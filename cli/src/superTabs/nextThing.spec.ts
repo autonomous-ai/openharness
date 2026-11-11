@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import type { TurnEnd } from '../core/api.js'
 import type { WatchedAgent } from './githubMentions.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
-import { IDLE_ASK_MS, IDLE_BACK_MS, INBOX_MAX, NEXT_SETTLE_MS, NEXT_TIMES, NextThing, START_LOOK_MS } from './nextThing.js'
+import { IDLE_ASK_MS, IDLE_BACK_MS, INBOX_MAX, NEXT_SETTLE_MS, NEXT_TIMES, NextThing, START_LOOK_MS, TELL_SETTLE_MS } from './nextThing.js'
 import { SuperTabHostError } from './wire.js'
 
 type Json = Record<string, unknown>
@@ -26,7 +26,7 @@ const item = (number: number, title: string, labels: string[] = [], pull = false
 /** Pip, a builder of acme/app on this computer, whose turns end; GitHub answers its open labelled tasks and pull requests. */
 function setup(options: { items?: Json[]; working?: boolean | null; watched?: WatchedAgent[]; file?: string } = {}) {
   const state = { items: options.items ?? [item(12, 'Fix the login bug')], working: options.working ?? false as boolean | null,
-    watched: options.watched ?? [PIP], down: false,
+    watched: options.watched ?? [PIP], down: false, checksDown: false,
     // Each pull request as GitHub details it, its comments, and its head's check runs; a pull request listed and not here is
     // clean and read by nobody yet.
     pulls: {} as Record<number, Json>, comments: {} as Record<number, Json[]>, runs: {} as Record<string, Json[]>,
@@ -50,6 +50,8 @@ function setup(options: { items?: Json[]; working?: boolean | null; watched?: Wa
     if (talk) return ok(state.comments[Number(talk[1])] ?? [])
     if (/^\/repos\/acme\/app\/pulls\/\d+\/reviews$/.test(url.pathname)) return ok([])
     const runs = /^\/repos\/acme\/app\/commits\/(\w+)\/check-runs$/.exec(url.pathname)
+    // A token that cannot read checks (a fine-grained one without Checks), as GitHub answers it.
+    if (runs && state.checksDown) return { status: 403, etag: null, body: { message: 'Resource not accessible by integration' }, resetAt: null }
     if (runs) return ok({ check_runs: state.runs[runs[1]!] ?? [] })
     if (/^\/repos\/acme\/app\/commits\/\w+\/status$/.test(url.pathname)) return ok({ statuses: [] })
     throw new Error(`not a read of this test: ${path}`)
@@ -182,6 +184,21 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     f.next.stop()
   })
 
+  // Finn, 2026-11-11: "fix and push" every minute on #4055, held, whose failing check needed a Mac it did not have.
+  it('says nothing of a pull request on hold, which waits for a person, and its checks once it is lifted', async () => {
+    const f = setup({ items: [item(30, 'Fix the login bug', [], true)] })
+    f.state.runs[HEAD] = [{ name: 'ci/required', status: 'completed', conclusion: 'failure' }, { name: 'ci/required', status: 'completed', conclusion: 'failure' }]
+    f.state.pulls[30] = { labels: [{ name: 'Hold' }] }
+    f.next.start()
+    await f.end()
+    expect(f.told()).toEqual([])
+    f.state.pulls[30] = { labels: [{ name: 'size:s' }] }
+    await f.end()
+    // Each failed check named once, however GitHub lists it.
+    expect(f.told()).toEqual([`Your acme/app#30 failed its checks at ${HEAD.slice(0, 7)}: ci/required. Fix them and push: gh pr checks 30 --repo acme/app`])
+    f.next.stop()
+  })
+
   it('says nothing of a draft, which is work going on, nor of a pull request GitHub gives no head or base, nor of one it says nothing of', async () => {
     const f = setup({ items: [30, 31, 32, 33].map(number => item(number, 'Fix the login bug', [], true)) })
     f.state.pulls[30] = { draft: true, mergeable_state: 'dirty' }
@@ -196,19 +213,117 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     f.next.stop()
   })
 
-  it('says the same HOLD three times, then to its person once; a push starts it over', async () => {
+  // anh Dee, 2026-11-11: "never spam agents because we burn user token". Said once; the next turn's end with nothing changed goes
+  // to its person, once, and the agent is typed it no more.
+  it('says the same HOLD once, then to its person once; a push starts it over', async () => {
     const f = setup({ items: [item(30, 'Fix the login bug', [], true)] })
     f.state.comments[30] = [said(`Juno, 05:00: HOLD ${HEAD.slice(0, 7)}: src/login.ts:12.`)]
     f.next.start()
     for (let i = 0; i <= NEXT_TIMES; i++) await f.end()
+    // Read again a while after its turn ended (GitHub shows a push some seconds after it), and told.
+    expect(f.say).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
     expect(f.tell).toHaveBeenCalledTimes(NEXT_TIMES)
     expect(f.say.mock.calls.map(([, , text]) => text)).toEqual([`Harness told Pip that its acme/app#30 has a HOLD from Juno at ${HEAD.slice(0, 7)} `
-      + '3 times as its turns ended, and nothing changed. Harness stops: tell Pip what to do.'])
+      + 'as its turn ended, and nothing changed by its next. Harness says it no more: tell Pip what to do.'])
     const pushed = 'd2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2'
     f.state.pulls[30] = { head: { sha: pushed } }
     f.state.comments[30] = [said(`Juno, 05:30: HOLD ${pushed.slice(0, 7)}: still the old token.`, '2026-11-11T05:30:00Z')]
     await f.end()
     expect(f.told().at(-1)).toContain(`has a HOLD from Juno at ${pushed.slice(0, 7)}`)
+    f.next.stop()
+  })
+
+  // Code review of #4060: Pip pushed its fix as its turn ended, and GitHub showed the new head some seconds later. Its person is told
+  // nothing: the minute after its turn ended reads the new head, and its new HOLD is typed.
+  it('reads what an agent was told again a minute after its turn ended, so a push GitHub shows late tells its person nothing', async () => {
+    const f = setup({ items: [item(30, 'Fix the login bug', [], true)] })
+    f.state.comments[30] = [said(`Juno, 05:00: HOLD ${HEAD.slice(0, 7)}: src/login.ts:12.`)]
+    f.next.start()
+    await f.end()
+    await f.end()
+    const pushed = 'd2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2'
+    f.state.pulls[30] = { head: { sha: pushed } }
+    f.state.comments[30] = [said(`Juno, 05:30: HOLD ${pushed.slice(0, 7)}: still the old token.`, '2026-11-11T05:30:00Z')]
+    await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
+    expect(f.say).not.toHaveBeenCalled()
+    expect(f.told().at(-1)).toContain(`has a HOLD from Juno at ${pushed.slice(0, 7)}`)
+    f.next.stop()
+  })
+
+  // Code review of #4060: a read it ignored, its person told, kept the task it holds from being watched: idle for hours, it was never
+  // asked after it nor freed.
+  it('still watches the task an agent holds once its person was told of a read it owes', async () => {
+    const f = setup({ items: [item(12, 'Add the export'), item(14, 'Mine', ['status:taken'])] })
+    f.state.owed = [{ number: 24, sha: HEAD.slice(0, 7) }]
+    f.next.start()
+    await f.end()
+    await f.end()
+    await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
+    expect(f.say).toHaveBeenCalledTimes(1)
+    const typed = f.told().length
+    await vi.advanceTimersByTimeAsync(IDLE_ASK_MS)
+    expect(f.told().length).toBeGreaterThan(typed)
+    expect(f.told().at(-1)).toContain('acme/app#14')
+    f.next.stop()
+  })
+
+  // Code review of #4060: one thing its person was told of waits for them, and what comes after it is typed: a pull request of its
+  // own it could not fix kept from it every read it owed others.
+  it('types what comes after a thing its person was told of, and that thing no more', async () => {
+    const f = setup({ items: [] })
+    f.state.owed = [{ number: 24, sha: HEAD.slice(0, 7) }, { number: 25, sha: HEAD.slice(0, 7) }]
+    f.next.start()
+    await f.end()
+    await f.end()
+    await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
+    await f.end()
+    await f.end()
+    await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
+    await f.end()
+    expect(f.told()).toEqual([expect.stringMatching(/^Read acme\/app#24 at /), expect.stringMatching(/^Read acme\/app#25 at /)])
+    expect(f.say).toHaveBeenCalledTimes(2)
+    f.next.stop()
+  })
+
+  it('tells its person no second time of a thing told before the things told were kept apart', async () => {
+    const f = setup()
+    writeFileSync(f.file, JSON.stringify({ pip: { key: 'acme/app#12', times: 3, told: true } }))
+    const next = f.make()
+    next.start()
+    await f.end()
+    await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
+    expect(f.tell).not.toHaveBeenCalled()
+    expect(f.say).not.toHaveBeenCalled()
+    next.stop()
+  })
+
+  // Code review of #4060: what was typed before a restart, under an older build three times over, had no turn since to say nothing
+  // changed. Its person is told after a turn of its ends here.
+  it('tells its person nothing at the first look after a restart, and after a turn of its ends here', async () => {
+    const f = setup()
+    f.next.start()
+    await f.end()
+    f.next.stop()
+    const again = f.make()
+    again.start()
+    await vi.advanceTimersByTimeAsync(START_LOOK_MS + TELL_SETTLE_MS)
+    expect(f.say).not.toHaveBeenCalled()
+    await f.end()
+    await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
+    expect(f.tell).toHaveBeenCalledTimes(1)
+    expect(f.say).toHaveBeenCalledTimes(1)
+    again.stop()
+  })
+
+  it('types a read whose checks its login cannot read, and says that once', async () => {
+    const f = setup({ items: [] })
+    f.state.owed = [{ number: 24, sha: HEAD.slice(0, 7) }]
+    f.state.checksDown = true
+    f.next.start()
+    await f.end()
+    expect(f.told()).toEqual([expect.stringMatching(/^Read acme\/app#24 at /)])
+    expect(f.log).toHaveBeenCalledWith('[super-tab] CHECKS_UNREAD acme/app: UNREADABLE')
     f.next.stop()
   })
 
@@ -222,6 +337,27 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     expect(f.told()).toEqual([`Read acme/app#24 at ${HEAD.slice(0, 7)}, as Harness asked you: harness super-tab read ok acme/app#24 ${HEAD.slice(0, 7)} `
       + '\'what you found\' (or read hold, with the file, line and fix)'])
     expect(f.owed).toHaveBeenCalledWith(PIP, 'acme/app')
+    f.next.stop()
+  })
+
+  // Code review of #4060: a read owed for a pull request since put on hold, or whose checks failed, waits as the pull request does.
+  it('types no read of a pull request on hold or failing its checks, and types it once it is lifted and passing', async () => {
+    const f = setup({ items: [] })
+    f.state.owed = [{ number: 24, sha: HEAD.slice(0, 7) }]
+    f.state.pulls[24] = { labels: [{ name: 'hold' }] }
+    f.next.start()
+    await f.end()
+    f.state.pulls[24] = {}
+    f.state.runs[HEAD] = [{ name: 'ci/required', status: 'completed', conclusion: 'failure' }]
+    await f.end()
+    expect(f.told()).toEqual([])
+    // Run again and passed: read again once ten minutes are up (a failing head is not read at each turn's end).
+    f.state.runs[HEAD] = [{ name: 'ci/required', status: 'completed', conclusion: 'success' }]
+    await f.end()
+    expect(f.told()).toEqual([])
+    vi.setSystemTime(Date.now() + 10 * 60_000)
+    await f.end()
+    expect(f.told()).toEqual([expect.stringMatching(/^Read acme\/app#24 at /)])
     f.next.stop()
   })
 
@@ -385,14 +521,15 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
   })
 
   // "The same next thing, typed three times with no change, goes to its person and is not typed a fourth time."
-  it('gives the same task three times, then tells its person once, and types it no more; another task starts over', async () => {
+  it('gives the same task once, then tells its person once, and types it no more; another task starts over', async () => {
     const f = setup()
     f.next.start()
     for (let i = 0; i < NEXT_TIMES + 2; i++) await f.end()
+    await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
     expect(f.tell).toHaveBeenCalledTimes(NEXT_TIMES)
     expect(new Set(f.tell.mock.calls.map(([, id]) => id)).size).toBe(NEXT_TIMES)
     expect(f.say.mock.calls.map(([, , text]) => text)).toEqual([
-      'Harness gave Pip acme/app#12 (Fix the login bug) as its next task 3 times as its turns ended, and nothing changed. Harness stops: tell Pip what to do.'])
+      'Harness gave Pip acme/app#12 (Fix the login bug) as its next task as its turn ended, and nothing changed by its next. Harness says it no more: tell Pip what to do.'])
     expect(f.say.mock.calls[0]![0]).toBe(PIP)
     f.state.items = [item(15, 'Write the docs')]
     await f.end()
@@ -408,6 +545,7 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     const again = f.make()
     again.start()
     await f.end()
+    await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
     expect(f.tell).toHaveBeenCalledTimes(NEXT_TIMES)
     expect(f.say).toHaveBeenCalledTimes(1)
     again.stop()
@@ -451,9 +589,10 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     const f = setup({ items: [{ number: 12, labels: [{ name: 'builder:pip' }] }] })
     f.next.start()
     for (let i = 0; i <= NEXT_TIMES; i++) await f.end()
+    await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
     expect(f.told()[0]).toBe(`Next: acme/app#12. It is given to you and nobody has taken it: ${TAKE} acme/app#12`)
-    expect(f.say.mock.calls[0]![2]).toBe('Harness gave Pip acme/app#12 as its next task 3 times as its turns ended, and nothing changed. '
-      + 'Harness stops: tell Pip what to do.')
+    expect(f.say.mock.calls[0]![2]).toBe('Harness gave Pip acme/app#12 as its next task as its turn ended, and nothing changed by its next. '
+      + 'Harness says it no more: tell Pip what to do.')
     f.next.stop()
   })
 
