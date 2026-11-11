@@ -58,13 +58,21 @@ static void fail(const char *why)
 
 bool fw_update_active(void) { return s_active; }
 
-void fw_mark_valid(void)
+void fw_confirm_boot(bool link_started)
 {
     const esp_partition_t *run = esp_ota_get_running_partition();
     esp_ota_img_states_t st;
     if (!run || esp_ota_get_state_partition(run, &st) != ESP_OK) return;
-    if (st != ESP_OTA_IMG_PENDING_VERIFY) return;   // not a fresh install — nothing to confirm
+    if (st != ESP_OTA_IMG_PENDING_VERIFY) return;   // not a fresh install — nothing to confirm or roll back
 
+    if (!link_started) {
+        // The cable is the only way to replace this image, and it cannot open: keep it and the dial is
+        // stranded until someone flashes it over USB. Go back to the image that could.
+        ESP_LOGE(TAG, "new image cannot open the cable — rolling back");
+        esp_err_t back = esp_ota_mark_app_invalid_rollback_and_reboot();   // returns only if it failed
+        ESP_LOGE(TAG, "rollback failed: %s", esp_err_to_name(back));
+        return;
+    }
     esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "could not confirm image: %s", esp_err_to_name(err));
@@ -115,6 +123,17 @@ bool fw_update_offer(const char *version, int size, const char *sha256_hex)
     if (!target) { ESP_LOGE(TAG, "no OTA slot"); return false; }
     if (target->size < (uint32_t)size) {
         ESP_LOGE(TAG, "image %d B does not fit the %u B slot", size, (unsigned)target->size);
+        return false;
+    }
+
+    // The image this dial just rolled back from sits in that slot, marked invalid (fw_confirm_boot). The
+    // daemon offers the same version again on every hello; installing it again would only fail the same way,
+    // so decline it — silently, like every other decline, and without erasing anything. A newer one goes in.
+    esp_ota_img_states_t slot_state;
+    esp_app_desc_t slot_image;
+    if (esp_ota_get_state_partition(target, &slot_state) == ESP_OK && slot_state == ESP_OTA_IMG_INVALID &&
+        esp_ota_get_partition_description(target, &slot_image) == ESP_OK && !strcmp(slot_image.version, version)) {
+        ESP_LOGW(TAG, "offer %s declined: that image failed to start here", version);
         return false;
     }
 

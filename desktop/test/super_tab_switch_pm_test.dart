@@ -6,6 +6,7 @@ import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
+import 'package:harness/usage/usage_account_key.dart';
 
 import 'support/real_fonts.dart';
 import 'support/super_tab_fixture.dart';
@@ -33,6 +34,7 @@ void main() {
         'observation': {
           'receivedAt': DateTime.now().millisecondsSinceEpoch,
           'capabilities': ['leadStart', 'leadSwitch'],
+          // Each engine's default account alone, as the server keeps a machine's report (machines.ts storedObservation).
           'profiles': [
             {
               'engine': 'claude',
@@ -42,24 +44,10 @@ void main() {
               'resetsAt': null,
             },
             {
-              'engine': 'claude',
-              'id': 'aaaaaaaaaaaaaaaa',
-              'label': 'Work',
-              'leftPercent': 0,
-              'resetsAt': '2099-01-02T15:00:00.000Z',
-            },
-            {
               'engine': 'codex',
               'id': codexDefault,
               'label': 'Default',
               'leftPercent': 90,
-              'resetsAt': null,
-            },
-            {
-              'engine': 'codex',
-              'id': 'bbbbbbbbbbbbbbbb',
-              'label': 'Side',
-              'leftPercent': 70,
               'resetsAt': null,
             },
           ],
@@ -119,6 +107,9 @@ void main() {
   }
 
   final item = find.text('Switch PM…');
+  // A row of the dialog, by its words: the chat behind it names engines too.
+  Finder inDialog(String text) =>
+      find.descendant(of: find.byType(AlertDialog), matching: find.text(text));
 
   // Task #3194: Project settings shows each row's value.
   testWidgets('Switch PM… shows the PM\'s name', (tester) async {
@@ -186,19 +177,27 @@ void main() {
   });
 
   testWidgets(
-    'the dialog lists the PM machine\'s profiles with % left, marks the current one and disables 0%',
+    // A PM runs on its machine's default account alone (pmAccount.ts), so each engine has one row, named by the engine.
+    'the dialog lists each engine by its name with % left and marks the current one',
     (tester) async {
       await mount(tester, swarm(), 'owner');
       await openMenu(tester);
       await tester.tap(item);
       await tester.pumpAndSettle();
-      expect(find.text('Claude Code · Default'), findsOneWidget);
+      expect(
+        [
+          for (final tile in tester.widgetList<ListTile>(
+            find.descendant(
+              of: find.byType(AlertDialog),
+              matching: find.byType(ListTile),
+            ),
+          ))
+            (tile.title as Text).data,
+        ],
+        ['Claude Code', 'Codex'],
+      );
       expect(find.text('Current · 40% left'), findsOneWidget);
-      expect(find.text('Claude Code · Work'), findsOneWidget);
-      expect(find.textContaining('0% left · resets '), findsOneWidget);
-      expect(find.text('Codex · Side'), findsOneWidget);
-      expect(find.text('Codex · Default'), findsOneWidget);
-      expect(find.text('70% left'), findsOneWidget);
+      expect(find.text('90% left'), findsOneWidget);
       expect(
         find.text(
           'The new session starts fresh and reads a handoff note. Tasks and chat stay.',
@@ -208,12 +207,37 @@ void main() {
       ListTile row(String key) =>
           tester.widget<ListTile>(find.byKey(ValueKey(key)));
       expect(row('switch-pm-claude-$claudeDefault').enabled, isFalse);
-      expect(row('switch-pm-claude-aaaaaaaaaaaaaaaa').enabled, isFalse);
-      expect(row('switch-pm-codex-bbbbbbbbbbbbbbbb').enabled, isTrue);
+      expect(row('switch-pm-codex-$codexDefault').enabled, isTrue);
       await tester.tap(find.text('Cancel'));
       await finish(tester);
     },
   );
+
+  testWidgets('a spent account is disabled and says when it resets', (
+    tester,
+  ) async {
+    final server = swarm();
+    final pool = (server.state['machines'] as List).first as Map;
+    final codex = ((pool['observation'] as Map)['profiles'] as List).last as Map
+      ..['leftPercent'] = 0
+      ..['resetsAt'] = '2099-01-02T15:00:00.000Z';
+    expect(codex['engine'], 'codex');
+    await mount(tester, server, 'owner');
+    await openMenu(tester);
+    await tester.tap(item);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('0% left · resets '), findsOneWidget);
+    expect(
+      tester
+          .widget<ListTile>(
+            find.byKey(ValueKey('switch-pm-codex-$codexDefault')),
+          )
+          .enabled,
+      isFalse,
+    );
+    await tester.tap(find.text('Cancel'));
+    await finish(tester);
+  });
 
   testWidgets(
     'the dialog says a PM runs on its machine\'s default account, whoever owns the machine',
@@ -243,8 +267,17 @@ void main() {
       await openMenu(tester);
       await tester.tap(item);
       await tester.pumpAndSettle();
-      expect(find.text('Codex · Default'), findsOneWidget);
+      expect(inDialog('Codex'), findsOneWidget);
       expect(find.text('Current'), findsOneWidget);
+      // Nothing to say under a row leaves no blank line there.
+      expect(
+        tester
+            .widget<ListTile>(
+              find.byKey(const ValueKey('switch-pm-codex-default')),
+            )
+            .subtitle,
+        isNull,
+      );
       expect(
         tester
             .widget<ListTile>(
@@ -272,7 +305,7 @@ void main() {
           .onPressed,
       isNull,
     );
-    await tester.tap(find.text('Codex · Side'));
+    await tester.tap(inDialog('Codex'));
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(FilledButton, 'Switch'));
     await tester.pumpAndSettle();
@@ -284,7 +317,7 @@ void main() {
     expect(sent, hasLength(1));
     expect(sent.single['projectId'], 'lead');
     expect(sent.single['engine'], 'codex');
-    expect(sent.single['profileId'], 'bbbbbbbbbbbbbbbb');
+    expect(sent.single['profileId'], codexDefault);
     expect(find.byType(AlertDialog), findsNothing);
     await finish(tester);
   });
@@ -306,7 +339,7 @@ void main() {
           'profiles': [
             {
               'engine': 'codex',
-              'id': 'cccccccccccccccc',
+              'id': swarmProfileId('target', 'codex', 'default'),
               'label': 'Default',
               'leftPercent': 80,
               'resetsAt': null,
@@ -333,8 +366,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Mac Two').last);
     await tester.pumpAndSettle();
-    expect(find.text('Codex · Default'), findsOneWidget);
-    await tester.tap(find.text('Codex · Default'));
+    await tester.tap(inDialog('Codex'));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('switch-pm-model')));
     await tester.pumpAndSettle();
@@ -349,7 +381,10 @@ void main() {
     ];
     expect(sent.single['machineId'], 'target');
     expect(sent.single['engine'], 'codex');
-    expect(sent.single['profileId'], 'cccccccccccccccc');
+    expect(
+      sent.single['profileId'],
+      swarmProfileId('target', 'codex', 'default'),
+    );
     expect(sent.single['model'], 'gpt-6.1-sol');
     await finish(tester);
   });
@@ -371,7 +406,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       find.text(
-        'No other machine or account can run a Product Manager right now.',
+        'No other machine or engine can run a Product Manager right now.',
       ),
       findsOneWidget,
     );
@@ -442,7 +477,7 @@ void main() {
       expect(
         tester
             .widget<ListTile>(
-              find.byKey(const ValueKey('switch-pm-codex-bbbbbbbbbbbbbbbb')),
+              find.byKey(const ValueKey('switch-pm-codex-$codexDefault')),
             )
             .enabled,
         isTrue,
@@ -478,7 +513,7 @@ void main() {
           'profiles': [
             {
               'engine': 'codex',
-              'id': 'cccccccccccccccc',
+              'id': swarmProfileId('target', 'codex', 'default'),
               'label': 'Default',
               'leftPercent': 80,
               'resetsAt': null,
@@ -495,7 +530,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Mac Two').last);
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Codex · Default'));
+    await tester.tap(inDialog('Codex'));
     await tester.pumpAndSettle();
     final target = (server.state['machines'] as List).last as Map;
     (target['observation'] as Map)['capabilities'] = ['leadStart'];
@@ -518,7 +553,8 @@ void main() {
   });
 
   testWidgets(
-    'the PM\'s own profileId marks its row; no id means its engine\'s default',
+    // A PM a switch left on another account (before the server took the default alone) can be moved back to its default.
+    'a PM on another account is offered its engine\'s default',
     (tester) async {
       await mount(
         tester,
@@ -532,8 +568,8 @@ void main() {
           tester.widget<ListTile>(find.byKey(ValueKey(key)));
       expect(row('switch-pm-claude-$claudeDefault').enabled, isTrue);
       expect(
-        (row('switch-pm-claude-aaaaaaaaaaaaaaaa').subtitle as Text).data,
-        startsWith('Current'),
+        (row('switch-pm-claude-$claudeDefault').subtitle as Text).data,
+        isNot(contains('Current')),
       );
       await tester.tap(find.text('Cancel'));
       await finish(tester);
