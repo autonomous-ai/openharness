@@ -7,7 +7,6 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/browser/browser_panel.dart';
-import 'package:harness/browser/browser_pill.dart';
 import 'package:harness/browser/browser_settings.dart';
 import 'package:harness/browser/browser_settings_page.dart';
 import 'package:harness/browser/browser_setup_dialog.dart';
@@ -847,28 +846,6 @@ class _Gallery extends StatelessWidget {
                   github: swarmV4GitHub(),
                   onClose: () {},
                 ),
-              ),
-            ],
-          ),
-          section(
-            'browser-pill',
-            'Browser in New agent: off, on, this computer to set up, another computer to set up',
-            [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  BrowserPill(on: false, onPressed: () {}),
-                  gap(),
-                  BrowserPill(on: true, onPressed: () {}),
-                  gap(),
-                  BrowserPill(on: true, needsSetup: true, onPressed: () {}),
-                  gap(),
-                  BrowserPill(
-                    on: false,
-                    unavailable: 'Set up Browser on Ken Mac first',
-                    onPressed: () {},
-                  ),
-                ],
               ),
             ],
           ),

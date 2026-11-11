@@ -1,6 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/browser/browser_availability.dart';
-import 'package:harness/browser/browser_settings.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/ws/ws_conn.dart';
@@ -208,16 +207,18 @@ void main() {
     expect(daemon.requests, isEmpty);
   });
 
-  test('createAgent sends browser:true only when asked', () async {
+  test('createAgent sends no browser', () async {
     daemon.reply = {'state': 'failed'};
     await app.createAgent('m', engine: 'claude', folder: '/work');
     expect(daemon.requests.last.payload.containsKey('browser'), isFalse);
-    await app.createAgent(
-      'm',
-      engine: 'claude',
-      folder: '/work',
-      browser: true,
-    );
-    expect(daemon.requests.last.payload['browser'], isTrue);
+  });
+
+  test('the Browser button is not offered on the web or on Windows', () {
+    bool offered({bool web = false, bool windows = false, bool asked = true}) =>
+        browserOffered(web: web, windows: windows, offersBrowser: asked);
+    expect(offered(web: true), isFalse);
+    expect(offered(windows: true), isFalse);
+    expect(offered(asked: false), isFalse);
+    expect(offered(), isTrue);
   });
 }
