@@ -64,7 +64,12 @@ List<SuperTabAgent> superTabPostRecipients(
 /// The names of [superTabPostRecipients] as their tags read them: those a post's words do not tag open its bubble (`@Juno`),
 /// as a group chat addresses a post (anh Dee, 2026-11-10: "why not use tag? like in a group chat").
 List<String> superTabPostTo(SuperTabSnapshot? swarm, SuperTabMessage message) =>
-    [for (final agent in superTabPostRecipients(swarm, message)) agent.name];
+    [
+      // By the name people know it by: a PM is stored under its role's name, "Product Manager" (anh Dee, 2026-11-11:
+      // "the tag Product Manager is also weird just tag the agent").
+      for (final agent in superTabPostRecipients(swarm, message))
+        agent.displayName ?? agent.name,
+    ];
 
 /// What waits under a post that names an agent that was offline when it was posted and still is (`downSince`: its machine has
 /// reported its session gone): "Juno is offline", "Juno and Kai are offline". An agent that was up when it was named has

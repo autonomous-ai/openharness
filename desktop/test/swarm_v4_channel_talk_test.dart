@@ -181,6 +181,22 @@ void main() {
     },
   );
 
+  // anh Dee, 2026-11-11, of the rehearsal's channel: "the tag Product Manager is also weird just tag the agent". A PM is
+  // stored under its role's name and shown under its own (the backend's start names it COORDINATOR_NAME, its person names it
+  // Ray): a post to it said "@Product Manager", and its own "@Ray" in the text was not read as a tag.
+  testWidgets('a post to the PM tags it by its own name, once', (tester) async {
+    final server = swarmV4Channel();
+    (server.state['agents'] as List).cast<Map<String, dynamic>>().firstWhere(
+      (a) => a['id'] == 'faye',
+    )['name'] = 'Product Manager';
+    say(server, 'Pip', '@Faye #9 is up as #19, ready to read.', to: ['faye']);
+    say(server, 'Juno', 'the CI on #19 passed.', to: ['faye']);
+    await openSwarmV4(tester, server);
+    expect(tagsIn(tester, '#9 is up as #19', '@Faye'), 1);
+    expect(tagsIn(tester, 'the CI on #19 passed.', '@Faye'), 1);
+    expect(find.textContaining('Product Manager'), findsNothing);
+  });
+
   testWidgets('an agent named twice in a post is tagged once', (tester) async {
     final server = swarmV4Channel();
     say(server, 'Faye', 'read #12.', to: ['juno', 'pip', 'juno']);

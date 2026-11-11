@@ -3489,9 +3489,12 @@ class _SuperTabViewState extends State<SuperTabView>
       for (final g in snapshot?.conversations ?? <SuperTabConversation>[])
         if (g.number != null) g.number!: g.id,
     };
+    // Each agent's tag as it is written: its own name, which a PM's role name is not ("@Ray", stored as Product Manager).
     _agentNames = [
-      for (final agent in snapshot?.agents ?? const <SuperTabAgent>[])
+      for (final agent in snapshot?.agents ?? const <SuperTabAgent>[]) ...{
         agent.name,
+        ?agent.displayName,
+      },
     ];
     _people = {};
     for (final person in snapshot?.people ?? <SuperTabPerson>[]) {
