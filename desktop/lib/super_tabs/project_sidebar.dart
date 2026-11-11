@@ -482,15 +482,29 @@ class ProjectSidebar extends StatelessWidget {
     Widget build(int i) => i < agents.length
         ? _agentRow(snapshot, agents[i].$1, agents[i].$2)
         : _paneRow(reading.panes[i - agents.length]);
-    String nameOf(int i) => i < agents.length
-        ? (agents[i].$1.displayName ?? agents[i].$1.name).toLowerCase()
-        : reading.panes[i - agents.length].name.toLowerCase();
-    final all = [for (var i = 0; i < count; i++) i];
-    if (reading.panes.isNotEmpty) {
-      all.sort((a, b) {
-        final byName = nameOf(a).compareTo(nameOf(b));
-        return byName != 0 ? byName : a.compareTo(b);
-      });
+    // Both lists come from A to Z (superTabMyAgents, personalAgents): merged once, so a pane keeps its place as it joins.
+    final all = <int>[];
+    if (reading.panes.isEmpty) {
+      for (var i = 0; i < count; i++) {
+        all.add(i);
+      }
+    } else {
+      final agentNames = [
+        for (final (agent, _) in agents)
+          (agent.displayName ?? agent.name).toLowerCase(),
+      ];
+      final paneNames = [
+        for (final pane in reading.panes) pane.name.toLowerCase(),
+      ];
+      var a = 0, p = 0;
+      while (a < agents.length || p < paneNames.length) {
+        if (p == paneNames.length ||
+            (a < agents.length && agentNames[a].compareTo(paneNames[p]) <= 0)) {
+          all.add(a++);
+        } else {
+          all.add(agents.length + p++);
+        }
+      }
     }
     if (count <= teamShown + 1) return [for (final i in all) build(i)];
     if (controller.agentsAllShown) {
@@ -506,13 +520,13 @@ class ProjectSidebar extends StatelessWidget {
       return agentStates?.taskOf(agent) != null ? 1 : 2;
     }
 
-    final place = {for (var p = 0; p < all.length; p++) all[p]: p};
-    final ranks = {for (final i in all) i: rank(i)};
-    final order = [...all]
-      ..sort((a, b) {
-        final byRank = ranks[a]!.compareTo(ranks[b]!);
-        return byRank != 0 ? byRank : place[a]!.compareTo(place[b]!);
-      });
+    // Positions in the list, by what matters most, each rank in list order.
+    final ranks = [for (final i in all) rank(i)];
+    final order = [
+      for (var r = 0; r <= 2; r++)
+        for (var at = 0; at < all.length; at++)
+          if (ranks[at] == r) all[at],
+    ];
     final shown = {
       ...order.take(teamShown),
       for (var i = 0; i < agents.length; i++)

@@ -128,6 +128,7 @@ void main() {
     List<String> people = const ['owner'],
     void Function(SuperTabLaunchFixture f)? desk,
     List<(String, String, String)> joined = const [('m', 'joined', 'Atlas')],
+    List<Map<String, Object>> removed = const [],
     Size size = const Size(1440, 900),
     Brightness brightness = Brightness.light,
   }) async {
@@ -143,6 +144,9 @@ void main() {
             'id': person,
             'email': '$person@example.com',
             'role': person == 'owner' ? 'owner' : 'collaborator',
+            // The sessions the reader took out, on their own entry alone.
+            if (person == 'owner' && removed.isNotEmpty)
+              'removedPanes': removed,
           },
       ]
       ..['agents'] = <Map<String, dynamic>>[
@@ -264,6 +268,7 @@ void main() {
     List<String> people = const ['owner'],
     void Function(SuperTabLaunchFixture f)? desk,
     List<(String, String, String)> joined = const [('m', 'joined', 'Atlas')],
+    List<Map<String, Object>> removed = const [],
     Size size = const Size(1440, 900),
   }) => testWidgets(description, (tester) async {
     final (:f, :c) = await open(
@@ -273,6 +278,7 @@ void main() {
       people: people,
       desk: desk,
       joined: joined,
+      removed: removed,
       size: size,
     );
     await body(tester, f, c);
@@ -405,15 +411,20 @@ void main() {
       for (final row in ['super-pane-m-v', 'super-pane-m-x']) {
         expect(shown(row), isNot(anyOf('Untitled Pane', 'Atlas')));
       }
-      expect({for (final r in names()) r.toLowerCase()}, hasLength(3));
-      // The same on every draw.
+      for (final row in ['super-pane-m-y', 'super-pane-m-z']) {
+        expect(agentNames, contains(shown(row)), reason: row);
+      }
+      expect({for (final r in names()) r.toLowerCase()}, hasLength(5));
+      // The same on every draw, and an untitled row's stays as others join.
       final before = names();
+      final untitled = shown('super-pane-m-v');
       await changed(tester, f);
       expect(names(), before);
       for (final (row, harness) in [
         ('super-pane-m-u', 'u'),
         ('super-pane-m-v', 'v'),
         ('super-pane-m-x', 'x'),
+        ('super-pane-m-y', 'y'),
       ]) {
         final name = shown(row);
         await tester.tap(key(row));
@@ -435,6 +446,7 @@ void main() {
         );
         await c.refresh();
         await changed(tester, f);
+        if (harness == 'u') expect(shown('super-pane-m-v'), untitled);
       }
     },
     desk: (f) {
@@ -447,8 +459,16 @@ void main() {
         ),
         session('v', 'harness-9', chosen: false),
         session('x', 'Atlas'),
+        // Names the Swarm refuses for an agent: one over 60 characters, an engine's.
+        session(
+          'y',
+          'A name far longer than the sixty characters a Swarm keeps for one',
+        ),
+        session('z', 'Claude Code'),
       ];
-      deskTab(f.app, 'one', [pane('m', 'u'), pane('m', 'v'), pane('m', 'x')]);
+      deskTab(f.app, 'one', [
+        for (final id in ['u', 'v', 'x', 'y', 'z']) pane('m', id),
+      ]);
     },
   );
 
@@ -500,12 +520,9 @@ void main() {
       expect(key('super-pane-m-docs'), findsNothing);
       expect(key('super-pane-laptop-notes'), findsOneWidget);
     },
-    desk: (f) {
-      usualDesk(f);
-      f.connection.server.state['removedPanes'] = [
-        {'machineId': 'm', 'harnessId': 'docs'},
-      ];
-    },
+    removed: const [
+      {'machineId': 'm', 'harnessId': 'docs', 'removedAt': 1},
+    ],
   );
 
   group('trying to break it', () {
@@ -643,7 +660,7 @@ void main() {
           session('e', '🚀 Ship the release 🎉'),
           session(
             'l',
-            'A session named with far too many words to fit in the left pane of any window at all',
+            'A session named with far too many words to fit a left pane',
           ),
           session('t', 'harness-7', title: 'Fix the login page', chosen: false),
           session(

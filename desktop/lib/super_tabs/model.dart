@@ -60,6 +60,15 @@ class SuperTabPerson {
         final String name when name.trim().isNotEmpty => name,
         _ => null,
       },
+      removedPanes = Set.unmodifiable({
+        if (row['removedPanes'] case final List panes)
+          for (final pane in panes)
+            if (pane case {
+              'machineId': final String machine,
+              'harnessId': final String harness,
+            })
+              (machineIdKey(machine), harness),
+      }),
       username =
           row['username'] as String? ??
           superTabDefaultUsername(_text(row, 'email'));
@@ -71,8 +80,13 @@ class SuperTabPerson {
       joinedVia = person.joinedVia,
       avatar = person.avatar,
       chosenUsername = person.chosenUsername,
+      removedPanes = person.removedPanes,
       name = person.name;
   final String id, email, role;
+
+  /// The sessions this person took out of the Swarm, by machine ([machineIdKey]) and session (backend `removedPanes`): sent
+  /// only on the reader's own entry. Empty from an older backend.
+  final Set<(String, String)> removedPanes;
 
   /// How the Swarm shows and tags them, as the server sends it, worked out in
   /// its join order. From an older server, their default
@@ -519,14 +533,6 @@ class SuperTabSnapshot {
         for (final id in row['removedMachines'] as List? ?? const [])
           if (id is String) id,
       ],
-      removedPanes = {
-        for (final pane in row['removedPanes'] as List? ?? const [])
-          if (pane case {
-            'machineId': final String machine,
-            'harnessId': final String harness,
-          })
-            (machineIdKey(machine), harness),
-      },
       autoJoin = row['autoJoin'] == true,
       chatSettings = Map.unmodifiable({
         if (row['chatSettings'] case final Map settings)
@@ -614,8 +620,11 @@ class SuperTabSnapshot {
   final List<String> removedMachines;
 
   /// The reader's own sessions they took out of this Swarm, by machine ([machineIdKey]) and session: Your Team leaves them
-  /// out, and only the person's own Attach brings one back (backend `removedPanes`). Empty from an older backend.
-  final Set<(String, String)> removedPanes;
+  /// out, and only the person's own Attach brings one back. Their own member entry alone carries them
+  /// ([SuperTabPerson.removedPanes]).
+  late final Set<(String, String)> removedPanes = Set.unmodifiable({
+    for (final person in people) ...person.removedPanes,
+  });
 
   /// People at the owner's email domain are added automatically (head
   /// `autoJoin`, every member reads it): someone who leaves is not added back.
