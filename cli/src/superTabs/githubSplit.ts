@@ -24,7 +24,7 @@ import { REPLY_TEXT_MAX } from './agentReplies.js'
 import { labelOf } from './assign/crew.js'
 import { labelsOf } from './githubClaim.js'
 import type { GitHubReply } from './githubRest.js'
-import { hhmm, recordOwn, type VerdictDeps } from './githubVerdict.js'
+import { hhmm, projectRepository, recordOwn, type ProjectRepositories, type VerdictDeps } from './githubVerdict.js'
 import { object, SuperTabHostError } from './wire.js'
 
 export interface Split { repository: string; number: number; size: 's' | 'm' | 'l'; title: string; text: string }
@@ -101,13 +101,11 @@ export const sameCut = (asked: Split): string => `split ${asked.repository.toLow
  * another's piece of the task has, and one with PIECES_MAX open pieces already. `cut` is whether this command changed
  * anything; `sized` is whether the piece carries a size, without which nobody is given it, and `note` says so.
  */
-export async function splitTask(deps: VerdictDeps, builder: { name: string; repositories: ReadonlySet<string> }, asked: Split):
+export async function splitTask(deps: VerdictDeps, builder: { name: string; repositories: ProjectRepositories }, asked: Split):
   Promise<{ url: string; number: number; cut: boolean; sized: boolean; note?: string }> {
-  const repository = asked.repository.toLowerCase(), at = `${repository}#${asked.number}`, name = builder.name.trim()
+  const name = builder.name.trim()
   if (!name) throw new SuperTabHostError('AGENT_UNNAMED', 'This agent has no name to cut a task under.', 409)
-  if (!builder.repositories.has(repository)) {
-    throw new SuperTabHostError('REPOSITORY_NOT_PROJECT', `${asked.repository} is not the repository of a project you are in.`, 422)
-  }
+  const project = projectRepository(builder.repositories, asked.repository), repository = project.github, at = `${repository}#${asked.number}`
   // Once the piece is open, a failure names it and says the same command finishes the cut: "nothing was changed" would be false.
   // And while it is being opened, a failure may have left an issue: the same command finds it.
   let made = 0, opening = false
@@ -245,7 +243,7 @@ export async function splitTask(deps: VerdictDeps, builder: { name: string; repo
     comment = object(said.body)
     changed = true
   }
-  await recordOwn(deps.record, repository, comment, 'Split')
+  await recordOwn(deps.record, project.project, comment, 'Split')
   return { url: words(piece.html_url), number: made, cut: changed, sized,
     ...sized ? {} : { note: `GitHub did not keep #${made}'s size, and nobody is given a task with none. Ask your PM to size it.` } }
 }

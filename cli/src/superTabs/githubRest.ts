@@ -44,6 +44,24 @@ export class GitHubStop extends Error {
 
 /** GitHub's page size: a page shorter than this is the last. */
 export const PAGE = 100
+
+/** How long what GitHub names a repository now is kept: a rename is rare, and every take, read and cut asks. */
+export const NAME_KEPT_MS = 60 * 60_000
+
+/** What GitHub names a repository now, lower case, asked with [get]: for one renamed since its project was made, GitHub answers
+ *  its old name with its new one. Its old name itself when GitHub does not say (it cannot be read now, or is gone), asked again
+ *  the next time; one answer is kept [NAME_KEPT_MS]. */
+export function currentNames(get: GitHubGet, now: () => number = Date.now): (slug: string) => Promise<string> {
+  const known = new Map<string, { name: string; at: number }>()
+  return async slug => {
+    const kept = known.get(slug)
+    if (kept && now() - kept.at < NAME_KEPT_MS) return kept.name
+    const read = await get(`/repos/${slug}`, null).catch(() => null)
+    const name = read?.status === 200 && typeof object(read.body).full_name === 'string' ? String(object(read.body).full_name).toLowerCase() : null
+    if (name) known.set(slug, { name, at: now() })
+    return name ?? slug
+  }
+}
 const MAX_KEPT = 500
 /** How long to wait before asking again: gh missing or signed out, a repository this login cannot read, a rate limit. */
 const OFF_RETRY_MS = 5 * 60_000, UNREADABLE_RETRY_MS = 10 * 60_000, LIMIT_MAX_MS = 15 * 60_000

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { GitHubReads, githubRest, retryIn, waitWords, type GitHubGet } from './githubRest.js'
+import { currentNames, GitHubReads, githubRest, NAME_KEPT_MS, retryIn, waitWords, type GitHubGet } from './githubRest.js'
 
 describe('GitHub\'s REST API as this computer\'s gh login (githubRest.ts)', () => {
   it('reads the token from gh once, asks with the ETag, and reads the token again after GitHub refuses it', async () => {
@@ -97,6 +97,28 @@ describe('a file of a repository (GitHubReads.file)', () => {
     now += 5 * 60_000
     await reads.file('acme/app', 'agents/First builder.md')
     expect(asked.length).toBe(before + 1)
+  })
+})
+
+// autonomous-harness, renamed openharness (2026-11-11): GitHub answers a repository's old name with what it is called now.
+describe('what GitHub names a repository now (currentNames)', () => {
+  it('reads it from GitHub, keeps it an hour, and gives the name asked when GitHub does not say, asking again the next time', async () => {
+    let clock = 0
+    const answers: Array<Awaited<ReturnType<GitHubGet>> | Error> = [{ status: 200, etag: null, body: { full_name: 'Acme/App' }, resetAt: null },
+      { status: 200, etag: null, body: { full_name: 'acme/app2' }, resetAt: null }, { status: 404, etag: null, body: null, resetAt: null },
+      new Error('gh is not signed in.'), { status: 200, etag: null, body: {}, resetAt: null }]
+    const get = vi.fn<GitHubGet>(async () => { const next = answers.shift()!; if (next instanceof Error) throw next; return next })
+    const current = currentNames(get, () => clock)
+    expect(await current('acme/old')).toBe('acme/app')
+    expect(get).toHaveBeenCalledExactlyOnceWith('/repos/acme/old', null)
+    expect(await current('acme/old')).toBe('acme/app')
+    clock += NAME_KEPT_MS
+    expect(await current('acme/old')).toBe('acme/app2')
+    for (const repo of ['b/one', 'b/one', 'b/one']) expect(await current(repo)).toBe(repo)
+    expect(get).toHaveBeenCalledTimes(5)
+    // By this computer's clock when given none.
+    const fresh = currentNames(async () => ({ status: 200, etag: null, body: { full_name: 'c/new' }, resetAt: null }))
+    expect(await fresh('c/old')).toBe('c/new')
   })
 })
 

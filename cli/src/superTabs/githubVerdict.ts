@@ -20,6 +20,12 @@ import { object, SuperTabHostError } from './wire.js'
 
 export interface Verdict { repository: string; number: number; verdict: 'READ-OK' | 'HOLD'; sha: string; text: string }
 
+/** A project's repository by each name a command may give it, lower case: as its project keeps it (`project`, the name the
+ *  backend records comments under) and as GitHub names it now (`github`). A repository renamed on GitHub keeps its old name in
+ *  its project, which cannot change (backend PROJECT_REPOSITORY_SET), and GitHub answers for the old name under the new one:
+ *  compared by names alone, every take was refused both ways (autonomous-harness, renamed openharness, 2026-11-11). */
+export type ProjectRepositories = ReadonlyMap<string, { project: string; github: string }>
+
 export interface VerdictDeps {
   get: GitHubGet
   send: GitHubSend
@@ -57,14 +63,11 @@ export const hhmm = (at: number): string => {
  * that is no project of the reader's, a pull request that is closed or cannot be read, a head that moved since the reader
  * was asked (a verdict is on the head that was read), and the pull request's own writer.
  */
-export async function postVerdict(deps: VerdictDeps, reader: { name: string; repositories: ReadonlySet<string> }, asked: Verdict):
+export async function postVerdict(deps: VerdictDeps, reader: { name: string; repositories: ProjectRepositories }, asked: Verdict):
   Promise<{ url: string; head: string; posted: boolean }> {
-  const repository = asked.repository.toLowerCase(), at = `${repository}#${asked.number}`
   // The comment opens with the reader's name, for people and for the merger: an agent with none cannot sign one.
   if (!reader.name.trim()) throw new SuperTabHostError('AGENT_UNNAMED', 'This agent has no name to sign a verdict with.', 409)
-  if (!reader.repositories.has(repository)) {
-    throw new SuperTabHostError('REPOSITORY_NOT_PROJECT', `${asked.repository} is not the repository of a project you are in.`, 422)
-  }
+  const project = projectRepository(reader.repositories, asked.repository), repository = project.github, at = `${repository}#${asked.number}`
   const github = async (call: () => Promise<GitHubReply>): Promise<GitHubReply> => {
     // gh missing or signed out, or GitHub out of reach: said in gh's own words.
     try { return await call() } catch (error) {
@@ -111,7 +114,7 @@ export async function postVerdict(deps: VerdictDeps, reader: { name: string; rep
     if (made.status !== 201) throw refused(made.status)
     comment = object(made.body)
   }
-  const url = await recordOwn(deps.record, repository, comment, 'Posted')
+  const url = await recordOwn(deps.record, project.project, comment, 'Posted')
   return { url, head, posted }
 }
 
@@ -119,6 +122,13 @@ export async function postVerdict(deps: VerdictDeps, reader: { name: string; rep
  * Records [comment] as the calling agent's and gives its address, or says what was [done] on GitHub and why it is not
  * recorded: a verdict's comment, a claim's (githubClaim.ts) and a cut's (githubSplit.ts).
  */
+/** The project repository [asked] names, by either of its names, or the refusal: a repository of no project of the agent's. */
+export function projectRepository(repositories: ProjectRepositories, asked: string): { project: string; github: string } {
+  const found = repositories.get(asked.toLowerCase())
+  if (!found) throw new SuperTabHostError('REPOSITORY_NOT_PROJECT', `${asked} is not the repository of a project you are in.`, 422)
+  return found
+}
+
 export async function recordOwn(record: VerdictDeps['record'], repository: string, comment: Record<string, unknown>, done: 'Posted' | 'Taken' | 'Split'): Promise<string> {
   const url = String(comment.html_url ?? '')
   try { await record(repository, String(comment.id)) } catch (error) {

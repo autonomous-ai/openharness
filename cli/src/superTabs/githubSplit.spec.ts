@@ -84,7 +84,7 @@ function setup() {
     return answer(404)
   }
   const record = vi.fn(async (_repository: string, _commentId: string) => {})
-  const pip = { name: 'Pip', repositories: new Set(['acme/app']) }
+  const pip = { name: 'Pip', repositories: new Map([['acme/app', { project: 'acme/app', github: 'acme/app' }]]) }
   const split = (over: Partial<{ number: number; size: 's' | 'm' | 'l'; title: string; text: string; repository: string }> = {}, agent = pip) =>
     splitTask({ get, send, record, login: async () => 'Pips-Person', now: () => NOW }, agent,
       { repository: 'acme/app', number: 34, size: 'm', title: 'Sync the theme', text: 'Only the theme: read it at start, write it on change.', ...over })
