@@ -885,11 +885,11 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
 - **Chat cards.** A compact card (`SwarmChatCard`) is an icon and a small
   label, one title line, and one blue action that shows the rest in place.
   What GitHub said to your agent (a comment, review or line comment that names it or is on
-  its own task or pull request, or a task labelled for it) is a card on the
-  left in your chat with it, never your bubble (`SuperTabGitHubRow`): the pull
-  request or issue mark, where it was and who wrote it (PR #4 · deehw, Review,
-  Line, New task · #13), its first line or a review's verdict, and Read for
-  the rest and Open in GitHub.
+  its own task or pull request, or a task labelled for it) is your agent's alone since 2026-11-12: your chat
+  with it is your conversation, not a feed of GitHub's (anh Dee). A server before that one still sends it to
+  you, as a card on the left, never your bubble (`SuperTabGitHubRow`): the pull request or issue mark, where it
+  was and who wrote it (PR #4 · deehw, Review, Line, New task · #13), its first line or a review's verdict, and
+  Read for the rest and Open in GitHub. The card goes on or after 2026-12-11.
 - **Long messages.** Every message shows whole: nothing folds behind More
   (anh Dee, 2026-11-09). So does a code block in it: every line, a line wider
   than the column wrapped, never a scroll inside the chat, with its language
