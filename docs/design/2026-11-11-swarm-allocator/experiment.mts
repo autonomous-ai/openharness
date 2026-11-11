@@ -30,7 +30,10 @@
 // person spends nothing of it; a task spends its true size's percent (the table's, by SPEND, by the task's own noise) evenly
 // over its minutes, whoever builds it; at nothing left its tasks stop until the reset. As the product: the plan is told a
 // window's use only within an hour of a reply since its reset (Claude's is known no other way), and holds one it is not told
-// to nothing; it counts a size's spend from the table, by the task's label, and nothing for a task in hand.
+// to nothing; it counts a size's spend from the table, by the task's label, and nothing for a task in hand. The solver
+// prices a window from what the plan is told of it (cli/src/superTabs/assign/schedule.ts priceOf): with HAND that is the
+// room less its tasks in hand, so there the price does move when a task starts or ends. window-price.mts beside this
+// file runs the critique's case for the price alone.
 //
 // Policies: fifo (first come, any free builder); solver (today's allocator); solver1 (the same with a list one deep: a
 // task is given only to a builder with nothing); dispatch (the most weight for its minutes, and
