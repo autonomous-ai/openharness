@@ -1,0 +1,133 @@
+import { execFileSync } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
+import { gitEnv } from '../lib/gitProject.js'
+import { goalRows } from './goal.js'
+import { GOAL_READER, GOAL_TEXT, goalWorkflow, startGoal } from './goalStarter.js'
+
+const folders: string[] = []
+afterEach(() => { for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true }) })
+const folder = () => { const made = mkdtempSync(join(tmpdir(), 'goal-starter-')); folders.push(made); return made }
+/** git as a checkout whose root is [root] and whose origin's main branch is [head] answers. */
+const git = (root: string | null, head: string | null) => async (_cwd: string, args: readonly string[]) => args[0] === 'rev-parse' ? root : head
+/** A real git, in a throwaway folder and nowhere else: never the repository a test run stands in, whatever GIT_DIR says. */
+const realGit = (cwd: string, args: string[]) => execFileSync('git', args, { cwd, env: gitEnv(process.env), encoding: 'utf8' })
+const ROW = '| what must be true | `the command that proves it` |'
+
+describe('a project\'s goal file and its workflow, written into a checkout', () => {
+  it('writes both where they are not, naming the main branch as the checkout knows it, and says what to do next', async () => {
+    const root = folder()
+    expect(await startGoal(join(root, 'cli'), git(root, 'origin/trunk'))).toEqual({ ok: true, said: 'Wrote agents/GOAL.md and .github/workflows/goal.yml. '
+      + `Add a row to agents/GOAL.md for each milestone: ${ROW} `
+      + 'Then commit both on a branch of yours and open a pull request, as for any change. The checks run on trunk once it lands.' })
+    expect(readFileSync(join(root, 'agents/GOAL.md'), 'utf8')).toBe(GOAL_TEXT)
+    expect(readFileSync(join(root, '.github/workflows/goal.yml'), 'utf8')).toBe(goalWorkflow('trunk'))
+    // The file as written states no milestone: a project with it and no row has no goal yet.
+    expect(goalRows(GOAL_TEXT)).toEqual([])
+  })
+
+  it('leaves alone what is there, a link to nowhere too, and says which', async () => {
+    const root = folder()
+    mkdirSync(join(root, 'agents'))
+    writeFileSync(join(root, 'agents/GOAL.md'), '| Sync works | `npm test` |\n')
+    expect(await startGoal(root, git(root, 'origin/main'))).toEqual({ ok: true, said: 'Wrote .github/workflows/goal.yml (agents/GOAL.md was there already). '
+      + `Add a row to agents/GOAL.md for each milestone: ${ROW} `
+      + 'Then commit it on a branch of yours and open a pull request, as for any change. The checks run on main once it lands.' })
+    expect(readFileSync(join(root, 'agents/GOAL.md'), 'utf8')).toBe('| Sync works | `npm test` |\n')
+    expect(await startGoal(root, git(root, 'origin/main'))).toEqual({ ok: true, said: `agents/GOAL.md and .github/workflows/goal.yml are there already. Add a row to agents/GOAL.md for each milestone: ${ROW}` })
+    // A link whose target is not there is not written through: nothing outside the checkout comes to be.
+    const linked = folder(), outside = join(folder(), 'elsewhere.md')
+    mkdirSync(join(linked, 'agents'))
+    symlinkSync(outside, join(linked, 'agents/GOAL.md'))
+    expect((await startGoal(linked, git(linked, 'origin/main'))).said).toContain('(agents/GOAL.md was there already)')
+    expect(existsSync(outside)).toBe(false)
+    // What it cannot write for another reason is the command's failure.
+    const blocked = folder()
+    writeFileSync(join(blocked, 'agents'), 'a file where the folder goes')
+    await expect(startGoal(blocked, git(blocked, 'origin/main'))).rejects.toThrow()
+  })
+
+  it('names main where the checkout does not say its main branch, or says one that is no branch\'s name', async () => {
+    for (const head of [null, '', 'origin/"] }\nrun: evil', 'origin/' + 'x'.repeat(201)]) {
+      const root = folder()
+      await startGoal(root, git(root, head))
+      expect(readFileSync(join(root, '.github/workflows/goal.yml'), 'utf8')).toBe(goalWorkflow('main'))
+    }
+  })
+
+  it('writes nothing outside a git repository, and says so', async () => {
+    const root = folder()
+    for (const none of [null, '']) {
+      expect(await startGoal(root, git(none, null))).toEqual({ ok: false, said: 'This folder is in no git repository: run it in your checkout of the project.' })
+    }
+    expect(existsSync(join(root, 'agents'))).toBe(false)
+  })
+
+  // Under a git hook of a linked worktree GIT_DIR names another repository than the folder's: the files were written into the
+  // folder the command stood in, cli/ of this very repository (the goal's first review).
+  it('reads the folder\'s own repository with git itself, whatever GIT_DIR says', async () => {
+    const root = folder(), other = folder()
+    realGit(root, ['init', '-q', '-b', 'main', root])
+    realGit(other, ['init', '-q', '-b', 'main', other])
+    realGit(root, ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/trunk'])
+    mkdirSync(join(root, 'sub/deeper'), { recursive: true })
+    const before = process.env.GIT_DIR
+    process.env.GIT_DIR = join(other, '.git')
+    try { expect((await startGoal(join(root, 'sub/deeper'))).said).toContain('The checks run on trunk once it lands.') } finally {
+      if (before === undefined) delete process.env.GIT_DIR
+      else process.env.GIT_DIR = before
+    }
+    expect(existsSync(join(root, 'agents/GOAL.md'))).toBe(true)
+    expect(existsSync(join(root, 'sub/deeper/agents'))).toBe(false)
+    // A repository that names no origin is checked on main.
+    expect((await startGoal(other)).said).toContain('The checks run on main once it lands.')
+  })
+})
+
+describe('the workflow that checks a goal', () => {
+  const text = goalWorkflow('main')
+  it('runs on the main branch alone, each check under the name Harness looks for, its command as a variable', () => {
+    expect(text).toContain('    branches: ["main"]\n')
+    expect(text).toContain('    name: "goal: ${{ matrix.milestone }}"\n')
+    expect(text).toContain('      - run: bash -eo pipefail -c "$CHECK"\n        env:\n          CHECK: ${{ matrix.check }}\n')
+    expect(text).toContain('        include: ${{ fromJSON(needs.rows.outputs.rows) }}\n')
+    expect(text).toContain("    if: needs.rows.outputs.rows != '[]'\n")
+    expect(text).toContain('permissions:\n  contents: read\n')
+    // No row's words are ever part of the script: only these expressions carry them.
+    expect(text.match(/\$\{\{[^}]*\}\}/g)).toEqual(['${{ steps.read.outputs.rows }}', '${{ fromJSON(needs.rows.outputs.rows) }}', '${{ matrix.milestone }}', '${{ matrix.check }}'])
+    expect(text).not.toMatch(/@@\{|\}@@/)
+  })
+
+  it('lets one failing check fail alone, a newer push take a run\'s place, and no check hold a runner for long', () => {
+    expect(text).toContain('    strategy:\n      fail-fast: false\n      max-parallel: 10\n')
+    expect(text).toContain('concurrency:\n  group: goal\n  cancel-in-progress: true\n')
+    expect(text).toContain('    runs-on: ubuntu-latest\n    timeout-minutes: 30\n')
+    // The rows are read from the commit that was pushed.
+    expect(text).toContain('    steps:\n      - uses: actions/checkout@v4\n      - id: read\n')
+  })
+
+  // What CI names a check must be what Harness looks for, row for row: the same file read by the workflow's own lines, taken
+  // from its text and run as it runs them, and by goal.ts.
+  it('reads a goal file exactly as Harness reads it', () => {
+    const step = /\n {8}run: \|\n {10}node - <<'JS' >> "\$GITHUB_OUTPUT"\n([\s\S]*?)\n {10}JS\n/.exec(text)
+    expect(step).not.toBeNull()
+    const script = step![1]!.split('\n').map(line => line.slice(10)).join('\n')
+    expect(script).toBe(GOAL_READER)
+    const files = ['# Goal\n\n| Milestone | Check |\n|---|---|\n| Settings sync offline | `npm test -- sync.offline` |\n  |  The  app   starts | `scripts/start --under 1000`|\n',
+      '| Sync | `a` |\r\n| Sync | `b` |\n| Start | `c | d` |\n| No check | npm test |\n| Empty | ` ` |\n| ' + 'x'.repeat(101) + ' | `a` |\n| ' + 'y'.repeat(100) + ' | `b` |\nnot a row\n| Only one |\n',
+      Array.from({ length: 105 }, (_, n) => `| Milestone ${n} | \`check "${n}" && echo '$HOME' \` |`).join('\n'), '', '| “Quotes” & <tags> ☃ | `echo "${{ secrets.X }}"` |\n',
+      '﻿| With a mark before it | `a` |\n|\tTabs\tand spaces\t|\t`b`\t|\n| rows=[] | `c` |\n| A | `x`y` |\n']
+    for (const file of files) {
+      const root = folder()
+      mkdirSync(join(root, 'agents'))
+      writeFileSync(join(root, 'agents/GOAL.md'), file)
+      // On stdin, as the workflow's heredoc gives it.
+      const said = execFileSync(process.execPath, ['-'], { cwd: root, input: script, encoding: 'utf8' })
+      expect(said.startsWith('rows=')).toBe(true)
+      expect(said.trimEnd().split('\n')).toHaveLength(1)
+      expect(JSON.parse(said.slice('rows='.length))).toEqual(goalRows(file))
+    }
+  })
+})
