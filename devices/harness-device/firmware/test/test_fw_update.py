@@ -34,7 +34,7 @@ static const esp_partition_t slot={8192,"inactive"}, running={8192,"running"};
 static uint8_t flash[8192], image[8192];
 static int fault, hash_fault, image_state;
 static bool voice, missing_slot, handle_live, corrupt_read, confirmed_log;
-static unsigned erases, writes, reads, aborts, accepts, progress, errors, done, reboots, boots, ui_closed, marks;
+static unsigned erases, writes, reads, aborts, accepts, progress, errors, done, reboots, boots, ui_closed, marks, rollbacks;
 static uint32_t write_offset, ack;
 static int64_t clock_us;
 static char offered_version[32], error_text[96], hash_hex[65];
@@ -52,6 +52,8 @@ static int esp_ota_get_state_partition(const esp_partition_t *p,int *state) {
     assert(p==&running); *state=image_state; return fault==8;
 }
 static int esp_ota_mark_app_valid_cancel_rollback(void) { marks++; return fault==9; }
+// Reboots on success, so it returns only when it failed (no other valid image).
+static int esp_ota_mark_app_invalid_rollback_and_reboot(void) { rollbacks++; return fault==11 ? 1 : 0; }
 static const esp_app_desc_t *esp_app_get_description(void) {
     static const esp_app_desc_t desc={"current"}; return &desc;
 }
@@ -113,7 +115,7 @@ static void reset(void) {
     assert(!s_active && !handle_live);
     reset_state(); fault=hash_fault=image_state=0;
     voice=missing_slot=corrupt_read=confirmed_log=false;
-    erases=writes=reads=aborts=accepts=progress=errors=done=reboots=boots=ui_closed=marks=0;
+    erases=writes=reads=aborts=accepts=progress=errors=done=reboots=boots=ui_closed=marks=rollbacks=0;
     ack=write_offset=0; clock_us=123456;
     error_text[0]=0;
 }
@@ -186,10 +188,19 @@ int main(void) {
         assert(done==1 && reboots==1 && boots==1 && !errors && !s_active && !handle_live);
         assert(reads==(n+1023)/1024);
     }
-    reset();fw_mark_valid();assert(!marks && !confirmed_log);
-    image_state=ESP_OTA_IMG_PENDING_VERIFY;fault=8;fw_mark_valid();assert(!marks);
-    fault=9;fw_mark_valid();assert(marks==1 && !confirmed_log);
-    fault=0;fw_mark_valid();assert(marks==2 && confirmed_log);
+    // Not a fresh install: nothing to confirm and nothing to roll back, link or not.
+    reset();fw_confirm_boot(false);assert(!marks && !rollbacks && !confirmed_log);
+    fw_confirm_boot(true);assert(!marks && !rollbacks);
+    // A fresh install whose state cannot be read is left alone.
+    image_state=ESP_OTA_IMG_PENDING_VERIFY;fault=8;fw_confirm_boot(true);assert(!marks && !rollbacks);
+    fw_confirm_boot(false);assert(!marks && !rollbacks);
+    // A fresh install whose link started is confirmed (a failed confirm is logged, not retried here).
+    fault=9;fw_confirm_boot(true);assert(marks==1 && !confirmed_log && !rollbacks);
+    fault=0;fw_confirm_boot(true);assert(marks==2 && confirmed_log && !rollbacks);
+    // A fresh install that cannot open the cable rolls back instead of being confirmed.
+    reset();image_state=ESP_OTA_IMG_PENDING_VERIFY;fw_confirm_boot(false);assert(rollbacks==1 && !marks);
+    // A rollback that returns (no other valid image) leaves the dial running, still unconfirmed.
+    fault=11;fw_confirm_boot(false);assert(rollbacks==2 && !marks);
     puts("OTA: malformed offers, overflow, stalled transfers, disconnect, 10 SDK failure paths, hash/version checks and 482 chunked images PASS (fake flash)");
 }
 '''

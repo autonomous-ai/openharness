@@ -58,13 +58,21 @@ static void fail(const char *why)
 
 bool fw_update_active(void) { return s_active; }
 
-void fw_mark_valid(void)
+void fw_confirm_boot(bool link_started)
 {
     const esp_partition_t *run = esp_ota_get_running_partition();
     esp_ota_img_states_t st;
     if (!run || esp_ota_get_state_partition(run, &st) != ESP_OK) return;
-    if (st != ESP_OTA_IMG_PENDING_VERIFY) return;   // not a fresh install — nothing to confirm
+    if (st != ESP_OTA_IMG_PENDING_VERIFY) return;   // not a fresh install — nothing to confirm or roll back
 
+    if (!link_started) {
+        // The cable is the only way to replace this image, and it cannot open: keep it and the dial is
+        // stranded until someone flashes it over USB. Go back to the image that could.
+        ESP_LOGE(TAG, "new image cannot open the cable — rolling back");
+        esp_err_t back = esp_ota_mark_app_invalid_rollback_and_reboot();   // returns only if it failed
+        ESP_LOGE(TAG, "rollback failed: %s", esp_err_to_name(back));
+        return;
+    }
     esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "could not confirm image: %s", esp_err_to_name(err));
