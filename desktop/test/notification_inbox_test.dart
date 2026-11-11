@@ -566,7 +566,13 @@ void main() {
         machine.blockedAgents.clear();
         app.agentUnread.clearAll();
         await tester.pumpAndSettle();
-        expect(find.text('No notifications'), findsOneWidget);
+        // An empty list shows nothing: the heading and its close alone.
+        expect(find.text('No notifications'), findsNothing);
+        expect(
+          find.descendant(of: inbox, matching: find.byType(Divider)),
+          findsNothing,
+        );
+        expect(find.text('Notifications'), findsOneWidget);
         expect(
           find.text('Could not open this harness. Try again.'),
           findsNothing,

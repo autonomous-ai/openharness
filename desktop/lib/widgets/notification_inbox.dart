@@ -226,32 +226,21 @@ class _NotificationInboxState extends State<NotificationInbox> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     _header(),
-                    Divider(height: 1, color: DesktopChrome.rim),
-                    Flexible(
-                      child: _rows.isEmpty
-                          ? Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 24,
-                                vertical: 40,
-                              ),
-                              child: Text(
-                                'No notifications',
-                                textAlign: TextAlign.center,
-                                style: DesktopChrome.control(
-                                  color: DesktopChrome.muted,
-                                ),
-                              ),
-                            )
-                          : ListView.builder(
-                              controller: _scroll,
-                              shrinkWrap: true,
-                              itemCount: _rows.length,
-                              padding: const EdgeInsets.all(8),
-                              itemExtent: _rowExtent,
-                              itemBuilder: (context, index) =>
-                                  _notificationRow(_rows[index]),
-                            ),
-                    ),
+                    // An empty list shows nothing: the heading and its close alone.
+                    if (_rows.isNotEmpty) ...[
+                      Divider(height: 1, color: DesktopChrome.rim),
+                      Flexible(
+                        child: ListView.builder(
+                          controller: _scroll,
+                          shrinkWrap: true,
+                          itemCount: _rows.length,
+                          padding: const EdgeInsets.all(8),
+                          itemExtent: _rowExtent,
+                          itemBuilder: (context, index) =>
+                              _notificationRow(_rows[index]),
+                        ),
+                      ),
+                    ],
                     if (_error != null && _rows.isNotEmpty)
                       Padding(
                         padding: const EdgeInsets.fromLTRB(20, 4, 20, 16),

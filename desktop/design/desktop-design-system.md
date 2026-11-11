@@ -936,7 +936,8 @@ and its own button closes it again. A dropdown never disables the titlebar or
 dims its controls. It opens fresh: no row is lit when a pointer opened it, the
 first is focused only when a key did. The Settings page is a page: the tab
 row stays live over it and a click there leaves Settings, then acts. Only a
-real modal dialog holds the titlebar.
+real modal dialog holds the titlebar. The bell's inbox with nothing in it is
+its heading and × alone: an empty list shows nothing.
 
 **Task dialogs** — one heading, optional short explanation, fields, and fixed
 trailing actions. Rename, confirmation, linking and sharing use the same type,
