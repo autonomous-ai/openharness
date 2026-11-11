@@ -23,7 +23,8 @@
 #      script on CI's federated credential after that run's staging read-back verified the zips and its pty-signatures
 #      job their signatures; a maintainer's own gcloud still works too, with PTY_SIGNED_ZIPS from
 #      check-pty-signatures.ps1 run on Windows (DRY_RUN=1 DRY_RUN_OUT=<dir> checks and writes nothing);
-#   3. the installer: bash cli/scripts/upload-install-ps1.sh --production
+#   3. the installer: release.yml's promote-pty job publishes it after the host when <version> is the live CLI's
+#      (bash cli/scripts/upload-install-ps1.sh --production by hand otherwise)
 #
 # Environment: GCS_BUCKET; STAGING_METADATA_PATH (harness/staging/pty/metadata.json); METADATA_PATH, the manifest
 # promoted into (harness/pty/metadata.json); PTY_SIGNED_ZIPS, the zips found signed (above); DRY_RUN=1 with
