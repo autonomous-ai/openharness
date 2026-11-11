@@ -438,7 +438,21 @@ void main() {
       await PersonalProjects.of(f.app).sync(c);
       expect(_commands(f), hasLength(2));
 
-      // The app restarted on the same computer: what it kept, no request.
+      // Each names its GitHub repository on the server, once.
+      expect(
+        [
+          for (final post in f.connection.server.posts)
+            if ((post['command'] as Map)['type'] == 'project.github')
+              (post['command'] as Map)['repository'],
+        ],
+        ['acme/api', 'acme/web'],
+      );
+      expect({
+        for (final p in c.snapshot!.projects) p.name: p.githubRepository,
+      }, containsPair('api', 'acme/api'));
+
+      // The app restarted on the same computer, or another computer: nothing kept here, and no request either: each
+      // project names its repository.
       final restarted = SuperTabLaunchFixture();
       restarted.store.values.addAll(f.store.values);
       restarted.connection.server.state
@@ -483,14 +497,16 @@ void main() {
       expect(names, isNot(contains('scratch')));
     });
 
-    test('nothing is sent of a pane but its project\'s name', () async {
+    test('nothing is sent of a pane but its project\'s name and its GitHub '
+        'repository', () async {
       final f = SuperTabLaunchFixture();
       _desk(f);
       final c = await _personal(f);
       await PersonalProjects.of(f.app).sync(c);
       final sent = f.connection.server.posts.toString();
+      expect(sent, contains('acme/api'));
       for (final leak in [
-        'acme',
+        'github.com',
         '/w/',
         '/Users/me',
         'notes',
@@ -1065,11 +1081,11 @@ void main() {
       final projects = PersonalProjects.of(f.app);
       await projects.sync(c);
       final api = named(c, 'api');
-      // The Swarm's own first project names no repository: it hides throughout.
-      expect(projects.hiddenIn(c), {'lead'});
+      // The Swarm's own first project is listed as any other (the server deletes an empty one, PS-B).
+      expect(projects.hiddenIn(c), isEmpty);
       f.app.swarms.firstWhere((s) => s.id == 'one').panes.remove(p.api);
       f.app.swarms.firstWhere((s) => s.id == 'two').panes.remove(p.api2);
-      expect(projects.hiddenIn(c), {'lead', api.id});
+      expect(projects.hiddenIn(c), {api.id});
       for (final project in c.snapshot!.projects) {
         expect(
           projects.hidden(c, project.id),
@@ -1081,7 +1097,7 @@ void main() {
       f.app.machineStates['m']!
         ..agentsListedOnce = false
         ..agentLoadStatus = AgentLoadStatus.loading;
-      expect(projects.hiddenIn(c), {'lead'});
+      expect(projects.hiddenIn(c), isEmpty);
     });
 
     test('nothing hides while a machine with one of the panes has not listed '

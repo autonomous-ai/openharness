@@ -16,12 +16,13 @@ import 'swarm_switcher.dart' show PersonalSwarm;
 
 /// A person's repos as the projects of their Personal Swarm (Swarm v4, anh Dee 2026-11-09): every pane of theirs in a
 /// checkout joins the project of its repo, whatever tab it is in, the same repo on each of their computers being one
-/// project, and each project's Tasks board reads that repo's GitHub issues ([PersonalProjects.repositoryOf]). A pane with
+/// project, and each project's Tasks board reads that repo's GitHub issues (`SuperTabProject.githubRepository`). A pane with
 /// no repo is in no project: it stays in Your Team (personal_agents.dart).
 ///
 /// Which pane belongs where is worked out here, on the person's own Desktop, from the panes it already shows. Nothing of
-/// a pane is sent anywhere: the server learns only each project's name, as a private project of a Swarm that has no one
-/// else in it.
+/// a pane is sent anywhere: the server learns each project's name and, for a repo on GitHub, its `owner/name`
+/// (`project.github`), which every computer of theirs then reads its Tasks board from. Which project a repo has is asked
+/// of the server, never kept on a computer: the same request on every computer answers the one project.
 ///
 /// The projects v3 made for a tab's panes with no repo ("one", "two") go: each this computer made is closed on the server
 /// once (backend commands.ts `project.closeTab`: deleted when none of its chats has a message, else kept read-only and
@@ -97,9 +98,6 @@ String _hash(String text) => const DartSha256()
     .join()
     .substring(0, 24);
 
-/// The id of a Swarm's own first project, made with it (backend projects.ts `projectsOf`).
-const kFirstProjectId = 'lead';
-
 /// The request id a repo's project is created with: the same on every computer of the person's, so the server answers
 /// each with the one project (backend commands.ts `project.create`: the project's id comes from it). The URL is not in it.
 String personalProjectOperation(String repo) => 'personal-repo-${_hash(repo)}';
@@ -148,8 +146,8 @@ List<PersonalPane> personalPanes(AppNotifier app) {
 }
 
 /// The projects made for the person's repos in their Personal Swarm, per app:
-/// made once, remembered on this computer, and found again by the same
-/// request on another.
+/// made once and found again by the same request, on every computer and after
+/// every restart, or by the GitHub repository the project names.
 class PersonalProjects extends ChangeNotifier {
   PersonalProjects._(this.app);
   static final _of = Expando<PersonalProjects>();
@@ -161,18 +159,19 @@ class PersonalProjects extends ChangeNotifier {
   /// The longest wait before a failed request is asked again.
   static const maxRetryWait = Duration(minutes: 5);
 
-  /// Each account's remembered projects, one key for all their Personal
-  /// Swarms: `super_tab.repos.<account>` (account_keys.dart sweeps it).
+  /// Each account's v3 tab projects not closed yet, one key for all their
+  /// Personal Swarms: `super_tab.repos.<account>` (account_keys.dart sweeps it).
+  /// The repos' projects it held before 2026-11-12 are read no more.
   static String storageKey(String account) => 'super_tab.repos.$account';
 
-  /// Per account and Personal Swarm: repo to project id, null once the person
-  /// deleted it (it is not made again).
+  /// Per account and Personal Swarm, for this run: repo to project id, null once
+  /// the person deleted it (it is not made again).
   final _known = <String, Map<String, Map<String, String?>>>{};
 
   /// Per account and Personal Swarm: v3's tab projects not closed yet, desk tab id to project id.
   final _tabs = <String, Map<String, Map<String, String>>>{};
 
-  /// Repos renamed to their long name, per account and Swarm.
+  /// Repos renamed to their long name, per account and Swarm, this run: a name the person chose since stays.
   final _renamed = <String, Map<String, Set<String>>>{};
   final _loads = <String, Future<void>>{};
   final _syncing = <String>{};
@@ -204,13 +203,6 @@ class PersonalProjects extends ChangeNotifier {
         in _known[account]?[swarm]?.entries ?? <MapEntry<String, String?>>[])
       if (value == projectId) key,
   };
-
-  /// The repo project [projectId] of [c] was made for (`github.com/owner/name`), read on this computer: what its Tasks
-  /// board reads, since the server never learns it. Null for any other project, or outside the person's Personal Swarm.
-  String? repositoryOf(SuperTabController c, String projectId) {
-    if (!eligible(c)) return null;
-    return _reposOf(c.accountId, c.tabId, projectId).firstOrNull;
-  }
 
   /// The repos the person's panes and their agents in [c] work in: an agent started in the Swarm has no pane in a tab.
   Set<String> _repos(SuperTabController c) => {
@@ -272,19 +264,12 @@ class PersonalProjects extends ChangeNotifier {
   Set<String> hiddenIn(SuperTabController c) {
     if (!eligible(c)) return const {};
     final snapshot = c.snapshot!;
-    // The Swarm's own first project while it names no repository (anh Dee via the lead, 2026-11-10: projects are repos
-    // only). Nothing of it is deleted, and it is listed once it has one.
-    final first = switch (snapshot.projectById(kFirstProjectId)) {
-      final project? when project.repository == null => project.id,
-      _ => null,
-    };
     final known = _known[c.accountId]?[c.tabId];
     if (known == null || known.isEmpty || _unresolvedPanes(app)) {
-      return {?first};
+      return const {};
     }
     final shown = {for (final repo in _repos(c)) ?known[repo]};
     return {
-      ?first,
       for (final id in known.values)
         if (id != null &&
             !shown.contains(id) &&
@@ -358,55 +343,37 @@ class PersonalProjects extends ChangeNotifier {
       if (saved is! Map) return;
       for (final MapEntry(key: swarm, value: entry) in saved.entries) {
         if (swarm is! String || entry is! Map) continue;
-        final projects = _projects(account, swarm);
         final repos = entry['projects'];
-        if (repos is Map) {
-          for (final MapEntry(:key, :value) in repos.entries) {
-            if (key is! String || (value != null && value is! String)) continue;
-            if (key.startsWith(_tabPrefix)) {
-              if (value is String) {
-                ((_tabs[account] ??= {})[swarm] ??= {}).putIfAbsent(
-                  key.substring(_tabPrefix.length),
-                  () => value,
-                );
-              }
-            } else {
-              projects.putIfAbsent(key, () => value as String?);
-            }
+        if (repos is! Map) continue;
+        for (final MapEntry(:key, :value) in repos.entries) {
+          if (key is String && key.startsWith(_tabPrefix) && value is String) {
+            ((_tabs[account] ??= {})[swarm] ??= {}).putIfAbsent(
+              key.substring(_tabPrefix.length),
+              () => value,
+            );
           }
-        }
-        final renamed = entry['renamed'];
-        if (renamed is List) {
-          ((_renamed[account] ??= {})[swarm] ??= {}).addAll(
-            renamed.whereType<String>(),
-          );
         }
       }
     } catch (_) {
-      // Nothing kept: each project is asked for again, and the server answers
-      // with the one it made.
+      // Nothing kept: the desk's own tabs are found again by their request.
     }
   }();
 
   Future<void> _save(String account) async {
-    final known = _known[account] ?? const {};
     final tabs = _tabs[account] ?? const {};
     final value = jsonEncode({
-      for (final swarm in {...known.keys, ...tabs.keys})
+      for (final MapEntry(key: swarm, value: kept) in tabs.entries)
         swarm: {
           'projects': {
-            ...?known[swarm],
-            for (final MapEntry(:key, :value)
-                in tabs[swarm]?.entries ?? <MapEntry<String, String>>[])
+            for (final MapEntry(:key, :value) in kept.entries)
               '$_tabPrefix$key': value,
           },
-          'renamed': [...?_renamed[account]?[swarm]],
         },
     });
     try {
       await app.superTabs.storage.write(storageKey(account), value);
     } catch (_) {
-      // Kept for this run; the next asks the server again, which repeats.
+      // Kept for this run; the next finds the desk's tabs again by their request.
     }
   }
 
@@ -437,6 +404,12 @@ class PersonalProjects extends ChangeNotifier {
         var made = false;
         for (final repo in wanted) {
           if (projects.containsKey(repo)) continue;
+          // One that names its GitHub repository is found with no request: another of their computers made it.
+          if (_ofGitHub(c, repo) case final id?) {
+            projects[repo] = id;
+            notifyListeners();
+            continue;
+          }
           final retryAt = _retryAt['$scope/$repo'];
           if (retryAt != null && clock.now().isBefore(retryAt)) continue;
           final answer = await _create(c, repo);
@@ -444,18 +417,78 @@ class PersonalProjects extends ChangeNotifier {
           if (answer case (:final id)) {
             projects[repo] = id;
             made = true;
-            await _save(account);
             notifyListeners();
           }
         }
         // The new projects read before two of one name are told apart.
         if (made && !await _reread(c)) return;
         if (!eligible(c)) return;
-        if (await _tellApart(c) && eligible(c)) await _reread(c);
+        final named = await _nameGitHub(c);
+        if (!eligible(c)) return;
+        if ((await _tellApart(c) || named) && eligible(c)) await _reread(c);
       } while (_again.contains(scope));
     } finally {
       _syncing.remove(scope);
     }
+  }
+
+  /// [repo]'s `owner/name` when it is on GitHub, else null: what a project's `githubRepository` holds.
+  static String? gitHubName(String repo) {
+    final parts = repo.split('/');
+    return parts.length == 3 && parts.first == 'github.com'
+        ? '${parts[1]}/${parts[2]}'
+        : null;
+  }
+
+  /// The project of [c] that names [repo] as its GitHub repository, if one does.
+  String? _ofGitHub(SuperTabController c, String repo) {
+    final name = gitHubName(repo);
+    if (name == null) return null;
+    return c.snapshot?.projects
+        .where((p) => p.githubRepository?.toLowerCase() == name)
+        .firstOrNull
+        ?.id;
+  }
+
+  /// Tells the server the GitHub repository of each of [c]'s repo projects that does not name it yet (backend
+  /// `project.github`), once a request: what every computer's Tasks board then reads. Whether any was set.
+  Future<bool> _nameGitHub(SuperTabController c) async {
+    final scope = '${c.accountId}/${c.tabId}';
+    var named = false;
+    for (final MapEntry(key: repo, value: id) in _projects(
+      c.accountId,
+      c.tabId,
+    ).entries.toList()) {
+      final name = gitHubName(repo);
+      final project = id == null ? null : c.snapshot?.projectById(id);
+      if (name == null || project == null || project.githubRepository != null) {
+        continue;
+      }
+      final key = '$scope/$repo/github';
+      final retryAt = _retryAt[key];
+      if (retryAt != null && clock.now().isBefore(retryAt)) continue;
+      try {
+        await c.request(
+          'POST',
+          '/api/super-tabs/${Uri.encodeComponent(c.tabId)}/commands',
+          body: {
+            'operationId': 'personal-github-${_hash(repo)}',
+            'command': {
+              'type': 'project.github',
+              'projectId': project.id,
+              'repository': name,
+            },
+          },
+        );
+        _failures.remove(key);
+        _retryAt.remove(key);
+        named = true;
+      } catch (error) {
+        _failed(key, 'repository', error);
+      }
+      if (!eligible(c)) return named;
+    }
+    return named;
   }
 
   /// Reads [c] again; false when that failed (the next change asks again).
@@ -639,7 +672,6 @@ class PersonalProjects extends ChangeNotifier {
         if (!eligible(c)) return changed;
         renamed.add(repo);
         changed = true;
-        await _save(account);
       }
     }
     return changed;

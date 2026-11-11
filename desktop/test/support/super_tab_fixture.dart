@@ -1356,6 +1356,16 @@ class ConversationServer {
         groups.removeWhere((g) => removed.contains(g['id']));
         messages.removeWhere((m) => removed.contains(m['conversationId']));
         revision++;
+      } else if (command['type'] == 'project.github') {
+        // As the backend's (project.github): the GitHub repository a project's board reads, set by its owner.
+        final project = (state['projects'] as List?)
+            ?.cast<Map<String, dynamic>>()
+            .where((p) => p['id'] == command['projectId'])
+            .firstOrNull;
+        if (project != null) {
+          project['githubRepository'] = command['repository'];
+          revision++;
+        }
       } else if ([
         'project.rename',
         'project.cadence',

@@ -313,6 +313,9 @@ class SuperTabConversation {
   final int reactionSeq;
 }
 
+/// A GitHub `owner/name`.
+final _ownerName = RegExp(r'^[\w.-]+/[\w.-]+$');
+
 class SuperTabProject {
   SuperTabProject.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
@@ -339,10 +342,18 @@ class SuperTabProject {
         row['repositoryCreation'],
       ),
       archived = row['archived'] == true,
+      githubRepository = switch (row['githubRepository']) {
+        final String name when _ownerName.hasMatch(name) => name,
+        _ => null,
+      },
       pmChatId = row['pmChat'] is Map
           ? superTabMap(row['pmChat'])['id'] as String?
           : null;
   final String id, name, ownerId, leadConversationId;
+
+  /// The GitHub repository (`owner/name`) its owner's Desktop set for it when its record names no address (backend
+  /// `project.github`): what its Tasks board reads on every computer. Null until set, and from a backend before it.
+  final String? githubRepository;
 
   /// The 1:1 chat its next PM takes, open while that PM starts (backend pmChat.ts): only its person reads it, so null
   /// for anyone else, once a PM took it, and from a backend before it.
