@@ -136,8 +136,10 @@ describe('canonical engine CLI commands', () => {
     const root = mkdtempSync(join(tmpdir(), 'engine-bin-deleted-image-'))
     tempDirs.push(root)
     const executable = join(root, 'native-agent')
-    copyFileSync('/bin/sleep', executable)
-    const child = spawn(executable, ['30'], { stdio: 'ignore' })
+    // Node itself, not /bin/sleep: Ubuntu 26.04's sleep is a multi-call coreutils binary that picks its tool by its own
+    // name, so a copy named native-agent exits at once and its /proc image is gone before it is read.
+    copyFileSync(process.execPath, executable)
+    const child = spawn(executable, ['-e', 'setTimeout(() => {}, 30_000)'], { stdio: 'ignore' })
     await new Promise<void>((resolve, reject) => {
       child.once('spawn', resolve)
       child.once('error', reject)
