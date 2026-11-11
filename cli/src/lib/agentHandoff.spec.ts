@@ -16,6 +16,33 @@ import {
   renderHandoff, renderTranscript, repoState, secureText, type HandoffDeps, type HandoffRequest, type HandoffResult,
 } from './agentHandoff.js'
 
+// What the publication does on disk, in order, while `on`: each flush (fsync) and each name it adds to a directory.
+const disk = vi.hoisted(() => ({ on: false, seq: 0, flushes: [] as Array<{ seq: number; ino: bigint; directory: boolean; state: string }>,
+  names: [] as Array<{ seq: number; directory: bigint; path: string }> }))
+vi.mock('node:fs', async (original) => {
+  const fs = await original<typeof import('node:fs')>()
+  const { dirname } = await import('node:path')
+  const named = (path: unknown): void => {
+    if (disk.on) disk.names.push({ seq: disk.seq++, directory: fs.lstatSync(dirname(String(path)), { bigint: true }).ino, path: String(path) })
+  }
+  return { ...fs,
+    fsyncSync: (fd: number) => {
+      fs.fsyncSync(fd)
+      if (!disk.on) return
+      const info = fs.fstatSync(fd, { bigint: true })
+      disk.flushes.push({ seq: disk.seq++, ino: info.ino, directory: info.isDirectory(), state: info.isDirectory() ? `${info.ino}` : `${info.ino}:${info.size}:${info.mtimeNs}` })
+    },
+    openSync: (...args: Parameters<typeof fs.openSync>) => {
+      const fd = fs.openSync(...args)
+      if (typeof args[1] === 'number' && (args[1] & fs.constants.O_CREAT) !== 0) named(args[0])
+      return fd
+    },
+    mkdirSync: (...args: Parameters<typeof fs.mkdirSync>) => { const made = fs.mkdirSync(...args); named(args[0]); return made },
+    linkSync: (...args: Parameters<typeof fs.linkSync>) => { fs.linkSync(...args); named(args[1]) },
+    renameSync: (...args: Parameters<typeof fs.renameSync>) => { fs.renameSync(...args); named(args[1]) },
+  }
+})
+
 // These fixtures exercise normalization, rendering, git and publication with small synthetic
 // reader records. Native identity is composed without this seam in core/handoffPublication.native,
 // nativeHandoff.golden and the real service/lifecycle fixtures.
@@ -388,6 +415,32 @@ describe('prepareAgentHandoff: a repository', () => {
     expect(transcript.indexOf('Add a retry')).toBeLessThan(transcript.indexOf('Now update the README'))
     expect(transcript).not.toContain('OUTPUT-SHOULD-NOT-APPEAR')
     expect(transcript).not.toContain('hunter2pass')
+  })
+
+  // On macOS every fsync is a full drive flush: a publication made 73, 2.5 s of a 3.3 s preparation on an Intel Mac at
+  // load 8, under its 5 s deadline. Most flushed a state again that nothing had changed since.
+  // Windows cannot flush a directory handle (secureState.ts `syncStateDirectory`): its names are not flushed here.
+  it.skipIf(process.platform === 'win32')('makes every name and every byte it publishes durable, and flushes no state twice', async () => {
+    disk.on = true
+    try { await prepareAgentHandoff(depsFor([session()]), request()) } finally { disk.on = false }
+    const { flushes, names } = disk
+    // Each name it added is durable: its directory was flushed after the name went in.
+    for (const name of names) {
+      expect(flushes.some(flush => flush.directory && flush.ino === name.directory && flush.seq > name.seq), name.path).toBe(true)
+    }
+    // Each file it published was flushed as it is now.
+    const receipts = join(root, 'daemon-data', 'handoff-receipts')
+    for (const path of [mdOf(), mdOf().replace(/\.md$/, '.transcript.md'), join(hdir(), '.gitignore'), ...readdirSync(receipts).filter(name => name.endsWith('.json')).map(name => join(receipts, name))]) {
+      const info = statSync(path, { bigint: true })
+      expect(flushes.some(flush => flush.state === `${info.ino}:${info.size}:${info.mtimeNs}`), path).toBe(true)
+    }
+    // No state flushed twice: a directory again only after a name went in.
+    for (const [index, flush] of flushes.entries()) {
+      const before = flushes.slice(0, index).filter(earlier => earlier.state === flush.state).pop()
+      if (!before) continue
+      expect(flush.directory && names.some(name => name.directory === flush.ino && name.seq > before.seq && name.seq < flush.seq), flush.state).toBe(true)
+    }
+    disk.flushes.length = 0; disk.names.length = 0
   })
 
   it('keeps the folder out of git, once, and locks the files down', async () => {
