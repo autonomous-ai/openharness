@@ -29,6 +29,7 @@ import { cancelledTags, cancelReason, switchExpired, unfinishedWork } from './ti
 import { namedDefault } from './catalog.js'
 import { BUILT_IN_ROLE_DEFAULTS, NO_PROJECT, inChannelOf, isAgentChat, agentProjectId, groupRepositoryUrl, canReadAgent, canReadProject, deletableProject, deleteProject, markConfidential, ownsProject, admitPerson, dismissPeople, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, mutableProjects, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, sameProject, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
 import { recordClosing } from './closedAgents.js'
+import { agentChatId } from './agentKind.js'
 import { declinedWith, declinedWithout } from './sharing.js'
 import { actorLabel, memberChanges, memberRowText, quotedName } from './memberRows.js'
 import { launchRefusedLine, leadArrived, LEAD_CLAIM_MS, leadEffort, leadJoined, leadOvertaken, leadStartFailed, leadStarting, leadWaits, LEAD_CAPABILITY, placeLead } from './leadStart.js'
@@ -70,6 +71,10 @@ const repositoryUrl = z.string().max(4096).refine(value => {
   } catch { return false }
 }, 'Share a repository URL without credentials.')
 const project = z.object({ cwd: path, repositoryUrl: repositoryUrl.nullable() }).strict()
+/** A GitHub repository as `owner/name`: GitHub's own rules for both (an owner of 1-39 letters, digits and inner dashes; a name of
+ *  letters, digits, `.`, `_` and `-` that is not `.` or `..`). */
+const githubRepository = z.string().regex(/^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}\/(?!\.\.?$)[A-Za-z0-9._-]{1,100}$/,
+  'Name the repository as owner/name.')
 // How many agents a machine offers is its owner's choice: the CLI suggests at most its total RAM / 2 GB (192 GB offers 96).
 // The 16 this once was held the Mac Studio far below that (Ken, 2026-10-28); 1024 only refuses a number no machine could run.
 const maxAgents = z.number().int().min(1).max(1024)
@@ -130,6 +135,9 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('project.report'), projectId: id,
     text: z.string().trim().min(1).max(PROJECT_STATUS_MAX, `Keep your own status lines under ${PROJECT_STATUS_MAX.toLocaleString('en-US')} characters: the Swarm writes the line of every active task.`) }).strict(),
   z.object({ type: z.literal('project.repository'), projectId: id, repositoryUrl }).strict(),
+  // The project's GitHub repository, `owner/name`, set by the client that knows it (anh Dee 2026-11-11): a project whose folder
+  // only one computer has still has its Tasks board on every computer.
+  z.object({ type: z.literal('project.github'), projectId: id, repository: githubRepository }).strict(),
   // What the project is, in one line, for the Cmd-N and join project list (task #4540): empty clears it.
   z.object({ type: z.literal('project.about'), projectId: id, about: z.string().trim().max(80).regex(/^[^\r\n]*$/, 'One line.') }).strict(),
   // Whether its agents answer each person's message in that message's thread (projects.ts answersInThread, task #3747).
@@ -138,7 +146,11 @@ export const commandSchema = z.discriminatedUnion('type', [
     model: z.string().trim().min(1).max(200).optional(), effort: z.string().trim().min(1).max(80).optional(),
     branchRef: z.string().max(1024).regex(/^refs\/(heads|remotes)\/[^\s\x00-\x1f\x7f]+$/).optional(), repositoryUrl: repositoryUrl.optional() }).strict(),
   // A Personal Swarm's one start of a project's Lead by its person's Desktop, on their message in its chat (leadStart.ts).
+  // project.pm replaces it: a Desktop chooses one of its person's agents as the PM. It goes 30 days after the first Desktop
+  // release that sends project.pm (due 2026-11-12), so on or after 2026-12-12, with leadWaiting and its Personal case.
   z.object({ type: z.literal('lead.claim'), projectId: id, machineId: id }).strict(),
+  // The project's Product Manager, chosen by its owner from their own agents (anh Dee 2026-11-11); choosing again switches it.
+  z.object({ type: z.literal('project.pm'), projectId: id, agentId: id }).strict(),
   z.object({ type: z.literal('lead.switch'), projectId: id, engine: swarmEngine, profileId: id, machineId: id.optional(),
     model: z.string().trim().min(1).max(200).optional(), effort: z.string().trim().min(1).max(80).optional() }).strict(),
   z.object({ type: z.literal('conversation.rename'), conversationId: id, title }).strict(),
@@ -888,6 +900,55 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         fail('PROJECT_REPOSITORY_SET', 'This project already shares another repository.')
       }
       repository.repositoryUrl = command.repositoryUrl
+      break
+    }
+    case 'project.github': {
+      // As its name is: its owner sets it, or its coordinator.
+      const project = readProject(state, actor, command.projectId)
+      if (actor.kind === 'agent') coordinatorOf(project)
+      else manageProject(state, actor, project.id)
+      mutableProjects(state)
+      projectOf(state, project.id).githubRepository = command.repository
+      break
+    }
+    case 'project.pm': {
+      // Swarm v4 (anh Dee 2026-11-11): a project's PM is one of its owner's own agents, chosen in its settings, in any Swarm.
+      // The one it replaces keeps running, back in its person's team as a plain agent.
+      if (actor.kind !== 'person') fail('HUMAN_REQUIRED', `A person chooses a project's ${COORDINATOR_NAME}.`, 403)
+      if (state.paused) fail('PAUSED', 'New work is paused in this Swarm.')
+      const project = manageProject(state, actor, command.projectId)
+      const home = open(state, project.leadConversationId)
+      const target = agent(state, command.agentId)
+      const name = target.displayName ?? target.name
+      // Its own agent on its own computer, in its own account: a PM runs as its person (machines.ts, task #4120).
+      if (target.contributorId !== actor.userId || target.machineOwnerId !== actor.userId || target.hostGrant) {
+        fail('AGENT_NOT_YOURS', `Choose one of your own agents as the ${COORDINATOR_NAME}.`, 403)
+      }
+      const current = home.leadId && home.agentIds.includes(home.leadId) ? agent(state, home.leadId) : undefined
+      // Its own chat with its person, where they talk to it (agentKind.ts).
+      result.chatId = agentChatId(state, target)
+      if (current?.id === target.id) break
+      if (target.workDecision === 'stop') fail('STOP_REQUESTED', `${name} is stopping.`, 409)
+      const led = ledProject(state, target.id)
+      if (led) fail('LEAD_ELSEWHERE', `${name} is already the ${COORDINATOR_NAME} of ${led.name}.`, 409)
+      // What it heard in a private project stays there (projects.ts privateProjectId).
+      if (target.privateProjectId && target.privateProjectId !== project.id) fail('AGENT_PRIVATE', `${name} works in a private project.`, 409)
+      if (state.conversations.some(c => activeWork(c) && c.assignment?.agentId === target.id && groupProject(state, c).id !== project.id)) {
+        fail('WORK_ACTIVE', `${name} has a task in another project. Choose it once that task ends.`, 409)
+      }
+      if (current?.switchRequest) fail('LEAD_SWITCHING', `The ${COORDINATOR_NAME} is being moved.`, 409)
+      if (leadStarting(state, project.id)) fail('LEAD_STARTING', `This project's ${COORDINATOR_NAME} is already starting.`, 409)
+      if (current) {
+        home.agentIds = home.agentIds.filter(a => a !== current.id)
+        current.regular = true
+        delete current.projectId
+      }
+      delete target.regular
+      delete target.mainProjectId
+      target.projectId = project.id
+      if (!home.agentIds.includes(target.id)) home.agentIds.push(target.id)
+      home.leadId = target.id
+      arrived(project, target.id)
       break
     }
     case 'project.create': {

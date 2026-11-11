@@ -53,8 +53,12 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       break
     case 'project.report': case 'project.repository':
     // The coordinator's own writes check it leads the project, which a concurrent Lead change ends (review of phase 2).
-    case 'project.answers': case 'project.about':
+    case 'project.answers': case 'project.about': case 'project.github':
       leadCheck(command.projectId)
+      break
+    // A PM is chosen against the project's own starts and claims, which the head holds: a start of one lands against it.
+    case 'project.pm':
+      head()
       break
     case 'project.sharing':
       // Rule (b): everyone who loses the project sees the change through their own part (design section 1.2).
