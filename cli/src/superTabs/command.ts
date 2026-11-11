@@ -1,3 +1,4 @@
+import { verdictAsked } from './githubVerdict.js'
 import { identifier, object } from './wire.js'
 import { openDaemon, whereFor, type Daemon, type Where } from '../agentClient/daemon.js'
 import { callerOf, type Frame } from '../agentClient/model.js'
@@ -22,7 +23,7 @@ function harnessIn(frames: PaneFrame[], pane: string, machineId: string): boolea
 
 const ELSEWHERE = 'From a harness, Swarm commands go to this computer\'s own Harness only: leave out --machine and --port, or give this computer\'s own.'
 
-const USAGE = 'harness super-tab [--tab ID] [--agent ID] [--port N --machine ID] status | messages GROUP [--thread ROOT] [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | answer GROUP MESSAGE_ID TEXT|- OPERATION_ID [--to AGENT]... | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]...'
+const USAGE = 'harness super-tab [--tab ID] [--agent ID] [--port N --machine ID] status | messages GROUP [--thread ROOT] [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | answer GROUP MESSAGE_ID TEXT|- OPERATION_ID [--to AGENT]... | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | read ok|hold OWNER/REPO#N SHA [TEXT|-]'
 const usageError = () => new Error(USAGE)
 
 /** A message on stdin, for post's TEXT `-`.
@@ -30,12 +31,16 @@ const usageError = () => new Error(USAGE)
  *  `post GROUP - OPERATION_ID` posted a literal dash: three Reviewer verdicts on 2026-10-30, #2345's findings among them,
  *  arrived as "-". So `-` reads the message from stdin, once, before anything is sent, and an empty or a terminal stdin is
  *  refused: nothing is posted, and nothing waits on a terminal for input that never comes. */
-const POST_STDIN = "post GROUP - OPERATION_ID <<'MSG' (the message on the next lines, then MSG alone on a line)"
-function postStdin(stdin: () => string, terminal: () => boolean): string {
-  if (terminal()) throw new Error(`post - reads the message from stdin, but stdin is a terminal, so nothing was posted. Send the message on stdin: ${POST_STDIN}, or pass it as TEXT.`)
+const HEREDOC = "<<'MSG' (the message on the next lines, then MSG alone on a line)"
+const POST_STDIN = `post GROUP - OPERATION_ID ${HEREDOC}`
+/** A verdict's words on stdin, as a post's (githubVerdict.ts). */
+const READ_STDIN = `read ok|hold OWNER/REPO#N SHA - ${HEREDOC}`
+function postStdin(stdin: () => string, terminal: () => boolean, verb: 'post' | 'read' = 'post'): string {
+  const form = verb === 'post' ? POST_STDIN : READ_STDIN
+  if (terminal()) throw new Error(`${verb} - reads the message from stdin, but stdin is a terminal, so nothing was posted. Send the message on stdin: ${form}, or pass it as TEXT.`)
   // A heredoc ends the message with one line break, which is not part of it.
   const text = stdin().replace(/\r?\n$/, '')
-  if (!text.trim()) throw new Error(`post - read no message from stdin, so nothing was posted. Send the message on stdin: ${POST_STDIN}. A message that is only - goes on stdin too.`)
+  if (!text.trim()) throw new Error(`${verb} - read no message from stdin, so nothing was posted. Send the message on stdin: ${form}. A message that is only - goes on stdin too.`)
   return text
 }
 /** What the server takes of one post (backend superTabs/commands.ts `message.send`: 32,000 characters once trimmed). A longer
@@ -82,8 +87,16 @@ export function readStdin(stream: NodeJS.ReadableStream & { destroy(): void }, i
   })
 }
 /** Why `-` read nothing usable from a stdin left open, and how to end it. */
-const idleRefusal = () => `post - read stdin until nothing more came for ${STDIN_IDLE_MS / 1000} s, but stdin was never closed, so nothing was posted. `
-  + `Close stdin after the message, as a heredoc does: ${POST_STDIN}, or pass it as TEXT.`
+const idleRefusal = (verb: 'post' | 'read') => `${verb} - read stdin until nothing more came for ${STDIN_IDLE_MS / 1000} s, but stdin was never closed, so nothing was posted. `
+  + `Close stdin after the message, as a heredoc does: ${verb === 'post' ? POST_STDIN : READ_STDIN}, or pass it as TEXT.`
+/** The command's action: the first word that is no flag of where to send it, nor a flag's value (parseSuperTabArgs). */
+const actionOf = (argv: readonly string[]): string | undefined => {
+  for (let i = 0; i < argv.length; i++) {
+    if (['--tab', '--agent', '--port', '--machine'].includes(argv[i]!)) i++
+    else return argv[i]
+  }
+  return undefined
+}
 /** Stands in for stdin while the arguments are parsed the first time: stdin is read only for a command that wants it. */
 class WantsStdin {}
 
@@ -175,6 +188,19 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
     if (!text && !keys.length) throw usageError()
     Object.assign(payload, { operationId: `terminal-${randomUUID()}`,
       command: { type: 'agent.input', agentId: first, ...(text ? { text } : {}), ...(keys.length ? { keys } : {}) } })
+  } else if (action === 'read' && (first === 'ok' || first === 'hold') && positional.length >= 4 && positional.length <= 5) {
+    // A reader's verdict on a pull request, on the head it was asked to read (githubVerdict.ts): `ok` may go without
+    // words, `hold` says the file, the line and the fix. The daemon reads the head and refuses one that moved.
+    const text = positional[4] === '-' ? postStdin(stdin, terminal, 'read') : positional[4] ?? ''
+    // Said with its length before anything is sent, as a post's is (POST_MAX_CHARS).
+    if (text.length > POST_MAX_CHARS) {
+      throw new Error(`These words are ${counted(text.length)} characters, and a verdict takes at most ${counted(POST_MAX_CHARS)}: nothing was posted. `
+        + 'Say it shorter, or put the rest in a comment of its own on the pull request.')
+    }
+    const asked = verdictAsked({ repository: second?.slice(0, second.lastIndexOf('#')), number: Number(/#([1-9][0-9]{0,8})$/.exec(second ?? '')?.[1]),
+      verdict: first === 'ok' ? 'READ-OK' : 'HOLD', sha: third, text })
+    if (!asked) throw usageError()
+    Object.assign(payload, { ...asked })
   } else if (action !== 'status' || positional.length !== 1) {
     throw usageError()
   }
@@ -188,7 +214,7 @@ async function parse(argv: readonly string[], local: Where, stdin: () => string 
   } catch (error) {
     if (!(error instanceof WantsStdin)) throw error
     const text = await Promise.resolve().then(stdin).catch(failure => {
-      throw failure instanceof StdinIdle ? new Error(idleRefusal()) : failure
+      throw failure instanceof StdinIdle ? new Error(idleRefusal(actionOf(argv) === 'read' ? 'read' : 'post')) : failure
     })
     return parseSuperTabArgs(argv, local, () => text, terminal)
   }
