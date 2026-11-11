@@ -728,6 +728,36 @@ describe('a train waits for its own checks, then lands or is closed', () => {
     expect(f.train().state).toBe('open')
   })
 
+  // A suite's result is said by a person's computer (githubSuite.ts), not by the repository's CI. Counted as CI having started,
+  // a train with one on its tip and no check of its own read as checked, and landed on what CI never ran.
+  it('does not count a suite\'s result as its CI having started: a train with one and no check of its own still waits', async () => {
+    const f = setup()
+    f.add(4); f.add(5)
+    await f.settle()
+    const tip = f.train().head.sha
+    f.state.runs.set(tip, [])
+    f.state.statuses.set(tip, [...f.state.statuses.get(tip)!, { context: 'suite: desktop-macos-1', state: 'success', creator: { login: 'mate' } }])
+    await f.settle()
+    await f.settle()
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual([])
+    expect(f.train().state).toBe('open')
+    // Its CI passes: it lands, the suite's result one check among them.
+    await f.ends(PASSED)
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual(['PUT /pulls/900/merge'])
+  })
+
+  // A result said failed is a failed check of the commit it is on: a train with one is red, as with any failed check.
+  it('closes as red a train whose tip a suite\'s result fails', async () => {
+    const f = setup()
+    f.add(4); f.add(5)
+    await f.settle()
+    const tip = f.train().head.sha
+    f.state.statuses.set(tip, [...f.state.statuses.get(tip)!, { context: 'suite: desktop-macos-1', state: 'failure', creator: { login: 'mate' } }])
+    await f.ends(PASSED)
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual([])
+    expect(f.trains()[0]).toMatchObject({ state: 'closed', merged_at: null, title: 'Train, red: #4 #5' })
+  })
+
   it('reads no red or landed train from a closed pull request another login wrote as one', async () => {
     const f = setup()
     f.add(4); f.add(5)

@@ -818,10 +818,25 @@ describe('the rule\'s parts', () => {
     expect(checksOf([{ status: 'completed', conclusion: 'skipped' }], { statuses: [{ state: 'success' }] }).state).toBe('passed')
     expect(checksOf([{ status: 'queued' }], {}).state).toBe('running')
     expect(checksOf([{ name: 'lint', status: 'completed', conclusion: 'failure' }], { statuses: [{ state: 'error', context: 'ci/required' }] }))
-      .toEqual({ state: 'failed', failed: ['lint', 'ci/required'], summary: 'ci/required:error|lint:completed:failure' })
+      .toEqual({ state: 'failed', failed: ['lint', 'ci/required'], summary: 'ci/required:error|lint:completed:failure', none: false })
     // What was read, in any order GitHub lists it, as one line: two looks that read the same are the same.
     expect(checksOf([{ name: 'b', status: 'completed', conclusion: 'success' }, { name: 'a', status: 'completed', conclusion: 'success' }], {}).summary)
       .toBe(checksOf([{ name: 'a', status: 'completed', conclusion: 'success' }, { name: 'b', status: 'completed', conclusion: 'success' }], {}).summary)
+  })
+
+  // A suite's result is said by a person's computer (githubSuite.ts): it counts as a check, and never as the repository's CI
+  // having started on the head.
+  it('has no check of the repository\'s own on a head with none, with the train\'s mark, or with a suite\'s result, which still passes or fails it', () => {
+    expect(checksOf([], {}).none).toBe(true)
+    expect(checksOf([{ status: 'queued' }], {}).none).toBe(false)
+    expect(checksOf([], { statuses: [{ state: 'success', context: 'ci' }] }).none).toBe(false)
+    expect(checksOf([], { statuses: [{ state: 'pending' }] }).none).toBe(false)
+    expect(checksOf([], { statuses: [{ state: 'success', context: 'harness/train' }, { state: 'success', context: 'suite: unit' }] })).toMatchObject({ state: 'passed', none: true })
+    expect(checksOf([], { statuses: [{ state: 'failure', context: 'suite: unit' }] })).toMatchObject({ state: 'failed', failed: ['suite: unit'], none: true })
+    expect(checksOf([], { statuses: [{ state: 'pending', context: 'suite: unit' }] })).toMatchObject({ state: 'running', none: true })
+    // Beside a check of its own, it is one check more.
+    expect(checksOf([{ name: 'test', status: 'completed', conclusion: 'success' }], { statuses: [{ state: 'success', context: 'suite: unit' }] }))
+      .toEqual({ state: 'passed', failed: [], summary: 'suite: unit:success|test:completed:success', none: false })
   })
 
   it('merges only for projects whose PM is this person\'s agent running here, on a GitHub repository', async () => {

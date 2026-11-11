@@ -1107,4 +1107,46 @@ describe('a verdict by command', () => {
     expect(t.sent[0]?.body).toEqual({ body: expect.stringMatching(/^Atlas, /) })
     t.service.port.stop()
   })
+  // A shard's result is said by command (githubSuite.ts): the daemon sets a commit status with this computer's own gh, and runs nothing.
+  it('says a shard\'s result on the exact commit as a status of the calling agent\'s person, in a private repository of its project', async () => {
+    const TIP = '1a2b3c4c0ffee0000000000000000000000000ab'
+    const t = verdictSetup()
+    t.github.get.mockImplementation(async (path: string) => ({ status: 200, etag: null, resetAt: null,
+      body: path === '/user' ? { login: 'reader-login' } : path === '/repos/acme/app' ? { private: true, full_name: 'Acme/App' }
+        : path.includes('/contents/') ? { encoding: 'base64', content: Buffer.from('| unit | node | `npm test` |').toString('base64') }
+        : path.endsWith('/statuses?per_page=100') ? [] : { sha: TIP } }))
+    const suite = (extra: Record<string, unknown> = {}, asker = owner) => t.service.requests.super_tabs({ action: 'suite', tabId: 'tab', harnessId: 'native', repository: 'acme/app',
+      sha: '1a2b3c4', shard: 'unit', result: 'passed', ...extra }, asker)
+    expect(await suite()).toEqual({ ok: true, value: { commit: TIP, check: 'suite: unit', said: true } })
+    expect(t.sent).toEqual([{ path: `/repos/acme/app/statuses/${TIP}`, body: { state: 'success', context: 'suite: unit', description: 'passed, said by Juno' } }])
+    // It makes no comment, so the backend is told of none: GitHub says whose a status is.
+    expect(t.call.mock.calls.filter(([, path]) => String(path).includes('/github-comments'))).toEqual([])
+    // What is no result, a repository of no project of the agent's, and another computer's caller: nothing more is said.
+    expect(await suite({ result: 'ok' })).toEqual({ error: 'INVALID_REQUEST' })
+    expect(await suite({ repository: 'other/thing' })).toMatchObject({ error: 'REPOSITORY_NOT_PROJECT', status: 422 })
+    expect(await suite({}, { local: false, owner: true, accountOwner: true } as never)).toMatchObject({ error: 'AGENT_LOCAL_ONLY' })
+    expect(t.sent).toHaveLength(1)
+    // The same result asked again while the first is being said joins it, by either spelling of its repository; the other
+    // result is its own command. GitHub holds each status until all three were asked.
+    let release = () => {}
+    const held = new Promise<void>(resolve => { release = resolve })
+    t.github.send.mockImplementation(async (_method: string, path: string, body?: unknown) => { t.sent.push({ path, body }); await held
+      return { status: 201, etag: null, resetAt: null, body: {} } })
+    const first = suite({ result: 'failed' })
+    await vi.waitFor(() => expect(t.sent).toHaveLength(2))
+    const others = [suite({ result: 'failed', repository: 'Acme/App' }), suite()]
+    await vi.waitFor(() => expect(t.sent).toHaveLength(3))
+    release()
+    expect((await Promise.all([first, ...others])).map(answer => 'ok' in answer)).toEqual([true, true, true])
+    expect(t.sent.slice(1).map(sent => (sent.body as { state: string }).state)).toEqual(['failure', 'success'])
+    t.service.port.stop()
+    // With its person's own GitHub login only, as a verdict.
+    for (const other of [{ contributorId: 'mate' }, { machineOwnerId: 'mate' }]) {
+      const u = verdictSetup(other)
+      expect(await u.service.requests.super_tabs({ action: 'suite', tabId: 'tab', harnessId: 'native', repository: 'acme/app', sha: '1a2b3c4', shard: 'unit', result: 'passed' }, owner))
+        .toEqual({ error: 'AGENT_UNAVAILABLE', detail: 'A suite\'s result is said with its person\'s own GitHub login, on that person\'s computer.' })
+      expect(u.github.get).not.toHaveBeenCalled()
+      u.service.port.stop()
+    }
+  })
 })

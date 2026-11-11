@@ -575,6 +575,21 @@ it('takes a task by its repository and number, and nothing else', () => {
   }
 })
 
+// A shard's result is said by command, on the exact commit (githubSuite.ts).
+it('says a shard\'s result: passed or failed, the repository, the commit and the shard\'s name, and nothing else', () => {
+  expect(parseSuperTabArgs(['suite', 'passed', 'acme/app', '1a2b3c4', 'desktop-macos-1'], where).payload).toEqual({ action: 'suite', tabId: '', agentId: '',
+    repository: 'acme/app', sha: '1a2b3c4', shard: 'desktop-macos-1', result: 'passed' })
+  expect(parseSuperTabArgs([...prefix, 'suite', 'failed', 'Acme/App.js', '1a2b3c4c0ffee0000000000000000000000000ab', 'cli/core'], where).payload).toEqual({ action: 'suite',
+    tabId: 'tab', agentId: 'agent', repository: 'Acme/App.js', sha: '1a2b3c4c0ffee0000000000000000000000000ab', shard: 'cli/core', result: 'failed' })
+  for (const argv of [['suite'], ['suite', 'passed'], ['suite', 'passed', 'acme/app'], ['suite', 'passed', 'acme/app', '1a2b3c4'], ['suite', 'ok', 'acme/app', '1a2b3c4', 'unit'],
+    ['suite', 'passed', 'acme/app#3', '1a2b3c4', 'unit'], ['suite', 'passed', 'acme/../app', '1a2b3c4', 'unit'], ['suite', 'passed', 'acme/app', '1a2b3c', 'unit'],
+    ['suite', 'passed', 'acme/app', 'HEAD', 'unit'], ['suite', 'passed', 'acme/app', '1a2b3c4', 'Desktop 1'], ['suite', 'passed', 'acme/app', '1a2b3c4', 'unit', 'extra']]) {
+    expect(() => parseSuperTabArgs(argv, where), argv.join(' ')).toThrow('harness super-tab')
+  }
+  // The usage line names it, for an agent that types it wrong.
+  expect(() => parseSuperTabArgs(['suite'], where)).toThrow('| suite passed|failed OWNER/REPO SHA SHARD |')
+})
+
 // A builder cuts a piece off a task it holds by command (githubSplit.ts).
 it('cuts a piece off a task: the repository and number, its size, its title, and what it is', () => {
   expect(parseSuperTabArgs(['split', 'acme/app#34', 'm', 'Sync the theme', 'Only the theme.'], where).payload).toMatchObject({ action: 'split', tabId: '',
