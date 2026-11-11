@@ -240,7 +240,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     const pull = (extra: Json = {}): Json => ({ number: 30, draft: false, base: { ref: 'main' }, head: { sha: HEAD, ref: 'pip/14' },
       labels: [{ name: 'builder:pip' }], body: 'Closes #14', ...extra })
     const comment = (body: string, extra: Json = {}): Json => ({ body, author_association: 'MEMBER', user: { login: 'deehw' },
-      created_at: '2026-11-09T07:00:00Z', ...extra })
+      created_at: '2026-11-09T07:20:00Z', ...extra })
     /** Pip (Claude Code) builds; Juno (Claude Code) and Atlas (Codex) can read. */
     const team: Crew = { builders: [...crew().builders, { id: 'atlas', name: 'Atlas', label: 'builder:atlas', machineId: 'mac', engine: 'codex' }],
       machines: crew().machines }
@@ -434,50 +434,52 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       expect(f.github.sent).toEqual([])
     })
 
-    it('asks another reader once the one asked has not read for 2 hours, and nobody more once a READ-OK is on the head', async () => {
+    // Swarm plan, step 1, item 1: "No verdict in 30 minutes: another is asked." Until 11-11, two hours.
+    it('asks another reader once the one asked has not read for 30 minutes, and nobody more once a READ-OK is on the head', async () => {
       const ask = (name: string, at: string) => comment(`Harness, ${at.slice(11, 16)}, to **${name}**: please read this pull request, `
         + 'and start your comment with READ-OK f6edb44 or HOLD f6edb44 (with the file, line and fix).', { created_at: at })
-      // Atlas (Codex) was asked an hour and a half ago: still reading.
+      // Atlas (Codex) was asked 20 minutes ago: still reading.
       const recent = setup([], { crew: team })
       recent.github.state.pulls = [pull()]
-      recent.github.state.comments.set(30, [ask('Atlas', '2026-11-09T06:01:00Z')])
+      recent.github.state.comments.set(30, [ask('Atlas', '2026-11-09T07:11:00Z')])
       await recent.assigner.tick()
       expect(asks(recent)).toEqual([])
-      // Asked three hours ago with no word since: Juno is asked too.
+      // Asked 45 minutes ago with no word since: Juno is asked too.
       const f = setup([], { crew: team })
       f.github.state.pulls = [pull()]
-      f.github.state.comments.set(30, [ask('Atlas', '2026-11-09T04:31:00Z')])
+      f.github.state.comments.set(30, [ask('Atlas', '2026-11-09T06:46:00Z')])
       await f.assigner.tick()
       await f.assigner.tick()
       expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Juno\*\*: please read this pull request/)])
       // Atlas reads after all: its READ-OK counts, and nobody more is asked when Juno's ask is old too.
-      f.github.state.comments.set(30, [ask('Atlas', '2026-11-09T04:31:00Z'), ask('Juno', '2026-11-09T04:40:00Z'),
+      f.github.state.comments.set(30, [ask('Atlas', '2026-11-09T06:46:00Z'), ask('Juno', '2026-11-09T06:50:00Z'),
         comment('Atlas, 07:30, to **Pip**: READ-OK f6edb44', { created_at: '2026-11-09T07:30:00Z' })])
       await f.make().tick()
       expect(asks(f)).toHaveLength(1)
     })
 
-    it('asks the only reader again after 2 silent hours, at most twice more for a head, after a restart too', async () => {
-      const HOUR = 60 * 60_000
+    it('asks the only reader again after 30 silent minutes, at most twice more for a head, after a restart too', async () => {
+      // Half the wait for a verdict.
+      const STEP = 15 * 60_000
       const askedAt = (at: string) => comment(`Harness, ${at.slice(11, 16)}, to **Faye**: please read this pull request, and start your `
         + 'comment with READ-OK f6edb44 or HOLD f6edb44 (with the file, line and fix).', { created_at: at })
-      // Pip builds alone; Faye, its PM, was asked three hours ago and has said nothing since (stopped when it was asked).
+      // Pip builds alone; Faye, its PM, was asked 45 minutes ago and has said nothing since (stopped when it was asked).
       const f = setup([], { crew: { builders: [crew().builders[0]!], machines: crew().machines } })
       f.github.state.pulls = [pull()]
       const iso = (ms: number) => new Date(ms).toISOString()
-      const first = iso(f.clock.now - 3 * HOUR)
+      const first = iso(f.clock.now - 3 * STEP)
       f.github.state.comments.set(30, [askedAt(first)])
       await f.assigner.tick()
       expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Faye\*\*: please read this pull request/)])
       f.github.state.comments.set(30, [askedAt(first), askedAt(iso(f.clock.now))])
-      f.clock.now += HOUR
+      f.clock.now += STEP
       await f.assigner.tick()
       expect(asks(f)).toHaveLength(1)
-      f.clock.now += HOUR + 60_000
+      f.clock.now += STEP + 60_000
       await f.make().tick()
       expect(asks(f)).toHaveLength(2)
-      f.github.state.comments.set(30, [askedAt(first), askedAt(iso(f.clock.now - 2 * HOUR)), askedAt(iso(f.clock.now))])
-      f.clock.now += 3 * HOUR
+      f.github.state.comments.set(30, [askedAt(first), askedAt(iso(f.clock.now - 2 * STEP)), askedAt(iso(f.clock.now))])
+      f.clock.now += 3 * STEP
       await f.make().tick()
       expect(asks(f)).toHaveLength(2)
     })
