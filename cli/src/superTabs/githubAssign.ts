@@ -13,7 +13,7 @@ import type { Choice } from './assign/model.js'
 import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { GitHubReads, GitHubStop, PAGE } from './githubRest.js'
-import { authorOf, isWriter, openPullsPath, PULL_PAGES, pullPeople, pullTalk, sameChange, verdicts, type LedProject } from './githubMerge.js'
+import { authorOf, isWriter, openPullsPath, PULL_PAGES, pullPeople, pullTalk, RECORD_SETTLE_MS, sameChange, verdicts, type LedProject, type VerdictRecords } from './githubMerge.js'
 import { TEAM } from './githubMentions.js'
 
 type Json = Record<string, unknown>
@@ -82,7 +82,9 @@ export class GitHubAssign {
   private readonly log: (line: string) => void
 
   constructor(private readonly deps: { projects: () => Promise<LedProject[]>; crew: (project: LedProject) => Promise<Crew>
-    get: GitHubGet; send: GitHubSend; now?: () => number; log?: (line: string) => void; intervalMs?: number }) {
+    get: GitHubGet; send: GitHubSend; now?: () => number; log?: (line: string) => void; intervalMs?: number
+    /** Who made each verdict by command, the merger's own (githubMerge.ts VerdictRecords): only such a READ-OK is a read. */
+    records: VerdictRecords }) {
     this.now = deps.now ?? Date.now
     this.log = deps.log ?? (line => console.warn(line))
     this.reads = new GitHubReads(deps.get, this.now)
@@ -267,14 +269,20 @@ export class GitHubAssign {
       if (!Number.isSafeInteger(number) || !/^[0-9a-f]{40}$/.test(head)) continue
       const author = authorOf(pull)
       if (author === null || !team.has(labelOf(author))) continue
-      const comments = await pullTalk(this.reads, repo, number)
+      // While who made its verdicts cannot be read, nobody is asked: a READ-OK made by command would read as typed.
+      const comments = await this.deps.records.named(project, await pullTalk(this.reads, repo, number))
+      if (!comments) { for (const task of tasksOf(pull)) withReaders.add(task); continue }
       const people = pullPeople(pull, team)
       const { readers, twoReads } = verdicts(comments, String(pull.body ?? ''), people)
       // A verdict on an earlier head whose change is the head's is one on it, a HOLD as much as a READ-OK (sameChange): its author
       // has changed nothing to read again.
       const same = await sameChange(this.reads, this.patches, repo, base, head, [...readers.values()].map(r => r.sha))
       const onHead = (sha: string) => head.startsWith(sha) || same.has(sha)
-      if ([...readers.values()].some(r => r.verdict === 'HOLD' && onHead(r.sha))) continue
+      // A HOLD of its own side (its writers' own, or an unsigned one from the login that opened it) stops nothing here: no reader
+      // of its own is asked to lift it, and another agent's READ-OK made by command does (verdicts).
+      const own = (name: string) => isWriter(people.writers, name)
+      // Nor one its reader answered with a typed READ-OK: it is asked to make that by command (below).
+      if ([...readers].some(([reader, r]) => r.verdict === 'HOLD' && onHead(r.sha) && !own(reader) && !r.ownLogin && !r.retyped)) continue
       for (const task of tasksOf(pull)) withReaders.add(task)
       // Who Harness asked, for which heads, and when.
       const now = this.now()
@@ -300,12 +308,25 @@ export class GitHubAssign {
       // measured from its ask for this head; one that never gave one, from its last ask.
       const lastAsk = (name: string, thisHead: boolean) =>
         Math.max(0, ...[...asked.get(name) ?? []].filter(([sha]) => !thisHead || onHead(sha)).map(([, at]) => at))
-      // Its writers' own verdicts count for nothing, however the names are written, nor an unsigned READ-OK from the login that
-      // opened it (verdicts); a reader who signs two ways counts once, as the merger counts it.
-      const own = (name: string) => isWriter(people.writers, name)
-      const ok = [...readers].filter(([reader, r]) => !own(reader) && !r.ownLogin && r.verdict === 'READ-OK' && onHead(r.sha))
-      // An unsigned READ-OK from that login was no read, so there is nobody to ask again for it (an unsigned HOLD stands, and is).
-      const stale = [...readers].filter(([reader, r]) => !own(reader) && !onHead(r.sha) && !(r.ownLogin && r.verdict === 'READ-OK'))
+      // Only a READ-OK made by command is a read, never its writers' own (verdicts); a reader who signs two ways counts once, as
+      // the merger counts it.
+      // One made before a HOLD of its own side that stands lifts nothing (verdicts): another is needed after it.
+      const ownHold = [...readers].filter(([reader, r]) => r.verdict === 'HOLD' && (own(reader) || r.ownLogin)).map(([, r]) => r.at).sort().at(-1) ?? ''
+      const ok = [...readers].filter(([reader, r]) => !own(reader) && r.recorded && r.verdict === 'READ-OK' && onHead(r.sha) && r.at > ownHold)
+      // No verdict of the login that opened it is asked about again: every agent of its person posts as that login, its writer
+      // too, which heard the ask and could answer it (review of #3708).
+      const stale = [...readers].filter(([reader, r]) => !own(reader) && !r.ownLogin && !onHead(r.sha))
+      // A reader whose READ-OK on the head was typed is asked again, by name, to make it by command: at most READ_ASKS times for a
+      // head, and not again before it answers (plan item 3: a typed READ-OK counts for nothing).
+      // One just made may be by command, its record not yet there (RECORD_SETTLE_MS): it is not asked about before.
+      const typed = [...readers].filter(([reader, r]) => !own(reader) && !r.ownLogin && onHead(r.sha)
+        && (r.verdict === 'READ-OK' ? !r.recorded : r.retyped))
+      const settling = (r: { at: string }) => now - Date.parse(r.at) < RECORD_SETTLE_MS
+      for (const [reader, r] of typed) {
+        if (settling(r) || lastAsk(reader, true) >= Date.parse(r.at) || (onThisHead.get(reader) ?? 0) >= READ_ASKS) continue
+        await this.ask(repo, number, head, r.name, `your READ-OK on ${r.sha.slice(0, 7)} was typed, and only one made by command counts: please read it again`,
+          onThisHead.get(reader) ?? 0)
+      }
       // A writer asked before (a task taken over by the reader asked) is not reading it.
       const waiting = [...asked.keys()].filter(name => !own(name) && !readers.has(name) && now - lastAsk(name, false) < READ_WAIT_MS)
       for (const [reader, r] of stale) {
@@ -314,7 +335,13 @@ export class GitHubAssign {
       }
       // A stale reader not asked again yet is asked just now, above.
       const rereading = stale.filter(([reader]) => { const at = lastAsk(reader, true); return at === 0 || now - at < READ_WAIT_MS })
-      let need = (twoReads ? 2 : 1) - ok.length - rereading.length - waiting.length
+      // A typed reader asked again (or about to be, or whose record may still come) is reading, as one asked first is
+      // (READ_WAIT_MS); one asked READ_ASKS times for the head is not counted on.
+      const retyping = typed.filter(([reader, r]) => {
+        const at = lastAsk(reader, true)
+        return settling(r) || (at >= Date.parse(r.at) ? now - at < READ_WAIT_MS : (onThisHead.get(reader) ?? 0) < READ_ASKS)
+      })
+      let need = (twoReads ? 2 : 1) - ok.length - rereading.length - waiting.length - retyping.length
       // None of its writers reads it: its label's agent nor its branch's (a task taken over carries both).
       const skip = new Set([...asked.keys(), ...readers.keys(), ...[...read.builders.values()].filter(b => own(b.name)).map(b => b.id)])
       while (need-- > 0) {

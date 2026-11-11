@@ -13,7 +13,8 @@ import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import type { Crew } from './assign/crew.js'
 import { GitHubAssign } from './githubAssign.js'
-import { GitHubMerge } from './githubMerge.js'
+import { GitHubMerge, VerdictRecords } from './githubMerge.js'
+import { commandRecords } from './commandRecords.fake.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 
 type Json = Record<string, unknown>
@@ -38,6 +39,7 @@ function liveGitHub(clock: { now: number }) {
   const labels: Json[] = ['status:taken', 'size:s', 'size:m', 'size:l', 'p0', 'p1', 'p2', 'builder:pip', 'builder:juno', 'needs:gpu'].map(name => ({ name }))
   const sent: Array<{ at: number; method: string; path: string; body: Json }> = []
   let ids = 1000
+  const records = commandRecords()
   const touch = (number: number) => {
     const at = iso()
     issues.get(number)!.updated_at = at
@@ -69,7 +71,7 @@ function liveGitHub(clock: { now: number }) {
       : p === `/repos/${REPO}/issues` ? page([...issues.values()].filter(i => (url.searchParams.get('state') ?? 'open') === 'all' || i.state === (url.searchParams.get('state') ?? 'open'))
         .filter(i => String(i.updated_at) >= since), url)
       : p === `/repos/${REPO}/pulls` ? page([...pulls.values()].filter(r => r.state === (url.searchParams.get('state') ?? 'open')), url)
-      : /\/issues\/\d+\/comments$/.test(p) ? page((comments.get(n(-2)) ?? []).filter(c => String(c.updated_at) >= since), url)
+      : /\/issues\/\d+\/comments$/.test(p) ? page((comments.get(n(-2)) ?? []).map(records.served).filter(c => String(c.updated_at) >= since), url)
       : /\/pulls\/\d+\/reviews$/.test(p) ? []
       // Each head its own change, so a push is something new to read; and each holds main's tip, so the one that is ready alone
       // merges on its own (the train is githubTrain.spec.ts).
@@ -120,7 +122,7 @@ function liveGitHub(clock: { now: number }) {
     }
     return reply(404)
   }
-  return { get, send, sent, issues, pulls, comments, runs, mergeable, task, pull, say }
+  return { get, send, sent, issues, pulls, comments, runs, mergeable, task, pull, say, authors: records.authors }
 }
 
 /** A comment as said, its time of day and the head's short form made alike, so the same thing said at another minute is the same. */
@@ -136,7 +138,7 @@ describe('Harness says each thing once on GitHub, over an hour and a restart (gi
     gh.task(2, ['size:s'])
     gh.task(3, ['size:s', 'needs:gpu'])
     gh.task(4, ['size:s', 'builder:pip', 'status:taken'], hours(5))
-    // Pull requests: an unsigned READ-OK from the login every agent posts as; failed checks; a conflict; behind; no reader yet;
+    // Pull requests: a typed READ-OK from the login every agent posts as; failed checks; a conflict; behind; no reader yet;
     // ready to merge; and a HOLD.
     gh.pull(10, sha(10)); gh.say(10, `READ-OK ${sha(10).slice(0, 7)}`)
     gh.pull(11, sha(11)); gh.say(11, `Juno, 11:00, to **Pip**: READ-OK ${sha(11).slice(0, 7)}`)
@@ -148,7 +150,7 @@ describe('Harness says each thing once on GitHub, over an hour and a restart (gi
     gh.pull(16, sha(16)); gh.say(16, `Juno, 11:05, to **Pip**: HOLD ${sha(16).slice(0, 7)}: the day count is off by one.`)
 
     const make = () => {
-      const deps = { projects: async () => [PROJECT], crew: async () => structuredClone(CREW), get: gh.get, send: gh.send, now: () => clock.now, log: () => {} }
+      const deps = { projects: async () => [PROJECT], crew: async () => structuredClone(CREW), get: gh.get, send: gh.send, now: () => clock.now, log: () => {}, records: new VerdictRecords(gh.authors, () => clock.now, () => {}) }
       return { merger: new GitHubMerge(deps), assigner: new GitHubAssign(deps) }
     }
     let loops = make()
@@ -184,7 +186,7 @@ describe('Harness says each thing once on GitHub, over an hour and a restart (gi
 
     // It did run through each case, so the hour proves something: each said what it is for, once.
     const one = (number: number, pattern: RegExp) => expect((harness.get(number) ?? []).filter(body => pattern.test(body)), `#${number}`).toHaveLength(1)
-    one(10, /not merged yet at \w+: the READ-OK from deehw is unsigned/)
+    one(10, /not merged yet at \w+: the READ-OK from deehw is typed/)
     one(10, /to \*\*Juno\*\*: please read this pull request/)
     one(12, /not merged yet at \w+: it conflicts with main/)
     one(13, /not merged yet at \w+: it is behind main/)
