@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_icons.dart';
@@ -229,6 +230,33 @@ class PersonalSwarm extends ChangeNotifier {
 
   String? _tabShowing(String swarmId) =>
       app.swarms.where((s) => s.id == swarmId).firstOrNull?.superTabId;
+
+  /// Opens Personal from outside a Swarm ([swarmsToOpen]): its tab if one shows it, else a tab of its own, or the empty
+  /// page [intoSwarmId] (`AppNotifier.openSuperTab`). Asked of the server when this computer has not met it yet, which
+  /// answers the same Swarm on each of the person's computers and makes it the first time. Throws why it could not.
+  Future<void> open({String? intoSwarmId}) async {
+    final account = _account;
+    final id = await ensure();
+    if (account == null || _account != account) return;
+    app.openSuperTab(id, kPersonalSwarmName, intoSwarmId: intoSwarmId);
+  }
+}
+
+/// The row [swarmsToOpen] lists Personal under, whether or not the server has made it yet. No Swarm's id is ever this.
+const kPersonalSwarmRow = kPersonalSwarmOperation;
+
+/// The Swarms a person opens from outside a Swarm (the New Tab page, a Swarm draft, ⌘K): on the Desktop, Personal first,
+/// always, then those closed on this computer, so their Personal Swarm is in reach on each of their computers without
+/// another Swarm open (anh Dee, 2026-11-11). The web's list stays the Swarms closed there.
+List<({String id, String name})> swarmsToOpen(AppNotifier app) {
+  final closed = app.closedSuperTabs;
+  if (kIsWeb || app.currentUser == null) return closed;
+  final personal = PersonalSwarm.of(app).id;
+  return [
+    (id: kPersonalSwarmRow, name: kPersonalSwarmName),
+    for (final tab in closed)
+      if (tab.id != personal) tab,
+  ];
 }
 
 /// The Swarms the dropdown lists under Personal, by name: every Swarm the
