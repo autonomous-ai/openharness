@@ -11,7 +11,8 @@ const text = (value = 'working on it', commentary = false): Event => ({ type: 't
 const ended = (aborted = false): Event => ({ type: 'turn_ended', payload: { aborted } }) as Event
 const tool = (parentToolUseId?: string): Event => ({ type: 'tool_start', payload: { id: 't1', tool: 'Bash', input: {}, ...(parentToolUseId ? { parentToolUseId } : {}) } })
 /** What the turn-end collaborator is told, in the order it is told it. */
-const fakeEnds = () => ({ started: vi.fn(), said: vi.fn(), worked: vi.fn(), ended: vi.fn() })
+const fakeEnds = () => ({ started: vi.fn(), said: vi.fn(), worked: vi.fn(), ended: vi.fn(), compacted: vi.fn() })
+const compact = (): Event => ({ type: 'context_compact', payload: { message: 'Context was compacted.', trigger: 'auto' } })
 
 /**
  * Every collaborator writes to one log, so a test reads the order the funnel called them in, across all
@@ -148,6 +149,16 @@ describe('the event funnel', () => {
     expect(ends.said).toHaveBeenCalledTimes(3)
     expect(ends.worked).toHaveBeenCalledTimes(1)
     expect(ends.ended).toHaveBeenCalledTimes(1)
+  })
+
+  // Swarm plan, step 1, item 2: the end of a turn its agent's context was compacted in says so (core/turns/ends.ts).
+  it('tells them each live compaction of an agent\'s context, never a re-read one', () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const ends = fakeEnds()
+    const { funnel } = setup('claude', { ends })
+    funnel('s1', [started('Ship it.'), compact(), text('Shipped.'), ended()])
+    funnel('s1', [started('History.'), compact(), ended()], { replay: true })
+    expect(ends.compacted.mock.calls).toEqual([['s1']])
   })
 
   // What an engine says is kept as the funnel hears it only where its texts are whole messages (Claude Code, Codex): another's may be

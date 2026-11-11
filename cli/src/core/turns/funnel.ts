@@ -70,7 +70,7 @@ export interface FunnelDeps {
   shortTurns?: Pick<ShortTurnGuard, 'started' | 'ended'>
   /** Whoever hears each live turn end (`CoreApi.turns.onEnd`, core/turns/ends.ts), which is told each turn as it goes: that is how
    *  an end says which turn it was, and what the turn answered. */
-  ends?: Pick<TurnEnds, 'started' | 'said' | 'worked' | 'ended'>
+  ends?: Pick<TurnEnds, 'started' | 'said' | 'worked' | 'ended' | 'compacted'>
 }
 
 type OutsideConsumers = (consumer: string, call: () => void) => void
@@ -196,6 +196,9 @@ export function funnelFor({
       } else if (event.type === 'tool_start' && !event.payload.parentToolUseId) {
         // A tool a sub-agent calls is not the turn's own: what the turn said stays what it said.
         if (!replay) outside('turn-ends', () => ends?.worked(sessionId))
+      } else if (event.type === 'context_compact') {
+        // Its agent's context was compacted: the end of this turn, or of its next, says so (core/turns/ends.ts).
+        if (!replay) outside('turn-ends', () => ends?.compacted(sessionId))
       }
     }
     mirror.ingest(events, sessionId, { replay: !!(opts?.resumed || opts?.replay) })

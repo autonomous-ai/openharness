@@ -88,6 +88,24 @@ describe('live turn ends', () => {
     expect(heard).toHaveLength(1)
   })
 
+  // Swarm plan, step 1, item 2: "Harness types it once after a compaction" (superTabs/nextThing.ts). An agent whose context was
+  // compacted has a summary of what it was told, no more: the end of the turn it was compacted in says so, or of its next turn when
+  // it was compacted between turns (`/compact` at its prompt).
+  it('says the end of a turn its context was compacted in, or of the next turn after one between turns, and of no other', () => {
+    const { ends, turn, heard } = setup()
+    ends.started('session', 'Ship it.', false)
+    ends.compacted('session')
+    ends.ended(told)
+    expect(heard.at(-1)).toEqual({ ...end, compacted: true })
+    expect(turn('Ship it.', [])).toEqual({ ...end, turnId: 2 })
+    ends.compacted('session')
+    ends.ended(told)
+    expect(heard).toHaveLength(2)
+    expect(turn('Ship it.', [])).toEqual({ ...end, turnId: 3, compacted: true })
+    ends.compacted('other')
+    expect(turn('Ship it.', [])).toEqual({ ...end, turnId: 4 })
+  })
+
   it('numbers its turns one after another, whatever session they ran in', () => {
     const { turn } = setup()
     expect([turn('One.', [], 'a'), turn('Two.', [], 'b'), turn('Three.', [], 'a')].map(event => event.turnId)).toEqual([1, 2, 3])

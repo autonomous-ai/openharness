@@ -124,6 +124,14 @@ describe('delivered turns from a service in its own process', () => {
     ])
   })
 
+  // Swarm plan, step 1, item 2: an end says its agent's context was compacted (core/turns/ends.ts), and the Swarm's host types
+  // it what waits for it. Only true is taken: anything else is an end that says nothing of it.
+  it('keeps that a turn\'s context was compacted, and nothing else in its place', () => {
+    const whole = { ...END, agentId: 'a', sessionId: 's' }
+    expect(endIn({ kind: 'turn_end', event: { ...whole, compacted: true } })).toEqual({ ...whole, compacted: true })
+    for (const compacted of [false, 'yes', 1, null]) expect(endIn({ kind: 'turn_end', event: { ...whole, compacted } })).toEqual(whole)
+  })
+
   it('takes nothing else for a turn end', () => {
     const heard = vi.fn()
     const link = turnsLink(async () => ({}), vi.fn())
