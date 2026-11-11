@@ -222,6 +222,10 @@ export class GitHubTrain<T extends TrainPull> {
     const ways = (['merge', 'squash', 'rebase'] as const).filter(way => settings[way === 'merge' ? 'allow_merge_commit' : `allow_${way}_merge`] !== false)
     let reply: GitHubReply | undefined, method: typeof ways[number] | undefined
     for (method of ways) {
+      // GitHub refuses a merge as the base moves, too: the next way is never sent onto a base the train was not tested on.
+      if (reply && (await this.deps.reads.one(this.repo, `/repos/${this.repo}/compare/${this.base}...${train.head}`)).behind_by !== 0) {
+        return this.close(train, false, `${this.base} moved under it`)
+      }
       // Pinned to the head its checks passed: a push since is a 409, and nothing lands.
       reply = await this.sent('PUT', `/pulls/${train.number}/merge`, [200, 405],
         { sha: train.head, merge_method: method, ...method === 'rebase' ? {} : landingMessage(riders) })
