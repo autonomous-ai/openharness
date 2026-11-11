@@ -44,6 +44,7 @@ import { checkLaunchWords } from './launchArgs.js'
 import type { CreationAuthority } from './agentCreationReceipt.js'
 import type { publishGridConfigDir } from './publishedGridConfig.js'
 import { nativeHookLocations } from '../engines/kit/nativeLocations.js'
+import { hooksHeldDetail } from '../engines/kit/hooksHeldDetail.js'
 
 export interface LaunchOverrides {
   native?: NativeLaunch
@@ -298,7 +299,7 @@ export async function prepareLaunchOverrides(
     // File-configured engines can move their native home. Prepare hooks after
     // those operation-owned locations are known, before any native dispatch.
     if (native && deps.prepareNative && !await deps.prepareNative(native, owner, overrides.env, overrides.clearEnv)) {
-      return { ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native', detail: 'Waiting to confirm the engine’s native hook preparation.' }
+      return { ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native', detail: hooksHeldDetail(engine, 'Waiting to confirm the engine’s native hook preparation.') }
     }
     if (!current()) return changed
     const scmEnv = scmLaunchEnv(source.scmLaunch)
@@ -437,7 +438,7 @@ async function prepareBaseLaunchOverrides(
       // A production native preparation covers the selected profile before any
       // grid/configuration commit. Legacy callers must also await and check it.
       if (!deps.native && !await deps.installCodexHooks(home)) return {
-        ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native', detail: 'Waiting to confirm Codex’s hooks in the selected profile.',
+        ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native', detail: hooksHeldDetail('codex', 'Waiting to confirm Codex’s hooks in the selected profile.'),
       }
       return {
         ok: true,

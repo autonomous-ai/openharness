@@ -15,6 +15,7 @@ import { createAgentForker, type ForkAgentDeps } from './fork.js'
 import type { NativeLaunch } from '../../engines/nativeLaunch.js'
 import { createLaunchHelpers } from './launch.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
+import { missingHookScript } from '../../engines/kit/notifyHooks.js'
 
 vi.mock('../../dsh/installed.js', () => ({ installedDsh: vi.fn(() => undefined) }))
 
@@ -40,6 +41,7 @@ vi.mock('../../scm/scmProjects.js', async (real) => {
   const actual = await real<typeof import('../../scm/scmProjects.js')>()
   return { ...actual, prepareInstructionWrites: vi.fn(actual.prepareInstructionWrites) }
 })
+vi.mock('../../engines/kit/notifyHooks.js', async (real) => ({ ...await real<object>(), missingHookScript: vi.fn(() => null) }))
 vi.mock('../../lib/forkAgent.js', async (real) => ({ ...await real<object>(), planFork: vi.fn(() => ({ ok: true, level: 'native', forkSessionId: 's1' })) }))
 
 const launchDsh = vi.fn<ForkAgentDeps['dshLaunch']['launch']>(async () => ({ ok: true, launch: { env: { HARNESS_DSH: 'blender' }, args: ['--dsh'] } }))
@@ -126,6 +128,23 @@ describe('forking an agent', () => {
     expect(await run.fork({ agentId: 'a1', name: null, prompt: null })).toMatchObject({ unavailable: 'native' })
     expect(refusePermissionFlagIfUnsupported).not.toHaveBeenCalled()
     expect(createAndRegisterPane).not.toHaveBeenCalled()
+  })
+
+  // Review of #3954: a fork held by a missing notify.mjs said "Waiting to confirm…", which waiting never changes.
+  it('names a missing notify.mjs, and what to do, where a held fork says why', async () => {
+    vi.mocked(missingHookScript).mockReturnValue('/opt/harness/hook/notify.mjs')
+    try {
+      const launch = { current: () => true, environment: { HOME: root }, opencodeMajor: 1 } as unknown as NativeLaunch
+      const run = setup(source(), {
+        native: async () => ({ ok: true, launch }),
+        relaunchOverrides: async () => ({ ok: true, overrides: { native: launch, env: {}, extraArgs: [], clearEnv: [] } }),
+        prepareNative: async () => false,
+      })
+      expect(await run.fork({ agentId: 'a1', name: null, prompt: null })).toEqual({ ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native',
+        detail: 'Harness’s hook script is missing (/opt/harness/hook/notify.mjs). Reinstall Harness, then start the agent again.' })
+      expect(missingHookScript).toHaveBeenLastCalledWith('claude')
+      expect(createAndRegisterPane).not.toHaveBeenCalled()
+    } finally { vi.mocked(missingHookScript).mockReturnValue(null) }
   })
 
   it('holds unavailable native preparation without touching the source or opening a pane', async () => {
