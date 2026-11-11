@@ -552,6 +552,20 @@ it('lists what waits for the agent in its pane, a line each, and says when nothi
   expect(JSON.parse(print.mock.calls.at(-1)![0])).toEqual({ error: 'RATE_LIMITED', detail: 'GitHub asks to wait.' })
 })
 
+// A project's goal file and its workflow are written into the caller's checkout (goalStarter.ts): the daemon has no part in it.
+it('writes a goal file in the checkout it runs in, says what it wrote, and asks nothing of the daemon', async () => {
+  expect(parseSuperTabArgs(['goal'], where).payload).toMatchObject({ action: 'goal' })
+  expect(() => parseSuperTabArgs(['goal', 'acme/app'], where)).toThrow('harness super-tab')
+  const print = vi.fn(), open = vi.fn()
+  const deps = { where: () => where, pane: undefined, open, print, goal: vi.fn(async () => ({ ok: true, said: 'Wrote agents/GOAL.md and .github/workflows/goal.yml.' })) }
+  expect(await superTabCommand(['goal'], deps)).toBe(0)
+  expect(print).toHaveBeenLastCalledWith('Wrote agents/GOAL.md and .github/workflows/goal.yml.')
+  deps.goal.mockResolvedValueOnce({ ok: false, said: 'This folder is in no git repository: run it in your checkout of the project.' })
+  expect(await superTabCommand(['goal'], deps)).toBe(1)
+  expect(print).toHaveBeenLastCalledWith('This folder is in no git repository: run it in your checkout of the project.')
+  expect(open).not.toHaveBeenCalled()
+})
+
 // A builder's claim is made by command (githubClaim.ts).
 it('takes a task by its repository and number, and nothing else', () => {
   expect(parseSuperTabArgs(['take', 'acme/app#34'], where).payload).toMatchObject({ action: 'take', tabId: '', repository: 'acme/app', number: 34 })

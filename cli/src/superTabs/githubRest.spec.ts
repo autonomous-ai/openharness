@@ -52,6 +52,18 @@ describe('reads with their ETags kept (GitHubReads)', () => {
     expect(await reads.one('acme/app', '/repos/acme/app')).toEqual({ n: 3 })
   })
 
+  it('asks outright what is large and asked for once, and keeps nothing of it', async () => {
+    const path = '/repos/acme/app/commits/abc/check-runs', body = { check_runs: [{ id: 1 }] }, etags: Array<string | null> = []
+    const get = answering({ [path]: body })
+    const reads = new GitHubReads(async (asked, etag) => { etags.push(etag); return get(asked, etag) })
+    expect(await reads.fresh('acme/app', path)).toEqual(body)
+    // Nothing was kept of it: the same address read as an object is asked with no ETag.
+    expect(await reads.one('acme/app', path)).toEqual(body)
+    // And what that read kept is not offered: the answer is the body, never a 304's nothing.
+    expect(await reads.fresh('acme/app', path)).toEqual(body)
+    expect(etags).toEqual([null, null, null])
+  })
+
   it('stops one repository it cannot read and every repository while gh is signed out', async () => {
     const unreadable = new GitHubReads(async () => ({ status: 404, etag: null, body: null, resetAt: null }))
     await expect(unreadable.current('acme/secret', '/repos/acme/secret/pulls')).rejects.toMatchObject({ code: 'UNREADABLE', everywhere: false })

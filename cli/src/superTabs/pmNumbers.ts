@@ -15,7 +15,9 @@
  * says so. Told [SHORT_TIMES] times with nothing landed, closed or opened since, its person is told once
  * instead, and nobody again until something is: a finished project falls silent. While the team lands work and a builder still
  * waits at the hour, the PM is told each hour, as anh Dee asked. Once a day the counts are posted in the project's channel,
- * where its people read the team's talk. Nothing is read for it that the pass did not read already.
+ * where its people read the team's talk. Nothing is read for it that the pass did not read already, but the project's goal
+ * (goal.ts), and that only as a line that says it is sent: how many of its milestones pass on its main branch. A project
+ * with no goal is told in the line how to state one; a goal that could not be read is left out of it.
  *
  * It says only what is so now: who has nothing, what is open, what landed. Its first three reviews found what more memory and
  * more rules cost: a person told of a night nobody watched, a message kept and typed three hours late, a file written every
@@ -31,6 +33,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DEEP, labelOf, openPieces, type AwayBuilder, type Crew, type Pick, type Read } from './assign/crew.js'
 import { refusedForGood } from './githubMentions.js'
+import { GOAL_FILE, type Score } from './goal.js'
 import type { LedProject } from './githubMerge.js'
 import { PAGE, retryIn } from './githubRest.js'
 import { TRAIN_TITLE } from './githubTrain.js'
@@ -139,9 +142,19 @@ const landedWords = (n: Numbers): string => `${counted(n.landed, 'pull request')
 const noTask = (n: Numbers, builders: number): string => n.open > 0 ? `the ${counted(n.open, 'sized task')} open ${n.open === 1 ? 'was' : 'were'} not given to ${builders === 1 ? 'it' : 'them'}`
   : `no sized task is open${n.unsized ? ` (${counted(n.unsized, 'open issue')} ${n.unsized === 1 ? 'has' : 'have'} no size)` : ''}`
 
-/** What the PM is typed when work is short: the builders with nothing ([names]), what is open, what landed, and what to do. */
-export const shortLine = (names: readonly string[], n: Numbers, at: string): string => `Harness, ${at}: ${nothing(names)}, and ${noTask(n, names.length)}`
-  + `. ${landedWords(n)} in the last 24 hours. Open the next tasks as issues, each with its part:, size: and p0-p2 labels${n.unsized ? ', or size the ones that wait' : ''}. `
+/** A goal's score in a few words: "41 of 60 checks pass on the main branch, 3 fail and 16 wait". */
+const scored = (goal: Score): string => `${goal.passed} of ${counted(goal.total, 'check')} pass${goal.total === 1 ? 'es' : ''} on the main branch`
+  + `${goal.failed || goal.waiting ? `, ${goal.failed} fail${goal.failed === 1 ? 's' : ''} and ${goal.waiting} wait${goal.waiting === 1 ? 's' : ''}` : ''}`
+
+/** A project's goal as a line has it: its score, null when it states none, undefined when it could not be read. */
+type Goal = Score | null | undefined
+
+/** What the PM is typed when work is short: the builders with nothing ([names]), what is open, what landed, how far the [goal]
+ *  is (or how to state one, with the command that writes its file), and what to do. */
+export const shortLine = (names: readonly string[], n: Numbers, at: string, goal: Goal): string => `Harness, ${at}: ${nothing(names)}, and ${noTask(n, names.length)}`
+  + `. ${landedWords(n)} in the last 24 hours.`
+  + (goal ? ` The goal (${GOAL_FILE}): ${scored(goal)}.` : goal === null ? ` The project states no goal: \`harness super-tab goal\` in your checkout writes ${GOAL_FILE} and the workflow that checks it.` : '')
+  + ` Open the next tasks as issues, each with its part:, size: and p0-p2 labels${n.unsized ? ', or size the ones that wait' : ''}. `
   + 'If the work is done, tell your person.'
 
 /** What the PM's person is told once the PM was told [SHORT_TIMES] times, nothing moved since, and [names] still have nothing:
@@ -149,11 +162,11 @@ export const shortLine = (names: readonly string[], n: Numbers, at: string): str
 export const toldLine = (names: readonly string[], n: Numbers, pm: string): string => `Harness: ${nothing(names)}, and ${noTask(n, names.length)}. `
   + `${plainName(pm)} was told ${SHORT_TIMES} times, and is told no more until a task is opened or something lands.`
 
-/** The day's numbers, for the project's people, with the [day] they are posted on. */
-export const dayLine = (n: Numbers, day: string): string => `Harness, ${day}, the last 24 hours: ${landedWords(n)}`
+/** The day's numbers, for the project's people, with the [day] they are posted on and how far its [goal] is. */
+export const dayLine = (n: Numbers, day: string, goal: Goal): string => `Harness, ${day}, the last 24 hours: ${landedWords(n)}`
   + `${n.landedBy.length ? ` (${n.landedBy.slice(0, NAMES_MAX).map(([name, count]) => `${name} ${count}`).join(', ')}${n.landedBy.length > NAMES_MAX ? ', others' : ''})` : ''}`
   + ` and ${counted(n.closed, 'task')}${n.more ? ' or more' : ''} closed. Now: ${n.builders ? `${n.free.length} of ${counted(n.builders, 'builder')} with nothing to do` : 'no builder is running'}, `
-  + `${counted(Math.max(0, n.open), 'task')} open and ${n.held} in hand.`
+  + `${counted(Math.max(0, n.open), 'task')} open and ${n.held} in hand.${goal ? ` Goal: ${scored(goal)}.` : ''}`
 
 /** Where a project's numbers go, in the Swarm as its PM reads it ([state]): the PM's own chat with its person, or the project's
  *  channel. Null when the Swarm has none. */
@@ -212,8 +225,13 @@ export class PmNumbers {
     this.log = deps.log ?? (line => console.warn(line))
   }
 
-  /** One project's counts after an assigner's pass: its PM told, its person told or its day posted, as each is due. */
-  async pass(project: LedProject, numbers: Numbers): Promise<void> {
+  /** One project's counts after an assigner's pass: its PM told, its person told or its day posted, as each is due, with the
+   *  project's goal where a line says it: read by [goal] only as that line is sent, and left out when it cannot be read. */
+  async pass(project: LedProject, numbers: Numbers, goal: () => Promise<Score | null>): Promise<void> {
+    const read = (): Promise<Goal> => goal().catch(error => {
+      this.once(`[super-tab] numbers: GOAL_UNREAD ${project.repo}: ${error instanceof Error ? error.message : String(error)}`)
+      return undefined
+    })
     const memory = this.memory ??= this.load(), now = this.now(), at = new Date(now), id = project.projectId
     const kept = memory[id] ?? { typedAt: 0, told: 0, said: false, activity: 0, day: '' }
     const before = JSON.stringify(kept)
@@ -236,9 +254,9 @@ export class PmNumbers {
       const after = kept.typedAt ? `${kept.typedAt}` : `first ${Math.floor(now / SHORT_EVERY_MS)}`
       if (kept.told >= SHORT_TIMES) {
         // Refused for good, it is not said again either: the log has it.
-        if (await this.send('say', project, after, toldLine(waiting, numbers, project.pm)) !== 'later') kept.said = true
+        if (await this.send('say', project, after, async () => toldLine(waiting, numbers, project.pm)) !== 'later') kept.said = true
       } else {
-        const sent = await this.send('tell', project, after, shortLine(waiting, numbers, hhmm(now)))
+        const sent = await this.send('tell', project, after, async () => shortLine(waiting, numbers, hhmm(now), await read()))
         // Taken, it counts; refused for good, the hour passes all the same, and nothing is counted that was not typed.
         if (sent !== 'later') Object.assign(kept, { typedAt: now, told: kept.told + (sent === 'taken' ? 1 : 0) })
       }
@@ -247,7 +265,7 @@ export class PmNumbers {
     if (at.getHours() >= DAY_HOUR && day > kept.day) {
       // A day in which nothing landed and no task closed has no numbers to post.
       if (!numbers.landed && !numbers.closed
-        || await this.send('post', project, day, dayLine(numbers, `${DAYS[at.getDay()]} ${at.getDate()} ${MONTHS[at.getMonth()]}`)) !== 'later') kept.day = day
+        || await this.send('post', project, day, async () => dayLine(numbers, `${DAYS[at.getDay()]} ${at.getDate()} ${MONTHS[at.getMonth()]}`, await read())) !== 'later') kept.day = day
     }
     if (JSON.stringify(kept) === before) return
     // Kept in the order they were last written, so the ones dropped past MAX_KEPT are the ones longest untouched.
@@ -261,11 +279,12 @@ export class PmNumbers {
    * from an earlier try whose answer was lost, which it says by refusing the id with other words), `refused` when it will not
    * have it at all, and `later` when it did not answer: tried again from 30 s on, doubling to 15 minutes, and said once.
    */
-  private async send(how: How, project: LedProject, when: string, text: string): Promise<'taken' | 'refused' | 'later'> {
+  private async send(how: How, project: LedProject, when: string, text: () => Promise<string>): Promise<'taken' | 'refused' | 'later'> {
     const key = `${project.projectId}\n${how}`, now = this.now()
+    // Its words are made only when it goes: a line that waits its turn again reads nothing meanwhile.
     if ((this.retries.get(key)?.at ?? 0) > now) return 'later'
     try {
-      await this.deps.send(how, project, `numbers-${createHash('sha256').update(`${key}\n${when}`).digest('hex').slice(0, 40)}`, text)
+      await this.deps.send(how, project, `numbers-${createHash('sha256').update(`${key}\n${when}`).digest('hex').slice(0, 40)}`, await text())
     } catch (error) {
       if (error instanceof SuperTabHostError && error.code === 'OPERATION_REUSED') return this.settled(key, 'taken')
       const why = error instanceof Error ? error.message : String(error)

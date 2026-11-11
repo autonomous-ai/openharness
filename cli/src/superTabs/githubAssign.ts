@@ -15,6 +15,7 @@ import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { GitHubReads, GitHubStop, PAGE } from './githubRest.js'
 import { authorOf, isWriter, openPullsPath, PULL_PAGES, pullPeople, pullTalk, RECORD_SETTLE_MS, sameChange, verdicts, type LedProject, type VerdictRecords } from './githubMerge.js'
 import { TEAM } from './githubMentions.js'
+import { goalOf, type Score } from './goal.js'
 import { numbersOf, type Numbers } from './pmNumbers.js'
 
 type Json = Record<string, unknown>
@@ -93,8 +94,9 @@ export class GitHubAssign {
     get: GitHubGet; send: GitHubSend; now?: () => number; log?: (line: string) => void; intervalMs?: number
     /** Who made each verdict by command, the merger's own (githubMerge.ts VerdictRecords): only such a READ-OK is a read. */
     records: VerdictRecords
-    /** Takes what a pass counted of a project, for its PM and its people (pmNumbers.ts PmNumbers). */
-    numbers: { pass: (project: LedProject, numbers: Numbers) => Promise<void> } }) {
+    /** Takes what a pass counted of a project, for its PM and its people, and how to read its goal when a line says it
+     *  (pmNumbers.ts PmNumbers). */
+    numbers: { pass: (project: LedProject, numbers: Numbers, goal: () => Promise<Score | null>) => Promise<void> } }) {
     this.now = deps.now ?? Date.now
     this.log = deps.log ?? (line => console.warn(line))
     this.reads = new GitHubReads(deps.get, this.now)
@@ -178,7 +180,8 @@ export class GitHubAssign {
     await this.takeBack(repo, issues, (crew.away ?? []).filter(away => away.why !== 'down' || crew.builders.length > 0), undefined, withReaders)
     const { short, picks } = await this.plan(project, issues, pulls, crew, read, withReaders)
     // What this pass read, counted: who has nothing after it, what is open, what landed.
-    await this.deps.numbers.pass(project, numbersOf({ now: this.now(), crew, pm: project.pm, issues, read, withReaders, short, picks, closed }))
+    await this.deps.numbers.pass(project, numbersOf({ now: this.now(), crew, pm: project.pm, issues, read, withReaders, short, picks, closed }),
+      async () => goalOf(this.reads, repo, String((await this.reads.one(repo, `/repos/${repo}`)).default_branch ?? '')))
   }
 
   /** Gives the free tasks to the builders who can start them soonest, after taking back what waits on a builder that cannot

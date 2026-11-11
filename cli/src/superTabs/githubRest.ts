@@ -116,6 +116,12 @@ export class GitHubReads {
     return object(body)
   }
 
+  /** What [path] answers now, asked outright and not kept: an answer that is large and asked for once (a commit's check
+   *  runs, goal.ts), which kept under its ETag would sit in memory for good. */
+  async fresh(repo: string, path: string): Promise<unknown> {
+    return this.read(repo, path, false, false, true)
+  }
+
   /** A file of [repo]'s default branch as text, its last answer again on a 304. Null when it is not there: a missing file
    *  is an answer here, never a repository this login cannot read, and it is not asked again for [MISSING_MS]. */
   async file(repo: string, path: string): Promise<string | null> {
@@ -150,9 +156,9 @@ export class GitHubReads {
   }
 
   /** The body of [url], its kept body on a 304 when [keep], or null on a 304 otherwise. With [fileMissing] a 404 answers
-   *  `{ missing: true }`: a file that is not there. */
-  private async read(repo: string, url: string, keep: boolean, fileMissing = false): Promise<unknown> {
-    const last = this.kept.get(url)
+   *  `{ missing: true }`: a file that is not there. [once]: asked with no ETag, and nothing of the answer kept. */
+  private async read(repo: string, url: string, keep: boolean, fileMissing = false, once = false): Promise<unknown> {
+    const last = once ? undefined : this.kept.get(url)
     const reply = await this.get(url, last?.etag ?? null).catch(error => {
       const code = typeof error?.code === 'string' ? error.code : 'GH_FAILED'
       // gh missing or signed out stops every repository until it is fixed; a slow or failed answer only this pass.
@@ -166,7 +172,7 @@ export class GitHubReads {
     if (reply.status === 404 || reply.status === 403) throw new GitHubStop('UNREADABLE', `this computer's gh login cannot read ${repo}.`, false, this.now() + UNREADABLE_RETRY_MS)
     // GitHub failing on its own side stops every repository; any other answer is about this one (it still goes when it next can).
     if (reply.status !== 200) throw new GitHubStop('GH_FAILED', `GitHub answered ${reply.status}.`, reply.status >= 500, this.now())
-    if (reply.etag) {
+    if (reply.etag && !once) {
       this.kept.delete(url)
       this.kept.set(url, { etag: reply.etag, body: keep ? reply.body : null })
       if (this.kept.size > MAX_KEPT) this.kept.delete(this.kept.keys().next().value!)

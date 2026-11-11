@@ -9,12 +9,14 @@ import { GitHubAssign } from './githubAssign.js'
 import { VerdictRecords, type LedProject } from './githubMerge.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { commandRecords } from './commandRecords.fake.js'
+import type { Score } from './goal.js'
 import { PmNumbers, type Numbers } from './pmNumbers.js'
 
 type Json = Record<string, unknown>
 const GiB = 1024 ** 3
 const issue = (number: number, labels: string[], extra: Json = {}): Json => ({ number, labels: labels.map(name => ({ name })), ...extra })
 const PROJECT = { repo: 'acme/app', pm: 'Faye', tabId: 'tab', pmAgentId: 'faye', projectId: 'app' }
+const TIP = 'c0ffee0000000000000000000000000000000001'
 
 /** One repository's issues as GitHub's REST API answers them, with ETags, and what was sent to it. Labels sent are kept
  *  only once [applied] says GitHub's lists show them. */
@@ -25,7 +27,7 @@ function fakeGitHub(open: Json[], closed: Json[] = []) {
   const state = { open, closed, asked: [] as string[], labelAnswer: 200, deleteAnswer: 200, commentAnswer: 201, signedOut: false, applied: false,
     /** Runs as a label's DELETE arrives, before it is answered: a test changes the issue here, or refuses the call with a status. */
     deleted: null as ((issue: Json, label: string) => number | void) | null,
-    files: new Map<string, string>(), labels: labels as Json[], pulls: [] as Json[], comments: new Map<number, Json[]>(), reviews: new Map<number, Json[]>(), compare: new Map<string, Json>() }
+    files: new Map<string, string>(), checks: [] as Json[], labels: labels as Json[], pulls: [] as Json[], comments: new Map<number, Json[]>(), reviews: new Map<number, Json[]>(), compare: new Map<string, Json>() }
   const sent: Array<{ method: string; path: string; body: Json }> = []
   const get: GitHubGet = async (path, etag) => {
     state.asked.push(path)
@@ -36,6 +38,9 @@ function fakeGitHub(open: Json[], closed: Json[] = []) {
     if (file && text === undefined) return { status: 404, etag: null, body: null, resetAt: null }
     const body = file ? { encoding: 'base64', content: Buffer.from(text!).toString('base64') }
       : url.pathname === '/repos/acme/app' ? { default_branch: 'main' }
+      // Main's last commit and its checks, where a project's goal is scored (goal.ts).
+      : url.pathname === '/repos/acme/app/commits' ? url.searchParams.get('sha') === 'main' ? [{ sha: TIP, parents: [] }] : null
+      : url.pathname === `/repos/acme/app/commits/${TIP}/check-runs` ? { check_runs: state.checks }
       // A page of the list, as GitHub pages it.
       : url.pathname === '/repos/acme/app/pulls' ? state.pulls.slice((Number(url.searchParams.get('page') ?? 1) - 1) * Number(url.searchParams.get('per_page') ?? 30),
         Number(url.searchParams.get('page') ?? 1) * Number(url.searchParams.get('per_page') ?? 30))
@@ -87,11 +92,11 @@ const crew = (): Crew => ({
   machines: [{ machineId: 'mac', observation: { resources: { memoryTotalBytes: 64 * GiB, projectDiskFreeBytes: 500 * GiB } } }],
 })
 
-function setup(open: Json[], options: { closed?: Json[]; crew?: Crew; numbers?: { pass: (project: LedProject, numbers: Numbers) => Promise<void> } } = {}) {
+function setup(open: Json[], options: { closed?: Json[]; crew?: Crew; numbers?: { pass: (project: LedProject, numbers: Numbers, goal: () => Promise<Score | null>) => Promise<void> } } = {}) {
   const github = fakeGitHub(open, options.closed)
   const log = vi.fn()
   /** What each pass counted (pmNumbers.ts). */
-  const numbers = vi.fn(async (_project: LedProject, _numbers: Numbers) => {})
+  const numbers = vi.fn(async (_project: LedProject, _numbers: Numbers, _goal: () => Promise<Score | null>) => {})
   const clock = { now: Date.parse('2026-11-09T07:31:00Z') }
   const make = () => new GitHubAssign({ projects: async () => [PROJECT], crew: async () => options.crew ?? crew(), get: github.get, send: github.send,
     now: () => clock.now, log, records: new VerdictRecords(github.authors, () => clock.now, log), numbers: options.numbers ?? { pass: numbers } })
@@ -110,7 +115,12 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     await f.assigner.tick()
     // Juno was given #2 this pass, so nobody is free and no task is open: one in hand before, one given.
     expect(f.labelled()).toEqual([[2, 'builder:juno']])
-    expect(f.numbers.mock.calls).toEqual([[PROJECT, { builders: 2, free: [], open: 0, unsized: 0, held: 2, landed: 1, landedBy: [['Pip', 1]], closed: 1, more: false, activity: Date.parse(merged) }]])
+    expect(f.numbers.mock.calls).toEqual([[PROJECT, { builders: 2, free: [], open: 0, unsized: 0, held: 2, landed: 1, landedBy: [['Pip', 1]], closed: 1, more: false, activity: Date.parse(merged) }, expect.any(Function)]])
+    // The project's goal is read from its default branch, and only when the numbers ask for it.
+    f.github.state.files.set('agents/GOAL.md', '| Sync works | `npm test` |\n| Starts fast | `make start-time` |')
+    f.github.state.checks = [{ id: 1, name: 'goal: Sync works', status: 'completed', conclusion: 'success' }]
+    expect(f.github.state.asked.some(path => path.includes('GOAL.md') || path.includes('check-runs'))).toBe(false)
+    expect(await f.numbers.mock.calls[0]![2]()).toEqual({ total: 2, passed: 1, failed: 0, waiting: 1 })
     // A landing more than a day old is the team's last, and no landing of the day: the pass counts from its own clock.
     const old = new Date(Date.parse('2026-11-09T07:31:00Z') - 30 * 3_600_000).toISOString()
     const g = setup([], { closed: [{ number: 9, pull_request: { merged_at: old }, labels: [{ name: 'builder:pip' }], updated_at: old }] })
