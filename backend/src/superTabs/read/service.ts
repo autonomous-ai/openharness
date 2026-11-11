@@ -15,7 +15,6 @@ import type { SuperTabStore } from '../store.js'
 import { transaction } from '../store.js'
 import { sizeOf, type CacheView } from '../cache.js'
 import { readAccess, readChanged, readLastChangedAt, readLastChangedAts, readLight, readLightGroups, readParts } from '../cachedReads.js'
-import { migrateSwarm } from '../migration/migrate.js'
 import * as parts from '../parts/index.js'
 import type { GroupData, Part, SwarmParts } from '../parts/index.js'
 import { canReadGroup, canReadProject, projectsOf, readConversation, readProject } from '../projects.js'
@@ -26,13 +25,11 @@ import type { PeriodName } from '../leaderboard/rolling.js'
 import { leaderboard } from '../leaderboard/stats.js'
 import { WEEK_MS } from '../leaderboard/week.js'
 import { derivedEtag, marksOf } from './derivedEtag.js'
-import { READ_FORMAT, SWARM_MIGRATING, type Changes, type Derived, type ReaderMarks, type MachineReadings, type DormantGroups, type FirstLoad, type OneGroup, type SwarmList } from './contract.js'
-import { AvatarLinks } from '../avatarLinks.js'
+import { READ_FORMAT, type Changes, type Derived, type ReaderMarks, type MachineReadings, type DormantGroups, type FirstLoad, type OneGroup, type SwarmList } from './contract.js'
 import { cursorFor, readCursor } from './cursor.js'
 import { changesFor } from './changes.js'
 import { envelope, groupView, readerView, seenIn, type ReaderView } from './views.js'
 import { decodeDormantPage, encodeDormantPage } from './dormantPage.js'
-import { ServedTops } from './servedTops.js'
 import { memberSwarms } from '../swarmRows.js'
 import { isPersonalSwarm } from '../deletion.js'
 
@@ -43,7 +40,7 @@ interface Read { parts: SwarmParts; actor: Actor; view: ReaderView; lastChangedA
 export const GROUP_ROWS_BYTES = 8 * 1024 * 1024
 /** How long one Swarm's machine lookups below are reused: machines report every 15 s anyway (Diego's review, item 5, 2026-10-28). */
 const MACHINE_READS_MS = 15_000
-/** The format and deletion metadata can be reused briefly: deletion and migration take effect on each pod within this window. */
+/** The format and deletion metadata can be reused briefly: a deletion takes effect on each pod within this window. */
 export const SWARM_ROW_READS_MS = 3_000
 const MAX_SWARM_ROW_READS = 2_000
 type SwarmRow = { format: number | null; deletedAt: Date | null }
@@ -104,12 +101,7 @@ export class SwarmReads {
   constructor(private readonly store: SuperTabStore, options: { now?: () => number } = {}) {
     this.db = store.db
     this.now = options.now ?? store.now
-    this.avatarLinks = store.avatars ? new AvatarLinks(store.avatars, store.avatarPrefix) : null
-    this.servedTops = new ServedTops(store.db)
   }
-  private readonly avatarLinks: AvatarLinks | null
-  /** Each project chat's newest main row people read, as readers are served it (servedTops.ts, #2742). */
-  private readonly servedTops: ServedTops
   /** The machine lookups of each Swarm read in the last MACHINE_READS_MS, oldest first, keyed by what they depend on. */
   private readonly machineReads = new Map<string, { at: number; read: Promise<MachineReads> }>()
   /** The small format/deletion row for each Swarm, held briefly per process. */
@@ -121,8 +113,8 @@ export class SwarmReads {
       const read = await this.load(tx, cached, user, tabId, asAgentId, t0, { includeRecentStarts: true })
       const { parts: loaded, view, lastChangedAt } = read
       return { format: READ_FORMAT, tabId, cursor: cursorFor(t0, loaded.visibilityEpoch), serverTime: t0, lastChangedAt, epoch: loaded.visibilityEpoch,
-        ...view.parts,
-        ...stamped({ ...await this.withAvatars(view, t0), ...readableMarks(read, await this.marksOf(tx, tabId, read.actor),
+        ...view.parts, progress: [],
+        ...stamped({ ...view.derived, ...readableMarks(read, await this.marksOf(tx, tabId, read.actor),
           await this.threadMarksOf(tx, tabId, read.actor), await this.settingsOf(tx, tabId, read.actor)) }) }
     })
   }
@@ -152,14 +144,6 @@ export class SwarmReads {
     return [...fresh, ...named.filter(s => !taken.has(s.key))]
   }
 
-  /** The reader's avatar links (avatarLinks.ts), only ever in a member's read: issued afresh each time, never stored. */
-  private async withAvatars(view: ReaderView, now: number): Promise<Derived> {
-    if (!this.avatarLinks) return view.derived
-    const seen = new Set(Object.keys(view.derived.agents))
-    const avatars = await this.avatarLinks.forReader(view.state, view.state.agents.filter(a => seen.has(a.id)), now)
-    return Object.keys(avatars).length ? { ...view.derived, avatars } : view.derived
-  }
-
   /** Every machine the reader sees, whole: what a client that asks for lines in its changes reads when it needs more than liveness. */
   async machineReadings(user: AuthUser, tabId: string, asAgentId?: string): Promise<MachineReadings> {
     const t0 = this.now()
@@ -178,7 +162,7 @@ export class SwarmReads {
     return this.read(user, tabId, async (tx, cached) => {
       // Light (parts/light.ts): changed parts come whole from the change feed; the rest is read only to check visibility and
       // derive values. The base is one per Swarm and stamp, whoever reads: the Lead conversations, running work, unfinished
-      // starts and the like, and no progress parts (the feed sends changed ones).
+      // starts and the like.
       const base = await readLight(tx, cached, tabId, LIGHT)
       const from = readCursor(cursor, base.visibilityEpoch, t0)
       // Reloading readers still pass the access check first, as every read does.
@@ -200,11 +184,9 @@ export class SwarmReads {
       const read = await this.load(tx, cached, user, tabId, asAgentId, t0, {},
         async () => withStarts(withGroups(base, await readLightGroups(tx, cached, tabId, named)), extra))
       const sent = changesFor(read.view, changed, read.actor, options.lightMachines ? { since: from.since } : undefined)
-      // A changed project chat comes whole from the change feed, with its stored newest main row (servedTops.ts).
-      if (!asAgentId) sent.groups = await this.servedTops.served(tabId, read.view.state, sent.groups)
       return { format: READ_FORMAT, reload: false, cursor: cursorFor(t0, read.parts.visibilityEpoch), serverTime: t0, lastChangedAt: read.lastChangedAt,
-        epoch: read.parts.visibilityEpoch, ...sent,
-        ...stamped({ ...await this.withAvatars(read.view, t0), ...readableMarks(read, marks, threadMarks, settings) }, options.derivedEtag) }
+        epoch: read.parts.visibilityEpoch, ...sent, progress: [],
+        ...stamped({ ...read.view.derived, ...readableMarks(read, marks, threadMarks, settings) }, options.derivedEtag) }
     })
   }
 
@@ -267,7 +249,7 @@ export class SwarmReads {
   /**
    * One conversation from its own row by key and the parts its read check reads: the head, members and agents (cachedReads.ts
    * readAccess), and for an agent stored with no project its active conversations (agentProjectId). Never the whole Swarm: its
-   * cached base and machines were refreshed from the Swarm's group, machine and progress feeds on every pod at every stamp a read met, ~1.33 GB in two minutes of these reads on prod (task
+   * cached base and machines were refreshed from the Swarm's change feeds on every pod at every stamp a read met, ~1.33 GB in two minutes of these reads on prod (task
    * #2875). canReadGroup reads no Lead conversation here (ledProject): a group with an audience is a closed Chat with PM, or
    * an agent's 1:1 chat. It answers as readGroup does (integration/superTabOneGroup.test.ts compares
    * every reader of every group). A task naming required machines goes to readGroup: which machines its reader sees depends
@@ -282,13 +264,13 @@ export class SwarmReads {
       // An awake group stored without a number (111 on prod, 11-04) is numbered by a whole read after every other one
       // (model.ts numberConversations, in visibleState): the whole read answers it. A project's chat and Leads have none.
       if (found && !found.dormant && found.data!.number == null && !isLeads(found.data!)
-        && !projectsOf(parts.reassemble({ ...access, groups: [], machines: [], starts: [], progress: [] }, { share: true })).some(p => p.leadConversationId === found.key)) return null
+        && !projectsOf(parts.reassemble({ ...access, groups: [], machines: [], starts: [] }, { share: true })).some(p => p.leadConversationId === found.key)) return null
       const target = asAgentId ? access.agents.find(a => a.key === asAgentId && !a.deleted)?.data : undefined
       const context = target && !target.projectId ? await parts.loadLightGroups(tx, tabId, 'agents', { agentIds: { $in: [target.id] }, dormant: false }) : []
       // The conversation itself whole; another only as the light row the checks read, once.
       const held = new Set(found ? [found.key] : [])
       const groups = [...found ? [found] : [], ...context.filter(g => !held.has(g.key) && !!held.add(g.key))]
-      const state = parts.reassemble({ ...access, groups, machines: [], starts: [], progress: [] }, { share: true })
+      const state = parts.reassemble({ ...access, groups, machines: [], starts: [] }, { share: true })
       const actor = await this.store.actor(tx, user, state, asAgentId)
       author(state, actor)
       const unavailable = (): never => fail('NOT_FOUND', 'This conversation is unavailable.', 404)
@@ -302,8 +284,7 @@ export class SwarmReads {
       // An awake one as a whole-Swarm read lists it (views.ts readerView): a kind this release knows, never the removed Leads.
       const group = state.conversations.find(c => c.id === conversationId)
       if (!group || isLeads(group) || !canReadGroup(state, actor, group)) return unavailable()
-      const one = envelope(found, groupView(group, new Set()))
-      return { group: actor.kind === 'person' ? (await this.servedTops.served(tabId, state, [one]))[0]! : one }
+      return { group: envelope(found, groupView(group, new Set())) }
     })
     return answer ?? { group: (await this.readGroup(user, tabId, conversationId, asAgentId)).group }
   }
@@ -436,17 +417,15 @@ export class SwarmReads {
     // People at the owner's domain join Swarms with auto-join on by themselves, before the first page is read (autoJoin.ts).
     if (!after) await this.store.autoJoin(user)
     const rows = await memberSwarms(this.db, user.autonomousEnv, user.sub, { after, limit: 101 })
-    const page = rows.slice(0, 100)
-    // A Swarm not yet in parts is migrated when it is opened; until then the list names it from its old row.
-    const unsplit = page.filter(r => r.format !== 2).map(r => r.id)
-    const legacy = unsplit.length ? await this.db.superTab.findMany({ where: { id: { in: unsplit } }, select: { id: true, state: true } }) : []
-    const ids = page.filter(r => r.format === 2).map(r => r.id)
+    // A Swarm still in one row is from before the parts: it is never served, and the wipe removes it (migration/wipeJob.ts).
+    const page = rows.slice(0, 100).filter(r => r.format === 2)
+    const ids = page.map(r => r.id)
     // Every head changed after the epoch: one read of each listed Swarm's head part.
     // Each Swarm's newest change through the read cache, at its stamp: a list every few seconds no longer recomputes it.
     const [heads, newest] = await Promise.all([transaction(this.db, tx => parts.loadChanged(tx, ids, new Date(0), ['head'])),
       this.store.view(ids).then(view => readLastChangedAts(this.db, view, ids))])
     return { tabs: page.map(row => {
-      const head = (heads.get(row.id)?.[0]?.data ?? legacy.find(l => l.id === row.id)?.state) as { name: string; paused: boolean }
+      const head = heads.get(row.id)![0]!.data as { name: string; paused: boolean }
       // Only the reader's own Personal Swarm is marked (a round dial's Personal | Team picker); another person's is not theirs
       // to be told apart. Its id is derived from its owner and environment (deletion.ts), so no read is needed.
       const personal = row.ownerId === user.sub && isPersonalSwarm({ id: row.id, environment: user.autonomousEnv, ownerId: row.ownerId })
@@ -456,17 +435,16 @@ export class SwarmReads {
   }
 
   /** Runs a read, outside any transaction: its parts come through the read cache at the stamps `body` is given (cache.ts),
-   *  and only the read of the base parts on a miss is a transaction (cachedReads.ts). A Swarm still in one row is migrated
-   *  first, as a safety net for one the job did not see (design 6.1), and answers 503 while that cannot be done. */
+   *  and only the read of the base parts on a miss is a transaction (cachedReads.ts). */
   private async read<T>(user: AuthUser, tabId: string, body: (tx: PrismaClient, view: CacheView) => Promise<T>): Promise<T> {
     const row = await this.swarmRow(user, tabId)
-    // A deleted Swarm reads as one that does not exist (deletion.ts).
-    if (!row || row.deletedAt) fail('NOT_FOUND', 'This Super Tab is unavailable.', 404)
-    if (row.format !== 2 && !(await migrateSwarm(this.db, tabId)).ok) fail(SWARM_MIGRATING.code, SWARM_MIGRATING.message, SWARM_MIGRATING.status)
+    // A deleted Swarm reads as one that does not exist (deletion.ts), and so does one still in one row: it is from before the
+    // parts, and the wipe removes it (migration/wipeJob.ts).
+    if (!row || row.deletedAt || row.format !== 2) fail('NOT_FOUND', 'This Super Tab is unavailable.', 404)
     return body(this.db, await this.store.view([tabId]))
   }
 
-  /** The row's format only: a migrated row still holds its old state, as large as the Swarm, until the owner drops it. */
+  /** The row's format and deletion only, never its other fields. */
   private swarmRow(user: AuthUser, tabId: string): Promise<SwarmRow | null> {
     const now = this.now(), key = JSON.stringify([user.autonomousEnv, tabId])
     const kept = this.swarmRows.get(key)
@@ -495,8 +473,6 @@ export class SwarmReads {
     const actor = await this.store.actor(tx, user, state, asAgentId)
     const [machineVersions, newest] = await Promise.all([this.machineLookups(state), readLastChangedAt(tx, cached, tabId)])
     const view = readerView(loaded, actor, t0, { machineVersions }, state)
-    // People count a chat unread by its newest main row; agents keep no read marks.
-    if (actor.kind === 'person') view.parts.groups = await this.servedTops.served(tabId, state, view.parts.groups)
     return { parts: loaded, actor, lastChangedAt: newest, view }
   }
 

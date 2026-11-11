@@ -1,6 +1,6 @@
 /**
- * API list prices, in US dollars per million tokens, for the models Swarm attempts run on: what an attempt would have cost
- * on the API (costs/cost.ts). Reviewed by hand; each row names its source and the day it was read. A model not listed has
+ * API list prices, in US dollars per million tokens, for the catalog's models, served with it on the routing-policy read
+ * (catalog.ts). Reviewed by hand; each row names its source and the day it was read. A model not listed has
  * no cost, never a guessed one. To add or update one, read its provider's own price page and change its row here.
  *
  * - Cache writes are the 5-minute rate: transcripts do not say which cache a write went to, so 1-hour writes count low.
@@ -34,7 +34,3 @@ export const PRICES: readonly ModelPrice[] = [
   { model: 'moonshotai/kimi-k3', input: 0.192, output: 20, cacheRead: 0.182, cacheWrite: 0, source: OPENROUTER, checked: '2026-10-29' },
   { model: 'deepseek/deepseek-v4.1-flash-1017', input: 0.3, output: 1.2, cacheRead: 0.006, cacheWrite: 0, source: OPENROUTER, checked: '2026-10-29' },
 ]
-
-const byModel = new Map(PRICES.map(p => [p.model, p]))
-/** A model's price by its exact id, or by a dated release of it (`claude-opus-5-5-20261001`). */
-export const priceOf = (model: string): ModelPrice | undefined => byModel.get(model) ?? byModel.get(model.replace(/-\d{8}$/, ''))

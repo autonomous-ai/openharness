@@ -23,7 +23,7 @@ const SCHEMA = join(process.cwd(), 'prisma/schema.prisma')
 
 /** Every index Prisma cannot describe, as the worker has always made it: collection, name, key, seconds to expiry. */
 const EXPIRY: Array<[string, string, Record<string, number>, number]> = [
-  ...['SwarmHead', 'SwarmGroup', 'SwarmStart', 'SwarmProgress'].map(c => [c, 'part_purge', { purgeAt: 1 }, 0] as [string, string, Record<string, number>, number]),
+  ...['SwarmHead', 'SwarmGroup', 'SwarmStart'].map(c => [c, 'part_purge', { purgeAt: 1 }, 0] as [string, string, Record<string, number>, number]),
   ['SuperTabOperation', 'operation_expiry', { createdAt: 1 }, 30 * DAY],
   ['SuperTabGithubComment', 'github_comment_expiry', { createdAt: 1 }, 90 * DAY],
   ['SuperTabTerminalRequest', 'terminal_request_expiry', { createdAt: 1 }, 120],
@@ -88,7 +88,7 @@ async function schemaWith(edit: (schema: string) => string): Promise<string> {
   await writeFile(path, edited)
   return path
 }
-const groupIndex = (line: string) => (schema: string) => schema.replace('  @@index([workFinished, archived, lastActivityAt])\n', `  @@index([workFinished, archived, lastActivityAt])\n  ${line}\n`)
+const groupIndex = (line: string) => (schema: string) => schema.replace('  @@index([dormant, lastActivityAt])\n', `  @@index([dormant, lastActivityAt])\n  ${line}\n`)
 
 beforeAll(async () => {
   replica = await MongoMemoryReplSet.create({ binary: { version: '7.0.24', downloadDir: join(tmpdir(), 'harness-super-tab-mongodb-binaries') },

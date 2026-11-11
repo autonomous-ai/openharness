@@ -46,7 +46,6 @@ export function createSwarmSkillAdoption(deps: {
       noRole.add(session.agentId)
       return { row: session, commit: () => {} }
     }
-    // With its project's mode, so the relaunch writes that text and the host owes it no reload.
     const swarmSkill = { ...grant, key: session.agentId }
     return { row: { ...session, swarmSkill }, commit: () => { deps.save(session.agentId, swarmSkill) } }
   }

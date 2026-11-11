@@ -381,7 +381,9 @@ describe('TerminalStreamManager', () => {
     expect(stream.sizes.at(-1)).toEqual({ cols: 140, rows: 50 })
   })
 
-  it('carries an opaque native input context without letting it grant terminal control', async () => {
+  // The native-turn record that read it went with #3901: an input context a Desktop still sends is taken and goes nowhere,
+  // and grants a watcher no control.
+  it('opens a stream that names an input context as any other, and passes the context on to nothing', async () => {
     const onInput = vi.fn(), inputContext = 'fixture-native-input-context'
     manager = newManager({ onInput })
     await manager.handleFrame('web-1', 'terminal_open', {
@@ -395,15 +397,9 @@ describe('TerminalStreamManager', () => {
     await manager.handleBinary('web-2', { kind: TerminalBinaryKind.input, streamId: watchId, seq: 0, compressed: false, bytes: Buffer.from('\r') })
     expect(onInput).not.toHaveBeenCalled()
     await manager.handleBinary('web-1', { kind: TerminalBinaryKind.input, streamId, seq: 0, compressed: false, bytes: Buffer.from('hello') })
-    expect(onInput).toHaveBeenLastCalledWith('agent-1', true, { connId: 'web-1', kind: null, inputContext })
+    expect(onInput).toHaveBeenLastCalledWith('agent-1', true, { connId: 'web-1', kind: null })
     await manager.handleBinary('web-1', { kind: TerminalBinaryKind.input, streamId, seq: 1, compressed: false, bytes: Buffer.from('\r') })
-    expect(onInput).toHaveBeenLastCalledWith('agent-1', true, { connId: 'web-1', kind: null, inputContext, submitted: true })
-    await manager.handleFrame('web-3', 'terminal_open', {
-      requestId: 'invalid-context', protocolVersion: 3, agentId: 'agent-1', cols: 80, rows: 24, inputContext: { userId: 'do-not-trust' },
-    })
-    const other = sent.find(frame => frame.type === 'terminal_ready' && frame.connId === 'web-3')!.payload.streamId as string
-    await manager.handleBinary('web-3', { kind: TerminalBinaryKind.input, streamId: other, seq: 0, compressed: false, bytes: Buffer.from('hello') })
-    expect(onInput).toHaveBeenLastCalledWith('agent-1', true, { connId: 'web-3', kind: null })
+    expect(onInput).toHaveBeenLastCalledWith('agent-1', true, { connId: 'web-1', kind: null })
   })
 
   it.each([[1, 1], [30, 30], [80, 8], [300, 120]])(

@@ -13,10 +13,11 @@ import { MemoryStamps } from '../src/superTabs/cache.test-support.js'
 import { localReportMemory, machineReportLine, RECORD_TTL_MS, type ReportMemory } from '../src/superTabs/machineReports.js'
 import { SWEEP_EVERY_MS } from '../src/superTabs/liveness.js'
 import type { Command } from '../src/superTabs/commands.js'
+import type { StoredCreate } from '../src/superTabs/steps.test-support.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
 import type { MachineData } from '../src/superTabs/parts/index.js'
 import { poolRows } from './hostRows.test-support.js'
-import { storeAssignment } from './storedWork.test-support.js'
+import { storeAssignment, storeCreate } from './storedWork.test-support.js'
 
 // Machine reports that change only the machine's reading skip the Swarm load (DB roadmap 2.5). A fresh loopback replica
 // set, created here; Redis is MemoryStamps and an in-process report memory. This suite never reads DATABASE_URL.
@@ -67,7 +68,8 @@ async function swarm(memory?: (now: () => number) => ReportMemory, shared?: { cl
   const store = (with_: ReportMemory = reports) => new SuperTabStore(db, () => clock.now, null, { reports: with_, swarmChanged: change => pushes.push(change) })
   const timed = store()
   const tab = (await timed.create(owner, randomUUID(), 'Reports', 'public')).id
-  const execute = (command: Command, user = owner) => timed.execute(user, tab, { operationId: randomUUID(), command })
+  const execute = (command: Command | StoredCreate, user = owner, asAgentId?: string) => command.type === 'conversation.create'
+    ? storeCreate(db, tab, command, user) : timed.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
   const invitation = await execute({ type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
   await execute({ type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
   for (const [machineId, name] of [['lead-host', 'Lead Mac'], ['test-host', 'Worker Mac']]) {
@@ -124,7 +126,7 @@ async function partOps(run: () => Promise<unknown>): Promise<Record<string, numb
   try {
     await run()
     const rows = await db.$runCommandRaw({ find: 'system.profile', filter: { ts: { $gte: { $date: since.toISOString() } },
-      ns: { $regex: '\\.Swarm(Head|Member|Agent|Group|Machine|Start|Progress)$' } }, projection: { _id: 0, ns: 1 }, batchSize: 10_000 }) as
+      ns: { $regex: '\\.Swarm(Head|Member|Agent|Group|Machine|Start)$' } }, projection: { _id: 0, ns: 1 }, batchSize: 10_000 }) as
       { cursor: { firstBatch: Array<{ ns: string }> } }
     const counts: Record<string, number> = {}
     for (const { ns } of rows.cursor.firstBatch) counts[ns.slice(ns.lastIndexOf('.') + 1)] = (counts[ns.slice(ns.lastIndexOf('.') + 1)] ?? 0) + 1
@@ -166,6 +168,20 @@ describe('a reading-only heartbeat (DB 2.5)', () => {
     expect(viaFast.pushes).toMatchObject([{ parts: ['machine'] }])
   })
 
+  // Today's CLI sends each running session's token counts on every report (cli superTabs/machines.ts tokensOf): taken, so no
+  // report is refused for them, and kept by neither path.
+  it('takes a session\'s token counts and stores none of them, in full or fast', async () => {
+    const f = await swarm()
+    const harnessTokens = { [f.harness.worker]: { 'claude-opus-5-5': { input: 10, output: 1, cacheRead: 0, cacheWrite: 0 } } }
+    const stored = async () => ((await f.part()).data as unknown as MachineData).contribution!.observation!
+    expect(await pathOf(() => f.beat({ harnessTokens }))).toBe('full')
+    expect(await stored()).toMatchObject({ receivedAt: f.clock.now })
+    expect(await stored()).not.toHaveProperty('harnessTokens')
+    f.clock.now += BEAT
+    expect((await settle(f, { harnessTokens })).at(-1)).toBe('fast')
+    expect(await stored()).not.toHaveProperty('harnessTokens')
+  })
+
   it('reads only the machine part among the Swarm\'s parts, writes it once, and moves only the machine stamp', async () => {
     const f = await swarm()
     await settle(f)
@@ -197,7 +213,8 @@ describe('every reason a report runs in full (DB 2.5 spec, Tests)', () => {
         worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } }, host)
     }],
     ['a conversation an agent on it works in changed', async f => {
-      await f.execute({ type: 'message.send', conversationId: f.group, text: 'hi', replyTo: null, recipientIds: [] })
+      // The Lead's post: only agents post in a project's channel and its tasks' chats (agentsOnly.test.ts).
+      await f.execute({ type: 'message.send', conversationId: f.group, text: 'hi', replyTo: null, recipientIds: [] }, host, f.lead)
     }],
     ['the Swarm\'s people changed', async f => {
       await f.execute({ type: 'invite.create', email: 'third@example.com', role: 'collaborator', conversationId: 'lead' })
@@ -214,7 +231,7 @@ describe('every reason a report runs in full (DB 2.5 spec, Tests)', () => {
     ['a bump of its Swarm is owed here', async f => {
       const bump = stamps.bump.bind(stamps)
       stamps.bump = async () => { throw new Error('Redis is unreachable') }
-      await f.execute({ type: 'message.send', conversationId: 'lead', text: 'owed', replyTo: null, recipientIds: [] })
+      await f.execute({ type: 'message.send', conversationId: 'lead', text: 'owed', replyTo: null, recipientIds: [] }, host, f.lead)
       stamps.bump = bump
     }],
     ['an engine suspension ends with this reading', async f => {
@@ -434,7 +451,8 @@ describe('a busy Swarm\'s readings (task #3119)', () => {
     }
     return { store, during }
   }
-  const message = (f: Scene, text: string) => f.execute({ type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [] })
+  /** The Lead's post in its project's channel, where only agents post (agentsOnly.test.ts). */
+  const message = (f: Scene, text: string) => f.execute({ type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [] }, host, f.lead)
 
   // Swarm v4 runs no v3 job on a report: it lost a task, nudged a crew member and kept a crew, so each full report read every
   // project's rules (one indexed read per project with a task assigned, and with crew) to judge them. Now none.
@@ -446,7 +464,6 @@ describe('a busy Swarm\'s readings (task #3119)', () => {
     const beat = await during(() => f.beat({}, store))
     expect(beat.path).toBe('full')
     expect((await f.assignment()).status).toBe('working')
-    expect(Object.keys(beat.ops).filter(op => op.startsWith('SuperTabProjectRules.'))).toEqual([])
   })
 
   it('stores a reading fast, in four calls, after a change elsewhere in the Swarm', async () => {

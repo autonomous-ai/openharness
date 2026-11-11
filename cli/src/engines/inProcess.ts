@@ -1,5 +1,5 @@
 /**
- * The code of the twelve engines besides Claude Code and Codex, loaded in the core's process only once one of
+ * The code of the fourteen engines besides Claude Code and Codex, loaded in the core's process only once one of
  * their sessions needs it (docs/design/2026-10-08-other-engines-out-of-core.md). An engine nobody runs costs
  * the core nothing: from the lean bundle each `import()` here is a file of its own, which Node reads only when
  * it is imported (build-bundle.mjs, `splitting`).
@@ -18,7 +18,7 @@ import { terminalScreen } from './kit/screen.js'
 import { isTerminalEngine, type AgentEngine, type ProcessEngine } from './types.js'
 
 /** The engines whose code the core loads only when one of their sessions needs it. */
-export const OTHER_ENGINES = ['opencode', 'cursor', 'kilo', 'devin', 'hermes', 'amp', 'agy', 'grok', 'copilot', 'commandcode', 'muse', 'pi', 'omp'] as const satisfies readonly ProcessEngine[]
+export const OTHER_ENGINES = ['opencode', 'cursor', 'kilo', 'devin', 'hermes', 'amp', 'agy', 'grok', 'copilot', 'commandcode', 'muse', 'pi', 'omp', 'openclaw'] as const satisfies readonly ProcessEngine[]
 export type OtherEngine = (typeof OTHER_ENGINES)[number]
 export function isOtherEngine(engine: string): engine is OtherEngine { return (OTHER_ENGINES as readonly string[]).includes(engine) }
 
@@ -45,6 +45,7 @@ const MODULES = {
   muse: () => import('./muse/inProcess.js'),
   pi: () => import('./pi/inProcess.js'),
   omp: () => import('./omp/inProcess.js'),
+  openclaw: () => import('./openclaw/inProcess.js'),
 } satisfies Record<OtherEngine | 'screens' | 'hooks' | 'databaseHistory', () => Promise<unknown>>
 export type InProcessModules = { [Name in keyof typeof MODULES]: Awaited<ReturnType<(typeof MODULES)[Name]>> }
 

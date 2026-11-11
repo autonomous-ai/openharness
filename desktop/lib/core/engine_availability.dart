@@ -24,6 +24,7 @@ class EngineAvailability {
     this.signedIn,
     this.lastUsedAt,
     this.waitsForDownload = false,
+    this.unavailable,
   });
 
   final String engine;
@@ -67,6 +68,10 @@ class EngineAvailability {
   /// a create then waits for the download itself before it opens the pane.
   final bool waitsForDownload;
 
+  /// Why this machine cannot run the engine however it is installed (`OpenClaw needs Node 24.`),
+  /// in the daemon's words. Null when it can, and from an older daemon, which never says.
+  final String? unavailable;
+
   static EngineAvailability? fromJson(Object? raw) {
     if (raw is! Map) return null;
     final engine = raw['engine'];
@@ -87,6 +92,9 @@ class EngineAvailability {
           ? (raw['lastUsedAt'] as num).toInt()
           : null,
       waitsForDownload: raw['waitsForDownload'] == true,
+      unavailable: raw['unavailable'] is String && (raw['unavailable'] as String).trim().isNotEmpty
+          ? (raw['unavailable'] as String).trim()
+          : null,
     );
   }
 }

@@ -101,6 +101,7 @@ function setup(over: Partial<AttachDeps> = {}) {
   const deps: AttachDeps = {
     liveFor,
     announceSession: vi.fn(),
+    setIdentityHold: () => false,
     setInterpretationHold: (id, revision, reason, create) => {
       const row = bindings.get(id)
       if (!row || row.evidenceRevision !== revision || row.identityHold || (!row.interpretationHold && !(create && reason))) return false
@@ -119,6 +120,7 @@ function setup(over: Partial<AttachDeps> = {}) {
       transcriptFields: vi.fn(() => []),
       beginHydrate: vi.fn(() => profile),
       hydrate: vi.fn(),
+      ingest: vi.fn(() => false),
       ingestConfig: vi.fn(async () => false),
       ingestPane: vi.fn(() => false),
       capturePane: vi.fn(async (session, capture, lines, silent) => {
@@ -132,7 +134,7 @@ function setup(over: Partial<AttachDeps> = {}) {
     announceTurnAborted: vi.fn(),
     questionWatcher: { start: vi.fn() },
     terminalLabel: () => 'tmux:%0',
-    dbs: { opencode: '/db/opencode.db', kilo: '/db/kilo.db', devin: '/db/devin.db' },
+    dbs: { opencode: '/db/opencode.db', kilo: '/db/kilo.db', devin: '/db/devin.db', openclaw: async () => null },
     devinHome: '/devin',
     hermesDb: async (s) => `/db/hermes-${s.agentId}.db`,
     concurrency: 2,

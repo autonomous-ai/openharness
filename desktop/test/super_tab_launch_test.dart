@@ -11,7 +11,6 @@ import 'package:harness/core/permission_modes.dart';
 import 'package:harness/core/project_folder.dart';
 import 'package:harness/core/launch_setup.dart';
 import 'package:harness/notify/system_notifications.dart';
-import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/harness_attachments.dart';
@@ -611,10 +610,7 @@ void main() {
           expect(request['permissionMode'], 'ask');
           expect(request['bypassPermission'], isFalse);
           expect(request['swarmRole'], kind == 'member' ? 'dev' : 'lead');
-          expect(
-            request['swarmSkillMode'],
-            kind == 'member' ? 'orchestration' : 'default',
-          );
+          expect(request, isNot(contains('swarmSkillMode')));
           await Future<void>.delayed(Duration.zero);
           final ordinary = NewHarnessController(
             f.app,
@@ -2269,8 +2265,10 @@ void main() {
     });
   }
 
+  // Swarm v4: an agent starts as plain Claude Code or Codex. No skill mode, role name or role id goes with it, whatever
+  // the project or a journal from an older Desktop still holds.
   test(
-    'a Desktop Builder starts with the existing project skill mode',
+    'a Desktop agent starts with no skill mode, role name or role id',
     () async {
       final f = SuperTabLaunchFixture();
       f.connection.server.state['projects'] = [
@@ -2278,230 +2276,47 @@ void main() {
       ];
       withCoordinator(f);
       f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      f.store.values['super_tab.launch.owner.${f.app.activeSwarmId}.lead'] =
+          jsonEncode({
+            'operationId': 'saved-operation',
+            'joinId': 'saved-join',
+            'tabId': tabId,
+            'conversationId': 'lead',
+            'lead': false,
+            'newSwarm': false,
+            'newProject': false,
+            'visibility': 'public',
+            'projectId': 'lead',
+            'roleName': 'Tester',
+            'roleId': 'dev',
+            'skillMode': 'default',
+          });
       final box = await f.box();
       expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
       final create = f.connection.calls
           .firstWhere((c) => c.$1 == 'agent_create')
           .$2;
+      expect(create.keys.toList()..sort(), [
+        'bypassPermission',
+        'creationId',
+        'cwd',
+        'engine',
+        'name',
+        'permissionMode',
+        'prompt',
+        'swarmRole',
+      ]);
       expect(create['swarmRole'], 'dev');
-      expect(create['swarmSkillMode'], 'default');
+      final join = f.connection.joins.single['command'] as Map;
+      expect(join, isNot(contains('roleName')));
+      expect(join, isNot(contains('roleId')));
     },
   );
 
-  // The document's role headings, in the template's shape.
-  const roleDocument =
-      '# Instructions\n\n## Roles\n\n### PM\n\n- Talks with people.\n\n'
-      '### Engineer\n\n- Does one task.\n\n### Reviewer\n\n- Reads code.\n\n'
-      '### Tester\n\n- Runs it.\n\n## Workflow\n\n### Not a role\n';
-
-  // A Swarm whose project has instructions (a backend from phase 2 on).
-  SuperTabLaunchFixture withInstructions({bool coordinator = true}) {
-    final f = SuperTabLaunchFixture();
-    f.connection.server.state['projects'] = [
-      {
-        ...projectFixture('lead', 'Company', 'lead'),
-        'skillMode': 'default',
-        if (coordinator) 'coordinatorName': 'Product Manager',
-      },
-    ];
-    f.connection.server.instructions['lead'] = {
-      'projectId': 'lead',
-      'revision': 1,
-      'text': roleDocument,
-      'template': false,
-      'coordinatorName': 'Product Manager',
-      'notesRevision': 0,
-      'notes': <dynamic>[],
-    };
-    withCoordinator(f);
-    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
-    return f;
-  }
-
-  Widget formOf(NewHarnessController box) => MaterialApp(
-    home: Scaffold(
-      body: SizedBox(
-        width: 1200,
-        height: 800,
-        child: NewHarnessForm(
-          controller: box,
-          desktop: true,
-          onClose: () {},
-          onCreated: () {},
-        ),
-      ),
-    ),
-  );
-
-  test('an agent joining a project takes the role typed', () async {
-    final f = withInstructions();
-    final box = await f.box();
-    expect(box.integration!.roleSuggestions, [
-      'Engineer',
-      'Reviewer',
-      'Tester',
-    ]);
-    box.integration!.roleName = '  Tester ';
-    expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
-    expect(f.connection.joins.single['command']['roleName'], 'Tester');
-    final create = f.connection.calls
-        .firstWhere((c) => c.$1 == 'agent_create')
-        .$2;
-    expect(create['swarmRole'], 'dev');
-    expect(create['swarmSkillMode'], 'default');
-    expect(create, isNot(contains('roleName')));
-    expect(create, isNot(contains('roleId')));
-    expect(create.keys.toList()..sort(), [
-      'bypassPermission',
-      'creationId',
-      'cwd',
-      'engine',
-      'name',
-      'permissionMode',
-      'prompt',
-      'swarmRole',
-      'swarmSkillMode',
-    ]);
-  });
-
-  test('an empty role sends none', () async {
-    final f = withInstructions();
-    final box = await f.box();
-    box.integration!.roleName = '   ';
-    expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
-    expect(f.connection.joins.single['command'], isNot(contains('roleName')));
-  });
-
-  test('an older Swarm gets no role field and no roleName', () async {
-    final f = withInstructions(coordinator: false);
-    final box = await f.box();
-    expect(box.integration!.roleSuggestions, isNull);
-    expect(f.connection.server.instructionReads, isEmpty);
-    box.integration!.roleName = 'Tester';
-    expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
-    expect(f.connection.joins.single['command'], isNot(contains('roleName')));
-  });
-
-  test('a failed instructions read leaves the field free', () async {
-    final f = withInstructions();
-    f.connection.server.instructionsRoute = false;
-    final box = await f.box();
-    expect(box.integration!.roleSuggestions, isEmpty);
-    box.integration!.roleName = 'Designer';
-    expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
-    expect(f.connection.joins.single['command']['roleName'], 'Designer');
-  });
-
-  testWidgets(
-    'the role field offers the document\'s roles and takes any text',
-    (tester) async {
-      final f = withInstructions();
-      final box = (await tester.runAsync(() => f.box()))!;
-      await tester.pumpWidget(formOf(box));
-      await tester.pump();
-      final field = find.byKey(const ValueKey('new-harness-role'));
-      expect(field, findsOneWidget);
-      // Start does not wait for a role.
-      expect(box.integration!.roleName, isNull);
-      await tester.tap(field);
-      await tester.pump();
-      for (final name in ['Engineer', 'Reviewer', 'Tester']) {
-        expect(find.widgetWithText(AppMenuItem, name), findsOneWidget);
-      }
-      await tester.enterText(field, 'Te');
-      await tester.pump();
-      expect(find.widgetWithText(AppMenuItem, 'Tester'), findsOneWidget);
-      expect(find.widgetWithText(AppMenuItem, 'Engineer'), findsNothing);
-      await tester.tap(find.widgetWithText(AppMenuItem, 'Tester'));
-      await tester.pump();
-      expect(box.integration!.roleName, 'Tester');
-      await tester.enterText(field, 'Designer');
-      await tester.pump();
-      expect(box.integration!.roleName, 'Designer');
-      final input = tester.widget<TextField>(
-        find.descendant(of: field, matching: find.byType(TextField)),
-      );
-      // The server counts UTF-16 units (40), not characters: 20 emoji fill it.
-      expect(input.maxLength, isNull);
-      final emoji = '\u{1F600}' * 20;
-      await tester.enterText(field, '${emoji}x');
-      await tester.pump();
-      expect(box.integration!.roleName, emoji);
-      await tester.enterText(field, 'a' * 41);
-      await tester.pump();
-      expect(box.integration!.roleName, 'a' * 40);
-    },
-  );
-
-  testWidgets('an older Swarm\'s form shows no role field', (tester) async {
-    final f = withInstructions(coordinator: false);
-    final box = (await tester.runAsync(() => f.box()))!;
-    await tester.pumpWidget(formOf(box));
-    await tester.pump();
-    expect(find.byKey(const ValueKey('new-harness-role')), findsNothing);
-  });
-
-  group('a recovered launch', () {
-    Map<String, dynamic> journal(Map<String, dynamic> extra) => {
-      'operationId': 'saved-operation',
-      'joinId': 'saved-join',
-      'tabId': tabId,
-      'conversationId': 'lead',
-      'lead': false,
-      'newSwarm': false,
-      'newProject': false,
-      'visibility': 'public',
-      'projectId': 'lead',
-      ...extra,
-    };
-
-    void keep(SuperTabLaunchFixture f, Map<String, dynamic> extra) {
-      f.store.values['super_tab.launch.owner.${f.app.activeSwarmId}.lead'] =
-          jsonEncode(journal(extra));
-    }
-
-    testWidgets('keeps its role', (tester) async {
-      final f = withInstructions();
-      keep(f, {'roleName': 'Tester', 'phase': 'joining'});
-      final box = (await tester.runAsync(() => f.box()))!;
-      expect(box.integration!.roleName, 'Tester');
-      await tester.pumpWidget(formOf(box));
-      await tester.pump();
-      expect(find.text('Tester'), findsOneWidget);
-    });
-
-    test('sends the role it kept', () async {
-      final f = withInstructions();
-      keep(f, {'roleName': 'Tester'});
-      final box = await f.box();
-      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
-      expect(f.connection.joins.single['command']['roleName'], 'Tester');
-    });
-
-    test('sends no role to a Swarm without instructions', () async {
-      final f = withInstructions(coordinator: false);
-      keep(f, {'roleName': 'Tester'});
-      final box = await f.box();
-      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
-      expect(f.connection.joins.single['command'], isNot(contains('roleName')));
-    });
-
-    test('from an older Desktop still sends its roleId', () async {
-      final f = withInstructions();
-      keep(f, {'roleId': 'dev', 'roleKind': 'builder'});
-      final box = await f.box();
-      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
-      final command = f.connection.joins.single['command'];
-      expect(command['roleId'], 'dev');
-      expect(command, isNot(contains('roleName')));
-    });
-  });
-
-  test('the coordinator\'s start is lead and has no role field', () async {
+  test('the coordinator\'s start is lead', () async {
     final f = SuperTabLaunchFixture();
     f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
     final box = await f.box(newProject: true);
-    expect(box.integration!.roleSuggestions, isNull);
     expect(box.integration!.swarmRole, 'lead');
   });
 
@@ -2514,7 +2329,6 @@ void main() {
     f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Personal');
     final box = await f.box(engine: 'claude', task: 'Hi New PM Personal');
     expect(box.integration!.swarmRole, 'lead');
-    expect(box.integration!.roleSuggestions, isNull);
     // The project and its visibility exist already.
     expect(box.integration!.projectVisibility, isNull);
     expect(box.integration!.actionLabel, 'New Harness');

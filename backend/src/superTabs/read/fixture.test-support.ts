@@ -1,7 +1,7 @@
-/** Test support only: a Swarm built through real commands, for the read views and the migration tests. */
+/** Test support only: a Swarm built through real commands, for the read views' tests. */
 import { applyCommand, type Command, type CommandContext } from '../commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration, type SuperTabState } from '../model.js'
-import { storedAssignment } from '../storedWork.test-support.js'
+import { storedAssignment, storedTask } from '../storedWork.test-support.js'
 
 export const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: '100000000000000000000001', email: 'owner@example.com' }
 export const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: '100000000000000000000002', email: 'peer@example.com' }
@@ -24,8 +24,8 @@ export function swarm(now = NOW) {
   const add = (harnessId: string, conversationId: string, lead = false, contributor = owner, machineId = 'host', machineOwnerId = `${contributor.userId}-machine`) =>
     run({ type: 'agent.add', conversationId, machineId, harnessId, name: harnessId, configuration: config, lead }, contributor,
       { contribution: { machineOwnerId, contributorId: contributor.userId } }).agentId as string
-  const group = (title: string, projectId?: string, actor: Actor = owner) => run({ type: 'conversation.create', ...(projectId ? { projectId } : {}),
-    title, brief: `${title} brief`, checks: [{ description: `${title} works`, independent: false }] }, actor).conversationId as string
+  const group = (title: string, projectId?: string) => storedTask(state, { ...(projectId ? { projectId } : {}),
+    title, brief: `${title} brief`, checks: [{ description: `${title} works` }], requesterId: owner.userId })
   const contribute = (machineId: string, scope?: 'swarm') => run({ type: 'machine.contribute', machineId, name: machineId, cwd: '/repo',
     ...(scope ? { scope } : {}), engines: ['codex'], maxAgents: 3 }, owner, { contribution: { machineOwnerId: owner.userId, contributorId: owner.userId } })
   /** Writes outside commands (store observations, ledger, audiences), as the store would. */
@@ -51,8 +51,8 @@ export function richSwarm(now = NOW) {
 }
 
 /** `richSwarm`, plus everything `visibleState` filters or drops: peer in the private project, a machine whose reading lists a
- *  gone session and a failed privacy check, a dormant conversation, report progress, and the
- *  owner-only and host-only records (sharing, reservations, released and closing sessions, overlap alerts). */
+ *  gone session and a failed privacy check, a dormant conversation, and the owner-only and host-only records (sharing,
+ *  reservations, released and closing sessions). */
 export function fullSwarm(now = NOW) {
   const s = richSwarm(now)
   s.run({ type: 'project.sharing', projectId: s.secret, visibility: 'private', memberIds: [peer.userId] })
@@ -69,11 +69,9 @@ export function fullSwarm(now = NOW) {
   })
   s.edit(state => {
     Object.assign(state.conversations.find(c => c.id === s.done)!, { archived: true, dormant: true })
-    for (const project of state.projects!) project.progress = { since: now, summarizedFloor: 0, summarized: {}, requestedFloor: 0, requested: {} }
     state.sharing = { revision: 1, generation: 'sharing-1', access: { mode: 'invited', role: 'collaborator' } }
     state.harnessReservations = [{ machineId: 'host', harnessId: 'worker-harness', generation: 'g1', renewed: false }]
     state.releasedHarnesses = [{ machineId: 'host', harnessId: 'old-harness' }]
-    state.overlapAlerts = ['a:b']
     state.closingSessions = [{ agentId: 'removed-agent', machineId: 'host', harnessId: 'old-harness', machineOwnerId }]
   })
   return s

@@ -19,6 +19,8 @@ export interface InlineRuntimeReaderBase {
   /** False means a warm-up or unavailable read, with no state contribution. */
   config?(context: InlineRuntimeContext): Promise<boolean>
   models?(context: InlineRuntimeContext): Promise<RuntimeModelOption[]>
+  /** The folder the engine's own tools run in, when it is not the pane's (OpenClaw's workspace): a label on the agent. */
+  workspace?(sessionId: string): string | null
   forget?(sessionId: string): void
 }
 export type InlineRuntimeReader = InlineRuntimeReaderBase & (
@@ -28,5 +30,5 @@ export type InlineRuntimeReader = InlineRuntimeReaderBase & (
   | { engine: 'commandcode'; target(sessionId: string, profileId: string): CommandcodeModelTarget | null }
   | { engine: 'opencode'; catalog(): Promise<OpencodeModelTarget[]> }
   | { engine: 'kilo'; catalog(): Promise<KiloModelTarget[]> }
-  | { engine: 'pi' | 'grok' | 'agy' | 'amp' | 'muse' | 'copilot' | 'omp' }
+  | { engine: 'pi' | 'grok' | 'agy' | 'amp' | 'muse' | 'copilot' | 'omp' | 'openclaw' }
 )

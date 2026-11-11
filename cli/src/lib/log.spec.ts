@@ -19,6 +19,14 @@ describe('log helpers', () => {
     expect(sid('69aaaa14-89e9-7e21-871a-ee6ea943fc95')).toBe('69aaaa14')
   })
 
+  it('logs an OpenClaw key as a short hash, never its text (a channel key can carry a peer id)', () => {
+    const key = 'agent:main:telegram:direct:5551234567'
+    expect(sid(key)).toMatch(/^oc-[0-9a-f]{8}$/)
+    expect(sid(key)).not.toContain('5551234567')
+    expect(sid(key)).toBe(sid(key))
+    expect(sid('agent:main:plain')).not.toBe(sid('agent:main:main'))
+  })
+
   describe('logFrame', () => {
     const lastLine = (spy: ReturnType<typeof vi.spyOn>) => String(spy.mock.calls.at(-1)?.[0] ?? '')
 

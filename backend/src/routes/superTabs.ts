@@ -35,7 +35,6 @@ import { NOTIFY_LEVELS } from '../superTabs/chatSettings.js'
 import { COMMENT_KINDS, MAX_COMMENT_IDS } from '../superTabs/githubComments.js'
 import { HostReads } from '../superTabs/read/host.js'
 import type { AuthUser } from '../lib/ssoAuth.js'
-import { DEFAULT_DAYS, MAX_DAYS } from '../superTabs/costs/read.js'
 import { markNothingNew } from '../lib/routeLatency.js'
 import { onMachineRenamed } from '../superTabs/machineRenames.js'
 import { onAccountRenamed } from '../superTabs/accountRenames.js'
@@ -74,7 +73,6 @@ const cursor = z.string().min(1).max(512).regex(/^[A-Za-z0-9_-]+$/)
 // `derivedEtag`: the summary's etag the client holds (read/derivedEtag.ts, task #2906).
 const changesQuery = agentQuery.extend({ cursor, machines: z.literal('light').optional(),
   derivedEtag: z.string().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/).optional() })
-const costsQuery = z.object({ days: z.coerce.number().int().min(1).max(MAX_DAYS).default(DEFAULT_DAYS), asAgentId: id.optional() }).strict()
 const leaderboardQuery = z.object({ projectId: id, week: z.coerce.number().int().nonnegative().safe().optional(), period: z.enum(PERIODS).optional(), scope: z.literal('all').optional() }).strict()
   .refine(query => query.week === undefined || query.period === undefined, 'Ask for a week or a period, not both.')
 const dormantQuery = agentQuery.extend({ dormant: z.literal('1'), projectId: id.optional(), before: cursor.optional() })
@@ -102,7 +100,6 @@ const messageQuery = agentQuery.extend({ after: z.coerce.number().int().nonnegat
   thread: id.optional() })
   .refine(q => [q.after, q.before, q.messageId].filter(value => value !== undefined).length <= 1, 'Choose one message cursor or exact message.')
   .refine(q => (q.afterId === undefined || q.after !== undefined) && (q.beforeId === undefined || q.before !== undefined), 'Send afterId with after, beforeId with before.')
-const decisionParams = tabParams.extend({ decisionId: id })
 const terminalParams = tabParams.extend({ requestId: id })
 const hostParams = z.object({ machineId: id })
 const hostStartParams = hostParams.extend({ tabId: id, startId: id })
@@ -220,7 +217,7 @@ async function productionStore(github: GitHubTokens | null): Promise<SuperTabSto
   // An agent chat sounds once in five minutes on every server (push/rings.ts).
   const rings = redisRingMemory(bus.pub)
   return new SuperTabStore(prisma, Date.now, attachmentsFromEnv(env),
-    // Older history pages and the costs report read the secondaries (lib/prisma.ts, task #2970).
+    // Older history pages read the secondaries (lib/prisma.ts, task #2970).
     { replica: prismaSecondary,
       // Thread replies and tags reach the phones of whoever they tell, while the app is closed (push/send.ts, task #2905).
       phoneNotices: notices => { void sendPhoneNotices(prisma, phones, notices, rings) },
@@ -666,27 +663,6 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.post<{ Params: z.infer<typeof messageParams>; Querystring: z.infer<typeof noQuery>; Body: z.infer<typeof notifyBody> }>('/api/super-tabs/:tabId/conversations/:conversationId/notifications',
     { preHandler: [validateParams(messageParams), validateQuery(noQuery), validateBody(notifyBody)] },
     (req, reply) => respond(reply, () => reads.setChatNotify(req.user!, req.params.tabId, req.params.conversationId, req.body.notify)))
-  app.get<{ Params: z.infer<typeof messageParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/conversations/:conversationId/attempts',
-    { preHandler: [validateParams(messageParams), validateQuery(agentQuery)] },
-    (req, reply) => respond(reply, () => store.attempts(req.user!, req.params.tabId, req.params.conversationId, req.query.asAgentId)))
-  // What routed attempts cost and how they went over a period (superTabs/costs/read.ts).
-  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof costsQuery> }>('/api/super-tabs/:tabId/costs',
-    { preHandler: [validateParams(tabParams), validateQuery(costsQuery)] },
-    (req, reply) => respond(reply, () => store.costSummary(req.user!, req.params.tabId, req.query.days, req.query.asAgentId)))
-  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/route-decisions',
-    { preHandler: [validateParams(tabParams), validateQuery(agentQuery)] },
-    (req, reply) => respond(reply, () => store.routeDecisions(req.user!, req.params.tabId, req.query.asAgentId)))
-  // A project's rules record and its kept revisions (superTabs/policy.ts): shown to people, in no prompt.
-  app.get<{ Params: z.infer<typeof projectParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/projects/:projectId/rules',
-    { preHandler: [validateParams(projectParams), validateQuery(agentQuery)] },
-    (req, reply) => respond(reply, () => store.projectRules(req.user!, req.params.tabId, req.params.projectId, req.query.asAgentId)))
-  // Its machine rules alone, from the newest revision: what the route applies (task #3964).
-  app.get<{ Params: z.infer<typeof projectParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/projects/:projectId/machine-rules',
-    { preHandler: [validateParams(projectParams), validateQuery(agentQuery)] },
-    (req, reply) => respond(reply, () => store.projectMachineRules(req.user!, req.params.tabId, req.params.projectId, req.query.asAgentId)))
-  app.get<{ Params: z.infer<typeof decisionParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/route-decisions/:decisionId',
-    { preHandler: [validateParams(decisionParams), validateQuery(agentQuery)] },
-    (req, reply) => respond(reply, () => store.routeDecision(req.user!, req.params.tabId, req.params.decisionId, req.query.asAgentId)))
   app.get<{ Params: z.infer<typeof deliveryParams>; Querystring: z.infer<typeof deliveryListQuery> }>('/api/super-tabs/:tabId/agents/:agentId/deliveries',
     { preHandler: [validateParams(deliveryParams), validateQuery(deliveryListQuery)] },
     (req, reply) => respond(reply, noting(req, () => store.deliveries(req.user!, req.params.tabId, req.params.agentId), open => !open.length)))

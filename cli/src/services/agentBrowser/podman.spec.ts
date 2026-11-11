@@ -244,18 +244,24 @@ describe('createPodman', () => {
   // Podman 4.9 takes `-` only from a real pipe (cmd/podman/secrets/create.go), and Node hands a child a socket: the
   // proxy secret was refused on GitHub's Ubuntu runner. The fake refuses the same way.
   it('stdin reaches podman through a real pipe, on a connection too', async () => {
+    // Values no temporary path can hold: `pw` was in a random folder name once (/tmp/vRkFpwG/…, CI 42924580725).
+    const first = 'stdin-only-secret-one', second = 'stdin-only-secret-two'
     const podman = found('linux')
-    await podman.run(['secret', 'create', 's1', '-'], { stdin: 'pw' })
+    await podman.run(['secret', 'create', 's1', '-'], { stdin: first })
     podman.useConnection('harness')
-    await podman.run(['secret', 'create', 's2', '-'], { stdin: 'pw2' })
+    await podman.run(['secret', 'create', 's2', '-'], { stdin: second })
     expect(fake.calls().map(call => [call.args, call.stdin])).toEqual([
-      [['secret', 'create', 's1', '-'], 'pw'],
-      [['--connection', 'harness', 'secret', 'create', 's2', '-'], 'pw2'],
+      [['secret', 'create', 's1', '-'], first],
+      [['--connection', 'harness', 'secret', 'create', 's2', '-'], second],
     ])
-    // Through the relay the data is on stdin alone: never in an argument or the environment.
-    for (const [file, args, opts] of vi.mocked(execFile).mock.calls as unknown as Array<[string, string[], { env: Record<string, string> }]>) {
-      expect([file, ...args].join(' ')).not.toMatch(/pw/)
-      expect(JSON.stringify(opts.env)).not.toMatch(/"pw2?"/)
+    // Through the relay the data is on stdin alone: never in an argument or the environment of either run.
+    const runs = vi.mocked(execFile).mock.calls as unknown as Array<[string, string[], { env?: NodeJS.ProcessEnv }]>
+    expect(runs).toHaveLength(2)
+    for (const [file, args, opts] of runs) {
+      for (const secret of [first, second]) {
+        expect([file, ...args].join(' ')).not.toContain(secret)
+        expect(JSON.stringify(opts.env ?? process.env)).not.toContain(secret)
+      }
     }
   })
 

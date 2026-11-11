@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { storeOldLeads } from '../src/superTabs/leads.test-support.js'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
-import { PrismaClient } from '@prisma/client'
+import { PrismaClient, type Prisma } from '@prisma/client'
 import Fastify, { type FastifyInstance } from 'fastify'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
@@ -15,15 +15,14 @@ import { errorHandler } from '../src/middlewares/errorHandler.js'
 import * as parts from '../src/superTabs/parts/index.js'
 import { noteChange, swarmTransaction } from '../src/superTabs/cache.js'
 import { guardedWrite } from '../src/superTabs/parts/write.js'
-import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { writeReadMark } from '../src/superTabs/readMarks.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import type { Conversation, SuperTabState } from '../src/superTabs/model.js'
 import { sendsEmptyIn, watched, type Query } from '../src/lib/queryRecorder.test-support.js'
-import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
+import { storeSwarm } from './storedSwarm.test-support.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
-import { storedAssignment, storedStatus } from '../src/superTabs/storedWork.test-support.js'
+import { storedAssignment, storedStatus, storedTask } from '../src/superTabs/storedWork.test-support.js'
 import { PROFILE_STAGES, profileEntry, type ProfileEntry } from './bench/profile.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
@@ -92,16 +91,15 @@ async function scene<T = void>(extra: (s: ReturnType<typeof swarm>, ids: { web: 
       audience: { people: [{ id: peer.sub, generation }] } })
     const finished = state.conversations.find(c => c.id === done)!
     finished.assignment = { ...state.conversations.find(c => c.id === web)!.assignment!, id: 'old-work', status: 'done' }
+    finished.dormant = true
   })
   const more = extra(s, { web, done, lead, secret })
   // Stored before its removal: the Swarm-wide Leads conversation, with the Lead in it; no read sends it now (model.ts leadsRemoved).
   s.edit(state => storeOldLeads(state, [lead]))
   const tabId = `tab-${randomUUID()}`
   const state = { ...structuredClone(s.state), id: tabId } as SuperTabState
-  await writeLegacySwarm(db, { state, revision: R, messages: [{ id: `${tabId}-m1`, conversationId: done, sequence: 5, text: 'Done',
-    author: { kind: 'person', id: owner.sub, name: owner.email, membershipGeneration: tabId }, createdAt: new Date(MIGRATED - 2 * DAY) }] })
-  const report = await migrateSwarm(db, tabId, { now: () => MIGRATED })
-  if (!report.ok) throw new Error(report.error)
+  await storeSwarm(db, { state, revision: R, messages: [{ id: `${tabId}-m1`, conversationId: done, sequence: 5, text: 'Done',
+    author: { kind: 'person', id: owner.sub, name: owner.email, membershipGeneration: tabId }, createdAt: new Date(MIGRATED - 2 * DAY) }] }, MIGRATED)
   return { tabId, lead, worker, web, done, secretGroup, privateId, peerChat, secret, leads: state.leadsConversationId!, more }
 }
 const get = async (url: string, as: AuthUser = owner) => {
@@ -129,8 +127,9 @@ describe('first load (design 4.3)', () => {
     expect(status).toBe(200)
     expect(Object.keys(body.data).sort()).toEqual(['agents', 'cursor', 'derived', 'derivedEtag', 'epoch', 'format', 'groups', 'head', 'lastChangedAt',
       'machines', 'members', 'progress', 'serverTime', 'starts', 'tabId'].sort())
+    // Always empty since the progress part went: released CLIs still require the list (read/contract.ts).
     expect(body.data).toMatchObject({ format: 2, tabId: s.tabId, serverTime: NOW, epoch: 1, lastChangedAt: MIGRATED,
-      head: { key: 'head', version: R, changedAt: MIGRATED, data: { id: s.tabId, name: 'Pilot' } } })
+      head: { key: 'head', version: R, changedAt: MIGRATED, data: { id: s.tabId, name: 'Pilot' } }, progress: [] })
     expect(JSON.parse(Buffer.from(body.data.cursor, 'base64url').toString())).toEqual({ v: 2, t: NOW - 30_000, e: 1 })
     expect(keys(body.data.members)).toEqual([owner.sub, peer.sub, outsider.sub])
     expect(keys(body.data.groups)).toEqual(['lead', s.web, s.peerChat])
@@ -149,35 +148,35 @@ describe('first load (design 4.3)', () => {
     for (const [as, agent] of [[peer], [outsider], [owner], [owner, s.lead]] as const) expect(await groups(as, agent)).not.toContain(s.privateId)
   })
 
-  it('migrates a Swarm still in one row on first access', async () => {
-    const s = swarm(MIGRATED)
+  /** A Swarm stored before the parts: its whole state in its one row (format 1). Every one is from before the wipe's cut-off. */
+  async function singleRow() {
     const tabId = `tab-${randomUUID()}`
-    await writeLegacySwarm(db, { state: { ...structuredClone(s.state), id: tabId }, revision: 3 })
+    await db.superTab.create({ data: { id: tabId, ownerId: owner.sub, autonomousEnv: 'prod', memberIds: [owner.sub], invitedEmails: [], machineIds: [],
+      format: 1, revision: 3, state: JSON.parse(JSON.stringify({ ...swarm(MIGRATED).state, id: tabId })) } })
+    return tabId
+  }
+
+  it('answers a Swarm still in one row as one that does not exist, and leaves it as it is: the wipe removes it', async () => {
+    const tabId = await singleRow()
     const { status, body } = await get(`/api/super-tabs/${tabId}/parts`)
-    expect(status).toBe(200)
-    expect(body.data.head.version).toBe(3)
-    expect(await db.superTab.findUnique({ where: { id: tabId } })).toMatchObject({ format: 2 })
+    expect(status).toBe(404)
+    expect(body.error!.code).toBe('NOT_FOUND')
+    expect(await db.superTab.findUnique({ where: { id: tabId }, select: { format: true, revision: true } })).toEqual({ format: 1, revision: 3 })
   })
 
-  it('opens a legacy Swarm with deleted-conversation history without exposing that history', async () => {
-    const s = swarm(MIGRATED)
-    const tabId = `tab-${randomUUID()}`
-    await writeLegacySwarm(db, { state: { ...structuredClone(s.state), id: tabId }, revision: 3 })
-    await db.superTabMessage.create({ data: { id: `${tabId}-orphan`, tabId, conversationId: 'gone', sequence: 1, author: {}, text: 'x', recipientIds: [], mentions: [] } })
-    const { status, body } = await get(`/api/super-tabs/${tabId}/parts`)
-    expect(status).toBe(200)
-    expect(keys(body.data.groups)).not.toContain('gone')
-    expect((await get(`/api/super-tabs/${tabId}/conversations/gone/messages`)).status).toBe(404)
-    expect((await db.superTabMessage.findUnique({ where: { id: `${tabId}-orphan` } }))?.text).toBe('x')
+  it('refuses a command to a Swarm still in one row as to one that does not exist, not as one to retry', async () => {
+    const tabId = await singleRow()
+    const response = await app.inject({ method: 'POST', url: `/api/super-tabs/${tabId}/commands`, headers: { authorization: `Bearer ${owner.sub}` },
+      payload: { operationId: randomUUID(), command: { type: 'conversation.rename', conversationId: 'lead', title: 'Renamed' } } })
+    expect([response.statusCode, response.json().error.code]).toEqual([404, 'NOT_FOUND'])
+    expect(response.headers['retry-after']).toBeUndefined()
   })
 
-  it('answers "being upgraded" when a Swarm cannot be migrated yet, and every client retries that', async () => {
-    const s = swarm(MIGRATED)
-    const tabId = `tab-${randomUUID()}`
-    await writeLegacySwarm(db, { state: { ...structuredClone(s.state), id: tabId, version: 2 as 1 }, revision: 3 })
-    const { status, body } = await get(`/api/super-tabs/${tabId}/parts`)
-    expect(status).toBe(503)
-    expect(body.error!.code).toBe('SWARM_MIGRATING')
+  it('leaves a Swarm still in one row out of its members\' list', async () => {
+    const tabId = await singleRow()
+    const { status, body } = await get('/api/super-tabs/list')
+    expect(status).toBe(200)
+    expect(body.data.tabs.map((t: { id: string }) => t.id)).not.toContain(tabId)
   })
 })
 
@@ -194,7 +193,7 @@ describe('changes since a cursor (design 4.2, 4.4)', () => {
   it('sends only what changed, whole, to the readers who may see it', async () => {
     const s = await scene()
     const [peerCursor, outsiderCursor] = [await firstLoad(s.tabId, peer, NOW), await firstLoad(s.tabId, outsider, NOW)]
-    expect((await changes(s.tabId, peerCursor, peer, NOW + 1_000)).body.data).toMatchObject({ reload: false, head: null, groups: [], agents: [] })
+    expect((await changes(s.tabId, peerCursor, peer, NOW + 1_000)).body.data).toMatchObject({ reload: false, head: null, groups: [], agents: [], progress: [] })
     await writeGroup(s.tabId, s.web, NOW + 2_000, g => { g.title = 'Web 2' })
     await writeGroup(s.tabId, s.peerChat, NOW + 2_000, g => { g.title = 'Private 2' })
     await writeGroup(s.tabId, s.privateId, NOW + 2_000, g => { g.title = 'Closed 2' })
@@ -232,7 +231,7 @@ describe('changes since a cursor (design 4.2, 4.4)', () => {
     group.lostAttempt = { id: group.assignment.id, agentId: worker }
     delete state.agents.find(a => a.id === worker)!.workDecision
   }
-  /** After the migration (which stores derived decisions), the worker has none: as a loss after it leaves it. */
+  /** The worker with no stored decision: as a loss after it leaves it. */
   async function noDecision(tabId: string, agentId: string) {
     await db.$transaction(async tx => {
       const agent = (await parts.loadActive(tx, tabId)).agents.find(a => a.key === agentId)!
@@ -410,7 +409,7 @@ describe('host form (design 4.10)', () => {
     s.edit(state => {
       const pool = state.machines!.find(m => m.machineId === machine)!
       state.conversations.find(c => c.id === ids.web)!.requesterId = webRequester
-      // These checks send real-time host readings. Keep their running task fresh: its migrated timestamp would now trigger
+      // These checks send real-time host readings. Keep their running task fresh: its fixture timestamp would now trigger
       // the all-worker 3-hour return clock, a real work change rather than the unchanged heartbeat this fixture tests.
       state.conversations.find(c => c.id === ids.web)!.assignment!.progressAt = Date.now()
       // One in a running group, one in a dormant group none of its agents is in: the host still has to settle it.
@@ -571,7 +570,7 @@ describe('host form (design 4.10)', () => {
     const { cursor } = await fullRead(s.tabId)
     await command(s.tabId, { type: 'conversation.agent', conversationId: s.more.lonerGroup, agentId: s.more.loner, present: false, lead: false })
     await command(s.tabId, { type: 'conversation.rename', conversationId: s.more.lonerGroup, title: 'Once' })
-    await command(s.tabId, { type: 'message.send', conversationId: s.more.lonerGroup, text: 'Twice', replyTo: null, recipientIds: [] })
+    await command(s.tabId, { type: 'conversation.rename', conversationId: s.more.lonerGroup, title: 'Twice' })
     clock = Date.now()
     const tab = (await host(cursor)).body.data.tabs.find((t: { tabId: string }) => t.tabId === s.tabId)
     expect(tab?.roster.find((r: { agent?: { id: string } }) => r.agent?.id === s.more.loner)).toMatchObject({ active: false })
@@ -693,6 +692,23 @@ describe('a real command through the store by parts (design 4.7)', () => {
     expect(seen.groups.map((g: { key: string; version: number; data: { title: string } }) => [g.key, g.version, g.data.title]))
       .toEqual([[s.web, written.version, 'Renamed for real']])
     expect(seen.lastChangedAt).toBe(reply.lastChangedAt)
+  })
+
+  it('sends no group its old report sequence, and a group\'s next write leaves it out, but writes no group for it alone', async () => {
+    const s = await scene()
+    // Every group stored before the report progress went holds `reportSeq: 0` in its data.
+    const stored = async (key: string) => (await db.swarmGroup.findUnique({ where: { id: `${s.tabId}:${key}` } }))!.data as Prisma.JsonObject
+    for (const key of [s.web, s.secretGroup]) {
+      await db.swarmGroup.update({ where: { id: `${s.tabId}:${key}` }, data: { data: { ...await stored(key), reportSeq: 0 } } })
+    }
+    clock = Date.now()
+    const groups = (await get(`/api/super-tabs/${s.tabId}/parts`)).body.data.groups as Array<{ key: string; data: object }>
+    expect(groups.find(g => g.key === s.web)!.data).not.toHaveProperty('reportSeq')
+    const response = await app.inject({ method: 'POST', url: `/api/super-tabs/${s.tabId}/commands`, headers: { authorization: `Bearer ${owner.sub}` },
+      payload: { operationId: randomUUID(), command: { type: 'conversation.rename', conversationId: s.web, title: 'Renamed' } } })
+    expect(response.statusCode, response.body).toBe(200)
+    expect(await stored(s.web)).not.toHaveProperty('reportSeq')
+    expect(await stored(s.secretGroup)).toHaveProperty('reportSeq', 0)
   })
 })
 
@@ -836,11 +852,11 @@ describe('what a read costs the database (group 3b)', () => {
   /** The whole Swarm as stored: what a read that reassembles it loads. */
   const swarmBytes = async (tabId: string) => {
     const all = await db.$transaction(tx => parts.loadAll(tx, tabId))
-    return [all.head, ...all.members, ...all.agents, ...all.groups, ...all.machines, ...all.starts, ...all.progress].reduce((n, p) => n + JSON.stringify(p.data).length, 0)
+    return [all.head, ...all.members, ...all.agents, ...all.groups, ...all.machines, ...all.starts].reduce((n, p) => n + JSON.stringify(p.data).length, 0)
   }
   /** Sixty more conversations with long briefs, as a busy Swarm's history makes them (about half a megabyte). */
   const bulky = (s: ReturnType<typeof swarm>) => {
-    for (let i = 0; i < 60; i++) s.run({ type: 'conversation.create', title: `Old work ${i}`, brief: `${'Long brief text. '.repeat(470)}${i}`, checks: [] })
+    for (let i = 0; i < 60; i++) storedTask(s.state, { title: `Old work ${i}`, brief: `${'Long brief text. '.repeat(470)}${i}` })
   }
 
   it('counts none of the reads an earlier test left running', async () => {
@@ -917,8 +933,9 @@ describe('what a read costs the database (group 3b)', () => {
     const s = await scene(f => bulky(f))
     clock = Date.now()
     const cursor = (await get(`/api/super-tabs/${s.tabId}/parts`, peer)).body.data.cursor
+    // The worker's post: only agents post in a task's chat (agentsOnly.test.ts).
     await new SuperTabStore(db).execute(owner, s.tabId, { operationId: randomUUID(),
-      command: { type: 'message.send', conversationId: s.web, text: 'One post', replyTo: null, recipientIds: [] } })
+      command: { type: 'message.send', conversationId: s.web, text: 'One post', replyTo: null, recipientIds: [] } }, s.worker)
     clock = Date.now()
     let groups: string[] = []
     const bytes = await databaseBytes(async () => {
@@ -939,7 +956,7 @@ describe('what a read costs the database (group 3b)', () => {
     const first = (await post({ full: true })).json().data as { cursor: string; tabs: Array<{ tabId: string; etag: string }> }
     const etag = first.tabs.find(t => t.tabId === s.tabId)!.etag
     await new SuperTabStore(db).execute(owner, s.tabId, { operationId: randomUUID(),
-      command: { type: 'message.send', conversationId: s.web, text: 'Busy', replyTo: null, recipientIds: [] } })
+      command: { type: 'message.send', conversationId: s.web, text: 'Busy', replyTo: null, recipientIds: [] } }, s.worker)
     clock = Date.now()
     let answer: Record<string, unknown> | undefined
     const bytes = await databaseBytes(async () => {
@@ -952,49 +969,6 @@ describe('what a read costs the database (group 3b)', () => {
 
   // Every host reads each second (a production backend went to 5 pods on it, 2026-10-27): a Swarm with no change for it
   // must not cost the newest-change aggregate, seven groupBy over all its parts.
-  it('the host poll reads a Swarm that keeps an old state without ever loading that state', async () => {
-    const machineId = `m-${randomUUID().slice(0, 8)}`
-    await db.machine.create({ data: { machineId, userId: owner.sub, apiKey: 'fixture-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
-    const s = await scene(f => { f.contribute(machineId, 'swarm') }, machineId)
-    const padding = 'old-state-'.repeat(2_000)
-    await db.superTab.update({ where: { id: s.tabId }, data: { legacyState: { padding } } })
-    const reads: Array<{ operation: string; select: Record<string, unknown> | undefined }> = []
-    const rawRows: Array<Record<string, unknown>> = []
-    // A named-index read (parts/indexed.ts readBy) names its fields in the $project that ends its pipeline: only an inclusion
-    // projection counts, since one that only leaves fields out (`{ _id: 0 }`, `{ padding: 0 }`) still returns the old state.
-    const included = (stage: { $project?: Record<string, unknown> } | undefined) => {
-      const fields = Object.entries(stage?.$project ?? {})
-      return fields.some(([, on]) => on === 1 || on === true)
-        && fields.every(([field, on]) => on === 1 || on === true || (field === '_id' && (on === 0 || on === false))) ? stage!.$project : undefined
-    }
-    const client = db.$extends({ query: { $allModels: { async $allOperations({ model, operation, args, query }) {
-      const raw = operation === 'aggregateRaw'
-      if (model === 'SuperTab') {
-        reads.push({ operation, select: raw ? included((args as { pipeline?: Array<{ $project?: Record<string, unknown> }> }).pipeline?.at(-1))
-          : (args as { select?: Record<string, unknown> }).select })
-      }
-      const result = await query(args)
-      // And what the database answered: no raw row holds the old state, whatever the pipeline says.
-      if (model === 'SuperTab' && raw) rawRows.push(...result as unknown as Array<Record<string, unknown>>)
-      return result
-    } } } }) as unknown as PrismaClient
-    const hosts = new HostReads(new SuperTabStore(client), { now: () => clock })
-    clock = Date.now()
-
-    const first = await hosts.changes(owner, machineId, { full: true })
-    clock = Date.now()
-    const idle = await hosts.changes(owner, machineId, { cursor: first.cursor })
-
-    expect(first.tabs).toHaveLength(1)
-    expect(JSON.stringify([first, idle])).not.toContain('old-state-')
-    // The poll reads the Swarm's row for its list and its owner, each time by naming the fields (Prisma's select, or a raw
-    // read's closing inclusion $project): none is the old state, and no raw row the database returned holds it.
-    expect(reads.length).toBeGreaterThan(0)
-    for (const read of reads) expect(read.select, read.operation).toBeDefined()
-    for (const read of reads) expect(read.select).not.toHaveProperty('legacyState')
-    for (const row of rawRows) expect(Object.keys(row)).not.toContain('legacyState')
-  })
-
   it('the host form asks for the newest change only of the Swarms it answers for', async () => {
     const machineId = `m-${randomUUID().slice(0, 8)}`
     await db.machine.create({ data: { machineId, userId: owner.sub, apiKey: 'fixture-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
@@ -1007,9 +981,9 @@ describe('what a read costs the database (group 3b)', () => {
     const hosts = new HostReads(new SuperTabStore(client), { now: () => clock })
     clock = Date.now()
     // The newest change is one Mongo `$group` per part kind, and never a Prisma groupBy.
-    const newestReads = () => ops.filter(op => /^Swarm(Head|Member|Agent|Group|Machine|Start|Progress)\.aggregateRaw:newest$/.test(op))
+    const newestReads = () => ops.filter(op => /^Swarm(Head|Member|Agent|Group|Machine|Start)\.aggregateRaw:newest$/.test(op))
     const first = await hosts.changes(owner, machineId, { full: true })
-    expect(newestReads()).toHaveLength(7)
+    expect(newestReads()).toHaveLength(6)
     expect(ops.filter(op => op.endsWith('.groupBy'))).toEqual([])
     ops.length = 0
     clock = Date.now()
@@ -1017,7 +991,7 @@ describe('what a read costs the database (group 3b)', () => {
     expect(idle.tabs).toEqual([])
     expect(newestReads()).toEqual([])
     await new SuperTabStore(db).execute(owner, s.tabId, { operationId: randomUUID(),
-      command: { type: 'message.send', conversationId: s.web, text: 'Busy', replyTo: null, recipientIds: [] } })
+      command: { type: 'message.send', conversationId: s.web, text: 'Busy', replyTo: null, recipientIds: [] } }, s.worker)
     clock = Date.now()
     const woken = (await hosts.changes(owner, machineId, { cursor: idle.cursor })).tabs
     const posted = (await db.swarmGroup.findFirst({ where: { tabId: s.tabId, key: s.web } }))!.changedAt.getTime()
@@ -1119,7 +1093,7 @@ describe('a change poll reads only the starts it can send (prod 10-29)', () => {
     await swarmTransaction(db, async tx => {
       const agent = await tx.swarmAgent.findUniqueOrThrow({ where: { id: `${s.tabId}:${s.more.loner}` } })
       // As prod still holds some (6 of 48 live agents, 10-29): no stored project, so it is read from the conversation it is in
-      // (projects.ts agentProjectId). Migration stores one, so the part loses it here.
+      // (projects.ts agentProjectId). The fixture stores one, so the part loses it here.
       const { projectId: _stored, ...data } = agent.data as { projectId?: string }
       await guardedWrite(tx, s.tabId, { op: 'update', kind: 'agent', key: s.more.loner, seen: agent.version,
         // Kept after its work: an agent with no stored decision has its active conversations loaded anyway (light.ts undecidedWork).
@@ -1173,7 +1147,7 @@ describe('a change poll reads only the starts it can send (prod 10-29)', () => {
   })
 
   describe('a change poll reads only what its reply needs (DB 2.3)', () => {
-    /** After the migration (which stores derived decisions), the agent has none, as a loss after it leaves it. */
+    /** The agent with no stored decision, as a loss after it leaves it. */
     async function withoutDecision(tabId: string, agentId: string) {
       await swarmTransaction(db, async tx => {
         const agent = await tx.swarmAgent.findUniqueOrThrow({ where: { id: `${tabId}:${agentId}` } })
@@ -1207,9 +1181,9 @@ describe('a change poll reads only the starts it can send (prod 10-29)', () => {
       expect(changes.derived.agents[s.more.member].workDecision).toBe('awaiting')
     })
 
-    /** A reply's derived values without what differs by design: a first load sends every read mark (and avatar link), a
+    /** A reply's derived values without what differs by design: a first load sends every read mark, a
      *  change read only the marks moved since its cursor. */
-    const derivedOf = ({ readMarks: _marks, threadMarks: _threads, avatars: _avatars, ...rest }: Record<string, unknown>) => rest
+    const derivedOf = ({ readMarks: _marks, threadMarks: _threads, ...rest }: Record<string, unknown>) => rest
     /** The agent's part as prod still holds some (6 of 66 live agents, 10-30): no stored project (projects.ts agentProjectId). */
     async function withoutProject(tabId: string, agentId: string) {
       await swarmTransaction(db, async tx => {
@@ -1262,8 +1236,8 @@ describe('a change poll reads only the starts it can send (prod 10-29)', () => {
         cursors.set(name, first.body.data.cursor)
       }
 
-      // After the cursor: a post, a start changed and one removed in the quiet conversation, a machine report, a progress
-      // part, and both people's read marks moved in a quiet conversation.
+      // After the cursor: a post, a start changed and one removed in the quiet conversation, a machine report, and both
+      // people's read marks moved in a quiet conversation.
       const at = Date.now()
       await writeGroup(tabId, s.web, at, g => { g.title = 'Web, renamed' })
       await swarmTransaction(db, async tx => {
@@ -1276,10 +1250,6 @@ describe('a change poll reads only the starts it can send (prod 10-29)', () => {
         const data = structuredClone(machine.data) as { contribution: { observation: { receivedAt: number } } }
         data.contribution.observation.receivedAt = at
         await guardedWrite(tx, tabId, { op: 'update', kind: 'machine', key: 'host', seen: machine.version, data: data as never }, at)
-        const progress = { since: at, summarizedFloor: 0, summarized: {}, requestedFloor: 0, requested: {} }
-        const held = await tx.swarmProgress.findUnique({ where: { id: `${tabId}:lead` } })
-        await guardedWrite(tx, tabId, held ? { op: 'update', kind: 'progress', key: 'lead', seen: held.version, data: progress }
-          : { op: 'insert', kind: 'progress', key: 'lead', data: progress, ordinal: 1 }, at)
       })
       for (const personId of [owner.sub, peer.sub]) await writeReadMark(db, { tabId, personId, conversationId: s.done, sequence: 5, now: at })
 
@@ -1294,7 +1264,6 @@ describe('a change poll reads only the starts it can send (prod 10-29)', () => {
         expect(changes.machines, name).toEqual(full.machines.filter((p: { key: string }) => p.key === 'host'))
         // A quiet conversation is in no first load, so neither its starts nor their harnesses are, the private one's included.
         expect(JSON.stringify(changes), name).not.toMatch(/quiet-secret|changing-harness/)
-        expect(changes.progress, name).toEqual(full.progress.filter((p: { key: string }) => p.key === 'lead'))
         // Its project is the private one, read from its conversation: only the owner and the agent itself see it.
         expect(Object.keys(changes.derived.agents).includes(more.legacy), name).toBe(name === 'owner' || name === 'legacy agent')
         if (name === 'owner') expect(changes.derived.agents[more.member].workDecision).toBe('awaiting')

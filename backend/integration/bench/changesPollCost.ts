@@ -18,7 +18,7 @@ import { benchStamps } from './stamps.js'
 
 /** Past the change reads' 30 s overlap, so the polls after it resend nothing they sent before. */
 const QUIET_MS = 35_000
-const PARTS = new Set(['SwarmHead', 'SwarmMember', 'SwarmGroup', 'SwarmAgent', 'SwarmMachine', 'SwarmStart', 'SwarmProgress'])
+const PARTS = new Set(['SwarmHead', 'SwarmMember', 'SwarmGroup', 'SwarmAgent', 'SwarmMachine', 'SwarmStart'])
 
 interface Poller { label: string; poll(): Promise<{ bytes: number; code: string | null }> }
 

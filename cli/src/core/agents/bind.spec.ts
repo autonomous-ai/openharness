@@ -1,11 +1,13 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { transcriptOf, processSessionOf } from '../../engines/identities.js'
 import { loadEngine } from '../../engines/inProcess.js'
 import { continuationOf } from '../../engines/sessionFiles.js'
+import { env } from '../../config/env.js'
 import { isRecentlyDeleted } from '../../lib/deletedSessions.js'
+import { openclawSessionDb, openclawStateDir } from '../../lib/openclawStore.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { findLiveSession, findResumedTranscript } from '../../lib/sessionRepair.js'
 import type { DiscoveredTerminalAgent } from '../../lib/terminalAgentDiscovery.js'
@@ -68,6 +70,7 @@ function setup(over: Partial<BindDeps> = {}) {
       }),
       has: vi.fn(() => false),
       bySession: vi.fn((sessionId: string) => bySession.get(sessionId)),
+      setOpenclawStateDir: vi.fn(() => true),
     } as unknown as BindDeps['registry'],
     mirror: { inheritSummary: vi.fn() },
     forgetSession: vi.fn(),
@@ -79,6 +82,10 @@ function setup(over: Partial<BindDeps> = {}) {
     input: { forget: vi.fn() },
     deviceInput: { forget: vi.fn() },
     homes: { copilot: '/copilot', grok: '/grok', agy: '/agy' },
+    capturePane: vi.fn(async () => null),
+    openclawPaneRead: vi.fn(),
+    openclawPaneDue: vi.fn(() => true),
+    openclawStateDir: vi.fn(async () => null),
     ...over,
   }
   return { deps, byAgent, bySession, binding: createBinding(deps) }
@@ -835,5 +842,298 @@ describe('a transcript\'s birth time', () => {
     expect(await statBirthMs('/t', at(Number.POSITIVE_INFINITY, 0, 0))).toBe(0)
     expect(await statBirthMs('/t', at(0, 0, Number.NaN))).toBe(0)
     expect(await statBirthMs('/t', async () => { throw new Error('ENOENT') })).toBe(0)
+  })
+})
+
+describe('binding an OpenClaw pane, read from its screen', () => {
+  const OPENCLAW_FIXTURES = join(import.meta.dirname, '../../engines/openclaw/__fixtures__')
+  const screen = (name: string): string => readFileSync(join(OPENCLAW_FIXTURES, `${name}.txt`), 'utf8')
+  const tui = (over: Partial<DiscoveredTerminalAgent> = {}): DiscoveredTerminalAgent => ({
+    engine: 'openclaw', cwd: '/work/proj', runtimes: [], primaryRuntimeKey: 'tmux:%1',
+    processIdentity: { pid: 7714, startMarker: '2026-11-10T07:40:00Z' }, ...over,
+  }) as DiscoveredTerminalAgent
+  const pane = (over: Partial<RegisteredSession> = {}) => agent({ engine: 'openclaw', sessionId: '', ...over } as Partial<RegisteredSession>)
+
+  beforeEach(() => { vi.spyOn(console, 'log').mockImplementation(() => {}) })
+  afterEach(() => { vi.restoreAllMocks() })
+
+  it('binds an openclaw pane to main from its footer, and remembers the state folder its TUI holds', async () => {
+    const run = setup({ capturePane: vi.fn(async () => screen('screen-two-panes-main-a')), openclawStateDir: vi.fn(async () => '/h/.openclaw-work') })
+    vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane())
+    const bound = pane({ sessionId: 'agent:main:main' })
+    vi.mocked(run.deps.registry.register).mockReturnValue({ entry: bound, ...meta({ isNew: true }) } as never)
+    await run.binding.bindObservedAgent(tui())
+    // `main` existed long before this TUI started, and is bound all the same: no repair by birth time.
+    expect(findLiveSession).not.toHaveBeenCalled()
+    expect(run.deps.capturePane).toHaveBeenCalledWith('a1')
+    expect(vi.mocked(run.deps.registry.register).mock.calls[0][0]).toMatchObject({
+      engine: 'openclaw', sessionId: 'agent:main:main', cwd: '/work/proj', source: 'openclaw-footer', hookEvent: 'OpenclawFooter',
+    })
+    await vi.waitFor(() => expect(run.deps.attachSession).toHaveBeenCalledWith(bound, true, false, false))
+    // A `--profile` TUI's store is not the default one: where it is, once this TUI is gone.
+    expect(run.deps.openclawStateDir).toHaveBeenCalledWith(7714)
+    expect(run.deps.registry.setOpenclawStateDir).toHaveBeenCalledWith('a1', '/h/.openclaw-work')
+  })
+
+  it('a second pane on the same key stays unbound and the first keeps it', async () => {
+    const run = setup({ capturePane: vi.fn(async () => screen('screen-two-panes-main-b')) })
+    const first = pane({ agentId: 'a0', sessionId: 'agent:main:main', processIdentity: { pid: 7700, startMarker: '2026-11-10T07:39:00Z' } } as Partial<RegisteredSession>)
+    run.bySession.set('agent:main:main', first)
+    vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane())
+    // What a repair by folder would answer: the key is in the store, whoever holds it.
+    vi.mocked(findLiveSession).mockResolvedValue({ sessionId: 'agent:main:main' })
+    // Started after the first: for another engine that is a resume taking the conversation over.
+    await run.binding.bindObservedAgent(tui())
+    expect(run.deps.registry.register).not.toHaveBeenCalled()
+    expect(run.deps.input.forget).not.toHaveBeenCalled()
+  })
+
+  it('a remote Gateway title gives the remote state, held until a local title shows again', async () => {
+    let shown = screen('screen-remote')
+    const run = setup({ capturePane: vi.fn(async () => shown) })
+    const row = pane()
+    run.byAgent.set('a1', row)
+    vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
+    await run.binding.bindObservedAgent(tui())
+    expect(run.deps.registry.register).not.toHaveBeenCalled()
+    expect(row.identityHold).toBe('This OpenClaw runs on another machine.')
+    expect(run.deps.announceSession).toHaveBeenCalledWith(row)
+    // The title scrolled off a long conversation: nothing says it is local now, so the state stays.
+    shown = screen('screen-remote').split('\n').slice(3).join('\n')
+    await run.binding.bindObservedAgent(tui())
+    expect(row.identityHold).toBe('This OpenClaw runs on another machine.')
+    expect(run.deps.registry.register).not.toHaveBeenCalled()
+    // The same pane reconnected to this machine's Gateway: the state goes, and the key is bound.
+    shown = screen('screen-plain')
+    vi.mocked(run.deps.registry.register).mockReturnValue({ entry: pane({ sessionId: 'agent:main:plain' }), ...meta({ isNew: true }) } as never)
+    await run.binding.bindObservedAgent(tui())
+    expect(row).not.toHaveProperty('identityHold')
+    expect(vi.mocked(run.deps.registry.register).mock.calls[0][0]).toMatchObject({ sessionId: 'agent:main:plain' })
+  })
+
+  it('follows the pane to the key /new moved it to, and the new key becomes the agent\'s session', async () => {
+    let shown = screen('screen-reset')
+    const run = setup({ capturePane: vi.fn(async () => shown) })
+    vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ sessionId: 'agent:main:reset' }))
+    await run.binding.bindObservedAgent(tui())
+    expect(run.deps.registry.register).not.toHaveBeenCalled()
+    shown = screen('screen-reset-new')
+    const moved = pane({ sessionId: 'agent:main:tui-652cc362-2631-416e-bf1c-6ac369311a20' })
+    vi.mocked(run.deps.registry.register).mockReturnValue({ entry: moved, ...meta({ isNew: true, rebound: 'agent:main:reset' }) } as never)
+    await run.binding.bindObservedAgent(tui())
+    expect(vi.mocked(run.deps.registry.register).mock.calls[0][0]).toMatchObject({
+      sessionId: 'agent:main:tui-652cc362-2631-416e-bf1c-6ac369311a20', source: 'openclaw-new', hookEvent: 'OpenclawNew',
+    })
+  })
+
+  it('leaves a pane that shows no TUI, or one it could not read, as it is', async () => {
+    const run = setup({ capturePane: vi.fn(async () => screen('screen-no-token').replace(/Missing gateway auth token\./, '')) })
+    vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane())
+    vi.mocked(findLiveSession).mockResolvedValue({ sessionId: 'agent:main:main' })
+    await run.binding.bindObservedAgent(tui())
+    vi.mocked(run.deps.capturePane).mockResolvedValueOnce(null)
+    await run.binding.bindObservedAgent(tui())
+    expect(run.deps.registry.register).not.toHaveBeenCalled()
+  })
+
+  it('binds a long session whose title scrolled off, by its footer', async () => {
+    // The 80-column pane on main, scrolled one line further: its title and its session line are gone, its footer wraps.
+    const long = screen('screen-two-panes-main-b').split('\n').slice(1).join('\n')
+    expect(long).not.toContain('agent:main:main')
+    const run = setup({ capturePane: vi.fn(async () => long) })
+    vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane())
+    vi.mocked(run.deps.registry.register).mockReturnValue({ entry: pane({ sessionId: 'agent:main:main' }), ...meta({ isNew: true }) } as never)
+    await run.binding.bindObservedAgent(tui())
+    expect(vi.mocked(run.deps.registry.register).mock.calls[0][0]).toMatchObject({ sessionId: 'agent:main:main' })
+  })
+
+  it('an answer that prints the session line never moves the pane', async () => {
+    const said = screen('screen-plain').replace(' connected | idle', ' session agent:main:elsewhere\n connected | idle')
+    const run = setup({ capturePane: vi.fn(async () => said) })
+    vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ sessionId: 'agent:main:plain' }))
+    await run.binding.bindObservedAgent(tui())
+    expect(run.deps.registry.register).not.toHaveBeenCalled()
+  })
+
+  it('a TUI restarted in the same pane binds its own session, never the one the old TUI left on screen', async () => {
+    // The first TUI exited; the person started another one in the same shell, which has not drawn yet.
+    let shown = `${screen('screen-plain').trimEnd()}\n$ openclaw tui --session other\n`
+    const run = setup({ capturePane: vi.fn(async () => shown) })
+    vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane())
+    await run.binding.bindObservedAgent(tui({ processIdentity: { pid: 7800, startMarker: '2026-11-10T08:00:00Z', executable: 'openclaw' } }))
+    expect(run.deps.registry.register).not.toHaveBeenCalled()
+    // Drawn: its own key, bound as a new binding, so nothing renames it after the old agent.
+    shown += ` openclaw tui - ws://127.0.0.1:18789 - agent main - session other\n connected | idle\n agent main | session other | m/m | deliver:off | tokens ?\n${'─'.repeat(40)}\n\n${'─'.repeat(40)}\n`
+    vi.mocked(run.deps.registry.register).mockReturnValue({ entry: pane({ sessionId: 'agent:main:other' }), ...meta({ isNew: true }) } as never)
+    await run.binding.bindObservedAgent(tui({ processIdentity: { pid: 7800, startMarker: '2026-11-10T08:00:00Z', executable: 'openclaw' } }))
+    expect(vi.mocked(run.deps.registry.register).mock.calls[0][0]).toMatchObject({ sessionId: 'agent:main:other', source: 'openclaw-footer' })
+  })
+
+  it('no Gateway and no token are said on the agent while the screen shows them, and cleared once it does not', async () => {
+    for (const [name, said] of [
+      ['screen-no-gateway-attached', 'OpenClaw Gateway is not running. Start it with openclaw gateway.'],
+      ['screen-no-token', 'OpenClaw has no Gateway token. Run openclaw onboard.'],
+    ] as const) {
+      let shown = screen(name)
+      const run = setup({ capturePane: vi.fn(async () => shown) })
+      const row = pane({ sessionId: 'agent:main:plain' })
+      run.byAgent.set('a1', row)
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
+      await run.binding.bindObservedAgent(tui())
+      expect(row.identityHold, name).toBe(said)
+      expect(run.deps.announceSession, name).toHaveBeenCalledWith(row)
+      expect(run.deps.registry.register, name).not.toHaveBeenCalled()
+      // The Gateway is back and the TUI reconnected by itself: the state goes, and the stream attaches if it had not.
+      shown = screen('screen-no-gateway-reconnected')
+      await run.binding.bindObservedAgent(tui())
+      expect(row, name).not.toHaveProperty('identityHold')
+      expect(run.deps.attachSession, name).toHaveBeenCalledWith(row)
+    }
+  })
+
+  it.each([new Error('reader unavailable'), 'reader unavailable'])('a stream that cannot attach once the state clears is logged, and the state still goes', async (error) => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    let shown = screen('screen-no-gateway-attached')
+    const run = setup({ capturePane: vi.fn(async () => shown), attachSession: vi.fn(async () => { throw error }) })
+    const row = pane({ sessionId: 'agent:main:plain' })
+    run.byAgent.set('a1', row)
+    vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
+    await run.binding.bindObservedAgent(tui())
+    shown = screen('screen-no-gateway-reconnected')
+    await run.binding.bindObservedAgent(tui())
+    expect(row).not.toHaveProperty('identityHold')
+    await vi.waitFor(() => expect(log).toHaveBeenCalledWith('[agent] a1 transcript attachment is unavailable: reader unavailable'))
+  })
+
+  it('a state the registry no longer holds is not announced cleared again', async () => {
+    // The pass read its row before another pass cleared the same state.
+    const run = setup({ capturePane: vi.fn(async () => screen('screen-no-gateway-reconnected')) })
+    const row = pane({ sessionId: 'agent:main:plain' })
+    run.byAgent.set('a1', row)
+    vi.mocked(run.deps.registry.byProcess).mockReturnValue({ ...row, identityHold: 'OpenClaw Gateway is not running. Start it with openclaw gateway.' })
+    await run.binding.bindObservedAgent(tui())
+    expect(run.deps.registry.setIdentityHold).toHaveBeenCalledWith('a1', undefined)
+    expect(run.deps.announceSession).not.toHaveBeenCalled()
+    expect(run.deps.attachSession).not.toHaveBeenCalled()
+  })
+
+  it('a pane not bound yet clears its state with no stream to attach, then binds by its footer', async () => {
+    let shown = screen('screen-no-gateway-attached')
+    const run = setup({ capturePane: vi.fn(async () => shown) })
+    const row = pane()
+    run.byAgent.set('a1', row)
+    vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
+    await run.binding.bindObservedAgent(tui())
+    expect(row.identityHold).toBe('OpenClaw Gateway is not running. Start it with openclaw gateway.')
+    shown = screen('screen-no-gateway-reconnected')
+    await run.binding.bindObservedAgent(tui())
+    expect(row).not.toHaveProperty('identityHold')
+    expect(run.deps.attachSession).not.toHaveBeenCalled()
+    expect(vi.mocked(run.deps.registry.register).mock.calls[0][0]).toMatchObject({ sessionId: 'agent:main:plain', source: 'openclaw-footer' })
+  })
+
+  it('an overlay that hides the footer keeps the no-Gateway state until a footer shows again', async () => {
+    // Autocomplete draws its list under the composer, so the footer is not the last thing on screen for a pass.
+    const noGateway = screen('screen-no-gateway-attached')
+    let shown = noGateway
+    const run = setup({ capturePane: vi.fn(async () => shown) })
+    const row = pane({ sessionId: 'agent:main:plain' })
+    run.byAgent.set('a1', row)
+    vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
+    await run.binding.bindObservedAgent(tui())
+    expect(row.identityHold).toBe('OpenClaw Gateway is not running. Start it with openclaw gateway.')
+    shown = `${noGateway.trimEnd()}\n /help  Show help\n /new  Start a new session\n`
+    await run.binding.bindObservedAgent(tui())
+    expect(row.identityHold).toBe('OpenClaw Gateway is not running. Start it with openclaw gateway.')
+    shown = noGateway
+    await run.binding.bindObservedAgent(tui())
+    expect(run.deps.announceSession).toHaveBeenCalledTimes(1)
+    shown = screen('screen-no-gateway-reconnected')
+    await run.binding.bindObservedAgent(tui())
+    expect(row).not.toHaveProperty('identityHold')
+  })
+
+  it('never takes over a hold another reason set', async () => {
+    const run = setup({ capturePane: vi.fn(async () => screen('screen-no-gateway')) })
+    const row = pane({ sessionId: 'agent:main:plain', identityHold: 'This OpenClaw version is not supported yet.' } as Partial<RegisteredSession>)
+    run.byAgent.set('a1', row)
+    vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
+    await run.binding.bindObservedAgent(tui())
+    expect(row.identityHold).toBe('This OpenClaw version is not supported yet.')
+    vi.mocked(run.deps.capturePane).mockResolvedValue(screen('screen-plain'))
+    await run.binding.bindObservedAgent(tui())
+    expect(row.identityHold).toBe('This OpenClaw version is not supported yet.')
+  })
+
+  it('tells the bound session\'s stream on each pass whether its pane reads idle and whether the Gateway dropped', async () => {
+    let shown = screen('screen-abort-running')
+    const run = setup({ capturePane: vi.fn(async () => shown) })
+    vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ sessionId: 'agent:main:abort' }))
+    await run.binding.bindObservedAgent(tui())
+    shown = screen('screen-abort')
+    await run.binding.bindObservedAgent(tui())
+    // A pass that reads no Gateway is told too, while its state is said on the agent.
+    shown = screen('screen-no-gateway').replace(/session no-gateway/g, 'session abort')
+    await run.binding.bindObservedAgent(tui())
+    shown = screen('screen-no-gateway-reconnected').replace(/session plain/g, 'session abort')
+    await run.binding.bindObservedAgent(tui())
+    expect(vi.mocked(run.deps.openclawPaneRead).mock.calls.map(([session, reading]) => [session, reading])).toEqual([
+      ['agent:main:abort', { ready: false, gatewayLost: false }],
+      ['agent:main:abort', { ready: true, gatewayLost: false }],
+      ['agent:main:abort', { ready: false, gatewayLost: true }],
+      ['agent:main:abort', { ready: true, gatewayLost: true }],
+    ])
+  })
+
+  // The bind pass's captures, and the footer poll's beside them, were most of what one bound idle pane cost (E2E 2026-11-10).
+  it('reads a bound pane only when its stream says it may show something new, and hands that one capture to the model chip', async () => {
+    const shown = screen('screen-plain')
+    const run = setup({ capturePane: vi.fn(async () => shown), openclawPaneDue: vi.fn(() => false) })
+    vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ sessionId: 'agent:main:plain' }))
+    await run.binding.bindObservedAgent(tui())
+    expect(run.deps.openclawPaneDue).toHaveBeenCalledWith('agent:main:plain')
+    expect(run.deps.capturePane).not.toHaveBeenCalled()
+    expect(run.deps.openclawPaneRead).not.toHaveBeenCalled()
+    vi.mocked(run.deps.openclawPaneDue).mockReturnValue(true)
+    await run.binding.bindObservedAgent(tui())
+    expect(run.deps.capturePane).toHaveBeenCalledOnce()
+    expect(run.deps.openclawPaneRead).toHaveBeenCalledWith('agent:main:plain', { ready: true, gatewayLost: false }, shown)
+    // A pane not bound yet is read on every pass: its footer is how it is bound.
+    vi.mocked(run.deps.openclawPaneDue).mockReturnValue(false)
+    vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane())
+    await run.binding.bindObservedAgent(tui())
+    expect(run.deps.capturePane).toHaveBeenCalledTimes(2)
+  })
+
+  it('finds the state folder from the TUI\'s open database (fake /proc and lsof)', async () => {
+    const fixture = (name: string) => readFileSync(join(OPENCLAW_FIXTURES, name), 'utf8')
+    // What Linux's /proc/<pid>/fd and macOS's lsof name, as recorded.
+    const linux = [...fixture('ps-linux.txt').split('# Gateway')[0].matchAll(/-> (\S+)/g)].map((match) => match[1])
+    const darwin = [...fixture('ps-darwin.txt').split('# Gateway')[0].matchAll(/^\S+ REG (\S+)$/gm)].map((match) => match[1].replace('<scratch>', '/scratch'))
+    expect(await openclawStateDir(7714, async () => linux)).toBe('/root/.openclaw')
+    expect(await openclawStateDir(28234, async () => darwin)).toBe('/scratch/state')
+    // Windows reads no open files: OpenClaw's own default.
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(await openclawStateDir(9001, async () => { throw new Error('no lsof') })).toBeNull()
+    expect(await openclawStateDir(9002, async () => ['/tmp/other.sqlite'])).toBeNull()
+    // A TUI that exited: the folder it held when bound, else OpenClaw's default.
+    const exited = async () => []
+    expect(await openclawSessionDb('agent:main:plain', { pid: 9004, stateDir: '/h/.openclaw-work' }, exited))
+      .toBe(join('/h/.openclaw-work', 'agents', 'main', 'agent', 'openclaw-agent.sqlite'))
+    // The pid outlived its TUI and now names another TUI's store: the folder remembered at bind is the session's.
+    const reused = async () => ['/h/.openclaw-other/state/openclaw.sqlite']
+    expect(await openclawSessionDb('agent:main:plain', { pid: 9005, stateDir: '/h/.openclaw-work' }, reused))
+      .toBe(join('/h/.openclaw-work', 'agents', 'main', 'agent', 'openclaw-agent.sqlite'))
+    expect(await openclawSessionDb('agent:main:plain', { pid: 0 }, exited))
+      .toBe(join(env.OPENCLAW_STATE_DIR, 'agents', 'main', 'agent', 'openclaw-agent.sqlite'))
+    // The agent's database, and the folder openclaw.json moves it to.
+    const state = mkdtempSync(join(tmpdir(), 'openclaw-state-'))
+    dirs.push(state)
+    const held = async () => [join(state, 'state', 'openclaw.sqlite')]
+    expect(await openclawSessionDb('agent:main:plain', { pid: 9003 }, held)).toBe(join(state, 'agents', 'main', 'agent', 'openclaw-agent.sqlite'))
+    writeFileSync(join(state, 'openclaw.json'), JSON.stringify({ agents: { entries: { work: { agentDir: '/moved/work' } } } }))
+    expect(await openclawSessionDb('agent:work:x', { pid: 9003 }, held)).toBe('/moved/work/openclaw-agent.sqlite')
+    expect(await openclawSessionDb('not-a-key', { pid: 9003 }, held)).toBeNull()
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
   })
 })

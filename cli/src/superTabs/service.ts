@@ -269,8 +269,8 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         if (payload.action === 'swarmRole') {
           const grant = await port.swarmRole(String(payload.harnessId ?? ''))
           // In the wire's values, which the core reads in either set (inCore/role.ts) and a core from before role kinds in
-          // these alone; a Reviewer's keeps its swarm-review file.
-          return { ok: true, role: grant ? wireRole(grant) : grant, ...(grant ? { mode: grant.mode } : {}) }
+          // these alone; a Reviewer's keeps its kind.
+          return { ok: true, role: grant ? wireRole(grant) : grant }
         }
         // Import agent (Desktop): whether any Swarm lists this harness here. An unreadable roster answers no `listed`, on which
         // Desktop refuses rather than share.

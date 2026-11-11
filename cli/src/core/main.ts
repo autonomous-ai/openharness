@@ -74,6 +74,7 @@ import { HERMES_SYSTEM_MANAGED_DIR, type GridLaunchMachine } from '../lib/gridLa
 import { writeGridConfigDir } from '../lib/gridConfigDir.js'
 import { clearDeleted, isRecentlyDeleted, markDeleted } from '../lib/deletedSessions.js'
 import { findLiveSession, findResumedTranscript } from '../lib/sessionRepair.js'
+import { openclawSessionDb, openclawStateDir } from '../lib/openclawStore.js'
 import { processSessionOf } from '../engines/sessionStores.js'
 import { createHandoffDependencies } from './handoffDependencies.js'
 import { TmuxBackend } from '../lib/tmuxBackend.js'
@@ -94,7 +95,6 @@ import { createKeepAbandonedConversation } from '../lib/keepAbandonedConversatio
 import { RESUME_READINESS_BUDGET_MS } from '../lib/resumeStoppedAgent.js'
 import { createConversationOwners } from './agents/conversationOwners.js'
 import { OpenTabProtection } from '../lib/openTabProtection.js'
-import { createNativeTurnObservations, nativeTurnBinding } from '../lib/nativeTurnObservations.js'
 import { sessionCheckpoints } from '../lib/sessionCheckpoint.js'
 import { repairProjectCwds } from '../lib/cwdRepair.js'
 import { stoppedAgents } from '../lib/stoppedAgents.js'
@@ -243,7 +243,10 @@ import { attachLocalWsServer, LOCAL_WS_PATH, LOCAL_WS_PROTOCOL_VERSION } from '.
 import { BROWSER_CHUNK_BYTES, TERMINAL_BINARY_VERSION } from '../lib/terminalBinary.js'
 import { isLoopbackRequest, loopbackHosts } from '../lib/loopbackRequest.js'
 import { isInstalledCopy } from '../lib/installedCopy.js'
+import { refreshNodeReferences } from '../lib/nodeReferences.js'
 import { managedNodePath } from '../lib/nodeRuntime.js'
+import { settleNodeMigration } from '../lib/nodeMigration.js'
+import { nodeStatus } from '../lib/nodeStatus.js'
 import { type ActivityFrame } from '../lib/turnActivity.js'
 import { cursorDataDir } from '../engines/cursor/contract.js'
 import { TranscriptPager } from '../lib/transcriptPages.js'
@@ -309,6 +312,8 @@ const OPENCODE_DB = join(env.OPENCODE_DATA_DIR, 'opencode.db')
 
 // Kilo's SQLite store — same shape, its own file and its own reader (see engines/kilo/).
 const KILO_DB = join(env.KILO_DATA_DIR, 'kilo.db')
+
+// OpenClaw keeps a store per agent under the state folder its TUI holds open (lib/openclawStore.ts): found per session.
 
 // Hermes keeps every surface's history in one SQLite store PER HOME — polled per session by
 // HermesReader, against the home that session lives in (`hermesDbForSession`; `hermes -p <name>` has
@@ -431,10 +436,11 @@ let usagePortRef: UsageSnapshots | null = null
 /** Set by runForeground once models can be asked: what an agent's frame says of its grid. */
 let gridAnnotationRef: ((grid: AgentGridTarget) => GridAnnotation | null) | null = null
 
-function projectFrame(s: RegisteredSession, selectedModel: string | null): Promise<AgentFrame> {
+function projectFrame(s: RegisteredSession, selectedModel: string | null, workspace: string | null): Promise<AgentFrame> {
   return agentFrame(s, {
     tokenUsage: usagePortRef?.get(s) ?? null,
     selectedModel,
+    workspace,
     terminalAvailable: registry.terminalAvailable(s.agentId),
     dsh: dshFrameContextRef?.(s) ?? null,
     activity: () => activityFrameContextRef?.(s) ?? null,
@@ -792,7 +798,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     terminalAvailable: (agentId) => registry.terminalAvailable(agentId),
     resolve: (target) => registry.resolve(target),
     stopped: (agentId) => stoppedAgents.get(agentId),
-    project: (s) => projectFrame(s, runtimeProfiles.selectedModel(s)),
+    project: (s) => projectFrame(s, runtimeProfiles.selectedModel(s), runtimeProfiles.workspace(s)),
   })
   const syncSession = agentEvents.syncSession
   const announceRename = agentEvents.announceRename
@@ -899,9 +905,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const tabRelay = tabRelayOf(() => gatewayOps.tabRelay)
   // The prompt of each agent's last turn start: what the one-line summary of a working agent says (turns/summaries.ts).
   const turnPrompts = new Map<string, string>()
-  const nativeTurns = createNativeTurnObservations({ resolve: id => nativeTurnBinding(registry.byAgent(id)) })
   const coreApi = createCoreApi({
-    nativeTurns: async (agentId, cursor) => nativeTurns.read(agentId, cursor),
     cloud: cloudDoors,
     ...(swarmDoors ? {
       superTabs: { attention: (items) => swarmDoors.waits.attention(items), cards: (items) => swarmDoors.cards.cards(items), cardRecap: (recap) => swarmDoors.cards.recap(recap),
@@ -1237,7 +1241,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // What the person typed restarts the agent's quiet period: one in use is not moved to another host.
       if (typed) hostQuiet.noteInput(agentId)
       if (typed) browser.typed(agentId, from)
-      if (typed) nativeTurns.typed(agentId, from.inputContext, from.submitted === true)
       const grid = registry.resolve(agentId)?.grid
       if (grid) ports.models?.prewarm(grid)
       // The person typing into a harness another agent started makes it theirs (services/agentCleanup.ts).
@@ -1347,6 +1350,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // (core/transcripts/attach.ts).
   const attach = createAttach({
     setInterpretationHold: registry.setInterpretationHold.bind(registry),
+    setIdentityHold: registry.setIdentityHold.bind(registry),
     announceSession,
     liveFor,
     resolve: id => registry.resolve(id),
@@ -1363,7 +1367,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // Built further down: read when an attach starts watching a pane, never now.
     questionWatcher: { start: (sessionId) => questionWatcher.start(sessionId) },
     terminalLabel: primaryTerminalLabel,
-    dbs: { opencode: OPENCODE_DB, kilo: KILO_DB, devin: DEVIN_DB },
+    dbs: { opencode: OPENCODE_DB, kilo: KILO_DB, devin: DEVIN_DB, openclaw: openclawSessionDb },
     devinHome: env.DEVIN_HOME,
     hermesDb,
     concurrency: ATTACH_CONCURRENCY,
@@ -1377,7 +1381,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const replayedFirstTurn = attach.replayedFirstTurn
   // A conversation's history, a page at a time, and how long it is (core/transcripts/history.ts).
   const history = createHistory({ readerFor: engineReaders.forEngine, resolve: (id) => registry.resolve(id), stopped: () => stoppedAgents.list(),
-    pages: new TranscriptPager(), dbs: { opencode: OPENCODE_DB, kilo: KILO_DB, devin: DEVIN_DB },
+    pages: new TranscriptPager(), dbs: { opencode: OPENCODE_DB, kilo: KILO_DB, devin: DEVIN_DB, openclaw: openclawSessionDb },
     hermesDb })
   backend.historyProvider = history.sessionGet
   backend.sessionsProvider = history.sessionsList
@@ -1389,6 +1393,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // The Swarm's chat is queued in the engine's own input while an agent works (superTabs/inCore/deliveries.ts).
     ...(swarm ? { typesWhileBusy: swarm.typesWhileBusy } : {}),
     answersQuestion: deliveries.answersQuestion,
+    personsOwn: deliveries.personsOwn,
     // Built further down: read when a person's message meets an open question, never now.
     pendingQuestion: (sessionId) => asking.pendingQuestion(sessionId),
     readScreen: screens.read,
@@ -1409,10 +1414,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // Reassigned further down (the funnel): always the current one.
     emit: (sessionId, events) => emitSessionEvents(sessionId, events),
     // Declared further down: read as a prompt is typed, never now.
-    promptTyped: (session, capture, screen, inputContext) => {
+    promptTyped: (session, capture, screen) => {
       // A message typed into the pane, from any sender (`harness send`, Agent Messages, the Device): the agent is in use.
       hostQuiet.noteInput(session.agentId)
-      nativeTurns.submitting(session.agentId, inputContext)
       if (session.sessionId) questionWatcher.notePrompt(session.sessionId, capture, screen.question)
     },
     // The person sent a harness text from a window or the phone (services/agentCleanup.ts).
@@ -1483,7 +1487,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const readLastTurn = createLastTurnReader({
     readerFor: engineReaders.forEngine,
     bySession: (sessionId) => registry.bySession(sessionId),
-    dbs: { opencode: OPENCODE_DB, kilo: KILO_DB, devin: DEVIN_DB },
+    dbs: { opencode: OPENCODE_DB, kilo: KILO_DB, devin: DEVIN_DB, openclaw: openclawSessionDb },
     hermesDb,
   })
   // Recaps: turn cards, notifications, cut by the recaps (services/recaps.ts) from the lifecycle the core tells (core/turns/recaps.ts).
@@ -1831,6 +1835,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
 
   backend.runtimeProfileProvider = (session) => runtimeProfiles.selectedModel(session)
+  backend.workspaceProvider = (session) => runtimeProfiles.workspace(session)
   backend.dshFrameProvider = (s) => ports.viewers?.frameContext(s) ?? null
   // `harness remote` names the tile it was typed in by its pane; the registry knows whose it is (lib/terminalHandoff.ts).
   backend.onTerminalHandoff = (pane) => handoffAgentId(registry.advertised(), pane)
@@ -1877,7 +1882,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     search: sessionSearch,
     turnStartedAt,
     prompts: turnPrompts,
-    nativeTurns,
     input,
     deviceInput,
     submission: submissions,
@@ -1961,6 +1965,17 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     input,
     deviceInput,
     homes: { copilot: env.COPILOT_HOME, grok: env.GROK_HOME, agy: env.AGY_HOME },
+    // OpenClaw's session key is on its TUI's footer and nowhere else. The scrollback above the screen keeps its title,
+    // the only place a Gateway on another host shows, a while longer into a conversation.
+    capturePane: (agentId) => captureTerminal(agentId, 200),
+    openclawPaneRead: (sessionId, reading, capture) => {
+      normalizers.openclawReaders.get(sessionId)?.paneRead(reading)
+      const session = registry.bySession(sessionId)
+      // As the footer poll beside the other engines' panes reads them: a profile that cannot be read leaves the chip as it was.
+      if (session) void Promise.resolve(runtimeProfiles.ingestPane(session, capture)).catch(() => undefined)
+    },
+    openclawPaneDue: (sessionId) => normalizers.openclawReaders.get(sessionId)?.paneDue() ?? true,
+    openclawStateDir: (pid) => openclawStateDir(pid),
   })
   binding.whileChanging((agentId) => restorePanes.busy(agentId))
   const pendingForkInherit = binding.pendingForkInherit
@@ -2055,6 +2070,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // is exactly when the app asks — the answer it needs is the file's.
       signedIn: readAuthSession() !== null,
       version: VERSION,
+      node: nodeStatus(),
       localWs: {
         path: LOCAL_WS_PATH,
         protocolVersion: LOCAL_WS_PROTOCOL_VERSION,
@@ -2286,6 +2302,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   daemonBoot.hookServer = hookServer
   daemonBoot.localSocket = localSocket
   console.log(`[cli] daemon pid ${process.pid} · v${VERSION}${process.env.ADAPTER_UPDATED_TO ? ' · updated' : ''} · listening on 127.0.0.1:${hookPort}`)
+  // The launcher and the service definition name the Node they were written with: once the core is up, they follow
+  // the Node it runs on, which an update may have moved (lib/nodeReferences.ts); and on the minimum Node, why an update once held it
+  // back no longer applies. The installed copy only: a checkout's core never changes the real installation.
+  if (isInstalledCopy(SCRIPT_PATH, env.ADAPTER_CLI_DIR)) {
+    refreshNodeReferences((line) => console.log(`[node-runtime] ${line.trim()}`))
+    settleNodeMigration(env.ADAPTER_CLI_DIR)
+  }
   // The device key log records which sign-in this machine is under: a session from before sign-in epochs
   // gets one first, adopted so it never starts the log over, and the gateway registers with it then.
   if (session?.machineId) void ensureSignInEpoch().catch(() => null).then(() => gatewayOps.account(account()))
@@ -2713,6 +2736,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // opencode and its fork kilo belong here for the same stated reason and were simply missing: neither
   // writes its model anywhere but the composer footer, so between reconciles their chips said nothing
   // at all rather than going stale.
+  // Not openclaw: its bind pass reads its pane already, and hands that capture to the profile (core/agents/bind.ts).
   const PANE_POLLED_ENGINES = new Set(['devin', 'cursor', 'grok', 'agy', 'opencode', 'kilo'])
   const PANE_POLL_MS = 15_000
   setInterval(() => {

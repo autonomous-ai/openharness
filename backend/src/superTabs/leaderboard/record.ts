@@ -24,11 +24,6 @@ export interface Run extends RanOn { assignmentId: string; at: number
    *  attempts recorded before it; the board then finds it by the agent while that agent exists (brought.ts runMachine). */
   machineId?: string
   firstVerdicts?: Record<string, boolean>; firstReview?: boolean
-  /** The step up from a cheaper model this attempt is, on a task stepped up before project instructions: its attempt number and why. */
-  stepUp?: { attempt: number; reason: string }
-  /** Its agent was launched on the engine's own model, which Codex reports by a slug the policy may not name: the board rates
-   *  it by the engine's `default` row (review of ee4ee6c9a). */
-  engineDefault?: true
   /** Re-reviews after a failed review during this attempt (evidence routing, Ken 2026-10-29): the most on any one check, so
    *  a review that judges two checks counts once. Absent until a review fails; 0 while a failure waits for its
    *  re-review. `reworks`: each checker's last verdict on a check and its re-reviews after its own failure, by check id and
@@ -48,7 +43,7 @@ export interface ReviewHour extends RanOn { hour: number; count: number }
 /** A group's leaderboard bookkeeping; readers never get it whole (read/views.ts groupView). */
 export interface GroupLedger {
   askedAt?: number
-  /** Why nobody is named as its requester, said by the agent that opened work no person asked for (taskContract.ts). */
+  /** Why nobody is named as its requester, said by the agent that opened work no person asked for before Swarm v4. */
   noRequesterReason?: string
   /** When it shipped: its earliest recorded merge, or without one the first time its work was done. A group is one request,
    *  so finishing it again ships nothing new. */
@@ -86,13 +81,6 @@ export const LEDGER_WEEKS = 5
 export const MAX_RUNS = 20
 /** Credits one conversation keeps, newest: a busy Lead conversation collects approvals and tag replies for weeks. */
 export const MAX_UNBLOCKS = 200
-
-/** A shared group is asked when it is opened. A private conversation is chat only and never counts. */
-export function recordAsked(group: Conversation, requesterId: string | undefined, now: number): void {
-  if (group.audience) return
-  if (requesterId) group.requesterId = requesterId
-  group.ledger = { askedAt: now }
-}
 
 /** The person a waiting item waits on: its requester while still a member, otherwise the project's owner. */
 export function waitedOn(state: SuperTabState, group: Conversation): string {

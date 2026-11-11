@@ -181,7 +181,7 @@ export class LeadSwitchRequests {
       // Desktop's rule (_changeAgent): a mode the new engine lacks becomes ask, and bypass follows the mode.
       const mode = old.permissionMode && permissionModeFlags(engine as AgentEngine, old.permissionMode) ? old.permissionMode : old.permissionMode ? 'ask' : undefined
       const payload: Record<string, unknown> = { engine, cwd: old.cwd, creationId: changeId, startedBy: 'agent',
-        swarmRole: wireRole(skill), ...(skill.mode ? { swarmSkillMode: skill.mode } : {}),
+        swarmRole: wireRole(skill),
         ...(mode ? { permissionMode: mode, bypassPermission: permissionModeApproves(mode) } : old.bypassPermission !== undefined ? { bypassPermission: old.bypassPermission } : {}),
         ...(old.defaultName ? { name: old.defaultName } : {}),
         ...(typeof request.model === 'string' ? { model: request.model } : {}), ...(typeof request.effort === 'string' ? { effort: request.effort } : {}),

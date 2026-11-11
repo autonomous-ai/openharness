@@ -5,6 +5,7 @@ import { createSuperTab, type Actor, type SuperTabState } from './model.js'
 import { canReadAgent, projectOf } from './projects.js'
 import * as store from './parts/index.js'
 import { readerView } from './read/views.js'
+import { storedTask } from './storedWork.test-support.js'
 
 // Task #4697 (anh Dee 11-07 21:20, card #4693 part A): one Member per person and project, made on their first accepted task
 // there. Swarm v4 retired task approval (2026-11-10), so no Member starts now; one started before still runs.
@@ -35,9 +36,8 @@ function swarm(quotas: Quota[] = [subscription()]) {
   const project = (name: string) => run({ type: 'project.create', name, visibility: 'public', brief: '' }).result.projectId as string
   /** A task Kai asks for in [projectId], made by its Lead as an asked task is. */
   const ask = (projectId: string, title: string) => {
-    const chat = state.projects!.find(p => p.id === projectId)!.leadConversationId
-    return run({ type: 'conversation.create', title, brief: 'Do it.', projectId, requesterId: 'kai', priority: 'P2',
-      task: { goal: title, changes: 'Change it.', constraints: 'None.', owns: ['src/a/'] }, checks: [{ description: 'Works.', independent: false }] } as unknown as Command, owner).result.conversationId as string ?? chat
+    return storedTask(state, { title, brief: 'Do it.', projectId, requesterId: 'kai', task: { goal: title, changes: 'Change it.', constraints: 'None.',
+      owns: ['src/a/'] }, checks: [{ description: 'Works.' }] })
   }
   const group = (id: string) => state.conversations.find(c => c.id === id)!
   return { run, machine, project, ask, group, get state() { return state }, set state(next: SuperTabState) { state = next } }

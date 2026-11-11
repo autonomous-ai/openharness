@@ -136,7 +136,7 @@ gets a `version.txt` written into the built bundle at package time (see `lib/cor
 since `flutter build linux` has no Info.plist-style stamping). Test the updater against a scratch
 manifest with `--dart-define=DESKTOP_UPDATE_METADATA_URL=...`; `HARNESS_RUNTIME_METADATA_URL` does
 the same for the desktop updater only. The managed Node runtime is still published from this repo with
-`make upload-node-runtime ARGS=22.23.2` (`darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`) — and,
+`make upload-node-runtime ARGS=24.22.2` (`darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`) — and,
 since 2026-09-15, a managed **tmux** for macOS the same way (`release-tmux-runtime.yml` /
 `make upload-tmux-runtime`, RELEASE.md "Managed tmux runtime") — but
 its consumer is now the `harness` installer rather than this app.

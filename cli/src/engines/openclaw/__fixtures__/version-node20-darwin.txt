@@ -1,0 +1,5 @@
+openclaw: Node 20.19.5: node:sqlite is unavailable; use 24.16+/26.1+ or a build with the fix.
+If you use nvm, run:
+  nvm install 26
+  nvm use 26
+  nvm alias default 26
