@@ -1,8 +1,8 @@
-import { constants, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync, chmodSync, fstatSync, statSync, renameSync } from 'node:fs'
+import { closeSync, constants, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync, chmodSync, fstatSync, statSync, renameSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
-import { hookFileVersion, inspectHookFile, runHookPreparation } from './nativeHookFiles.js'
+import { directoryChanged, flushDirectory, hookFileVersion, inspectHookFile, runHookPreparation } from './nativeHookFiles.js'
 
 // Windows moved a just-published file's change time when its handle closed (measured on DESKTOP-0TFH0OJ, 2026-11-05), after the
 // publication had read it: Kilo's, Pi's and Amp's plugins were written, then reported as failed, at every start.
@@ -207,6 +207,47 @@ it('holds a plugin alias without deleting its shared target or the alias', async
   await expect(prepared(file).remove()).rejects.toThrow(/alias/)
   expect(realpathSync(file)).toBe(target)
   expect(readFileSync(target, 'utf8')).toBe('shared plugin')
+})
+
+// On macOS every fsync is a full drive flush: each write flushed its folder's whole chain to the root again, and the
+// grid config golden spent 4.5 s of 6.6 s in them.
+// Windows cannot flush a directory handle (secureState.ts `syncStateDirectory`): there is no directory flush to count.
+it.skipIf(process.platform === 'win32')('flushes each ancestor once per attempt, and the folder again after each name it publishes there', async () => {
+  const { root } = fixture(), folder = join(root, 'a'), one = join(folder, 'one.json'), two = join(folder, 'two.json')
+  mkdirSync(folder)
+  const flushes = new Map<bigint, number>(), names: string[][] = []
+  fault.onSync = fd => {
+    const info = fstatSync(fd, { bigint: true })
+    if (!info.isDirectory()) return
+    flushes.set(info.ino, (flushes.get(info.ino) ?? 0) + 1)
+    if (info.ino === statSync(folder, { bigint: true }).ino) names.push(readdirSync(folder).sort())
+  }
+  const first = inspectHookFile(one), second = inspectHookFile(two)
+  await runHookPreparation([one, two], async attempt => { await first.replace('1', attempt); await second.replace('2', attempt) })
+  expect(readFileSync(one, 'utf8')).toBe('1'); expect(readFileSync(two, 'utf8')).toBe('2')
+  // Each name is durable: its folder was flushed after the name was in it.
+  expect(names).toEqual([['one.json'], ['one.json', 'two.json']])
+  for (let path = root; ; path = dirname(path)) {
+    expect(flushes.get(statSync(path, { bigint: true }).ino)).toBe(1)
+    if (path === dirname(path)) break
+  }
+})
+
+it.skipIf(process.platform === 'win32')('flushes a directory again when the attempt changed it while its flush was in flight', async () => {
+  const { root } = fixture()
+  let flushed = 0
+  fault.onSync = fd => { if (fstatSync(fd).isDirectory()) flushed++ }
+  await runHookPreparation([join(root, 'config.json')], async attempt => {
+    const fd = openSync(root, constants.O_RDONLY | constants.O_DIRECTORY)
+    try {
+      const inFlight = flushDirectory(attempt, fd)
+      directoryChanged(attempt, root)
+      await inFlight
+      await flushDirectory(attempt, fd)
+      await flushDirectory(attempt, fd)
+    } finally { closeSync(fd) }
+  })
+  expect(flushed).toBe(2)
 })
 
 it('reconfirms an ancestor name left uncertain by an earlier failed parent sync', async () => {
