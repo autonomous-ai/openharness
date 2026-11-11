@@ -23,7 +23,7 @@ import { githubRepository } from '../github/repository.js'
 import { commentAuthors, recordComment, sameRepository, type CommentKind } from './githubComments.js'
 import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
-import { DELETED_SWARM_COMMANDS, DELETION_COMMANDS, isPersonalSwarm, notThere } from './deletion.js'
+import { DELETED_SWARM_COMMANDS, DELETION_COMMANDS, isPersonalSwarm, notThere, PERSONAL_SWARM_OPERATION } from './deletion.js'
 import { forgetRemovedPanes } from './removedPanes.js'
 import { applyCommand, authorizeCommandAccess, LOOP_NOTICE_AT, mayResumeStart, operationSchema, postable, reserveHarnessSlot, worksInProjectChat, type Command, type CommandContext } from './commands.js'
 import { redactCredentials } from './credentials.js'
@@ -705,7 +705,7 @@ export class SuperTabStore {
         if (prior.requestHash !== requestHash) fail('OPERATION_REUSED', 'Use a new operation ID for a different request.')
         return { id, revision: prior.revision }
       }
-      const state = createSuperTab(id, name, { id: user.sub, email: user.email }, user.autonomousEnv, projectVisibility)
+      const state = createSuperTab(id, name, { id: user.sub, email: user.email }, user.autonomousEnv, projectVisibility, operationId !== PERSONAL_SWARM_OPERATION)
       nameFromAccount(state.people[0]!, await accountNameOf(tx, user.sub))
       // Born in parts: its state lives in the Swarm* parts, and `state` only fences older backends (schema.prisma).
       await tx.superTab.create({ data: { id, ownerId: user.sub, autonomousEnv: user.autonomousEnv, ...indexesOf(state), format: 2, state: { version: 2 } } })
@@ -837,6 +837,25 @@ export class SuperTabStore {
       throw error
     }
     return 'deleted'
+  }
+
+  /** Deletes the repo-less project every Personal Swarm was made with (migration/personalProjectJob.ts), as its owner's
+   *  `project.delete` would, given `personalProject` by the store alone: only while nothing was ever said in it and no agent or
+   *  start is in it. 'kept' when something is, which stays a project like any other; 'gone' when the Swarm or the project is not
+   *  there or is not that one. */
+  async removePersonalProject(tabId: string): Promise<'removed' | 'kept' | 'gone'> {
+    const row = await this.db.superTab.findUnique({ where: { id: tabId }, select: { ownerId: true, autonomousEnv: true, deletedAt: true, format: true } })
+    if (!row || row.deletedAt || row.format !== 2) return 'gone'
+    const user: AuthUser = { sub: row.ownerId, email: '', autonomousEnv: row.autonomousEnv as AuthUser['autonomousEnv'], role: 'user' }
+    try {
+      await this.executeOnce(user, tabId, { operationId: 'personal-project-removal', command: { type: 'project.delete', projectId: 'lead' } },
+        undefined, undefined, { personalProject: true })
+    } catch (error) {
+      if (error instanceof SuperTabError && error.code === 'PERSONAL_PROJECT_KEPT') return 'kept'
+      if (error instanceof SuperTabError && ['NOT_FOUND', 'PROJECT_OWNER_REQUIRED'].includes(error.code)) return 'gone'
+      throw error
+    }
+    return 'removed'
   }
 
   /** Removes notice [messageId] of a retired kind (migration/retiredNotices.ts) as its author's `message.delete` would, run as the
@@ -1047,7 +1066,7 @@ export class SuperTabStore {
    *  machine.teamGone (takeOutTeamMachines), `wipe` for swarm.delete (wipeSwarm), `retiredNotice` for message.delete
    *  (removeRetiredNotice). */
   private async executeOnce(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string,
-    only: { movedTo?: { machineId: string; ownerId: string }; teamMachineGone?: true; wipe?: true; retiredNotice?: true } = {}) {
+    only: { movedTo?: { machineId: string; ownerId: string }; teamMachineGone?: true; wipe?: true; retiredNotice?: true; personalProject?: true } = {}) {
     const { operationId, command } = operationSchema.parse(input)
     let ended: WorkHold[] = [], started: WorkHold[] = []
     const done = await transaction(this.db, async tx => {
@@ -1127,6 +1146,7 @@ export class SuperTabStore {
       if (command.type === 'machine.teamGone' && only.teamMachineGone) context.teamMachineGone = true
       if (command.type === 'swarm.delete' && only.wipe) context.wipe = true
       if (command.type === 'message.delete' && only.retiredNotice) context.retiredNotice = true
+      if (command.type === 'project.delete' && only.personalProject) context.personalProject = true
       if (command.type === 'machine.moved' && only.movedTo && actor.kind === 'person') {
         context.computerMove = await this.computerMove(tx, original, actor.userId, command.machineId, only.movedTo)
       }

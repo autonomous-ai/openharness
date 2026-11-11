@@ -313,6 +313,9 @@ export interface CommandContext {
   /** For `message.delete`: set by the store's one-time removal of notices of retired kinds alone (store.ts removeRetiredNotice,
    *  migration/retiredNotices.ts), never from a request: the notice goes as its author's delete would take it. */
   retiredNotice?: true
+  /** For `project.delete`: set by the store's one-time removal of the "Personal" project alone (store.ts removePersonalProject,
+   *  migration/personalProjectJob.ts), never from a request. */
+  personalProject?: true
   /** Read from host ownership/access records by the store, never copied from the request. */
   contribution?: { machineOwnerId: string; contributorId: string; hostGrant?: string | null
     /** The name the machine's owner gave it, from its account row (machines.ts accountMachineName); absent when it has none. */
@@ -1083,6 +1086,19 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       break
     }
     case 'project.delete': {
+      if (context.personalProject) {
+        // The repo-less project every Personal Swarm was made with (anh Dee 2026-11-11: its projects are its person's repos): it
+        // goes only while nothing was ever said in it, dormant chats too (store.ts loads them), and no agent or start is in it.
+        // One with anything in it stays, a project like any other: nothing of a person's is hidden.
+        const project = projectsOf(state).find(p => p.id === command.projectId)
+        if (!isPersonalSwarm(state) || command.projectId !== 'lead' || !project || project.repository || state.project) fail('NOT_FOUND', 'This project is unavailable.', 404)
+        const groups = state.conversations.filter(c => !isLeads(c) && !isAgentChat(c) && (c.projectId ?? 'lead') === project.id)
+        if (groups.some(c => c.lastMessageSequence) || state.agents.some(a => agentProjectId(state, a) === project.id)
+          || state.starts?.some(s => !s.error && groups.some(c => c.id === s.request.conversationId)) || project.leadClaim || project.leadWaiting?.length
+          || project.pmChat) fail('PERSONAL_PROJECT_KEPT', 'This project has something in it.', 409)
+        deleteWholeProject(deletableProject(state, actor, project.id), 'keep')
+        break
+      }
       // Its owner confirmed a permanent delete, so the project takes its own agents with it, its Lead included, and their
       // hosts close their sessions. The Swarm's owner deletes one nobody owns (task #3073).
       deleteWholeProject(deletableProject(state, actor, command.projectId), 'close')
