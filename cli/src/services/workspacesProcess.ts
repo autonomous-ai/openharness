@@ -5,7 +5,7 @@
  * API built here. It acts only when the core says so (core/workspacesLink.ts):
  * - It names branches when told to, with the live agents the core sends on each terminal-title pass.
  * - It sweeps when the core's timer says, asking the core at that moment for every agent, live and
- *   stopped, and sweeping with exactly that answer.
+ *   stopped, and which are live, and sweeping with exactly that answer.
  *
  * It never sweeps on its own, never with agents it kept from earlier, never when the core cannot answer,
  * and never two sweeps at once (services/workspaces.ts). After a rename it asks the core to send the
@@ -34,7 +34,8 @@ const isSession = (value: unknown): value is RegisteredSession =>
   !!value && typeof value === 'object' && typeof (value as { agentId?: unknown }).agentId === 'string'
 
 /**
- * The core API workspaces run on in their own process. The live agents are the ones the core last sent.
+ * The core API workspaces run on in their own process. The live agents are the ones the core last sent;
+ * while a sweep the core asked for starts, they are the ones it named live in that answer.
  * Every agent, live and stopped, is known only while a sweep the core asked for starts; asked at any
  * other time it throws, and a sweep that cannot list the folders in use sweeps nothing. A frame sent
  * again (after a rename) is the core's to send: `renamed` asks it to.
@@ -95,6 +96,8 @@ export function runWorkspacesService(options: WorkspacesServiceOptions): Service
   let live: RegisteredSession[] = []
   /** Every agent the core named for the sweep starting now; null at every other moment. */
   let inUse: RegisteredSession[] | null = null
+  /** Those of them the core named live in the same answer; null at every other moment. */
+  let running: RegisteredSession[] | null = null
   let core: CoreConnection | null = null
   /** A sweep's question to the core is out: a second request meanwhile is the same sweep. */
   let asking = false
@@ -102,7 +105,7 @@ export function runWorkspacesService(options: WorkspacesServiceOptions): Service
   // Lost only with the connection: the frame then shows the new branch when the core's read of the
   // folder expires (lib/agentProject.ts), seconds later.
   const renamed = (agentId: string): void => { void core?.query('branchNamed', { agentId }).catch(() => {}) }
-  ;(options.start ?? startWorkspaces)(workspacesCoreApi(options.dataDir, { live: () => live, inUse: () => inUse }, renamed), ports)
+  ;(options.start ?? startWorkspaces)(workspacesCoreApi(options.dataDir, { live: () => running ?? live, inUse: () => inUse }, renamed), ports)
   if (!ports.workspaces) throw new Error('workspaces did not start')
   const workspaces = ports.workspaces
 
@@ -117,8 +120,12 @@ export function runWorkspacesService(options: WorkspacesServiceOptions): Service
       // sweep at all.
       const agents = answer.agents
       if (!Array.isArray(agents) || !agents.every(isSession)) return
+      // An answer that does not name the live ones (a core from before it did) leaves every agent counted as live: the
+      // sweep then removes what it always removed, and frees no build output under a harness that may be running.
+      const liveIds: unknown[] = Array.isArray(answer.live) ? answer.live : agents.map(agent => agent.agentId)
       inUse = agents
-      try { workspaces.sweepUnused() } catch { /* its own failure: the next timer tries again */ } finally { inUse = null }
+      running = agents.filter(agent => liveIds.includes(agent.agentId))
+      try { workspaces.sweepUnused() } catch { /* its own failure: the next timer tries again */ } finally { inUse = null; running = null }
     }, () => {}).finally(() => { asking = false })
   }
 

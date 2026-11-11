@@ -16,7 +16,8 @@
  * - When the process starts the sweep, it asks for every agent, live and stopped (`agents`), and sweeps
  *   only with that answer. So the folders in use are read when the sweep begins, as in the core's
  *   process, never from a list that waited in a buffer while the process was stopped. A core that
- *   cannot list them (an unreadable stopped agent) answers QUERY_FAILED, and nothing is swept.
+ *   cannot list them (an unreadable stopped agent) answers QUERY_FAILED, and nothing is swept. The
+ *   answer names the live ones too: the sweep frees build output only where no harness is running.
  *
  * After it renames a branch, the process asks the core to send the agent's frame again
  * (`branchNamed`): the core forgets what it read of the folder, and the frame shows the new name now
@@ -59,8 +60,8 @@ export function createWorkspacesLink(
     port,
     /** The core's answers to the workspaces' questions (core/serviceLinks.ts `answer`, for `workspaces`). */
     answer(query: string, payload: Record<string, unknown>): Record<string, unknown> {
-      // Every agent, live then stopped: the folders a sweep starting now must keep.
-      if (query === 'agents') return { agents: core.agents.all() }
+      // Every agent, live then stopped: the folders a sweep starting now must keep. And which are live, read with them.
+      if (query === 'agents') return { agents: core.agents.all(), live: core.agents.live().map(agent => agent.agentId) }
       if (query === 'branchNamed') return branchNamed(payload)
       return { error: 'UNKNOWN_QUERY' }
     },

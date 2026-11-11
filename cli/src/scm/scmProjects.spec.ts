@@ -93,10 +93,29 @@ describe('the SCM seam, with git as its only implementation', { timeout: 30_000 
     await git(repo, 'worktree', 'add', '--quiet', '-b', 'harness/idle', join(worktrees, 'idle'), 'main')
     await git(repo, 'worktree', 'add', '--quiet', '-b', 'harness/busy', join(worktrees, 'busy'), 'main')
     const later = Date.now() + 8 * 24 * 3600_000
+    const nothing = { removed: [], freed: [], stuck: [] }
     function* inUse() { yield join(worktrees, 'busy'); yield null }
-    expect(await sweepScmProjects({ root: harnesses, inUse: inUse(), now: later })).toEqual([join(worktrees, 'idle')])
-    expect(await sweepWorktrees({ root: harnesses, inUse: [join(worktrees, 'busy')], now: later })).toEqual([])
-    expect(await sweepScmProjects({ root: join(root, 'nowhere'), inUse: [] })).toEqual([])
+    expect(await sweepScmProjects({ root: harnesses, inUse: inUse(), live: [], now: later })).toEqual({ ...nothing, removed: [join(worktrees, 'idle')] })
+    expect(await sweepWorktrees({ root: harnesses, inUse: [join(worktrees, 'busy')], live: [], now: later })).toEqual(nothing)
+    expect(await sweepScmProjects({ root: join(root, 'nowhere'), inUse: [], live: [] })).toEqual(nothing)
+  })
+
+  it('gives every SCM the folders in use and the live ones, each read once, and says all that went, in SCM order', async () => {
+    const given: unknown[] = []
+    const sweeper = (name: string) => ({
+      sweep: vi.fn(async (input: { inUse: Iterable<unknown>; live: Iterable<unknown> }) => {
+        given.push([[...input.inUse], [...input.live]])
+        return { removed: [`${name}/gone`], freed: [`${name}/kept/node_modules`], stuck: [`${name}/kept/build`] }
+      }),
+    }) as unknown as ScmProject
+    function* inUse() { yield '/w/live'; yield '/w/stopped' }
+    function* live() { yield '/w/live' }
+    expect(await sweepScmProjects({ root: '/w', inUse: inUse(), live: live() }, [sweeper('first'), sweeper('second')])).toEqual({
+      removed: ['first/gone', 'second/gone'],
+      freed: ['first/kept/node_modules', 'second/kept/node_modules'],
+      stuck: ['first/kept/build', 'second/kept/build'],
+    })
+    expect(given).toEqual([[['/w/live', '/w/stopped'], ['/w/live']], [['/w/live', '/w/stopped'], ['/w/live']]])
   })
 
   it('has no launch environment for git, and nothing for a missing record', () => {

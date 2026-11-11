@@ -18,11 +18,12 @@ describe('workspaces in their own process', () => {
   const setup = (over: Partial<Parameters<typeof runWorkspacesService>[0]> = {}) => {
     let api: CoreApi | null = null
     let options: ServiceProcessOptions | null = null
-    /** What `all()` answered when the service swept, each time. */
+    /** What `all()` answered when the service swept, each time, and what `live()` did. */
     const swept: RegisteredSession[][] = []
+    const sweptLive: string[][] = []
     const port = {
       nameBranches: vi.fn(),
-      sweepUnused: vi.fn(() => { swept.push(api!.agents.all()) }),
+      sweepUnused: vi.fn(() => { swept.push(api!.agents.all()); sweptLive.push(api!.agents.live().map(session => session.agentId)) }),
     } satisfies WorkspacesPort
     const service = { stop: vi.fn() }
     const handle = runWorkspacesService({
@@ -31,7 +32,7 @@ describe('workspaces in their own process', () => {
       start: (core: CoreApi, ports: CorePorts) => { api = core; ports.workspaces = port },
       ...over,
     })
-    return { api: api!, options: options!, port, service, handle, swept }
+    return { api: api!, options: options!, port, service, handle, swept, sweptLive }
   }
   /** A core that answers `agents` with `answer`, and records the rest. */
   const connection = (answer: () => Promise<Record<string, unknown>> = async () => ({ agents: [agent()] })) => {
@@ -70,10 +71,11 @@ describe('workspaces in their own process', () => {
   })
 
   it('sweeps when the core says, with every agent the core names at that moment, and knows them only then', async () => {
-    const { api, options, port, swept } = setup()
+    const { api, options, port, swept, sweptLive } = setup()
     const everyone = [agent('a1'), agent('old', { active: false, cwd: null as never })]
-    const core = connection(async () => ({ agents: everyone, requestId: 'r1' }))
+    const core = connection(async () => ({ agents: everyone, live: ['a1', 'gone-since'], requestId: 'r1' }))
     options.onConnected!(core.core)
+    options.onEvent!({ kind: 'nameBranches', agents: [agent('seen-earlier')] })
     expect(() => api.agents.all()).toThrow('the core has not said which folders are in use')
     options.onEvent!({ kind: 'sweep' })
     await flush()
@@ -81,7 +83,22 @@ describe('workspaces in their own process', () => {
     expect(port.sweepUnused).toHaveBeenCalledOnce()
     // Exactly as the core sent them, the one with no folder too.
     expect(swept).toEqual([everyone])
+    // The live ones are those the core named with them, never the ones it sent for an earlier title pass.
+    expect(sweptLive).toEqual([['a1']])
     expect(() => api.agents.all()).toThrow()
+    expect(api.agents.live().map(session => session.agentId)).toEqual(['seen-earlier'])
+  })
+
+  it('counts every agent as live when the core does not say which are, so no build output is freed', async () => {
+    const { options, sweptLive } = setup()
+    const everyone = [agent('a1'), agent('old', { active: false })]
+    options.onConnected!(connection(async () => ({ agents: everyone })).core)
+    options.onEvent!({ kind: 'sweep' })
+    await flush()
+    options.onConnected!(connection(async () => ({ agents: everyone, live: 'a1' })).core)
+    options.onEvent!({ kind: 'sweep' })
+    await flush()
+    expect(sweptLive).toEqual([['a1', 'old'], ['a1', 'old']])
   })
 
   it('does not sweep when the core cannot name every agent, or names something that is not one', async () => {
@@ -126,6 +143,7 @@ describe('workspaces in their own process', () => {
     options.onEvent!({ kind: 'sweep' })
     await flush()
     expect(() => api.agents.all()).toThrow()
+    expect(api.agents.live()).toEqual([])
     options.onEvent!({ kind: 'sweep' })
     await flush()
     expect(port.sweepUnused).toHaveBeenCalledTimes(2)

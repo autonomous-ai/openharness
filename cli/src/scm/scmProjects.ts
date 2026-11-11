@@ -13,6 +13,7 @@
 import { basename } from 'node:path'
 import { PROJECT_INSTRUCTION_FILES } from '../dsh/adapters.js'
 import { validProjectCwd } from '../lib/agentProject.js'
+import type { Swept } from '../lib/worktreeSweep.js'
 import { GitScmProject } from './gitScmProject.js'
 import type { ScmDescription, ScmDetectOptions, ScmDetectResult, ScmKind, ScmLaunchRecord, ScmProject } from './types.js'
 
@@ -58,18 +59,24 @@ export async function renameScmProject(cwd: string, title: string | null, scms: 
   return null
 }
 
-/** Every SCM sweeps its own idle workspaces under `root`; the paths removed, in SCM order. `inUse`
- *  is read once here, because an iterable handed to two implementations would be empty for the second. */
+/** Every SCM sweeps its own idle workspaces under `root`; what went, in SCM order. `inUse` and `live`
+ *  are read once here, because an iterable handed to two implementations would be empty for the second. */
 export async function sweepScmProjects(input: {
   root: string
   inUse: Iterable<string | null | undefined>
+  live: Iterable<string | null | undefined>
   now?: number
   idleMs?: number
-}, scms: readonly ScmProject[] = scmProjects): Promise<string[]> {
-  const inUse = [...input.inUse]
-  const removed: string[] = []
-  for (const scm of scms) removed.push(...await scm.sweep({ ...input, inUse }))
-  return removed
+}, scms: readonly ScmProject[] = scmProjects): Promise<Swept> {
+  const inUse = [...input.inUse], live = [...input.live]
+  const swept: Swept = { removed: [], freed: [], stuck: [] }
+  for (const scm of scms) {
+    const one = await scm.sweep({ ...input, inUse, live })
+    swept.removed.push(...one.removed)
+    swept.freed.push(...one.freed)
+    swept.stuck.push(...one.stuck)
+  }
+  return swept
 }
 
 /** The pane environment a workspace's record asks for, or undefined when there is none to ask —

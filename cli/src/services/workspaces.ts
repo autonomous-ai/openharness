@@ -1,7 +1,7 @@
 /**
  * Workspaces: everything about the folder an agent works in (docs/design/2026-10-03-harnessd.md,
- * "Workspaces"). Here so far: a worktree branch Harness made up takes its session's name, and the
- * worktrees Harness made that nothing uses are swept.
+ * "Workspaces"). Here so far: a worktree branch Harness made up takes its session's name, the
+ * worktrees Harness made that nothing uses are swept, and build output is freed in the idle ones that stay.
  *
  * A service on the core boundary (step 13): it reads the core only through `CoreApi`, and the core
  * reaches it only through `ports.workspaces`.
@@ -32,7 +32,8 @@ export function startWorkspaces(core: CoreApi, ports: CorePorts): void {
       }).catch(() => {})
     }
   }
-  // Worktrees Harness made that no live or stopped harness uses and nothing would miss
+  // Worktrees Harness made that no live or stopped harness uses and nothing would miss; and, in an idle one
+  // that stays with no live harness in it, what an install or a build makes again
   // (lib/worktreeSweep.ts). The core decides when: a few minutes after start, once restored agents
   // are back in the registry, then twice a day.
   //
@@ -42,11 +43,19 @@ export function startWorkspaces(core: CoreApi, ports: CorePorts): void {
   let sweeping = false
   const sweepUnusedWorktrees = () => {
     if (sweeping) return
-    let inUse: Array<string | null>
-    try { inUse = core.agents.all().map(s => s.cwd) } catch { return }
+    let inUse: Array<string | null>, live: Array<string | null>
+    try {
+      inUse = core.agents.all().map(s => s.cwd)
+      live = core.agents.live().map(s => s.cwd)
+    } catch { return }
     sweeping = true
-    void sweepScmProjects({ root: join(homedir(), 'harnesses'), inUse })
-      .then(removed => { if (removed.length) console.log(`[worktrees] removed ${removed.length} unused worktree(s)`) })
+    void sweepScmProjects({ root: join(homedir(), 'harnesses'), inUse, live })
+      .then(({ removed, freed, stuck }) => {
+        // Counts only: a path names a person's folder.
+        if (removed.length) console.log(`[worktrees] removed ${removed.length} unused worktree(s)`)
+        if (freed.length) console.log(`[worktrees] freed ${freed.length} build folder(s) in idle worktrees`)
+        if (stuck.length) console.warn(`[worktrees] BUILD_OUTPUT_STUCK: ${stuck.length} build folder(s) could not be removed whole`)
+      })
       .catch(() => {})
       .finally(() => { sweeping = false })
   }

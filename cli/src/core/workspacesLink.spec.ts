@@ -49,9 +49,9 @@ describe('workspaces in their own process, as the core tells them', () => {
     expect(lines).toEqual(['[worktrees] sweep skipped: the workspaces process is not running; the next one is on its timer'])
   })
 
-  it('answers the process every agent, live then stopped, when it starts a sweep', () => {
+  it('answers the process every agent, live then stopped, and which are live, when it starts a sweep', () => {
     const { link, live, stopped } = setup()
-    expect(link.answer('agents', {})).toEqual({ agents: [...live, stopped] })
+    expect(link.answer('agents', {})).toEqual({ agents: [...live, stopped], live: ['a1', 'a2'] })
   })
 
   it('lets a failure to list the agents fail the question, so nothing is swept', () => {

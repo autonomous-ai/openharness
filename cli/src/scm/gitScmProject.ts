@@ -11,7 +11,7 @@
 import { agentProject, forgetAgentProject } from '../lib/agentProject.js'
 import { nameBranchAfterSession } from '../lib/branchNaming.js'
 import { prepareGitProject, readGitProject } from '../lib/gitProject.js'
-import { sweepWorktrees } from '../lib/worktreeSweep.js'
+import { sweepWorktrees, type Swept } from '../lib/worktreeSweep.js'
 import type { PrepareOptions, ScmDescription, ScmDetectOptions, ScmDetectResult, ScmLaunchRecord, ScmProject } from './types.js'
 
 export class GitScmProject implements ScmProject {
@@ -49,7 +49,7 @@ export class GitScmProject implements ScmProject {
     return nameBranchAfterSession(cwd, title)
   }
 
-  sweep(input: { root: string; inUse: Iterable<string | null | undefined>; now?: number; idleMs?: number }): Promise<string[]> {
+  sweep(input: { root: string; inUse: Iterable<string | null | undefined>; live: Iterable<string | null | undefined>; now?: number; idleMs?: number }): Promise<Swept> {
     return sweepWorktrees(input)
   }
 

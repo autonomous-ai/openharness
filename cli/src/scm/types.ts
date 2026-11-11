@@ -14,6 +14,7 @@
  */
 import type { AgentProject } from '../lib/agentProject.js'
 import type { readGitProject } from '../lib/gitProject.js'
+import type { Swept } from '../lib/worktreeSweep.js'
 
 /** `none` is a folder no SCM claims: a real answer, not an error. */
 export type ScmKind = 'git' | 'none'
@@ -90,8 +91,9 @@ export interface ScmProject {
   describe(cwd: string): Promise<ScmDescription | null>
   /** Once the session has a title (today: `nameBranchAfterSession`): the new name, or null when nothing was renamed. */
   rename(cwd: string, title: string | null): Promise<string | null>
-  /** Remove idle isolated workspaces nothing uses (today: `sweepWorktrees`); the paths removed. */
-  sweep(input: { root: string; inUse: Iterable<string | null | undefined>; now?: number; idleMs?: number }): Promise<string[]>
+  /** Remove idle isolated workspaces nothing uses, and in the idle ones that stay with no live harness (`live`, a part of
+   *  `inUse`) free what a build makes again (today: `sweepWorktrees`); what went. */
+  sweep(input: { root: string; inUse: Iterable<string | null | undefined>; live: Iterable<string | null | undefined>; now?: number; idleMs?: number }): Promise<Swept>
   /** Env to put in the pane at launch and every relaunch (git: nothing). */
   launchEnv(record: ScmLaunchRecord): Record<string, string>
   /** Before Harness itself writes into project files the SCM may hold read-only (the instruction files

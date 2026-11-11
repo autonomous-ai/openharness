@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { constants, type Dirent } from 'node:fs'
-import { access, lstat, mkdir, readdir, readFile, rmdir, stat, writeFile } from 'node:fs/promises'
+import { access, lstat, mkdir, readdir, readFile, rm, rmdir, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, normalize, relative, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
 import { inRepositoryTurn } from './gitProject.js'
@@ -43,31 +43,109 @@ async function candidates(home: string): Promise<string[]> {
   return found
 }
 
+/** What a sweep did. [removed]: the worktrees that went whole. In the worktrees that stay, [freed]: the build folders that
+ *  went, and [stuck]: those it began to remove and could not finish, so part of one may be left. */
+export interface Swept { removed: string[]; freed: string[]; stuck: string[] }
+
 /**
  * Removes the worktrees Harness made that nothing uses and nothing would miss: under
  * `<root>/worktrees`, no live or stopped harness working in it (a stopped one can be resumed there),
  * nothing uncommitted, untouched for [idleMs], and — on no branch — no commit only it has. The
  * branch stays, unless Harness made it and its commits are all on other branches or the remote. Anything that does not pass is left exactly as it is.
+ *
+ * In a worktree that stays, with no live harness in it and unused for [idleMs], what an install or a build makes again is
+ * freed (`freeBuildOutput`). [live] is the folders of [inUse] whose harness is running now.
  */
 export async function sweepWorktrees(input: {
   root: string
   inUse: Iterable<string | null | undefined>
+  live: Iterable<string | null | undefined>
   now?: number
   idleMs?: number
-}): Promise<string[]> {
+}): Promise<Swept> {
   const home = join(input.root, 'worktrees')
-  const used = [...input.inUse].filter((cwd): cwd is string => typeof cwd === 'string' && cwd.length > 0).map(cwd => normalize(cwd))
-  const removed: string[] = []
+  const folders = (cwds: Iterable<string | null | undefined>) =>
+    [...cwds].filter((cwd): cwd is string => typeof cwd === 'string' && cwd.length > 0).map(cwd => normalize(cwd))
+  const used = folders(input.inUse), live = folders(input.live)
+  const worksIn = (cwds: string[], path: string) => cwds.some(cwd => cwd === path || cwd.startsWith(path + sep))
+  const now = input.now ?? Date.now(), idleMs = input.idleMs ?? WORKTREE_IDLE_MS
+  const swept: Swept = { removed: [], freed: [], stuck: [] }
   for (const path of await candidates(home)) {
-    if (used.some(cwd => cwd === path || cwd.startsWith(path + sep))) continue
-    try {
-      if (!await sweepOne(path, input.now ?? Date.now(), input.idleMs ?? WORKTREE_IDLE_MS)) continue
-      removed.push(path)
+    // A worktree the checks could not finish on is left as it is.
+    if (!worksIn(used, path) && await sweepOne(path, now, idleMs).catch(() => false)) {
+      swept.removed.push(path)
       // The repository's folder goes with its last worktree; the worktrees folder itself stays.
       if (dirname(path) !== home) await rmdir(dirname(path)).catch(() => {})
-    } catch { /* left as it is */ }
+    // Never under a live harness: a server or a test run it started may be running from that build output.
+    } else if (!worksIn(live, path)) await freeBuildOutput(path, now, idleMs, swept).catch(() => { /* left as it is */ })
   }
-  return removed
+  return swept
+}
+
+/** A linked worktree's own git folder and its repository's, or null for any other checkout. */
+async function linked(path: string): Promise<{ gitDir: string; common: string } | null> {
+  const gitDir = resolve(path, await git(path, ['rev-parse', '--git-dir']))
+  const common = resolve(path, await git(path, ['rev-parse', '--git-common-dir']))
+  return gitDir === common || basename(common) !== '.git' ? null : { gitDir, common }
+}
+
+/** When a worktree was last used: its top folder, HEAD or index written, or HEAD moved. HEAD's moves are read from the last
+ *  line of its reflog, never from the time that file was written: `git gc`, which git runs by itself after fetches, writes
+ *  every worktree's reflog again. One Mac, 11-10: 15 worktrees of one repository in one second, and 85 of another's 88; read
+ *  as use, that restarted the idle week for all of them, worked in or not. */
+async function lastUsed(path: string, gitDir: string): Promise<number> {
+  const written = [path, join(gitDir, 'HEAD'), join(gitDir, 'index')].map(file => stat(file).then(info => info.mtimeMs, () => 0))
+  // A reflog line: the two commits, who moved HEAD, the second it moved and the zone, then a tab and why when git says why.
+  const moved = readFile(join(gitDir, 'logs', 'HEAD'), 'utf8')
+    .then(log => 1000 * Number(/> (\d+) [-+]\d{4}(?:\t[^\n]*)?\n?$/.exec(log)?.[1] ?? 0), () => 0)
+  return Math.max(...await Promise.all([...written, moved]))
+}
+
+/** What an install or a build makes again, by the folder's name: 4.7 of the 21.6 GB that 29 worktrees Harness made held on
+ *  one Mac (11-11). Only these names, never all that git ignores: there an agent kept 2 GB of evidence under `.harness`, and
+ *  a new worktree is given the project's ignored `.env`. */
+const BUILD_OUTPUT = new Set(['node_modules', '.dart_tool', 'build', '.next'])
+
+/**
+ * The build output in what git lists as ignored in [worktree] (`ls-files --others --ignored --directory -z`): the folders
+ * it lists whole, by their last name. Git lists a folder whole only when nothing in it is tracked or waits to be committed,
+ * and a link as a file. It writes `/` on every platform, so the listing is never split on the platform's separator.
+ * [joinPath] is the platform's; a test passes Windows's.
+ */
+export function buildOutputIn(worktree: string, listing: string, joinPath: typeof join = join): string[] {
+  return listing.split('\0').flatMap((entry) => {
+    const names = entry.split('/')
+    return names.pop() === '' && BUILD_OUTPUT.has(names.at(-1) ?? '') ? [joinPath(worktree, ...names)] : []
+  })
+}
+
+/** Whether something in [dir] is a repository or a worktree of its own: a checkout someone made inside build output is their
+ *  work, and git, which ignores the folder around it, says nothing of it. */
+async function holdsCheckout(dir: string): Promise<boolean> {
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    if (entry.name === '.git' || (entry.isDirectory() && await holdsCheckout(join(dir, entry.name)))) return true
+  }
+  return false
+}
+
+/**
+ * Frees what an install or a build makes again in a worktree that stays, once nobody has used the worktree for [idleMs]:
+ * the folders git ignores whole that are named for build output. A stopped harness resumed there, or a person back at
+ * uncommitted work, finds the checkout and every other file as they were, and installs again. A folder stays when it was
+ * written within [idleMs], when something in it could not be emptied (nothing of it is touched then), and when it holds a
+ * checkout of its own. Nothing is forced: a removal that fails part way is named in [swept] and left for the next sweep.
+ */
+async function freeBuildOutput(path: string, now: number, idleMs: number, swept: Swept): Promise<void> {
+  const dirs = await linked(path)
+  if (!dirs || now - await lastUsed(path, dirs.gitDir) < idleMs) return
+  const ignored = await git(path, ['ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--directory'])
+  for (const folder of buildOutputIn(path, ignored)) {
+    // Not there reads as written now: git also lists what is in a folder it ignores for its contents alone, and that
+    // folder went just before.
+    const written = await lstat(folder).then(info => info.mtimeMs, () => Infinity)
+    if (now - written < idleMs || await unwritableFolder(folder) || await holdsCheckout(folder)) continue
+    await rm(folder, { recursive: true }).then(() => swept.freed.push(folder), () => swept.stuck.push(folder))
+  }
 }
 
 /** Why a worktree that passed every check above was kept anyway, by a fixed code: an error's own text can carry its path.
@@ -128,9 +206,9 @@ async function removeKeepingRecord(main: string, common: string, gitDir: string,
  *  it just stopped (superTabs/machines.ts `removeStoppedWorktree`), and asks [unused] again just before git removes it: the
  *  reads and the folder walk take a while, and a session may open there meanwhile (security review 1 of #2417). */
 export async function sweepOne(path: string, now: number, idleMs: number, unused: () => boolean = () => true): Promise<boolean> {
-  const gitDir = resolve(path, await git(path, ['rev-parse', '--git-dir']))
-  const common = resolve(path, await git(path, ['rev-parse', '--git-common-dir']))
-  if (gitDir === common || basename(common) !== '.git') return false
+  const dirs = await linked(path)
+  if (!dirs) return false
+  const { gitDir, common } = dirs
   const main = dirname(common)
   const touched = await Promise.all(
     [path, join(gitDir, 'HEAD'), join(gitDir, 'index'), join(gitDir, 'logs', 'HEAD')]
