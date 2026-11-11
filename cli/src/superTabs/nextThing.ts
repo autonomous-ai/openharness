@@ -22,7 +22,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { TurnEnd } from '../core/api.js'
 import { named } from './agentReplies.js'
-import { readerKey } from './assign/crew.js'
+import { readerKey, tasksOf } from './assign/crew.js'
 import { backLine, giveBack, labelNames } from './githubAssign.js'
 import type { WatchedAgent } from './githubMentions.js'
 import { checksOf, pullPeople, pullTalk, verdicts } from './githubMerge.js'
@@ -42,6 +42,16 @@ export const IDLE_ASK_MS = 20 * 60_000
 export const IDLE_BACK_MS = 60 * 60_000
 /** The most agents whose counts are kept; the least recent go first. */
 const MAX_KEPT = 1_000
+
+/** The task an agent's open labelled tasks and pull requests ([items]) show it holding with no pull request of its yet, the oldest
+ *  such: one it took that no pull request of its closes, past as many as its pull requests that name no task may be for. With two
+ *  taken and one pull request, the oldest was watched as idle while its pull request was open (review of #4003). */
+function heldTask(items: Record<string, unknown>[]): Record<string, unknown> | null {
+  const named = items.filter(it => it.pull_request).map(tasksOf), closed = new Set(named.flat())
+  const open = items.filter(it => !it.pull_request && labelNames(it).includes('status:taken') && !closed.has(Number(it.number)))
+    .sort((a, b) => Number(a.number) - Number(b.number))
+  return open.length > named.filter(tasks => !tasks.length).length ? open[0]! : null
+}
 
 /** What was typed to an agent: the task, how many times, and whether its person was told. */
 interface Kept { key: string; times: number; told: boolean }
@@ -156,8 +166,8 @@ export class NextThing {
         }
       }
       // A task it took with no pull request of its yet is its own work to go on with: watched while it sits idle with it.
-      const taken = tasks.filter(task => labelNames(task).includes('status:taken')).sort((a, b) => Number(a.number) - Number(b.number))
-      if (taken.length > pulls.length) return this.watch(agent, repo, taken[0]!, Date.now(), false)
+      const held = heldTask(items)
+      if (held) return this.watch(agent, repo, held, Date.now(), false)
       const next = tasks.filter(task => !labelNames(task).includes('status:taken')).sort((a, b) => Number(a.number) - Number(b.number))[0]
       if (!next) continue
       const key = `${repo}#${next.number}`, title = String(next.title ?? '').trim()
@@ -221,8 +231,7 @@ export class NextThing {
       if (await this.deps.working(agent.harnessId) !== false) return
       // Still its own, taken, with no pull request of its yet.
       const items = await this.reads.current(repo, `/repos/${repo}/issues?state=open&labels=${encodeURIComponent(agent.label)}&per_page=100`, 1)
-      const tasks = items.filter(it => !it.pull_request), held = tasks.filter(it => labelNames(it).includes('status:taken'))
-      if (!held.some(it => Number(it.number) === number) || held.length <= items.length - tasks.length) return
+      if (Number(heldTask(items)?.number) !== number) return
       if (!asked) {
         await this.deps.tell(agent, this.operation(agent, key, `idle ${since}`), `You hold ${what} and have done nothing on it for 20 minutes: `
           + `go on with it, or say on it what holds it: gh issue view ${number} --repo ${repo}`)
