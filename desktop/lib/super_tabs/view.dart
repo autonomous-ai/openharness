@@ -366,6 +366,7 @@ class _SuperTabViewState extends State<SuperTabView>
       : SwarmAgentStates(
           controller: c,
           github: _github,
+          app: widget.app,
           localRepository: (agent) =>
               PersonalProjects.of(widget.app!).agentRepository(c, agent),
           // A test never waits for the next read of a board.
