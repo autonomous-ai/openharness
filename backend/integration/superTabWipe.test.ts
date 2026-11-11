@@ -302,8 +302,8 @@ describe('the wipe of every Swarm from before Swarm v4', () => {
     const team = randomUUID(), teamTab = (await w.store.create(who, team, 'Team')).id
     await db.superTab.update({ where: { id: teamTab }, data: { createdAt: new Date(WIPE_CUTOFF - DAY) } })
     await pass(w)
-    const again = await Promise.all([w.store.create(who, PERSONAL_SWARM_OPERATION, 'Personal'), w.store.create(who, PERSONAL_SWARM_OPERATION, 'Personal')]
-      .map(made => made.catch(() => w.store.create(who, PERSONAL_SWARM_OPERATION, 'Personal'))))
+    // Asked from one computer, then another.
+    const again = [await w.store.create(who, PERSONAL_SWARM_OPERATION, 'Personal'), await w.store.create(who, PERSONAL_SWARM_OPERATION, 'Personal')]
     expect(again[0]!.id).not.toBe(wiped)
     expect(again[1]!.id).toBe(again[0]!.id)
     expect((await w.store.read(who, again[0]!.id)).state.id).toBe(again[0]!.id)
@@ -312,6 +312,13 @@ describe('the wipe of every Swarm from before Swarm v4', () => {
     expect((await w.store.create(who, PERSONAL_SWARM_OPERATION, 'Personal')).id).toBe(again[0]!.id)
     // A Team Swarm's request answers its own, deleted or not, as before.
     expect((await w.store.create(who, team, 'Team')).id).toBe(teamTab)
+    // Once the wiped one is purged, row and receipts, the request still answers the live one, not a second.
+    await db.superTabOperation.deleteMany({ where: { tabId: wiped } })
+    await db.swarmHead.deleteMany({ where: { tabId: wiped } })
+    await db.superTab.delete({ where: { id: wiped } })
+    expect((await w.store.create(who, PERSONAL_SWARM_OPERATION, 'Personal')).id).toBe(again[0]!.id)
+    // A different body for the same request is refused, as before.
+    await expect(w.store.create(who, PERSONAL_SWARM_OPERATION, 'Mine')).rejects.toMatchObject({ code: 'OPERATION_REUSED' })
   })
 
 })

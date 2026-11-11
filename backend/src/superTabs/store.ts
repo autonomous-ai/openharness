@@ -124,8 +124,8 @@ function requireParts(row: SwarmRow): SwarmRow {
 
 /** How far a Personal Swarm's request walks its line of deleted ones (store.ts create): one per deletion, so a few. */
 const MAX_PERSONAL_LINE = 20
-/** The most of a person's own Swarms a Personal Swarm's request reads to find their live one. */
-const MAX_OWNED_READ = 500
+/** A person's own Swarms read at a time when a Personal Swarm's request looks for their live one. */
+const OWNED_PAGE = 500
 
 /** What a command or read works on: the index row, the parts it loaded, and the state reassembled from them. */
 export interface Loaded { row: SwarmRow; parts: SwarmParts; state: SuperTabState }
@@ -704,25 +704,32 @@ export class SuperTabStore {
   async create(user: AuthUser, operationId: string, name: string, projectVisibility?: ProjectVisibility) {
     const personal = operationId === PERSONAL_SWARM_OPERATION
     const requestHash = hash({ name, ...(projectVisibility ? { projectVisibility } : {}) })
-    // The person's live Personal Swarm, whichever in its line it is (below).
-    const live = personal ? await this.livePersonal(user) : undefined
-    if (live) return live
+    const first = stableId('super-tab', user.autonomousEnv, user.sub, operationId)
     return transaction(this.db, async tx => {
-      // A request makes its Swarm once; asked again, it answers that one. A Personal Swarm deleted since (by the wipe of every
-      // Swarm before v4, 2026-11) leaves its person none: its request makes the next in its line, named by the one before, so two
-      // computers asking at once make the same one (PSW-B review, 2026-11-11). Before, the request answered the deleted Swarm
-      // until its purge, and every read of it was refused.
-      let id = stableId('super-tab', user.autonomousEnv, user.sub, operationId)
+      // A request makes its Swarm once; asked again, it answers that one. A Personal Swarm deleted since (only the wipe of every
+      // Swarm before v4 deletes one, 2026-11) leaves its person none: its request makes the next in its line, named by the one
+      // before, so their computers name the same one (PSW-B review, 2026-11-11). Before, the request answered the deleted Swarm
+      // until its purge, and every read of it was refused. One point read per step: the line is one long per deletion.
+      let id = first
       for (let step = 0; ; step++) {
-        const prior = await tx.superTabOperation.findUnique({ where: { id } })
         const row = await tx.superTab.findUnique({ where: { id }, select: { deletedAt: true } })
-        if (prior && prior.requestHash !== requestHash) fail('OPERATION_REUSED', 'Use a new operation ID for a different request.')
-        if (!(personal && row?.deletedAt && step < MAX_PERSONAL_LINE)) {
-          // Its receipt is gone after 30 days (operations.ts); the Swarm it made answers it then.
-          if (prior || row) return { id, revision: prior?.revision ?? 0 }
-          break
+        if (personal && row?.deletedAt) {
+          if (step >= MAX_PERSONAL_LINE) {
+            logger.error('[super-tab] a person\'s Personal Swarms were deleted too often to make another', { steps: step })
+            fail('PERSONAL_SWARM_LINE', 'Your Personal Swarm could not be made again. Contact support.', 409)
+          }
+          id = stableId('super-tab', user.autonomousEnv, user.sub, operationId, id)
+          continue
         }
-        id = stableId('super-tab', user.autonomousEnv, user.sub, operationId, id)
+        // The first of its line purged, a later one may live: its person's own Swarms say so (the purge removes a deleted one's
+        // row and receipts after 7 days).
+        const found = !row && personal && step === 0 ? await this.livePersonal(tx, user) : undefined
+        if (found) id = found
+        const prior = await tx.superTabOperation.findUnique({ where: { id } })
+        if (prior && prior.requestHash !== requestHash) fail('OPERATION_REUSED', 'Use a new operation ID for a different request.')
+        // Its receipt is gone after 30 days (operations.ts); the Swarm it made answers it then.
+        if (prior || row || found) return { id, revision: prior?.revision ?? 0 }
+        break
       }
       const state = createSuperTab(id, name, { id: user.sub, email: user.email }, user.autonomousEnv, projectVisibility)
       if (personal) state.personal = true
@@ -735,16 +742,19 @@ export class SuperTabStore {
     }).then(async made => { await this.joined(made.id, user.sub); return made })
   }
 
-  /** [user]'s live Personal Swarm, by the owner index and its head: the first of their own, at most MAX_OWNED_READ. */
-  private async livePersonal(user: AuthUser): Promise<{ id: string; revision: number } | undefined> {
-    const rows = await readBy(this.db, 'SuperTab', 'owner', [{ $match: { autonomousEnv: user.autonomousEnv, ownerId: user.sub, format: 2, deletedAt: null } },
-      { $sort: { _id: 1 } }, { $limit: MAX_OWNED_READ }, { $project: { revision: 1 } }])
-    const heads = await this.heads(rows.map(row => ({ id: row._id as string, format: 2 })))
-    const found = rows.find(row => {
-      const head = heads.get(row._id as string)
-      return head && !head.deletion && isPersonalSwarm({ id: row._id as string, environment: user.autonomousEnv, ownerId: user.sub, personal: head.personal })
-    })
-    return found ? { id: found._id as string, revision: Number(found.revision ?? 0) } : undefined
+  /** [user]'s live Personal Swarm marked so (`personal`), by the owner index and their Swarms' heads, a page at a time: read only
+   *  when the first of their line is gone. */
+  private async livePersonal(tx: Transaction, user: AuthUser): Promise<string | undefined> {
+    for (let after = ''; ;) {
+      const rows = await readBy(tx, 'SuperTab', 'owner', [{ $match: { autonomousEnv: user.autonomousEnv, ownerId: user.sub, _id: { $gt: after }, format: 2, deletedAt: null } },
+        { $sort: { _id: 1 } }, { $limit: OWNED_PAGE }, { $project: { _id: 1 } }])
+      if (!rows.length) return undefined
+      const marked = await readBy(tx, 'SwarmHead', 'id', [{ $match: { _id: { $in: rows.map(row => `${row._id as string}:head`) }, 'data.personal': true,
+        'data.deletion': null } }, { $limit: 1 }, { $project: { tabId: 1 } }])
+      if (marked.length) return marked[0]!.tabId as string
+      if (rows.length < OWNED_PAGE) return undefined
+      after = rows.at(-1)!._id as string
+    }
   }
 
   async list(user: AuthUser, after?: string) {
