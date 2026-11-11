@@ -2743,7 +2743,8 @@ static action_t make_action(hit_t h)
         COPY(a.id, selection.agent);
         copy(a.text, sizeof selection.id, selection.id);
         a.dy = (int)selection.revision;
-    } else if ((s.view == HOME || s.view == AGENT) && h.action == A_PET && carry.active) {
+    } else if ((s.view == HOME || s.view == AGENT) && (h.action == A_PET || h.action == A_VOICE) && carry.active) {
+        // Carried text goes with the voice, from the pet or from Focus's face and [ say ] (A_VOICE).
         if (active()) COPY(a.id,active()->id);
         copy(a.text,sizeof carry.id,carry.id); a.value=3;
     } else if (h.action == A_RETURN) {

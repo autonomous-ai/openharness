@@ -3344,10 +3344,14 @@ int main(int argc, char **argv) {
     tap(2800,233,220); assert(!starts); // no voice while the selected text is being frozen
     assert(ht_carry_reply(&carry,carry.id,carry.request,true,"Research helper","A highlighted paragraph",3,300000,NULL,3000));
     ht_selection_close(&selection); view(HOME); s.active=1; scene_take(); portrait(dir,"carry-home");
-    tap(3400,233,220); assert(starts==1 && !strcmp(target,"b"));   // Focus starts voice from its own touch branch, without the carry context
+    tap(3400,233,220); assert(starts==1 && !strcmp(target,"b") && s.voice_carry && !strcmp(voice_context,carry.id));
     scene_take(); portrait(dir,"carry-listening");
     dispatch((action_t){.kind=A_VOICE_ABORT}); scene_take();
-    tap(4100,233,410); assert(!carry.active && carry_drops==1 && starts==1);
+    // The Focus [ say ] control builds its voice the same way (make_action for A_VOICE): the carry goes with it too.
+    dispatch(make_action((hit_t){.action=A_VOICE}));
+    assert(starts==2 && !strcmp(target,"b") && s.voice_carry && !strcmp(voice_context,carry.id));
+    dispatch((action_t){.kind=A_VOICE_ABORT}); scene_take();
+    tap(4100,233,410); assert(!carry.active && carry_drops==1 && starts==2);
     reset(); view(SELECTION); ht_selection_open(&selection,"pick-test","a",1000,select_emit,NULL);
     assert(ht_selection_reply(&selection,selection.request,"pick-test",true,1,"A highlighted paragraph",3,true,NULL,1010));
     action_t selected_action=make_action((hit_t){.action=A_PET});
