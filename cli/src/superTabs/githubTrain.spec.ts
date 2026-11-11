@@ -624,7 +624,8 @@ describe('a train waits for its own checks, then lands or is closed', () => {
     f.state.pulls.get(5)!.mergeable_state = 'unknown'
     await f.ends(PASSED)
     await f.tick(90 * 60_000)
-    expect(f.trains()[0]).toMatchObject({ state: 'closed', merged_at: null })
+    // Nothing of it changed: it ran out of time, and its title says so.
+    expect(f.trains()[0]).toMatchObject({ state: 'closed', merged_at: null, title: 'Train, out of time: #4 #5' })
     expect(f.logged()).toContainEqual('[super-tab] train acme/app#900 closed: a pull request it carries is no longer ready at its head')
   })
 
@@ -645,6 +646,7 @@ describe('a train waits for its own checks, then lands or is closed', () => {
     await f.ends(PASSED)
     expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual([])
     expect(f.logged()).toContainEqual('[super-tab] train acme/app#900 closed: its branch does not hold what its body names')
+    expect(f.state.pulls.get(900)).toMatchObject({ state: 'closed', title: 'Train: #4 #5' })
     expect([4, 5, 6].map(number => f.state.pulls.get(number)!.state)).toEqual(['open', 'open', 'open'])
   })
 
@@ -714,7 +716,8 @@ describe('a train waits for its own checks, then lands or is closed', () => {
     const tip = f.train().head.sha
     f.state.statuses.set(tip, [...f.state.statuses.get(tip)!, ...Array.from({ length: 1_100 }, (_, at) => ({ context: `noise/${at}`, state: 'success', creator: { login: 'mallory' } }))])
     await f.tick()
-    expect(f.trains()[0]).toMatchObject({ state: 'closed', merged_at: null })
+    // Closed for no reason the day's numbers name: it keeps the title it was built with.
+    expect(f.trains()[0]).toMatchObject({ state: 'closed', merged_at: null, title: 'Train: #4 #5' })
     expect(f.logged()).toContainEqual('[super-tab] train acme/app#900 closed: its tip is not one the train built')
   })
 
@@ -762,7 +765,7 @@ describe('a train waits for its own checks, then lands or is closed', () => {
     f.state.runs.delete(f.train().head.sha)
     await f.settle()
     await f.tick(90 * 60_000)
-    expect(f.trains()[0]).toMatchObject({ state: 'closed', merged_at: null })
+    expect(f.trains()[0]).toMatchObject({ state: 'closed', merged_at: null, title: 'Train, out of time: #4 #5' })
     expect(f.logged()).toContainEqual('[super-tab] train acme/app#900 closed: its checks did not finish in 90 min')
   })
 
@@ -904,7 +907,7 @@ describe('a train waits for its own checks, then lands or is closed', () => {
     await f.settle()
     expect(f.writes(built).slice(0, 2)).toEqual(['PATCH /pulls/900', `DELETE /git/refs/heads/${train.head.ref}`])
     expect(f.writes(built).filter(w => w.startsWith('PUT'))).toEqual([])
-    expect(train.merged_at).toBeNull()
+    expect(train).toMatchObject({ state: 'closed', merged_at: null, title: 'Train: #4 #5' })
   })
 
   it('closes a train whose checks have not finished in 90 minutes, and builds it again', async () => {

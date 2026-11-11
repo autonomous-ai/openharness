@@ -93,7 +93,7 @@ const SELF = 'Harness'
  *  head can change and change order. A restart finds a note said by these first words. */
 const NOTES = { unsigned: 'the READ-OK from ', held: 'the HOLD from ', checks: 'checks failed: ', behind: 'it is behind ', dirty: 'it conflicts with ',
   blocked: 'GitHub\'s rules for ', stacked: 'it carries open ', red: 'its train failed: ' } as const
-export type NoteKind = keyof typeof NOTES
+type NoteKind = keyof typeof NOTES
 const noteStart = (head: string, kind: NoteKind): string => `not merged yet at ${head.slice(0, 7)}: ${NOTES[kind]}`
 /** Which of these notes a comment of the team's is, on whatever head, or null: the day's scoreboard counts the pull requests
  *  told they were behind or in conflict (scoreboard.ts). Read where `said` reads one: in its first 500 characters. */

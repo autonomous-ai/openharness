@@ -136,7 +136,8 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
   it('hands the numbers the day\'s scoreboard, read from GitHub only when they ask for it, and says once a part GitHub does not give', async () => {
     const at = (minutes: number) => new Date(Date.parse('2026-11-09T07:31:00Z') - minutes * 60_000).toISOString()
     const landed = (number: number) => ({ number, created_at: at(120), closed_at: at(30), updated_at: at(30), pull_request: { merged_at: at(30) }, labels: [{ name: 'builder:pip' }] })
-    const f = setup([], { closed: [landed(9), landed(10), landed(11), { number: 20, title: 'Train, base moved: #9', closed_at: at(60), updated_at: at(60), pull_request: { merged_at: null }, labels: [] }] })
+    const train = (title: string, merged: string | null) => ({ number: 20, title, author_association: 'MEMBER', closed_at: at(60), updated_at: at(60), pull_request: { merged_at: merged }, labels: [] })
+    const f = setup([], { closed: [landed(9), landed(10), landed(11), train('Train, base moved: #9', null)] })
     for (const number of [9, 10, 11]) {
       f.github.state.comments.set(number, [{ body: 'Juno, 15:00: READ-OK f6edb44', author_association: 'MEMBER', created_at: at(100) }])
       f.github.state.changed.set(number, ['src/hub.ts', `src/own${number}.ts`])
@@ -144,15 +145,21 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     await f.assigner.tick()
     // Nothing of it is read by the pass itself.
     expect(f.github.state.asked.some(path => path.includes('/files') || /\/issues\/\d+\/comments/.test(path))).toBe(false)
-    const waited = 'A landed change waited 20 min for its first verdict and 70 min from its last READ-OK to landing (medians). None was told to rework. '
-      + 'Trains: 0 landed, 1 closed without landing (base moved 1).'
-    expect(await f.numbers.mock.calls[0]![3]()).toBe(`${waited} Files touched most in 7 days (3 landings): \`src/hub.ts\` 100%.`)
+    const waited = 'Last 3 landed: 20 min from opened to a first verdict (median of 3), 70 min from the last READ-OK to landing (median of 3); '
+      + 'none was told it was behind or in conflict. Trains: 0 landed, 1 closed without landing (base moved 1).'
+    expect(await f.numbers.mock.calls[0]![3]()).toBe(`${waited} Files touched most, of the last 3 landings: \`src/hub.ts\` 100%.`)
     expect(f.github.state.asked.filter(path => path.includes('/files') || /\/issues\/\d+\/comments/.test(path))).toHaveLength(6)
     // The PM's own landed pull requests are the team's too.
     const g = setup([], { closed: [{ ...landed(9), labels: [{ name: 'builder:faye' }] }] })
     g.github.state.comments.set(9, [{ body: 'Juno, 15:00: READ-OK f6edb44', author_association: 'MEMBER', created_at: at(100) }])
     await g.assigner.tick()
-    expect(await g.numbers.mock.calls[0]![3]()).toBe('A landed change waited 20 min for its first verdict and 70 min from its last READ-OK to landing (medians). None was told to rework.')
+    expect(await g.numbers.mock.calls[0]![3]()).toBe('Last 1 landed: 20 min from opened to a first verdict (median of 1), 70 min from the last READ-OK to landing (median of 1); '
+      + 'none was told it was behind or in conflict.')
+    // The closed list it read was full of the day's: there may be more trains than it held, and the words say so.
+    const h = setup([], { closed: [train('Train: #9', at(60)), ...Array.from({ length: 99 }, (_, n) => ({ number: 100 + n, closed_at: at(60), updated_at: at(60), labels: [] }))] })
+    await h.assigner.tick()
+    expect(h.numbers.mock.calls[0]![1]).toMatchObject({ more: true })
+    expect(await h.numbers.mock.calls[0]![3]()).toBe('Trains, at least: 1 landed.')
     // A part GitHub does not give is left out, and said once in the log however often the day is posted.
     f.github.state.failing = /\/files$/
     expect(await f.numbers.mock.calls[0]![3]()).toBe(waited)

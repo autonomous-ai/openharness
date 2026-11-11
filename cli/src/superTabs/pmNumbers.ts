@@ -19,7 +19,7 @@
  * (goal.ts), and that only as a line that says it is sent: how many of its milestones pass on its main branch. A project
  * with no goal is told in the line how to state one; a goal that could not be read is left out of it. The day's post says
  * the day's scoreboard too (scoreboard.ts: where a landed change waited, what the trains did, the files most landings touch),
- * read as that post is made and once for its day.
+ * read as that post is made and once for its day: what it said is kept with the project's record until the post is taken.
  *
  * It says only what is so now: who has nothing, what is open, what landed. Its first three reviews found what more memory and
  * more rules cost: a person told of a night nobody watched, a message kept and typed three hours late, a file written every
@@ -214,8 +214,9 @@ export const numbersSender = (read: (project: LedProject) => Promise<Json>, post
     post(`/api/super-tabs/${project.tabId}/commands`, { operationId, asAgentId: project.pmAgentId, command: messageOf(how, project, await read(project), text) })
 
 /** What is kept of a project on disk: when its PM was last told, how many times since the project last moved, when that
- *  was, whether its person was told, and the day its numbers were last posted. */
-interface Kept { typedAt: number; told: number; said: boolean; activity: number; day: string }
+ *  was, whether its person was told, the day its numbers were last posted, and, while a day's post is not yet taken, what
+ *  that day's scoreboard said. */
+interface Kept { typedAt: number; told: number; said: boolean; activity: number; day: string; board?: { day: string; words: string } }
 
 const dayOf = (at: Date): string => `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, '0')}-${String(at.getDate()).padStart(2, '0')}`
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'], MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -226,8 +227,6 @@ export class PmNumbers {
   private readonly waits = new Map<string, Map<string, number>>()
   /** After a send the server did not take: how many in a row, and when the next goes, by project and kind. */
   private readonly retries = new Map<string, { misses: number; at: number }>()
-  /** What each project's scoreboard says for the day whose post is being tried, until the server has that post. */
-  private readonly boards = new Map<string, { day: string; words: string }>()
   private readonly said = new Set<string>()
   private readonly now: () => number
   private readonly log: (line: string) => void
@@ -284,9 +283,9 @@ export class PmNumbers {
     if (at.getHours() >= DAY_HOUR && day > kept.day) {
       // A day in which nothing landed and no task closed has no numbers to post.
       if (!numbers.landed && !numbers.closed
-        || await this.send('post', project, day, async () => dayLine(numbers, `${DAYS[at.getDay()]} ${at.getDate()} ${MONTHS[at.getMonth()]}`, await read(), await this.board(project, day, board))) !== 'later') {
+        || await this.send('post', project, day, async () => dayLine(numbers, `${DAYS[at.getDay()]} ${at.getDate()} ${MONTHS[at.getMonth()]}`, await read(), await this.board(project, kept, day, board))) !== 'later') {
         kept.day = day
-        this.boards.delete(id)
+        delete kept.board
       }
     }
     if (JSON.stringify(kept) === before) return
@@ -296,20 +295,23 @@ export class PmNumbers {
     this.save(memory)
   }
 
-  /** What [project]'s scoreboard says for [day]'s post, read once: a post the server did not take goes again with the same,
-   *  as its reads are a hundred requests or more (scoreboard.ts), and tries come from 30 seconds apart. One that cannot be read
-   *  is said once, and the day is posted without it. Kept for the projects whose post failed last. */
-  private async board(project: LedProject, day: string, read: () => Promise<string>): Promise<string> {
-    const kept = this.boards.get(project.projectId)
-    if (kept?.day === day) return kept.words
-    const words = await read().catch(error => {
+  /** What [project]'s scoreboard says for [day]'s post, read once for the day: its reads are a hundred requests or more
+   *  (scoreboard.ts), and a post the server does not take is tried again from 30 seconds apart, so it goes again with the same
+   *  words. That it is being read is written with the project's record before the read: a daemon that restarts meanwhile (a
+   *  release restarts every PM's) posts the day without it and does not read again (its review counted 3,000 requests a day
+   *  with a server refusing the post and a restart each hour). One that cannot be read is said once, and left out. */
+  private async board(project: LedProject, kept: Kept, day: string, read: () => Promise<string>): Promise<string> {
+    if (kept.board?.day === day) return kept.board.words
+    const memory = this.memory!
+    kept.board = { day, words: '' }
+    delete memory[project.projectId]
+    memory[project.projectId] = kept
+    this.save(memory)
+    kept.board.words = await read().catch(error => {
       this.once(`[super-tab] numbers: SCOREBOARD_UNREAD ${project.repo}: ${error instanceof Error ? error.message : String(error)}`)
       return ''
     })
-    this.boards.delete(project.projectId)
-    this.boards.set(project.projectId, { day, words })
-    if (this.boards.size > MAX_KEPT) this.boards.delete(this.boards.keys().next().value!)
-    return words
+    return kept.board.words
   }
 
   /**
@@ -358,7 +360,9 @@ export class PmNumbers {
         const row = object(value)
         if (identifier(id) && Number.isSafeInteger(row.typedAt) && Number.isSafeInteger(row.told) && typeof row.said === 'boolean' && Number.isSafeInteger(row.activity)
           && typeof row.day === 'string') {
-          kept[id] = { typedAt: row.typedAt as number, told: row.told as number, said: row.said, activity: row.activity as number, day: row.day }
+          const board = object(row.board)
+          kept[id] = { typedAt: row.typedAt as number, told: row.told as number, said: row.said, activity: row.activity as number, day: row.day,
+            ...typeof board.day === 'string' && typeof board.words === 'string' ? { board: { day: board.day, words: board.words } } : {} }
         }
       }
     } catch { /* none kept yet, or unreadable: counted from now */ }

@@ -155,7 +155,7 @@ export class GitHubReads {
 
   /** Up to [maxPages] pages of a list as it is now, asked outright and not kept (fresh): the comments and files of closed pull
    *  requests, read once a day (scoreboard.ts), which kept under their ETags would push out the ones every pass asks with. */
-  async freshPages(repo: string, path: string, maxPages = 3): Promise<Json[]> {
+  async freshPages(repo: string, path: string, maxPages: number): Promise<Json[]> {
     return this.pages(repo, path, maxPages, false, true)
   }
 
@@ -184,6 +184,9 @@ export class GitHubReads {
     const rows: Json[] = []
     for (let page = 1; page <= maxPages; page++) {
       const body = await this.read(repo, page === 1 ? path : `${path}&page=${page}`, keep, false, once)
+      // Asked outright there is no 304: no body is an answer cut off on its way (a list of a hundred files with their patches
+      // is 600 KB against the 10 s deadline), and read as the end of the list it would count as nothing, with nothing said.
+      if (body === null && once) throw new GitHubStop('GH_FAILED', 'GitHub\'s answer did not arrive whole.', false, this.now())
       if (body === null) return rows
       if (!Array.isArray(body)) throw new GitHubStop('GH_FAILED', 'GitHub answered something unreadable.', false, this.now())
       rows.push(...body.map(object))
