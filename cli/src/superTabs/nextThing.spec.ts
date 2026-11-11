@@ -360,12 +360,14 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     expect(f.log).toHaveBeenCalledWith('[super-tab] next thing of agent pip: acme/app#14 not given back: GitHub answered 403.')
     expect(f.say).not.toHaveBeenCalled()
     f.refuse.clear()
+    // Its line held back (githubWrites.ts) or refused: given back all the same, and said (code review of #4084).
     let clears = 0
-    f.send.mockImplementation(async (method, path) => ({ status: method === 'DELETE' && path.endsWith('status%3Ataken') && clears++ === 1 ? 500 : 200,
-      etag: null, body: null, resetAt: null }))
+    f.send.mockImplementation(async (method, path) => ({ status: method === 'DELETE' && path.endsWith('status%3Ataken') && clears++ === 1 ? 500
+      : method === 'POST' && path.endsWith('/comments') ? 429 : 200, etag: null, body: null, resetAt: null }))
     await f.end()
     await vi.advanceTimersByTimeAsync(IDLE_BACK_MS)
     expect(f.log).toHaveBeenCalledWith('[super-tab] next thing of agent pip: acme/app#14 kept status:taken: GitHub answered 500.')
+    expect(f.log).toHaveBeenCalledWith('[super-tab] next thing of agent pip: acme/app#14\'s line not written: GitHub answered 429.')
     expect(f.say).toHaveBeenCalledTimes(1)
     await f.end()
     f.state.down = true

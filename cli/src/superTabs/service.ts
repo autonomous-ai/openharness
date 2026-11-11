@@ -167,7 +167,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   // GitHub as this computer's own gh login, for the news to its person's v4 agents and the merges of their PM's projects:
   // read and merged while the host runs (no host, no Swarm agents here to read or merge for).
   // Every write passes the gate: nothing of Harness's said twice in a day, and none past its hourly limits (githubWrites.ts).
-  const github = gatedWrites((options.github ?? githubRest)(), { file: join(core.dataDir, 'super-tab-github-writes.json') })
+  const github = gatedWrites((options.github ?? githubRest)())
   // What GitHub names a project's repository now: a take, a read or a cut may name it either way (githubVerdict.ts ProjectRepositories).
   const currentName = currentNames(github.get)
   // The verdicts, claims and cuts being made by command now, by agent and what was asked: as many as there are commands running.

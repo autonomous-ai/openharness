@@ -234,7 +234,9 @@ export class GitHubAssign {
       if ('refused' in given) { this.once(`[super-tab] Task assignment: TAKE_BACK_REFUSED ${repo}#${back.number}: GitHub answered ${given.refused}`); continue }
       if (given.takenKept !== null) this.once(`[super-tab] Task assignment: TAKEN_NOT_CLEARED ${repo}#${back.number}: GitHub answered ${given.takenKept}`)
       this.backs.add(key)
-      await this.deps.send('POST', `/repos/${repo}/issues/${back.number}/comments`, { body: backLine(back.why, this.clock()) })
+      const said = await this.deps.send('POST', `/repos/${repo}/issues/${back.number}/comments`, { body: backLine(back.why, this.clock()) })
+      // Taken back all the same: the labels say so. Its line held or refused is said here (githubWrites.ts holds a line said too often).
+      if (said.status >= 300) this.once(`[super-tab] Task assignment: LINE_REFUSED ${repo}#${back.number}: GitHub answered ${said.status}`)
       this.log(`[super-tab] took ${repo}#${back.number} back: ${back.why}`)
     }
   }
@@ -578,8 +580,10 @@ export class GitHubAssign {
       return false
     }
     this.given.set(`${project.repo}#${number}`, label)
-    await this.deps.send('POST', `/repos/${project.repo}/issues/${number}/comments`,
+    const said = await this.deps.send('POST', `/repos/${project.repo}/issues/${number}/comments`,
       { body: `${SELF}, ${this.clock()}: for **${name}**: ${reasonOf(pick, read)}.` })
+    // Given all the same: its label is on, and its builder's turn's end types it (nextThing.ts). Its line held or refused is said here.
+    if (said.status >= 300) this.once(`[super-tab] Task assignment: LINE_REFUSED ${project.repo}#${number}: GitHub answered ${said.status}`)
     this.log(`[super-tab] gave ${project.repo}#${number} to ${name} (${reasonOf(pick, read)})`)
     return true
   }

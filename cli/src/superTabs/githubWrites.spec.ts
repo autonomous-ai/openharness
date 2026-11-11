@@ -1,121 +1,105 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { afterAll, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { GitHubReply, GitHubSend } from './githubRest.js'
-import { gatedWrites, SAME_TEXT_MS, TEXTS_PER_HOUR, TEXTS_PER_MINUTE } from './githubWrites.js'
-
-const dirs: string[] = []
-afterAll(() => { for (const dir of dirs) rmSync(dir, { recursive: true, force: true }) })
+import { gatedWrites, SAME_TEXT_TIMES, TEXTS_PER_HOUR, TEXTS_PER_MINUTE } from './githubWrites.js'
 
 const ASK = (at: string) => `Harness, ${at}, to **Uma**: please read this pull request, then run \`harness super-tab read ok acme/app#30 166f687 'what you found'\`.`
+const HELD = 'Harness holds back this write to GitHub: it said this here twice today, or wrote too much in the last minute or hour.'
+const DAY_MS = 24 * 60 * 60_000
 
-function setup(file?: string) {
-  const dir = mkdtempSync(join(tmpdir(), 'github-writes-'))
-  dirs.push(dir)
+function setup() {
   const clock = { now: Date.parse('2026-11-11T22:00:00Z') }
-  const answer = { status: 201 }
+  const answer: { status: number; slow: Promise<void> | null } = { status: 201, slow: null }
   const sent: Array<{ method: string; path: string; body: unknown }> = []
-  const send: GitHubSend = async (method, path, body) => { sent.push({ method, path, body }); return { status: answer.status, etag: null, body: { id: sent.length }, resetAt: null } }
+  const send: GitHubSend = async (method, path, body) => {
+    sent.push({ method, path, body })
+    await answer.slow
+    return { status: answer.status, etag: null, body: { id: sent.length }, resetAt: null }
+  }
   const get = vi.fn(async (): Promise<GitHubReply> => ({ status: 200, etag: null, body: {}, resetAt: null }))
   const log = vi.fn()
-  const path = file ?? join(dir, 'writes.json')
-  const make = () => gatedWrites({ get, send }, { file: path, now: () => clock.now, log })
-  return { clock, answer, sent, get, log, make, path, gate: make() }
+  return { clock, answer, sent, get, log, gate: gatedWrites({ get, send }, { now: () => clock.now, log }) }
 }
 
 describe('Harness\'s writes to GitHub in its person\'s name (githubWrites.ts)', () => {
   // #4055: Uma was asked to read three times in an hour, a comment in its person's name each time (anh Dee, 2026-11-11: "never spam
-  // github as user accounts could be banned").
-  it('writes a line of Harness\'s once on an issue in a day, whatever its clock says, and says so once', async () => {
+  // github as user accounts could be banned"). A task given back to the same builder twice in a day is said twice, as it happened.
+  it('writes the same line of Harness\'s on an issue twice in a day at most, whatever its clock says, and says the hold once', async () => {
     const f = setup()
-    expect((await f.gate.send('POST', '/repos/acme/app/issues/30/comments', { body: ASK('21:34') })).status).toBe(201)
-    for (const at of ['22:05', '22:35']) {
+    const start = f.clock.now
+    for (const at of ['21:34', '22:05', '22:35', '23:05']) {
+      const reply = await f.gate.send('POST', '/repos/acme/app/issues/30/comments', { body: ASK(at) })
       f.clock.now += 30 * 60_000
-      expect(await f.gate.send('POST', '/repos/acme/app/issues/30/comments', { body: ASK(at) })).toEqual({ status: 201, etag: null, body: {}, resetAt: null })
+      if (f.sent.length > SAME_TEXT_TIMES) throw new Error(`written ${f.sent.length} times`)
+      if (at >= '22:35') expect(reply).toEqual({ status: 429, etag: null, body: { message: HELD }, resetAt: start + DAY_MS })
     }
-    expect(f.sent).toHaveLength(1)
-    expect(f.log.mock.calls).toEqual([['[super-tab] GitHub writes: SAME_TEXT /repos/acme/app/issues/30/comments: Harness wrote it there in the last day']])
-    // On another pull request it is another line; a day on, it is written again.
-    await f.gate.send('POST', '/repos/acme/app/issues/31/comments', { body: ASK('22:35') })
-    f.clock.now += SAME_TEXT_MS
-    await f.gate.send('POST', '/repos/acme/app/issues/30/comments', { body: ASK('22:35') })
-    expect(f.sent.map(write => write.path)).toEqual(['/repos/acme/app/issues/30/comments', '/repos/acme/app/issues/31/comments', '/repos/acme/app/issues/30/comments'])
+    expect(f.sent).toHaveLength(SAME_TEXT_TIMES)
+    expect(f.log.mock.calls).toEqual([[expect.stringMatching(/^\[super-tab\] GitHub writes: SAME_TEXT \/repos\/acme\/app\/issues\/30\/comments \w+: Harness wrote it there 2 times in the last day$/)]])
+    // On another pull request it is another line; a day after the first, it goes again.
+    expect((await f.gate.send('POST', '/repos/acme/app/issues/31/comments', { body: ASK('23:30') })).status).toBe(201)
+    f.clock.now = start + DAY_MS
+    expect((await f.gate.send('POST', '/repos/acme/app/issues/30/comments', { body: ASK('22:00') })).status).toBe(201)
+    expect(f.sent).toHaveLength(4)
+  })
+
+  it('leaves out only the clock that signs a line: another time inside it is another line', async () => {
+    const f = setup()
+    for (const until of ['14:00', '15:00', '16:00']) {
+      await f.gate.send('POST', '/repos/acme/app/issues/30/comments', { body: `Harness, 05:00, to **Pip**: the train waits until ${until}.` })
+    }
+    expect(f.sent).toHaveLength(3)
   })
 
   it('writes an agent\'s own words made by command each time: its command says them once', async () => {
     const f = setup()
-    for (let i = 0; i < 2; i++) await f.gate.send('POST', '/repos/acme/app/issues/14/comments', { body: 'Pip, 05:00: taken by Pip' })
-    expect(f.sent).toHaveLength(2)
+    for (let i = 0; i < 3; i++) await f.gate.send('POST', '/repos/acme/app/issues/14/comments', { body: 'Pip, 05:00: taken by Pip' })
+    expect(f.sent).toHaveLength(3)
   })
 
-  it('holds back texts past 75 a minute and 200 an hour, answered as a limit with when to try again; labels and merges pass', async () => {
+  it('holds back texts past 75 a minute and 200 an hour, with when to try again; labels, merges and edits pass', async () => {
     const f = setup()
     const start = f.clock.now
     for (let i = 0; i < TEXTS_PER_MINUTE; i++) await f.gate.send('POST', '/repos/acme/app/issues', { title: `Task ${i}`, body: 'Do it.' })
     expect(await f.gate.send('POST', '/repos/acme/app/issues/30/comments', { body: 'Pip, 05:00: cut #31' }))
-      .toEqual({ status: 429, etag: null, body: { message: 'Harness holds back its writes to GitHub: too many in the last minute or hour.' }, resetAt: start + 60_000 })
+      .toEqual({ status: 429, etag: null, body: { message: HELD }, resetAt: start + 60_000 })
     expect(f.log).toHaveBeenCalledWith('[super-tab] GitHub writes: LIMIT 75 a minute reached; the rest wait until 22:01 UTC')
-    // What writes no text passes, limit or none: the work needs it.
     expect((await f.gate.send('POST', '/repos/acme/app/issues/30/labels', { labels: ['status:taken'] })).status).toBe(201)
     expect((await f.gate.send('PUT', '/repos/acme/app/pulls/30/merge', { merge_method: 'squash' })).status).toBe(201)
     expect((await f.gate.send('PATCH', '/repos/acme/app/pulls/30', { state: 'closed' })).status).toBe(201)
     // A minute on, more go; the hour's limit holds the rest until the first of the hour is an hour old.
     for (let i = 0; f.sent.length < TEXTS_PER_HOUR + 3; i++) {
       f.clock.now += 60_000
-      for (let j = 0; j < 20; j++) await f.gate.send('POST', `/repos/acme/app/issues/${i}/comments`, { body: `Pip, 05:00: note ${j}` })
+      for (let j = 0; j < 40; j++) await f.gate.send('POST', `/repos/acme/app/issues/${i}/comments`, { body: `Pip, 05:00: note ${j}` })
     }
     expect(f.sent.filter(write => write.method === 'POST' && !write.path.endsWith('/labels'))).toHaveLength(TEXTS_PER_HOUR)
     expect((await f.gate.send('POST', '/repos/acme/app/issues/30/comments', { body: 'one more' })).resetAt).toBe(start + 60 * 60_000)
-    expect(f.log).toHaveBeenCalledWith(expect.stringMatching(/^\[super-tab\] GitHub writes: LIMIT 200 an hour reached; the rest wait until 23:00 UTC$/))
+    expect(f.log).toHaveBeenCalledWith('[super-tab] GitHub writes: LIMIT 200 an hour reached; the rest wait until 23:00 UTC')
   })
 
-  it('counts and keeps only what GitHub took', async () => {
+  it('counts writes running at once before they go, and gives back what GitHub did not take', async () => {
     const f = setup()
+    let release!: () => void
+    f.answer.slow = new Promise(resolve => { release = resolve })
+    const all = Array.from({ length: TEXTS_PER_MINUTE + 1 }, (_, i) => f.gate.send('POST', `/repos/acme/app/issues/${i}/comments`, { body: `Pip, 05:00: note ${i}` }))
+    release()
+    expect((await Promise.all(all)).map(reply => reply.status).filter(status => status === 429)).toHaveLength(1)
+    // A minute on: one GitHub refused, and one that failed outright, are not counted, and the line goes again.
+    f.clock.now += 60_000
+    f.answer.slow = null
     f.answer.status = 502
     await f.gate.send('POST', '/repos/acme/app/issues/30/comments', { body: ASK('21:34') })
     f.answer.status = 201
-    await f.gate.send('POST', '/repos/acme/app/issues/30/comments', { body: ASK('21:35') })
-    expect(f.sent).toHaveLength(2)
-  })
-
-  it('knows what it wrote over a restart, and starts afresh from a file it cannot read', async () => {
-    const f = setup()
-    await f.gate.send('POST', '/repos/acme/app/issues/30/comments', { body: ASK('21:34') })
-    await f.make().send('POST', '/repos/acme/app/issues/30/comments', { body: ASK('21:40') })
-    expect(f.sent).toHaveLength(1)
-    writeFileSync(f.path, JSON.stringify({ lines: 'nothing', texts: 7 }))
-    await f.make().send('POST', '/repos/acme/app/issues/30/comments', { body: ASK('21:45') })
-    writeFileSync(f.path, '{')
-    await f.make().send('POST', '/repos/acme/app/issues/30/comments', { body: ASK('21:50') })
-    expect(f.sent).toHaveLength(3)
-  })
-
-  it('keeps what it wrote in memory when it cannot save it, and says so once', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'github-writes-locked-'))
-    dirs.push(dir)
-    chmodSync(dir, 0o500)
-    try {
-      const f = setup(join(dir, 'writes.json'))
-      await f.gate.send('POST', '/repos/acme/app/issues/30/comments', { body: ASK('21:34') })
-      await f.gate.send('POST', '/repos/acme/app/issues/31/comments', { body: ASK('21:34') })
-      await f.gate.send('POST', '/repos/acme/app/issues/30/comments', { body: ASK('21:40') })
-      expect(f.sent).toHaveLength(2)
-      expect(f.log.mock.calls.filter(([line]) => String(line).includes('NOT_SAVED'))).toEqual([['[super-tab] GitHub writes: NOT_SAVED EACCES']])
-    } finally {
-      chmodSync(dir, 0o700)
-    }
+    const failing = gatedWrites({ get: f.get, send: async () => { throw new Error('GitHub did not answer.') } }, { now: () => f.clock.now, log: f.log })
+    await expect(failing.send('POST', '/repos/acme/app/issues/30/comments', { body: ASK('21:34') })).rejects.toThrow('GitHub did not answer.')
+    await expect(failing.send('POST', '/repos/acme/app/issues/30/comments', { body: ASK('21:34') })).rejects.toThrow('GitHub did not answer.')
+    await expect(failing.send('POST', '/repos/acme/app/issues/30/comments', { body: ASK('21:34') })).rejects.toThrow('GitHub did not answer.')
+    for (const at of ['21:35', '21:36']) expect((await f.gate.send('POST', '/repos/acme/app/issues/30/comments', { body: ASK(at) })).status).toBe(201)
   })
 
   it('reads its clock and writes its log as the daemon does when given none', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const dir = mkdtempSync(join(tmpdir(), 'github-writes-'))
-    dirs.push(dir)
-    const send: GitHubSend = async () => ({ status: 201, etag: null, body: {}, resetAt: null })
-    const gate = gatedWrites({ get: async () => ({ status: 200, etag: null, body: {}, resetAt: null }), send }, { file: join(dir, 'writes.json') })
-    await gate.send('POST', '/repos/acme/app/issues/30/comments', { body: ASK('21:34') })
-    await gate.send('POST', '/repos/acme/app/issues/30/comments', { body: ASK('21:35') })
-    expect(warn).toHaveBeenCalledWith('[super-tab] GitHub writes: SAME_TEXT /repos/acme/app/issues/30/comments: Harness wrote it there in the last day')
+    const gate = gatedWrites({ get: async () => ({ status: 200, etag: null, body: {}, resetAt: null }), send: async () => ({ status: 201, etag: null, body: {}, resetAt: null }) })
+    for (const at of ['21:34', '21:35', '21:36']) await gate.send('POST', '/repos/acme/app/issues/30/comments', { body: ASK(at) })
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/GitHub writes: SAME_TEXT \/repos\/acme\/app\/issues\/30\/comments/))
     warn.mockRestore()
   })
 })

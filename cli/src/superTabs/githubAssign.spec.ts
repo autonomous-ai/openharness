@@ -1053,6 +1053,20 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       expect(f.said().some(([, body]) => String(body).includes('Juno has had no activity on it since it was asked'))).toBe(true)
     })
 
+    // Code review of #4084: a line held back (githubWrites.ts) or refused was dropped without a word; the task moves all the same.
+    it('takes a task back and gives it on all the same when GitHub refuses their lines, and says each line was not written', async () => {
+      const f = setup([issue(1, ['size:s', 'builder:juno', 'status:taken'])])
+      f.github.state.open[0]!.updated_at = ago(f, 5)
+      await f.assigner.tick()
+      f.github.state.commentAnswer = 429
+      f.clock.now += 5 * HOUR
+      await f.assigner.tick()
+      await f.assigner.tick()
+      expect(f.log).toHaveBeenCalledWith(expect.stringMatching(/^\[super-tab\] took acme\/app#1 back: /))
+      expect(f.log).toHaveBeenCalledWith('[super-tab] Task assignment: LINE_REFUSED acme/app#1: GitHub answered 429')
+      expect(f.log).toHaveBeenCalledWith(expect.stringMatching(/^\[super-tab\] gave acme\/app#1 to /))
+    })
+
     it('after a restart, asks no second time, and gives the task to another 4 hours after its ask', async () => {
       const f = setup([issue(1, ['size:s', 'builder:juno', 'status:taken'])])
       f.github.state.open[0]!.updated_at = ago(f, 5)
