@@ -18,12 +18,12 @@ import 'keymap_host_test.dart' show MemoryKeymap;
 import 'support/capture.dart';
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
 
-/// Attach, beside + in Your Team (Swarm v4, anh Dee 2026-11-09: "this is like cmd p. while + is like cmd n"), clicked
-/// through as a person does: ⌘P's picker of the agents running on their own computers, and the one chosen joins their
-/// team with its own chat.
 /// Set to a folder to write the pull request's pictures of Remove there.
 final _shots = Platform.environment['REMOVE_AGENT_SHOTS'];
 
+/// Attach, beside + in Your Team (Swarm v4, anh Dee 2026-11-09: "this is like cmd p. while + is like cmd n"), clicked
+/// through as a person does: ⌘P's picker of the agents running on their own computers, and the one chosen joins their
+/// team with its own chat.
 void main() {
   setUpAll(() => loadCaptureFonts(_shots));
   Finder key(String k) => find.byKey(ValueKey(k));
@@ -373,6 +373,13 @@ void main() {
     await tester.tap(find.text('Keep open'));
     await tester.pumpAndSettle();
     expect(key('remove-agent-confirm'), findsOneWidget);
+    expect(removals(f), isEmpty);
+    // Closing past the refusal in the review: the session still runs, so the Swarm keeps it, and says so.
+    await tester.tap(key('remove-agent-confirm'));
+    await tester.pumpAndSettle();
+    await tester.tap(key('session-close-view'));
+    await tester.pumpAndSettle();
+    expect(find.text('Its session is still running.'), findsOneWidget);
     expect(removals(f), isEmpty);
     expect(
       f.app.superTabs

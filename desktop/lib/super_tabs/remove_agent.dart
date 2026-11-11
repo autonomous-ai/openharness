@@ -25,15 +25,16 @@ Future<void> removeSwarmAgent(
 }) async {
   var busy = false;
   String? stopFailure;
-  final inTab = app != null && _shownInTab(app, agent);
   await showAppDialog<void>(
     context: context,
     builder: (context) => SuperTabDialogScope(
       controller: c,
       child: StatefulBuilder(
         builder: (context, update) => ListenableBuilder(
-          listenable: c,
+          listenable: Listenable.merge([c, ?app]),
           builder: (context, _) {
+            // Read again on each draw: a tab that shows it may close while the dialog is open.
+            final stops = app == null ? null : _lastPlaceSession(app, c, agent);
             final pending = c.pendingCommand;
             final checking =
                 pending?['type'] == 'agent.remove' &&
@@ -51,9 +52,11 @@ Future<void> removeSwarmAgent(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        inTab
+                        stops != null
+                            ? 'Its chat goes and its session stops.'
+                            : app != null && _shownInTab(app, agent)
                             ? 'Its chat goes. It keeps running in your tab.'
-                            : 'Its chat goes and its session stops.',
+                            : 'Its chat goes.',
                         style: DesktopChrome.text(),
                       ),
                       if (stopFailure ?? c.operationError
@@ -80,9 +83,9 @@ Future<void> removeSwarmAgent(
                               busy = true;
                               stopFailure = null;
                             });
-                            final stopped = checking || inTab || app == null
+                            final stopped = checking || stops == null
                                 ? (stopped: true, refused: null)
-                                : await _stopLastPlace(app, agent);
+                                : await _stopLastPlace(app!, stops);
                             if (!context.mounted) return;
                             if (!stopped.stopped) {
                               update(() {
@@ -128,13 +131,15 @@ bool _shownInTab(AppNotifier app, SuperTabAgent agent) => app.swarms.any(
       ),
 );
 
-/// Stops [agent]'s session as its last view's close does ([AppNotifier.reviewSessionClose]): quietly while idle, after
-/// asking while it works. Not [stopped] when its person kept it running there, with why when its computer refused.
-/// Nothing to stop (a computer this app does not reach, a session already stopped) is stopped.
-Future<({bool stopped, String? refused})> _stopLastPlace(
+/// [agent]'s session, when removing it from Your Team of [c] is its last place, by the rule closing a tab's last view
+/// keeps (`AppNotifier._requestViewClose`): none while one of its person's tabs shows it, another Swarm has it as an
+/// agent or it is a project's PM, and none that its computer cannot close (not reached, shared, a session already stopped,
+/// one with no terminal, or a CLI too old to close it safely). Those keep running as they are.
+(String, Agent)? _lastPlaceSession(
   AppNotifier app,
+  SuperTabController c,
   SuperTabAgent agent,
-) async {
+) {
   final machine = app.stateOf(agent.machineId);
   final session = machine?.agents
       .where((a) => a.id == agent.harnessId)
@@ -142,16 +147,55 @@ Future<({bool stopped, String? refused})> _stopLastPlace(
   if (machine == null ||
       session == null ||
       session.isStopped ||
+      !session.terminalAvailable ||
+      !session.closeSupported ||
+      session.createdAt == null ||
+      machine.machine.isShared ||
       machine.belongsToOtherAccount ||
-      machine.connectionStatus != ConnectionStatus.connected) {
-    return (stopped: true, refused: null);
+      machine.connectionStatus != ConnectionStatus.connected ||
+      _shownInTab(app, agent) ||
+      app.superTabs.leadProtectionReasonForHarness(
+            agent.machineId,
+            agent.harnessId,
+          ) !=
+          null) {
+    return null;
   }
+  final elsewhere = app.superTabs.loadedControllers.any(
+    (other) =>
+        other.tabId != c.tabId &&
+        (other.snapshot?.agents.any(
+              (a) =>
+                  sameMachineId(a.machineId, agent.machineId) &&
+                  a.harnessId == agent.harnessId,
+            ) ??
+            false),
+  );
+  return elsewhere ? null : (machine.machine.machineId, session);
+}
+
+/// Stops [session] as its last view's close does ([AppNotifier.reviewSessionClose]): quietly while idle, after asking while
+/// it works. Not [stopped] when its person kept it running, or when it still runs after the review (a stop its computer
+/// refused or could not confirm, closed past in the review): the Swarm keeps it then, as it was.
+Future<({bool stopped, String? refused})> _stopLastPlace(
+  AppNotifier app,
+  (String, Agent) session,
+) async {
   final review = app.reviewSessionClose;
   if (review == null) {
     return (stopped: false, refused: 'Its session could not be stopped.');
   }
-  final done = await review([(machine.machine.machineId, session)]);
-  return (stopped: done, refused: null);
+  if (!await review([session])) return (stopped: false, refused: null);
+  final (machineId, agent) = session;
+  final now = app
+      .stateOf(machineId)
+      ?.agents
+      .where((a) => a.id == agent.id)
+      .firstOrNull;
+  if (now != null && !now.isStopped && now.continuesSession(agent)) {
+    return (stopped: false, refused: 'Its session is still running.');
+  }
+  return (stopped: true, refused: null);
 }
 
 /// The view moves off the chat of the agent just removed, to the next agent's chat or, with none, the first project's channel;
