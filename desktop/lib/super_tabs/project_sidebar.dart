@@ -555,6 +555,8 @@ class ProjectSidebar extends StatelessWidget {
         name: pane.name,
         size: SuperTabQuietRow.faceSize,
         face: true,
+        // Grey while its computer is off, as an agent's face is.
+        offline: pane.machine.isOffline,
       ),
       name: pane.name,
       detail: busy ? 'joining' : pane.place,
