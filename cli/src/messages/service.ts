@@ -42,8 +42,7 @@ import { type DirectoryTab, MessageDirectory, type Member } from './directory.js
 import { PaneInbox } from './inbox.js'
 import { Mailbox, type MailboxAgent } from './mailbox.js'
 import { type DeliveryStatus, LIMITS, LONG_TEXT, longAdvice, type Message, MessageError, messageId, note, parseMessage, type Recipient, rendered, type TabNote, type Teammate } from './model.js'
-import { RELAYED_TAB, relayedText, relayRefusal, TOLD_TAB, tellRefusal, toldText, type RelayTarget } from './tell.js'
-import { buddyGrantLive, buddyReadsOf } from '../lib/buddyGuard.js'
+import { TOLD_TAB, tellRefusal, toldText } from './tell.js'
 import { PERSON_AGENT_ID, REPLIED_TAB, replyRefusal } from './replyLocal.js'
 import { messagesRpc, RefusedError, type Rpc } from './rpc.js'
 import { RequestStore } from './requestStore.js'
@@ -89,8 +88,7 @@ export interface MessagesOptions {
   project?: (cwd: string) => Promise<{ branch: string | null } | null>
   /** The shared tabs' tasks (tasks.ts, which runs `gh`); a test's own, so no test starts the real one. */
   tasks?: TaskReader
-  /** Whether a Buddy session here holds its person's live grant (lib/buddyGuard.ts `buddyGrantLive`); a test's own. */
-  buddyGranted?: (session: RegisteredSession) => boolean
+
   now?: () => number
 }
 
@@ -237,19 +235,7 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
   const tellOn = (): boolean => readAgentSettings(options.dataDir ?? core.dataDir).agentsTellAgents
   /** Whether a program acting for the person may reply to a harness here (`programs-reply`): read at each use, as `tellOn`. */
   const replyOn = (): boolean => readAgentSettings(options.dataDir ?? core.dataDir).programsReply
-  /** A person's Buddy here, by this machine's registry: a Swarm session of role buddy (#2626). */
-  const isBuddy = (session: RegisteredSession | undefined): session is RegisteredSession => session?.swarmSkill?.role === 'buddy'
-  /** Whether that Buddy's person is proven with it on this machine now. */
-  const buddyGranted = options.buddyGranted ?? ((session: RegisteredSession) => !!session.swarmSkill && !!session.cwd
-    && buddyGrantLive(buddyReadsOf(session.swarmSkill.key), session.cwd, now()))
-  /** What a Buddy would pass words to, from this machine's registry: every live harness, terminals included, so each is named. */
-  const relayTarget = (buddy: RegisteredSession, agentId: string): RelayTarget | null => {
-    const target = core.agents.live().find((s) => s.agentId === agentId)
-    return target ? { swarm: !!target.swarmSkill, startedByAgent: target.startedBy === 'agent' || !!target.parentAgentId, guest: !!target.guest,
-      terminal: target.engine === ('terminal' as string), self: target.agentId === buddy.agentId } : null
-  }
-  /** Why the Buddy [from] may not pass words to [agentId] here now, or null; at the request and at each delivery look. */
-  const relayCheck = (from: RegisteredSession, agentId: string) => relayRefusal({ on: tellOn(), granted: buddyGranted(from), target: relayTarget(from, agentId) })
+
   let waking = false
   const later = (): void => {
     if (waking) return
@@ -301,7 +287,7 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
     text: (delivery, message) => {
       // More work from its starter: no tab, so no roster note, which would invite it to message its teammates.
       if (message.tabId === TOLD_TAB) return toldText(message)
-      if (message.tabId === RELAYED_TAB) return relayedText(message)
+
       // The person's words, as they would type them: no header, as `harness reply` to a cloud harness sends them.
       if (message.tabId === REPLIED_TAB) return message.text
       const roster = rosterOf(delivery.agentId)
@@ -320,7 +306,9 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
    * cannot be read (signed out, the backend down) would otherwise leave it there to be taken.
    */
   function forbidden(delivery: LocalDelivery): string | null {
-    return store.entry(delivery.messageId)?.message.tabId === 'started' ? 'it was sent outside any tab' : null
+    // `started`: 0.3.75's log of starts; `relayed`: a v3 Buddy's words for its person's harness, retired with the Buddy.
+    const tab = store.entry(delivery.messageId)?.message.tabId
+    return tab === 'started' || tab === 'relayed' ? 'it was sent outside any tab' : null
   }
 
   /** When the tabs stopped carrying each local delivery (`messageId agentId`), while they do not. */
@@ -345,13 +333,7 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
       const refusal = tellRefusal({ on: tellOn(), lineage, self: self(), live: () => true }, entry.message.from, delivery.agentId)
       return refusal ? { refused: refusal.message } : null
     }
-    // A Buddy's words for its person's harness: who it is from, whose the harness is and the grant, again at each look.
-    if (entry.message.tabId === RELAYED_TAB) {
-      const buddy = localAgent(entry.message.from.agentId)
-      if (entry.message.from.machineId !== self() || !isBuddy(buddy)) return { refused: 'its Buddy no longer runs here' }
-      const refusal = relayCheck(buddy, delivery.agentId)
-      return refusal ? { refused: refusal.message } : null
-    }
+
     // A program's reply for the person: the switch is looked at again at each look, as a tell's is.
     if (entry.message.tabId === REPLIED_TAB) return replyOn() ? null : { refused: 'programs-reply was turned off' }
     if (!directory.current() && directory.on()) return null
@@ -643,12 +625,9 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
    */
   async function tell(payload: Record<string, unknown>, local: boolean): Promise<Record<string, unknown>> {
     let from: Member
-    let caller: RegisteredSession | undefined
-    // `harness reply` from a pane: the words of the person, passed on by their Buddy (#2626); never another agent's.
-    const reply = payload.reply === true
     if (local) {
       const pane = typeof payload.pane === 'string' ? payload.pane : ''
-      caller = PANE.test(pane) ? sessionForPaneId(live(), pane) : undefined
+      const caller = PANE.test(pane) ? sessionForPaneId(live(), pane) : undefined
       if (!caller) throw new MessageError('NOT_A_HARNESS', 'Run harness tell from the pane of the harness that started it.')
       from = { machineId: self(), agentId: caller.agentId }
     } else {
@@ -666,10 +645,7 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
     if (!text.trim()) throw new MessageError('USAGE', 'Say what to do: harness tell <name> -- <work>')
     if (text.length > LIMITS.text) throw new MessageError('TOO_LONG', `A message holds at most ${LIMITS.text} characters.`)
     const refusal = tellRefusal({ on: tellOn(), lineage, self: self(), live: (id) => !!localAgent(id) }, from, agentId)
-    // Not a harness it started: a Buddy here may still pass its person's words to their own (relay); nobody else may.
-    if (refusal?.code === 'NOT_YOURS' && local && isBuddy(caller)) return relay(caller, agentId, text, payload, reply)
     if (refusal) throw new MessageError(refusal.code, refusal.message)
-    if (reply) throw new MessageError('NOT_YOURS', 'Only the person replies to a harness: tell them what it asked. To give more work to one you started, use harness tell.')
     const key = `${from.machineId}/${from.agentId}`
     const times = (toldAt.get(key) ?? []).filter((t) => now() - t < LIMITS.window)
     if (times.length >= LIMITS.perSender) throw new MessageError('RATE_LIMITED', `You told your harnesses ${LIMITS.perSender} times in 10 minutes. Wait for their answers first.`)
@@ -692,42 +668,6 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
     store.status({ messageId: message.id, machineId: self(), agentId, state: 'queued', at: now() })
     mailbox.accept(message, agentId)
     // Asleep (Agent Messages off), the mailbox looks only while something waits: this does now.
-    mailbox.resume()
-    saveQuietly()
-    const status = store.entry(message.id)?.statuses.find((s) => s.machineId === self() && s.agentId === agentId)
-    return { id: message.id, state: status?.state ?? 'queued', ...(status?.reason ? { reason: status.reason } : {}) }
-  }
-
-  /**
-   * A person's Buddy passing their words to their own harness here (tell.ts `relayRefusal`, #2626): checked from this
-   * machine's registry, kept under `relayed`, queued in the mailbox as a tell is, at the same rate and limits. A reply goes
-   * only to an idle harness, as a program's does: one that may wait on a question or a permission is the person's.
-   */
-  async function relay(buddy: RegisteredSession, agentId: string, text: string, payload: Record<string, unknown>, reply: boolean): Promise<Record<string, unknown>> {
-    const refusal = relayCheck(buddy, agentId)
-    if (refusal) throw new MessageError(refusal.code, refusal.message)
-    if (reply) {
-      const activity = (await core.agents.activity([agentId]))[agentId] ?? 'unknown'
-      const busy = replyRefusal({ on: true, live: true, activity })
-      if (busy) throw new MessageError(busy.code, busy.message)
-    }
-    const key = `${self()}/${buddy.agentId}`
-    const times = (toldAt.get(key) ?? []).filter((t) => now() - t < LIMITS.window)
-    if (times.length >= LIMITS.perSender) throw new MessageError('RATE_LIMITED', `You passed words to your owner's harnesses ${LIMITS.perSender} times in 10 minutes. Wait for them first.`)
-    if (store.state.local.filter((d) => d.state === 'queued').length >= LIMITS.waiting) {
-      throw new MessageError('MAILBOX_FULL', 'Too many messages are waiting on that machine. Try again once some are delivered.')
-    }
-    const target = localAgent(agentId)!
-    const machine = typeof payload.machine === 'string' && payload.machine.trim() ? payload.machine.trim().slice(0, 200) : machineName(self())
-    const message: Message = {
-      id: messageId(), tabId: RELAYED_TAB, text, at: now(),
-      to: [{ machineId: self(), agentId, name: core.agents.displayName(target) || agentId.slice(0, 8) }],
-      from: { machineId: self(), agentId: buddy.agentId, name: core.agents.displayName(buddy) || buddy.agentId.slice(0, 8), engine: buddy.engine, machine },
-    }
-    toldAt.set(key, [...times, now()])
-    store.record(message)
-    store.status({ messageId: message.id, machineId: self(), agentId, state: 'queued', at: now() })
-    mailbox.accept(message, agentId)
     mailbox.resume()
     saveQuietly()
     const status = store.entry(message.id)?.statuses.find((s) => s.machineId === self() && s.agentId === agentId)

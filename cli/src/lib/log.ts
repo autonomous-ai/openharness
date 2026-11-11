@@ -6,6 +6,7 @@
  * `[backend] connected` token scanned by the self-update readiness check) stay intact.
  */
 
+import { createHash } from 'node:crypto'
 import { closeSync, existsSync, openSync, readSync, renameSync, statSync, writeFileSync } from 'fs'
 
 function pad(n: number, width = 2): string {
@@ -99,9 +100,12 @@ export function prepareLogFile(file: string, legacy: string, maxBytes = LOG_MAX_
   trimLogFile(file, maxBytes)
 }
 
-/** Short session id for log lines. */
+/**
+ * Short session id for log lines. An OpenClaw key (`agent:<id>:<key>`) would read `agent:ma` for every session, and a
+ * channel's key can carry the peer's id: it is logged as a short hash of itself instead.
+ */
 export function sid(id: string): string {
-  return id.slice(0, 8)
+  return id.startsWith('agent:') ? `oc-${createHash('sha256').update(id).digest('hex').slice(0, 8)}` : id.slice(0, 8)
 }
 
 /** One-line, whitespace-flattened preview of user/assistant text, capped with an ellipsis. */

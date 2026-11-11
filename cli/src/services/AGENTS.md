@@ -63,6 +63,7 @@ that process. A process per risk, not per feature (`SERVICE_HOSTS` in `src/harne
 | `memory` | memory | an experiment: Memories across machines | on demand |
 | `router` | router | an experiment: where ⌘B sends a task, decided by Jev | on demand |
 | `cloud` | cloud | an experiment: cloud agents (Fo, Devin Cloud, Cursor Cloud), harnesses on their makers' servers | on demand |
+| `agentBrowser` | agentBrowser | Podman's calls and event stream, image builds, Podman's setup (`agentBrowserProcess.ts`, `core/agentBrowserLink.ts`) | on demand |
 
 A fault in one of the edge host's services can cost the others in it, never the core. Every service in
 `KNOWN_SERVICES` runs out of the core's process by default, unless `HARNESSD_SERVICES` names a subset, by
@@ -227,7 +228,8 @@ like any other. Named in `HARNESSD_SERVICES`, it starts with the others.
   which a core asks for this process. A core that speaks an older one never asks, so the master starts the
   process as that core binds (`ServiceSupervisor.unasked`). It is 3 by default, the experiments'; the
   devices, models and the gateway became on demand at protocol 4, which may also ask before it binds; the
-  viewers at protocol 5. Making another process on demand needs a protocol bump, and that number in its
+  viewers at protocol 5; the agent browser at protocol 7, asked for by an agent with Browser or as the core starts
+  when its state file is there (`core/agentBrowserLink.ts`). Making another process on demand needs a protocol bump, and that number in its
   `askedSince`. A newer core under an older master asks for a process that master started with the others,
   which changes nothing.
 - **Proof.** `e2e/experiments.e2e.ts`, `e2e/devicesOnDemand.e2e.ts`, `e2e/modelsOnDemand.e2e.ts`,

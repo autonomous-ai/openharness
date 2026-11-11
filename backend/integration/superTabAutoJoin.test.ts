@@ -36,8 +36,8 @@ async function saveState(tab: string, state: SuperTabState) {
   await db.$transaction(async tx => {
     const current = await parts.loadAll(tx, tab)
     const version = Math.max(current.head.version, ...[...current.members, ...current.agents, ...current.groups, ...current.machines,
-      ...current.starts, ...current.progress].map(p => p.version)) + 1
-    for (const model of [tx.swarmHead, tx.swarmMember, tx.swarmAgent, tx.swarmGroup, tx.swarmMachine, tx.swarmStart, tx.swarmProgress] as unknown as
+      ...current.starts].map(p => p.version)) + 1
+    for (const model of [tx.swarmHead, tx.swarmMember, tx.swarmAgent, tx.swarmGroup, tx.swarmMachine, tx.swarmStart] as unknown as
       Array<{ deleteMany(args: unknown): Promise<unknown> }>) await model.deleteMany({ where: { tabId: tab } })
     await parts.insertParts(tx, { ...parts.split(state, { tabId: tab, version, now: Date.now(), visibilityEpoch: current.visibilityEpoch }),
       sequenceBase: current.sequenceBase })
@@ -92,9 +92,8 @@ beforeAll(async () => {
   app.addHook('onRequest', async (req, reply) => {
     const header = req.headers.authorization ?? ''
     const user = accounts.find(a => header === `Bearer ${a.sub}`)
-    const team = accounts.find(a => header === `Bearer team:${a.sub}`)
-    if (!user && !team) return reply.code(401).send({ success: false })
-    req.user = user ?? { ...team!, harnessSessionKind: 'team', harnessComputerId: 'computer-1' }
+    if (!user) return reply.code(401).send({ success: false })
+    req.user = user
   })
   await app.register(superTabRoutes, { store })
   await app.ready()
@@ -212,15 +211,6 @@ describe('Joining by domain on the person\'s own list read', () => {
     expect((await listed(b1)).filter(id => tabs.includes(id))).toHaveLength(10)
     later()
     expect((await listed(b1)).filter(id => tabs.includes(id)).sort()).toEqual([...tabs].sort())
-  })
-
-  it('never joins from a team session', async () => {
-    const { t } = await org('four', ['t'])
-    const tab = await create()
-    await turnOn(tab)
-    const team = await app.inject({ method: 'GET', url: '/api/super-tabs/list', headers: { authorization: `Bearer team:${t.sub}` } })
-    expect(team.statusCode).toBe(403)
-    expect(await personIn(tab, t)).toBeUndefined()
   })
 
   it('writes no membership after turning auto-join off commits', async () => {

@@ -16,7 +16,7 @@ export interface PersonDetails {
   unblocked: Array<{ title: string; conversationId: string; kind: UnblockKind; waitedMinutes: number }>
   /** Each machine's busy agent-hours this week, to one decimal, busiest first. */
   lent: Array<{ machineName: string; busyHours: number }>
-  /** Every machine the person brought that the reader may see, a Harness Team account in its Mac's row: what it did this
+  /** Every machine the person brought that the reader may see: what it did this
    *  week (contributor view, #2444). Absent from a backend before it. Supersedes [lent] for clients that read it. */
   brought: BroughtMachine[]
 }
@@ -64,15 +64,13 @@ export interface WeekGoal { shipped: number; points: number; medianAskToShipMs: 
  *  cheaper models without lower quality). */
 export interface ModelShare { attempts: number; grid: number; reviewed: { grid: number; subscription: number }; passedFirst: { grid: number; subscription: number } }
 
-/** A permanent agent of the project, its PM or a Buddy, scored by name like a person (Dee, 2026-10-29). */
+/** A project's PM, scored by name like a person (Dee, 2026-10-29). */
 export interface AgentScore {
   agentId: string
   displayName: string
-  kind: 'pm' | 'buddy'
-  /** A Buddy's person; null for the PM. */
-  personId: string | null
+  kind: 'pm'
   machineId: string
-  /** SHIPPED_POINTS for each request shipped this week: the PM's of groups it led, a Buddy's of groups opened from its proposals. */
+  /** SHIPPED_POINTS for each request shipped this week: of the groups it led. */
   points: number
   rank: number
   shipped: number
@@ -127,7 +125,7 @@ export interface Leaderboard {
   waiting: { total: number; people: Array<{ personId: string; count: number; conversationIds: string[] }> }
   /** Absent from a backend before it. */
   models: { thisWeek: ModelShare; lastWeek: ModelShare | null }
-  /** The project's PM and Buddies, most points first. Absent from a backend before them. */
+  /** The project's PM, most points first. Absent from a backend before them. */
   agents: AgentScore[]
   /** Every model that worked this week, most points first. Absent from a backend before it. */
   byModel: ModelScore[]

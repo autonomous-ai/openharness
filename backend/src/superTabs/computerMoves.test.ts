@@ -1,18 +1,18 @@
-// A computer is signed in as one account at a time (Scholes, #3122: MacBooks-MacBook-Pro-7 showed as kelvin's, as
-// ttkhoahcmus's and as kelvin's Team account at once). When another account signs in there, the store finds the computer's
+// A computer is signed in as one account at a time (Scholes, #3122: MacBooks-MacBook-Pro-7 showed as kelvin's and as
+// ttkhoahcmus's at once). When another account signs in there, the store finds the computer's
 // entry of the old account in each Swarm (store.ts computerSignedIn) and moves it: one entry, the new account's.
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor } from './model.js'
-import { swarmBuddyChatId } from './buddies.js'
 import type { ContributedMachine } from './machines.js'
+import { storedTask } from './storedWork.test-support.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const kelvin: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'kelvin', email: 'kelvin@example.com' }
 const tt: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'tt', email: 'ttkhoahcmus@example.com' }
 const configuration = { engine: 'claude', model: null, effort: null, contextWindow: null, engineVersion: null }
 const NOW = 10_000_000
-const reading = (receivedAt: number): NonNullable<ContributedMachine['observation']> => ({ generation: 'g1', receivedAt, sessionKind: 'computer',
+const reading = (receivedAt: number): NonNullable<ContributedMachine['observation']> => ({ generation: 'g1', receivedAt,
   resources: { cpuPercent: null, memoryTotalBytes: null, memoryUsedBytes: null, diskFreeBytes: null, diskTotalBytes: null, projectDiskFreeBytes: null,
     deviceType: null, chip: null, os: null, gpuPercent: null }, tools: {}, quotas: [], runningHarnessIds: [], stoppedHarnessIds: [] })
 const own = (userId: string) => ({ machineOwnerId: userId, contributorId: userId, hostGrant: null })
@@ -20,7 +20,7 @@ const own = (userId: string) => ({ machineOwnerId: userId, contributorId: userId
 const moveTo = (to = { machineId: 'tt-mac', ownerId: 'tt', name: 'MacBooks-MacBook-Pro-7' }): Partial<CommandContext> => ({ computerMove: { to } })
 const MOVED: Command = { type: 'machine.moved', machineId: 'kelvin-mac' }
 
-/** A Swarm where kelvin's Mac is in, offline since he signed out of it, with its Team account live, and ttkhoahcmus a member. */
+/** A Swarm where kelvin's Mac is in, offline since he signed out of it, and ttkhoahcmus a member. */
 function setup({ ttMember = true, kelvinOnline = false } = {}) {
   let state = createSuperTab('swarm', 'Team', { id: 'owner', email: owner.email }, 'test')
   state.people.push({ id: 'kelvin', email: kelvin.email, role: 'collaborator', generation: 'kelvin-gen' })
@@ -38,16 +38,11 @@ function setup({ ttMember = true, kelvinOnline = false } = {}) {
     generation: 'g0', cwd: '/Users/mac/harness-swarm', scope: 'swarm', engines: ['claude', 'codex'], maxAgents: 3, agents: 'atMost', paused: true,
     observation: reading(kelvinOnline ? NOW - 1000 : NOW - 3_000_000), teamAccountOnly: true, ...LEGACY_RECORDS,
     lent: [{ week: 1, ms: 5000 }] as unknown as ContributedMachine['lent'], engineFailures: { codex: 1 } }
-  const kelvinTeam: ContributedMachine = { machineId: 'kelvin-team', name: 'MacBooks-MacBook-Pro-7', contributorId: 'kelvin', membershipGeneration: 'kelvin-gen',
-    generation: 'g0', cwd: '/Users/harness-team/harness-swarm', scope: 'swarm', engines: ['claude'], maxAgents: 3, paused: true,
-    observation: { ...reading(NOW - 1000), sessionKind: 'team' }, hostMachineId: 'kelvin-mac' }
-  state.machines = [kelvinMac, kelvinTeam]
-  const group = run({ type: 'conversation.create', projectId: 'lead', title: 'Offline edits', brief: 'Save edits.', checks: [] }).result.conversationId as string
+  state.machines = [kelvinMac]
+  const group = storedTask(state, { projectId: 'lead', title: 'Offline edits', brief: 'Save edits.', requesterId: 'owner' })
   const builder = run({ type: 'agent.add', conversationId: group, harnessId: 'h-builder', machineId: 'kelvin-mac', name: 'Birch3', configuration, lead: false },
     kelvin, { contribution: own('kelvin') }).result.agentId as string
-  const teamAgent = run({ type: 'agent.add', conversationId: group, harnessId: 'h-team', machineId: 'kelvin-team', name: 'Fern', configuration, lead: false },
-    kelvin, { contribution: { ...own('kelvin'), hostMachineId: 'kelvin-mac' } }).result.agentId as string
-  return { run, group, builder, teamAgent, get state() { return state } }
+  return { run, group, builder, get state() { return state } }
 }
 const entries = (f: ReturnType<typeof setup>) => f.state.machines!.filter(m => !m.removal).map(m => m.machineId)
 
@@ -66,27 +61,23 @@ describe("another account's sign-in on a computer", () => {
     const f = setup()
     f.run(MOVED, kelvin, moveTo())
     const moved = f.state.machines!.find(m => m.machineId === 'tt-mac')!
-    for (const key of ['projects', 'ownAccountChoice', 'othersToldWeek', 'lent', 'lentDays', 'engineFailures', 'engineSuspensions', 'observation', 'hostMachineId']) {
+    for (const key of ['projects', 'ownAccountChoice', 'othersToldWeek', 'lent', 'lentDays', 'engineFailures', 'engineSuspensions', 'observation']) {
       expect(moved, key).not.toHaveProperty(key)
     }
   })
 
-  it("stops the old account's agents first, there and on its Team account, and tells their groups and the old owner", () => {
+  it("stops the old account's agents first, and tells their groups", () => {
     const f = setup()
     const effects = f.run(MOVED, kelvin, moveTo())
     expect(f.state.agents.map(a => a.id)).not.toContain(f.builder)
-    expect(f.state.agents.map(a => a.id)).not.toContain(f.teamAgent)
-    expect(effects.cancelledAgents).toEqual(expect.arrayContaining([f.builder, f.teamAgent]))
+    expect(effects.cancelledAgents).toEqual(expect.arrayContaining([f.builder]))
     expect(effects.messages.find(m => m.conversationId === f.group)?.text).toContain('MacBooks-MacBook-Pro-7 is signed in to another account now')
-    const told = effects.messages.filter(m => m.conversationId === swarmBuddyChatId(f.state.people.find(p => p.id === 'kelvin')!))
-    expect(told).toHaveLength(1)
-    expect(told[0]!.text).toBe('Your MacBooks-MacBook-Pro-7 is signed in as ttkhoahcmus now, so it left this Swarm under your account, and Birch3 and Fern with it.')
   })
 
-  it('cleans up after the Team account, whose host still runs, and leaves the computer\'s folders to the new account', () => {
+  it('leaves the computer\'s folders to the new account', () => {
     const f = setup()
     f.run(MOVED, kelvin, moveTo())
-    expect(f.state.machineCleanups?.map(c => c.machineId)).toEqual(['kelvin-team'])
+    expect(f.state.machineCleanups ?? []).toEqual([])
     expect(f.state.removedMachines ?? []).toEqual([])
   })
 
@@ -106,12 +97,10 @@ describe("another account's sign-in on a computer", () => {
     expect(f.state.machines!.find(m => m.machineId === 'tt-mac')).toMatchObject({ maxAgents: 1, paused: false, previousOwner: { personId: 'kelvin' } })
   })
 
-  it('only takes the old entry out when the new account is not in the Swarm, and names no one to the old owner', () => {
+  it('only takes the old entry out when the new account is not in the Swarm', () => {
     const f = setup({ ttMember: false })
-    const effects = f.run(MOVED, kelvin, moveTo())
+    f.run(MOVED, kelvin, moveTo())
     expect(entries(f)).toEqual([])
-    const told = effects.messages.filter(m => m.conversationId === swarmBuddyChatId(f.state.people.find(p => p.id === 'kelvin')!))
-    expect(told[0]!.text).toBe('Your MacBooks-MacBook-Pro-7 is signed in to another account now, so it left this Swarm under your account, and Birch3 and Fern with it.')
   })
 
   it('does not add the new account\'s machine where its person took it out', () => {
@@ -133,7 +122,7 @@ describe("another account's sign-in on a computer", () => {
     const f = setup()
     expect(() => f.run(MOVED, kelvin)).toThrow()
     expect(() => f.run(MOVED, tt)).toThrow()
-    expect(entries(f)).toEqual(['kelvin-mac', 'kelvin-team'])
+    expect(entries(f)).toEqual(['kelvin-mac'])
   })
 
   it('changes nothing the second time', () => {

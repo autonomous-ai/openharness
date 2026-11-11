@@ -15,7 +15,6 @@ import 'keymap_host_test.dart' show MemoryKeymap, key;
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
 import 'support/launch_menu.dart' show acceptSetupOrSearch;
 
-final _kind = find.byKey(const ValueKey('new-harness-field-agent-kind'));
 final _form = find.byType(NewHarnessForm);
 const _menus = MethodChannel('harness/swarm_tabs');
 
@@ -106,10 +105,9 @@ Future<void> tapNewAgent(WidgetTester tester) async {
   await tester.pumpAndSettle();
 }
 
-/// + New agent's form (Swarm v4): a `New agent` button and no role to choose: a PM is New project's.
+/// + New agent's form (Swarm v4): a `New agent` button; a PM is New project's.
 void _expectNewAgentForm(WidgetTester tester) {
   expect(_form, findsOneWidget);
-  expect(_kind, findsNothing);
   expect(
     find.descendant(
       of: find.byKey(const ValueKey('new-harness-field-start')),

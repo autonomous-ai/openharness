@@ -8,12 +8,11 @@ import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient, type Prisma } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore, transaction } from '../src/superTabs/store.js'
-import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
-import { buddyChatId } from '../src/superTabs/buddies.js'
 import { foldReplies, refreshThreads, threadFacet } from '../src/superTabs/pageReads.js'
 import { backfillThreads } from '../src/superTabs/threadBackfill.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
-import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
+import { LOOP_NOTICE_AT } from '../src/superTabs/commands.js'
+import { storeSwarm } from './storedSwarm.test-support.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
 import { profiledReads } from './profiledReads.test-support.js'
 import { filterOf, plan, profiled, reads } from './plans.test-support.js'
@@ -50,9 +49,9 @@ const person = (actor: AuthUser) => ({ kind: 'person', id: actor.sub, name: acto
 const agent = (id: string) => ({ kind: 'agent', id, name: id, membershipGeneration: 'gen' })
 let sequence = 10, scenes = 0
 
-/** A migrated Swarm: a Lead, a worker in Web, and peer's Buddy, in the project chat and in its own Buddy chat. Web holds a lone
- *  root and threads with every kind of reply a reader may skip: a note to the Lead alone, a route row (no Buddy reads it), a
- *  tag. Its root `w-b` is a note to the worker alone. The Buddy chat holds a thread with replies of a Buddy session. */
+/** A stored Swarm: a Lead, a worker in Web, and the owner's own agent in its 1:1 chat with them. Web holds a lone root and
+ *  threads with every kind of reply a reader may skip: a note to the Lead alone, a route row, a tag. Its root `w-b` is a note
+ *  to the worker alone. The 1:1 chat holds a thread too. */
 async function scene() {
   const s = swarm(MIGRATED)
   s.join(peerActor)
@@ -60,20 +59,14 @@ async function scene() {
   const lead = s.add('lead-harness', 'lead', true, ownerActor, 'host', owner.sub)
   const web = s.group('Web')
   const worker = s.add('worker-harness', web, false, ownerActor, 'host', owner.sub)
-  const buddy = s.add('buddy-harness', 'lead', false, ownerActor, 'host', owner.sub)
-  let buddyChat = ''
+  const own = s.add('own-harness', 'lead', false, ownerActor, 'host', owner.sub), ownChat = 'own-chat'
   s.edit(state => {
-    const generation = state.people.find(p => p.id === peer.sub)!.generation
-    const projectId = state.projects![0]!.id
-    state.agents.find(a => a.id === buddy)!.buddyOf = { personId: peer.sub, generation }
-    buddyChat = buddyChatId(projectId, { id: peer.sub, generation })
-    state.conversations.push({ id: buddyChat, kind: 'buddy', projectId, title: 'Buddy', leadId: null, agentIds: [buddy], archived: false,
-      brief: '', checks: [], assignment: null, lastMessageSequence: 0, audience: { people: [{ id: peer.sub, generation }] } })
+    const generation = state.people.find(p => p.id === owner.sub)!.generation
+    state.conversations.push({ id: ownChat, kind: 'agent-chat', title: 'Own', leadId: null, agentIds: [own], archived: false,
+      brief: '', checks: [], assignment: null, lastMessageSequence: 0, audience: { people: [{ id: owner.sub, generation }] } })
   })
   const tabId = `tab-${randomUUID()}`
-  await writeLegacySwarm(db, { state: { ...structuredClone(s.state), id: tabId } as SuperTabState, revision: 700 })
-  const report = await migrateSwarm(db, tabId, { now: () => MIGRATED })
-  if (!report.ok) throw new Error(report.error)
+  await storeSwarm(db, { state: { ...structuredClone(s.state), id: tabId } as SuperTabState, revision: 700 }, MIGRATED)
   const note = (to: string) => ({ source: { kind: 'note', recipientsOnly: true }, recipientIds: [to] })
   // Message ids are unique across Swarms: each scene's carry its own prefix.
   const prefix = `s${++scenes}-`, id = (name: string) => prefix + name
@@ -89,19 +82,18 @@ async function scene() {
     { id: 'w-b1', conversationId: web, thread: 'w-b', author: agent(worker) },
     { id: 'w-c', conversationId: web, thread: 'w-c', author: person(owner) },
     { id: 'w-c1', conversationId: web, thread: 'w-c', author: agent(lead), source: { kind: 'route' } },
-    { id: 'b-root', conversationId: buddyChat, thread: 'b-root', author: person(peer) },
-    { id: 'b-r1', conversationId: buddyChat, thread: 'b-root', author: agent(buddy) },
-    { id: 'b-r2', conversationId: buddyChat, thread: 'b-root', author: person(peer), buddySession: true },
-    { id: 'b-r3', conversationId: buddyChat, thread: 'b-root', author: agent(buddy), buddySession: true },
+    { id: 'b-root', conversationId: ownChat, thread: 'b-root', author: person(owner) },
+    { id: 'b-r1', conversationId: ownChat, thread: 'b-root', author: agent(own) },
+    { id: 'b-r2', conversationId: ownChat, thread: 'b-root', author: person(owner) },
+    { id: 'b-r3', conversationId: ownChat, thread: 'b-root', author: agent(own) },
   ]
   await insert(tabId, prefix, rows)
   const readers: Array<[string, string, AuthUser, string?]> = [['owner', web, owner], ['peer', web, peer], ['outsider', web, outsider],
-    ['Buddy', web, owner, buddy], ['worker', web, owner, worker], ['Lead', web, owner, lead], ['peer in the Buddy chat', buddyChat, peer],
-    ['Buddy in its chat', buddyChat, owner, buddy]]
-  return { tabId, web, buddyChat, lead, worker, buddy, readers, prefix, id }
+    ['worker', web, owner, worker], ['Lead', web, owner, lead], ['owner in their 1:1 chat', ownChat, owner], ['agent in its chat', ownChat, owner, own]]
+  return { tabId, web, ownChat, lead, worker, own, readers, prefix, id }
 }
 
-interface Row { id: string; conversationId: string; thread: string; author: object; mentions?: string[]; source?: object; recipientIds?: string[]; buddySession?: boolean }
+interface Row { id: string; conversationId: string; thread: string; author: object; mentions?: string[]; source?: object; recipientIds?: string[] }
 /** Rows written as an older release writes them, no summary touched; ids and threads named without the scene's prefix. */
 async function insert(tabId: string, prefix: string, rows: Row[]) {
   await db.superTabMessage.createMany({ data: rows.map(row => ({ recipientIds: [], mentions: [], ...row, id: prefix + row.id, thread: prefix + row.thread,
@@ -123,10 +115,10 @@ describe('thread summaries (spec 5 phase D)', () => {
     const s = await scene()
     const before = await pages(s)
     // Each reader skips its own kinds of reply: no summary counts a note to agents alone (a reader of `w-b`'s root still counts
-    // its reply), and a Buddy no route row, nor the session's replies in its own chat.
+    // its reply).
     expect(Object.fromEntries(Object.entries(before).map(([name, page]) => [name, replies(page)]))).toEqual({
-      owner: { 'w-a': 4, 'w-c': 1 }, peer: { 'w-a': 4, 'w-c': 1 }, outsider: { 'w-a': 4, 'w-c': 1 }, Buddy: { 'w-a': 3 },
-      worker: { 'w-a': 4, 'w-b': 1, 'w-c': 1 }, Lead: { 'w-a': 4, 'w-c': 1 }, 'peer in the Buddy chat': { 'b-root': 3 }, 'Buddy in its chat': { 'b-root': 1 } })
+      owner: { 'w-a': 4, 'w-c': 1 }, peer: { 'w-a': 4, 'w-c': 1 }, outsider: { 'w-a': 4, 'w-c': 1 },
+      worker: { 'w-a': 4, 'w-b': 1, 'w-c': 1 }, Lead: { 'w-a': 4, 'w-c': 1 }, 'owner in their 1:1 chat': { 'b-root': 3 }, 'agent in its chat': { 'b-root': 3 } })
     expect(await db.superTabThread.count({ where: { tabId: s.tabId } })).toBe(0)
 
     await backfillThreads(db, Date.now())
@@ -149,9 +141,10 @@ describe('thread summaries (spec 5 phase D)', () => {
   it('rewrites a thread\'s summary in the transaction that sends a reply, a lone root\'s first one too', async () => {
     const s = await scene()
     await backfillThreads(db, Date.now())
+    // Only agents post in a project's channel and its tasks' chats (agentsOnly.test.ts): the worker replies, and tags.
     for (const replyTo of ['w-a', 'w-lone'].map(s.id)) {
       await store.execute(owner, s.tabId, { operationId: randomUUID(), command: { type: 'message.send', conversationId: s.web, text: 'More', replyTo,
-        recipientIds: [], mentions: [outsider.sub] } as never })
+        recipientIds: [], mentions: [outsider.sub] } as never }, s.worker)
       const stored = await db.superTabThread.findUniqueOrThrow({ where: { id: replyTo } })
       const facet = await threadFacet(db, s.tabId, s.web, [replyTo])
       expect(sorted(stored.parts as unknown[])).toEqual(sorted(facet.parts))
@@ -167,8 +160,13 @@ describe('thread summaries (spec 5 phase D)', () => {
     await insert(s.tabId, s.prefix, long)
     await backfillThreads(db, Date.now())
     const entries = await profiled(db, () => store.execute(owner, s.tabId, { operationId: randomUUID(), command: { type: 'message.send', conversationId: s.web,
-      text: 'One more', replyTo: s.id('w-a'), recipientIds: [] } as never }))
-    const messages = entries.filter(entry => entry.ns.endsWith('.SuperTabMessage') && JSON.stringify(filterOf(entry) ?? null).includes(s.tabId))
+      text: 'One more', replyTo: s.id('w-a'), recipientIds: [] } as never }, s.worker))
+    // An agent's post also reads its conversation's newest LOOP_NOTICE_AT rows, by the tab and conversation alone, for the loop notice
+    // (store.ts context.recent): bounded, and no read of the thread.
+    const loopRead = (entry: (typeof entries)[number]) => !/_id|thread|sequence/.test(JSON.stringify(filterOf(entry) ?? null))
+    const messages = entries.filter(entry => entry.ns.endsWith('.SuperTabMessage') && JSON.stringify(filterOf(entry) ?? null).includes(s.tabId)
+      && !loopRead(entry))
+    expect(entries.filter(entry => entry.ns.endsWith('.SuperTabMessage') && loopRead(entry)).every(entry => (entry.docsExamined ?? 0) <= LOOP_NOTICE_AT)).toBe(true)
     const examined = messages.reduce((sum, entry) => sum + entry.docsExamined, 0)
     // Before the fold: 509 (each of the thread's rows, then the root and quoted rows by id). After: the new row and those.
     console.info(`[#2974] SuperTabMessage docs examined by one reply in a 505-reply thread: ${examined}`)
@@ -196,23 +194,33 @@ describe('thread summaries (spec 5 phase D)', () => {
         tabId: s.tabId, text: row.id, sequence: ++sequence, createdAt: new Date() })) })
       await foldReplies(tx, s.tabId, s.web, more.map(row => ({ id: s.id(row.id), thread: s.id(row.thread) })))
     })
-    const chat = [{ id: s.id('b-r4'), conversationId: s.buddyChat, thread: s.id('b-root'), author: agent(s.buddy), buddySession: true }]
+    const chat = [{ id: s.id('b-r4'), conversationId: s.ownChat, thread: s.id('b-root'), author: agent(s.own) }]
     await transaction(db, async tx => {
       await tx.superTabMessage.createMany({ data: chat.map(row => ({ recipientIds: [], mentions: [], ...row, tabId: s.tabId, text: 'x', sequence: ++sequence })) })
-      await foldReplies(tx, s.tabId, s.buddyChat, chat)
+      await foldReplies(tx, s.tabId, s.ownChat, chat)
     })
     const folded = await rawSummaries([...roots, s.id('b-root')])
     await refreshThreads(db, s.tabId, s.web, roots)
-    await refreshThreads(db, s.tabId, s.buddyChat, [s.id('b-root')])
+    await refreshThreads(db, s.tabId, s.ownChat, [s.id('b-root')])
     expect(folded).toEqual(await rawSummaries([...roots, s.id('b-root')]))
     expect(Object.keys(folded[0]!).sort()).toEqual(['_id', 'conversationId', 'mentions', 'parts', 'tabId'])
   })
 
-  it('leaves the full rebuild\'s summary after folded replies are edited and deleted, and none once the last reply goes (task #2974)', async () => {
+  it('leaves the full rebuild\'s summary after folded replies are deleted, and none once the last reply goes (task #2974)', async () => {
     const s = await scene()
     await backfillThreads(db, Date.now())
-    const send = async (replyTo: string, as: AuthUser, mentions: string[] = []) => String((await store.execute(as, s.tabId, { operationId: randomUUID(),
-      command: { type: 'message.send', conversationId: s.web, text: 'r', replyTo, recipientIds: [], mentions } as never })).result.messageId)
+    // A person's replies there from before only agents posted in a project's channel, folded in as a send folds them: their author
+    // still deletes them; an edit is new words there, refused as a post is (agentsOnly.test.ts).
+    let replied = 0
+    const send = async (replyTo: string, as: AuthUser, mentions: string[] = []) => {
+      const id = s.id(`w-c-reply-${++replied}`)
+      await transaction(db, async tx => {
+        await tx.superTabMessage.create({ data: { id, tabId: s.tabId, conversationId: s.web, thread: replyTo, sequence: ++sequence, text: 'r',
+          author: person(as), recipientIds: [], mentions } })
+        await foldReplies(tx, s.tabId, s.web, [{ id, thread: replyTo }])
+      })
+      return id
+    }
     const run = (as: AuthUser, command: object) => store.execute(as, s.tabId, { operationId: randomUUID(), command: { conversationId: s.web, ...command } as never })
     const same = async (root: string) => {
       const stored = await db.superTabThread.findUnique({ where: { id: root } })
@@ -224,7 +232,7 @@ describe('thread summaries (spec 5 phase D)', () => {
     const root = s.id('w-c')
     const first = await send(root, owner, [peer.sub]), second = await send(root, peer), third = await send(root, owner, [outsider.sub])
     await same(root)
-    await run(owner, { type: 'message.edit', messageId: first, text: 'edited' })
+    await expect(run(owner, { type: 'message.edit', messageId: first, text: 'edited' })).rejects.toMatchObject({ code: 'AGENTS_ONLY' })
     await same(root)
     // The newest of its part, the only reply of its part, then the oldest of what is left: each moves what the summary holds.
     for (const [messageId, as] of [[third, owner], [second, peer], [first, owner]] as const) {
@@ -274,11 +282,11 @@ describe('thread summaries (spec 5 phase D)', () => {
   it('counts both of two replies sent at once through the store (task #2974)', async () => {
     const s = await scene()
     await backfillThreads(db, Date.now())
-    const send = (as: AuthUser) => store.execute(as, s.tabId, { operationId: randomUUID(), command: { type: 'message.send',
-      conversationId: s.web, text: 'At once', replyTo: s.id('w-a'), recipientIds: [] } as never })
+    const send = (agentId: string) => store.execute(owner, s.tabId, { operationId: randomUUID(), command: { type: 'message.send',
+      conversationId: s.web, text: 'At once', replyTo: s.id('w-a'), recipientIds: [] } as never }, agentId)
     // One reply each first, so the two at once fold into parts the summary already holds.
-    for (const as of [owner, peer]) await send(as)
-    await Promise.all([owner, peer].map(send))
+    for (const agentId of [s.worker, s.lead]) await send(agentId)
+    await Promise.all([s.worker, s.lead].map(send))
     const stored = await db.superTabThread.findUniqueOrThrow({ where: { id: s.id('w-a') } })
     expect(sorted(stored.parts as unknown[])).toEqual(sorted((await threadFacet(db, s.tabId, s.web, [s.id('w-a')])).parts))
     expect(replies(await store.messages(owner, s.tabId, s.web, {}))['w-a']).toBe(8)
@@ -304,7 +312,7 @@ describe('thread summaries (spec 5 phase D)', () => {
       { cursor: { firstBatch: Prisma.InputJsonObject[] } }).cursor.firstBatch[0]!
     const before = await summary()
     await store.execute(owner, s.tabId, { operationId: randomUUID(), command: { type: 'message.send', conversationId: s.web, text: 'Late', replyTo: s.id('w-a'),
-      recipientIds: [] } as never })
+      recipientIds: [] } as never }, s.worker)
     await db.$runCommandRaw({ update: 'SuperTabThread', updates: [{ q: { _id: s.id('w-a') }, u: before }] })
     expect(replies(await store.messages(owner, s.tabId, s.web, {}))['w-a']).toBe(4)
     const entries = await profiled(db, () => backfillThreads(db, Date.now()))

@@ -52,17 +52,15 @@ SuperTabSnapshot _swarm({
 });
 
 void main() {
-  test('names an agent by its role and the coordinator by its project', () {
+  test('names an agent by its role, and the coordinator the Product Manager', () {
     final swarm = _swarm(
       agents: [
         _agent('tester', {'roleName': 'Tester'}),
         _agent('qa', {'roleName': 'Quality assurance lead'}),
         _agent('exact', {'roleName': 'Twelve chars'}),
         _agent('lead', {'roleName': 'PM'}),
-        _agent('buddy', {
-          'buddyOf': {'personId': 'u1'},
-        }),
       ],
+      // A name a project had before Swarm v4 is not read.
       project: {'coordinatorName': 'Coordinator'},
     );
     expect(swarm.roleOf('tester'), (name: 'Tester', badge: 'Tester'));
@@ -72,13 +70,10 @@ void main() {
     ));
     expect(swarm.roleOf('exact')?.badge, 'Twelve chars');
     expect(swarm.roleOf('lead'), (name: 'PM', badge: 'PM'));
-    expect(swarm.roleOf('buddy'), isNull);
     expect(swarm.roleOf('nobody'), isNull);
-    expect(swarm.coordinatorNameOf('p1'), 'Coordinator');
-    expect(swarm.coordinatorNameOf('elsewhere'), kDefaultCoordinatorName);
     expect(
       swarm.leadProtectionReason('lead'),
-      'lead is the Coordinator of project Lamp. Delete the project first.',
+      'lead is the Product Manager of project Lamp. Delete the project first.',
     );
 
     // A backend from before project instructions: today's three pairs.
@@ -92,7 +87,6 @@ void main() {
     expect(older.roleOf('lead'), (name: 'Product Manager', badge: 'PM'));
     expect(older.roleOf('rev'), (name: 'Reviewer', badge: 'Rev'));
     expect(older.roleOf('dev'), (name: 'Engineer', badge: 'Dev'));
-    expect(older.coordinatorNameOf('p1'), 'Product Manager');
     expect(
       older.leadProtectionReason('lead'),
       'lead is the Product Manager of project Lamp. Delete the project first.',
@@ -100,38 +94,33 @@ void main() {
   });
 
   testWidgets(
-    // Empty means empty (anh Dee's rule 7, #4465): whatever the project calls its coordinator.
+    // Empty means empty (anh Dee's rule 7, #4465).
     'an empty project chat says nothing',
     (tester) async {
-      for (final coordinator in [null, 'Coordinator']) {
-        final server = ConversationServer();
-        server.state['projects'] = [
-          {
-            ...projectFixture('lead', 'web-project', 'lead'),
-            'coordinatorName': ?coordinator,
-          },
-        ];
-        final c = server.controller();
-        await c.refresh();
-        await c.select('lead');
-        await tester.pumpWidget(
-          MaterialApp(
-            home: Scaffold(
-              body: SuperTabView(
-                controller: c,
-                onAddAgent: (_) {},
-                onOpenTerminal: (_) {},
-                machineName: (_) => 'Team Mac',
-              ),
+      final server = ConversationServer();
+      server.state['projects'] = [
+        projectFixture('lead', 'web-project', 'lead'),
+      ];
+      final c = server.controller();
+      await c.refresh();
+      await c.select('lead');
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SuperTabView(
+              controller: c,
+              onAddAgent: (_) {},
+              onOpenTerminal: (_) {},
+              machineName: (_) => 'Team Mac',
             ),
           ),
-        );
-        await tester.pumpAndSettle();
-        expect(find.textContaining('Discuss the plan'), findsNothing);
-        await tester.pumpWidget(const SizedBox());
-        await c.flush();
-        c.dispose();
-      }
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Discuss the plan'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      c.dispose();
     },
   );
 

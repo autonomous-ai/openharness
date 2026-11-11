@@ -1,12 +1,10 @@
 import { z } from 'zod'
-import { fail, type Conversation, type SuperTabState } from './model.js'
-import { groupProject } from './projects.js'
+import { type Conversation } from './model.js'
 
 /**
- * Why a task is held: a not-before date on the Next-up queue (work.queue), or an agent's blocked or needs_human status
- * (work.status). Exactly four reasons are real (anh Dee's Swarm redesign, 2026-11-05; #3390); the server refuses a hold that
- * names none (HOLD_REASON_MISSING), and the refusal lists the four. Not the delivery `holdReason` (holdReason.ts), which is a
- * host's reason for not typing a message yet.
+ * Why a task is held, as a Swarm from before v4 stored it: a not-before date on the Next-up queue (work.queue), or an agent's
+ * blocked or needs_human status (work.status); both commands are retired (2026-11-10), so readers read only what is stored. Not
+ * the delivery `holdReason` (holdReason.ts), which is a host's reason for not typing a message yet.
  */
 export const heldReason = z.discriminatedUnion('kind', [
   /** Waits on another task of the project. */
@@ -22,40 +20,6 @@ export type HeldReason = z.infer<typeof heldReason>
 
 /** What a hold looks like where no reason was recorded: every hold from before reasons, shown as "no reason". */
 export type HeldView = HeldReason | { kind: 'none' }
-
-export const HELD_REASON_KINDS = ['task', 'person', 'reset', 'requester'] as const
-/** The refusal's words: the four kinds, each with the fields it takes, so the next command can be right. */
-export const HELD_REASON_HELP = 'Say why it is held, with "hold" set to one of: {"kind":"task","taskNumber":N} (waits on task #N); '
-  + '{"kind":"person","personId":"PERSON","defaultAt":"ISO time"} (waits on a person already asked, and when the default applies); '
-  + '{"kind":"reset","what":"quota"|"machine","at":"ISO time"} (waits for a reset); {"kind":"requester"} (the requester asked for later).'
-
-/** A hold with no reason is refused, naming the four kinds. */
-export function missingReason(): never {
-  return fail('HOLD_REASON_MISSING', `A held task needs a reason. ${HELD_REASON_HELP}`, 400)
-}
-
-/**
- * The facts a reason claims, checked against the Swarm: the task it waits on is another task of this project, the person is a
- * member (not checked: that they were asked, which lives in their decisions), the requester exists, and a time is still ahead.
- * A reason that is not true is no reason.
- */
-export function checkReason(state: SuperTabState, group: Conversation, reason: HeldReason, now: number): void {
-  if (reason.kind === 'task') {
-    const project = groupProject(state, group).id
-    const other = state.conversations.find(c => c.number === reason.taskNumber && !c.archived && !c.reviewOf && !c.kind && groupProject(state, c).id === project)
-    if (!other || other.id === group.id) fail('HOLD_REASON_MISSING', `Task #${reason.taskNumber} is not another open task of this project. ${HELD_REASON_HELP}`, 400)
-  }
-  else if (reason.kind === 'person') {
-    if (Date.parse(reason.defaultAt) <= now) fail('HOLD_REASON_MISSING', `The default time ${reason.defaultAt} has passed. ${HELD_REASON_HELP}`, 400)
-    if (!state.people.some(p => p.id === reason.personId)) fail('HOLD_REASON_MISSING', `${reason.personId} is not a member of this Swarm. ${HELD_REASON_HELP}`, 400)
-  }
-  else if (reason.kind === 'reset') {
-    if (Date.parse(reason.at) <= now) fail('HOLD_REASON_MISSING', `The reset time ${reason.at} has passed. ${HELD_REASON_HELP}`, 400)
-  }
-  else if (reason.kind === 'requester' && !group.requesterId) {
-    fail('HOLD_REASON_MISSING', `This task has no requester who could have asked for later. ${HELD_REASON_HELP}`, 400)
-  }
-}
 
 /** What a reader shows for a held task: its reason, else "no reason" for a hold from before reasons. Absent when it is not held. */
 export function heldView(group: Conversation): HeldView | undefined {

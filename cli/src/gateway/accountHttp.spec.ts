@@ -142,11 +142,12 @@ describe('account HTTP in the gateway', () => {
     const { api, deps, dataDir, request, changed, reachable, listed } = setup()
     expect(await api.machines()).toEqual({ status: 200, body })
     expect(reachable).toHaveBeenLastCalledWith(['remote'])
-    // The body as the backend answered it, for the trust group's team machines (lib/e2ee/machineKinds.ts); null once signed out.
-    expect(listed).toHaveBeenLastCalledWith(body)
+    // The machines the backend's list names, for the relay's pins; nothing from a list that is not the backend's.
+    expect(listed).toHaveBeenLastCalledWith(['remote'])
+    listed.mockClear()
     request.mockResolvedValueOnce(response({}, 401))
     await api.machines()
-    expect(listed).toHaveBeenLastCalledWith(null)
+    expect(listed).not.toHaveBeenCalled()
     request.mockResolvedValueOnce(response(body))
     await api.machines()
     expect(JSON.parse(readFileSync(join(dataDir, 'machines.json'), 'utf8')).bodyOwner).toBe('account-a')

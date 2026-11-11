@@ -93,7 +93,6 @@ extension SuperTabVoiceSend on SuperTabController {
         'replyTo': root,
         'recipientIds': const <String>[],
         'attachmentIds': ids,
-        if (oneBuddy) 'oneBuddy': true,
       },
       {for (final (i, file) in attached.indexed) file: ids[i]},
     );

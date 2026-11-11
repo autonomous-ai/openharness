@@ -28,8 +28,8 @@ function engineFailure(error: string): 'sign-in' | 'engine' | null {
 }
 
 function pool(state: SuperTabState, machineId: string) { return state.machines?.find(m => m.machineId === machineId) }
-/** Only a routed worker's start: a Product Manager's start has its own retries (leadStart.ts), and a Buddy is its owner's own. */
-const worker = (start: AgentStart) => !!start.error && !start.request.leadFor && !start.request.buddyOf
+/** Only a routed worker's start: a Product Manager's start has its own retries (leadStart.ts). */
+const worker = (start: AgentStart) => !!start.error && !start.request.leadFor
 
 /** Signed in, with every usage window below its limit (or metered, with none), in the machine's latest reading. */
 function readsFine(machine: ContributedMachine, engine: string): boolean {

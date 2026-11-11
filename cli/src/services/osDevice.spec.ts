@@ -193,6 +193,22 @@ describe('the Harness OS computer, managed from the phone', () => {
     expect(spawnDetached).toHaveBeenCalledTimes(2)
   })
 
+  it('restarts at once when the update started is in and only waits for the restart', async () => {
+    const waiting = JSON.stringify({ ...JSON.parse(STATUS), ready: '/var/lib/harness-os/builds/aaa', restart_required: true })
+    let answer = STATUS
+    const exec = vi.fn(async () => answer)
+    const { ask, spawnDetached } = service({ exec })
+    expect(await ask({ action: 'update' })).toEqual({ started: true })
+    // Still updating: neither another update nor its restart starts.
+    expect(await ask({ action: 'update', reboot: true })).toEqual({ error: 'BUSY' })
+    answer = waiting
+    // In, and waiting for the restart: Restart to finish restarts; a plain update is still one too many.
+    expect(await ask({ action: 'update' })).toEqual({ error: 'BUSY' })
+    expect(await ask({ action: 'update', reboot: true })).toEqual({ started: true })
+    expect(spawnDetached).toHaveBeenLastCalledWith('/usr/bin/harness', ['update', '--reboot'])
+    expect(spawnDetached).toHaveBeenCalledTimes(2)
+  })
+
   it('does not count an update that could not start', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     const spawnDetached = vi.fn((): void => { throw new Error('spawn EAGAIN') })

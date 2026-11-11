@@ -147,7 +147,6 @@ class _Notifier extends AppNotifier {
     String? claudeHome,
     String? dsh,
     String? swarmRole,
-    String? swarmSkillMode,
     GridModel? model,
     String? prompt,
     String? name,
@@ -157,6 +156,7 @@ class _Notifier extends AppNotifier {
     PaneSplitRequest? split,
     AgentCreationAttempt? attempt,
     HarnessPlacement? placement,
+    bool browser = false,
   }) async {
     launches.add({'engine': engine, 'dsh': dsh});
     return 'Test launch refused.';

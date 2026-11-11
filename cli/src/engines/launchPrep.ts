@@ -8,7 +8,7 @@
 import { join } from 'node:path'
 import { homeRoots, launchHomeOf } from '../lib/engineHomes.js'
 import { homeIsNetworkOrDevice } from './kit/homeAdoption.js'
-import { acceptedIn, forgetTrustIn, recordAcceptanceIn, recordSettingIn, recordTrustIn, trustsIn } from './kit/folderTrust.js'
+import { acceptedIn, recordAcceptanceIn, recordSettingIn, recordTrustIn, trustsIn } from './kit/folderTrust.js'
 import { recordInheritedMcp } from './kit/inheritedMcp.js'
 import { repairHistory } from './kit/resumeRepair.js'
 import { launchContract } from './launches.js'
@@ -18,11 +18,8 @@ import type { AgentEngine } from './types.js'
 export interface FolderTrust {
   /** Whether the engine already trusts `path`. */
   trusts(path: string): boolean
-  /** Record trust in `path`: never removes anything, and leaves a file it cannot safely extend alone. `create`: also on a
-   *  computer where the engine never ran, making the file (a JSON one) with this folder alone. */
-  record(path: string, options?: { create?: boolean }): 'trusted' | 'already' | 'skipped'
-  /** Clear the trust flag of `path` itself, for a folder Harness made and is deleting (kit/folderTrust.ts `forgetTrustIn`). */
-  forget(path: string): 'forgotten' | 'absent' | 'skipped'
+  /** Record trust in `path`: never removes anything, and leaves a file it cannot safely extend alone. */
+  record(path: string): 'trusted' | 'already' | 'skipped'
 }
 
 /**
@@ -40,9 +37,9 @@ export function folderTrust(engine: AgentEngine, profile?: string | null, enviro
   const network = (): boolean => homeIsNetworkOrDevice(home())
   return {
     trusts: (path) => !network() && trustsIn(trust, file(), path),
-    record: (path, options) => {
+    record: (path) => {
       if (network()) return 'skipped'
-      const recorded = recordTrustIn(trust, file(), path, options)
+      const recorded = recordTrustIn(trust, file(), path)
       // The folder's other question, asked as the engine starts there: the MCP servers it inherits from above. A folder
       // Harness trusts for its agent is one whose questions are Harness's, so it is answered here too, by its default.
       const mcp = contract.inheritedMcp
@@ -54,7 +51,6 @@ export function folderTrust(engine: AgentEngine, profile?: string | null, enviro
       }
       return recorded
     },
-    forget: (path) => network() ? 'skipped' : forgetTrustIn(trust, file(), path),
   }
 }
 
@@ -79,7 +75,7 @@ export function firstRunAnswered(engine: AgentEngine, environment?: NodeJS.Proce
 /**
  * The person's answers to `engine`'s first-run screens, given on the phone setting up this computer (owner, 2026-11-06): its
  * `theme`, one of the contract's, and the screens done. Recorded as the engine records its own; a `false` the person set
- * before stays. No permission setting: the Buddy runs in its owner's own mode (task #4215). Whether it is answered now
+ * before stays. No permission setting: an agent runs in its owner's own mode (task #4215). Whether it is answered now
  * ([firstRunAnswered]).
  */
 export function answerFirstRun(engine: AgentEngine, answers: { theme: string }, environment?: NodeJS.ProcessEnv): boolean {

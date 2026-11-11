@@ -5,14 +5,12 @@ import { fail, type Actor } from './model.js'
 export const DELETED_TEXT = 'This message was deleted.'
 
 /** The message `message.edit` or `message.delete` names, found by the store in that conversation and readable by the actor
- *  (store.ts messageChangeTarget, the checks reactionTarget makes). Absent when it is not there or the actor may not see it. */
+ *  (store.ts messageChangeTarget). Absent when it is not there or the actor may not see it. */
 export interface MessageChangeTarget {
   messageId: string
   author: { kind: string; id: string }
   /** A person's own post: no system source (parts/commit.ts counts the same rows as a person's). */
   plain: boolean
-  /** Only a stored Buddy proposal supplies this: the person it was posted for. Delete only, never edit. */
-  proposalOwnerId?: string
   deleted: boolean
   hasFiles: boolean
   /** For a delete: some other row replies in its thread, so it stays as DELETED_TEXT. */
@@ -26,13 +24,14 @@ export interface MessageChangeTarget {
 
 type Counters = { reactionSeq?: number; lastMessageSequence: number; lastMainSequence?: number; lastPersonSequence?: number }
 
-/** Only the author changes a message: a person, on their own plain post, or deleting their own Buddy proposal (#3322).
- *  Its source owner must agree with its attribution. An agent (a Buddy too) never does, for anyone.
+/** Only the author changes a message: a person, on their own plain post. An agent never does, for anyone.
  *  A message the actor cannot see reads as unavailable, so a refusal tells nothing about it. */
-function changeable(actor: Actor, messageId: string, target: MessageChangeTarget | undefined, operation: 'edit' | 'delete'): MessageChangeTarget {
+function changeable(actor: Actor, messageId: string, target: MessageChangeTarget | undefined, operation: 'edit' | 'delete',
+  retiredNotice = false): MessageChangeTarget {
   if (target?.messageId !== messageId) fail('NOT_FOUND', 'This message is unavailable.', 404)
-  if (actor.kind !== 'person' || target.author.kind !== 'person' || target.author.id !== actor.userId
-    || (!target.plain && !(operation === 'delete' && target.proposalOwnerId === actor.userId))) {
+  if (retiredNotice) {
+    if (target.plain) fail('FORBIDDEN', 'Only its author can change this message.', 403)
+  } else if (actor.kind !== 'person' || target.author.kind !== 'person' || target.author.id !== actor.userId || !target.plain) {
     fail('FORBIDDEN', 'Only its author can change this message.', 403)
   }
   if (target.deleted) fail('MESSAGE_DELETED', 'This message was deleted.', 409)
@@ -40,7 +39,7 @@ function changeable(actor: Actor, messageId: string, target: MessageChangeTarget
 }
 
 /** `message.edit`: the author's new text replaces the old; no earlier text is kept. Empty only for a message with files.
- *  A change bumps the group, so every reader's next read takes the page again (reactions.ts). */
+ *  A change bumps the group, so every reader's next read takes the page again. */
 export function editMessage(group: { reactionSeq?: number }, actor: Actor, messageId: string, text: string,
   target: MessageChangeTarget | undefined): boolean {
   const found = changeable(actor, messageId, target, 'edit')
@@ -50,10 +49,11 @@ export function editMessage(group: { reactionSeq?: number }, actor: Actor, messa
   return true
 }
 
-/** `message.delete`: the row goes, or stays as DELETED_TEXT while replies hang under it. The store removes the rest. */
+/** `message.delete`: the row goes, or stays as DELETED_TEXT while replies hang under it. The store removes the rest.
+ *  [retiredNotice]: the store's removal of a notice of a kind nothing writes any more, which no person authored. */
 export function deleteMessage(group: Counters, actor: Actor, messageId: string,
-  target: MessageChangeTarget | undefined): { kept: boolean } {
-  const found = changeable(actor, messageId, target, 'delete')
+  target: MessageChangeTarget | undefined, retiredNotice = false): { kept: boolean } {
+  const found = changeable(actor, messageId, target, 'delete', retiredNotice)
   group.reactionSeq = (group.reactionSeq ?? 0) + 1
   if (found.hasReplies) return { kept: true }
   // Each counter that pointed at the row steps back to the newest row left of its kind (parts/commit.ts numberMessages).

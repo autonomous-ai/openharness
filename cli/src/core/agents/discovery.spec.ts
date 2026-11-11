@@ -3,6 +3,8 @@ import type { RegisteredSession } from '../../lib/registry.js'
 import type { DiscoveredTerminalAgent } from '../../lib/terminalAgentDiscovery.js'
 import type { TerminalBackend } from '../../lib/terminalBackend.js'
 import { bypassPermissionActive, permissionModeFromArgv } from '../../lib/processTable.js'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { createDiscoveryHandlers, type DiscoveryDeps } from './discovery.js'
 
 // The pane's backend, asked what became of an unconfirmed start's pane.
@@ -151,10 +153,53 @@ describe('discovery', () => {
       expect(run.deps.registry.setBypassPermission).not.toHaveBeenCalled()
     })
 
-    it('reads a Buddy launched in full mode back as full, never as an older Buddy\'s mode (task #2832)', () => {
+    it('reads an engine launched in full mode back as full (task #2832)', () => {
       expect(permissionModeFromArgv('codex', 'codex --dangerously-bypass-approvals-and-sandbox -c tui.fullscreen_transcript=false')).toBe('full')
       expect(permissionModeFromArgv('claude', 'claude --dangerously-skip-permissions')).toBe('full')
       expect(permissionModeFromArgv('codex', 'codex --sandbox read-only')).toBe('readOnly')
+    })
+
+    it('takes a pane for OpenClaw only once it shows the TUI: `openclaw onboard` renames itself `openclaw` too', async () => {
+      // What `openclaw onboard` draws (OpenClaw's clack wizard, 2026.11.2): no title, no footer. Not recorded: written
+      // from its intro and first prompt.
+      const onboard = '│\n◇\n\nOpenClaw 2026.11.2 (b556fdf) — tagline\n\n┌  OpenClaw setup\n│\n◆  I understand this is personal-by-default. Continue?\n│  ● Yes / ○ No\n└\n'
+      const tui = readFileSync(join(import.meta.dirname, '../../engines/openclaw/__fixtures__/screen-plain.txt'), 'utf8')
+      let screen = onboard
+      const capture = vi.fn(async () => ({ state: 'succeeded' as const, value: screen }))
+      const run = setup({ terminals: { backendFor: vi.fn(() => ({ paneState, capture }) as unknown as TerminalBackend) } })
+      run.rows.set('a1', row({ engine: 'openclaw', sessionId: '' }))
+      const openclaw = seen({ engine: 'openclaw', args: 'openclaw' })
+      vi.mocked(run.deps.registry.openProcessAgent).mockReturnValue({ entry: row({ agentId: 'new', engine: 'openclaw' }), isNew: true, evicted: null } as never)
+      await run.handlers.onObserved(openclaw, row({ engine: 'terminal' } as Partial<RegisteredSession>))
+      await run.handlers.onDiscovered(openclaw)
+      expect(capture).toHaveBeenCalledWith({ backend: 'tmux', paneId: '%0' })
+      expect(run.deps.registry.adoptEngine).not.toHaveBeenCalled()
+      expect(run.deps.registry.openProcessAgent).not.toHaveBeenCalled()
+      expect(run.deps.bindObservedAgent).not.toHaveBeenCalled()
+      // The TUI, drawn: taken.
+      screen = tui
+      await run.handlers.onObserved(openclaw, row({ engine: 'terminal' } as Partial<RegisteredSession>))
+      expect(run.deps.registry.adoptEngine).toHaveBeenCalledWith('a1', 'openclaw', expect.anything())
+      await run.handlers.onDiscovered(openclaw)
+      expect(run.deps.registry.openProcessAgent).toHaveBeenCalled()
+      // A row OpenClaw already has is never asked again: an overlay over its footer does not make it look gone.
+      capture.mockClear()
+      screen = onboard
+      await run.handlers.onObserved(openclaw, row({ engine: 'openclaw' }))
+      expect(capture).not.toHaveBeenCalled()
+      expect(run.deps.registry.updateProcessIdentity).toHaveBeenCalled()
+    })
+
+    it('never takes an `openclaw` process for OpenClaw while its screen cannot be read', async () => {
+      const capture = vi.fn(async () => { throw new Error('pane host gone') })
+      const run = setup({ terminals: { backendFor: vi.fn(() => ({ paneState, capture }) as unknown as TerminalBackend) } })
+      // Its pane's backend failed the read, or it shows in no pane at all.
+      for (const openclaw of [seen({ engine: 'openclaw', args: 'openclaw' }), seen({ engine: 'openclaw', args: 'openclaw', runtimes: [] })]) {
+        await run.handlers.onDiscovered(openclaw)
+      }
+      expect(capture).toHaveBeenCalledOnce()
+      expect(run.deps.registry.openProcessAgent).not.toHaveBeenCalled()
+      expect(run.deps.bindObservedAgent).not.toHaveBeenCalled()
     })
 
     it('adopts the engine someone typed into a terminal, and announces it', async () => {

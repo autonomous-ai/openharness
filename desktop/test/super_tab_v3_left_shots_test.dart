@@ -26,10 +26,8 @@ Map<String, dynamic> _agent(String id, String name) => {
   'configuration': {'engine': 'codex'},
 };
 
-/// Swarm v3's left pane and middle (task #4118), in both appearances: My agents with the Buddy first, a PM's Lead ring and an
-/// unread name in bold; the chat of a selected agent in the middle; a project's Board with Projects open. Task #4192: no
-/// arrows under the org switcher, the Buddy's own avatar, only the server's My agents, and My agents folded. Task #4220:
-/// Decisions in the middle keeps Tasks on the right.
+/// The Swarm's left pane and middle, in both appearances: Your Team with a PM's Lead ring and an unread name in bold, and
+/// the chat of a selected agent in the middle.
 void main() {
   setUpAll(() async {
     await loadCaptureFonts(shots);
@@ -59,15 +57,12 @@ void main() {
         if (scene == 'no-agents') {
           server.state['agents'] = <dynamic>[];
         } else {
-          server.state['swarmBuddy'] = true;
           server.state['agents'] = [
-            // The person's one Buddy is of no project, as the server sends it.
+            // The person's own agent is of no project, as the server sends it.
             {
-              ...(_agent('buddy', 'Buddy')..remove('projectId')),
-              'buddyScope': 'swarm',
-              'buddyOf': {'personId': 'owner'},
-              'kind': 'buddy',
-              'chatId': 'swarm-buddy-owner',
+              ...(_agent('wren', 'Wren')..remove('projectId')),
+              'kind': 'regular',
+              'chatId': 'agent-chat-wren',
               'myAgent': true,
             },
             {
@@ -91,10 +86,9 @@ void main() {
             },
           ];
           groups.add({
-            ...conversationFixture('swarm-buddy-owner', 'Buddy'),
-            'kind': 'swarm-buddy',
-            'buddyOwnerId': 'owner',
-            'agentIds': ['buddy'],
+            ...conversationFixture('agent-chat-wren', 'Wren'),
+            'kind': 'agent-chat',
+            'agentIds': ['wren'],
           });
           groups.firstWhere((g) => g['id'] == 'lead')['leadId'] = 'orion';
           // A Regular agent's own chat with its person (backend #4116): it needs no Lead.

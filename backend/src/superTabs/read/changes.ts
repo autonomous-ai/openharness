@@ -3,32 +3,29 @@
  * dormant group goes as a one-line stub, and only to a reader who could read the part's last data. Where that check
  * cannot be made (its project is gone), the change also moved the visibility epoch and every reader reloads.
  */
-import { groupForBuddy, type Actor, type Agent, type AgentStart, type Conversation } from '../model.js'
-import { isBuddyReader } from '../buddies.js'
+import { type Actor, type Agent, type AgentStart, type Conversation } from '../model.js'
 import { canReadAgent, canReadGroup } from '../projects.js'
 import { knownKind, type MachineData, type Part } from '../parts/index.js'
 import type { ChangesDelta, DormantStub, MachineView, Tombstone } from './contract.js'
-import { envelope, progressView, seenIn, visibleGroupView, type ReaderView } from './views.js'
+import { envelope, seenIn, visibleGroupView, type ReaderView } from './views.js'
 
-export type PartChanges = Pick<ChangesDelta, 'head' | 'members' | 'agents' | 'groups' | 'machines' | 'machineReadings' | 'starts' | 'progress'>
+export type PartChanges = Pick<ChangesDelta, 'head' | 'members' | 'agents' | 'groups' | 'machines' | 'machineReadings' | 'starts'>
 
-/** A command's own time can be a little before the stamp of the part it wrote, so a read between them still finds the card moved. */
-const CARD_SKEW_MS = 60_000
 const stub = (part: Part): Tombstone => ({ key: part.key, version: part.version, changedAt: part.changedAt, deleted: true })
 const dormantStub = (part: Part): DormantStub => ({ key: part.key, version: part.version, changedAt: part.changedAt, dormant: true })
 /** A read check that names a project which no longer exists answers no. */
 const safely = (check: () => boolean): boolean => { try { return check() } catch { return false } }
 
 /** [light]: the reader asked for a line for a machine's own reading, and its cursor's time: anything else since then sends the part. */
-export function changesFor(view: ReaderView, changed: Part[], actor: Actor, light?: { since: number }, cursor?: number): PartChanges {
+export function changesFor(view: ReaderView, changed: Part[], actor: Actor, light?: { since: number }): PartChanges {
   const { state, parts: seen } = view
   const live = <T>(list: Array<{ key: string } & T>, key: string) => list.find(p => p.key === key)
   const groupReadable = (group: Conversation) => safely(() => canReadGroup(state, actor, group))
   const groupOf = (id: string) => state.conversations.find(c => c.id === id)
     ?? changed.find(p => p.kind === 'group' && p.key === id)?.data as Conversation | undefined
   const visibleAgents = new Set(seen.agents.map(a => a.key))
-  const seenMachines = seenIn(seen), buddy = isBuddyReader(state, actor)
-  const out: PartChanges = { head: null, members: [], agents: [], groups: [], machines: [], ...light ? { machineReadings: [] } : {}, starts: [], progress: [] }
+  const seenMachines = seenIn(seen)
+  const out: PartChanges = { head: null, members: [], agents: [], groups: [], machines: [], ...light ? { machineReadings: [] } : {}, starts: [] }
   for (const part of changed) {
     switch (part.kind) {
       case 'head': out.head = seen.head; break
@@ -52,21 +49,11 @@ export function changesFor(view: ReaderView, changed: Part[], actor: Actor, ligh
         // Sent from the changed part itself: the reader's view may hold only a conversation's light fields (parts/light.ts).
         else if (groupReadable(part.data as Conversation)) {
           const group = part.data as Conversation
-          out.groups.push(envelope(part, visibleGroupView(buddy ? groupForBuddy(group) : group, visibleAgents, seenMachines)))
-          // A task whose status line moved since the reader's cursor (statusCard.ts, tasks #3593, #4419): readers get the card in the
-          // head's project, so the head goes with it, or a live reader keeps the old card until something else moves the head. Only
-          // then: a task changes with every message, and the head is large. A reader with no cursor to compare gets it.
-          if (group.statusLine && !out.head && (cursor === undefined || group.statusLine.since >= cursor - CARD_SKEW_MS)) out.head = seen.head
+          out.groups.push(envelope(part, visibleGroupView(group, visibleAgents, seenMachines)))
         }
         break
       }
       case 'machine': {
-        // A Buddy reads no machines, not even a removal's id (review 1 of #2115).
-        if (buddy) break
-        // Nor does anyone read a Buddy-only machine, its own person included, who never had it listed (model.ts visibleState):
-        // not its record, its cleanup or the part's removal, whose data is the last the part held (security review 1 of #2234).
-        const data = part.data as MachineData | null
-        if (data?.contribution?.buddyOnly || data?.cleanups?.some(c => c.buddyOnly) || data?.closingSessions?.some(c => c.buddyOnly)) break
         const machine = live(seen.machines, part.key)
         const receivedAt = (machine?.data as MachineView | undefined)?.observation?.receivedAt
         if (machine && !part.deleted && light && receivedAt !== undefined && Math.max(part.changedAt, part.contentAt ?? 0) <= light.since) {
@@ -77,15 +64,9 @@ export function changesFor(view: ReaderView, changed: Part[], actor: Actor, ligh
         break
       }
       case 'start': {
-        // A Buddy reads no starts, so not a removal's id either (security review 2 of #2258).
-        if (buddy) break
         const start = live(seen.starts, part.key), group = groupOf((part.data as AgentStart).request.conversationId)
         if (part.deleted) { if (group && groupReadable(group)) out.starts.push(stub(part)) }
         else if (start) out.starts.push(start)
-        break
-      }
-      case 'progress': {
-        if (!part.deleted && seen.head.data.projects?.some(p => p.id === part.key)) out.progress.push(envelope(part, progressView(part.data as never)))
         break
       }
     }

@@ -5,7 +5,7 @@
  * holds no key, as reaching that socket is the credential, and it never falls back to a port: with the socket gone the daemon is
  * down, and the client is told so.
  *
- * Its own small script, written into the vault's private folder as lib/buddyGuard.ts writes its guard, for three reasons found in
+ * Its own small script, written into the vault's private folder, for three reasons found in
  * review of #2558. An entry naming the running script would name the lean bundle from the daemon, which has no CLI, and from any
  * `harness connections` a worktree that may be removed. An entry naming cli.js would load all of it, about 45 MiB, once per
  * connection per agent. And the updater ships only cli.js and notify.mjs, so a third file there would need its manifest changed.

@@ -34,35 +34,62 @@ void main() {
     expect(snapshot.conversation('aeef')!.lastMessageSequence, 219804);
     expect(snapshot.agents.map((a) => a.displayName), ['River', 'Hugo']);
     expect(snapshot.localModels!.grid, 'swarm-c514');
-    expect(state['githubApp'], true);
     // The machine and its values worked out at read time.
     expect(snapshot.pool('7835')!['teamWork'], {'allowed': true});
     expect(snapshot.pool('7835')!['availableSlots'], 3);
   });
 
-  test(
-    'derived values overlay the agents; a null decision keeps the stored one',
-    () {
-      final state = SuperTabParts.firstLoad(recorded('first_load')).state;
-      final agents = (state['agents'] as List).cast<Map<String, dynamic>>();
-      final hugo = agents.firstWhere((a) => a['id'] == '0540');
-      final river = agents.firstWhere((a) => a['id'] == '0fcb');
-      expect(hugo['downSince'], '2026-10-26T10:19:51.474Z');
-      expect(hugo['workDecision'], 'awaiting');
-      expect(river['downSince'], isNull);
-      expect(river.containsKey('workDecision'), isFalse);
+  test('derived values overlay the agents', () {
+    final state = SuperTabParts.firstLoad(recorded('first_load')).state;
+    final agents = (state['agents'] as List).cast<Map<String, dynamic>>();
+    final hugo = agents.firstWhere((a) => a['id'] == '0540');
+    final river = agents.firstWhere((a) => a['id'] == '0fcb');
+    expect(hugo['downSince'], '2026-10-26T10:19:51.474Z');
+    expect(river['downSince'], isNull);
 
-      final changed = recorded('changes');
-      final parts = SuperTabParts.firstLoad(recorded('first_load'))
-        ..apply(changed);
-      final after = (parts.state['agents'] as List)
-          .cast<Map<String, dynamic>>()
-          .firstWhere((a) => a['id'] == '0540');
-      // Derived says nothing more about the decision: the stored one stands.
-      expect(after['workDecision'], 'release');
-      expect(after['downSince'], isNull);
-    },
-  );
+    final changed = recorded('changes');
+    final parts = SuperTabParts.firstLoad(recorded('first_load'))
+      ..apply(changed);
+    final after = (parts.state['agents'] as List)
+        .cast<Map<String, dynamic>>()
+        .firstWhere((a) => a['id'] == '0540');
+    expect(after['downSince'], isNull);
+  });
+
+  // Backend S18 stops sending a role's id and name and the avatars' signed links: an agent then goes by its kind's role,
+  // and an uploaded picture with no link reads as none, drawn as any agent with no picture is (identity.dart).
+  test('a read with no role ids, role names or avatar links falls back', () {
+    final load = recorded('first_load');
+    final derived = Map<String, dynamic>.from(load['derived'] as Map)
+      ..remove('avatars');
+    derived['agents'] = {
+      for (final MapEntry(:key, :value) in (derived['agents'] as Map).entries)
+        key: Map<String, dynamic>.from(value as Map)
+          ..remove('roleId')
+          ..remove('roleName'),
+    };
+    final agents = [
+      for (final part in (load['agents'] as List).cast<Map>())
+        {
+          ...part,
+          'data': {
+            ...(part['data'] as Map),
+            'avatar': {'kind': 'upload', 'id': 'a1'},
+          },
+        },
+    ];
+    final snapshot = SuperTabSnapshot.fromJson(
+      SuperTabParts.firstLoad({...load, 'agents': agents, 'derived': derived})
+          .state,
+    );
+    final river = snapshot.agent('0fcb')!, hugo = snapshot.agent('0540')!;
+    expect(river.roleId, isNull);
+    expect(river.roleName, isNull);
+    expect(snapshot.roleOf('0fcb'), (name: 'Product Manager', badge: 'PM'));
+    expect(snapshot.roleOf('0540'), (name: 'Engineer', badge: 'Dev'));
+    expect(river.avatar, isNull);
+    expect(hugo.avatar, isNull);
+  });
 
   test('a first load of another format is refused', () {
     expect(
@@ -143,7 +170,6 @@ void main() {
         SuperTabSnapshot.fromJson(state).pool('7835')!['availableSlots'],
         2,
       );
-      expect(state['mentionsWaiting'], 1);
     },
   );
 
@@ -340,11 +366,11 @@ void main() {
         'derived': {
           'agents': <String, dynamic>{},
           'machines': <String, dynamic>{},
-          'mentionsWaiting': 4,
+          'avatars': {'person:owner': 'https://example.com/a.png'},
         },
       });
       expect(parts.derivedEtag, 'e2');
-      expect(parts.derived['mentionsWaiting'], 4);
+      expect(parts.derived['avatars'], isNotEmpty);
       expect(parts.derived['agents'], isEmpty);
     });
 

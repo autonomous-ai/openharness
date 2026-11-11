@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../../logging/app_log.dart';
 import '../controller.dart';
 import 'model.dart';
 
@@ -142,10 +143,12 @@ class SuperTabLeaderboardReader extends ChangeNotifier {
         error = null;
       } else {
         error = failure.message;
+        _logFailed(failure.code);
       }
-    } catch (_) {
+    } catch (thrown) {
       if (read != _read) return;
       error = "Couldn't read the leaderboard.";
+      _logFailed('${thrown.runtimeType}');
     }
     _notify();
   }
@@ -153,6 +156,10 @@ class SuperTabLeaderboardReader extends ChangeNotifier {
   void _notify() {
     if (!_disposed) notifyListeners();
   }
+
+  /// By the failure's name alone: what the server or GitHub said may name the person's own work.
+  void _logFailed(String name) =>
+      appLog.warn('super-tabs', 'Project leaderboard not read ($name)');
 
   @override
   void dispose() {
@@ -186,7 +193,7 @@ class SuperTabProjectBoard extends SuperTabLeaderboardReader {
   String? get projectId => _following;
 
   void _follow() {
-    // A chat of no project (the one Buddy) still has models to show in Manage:
+    // A chat of no project (an agent's own) still has models to show in Manage:
     // the read needs some project. It sums them all unless Members has been
     // set to one project, a choice this shared board keeps.
     final snapshot = controller.snapshot;

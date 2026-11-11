@@ -4,7 +4,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/services.dart';
-import 'package:harness/core/machine_resources.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
@@ -77,7 +76,6 @@ void main() {
     SuperTabController c,
     AppNotifier app, {
     void Function(Uri url)? openDownload,
-    Future<MachineResources?> Function(String id)? readResources,
     Brightness brightness = Brightness.dark,
     Size size = const Size(900, 1000),
   }) async {
@@ -92,13 +90,8 @@ void main() {
         home: Scaffold(
           body: Builder(
             builder: (context) => TextButton(
-              onPressed: () => showAddComputers(
-                context,
-                c,
-                app,
-                readResources: readResources ?? (_) async => null,
-                openDownload: openDownload,
-              ),
+              onPressed: () =>
+                  showAddComputers(context, c, app, openDownload: openDownload),
               child: const Text('open'),
             ),
           ),
@@ -153,8 +146,8 @@ void main() {
         computer(f, 'twin', 'Studio');
         computer(f, 'rig', '2x 4090 Rig');
         computer(f, 'old', 'Old iMac', needsLink: true);
-        // Another account's harness and whole computer, and a Mac's Harness
-        // Team account: never rows of their own.
+        // Another account's harness and whole computer, and a leftover
+        // Harness Team account: never rows of their own.
         computer(f, 'theirs', 'Diego’s harness', shared: true);
         computer(f, 'team', 'Studio · Team', sessionKind: 'team');
         f.connection.server.state['machines'] = [
@@ -193,7 +186,6 @@ void main() {
       expect(inRow('m', thisMac(f)), findsOneWidget);
       expect(find.text('Studio'), findsNWidgets(2));
       expect(find.textContaining('Diego'), findsNothing);
-      expect(find.text('Studio · Team'), findsNothing);
       expect(row('team'), findsNothing);
       expect(find.text('Tony Mac'), findsNothing);
       expect(tester.takeException(), isNull);
@@ -247,7 +239,7 @@ void main() {
   );
 
   testWidgets(
-    'Add N adds exactly the ticked computers, one at a time, with today\'s defaults and the Team account rule',
+    'Add N adds exactly the ticked computers, one at a time, with today\'s defaults',
     (tester) async {
       final (:f, :c) = await swarm((f) {
         computer(f, 'studio', 'Studio');
@@ -272,10 +264,8 @@ void main() {
         'engines': ['claude', 'codex'],
         'maxAgents': 8,
         'agents': 'memory',
-        'teamAccountOnly': true,
       });
       expect(commands.last['name'], 'Studio');
-      expect(commands.last['teamAccountOnly'], isTrue);
       // One at a time: the second computer's setup starts only after the first
       // one was added.
       final steps = [
@@ -387,63 +377,6 @@ void main() {
   );
 
   testWidgets(
-    'where the Swarm has no Team accounts nothing is marked Team account only',
-    (tester) async {
-      final (:f, :c) = await swarm((f) {
-        f.connection.server.state['teamAccounts'] = false;
-      });
-      await openBox(tester, c, f.app);
-      await tester.tap(find.text('Add 1'));
-      await settle(tester);
-      final command = f.connection.server.posts.single['command'] as Map;
-      expect(command.containsKey('teamAccountOnly'), isFalse);
-      await close(tester, f, c);
-    },
-  );
-
-  // Swarm v3 makes no Team account (#4221): a computer without one is short of nothing, while one whose existing Team
-  // account fails its check still says so.
-  testWidgets(
-    'an added computer without a working Team account says only your projects run there',
-    (tester) async {
-      final (:f, :c) = await swarm((f) {
-        computer(f, 'studio', 'Studio');
-        computer(f, 'air', 'MacBook Air');
-        f.connection.server.state['machines'] = [
-          {
-            'machineId': 'studio',
-            'name': 'Studio',
-            'contributorId': 'owner',
-            'teamWork': {'allowed': false, 'code': 'TEAM_ACCOUNT_REQUIRED'},
-          },
-          {
-            'machineId': 'air',
-            'name': 'MacBook Air',
-            'contributorId': 'owner',
-            'teamWork': {'allowed': false, 'code': 'PRIVACY_CHECK_FAILED'},
-          },
-        ];
-      });
-      await openBox(tester, c, f.app);
-      // A word or two on the row, the whole reason on hover.
-      expect(inRow('studio', 'added'), findsOneWidget);
-      expect(find.textContaining('not set up'), findsNothing);
-      expect(
-        find.byTooltip('No Team account yet, so only your projects run here.'),
-        findsNothing,
-      );
-      expect(inRow('air', 'added · check failed'), findsOneWidget);
-      expect(
-        find.byTooltip(
-          'Its Team account failed the privacy check, so only your projects run here.',
-        ),
-        findsOneWidget,
-      );
-      await close(tester, f, c);
-    },
-  );
-
-  testWidgets(
     'losing write access while the box is open takes its rows away and says why',
     (tester) async {
       final (:f, :c) = await swarm((f) {
@@ -512,13 +445,13 @@ void main() {
     },
   );
 
-  testWidgets('Machines + opens Add your computers', (tester) async {
+  testWidgets('Add machine opens Add your computers', (tester) async {
     final (:f, :c) = await swarm((_) {});
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
           body: SizedBox(
-            width: 300,
+            width: 800,
             height: 400,
             child: SuperTabMachines(
               controller: c,
@@ -531,34 +464,12 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('Add machine'));
+    await tester.tap(find.byKey(const ValueKey('super-manage-add-machine')));
     await tester.pumpAndSettle();
     expect(find.text('Add your computers'), findsOneWidget);
     expect(find.byKey(const ValueKey('add-computer-m')), findsOneWidget);
     await close(tester, f, c);
   });
-
-  testWidgets(
-    'a Mac\'s Harness Team account in the Swarm is part of its Mac\'s row, never one of its own',
-    (tester) async {
-      final (:f, :c) = await swarm((f) {
-        computer(f, 'm-team', 'This Mac · Team');
-        f.connection.server.state['machines'] = [
-          {'machineId': 'm', 'contributorId': 'owner'},
-          {
-            'machineId': 'm-team',
-            'contributorId': 'owner',
-            'hostMachineId': 'm',
-          },
-        ];
-      });
-      await openBox(tester, c, f.app);
-      expect(row('m'), findsOneWidget);
-      expect(inRow('m', 'added'), findsOneWidget);
-      expect(row('m-team'), findsNothing);
-      await close(tester, f, c);
-    },
-  );
 
   testWidgets(
     'a Lead running on this Mac does not make it added: only the Swarm\'s Machines list does',
@@ -604,25 +515,33 @@ void main() {
   );
 
   testWidgets(
-    'each computer is added with the agent count its own memory suggests',
+    'an add whose reply was lost is settled under its own receipt when Add is pressed again',
     (tester) async {
       final (:f, :c) = await swarm((_) {});
-      // 16 GiB total suggests four agents, whatever is free.
-      await openBox(
-        tester,
-        c,
-        f.app,
-        readResources: (_) async => const MachineResources(
-          memoryTotalBytes: 16 * 1024 * 1024 * 1024,
-          memoryUsedBytes: 8 * 1024 * 1024 * 1024,
-        ),
-      );
+      await openBox(tester, c, f.app);
+      // The add reaches the server and every reply to it is lost: the row
+      // fails and the attempt keeps its own receipt.
+      f.connection.server
+        ..loseReply = true
+        ..loseResentReplies = 100;
       await tester.tap(find.text('Add 1'));
       await settle(tester);
-      expect(
-        (f.connection.server.posts.single['command'] as Map)['maxAgents'],
-        4,
-      );
+      expect(inRow('m', 'failed'), findsOneWidget);
+      expect(c.pendingCommand?['type'], 'machine.contribute');
+
+      f.connection.server.loseResentReplies = 0;
+      await tester.tap(find.byKey(const ValueKey('add-computers')));
+      await settle(tester);
+      // That attempt is confirmed under its receipt: the machine is added once.
+      final receipts = [
+        for (final post in f.connection.server.posts)
+          if ((post['command'] as Map)['type'] == 'machine.contribute')
+            post['operationId'],
+      ];
+      expect(receipts[1], receipts[0]);
+      expect(c.pendingCommand, isNull);
+      expect(find.text('Add your computers'), findsNothing);
+      expect(tester.takeException(), isNull);
       await close(tester, f, c);
     },
   );
@@ -780,11 +699,7 @@ void main() {
         );
         computer(f, 'rig', '2x 4090 Rig');
         f.connection.server.state['machines'] = [
-          {
-            'machineId': 'rig',
-            'contributorId': 'owner',
-            'teamWork': {'allowed': false, 'code': 'PRIVACY_CHECK_STALE'},
-          },
+          {'machineId': 'rig', 'contributorId': 'owner'},
         ];
       });
       tester.platformDispatcher.textScaleFactorTestValue = 2;
@@ -804,13 +719,11 @@ void main() {
 
   // The PR's pictures, light and dark, over in-memory Swarms only: the first
   // box with this Mac not added, several computers, all added, offline rows,
-  // a Team account's failed check, Dee's Swarm with six computers, and a row
-  // that could not be added.
-  Map<String, dynamic> pool(String id, String name, [String? teamCode]) => {
+  // Dee's Swarm with six computers, and a row that could not be added.
+  Map<String, dynamic> pool(String id, String name) => {
     'machineId': id,
     'name': name,
     'contributorId': 'owner',
-    if (teamCode != null) 'teamWork': {'allowed': false, 'code': teamCode},
   };
   final scenes = <(String, void Function(SuperTabLaunchFixture f))>[
     (
@@ -853,17 +766,6 @@ void main() {
       },
     ),
     (
-      '5-team-account-check-failed',
-      (f) {
-        computer(f, 'studio', 'Studio');
-        computer(f, 'mini', 'Mac mini');
-        f.connection.server.state['machines'] = [
-          pool('m', 'tropic', 'TEAM_ACCOUNT_REQUIRED'),
-          pool('studio', 'Studio', 'PRIVACY_CHECK_FAILED'),
-        ];
-      },
-    ),
-    (
       '6-dee-swarm-six-computers',
       (f) {
         computer(f, 'studio', 'Studio');
@@ -874,7 +776,7 @@ void main() {
         f.connection.server.state['machines'] = [
           pool('m', 'tropic'),
           pool('rig', '2x 4090 Rig'),
-          pool('mini', 'Mac mini', 'TEAM_ACCOUNT_REQUIRED'),
+          pool('mini', 'Mac mini'),
         ];
       },
     ),

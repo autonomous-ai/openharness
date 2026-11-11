@@ -32,7 +32,6 @@ import { presenceWriteDue, touchDeviceOnlineDay, type PresenceWriteState } from 
 import { countryCodeFromHeaders } from './clientGeo.js'
 import { utcDayKey } from '../types/analytics.js'
 import { agentLimit, recordCreatedAgent } from './agentTracker.js'
-import { env } from '../config/env.js'
 import { logger } from '../utils/logger.js'
 import { fireAndForget } from '../utils/async.js'
 import { guardedSend, guardedSendJson } from './wsSend.js'
@@ -342,9 +341,7 @@ export function handleDeviceUpgrade(req: IncomingMessage, socket: Duplex, head: 
     try {
       user = await authenticateAccessToken(accessToken, autonomousEnv, { allowHarnessSession: 'computer' })
     } catch (err) {
-      // A Mac's team account (lib/teamSession.ts) has no device lane: refused for good, like the wrong environment.
-      if (err instanceof SsoAuthError && (err.code === 'AUTONOMOUS_ENV_MISMATCH' || err.code === 'AUTONOMOUS_ENV_NOT_ALLOWED'
-        || err.code === 'TEAM_SESSION_LIMITED')) {
+      if (err instanceof SsoAuthError && (err.code === 'AUTONOMOUS_ENV_MISMATCH' || err.code === 'AUTONOMOUS_ENV_NOT_ALLOWED')) {
         denyWith(403, 'Forbidden')
         return
       }

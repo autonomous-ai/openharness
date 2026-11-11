@@ -580,21 +580,14 @@ describe('Super Tab attachment pass-through', () => {
 
   // A profile picture goes the same way (Desktop's Upload picture…); before this, the daemon answered 404 and Desktop
   // showed only "Could not upload the file".
-  it('hands an avatar picture to the pass-through, guarded the same way', async () => {
-    const forward = vi.fn(async (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, path: string) => {
-      let bytes = 0
-      for await (const chunk of req) bytes += (chunk as Buffer).byteLength
-      res.writeHead(200, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ path, bytes }))
-    })
+  // The profile picture route went with the v3 people screens (backend #3892): the daemon passes no picture through.
+  it('passes no avatar picture through', async () => {
+    const forward = vi.fn()
     const { base } = await start({ onSuperTabAttachment: forward })
-    const headers = { 'x-adapter-local': '1', 'content-type': 'multipart/form-data; boundary=x' }
-    expect((await fetch(`${base}/api/super-tabs/tab-1/avatars`, { method: 'POST',
-      headers: { ...headers, origin: 'https://untrusted.example' }, body: 'x' })).status).toBe(403)
+    const r = await fetch(`${base}/api/super-tabs/tab-1/avatars`, { method: 'POST',
+      headers: { 'x-adapter-local': '1', 'content-type': 'multipart/form-data; boundary=x' }, body: 'picture' })
+    expect(r.status).not.toBe(200)
     expect(forward).not.toHaveBeenCalled()
-    const r = await fetch(`${base}/api/super-tabs/tab-1/avatars`, { method: 'POST', headers, body: 'picture' })
-    expect(r.status).toBe(200)
-    expect(await r.json()).toEqual({ path: '/api/super-tabs/tab-1/avatars', bytes: 7 })
   })
 
   // Files over 10 MB go straight to storage (contract of group 1604): the daemon asks the backend for the link and says the
@@ -716,7 +709,7 @@ describe('account Experimental settings proxy', () => {
     const newer = { ...body, counters: { ...body.counters, health_desktop_frame_slow_wait: 2, health_desktop_PRIVATE_CANARY: 1 } }
     const kept = await post(newer)
     expect(kept.status).toBe(200)
-    expect(kept.headers.get('x-harness-usage-vocabulary')).toBe('8')
+    expect(kept.headers.get('x-harness-usage-vocabulary')).toBe('9')
     expect(send).toHaveBeenCalledExactlyOnceWith({ ...body,
       counters: { ...body.counters, health_desktop_frame_slow_wait: 2, health_desktop_report_unknown_metric: 1 } })
     expect(JSON.stringify(send.mock.calls)).not.toContain('PRIVATE_CANARY')
@@ -729,7 +722,7 @@ describe('account Experimental settings proxy', () => {
     ] as const) {
       const response = await post(refused, h)
       expect(response.status).toBe('x-adapter-local' in h ? 400 : 403)
-      expect(response.headers.get('x-harness-usage-vocabulary')).toBe('8')
+      expect(response.headers.get('x-harness-usage-vocabulary')).toBe('9')
       expect(await response.text()).not.toContain('PRIVATE_CANARY')
     }
     expect(send).toHaveBeenCalledOnce()

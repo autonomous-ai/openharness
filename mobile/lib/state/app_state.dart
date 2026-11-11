@@ -3413,6 +3413,7 @@ class AppNotifier extends ChangeNotifier {
           prev.status != agent.status ||
           prev.terminalAvailable != agent.terminalAvailable ||
           prev.terminalUnavailableReason != agent.terminalUnavailableReason ||
+          prev.namedState != agent.namedState ||
           // A row's stats line (`sheet_agent_lines.dart`) — the desktop
           // compares these three too.
           prev.tokensUsed != agent.tokensUsed ||
@@ -6433,6 +6434,13 @@ class AppNotifier extends ChangeNotifier {
     try {
       return await _conn(machineId)
           .request('os_device', payload: payload, timeout: timeout);
+    } on WsRequestFailure catch (failure) {
+      // The computer answered and refused: its own code (BUSY, WRONG_PASSWORD…) and sentence, for
+      // the page to show. Only no answer at all is UNAVAILABLE.
+      return {
+        'error': failure.code,
+        if (failure.message != null) 'message': failure.message,
+      };
     } catch (_) {
       return {'error': 'UNAVAILABLE'};
     }
@@ -6966,7 +6974,7 @@ class AppNotifier extends ChangeNotifier {
 
   /// Asks the account's own computer [machineId] a Swarm question of its own
   /// (`super_tabs`), such as preparing a Buddy's folder there
-  /// (`prepareContribution`, as the desktop's `prepareBuddyMachine` asks it).
+  /// (`prepareContribution`).
   /// A refusal throws; so does an account change while it was asked.
   Future<Map<String, dynamic>> swarmAskComputer(
     String machineId,

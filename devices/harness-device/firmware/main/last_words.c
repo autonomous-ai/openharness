@@ -29,8 +29,9 @@ static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 static esp_reset_reason_t s_reason;
 static bool s_abnormal;
 // The previous boot's lines, copied out before this boot starts overwriting the ring. Static rather than
-// heap: 4 KB of BSS is cheaper than a failed allocation at the one moment it would matter.
-static char s_previous[RING_BYTES + 1];
+// heap, and in PSRAM's BSS (zeroed before app_main, where last_words_boot fills it; read only from the cable
+// session task, never from an ISR or the log hook): it costs no internal RAM and cannot fail to allocate.
+static EXT_RAM_BSS_ATTR char s_previous[RING_BYTES + 1];
 static size_t s_previous_len;
 static bool s_reported;
 

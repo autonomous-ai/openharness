@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
-import { CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, emptyPorts, LANE_OFF, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, TURN_DELIVERERS, TURN_END_HEARERS, WIFI_FALLBACKS, WIFI_OFF, type CoreApiDeps, type SwarmAgentDeps } from './api.js'
+import { AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS, mayOpenBrowser, CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, emptyPorts, LANE_OFF, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, TURN_DELIVERERS, TURN_END_HEARERS, WIFI_FALLBACKS, WIFI_OFF, type CoreApiDeps, type SwarmAgentDeps } from './api.js'
 import { FAIL, readFallback } from './serviceHost.js'
 
 const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/work/app' }) as RegisteredSession
@@ -25,11 +25,6 @@ describe('the core API services stand on', () => {
     expect([given!.closeAgent, given!.resumeAgent, given!.creationStatus]).toEqual([closeAgent, resumeAgent, creationStatus])
   })
 
-  it('exposes an optional native-turn observer without importing feature state', () => {
-    const nativeTurns = vi.fn(async () => null)
-    expect(createCoreApi({ ...coreDeps(), nativeTurns }).transcripts.nativeTurns).toBe(nativeTurns)
-    expect(createCoreApi(coreDeps()).transcripts.nativeTurns).toBeUndefined()
-  })
   it('carries the existing native creation-status provider without inventing one for an older core', async () => {
     const creationStatus = vi.fn(async (creationId: string) => ({ creationId, state: 'cancelled' as const }))
     const core = createCoreApi({ ...coreDeps(), creationStatus })
@@ -266,6 +261,42 @@ describe('the core API services stand on', () => {
     expect(await bare.agents.lastActivity!('kid')).toBeNull()
   })
 
+  // The agent browser keeps a browser for an agent the core still has, and its tools in a pane name their agent by it.
+  it('names every agent\'s id, live and stopped, and the live agent of a pane', async () => {
+    const deps = coreDeps()
+    const paned = { ...row('live'), runtimes: [{ backend: 'tmux', paneId: '%7' }] } as RegisteredSession
+    const core = createCoreApi({ ...deps, registry: { ...deps.registry, list: vi.fn(() => [paned]) } as unknown as CoreApiDeps['registry'] })
+    expect(await core.agents.ids!()).toEqual({ live: ['live'], stopped: ['stopped'] })
+    expect(await core.agents.ofPane!('%7')).toBe('live')
+    expect(await core.agents.ofPane!('%8')).toBeNull()
+  })
+
+  it('hands a service\'s product counters on only where the core was told where they go', () => {
+    const count = vi.fn()
+    createCoreApi({ ...coreDeps(), count }).count!('agent_browser_enabled')
+    expect(count).toHaveBeenCalledWith('agent_browser_enabled')
+    expect(createCoreApi(coreDeps()).count).toBeUndefined()
+  })
+
+  // A verified machine share is `owner` too, and the browser holds its person's logins.
+  it('opens an agent\'s browser for this computer and the owner\'s own apps only, never a plain owner or a guest', () => {
+    expect(AGENT_BROWSER_REQUESTS).toEqual(['agent_browser_available', 'agent_browser_setup', 'agent_browser_retry',
+      'agent_browser_state', 'agent_browser_settings', 'agent_browser_settings_save', 'agent_browser_proxy_test'])
+    expect(mayOpenBrowser({ local: true, owner: true })).toBe(true)
+    expect(mayOpenBrowser({ local: false, owner: true, accountOwner: true })).toBe(true)
+    expect(mayOpenBrowser({ local: false, owner: true })).toBe(false)
+    expect(mayOpenBrowser({ local: false, owner: true, accountOwner: true, guest: 'kim@acme.io' })).toBe(false)
+    expect(mayOpenBrowser({ local: true, owner: false, guest: 'kim@acme.io' })).toBe(false)
+  })
+
+  it('tells the agent browser nothing while it is off, and its frames carry no browser', () => {
+    // Asserted member by member, not as one object, so a member added later still has to answer one of these.
+    const { streamCommand, ...notices } = AGENT_BROWSER_FALLBACKS
+    // No stream to open: the same answer the core gives when the service never started (core/main.ts).
+    expect(streamCommand).toEqual({ error: 'NO_BROWSER' })
+    for (const [member, fallback] of Object.entries(notices)) expect(fallback, member).toBeUndefined()
+  })
+
   it('tells the agent cleanup nothing while it is off: every harness is left open, as before it', () => {
     expect(AGENT_CLEANUP_FALLBACKS).toEqual({ closed: undefined, typed: undefined, stop: undefined })
   })
@@ -375,7 +406,7 @@ describe('the core API services stand on', () => {
   })
 
   it('starts with every port empty: a service fills its own when it starts', () => {
-    expect(emptyPorts()).toEqual({ usage: null, store: null, search: null, viewers: null, models: null, workspaces: null, messages: null, devices: null, wifi: null, monitor: null, orchestrator: null, sharing: null, recaps: null, agentCleanup: null, cloud: null, superTabs: null, sharedMachines: null })
+    expect(emptyPorts()).toEqual({ usage: null, store: null, search: null, viewers: null, models: null, workspaces: null, messages: null, devices: null, wifi: null, monitor: null, orchestrator: null, sharing: null, recaps: null, agentCleanup: null, cloud: null, superTabs: null, sharedMachines: null, agentBrowser: null })
     expect(emptyPorts()).not.toBe(emptyPorts())
   })
 

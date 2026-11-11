@@ -20,7 +20,7 @@ import 'support/super_tab_fixture.dart';
 // # Harness Monitor had no Lead, and its empty chat said only "1 pane in this
 // project · Discuss the plan with Product Manager · Show panes". A message
 // there starts its Lead (#2633), but nothing said so. Now the empty chat
-// offers the start itself, as a Buddy chat's start card does.
+// offers the start itself, as an agent's chat's start card does.
 
 /// Set to a folder to write the PR's pictures of the empty chat.
 final _shots = Platform.environment['PERSONAL_LEAD_CARD_SHOTS'];

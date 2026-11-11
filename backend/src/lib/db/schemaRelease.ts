@@ -3,10 +3,10 @@ import { prisma } from '../prisma.js'
 import { ensureProductUsageExpiry } from '../productUsage.js'
 import { ensureHarnessSessionExpiry } from '../ssoSession.js'
 import { ensureTerminalExpiry } from '../../superTabs/terminal.js'
-import { ensureMentionExpiry } from '../../superTabs/mentions.js'
 import { ensureReadMarkExpiry } from '../../superTabs/readMarks.js'
 import { ensurePartExpiry } from '../../superTabs/sweeps.js'
 import { ensureOperationExpiry } from '../../superTabs/operations.js'
+import { ensureCommentExpiry } from '../../superTabs/githubComments.js'
 import { ensurePushDeviceExpiry } from '../../push/devices.js'
 import { ensureSchema, type SchemaTarget } from './migrate.js'
 
@@ -20,12 +20,12 @@ export async function releaseSchema(db: PrismaClient = prisma, target: SchemaTar
   // at once and the push keeps it; built by the push, it would need collMod for its expiry, which production's app user may
   // not run (10-29). The indexes below were made before they were declared, so the push has always found them.
   await ensureOperationExpiry(db)
+  await ensureCommentExpiry(db)
   await ensurePushDeviceExpiry(db)
   await ensureSchema(target)
   await ensureProductUsageExpiry(db)
   await ensureHarnessSessionExpiry(db)
   await ensureTerminalExpiry(db)
-  await ensureMentionExpiry(db)
   const readMarkExpirySet = await ensureReadMarkExpiry(db)
   await ensurePartExpiry(db)
   return { readMarkExpirySet }

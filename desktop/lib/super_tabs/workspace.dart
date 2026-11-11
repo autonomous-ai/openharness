@@ -12,7 +12,6 @@ import 'dialog_scope.dart';
 import 'github_issues.dart';
 import 'model.dart';
 import 'pane.dart';
-import 'personal_machines.dart';
 import 'personal_projects.dart';
 import 'swarm_switcher.dart' show PersonalSwarm;
 import 'terminal_unavailable.dart';
@@ -31,6 +30,7 @@ class SuperTabWorkspace extends StatefulWidget {
     this.onNewAgent,
     this.onAttachAgent,
     this.onNewSwarm,
+    this.onRenameSwarm,
     this.github,
   });
   final AppNotifier app;
@@ -44,6 +44,9 @@ class SuperTabWorkspace extends StatefulWidget {
   /// Attach beside + New agent: the ⌘P picker of agents already running on its person's own computers (Swarm v4).
   final VoidCallback? onAttachAgent;
   final VoidCallback? onNewSwarm;
+
+  /// Rename in the Swarm's own menu: the workspace's Rename, for this Swarm.
+  final VoidCallback? onRenameSwarm;
 
   /// Reads a project's tasks with `gh`; tests give their own.
   final SwarmGitHub? github;
@@ -95,15 +98,12 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
     _nativePanes.clear();
     _readyRequest = null;
     for (final pane in panes) {
-      if (pane.inputContext == null && pane.watchOnly) continue;
-      pane.inputContext = null;
+      if (pane.watchOnly) continue;
       pane.watchOnly = true;
       final session = pane.session;
-      session?.stageInputContext(null, watchOnly: true);
+      session?.stageWatchOnly(true);
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (pane.inputContext == null && pane.watchOnly) {
-          unawaited(session?.setInputContext(null, watchOnly: true));
-        }
+        if (pane.watchOnly) unawaited(session?.setWatchOnly(true));
       });
     }
   }
@@ -231,7 +231,6 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
             pane.machineId,
             pane.agentId!,
             swarmId: swarmId,
-            inputContext: pane.inputContext,
             watchOnly: pane.watchOnly,
             autoTile: true,
             focus: false,
@@ -411,12 +410,8 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
       }
       return;
     }
-    bool waitsThere(SuperTabConversation group) =>
-        group.assignment?['agentId'] == agent.id &&
-        superTabWorkWaits(group.assignment?['status']);
     final group =
         groups.where((g) => g.id == request.conversationId).firstOrNull ??
-        groups.where(waitsThere).firstOrNull ??
         groups.where((g) => g.id == controller.selectedId).firstOrNull ??
         groups.first;
     _focusAgent(controller, tabId, agent, group.id);
@@ -490,7 +485,6 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
               WidgetsBinding.instance.addPostFrameCallback((_) {
                 if (mounted) {
                   unawaited(PersonalProjects.of(app).sync(controller));
-                  unawaited(PersonalMachines.of(app).sync(controller));
                 }
               });
             }
@@ -520,12 +514,7 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
             final terminal = SuperPane(
               machineId: lead?.machineId ?? '',
               harnessId: lead?.harnessId ?? '',
-              title: lead == null
-                  ? kDefaultCoordinatorName
-                  : controller.snapshot!.coordinatorNameOf(
-                      controller.snapshot!.leadProjectForAgent(lead.id)?.id ??
-                          '',
-                    ),
+              title: kDefaultCoordinatorName,
               titles: {
                 for (final p in local)
                   if (app
@@ -584,6 +573,7 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
                   onNewAgent: widget.onNewAgent,
                   onAttachAgent: widget.onAttachAgent,
                   onNewSwarm: widget.onNewSwarm,
+                  onRenameSwarm: widget.onRenameSwarm,
                   github: widget.github,
                   onOpenTerminal: (agent) => _focusAgent(
                     controller,

@@ -34,9 +34,14 @@ afterAll(async () => {
 const run = (tab: string, command: Command, user = owner, asAgentId?: string) => store.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
 async function fixture() {
   const tab = (await store.create(owner, randomUUID(), 'Pages')).id
+  // Its person, host, adds the Lead on their own computer, and talks to it in their own chat with it: only agents post in a project's
+  // channel (agentsOnly.test.ts), and an agent reads its person's chat only on that person's computer (projects.ts readsAgentChat).
+  const invitation = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
+  await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
   const lead = String((await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(), name: 'Lead',
-    configuration: config, lead: true })).result.agentId)
-  return { tab, lead }
+    configuration: config, lead: true }, host)).result.agentId)
+  const chat = (await db.swarmGroup.findFirstOrThrow({ where: { tabId: tab, kind: 'agent-chat' } })).key
+  return { tab, lead, chat }
 }
 
 /** `count` messages in the Lead chat from sequence 1000 on; `hidden(i)` ones are agent-only notes to another agent. */
@@ -81,13 +86,11 @@ describe('messages by reader (spec 5 A1)', () => {
       await store.messages(host, tab, 'lead', { before: edge.sequence, beforeId: edge.id }, lead)
       await store.messages(owner, tab, 'lead', {})
       await store.messages(owner, tab, 'lead', { before: 1150 })
-      await store.catchUp(owner, tab, 'lead', 1140)
     })
     const row = (reader: string, cursor: string) => rows.find(r => r.reader === reader && r.cursor === cursor)
     expect(row('agent', 'beforeId')).toMatchObject({ session: 'sso', n: 1, batches: 1, shown: 100 })
     expect(row('person', 'latest')).toMatchObject({ session: 'sso', n: 1, batches: 1, decoded: 101, shown: 100 })
     expect(row('person', 'before')).toMatchObject({ n: 1, shown: 100 })
-    expect(row('person', 'catchUp')).toMatchObject({ n: 1, batches: 1, decoded: 9, shown: 9 })
     expect(JSON.stringify(rows)).not.toMatch(/[0-9a-f]{12,}|@|tab-/i)
   })
 })
@@ -144,13 +147,13 @@ describe('receipts read the same live or compacted (spec 5 A3)', () => {
   async function answered() {
     const f = await fixture()
     for (const text of ['One', 'Two', 'Three']) {
-      const sent = String((await run(f.tab, { type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [] })).result.messageId)
+      const sent = String((await run(f.tab, { type: 'message.send', conversationId: f.chat, text, replyTo: null, recipientIds: [] }, host)).result.messageId)
       const delivery = (await store.deliveries(host, f.tab, f.lead)).find(d => d.messageId === sent)!
       await store.delivery(host, f.tab, f.lead, delivery.id, { type: 'claim', claimId: `claim-${text}` })
       await store.delivery(host, f.tab, f.lead, delivery.id, { type: 'ack', claimId: `claim-${text}`, receipt: `typed-${text}`, uncertain: false })
-      await run(f.tab, { type: 'message.send', conversationId: 'lead', text: `Re: ${text}`, replyTo: sent, recipientIds: [] }, host, f.lead)
+      await run(f.tab, { type: 'message.send', conversationId: f.chat, text: `Re: ${text}`, replyTo: sent, recipientIds: [] }, host, f.lead)
     }
-    await run(f.tab, { type: 'message.send', conversationId: 'lead', text: 'Four', replyTo: null, recipientIds: [] })
+    await run(f.tab, { type: 'message.send', conversationId: f.chat, text: 'Four', replyTo: null, recipientIds: [] }, host)
     const deliveries = await db.superTabDelivery.findMany({ where: { tabId: f.tab }, orderBy: { createdAt: 'asc' } })
     return { ...f, deliveries }
   }
@@ -158,13 +161,13 @@ describe('receipts read the same live or compacted (spec 5 A3)', () => {
   it('a page reads the same whether its deliveries are live, compacted or half each', async () => {
     const f = await answered()
     expect(f.deliveries.map(d => d.status)).toEqual(['answered', 'answered', 'answered', 'queued'])
-    const live = await store.messages(owner, f.tab, 'lead', {}), liveToLead = await store.messages(host, f.tab, 'lead', {}, f.lead)
+    const live = await store.messages(host, f.tab, f.chat, {}), liveToLead = await store.messages(host, f.tab, f.chat, {}, f.lead)
     expect(live.messages.flatMap(m => m.deliveries)).toHaveLength(4)
     await compactByHand(f.deliveries.slice(0, 2).map(d => d.id))
-    expect(await store.messages(owner, f.tab, 'lead', {})).toEqual(live)
+    expect(await store.messages(host, f.tab, f.chat, {})).toEqual(live)
     await compactByHand([f.deliveries[2]!.id])
-    expect(await store.messages(owner, f.tab, 'lead', {})).toEqual(live)
-    expect(await store.messages(host, f.tab, 'lead', {}, f.lead)).toEqual(liveToLead)
+    expect(await store.messages(host, f.tab, f.chat, {})).toEqual(live)
+    expect(await store.messages(host, f.tab, f.chat, {}, f.lead)).toEqual(liveToLead)
   })
 
   it('keeps one order for a message\'s receipts whichever of them are compacted', async () => {
@@ -185,40 +188,22 @@ describe('receipts read the same live or compacted (spec 5 A3)', () => {
   it('a live row wins over a compacted one for the same agent', async () => {
     const f = await answered()
     const first = f.deliveries[0]!
-    const live = await store.messages(owner, f.tab, 'lead', {})
+    const live = await store.messages(host, f.tab, f.chat, {})
     await compactByHand([first.id])
     // A row for the same message and agent again (a host that settled it while it was being moved): it is what the page shows.
     await db.superTabDelivery.create({ data: { ...first, status: 'confirmed', receipt: 'again' } })
-    const page = await store.messages(owner, f.tab, 'lead', {})
+    const page = await store.messages(host, f.tab, f.chat, {})
     const row = page.messages.find(m => m.id === first.messageId)!
     expect(row.deliveries).toHaveLength(1)
     expect(row.deliveries[0]).toMatchObject({ id: first.id, status: 'confirmed', receipt: 'again' })
     expect(page.messages.filter(m => m.id !== first.messageId)).toEqual(live.messages.filter(m => m.id !== first.messageId))
   })
 
-  it('a compacted receipt for news a row does not name (a Buddy\'s) is shown only to that agent, as a live one is', async () => {
-    const { tab, lead } = await fixture()
-    // The Lead's delivery of a row that does not list it among its recipients: the shape of Buddy news (buddyNews.ts).
-    const id = `${tab}-news`
-    await db.superTabMessage.create({ data: { id, tabId: tab, conversationId: 'lead', sequence: 900, text: 'News', replyTo: null, recipientIds: [],
-      mentions: [], thread: id, author: { kind: 'person', id: owner.sub, name: owner.email, membershipGeneration: 'g' } } })
-    await db.superTabDelivery.create({ data: { id: `${id}-d`, tabId: tab, conversationId: 'lead', messageId: id, agentId: lead, machineId: 'test-host',
-      membershipGeneration: 'g', authorKind: 'person', authorId: owner.sub, authorGeneration: 'g', status: 'answered' } })
-    const receipts = async (user: AuthUser, asAgentId?: string) =>
-      (await store.messages(user, tab, 'lead', {}, asAgentId)).messages.find(m => m.id === id)!.deliveries.map(d => d.agentId)
-    expect(await receipts(owner)).toEqual([])
-    expect(await receipts(host, lead)).toEqual([lead])
-    await compactByHand([`${id}-d`])
-    expect(await receipts(owner)).toEqual([])
-    expect(await receipts(host, lead)).toEqual([lead])
-  })
-
   it('no message read returns a receipts map or a compacted receipt\'s host fields', async () => {
     const f = await answered()
     await compactByHand(f.deliveries.slice(0, 3).map(d => d.id))
-    const replies = [await store.messages(owner, f.tab, 'lead', {}), await store.messages(host, f.tab, 'lead', {}, f.lead),
-      await store.messages(owner, f.tab, 'lead', { messageId: f.deliveries[0]!.messageId }), await store.catchUp(owner, f.tab, 'lead', 0),
-      await store.mentions(owner, f.tab, 'waiting')]
+    const replies = [await store.messages(host, f.tab, f.chat, {}), await store.messages(host, f.tab, f.chat, {}, f.lead),
+      await store.messages(host, f.tab, f.chat, { messageId: f.deliveries[0]!.messageId })]
     for (const reply of replies) expect(JSON.stringify(reply)).not.toMatch(/"receipts"|"deliveryIds"|"deliveryId"|"machineOwnerId"|"claimId"/)
   })
 })
@@ -228,20 +213,20 @@ describe('receipts read the same live or compacted (spec 5 A3)', () => {
 describe('a person author as an agent reads it (task #2954)', () => {
   it('names the person, never their email, in a claim, a page, a one-message read and a thread; a person reads the row as stored', async () => {
     const f = await fixture()
-    const root = String((await run(f.tab, { type: 'message.send', conversationId: 'lead', text: 'Ship it?', replyTo: null, recipientIds: [] })).result.messageId)
-    const reply = String((await run(f.tab, { type: 'message.send', conversationId: 'lead', text: 'Today, please.', replyTo: root, recipientIds: [] })).result.messageId)
-    const named = { kind: 'person', id: owner.sub, name: 'owner', displayName: 'owner' }
+    const root = String((await run(f.tab, { type: 'message.send', conversationId: f.chat, text: 'Ship it?', replyTo: null, recipientIds: [] }, host)).result.messageId)
+    const reply = String((await run(f.tab, { type: 'message.send', conversationId: f.chat, text: 'Today, please.', replyTo: root, recipientIds: [] }, host)).result.messageId)
+    const named = { kind: 'person', id: host.sub, name: 'host', displayName: 'host' }
     const delivery = (await store.deliveries(host, f.tab, f.lead)).find(d => d.messageId === reply)!
     const claimed = await store.delivery(host, f.tab, f.lead, delivery.id, { type: 'claim', claimId: 'claim-2954' })
     expect(claimed.message!.author).toMatchObject(named)
-    const reads = [claimed, await store.messages(host, f.tab, 'lead', {}, f.lead), await store.messages(host, f.tab, 'lead', { messageId: root }, f.lead),
-      await store.messages(host, f.tab, 'lead', { thread: root }, f.lead)]
-    for (const read of reads) expect(JSON.stringify(read)).not.toContain(owner.email)
-    const page = await store.messages(host, f.tab, 'lead', {}, f.lead)
+    const reads = [claimed, await store.messages(host, f.tab, f.chat, {}, f.lead), await store.messages(host, f.tab, f.chat, { messageId: root }, f.lead),
+      await store.messages(host, f.tab, f.chat, { thread: root }, f.lead)]
+    for (const read of reads) expect(JSON.stringify(read)).not.toContain(host.email)
+    const page = await store.messages(host, f.tab, f.chat, {}, f.lead)
     expect(page.messages.find(m => m.id === root)!.author).toMatchObject(named)
     expect(page.threads.find(t => t.id === root)!.authors).toEqual([expect.objectContaining(named)])
     // People's apps match a person author by the stored row (Desktop superTabPersonName): theirs is unchanged.
-    const theirs = await store.messages(owner, f.tab, 'lead', {})
-    expect(theirs.messages.find(m => m.id === root)!.author).toEqual({ kind: 'person', id: owner.sub, name: owner.email, membershipGeneration: expect.any(String) })
+    const theirs = await store.messages(host, f.tab, f.chat, {})
+    expect(theirs.messages.find(m => m.id === root)!.author).toEqual({ kind: 'person', id: host.sub, name: host.email, membershipGeneration: expect.any(String) })
   })
 })

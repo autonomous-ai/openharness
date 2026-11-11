@@ -16,7 +16,7 @@ import 'support/super_tab_fixture.dart';
 final shots = Platform.environment['SUPER_TAB_COMPOSER_ROW_SHOTS'];
 
 /// The composer as the PR shows it (Huy and Scholes, 11-04): the reader's
-/// Buddy chat with New session on offer, a project chat's thread with Also
+/// chat with their own agent, a project chat's thread with Also
 /// send, the mic (`chat-mic`), a voice message recording in the chat and in a
 /// thread (`chat-recording`, `thread-recording`, #2665), a refused microphone
 /// (`chat-refused`), and the web at a phone's width (`web-phone`), each with a
@@ -26,24 +26,20 @@ void main() {
     if (shots != null) await loadPreviewFonts();
   });
 
-  ConversationServer buddyChat() {
+  ConversationServer agentChat() {
     final server = ConversationServer()..threads = true;
-    server.state['threadSessions'] = true;
-    server.state['sessionsFromChat'] = true;
     final chat = (server.state['conversations'] as List)[1] as Map;
     chat
-      ..['kind'] = 'buddy'
-      ..['buddyOwnerId'] = 'owner'
+      ..['kind'] = 'agent-chat'
       ..['title'] = 'Wren'
-      ..['agentIds'] = ['buddy-main'];
+      ..['agentIds'] = ['own-agent'];
     (server.state['agents'] as List).add({
-      'id': 'buddy-main',
+      'id': 'own-agent',
       'name': 'Wren',
       'displayName': 'Wren',
       'machineId': 'mac',
       'harnessId': 'h-main',
       'contributorId': 'owner',
-      'buddyOf': {'personId': 'owner', 'generation': 'g1'},
       'configuration': {'engine': 'claude'},
     });
     server.append(
@@ -79,7 +75,7 @@ void main() {
         final mic = scene.startsWith('chat-') || scene == 'thread-recording'
             ? (FakeVoiceRecorder()..allow = scene != 'chat-refused')
             : null;
-        final c = (thread ? projectThread() : buddyChat()).controller();
+        final c = (thread ? projectThread() : agentChat()).controller();
         addTearDown(c.dispose);
         await c.refresh();
         grid.AppTheme.brightness.value = brightness;

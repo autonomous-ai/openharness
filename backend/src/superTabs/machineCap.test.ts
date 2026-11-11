@@ -1,7 +1,7 @@
 // A new collaborator could not add their Mac to a Swarm holding 32 machines, 15 of them Team accounts' (Ken, 2026-11-04).
 // Since each machine is its own part, the Swarm-wide 32 went: each person adds at most 20 machines to one Swarm (#2637).
 import { describe, expect, it } from 'vitest'
-import { applyCommand, type Command, type CommandContext } from './commands.js'
+import { applyCommand, type Command } from './commands.js'
 import { createSuperTab, type Actor } from './model.js'
 import { MACHINE_LIMIT_MESSAGE } from './machines.js'
 import { hostTab } from './read/hostRows.js'
@@ -10,20 +10,18 @@ const actorOf = (userId: string): Extract<Actor, { kind: 'person' }> => ({ kind:
 const own = (userId: string) => ({ machineOwnerId: userId, contributorId: userId, hostGrant: null })
 const LIMIT = 'You have 20 machines in this Swarm, the most one person can add. Remove one before adding another.'
 
-/** A Swarm where each person in [counts] contributed that many real machines and [team] Team accounts' entries. */
-function swarm(counts: Record<string, { real: number; team?: number }>) {
+/** A Swarm where each person in [counts] contributed that many real machines. */
+function swarm(counts: Record<string, { real: number }>) {
   const state = createSuperTab('swarm', 'Team', { id: 'owner', email: 'owner@example.com' }, 'test')
   for (const id of Object.keys(counts)) if (id !== 'owner') state.people.push({ id, email: `${id}@example.com`, role: 'collaborator', generation: 'g' })
-  state.machines = Object.entries(counts).flatMap(([id, { real, team = 0 }]) => [
-    ...Array.from({ length: real }, (_, i) => ({ machineId: `${id}-m${i}`, name: `Mac ${i}`, contributorId: id, membershipGeneration: 'g', generation: 'g0',
-      cwd: '/swarm', scope: 'swarm' as const, engines: ['claude' as const], maxAgents: 2, paused: false })),
-    ...Array.from({ length: team }, (_, i) => ({ machineId: `${id}-t${i}`, name: `Mac ${i}`, contributorId: id, membershipGeneration: 'g', generation: 'g0',
-      cwd: '/team', scope: 'swarm' as const, engines: ['claude' as const], maxAgents: 2, paused: false, hostMachineId: `${id}-m${i}` }))])
+  state.machines = Object.entries(counts).flatMap(([id, { real }]) =>
+    Array.from({ length: real }, (_, i) => ({ machineId: `${id}-m${i}`, name: `Mac ${i}`, contributorId: id, membershipGeneration: 'g', generation: 'g0',
+      cwd: '/swarm', scope: 'swarm' as const, engines: ['claude' as const], maxAgents: 2, paused: false })))
   return state
 }
-const contribute = (state: ReturnType<typeof swarm>, userId: string, machineId: string, context: Partial<CommandContext> = {}) =>
+const contribute = (state: ReturnType<typeof swarm>, userId: string, machineId: string) =>
   applyCommand(state, actorOf(userId), { type: 'machine.contribute', machineId, name: 'New', cwd: '/swarm', scope: 'swarm', engines: ['claude'], maxAgents: 2 } as Command,
-    { operationId: 'op', now: 1000, contribution: own(userId), ...context }).state
+    { operationId: 'op', now: 1000, contribution: own(userId) }).state
 
 describe('how many machines one person adds to a Swarm', () => {
   it('refuses a person\'s 21st machine with its own code, in words a person can act on', () => {
@@ -40,18 +38,7 @@ describe('how many machines one person adds to a Swarm', () => {
   it('has no Swarm-wide limit: 33 real machines across people take another', () => {
     const state = swarm({ owner: { real: 19 }, peer: { real: 14 } })
     expect(contribute(state, 'owner', 'new').machines).toHaveLength(34)
-    expect(contribute(swarm({ owner: { real: 10, team: 10 }, a: { real: 20, team: 20 }, b: { real: 20, team: 20 } }), 'owner', 'new').machines).toHaveLength(101)
-  })
-
-  it('leaves Team accounts\' entries out of their owner\'s 20: a Mac\'s Team account is that same Mac', () => {
-    expect(contribute(swarm({ owner: { real: 19, team: 19 } }), 'owner', 'new').machines).toHaveLength(39)
-    expect(contribute(swarm({ owner: { real: 20, team: 0 } }), 'owner', 'team', { contribution: { ...own('owner'), hostMachineId: 'owner-m0' } }).machines).toHaveLength(21)
-  })
-
-  it('holds a person\'s Team accounts\' entries at 20 too, so they stay bounded', () => {
-    const team = { contribution: { ...own('owner'), hostMachineId: 'owner-m0' } }
-    expect(() => contribute(swarm({ owner: { real: 20, team: 20 } }), 'owner', 'team', team)).toThrow(expect.objectContaining({ code: 'MACHINE_LIMIT_PER_PERSON' }))
-    expect(contribute(swarm({ owner: { real: 20, team: 20 }, peer: { real: 0, team: 20 } }), 'owner', 'peer-t0', team).machines).toHaveLength(60)
+    expect(contribute(swarm({ owner: { real: 10 }, a: { real: 20 }, b: { real: 20 } }), 'owner', 'new').machines).toHaveLength(51)
   })
 
   it('still saves the settings of a machine already in it at the limit', () => {
@@ -89,12 +76,6 @@ describe('which hosts are asked to join', () => {
     const f = leadOn(swarm({ owner: { real: 20 } }), 'laptop')
     f.state.machines = f.state.machines!.filter(m => m.machineId !== 'owner-m3')
     expect(await joinSwarm(f, 'laptop')).toMatchObject({ joinSwarm: true })
-  })
-
-  it('still asks the Lead on its owner\'s Buddy-only record at 20: that record is counted already', async () => {
-    const state = swarm({ owner: { real: 20 } })
-    state.machines!.find(m => m.machineId === 'owner-m19')!.buddyOnly = true
-    expect(await joinSwarm(leadOn(state, 'owner-m19'), 'owner-m19')).toMatchObject({ joinSwarm: true })
   })
 
 })

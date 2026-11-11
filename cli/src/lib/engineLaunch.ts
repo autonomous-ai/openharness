@@ -14,6 +14,7 @@ import { startupFunctions, startupNeedsScript, startupRuns } from '../engines/ki
 import { screenArgs, screenEnvPrefix, screenPrelude, screenVariables } from '../engines/kit/launchScreen.js'
 import { isTerminalEngine, PROCESS_ENGINES, type AgentEngine } from '../engines/types.js'
 import { isOpencodeV2 } from '../engines/opencode/contract.js'
+import { OPENCLAW_LAUNCH } from '../engines/openclaw/contract.js'
 import { binaryOnPath, resolveBinaryOnPath } from './binaryOnPath.js'
 import { windowsEngineArgv } from './windows/launch.js'
 import { nativeLaunchConfirmed, windowsHeldPaneArgv, windowsStartupArgs } from './windows/engineStart.js'
@@ -55,6 +56,8 @@ export const BYPASS_PERMISSION_FLAGS: Readonly<Record<AgentEngine, string[] | nu
   grok: null,
   agy: null,
   copilot: null,
+  // OpenClaw's tools run in its Gateway under the Gateway's own exec policy; the TUI has no flag for it.
+  openclaw: null,
   // A shell has no permissions to bypass.
   terminal: null,
 }
@@ -74,11 +77,6 @@ export const PERMISSION_MODES: Readonly<Partial<Record<AgentEngine, Readonly<Rec
   cursor: { auto: ['--force'], ask: [] },
   opencode: { auto: ['--auto'], ask: [] },
 }
-
-/** Modes a relaunch never trades for the engine's own default when the engine on disk lacks their flag: Team-written work,
- *  whose default would read the branch's own settings (audit H2). The relaunch is held. A Buddy's were kept too, until a
- *  Buddy ran in full mode like its owner's own session (task #2832). */
-const KEPT_PERMISSION_MODES: ReadonlySet<string> = new Set(['teamWritten'])
 
 /** The argv of [mode] for [engine], or null when the engine has no such mode. */
 export function permissionModeFlags(engine: AgentEngine, mode: string): readonly string[] | null {
@@ -123,6 +121,8 @@ export const FIRST_PROMPT_ARGS: Readonly<Record<AgentEngine, readonly string[] |
   grok: null,
   agy: null,
   copilot: null,
+  // `openclaw tui --help` (2026.11.2): `--message <text>  Send an initial message after connecting`.
+  openclaw: ['--message'],
   terminal: null,
 }
 
@@ -182,6 +182,8 @@ export const NAMED_AGENT_ARGS: Readonly<Record<AgentEngine, readonly string[] | 
   grok: null,
   agy: null,
   copilot: null,
+  // OpenClaw's agents are its own state (`agent:<id>:…` keys), not personas a pane opens as.
+  openclaw: null,
   terminal: null,
 }
 
@@ -226,6 +228,11 @@ export interface LaunchCommandOptions {
   /** FORK this engine session id on launch — a new session that starts with its history, the source
    *  untouched ([LAUNCH_FORK_FLAG]). Takes precedence over `resumeSessionId`. */
   forkSessionId?: string
+  /**
+   * The Harness agent this launch is for. An engine whose new sessions Harness names opens one under it when it
+   * resumes none ([LAUNCH_NEW_SESSION]), so a relaunch before the session is bound reopens the same conversation.
+   */
+  agentId?: string
   /**
    * The message the session opens with, already submitted — see [FIRST_PROMPT_ARGS]. Appended LAST,
    * after every flag, because two of the three engines take it positionally and a positional is only
@@ -353,7 +360,17 @@ export const LAUNCH_RESUME_FLAG: Readonly<Partial<Record<AgentEngine, string[]>>
   agy: ['--conversation'],
   copilot: ['--resume'],
   devin: ['--resume'],
+  // No flag: the full key is the TUI's positional target, after its `tui` (OPENCLAW_LAUNCH).
+  openclaw: [],
 }
+
+/**
+ * The arguments that come right after the binary, ahead of a resume (OpenClaw's `tui`), and the ones that open a new
+ * session Harness names after the agent when the launch resumes or forks none. A bare `openclaw tui` opens the last
+ * session any TUI used, which may be another agent's.
+ */
+const LAUNCH_BASE_ARGS: Readonly<Partial<Record<AgentEngine, readonly string[]>>> = { openclaw: OPENCLAW_LAUNCH.base }
+const LAUNCH_NEW_SESSION: Readonly<Partial<Record<AgentEngine, (agentId: string) => string[]>>> = { openclaw: OPENCLAW_LAUNCH.newSession }
 
 /**
  * "Open a NEW session that starts with everything session <id> has" — a fork, per engine. Confirmed
@@ -383,7 +400,8 @@ export function supportsNativeFork(engine: AgentEngine): boolean {
 /** The executable argv, before the interactive-shell wrapper is applied. */
 export function buildEngineCommandArgv(engine: AgentEngine, opts: LaunchCommandOptions = {}): string[] {
   // Windows: the flags its declared startup puts first (Codex's `--no-daemon`), which a launch script probes for elsewhere.
-  const argv = [opts.native?.executable?.command ?? engineBin(engine), ...(process.platform === 'win32' ? windowsStartupArgs(engine, opts.native) : [])]
+  const argv = [opts.native?.executable?.command ?? engineBin(engine), ...(process.platform === 'win32' ? windowsStartupArgs(engine, opts.native) : []),
+    ...LAUNCH_BASE_ARGS[engine] ?? []]
   // A fork is a resume that leaves the source alone; the two are exclusive, and the fork wins.
   const fork = opts.forkSessionId ? LAUNCH_FORK_FLAG[engine] : undefined
   const resumeFlag = fork ? fork.lead : opts.resumeSessionId ? LAUNCH_RESUME_FLAG[engine] : undefined
@@ -404,6 +422,8 @@ export function buildEngineCommandArgv(engine: AgentEngine, opts: LaunchCommandO
   if (!resumeIsSubcommand && resumeFlag && sessionArg) {
     argv.push(...resumeFlag, sessionArg, ...(fork?.after ?? []))
   }
+  const newSession = LAUNCH_NEW_SESSION[engine]
+  if (newSession && opts.agentId && !(resumeFlag && sessionArg)) argv.push(...newSession(opts.agentId))
   // Ahead of the extra arguments, so a grid's or a harness's own value for the same key is the one that holds.
   argv.push(...screenArgs(launchContract(engine)))
   if (opts.extraArgs?.length) argv.push(...opts.extraArgs)
@@ -1041,6 +1061,25 @@ export function npmRuntimeBins(runtimeNode: string = managedNodePath()): string[
   return [...new Set([dirname(runtimeNode), dirname(baseNode(process.execPath))])]
 }
 
+const NODE_FOLDER = /^node-v(\d+)\.(\d+)\.(\d+)-/
+
+/**
+ * Where an npm engine may sit: the current runtime's folders, then every other managed Node under the runtime directory,
+ * newest first. A Node upgrade lays down a new folder and leaves the old one, with the engines installed under it; those
+ * still run, so looking only beside the current Node called them missing and reinstalled them. Only for finding an
+ * executable: the pane's `node` stays the current runtime's ([npmRuntimeBins]).
+ */
+export function npmEngineBins(runtimeNode: string = managedNodePath()): string[] {
+  const current = npmRuntimeBins(runtimeNode)
+  let folders: string[] = []
+  try { folders = readdirSync(env.ADAPTER_RUNTIME_DIR) } catch { /* no runtime directory yet: only the current folders */ }
+  const version = (name: string) => NODE_FOLDER.exec(name)!.slice(1).map(Number)
+  const older = folders.filter((name) => NODE_FOLDER.test(name))
+    .sort((a, b) => { const [x, y] = [version(a), version(b)]; return (y[0] - x[0]) || (y[1] - x[1]) || (y[2] - x[2]) })
+    .map((name) => join(env.ADAPTER_RUNTIME_DIR, name, ...(process.platform === 'win32' ? [] : ['bin'])))
+  return [...new Set([...current, ...older])]
+}
+
 function npmRuntimePrelude(recipe: EngineInstallRecipe, runtimeNode: string): string {
   if (!recipe.executable.npmGlobal) return ''
   const bins = npmRuntimeBins(runtimeNode)
@@ -1397,6 +1436,33 @@ export async function commandAvailableInInteractiveShell(
   return detailed ? result : result.status === 'available'
 }
 
+/**
+ * What `command args…` prints on both streams, and its exit status, run in the interactive shell a new agent launches
+ * through, so it finds the Node and PATH the engine will. Windows has no such shell: there it is run as a pane would run
+ * [engine] (an npm shim as node on its script, lib/windows/launch.ts), with its console hidden (docs/windows-rules.md).
+ * Null when it gave no answer within 5 seconds, or could not be started.
+ */
+export async function commandOutputInInteractiveShell(engine: AgentEngine, command: string, args: readonly string[], shell: string | undefined = undefined): Promise<{ code: number; output: string } | null> {
+  const interactive = interactiveEngineShell(shell)
+  let run: string[]
+  try {
+    run = interactive
+      ? engineShellArgv(interactive, ['"$@" 2>&1', 'harness-engine-output', command, ...args])
+      : windowsEngineArgv(engine, [command, ...args])
+  } catch (error) {
+    // A shim Windows will not run (lib/windows/launch.ts): the launch itself says why.
+    console.warn(`[engine] ${engine} ${args.join(' ')} not run · ${error instanceof Error ? error.message : error}`)
+    return null
+  }
+  const [file, ...argv] = run
+  return await new Promise((resolve) => {
+    execFile(file, argv, { timeout: 5_000, maxBuffer: 64 * 1024, windowsHide: true }, (error, stdout, stderr) => {
+      const code = !error ? 0 : typeof (error as { code?: unknown }).code === 'number' ? (error as { code: number }).code : null
+      resolve(code === null || error?.killed ? null : { code, output: `${stdout}\n${stderr}` })
+    })
+  })
+}
+
 export type CommandFlagSupport = 'supported' | 'unsupported' | 'unknown'
 
 /**
@@ -1609,11 +1675,6 @@ export async function dropPermissionFlagIfUnsupported<T extends PermissionLaunch
   if (support === 'unknown') return { choice, droppedFlag: null, nativeHold: 'Waiting to confirm the selected executable’s permission flags.' }
   const droppedFlag = support === 'supported' ? null : native ? permissionFlagToVerify(engine, choice) : await unsupportedPermissionFlag(engine, choice, shell)
   if (!droppedFlag) return { choice, droppedFlag: null }
-  if (choice.permissionMode && KEPT_PERMISSION_MODES.has(choice.permissionMode)) {
-    const update = engineUpdateCommand(engine)
-    return { choice, droppedFlag: null, nativeHold: `The ${engine} CLI on this machine does not support ${droppedFlag}, which this harness's `
-      + `permission mode needs. It stays stopped until ${engine} is updated${update ? ` (${update})` : ''}.` }
-  }
   // Ask in its place, launched with no flag at all: Claude Code's Ask names its mode with the very flag a build
   // this old may lack, so it goes as the engine's own default, which asked before auto mode existed.
   return { choice: { ...choice, permissionMode: permissionModeFlags(engine, 'ask')?.length ? null : 'ask', bypassPermission: false }, droppedFlag }

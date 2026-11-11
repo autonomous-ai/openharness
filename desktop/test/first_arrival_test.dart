@@ -113,10 +113,10 @@ class _OpeningApp extends _PreparingApp {
     String? agent,
     String? swarmId,
     String? swarmRole,
-    String? swarmSkillMode,
     PaneSplitRequest? split,
     AgentCreationAttempt? attempt,
     HarnessPlacement? placement,
+    bool browser = false,
   }) async {
     starts.add((engine: engine, folder: folder, prompt: prompt));
     if (refusal != null) return refusal;
@@ -149,10 +149,10 @@ class _AnsweredApp extends _OpeningApp {
     String? agent,
     String? swarmId,
     String? swarmRole,
-    String? swarmSkillMode,
     PaneSplitRequest? split,
     AgentCreationAttempt? attempt,
     HarnessPlacement? placement,
+    bool browser = false,
   }) async {
     starts.add((engine: engine, folder: folder, prompt: prompt));
     attempts.add(attempt);

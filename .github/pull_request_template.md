@@ -28,7 +28,8 @@ complete checks, not a way to waive failures. Native checks require `macos`.
 
 Use a positive test count; zero, failed, stale-head and wrong-platform receipts
 cannot satisfy the gate. Coverage commands may add ` -- --maxWorkers=2` to cap
-resources. Do not include logs, personal paths or environment values.
+resources, and `make desktop-test` may add `ARGS="--timeout 3600 --workers 4"`
+(budget and workers only). Do not include logs, personal paths or environment values.
 
 Record the tested commit/tree (or dirty-source fingerprint), check scope, and result links.
 When reusing CI or baseline evidence, link it and explain why it still covers this diff.

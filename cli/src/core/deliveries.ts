@@ -85,8 +85,18 @@ export function createDeliveries(deps: DeliveriesDeps) {
   /** Deliveries from a person's message, which close a question open on the pane, until they settle. */
   const answering = new Map<string, { writtenAt?: number }>()
   const answers = (writtenAt: unknown) => Number.isFinite(writtenAt) ? { writtenAt: writtenAt as number } : {}
+  /** Deliveries of a person's own words in their agent's 1:1 chat (`DeliveryOptions.personsOwn`), which the short-turn guard never
+   *  holds. Kept through a write the pane held (`team_waiting_*`), as its maker asks what holds it before it writes it again; gone
+   *  once it settles otherwise, and the oldest past KEPT_DELIVERERS. */
+  const own = new Set<string>()
+  const markOwn = (deliveryId: string): void => {
+    own.delete(deliveryId)
+    own.add(deliveryId)
+    if (own.size > KEPT_DELIVERERS) own.delete(own.values().next().value!)
+  }
   const settled = (event: TurnDelivery): void => {
     if (event.state !== 'queued') answering.delete(event.deliveryId)
+    if (event.state !== 'queued' && !(event.state === 'rejected' && event.reason?.startsWith('team_waiting_'))) own.delete(event.deliveryId)
     for (const listener of listeners) {
       try { listener(event) } catch (error) {
         log(`[deliveries] a listener failed on ${event.deliveryId.slice(0, 40)} · ${error instanceof Error ? error.message : String(error)}`)
@@ -100,6 +110,7 @@ export function createDeliveries(deps: DeliveriesDeps) {
   const turns: Pick<CoreApi['turns'], 'deliver' | 'cancelDelivery' | 'onDelivery' | 'leaseDeliveries' | 'holdOf'> = {
     deliver: (agentId, content, deliveryId, options) => {
       if (options?.answersQuestion) answering.set(deliveryId, answers(options.writtenAt))
+      if (options?.personsOwn) markOwn(deliveryId)
       submit(agentId, content, deliveryId)
     },
     cancelDelivery: (deliveryId) => cancel(deliveryId),
@@ -125,6 +136,9 @@ export function createDeliveries(deps: DeliveriesDeps) {
 
     /** The delivery, when it is unsettled and came from a person's message (`DeliveryOptions.answersQuestion`), else null. */
     answersQuestion: (deliveryId: string): { writtenAt?: number } | null => answering.get(deliveryId) ?? null,
+
+    /** Whether the delivery is a person's own words in their agent's 1:1 chat (`DeliveryOptions.personsOwn`), held by no short-turn guard. */
+    personsOwn: (deliveryId: string): boolean => own.has(deliveryId),
 
     /** The core's input says what became of a delivery: every listener here hears it, each guarded, and the
      *  process that made it is told. A listener that throws costs that listener the event, never the input
@@ -157,6 +171,7 @@ export function createDeliveries(deps: DeliveriesDeps) {
       makers.set(deliveryId, service)
       if (makers.size > KEPT_DELIVERERS) makers.delete(makers.keys().next().value!)
       if (payload.answersQuestion === true) answering.set(deliveryId, answers(payload.writtenAt))
+      if (payload.personsOwn === true) markOwn(deliveryId)
       submit(agentId, payload.text, deliveryId)
       return {}
     },

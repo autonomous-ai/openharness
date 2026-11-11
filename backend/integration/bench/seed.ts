@@ -68,12 +68,13 @@ async function seedMembers(s: Setup): Promise<string> {
     name: 'Lead', configuration: AGENT_CONFIGURATION, lead: true })).agentId)
 }
 
-/** Every group with a brief and two checks; returns their ids in plan order. */
+/** Every group with a brief and two checks, stored as Swarms before v4 stored a task (no command opens one in v4); returns their
+ *  ids in plan order. */
 async function seedGroups(s: Setup, rng: Random): Promise<string[]> {
   const groups: string[] = []
   for (let g = 0; g < s.config.groups; g++) {
-    groups.push(String((await s.run(s.owner, { type: 'conversation.create', title: `Bench group ${g}`, brief: words(rng, s.config.text.briefChars),
-      checks: [0, 1].map(() => ({ description: words(rng, 120), independent: false })) })).conversationId))
+    groups.push(await s.driver.storeTask(s.tabId, s.owner, { title: `Bench group ${g}`, brief: words(rng, s.config.text.briefChars),
+      checks: [0, 1].map(() => ({ description: words(rng, 120), independent: false })) }))
   }
   return groups
 }
@@ -91,14 +92,9 @@ async function seedWorkers(s: Setup, p: Plan, groups: string[]): Promise<Array<{
   return agents
 }
 
-/** A done group's whole task: its worker joins, is assigned, passes both checks and reports done. */
-async function finishGroup(s: Setup, rng: Random, group: string, agentId: string, host: AuthUser, checkIds: string[]) {
+/** A done group: its worker joins it. Swarm v4 assigns no work, so nothing else of a task is written. */
+async function finishGroup(s: Setup, group: string, agentId: string) {
   await s.run(s.owner, { type: 'conversation.agent', conversationId: group, agentId, present: true, lead: false })
-  const assignmentId = String((await s.run(s.owner, { type: 'work.assign', conversationId: group, agentId })).assignmentId)
-  for (const checkId of checkIds) {
-    await s.run(host, { type: 'work.check', conversationId: group, assignmentId, checkId, passed: true, evidence: words(rng, 200) }, agentId)
-  }
-  await s.run(host, { type: 'work.status', conversationId: group, assignmentId, status: 'done', result: words(rng, s.config.text.resultChars) }, agentId)
 }
 
 /**
@@ -116,14 +112,13 @@ export async function seedSwarm(driver: SwarmDriver, config: BenchConfig, p: Pla
   const snapshot = await driver.snapshot(s.tabId, s.owner)
   const checksOf = (group: string) => snapshot.conversations.find(c => c.id === group)!.checks.map(c => c.id)
   for (const w of p.workers) {
-    for (const g of w.doneGroups) await finishGroup(s, rng, groups[g]!, agents[w.index]!.id, people[w.machine]!, checksOf(groups[g]!))
+    for (const g of w.doneGroups) await finishGroup(s, groups[g]!, agents[w.index]!.id)
   }
   const workers: Worker[] = []
   for (const w of p.workers) {
-    const group = groups[w.groups[0]!]!, agent = agents[w.index]!, host = people[w.machine]!
-    const assignmentId = String((await s.run(s.owner, { type: 'work.assign', conversationId: group, agentId: agent.id })).assignmentId)
-    const { contextId } = await s.check('native.open', driver.openNative(s.tabId, host, { operationId: s.op(), conversationId: group, agentId: agent.id }))
-    workers.push({ ...agent, machine: w.machine, group, assignmentId, checkIds: checksOf(group), contextId })
+    const group = groups[w.groups[0]!]!, agent = agents[w.index]!
+    // Swarm v4 assigns no work and records no terminal: the load's work and recording writes (load.ts) go with the bench rework.
+    workers.push({ ...agent, machine: w.machine, group, assignmentId: '', checkIds: checksOf(group), contextId: '' })
   }
   const generations: string[] = []
   for (let n = 0; n < config.machines; n++) generations.push(await driver.machineGeneration(s.tabId, people[n]!, machineId(n)))

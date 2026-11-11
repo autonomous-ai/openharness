@@ -1,12 +1,8 @@
 import type { Command, CommandContext } from '../commands.js'
 import type { Actor, CommandEffects, SuperTabState } from '../model.js'
-import type { ContributedMachine } from '../machines.js'
 import { agentProjectId, canReadProject, groupProject, projectsOf } from '../projects.js'
 import type { Touch } from './commit.js'
 import { waitsNow } from '../leaderboard/record.js'
-import { buddiesHearing } from '../buddyNews.js'
-import { defaultBuddy } from '../buddies.js'
-import { mainBuddyOf } from '../buddySessions.js'
 
 /**
  * The parts a command relies on without writing them (design section 1.2, column T). A part the command also writes is
@@ -14,7 +10,7 @@ import { mainBuddyOf } from '../buddySessions.js'
  * changes that part makes one of the two retry against the other's result.
  */
 export function touchesFor(command: Command, actor: Actor, before: SuperTabState, effects: Pick<CommandEffects, 'state' | 'messages'>,
-  context: Pick<CommandContext, 'delivery' | 'routeDecision'> = {}): Touch[] {
+  context: Pick<CommandContext, 'delivery'> = {}): Touch[] {
   const touches: Touch[] = []
   const group = (key: string | undefined) => { if (key) touches.push({ kind: 'group', key }) }
   const agent = (key: string | undefined) => { if (key && before.agents.some(a => a.id === key)) touches.push({ kind: 'agent', key }) }
@@ -27,20 +23,7 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
   const leadCheck = (projectId: string | undefined) => { if (actor.kind === 'agent') group(leadGroupOf(projectId)) }
   const agentProject = (id: string) => { const a = before.agents.find(x => x.id === id); return a && agentProjectId(before, a) }
   /** Every slot `machineSlots` counts for a start on this machine: the Mac and its team account share them (machines.ts). */
-  /** A Member's start, from the first Accept or the dispatch pass (members.ts, task #4697): its free name is claimed on the head,
-   *  and its computer's slots counted as any start's. */
-  const newMemberStarts = () => {
-    for (const start of effects.state.starts ?? []) {
-      if ((start.request.member || start.request.helperOf) && !(before.starts ?? []).some(s => s.id === start.id)) { head(); slots(start.request.machineId) }
-    }
-  }
-  const slots = (machineId: string) => {
-    const pool = before.machines?.find(m => m.machineId === machineId)
-    const mac: ContributedMachine | undefined = pool?.hostMachineId ? before.machines?.find(m => m.machineId === pool.hostMachineId) : pool
-    for (const id of new Set([machineId, mac?.machineId, ...(before.machines ?? []).filter(m => mac && m.hostMachineId === mac.machineId).map(m => m.machineId)])) {
-      if (id) machine(id)
-    }
-  }
+  const slots = (machineId: string) => machine(machineId)
 
   // D1: the actor's own part (spec ruling 2).
   if (actor.kind === 'person') member(actor.userId)
@@ -51,12 +34,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
   // and removing an agent writes every conversation it is in (rule b), so the conversation guards it. Touching them would
   // make every worker's post touch its Lead, and posts in different groups would conflict again (spec goal 1).
   if ('agentId' in command) agent(command.agentId)
-  // D9: a custom role choice reads the role sets on the head.
-  if ('roleId' in command && command.roleId) head()
-  if (command.type === 'agent.start' && command.request.roleId) head()
-
-  // Buddy input also guards an already awake recipient, so a concurrent sleep retries against that input (#3824).
-  for (const buddy of buddiesHearing(effects.state, effects.messages)) { agent(buddy.id); member(buddy.buddyOf!.personId) }
 
   switch (command.type) {
     // Every person's write relies on the Swarm not being deleted (deletion.ts): the delete moves each person's part, so one
@@ -70,86 +47,14 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
     case 'machine.contribute':
       if (!before.machines?.some(m => m.machineId === command.machineId)) head()
       break
-    case 'buddy.engine': {
-      const chat = before.conversations.find(c => c.id === command.conversationId)
-      const buddy = command.conversationId ? chat && mainBuddyOf(before, chat)
-        : actor.kind === 'person' ? defaultBuddy(before, actor.userId) : undefined
-      if (buddy) machine(buddy.machineId)
-      break
-    }
-    case 'task.suggest': case 'task.approve': case 'task.reject': {
-      head()
-      const card = before.conversations.find(c => c.id === command.conversationId)
-      member(card?.taskApproval?.personId)
-      agent(card?.taskApproval?.suggestedAgentId)
-      leadCheck(card && groupProject(before, card).id)
-      newMemberStarts()
-      break
-    }
-    case 'proposal.close':
-      head()
-      leadCheck(command.projectId)
-      break
-    case 'proposal.create':
-      head()
-      group(leadGroupOf(command.projectId))
-      break
-    case 'proposal.decide': case 'proposal.ask': case 'proposal.answer': case 'proposal.merge': {
-      head()
-      const card = before.conversations.find(c => c.id === command.conversationId)
-      leadCheck(card && groupProject(before, card).id)
-      for (const identity of card?.proposal?.senders ?? []) member(identity.personId)
-      if (command.type === 'proposal.merge') {
-        group(command.intoConversationId)
-        for (const id of card?.proposal?.mergedFrom ?? []) group(id)
-      }
-      break
-    }
-    case 'buddy.propose':
-      head()
-      leadCheck(command.projectId)
-      if (actor.kind === 'agent') member(before.agents.find(a => a.id === actor.agentId)?.buddyOf?.personId)
-      break
-    case 'buddy.create':
-      // It may record a Buddy-only machine, or count on one that a concurrent removal of its last Buddy ends.
-      slots(command.machineId)
-      // Its name is claimed against every other name in the Swarm, as buddy.rename's is (below).
-      head()
-      break
-    case 'agent.avatar':
-      leadCheck(agentProject(command.agentId))
-      break
-    // A Buddy's name is claimed against every other name in the Swarm, some of them in chats a command does not load: the
-    // head guards the claim, as agent.start and agent.add touch it, so of two claims at once one retries and is refused
-    // (review of #2094).
-    case 'buddy.rename':
     // A new agent's free name is picked against every name in the Swarm (agentRename.ts newAgentName, review of #3560).
     case 'agent.new':
       head()
       break
-    case 'member.start': case 'member.helper':
-      newMemberStarts()
-      break
     case 'project.report': case 'project.repository':
     // The coordinator's own writes check it leads the project, which a concurrent Lead change ends (review of phase 2).
-    case 'instructions.save': case 'note.add': case 'note.remove': case 'project.coordinatorName': case 'project.answers': case 'project.about':
+    case 'project.answers': case 'project.about':
       leadCheck(command.projectId)
-      break
-    // A rules save writes its own collection, no part of the project: by anyone, it guards on the project's Lead chat, which a
-    // project delete and a tab's close write, so a first save never lands on a project being deleted (security review 2 of
-    // #3929). The Lead check above is part of the same touch.
-    case 'rules.set':
-      group(leadGroupOf(command.projectId))
-      break
-    // An older CLI's rule is a save to its project's instructions, the coordinator's like instructions.save (commands.ts).
-    case 'rule.set':
-      leadCheck(command.projectId ?? (actor.kind === 'agent' ? agentProject(actor.agentId) : undefined))
-      break
-    case 'person.tell':
-      // The line reads that its person still reads the agent's project: their own part guards it, as a revoke touches the
-      // people it removes (project.sharing below) and member.remove writes it (security review 2 of #2090).
-      member(command.personId)
-      leadCheck(actor.kind === 'agent' ? agentProject(actor.agentId) : undefined)
       break
     case 'project.sharing':
       // Rule (b): everyone who loses the project sees the change through their own part (design section 1.2).
@@ -160,48 +65,16 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
         if (project && canReadProject(before, reader, project) && !(after && canReadProject(effects.state, reader, after))) member(person.id)
       }
       break
-    case 'conversation.create': {
-      const projectId = command.projectId ?? (actor.kind === 'agent' ? agentProject(actor.agentId) : 'lead')
-      group(leadGroupOf(projectId))
-      group(command.reviewOf)
-      member(command.requesterId)
-      for (const created of effects.state.conversations.filter(c => !before.conversations.some(b => b.id === c.id))) member(created.requesterId)
-      if (command.proposalMessageId) head()
-      break
-    }
-    case 'conversation.merged':
-    case 'conversation.unlink':
-      leadCheck(projectOfGroup(command.conversationId)?.id)
-      break
-    case 'work.status':
-      // Ready decides whether to open steps from the project's preset; a concurrent switch must make it retry.
-      if (command.status === 'review') head()
-      break
-    // Whether an agent may change a priority is whether it is still its project's PM (commands.ts coordinatorOrPerson).
-    case 'work.priority':
-    case 'work.lane':
-      leadCheck(projectOfGroup(command.conversationId)?.id)
-      break
     case 'conversation.requester':
       leadCheck(projectOfGroup(command.conversationId)?.id)
       member(command.personId ?? undefined)
       break
-    // A move reads that the task it goes after is still open in the project: archiving it meets the move here.
-    case 'work.queue':
-      leadCheck(projectOfGroup(command.conversationId)?.id)
-      group(command.after ?? undefined)
-      break
     case 'message.send': {
-      if (command.handoff) leadCheck(projectOfGroup(command.conversationId)?.id)
-      // Every start a post makes, a thread session's or the one Buddy's in an older project chat (commands.ts
-      // startOldChatBuddy), counts its machine's slots, as buddy.create's does, and meets a concurrent removal of the Buddy it
-      // runs beside: a Remove racing it can never leave it running (security review 2 of #2435).
+      // Every start a post makes counts its machine's slots.
       const start = effects.state.starts?.find(s => !before.starts?.some(b => b.id === s.id))
       if (start) {
         slots(start.request.machineId)
         head()
-        const person = start.request.buddyOf?.personId
-        for (const main of before.agents.filter(a => person && a.buddyOf?.personId === person && !a.buddySession)) agent(main.id)
       }
       // An answer to waiting work is credited to the person it waits on (leaderboard/record.ts): a concurrent change to who
       // that is meets the answer here.
@@ -233,7 +106,7 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       head()
       break
     }
-    case 'agent.release': case 'crew.add': case 'crew.remove':
+    case 'agent.release':
       leadCheck(agentProject(command.agentId))
       break
     case 'agent.rebind':
@@ -247,33 +120,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
         agent(context.delivery.agentId)
         group(context.delivery.conversationId)
       }
-      break
-    case 'work.assign': {
-      head()
-      const target = before.agents.find(a => a.id === command.agentId)
-      const unsettled = before.starts?.find(s => s.poolGeneration && !s.poolSettled && target && s.request.machineId === target.machineId && s.harnessId === target.harnessId)
-      if (unsettled) touches.push({ kind: 'start', key: unsettled.id })
-      break
-    }
-    // Finished work no longer meets the next start, assignment or route on the project's progress part: that fenced the worker
-    // decisions the Lead had to make first (design ruling R5), which no command reads now (project instructions, phase 4).
-    case 'work.cancel':
-      leadCheck(projectOfGroup(command.conversationId)?.id)
-      break
-    case 'route.record': {
-      head()
-      const pick = command.decision.candidates.find(c => c.id === command.decision.pick)
-      if (pick?.kind === 'member') agent(pick.agentId)
-      break
-    }
-    case 'route.override': {
-      const chosen = context.routeDecision?.record.candidates.find(c => c.id === command.candidateId)
-      if (chosen?.kind === 'member') agent(chosen.agentId)
-      group(context.routeDecision?.conversationId)
-      break
-    }
-    case 'route.modelResult':
-      group(context.routeDecision?.conversationId)
       break
     case 'agent.screen': case 'agent.input':
       leadCheck(agentProject(command.agentId))

@@ -297,6 +297,64 @@ class ForkedFrom {
   }
 }
 
+/// The agent's own Chrome, as its daemon reports it (cli agentFrame.ts `browser`). Only values this build has words for are
+/// kept: a newer daemon's step or error is dropped rather than shown as a code.
+class AgentBrowser {
+  const AgentBrowser({required this.state, this.step, this.error});
+
+  /// `setup`, `starting`, `ready` or `failed`.
+  final String state;
+
+  /// During `setup`: `installing`, `starting_podman` or `building`.
+  final String? step;
+
+  /// During `failed`: one of [errors].
+  final String? error;
+
+  static const steps = {'installing', 'starting_podman', 'building'};
+  static const errors = {
+    'needs_setup',
+    'podman_install_failed',
+    'podman_manual',
+    'podman_old',
+    'podman_memory',
+    'state_unreadable',
+    'podman_down',
+    'image_failed',
+    'browser_stopped',
+    'profile_unwritable',
+    'proxy_failed',
+    'browser_limit',
+    'device_failed',
+  };
+
+  static AgentBrowser? fromJson(Object? raw) {
+    if (raw is! Map) return null;
+    final state = raw['state'];
+    if (state is! String ||
+        !const {'setup', 'starting', 'ready', 'failed'}.contains(state)) {
+      return null;
+    }
+    final step = raw['step'], error = raw['error'];
+    return AgentBrowser(
+      state: state,
+      step: state == 'setup' && steps.contains(step) ? step as String : null,
+      error: state == 'failed' && errors.contains(error)
+          ? error as String
+          : null,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is AgentBrowser &&
+      state == other.state &&
+      step == other.step &&
+      error == other.error;
+  @override
+  int get hashCode => Object.hash(state, step, error);
+}
+
 /// Display-only fallbacks; never send these to a CLI as a user rename.
 const kUntitledPane = 'Untitled Pane';
 final _automaticHarnessName = RegExp(
@@ -444,6 +502,16 @@ class Agent {
   /// [modelName] as the engine names it (`claude-opus-5-5`), for a launch.
   final String? modelId;
 
+  /// Where the engine's own tools work when that is not the pane's folder (OpenClaw's workspace),
+  /// so nobody reads the folder as the place its files change. Null from an engine that works in
+  /// the pane's folder and from an older daemon.
+  final String? workspace;
+
+  /// What stops this agent that only the person can fix, in the daemon's words (`namedState`:
+  /// `OpenClaw Gateway is not running. Start it with openclaw gateway.`). Null when nothing does,
+  /// and from an older daemon.
+  final String? namedState;
+
   /// The grid model this agent is CURRENTLY running on, or null for its own vendor login.
   ///
   /// Read by the daemon off the live process on every discovery, never bookkept — so it is the
@@ -474,8 +542,7 @@ class Agent {
   final String? startedBy;
 
   /// Started by the Swarm: by an agent, from no harness on this machine, as
-  /// the CLI tells one (superTabs/inCore/adoption.ts `swarmStarted`). Every
-  /// Buddy is one.
+  /// the CLI tells one (superTabs/inCore/adoption.ts `swarmStarted`).
   bool get startedBySwarm => startedBy == 'agent' && parentAgentId == null;
   final AgentProject? project;
   final AgentGitContext? gitContext;
@@ -532,6 +599,9 @@ class Agent {
   /// when there is none (yet). A change means the viewer pane must navigate.
   final String? viewerUrl;
 
+  /// Its Browser, or null for an agent made without one or from an older daemon.
+  final AgentBrowser? browser;
+
   /// Why this remote viewer could not be forwarded, including old-daemon update guidance.
   final String? viewerError;
 
@@ -578,7 +648,7 @@ class Agent {
   /// agent that runs on a computer (docs/design/2026-10-11-cloud-agents.md).
   final AgentCloud? cloud;
 
-  /// Extra launch flags saved on the machine for this agent (a Buddy's `--chrome`), as words.
+  /// Extra launch flags saved on the machine for this agent (`--chrome`, say), as words.
   /// Empty from an older daemon or an agent with none.
   final List<String> launchArgs;
 
@@ -598,6 +668,8 @@ class Agent {
     this.modelName,
     this.modelEffort,
     this.modelId,
+    this.workspace,
+    this.namedState,
     this.gridModel,
     this.gridWebSearch,
     this.gridBaseUrl,
@@ -627,6 +699,7 @@ class Agent {
     this.dsh,
     this.dshName,
     this.viewerUrl,
+    this.browser,
     this.viewerError,
     this.viewerName,
     this.verdict,
@@ -771,6 +844,8 @@ class Agent {
       modelName: model?.name,
       modelEffort: model?.effort,
       modelId: model?.id,
+      workspace: _safeDetail(j['workspace']),
+      namedState: _safeDetail(j['namedState']),
       gridModel: _safeLabel(grid?['model']),
       gridWebSearch: GridWebSearch.fromWire(grid?['webSearch']),
       gridBaseUrl: _safeUrl(grid?['baseUrl']),
@@ -820,6 +895,7 @@ class Agent {
       dsh: _safeDsh(j['dsh']),
       dshName: _safeLabel(j['dshName']),
       viewerUrl: _safeViewerUrl(j['viewerUrl']),
+      browser: AgentBrowser.fromJson(j['browser']),
       viewerError: _safeDetail(j['viewerError']),
       viewerName: _safeLabel(j['viewerName']),
       verdict: AgentVerdict.fromJson(j['verdict']),
@@ -862,6 +938,8 @@ class Agent {
     modelName: modelName,
     modelEffort: modelEffort,
     modelId: modelId,
+    workspace: workspace,
+    namedState: namedState,
     gridModel: gridModel,
     gridWebSearch: gridWebSearch,
     gridBaseUrl: gridBaseUrl,
@@ -891,6 +969,7 @@ class Agent {
     dsh: dsh,
     dshName: dshName,
     viewerUrl: viewerUrl,
+    browser: browser,
     viewerError: viewerError,
     viewerName: viewerName,
     verdict: verdict,

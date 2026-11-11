@@ -19,7 +19,6 @@ import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { turnsLink } from './turnsLink.js'
 import { creationObservation } from '../lib/creationObservation.js'
-import { nativeTurnPageIn } from '../lib/nativeTurnObservations.js'
 
 type Payload = Record<string, unknown>
 
@@ -114,10 +113,6 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
       const answer = await ask?.('agentUsage', { target: usageTarget(target) }).catch(() => null)
       return validUsageTarget(answer?.target) && usageTargetKey(answer.target) === usageTargetKey(target) && validUsage(answer?.value) ? usageSnapshot(answer.value) : null
     },
-    usageFresh: async agentId => {
-      const answer = await ask?.('agentUsageFresh', { agentId }).catch(() => null)
-      return answer && 'value' in answer && validUsage(answer.value) ? usageSnapshot(answer.value) : null
-    },
     conversations: CONVERSATIONS_OFF,
     // Terminals are launched by the core alone (the shell service, #893): a service in its own process
     // is refused, never handed a way to start a process outside the core.
@@ -195,10 +190,7 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
       },
     },
     questions: { answer: () => {}, answerReviewed: async () => false },
-    transcripts: { databaseHistory: () => undefined, lastTurn: UNASKED.lastTurn,
-      nativeTurns: async (agentId, cursor) => nativeTurnPageIn(
-        (await ask?.('native_turns', { agentId, ...(cursor ? { cursor } : {}) }).catch(() => null))?.page),
-    },
+    transcripts: { databaseHistory: () => undefined, lastTurn: UNASKED.lastTurn },
 
     account: {
       mintGridName: async () => null,

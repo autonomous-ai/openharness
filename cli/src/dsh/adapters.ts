@@ -30,6 +30,9 @@ export const HARNESS_ADAPTERS = {
   grok: { instructionFiles: ['AGENTS.md'] },
   agy: { instructionFiles: ['AGENTS.md', 'GEMINI.md'] },
   copilot: { instructionFiles: ['AGENTS.md'] },
+  // OpenClaw's agent reads the instruction files of its own workspace (`<stateDir>/workspace`), whatever folder the
+  // pane is in, and its TUI takes no instruction flag: a file Harness wrote in the pane's folder would never be read.
+  openclaw: { instructionFiles: [] },
 } satisfies Record<ProcessEngine, HarnessAdapter>
 
 /**

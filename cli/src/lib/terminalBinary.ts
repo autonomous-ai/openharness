@@ -32,6 +32,9 @@ export const TERMINAL_LOCAL_IMAGE_PASTE_MAX_PAYLOAD_BYTES = 8 * 1024 * 1024
 // feature. Mirrors terminal_binary.dart's terminalLocalPasteFileMaxPayloadBytes — keep in step.
 export const TERMINAL_BINARY_PASTE_FILE_MAX_CIPHERTEXT_BYTES = 20 * 1024 * 1024
 export const TERMINAL_LOCAL_PASTE_FILE_MAX_PAYLOAD_BYTES = 20 * 1024 * 1024
+// One `browser` frame's plaintext: the agent browser's VNC bytes are cut into chunks of at most this,
+// so one frame never holds an echo back for long and stays far under the output ceiling it shares.
+export const BROWSER_CHUNK_BYTES = 32 * 1024
 
 export const enum TerminalBinaryKind {
   input = 1,
@@ -53,6 +56,9 @@ export const enum TerminalBinaryKind {
    *  `imagePaste` — the goal here is only "the pane gets a valid path". Upload (client→CLI) only;
    *  nothing ever sends this back down. */
   pasteFile = 7,
+  /** An agent browser's VNC bytes (services/agentBrowser), both ways: the container's screen down,
+   *  keys and mouse up. Raw bytes, never compressed: VNC already is, and the far side reads them as is. */
+  browser = 8,
 }
 
 export interface TerminalBinaryClear {
@@ -107,6 +113,7 @@ function validKind(value: number): value is TerminalBinaryKind {
     || value === TerminalBinaryKind.paste
     || value === TerminalBinaryKind.imagePaste
     || value === TerminalBinaryKind.pasteFile
+    || value === TerminalBinaryKind.browser
 }
 
 export function terminalBinaryType(kind: TerminalBinaryKind): string {
@@ -116,6 +123,7 @@ export function terminalBinaryType(kind: TerminalBinaryKind): string {
   if (kind === TerminalBinaryKind.paste) return 'terminal_paste'
   if (kind === TerminalBinaryKind.imagePaste) return 'terminal_paste_image'
   if (kind === TerminalBinaryKind.pasteFile) return 'terminal_paste_file'
+  if (kind === TerminalBinaryKind.browser) return 'agent_browser_data'
   return 'terminal_sync'
 }
 
@@ -144,7 +152,7 @@ export function encodeTerminalPlain(frame: TerminalBinaryClear): Uint8Array | nu
   // sync, and — for now — paste too) would silently hand tmux a compressed blob instead of text.
   if ((frame.kind === TerminalBinaryKind.input || frame.kind === TerminalBinaryKind.sync
     || frame.kind === TerminalBinaryKind.paste || frame.kind === TerminalBinaryKind.imagePaste
-    || frame.kind === TerminalBinaryKind.pasteFile)
+    || frame.kind === TerminalBinaryKind.pasteFile || frame.kind === TerminalBinaryKind.browser)
     && frame.compressed) return null
   if (frame.kind === TerminalBinaryKind.sync && frame.bytes.length !== 0) return null
   const scope = frame.tabId === undefined ? null : Buffer.from(frame.tabId, 'utf8')
@@ -169,7 +177,7 @@ export function decodeTerminalPlain(kind: TerminalBinaryKind, flags: number, pla
   if ((flags & ~(FLAG_ZLIB | FLAG_SWARM)) !== 0 || ((flags & FLAG_SWARM) && !canCarrySwarm(kind))
     || ((kind === TerminalBinaryKind.input || kind === TerminalBinaryKind.sync
       || kind === TerminalBinaryKind.paste || kind === TerminalBinaryKind.imagePaste
-      || kind === TerminalBinaryKind.pasteFile) && (flags & FLAG_ZLIB) !== 0)) return null
+      || kind === TerminalBinaryKind.pasteFile || kind === TerminalBinaryKind.browser) && (flags & FLAG_ZLIB) !== 0)) return null
   let metaBytes = kind === TerminalBinaryKind.keyframe ? 28 : 24
   let tabId: string | undefined
   if (flags & FLAG_SWARM) {

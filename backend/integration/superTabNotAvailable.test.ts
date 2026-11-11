@@ -9,7 +9,7 @@ import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
-import { MemoryAttachmentStore, MemoryAvatarStore } from '../src/superTabs/attachments.js'
+import { MemoryAttachmentStore } from '../src/superTabs/attachments.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
@@ -36,8 +36,7 @@ beforeAll(async () => {
   })
   db = new PrismaClient({ datasources: { db: { url: uri } } })
   for (const u of users.values()) await db.user.create({ data: { id: u.sub, externalId: `fixture-${u.sub}`, email: u.email, autonomousEnv: u.autonomousEnv } })
-  store = new SuperTabStore(db, () => Date.now(), { store: new MemoryAttachmentStore(), prefix: 'super-tabs', publicBase: 'https://cdn.example.test',
-    avatars: new MemoryAvatarStore('https://avatars.example.test') })
+  store = new SuperTabStore(db, () => Date.now(), { store: new MemoryAttachmentStore(), prefix: 'super-tabs', publicBase: 'https://cdn.example.test' })
   app = Fastify()
   app.addHook('onRoute', route => {
     if (!/^\/api\/super-tabs\/:tabId(?:\/|$)/.test(route.url)) return
@@ -86,45 +85,26 @@ function calls(tab: string, chat: string, project: string) {
     json('GET', 'GET /api/super-tabs/:tabId/parts', `${t}/parts`),
     json('GET', 'GET /api/super-tabs/:tabId/parts', `${t}/parts?asAgentId=${MISSING}`),
     json('GET', 'GET /api/super-tabs/:tabId/changes', `${t}/changes?cursor=abc`),
-    json('GET', 'GET /api/super-tabs/:tabId/activity', `${t}/activity`),
-    json('POST', 'POST /api/super-tabs/:tabId/activity/read', `${t}/activity/read`, { through: '2026-11-01T00:00:00.000Z' }),
-    json('GET', 'GET /api/super-tabs/:tabId/reminders', `${t}/reminders`),
-    json('GET', 'GET /api/super-tabs/:tabId/inbox', `${t}/inbox`),
-    json('GET', 'GET /api/super-tabs/:tabId/threads', `${t}/threads`),
     json('POST', 'POST /api/super-tabs/:tabId/commands', `${t}/commands`,
       { operationId: op(), command: { type: 'message.send', conversationId: chat, text: 'hello', replyTo: null, recipientIds: [] } }),
-    json('GET', 'GET /api/super-tabs/:tabId/mentions', `${t}/mentions?state=waiting`),
-    json('GET', 'GET /api/super-tabs/:tabId/decisions', `${t}/decisions?state=open`),
     json('GET', 'GET /api/super-tabs/:tabId/leaderboard', `${t}/leaderboard?projectId=${project}`),
     json('GET', 'GET /api/super-tabs/:tabId/shipping', `${t}/shipping`),
     json('GET', 'GET /api/super-tabs/:tabId/machine-readings', `${t}/machine-readings`),
-    json('GET', 'GET /api/super-tabs/:tabId/proposals', `${t}/proposals?projectId=${project}`),
     json('GET', 'GET /api/super-tabs/:tabId/project-list', `${t}/project-list?invitedTo=${project}`),
     json('GET', 'GET /api/super-tabs/:tabId/sharing', `${t}/sharing`),
     json('POST', 'POST /api/super-tabs/:tabId/sharing', `${t}/sharing`, { operationId: op(), revision: 0, access: { mode: 'link', role: 'viewer' } }),
     json('GET', 'GET /api/super-tabs/:tabId/routing-policy', `${t}/routing-policy`),
     json('GET', 'GET /api/super-tabs/:tabId/groups', `${t}/groups?dormant=1&projectId=${project}`),
-    json('GET', 'GET /api/super-tabs/:tabId/personal-tasks', `${t}/personal-tasks`),
     json('GET', 'GET /api/super-tabs/:tabId/groups/:conversationId', `${t}/groups/${chat}`),
     json('POST', 'POST /api/super-tabs/:tabId/join', `${t}/join`, { operationId: op(), token: 'a'.repeat(43) }),
     json('POST', 'POST /api/super-tabs/:tabId/join/preview', `${t}/join/preview`, { token: 'a'.repeat(43) }),
     json('GET', 'GET /api/super-tabs/:tabId/conversations/:conversationId/messages', `${t}/conversations/${chat}/messages`),
-    json('GET', 'GET /api/super-tabs/:tabId/conversations/:conversationId/catch-up', `${t}/conversations/${chat}/catch-up?after=0`),
     json('GET', 'GET /api/super-tabs/:tabId/conversations/:conversationId/messages/:messageId/attachments/:attachmentId',
       `${t}/conversations/${chat}/messages/${MISSING}/attachments/${MISSING}`),
     json('POST', 'POST /api/super-tabs/:tabId/conversations/:conversationId/read', `${t}/conversations/${chat}/read`, { sequence: 1 }),
     json('POST', 'POST /api/super-tabs/:tabId/conversations/:conversationId/unread', `${t}/conversations/${chat}/unread`, { sequence: 1 }),
     json('POST', 'POST /api/super-tabs/:tabId/conversations/:conversationId/threads/:threadId/read', `${t}/conversations/${chat}/threads/${MISSING}/read`, { sequence: 1 }),
-    json('POST', 'POST /api/super-tabs/:tabId/conversations/:conversationId/messages/:messageId/reminder', `${t}/conversations/${chat}/messages/${MISSING}/reminder`,
-      { at: new Date(Date.now() + 60 * 60_000).toISOString() }),
     json('POST', 'POST /api/super-tabs/:tabId/conversations/:conversationId/notifications', `${t}/conversations/${chat}/notifications`, { notify: 'all' }),
-    json('POST', 'POST /api/super-tabs/:tabId/conversations/:conversationId/threads/:threadId/follow', `${t}/conversations/${chat}/threads/${MISSING}/follow`,
-      { follow: true }),
-    json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/instructions', `${t}/projects/${project}/instructions`),
-    json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/instructions/revisions', `${t}/projects/${project}/instructions/revisions`),
-    json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/instructions/revisions/:revision', `${t}/projects/${project}/instructions/revisions/1`),
-    json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/rules', `${t}/projects/${project}/rules`),
-    json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/machine-rules', `${t}/projects/${project}/machine-rules`),
     json('POST', 'POST /api/super-tabs/:tabId/attachments/uploads', `${t}/attachments/uploads`, { conversationId: chat, name: 'notes.txt', mime: 'text/plain', size: 12_000_000 }),
     json('POST', 'POST /api/super-tabs/:tabId/attachments/uploads/:uploadId/complete', `${t}/attachments/uploads/${MISSING}/complete`, {}),
     json('POST', 'POST /api/super-tabs/:tabId/attachments/:attachmentId/voice', `${t}/attachments/${MISSING}/voice?lang=en`, {}),
@@ -132,19 +112,18 @@ function calls(tab: string, chat: string, project: string) {
     json('POST', 'POST /api/super-tabs/:tabId/projects/:projectId/github/approve', `${t}/projects/${project}/github/approve`, { scope: 'project' }),
     json('GET', 'GET /api/super-tabs/:tabId/github/owners/:owner', `${t}/github/owners/acme`),
     json('POST', 'POST /api/super-tabs/:tabId/projects/:projectId/github/repository', `${t}/projects/${project}/github/repository`, { owner: 'acme', name: 'notes', private: true }),
-    json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/roles/:roleId', `${t}/projects/${project}/roles/${MISSING}`),
     json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/ci-load', `${t}/projects/${project}/ci-load`),
     // A made-up agent: an outsider is answered as for any Swarm it cannot reach. Asked of the Lead's project, so a member's
     // in-Swarm refusal of an agent it does not run is not taken for the private project's answer.
     json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/ci-load', `${t}/projects/lead/ci-load?asAgentId=${MISSING}`),
-    json('GET', 'GET /api/super-tabs/:tabId/route-decisions/:decisionId', `${t}/route-decisions/${MISSING}`),
+    // Which agent wrote a GitHub comment (superTabs/githubComments.ts): a made-up agent records nothing, and a reader of no project
+    // of the repository reads nothing.
+    json('POST', 'POST /api/super-tabs/:tabId/github-comments', `${t}/github-comments?asAgentId=${MISSING}`, { repository: 'acme/app', kind: 'issue', commentId: '1' }),
+    json('GET', 'GET /api/super-tabs/:tabId/github-comments', `${t}/github-comments?repository=acme/app&ids=issue:1`),
     json('GET', 'GET /api/super-tabs/:tabId/machines/:machineId/removal', `${t}/machines/${MISSING}/removal`),
     json('GET', 'GET /api/super-tabs/:tabId/machines/:machineId/removal/v2', `${t}/machines/${MISSING}/removal/v2`),
     multipart('POST /api/super-tabs/:tabId/attachments', `${t}/attachments`, form([field('conversationId', chat), file('notes.txt', 'text/plain', 'hello')])),
-    json('GET', 'GET /api/super-tabs/:tabId/costs', `${t}/costs`),
-    json('GET', 'GET /api/super-tabs/:tabId/route-decisions', `${t}/route-decisions`),
     json('GET', 'GET /api/super-tabs/:tabId/starts/:startId', `${t}/starts/${MISSING}`),
-    json('GET', 'GET /api/super-tabs/:tabId/conversations/:conversationId/attempts', `${t}/conversations/${chat}/attempts`),
     json('GET', 'GET /api/super-tabs/:tabId/terminal/:requestId', `${t}/terminal/${MISSING}`),
     json('GET', 'GET /api/super-tabs/:tabId/agents/:agentId/deliveries', `${t}/agents/${MISSING}/deliveries`),
     json('GET', 'GET /api/super-tabs/:tabId/agents/:agentId/deliveries/:deliveryId', `${t}/agents/${MISSING}/deliveries/${MISSING}`),
@@ -172,11 +151,7 @@ describe('a Swarm the caller cannot reach, on every person route', () => {
     const f = await swarm()
     const real = calls(f.tab, 'lead', 'lead'), missing = calls(MISSING, 'lead', 'lead')
     // Compare against actual registration, so adding a route requires a real refusal test.
-    // The retired full-state read always asks every client to update, the retired scorecard read answers no days, the retired
-    // terminal recording answers ok and ignored and the retired picture upload refuses in words, each without reading a Swarm: they are
-    // tried alike for everyone in the tests below (and the upload's in superTabProfile.test.ts).
-    expect(new Set([...real.map(c => c.route), 'GET /api/super-tabs/:tabId', 'GET /api/super-tabs/:tabId/scorecard', 'POST /api/super-tabs/:tabId/native',
-      'GET /api/super-tabs/:tabId/native/:contextId', 'POST /api/super-tabs/:tabId/native/:contextId', 'POST /api/super-tabs/:tabId/avatars'])).toEqual(registeredPersonRoutes)
+    expect(new Set(real.map(c => c.route))).toEqual(registeredPersonRoutes)
     for (const [i, call] of real.entries()) {
       const cases = { missing: await answer(missing[i]!, outsider), refused: await answer(call, outsider), revoked: await answer(call, removed) }
       // Approving needs the server's GitHub App, which this server has not: it says so to everyone, before any Swarm is read.
@@ -186,13 +161,12 @@ describe('a Swarm the caller cannot reach, on every person route', () => {
     }
   })
 
-  it('answers a deleted Swarm alike on every route, to its owner and members too, for its chats, Buddy chat and private project', async () => {
+  it('answers a deleted Swarm alike on every route, to its owner and members too, for its chats and private project', async () => {
     const f = await swarm()
     const execute = (command: Command, as = owner) => store.execute(as, f.tab, { operationId: randomUUID(), command })
-    const buddyChat = String((await execute({ type: 'buddy.chat' }, member)).result.conversationId)
     await execute({ type: 'swarm.delete', name: 'Not available' })
     const missing = calls(MISSING, 'lead', 'lead')
-    for (const [chat, project] of [['lead', 'lead'], [buddyChat, 'lead'], [f.privateChat, f.privateProject]] as const) {
+    for (const [chat, project] of [['lead', 'lead'], [f.privateChat, f.privateProject]] as const) {
       for (const [i, call] of calls(f.tab, chat, project).entries()) {
         const cases = { owner: await answer(call, owner), member: await answer(call, member), outsider: await answer(call, outsider), missing: await answer(missing[i]!, owner) }
         const expected = /\/github\/approve$|\/github\/repository$|\/github-token$/.test(call.route) ? cases.missing : { status: 404, body: NOT_AVAILABLE_BODY }
@@ -226,51 +200,6 @@ describe('a Swarm the caller cannot reach, on every person route', () => {
       expect(got.status, call.url).toBe(404)
       expect(got.body, call.url).toBe(NOT_AVAILABLE_BODY)
       expect(JSON.parse(got.body).error.message).not.toMatch(about)
-    }
-  })
-
-  it('asks every legacy full-state reader to update without revealing whether the Swarm exists', async () => {
-    const f = await swarm()
-    for (const as of [owner, member, outsider, removed]) {
-      const real = await app.inject({ url: `/api/super-tabs/${f.tab}`, headers: { 'x-user': as.sub } })
-      const missing = await app.inject({ url: `/api/super-tabs/${MISSING}`, headers: { 'x-user': as.sub } })
-      expect(real.statusCode).toBe(426)
-      expect(real.json().error.code).toBe('UPDATE_REQUIRED')
-      expect({ status: real.statusCode, body: real.body }).toEqual({ status: missing.statusCode, body: missing.body })
-    }
-  })
-
-  // The scorecard is gone with Swarm v4: an older Desktop's Scorecard tab still reads it, and gets no days, whoever asks and
-  // whatever Swarm or project it names, even one that is missing, so the answer says nothing of any of them.
-  it('answers the retired scorecard read with no days, alike to everyone, naming nothing of the Swarm', async () => {
-    const f = await swarm()
-    const read = (tab: string, project: string, as: AuthUser) => app.inject({ url: `/api/super-tabs/${tab}/scorecard?projectId=${project}&scope=all`, headers: { 'x-user': as.sub } })
-    for (const as of [owner, member, outsider, removed]) {
-      for (const [tab, project] of [[f.tab, 'lead'], [f.tab, f.privateProject], [MISSING, 'lead']] as const) {
-        const res = await read(tab, project, as)
-        expect({ status: res.statusCode, body: res.body }, `${as.email} ${tab} ${project}`).toEqual({ status: 200, body: JSON.stringify({ success: true, data: { days: [] } }) })
-      }
-    }
-  })
-
-  // Terminal recording is gone with Swarm v4: an older Desktop opens a terminal's context, and an older host reads it and records into
-  // it. Each is answered ok and ignored, whoever asks and whatever Swarm it names, even a missing one, so the answer says nothing of any.
-  it('answers the retired terminal recording ok and ignored, alike to everyone, naming nothing of the Swarm', async () => {
-    const f = await swarm()
-    const observation = { turnId: 'turn-1', kind: 'prompt', previousEventId: null, text: 'hello', truncated: false, interrupted: false }
-    const ask = (as: AuthUser, tab: string, method: 'GET' | 'POST', path: string, payload?: object) =>
-      app.inject({ method, url: `/api/super-tabs/${tab}/native${path}`, headers: { 'x-user': as.sub }, payload: payload as never })
-    for (const as of [owner, member, outsider, removed]) {
-      for (const tab of [f.tab, MISSING]) {
-        const label = `${as.email} ${tab}`
-        const opened = await ask(as, tab, 'POST', '', { operationId: randomUUID(), conversationId: 'lead', agentId: MISSING })
-        expect({ status: opened.statusCode, body: opened.body }, label).toEqual({ status: 200, body: JSON.stringify({ success: true, data: { ok: true, ignored: true } }) })
-        const read = await ask(as, tab, 'GET', `/${MISSING}`)
-        expect({ status: read.statusCode, body: read.body }, label).toEqual({ status: 200, body: JSON.stringify({ success: true, data: { ok: true, ignored: true } }) })
-        const recorded = await ask(as, tab, 'POST', `/${MISSING}`, observation)
-        expect(recorded.statusCode, label).toBe(200)
-        expect(recorded.json().data, label).toMatchObject({ ok: true, ignored: true, eventId: expect.stringMatching(/^[0-9a-f]{24}$/) })
-      }
     }
   })
 

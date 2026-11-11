@@ -53,6 +53,7 @@ import { storedLaunchModel, type LaunchModel } from './launchModel.js'
 import { commandcodeTranscriptPath } from '../engines/commandcode/contract.js'
 import { agyTranscriptPath } from '../engines/agy/contract.js'
 import { copilotTranscriptPath } from '../engines/copilot/contract.js'
+import { OPENCLAW_KEY } from '../engines/openclaw/contract.js'
 import { bootChanged, currentBootId } from './bootId.js'
 import { lockOwnerAlive, lockStartMarker, processLockIdentity } from './processLiveness.js'
 import { hardenPrivateStateFileIfPresent, readPrivateStateFile, secureStateDirectory, syncStateDirectory } from './secureState.js'
@@ -190,11 +191,10 @@ export interface RegisteredSession {
    */
   launchArgs?: string[]
   /**
-   * The conversation this agent was in on its own login when a fresh move took it onto a grid
-   * (`agent_retarget` with `fresh`: a conversation too long for the grid model's window). The way
-   * home reopens it instead of the grid's, and forgets it once home. Absent when there is none.
+   * Created with Browser ticked: the agent browser service (services/agentBrowser.ts) runs a sandboxed Chrome beside it.
+   * Chosen once at creation and carried forward, like `codexHome`. Absent for an agent without one.
    */
-  subscriptionSessionId?: string
+  browser?: true
   /**
    * The CODEX_HOME folder this agent was launched against, if one was chosen instead of `~/.codex`.
    * Codex only. Unlike `grid`, this is chosen once at creation and never re-derived from the live
@@ -222,6 +222,12 @@ export interface RegisteredSession {
    * fleet's activity cards empty forever while their terminals streamed perfectly (openharness#191).
    */
   hermesHome?: string | null
+  /**
+   * OpenClaw only: the state folder its TUI held open when the session was bound (lib/openclawStore.ts). A `--profile`
+   * or `--dev` TUI keeps its store outside the default folder, and once the TUI has exited this is where its history,
+   * usage and checkpoint are read from.
+   */
+  openclawStateDir?: string | null
   /**
    * The domain-specific harness this agent was created as (`autonomous/copper`), or null for a plain
    * engine. NOT a second engine: `engine` stays the base (`claude`, `codex`, …) and every normalizer,
@@ -714,7 +720,7 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
   // Taken out of the spread and put back only when it is a real moment: the spread would otherwise
   // carry a hand-edited string or a negative number straight into the frame's `toISOString()`.
   // `forkedFrom` is out too, so an invalid one is dropped rather than spread back in as-is.
-  const { identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, admissionHold: _admission, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, launchModel: rawLaunchModel, externalResume: _externalResume, startedBy: rawStartedBy, parentAgentId: rawParentAgentId, swarmSkill: rawSwarmSkill, launchArgs: rawLaunchArgs, ...rest } = row
+  const { identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, admissionHold: _admission, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, launchModel: rawLaunchModel, externalResume: _externalResume, startedBy: rawStartedBy, parentAgentId: rawParentAgentId, swarmSkill: rawSwarmSkill, launchArgs: rawLaunchArgs, browser: rawBrowser, ...rest } = row
   const lastOpenedAt = normalizedOpenedAt(rawOpenedAt)
   // Out of the spread for the same reason: a half-formed record is dropped, never relaunched with.
   const scmLaunch = parseScmLaunchRecord(rawScmLaunch)
@@ -730,6 +736,7 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
     ...(launchModel ? { launchModel } : {}),
     ...(swarmSkill ? { swarmSkill } : {}),
     ...(launchArgs ? { launchArgs } : {}),
+    ...(rawBrowser === true ? { browser: true as const } : {}),
     ...(normalizedClosePlan(rawClosePlan) ? { closePlan: normalizedClosePlan(rawClosePlan)! } : {}),
     schemaVersion: 2,
     active,
@@ -1384,7 +1391,7 @@ class Registry {
             }
             if (!verified) bound = false
           } else if (bound && engine !== 'cursor' && engine !== 'opencode' && engine !== 'kilo' && engine !== 'pi'
-            && engine !== 'hermes' && engine !== 'commandcode' && engine !== 'devin') {
+            && engine !== 'hermes' && engine !== 'commandcode' && engine !== 'devin' && engine !== 'openclaw') {
             bound = false
             changed = true
           }
@@ -1418,6 +1425,7 @@ class Registry {
           codexHome: typeof rawCodexHome === 'string' && rawCodexHome ? rawCodexHome : null,
           claudeHome: typeof raw?.claudeHome === 'string' && raw.claudeHome ? raw.claudeHome : null,
           hermesHome: typeof raw?.hermesHome === 'string' && raw.hermesHome ? raw.hermesHome : null,
+          ...(typeof raw?.openclawStateDir === 'string' && raw.openclawStateDir ? { openclawStateDir: raw.openclawStateDir } : {}),
           ...normalizedForkedFrom((raw as { forkedFrom?: unknown }).forkedFrom),
           dsh: normalizedDshId((raw as { dsh?: unknown }).dsh),
           dshRuntime: typeof raw.dshRuntime === 'string' && raw.dshRuntime ? raw.dshRuntime : null,
@@ -1427,6 +1435,7 @@ class Registry {
           ...(rawGridLaunch ? { gridWebSearch: normalizedGridWebSearch(raw?.gridWebSearch) } : {}),
           ...(rawScmLaunch ? { scmLaunch: rawScmLaunch } : {}),
           ...(storedLaunchArgs(raw.launchArgs) ? { launchArgs: storedLaunchArgs(raw.launchArgs) } : {}),
+          ...(raw.browser === true ? { browser: true as const } : {}),
           ...(storedLaunchModel((raw as { launchModel?: unknown }).launchModel) ? { launchModel: storedLaunchModel((raw as { launchModel?: unknown }).launchModel) } : {}),
           // ⚠️ Rehydrated EXPLICITLY, like every field above it. A row is rebuilt from this list on
           // load, so a field added to the type and the setter but not to this list is written to
@@ -1434,9 +1443,6 @@ class Registry {
           // it looks like "the setter never ran" rather than like a missing line here.
           ...(typeof raw?.subscriptionModel === 'string' && raw.subscriptionModel
             ? { subscriptionModel: raw.subscriptionModel }
-            : {}),
-          ...(typeof raw?.subscriptionSessionId === 'string' && raw.subscriptionSessionId
-            ? { subscriptionSessionId: raw.subscriptionSessionId }
             : {}),
           ...(raw.bypassPermission === true ? { bypassPermission: true } : {}),
           ...(permissionModeName(raw.permissionMode) ? { permissionMode: raw.permissionMode } : {}),
@@ -1728,6 +1734,8 @@ class Registry {
 
   /** Register a terminal route before its engine process exists. */
   openPendingAgent(input: {
+    /** The id the launch already named its session after (OpenClaw's `harness-<agentId>`); a new one otherwise. */
+    agentId?: string
     nativeToken?: string
     engine: AgentEngine
     runtimes: TerminalRuntimeRef[]
@@ -1762,6 +1770,8 @@ class Registry {
     parentAgentId?: string | null
     /** The guest it is started for — see RegisteredSession.guest. */
     guest?: string | null
+    /** Created with Browser ticked — see RegisteredSession.browser. */
+    browser?: boolean
   }): RegisteredSession | null {
     if (this.writeBlocked) return null
     const externalResume = input.externalResume === undefined ? undefined : parseExternalResume(input.externalResume)
@@ -1770,8 +1780,9 @@ class Registry {
     const runtimes = normalizedRuntimes(input.runtimes)
     if (!runtimes.length) return null
     if (runtimes.some((runtime) => this.runtimeIndex.has(terminalRouteKey(runtime)))) return null
+    const agentId = input.agentId ?? randomUUID()
+    if (this.byAgent(agentId)) return null
     const now = Date.now()
-    const agentId = randomUUID()
     const entry: RegisteredSession = {
       schemaVersion: 2,
       active: !externalResume,
@@ -1804,6 +1815,7 @@ class Registry {
       ...(input.startedBy === 'agent' ? { startedBy: 'agent' as const } : {}),
       ...normalizedParent(input.startedBy, input.parentAgentId),
       ...(input.guest ? { guest: input.guest } : {}),
+      ...(input.browser ? { browser: true as const } : {}),
       transcriptPath: null,
       projectDir: basename(input.cwd ?? '') || agentId,
       cwd: input.cwd ?? null,
@@ -1986,7 +1998,9 @@ class Registry {
       || (engine === 'agy' && !GROK_SESSION_RE.test(sessionId))
       // Copilot's session id is a uuid and names the directory its event stream lives in.
       || (engine === 'copilot' && !GROK_SESSION_RE.test(sessionId))
-      || (engine !== 'cursor' && engine !== 'opencode' && engine !== 'kilo' && engine !== 'pi' && engine !== 'hermes' && engine !== 'commandcode' && engine !== 'devin' && engine !== 'grok' && engine !== 'agy' && engine !== 'copilot' && !transcriptPath)
+      // OpenClaw's session id is its key, `agent:<agentId>:<key>`, which names the agent database it is read from.
+      || (engine === 'openclaw' && !OPENCLAW_KEY.test(sessionId))
+      || (engine !== 'cursor' && engine !== 'opencode' && engine !== 'kilo' && engine !== 'pi' && engine !== 'hermes' && engine !== 'commandcode' && engine !== 'devin' && engine !== 'grok' && engine !== 'agy' && engine !== 'copilot' && engine !== 'openclaw' && !transcriptPath)
       // The already-registered agent (opened at agent_create time) already carries its own
       // CODEX_HOME profile, if it has one other than the default — see RegisteredSession.codexHome.
     ) return null
@@ -2125,8 +2139,8 @@ class Registry {
       ...(existing?.launchModel ? { launchModel: existing.launchModel } : {}),
       // And the owner's extra launch flags: a hook bind that forgot them would drop them at the first relaunch.
       ...(existing?.launchArgs ? { launchArgs: existing.launchArgs } : {}),
-      // And for the conversation a fresh move left: the grid's first hook would otherwise forget the way home.
-      ...(existing?.subscriptionSessionId ? { subscriptionSessionId: existing.subscriptionSessionId } : {}),
+      // And its browser: dropped at the first hook, the agent's browser would stop with its next start.
+      ...(existing?.browser ? { browser: true as const } : {}),
       defaultName: existing?.defaultName,
       transcriptPath: effectiveTranscriptPath,
       projectDir: engine === 'grok' || engine === 'agy' || engine === 'copilot'
@@ -2151,6 +2165,8 @@ class Registry {
       // forward like every field here: a bind REBUILDS the row, and a home dropped at the first hook
       // would send the mirror back to the default store (openharness#191).
       hermesHome: input.hermesHome ?? existing?.hermesHome ?? null,
+      // Carried forward too: `/new` rebinds the same TUI, and its store is where it was.
+      ...(existing?.openclawStateDir && engine === 'openclaw' ? { openclawStateDir: existing.openclawStateDir } : {}),
       dsh: existing?.dsh ?? null,
       dshRuntime: existing?.dshRuntime ?? null,
       ...(existing?.swarmSkill ? { swarmSkill: existing.swarmSkill } : {}),
@@ -2359,6 +2375,8 @@ class Registry {
     // The shell under a new identity is the person's, not a harness an agent started: kept, a window took the new id for
     // a new child and opened the shell beside the agent, even after the person had closed the child (review of #1217).
     if (separateShell) delete entry.parentAgentId
+    // Its browser is the archived agent's, with that agent's logins: never the shell's.
+    if (separateShell) delete entry.browser
     this.releaseBinding(entry)
     delete entry.resumeOnly
     delete entry.externalResume
@@ -2629,6 +2647,16 @@ class Registry {
     return true
   }
 
+  /** Where an OpenClaw session's TUI keeps its state, read off the TUI while it runs: the one it holds now wins. */
+  setOpenclawStateDir(agentId: string, stateDir: string): boolean {
+    const session = this.agents.get(agentId)
+    if (!session || session.engine !== 'openclaw' || session.openclawStateDir === stateDir) return false
+    session.openclawStateDir = stateDir
+    session.touchedAt = Date.now()
+    this.save()
+    return true
+  }
+
   /** Older Swarm members adopt a role at restart, once; later roster reads cannot replace a saved role. */
   setSwarmSkill(agentId: string, skill: SwarmSkill): boolean {
     const session = this.agents.get(agentId)
@@ -2695,18 +2723,6 @@ class Registry {
     if (!session) return false
     if (args.length) session.launchArgs = [...args]
     else delete session.launchArgs
-    session.touchedAt = Date.now()
-    this.save()
-    return true
-  }
-
-  /** Remember the conversation a fresh move onto a grid left on the own login, or forget it (null) once
-   *  the agent is back in it. Kept while the agent is on a grid, across moves between grids. */
-  setSubscriptionSession(agentId: string, sessionId: string | null): boolean {
-    const session = this.agents.get(agentId)
-    if (!session) return false
-    if (sessionId) session.subscriptionSessionId = sessionId
-    else delete session.subscriptionSessionId
     session.touchedAt = Date.now()
     this.save()
     return true
@@ -3191,7 +3207,9 @@ export const registry = new Registry()
 
 function defaultProjectDisplayName(s: RegisteredSession): string {
   const folder = s.cwd ? s.cwd.split('/').filter(Boolean).pop() || s.cwd : s.projectDir
-  return `${folder} · ${(s.sessionId || s.agentId).slice(0, 4)}`
+  // Every OpenClaw key starts `agent:<agentId>:`: it is told apart by its own part (`main`, `tui-22b7208d`).
+  const key = s.engine === 'openclaw' ? OPENCLAW_KEY.exec(s.sessionId)?.[2] : undefined
+  return `${folder} · ${key ? key.slice(0, 12) : (s.sessionId || s.agentId).slice(0, 4)}`
 }
 
 /**

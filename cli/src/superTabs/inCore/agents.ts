@@ -7,8 +7,8 @@
 import type { SwarmAgentDeps, SwarmAgents } from '../../core/api.js'
 
 export function createSwarmAgents({ byAgent, stoppedIds, closeAgent, resumeAgent, creationStatus, members }: SwarmAgentDeps & {
-  /** The Leads and crew (`leads`) and members this machine's Super Tab host keeps (superTabs/retention.ts). */
-  members: { leads(): Set<string>; harnesses(): Set<string>; sleepingBuddies?(): Set<string> }
+  /** The Leads (`leads`) and the members this machine's Super Tab host keeps (superTabs/retention.ts). */
+  members: { leads(): Set<string>; harnesses(): Set<string> }
 }): SwarmAgents {
   return {
     closeSwarm: async request => {
@@ -49,16 +49,6 @@ export function createSwarmAgents({ byAgent, stoppedIds, closeAgent, resumeAgent
         member = creation?.state === 'created' && creation.agentId === agentId
       }
       if (!member) return { error: 'NOT_A_MEMBER' }
-      // A server-managed Buddy sleeps only while the latest roster still asks, under the close service's idle fences.
-      // This function stays in the core: no window or wire request can supply the non-serializable permit.
-      if (members.sleepingBuddies?.().has(agentId)) {
-        let revoked = false
-        const buddySleep = () => {
-          if (!members.sleepingBuddies?.().has(agentId)) revoked = true
-          return !revoked
-        }
-        return closeAgent({ agentId, sessionId: session.sessionId, createdAt: new Date(session.registeredAt).toISOString(), mode: 'idle', buddySleep })
-      }
       // The close itself refuses a session that changed during the receipt read.
       return closeAgent({ agentId, sessionId: session.sessionId, createdAt: new Date(session.registeredAt).toISOString(), mode: 'now' })
     },

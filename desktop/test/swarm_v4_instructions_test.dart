@@ -19,8 +19,7 @@ void main() {
 
   /// A computer that holds Pip's file ([SwarmV4Computer]: it refuses as a real link fails, and a save checks the version).
   SwarmV4Computer computer({String? text, String? error}) =>
-      SwarmV4Computer(files: {'session-pip/Pip': ?text})
-        ..refuse = error;
+      SwarmV4Computer(files: {'session-pip/Pip': ?text})..refuse = error;
 
   Future<void> open(
     WidgetTester tester,
@@ -73,7 +72,7 @@ void main() {
 
   testWidgets('no file yet', (tester) async {
     await open(tester, computer());
-    expect(find.textContaining('No instructions yet.'), findsOneWidget);
+    expect(find.textContaining('Empty for now.'), findsOneWidget);
     await look(tester, 'none');
   });
 

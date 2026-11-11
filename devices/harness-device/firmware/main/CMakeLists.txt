@@ -56,17 +56,10 @@ set(BOARD_SRCS
     "ui/habitat/form.c"
     "ui/habitat/draft.c"
     "ui/habitat/gestures.c"
-    "ui/habitat/tim.c"
     "ui/habitat/character.c"
-    "ui/habitat/illustrated.c"
-    "ui/habitat/illustrated_cache.c"
     "ui/habitat/character_motion.c"
     "ui/habitat/character_layout.c"
-    "ui/habitat/tux.c"
     "ui/habitat/focus.c"
-    "ui/habitat/octopus.c"
-    "ui/habitat/ascii_clip.c"
-    "ui/habitat/octopus_font.c"
     "ui/habitat/command_face.c"
     "ui/habitat/fonts.c"
     "ui/habitat/lvgl_fonts.c"
@@ -78,17 +71,9 @@ set(BOARD_SRCS
 
 set(BOARD_REQUIRES
     nvs_flash
-    esp_wifi
-    esp_netif
-    esp_event
-    esp_http_server
-    esp_http_client
-    esp_https_ota
     app_update
     esp_partition
     mbedtls
-    esp_websocket_client
-    esp-tls
     esp_lcd
     esp_lcd_touch
     esp_codec_dev
@@ -97,15 +82,6 @@ set(BOARD_REQUIRES
     json
 )
 
-# The illustrated companions' artwork is 4.6 MB of the image, and a Focus-only build never draws it,
-# so it ships only with -DDEVICE_ALL_SKINS=1 (owner, 2026-09-30). Without it the code stays and the
-# pack is empty — see illustrated_cache.c.
-if(DEVICE_ALL_SKINS)
-    set(COMPANION_ART "../assets/companions/companion_art.pack")
-else()
-    set(COMPANION_ART "")
-endif()
-
 idf_component_register(
     SRCS ${BOARD_SRCS}
     INCLUDE_DIRS
@@ -113,7 +89,6 @@ idf_component_register(
         "ui"
         "board"
     REQUIRES ${BOARD_REQUIRES}
-    EMBED_FILES ${COMPANION_ART}
 )
 
 # snprintf() is bounded (it truncates, never overflows), but -O2 enables a noisy
@@ -124,32 +99,8 @@ if(DEVICE_HABITAT_ORANGE)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVICE_HABITAT_ORANGE=1)
 endif()
 
-# Focus and nothing else until the companion skins are finished (owner, 2026-09-30); the host tests
-# build without it and keep covering every skin. -DDEVICE_ALL_SKINS=1 lifts it for a build.
-if(NOT DEVICE_ALL_SKINS)
-    target_compile_definitions(${COMPONENT_LIB} PRIVATE HABITAT_FOCUS_ONLY=1 HABITAT_NO_COMPANION_ART=1)
-endif()
-
-# Focus unless told otherwise — see ht_character_default().
-if(DEVICE_DEFAULT_CHARACTER STREQUAL "tux")
-    target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVICE_DEFAULT_CHARACTER_TUX=1)
-elseif(DEVICE_DEFAULT_CHARACTER STREQUAL "tim")
-    target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVICE_DEFAULT_CHARACTER_TIM=1)
-elseif(DEFINED DEVICE_DEFAULT_CHARACTER AND NOT DEVICE_DEFAULT_CHARACTER STREQUAL "focus")
-    message(FATAL_ERROR "DEVICE_DEFAULT_CHARACTER must be tim, tux or focus")
-endif()
-
 if(DEVICE_PERF_BENCH)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVICE_PERF_BENCH=1)
-endif()
-
-# Event-tagged A/B profiling of the connected octopus. Never part of a daily image.
-if(DEVICE_OCTOPUS_BENCH)
-    if(NOT DEVICE_PERF_BENCH OR DEVICE_CREATURE_GALLERY)
-        message(FATAL_ERROR "DEVICE_OCTOPUS_BENCH requires PERF, without the gallery")
-    endif()
-    target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVICE_OCTOPUS_BENCH=1)
-    target_sources(${COMPONENT_LIB} PRIVATE "ui/habitat/perf_bench.c")
 endif()
 
 # BRING-UP PROBE: `idf.py -DBOARD_PROBE=1 build` (separate build dir recommended). app_main runs
@@ -161,7 +112,7 @@ if(BOARD_PROBE)
 endif()
 
 if(DEVICE_TRANSPORT_BENCH)
-    if(DEVICE_CREATURE_GALLERY OR DEVICE_LAYOUT_BENCH)
+    if(DEVICE_LAYOUT_BENCH)
         message(FATAL_ERROR "DEVICE_TRANSPORT_BENCH requires the normal renderer")
     endif()
     target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVICE_TRANSPORT_BENCH=1)
@@ -169,19 +120,8 @@ if(DEVICE_TRANSPORT_BENCH)
         "../test/reference91/cable_frame_ref.c")
 endif()
 
-# Opt-in, local-only ASCII visual study. Omitted entirely from normal firmware.
-if(DEVICE_CREATURE_GALLERY)
-    target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVICE_CREATURE_GALLERY=1)
-    target_sources(${COMPONENT_LIB} PRIVATE
-        "ui/habitat/creature_gallery.c"
-        "ui/habitat/creature_font.c")
-endif()
-
 # One-boot layout CPU profiling. Never enabled in the daily device image.
 if(DEVICE_LAYOUT_BENCH)
-    if(DEVICE_CREATURE_GALLERY OR DEVICE_OCTOPUS_BENCH)
-        message(FATAL_ERROR "DEVICE_LAYOUT_BENCH requires the connected UI only")
-    endif()
     target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVICE_LAYOUT_BENCH=1)
     target_sources(${COMPONENT_LIB} PRIVATE "ui/habitat/layout_bench.c" "ui/habitat/scroll_bench.c")
     if(DEVICE_LAYOUT_BASELINE STREQUAL "82")
@@ -190,8 +130,7 @@ if(DEVICE_LAYOUT_BENCH)
         target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVICE_LAYOUT_BASELINE79=1)
         target_sources(${COMPONENT_LIB} PRIVATE "../test/reference79/terminal_ref.c")
     else()
-        target_sources(${COMPONENT_LIB} PRIVATE
-            "../test/reference48/terminal_ref.c" "../test/reference48/octopus_ref.c")
+        target_sources(${COMPONENT_LIB} PRIVATE "../test/reference48/terminal_ref.c")
     endif()
     target_include_directories(${COMPONENT_LIB} PRIVATE
         "${CMAKE_CURRENT_LIST_DIR}/../test" "${CMAKE_CURRENT_LIST_DIR}/ui/habitat")
@@ -200,14 +139,14 @@ endif()
 # One-shot fault injection, omitted from daily builds. A retained marker makes
 # the reboot after the injected stall resume normal operation instead of looping.
 if(DEVICE_RENDER_FAULT)
-    if(DEVICE_CREATURE_GALLERY OR DEVICE_LAYOUT_BENCH OR DEVICE_OCTOPUS_BENCH)
+    if(DEVICE_LAYOUT_BENCH)
         message(FATAL_ERROR "DEVICE_RENDER_FAULT requires the normal renderer")
     endif()
     target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVICE_RENDER_FAULT=1)
 endif()
 
 if(DEVICE_RENDER_STRESS)
-    if(DEVICE_CREATURE_GALLERY OR DEVICE_LAYOUT_BENCH OR DEVICE_OCTOPUS_BENCH OR DEVICE_RENDER_FAULT)
+    if(DEVICE_LAYOUT_BENCH OR DEVICE_RENDER_FAULT)
         message(FATAL_ERROR "DEVICE_RENDER_STRESS requires the normal renderer without fault injection")
     endif()
     target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVICE_RENDER_STRESS=1)

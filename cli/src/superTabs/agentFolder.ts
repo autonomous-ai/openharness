@@ -4,7 +4,7 @@
  * about on every run, in a terminal no Swarm view shows, so the agent waited on nobody. The core trusts only a Git checkout
  * or a Harness worktree (core/agents/create.ts `swarmFolder`), and a scratchpad is neither.
  *
- * As a Buddy's home (buddyHome.ts), the folder is Harness's, made for this start in its worktrees folder and marked as its,
+ * The folder is Harness's, made for this start in its worktrees folder and marked as its,
  * and trusted alone: never a parent, the home folder or a folder a person made. It goes when its agent stops, once nothing
  * of the agent's work is left in it (machines.ts).
  */
@@ -15,7 +15,7 @@ import { folderTrust } from '../engines/launchPrep.js'
 import { launchEnvironment } from '../engines/kit/launchExecutable.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
 
-/** The folder of agent folders, beside Buddy homes in Harness's worktrees folder. */
+/** The folder of agent folders, in Harness's worktrees folder. */
 export const AGENT_FOLDERS = 'agent-home'
 /** The file that says a folder is Harness's agent folder: only a marked one is ever removed. */
 export const AGENT_FOLDER_MARK = '.harness-agent-folder'
@@ -32,7 +32,7 @@ export function temporaryFolder(path: string, tmp: string = tmpdir()): boolean {
   return inside(normalize(path)) || inside(resolved)
 }
 
-/** The folder for [startId]'s agent: named for its start, as a Buddy's home is, never for anything a request names. */
+/** The folder for [startId]'s agent: named for its start, never for anything a request names. */
 export function agentFolderFor(root: string, startId: string): string {
   return join(root, 'worktrees', AGENT_FOLDERS, worktreeFolderName(`super-tab/${startId}`))
 }
@@ -55,7 +55,7 @@ export async function prepareAgentFolder(folder: string, engine: unknown, enviro
   if (made) writeFileSync(mark, 'A Swarm agent\'s folder, made by Harness; removed when the agent stops and nothing of its work is left.\n', { flag: 'wx', mode: 0o600 })
   else if (!lstatSync(mark, { throwIfNoEntry: false })?.isFile()) throw new Error('the agent folder is not one Harness made')
   if (engine !== 'claude') return
-  // The environment the launch reads its Claude home from (a CLAUDE_CONFIG_DIR its login shell sets), as a Buddy's home is.
+  // The environment the launch reads its Claude home from (a CLAUDE_CONFIG_DIR its login shell sets).
   try { folderTrust('claude', undefined, environment ?? await launchEnvironment() ?? undefined)?.record(folder) }
   catch (error) { console.warn(`[super-tabs] could not answer the folder question for an agent: ${(error as Error).message}`) }
 }

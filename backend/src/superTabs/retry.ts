@@ -2,8 +2,8 @@ import { fail } from './model.js'
 import { recordAttempt, recordBusy, recordRetry } from './retryStats.js'
 import { addPhase, timedPhase } from './commandTiming.js'
 
-/** A Swarm's answers that say "try again" rather than "no": busy after its retries, or moving to its new store. */
-export const RETRYABLE_SWARM_CODES: ReadonlySet<string> = new Set(['SWARM_BUSY', 'SWARM_MIGRATING'])
+/** A Swarm's answers that say "try again" rather than "no": busy after its retries. */
+export const RETRYABLE_SWARM_CODES: ReadonlySet<string> = new Set(['SWARM_BUSY'])
 
 const TRANSACTION_ATTEMPTS = 8
 const EXPIRED_TRANSACTION_ATTEMPTS = 2

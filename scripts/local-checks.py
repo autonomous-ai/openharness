@@ -21,6 +21,14 @@ def cli_gate(name, *paths):
                 paths=paths + (f"cli/vitest.{name}.config.ts",))
 
 
+# What a receipt's command may add to its check's: resource caps change the budget or parallelism, never which
+# tests run or their coverage, so narrowed or disabled runs are still refused. Vitest takes a worker cap; the
+# Desktop suite takes its total budget in seconds and its worker count (scripts/test-desktop.py).
+MAX_WORKERS = r"(?: -- --maxWorkers(?:=| )[1-9][0-9]?)?"
+_TIMEOUT, _WORKERS = r"--timeout [1-9][0-9]{2,4}", r"--workers [1-9][0-9]?"
+DESKTOP_RESOURCES = rf'(?: ARGS="(?:{_TIMEOUT}(?: {_WORKERS})?|{_WORKERS}(?: {_TIMEOUT})?)")?'
+
+
 # Keep coverage inputs aligned with cli/package.json and the coverage include
 # lists in cli/vitest.*.config.ts. Directory patterns also cover new files/tests.
 CHECKS = {
@@ -49,12 +57,12 @@ CHECKS = {
                                                          "cli/src/lib/engineShell*.ts", "cli/src/lib/zsh*.ts",
                                                          "cli/src/lib/loginShellEnv*.ts", "cli/src/lib/userShell*.ts",
                                                          "cli/src/lib/shellQuote*.ts")),
-    "desktop-macos": dict(command="make desktop-test", cwd=".", platform="macos",
+    "desktop-macos": dict(command="make desktop-test", cwd=".", platform="macos", resources=DESKTOP_RESOURCES,
                           paths=("desktop/macos/*", "desktop/lib/*/mac_*.dart", "desktop/lib/*/macos*.dart",
                                  "desktop/test/macos*.dart", "desktop/pubspec.yaml", "desktop/pubspec.lock")),
 }
 CLI_SHARED = ("cli/package.json", "cli/package-lock.json", "cli/vitest.config.ts", "cli/vitest.setup.ts",
-              "cli/vitest.tmpdir.ts", "cli/tsconfig*.json", "cli/.node-version", "cli/.nvmrc")
+              "cli/vitest.tmpdir.ts", "cli/src/__fixtures__/vitestRun.ts", "cli/tsconfig*.json", "cli/.node-version", "cli/.nvmrc")
 FENCE = re.compile(r"^```harness-local-checks\s*\n(.*?)^```[ \t]*$", re.MULTILINE | re.DOTALL)
 
 
@@ -98,10 +106,8 @@ def validate_receipts(required, receipts, head):
             raise missing(required)
         contract = CHECKS[name]
         command = item.get("command")
-        # Worker caps change resource use, not test selection or coverage. Reject
-        # all other suffixes rather than accepting narrowed/disabled test runs.
         command_ok = isinstance(command, str) and re.fullmatch(
-            re.escape(contract["command"]) + r"(?: -- --maxWorkers(?:=| )[1-9][0-9]?)?", command)
+            re.escape(contract["command"]) + contract.get("resources", MAX_WORKERS), command)
         if (item.get("head") != head or item.get("status") != "passed"
                 or type(item.get("passed")) is not int or item["passed"] <= 0
                 or not command_ok or item.get("cwd") != contract["cwd"]

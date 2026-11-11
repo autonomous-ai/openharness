@@ -9,6 +9,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:xterm/xterm.dart' show TerminalTheme;
 
+import '../browser/browser_pill.dart';
+import '../browser/browser_setup_dialog.dart';
 import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import '../core/dsh_catalog.dart';
@@ -31,7 +33,6 @@ import 'new_harness_attachments.dart';
 import 'new_harness_paste.dart';
 import 'new_repository_dialog.dart';
 import 'engine_identity.dart';
-import 'laid_out_list.dart';
 
 /// Desktop composer and legacy terminal launch form sharing the same draft.
 /// Enter on the selected launch action starts with the displayed defaults.
@@ -90,8 +91,6 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   final _taskFocus = FocusNode(debugLabel: 'New harness task');
   final _headerMachineMenu = MenuController();
   final _headerMachineFocus = FocusNode(debugLabel: 'New harness computer');
-  final _kindMenu = MenuController();
-  final _kindFocus = FocusNode(debugLabel: 'New agent role');
   final _leadRowFocus = <String, FocusNode>{};
   final _headerMachineAnchor = GlobalKey();
   bool get _desktopStartEnabled =>
@@ -177,10 +176,6 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     });
   }
 
-  /// How often a request the machine holds is asked after ([_followHeld]).
-  @visibleForTesting
-  static Duration heldFollowInterval = const Duration(seconds: 3);
-
   Timer? _heldFollow;
 
   /// A request the machine holds or is starting completes by itself (an agent
@@ -196,7 +191,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       return;
     }
     if (_heldFollow != null) return;
-    _heldFollow = Timer(heldFollowInterval, () async {
+    _heldFollow = Timer(NewHarnessController.heldFollowInterval, () async {
       _heldFollow = null;
       if (!mounted) return;
       final outcome = await box.followHeld();
@@ -236,7 +231,6 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     _taskText.dispose();
     _taskFocus.dispose();
     _headerMachineFocus.dispose();
-    _kindFocus.dispose();
     for (final node in _leadRowFocus.values) {
       node.dispose();
     }
@@ -313,7 +307,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _focusScheduled = false;
       if (!mounted) return;
-      if (_headerMachineMenu.isOpen || _kindMenu.isOpen) return;
+      if (_headerMachineMenu.isOpen) return;
       if (_picking) {
         _inputFocus.requestFocus();
       } else if (widget.desktop) {
@@ -340,9 +334,8 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   /// Escape and Close remain the explicit ways to discard an unfinished task.
   void dismissFromOutside() {
     if (widget.desktop) {
-      if (_headerMachineMenu.isOpen || _kindMenu.isOpen) {
+      if (_headerMachineMenu.isOpen) {
         _headerMachineMenu.close();
-        _kindMenu.close();
       } else if (_picking && !box.locked) {
         _closeDesktopChooser();
       }
@@ -360,7 +353,6 @@ class NewHarnessFormState extends State<NewHarnessForm> {
 
   void _closeDesktopChooser({bool? next}) {
     _headerMachineMenu.close();
-    _kindMenu.close();
     _folderAction = null;
     box.setQuery('');
     box.focusField(NewHarnessField.launch);
@@ -985,6 +977,16 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       _revealRow();
       return;
     }
+    if (box.browser && box.browserNeedsSetup) {
+      final availability = box.browserAvailability!;
+      final install = await showBrowserSetupDialog(
+        context,
+        ownMachine: availability.ownMachine,
+      );
+      if (!mounted || !install || !await box.setUpBrowser() || !mounted) {
+        return;
+      }
+    }
     _checkingLaunch = box.checking;
     final outcome = existingFolder
         ? await box.useExistingFolder(resendAttachments: resendAttachments)
@@ -1092,9 +1094,8 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   }
 
   void _cancel() {
-    if (widget.desktop && (_headerMachineMenu.isOpen || _kindMenu.isOpen)) {
+    if (widget.desktop && _headerMachineMenu.isOpen) {
       _headerMachineMenu.close();
-      _kindMenu.close();
       return;
     }
     if (widget.desktop && !_picking) {
@@ -1154,7 +1155,6 @@ class NewHarnessFormState extends State<NewHarnessForm> {
 
   void _openCreationRow(_Row row) {
     _headerMachineMenu.close();
-    _kindMenu.close();
     _folderAction = null;
     // A direct shortcut enters the top-level chooser, even when another
     // chooser currently owns a nested project or specialized-agent prompt.
@@ -1720,24 +1720,6 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
-                                  if (box.integration?.heading
-                                      case final heading?) ...[
-                                    Text(
-                                      heading,
-                                      style: DesktopChrome.heading(),
-                                    ),
-                                    if (box.integration?.intro
-                                        case final intro?) ...[
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        intro,
-                                        style: DesktopChrome.text(
-                                          color: DesktopChrome.muted,
-                                        ),
-                                      ),
-                                    ],
-                                    const SizedBox(height: 14),
-                                  ],
                                   _desktopHeader(),
                                   const SizedBox(height: 12),
                                   if (_installing case final run?)
@@ -1745,8 +1727,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                                   else ...[
                                     _desktopTaskEditor(),
                                     const SizedBox(height: 6),
-                                    // A Buddy runs as the Swarm starts it.
-                                    if (!box.bringsBuddy) _desktopSettings(),
+                                    _desktopSettings(),
                                     if (box.placesLead) _desktopLeadBlocked(),
                                     if (box.requiredChoice
                                         case final required?) ...[
@@ -2016,9 +1997,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
               ),
             // Fo takes no repository; a cloud coding agent works on the chosen
             // repository's GitHub copy, never on this computer's folder.
-            // A Buddy has a folder of its own (task #4196).
-            if (!box.bringsBuddy &&
-                (!box.isCloud || cloudAgentTakesRepository(box.engine)) &&
+            if ((!box.isCloud || cloudAgentTakesRepository(box.engine)) &&
                 (!box.asGuest ||
                     box.fields.contains(NewHarnessField.projectMenu)))
               _desktopField(
@@ -2453,6 +2432,8 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       final gitControls = Row(
         key: const ValueKey('new-harness-git-settings'),
         mainAxisSize: MainAxisSize.min,
+        // Browser's line hangs under its pill; the other pills keep their row.
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // A Product Manager always gets its own worktree.
           if (box.canUseWorktree && !box.placesLead)
@@ -2480,6 +2461,16 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                 ),
               ),
             ),
+          if (box.offersBrowser)
+            FocusTraversalOrder(
+              order: const NumericFocusOrder(8.5),
+              child: BrowserPill(
+                on: box.browser,
+                unavailable: box.browserUnavailable,
+                needsSetup: box.browserNeedsSetup,
+                onPressed: box.locked ? null : box.toggleBrowser,
+              ),
+            ),
           if (!box.isCloud &&
               !box.leadThroughSwarm &&
               (box.choosesBranch || box.checkingGit || box.gitError != null))
@@ -2505,6 +2496,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              crossAxisAlignment: CrossAxisAlignment.start,
               spacing: 16,
               children: [controls, gitControls],
             ),
@@ -2618,8 +2610,8 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     child: const Text('Use the existing folder'),
   );
 
-  /// [includeChoices]: the project's visibility and the agent's role, which
-  /// the box under the task shows and the starting view does not.
+  /// [includeChoices]: the project's visibility, which the box under the task
+  /// shows and the starting view does not.
   Widget _desktopLaunchActions({bool includeChoices = false}) => Wrap(
     spacing: 8,
     runSpacing: 8,
@@ -2629,59 +2621,10 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       if (box.canCancelPending) _cancelPendingButton(),
       if (box.canDiscardPending) _discardPendingButton(),
       if (box.existingFolder != null) _useExistingFolderButton(),
-      if (box.integration?.roleSuggestions case final suggestions?)
-        _RoleField(
-          key: const ValueKey('new-harness-role'),
-          suggestions: suggestions,
-          initial: box.integration!.roleName ?? '',
-          enabled: !box.locked,
-          onChanged: (value) {
-            final name = value.trim();
-            box.integration!.roleName = name.isEmpty ? null : name;
-          },
-        ),
-      // In + New agent, only a Product Manager makes a project.
-      if (includeChoices &&
-          box.integration?.projectVisibility != null &&
-          (box.agentKind ?? 'lead') == 'lead')
+      if (includeChoices && box.integration?.projectVisibility != null)
         _desktopProjectVisibility(9.95),
-      // A Buddy is an offer: saying no is as plain as saying yes (#4442).
-      if (box.bringsBuddy && !widget.embedded)
-        TextButton(
-          key: const ValueKey('new-harness-not-now'),
-          onPressed: () {
-            if (box.requestDismiss()) widget.onClose();
-          },
-          child: const Text('Not now'),
-        ),
-      // Chosen where the agent is started, directly left of Start (product owner, task #4445).
-      if (includeChoices)
-        if (box.agentKind case final kind?) _desktopKindChip(kind),
       _desktopStartButton(),
     ],
-  );
-
-  Widget _desktopKindChip(String kind) => FocusTraversalOrder(
-    // Just before Start.
-    order: const NumericFocusOrder(9.97),
-    child: _desktopKindMenu(
-      child: DesktopPill(
-        key: const ValueKey('new-harness-field-agent-kind'),
-        focusNode: _kindFocus,
-        label: kind == 'lead' ? 'Product Manager' : 'Agent',
-        semanticLabel:
-            'Starts as, ${kind == 'lead' ? 'Product Manager' : 'Agent'}',
-        icon: kind == 'lead' ? AppIcons.circleUser : AppIcons.user,
-        menu: true,
-        capsule: true,
-        tooltip: 'Start as an agent or a Product Manager',
-        textSize: 13,
-        surfaceColor: DesktopChrome.surface,
-        onPressed: box.locked || box.integration?.agentKindLocked == true
-            ? null
-            : () => _kindMenu.isOpen ? _kindMenu.close() : _kindMenu.open(),
-      ),
-    ),
   );
 
   Widget _desktopProjectVisibility(double order) => FocusTraversalOrder(
@@ -3874,52 +3817,6 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   }
 
   // Computer selection belongs to the header, independently of repo search.
-  /// Agent or Product Manager (task #4196): the one choice + New agent adds
-  /// to Cmd-N. Wire values stay `member` and `lead`.
-  Widget _desktopKindMenu({required Widget child}) {
-    final locked = box.locked || box.integration?.agentKindLocked == true;
-    final rows = [
-      for (final (kind, label, detail, icon) in [
-        ('member', 'Agent', 'Works with you in its own chat', AppIcons.user),
-        (
-          'lead',
-          'Product Manager',
-          'Leads a project and its crew',
-          AppIcons.circleUser,
-        ),
-      ])
-        AppMenuItem(
-          key: ValueKey('new-harness-agent-kind-$kind'),
-          autofocus: kind == box.agentKind,
-          selected: kind == box.agentKind,
-          icon: icon,
-          label: label,
-          detail: detail,
-          onPressed: locked ? null : () => box.setAgentKind(kind),
-        ),
-    ];
-    return AppDropdown(
-      controller: _kindMenu,
-      childFocusNode: _kindFocus,
-      // As wide as its lines need at any text size, so a detail is never cut.
-      width: math.max(
-        _machineMenuWidth,
-        AppMenuItem.fitWidth(context, rows) ?? 0,
-      ),
-      onOpen: () => setState(() {}),
-      onClose: () {
-        if (!mounted) return;
-        setState(() {});
-        _chooserOrigin = _kindFocus;
-        _restoreChoiceFocus = true;
-        _chooserTraversal = null;
-        _focusEditor();
-      },
-      children: rows,
-      child: child,
-    );
-  }
-
   Widget _desktopMachineAnchor({required Widget child}) => AppDropdown(
     controller: _headerMachineMenu,
     childFocusNode: _headerMachineFocus,
@@ -4438,120 +4335,5 @@ class _LaunchProgressState extends State<_LaunchProgress> {
     softWrap: false,
     overflow: TextOverflow.clip,
     style: widget.style,
-  );
-}
-
-const _roleFieldWidth = 180.0;
-
-/// The server's limit on a role name, in UTF-16 units (`.length` in JavaScript).
-const _roleNameUnits = 40;
-
-/// Keeps text to [max] UTF-16 units as the server counts them, never cutting a
-/// surrogate pair in two.
-class _Utf16Limit extends TextInputFormatter {
-  const _Utf16Limit(this.max);
-  final int max;
-
-  @override
-  TextEditingValue formatEditUpdate(
-    TextEditingValue oldValue,
-    TextEditingValue newValue,
-  ) {
-    final text = newValue.text;
-    if (text.length <= max) return newValue;
-    var end = max;
-    if (_isHigh(text.codeUnitAt(end - 1))) end--;
-    return TextEditingValue(
-      text: text.substring(0, end),
-      selection: TextSelection.collapsed(offset: end),
-    );
-  }
-
-  static bool _isHigh(int unit) => unit >= 0xD800 && unit <= 0xDBFF;
-}
-
-/// A joining agent's role: free text, with the project document's role
-/// headings offered as suggestions (all of them on focus, filtered as typed).
-class _RoleField extends StatefulWidget {
-  const _RoleField({
-    super.key,
-    required this.suggestions,
-    required this.initial,
-    required this.enabled,
-    required this.onChanged,
-  });
-  final List<String> suggestions;
-  final String initial;
-  final bool enabled;
-  final ValueChanged<String> onChanged;
-
-  @override
-  State<_RoleField> createState() => _RoleFieldState();
-}
-
-class _RoleFieldState extends State<_RoleField> {
-  late final _text = TextEditingController(text: widget.initial);
-  final _focus = FocusNode(debugLabel: 'New harness role');
-
-  @override
-  void dispose() {
-    _text.dispose();
-    _focus.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => SizedBox(
-    width: _roleFieldWidth,
-    child: RawAutocomplete<String>(
-      textEditingController: _text,
-      focusNode: _focus,
-      optionsBuilder: (value) {
-        final typed = value.text.trim().toLowerCase();
-        return [
-          for (final name in widget.suggestions)
-            if (typed.isEmpty || name.toLowerCase().contains(typed)) name,
-        ];
-      },
-      onSelected: widget.onChanged,
-      fieldViewBuilder: (context, controller, focusNode, onSubmit) => TextField(
-        controller: controller,
-        focusNode: focusNode,
-        enabled: widget.enabled,
-        inputFormatters: [_Utf16Limit(_roleNameUnits)],
-        onChanged: widget.onChanged,
-        style: DesktopChrome.control(),
-        decoration: const InputDecoration(
-          labelText: 'Role',
-          hintText: 'Engineer',
-          counterText: '',
-          isDense: true,
-        ),
-      ),
-      optionsViewBuilder: (context, onSelected, options) => Align(
-        alignment: Alignment.topLeft,
-        child: Material(
-          color: grid.AppMenu.fill,
-          elevation: grid.AppMenu.elevation,
-          borderRadius: BorderRadius.all(
-            Radius.circular(grid.AppMenu.panelRadius),
-          ),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(
-              maxWidth: _roleFieldWidth,
-              maxHeight: grid.AppControl.menuMaxHeight,
-            ),
-            child: LaidOutListView(
-              padding: grid.AppMenu.panelPadding,
-              shrinkWrap: true,
-              children: [
-                for (final name in options)
-                  AppMenuItem(label: name, onPressed: () => onSelected(name)),
-              ],
-            ),
-          ),
-        ),
-      ),
-    ),
   );
 }

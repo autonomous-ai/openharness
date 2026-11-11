@@ -5,7 +5,7 @@ import 'model.dart';
 /// request rather than waiting behind a message being sent; the answer is
 /// null when it went through, or what to tell the person.
 extension SuperTabProfileActions on SuperTabController {
-  /// Whether the reader may edit [message]: their own plain post
+  /// Whether the reader may delete [message]: their own plain post
   /// (no `source`: no task line, route or note the server wrote in their
   /// name), not deleted, in a conversation they may write in. The server
   /// decides (backend messageEdits.ts); this only offers the choices.
@@ -14,28 +14,18 @@ extension SuperTabProfileActions on SuperTabController {
     return canWrite &&
         group != null &&
         !group.archived &&
-        !isEarlierBuddyChat(group) &&
         message.author['kind'] == 'person' &&
         message.authorId == accountId &&
         message.source.isEmpty &&
         !message.deleted;
   }
 
-  /// Deletion also permits the reader's own Buddy proposal. Both its
-  /// attribution and source owner must agree; the server authorizes again.
-  bool canDelete(SuperTabMessage message) {
-    final group = snapshot?.conversation(message.conversationId);
-    return canWrite &&
-        group != null &&
-        !group.archived &&
-        !isEarlierBuddyChat(group) &&
-        message.author['kind'] == 'person' &&
-        message.authorId == accountId &&
-        (message.source.isEmpty ||
-            (message.source['kind'] == 'buddy-proposal' &&
-                message.source['personId'] == accountId)) &&
-        !message.deleted;
-  }
+  /// Whether the reader may edit [message]: one they may delete, outside a project's channel, where only agents post
+  /// and the server refuses a person's edit (AGENTS_ONLY); a task's chat would be refused too, and Swarm v4 makes none.
+  /// The rule the chat's composer follows (view.dart `_agentsOnly`).
+  bool canEdit(SuperTabMessage message) =>
+      canChange(message) &&
+      snapshot?.isProjectLead(message.conversationId) != true;
 
   /// Replaces [message]'s text with [text], trimmed. The same text sends
   /// nothing; empty text only goes for a message with files.

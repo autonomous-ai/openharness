@@ -1,9 +1,8 @@
 /**
- * Swarm v4 (anh Dee 2026-11-09): every agent but a Buddy has one 1:1 chat with its person, and that chat is where its person
+ * Swarm v4 (anh Dee 2026-11-09): every agent has one 1:1 chat with its person, and that chat is where its person
  * talks to it. An agent from before v4 (a PM whose chat was its project's channel, an agent started before chats of their own)
  * gets its chat from the time checks' pass (store.ts runTimeChecks), once: an agent then keeps its chat's id (`chatId`).
  */
-import { isBuddy } from './buddies.js'
 import { stableId, type SuperTabState } from './model.js'
 import { isAgentChat } from './projects.js'
 
@@ -12,7 +11,7 @@ import { isAgentChat } from './projects.js'
  *  this pass sees what it loaded. An agent whose person left the Swarm gets none. */
 export function giveAgentsChats(state: SuperTabState, now: number, all: SuperTabState = state): void {
   for (const target of state.agents) {
-    if (target.chatId || isBuddy(target)) continue
+    if (target.chatId) continue
     const own = all.conversations.find(c => isAgentChat(c) && c.agentIds.includes(target.id))
     if (own) { target.chatId = own.id; continue }
     const owner = state.people.find(p => p.id === target.contributorId)
@@ -25,5 +24,5 @@ export function giveAgentsChats(state: SuperTabState, now: number, all: SuperTab
   }
 }
 
-/** The agents [giveAgentsChats] has to look at: those that keep no chat id, Buddies aside. */
-export const chatlessAgents = (state: SuperTabState): string[] => state.agents.filter(a => !a.chatId && !isBuddy(a)).map(a => a.id)
+/** The agents [giveAgentsChats] has to look at: those that keep no chat id. */
+export const chatlessAgents = (state: SuperTabState): string[] => state.agents.filter(a => !a.chatId).map(a => a.id)

@@ -17,6 +17,7 @@ class SuperTabMessageText extends StatelessWidget {
     this.references = const {},
     this.onOpenGroup,
     this.mentions = const [],
+    this.addressed = const [],
     this.agents = const [],
     this.addresses = const {},
     this.labels = const {},
@@ -30,6 +31,10 @@ class SuperTabMessageText extends StatelessWidget {
   /// The names a Lead tagged in this message. Each reads highlighted where
   /// the text says it; one the text does not say opens its first line.
   final List<String> mentions;
+
+  /// The agents a post is to (its `recipientIds`), by name: each one its words do not tag opens its first line as a tag, as
+  /// a group chat addresses a post (anh Dee, 2026-11-10: "why not use tag? like in a group chat").
+  final List<String> addressed;
 
   /// The Swarm's agents' names: an `@name` of one reads as a tag too (Swarm v4: agents talk to each other by name), and
   /// unlike [mentions] an agent the text does not name is never added.
@@ -111,9 +116,11 @@ class SuperTabMessageText extends StatelessWidget {
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     // Read only for a message that tags someone: most tag nobody.
-    final said = mentions.isEmpty ? const <String>[] : tagsIn(text);
+    final said = mentions.isEmpty && addressed.isEmpty
+        ? const <String>[]
+        : tagsIn(text);
     final unsaid = [
-      for (final name in mentions)
+      for (final name in [...mentions, ...addressed])
         if (!said.any((tag) => _says(tag, name, addresses))) '@$name',
     ];
     final body = MarkdownBody(

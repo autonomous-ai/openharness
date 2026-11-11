@@ -1,9 +1,6 @@
-import { isBuddy } from './buddies.js'
-import { isCrew } from './crew.js'
-import { MACHINE_FRESH_MS, productManagerOn, teamAccountPool, teamWorkCheck, type MachineObservation } from './machines.js'
+import { MACHINE_FRESH_MS, teamWorkCheck, type MachineObservation } from './machines.js'
 import { activeWork, type Agent, type RemovedSession, type SuperTabState } from './model.js'
-import { agentProjectId, canReadProject, isConfidential, ledProject, onTeamAccount, projectsOf } from './projects.js'
-import { barredFromTeamWritten } from './teamWritten.js'
+import { agentProjectId, canReadProject, isConfidential, ledProject, projectsOf } from './projects.js'
 
 // Huy, 2026-11-02: four agents closed on their machine sat under Idle for hours, each in the machine's stopped list, because
 // only an agent's own host removed it, and only after a stop was asked for. A session closed by hand never asked. Now the
@@ -18,11 +15,11 @@ export const REMOVED_KEEP_MS = 30 * 24 * 60 * 60_000
  *  one stopped for a moment before it is back (security reviews of #2569). */
 export const STOPPED_REMOVE_MS = 30_000
 
-/** Whether [target] could ever leave this way: not a coordinator, a Buddy, a Regular agent, crew (its host reopens it in place,
- *  crew.ts), one kept or being stopped. A Regular agent is its person's, as a Buddy is: removed, it never came back, since its own
- *  chat made it confidential and it has no project to restore into (task #4218). Its person stops it. */
+/** Whether [target] could ever leave this way: not a coordinator, a Regular agent, one kept or being stopped. A Regular agent is
+ *  its person's: removed, it never came back, since its own chat made it confidential and it has no project to restore into
+ *  (task #4218). Its person stops it. */
 const removable = (state: SuperTabState, target: Agent): boolean =>
-  !isBuddy(target) && !target.regular && !isCrew(target) && target.workDecision !== 'keep' && target.workDecision !== 'stop' && !ledProject(state, target.id)
+  !target.regular && target.workDecision !== 'keep' && target.workDecision !== 'stop' && !ledProject(state, target.id)
 
 /** Whether [report] proves [target]'s session stopped: listed stopped and, for a reservation a resume renewed, stopped in that
  *  very generation, since an older host lists the earlier run stopped and cannot say which. */
@@ -33,7 +30,7 @@ const provedStopped = (state: SuperTabState, target: Agent, report: Pick<Machine
 }
 
 /** Whether [target]'s machine, reading now, proves its idle cleanup closed its session: a fresh reading that lists it closed
- *  and stopped, not running. Such an agent takes no task (commands.ts work.assign): on 11-04 the idle cleanup closed Tern on
+ *  and stopped, not running. Such an agent was given no task (work.assign, retired with Swarm v4): on 11-04 the idle cleanup closed Tern on
  *  the Mac Studio and the PM assigned it six seconds later, so the task was lost at once (task #2744). A session merely
  *  listed stopped may be a Change agent before its rebind, or a host mid-restart, and keeps taking work (review of #2953). */
 export function sessionClosed(state: SuperTabState, target: Agent, now: number): boolean {
@@ -48,7 +45,7 @@ export function sessionClosed(state: SuperTabState, target: Agent, now: number):
  * not listed for DOWN_REMOVE_MS while the machine's other sessions still run. The last reading must be fresh and not list
  * them running either, so one report after a silence never removes anyone, and a report whose running list is empty never
  * removes by time (a fault in the host's listing would empty a whole machine). Never a coordinator (a project's end is the
- * only removal that takes one), a Buddy or a Regular agent (its person stops it), an agent someone chose to keep: it stays, shown as closed, or
+ * only removal that takes one), a Regular agent (its person stops it), an agent someone chose to keep: it stays, shown as closed, or
  * one being stopped: its host closes it and takes it out (commands.ts agent.remove). Whether a task is still held is judged by
  * removeClosedAgents, after the loss of tasks.
  */
@@ -66,16 +63,11 @@ export function closedAgents(state: SuperTabState, machineId: string, report: Pi
   })
 }
 
-/** The record that its host closes the session of a removed agent: a confidential session in a Team account keeps the account
- *  for its project until the host confirms the close, which it does once the session's data there is deleted (security re-check
- *  2 of #2089). The close also frees the session's slot (commands.ts agent.sessionClosed). Written before the agent leaves its
- *  groups, which decide whether the session is confidential. */
-export function recordClosing(state: SuperTabState, target: Agent, now: number): void {
+/** The record that its host closes the session of a removed agent. The close also frees the session's slot (commands.ts
+ *  agent.sessionClosed). */
+export function recordClosing(state: SuperTabState, target: Agent): void {
   if (state.closingSessions?.some(c => c.agentId === target.id && c.harnessId === target.harnessId)) return
-  const held = onTeamAccount(state, target) && isConfidential(state, target) ? { heldFor: agentProjectId(state, target), since: now } : {}
-  // Its machine part outlives the Buddy-only record while this closes: it stays as private as the record (read/changes.ts).
-  const hidden = state.machines?.some(m => m.machineId === target.machineId && m.buddyOnly) ? { buddyOnly: true as const } : {}
-  ;(state.closingSessions ??= []).push({ agentId: target.id, machineId: target.machineId, harnessId: target.harnessId, machineOwnerId: target.machineOwnerId, ...held, ...hidden })
+  ;(state.closingSessions ??= []).push({ agentId: target.id, machineId: target.machineId, harnessId: target.harnessId, machineOwnerId: target.machineOwnerId })
 }
 
 /** Removes those of [closed] that hold no task now: from the agents and from every group's members and leads, as commands.ts
@@ -86,7 +78,7 @@ export function removeClosedAgents(state: SuperTabState, closed: Agent[], now: n
   const holding = new Set(state.conversations.filter(group => activeWork(group) || group.assignment?.status === 'lost').map(group => group.assignment!.agentId))
   const removed = closed.filter(target => !holding.has(target.id))
   if (!removed.length) return []
-  for (const target of removed) recordClosing(state, target, now)
+  for (const target of removed) recordClosing(state, target)
   const gone = new Set(removed.map(target => target.id))
   for (const target of removed) keepRecord(state, target, now)
   state.agents = state.agents.filter(target => !gone.has(target.id))
@@ -107,7 +99,7 @@ function keepRecord(state: SuperTabState, target: Agent, now: number): void {
     return
   }
   const { downSince: _down, lostTask: _lost, releaseId: _release, idleStop: _idle, idleNoticedAt: _noticed, workDecision: _decision,
-    switchRequest: _switch, switchLanded: _landed, modelRequest: _model, alerting: _alerting, ...agent } = target
+    switchRequest: _switch, switchLanded: _landed, alerting: _alerting, ...agent } = target
   const mine = others.filter(r => r.machineId === target.machineId)
   const over = mine.length + 1 - REMOVED_KEPT
   const dropped = new Set(over > 0 ? [...mine].sort((a, b) => a.removedAt - b.removedAt).slice(0, over) : [])
@@ -126,7 +118,7 @@ export interface RestoreFacts { elsewhere: ReadonlySet<string> }
 /**
  * Why [record] may not come back as it was, by a fixed word, or null. The rules a person's add takes (commands.ts agent.add, whose
  * session record and share the caller checks after this), each read from the state this write loaded, as any of it may have
- * changed since: its machine's Team account may serve another project now, and its person may no longer take that project's work.
+ * changed since: its person may no longer take that project's work.
  */
 export function restoreRefusal(state: SuperTabState, record: RemovedSession, machineOwnerId: string, facts: RestoreFacts): string | null {
   const { agent } = record
@@ -134,16 +126,11 @@ export function restoreRefusal(state: SuperTabState, record: RemovedSession, mac
   if (agent.machineId !== record.machineId || agent.harnessId !== record.harnessId || agent.machineOwnerId !== machineOwnerId) return 'not-this-machine'
   if (state.agents.some(a => a.id === agent.id || (a.machineId === record.machineId && a.harnessId === record.harnessId))) return 'already-listed'
   if (facts.elsewhere.has(record.harnessId)) return 'in-another-swarm'
-  if (state.closingSessions?.some(c => c.machineId === record.machineId && c.harnessId === record.harnessId && c.heldFor)) return 'team-held'
   // Its contributor may be another person, on a machine shared with them: they must still be here, and the share must hold.
   const contributor = state.people.find(p => p.id === agent.contributorId)
   if (!contributor || contributor.generation !== agent.membershipGeneration || contributor.role === 'viewer') return 'contributor-changed'
   const project = projectsOf(state).find(p => p.id === agentProjectId(state, agent))
   if (!project || !canReadProject(state, { kind: 'person', userId: contributor.id, email: contributor.email }, project)) return 'project-ended'
-  if (teamAccountPool(state.machines?.find(m => m.machineId === record.machineId))) {
-    const held = productManagerOn(state, record.machineId)
-    if (held && held !== project.id) return 'team-other-project'
-  }
   return teamWorkCheck(state, record.machineId, agent.contributorId, project) ? 'team-work' : null
 }
 
@@ -151,7 +138,7 @@ export function restoreRefusal(state: SuperTabState, record: RemovedSession, mac
  * Brings back the agents of [machineId] whose sessions [running] lists again and the caller [allowed], from the records their
  * removal kept, and drops the records that came due or were refused. Called only with a report already proved to be this machine's;
  * no command reaches it. An agent comes back only to the open groups of its own project it was in: never a private chat, since who
- * may read there is not its to decide again, nor a task marked Team-written while it was away, unless it runs in a Team account.
+ * may read there is not its to decide again.
  * The restored agents.
  */
 export function restoreSessions(state: SuperTabState, machineId: string, running: readonly string[], now: number,
@@ -167,13 +154,11 @@ export function restoreSessions(state: SuperTabState, machineId: string, running
     if (!allowed.has(record.harnessId)) return false
     state.agents.push(record.agent)
     reserve(record.harnessId)
-    // Back before its host closed it: the session stays open, as when a person adds it back (commands.ts agent.add). A close held for
-    // a Team account was refused: that account stays held until its host confirms (restoreRefusal, `team-held`).
+    // Back before its host closed it: the session stays open, as when a person adds it back (commands.ts agent.add).
     state.closingSessions = state.closingSessions?.filter(c => c.machineId !== record.machineId || c.harnessId !== record.harnessId)
     if (!state.closingSessions?.length) delete state.closingSessions
     for (const group of state.conversations) {
       if (group.archived || group.dormant || group.kind || group.audience || (state.projects && group.projectId !== record.agent.projectId)) continue
-      if (barredFromTeamWritten(state, group, record.agent)) continue
       if (record.leadOf.includes(group.id) && !group.leadId) group.leadId = record.agent.id
       // A project chat holds only its coordinator among agents (#2207): a member there comes back to it only as its coordinator.
       if (projectChats.has(group.id) && group.leadId !== record.agent.id) continue

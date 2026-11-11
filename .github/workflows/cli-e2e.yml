@@ -13,10 +13,18 @@ name: CLI end to end
 # runner-specific ones. So it runs every night and on demand from a branch (Actions -> CLI end to
 # end -> Run workflow) when a change needs it. It no longer runs on every merge to main: each run
 # held nine of the account's twenty concurrent runners, and the next merge usually cancelled it.
+#
+# Run workflow with `agent_browser_podman` runs only the agent browser on real Podman, which builds
+# the browser's image, Chrome and all: nothing else then, so that one heavy run holds one runner.
 on:
   schedule:
     - cron: '17 6 * * *'
   workflow_dispatch:
+    inputs:
+      agent_browser_podman:
+        description: Only the agent browser on real Podman (cli/e2e/agentBrowserPodman.e2e.ts)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -29,11 +37,13 @@ concurrency:
 
 # The managed runtime the CLI ships on; keep ci.yml's and release.yml's pins in sync.
 env:
-  CLI_NODE_VERSION: 22.23.2
+  CLI_NODE_VERSION: 24.22.2
 
 jobs:
   e2e:
     name: e2e (${{ matrix.shard }})
+    # A schedule has no inputs: the input reads empty there, and the shards run.
+    if: ${{ !inputs.agent_browser_podman }}
     strategy:
       fail-fast: false
       matrix:
@@ -126,10 +136,11 @@ jobs:
           overwrite: true
           retention-days: 7
 
-  # Native macOS checks: a disk image that fills (hdiutil), and Buddy sleep/resume on an owner OS account.
-  # Team accounts cannot launch Buddies; the hosted runner exercises the real terminal lifecycle.
+  # The tests that need macOS: a data folder on a small disk image that fills (hdiutil). Opt-in
+  # locally (DISKFULL=1); here on one macOS runner, filtered to those tests alone, a few minutes.
   e2e-macos-disk:
-    name: e2e (macOS, full disk and Buddy)
+    name: e2e (macOS, full disk)
+    if: ${{ !inputs.agent_browser_podman }}
     runs-on: macos-15
     timeout-minutes: 30
     defaults:
@@ -144,27 +155,6 @@ jobs:
           cache-dependency-path: cli/package-lock.json
       - run: command -v tmux || brew install tmux
       - run: npm ci --no-audit --no-fund
-      - name: An idle Buddy releases its session and wakes on a message
-        env:
-          E2E_BUNDLE: '1'
-          E2E_ARTIFACTS_DIR: ${{ runner.temp }}/e2e-daemon-logs
-        run: >-
-          npx vitest run --config vitest.e2e.config.ts e2e/superTabSwarmBuddy.e2e.ts
-          --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/buddy-result.json"
-      - name: Require the native Buddy flow to pass without skipping
-        env:
-          BUDDY_RESULT: ${{ runner.temp }}/buddy-result.json
-        run: >-
-          node -e 'const r = JSON.parse(require("node:fs").readFileSync(process.env.BUDDY_RESULT, "utf8"));
-          if (r.numPassedTests !== 2 || r.numPendingTests !== 0 || r.numFailedTests !== 0) process.exit(1)'
-      - name: Preserve the native Buddy result
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: cli-e2e-buddy-macos
-          path: ${{ runner.temp }}/buddy-result.json
-          if-no-files-found: error
-          retention-days: 7
       - name: A full disk, and an update on a disk that fills
         env:
           DISKFULL: '1'
@@ -188,7 +178,7 @@ jobs:
   # carries each file's duration, which refreshes cli/ci-e2e-durations.json.
   e2e-summary:
     needs: e2e
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && !inputs.agent_browser_podman }}
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
@@ -213,5 +203,76 @@ jobs:
           name: cli-e2e-summary
           path: ${{ runner.temp }}/cli-e2e-summary.json
           if-no-files-found: error
+          overwrite: true
+          retention-days: 7
+
+  # The agent browser on real Podman: rootless, as the runner's own user, as on a person's Linux
+  # machine. The test runs Podman in a store of its own and removes it, whatever happened.
+  agent-browser-podman:
+    name: e2e (agent browser, real Podman)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.agent_browser_podman }}
+    runs-on: ubuntu-24.04
+    # Up to 15 minutes of image build (image.ts), the cases, install and the bundle.
+    timeout-minutes: 50
+    defaults:
+      run:
+        working-directory: cli
+    env:
+      LANG: C.UTF-8
+      SHELL: /bin/zsh
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.CLI_NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - name: Install tmux and zsh, and record Podman
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends tmux zsh lsof
+          # The runner image ships Podman; installed only if a future image does not.
+          command -v podman || sudo apt-get install -y -q --no-install-recommends podman
+          # As in the shards: zsh's compinit stops every agent's pane at a question while a
+          # completion folder is writable by others.
+          insecure=$(zsh -fc 'autoload -U compaudit && compaudit' 2>/dev/null | grep '^/' | sort -u || true)
+          if [ -n "$insecure" ]; then
+            echo "$insecure" | xargs sudo chown root:root
+            echo "$insecure" | xargs sudo chmod g-w,o-w
+          fi
+          zsh -fc 'autoload -U compaudit && compaudit'
+          podman --version | tee -a "$GITHUB_STEP_SUMMARY"
+          podman info
+      - run: npm ci --no-audit --no-fund
+      - name: The agent browser on real Podman
+        timeout-minutes: 40
+        env:
+          E2E_BUNDLE: '1'
+          E2E_ARTIFACTS_DIR: ${{ runner.temp }}/e2e-daemon-logs
+        run: >-
+          npx vitest run --config vitest.e2e.config.ts e2e/agentBrowserPodman.e2e.ts
+          --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/agent-browser-podman.json"
+      # A Podman that does not answer skips the file, which vitest calls a pass.
+      - name: Require every case to pass without skipping
+        env:
+          RESULT: ${{ runner.temp }}/agent-browser-podman.json
+        run: >-
+          node -e 'const r = JSON.parse(require("node:fs").readFileSync(process.env.RESULT, "utf8"));
+          if (r.numTotalTests === 0 || r.numPassedTests !== r.numTotalTests) process.exit(1)'
+      - name: Preserve the result
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-e2e-agent-browser-podman
+          path: ${{ runner.temp }}/agent-browser-podman.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Preserve the failing cases' daemon logs
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-e2e-daemon-logs-agent-browser-podman
+          path: ${{ runner.temp }}/e2e-daemon-logs/
+          if-no-files-found: ignore
           overwrite: true
           retention-days: 7

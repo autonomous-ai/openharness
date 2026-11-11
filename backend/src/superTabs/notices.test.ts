@@ -76,49 +76,27 @@ describe('the notices the Swarm writes into a chat', () => {
   const written = writtenKinds()
 
   it('finds the notices it is known to write, so a change in how they are written cannot empty this check', () => {
-    expect([...written.keys()]).toEqual(expect.arrayContaining(['system', 'agent-only', 'review-failed', 'work-lost', 'terminal-alert']))
+    expect([...written.keys()]).toEqual(expect.arrayContaining(['system', 'agent-only', 'work-lost', 'start-timeout']))
   })
 
   it('classifies every kind it writes, and only those', () => {
     const unclassified = [...written].filter(([kind]) => !Object.hasOwn(NOTICE_READERS, kind)).map(([kind, files]) => `${kind} (${files.join(', ')})`)
     expect(unclassified, 'add each to NOTICE_READERS in model.ts: who reads it?').toEqual([])
-    // A kind no longer written keeps its readers for the rows stored before: the server's idle stop (project instructions,
-    // phase 4) told only the Lead; the coordinator's progress post, now the project's status card (Dee, 2026-10-31), people;
-    // the Shipped line, now the task's own line (taskLine.ts; Quiet Swarm, Dee, 2026-11-02), people; a machine's removal ending,
-    // no longer said in any chat (anh Dee, 11-04, #2742), nobody; a task's own row under its requester's name, now only a person's
-    // own message (anh Dee, 11-04, 'bot messages', #2925), people; an instructions save's line, now only in the Instructions
-    // history (Dee and Ken, 11-05, #3132), people; the card wake-up, now written by the server (anh Dee, 11-06, #3593), the Lead;
-    // a proposal's notices and the PM's private line in a person's Buddy chat, now on the card or refused (anh Dee, 11-07, #4558), people.
-    // An idle agent's notice to its coordinator, gone in Swarm v4 (anh Dee, 11-09: only its person stops an agent), the Lead; the
-    // time checks' stalled-work notice, gone with them (anh Dee, 11-09: the server runs no v3 rule on its own), the PM; the
-    // Lead's built-in schedule wake, daily tidy and morning digest, gone the same day, the Lead; the release watch's steps and lines,
-    // gone with it, people; the recorded terminal turns, gone with the recording, people; the crew's 2-hour nudge, gone with the crew
-    // keeper (Swarm v4: the server runs no v3 job), the recipients.
-    const retired = ['idle-stop', 'idle', 'project-report', 'ship', 'machine-left', 'task-line', 'routing-reflection', 'instructions', 'update-request',
-      'proposal-notice', 'proposal-overdue', 'pm-line', 'work-stalled', 'schedule-request', 'tidy-request', 'digest-request', 'release', 'native', 'others-work-notice', 'crew-nudge']
-    expect(Object.keys(NOTICE_READERS).filter(kind => !written.has(kind) && !retired.includes(kind))).toEqual([])
-    expect(retired.filter(kind => written.has(kind))).toEqual([])
+    // Only the kinds it still writes: every Swarm from before v4, with the rows of kinds only v1-v3 wrote, was wiped (2026-11-10).
+    expect(Object.keys(NOTICE_READERS).filter(kind => !written.has(kind))).toEqual([])
   })
 
   it('shows people a notice of theirs, and one for an agent only while it reaches none', () => {
     expect(agentOnly({ kind: 'system' }, ['lead'])).toBe(false)
-    expect(agentOnly({ kind: 'terminal-alert' }, ['lead'])).toBe(false)
     expect(agentOnly({ kind: 'start-timeout' }, ['lead'])).toBe(false)
-    for (const kind of ['idle-stop', 'work-stalled', 'overlap']) {
+    for (const kind of ['work-lost', 'pair-loop']) {
       expect(agentOnly({ kind }, ['lead'])).toBe(true)
       expect(agentOnly({ kind }, [])).toBe(false)
     }
     expect(agentOnly({ kind: 'agent-only' }, [])).toBe(true)
-    // The "<machine> left the Swarm" lines stored before #2742 have no recipients: nobody reads them.
-    expect(agentOnly({ kind: 'machine-left', machine: 'Studio' }, [])).toBe(true)
     // A row of a kind people read can still be its recipients' alone; a kind no code knows (stored by a newer server) shows.
     expect(agentOnly(forRecipients({ kind: 'system' }), [])).toBe(true)
     expect(agentOnly({ kind: 'from-a-newer-server' }, ['lead'])).toBe(false)
     expect(agentOnly(undefined, [])).toBe(false)
-  })
-
-  it('keeps the PM’s task decision wake out of people’s chat while it reaches the PM', () => {
-    expect(agentOnly({ kind: 'task-approval', state: 'approved' }, ['lead'])).toBe(true)
-    expect(agentOnly({ kind: 'task-approval', state: 'rejected' }, [])).toBe(false)
   })
 })

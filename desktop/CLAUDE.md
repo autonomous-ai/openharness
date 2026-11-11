@@ -136,7 +136,7 @@ gets a `version.txt` written into the built bundle at package time (see `lib/cor
 since `flutter build linux` has no Info.plist-style stamping). Test the updater against a scratch
 manifest with `--dart-define=DESKTOP_UPDATE_METADATA_URL=...`; `HARNESS_RUNTIME_METADATA_URL` does
 the same for the desktop updater only. The managed Node runtime is still published from this repo with
-`make upload-node-runtime ARGS=22.23.2` (`darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`) — and,
+`make upload-node-runtime ARGS=24.22.2` (`darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`) — and,
 since 2026-09-15, a managed **tmux** for macOS the same way (`release-tmux-runtime.yml` /
 `make upload-tmux-runtime`, RELEASE.md "Managed tmux runtime") — but
 its consumer is now the `harness` installer rather than this app.
@@ -477,7 +477,10 @@ rebuild unchanged row controls and arrows rebuild only changed highlights. The c
 invalidates for row metadata, availability, action, geometry, theme, and font changes. Keep focus,
 semantics, and traversal on the row; do not replace them with paint-only search results.
 Creation and draft precedence are documented in `design/new-harness-entry-rules.md` and exercised
-by its listed tests. Cmd-T/Cmd-O retarget the same draft/search; Store requests own their explicit
+by its listed tests. A Swarm's New project and New agent never hold their person (anh Dee, 2026-11-10): once the
+start is under way (`HarnessLaunchIntegration.onStarted`) the form closes and its controller goes to
+`AppNotifier.swarmStarts` (`super_tabs/swarm_starts.dart`), which waits for its start, follows a held request and
+gives it a `starting` row in the left pane; a `failed` row opens that same controller again. Cmd-T/Cmd-O retarget the same draft/search; Store requests own their explicit
 product and machine. `test/benchmarks/swarm_benchmark.dart` measures large synthetic inventories;
 its headless debug timings do not establish native display or network latency.
 
@@ -599,7 +602,9 @@ add a kind there, not at the call site.
 - **Type** is `AppType` (`lib/shared/theme/app_type.dart`): system sans for app
   headings, labels, fields, navigation, and prose; explicit mono for code, paths,
   logs, and identifiers. Ordinary UI is independent of terminal zoom and respects
-  accessibility text scaling. The terminal grid, in-pane composer, and in-pane
+  accessibility text scaling, except the Swarm's panes: a chat, a task's or pull request's chat
+  and an agent's instructions read at the terminal's size beside them (`SwarmType.sizeOf`, anh Dee
+  2026-11-10: "one consistent font across all panes"). The terminal grid, in-pane composer, and in-pane
   find keep the selected terminal font and size. Compact pane/status bars retain
   their established `workspaceBarTextStyle()` and user-selected status themes.
   Native menus use the system menu font. Do not measure desktop UI in terminal cells.

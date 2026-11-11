@@ -21,15 +21,12 @@ import '../state/app_state.dart';
 import '../state/harness_activity.dart';
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
-import '../usage/models_menu_controller.dart';
 import '../widgets/browser_menu_guard.dart';
 import '../widgets/finger_target.dart';
 import '../shared/widgets/skeleton.dart';
 import '../widgets/desktop_chrome.dart';
-import '../widgets/engine_identity.dart';
 import '../widgets/harness_activity_mark.dart';
 import '../widgets/pane_menu.dart' show showContextMenuAt;
-import '../widgets/workspace_subscription_usage.dart';
 import 'add_computers.dart';
 import 'agent_details.dart';
 import 'controller.dart';
@@ -37,87 +34,41 @@ import 'detail_dialog.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
 import 'local_models.dart';
-import 'machine_access.dart';
-import 'machine_projects.dart';
-import 'machine_allowance.dart';
 import '../models/swarm_models_target.dart' show swarmSharedWithYouShown;
 import 'machine_details.dart';
-import 'machine_icon.dart';
 import 'machine_status.dart';
 import 'model.dart';
-import 'join_machine.dart'
-    show superTabOldJoinSuggestion, superTabSuggestedAgentSlots;
-import 'personal_machine_rows.dart';
-import 'section_heading.dart';
 import '../widgets/laid_out_list.dart';
 
 export 'machine_status.dart';
 
 part 'machines_manage.dart';
 
-/// The backend's upper bound. A machine's own total RAM may set a lower one.
+/// The backend's bounds for a machine's `maxAgents`.
 const _agentSlotsMin = 1;
 const _agentSlotsMax = 1024;
-
-/// Every machine may offer this many, whatever its RAM, and the suggestion
-/// never starts above 16 (superTabSuggestedAgentSlots): the CLI's own figures
-/// (`prepareContribution`, `cli/src/superTabs/contribution.ts`).
-const _agentSlotsFloor = 4;
-
-/// What one more agent needs to start, the CLI's own figure
-/// (`START_REQUIREMENTS.memoryBytes`, `cli/src/superTabs/capacity.ts`).
-const _agentMemoryBytes = 2 * 1024 * 1024 * 1024;
 
 int _clampAgentSlots(num value) =>
     value.toInt().clamp(_agentSlotsMin, _agentSlotsMax);
 
-/// The machine's total-RAM limit and its half-sized starting suggestion.
-/// Every 2 GiB may run an agent and every machine may offer four, with no cap
-/// of 16 (Ken, 2026-10-28: it held a 192 GiB Mac Studio to a sixth of its
-/// room). The suggestion keeps its 16, so 192 GiB suggests 16 of 96 slots.
-int? _maxAgentSlots(MachineResources? resources) {
-  final total = resources?.memoryTotalBytes;
-  if (total == null) return null;
-  final byMemory = (total / _agentMemoryBytes).floor();
-  return _clampAgentSlots(
-    byMemory < _agentSlotsFloor ? _agentSlotsFloor : byMemory,
-  );
-}
-
-int? _suggestedAgentSlots(MachineResources? resources) =>
-    superTabSuggestedAgentSlots(resources);
-
+/// Manage › Machines: one line per machine with its owner and status, search and filters, and Add machine.
 class SuperTabMachines extends StatefulWidget {
   const SuperTabMachines({
     super.key,
     required this.controller,
     required this.onAddAgent,
     this.app,
-    this.embedded = false,
     this.now = DateTime.now,
     this.readLocal,
-    this.collapsed = false,
-    this.onToggleCollapsed,
     this.onOpenAgent,
     this.ticks,
-    this.manage = false,
   });
   final SuperTabController controller;
   final AppNotifier? app;
-  final bool embedded;
-
-  /// Manage › Machines: one line per machine with its owner and status, and
-  /// Add machine at the foot, with no heading of its own (Quiet Swarm, screen 10).
-  final bool manage;
 
   /// Runs the one-second clock; by default everywhere but under `flutter test`.
   @visibleForTesting
   final bool? ticks;
-
-  /// Whether the body below the heading is hidden. The heading itself, and
-  /// its Add machine action, remain visible so the group stays reachable.
-  final bool collapsed;
-  final VoidCallback? onToggleCollapsed;
 
   /// Opens an existing agent using the workspace's membership and account guards.
   final ValueChanged<SuperTabAgent>? onOpenAgent;
@@ -134,151 +85,8 @@ class SuperTabMachines extends StatefulWidget {
   State<SuperTabMachines> createState() => _SuperTabMachinesState();
 }
 
-/// The engines whose allowance a machine row shows, in this order.
-const _chipEngines = ['claude', 'codex'];
-
-/// A machine's Agents setting in its settings: as many as its memory allows
-/// (the [_maxAgentSlots] figure, stored in the same `maxAgents` every machine
-/// has), or at most a number its owner picks. Each start still checks free
-/// memory either way (Dee, 2026-10-29).
-///
-/// The number is a stepper rather than a field, so no keystroke can leave the
-/// dialog holding a count the backend would refuse; both buttons go dead at
-/// the bounds rather than staying lit and doing nothing. Changing it chooses
-/// At most, the only choice it belongs to. It sits beside the At most tile
-/// rather than inside it, so a screen reader reaches the number and its two
-/// buttons instead of one merged choice (review of #2084).
-class _AgentsLimit extends StatelessWidget {
-  const _AgentsLimit({
-    required this.memory,
-    required this.value,
-    required this.maximum,
-    required this.busy,
-    required this.onMemory,
-    required this.onAtMost,
-  });
-
-  final bool memory;
-  final int value;
-  final int maximum;
-  final bool busy;
-  final VoidCallback onMemory;
-  final ValueChanged<int> onAtMost;
-
-  @override
-  Widget build(BuildContext context) {
-    grid.AppTheme.watch(context);
-    final value = this.value;
-    final canFewer = !busy && value > _agentSlotsMin;
-    final canMore = !busy && value < maximum;
-    void fewer() => onAtMost(value > maximum ? maximum : value - 1);
-    void more() => onAtMost(value + 1);
-    return Row(
-      // "Agents" on the line of its first choice.
-      crossAxisAlignment: CrossAxisAlignment.baseline,
-      textBaseline: TextBaseline.alphabetic,
-      children: [
-        Text('Agents', style: DesktopChrome.text()),
-        const SizedBox(width: grid.AppDesktop.groupGap),
-        Expanded(
-          child: RadioGroup<String>(
-            key: const ValueKey('machine-agents'),
-            groupValue: memory ? 'memory' : 'atMost',
-            onChanged: (choice) {
-              if (busy) return;
-              choice == 'memory' ? onMemory() : onAtMost(value);
-            },
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Standard tiles: one Tab stop for the choice, and the arrow
-                // keys move it (re-review of #2084).
-                RadioListTile<String>(
-                  key: const ValueKey('machine-agents-memory'),
-                  value: 'memory',
-                  enabled: !busy,
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('As memory allows'),
-                ),
-                Row(
-                  children: [
-                    Expanded(
-                      child: RadioListTile<String>(
-                        key: const ValueKey('machine-agents-at-most'),
-                        value: 'atMost',
-                        enabled: !busy,
-                        dense: true,
-                        contentPadding: EdgeInsets.zero,
-                        title: const Text('At most'),
-                      ),
-                    ),
-                    // The number on its own: adjustable by a screen reader's
-                    // increase and decrease, with its two buttons beside it.
-                    Semantics(
-                      container: true,
-                      label: 'Most agents',
-                      value: '$value',
-                      increasedValue: canMore ? '${value + 1}' : null,
-                      decreasedValue: canFewer
-                          ? '${value > maximum ? maximum : value - 1}'
-                          : null,
-                      onIncrease: canMore ? more : null,
-                      onDecrease: canFewer ? fewer : null,
-                      child: Container(
-                        constraints: const BoxConstraints(
-                          minHeight: grid.AppControl.height,
-                        ),
-                        decoration: BoxDecoration(
-                          // The same recessed well the picker's control sits in.
-                          color: grid.AppSurface.recess,
-                          borderRadius: BorderRadius.circular(
-                            grid.AppControl.radius,
-                          ),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            AppIconButton(
-                              key: const ValueKey('agent-limit-fewer'),
-                              icon: AppIcons.minus,
-                              size: grid.AppControl.iconSize,
-                              tooltip: 'Fewer agents',
-                              onPressed: canFewer ? fewer : null,
-                            ),
-                            ExcludeSemantics(
-                              child: Text(
-                                value.toString(),
-                                key: const ValueKey('agent-limit-value'),
-                                style: DesktopChrome.control().copyWith(
-                                  fontFeatures: const [
-                                    FontFeature.tabularFigures(),
-                                  ],
-                                ),
-                              ),
-                            ),
-                            AppIconButton(
-                              key: const ValueKey('agent-limit-more'),
-                              icon: AppIcons.plus,
-                              size: grid.AppControl.iconSize,
-                              tooltip: 'More agents',
-                              onPressed: canMore ? more : null,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
+/// The engines a machine offers the Swarm; a retired one (OpenCode) is left out.
+const _swarmEngines = ['claude', 'codex'];
 
 /// Sets [machineId]'s project up for the Swarm and asks what it offers
 /// (`prepareContribution`), a second apart for up to five minutes. Null when
@@ -324,7 +132,7 @@ List<String> _contributedEngines(Map<String, dynamic> prepared) {
   final engines =
       (prepared['engines'] as List?)
           ?.whereType<String>()
-          .where((engine) => _chipEngines.contains(engine))
+          .where((engine) => _swarmEngines.contains(engine))
           .toSet()
           .toList() ??
       <String>[];
@@ -337,108 +145,17 @@ List<String> _contributedEngines(Map<String, dynamic> prepared) {
   return engines;
 }
 
-/// The setup a Buddy sends for [machineId], one of the reader's own machines
-/// outside the Swarm: prepared there as Add machine prepares one (its folder
-/// and engines), so the server records it for their Buddies alone and never
-/// adds it to the Swarm (Dee, 10-29). Null when [alive] ended first or the
-/// reader can no longer write.
-Future<Map<String, dynamic>?> prepareBuddyMachine(
-  SuperTabController c,
-  AppNotifier app,
-  String machineId, {
-  required String setupId,
-  required bool Function() alive,
-}) async {
-  final prepared = await _prepareContribution(
-    c,
-    app,
-    machineId,
-    setupId: setupId,
-    alive: alive,
-  );
-  if (prepared == null) return null;
-  return {
-    'name': app.stateOf(machineId)?.machine.displayName ?? machineId,
-    'cwd': prepared['cwd'],
-    'engines': _contributedEngines(prepared),
-  };
-}
-
-/// Adds the prepared [machineId] to the Swarm, offering [maxAgents] slots.
-/// False when [alive] says the asker is gone or the reader can no longer
-/// write, in which case nothing was added.
-Future<bool> _sendContribution(
-  SuperTabController c,
-  AppNotifier app,
-  String machineId,
-  Map<String, dynamic> prepared,
-  List<String> engines, {
-  required int maxAgents,
-  required bool memory,
-  required bool Function() alive,
-  bool teamAccountOnly = false,
-  bool ifMissing = false,
-  bool unlessRemoved = false,
-}) async {
-  // An earlier lost reply leaves an uncertain attempt holding its own
-  // receipt, and only one action may be in flight: check that one first, then
-  // send the number the owner is looking at — the stored attempt cannot know
-  // it was changed.
-  if (c.pendingCommand?['type'] == 'machine.contribute') {
-    // If that attempt cannot be confirmed, its own error is the one worth
-    // showing: it says why it is still unclear.
-    if (await c.retry() == null) {
-      if (!alive()) return false;
-      throw SuperTabFailure(
-        c.operationErrorCode ?? 'CONTRIBUTION_FAILED',
-        c.operationError ?? 'The earlier attempt is still not confirmed. Try again to check it.',
-      );
-    }
-    if (!alive() || !c.canWrite) return false;
-  }
-  final result = await c.command({
-    'type': 'machine.contribute',
-    'machineId': machineId,
-    'name': app.stateOf(machineId)!.machine.displayName,
-    'cwd': prepared['cwd'],
-    if (prepared['scope'] != null) 'scope': prepared['scope'],
-    'engines': engines,
-    'maxAgents': maxAgents,
-    // Its Agents setting, so a count is a limit only when its owner chose one.
-    'agents': memory ? 'memory' : 'atMost',
-    if (teamAccountOnly) 'teamAccountOnly': true,
-    if (ifMissing) 'ifMissing': true,
-    if (unlessRemoved) 'unlessRemoved': true,
-  });
-  if (result == null) {
-    throw SuperTabFailure(
-      'CONTRIBUTION_FAILED',
-      c.operationError ?? 'Could not add this machine.',
-    );
-  }
-  await app.wakeSuperTabHost(machineId);
-  return true;
-}
-
-/// Adds the reader's own computer [machineId] to the Swarm as the Add machine
-/// form does when its Add machine is clicked untouched: the slots its memory
-/// suggests, else what preparation offered. Resolves to [machineId], null when
-/// [alive] ended first. Throws a [SuperTabFailure] saying why it could not.
-/// [setupId] is the caller's to keep between tries: a setup still running
-/// answers the next try with the same one. With [teamAccountOnly], teammates'
-/// work reaches it only through its Harness Team account once that passes its
-/// privacy check (backend superTabs/machines.ts `teamWorkRefusal`).
-/// [readResources] stands in for [AppNotifier.readMachineResources].
+/// Adds the reader's own computer [machineId] to the Swarm, running as many
+/// agents as its memory allows. Resolves to [machineId], null when [alive]
+/// ended first or the reader can no longer write. Throws a [SuperTabFailure]
+/// saying why it could not. [setupId] is the caller's to keep between tries: a
+/// setup still running answers the next try with the same one.
 Future<String?> contributeComputer(
   SuperTabController c,
   AppNotifier app,
   String machineId, {
   required String setupId,
   required bool Function() alive,
-  bool teamAccountOnly = false,
-  bool ifMissing = false,
-  bool unlessRemoved = false,
-  Future<MachineResources?> Function(String machineId)? readResources,
 }) async {
   final prepared = await _prepareContribution(
     c,
@@ -449,371 +166,42 @@ Future<String?> contributeComputer(
   );
   if (prepared == null) return null;
   final engines = _contributedEngines(prepared);
-  MachineResources? resources;
-  try {
-    resources = await (readResources ?? app.readMachineResources)(machineId);
-  } catch (_) {
-    // The suggestion only sizes the offer; preparation's own number stands in.
-  }
-  final offered = prepared['maxAgents'];
-  final slots =
-      _suggestedAgentSlots(resources) ??
-      (offered is num ? _clampAgentSlots(offered) : _agentSlotsMin);
   if (!alive() || !c.canWrite) return null;
-  final added = await _sendContribution(
-    c,
-    app,
-    machineId,
-    prepared,
-    engines,
-    maxAgents: slots,
-    memory: true,
-    alive: alive,
-    teamAccountOnly: teamAccountOnly,
-    ifMissing: ifMissing,
-    unlessRemoved: unlessRemoved,
-  );
-  return added ? machineId : null;
-}
-
-/// Why [m] cannot be added to the Swarm now, in the Add machine form's words;
-/// null when it can.
-({IconData icon, String message})? _machineUnavailable(
-  MachineState m, {
-  required bool inSwarm,
-}) {
-  if (inSwarm) {
-    return (icon: AppIcons.circleCheck, message: 'Already in this Swarm');
+  // An earlier lost reply leaves an uncertain attempt holding its own
+  // receipt, and only one action may be in flight: check that one first.
+  if (c.pendingCommand?['type'] == 'machine.contribute') {
+    // If that attempt cannot be confirmed, its own error is the one worth
+    // showing: it says why it is still unclear.
+    if (await c.retry() == null) {
+      if (!alive()) return null;
+      throw SuperTabFailure(
+        c.operationErrorCode ?? 'CONTRIBUTION_FAILED',
+        c.operationError ?? 'The earlier attempt is still not confirmed. Try again to check it.',
+      );
+    }
+    if (!alive() || !c.canWrite) return null;
   }
-  if (m.needsLink) {
-    return (
-      icon: AppIcons.unlink,
-      message: 'Not linked. Link this computer from Machines.',
+  // With `agents: memory` the server sets no limit; `maxAgents` is only
+  // preparation's own figure, which the command still carries.
+  final offered = prepared['maxAgents'];
+  final result = await c.command({
+    'type': 'machine.contribute',
+    'machineId': machineId,
+    'name': app.stateOf(machineId)!.machine.displayName,
+    'cwd': prepared['cwd'],
+    if (prepared['scope'] != null) 'scope': prepared['scope'],
+    'engines': engines,
+    'maxAgents': offered is num ? _clampAgentSlots(offered) : _agentSlotsMin,
+    'agents': 'memory',
+  });
+  if (result == null) {
+    throw SuperTabFailure(
+      'CONTRIBUTION_FAILED',
+      c.operationError ?? 'Could not add this machine.',
     );
   }
-  if (m.isOffline) {
-    return (
-      icon: AppIcons.cloudOff,
-      message: 'Offline. Open Harness on this computer to add it.',
-    );
-  }
-  return null;
-}
-
-/// Why this computer cannot be added to the Swarm from here, as the Add
-/// machine form says it; null when it can.
-String? thisComputerRefusal(AppNotifier app, SuperTabController c) {
-  final here = app.machineStates.values
-      .where((m) => m.isLocalMachine)
-      .firstOrNull;
-  if (here == null || here.belongsToOtherAccount) {
-    return 'No computer is connected to this account yet.';
-  }
-  final inSwarm = (c.snapshot?.machines ?? const <Map<String, dynamic>>[]).any(
-    (m) => m['machineId'] == here.machine.machineId,
-  );
-  return _machineUnavailable(here, inSwarm: inSwarm)?.message;
-}
-
-/// A machine's settings in this Swarm, its owner's: how many agents it runs,
-/// and Remove from this Swarm. Adding machines is Add your computers
-/// (add_computers.dart). The panel's own knowledge comes in as callbacks:
-/// [sampleOf] a reading it already holds, [canRemove], [removeReason] and
-/// [remove] for Remove from this Swarm, and [readLocal] in place of
-/// [AppNotifier.readMachineResources].
-Future<void> _machineSettingsDialog(
-  BuildContext context,
-  SuperTabController c,
-  AppNotifier app, {
-  required Map<String, dynamic> existing,
-  _MachineView? view,
-  required MachineResources? Function(String machineId) sampleOf,
-  required bool Function(String machineId) canRemove,
-  required String? Function(String machineId) removeReason,
-  required void Function(_MachineView view) remove,
-  Future<MachineResources?> Function(String machineId)? readLocal,
-}) async {
-  final existingId = existing['machineId'] as String;
-  bool canSelect(MachineState? m) =>
-      m != null &&
-      !m.belongsToOtherAccount &&
-      _machineUnavailable(m, inSwarm: false) == null;
-  String? error;
-  var busy = false;
-  String? setupId;
-  Map<String, dynamic>? storedRow(String? id) => id == null
-      ? null
-      : c.snapshot?.machines.where((m) => m['machineId'] == id).firstOrNull;
-  int? storedSlots(String? id) {
-    final current = storedRow(id)?['maxAgents'];
-    return current is num ? current.toInt() : null;
-  }
-
-  // Readings this dialog has taken itself, keyed by machine. The panel's own
-  // samples stand in for a machine it already reads.
-  final suggestions = <String, int>{};
-  final maximums = <String, int>{};
-
-  // Machine settings: As memory allows, or At most a number (Dee,
-  // 2026-10-29). Memory is known from this dialog's reading, the panel's
-  // sample, or what the machine last reported to the Swarm.
-  MachineResources? settingsResources() =>
-      sampleOf(existingId) ?? view?.resources;
-  int? memoryMaximum() =>
-      maximums[existingId] ?? _maxAgentSlots(settingsResources());
-
-  // Until the owner touches either, both follow what is known: a stored
-  // limit at or above the maximum is as memory allows, and one below it is
-  // the owner's own. With the maximum unknown a stored number is kept, and
-  // a machine with no number of its own starts at At most its suggestion
-  // (review of #2084).
-  bool? memoryEdited;
-  int? atMostEdited;
-  bool memoryChoice() {
-    if (memoryEdited != null) return memoryEdited!;
-    // The setting the server keeps (Dee, 2026-11-04: "remove the limit").
-    final agents = storedRow(existingId)?['agents'];
-    if (agents == 'memory') return true;
-    if (agents == 'atMost') return false;
-    final stored = storedSlots(existingId);
-    final maximum = memoryMaximum();
-    // A machine saved before the server kept it: the server reads the old
-    // join suggestion as As memory allows (superTabOldJoinSuggestion).
-    if (stored != null &&
-        superTabOldJoinSuggestion(stored, settingsResources())) {
-      return true;
-    }
-    return stored != null && maximum != null && stored >= maximum;
-  }
-
-  // With nothing known, every machine may offer four.
-  int atMostMaximum() =>
-      memoryMaximum() ??
-      _clampAgentSlots(storedSlots(existingId) ?? _agentSlotsFloor);
-  int atMostValue() {
-    if (atMostEdited != null) return atMostEdited!;
-    final stored = storedSlots(existingId);
-    if (stored != null && storedRow(existingId)?['agents'] == 'atMost') {
-      return stored.clamp(_agentSlotsMin, atMostMaximum());
-    }
-    final maximum = memoryMaximum();
-    if (stored != null && (maximum == null || stored < maximum)) {
-      return _clampAgentSlots(stored);
-    }
-    final suggested =
-        suggestions[existingId] ?? _suggestedAgentSlots(settingsResources());
-    return (suggested ?? maximum ?? stored ?? _agentSlotsFloor).clamp(
-      _agentSlotsMin,
-      atMostMaximum(),
-    );
-  }
-
-  /// Why this machine's settings cannot be saved from here, in settings'
-  /// own words; null when they can.
-  String? settingsUnavailable() {
-    final m = app.stateOf(existingId);
-    if (m == null) {
-      return 'This computer can’t reach that machine. Sign in to Harness '
-          'there with this account to change its settings.';
-    }
-    // The machine by name: "this computer" is the one you're on.
-    final name = superTabMachineName(m.machine.displayName);
-    if (m.belongsToOtherAccount) {
-      return '$name is signed in to another account.';
-    }
-    if (m.needsLink) return 'Not linked. Link $name from Machines.';
-    if (m.isOffline) {
-      return 'Offline. Open Harness on $name to change its settings.';
-    }
-    return null;
-  }
-
-  // As memory allows saves the machine's maximum: its own figure from
-  // setup (it measured the machine just now), else the one known here,
-  // else what an older Harness's setup offered.
-  int memoryLimit(Map<String, dynamic> prepared) {
-    final offeredMaximum = prepared['maxAvailableAgents'];
-    if (offeredMaximum is num) return _clampAgentSlots(offeredMaximum);
-    final offered = prepared['maxAgents'];
-    return memoryMaximum() ??
-        (offered is num
-            ? _clampAgentSlots(offered)
-            : storedSlots(existingId) ?? _agentSlotsFloor);
-  }
-
-  // The open dialog and its own setState, once it is built: a reading
-  // answers while the form is open, and the field has to repaint when it
-  // does. Both are read only while the dialog is still there — one that
-  // arrives after it closed has nothing to repaint.
-  BuildContext? dialog;
-  void Function(void Function())? repaint;
-  var reading = false;
-
-  /// The machine's memory reading, for the At most limit, without asking
-  /// preparation: preparation sets the project up, probes engines and takes
-  /// one of its 32 setup slots, and opening settings the owner may cancel is
-  /// no reason to do that. The owner's chosen number is never replaced.
-  Future<void> readMemory() async {
-    if (reading || !canSelect(app.stateOf(existingId))) return;
-    reading = true;
-    MachineResources? resources;
-    try {
-      resources = await (readLocal ?? app.readMachineResources)(existingId);
-    } catch (_) {
-      return;
-    }
-    final suggested = _suggestedAgentSlots(resources);
-    if (suggested == null || dialog?.mounted != true) return;
-    suggestions[existingId] = suggested;
-    maximums[existingId] = _maxAgentSlots(resources)!;
-    repaint?.call(() {});
-  }
-
-  await showAppDialog<void>(
-    context: context,
-    builder: (context) => SuperTabDialogScope(
-      controller: c,
-      child: ListenableBuilder(
-        listenable: app,
-        builder: (context, _) => StatefulBuilder(
-          builder: (context, update) {
-            dialog = context;
-            repaint = update;
-            // Not awaited: the form is usable immediately, and the limit
-            // only has to be there by the time the owner reads it. The
-            // machine is read once, so a rebuild does not read again.
-            unawaited(readMemory());
-            final canSave = canSelect(app.stateOf(existingId));
-            Future<void> save() async {
-              if (busy || !c.canWrite || !canSelect(app.stateOf(existingId))) {
-                return;
-              }
-              // Settings save what is on screen now: preparation below may
-              // learn a different maximum, and that must not turn the
-              // owner's At most into As memory allows (review of #2084).
-              final atMost = memoryChoice() ? null : atMostValue();
-              update(() {
-                busy = true;
-                error = null;
-              });
-              try {
-                setupId ??= superTabOperationId();
-                final prepared = await _prepareContribution(
-                  c,
-                  app,
-                  existingId,
-                  setupId: setupId!,
-                  alive: () => context.mounted,
-                );
-                if (prepared == null) return;
-                if (!context.mounted || !c.canWrite) return;
-                final engines = _contributedEngines(prepared);
-                final offeredMaximum = prepared['maxAvailableAgents'];
-                if (offeredMaximum is num) {
-                  maximums[existingId] = _clampAgentSlots(offeredMaximum);
-                }
-                if (!await _sendContribution(
-                  c,
-                  app,
-                  existingId,
-                  prepared,
-                  engines,
-                  maxAgents: atMost ?? memoryLimit(prepared),
-                  memory: atMost == null,
-                  alive: () => context.mounted,
-                )) {
-                  return;
-                }
-                if (context.mounted) Navigator.pop(context);
-              } catch (failure) {
-                if (context.mounted) {
-                  update(() {
-                    busy = false;
-                    error = failure.toString();
-                    if (failure is! SuperTabFailure ||
-                        failure.code != 'SETUP_PENDING') {
-                      setupId = null;
-                    }
-                  });
-                }
-              }
-            }
-
-            final current = app.stateOf(existingId);
-            final why = settingsUnavailable();
-            final title = superTabMachineName(
-              current?.machine.displayName ??
-                  existing['name'] as String? ??
-                  existingId,
-            );
-            return SuperTabDetailDialog(
-              title: title,
-              body: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  _AgentsLimit(
-                    memory: memoryChoice(),
-                    value: atMostValue(),
-                    maximum: atMostMaximum(),
-                    busy: busy,
-                    onMemory: () => update(() => memoryEdited = true),
-                    onAtMost: (next) => update(() {
-                      memoryEdited = false;
-                      atMostEdited = next;
-                    }),
-                  ),
-                  // What it can reach (#3047): sent at once, apart from Save; its owner's, on the Mac's own entry.
-                  SuperTabMachineAccessSetting(
-                    controller: c,
-                    machineId: existingId,
-                    machineName: title,
-                  ),
-                  // Why it cannot be removed, in words rather than a dimmed button alone.
-                  if (view != null && canRemove(view.id))
-                    if (removeReason(view.id) case final reason?) ...[
-                      const SizedBox(height: grid.AppDesktop.controlGap),
-                      Text(reason, style: DesktopChrome.metadata()),
-                    ],
-                  if (!canSave && why != null) ...[
-                    const SizedBox(height: grid.AppDesktop.controlGap),
-                    Text(why, style: DesktopChrome.metadata()),
-                  ],
-                  if (error != null) ...[
-                    const SizedBox(height: grid.AppDesktop.controlGap),
-                    Text(error!, style: DesktopChrome.metadata()),
-                  ],
-                ],
-              ),
-              // One clear action at the right; the rarer one quiet at the
-              // left, as in the machine's details.
-              leadingActions: [
-                if (view != null && canRemove(view.id))
-                  TextButton(
-                    style: superTabQuietAction,
-                    onPressed: busy || removeReason(view.id) != null
-                        ? null
-                        : () {
-                            Navigator.pop(context);
-                            WidgetsBinding.instance.addPostFrameCallback((_) {
-                              remove(view);
-                            });
-                          },
-                    child: const Text('Remove from this Swarm'),
-                  ),
-              ],
-              actions: [
-                FilledButton(
-                  onPressed: busy || !canSave ? null : save,
-                  child: Text(busy ? 'Saving…' : 'Save'),
-                ),
-              ],
-            );
-          },
-        ),
-      ),
-    ),
-  );
+  await app.wakeSuperTabHost(machineId);
+  return machineId;
 }
 
 class _SuperTabMachinesState extends State<SuperTabMachines> {
@@ -850,37 +238,22 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
 
   /// One per Swarm menu open now, each keeping the browser's menu off.
   final _menuHolds = <Object>{};
-  ModelsMenuController? _usage;
   Timer? _timer;
   bool _reading = false;
   int _revision = 0;
 
-  /// This Mac's daemon's word on why its Team account, signed in, has not
-  /// joined (#3215); null unless this Mac's own row reads joining.
-  ({String? failure, bool hostRunning})? _teamJoin;
-  bool _teamJoinReading = false;
-
   SuperTabController get c => widget.controller;
-  // Team agents only: a Buddy is listed nowhere, and its machine may be its
-  // person's alone, outside the Swarm (backend buddyOnly).
   Set<String> get _ids => {
-    for (final a in c.snapshot?.teamAgents ?? const <SuperTabAgent>[])
-      a.machineId,
+    for (final a in c.snapshot?.agents ?? const <SuperTabAgent>[]) a.machineId,
     for (final m in c.snapshot?.machines ?? const <Map<String, dynamic>>[])
       m['machineId'] as String,
   };
-
-  /// The rows: one per computer, a Mac's Harness Team account inside its Mac's ([SuperTabSnapshot.placeOf]).
-  Iterable<String> get _rowIds =>
-      _ids.where((id) => (c.snapshot?.placeOf(id) ?? id) == id);
 
   @override
   void initState() {
     super.initState();
     c.machinesChanged.addListener(_machinesMoved);
-    unawaited(_readTeamJoin());
     if ((!kUnderTest || widget.readLocal != null) && widget.app != null) {
-      _updateUsage();
       widget.app!.foreground.addListener(_foreground);
       unawaited(_refresh());
     }
@@ -907,15 +280,13 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   }
 
   /// The clock runs only while something it moves shows: not for a Swarm not
-  /// on screen, a window at the back, or a collapsed group, whose heading shows
-  /// an age only while the Swarm can't be read.
+  /// on screen or a window at the back.
   void _syncTick() {
     final wanted =
         (widget.ticks ?? !kUnderTest) &&
         !c.away &&
         TickerMode.valuesOf(context).enabled &&
-        widget.app?.foreground.value != false &&
-        (!widget.collapsed || c.backendUnreachable);
+        widget.app?.foreground.value != false;
     if (!wanted) {
       _tick?.cancel();
       _tick = null;
@@ -955,8 +326,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       for (final (key, _, group) in _groups(views))
         for (final v in group) '$key/${v.id}',
     ];
-    if (c.backendUnreachable ||
-        (widget.manage && _manageLayoutDrawn != _machineLayout(views)) ||
+    if (_manageLayoutDrawn != _machineLayout(views) ||
         !listEquals(_groupsDrawn, groups)) {
       _changed();
       return;
@@ -973,68 +343,24 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     view.name,
     view.status,
     view.readingAt,
-    view.arrived,
+    // A line not online says when it was last seen, an age the one-second tick moves.
+    if (view.readingAt case final at?
+        when _machineStatusGroup(view) != 'online')
+      superTabAgo(widget.now().difference(at)),
     view.paused,
     view.cleaning,
     view.dim,
     view.details,
     view.tip,
-    view.problem,
-    view.subscriptionsAside,
     view.agents.length,
-    if (widget.manage) ...[
-      view.resources?.diskTotalBytes,
-      view.resources?.diskFreeBytes,
-      view.resources?.projectDiskTotalBytes,
-      view.resources?.projectDiskFreeBytes,
-    ],
+    view.resources?.diskTotalBytes,
+    view.resources?.diskFreeBytes,
+    view.resources?.projectDiskTotalBytes,
+    view.resources?.projectDiskFreeBytes,
   ]);
-
-  /// Reads why this Mac's Team account has not joined, only while its
-  /// person's own row reads joining: asked of this Mac's daemon, never of
-  /// another's.
-  Future<void> _readTeamJoin() async {
-    final app = widget.app;
-    if (app == null || _teamJoinReading) return;
-    final joining =
-        c.snapshot?.machines.any(
-          (m) =>
-              m['contributorId'] == c.accountId &&
-              app.stateOf(m['machineId'] as String)?.isLocalMachine == true &&
-              (m['teamWork'] as Map?)?['code'] == 'TEAM_ACCOUNT_JOINING',
-        ) ==
-        true;
-    if (!joining) {
-      _teamJoin = null;
-      return;
-    }
-    _teamJoinReading = true;
-    try {
-      final join = await app.teamJoinStatus();
-      if (!mounted) return;
-      _teamJoin = join;
-      _changed();
-    } finally {
-      _teamJoinReading = false;
-    }
-  }
-
-  void _updateUsage() {
-    if (kUnderTest || widget.app == null) return;
-    if (!widget.app!.foreground.value) {
-      _usage?.removeListener(_changed);
-      _usage?.dispose();
-      _usage = null;
-    } else {
-      _usage ??= ModelsMenuController(remote: widget.app!.readRemoteUsage)
-        ..addListener(_changed)
-        ..start();
-    }
-  }
 
   void _foreground() {
     _syncTick();
-    _updateUsage();
     _revision++;
     _timer?.cancel();
     if (widget.app?.foreground.value == true) {
@@ -1075,7 +401,6 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       }
       _samples.removeWhere((id, _) => !_ids.contains(id));
       _awaiting.removeWhere((id) => !_samples.containsKey(id));
-      await _readTeamJoin();
     } finally {
       _reading = false;
       // A Swarm that isn't showing reads nothing; coming back reads at once ([_machinesMoved]).
@@ -1097,307 +422,30 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       beat.dispose();
     }
     widget.app?.foreground.removeListener(_foreground);
-    _usage?.removeListener(_changed);
-    _usage?.dispose();
     super.dispose();
-  }
-
-  /// [existing]'s settings in this Swarm (its owner's).
-  Future<void> _settings({
-    required Map<String, dynamic> existing,
-    _MachineView? view,
-  }) async {
-    final app = widget.app;
-    if (app == null) return;
-    await _machineSettingsDialog(
-      context,
-      c,
-      app,
-      existing: existing,
-      view: view,
-      sampleOf: (id) => _samples[id]?.$1,
-      canRemove: _canRemove,
-      removeReason: _removeReason,
-      remove: (v) {
-        if (mounted) unawaited(_remove(v));
-      },
-      readLocal: widget.readLocal,
-    );
-  }
-
-  /// One engine's reading as an account row. [old]: the machine is offline, so this is its last reading, whose
-  /// windows may have reset since; the figures stay, as when they were read. A current reading whose window reset has
-  /// none, the next reading has it.
-  Map<String, Object?> _quotaRow(
-    Map<String, dynamic> quota,
-    String machineId, {
-    required bool old,
-  }) {
-    final windows =
-        [for (final raw in quota['windows'] as List? ?? []) superTabMap(raw)]
-          ..sort(
-            (a, b) => ((b['usedPercent'] as num?) ?? 0).compareTo(
-              (a['usedPercent'] as num?) ?? 0,
-            ),
-          );
-    DateTime? reset(dynamic raw) => raw is num
-        ? DateTime.fromMillisecondsSinceEpoch(
-            raw > 100000000000 ? raw.toInt() : (raw * 1000).toInt(),
-          )
-        : raw is String
-        ? DateTime.tryParse(raw)
-        : null;
-    final expired =
-        !old &&
-        windows.any(
-          (w) => reset(w['resetsAt'])?.isBefore(DateTime.now()) == true,
-        );
-    final known = quota['known'] == true && windows.isNotEmpty && !expired;
-    return {
-      'accountKey': 'machine:$machineId:${quota['engine']}',
-      'engine': quota['engine'],
-      'name': engineIdentity(quota['engine'] as String? ?? '').label,
-      'remainingPercent': known
-          ? 100 - (windows.first['usedPercent'] as num)
-          : null,
-      'details': [
-        for (final w in windows)
-          '${w['name']}: ${100 - (w['usedPercent'] as num)}% remaining${reset(w['resetsAt'])?.isAfter(DateTime.now()) == true ? ' · resets in ${_until(reset(w['resetsAt'])!)}' : ''}',
-      ],
-    };
-  }
-
-  String _until(DateTime when) {
-    final minutes = when.difference(DateTime.now()).inMinutes;
-    return minutes <= 0
-        ? 'now'
-        : minutes < 60
-        ? '${minutes}m'
-        : minutes < 1440
-        ? '${minutes ~/ 60}h ${minutes % 60}m'
-        : '${minutes ~/ 1440}d';
-  }
-
-  /// The Subscriptions a machine's row shows to every viewer, from its own pool ([SuperTabSnapshot.subscriptionPoolOf]):
-  /// a Mac's Harness Team account spends the Mac owner's subscriptions. One card per engine it offers, Claude first,
-  /// with its figure or why there is none; offline, the last figures, with when they were read.
-  ({
-    List<Map<String, Object?>> accounts,
-    List<String>? engines,
-    List<_Allowance> allowances,
-    String aside,
-  })
-  _subscriptions(
-    String id, {
-    required Map<String, dynamic>? reading,
-    required bool readingDim,
-    required DateTime? readingAt,
-    required DateTime now,
-  }) {
-    final pool = c.snapshot!.subscriptionPoolOf(id) ?? reading;
-    final poolId = pool?['machineId'] as String? ?? id;
-    final state = widget.app?.stateOf(poolId);
-    final observation = superTabMap(
-      pool?['observation'] ?? const <String, dynamic>{},
-    );
-    final received = observation['receivedAt'];
-    final readAt = identical(pool, reading)
-        ? readingAt
-        : received is num
-        ? DateTime.fromMillisecondsSinceEpoch(received.toInt())
-        : null;
-    final stale = identical(pool, reading)
-        ? readingDim
-        : readAt == null ||
-              now.difference(readAt) >= kSuperTabMachineOfflineAfter;
-    final quotas = {
-      for (final raw in observation['quotas'] as List? ?? [])
-        if (_chipEngines.contains(superTabMap(raw)['engine']))
-          superTabMap(raw)['engine'] as String: superTabMap(raw),
-    };
-    final configured = (pool?['engines'] as List?)?.whereType<String>();
-    // What the machine has installed (its readiness, probed by the CLI), per engine.
-    final readiness = observation['readiness'];
-    final installed = {
-      for (final raw
-          in (readiness is Map ? readiness['engines'] : null) as List? ?? [])
-        if (raw is Map && raw['installed'] == true) raw['engine'],
-    };
-    // A list that still names a retired engine (OpenCode) cannot say which of the two it offers: Claude and Codex
-    // come from what it reported or has installed.
-    final allowed =
-        configured?.any((engine) => !_chipEngines.contains(engine)) == true
-        ? [
-            for (final engine in _chipEngines)
-              if (configured!.contains(engine) ||
-                  quotas.containsKey(engine) ||
-                  installed.contains(engine))
-                engine,
-          ]
-        : configured?.where(_chipEngines.contains).toList();
-    var accounts =
-        _usage?.rows
-            .where(
-              (row) =>
-                  (allowed == null || allowed.contains(row['engine'])) &&
-                  (state?.isLocalMachine == true
-                      ? row['local'] == true
-                      : (row['machines'] as List? ?? []).contains(
-                          state?.machine.displayName,
-                        )),
-            )
-            .toList() ??
-        const <Map<String, Object?>>[];
-    if (accounts.isEmpty && readAt != null) {
-      accounts = [
-        for (final quota in quotas.values) _quotaRow(quota, poolId, old: stale),
-      ];
-    }
-    final reasons = observation['quotaReasons'];
-    // Engines the server suspended here after failed starts, with why (backend superTabs/engineHealth.ts), on the Mac
-    // or its Harness Team account.
-    final suspended = <String, String>{
-      for (final p in [c.snapshot!.pool(id), c.snapshot!.teamPoolOf(id)])
-        if (p?['suspendedEngines'] case final Map raw)
-          for (final entry in raw.entries)
-            if (entry.key is String && entry.value is String)
-              entry.key as String: entry.value as String,
-    };
-    final allowances = [
-      for (final engine in _chipEngines)
-        if (allowed?.contains(engine) ??
-            (quotas.containsKey(engine) ||
-                suspended.containsKey(engine) ||
-                accounts.any((row) => row['engine'] == engine)))
-          switch (accounts
-              .where(
-                (row) =>
-                    row['engine'] == engine && row['remainingPercent'] is num,
-              )
-              .firstOrNull) {
-            final row? => _figured(
-              engine,
-              row,
-              stale: stale,
-              struck: suspended[engine],
-              // Information only: quota never makes a machine unusable.
-              notice:
-                  suspended[engine] == null &&
-                      !stale &&
-                      (row['remainingPercent'] as num) <= 0
-                  ? _noQuotaLeft
-                  : null,
-            ),
-            null => _unfigured(
-              engine,
-              poolId,
-              quotas[engine] == null &&
-                      !(reasons is Map && reasons[engine] != null) &&
-                      (stale || installed.contains(engine))
-                  ? (stale ? kAllowanceNotReadOffline : kAllowanceNotRead)
-                  : superMachineAllowanceReason(
-                      quotas[engine],
-                      reasons is Map ? reasons[engine] : null,
-                    ),
-              struck: suspended[engine],
-            ),
-          },
-    ];
-    return (
-      accounts: accounts,
-      engines: allowed,
-      allowances: allowances,
-      aside: !stale
-          ? 'left now'
-          : readAt == null
-          ? 'offline'
-          : 'offline, read ${superTabAgo(now.difference(readAt))}',
-    );
-  }
-
-  /// [engine]'s card from its account [row], which has a figure; [stale] when it is the last one an offline machine read.
-  _Allowance _figured(
-    String engine,
-    Map<String, Object?> row, {
-    required bool stale,
-    String? struck,
-    String? notice,
-  }) {
-    final account = WorkspaceSubscriptionUsage.fromRows([row]).accounts.first;
-    return _Allowance(
-      engine: engine,
-      name: account.name,
-      figure: account.figure,
-      left: (row['remainingPercent'] as num).toDouble().clamp(0, 100),
-      stale: stale,
-      struck: struck,
-      notice: notice,
-      note: superMachineAllowanceNote(switch (row['details']) {
-        final List lines => lines.whereType<String>(),
-        _ => const <String>[],
-      }),
-      detail: [
-        account.name,
-        ...switch (row['details']) {
-          final List lines when lines.isNotEmpty => lines.whereType<String>(),
-          _ => ['${account.figure} remaining'],
-        },
-      ].join('\n'),
-    );
-  }
-
-  /// [engine]'s card without a figure, saying [reason] instead; named and figured as one with a reading is.
-  _Allowance _unfigured(
-    String engine,
-    String machineId,
-    String reason, {
-    String? struck,
-  }) {
-    final account = WorkspaceSubscriptionUsage.fromRows([
-      {'engine': engine, 'accountKey': 'machine:$machineId:$engine'},
-    ]).accounts.first;
-    return _Allowance(
-      engine: engine,
-      name: account.name,
-      figure: account.figure,
-      left: null,
-      note: reason,
-      struck: struck,
-      detail: '${account.name}\n$reason',
-    );
   }
 
   /// Everything a machine's row, its tooltip and its details say of it, read once per build.
   _MachineView _view(String id) {
     final app = widget.app, snapshot = c.snapshot!;
     final shared = snapshot.pool(id);
-    // The Mac's Harness Team account is part of its row: its agents are listed here, and everyone but the Mac's owner
-    // reads its availability, since it runs their agents, also while the owner is away from the Mac. The owner reads
-    // their own computer. Actions stay the Mac's; the backend changes its team account with it.
-    final team = snapshot.teamPoolOf(id);
-    final teamId = team?['machineId'] as String?;
-    final agents = snapshot.teamAgents
-        .where((a) => snapshot.placeOf(a.machineId) == id)
-        .toList();
+    final agents = snapshot.agents.where((a) => a.machineId == id).toList();
     final contributor =
         shared?['contributorId'] as String? ??
         agents.firstOrNull?.contributorId;
     final person = snapshot.people
         .where((p) => p.id == contributor)
         .firstOrNull;
-    final reading = snapshot.readingPoolOf(id, c.accountId);
-    final teammateView = team != null && identical(reading, team);
-    final readId = teammateView ? teamId! : id;
-    final state = app?.stateOf(readId);
+    final state = app?.stateOf(id);
     final observation = superTabMap(
-      reading?['observation'] ?? const <String, dynamic>{},
+      shared?['observation'] ?? const <String, dynamic>{},
     );
     final now = widget.now();
     final received = observation['receivedAt'];
     final observedAt = received is num
         ? DateTime.fromMillisecondsSinceEpoch(received.toInt())
         : null;
-    final sample = _samples[readId];
+    final sample = _samples[id];
     final connected =
         state?.connectionStatus == ConnectionStatus.connected &&
         state?.nodeOnline != false;
@@ -1405,7 +453,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     // this very computer when it contributes and its own sample is the newer, which is why it stays live while
     // the Swarm cannot be read. Any other contributing machine is known by what it reports through the Swarm.
     final direct =
-        reading == null ||
+        shared == null ||
         (state?.isLocalMachine == true &&
             sample != null &&
             (observedAt == null || sample.$2.isAfter(observedAt)));
@@ -1413,7 +461,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     final age = readingAt == null ? null : now.difference(readingAt);
     // A computer only running someone's agents, never added to the Swarm and not one this Desktop reads (a teammate's
     // Lead computer): nothing reports it but its agents, so it is up while one of them is (group #646, item 5).
-    final agentsOnly = shared == null && team == null && state == null;
+    final agentsOnly = shared == null && state == null;
     final status = agentsOnly
         ? (agents.any((a) => a.downSince == null)
               ? SuperTabMachineStatus.live
@@ -1423,7 +471,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             // The Swarm cannot be read: a machine's silence is not known to be its own, so it is not offline.
             unreachable: !direct && c.backendUnreachable,
             refreshing: direct
-                ? _awaiting.contains(readId)
+                ? _awaiting.contains(id)
                 : _swarmReadsAtReturn != null &&
                       c.stateReads <= _swarmReadsAtReturn!,
             connected: direct ? connected : null,
@@ -1461,15 +509,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         (agentsOnly && person != null
             ? "${person.shownName}'s computer"
             : 'Unavailable machine');
-    final subscriptions = _subscriptions(
-      id,
-      reading: reading,
-      readingDim: dim,
-      readingAt: readingAt,
-      now: now,
-    );
-    final accounts = subscriptions.accounts, allowed = subscriptions.engines;
-    final paused = reading?['paused'] == true;
+    final paused = shared?['paused'] == true;
     final removal = shared?['removal'];
     final cleaning =
         removal is Map && superTabMap(removal)['state'] == 'cleaning';
@@ -1541,46 +581,27 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         }
       }
     }
-    final line = _teammatesLine(shared, team, contributor);
-    // A Team account signed in but not joined (#3215): this Mac's own person reads why, and Retry.
-    final join = _teamJoin;
-    final joinLine =
-        line != null &&
-            team == null &&
-            (shared?['teamWork'] as Map?)?['code'] == 'TEAM_ACCOUNT_JOINING' &&
-            contributor == c.accountId &&
-            app != null &&
-            app.stateOf(id)?.isLocalMachine == true &&
-            join != null
-        ? superTabTeamJoinLine(join)
-        : null;
-    final problem = joinLine ?? line;
     return _MachineView(
       apiModels: apiModels,
       localModels: localModels,
       id: id,
       name: name,
-      problem: problem,
-      history: superTabMachineHistory(shared, snapshot.people),
-      retryJoin: joinLine != null,
       owner: person,
       contributor: contributor,
       shared: shared,
       agents: agents,
       status: status,
       readingAt: readingAt,
-      arrived: age != null && age < const Duration(milliseconds: 1200),
       paused: paused,
       cleaning: cleaning,
       dim: dim,
       details: details,
       resources: value,
-      accounts: accounts,
-      engines: allowed,
-      allowances: subscriptions.allowances,
-      subscriptionsAside: subscriptions.aside,
-      // What it can reach, from the Mac's own entry, which holds its Team account's too (#3047).
-      access: SuperTabAccessEntry.listOf(shared),
+      // The engines it was added with, as Add machine sent them.
+      engines: (shared?['engines'] as List?)
+          ?.whereType<String>()
+          .where(_swarmEngines.contains)
+          .toList(),
       // What the line leaves out, for hover, focus and a screen reader: whose machine it is and its hardware,
       // after its state when that is not online. Never an age. Only current readings are included.
       tip: [
@@ -1598,34 +619,11 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     );
   }
 
-  /// Why teammates' agents cannot run on this row's computer, in its one line; null when they can, when nobody
-  /// else starts work in this Swarm, or when the row already reads offline: the computer's own silence, or, for
-  /// anyone but the Mac's owner, its Harness Team account's. A Mac with a team account answers for that account.
-  String? _teammatesLine(
-    Map<String, dynamic>? shared,
-    Map<String, dynamic>? team,
-    String? contributor,
-  ) {
-    if (c.snapshot?.hasTeammates != true) return null;
-    final work = (team ?? shared)?['teamWork'];
-    if (work is! Map || work['allowed'] != false) return null;
-    final code = work['code'];
-    if (code == 'MACHINE_OFFLINE' &&
-        (team == null || contributor != c.accountId)) {
-      return null;
-    }
-    return superTabTeammatesPaused(code);
-  }
-
-  /// Every agent of the Swarm on [machineId]'s row, its Mac's Harness Team account's included: removing the machine
-  /// takes them all with it.
-  List<SuperTabAgent> _agentsOn(String machineId) {
-    final snapshot = c.snapshot;
-    return [
-      for (final a in snapshot?.agents ?? const <SuperTabAgent>[])
-        if (snapshot!.placeOf(a.machineId) == machineId) a,
-    ];
-  }
+  /// Every agent of the Swarm on [machineId]: removing the machine takes them all with it.
+  List<SuperTabAgent> _agentsOn(String machineId) => [
+    for (final a in c.snapshot?.agents ?? const <SuperTabAgent>[])
+      if (a.machineId == machineId) a,
+  ];
 
   String? _removeReason(String machineId) {
     final snapshot = c.snapshot;
@@ -1688,7 +686,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                       preview?.blockedReason ??
                       (preview?.blockedProjectName == null
                           ? null
-                          : 'This machine runs the ${c.snapshot?.coordinatorNameOf(preview!.blockedProjectId ?? '') ?? kDefaultCoordinatorName} of project ${preview!.blockedProjectName}. Delete the project first.');
+                          : 'This machine runs the $kDefaultCoordinatorName of project ${preview!.blockedProjectName}. Delete the project first.');
                   final enabled =
                       permitted &&
                       reason == null &&
@@ -1883,8 +881,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   Future<void> _details(_MachineView v) {
     final id = v.id, name = v.name, person = v.owner, shared = v.shared;
     final contributor = v.contributor, paused = v.paused, dim = v.dim;
-    final details = v.details, value = v.resources, allowed = v.engines;
-    final accounts = v.accounts;
+    final details = v.details, value = v.resources, engines = v.engines;
     return showAppDialog<void>(
       context: context,
       builder: (context) => SuperTabDialogScope(
@@ -1940,22 +937,14 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                 status: details,
                 // Details follow the same freshness rule as the row and its disclosure.
                 resources: dim ? null : value,
-                engines: allowed,
-                accounts: dim ? const [] : accounts,
-                footer: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _MachineProjectsSetting(controller: c, machineId: id),
-                    SuperTabMachineLocalModels(
-                      controller: c,
-                      machineId: id,
-                      now: widget.now,
-                    ),
-                  ],
+                engines: engines,
+                footer: SuperTabMachineLocalModels(
+                  controller: c,
+                  machineId: id,
+                  now: widget.now,
                 ),
               ),
-              // One clear action at the right; the rarer ones quiet at the left (Ken, 2026-10-28).
+              // Its rarer actions, quiet at the left (Ken, 2026-10-28).
               leadingActions: [
                 if (shared != null && contributor == c.accountId)
                   TextButton(
@@ -1968,21 +957,6 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                     style: superTabQuietAction,
                     onPressed: attach,
                     child: const Text('Attach running agent'),
-                  ),
-              ],
-              actions: [
-                if (contributor == c.accountId)
-                  TextButton(
-                    onPressed: () {
-                      Navigator.pop(context);
-                      unawaited(
-                        _settings(
-                          existing: shared ?? {'machineId': id},
-                          view: v,
-                        ),
-                      );
-                    },
-                    child: const Text('Configure'),
                   ),
               ],
             );
@@ -2016,23 +990,18 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       active: true,
       child: _RowHoverRegion(
         child: Material(
-          key: widget.manage ? ValueKey('machines-surface-${view.id}') : null,
-          shape: widget.manage
-              ? RoundedRectangleBorder(
-                  borderRadius: MachinesStyle.radius,
-                  side: _focusedMachineId == view.id
-                      ? BorderSide(color: MachinesStyle.accent, width: 2)
-                      : BorderSide.none,
-                )
-              : null,
-          color: widget.manage && view.owner?.id == c.accountId
+          key: ValueKey('machines-surface-${view.id}'),
+          shape: RoundedRectangleBorder(
+            borderRadius: MachinesStyle.radius,
+            side: _focusedMachineId == view.id
+                ? BorderSide(color: MachinesStyle.accent, width: 2)
+                : BorderSide.none,
+          ),
+          color: view.owner?.id == c.accountId
               ? MachinesStyle.selected
               : selected
               ? grid.AppSurface.selectedFill
               : Colors.transparent,
-          borderRadius: widget.manage
-              ? null
-              : BorderRadius.circular(DesktopChrome.rowRadius),
           clipBehavior: Clip.antiAlias,
           // No chevron (Dee, 2026-10-27): a click expands the machine, and its
           // details are in the right-click menu, or a long press on a touch screen.
@@ -2061,16 +1030,14 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                 focusColor: grid.AppSurface.hoverFill,
                 borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
                 onFocusChange: (focused) {
-                  if (widget.manage) {
-                    if (focused &&
-                        FocusManager.instance.highlightMode ==
-                            FocusHighlightMode.traditional) {
-                      _focusedMachineId = view.id;
-                    } else if (_focusedMachineId == view.id) {
-                      _focusedMachineId = null;
-                    }
-                    _rowBeats[view.id]?.value++;
+                  if (focused &&
+                      FocusManager.instance.highlightMode ==
+                          FocusHighlightMode.traditional) {
+                    _focusedMachineId = view.id;
+                  } else if (_focusedMachineId == view.id) {
+                    _focusedMachineId = null;
                   }
+                  _rowBeats[view.id]?.value++;
                   if (focused &&
                       FocusManager.instance.highlightMode ==
                           FocusHighlightMode.traditional) {
@@ -2081,36 +1048,20 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                 },
                 child: Semantics(
                   expanded: expanded,
-                  child: widget.manage
-                      ? _ManageMachineLine(
-                          view: view,
-                          name:
-                              _manageNames[view.id] ??
-                              superTabMachineName(view.name),
-                          own: view.owner?.id == c.accountId,
-                          local:
-                              widget.app?.stateOf(view.id)?.isLocalMachine ==
-                              true,
-                          now: widget.now(),
-                          port: widget.app
-                              ?.stateOf(view.id)
-                              ?.localEndpoint
-                              ?.wsUri
-                              .port,
-                          onMore: (at) => _menu(view, at),
-                        )
-                      : _MachineLine(
-                          view: view,
-                          onMore: BrowserMenuGuard.inBrowser
-                              ? (at) => _menu(view, at)
-                              : null,
-                          onRetryJoin: view.retryJoin
-                              ? () async {
-                                  await widget.app!.retryTeamJoin();
-                                  await _readTeamJoin();
-                                }
-                              : null,
-                        ),
+                  child: _ManageMachineLine(
+                    view: view,
+                    name:
+                        _manageNames[view.id] ?? superTabMachineName(view.name),
+                    own: view.owner?.id == c.accountId,
+                    local: widget.app?.stateOf(view.id)?.isLocalMachine == true,
+                    now: widget.now(),
+                    port: widget.app
+                        ?.stateOf(view.id)
+                        ?.localEndpoint
+                        ?.wsUri
+                        .port,
+                    onMore: (at) => _menu(view, at),
+                  ),
                 ),
               ),
             ),
@@ -2132,12 +1083,8 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
               superTabMachineName(view.name),
               view.cleaning
                   ? 'Cleaning up'
-                  : widget.manage
-                  ? _machineStatusGroup(view)
-                        .replaceAll('unknown', 'status unknown')
-                  : superTabMachineStateLabel(view.status),
-              ?view.history,
-              ?view.problem,
+                  : _machineStatusGroup(view)
+                        .replaceAll('unknown', 'status unknown'),
               if (view.tip.isNotEmpty) view.tip,
             ].join(', '),
             child: Tooltip(
@@ -2208,15 +1155,6 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       if (view.status == SuperTabMachineStatus.unknown) {
         return HarnessActivity.unknown;
       }
-    }
-    if (c.snapshot?.conversations.any(
-          (group) =>
-              !group.closed &&
-              group.assignment?['agentId'] == agent.id &&
-              superTabWorkWaits(group.assignment?['status']),
-        ) ==
-        true) {
-      return HarnessActivity.needsInput;
     }
     return native ?? HarnessActivity.unknown;
   }
@@ -2315,23 +1253,24 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     );
   }
 
-  /// [view]'s agents under Working, Waiting, Idle and Kept (closed), each by name; a group with none is left out.
+  /// [view]'s agents under Working, Waiting, Idle and Closed, each by name; a group with none is left out.
   List<Widget> _agentGroups(_MachineView view) {
     final groups = <String, List<(SuperTabAgent, HarnessActivity)>>{
       'Working': [],
       'Waiting': [],
       'Idle': [],
-      'Kept (closed)': [],
+      'Closed': [],
     };
     for (final agent in view.agents) {
       final activity = _activity(view, agent);
       groups[switch (activity) {
             HarnessActivity.working || HarnessActivity.starting => 'Working',
             HarnessActivity.needsInput || HarnessActivity.failed => 'Waiting',
-            // A kept agent whose session is closed on a machine that is
-            // there: the Swarm removes the others, so this one says so.
-            _ when agent.keptClosed && activity != HarnessActivity.offline =>
-              'Kept (closed)',
+            // Its session is gone on a machine that is there: never Idle.
+            _
+                when agent.downSince != null &&
+                    activity != HarnessActivity.offline =>
+              'Closed',
             _ => 'Idle',
           }]!
           .add((agent, activity));
@@ -2462,7 +1401,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
 
   /// Keep offline machines in the same list and on the same columns.
   List<_MachineView> _sortedViews() {
-    final views = [for (final id in _rowIds) _view(id)];
+    final views = [for (final id in _ids) _view(id)];
     String key(_MachineView view) =>
         superTabMachineName(view.name).toLowerCase();
     int rank(_MachineView view) => switch (view.status) {
@@ -2492,12 +1431,12 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     final unknown = <_MachineView>[];
     final offline = <_MachineView>[];
     for (final view in views) {
-      if (widget.manage && !_matchesMachine(view)) continue;
+      if (!_matchesMachine(view)) continue;
       if (view.owner?.id != null && view.owner?.id == c.accountId) {
         yours.add(view);
       } else {
         (switch (view.status) {
-          SuperTabMachineStatus.late when widget.manage => asleep,
+          SuperTabMachineStatus.late => asleep,
           SuperTabMachineStatus.unknown => unknown,
           SuperTabMachineStatus.offline => offline,
           _ => online,
@@ -2519,25 +1458,10 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     header: true,
     container: true,
     child: Padding(
-      padding: widget.manage
-          ? MachinesStyle.groupInset
-          : const EdgeInsets.fromLTRB(
-              grid.AppDesktop.controlGap,
-              grid.AppDesktop.controlGap,
-              grid.AppDesktop.controlGap,
-              grid.AppDesktop.listRowGap,
-            ),
+      padding: MachinesStyle.groupInset,
       child: Text(
-        widget.manage
-            ? (key == 'yours'
-                  ? 'YOUR MACHINE'
-                  : '${label.toUpperCase()} · $count')
-            : '$label · $count',
-        style: widget.manage
-            ? MachinesStyle.small(heading: true)
-            : DesktopChrome.metadata().copyWith(
-                fontWeight: grid.AppFont.semibold,
-              ),
+        key == 'yours' ? 'YOUR MACHINE' : '${label.toUpperCase()} · $count',
+        style: MachinesStyle.small(heading: true),
       ),
     ),
   );
@@ -2545,13 +1469,13 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   /// Before the Swarm is read, a loading list; a Swarm that cannot be read and holds no machine says so with Retry,
   /// even when an earlier read found none; a read Swarm with none, the empty note (task #3801). Null when there are
   /// machines to list.
-  Widget? _stateNote(EdgeInsets emptyPadding) {
+  Widget? _stateNote() {
     if (_ids.isNotEmpty) return null;
     if (c.backendUnreachable) {
       return Padding(
         key: const ValueKey('super-machines-error'),
-        padding: emptyPadding,
-        // Wraps: in a narrow sidebar with large text, Retry goes under the sentence rather than squeezing it.
+        padding: MachinesStyle.headerInset,
+        // Wraps: in a narrow window with large text, Retry goes under the sentence rather than squeezing it.
         child: Wrap(
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
@@ -2572,20 +1496,18 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       return SkeletonList(
         key: const ValueKey('super-machines-loading'),
         rows: 3,
-        itemBuilder: widget.manage
-            ? (_, i) => SizedBox(
-                key: ValueKey('machines-loading-row-$i'),
-                height: 56,
-                child: const SkeletonListTile(
-                  leading: 8,
-                  padding: MachinesStyle.rowInset,
-                ),
-              )
-            : null,
+        itemBuilder: (_, i) => SizedBox(
+          key: ValueKey('machines-loading-row-$i'),
+          height: 56,
+          child: const SkeletonListTile(
+            leading: 8,
+            padding: MachinesStyle.rowInset,
+          ),
+        ),
       );
     }
     return Padding(
-      padding: emptyPadding,
+      padding: MachinesStyle.headerInset,
       child: Text(
         "Add a machine for this Swarm's agents to use.",
         style: DesktopChrome.metadata(),
@@ -2628,56 +1550,10 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
 
   @override
   Widget build(BuildContext context) {
-    final failingSince = c.backendUnreachable ? c.unreachableSince : null;
     final add = c.canWrite && widget.app != null
-        ? () => unawaited(
-            showAddComputers(
-              context,
-              c,
-              widget.app!,
-              readResources: widget.readLocal,
-            ),
-          )
+        ? () => unawaited(showAddComputers(context, c, widget.app!))
         : null;
-    if (widget.manage) return _manageScreen(add);
-    final children = [
-      SuperTabSectionHeading(
-        'Machines',
-        onAdd: add,
-        addTooltip: 'Add machine',
-        // Only a Swarm that can't be read is news; a live one says nothing.
-        trailing: c.backendUnreachable
-            ? SuperTabMachinesPill(
-                connecting: c.stillConnecting,
-                reconnectingFor: failingSince == null
-                    ? Duration.zero
-                    : widget.now().difference(failingSince),
-              )
-            : null,
-        endInset: widget.embedded ? 0 : 12,
-        collapsed: widget.onToggleCollapsed == null ? null : widget.collapsed,
-        onToggleCollapsed: widget.onToggleCollapsed,
-      ),
-      if (!widget.collapsed) ...[
-        if (_ids.isEmpty)
-          _stateNote(const EdgeInsets.fromLTRB(36, 8, 16, 16))!
-        else
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            mainAxisSize: MainAxisSize.min,
-            children: _machines(),
-          ),
-        if (widget.app case final app?)
-          PersonalMachineRows(controller: c, app: app),
-      ],
-    ];
-    return widget.embedded
-        ? Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            mainAxisSize: MainAxisSize.min,
-            children: children,
-          )
-        : LaidOutListView(children: children);
+    return _manageScreen(add);
   }
 }
 
@@ -2725,7 +1601,7 @@ class _RemovalPreview {
       final agent = superTabMap(item);
       final name = agent['name'], projectName = agent['projectName'];
       final task = agent['task'];
-      // A Swarm-wide Buddy has no project: the server sends an empty name.
+      // An agent of no project: the server sends an empty name.
       if (name is! String ||
           name.isEmpty ||
           projectName is! String ||
@@ -2784,38 +1660,18 @@ class _MachineView {
     required this.agents,
     required this.status,
     required this.readingAt,
-    required this.arrived,
     required this.paused,
     required this.cleaning,
     required this.dim,
     required this.details,
     required this.resources,
-    required this.accounts,
     required this.engines,
-    required this.allowances,
-    required this.subscriptionsAside,
     required this.tip,
-    this.problem,
-    this.history,
-    this.retryJoin = false,
     this.apiModels = const [],
     this.localModels = const [],
-    this.access = const [],
   });
 
-  /// What the machine can reach, by account (#3047): the row's last section, for every member who sees it.
-  final List<SuperTabAccessEntry> access;
-
   final String id, name, details, tip;
-
-  /// The row's button retries this Mac's join of its Team account (#3215), its own person looking.
-  final bool retryJoin;
-
-  /// Its one line when teammates' agents cannot run there ([superTabTeammatesPaused]); null otherwise.
-  final String? problem;
-
-  /// Who had this computer's row before (superTabMachineHistory); null for a row never moved.
-  final String? history;
 
   final SuperTabPerson? owner;
   final String? contributor;
@@ -2825,19 +1681,12 @@ class _MachineView {
 
   /// When the reading shown was taken, and whether that is just now (the dot pings once).
   final DateTime? readingAt;
-  final bool arrived, paused, cleaning;
+  final bool paused, cleaning;
 
   /// Offline, unknown or refreshing: its numbers are old.
   final bool dim;
   final MachineResources? resources;
-  final List<Map<String, Object?>> accounts;
   final List<String>? engines;
-
-  /// What the row's chips show, Claude first; empty while offline or out of reach.
-  final List<_Allowance> allowances;
-
-  /// Beside the Subscriptions heading: `left now`, or `offline, read 2 h ago` over the last figures.
-  final String subscriptionsAside;
 
   /// What this machine offers the Swarm on its grid, as its reading says: the APIs its person shares, and its own
   /// models running for the Swarm (docs/plans/2026-10-23-swarm-local-models.md). Empty while the add-on is off.
@@ -2847,359 +1696,6 @@ class _MachineView {
 /// A model a machine offers its Swarm: its short name on the row, the whole of it on hover.
 /// [starting]: run or shared here, not yet listed by the Swarm's grid (CLI `superTabs/machines.ts`).
 typedef _ServedModel = ({String name, String tip, bool starting});
-
-/// An allowance's note, from its detail lines: the window that stops work first, and its reset. Another machine's
-/// lines put that window first (`5-hour: 44% remaining · resets in 2h 10m`); this computer's name it
-/// (`Limiting window: 5-hour`) and list each window as `5-hour — 44% remaining · resets in 2h 10m`.
-String? superMachineAllowanceNote(Iterable<String> lines) {
-  const limiting = 'Limiting window: ', resets = ' · resets in ';
-  final named = lines
-      .where((line) => line.startsWith(limiting))
-      .firstOrNull
-      ?.substring(limiting.length);
-  final String window;
-  final String? line;
-  if (named != null) {
-    window = named;
-    line = lines.where((l) => l.startsWith('$named — ')).firstOrNull;
-  } else {
-    final first = lines.firstOrNull;
-    if (first == null || !first.contains(': ')) return null;
-    window = first.substring(0, first.indexOf(': '));
-    line = first;
-  }
-  return [
-    '$window limit',
-    if (line != null && line.contains(resets))
-      line.substring(line.indexOf(resets) + 3),
-  ].join(' · ');
-}
-
-/// A machine row's line when teammates' agents cannot run there, from the Swarm's refusal code (backend
-/// superTabs/machines.ts `teamWorkRefusal`); null for a code this build does not know.
-String? superTabTeammatesPaused(Object? code) {
-  final why = switch (code) {
-    'MACHINE_OFFLINE' => 'Harness Team account offline',
-    // Its owner's Harness Team account is on it and joins on the Mac's next poll (backend machines.ts, #3122).
-    'TEAM_ACCOUNT_JOINING' => 'Harness Team is joining',
-    'PRIVACY_UNCHECKED' => 'privacy not checked yet',
-    'PRIVACY_CHECK_FAILED' => 'privacy check failed',
-    'PRIVACY_CHECK_STALE' => 'privacy check out of date',
-    _ => null,
-  };
-  return why == null ? null : "Teammates' agents paused: $why";
-}
-
-/// This Mac's own row while its Team account, signed in, has not joined (#3215): the last refusal or error of its join, or
-/// that this Mac's Swarm work is not running; null while the join simply runs.
-String? superTabTeamJoinLine(({String? failure, bool hostRunning}) join) {
-  final failure = join.failure?.trim().replaceFirst(RegExp(r'[.]+$'), '');
-  final why = failure != null && failure.isNotEmpty
-      ? failure
-      : join.hostRunning
-      ? null
-      : 'this computer is not adding it';
-  return why == null
-      ? null
-      : "Teammates' agents paused: Harness Team could not join: $why";
-}
-
-/// Who had this computer's row before the account signed in on it now, and until when: "Was kelvin until 5 Nov"
-/// (backend machines.ts previousOwner, #3122). Null for a row never moved, or one whose person is not in the Swarm.
-String? superTabMachineHistory(
-  Map<String, dynamic>? pool,
-  List<SuperTabPerson> people, {
-  DateTime? now,
-}) {
-  final previous = pool?['previousOwner'];
-  if (previous is! Map) return null;
-  final person = people.where((p) => p.id == previous['personId']).firstOrNull;
-  final until = DateTime.tryParse(previous['until']?.toString() ?? '');
-  if (person == null || until == null) return null;
-  const months = [
-    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', //
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
-  ];
-  final local = until.toLocal();
-  final year = local.year == (now ?? DateTime.now()).year
-      ? ''
-      : ' ${local.year}';
-  return 'Was ${person.shownName} until ${local.day} ${months[local.month - 1]}$year';
-}
-
-/// One engine's allowance on a machine: its mark and remaining share on the row, its windows on hover.
-class _Allowance {
-  const _Allowance({
-    required this.engine,
-    required this.name,
-    required this.figure,
-    required this.left,
-    required this.detail,
-    this.note,
-    this.stale = false,
-    this.struck,
-    this.notice,
-  });
-
-  final String engine, name, figure, detail;
-
-  /// The window that stops work first and when it resets (`5-hour limit · resets in 2h 10m`), under the figure; or
-  /// why there is no figure ([superMachineAllowanceReason]).
-  final String? note;
-
-  /// The share left, 0–100; null when there is no figure.
-  final double? left;
-
-  /// Why new work does not go to this engine here (the server suspended it after failed starts), shown on hover
-  /// with its name struck through; null when it takes work.
-  final String? struck;
-
-  /// A fact said on hover, never struck: no quota left until it resets. Quota makes no machine unusable.
-  final String? notice;
-
-  /// The last figure an offline machine read: shown muted, never as now.
-  final bool stale;
-
-  /// The tone of what is left: amber below 20%, red below 10%; none for an old or missing figure.
-  Color? get tone => left == null || stale
-      ? null
-      : left! < 10
-      ? grid.AppPalette.usageCritical
-      : left! < 20
-      ? grid.AppPalette.usageLow
-      : null;
-
-  /// The figure's ink: its tone, muted when old or missing, otherwise the reading's own ink.
-  Color get ink => statusLineInkOnSurface(
-    tone ??
-        (left == null || stale
-            ? DesktopChrome.muted
-            : DesktopChrome.foreground),
-    DesktopChrome.surface,
-  );
-}
-
-/// What hovering an engine with no quota left on a machine says: a fact, never a refusal.
-const _noQuotaLeft = 'No quota left until it resets.';
-
-/// The same leading icon/name and trailing status column as projects.
-/// The machine's projects setting (machine_projects.dart) on this Swarm's state: its owner changes it with
-/// `machine.projects` at once, as Pause does. A Mac's Harness Team account follows its Mac, so it has none of its own,
-/// and a Swarm with one project and no choice made has nothing to choose.
-class _MachineProjectsSetting extends StatefulWidget {
-  const _MachineProjectsSetting({
-    required this.controller,
-    required this.machineId,
-  });
-
-  final SuperTabController controller;
-  final String machineId;
-
-  @override
-  State<_MachineProjectsSetting> createState() =>
-      _MachineProjectsSettingState();
-}
-
-class _MachineProjectsSettingState extends State<_MachineProjectsSetting> {
-  bool _busy = false;
-
-  Future<void> _send(List<String>? projectIds) async {
-    setState(() => _busy = true);
-    try {
-      await widget.controller.command({
-        'type': 'machine.projects',
-        'machineId': widget.machineId,
-        'projectIds': projectIds,
-      });
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final c = widget.controller, snapshot = c.snapshot;
-    final pool = snapshot?.machines
-        .where((m) => m['machineId'] == widget.machineId)
-        .firstOrNull;
-    if (snapshot == null || pool == null || pool['hostMachineId'] is String) {
-      return const SizedBox.shrink();
-    }
-    final kept = pool['projects'] is List
-        ? [
-            for (final id in pool['projects'] as List)
-              if (id is String) id,
-          ]
-        : null;
-    final projects = [
-      for (final p in snapshot.projects) (id: p.id, name: p.name),
-    ];
-    if (kept == null && projects.length < 2) return const SizedBox.shrink();
-    return Padding(
-      padding: const EdgeInsets.only(top: grid.AppDesktop.groupGap),
-      child: SuperTabMachineProjects(
-        projects: projects,
-        kept: kept,
-        editable: pool['contributorId'] == c.accountId && c.canWrite,
-        busy: _busy,
-        onChanged: (ids) => unawaited(_send(ids)),
-      ),
-    );
-  }
-}
-
-class _MachineLine extends StatelessWidget {
-  const _MachineLine({required this.view, this.onRetryJoin, this.onMore});
-
-  final _MachineView view;
-
-  /// In a browser, opens the machine's menu at a point until it closes: the ⋯ that needs no right-click.
-  final Future<void> Function(Offset at)? onMore;
-
-  /// This Mac's row, its Team account not joined: Retry under the paused line.
-  final VoidCallback? onRetryJoin;
-
-  @override
-  Widget build(BuildContext context) {
-    final muted =
-        view.status == SuperTabMachineStatus.offline ||
-        view.status == SuperTabMachineStatus.unknown;
-    final name = superTabMachineName(view.name);
-    final owner = view.owner;
-    return ConstrainedBox(
-      constraints: const BoxConstraints(minHeight: 36),
-      child: Row(
-        children: [
-          const SizedBox(width: 4),
-          // A machine leads with what it is, a MacBook, a Mac Studio, beside
-          // the sidebar's "# project" channels; dimmed with its name.
-          SizedBox(
-            width: 32,
-            child: Center(
-              child: SuperTabMachineIcon(
-                deviceType: view.resources?.deviceType,
-                color: muted ? DesktopChrome.muted : DesktopChrome.foreground,
-              ),
-            ),
-          ),
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  final style = DesktopChrome.control(
-                    color: muted
-                        ? DesktopChrome.muted
-                        : DesktopChrome.foreground,
-                  );
-                  final text = Text(
-                    name,
-                    key: ValueKey('super-machine-name-${view.id}'),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: style,
-                  );
-                  final painter = TextPainter(
-                    text: TextSpan(text: name, style: style),
-                    textDirection: Directionality.of(context),
-                    textScaler: MediaQuery.textScalerOf(context),
-                    maxLines: 1,
-                  )..layout(maxWidth: constraints.maxWidth);
-                  final truncated = painter.didExceedMaxLines;
-                  painter.dispose();
-                  final title = truncated
-                      ? Tooltip(
-                          message: [
-                            name,
-                            if (view.tip.isNotEmpty) view.tip,
-                          ].join('\n'),
-                          excludeFromSemantics: true,
-                          child: text,
-                        )
-                      : text;
-                  final problem = view.problem, history = view.history;
-                  if (problem == null && history == null) {
-                    return title;
-                  }
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      title,
-                      if (history != null)
-                        Text(
-                          history,
-                          key: ValueKey('super-machine-history-${view.id}'),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: DesktopChrome.metadata(),
-                        ),
-                      if (problem != null)
-                        Text(
-                          problem,
-                          key: ValueKey('super-machine-problem-${view.id}'),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: DesktopChrome.metadata(),
-                        ),
-                      // The design system's secondary action, as themed (desktop-design-system.md): no local style.
-                      if (problem != null && onRetryJoin != null)
-                        Padding(
-                          padding: const EdgeInsets.only(
-                            top: grid.AppDesktop.controlGap,
-                          ),
-                          child: OutlinedButton(
-                            key: ValueKey(
-                              'super-machine-team-retry-${view.id}',
-                            ),
-                            onPressed: onRetryJoin,
-                            child: const Text('Retry'),
-                          ),
-                        ),
-                    ],
-                  );
-                },
-              ),
-            ),
-          ),
-          if (owner != null)
-            Padding(
-              padding: const EdgeInsets.only(left: 6),
-              child: Tooltip(
-                message: 'Owned by ${owner.shownName}',
-                child: SuperTabAvatar.person(owner, size: 20),
-              ),
-            ),
-          if (view.cleaning)
-            Padding(
-              padding: const EdgeInsets.only(left: 6),
-              child: Text('Cleaning up', style: DesktopChrome.metadata()),
-            ),
-          if (onMore case final open?)
-            _MachineMore(
-              key: ValueKey('super-machine-more-${view.id}'),
-              onOpen: open,
-            ),
-          SizedBox(
-            width: 32,
-            child: Center(
-              child: KeyedSubtree(
-                key: ValueKey(
-                  'super-machine-state-${view.id}-${view.status.name}',
-                ),
-                child: SuperTabMachineDot(
-                  status: view.status,
-                  readingAt: view.readingAt,
-                  arrived: view.arrived,
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
 
 /// The ⋯ on a machine row. It takes no room until the row is pointed at or the button has focus, and stays in the
 /// focus order the whole time, so a key can reach it.
@@ -3325,7 +1821,7 @@ class _MachineReadings extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Offline or out of reach, only Subscriptions shows: the last figures, said to be old.
+    // Offline or out of reach, no hardware shows: its figures are old.
     final resources = view.dim ? null : view.resources;
     final memoryTotal = resources?.memoryTotalBytes;
     final memoryFree = memoryTotal == null || resources?.memoryUsedBytes == null
@@ -3376,45 +1872,18 @@ class _MachineReadings extends StatelessWidget {
           meaning: 'Storage available',
         ),
     ];
-    final sections = <(String, String?, Widget Function(double))>[
+    final sections = <(String, Widget Function(double))>[
       if (hardware.isNotEmpty)
         (
           'Hardware',
-          null,
           (width) => _grid(width, width >= 300 ? 4 : 2, [
             for (final reading in hardware) _hardware(reading),
           ]),
         ),
-      (
-        'Subscriptions',
-        view.allowances.isEmpty
-            ? (view.status == SuperTabMachineStatus.offline ? 'offline' : null)
-            : view.subscriptionsAside,
-        (width) => view.allowances.isEmpty
-            ? Text(
-                // Only a machine read just now is known to have none; one offline, out of reach or being read again
-                // may have an allowance it cannot report at this moment.
-                switch (view.status) {
-                  SuperTabMachineStatus.live || SuperTabMachineStatus.late =>
-                    'No Claude or Codex allowance reported for this machine',
-                  SuperTabMachineStatus.offline => kAllowanceNotReadOffline,
-                  _ => kAllowanceNotRead,
-                },
-                style: DesktopChrome.text(
-                  size: 11,
-                  height: 1.3,
-                  color: DesktopChrome.muted,
-                ),
-              )
-            : _grid(width, width >= 260 ? 2 : 1, [
-                for (final allowance in view.allowances) _allowance(allowance),
-              ]),
-      ),
       if (!view.dim &&
           (view.apiModels.isNotEmpty || view.localModels.isNotEmpty))
         (
           'Models for the Swarm',
-          null,
           (_) => Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -3427,18 +1896,9 @@ class _MachineReadings extends StatelessWidget {
             ],
           ),
         ),
-      // Last, by account (#3047, design section 6).
-      if (view.access.isNotEmpty)
-        (
-          'Access',
-          null,
-          (_) => SuperTabMachineAccessLines(
-            key: ValueKey('super-machine-access-${view.id}'),
-            entries: view.access,
-            ownerName: view.owner?.shownName,
-          ),
-        ),
     ];
+    // Offline or out of reach with no models: nothing current to show.
+    if (sections.isEmpty) return const SizedBox.shrink();
     return Padding(
       key: ValueKey('super-machine-readings-${view.id}'),
       padding: const EdgeInsets.fromLTRB(10, 4, 10, 12),
@@ -3460,24 +1920,10 @@ class _MachineReadings extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  for (final (index, (title, aside, body))
-                      in sections.indexed) ...[
+                  for (final (index, (title, body)) in sections.indexed) ...[
                     if (index > 0) const SizedBox(height: 14),
-                    Text.rich(
-                      TextSpan(
-                        text: title,
-                        children: [
-                          if (aside != null)
-                            TextSpan(
-                              text: ' · $aside',
-                              style: DesktopChrome.text(
-                                size: 11,
-                                height: 1.3,
-                                color: DesktopChrome.muted,
-                              ),
-                            ),
-                        ],
-                      ),
+                    Text(
+                      title,
                       style: DesktopChrome.text(
                         size: 11,
                         medium: true,
@@ -3577,92 +2023,6 @@ class _MachineReadings extends StatelessWidget {
               ),
             ),
           ],
-        ),
-      ),
-    );
-  }
-
-  Widget _allowance(_Allowance allowance) {
-    final left = allowance.left;
-    final struck = allowance.struck;
-    final said = struck ?? allowance.notice;
-    return Tooltip(
-      message: [
-        ?said,
-        if (allowance.detail.isNotEmpty) allowance.detail,
-      ].join('\n\n'),
-      child: Semantics(
-        label:
-            (left == null
-                ? '${allowance.name}: ${allowance.note}'
-                : '${allowance.name} ${allowance.figure} remaining') +
-            (said == null ? '' : '. $said'),
-        excludeSemantics: true,
-        child: Container(
-          key: ValueKey(
-            'super-machine-allowance-${view.id}-${allowance.engine}',
-          ),
-          padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
-          decoration: BoxDecoration(
-            color: DesktopChrome.foreground.withValues(alpha: .045),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  EngineMark(engine: allowance.engine, size: 14),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      allowance.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: DesktopChrome.text(size: 12, height: 1.3).copyWith(
-                        decoration: struck == null
-                            ? null
-                            : TextDecoration.lineThrough,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    allowance.figure,
-                    key: ValueKey(
-                      'super-machine-figure-${view.id}-${allowance.engine}',
-                    ),
-                    style:
-                        DesktopChrome.text(
-                          size: 12,
-                          medium: true,
-                          height: 1.3,
-                          color: allowance.ink,
-                        ).copyWith(
-                          fontWeight: FontWeight.w600,
-                          fontFeatures: const [FontFeature.tabularFigures()],
-                        ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 6),
-              // The bar is what is left, as the figure is; none without a figure.
-              if (left != null) _Meter(share: left / 100, tone: allowance.tone),
-              if (allowance.note case final note?) ...[
-                const SizedBox(height: 5),
-                Text(
-                  note,
-                  maxLines: left == null ? 2 : 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: DesktopChrome.text(
-                    size: 10,
-                    height: 1.2,
-                    color: DesktopChrome.muted,
-                  ),
-                ),
-              ],
-            ],
-          ),
         ),
       ),
     );

@@ -1,32 +1,10 @@
 /**
  * Steps inside a task (design docs/plans/2026-11-02-task-steps-design.md). A step is a linked group (`reviewOf` names its
- * task) with a name the project's instructions give: it keeps its own assignment, lease, attempts and costs, and readers
- * show it inside its task. Nothing here reads a step's name: which steps a task has is the instructions' to say.
+ * task) with a name the project's instructions gave. Swarm v4 opens none (2026-11-10); a Swarm from before still stores some,
+ * which the task readers that remain tell apart, and which end with their task, until they go with the task records (slice S13).
  */
 import { agentDisplayName } from './agentNames.js'
 import { activeWork, finishWorker, type Author, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
-
-/** Whether [group] is a step of a task: any linked group, named or not. Ken, 2026-11-02: a PM that opened "Test: PR #2514"
- *  the old way, a minute after saving the steps workflow, still heard every Tester post; what reaches the PM must not rest on
- *  an agent remembering the workflow. */
-export const isStep = (group: Pick<Conversation, 'reviewOf'>): boolean => !!group.reviewOf
-
-/** A step's name: the one it was opened with, else its title (a linked group opened without one). */
-export const stepName = (group: Pick<Conversation, 'step' | 'title'>): string => group.step ?? group.title
-
-/** Whether [step]'s task is done or cancelled, as far as [state] loaded it. Only then may the archive pass take a step: one
- *  archived under an open task refuses the next round, and that re-check fails silently. A task not loaded has not ended. */
-export const taskEnded = (state: SuperTabState, step: Pick<Conversation, 'reviewOf'>): boolean =>
-  ['done', 'cancelled'].includes(state.conversations.find(c => c.id === step.reviewOf)?.assignment?.status ?? '')
-
-/** The most steps a task lists (Conversation.stepIds): production's most was 14 (2026-11-05). */
-const STEPS_LISTED = 200
-/** [task] lists its new step [id], so a new head of its pull request re-derives the step's checks even once it is dormant
- *  (#3394), however the step opened (conversation.create, or a Ready's review steps). A task from before lists none until its
- *  PR watch looks its dormant steps up (review of #3218, round 3): listing only this one would hide those. */
-export function listStep(task: Conversation, id: string): void {
-  if (task.stepIds) task.stepIds = [...task.stepIds, id].slice(-STEPS_LISTED)
-}
 
 /** The steps of task [taskId], in creation order. */
 export const stepsOf = (state: SuperTabState, taskId: string): Conversation[] =>
@@ -52,7 +30,7 @@ export function endSteps(state: SuperTabState, task: Conversation, reason: strin
 
 /** The row each step endSteps cancelled keeps, in that step, for the agent whose work ended: [reason], as [author], or as that
  *  agent where none is given (a project with no Lead). One whose agent or its contributor has left the Swarm reaches nobody: a delivery to it would
- *  throw, and the archive pass that wrote it could then never archive its task. With no author either, there is no row. */
+ *  throw. With no author either, there is no row. */
 export function stepEndedRows(state: SuperTabState, cancelled: Conversation[], reason: string, author: Author | null, id: (step: Conversation) => string): MessageDraft[] {
   return cancelled.flatMap(step => {
     // agent()'s own rule, without its throw: its contributor still here, at the generation it was shared under.
@@ -61,35 +39,4 @@ export function stepEndedRows(state: SuperTabState, cancelled: Conversation[], r
     const by: Author | null = author ?? (agent ? { kind: 'agent', id: agent.id, name: agent.name, displayName: agentDisplayName(state.agents, agent.id), membershipGeneration: agent.membershipGeneration } : null)
     return by ? [{ id: id(step), conversationId: step.id, author: by, text: reason, replyTo: null, recipients: agent ? [agent.id] : [], source: { kind: 'system' } }] : []
   })
-}
-
-/** Whether a step may sleep, given its task's row as the sweep read it (null: gone). A step sleeps once its task is
- *  archived, never on its own clock nor with a task that is only dormant: a dormant step drops out of the Swarm read with
- *  its verdict, and one asleep under a done task was not loaded when that task was archived later, so it stayed open in an
- *  archived task (final review, minor 5). */
-export const stepSleeps = (task: { archived: boolean; dormant: boolean } | null): boolean => !task || task.archived
-/** The agent that owns [task]: its assignee while that agent is in the Swarm, its own work done or not, else null (the
- *  coordinator's then). Ken, 2026-11-02: a Builder set its task done before its Tester's verdict, and the verdict reached
- *  the PM; the verdict is still the Builder's to act on. */
-export function ownerOf(state: SuperTabState, task: Conversation): string | null {
-  const agentId = task.assignment?.agentId
-  return agentId && state.agents.some(a => a.id === agentId) ? agentId : null
-}
-
-/** The task's owner for [step] (ownerOf its task), or null. */
-export function taskOwner(state: SuperTabState, step: Conversation): string | null {
-  const task = isStep(step) ? state.conversations.find(c => c.id === step.reviewOf) : undefined
-  return task ? ownerOf(state, task) : null
-}
-
-/** Whether [agentId] has held steps only, never a task, in the groups loaded, and a task one of them checks has not ended: a
- *  Reviewer or Tester the instructions keep while the work it checked is open, whatever its role is called, so its idle time
- *  is no news for the coordinator. Once each of those tasks is done or cancelled it is idle as any agent is, whether or not
- *  the task is archived yet (Diego, 2026-11-02: one sat unseen under a finished, unarchived task, holding a slot and quota).
- *  Open tasks are always loaded; a missing parent can be dormant and must not hold idle handling. Unlike taskEnded's
- *  archive guard, this decision needs no proof that an absent task ended (Diego, 2026-11-06). */
-export const checksOpenWork = (state: SuperTabState, groups: readonly Conversation[], agentId: string): boolean => {
-  const held = groups.filter(g => g.assignment?.agentId === agentId)
-  return held.length > 0 && held.every(isStep) && held.some(step => state.conversations.some(task =>
-    task.id === step.reviewOf && !['done', 'cancelled'].includes(task.assignment?.status ?? '')))
 }

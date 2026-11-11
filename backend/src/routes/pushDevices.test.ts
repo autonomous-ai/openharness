@@ -40,14 +40,6 @@ describe('push device routes (task #2905)', () => {
     expect((await post('/api/push-devices', { platform: 'android', token: fcm })).statusCode).toBe(200)
   })
 
-  it('refuses a team session: a teammate\'s work never gets the person\'s notices', async () => {
-    m.auth.mockResolvedValue({ ...user, harnessSessionId: 's', harnessSessionKind: 'team' })
-    const r = await post('/api/push-devices', { platform: 'ios', token })
-    expect(r.statusCode).toBe(403)
-    expect(r.json().error.code).toBe('TEAM_SESSION_LIMITED')
-    expect(m.register).not.toHaveBeenCalled()
-  })
-
   it('refuses another platform, a token with other characters, and one too long', async () => {
     for (const payload of [{ platform: 'web', token }, { platform: 'ios', token: 'ab cd' }, { platform: 'ios', token: 'a/b' },
       { platform: 'ios', token: 'a'.repeat(4097) }, { platform: 'ios', token: '' }, { platform: 'ios', token, extra: 1 }]) {

@@ -126,7 +126,6 @@ void main() {
               controller: c,
               app: fixture.app,
               onAddAgent: (_) {},
-              manage: true,
               ticks: false,
             ),
           ),

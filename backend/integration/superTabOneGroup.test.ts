@@ -17,18 +17,17 @@ import { configureSwarmStamps, swarmTransaction, SwarmCache } from '../src/super
 import { MemoryStamps } from '../src/superTabs/cache.test-support.js'
 import { readDelta } from '../src/superTabs/cachedReads.js'
 import { guardedWrite } from '../src/superTabs/parts/write.js'
-import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import type { Conversation, SuperTabState } from '../src/superTabs/model.js'
-import { buddyChatId } from '../src/superTabs/buddies.js'
 import { storeOldLeads } from '../src/superTabs/leads.test-support.js'
-import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
+import { storeSwarm } from './storedSwarm.test-support.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
+import { storedAssignment } from '../src/superTabs/storedWork.test-support.js'
 import { PROFILE_STAGES, profileEntry, type ProfileEntry } from './bench/profile.js'
 
 // GET /api/super-tabs/:tabId/groups/:conversationId (task #2875). Ken's report of 11-04 17:13 VN: ~1,500 of these in two minutes
-// each read the Swarm's change feeds (SwarmGroup and SwarmProgress by changedAt, SwarmMachine by readAt), 1.33 GB in all.
+// each read the Swarm's whole change feeds (its groups by changedAt, its machines by readAt), 1.33 GB in all.
 // The read cache patches from deltas here, as in production (server.ts, SWARM_CACHE_DELTA=on). A fresh loopback replica set,
 // created here; this suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -104,9 +103,7 @@ async function scene() {
   // Briefs about a task's size, so the change feeds carry what a busy Swarm's do.
   s.edit(state => { for (const c of state.conversations) c.brief = `${c.title}: ${'what to build and why. '.repeat(80)}` })
   const tabId = `tab-${randomUUID()}`
-  await writeLegacySwarm(db, { state: { ...structuredClone(s.state), id: tabId } as SuperTabState, revision: 700 })
-  const report = await migrateSwarm(db, tabId, { now: () => MIGRATED })
-  if (!report.ok) throw new Error(report.error)
+  await storeSwarm(db, { state: { ...structuredClone(s.state), id: tabId } as SuperTabState, revision: 700 }, MIGRATED)
   return { tabId, lead, web, agents, quiet, busy }
 }
 
@@ -156,7 +153,7 @@ async function profiled<T>(run: () => Promise<T>): Promise<{ value: T; rows: Pro
 }
 
 /** The Swarm's change feeds the incident named: a read of groups or progress by changedAt, or of machines by readAt. */
-const FEEDS = /\.(SwarmGroup|SwarmProgress|SwarmMachine)$/
+const FEEDS = /\.(SwarmGroup|SwarmMachine)$/
 function feedReads(rows: ProfileEntry[]): ProfileEntry[] {
   return rows.filter(r => FEEDS.test(r.ns) && r.op !== 'getmore' && (() => {
     const match = JSON.stringify((r.command?.pipeline as Array<{ $match?: unknown }> | undefined)?.[0]?.$match ?? r.command?.filter ?? {})
@@ -180,8 +177,8 @@ const describeRows = (rows: ProfileEntry[]) => rows.filter(r => r.op !== 'getmor
   `  ${r.ns.split('.').at(-1)} ${r.op} ${(r.planSummary ?? '').slice(0, 60)} docs=${r.docsExamined ?? 0} returned=${r.nreturned ?? 0} bytes=${r.responseLength ?? 0}`).join('\n')
 
 /** Every kind of group and reader a read check tells apart: two projects (one private to the owner, one shared with peer), a
- *  Lead and workers, one stored with no project (28 of 143 agents on prod, 11-04), a Buddy of peer's, a quiet task with
- *  required machines, a closed Chat with PM, peer's Buddy chat, the removed Leads conversation and quiet work. */
+ *  Lead and workers, one stored with no project (28 of 143 agents on prod, 11-04), an agent of peer's, a quiet task with
+ *  required machines, a closed Chat with PM, peer's 1:1 chat with their agent, the removed Leads conversation and quiet work. */
 async function everyKind() {
   const s = swarm(MIGRATED)
   s.join(peerActor)
@@ -193,7 +190,7 @@ async function everyKind() {
   s.run({ type: 'project.sharing', projectId: shared, visibility: 'private', memberIds: [peer.sub] })
   const web = s.group('Web')
   const worker = s.add('worker-harness', web, false, ownerActor, 'host', owner.sub)
-  s.run({ type: 'work.assign', conversationId: web, agentId: worker })
+  s.edit(state => { storedAssignment(state, web, worker, MIGRATED) })
   const secretGroup = s.group('Secret work', secret)
   const secretWorker = s.add('secret-harness', secretGroup, false, ownerActor, 'host', owner.sub)
   const sharedGroup = s.group('Shared work', shared)
@@ -207,8 +204,7 @@ async function everyKind() {
   const legacy = s.group('Legacy work')
   const quietLegacy = s.group('Quiet legacy work')
   for (const id of [done, needs, quietSecret, quietLegacy]) s.run({ type: 'conversation.archive', conversationId: id, archived: true })
-  let buddyChat = ''
-  const buddy = 'peer-buddy'
+  const peerAgent = 'peer-agent', peerChat = 'peer-agent-chat'
   s.edit(state => {
     const generation = state.people.find(p => p.id === peer.sub)!.generation
     state.conversations.find(c => c.id === privateId)!.audience = { people: [{ id: peer.sub, generation }] }
@@ -218,26 +214,23 @@ async function everyKind() {
     const sharedProject = state.projects!.find(p => p.id === shared)!
     state.conversations.find(c => c.id === sharedProject.leadConversationId)!.leadId = sharedLead
     state.conversations.find(c => c.id === needs)!.task = { goal: 'g', changes: 'c', constraints: 'k', owns: ['o'], requires: { machines: ['host', 'other-mac'] } }
-    const projectId = state.projects![0]!.id
-    buddyChat = buddyChatId(projectId, { id: peer.sub, generation })
     // On peer's own machine, so peer reads as it; the owner may not.
-    state.agents.push({ ...structuredClone(state.agents.find(a => a.id === worker)!), id: buddy, harnessId: 'buddy-harness', name: 'Buddy', projectId,
-      machineId: 'peer-mac', machineOwnerId: peer.sub, contributorId: peer.sub, membershipGeneration: generation, buddyOf: { personId: peer.sub, generation } })
-    state.conversations.push({ id: buddyChat, kind: 'buddy', projectId, title: 'Buddy', leadId: null, agentIds: [buddy], archived: false,
+    const { projectId: _project, ...base } = structuredClone(state.agents.find(a => a.id === worker)!)
+    state.agents.push({ ...base, id: peerAgent, harnessId: 'peer-agent-harness', name: 'Ada', regular: true, chatId: peerChat,
+      machineId: 'peer-mac', machineOwnerId: peer.sub, contributorId: peer.sub, membershipGeneration: generation })
+    state.conversations.push({ id: peerChat, kind: 'agent-chat', title: 'Ada', leadId: null, agentIds: [peerAgent], archived: false,
       brief: '', checks: [], assignment: null, lastMessageSequence: 0, audience: { people: [{ id: peer.sub, generation }] } })
     storeOldLeads(state, [lead])
   })
   const tabId = `tab-${randomUUID()}`
   const state = { ...structuredClone(s.state), id: tabId } as SuperTabState
-  await writeLegacySwarm(db, { state, revision: 700 })
-  const report = await migrateSwarm(db, tabId, { now: () => MIGRATED })
-  if (!report.ok) throw new Error(report.error)
+  await storeSwarm(db, { state, revision: 700 }, MIGRATED)
   // Stored without a number, as 111 live groups on prod are (11-04): a whole read numbers an awake one after every other
-  // (model.ts numberConversations); a quiet one reads without. Migration numbers them, so the number goes after it.
+  // (model.ts numberConversations); a quiet one reads without. The fixture's commands numbered them, so the stored number goes.
   await db.$runCommandRaw({ update: 'SwarmGroup', updates: [{ q: { tabId, key: { $in: [legacy, quietLegacy] } }, u: { $unset: { 'data.number': '' } }, multi: true }] })
   const groups = (await parts.loadAll(db, tabId)).groups.filter(g => !g.deleted).map(g => g.key)
   return { tabId, groups, readers: [[owner], [peer], [outsider], [owner, lead], [owner, worker], [owner, secretWorker], [owner, sharedLead],
-    [owner, unprojected], [owner, buddy], [peer, buddy], [owner, 'no-such-agent']] as Array<[AuthUser, string?]> }
+    [owner, unprojected], [owner, peerAgent], [peer, peerAgent], [owner, 'no-such-agent']] as Array<[AuthUser, string?]> }
 }
 
 /** What the whole-Swarm reads say of one group for a reader: its first load's entry for an active group, the dormant list's
@@ -307,11 +300,9 @@ describe('one group read by id (task #2875)', () => {
       const byKey = groupRows.filter(r => /^IXSCAN \{ tabId: 1, deleted: 1, key: 1/.test(r.planSummary ?? ''))
       expect(byKey, describeRows(groupRows)).toHaveLength(1)
       expect(byKey[0]!.docsExamined).toBe(1)
-      // An agent's machine: its account fields, one document. This suite names no index, as a server before its first listing,
-      // and Mongo may plan it on `_id` or the held index alike; a server that listed them names `_id` (superTabCommandReads).
+      // No machine: an agent's read checked its machine's account only for a Harness Team account, which is gone.
       const machineRows = rows.filter(r => r.ns.endsWith('.SwarmMachine') && r.op !== 'getmore')
-      expect(machineRows.map(r => [/^IXSCAN \{ (_id: 1 \}|tabId: 1, deleted: 1, key: 1)/.test(r.planSummary ?? ''), r.docsExamined]), describeRows(machineRows))
-        .toEqual(asAgentId ? [[true, 1]] : [])
+      expect(machineRows, describeRows(machineRows)).toEqual([])
     }
   }, 120_000)
 

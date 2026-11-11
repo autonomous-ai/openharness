@@ -11,9 +11,8 @@ import { createHash, randomBytes } from 'node:crypto'
 export const HARNESS_ACCESS_PREFIX = 'hna_'
 export const HARNESS_REFRESH_PREFIX = 'hnr_'
 /**
- * A team session's own (lib/teamSession.ts), deliberately not `hna_`/`hnr_`: a server from before team sessions took
- * every Harness session it did not know as a phone's, which may reach every machine and route of the account. Under
- * these prefixes such a server never reads a team token as a Harness one at all, and refuses it.
+ * A Harness Team account's, issued until Team accounts went (2026-11-10). Still known, so an old Team daemon's token is
+ * refused here (lib/harnessSession.ts) and never sent to the account service. Until 2026-12-10.
  */
 export const HARNESS_TEAM_ACCESS_PREFIX = 'hta_'
 export const HARNESS_TEAM_REFRESH_PREFIX = 'htr_'
@@ -30,7 +29,7 @@ const shaped = (token: unknown, prefix: string): token is string =>
 
 export const isTeamAccessToken = (token: unknown): token is string => shaped(token, HARNESS_TEAM_ACCESS_PREFIX)
 export const isTeamRefreshToken = (token: unknown): token is string => shaped(token, HARNESS_TEAM_REFRESH_PREFIX)
-/** Any access token Harness issued itself, a team session's included. */
+/** Any access token Harness issued itself, a Team account's old one included. */
 export const isHarnessAccessToken = (token: unknown): token is string => shaped(token, HARNESS_ACCESS_PREFIX) || isTeamAccessToken(token)
 export const isHarnessRefreshToken = (token: unknown): token is string => shaped(token, HARNESS_REFRESH_PREFIX) || isTeamRefreshToken(token)
 export const isHarnessHandoffCode = (token: unknown): token is string => shaped(token, HARNESS_HANDOFF_PREFIX)

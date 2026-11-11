@@ -53,7 +53,6 @@ void main() {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final server = swarm();
     server.append('A root to thread on');
-    server.ask(['Ship it?']);
     prepare?.call(server);
     final c = server.controller(
       account: 'owner',

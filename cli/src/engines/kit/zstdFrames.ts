@@ -1,5 +1,6 @@
 /** Check complete zstd frame boundaries while the native decoder checks their contents.
- * Node 22.23's decoder silently accepts a truncated final block, even with finishFlush=end.
+ * Node 22.23's decoder silently accepts a truncated final block, even with finishFlush=end; Node 24.22.2 throws
+ * Z_BUF_ERROR there (scripts/probe-node-behavior.mjs). This pass stays for a stream cut between frames.
  * Publishing its partial output would lose history. This pass retains at most a frame header.
  * Format: https://github.com/facebook/zstd/blob/dev/doc/zstd_compression_format.md */
 import { Transform } from 'node:stream'

@@ -39,11 +39,7 @@ export const GROUP_FIELDS = {
     'kind',
     'leadId',
     'projectId',
-    'proposal',
-    'pulse',
     'reviewOf',
-    'statusLine',
-    'taskApproval',
   ],
   whenRunning: [
     'assignment.execution',
@@ -52,35 +48,22 @@ export const GROUP_FIELDS = {
     'title',
   ],
   unread: [
-    'answered',
     'assignment.askedOf',
-    'assignment.changesRequestedAt',
     'assignment.configuration',
     'assignment.handoffs',
     'assignment.hold',
     'assignment.leaseUntil',
-    'assignment.nudgedAt',
     'assignment.progressAt',
     'assignment.recordingProgress',
     'assignment.reopened',
     'assignment.reviewFoundAt',
-    'assignment.toldEngineerAt',
     'assignment.verdicts',
     'brief',
     'briefAt',
-    'buddyChats',
-    'buddyDefault',
-    'buddyDownTold',
-    'buddyName',
-    'buddySessions',
     'cards',
-    'chatLimits',
     'checks',
-    'codePullRequestUrls',
     'foldedInto',
-    'handOutLane',
     'hold',
-    'lane',
     'lastActivityAt',
     'lastMainSequence',
     'lastMessageSequence',
@@ -92,35 +75,17 @@ export const GROUP_FIELDS = {
     'messageSeq',
     'notBefore',
     'number',
-    'openedBy',
-    'owed',
-    'paused',
     'pin',
     'priority',
     'process',
-    'proposals',
-    'pullRequestChecks',
-    'pullRequestEvents',
-    'pullRequestHeads',
     'pullRequestUrls',
-    'queueRank',
     'reactionSeq',
     'released',
     'releasing',
-    'reportSeq',
     'requesterId',
     'reviewStamp',
     'step',
-    'stepIds',
-    'stepUp',
-    'stuck',
     'talkedAt',
-    'teamWritten',
-    'teamWrittenBy',
-    'unlinkedPullRequests',
-    'waitingLinuxStep',
-    'waitingWindowsStep',
-    'writers',
   ],
 } as const
 const LIGHT_GROUP = {
@@ -173,7 +138,7 @@ async function undecidedWork(agents: Part<Agent>[], groups: Part<GroupData>[], l
 const toPart = <T>(kind: PartKind, row: PartRow): Part<T> => ({ kind, key: row.key, version: row.version, changedAt: row.changedAt.getTime(),
   ordinal: row.ordinal, data: row.data as T })
 
-/** Delivery authority only: no machine reports, starts, progress, or unrelated work. Keep the Lead conversations for
+/** Delivery authority only: no machine reports, starts, or unrelated work. Keep the Lead conversations for
  * ledProject, and the named agents' groups for legacy project identity. These projected groups must never be committed as
  * state; a delivery only touches its authority parts and updates its own row. */
 export async function loadDeliveryParts(tx: Transaction, tabId: string, groupIds: string[], agentIds: string[],
@@ -205,7 +170,7 @@ export async function loadDeliveryParts(tx: Transaction, tabId: string, groupIds
   const groups = [...new Map([...named, ...linked, ...worked].map(row => [row.key, lightGroup(row)])).values()]
   return { tabId, head: toPart<HeadData>('head', head as unknown as PartRow),
     members: members.map(row => toPart('member', row)), agents: agents.map(row => toPart('agent', row)),
-    groups, machines: [], starts: [], progress: [],
+    groups, machines: [], starts: [],
     sequenceBase: head.sequenceBase, visibilityEpoch: head.visibilityEpoch, groupCounter: head.groupCounter } as SwarmParts
 }
 
@@ -216,8 +181,7 @@ export async function loadLightGroups(tx: Transaction, tabId: string, index: Gro
 }
 
 /**
- * The live parts of one Swarm with conversations light, and no progress parts: a change poll sends those from the change
- * feed (read/changes.ts), and nothing derived reads them. Conversations: every active one (`groups: 'active'`, as
+ * The live parts of one Swarm with conversations light. Conversations: every active one (`groups: 'active'`, as
  * `loadActive`), or only the Lead conversations and those with running work (`'working'`: what visibility and derived
  * values read once every finished worker's decision is stored), with the active ones of agents stored with no project (they
  * take theirs from the first one they are in: projects.ts agentProjectId); plus those named by id and those the named agents
@@ -266,6 +230,6 @@ export async function loadLight(tx: Transaction, tabId: string,
     const held = new Set(groups.map(g => g.key))
     groups.push(...unique([undecided, ofLegacy, ofLeads]).filter(g => !held.has(g.key)))
   }
-  return { tabId, head: toPart<HeadData>('head', head as unknown as PartRow), members, agents, groups, machines, starts, progress: [],
+  return { tabId, head: toPart<HeadData>('head', head as unknown as PartRow), members, agents, groups, machines, starts,
     sequenceBase: head.sequenceBase, visibilityEpoch: head.visibilityEpoch, groupCounter: head.groupCounter } as SwarmParts
 }

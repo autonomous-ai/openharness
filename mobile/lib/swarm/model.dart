@@ -1,7 +1,5 @@
 import 'identity.dart' show superTabPersonName;
-import 'live_card_model.dart';
 import 'profile_model.dart';
-import 'pulse_model.dart';
 
 export 'profile_model.dart';
 
@@ -28,11 +26,6 @@ Map<String, T> _byId<T>(List<T> rows, String Function(T row) idOf) => {
 /// is stuck (`blocked`). Both stay active work until the agent moves on.
 bool superTabWorkWaits(Object? status) =>
     status == 'needs_human' || status == 'blocked';
-
-/// How a work status reads in the app. `blocked` is what the agent calls it;
-/// people read Stuck. Statuses this build does not know read as sent.
-String superTabWorkStatusLabel(String status) =>
-    status == 'blocked' ? 'stuck' : status.replaceAll('_', ' ');
 
 /// What a project calls its coordinator when the backend names none (one from before project instructions), and
 /// what every new project starts with.
@@ -411,7 +404,6 @@ class SuperTabConversation {
         (row['pullRequestUrls'] as List?)?.whereType<String>() ??
             const <String>[],
       ),
-      cards = SuperTabCards.fromJson(row['cards']),
       reviewOf = row['reviewOf'] as String?,
       step = row['step'] as String?,
       brief = _text(row, 'brief'),
@@ -558,10 +550,6 @@ class SuperTabConversation {
   /// Persisted links may be absent on older backends; loaded messages still supply links.
   final List<String> pullRequestUrls;
 
-  /// Its messages drawn as live cards (swarm_live_card.dart); none from an
-  /// older backend.
-  final SuperTabCards cards;
-
   /// A review group's reviewed group; null for any other conversation.
   final String? reviewOf;
 
@@ -611,7 +599,7 @@ class SuperTabConversation {
 }
 
 /// The zone a project's day is read in when its digest names none (backend
-/// costs/reflection.ts `DEFAULT_TIME_ZONE`).
+/// superTabs/localTime.ts `DEFAULT_TIME_ZONE`).
 const superTabDefaultTimeZone = 'Asia/Ho_Chi_Minh';
 
 class SuperTabProject {
@@ -959,7 +947,6 @@ class SuperTabSnapshot {
       autoJoin = row['autoJoin'] == true,
       mentionsWaiting = (row['mentionsWaiting'] as num?)?.toInt() ?? 0,
       mentionsDigest = row['mentionsDigest'] as String?,
-      pulses = SuperTabPulse.readAll(row['pulse']),
       _releaseTimes = {
         if (row['releaseTimes'] case final Map projects)
           for (final MapEntry(key: project, value: times) in projects.entries)
@@ -1095,14 +1082,6 @@ class SuperTabSnapshot {
   /// Which tags wait, as a digest that moves when they change though the
   /// count may not; null from a backend before it (superTabs/mentions.ts).
   final String? mentionsDigest;
-
-  /// Each project's board pulse by project id (backend superTabs/pulse.ts,
-  /// read `derived.pulse`); empty from a server before it.
-  final Map<String, SuperTabPulse> pulses;
-
-  /// [projectId]'s board pulse; null where the server sent none, and the
-  /// board draws no strip.
-  SuperTabPulse? pulseOf(String projectId) => pulses[projectId];
 
   /// When each release part of [projectId] may next open, in ms: 0 is now (backend releases.ts nextReleaseAt, task #3827).
   Map<String, int> releaseTimesOf(String projectId) =>
@@ -1417,57 +1396,6 @@ List<SuperTabServedModel> superTabServedModels(
               : m['model'] as String,
         ),
   ];
-}
-
-class SuperTabRouteChoice {
-  const SuperTabRouteChoice(this.id, this.title);
-  final String id, title;
-}
-
-/// The routing decision a Lead message reports: who got the task and why.
-class SuperTabRoute {
-  SuperTabRoute._(
-    this.decisionId,
-    this.via,
-    this.p,
-    this.why,
-    this.pick,
-    this.alternatives,
-  );
-  static SuperTabRoute? fromSource(Map<String, dynamic> s) {
-    final pick = s['pick'];
-    final decisionId = s['decisionId'];
-    if (s['kind'] != 'route' ||
-        decisionId is! String ||
-        pick is! Map ||
-        pick['id'] is! String ||
-        pick['title'] is! String) {
-      return null;
-    }
-    final via = s['via'];
-    final why = s['why'];
-    final alternatives = s['alternatives'];
-    return SuperTabRoute._(
-      decisionId,
-      via is String ? via : 'order',
-      s['p'] is num ? (s['p'] as num).toDouble() : null,
-      why is String ? why : '',
-      SuperTabRouteChoice(pick['id'] as String, pick['title'] as String),
-      [
-        if (alternatives is List)
-          for (final a in alternatives)
-            if (a is Map && a['id'] is String && a['title'] is String)
-              SuperTabRouteChoice(a['id'] as String, a['title'] as String),
-      ],
-    );
-  }
-
-  /// The reason for the task. An older backend's quality-floor flag and
-  /// policy-order fallback are not read: nothing is refused for a floor.
-  final String decisionId, via, why;
-  final double? p;
-  final SuperTabRouteChoice pick;
-  final List<SuperTabRouteChoice> alternatives;
 }
 
 /// A file sent with a message. The chat never loads [url] by itself.
@@ -1854,14 +1782,18 @@ class SuperTabMessage {
   /// a person nothing to do (Dee 11-05, task #3127). The server keeps it for
   /// diagnosis, and a required recovery still reaches the coordinator.
   bool get terminalGap => fromTerminal && source['phase'] == 'gap';
-  SuperTabRoute? get route => SuperTabRoute.fromSource(source);
-  bool get routeOverride => source['kind'] == 'route-override';
 
-  /// A line the backend posted for an instructions save: no chat row and
-  /// nothing unread, since it gives a person nothing to do (Dee 11-05, task
-  /// #3165). The backend posts none since #3132; the History keeps every
-  /// revision.
-  bool get instructionsSave => source['kind'] == 'instructions';
+  /// A note v1-v3 posted that v4 has no row for: an instructions save (#3165),
+  /// a routing note and its override, a ship line. No chat row and nothing
+  /// unread: the backend posts none now and removes the old ones a page at a
+  /// time, so one may still be read until it is gone.
+  bool get retiredNotice => _retiredKinds.contains(source['kind']);
+  static const _retiredKinds = {
+    'instructions',
+    'route',
+    'route-override',
+    'ship',
+  };
 
   /// A task's root the server posted in its person's name (plain chat, #2294):
   /// theirs to read, not their own writing, so it reads nothing before it and

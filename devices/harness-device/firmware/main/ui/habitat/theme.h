@@ -1,12 +1,12 @@
 #pragma once
 
-// One charcoal surface, two neutral inks, one companion/action accent.
+// One charcoal surface, two neutral inks, one action accent.
 // Canvas matches the desktop terminal pane and Cmd N / Cmd P surfaces.
 // All colors are RGB565-representable at full brightness. Conversion and the
 // existing saved brightness setting remain at the UI boundary; no theme heap.
 #define HT_THEME_CANVAS    0x181818u
-// The Focus skin's canvas. Its design (mockup/newdesign.html, every screen) is on black, not on the
-// terminal's charcoal — Focus is the pre-habitat layout and brings its ground with it.
+// Focus's canvas. Its design (mockup/newdesign.html, every screen) is on black, not on the
+// terminal's charcoal (HT_THEME_CANVAS, which color() still maps for the saved-brightness path).
 #define HT_THEME_FOCUS_CANVAS 0x000000u
 #define HT_THEME_TEXT      0xefe7deu
 #define HT_THEME_SECONDARY 0xada6adu
@@ -19,9 +19,8 @@
 #define HT_THEME_ERROR     0xe7a6adu
 // Desktop activityColor() / darkTerminalTheme ANSI status colors.
 //
-// The inbox status mark was the only coloured thing on the glass until the Focus skin, which reads a
-// live status in HT_THEME_DONE and draws each engine in its own ink (focus.c, ENGINE_INK). On the
-// creature skins the rule is unchanged: pane name, message and navigation stay neutral.
+// Focus reads a live status in HT_THEME_DONE and draws each engine in its own ink (focus.c, ENGINE_INK);
+// pane name, message and navigation stay neutral.
 // The voice green: the recording waveform and the microphone that starts it.
 //
 // It is a pure channel — brighter and harder than HT_THEME_DONE, which is the terminal's "finished"

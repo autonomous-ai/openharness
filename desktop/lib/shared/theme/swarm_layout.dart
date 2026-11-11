@@ -12,8 +12,9 @@ abstract final class SwarmLayout {
     vertical: 6,
   );
 
-  /// The most a chat's column is wide: its rows, day lines, composer and the notes around it, centred in the chat's pane.
-  static const double chatColumn = 720;
+  /// The most a chat's column is wide: its rows, day lines, composer and the notes around it, centred in the chat's pane. An
+  /// agent's words get about the 768 Codex gives its answers (anh Dee, 2026-11-10: "the center chat area is too small").
+  static const double chatColumn = 880;
 
   /// The strip that leads back to the chat when a pane has taken its place: the pill's room, in from the bar's side.
   static const EdgeInsets backPadding = EdgeInsets.symmetric(
@@ -55,9 +56,6 @@ abstract final class SwarmLayout {
 
   /// The gap above the quiet line under a post's bubble (super_tabs/channel_talk.dart): "Juno is offline".
   static const double postNoteTop = 6;
-
-  /// The gap between the name and "to Juno" in a post's name line, which reads as one phrase.
-  static const double namePhraseGap = 4;
 
   /// The agents-only line under a project's channel, where a composer would be.
   static const EdgeInsets agentsOnlyMargin = EdgeInsets.fromLTRB(28, 6, 28, 18);

@@ -1,10 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from '../commands.js'
 import { createSuperTab, type Actor } from '../model.js'
-import { openSwarmBuddyChat } from '../buddies.js'
+import { storedAssignment, storedStatus, storedTask } from '../storedWork.test-support.js'
 import { touchesFor } from './touches.js'
-
-const HOLD = { kind: 'person', personId: 'owner', defaultAt: '2026-11-06T02:00:00.000Z' } as const
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const config = { engine: 'codex', model: 'm', effort: 'high', contextWindow: null, engineVersion: null }
@@ -24,10 +22,10 @@ function swarm() {
     name: harnessId, configuration: config, lead }, owner, contribution).effects.result.agentId as string
   const lead = add('lead', 'lead', true)
   const group = (title: string) => {
-    const id = run({ type: 'conversation.create', title, brief: 'Do it', checks: [{ description: 'Done', independent: false }] }).effects.result.conversationId as string
+    const id = storedTask(state, { title, brief: 'Do it', checks: [{ description: 'Done' }], requesterId: 'owner' })
     const worker = add(`${title}-worker`, id)
-    const assignmentId = run({ type: 'work.assign', conversationId: id, agentId: worker }).effects.result.assignmentId as string
-    return { id, worker, assignmentId }
+    storedAssignment(state, id, worker, 1000)
+    return { id, worker }
   }
   const agentActor = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
   return { run, lead, group, agentActor, get state() { return state } }
@@ -37,34 +35,11 @@ const has = (touches: Array<{ kind: string; key: string }>, kind: string, key: s
 describe('the parts a command touches (design section 1.2, column T)', () => {
   it('touches the actor\'s own part on every command', () => {
     const f = swarm(), a = f.group('A')
-    expect(has(f.run({ type: 'message.send', conversationId: a.id, text: 'Hi', replyTo: null, recipientIds: [] }).touches, 'member', 'owner')).toBe(true)
+    // A person posts in their own chat with their agent (agentsOnly.test.ts).
+    const chat = f.run({ type: 'agent.new', kind: 'regular', name: 'Ada', machineId: 'owner-mac', engine: 'claude', local: true } as Command, owner,
+      { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } }).effects.result.conversationId as string
+    expect(has(f.run({ type: 'message.send', conversationId: chat, text: 'Hi', replyTo: null, recipientIds: [] }).touches, 'member', 'owner')).toBe(true)
     expect(has(f.run({ type: 'message.send', conversationId: a.id, text: 'Hi', replyTo: null, recipientIds: [] }, f.agentActor(a.worker)).touches, 'agent', a.worker)).toBe(true)
-  })
-
-  it('makes a Lead\'s clearing of an agent\'s avatar meet on the Lead conversation its check reads', () => {
-    const f = swarm(), a = f.group('A')
-    const { touches } = f.run({ type: 'agent.avatar', agentId: a.worker, avatar: null }, f.agentActor(f.lead))
-    expect(has(touches, 'group', 'lead')).toBe(true)
-    expect(has(touches, 'agent', a.worker)).toBe(true)
-  })
-
-  it('makes the coordinator\'s instructions save, notes and name meet a Lead change on the Lead conversation its check reads (review of phase 2)', () => {
-    const f = swarm(), lead = f.agentActor(f.lead)
-    const notes = [{ id: 'n1', text: 'Not machine A.', askedBy: 'owner', at: 500, expiresAt: null }]
-    for (const [command, context] of [
-      [{ type: 'instructions.save', projectId: 'lead', baseRevision: 1, text: 'PM text.', summary: 'PM text', askedBy: 'owner' }, {}],
-      [{ type: 'note.add', projectId: 'lead', text: 'Not machine B.', askedBy: 'owner' }, {}],
-      [{ type: 'note.remove', projectId: 'lead', noteId: 'n1' }, { notes }],
-      [{ type: 'project.coordinatorName', projectId: 'lead', name: 'Lead engineer' }, {}],
-      [{ type: 'project.answers', projectId: 'lead', inThread: true }, {}],
-      [{ type: 'project.about', projectId: 'lead', about: 'The Harness app' }, {}],
-      // An older CLI's rule, a save to the instructions after the one above (project instructions, phase 4).
-      [{ type: 'rule.set', rule: { kind: 'preferIdle' }, text: 'Idle first.', askedIn: { conversationId: 'lead', messageId: 'm1' } },
-        { askedIn: { author: { kind: 'person', id: 'owner', name: 'owner', membershipGeneration: 'g' }, source: false, createdAt: 0 },
-          instructions: { revision: 2, text: 'PM text.' } }],
-    ] as Array<[Command, Partial<CommandContext>]>) {
-      expect(has(f.run(command, lead, context).touches, 'group', 'lead'), command.type).toBe(true)
-    }
   })
 
   it('leaves a post\'s recipients alone, so workers posting to their Lead in different groups never meet on the Lead', () => {
@@ -82,46 +57,21 @@ describe('the parts a command touches (design section 1.2, column T)', () => {
     // Already a member now: an ordinary post to it no longer touches it.
     expect(has(f.run({ type: 'message.send', conversationId: a.id, text: 'Again', replyTo: null, recipientIds: [b.worker] }, f.agentActor(a.worker)).touches, 'agent', b.worker)).toBe(false)
   })
-  // The project's progress part was also the fence of the worker decisions the Lead had to make before its next start,
-  // assignment or route (design ruling R5). No command reads those decisions now (project instructions, phase 4, decision 17),
-  // so finishing work and the next start, assignment or route no longer meet there (final review of the branch).
-  it('leaves the project\'s progress part to its reports when work finishes, and when the next is defined, routed or assigned', () => {
-    const f = swarm(), a = f.group('A')
-    f.run({ type: 'work.check', conversationId: a.id, assignmentId: a.assignmentId, checkId: f.state.conversations.find(c => c.id === a.id)!.checks[0]!.id,
-      passed: true, evidence: 'Shown' }, f.agentActor(f.lead))
-    const done = f.run({ type: 'work.status', conversationId: a.id, assignmentId: a.assignmentId, status: 'done', result: 'Shipped' }, f.agentActor(a.worker))
-    expect(has(done.touches, 'progress', 'lead')).toBe(false)
-    const cancelled = f.group('B')
-    expect(has(f.run({ type: 'work.cancel', conversationId: cancelled.id, assignmentId: cancelled.assignmentId, reason: 'Not needed' }).touches, 'progress', 'lead')).toBe(false)
-    expect(has(f.run({ type: 'work.define', conversationId: cancelled.id, brief: 'Again', checks: [] }).touches, 'progress', 'lead')).toBe(false)
-    const next = f.run({ type: 'conversation.create', title: 'C', brief: 'More', checks: [{ description: 'Done', independent: false }] }).effects.result.conversationId as string
-    expect(has(f.run({ type: 'work.assign', conversationId: next, agentId: a.worker }).touches, 'progress', 'lead')).toBe(false)
-  })
 
   it('makes naming a requester meet that person\'s removal on their member part', () => {
     const f = swarm()
     const invited = f.run({ type: 'invite.create', email: 'peer@example.com', role: 'collaborator', conversationId: 'lead' }).effects.result.inviteId as string
     f.run({ type: 'invite.accept', inviteId: invited }, { kind: 'person', userId: 'peer', email: 'peer@example.com' })
-    const opened = f.run({ type: 'conversation.create', title: 'R', brief: 'Do it', checks: [{ description: 'Done', independent: false }], priority: 'P2', requesterId: 'peer' },
-      f.agentActor(f.lead))
-    expect(has(opened.touches, 'member', 'peer')).toBe(true)
-    const id = opened.effects.result.conversationId as string
+    const { id } = f.group('R')
     const named = f.run({ type: 'conversation.requester', conversationId: id, personId: 'peer' }, f.agentActor(f.lead))
     expect(has(named.touches, 'member', 'peer')).toBe(true)
     expect(has(named.touches, 'group', 'lead')).toBe(true)
   })
 
-  it('makes a priority change meet a change of who is PM on the project\'s chat (task #3117)', () => {
-    const f = swarm()
-    const id = f.run({ type: 'conversation.create', title: 'R', brief: 'Do it', checks: [{ description: 'Done', independent: false }], priority: 'P2', requesterId: 'owner' }, f.agentActor(f.lead)).effects.result.conversationId as string
-    const changed = f.run({ type: 'work.priority', conversationId: id, priority: 'P0' }, f.agentActor(f.lead))
-    expect(has(changed.touches, 'group', 'lead')).toBe(true)
-  })
-
   it('makes an answer to waiting work meet a change to whom it waits on', () => {
     const f = swarm(), a = f.group('A')
     f.run({ type: 'conversation.requester', conversationId: a.id, personId: 'owner' })
-    f.run({ type: 'work.status', conversationId: a.id, assignmentId: a.assignmentId, status: 'needs_human', hold: HOLD, result: 'Flag?' }, f.agentActor(a.worker))
+    storedStatus(f.state, a.id, 'needs_human', 'Flag?')
     const answer = f.run({ type: 'message.send', conversationId: a.id, text: 'Flag.', replyTo: null, recipientIds: [] }, f.agentActor(f.lead))
     expect(has(answer.touches, 'member', 'owner')).toBe(true)
   })
@@ -135,7 +85,7 @@ describe('the parts a command touches (design section 1.2, column T)', () => {
     expect(has(touches, 'head', 'head')).toBe(true)
   })
 
-  // Review of #3560: + New agent picks a name free across the Swarm, so two at once must meet, as Buddy names do.
+  // Review of #3560: + New agent picks a name free across the Swarm, so two at once must meet.
   it('makes two new agents meet on the head, where their names are claimed', () => {
     const f = swarm()
     const { touches } = f.run({ type: 'agent.new', kind: 'regular', machineId: 'host', engine: 'claude', local: true }, owner,
@@ -144,16 +94,3 @@ describe('the parts a command touches (design section 1.2, column T)', () => {
   })
 })
 
-
-it('guards an already awake Buddy hearing its own chat against a concurrent sleep', () => {
-  const f = swarm(), a = f.group('A')
-  const buddy = f.state.agents.find(agent => agent.id === a.worker)!
-  buddy.buddyOf = { personId: 'owner', generation: f.state.people[0]!.generation }
-  buddy.buddyScope = 'swarm'
-  const chat = openSwarmBuddyChat(f.state, f.state.people[0]!)
-  chat.agentIds.push(buddy.id)
-  const touches = touchesFor({ type: 'message.send', conversationId: chat.id, text: 'Hi', replyTo: null, recipientIds: [] },
-    owner, f.state, { state: f.state, messages: [{ id: 'input', conversationId: chat.id, text: 'Hi', replyTo: null,
-      recipients: [buddy.id], author: { kind: 'person', id: 'owner', name: 'Owner', membershipGeneration: f.state.people[0]!.generation } }] })
-  expect(has(touches, 'agent', buddy.id)).toBe(true)
-})

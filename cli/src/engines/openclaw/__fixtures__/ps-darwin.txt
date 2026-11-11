@@ -1,0 +1,31 @@
+# OpenClaw 2026.11.2, macOS 26.6.2 arm64, Node 24.22.2; OPENCLAW_STATE_DIR=<scratch>/state; TUI started as: openclaw tui --session plain (pane folder <scratch>/proj)
+$ ps -o pid,ppid,comm,args -p 28234
+  PID  PPID COMM     ARGS
+28234 28228 openclaw openclaw    
+$ lsof -a -p 28234 -d cwd -Fn
+n<scratch>/proj
+$ lsof -p 28234 | grep -i sqlite  (FD, TYPE, NAME)
+txt REG <scratch>/state/state/openclaw.sqlite-shm
+17r REG <scratch>/state/state/openclaw.sqlite
+20r REG <scratch>/state/state/openclaw-quarantine.sqlite
+23r REG <scratch>/state/state/openclaw.sqlite
+24u REG <scratch>/state/state/openclaw.sqlite-wal
+25u REG <scratch>/state/state/openclaw.sqlite-shm
+32u REG <scratch>/state/state/openclaw.sqlite
+33u REG <scratch>/state/state/openclaw.sqlite-wal
+
+# Gateway process (holds the agent DB; the TUI does not)
+$ ps -o pid,ppid,comm,args -p 11785
+  PID  PPID COMM             ARGS
+11785 11781 openclaw-gateway openclaw-gateway   
+$ lsof -p 11785 | grep -i sqlite | awk '{print $NF}' | sort | uniq -c
+  11 <scratch>/state/agents/main/agent/openclaw-agent.sqlite
+   2 <scratch>/state/agents/main/agent/openclaw-agent.sqlite-shm
+   8 <scratch>/state/agents/main/agent/openclaw-agent.sqlite-wal
+   1 <scratch>/state/agents/main/agent/openclaw-agent.sqlite.memory-reindex-ffda46ef-9b3d-4d8d-8a0d-1d885d48ae75
+   1 <scratch>/state/state/openclaw-quarantine.sqlite
+  10 <scratch>/state/state/openclaw.sqlite
+   2 <scratch>/state/state/openclaw.sqlite-shm
+   8 <scratch>/state/state/openclaw.sqlite-wal
+   2 <scratch>/state/tmp/plugin-captures/21699efb-ae5b-41ae-9c12-a6396c1e5699/owner.sqlite
+   1 <scratch>/state/tmp/plugin-captures/21699efb-ae5b-41ae-9c12-a6396c1e5699/owner.sqlite-journal

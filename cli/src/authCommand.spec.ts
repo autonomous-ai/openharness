@@ -895,8 +895,8 @@ describe('a Harness session in place of SSO tokens', () => {
     for (const token of [HNA, HNR, 'refresh_seeded', 'tok_seeded']) expect(result.stdout + result.stderr).not.toContain(token)
   })
 
-  it('a Harness session renews as one, asking for nothing more; a QR or team sign-in never asks', async () => {
-    for (const overrides of [{ refreshToken: HNR }, { method: 'qr', refreshToken: 'refresh_qr' }, { kind: 'team', refreshToken: `htr_${'c'.repeat(43)}` }]) {
+  it('a Harness session renews as one, asking for nothing more; a QR sign-in never asks', async () => {
+    for (const overrides of [{ refreshToken: HNR }, { method: 'qr', refreshToken: 'refresh_qr' }]) {
       const root = tempRoot()
       seedSession(root, { expiresInMs: 30_000, overrides })
       const backend = await fakeBackend({ routes: { '/api/auth/refresh': renewal } })

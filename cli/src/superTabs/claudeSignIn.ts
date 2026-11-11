@@ -1,6 +1,6 @@
 /**
  * Claude Code signed in on this machine from the phone, with no terminal and no code to copy (owner, 2026-11-05): the
- * phone setting up a new computer for its Buddy asks for `claude auth login`'s page, opens it, and the person signs in
+ * phone setting up a new computer asks for `claude auth login`'s page, opens it, and the person signs in
  * there. The page returns to `http://localhost:PORT/callback`, which on the phone is the phone itself: the phone catches
  * that redirect, as it does for a sign-in in a pane (core/terminals/browser.ts), and sends it here, and it is handed to
  * the login waiting on that port on this machine.
@@ -65,7 +65,7 @@ export interface ClaudeLogin {
   codePages?: boolean
 }
 
-/** The engines the phone signs in here for a Buddy (owner, 2026-11-06: Codex as well as Claude Code). */
+/** The engines the phone signs in here (owner, 2026-11-06: Codex as well as Claude Code). */
 export type SignInEngine = 'claude' | 'codex'
 
 /** Who the person signs in to, for what is said to them. */

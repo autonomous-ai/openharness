@@ -10,9 +10,6 @@ import { readFileSync } from 'node:fs'
 import { isatty } from 'node:tty'
 import { inDaemonPane, NOT_IN_PANE, runningPane, windowsRunningPane, type PaneProbe, type RunningPane } from './callerPane.js'
 import type { ProcessRow } from '../lib/processTable.js'
-// cli.ts's way to it: this file is its door to the Swarm's code (architecture.spec.ts SWARM_DOORS).
-export { buddyRefusal } from './buddyPane.js'
-import { paneBuddy } from './buddyPane.js'
 import { sendPane } from '../messages/command.js'
 
 type PaneFrame = Frame
@@ -25,15 +22,8 @@ function harnessIn(frames: PaneFrame[], pane: string, machineId: string): boolea
 
 const ELSEWHERE = 'From a harness, Swarm commands go to this computer\'s own Harness only: leave out --machine and --port, or give this computer\'s own.'
 
-const USAGE = 'harness super-tab [--tab ID] [--agent ID] [--port N --machine ID] status [--project NAME] [--archived [PAGE]] | messages GROUP [--thread ROOT] [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | answer GROUP MESSAGE_ID TEXT|- OPERATION_ID [--to AGENT]... | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]...'
-/** A Buddy's guard refuses a post read from stdin (#2358): there its words would skip the secret check. A Buddy that followed
- *  the stdin form here was refused and tried again (#2360 took it out of a Buddy's help), so a Buddy's usage line never offers it. */
-const BUDDY_USAGE = USAGE.replaceAll('TEXT|- OPERATION_ID', 'TEXT OPERATION_ID')
-/** A refusal worded for any caller, and for a Buddy (BUDDY_USAGE): which one it is is asked only once the command is refused. */
-class UsageError extends Error {
-  constructor(readonly words: (buddy: boolean) => string) { super(words(false)) }
-}
-const usageError = () => new UsageError(buddy => buddy ? BUDDY_USAGE : USAGE)
+const USAGE = 'harness super-tab [--tab ID] [--agent ID] [--port N --machine ID] status | messages GROUP [--thread ROOT] [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | answer GROUP MESSAGE_ID TEXT|- OPERATION_ID [--to AGENT]... | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]...'
+const usageError = () => new Error(USAGE)
 
 /** A message on stdin, for post's TEXT `-`.
  *
@@ -97,20 +87,6 @@ const idleRefusal = () => `post - read stdin until nothing more came for ${STDIN
 /** Stands in for stdin while the arguments are parsed the first time: stdin is read only for a command that wants it. */
 class WantsStdin {}
 
-/** Whether the harness in this pane is a Buddy, by this computer's launch record (service.ts `buddyCheck`, what turns its
- *  guard on), for a refusal's wording alone. Asked of this computer's daemon, never one named with --machine. Anything it
- *  cannot tell is no Buddy: the guard still refuses what a Buddy may not send. */
-async function buddyHere(open: typeof openDaemon, local: Where, pane: string | undefined): Promise<boolean> {
-  if (!pane) return false
-  try {
-    const daemon = await open(local)
-    try {
-      // The guard's own steps (buddyPane.ts paneBuddy), without its pane check: a wording, not a refusal.
-      return await paneBuddy(daemon, pane, local.machineId) === 'buddy'
-    } finally { daemon.close() }
-  } catch { return false }
-}
-
 /** [stdin] is asked for what `-` stands for: `post`'s message. */
 export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: () => string = () => readFileSync(0, 'utf8'),
   terminal: () => boolean = () => isatty(0)) {
@@ -126,19 +102,10 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
     else { positional.push(...argv.slice(i)); break }
   }
   if (!Number.isInteger(target.port) || target.port < 1 || target.port > 65535 || !identifier(target.machineId)) throw usageError()
-  // A person's one Buddy reads one of its projects by its name (status --project NAME, spec 2026-10-31-one-buddy-per-swarm):
-  // taken out first, so it goes with status alone or with --archived.
-  let statusProject: string | undefined
-  const projectAt = positional[0] === 'status' ? positional.indexOf('--project') : -1
-  if (projectAt > 0) {
-    statusProject = positional[projectAt + 1]
-    if (!statusProject || statusProject.length > 200 || /[\u0000-\u001f]/.test(statusProject)) throw usageError()
-    positional.splice(projectAt, 2)
-  }
   const [action, first, second, third] = positional
   // --tab may be left out in an agent's own pane: its daemon takes the one Swarm the agent is in (superTabs/service.ts).
   if ((tabId && !identifier(tabId)) || (agentId && !identifier(agentId))) throw usageError()
-  const payload: Record<string, unknown> = { action, tabId, agentId, ...(statusProject ? { project: statusProject } : {}) }
+  const payload: Record<string, unknown> = { action, tabId, agentId }
   if (action === 'messages' && identifier(first) && positional.length === 2) payload.conversationId = first
   // Older messages, a page before the cursor the last page named: its sequence and message id together, as messages may
   // share a sequence and a sequence alone skipped them (security review 2 of #2115).
@@ -152,10 +119,6 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
       && Number.isSafeInteger(Number(positional[5])) && identifier(positional[6])))) {
     Object.assign(payload, { conversationId: first, thread: third,
       ...(positional.length === 7 ? { before: Number(positional[5]), beforeId: positional[6] } : {}) })
-  }
-  // A Buddy's archived tasks, a page at a time from the page the last one named (cli/src/superTabs/buddyStatus.ts).
-  else if (action === 'status' && first === '--archived' && (positional.length === 2 || positional.length === 3 && /^[A-Za-z0-9_-]{1,512}$/.test(second ?? ''))) {
-    Object.assign(payload, { archived: true, ...(second ? { before: second } : {}) })
   }
   else if (action === 'message' && identifier(first) && identifier(second) && positional.length === 3) {
     Object.assign(payload, { conversationId: first, messageId: second })
@@ -182,8 +145,7 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
     Object.assign(payload, { action: 'command', operationId: third, ...(attach.length ? { attach } : {}),
       command: { type: 'message.send', conversationId: first, text, replyTo, ...(answers ? { answers } : {}), recipientIds: to, ...(mentions.length ? { mentions } : {}) } })
   } else if (action === 'answer' && identifier(first) && identifier(second) && typeof third === 'string' && identifier(positional[4])) {
-    // The answer to the message [second] (task #3403): the server puts it in that message's thread, or right below it, and
-    // refuses a second answer saying where the first is.
+    // The answer to the message [second] (task #3403): the server puts it in that message's thread, or right below it.
     const to: string[] = []
     for (let i = 5; i < positional.length; i += 2) {
       const [flag, value] = [positional[i], positional[i + 1]]
@@ -250,12 +212,8 @@ export async function superTabCommand(argv: readonly string[], deps: {
     const pane = running.pane
     const local = (deps.where ?? (() => whereFor(pane)))()
     const request = await parse(argv, local, deps.stdin ?? (() => readStdin(process.stdin)), deps.terminal)
-      .catch(async error => {
-        if (error instanceof UsageError && await buddyHere(open, local, pane)) throw new Error(error.words(true))
-        throw error
-      })
     operationId = request.payload.operationId
-    // A harness reaches the Swarm through this computer's Harness alone (second review of #2087: a Buddy's --machine reached
+    // A harness reaches the Swarm through this computer's Harness alone (second review of #2087: an agent's --machine reached
     // the owner's other Mac, which knew no pane there). The daemon refuses an agent's request from another computer as well.
     const elsewhere = request.where.port !== local.port || request.where.machineId !== local.machineId
     // Asked of this computer's daemon, never the other machine's (re-check of #2093: --machine asked the other one, which does
@@ -269,7 +227,7 @@ export async function superTabCommand(argv: readonly string[], deps: {
     }
     daemon = await open(request.where)
     // A harness's pane speaks as its own agent alone: with --agent too, its harness goes with the request, and the daemon
-    // refuses an agent that is not that harness's (security review of #2087: a Buddy named its Builder). A person's terminal
+    // refuses an agent that is not that harness's (security review of #2087: one named another agent). A person's terminal
     // is no harness, and its --agent is the person's as before.
     if (!request.payload.agentId || pane) {
       const listed = await daemon.request('agents_list')

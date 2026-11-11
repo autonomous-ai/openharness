@@ -19,8 +19,8 @@ class SuperTabAvatar extends StatelessWidget {
     this.picture,
     this.engine,
     this.face = false,
-  }) : lead = false,
-       offline = false;
+    this.offline = false,
+  }) : lead = false;
 
   SuperTabAvatar.person(SuperTabPerson person, {super.key, this.size = 30})
     : identity = 'person:${person.id}',
@@ -66,7 +66,7 @@ class SuperTabAvatar extends StatelessWidget {
   /// moves: a PM in My agents.
   final bool lead;
 
-  /// Drawn grey: its agent is offline.
+  /// Drawn grey: its agent is offline, or not started yet (a start's row in the left pane).
   final bool offline;
 
   @override
@@ -187,15 +187,7 @@ String superTabPersonName(String email) => email.split('@').first;
 
 /// A computer as it calls itself: a Bonjour hostname without its `.local` suffix ("MacBookPro2021"), never mapped
 /// to a model name, so two machines of one model stay told apart. A name a person chose stays as it is.
-/// What names a Mac's Harness Team account entry after its Mac's name (backend model.ts TEAM_ENTRY_LABEL, task #3060).
-const kTeamEntryLabel = ' · Team account';
-
 String superTabMachineName(String name) {
-  // A Team account entry reads as its Mac's name and the label: the Mac's part is shown like any hostname, the label kept.
-  const team = kTeamEntryLabel;
-  if (name.length > team.length && name.endsWith(team)) {
-    return '${superTabMachineName(name.substring(0, name.length - team.length))}$team';
-  }
   const suffix = '.local';
   return name.length > suffix.length && name.toLowerCase().endsWith(suffix)
       ? name.substring(0, name.length - suffix.length)
