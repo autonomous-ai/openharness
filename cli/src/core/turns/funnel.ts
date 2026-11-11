@@ -18,6 +18,7 @@ import type { SubmissionReader } from '../../lib/submissionReader.js'
 import type { WifiFeed } from '../wifi.js'
 import { WHOLE_TEXT_ENGINES, type TurnEnds } from './ends.js'
 import type { TurnRecaps } from './recaps.js'
+import type { QuietTitles } from '../agents/quietTitles.js'
 import type { ShortTurnGuard } from './shortTurnGuard.js'
 import { deviceErrorText } from '../cardText.js'
 import { preview, sid } from '../../lib/log.js'
@@ -71,6 +72,9 @@ export interface FunnelDeps {
   /** Whoever hears each live turn end (`CoreApi.turns.onEnd`, core/turns/ends.ts), which is told each turn as it goes: that is how
    *  an end says which turn it was, and what the turn answered. */
   ends?: Pick<TurnEnds, 'started' | 'said' | 'worked' | 'ended' | 'compacted'>
+  /** Each live turn's start, told before the input can say a quiet delivery started it: an agent's quiet stretch ends there, and a
+   *  title its engine gives after it may name it again (core/agents/quietTitles.ts). */
+  quietTitles?: Pick<QuietTitles, 'turnStarted'>
 }
 
 type OutsideConsumers = (consumer: string, call: () => void) => void
@@ -112,6 +116,7 @@ export function outsideConsumers(options: {
 export function funnelFor({
   bySession, tokenUsage, agentIdFor, turnActivity, isSubagentSession, clients, search, turnStartedAt, prompts, input,
   deviceInput, submission, device, startHeartbeat, questionWatcher, mirror, outside = outsideConsumers(), working, shortTurns, ends,
+  quietTitles,
 }: FunnelDeps) {
   return (sessionId: string, events: Events, opts?: EmitOptions): void => {
     if (!events.length || !bySession(sessionId)?.active) return
@@ -122,8 +127,10 @@ export function funnelFor({
       const replay = !!(opts?.resumed || opts?.replay)
       turnActivity.observe(sessionId, event.type, replay)
       if (!replay && isProgressEvent(event.type)) working?.(agentId)
-      if (!replay && event.type === 'turn_started') shortTurns?.started(sessionId, agentId)
-      else if (!replay && event.type === 'turn_ended') shortTurns?.ended(sessionId)
+      if (!replay && event.type === 'turn_started') {
+        shortTurns?.started(sessionId, agentId)
+        quietTitles?.turnStarted(agentId)
+      } else if (!replay && event.type === 'turn_ended') shortTurns?.ended(sessionId)
       const frame = correlateAgentEvent({ ...event, payload: { ...event.payload, activity: turnActivity.snapshot(sessionId) } }, sessionId, agentId)
       // A `turn_started` that is not a turn starting NOW — a turn picked back up at attach, or a prompt
       // re-read from a transcript that was already on disk — says so in the clear, beside `agentId`
