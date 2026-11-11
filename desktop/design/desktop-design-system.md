@@ -722,18 +722,20 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   1:1 chat with it at once (backend `lead.start` and `lead.claim` answer its
   id), before the PM is up. New Project sends its task and files there and
   opens it. What the person sends there waits for the PM, and their newest
-  message's receipt says `Waiting for the PM` in muted grey with a clock. A
-  Personal PM start that failed says `Couldn’t start the PM: <why>` there
-  instead, in red. Nothing goes to the channel.
+  message's receipt says `Waiting for the Product Manager` in muted grey with
+  a clock; a row the server wrote there (a start that failed) carries none. A
+  Personal start that failed says `Couldn’t start the Product Manager: <why>`
+  there instead, in red. Nothing goes to the channel.
 - **Start PM** (`SwarmPmStart`, `super_tabs/personal_lead_card.dart`; in the
   gallery). A Personal project's empty channel with no PM shows one card above
-  the agents-only line: one line, `This project has no PM.`, and the blue
-  `Start PM` (`Starting…` while it starts). The click starts the PM on the
+  the agents-only line: one line, `This project has no Product Manager.`, and
+  the blue `Start PM` (`Starting…` while it starts). The click starts the PM on the
   person's own computer, with Claude Code in the repo's folder (Codex when
   Claude Code isn't there), and opens its chat. A start that failed says
-  `Couldn’t start the PM: <why>` in the line, and Start PM tries again. With
-  none of their computers able to start it, the line says
-  `Can’t start a PM: <why>` and there is no button.
+  `Couldn’t start the Product Manager: <why>` in the line, back in the channel
+  if its chat was still open, and Start PM tries again. With none of their
+  computers able to start it, the line says
+  `Can’t start a Product Manager: <why>` and there is no button.
 - **Channel talk** (`super_tabs/channel_talk.dart`; anh Dee, 2026-11-09: "i dont
   see any agent to agent chat"; 2026-11-10: "channel chat here replaces the
   queue", "why not use tag? like in a group chat"). A project's channel is where

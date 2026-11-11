@@ -137,17 +137,23 @@ class PersonalLeadStarter extends ChangeNotifier {
         },
       );
       final answer = superTabMap(claim['result']);
-      final chatId =
-          answer['chatId'] as String? ??
-          (throw const SuperTabFailure(
-            'UPDATE_REQUIRED',
-            'this Swarm’s server needs an update',
-          ));
-      await c.refresh();
-      await c.select(chatId);
+      // Its own chat opens now, unless its person moved on meanwhile. A
+      // backend before it opens none until the PM joins; the start goes on.
+      final chatId = answer['chatId'] as String?;
+      if (chatId != null && c.selectedId == conversationId) {
+        await c.select(chatId);
+      }
       // Another of the person's machines starts it: its join ends the note.
       if (answer['leadStart'] == 'waiting') return;
-      await (launchForTest ?? _launch)(c, conversationId, plan);
+      try {
+        await (launchForTest ?? _launch)(c, conversationId, plan);
+      } catch (_) {
+        // Back to the channel, whose card says why and starts it again.
+        if (chatId != null && c.selectedId == chatId) {
+          unawaited(c.select(conversationId));
+        }
+        rethrow;
+      }
       // Starting until the chat reads its PM.
       unawaited(c.refresh().catchError((Object _) {}));
     } on SuperTabFailure catch (failure) {

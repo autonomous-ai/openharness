@@ -958,7 +958,7 @@ class _Gallery extends StatelessWidget {
             const SizedBox(
               width: 440,
               child: SwarmPmStart(
-                line: 'This project has no PM.',
+                line: 'This project has no Product Manager.',
                 onStart: _noop,
               ),
             ),
@@ -966,7 +966,7 @@ class _Gallery extends StatelessWidget {
             const SizedBox(
               width: 440,
               child: SwarmPmStart(
-                line: 'Couldn’t start the PM: Claude Code isn’t signed in on Mac Studio',
+                line: 'Couldn’t start the Product Manager: Claude Code isn’t signed in on Mac Studio',
                 onStart: _noop,
               ),
             ),

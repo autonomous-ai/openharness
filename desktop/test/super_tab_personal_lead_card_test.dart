@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -184,7 +185,7 @@ void main() {
     final (c, _) = await _swarm(f);
     await _show(tester, f);
     expect(_card, findsOneWidget);
-    expect(_line(tester), 'This project has no PM.');
+    expect(_line(tester), 'This project has no Product Manager.');
     expect(_startPm, findsOneWidget);
     // Nothing to send in: the channel is agents only.
     expect(_key('super-agents-only'), findsOneWidget);
@@ -234,7 +235,7 @@ void main() {
     ];
     expect(sent.single['conversationId'], chat);
     expect(sent.single['text'], 'Make the dashboard dark');
-    expect(find.text('Waiting for the PM'), findsOneWidget);
+    expect(find.text('Waiting for the Product Manager'), findsOneWidget);
     // The channel holds none of the person's words.
     expect(
       f.connection.server.messages.where((m) => m['conversationId'] == channel),
@@ -295,7 +296,10 @@ void main() {
     final (c, _) = await _swarm(f);
     f.app.machineStates['m']!.nodeOnline = false;
     await _show(tester, f);
-    expect(_line(tester), 'Can’t start a PM: none of your computers is online');
+    expect(
+      _line(tester),
+      'Can’t start a Product Manager: none of your computers is online',
+    );
     expect(_startPm, findsNothing);
     await _close(tester, f, c);
   });
@@ -322,34 +326,49 @@ void main() {
     await _close(tester, f, c);
   });
 
-  testWidgets('a failed start says why in its chat and on the card, and Start '
-      'PM tries again', (tester) async {
+  testWidgets('a failed start says why in its chat and back on the card, and '
+      'Start PM tries again', (tester) async {
     final f = SuperTabLaunchFixture();
     _desk(f);
     final (c, channel) = await _swarm(f);
     var calls = 0;
-    PersonalLeadStarter.launchForTest = (_, _, _) async {
+    final first = Completer<void>();
+    PersonalLeadStarter.launchForTest = (_, _, _) {
       calls++;
-      if (calls == 1) {
-        throw const SuperTabFailure(
-          'CREATE_FAILED',
-          'Claude Code isn’t signed in on Test host.',
-        );
-      }
+      return calls == 1 ? first.future : Future.value();
     };
     await _show(tester, f);
     await tester.tap(_startPm);
     await _settle(tester);
+    // Its chat is open while it starts: what the person sends waits.
+    final chat = _pmChat(f);
+    expect(c.selectedId, chat);
     final composer = _key('super-message-composer');
     await tester.tap(composer);
     await tester.enterText(composer, 'Make the dashboard dark');
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await _settle(tester);
+    expect(find.text('Waiting for the Product Manager'), findsOneWidget);
+    first.completeError(
+      const SuperTabFailure(
+        'CREATE_FAILED',
+        'Claude Code isn’t signed in on Test host.',
+      ),
+    );
+    await _settle(tester);
+    // Back on the channel, whose card says why.
     const why = 'Claude Code isn’t signed in on Test host';
-    expect(find.text('Couldn’t start the PM: $why'), findsOneWidget);
+    expect(c.selectedId, channel);
+    expect(_line(tester), 'Couldn’t start the Product Manager: $why');
+    // Its chat says it under the message too.
+    await c.select(chat);
+    await _settle(tester);
+    expect(
+      find.text('Couldn’t start the Product Manager: $why'),
+      findsOneWidget,
+    );
     await c.select(channel);
     await _settle(tester);
-    expect(_line(tester), 'Couldn’t start the PM: $why');
     await tester.tap(_startPm);
     await _settle(tester);
     expect(calls, 2);

@@ -38,9 +38,9 @@ class PersonalLeadStartCard extends StatelessWidget {
           unavailable = failure.message;
         }
         final line = switch ((unavailable, status?.reason)) {
-          (final why?, _) => 'Can’t start a PM: $why',
-          (_, final reason?) => 'Couldn’t start the PM: $reason',
-          _ => 'This project has no PM.',
+          (final why?, _) => 'Can’t start a Product Manager: $why',
+          (_, final reason?) => 'Couldn’t start the Product Manager: $reason',
+          _ => 'This project has no Product Manager.',
         };
         return SwarmPmStart(
           line: line,

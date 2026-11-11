@@ -121,7 +121,7 @@ void main() {
     await _settle(tester);
     // The request, in the PM's chat, waiting for it.
     expect(find.text('Plan the launch'), findsOneWidget);
-    expect(find.text('Waiting for the PM'), findsOneWidget);
+    expect(find.text('Waiting for the Product Manager'), findsOneWidget);
     expect(
       find.byKey(const ValueKey('super-message-composer')),
       findsOneWidget,
