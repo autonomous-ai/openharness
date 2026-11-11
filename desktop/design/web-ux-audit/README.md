@@ -574,7 +574,7 @@ not drawn; clipping was judged from the screenshots.
 | Text clipping and overflow | **Fail → B1, S2, S11, S15, P4, P7.** |
 | Panels covering the whole phone screen | **Pass.** Settings, Appearance, the picker, Machines, History and the Store take the whole phone screen with a visible Back or close. The Super Tab drawers leave a veil to tap (PR #1570). The app menu and footer dropdown are popovers. |
 | Features reachable only by keyboard | **Fail → B2** (New Swarm) and **S10** (renaming a tab by double-click only at computer widths). Zoom pane, move pane, layouts, reopening a closed tab and the shortcuts sheet are reachable by clicking only through Menu ▸ All commands. That counts as clickable, but it is a long way round. |
-| Empty, loading and error states | **Fail → S5, S6, S12, S13, S14, P5, P6.** The first-computer page, the error banner with Retry, Notifications ("No notifications") and the History search are clear. |
+| Empty, loading and error states | **Fail → S5, S6, S12, S13, S14, P5, P6.** The first-computer page, the error banner with Retry, Notifications (empty: its heading alone, 2026-11-11) and the History search are clear. |
 | First load of the web bundle | See [First load](#first-load). |
 | Copy against `docs/naming-system.md` | **Fail → P3.** "This computer" in a browser, "1 linked machines", "Rename this tab" instead of **Rename Tab**. Swarm, Product Manager, New Harness, New Tab and Connect a computer follow the system. |
 | Requests leaving the page | None. `blocked*.json` is empty for every run: the fixture never reached a backend. Only Google's font CDN is let through, as production does for missing glyphs. |
