@@ -8,6 +8,7 @@
 /// cases are one fixture both are held to (cli/src/superTabs/__fixtures__/goal-rows.json).
 library;
 
+import 'dart:convert';
 import 'dart:math';
 
 /// Where a project states its goal, from its repository's root.
@@ -17,14 +18,13 @@ const goalFile = 'agents/GOAL.md';
 const goalCheck = 'goal: ';
 
 /// The most milestones read, and the most each may be long: the daemon's limits.
-const goalMax = 100, goalMilestoneMax = 100;
+const _goalMax = 100, _milestoneMax = 100;
 
 /// The longest line read as a row, in UTF-16 units as the daemon counts them: it bounds a check's command.
-const goalLineMax = 1000;
+const _lineMax = 1000;
 
-/// How many of the branch's last landings are looked at for one whose goal checks have all ended, among how many of its
-/// last commits.
-const goalLandings = 5, goalCommits = 100;
+/// How many of the branch's last landings are looked at for one whose goal checks have all ended.
+const _landings = 5;
 
 /// A milestone and the command that checks it.
 typedef SwarmGoalRow = ({String milestone, String check});
@@ -32,6 +32,26 @@ typedef SwarmGoalRow = ({String milestone, String check});
 final _spaces = RegExp(r'\s+');
 final _lineEnd = RegExp(r'\r?\n');
 final _lineBreak = RegExp(r'[\r\u2028\u2029]');
+final _sha = RegExp(r'^[0-9a-f]{40}$');
+
+/// What a row or a tooltip must not draw: control characters, and the marks that turn a line's direction, which would show
+/// a milestone as other words than its file's.
+final _unshown = RegExp(
+  r'[\u0000-\u001F\u007F-\u009F\u200E\u200F\u202A-\u202E\u2066-\u2069]',
+);
+
+/// The control characters `gh` hands over in caret notation (U+0007 as `^G`), whatever GitHub answers, so that no answer
+/// can drive a terminal (go-gh's asciisanitizer): C0 but tab, line feed, vertical tab and return, and C1.
+final _ghRewrites = RegExp(r'[\u0000-\u0008\u000C\u000E-\u001F\u0080-\u009F]');
+
+/// [name] as `gh` hands a name over. The daemon asks GitHub itself and reads a check's name as it is; Desktop reads it
+/// through `gh`, and a milestone's own name from its file, which gh leaves alone. So the two are compared written gh's
+/// way: on a real repository the milestone `A bell <U+0007> in a name` passed for the daemon and was not run here
+/// (2026-11-11).
+String _asGhWrites(String name) => name.replaceAllMapped(
+  _ghRewrites,
+  (found) => '^${String.fromCharCode((found[0]!.codeUnitAt(0) & 0x1F) | 0x40)}',
+);
 
 /// Whether [unit] is space to JavaScript's `trim`, the daemon's: Dart's own `trim` also takes U+0085, which the daemon
 /// leaves in a milestone's name.
@@ -76,7 +96,7 @@ String _trim(String text) {
 List<SwarmGoalRow> goalRows(String? text) {
   final rows = <String, SwarmGoalRow>{};
   for (final line in (text ?? '').split(_lineEnd)) {
-    if (line.length > goalLineMax) continue;
+    if (line.length > _lineMax) continue;
     // `| milestone | \`check\` |`: the check is between the row's last two backticks, with a bar after them and a bar
     // before. Each test stands before the cut it guards, where JavaScript cuts first and tests after: Dart's `substring`
     // throws where `slice` answers nothing.
@@ -97,14 +117,70 @@ List<SwarmGoalRow> goalRows(String? text) {
     final check = _trim(cell.substring(open + 1, cell.length - 1));
     if (milestone.isEmpty ||
         check.isEmpty ||
-        milestone.length > goalMilestoneMax ||
+        milestone.length > _milestoneMax ||
         rows.containsKey(milestone)) {
       continue;
     }
     rows[milestone] = (milestone: milestone, check: check);
-    if (rows.length >= goalMax) break;
+    if (rows.length >= _goalMax) break;
   }
   return rows.values.toList();
+}
+
+/// The text of a goal file as GitHub's contents API answers for it, or null when it holds none: the file is not there, or
+/// is over 1 MB, which GitHub answers with no content. Null is no goal, as in the daemon (githubRest.ts `file`).
+String? goalFileText(Object? contents) {
+  if (contents is! Map ||
+      contents['content'] is! String ||
+      contents['encoding'] != 'base64') {
+    return null;
+  }
+  try {
+    // GitHub breaks the content into lines.
+    final bytes = base64.decode(
+      (contents['content'] as String).replaceAll(_spaces, ''),
+    );
+    final text = utf8.decode(bytes, allowMalformed: true);
+    // Dart leaves a file's byte-order mark out of its text, and the daemon's reader keeps it, where it counts toward the
+    // first line's length.
+    final marked =
+        bytes.length >= 3 &&
+        bytes[0] == 0xEF &&
+        bytes[1] == 0xBB &&
+        bytes[2] == 0xBF;
+    return marked ? '\uFEFF$text' : text;
+  } on FormatException {
+    return null;
+  }
+}
+
+/// The last landings of a branch among its last commits as GitHub lists them ([commits], the newest first), by their ids,
+/// the newest first: its tip, then each one's first parent, as far as five and no further than the commits listed. A
+/// landing is a commit on the branch's first-parent line: a train that lands as a merge commit brings its members' commits
+/// with it, which were never pushed to the branch and carry no check of it.
+List<String> goalLandingsOf(Object? commits) {
+  final listed = [
+    for (final commit in commits is List ? commits : const <Object?>[])
+      if (commit is Map)
+        if (commit['sha'] case final String sha when _sha.hasMatch(sha))
+          (sha: sha, parents: commit['parents']),
+  ];
+  final parent = {
+    for (final commit in listed)
+      commit.sha: switch (commit.parents) {
+        [{'sha': final String sha}, ...] => sha,
+        _ => '',
+      },
+  };
+  final landings = <String>[];
+  for (
+    var sha = listed.firstOrNull?.sha ?? '';
+    parent.containsKey(sha) && landings.length < _landings;
+    sha = parent[sha]!
+  ) {
+    landings.add(sha);
+  }
+  return landings;
 }
 
 /// How a milestone stands on the commit its goal is scored on.
@@ -113,49 +189,57 @@ enum SwarmMilestoneState { passes, fails, notRun }
 /// One milestone of a goal: its name as the file writes it, how it stands, and its check run's page on GitHub when one ran.
 class SwarmMilestone {
   const SwarmMilestone({required this.name, required this.state, this.url});
+
+  /// As its row writes it, which its check is named by.
   final String name;
   final SwarmMilestoneState state;
   final String? url;
+
+  /// [name] as the screen shows it. The name is the repository's text: a control character draws as nothing, and a mark
+  /// that turns the line's direction makes a row read as other words.
+  String get shown => name.replaceAll(_unshown, '');
 }
 
 /// A project's goal as it stands on one commit of its default branch: every milestone of its file, in the file's order.
 class SwarmGoal {
   const SwarmGoal({required this.milestones, required this.branch});
 
-  /// [rows] scored by the check [runs] of one commit, as GitHub's GraphQL describes a check run: each milestone by the
-  /// newest run of its name. A run that has not completed, or was skipped or neutral, says nothing of its milestone; one
-  /// that concluded success passes it, and any other conclusion fails it. Cancelled fails too: GitHub ends a check that
-  /// ran past its time limit as cancelled, and a hang must not read as a check still to run.
+  /// [rows] scored by the check [runs] of one commit, as GitHub's REST API lists them: each milestone by the newest run of
+  /// its name. A run that has not completed, or was skipped or neutral, says nothing of its milestone; one that concluded
+  /// success passes it, and any other conclusion fails it. Cancelled fails too: GitHub ends a check that ran past its time
+  /// limit as cancelled, and a hang must not read as a check still to run (goal.ts `scoreOf`).
   factory SwarmGoal.on(
     List<SwarmGoalRow> rows,
     List<Object?> runs, {
     required String branch,
   }) {
     final newest = <String, Map<Object?, Object?>>{};
-    int id(Map<Object?, Object?>? run) => switch (run?['databaseId']) {
+    int id(Map<Object?, Object?>? run) => switch (run?['id']) {
       final int id => id,
       _ => 0,
     };
     for (final run in runs) {
       if (run is! Map) continue;
-      final name = run['name'] is String ? run['name'] as String : '';
+      final name = _asGhWrites(
+        run['name'] is String ? run['name'] as String : '',
+      );
       if (id(run) >= id(newest[name])) newest[name] = run;
     }
     return SwarmGoal(
       branch: branch,
       milestones: [
         for (final row in rows)
-          if (newest['$goalCheck${row.milestone}'] case final run?)
+          if (newest[_asGhWrites('$goalCheck${row.milestone}')] case final run?)
             SwarmMilestone(
               name: row.milestone,
               state: switch ((run['status'], run['conclusion'])) {
-                ('COMPLETED', 'SUCCESS') => SwarmMilestoneState.passes,
-                ('COMPLETED', 'SKIPPED' || 'NEUTRAL') =>
+                ('completed', 'success') => SwarmMilestoneState.passes,
+                ('completed', 'skipped' || 'neutral') =>
                   SwarmMilestoneState.notRun,
-                ('COMPLETED', _) => SwarmMilestoneState.fails,
+                ('completed', _) => SwarmMilestoneState.fails,
                 _ => SwarmMilestoneState.notRun,
               },
-              url: _page(run['url']),
+              url: _page(run['html_url']),
             )
           else
             SwarmMilestone(
@@ -173,7 +257,6 @@ class SwarmGoal {
 
   int get total => milestones.length;
   int get passed => _count(SwarmMilestoneState.passes);
-  int get failed => _count(SwarmMilestoneState.fails);
   int get notRun => _count(SwarmMilestoneState.notRun);
 
   int _count(SwarmMilestoneState state) =>
@@ -189,35 +272,12 @@ class SwarmGoal {
         if (milestone.state == state) milestone,
   ];
 
-  /// A check run's page, when it is one a browser may be sent to: GitHub's answer is text from outside.
-  static String? _page(Object? url) =>
-      url is String && Uri.tryParse(url)?.scheme == 'https' ? url : null;
-}
-
-/// The last landings of a default branch as one read of it describes them ([branchRef], GraphQL's `defaultBranchRef`), the
-/// newest first: its tip, then each one's first parent, as far as [goalLandings] and no further than the branch's last
-/// [goalCommits] commits, which the daemon lists to follow the same line. A landing is a commit on the branch's
-/// first-parent line: a train that lands as a merge commit brings its members' commits with it, which carry no check of
-/// the branch.
-List<Map<Object?, Object?>> goalLandingsOf(Object? branchRef) {
-  final tip = branchRef is Map ? branchRef['target'] : null;
-  if (tip is! Map) return const [];
-  final listed = {
-    for (final commit in _nodes(tip['history']))
-      if (commit is Map && commit['oid'] is String) commit['oid'] as String,
-  };
-  final landings = <Map<Object?, Object?>>[];
-  Object? commit = tip;
-  while (commit is Map &&
-      listed.contains(commit['oid']) &&
-      landings.length < goalLandings) {
-    landings.add(commit);
-    commit = _nodes(commit['parents']).firstOrNull;
+  /// A check run's page, when it is one a browser may be sent to: GitHub's answer is text from outside, and a row opens
+  /// only a page of github.com over https.
+  static String? _page(Object? url) {
+    final page = url is String ? Uri.tryParse(url) : null;
+    return page != null && page.scheme == 'https' && page.host == 'github.com'
+        ? url as String
+        : null;
   }
-  return landings;
 }
-
-List<Object?> _nodes(Object? connection) =>
-    connection is Map && connection['nodes'] is List
-    ? connection['nodes'] as List
-    : const [];

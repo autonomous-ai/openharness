@@ -90,27 +90,38 @@ to A.
 
 ## For the build
 
-Read in the code:
+As built (`SwarmGoalScore`, `desktop/lib/super_tabs/goal_score.dart`):
 
-- The project's bar (`_header`, `super_tabs/view.dart`) holds the title alone in its column. The score needs the title
-  and a detail in one row, as `_agentHeader` lays out its name and detail, with the name giving way first.
-- Rule 5 has no shared widget. `SuperTabQuietHeading.org` draws its own hover chevron; the score would be a second
-  copy or the first shared one.
-- `AppMenuItem` does not recolour its `trailing` widget on the active (blue) row. A red `fails` there would stay red on
-  blue. The row needs a state word it recolours itself.
+- The project's bar (`_header`, `super_tabs/view.dart`) holds the title and the score in one row, as `_agentHeader`
+  lays out its name and detail, with the name giving way first.
+- Rule 5 has no shared widget. `SuperTabQuietHeading.org` draws its own hover chevron, which is absent at rest; the
+  score's keeps its room. They are two copies.
+- `AppMenuItem` has a state word it colours itself (`state`): a `trailing` widget keeps its own colours, and a red
+  `fails` there would stay red on the active row's blue. The dropdown's search finds a row by that word too.
 - `AppDropdown` opens on a search field past 8 rows (`defaultSearchAfter`) and scrolls past 480 points. The mockup
   draws both.
-- Desktop has no reading of a goal. It reads a project's GitHub facts itself with `gh` (`SwarmGitHub`,
-  `super_tabs/github_issues.dart`); nothing reads main's check runs.
-- The Naming System has no entry for Goal or Milestone.
+- Desktop reads the goal itself with `gh` (`SwarmGitHub.goal`, `super_tabs/github_issues.dart`), by the REST calls the
+  daemon makes (`cli/src/superTabs/goal.ts` `goalOf`): the goal file, the repository's default branch, that branch's
+  last 100 commits and a commit's check runs, up to 300 of them. GitHub's GraphQL roll-up of a commit's checks is not
+  used: it leaves out check runs REST lists and counts commit statuses among them. The file's rows are read by the
+  daemon's own reader, ported step for step (`super_tabs/goal.dart`), and both are held to one fixture
+  (`cli/src/superTabs/__fixtures__/goal-rows.json`).
+- `gh` hands over no control character as it is: it writes each in caret notation (U+0007 as `^G`), where the daemon
+  asks GitHub itself. A milestone is matched to its check with both names written gh's way, so one with a control
+  character in its name scores as it does for the daemon.
+- The Naming System has entries for Goal and Milestone.
 
-Not decided here, for the builder's Design section:
+Decided in the build:
 
-- How the daemon's reading reaches Desktop, and how often. The board reads once a minute while it shows.
-- A reading that fails: the mockup assumes the last score stays, and the menu's first line says why in the board's own
-  words (`Sign in to GitHub: run gh auth login.`).
-- The limit on the list. The mockup assumes the file's rows, in a menu that scrolls.
-- The new element joins Swarm elements and the gallery in the same pull request, with a Flutter test that clicks it.
+- How often it is read: when the project's bar comes on screen, every five minutes while it stays, and when the menu
+  opens, each only on a reading older than a minute. An answer that comes after a later read's is dropped.
+- A reading that fails: the last score stays, and the menu's first line says why in the board's own words
+  (`Sign in to GitHub: run gh auth login.`).
+- The limit on the list: the file's rows, 100 at most, in a menu that scrolls.
+- A row opens only a page of github.com over https, and shows a milestone's name without control characters and the
+  marks that turn a line's direction.
+- The element is in Swarm elements and the gallery, with a Flutter test that clicks it
+  (`desktop/test/swarm_goal_score_test.dart`).
 
 ## The mockup's limits
 

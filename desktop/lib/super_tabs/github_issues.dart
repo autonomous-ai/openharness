@@ -237,16 +237,19 @@ class SwarmGitHub {
   /// How many repositories' goals are kept to show again at once: the project on screen and the few a person moves between.
   static const goalsKept = 8;
 
-  /// Pages of a hundred of a commit's checks read for its goal: a hundred milestones beside two hundred checks of the
-  /// project's own, as the daemon reads them.
-  static const goalCheckPages = 3;
+  /// GitHub's page size, and how many pages of a commit's checks are read for its goal: a hundred milestones beside two
+  /// hundred checks of the project's own, as the daemon reads them.
+  static const _page = 100, _goalCheckPages = 3;
 
   final _lists = <String, List<SwarmIssue>>{};
   final _pulls = <String, Map<int, SwarmPull>>{};
   final _pullLists = <String, List<SwarmPull>>{};
   final _threads = <String, SwarmIssueThread>{};
   final _reading = <String>{};
-  final _goals = <String, ({SwarmGoal? goal, DateTime readAt})>{};
+  final _goals = <String, ({SwarmGoal? goal, DateTime readAt, int read})>{};
+
+  /// How many reads of a goal have started: each one's number, by which an answer older than the kept one is told.
+  var _goalReads = 0;
 
   /// [repository]'s issues as they were last read, to show at once while [issues] reads them again. Null before the first.
   List<SwarmIssue>? kept(String repository) => _lists[repository];
@@ -264,100 +267,94 @@ class SwarmGitHub {
   /// [repository]'s goal as it was last read, null in it for a project that states none, and when: its bar shows it at once
   /// and asks again only once that is old. Null before the first read.
   ({SwarmGoal? goal, DateTime readAt})? keptGoal(String repository) =>
-      _goals[repository];
+      switch (_goals[repository]) {
+        final kept? => (goal: kept.goal, readAt: kept.readAt),
+        null => null,
+      };
 
   /// [repository]'s goal as its default branch's checks score it now ([SwarmGoal]), or null when it states none: the score
-  /// the daemon tells its PM (cli/src/superTabs/goal.ts `goalOf`). Scored on the newest of the branch's last landings on
-  /// which no milestone's check is still to run, or, when there is none, on the one with the fewest still to run, the
-  /// newest of those: the tip has no run yet in the minutes after each landing.
+  /// the daemon tells its PM, read by the calls the daemon makes (cli/src/superTabs/goal.ts `goalOf`). Scored on the newest
+  /// of the branch's last landings on which no milestone's check is still to run, or, when there is none, on the one with
+  /// the fewest still to run, the newest of those: the tip has no run yet in the minutes after each landing.
   ///
-  /// One GraphQL read brings the file, the landings and each one's first hundred checks, where the daemon makes three REST
-  /// reads: this one is asked while a person looks. A landing with more checks is asked for the rest only when it is looked
-  /// at.
+  /// GitHub's REST API, as the daemon asks it, and not its GraphQL roll-up of a commit's checks: the roll-up leaves out
+  /// check runs REST lists (10 of 75 on one commit) and counts commit statuses among them (review, 2026-11-11). The file
+  /// is asked first, so a project with no goal costs one call.
   Future<SwarmGoal?> goal(String repository) async {
-    final (owner, name) = _split(repository);
-    final answer = await _call([
-      'api',
-      'graphql',
-      '-f',
-      'query=$_goalQuery',
-      '-f',
-      'owner=$owner',
-      '-f',
-      'name=$name',
-    ], repository);
-    final map = _data(answer, ['repository']);
-    final file = map['goal'];
+    final read = ++_goalReads;
     final rows = goalRows(
-      file is Map && file['text'] is String ? file['text'] as String : null,
+      goalFileText(
+        await _goalRead(repository, '/contents/$goalFile', fileMissing: true),
+      ),
     );
     SwarmGoal? goal;
     if (rows.isNotEmpty) {
-      final branch = map['defaultBranchRef'];
-      final branchName = branch is Map && branch['name'] is String
-          ? branch['name'] as String
-          : '';
-      for (final landing in goalLandingsOf(branch)) {
-        final scored = SwarmGoal.on(
-          rows,
-          await _goalRuns(repository, landing),
-          branch: branchName,
-        );
+      final about = await _goalRead(repository, '');
+      final branch = '${(about is Map ? about['default_branch'] : null) ?? ''}';
+      final commits = await _goalRead(
+        repository,
+        '/commits?sha=${Uri.encodeComponent(branch)}&per_page=$_page',
+      );
+      for (final sha in goalLandingsOf(commits)) {
+        final runs = <Object?>[];
+        for (var page = 1; page <= _goalCheckPages; page++) {
+          final answer = await _goalRead(
+            repository,
+            '/commits/$sha/check-runs?per_page=$_page${page > 1 ? '&page=$page' : ''}',
+          );
+          final found = answer is Map && answer['check_runs'] is List
+              ? answer['check_runs'] as List
+              : const <Object?>[];
+          runs.addAll(found);
+          if (found.length < _page) break;
+        }
+        final scored = SwarmGoal.on(rows, runs, branch: branch);
         if (goal == null || scored.notRun < goal.notRun) goal = scored;
         if (scored.notRun == 0) break;
       }
-      goal ??= SwarmGoal.on(rows, const [], branch: branchName);
+      goal ??= SwarmGoal.on(rows, const [], branch: branch);
     }
-    _goals.remove(repository);
-    _goals[repository] = (goal: goal, readAt: clock.now());
-    while (_goals.length > goalsKept) {
-      _goals.remove(_goals.keys.first);
+    // Two reads of one repository can be on their way at once, and the first to start may answer last: what a later
+    // read brought stays.
+    if ((_goals[repository]?.read ?? 0) < read) {
+      _goals.remove(repository);
+      _goals[repository] = (goal: goal, readAt: clock.now(), read: read);
+      while (_goals.length > goalsKept) {
+        _goals.remove(_goals.keys.first);
+      }
     }
     return goal;
   }
 
-  /// The check runs of [landing], a commit of [repository] as [goal]'s read describes it: its first hundred, which that
-  /// read brought, and its next pages while GitHub says there are more, as far as [goalCheckPages].
-  Future<List<Object?>> _goalRuns(
+  /// What GitHub's REST API answers at [path] under [repository] for its goal, a read as the daemon makes it (the same
+  /// version of the API, githubRest.ts): the answer's JSON, or null where it is none, which the daemon reads as an empty
+  /// answer. With [fileMissing] a 404 is null too: a file that is not there.
+  Future<Object?> _goalRead(
     String repository,
-    Map<Object?, Object?> landing,
-  ) async {
-    final (owner, name) = _split(repository);
-    final rollup = landing['statusCheckRollup'];
-    var contexts = rollup is Map ? rollup['contexts'] : null;
-    final runs = [..._nodes(contexts)];
-    for (var page = 1; page < goalCheckPages; page++) {
-      final info = contexts is Map ? contexts['pageInfo'] : null;
-      final oid = landing['oid'];
-      if (info is! Map ||
-          info['hasNextPage'] != true ||
-          info['endCursor'] is! String ||
-          oid is! String) {
-        break;
-      }
-      final answer = await _call([
+    String path, {
+    bool fileMissing = false,
+  }) async {
+    final answer = await _call(
+      [
         'api',
-        'graphql',
-        '-f',
-        'query=$_goalChecksQuery',
-        '-f',
-        'owner=$owner',
-        '-f',
-        'name=$name',
-        '-f',
-        'oid=$oid',
-        '-f',
-        'after=${info['endCursor']}',
-      ], repository);
-      contexts = _data(answer, [
-        'repository',
-        'object',
-        'statusCheckRollup',
-        'contexts',
-      ]);
-      runs.addAll(_nodes(contexts));
+        '--method',
+        'GET',
+        '-H',
+        'Accept: application/vnd.github+json',
+        '-H',
+        'X-GitHub-Api-Version: 2022-11-28',
+        'repos/$repository$path',
+      ],
+      repository,
+      what: 'goal',
+      missing: 'Install the GitHub CLI (gh) to see the goal.',
+      notFound: fileMissing ? 'null' : null,
+    );
+    try {
+      return jsonDecode(answer);
+    } on FormatException {
+      return null;
     }
-    return runs;
   }
 
   /// [repository]'s open issues, newest activity first, each with its labels in their colours, who opened it and when, and how
@@ -785,28 +782,6 @@ class SwarmGitHub {
       r'repository(owner:$owner,name:$name){issue(number:$number){'
       'comments(last:\$last,before:\$before){$_commentFields}}}}';
 
-  /// What a goal's score reads of a commit's check runs, and each one's page. A commit status is among a commit's checks
-  /// too, and has none of these.
-  static const _goalRunFields =
-      'pageInfo{hasNextPage endCursor} nodes{...on CheckRun{databaseId name status conclusion url}}';
-
-  /// A project's goal ([goal]): its file on the default branch, the ids of that branch's last [goalCommits] commits, and
-  /// its tip with the four commits before it on its first-parent line ([goalLandings] in all), each with its first hundred
-  /// checks.
-  static const _goalQuery =
-      r'query($owner:String!,$name:String!){repository(owner:$owner,name:$name){'
-      'goal:object(expression:"HEAD:$goalFile"){...on Blob{text}} '
-      'defaultBranchRef{name target{...on Commit{history(first:$goalCommits){nodes{oid}} '
-      '...c parents(first:1){nodes{...c parents(first:1){nodes{...c parents(first:1){nodes{'
-      '...c parents(first:1){nodes{...c}}}}}}}}}}}}} '
-      'fragment c on Commit{oid statusCheckRollup{contexts(first:100){$_goalRunFields}}}';
-
-  /// The checks of one commit after its first hundred ([_goalRuns]).
-  static const _goalChecksQuery =
-      r'query($owner:String!,$name:String!,$oid:GitObjectID!,$after:String!){'
-      r'repository(owner:$owner,name:$name){object(oid:$oid){...on Commit{'
-      'statusCheckRollup{contexts(first:100,after:\$after){$_goalRunFields}}}}}}';
-
   /// What a read says while GitHub limits this person's requests.
   static const limitedWords =
       'GitHub is limiting requests. Wait a few minutes.';
@@ -818,25 +793,31 @@ class SwarmGitHub {
   /// Until when GitHub limits this person's requests ([limitedFor]); null when it does not.
   DateTime? _limitedUntil;
 
-  Future<String> _call(List<String> arguments, String repository) async {
+  /// What `gh` answers for [arguments] about [repository], or why it could not, in the words the person sees. [what] names
+  /// what was being read, in the log, and [missing] says what to install gh for. With [notFound], a 404 answers that in
+  /// place of failing: a file that is not there is an answer, not a repository this person cannot see.
+  Future<String> _call(
+    List<String> arguments,
+    String repository, {
+    String what = 'issues',
+    String missing = 'Install the GitHub CLI (gh) to see tasks.',
+    String? notFound,
+  }) async {
     if (_limitedUntil case final until? when clock.now().isBefore(until)) {
       throw const SwarmGitHubError(limitedWords);
     }
-    final result = await _ask(
-      arguments,
-      log: 'issues',
-      missing: 'Install the GitHub CLI (gh) to see tasks.',
-    );
+    final result = await _ask(arguments, log: what, missing: missing);
     if (result.exitCode == 0) return '${result.stdout}';
     final (kind, refusal) = _refusal(
       result.exitCode,
       '${result.stderr}',
       repository,
     );
+    if (notFound != null && kind == 'no repository') return notFound;
     // Its kind names the failure in the log; what gh printed stays out of it.
     appLog.warn(
       'super-tabs',
-      'GitHub issues not read: $kind (gh exited ${result.exitCode})',
+      'GitHub $what not read: $kind (gh exited ${result.exitCode})',
     );
     if (kind == 'rate limited') _limitedUntil = clock.now().add(limitedFor);
     throw refusal;

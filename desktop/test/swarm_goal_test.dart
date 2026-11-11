@@ -1,16 +1,18 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:clock/clock.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/logging/app_log.dart';
 import 'package:harness/super_tabs/github_issues.dart';
 import 'package:harness/super_tabs/goal.dart';
 
 import 'support/swarm_goal_gh.dart';
 
 /// A project's goal as Desktop reads it with `gh` (Swarm plan, rule 1: "a goal that can be checked"): the score its bar shows
-/// is the one the daemon tells the PM for the same repository (cli/src/superTabs/goal.ts), so each case here is one of
-/// goal.spec.ts's, asked the way Desktop asks.
+/// is the one the daemon tells the PM for the same repository (cli/src/superTabs/goal.ts), read by the same REST calls, so
+/// each case here is one of goal.spec.ts's, asked the way Desktop asks.
 void main() {
   const file = '''
 # Goal
@@ -25,19 +27,26 @@ void main() {
   const start = 'The app starts in a second';
   const screens = 'Every screen has a test';
   final done = [
-    goalRun(1, sync, 'SUCCESS'),
-    goalRun(2, start, 'SUCCESS'),
-    goalRun(3, screens, 'FAILURE'),
+    goalRun(1, sync, 'success'),
+    goalRun(2, start, 'success'),
+    goalRun(3, screens, 'failure'),
   ];
   final running = [
-    goalRun(1, sync, 'SUCCESS'),
-    goalRun(2, start, null, status: 'IN_PROGRESS'),
+    goalRun(1, sync, 'success'),
+    goalRun(2, start, null, status: 'in_progress'),
   ];
 
-  /// What [t]'s goal reads as: how many pass, fail and are not run.
+  /// How many of [goal]'s milestones pass, fail and are not run.
+  (int, int, int) counts(SwarmGoal goal) => (
+    goal.passed,
+    goal.milestones.where((m) => m.state == SwarmMilestoneState.fails).length,
+    goal.notRun,
+  );
+
+  /// What [t]'s goal reads as.
   Future<(int, int, int)?> score(FakeGoalGitHub t) async {
     final goal = await t.github.goal('acme/lampos');
-    return goal == null ? null : (goal.passed, goal.failed, goal.notRun);
+    return goal == null ? null : counts(goal);
   }
 
   FakeGoalGitHub commits(List<List<Map<String, Object?>>> runs, {String? of}) =>
@@ -45,6 +54,35 @@ void main() {
         file: of ?? file,
         landings: [for (final each in runs) FakeLanding(each)],
       );
+
+  /// The calls of [t] for commits' check runs, each as the commit's place among the branch's and its page.
+  List<(int, int)> checksAsked(FakeGoalGitHub t) => [
+    for (final call in t.calls)
+      if (RegExp(
+            r'^/commits/([0-9a-f]{2})[0-9a-f]{38}/check-runs\?per_page=100(?:&page=(\d))?$',
+          ).firstMatch(call)
+          case final found?)
+        (int.parse(found[1]!, radix: 16) - 1, int.parse(found[2] ?? '1')),
+  ];
+
+  /// A file as GitHub's contents API answers for it.
+  Map<String, Object?> contents(String text) => {
+    'content': base64.encode(utf8.encode(text)),
+    'encoding': 'base64',
+  };
+
+  /// A `gh` that answers each place under the repository with what [body] makes of it: JSON, or its text as it stands.
+  SwarmGitHub answering(Object? Function(String path) body) => SwarmGitHub(
+    run: (arguments) async {
+      final answer = body(arguments.last.replaceFirst('repos/acme/lampos', ''));
+      return ProcessResult(
+        1,
+        0,
+        answer is String ? answer : jsonEncode(answer),
+        '',
+      );
+    },
+  );
 
   // The same file the CLI's goal.spec.ts reads: the bar must list the milestones the daemon scores.
   test('reads every row of a goal file as the daemon does', () {
@@ -98,20 +136,20 @@ void main() {
     expect(
       await score(
         commits([
-          [goalRun(1, sync, 'SUCCESS'), goalRun(2, start, 'FAILURE')],
+          [goalRun(1, sync, 'success'), goalRun(2, start, 'failure')],
         ]),
       ),
       (1, 1, 1),
     );
     const one = '| $sync | `a` |';
     for (final conclusion in [
-      'FAILURE',
-      'TIMED_OUT',
-      'ACTION_REQUIRED',
-      'STALE',
-      'STARTUP_FAILURE',
+      'failure',
+      'timed_out',
+      'action_required',
+      'stale',
+      'startup_failure',
       // GitHub ends a check that ran past its time limit as cancelled: a hang fails, it is not still to run.
-      'CANCELLED',
+      'cancelled',
       // Completed with no conclusion is not a success.
       null,
     ]) {
@@ -127,10 +165,10 @@ void main() {
     }
     // Running, queued, skipped and neutral say nothing yet.
     for (final waiting in [
-      goalRun(1, sync, null, status: 'IN_PROGRESS'),
-      goalRun(1, sync, null, status: 'QUEUED'),
-      goalRun(1, sync, 'SKIPPED'),
-      goalRun(1, sync, 'NEUTRAL'),
+      goalRun(1, sync, null, status: 'in_progress'),
+      goalRun(1, sync, null, status: 'queued'),
+      goalRun(1, sync, 'skipped'),
+      goalRun(1, sync, 'neutral'),
     ]) {
       expect(
         await score(
@@ -145,33 +183,24 @@ void main() {
   });
 
   test('a milestone is read by the newest run of its own check, and no other check as one', () async {
+    Map<String, Object?> other(int id, String name) => {
+      'id': id,
+      'name': name,
+      'status': 'completed',
+      'conclusion': 'success',
+    };
     expect(
       await score(
         commits([
           [
-            goalRun(5, sync, 'FAILURE'),
-            goalRun(9, sync, 'SUCCESS'),
-            goalRun(7, sync, 'FAILURE'),
+            goalRun(5, sync, 'failure'),
+            goalRun(9, sync, 'success'),
+            goalRun(7, sync, 'failure'),
             // The project's own checks, a check of another milestone's name, and one that only starts like it.
-            {
-              'databaseId': 20,
-              'name': 'ci/required',
-              'status': 'COMPLETED',
-              'conclusion': 'SUCCESS',
-            },
-            {
-              'databaseId': 21,
-              'name': screens,
-              'status': 'COMPLETED',
-              'conclusion': 'SUCCESS',
-            },
-            goalRun(22, '$screens and more', 'SUCCESS'),
-            {
-              'databaseId': 23,
-              'name': 'Goal: $start',
-              'status': 'COMPLETED',
-              'conclusion': 'SUCCESS',
-            },
+            other(20, 'ci/required'),
+            other(21, screens),
+            goalRun(22, '$screens and more', 'success'),
+            other(23, 'Goal: $start'),
           ],
         ]),
       ),
@@ -182,13 +211,13 @@ void main() {
       await score(
         commits([
           [
-            {'status': 'COMPLETED', 'conclusion': 'SUCCESS'},
+            {'status': 'completed', 'conclusion': 'success'},
             {
               'name': 'goal: $sync',
-              'status': 'COMPLETED',
-              'conclusion': 'FAILURE',
+              'status': 'completed',
+              'conclusion': 'failure',
             },
-            goalRun(4, sync, 'SUCCESS'),
+            goalRun(4, sync, 'success'),
           ],
         ], of: '| $sync | `a` |'),
       ),
@@ -199,10 +228,9 @@ void main() {
   test('each milestone carries its state and its check run\'s page, in the file\'s order; those that do not pass list fails first', () async {
     final goal = (await commits([
       [
-        goalRun(1, sync, 'SUCCESS'),
-        goalRun(3, screens, 'FAILURE'),
-        // A page that is not GitHub's over https is no link.
-        {...goalRun(2, start, null, status: 'QUEUED'), 'url': 'file:///x'},
+        goalRun(1, sync, 'success'),
+        goalRun(3, screens, 'failure'),
+        goalRun(2, start, null, status: 'queued'),
       ],
     ]).github.goal('acme/lampos'))!;
     expect(
@@ -211,13 +239,17 @@ void main() {
         (
           sync,
           SwarmMilestoneState.passes,
-          'https://github.com/acme/lampos/runs/1',
+          'https://github.com/acme/lampos/actions/runs/7/job/1',
         ),
-        (start, SwarmMilestoneState.notRun, null),
+        (
+          start,
+          SwarmMilestoneState.notRun,
+          'https://github.com/acme/lampos/actions/runs/7/job/2',
+        ),
         (
           screens,
           SwarmMilestoneState.fails,
-          'https://github.com/acme/lampos/runs/3',
+          'https://github.com/acme/lampos/actions/runs/7/job/3',
         ),
       ],
     );
@@ -225,34 +257,149 @@ void main() {
     expect([for (final m in goal.notPassing) m.name], [screens, start]);
   });
 
-  test('the goal is scored on the branch\'s tip when all its checks have ended, in one request', () async {
+  // `gh` hands over no control character as it is: it writes each in caret notation (U+0007 as `^G`), so that no answer
+  // can drive a terminal. The daemon asks GitHub itself and reads a check's name as it is. Seen on a real repository
+  // (2026-11-11): the milestone `A bell <U+0007> in a name` passed for the daemon and was not run for Desktop.
+  test('a milestone with a control character in its name is matched to its check as gh hands the name over', () async {
+    const bell = 'A bell \u0007 in a name';
+    const others = 'Esc \u001B, a file separator \u001C and a next line \u0085';
+    const rubout = 'A rubout \u007F stays';
+    const goal = '| $bell | `a` |\n| $others | `b` |\n| $rubout | `c` |';
+    Map<String, Object?> named(int id, String name) => {
+      'id': id,
+      'name': name,
+      'status': 'completed',
+      'conclusion': 'success',
+    };
+    // As gh writes the names.
+    expect(
+      await score(
+        commits([
+          [
+            named(1, 'goal: A bell ^G in a name'),
+            named(2, 'goal: Esc ^[, a file separator ^\\ and a next line ^E'),
+            named(3, 'goal: $rubout'),
+          ],
+        ], of: goal),
+      ),
+      (3, 0, 0),
+    );
+    // As GitHub itself has them: a gh that rewrites nothing reads the same.
+    expect(
+      await score(
+        commits([
+          [goalRun(1, bell, 'success'), goalRun(2, others, 'success')],
+        ], of: goal),
+      ),
+      (2, 0, 1),
+    );
+    // The newest run of a name is still told among both spellings.
+    expect(
+      await score(
+        commits([
+          [
+            named(5, 'goal: A bell ^G in a name'),
+            {...goalRun(9, bell, 'failure')},
+          ],
+        ], of: '| $bell | `a` |'),
+      ),
+      (0, 1, 0),
+    );
+  });
+
+  // A check run's page is text from outside: a row may send a browser only to github.com, over https.
+  test(
+    'a run\'s page is a link only when it is github.com\'s over https',
+    () async {
+      for (final (page, link) in <(Object?, bool)>[
+        ('https://github.com/acme/lampos/actions/runs/7/job/1', true),
+        ('https://GitHub.com/acme/lampos/runs/1', true),
+        ('http://github.com/acme/lampos/runs/1', false),
+        ('https://github.com.example.org/acme/lampos/runs/1', false),
+        ('https://example.org/github.com/runs/1', false),
+        ('https://github.com@example.org/runs/1', false),
+        ('file:///Applications', false),
+        ('javascript:alert(1)', false),
+        ('github.com/acme/lampos/runs/1', false),
+        ('https://', false),
+        (7, false),
+        (null, false),
+      ]) {
+        final goal = (await commits([
+          [
+            {...goalRun(1, sync, 'failure'), 'html_url': page},
+          ],
+        ], of: '| $sync | `a` |').github.goal('acme/lampos'))!;
+        expect(
+          goal.milestones.single.url,
+          link ? page : isNull,
+          reason: '$page',
+        );
+        expect(goal.milestones.single.state, SwarmMilestoneState.fails);
+      }
+    },
+  );
+
+  // A milestone's name is the repository's text. On screen it loses what would draw as nothing or as other words; its
+  // check is still found by the name as written.
+  test('a milestone is shown without control characters and marks that turn a line\'s direction, and matched as written', () async {
+    const written =
+        'A bell \u0007 in a\u0085 name\u202E txet\u202C \u2066x\u2069\u200E\u200F\u007F\u009F\u001B[31m';
+    final goal = (await commits([
+      [goalRun(1, written, 'success')],
+    ], of: '| $written | `true` |').github.goal('acme/lampos'))!;
+    expect(goal.milestones.single.name, written);
+    expect(goal.milestones.single.state, SwarmMilestoneState.passes);
+    expect(goal.milestones.single.shown, 'A bell  in a name txet x[31m');
+    // Words in other scripts, and an emoji, are a name's own.
+    expect(
+      const SwarmMilestone(
+        name: 'Caf\u00E9 \u{1F4A1} \u706F',
+        state: SwarmMilestoneState.notRun,
+      ).shown,
+      'Caf\u00E9 \u{1F4A1} \u706F',
+    );
+  });
+
+  test('the goal is scored on the branch\'s tip when all its checks have ended, by the calls the daemon makes', () async {
     final t = commits([
       done,
-      [goalRun(9, sync, 'FAILURE')],
+      [goalRun(9, sync, 'failure')],
     ]);
     expect(await score(t), (2, 1, 0));
-    expect(t.calls, hasLength(1));
-    expect(
-      t.calls.single,
-      containsAll(['api', 'graphql', 'owner=acme', 'name=lampos']),
-    );
+    expect(t.calls, [
+      '/contents/agents/GOAL.md',
+      '',
+      '/commits?sha=main&per_page=100',
+      '/commits/${FakeGoalGitHub.sha(0)}/check-runs?per_page=100',
+    ]);
+    // Each a read, as the version of GitHub's API the daemon asks.
+    expect(t.last, [
+      'api',
+      '--method',
+      'GET',
+      '-H',
+      'Accept: application/vnd.github+json',
+      '-H',
+      'X-GitHub-Api-Version: 2022-11-28',
+      'repos/acme/lampos/commits/${FakeGoalGitHub.sha(0)}/check-runs?per_page=100',
+    ]);
   });
 
   // After each landing the tip has no run yet, and a tip pushed with [skip ci] never has one.
   test('else on the newest of the branch\'s last five landings whose checks have all ended', () async {
-    expect(
-      await score(
-        commits([
-          [],
-          running,
-          done,
-          [goalRun(9, sync, 'FAILURE')],
-        ]),
-      ),
-      (2, 1, 0),
-    );
+    final t = commits([
+      [],
+      running,
+      done,
+      [goalRun(9, sync, 'failure')],
+    ]);
+    expect(await score(t), (2, 1, 0));
+    expect(checksAsked(t), [(0, 1), (1, 1), (2, 1)]);
     // The sixth is not looked at.
-    expect(await score(commits([[], [], [], [], [], done])), (0, 0, 3));
+    final six = commits([[], [], [], [], [], done]);
+    expect(await score(six), (0, 0, 3));
+    expect(checksAsked(six), [for (var n = 0; n < 5; n++) (n, 1)]);
   });
 
   // A train that lands as a merge commit brings its members' commits with it: none was pushed to the branch, so none has
@@ -268,10 +415,11 @@ void main() {
       ],
     );
     expect(await score(t), (2, 1, 0));
+    expect(checksAsked(t), [(0, 1), (7, 1)]);
   });
 
-  // The daemon lists the branch's last hundred commits and follows the line among them: a landing older than those is not
-  // one of its five, so it is none of Desktop's.
+  // The daemon follows the line among the branch's last hundred commits, as GitHub lists them: a landing older than those
+  // is not one of its five.
   test(
     'a landing behind the branch\'s last hundred commits is not followed',
     () async {
@@ -284,22 +432,21 @@ void main() {
         ],
       );
       expect(await score(t), (1, 0, 2));
+      expect(checksAsked(t), [(0, 1)]);
     },
   );
 
   test('with none of the five ended, on the landing with the fewest not run, the newest of those', () async {
-    final one = [goalRun(1, sync, 'SUCCESS')];
-    expect(await score(commits([[], running, one, running, [], done])), (
-      1,
-      0,
-      2,
-    ));
+    final one = [goalRun(1, sync, 'success')];
+    final none = commits([[], running, one, running, [], done]);
+    expect(await score(none), (1, 0, 2));
+    expect(none.calls, hasLength(3 + 5));
     expect(
       await score(
         commits([
           [],
           one,
-          [goalRun(1, sync, 'FAILURE')],
+          [goalRun(1, sync, 'failure')],
         ]),
       ),
       (1, 0, 2),
@@ -311,128 +458,252 @@ void main() {
       ),
       (2, 1, 1),
     );
-    // A branch with no commit GitHub tells of: nothing has run.
-    expect(await score(commits([])), (0, 0, 3));
+    // A branch GitHub lists no commit of: nothing has run, and nothing more is asked.
+    final empty = commits([]);
+    expect(await score(empty), (0, 0, 3));
+    expect(empty.calls, hasLength(3));
   });
 
-  test('a commit\'s checks past the first hundred are read too, as far as three hundred, and only for a landing looked at', () async {
+  test('the branch is asked for by its name as an address takes it, and a commit\'s checks past the first hundred are read too, as far as three pages', () async {
     Map<String, Object?> other(int id) => {
-      'databaseId': id,
+      'id': id,
       'name': 'build $id',
-      'status': 'COMPLETED',
-      'conclusion': 'SUCCESS',
+      'status': 'completed',
+      'conclusion': 'success',
     };
     final late = [
-      for (final run in done)
-        {...run, 'databaseId': 900 + (run['databaseId']! as int)},
+      for (final run in done) {...run, 'id': 900 + (run['id']! as int)},
     ];
     final t = commits([
       [for (var n = 1; n <= 250; n++) other(n), ...late],
-      // Its further pages are never asked for: the tip's checks have ended.
+      // Its checks are never asked for: the tip's have ended.
       [for (var n = 1; n <= 250; n++) other(n)],
+    ])..branch = 'release/1 beta';
+    final goal = (await t.github.goal('acme/lampos'))!;
+    expect((counts(goal), goal.branch), ((2, 1, 0), 'release/1 beta'));
+    expect(t.calls.skip(2), [
+      '/commits?sha=release%2F1%20beta&per_page=100',
+      '/commits/${FakeGoalGitHub.sha(0)}/check-runs?per_page=100',
+      '/commits/${FakeGoalGitHub.sha(0)}/check-runs?per_page=100&page=2',
+      '/commits/${FakeGoalGitHub.sha(0)}/check-runs?per_page=100&page=3',
     ]);
-    expect(await score(t), (2, 1, 0));
-    expect(t.calls, hasLength(3));
-    expect(t.calls[1], containsAll(['oid=${FakeGoalGitHub.oid(0)}']));
-    expect(
-      [
-        for (final call in t.calls.skip(1))
-          call.firstWhere((a) => a.startsWith('after=')),
-      ],
-      ['after=100', 'after=200'],
-    );
     final far = commits([
       [for (var n = 1; n <= 300; n++) other(n), ...done],
     ]);
     expect(await score(far), (0, 0, 3));
-    expect(far.calls, hasLength(3));
+    expect(checksAsked(far), [(0, 1), (0, 2), (0, 3)]);
+    // A repository that names no default branch is asked for its commits with none, as the daemon asks.
+    final unnamed = commits([done])..branch = '';
+    expect(await score(unnamed), (2, 1, 0));
+    expect(unnamed.calls[2], '/commits?sha=&per_page=100');
   });
 
-  test('a project with no goal file, or no row in it, has no goal', () async {
-    for (final text in [null, '# Goal\n\nNot written yet.']) {
-      final t = FakeGoalGitHub(file: text, landings: [FakeLanding(done)]);
-      expect(await t.github.goal('acme/lampos'), isNull, reason: '$text');
-      expect(t.calls, hasLength(1));
+  test('a project with no goal file, one over 1 MB, or one with no row has no goal, and nothing more is asked for it', () async {
+    for (final t in [
+      FakeGoalGitHub(landings: [FakeLanding(done)]),
+      FakeGoalGitHub(
+        file: '# Goal\n\nNot written yet.',
+        landings: [FakeLanding(done)],
+      ),
+      // GitHub answers for a file over 1 MB with no content, which the daemon reads as no file.
+      FakeGoalGitHub(file: file, landings: [FakeLanding(done)])..tooBig = true,
+    ]) {
+      expect(await t.github.goal('acme/lampos'), isNull);
+      expect(t.calls, ['/contents/agents/GOAL.md']);
     }
-    // A repository with no commit at all.
-    expect(await FakeGoalGitHub().github.goal('acme/lampos'), isNull);
+    // Content that is not what GitHub says it is, and an answer that is no JSON at all.
+    for (final answer in <Object?>[
+      {'content': 'not base64!', 'encoding': 'base64'},
+      {'content': 7, 'encoding': 'base64'},
+      {'content': base64.encode(utf8.encode(file))},
+      [contents(file)],
+      'not json',
+      'null',
+    ]) {
+      expect(
+        await answering((_) => answer).goal('acme/lampos'),
+        isNull,
+        reason: '$answer',
+      );
+    }
+    // Bytes that are no UTF-8 are read as the daemon reads them, each as U+FFFD, and the rows around them stand.
+    final bytes = [
+      ...utf8.encode('| Sync | `a` |\n| '),
+      0xFF,
+      ...utf8.encode(' | `b` |'),
+    ];
+    final goal = await answering(
+      (path) => path.startsWith('/contents/')
+          ? {'content': base64.encode(bytes), 'encoding': 'base64'}
+          : path.isEmpty
+          ? {'default_branch': 'main'}
+          : [],
+    ).goal('acme/lampos');
+    expect([for (final m in goal!.milestones) m.name], ['Sync', '\uFFFD']);
   });
 
-  test('a read that fails says why in the board\'s words, and what GitHub sends in another shape reads as nothing run', () async {
+  // The daemon's reader keeps a file's byte-order mark, which counts toward its first line's length; Dart's own leaves
+  // the mark out.
+  test(
+    'a file that starts with a byte-order mark is read as the daemon reads it',
+    () async {
+      Future<List<String>?> milestones(String text) async {
+        final goal = await answering(
+          (path) => path.startsWith('/contents/')
+              ? {
+                  'content': base64.encode([
+                    0xEF,
+                    0xBB,
+                    0xBF,
+                    ...utf8.encode(text),
+                  ]),
+                  'encoding': 'base64',
+                }
+              : path.isEmpty
+              ? {'default_branch': 'main'}
+              : [],
+        ).goal('acme/lampos');
+        return goal == null ? null : [for (final m in goal.milestones) m.name];
+      }
+
+      // The mark is space at a row's start.
+      expect(await milestones('| Sync | `a` |\n| Start | `b` |'), [
+        'Sync',
+        'Start',
+      ]);
+      // With it the first line is 1,000 long, and read; one longer, and it is not.
+      final longest = '| Sync | `${'b' * 986}` |';
+      expect(longest.length, 999);
+      expect(await milestones(longest), ['Sync']);
+      expect(await milestones('| Sync | `${'b' * 987}` |'), isNull);
+      expect(await milestones('\n| Sync | `${'b' * 987}` |'), ['Sync']);
+    },
+  );
+
+  test('a read that fails says why, in the goal\'s own words where the board\'s are of tasks', () async {
+    Future<void> fails(Future<SwarmGoal?> read, String words) => expectLater(
+      read,
+      throwsA(
+        isA<SwarmGitHubError>().having((e) => e.message, 'message', words),
+      ),
+    );
+    final logged = <String>[];
+    final previous = appLog;
+    appLog = _Recorder(logged);
+    addTearDown(() => appLog = previous);
     final t = commits([done])..failure = FakeGoalGitHub.signedOut;
-    await expectLater(
+    await fails(
       t.github.goal('acme/lampos'),
-      throwsA(
-        isA<SwarmGitHubError>().having(
-          (e) => e.message,
-          'message',
-          'Sign in to GitHub: run gh auth login.',
-        ),
-      ),
+      'Sign in to GitHub: run gh auth login.',
     );
-    t.failure = (1, 'GraphQL: Could not resolve to a Repository');
-    await expectLater(
+    // The file not being there is an answer; the repository not being there is not.
+    t
+      ..failure = FakeGoalGitHub.notFound
+      ..failureAt = '';
+    await fails(
       t.github.goal('acme/lampos'),
-      throwsA(
-        isA<SwarmGitHubError>().having(
-          (e) => e.message,
-          'message',
-          'You can\'t see acme/lampos on GitHub.',
-        ),
+      'You can\'t see acme/lampos on GitHub.',
+    );
+    t
+      ..failure = (1, 'gh: Server Error (HTTP 502)')
+      ..failureAt = '/commits/${FakeGoalGitHub.sha(0)}/check-runs?per_page=100';
+    await fails(
+      t.github.goal('acme/lampos'),
+      'GitHub didn\'t answer. Try again.',
+    );
+    // No gh on this computer.
+    await fails(
+      SwarmGitHub(run: (_) async => throw const ProcessException('gh', []))
+          .goal('acme/lampos'),
+      'Install the GitHub CLI (gh) to see the goal.',
+    );
+    // A limit stops every read for two minutes, the goal's too.
+    t
+      ..failure = (1, 'gh: API rate limit exceeded for user ID 1. (HTTP 403)')
+      ..failureAt = null;
+    await fails(t.github.goal('acme/lampos'), SwarmGitHub.limitedWords);
+    final asked = t.calls.length;
+    t.failure = null;
+    await fails(t.github.goal('acme/lampos'), SwarmGitHub.limitedWords);
+    expect(t.calls, hasLength(asked));
+    // Each failure is named in the log as the goal's, by its kind and never by what gh printed.
+    expect(logged, [
+      'GitHub goal not read: signed out (gh exited 4)',
+      'GitHub goal not read: no repository (gh exited 1)',
+      'GitHub goal not read: failed (gh exited 1)',
+      'GitHub goal not read: gh is not installed',
+      'GitHub goal not read: rate limited (gh exited 1)',
+    ]);
+    // A project with no goal file is no failure: nothing is logged for it.
+    logged.clear();
+    expect(await FakeGoalGitHub().github.goal('acme/lampos'), isNull);
+    expect(logged, isEmpty);
+  });
+
+  // The daemon reads an answer that is not what was asked for as an empty one.
+  test('what GitHub sends in another shape reads as nothing run', () async {
+    final sha = FakeGoalGitHub.sha(0);
+    for (final (commits, runs, asked) in <(Object?, Object?, int)>[
+      ('not json', null, 0),
+      ({'message': 'not a list'}, null, 0),
+      (
+        [
+          7,
+          {},
+          {'sha': '../../pulls'},
+          {'sha': 7},
+          {'sha': sha, 'parents': 'none'},
+        ],
+        {'total_count': 0},
+        1,
       ),
-    );
-    ProcessResult ok(Object? data) =>
-        ProcessResult(1, 0, jsonEncode({'data': data}), '');
-    await expectLater(
-      SwarmGitHub(run: (_) async => ok(null)).goal('acme/lampos'),
-      throwsA(isA<SwarmGitHubError>()),
-    );
-    for (final branch in <Object?>[
-      'main',
-      {'name': 7, 'target': 'none'},
-      {
-        'target': {
-          'oid': 5,
-          'history': {'nodes': 'none'},
+      (
+        [
+          {
+            'sha': sha,
+            'parents': [7],
+          },
+        ],
+        {
+          'check_runs': [
+            7,
+            null,
+            {'name': 9, 'id': 'x', 'status': 3},
+            {'name': 'goal: $sync', 'id': 4.5, 'status': 'completed'},
+          ],
         },
-      },
-      {
-        'name': 'main',
-        'target': {
-          'oid': FakeGoalGitHub.oid(0),
-          'history': {
-            'nodes': [
-              {'oid': FakeGoalGitHub.oid(0)},
-              7,
+        1,
+      ),
+      (
+        [
+          {
+            'sha': sha,
+            'parents': [
+              {'sha': 7},
             ],
           },
-          'statusCheckRollup': {
-            'contexts': {
-              'nodes': [
-                7,
-                {'name': 9, 'databaseId': 'x', 'status': 3},
-              ],
-            },
-          },
-          'parents': {
-            'nodes': ['none'],
-          },
-        },
-      },
+        ],
+        'not json',
+        1,
+      ),
     ]) {
-      final goal = await SwarmGitHub(
-        run: (_) async => ok({
-          'repository': {
-            'goal': {'text': file},
-            'defaultBranchRef': branch,
-          },
-        }),
-      ).goal('acme/lampos');
-      expect(
-        (goal!.passed, goal.failed, goal.notRun),
-        (0, 0, 3),
-        reason: '$branch',
-      );
+      var checks = 0;
+      final goal = await answering((path) {
+        if (path.startsWith('/contents/')) return contents(file);
+        // A name that is no text is asked for as it stands, as the daemon asks.
+        if (path.isEmpty) return {'default_branch': 7};
+        if (path == '/commits?sha=7&per_page=100') return commits;
+        if (path == '/commits/$sha/check-runs?per_page=100') {
+          checks++;
+          return runs;
+        }
+        fail('asked for $path');
+      }).goal('acme/lampos');
+      final expected = runs is Map && runs['check_runs'] is List
+          ? (0, 1, 2)
+          : (0, 0, 3);
+      expect(counts(goal!), expected, reason: '$commits');
+      expect(checks, asked, reason: '$commits');
     }
   });
 
@@ -460,4 +731,41 @@ void main() {
     expect(t.github.keptGoal('acme/other-0')!.goal, isNull);
     expect(t.github.keptGoal('acme/lampos'), isNull);
   });
+
+  // Two reads of one repository can be on their way at once (its bar shown again while the first still waits on GitHub).
+  test(
+    'an answer that comes after a later read\'s is not kept in its place',
+    () async {
+      final t = commits([done]);
+      final gate = t.hold = Completer<void>();
+      // Its checks are answered, 2 passing, and the answer waits.
+      final older = t.github.goal('acme/lampos');
+      await pumpEventQueue();
+      expect(t.calls, hasLength(4));
+      t
+        ..hold = null
+        ..landings = [
+          FakeLanding([...done, goalRun(13, screens, 'success')]),
+        ];
+      expect((await t.github.goal('acme/lampos'))!.passed, 3);
+      gate.complete();
+      expect((await older)!.passed, 2);
+      expect(t.github.keptGoal('acme/lampos')!.goal!.passed, 3);
+    },
+  );
+}
+
+/// The app log's lines, as they were written.
+class _Recorder implements AppLog {
+  _Recorder(this.lines);
+  final List<String> lines;
+
+  @override
+  void record(
+    AppLogLevel level,
+    String category,
+    String message, {
+    Object? error,
+    StackTrace? stackTrace,
+  }) => lines.add(message);
 }

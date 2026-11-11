@@ -38,13 +38,13 @@ class SwarmGoalScore extends StatefulWidget {
   /// How often the goal is read again while it shows; null under test, where nothing ticks.
   final Duration? refreshEvery;
 
-  /// How old a reading may be before the bar coming on screen, or the menu opening, reads again: a person moving between
-  /// chats would otherwise spend their GitHub rate limit on a score that has not moved.
-  static const freshFor = Duration(minutes: 1);
-
   @override
   State<SwarmGoalScore> createState() => _SwarmGoalScoreState();
 }
+
+/// How old a reading may be before the bar coming on screen, or the menu opening, reads again: a person moving between
+/// chats would otherwise spend their GitHub rate limit on a score that has not moved.
+const _freshFor = Duration(minutes: 1);
 
 class _SwarmGoalScoreState extends State<SwarmGoalScore>
     with WidgetsBindingObserver, VisibleTick<SwarmGoalScore> {
@@ -55,6 +55,10 @@ class _SwarmGoalScoreState extends State<SwarmGoalScore>
 
   /// When the last read started, or the kept score was read.
   DateTime? _readAt;
+
+  /// How many reads have started, and repositories shown: the number of the one whose answer is awaited. GitHub may
+  /// answer an earlier read after a later one, and what it says then is older than what shows.
+  var _reads = 0;
   String? _shown;
   bool _hovered = false, _focused = false;
   final _menu = MenuController();
@@ -81,6 +85,7 @@ class _SwarmGoalScoreState extends State<SwarmGoalScore>
   /// The repository's last score shows at once, and GitHub is asked only when that is old.
   void _show() {
     final kept = widget.github.keptGoal(widget.repository);
+    _reads++;
     _shown = widget.repository;
     _goal = kept?.goal;
     _error = null;
@@ -94,28 +99,27 @@ class _SwarmGoalScoreState extends State<SwarmGoalScore>
   @override
   void onScreenChanged(bool onScreen) => _readIfOld();
 
-  /// Reads when the last reading is older than [SwarmGoalScore.freshFor], and never out of sight.
+  /// Reads when the last reading is older than [_freshFor], and never out of sight.
   void _readIfOld() {
     final readAt = _readAt;
     if (onScreen &&
-        (readAt == null ||
-            clock.now().difference(readAt) >= SwarmGoalScore.freshFor)) {
+        (readAt == null || clock.now().difference(readAt) >= _freshFor)) {
       unawaited(_read());
     }
   }
 
   Future<void> _read() async {
-    final repository = widget.repository;
+    final read = ++_reads;
     _readAt = clock.now();
     try {
-      final goal = await widget.github.goal(repository);
-      if (!mounted || widget.repository != repository) return;
+      final goal = await widget.github.goal(widget.repository);
+      if (!mounted || read != _reads) return;
       setState(() {
         _goal = goal;
         _error = null;
       });
     } on SwarmGitHubError catch (error) {
-      if (!mounted || widget.repository != repository) return;
+      if (!mounted || read != _reads) return;
       // The last score stays, and its menu says why it may be old.
       setState(() => _error = error.message);
     } catch (error) {
@@ -186,9 +190,9 @@ class _SwarmGoalScoreState extends State<SwarmGoalScore>
             Tooltip(
               message: milestone.url == null
                   ? 'Opens $goalFile on GitHub'
-                  : 'Opens $goalCheck${milestone.name} on GitHub',
+                  : 'Opens $goalCheck${milestone.shown} on GitHub',
               child: AppMenuItem(
-                label: milestone.name,
+                label: milestone.shown,
                 state: milestone.state == SwarmMilestoneState.fails
                     ? 'fails'
                     : 'not run',

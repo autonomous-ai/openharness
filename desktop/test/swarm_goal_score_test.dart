@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -34,15 +36,22 @@ void main() {
 | Alarm rings offline | `make alarm` |
 ''';
   List<Map<String, Object?>> runs() => [
-    goalRun(1, 'Boots in under 20 s', 'SUCCESS'),
-    goalRun(3, 'Update rolls back on failure', 'FAILURE'),
-    goalRun(4, 'Night mode by voice', 'SUCCESS'),
-    goalRun(5, 'Desk talk is left alone', null, status: 'QUEUED'),
-    goalRun(6, 'Voice timer survives a restart', 'TIMED_OUT'),
-    goalRun(7, 'Alarm rings offline', 'SUCCESS'),
+    goalRun(1, 'Boots in under 20 s', 'success'),
+    goalRun(3, 'Update rolls back on failure', 'failure'),
+    goalRun(4, 'Night mode by voice', 'success'),
+    goalRun(5, 'Desk talk is left alone', null, status: 'queued'),
+    goalRun(6, 'Voice timer survives a restart', 'timed_out'),
+    goalRun(7, 'Alarm rings offline', 'success'),
   ];
-  FakeGoalGitHub lampos() =>
-      FakeGoalGitHub(file: file, landings: [FakeLanding(runs())]);
+  FakeGoalGitHub lampos({Duration timeout = const Duration(seconds: 30)}) =>
+      FakeGoalGitHub(
+        file: file,
+        landings: [FakeLanding(runs())],
+        timeout: timeout,
+      );
+
+  /// Where a check run's page is.
+  String job(int id) => 'https://github.com/acme/lampos/actions/runs/7/job/$id';
 
   /// The Swarm of lampos, whose repository is acme/lampos, as [gh] answers for it.
   ConversationServer server() {
@@ -109,7 +118,7 @@ void main() {
       final opened = links(tester);
       await show(tester, gh);
       expect(find.text('Goal 3 of 7'), findsOneWidget);
-      expect(gh.calls, hasLength(1));
+      expect(gh.reads, 1);
       // After the name, on its line, in the bar's metadata style with figures of one width.
       final name = tester.getRect(key('super-project-menu'));
       final score = tester.getRect(find.text('Goal 3 of 7'));
@@ -159,13 +168,17 @@ void main() {
         grid.AppPalette.textFaint,
       );
       // Opened within a minute of the read, it asks GitHub nothing.
-      expect(gh.calls, hasLength(1));
+      expect(gh.reads, 1);
 
       // A row opens its check run, and the menu closes.
+      expect(
+        find.byTooltip('Opens goal: Update rolls back on failure on GitHub'),
+        findsOneWidget,
+      );
       await tester.tap(find.text('Update rolls back on failure'));
       await tester.pumpAndSettle();
       expect(find.byType(AppMenuItem), findsNothing);
-      expect(opened, ['https://github.com/acme/lampos/runs/3']);
+      expect(opened, [job(3)]);
       // One whose check is only queued opens that run; one with no run opens the goal file.
       await tester.tap(key('swarm-goal'));
       await tester.pumpAndSettle();
@@ -177,10 +190,142 @@ void main() {
       await tester.tap(find.text('Busy room is detected'));
       await tester.pumpAndSettle();
       expect(opened.skip(1), [
-        'https://github.com/acme/lampos/runs/5',
+        job(5),
         'https://github.com/acme/lampos/blob/HEAD/agents/GOAL.md',
       ]);
       expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'the keyboard reaches the score with Tab, opens it, moves to a row with the arrows and opens that row',
+    (tester) async {
+      final opened = links(tester);
+      await show(tester, lampos());
+      // The keys are on the project's name, as after its menu was closed with Escape; the score is the next stop.
+      await tester.tap(key('super-project-menu'));
+      await tester.pumpAndSettle();
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(focusIsIn(key('super-project-menu')), isTrue);
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.pump();
+      expect(focusIsIn(key('swarm-goal')), isTrue);
+      // Focus shows as hover does.
+      expect(chevronShown(tester), isTrue);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(find.byType(AppMenuItem), findsNWidgets(4));
+      // Down to the first row, down again to the second, and Enter opens it.
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump();
+      expect(
+        focusIsIn(
+          find.widgetWithText(AppMenuItem, 'Update rolls back on failure'),
+        ),
+        isTrue,
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump();
+      expect(
+        focusIsIn(
+          find.widgetWithText(AppMenuItem, 'Voice timer survives a restart'),
+        ),
+        isTrue,
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(opened, [job(6)]);
+      expect(find.byType(AppMenuItem), findsNothing);
+      // The keys are on the score again: Enter opens it once more, and Escape from a row closes it with the keys on the score.
+      expect(focusIsIn(key('swarm-goal')), isTrue);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(find.byType(AppMenuItem), findsNWidgets(4));
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(find.byType(AppMenuItem), findsNothing);
+      expect(focusIsIn(key('swarm-goal')), isTrue);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'a long list opens on its search, and a state word typed there leaves the rows that stand so',
+    (tester) async {
+      final opened = links(tester);
+      // Twelve milestones, none passing: three fail, one of them a check GitHub cancelled, and nine have no run.
+      final gh = FakeGoalGitHub(
+        file: [
+          for (var n = 1; n <= 12; n++) '| Milestone $n | `make check-$n` |',
+        ].join('\n'),
+        landings: [
+          FakeLanding([
+            goalRun(2, 'Milestone 2', 'failure'),
+            goalRun(5, 'Milestone 5', 'failure'),
+            goalRun(11, 'Milestone 11', 'cancelled'),
+          ]),
+        ],
+      );
+      await show(tester, gh);
+      expect(find.text('Goal 0 of 12'), findsOneWidget);
+      await tester.tap(key('swarm-goal'));
+      await tester.pumpAndSettle();
+      expect(rows(tester), hasLength(12));
+      final search = find.byKey(const Key('app-menu-search'));
+      await tester.enterText(search, 'fails');
+      await tester.pumpAndSettle();
+      expect(rows(tester), [
+        ('Milestone 2', 'fails'),
+        ('Milestone 5', 'fails'),
+        ('Milestone 11', 'fails'),
+      ]);
+      await tester.enterText(search, 'Not Run');
+      await tester.pumpAndSettle();
+      expect(rows(tester), [
+        for (final n in [1, 3, 4, 6, 7, 8, 9, 10, 12])
+          ('Milestone $n', 'not run'),
+      ]);
+      // A milestone's own words still find it, and Enter opens the first row left.
+      await tester.enterText(search, 'stone 11');
+      await tester.pumpAndSettle();
+      expect(rows(tester), [('Milestone 11', 'fails')]);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(opened, [job(11)]);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  // A milestone's name is the repository's text: what would draw as nothing, or turn the row's words around, is left out
+  // of what is drawn, and its check is still found by the name as written.
+  testWidgets(
+    'a row and its tooltip show a milestone without control characters and marks that turn a line\'s direction',
+    (tester) async {
+      const written = 'Dim\u202E the lamp\u0007 at dusk\u2066';
+      final gh = FakeGoalGitHub(
+        file:
+            '| $written | `make dim` |\n| Boots in under 20 s | `make boot` |',
+        landings: [
+          FakeLanding([
+            goalRun(1, written, 'failure'),
+            goalRun(2, 'Boots in under 20 s', 'success'),
+          ]),
+        ],
+      );
+      await show(tester, gh);
+      expect(find.text('Goal 1 of 2'), findsOneWidget);
+      await tester.tap(key('swarm-goal'));
+      await tester.pumpAndSettle();
+      expect(rows(tester), [('Dim the lamp at dusk', 'fails')]);
+      expect(
+        find.byTooltip('Opens goal: Dim the lamp at dusk on GitHub'),
+        findsOneWidget,
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
     },
   );
 
@@ -213,8 +358,8 @@ void main() {
         file: '| Boots in under 20 s | `make boot` |\n| Alarm rings offline | `make alarm` |',
         landings: [
           FakeLanding([
-            goalRun(1, 'Boots in under 20 s', 'SUCCESS'),
-            goalRun(2, 'Alarm rings offline', 'SUCCESS'),
+            goalRun(1, 'Boots in under 20 s', 'success'),
+            goalRun(2, 'Alarm rings offline', 'success'),
           ]),
         ],
       );
@@ -235,6 +380,20 @@ void main() {
       await tester.tap(find.text('Goal 2 of 2'));
       await tester.pumpAndSettle();
       expect(find.byType(AppMenuItem), findsNothing);
+      // With no menu to say it in, a read that fails says why in the tooltip, and the score stays.
+      gh.failure = FakeGoalGitHub.signedOut;
+      await tester.tap(key('super-agent-pip'));
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 61));
+      await tester.tap(key('super-project-lampos'));
+      await tester.pumpAndSettle();
+      expect(gh.reads, 2);
+      expect(find.text('Goal 2 of 2'), findsOneWidget);
+      expect(
+        find.byTooltip('Sign in to GitHub: run gh auth login.'),
+        findsOneWidget,
+      );
+      await tester.pump(const Duration(milliseconds: 300));
       expect(tester.takeException(), isNull);
     },
   );
@@ -244,7 +403,7 @@ void main() {
     (tester) async {
       final gh = FakeGoalGitHub(landings: [FakeLanding(runs())]);
       await show(tester, gh);
-      expect(gh.calls, hasLength(1));
+      expect(gh.reads, 1);
       expect(find.textContaining('Goal'), findsNothing);
       // Nothing is laid out after the name, not even the room of one.
       expect(tester.getSize(find.byType(SwarmGoalScore)), Size.zero);
@@ -270,7 +429,7 @@ void main() {
       await tester.pump(const Duration(seconds: 61));
       await tester.tap(key('swarm-goal'));
       await tester.pumpAndSettle();
-      expect(gh.calls, hasLength(2));
+      expect(gh.reads, 2);
       expect(find.text('Goal 3 of 7'), findsOneWidget);
       expect(
         tester.widget<Text>(key('swarm-goal-stale')).data,
@@ -289,16 +448,28 @@ void main() {
         ..landings = [
           FakeLanding([
             ...runs(),
-            goalRun(13, 'Update rolls back on failure', 'SUCCESS'),
+            goalRun(13, 'Update rolls back on failure', 'success'),
           ]),
         ];
       await tester.pump(const Duration(seconds: 61));
       await tester.tap(key('swarm-goal'));
       await tester.pumpAndSettle();
-      expect(gh.calls, hasLength(3));
+      expect(gh.reads, 3);
       expect(find.text('Goal 4 of 7'), findsOneWidget);
       expect(key('swarm-goal-stale'), findsNothing);
       expect(rows(tester).first, ('Voice timer survives a restart', 'fails'));
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      // A computer whose gh is gone says so of the goal, not of tasks.
+      gh.missing = true;
+      await tester.pump(const Duration(seconds: 61));
+      await tester.tap(key('swarm-goal'));
+      await tester.pumpAndSettle();
+      expect(find.text('Goal 4 of 7'), findsOneWidget);
+      expect(
+        tester.widget<Text>(key('swarm-goal-stale')).data,
+        'Install the GitHub CLI (gh) to see the goal.',
+      );
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
@@ -310,7 +481,7 @@ void main() {
   ) async {
     final gh = lampos()..failure = FakeGoalGitHub.signedOut;
     await show(tester, gh);
-    expect(gh.calls, hasLength(1));
+    expect(gh.reads, 1);
     expect(find.textContaining('Goal'), findsNothing);
     expect(tester.getSize(find.byType(SwarmGoalScore)), Size.zero);
     expect(tester.takeException(), isNull);
@@ -345,7 +516,7 @@ void main() {
       await tester.tap(key('super-project-lampos'));
       await tester.pumpAndSettle();
       expect(find.text('Goal 3 of 7'), findsOneWidget);
-      expect(gh.calls, hasLength(1));
+      expect(gh.reads, 1);
       await tester.tap(key('super-agent-pip'));
       await tester.pumpAndSettle();
       expect(find.textContaining('Goal'), findsNothing);
@@ -354,14 +525,14 @@ void main() {
       await tester.pump();
       expect(find.text('Goal 3 of 7'), findsOneWidget);
       await tester.pumpAndSettle();
-      expect(gh.calls, hasLength(1));
+      expect(gh.reads, 1);
       // Back after a minute, it is read again.
       await tester.tap(key('super-agent-pip'));
       await tester.pumpAndSettle();
       await tester.pump(const Duration(seconds: 61));
       await tester.tap(key('super-project-lampos'));
       await tester.pumpAndSettle();
-      expect(gh.calls, hasLength(2));
+      expect(gh.reads, 2);
       await tester.pump(const Duration(milliseconds: 300));
     },
   );
@@ -394,24 +565,69 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.text('Goal 3 of 7'), findsOneWidget);
-      expect(gh.calls, hasLength(1));
+      expect(gh.reads, 1);
       await tester.pump(const Duration(minutes: 4, seconds: 59));
-      expect(gh.calls, hasLength(1));
+      expect(gh.reads, 1);
       await tester.pump(const Duration(seconds: 1));
       await tester.pumpAndSettle();
-      expect(gh.calls, hasLength(2));
+      expect(gh.reads, 2);
       // Out of sight (another tab, the app hidden): no read, however long.
       set(() => shown = false);
       await tester.pump();
       await tester.pump(const Duration(minutes: 30));
-      expect(gh.calls, hasLength(2));
+      expect(gh.reads, 2);
       // Back in sight: read at once, and every five minutes from then.
       set(() => shown = true);
       await tester.pump();
       await tester.pumpAndSettle();
-      expect(gh.calls, hasLength(3));
+      expect(gh.reads, 3);
       await tester.pump(const Duration(minutes: 5));
-      expect(gh.calls, hasLength(4));
+      expect(gh.reads, 4);
+    },
+  );
+
+  // Two reads can be on their way at once: GitHub slow to answer the first while the next one's time comes.
+  testWidgets(
+    'an answer that comes after a later read\'s is dropped: the score stays the newest read\'s',
+    (tester) async {
+      // Longer than gh's own half minute, so the slow answer is still awaited when the next read's time comes.
+      final gh = lampos(timeout: const Duration(hours: 1));
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.light),
+          home: Scaffold(
+            body: SwarmGoalScore(
+              repository: 'acme/lampos',
+              github: gh.github,
+              refreshEvery: const Duration(minutes: 5),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Goal 3 of 7'), findsOneWidget);
+      // The second read's checks are answered, 3 passing still, and the answer waits.
+      final gate = gh.hold = Completer<void>();
+      await tester.pump(const Duration(minutes: 5));
+      expect(gh.reads, 2);
+      // The third read answers at once: the rollback passes now.
+      gh
+        ..hold = null
+        ..landings = [
+          FakeLanding([
+            ...runs(),
+            goalRun(13, 'Update rolls back on failure', 'success'),
+          ]),
+        ];
+      await tester.pump(const Duration(minutes: 5));
+      await tester.pumpAndSettle();
+      expect(gh.reads, 3);
+      expect(find.text('Goal 4 of 7'), findsOneWidget);
+      // The second read's answer comes now, older than what shows.
+      gate.complete();
+      await tester.pumpAndSettle();
+      expect(find.text('Goal 4 of 7'), findsOneWidget);
+      expect(gh.github.keptGoal('acme/lampos')!.goal!.passed, 4);
     },
   );
 

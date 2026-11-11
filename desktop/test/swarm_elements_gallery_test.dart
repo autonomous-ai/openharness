@@ -304,7 +304,7 @@ FakeGoalGitHub _goal({required int pass, int fail = 0, int notRun = 0}) {
     landings: [
       FakeLanding([
         for (final (n, name) in names.take(pass + fail).indexed)
-          goalRun(n + 1, name, n < pass ? 'SUCCESS' : 'FAILURE'),
+          goalRun(n + 1, name, n < pass ? 'success' : 'failure'),
       ]),
     ],
   );

@@ -516,7 +516,8 @@ class AppMenuSearchField extends StatelessWidget {
 /// marks missed each other.
 ///
 /// Past [searchAfter] rows the panel opens on a search field, matching a row's
-/// label, detail and note. Headings and dividers step aside during a search.
+/// label, detail, note and state word. Headings and dividers step aside during
+/// a search.
 ///
 /// [AppMenuItem] rows close the whole dropdown before they act. Anything else
 /// among [children] (a heading, an [AppMenuDivider]) is drawn as it is.
@@ -719,7 +720,8 @@ class _AppDropdownState extends State<AppDropdown> {
   bool _matches(AppMenuItem row, String needle) =>
       row.label.toLowerCase().contains(needle) ||
       (row.detail?.toLowerCase().contains(needle) ?? false) ||
-      (row.note?.toLowerCase().contains(needle) ?? false);
+      (row.note?.toLowerCase().contains(needle) ?? false) ||
+      (row.state?.toLowerCase().contains(needle) ?? false);
 
   List<AppMenuItem> get _rows => [
     for (final child in widget.children) ?_rowIn(child),

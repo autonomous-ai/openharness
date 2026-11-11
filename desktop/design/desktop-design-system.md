@@ -111,7 +111,8 @@ values to creation, search and desktop presenters; it is not a second palette.
 `AppMenuItem` is the ordinary context-menu row. A row that stands somewhere
 says so in one word at its far end (`state`: `fails`, `not run`), 12 and faint,
 in the error ink when it failed, and in the active row's detail ink on blue; a
-`trailing` widget keeps its own colours and is not for a word of state.
+`trailing` widget keeps its own colours and is not for a word of state. A
+dropdown's search finds a row by that word too.
 `AppDropdown` is every
 dropdown: however a click or a key opened it, the control that opened it holds
 focus, and Escape closes the menu from there and leaves focus on the control (on
@@ -771,18 +772,25 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   lists the milestones that do not pass yet, those that fail first, then those
   not run, each in the file's order, with the row's state word (`fails` in the
   error ink, `not run` faint); past 8 rows it opens on its search field, as
-  every dropdown does. A row opens its check run on GitHub, or `agents/GOAL.md`
-  when nothing ran for it. With every milestone passing it is text alone, with
+  every dropdown does, and `fails` typed there leaves the rows that fail. A
+  milestone's name is the repository's text: a row and its tooltip show it
+  without control characters and the marks that turn a line's direction. A row
+  opens its check run on GitHub, only a page of github.com over https, or
+  `agents/GOAL.md` when nothing ran for it. Tab reaches the score, Enter opens
+  it, the arrows move among its rows and Enter opens one. With every milestone
+  passing it is text alone, with
   no chevron and no menu; a project with no goal file, or no row in it, shows
   nothing, and its bar is as it was. A read that fails keeps the last score,
   and the menu's first line says why in the board's own words (`Sign in to
-  GitHub: run gh auth login.`), in metadata grey; a score that is text alone
-  says it in its tooltip; with no earlier score nothing shows. Desktop reads
-  it with `gh`, as the tasks (`SwarmGitHub.goal`), by the daemon's rules, so
-  the bar and the PM are told one number: when the project's bar comes on
-  screen, every five minutes while it stays, and when the menu opens, each
-  only on a reading older than a minute. Nothing is read for a project that is
-  not shown, on a phone, or while the Swarm is out of sight.
+  GitHub: run gh auth login.`; with no gh, `Install the GitHub CLI (gh) to see
+  the goal.`), in metadata grey; a score that is text alone says it in its
+  tooltip; with no earlier score nothing shows. Desktop reads it with `gh`
+  (`SwarmGitHub.goal`), by the REST calls the daemon makes and by its rules
+  (`cli/src/superTabs/goal.ts`), so the bar and the PM are told one number:
+  when the project's bar comes on screen, every five minutes while it stays,
+  and when the menu opens, each only on a reading older than a minute. An
+  answer that comes after a later read's is dropped. Nothing is read for a
+  project that is not shown, on a phone, or while the Swarm is out of sight.
   `test/swarm_goal_score_test.dart` clicks through it.
 - **Agents only.** People read a project's channel and its threads; only
   agents post there. In place of a composer, one quiet line in a grey pill:
