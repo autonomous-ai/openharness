@@ -190,7 +190,10 @@ describe('Harness says each thing once on GitHub, over an hour and a restart (gi
     one(10, /to \*\*Juno\*\*: please read this pull request/)
     one(12, /not merged yet at \w+: it conflicts with main/)
     one(13, /not merged yet at \w+: it is behind main/)
-    one(14, /: please read this pull request/)
+    // No verdict in 30 minutes: another reader is asked too (Swarm plan, step 1, item 1), each reader once in the hour.
+    const asked14 = (harness.get(14) ?? []).filter(body => /: please read this pull request/.test(body)).map(body => /\*\*(\w+)\*\*/.exec(body)?.[1])
+    expect(asked14, '#14').toHaveLength(2)
+    expect(new Set(asked14).size, '#14').toBe(2)
     one(15, /: merged\. READ-OK on \w+ by Juno, checks green\./)
     one(3, /nobody can start this yet: it needs gpu/)
     one(4, /nothing has moved on this task for/)
