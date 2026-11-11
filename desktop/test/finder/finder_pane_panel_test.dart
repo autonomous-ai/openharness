@@ -227,6 +227,18 @@ void main() {
     expect(widths.last, 265);
   });
 
+  // An empty list shows nothing (design doc, Swarm elements rule 7).
+  testWidgets('Changes with nothing changed shows nothing', (tester) async {
+    await pumpPanel(tester);
+    git.current = [];
+    await tester.tap(find.byKey(const ValueKey('finder-mode-changes')));
+    await tester.pumpAndSettle();
+    expect(git.reads, greaterThan(0));
+    expect(find.text('No changes'), findsNothing);
+    expect(find.textContaining('matches the last commit'), findsNothing);
+    expect(find.text('lib/main.dart'), findsNothing);
+  });
+
   testWidgets('Collapse folds it to a rail; the rail opens it again', (
     tester,
   ) async {

@@ -546,12 +546,13 @@ class _DevicesScreenState extends State<DevicesScreen>
                             radius: 18,
                           ),
                         )
+                      // Back with none connected, the page shows nothing: Add device is in its header (an empty list
+                      // shows nothing). The welcome is for a first device.
+                      else if (selected == null &&
+                          widget.controller.devices.isEmpty)
+                        _EmptyDevices(onAdd: () => _setup(), onShop: _shop)
                       else if (selected == null)
-                        _EmptyDevices(
-                          onAdd: () => _setup(),
-                          onShop: _shop,
-                          returning: widget.controller.devices.isNotEmpty,
-                        )
+                        const SizedBox.shrink()
                       else ...[
                         Text(
                           '${devices.length} ${devices.length == 1 ? 'device' : 'devices'}',
@@ -928,13 +929,8 @@ class _Beside {
 }
 
 class _EmptyDevices extends StatelessWidget {
-  const _EmptyDevices({
-    required this.onAdd,
-    required this.onShop,
-    this.returning = false,
-  });
+  const _EmptyDevices({required this.onAdd, required this.onShop});
   final VoidCallback onAdd, onShop;
-  final bool returning;
   @override
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
@@ -945,16 +941,12 @@ class _EmptyDevices extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              returning
-                  ? 'No devices connected'
-                  : 'A little closer\nto your work.',
+              'A little closer\nto your work.',
               style: grid.AppType.display(),
             ),
             const SizedBox(height: 18),
             Text(
-              returning
-                  ? 'Connect a device by USB-C to a computer running Harness. It will appear here automatically.'
-                  : 'Your agents, at a glance. A quiet chime when they need you. Make a home for every Harness on your desk.',
+              'Your agents, at a glance. A quiet chime when they need you. Make a home for every Harness on your desk.',
               style: DesktopChrome.text(color: DesktopChrome.muted),
             ),
             const SizedBox(height: 28),
@@ -964,9 +956,7 @@ class _EmptyDevices extends StatelessWidget {
               children: [
                 FilledButton(
                   onPressed: onAdd,
-                  child: Text(
-                    returning ? 'Add device' : 'Add your first device',
-                  ),
+                  child: const Text('Add your first device'),
                 ),
                 TextButton(
                   onPressed: onShop,
