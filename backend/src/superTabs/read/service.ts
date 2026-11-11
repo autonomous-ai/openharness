@@ -425,10 +425,10 @@ export class SwarmReads {
     const [heads, newest] = await Promise.all([transaction(this.db, tx => parts.loadChanged(tx, ids, new Date(0), ['head'])),
       this.store.view(ids).then(view => readLastChangedAts(this.db, view, ids))])
     return { tabs: page.map(row => {
-      const head = heads.get(row.id)![0]!.data as { name: string; paused: boolean }
+      const head = heads.get(row.id)![0]!.data as { name: string; paused: boolean; personal?: true }
       // Only the reader's own Personal Swarm is marked (a round dial's Personal | Team picker); another person's is not theirs
-      // to be told apart. Its id is derived from its owner and environment (deletion.ts), so no read is needed.
-      const personal = row.ownerId === user.sub && isPersonalSwarm({ id: row.id, environment: user.autonomousEnv, ownerId: row.ownerId })
+      // to be told apart. Its head says so, or its id is derived from its owner and environment (deletion.ts).
+      const personal = row.ownerId === user.sub && isPersonalSwarm({ id: row.id, environment: user.autonomousEnv, ownerId: row.ownerId, personal: head.personal })
       return { id: row.id, name: head.name, ownerId: row.ownerId, paused: head.paused, lastChangedAt: newest.get(row.id) ?? null,
         ...personal ? { personal: true as const } : {} }
     }), next: rows.length > 100 ? rows[99]!.id : null }

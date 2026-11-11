@@ -1,3 +1,4 @@
+import { unsigned } from './signature.js'
 import { readCapabilities } from './capacity.js'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
@@ -25,7 +26,7 @@ import { claimAsked, takeTask } from './githubClaim.js'
 import { Cuts, sameCut, splitAsked, splitTask } from './githubSplit.js'
 import { postVerdict, verdictAsked } from './githubVerdict.js'
 import { GitHubAssign } from './githubAssign.js'
-import { GitHubMerge, ledProjects, recordedAuthors, VerdictRecords, type LedProject } from './githubMerge.js'
+import { GitHubMerge, ledProjects, pmRunsHere, recordedAuthors, VerdictRecords, type LedProject } from './githubMerge.js'
 import { numbersSender, PmNumbers } from './pmNumbers.js'
 import { crewOf, labelOf } from './assign/crew.js'
 
@@ -210,7 +211,8 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     // A project's numbers, sent as its PM into the Swarm as the PM reads it (pmNumbers.ts messageOf).
     const numbers = new PmNumbers({ file: join(api.dataDir, 'super-tab-numbers.json'),
       send: numbersSender(async project => (await held().reads.read(project.tabId, project.pmAgentId)).state, (path, body) => backend(api, 'POST', path, body)) })
-    return new GitHubAssign({ projects: led(api, held), crew: crewOfProject(held), get: github.get, send: github.send, records, numbers })
+    return new GitHubAssign({ projects: led(api, held), crew: crewOfProject(held), get: github.get, send: github.send, records, numbers,
+      pmRunning: async project => pmRunsHere((await held().feed.current(60_000)).roster, project, id => !!api.agents.byAgent(id)) })
   }))(core, sources)
   // What this computer's person's agents shipped, read from GitHub with their own gh and told to the leaderboard (shipping.ts).
   const shipping = (options.shipping ?? (api => new ShippingReporter(api)))(core)
@@ -552,7 +554,11 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         }
         if (payload.action === 'command' && identifier(payload.operationId) && payload.command && typeof payload.command === 'object' && !Array.isArray(payload.command)) {
           if (!AGENT_COMMANDS.has(String(object(payload.command).type))) return { error: 'INVALID_REQUEST' }
-          const command = await mentionCommand(object(payload.command), async () => (await swarm()).state)
+          const tagged = await mentionCommand(object(payload.command), async () => (await swarm()).state)
+          // A post it sends by command, as the channel and its person's chat show it: who wrote it, and when, are beside it
+          // (signature.ts).
+          const command = tagged.type === 'message.send' && typeof tagged.text === 'string'
+            ? { ...tagged, text: unsigned(tagged.text, [agent.displayName as string | undefined, agent.name as string | undefined]) } : tagged
           const send = (command: Record<string, unknown>) => backend(core, 'POST', `${path}/commands`,
             { operationId: payload.operationId, command, asAgentId: agentId })
           try { return { ok: true, operationId: payload.operationId, value: await send(command) } } catch (error) {

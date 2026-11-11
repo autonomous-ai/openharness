@@ -23,6 +23,7 @@ import { startAccountNames } from './superTabs/migration/accountNamesJob.js'
 import { startTeamMachines } from './superTabs/migration/teamMachinesJob.js'
 import { startSwarmWipe } from './superTabs/migration/wipeJob.js'
 import { startRetiredNoticeRemoval } from './superTabs/migration/retiredNotices.js'
+import { startPersonalProjectRemoval } from './superTabs/migration/personalProjectJob.js'
 import { startAvatarRemoval } from './superTabs/migration/avatarRemoval.js'
 import { startDeliverySettle } from './superTabs/deliverySettle.js'
 import { startDeliveryRepush } from './superTabs/deliveryRepush.js'
@@ -79,6 +80,7 @@ async function start(): Promise<void> {
   let stopTeamMachines = (): void => {}
   let stopSwarmWipe = (): void => {}
   let stopRetiredNotices = (): void => {}
+  let stopPersonalProjects = (): void => {}
   let stopAvatarRemoval = (): void => {}
   let stopTimeChecks = (): void => {}
   let stopDeliveries = (): void => {}
@@ -102,6 +104,7 @@ async function start(): Promise<void> {
     stopTeamMachines()
     stopSwarmWipe()
     stopRetiredNotices()
+    stopPersonalProjects()
     stopAvatarRemoval()
     stopTimeChecks()
     stopDeliveries()
@@ -159,6 +162,9 @@ async function start(): Promise<void> {
   // Once after this release: stored notices of kinds nothing writes any more go, each as its author's delete would take it
   // (superTabs/migration/retiredNotices.ts).
   stopRetiredNotices = startRetiredNoticeRemoval(prisma, swarms)
+  // Once after this release: the repo-less "Personal" project every Personal Swarm was made with goes where nothing is in it
+  // (superTabs/migration/personalProjectJob.ts).
+  stopPersonalProjects = startPersonalProjectRemoval(prisma, swarms)
   // Once after this release: every avatar still stored goes, object and record (superTabs/migration/avatarRemoval.ts).
   stopAvatarRemoval = startAvatarRemoval(prisma, env)
   // Every 30 s, each active Swarm's time checks: v4's jobs only (superTabs/timeChecks.ts). Swarm v4 (anh Dee, 2026-11-09) runs

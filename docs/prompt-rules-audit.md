@@ -117,6 +117,11 @@ task. The command is named where it is needed, in the answer to `take`, not in e
 clause, "a builder may cut a piece off a task it holds, a sized sub-issue that Harness gives out as any task: leave it open":
 judgment the PM keeps, as code cannot tell a piece the PM would rather not have from one it closes by mistake.
 
+**The PM answers its person in a few lines (anh Dee, 2026-11-11: "it should be like a human conversation"):** one line at
+the end of `PM_BASICS`, "Answer your person in a few lines, as a teammate would on Slack; the detail goes on the issues". The
+rehearsal's PM answered a two-feature ask with a table and a report that were already on the issues. A prompt line for good:
+what to leave out of an answer is the PM's judgment, which no program can check.
+
 **The PM announces each hand-off in the project's channel (anh Dee, 2026-11-09)** so people can read the team talk: one line in
 `PM_BASICS`, "@Pip #12 is yours", once per hand-off, the rest of the task's record staying on its issue. It is a prompt line only
 until code does it: the PM does not see who a task went to until it reads the issue, and Harness knows at the moment it

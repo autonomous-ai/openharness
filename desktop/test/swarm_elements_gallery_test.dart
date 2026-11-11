@@ -48,7 +48,7 @@ import 'package:harness/super_tabs/message_receipt.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/personal_agents.dart';
-import 'package:harness/super_tabs/personal_lead_card.dart' show SwarmPmStart;
+import 'package:harness/super_tabs/choose_pm.dart' show SwarmPmChoose;
 import 'package:harness/super_tabs/project_sidebar.dart'
     show SuperTabFoldRow, SwarmStartRow;
 import 'package:harness/super_tabs/reply_box.dart';
@@ -674,6 +674,19 @@ class _Gallery extends StatelessWidget {
                         detail: 'Mac Studio',
                         onTap: () {},
                       ),
+                      // Its computer off: it says so, as an agent's row does, and does nothing.
+                      SuperTabQuietRow(
+                        leading: SuperTabAvatar(
+                          identity: 'agent:${swarmAgentId('laptop', 'notes')}',
+                          name: 'Release notes',
+                          size: SuperTabQuietRow.faceSize,
+                          face: true,
+                          offline: true,
+                        ),
+                        name: 'Release notes',
+                        detail: 'offline',
+                        onTap: null,
+                      ),
                       // While a click joins it: it waits.
                       SuperTabQuietRow(
                         leading: SuperTabAvatar(
@@ -1076,24 +1089,10 @@ class _Gallery extends StatelessWidget {
               child: SuperTabEmptyWords(superTabEmptyChannel),
             ),
           ]),
-          // A Personal project's channel with no PM (Swarm v4): one line and Start PM, which opens the PM's own chat; and
-          // why it could not start.
-          section('pm-start', 'Start PM: a Personal project with no PM', [
-            const SizedBox(
-              width: 440,
-              child: SwarmPmStart(
-                line: 'This project has no Product Manager.',
-                onStart: _noop,
-              ),
-            ),
-            const SizedBox(height: 8),
-            const SizedBox(
-              width: 440,
-              child: SwarmPmStart(
-                line: 'Couldn’t start the Product Manager: Claude Code isn’t signed in on Mac Studio',
-                onStart: _noop,
-              ),
-            ),
+          // A project's channel with no PM, as its owner sees it (anh Dee 2026-11-11): one line and Choose PM, which picks
+          // one of their agents.
+          section('pm-choose', 'Choose PM: a project with no PM', [
+            const SizedBox(width: 440, child: SwarmPmChoose(onChoose: _noop)),
           ]),
           // What GitHub said to a person's agent, in their chat with it (anh Dee 2026-11-09): a card on the left, not a bubble.
           section(

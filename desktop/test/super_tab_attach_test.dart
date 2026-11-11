@@ -6,7 +6,9 @@ import 'package:harness/core/models.dart';
 import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shortcuts/app_keymap.dart';
+import 'package:harness/state/app_state.dart';
 import 'package:harness/state/swarm_catalog.dart';
+import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/widgets/swarm_switcher.dart';
 
 import 'keymap_host_test.dart' show MemoryKeymap;
@@ -19,10 +21,12 @@ void main() {
   Finder key(String k) => find.byKey(ValueKey(k));
   final harness = RegExp('harness', caseSensitive: false);
 
-  /// With [nothingRunning], no session runs on the person's computers.
+  /// With [nothingRunning], no session runs on the person's computers; with [full], the Swarm tab already shows as many
+  /// panes as a tab holds.
   Future<SuperTabLaunchFixture> open(
     WidgetTester tester, {
     bool nothingRunning = false,
+    bool full = false,
   }) async {
     final f = SuperTabLaunchFixture();
     f.connection.journaled = false;
@@ -85,6 +89,12 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    if (full) {
+      final tab = f.app.activeSwarm;
+      for (var id = 1 << 20; tab.panes.length < AppNotifier.maxPanes; id++) {
+        tab.panes.add(TerminalPane(id: id, machineId: 'm'));
+      }
+    }
     return f;
   }
 
@@ -146,6 +156,46 @@ void main() {
       f.app.superTabs.dispose();
     },
   );
+
+  // QA 2026-11-12: Attach's footer said "No room for another harness." once the Swarm tab was full. An agent joins the
+  // team, so the tab's pane count never limits Attach, nor + Add agent.
+  testWidgets('a full Swarm tab still attaches, and says nothing of room', (
+    tester,
+  ) async {
+    final f = await open(tester, full: true);
+    final results = find.byType(SwarmSearchResults);
+    final room = find.descendant(
+      of: results,
+      matching: find.textContaining(RegExp('room|full')),
+    );
+    // Add agent (Cmd-O) to the Lead chat: an agent running here, or a new one.
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyO);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+    await tester.pumpAndSettle();
+    var search = tester.widget<SwarmSearchResults>(results).search;
+    expect(search.harnessContext?.action, 'Add agent');
+    expect(f.app.activeSwarm.panes, hasLength(AppNotifier.maxPanes));
+    expect(room, findsNothing);
+    expect(search.rows.where((row) => row.isCreate), hasLength(1));
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+
+    await tester.tap(key('project-sidebar-agents-attach'));
+    await tester.pumpAndSettle();
+    search = tester.widget<SwarmSearchResults>(results).search;
+    expect(search.selected?.agentId, 'docs-session');
+    expect(f.app.activeSwarm.panes, hasLength(AppNotifier.maxPanes));
+    expect(room, findsNothing);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    final join = f.connection.joins.single['command'] as Map;
+    expect(join, containsPair('harnessId', 'docs-session'));
+    expect(f.app.superTabs.peek(tabId)!.selectedId, join['conversationId']);
+    await tester.pumpWidget(const SizedBox());
+    await f.app.superTabs.peek(tabId)!.flush();
+    f.app.superTabs.dispose();
+  });
 
   // anh Dee 2026-11-10: "i should be able to attach stopped sessions too … resume + attach in one step".
   testWidgets('Attach speaks of agents when nothing matches, and an empty '
