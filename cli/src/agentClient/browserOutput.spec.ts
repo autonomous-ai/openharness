@@ -94,6 +94,14 @@ describe('capOutput', () => {
 })
 
 describe('the folder keeps the newest files', () => {
+  it('deletes nothing while there are fewer', () => {
+    const tmp = fresh()
+    const folder = browserFolder({ TMPDIR: tmp })
+    for (let i = 0; i < 30; i++) writeFileSync(join(folder, `shot-old-${i}.jpg`), 'old')
+    saveScreenshot({ TMPDIR: tmp }, JPEG.toString('base64'), AT)
+    expect(readdirSync(folder)).toHaveLength(31)
+  })
+
   it(`keeps ${KEPT_FILES}: one more deletes the oldest, whatever its kind`, () => {
     const tmp = fresh()
     const folder = browserFolder({ TMPDIR: tmp })
