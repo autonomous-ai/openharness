@@ -503,8 +503,16 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   it (a `CLAUDE.md` linked to `AGENTS.md`) says `Same as AGENTS.md.` in place
   of its size and has nothing to open. A
   file it did not show gets one metadata line (`CLAUDE.md is a link.`,
-  `CLAUDE.md isn't text.`, `../AGENTS.md isn't shown: too much text.`). An older computer sends
-  none: the agent's own file alone. Edit, Save and the 64 KB limit are for the
+  `CLAUDE.md isn't text.`, `../AGENTS.md isn't shown: too much text.`), in its group. An older computer sends
+  none: the agent's own file alone. After the folder, each under its own metadata heading after a hairline,
+  read only and folded the same way, is the rest of what goes into the agent (anh Dee, 2026-11-11: "show
+  users what goes into the agent. and what they can edit"): `From Harness`, one row `Swarm basics`, the
+  text Harness starts it with for its part, which its computer's Swarm service gives (`basics`); and `From
+  Mac 3`, its person's own file there that its engine reads for every session (`~/.claude/CLAUDE.md`,
+  Codex's `~/.codex/AGENTS.md`, named by its path). Last, after a hairline, one metadata line for what the
+  engine's maker tells it first, which nobody sees or changes here: `And Claude Code's own instructions,
+  from Anthropic.` (`And Codex's own instructions, from OpenAI.`). Only the agent's own file has Edit. A
+  computer from before them sends neither group, and the last line still shows. Edit, Save and the 64 KB limit are for the
   agent's own file: while it is typed it has the pane to itself, and the
   others are back after Save or Cancel. A read the computer refuses for the
   agent's own file still shows them, under its one line. A save names the
