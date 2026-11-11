@@ -244,8 +244,8 @@ describe('the tasks builders took, and when each was last touched (takenTasks)',
     const pulls = [{ body: 'Fixes #1', updated_at: t(2), head: { ref: 'pip/feature' } }, { body: '', updated_at: t(1), head: { ref: 'juno/2' } },
       { body: 'Closes #3', updated_at: t(0), head: { ref: 'x' } }]
     expect(takenTasks(issues, pulls, crew().builders)).toEqual([
-      { number: 1, label: 'builder:pip', name: 'Pip', touched: Date.parse(t(2)), waits: false },
-      { number: 2, label: 'builder:juno', name: 'Juno', touched: Date.parse(t(1)), waits: false },
+      { number: 1, label: 'builder:pip', name: 'Pip', touched: Date.parse(t(2)) },
+      { number: 2, label: 'builder:juno', name: 'Juno', touched: Date.parse(t(1)) },
     ])
   })
 })
@@ -256,11 +256,17 @@ describe('a task that waits on pieces cut off it (openPieces)', () => {
     expect(openPieces({ sub_issues_summary: { total: 5, completed: 5 } })).toBe(0)
     for (const summary of [undefined, null, {}, { total: 'many', completed: 0 }, { total: 2 }, { total: 1, completed: 3 }, 'three']) expect(openPieces({ sub_issues_summary: summary })).toBe(0)
   })
-  it('is a task its builder took that waits, until its pieces are done', () => {
+  it('is not a task its builder took and left quiet, until its pieces are done', () => {
     const at = new Date(NOW - 9 * 3_600_000).toISOString()
     const waits = issue(1, ['builder:pip', 'status:taken'], { updated_at: at, sub_issues_summary: { total: 2, completed: 1 } })
-    expect(takenTasks([waits], [], crew().builders)).toEqual([{ number: 1, label: 'builder:pip', name: 'Pip', touched: Date.parse(at), waits: true }])
-    expect(takenTasks([{ ...waits, sub_issues_summary: { total: 2, completed: 2 } }], [], crew().builders)).toMatchObject([{ number: 1, waits: false }])
+    expect(takenTasks([waits], [], crew().builders)).toEqual([])
+    expect(takenTasks([{ ...waits, sub_issues_summary: { total: 2, completed: 2 } }], [], crew().builders)).toEqual([{ number: 1, label: 'builder:pip', name: 'Pip', touched: Date.parse(at) }])
+  })
+  // Taken back from a builder that stopped, it was given out whole, to be built beside its own pieces (third review).
+  it('is given to nobody while it has no builder, and is a task again once its pieces are closed', () => {
+    const waits = issue(1, ['size:l'], { sub_issues_summary: { total: 2, completed: 1 } })
+    expect([...readProblem({ now: NOW, crew: crew(), closed: [], issues: [waits, issue(2, ['size:s'])] }).free]).toEqual(['#2'])
+    expect([...readProblem({ now: NOW, crew: crew(), closed: [], issues: [{ ...waits, sub_issues_summary: { total: 2, completed: 2 } }] }).free]).toEqual(['#1'])
   })
   // The second review of the split: a builder with two tasks waiting on pieces was given nothing more, and a team's one
   // builder could never be given the pieces its own tasks waited on.

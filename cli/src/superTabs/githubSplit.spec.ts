@@ -292,7 +292,7 @@ describe('a piece cut off a task, by command', () => {
   })
 
   it('closes again an issue GitHub will not make a piece, and says so', async () => {
-    for (const status of [422, 404, 410]) {
+    for (const status of [422, 410]) {
       const t = setup()
       t.repo.fail = { method: 'POST', path: /\/sub_issues$/, status }
       expect(await refusal(t.split())).toEqual({ code: 'PIECE_REFUSED', message: `GitHub will not make #57 a piece of acme/app#34: it answered ${status}. `
@@ -306,13 +306,16 @@ describe('a piece cut off a task, by command', () => {
 
   // GitHub's limit on writes answers 403 with no word of when it lifts: closing the piece then would undo a cut the same
   // command finishes a minute on. A login that may not attach answers 403 too, and is told what to do.
-  it('leaves open, unsized, a piece GitHub answers 403 for, and says how it ends either way', async () => {
-    const t = setup()
-    t.repo.fail = { method: 'POST', path: /\/sub_issues$/, status: 403 }
-    expect(await refusal(t.split())).toEqual({ code: 'GITHUB_REFUSED', message: `GitHub answered 403 for acme/app#34. ${AGAIN} If it answers 403 again, this login may not attach it: close #57.` })
-    expect(t.repo.issues.get(57)).toMatchObject({ state: 'open', labels: [{ name: 'part:sync' }, { name: 'needs:macos' }, { name: 'p1' }] })
-    t.repo.fail = null
-    expect(await t.split()).toMatchObject({ number: 57, cut: true, sized: true })
+  it('leaves open, unsized, a piece GitHub answers 403 or 404 for, and says how it ends either way', async () => {
+    for (const status of [403, 404]) {
+      const t = setup()
+      t.repo.fail = { method: 'POST', path: /\/sub_issues$/, status }
+      expect(await refusal(t.split())).toEqual({ code: 'GITHUB_REFUSED',
+        message: `GitHub answered ${status} for acme/app#34. ${AGAIN} If it answers ${status} again, this login may not attach it: close #57.` })
+      expect(t.repo.issues.get(57)).toMatchObject({ state: 'open', labels: [{ name: 'part:sync' }, { name: 'needs:macos' }, { name: 'p1' }] })
+      t.repo.fail = null
+      expect(await t.split()).toMatchObject({ number: 57, cut: true, sized: true })
+    }
   })
 
   // An attach whose answer was lost, sent again, is refused as already there; so is one a list read too early did not show.
@@ -329,6 +332,19 @@ describe('a piece cut off a task, by command', () => {
     expect(await cut()).toEqual({ url: 'https://github.com/acme/app/issues/57', number: 57, cut: true, sized: true })
     expect(t.calls()).toEqual(['POST /issues', 'POST /issues/34/sub_issues', 'POST /issues/57/labels', 'POST /issues/34/comments'])
     expect(t.repo.issues.get(57)).toMatchObject({ state: 'open' })
+    // Found attached that way with its line on the task already, from the command before, the line is not said twice.
+    const v = setup()
+    v.repo.issues.set(57, { id: 5700, number: 57, state: 'open', title: 'Sync the theme', body: 'Part of #34.', labels: [], html_url: 'https://github.com/acme/app/issues/57',
+      user: { login: 'pips-person' }, updated_at: new Date(NOW).toISOString(), repository_url: HERE })
+    v.repo.comments.set(34, [{ id: 9001, html_url: 'https://github.com/acme/app/issues/34#issuecomment-9001', body: 'Pip, 14:01: split off #57: Sync the theme', user: { login: 'pips-person' } }])
+    let again = true
+    expect(await splitTask({ get: v.get, record: v.record, login: async () => 'pips-person', now: () => NOW,
+      send: async (method, path, body) => {
+        const reply = await v.send(method, path, body)
+        if (again && method === 'POST' && path.endsWith('/sub_issues')) { again = false; return { ...reply, status: 422, body: null } }
+        return reply
+      } }, v.pip, { repository: 'acme/app', number: 34, size: 'm', title: 'Sync the theme', text: '' })).toMatchObject({ number: 57, cut: true })
+    expect(v.calls()).toEqual(['POST /issues/34/sub_issues', 'POST /issues/57/labels'])
     // The read it would close on is not given: nothing is closed, and the same command goes on from there.
     const u = setup()
     u.repo.fail = { method: 'POST', path: /\/sub_issues$/, status: 422 }
@@ -341,11 +357,14 @@ describe('a piece cut off a task, by command', () => {
     expect(u.calls()).toEqual(['POST /issues', 'POST /issues/34/sub_issues'])
   })
 
-  it('says an issue may be open when GitHub did not answer as it was opened', async () => {
+  it('says an issue may be open when GitHub did not answer as it was opened, or answered that it failed', async () => {
     const t = setup()
     t.repo.fail = { method: 'POST', path: /\/issues$/, status: 0 }
     expect(await refusal(t.split())).toEqual({ code: 'GITHUB_UNAVAILABLE',
       message: 'fetch failed. An issue may have been opened for acme/app#34. Run the same command again: it finds it, and opens nothing twice.' })
+    t.repo.fail = { method: 'POST', path: /\/issues$/, status: 502 }
+    expect(await refusal(t.split())).toEqual({ code: 'GITHUB_REFUSED',
+      message: 'GitHub answered 502 for acme/app#34. An issue may have been opened for it. Run the same command again: it finds it, and opens nothing twice.' })
   })
 
   it('says an issue it could not close again when GitHub does not answer', async () => {

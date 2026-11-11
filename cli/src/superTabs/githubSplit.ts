@@ -177,6 +177,10 @@ export async function splitTask(deps: VerdictDeps, builder: { name: string; repo
       opening = true
       const opened = await github(() => deps.send('POST', issues, { title: asked.title, body: `${asked.text.trim() ? `${asked.text.trim()}\n\n` : ''}${marker}`, labels: carried }))
       opening = false
+      // GitHub failing on its side may have opened it all the same.
+      if (opened.status >= 500) {
+        throw new SuperTabHostError('GITHUB_REFUSED', `GitHub answered ${opened.status} for ${at}. An issue may have been opened for it. Run the same command again: it finds it, and opens nothing twice.`, 502)
+      }
       if (opened.status !== 201) throw refused(opened.status)
       piece = object(opened.body)
       if (!Number.isSafeInteger(piece.number) || !Number.isSafeInteger(piece.id)) {
@@ -186,10 +190,10 @@ export async function splitTask(deps: VerdictDeps, builder: { name: string; repo
     made = Number(piece.number)
     const reply = await github(() => deps.send('POST', `${task}/sub_issues`, { sub_issue_id: piece!.id }))
     // GitHub failing or limiting on its side is worth the command again: its limit on writes answers 403 or 429, with no word of
-    // when it lifts. A 403 may also be a login that may not attach, which the same command will not get past.
+    // when it lifts. A 403 or a 404 may also be a login that may not attach, which the same command will not get past.
     if (reply.status >= 500 || reply.status === 429 || reply.resetAt !== null) throw refused(reply.status)
-    if (reply.status === 403) {
-      throw new SuperTabHostError('GITHUB_REFUSED', `GitHub answered 403 for ${at}. ${again()} If it answers 403 again, this login may not attach it: close #${made}.`, 502)
+    if (reply.status === 403 || reply.status === 404) {
+      throw new SuperTabHostError('GITHUB_REFUSED', `GitHub answered ${reply.status} for ${at}. ${again()} If it answers ${reply.status} again, this login may not attach it: close #${made}.`, 502)
     }
     if (reply.status !== 201) {
       // Refused as it would be again (a task holds a hundred pieces, eight levels deep), unless the piece is under the task
@@ -203,7 +207,9 @@ export async function splitTask(deps: VerdictDeps, builder: { name: string; repo
           + (closed === 200 ? `#${made} was closed again.` : `#${made} is still open: close it.`), 409)
       }
     }
-    changed = attachedNow = true
+    // Attached by this answer: its line cannot be on the task yet. Found attached after a refusal, an earlier command may have said it.
+    changed = true
+    attachedNow = reply.status === 201
   }
   // Found built and closed: there is nothing to finish.
   let sized = labelsOf(piece.labels).some(label => label.startsWith('size:'))

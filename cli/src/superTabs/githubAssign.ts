@@ -8,7 +8,7 @@
  * builder. It runs where the merger runs: in the Harness of the person whose agent is the project's PM, running or stopped there, with their gh.
  * A task its PM or a person gave by hand is never moved.
  */
-import { ASKED, DEEP, labelOf, machineHas, nextPicks, openPieces, outOfQuota, teamOf, PIECES_QUIET_MS, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readerKey, readProblem, reasonOf, startedAt, takeBacks, takenTasks, tasksOf, worksOnOf, type AwayBuilder, type Crew, type Read } from './assign/crew.js'
+import { ASKED, DEEP, labelOf, machineHas, nextPicks, openPieces, outOfQuota, teamOf, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readerKey, readProblem, reasonOf, startedAt, takeBacks, takenTasks, tasksOf, worksOnOf, type AwayBuilder, type Crew, type Read } from './assign/crew.js'
 import type { Choice } from './assign/model.js'
 import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
@@ -49,6 +49,9 @@ const ISSUE_PAGES = 10
  *  asked"; lampOS's first verdict came at 6 minutes at the median and 37 at p90): two hours until 11-11, and v4's sandbox #27
  *  waited four on two readers who never answered. A reader's turn that ends without its read is typed it too (nextThing.ts). */
 const READ_WAIT_MS = 30 * 60_000, READ_ASKS = 3
+/** How far back a word to a builder that its task's pieces are closed is looked for, and so how soon it is said again of a
+ *  task left as it is. */
+const PIECES_SAID_MS = 24 * 60 * 60_000
 /** How Harness's ask about a quiet task begins, after the builder's name: a restart finds it by these words. */
 const QUIET_ASKED = 'nothing has moved on this task for '
 export class GitHubAssign {
@@ -76,8 +79,6 @@ export class GitHubAssign {
   private readonly said = new Set<string>()
   /** Each quiet taken task its builder was asked about: since when it was quiet, and when it was asked. */
   private readonly quiet = new Map<string, { since: number; askedAt: number }>()
-  /** Each quiet taken task looked at for an ask of before a restart, by the touch it was looked at for. */
-  private readonly looked = new Map<string, number>()
   /** Each finished task's size and the minutes its work took, by repository and issue; null when it cannot be told. */
   private readonly took = new Map<string, { size: string; minutes: number } | null>()
   private projects: { at: number; list: LedProject[] } | null = null
@@ -175,8 +176,8 @@ export class GitHubAssign {
     // Only while another builder has room: a team's one builder would be given its task straight back.
     const short = outOfQuota(read)
     if (short.length < read.problem.builders.length) await this.takeBack(repo, issues, short, undefined, withReaders)
-    await this.askQuiet(repo, issues, pulls, crew, withReaders)
-    await this.sayPiecesDone(repo, issues, pulls, crew)
+    await this.askQuiet(repo, issues, pulls, crew, withReaders, await this.sayPiecesDone(repo, issues, pulls, crew))
+    await this.sayWaiting(project, issues)
     await this.openWaiting(repo, issues, crew, read, short)
     if (!read.free.size) return
     // Nobody can take a task while every list is full: no plan, so a backlog costs no CPU each minute (the daemon at rest
@@ -386,14 +387,15 @@ export class GitHubAssign {
    * brings it; quiet for [QUIET_BACK_MS] after that, it goes to another builder. Harness's own ask is no activity; an
    * answer, a push or a label is.
    */
-  private async askQuiet(repo: string, issues: Json[], pulls: Json[], crew: Crew, withReaders: ReadonlySet<number>): Promise<void> {
+  private async askQuiet(repo: string, issues: Json[], pulls: Json[], crew: Crew, withReaders: ReadonlySet<number>, piecesDone: ReadonlySet<number>): Promise<void> {
     const now = this.now()
     // A task whose pull request waits for its readers or its merge is not its builder's to move (askReaders); the
     // sandbox's dry run asked Pip about #16 while its pull request had its READ-OK, minutes before Harness merged it.
-    const taken = takenTasks(issues, pulls, crew.builders).filter(task => !withReaders.has(task.number))
+    // Nor one whose pieces closed this pass (sayPiecesDone): GitHub does not touch a task as a piece of it closes, so it reads
+    // as quiet since its builder's last cut, hours back, in the very pass its builder is told it is theirs again.
+    const taken = takenTasks(issues, pulls, crew.builders).filter(task => !withReaders.has(task.number) && !piecesDone.has(task.number))
     const open = new Set(taken.map(t => `${repo}#${t.number}`))
     for (const key of [...this.quiet.keys()]) if (key.startsWith(`${repo}#`) && !open.has(key)) this.quiet.delete(key)
-    for (const key of [...this.looked.keys()]) if (key.startsWith(`${repo}#`) && !open.has(key)) this.looked.delete(key)
     for (const task of taken) {
       // A task GitHub gave no time for is never called quiet.
       if (task.touched <= 0) continue
@@ -402,15 +404,10 @@ export class GitHubAssign {
       // Touched after the ask (allowing the ask itself, written a moment after it was decided): it is moving again.
       if (asked && task.touched > asked.askedAt + 2 * 60_000) { this.quiet.delete(key); asked = undefined }
       const since = asked?.since ?? task.touched
-      // One that waits on its pieces is quiet only after a day: they are others' to build.
-      const askAfter = task.waits ? PIECES_QUIET_MS : QUIET_ASK_MS
-      // Asked before this daemon restarted (a release restarts every PM's): the ask is then the issue's last touch, and it is
-      // looked for once the time an ask waits has passed since. Once for a touch: a task that waits on its pieces is quiet for
-      // a day before it is asked, and would be read each pass until then.
-      if (!asked && now - since >= QUIET_BACK_MS - QUIET_ASK_MS && this.looked.get(key) !== task.touched) {
-        this.looked.set(key, task.touched)
+      if (!asked && now - since >= QUIET_ASK_MS) {
+        // Asked before this daemon restarted (a release restarts every PM's): the ask is then the issue's last touch.
         const before = await this.quietAskedAt(repo, task.number, task.name, task.touched)
-        if (before !== null) { asked = { since: before - askAfter, askedAt: before }; this.quiet.set(key, asked) }
+        if (before !== null) { asked = { since: before - QUIET_ASK_MS, askedAt: before }; this.quiet.set(key, asked) }
       }
       if (asked && now - asked.askedAt >= QUIET_BACK_MS - QUIET_ASK_MS && now - asked.since >= QUIET_BACK_MS) {
         // A team's one builder keeps it: there is nobody else to give it to.
@@ -418,9 +415,9 @@ export class GitHubAssign {
         this.quiet.delete(key)
         await this.takeBack(repo, issues.filter(issue => Number(issue.number) === task.number),
           [{ name: task.name, label: task.label, why: 'stopping' }], `${task.name} has had no activity on it since it was asked`)
-      } else if (!asked && now - since >= askAfter) {
+      } else if (!asked && now - since >= QUIET_ASK_MS) {
         const reply = await this.deps.send('POST', `/repos/${repo}/issues/${task.number}/comments`, { body: `${SELF}, ${this.clock()}, to **${task.name}**: `
-          + `${QUIET_ASKED}${Math.round((now - since) / 3_600_000)} h${task.waits ? ', and pieces cut off it are still open' : ''}. Are you still on it? Say where it stands, or what you need.`
+          + `${QUIET_ASKED}${Math.round((now - since) / 3_600_000)} h. Are you still on it? Say where it stands, or what you need.`
           // A team's one builder keeps it (below), so it is told no other will take it.
           + (crew.builders.some(b => b.label !== task.label) ? ` With no word in ${Math.round((QUIET_BACK_MS - QUIET_ASK_MS) / 3_600_000)} h it goes to another builder.` : '') })
         if (reply.status >= 300) { this.once(`[super-tab] Task assignment: ASK_REFUSED ${repo}#${task.number}: GitHub answered ${reply.status}`); continue }
@@ -433,20 +430,26 @@ export class GitHubAssign {
   /**
    * Tells the builder of a task it took that every piece cut off it is closed (githubSplit.ts), once: nothing else does, and a
    * builder that waits on its pieces does not look at them (SWARM_BASICS: "Never watch GitHub yourself"). A comment naming it,
-   * which GitHub news brings it. Not while a pull request for the task is open: it is being finished. What was said before a
-   * restart is found among the task's comments of the last day, so a task left as it is is said again a day on, never each pass.
+   * which GitHub news brings it, and which touches the task: its quiet is counted from there. Not while a pull request of its
+   * builder's for the task is open: it is being finished. What was said before a restart is found among the task's comments
+   * of the last day, so a task left as it is is said again a day on, never each pass. Returns the tasks it told this pass, and
+   * the ones GitHub would not let it tell, which it tries again: the quiet watch leaves both alone.
    */
-  private async sayPiecesDone(repo: string, issues: Json[], pulls: Json[], crew: Crew): Promise<void> {
-    const finishing = new Set(pulls.flatMap(tasksOf))
+  private async sayPiecesDone(repo: string, issues: Json[], pulls: Json[], crew: Crew): Promise<Set<number>> {
+    const now = new Set<number>()
     for (const issue of issues) {
       const labels = labelNames(issue), builder = crew.builders.find(b => labels.includes(b.label)), number = Number(issue.number)
       const total = Number((issue.sub_issues_summary as Json | undefined)?.total)
-      if (issue.pull_request || !builder || !labels.includes('status:taken') || !(total > 0) || openPieces(issue) || finishing.has(number)) continue
+      if (issue.pull_request || !builder || !labels.includes('status:taken') || !(total > 0) || openPieces(issue)) continue
+      if (pulls.some(pull => labelNames(pull).includes(builder.label) && tasksOf(pull).includes(number))) continue
       const key = `${repo}#${number}:pieces:${total}`
       if (this.pieces.has(key)) continue
       const line = `${total === 1 ? 'the piece cut off this task is' : `all ${total} pieces cut off this task are`} closed`
-      const comments = await this.reads.current(repo, `/repos/${repo}/issues/${number}/comments?since=${new Date(this.now() - PIECES_QUIET_MS).toISOString()}&per_page=${PAGE}`, 1)
+      // From the hour a day back, so the same read is asked for an hour and answered unchanged.
+      const since = new Date(Math.floor((this.now() - PIECES_SAID_MS) / 3_600_000) * 3_600_000).toISOString()
+      const comments = await this.reads.current(repo, `/repos/${repo}/issues/${number}/comments?since=${since}&per_page=${PAGE}`, 1)
       if (!comments.some(c => ownAsk(c, /^Harness, \d\d:\d\d, to \*\*[^*]+\*\*: (.*)$/m)?.[1]?.startsWith(line))) {
+        now.add(number)
         const reply = await this.deps.send('POST', `/repos/${repo}/issues/${number}/comments`,
           { body: `${SELF}, ${this.clock()}, to **${builder.name}**: ${line}. It is yours to finish, or to close if nothing is left.` })
         if (reply.status >= 300) { this.once(`[super-tab] Task assignment: ASK_REFUSED ${repo}#${number}: GitHub answered ${reply.status}`); continue }
@@ -454,6 +457,7 @@ export class GitHubAssign {
       }
       this.pieces.add(key)
     }
+    return now
   }
 
   /**
@@ -511,6 +515,18 @@ export class GitHubAssign {
     this.blocked.add(key)
     this.log(`[super-tab] told ${project.pm} why nobody can start ${repo}#${number}: ${blocked}`)
     return true
+  }
+
+  /** Tells the PM, once on the task, of a sized task nobody holds whose pieces are still open: it is given to nobody until
+   *  they are closed (assign/crew.ts readProblem), which a piece nobody builds would make for ever. */
+  private async sayWaiting(project: LedProject, issues: Json[]): Promise<void> {
+    let told = 0
+    for (const issue of issues) {
+      const labels = labelNames(issue)
+      if (issue.pull_request || !openPieces(issue) || labels.includes('status:taken') || labels.some(label => label.startsWith('builder:'))
+        || !labels.some(label => /^size:[sml]$/.test(label))) continue
+      if (told < BLOCKED_PER_PASS && await this.sayBlocked(project, Number(issue.number), 'pieces cut off it are still open')) told++
+    }
   }
 
   /** One ask of a reader, once per pull request, head and reader: a comment naming it, with the command that makes its

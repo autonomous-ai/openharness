@@ -58,9 +58,6 @@ export const QUOTA_WAIT_MINUTES = 120
  *  after the ask, it goes to another. Agents post when they start, open a pull request and answer reviews, so four quiet
  *  hours is rare for one at work. */
 export const QUIET_ASK_MS = 4 * 60 * 60_000, QUIET_BACK_MS = 8 * 60 * 60_000
-/** And one that waits on pieces cut off it (openPieces), quiet this long: others build them, in their own time, and its builder
- *  has nothing to say of it meanwhile. Still asked in the end, so a piece nobody ever builds does not hold its task unseen. */
-export const PIECES_QUIET_MS = 24 * 60 * 60_000
 
 /** The problem, and what the picks and their reasons need to know of it. */
 export interface Read {
@@ -183,6 +180,9 @@ export function readProblem(input: { now: number; issues: Json[]; closed: Json[]
     const holder = held.map(label => byLabel.get(label)).find(Boolean)
     // Held by a label that names no builder of this team, or taken with none (a person on it): someone else's to plan.
     if ((held.length && !holder) || (!holder && labels.includes('status:taken'))) continue
+    // Nobody's, with pieces cut off it still open (its builder was stopped, or gave it back): others build those, and given
+    // out whole it would be built beside them. It is planned once they are closed (third review of the split).
+    if (!holder && openPieces(issue)) continue
     const sized = valueOf(labels, 'size:')
     const size = sized === 's' || sized === 'm' || sized === 'l' ? sized : undefined
     // Not sized: the PM has not made it a task yet. One a builder holds counts as a middle one.
@@ -334,9 +334,8 @@ export function outOfQuota(read: Read): AwayBuilder[] {
   return out
 }
 
-/** A task a builder of the team took, and when it was last touched: its issue, or a pull request for it. `waits`: on pieces
- *  cut off it. */
-export interface Taken { number: number; label: string; name: string; touched: number; waits: boolean }
+/** A task a builder of the team took, and when it was last touched: its issue, or a pull request for it. */
+export interface Taken { number: number; label: string; name: string; touched: number }
 
 /** The tasks a pull request is for: the issues it closes, and its builder's branch for one (`pip/14`). */
 export function tasksOf(pull: Json): number[] {
@@ -346,14 +345,15 @@ export function tasksOf(pull: Json): number[] {
 }
 
 /** How many pieces cut off a task are still open (githubSplit.ts), as GitHub counts its sub-issues. A task with some waits
- *  on them: its builder is not idle on it, and it is quiet only after a day (PIECES_QUIET_MS). */
+ *  on them: it holds no place in its builder's list, and its builder is neither idle on it nor quiet. One nobody builds is
+ *  the PM's to see: unsized, it is in the PM's numbers; sized and unplaced, its PM is told why. */
 export const openPieces = (issue: Json): number => {
   const summary = object(issue.sub_issues_summary), total = Number(summary.total), completed = Number(summary.completed)
   return Number.isSafeInteger(total) && Number.isSafeInteger(completed) ? Math.max(0, total - completed) : 0
 }
 
 /** The tasks builders of the team took, each with its last touch: a comment or label on the issue, or a change to a pull
- *  request for it (tasksOf), and whether it waits on its pieces (openPieces). */
+ *  request for it (tasksOf). Not one that waits on its pieces (openPieces). */
 export function takenTasks(issues: Json[], pulls: Json[], builders: CrewBuilder[]): Taken[] {
   const byLabel = new Map(builders.map(b => [b.label, b]))
   const touched = new Map<number, number>()
@@ -367,10 +367,10 @@ export function takenTasks(issues: Json[], pulls: Json[], builders: CrewBuilder[
     if (issue.pull_request || !Number.isSafeInteger(issue.number)) continue
     const labels = labelsOf(issue)
     const builder = labels.map(label => byLabel.get(label)).find(Boolean)
-    if (!builder || !labels.includes('status:taken')) continue
+    if (!builder || !labels.includes('status:taken') || openPieces(issue)) continue
     const own = Date.parse(String(issue.updated_at ?? ''))
     const number = Number(issue.number)
-    out.push({ number, label: builder.label, name: builder.name, touched: Math.max(Number.isFinite(own) ? own : 0, touched.get(number) ?? 0), waits: openPieces(issue) > 0 })
+    out.push({ number, label: builder.label, name: builder.name, touched: Math.max(Number.isFinite(own) ? own : 0, touched.get(number) ?? 0) })
   }
   return out
 }
