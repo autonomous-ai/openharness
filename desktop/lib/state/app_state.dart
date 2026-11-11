@@ -2938,8 +2938,9 @@ class AppNotifier extends ChangeNotifier {
     return _conn(machineId).request(type, payload: payload, timeout: timeout);
   }
 
-  /// Whether New agent may offer Browser on [machineId]. Never throws: a daemon too old to know the request is
-  /// [BrowserAvailability.unsupported], and one whose service did not answer is [BrowserAvailability.unavailable].
+  /// Whether [machineId] can run a browser, for the Browser panel's Install. Never throws: a daemon too old to know
+  /// the request is [BrowserAvailability.unsupported], and one whose service did not answer is
+  /// [BrowserAvailability.unavailable].
   Future<BrowserAvailability> agentBrowserAvailable(String machineId) async {
     try {
       return BrowserAvailability.fromJson(
@@ -2963,8 +2964,7 @@ class AppNotifier extends ChangeNotifier {
   Future<void> agentBrowserSetup(String machineId) =>
       _agentBrowserRequest(machineId, 'agent_browser_setup');
 
-  /// Restarts Windows to finish setup, from this computer only.
-
+  /// Starts [agentId]'s failed browser again; a failed install is retried from this computer only (`LOCAL_ONLY`).
   Future<void> agentBrowserRetry(String machineId, String agentId) =>
       _agentBrowserRequest(
         machineId,

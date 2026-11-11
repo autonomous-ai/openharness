@@ -13,9 +13,17 @@ const output = new URL('../../assets/browser/browser_viewer.html', import.meta.u
 // hold. The flag is a live binding read only when encodings are sent, after
 // the handshake, so the probe resolves into it instead. Xvnc sends no H.264.
 const probe = 'supportsWebCodecsH264Decode = await _checkWebCodecsH264DecodeSupport();';
-const noTopLevelAwait = {
-  name: 'no-top-level-await',
+// viewer.js wraps two of RFB's internals to clip to Chrome's window: a noVNC
+// that renames either fails here, not as a page that silently stops clipping.
+const internals = ['    _updateScale() {', 'this._display = new Display('];
+const noVnc = {
+  name: 'novnc',
   setup(b) {
+    b.onLoad({ filter: /novnc[\\/]core[\\/]rfb\.js$/ }, async ({ path }) => {
+      const source = readFileSync(path, 'utf8');
+      if (!internals.every((part) => source.includes(part))) throw new Error('noVNC changed RFB._updateScale or RFB._display; update viewer.js');
+      return { contents: source };
+    });
     b.onLoad({ filter: /novnc[\\/]core[\\/]util[\\/]browser\.js$/ }, async ({ path }) => {
       const source = readFileSync(path, 'utf8');
       if (!source.includes(probe)) throw new Error('noVNC changed its H.264 probe; update build.mjs');
@@ -37,7 +45,7 @@ export async function buildViewerHtml() {
     minify: true,
     target: 'es2020',
     legalComments: 'none',
-    plugins: [noTopLevelAwait],
+    plugins: [noVnc],
     write: false,
   });
   const script = result.outputFiles[0].text;

@@ -89,7 +89,8 @@ export function startViewer(RFB, win) {
   // its own clip and scale after every resize of the page or of the screen,
   // each ending in _updateScale. After it, the page clips the Display to the
   // window and scales that rectangle to fit, unless it already fits at 1:1.
-  // build.mjs pins the version.
+  // _updateScale and _display are noVNC's internals: package.json pins the
+  // version exactly, and build.mjs fails on one that renames either.
   function fitWindow(current) {
     if (!chromeWindow) return;
     const display = current._display;
