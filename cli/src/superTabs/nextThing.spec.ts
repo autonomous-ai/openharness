@@ -660,7 +660,7 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     for (let i = 0; i < 3; i++) await f.end()
     await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
     expect(f.told()).toEqual([expect.stringMatching(/^Read acme\/app#25 at /)])
-    expect(f.say).toHaveBeenCalledTimes(1)
+    expect(f.say.mock.calls.map(([, , text]) => text)).toEqual([`When my turn ended, Harness asked me to read acme/app#25 at ${short}, and my next turn changed nothing.`])
     next.stop()
   })
 
