@@ -1722,7 +1722,7 @@ class _SuperTabViewState extends State<SuperTabView>
     onRenameSwarm: widget.onRenameSwarm,
     page: _pageShown,
     onManage: _openManage,
-    onInvite: () => showSuperTabSharing(context, c),
+    onInvite: () => showSuperTabSharing(context, c, title: 'Invite people'),
     onManageMachines: () {
       // Set before Manage opens, so a last page of Devices is not opened here only to be left at once.
       _manageTab = SuperTabManageTab.machines;
