@@ -26,14 +26,44 @@ export interface HookPreparationProof {
 const MAX_BYTES = 1024 * 1024
 const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT'
 
+/**
+ * The directories each attempt has flushed. On macOS every fsync is F_FULLFSYNC, a full drive flush (25-35 ms on an
+ * Intel Mac, several times that loaded), and every write flushed its folder's whole chain to the root: the four grid
+ * config publications of gridConfigCompatibility.golden.spec.ts made 202 flushes, 4.5 s of its 6.6 s. A flush makes
+ * durable the names a directory holds when it runs, so one per directory state is what crash safety needs: a directory
+ * is flushed again only once the attempt has changed its names since (`directoryChanged`). An attempt starts with
+ * none, so names an earlier, failed attempt left are confirmed by its first flush, as before.
+ */
+const directoryFlushes = new WeakMap<HookPreparationAttempt, { flushed: Set<string>; changes: number }>()
+
+/** [attempt] created, renamed, linked or removed a name in [directory]: its next sync flushes it again. */
+export function directoryChanged(attempt: HookPreparationAttempt, directory: string): void {
+  const state = directoryFlushes.get(attempt)
+  if (!state) return
+  state.changes++
+  // A directory no longer there to name forgets every flush: nothing else says which one it was.
+  try { state.flushed.delete(fileIdentity(lstatSync(directory, { bigint: true }))) } catch { state.flushed.clear() }
+}
+
+/** Flush the directory open as [fd], unless [attempt] flushed it and has changed none of its names since. */
+export async function flushDirectory(attempt: HookPreparationAttempt, fd: number): Promise<void> {
+  // Windows cannot flush a directory handle (secureState.ts `syncStateDirectory`); NTFS journals the names.
+  if (!directorySyncSupported()) return
+  const state = directoryFlushes.get(attempt), identity = fileIdentity(fstatSync(fd, { bigint: true }))
+  if (state?.flushed.has(identity)) return
+  const changes = state?.changes
+  await attempt.flush(fd)
+  // A change made while the flush was in flight may have missed it.
+  if (state && state.changes === changes) state.flushed.add(identity)
+}
+
 async function syncDirectory(path: string, attempt: HookPreparationAttempt): Promise<void> {
   attempt.check()
   const expected = fileIdentity(lstatSync(path, { bigint: true }))
   const fd = openSync(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
   try {
     if (fileIdentity(fstatSync(fd, { bigint: true })) !== expected) throw new HookPreparationHeld('the directory changed before sync')
-    // Windows cannot flush a directory handle (secureState.ts `syncStateDirectory`); NTFS journals the names.
-    if (directorySyncSupported()) await attempt.flush(fd)
+    await flushDirectory(attempt, fd)
     if (fileIdentity(lstatSync(path, { bigint: true })) !== expected) throw new HookPreparationHeld('the directory changed during sync')
   } finally { closeSync(fd) }
 }
@@ -61,6 +91,7 @@ function ensureDirectory(path: string, attempt: HookPreparationAttempt): void {
     ensureDirectory(dirname(path), attempt)
     attempt.verify(); attempt.check()
     try { mkdirSync(path) } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
+    directoryChanged(attempt, dirname(path))
   }
 }
 
@@ -208,6 +239,7 @@ export function inspectHookFile(file: string, defaultMode = 0o666) {
           throw new HookPreparationHeld('the published settings changed before sync')
         }
         attempt.observe(file, committed.verify)
+        directoryChanged(attempt, parent)
         await syncDirectoryChain(parent, attempt)
         attempt.verify()
         verifyNativePathFacts(facts.filter(fact => fact.identity !== null && fact.path !== target))
@@ -231,7 +263,7 @@ export function inspectHookFile(file: string, defaultMode = 0o666) {
       // shared target. A leaf alias requires the owner to resolve that conflict.
       if (content !== null && lstatSync(file).isSymbolicLink()) throw new HookPreparationHeld('the plugin entry is an alias')
       attempt.check()
-      if (content !== null) unlinkSync(target)
+      if (content !== null) { unlinkSync(target); directoryChanged(attempt, dirname(target)) }
       attempt.observe(file, inspectHookFile(file).verify)
       let parent = dirname(target)
       for (let depth = 0; depth < 256; depth++) {
@@ -397,6 +429,7 @@ export async function runHookPreparation<T>(files: readonly string[], work: (att
       check()
     },
   }
+  directoryFlushes.set(attempt, { flushed: new Set(), changes: 0 })
   let timer: ReturnType<typeof setTimeout> | undefined
   const pending: PendingPreparation = { identity: options.identity, keys, revoke, reply: Promise.resolve(), waiters: 0 }
   pendingPreparations.add(pending)
