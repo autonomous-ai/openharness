@@ -741,7 +741,7 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
   // Taken out of the spread and put back only when it is a real moment: the spread would otherwise
   // carry a hand-edited string or a negative number straight into the frame's `toISOString()`.
   // `forkedFrom` is out too, so an invalid one is dropped rather than spread back in as-is.
-  const { identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, admissionHold: _admission, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, launchModel: rawLaunchModel, externalResume: _externalResume, startedBy: rawStartedBy, parentAgentId: rawParentAgentId, swarmSkill: rawSwarmSkill, launchArgs: rawLaunchArgs, browser: rawBrowser, firstTask: rawFirstTask, ...rest } = row
+  const { identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, admissionHold: _admission, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, launchModel: rawLaunchModel, externalResume: _externalResume, startedBy: rawStartedBy, parentAgentId: rawParentAgentId, swarmSkill: rawSwarmSkill, launchArgs: rawLaunchArgs, browser: rawBrowser, quietTitle: rawQuietTitle, firstTask: rawFirstTask, ...rest } = row
   const lastOpenedAt = normalizedOpenedAt(rawOpenedAt)
   // Out of the spread for the same reason: a half-formed record is dropped, never relaunched with.
   const scmLaunch = parseScmLaunchRecord(rawScmLaunch)
@@ -760,6 +760,7 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
     ...(swarmSkill ? { swarmSkill } : {}),
     ...(launchArgs ? { launchArgs } : {}),
     ...(rawBrowser === true ? { browser: true as const } : {}),
+    ...(typeof rawQuietTitle === 'string' && rawQuietTitle ? { quietTitle: rawQuietTitle } : {}),
     ...(normalizedClosePlan(rawClosePlan) ? { closePlan: normalizedClosePlan(rawClosePlan)! } : {}),
     schemaVersion: 2,
     active,
