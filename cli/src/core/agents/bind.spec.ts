@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { transcriptOf, processSessionOf } from '../../engines/identities.js'
 import { loadEngine } from '../../engines/inProcess.js'
+import { OpenclawLive } from '../../engines/openclaw/live.js'
 import { continuationOf } from '../../engines/sessionFiles.js'
 import { env } from '../../config/env.js'
 import { isRecentlyDeleted } from '../../lib/deletedSessions.js'
@@ -1125,6 +1126,83 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane())
     await run.binding.bindObservedAgent(tui())
     expect(run.deps.capturePane).toHaveBeenCalledTimes(2)
+  })
+
+  // Found end to end (2026-11-11): a store the Gateway does not write never changes and opens no turn, so the pass before
+  // a message was typed left the pane quiet for 30 s, the run it started was first read that late, and the store hold
+  // came about 70 s into the run.
+  it('a pane awaiting a typed message\'s confirmation is read on every pass: the store hold comes 30 s into its run', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const folder = mkdtempSync(join(tmpdir(), 'openclaw-bind-'))
+    // The TUI's store as the lamp's was: no file, as the Gateway writes another folder's.
+    const onSessionMissing = vi.fn()
+    const stream = new OpenclawLive({
+      db: join(folder, 'openclaw-agent.sqlite'), key: 'agent:main:plain', pollMs: 1_000, onEvents: vi.fn(), onFatal: vi.fn(), onSessionMissing,
+    })
+    let shown = screen('screen-plain')
+    const row = pane({ sessionId: 'agent:main:plain' })
+    const rows = (id: string) => id === 'a1' || id === 'agent:main:plain' ? row : undefined
+    const done: TerminalActionResult = { state: 'succeeded', dispatch: 'executed' }
+    const typed: string[] = []
+    const inputs = createInput({
+      readScreen: readInlineScreen,
+      submission: inlineSubmission,
+      resolve: rows,
+      byAgent: rows,
+      terminal: {
+        captureTerminal: vi.fn(async () => shown),
+        validateTerminal: vi.fn(async () => true),
+        submitTerminalAction: vi.fn(async (_id: string, text: string) => { typed.push(text); return done }),
+        keyTerminalAction: vi.fn(async () => done),
+        pinTerminalControl: vi.fn(() => () => {}),
+      },
+      deliveries: { settled: vi.fn(), canWrite: vi.fn(() => true) },
+      device: () => undefined,
+      clients: { send: vi.fn(), sendCommander: vi.fn() },
+      agentIdFor: (sessionId) => rows(sessionId)?.agentId ?? sessionId,
+      commandcode: () => undefined,
+      emit: vi.fn(),
+    })
+    const run = setup({
+      capturePane: vi.fn(async () => shown),
+      input: inputs.input,
+      submitAgent: inputs.submitAgent,
+      openclawPaneRead: vi.fn((_sessionId: string, reading: Parameters<OpenclawLive['paneRead']>[0]) => { stream.paneRead(reading); return true }),
+      openclawPaneDue: vi.fn(() => stream.paneDue()),
+    })
+    vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
+    try {
+      await stream.start()
+      const start = Date.now()
+      /** A bind pass `seconds` after the first. */
+      const pass = async (seconds: number) => {
+        await vi.advanceTimersByTimeAsync(start + seconds * 1_000 - Date.now())
+        await run.binding.bindObservedAgent(tui())
+      }
+      await pass(0)
+      // Idle, with nothing typed: not read again within half a minute.
+      await pass(5)
+      expect(run.deps.capturePane).toHaveBeenCalledOnce()
+      inputs.submitAgent('a1', 'Run sleep 120')
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(typed).toEqual(['Run sleep 120'])
+      shown = screen('screen-abort-running').replace(/abort/g, 'plain')
+      // The message awaits its user row, which this store never shows: the pass reads the pane, and the run on it.
+      await pass(10)
+      expect(run.deps.capturePane).toHaveBeenCalledTimes(2)
+      expect(run.deps.openclawPaneRead).toHaveBeenLastCalledWith('agent:main:plain', { ready: false, gatewayLost: false, running: true }, shown)
+      for (let seconds = 15; seconds < 40; seconds += 5) await pass(seconds)
+      expect(onSessionMissing).not.toHaveBeenCalled()
+      await pass(40)
+      expect(onSessionMissing).toHaveBeenCalledOnce()
+    } finally {
+      stream.stop()
+      inputs.input.forget('a1')
+      rmSync(folder, { recursive: true, force: true })
+      vi.useRealTimers()
+    }
   })
 
   it('finds the state folder from the TUI\'s open database (fake /proc and lsof)', async () => {
