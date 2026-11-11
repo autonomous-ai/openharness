@@ -66,12 +66,32 @@ void main() {
     }
   });
 
-  test('reads a file of one very long line at once: no row from a line too long to be one', () {
-    final watch = Stopwatch()..start();
+  // As one pattern a row was read in time by the cube of its line's length: a 1,000-character line of a bar, spaces and a
+  // letter took about 2 s in the built app, on the isolate that draws it, and a file of them minutes (review, 2026-11-11).
+  // Read by plain searches from the row's end, as the daemon reads it since #4048, a megabyte of the worst lines is read at
+  // once. Under the old reader this test ran out of its time: it is read a few lines at a time first, with the test's own
+  // clock let in between, because a reader that never returns cannot be timed out.
+  test('reads a megabyte of the slowest lines there are at once, and the row among them', () async {
+    final slow = [
+      '|${' ' * 998}a',
+      '|${' ' * 500}|${' ' * 490}`a` x',
+      '| a |${' ' * 990}`x',
+      '|${' |' * 498} x',
+    ];
+    for (var n = 0; n < 275; n++) {
+      expect(goalRows(slow.join('\n')), isEmpty);
+      await Future<void>.delayed(Duration.zero);
+    }
+    final file = [
+      for (var n = 0; n < 1100; n++) slow[n % slow.length],
+      '| Sync | `a` |',
+    ].join('\n');
+    expect(file.length, greaterThan(1000000));
+    expect(goalRows(file), [(milestone: 'Sync', check: 'a')]);
+    // A line too long to be a row is not read at all.
     expect(goalRows('| a${' ' * 400000}| x\n| Sync | `a` |'), [
       (milestone: 'Sync', check: 'a'),
     ]);
-    expect(watch.elapsed, lessThan(const Duration(seconds: 1)));
   });
 
   test('a milestone passes when its check concluded success, fails when it concluded anything else, cancelled too, and is not run otherwise', () async {

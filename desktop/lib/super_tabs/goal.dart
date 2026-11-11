@@ -4,9 +4,11 @@
 /// The project lists its milestones in `agents/GOAL.md`, a table of what must be true and the command that checks it, and
 /// its own CI runs each on the default branch as a check named `goal: <milestone>`. The daemon reads both and tells the PM
 /// how many pass (cli/src/superTabs/goal.ts). Desktop shows the same number in the project's bar, so everything here reads
-/// as that file does: the same rows, the same choice of commit and the same reading of a run. The rows' cases are one
-/// fixture both are held to (cli/src/superTabs/__fixtures__/goal-rows.json).
+/// as that file does, step for step: the same rows, the same choice of commit and the same reading of a run. The rows'
+/// cases are one fixture both are held to (cli/src/superTabs/__fixtures__/goal-rows.json).
 library;
+
+import 'dart:math';
 
 /// Where a project states its goal, from its repository's root.
 const goalFile = 'agents/GOAL.md';
@@ -17,8 +19,7 @@ const goalCheck = 'goal: ';
 /// The most milestones read, and the most each may be long: the daemon's limits.
 const goalMax = 100, goalMilestoneMax = 100;
 
-/// The longest line read as a row. The row's pattern takes time by the square of a line's length, and the file is the
-/// repository's text.
+/// The longest line read as a row, in UTF-16 units as the daemon counts them: it bounds a check's command.
 const goalLineMax = 1000;
 
 /// How many of the branch's last landings are looked at for one whose goal checks have all ended, among how many of its
@@ -28,35 +29,74 @@ const goalLandings = 5, goalCommits = 100;
 /// A milestone and the command that checks it.
 typedef SwarmGoalRow = ({String milestone, String check});
 
-final _row = RegExp(r'^\|\s*(.+?)\s*\|\s*`([^`]+)`\s*\|\s*$');
-final _space = RegExp(r'\s');
 final _spaces = RegExp(r'\s+');
 final _lineEnd = RegExp(r'\r?\n');
+final _lineBreak = RegExp(r'[\r\u2028\u2029]');
 
-/// [text] without the spaces at its ends, as JavaScript's `trim` takes them: Dart's own also takes U+0085, which the daemon
-/// leaves in place.
-String _trimmed(String text) {
-  var start = 0, end = text.length;
-  while (start < end && _space.hasMatch(text[start])) {
-    start++;
-  }
-  while (end > start && _space.hasMatch(text[end - 1])) {
+/// Whether [unit] is space to JavaScript's `trim`, the daemon's: Dart's own `trim` also takes U+0085, which the daemon
+/// leaves in a milestone's name.
+bool _isSpace(int unit) =>
+    (unit >= 0x09 && unit <= 0x0D) ||
+    unit == 0x20 ||
+    unit == 0xA0 ||
+    unit == 0x1680 ||
+    (unit >= 0x2000 && unit <= 0x200A) ||
+    unit == 0x2028 ||
+    unit == 0x2029 ||
+    unit == 0x202F ||
+    unit == 0x205F ||
+    unit == 0x3000 ||
+    unit == 0xFEFF;
+
+/// JavaScript's `trimEnd`.
+String _trimEnd(String text) {
+  var end = text.length;
+  while (end > 0 && _isSpace(text.codeUnitAt(end - 1))) {
     end--;
   }
-  return text.substring(start, end);
+  return text.substring(0, end);
+}
+
+/// JavaScript's `trim`.
+String _trim(String text) {
+  final ended = _trimEnd(text);
+  var start = 0;
+  while (start < ended.length && _isSpace(ended.codeUnitAt(start))) {
+    start++;
+  }
+  return ended.substring(start);
 }
 
 /// The rows of a goal file: each table row whose second cell is one command in backticks, in the file's order. A header, a
 /// rule, a row with no command and any other line are none; a milestone named twice counts once, as its check has one name.
+///
+/// The daemon's reader (goal.ts `goalRows`), step for step and under its names, so the two cannot drift: a row is found
+/// from its end by plain searches, in time by its line's length. As one pattern it took time by the cube of that: a
+/// 1,000-character line of spaces took 2 s in the built app, on the isolate that draws it (review, 2026-11-11).
 List<SwarmGoalRow> goalRows(String? text) {
   final rows = <String, SwarmGoalRow>{};
   for (final line in (text ?? '').split(_lineEnd)) {
     if (line.length > goalLineMax) continue;
-    final found = _row.firstMatch(_trimmed(line));
-    if (found == null) continue;
-    final milestone = found.group(1)!.replaceAll(_spaces, ' ');
-    final check = _trimmed(found.group(2)!);
-    if (check.isEmpty ||
+    // `| milestone | \`check\` |`: the check is between the row's last two backticks, with a bar after them and a bar
+    // before. Each test stands before the cut it guards, where JavaScript cuts first and tests after: Dart's `substring`
+    // throws where `slice` answers nothing.
+    final row = _trim(line);
+    if (!row.startsWith('|') || !row.endsWith('|')) continue;
+    final cell = _trimEnd(row.substring(0, row.length - 1));
+    final open = cell.lastIndexOf('`', max(0, cell.length - 2));
+    if (!cell.endsWith('`') || open < 0) continue;
+    final head = _trimEnd(cell.substring(0, open));
+    if (!head.endsWith('|')) continue;
+    final named = _trim(
+      head.length < 2 ? '' : head.substring(1, head.length - 1),
+    );
+    // A milestone is one line's words: one with a line's end inside it is none.
+    final milestone = named.contains(_lineBreak)
+        ? ''
+        : named.replaceAll(_spaces, ' ');
+    final check = _trim(cell.substring(open + 1, cell.length - 1));
+    if (milestone.isEmpty ||
+        check.isEmpty ||
         milestone.length > goalMilestoneMax ||
         rows.containsKey(milestone)) {
       continue;

@@ -1,5 +1,5 @@
 {
-  "about": "What a project's goal file (agents/GOAL.md) says, held to by both cli/src/superTabs/goal.spec.ts (goalRows) and desktop/test/swarm_goal_test.dart (goalRows), so Desktop lists the milestones the daemon scores. Change it deliberately, then both readers.",
+  "about": "What a project's goal file (agents/GOAL.md) says, held to by both cli/src/superTabs/goal.spec.ts (goalRows) and desktop/test/swarm_goal_test.dart (goalRows), so Desktop lists the milestones the daemon scores. Characters outside ASCII are written as escapes, so each can be seen. Change it deliberately, then both readers.",
   "cases": [
     {
       "name": "a table among prose: its rows in the file's order, cells trimmed, spaces within a milestone made one; the header, the rule and a row with no command are none",
@@ -102,13 +102,32 @@
       ]
     },
     {
-      "name": "a first cell of spaces alone names no milestone",
-      "text": "|  | `a` |",
+      "name": "a row is its last two backticks and the bars around them, with or without spaces",
+      "text": "| a `q` | `x | y` |\n|b|`z`|",
+      "rows": [
+        {
+          "milestone": "a `q`",
+          "check": "x | y"
+        },
+        {
+          "milestone": "b",
+          "check": "z"
+        }
+      ]
+    },
+    {
+      "name": "no milestone, no bar between the cells, nothing in the backticks, or something after them: no row",
+      "text": "|\n||\n|`x`|\n|| `x` |\n| a | `` |\n| a | ` ` |\n| a | `x` y |\n| a  `x` |\n| a | x` |\n` | a | `x` |\n| a | `x`\n`\n|`|\n| a | ` |",
+      "rows": []
+    },
+    {
+      "name": "a first cell of spaces alone names no milestone, whatever the spaces",
+      "text": "|  | `a` |\n|\t\u00a0\u3000| `b` |\n|\ufeff| `c` |",
       "rows": []
     },
     {
       "name": "a no-break space and a tab are spaces; a next-line mark (U+0085) is not",
-      "text": "| Sync  offline\t| `a ` |\n| Start | `b` |\n| Wake | `c` |",
+      "text": "|\u00a0Sync\u00a0\u00a0offline\t| `a\u00a0` |\n| Start | `b` |\u0085\n| Wake | `c\u0085` |\n|\u0085| `d` |",
       "rows": [
         {
           "milestone": "Sync offline",
@@ -116,7 +135,25 @@
         },
         {
           "milestone": "Wake",
-          "check": "c"
+          "check": "c\u0085"
+        },
+        {
+          "milestone": "\u0085",
+          "check": "d"
+        }
+      ]
+    },
+    {
+      "name": "a milestone is one line's words: a lone return, U+2028 or U+2029 inside it makes it none; at its ends they are space",
+      "text": "| a\rb | `x` |\n| a\u2028b | `x` |\n| a\u2029b | `x` |\n|\u2028 c \u2029| `y` |\n|\r d \r| `z` |",
+      "rows": [
+        {
+          "milestone": "c",
+          "check": "y"
+        },
+        {
+          "milestone": "d",
+          "check": "z"
         }
       ]
     },
@@ -137,6 +174,16 @@
         {
           "milestone": "Long",
           "check": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      ]
+    },
+    {
+      "name": "the lines one pattern read slowest (a bar and 998 spaces; two bars, spaces and a command with a word after it; an unclosed backtick; 498 bars) are no rows, and the row after them is",
+      "text": "|                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      a\n|                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          `a` x\n| a |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              `x\n| | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | x\n| Sync | `a` |",
+      "rows": [
+        {
+          "milestone": "Sync",
+          "check": "a"
         }
       ]
     },
