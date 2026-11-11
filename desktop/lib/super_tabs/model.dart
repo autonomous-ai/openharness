@@ -834,12 +834,11 @@ List<SuperTabServedModel> superTabServedModels(
 }
 
 /// One account of a machine as its report lists it (backend
-/// `observation.profiles`): opaque id, a label with no path or email, and what
+/// `observation.profiles`, each engine's default alone): opaque id, and what
 /// is left of its allowance when known.
 typedef SuperTabProfile = ({
   String engine,
   String id,
-  String label,
   int? leftPercent,
   DateTime? resetsAt,
 });
@@ -850,14 +849,10 @@ List<SuperTabProfile> superTabProfilesOf(Map<String, dynamic>? pool) {
   final rows = observation is Map ? observation['profiles'] : null;
   return [
     for (final p in rows is List ? rows : const [])
-      if (p is Map &&
-          p['engine'] is String &&
-          p['id'] is String &&
-          p['label'] is String)
+      if (p is Map && p['engine'] is String && p['id'] is String)
         (
           engine: p['engine'] as String,
           id: p['id'] as String,
-          label: p['label'] as String,
           leftPercent: (p['leftPercent'] as num?)?.toInt(),
           resetsAt: DateTime.tryParse(p['resetsAt'] as String? ?? ''),
         ),

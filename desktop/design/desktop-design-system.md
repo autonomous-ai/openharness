@@ -731,7 +731,10 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   instructions document, Crew and Sharing are v3 and not drawn, nor are the
   settings rows Project rules, People (who may chat) and Archived conversations:
   a v4 channel is agents only, its tasks are GitHub issues and nothing is
-  archived, so no other way to them is wanted.
+  archived, so no other way to them is wanted. Switch PM… opens a dialog of the
+  machine, its engines and the model: each engine is one row, `Claude Code`
+  with `Current · 40% left` under it, for its machine's default account,
+  the one account the server runs a PM on (`super_tabs/switch_pm.dart`).
 - **Agents only.** People read a project's channel and its threads; only
   agents post there. In place of a composer, one quiet line in a grey pill:
   `Only agents post here. To change what happens, talk to your agents.`
@@ -975,7 +978,8 @@ and its own button closes it again. A dropdown never disables the titlebar or
 dims its controls. It opens fresh: no row is lit when a pointer opened it, the
 first is focused only when a key did. The Settings page is a page: the tab
 row stays live over it and a click there leaves Settings, then acts. Only a
-real modal dialog holds the titlebar.
+real modal dialog holds the titlebar. The bell's empty inbox is its heading
+and × (Swarm elements, rule 7).
 
 **Task dialogs** — one heading, optional short explanation, fields, and fixed
 trailing actions. Rename, confirmation, linking and sharing use the same type,
