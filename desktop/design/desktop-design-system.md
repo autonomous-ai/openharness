@@ -540,27 +540,14 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   puts GitHub's reason in the Task row, under the tasks it held when last
   read, so they never read as current. Its text can be selected. Info,
   Instructions, Terminal and Browser are one at a time: each closes the others.
-- **Browser in New agent** (`BrowserPill`, `browser/browser_pill.dart`). Swarm
-  New agent alone, and never on the web build or on Windows, has a `Browser`
-  pill after
-  Worktree, drawn as Worktree is (a quiet compact `DesktopPill` with a square
-  that is ticked when on, 12 muted), off by default, with the tooltip `A
-  sandboxed Chrome the agent drives`. The form asks the chosen machine whether
-  it can run one: when this computer has no Podman, one line in 12 faint sits
-  under the pill, level with its square, `Needs setup · about 15 min`, and the
-  pill still works. When it cannot be ticked the pill is dimmed and its tooltip
-  says why: `Set up Browser on Ken Mac first` (another computer with no
-  Podman), `Update Harness on Ken Mac first`, `Browser isn't available on Ken
-  Mac right now`.
 - **Set up Browser** (`BrowserSetupPrompt`, `browser/browser_setup_dialog.dart`).
-  Start with Browser ticked on a computer with no Podman asks once, before the
-  agent is made, in the shared prompt (`DesktopPromptSurface`): the title in the
-  dialog heading, then `Installs Podman on this computer to run the agent's
-  Chrome. Asks for your password once. About 15 minutes, 3 GB.` in 13 body,
-  `Podman on this computer won't start. Harness will set up its own.` on its
-  own line when its Podman machine will not start. `Cancel` and the blue
-  `Install`: Install starts the setup and makes the agent at once; Cancel makes
-  nothing.
+  The Browser panel's Install, on a computer with no Podman, asks once in the
+  shared prompt (`DesktopPromptSurface`): the title in the dialog heading, then
+  `Installs Podman on this computer to run the agent's Chrome. Asks for your
+  password once. About 15 minutes, 3 GB.` in 13 body, `Podman on this computer
+  won't start. Harness will set up its own.` on its own line when its Podman
+  machine will not start. `Cancel` and the blue `Install`: Install starts the
+  setup; Cancel does nothing.
 - **Browser panel** (`BrowserPanel`, `browser/browser_panel.dart`). The agent's
   own Chrome, beside its chat or in its place as the other panes. Its header is
   `Browser` in 13 medium, then the gear (`Browser settings`, which opens them

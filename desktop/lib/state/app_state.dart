@@ -15874,9 +15874,6 @@ class AppNotifier extends ChangeNotifier {
     PaneSplitRequest? split,
     AgentCreationAttempt? attempt,
     HarnessPlacement? placement,
-
-    /// Gives the agent its own sandboxed Chrome (Swarm New agent's Browser).
-    bool browser = false,
   }) async {
     final creation = attempt ?? AgentCreationAttempt();
     final launch = creation._launchModelDropped ? null : creation.launchModel;
@@ -15912,8 +15909,6 @@ class AppNotifier extends ChangeNotifier {
       // a general session. Same absent-unless-asked rule as `prompt`, and the
       // same refusal for an engine that has no such thing (`AGENT_UNSUPPORTED`).
       'agent': ?agent,
-      // Absent unless asked for, as above: an older daemon ignores it.
-      if (browser) 'browser': true,
     };
     Future<String?> ask() => _create(
       machineId,
