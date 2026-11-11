@@ -27,7 +27,7 @@ function fakeGitHub(open: Json[], closed: Json[] = []) {
   const state = { open, closed, asked: [] as string[], labelAnswer: 200, deleteAnswer: 200, commentAnswer: 201, signedOut: false, applied: false,
     /** Runs as a label's DELETE arrives, before it is answered: a test changes the issue here, or refuses the call with a status. */
     deleted: null as ((issue: Json, label: string) => number | void) | null,
-    files: new Map<string, string>(), checks: [] as Json[], labels: labels as Json[], pulls: [] as Json[], comments: new Map<number, Json[]>(), reviews: new Map<number, Json[]>(), compare: new Map<string, Json>(),
+    files: new Map<string, string>(), checks: [] as Json[], headChecks: new Map<string, Json[]>(), checksDown: false, checksLimited: false, labels: labels as Json[], pulls: [] as Json[], comments: new Map<number, Json[]>(), reviews: new Map<number, Json[]>(), compare: new Map<string, Json>(),
     /** The files each pull request changes, and the paths GitHub fails on its own side for. */
     changed: new Map<number, string[]>(), failing: null as RegExp | null }
   const sent: Array<{ method: string; path: string; body: Json }> = []
@@ -35,6 +35,9 @@ function fakeGitHub(open: Json[], closed: Json[] = []) {
     state.asked.push(path)
     if (state.signedOut) throw Object.assign(new Error('gh is not signed in on this computer: run `gh auth login`.'), { code: 'GH_SIGNED_OUT' })
     const url = new URL(`https://api.github.com${path}`)
+    // A token that cannot read checks (a fine-grained one without Checks), as GitHub answers it.
+    if (state.checksDown && /\/commits\/[0-9a-f]{40}\/check-runs$/.test(url.pathname)) return { status: 403, etag: null, body: { message: 'Resource not accessible by integration' }, resetAt: null }
+    if (state.checksLimited && /\/commits\/[0-9a-f]{40}\/check-runs$/.test(url.pathname)) return { status: 403, etag: null, body: {}, resetAt: Date.now() + 60_000 }
     if (state.failing?.test(url.pathname)) return { status: 500, etag: null, body: null, resetAt: null }
     const file = /^\/repos\/acme\/app\/contents\/(.+)$/.exec(url.pathname)
     const text = file ? state.files.get(decodeURIComponent(file[1]!)) : undefined
@@ -44,6 +47,9 @@ function fakeGitHub(open: Json[], closed: Json[] = []) {
       // Main's last commit and its checks, where a project's goal is scored (goal.ts).
       : url.pathname === '/repos/acme/app/commits' ? url.searchParams.get('sha') === 'main' ? [{ sha: TIP, parents: [] }] : null
       : url.pathname === `/repos/acme/app/commits/${TIP}/check-runs` ? { check_runs: state.checks }
+      // A pull request's head's checks, none unless a test gives some; and its combined status.
+      : /^\/repos\/acme\/app\/commits\/[0-9a-f]{40}\/check-runs$/.test(url.pathname) ? { check_runs: state.headChecks.get(url.pathname.split('/')[5]!) ?? [] }
+      : /^\/repos\/acme\/app\/commits\/[0-9a-f]{40}\/status$/.test(url.pathname) ? { state: 'success', statuses: [] }
       // A page of the list, as GitHub pages it.
       : url.pathname === '/repos/acme/app/pulls' ? state.pulls.slice((Number(url.searchParams.get('page') ?? 1) - 1) * Number(url.searchParams.get('per_page') ?? 30),
         Number(url.searchParams.get('page') ?? 1) * Number(url.searchParams.get('per_page') ?? 30))
@@ -103,12 +109,13 @@ function setup(open: Json[], options: { closed?: Json[]; crew?: Crew
   /** What each pass counted (pmNumbers.ts). */
   const numbers = vi.fn(async (_project: LedProject, _numbers: Numbers, _goal: () => Promise<Score | null>, _board: () => Promise<string>) => {})
   const clock = { now: Date.parse('2026-11-09T07:31:00Z') }
-  const make = () => new GitHubAssign({ projects: async () => [PROJECT], crew: async () => options.crew ?? crew(), get: github.get, send: github.send,
+  const pm = { running: true, unreadable: false }
+  const make = () => new GitHubAssign({ projects: async () => [PROJECT], crew: async () => options.crew ?? crew(), get: github.get, send: github.send, pmRunning: async () => { if (pm.unreadable) throw new Error('The backend did not answer.'); return pm.running },
     now: () => clock.now, log, records: new VerdictRecords(github.authors, () => clock.now, log), numbers: options.numbers ?? { pass: numbers } })
   const assigner = make()
   const labelled = () => github.sent.filter(s => /\/issues\/\d+\/labels$/.test(s.path)).map(s => [Number(s.path.split('/').at(-2)), (s.body.labels as string[])[0]])
   const said = () => github.sent.filter(s => s.path.endsWith('/comments')).map(s => [Number(s.path.split('/').at(-2)), String(s.body.body)])
-  return { github, assigner, make, log, labelled, said, clock, numbers }
+  return { github, assigner, make, log, labelled, said, clock, numbers, pm }
 }
 
 describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () => {
@@ -625,30 +632,114 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       expect(asks(f)).toHaveLength(1)
     })
 
-    it('asks the only reader again after 30 silent minutes, at most twice more for a head, after a restart too', async () => {
-      // Half the wait for a verdict.
-      const STEP = 15 * 60_000
+    // #4055, anh Dee, 2026-11-11: "never spam github as user accounts could be banned". Asked again each silent half hour, the
+    // pull request had one more comment, in its person's name, each time; its reader is reminded in its own terminal instead.
+    it('asks the only reader once for a head, and not again however long it is silent, after a restart too', async () => {
       const askedAt = (at: string) => comment(`Harness, ${at.slice(11, 16)}, to **Faye**: please read this pull request, and start your `
         + 'comment with READ-OK f6edb44 or HOLD f6edb44 (with the file, line and fix).', { created_at: at })
-      // Pip builds alone; Faye, its PM, was asked 45 minutes ago and has said nothing since (stopped when it was asked).
+      // Pip builds alone; Faye, its PM, was asked 45 minutes ago and has said nothing since.
       const f = setup([], { crew: { builders: [crew().builders[0]!], machines: crew().machines } })
       f.github.state.pulls = [pull()]
-      const iso = (ms: number) => new Date(ms).toISOString()
-      const first = iso(f.clock.now - 3 * STEP)
-      f.github.state.comments.set(30, [askedAt(first)])
+      f.github.state.comments.set(30, [askedAt(new Date(f.clock.now - 45 * 60_000).toISOString())])
+      for (const later of [0, 60, 240]) {
+        f.clock.now += later * 60_000
+        await f.make().tick()
+      }
+      expect(asks(f)).toEqual([])
+    })
+
+    // Code review of #4060: a push is a change to read. The reader asked about the head before, with no verdict on it, is asked
+    // about the new one once, half an hour after its last ask at the soonest, and then not again.
+    it('asks a reader asked about an earlier head about the new one, once, half an hour after its last ask', async () => {
+      const f = setup([], { crew: { builders: [crew().builders[0]!], machines: crew().machines } })
+      f.github.state.pulls = [pull()]
+      f.github.state.comments.set(30, [comment('Harness, 05:00, to **Faye**: please read this pull request, and start your comment with '
+        + 'READ-OK 1234567 or HOLD 1234567 (with the file, line and fix).', { created_at: new Date(f.clock.now - 10 * 60_000).toISOString() })])
+      await f.make().tick()
+      expect(asks(f)).toEqual([])
+      // Each pass a fresh process, which knows what it asked only as GitHub keeps it.
+      let kept = 0
+      for (const later of [20, 0, 60, 240]) {
+        f.clock.now += later * 60_000
+        await f.make().tick()
+        for (const body of asks(f).slice(kept)) f.github.state.comments.get(30)!.push(comment(body, { created_at: new Date(f.clock.now).toISOString() }))
+        kept = asks(f).length
+      }
+      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Faye\*\*: the head is now f6edb44: please read this pull request/)])
+      // Said in the daemon's log, once a process.
+      expect(f.log.mock.calls.some(([line]) => /NO_READER acme\/app#30@f6edb44: its readers asked have not read it/.test(String(line)))).toBe(true)
+    })
+
+    // The swarm-sandbox, 2026-11-10: Juno, its PM and only reader, was asked while stopped and never heard it (GitHub news brings
+    // what is said only while an agent runs). Asked once it runs; until then the daemon says why nobody reads it.
+    it('asks its PM to read only while it runs here', async () => {
+      const f = setup([], { crew: { builders: [crew().builders[0]!], machines: crew().machines } })
+      f.github.state.pulls = [pull()]
+      f.pm.running = false
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([])
+      expect(f.log.mock.calls.some(([line]) => /NO_READER acme\/app#30@f6edb44: its PM, the reader left, is stopped/.test(String(line)))).toBe(true)
+      f.pm.running = true
+      await f.assigner.tick()
       await f.assigner.tick()
       expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Faye\*\*: please read this pull request/)])
-      f.github.state.comments.set(30, [askedAt(first), askedAt(iso(f.clock.now))])
-      f.clock.now += STEP
+    })
+
+    // Code review of #4060: a stopped PM asked about an earlier head is not asked about the new one either; one whose state cannot be
+    // read is taken as stopped, and the pass goes on.
+    it('asks a stopped PM about a new head no more than about the first, and goes on when its state cannot be read', async () => {
+      const f = setup([], { crew: { builders: [crew().builders[0]!], machines: crew().machines } })
+      f.github.state.pulls = [pull()]
+      f.github.state.comments.set(30, [comment('Harness, 05:00, to **Faye**: please read this pull request, and start your comment with '
+        + 'READ-OK 1234567 or HOLD 1234567 (with the file, line and fix).', { created_at: new Date(f.clock.now - 40 * 60_000).toISOString() })])
+      f.pm.running = false
+      await f.assigner.tick()
+      f.pm.unreadable = true
+      f.clock.now += 60 * 60_000
+      await f.make().tick()
+      expect(asks(f)).toEqual([])
+      expect(f.log.mock.calls.filter(([line]) => /NO_READER acme\/app#30@f6edb44: its PM, the reader left, is stopped/.test(String(line)))).toHaveLength(2)
+    })
+
+    // A stop for every repository (GitHub limiting this computer) stops the pass, as any read's: nothing is asked meanwhile.
+    it('stops its pass when GitHub limits the read of the checks', async () => {
+      const f = setup([], { crew: team })
+      f.github.state.pulls = [pull()]
+      f.github.state.checksLimited = true
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([])
+      expect(f.log.mock.calls.some(([line]) => /RATE_LIMITED|limiting/.test(String(line)))).toBe(true)
+    })
+
+    it('asks readers as before when the checks cannot be read, and says so once', async () => {
+      const f = setup([], { crew: team })
+      f.github.state.pulls = [pull()]
+      f.github.state.checksDown = true
+      await f.assigner.tick()
       await f.assigner.tick()
       expect(asks(f)).toHaveLength(1)
-      f.clock.now += STEP + 60_000
-      await f.make().tick()
-      expect(asks(f)).toHaveLength(2)
-      f.github.state.comments.set(30, [askedAt(first), askedAt(iso(f.clock.now - 2 * STEP)), askedAt(iso(f.clock.now))])
-      f.clock.now += 3 * STEP
-      await f.make().tick()
-      expect(asks(f)).toHaveLength(2)
+      expect(f.log.mock.calls.filter(([line]) => /CHECKS_UNREAD acme\/app/.test(String(line)))).toHaveLength(1)
+    })
+
+    it('asks nobody to read a pull request on hold, nor one whose checks failed at its head, until they pass', async () => {
+      const f = setup([], { crew: team })
+      // On hold, in any case: its task waits with it, so its builder is not called quiet on it (code review of #4060).
+      f.github.state.pulls = [pull({ labels: [{ name: 'builder:pip' }, { name: 'Hold' }] })]
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([])
+      expect(f.numbers.mock.calls.at(-1)![1].free.map(free => free.name)).toContain('Pip')
+      const failing = pull()
+      f.github.state.pulls = [failing]
+      f.github.state.headChecks.set(String((failing.head as Json).sha), [{ name: 'ci/required', status: 'completed', conclusion: 'failure' }])
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([])
+      // Run again and passed: read again once ten minutes are up (a failing head is not read each pass), and its reader asked.
+      f.github.state.headChecks.set(String((failing.head as Json).sha), [{ name: 'ci/required', status: 'completed', conclusion: 'success' }])
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([])
+      f.clock.now += 10 * 60_000
+      await f.assigner.tick()
+      expect(asks(f)).toHaveLength(1)
     })
 
     it('measures a reader asked again after a push from that ask, and one that never answered from its last', async () => {
