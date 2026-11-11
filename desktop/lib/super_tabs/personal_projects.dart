@@ -20,8 +20,7 @@ import 'swarm_switcher.dart' show PersonalSwarm;
 /// no repo is in no project: it stays in Your Team (personal_agents.dart).
 ///
 /// Which pane belongs where is worked out here, on the person's own Desktop, from the panes it already shows. Nothing of
-/// a pane is sent anywhere: the server learns only each project's name, as a private project of a Swarm that has no one
-/// else in it.
+/// a pane is sent anywhere: the server learns only each project's name, as a private project of the person's own Swarm.
 ///
 /// The projects v3 made for a tab's panes with no repo ("one", "two") go: each this computer made is closed on the server
 /// once (backend commands.ts `project.closeTab`: deleted when none of its chats has a message, else kept read-only and

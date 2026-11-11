@@ -102,7 +102,10 @@ class PersonalSwarm extends ChangeNotifier {
   }
 
   /// A Swarm the person owns named Personal, of those they belong to, with
-  /// no one else in it when it has been read.
+  /// no one else in it when it has been read: a guess for a computer that has
+  /// not picked Personal yet. Their own Personal with someone they invited is
+  /// known once picked here ([ensure]), so a team Swarm they named Personal is
+  /// never taken for it.
   String? _owned(String account) {
     final ids = <String>[
       for (final tab in app.swarms) ?tab.superTabId,

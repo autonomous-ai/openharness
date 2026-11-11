@@ -251,6 +251,29 @@ void main() {
     },
   );
 
+  // Review of #4089: a project someone they invited made is that person's to lead, never started on the owner's computer.
+  test(
+    'in their Personal Swarm, a guest\'s project offers its owner no Start PM',
+    () async {
+      final f = SuperTabLaunchFixture();
+      _desk(f, cwd: '/w/games');
+      final c = await _swarm(f);
+      final server = f.connection.server.state;
+      (server['people'] as List).add({
+        'id': 'kim',
+        'email': 'kim@example.com',
+        'role': 'collaborator',
+      });
+      final byHand = (server['projects'] as List)
+          .cast<Map<String, dynamic>>()
+          .firstWhere((p) => p['id'] == 'by-hand');
+      expect(PersonalLeadStarter.of(f.app).wants(c, 'chat-by-hand'), isTrue);
+      byHand['ownerId'] = 'kim';
+      await c.refresh();
+      expect(PersonalLeadStarter.of(f.app).wants(c, 'chat-by-hand'), isFalse);
+    },
+  );
+
   test('a Team Swarm starts no Lead', () async {
     final f = SuperTabLaunchFixture();
     _desk(f, remote: 'https://github.com/huy/games', cwd: '/Users/huy/games');

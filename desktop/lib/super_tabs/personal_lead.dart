@@ -93,8 +93,8 @@ class PersonalLeadStarter extends ChangeNotifier {
   }
 
   /// Whether [conversationId] of [c] offers to start its project's PM: the
-  /// signed-in person's own Personal Swarm, a project's channel, and no PM
-  /// there.
+  /// signed-in person's own Personal Swarm, a project's channel of theirs (one
+  /// someone they invited made is that person's to lead), and no PM there.
   bool wants(SuperTabController c, String conversationId) {
     if (!PersonalProjects.of(app).eligible(c)) return false;
     final snapshot = c.snapshot!;
@@ -102,7 +102,9 @@ class PersonalLeadStarter extends ChangeNotifier {
     if (group == null || group.archived) return false;
     if (!snapshot.isProjectLead(conversationId)) return false;
     final project = snapshot.projectFor(conversationId);
-    return project != null && snapshot.leadOf(project.id) == null;
+    return project != null &&
+        project.ownerId == c.accountId &&
+        snapshot.leadOf(project.id) == null;
   }
 
   /// Starts [conversationId]'s PM from its channel's card (task #2815), once:

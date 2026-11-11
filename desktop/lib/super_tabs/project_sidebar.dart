@@ -106,7 +106,7 @@ class ProjectSidebar extends StatelessWidget {
   final VoidCallback? onManage;
 
   /// Opens the Swarm's people, to invite someone: a row under the Swarm's name for its owner, the one person who may invite
-  /// (backend commands.ts, invite.create), and never in their Personal Swarm, which is theirs alone. People join a Swarm by
+  /// (backend commands.ts, invite.create), their Personal Swarm too (anh Dee, 2026-11-11). People join a Swarm by
   /// an invitation, and Manage people was the only way there (anh Dee, 2026-11-11: "it's quite difficult to invite people.
   /// i have no idea where to find it. invite should be visible").
   final VoidCallback? onInvite;
