@@ -199,7 +199,8 @@ export class NextThing {
     let agent: WatchedAgent | undefined
     try {
       agent = (await this.deps.watched()).find(watched => watched.harnessId === harnessId)
-      if (!agent) { this.compacted.delete(harnessId); this.endedAt.delete(harnessId) }
+      // A paused agent is typed nothing until it is resumed (backend agent.pause); its next turn's end after looks again.
+      if (!agent || agent.paused) { this.compacted.delete(harnessId); this.endedAt.delete(harnessId) }
       // Something set it working since its turn ended, or nobody can say: that comes first.
       else if (await this.deps.working(harnessId) === false) {
         const compacted = this.compacted.get(harnessId)
@@ -341,6 +342,8 @@ export class NextThing {
     try {
       // Working, or nobody can say: its turn's end looks again.
       if (await this.deps.working(agent.harnessId) !== false) return
+      // Paused since it was watched: nothing is asked of it, and its task goes to others as the assigner's take-back says (crew.ts).
+      if ((await this.deps.watched()).find(watched => watched.harnessId === agent.harnessId)?.paused) return
       // Still its own, taken, with no pull request of its yet.
       const items = await this.reads.current(repo, `/repos/${repo}/issues?state=open&labels=${encodeURIComponent(agent.label)}&per_page=100`, 1)
       if (Number(heldTask(items)?.number) !== number) return

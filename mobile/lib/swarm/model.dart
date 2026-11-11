@@ -179,6 +179,7 @@ class SuperTabAgent {
       profileId = row['profileId'] as String?,
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
       downSince = DateTime.tryParse(row['downSince'] as String? ?? ''),
+      paused = row['pausedAt'] is String,
       workDecision = switch (row['workDecision']) {
         final String decision when _workDecisions.contains(decision) =>
           decision,
@@ -253,6 +254,10 @@ class SuperTabAgent {
   /// Since when its machine has reported its session gone, or its host confirmed a stop (backend machines.ts). Null
   /// while it runs.
   final DateTime? downSince;
+
+  /// Paused by its person, its machine's owner or the Swarm's owner (backend `agent.pause`, `pausedAt`), as the desktop reads
+  /// it: Harness gives it no task and types it nothing until it is resumed. False from an older backend.
+  final bool paused;
 
   /// What its project's Lead decided once its work was over (backend
   /// model.ts `workDecision`): `awaiting` a decision, kept (`keep`) for more
