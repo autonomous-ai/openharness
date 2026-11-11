@@ -118,7 +118,7 @@ function setPreset(preset) {
   persist(); columnMenu(); buildColumns()
 }
 for (const button of document.querySelectorAll('[data-preset]')) button.onclick = () => setPreset(button.dataset.preset)
-const iconNames = new Set(['codex', 'opencode', 'cursor', 'pi', 'hermes', 'commandcode', 'devin', 'muse', 'amp', 'kilo', 'grok', 'copilot', 'agy', 'claude'])
+const iconNames = new Set(['codex', 'opencode', 'cursor', 'pi', 'hermes', 'commandcode', 'devin', 'muse', 'amp', 'kilo', 'grok', 'copilot', 'agy', 'openclaw', 'claude'])
 const engineNames = { codex: 'Codex', claude: 'Claude', opencode: 'OpenCode', cursor: 'Cursor', terminal: 'Terminal', pi: 'Pi', hermes: 'Hermes', copilot: 'Copilot', gemini: 'Gemini' }
 function createRow(row) {
   const tr = element('tr'); tr.dataset.id = row.id

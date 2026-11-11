@@ -179,6 +179,30 @@ state folder (`~/.openclaw`, or `$OPENCLAW_STATE_DIR`):
 `node:sqlite` returns `event_zstd` as bytes, and `zlib.zstdDecompressSync` reads them. The `sqlite3` CLI fallback
 (`-json`) mangles blobs, so OpenClaw is read through `node:sqlite` only. After Part 0, Harness always has it.
 
+### Corrections from the recorded fixtures (2026-11-10)
+
+The fixtures (`cli/src/engines/openclaw/__fixtures__/`) override anything above that they contradict:
+
+- **Bare `openclaw tui`** opens the last-used session, not always `agent:main:main`.
+- **`/reset`** keeps the window and appends a `reset` event.
+- **`/new`** moves the pane to a new key, `agent:main:tui-<uuid>`. A pane's key can therefore change while it runs.
+- **Rewind** exists only as the Gateway call `sessions.rewind`. It makes a new window, copies every old row into it, and adds a `leaf` row. The attached TUI does not redraw.
+- **Hidden rows.** `navigation_custom_type` is empty for the system-prompt, model-snapshot and bootstrap rows. On compressed rows the type sits in `navigation_json`. Only large rows are compressed; most assistant rows are plain text.
+- **Abort and failure.**
+  - Esc leaves the tool call unanswered, and the status becomes `killed`.
+  - A failed run writes an empty `error` assistant row and a `run-failed-before-reply` row, and the status becomes `failed`.
+- **Folder.** A session created by `/model` before any message has `cwd: "/"`.
+- **Heartbeat.** The recorded heartbeat was event-driven, not scheduled, and its `heartbeat_respond` call failed.
+- **Approvals.** The TUI denies exec approvals at once ("Headless runs cannot wait"). There is no approval prompt to answer.
+- **No Gateway.** The TUI opens and shows `gateway disconnected: ECONNREFUSED`, and reconnects by itself when the Gateway is back.
+- **Open files.** The TUI holds the state DB open read-write, and also opens `openclaw-quarantine.sqlite`. A remote TUI still holds the local state DB.
+- **Footer and screen.** The footer's token count lags after a turn, the thinking level shows next to the model, and tool calls are not drawn on screen.
+
+Decisions that follow from the corrections:
+- The binding follows a pane's key when its footer changes (`/new`). The new key becomes the agent's session.
+- The reader drops events whose `id` it has already emitted, so a rewind's copied rows are not shown twice.
+- Hidden rows are recognised from the decoded record, not only from `navigation_custom_type`.
+
 ## Decisions
 
 These are my calls unless marked as Ken's.
@@ -190,20 +214,27 @@ These are my calls unless marked as Ken's.
    **Resume** is `openclaw tui agent:<agentId>:<key>`. `tui` is a base argument that `contract.ts` declares, the way
    `claude/adoption.ts` declares its session flags. The launch keeps a folder: the pane opens in the folder New chose,
    as for every engine.
-3. **Binding a pane.** The TUI hides its argv, so a pane is bound from its screen. `contract.ts` declares the header
-   pattern (`session agent:<agentId>:<key>`) as data, and `bind.ts` applies it to the pane capture. `main` is bound
+3. **Binding a pane.** The TUI hides its argv, so a pane is bound from its screen. `contract.ts` declares the footer
+   pattern (`agent <agentId> | session <key> |`, drawn last, word-wrapped at the pane's width) as data, and `bind.ts`
+   applies it to the pane capture: only while the composer is the last thing under it, and only when the title, if it
+   is on screen, names the same session. The `session agent:<agentId>:<key>` line is a chat line an answer can print,
+   and the title scrolls off a long conversation, so neither binds. `main` is bound
    like any other key, even though it existed before the process started (decided by Ken: shown like any other
    session, channel messages included). When a second pane shows a key that an agent already holds, that pane stays
    unbound. It never takes the session from the first.
 4. **The database is found from the TUI process.** The state folder is the folder of the `state/openclaw.sqlite`
    that the TUI holds open (`/proc/<pid>/fd` on Linux, `lsof -p` on macOS). If that cannot be read (Windows), the
-   order is the pane's `OPENCLAW_STATE_DIR`, then `~/.openclaw`. The agent's folder is
+   order is the folder remembered at bind, then the daemon's `OPENCLAW_STATE_DIR`, then `~/.openclaw`. Measured on
+   Windows 2026-11-10: Harness has no Windows reader for another process's open files or environment, so a TUI run with
+   `--profile` or a pane-only `OPENCLAW_STATE_DIR` is not followed there; a default install is. (My call: not built
+   until someone needs it on Windows.) The agent's folder is
    `<stateDir>/agents/<agentId>/agent/`, unless the config (read-only) moves it with `agentDir`. A header URL that is
    not loopback means a remote Gateway, and the named state is `This OpenClaw runs on another machine.`
 5. **Named states**, each with a log line:
    - `OpenClaw Gateway is not running. Start it with openclaw gateway.`
    - `OpenClaw has no Gateway token. Run openclaw onboard.`
    - `OpenClaw needs Node 24.`
+   - `This Harness needs Node 24 to read OpenClaw.` Shown when Harness's own Node lacks `node:sqlite` or zstd.
    - `This OpenClaw runs on another machine.`
    - `This OpenClaw version is not supported yet.` Shown when a column the reader uses is missing. The schema
      version is logged but is not an allowlist.
@@ -226,7 +257,8 @@ These are my calls unless marked as Ken's.
     its tools run in the pane's folder.
 11. **Install**: after Part 0, the recipe is `npm i -g openclaw` with the Node and npm that Harness ships, as the npm
     recipes of the other engines are. An `openclaw` on PATH under an older Node gets `OpenClaw needs Node 24.`
-12. **Windows**: OpenClaw manages its Gateway through `schtasks` there, so native Windows is the target. Measure on
+12. **Windows**: OpenClaw runs natively there (measured 2026-11-10 on a Windows 11 ARM64 VM with Node 24.22.2: onboard,
+    Gateway, TUI, a Harness launch bound and streamed, no window opened). Measure on
     the Windows VM. If it does not run natively, the PR says so with the evidence, and Windows shows the engine as
     unavailable with the reason. Harness does not go through WSL.
 

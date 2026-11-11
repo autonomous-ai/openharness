@@ -49,6 +49,8 @@ export function createRuntimeProfiles({ local, handles, resolve, transport }: Ru
     get onChanged() { return changed },
     set onChanged(value: ((id: string) => void) | null) { changed = value },
     selectedModel: (session: RegisteredSession) => forSession(session).selectedModel(session),
+    // Only an inline reader knows one (OpenClaw's); a worker's engine has none.
+    workspace: (session: RegisteredSession): string | null => handles(session.engine) ? null : local.workspace(session),
     getState: (id: string) => forId(id).getState(id),
     beginControl: (session: RegisteredSession, target: RuntimeProfile) => forSession(session).beginControl(session, target),
     cancelControl: (id: string) => forId(id).cancelControl(id),

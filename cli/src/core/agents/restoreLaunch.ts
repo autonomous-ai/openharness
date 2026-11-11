@@ -16,7 +16,7 @@ interface RestoreLaunchDeps {
   downgradedPermission(entry: RegisteredSession, native?: LaunchOverrides['native']): Promise<{ permissionMode?: string | null; bypassPermission?: boolean; nativeHold?: string }>
   prepareSessionResume(entry: RegisteredSession): void
   refreshGridWebSearch(agentId: string, overrides: LaunchOverrides): void
-  launch(entry: RegisteredSession, opts: { resumeSessionId?: string }, overrides: LaunchOverrides,
+  launch(entry: RegisteredSession, opts: { resumeSessionId?: string; agentId: string }, overrides: LaunchOverrides,
     permission: { permissionMode?: string | null; bypassPermission?: boolean }): RestoreLaunch
   /** An older Swarm session's role, read before it is relaunched (superTabs/inCore/adoption.ts). Absent while the Swarm is off. */
   adoptSwarmSkill?: AdoptSwarmSkill
@@ -77,7 +77,9 @@ export function createRestoreLaunch(deps: RestoreLaunchDeps): RestoreAgentsDeps[
     // Windows refuses a batch-file engine whose arguments cmd.exe would read (lib/windows/launch.ts): this row fails
     // alone. Thrown, it ended the whole pass ("restore skipped") on every start.
     let launched: RestoreLaunch
-    try { launched = await deps.launch(entry, opts, built.overrides, permission) } catch (error) {
+    // The row's id goes with the launch: an engine whose sessions Harness names reopens the agent's own when it resumes
+    // none (engineLaunch.ts `agentId`).
+    try { launched = await deps.launch(entry, { ...opts, agentId: entry.agentId }, built.overrides, permission) } catch (error) {
       const { error: code, detail } = windowsLaunchRefusal(error)
       return { error: code, detail }
     }

@@ -266,6 +266,13 @@ export class RuntimeProfileState {
     try { return await operation() } finally { this.suppressNotifications-- }
   }
 
+  /** The engine's own workspace for this session, when its reader knows one (the frame's `workspace`). Asked of every
+   *  frame, so only a reader already in use answers: building a frame never loads an engine's code. */
+  workspace(session: RegisteredSession): string | null {
+    if (this.unbound(session.sessionId)) return null
+    return this.readers.get(session.engine)?.workspace?.(session.sessionId) ?? null
+  }
+
   selectedModel(session: RegisteredSession): string | null {
     if (this.unbound(session.sessionId)) return null
     const state = this.states.get(session.sessionId)

@@ -1049,6 +1049,9 @@ class _AgentPreview extends StatelessWidget {
             ),
           if (!terminal) const SizedBox(height: 8),
           if (project?.cwd case final cwd?) Text(cwd, style: muted),
+          // Where its tools run when that is not the folder above (OpenClaw's own workspace).
+          if (agent.workspace case final workspace?)
+            Text('Workspace · $workspace', style: muted),
           if (!terminal && !desktop)
             if (project?.branch case final branch?)
               Padding(
