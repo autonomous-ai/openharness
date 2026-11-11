@@ -27,8 +27,6 @@ export type GroupChange = LivePart<GroupView> | Tombstone | DormantStub
 export type HeadView = Pick<SuperTabState, 'version' | 'id' | 'name' | 'project' | 'leadsConversationId' | 'ownerId'
   | 'environment' | 'paused' | 'invitations' | 'localModels' | 'removedMachines'
   | 'autoJoin'> & {
-  /** The reader's own sessions they took out of the Swarm that keep running (removedPanes.ts): their apps do not add them back. */
-  removedPanes?: Array<{ machineId: string; harnessId: string }> | import('../removedPanes.js').RemovedPane[]
   /** Fixed columns for the chosen preset (task #3896); an older server omits both, meaning Full. */
   projects?: Array<import('../projects.js').SwarmProject & {
     process: import('../process.js').ProjectProcess; columns: readonly import('../process.js').BoardColumn[]

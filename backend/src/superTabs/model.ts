@@ -2,9 +2,9 @@ import { createHash } from 'node:crypto'
 import { githubRepository } from '../github/repository.js'
 import { cloneData } from './cloneData.js'
 import { autoJoinOn } from './autoJoinDomain.js'
-import { ownRemovedPanes } from './removedPanes.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { personView } from './profile.js'
+import { removedPanesFor } from './removedPanes.js'
 import { swarmUsernames } from './usernames.js'
 import { downSince, expireRemovals, startPreparing } from './machines.js'
 import { publicReason, readsRawReason } from './startFailure.js'
@@ -31,6 +31,9 @@ export interface Person {
   nameFollowsAccount?: true
   /** `domain`: joined by themselves as someone at the owner's email domain (autoJoin.ts), so the people list says so. */
   joinedVia?: 'domain'
+  /** The sessions they took out of this Swarm that keep running (removedPanes.ts), so their apps do not offer them to join.
+   *  Only they read it. */
+  removedPanes?: import('./removedPanes.js').RemovedPane[]
 }
 export interface AgentConfiguration {
   engine: string
@@ -462,9 +465,6 @@ export interface SuperTabState {
   /** The machines their person took out of this Swarm, so a sync that adds machines by itself leaves them out; a reader gets only
    *  the ids of their own (visibleState). */
   removedMachines?: Array<{ machineId: string; contributorId: string }>
-  /** The sessions their person took out of this Swarm while they keep running (removedPanes.ts); a reader gets only their own
-   *  (visibleState). */
-  removedPanes?: import('./removedPanes.js').RemovedPane[]
   /** Conversations of a kind a later release added, set aside unchanged by a release that does not know it (parkLaterConversations). */
   parkedConversations?: Conversation[]
   /** The Local models add-on (docs/plans/2026-10-23-swarm-local-models.md): off until the owner turns it on, and only
@@ -783,9 +783,6 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   const ownRemoved = actor.kind === 'person' ? (visible.removedMachines ?? []).filter(r => r.contributorId === actor.userId).map(r => r.machineId) : []
   if (ownRemoved.length) (visible as { removedMachines?: unknown }).removedMachines = ownRemoved
   else delete visible.removedMachines
-  const ownPanes = actor.kind === 'person' ? ownRemovedPanes(state, actor.userId, now) : []
-  if (ownPanes.length) (visible as { removedPanes?: unknown }).removedPanes = ownPanes
-  else delete visible.removedPanes
   // Rows by day and project that only the leaderboard read uses, and it takes them from the Swarm itself.
   for (const pool of visible.machines ?? []) delete pool.lentDays
   // The removed Leads conversation reaches nobody (leadsRemoved), its id included.
@@ -864,7 +861,7 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   }
   // Each person as the Swarm names them (usernames.ts), their default included.
   const names = swarmUsernames(state)
-  visible.people = visible.people.map(p => ({ ...personView(p), username: names.get(p.id) }))
+  visible.people = visible.people.map(p => ({ ...removedPanesFor(personView(p), actor.kind === 'person' ? actor.userId : null, now), username: names.get(p.id) }))
   visible.agents = visible.agents.map(personView)
   if (actor.kind !== 'person' || actor.userId !== state.ownerId) visible.invitations = []
   for (const start of visible.starts ?? []) {

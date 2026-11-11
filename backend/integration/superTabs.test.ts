@@ -2580,8 +2580,8 @@ it('releases a finished worker through its execution host, cancels deliveries an
   await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: native, name: 'Renewed worker', configuration: config, lead: false })
   await run(tab, { type: 'agent.remove', agentId: worker })
   // Taken out, its session keeps running, recorded for its person until it ends (removedPanes.ts).
-  const removedPanes = async () => (await store.read(owner, tab)).state.removedPanes
-  expect(await removedPanes()).toEqual([{ machineId: 'test-host', harnessId: native }])
+  const removedPanes = async () => (await store.read(owner, tab)).state.people.find(p => p.id === owner.sub)!.removedPanes
+  expect(await removedPanes()).toEqual([{ machineId: 'test-host', harnessId: native, removedAt: expect.any(Number) }])
   const hostPool = (await poolRows(store, host, 'test-host')).find(p => p.tabId === tab)!
   expect(hostPool.harnessIds).toContain(native)
   const reservation = hostPool.reservations.find(r => r.harnessId === native)!

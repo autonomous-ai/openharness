@@ -2406,6 +2406,10 @@ describe('Lead protection', () => {
   })
 
   // anh Dee 2026-11-11: taking an agent out of a Swarm is closing a view of it, which never stops it unasked.
+  const panes = (f: ReturnType<typeof fixture>, personId = 'owner') => f.state.people.find(p => p.id === personId)?.removedPanes
+  const read = (f: ReturnType<typeof fixture>, reader: Extract<Actor, { kind: 'person' }>, of = 'owner', now = 1000) =>
+    visibleState(f.state, reader, now).people.find(p => p.id === of)
+
   it('leaves the session of an agent a person takes out running, and records it for that person alone', () => {
     const f = fixture()
     f.invite()
@@ -2413,24 +2417,26 @@ describe('Lead protection', () => {
     f.run({ type: 'agent.remove', agentId: worker })
     expect(f.state.closingSessions).toBeUndefined()
     expect(f.state.agents.map(a => a.id)).toEqual([theirs])
-    expect(f.state.removedPanes).toEqual([{ machineId: 'host', harnessId: 'worker', contributorId: 'owner', removedAt: 1000 }])
-    expect(visibleState(f.state, owner, 1000)).toMatchObject({ removedPanes: [{ machineId: 'host', harnessId: 'worker' }] })
-    expect(visibleState(f.state, peer, 1000)).not.toHaveProperty('removedPanes')
+    expect(panes(f)).toEqual([{ machineId: 'host', harnessId: 'worker', removedAt: 1000 }])
+    expect(read(f, owner)).toMatchObject({ removedPanes: [{ machineId: 'host', harnessId: 'worker', removedAt: 1000 }] })
+    expect(read(f, peer)).not.toHaveProperty('removedPanes')
 
     const g = fixture(), other = g.add('other')
     g.run({ type: 'machine.remove', machineId: 'host' })
     expect(g.state.agents.some(a => a.id === other)).toBe(false)
     expect(g.state.closingSessions).toBeUndefined()
-    expect(g.state.removedPanes).toEqual([expect.objectContaining({ harnessId: 'other' })])
+    expect(panes(g)).toEqual([expect.objectContaining({ harnessId: 'other' })])
 
-    // Whoever leaves takes their agents out with them, still running, and no record they could no longer read.
+    // Whoever leaves takes their agents out with them, still running, and their records go with them.
     const h = fixture()
     h.invite()
+    h.run({ type: 'agent.remove', agentId: h.add('earlier', 'peer') }, peer)
+    expect(panes(h, 'peer')).toHaveLength(1)
     h.add('theirs', 'peer')
     h.run({ type: 'member.remove', userId: 'peer' }, peer)
     expect(h.state.agents).toEqual([])
     expect(h.state.closingSessions).toBeUndefined()
-    expect(h.state.removedPanes).toBeUndefined()
+    expect(h.state.people.map(p => p.id)).toEqual(['owner'])
   })
 
   it('closes the session only on a confirmed delete or a Stop its person asked for', () => {
@@ -2438,7 +2444,7 @@ describe('Lead protection', () => {
     f.run({ type: 'agent.release', agentId: worker, decision: 'stop' })
     f.run({ type: 'agent.remove', agentId: worker })
     expect(f.state.closingSessions).toEqual([closing(worker, 'worker')])
-    expect(f.state.removedPanes).toBeUndefined()
+    expect(panes(f)).toBeUndefined()
     expect(visibleState(f.state, owner)).not.toHaveProperty('closingSessions')
 
     const g = fixture(), other = g.add('other')
@@ -2446,18 +2452,30 @@ describe('Lead protection', () => {
     expect(g.state.closingSessions).toEqual([closing(other, 'other')])
   })
 
-  it('forgets a taken-out session once it is added again, keeps at most the newest records, and lets old ones lapse', () => {
+  it('forgets a taken-out session once it or its machine is added again, keeps a person\'s newest, and lets old ones lapse', () => {
     const f = fixture(), worker = f.add('worker')
     f.run({ type: 'agent.remove', agentId: worker })
     f.add('worker')
-    expect(f.state.removedPanes).toBeUndefined()
+    expect(panes(f)).toBeUndefined()
+
+    const own = { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } }
+    const contribute = { type: 'machine.contribute', machineId: 'host', name: 'Studio', cwd: '/repo', engines: ['claude'], maxAgents: 2 } as Command
+    const m = fixture()
+    m.run(contribute, owner, own)
+    m.add('kept')
+    const removalId = m.run({ type: 'machine.remove', machineId: 'host' }).result.removalId as string
+    expect(panes(m)).toHaveLength(1)
+    m.run({ type: 'machine.cleaned', machineId: 'host', removalId })
+    m.run(contribute, owner, own)
+    expect(panes(m)).toBeUndefined()
+
     const g = fixture()
-    g.state.removedPanes = Array.from({ length: MAX_REMOVED_PANES }, (_, i) => ({ machineId: 'host', harnessId: `old-${i}`, contributorId: 'owner', removedAt: 1000 }))
+    g.state.people[0]!.removedPanes = Array.from({ length: MAX_REMOVED_PANES }, (_, i) => ({ machineId: 'host', harnessId: `old-${i}`, removedAt: 1000 }))
     g.run({ type: 'agent.remove', agentId: g.add('worker') })
-    expect(g.state.removedPanes).toHaveLength(MAX_REMOVED_PANES)
-    expect(g.state.removedPanes!.at(-1)).toMatchObject({ harnessId: 'worker' })
-    expect(g.state.removedPanes!.some(r => r.harnessId === 'old-0')).toBe(false)
-    expect(visibleState(g.state, owner, 1000 + REMOVED_PANE_KEEP_MS)).not.toHaveProperty('removedPanes')
+    expect(panes(g)).toHaveLength(MAX_REMOVED_PANES)
+    expect(panes(g)!.at(-1)).toMatchObject({ harnessId: 'worker' })
+    expect(panes(g)!.some(r => r.harnessId === 'old-0')).toBe(false)
+    expect(read(g, owner, 'owner', 1000 + REMOVED_PANE_KEEP_MS)).not.toHaveProperty('removedPanes')
   })
 
   it('drops a close request and the slot held for its session once the machine owner says it closed', () => {
