@@ -241,7 +241,7 @@ describe('where the core finds the other engines\' conversations', () => {
       // OpenClaw's TUI names its session on its screen alone: the footer under its status line, above its composer.
       capturePane: async (agentId: string) => agentId === 'agent-openclaw'
         ? ` openclaw tui - ws://127.0.0.1:18789 - agent main - session plain\n\n session agent:main:plain\n connected | idle\n agent main | session plain | m/m | deliver:off | tokens ?\n${'─'.repeat(40)}\n\n${'─'.repeat(40)}\n` : null,
-      openclawPaneRead: () => {}, openclawPaneDue: () => true, openclawStateDir: async () => null,
+      openclawPaneRead: () => false, openclawPaneDue: () => true, openclawStateDir: async () => null,
     })
     const observed = (engine: string, over: Record<string, unknown>) => ({
       engine, cwd: '/work/g', runtimes: [{ backend: 'tmux', paneId: '%1' }], primaryRuntimeKey: 'tmux:%1',

@@ -77,8 +77,9 @@ export interface BindDeps {
   /** The agent's pane as it shows now, or null when it cannot be read: OpenClaw's TUI names its session nowhere else. */
   capturePane: (agentId: string) => Promise<string | null>
   /** Tells an OpenClaw session's live stream what its pane read on this pass (engines/openclaw/live.ts), and hands the
-   *  capture on to the model chip: the footer draws the model, and this is the pane's one capture. */
-  openclawPaneRead: (sessionId: string, reading: { ready: boolean; gatewayLost: boolean }, capture: string) => void
+   *  capture on to the model chip: the footer draws the model, and this is the pane's one capture. Whether a stream
+   *  took the reading: an agent bound but not yet attached has none. */
+  openclawPaneRead: (sessionId: string, reading: { ready: boolean; gatewayLost: boolean; running: boolean }, capture: string) => boolean
   /** Whether a bound OpenClaw session's pane may show anything its last read did not (live.ts `paneDue`). */
   openclawPaneDue: (sessionId: string) => boolean
   /** The state folder an OpenClaw TUI holds open, or null when its open files cannot be read (lib/openclawStore.ts). */
@@ -308,7 +309,7 @@ export function createBinding({
       const screen = readOpenclawScreen(captured.value)
       // Told on every pass, the ones that say a state too: a pass that reads the Gateway gone is what lets the stream
       // close a turn its restart left `running`.
-      if (agent.sessionId) openclawPaneRead(agent.sessionId, { ready: screen.state === 'ready', gatewayLost: screen.gatewayLost }, captured.value)
+      if (agent.sessionId) openclawPaneRead(agent.sessionId, { ready: screen.state === 'ready', gatewayLost: screen.gatewayLost, running: screen.running }, captured.value)
       const held = screen.state ? OPENCLAW_SCREEN_HOLDS[screen.state] : undefined
       const ours = !agent.identityHold || OPENCLAW_HOLDS.has(agent.identityHold)
       if (held) {

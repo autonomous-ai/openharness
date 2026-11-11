@@ -1969,10 +1969,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // the only place a Gateway on another host shows, a while longer into a conversation.
     capturePane: (agentId) => captureTerminal(agentId, 200),
     openclawPaneRead: (sessionId, reading, capture) => {
-      normalizers.openclawReaders.get(sessionId)?.paneRead(reading)
+      const stream = normalizers.openclawReaders.get(sessionId)
+      stream?.paneRead(reading)
       const session = registry.bySession(sessionId)
       // As the footer poll beside the other engines' panes reads them: a profile that cannot be read leaves the chip as it was.
       if (session) void Promise.resolve(runtimeProfiles.ingestPane(session, capture)).catch(() => undefined)
+      return !!stream
     },
     openclawPaneDue: (sessionId) => normalizers.openclawReaders.get(sessionId)?.paneDue() ?? true,
     openclawStateDir: (pid) => openclawStateDir(pid),
