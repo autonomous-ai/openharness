@@ -363,7 +363,7 @@ export function takenTasks(issues: Json[], pulls: Json[], builders: CrewBuilder[
 /** Finished tasks of a size needed before their time replaces the size's guess, and the bounds kept on it. */
 export const LEARN_MIN = 3, LEARNED_FLOOR = 10, LEARNED_CEILING = 24 * 60
 
-/** When a closed task's work began: its builder's "taken by" comment (SWARM_BASICS), else Harness's word giving it. */
+/** When a closed task's work began: its builder's "taken by" comment (githubClaim.ts), else Harness's word giving it. */
 export function startedAt(comments: Json[]): number | null {
   for (const comment of comments) {
     const first = String(comment.body ?? '').split('\n').find(line => line.trim()) ?? ''
