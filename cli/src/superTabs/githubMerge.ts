@@ -28,6 +28,7 @@ import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { GitHubReads, GitHubStop, PAGE, retryIn, Waits, waitWords } from './githubRest.js'
 import { repositorySlug, TEAM } from './githubMentions.js'
 import { GitHubTrain, TRAIN_MARK, type TrainPull } from './githubTrain.js'
+import { SUITE_CHECK } from './suites.js'
 import { identifier, object } from './wire.js'
 
 type Json = Record<string, unknown>
@@ -485,10 +486,11 @@ export const pullPeople = (pull: Json, team: ReadonlySet<string>): PullPeople =>
 export const authorOf = (pull: Json): string | null => writersOf(pull)[0] ?? null
 
 /** Whether every check on a head passed (none at all passes), is still running, or failed with which names, and what was read,
- *  in one line, to tell two looks apart. */
-export function checksOf(runs: Json[], status: Json): { state: 'passed' | 'running' | 'failed'; failed: string[]; summary: string } {
+ *  in one line, to tell two looks apart. `none`: the head has no check and no status of the repository's own, which is a
+ *  repository with no CI, or CI that has not started on this head. */
+export function checksOf(runs: Json[], status: Json): { state: 'passed' | 'running' | 'failed'; failed: string[]; summary: string; none: boolean } {
   const failed: string[] = [], seen: string[] = []
-  let running = false
+  let running = false, none = !runs.length
   for (const run of runs) {
     seen.push(`${String(run.name ?? '')}:${String(run.status ?? '')}:${String(run.conclusion ?? '')}`)
     if (run.status !== 'completed') { running = true; continue }
@@ -497,11 +499,14 @@ export function checksOf(runs: Json[], status: Json): { state: 'passed' | 'runni
   for (const each of Array.isArray(status.statuses) ? status.statuses.map(object) : []) {
     // The train's own mark on the tip it built is no check of it: counted, a train whose CI had not started read as passed.
     if (each.context === TRAIN_MARK) continue
+    // A suite's result is a check as any other, said by a person's computer (githubSuite.ts) and not by the repository's CI:
+    // counted as CI having started, a train with one on its tip and no check of its own read as checked, and landed.
+    if (!String(each.context).startsWith(SUITE_CHECK)) none = false
     seen.push(`${String(each.context ?? '')}:${String(each.state ?? '')}`)
     if (each.state === 'pending') running = true
     else if (each.state !== 'success') failed.push(String(each.context ?? 'a status'))
   }
-  return { state: failed.length ? 'failed' : running ? 'running' : 'passed', failed, summary: seen.sort().join('|') }
+  return { state: failed.length ? 'failed' : running ? 'running' : 'passed', failed, summary: seen.sort().join('|'), none }
 }
 
 export class GitHubMerge {
@@ -725,13 +730,11 @@ export class GitHubMerge {
   private async checks(repo: string, at: string, head: string): Promise<{ state: 'passed' | 'running' | 'failed'; failed: string[]; none: boolean }> {
     const runs = object(await this.reads.one(repo, `/repos/${repo}/commits/${head}/check-runs?per_page=${PAGE}`)).check_runs
     const checks = checksOf(Array.isArray(runs) ? runs.map(object) : [], await this.reads.one(repo, `/repos/${repo}/commits/${head}/status`))
-    // No check and no status at all: a repository with no CI, or CI that has not started on this head.
-    const none = checks.summary === ''
-    if (checks.state !== 'passed') return { ...checks, none }
+    if (checks.state !== 'passed') return checks
     // Passed, or none yet.
     const before = this.looked.get(at)
     this.looked.set(at, checks.summary)
-    return this.now() - this.seenAt.get(at)! < CHECKS_SETTLE_MS || before !== checks.summary ? { state: 'running', failed: [], none } : { ...checks, none }
+    return this.now() - this.seenAt.get(at)! < CHECKS_SETTLE_MS || before !== checks.summary ? { state: 'running', failed: [], none: checks.none } : checks
   }
 
   /** Another open pull request (a draft too) whose head is among [number]'s commits, or null: merging [number] would merge that one's

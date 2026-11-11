@@ -287,6 +287,11 @@ code.
 
 ### 10. End-to-end tests across machines
 
+**Designed** (#NNNN): [suites across machines](suites-across-machines.md). Built: a project's `agents/SUITES.md` is
+read, a shard's result is said on the exact commit by command (`suites.ts`, `githubSuite.ts`), and the train never reads
+it as its CI having started. Waits: giving shards to computers and running them there, package 16's offer, and the
+proof (a private repository and a second Mac).
+
 **For private teams.** An open project needs the sandbox first, which was set aside on 11 November.
 
 **Design first**, in the pull request's Design section:

@@ -47,6 +47,12 @@ signed in while the team works.
 A project can state its goal as checks: `harness super-tab goal` in a checkout writes `agents/GOAL.md` and the workflow
 that runs it, and the PM is told how many pass.
 
+A project in a private repository can list the suites its CI does not run in `agents/SUITES.md`, a row for each shard:
+its name, what its computer needs, and its command. Whoever runs a shard says how it ended on that exact commit with
+`harness super-tab suite passed|failed OWNER/REPO SHA SHARD`. It shows on GitHub as that person's check,
+`suite: <shard>`, and a failed one holds what it is on. Harness does not run the shards yet
+([the design](design/2026-11-11-swarm-allocator/suites-across-machines.md)).
+
 ## When nothing moves
 
 | You see | Look at |

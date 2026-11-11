@@ -18,6 +18,8 @@ const FILES = ['src/superTabs/shortCommand.ts', ...IN_CORE,
   'src/superTabs/githubSplit.ts',
   // A project's goal, scored from main's checks, and the file and workflow it starts from (anh Dee, 11-11).
   'src/superTabs/goal.ts', 'src/superTabs/goalStarter.ts',
+  // The suites a project's CI does not run, as its file lists their shards, and a shard's result said by command (anh Dee, 11-11).
+  'src/superTabs/suites.ts', 'src/superTabs/githubSuite.ts',
   // The leaderboard's daemon half: what its person's agents shipped, read with their own gh and reported as counts.
   'src/superTabs/shipping.ts', 'src/superTabs/shippingRead.ts',
 ]

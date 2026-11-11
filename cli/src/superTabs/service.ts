@@ -23,6 +23,7 @@ import { ShippingReporter } from './shipping.js'
 import { currentNames, GitHubStop, githubRest, type GitHubGet, type GitHubSend } from './githubRest.js'
 import { claimAsked, takeTask } from './githubClaim.js'
 import { Cuts, sameCut, splitAsked, splitTask } from './githubSplit.js'
+import { saySuite, suiteAsked } from './githubSuite.js'
 import { postVerdict, verdictAsked } from './githubVerdict.js'
 import { GitHubAssign } from './githubAssign.js'
 import { GitHubMerge, ledProjects, recordedAuthors, VerdictRecords, type LedProject } from './githubMerge.js'
@@ -470,18 +471,21 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         }
         // A reader's verdict on a pull request (`read ok|hold`, githubVerdict.ts), a builder's claim on a task (`take`,
         // githubClaim.ts) and a piece it cuts off one (`split`, githubSplit.ts): made with this computer's gh under the calling
-        // agent's name, on a repository of a project it reads, and its comment recorded with the backend as that agent's.
-        if (payload.action === 'read' || payload.action === 'take' || payload.action === 'split') {
+        // agent's name, on a repository of a project it reads, and its comment recorded with the backend as that agent's. And
+        // how a shard ended on the commit it ran on (`suite passed|failed`, githubSuite.ts): a commit status, which GitHub
+        // itself shows as this computer's person's, so the backend is told of nothing.
+        if (payload.action === 'read' || payload.action === 'take' || payload.action === 'split' || payload.action === 'suite') {
           const verdict = payload.action === 'read' ? verdictAsked(payload) : null, claim = payload.action === 'take' ? claimAsked(payload) : null
-          const piece = payload.action === 'split' ? splitAsked(payload) : null
-          if (!verdict && !claim && !piece) return { error: 'INVALID_REQUEST' }
+          const piece = payload.action === 'split' ? splitAsked(payload) : null, result = payload.action === 'suite' ? suiteAsked(payload) : null
+          if (!verdict && !claim && !piece && !result) return { error: 'INVALID_REQUEST' }
           // This computer's gh login is its person's: only that person's own agent here posts with it, as GitHub news and the
           // merger read with it only for such an agent (githubMentions.ts watchedAgents, githubMerge.ts ledProjects).
           const me = (await core.account.identity().catch(() => null))?.accountId ?? null
           if (!me || agent.contributorId !== me || agent.machineOwnerId !== me) {
             return { error: 'AGENT_UNAVAILABLE', detail: verdict ? 'A verdict is posted with its person\'s own GitHub login, on that person\'s computer.'
               : claim ? 'A task is taken with its person\'s own GitHub login, on that person\'s computer.'
-              : 'A task is cut with its person\'s own GitHub login, on that person\'s computer.' }
+              : piece ? 'A task is cut with its person\'s own GitHub login, on that person\'s computer.'
+              : 'A suite\'s result is said with its person\'s own GitHub login, on that person\'s computer.' }
           }
           const slugs = list((await swarm()).state.projects).map(project => repositorySlug(object(project.repository).repositoryUrl)).filter(slug => slug !== null)
           const name = [agent.displayName, agent.name].find((given): given is string => typeof given === 'string' && !!given.trim()) ?? ''
@@ -489,7 +493,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           // (githubVerdict.ts ProjectRepositories), and a name asked that is neither by what GitHub names it now (renamed twice).
           // A project's own name is never another's; GitHub's answers are kept, so a command refused once it runs (a cut past its
           // limit) asks GitHub again for none of them.
-          const asked = (verdict ?? claim ?? piece!).repository.toLowerCase()
+          const asked = (verdict ?? claim ?? piece ?? result!).repository.toLowerCase()
           const currents = await Promise.all(slugs.map(slug => currentName(slug)))
           const repositories = new Map<string, { project: string; github: string }>(slugs.map((slug, i) => [slug, { project: slug, github: currents[i]! }]))
           slugs.forEach((slug, i) => { if (!repositories.has(currents[i]!)) repositories.set(currents[i]!, { project: slug, github: currents[i]! }) })
@@ -503,11 +507,13 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           // The CLI gives up after 30 seconds and says "Try again" while this works on: the same command from the same agent
           // joins the one still running, or both would find no comment yet and each post its own. By either name of its repository.
           // A cut is the same cut whatever its words or size: sent again with other words, it joins the one that runs.
-          const same = JSON.stringify([agentId, verdict ? { ...verdict, repository: resolved } : claim ? { ...claim, repository: resolved } : sameCut({ ...piece!, repository: resolved })])
+          const same = JSON.stringify([agentId, verdict ? { ...verdict, repository: resolved } : claim ? { ...claim, repository: resolved }
+            : piece ? sameCut({ ...piece, repository: resolved }) : { ...result!, repository: resolved }])
           const deps = { get: github.get, send: github.send, login: loginOf, record }
           const made = commands.get(same) ?? (verdict ? postVerdict(deps, builder, verdict)
             : claim ? takeTask(deps, builder, claim)
-            : cuts.run(agentId, () => splitTask(deps, builder, piece!)))
+            : piece ? cuts.run(agentId, () => splitTask(deps, builder, piece))
+            : saySuite(deps, builder, result!))
             .finally(() => commands.delete(same))
           commands.set(same, made)
           return { ok: true, value: await made }

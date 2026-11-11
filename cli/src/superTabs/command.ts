@@ -1,5 +1,6 @@
 import { claimAsked } from './githubClaim.js'
 import { splitAsked } from './githubSplit.js'
+import { suiteAsked } from './githubSuite.js'
 import { verdictAsked } from './githubVerdict.js'
 import { identifier, object } from './wire.js'
 import { openDaemon, whereFor, type Daemon, type Where } from '../agentClient/daemon.js'
@@ -25,7 +26,7 @@ function harnessIn(frames: PaneFrame[], pane: string, machineId: string): boolea
 
 const ELSEWHERE = 'From a harness, Swarm commands go to this computer\'s own Harness only: leave out --machine and --port, or give this computer\'s own.'
 
-const USAGE = 'harness super-tab [--tab ID] [--agent ID] [--port N --machine ID] status | messages GROUP [--thread ROOT] [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | answer GROUP MESSAGE_ID TEXT|- OPERATION_ID [--to AGENT]... | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | read ok|hold OWNER/REPO#N SHA [TEXT|-] | take OWNER/REPO#N | split OWNER/REPO#N s|m|l TITLE [TEXT|-] | inbox | goal'
+const USAGE = 'harness super-tab [--tab ID] [--agent ID] [--port N --machine ID] status | messages GROUP [--thread ROOT] [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | answer GROUP MESSAGE_ID TEXT|- OPERATION_ID [--to AGENT]... | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | read ok|hold OWNER/REPO#N SHA [TEXT|-] | take OWNER/REPO#N | split OWNER/REPO#N s|m|l TITLE [TEXT|-] | suite passed|failed OWNER/REPO SHA SHARD | inbox | goal'
 const usageError = () => new Error(USAGE)
 
 /** A message on stdin, for post's TEXT `-`.
@@ -216,6 +217,12 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
     // A piece cut off a task its builder holds (githubSplit.ts): its size, its title, and what it is, which may come on stdin.
     const text = positional[4] === '-' ? postStdin(stdin, terminal, 'split') : positional[4] ?? ''
     const asked = splitAsked({ repository: first?.slice(0, first.lastIndexOf('#')), number: Number(/#([1-9][0-9]{0,8})$/.exec(first ?? '')?.[1]), size: second, title: third, text })
+    if (!asked) throw usageError()
+    Object.assign(payload, { ...asked })
+  } else if (action === 'suite' && positional.length === 5) {
+    // How a shard ended on the commit it ran on (githubSuite.ts): the daemon finds the commit and the shard's row there, and
+    // says it as a commit status.
+    const asked = suiteAsked({ result: first, repository: second, sha: third, shard: positional[4] })
     if (!asked) throw usageError()
     Object.assign(payload, { ...asked })
   } else if ((action !== 'status' && action !== 'inbox' && action !== 'goal') || positional.length !== 1) {
