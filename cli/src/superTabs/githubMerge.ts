@@ -477,19 +477,26 @@ export class GitHubMerge {
       ready.push({ number, head, title: String(pull.title ?? ''), body: String(pull.body ?? ''), readers: [...reads.values()].map(r => r.name),
         fork: String(object(object(pull.head).repo).full_name ?? '').toLowerCase() !== repo.toLowerCase(), checked: !checks.none, author, comments })
     }
-    for (const pull of await train.carry(ready, waiting)) await this.mergeAlone(repo, pull)
+    for (const pull of await train.carry(ready, waiting)) {
+      // A fork GitHub took neither into a train nor on its own: tried again with the merger's waits, not every pass (each
+      // try makes and deletes a branch).
+      if (!await this.mergeAlone(repo, pull) && pull.fork) {
+        throw new GitHubStop('FORK_REFUSED', `GitHub takes #${pull.number} neither into a train nor on its own.`, false, this.now())
+      }
+    }
     this.forgetHeads(repo, open)
   }
 
   /** Merges one pull request on its own, squashed at its head, as every ready one was before the train. */
-  private async mergeAlone(repo: string, pull: Ready): Promise<void> {
+  private async mergeAlone(repo: string, pull: Ready): Promise<boolean> {
     const merged = await this.deps.send('PUT', `/repos/${repo}/pulls/${pull.number}/merge`, { merge_method: 'squash', sha: pull.head })
     // Merged, its head moved (409) or refused by GitHub (405): the repository is read again next pass.
     this.reads.forget(repo)
-    if (merged.status !== 200) { this.note('MERGE_REFUSED', `${repo}#${pull.number}: GitHub answered ${merged.status}`); return }
+    if (merged.status !== 200) { this.note('MERGE_REFUSED', `${repo}#${pull.number}: GitHub answered ${merged.status}`); return false }
     const by = pull.readers.join(' and ')
     await this.comment(repo, pull.number, `${SELF}, ${this.clock()}: merged. READ-OK on ${pull.head.slice(0, 7)} by ${by}, checks green.`)
     this.log(`[super-tab] merged ${repo}#${pull.number} on ${pull.head.slice(0, 7)} (READ-OK by ${by})`)
+    return true
   }
 
   /** This computer's GitHub login, asked once: the train takes only the pull requests it opened for its own (githubTrain.ts). */

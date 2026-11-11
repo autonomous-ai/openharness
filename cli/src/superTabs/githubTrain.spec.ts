@@ -413,9 +413,10 @@ describe('the ready pull requests ride a train (githubTrain.ts)', () => {
     const f = setup()
     const fork = f.add(4, { fork: true }); f.add(5)
     await f.settle()
-    await f.ends(FAILED)
+    // Refused from here on: the train that carries it is already built.
     f.state.untaken.add(fork.head.sha)
-    await f.tick()
+    await f.ends(FAILED)
+    expect(f.carried()).toEqual([[4, 5]])
     expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual([])
     expect(f.logged()).toContainEqual(expect.stringContaining('TRAIN_REFUSED acme/app: GitHub answered POST /merges with 404.'))
   })

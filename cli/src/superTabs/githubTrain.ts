@@ -174,13 +174,14 @@ export class GitHubTrain<T extends TrainPull> {
     if (train) { await this.attend(train, ready, waiting); return [] }
     // Nothing to carry: nothing more is read (the merger passes every 30 seconds).
     if (!ready.length) return []
-    const { riders, alone } = nextTrain(ready, (await this.closed()).filter(closed => closed.red && !closed.mergedAs))
+    const red = (await this.closed()).filter(closed => closed.red && !closed.mergedAs)
+    const { riders, alone } = nextTrain(ready, red)
     for (const { pull, train: carried } of alone) await this.host.failedAlone(pull, carried)
     if (!riders.length) return []
     // Alone, and it holds the base's tip: its own checks ran on what will land. Not a fork's: whether GitHub compares its
     // head here is not yet seen, and a read it refuses would hold the pass; a train of one is taken or refused by the merges API.
     if (ready.length === 1 && !riders[0]!.fork && (await this.deps.reads.one(this.repo, `/repos/${this.repo}/compare/${this.base}...${riders[0]!.head}`)).behind_by === 0) return riders
-    return this.build(riders)
+    return this.build(riders, new Set(red.flatMap(closed => closed.members.map(member => `${member.number}@${member.head}`))))
   }
 
   /** The open [train]: its checks running, it waits; failed, it is closed as red; passed, it lands if every member is still
@@ -265,9 +266,10 @@ export class GitHubTrain<T extends TrainPull> {
 
   /** Builds the next train of [riders] on the base's tip with the merges API (no checkout, so no branch's code runs here), and
    *  opens its pull request. A fork's pull request rides as any other: GitHub keeps its head in this repository
-   *  (refs/pull/N/head) and merges it by its SHA. Returns the forks whose head GitHub did not take, to merge on their own
-   *  checks as before the train; no train is opened then, as their merge moves the base under it. */
-  private async build(riders: readonly T[]): Promise<T[]> {
+   *  (refs/pull/N/head) and merges it by its SHA. Returns the fork whose head GitHub did not take (404), to merge on its own
+   *  checks as before the train; no train is opened then, as its merge moves the base under it. Not one a red train
+   *  carried at this head ([carried], as `<number>@<head>`): GitHub took it then, and its own checks are not what failed. */
+  private async build(riders: readonly T[], carried: ReadonlySet<string>): Promise<T[]> {
     // No train is open, so every train branch is one left behind (a build that failed part way, a daemon stopped between two
     // calls): deleted before the next, never opened later. GitHub matches by the start of the name, so a branch that only
     // begins like the train's (`harness-trains`) is listed too, and left alone.
@@ -282,9 +284,10 @@ export class GitHubTrain<T extends TrainPull> {
     let tip = from
     const members: T[] = [], untaken: T[] = []
     for (const pull of riders) {
-      const reply = await this.sent('POST', '/merges', pull.fork ? [201, 204, 409, 404, 422] : [201, 204, 409],
+      const reply = await this.sent('POST', '/merges', pull.fork && !carried.has(`${pull.number}@${pull.head}`) ? [201, 204, 409, 404] : [201, 204, 409],
         { base: branch, head: pull.head, commit_message: `${TITLE}#${pull.number}` })
-      if (reply.status === 404 || reply.status === 422) { untaken.push(pull); continue }
+      // Nothing is opened this pass, so no more is asked.
+      if (reply.status === 404) { untaken.push(pull); break }
       // A conflict with the base or with a member before it: left out, and its author told once for this head.
       if (reply.status === 409) { await this.host.conflicts(pull); continue }
       // The branch holds it already (merged by hand meanwhile): nothing of it to carry.
@@ -298,7 +301,9 @@ export class GitHubTrain<T extends TrainPull> {
       tip = String(merge.sha)
       members.push(pull)
     }
-    if (untaken.length || !members.length) { await this.drop(branch); return untaken }
+    // The same 404 answers a merge into a branch that is gone: with the train's own branch deleted under the build, it was
+    // no word on the fork's head, and nothing merges on its own.
+    if (untaken.length || !members.length) return await this.drop(branch) ? untaken : []
     const opened = object((await this.sent('POST', '/pulls', [201], { head: branch, base: this.base, draft: false, title: `${TITLE}${members.map(m => `#${m.number}`).join(' ')}`,
       body: trainBody(this.base, tip, members.map(m => ({ number: m.number, head: m.head, readers: m.readers.join(' and ') }))) })).body)
     const [train] = await this.mine([opened])
@@ -341,10 +346,11 @@ export class GitHubTrain<T extends TrainPull> {
     this.deps.log(`[super-tab] train ${this.repo}#${train.number} closed: ${why}`)
   }
 
-  /** Deletes a train's [branch]; one already gone (422) is done. Never a ref that is not the train's own. */
-  private async drop(branch: string): Promise<void> {
+  /** Deletes a train's [branch], and says whether it was there; one already gone (422) is done. Never a ref that is not the
+   *  train's own. */
+  private async drop(branch: string): Promise<boolean> {
     if (!own(branch)) throw this.stop('TRAIN_UNREADABLE', 'a branch to delete is not one of the train\'s.')
-    await this.sent('DELETE', `/git/refs/heads/${branch}`, [204, 422])
+    return (await this.sent('DELETE', `/git/refs/heads/${branch}`, [204, 422])).status === 204
   }
 
   /** [pull] as a train, or null when it is none of this repository's: another branch, another base, or a fork's, which may
