@@ -356,6 +356,23 @@ void main() {
         SwarmPullStatus.failing,
       );
     });
+    // Review of #3959: anyone can push a branch under the train's prefix. One that is not titled as Harness titles a
+    // train is a builder's pull request, and still one to read.
+    test('a pull request on such a branch that is not titled a train is its builder\'s', () {
+      final pull = SwarmPull.read({
+        ...train('SUCCESS'),
+        'title': 'Add the day count',
+        'headRefName': 'harness-train/14',
+        'labels': {
+          'nodes': [
+            {'name': 'builder:pip'},
+          ],
+        },
+      }, defaultBranch: 'main')!;
+      expect(pull.author, 'pip');
+      expect(pull.readOk, isFalse);
+      expect(pull.status, SwarmPullStatus.review);
+    });
     test('a branch that only begins like a train\'s is its builder\'s', () {
       final pull = SwarmPull.read({
         ...train('SUCCESS'),
