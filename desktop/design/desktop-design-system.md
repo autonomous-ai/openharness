@@ -454,10 +454,14 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   At the right three icons: Info (`AppIcons.info`) opens what the app knows of
   it, Instructions (`AppIcons.fileText`) opens `agents/<name>.md`, and
   Terminal opens its terminal, each with its own header and ×, beside the chat
-  or in its place (Panes beside the chat). A browser agent on one of the
+  or in its place (Panes beside the chat). Every running agent on one of the
   person's own computers has a fourth after Terminal, Browser
-  (`BrowserButton`, `AppIcons.globe`), selected while its panel is open; a
-  computer shared with them, the web build and Windows draw none. In a window under 720 the list of
+  (`BrowserButton`, `AppIcons.globe`), selected while its panel is open, with
+  or without a browser. While its browser runs (`ready`), a 6-point dot in
+  `AppPalette.online`, the connection dot's green, sits at the glyph's top
+  right; the tooltip stays `Browser` and its label reads `Browser, running`.
+  A computer shared with them, a stopped agent, the web build and Windows draw
+  none. In a window under 720 the list of
   conversations is behind a Conversations button that starts the bar, as a
   project's bar has it.
 - **Panes beside the chat.** An agent's Instructions, a project's Tasks and
@@ -550,9 +554,13 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   setup; Cancel does nothing.
 - **Browser panel** (`BrowserPanel`, `browser/browser_panel.dart`). The agent's
   own Chrome, beside its chat or in its place as the other panes. Its header is
-  `Browser` in 13 medium, then the gear (`Browser settings`, which opens them
-  in the panel), Paste (`AppIcons.clipboardPaste`, which sends the clipboard's
-  text, only while the screen shows) and ×. Ready, the screen fills the panel,
+  `Browser` in 13 medium, then `Stop` (a compact quiet `DesktopPill`, there in
+  every state while the browser is on, a failed one too, with no
+  confirmation), the gear (`Browser settings`, which opens them in the panel,
+  off too), Paste (`AppIcons.clipboardPaste`, which sends the clipboard's
+  text, only while the screen shows) and ×. × only hides the panel: the
+  browser runs on. Off, one centred line in 13, `A sandboxed Chrome the agent
+  drives`, and the blue `Start` under it. Ready, the screen fills the panel,
   scaled to fit: the bundled noVNC page in the native webview, which the
   person uses as the agent does. While it sets up, four lines in 13, `Podman
   installed`, `Starting Podman…`, `Building browser`, `Starting browser`, each
@@ -567,8 +575,11 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   reconnect), `Browser is open in too many places`, `Only its owner can open
   this browser`, `Reconnect this machine to open its browser`, `This computer
   can't show the browser`. A request the computer did not take adds one 12
-  grey line under it. The gallery draws the button closed and open, the setup,
-  and a failed state.
+  grey line under what the panel shows: `Update Harness on Mac Studio first`
+  from an older Harness, `Browser doesn't run on Windows yet`, `Only its owner
+  can open this browser`, any other `Browser isn't available on Mac Studio
+  right now`. The gallery draws the button plain, open and running, and the
+  panel off, running and failed.
 - **Browser settings** (`BrowserSettingsPage`, `browser/browser_settings_page.dart`).
   Inside the agent's Browser panel, read from and saved to the agent's
   computer only. `‹ Browser settings` (a compact quiet `DesktopPill` with a

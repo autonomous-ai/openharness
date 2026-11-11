@@ -11,7 +11,9 @@ import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/view.dart';
 import 'package:harness/widgets/web_pane_panel.dart';
 import 'package:harness/ws/ws_conn.dart';
+import 'package:webview_flutter_platform_interface/webview_flutter_platform_interface.dart';
 
+import '../support/fake_webview.dart';
 import '../support/swarm_v4_data.dart';
 import 'browser_button_test.dart' show settle;
 
@@ -104,12 +106,44 @@ class _App extends AppNotifier {
   }
 }
 
+/// The Browser page in a webview with no native view: it says it loaded as soon as its channel is there.
+class _Webviews extends FakeWebViewPlatform {
+  @override
+  PlatformWebViewController createPlatformWebViewController(
+    PlatformWebViewControllerCreationParams params,
+  ) {
+    final controller = _Page(params, this);
+    controllers.add(controller);
+    return controller;
+  }
+}
+
+class _Page extends FakeWebViewController {
+  _Page(super.params, super.platform);
+
+  @override
+  Future<void> addJavaScriptChannel(JavaScriptChannelParams channel) async =>
+      channel.onMessageReceived(
+        const JavaScriptMessage(message: '{"t":"ready"}'),
+      );
+
+  @override
+  Future<void> loadHtmlString(String html, {String? baseUrl}) async {}
+}
+
 /// A person in their chat with second, on the Desktop: the Browser button after Terminal, and its panel beside the chat.
 void main() {
   Finder key(String k) => find.byKey(ValueKey(k));
 
-  setUp(() => WebPanePanel.webviewAvailableForTest = true);
-  tearDown(() => WebPanePanel.webviewAvailableForTest = null);
+  setUp(() {
+    final previous = WebViewPlatform.instance;
+    WebViewPlatform.instance = _Webviews();
+    WebPanePanel.webviewAvailableForTest = true;
+    addTearDown(() {
+      WebPanePanel.webviewAvailableForTest = null;
+      if (previous != null) WebViewPlatform.instance = previous;
+    });
+  });
 
   Future<_App> show(WidgetTester tester, {bool thisComputer = true}) async {
     final app = _App(thisComputer: thisComputer);
@@ -130,14 +164,18 @@ void main() {
       MaterialApp(
         theme: grid.buildAppTheme(brightness: Brightness.light),
         home: Scaffold(
-          body: SuperTabView(
-            controller: controller,
-            app: app,
-            onAddAgent: (_) {},
-            onOpenTerminal: (_) {},
-            machineName: (_) => 'Mac Studio',
-            github: swarmV4GitHub(),
-            instructions: SwarmV4Computer().link,
+          // As the workspace hosts it: the view is built again on every change of the app.
+          body: ListenableBuilder(
+            listenable: app,
+            builder: (context, _) => SuperTabView(
+              controller: controller,
+              app: app,
+              onAddAgent: (_) {},
+              onOpenTerminal: (_) {},
+              machineName: (_) => 'Mac Studio',
+              github: swarmV4GitHub(),
+              instructions: SwarmV4Computer().link,
+            ),
           ),
         ),
       ),
@@ -162,6 +200,7 @@ void main() {
   }
 
   const off = 'A sandboxed Chrome the agent drives';
+  final screen = key('fake-webview');
   const ready = AgentBrowser(state: 'ready');
   Finder running() => find.bySemanticsLabel('Browser, running');
 
@@ -189,7 +228,7 @@ void main() {
     app.answer();
     await tester.pump();
     await tester.pump();
-    expect(key('browser-screen'), findsOneWidget);
+    expect(screen, findsOneWidget);
     expect(running(), findsOneWidget);
 
     await tester.tap(key('swarm-browser-stop'));
@@ -199,7 +238,7 @@ void main() {
       'stop host/session-second',
     ]);
     await frame(tester, app, null);
-    expect(key('browser-screen'), findsNothing);
+    expect(screen, findsNothing);
     expect(find.text(off), findsOneWidget);
     expect(key('swarm-browser-stop'), findsNothing);
     expect(running(), findsNothing);
@@ -224,7 +263,7 @@ void main() {
     app.answer();
     await tester.pump();
     await tester.pump();
-    expect(key('browser-screen'), findsOneWidget);
+    expect(screen, findsOneWidget);
     expect(app.asked, isEmpty);
     semantics.dispose();
   });
@@ -311,11 +350,13 @@ void main() {
   testWidgets('closing the panel sends no request', (tester) async {
     final app = await show(tester);
     await frame(tester, app, ready);
-    await tap(tester, 'swarm-browser-button');
+    await tester.tap(key('swarm-browser-button'));
+    await tester.pump();
+    await tester.pump();
     app.answer();
     await tester.pump();
     await tester.pump();
-    expect(key('browser-screen'), findsOneWidget);
+    expect(screen, findsOneWidget);
     await tap(tester, 'swarm-browser-close');
     expect(key('swarm-browser-panel'), findsNothing);
     await tap(tester, 'swarm-browser-button');

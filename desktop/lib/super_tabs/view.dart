@@ -24,7 +24,7 @@ import '../widgets/new_harness_paste.dart';
 import '../widgets/terminal_name_prompt.dart';
 import '../widgets/terminal_prompt.dart';
 import '../core/local_key_value_store.dart';
-import '../core/models.dart' show AgentBrowser;
+import '../core/models.dart' show Agent;
 import '../core/runtime_platform.dart';
 import '../logging/app_log.dart';
 import '../state/app_state.dart';
@@ -2821,25 +2821,27 @@ class _SuperTabViewState extends State<SuperTabView>
       ? c.snapshot?.agent(group.agentIds.first)
       : null;
 
-  /// [agent]'s own Chrome, on one of the person's own machines and never on the web build; null for anything else. A
-  /// machine shared with them is another person's, and so is the login in its browser.
-  AgentBrowser? _browserAgent(SuperTabAgent agent) {
+  /// [agent] as its machine lists it, or null when it does not.
+  Agent? _machineAgent(SuperTabAgent agent) => widget.app
+      ?.stateOf(agent.machineId)
+      ?.agents
+      .where((a) => a.id == agent.harnessId)
+      .firstOrNull;
+
+  /// Whether [agent]'s chat has Browser: it runs on one of the person's own machines, and never on the web build or
+  /// Windows. A machine shared with them is another person's, and so is the login in its browser.
+  bool _offersBrowser(SuperTabAgent agent) {
     final machine = widget.app?.stateOf(agent.machineId);
-    final browser = machine?.agents
-        .where((a) => a.id == agent.harnessId)
-        .firstOrNull
-        ?.browser;
+    final running = _machineAgent(agent)?.isStopped == false;
     final own =
         machine != null &&
         !machine.machine.isShared &&
         !machine.machine.isSharedMachine;
     return browserOffered(
-          web: kIsWeb,
-          windows: RuntimePlatform.isWindows,
-          offersBrowser: own && browser != null,
-        )
-        ? browser
-        : null;
+      web: kIsWeb,
+      windows: RuntimePlatform.isWindows,
+      offersBrowser: own && running,
+    );
   }
 
   /// A project's channel: agents post there, people read (Swarm v4). A person's chat with their own agent is the one
@@ -2964,10 +2966,11 @@ class _SuperTabViewState extends State<SuperTabView>
                     _openTerminals(group)?.call();
                   },
           ),
-          if (_browserAgent(agent) != null) ...[
+          if (_offersBrowser(agent)) ...[
             const SizedBox(width: 4),
             BrowserButton(
               open: _browserOpen,
+              running: _machineAgent(agent)?.browser?.state == 'ready',
               onPressed: () => setState(() {
                 _browserOpen = !_browserOpen;
                 if (_browserOpen) {
@@ -4935,8 +4938,7 @@ class _SuperTabViewState extends State<SuperTabView>
             );
       final infoAgent = _infoOpen ? _chatAgent(c.selected) : null;
       final browserAgent = _browserOpen ? _chatAgent(c.selected) : null;
-      final browser =
-          browserAgent == null || _browserAgent(browserAgent) == null
+      final browser = browserAgent == null || !_offersBrowser(browserAgent)
           ? null
           : BrowserPanel(
               // A new agent's panel is a new panel: the stream is that agent's.

@@ -5,7 +5,6 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/view.dart';
 
-import '../support/super_tab_fixture.dart';
 import '../support/swarm_v4_data.dart';
 import '../swarm_state_test.dart' show createApp;
 

@@ -270,7 +270,7 @@ void main() {
     await show(tester, needsSetup, thisComputer: false);
     expect(find.text('Set up Browser on Ken Mac first'), findsOneWidget);
     expect(find.byType(FilledButton), findsNothing);
-    expect(find.byType(TextButton), findsNothing);
+    expect(find.text('Install'), findsNothing);
   });
 
   testWidgets('podman_install_failed shows Retry on this computer only, and '
