@@ -745,7 +745,11 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   (`SuperTabPostNote`, in 12 metadata grey, as `Response interrupted` is):
   `Juno is offline` (`Pip and Juno are offline`, `Juno, Pip and Faye are offline`): its answer waits. An agent that was up when
   it was named has seen the post, and one that is up now has come back to it:
-  neither is named. A task's chat reads the same.
+  neither is named. A task's chat reads the same. In a person's own 1:1 chat
+  with an agent that Your Team shows offline, their newest message not yet
+  typed into it says so at once, in the same quiet grey (`Juno is offline`,
+  `SuperTabMessageReceipt`), and the line goes once the agent is back; a
+  computer that is off keeps its own line (`Mac Studio is offline`).
 - **Tags.** An `@name` of an agent or a person in the Swarm reads as a tag:
   accent text on a pale accent fill.
 - **Chat bubbles.** A chat reads like iMessage (anh Dee's mockup,
