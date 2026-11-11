@@ -346,6 +346,81 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
 
   })
 
+  // The allocator's design, package 3: a task that says "after #B" was given as soon as #B was taken, before #B had any code; and
+  // of #1 and #2 "after #1", both free, with two builders, both were given in one pass.
+  describe('a task that comes after another', () => {
+    const head = (n: number) => `${(0xa6edb40 + n).toString(16)}${'0'.repeat(33)}`
+    /** [builder]'s pull request for task [n], into main. */
+    const pullFor = (n: number, builder: string, extra: Json = {}): Json => ({ number: 100 + n, draft: false, base: { ref: 'main' }, head: { sha: head(n), ref: `${builder}/${n}` },
+      labels: [{ name: `builder:${builder}` }], body: `Closes #${n}`, ...extra })
+    const lines = (f: ReturnType<typeof setup>, number: number) => f.said().filter(([n]) => n === number).map(([, body]) => String(body).replace(/^Harness, \d\d:\d\d: /, ''))
+
+    it('is given once what it comes after has its pull request up, only to that builder, with the branch to build it on', async () => {
+      const f = setup([issue(1, ['size:s']), issue(2, ['size:s', 'p0'], { body: 'Do this after #1.' })])
+      f.github.state.applied = true
+      await f.assigner.tick()
+      // Only #1 is given: Juno has nothing, and the task that comes after waits, urgent as it is.
+      expect(f.labelled()).toEqual([[1, 'builder:pip']])
+      expect(f.numbers.mock.calls.at(-1)![1]).toMatchObject({ free: [{ id: 'juno', name: 'Juno' }], open: 0 })
+      // Taken, then a draft: #1 has no code to build on yet.
+      f.github.state.open[0] = issue(1, ['size:s', 'builder:pip', 'status:taken'])
+      await f.assigner.tick()
+      f.github.state.pulls = [pullFor(1, 'pip', { draft: true })]
+      await f.assigner.tick()
+      expect(f.labelled()).toEqual([[1, 'builder:pip']])
+      // Its pull request is up: the next goes to Pip, who has the branch, not to Juno, who has nothing.
+      f.github.state.pulls = [pullFor(1, 'pip')]
+      await f.assigner.tick()
+      expect(f.labelled()).toEqual([[1, 'builder:pip'], [2, 'builder:pip']])
+      expect(lines(f, 2)).toEqual(['for **Pip**: it can start now. Build it on the branch of #101 (`pip/1`); its pull request still goes into the default branch.'])
+    })
+
+    it('waits until what it comes after lands when that builder is away, then goes to who can start it', async () => {
+      const team: Crew = { ...crew(), builders: [crew().builders[0]!], away: [{ name: 'Juno', label: 'builder:juno', why: 'stopping' }] }
+      const f = setup([issue(1, ['size:s', 'builder:juno', 'status:taken']), issue(2, ['size:s'], { body: 'after #1' })], { crew: team })
+      f.github.state.pulls = [pullFor(1, 'juno')]
+      await f.assigner.tick()
+      await f.assigner.tick()
+      // Juno's task is kept while its pull request waits for its read; what comes after it is given to nobody.
+      expect(f.labelled()).toEqual([])
+      // It lands: #1 is closed, and nothing is left to wait for.
+      f.github.state.open.shift()
+      f.github.state.pulls = []
+      await f.assigner.tick()
+      expect(f.labelled()).toEqual([[2, 'builder:pip']])
+      expect(lines(f, 2)).toEqual(['for **Pip**: it can start now.'])
+    })
+
+    // Taken back for a builder with nothing, it could go to that one builder only: three writes, and an untrue line.
+    it('stays with its builder, untaken for ten minutes, while another builder has nothing', async () => {
+      const f = setup([issue(1, ['size:s', 'builder:pip', 'status:taken']), issue(2, ['size:s', 'builder:pip'], { body: 'after #1' })])
+      f.github.state.pulls = [pullFor(1, 'pip')]
+      f.github.state.comments.set(2, [{ body: 'Harness, 07:20: for **Pip**: it can start now. Build it on the branch of #101 (`pip/1`); its pull request still goes into the default branch.',
+        author_association: 'MEMBER', user: { login: 'deehw' }, created_at: '2026-11-09T07:20:00Z' }])
+      await f.assigner.tick()
+      expect(f.github.sent.filter(s => s.method === 'DELETE')).toEqual([])
+      expect(lines(f, 2)).toEqual([])
+      // What it came after has landed and is closed: it is any builder's now, and goes back for the one with nothing.
+      f.github.state.open.shift()
+      f.github.state.pulls = []
+      await f.assigner.tick()
+      expect(lines(f, 2)).toEqual(['Pip has not started it in 11 minutes, and Juno has nothing to do, so this task goes to the builder who can start it next.'])
+    })
+
+    it('waits while two builders each have a pull request up for what it comes after', async () => {
+      const team: Crew = { ...crew(), builders: [...crew().builders, { id: 'atlas', name: 'Atlas', label: 'builder:atlas', machineId: 'mac', engine: 'codex' }] }
+      const f = setup([issue(1, ['size:s', 'builder:pip', 'status:taken']), issue(2, ['size:s'], { body: 'after #1' })], { crew: team })
+      f.github.state.pulls = [pullFor(1, 'pip'), { ...pullFor(1, 'juno'), number: 111 }]
+      await f.assigner.tick()
+      expect(f.labelled()).toEqual([])
+      // One of them closes its own: the other's branch is the one to build on.
+      f.github.state.pulls = [{ ...pullFor(1, 'juno'), number: 111 }]
+      await f.assigner.tick()
+      expect(f.labelled()).toEqual([[2, 'builder:juno']])
+      expect(lines(f, 2)).toEqual(['for **Juno**: it can start now. Build it on the branch of #111 (`juno/1`); its pull request still goes into the default branch.'])
+    })
+  })
+
   it('gives a task once, though GitHub\'s lists have not caught up with its label yet', async () => {
     const f = setup([issue(1, ['size:s'])])
     await f.assigner.tick()

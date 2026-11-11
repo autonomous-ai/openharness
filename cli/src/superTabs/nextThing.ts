@@ -13,16 +13,17 @@
  * branch behind or conflicting with its base, as the merger reads them (githubMerge.ts verdicts, checksOf, mergeable_state),
  * which the merger has said on the pull request once and GitHub news brought it, and it slept on. Then a task it took
  * (status:taken) with no pull request of its yet, which is its own work to go on with: nothing is typed. Then the oldest task
- * given to it and not taken. What it is typed ends with the command that answers it, as every ask Harness types does. The same
- * thing typed three times with no change (a push changes a pull request's head) goes to its person instead, once, and is not
- * typed a fourth time; the counts outlive a restart.
+ * given to it and not taken, with the branches to build it on when it comes after tasks whose pull requests of its are up
+ * (the allocator's design, package 3). What it is typed ends with the command that answers it, as every ask Harness types
+ * does. The same thing typed three times with no change (a push changes a pull request's head) goes to its person instead,
+ * once, and is not typed a fourth time; the counts outlive a restart.
  */
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { TurnEnd } from '../core/api.js'
 import { named } from './agentReplies.js'
-import { openPieces, readerKey, tasksOf } from './assign/crew.js'
+import { builtOn, dependsOn, openPieces, readerKey, tasksOf } from './assign/crew.js'
 import { backLine, giveBack, labelNames } from './githubAssign.js'
 import type { WatchedAgent } from './githubMentions.js'
 import { FailingHeads, headChecks, isHeld, pullPeople, pullTalk, verdicts } from './githubMerge.js'
@@ -257,8 +258,11 @@ export class NextThing {
       const items = await this.reads.current(repo, `/repos/${repo}/issues?state=open&labels=${encodeURIComponent(agent.label)}&per_page=100`, 1)
       const tasks = items.filter(it => !it.pull_request && Number.isSafeInteger(it.number))
       const pulls = items.filter(it => it.pull_request && Number.isSafeInteger(it.number)).sort((a, b) => Number(a.number) - Number(b.number))
+      // Each as GitHub details it, read once for its own work and kept for the branch its next task may be built on.
+      const details: Record<string, unknown>[] = []
       for (const pull of pulls) {
-        const work = await this.ownWork(agent, repo, Number(pull.number))
+        details.push(await this.reads.one(repo, `/repos/${repo}/pulls/${pull.number}`))
+        const work = await this.ownWork(agent, repo, Number(pull.number), details.at(-1)!)
         if (work) yield { key: `${repo}#${pull.number} ${work.kind} ${work.head}`, typed: work.typed, did: `told ${name} that its ${repo}#${pull.number} ${work.what}` }
       }
       // A read it was asked for and has not made, before its next task as the plan's order has it (no pull request waits 30
@@ -283,16 +287,20 @@ export class NextThing {
       const next = tasks.filter(task => !labelNames(task).includes('status:taken')).sort((a, b) => Number(a.number) - Number(b.number))[0]
       if (!next) continue
       const key = `${repo}#${next.number}`, title = String(next.title ?? '').trim()
-      yield { key, typed: `Next: ${title ? `${key} ${title}` : key}. It is given to you and nobody has taken it: harness super-tab take ${key}`,
+      // What it comes after, with its own pull requests up for those: the code it is built on (assign/crew.ts readProblem).
+      const after = dependsOn(next.body)
+      const bases = details.filter(pull => pull.draft !== true && tasksOf(pull).some(task => after.includes(task)))
+        .map(pull => ({ pull: Number(pull.number), branch: String(object(pull.head).ref ?? '') }))
+      yield { key, typed: `Next: ${title ? `${key} ${title}` : key}. It is given to you and nobody has taken it${bases.length ? `. ${builtOn(bases)}` : ''}: harness super-tab take ${key}`,
         did: `gave ${name} ${titled(repo, next)} as its next task` }
     }
   }
 
-  /** What stands in the way of [number], a pull request of the agent's, that it fixes itself, the first of: a reader's HOLD on its
-   *  head (one on an earlier head waits for its reader to read the push), its checks failed at its head, its branch behind or
-   *  conflicting with its base. Null for a draft, which is work going on, and for one with none of them, or none known yet. */
-  private async ownWork(agent: WatchedAgent, repo: string, number: number): Promise<{ kind: string; head: string; typed: string; what: string } | null> {
-    const pull = await this.reads.one(repo, `/repos/${repo}/pulls/${number}`)
+  /** What stands in the way of [number], a pull request of the agent's as GitHub details it ([pull]), that it fixes itself, the
+   *  first of: a reader's HOLD on its head (one on an earlier head waits for its reader to read the push), its checks failed at its
+   *  head, its branch behind or conflicting with its base. Null for a draft, which is work going on, and for one with none of
+   *  them, or none known yet. */
+  private async ownWork(agent: WatchedAgent, repo: string, number: number, pull: Record<string, unknown>): Promise<{ kind: string; head: string; typed: string; what: string } | null> {
     const head = String(object(pull.head).sha ?? ''), short = head.slice(0, 7), base = String(object(pull.base).ref ?? '')
     // One on hold waits for a person: nothing of it is the agent's to fix now.
     if (pull.draft === true || isHeld(pull) || !head || !base) return null
