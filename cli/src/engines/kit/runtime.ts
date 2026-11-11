@@ -13,8 +13,8 @@ export function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
 }
 
-/** Puts [configured], the settings' default, where the session has shown no effort: none yet, or the one an earlier
- * settings read put there, which follows the settings (moved homes, the project override last). Read after the
+/** Puts [configured], the launch flag's or the settings' default, where the session has shown no effort: none yet, or the one
+ * an earlier read put there, which follows the settings (moved homes, the project override last). Read after the
  * transcript on attach, it replaced the effort a reply recorded, so an adopted agent or a restarted daemon reported it
  * wrong (#1966 review). */
 export function fillConfiguredEffort(state: RuntimeState, configured: string): void {
