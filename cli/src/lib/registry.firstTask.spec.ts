@@ -57,7 +57,7 @@ it('a bind keeps it', async () => {
 
 it('taking it removes it from the file before it is returned, once', async () => {
   const { registry, row } = await bound()
-  expect(registry.takeFirstTask(row.agentId)).toEqual({ sessionId: SESSION, task: TASK })
+  expect(registry.takeFirstTask(row.agentId)).toBe(TASK)
   expect(disk()[0]).not.toHaveProperty('firstTask')
   expect(registry.takeFirstTask(row.agentId)).toBeNull()
   const next = await load()
@@ -80,13 +80,13 @@ it('a registry that cannot save keeps the task', async () => {
 
 it('inside a reconcile transaction it is taken only after the commit', async () => {
   const { registry, row } = await bound()
-  let taken: Promise<{ sessionId: string; task: string } | null> | undefined
+  let taken: Promise<string | null> | undefined
   await registry.transaction(() => {
     expect(() => registry.takeFirstTask(row.agentId)).toThrow()
     expect(registry.byAgent(row.agentId)?.firstTask).toBe(TASK)
     taken = registry.afterTransaction(() => registry.takeFirstTask(row.agentId))
   })
-  await expect(taken).resolves.toEqual({ sessionId: SESSION, task: TASK })
+  await expect(taken).resolves.toBe(TASK)
   expect(disk()[0]).not.toHaveProperty('firstTask')
 })
 
