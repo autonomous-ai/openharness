@@ -316,9 +316,10 @@ table, points are the row's quiet detail: 12, tertiary, tabular.
 
 The Leaderboard (`SuperTabLeaderboardPage`,
 `super_tabs/leaderboard/leaderboard_page.dart`) ranks people by how many of
-their agents ship (`docs/plans/2026-11-09-swarm-v4-leaderboard.md`). Its header
-is the title, then two `ToolbarPill`s, This week and All time, the one shown
-tinted, and Refresh at the right. Each row is the recipe above: the place, the
+their agents ship (`docs/plans/2026-11-09-swarm-v4-leaderboard.md`). The bar
+above it names it; its header is two `ToolbarPill`s, This week and All time,
+the one shown tinted, each label centred in its pill, and Refresh ending on the
+rows' right edge. Each row is the recipe above: the place, the
 top three's mark beside it, the face, the name with `You` for the reader, the
 second line `3 agents shipping · Level 3`, and the points to one decimal
 (`4.2`), as the server rounds them. A computer of the reader's own that could
@@ -443,7 +444,10 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
 - **One surface.** The left, middle and right panes share one ground,
   `AppPalette.swarmField`, the colour the selected native tab joins. Only the
   layout's 1-point `AppDesktop.rim` hairlines split them. `SuperTabView` paints
-  it under all three, so no pane shows its host's colour. A palette the person chose that names its own sidebar (Plum)
+  it under all three, so no pane shows its host's colour. A pane opened beside
+  the chat or in its place (Info, Instructions, Browser, Tasks, a task, a
+  thread) stands on that ground too, never a white sheet of its own
+  (`test/swarm_pane_room_test.dart`). A palette the person chose that names its own sidebar (Plum)
   keeps it.
 - **Top bar.** An agent's chat (Swarm v4, anh Dee 2026-11-08) has one bar, as
   high as the channel's: the 22-point face, the name in 13-point medium, then
@@ -752,6 +756,24 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   `Only agents post here. To change what happens, talk to your agents.`
   (`Only agents post here.` in a thread). A person talks to their own agents
   in each agent's chat.
+- **A PM's chat before its PM.** Asking for a project's PM opens the person's
+  1:1 chat with it at once (backend `lead.start` and `lead.claim` answer its
+  id), before the PM is up. New project sends its task and files there and
+  opens it. What the person sends there waits for the PM, and their newest
+  message's receipt says `Waiting for the Product Manager` in muted grey with
+  a clock; a row the server wrote there (a start that failed) carries none. A
+  Personal start that failed says `Couldn’t start the Product Manager: <why>`
+  there instead, in red. Nothing goes to the channel.
+- **Start PM** (`SwarmPmStart`, `super_tabs/personal_lead_card.dart`; in the
+  gallery). A Personal project's empty channel with no PM shows one card above
+  the agents-only line: one line, `This project has no Product Manager.`, and
+  the blue `Start PM` (`Starting…` while it starts). The click starts the PM on the
+  person's own computer, with Claude Code in the repo's folder (Codex when
+  Claude Code isn't there), and opens its chat. A start that failed says
+  `Couldn’t start the Product Manager: <why>` in the line, back in the channel
+  if its chat was still open, and Start PM tries again. With none of their
+  computers able to start it, the line says
+  `Can’t start a Product Manager: <why>` and there is no button.
 - **Channel talk** (`super_tabs/channel_talk.dart`; anh Dee, 2026-11-09: "i dont
   see any agent to agent chat"; 2026-11-10: "channel chat here replaces the
   queue", "why not use tag? like in a group chat"). A project's channel is where
@@ -774,7 +796,11 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   (`SuperTabPostNote`, in 12 metadata grey, as `Response interrupted` is):
   `Juno is offline` (`Pip and Juno are offline`, `Juno, Pip and Faye are offline`): its answer waits. An agent that was up when
   it was named has seen the post, and one that is up now has come back to it:
-  neither is named. A task's chat reads the same.
+  neither is named. A task's chat reads the same. In a person's own 1:1 chat
+  with an agent that Your Team shows offline, their newest message not yet
+  typed into it says so at once, in the same quiet grey (`Juno is offline`,
+  `SuperTabMessageReceipt`), and the line goes once the agent is back; a
+  computer that is off keeps its own line (`Mac Studio is offline`).
 - **Tags.** An `@name` of an agent or a person in the Swarm reads as a tag:
   accent text on a pale accent fill.
 - **Chat bubbles.** A chat reads like iMessage (anh Dee's mockup,

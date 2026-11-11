@@ -254,7 +254,8 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
     grid.AppTheme.watch(context);
     final name = widget.name, file = _file;
     return ColoredBox(
-      color: DesktopChrome.surface,
+      // The Swarm's one ground, beside the chat or in its place (design system, One surface).
+      color: grid.AppPalette.swarmField,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [

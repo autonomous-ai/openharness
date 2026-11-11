@@ -6,7 +6,9 @@ import { buildHarnessSessionLabel, harnessPaneOwner, isHarnessSessionFor, ownedH
 import { isolatedTmux } from '../testing/isolatedTmux.js'
 
 const dirs: string[] = []
-afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
+// The real-tmux case's home: its panes' zsh may still write history there after kill-server returns, so removal is
+// asked again on ENOTEMPTY, as testing/isolatedTmux.ts removes its own folder.
+afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }) })
 
 describe('panes created in the same millisecond', () => {
   it('allocates distinct names for the same engine and keeps discovery recognition', () => {

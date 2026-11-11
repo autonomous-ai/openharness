@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { inspectNativeLaunch } from './nativeLaunch.js'
 import { captureLaunchExecutable } from './kit/launchExecutable.js'
+import { LAUNCH_LOCATION_VARIABLES, nativeHookLocations } from './kit/nativeLocations.js'
 import { engineHooks } from './hooks.js'
 import * as hooks from './nativeHooks.js'
 
@@ -136,6 +137,21 @@ it('does not let another engine\'s network setting, or its own sibling engine\'s
     expect(home).toMatchObject({ refusal: 'ENGINE_LAUNCH_REFUSED' })
     expect((home as { detail: string }).detail).toMatch(/^HOME names a network or device path.*such as /)
   } finally { host.win32 = false }
+})
+it('refuses an OpenClaw launch whose OPENCLAW_HOME is a network path on Windows', async () => {
+  host.win32 = true
+  try {
+    vi.mocked(captureLaunchExecutable).mockResolvedValueOnce({ state: 'ready', executable: { command: '/fixture/engine', identity: 'fixture', current: () => true },
+      environment: { HOME: '/fixture/home', PATH: '/fixture/bin', OPENCLAW_HOME: '\\\\server\\share\\h' } } as never)
+    const result = await inspectNativeLaunch('openclaw')
+    expect(result).toMatchObject({ ok: false, refusal: 'ENGINE_LAUNCH_REFUSED' })
+    expect((result as { detail: string }).detail).toMatch(/^OPENCLAW_HOME names a network or device path/)
+  } finally { host.win32 = false }
+})
+it('OPENCLAW_HOME is a launch location, and moves the state folder a launch derives', () => {
+  expect(LAUNCH_LOCATION_VARIABLES).toContain('OPENCLAW_HOME')
+  expect(nativeHookLocations({ HOME: '/home/u', OPENCLAW_HOME: '/h' }).OPENCLAW_STATE_DIR).toBe('/h/.openclaw')
+  expect(nativeHookLocations({ HOME: '/home/u' }).OPENCLAW_STATE_DIR).toBe('/home/u/.openclaw')
 })
 it('does not refuse a double-slash location off Windows', async () => {
   expect(await inspectNativeLaunch('codex', { codexHome: '//server/share/x' })).not.toMatchObject({ refusal: 'ENGINE_LAUNCH_REFUSED' })

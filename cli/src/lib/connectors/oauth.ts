@@ -196,7 +196,10 @@ async function tokenRequest(client: Client, form: Record<string, string>): Promi
   const answer = await http(client.token_endpoint, { headers, body: new URLSearchParams(fields).toString() })
   const data = jsonOf(answer.body) ?? {}
   if (answer.status !== 200 || typeof data.access_token !== 'string') {
-    throw new SignInError(data.error === 'invalid_grant' ? 'invalid_grant' : 'The service did not issue a token.')
+    const refused = new SignInError(data.error === 'invalid_grant' ? 'invalid_grant' : 'The service did not issue a token.')
+    const said = [data.error_description, data.error].find((value) => typeof value === 'string' && value)
+    refused.detail = `${answer.status} ${typeof said === 'string' ? said.slice(0, 200) : 'no reason given'}`
+    throw refused
   }
   return data
 }

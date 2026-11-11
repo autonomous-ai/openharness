@@ -4,6 +4,9 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { AgentEngine } from './types.js'
 
+// Claude Code and Codex are asked for their help: answered in this process (testing/engineHelpInProcess.ts).
+vi.mock('node:child_process', async (real) => (await import('../testing/engineHelpInProcess.js')).withEngineHelp(await real<typeof import('node:child_process')>()))
+
 let root = '', home = '', bin = ''
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'native-launch-locations-'))

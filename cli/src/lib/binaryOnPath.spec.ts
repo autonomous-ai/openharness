@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
-import { binaryOnPath, windowsLaunchCommand } from './binaryOnPath.js'
+import { binaryOnPath, resolveBinaryOnPath, windowsLaunchCommand } from './binaryOnPath.js'
 
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
@@ -36,6 +36,15 @@ describe('binaryOnPath', () => {
     const dir = dirWith('codex')
     expect(binaryOnPath(join(dir, 'codex'), { PATH: '' })).toBe(true)
     expect(binaryOnPath(join(dir, 'nope'), { PATH: dir })).toBe(false)
+  })
+
+  // An engine's probe on Windows passes over a Store app's alias (lib/windows/storeAppAlias.ts) the same way.
+  it('passes over a file the caller does not accept, to the next one on PATH', () => {
+    const first = dirWith('agent'), second = dirWith('agent')
+    const env = { PATH: [first, second].join(delimiter) }
+    expect(resolveBinaryOnPath('agent', env, (path) => !path.startsWith(first))).toBe(join(second, 'agent'))
+    expect(binaryOnPath('agent', { PATH: first }, () => false)).toBe(false)
+    expect(resolveBinaryOnPath('agent', env)).toBe(join(first, 'agent'))
   })
 
   it('handles an empty or absent PATH and an empty name', () => {

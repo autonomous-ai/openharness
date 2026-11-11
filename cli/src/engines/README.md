@@ -198,6 +198,10 @@ measured on 2026.11.2 with a real model; re-measure it on the binary you ship.
   open (`/proc/<pid>/fd`, `lsof -p`), which is right under `--profile`, `--dev` and
   `OPENCLAW_STATE_DIR`; remember it at bind for when the TUI is gone. A Gateway on another host still
   leaves the local file open, so the title's URL, not the file, says whether the transcript is on this machine.
+- **The TUI's store is not always the Gateway's.** A Gateway started with its own `OPENCLAW_STATE_DIR` (systemd)
+  writes elsewhere, and the TUI's store never gets the session: a pane working for 30 s on a key with no row is that.
+- **Type the first task; do not pass `--message`.** The TUI sends it once, after its first Gateway connection, and a
+  send that fails or is blocked leaves only a line on screen. Typed once the pane reads ready, the store confirms it.
 - **There is no approval to answer.** The TUI denies an exec approval at once ("Headless runs cannot
   wait"), so no permission dialog ever appears on screen for Harness to walk.
 

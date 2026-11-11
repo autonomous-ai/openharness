@@ -7,7 +7,7 @@ import 'package:harness/super_tabs/manage_page.dart';
 import 'package:harness/super_tabs/sharing.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
 
-import 'swarm_sharing_test.dart' show SwarmSharingServer;
+import 'support/swarm_sharing_server.dart';
 import 'swarm_state_test.dart' show createApp;
 
 /// People at the owner's email domain join a Swarm by themselves

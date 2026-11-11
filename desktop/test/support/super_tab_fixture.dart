@@ -542,6 +542,28 @@ class ConversationServer {
   /// Refuses the next lead.start with this code and message, as the backend
   /// refuses a machine that cannot take the Product Manager (leadStart.ts).
   Map<String, String>? leadRefusal;
+
+  /// The 1:1 chat with [project]'s next PM, as backend pmChat.ts opens it on lead.start and lead.claim: the one already
+  /// waiting, else a new one for [reader], with no agent while the PM starts.
+  String _pmChat(Map<String, dynamic>? project, String? reader) {
+    if (project?['pmChat'] case final Map waiting) {
+      return waiting['id'] as String;
+    }
+    revision++;
+    final id = 'pm-chat-$revision';
+    (state['conversations'] as List).add({
+      ...conversationFixture(id, 'Product Manager'),
+      'kind': 'agent-chat',
+      'audience': {
+        'people': [
+          {'id': reader ?? 'owner', 'generation': 'g'},
+        ],
+      },
+    });
+    project?['pmChat'] = {'id': id};
+    return id;
+  }
+
   final receipts = <String, Map<String, dynamic>>{};
 
   /// As the backend (store.ts): a request id used again for another command is
@@ -1209,6 +1231,7 @@ class ConversationServer {
             .where((p) => p['id'] == command['projectId'])
             .firstOrNull;
         final held = project?['leadClaim'];
+        output['chatId'] = _pmChat(project, reader);
         if (held is Map && held['machineId'] != command['machineId']) {
           output['leadStart'] = 'waiting';
         } else {
@@ -1240,6 +1263,7 @@ class ConversationServer {
           'machineId': ?machineId,
           'requestedAt': revision,
         };
+        output['chatId'] = _pmChat(project, reader);
       } else if (command['type'] == 'agent.new' && command['local'] == true) {
         // As backend agent.new with `local` (task #4196): a Member's own chat,
         // and no start; its person's Desktop starts the agent itself.
@@ -1577,6 +1601,9 @@ class ConversationServer {
   /// read by its audience alone. A zone value, so that subclasses overriding
   /// [request] keep it.
   static final _reader = Object();
+
+  /// The account asking, inside [request]: the one whose [controller] made the call, or null.
+  String? get reader => Zone.current[_reader] as String?;
 
   SuperTabController controller({
     String tabId = 'tab',
