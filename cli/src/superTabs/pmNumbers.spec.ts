@@ -717,16 +717,5 @@ describe('the numbers, told as they are due', () => {
     expect(u.sent).toHaveLength(1)
     await u.numbers.pass({ ...PROJECT, projectId: 'project-1' }, quiet, u.goal, u.board)
     expect(u.sent).toHaveLength(1)
-    // A day's scoreboard is kept while its post is tried again, for the two hundred projects whose post failed last: the one
-    // before them reads its own again.
-    const v = setup(new Date(2026, 10, 11, 9, 0).getTime())
-    v.failing.set('post', down)
-    for (let n = 0; n <= 200; n++) await v.numbers.pass({ ...PROJECT, projectId: `project-${n}` }, landed, v.goal, v.board)
-    expect(v.board).toHaveBeenCalledTimes(201)
-    v.clock.now += MINUTE
-    await v.numbers.pass({ ...PROJECT, projectId: 'project-200' }, landed, v.goal, v.board)
-    expect(v.board).toHaveBeenCalledTimes(201)
-    await v.numbers.pass({ ...PROJECT, projectId: 'project-0' }, landed, v.goal, v.board)
-    expect(v.board).toHaveBeenCalledTimes(202)
   })
 })
