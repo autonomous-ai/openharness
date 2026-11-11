@@ -100,6 +100,13 @@ everywhere), [Process Creation Flags](https://learn.microsoft.com/en-us/windows/
 - **There is no `ps`.** Read the process table through `lib/windows/processTable.ts`. A check that treats a failed `ps` as "gone"
   quietly does nothing on Windows: viewers piled up for that reason (`dsh/viewerLedger.ts`).
 - **What Git Bash runs has a parent that has gone.** Walking Windows' parent links does not reach it (`lib/windows/gitBashTree.ts`).
+- **An unsigned program can be blocked outright.** Smart App Control (Windows 11) blocks an `.exe` or `.dll` without a valid
+  signature, and a blocked `harness-launch.exe` means Harness cannot start, so cannot update itself either (2026-11-09,
+  Code Integrity event 3077 at a customer). Nothing installs, updates to or promotes a terminal host unless every file is
+  signed ([Windows code signing](windows-code-signing.md#only-signed-terminal-hosts-reach-a-computer)).
+- **`Get-AuthenticodeSignature` needs its module imported by path** (`$PSHOME\Modules\Microsoft.PowerShell.Security`): a
+  PowerShell 7 `PSModulePath` makes 5.1 autoload 7's module, as with `Get-FileHash`. A file that is no program at all
+  reads `UnknownError`, not `NotSigned`.
 
 ## 4. Screens a person sees
 

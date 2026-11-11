@@ -11,7 +11,7 @@ import { CommandRetries, permanentRefusal } from './retries.js'
 import { createHash } from 'node:crypto'
 import type { CoreApi, SuperTabScreen } from '../core/api.js'
 import { openRestrictedKeys, updateDismissKeys } from '../engines/codex/screen.js'
-import { feedbackDismissKeys } from '../engines/claude/screen.js'
+import { popupDismissKeys } from '../engines/claude/screen.js'
 import type { MessageHold } from '../engines/facets/screen.js'
 import { backend, identifier, object } from './wire.js'
 
@@ -344,7 +344,7 @@ export class TerminalHost {
     // Only the exact restricted choice is safe; never answer a trust grant or another engine's screen.
     const restricted = read.hold === 'trust_open' && this.core.agents.byAgent(agent.harnessId)?.engine === 'codex'
       ? openRestrictedKeys(read.text) : null
-    const keys = restricted ?? (read.hold === 'update_prompt_open' ? updateDismissKeys(read.text) : feedbackDismissKeys(read.text))
+    const keys = restricted ?? (read.hold === 'update_prompt_open' ? updateDismissKeys(read.text) : popupDismissKeys(read.text))
     if (!keys) return 0
     if (tries >= SKIP_TRIES) return tries
     const dismissed = await this.core.superTabs!.inputIfScreen(agent.harnessId, keys, read.text).catch(error => ({ ok: false as const, error: String(error) }))

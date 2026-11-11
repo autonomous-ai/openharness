@@ -50,6 +50,36 @@ pty-build (x64, arm64) ──> pty-sign (x64 only) ──────> windows-s
   a successful `sign-windows` job. A candidate built before signing was turned on is rebuilt, not shipped unsigned.
 - **PR CI is unchanged.** Signing runs only in the release workflows.
 
+## Only signed terminal hosts reach a computer
+
+Signing a build is not enough: what a computer installs is whatever the production manifest names. From 2026-11-04
+(signing on) to 2026-11-09 11:31 UTC, production still named the unsigned terminal host 0.4.31, because the host
+reaches production only when someone promotes it. On a Windows 11 computer with Smart App Control on, the blocked
+`harness-launch.exe` left Harness unable to start, and so unable to update itself; a customer reported Code Integrity
+event 3077. Three checks now refuse an unsigned host, each with Windows' own check (`Get-AuthenticodeSignature`
+Valid, by AUTONOMOUS INC., and by Microsoft Corporation for `conpty.dll` and `OpenConsole.exe`):
+
+| Where | What refuses | Before it |
+| --- | --- | --- |
+| Promotion (`release.yml`) | `pty-signatures`, a Windows job running `cli/scripts/windows-ci/check-pty-signatures.ps1` on the staging zips; `promote-pty-payload.sh` then promotes only the zips it names (`PTY_SIGNED_ZIPS`, `<key>=<sha256>`) | production names it |
+| Install (`install.ps1`) | `Assert-HarnessPtySigned`, on the unpacked host and on a version folder already there | `current-pty` and `bin\` move |
+| Update (`ptyUpdate.ts`) | `preparePtyPayload` with `ptySignatures.ts` (PowerShell, hidden), a refusal the updater backs off from | any of its files runs (the canary) |
+
+A computer stuck on an unsigned host recovers by running the installer again: nothing of ours can run there to
+update it.
+
+**Developer builds.** A local or CI build is unsigned. `HARNESS_ALLOW_UNSIGNED=1` in the environment lets
+`install.ps1` and the updater take it, with a warning from the installer: the Windows workflow's install job sets it,
+and so must a test computer that installs a branch build (the VM end to end's fake CDN, docs/testing/windows-cli-e2e.md).
+The promotion check ignores it.
+
+A maintainer who promotes from a laptop runs the check on Windows first and passes its output:
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File cli\scripts\windows-ci\check-pty-signatures.ps1 -Version <version>
+PTY_SIGNED_ZIPS='<the line it printed>' bash cli/scripts/promote-pty-payload.sh <version>
+```
+
 ## Setup
 
 ### 1. Azure (owner, once)
