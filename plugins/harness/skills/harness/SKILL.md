@@ -134,7 +134,7 @@ If Harness's MCP server (`harness mcp`) is connected, its tools are the same ver
 
 ## Limits and rules
 
-- At most 4 live harnesses of yours, and 20 starts in 10 minutes. A harness another agent started may not start
+- At most 8 live harnesses of yours, and 20 starts in 10 minutes. A harness another agent started may not start
   harnesses itself: if you were started by one, do the work yourself, or say in your answer what else is needed.
   Every limit refuses with a message; do not work around it.
 - Harness cleans up after you: closing a harness closes the harnesses it started, and one another agent started

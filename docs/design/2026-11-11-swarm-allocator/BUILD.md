@@ -66,6 +66,9 @@ the mockup of the choice package 14 adds to a screen.
 
 ### 1. The scoreboard
 
+**Built** (#4064): `cli/src/superTabs/scoreboard.ts`. What follows is what was asked; where the build differs it says so
+in *italics*.
+
 **Why.** Everything after it is judged by it. Today's daily post has counts only.
 
 **Today.** `cli/src/superTabs/pmNumbers.ts` (`numbersOf`, `dayLine`: the day's post in the project's channel, from
@@ -83,6 +86,8 @@ one is marked, in its title.
   it ran out of time). A train closed without landing says its cause in its title, as a red one does, with the
   write that closes it: no new write, and nothing to read but the closed list the pass has;
 - the files most landings touched in the last seven days, when one is in more than a tenth of them, with its share.
+  *The words count the landings read ("of the last 43 landings") and name no window: the closed list the pass reads is
+  one page, which on a busy repository is hours. A file is named at three landings or more.*
 
 Counts, medians and file paths only. Bounded: at most the newest 50 changes landed in the day are read for their
 times, and the newest 50 landed in the week for their files, once a day, when the post is due. A part that cannot be

@@ -43,6 +43,9 @@ export interface SwarmProject {
    *  replaces the one before and posts nothing. Read exactly by those who read the project chat (model.ts visibleState). */
   status?: ProjectStatus | null
   repository?: { machineId: string; cwd: string; repositoryUrl: string | null }
+  /** Its GitHub repository as `owner/name`, set by its owner's client or its coordinator (commands.ts project.github): its Tasks
+   *  board on every computer. Absent until set. */
+  githubRepository?: string
   /** Its Product Manager started by the Swarm on one of its machines, or waiting for one (leadStart.ts). */
   lead?: import('./leadStart.js').LeadPlacement
   /** A Personal Swarm project chat with no Lead: its person's messages sent there, delivered to its Lead once it joins

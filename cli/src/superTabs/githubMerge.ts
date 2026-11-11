@@ -65,6 +65,13 @@ function ownVerdict(line: string): { verdict: 'READ-OK' | 'HOLD'; sha: string } 
   return null
 }
 
+/** A comment's first line with words: where its verdict is read. */
+const firstLine = (comment: Json): string => String(comment.body ?? '').split('\n').find(line => line.trim()) ?? ''
+
+/** The verdict a comment of the team's gives as its own (ownVerdict), or null: for what counts verdicts by their time and not
+ *  by their reader, the day's scoreboard (scoreboard.ts). */
+export const verdictOf = (comment: Json): 'READ-OK' | 'HOLD' | null => TEAM.has(comment.author_association) ? ownVerdict(firstLine(comment))?.verdict ?? null : null
+
 /** A pull request's comments and its reviews' bodies, as one list in time order. A review's body reads exactly as a comment's
  *  (lampOS #5212: El posted its reads as reviews, and four pull requests each counted one read short), its state (APPROVED,
  *  CHANGES_REQUESTED, ...) is never a read, and a review with no words, not submitted or dismissed counts for nothing
@@ -89,6 +96,12 @@ const NOTES = { unsigned: 'the READ-OK from ', held: 'the HOLD from ', checks: '
   blocked: 'GitHub\'s rules for ', stacked: 'it carries open ', red: 'its train failed: ' } as const
 type NoteKind = keyof typeof NOTES
 const noteStart = (head: string, kind: NoteKind): string => `not merged yet at ${head.slice(0, 7)}: ${NOTES[kind]}`
+/** Which of these notes a comment of the team's is, on whatever head, or null: the day's scoreboard counts the pull requests
+ *  told they were behind or in conflict (scoreboard.ts). Read where `said` reads one: in its first 500 characters. */
+export function noteOf(comment: Json): NoteKind | null {
+  const rest = TEAM.has(comment.author_association) ? /not merged yet at [0-9a-f]{7}: (.*)/s.exec(String(comment.body ?? '').slice(0, 500))?.[1] : undefined
+  return rest === undefined ? null : (Object.keys(NOTES) as NoteKind[]).find(kind => rest.startsWith(NOTES[kind])) ?? null
+}
 /** How long after a head is first seen its checks may count as passed, and then only when two looks in a row read them the same:
  *  lampOS's merge-when-green.sh waits for "the same in two looks 30 s apart, from 3 min on". A head just pushed has no checks
  *  yet, which read as all passed, and a job that needs another gets its check only when that one ends. */
@@ -161,7 +174,7 @@ export function verdicts(comments: Json[], body: string, people: PullPeople):
   const team = new Set([...people.team].map(label => sameKey(label.replace(/^builder:/i, ''))))
   for (const comment of comments) {
     if (!TEAM.has(comment.author_association)) continue
-    const first = String(comment.body ?? '').split('\n').find(line => line.trim()) ?? ''
+    const first = firstLine(comment)
     if (/\bTWO READS\b/.test(first)) twoReads = true
     const found = ownVerdict(first)
     if (!found) continue
@@ -245,7 +258,7 @@ export class VerdictRecords {
     // A comment changed since it was written is not the words its record was made for (the command never edits): typed by hand.
     const asWritten = (comment: Json) => comment.updated_at === undefined || comment.updated_at === comment.created_at
     const given = comments.filter(comment => Number.isSafeInteger(comment.id) && comment.review !== true && asWritten(comment)
-      && ownVerdict(String(comment.body ?? '').split('\n').find(line => line.trim()) ?? ''))
+      && ownVerdict(firstLine(comment)))
     const unknown = given.filter(comment => this.now() - (this.recorded.get(key(comment))?.at ?? -Infinity) >= RECORD_AGAIN_MS)
     for (let from = 0; from < unknown.length && this.now() >= (this.down.get(project.repo)?.againAt ?? 0); from += AUTHORS_PAGE) {
       const page = unknown.slice(from, from + AUTHORS_PAGE)
