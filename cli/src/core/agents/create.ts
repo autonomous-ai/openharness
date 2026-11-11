@@ -377,7 +377,7 @@ export function createAgentCreator({
     const swarmSkill = input.swarmRole ? parseSwarmSkill({ role: input.swarmRole, key: label, fallback: input.swarmFallback }) : undefined
     // Its own words: the Swarm's skill code (and its refusal's text) stays out of the core's bundle (src/leanEntry.spec.ts).
     if (input.swarmRole && !swarmSkill) return { ok: false, error: 'SWARM_SKILL_FAILED', detail: 'This launch names no Swarm role this Harness knows.' }
-    const swarmInstructions = swarmLaunch && swarmSkill ? swarmLaunch.basics(swarmSkill.role === 'coordinator') : undefined
+    const swarmInstructions = swarmLaunch && swarmSkill ? swarmLaunch.basics(swarmSkill.role === 'coordinator', { cwd, name: name ?? null }) : undefined
     const told = agentLaunchArgs(engine, startedBy, { cwd, profile: codexHome, environment: native?.environment, ...(swarmInstructions ? { swarmInstructions } : {}) })
     // The person's machine MCP servers (lib/machineMcp.ts, #1872), beside the grid's and their own: read at each launch,
     // as every relaunch reads them again (`buildLaunchOverrides`).
