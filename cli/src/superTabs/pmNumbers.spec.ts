@@ -42,6 +42,11 @@ describe('a project\'s counts after an assigner\'s pass', () => {
     // waiting for a task its PM could open.
     const full = counts({ issues: [task(1, ['builder:pip', 'status:taken']), task(2, ['builder:pip', 'status:taken']), task(3, ['builder:kai', 'status:taken'])], withReaders: new Set([1, 2, 3]) })
     expect(full.free.map(free => free.name)).toEqual(['Ada', 'Bo', 'Kai'])
+    // A task its builder took that waits on pieces cut off it is others' to build: its builder has nothing, and is given the
+    // next. One only given, with a sub-issue under it, is in its list as any other.
+    const waiting = { sub_issues_summary: { total: 2, completed: 1 } }
+    const cut = counts({ issues: [task(1, ['builder:pip', 'status:taken'], waiting), task(2, ['builder:kai'], waiting), task(3, ['builder:ada', 'status:taken'], { sub_issues_summary: { total: 2, completed: 2 } })] })
+    expect(cut.free.map(free => free.name)).toEqual(['Bo', 'Pip'])
   })
 
   it('counts what the team landed in the last day, merged or carried by a train that landed squashed, and the team\'s tasks closed', () => {

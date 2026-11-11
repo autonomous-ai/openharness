@@ -109,17 +109,9 @@ class _LeaderboardState extends State<SuperTabLeaderboardPage> {
     );
   }
 
+  // The bar above names the page, so its header is the pills and Refresh alone.
   Widget _header() => Row(
     children: [
-      // Beside an open thread the page is narrow: the title gives way before the pills do.
-      Flexible(
-        child: Text(
-          'Leaderboard',
-          overflow: TextOverflow.ellipsis,
-          style: DesktopChrome.text(medium: true),
-        ),
-      ),
-      const SizedBox(width: 16),
       for (final (label, all) in [
         ('This week', false),
         ('All time', true),

@@ -18,7 +18,8 @@ interface RestoreLaunchDeps {
   refreshGridWebSearch(agentId: string, overrides: LaunchOverrides): void
   launch(entry: RegisteredSession, opts: { resumeSessionId?: string; agentId: string }, overrides: LaunchOverrides,
     permission: { permissionMode?: string | null; bypassPermission?: boolean }): RestoreLaunch
-  /** An older Swarm session's role, read before it is relaunched (superTabs/inCore/adoption.ts). Absent while the Swarm is off. */
+  /** The Swarm role of an agent its person attached, read before it is relaunched (superTabs/inCore/adoption.ts). Absent while the
+   *  Swarm is off. */
   adoptSwarmSkill?: AdoptSwarmSkill
 }
 
@@ -32,9 +33,9 @@ export function createRestoreLaunch(deps: RestoreLaunchDeps): RestoreAgentsDeps[
       detail: given.launch?.state === 'held' ? given.launch.detail : 'Waiting to verify this external conversation.' }
     const missing = deps.workspaceMissing(given.cwd)
     if (missing) return missing
-    // An older Swarm session comes back with its role, or waits for it: boot restore and a host move relaunched an old
-    // Swarm session with no saved role as an ordinary session (security review 1 of #2255). A held one waits in
-    // its pane, and the held pass launches it once the Swarm answers (core/agents/heldLaunches.ts); a move does not happen.
+    // An agent its person attached comes back with its Swarm role, or waits for it: boot restore and a host move relaunched a
+    // Swarm member with no saved role as an ordinary session (security review 1 of #2255). A held one waits in its pane, and
+    // the held pass launches it once the Swarm answers (core/agents/heldLaunches.ts); a move does not happen.
     let entry = given
     const looked = await deps.adoptSwarmSkill?.lookup?.(given, current)
     if (looked !== undefined) {

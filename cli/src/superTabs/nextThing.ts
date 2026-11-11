@@ -22,7 +22,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { TurnEnd } from '../core/api.js'
 import { named } from './agentReplies.js'
-import { readerKey, tasksOf } from './assign/crew.js'
+import { openPieces, readerKey, tasksOf } from './assign/crew.js'
 import { backLine, giveBack, labelNames } from './githubAssign.js'
 import type { WatchedAgent } from './githubMentions.js'
 import { checksOf, pullPeople, pullTalk, verdicts } from './githubMerge.js'
@@ -56,10 +56,11 @@ type Waiting = { key: string; typed: string; did: string } | { held: Record<stri
 
 /** The task an agent's open labelled tasks and pull requests ([items]) show it holding with no pull request of its yet, the oldest
  *  such: one it took that no pull request of its closes, past as many as its pull requests that name no task may be for. With two
- *  taken and one pull request, the oldest was watched as idle while its pull request was open (review of #4003). */
+ *  taken and one pull request, the oldest was watched as idle while its pull request was open (review of #4003). Not a task that
+ *  waits on pieces cut off it (githubSplit.ts): its builder is asked nothing about it, and is typed its next task meanwhile. */
 function heldTask(items: Record<string, unknown>[]): Record<string, unknown> | null {
   const named = items.filter(it => it.pull_request).map(tasksOf), closed = new Set(named.flat())
-  const open = items.filter(it => !it.pull_request && labelNames(it).includes('status:taken') && !closed.has(Number(it.number)))
+  const open = items.filter(it => !it.pull_request && labelNames(it).includes('status:taken') && !closed.has(Number(it.number)) && !openPieces(it))
     .sort((a, b) => Number(a.number) - Number(b.number))
   return open.length > named.filter(tasks => !tasks.length).length ? open[0]! : null
 }
@@ -107,6 +108,12 @@ export class NextThing {
     tell: (agent: WatchedAgent, operationId: string, text: string) => Promise<unknown>
     /** Says [text] to [agent]'s person, in its chat. */
     say: (agent: WatchedAgent, operationId: string, text: string) => Promise<unknown>
+    /** The builder labels of [agent]'s team: a verdict signed from the login that opened its pull request, which every agent of
+     *  that person posts as, names its reader only when it names one of them (githubMerge.ts verdicts). */
+    team: (agent: WatchedAgent) => Promise<ReadonlySet<string>>
+    /** [comments] with the agent the backend recorded as each verdict's writer (githubMerge.ts VerdictRecords.named), asked as
+     *  [agent]; null while the records cannot be read. Only a READ-OK made by command is a read. */
+    named: (agent: WatchedAgent, repo: string, comments: Record<string, unknown>[]) => Promise<Record<string, unknown>[] | null>
     file: string
     log?: (line: string) => void
   }) {
@@ -230,7 +237,7 @@ export class NextThing {
       const tasks = items.filter(it => !it.pull_request && Number.isSafeInteger(it.number))
       const pulls = items.filter(it => it.pull_request && Number.isSafeInteger(it.number)).sort((a, b) => Number(a.number) - Number(b.number))
       for (const pull of pulls) {
-        const work = await this.ownWork(repo, Number(pull.number))
+        const work = await this.ownWork(agent, repo, Number(pull.number))
         if (work) yield { key: `${repo}#${pull.number} ${work.kind} ${work.head}`, typed: work.typed, did: `told ${name} that its ${repo}#${pull.number} ${work.what}` }
       }
       // A read it was asked for and has not made, before its next task as the plan's order has it (no pull request waits 30
@@ -263,11 +270,13 @@ export class NextThing {
   /** What stands in the way of [number], a pull request of the agent's, that it fixes itself, the first of: a reader's HOLD on its
    *  head (one on an earlier head waits for its reader to read the push), its checks failed at its head, its branch behind or
    *  conflicting with its base. Null for a draft, which is work going on, and for one with none of them, or none known yet. */
-  private async ownWork(repo: string, number: number): Promise<{ kind: string; head: string; typed: string; what: string } | null> {
+  private async ownWork(agent: WatchedAgent, repo: string, number: number): Promise<{ kind: string; head: string; typed: string; what: string } | null> {
     const pull = await this.reads.one(repo, `/repos/${repo}/pulls/${number}`)
     const head = String(object(pull.head).sha ?? ''), short = head.slice(0, 7), base = String(object(pull.base).ref ?? '')
     if (pull.draft === true || !head || !base) return null
-    const { readers } = verdicts(await pullTalk(this.reads, repo, number), String(pull.body ?? ''), pullPeople(pull, new Set()))
+    // A HOLD stands made by command or typed, so one whose records cannot be read is still said, its reader as the comment shows it.
+    const talk = await pullTalk(this.reads, repo, number)
+    const { readers } = verdicts(await this.deps.named(agent, repo, talk) ?? talk, String(pull.body ?? ''), pullPeople(pull, await this.deps.team(agent)))
     const hold = [...readers.values()].find(reader => reader.verdict === 'HOLD' && head.startsWith(reader.sha))
     if (hold) {
       return { kind: 'hold', head: short, what: `has a HOLD from ${hold.name} at ${short}`,
@@ -340,7 +349,10 @@ export class NextThing {
     const pull = await this.reads.one(repo, `/repos/${repo}/pulls/${ask.number}`)
     const head = String(object(pull.head).sha ?? '')
     if (pull.state === 'open' && head.startsWith(ask.sha)) {
-      const { readers } = verdicts(await pullTalk(this.reads, repo, ask.number), String(pull.body ?? ''), pullPeople(pull, new Set()))
+      // Whether it read is not known while the records cannot be read: it is not asked now, nor taken as answered.
+      const talk = await this.deps.named(agent, repo, await pullTalk(this.reads, repo, ask.number))
+      if (!talk) return null
+      const { readers } = verdicts(talk, String(pull.body ?? ''), pullPeople(pull, await this.deps.team(agent)))
       const read = agent.names.some(name => head.startsWith(readers.get(readerKey(name))?.sha ?? '\n'))
       if (!read) return head.slice(0, 7)
     }

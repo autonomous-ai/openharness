@@ -16,7 +16,7 @@ it.runIf(Boolean(process.env.OPENCODE_COST_ROOT))('samples the same cold daemon 
     return { cpuMs: cpu.split(':').reverse().reduce((sum, value, i) => sum + Number(value) * 60 ** i, 0) * 1000, rssMiB: Number(rss) / 1024 }
   }
   for (const which of ['baseline', 'candidate', 'candidate', 'baseline']) {
-    const d = await IsolatedDaemon.create({ scriptPath: join(root, which, 'cli.js'), env: { HARNESS_CONNECTIONS_PORT: '0' } })
+    const d = await IsolatedDaemon.create({ scriptPath: join(root, which, 'cli.js') })
     let client: LocalClient | undefined
     try {
       if (process.env.OPENCODE_COST_NATIVE_HOOKS === '1') {

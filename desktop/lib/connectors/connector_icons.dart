@@ -50,6 +50,7 @@ const connectorIcons = <String, String>{
   'mailerlite': 'assets/connector-icons/mailerlite.png',
   'make': 'assets/connector-icons/make.png',
   'mercury': 'assets/connector-icons/mercury.png',
+  'microsoft_365': 'assets/connector-icons/microsoft_365.png',
   'mintlify': 'assets/connector-icons/mintlify.png',
   'miro': 'assets/connector-icons/miro.png',
   'mixpanel': 'assets/connector-icons/mixpanel.png',

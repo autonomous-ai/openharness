@@ -265,7 +265,8 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel>
         'https://github.com/${widget.repository}/${widget.pull ? 'pull' : 'issues'}/${widget.number}';
     return ColoredBox(
       key: const ValueKey('swarm-issue-panel'),
-      color: DesktopChrome.surface,
+      // The Swarm's one ground, beside the chat or in its place (design system, One surface).
+      color: grid.AppPalette.swarmField,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [

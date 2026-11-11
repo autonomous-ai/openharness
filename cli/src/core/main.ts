@@ -66,7 +66,7 @@ import { AUTH_DIR, AuthSessionManager, ensureSignInEpoch, markSignedOut, readAut
 import { ENGINES, enginePathOverride } from '../lib/engineBin.js'
 import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import { engineInstallRecipe } from '../lib/engineInstall.js'
-import { buildEngineLaunchArgv, engineLaunchEnv, supportsFirstPrompt } from '../lib/engineLaunch.js'
+import { buildEngineLaunchArgv, engineLaunchEnv, supportsFirstPrompt, typedFirstPrompt } from '../lib/engineLaunch.js'
 import { isWindowsHeldPane, windowsPaneLaunch } from '../lib/windows/engineStart.js'
 import { createGuestHostBackend } from '../lib/windows/guestHostBackend.js'
 import { workspaceMissing } from '../lib/workspaceCheck.js'
@@ -1963,16 +1963,20 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     stoppedAgents,
     syncRecapPool,
     input,
+    // A first task is the person's own message (core/input.ts).
+    submitAgent: inputs.submitAgent,
     deviceInput,
     homes: { copilot: env.COPILOT_HOME, grok: env.GROK_HOME, agy: env.AGY_HOME },
     // OpenClaw's session key is on its TUI's footer and nowhere else. The scrollback above the screen keeps its title,
     // the only place a Gateway on another host shows, a while longer into a conversation.
     capturePane: (agentId) => captureTerminal(agentId, 200),
     openclawPaneRead: (sessionId, reading, capture) => {
-      normalizers.openclawReaders.get(sessionId)?.paneRead(reading)
+      const stream = normalizers.openclawReaders.get(sessionId)
+      stream?.paneRead(reading)
       const session = registry.bySession(sessionId)
       // As the footer poll beside the other engines' panes reads them: a profile that cannot be read leaves the chip as it was.
       if (session) void Promise.resolve(runtimeProfiles.ingestPane(session, capture)).catch(() => undefined)
+      return !!stream
     },
     openclawPaneDue: (sessionId) => normalizers.openclawReaders.get(sessionId)?.paneDue() ?? true,
     openclawStateDir: (pid) => openclawStateDir(pid),
@@ -2567,10 +2571,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     downgradedPermission: (entry, native) => downgradedPermission(entry, entry.bypassPermission === true, 'restore', native),
     launch: (entry, opts, overrides, permission) => {
       const { env: launchEnv, extraArgs, ownerArgs, clearEnv } = overrides
+      const firstPrompt = entry.externalResume?.continue && entry.externalResume.signal === 'sent' && !entry.externalResume.dispatched && supportsFirstPrompt(entry.engine) ? 'continue' : undefined
+      // An engine that takes it typed gets it on its row with the dispatch instead (lib/restoreAgents.ts).
+      const firstTask = typedFirstPrompt(entry.engine, firstPrompt)
       const argv = buildEngineLaunchArgv(entry.engine, {
         ...opts,
         ...(overrides.native ? { native: overrides.native } : {}),
-        ...(entry.externalResume?.continue && entry.externalResume.signal === 'sent' && !entry.externalResume.dispatched && supportsFirstPrompt(entry.engine) ? { firstPrompt: 'continue' } : {}),
+        ...(firstPrompt ? { firstPrompt } : {}),
         bypassPermission: permission.bypassPermission === true,
         ...(permission.permissionMode ? { permissionMode: permission.permissionMode } : {}),
         installIfMissing: enginePathOverride(entry.engine) ? undefined : engineInstallRecipe(entry.engine),
@@ -2584,6 +2591,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // Windows: the variables the argv's `/usr/bin/env` prefix carries elsewhere, last (engineLaunchEnv).
       const paneEnv = { ...launchEnv, ...engineLaunchEnv(entry.engine, overrides.native) }
       return { argv, ...(overrides.native ? { nativeToken: overrides.native.token, current: overrides.native.current } : {}), ...(Object.keys(paneEnv).length ? { env: paneEnv } : {}),
+        ...(firstTask ? { firstTask } : {}),
         // Windows: the workspace to start in and the shell the pane becomes after the engine (lib/windows/engineStart.ts).
         paneLaunch: windowsPaneLaunch(entry.engine, { cwd: entry.cwd, clearEnv, native: overrides.native, held: isWindowsHeldPane(argv) }) }
     },
@@ -2646,7 +2654,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       triggerHint: async (runtime, engine) => { await agentReconciler.triggerHint(runtime, engine) },
       log: (message) => console.log(message),
       // A grid's or a saved API's launch asks models: not before the core is ready (core/agents/heldLaunches.ts).
-      // An older Swarm session's role (core/agents/restoreLaunch.ts): one unanswered read holds the rest of the pass unasked.
+      // An attached agent's Swarm role (core/agents/restoreLaunch.ts): one unanswered read holds the rest of the pass unasked.
       needs: (entry) => [...(externalResumePending(entry.externalResume) ? ['search'] : []), ...(entry.gridLaunch ? ['models'] : []), ...(entry.dsh ? ['store'] : []), ...(!isTerminalEngine(entry.engine) ? ['native'] : []), ...(adoptSwarmSkill?.needed?.(entry) ? ['superTabs'] : [])],
       waitingLaunch: (entry, held) => ({ argv: heldPaneArgv(held.detail, entry.externalResume?.token ?? held.nativeToken) }),
       killPane: restoreOn.killPane,

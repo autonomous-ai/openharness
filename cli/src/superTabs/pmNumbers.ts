@@ -29,7 +29,7 @@
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { DEEP, labelOf, type AwayBuilder, type Crew, type Pick, type Read } from './assign/crew.js'
+import { DEEP, labelOf, openPieces, type AwayBuilder, type Crew, type Pick, type Read } from './assign/crew.js'
 import { refusedForGood } from './githubMentions.js'
 import type { LedProject } from './githubMerge.js'
 import { PAGE, retryIn } from './githubRest.js'
@@ -73,7 +73,8 @@ export const plainName = (name: string): string =>
  * repository's issues and pull requests closed last ([closed], one page), and the project's [pm]. A builder is free when it
  * would be given a task were one open: its list is not full (DEEP), every task in it waits on its pull request, it has room in
  * its subscription and it was given nothing this pass. One with a full list all in review is given nothing whatever is open,
- * so it is not counted: its PM cannot end that wait by opening tasks (third review).
+ * so it is not counted: its PM cannot end that wait by opening tasks (third review). A task that waits on its pieces is not
+ * in a list.
  */
 export function numbersOf(input: { now: number; crew: Crew; pm: string; issues: readonly Json[]; read: Read; withReaders: ReadonlySet<number>
   short: readonly AwayBuilder[]; picks: readonly Pick[]; closed: readonly Json[] }): Numbers {
@@ -81,7 +82,12 @@ export function numbersOf(input: { now: number; crew: Crew; pm: string; issues: 
   const tasks = input.issues.filter(issue => !issue.pull_request)
   const given = new Set(picks.map(pick => pick.builder)), out = new Set(input.short.map(away => away.label))
   const lists = new Map<string, number[]>()
-  for (const task of tasks) for (const label of labelsOf(task)) lists.set(label, [...lists.get(label) ?? [], Number(task.number)])
+  // A task its builder took that waits on pieces cut off it holds no place in its list, as the assigner counts it (readProblem).
+  for (const task of tasks) {
+    const labels = labelsOf(task)
+    if (labels.includes('status:taken') && openPieces(task)) continue
+    for (const label of labels) lists.set(label, [...lists.get(label) ?? [], Number(task.number)])
+  }
   const idle = (label: string) => { const list = lists.get(label) ?? []; return list.length < DEEP && list.every(number => input.withReaders.has(number)) }
   const free = crew.builders.filter(b => idle(b.label) && !given.has(b.id) && !out.has(b.label)).map(b => ({ id: b.id, name: plainName(b.name) }))
     .sort((a, b) => a.name.localeCompare(b.name))

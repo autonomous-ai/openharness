@@ -9,6 +9,21 @@ const search = $("#search");
 let items = [];
 let view = "browse";
 const pending = new Map();  // connector -> flow id
+// Gmail, Calendar and Drive through this computer's Claude Code or Codex (/api/elsewhere): which engines it has,
+// each service's state through them, and what each way lets an agent do.
+let engines = {};
+let via = {};
+let scopes = {};
+const CODEX_ACCOUNTS = "https://chatgpt.com/#settings/Connectors";
+const ENGINES = [["claude", "Claude", "Only Claude Code on the same Claude account"], ["codex", "Codex", "Only Codex on the same ChatGPT account"]];
+const working = new Set();  // "connector:engine" while it is being connected or removed
+// The services this computer may offer through Claude Code or Codex. Until it has said (checkingVia), their card waits
+// rather than offering Harness's own sign-in, which a click would otherwise start before the ways appeared.
+const WAY_CODES = new Set(["gmail", "google_calendar", "google_drive", "microsoft_365"]);
+let checkingVia = false;
+const hasWays = (code) => ENGINES.some(([engine]) => engines[engine] && via[code] && engine in via[code]);
+// Codex's plugin installed counts: whether its account is signed in is ChatGPT's to know.
+const onVia = (code) => ENGINES.some(([engine]) => engines[engine] && via[code] && !["not_connected", undefined].includes(via[code][engine]));
 let noticeTimer = 0;
 // A notice goes away on its own, so a disconnect from earlier does not stand there for good.
 function say(text) {
@@ -44,7 +59,36 @@ function mark(item) {
   tile.style.background = item.color || "#59634b";
   return tile;
 }
+// A service with more than one way in: chips for the ways it is connected by, and Manage (or +) for the choice.
+function waysCard(item) {
+  const chips = [];
+  for (const [engine, name] of ENGINES) {
+    const state = engines[engine] ? (via[item.connector] || {})[engine] : undefined;
+    if (state === "connected") chips.push(["✓ " + name, ""]);
+    else if (state === "installed") chips.push(["✓ " + name + " · accounts in ChatGPT", ""]);
+    else if (state === "reconnect") chips.push([name + " · Reconnect", " warn"]);
+  }
+  if (item.state === "connected") chips.push(["✓ Harness", ""]);
+  if (item.state === "reconnect") chips.push(["Harness · Reconnect", " warn"]);
+  const box = node("article", "", "card" + (chips.length ? " on" : ""));
+  const head = node("div", "", "card-head");
+  head.append(mark(item), node("h3", item.name));
+  const actions = node("div", "", "card-actions");
+  if (pending.has(item.connector)) actions.append(node("span", "Waiting for sign-in…", "hint"));
+  else if (chips.length) actions.append(button("Manage", () => openWays(item)));
+  else actions.append(button("+", () => openWays(item), "icon plus", "Connect " + item.name));
+  head.append(actions);
+  box.append(head);
+  if (chips.length) {
+    const row = node("div", "", "chips");
+    for (const [text, tone] of chips) row.append(node("span", text, "badge" + tone));
+    box.append(row);
+  }
+  box.append(node("p", item.description, "about"));
+  return box;
+}
 function card(item) {
+  if (hasWays(item.connector)) return waysCard(item);
   const connected = item.state === "connected";
   const box = node("article", "", "card" + (connected ? " on" : ""));
   const head = node("div", "", "card-head");
@@ -58,6 +102,8 @@ function card(item) {
   } else if (item.state !== "not_connected") {
     if (item.state === "reconnect" && !item.custom) actions.append(button("Reconnect", () => connect(item)));
     actions.append(button("×", () => confirmDisconnect(item), "icon", "Disconnect " + item.name));
+  } else if (checkingVia && WAY_CODES.has(item.connector)) {
+    actions.append(node("span", "Checking…", "hint"));
   } else if (item.reason) {
     // Signs in through the Harness account: shown, but not yet connectable.
     actions.append(node("span", item.reason, "hint"));
@@ -83,8 +129,9 @@ function button(text, action, className, label) {
 function render() {
   const query = search.value.trim().toLowerCase();
   const match = (item) => !query || (item.name + " " + item.description).toLowerCase().includes(query);
-  const on = items.filter((item) => item.state !== "not_connected" && match(item));
-  const off = items.filter((item) => item.state === "not_connected" && match(item));
+  const connected = (item) => item.state !== "not_connected" || onVia(item.connector);
+  const on = items.filter((item) => connected(item) && match(item));
+  const off = items.filter((item) => !connected(item) && match(item));
   sections.replaceChildren();
   const group = (title, list, empty) => {
     const section = node("section", "", "group");
@@ -104,8 +151,112 @@ async function refresh() {
   const result = await request("/api/connections");
   items = result.connections.sort((a, b) => a.name.localeCompare(b.name));
   $("#signed-out").hidden = result.signed_in;
+  // Slower (it asks Claude Code and Codex), so after the list is on screen; until then those cards wait.
+  checkingVia = true;
   render();
+  loadElsewhere().catch(() => {}).finally(() => { checkingVia = false; render(); });
 }
+async function loadElsewhere() {
+  const result = await request("/api/elsewhere");
+  engines = result.engines || {};
+  via = result.connections || {};
+  scopes = result.scopes || {};
+  // Services only an engine connects (Microsoft 365): a card of their own, where this computer has an engine for them.
+  items = items.filter((item) => !item.viaOnly);
+  for (const service of result.services || []) {
+    if (hasWays(service.connector) && !items.some((item) => item.connector === service.connector)) {
+      items.push({...service, state: "not_connected", viaOnly: true});
+    }
+  }
+  items.sort((a, b) => a.name.localeCompare(b.name));
+  render();
+  if (waysItem) renderWays();
+}
+let waysItem = null;
+function openWays(item) {
+  waysItem = item;
+  renderWays();
+  $("#ways-dialog").showModal();
+}
+// The ways [waysItem] connects: each engine this computer has, then Harness's own, with what each can do.
+function renderWays() {
+  const item = items.find((i) => i.connector === waysItem.connector) || waysItem;
+  const scope = scopes[item.connector] || {};
+  $("#ways-title").textContent = "Connect " + item.name;
+  const rows = $("#ways-rows");
+  rows.replaceChildren();
+  const row = (key, title, what, who, state, onConnect, onRemove, blocked) => {
+    const line = node("div", "", "way");
+    line.dataset.way = key;
+    const text = node("div", "", "way-text");
+    const name = node("strong", title);
+    const status = {connected: "✓ Connected", installed: "✓ Installed", reconnect: "Needs sign-in again"}[state];
+    if (status) name.append(node("span", status, "way-state" + (state === "reconnect" ? " warn" : "")));
+    text.append(name, node("span", what), node("span", who, "hint"));
+    line.append(text);
+    if (working.has(item.connector + ":" + key) || (key === "harness" && pending.has(item.connector))) line.append(node("span", "Working…", "hint"));
+    else if (blocked) line.append(node("span", blocked, "hint"));
+    else if (state && state !== "not_connected" && state !== "reconnect") {
+      // Codex's plugin is in: its accounts (more than one, if wanted) are ChatGPT's, added or chosen there.
+      if (key === "codex") line.append(button("Accounts", () => window.open(CODEX_ACCOUNTS, "_blank", "noopener")));
+      line.append(button("Remove", onRemove));
+    }
+    else line.append(button(state === "reconnect" ? "Reconnect" : "Connect", onConnect, "primary"));
+    rows.append(line);
+  };
+  for (const [engine, title, who] of ENGINES) {
+    if (!engines[engine]) continue;
+    row(engine, title, scope[engine] || "", who, (via[item.connector] || {})[engine] || "not_connected",
+      () => connectVia(item, engine), () => disconnectVia(item, engine));
+  }
+  // Not for a service only an engine connects.
+  if (item.viaOnly || !("harness" in scope) && Object.keys(scope).length) return;
+  row("harness", "Harness", scope.harness || item.description, "All agents · via Harness", item.state,
+    () => {$("#ways-dialog").close(); connect(item);}, () => {$("#ways-dialog").close(); confirmDisconnect(item);},
+    item.state === "not_connected" ? item.reason : "");
+}
+async function connectVia(item, engine) {
+  say("");
+  const tab = blankTab();
+  working.add(item.connector + ":" + engine);
+  renderWays();
+  try {
+    const result = await request("/api/connect_via", {connector: item.connector, via: engine});
+    if (tab) tab.location.href = result.url;
+    else say("Allow pop-ups for this page, or open " + result.url);
+    say(engine === "codex"
+      ? "Codex has the " + item.name + " plugin. Connect " + item.name + " in ChatGPT; Codex asks for Google sign-in the first time it uses it."
+      : "Connect " + item.name + " on claude.ai. Claude Code on this computer gets it in a moment.");
+  } catch (e) {
+    if (tab) tab.close();
+    say(item.name + ": " + e.message);
+  }
+  working.delete(item.connector + ":" + engine);
+  await loadElsewhere().catch(() => {});
+  // Back from the browser: the card shows it as soon as the engine does.
+  for (let i = 0; i < 36 && ((via[item.connector] || {})[engine] || "not_connected") === "not_connected"; i++) {
+    await new Promise((done) => setTimeout(done, 10000));
+    await loadElsewhere().catch(() => {});
+  }
+}
+async function disconnectVia(item, engine) {
+  const tab = blankTab();
+  working.add(item.connector + ":" + engine);
+  renderWays();
+  try {
+    const result = await request("/api/disconnect_via", {connector: item.connector, via: engine});
+    if (tab) tab.location.href = result.url;
+    say(engine === "codex"
+      ? "Codex stopped using " + item.name + ". To end its access to your Google account, disconnect it in ChatGPT too."
+      : "Disconnect " + item.name + " on claude.ai: Claude Code follows your claude.ai account.");
+  } catch (e) {
+    if (tab) tab.close();
+    say(item.name + ": " + e.message);
+  }
+  working.delete(item.connector + ":" + engine);
+  await loadElsewhere().catch(() => {});
+}
+$("#ways-done").addEventListener("click", () => {$("#ways-dialog").close(); waysItem = null;});
 async function follow(item, flow) {
   pending.set(item.connector, flow);
   render();
