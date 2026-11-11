@@ -63,14 +63,20 @@ export async function runLoad(driver: SwarmDriver, counter: AttemptCounter, conf
       await send(`agent-${pad(i)}`, i, a.channel, a.pmId === a.id ? [] : [a.pmId], true, words(rng, config.text.messageChars))
     })
   }
-  /** Its person writes in their 1:1 chat with the agent; the agent answers there. */
+  /** Its person writes in their 1:1 chat with the agent; the agent answers there. A post that failed (counted as its error)
+   *  gets no answer. */
   function chatTurns(i: number) {
     const rng = random(config.seed, `chat-text-${i}`), a = agents[i]!
     return timeline('chat turns', p.agents[i]!.turns, async () => {
-      if (!await send(`person-${pad(a.machine)}`, i, a.chat, [], false, words(rng, config.text.messageChars))) {
-        skipped['chat answers'] = (skipped['chat answers'] ?? 0) + 1
-        return
+      if (await send(`person-${pad(a.machine)}`, i, a.chat, [], false, words(rng, config.text.messageChars))) {
+        await send(`agent-${pad(i)}`, i, a.chat, [], true, words(rng, config.text.messageChars))
       }
+    })
+  }
+  /** Cross-chat lane: the agent posts only in its own chat, at both its cadences in one sequence, so its chat has one writer. */
+  function ownChatPosts(i: number) {
+    const rng = random(config.seed, `agent-text-${i}`), a = agents[i]!, { posts, turns } = p.agents[i]!
+    return timeline('own chat posts', [...posts, ...turns].sort((x, y) => x - y), async () => {
       await send(`agent-${pad(i)}`, i, a.chat, [], true, words(rng, config.text.messageChars))
     })
   }
@@ -100,7 +106,7 @@ export async function runLoad(driver: SwarmDriver, counter: AttemptCounter, conf
   }))
 
   await Promise.all([
-    ...agents.flatMap((_, i) => [channelPosts(i), chatTurns(i)]),
+    ...agents.flatMap((_, i) => config.lane === 'cross-chat' ? [ownChatPosts(i)] : [channelPosts(i), chatTurns(i)]),
     ...p.machines.flatMap(m => [machineReports(m.index), deliveryPasses(m.index)]), ...polls,
   ])
   return { recorder, skipped, actualMs: performance.now() - start, readers: readers.map(r => r.reader) }

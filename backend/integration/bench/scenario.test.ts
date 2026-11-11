@@ -14,15 +14,23 @@ import { AGENT_CONFIGURATION } from './seed.js'
 const config: BenchConfig = { ...DEFAULT_CONFIG, agents: 5, projects: 2, machines: 2, durationMs: 6_000, desktopReaders: 2, hostReaders: 1,
   every: { channelPostMs: 800, chatTurnMs: 1_200, observeMs: 2_000, deliveryPassMs: 700, desktopPollMs: 1_000, hostTickMs: 500 },
   text: { messageChars: 80 } }
-let database: LocalDatabase
-let report: BenchReport
-const op = (name: string) => report.load.ops.find(row => row.key === name)
+// The cross-chat lane: one writer per conversation.
+const lane: BenchConfig = { ...config, lane: 'cross-chat' }
+let database: LocalDatabase, laneDatabase: LocalDatabase
+let report: BenchReport, laneReport: BenchReport
+const op = (name: string, from = report) => from.load.ops.find(row => row.key === name)
+const sends = (from: BenchReport, prefix: string) => from.load.writers.filter(w => w.key.startsWith(prefix))
+  .reduce((sum, w) => sum + (w.byOp['message.send'] ?? 0), 0)
 
 beforeAll(async () => {
   database = await localDatabase()
   report = await runBench(config, database.db)
-})
-afterAll(async () => { await database?.stop() })
+  // Each run seeds its own accounts, so it gets a fresh database.
+  laneDatabase = await localDatabase()
+  laneReport = await runBench(lane, laneDatabase.db)
+// Two seeded runs, each about a minute on a busy machine.
+}, 300_000)
+afterAll(async () => { await database?.stop(); await laneDatabase?.stop() })
 
 describe('the Swarm load benchmark', () => {
   it('builds a v4 Swarm: every agent with its chat, every project with its channel and PM', () => {
@@ -32,15 +40,15 @@ describe('the Swarm load benchmark', () => {
 
   it('runs every planned channel post, chat turn, machine report and poll exactly once', () => {
     const p = plan(config)
-    const sends = (prefix: string) => report.load.writers.filter(w => w.key.startsWith(prefix)).reduce((sum, w) => sum + (w.byOp['message.send'] ?? 0), 0)
     const turns = p.agents.reduce((sum, a) => sum + a.turns.length, 0)
-    // A person's post that ran out of retries gets no answer (load.ts); that is counted, never lost.
-    expect(sends('person-')).toBe(turns)
-    expect(sends('agent-') + (report.load.skipped['chat answers'] ?? 0)).toBe(p.agents.reduce((sum, a) => sum + a.posts.length, 0) + turns)
+    expect(sends(report, 'person-')).toBe(turns)
+    // A person's post that failed (counted as its error) gets no answer (load.ts).
+    const answered = report.load.writers.filter(w => w.key.startsWith('person-')).reduce((sum, w) => sum + w.ok, 0)
+    expect(sends(report, 'agent-')).toBe(p.agents.reduce((sum, a) => sum + a.posts.length, 0) + answered)
     expect(op('observeMachine')?.count).toBe(p.machines.reduce((sum, m) => sum + m.observations.length, 0))
     expect(op('read.desktop')?.count).toBe(p.readers.filter(r => r.kind === 'desktop').reduce((sum, r) => sum + r.polls.length, 0))
     expect(op('read.host')?.count).toBe(p.readers.filter(r => r.kind === 'host').reduce((sum, r) => sum + r.polls.length, 0))
-    expect(Object.keys(report.load.skipped).filter(k => k !== 'chat answers')).toEqual([])
+    expect(report.load.skipped).toEqual({})
   })
 
   it('gets no error back but a busy Swarm', () => {
@@ -79,6 +87,17 @@ describe('the Swarm load benchmark', () => {
     for (const heading of ['## Run', '## Operations', '## Writer kinds', '## Writers', '## Readers', '## State']) expect(markdown).toContain(heading)
     expect(markdown).toContain('| Swarm | 5 agents (2 of them PMs), 2 projects, 7 conversations, 2 machines |')
     expect(markdown).toContain('| message.send |')
+  })
+
+  it('runs the cross-chat lane: each agent posts only in its own chat, no person writes and no host takes a delivery', () => {
+    const p = plan(lane)
+    expect(sends(laneReport, 'agent-')).toBe(p.agents.reduce((sum, a) => sum + a.posts.length + a.turns.length, 0))
+    expect(laneReport.load.writerKinds.map(k => k.key)).toEqual(['agent', 'desktop', 'host', 'machine'])
+    for (const name of ['deliveries.list', 'delivery.claim', 'delivery.ack']) expect(op(name, laneReport), name).toBeUndefined()
+    expect(op('observeMachine', laneReport)?.count).toBe(p.machines.reduce((sum, m) => sum + m.observations.length, 0))
+    for (const row of laneReport.load.ops) expect(row.errors, row.key).toEqual({})
+    expect(laneReport.load.skipped).toEqual({})
+    expect(renderMarkdown(laneReport)).toContain('| Lane | cross-chat')
   })
 
   it('counts the write conflicts the store retries when posts in one Swarm run at once', async () => {

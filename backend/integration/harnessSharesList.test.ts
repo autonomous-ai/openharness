@@ -54,7 +54,10 @@ const list = async (as: AuthUser = recipient) => {
 const listedIds = (machines: Awaited<ReturnType<typeof list>>) => machines.flatMap(m => m.shares.map(s => s.id)).sort()
 const percentile = (values: number[], p: number) => [...values].sort((a, b) => a - b)[Math.min(values.length - 1, Math.floor(values.length * p))]!
 
-interface Profiled { collection: string; plans: string[]; keysExamined: number; docsExamined: number; returned: number; reads: number }
+interface Profiled { collection: string; plans: string[]; keysExamined: number; docsExamined: number; returned: number; reads: number; seeks: number }
+/** How many values a read's filter asks for by `$in`: an index scan seeks once for each. */
+const inValues = (value: unknown): number => Array.isArray(value) ? value.reduce((n: number, item) => n + inValues(item), 0)
+  : value && typeof value === 'object' ? Object.entries(value).reduce((n, [key, item]) => n + (key === '$in' && Array.isArray(item) ? item.length : inValues(item)), 0) : 0
 /** What Mongo did for each collection while `read` ran: plans, documents examined and rows returned. */
 async function profiled(read: () => Promise<unknown>): Promise<Profiled[]> {
   const db = database.db
@@ -62,18 +65,20 @@ async function profiled(read: () => Promise<unknown>): Promise<Profiled[]> {
   await read()
   await db.$runCommandRaw({ profile: 0 })
   const found = await db.$runCommandRaw({ find: 'system.profile', filter: { 'command.profile': { $exists: false } }, batchSize: 10000 }) as
-    unknown as { cursor: { firstBatch: Array<{ ns: string; planSummary?: string; keysExamined?: number; docsExamined?: number; nreturned?: number }> } }
+    unknown as { cursor: { firstBatch: Array<{ ns: string; planSummary?: string; keysExamined?: number; docsExamined?: number; nreturned?: number
+      command?: { pipeline?: unknown[]; filter?: unknown } }> } }
   await db.$runCommandRaw({ drop: 'system.profile' })
   const byCollection = new Map<string, Profiled>()
   for (const row of found.cursor.firstBatch) {
     const collection = row.ns.slice(row.ns.indexOf('.') + 1)
     if (collection.startsWith('system.') || collection.startsWith('$cmd')) continue
-    const entry = byCollection.get(collection) ?? { collection, plans: [], keysExamined: 0, docsExamined: 0, returned: 0, reads: 0 }
+    const entry = byCollection.get(collection) ?? { collection, plans: [], keysExamined: 0, docsExamined: 0, returned: 0, reads: 0, seeks: 0 }
     entry.reads++
     if (row.planSummary && !entry.plans.includes(row.planSummary)) entry.plans.push(row.planSummary)
     entry.keysExamined += row.keysExamined ?? 0
     entry.docsExamined += row.docsExamined ?? 0
     entry.returned += row.nreturned ?? 0
+    entry.seeks += inValues(row.command?.pipeline?.[0] ?? row.command?.filter)
     byCollection.set(collection, entry)
   }
   return [...byCollection.values()]
@@ -191,8 +196,9 @@ describe('the harness shares list on a Swarm-sized database', () => {
       expect(read.plans.filter(p => p.includes('}, IXSCAN') && !nullBounds(p)), read.collection).toEqual([])
       expect(read.docsExamined, read.collection).toBeLessThanOrEqual(read.returned + 2)
       // Keys too: an agent read by key that walks the (tabId, key) index costs every other Swarm in production (here the 200
-      // crowd agents). A read of N keys by `$in` seeks N times, and a seek may examine the key past its match.
-      expect(read.keysExamined, read.collection).toBeLessThanOrEqual(2 * read.returned + 10)
+      // crowd agents). An agent read by `$in` seeks once per key it asks for, and a seek may examine the key past its match.
+      const seeks = read.collection === 'SwarmAgent' ? read.seeks : 0
+      expect(read.keysExamined, read.collection).toBeLessThanOrEqual(read.returned + seeks + 10)
     }
   })
 })

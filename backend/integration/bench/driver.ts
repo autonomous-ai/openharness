@@ -11,8 +11,8 @@ export interface SwarmDriver {
   createSwarm(owner: AuthUser, operationId: string, name: string): Promise<Reply<{ id: string }>>
   /** A command as a person, or as an agent when [asAgentId] is set (the agent's execution host signs in). */
   execute(tabId: string, user: AuthUser, operationId: string, command: Command, asAgentId?: string): Promise<Reply<CommandResult>>
-  /** Each of [person]'s agents' 1:1 chat with them, by agent id, from a first load. */
-  agentChats(tabId: string, person: AuthUser): Promise<Map<string, string>>
+  /** The 1:1 chat an agent's add opened with its person (a PM's), as its stored agent names it; setup reads no route for it. */
+  agentChat(tabId: string, agentId: string): Promise<string | null>
   /** A machine's contribution generation, as its host reads it before reporting. */
   machineGeneration(tabId: string, host: AuthUser, machineId: string): Promise<string>
   observeMachine(tabId: string, host: AuthUser, machineId: string, observation: MachineObservation): Promise<Reply>

@@ -1,8 +1,9 @@
 # Swarm state benchmark
 
 A repeatable before and after measure of a busy Swarm v4: what each call costs while agents post in their projects'
-channels and talk with their people in their 1:1 chats, and what a poll costs the database when only a little changed
-([Swarm state by parts](../../../docs/plans/2026-10-26-swarm-state-parts.md), goal 3).
+channels and talk with their people in their 1:1 chats, whether writers in different conversations conflict, and what a
+poll costs the database when only a little changed ([Swarm state by parts](../../../docs/plans/2026-10-26-swarm-state-parts.md),
+goals 1 and 3).
 
 ## Run it
 
@@ -11,6 +12,7 @@ From `backend/`, after `npm ci`:
 ```bash
 npm run bench:swarm-state                                    # the default busy Swarm, about 3 minutes
 npm run bench:swarm-state -- --agents 150 --projects 50      # 200 conversations
+npm run bench:swarm-state -- --lane cross-chat               # goal 1: one writer per conversation
 npm run bench:swarm-state -- --duration 20 --profile         # every database operation through Mongo's profiler
 ```
 
@@ -24,6 +26,7 @@ patching from deltas, as a server with that setting does.
 | `--seed N` | 1726 | Seeds every choice: who posts what, when. Same seed, same plan (the report's plan fingerprint). |
 | `--agents N` | 60 | Plain agents, each with its 1:1 chat with its person. The first of each project is its PM; the others are Members, spread over the projects. |
 | `--projects N` | 50 | Projects (at most 100, as the server allows), each with its channel and PM. The Swarm's first project is one of them. |
+| `--lane L` | mixed | `mixed`: the busy Swarm below. `cross-chat`: one writer per conversation, for goal 1 (below). |
 | `--machines N` | 6 | Machines, each its own person's; person 0 owns the Swarm. Agent n runs on machine n mod N, as its person's. |
 | `--duration S` | 120 | Load length in seconds. A slow store stretches it by up to a quarter (at least 10 s); work left after that is reported as skipped. |
 | `--desktop-readers N` | 3 | Desktop windows of the first people, reading the Swarm's changes (below). |
@@ -44,6 +47,11 @@ agent). Then, all at once, each on its own seeded timeline:
 - each machine reports (`observeMachine`) every 15 s;
 - each machine's host passes over its agents' deliveries every 3 s: lists them, claims and acknowledges each one;
 - Desktop windows read the changes since their cursor every 3 s, and hosts their rows every 1 s.
+
+In the `cross-chat` lane each agent posts only in its own 1:1 chat, at both its cadences in one sequence, and no person
+writes and no host passes over deliveries, so no two calls ever write one conversation at once: every conflict between
+agents is between different conversations. Machine reports stay, every 15 s: they write only their machine's part. The
+report's writer kinds table shows which kind of writer met the conflicts.
 
 After the load each reader polls once more, alone, as a client that is already up to date. That poll's response size and
 what MongoDB sent the backend for it (`serverStatus` bytes out, minus the status call's own reply) show what a poll costs

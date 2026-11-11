@@ -53,7 +53,9 @@ function peakConnections(db: PrismaClient) {
   return { async stop() { running = false; await sampling; return peak } }
 }
 
-main().catch(error => {
+// The routes' bus keeps reconnecting to a Redis the bench never has (closeBus did not end it), so the process would
+// never end on its own: leave once the report is written.
+main().then(() => process.exit(), error => {
   process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`)
-  process.exitCode = 1
+  process.exit(1)
 })

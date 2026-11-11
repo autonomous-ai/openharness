@@ -1,3 +1,14 @@
+import { MAX_PROJECTS } from '../../src/superTabs/commands.js'
+
+/**
+ * `mixed` is the busy Swarm: agents post in their project's channel and answer in their chats, people write to them, hosts
+ * take the deliveries. `cross-chat` has one writer per conversation: each agent posts only in its own 1:1 chat, at both its
+ * cadences in one sequence; no person writes and no host passes over deliveries. Machine reports stay: they write only
+ * their machine's part. So any conflict between agents is between different conversations (#1726 goal 1).
+ */
+export const LANES = ['mixed', 'cross-chat'] as const
+export type Lane = typeof LANES[number]
+
 export interface Cadence {
   /** Mean gap between one agent's posts in its project's channel. */
   channelPostMs: number
@@ -21,6 +32,7 @@ export interface BenchConfig {
   projects: number
   /** Machines, each its own person's; person 0 owns the Swarm. Agent n runs on machine n mod machines. */
   machines: number
+  lane: Lane
   durationMs: number
   /** Desktop windows of the first people. */
   desktopReaders: number
@@ -30,12 +42,9 @@ export interface BenchConfig {
   text: { messageChars: number }
 }
 
-/** A Swarm can hold at most this many projects (commands.ts PROJECTS_FULL). */
-const MAX_PROJECTS = 100
-
 /** A busy Swarm: 60 agents and 50 projects make 110 conversations (each agent's chat and each project's channel). */
 export const DEFAULT_CONFIG: BenchConfig = {
-  seed: 1726, agents: 60, projects: 50, machines: 6, durationMs: 120_000, desktopReaders: 3, hostReaders: 2,
+  seed: 1726, agents: 60, projects: 50, machines: 6, lane: 'mixed', durationMs: 120_000, desktopReaders: 3, hostReaders: 2,
   every: { channelPostMs: 20_000, chatTurnMs: 30_000, observeMs: 15_000, deliveryPassMs: 3_000, desktopPollMs: 3_000, hostTickMs: 1_000 },
   text: { messageChars: 300 },
 }
@@ -74,7 +83,10 @@ export function parseArgs(argv: readonly string[]): Args {
       if (!Number.isFinite(Number(value))) throw new Error(`${flag} needs a number`)
       NUMBERS[flag]!(config, Number(value))
     } else if (flag === '--every') config.every = { ...config.every, ...pairs(flag, value, config.every) }
-    else if (flag === '--out') out = value
+    else if (flag === '--lane') {
+      if (!(LANES as readonly string[]).includes(value)) throw new Error(`--lane is one of ${LANES.join(', ')}`)
+      config.lane = value as Lane
+    } else if (flag === '--out') out = value
     else if (flag === '--cache') {
       if (value !== 'memory' && value !== 'off' && !value.startsWith('redis://')) throw new Error('--cache is memory, off or a redis:// URL')
       cache = value

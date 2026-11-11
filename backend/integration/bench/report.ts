@@ -45,6 +45,7 @@ export function renderMarkdown(report: BenchReport): string {
     ['Started', report.startedAt],
     ['Machine', `${report.machine.cpu}, ${report.machine.cpus} cores, ${report.machine.memoryGb} GB, ${report.machine.platform} ${report.machine.release} ${report.machine.arch}`],
     ['Runtime', `Node ${report.machine.node}, MongoDB ${report.machine.mongo} (local single-node replica set)`],
+    ['Lane', config.lane === 'cross-chat' ? 'cross-chat (one writer per conversation: each agent posts only in its own chat)' : 'mixed'],
     ['Read cache', report.cache ?? 'none (before the cache)'], ['Seed', String(config.seed)], ['Plan', `sha256 ${report.planDigest.slice(0, 16)}`],
     ['Swarm', `${setup.agents} agents (${setup.pms} of them PMs), ${config.projects} projects, ${setup.conversations} conversations, ${config.machines} machines`],
     ['Readers', `${config.desktopReaders} Desktop every ${config.every.desktopPollMs} ms, ${config.hostReaders} hosts every ${config.every.hostTickMs} ms`],

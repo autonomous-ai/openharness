@@ -60,7 +60,7 @@ async function seedMembers(s: Setup): Promise<void> {
   }
   for (let n = 0; n < s.config.machines; n++) {
     await s.run(s.people[n]!, { type: 'machine.contribute', machineId: machineId(n), name: `Bench machine ${n}`, cwd: '/bench/repo',
-      engines: ['codex'], maxAgents: 64 })
+      engines: ['codex'], maxAgents: 16 })
   }
 }
 
@@ -83,7 +83,7 @@ async function seedAgents(s: Setup, p: Plan, channels: string[]): Promise<Array<
     const add = { type: 'agent.add', machineId: machineId(a.machine), harnessId, name, configuration: AGENT_CONFIGURATION } as const
     if (a.pm) {
       const id = String((await s.run(person, { ...add, conversationId: channels[a.project]!, lead: true })).agentId)
-      agents.push({ id, harnessId, chat: null })
+      agents.push({ id, harnessId, chat: await s.driver.agentChat(s.tabId, id) })
       continue
     }
     const chat = String((await s.run(person, { type: 'agent.new', kind: 'regular', machineId: machineId(a.machine), engine: 'codex', name, local: true }))
@@ -104,19 +104,15 @@ export async function seedSwarm(driver: SwarmDriver, config: BenchConfig, p: Pla
   await seedMembers(s)
   const channels = await seedProjects(s, p)
   const added = await seedAgents(s, p, channels)
-  // A PM's chat is opened by its add; each person's first load names their agents' chats.
-  const chats = new Map<string, string>()
-  for (let n = 0; n < config.machines; n++) {
-    if (!p.agents.some(a => a.pm && a.machine === n)) continue
-    s.calls++
-    for (const [agentId, chat] of await driver.agentChats(s.tabId, people[n]!)) chats.set(agentId, chat)
-  }
   const agents = p.agents.map((a, i): Agent => {
     const { id, harnessId, chat } = added[i]!
-    return { id, harnessId, machine: a.machine, chat: chat ?? chats.get(id) ?? (() => { throw new Error(`No chat of agent ${i}`) })(),
+    return { id, harnessId, machine: a.machine, chat: chat ?? (() => { throw new Error(`No chat of agent ${i}`) })(),
       channel: channels[a.project]!, pmId: added[a.project]!.id }
   })
   const generations: string[] = []
-  for (let n = 0; n < config.machines; n++) generations.push(await driver.machineGeneration(s.tabId, people[n]!, machineId(n)))
+  for (let n = 0; n < config.machines; n++) {
+    s.calls++
+    generations.push(await driver.machineGeneration(s.tabId, people[n]!, machineId(n)))
+  }
   return { swarm: { tabId: s.tabId, people, channels, agents, generations }, calls: s.calls }
 }

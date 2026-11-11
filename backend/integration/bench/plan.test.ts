@@ -36,6 +36,15 @@ describe('plan', () => {
     expect(at({ ...small, agents: 40, projects: 10 })).toEqual(at(small))
   })
 
+  it('leaves out the delivery passes in the cross-chat lane, and keeps agents, machine reports and readers', () => {
+    const mixed = plan(small), lane = plan({ ...small, lane: 'cross-chat' })
+    expect(mixed.machines.every(m => m.deliveryPasses.length > 0)).toBe(true)
+    expect(lane.machines.every(m => !m.deliveryPasses.length)).toBe(true)
+    expect(lane.machines.map(m => m.observations)).toEqual(mixed.machines.map(m => m.observations))
+    expect(lane.agents).toEqual(mixed.agents)
+    expect(lane.readers).toEqual(mixed.readers)
+  })
+
   it('reports every machine every 15 s, and puts readers on the first people and machines', () => {
     const p = plan(small)
     for (const { observations } of p.machines) {

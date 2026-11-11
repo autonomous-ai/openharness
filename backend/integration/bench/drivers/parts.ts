@@ -83,10 +83,9 @@ export async function partsDriver(db: PrismaClient, users: () => readonly AuthUs
     createSwarm: (owner, operationId, name) => call(owner, 'POST', base, { operationId, name }),
     execute: (tabId, user, operationId, command, asAgentId) =>
       call<CommandResult>(user, 'POST', `${base}/${tabId}/commands`, { operationId, command, ...(asAgentId ? { asAgentId } : {}) }),
-    async agentChats(tabId, person) {
-      const reply = await firstLoad(tabId, person)
-      if (!reply.data) throw new Error(`First load failed: ${reply.code}`)
-      return new Map(reply.data.groups.flatMap(g => g.data.kind === 'agent-chat' ? g.data.agentIds.map(id => [id, g.data.id] as const) : []))
+    async agentChat(tabId, agentId) {
+      const row = await db.swarmAgent.findFirst({ where: { tabId, key: agentId, deleted: false }, select: { data: true } })
+      return (row?.data as { chatId?: string } | null)?.chatId ?? null
     },
     async machineGeneration(tabId, host, machineId) {
       const reply = await hostForm(host, machineId, { full: true })

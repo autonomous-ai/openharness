@@ -38,7 +38,9 @@ export function plan(config: BenchConfig): Plan {
   })
   const machines = Array.from({ length: config.machines }, (_, index) => {
     const rng = random(seed, `machine-${index}`)
-    return { index, observations: steady(rng, every.observeMs, durationMs), deliveryPasses: steady(rng, every.deliveryPassMs, durationMs) }
+    const deliveryPasses = steady(rng, every.deliveryPassMs, durationMs)
+    // The cross-chat lane makes no delivery: only agents write, each in its own chat.
+    return { index, observations: steady(rng, every.observeMs, durationMs), deliveryPasses: config.lane === 'cross-chat' ? [] : deliveryPasses }
   })
   const readers = [
     ...Array.from({ length: config.desktopReaders }, (_, index) => ({ kind: 'desktop' as const, index,
