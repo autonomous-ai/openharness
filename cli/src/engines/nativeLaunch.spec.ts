@@ -2,17 +2,19 @@ import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { inspectNativeLaunch } from './nativeLaunch.js'
 import { captureLaunchExecutable } from './kit/launchExecutable.js'
+import { LAUNCH_LOCATION_VARIABLES, nativeHookLocations } from './kit/nativeLocations.js'
 import { engineHooks } from './hooks.js'
 import * as hooks from './nativeHooks.js'
 
-const fixture = vi.hoisted(() => ({ current: true, hooks: true, version: '2.0.0', help: '--auto --permission-mode --approve-for-me', calls: [] as string[], pending: [] as (() => void)[], stalled: false, failed: false, environments: [] as NodeJS.ProcessEnv[], exit: 0, stderr: '' }))
-vi.mock('./kit/launchExecutable.js', async original => ({ ...await original<typeof import('./kit/launchExecutable.js')>(), captureLaunchExecutable: vi.fn(async () => ({ state: 'ready',
-  executable: { command: '/fixture/engine', identity: 'fixture', current: () => fixture.current },
+const fixture = vi.hoisted(() => ({ identity: '', current: true, hooks: true, version: '2.0.0', help: '--auto --permission-mode --approve-for-me', calls: [] as string[], pending: [] as (() => void)[], stalled: false, failed: false, environments: [] as NodeJS.ProcessEnv[], exit: 0, stderr: '' }))
+vi.mock('./kit/launchExecutable.js', async original => ({ ...await original<typeof import('./kit/launchExecutable.js')>(), captureLaunchExecutable: vi.fn(async (engine: string) => ({ state: 'ready',
+  // Each test's engines are installs of their own: their help is kept by the file's identity (nativeLaunch.ts).
+  executable: { command: '/fixture/engine', identity: `${fixture.identity}:${engine}`, current: () => fixture.current },
   environment: { HOME: '/fixture/home', PATH: '/fixture/bin', CODEX_HOME: '/fixture/codex', CLAUDE_CONFIG_DIR: '/fixture/claude', HERMES_HOME: '/fixture/hermes' },
 })) }))
 vi.mock('node:child_process', () => ({ execFile: (command: string, args: string[], _options: { env: NodeJS.ProcessEnv }, done: (error: Error | null, output: string, errors: string) => void) => {
   fixture.calls.push(command); fixture.environments.push(_options.env)
-  const settle = () => done(fixture.failed ? Error('Private probe unavailable') : fixture.exit ? Object.assign(Error('Command failed'), { code: fixture.exit }) : null,
+  const settle = () => done(fixture.failed && args[0] !== '--version' ? Error('Private probe unavailable') : fixture.exit ? Object.assign(Error('Command failed'), { code: fixture.exit }) : null,
     args[0] === '--version' ? fixture.version : fixture.help, fixture.stderr)
   if (fixture.stalled) fixture.pending.push(settle); else queueMicrotask(settle)
   return { stdin: { end: vi.fn(), destroy: vi.fn() } }
@@ -21,7 +23,8 @@ vi.mock('./hooks.js', () => ({ engineHooks: { claude: { installIn: vi.fn(async (
 vi.mock('./nativeHooks.js', () => Object.fromEntries(['installOpencodePlugin', 'installHermesHooks', 'installCursorHooks',
   'installCommandCodeHooks', 'installDevinHooks', 'installAmpPlugin', 'installKiloPlugin', 'installGrokHooks', 'installAgyHooks', 'installCopilotHooks', 'installPiExtension',
 ].map(name => [name, vi.fn(async () => fixture.hooks)])))
-beforeEach(() => { fixture.current = true; fixture.hooks = true; fixture.version = '2.0.0'; fixture.help = '--auto --permission-mode --approve-for-me'; fixture.calls = []; fixture.pending = []; fixture.stalled = false; fixture.failed = false; fixture.environments = []; fixture.exit = 0; fixture.stderr = '' })
+let installs = 0
+beforeEach(() => { fixture.identity = `install-${++installs}`; fixture.current = true; fixture.hooks = true; fixture.version = '2.0.0'; fixture.help = '--auto --permission-mode --approve-for-me'; fixture.calls = []; fixture.pending = []; fixture.stalled = false; fixture.failed = false; fixture.environments = []; fixture.exit = 0; fixture.stderr = '' })
 afterEach(() => { vi.clearAllMocks(); vi.unstubAllEnvs() })
 
 it('needs no executable, hooks or probes for a terminal', async () => {
@@ -135,6 +138,21 @@ it('does not let another engine\'s network setting, or its own sibling engine\'s
     expect((home as { detail: string }).detail).toMatch(/^HOME names a network or device path.*such as /)
   } finally { host.win32 = false }
 })
+it('refuses an OpenClaw launch whose OPENCLAW_HOME is a network path on Windows', async () => {
+  host.win32 = true
+  try {
+    vi.mocked(captureLaunchExecutable).mockResolvedValueOnce({ state: 'ready', executable: { command: '/fixture/engine', identity: 'fixture', current: () => true },
+      environment: { HOME: '/fixture/home', PATH: '/fixture/bin', OPENCLAW_HOME: '\\\\server\\share\\h' } } as never)
+    const result = await inspectNativeLaunch('openclaw')
+    expect(result).toMatchObject({ ok: false, refusal: 'ENGINE_LAUNCH_REFUSED' })
+    expect((result as { detail: string }).detail).toMatch(/^OPENCLAW_HOME names a network or device path/)
+  } finally { host.win32 = false }
+})
+it('OPENCLAW_HOME is a launch location, and moves the state folder a launch derives', () => {
+  expect(LAUNCH_LOCATION_VARIABLES).toContain('OPENCLAW_HOME')
+  expect(nativeHookLocations({ HOME: '/home/u', OPENCLAW_HOME: '/h' }).OPENCLAW_STATE_DIR).toBe('/h/.openclaw')
+  expect(nativeHookLocations({ HOME: '/home/u' }).OPENCLAW_STATE_DIR).toBe('/home/u/.openclaw')
+})
 it('does not refuse a double-slash location off Windows', async () => {
   expect(await inspectNativeLaunch('codex', { codexHome: '//server/share/x' })).not.toMatchObject({ refusal: 'ENGINE_LAUNCH_REFUSED' })
 })
@@ -155,9 +173,9 @@ it.each(['claude', 'codex', 'hermes'] as const)('prepares the captured %s profil
   expect(await prepared.launch.prepareHooks(19473, () => false)).toBe(false)
 })
 it('does not treat a longer flag as support for the selected permission mode', async () => {
+  fixture.help = '--auto-update'
   const prepared = await inspectNativeLaunch('opencode')
   if (!prepared.ok) throw new Error('fixture was held')
-  fixture.help = '--auto-update'
   expect(await prepared.launch.permission({ bypassPermission: true })).toBe('unsupported')
 })
 
@@ -235,27 +253,53 @@ it('answers an expired probe while retaining its slot until the actual child set
     for (const settle of fixture.pending.splice(0)) settle()
     fixture.stalled = false
     expect(await inspectNativeLaunch('opencode')).toMatchObject({ ok: true })
-    expect(fixture.calls).toHaveLength(9)
+    // Its version, then its help: a launch that names no mode still asks whether it runs.
+    expect(fixture.calls).toHaveLength(10)
   } finally {
     for (const settle of fixture.pending.splice(0)) settle()
     fixture.stalled = false; vi.useRealTimers()
   }
 })
+it('asks an install again after a minute, so an engine broken around its unchanged file is refused', async () => {
+  const now = vi.spyOn(performance, 'now')
+  try {
+    now.mockReturnValue(1_000)
+    expect(await inspectNativeLaunch('codex')).toMatchObject({ ok: true })
+    // Its Node uninstalled: the file is the same.
+    fixture.exit = 127; fixture.stderr = 'env: node: No such file or directory\n'
+    now.mockReturnValue(60_999)
+    expect(await inspectNativeLaunch('codex')).toMatchObject({ ok: true })
+    now.mockReturnValue(61_000)
+    expect(await inspectNativeLaunch('codex')).toMatchObject({ refusal: 'ENGINE_CANNOT_RUN', detail: 'Codex is installed but cannot run: env: node: No such file or directory' })
+    expect(fixture.calls).toHaveLength(2)
+  } finally { now.mockRestore() }
+})
+it('keeps no help from an executable that changed while it answered', async () => {
+  fixture.stalled = true
+  const changing = inspectNativeLaunch('codex')
+  await vi.waitFor(() => expect(fixture.pending).toHaveLength(1))
+  fixture.current = false
+  fixture.pending.shift()!()
+  expect(await changing).toMatchObject({ ok: false, unavailable: 'native' })
+  fixture.current = true; fixture.stalled = false
+  expect(await inspectNativeLaunch('codex')).toMatchObject({ ok: true })
+  expect(fixture.calls).toHaveLength(2)
+})
 it('retries unknown permission answers and matches only complete flag tokens', async () => {
+  fixture.failed = true
+  expect(await inspectNativeLaunch('opencode', { bypassPermission: true })).toMatchObject({ ok: false, unavailable: 'native' })
+  fixture.failed = false; fixture.help = '--prefix--auto --auto-update'
   const prepared = await inspectNativeLaunch('opencode')
   if (!prepared.ok) throw Error(prepared.detail)
-  fixture.failed = true
-  expect(await prepared.launch.permission({ bypassPermission: true })).toBe('unknown')
-  fixture.failed = false; fixture.help = '--prefix--auto --auto-update'
   expect(await prepared.launch.permission({ bypassPermission: true })).toBe('unsupported')
 })
 
 it('holds an empty help reply without caching an unsupported permission flag', async () => {
+  fixture.help = ' \n'
+  expect(await inspectNativeLaunch('claude', { permissionMode: 'auto' })).toMatchObject({ ok: false, unavailable: 'native' })
+  fixture.help = '--permission-mode'
   const prepared = await inspectNativeLaunch('claude')
   if (!prepared.ok) throw Error(prepared.detail)
-  fixture.help = ' \n'
-  expect(await prepared.launch.permission({ permissionMode: 'auto' })).toBe('unknown')
-  fixture.help = '--permission-mode'
   expect(await prepared.launch.permission({ permissionMode: 'auto' })).toBe('supported')
 })
 
@@ -295,6 +339,8 @@ it('publishes locations and proofs together and revokes authority while replacem
 it('rejects a permission reply from a prior preparation revision', async () => {
   const result = await inspectNativeLaunch('opencode')
   if (!result.ok) throw Error(result.detail)
+  // A PATH of its own: the install's help under it is not known yet.
+  expect(await result.launch.prepareHooks(19473, () => true, { PATH: '/fixture/other-bin' })).toBe(true)
   fixture.stalled = true
   const answer = result.launch.permission({ bypassPermission: true })
   expect(fixture.pending).toHaveLength(1)
@@ -338,11 +384,13 @@ describe('the startup probe on Windows', () => {
   it('answers with the flag when the help lists it, and without when it does not', async () => {
     fixture.help = 'Options:\n      --no-daemon   Run in this process'
     expect(await inspectNativeLaunch('codex')).toMatchObject({ ok: true, launch: { startupArgs: ['--no-daemon'] } })
+    // One probe answers its startup options and whether it runs.
     expect(fixture.calls).toEqual(['/fixture/engine'])
-    fixture.help = 'Options:\n      --no-daemonize'
+    // Other installs, with other help.
+    fixture.identity = 'other-help'; fixture.help = 'Options:\n      --no-daemonize'
     expect(await inspectNativeLaunch('codex')).toMatchObject({ ok: true, launch: { startupArgs: [] } })
     // On both streams, as the permission probe reads it.
-    fixture.help = ''; fixture.stderr = '--no-daemon'
+    fixture.identity = 'stderr-help'; fixture.help = ''; fixture.stderr = '--no-daemon'
     expect(await inspectNativeLaunch('codex')).toMatchObject({ ok: true, launch: { startupArgs: ['--no-daemon'] } })
   })
 
@@ -357,14 +405,18 @@ describe('the startup probe on Windows', () => {
     expect(await inspectNativeLaunch('codex')).toMatchObject({ ok: false, unavailable: 'native' })
   })
 
-  it('probes no engine without a startup probe, and nothing elsewhere', async () => {
+  it('probes no engine without a startup probe, and nothing elsewhere but whether it runs', async () => {
+    // Whether the engine runs, as a launch that names no mode asks; never one for startup options. Claude on Windows is
+    // first asked its version, which must say Claude Code (nativeLaunch.claudeIdentity.spec.ts).
+    fixture.version = '2.0.0 (Claude Code)'
     const claude = await inspectNativeLaunch('claude')
     expect(claude.ok && claude.launch.startupArgs).toBeUndefined()
-    expect(fixture.calls).toEqual([])
+    expect(fixture.calls).toEqual(['/fixture/engine', '/fixture/engine'])
+    fixture.calls = []
     Object.defineProperty(process, 'platform', platform)
     if (process.platform === 'win32') return
     const codex = await inspectNativeLaunch('codex')
     expect(codex.ok && codex.launch.startupArgs).toBeUndefined()
-    expect(fixture.calls).toEqual([])
+    expect(fixture.calls).toEqual(['/fixture/engine'])
   })
 })

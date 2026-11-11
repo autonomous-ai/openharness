@@ -5,7 +5,7 @@ import { lstat, realpath } from 'node:fs/promises'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { createHash } from 'node:crypto'
 import { env } from '../config/env.js'
-import { insideGitCheckout } from './gitProject.js'
+import { inRepositoryTurn, insideGitCheckout } from './gitProject.js'
 import type { RegisteredSession } from './registry.js'
 
 const exec = promisify(execFile)
@@ -122,5 +122,5 @@ export async function removeReviewedWorktree(review: WorktreeReview, s: Register
     throw new Error('The worktree or its changes changed. Review it again before deleting.')
   }
   if (current.dirty && !discardChanges) throw new Error('Confirm discarding the listed uncommitted files before deleting this worktree.')
-  await git(current.main, ['worktree', 'remove', ...(current.dirty && discardChanges ? ['--force'] : []), '--', current.path])
+  await inRepositoryTurn(current.main, () => git(current.main, ['worktree', 'remove', ...(current.dirty && discardChanges ? ['--force'] : []), '--', current.path]))
 }

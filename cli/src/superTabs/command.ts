@@ -1,3 +1,4 @@
+import { claimAsked } from './githubClaim.js'
 import { verdictAsked } from './githubVerdict.js'
 import { identifier, object } from './wire.js'
 import { openDaemon, whereFor, type Daemon, type Where } from '../agentClient/daemon.js'
@@ -23,7 +24,7 @@ function harnessIn(frames: PaneFrame[], pane: string, machineId: string): boolea
 
 const ELSEWHERE = 'From a harness, Swarm commands go to this computer\'s own Harness only: leave out --machine and --port, or give this computer\'s own.'
 
-const USAGE = 'harness super-tab [--tab ID] [--agent ID] [--port N --machine ID] status | messages GROUP [--thread ROOT] [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | answer GROUP MESSAGE_ID TEXT|- OPERATION_ID [--to AGENT]... | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | read ok|hold OWNER/REPO#N SHA [TEXT|-]'
+const USAGE = 'harness super-tab [--tab ID] [--agent ID] [--port N --machine ID] status | messages GROUP [--thread ROOT] [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | answer GROUP MESSAGE_ID TEXT|- OPERATION_ID [--to AGENT]... | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | read ok|hold OWNER/REPO#N SHA [TEXT|-] | take OWNER/REPO#N | inbox'
 const usageError = () => new Error(USAGE)
 
 /** A message on stdin, for post's TEXT `-`.
@@ -201,7 +202,12 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
       verdict: first === 'ok' ? 'READ-OK' : 'HOLD', sha: third, text })
     if (!asked) throw usageError()
     Object.assign(payload, { ...asked })
-  } else if (action !== 'status' || positional.length !== 1) {
+  } else if (action === 'take' && positional.length === 2) {
+    // A builder's claim on a task given to it (githubClaim.ts): the daemon makes it.
+    const asked = claimAsked({ repository: first?.slice(0, first.lastIndexOf('#')), number: Number(/#([1-9][0-9]{0,8})$/.exec(first ?? '')?.[1]) })
+    if (!asked) throw usageError()
+    Object.assign(payload, { ...asked })
+  } else if ((action !== 'status' && action !== 'inbox') || positional.length !== 1) {
     throw usageError()
   }
   return { where: target, payload }
@@ -285,6 +291,12 @@ export async function superTabCommand(argv: readonly string[], deps: {
         command.attachmentIds = await uploadAttachments(attach as string[], String(payload.operationId), target, scoped, deps.fetch)
       }
       result = await daemon.request('super_tabs', payload, 30_000)
+    }
+    // What waits for the agent, a line each, for it to read as it reads what it is typed; a failure as JSON, as every other.
+    const waiting = object(result.value).waiting
+    if (request.payload.action === 'inbox' && Array.isArray(waiting)) {
+      print(waiting.length ? waiting.join('\n') : 'Nothing waits for you.')
+      return 0
     }
     print(JSON.stringify({ ...result, ...(operationId ? { operationId } : {}) }))
     return result.error ? 1 : 0

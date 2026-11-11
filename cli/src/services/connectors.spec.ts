@@ -13,6 +13,7 @@ import { Store } from '../lib/connectors/store.js'
 import * as gateway from '../lib/connectors/gateway.js'
 import { FakeGateway } from '../testing/connectorServers.js'
 import { serveBridgeSocket } from '../lib/connectors/bridge.js'
+import { LSOF_MS } from '../lib/peerAccount.js'
 
 // The real socket, but for a failure with no Error to say why, which nothing here can provoke.
 vi.mock('../lib/connectors/bridge.js', async (original) => {
@@ -21,6 +22,11 @@ vi.mock('../lib/connectors/bridge.js', async (original) => {
 })
 
 const OWNER = { local: true, owner: true }
+/**
+ * How long the bridge may take to answer: a known key is answered only once it has asked who is calling, which on a Mac is
+ * lsof, about a second at load 28 and allowed LSOF_MS. A second cut that lookup off on a loaded Mac (cli-core gate, load 30).
+ */
+const ANSWER_MS = LSOF_MS + 1_000
 
 describe('the connectors service', () => {
   let home: string
@@ -51,8 +57,8 @@ describe('the connectors service', () => {
     await new Promise(done => free.close(done))
     return port
   }
-  /** What a request answered, or 0 when it was not answered within a second. */
-  const answered = (url: string) => fetch(url, { method: 'POST', body: '{}', signal: AbortSignal.timeout(1_000) }).then(reply => reply.status, () => 0)
+  /** What a request answered, or 0 when it was not answered in ANSWER_MS. */
+  const answered = (url: string) => fetch(url, { method: 'POST', body: '{}', signal: AbortSignal.timeout(ANSWER_MS) }).then(reply => reply.status, () => 0)
 
   // Any process can dial a port a test listens on: under load another run's request reached a held port just released and taken
   // again (one node process held connections to the holders of two parallel runs), and a holder that kept the connection waited
@@ -266,6 +272,83 @@ describe('the connectors service', () => {
     }
   }, 30_000)
 
+  // A second Harness home, a dev build or a leftover core of this account can hold the port for hours. Asking lsof whose it was
+  // at every try, every 5 s, cost about 1% of a core at rest, the daemon's whole budget (2026-11-11).
+  describe('while a process of this account holds the port', () => {
+    afterEach(() => { vi.useRealTimers() })
+
+    const held = async (holderIsMine: () => Promise<boolean | null>) => {
+      const holder = await holdPort()
+      const taken = (holder.address() as { port: number }).port
+      const { HARNESS_CONNECTIONS_PORT: _named, ...free } = env
+      const vault = new Store(join(home, 'store'), free)
+      saveBridgePort(vault, taken)
+      const said = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      // The default try every 5 s, as the daemon runs it.
+      startConnectors(fakeCore(), { vault, env: free, offered: async () => ({}), vaultPort: null, holderIsMine })
+      const told = (text: string) => said.mock.calls.flat().join('\n').split(text).length - 1
+      const savedPort = () => bridgePort(free, new Store(join(home, 'store'), free))
+      return { holder, taken, said, told, savedPort }
+    }
+
+    it('asks whose it is less and less often, says so once, and takes the port at the next try once it is let go', async () => {
+      let asked = 0
+      const { holder, taken, said, told } = await held(async () => { asked++; return true })
+      try {
+        // An hour: 720 tries of the port, which asked 718 times before.
+        await vi.advanceTimersByTimeAsync(3_600_000)
+        expect(asked).toBeGreaterThan(0)
+        expect(asked).toBeLessThanOrEqual(20)
+        expect(told(`bridge port ${taken} is not available`)).toBe(1)
+        expect(told(`a process of this account holds bridge port ${taken}`)).toBe(1)
+        await new Promise<void>(resolve => holder.close(() => resolve()))
+        // The port itself is still tried every 5 s: one try takes it.
+        await vi.advanceTimersByTimeAsync(5_000)
+        vi.useRealTimers()
+        let status = 0
+        for (let n = 0; n < 100 && !status; n++) {
+          status = await answered(`http://127.0.0.1:${taken}/x/linear/mcp`)
+          if (!status) await new Promise(resolve => setTimeout(resolve, 10))
+        }
+        expect(status).toBe(404)
+        expect(told('moved')).toBe(0)
+      } finally {
+        said.mockRestore()
+        holder.close()
+      }
+    }, 30_000)
+
+    it('says once that no one can tell whose the port is, when the lookup cannot answer', async () => {
+      const { holder, taken, said, told } = await held(async () => null)
+      try {
+        await vi.advanceTimersByTimeAsync(3_600_000)
+        expect(told(`cannot tell which account holds bridge port ${taken}`)).toBe(1)
+        expect(told(`a process of this account holds bridge port ${taken}`)).toBe(0)
+      } finally {
+        said.mockRestore()
+        holder.close()
+      }
+    }, 30_000)
+
+    it('still moves off it when another account takes it over, within five minutes of asking less', async () => {
+      let mine = true
+      const { holder, taken, said, told, savedPort } = await held(async () => mine)
+      try {
+        await vi.advanceTimersByTimeAsync(3_600_000)
+        expect(savedPort()).toBe(taken)
+        // The holder let go and another account took the port between two tries.
+        mine = false
+        await vi.advanceTimersByTimeAsync(5 * 60_000 + 15_000)
+        expect(savedPort()).not.toBe(taken)
+        expect(told(`the bridge moved to port ${savedPort()}`)).toBe(1)
+      } finally {
+        said.mockRestore()
+        holder.close()
+      }
+    }, 30_000)
+  })
+
   it('says so when the port it moved to cannot be saved', async () => {
     const holder = await holdPort()
     const { HARNESS_CONNECTIONS_PORT: _named, ...free } = env
@@ -297,7 +380,7 @@ describe('the connectors service', () => {
       }
       return 0
     }
-    const body = (port: number, path: string) => fetch(`http://127.0.0.1:${port}${path}`, { method: 'POST', body: '{}', signal: AbortSignal.timeout(1_000) }).then(reply => reply.text())
+    const body = (port: number, path: string) => fetch(`http://127.0.0.1:${port}${path}`, { method: 'POST', body: '{}', signal: AbortSignal.timeout(ANSWER_MS) }).then(reply => reply.text())
     const rawStatus = (port: number, path: string) => new Promise<number>((resolve, reject) => {
       const sent = httpRequest({ host: '127.0.0.1', port, path, method: 'POST', timeout: 1_000 }, (reply) => { reply.resume(); resolve(reply.statusCode ?? 0) })
       sent.once('timeout', () => sent.destroy(new Error('no answer within a second')))
@@ -340,6 +423,26 @@ describe('the connectors service', () => {
       expect(await rawStatus(port, '/.//connections')).toBe(404)
       expect(await body(port, `/${agentKey}/linear/mcp`)).toContain('Unknown connection address')
     })
+
+    // Agents' entries are the port's address here, with its key: another account taking it over must be seen at once (audit H1).
+    it('asks whose the port is at every try while this account holds it, as before', async () => {
+      const holder = await holdPort()
+      const vault = longVault()
+      const { HARNESS_CONNECTIONS_PORT: _named, ...free } = env
+      saveBridgePort(vault, (holder.address() as { port: number }).port)
+      const said = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      let asked = 0
+      try {
+        startConnectors(fakeCore(), { vault, env: free, offered: async () => ({}), vaultPort: null, holderIsMine: async () => { asked++; return true } })
+        await vi.advanceTimersByTimeAsync(3_600_000)
+        expect(asked).toBeGreaterThanOrEqual(700)
+      } finally {
+        vi.useRealTimers()
+        said.mockRestore()
+        holder.close()
+      }
+    }, 30_000)
   })
 
   // The store refuses a vault folder that has become a link: its keys cannot be read or replaced, and nobody gets in by that.

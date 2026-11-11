@@ -16,6 +16,11 @@
  * - A pane that read idle, with no turn open and its store unchanged since, has nothing new to show but a Gateway that
  *   dropped: the bind pass reads it every QUIET_PANE_MS instead of every pass (`paneDue`). The pane's captures were
  *   most of what one bound idle pane cost the daemon.
+ * - A pane that reads a run in progress (`running`, `streaming`; not `connecting`) while the store holds no node for
+ *   the key, on every pass for NO_SESSION_MS, is on a store the Gateway does not write: the TUI's state folder is not
+ *   the Gateway's, and the store will never get the session (`onSessionMissing`). A fresh key reads idle before its
+ *   first message, and a Gateway that is only slow writes the node well within that time. Said once, and cleared once
+ *   the key is found (`onSessionFound`). Not counted while the store cannot be read (`onFatal`), which says so itself.
  */
 import type { LiveEvent } from '../../lib/normalize.js'
 import { OpenclawNormalizer } from './normalizer.js'
@@ -37,6 +42,14 @@ const STALE_READS = 2
 const READY_PASSES = 2
 /** How often a quiet pane is read all the same: a Gateway that stops while nothing runs changes the screen alone. */
 const QUIET_PANE_MS = 30_000
+/** How long the pane reads a run with no node for the key before the store is said to be the wrong one. */
+const NO_SESSION_MS = 30_000
+/**
+ * How far short of NO_SESSION_MS a pass may read and still count as reaching it: the passes are timed on the event
+ * loop's clock and each reads after a capture of its own, so by `Date.now()` the pass 30 s on lands a few ms either side
+ * of it (end to end, 2026-11-11: short each time, and the hold came a pass later). A tenth of the shortest pass interval.
+ */
+const PASS_JITTER_MS = 500
 
 /** What a bind pass read off the pane (contract.ts `readOpenclawScreen`). */
 interface OpenclawPaneReading {
@@ -44,6 +57,8 @@ interface OpenclawPaneReading {
   ready: boolean
   /** The status line says the Gateway connection dropped or just came back. */
   gatewayLost: boolean
+  /** The status line says a run is in progress. */
+  running: boolean
 }
 
 export interface OpenclawLiveDeps {
@@ -59,6 +74,10 @@ export interface OpenclawLiveDeps {
   onFatal(reason: 'unsupported' | 'missing'): void
   /** An unsupported store is read again (OpenClaw was upgraded or downgraded). */
   onRecovered?(): void
+  /** The pane read a run for NO_SESSION_MS while the store held no node for the key: it is not the Gateway's store. */
+  onSessionMissing?(): void
+  /** The key was found after `onSessionMissing`. */
+  onSessionFound?(): void
   pollMs?: number
 }
 
@@ -72,6 +91,11 @@ export class OpenclawLive {
   private gatewayLost = false
   /** The last bind pass that read the pane: when, how many store changes the reader had seen, and whether it was quiet. */
   private paneSeen: { at: number; changes: number; quiet: boolean } | null = null
+  /** When the passes that read a run with no node for the key began, and whether `onSessionMissing` was said. */
+  private runWithoutKey: number | null = null
+  private sessionMissing = false
+  /** The store cannot be read here or in this version (`onFatal`) and is not read again yet: no word on the key. */
+  private unreadable = false
 
   constructor(private readonly deps: OpenclawLiveDeps) {
     this.reader = new OpenclawReader({
@@ -92,8 +116,9 @@ export class OpenclawLive {
         this.emit(this.normalizer.push(events))
       },
       onStatus: (status) => this.status(status),
-      onFatal: (reason) => deps.onFatal(reason),
-      onRecovered: () => deps.onRecovered?.(),
+      // Its own state replaces the hold on the agent (core/transcripts/attach.ts): read again, the key is counted anew.
+      onFatal: (reason) => { this.unreadable = true; this.sessionMissing = false; deps.onFatal(reason) },
+      onRecovered: () => { this.unreadable = false; deps.onRecovered?.() },
       onAgentHeader: (record) => deps.onHeader?.(record),
       busy: () => this.normalizer.turnOpen,
     })
@@ -111,9 +136,11 @@ export class OpenclawLive {
     this.reset()
   }
 
-  /** A bind pass's reading of the pane: the backstop for a run the status still calls `running` after a Gateway drop. */
+  /** A bind pass's reading of the pane: how long a run has gone with no node for the key, and the backstop for a run
+   *  the status still calls `running` after a Gateway drop. */
   paneRead(reading: OpenclawPaneReading): void {
     this.paneSeen = { at: Date.now(), changes: this.reader.changes, quiet: reading.ready && !reading.gatewayLost }
+    this.keySought(reading.running)
     if (!this.normalizer.turnOpen) { this.readyPasses = 0; return }
     if (reading.gatewayLost) this.gatewayLost = true
     if (!reading.ready) { this.readyPasses = 0; return }
@@ -125,6 +152,22 @@ export class OpenclawLive {
     const seen = this.paneSeen
     return !seen || !seen.quiet || this.normalizer.turnOpen || seen.changes !== this.reader.changes
       || Date.now() - seen.at >= QUIET_PANE_MS
+  }
+
+  /** Times the passes that read a run while the store has no node for the key; a pass with no run, or a found key,
+   *  starts the count again. */
+  private keySought(running: boolean): void {
+    if (this.reader.keyFound) {
+      this.runWithoutKey = null
+      if (this.sessionMissing) { this.sessionMissing = false; this.deps.onSessionFound?.() }
+      return
+    }
+    // A store that cannot be read says nothing of the key: what it says instead is its own state (`onFatal`).
+    if (!running || this.unreadable) { this.runWithoutKey = null; return }
+    this.runWithoutKey ??= Date.now()
+    if (this.sessionMissing || Date.now() - this.runWithoutKey < NO_SESSION_MS - PASS_JITTER_MS) return
+    this.sessionMissing = true
+    this.deps.onSessionMissing?.()
   }
 
   private status(status: string | null): void {

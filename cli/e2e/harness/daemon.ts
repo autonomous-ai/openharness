@@ -22,6 +22,9 @@ import { artifactLog, artifactsEnabled } from './artifacts.js'
 import { daemonEnvironment } from '../../src/testing/daemonEnvironment.js'
 import { GH_FORBIDDEN_STUB } from '../../src/testing/ghStub.js'
 import { readAdoptedHomes } from '../../src/engines/kit/homeAdoption.js'
+import { ownProcessGroup } from '../../src/lib/windows/noWindow.js'
+import { alive } from '../../src/testing/spawnedRuns.js'
+import { forgetGroup, forgetTmux, leaderGone, watchGroup, watchTmux } from './reaper.js'
 
 const exec = promisify(execFile)
 const here = dirname(fileURLToPath(import.meta.url))
@@ -220,6 +223,8 @@ export const fakeEngineShim = (name: 'claude' | 'codex', config: EngineConfig & 
 export class IsolatedDaemon {
   child: ChildProcess | null = null
   private output = ''
+  /** Every start not yet closed: each master leads a process group, numbered by its pid (`start`). */
+  private readonly groups = new Set<ChildProcess>()
 
   private constructor(
     readonly root: string,
@@ -234,6 +239,8 @@ export class IsolatedDaemon {
   static async create(options: DaemonOptions = {}): Promise<IsolatedDaemon> {
     const beside = options.beside
     const tmux = beside?.tmux ?? await isolatedTmux()
+    // Stopped by the worker's reaper should this worker go before `close` (reaper.ts).
+    if (!beside) watchTmux(tmux.socket, tmux.root)
     const root = tmux.root
     const port = options.port ?? await freePort()
     // What a daemon beside another keeps for itself; everything else is the computer's, and shared. Short
@@ -275,6 +282,9 @@ export class IsolatedDaemon {
       // A login shell in a pane must not load anyone's zsh configuration.
       ZDOTDIR: dirs.home,
       PORT: String(port),
+      // A bridge port of its own: on 51793, the developer's daemon's, one daemon under test left running took the
+      // port from it, and another asked `lsof` every 5.5 s which account held it (2026-11-11).
+      HARNESS_CONNECTIONS_PORT: '0',
       ADAPTER_DATA_DIR: dirs.data,
       ADAPTER_RUNTIME_DIR: dirs.runtime,
       ADAPTER_COMPUTER_ID: 'e2e-computer-0000-0000-000000000001',
@@ -364,10 +374,17 @@ export class IsolatedDaemon {
     // A test's own bundle (an old release), the run's bundle (`E2E_BUNDLE`, see bundle.ts), or the sources.
     const bundle = this.options.scriptPath ?? process.env.E2E_BUNDLE_PATH
     const script = bundle ? [bundle] : ['--import', 'tsx', 'src/cli.ts']
+    // A process group of its own, which the core and the services join: one signal reaches all of them, whether or
+    // not the master is still there, and the worker's reaper (reaper.ts) ends it should the worker go without closing it.
     const child = spawn(process.execPath, this.options.launch ?? [...heap, ...script, ...entry], {
-      cwd: CLI_ROOT, env: this.env, stdio: ['ignore', 'pipe', 'pipe'],
+      cwd: CLI_ROOT, env: this.env, stdio: ['ignore', 'pipe', 'pipe'], ...ownProcessGroup(),
     })
     this.child = child
+    if (child.pid) {
+      this.groups.add(child)
+      watchGroup(child.pid)
+      child.once('exit', () => leaderGone(child.pid!))
+    }
     // The whole log, as files, for a failing test's CI artifacts (E2E_ARTIFACTS_DIR, artifacts.ts).
     const logName = `daemon-${this.port}.log`
     artifactLog(logName, `---- ${new Date().toISOString()} start (pid ${child.pid}, ${script.at(-1)} ${entry.join(' ')}, data ${this.dataDir})\n`)
@@ -400,15 +417,26 @@ export class IsolatedDaemon {
     })()])
   }
 
-  /** SIGTERM, then SIGKILL after `ms`. Resolves when the process is gone. */
+  /** SIGTERM, then SIGKILL to its whole process group after `ms`. Resolves when the process is gone. */
   async stop(ms = 15_000): Promise<void> {
     const child = this.child
     if (!child) return
     const exited = new Promise<void>((done) => child.once('exit', () => done()))
     child.kill('SIGTERM')
-    const timer = setTimeout(() => child.kill('SIGKILL'), ms)
+    const timer = setTimeout(() => IsolatedDaemon.killGroup(child), ms)
     await exited
     clearTimeout(timer)
+  }
+
+  /**
+   * SIGKILL what is left of [leader]'s process group. While a group has members no new process gets its number; once
+   * the leader has exited, a process with its pid is a stranger leading a group of its own, and ours is empty.
+   */
+  static killGroup(leader: ChildProcess): void {
+    const pgid = leader.pid
+    const exited = leader.exitCode !== null || leader.signalCode !== null
+    if (!pgid || (exited && alive(pgid))) return
+    try { process.kill(-pgid, 'SIGKILL') } catch { /* empty */ }
   }
 
   /** The way a crash ends it: no shutdown path runs. */
@@ -472,7 +500,6 @@ export class IsolatedDaemon {
   }
 
   async close(): Promise<void> {
-    const core = this.options.noMaster ? null : this.corePid()
     // While the panes are still there: a daemon that stops can take its agents' panes with it.
     if (artifactsEnabled()) await this.keepPanes()
     await this.stop().catch(() => {})
@@ -482,18 +509,19 @@ export class IsolatedDaemon {
     // A failed test prints it after this close has removed the root.
     this.closedHookLog = this.hookLog()
     artifactLog(`daemon-${this.port}-engine-hooks.log`, this.closedHookLog)
-    // A core whose master died during the test must not outlive it: 20 such cores, left by a run
-    // whose masters crashed, spun on their closed output pipes for the rest of a parallel suite. Only
-    // this test's core is killed — its pid, still running this daemon's entry, orphaned or ours.
-    if (core && IsolatedDaemon.alive(core)) {
-      const { stdout } = await exec('ps', ['-o', 'ppid=,command=', '-p', String(core)]).catch(() => ({ stdout: '' }))
-      const [ppid, ...command] = stdout.trim().split(/\s+/)
-      if (command.join(' ').includes('__run') && (ppid === '1' || Number(ppid) === this.pid)) {
-        try { process.kill(core, 'SIGKILL') } catch { /* gone */ }
-      }
+    // A core or service whose master died during the test must not outlive it: 20 such cores, left by a
+    // run whose masters crashed, spun on their closed output pipes for the rest of a parallel suite. They
+    // are in their master's process group, every start's.
+    for (const leader of this.groups) {
+      IsolatedDaemon.killGroup(leader)
+      forgetGroup(leader.pid!)
     }
+    this.groups.clear()
     // A daemon beside another shares its tmux server: that one closes it.
-    if (!this.options.beside) await this.tmux.close()
+    if (!this.options.beside) {
+      await this.tmux.close()
+      forgetTmux(this.tmux.socket)
+    }
     if (escaped) throw escaped
   }
 }

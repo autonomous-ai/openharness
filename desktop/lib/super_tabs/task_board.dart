@@ -312,7 +312,8 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard>
     // A read that failed while the cards from the last one show: said beside them, not left as if they were current.
     final stale = _issues != null ? _error : null;
     return ColoredBox(
-      color: DesktopChrome.surface,
+      // The Swarm's one ground, beside the chat or in its place (design system, One surface).
+      color: grid.AppPalette.swarmField,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [

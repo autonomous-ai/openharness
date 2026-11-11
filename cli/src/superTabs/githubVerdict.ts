@@ -46,7 +46,8 @@ export function verdictAsked(payload: Record<string, unknown>): Verdict | null {
   return { repository, number: Number(number), verdict, sha, text }
 }
 
-const hhmm = (at: number): string => {
+/** A comment's time as lampOS wrote it, in this computer's own zone. */
+export const hhmm = (at: number): string => {
   const date = new Date(at)
   return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
 }
@@ -110,16 +111,25 @@ export async function postVerdict(deps: VerdictDeps, reader: { name: string; rep
     if (made.status !== 201) throw refused(made.status)
     comment = object(made.body)
   }
+  const url = await recordOwn(deps.record, repository, comment, 'Posted')
+  return { url, head, posted }
+}
+
+/**
+ * Records [comment] as the calling agent's and gives its address, or says what was [done] on GitHub and why it is not
+ * recorded: a verdict's comment, and a claim's (githubClaim.ts).
+ */
+export async function recordOwn(record: VerdictDeps['record'], repository: string, comment: Record<string, unknown>, done: 'Posted' | 'Taken'): Promise<string> {
   const url = String(comment.html_url ?? '')
-  try { await deps.record(repository, String(comment.id)) } catch (error) {
+  try { await record(repository, String(comment.id)) } catch (error) {
     const said = error instanceof Error ? error.message : 'the server did not answer.'
     // What the server refuses for good (another agent's comment, a repository of no project) the same command would be
     // refused again: said as the server said it. A busy or unreachable server is worth the command again.
     if (error instanceof SuperTabHostError && error.status >= 400 && error.status < 500 && error.status !== 429) {
-      throw new SuperTabHostError('NOT_RECORDED', `Posted (${url}), but it is not recorded as yours: ${said} (${error.code})`, error.status)
+      throw new SuperTabHostError('NOT_RECORDED', `${done} (${url}), but it is not recorded as yours: ${said} (${error.code})`, error.status)
     }
-    throw new SuperTabHostError('NOT_RECORDED', `Posted (${url}), but Harness could not record it as yours: ${said} `
+    throw new SuperTabHostError('NOT_RECORDED', `${done} (${url}), but Harness could not record it as yours: ${said} `
       + 'Run the same command again: it will not post twice.', 503)
   }
-  return { url, head, posted }
+  return url
 }

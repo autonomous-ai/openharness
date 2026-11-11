@@ -19,6 +19,7 @@ import { settleHiddenScreen } from './startScreen.js'
 import { prepareSwarmStart } from './projectFolder.js'
 import { createSwarmCloneTrustRepair, swarmCloneRoots } from './cloneTrust.js'
 import { git, sweepOne, WorktreeKept } from '../lib/worktreeSweep.js'
+import { inRepositoryTurn } from '../lib/gitProject.js'
 import { projectsRoot } from '../lib/projectFolder.js'
 import { agentFolderEmpty, removableAgentFolder } from './agentFolder.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
@@ -594,7 +595,9 @@ export class ContributedMachines {
         // Not yet listed by the grid (a start or a share still registering): sent as starting, which the panel shows,
         // rather than left out until the grid lists it.
         const marked = (m: LocalModelReading): LocalModelReading => !live || live.has(m.model) ? m : { ...m, starting: true }
-        const fleet = typeof row.localGrid === 'string' ? await local.request('grid_fleet_models_list', {}, 20_000).catch(() => ({})) : null
+        // Other apps' models as the last scan a person asked for found them (`scan: false`, services/models.ts): what
+        // this machine serves there was started through such an ask, which scanned.
+        const fleet = typeof row.localGrid === 'string' ? await local.request('grid_fleet_models_list', { scan: false }, 20_000).catch(() => ({})) : null
         const refusedModels = typeof row.localGrid === 'string' ? refusedOn(fleet, row.localGrid) : []
         const localModels = typeof row.localGrid === 'string' ? [
           ...servedOn(fleet, row.localGrid).map(marked),
@@ -1251,7 +1254,7 @@ export class ContributedMachines {
       if (addedAgain(await read())) return
       const candidate = candidates.find(c => c.path === target)
       // git forgets the worktree in its repository too; a folder it refuses (a submodule, a lock) is deleted as a folder.
-      if (candidate) await git(candidate.source, ['worktree', 'remove', '--force', target]).catch(() => null)
+      if (candidate) await inRepositoryTurn(candidate.source, () => git(candidate.source, ['worktree', 'remove', '--force', target])).catch(() => null)
       await rm(target, { recursive: true, force: true })
     }
     // Diego 10-29: a folder kept for a live session was confirmed cleaned anyway and its records dropped, so nothing ever

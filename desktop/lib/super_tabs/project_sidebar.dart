@@ -308,33 +308,31 @@ class ProjectSidebar extends StatelessWidget {
       for (final start in _starts)
         if (start.project) start,
     ];
+    final channels = _channels(snapshot, reading);
+    // An empty list shows nothing, or only the action that fills it (design system, Swarm elements, rule 7): Projects with
+    // none is its heading and its +, and with no + to offer, nothing.
+    final projects =
+        channels.isNotEmpty || projectStarts.isNotEmpty || controller.canWrite;
     return [
       ?switcher,
       const SizedBox(height: grid.AppDesktop.groupGap),
       ..._myAgents(snapshot, reading),
-      SuperTabQuietHeading(
-        'Projects',
-        key: const ValueKey('project-sidebar-projects'),
-        collapsed: !controller.projectsGroupOpen,
-        onTap: controller.toggleProjectsGroup,
-        onAdd: controller.canWrite ? onNewProject : null,
-        addTooltip: 'New project',
-        addKey: const ValueKey('project-sidebar-projects-add'),
-      ),
-      if (controller.projectsGroupOpen) ...[
-        for (final start in projectStarts) _startRow(start),
-        if (snapshot != null &&
-            projectStarts.isEmpty &&
-            superTabListedProjects(
-              controller,
-              app: app,
-              paneCovered: _paneCovered,
-            ).isEmpty)
-          _noProjects()
-        else
-          for (final (_, channel) in _channels(snapshot, reading)) channel,
+      if (projects) ...[
+        SuperTabQuietHeading(
+          'Projects',
+          key: const ValueKey('project-sidebar-projects'),
+          collapsed: !controller.projectsGroupOpen,
+          onTap: controller.toggleProjectsGroup,
+          onAdd: controller.canWrite ? onNewProject : null,
+          addTooltip: 'New project',
+          addKey: const ValueKey('project-sidebar-projects-add'),
+        ),
+        if (controller.projectsGroupOpen) ...[
+          for (final start in projectStarts) _startRow(start),
+          for (final (_, channel) in channels) channel,
+        ],
+        const SizedBox(height: grid.AppDesktop.groupGap),
       ],
-      const SizedBox(height: grid.AppDesktop.groupGap),
       ..._yourMachines(),
       ..._humans(snapshot),
     ];
@@ -561,12 +559,14 @@ class ProjectSidebar extends StatelessWidget {
       tooltip: chat == null && onOpenAgentTerminal != null
           ? 'Opens its terminal'
           : null,
-      // A message waits while its engine starts: it says so, before anything else it is doing.
-      detail:
-          SwarmAgentStates.offlineOf(agent) == null &&
-              (app?.engineStarting(agent.machineId, agent.harnessId) ?? false)
-          ? 'starting'
-          : agentStates?.of(agent) ?? SwarmAgentStates.offlineOf(agent),
+      // What it is doing, in a word or two (agent_state.dart rowOf): a message waits while its engine starts, so starting
+      // comes before anything else it is doing.
+      detail: SwarmAgentStates.rowOf(
+        agent,
+        states: agentStates,
+        app: app,
+        me: controller.accountId,
+      ),
       selected: _chatLit(chat),
       unread: chat != null && controller.unreadShown(chat),
       onTap: switch ((chat, onOpenAgentTerminal)) {
@@ -629,24 +629,6 @@ class ProjectSidebar extends StatelessWidget {
     failed: start.failed,
     compact: compact,
     onOpen: start.project ? onNewProject : onNewAgent,
-  );
-
-  /// Open Projects over a Swarm with none, in the names' column.
-  Widget _noProjects() => Padding(
-    key: const ValueKey('super-projects-empty'),
-    padding: EdgeInsets.fromLTRB(
-      SuperTabSectionHeading.indentFor(0) + _iconColumn,
-      SwarmType.sidebarRowPadding(compact: compact),
-      grid.AppDesktop.controlGap,
-      SwarmType.sidebarRowPadding(compact: compact),
-    ),
-    child: Text(
-      'No projects yet.',
-      style: SwarmType.sidebar(
-        compact: compact,
-        color: grid.SidebarInk.inkMuted,
-      ),
-    ),
   );
 
   /// Every project with its workgroups, by name from A to Z. The round dial

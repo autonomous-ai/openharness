@@ -7,7 +7,7 @@ import { afterAll, afterEach, beforeAll, expect, it, onTestFailed } from 'vitest
 import { readLeanBundle } from '../src/harnessd/leanBundle.js'
 import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
-import { withLean } from './harness/release.js'
+import { buildWithLean } from './harness/release.js'
 
 let scratch = '', bundle = ''
 let daemon: IsolatedDaemon | undefined, client: LocalClient | undefined
@@ -28,9 +28,8 @@ it.each([['missing', 1], ['stalled', 1], ['missing', 2], ['stalled', 2]] as cons
     expect(chunks).toHaveLength(1)
     if (mode === 'missing') delete files[chunks[0]!]
     else files[chunks[0]!] = "console.error('[fixture] OpenCode reader stalled'); await new Promise(() => {});\n"
-    const script = join(scratch, `${mode}-${major}`, 'cli.js'); mkdirSync(dirname(script), { recursive: true })
-    writeFileSync(script, withLean(readFileSync(bundle, 'utf8'), files), { mode: 0o755 })
-    const d = daemon = await IsolatedDaemon.create({ scriptPath: script, env: { HARNESS_CONNECTIONS_PORT: '0' } })
+    const script = buildWithLean(join(scratch, `${mode}-${major}`), bundle, files)
+    const d = daemon = await IsolatedDaemon.create({ scriptPath: script })
     onTestFailed(() => console.log(d.log()))
     const binary = join(d.root, 'bin', 'opencode'), launches = join(d.root, 'launches.jsonl')
     const apiCalls = join(d.root, 'api.jsonl'), nativeModel = join(d.root, 'model.json')

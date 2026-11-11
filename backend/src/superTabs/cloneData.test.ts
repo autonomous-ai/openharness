@@ -23,7 +23,7 @@ function sharesNothing(source: unknown, copy: unknown, path = '(root)'): void {
   for (const [key, item] of Object.entries(source)) sharesNothing(item, (copy as Record<string, unknown>)[key], `${path}.${key}`)
 }
 
-/** The bench's default Swarm size (integration/bench/README.md): 200 groups and 20 workers, each working on one. */
+/** A large Swarm: 200 groups and 20 workers, each working on one. */
 function benchSized(): SuperTabState {
   const s = swarm()
   s.add('lead-harness', 'lead', true)

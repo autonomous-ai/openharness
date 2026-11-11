@@ -1,8 +1,9 @@
 /**
  * Delivery of a promoted PTY payload (six files in one zip): decide whether one is wanted, download and
- * verify it, unpack it beside the live install and prove it runs: each binary says its version, and the host serves
- * one pane (`serveCanary`). Nothing here calls a Windows API, so it is tested on every OS; only the default unzip tool
- * and the canary pane's command differ by platform.
+ * verify it, unpack it beside the live install, check that every file is signed (./ptySignatures.ts) and prove it runs:
+ * each binary says its version, and the host serves one pane (`serveCanary`). Nothing here calls a Windows API, so it
+ * is tested on every OS; only the default unzip tool, the signature check (PowerShell, Windows only) and the canary
+ * pane's command differ by platform.
  */
 import { execFile, spawn, type ChildProcess } from 'child_process'
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'fs'
@@ -13,6 +14,7 @@ import { hostInstanceName } from '../ptyHost/instance.js'
 import { VERSION_COMMAND, readInstanceDiscovery } from '../ptyHost/launch.js'
 import { PTY_PROTOCOL, SHUTDOWN_PROTOCOL, SUPPORTED_PTY_PROTOCOLS } from '../ptyHost/protocol.js'
 import { windowsProcessRows } from './processTable.js'
+import { readSignatureProblems, unsignedAllowed } from './ptySignatures.js'
 import { scrubTerminalContext } from '../terminalEnvironment.js'
 import {
   DigestMismatchError, MANIFEST_LIMITS, downloadVerified, fetchWithin, isLocalDevBuild, semverGt,
@@ -155,6 +157,9 @@ export class PtyPayloadUnpackFailed extends Error {
 export interface PreparePtyDeps {
   download: (ref: FileRef) => Promise<Buffer>
   unzip: (zip: Buffer, dest: string) => Promise<void>
+  /** What is wrong with the signatures of [files] in [dir], one line each; none when every one is right. Throws when
+   *  they could not be read (transient). */
+  signatures: (dir: string, files: readonly string[]) => Promise<string[]>
   /** Run `<binary> version` and return its one parsed JSON line. */
   probe: (binary: string) => Promise<unknown>
   /** Prove the staged host serves (`serveCanary`); throws why not. */
@@ -330,8 +335,16 @@ export async function serveCanary(binary: string, host: { protocol: number; vers
   }
 }
 
+/** Windows reads the signatures; elsewhere (the tests) there are none to read. HARNESS_ALLOW_UNSIGNED=1 is a developer's
+ *  own build on a test computer. */
+async function payloadSignatures(dir: string, files: readonly string[]): Promise<string[]> {
+  if (process.platform !== 'win32' || unsignedAllowed()) return []
+  return readSignatureProblems(dir, files)
+}
+
 const DEFAULT_DEPS: PreparePtyDeps = {
-  download: (ref) => downloadVerified(ref), unzip: unzipWithTool, probe: probeVersionLine, serve: (binary, host) => serveCanary(binary, host),
+  download: (ref) => downloadVerified(ref), unzip: unzipWithTool, signatures: payloadSignatures, probe: probeVersionLine,
+  serve: (binary, host) => serveCanary(binary, host),
 }
 
 /** A probe that never answers must not stall the updater, whatever the injected probe does. */
@@ -394,6 +407,9 @@ export async function preparePtyPayload(entry: PtyEntry, runtimeDir: string, dep
     if (found.length !== want.length || found.some((f, i) => f !== want[i])) {
       throw new PtyPayloadRefused(`payload holds [${found.join(', ')}], expected [${want.join(', ')}]`)
     }
+    // Before any of its files runs: an unsigned host is blocked by Smart App Control, and with it Harness's own start.
+    const unsigned = await d.signatures(staging, PTY_PAYLOAD_FILES)
+    if (unsigned.length) throw new PtyPayloadRefused(`not signed as Harness releases are: ${unsigned.join('; ')}`)
     const host = await canary(d.probe, join(staging, 'harness-pty.exe'))
     if (!host || typeof host !== 'object') throw new PtyPayloadRefused('harness-pty version is not a JSON object')
     const h = host as { version?: unknown; protocol?: unknown; features?: unknown }

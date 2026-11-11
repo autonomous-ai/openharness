@@ -202,7 +202,7 @@ export function createAgentRestarter({
     }
     if (!session.processIdentity) return { ok: false, error: 'NO_ACTIVE_PROCESS' }
 
-    // Fill a missing Swarm role before native inspection and launch preparation.
+    // An attached agent's Swarm role, before native inspection and launch preparation (superTabs/inCore/adoption.ts).
     if (adoptSwarmSkill) {
       const adopted = await adoptSwarmSkill(session, current)
       if (!adopted || !current()) return changed

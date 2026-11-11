@@ -103,6 +103,23 @@ describe('a deadline that counts only running time', () => {
     expect(expire).toHaveBeenCalledTimes(1)
   })
 
+  // A hold that began as the child started and ended just past the deadline: its one timer fired barely late, and the
+  // child's answer, sitting unread, was thrown away (an `agent_resume` held for good, e2e/stall.e2e.ts: 5181 ms on 5000).
+  it('sees a hold that ends just past the deadline, and gives the window again from then', () => {
+    vi.useFakeTimers()
+    const expire = vi.fn()
+    let now = 0
+    patientDeadline(1_000, expire, () => now)
+    now = 1_000 + HELD_MS - 1
+    vi.advanceTimersByTime(1_000)
+    vi.advanceTimersByTime(1)
+    expect(expire).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(248)
+    expect(expire).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(2)
+    expect(expire).toHaveBeenCalledTimes(1)
+  })
+
   it('reads the monotonic clock by default', () => {
     vi.useFakeTimers()
     const expire = vi.fn()

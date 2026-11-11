@@ -29,6 +29,17 @@ const MAX_PIDS = 4096
 const utf8 = new TextDecoder('utf-8', { fatal: true })
 const prepared = new Map<string, Promise<string | null>>()
 const retryAfter = new Map<string, number>()
+/**
+ * Since when each helper's queries have timed out, each timeout within TIMING_OUT_MS of the last, with no answer between. macOS checks a new executable's signature at
+ * its first exec: a fresh copy of this helper took 400 to 1,300 ms to answer, and 4 to 45 ms from then on (2026-11-11).
+ * Killed at a query's 500 ms deadline, that first launch turned the helper off for 60 s, and process lookups fell back to
+ * `lsof`, some 20% of a core with one agent prompted every 5 s. A killed launch still moves the check on: the next answered
+ * in 40 to 450 ms. So a query that times out is answered by `lsof` alone, and the helper is turned off only once its
+ * queries have timed out for this long; queries started together time out together and count once. Any other failure
+ * turns it off at once, as before.
+ */
+const timingOutSince = new Map<string, { since: number; last: number }>()
+const TIMING_OUT_MS = 2_000
 let artifactSource: string | undefined
 let artifactValue: ProcessImageArtifact | null = null
 
@@ -172,6 +183,7 @@ export async function bundledProcessImageHelper(options: { retryUnavailable?: bo
  * preparation only; no process result is cached or made available by a spawn failure. */
 export function invalidateProcessImageHelper(key: string, delay = 0): void {
   prepared.delete(key)
+  timingOutSince.delete(key)
   if (delay) retryAfter.set(key, performance.now() + delay)
   else retryAfter.delete(key)
 }
@@ -195,13 +207,26 @@ export async function nativeProcessImages(
     if (!helper || remaining <= 0) return empty
     return await new Promise(resolve => {
       probeExecFile(execFile)(helper.path, ['--paths', ...new Set(pids).values()].map(String),
-        { timeout: remaining, maxBuffer: 4 * 1024 * 1024, env: psEnv() }, (error, stdout) => {
+        { timeout: remaining, maxBuffer: 4 * 1024 * 1024, env: psEnv() }, (error, stdout, _stderr, outcome) => {
           const result = parseNativeProcessImages(stdout ?? '', new Set(pids))
           if (error && !result.images.size) {
-            // A missing/blocked helper must not become a failed spawn every
-            // reconcile. Retry preparation later; ordinary discovery continues.
-            invalidateProcessImageHelper(helper.key, 60_000)
-          }
+            const now = performance.now()
+            // Killed at its deadline: the worker says so; in this thread, Node's kill carries no code (maxBuffer's does).
+            const timedOut = outcome ? outcome.timedOut : error.killed === true && error.code == null
+            const before = timingOutSince.get(helper.key)
+            // A timeout long after the last is a new window, not the old one going on.
+            const since = before && now - before.last < TIMING_OUT_MS ? before.since : now
+            if (timedOut && now - since < TIMING_OUT_MS) {
+              if (since === now) console.warn(`[process-images] the helper did not answer in ${remaining} ms; lsof answers until it does`)
+              timingOutSince.set(helper.key, { since, last: now })
+            } else {
+              // A missing/blocked helper must not become a failed spawn every
+              // reconcile. Retry preparation later; ordinary discovery continues.
+              const why = timedOut ? `no answer for ${TIMING_OUT_MS} ms` : String(error.code ?? error.signal ?? 'no answer')
+              console.warn(`[process-images] the helper failed (${why}); lsof reads process images for 60 s`)
+              invalidateProcessImageHelper(helper.key, 60_000)
+            }
+          } else timingOutSince.delete(helper.key)
           resolve(result)
         })
     })

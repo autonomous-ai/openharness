@@ -79,13 +79,17 @@ SUBCOMPONENTS = {"devices/harness-pro/": "pro"}
 # test_ci_plan.CrossReadTests scans the components' sources and fails on an undeclared read.
 # The desktop VM tests run in a sparse checkout of exactly these inputs (ci-source-inputs.py).
 DEPENDS = {
-    # attachments.limits.test.ts compares the attachment size limits each client declares.
+    # attachments.limits.test.ts compares the attachment size limits each client declares; cliVerbs.test-support.ts
+    # reads the CLI's super-tab usage line.
     "backend": ("cli/src/lib/productHealthContract.ts", "cli/src/lib/productUsageContract.ts",
-                "cli/src/lib/superTabAttachmentProxy.ts", "cli/src/superTabs/attachments.ts", "daemons/frames.json",
+                "cli/src/lib/superTabAttachmentProxy.ts", "cli/src/superTabs/attachments.ts", "cli/src/superTabs/command.ts",
+                "daemons/frames.json",
                 "desktop/lib/measurement/", "desktop/lib/super_tabs/attachment_upload.dart", "mobile/lib/measurement/",
                 "mobile/integration_test/push_e2e/reply_push.apns", "mobile/lib/swarm/swarm_outgoing_files.dart",
                 "provider/reference-provider/", "tests/fixtures/"),
-    "cli": ("backend/src/lib/deviceAck.vectors.json", "backend/src/lib/deviceAckCore.ts",
+    # CLAUDE.md: agentInstructions.spec.ts expects '../../../CLAUDE.md' in a temporary project, and a relative path always
+    # counts as a read; the repository's own CLAUDE.md is a one-line pointer that rarely changes.
+    "cli": ("CLAUDE.md", "backend/src/lib/deviceAck.vectors.json", "backend/src/lib/deviceAckCore.ts",
             "backend/src/superTabs/processNotes.ts", "desktop/",
             "cli/e2e/harness/", "devices/harness-device/firmware/test/vectors/", "docs/contracts/", "mobile/", "pty/", "tui/"),
     "companions": ("cli/", "docs/research/2026-09-30-memory-batch-extraction-cases.json",
@@ -151,16 +155,20 @@ NOT_READS = {
     "backend/src/superTabs/refusalLog.test.ts": ("test data: client versions ('cli/0.5.34', 'desktop/1.3.57')",
                                                  {"cli/", "desktop/"}),
     "cli/src/engines/__fixtures__/other-runtime.golden.json": ("test data: a model name", {"provider/"}),
+    "cli/src/lib/agentInstructions.spec.ts": ("test data: instruction files in a temporary project", {"AGENTS.md", "docs/"}),
     "cli/src/lib/handoffChangedFiles.spec.ts": ("test data: changed file names", {"docs/"}),
     "cli/src/lib/opencodeOneShot.spec.ts": ("test data: a model name", {"provider/"}),
     "cli/src/lib/runtimeProfile.spec.ts": ("test data: a model name", {"provider/"}),
     "cli/src/lib/transcriptReader.spec.ts": ("test data: a tool result's text", {"devices/"}),
+    "cli/src/superTabs/githubTrain.spec.ts": ("test data: a pull request's changed files", {"docs/"}),
     "companions/src/application/modelProfile.spec.ts": ("test data: a model name", {"provider/"}),
     "companions/src/memory/lessons/signals.spec.ts": ("test data: a test id", {"tests/"}),
     "desktop/test/p2p/mobile_parity_test.dart": ("reads ../mobile/<file> only for the phone files desktop-tests' sparse "
                                                   "checkout holds, each declared in ci.SOURCE_INPUTS", {"mobile/"}),
     "desktop/test/community_publish_test.dart": ("test data: a file in a temporary folder", {"docs/"}),
     "desktop/test/runtime_model_name_test.dart": ("test data: a model name", {"provider/"}),
+    "desktop/test/swarm_instructions_shared_test.dart": ("test data: a project's instruction file names",
+                                                         {"AGENTS.md", "CLAUDE.md"}),
     "desktop/test/super_tab_read_fixtures/first_load.json": ("test data: a task's owned paths", {"docs/design/"}),
     "mobile/lib/demo/sample_scripts.dart": ("demo transcript text", {"tests/"}),
     "tui/src/runtime_model.rs": ("test data: a model name", {"provider/"}),

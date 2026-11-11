@@ -1459,6 +1459,24 @@ describe('external adoption crash boundaries', () => {
     }
   })
 
+  it('an external resume that continues commits its first task with the dispatch', async () => {
+    for (const firstTask of ['continue', undefined]) {
+      const h = harness([imported('admitted')], { alivePanes: ['%3'] })
+      dispatch(h)
+      const begin = vi.spyOn(h.deps.registry, 'beginExternalDispatch')
+      const build = h.deps.buildLaunch
+      h.deps.buildLaunch = async (entry, options) => {
+        const launch = await build(entry, options) as RestoreLaunch
+        return firstTask ? { ...launch, firstTask } : launch
+      }
+      h.deps.waitingPane = async () => true
+      h.probes.set('%3', [identity(12)])
+      expect((await restoreAgents(h.deps)).restored).toEqual(['agent-a'])
+      await settled(h, 1, 1)
+      expect(begin).toHaveBeenCalledWith('agent-a', firstTask)
+    }
+  })
+
   it('observes a dispatch that may have run before the crash instead of replaying over it', async () => {
     for (const known of [false, 'unknown'] as const) {
       const h = harness([imported('admitted', true)], { alivePanes: ['%3'] })
