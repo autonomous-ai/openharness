@@ -33,8 +33,10 @@ const goodProbe = (host: object = {}, serial: object = {}) => async (bin: string
   bin.endsWith('harness-pty.exe')
     ? { version: '0.11.0', protocol: 2, features: ['seed'], ...host }
     : { version: '0.11.0', ...serial }
+// These zips hold text, not signed programs: every case passes the signature check unless it says otherwise.
+const signed = async () => [] as string[]
 const run = (deps: Parameters<typeof preparePtyPayload>[2], files: readonly string[] = PTY_PAYLOAD_FILES) =>
-  preparePtyPayload(entry, tmp + '/rt', { download: async () => zipOf(files), probe: goodProbe(), serve: async () => {}, ...deps })
+  preparePtyPayload(entry, tmp + '/rt', { download: async () => zipOf(files), signatures: signed, probe: goodProbe(), serve: async () => {}, ...deps })
 const leftovers = () => (existsSync(join(tmp, 'rt', 'pty')) ? readdirSync(join(tmp, 'rt', 'pty')) : [])
 
 describe('ptyManifestUrl', () => {
@@ -81,6 +83,34 @@ describe('preparePtyPayload', () => {
   it('a missing or extra file is refused', async () => {
     await expect(run({}, PTY_PAYLOAD_FILES.slice(1))).rejects.toThrow(/expected/)
     await expect(run({}, [...PTY_PAYLOAD_FILES, 'extra.dll'])).rejects.toThrow(/expected/)
+    expect(leftovers()).toEqual([])
+  })
+  // 2026-11-09: an unsigned host reached production, and Smart App Control then blocked Harness's own start.
+  it('an unsigned payload is refused before any of its files runs, and leaves nothing', async () => {
+    const asked: Array<{ dir: string; files: string[]; present: string[] }> = []
+    let ran = false
+    const err = await run({
+      signatures: async (dir, files) => {
+        asked.push({ dir, files: [...files], present: readdirSync(dir).sort() })
+        return ['harness-launch.exe is NotSigned', "conpty.dll is signed by 'Someone', not 'Microsoft Corporation'"]
+      },
+      probe: async () => { ran = true; return {} },
+      serve: async () => { ran = true },
+    }).catch((e) => e)
+    expect(err).toBeInstanceOf(PtyPayloadRefused)
+    expect((err as PtyPayloadRefused).reason).toBe("not signed as Harness releases are: harness-launch.exe is NotSigned; conpty.dll is signed by 'Someone', not 'Microsoft Corporation'")
+    expect(asked).toHaveLength(1)
+    expect(asked[0]!.dir.startsWith(join(tmp, 'rt', 'pty', '.staging-'))).toBe(true)
+    expect(asked[0]!.files).toEqual([...PTY_PAYLOAD_FILES])
+    expect(asked[0]!.present).toEqual([...PTY_PAYLOAD_FILES].sort())
+    expect(ran).toBe(false)
+    expect(leftovers()).toEqual([])
+  })
+  it('signatures that cannot be read are no refusal: the next check asks again', async () => {
+    const boom = new Error("could not read the payload's signatures: powershell.exe not found")
+    const err = await run({ signatures: async () => { throw boom } }).catch((e) => e)
+    expect(err).toBe(boom)
+    expect(err).not.toBeInstanceOf(PtyPayloadRefused)
     expect(leftovers()).toEqual([])
   })
   it('a host that names another version is refused', async () => {
@@ -139,7 +169,7 @@ describe('preparePtyPayload failure kinds', () => {
     expect(err.reason).toBe('spawn unzip ENOENT')
     expect(err.zip).toBe(zip)
     expect(leftovers()).toEqual([])
-    const again = await preparePtyPayload(entry, tmp + '/rt', { download: async () => { downloads++; return zip }, probe: goodProbe(), serve: async () => {} }, err.zip)
+    const again = await preparePtyPayload(entry, tmp + '/rt', { download: async () => { downloads++; return zip }, signatures: signed, probe: goodProbe(), serve: async () => {} }, err.zip)
     expect(downloads).toBe(1)
     expect(readdirSync(again.staging).sort()).toEqual([...PTY_PAYLOAD_FILES].sort())
   })
