@@ -1,4 +1,5 @@
 import { chatlessAgents, giveAgentsChats } from './agentChats.js'
+import { archiveEmptyChats, paneChatId } from './paneChats.js'
 import { canReadProject } from './projects.js'
 import { timeCommand, timedPhase, type CommandPhases } from './commandTiming.js'
 import { refusalLogFields, type DeclaredClient } from './refusalLog.js'
@@ -22,7 +23,7 @@ import { githubRepository } from '../github/repository.js'
 import { commentAuthors, recordComment, sameRepository, type CommentKind } from './githubComments.js'
 import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
-import { DELETED_SWARM_COMMANDS, DELETION_COMMANDS, isPersonalSwarm, notThere } from './deletion.js'
+import { DELETED_SWARM_COMMANDS, DELETION_COMMANDS, isPersonalSwarm, notThere, PERSONAL_SWARM_OPERATION } from './deletion.js'
 import { forgetRemovedPanes } from './removedPanes.js'
 import { applyCommand, authorizeCommandAccess, LOOP_NOTICE_AT, mayResumeStart, operationSchema, postable, reserveHarnessSlot, worksInProjectChat, type Command, type CommandContext } from './commands.js'
 import { redactCredentials } from './credentials.js'
@@ -120,6 +121,11 @@ export type SwarmRow = Prisma.SuperTabGetPayload<{ select: typeof SWARM_ROW }>
 function requireParts(row: SwarmRow): SwarmRow {
   return row.format === 2 ? row : fail('NOT_FOUND', 'This Super Tab is unavailable.', 404)
 }
+
+/** How far a Personal Swarm's request walks its line of deleted ones (store.ts create): one per deletion, so a few. */
+const MAX_PERSONAL_LINE = 20
+/** A person's own Swarms read at a time when a Personal Swarm's request looks for their live one. */
+const OWNED_PAGE = 500
 
 /** What a command or read works on: the index row, the parts it loaded, and the state reassembled from them. */
 export interface Loaded { row: SwarmRow; parts: SwarmParts; state: SuperTabState }
@@ -592,6 +598,12 @@ export class SuperTabStore {
       if (delivery) groupIds.push(delivery.conversationId)
     }
     if (command.type === 'agent.remove') agentIds.push(command.agentId)
+    // A session's own chat, which an archive by hand may have put to sleep: joining it again opens it again (paneChats.ts).
+    const joining = command.type === 'agent.new' && command.local && command.harnessId ? state.people.find(p => p.id === personId) : undefined
+    if (joining && command.type === 'agent.new') {
+      const kept = state.agents.find(a => a.machineId === command.machineId && a.harnessId === command.harnessId)?.chatId
+      groupIds.push(...kept ? [kept] : [], paneChatId(joining, command.machineId, command.harnessId!))
+    }
     // These only ask about the agent. A coordinator's project chat, always loaded, answers them, and every group it was ever in is
     // what a read by agent gave: 1,668 on prod, growing with every task (Ken's profile, 2026-11-02, up to 1.66 s a read). Filtering
     // that read by dormant would not do: its index has no dormant, so it examines them all, and removals need them (design D8).
@@ -690,15 +702,37 @@ export class SuperTabStore {
   }
 
   async create(user: AuthUser, operationId: string, name: string, projectVisibility?: ProjectVisibility) {
-    const id = stableId('super-tab', user.autonomousEnv, user.sub, operationId)
+    const personal = operationId === PERSONAL_SWARM_OPERATION
     const requestHash = hash({ name, ...(projectVisibility ? { projectVisibility } : {}) })
+    const first = stableId('super-tab', user.autonomousEnv, user.sub, operationId)
     return transaction(this.db, async tx => {
-      const prior = await tx.superTabOperation.findUnique({ where: { id } })
-      if (prior) {
-        if (prior.requestHash !== requestHash) fail('OPERATION_REUSED', 'Use a new operation ID for a different request.')
-        return { id, revision: prior.revision }
+      // A request makes its Swarm once; asked again, it answers that one. A Personal Swarm deleted since (only the wipe of every
+      // Swarm before v4 deletes one, 2026-11) leaves its person none: its request makes the next in its line, named by the one
+      // before, so their computers name the same one (PSW-B review, 2026-11-11). Before, the request answered the deleted Swarm
+      // until its purge, and every read of it was refused. One point read per step: the line is one long per deletion.
+      let id = first
+      for (let step = 0; ; step++) {
+        const row = await tx.superTab.findUnique({ where: { id }, select: { deletedAt: true } })
+        if (personal && row?.deletedAt) {
+          if (step >= MAX_PERSONAL_LINE) {
+            logger.error('[super-tab] a person\'s Personal Swarms were deleted too often to make another', { steps: step })
+            fail('PERSONAL_SWARM_LINE', 'Your Personal Swarm could not be made again. Contact support.', 409)
+          }
+          id = stableId('super-tab', user.autonomousEnv, user.sub, operationId, id)
+          continue
+        }
+        // The first of its line purged, a later one may live: its person's own Swarms say so (the purge removes a deleted one's
+        // row and receipts after 7 days).
+        const found = !row && personal && step === 0 ? await this.livePersonal(tx, user) : undefined
+        if (found) id = found
+        const prior = await tx.superTabOperation.findUnique({ where: { id } })
+        if (prior && prior.requestHash !== requestHash) fail('OPERATION_REUSED', 'Use a new operation ID for a different request.')
+        // Its receipt is gone after 30 days (operations.ts); the Swarm it made answers it then.
+        if (prior || row || found) return { id, revision: prior?.revision ?? 0 }
+        break
       }
-      const state = createSuperTab(id, name, { id: user.sub, email: user.email }, user.autonomousEnv, projectVisibility)
+      const state = createSuperTab(id, name, { id: user.sub, email: user.email }, user.autonomousEnv, projectVisibility, !personal)
+      if (personal) state.personal = true
       nameFromAccount(state.people[0]!, await accountNameOf(tx, user.sub))
       // Born in parts: its state lives in the Swarm* parts, and `state` only fences older backends (schema.prisma).
       await tx.superTab.create({ data: { id, ownerId: user.sub, autonomousEnv: user.autonomousEnv, ...indexesOf(state), format: 2, state: { version: 2 } } })
@@ -706,6 +740,21 @@ export class SuperTabStore {
       await tx.superTabOperation.create({ data: { id, tabId: id, actorKey: `person:${user.sub}`, requestHash, revision: 0, result: { id } } })
       return { id, revision: 0 }
     }).then(async made => { await this.joined(made.id, user.sub); return made })
+  }
+
+  /** [user]'s live Personal Swarm marked so (`personal`), by the owner index and their Swarms' heads, a page at a time: read only
+   *  when the first of their line is gone. */
+  private async livePersonal(tx: Transaction, user: AuthUser): Promise<string | undefined> {
+    for (let after = ''; ;) {
+      const rows = await readBy(tx, 'SuperTab', 'owner', [{ $match: { autonomousEnv: user.autonomousEnv, ownerId: user.sub, _id: { $gt: after }, format: 2, deletedAt: null } },
+        { $sort: { _id: 1 } }, { $limit: OWNED_PAGE }, { $project: { _id: 1 } }])
+      if (!rows.length) return undefined
+      const marked = await readBy(tx, 'SwarmHead', 'id', [{ $match: { _id: { $in: rows.map(row => `${row._id as string}:head`) }, 'data.personal': true,
+        'data.deletion': null } }, { $limit: 1 }, { $project: { tabId: 1 } }])
+      if (marked.length) return marked[0]!.tabId as string
+      if (rows.length < OWNED_PAGE) return undefined
+      after = rows.at(-1)!._id as string
+    }
   }
 
   async list(user: AuthUser, after?: string) {
@@ -830,6 +879,23 @@ export class SuperTabStore {
       throw error
     }
     return 'deleted'
+  }
+
+  /** Deletes the repo-less project every Personal Swarm was made with (migration/personalProjectJob.ts), as its owner's
+   *  `project.delete` would, given `personalProject` by the store alone: only as it was made, with nothing in it. 'kept' when
+   *  anything is, or someone else owns it now, which stays a project like any other; 'gone' when the Swarm or the project is not
+   *  there or is not that one. [row]: the Swarm's row as the job read it. */
+  async removePersonalProject(row: { id: string; ownerId: string; autonomousEnv: string }): Promise<'removed' | 'kept' | 'gone'> {
+    const user: AuthUser = { sub: row.ownerId, email: '', autonomousEnv: row.autonomousEnv as AuthUser['autonomousEnv'], role: 'user' }
+    try {
+      await this.executeOnce(user, row.id, { operationId: 'personal-project-removal', command: { type: 'project.delete', projectId: 'lead' } },
+        undefined, undefined, { personalProject: true })
+    } catch (error) {
+      if (error instanceof SuperTabError && ['PERSONAL_PROJECT_KEPT', 'PROJECT_OWNER_REQUIRED'].includes(error.code)) return 'kept'
+      if (error instanceof SuperTabError && error.code === 'NOT_FOUND') return 'gone'
+      throw error
+    }
+    return 'removed'
   }
 
   /** Removes notice [messageId] of a retired kind (migration/retiredNotices.ts) as its author's `message.delete` would, run as the
@@ -1040,7 +1106,7 @@ export class SuperTabStore {
    *  machine.teamGone (takeOutTeamMachines), `wipe` for swarm.delete (wipeSwarm), `retiredNotice` for message.delete
    *  (removeRetiredNotice). */
   private async executeOnce(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string,
-    only: { movedTo?: { machineId: string; ownerId: string }; teamMachineGone?: true; wipe?: true; retiredNotice?: true } = {}) {
+    only: { movedTo?: { machineId: string; ownerId: string }; teamMachineGone?: true; wipe?: true; retiredNotice?: true; personalProject?: true } = {}) {
     const { operationId, command } = operationSchema.parse(input)
     let ended: WorkHold[] = [], started: WorkHold[] = []
     const done = await transaction(this.db, async tx => {
@@ -1098,6 +1164,7 @@ export class SuperTabStore {
             readConversation(original, actor, delivery.conversationId)
           }
         }
+        // For projects deleted before deletedProjects (commands.ts project.create): goes on or after 2026-12-12, once their receipts are gone.
         if (command.type === 'project.create' &&
             !projectsOf(original).some(p => p.id === (prior.result as Record<string, unknown>).projectId)) {
           fail('NOT_FOUND', 'This project was deleted. Create a new project.', 404)
@@ -1120,6 +1187,7 @@ export class SuperTabStore {
       if (command.type === 'machine.teamGone' && only.teamMachineGone) context.teamMachineGone = true
       if (command.type === 'swarm.delete' && only.wipe) context.wipe = true
       if (command.type === 'message.delete' && only.retiredNotice) context.retiredNotice = true
+      if (command.type === 'project.delete' && only.personalProject) context.personalProject = true
       if (command.type === 'machine.moved' && only.movedTo && actor.kind === 'person') {
         context.computerMove = await this.computerMove(tx, original, actor.userId, command.machineId, only.movedTo)
       }
@@ -3222,6 +3290,9 @@ export class SuperTabStore {
       const all = chatless.length ? (await this.ensure(tx, loaded, { agentIds: chatless })).state : loaded.state
       const state = cloneData(loaded.state), now = this.now()
       giveAgentsChats(state, now, all)
+      // The chats a join left empty, with no agent and no message (paneChats.ts).
+      const archived = archiveEmptyChats(state, now)
+      if (archived) logger.info('[super-tab] archived empty agent chats', { tabId, archived })
       await this.save(tx, loaded, state, clock.next())
       return 0
     })

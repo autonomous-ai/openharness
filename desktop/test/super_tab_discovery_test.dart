@@ -434,10 +434,13 @@ void main() {
     await _close(first, tab);
     final app = _computer(catalog, store)..newSwarm(newTabPage: true);
     await mount(tester, app);
-    expect(find.text('Recent Swarms'), findsNothing);
+    final closed = find.byKey(
+      ValueKey('welcome-closed-super-tab-${tab.superTabId}'),
+    );
+    expect(closed, findsNothing);
     await app.superTabs.refreshTabs();
     await tester.pump();
-    expect(find.text('Recent Swarms'), findsOneWidget);
+    expect(closed, findsOneWidget);
     await tester.tap(
       find.byKey(ValueKey('welcome-closed-super-tab-${tab.superTabId}')),
     );

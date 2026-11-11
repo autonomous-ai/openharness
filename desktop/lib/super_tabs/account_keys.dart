@@ -11,8 +11,8 @@ import '../core/local_key_value_store.dart';
 /// - `super_tab.hidden.<account>`: the Swarms hidden on this browser;
 /// - `super_tab.personal.<account>`: the Swarm last chosen in the switcher;
 /// - `super_tab.scope.<account>.<swarm>`: whether the roster lists the whole Swarm or the open project;
-/// - `super_tab.repos.<account>`: the projects made for their repos in their
-///   Personal Swarm (personal_projects.dart).
+/// - `super_tab.repos.<account>`: v3's tab projects of their Personal Swarm not
+///   closed yet (personal_projects.dart; goes 2026-12-10).
 /// The saved views' own keys (`super_tab.view…`, `super_tab.saved_by`) are
 /// [SuperTabSavedViews]', which forgets them itself.
 String? swarmKeyAccount(String key) {

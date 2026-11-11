@@ -18,10 +18,10 @@ const none = { env: {}, args: [] }
 describe('who gets the private temporary folder', () => {
   // Task #4395: since #4215 an agent starts in its owner's own settings, which on the Mac Studio block reads outside the working
   // directories, and since v3 there is no Team computer, so agents used the system's folder and stopped at Claude Code's
-  // question for their own mktemp file (Authorder, 11-07). Each Swarm agent gets a folder of its own, added to the engine's
+  // question for their own mktemp file (Authorder, 11-07). Each Swarm agent gets a folder of its own, added to Claude Code's
   // working directories: Claude Code reads an added folder's own skills and settings, so one shared folder would let an
   // agent plant them for the others.
-  it('a Swarm agent: a 0700 folder of its own as TMPDIR, added to Claude Code\'s and Codex\'s working directories', () => {
+  it('a Swarm agent: a 0700 folder of its own as TMPDIR, added to Claude Code\'s working directories', () => {
     const data = scratch()
     const launch = agentTmpLaunch('claude', { role: 'agent', key: 'one' }, deps(data))
     const folder = launch.env.TMPDIR!
@@ -30,8 +30,9 @@ describe('who gets the private temporary folder', () => {
     expect(statSync(agentTmpFolder(data)).mode & 0o777).toBe(0o700)
     // Joined to its flag: Claude Code's takes several values and would swallow what follows it.
     expect(launch).toEqual({ env: { TMPDIR: folder }, args: [`--add-dir=${folder}`] })
+    // Codex gets it as its TMPDIR alone: its --add-dir made codex-cli 0.164 quit in an untrusted folder (agentTmp.ts ADDED_FOLDER).
     expect(agentTmpLaunch('codex', { role: 'coordinator', key: 'one' }, deps(data, { platform: 'linux' })))
-      .toEqual({ env: { TMPDIR: folder }, args: [`--add-dir=${folder}`] })
+      .toEqual({ env: { TMPDIR: folder }, args: [] })
     // The same agent's relaunch finds the same folder; another agent has its own, in the same workspace too: a person's
     // Regular agents all start in that person's home folder (security review of #3506). On a Mac too, only that folder is
     // added, never the account's own temporary folder, which every agent and app of the account shares.
