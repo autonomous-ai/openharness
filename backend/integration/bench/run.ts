@@ -10,12 +10,12 @@ import { benchStamps } from './stamps.js'
 import { listGroupIndexes } from '../../src/superTabs/parts/indexed.js'
 import { readDelta } from '../../src/superTabs/cachedReads.js'
 
-/** `npm run bench:swarm-state -- [options] [--profile]` (README.md). Writes `<driver>-<time>.json` and `.md` to the results
+/** `npm run bench:swarm-state -- [options] [--profile]` (README.md). Writes `swarm-state-<time>.json` and `.md` to the results
  *  folder; with `--profile`, every database operation of the run goes through Mongo's profiler and the report adds what each
  *  query shape read and how long it took. */
 async function main() {
   const argv = process.argv.slice(2), profile = argv.includes('--profile')
-  const { config, out, driver, cache } = parseArgs(argv.filter(arg => arg !== '--profile'))
+  const { config, out, cache } = parseArgs(argv.filter(arg => arg !== '--profile'))
   const folder = out ?? join(process.cwd(), 'integration/bench/results')
   const database = await localDatabase()
   // As each server does at startup (server.ts): hot reads name the indexes the database has.
@@ -26,9 +26,9 @@ async function main() {
   try {
     if (profile) await startProfiling(database.db)
     const peak = profile ? peakConnections(database.db) : null
-    const report = { ...await runBench(config, driver, database.db), cache: stamps.label }
+    const report = { ...await runBench(config, database.db), cache: stamps.label }
     const profiled = profile ? { ...await readProfile(database.db), peakConnections: await peak!.stop() } : null
-    const name = `${report.driver}-${report.startedAt.replaceAll(':', '-').replace(/\.\d+Z$/, 'Z')}`
+    const name = `swarm-state-${report.startedAt.replaceAll(':', '-').replace(/\.\d+Z$/, 'Z')}`
     const markdown = renderMarkdown(report) + (profiled ? `\n${renderProfile(profiled)}` : '')
     await mkdir(folder, { recursive: true })
     await writeFile(join(folder, `${name}.json`), `${JSON.stringify(profiled ? { ...report, profile: profiled } : report, null, 2)}\n`)

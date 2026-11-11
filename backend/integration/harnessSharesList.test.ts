@@ -7,7 +7,7 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { localDatabase, type LocalDatabase } from './bench/mongo.js'
 import { DEFAULT_CONFIG } from './bench/config.js'
-import { DRIVERS } from './bench/bench.js'
+import { partsDriver } from './bench/drivers/parts.js'
 import { machineId, seedAccounts } from './bench/fixtures.js'
 import { plan } from './bench/plan.js'
 import { seedSwarm, AGENT_CONFIGURATION, type Swarm } from './bench/seed.js'
@@ -29,8 +29,8 @@ vi.mock('../src/superTabs/cachedReads.js', async original => {
 const { harnessShareRoutes } = await import('../src/routes/harnessShares.js')
 const { SuperTabStore } = await import('../src/superTabs/store.js')
 
-/** The Swarm the benchmark runs on, with 40 workers over 6 machines, most of them shared with the recipient. */
-const CONFIG = { ...structuredClone(DEFAULT_CONFIG), groups: 200, doneShare: 0.8, workers: 40 }
+/** The Swarm the benchmark runs on, with 40 agents over 6 machines (10 of them its projects' PMs), most of them shared with the recipient. */
+const CONFIG = { ...structuredClone(DEFAULT_CONFIG), agents: 40, projects: 10 }
 const RUNS = 30, WAVE = 20
 
 let database: LocalDatabase
@@ -39,7 +39,8 @@ let swarm: Swarm
 let recipient: AuthUser
 /** Who the next list call is made as. */
 let viewer: AuthUser
-/** The shares the recipient must be listed, by hand: each worker not on its own machine, the Swarm's Lead, and the ordinary share. */
+/** The shares the recipient must be listed, by hand: each PM not on its own machine (every reader of its project watches it), and
+ *  the ordinary share. */
 let expected: string[]
 /** Every share addressed to the recipient that the list must leave out, by why. */
 let hidden: Record<string, string>
@@ -82,7 +83,7 @@ beforeAll(async () => {
   database = await localDatabase()
   const db = shared.db = database.db
   const people = await seedAccounts(db, CONFIG.machines)
-  const driver = await DRIVERS.parts!(db, () => people)
+  const driver = await partsDriver(db, () => people)
   swarm = (await seedSwarm(driver, CONFIG, plan(CONFIG), people)).swarm
   await driver.close()
   recipient = people[1]!
@@ -91,19 +92,21 @@ beforeAll(async () => {
       agentId: data.agentId, recipientEmail: data.recipientEmail ?? recipient.email, autonomousEnv: 'prod', name: data.agentId,
       ownerPublicKey: 'fixture-key', expiresAt: data.expiresAt ?? new Date(Date.now() + 86_400_000), revokedAt: data.revokedAt ?? null } })
   expected = []
-  for (const worker of swarm.workers) {
-    if (worker.machine === 1) continue
+  hidden = {}
+  const hide = async (why: string, data: Parameters<typeof share>[1]) => { const id = randomUUID(); hidden[id] = why; await share(id, data) }
+  for (const [i, agent] of swarm.agents.entries()) {
+    if (agent.machine === 1) continue
+    if (i >= CONFIG.projects) {
+      await hide('another person\'s Member: only its person reads it', { superTabId: swarm.tabId, owner: agent.machine, agentId: agent.harnessId })
+      continue
+    }
     const id = randomUUID()
-    await share(id, { superTabId: swarm.tabId, owner: worker.machine, agentId: worker.harnessId })
+    await share(id, { superTabId: swarm.tabId, owner: agent.machine, agentId: agent.harnessId })
     expected.push(id)
   }
   const plain = randomUUID()
   await share(plain, { superTabId: null, owner: 2, agentId: 'plain-harness' })
   expected.push(plain)
-  // The Swarm's current Lead is open to its readers (projects.ts watchClosed); confidential, it is closed everywhere else.
-  const lead = randomUUID()
-  await share(lead, { superTabId: swarm.tabId, owner: 0, agentId: 'bench-lead' })
-  expected.push(lead)
   expected.sort()
   // A Swarm the recipient is not in, with one agent shared through it, and its Lead, shared outside any Swarm.
   const store = new SuperTabStore(db)
@@ -118,14 +121,12 @@ beforeAll(async () => {
   const { id: _row, ...template } = await db.swarmAgent.findFirstOrThrow({ where: { tabId: swarm.tabId } })
   await db.swarmAgent.createMany({ data: Array.from({ length: 200 }, (_, i) => ({ ...template, id: `crowd-${i}`, tabId: `crowd-tab-${i}`,
     key: `crowd-agent-${i}`, data: template.data as object })) })
-  hidden = {}
-  const hide = async (why: string, data: Parameters<typeof share>[1]) => { const id = randomUUID(); hidden[id] = why; await share(id, data) }
   await hide('an ordinary share of a confidential session', { superTabId: null, owner: 0, agentId: 'elsewhere-lead' })
   await hide('a Swarm the recipient is not in', { superTabId: other, owner: 0, agentId: 'elsewhere-worker' })
   await hide('an agent not in the Swarm', { superTabId: swarm.tabId, owner: 2, agentId: 'gone-worker' })
   await hide('expired', { superTabId: null, owner: 3, agentId: 'expired-harness', expiresAt: new Date(Date.now() - 1000) })
   await hide('revoked', { superTabId: null, owner: 3, agentId: 'revoked-harness', revokedAt: new Date() })
-  await share(randomUUID(), { superTabId: swarm.tabId, owner: 2, agentId: swarm.workers.find(w => w.machine === 2)!.harnessId, recipientEmail: 'someone-else@example.com' })
+  await share(randomUUID(), { superTabId: swarm.tabId, owner: 2, agentId: swarm.agents.find(a => a.machine === 2)!.harnessId, recipientEmail: 'someone-else@example.com' })
   app = Fastify()
   app.decorateRequest('user', null)
   app.addHook('onRequest', async req => { req.user = viewer })
@@ -189,8 +190,9 @@ describe('the harness shares list on a Swarm-sized database', () => {
       const nullBounds = (p: string) => read.collection === 'harness_shares' && branches(p).length === 2 && new Set(branches(p)).size === 1
       expect(read.plans.filter(p => p.includes('}, IXSCAN') && !nullBounds(p)), read.collection).toEqual([])
       expect(read.docsExamined, read.collection).toBeLessThanOrEqual(read.returned + 2)
-      // Keys too: an agent read by key that walks the (tabId, key) index costs every other Swarm in production.
-      expect(read.keysExamined, read.collection).toBeLessThanOrEqual(read.returned + 10)
+      // Keys too: an agent read by key that walks the (tabId, key) index costs every other Swarm in production (here the 200
+      // crowd agents). A read of N keys by `$in` seeks N times, and a seek may examine the key past its match.
+      expect(read.keysExamined, read.collection).toBeLessThanOrEqual(2 * read.returned + 10)
     }
   })
 })

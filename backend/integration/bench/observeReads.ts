@@ -1,9 +1,9 @@
 import { performance } from 'node:perf_hooks'
 import { SuperTabStore } from '../../src/superTabs/store.js'
-import { AttemptCounter } from './attempts.js'
-import { DRIVERS } from './bench.js'
 import { parseArgs } from './config.js'
+import { partsDriver } from './drivers/parts.js'
 import { machineId, seedAccounts } from './fixtures.js'
+import { observation } from './load.js'
 import { localDatabase } from './mongo.js'
 import { plan } from './plan.js'
 import { bytesOut } from './probe.js'
@@ -21,21 +21,18 @@ const RUNS = 30
  *     DATABASE_URL=mongodb://127.0.0.1:1/bench-never-used npx tsx integration/bench/observeReads.ts
  */
 async function main() {
-  const { config, driver: driverName } = parseArgs(process.argv.slice(2))
+  const { config } = parseArgs(process.argv.slice(2))
   const database = await localDatabase()
   const { db } = database
   try {
     const people = await seedAccounts(db, config.machines)
-    const driver = await DRIVERS[driverName]!(new AttemptCounter().wrap(db), () => people)
+    const driver = await partsDriver(db, () => people)
     const { swarm } = await seedSwarm(driver, config, plan(config), people)
     await driver.close()
     const owner = people[0]!
-    const runningHarnessIds = (await new SuperTabStore(db).read(owner, swarm.tabId)).state.agents
-      .filter(a => a.machineId === machineId(0)).map(a => a.harnessId)
-    const report = (store: SuperTabStore, n: number) => store.observeMachine(owner, swarm.tabId, machineId(0), {
-      generation: swarm.generations[0]!, quotas: [], tools: {}, runningHarnessIds, stoppedHarnessIds: [],
-      resources: { cpuPercent: 10 + n % 50, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9,
-        projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Bench', os: 'macOS', gpuPercent: null } })
+    const runningHarnessIds = swarm.agents.filter(a => a.machine === 0).map(a => a.harnessId)
+    const report = (store: SuperTabStore, n: number) => store.observeMachine(owner, swarm.tabId, machineId(0),
+      observation(swarm.generations[0]!, runningHarnessIds, 10 + n % 50))
     const before = await bytesOut(db)
     const ownReply = await bytesOut(db) - before
     const median = (values: number[]) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)]!

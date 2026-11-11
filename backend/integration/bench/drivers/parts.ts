@@ -1,8 +1,10 @@
 import type { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../../../src/lib/ssoAuth.js'
+import { superTabRoutes } from '../../../src/routes/superTabs.js'
+import { SuperTabStore } from '../../../src/superTabs/store.js'
 import type { Changes, FirstLoad, HostChanges, HostChangesRequest } from '../../../src/superTabs/read/contract.js'
-import type { Reader, Reply, Snapshot, SwarmDriver } from '../driver.js'
-import { legacyDriver, storeRoutes } from '../legacyDriver.js'
+import type { CommandResult, Reader, Reply, SwarmDriver } from '../driver.js'
+import { benchApp, caller, type Call } from '../http.js'
 
 const base = '/api/super-tabs'
 /** The parts' collections (backend/prisma/schema.prisma, Swarm state by parts). */
@@ -10,10 +12,19 @@ const PARTS = ['SwarmHead', 'SwarmMember', 'SwarmGroup', 'SwarmAgent', 'SwarmMac
 /** A host asks for its whole form at least this often (cli/src/superTabs/hostFeed.ts `HOST_FULL_MS`). */
 const HOST_FULL_MS = 60_000
 
+/** The Super Tab routes on one store, in process. Callers that share them share the store and its in-process state. */
+export interface StoreRoutes { call: Call; close(): Promise<void> }
+
+export async function storeRoutes(db: PrismaClient, users: () => readonly AuthUser[]): Promise<StoreRoutes> {
+  const store = new SuperTabStore(db)
+  // No GitHub App: the bench never reaches GitHub.
+  const app = await benchApp(users, async scope => superTabRoutes(scope, { store, github: null }))
+  return { call: caller(app), close: () => app.close() }
+}
+
 /**
- * The store by parts (#1726 groups 2 and 3), read through the new read API the way the merged clients read it. Commands,
- * machine reports, terminals and deliveries go through the same routes as `legacyDriver`; only the reads differ:
- * - setup facts come from a first load, and a machine's generation from its host form;
+ * The Swarm's clients, through the routes they call:
+ * - commands, machine reports and deliveries as the CLI and Desktop send them;
  * - a Desktop window loads the Swarm once, then reads the changes since its cursor (desktop/lib/super_tabs controller); a
  *   `reload` answer is followed by a first load in the same poll;
  * - a host reads its form (cli/src/superTabs/hostFeed.ts): in full at start and at least every minute, by change in
@@ -23,8 +34,7 @@ const HOST_FULL_MS = 60_000
 export async function partsDriver(db: PrismaClient, users: () => readonly AuthUser[], options: { now?: () => number } = {}): Promise<SwarmDriver> {
   const now = options.now ?? Date.now
   // One app and store behind the writes and the reads, as in one backend process.
-  const routes = await storeRoutes(db, users), { call } = routes
-  const legacy = await legacyDriver(db, users, routes)
+  const { call, close } = await storeRoutes(db, users)
   const firstLoad = (tabId: string, user: AuthUser) => call<FirstLoad>(user, 'GET', `${base}/${tabId}/parts`)
   const hostForm = (host: AuthUser, machineId: string, request: HostChangesRequest) => Object.keys(request.held ?? {}).length
     ? call<HostChanges>(host, 'POST', `${base}/hosts/${machineId}/changes`, request)
@@ -69,12 +79,14 @@ export async function partsDriver(db: PrismaClient, users: () => readonly AuthUs
   }
 
   return {
-    ...legacy,
-    name: 'parts',
-    async snapshot(tabId, user) {
-      const reply = await firstLoad(tabId, user)
+    close,
+    createSwarm: (owner, operationId, name) => call(owner, 'POST', base, { operationId, name }),
+    execute: (tabId, user, operationId, command, asAgentId) =>
+      call<CommandResult>(user, 'POST', `${base}/${tabId}/commands`, { operationId, command, ...(asAgentId ? { asAgentId } : {}) }),
+    async agentChats(tabId, person) {
+      const reply = await firstLoad(tabId, person)
       if (!reply.data) throw new Error(`First load failed: ${reply.code}`)
-      return { conversations: reply.data.groups.map(g => g.data), agents: reply.data.agents.map(a => a.data) } satisfies Snapshot
+      return new Map(reply.data.groups.flatMap(g => g.data.kind === 'agent-chat' ? g.data.agentIds.map(id => [id, g.data.id] as const) : []))
     },
     async machineGeneration(tabId, host, machineId) {
       const reply = await hostForm(host, machineId, { full: true })
@@ -82,6 +94,9 @@ export async function partsDriver(db: PrismaClient, users: () => readonly AuthUs
       if (!tab || tab.unchanged || !tab.pool) throw new Error(`No contribution of ${machineId}: ${reply.code}`)
       return tab.pool.machine.generation
     },
+    observeMachine: (tabId, host, machineId, observation) => call(host, 'POST', `${base}/${tabId}/machines/${machineId}`, observation),
+    deliveries: (tabId, host, agentId) => call(host, 'GET', `${base}/${tabId}/agents/${agentId}/deliveries`),
+    delivery: (tabId, host, agentId, deliveryId, action) => call(host, 'POST', `${base}/${tabId}/agents/${agentId}/deliveries/${deliveryId}`, action),
     desktopReader,
     hostReader,
     async stateSize(tabId) {

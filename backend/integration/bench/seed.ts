@@ -4,28 +4,26 @@ import type { BenchConfig } from './config.js'
 import type { Reply, SwarmDriver } from './driver.js'
 import { machineId } from './fixtures.js'
 import type { Plan } from './plan.js'
-import { random, words, type Random } from './random.js'
 
-export interface Worker {
+export interface Agent {
   id: string
   harnessId: string
   machine: number
-  /** The group whose task it holds; its terminal is open there. */
-  group: string
-  assignmentId: string
-  checkIds: string[]
-  /** Its terminal, opened by its machine's owner. */
-  contextId: string
+  /** Its 1:1 chat with its person (the owner of its machine). */
+  chat: string
+  /** Its project's channel, where it posts. */
+  channel: string
+  /** Its project's PM: itself, for a PM. */
+  pmId: string
 }
 
 /** The Swarm the load runs on: who is who, and the ids the load's calls need. */
 export interface Swarm {
   tabId: string
   people: AuthUser[]
-  leadId: string
-  /** Every work group's id, by its index in the plan. */
-  groups: string[]
-  workers: Worker[]
+  /** Every project's channel, by its index in the plan. */
+  channels: string[]
+  agents: Agent[]
   /** Each machine's contribution generation, which its reports name. */
   generations: string[]
 }
@@ -49,78 +47,76 @@ class Setup {
     this.calls++
     return must(await call, what)
   }
-  async run(user: AuthUser, command: Command, asAgentId?: string) {
-    return (await this.check(command.type, this.driver.execute(this.tabId, user, this.op(), command, asAgentId))).result
+  async run(user: AuthUser, command: Command) {
+    return (await this.check(command.type, this.driver.execute(this.tabId, user, this.op(), command))).result
   }
 }
 
-/** Members join and contribute their machines; the owner's machine 0 runs the Lead. */
-async function seedMembers(s: Setup): Promise<string> {
+/** Members join and list their machines. */
+async function seedMembers(s: Setup): Promise<void> {
   for (const member of s.people.slice(1)) {
     const invitation = await s.run(s.owner, { type: 'invite.create', email: member.email, role: 'collaborator', conversationId: 'lead' })
     await s.run(member, { type: 'invite.accept', inviteId: String(invitation.inviteId) })
   }
   for (let n = 0; n < s.config.machines; n++) {
     await s.run(s.people[n]!, { type: 'machine.contribute', machineId: machineId(n), name: `Bench machine ${n}`, cwd: '/bench/repo',
-      engines: ['codex'], maxAgents: 16 })
+      engines: ['codex'], maxAgents: 64 })
   }
-  return String((await s.run(s.owner, { type: 'agent.add', conversationId: 'lead', machineId: machineId(0), harnessId: 'bench-lead',
-    name: 'Lead', configuration: AGENT_CONFIGURATION, lead: true })).agentId)
 }
 
-/** Every group with a brief and two checks, stored as Swarms before v4 stored a task (no command opens one in v4); returns their
- *  ids in plan order. */
-async function seedGroups(s: Setup, rng: Random): Promise<string[]> {
-  const groups: string[] = []
-  for (let g = 0; g < s.config.groups; g++) {
-    groups.push(await s.driver.storeTask(s.tabId, s.owner, { title: `Bench group ${g}`, brief: words(rng, s.config.text.briefChars),
-      checks: [0, 1].map(() => ({ description: words(rng, 120), independent: false })) }))
+/** Every project's channel in plan order: the Swarm's first project, then one each created by its PM's person. */
+async function seedProjects(s: Setup, p: Plan): Promise<string[]> {
+  const channels = ['lead']
+  for (let project = 1; project < s.config.projects; project++) {
+    const pm = p.agents[project]!
+    channels.push(String((await s.run(s.people[pm.machine]!, { type: 'project.create', name: `Bench project ${project}`, visibility: 'public', brief: '' })).conversationId))
   }
-  return groups
+  return channels
 }
 
-/** Each worker added by its machine's owner into its first active group, then joined to its other active groups. */
-async function seedWorkers(s: Setup, p: Plan, groups: string[]): Promise<Array<{ id: string; harnessId: string }>> {
-  const agents: Array<{ id: string; harnessId: string }> = []
-  for (const w of p.workers) {
-    const harnessId = `bench-worker-${w.index}`
-    const id = String((await s.run(s.people[w.machine]!, { type: 'agent.add', conversationId: groups[w.groups[0]!]!,
-      machineId: machineId(w.machine), harnessId, name: `Engineer ${w.index}`, configuration: AGENT_CONFIGURATION, lead: false })).agentId)
-    for (const g of w.groups.slice(1)) await s.run(s.owner, { type: 'conversation.agent', conversationId: groups[g]!, agentId: id, present: true, lead: false })
-    agents.push({ harnessId, id })
+/** Each agent added by its person on their own machine: a PM into its project's channel (which opens its 1:1 chat), a Member
+ *  into the 1:1 chat its person opens for it (+ New agent). */
+async function seedAgents(s: Setup, p: Plan, channels: string[]): Promise<Array<{ id: string; harnessId: string; chat: string | null }>> {
+  const agents: Array<{ id: string; harnessId: string; chat: string | null }> = []
+  for (const a of p.agents) {
+    const person = s.people[a.machine]!, harnessId = `bench-agent-${a.index}`, name = `Agent ${a.index}`
+    const add = { type: 'agent.add', machineId: machineId(a.machine), harnessId, name, configuration: AGENT_CONFIGURATION } as const
+    if (a.pm) {
+      const id = String((await s.run(person, { ...add, conversationId: channels[a.project]!, lead: true })).agentId)
+      agents.push({ id, harnessId, chat: null })
+      continue
+    }
+    const chat = String((await s.run(person, { type: 'agent.new', kind: 'regular', machineId: machineId(a.machine), engine: 'codex', name, local: true }))
+      .conversationId)
+    agents.push({ id: String((await s.run(person, { ...add, conversationId: chat, lead: false })).agentId), harnessId, chat })
   }
   return agents
 }
 
-/** A done group: its worker joins it. Swarm v4 assigns no work, so nothing else of a task is written. */
-async function finishGroup(s: Setup, group: string, agentId: string) {
-  await s.run(s.owner, { type: 'conversation.agent', conversationId: group, agentId, present: true, lead: false })
-}
-
 /**
- * Builds the Swarm through the driver's real commands, one after another, as people and agents would: members join,
- * machines are contributed, the Lead and the workers are added, every group gets a brief and checks, the done groups run
- * a whole task, and each worker is given its active group's task with its terminal open. Returns how many calls it made.
+ * Builds the Swarm through the driver's real commands, one after another, as people would: members join and list their
+ * machines, projects are created, each project's PM is added to its channel and each Member to its own chat. Returns how
+ * many calls it made.
  */
 export async function seedSwarm(driver: SwarmDriver, config: BenchConfig, p: Plan, people: AuthUser[]): Promise<{ swarm: Swarm; calls: number }> {
-  const s = new Setup(driver, config, people), rng = random(config.seed, 'setup')
+  const s = new Setup(driver, config, people)
   s.tabId = (await s.check('create', driver.createSwarm(s.owner, s.op(), 'Bench Swarm'))).id
-  const leadId = await seedMembers(s)
-  const groups = await seedGroups(s, rng)
-  const agents = await seedWorkers(s, p, groups)
-  // Check ids are fixed when a group is created; one read gives them all.
-  const snapshot = await driver.snapshot(s.tabId, s.owner)
-  const checksOf = (group: string) => snapshot.conversations.find(c => c.id === group)!.checks.map(c => c.id)
-  for (const w of p.workers) {
-    for (const g of w.doneGroups) await finishGroup(s, groups[g]!, agents[w.index]!.id)
+  await seedMembers(s)
+  const channels = await seedProjects(s, p)
+  const added = await seedAgents(s, p, channels)
+  // A PM's chat is opened by its add; each person's first load names their agents' chats.
+  const chats = new Map<string, string>()
+  for (let n = 0; n < config.machines; n++) {
+    if (!p.agents.some(a => a.pm && a.machine === n)) continue
+    s.calls++
+    for (const [agentId, chat] of await driver.agentChats(s.tabId, people[n]!)) chats.set(agentId, chat)
   }
-  const workers: Worker[] = []
-  for (const w of p.workers) {
-    const group = groups[w.groups[0]!]!, agent = agents[w.index]!
-    // Swarm v4 assigns no work and records no terminal: the load's work and recording writes (load.ts) go with the bench rework.
-    workers.push({ ...agent, machine: w.machine, group, assignmentId: '', checkIds: checksOf(group), contextId: '' })
-  }
+  const agents = p.agents.map((a, i): Agent => {
+    const { id, harnessId, chat } = added[i]!
+    return { id, harnessId, machine: a.machine, chat: chat ?? chats.get(id) ?? (() => { throw new Error(`No chat of agent ${i}`) })(),
+      channel: channels[a.project]!, pmId: added[a.project]!.id }
+  })
   const generations: string[] = []
   for (let n = 0; n < config.machines; n++) generations.push(await driver.machineGeneration(s.tabId, people[n]!, machineId(n)))
-  return { swarm: { tabId: s.tabId, people, leadId, groups, workers, generations }, calls: s.calls }
+  return { swarm: { tabId: s.tabId, people, channels, agents, generations }, calls: s.calls }
 }

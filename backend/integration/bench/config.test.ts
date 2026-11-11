@@ -1,38 +1,32 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_CONFIG, parseArgs } from './config.js'
+import { conversationCount, DEFAULT_CONFIG, parseArgs } from './config.js'
 
 describe('parseArgs', () => {
-  it('uses the defaults the brief names: 200 groups, 20 active, 6 machines, 3 Desktop and 2 host readers', () => {
+  it('runs a busy Swarm by default: 60 agents, 50 projects, 6 machines, 3 Desktop and 2 host readers', () => {
     const { config } = parseArgs([])
     expect(config).toEqual(DEFAULT_CONFIG)
-    expect(config).toMatchObject({ groups: 200, doneShare: 0.9, workers: 20, lane: 'mixed', machines: 6, desktopReaders: 3, hostReaders: 2 })
+    expect(config).toMatchObject({ agents: 60, projects: 50, machines: 6, desktopReaders: 3, hostReaders: 2 })
+    expect(conversationCount(config)).toBe(110)
     expect(config.every).toMatchObject({ observeMs: 15_000, desktopPollMs: 3_000, hostTickMs: 1_000, deliveryPassMs: 3_000 })
   })
 
-  it('runs the store by parts unless told otherwise: on this branch the old full reads answer 426', () => {
-    expect(parseArgs([]).driver).toBe('parts')
-  })
-
-  it('reads sizes, seconds, the mix and cadences', () => {
-    const { config, out, driver } = parseArgs(['--seed', '9', '--groups', '50', '--done-share', '0', '--workers', '5', '--lane', 'cross-group', '--duration', '30',
-      '--mix', 'message.send=1,work.status=0,work.check=3', '--every', 'workerPostMs=500,hostTickMs=2000', '--out', '/tmp/x', '--driver', 'legacy'])
-    expect(config).toMatchObject({ seed: 9, groups: 50, doneShare: 0, workers: 5, lane: 'cross-group', durationMs: 30_000,
-      mix: { 'message.send': 1, 'work.status': 0, 'work.check': 3 } })
-    expect(config.every).toEqual({ ...DEFAULT_CONFIG.every, workerPostMs: 500, hostTickMs: 2000 })
+  it('reads sizes, seconds and cadences', () => {
+    const { config, out } = parseArgs(['--seed', '9', '--agents', '150', '--projects', '50', '--machines', '10', '--duration', '30',
+      '--every', 'channelPostMs=500,hostTickMs=2000', '--out', '/tmp/x'])
+    expect(config).toMatchObject({ seed: 9, agents: 150, projects: 50, machines: 10, durationMs: 30_000 })
+    expect(conversationCount(config)).toBe(200)
+    expect(config.every).toEqual({ ...DEFAULT_CONFIG.every, channelPostMs: 500, hostTickMs: 2000 })
     expect(out).toBe('/tmp/x')
-    expect(driver).toBe('legacy')
   })
 
   it('refuses settings it cannot run', () => {
-    expect(() => parseArgs(['--done-share', '1'])).toThrow(/at least one active group/)
+    expect(() => parseArgs(['--projects', '0'])).toThrow(/projects/)
+    expect(() => parseArgs(['--projects', '101', '--agents', '200'])).toThrow(/100 projects/)
+    expect(() => parseArgs(['--agents', '10', '--projects', '20'])).toThrow(/PM/)
     expect(() => parseArgs(['--desktop-readers', '9'])).toThrow(/Readers/)
-    expect(() => parseArgs(['--workers', '0'])).toThrow(/worker/)
-    expect(() => parseArgs(['--workers', '21'])).toThrow(/worker/)
-    expect(() => parseArgs(['--lane', 'diagonal'])).toThrow(/--lane/)
-    expect(() => parseArgs(['--mix', 'message.send=0,work.status=0,work.check=0'])).toThrow(/mix/)
     expect(() => parseArgs(['--every', 'nope=1'])).toThrow(/nope/)
-    expect(() => parseArgs(['--groups'])).toThrow(/--groups/)
-    expect(() => parseArgs(['--colour', 'red'])).toThrow(/--colour/)
+    expect(() => parseArgs(['--agents'])).toThrow(/--agents/)
+    expect(() => parseArgs(['--groups', '200'])).toThrow(/--groups/)
   })
 })
 
