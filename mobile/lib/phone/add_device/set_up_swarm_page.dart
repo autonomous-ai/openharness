@@ -151,17 +151,10 @@ class _SetUpSwarmPageState extends State<SetUpSwarmPage> {
     if (mounted && _swarm.done) await _openBuddy();
   }
 
-  /// The Buddy tab, in this Swarm, with Settings and this page gone (owner, 2026-11-06), as an old chat's way back to
-  /// the Buddy does; its chat as its own page only with no tabs up.
+  /// The Buddy's chat, as its own page.
   Future<void> _openBuddy() async {
     final reader = _swarm.reader;
     if (reader == null) return;
-    if (widget.session.showBuddyTab case final show?) {
-      widget.session.home.showBuddy(reader.tabId);
-      Navigator.of(context).popUntil((route) => route.isFirst);
-      show();
-      return;
-    }
     final failed = await openSwarmBuddy(
       context,
       reader,

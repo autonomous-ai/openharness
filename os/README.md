@@ -140,7 +140,7 @@ The GitHub **Harness OS** workflow builds on an isolated x86 Linux runner.
 Local equivalent on an x86 Arch build host:
 
 ```sh
-sudo pacman -Syu archiso python git rustup musl nodejs-lts-jod npm
+sudo pacman -Syu archiso python git rustup musl nodejs-lts-krypton npm
 rustup default stable
 rustup target add x86_64-unknown-linux-musl
 make -C os check

@@ -37,7 +37,7 @@ describe('an old Swarm session with no saved role', () => {
     expect(await build(legacy, { current: () => true })).toEqual({ argv: ['engine'] })
     const tagged = expect.objectContaining({ swarmSkill: { role: 'agent', key: 'agent' } })
     expect(deps.relaunchOverrides).toHaveBeenCalledWith(tagged, tagged, expect.any(Function))
-    expect(deps.launch).toHaveBeenCalledWith(tagged, {}, built.overrides, { bypassPermission: false })
+    expect(deps.launch).toHaveBeenCalledWith(tagged, { agentId: 'agent' }, built.overrides, { bypassPermission: false })
     expect(s.save).toHaveBeenCalledWith('agent', { role: 'agent', key: 'agent' })
   })
   it('is held, never launched, while its role cannot be read', async () => {
@@ -59,7 +59,7 @@ describe('an old Swarm session with no saved role', () => {
     const s = swarm({ role: 'agent' }), { deps, build } = setup(s.adopt)
     expect(await build(legacy, { resumeSessionId: 'conversation', current: () => true, prepare: false })).toMatchObject({ argv: ['engine'] })
     expect(deps.launch).toHaveBeenCalledWith(expect.objectContaining({ swarmSkill: { role: 'agent', key: 'agent' } }),
-      { resumeSessionId: 'conversation' }, built.overrides, { bypassPermission: false })
+      { resumeSessionId: 'conversation', agentId: 'agent' }, built.overrides, { bypassPermission: false })
     expect(s.save).not.toHaveBeenCalled()
   })
   it('does not move while its role cannot be read', async () => {
@@ -95,7 +95,7 @@ describe('a launch built without preparation', () => {
     expect(await build(entry, { resumeSessionId: 'conversation', current: () => true, prepare: false })).toMatchObject({ argv: ['engine'] })
     expect(deps.prepareSessionResume).not.toHaveBeenCalled()
     expect(deps.refreshGridWebSearch).not.toHaveBeenCalled()
-    expect(deps.launch).toHaveBeenCalledWith(entry, { resumeSessionId: 'conversation' }, built.overrides, { bypassPermission: false })
+    expect(deps.launch).toHaveBeenCalledWith(entry, { resumeSessionId: 'conversation', agentId: 'agent' }, built.overrides, { bypassPermission: false })
     const prepared = await build(entry, { resumeSessionId: 'conversation', current: () => true })
     expect(prepared).toEqual({ argv: ['engine'] })
     expect(deps.prepareSessionResume).toHaveBeenCalledWith(entry)
@@ -159,7 +159,7 @@ describe('restore preparation keeps session authority in core', () => {
     const build = createRestoreLaunch({ ...deps, relaunchOverrides: helpers.relaunchOverrides })
     expect(await build(requested, { current: () => true })).toEqual({ argv: ['engine'] })
     expect(apiNotes).toHaveBeenCalledWith('/workspace', requested.engine)
-    expect(deps.launch).toHaveBeenCalledWith(requested, {}, expect.any(Object), expect.any(Object))
+    expect(deps.launch).toHaveBeenCalledWith(requested, { agentId: requested.agentId }, expect.any(Object), expect.any(Object))
   })
 
   it('a richer dispatch fence cancels restore without failing or publishing the replacement', async () => {
@@ -189,7 +189,7 @@ describe('restore preparation keeps session authority in core', () => {
     expect(await build(entry, { resumeSessionId, current: () => true })).toEqual({ argv: ['engine'] })
     expect(deps.prepareSessionResume).toHaveBeenCalledTimes(resumeSessionId ? 1 : 0)
     expect(deps.refreshGridWebSearch).toHaveBeenCalledWith('agent', built.overrides)
-    expect(deps.launch).toHaveBeenCalledWith(entry, { resumeSessionId }, built.overrides, { bypassPermission: false })
+    expect(deps.launch).toHaveBeenCalledWith(entry, { resumeSessionId, agentId: 'agent' }, built.overrides, { bypassPermission: false })
   })
 
   it.each(['Store', 'permission'] as const)('a replacement arriving during %s leaves its transcript, tail and grid untouched', async stage => {

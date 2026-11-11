@@ -5,7 +5,7 @@
  * paged out, a laptop deep in swap), every child it started keeps running, answers and exits. When the
  * loop wakes it runs the timers that came due before it reads the answers that arrived, so Node's own
  * `timeout` fires on a child that answered long ago. Node then throws the unread output away and reports
- * the exit, 0, as a success with an empty stdout (measured on Node 22: a hold in an I/O or setImmediate
+ * the exit, 0, as a success with an empty stdout (measured on Node 22 and again on 24.22.2: a hold in an I/O or setImmediate
  * callback, `err` null, stdout ""). Every probe read that as an answer: no such pane, no panes at all,
  * no processes. A held core took live agents for gone and acted on it (e2e/stall.e2e.ts).
  *

@@ -16,7 +16,6 @@ import type { MachineObservation } from '../src/superTabs/machines.js'
 import * as parts from '../src/superTabs/parts/index.js'
 import { poolRows, rosterRows } from './hostRows.test-support.js'
 import { beforeFirstWrite } from './interleave.test-support.js'
-import { profiledReads } from './profiledReads.test-support.js'
 import { storeAssignment, storeCreate, storeStatus } from './storedWork.test-support.js'
 
 // A machine's reports and the delivery polls of its agents: what a Swarm's time checks still decide (a start that never runs), the
@@ -146,7 +145,7 @@ describe('a machine\'s report', () => {
       execution: { machineId: 'test-host', harnessId: f.harness.worker, machineOwnerId: host.sub } }
     const keys = Array.from({ length: n }, (_, i) => `finished-${String(i).padStart(2, '0')}`)
     await db.swarmGroup.createMany({ data: keys.map((key, i) => ({ ...row, id: `${f.tab}:${key}`, key, ordinal: row.ordinal + i + 1,
-      agentIds: [...row.agentIds, f.worker], workFinished: true,
+      agentIds: [...row.agentIds, f.worker],
       data: { ...row.data as object, id: key, title: key, agentIds: [...row.agentIds, f.worker], assignment } as Prisma.InputJsonValue })) })
     return keys
   }
@@ -191,28 +190,6 @@ describe('a machine\'s report', () => {
     f.clock.now += 15_000
     await f.observe('test-host', [f.harness.worker])
     expect((await lent()).contribution?.lent?.[0]?.busyMs).toBe(15_000)
-  })
-})
-
-// A report never reads its projects' report progress.
-describe('machine reports and report progress', () => {
-  it('reads no report progress and writes none, also when the worker\'s machine goes silent', async () => {
-    const f = await swarm()
-    await f.execute({ type: 'message.send', conversationId: f.group, text: 'Parser done', replyTo: null, recipientIds: [] }, host, f.worker)
-    // Nothing marks a work group for a report any more (task #3593), so no report progress exists to read or write.
-    const before = await db.swarmProgress.findFirst({ where: { tabId: f.tab, deleted: false } })
-    expect(before).toBeNull()
-    const { reads } = await profiledReads(db, /\.SwarmProgress$/, async () => {
-      // The tab's first report, so it runs the liveness sweep too.
-      await f.observe('test-host', [f.harness.worker])
-      // The worker's machine is silent past its grace: the Swarm's other machine reports, and the sweep runs again.
-      f.clock.now += 2 * MINUTE + 5_000
-      await f.observe('lead-host', [f.harness.lead])
-    })
-    expect(reads).toBe(0)
-    // Swarm v4 loses no task on a report: it is the worker's own person who stops it.
-    expect((await f.assignment()).status).toBe('working')
-    expect(await db.swarmProgress.findFirst({ where: { tabId: f.tab, deleted: false } })).toBeNull()
   })
 })
 
@@ -506,7 +483,7 @@ describe('the delivery poll of an agent with a held delivery', () => {
     const row = (await f.timed.deliveries(host, f.tab, f.worker)).find(r => r.messageId === sent.result.messageId)!
     counted.ops.length = 0
     expect(await f.timed.deliveryReceipt(host, f.tab, f.worker, row.id)).toEqual({ id: row.id, status: 'queued' })
-    expect(counted.ops.filter(op => /^Swarm(Head|Member|Agent|Group|Machine|Start|Progress)\./.test(op))).toEqual([])
+    expect(counted.ops.filter(op => /^Swarm(Head|Member|Agent|Group|Machine|Start)\./.test(op))).toEqual([])
   })
 
   it('answers a worker\'s held delivery from the same reads', async () => {

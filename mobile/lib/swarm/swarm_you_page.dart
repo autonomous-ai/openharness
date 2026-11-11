@@ -27,9 +27,9 @@ import 'swarm_start.dart';
 import 'swarm_style.dart';
 
 /// Where You's Settings row goes, and the notice centre its Notifications
-/// reads: the shell's, handed down by Swarm's tabs to whatever opens You from
-/// under them ([openSwarmYou]); and the tabs told of each You opened over them
-/// ([onOpened]), to take it with them when they go.
+/// reads: the shell's, handed down by [SwarmYouScope] to whatever opens You from
+/// under it ([openSwarmYou]); and the scope told of each You opened over it
+/// ([onOpened]), to take it with it when it goes.
 class SwarmYouSettings extends InheritedWidget {
   const SwarmYouSettings({
     super.key,
@@ -45,7 +45,7 @@ class SwarmYouSettings extends InheritedWidget {
   /// none to turn on (the sample).
   final SystemNotices? notices;
 
-  /// A You opened over the tabs: it goes with them.
+  /// A You opened over Home: it goes with it.
   final ValueChanged<Route<void>>? onOpened;
 
   @override
@@ -55,9 +55,64 @@ class SwarmYouSettings extends InheritedWidget {
       onOpened != oldWidget.onOpened;
 }
 
-/// Opens You over [context]'s page, its Settings and notices the tabs'
-/// ([SwarmYouSettings]), and tells the tabs, which take it with them when they
-/// go.
+/// Swarm Home at the root of the phone's stack, with what You needs from the shell ([SwarmYouSettings]). Each You
+/// opened over Home goes with it: Swarm turned off from You's own Settings puts the terminal at the root, and back from
+/// Settings is then the terminal, not a You with no Swarm.
+class SwarmYouScope extends StatefulWidget {
+  const SwarmYouScope({
+    super.key,
+    this.onSettings,
+    this.notices,
+    required this.child,
+  });
+
+  /// The phone's Settings, from You.
+  final void Function(BuildContext context)? onSettings;
+
+  /// The phone's notice centre, for You's Notifications.
+  final SystemNotices? notices;
+  final Widget child;
+
+  @override
+  State<SwarmYouScope> createState() => _SwarmYouScopeState();
+}
+
+class _SwarmYouScopeState extends State<SwarmYouScope> {
+  final _yous = <Route<void>>[];
+
+  void _opened(Route<void> route) => _yous
+    ..removeWhere((you) => !you.isActive)
+    ..add(route);
+
+  @override
+  void dispose() {
+    // Not while the tree is torn down: once this frame is done.
+    final yous = [..._yous];
+    if (yous.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        for (final you in yous) {
+          final navigator = you.navigator;
+          if (navigator != null && navigator.mounted && you.isActive) {
+            navigator.removeRoute(you);
+          }
+        }
+      });
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => SwarmYouSettings(
+    onSettings: widget.onSettings,
+    notices: widget.notices,
+    onOpened: _opened,
+    child: widget.child,
+  );
+}
+
+/// Opens You over [context]'s page, its Settings and notices the scope's
+/// ([SwarmYouSettings]), and tells the scope, which takes it with it when it
+/// goes.
 void openSwarmYou(BuildContext context) {
   final scope = context.getInheritedWidgetOfExactType<SwarmYouSettings>();
   final route = phoneRoute(
@@ -154,7 +209,7 @@ class SwarmYouPage extends StatelessWidget {
     this.now = DateTime.now,
   });
 
-  /// The phone's Settings over the tabs.
+  /// The phone's Settings over Home.
   final void Function(BuildContext context)? onSettings;
 
   /// The phone's notice centre, for Notifications; none shows without it.

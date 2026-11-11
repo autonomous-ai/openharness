@@ -5,6 +5,8 @@ import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
+import { loadEngine } from '../engines/inProcess.js'
+import { openclawSessionDb } from './openclawStore.js'
 import { sqliteReadAll } from './sqliteRead.js'
 import { emptyOutputLedger, ingestOutput, outputSnapshot, validOutputLedger, type AgentOutputStats, type OutputLedger } from './agentOutputStats.js'
 import { emptySessionWork, ingestSessionWork, sessionWorkSnapshot, validSessionWork, type SessionWork, type SessionWorkLedger } from './sessionWork.js'
@@ -43,9 +45,48 @@ const object = (value: unknown): Record<string, unknown> | null =>
 const tokens = (value: unknown): number => typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : 0
 const sum = (values: number[]) => values.reduce((a, b) => a + b, 0)
 
+/**
+ * An OpenClaw key's tokens, per model: the `usage` its Gateway writes on each assistant row (uncached input, output,
+ * cache read, cache write), summed over the conversation's active branch. The session row's own counts are the last
+ * run's alone (recorded: `model-switch` holds three runs and its row counts one). The usage target carries no
+ * process, so the store is OpenClaw's default state folder's.
+ */
+/**
+ * An OpenClaw conversation's assistant usage since the count's cursor (`state.inode` holds the window and rewrite
+ * generation, `state.offset` and `state.size` the seq after the last one counted), added to the count's totals; counted from the start again when the
+ * window or generation changed. The session row's own counts are its last run's only (`model-switch` fixture).
+ */
+async function countOpenclaw(state: Checkpoint, target: Target, store: (key: string, stateDir: string | null) => Promise<string | null>): Promise<Checkpoint | null> {
+  const [code, db] = await Promise.all([loadEngine('openclaw'), store(target.sessionId, target.openclawStateDir ?? null)])
+  if (!code || !db) return null
+  const [windowId, generation] = state.inode ? state.inode.split('\u0000') : []
+  const after = windowId ? { windowId, seq: state.offset - 1, generation: generation || null } : null
+  const read = await code.readOpenclawSince(db, target.sessionId, after)
+  if (!read) return null
+  const next = read.whole ? { ...empty(state.key), work: state.work, output: state.output } : state
+  for (const { record } of read.events) {
+    const message = object(record.message)
+    const usage = object(message?.usage)
+    if (record.type !== 'message' || message?.role !== 'assistant' || !usage) continue
+    const delta: Buckets = [tokens(usage.input), tokens(usage.output), tokens(usage.cacheRead), tokens(usage.cacheWrite)]
+    addModel(next, message.model, delta)
+    next.total += sum(delta)
+    next.usage[0] += delta[0] + delta[2] + delta[3]
+    next.usage[1] += delta[1]
+    next.usage[2] += delta[2]
+  }
+  next.offset = next.size = read.cursor.seq + 1
+  next.inode = `${read.cursor.windowId}\u0000${read.cursor.generation ?? ''}`
+  next.observed = true
+  return next
+}
+
+/** The engines whose count is their store's, not a transcript file's. */
+const STORE_COUNTED = ['opencode', 'openclaw']
+
 function keyFor(s: Target): string | null {
-  if (!s.sessionId || !['claude', 'codex', 'opencode'].includes(s.engine)) return null
-  if (s.engine !== 'opencode' && !s.transcriptPath) return null
+  if (!s.sessionId || !['claude', 'codex', ...STORE_COUNTED].includes(s.engine)) return null
+  if (!STORE_COUNTED.includes(s.engine) && !s.transcriptPath) return null
   return hash(JSON.stringify([s.engine, s.codexHome ?? '', s.sessionId, s.transcriptPath,
     s.forkedFrom ? s.registeredAt : null]))
 }
@@ -54,7 +95,8 @@ function cacheKeyFor(s: Target): string | null {
 }
 function targetSnapshot(s: Target): Target {
   return { agentId: s.agentId, sessionId: s.sessionId, engine: s.engine, transcriptPath: s.transcriptPath,
-    codexHome: s.codexHome, cwd: s.cwd, registeredAt: s.registeredAt, forkedFrom: s.forkedFrom ? { ...s.forkedFrom } : null }
+    codexHome: s.codexHome, cwd: s.cwd, registeredAt: s.registeredAt, forkedFrom: s.forkedFrom ? { ...s.forkedFrom } : null,
+    ...(s.openclawStateDir ? { openclawStateDir: s.openclawStateDir } : {}) }
 }
 function empty(key: string): Checkpoint {
   return { version: 6, key, offset: 0, size: 0, mtime: 0, inode: '', boundary: '', total: 0, usage: [0, 0, 0],
@@ -163,6 +205,7 @@ export class AgentTokenUsageCache {
   onChanged?: (target: Target) => void
   constructor(private readonly directory: string, private readonly options: {
     now?: () => number; refreshMs?: number; opencodeDb?: string;
+    openclawDb?: (sessionId: string, stateDir: string | null) => Promise<string | null>;
     readSqlite?: typeof sqliteReadAll;
     onRead?: (bytes: number) => void;
   } = {}) {}
@@ -353,6 +396,11 @@ export class AgentTokenUsageCache {
       state.usage = [tokens(row.tokens_input) + tokens(row.tokens_cache_read) + tokens(row.tokens_cache_write),
         tokens(row.tokens_output) + tokens(row.tokens_reasoning), tokens(row.tokens_cache_read)]
       state.observed = true
+    } else if (entry.target.engine === 'openclaw') {
+      const counted = await countOpenclaw(state, entry.target,
+        this.options.openclawDb ?? ((key, stateDir) => openclawSessionDb(key, { pid: 0, stateDir })))
+      if (!counted) return false
+      state = counted
     } else {
       const path = entry.target.transcriptPath!
       const file = await open(path, 'r')

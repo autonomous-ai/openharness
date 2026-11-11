@@ -14,9 +14,8 @@ import { cacheDigest, startsOfRule } from '../src/superTabs/cachePatch.js'
 import * as parts from '../src/superTabs/parts/index.js'
 import { guardedWrite, startFinished } from '../src/superTabs/parts/write.js'
 import { DIRECT, deriveLight, readChanged, readDelta, readLastChangedAt, readLight, readParts, type ReadNamed } from '../src/superTabs/cachedReads.js'
-import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { stableId, type SuperTabState } from '../src/superTabs/model.js'
-import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
+import { storeSwarm } from './storedSwarm.test-support.js'
 import { outsider as outsiderActor, owner as ownerActor, peer as peerActor, richSwarm } from '../src/superTabs/read/fixture.test-support.js'
 
 // The read cache patched from deltas (spec docs/superpowers/specs/2026-11-02-swarm-cache-delta-design.md, Phases 1-2) against
@@ -53,9 +52,7 @@ async function scene() {
   await db.machine.create({ data: { machineId, userId: people.owner.sub, apiKey: `fixture-${machineId}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
   const poster = s.add('poster-harness', s.web, false, ownerActor, machineId, ownerActor.userId)
   const tabId = `tab-${randomUUID()}`
-  await writeLegacySwarm(db, { state: { ...structuredClone(s.state), id: tabId } as SuperTabState, revision: 10 })
-  const report = await migrateSwarm(db, tabId)
-  if (!report.ok) throw new Error(report.error)
+  await storeSwarm(db, { state: { ...structuredClone(s.state), id: tabId } as SuperTabState, revision: 10 })
   return { tabId, web: s.web, secret: s.secret, poster }
 }
 

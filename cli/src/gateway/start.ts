@@ -1,5 +1,6 @@
 import { VERSION, IS_RELEASE_BUILD } from '../version.js'
 import { gatewayResourceSample } from './productHealth.js'
+import { nodeStatus } from '../lib/nodeStatus.js'
 /**
  * The gateway, started: everything that holds this machine's keys or speaks for them, built in one place
  * so that it runs the same in the core's process (`HARNESSD_SERVICES=none`, or a master that does not run
@@ -151,6 +152,8 @@ export function startGateway(host: GatewayHost): StartedGateway {
     request: (method, path, body) => accountHttp.backend(method, path, body, 5_000),
     context: { surface: 'cli', release: VERSION, platform: process.platform === 'darwin' ? 'macos' : process.platform === 'linux' ? 'linux' : process.platform === 'win32' ? 'windows' : 'other', channel: host.autonomousEnv === 'prod' && IS_RELEASE_BUILD ? 'production' : 'development' },
     sample: gatewayResourceSample(),
+    // The gateway runs on the daemon's Node, as every service of the master does.
+    node: () => nodeStatus(),
   }) : null
   // The choice is read at once, so collection starts with the gateway; its first report waits for its first
   // tick, a random 10 to 60 seconds on (gateway/productUsage.ts), rather than the second a release started it.

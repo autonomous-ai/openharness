@@ -17,7 +17,7 @@ import tempfile
 # github-cli (gh) and sound-theme-freedesktop (foot.ini's bell): for a computer installed before they were
 # in the image (packages.x86_64) to get them with an update.
 # wtype, python-pywayland and wlr-protocols: the desktop MCP's keys and mouse (os/desktop_mcp.py).
-DEPENDENCIES = ('nodejs-lts-jod', 'tmux', 'foot', 'gtklock', 'grim', 'slurp', 'dnsmasq', 'github-cli', 'sound-theme-freedesktop',
+DEPENDENCIES = ('nodejs-lts-krypton', 'tmux', 'foot', 'gtklock', 'grim', 'slurp', 'dnsmasq', 'github-cli', 'sound-theme-freedesktop',
                 'wtype', 'python-pywayland', 'wlr-protocols')
 
 

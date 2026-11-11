@@ -9,7 +9,7 @@ const s = fullSwarm()
 const readers: Array<[string, Actor]> = [['the owner', owner], ['a member of the private project', peer], ['a member outside it', outsider],
   ['a worker', agentActor(s.worker)], ['a Lead', agentActor(s.lead)]]
 /** Kept from every reader: visibleState leaves them out before it copies. */
-const withheld = ['sharing', 'harnessReservations', 'releasedHarnesses', 'overlapAlerts', 'closingSessions'] as const
+const withheld = ['sharing', 'harnessReservations', 'releasedHarnesses', 'closingSessions'] as const
 
 describe('visibleState', () => {
   it('reads a Swarm that holds everything it leaves out', () => {
@@ -23,8 +23,11 @@ describe('visibleState', () => {
     expect(visible.conversations.some(c => c.dormant)).toBe(false)
   })
 
-  it('keeps project progress and each reader\'s projects', () => {
-    expect(visibleState(s.state, owner, NOW).projects!.some(p => p.progress)).toBe(true)
+  it.each(readers)('hands %s none of the overlap alerts a head written before S18 may still hold', (_name, actor) => {
+    expect(visibleState({ ...s.state, overlapAlerts: ['a:b'] } as typeof s.state, actor, NOW)).not.toHaveProperty('overlapAlerts')
+  })
+
+  it('keeps each reader\'s projects', () => {
     expect(visibleState(s.state, peer, NOW).projects!.map(p => p.id)).toContain(s.secret)
     expect(visibleState(s.state, outsider, NOW).projects!.map(p => p.id)).not.toContain(s.secret)
   })

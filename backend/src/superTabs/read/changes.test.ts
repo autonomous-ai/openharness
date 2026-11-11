@@ -21,7 +21,7 @@ function scene(closed = false) {
   })
   return { s, privateId, parts: store.split(s.state, { tabId: 'tab', version: R, now: NOW }) }
 }
-type Kind = 'members' | 'agents' | 'groups' | 'machines' | 'starts' | 'progress'
+type Kind = 'members' | 'agents' | 'groups' | 'machines' | 'starts'
 /** A later write of one part: its version moves and `change` applies to the stored part (data, tombstone or dormant flag). */
 function write(parts: SwarmParts, kind: Kind, key: string, change: (part: Part) => void): Part {
   const part = (parts[kind] as Part[]).find(p => p.key === key)!
@@ -32,7 +32,7 @@ function write(parts: SwarmParts, kind: Kind, key: string, change: (part: Part) 
 }
 /** What the reader receives: its view of the active (live) parts, then the changed parts run through its read check. */
 function receive(parts: SwarmParts, changed: Part[], actor: Actor) {
-  const active = { ...parts, ...Object.fromEntries((['members', 'agents', 'groups', 'machines', 'starts', 'progress'] as Kind[])
+  const active = { ...parts, ...Object.fromEntries((['members', 'agents', 'groups', 'machines', 'starts'] as Kind[])
     .map(kind => [kind, (parts[kind] as Part[]).filter(p => !p.deleted && !p.dormant)])) } as SwarmParts
   return changesFor(readerView(active, actor, LATER, {}), changed, actor)
 }
@@ -41,7 +41,7 @@ const keys = (list: Array<{ key: string }>) => list.map(p => p.key)
 describe('changes since a cursor (design 4.4)', () => {
   it('sends nothing but derived when nothing changed, and the head only when it changed', () => {
     const { parts } = scene()
-    expect(receive(parts, [], peer)).toMatchObject({ head: null, members: [], agents: [], groups: [], machines: [], starts: [], progress: [] })
+    expect(receive(parts, [], peer)).toMatchObject({ head: null, members: [], agents: [], groups: [], machines: [], starts: [] })
     const head = { ...parts.head, version: R + 1, changedAt: LATER }
     parts.head = head
     expect(receive(parts, [head], peer).head).toMatchObject({ key: 'head', version: R + 1 })
@@ -106,15 +106,6 @@ describe('changes since a cursor (design 4.4)', () => {
     const changed = [write(fresh, 'starts', `start-${s.web}`, p => { p.deleted = true }), write(fresh, 'starts', `start-${s.secretGroup}`, p => { p.deleted = true })]
     expect(keys(receive(fresh, changed, peer).starts)).toEqual([`start-${s.web}`])
     expect(keys(receive(fresh, changed, owner).starts)).toEqual([`start-${s.web}`, `start-${s.secretGroup}`])
-  })
-
-  it('sends changed project progress only to readers of the project', () => {
-    const { s } = scene()
-    s.edit(state => { for (const p of state.projects!) p.progress = { since: 1, summarizedFloor: 0, summarized: {}, requestedFloor: 0, requested: {} } })
-    const fresh = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
-    const changed = [write(fresh, 'progress', 'lead', () => {}), write(fresh, 'progress', s.secret, () => {})]
-    expect(receive(fresh, changed, peer).progress).toEqual([{ key: 'lead', version: R + 1, changedAt: LATER,
-      data: { since: 1, summarizedFloor: 0, summarized: {}, requestedFloor: 0, requested: {}, requestedAt: null } }])
   })
 
   it('hands a reader only the required machines they see, whole and in changes', () => {

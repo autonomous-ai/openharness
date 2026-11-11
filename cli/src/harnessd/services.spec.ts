@@ -18,7 +18,7 @@ class FakeService implements CoreHandle {
   onMessage(listener: (message: unknown) => void): void { this.messageListeners.push(listener) }
   onExit(listener: (code: number | null, signal: NodeJS.Signals | null) => void): void { this.exitListeners.push(listener) }
   say(message: unknown): void { for (const listener of this.messageListeners) listener(message) }
-  beat(rssBytes = 100 * MIB, heapUsedBytes = rssBytes / 2): void { this.say({ type: 'harnessd:heartbeat', rssBytes, heapUsedBytes, loopDelayMs: 2 }) }
+  beat(rssBytes = 100 * MIB, heapUsedBytes = rssBytes / 2): void { this.say({ type: 'harnessd:heartbeat', rssBytes, heapUsedBytes }) }
   exit(code: number | null, signal: NodeJS.Signals | null = null): void { for (const listener of this.exitListeners) listener(code, signal) }
 }
 

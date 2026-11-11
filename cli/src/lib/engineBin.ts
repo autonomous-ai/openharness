@@ -39,6 +39,7 @@ export const ENGINE_CLI_COMMANDS: Readonly<Record<AgentEngine, string>> = {
   grok: 'grok',
   agy: 'agy',
   copilot: 'copilot',
+  openclaw: 'openclaw',
   // A terminal has no command: the pane runs the user's login shell (engineLaunch.ts). The empty
   // string is what keeps every "is this binary installed" probe honest — nothing to look for.
   terminal: '',
@@ -88,6 +89,7 @@ export const ENGINE_CLI_ALIASES: Readonly<Record<AgentEngine, readonly string[]>
   grok: ['grok', 'agent'],
   agy: ['agy'],
   copilot: ['copilot'],
+  openclaw: ['openclaw'],
   terminal: [],
 }
 
@@ -468,6 +470,7 @@ export function enginePathOverride(engine: AgentEngine): string | undefined {
     case 'grok': return env.GROK_PATH
     case 'agy': return env.AGY_PATH
     case 'copilot': return env.COPILOT_PATH
+    case 'openclaw': return env.OPENCLAW_PATH
     case 'terminal': return undefined
   }
 }
@@ -493,6 +496,7 @@ export function engineBin(engine: AgentEngine, platform: NodeJS.Platform = proce
     case 'grok': return env.GROK_PATH || ENGINE_CLI_COMMANDS.grok
     case 'agy': return env.AGY_PATH || ENGINE_CLI_COMMANDS.agy
     case 'copilot': return env.COPILOT_PATH || ENGINE_CLI_COMMANDS.copilot
+    case 'openclaw': return env.OPENCLAW_PATH || ENGINE_CLI_COMMANDS.openclaw
     // Never launched by name — `buildEngineLaunchArgv` builds the shell argv itself.
     case 'terminal': return ENGINE_CLI_COMMANDS.terminal
   }

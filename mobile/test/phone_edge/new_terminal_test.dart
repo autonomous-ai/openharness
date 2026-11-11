@@ -124,9 +124,10 @@ void main() {
     await tapInView(tester, find.text('agent'));
     await frames(tester);
 
+    // Above the catalog's first row; the sheet builds only what fits, so a row further down may not be built.
     final terminal = tester.getTopLeft(find.text('Terminal').last).dy;
-    final amp = tester.getTopLeft(find.text('Amp').last).dy;
-    expect(terminal, lessThan(amp), reason: 'recents come before the rest');
+    final claude = tester.getTopLeft(find.text('Claude Code').last).dy;
+    expect(terminal, lessThan(claude), reason: 'recents come before the rest');
     await close(tester, app);
   });
 

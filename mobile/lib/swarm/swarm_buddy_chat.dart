@@ -28,10 +28,6 @@ import 'swarm_start.dart' show SwarmOwnComputer;
 import 'swarm_terminal_row.dart';
 import 'swarm_style.dart';
 
-/// The Swarm a Buddy chat shows in the Buddy tab, by name, and how to pick
-/// another from its menu.
-typedef SwarmBuddySwitch = ({String name, VoidCallback open});
-
 /// Opens the person's Buddy chat in [projectId] over [context]'s page, on the
 /// server first when the read holds none ([openSwarmBuddyChat]). Answers what
 /// went wrong as a sentence to show, or null once it is open — or once there
@@ -457,7 +453,7 @@ class _Field extends StatelessWidget {
 /// which asks first, then stops it; the chat stays (the desktop's Buddy
 /// options); and the chat's Notifications, as its menu on the desktop has.
 /// In their one chat for the Swarm, for a viewer too, Old chats with their
-/// older Buddy chats, and the Swarm to switch from in the Buddy tab. Nothing
+/// older Buddy chats. Nothing
 /// in anyone else's Buddy chat, or for a viewer with nothing to offer.
 class SwarmBuddyMenuButton extends StatelessWidget {
   const SwarmBuddyMenuButton({
@@ -465,7 +461,6 @@ class SwarmBuddyMenuButton extends StatelessWidget {
     required this.actions,
     required this.chatId,
     this.swarmId,
-    this.swarmSwitch,
     this.onFind,
   });
 
@@ -482,12 +477,8 @@ class SwarmBuddyMenuButton extends StatelessWidget {
   /// chats.
   final String? swarmId;
 
-  /// The Swarm row, in the Buddy tab with others to pick; null for none.
-  final SwarmBuddySwitch? swarmSwitch;
-
-  /// Old chats and the Swarm row: rows a viewer has too.
-  bool _hasOthers(SwarmReader reader) =>
-      swarmSwitch != null || _oldChats(reader).isNotEmpty;
+  /// Old chats: rows a viewer has too.
+  bool _hasOthers(SwarmReader reader) => _oldChats(reader).isNotEmpty;
 
   /// The older Buddy chats to offer, from the person's one chat alone.
   List<({SuperTabProject project, SuperTabConversation chat})> _oldChats(
@@ -626,14 +617,6 @@ class SwarmBuddyMenuButton extends StatelessWidget {
                       unawaited(_openOldChats(context));
                     }
                   },
-                ),
-              if (swarmSwitch case final swarm?)
-                PhoneSheetAction(
-                  icon: LucideIcons.hexagon,
-                  label: 'Swarm',
-                  value: swarm.name,
-                  chevron: true,
-                  onTap: swarm.open,
                 ),
               if (wrote && buddy != null)
                 PhoneSheetAction(

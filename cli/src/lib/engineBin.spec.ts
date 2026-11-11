@@ -3,6 +3,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { env } from '../config/env.js'
 import {
   agentAliasOwner,
   agentCommandOwnershipSnapshot,
@@ -58,7 +59,7 @@ describe('canonical engine CLI commands', () => {
     expect(snapshot.engineFileKeys?.get('opencode')?.has(bash.fileKey)).toBe(false)
   })
 
-  it('keeps the user-facing 15-engine command contract exact and ordered', () => {
+  it('keeps the user-facing 16-engine command contract exact and ordered', () => {
     expect(PROCESS_ENGINES.map((engine) => [engine, ENGINE_CLI_COMMANDS[engine]])).toEqual([
       ['claude', 'claude'],
       ['codex', 'codex'],
@@ -75,6 +76,7 @@ describe('canonical engine CLI commands', () => {
       ['grok', 'grok'],
       ['agy', 'agy'],
       ['copilot', 'copilot'],
+      ['openclaw', 'openclaw'],
     ])
   })
 
@@ -108,6 +110,25 @@ describe('canonical engine CLI commands', () => {
     expect(agentAliasOwner([snapshot.agentCandidates[0]?.fileKey], snapshot)).toBe('cursor')
     expect(cursorRuntimeBin(snapshot)).toBe('agent')
     expect(installedEngineBin('cursor', snapshot)).toBe(join(cursorBin, 'agent'))
+  })
+
+  it('finds openclaw on PATH and honours OPENCLAW_PATH', () => {
+    const root = mkdtempSync(join(tmpdir(), 'engine-bin-openclaw-'))
+    tempDirs.push(root)
+    const onPath = join(root, 'bin', 'openclaw'), chosen = join(root, 'chosen', 'openclaw')
+    for (const file of [onPath, chosen]) {
+      mkdirSync(join(file, '..'), { recursive: true })
+      writeFileSync(file, '#!/bin/sh\n', { mode: 0o755 })
+    }
+    process.env.PATH = join(root, 'bin')
+    expect(engineBin('openclaw')).toBe('openclaw')
+    expect(installedEngineBin('openclaw')).toBe(onPath)
+    const original = env.OPENCLAW_PATH
+    env.OPENCLAW_PATH = chosen
+    try {
+      expect(engineBin('openclaw')).toBe(chosen)
+      expect(installedEngineBin('openclaw')).toBe(chosen)
+    } finally { env.OPENCLAW_PATH = original }
   })
 
   const linuxIt = process.platform === 'linux' ? it : it.skip
