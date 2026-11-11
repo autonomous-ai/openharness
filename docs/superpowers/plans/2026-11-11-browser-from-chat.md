@@ -16,6 +16,11 @@ Swarm chat, and the agent drives it with `harness browser <command>`: no MCP, no
   attached again on every path that runs that agent again. Create, resume and daemon start attach it as before; the
   reconciler's look at each running agent (`core/agents/discovery.ts` `onObserved`) attaches any it finds left out,
   so no path has to remember to (Task 23).
+- A browser moves with its pane (decision 19): when a new agent row takes the pane its previous agent ended in, the
+  core tells the browser's port both ids, the service moves the settings entry and its profile in its queue, and
+  then asks the core to move the flag (`CoreApi.agents.moveBrowser`). A browser's container, network, volume and
+  proxy secret are named by the entry's `profile` id, not by the agent's, so nothing on disk is renamed
+  (Tasks 24 to 26).
 - The daemon's `agentBrowser` service keeps one tool server per ready browser (`podman exec -i … browser-tools.mjs`),
   runs the agent's commands through it one at a time, sizes Chrome's window through it, and types two lines into
   the agent (`CoreApi.turns.deliver`): one when the person's Start is ready, one at the person's Stop. Both are quiet
@@ -46,8 +51,12 @@ them and does not repeat them.
   end: the Swarm still types the agent its next thing.
 - **The browser follows its agent, by its id (Ken, 2026-11-11, decision 14).** Only the person's Stop clears the
   flag. An agent that stops has its browser stopped; whenever a row with the flag has a running engine again, by any
-  path, its browser is attached, and nothing is typed (its `told` mark stays). The flag never moves to another
-  agent's id (Where the spec needed a call, 21).
+  path, its browser is attached, and nothing is typed (its `told` mark stays).
+- **The browser moves with its pane (Ken, 2026-11-11, decision 19).** The flag, the settings entry and the profile
+  go to another agent's id in one case only: a new row takes the pane its previous agent ended in (`adoptEngine`
+  in the shell an exit left; `openProcessAgent` evicting the pane's row). The entry moves first, the flag after it,
+  so a move that fails leaves both agents as they were (`browser_move_failed`). The new agent is typed the ready
+  line; the previous one keeps no browser. No name in Podman is made from an agent's id but through its profile.
 - **No asking (Ken, 2026-11-11).** `harness browser …` is in both engines' allow rules, as `harness send` is
   (Task 20). It has no MCP tool.
 - **No read of the backend or of the Swarm on a command's path.** `agent_browser_run` reads the registry row, the
@@ -102,6 +111,16 @@ Inputs the spec implies and a person will meet. Each has its test in the task th
 9. **An agent the daemon took for exited while its engine ran on** (a restore that could not see it, two missed
    scans): archived, its browser stopped, then back under its own id with nothing restarted. Its browser is attached
    again, once, and every later scan tells the service nothing. Task 23.
+10. **The previous agent, resumed after its browser moved, and its person presses Start** (the spec: "a new, empty
+    one"): its own id is the name of the volume the pane's new agent now holds. Its new entry gets a profile id of
+    its own; that volume is never mounted for it, and a stop or a delete of the previous agent touches nothing
+    named by its id. Task 24.
+11. **The previous agent resumed in another pane before its old pane gets a new agent:** its browser came back with
+    it (decision 14) and stays with it; the engine typed into the old shell is a new agent with no browser.
+    Tasks 25 and 26.
+12. **The state file cannot be written at the move, or the core does not answer after it:** both flags stay as they
+    were, nothing is started for the new agent, nothing is typed, and one line names `browser_move_failed`.
+    Task 26.
 
 ## Contract
 
@@ -137,8 +156,10 @@ Every task uses these names. Requests are answered by `cli/src/services/agentBro
 | File | Holds | Task |
 |---|---|---|
 | `backend/src/types/productUsage.ts`, `cli/src/lib/productUsageContract.ts` | the counters, byte-identical | 1 |
-| `cli/src/lib/registry.ts`, `cli/src/core/agents/lifecycle.ts`, `cli/src/core/api.ts`, `cli/src/core/agentBrowserLink.ts`, `cli/src/core/main.ts` | the flag, set by the core | 2, 12, 15 (`api.ts` and `main.ts` also 22; `lifecycle.ts` and `main.ts` also 23) |
-| `cli/src/core/agents/discovery.ts` | a browser left on, attached on every look at its running agent | 23 |
+| `cli/src/lib/registry.ts`, `cli/src/core/agents/lifecycle.ts`, `cli/src/core/api.ts`, `cli/src/core/agentBrowserLink.ts`, `cli/src/core/main.ts` | the flag, set by the core | 2, 12, 15 (`api.ts` and `main.ts` also 22; `lifecycle.ts` and `main.ts` also 23; `registry.ts` also 25; all but `registry.ts` also 26) |
+| `cli/src/core/agents/discovery.ts` | a browser left on, attached on every look at its running agent; a pane's new agent, told to the browser | 23, 26 |
+| `cli/src/lib/registry.ts`, `cli/src/lib/stoppedAgents.ts` | the shell's name for the agent that ended in its pane; a stopped record's flag | 25 |
+| `cli/src/services/agentBrowser/containers.ts`, `browsers.ts`, `stateFile.ts` | a browser named by its profile; an entry that moves | 24 |
 | `cli/src/lib/e2ee/applicationFrames.ts` | the three sealed requests | 2 |
 | `cli/src/core/agents/create.ts`, `cli/src/lib/launchOverrides.ts` | launches with no browser argument | 3 |
 | `cli/src/lib/callerPane.ts` (moved) | the pane a command runs in | 4 |
@@ -148,12 +169,12 @@ Every task uses these names. Requests are answered by `cli/src/services/agentBro
 | `cli/src/services/agentBrowser/notices.ts`, `stateFile.ts` | the two lines and the `told` mark | 8, 22 (`notices.ts`) |
 | `cli/assets/browser/browser-tools.mjs`, `browser-tools-lib.mjs` | the tool server: calls and the window | 9 |
 | `desktop/tool/browser_viewer/viewer.js`, `desktop/assets/browser/browser_viewer.html` | the page clips to the window | 10 |
-| `cli/src/services/agentBrowser.ts`, `agentBrowserProcess.ts`, `agentBrowser/browsers.ts`, `agentBrowser/settings.ts` | the requests | 12, 15 |
+| `cli/src/services/agentBrowser.ts`, `agentBrowserProcess.ts`, `agentBrowser/browsers.ts`, `agentBrowser/settings.ts` | the requests; the move, in the service's queue | 12, 15 (`agentBrowser.ts` and `agentBrowserProcess.ts` also 26) |
 | `cli/src/agentClient/browser.ts`, `cli/src/cli.ts`, `cli/src/agentClient/help.ts` | the command | 13 |
 | `desktop/lib/state/app_state.dart`, `desktop/lib/e2ee/envelope.dart` | Desktop's requests | 11, 14 |
 | `desktop/lib/browser/browser_panel.dart`, `desktop/lib/super_tabs/view.dart`, `browser_bridge.dart` | button and panel | 16, 19 |
 | `desktop/design/desktop-design-system.md`, `desktop/test/swarm_elements_gallery_test.dart`, goldens | design doc and gallery | 11, 16, 19 |
-| `cli/e2e/agentBrowser.e2e.ts`, `cli/e2e/agentBrowserPodman.e2e.ts` | end to end | 17, 18 |
+| `cli/e2e/agentBrowser.e2e.ts`, `cli/e2e/agentBrowserPodman.e2e.ts` | end to end | 17, 18 (`agentBrowser.e2e.ts` also 26) |
 | `cli/src/engines/facets/hooks.ts`, `cli/src/engines/kit/hookSettings.ts`, `cli/src/engines/__fixtures__/hook-installers.golden.json`, `cli/e2e/agentClient.e2e.ts` | `harness browser` in both engines' allow rules | 20 |
 | `cli/src/lib/commander.ts` | a quiet turn's end: no recap, no notification | 21 |
 | `cli/src/core/deliveries.ts`, `cli/src/services/turnsLink.ts`, `cli/src/core/turns/recaps.ts`, `cli/src/services/recaps.ts` | the quiet mark, from a delivery to its turn's end | 22 |
@@ -169,8 +190,9 @@ its code commit, run the wave's commands below.
 | 0 (by hand, gate) | 0 |
 | 1 | 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 |
 | 2 | 12, 13, 14, 20, 21, 23 |
-| 3 | 15, 16 |
+| 3 | 15, 16, 24, 25 |
 | 4 | 17, 18, 19, 22 |
+| 5 | 26 |
 
 Tasks 20 to 22 were added after Task 0 (Ken, 2026-11-11). Why they sit where they do: 20 and 21 share no file with
 12, 13 or 14 and depend on none of them; 22 changes `core/api.ts` (Tasks 12 and 15) and `core/main.ts` (Task 15), so
@@ -182,6 +204,17 @@ its files (`core/agents/lifecycle.ts`, `core/agents/discovery.ts`, `core/main.ts
 cannot sit in wave 3 or 4: `core/main.ts` is Task 15's there, then Task 22's. Started after the others finish, it
 is still wave 2: it is cherry-picked last, before wave 3 starts, and Tasks 15 and 22 edit `main.ts` as it leaves
 it.
+
+Tasks 24 to 26 were added as wave 2 ended (Ken, 2026-11-11, decision 19). 24 and 25 are in wave 3: their files
+(`agentBrowser/containers.ts`, `browsers.ts`, `stateFile.ts`; `lib/registry.ts`, `lib/stoppedAgents.ts`; each one's
+spec) are changed by neither Task 15 nor Task 16, and they need nothing from them: until Task 26 no browser has
+moved, so every profile is its agent's id and Task 15's `containers.execArgs(agentId, …)` names the same container.
+Started after 15 and 16, they are still wave 3: cherry-picked after them, before wave 4 starts.
+26 cannot sit in wave 3 or 4: it changes `core/api.ts`, `core/main.ts`, `core/agentBrowserLink.ts`,
+`services/agentBrowser.ts` and `agentBrowserProcess.ts` (Task 15's; `api.ts` and `main.ts` then Task 22's) and
+`e2e/agentBrowser.e2e.ts` (Task 17's), and it needs 24 and 25. So a fifth wave, of one task: the core's half and the
+service's half meet at one port call and one ask, and one task holds both ends of them. The end to end case is
+Task 26's, not Task 17's: in wave 4 the code it runs is not there.
 
 **Wave 1 verify** (in `cli/` unless said):
 
@@ -222,7 +255,9 @@ npx vitest run src/services/agentBrowser.spec.ts src/services/agentBrowserProces
 npm run typecheck
 npx vitest run src/services/agentBrowser.spec.ts src/services/agentBrowserProcess.spec.ts src/core/api.spec.ts \
   src/core/agentBrowserLink.spec.ts src/services/agentBrowser/settings.spec.ts \
-  src/backendSocket.agentBrowser.spec.ts --maxWorkers=4
+  src/backendSocket.agentBrowser.spec.ts src/services/agentBrowser/containers.spec.ts \
+  src/services/agentBrowser/browsers.spec.ts src/services/agentBrowser/stateFile.spec.ts \
+  src/lib/registry.spec.ts src/lib/stoppedAgents.spec.ts --maxWorkers=4
 (cd ../desktop && flutter analyze lib test && flutter test --no-pub --concurrency=2 --timeout=60s test/browser \
   test/swarm_v4_journey_test.dart test/swarm_elements_gallery_test.dart)
 ```
@@ -240,6 +275,17 @@ E2E_BUNDLE=1 npx vitest run --config vitest.e2e.config.ts e2e/agentBrowser.e2e.t
 ```
 
 `e2e/agentBrowserPodman.e2e.ts` is typechecked here and run once by hand at the end (see At the end).
+
+**Wave 5 verify:**
+
+```bash
+npm run typecheck
+npx vitest run src/core/agents/discovery.spec.ts src/core/agents/lifecycle.spec.ts src/core/api.spec.ts \
+  src/core/agentBrowserLink.spec.ts src/services/agentBrowser.spec.ts src/services/agentBrowserProcess.spec.ts \
+  src/services/agentBrowser/browsers.spec.ts src/services/agentBrowser/containers.spec.ts \
+  src/backendSocket.agentBrowser.spec.ts src/lib/registry.spec.ts --maxWorkers=4
+E2E_BUNDLE=1 npx vitest run --config vitest.e2e.config.ts e2e/agentBrowser.e2e.ts
+```
 
 ---
 
@@ -1036,7 +1082,8 @@ whether `ended` is reached on the way:
 So one path lacks it today: back from the archive. The paths with no test of their own (daemon start, a restart
 in its pane) get one on the real daemon in Task 17's case, and every one that keeps its id is held by this task's
 look. The two that come back under a new id are not this task's: the flag is kept by id (Where the spec needed a
-call, 21).
+call, 21). Decision 19 came after: on those two paths the browser moves to the new id (Tasks 24 to 26), and Task 26
+turns this task's two pins of call 21 into its red tests.
 
 Rules:
 - **lifecycle.ts.** `observed(session)`: `session.browser` set and the agent not in `running`: `attached(session)`.
@@ -1231,6 +1278,190 @@ Decisions the spec leaves:
   and look at them.
 - [ ] **Step 4:** The Desktop command under Wave 3 verify: PASS. Commit `feat: Browser on every agent's chat, with
   Start and Stop`.
+
+### Task 24: A browser is named by its profile, and its entry can move
+
+**(Ken, 2026-11-11, decision 19.)** Today a browser's container, network and volume are `harness-browser-<agentId>`
+and its secret `harness-proxy-<agentId>`: a login cannot follow its pane to another id without a rename on disk.
+This task names them by a profile id kept in the settings entry, and gives the service the move itself. Nothing
+calls the move until Task 26, and until then every profile is its agent's id: no name changes.
+
+**Files:**
+- Modify: `cli/src/services/agentBrowser/stateFile.ts:12` (`browsers`' entry type; the header),
+  `cli/src/services/agentBrowser/browsers.ts` (`profile`, `move`; `settings`, `saveSettings`, `launch`, `stop`,
+  `remove`; the file's header), `cli/src/services/agentBrowser/containers.ts` (`start`, `stop`, `remove`, `ready`,
+  `execArgs`, `create`, `sweep`; the header)
+- Test: `cli/src/services/agentBrowser/stateFile.spec.ts`, `cli/src/services/agentBrowser/browsers.spec.ts`,
+  `cli/src/services/agentBrowser/containers.spec.ts`
+- Not changed: `cli/src/services/agentBrowser.ts`, `agentBrowserProcess.ts` and `agentBrowser/settings.ts` (Task 15's,
+  in this wave: `BrowserSettings` gains no field, so `parseSettings`, `publicSettings` and `settingsHash` never see
+  `profile`); `agentBrowser/fakePodman.ts`; `agentBrowser/notices.ts`; `agentBrowser/events.ts` (an exit is told by
+  the `harness.agent` label, which stays the agent's id).
+
+**Depends on:** Task 12 (`browsers.ts` as it leaves it). Nothing in wave 3.
+
+**Interfaces, produces:**
+
+```ts
+// stateFile.ts. `profile`: the id the browser's container, network, volume and proxy secret are named by. Absent,
+// it is the agent's own id: every browser that never moved, and every one made before this field.
+export type SavedBrowser = BrowserSettings & { profile?: string }
+export interface BrowserStateData { browsers: Record<string, SavedBrowser>; … }
+
+// browsers.ts
+/** The id [agentId]'s browser is named by: its entry's `profile`, else its own id. Null for an agent with no entry
+ *  whose id another entry holds as its profile: its browser went with its pane, and nothing of that name is its. */
+profile(agentId: string): string | null
+/** [from]'s entry, its profile with it, becomes [to]'s (decision 19): [from]'s browser is stopped first, in both
+ *  agents' queues. False, changing nothing, when [from] has no entry or is being deleted, or [to] has an entry of
+ *  its own. Rejects when the state file cannot be written: both entries are as they were. */
+move(from: string, to: string): Promise<boolean>
+
+// containers.ts: named by the profile, labelled with the agent.
+start(agentId: string, profile: string, image: string, settings: BrowserSettings, timeZone: string, secretId: string)
+stop(profile: string) · remove(profile: string) · ready(profile: string) · execArgs(profile: string, cmd: string[])
+// By the agent's label, as today: running(), exitCode(agentId), sweep(listedAgentIds).
+```
+
+Rules:
+- **Names.** `harness-browser-<profile>` for the container, its network and its volume, `harness-proxy-<profile>`
+  for the secret; the labels stay `harness.agent=<agentId>` and `harness.daemon`. The spec names the volume and
+  the container; the network and the secret share their name function today and go with them (Where the spec
+  needed a call, 26).
+- **`profile(agentId)`** reads the state file, as `settings()` does. `Browsers` resolves it once for each start,
+  stop and remove (once per `launch`, not once per ready try) and hands it to `Containers`. A null profile has
+  nothing to stop or remove: no Podman call is made.
+- **An entry made new** (`launch`'s `??=`, a save while off) for an agent whose id another entry holds as its
+  profile gets `profile: randomUUID()`. Any other new entry has no `profile`: the file of a browser that never
+  moved is byte for byte what an older CLI writes, which is the spec's rollback line.
+- **`profile` is the service's, never the person's.** `settings()` returns the entry without it (as it does the
+  proxy's `secretId`), so the apps, `settingsHash` and the container's label never see it; `saveSettings` keeps
+  the entry's `profile` whatever is saved.
+- **`move(from, to)`**, one piece of work in `from`'s queue and, inside it, in `to`'s: when `from` shows a state,
+  it is forgotten, its viewers are closed and its container, network and secret are removed (a removal that fails
+  is logged, as a stop's is, and the move goes on); then one `state.update`: `to` takes `from`'s entry with
+  `profile: entry.profile ?? from`, `from`'s entry and its `told` mark go, `to` gets no `told` mark. A move that
+  happened logs `agent browser <to>: took the browser of <from>` and nothing of the settings. The volume is never
+  touched.
+- **`remove(agentId)`** removes the volume of the agent's own profile and no other; with no entry it removes
+  nothing in Podman and only takes the id off `deleting`.
+- **`Containers.create`.** A create Podman refuses because the name is in use (`/already in use/i`: a container the
+  previous agent's failed stop left, under that agent's label) removes the container of that name and creates
+  again, once. The usual path gains no call.
+- **`Containers.sweep`.** A stray is stopped by the name Podman lists for it (`Names[0]`), never by a name made
+  from its label: after a move, `harness-browser-<an agent's id>` can be another agent's running browser.
+- **Standard 4.** Nothing on a command's path or at rest: the state file is read where a container is started,
+  stopped or removed, as today.
+
+- [ ] **Step 1: Red.**
+  - `stateFile.spec.ts`: `an entry's profile is read back as written, and an entry without one is read as before`.
+  - `containers.spec.ts`: `a browser whose profile is not its agent's id is created, started, checked, exec'd into,
+    stopped and removed under the profile's names, labelled with the agent` (the argv of each); `a create refused
+    because the name is in use removes that container and creates again, once; a second refusal fails`; `sweep
+    stops a stray by its own name, and never the container named after the stray's agent`. Every existing case
+    passes with the profile equal to the agent's id.
+  - `browsers.spec.ts` (its fake `Containers`, a real `StateFile`):
+    - `a browser with no profile in its entry is named by its agent's id` (start, stop, delete: what `Containers`
+      is handed);
+    - `a move gives the new agent the entry and the profile, takes the previous agent's entry and told mark, and
+      touches no volume`; `a moved entry moves again and keeps its first profile`;
+    - `a move stops the previous agent's browser first when it runs, and makes no Podman call when it does not`;
+      `a stop that fails is logged and the entry still moves`;
+    - `a move with no entry, of an agent being deleted, or to an agent that has an entry, changes nothing and
+      answers false`;
+    - `a move that cannot write the state file rejects, and both entries are as they were`;
+    - `a move waits for the work already queued for either agent` (a start of `to` asked first finishes first);
+    - Review Focus 10: `the previous agent's next start gets a profile of its own: the moved volume is not
+      mounted for it, and its stop and its delete remove nothing named by its id`;
+    - `a delete removes the volume of the agent's own profile, and a delete of the new agent removes the moved
+      one`; `a delete of an agent with no entry removes nothing in Podman`;
+    - `settings never show the profile, and a save keeps it`; `a save while off for an agent whose id is another's
+      profile makes its entry with a profile of its own`.
+- [ ] **Step 2:** `npx vitest run src/services/agentBrowser/stateFile.spec.ts
+  src/services/agentBrowser/containers.spec.ts src/services/agentBrowser/browsers.spec.ts`: FAIL. Commit `test: a
+  browser is named by its profile, and its entry moves to another agent`.
+- [ ] **Step 3: Green.** Implement the rules.
+- [ ] **Step 4:** Same command with `--coverage` and a `--coverage.include=` for each of the three files: PASS at
+  100%. Then `npx vitest run src/services/agentBrowser.spec.ts src/services/agentBrowserProcess.spec.ts` (Task 15's,
+  as the wave's base has them: no name changed) and `npm run typecheck`: PASS. Commit `feat: a browser's container
+  and volume are named by its profile; Browsers.move`.
+
+### Task 25: A shell names the agent that ended in its pane
+
+**(Ken, 2026-11-11, decision 19.)** The core cannot tell today whose pane a shell was: `releaseEngine` gives the
+shell a new id and keeps nothing of the old one, and an evicted row's flag is gone with the row before the caller
+reads `evicted`. A search of the saved agents by pane is not proof: pane ids restart with every tmux server. This
+task keeps the two facts Task 26 needs, and lets a stopped record's flag be written.
+
+**Files:**
+- Modify: `cli/src/lib/registry.ts` (`RegisteredSession`, beside `browser` at `:194-198`; the load list at `:1439`;
+  `openProcessAgent`'s `evicted` at `:1615` and `:1690`; `resumePendingAgent` at `:1848`; `reinstateArchived` at
+  `:2301`; `adoptEngine` at `:2333`; `releaseEngine` at `:2379-2380`), `cli/src/lib/stoppedAgents.ts` (`save` at
+  `:112`; `patch` at `:166` and its comment)
+- Test: `cli/src/lib/registry.spec.ts`, `cli/src/lib/stoppedAgents.spec.ts`
+- Not changed: `cli/src/lib/retainExitedSession.ts`, `cli/src/core/` (Task 26), `cli/src/lib/agentFrame.ts` (a frame
+  is built from named fields: the new one is on none).
+
+**Depends on:** Task 2. Nothing in wave 3.
+
+**Interfaces, produces:**
+
+```ts
+// registry.ts, RegisteredSession. On the shell an exit left (`releaseEngine(id, true)`): the agent whose engine
+// ended in this pane. The pane's next agent takes that agent's browser (decision 19). Gone once an engine is
+// adopted here, and once that agent runs again under its own id.
+previousAgentId?: string
+// openProcessAgent's answer: the evicted row's Browser was on.
+evicted: { agentId: string; sessionId: string; browser?: true } | null
+
+// stoppedAgents.ts: one field of a saved record, in place. `browser: true` sets the flag, `browser: undefined`
+// takes it out of the file.
+patch(agentId: string, patch: Partial<Pick<RegisteredSession, 'cwd' | 'browser'>>): boolean
+```
+
+**Design** (one stored field more than the spec's Data line names; Where the spec needed a call, 23):
+- growth: one id on a shell's row; it goes when an engine is adopted there, when the agent it names runs again,
+  and with the row. Never in a saved record;
+- concurrency: the registry's own writes, one turn each;
+- read cost: read only where a terminal adopts an engine; nothing per scan;
+- scale: N/A because it is one string on rows that already exist;
+- compatibility: an older CLI rebuilds a row from named fields and drops it: after a rollback nothing moves;
+- migration and rollback: none; the field is absent until an engine exits under the new CLI;
+- audience: on no frame; identity: N/A because it names an agent of this machine, never a login; failure: a
+  hand-edited value that is not an id is dropped at load; platforms: all.
+
+Rules:
+- **`releaseEngine(agentId, true)`**: the shell's `previousAgentId` is the released agent's id. Its `browser` is
+  still taken off (`:2380`): the flag stays with the agent until a new agent takes the pane. A release in place
+  (no second argument) names nobody: that row keeps its id and its flag.
+- **`adoptEngine`** takes `previousAgentId` off: the row is an agent now. Task 26 reads it before it adopts.
+- **`resumePendingAgent(saved, …)` and `reinstateArchived(…, saved, …)`**: every row that names `saved.agentId`
+  loses the name. The agent runs again and its browser came back with it (decision 14): its old pane's next agent
+  takes nothing (Review Focus 11). One pass over the live rows, at a resume only.
+- **Load** keeps it only as an agent id (`parentAgentIdOf`) on a row whose engine is `terminal`, in the explicit
+  list at `:1439`.
+- **`openProcessAgent`**: `evicted.browser` is the evicted row's flag.
+- **stoppedAgents.ts.** `save` never keeps `previousAgentId` (a stopped shell that is opened again is a new
+  pane). `patch` takes `browser` beside `cwd`, with the same promise: no rename, no `touchedAt`.
+
+- [ ] **Step 1: Red.**
+  - `registry.spec.ts`:
+    - `the shell an exit leaves names the agent that ended in its pane, through a save and a load; a release in
+      place names nobody` (and the case at `:2065` still holds: the shell has no `browser`);
+    - `the name goes when an engine is adopted in the shell`;
+    - `the name goes when the agent it names runs again: a resume, and a return from the archive` (two shells
+      naming it, both cleared; a shell naming another agent keeps its name);
+    - `a hand-edited name that is not an id, or on a row that is not a terminal, is dropped at load`;
+    - `a process that takes a bound agent's pane says whether the agent it evicted had its Browser on`.
+  - `stoppedAgents.spec.ts`: `a saved record never keeps previousAgentId`; `patch sets and clears browser in
+    place: the name and touchedAt stay, a cleared flag is absent from the file, and an id with no record answers
+    false`.
+- [ ] **Step 2:** `npx vitest run src/lib/registry.spec.ts src/lib/stoppedAgents.spec.ts`: FAIL. Commit `test: a
+  shell names the agent that ended in its pane`.
+- [ ] **Step 3: Green.** Implement the rules.
+- [ ] **Step 4:** Same command, `npx vitest run src/core/agents/discovery.spec.ts src/lib/retainExitedSession.spec.ts`
+  and `npm run typecheck`: PASS. Commit `feat: the shell an exit leaves keeps its agent's id; a stopped record's
+  Browser flag can be written`.
 
 ---
 
@@ -1433,6 +1664,166 @@ Rules:
 
 ---
 
+## Wave 5
+
+### Task 26: The browser moves with its pane
+
+**(Ken, 2026-11-11, decision 19; the spec's "The browser moves with its pane".)** The person quits the engine and
+types it again in the same pane: the pane's agent has a new id, and today its Browser is off and its logins stay
+with a stopped agent. From here the browser goes with the pane: the core sees the new row take the pane and tells
+the browser's port both ids; the service moves the entry and the profile (Task 24) in its queue and then asks the
+core to move the flag; the core attaches the new agent, which starts the browser and is typed the ready line.
+
+**Files** (line numbers as of wave 2's head; Tasks 15 and 22 move them):
+- Modify: `cli/src/core/api.ts` (`AgentBrowserPort` at `:1079-1093`, `AGENT_BROWSER_FALLBACKS`;
+  `CoreApi.agents.moveBrowser` beside `setBrowser` at `:231`; `CoreApiDeps.moveBrowser` at `:2047`),
+  `cli/src/core/agents/lifecycle.ts` (`createAgentBrowserLifecycle`: `taken`, `move`, a third argument; its comment),
+  `cli/src/core/agents/discovery.ts` (`DiscoveryDeps`; `onDiscovered` after the forget at `:115-128`; `onObserved` at
+  the adopt, `:166-169`; the header), `cli/src/core/agentBrowserLink.ts` (the port's `moved`; `move_browser`; the
+  header), `cli/src/core/main.ts` (`:847`, `:1037`, `:1993`), `cli/src/services/agentBrowser.ts` (the port's `moved`;
+  `unsupported`; every `containers.execArgs` caller; the header), `cli/src/services/agentBrowserProcess.ts` (the
+  `moved` event; `moveBrowser`; the header), `cli/e2e/agentBrowser.e2e.ts`
+- Test: `cli/src/core/agents/discovery.spec.ts` (`:114-123` and `:255-263`, Task 23's two pins of call 21, become
+  this task's red tests), `cli/src/core/agents/lifecycle.spec.ts`, `cli/src/core/api.spec.ts`,
+  `cli/src/core/agentBrowserLink.spec.ts`, `cli/src/services/agentBrowser.spec.ts`,
+  `cli/src/services/agentBrowserProcess.spec.ts`
+- Not changed: `cli/src/lib/registry.ts`, `cli/src/lib/stoppedAgents.ts` (Task 25), `cli/src/services/agentBrowser/`
+  (Task 24), `cli/src/core/agents/forget.ts`, `cli/src/lib/retainExitedSession.ts`, `cli/src/superTabs/`, Desktop (the
+  button is already on every running agent: Task 16), the backend (no counter, no frame).
+
+**Depends on:** Tasks 24 and 25; Tasks 15 and 22 (`api.ts`, `main.ts`, `agentBrowserLink.ts`, `agentBrowser.ts` and
+`agentBrowserProcess.ts` as they leave them); Task 17 (the e2e file and its fake `podman`); Task 23.
+
+**Interfaces, produces:**
+
+```ts
+// core/api.ts, AgentBrowserPort. The pane [from] ended in has a new agent, [to] (decision 19): [from]'s settings
+// and profile go to [to], and then the service asks `agents.moveBrowser`. [on]: [from]'s Browser was on.
+moved(from: string, to: RegisteredSession, on: boolean): void
+// CoreApi.agents. The agent browser moved [from]'s entry to [to], and [from]'s Browser was on: [from]'s flag is
+// cleared and [to]'s is set, each where its row is, live or stopped; a live [to] is attached in the same turn.
+moveBrowser?(from: string, to: string): Promise<BrowserSwitch>
+// CoreApiDeps
+moveBrowser?: (from: string, to: string) => BrowserSwitch
+
+// lifecycle.ts, beside `attached`, `ended`, `observed` and `set`
+taken(from: string, to: RegisteredSession, on: boolean): void   // discovery's word: tells the port
+move(from: string, to: string): BrowserSwitch                   // the service's ask, for a flag that was on
+// createAgentBrowserLifecycle's third argument: where a stopped agent's flag is written (Task 25).
+stopped: Pick<StoppedAgentStore, 'get' | 'patch'>
+
+// discovery.ts, DiscoveryDeps (required: the compiler holds main.ts to it)
+moveBrowser: (from: string, to: RegisteredSession, on: boolean) => void
+stoppedAgents: Pick<StoppedAgentStore, 'finishResume' | 'get' | 'list' | 'remove' | 'resumeReservedAt'>
+
+// agentBrowserLink: `service_event {kind: 'moved', from, session, on}`; the query `move_browser {from, to}`,
+// answered as `set_browser` is.
+```
+
+Rules:
+- **discovery.ts, the shell an exit left** (`onObserved`). `current.previousAgentId` is read before `adoptEngine`
+  (Task 25 takes it off there). After an adopt with a name: the named agent's saved record (`stoppedAgents.get`),
+  unless a resume of it is under way (`resumeReservedAt`). A record: `moveBrowser(previous, adopted, record.browser
+  === true)`. No record (purged since), a resume under way, or a store that cannot be read (one warning, as
+  `archivedOwner`'s): nothing moves. Any engine typed there takes it, not only the one that left.
+- **discovery.ts, a scan before the hook** (`onDiscovered`). `opened.evicted` with `opened.isNew`: after the
+  `forgetSession` that is there today, `moveBrowser(evicted.agentId, opened.entry, evicted.browser === true)`.
+  After, so the evicted browser's stop is ahead of the move in the service's queue.
+- **Not a takeover:** an agent back from the archive (`reinstateArchived`: its own id, Task 23); a terminal that
+  kept its id; a plain terminal nobody ended in; fork, Change agent, an adopted outside conversation, a guest's
+  create, `--resume` in a second pane. None of them reaches either line above.
+- **lifecycle.ts `taken`.** Nothing for a guest's `to`, or a `to` whose Browser is on already (it keeps its own:
+  Where the spec needed a call, 25). Else `browser()?.moved(from, to, on)`. No flag changes here.
+- **lifecycle.ts `move`.** `to` is looked up first, live then stopped; in neither: `{error: 'NOT_RUNNING'}` and
+  `from` keeps its flag. Then `from`'s flag is cleared where its row is (live: `rows.setBrowser(from, false)` and
+  `ended(from)`; stopped: `stopped.patch`; an evicted row is nowhere, and that is done), and `to`'s is set: live,
+  `attached(rows.setBrowser(to, true)!)`; stopped, `stopped.patch(to, {browser: true})`, so its resume brings the
+  browser. `{ok: true, changed: true}`.
+- **agentBrowserLink.ts.** The port's `moved`: `forget(from)`, then the event, held until the process hears it
+  (`untilDelivered`, as a stop); the process is asked for only when `on`, as an attach asks. `move_browser`:
+  `INVALID_REQUEST` unless two ids; `UNSUPPORTED` without `core.agents.moveBrowser`.
+- **agentBrowserProcess.ts.** `moved` reaches `port.moved` when `from` is an id, `session` is a session and `on`
+  a boolean, before the `agentId` check the other events share. `moveBrowser` asks `move_browser` within
+  `SWITCH_TIMEOUT_MS` and reads the answer with `switchOf`.
+- **agentBrowser.ts, the port's `moved(from, to, on)`.** `notices.ended(from)` and `attached.delete(from)` at once;
+  then, not awaited: `browsers.move(from, to.agentId)` (Task 24: stop, then the entry, in both queues). False, or
+  true with `on` false (no flag to move): done. True with `on`: `core.agents.moveBrowser(from, to.agentId)`. A
+  rejected move, a core that answers an error, and a core that does not answer each log
+  `agent browser <to>: browser_move_failed (<why>)` once, `why` being `state_unwritable`, the core's error name or
+  `no_answer`: never a path or a setting. Nothing is started here: the core's `attached` starts the browser, and
+  the ready line follows from `changed`, since `to` has no `told` mark. A move never calls `begin()`: with no
+  state file there is no entry, and it ends at one read.
+- **agentBrowser.ts, names.** The stream's exec (`streamCommand`) and the tool server's spawn (Task 15) name the
+  container by `browsers.profile(agentId)`. On Windows `moved` does nothing.
+- **Counters.** None: a move is not a Start. `agent_browser_enabled` is not counted for `to` (it is listed by the
+  time it is attached), and `agent_browser_started` is the request's alone.
+- **Standard 4.** A scan of a running agent gains nothing: both lines run only where a terminal adopts an engine
+  or a new row evicts one. No timer, no poll, nothing at rest.
+
+- [ ] **Step 1: Red.**
+  - `discovery.spec.ts`, the two pins rewritten (their comment "kept by the agent's id" goes):
+    - `an engine typed into the shell an exit left takes the browser of the agent that ended there: the browser's
+      move is told the previous agent, the adopted row, and the flag its record kept` (twice: the record's flag
+      on, and off);
+    - `a process that takes a bound agent's pane takes its browser: the move is told after the evicted agent is
+      forgotten, with the flag the evicted row had`;
+    - `nothing moves for a shell that names nobody, for a previous agent with no saved record, while its resume
+      is under way, or when the saved agents cannot be read` (Review Focus 11 at this layer: Task 25 drops the
+      name at a resume);
+    - `an agent back from the archive, and a row re-observed in place, move nothing`.
+  - `lifecycle.spec.ts`, in "the agent browser, as its agent starts and ends":
+    - `a pane's new agent is told to the browser with both ids, and no flag changes until the service asks`;
+    - `a guest's new agent, and one whose Browser is on already, are told nothing`;
+    - `the service's ask clears the stopped agent's flag in its record, sets the new agent's and attaches it, in
+      one turn`; `a previous agent that runs again loses its flag and its browser is stopped`; `an evicted
+      agent, in no list, is done`;
+    - `a new agent that stopped meanwhile gets the flag in its record and nothing is attached`; `one that is
+      nowhere answers NOT_RUNNING and the previous agent keeps its flag`.
+  - `api.spec.ts`: `moveBrowser answers what the lifecycle said, and is absent without it`.
+  - `agentBrowserLink.spec.ts`: `a move is said to the process with both ids and the flag, held until it hears,
+    and asks for the process only when the flag is on`; `the previous agent's state, command and viewers go at
+    once`; `move_browser asks the core and answers what it said; anything but two ids is INVALID_REQUEST`.
+  - `agentBrowserProcess.spec.ts`: `a move the core says reaches the port`; `a move without a session or a flag
+    is dropped`; `asks the core to move the flag and answers what it said; a core that does not answer rejects`.
+  - `agentBrowser.spec.ts` (fake `podman`, a fake core whose `moveBrowser` calls the port as the core does):
+    - `the browser moves with its pane: the previous agent's container is removed, the entry and its profile are
+      the new agent's, the core is asked to move the flag, the container is created again under the new agent's
+      label on the same volume, and the new agent is typed the ready line once`;
+    - `a move with the flag off moves the entry, asks the core nothing and starts nothing; the new agent's Start
+      then mounts the same volume`;
+    - `the stream and the tool server of a moved browser exec into its profile's container`;
+    - Review Focus 12: `a state file that cannot be written leaves both agents as they were, asks the core
+      nothing, types nothing, and logs browser_move_failed`; `a core that refuses or does not answer is logged
+      browser_move_failed, and nothing is started`;
+    - `a move of an agent with no entry asks the core nothing and makes no Podman call`; `a move counts
+      nothing`; `a line owed to the previous agent is taken back`;
+    - `a delete of the previous agent after the move removes no volume, and a delete of the new agent removes
+      the moved one` (through the port's `deleted`);
+    - `on win32 a move does nothing and no process starts`.
+  - `e2e/agentBrowser.e2e.ts`, a new case, `the browser moves with its pane`: a plain agent, `agent_browser_start`,
+    `ready`; `!exit` typed into its pane (as `paneLifecycle.e2e.ts` does) and the `agent_deleted` that names the
+    shell as `successor`; the fixture's `claude` typed into that pane; the successor's frame turns `ready` with no
+    `agent_browser_start`; the fake's log has a `create` named `harness-browser-<the first id>` labelled
+    `harness.agent=<successor>` and no `volume rm`; the state file lists the successor with `profile: <the first
+    id>` and not the first agent; `harness browser snapshot` in the pane exits 0; the pane shows the ready line;
+    the first agent is listed stopped, and after `agent_resume` its frame has no `browser`.
+- [ ] **Step 2:** `npx vitest run src/core/agents/discovery.spec.ts src/core/agents/lifecycle.spec.ts
+  src/core/api.spec.ts src/core/agentBrowserLink.spec.ts src/services/agentBrowser.spec.ts
+  src/services/agentBrowserProcess.spec.ts`: FAIL. `E2E_BUNDLE=1 npx vitest run --config vitest.e2e.config.ts
+  e2e/agentBrowser.e2e.ts -t "moves with its pane"`: FAIL (the successor never shows a browser). Commit `test: the
+  browser moves with its pane to the agent that takes it`.
+- [ ] **Step 3: Green.** Implement the rules. Comments: `createAgentBrowserLifecycle`'s says the one case a flag
+  changes id, and that the entry moves first; discovery's header names the takeover; the three headers
+  (`agentBrowserLink.ts`, `agentBrowserProcess.ts`, `agentBrowser.ts`) name `moved` and `move_browser` beside what
+  they list today.
+- [ ] **Step 4:** The unit command with `--coverage` and a `--coverage.include=` for each of
+  `src/core/agents/discovery.ts`, `src/core/agents/lifecycle.ts`, `src/core/agentBrowserLink.ts`,
+  `src/services/agentBrowser.ts` and `src/services/agentBrowserProcess.ts`: PASS at 100%. Then the commands under
+  Wave 5 verify: PASS.
+- [ ] **Step 5:** Commit `feat: a pane's new agent takes its browser: the settings, the profile and the flag`.
+
+---
+
 ## At the end
 
 1. **Final review** (ken15dev phase 4): one fresh Opus subagent that wrote none of it reviews the branch against
@@ -1445,18 +1836,25 @@ Rules:
    "attachBrowser" -- cli/src ':!*.spec.ts'` shows create, resume and discovery, each handed the lifecycle in
    `core/main.ts` (`agentBrowsers.attached` twice, `agentBrowsers.observed` once), and Task 23's table still names
    every caller of `registry.openPendingAgent`, `resumePendingAgent`, `openProcessAgent`, `reinstateArchived`,
-   `adoptEngine` and `releaseEngine`: a path added since gets its row and its test.
+   `adoptEngine` and `releaseEngine`: a path added since gets its row and its test. And for decision 19: `git grep
+   -n "moveBrowser\|\.moved(" -- cli/src ':!*.spec.ts'` shows discovery's two lines (the adopt, the eviction), the
+   lifecycle, the link, the service's own process and the service, and no other caller; in
+   `cli/src/services/agentBrowser/containers.ts` no name is made from an agent's id (`nameOf` and `secretOf` take a
+   profile), and every `containers.execArgs` caller passes `browsers.profile(…)`; `git grep -n "kept by the agent's
+   id" -- cli/src` finds nothing (Task 23's two pins are Task 26's tests now); and `previousAgentId` is on no frame
+   (`git grep -n previousAgentId -- cli/src/lib/agentFrame.ts desktop mobile` finds nothing).
 2. **Local receipts** (`docs/validation-and-release.md`; PR CI does not run these). `python3 scripts/local-checks.py
    --list $(git diff --name-only main...HEAD)` prints what the pull request must carry. Expected, once each, on
    the final head, recorded in the PR body's `harness-local-checks` fence:
    - `cli-core`: `npm run test:core` (`src/core/`, `src/services/` at 100% per file);
    - `cli-portability`: `npm run test:portability` (`launchOverrides`, `createAgentPane`, `registry`);
-   - `cli-resume`: `npm run test:resume` (`resumeAgentService.ts`, a comment);
+   - `cli-resume`: `npm run test:resume` (`resumeAgentService.ts`, a comment; `stoppedAgents.ts`, Task 25);
    - `make desktop-test` on a Mac (`desktop-macos`): not required by path, run once because the panel's webview is
      macOS and Linux UI.
    `test:harnessd` is not needed: nothing under `src/harnessd/` changes. Tasks 20 to 23 add no receipt: their
    files ask for `cli-core` alone (`local-checks.py --list`), already here; `cli/src/engines/` and
-   `cli/src/lib/commander.ts` are covered by `cli-tests` on CI.
+   `cli/src/lib/commander.ts` are covered by `cli-tests` on CI. Tasks 24 to 26 add none either: their files ask for
+   the same three (`cli-core`; `cli-portability` and `cli-resume` for `registry.ts` and `stoppedAgents.ts`).
 3. **CI, once:** push, open the pull request ready with the `hold` label. `ci/required` runs `cli-typecheck`,
    `cli-tests`, `desktop-tests`, `backend-desk`, `backend-integration`, `mobile-checks` and `process-checks`.
 4. **Heavy end to end, once, by hand:** Actions, CLI end to end, Run workflow on the branch with
@@ -1473,8 +1871,15 @@ Rules:
      in Codex. An engine restart in its pane (Restart, ⌘⇧E): the button stays, running, and the page and the login
      are there after. The engine ended in its pane (`/exit`) and its tile gone to a terminal, then the agent
      resumed: the button stays and the browser comes back, signed in, with no ready line typed again. A daemon
-     restart (an update does one), then a restart of the Mac: the same, once the agent is back. And record what
-     call 21 leaves: the engine typed again into the shell its exit left is another agent, whose Browser is off.
+     restart (an update does one), then a restart of the Mac: the same, once the agent is back.
+   - **It moves with its pane (Tasks 24 to 26, decision 19).** With the browser on and a site signed in, in Claude
+     Code and in Codex: quit the engine (`/exit`) and type it again in the same pane. The button stays, on the
+     pane's new agent; the browser comes back signed in; the ready line is typed to it once. Then, from the saved
+     list, resume the agent that ended: its Browser is off, its Start opens an empty profile, and the pane's agent
+     is still signed in. Delete that resumed agent: the pane's agent is still signed in. Once more with the browser
+     stopped before the quit: the new agent's Browser is off, and its Start opens the signed-in profile. And the
+     other order: quit, resume the agent from the saved list first, then type the engine into the old shell: the
+     resumed agent keeps its browser and the shell's new agent has none.
    - **No asking (Task 20).** `harness browser snapshot` runs with no question in Claude Code's Ask mode and Auto
      mode and in Codex's default mode (sign Codex in first: Task 0 could not), on an agent started after the
      update. For the two agents that ran before it, record whether each engine took the new rule without a restart.
@@ -1488,10 +1893,16 @@ Rules:
    of `snapshot` on one page, p50 and p95 over 20 runs, through the relay on `main` and through the CLI on the
    branch; Task 0's start time beside them; Task 22's two medians, before and after (the recaps' `ingest` per
    batch and `settled` per delivery event); Task 23's medians, before and after (a scan's `onObserved` per agent).
+   Tasks 24 to 26 have no number: read from the diff, nothing is added to a scan of a running agent, to a
+   delivery or to a command (the takeover's lines run only where a terminal adopts an engine or a new row evicts
+   one; a profile is read where a container is started, stopped, removed or exec'd into).
 7. **The pull request says:** platforms (above); the release order (backend, CLI, Desktop); migration (none) and
    rollback (the spec's paragraph); the two compatibility entries and their date; what an older Desktop and an
-   older phone do at a quiet turn's end (Task 22, Compatibility); and that the hook fixture was recorded again for
-   `harness browser`'s rules (Task 20).
+   older phone do at a quiet turn's end (Task 22, Compatibility); that the hook fixture was recorded again for
+   `harness browser`'s rules (Task 20); and decision 19's data: the entry's `profile` and the shell row's
+   `previousAgentId` (Task 25's Design lines and the spec's Data line), no migration, and the rollback the spec
+   accepts (an older CLI finds a moved browser's volume under no name it knows: orphaned until its agent is
+   deleted; the move's log line names both ids).
 
 ## Where the spec needed a call
 
@@ -1550,19 +1961,45 @@ Each is built as written here; Ken may change any.
     quiet on a guess.
 20. **Desktop has no task for the quiet lines.** Its alert is raised only by the daemon's notification, which a
     quiet turn does not send; a Desktop test for it would pass before any change (Task 21).
-21. **The same pane, another agent.** Decision 14 keeps the browser by the agent's id. Today an engine comes back
-    in its own pane under a new id in two ways, and the flag does not move with it (Task 23's table): the engine
-    exits, its pane is left a shell under a new id, and the engine is typed again there; or a new engine process is
-    seen in a bound agent's pane before its start hook arrives. Built: by id. The stopped agent keeps its flag and
-    its logins and gets its browser back at its Resume; the pane's new agent shows Browser (Task 16) with the
-    browser off, and a Start there is a new, empty profile. Moving the browser with the pane means moving a profile
-    volume named by the agent's id: new work. Say if it is wanted.
+21. **The same pane, another agent. Decided by Ken (2026-11-11, decision 19): the browser moves with its pane**
+    (Tasks 24 to 26). As asked then: decision 14 keeps the browser by the agent's id, and an engine comes back in
+    its own pane under a new id in two ways (Task 23's table): the engine exits, its pane is left a shell under a
+    new id, and the engine is typed again there; or a new engine process is seen in a bound agent's pane before its
+    start hook arrives. Task 23 was built by id; on these two paths the flag, the settings and the profile now go
+    to the pane's new agent, and the agent that ended keeps no browser.
 22. **Two places a browser outlives its engine**, read from the code on the way, not run, and left as today (they
     are about how a browser ends, not how it comes back): a row whose engine never came up, or that a restore could
     not relaunch, stays a terminal under its id with its flag, so its browser runs beside a shell until the pane
     closes; and an agent archived as the daemon starts (its engine exited while the daemon was down) was never
     attached by that daemon, so `ended` tells the service nothing and a container that outlived the old daemon
     runs until that agent is resumed or purged. Say if either should stop it.
+23. **How the core knows whose pane a shell was** (decision 19). The spec's Data line names one stored field, the
+    entry's `profile`. Built with one more: the shell's registry row keeps the id of the agent that ended in its
+    pane (`previousAgentId`, Task 25). A search of the saved agents by pane is not proof: pane ids restart with
+    every tmux server, and a saved agent of last week would give its logins to a stranger's pane.
+24. **The agent that ended runs again before its old pane has a new agent** (resumed from the saved list, in
+    another pane). Its browser came back with it, as decision 14 says. Built: the old shell forgets it, and the
+    engine typed there later is a new agent with no browser. Taking a browser from a running agent is not what
+    "replaced" means.
+25. **The pane's new agent already has a browser of its own** (its Browser is on, or it has a settings entry: a
+    Start or a save on the shell before the engine was typed). Built: it keeps its own and nothing moves; the agent
+    that ended keeps its flag and its logins.
+26. **The names by profile.** The spec names the volume and the container. Built: the network and the proxy secret
+    too (`harness-browser-<profile>`, `harness-proxy-<profile>`): they share one name function today, and a secret
+    left under the agent's id would outlive its container.
+27. **"Its person can Start a new, empty one."** The previous agent's id is the name of the volume it gave away
+    (a profile is the agent's id until it moves). Built: a new entry for an agent whose id another entry holds as
+    its profile gets a profile id of its own (a UUID); any other new entry has no `profile`, as before. Without it
+    two agents would share one volume, and a delete of one would take the other's logins.
+28. **Failures the spec does not name.** A core that refuses or does not answer after the entry moved: the entry
+    stays with the pane's new agent, both flags stay as they were, and it is logged `browser_move_failed`; the new
+    agent's Start finds the logins. An agent evicted by a scan has no saved record, so a move that fails leaves its
+    entry under an id no agent has, and the next service start deletes it with its volume, as it does today. A
+    stop of the previous browser that Podman fails: logged, the entry still moves, and the new agent's start
+    removes the container left under that name.
+29. **Any engine typed into the shell takes the browser**, Codex after Claude Code too: the browser is the pane's.
+30. **A move tells nobody but the new agent.** The agent that ended is not running and is typed nothing. No
+    counter: the spec asks for the log line alone.
 
 ## Handoff
 
@@ -1574,3 +2011,7 @@ allow rules and the quiet lines (Ken: both in scope; quiet lines, option b).
 
 Amended 2026-11-11, with wave 2 under way: Task 23 (wave 2), for decision 14 (Ken: the browser follows its agent on
 every run path), with its case in Task 17's end to end run and its line in the by-hand list.
+
+Amended 2026-11-11, as wave 2 ended: Tasks 24 and 25 (wave 3) and 26 (a new wave 5), for decision 19 (Ken: the
+browser moves with its pane to the agent that replaces it; call 21 decided). Task 26 turns Task 23's two pins of
+call 21 into its red tests and carries the end to end case; calls 23 to 30 are what the spec left.
