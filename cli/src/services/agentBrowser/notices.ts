@@ -5,8 +5,8 @@
  *
  * Once per start: the state file's `told` mark is set when the ready line was written (or may have been: a line is
  * never typed twice) and cleared by the person's Stop, so a daemon restart and a resume type nothing. A line the core
- * gives up on is tried again, three times in all; a ready line given up on leaves the browser owed, and its next
- * ready tries again.
+ * gives up on is tried again, three times in all, unless its agent is gone; a ready line given up on leaves the browser
+ * owed, and its next ready tries again.
  */
 import { randomUUID } from 'node:crypto'
 import type { StateFile } from './stateFile.js'
@@ -16,6 +16,8 @@ export const STOPPED_LINE = 'Your person stopped your browser.'
 export const NOTICE_TRIES = 3
 /** Times the try: the second waits 30 s, the third 60 s. */
 export const NOTICE_RETRY_MS = 30_000
+/** The core's reason for a delivery whose agent no longer runs (lib/sessionInput.ts). */
+const AGENT_GONE = 'agent_gone'
 
 type Kind = 'ready' | 'stopped'
 
@@ -158,6 +160,12 @@ export class Notices {
     if (written) {
       this.lines.delete(`${line.agentId}:${line.kind}`)
       if (line.kind === 'ready') this.mark(line.agentId, event.state)
+      return
+    }
+    // Nothing is tried again against an agent that is gone (a stop line after the person's Stop has no end of the
+    // agent's to take it back). A ready line leaves no mark: the browser stays owed, and its next ready tells it.
+    if (event.reason === AGENT_GONE) {
+      this.lines.delete(`${line.agentId}:${line.kind}`)
       return
     }
     if (line.tries >= NOTICE_TRIES) {
