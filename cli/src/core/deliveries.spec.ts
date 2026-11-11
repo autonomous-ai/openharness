@@ -9,6 +9,7 @@ const setup = (over: Partial<Pick<DeliveriesDeps, 'submit' | 'cancel' | 'deliver
     tell: vi.fn(),
     deliverers: over.deliverers ?? new Set(['orchestrator']),
     log: vi.fn(),
+    quietStarted: vi.fn<(agentId: string) => void>(),
   }
   const deliveries = createDeliveries(deps)
   if (ready) deliveries.ready()
@@ -216,6 +217,59 @@ describe('delivered turns', () => {
     deliveries.ready()
     expect(deps.submit).toHaveBeenCalledTimes(HELD_DELIVERIES)
     expect(vi.mocked(deps.submit).mock.calls[0]).toEqual(['agent-1', 'turn 1', 'd1'])
+  })
+
+  describe('a quiet delivery', () => {
+    const started = (deliveryId: string, sessionId = 'agent-1'): TurnDelivery => ({ deliveryId, sessionId, state: 'started' })
+
+    it('says once that a quiet delivery\'s turn started, delivered from the core\'s process and from a service\'s own, and never for a delivery that is not quiet', () => {
+      const { deps, deliveries } = setup()
+      deliveries.turns.deliver('agent-1', 'ready', 'in-core', { quiet: true })
+      expect(deliveries.answer('orchestrator', 'deliver', { agentId: 'agent-2', text: 'ready', deliveryId: 'in-process', quiet: true })).toEqual({})
+      deliveries.turns.deliver('agent-1', 'hello', 'plain')
+      deliveries.answer('orchestrator', 'deliver', { agentId: 'agent-2', text: 'hello', deliveryId: 'plain-process' })
+      // Only `true` marks it: a payload that says anything else is a delivery like any.
+      deliveries.answer('orchestrator', 'deliver', { agentId: 'agent-2', text: 'hello', deliveryId: 'said-yes', quiet: 'yes' })
+      for (const id of ['plain', 'plain-process', 'said-yes']) deliveries.settled(started(id))
+      expect(deps.quietStarted).not.toHaveBeenCalled()
+      deliveries.settled(started('in-core'))
+      deliveries.settled(started('in-process', 'agent-2'))
+      // A second `started` for the same delivery is not a second turn.
+      deliveries.settled(started('in-core'))
+      expect(deps.quietStarted.mock.calls).toEqual([['agent-1'], ['agent-2']])
+    })
+
+    it('forgets a quiet delivery that is rejected or past knowing, and keeps one that is queued or only written', () => {
+      const { deps, deliveries } = setup()
+      for (const id of ['refused', 'unknown', 'written']) deliveries.turns.deliver('agent-1', 'ready', id, { quiet: true })
+      deliveries.settled({ deliveryId: 'refused', sessionId: 'agent-1', state: 'rejected', reason: 'cancelled' })
+      deliveries.settled({ deliveryId: 'unknown', sessionId: 'agent-1', state: 'unknown', reason: 'prompt_mismatch' })
+      deliveries.settled(event('written', 'queued'))
+      deliveries.settled(event('written', 'delivered'))
+      for (const id of ['refused', 'unknown', 'written']) deliveries.settled(started(id))
+      // No turn is made quiet on a guess: only the one the input tied to the line.
+      expect(deps.quietStarted.mock.calls).toEqual([['agent-1']])
+    })
+
+    it('keeps the last quiet deliveries only', () => {
+      const { deps, deliveries } = setup()
+      for (let i = 0; i < KEPT_DELIVERERS; i++) deliveries.turns.deliver('agent-1', 'ready', `q${i}`, { quiet: true })
+      // Marked again, one moves to the newest end; past the limit, the oldest is forgotten.
+      deliveries.turns.deliver('agent-1', 'ready', 'q0', { quiet: true })
+      deliveries.turns.deliver('agent-1', 'ready', 'last', { quiet: true })
+      for (const id of ['q0', 'q1', 'q2', 'last']) deliveries.settled(started(id, id))
+      expect(deps.quietStarted.mock.calls).toEqual([['q0'], ['q2'], ['last']])
+    })
+
+    it('says nothing where nobody listens for it', () => {
+      const deliveries = createDeliveries({ submit: vi.fn(), cancel: vi.fn(() => false), tell: vi.fn(), deliverers: new Set(['orchestrator']) })
+      deliveries.ready()
+      const heard: TurnDelivery[] = []
+      deliveries.turns.onDelivery((e) => heard.push(e))
+      deliveries.turns.deliver('agent-1', 'ready', 'd1', { quiet: true })
+      expect(() => deliveries.settled(started('d1'))).not.toThrow()
+      expect(heard).toEqual([started('d1')])
+    })
   })
 
   it('logs to the console when given no log of its own', () => {

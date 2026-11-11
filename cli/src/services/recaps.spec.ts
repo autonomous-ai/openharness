@@ -244,6 +244,30 @@ describe('the recaps', () => {
     expect(vi.mocked(core.clients.turnCard).mock.calls.at(-1)?.[0].payload).toEqual({ kind: 'done', text: 'done' })
   })
 
+  it('a turn the core says is quiet gets no recap and no notification, and the session\'s last recap stays', async () => {
+    const { core, recaps, tell } = setup()
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    tell({ kind: 'events', session: s1, events: [started()], replay: false })
+    tell({ kind: 'events', session: s1, events: [ended], replay: false })
+    await vi.waitFor(() => expect(core.clients.turnSummary).toHaveBeenCalled())
+    const last = recaps.port.recaps('s1')
+    vi.mocked(core.clients.turnSummary).mockClear()
+    vi.mocked(core.clients.turnCard).mockClear()
+    vi.mocked(core.transcripts.lastTurn).mockClear()
+    // A line a service typed for the agent alone (core/deliveries.ts `quiet`), told with the batch that ends its turn.
+    tell({ kind: 'events', session: s1, events: [started('Your browser is ready: run `harness browser --help`')], replay: false })
+    tell({ kind: 'events', session: s1, events: [ended], replay: false, quiet: true })
+    await flush()
+    await flush()
+    // The apps hear the silent tier alone: no recap, no notification.
+    expect(vi.mocked(core.clients.turnSummary).mock.calls).toEqual([
+      [{ type: 'turn_summary', agentId: 'a1', dbSessionId: 's1', payload: { sessionId: 's1', tier: 'silent' } }],
+    ])
+    expect(vi.mocked(core.clients.turnCard).mock.calls.map(([frame]) => frame.payload.kind)).toEqual(['turn_started', 'processing', 'done'])
+    expect(core.transcripts.lastTurn).not.toHaveBeenCalled()
+    expect(recaps.port.recaps('s1')).toEqual(last)
+  })
+
   describe('a finished turn\'s tier', () => {
     const turn = async (tell: (event: TurnLifecycle, seen?: typeof watching) => void, seen: typeof watching & { remote?: boolean }, quiet?: boolean) => {
       // The core says the engine, and whether the session is quiet on devices, with every event (core/turns/recaps.ts `session`).

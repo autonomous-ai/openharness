@@ -15,7 +15,7 @@ function fakeTurns() {
   const listeners = new Set<(event: TurnDelivery) => void>()
   let cancels = true
   const turns = {
-    deliver: vi.fn((agentId: string, text: string, deliveryId: string) => { typed.push({ agentId, text, deliveryId }) }),
+    deliver: vi.fn((agentId: string, text: string, deliveryId: string, _options?: { quiet?: true }) => { typed.push({ agentId, text, deliveryId }) }),
     cancelDelivery: vi.fn((_deliveryId: string) => cancels),
     onDelivery: vi.fn((listener: (event: TurnDelivery) => void) => {
       listeners.add(listener)
@@ -214,6 +214,20 @@ describe('Notices', () => {
     expect(told()).toEqual({})
     notices.ready('a1')
     expect(core.typed).toHaveLength(4)
+  })
+
+  // Nobody asked for either line: the turn each starts ends with no recap and no notification (core/api.ts `DeliveryOptions.quiet`).
+  it('the ready line and the stop line are delivered quiet, each try', () => {
+    notices.ready('a1')
+    core.hear(core.last().deliveryId, 'rejected', 'queue_expired')
+    vi.advanceTimersByTime(NOTICE_RETRY_MS)
+    core.hear(core.last().deliveryId, 'delivered')
+    notices.stopped('a1', false)
+    core.hear(core.last().deliveryId, 'rejected', 'queue_expired')
+    vi.advanceTimersByTime(NOTICE_RETRY_MS)
+    expect(core.turns.deliver.mock.calls.map(([, text, , options]) => [text, options])).toEqual([
+      [READY_LINE, { quiet: true }], [READY_LINE, { quiet: true }], [STOPPED_LINE, { quiet: true }], [STOPPED_LINE, { quiet: true }],
+    ])
   })
 
   it('the stop line is tried three times too', () => {
