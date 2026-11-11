@@ -192,6 +192,17 @@ describe('creating an agent', () => {
     }
   })
 
+  // anh Dee, 2026-11-11: Alba never read the rules its person wrote in agents/Alba.md; its launch line carries them now.
+  it('starts a Swarm agent with its own agents/<name>.md after the basics, by the name it is started under', async () => {
+    const cwd = folder()
+    mkdirSync(join(cwd, 'agents'))
+    writeFileSync(join(cwd, 'agents', 'Faye.md'), 'Never push to main.\n')
+    await setup().create(request({ cwd, engine: 'claude', swarmRole: 'agent', name: 'Faye' }))
+    const place = vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2]
+    expect(place.swarmInstructions).toBe(SWARM_LAUNCH.basics(false, { cwd, name: 'Faye' }))
+    expect(place.swarmInstructions).toMatch(/\nYour own instructions, from agents\/Faye\.md, [^\n]*:\nNever push to main\.$/)
+  })
+
   // Project instructions, phase 4 (decision 1): a Reviewer started by an older client keeps its kind, and a launch an older CLI
   // saved to finish later (a pending intent) names its role in the wire's values.
   it('registers a Reviewer as an agent that keeps its Reviewer kind, from this CLI\'s launch or an older one\'s saved intent', async () => {
