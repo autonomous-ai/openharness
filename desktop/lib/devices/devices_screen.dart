@@ -546,14 +546,11 @@ class _DevicesScreenState extends State<DevicesScreen>
                             radius: 18,
                           ),
                         )
-                      // Back with none connected, the page shows nothing: Add device is in its header (an empty list
-                      // shows nothing). The welcome is for a first device.
-                      else if (selected == null &&
-                          widget.controller.devices.isEmpty)
+                      // The welcome is for a first device. Back with none connected, the page shows nothing: Add
+                      // device is in its header (an empty list shows nothing).
+                      else if (widget.controller.devices.isEmpty)
                         _EmptyDevices(onAdd: () => _setup(), onShop: _shop)
-                      else if (selected == null)
-                        const SizedBox.shrink()
-                      else ...[
+                      else if (selected != null) ...[
                         Text(
                           '${devices.length} ${devices.length == 1 ? 'device' : 'devices'}',
                           style: DesktopChrome.metadata(),

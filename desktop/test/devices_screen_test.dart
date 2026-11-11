@@ -305,7 +305,8 @@ void main() {
         const DeviceHost(id: 'remote', name: 'Remote Mac', online: false),
       ]);
       await tester.pumpAndSettle();
-      // An empty list shows only the action that fills it (design doc, Swarm elements rule 7).
+      // Back with none connected, the page shows nothing but its header's
+      // Add device (design doc, Swarm elements rule 7).
       expect(find.text('No devices connected'), findsNothing);
       expect(find.text('Add device'), findsOneWidget);
       expect(find.textContaining('Computer offline'), findsNothing);
@@ -431,8 +432,7 @@ void main() {
         'brightness': 70, 'character': 2, 'face': 720, 'round': false,
         'muted': false, 'quiet': false, 'straightTitle': true,
         'focusFace': true, 'scrollReversed': false, 'voiceLang': 'en',
-        'uiSkin':
-            'classic', // an older firmware: Pets is the only interface now
+        'uiSkin': 'classic', // an older firmware: Pets is the only interface now
       },
     });
     report(dial, [pro]);
@@ -500,7 +500,8 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byKey(ValueKey('device-card-$key')), findsNothing);
       expect(find.byType(DeviceSettingsPanel), findsNothing);
-      // An empty list shows only the action that fills it (design doc, Swarm elements rule 7).
+      // Back with none connected, the page shows nothing but its header's
+      // Add device (design doc, Swarm elements rule 7).
       expect(find.text('No devices connected'), findsNothing);
       expect(find.text('Add device'), findsOneWidget);
       expect(sent, hasLength(1));

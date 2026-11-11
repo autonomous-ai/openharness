@@ -346,12 +346,9 @@ class _ModelsPanelState extends State<ModelsPanel> with SectionWakes {
                             _retry(controller.error!)
                           else if (controller.models == null)
                             _empty('Finding shared models…')
-                          else if (!matchingShared.any(drawn))
-                            _empty(
-                              query.isEmpty
-                                  ? 'No shared models'
-                                  : 'No matching models',
-                            ),
+                          else if (!matchingShared.any(drawn) &&
+                              query.isNotEmpty)
+                            _empty('No matching models'),
                           for (final shared in matchingShared)
                             if (drawn(shared)) ...[
                               _heading(
