@@ -57,7 +57,7 @@ if ($problems.Count -gt 0) {
 $line = $signed -join ' '
 Write-Host "PTY_SIGNED_ZIPS=$line"
 # .NET's UTF-8 without a byte order mark: Windows PowerShell 5.1's Out-File -Encoding utf8 starts an empty file with one,
-# and the runner would then read an output named "﻿signed_zips", leaving signed_zips empty and the promote refused.
+# and the runner would then read an output named "signed_zips" with the mark in front, leaving signed_zips empty and the promote refused.
 if ($env:GITHUB_OUTPUT) { [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "signed_zips=$line`n") }
 if ($env:GITHUB_STEP_SUMMARY) { [IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, "Terminal host ``$Version``: every file of both zips is signed (Windows' own check).`n") }
 exit 0
