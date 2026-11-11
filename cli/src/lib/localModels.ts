@@ -395,6 +395,7 @@ export class LocalModels {
   private blockers = new Map<string, string>()
   private appsRead?: { at: number; value: AppModel[] }
   private appsPending?: Promise<AppModel[]>
+  private appsSaved?: Promise<void>
   /** Read once: a computer does not change its OS while the daemon runs. */
   private osRead?: { value: OsToken | undefined }
   /** The last operation finished, and its grid: a list of another grid (the own one, after a start on the
@@ -720,8 +721,9 @@ export class LocalModels {
   private async apps(force = false, scan = true): Promise<AppModel[]> {
     if (!this.options.appModels) return []
     // A daemon just started answers from the scan it saved last time: a first scan while a llama-server
-    // was busy kept the picker without these models, and held a Stop two minutes [run].
-    if (!this.appsRead) this.appsRead = await this.savedApps()
+    // was busy kept the picker without these models, and held a Stop two minutes [run]. Read once, found
+    // or not: a Swarm reading every 15 s read a missing file again each time.
+    await (this.appsSaved ??= this.savedApps().then(saved => { this.appsRead ??= saved }))
     if (!scan) return this.appsRead?.value ?? []
     if (force || !this.appsRead || Date.now() - this.appsRead.at >= 30_000) { void this.scanApps() }
     return this.appsRead?.value ?? this.scanApps()
@@ -822,9 +824,11 @@ export class LocalModels {
   /** [scan] false reads other apps' models from the last scan and never starts one ([apps]). */
   async list(grid: string | null, force = false, scan = true): Promise<LocalModelsSnapshot> {
     if (!grid) return { models: [], notice: 'Sign in to find models for this computer.', observedAt: new Date().toISOString(), busy: false }
-    if (!force && this.cached?.grid === grid && Date.now() - this.cached.at < 2500) return this.cached.value
+    // A person's ask answered from a list already read, which a Swarm reading's may be, still starts a scan that is due.
+    const shared = <T>(answer: T): T => { if (scan) void this.apps(force); return answer }
+    if (!force && this.cached?.grid === grid && Date.now() - this.cached.at < 2500) return shared(this.cached.value)
     if (this.listPending) {
-      if (this.listGrid === grid) return this.listPending
+      if (this.listGrid === grid) return shared(this.listPending)
       await this.listPending; return this.list(grid, force, scan)
     }
     this.listGrid = grid
@@ -949,8 +953,13 @@ export class LocalModels {
       models.push(await appRow(app.id, app.name, app.app, records.find(r => r.modelId === app.id),
         { sizeBytes: app.sizeBytes, ...(app.quant ? { quant: app.quant } : {}) }))
     }
-    for (const record of records.filter(r => !apps.some(a => a.id === r.modelId))) {
-      models.push({ ...await appRow(record.modelId, record.name, record.engine, record, {}), canStart: false })
+    // So does an engine still serving on another grid (a Swarm's), whose row that Swarm's reading reads: the reading never
+    // scans, and may have no scan, or one that missed the model, to find it in.
+    const unscanned = allRecords.filter(r => !apps.some(a => a.id === r.modelId))
+    for (const modelId of new Set(unscanned.map(r => r.modelId))) {
+      const own = records.find(r => r.modelId === modelId), named = own ?? unscanned.find(r => r.modelId === modelId)!
+      const row: LocalModel = { ...await appRow(modelId, named.name, named.engine, own, {}), canStart: false }
+      if (own || row.servedOn) models.push(row)
     }
     const freeDiskBytes = await statfs(join(this.home, 'models')).catch(() => statfs(this.home))
       .then(disk => disk.bavail * disk.bsize, () => undefined)
