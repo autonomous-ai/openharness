@@ -25,7 +25,9 @@ const config = { engine: 'codex', model: 'fixture-model', effort: 'high', contex
 let person = owner
 const run = (tab: string, command: Command | StoredCreate, user = person, asAgentId?: string) => command.type === 'conversation.create'
   ? storeCreate(db, tab, command, user, asAgentId) : store.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
-const post = (text: string, replyTo: string | null = null): Command => ({ type: 'message.send', conversationId: 'lead', text, replyTo, recipientIds: [] })
+/** The project chat of the Swarm `working` made last. */
+let channel = ''
+const post = (text: string, replyTo: string | null = null): Command => ({ type: 'message.send', conversationId: channel, text, replyTo, recipientIds: [] })
 
 beforeAll(async () => {
   ({ replica, db } = await planDatabase('project_chat_workers'))
@@ -46,11 +48,14 @@ async function working(user: AuthUser) {
   const tab = (await store.create(user, PERSONAL_SWARM_OPERATION, 'Personal')).id
   const add = async (conversationId: string, name: string, lead: boolean) => (await run(tab, { type: 'agent.add', conversationId, machineId: 'test-host',
     harnessId: randomUUID(), name, configuration: config, lead })).result.agentId as string
-  const lead = await add('lead', 'Lead', true)
-  const task = String((await run(tab, { type: 'conversation.create', title: 'Login bug', brief: 'Fix it.', checks: [] })).result.conversationId)
+  // A Personal Swarm is made with no project (PSW-B review, 2026-11-11): its projects are its person's repos.
+  const project = (await run(tab, { type: 'project.create', name: 'Login', visibility: 'public', brief: '' })).result as { projectId: string; conversationId: string }
+  channel = project.conversationId
+  const lead = await add(channel, 'Lead', true)
+  const task = String((await run(tab, { type: 'conversation.create', projectId: project.projectId, title: 'Login bug', brief: 'Fix it.', checks: [] })).result.conversationId)
   const engineer = await add(task, 'Builder', false)
   await storeAssignment(db, tab, task, engineer)
-  const members = async () => (await store.read(user, tab)).state.conversations.find(c => c.id === 'lead')!.agentIds
+  const members = async () => (await store.read(user, tab)).state.conversations.find(c => c.id === channel)!.agentIds
   return { tab, lead, task, engineer, members }
 }
 
@@ -64,7 +69,7 @@ describe('an agent with a task in the project, in its project chat', () => {
     const inThread = String((await run(tab, post('Thanks, which build?', top))).result.messageId)
     const below = String((await run(tab, post('Also the phone, please.'))).result.messageId)
     expect(await members()).toEqual([lead])
-    const rows = (await store.messages(person, tab, 'lead', {})).messages
+    const rows = (await store.messages(person, tab, channel, {})).messages
     expect(rows.find(m => m.id === line)).toMatchObject({ author: { kind: 'agent', id: engineer }, thread: asked, recipientIds: [] })
     expect(rows.find(m => m.id === inThread)!.recipientIds).toEqual([engineer])
     expect(rows.find(m => m.id === below)!.recipientIds).toEqual([engineer, lead])

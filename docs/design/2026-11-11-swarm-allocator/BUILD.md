@@ -66,6 +66,9 @@ the mockup of the choice package 14 adds to a screen.
 
 ### 1. The scoreboard
 
+**Built** (#4064): `cli/src/superTabs/scoreboard.ts`. What follows is what was asked; where the build differs it says so
+in *italics*.
+
 **Why.** Everything after it is judged by it. Today's daily post has counts only.
 
 **Today.** `cli/src/superTabs/pmNumbers.ts` (`numbersOf`, `dayLine`: the day's post in the project's channel, from
@@ -83,6 +86,8 @@ one is marked, in its title.
   it ran out of time). A train closed without landing says its cause in its title, as a red one does, with the
   write that closes it: no new write, and nothing to read but the closed list the pass has;
 - the files most landings touched in the last seven days, when one is in more than a tenth of them, with its share.
+  *The words count the landings read ("of the last 43 landings") and name no window: the closed list the pass reads is
+  one page, which on a busy repository is hours. A file is named at three landings or more.*
 
 Counts, medians and file paths only. Bounded: at most the newest 50 changes landed in the day are read for their
 times, and the newest 50 landed in the week for their files, once a day, when the post is due. A part that cannot be
@@ -95,6 +100,10 @@ line it would post for this repository's own last day, read from GitHub without 
 building and in fixes come with package 12's boundaries, and which files a conflict was on with package 8.
 
 ### 2. One task building, at most four open
+
+**Built** (#4091): in `cli/src/superTabs/assign/crew.ts` (`heldTasks`, `hasRoom`), `githubAssign.ts` and `pmNumbers.ts`.
+*`CLAIM_LIMIT` is defined in `assign/crew.ts`. No free task is planned on a builder that holds four. A pull request that
+is red or in conflict counts as in review: the assigner reads no checks.*
 
 **Why.** Two faults. A change waiting for its read fills its builder's list, so a builder with two in review is given
 nothing and is not counted idle. And a second task is given ahead, which in the model costs 0 to 6% of
@@ -186,6 +195,9 @@ change. No check they added is loosened: a READ-OK on the head that rides, rider
 built, a tip the train itself marked.
 
 ### 5. An area is its label, however it is spelled
+
+**Built** (#4093): `partOf` in `cli/src/superTabs/assign/crew.ts`. *Also: `githubAssign.ts` makes no `part:` label for
+an area the repository already has one for in its own spelling.*
 
 **Why.** `part:Backend` and an agent's "Works on: backend" do not match; the label's side is compared as written.
 

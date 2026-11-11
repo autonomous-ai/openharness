@@ -1,6 +1,7 @@
 /** Eager state/control owner; native interpretation is supplied by engine facets. */
 import { parseRuntimeProfile } from './runtimeProfileWire.js'
 export { parseRuntimeProfile } from './runtimeProfileWire.js'
+import { launchFlagsOf } from './launchFlags.js'
 import type { RegisteredSession } from './registry.js'
 import type { RuntimeFor, RuntimeProfile, RuntimeModelOption, RuntimeState, RuntimeField, RuntimeControl, RuntimeCatalogModel } from '../engines/facets/runtime.js'
 import type { InlineRuntimeContext, InlineRuntimeReader } from '../engines/facets/inlineRuntime.js'
@@ -37,6 +38,13 @@ const readIdentity = (session: RegisteredSession): string => JSON.stringify([ses
   session.active, session.evidenceRevision, !!session.identityHold, session.processIdentity ? processIdentityKey(session.engine, session.processIdentity) : undefined])
 const copyControl = (control: RuntimeControl | undefined): RuntimeControl | undefined => control && {
   ...control, target: { ...control.target },
+}
+
+/** A copy of [session] for an engine to read, with the launch flags only where its process got them (launchFlagsOf). */
+function engineCopy(session: RegisteredSession): RegisteredSession {
+  const copy = { ...session }
+  if (!launchFlagsOf(session)) delete copy.launchModel
+  return copy
 }
 
 export class RuntimeProfileState {
@@ -181,7 +189,7 @@ export class RuntimeProfileState {
     const reader = runtime ? null : await this.reader(session.engine)
     if (!current() || (!runtime?.configuredEffort && !reader?.config)) return false
     const before = this.selectedModel(session)
-    const context = { ...this.context(session, silent), session: { ...session }, state: { ...state }, control: copyControl(control) }
+    const context = { ...this.context(session, silent), session: engineCopy(session), state: { ...state }, control: copyControl(control) }
     if (runtime?.configuredEffort) fillConfiguredEffort(context.state, await runtime.configuredEffort(context.session))
     else if (!await reader!.config!(context)) return false
     // An optional reader cannot publish into a forgotten/rebound row or replace newer evidence.
@@ -214,7 +222,7 @@ export class RuntimeProfileState {
   } {
     const previous = this.state(session.sessionId), version = this.version(previous)
     const identity = readIdentity(session), control = this.controls.get(session.sessionId)
-    const stagedSession = { ...session }, stagedControl = copyControl(control)
+    const stagedSession = engineCopy(session), stagedControl = copyControl(control)
     const staged = freshState(session)
     let committed = false, failed = false
     const current = () => !committed && !failed && !this.unbound(session.sessionId)

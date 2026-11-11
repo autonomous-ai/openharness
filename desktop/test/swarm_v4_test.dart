@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/theme/swarm_layout.dart';
+import 'package:harness/super_tabs/sharing.dart';
 import 'package:harness/super_tabs/agent_instructions.dart';
 import 'package:harness/terminal/terminal_font_store.dart';
 import 'package:harness/super_tabs/controller.dart';
@@ -99,6 +100,49 @@ void main() {
       ]) {
         expect(find.text(gone), findsNothing, reason: gone);
       }
+    },
+  );
+
+  // anh Dee, 2026-11-11: "it's quite difficult to invite people. i have no idea where to find it. invite should be visible".
+  testWidgets(
+    'Invite people, in the left pane, opens the Swarm\'s people for its owner, '
+    'titled as what opened it; Manage people opens them titled so',
+    (tester) async {
+      Future<void> settle() async {
+        for (var i = 0; i < 3; i++) {
+          await tester.pump(const Duration(milliseconds: 100));
+        }
+      }
+
+      Finder title(String text) => find.descendant(
+        of: find.byType(SwarmSharingDialog),
+        matching: find.text(text),
+      );
+      await show(tester);
+      await tester.tap(find.text('Invite people'));
+      await settle();
+      expect(find.byType(SwarmSharingDialog), findsOneWidget);
+      // The owner's own form, where an invitation is made, under the words they clicked (PSQA, 2026-11-12: it said
+      // Share Swarm).
+      expect(find.byKey(const Key('swarm-invite-email')), findsOneWidget);
+      expect(title('Invite people'), findsOneWidget);
+      expect(find.text('Share Swarm'), findsNothing);
+      await tester.tap(find.text('Done'));
+      await settle();
+      expect(find.byType(SwarmSharingDialog), findsNothing);
+
+      // Manage ▸ Swarm ▸ Manage people: the same people, titled Manage people.
+      await tester.tap(key('super-manage'));
+      await settle();
+      await tester.tap(key('super-manage-tab-swarm'));
+      await settle();
+      await tester.tap(key('super-manage-people'));
+      await settle();
+      expect(title('Manage people'), findsOneWidget);
+      expect(find.text('Share Swarm'), findsNothing);
+      await tester.tap(find.text('Done'));
+      await settle();
+      expect(find.byType(SwarmSharingDialog), findsNothing);
     },
   );
 

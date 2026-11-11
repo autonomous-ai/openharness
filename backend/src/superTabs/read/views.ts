@@ -12,6 +12,7 @@ import type { Part, SwarmParts } from '../parts/index.js'
 import { canReadGroup, canReadProject, projectsOf } from '../projects.js'
 import { agentChatId, agentKind, inMyAgents, ledProjects } from '../agentKind.js'
 import { personView } from '../profile.js'
+import { removedPanesFor } from '../removedPanes.js'
 import { swarmUsernames } from '../usernames.js'
 import type { AgentView, Derived, GroupView, HeadView, LivePart, MachineView, MemberView, StartView } from './contract.js'
 
@@ -88,7 +89,9 @@ export function readerView(parts: SwarmParts, actor: Actor, now: number, extras:
       head: envelope(parts.head, head),
       // Each person's username as the Swarm shows it, worked out in join order (the reassembled state's), never the order
       // member parts happen to load in.
-      members: parts.members.filter(m => !m.deleted).map(m => envelope(m, { ...personView(m.data!), username: names.get(m.key) } as MemberView)),
+      // A person's records of the sessions they took out are theirs alone (removedPanes.ts).
+      members: parts.members.filter(m => !m.deleted).map(m => envelope(m, { ...removedPanesFor(personView(m.data!), actor.kind === 'person' ? actor.userId : null, now),
+        username: names.get(m.key) } as MemberView)),
       agents: visible.agents.map(a => envelope(agentPart(a.id), agentView(state.agents.find(s => s.id === a.id)!))),
       groups: groups.map(g => envelope(groupPart(g.id), groupView(g, seen))),
       machines: (visible.machines ?? []).map(m => envelope(machinePart(m.machineId), m)),

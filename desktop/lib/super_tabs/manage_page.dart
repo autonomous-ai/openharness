@@ -304,7 +304,8 @@ class _ManageSwarmState extends State<_ManageSwarm> {
             padding: const EdgeInsets.only(left: grid.AppDesktop.controlGap),
             child: TextButton(
               key: const ValueKey('super-manage-people'),
-              onPressed: () => showSuperTabSharing(context, c),
+              onPressed: () =>
+                  showSuperTabSharing(context, c, title: 'Manage people'),
               child: const Text('Manage people'),
             ),
           ),

@@ -43,6 +43,9 @@ export interface SwarmProject {
    *  replaces the one before and posts nothing. Read exactly by those who read the project chat (model.ts visibleState). */
   status?: ProjectStatus | null
   repository?: { machineId: string; cwd: string; repositoryUrl: string | null }
+  /** Its GitHub repository as `owner/name`, set by its owner's client or its coordinator (commands.ts project.github): its Tasks
+   *  board on every computer. Absent until set. */
+  githubRepository?: string
   /** Its Product Manager started by the Swarm on one of its machines, or waiting for one (leadStart.ts). */
   lead?: import('./leadStart.js').LeadPlacement
   /** A Personal Swarm project chat with no Lead: its person's messages sent there, delivered to its Lead once it joins
@@ -127,9 +130,26 @@ export function startProject(state: SuperTabState, request: Pick<AgentStartReque
 }
 
 export function agentProjectId(state: SuperTabState, target: Agent): string {
+  return agentProjectIdFrom(state, target, agentPlaces(state, target))
+}
+
+/** Where an agent is that its project is read from: the first task it works on now, and the first conversation it is in
+ *  that is not its own chat. */
+export interface AgentPlaces { work: Conversation | undefined; group: Conversation | undefined }
+/** Whether [c] is a task [agentId] works on now: the first such is a Regular agent's place (agentProjectId). */
+export const worksIn = (c: Conversation, agentId: string): boolean => c.assignment?.agentId === agentId && activeWork(c)
+/** Whether [c] is a conversation [agentId] is in that is not its own chat: the first such is its place otherwise. */
+export const placedIn = (c: Conversation, agentId: string): boolean => c.agentIds.includes(agentId) && !isAgentChat(c)
+const agentPlaces = (state: SuperTabState, target: Agent): AgentPlaces => ({
+  work: target.regular ? state.conversations.find(c => worksIn(c, target.id)) : undefined,
+  group: target.regular || target.projectId ? undefined : state.conversations.find(c => placedIn(c, target.id)),
+})
+
+/** [agentProjectId] from where [target] is ([places]), read by the caller: a host's roster reads every agent's places in one pass. */
+export function agentProjectIdFrom(state: SuperTabState, target: Agent, places: AgentPlaces): string {
   // A Regular agent (task #4116: "the task decides where it works") is its active task's project's while it works, else none.
   if (target.regular) {
-    const work = state.conversations.find(c => c.assignment?.agentId === target.id && activeWork(c))
+    const work = places.work
     if (work) return groupProject(state, work).id
     // A Member is its main project's between tasks (task #4697), while its person still reads it: that project's Lead hands it
     // the next task, and it reports its set-up there.
@@ -138,7 +158,7 @@ export function agentProjectId(state: SuperTabState, target: Agent): string {
   }
   // Its 1:1 chat with its person (Swarm v4) is in no project: placed by it, an agent fell back to the project 'lead', which a
   // Swarm whose projects have their own ids does not have, and its host's every read was refused (anh Dee's Mac 3, 2026-11-09).
-  return target.projectId ?? state.conversations.find(c => c.agentIds.includes(target.id) && !isAgentChat(c))?.projectId ?? 'lead'
+  return target.projectId ?? places.group?.projectId ?? 'lead'
 }
 /** The project id of an agent in no project: no project has it, so a comparison with one is false and projectOf refuses it. */
 export const NO_PROJECT = ''
@@ -149,8 +169,12 @@ export function ledProject(state: SuperTabState, agentId: string): SwarmProject 
   // ledProject's callback, 13.5 M calls in the 2026-11-02 prod profiles (12 profiles), mostly from markConfidential.
   const led = new Set<string>()
   for (const c of state.conversations) if (c.leadId === agentId) led.add(c.id)
-  return led.size ? projectsOf(state).find(p => led.has(p.leadConversationId)) : undefined
+  return ledProjectFrom(state, led)
 }
+
+/** [ledProject] from the conversations [led] an agent leads, read by the caller. */
+export const ledProjectFrom = (state: SuperTabState, led: ReadonlySet<string>): SwarmProject | undefined =>
+  led.size ? projectsOf(state).find(p => led.has(p.leadConversationId)) : undefined
 
 /** Gives each project whose owner is gone a new owner (task #3073, River's ruling 2026-11-05): its owner left or was
  *  removed, or is in the Swarm at a later membership. It passes to the earliest listed member still in the Swarm at the
@@ -323,15 +347,16 @@ function readsAgentChat(state: SuperTabState, actor: Actor, group: Conversation)
     && target.contributorId === owner.id && target.machineOwnerId === owner.id
 }
 
-export function canReadAgent(state: SuperTabState, actor: Actor, target: Agent): boolean {
+/** [projectId]: [target]'s agentProjectId in this very [state], when the caller read it already (read/hostRows.ts). */
+export function canReadAgent(state: SuperTabState, actor: Actor, target: Agent, projectId = agentProjectId(state, target)): boolean {
   // An idle Regular agent (task #4116): its person, itself, and the PM of a project its person reads, which may give it a task.
-  if (target.regular && agentProjectId(state, target) === NO_PROJECT) {
+  if (target.regular && projectId === NO_PROJECT) {
     if (actor.kind === 'person') return actor.userId === target.contributorId
     if (actor.agentId === target.id) return true
     const led = ledProject(state, actor.agentId)
     return !!led && regularMayWorkIn(state, target, led)
   }
-  return canReadProject(state, actor, projectOf(state, agentProjectId(state, target)))
+  return canReadProject(state, actor, projectOf(state, projectId))
 }
 
 /** A session that reads people's private messages: its project's Lead (the Product Manager each person chats with privately),
@@ -403,8 +428,9 @@ export const watchClosed = (state: SuperTabState, target: Agent, elsewhere = fal
 
 /** Who may watch an agent's terminal: observe it or hold a share of it. Reading or typing in it on request is closed by
  *  `isConfidential` alone (terminal.ts mayDrive). Any other agent: every reader of its project, as before. */
-export function canWatchAgent(state: SuperTabState, actor: Actor, target: Agent, elsewhere = false, sets?: ConfidentialSets): boolean {
-  if (!canReadAgent(state, actor, target)) return false
+export function canWatchAgent(state: SuperTabState, actor: Actor, target: Agent, elsewhere = false, sets?: ConfidentialSets,
+  projectId?: string): boolean {
+  if (!canReadAgent(state, actor, target, projectId)) return false
   return !watchClosed(state, target, elsewhere, sets) || ownSession(actor, target)
 }
 
