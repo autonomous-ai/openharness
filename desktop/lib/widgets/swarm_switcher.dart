@@ -1544,6 +1544,12 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults>
                                   ? 'No matching projects'
                                   : search.isMachineMode
                                   ? 'No matching machines'
+                                  // A picker that brings an agent into a Swarm (Attach) speaks of agents, and its
+                                  // empty list says nothing.
+                                  : search.harnessContext != null
+                                  ? (search.query.isEmpty
+                                        ? ''
+                                        : 'No matching agents')
                                   : search.adding &&
                                         search.query.isEmpty &&
                                         search.capacity <= 0
@@ -1877,6 +1883,8 @@ class _SearchInventoryEmptyState extends StatelessWidget {
             ? 'machines'
             : search.isProjectMode
             ? 'projects'
+            : search.harnessContext != null
+            ? 'agents'
             : 'harnesses';
         void retry() {
           if (!app.machinesLoading && !app.machinesRefreshing) {

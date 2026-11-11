@@ -17,8 +17,13 @@ import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
 /// team with its own chat.
 void main() {
   Finder key(String k) => find.byKey(ValueKey(k));
+  final harness = RegExp('harness', caseSensitive: false);
 
-  Future<SuperTabLaunchFixture> open(WidgetTester tester) async {
+  /// With [nothingRunning], no session runs on the person's computers.
+  Future<SuperTabLaunchFixture> open(
+    WidgetTester tester, {
+    bool nothingRunning = false,
+  }) async {
     final f = SuperTabLaunchFixture();
     f.connection.journaled = false;
     f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
@@ -48,6 +53,7 @@ void main() {
         sessionId: 'saved-builder',
       ),
     ];
+    if (nothingRunning) f.app.machineStates['m']!.agents = const [];
     f.connection.native = {
       'id': 'stopped',
       'name': 'Stopped builder',
@@ -94,6 +100,9 @@ void main() {
         find.text('It joins your team with its own chat.'),
         findsOneWidget,
       );
+      // It finds agents: harness is not a word of the Swarm.
+      expect(find.text('Search agents'), findsOneWidget);
+      expect(find.textContaining(harness), findsNothing);
       final search = tester
           .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
           .search;
@@ -139,6 +148,35 @@ void main() {
   );
 
   // anh Dee 2026-11-10: "i should be able to attach stopped sessions too … resume + attach in one step".
+  testWidgets('Attach speaks of agents when nothing matches, and an empty '
+      'list says nothing', (tester) async {
+    final f = await open(tester);
+    await tester.tap(key('project-sidebar-agents-attach'));
+    await tester.pumpAndSettle();
+    await tester.enterText(key('swarm-search-input'), 'zzz');
+    await tester.pumpAndSettle();
+    expect(find.text('No matching agents'), findsOneWidget);
+    expect(find.textContaining(harness), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+    f.app.superTabs.dispose();
+    // Nothing running on its person's computers: the list is empty, and says nothing.
+    final none = await open(tester, nothingRunning: true);
+    await tester.tap(key('project-sidebar-agents-attach'));
+    await tester.pumpAndSettle();
+    final results = find.byType(SwarmSearchResults);
+    expect(
+      tester.widget<SwarmSearchResults>(results).search.rows,
+      isEmpty,
+    );
+    expect(find.textContaining(harness), findsNothing);
+    expect(
+      find.descendant(of: results, matching: find.textContaining('yet')),
+      findsNothing,
+    );
+    await tester.pumpWidget(const SizedBox());
+    none.app.superTabs.dispose();
+  });
+
   testWidgets('a stopped session resumes and joins in one step', (
     tester,
   ) async {
