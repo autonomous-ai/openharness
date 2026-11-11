@@ -10,13 +10,13 @@
  * The bundle is built from this checkout (the run's own with `E2E_BUNDLE=1`).
  */
 import { execFileSync } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
-import { withLean } from './harness/release.js'
+import { buildWithLean } from './harness/release.js'
 import { LEAN_CORE_ENTRY, readLeanBundle } from '../src/harnessd/leanBundle.js'
 
 type Engine = 'claude' | 'codex'
@@ -37,20 +37,9 @@ const isTurn = (type: string, agentId: string) => (frame: Frame) => frame.type =
 /** The command the daemon's hooks run, once it has installed them for Claude Code in the test's home: it does that after it
  *  is ready, so the settings may not be there yet. */
 const claudeHookCommand = (d: IsolatedDaemon): Promise<string> => until('Claude Code\'s hooks to be installed', () => {
-  try {
-    const settings = JSON.parse(readFileSync(join(d.root, 'home', '.claude', 'settings.json'), 'utf8')) as { hooks?: Record<string, Array<{ hooks: Array<{ command: string }> }>> }
-    return settings.hooks?.UserPromptSubmit?.[0]?.hooks[0]?.command ?? null
-  } catch { return null }
+  const settings = JSON.parse(readFileSync(join(d.root, 'home', '.claude', 'settings.json'), 'utf8')) as { hooks?: Record<string, Array<{ hooks: Array<{ command: string }> }>> }
+  return settings.hooks?.UserPromptSubmit?.[0]?.hooks[0]?.command ?? null
 }, 30_000, 100)
-/** A build of the CLI in [dir]: its cli.js, with [lean] for its lean section, and the notify.mjs the hooks it installs run,
- *  which a build keeps beside it. */
-function buildIn(dir: string, bundle: string, lean: Record<string, string>): string {
-  mkdirSync(dir, { recursive: true })
-  const cli = join(dir, 'cli.js')
-  writeFileSync(cli, withLean(readFileSync(bundle, 'utf8'), lean), { mode: 0o755 })
-  copyFileSync(join(dirname(bundle), 'notify.mjs'), join(dir, 'notify.mjs'))
-  return cli
-}
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 /** This daemon's core, by the pid it reports, and what started it. */
 const coreCommand = (d: IsolatedDaemon): string => commandOf(d.corePid()!)
@@ -176,7 +165,7 @@ describe('harnessd\'s master and services lean', () => {
     const files = Object.fromEntries([...lean.files].map(([name, code]) => [name, code.toString('utf8')]))
     const core = Object.keys(files).find((name) => name.startsWith('core-coreProcess-'))!
     files[core] = 'throw new Error("a lean core that cannot load")\n'
-    const brokenCore = buildIn(join(scratch, 'broken-core'), bundle, files)
+    const brokenCore = buildWithLean(join(scratch, 'broken-core'), bundle, files)
     const d = await fresh({ HARNESSD_INITIAL_BACKOFF_MS: '200' }, brokenCore)
     expect(d.log()).toMatch(/\[harnessd\] the core died 2 times from the lean bundle before it beat: it starts from \S+cli\.js from now on/)
     expect(d.coresStarted()).toBe(3)
@@ -195,7 +184,7 @@ describe('harnessd\'s master and services lean', () => {
     const lean = readLeanBundle(readFileSync(bundle))!
     const files = Object.fromEntries([...lean.files].map(([name, code]) => [name, code.toString('utf8')]))
     files['harnessd.mjs'] += '\n// another build\n'
-    const other = buildIn(join(scratch, 'other'), bundle, files)
+    const other = buildWithLean(join(scratch, 'other'), bundle, files)
     const second = await IsolatedDaemon.create({ beside: d, dataDir: d.dataDir, port: d.port, scriptPath: other })
     try {
       await second.start({ ready: 'none' })
@@ -248,7 +237,7 @@ describe('harnessd\'s master and services lean', () => {
     const amp = Object.keys(files).filter((name) => name.startsWith('core-inProcess-') && files[name]!.includes('AMP_DISABLE_PLUGINS'))
     expect(amp).toHaveLength(1)
     delete files[amp[0]!]
-    const without = buildIn(join(scratch, 'without-others'), bundle, files)
+    const without = buildWithLean(join(scratch, 'without-others'), bundle, files)
     // Amp and OpenCode, as far as the daemon can tell: programs that answer their probes and then wait.
     const standIn = (name: string, version: string): string => {
       const path = join(scratch, 'without-others', name)
@@ -259,7 +248,7 @@ describe('harnessd\'s master and services lean', () => {
     // The core runs from the lean bundle that lacks them, Claude Code's and Codex's hooks installed, and nothing
     // asked for either as it started.
     expect(coreCommand(d)).toMatch(new RegExp(` ${escape(join(d.dataDir, 'lean'))}/[0-9a-f]{16}/${escape(LEAN_CORE_ENTRY)} __run$`))
-    expect(await claudeHookCommand(d)).toContain('notify.mjs')
+    expect(await claudeHookCommand(d)).toContain(join(dirname(without), 'notify.mjs'))
     const unavailable = (module: string): number => d.log().match(new RegExp(`\\[engine ${module}\\] unavailable · `, 'g'))?.length ?? 0
     expect(unavailable('screens')).toBe(0)
     expect(unavailable('hooks')).toBe(0)
@@ -290,7 +279,7 @@ describe('harnessd\'s master and services lean', () => {
   })
 
   it('never hands the daemon a lean bundle that cannot start a master: everything runs from cli.js', async () => {
-    const broken = buildIn(join(scratch, 'broken'), bundle, { 'harnessd.mjs': 'process.exit(5)\n' })
+    const broken = buildWithLean(join(scratch, 'broken'), bundle, { 'harnessd.mjs': 'process.exit(5)\n' })
     const d = await fresh({}, broken)
     expect(d.log()).toMatch(/\[harnessd\] the lean bundle \S+ did not answer its probe \(exit 5\): the master, the core and the services run from /)
     expect(d.log()).not.toMatch(/\[harnessd\] services run from/)
