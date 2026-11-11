@@ -236,9 +236,13 @@ class SwarmGoal {
     };
     for (final run in runs) {
       if (run is! Map) continue;
-      final name = _asGhWrites(
-        run['name'] is String ? run['name'] as String : '',
-      );
+      // As gh handed it over, rewritten already: read again, `^\` before a written-out `u001b` would be taken for its
+      // escape. Only a control character JSON's own escapes put back (`\b`, `\f`, which gh passes on) is written its way.
+      final name = (run['name'] is String ? run['name'] as String : '')
+          .replaceAllMapped(
+            _ghRewrites,
+            (found) => _caret(found[0]!.codeUnitAt(0)),
+          );
       if (id(run) >= id(newest[name])) newest[name] = run;
     }
     return SwarmGoal(

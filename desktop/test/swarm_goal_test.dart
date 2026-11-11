@@ -333,6 +333,17 @@ void main() {
       ),
       (3, 0, 0),
     );
+    // A run's name comes as gh rewrote it already, and is not rewritten again: a file separator before `u001b` comes as
+    // `^\u001b`, which read again would be `^\^[` (third review, 2026-11-11).
+    const separator = 'A separator \u001Cu001b';
+    expect(
+      await score(
+        commits([
+          [named(4, r'goal: A separator ^\u001b')],
+        ], of: '| $separator | `a` |'),
+      ),
+      (1, 0, 0),
+    );
   });
 
   // A check run's page is text from outside: a row may send a browser only to github.com, over https.
