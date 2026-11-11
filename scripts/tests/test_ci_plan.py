@@ -128,6 +128,11 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(planner.select(["cli/src/lib/windows/__fixtures__/pipe-auth-vectors.json"])[0], {"cli", "desktop"})
         self.assertEqual(planner.select(["cli/src/lib/windows/pipeAuth.ts"])[0], {"cli"})
 
+    def test_the_goal_rows_also_select_the_desktop_suite(self):
+        # desktop/test/swarm_goal_test.dart reads them from cli/: a changed row runs both readers.
+        self.assertEqual(planner.select(["cli/src/superTabs/__fixtures__/goal-rows.json"])[0], {"cli", "desktop"})
+        self.assertEqual(planner.select(["cli/src/superTabs/goal.ts"])[0], {"cli"})
+
     def test_the_desktop_runner_and_its_durations_select_the_desktop_suite(self):
         # Task #3458: the runner splits the Desktop shards by the durations file; a change to either runs those shards,
         # so a bad split cannot merge on process checks alone.

@@ -1,0 +1,597 @@
+{
+  "about": "What a project's goal file (agents/GOAL.md) says, held to by both cli/src/superTabs/goal.spec.ts (goalRows) and desktop/test/swarm_goal_test.dart (goalRows), so Desktop lists the milestones the daemon scores. Characters outside ASCII are written as escapes, so each can be seen. Change it deliberately, then both readers.",
+  "cases": [
+    {
+      "name": "a table among prose: its rows in the file's order, cells trimmed, spaces within a milestone made one; the header, the rule and a row with no command are none",
+      "text": "# Goal\n\nA milestone is done when its check passes on main.\n\n| Milestone | Check |\n|---|---|\n| Settings sync offline | `npm test -- sync.offline` |\n   |  The  app \t starts in a second| `scripts/start-time --under 1000`|\n| No check here | make test |\n\n| Every screen has a test | `make desktop-test` |\n",
+      "rows": [
+        {
+          "milestone": "Settings sync offline",
+          "check": "npm test -- sync.offline"
+        },
+        {
+          "milestone": "The app starts in a second",
+          "check": "scripts/start-time --under 1000"
+        },
+        {
+          "milestone": "Every screen has a test",
+          "check": "make desktop-test"
+        }
+      ]
+    },
+    {
+      "name": "no file",
+      "text": null,
+      "rows": []
+    },
+    {
+      "name": "an empty file",
+      "text": "",
+      "rows": []
+    },
+    {
+      "name": "prose and no table",
+      "text": "# Goal\n\nShip it.",
+      "rows": []
+    },
+    {
+      "name": "a table whose commands are not in backticks",
+      "text": "| Milestone | Check |\n|---|---|\n| Sync works | npm test |",
+      "rows": []
+    },
+    {
+      "name": "a row of one cell, one with no opening bar, one with no closing bar, and one with a cell after its check",
+      "text": "| Only one cell |\nSync | `npm test` |\n| Sync | `npm test`\n| Sync | `npm test` | soon |",
+      "rows": []
+    },
+    {
+      "name": "a check of nothing would pass by running nothing",
+      "text": "| Sync works | ` ` |\n| Start | `` |",
+      "rows": []
+    },
+    {
+      "name": "Windows line ends; a milestone named twice counts once, as its first row",
+      "text": "| Sync | `a` |\r\n| Sync | `b` |\r\n| Start | `c` |",
+      "rows": [
+        {
+          "milestone": "Sync",
+          "check": "a"
+        },
+        {
+          "milestone": "Start",
+          "check": "c"
+        }
+      ]
+    },
+    {
+      "name": "named twice once its spaces are made one",
+      "text": "| The  app | `a` |\n| The app | `b` |",
+      "rows": [
+        {
+          "milestone": "The app",
+          "check": "a"
+        }
+      ]
+    },
+    {
+      "name": "a bar in the milestone, a bar in the command, and backticks in the milestone",
+      "text": "| Sync | offline | `a` |\n| A pipe fails | `false | cat` |\n| Uses `jq` | `command -v jq` |",
+      "rows": [
+        {
+          "milestone": "Sync | offline",
+          "check": "a"
+        },
+        {
+          "milestone": "A pipe fails",
+          "check": "false | cat"
+        },
+        {
+          "milestone": "Uses `jq`",
+          "check": "command -v jq"
+        }
+      ]
+    },
+    {
+      "name": "two commands in a row: the last is the check",
+      "text": "| Sync | `a` | `b` |",
+      "rows": [
+        {
+          "milestone": "Sync | `a`",
+          "check": "b"
+        }
+      ]
+    },
+    {
+      "name": "a row is its last two backticks and the bars around them, with or without spaces",
+      "text": "| a `q` | `x | y` |\n|b|`z`|",
+      "rows": [
+        {
+          "milestone": "a `q`",
+          "check": "x | y"
+        },
+        {
+          "milestone": "b",
+          "check": "z"
+        }
+      ]
+    },
+    {
+      "name": "no milestone, no bar between the cells, nothing in the backticks, or something after them: no row",
+      "text": "|\n||\n|`x`|\n|| `x` |\n| a | `` |\n| a | ` ` |\n| a | `x` y |\n| a  `x` |\n| a | x` |\n` | a | `x` |\n| a | `x`\n`\n|`|\n| a | ` |",
+      "rows": []
+    },
+    {
+      "name": "a first cell of spaces alone names no milestone, whatever the spaces",
+      "text": "|  | `a` |\n|\t\u00a0\u3000| `b` |\n|\ufeff| `c` |",
+      "rows": []
+    },
+    {
+      "name": "a no-break space and a tab are spaces; a next-line mark (U+0085) is not",
+      "text": "|\u00a0Sync\u00a0\u00a0offline\t| `a\u00a0` |\n| Start | `b` |\u0085\n| Wake | `c\u0085` |\n|\u0085| `d` |",
+      "rows": [
+        {
+          "milestone": "Sync offline",
+          "check": "a"
+        },
+        {
+          "milestone": "Wake",
+          "check": "c\u0085"
+        },
+        {
+          "milestone": "\u0085",
+          "check": "d"
+        }
+      ]
+    },
+    {
+      "name": "a milestone is one line's words: a lone return, U+2028 or U+2029 inside it makes it none; at its ends they are space",
+      "text": "| a\rb | `x` |\n| a\u2028b | `x` |\n| a\u2029b | `x` |\n|\u2028 c \u2029| `y` |\n|\r d \r| `z` |",
+      "rows": [
+        {
+          "milestone": "c",
+          "check": "y"
+        },
+        {
+          "milestone": "d",
+          "check": "z"
+        }
+      ]
+    },
+    {
+      "name": "a milestone of 101 characters is too long to name a check; one of 100 is not",
+      "text": "| xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx | `a` |\n| yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy | `b` |",
+      "rows": [
+        {
+          "milestone": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+          "check": "b"
+        }
+      ]
+    },
+    {
+      "name": "a line of 1,000 characters is read; one of 1,001 is not",
+      "text": "| Long | `bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb` |\n| Longer | `cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc` |",
+      "rows": [
+        {
+          "milestone": "Long",
+          "check": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      ]
+    },
+    {
+      "name": "the lines one pattern read slowest (a bar and 998 spaces; two bars, spaces and a command with a word after it; an unclosed backtick; 498 bars) are no rows, and the row after them is",
+      "text": "|                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      a\n|                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          `a` x\n| a |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              `x\n| | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | x\n| Sync | `a` |",
+      "rows": [
+        {
+          "milestone": "Sync",
+          "check": "a"
+        }
+      ]
+    },
+    {
+      "name": "a goal holds 100 milestones: the first 100 rows",
+      "text": "| Milestone 0 | `check 0` |\n| Milestone 1 | `check 1` |\n| Milestone 2 | `check 2` |\n| Milestone 3 | `check 3` |\n| Milestone 4 | `check 4` |\n| Milestone 5 | `check 5` |\n| Milestone 6 | `check 6` |\n| Milestone 7 | `check 7` |\n| Milestone 8 | `check 8` |\n| Milestone 9 | `check 9` |\n| Milestone 10 | `check 10` |\n| Milestone 11 | `check 11` |\n| Milestone 12 | `check 12` |\n| Milestone 13 | `check 13` |\n| Milestone 14 | `check 14` |\n| Milestone 15 | `check 15` |\n| Milestone 16 | `check 16` |\n| Milestone 17 | `check 17` |\n| Milestone 18 | `check 18` |\n| Milestone 19 | `check 19` |\n| Milestone 20 | `check 20` |\n| Milestone 21 | `check 21` |\n| Milestone 22 | `check 22` |\n| Milestone 23 | `check 23` |\n| Milestone 24 | `check 24` |\n| Milestone 25 | `check 25` |\n| Milestone 26 | `check 26` |\n| Milestone 27 | `check 27` |\n| Milestone 28 | `check 28` |\n| Milestone 29 | `check 29` |\n| Milestone 30 | `check 30` |\n| Milestone 31 | `check 31` |\n| Milestone 32 | `check 32` |\n| Milestone 33 | `check 33` |\n| Milestone 34 | `check 34` |\n| Milestone 35 | `check 35` |\n| Milestone 36 | `check 36` |\n| Milestone 37 | `check 37` |\n| Milestone 38 | `check 38` |\n| Milestone 39 | `check 39` |\n| Milestone 40 | `check 40` |\n| Milestone 41 | `check 41` |\n| Milestone 42 | `check 42` |\n| Milestone 43 | `check 43` |\n| Milestone 44 | `check 44` |\n| Milestone 45 | `check 45` |\n| Milestone 46 | `check 46` |\n| Milestone 47 | `check 47` |\n| Milestone 48 | `check 48` |\n| Milestone 49 | `check 49` |\n| Milestone 50 | `check 50` |\n| Milestone 51 | `check 51` |\n| Milestone 52 | `check 52` |\n| Milestone 53 | `check 53` |\n| Milestone 54 | `check 54` |\n| Milestone 55 | `check 55` |\n| Milestone 56 | `check 56` |\n| Milestone 57 | `check 57` |\n| Milestone 58 | `check 58` |\n| Milestone 59 | `check 59` |\n| Milestone 60 | `check 60` |\n| Milestone 61 | `check 61` |\n| Milestone 62 | `check 62` |\n| Milestone 63 | `check 63` |\n| Milestone 64 | `check 64` |\n| Milestone 65 | `check 65` |\n| Milestone 66 | `check 66` |\n| Milestone 67 | `check 67` |\n| Milestone 68 | `check 68` |\n| Milestone 69 | `check 69` |\n| Milestone 70 | `check 70` |\n| Milestone 71 | `check 71` |\n| Milestone 72 | `check 72` |\n| Milestone 73 | `check 73` |\n| Milestone 74 | `check 74` |\n| Milestone 75 | `check 75` |\n| Milestone 76 | `check 76` |\n| Milestone 77 | `check 77` |\n| Milestone 78 | `check 78` |\n| Milestone 79 | `check 79` |\n| Milestone 80 | `check 80` |\n| Milestone 81 | `check 81` |\n| Milestone 82 | `check 82` |\n| Milestone 83 | `check 83` |\n| Milestone 84 | `check 84` |\n| Milestone 85 | `check 85` |\n| Milestone 86 | `check 86` |\n| Milestone 87 | `check 87` |\n| Milestone 88 | `check 88` |\n| Milestone 89 | `check 89` |\n| Milestone 90 | `check 90` |\n| Milestone 91 | `check 91` |\n| Milestone 92 | `check 92` |\n| Milestone 93 | `check 93` |\n| Milestone 94 | `check 94` |\n| Milestone 95 | `check 95` |\n| Milestone 96 | `check 96` |\n| Milestone 97 | `check 97` |\n| Milestone 98 | `check 98` |\n| Milestone 99 | `check 99` |\n| Milestone 100 | `check 100` |\n| Milestone 101 | `check 101` |\n| Milestone 102 | `check 102` |\n| Milestone 103 | `check 103` |\n| Milestone 104 | `check 104` |",
+      "rows": [
+        {
+          "milestone": "Milestone 0",
+          "check": "check 0"
+        },
+        {
+          "milestone": "Milestone 1",
+          "check": "check 1"
+        },
+        {
+          "milestone": "Milestone 2",
+          "check": "check 2"
+        },
+        {
+          "milestone": "Milestone 3",
+          "check": "check 3"
+        },
+        {
+          "milestone": "Milestone 4",
+          "check": "check 4"
+        },
+        {
+          "milestone": "Milestone 5",
+          "check": "check 5"
+        },
+        {
+          "milestone": "Milestone 6",
+          "check": "check 6"
+        },
+        {
+          "milestone": "Milestone 7",
+          "check": "check 7"
+        },
+        {
+          "milestone": "Milestone 8",
+          "check": "check 8"
+        },
+        {
+          "milestone": "Milestone 9",
+          "check": "check 9"
+        },
+        {
+          "milestone": "Milestone 10",
+          "check": "check 10"
+        },
+        {
+          "milestone": "Milestone 11",
+          "check": "check 11"
+        },
+        {
+          "milestone": "Milestone 12",
+          "check": "check 12"
+        },
+        {
+          "milestone": "Milestone 13",
+          "check": "check 13"
+        },
+        {
+          "milestone": "Milestone 14",
+          "check": "check 14"
+        },
+        {
+          "milestone": "Milestone 15",
+          "check": "check 15"
+        },
+        {
+          "milestone": "Milestone 16",
+          "check": "check 16"
+        },
+        {
+          "milestone": "Milestone 17",
+          "check": "check 17"
+        },
+        {
+          "milestone": "Milestone 18",
+          "check": "check 18"
+        },
+        {
+          "milestone": "Milestone 19",
+          "check": "check 19"
+        },
+        {
+          "milestone": "Milestone 20",
+          "check": "check 20"
+        },
+        {
+          "milestone": "Milestone 21",
+          "check": "check 21"
+        },
+        {
+          "milestone": "Milestone 22",
+          "check": "check 22"
+        },
+        {
+          "milestone": "Milestone 23",
+          "check": "check 23"
+        },
+        {
+          "milestone": "Milestone 24",
+          "check": "check 24"
+        },
+        {
+          "milestone": "Milestone 25",
+          "check": "check 25"
+        },
+        {
+          "milestone": "Milestone 26",
+          "check": "check 26"
+        },
+        {
+          "milestone": "Milestone 27",
+          "check": "check 27"
+        },
+        {
+          "milestone": "Milestone 28",
+          "check": "check 28"
+        },
+        {
+          "milestone": "Milestone 29",
+          "check": "check 29"
+        },
+        {
+          "milestone": "Milestone 30",
+          "check": "check 30"
+        },
+        {
+          "milestone": "Milestone 31",
+          "check": "check 31"
+        },
+        {
+          "milestone": "Milestone 32",
+          "check": "check 32"
+        },
+        {
+          "milestone": "Milestone 33",
+          "check": "check 33"
+        },
+        {
+          "milestone": "Milestone 34",
+          "check": "check 34"
+        },
+        {
+          "milestone": "Milestone 35",
+          "check": "check 35"
+        },
+        {
+          "milestone": "Milestone 36",
+          "check": "check 36"
+        },
+        {
+          "milestone": "Milestone 37",
+          "check": "check 37"
+        },
+        {
+          "milestone": "Milestone 38",
+          "check": "check 38"
+        },
+        {
+          "milestone": "Milestone 39",
+          "check": "check 39"
+        },
+        {
+          "milestone": "Milestone 40",
+          "check": "check 40"
+        },
+        {
+          "milestone": "Milestone 41",
+          "check": "check 41"
+        },
+        {
+          "milestone": "Milestone 42",
+          "check": "check 42"
+        },
+        {
+          "milestone": "Milestone 43",
+          "check": "check 43"
+        },
+        {
+          "milestone": "Milestone 44",
+          "check": "check 44"
+        },
+        {
+          "milestone": "Milestone 45",
+          "check": "check 45"
+        },
+        {
+          "milestone": "Milestone 46",
+          "check": "check 46"
+        },
+        {
+          "milestone": "Milestone 47",
+          "check": "check 47"
+        },
+        {
+          "milestone": "Milestone 48",
+          "check": "check 48"
+        },
+        {
+          "milestone": "Milestone 49",
+          "check": "check 49"
+        },
+        {
+          "milestone": "Milestone 50",
+          "check": "check 50"
+        },
+        {
+          "milestone": "Milestone 51",
+          "check": "check 51"
+        },
+        {
+          "milestone": "Milestone 52",
+          "check": "check 52"
+        },
+        {
+          "milestone": "Milestone 53",
+          "check": "check 53"
+        },
+        {
+          "milestone": "Milestone 54",
+          "check": "check 54"
+        },
+        {
+          "milestone": "Milestone 55",
+          "check": "check 55"
+        },
+        {
+          "milestone": "Milestone 56",
+          "check": "check 56"
+        },
+        {
+          "milestone": "Milestone 57",
+          "check": "check 57"
+        },
+        {
+          "milestone": "Milestone 58",
+          "check": "check 58"
+        },
+        {
+          "milestone": "Milestone 59",
+          "check": "check 59"
+        },
+        {
+          "milestone": "Milestone 60",
+          "check": "check 60"
+        },
+        {
+          "milestone": "Milestone 61",
+          "check": "check 61"
+        },
+        {
+          "milestone": "Milestone 62",
+          "check": "check 62"
+        },
+        {
+          "milestone": "Milestone 63",
+          "check": "check 63"
+        },
+        {
+          "milestone": "Milestone 64",
+          "check": "check 64"
+        },
+        {
+          "milestone": "Milestone 65",
+          "check": "check 65"
+        },
+        {
+          "milestone": "Milestone 66",
+          "check": "check 66"
+        },
+        {
+          "milestone": "Milestone 67",
+          "check": "check 67"
+        },
+        {
+          "milestone": "Milestone 68",
+          "check": "check 68"
+        },
+        {
+          "milestone": "Milestone 69",
+          "check": "check 69"
+        },
+        {
+          "milestone": "Milestone 70",
+          "check": "check 70"
+        },
+        {
+          "milestone": "Milestone 71",
+          "check": "check 71"
+        },
+        {
+          "milestone": "Milestone 72",
+          "check": "check 72"
+        },
+        {
+          "milestone": "Milestone 73",
+          "check": "check 73"
+        },
+        {
+          "milestone": "Milestone 74",
+          "check": "check 74"
+        },
+        {
+          "milestone": "Milestone 75",
+          "check": "check 75"
+        },
+        {
+          "milestone": "Milestone 76",
+          "check": "check 76"
+        },
+        {
+          "milestone": "Milestone 77",
+          "check": "check 77"
+        },
+        {
+          "milestone": "Milestone 78",
+          "check": "check 78"
+        },
+        {
+          "milestone": "Milestone 79",
+          "check": "check 79"
+        },
+        {
+          "milestone": "Milestone 80",
+          "check": "check 80"
+        },
+        {
+          "milestone": "Milestone 81",
+          "check": "check 81"
+        },
+        {
+          "milestone": "Milestone 82",
+          "check": "check 82"
+        },
+        {
+          "milestone": "Milestone 83",
+          "check": "check 83"
+        },
+        {
+          "milestone": "Milestone 84",
+          "check": "check 84"
+        },
+        {
+          "milestone": "Milestone 85",
+          "check": "check 85"
+        },
+        {
+          "milestone": "Milestone 86",
+          "check": "check 86"
+        },
+        {
+          "milestone": "Milestone 87",
+          "check": "check 87"
+        },
+        {
+          "milestone": "Milestone 88",
+          "check": "check 88"
+        },
+        {
+          "milestone": "Milestone 89",
+          "check": "check 89"
+        },
+        {
+          "milestone": "Milestone 90",
+          "check": "check 90"
+        },
+        {
+          "milestone": "Milestone 91",
+          "check": "check 91"
+        },
+        {
+          "milestone": "Milestone 92",
+          "check": "check 92"
+        },
+        {
+          "milestone": "Milestone 93",
+          "check": "check 93"
+        },
+        {
+          "milestone": "Milestone 94",
+          "check": "check 94"
+        },
+        {
+          "milestone": "Milestone 95",
+          "check": "check 95"
+        },
+        {
+          "milestone": "Milestone 96",
+          "check": "check 96"
+        },
+        {
+          "milestone": "Milestone 97",
+          "check": "check 97"
+        },
+        {
+          "milestone": "Milestone 98",
+          "check": "check 98"
+        },
+        {
+          "milestone": "Milestone 99",
+          "check": "check 99"
+        }
+      ]
+    }
+  ]
+}

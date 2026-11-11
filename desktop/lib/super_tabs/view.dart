@@ -75,12 +75,14 @@ import 'day_pill.dart';
 import 'agent_instructions.dart';
 import '../core/test_run.dart';
 import 'github_issues.dart';
+import 'goal_score.dart';
 import 'github_row.dart';
 import 'instructions_link.dart';
 import 'issue_panel.dart';
 import 'task_board.dart';
 import 'thread_panel.dart';
 import 'manage_page.dart';
+import 'sharing.dart';
 import 'project_sidebar.dart';
 import 'swarm_switcher.dart' show fallBackToPersonal;
 import 'project_options.dart';
@@ -1720,6 +1722,7 @@ class _SuperTabViewState extends State<SuperTabView>
     onRenameSwarm: widget.onRenameSwarm,
     page: _pageShown,
     onManage: _openManage,
+    onInvite: () => showSuperTabSharing(context, c),
     onManageMachines: () {
       // Set before Manage opens, so a last page of Devices is not opened here only to be left at once.
       _manageTab = SuperTabManageTab.machines;
@@ -3000,6 +3003,16 @@ class _SuperTabViewState extends State<SuperTabView>
     final isProject =
         group != null && c.snapshot?.isProjectLead(group.id) == true;
     final restsOnChat = isProject;
+    // A project's goal follows its name where its menu does: on Desktop, in its own bar. A phone's bar has no room for it,
+    // and a browser has no gh to read it with.
+    final goalRepository =
+        isProject &&
+            !kIsWeb &&
+            !_phone &&
+            !_devicesVisible &&
+            !_listViewHoldsThePane
+        ? SwarmTaskBoard.repositoryOf(c, group.id, app: widget.app)
+        : null;
     return Container(
       constraints: const BoxConstraints(minHeight: 52),
       // A phone's rows line up (Huy, 2026-11-02): the sidebar icon starts at
@@ -3043,6 +3056,20 @@ class _SuperTabViewState extends State<SuperTabView>
                               style: DesktopChrome.metadata(),
                             ),
                           ),
+                        ),
+                      ],
+                    )
+                  else if (goalRepository != null)
+                    // The name gives way first: the score is whole beside a long name.
+                    Row(
+                      children: [
+                        Flexible(child: _title(group)),
+                        SwarmGoalScore(
+                          repository: goalRepository,
+                          github: _github,
+                          refreshEvery: kUnderTest
+                              ? null
+                              : const Duration(minutes: 5),
                         ),
                       ],
                     )
