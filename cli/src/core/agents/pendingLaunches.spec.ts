@@ -258,3 +258,29 @@ it('includes synchronous retry reads in the event-loop work budget', async () =>
   await pending.recover()
   expect(receipts.pendingIntent).toHaveBeenCalledOnce()
 })
+
+it('wakes only for what is pending: a held launch retries at 2 s, and with nothing pending only the rescan wakes it', async () => {
+  // The core at rest woke every 250 ms with nothing pending (0.13% of a core, 2026-11-11, after #3934).
+  vi.useFakeTimers()
+  const effect = vi.fn(async () => created)
+  const prepare = vi.fn<Parameters<typeof createPendingLaunches>[0]['prepare']>().mockResolvedValueOnce(null).mockResolvedValue(effect)
+  const { pending, store } = setup(prepare)
+  pending.open()
+  await pending.recover()
+  const opened = Date.now()
+  await vi.advanceTimersToNextTimerAsync()
+  expect(Date.now() - opened).toBe(60_000)
+  await pending.recover()
+
+  const asked = Date.now()
+  expect(await pending.start(id(0), fingerprint, request, held)).toEqual({ state: 'pending', held })
+  await vi.advanceTimersToNextTimerAsync()
+  expect(Date.now() - asked).toBe(2_000)
+  await pending.recover()
+  await vi.advanceTimersByTimeAsync(0)
+  expect(store.status(id(0))).toEqual(created)
+  expect(effect).toHaveBeenCalledOnce()
+
+  await vi.advanceTimersToNextTimerAsync()
+  expect(Date.now() - opened).toBe(120_000)
+})

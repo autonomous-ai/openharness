@@ -27,11 +27,11 @@ it.skipIf(process.getuid === undefined)('asks lsof again on the next request of 
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
   lsofAnswers([failed({ killed: true, code: null as unknown as undefined, signal: 'SIGTERM' }), ''], [null, 'p1\nf3\nn127.0.0.1:50000->127.0.0.1:18473\n'])
   const socket = caller()
-  expect(await peerIsThisAccount(socket, 'darwin')).toBe(false)
+  expect(await peerIsThisAccount(socket, 'darwin')).toBe('unanswered')
   expect(await peerIsThisAccount(socket, 'darwin')).toBe(true)
   expect(childProcess.execFile).toHaveBeenCalledTimes(2)
   expect(warn).toHaveBeenCalledWith(`[peer] lsof did not say who is calling in ${LSOF_MS} ms`)
-  expect(warn).toHaveBeenCalledWith('[peer] refused a valid secret on 127.0.0.1:18473: lsof did not answer in time; asked again on its next request')
+  expect(warn).toHaveBeenCalledWith('[peer] could not check a valid secret on 127.0.0.1:18473: lsof did not answer in time; told to retry')
 })
 
 it.skipIf(process.getuid === undefined)('keeps a no on the connection: lsof found nothing, or failed for any reason but time', async () => {

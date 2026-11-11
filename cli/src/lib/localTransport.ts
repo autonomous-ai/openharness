@@ -17,7 +17,7 @@ import { dirname, join } from 'node:path'
 import { Readable } from 'node:stream'
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web'
 import { configuredPortOf, readDaemonRecord } from './daemonRecord.js'
-import { localCredentialHeaders } from './localCredential.js'
+import { localCredentialHeaders, PEER_LOOKUP_UNANSWERED } from './localCredential.js'
 import { unixSocketPath } from './localSocket.js'
 import { NOT_RUNNING } from './unreachable.js'
 import { daemonPipe } from './windows/daemonPipe.js'
@@ -147,7 +147,22 @@ export function daemonFetch(
       return overSocket(target.pipe, new Request(input, init), target)
     }
     const socket = daemon ? localSocketRoute(dataDir, port, platform) : null
-    return socket ? overSocket(socket, new Request(input, init)) : base(input, init)
+    if (socket) return overSocket(socket, new Request(input, init))
+    // Only over TCP is who is calling looked up, and a body that cannot be sent twice (a stream) is not sent again.
+    const resendable = !(input instanceof Request) && (init?.body == null || typeof init.body === 'string')
+    return resendable ? askedAgainWhenUnanswered(() => base(input, init)) : base(input, init)
+  }
+}
+
+/** A listener that could not check in time who is calling (503 PEER_LOOKUP_UNANSWERED, lib/peerAccount.ts) is asked again,
+ *  after 250 and 500 ms. Past three tries its 503 goes to the caller, whose message says to retry in a moment. */
+async function askedAgainWhenUnanswered(send: () => Promise<Response>): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    const reply = await send()
+    if (reply.status !== 503 || attempt >= 2) return reply
+    const said = await reply.clone().json().catch(() => null) as { error?: unknown } | null
+    if (said?.error !== PEER_LOOKUP_UNANSWERED) return reply
+    await new Promise(resolve => setTimeout(resolve, 250 * 2 ** attempt))
   }
 }
 

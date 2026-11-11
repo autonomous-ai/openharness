@@ -231,6 +231,14 @@ describe('local CLI WebSocket', () => {
     expect(await new Promise<number>((resolve) => ws.once('unexpected-response', (_req, res) => resolve(res.statusCode ?? 0)))).toBe(401)
   })
 
+  it('tells a TCP upgrade whose caller could not be looked up in time to retry', async () => {
+    const credential = 'c'.repeat(43)
+    const url = await start(new FakeBackend(), { localCredential: credential, peerAccount: async () => 'unanswered' })
+    const ws = new WebSocket(url, { headers: { 'x-harness-local': credential } })
+    const reply = await new Promise<{ status: number; retry: unknown }>((resolve) => ws.once('unexpected-response', (_req, res) => resolve({ status: res.statusCode ?? 0, retry: res.headers['retry-after'] })))
+    expect(reply).toEqual({ status: 503, retry: '1' })
+  })
+
   it('survives a client that resets while the lookup of who it is runs', async () => {
     const credential = 'c'.repeat(43)
     let release: (mine: boolean) => void = () => {}
