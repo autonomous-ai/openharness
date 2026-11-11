@@ -466,13 +466,14 @@ export function worksInProjectChat(state: SuperTabState, group: Conversation, ag
   return state.conversations.some(c => c.assignment?.agentId === agentId && !c.archived && c.id !== group.id && !c.kind && !c.audience
     && !['lost', 'stopped', 'cancelled'].includes(c.assignment.status) && groupProject(state, c).id === project.id)
 }
-/** When a person's last words go in a project's channel: Desktop 1.4.28 and older post New project's opening request and a
- *  Personal Swarm's first message there, and the Desktop of #3965 sends both to the PM's own 1:1 chat, which lead.start and
- *  lead.claim open (pmChat.ts). Those older Desktops keep working until this, 30 days after that Desktop's release; then a
- *  channel is agents only everywhere, and leadWaiting and the opening request go. */
+/** When a person's last words go in a project's channel: a Desktop from before #3965's release (2026-11-11) posts New project's
+ *  opening request and a Personal Swarm's first message there, and the Desktop of #3965 sends both to the PM's own 1:1 chat,
+ *  which lead.start and lead.claim open (pmChat.ts). Those older Desktops keep working until this, 30 days after that release;
+ *  then a channel is agents only everywhere, a Personal Swarm's too. The exemptions, leadWaiting and the person-to-PM fallback
+ *  go with their tests from then (the lead's removal task). */
 export const CHANNEL_EXEMPTIONS_END = Date.UTC(2026, 11, 11)
 
-/** New project's opening request from Desktop 1.4.28 and older (launch.dart startInSwarm): its creator posts it, with its files,
+/** New project's opening request from a Desktop before #3965 (launch.dart startInSwarm): its creator posts it, with its files,
  *  in the new project's channel right before lead.start, and the PM reads it there when it joins. Only while the channel holds
  *  no message and no PM was asked for or holds it, and until CHANNEL_EXEMPTIONS_END. */
 function openingRequest(state: SuperTabState, userId: string, group: Conversation): boolean {
@@ -490,7 +491,7 @@ export function postable(state: SuperTabState, actor: Actor, conversationId: str
   // Swarm v4 (anh Dee, 2026-11-08): a project's channel and its tasks' chats are agents only. People read them and talk to their
   // own agents, each in a chat of its own (a conversation with a kind); an agent passes its person's decision on. The apps only
   // hid the composer, so an older app, the phone and the web still posted there (2026-11-09). A post, an upload and a voice
-  // message all ask this. Exempt until CHANNEL_EXEMPTIONS_END, for Desktop 1.4.28 and older: a Personal Swarm, whose Desktop
+  // message all ask this. Exempt until CHANNEL_EXEMPTIONS_END, for a Desktop before #3965: a Personal Swarm, whose Desktop
   // started a project's PM on the person's first message in its chat (leadWaiting, lead.claim), and New project's opening request.
   const exempt = now < CHANNEL_EXEMPTIONS_END && (isPersonalSwarm(state) || actor.kind === 'person' && openingRequest(state, actor.userId, group))
   if (actor.kind === 'person' && !group.kind && !exempt) {

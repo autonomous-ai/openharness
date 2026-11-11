@@ -116,7 +116,7 @@ describe('a person\'s words there by another way', () => {
   })
 })
 
-// Exempt until CHANNEL_EXEMPTIONS_END, for Desktop 1.4.28 and older: a Personal Swarm. That Desktop starts a project's PM on the
+// Exempt until CHANNEL_EXEMPTIONS_END, for a Desktop before #3965: a Personal Swarm. That Desktop starts a project's PM on the
 // person's first message in the project's chat: the message waits for the PM (leadWaiting) and the first lead.claim starts it on
 // the person's machine (leadWaiting.test.ts). The Desktop of #3965 sends it to the PM's own chat (pmChat.ts).
 describe('a project\'s chat in a Personal Swarm, until CHANNEL_EXEMPTIONS_END', () => {
@@ -154,19 +154,20 @@ describe('a project\'s chat in a Personal Swarm, until CHANNEL_EXEMPTIONS_END', 
     const f = project(true, CHANNEL_EXEMPTIONS_END)
     expect(refusal(() => f.run(post(f.conversationId, 'make the landing page dark')))).toMatchObject({ code: 'AGENTS_ONLY', message: SENTENCE })
     expect(f.project.leadWaiting).toBeUndefined()
-    expect(refusal(() => project(true, CHANNEL_EXEMPTIONS_END - 1).run(post(f.conversationId, 'make the landing page dark')))).toBeNull()
+    const before = project(true, CHANNEL_EXEMPTIONS_END - 1)
+    expect(refusal(() => before.run(post(before.conversationId, 'make the landing page dark')))).toBeNull()
   })
 })
 
-// Desktop 1.4.28 and older keep both exemptions for 30 days after the release of #3965's Desktop, which sends a new PM's first
-// words to its own chat; this pins that day, so moving it is a decision a pull request shows.
+// A Desktop before #3965 keeps both exemptions for 30 days after the release of #3965's Desktop (2026-11-11), which sends a new
+// PM's first words to its own chat; this pins that day, so moving it is a decision a pull request shows.
 describe('CHANNEL_EXEMPTIONS_END', () => {
   it('is 2026-12-11, 00:00 UTC', () => {
     expect(new Date(CHANNEL_EXEMPTIONS_END).toISOString()).toBe('2026-12-11T00:00:00.000Z')
   })
 })
 
-// Exempt until CHANNEL_EXEMPTIONS_END, for Desktop 1.4.28 and older: New project's opening request. When the Swarm starts the PM,
+// Exempt until CHANNEL_EXEMPTIONS_END, for a Desktop before #3965: New project's opening request. When the Swarm starts the PM,
 // that Desktop posts its person's request, with its files, in the new project's channel right before lead.start (launch.dart
 // startInSwarm), and the PM reads it there when it joins. Kept only from the project's creator, only while the channel holds no
 // message and no PM was asked for or holds it. The Desktop of #3965 sends it to the PM's own chat, which lead.start opens.
