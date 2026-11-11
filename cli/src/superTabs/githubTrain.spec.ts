@@ -32,8 +32,9 @@ function fakeRepo(now: () => number) {
     /** A train commit's parents: what it was merged onto, and the member's head. */
     parents: new Map<string, string[]>(),
     branches: new Map<string, string>(),
-    /** Heads that conflict when merged into a train, and heads main holds already. */
+    /** Heads that conflict when merged into a train, heads GitHub does not take into one, and heads main holds already. */
     conflicts: new Set<string>(),
+    untaken: new Set<string>(),
     inMain: new Set<string>(),
     settings: {} as Json,
     /** Answers a write in GitHub's place, which then changes nothing: a test refuses a call here. */
@@ -110,6 +111,7 @@ function fakeRepo(now: () => number) {
       state.beforeMerge?.(branch)
       const before = state.branches.get(branch)
       if (!before || !state.commits.has(head)) return reply(404)
+      if (state.untaken.has(head)) return reply(404)
       if (state.conflicts.has(head)) return reply(409)
       if (state.inMain.has(head)) return reply(204, null)
       const merged = sha(`${before}+${head}`), under = state.commits.get(before)
@@ -339,13 +341,42 @@ describe('the ready pull requests ride a train (githubTrain.ts)', () => {
     expect(f.state.branches.has(live.head.ref)).toBe(true)
   })
 
-  it('leaves a fork\'s pull request to merge on its own, and carries it on no train', async () => {
+  // In an open project most people's agents work from forks. GitHub keeps a fork's head in the repository it is opened
+  // against (refs/pull/N/head), and its merges API takes that head by its SHA: tried on 2026-11-10 with a commit only a
+  // pull request held (201). Left to merge on its own, a fork's pull request landed on checks from an older base.
+  it('carries a fork\'s pull request on the train with the others, by its head', async () => {
     const f = setup()
-    f.add(4); f.add(5, { fork: true }); f.add(6)
+    f.add(4); const fork = f.add(5, { fork: true }); f.add(6)
     await f.settle()
-    expect(f.writes()).toEqual(['PUT /pulls/5/merge', 'POST /issues/5/comments'])
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual([])
+    expect(f.carried()).toEqual([[4, 5, 6]])
+    expect(f.state.sent.filter(s => s.path === '/merges').map(s => s.body.head)).toContain(fork.head.sha)
+    await f.ends(PASSED)
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual(['PUT /pulls/900/merge'])
+    expect(fork).toMatchObject({ state: 'closed', merged_at: expect.any(String) })
+  })
+
+  it('merges a fork\'s pull request on its own, as before the train, when GitHub does not take its head, and builds the train of the others next', async () => {
+    const f = setup()
+    f.add(4); const fork = f.add(5, { fork: true }); f.add(6)
+    f.state.untaken.add(fork.head.sha)
+    await f.settle()
+    // The train is not opened this pass: the fork's merge is about to move the base under it.
+    expect(f.trains()).toEqual([])
+    expect(f.state.branches.size).toBe(0)
+    expect(f.writes().filter(w => !w.startsWith('POST /merges') && !w.includes('/git/refs'))).toEqual(['PUT /pulls/5/merge', 'POST /issues/5/comments'])
     await f.tick()
     expect(f.carried()).toEqual([[4, 6]])
+  })
+
+  it('stops, and merges nothing on its own, when GitHub does not take the head of a pull request of this repository', async () => {
+    const f = setup()
+    const a = f.add(4); f.add(5)
+    f.state.untaken.add(a.head.sha)
+    await f.settle()
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual([])
+    expect(f.trains()).toEqual([])
+    expect(f.logged()).toContainEqual(expect.stringContaining('TRAIN_REFUSED acme/app: GitHub answered POST /merges with 404.'))
   })
 })
 
