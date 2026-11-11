@@ -96,9 +96,10 @@ export function permissionModeApproves(mode: string): boolean {
  * rather than guess, the way `gridLaunch.ts` refuses an engine with no endpoint contract.
  *
  * An entry is the argv placed BEFORE the text: a flag (`['--prompt']`) or nothing at all for an
- * engine that reads a bare positional. Each entry cites where it was read from.
+ * engine that reads a bare positional. `'typed'`: the engine takes it, but not in argv; Harness types it
+ * into the pane once the engine can take it ([typedFirstPrompt]). Each entry cites where it was read from.
  */
-export const FIRST_PROMPT_ARGS: Readonly<Record<AgentEngine, readonly string[] | null>> = {
+export const FIRST_PROMPT_ARGS: Readonly<Record<AgentEngine, readonly string[] | 'typed' | null>> = {
   ...launchField('firstPromptArgs'),
   // `opencode --help`: `--prompt  prompt to use`, a TUI flag — the interactive session starts with
   // the message submitted. A flag rather than a positional because opencode's own positional is
@@ -121,8 +122,7 @@ export const FIRST_PROMPT_ARGS: Readonly<Record<AgentEngine, readonly string[] |
   grok: null,
   agy: null,
   copilot: null,
-  // `openclaw tui --help` (2026.11.2): `--message <text>  Send an initial message after connecting`.
-  openclaw: ['--message'],
+  openclaw: OPENCLAW_LAUNCH.firstPrompt,
   terminal: null,
 }
 
@@ -146,12 +146,19 @@ export function supportsFirstPrompt(engine: AgentEngine): boolean {
   return FIRST_PROMPT_ARGS[engine] !== null
 }
 
-/** The argv that hands `prompt` to `engine` as its first message. Throws [FirstPromptUnsupportedError]
- *  for an engine with no contract, so a caller cannot build an argv that silently drops the prompt. */
+/** The argv that hands `prompt` to `engine` as its first message: none for a typed one, which the pane
+ *  gets instead. Throws [FirstPromptUnsupportedError] for an engine with no contract, so a caller cannot
+ *  build an argv that silently drops the prompt. */
 export function firstPromptArgs(engine: AgentEngine, prompt: string): string[] {
   const lead = FIRST_PROMPT_ARGS[engine]
   if (lead === null) throw new FirstPromptUnsupportedError(engine)
-  return [...lead, prompt]
+  return lead === 'typed' ? [] : [...lead, prompt]
+}
+
+/** The first prompt a launch of `engine` leaves to be typed into its pane, since its argv does not carry it;
+ *  `undefined` when there is none or the argv carries it. */
+export function typedFirstPrompt(engine: AgentEngine, prompt: string | undefined): string | undefined {
+  return FIRST_PROMPT_ARGS[engine] === 'typed' && prompt ? prompt : undefined
 }
 
 /**
@@ -238,9 +245,10 @@ export interface LaunchCommandOptions {
    * after every flag, because two of the three engines take it positionally and a positional is only
    * unambiguous once the options are exhausted.
    *
-   * A launch option and nothing more: it is never written to the registry row, so a relaunch (which
-   * resumes a session that already has its first turn) never repeats it. Never logged either — it is
-   * what the user typed.
+   * A launch option and nothing more for an engine that takes it in argv: it is never written to the
+   * registry row, so a relaunch (which resumes a session that already has its first turn) never repeats
+   * it. A typed one ([typedFirstPrompt]) is not in argv at all. Never logged either — it is what the
+   * user typed.
    */
   firstPrompt?: string
   /**
@@ -675,17 +683,34 @@ export function buildEngineLaunchArgv(
   return opts.native ? ['/usr/bin/env', `${NATIVE_LAUNCH_MARKER}=${opts.native.token}`, ...argv] : argv
 }
 
+/** The daemon's variables an engine starts with on every platform, so it reads the same state Harness does. */
+const LAUNCH_ENVIRONMENT: Readonly<Partial<Record<AgentEngine, readonly string[]>>> = { openclaw: OPENCLAW_LAUNCH.environment }
+
 /**
- * The variables a launch sets around its engine on Windows, which has no `/usr/bin/env` to put in front of the argv
- * (`buildEngineLaunchArgv` leaves it out there): the screen's (engines/kit/launchScreen.ts) and a native launch's
- * marker. The caller sends them with the pane's env (the pty host's create and respawn env), which the engine
- * inherits, after the launch's own so they win as the prefix did. None elsewhere, where they are in the argv. A screen's
+ * The variables a launch sets around its engine. Everywhere: the daemon's non-empty values of those its engine names
+ * ([LAUNCH_ENVIRONMENT]); a pane's shell does not inherit the daemon's environment, so without them a TUI would open
+ * another state folder than the one Harness reads. On Windows also those it cannot put in front of the argv, having no
+ * `/usr/bin/env` (`buildEngineLaunchArgv` leaves it out there): the screen's (engines/kit/launchScreen.ts) and a native
+ * launch's marker, which elsewhere are in the argv. The caller sends them with the pane's env (the pty host's create
+ * and respawn env), which the engine inherits, after the launch's own so they win as the prefix did. A screen's
  * cleared variables cannot ride an env; no engine declares any (facets/launch.ts `clearEnvironment`).
  */
-export function engineLaunchEnv(engine: AgentEngine, native?: Pick<NativeLaunch, 'token'>, platform: NodeJS.Platform = process.platform): Record<string, string> | undefined {
-  if (platform !== 'win32') return undefined
-  // As the prefix wrote it: `${token}`, which a native launch always has (nativeLaunch.ts).
-  const variables = { ...screenVariables(launchContract(engine)), ...(native ? { [NATIVE_LAUNCH_MARKER]: `${native.token}` } : {}) }
+export function engineLaunchEnv(
+  engine: AgentEngine,
+  native?: Pick<NativeLaunch, 'token'>,
+  platform: NodeJS.Platform = process.platform,
+  daemon: NodeJS.ProcessEnv = process.env,
+): Record<string, string> | undefined {
+  const variables: Record<string, string> = {}
+  for (const name of LAUNCH_ENVIRONMENT[engine] ?? []) {
+    const value = daemon[name]
+    if (value) variables[name] = value
+  }
+  if (platform === 'win32') {
+    Object.assign(variables, screenVariables(launchContract(engine)))
+    // As the prefix wrote it: `${token}`, which a native launch always has (nativeLaunch.ts).
+    if (native) variables[NATIVE_LAUNCH_MARKER] = `${native.token}`
+  }
   return Object.keys(variables).length ? variables : undefined
 }
 
