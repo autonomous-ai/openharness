@@ -220,6 +220,42 @@ describe('fresh native image reads', () => {
     expect(await readFile(path)).toEqual(bytes)
   })
 
+  it('keeps a helper whose first exec outlasts its queries, as macOS\'s signature check makes it, and turns off one that never answers', async () => {
+    vi.stubGlobal('__DARWIN_PROCESS_IMAGES__', JSON.stringify(artifact))
+    let now = 0
+    vi.spyOn(performance, 'now').mockImplementation(() => now)
+    // How Node's execFile reports a child it killed at its timeout, and how the off-thread worker says so.
+    let queries = 0
+    const timedOut = (_path: unknown, _args: unknown, _options: unknown, done: (error: Error | null, stdout: string, stderr?: string, outcome?: { timedOut: boolean }) => void) =>
+      queries++ % 2 ? done(Object.assign(new Error('timed out'), { killed: true, signal: 'SIGTERM', code: null }), '')
+        : done(Object.assign(new Error('timed out'), { signal: 'SIGKILL' }), '', '', { timedOut: true })
+    const answers = (_path: unknown, _args: unknown, _options: unknown, done: (error: Error | null, stdout: string) => void) =>
+      done(null, output(record(10)))
+    // The first exec: every query started meanwhile is killed at its deadline, and answered by lsof alone.
+    host.execFile.mockImplementation(timedOut)
+    const first = await Promise.all([1, 2, 3].map(() => nativeProcessImages([10], 500)))
+    expect(first.map(result => result.images.size)).toEqual([0, 0, 0])
+    host.execFile.mockImplementation(answers)
+    expect((await nativeProcessImages([10], 500)).images.get(10)?.path).toBe('/fixture/native')
+    // A timeout long after the last starts a window of its own: these two are 5 s apart, and the helper stays on.
+    host.execFile.mockImplementation(timedOut)
+    for (now = 1_000; now <= 6_000; now += 5_000) expect((await nativeProcessImages([10], 500)).images.size).toBe(0)
+    host.execFile.mockImplementationOnce(answers)
+    expect((await nativeProcessImages([10], 500)).images.size).toBe(1)
+    // A helper that times out for 2 s with no answer between is turned off: no spawn for 60 s.
+    for (now = 10_000; now <= 12_000; now += 1_000) expect((await nativeProcessImages([10], 500)).images.size).toBe(0)
+    const spawned = host.execFile.mock.calls.length
+    expect((await nativeProcessImages([10], 500)).images.size).toBe(0)
+    expect(host.execFile).toHaveBeenCalledTimes(spawned)
+    // Any other failure turns it off at once.
+    now = 80_000
+    host.execFile.mockImplementationOnce((_path, _args, _options, done) => done(Object.assign(new Error('exit 69'), { code: 69 }), ''))
+    expect((await nativeProcessImages([10], 500)).images.size).toBe(0)
+    host.execFile.mockImplementation(answers)
+    expect((await nativeProcessImages([10], 500)).images.size).toBe(0)
+    expect(host.execFile).toHaveBeenCalledTimes(spawned + 1)
+  })
+
   it('does not launch a late helper when preparation exceeds the request deadline', async () => {
     vi.stubGlobal('__DARWIN_PROCESS_IMAGES__', JSON.stringify(artifact))
     let resume!: () => void
