@@ -51,7 +51,7 @@ type Json = Record<string, unknown>
 export const SHORT_AFTER_MS = 15 * 60_000
 /** How often the PM is told while work is short. */
 export const SHORT_EVERY_MS = 60 * 60_000
-/** How many times the PM is told, with nothing landed, closed or opened since, before its person is told instead (nextThing.ts NEXT_TIMES). */
+/** How many times the PM is told, with nothing landed, closed or opened since, before its person is told instead. */
 export const SHORT_TIMES = 3
 /** The hour of this computer's day from which the day's numbers are posted, once. */
 export const DAY_HOUR = 9

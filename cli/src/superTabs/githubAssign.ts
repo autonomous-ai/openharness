@@ -13,7 +13,7 @@ import type { Choice } from './assign/model.js'
 import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { GitHubReads, GitHubStop, PAGE } from './githubRest.js'
-import { authorOf, isWriter, openPullsPath, PULL_PAGES, pullPeople, pullTalk, RECORD_SETTLE_MS, sameChange, verdicts, type LedProject, type VerdictRecords } from './githubMerge.js'
+import { authorOf, FailingHeads, isHeld, isWriter, openPullsPath, PULL_PAGES, pullPeople, pullTalk, RECORD_SETTLE_MS, sameChange, verdicts, type LedProject, type VerdictRecords } from './githubMerge.js'
 import { TEAM } from './githubMentions.js'
 import { goalOf, type Score } from './goal.js'
 import { numbersOf, type Numbers } from './pmNumbers.js'
@@ -91,16 +91,21 @@ export class GitHubAssign {
   private readonly now: () => number
   private readonly log: (line: string) => void
 
+  private readonly failing: FailingHeads
   constructor(private readonly deps: { projects: () => Promise<LedProject[]>; crew: (project: LedProject) => Promise<Crew>
     get: GitHubGet; send: GitHubSend; now?: () => number; log?: (line: string) => void; intervalMs?: number
     /** Who made each verdict by command, the merger's own (githubMerge.ts VerdictRecords): only such a READ-OK is a read. */
     records: VerdictRecords
+    /** Whether [project]'s PM runs here now: GitHub news brings an agent what is said only while it runs (githubMentions.ts), so a
+     *  PM asked while stopped never hears it (the swarm-sandbox, 2026-11-10: Juno, its PM and only reader). */
+    pmRunning: (project: LedProject) => Promise<boolean>
     /** Takes what a pass counted of a project, for its PM and its people, and how to read its goal and what its day's
      *  scoreboard says when a line says them (pmNumbers.ts PmNumbers). */
     numbers: { pass: (project: LedProject, numbers: Numbers, goal: () => Promise<Score | null>, board: () => Promise<string>) => Promise<void> } }) {
     this.now = deps.now ?? Date.now
     this.log = deps.log ?? (line => console.warn(line))
     this.reads = new GitHubReads(deps.get, this.now)
+    this.failing = new FailingHeads(this.reads, this.now, this.log)
   }
 
   start(): void {
@@ -277,6 +282,9 @@ export class GitHubAssign {
   private async askReaders(project: LedProject, read: Read, open: Json[], crew: Crew): Promise<Set<number>> {
     const { repo } = project
     const team = teamOf(crew, project.pm)
+    // Read only when the PM is the reader left; one that cannot be read is taken as stopped, and the pass goes on.
+    let pmRuns: Promise<boolean> | undefined
+    const pmHears = () => pmRuns ??= this.deps.pmRunning(project).catch(() => false)
     // The tasks whose pull request waits for its readers or its merge, not for its builder (askQuiet).
     const withReaders = new Set<number>()
     const base = String((await this.reads.one(repo, `/repos/${repo}`)).default_branch ?? '')
@@ -288,10 +296,18 @@ export class GitHubAssign {
       if (!Number.isSafeInteger(number) || !/^[0-9a-f]{40}$/.test(head)) continue
       const author = authorOf(pull)
       if (author === null || !team.has(labelOf(author))) continue
+      // One on hold waits for a person to lift it: nobody is asked to read it meanwhile, and its task waits with it, not its
+      // builder (askQuiet asks nothing of it, and it is not taken back).
+      if (isHeld(pull)) { for (const task of tasksOf(pull)) withReaders.add(task); continue }
+      // Nobody is asked to read a head whose checks failed: its builder fixes it first, and the fix is a new head, read again. Its
+      // task stays its builder's, as one held: taken back, it went to another builder while its pull request was still open
+      // (code review of #4060); its builder's turn's end tells it the checks (nextThing.ts).
+      if (await this.failing.failing(repo, head)) { for (const task of tasksOf(pull)) withReaders.add(task); continue }
       // While who made its verdicts cannot be read, nobody is asked: a READ-OK made by command would read as typed.
       const comments = await this.deps.records.named(project, await pullTalk(this.reads, repo, number))
       if (!comments) { for (const task of tasksOf(pull)) withReaders.add(task); continue }
       const people = pullPeople(pull, team)
+      const askNow = (name: string, why: string, nth?: number) => this.ask(repo, number, head, name, why, nth)
       const { readers, twoReads } = verdicts(comments, String(pull.body ?? ''), people)
       // A verdict on an earlier head whose change is the head's is one on it, a HOLD as much as a READ-OK (sameChange): its author
       // has changed nothing to read again.
@@ -306,8 +322,10 @@ export class GitHubAssign {
       // Who Harness asked, for which heads, and when.
       const now = this.now()
       const asked = new Map<string, Map<string, number>>()
-      // How often each was asked for this head, and its name as written.
-      const onThisHead = new Map<string, number>(), written = new Map<string, string>()
+      // Each asked as its ask wrote it: GitHub news brings an ask to the name as written, in its case (the swarm-sandbox, 2026-11-10).
+      const written = new Map<string, string>()
+      // How often each was asked for this head.
+      const onThisHead = new Map<string, number>()
       for (const c of comments) {
         const found = ownAsk(c, ASKED)
         if (!found) continue
@@ -343,14 +361,14 @@ export class GitHubAssign {
       const settling = (r: { at: string }) => now - Date.parse(r.at) < RECORD_SETTLE_MS
       for (const [reader, r] of typed) {
         if (settling(r) || lastAsk(reader, true) >= Date.parse(r.at) || (onThisHead.get(reader) ?? 0) >= READ_ASKS) continue
-        await this.ask(repo, number, head, r.name, `your READ-OK on ${r.sha.slice(0, 7)} was typed, and only one made by command counts: please read it again`,
+        await askNow(r.name, `your READ-OK on ${r.sha.slice(0, 7)} was typed, and only one made by command counts: please read it again`,
           onThisHead.get(reader) ?? 0)
       }
       // A writer asked before (a task taken over by the reader asked) is not reading it.
       const waiting = [...asked.keys()].filter(name => !own(name) && !readers.has(name) && now - lastAsk(name, false) < READ_WAIT_MS)
       for (const [reader, r] of stale) {
         if (lastAsk(reader, true)) continue
-        await this.ask(repo, number, head, r.name, `the head is now ${head.slice(0, 7)}, after your ${r.verdict} on ${r.sha.slice(0, 7)}: please read it again`)
+        await askNow(r.name, `the head is now ${head.slice(0, 7)}, after your ${r.verdict} on ${r.sha.slice(0, 7)}: please read it again`)
       }
       // A stale reader not asked again yet is asked just now, above.
       const rereading = stale.filter(([reader]) => { const at = lastAsk(reader, true); return at === 0 || now - at < READ_WAIT_MS })
@@ -368,21 +386,26 @@ export class GitHubAssign {
         // Juno, its PM, read every pull request of Pip's).
         const builder = readerFor(read, author, skip)
         const pm = readerKey(project.pm)
-        const reader = builder ?? (!own(pm) && !skip.has(pm) ? { id: pm, name: project.pm } : null)
+        const reader = builder ?? (!own(pm) && !skip.has(pm) && await pmHears() ? { id: pm, name: project.pm } : null)
         if (!reader) {
-          // Nobody new can read it: the reader asked longest ago, with no verdict on this head, is asked again, at most twice
-          // for a head and thirty minutes apart. One stopped when it was asked never heard it: GitHub news reads what is said from
-          // when its agent runs again (the swarm-sandbox, 2026-11-10: Juno, its PM and only reader, was asked while stopped).
-          const again = [...asked.keys()].filter(name => !own(name) && (onThisHead.get(name) ?? 0) < READ_ASKS
+          // Nobody new can read it. A reader asked about an earlier head, with no verdict on this one, is asked about this one: once,
+          // and half an hour after its last ask at the soonest, so a run of pushes is one ask. One asked about this head is not asked
+          // again: its own turn's end types it the read it owes (nextThing.ts). Asked again each silent half hour, a pull request had
+          // one more comment in its person's name each time (#4055; anh Dee, 2026-11-11: "never spam github as user accounts could
+          // be banned").
+          const stoppedPm = !await pmHears()
+          const again = [...asked.keys()].filter(name => !own(name) && !lastAsk(name, true) && !(stoppedPm && name === pm)
             && !(readers.has(name) && onHead(readers.get(name)!.sha)) && now - lastAsk(name, false) >= READ_WAIT_MS)
             .sort((a, b) => lastAsk(a, false) - lastAsk(b, false))[0]
-          if (again) await this.ask(repo, number, head, written.get(again) ?? again, 'please read this pull request', onThisHead.get(again) ?? 0)
-          else this.once(`[super-tab] Task assignment: NO_READER ${repo}#${number}: nobody but its author can read it`)
+          if (again) await askNow(written.get(again)!, `the head is now ${head.slice(0, 7)}: please read this pull request`)
+          else this.once(`[super-tab] Task assignment: NO_READER ${repo}#${number}@${head.slice(0, 7)}: `
+            + (!own(pm) && stoppedPm ? 'its PM, the reader left, is stopped'
+              : [...asked.keys()].some(name => !own(name)) ? 'its readers asked have not read it, and nobody else can' : 'nobody but its author can read it'))
           break
         }
         skip.add(reader.id)
         skip.add(readerKey(reader.name))
-        await this.ask(repo, number, head, reader.name, 'please read this pull request')
+        await askNow(reader.name, 'please read this pull request')
       }
     }
     return withReaders
