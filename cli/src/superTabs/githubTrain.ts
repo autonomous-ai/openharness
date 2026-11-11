@@ -39,7 +39,9 @@ const TRAIN_MAX = 20
 /** A train whose checks have not finished in this long, or whose member still waits, is closed and built again: while it is
  *  open nothing else lands, and a check that never reports would hold the repository for good. */
 const TRAIN_WAIT_MS = 90 * 60_000
-const TITLE = 'Train: ', RED_TITLE = 'Train, red: '
+/** How a train's title begins, before its members' numbers: the numbers a project's people read count them by it (pmNumbers.ts). */
+export const TRAIN_TITLE = 'Train: '
+const TITLE = TRAIN_TITLE, RED_TITLE = 'Train, red: '
 const SHA = /^[0-9a-f]{40}$/
 /** A member as a train's body names it. Its readers are there for the note that it landed, which a restart must write the same. */
 const MEMBER = /^#([1-9]\d{0,9}) at ([0-9a-f]{40}), READ-OK by ([\w -]{1,200})$/

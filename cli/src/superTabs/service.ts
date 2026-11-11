@@ -25,7 +25,7 @@ import { claimAsked, takeTask } from './githubClaim.js'
 import { postVerdict, verdictAsked } from './githubVerdict.js'
 import { GitHubAssign } from './githubAssign.js'
 import { GitHubMerge, ledProjects, recordedAuthors, VerdictRecords, type LedProject } from './githubMerge.js'
-import { placeOf, PmNumbers } from './pmNumbers.js'
+import { messageOf, PmNumbers } from './pmNumbers.js'
 import { crewOf } from './assign/crew.js'
 
 import { peopleNamed } from './personName.js'
@@ -202,15 +202,10 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     send: github.send, records })))(core, sources)
   // Gives their tasks to their builders (githubAssign.ts), from the crew as the PM reads the Swarm.
   const assigns = (options.githubAssign ?? ((api, held) => {
-    // A project's numbers, told as its PM in the PM's own chat (to it alone, or for its person to read) and posted in the
-    // project's channel (pmNumbers.ts): each place as the PM reads the Swarm.
-    const as = (place: 'chat' | 'channel', toPm: boolean) => async (project: LedProject, operationId: string, text: string) => {
-      const conversationId = placeOf((await held().reads.read(project.tabId, project.pmAgentId)).state, project, place)
-      if (!conversationId) throw new Error(place === 'channel' ? 'the project has no channel to post in.' : `${project.pm} has no chat with its person.`)
-      return backend(api, 'POST', `/api/super-tabs/${project.tabId}/commands`, { operationId, asAgentId: project.pmAgentId,
-        command: { type: 'message.send', conversationId, replyTo: null, recipientIds: toPm ? [project.pmAgentId] : [], text, ...toPm ? { agentOnly: true } : {} } })
-    }
-    const numbers = new PmNumbers({ tell: as('chat', true), say: as('chat', false), post: as('channel', false), file: join(api.dataDir, 'super-tab-numbers.json') })
+    // A project's numbers, sent as its PM into the Swarm as the PM reads it (pmNumbers.ts messageOf).
+    const numbers = new PmNumbers({ file: join(api.dataDir, 'super-tab-numbers.json'),
+      send: async (how, project, operationId, text) => backend(api, 'POST', `/api/super-tabs/${project.tabId}/commands`, { operationId, asAgentId: project.pmAgentId,
+        command: messageOf(how, project, (await held().reads.read(project.tabId, project.pmAgentId)).state, text) }) })
     return new GitHubAssign({ projects: led(api, held), crew: crewOfProject(held), get: github.get, send: github.send, records,
       numbers: (project, counted) => numbers.pass(project, counted) })
   }))(core, sources)

@@ -99,7 +99,7 @@ const repositoryOf = (url: unknown): string | null => {
  *  words. By its code, not its status: a sign-in, a timeout, throttling, an update, a busy server and a lapsed billing say nothing of the
  *  item, and a backend that does not know the command yet (a discriminator it does not recognise) refuses every item. */
 const REFUSED_CODES: ReadonlySet<string> = new Set(['VALIDATION_ERROR', 'REQUEST_BLOCKED', 'FORBIDDEN', 'HUMAN_REQUIRED', 'OPERATION_REUSED'])
-const refusedForGood = (error: unknown): error is SuperTabHostError => error instanceof SuperTabHostError && error.status < 500
+export const refusedForGood = (error: unknown): error is SuperTabHostError => error instanceof SuperTabHostError && error.status < 500
   && (permanentRefusal(error) || REFUSED_CODES.has(error.code) && !(error.code === 'VALIDATION_ERROR' && /discriminator|Unrecognized key/i.test(error.message)))
 
 /** owner/name of a github.com repository's address, https or ssh, in lower case (GitHub reads it in any case, and two spellings of one

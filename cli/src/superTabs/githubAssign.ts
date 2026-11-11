@@ -171,7 +171,7 @@ export class GitHubAssign {
     await this.takeBack(repo, issues, (crew.away ?? []).filter(away => away.why !== 'down' || crew.builders.length > 0), undefined, withReaders)
     const { short, picks } = await this.plan(project, issues, pulls, crew, read, withReaders)
     // What this pass read, counted: who has nothing after it, what is open, what landed.
-    await this.deps.numbers(project, numbersOf({ now: this.now(), crew, read, short, picks, closed, team: teamOf(crew, project.pm) }))
+    await this.deps.numbers(project, numbersOf({ now: this.now(), crew, pm: project.pm, issues, read, withReaders, short, picks, closed }))
   }
 
   /** Gives the free tasks to the builders who can start them soonest, after taking back what waits on a builder that cannot
