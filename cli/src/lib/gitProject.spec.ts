@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process'
+import { writeFileSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -581,18 +582,25 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
         vi.stubEnv('PATH', `${bin}:${process.env.PATH}`)
       })
       afterEach(() => { Object.defineProperty(process, 'platform', { value: platform, configurable: true }) })
-      /** git checks out and exits; its post-checkout hook leaves a process behind, holding git's stderr, that ends after
-       *  [seconds] by touching `ended`. */
-      const leftBehind = async (seconds: number) => {
+      /** git checks out and exits; its post-checkout hook leaves a process behind, holding git's stderr, that ends once
+       *  [wait] (shell) returns by touching `ended`. */
+      const leftBehind = async (wait: string) => {
         const hooks = join(root, 'hooks')
         await mkdir(hooks)
-        await writeFile(join(hooks, 'post-checkout'), `#!/bin/sh\n(sleep ${seconds}; : > '${join(root, 'ended')}') &\nexit 0\n`, { mode: 0o755 })
+        await writeFile(join(hooks, 'post-checkout'), `#!/bin/sh\n(${wait}; : > '${join(root, 'ended')}') &\nexit 0\n`, { mode: 0o755 })
         await git('config', 'core.hooksPath', hooks)
       }
 
       it('waits for what git left running to end before it looks at the checkout, and says taskkill failed', async () => {
-        const said = vi.spyOn(console, 'error').mockImplementation(() => {})
-        await leftBehind(2)
+        // What git left ends 0.3 s after the start has given up on stopping it, however long git took under load: a
+        // fixed 2 s from the hook left 1 s between it and the start's own wait, and a slow checkout on a loaded Mac used
+        // that up. Still after the timeout, so a start that stopped waiting for git's stderr would read it unfinished.
+        // Bounded (30 s), so a test that fails first leaves nothing running.
+        const stopped = join(root, 'stop-failed')
+        const said = vi.spyOn(console, 'error').mockImplementation((...line: unknown[]) => {
+          if (String(line[0]).startsWith('[worktree] could not stop git')) writeFileSync(stopped, '')
+        })
+        await leftBehind(`n=0; while [ ! -e '${stopped}' ] && [ $n -lt 600 ]; do sleep 0.05; n=$((n + 1)); done; sleep 0.3`)
         const path = await prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'outlived', worktreeTimeout: 1_500 })
         expect(await readFile(join(root, 'ended'), 'utf8')).toBe('')
         expect(await readFile(join(path, 'src', 'value'), 'utf8')).toBe('main')
@@ -601,7 +609,7 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
 
       it('removes nothing while something git started may still be writing', async () => {
         const said = vi.spyOn(console, 'error').mockImplementation(() => {})
-        await leftBehind(8)
+        await leftBehind('sleep 8')
         await expect(prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'still-running', worktreeTimeout: 1_500 }))
           .rejects.toMatchObject({ code: 'WORKTREE_FAILED' })
         await expect(readFile(join(root, 'ended'))).rejects.toThrow()
