@@ -158,7 +158,7 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     expect(f.log.mock.calls.map(([line]) => String(line)).filter(line => line.includes('stopped'))).toEqual([])
   })
 
-  // GitHub lists a changed binary with no patch and `changes: 0` (seen on git/git's git-gui.ico): two heads that differed
+  // GitHub lists a changed binary with no patch and `changes: 0` (seen on rust-lang/rust's favicon PNGs): two heads that differed
   // only in a binary read as one change, so a READ-OK on the first counted for the second, which nobody had read.
   const binary = (blob: string, extra: Json = {}) => ({ files: [changed(['+    days = int(n)', '-    days = 1']).files[0],
     { filename: 'assets/logo.png', status: 'modified', changes: 0, additions: 0, deletions: 0, sha: blob, ...extra }] })
@@ -177,12 +177,16 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     same.github.repo.compare.set(HEAD, binary('1111111111111111111111111111111111111111'))
     await settle(same)
     expect(same.merges()).toHaveLength(1)
-    const unnamed = setup()
-    unnamed.github.repo.comments.set(4, [comment('Juno, 14:20, to **Pip**: READ-OK a1b2c3d')])
-    unnamed.github.repo.compare.set('a1b2c3d', binary('', { sha: undefined }))
-    unnamed.github.repo.compare.set(HEAD, binary('', { sha: undefined }))
-    await settle(unnamed)
-    expect(unnamed.merges()).toEqual([])
+    // A mode change alone (chmod +x): GitHub names no blob for it (`sha: null`, seen on torvalds/linux), and a patch that is
+    // there but empty names no content either.
+    for (const extra of [{ sha: null }, { sha: undefined }, { patch: '' , sha: undefined }]) {
+      const unnamed = setup()
+      unnamed.github.repo.comments.set(4, [comment('Juno, 14:20, to **Pip**: READ-OK a1b2c3d')])
+      unnamed.github.repo.compare.set('a1b2c3d', binary('', extra))
+      unnamed.github.repo.compare.set(HEAD, binary('', extra))
+      await settle(unnamed)
+      expect(unnamed.merges(), JSON.stringify(extra)).toEqual([])
+    }
   })
 
   it('never merges on its author\'s own READ-OK, however its two-word name is written', async () => {
