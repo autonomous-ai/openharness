@@ -47,7 +47,7 @@ function liveGitHub(clock: { now: number }) {
     issues.set(number, { number, title: `Task ${number}`, state: 'open', labels: names.map(name => ({ name })), user: { login: OPENER },
       author_association: 'MEMBER', created_at: updatedAt, updated_at: updatedAt })
   const pull = (number: number, head: string, extra: Json = {}) => {
-    const row = { number, draft: false, state: 'open', base: { ref: 'main' }, head: { sha: head, ref: `pip/${number}` }, labels: [{ name: 'builder:pip' }],
+    const row = { number, draft: false, state: 'open', base: { ref: 'main' }, head: { sha: head, ref: `pip/${number}`, repo: { full_name: REPO } }, labels: [{ name: 'builder:pip' }],
       user: { login: OPENER }, body: '', updated_at: iso(), ...extra }
     pulls.set(number, row)
     issues.set(number, { ...row, title: `PR ${number}`, pull_request: {}, author_association: 'MEMBER' })
@@ -68,11 +68,12 @@ function liveGitHub(clock: { now: number }) {
     const body = p === `/repos/${REPO}` ? { default_branch: 'main' }
       : p === `/repos/${REPO}/issues` ? page([...issues.values()].filter(i => (url.searchParams.get('state') ?? 'open') === 'all' || i.state === (url.searchParams.get('state') ?? 'open'))
         .filter(i => String(i.updated_at) >= since), url)
-      : p === `/repos/${REPO}/pulls` ? page([...pulls.values()].filter(r => r.state === 'open'), url)
+      : p === `/repos/${REPO}/pulls` ? page([...pulls.values()].filter(r => r.state === (url.searchParams.get('state') ?? 'open')), url)
       : /\/issues\/\d+\/comments$/.test(p) ? page((comments.get(n(-2)) ?? []).filter(c => String(c.updated_at) >= since), url)
       : /\/pulls\/\d+\/reviews$/.test(p) ? []
-      // Each head its own change, so a push is something new to read.
-      : /\/compare\/main\.\.\.[0-9a-f]+$/.test(p) ? { files: [{ filename: 'app.py', status: 'modified', changes: 1, patch: `@@ -1 +1 @@\n+${p.split('...').at(-1)}` }] }
+      // Each head its own change, so a push is something new to read; and each holds main's tip, so the one that is ready alone
+      // merges on its own (the train is githubTrain.spec.ts).
+      : /\/compare\/main\.\.\.[0-9a-f]+$/.test(p) ? { behind_by: 0, files: [{ filename: 'app.py', status: 'modified', changes: 1, patch: `@@ -1 +1 @@\n+${p.split('...').at(-1)}` }] }
       : /\/pulls\/\d+\/commits$/.test(p) ? [{ sha: (pulls.get(n(-2))?.head as Json | undefined)?.sha }]
       : p === `/repos/${REPO}/labels` ? page(labels, url)
       : /\/commits\/[0-9a-f]+\/check-runs$/.test(p) ? { check_runs: runs.get(String(p.split('/').at(-2))) ?? [] }
@@ -162,7 +163,7 @@ describe('Harness says each thing once on GitHub, over an hour and a restart (gi
       // other order.
       if (pass === 40) {
         const row = gh.pulls.get(11)!
-        row.head = { sha: sha(11, 1), ref: 'pip/11' }
+        row.head = { sha: sha(11, 1), ref: 'pip/11', repo: { full_name: REPO } }
         gh.issues.get(11)!.head = row.head
         gh.runs.set(sha(11, 1), [{ name: 'lint', status: 'completed', conclusion: 'failure' }, { name: 'test', status: 'completed', conclusion: 'failure' }])
         gh.say(11, 'Pip, 12:00: fixed the tests, pushed.')
