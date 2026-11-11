@@ -279,19 +279,39 @@ const COMPARE_FILES_MAX = 300
 /** Changes kept by each merger and assigner: what a commit changes since its merge base does not change. */
 const PATCHES_MAX = 1_000
 
-/** A compare's files as one change: each file's status and names and its added and removed lines, without context or line numbers.
- *  A file GitHub gives no patch for and counts no changed lines in (a binary, a rename alone, an empty file) is its content,
- *  by its blob: two heads that differ only in a binary are two changes. Null when a file with changed lines has no patch (too
- *  large for GitHub to give), when one with no lines names no blob (a mode change alone: GitHub sends none), or when the list
- *  may be cut short. */
+/** A hunk's line numbers, which a rebase moves; what follows them (the heading the hunk is under) stays. */
+const HUNK = /^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/
+/** A submodule's whole patch: the commit it points at. */
+const SUBMODULE = /^[+-]Subproject commit [0-9a-f]{40,64}$/
+
+/**
+ * A compare's files as one change: each file's status and names and its patch as GitHub gives it, without each hunk's line
+ * numbers. The lines around the added and removed ones count, and the heading each hunk is under: read without them, as
+ * lampOS's `git diff -U0 | git patch-id` did, the same line added in another function was the same change, and a READ-OK
+ * carried to code nobody had read. A rebase onto a base that changed those very lines is read again.
+ *
+ * A file GitHub gives no patch for and counts no changed lines in (a binary, a rename alone, an empty file) is its content, by
+ * its blob: two heads that differ only in a binary are two changes.
+ *
+ * Null, so a verdict counts only on its own head: when a file with changed lines has no patch (too large for GitHub to
+ * give); when one with no lines names no blob (a mode change alone: GitHub sends none); when a file may be a symbolic link or
+ * a submodule (the compare does not say a file's kind, and a link's patch is its target as one line with no newline at its
+ * end, a submodule's its commit: a regular file with that text would read the same); or when the list may be cut short.
+ * Not told apart, as the compare carries no mode: an executable bit on a file that is added or edited.
+ */
 function changeOf(files: Json[]): string | null {
   if (files.length >= COMPARE_FILES_MAX) return null
   const parts: string[] = []
   for (const file of [...files].sort((a, b) => String(a.filename ?? '').localeCompare(String(b.filename ?? '')))) {
-    const lines = String(file.patch ?? '').split('\n').filter(line => line.startsWith('+') || line.startsWith('-'))
+    const rows = String(file.patch ?? '').split('\n')
+    const lines = rows.filter(row => row.startsWith('+') || row.startsWith('-'))
     const whole = lines.length > 0
     if (!whole && (Number(file.changes ?? 0) > 0 || !/^[0-9a-f]{40,64}$/.test(String(file.sha ?? '')))) return null
-    parts.push(JSON.stringify([String(file.status ?? ''), String(file.previous_filename ?? ''), String(file.filename ?? ''), lines, ...whole ? [] : [String(file.sha)]]))
+    // One line each way at most, each with no newline at its end and nothing around it: what a link's patch is.
+    const link = whole && lines.length <= 2 && rows.filter(row => row.startsWith('\\')).length === lines.length && !rows.some(row => row.startsWith(' '))
+    if (link || (whole && lines.every(line => SUBMODULE.test(line)))) return null
+    parts.push(JSON.stringify([String(file.status ?? ''), String(file.previous_filename ?? ''), String(file.filename ?? ''),
+      whole ? rows.map(row => row.replace(HUNK, '@@')) : [String(file.sha)]]))
   }
   return createHash('sha256').update(parts.join('\n')).digest('hex')
 }
