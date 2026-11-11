@@ -106,13 +106,18 @@ async function mainCheckout(root: string, trees: Worktree[]): Promise<string | n
   return null
 }
 
+/** The real path of `path`'s git directory, the same from each of the repository's worktrees. */
+async function commonDir(path: string): Promise<string> {
+  const common = await git(path, ['rev-parse', '--git-common-dir'])
+  return real(isAbsolute(common) ? common : join(path, common))
+}
+
 const branchRefreshes = new Map<string, Promise<Map<string, string[] | null>>>()
 
 /** Share a refresh across pickers/worktrees. Ask for names only: downloading
  *  objects is deferred until Start, and no repository files or refs change. */
 async function refreshBranches(path: string): Promise<Map<string, string[] | null>> {
-  const common = await git(path, ['rev-parse', '--git-common-dir'])
-  const key = await real(isAbsolute(common) ? common : join(path, common))
+  const key = await commonDir(path)
   const pending = branchRefreshes.get(key)
   if (pending) return pending
   const refresh = (async () => {
@@ -275,7 +280,7 @@ export async function prepareGitProject(source: string, options: GitProjectOptio
       ? await git(source, ['for-each-ref', '--format=%(upstream)', ref]).then(found => remoteBranch(found) ? found : null, () => null)
       : null
     const fetch = remote ?? remoteBranch(upstream ?? undefined)
-    if (fetch) await git(source, ['fetch', '--quiet', '--no-tags', fetch.remote, fetch.refspec], 10_000).catch(() => '')
+    if (fetch) await fetchOnce(source, fetch.remote, fetch.refspec)
     // Behind or level with its upstream: the upstream is the newer.
     if (upstream && ref && await git(source, ['merge-base', '--is-ancestor', ref, upstream]).then(() => true, () => false)) {
       start = upstream
@@ -287,7 +292,6 @@ export async function prepareGitProject(source: string, options: GitProjectOptio
     throw new GitProjectError('GIT_PROJECT_UNAVAILABLE', 'Choose a Git project and branch with at least one commit. For a new folder, turn Worktree off.')
   }
   const inside = (folder: string) => prefix ? join(folder, prefix.replace(/\/$/, '')) : folder
-  const trees = await worktrees(source)
   if (creating) {
     const name = options.branchName!
     if (await git(source, ['show-ref', '--verify', '--quiet', '--', `refs/heads/${name}`]).then(() => true, () => false)) {
@@ -305,7 +309,7 @@ export async function prepareGitProject(source: string, options: GitProjectOptio
     if (current === options.ref) return source
     // A branch that already has a worktree is worked on there: Git would refuse to check it out
     // twice, and the folder is not the person's concern.
-    for (const tree of trees) {
+    for (const tree of await worktrees(source)) {
       if (tree.usable && tree.ref === options.ref && await isDirectory(tree.path)) return inside(tree.path)
     }
     const status = await git(source, ['status', '--porcelain']).catch(() => null)
@@ -319,97 +323,146 @@ export async function prepareGitProject(source: string, options: GitProjectOptio
       throw new GitProjectError('BRANCH_SWITCH_FAILED', 'Could not switch branches. Commit or stash conflicting changes, or turn Worktree on.')
     }
   }
-  // Grouped by repository, so the leaf only needs the branch.
-  const repository = trees[0]?.usable ? basename(trees[0].path) : basename(root)
-  const taken = new Set((await git(source, ['for-each-ref', '--format=%(refname)', 'refs/heads']).catch(() => '')).split('\n'))
-  const placeholder = !options.branchName || options.placeholder === true
-  let branch = options.branchName ?? placeholderBranch(taken, options.pick)
-  // A name made up before the start (Desktop keeps its pick) may be taken by then; nobody chose it, so the next
-  // free number is taken instead of refusing with BRANCH_EXISTS.
-  if (placeholder && !existing) for (let suffix = 2, base = branch; taken.has(`refs/heads/${branch}`); suffix++) branch = `${base}-${suffix}`
-  if (existing) {
-    if (!taken.has(`refs/heads/${branch}`)) throw new GitProjectError('GIT_PROJECT_UNAVAILABLE', 'That branch is no longer available. Choose another branch.')
-    if (trees.some(tree => tree.ref === `refs/heads/${branch}`)) {
-      throw new GitProjectError('BRANCH_IN_USE', `${branch} is checked out in another worktree. Turn Worktree off to open it there.`)
+  let common: string
+  try { common = await commonDir(source) }
+  catch { throw new GitProjectError('WORKTREE_FAILED', 'Could not read the project\'s Git folder. Retry.') }
+  // Starts in one repository take turns, from reading its worktrees and branch names until the new worktree is registered
+  // and marked: two at once drew the same made-up name, wrote .git/config together, and one git, adding its worktree, read
+  // the other's half-written .git/worktrees/<name> ("failed to read .../commondir", exit 128; 2026-11-11). The checkout is
+  // inside the turn because git registers and checks out in one command. Different repositories still start at once.
+  const destination = await inTurn(common, async () => {
+    const trees = await worktrees(source)
+    // Grouped by repository, so the leaf only needs the branch.
+    const repository = trees[0]?.usable ? basename(trees[0].path) : basename(root)
+    const taken = new Set((await git(source, ['for-each-ref', '--format=%(refname)', 'refs/heads']).catch(() => '')).split('\n'))
+    const placeholder = !options.branchName || options.placeholder === true
+    let branch = options.branchName ?? placeholderBranch(taken, options.pick)
+    // A name made up before the start (Desktop keeps its pick) may be taken by then; nobody chose it, so the next
+    // free number is taken instead of refusing with BRANCH_EXISTS.
+    if (placeholder && !existing) for (let suffix = 2, base = branch; taken.has(`refs/heads/${branch}`); suffix++) branch = `${base}-${suffix}`
+    if (existing) {
+      if (!taken.has(`refs/heads/${branch}`)) throw new GitProjectError('GIT_PROJECT_UNAVAILABLE', 'That branch is no longer available. Choose another branch.')
+      if (trees.some(tree => tree.ref === `refs/heads/${branch}`)) {
+        throw new GitProjectError('BRANCH_IN_USE', `${branch} is checked out in another worktree. Turn Worktree off to open it there.`)
+      }
+    } else {
+      if (taken.has(`refs/heads/${branch}`)) throw new GitProjectError('BRANCH_EXISTS', `A branch named ${branch} already exists. Choose another name.`)
+      try { await git(source, ['check-ref-format', '--branch', branch]) }
+      catch { throw new GitProjectError('INVALID_BRANCH', `${branch} is not a valid branch name.`) }
     }
-  } else {
-    if (taken.has(`refs/heads/${branch}`)) throw new GitProjectError('BRANCH_EXISTS', `A branch named ${branch} already exists. Choose another name.`)
-    try { await git(source, ['check-ref-format', '--branch', branch]) }
-    catch { throw new GitProjectError('INVALID_BRANCH', `${branch} is not a valid branch name.`) }
-  }
-  let destination: string | undefined
-  try {
-    const home = join(options.root, 'worktrees')
-    const parent = join(home, repository)
-    await mkdir(parent, { recursive: true })
-    // Spotlight would index every checkout again.
-    if (process.platform === 'darwin') await writeFile(join(home, '.metadata_never_index'), '').catch(() => {})
-    const leaf = worktreeFolderName(branch)
-    // mkdir reserves the name atomically, so simultaneous starts never share a worktree.
-    for (let attempt = 1; attempt <= 100 && !destination; attempt++) {
-      const folder = join(parent, attempt === 1 ? leaf : `${leaf}-${attempt}`)
-      try { await mkdir(folder); destination = folder }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
+    let destination: string | undefined
+    try {
+      const home = join(options.root, 'worktrees')
+      const parent = join(home, repository)
+      await mkdir(parent, { recursive: true })
+      // Spotlight would index every checkout again.
+      if (process.platform === 'darwin') await writeFile(join(home, '.metadata_never_index'), '').catch(() => {})
+      const leaf = worktreeFolderName(branch)
+      // mkdir reserves the name atomically, so simultaneous starts never share a worktree.
+      for (let attempt = 1; attempt <= 100 && !destination; attempt++) {
+        const folder = join(parent, attempt === 1 ? leaf : `${leaf}-${attempt}`)
+        try { await mkdir(folder); destination = folder }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
+      }
+    } catch (error) {
+      if (diskFull(error)) throw new GitProjectError('WORKTREE_FAILED', worktreeDiskFull)
+      destination = undefined
     }
-  } catch (error) {
-    if (diskFull(error)) throw new GitProjectError('WORKTREE_FAILED', worktreeDiskFull)
-    destination = undefined
-  }
-  if (!destination) throw new GitProjectError('WORKTREE_FAILED', 'Could not create a worktree folder. Check folder permissions, then retry.')
-  const remote = remoteBranch(options.ref)
-  try {
-    if (!existing && remote?.branch === branch) {
-      // A single-branch clone has no tracking rule for this newly discovered
-      // branch. Add only the chosen branch when the person starts it.
-      const key = `remote.${remote.remote}.fetch`
-      const mappings = (await git(source, ['config', '--get-all', key]).catch(() => ''))
-        .split('\n').map(ref => ref.replace(/^\+/, ''))
-      if (!mappings.includes(remote.refspec.slice(1)) &&
-          !mappings.includes(`refs/heads/*:refs/remotes/${remote.remote}/*`)) {
-        await git(source, ['config', '--add', key, remote.refspec])
+    if (!destination) throw new GitProjectError('WORKTREE_FAILED', 'Could not create a worktree folder. Check folder permissions, then retry.')
+    const remote = remoteBranch(options.ref)
+    try {
+      if (!existing && remote?.branch === branch) {
+        // A single-branch clone has no tracking rule for this newly discovered
+        // branch. Add only the chosen branch when the person starts it.
+        const key = `remote.${remote.remote}.fetch`
+        const mappings = (await git(source, ['config', '--get-all', key]).catch(() => ''))
+          .split('\n').map(ref => ref.replace(/^\+/, ''))
+        if (!mappings.includes(remote.refspec.slice(1)) &&
+            !mappings.includes(`refs/heads/*:refs/remotes/${remote.remote}/*`)) {
+          await git(source, ['config', '--add', key, remote.refspec])
+        }
+      }
+    } catch (error) {
+      if (diskFull(error)) throw new GitProjectError('WORKTREE_FAILED', worktreeDiskFull)
+      throw new GitProjectError('WORKTREE_FAILED', `Could not create the worktree at ${destination}. Check Git and folder permissions, then retry.`)
+    }
+    // A remote branch checked out under its own name tracks it; a new branch from one must not, or it would push onto the base.
+    const tracks = !existing && remote?.branch === branch
+    // The new branch is made here, before the worktree, by a ref update that refuses one existing by now: a branch a person made
+    // after the check above is never taken for this start's (review of #1837). A failed start deletes exactly the ref it made.
+    const made = existing ? null : { branch, head, tracks }
+    if (made) {
+      const created = await git(source, ['update-ref', '-m', `branch: Created from ${tracks ? options.ref : head}`, `refs/heads/${branch}`, head, ''])
+        .then(() => true, () => false)
+      if (!created) {
+        await rm(destination, { recursive: true, force: true })
+        throw new GitProjectError('BRANCH_EXISTS', `A branch named ${branch} already exists. Choose another name.`)
       }
     }
-  } catch (error) {
-    if (diskFull(error)) throw new GitProjectError('WORKTREE_FAILED', worktreeDiskFull)
-    throw new GitProjectError('WORKTREE_FAILED', `Could not create the worktree at ${destination}. Check Git and folder permissions, then retry.`)
-  }
-  // A remote branch checked out under its own name tracks it; a new branch from one must not, or it would push onto the base.
-  const tracks = !existing && remote?.branch === branch
-  // The new branch is made here, before the worktree, by a ref update that refuses one existing by now: a branch a person made
-  // after the check above is never taken for this start's (review of #1837). A failed start deletes exactly the ref it made.
-  const made = existing ? null : { branch, head, tracks }
-  if (made) {
-    const created = await git(source, ['update-ref', '-m', `branch: Created from ${tracks ? options.ref : head}`, `refs/heads/${branch}`, head, ''])
-      .then(() => true, () => false)
-    if (!created) {
-      await rm(destination, { recursive: true, force: true })
-      throw new GitProjectError('BRANCH_EXISTS', `A branch named ${branch} already exists. Choose another name.`)
+    const admin = join(common, 'worktrees')
+    const registered = new Set(await readdir(admin).catch(() => [] as string[]))
+    const upstream = tracks ? await git(source, ['branch', `--set-upstream-to=${options.ref}`, branch]).then(() => true, () => false) : true
+    const added: WorktreeAdd = upstream
+      ? await worktreeAdd(source, ['worktree', 'add', '--', destination, branch], options.worktreeTimeout ?? WORKTREE_ADD_TIMEOUT)
+      : { ok: false, reason: 'could not track its remote branch', stderr: '', timedOut: false, diskFull: false, running: false }
+    if (!added.ok && added.running) {
+      // Deleting the folder under a process still writing it would only race it; the next start takes another folder.
+      console.error(`[worktree] git worktree add failed (${added.reason}) at ${destination}; something git started is still running, so the folder and branch are left as it is: ${gitReason(added.stderr)}`)
+      throw new GitProjectError('WORKTREE_FAILED', `Could not create the worktree at ${destination}. Check Git and folder permissions, then retry.`)
     }
-  }
-  const admin = await worktreeAdmin(source)
-  const registered = new Set(await readdir(admin).catch(() => [] as string[]))
-  const upstream = tracks ? await git(source, ['branch', `--set-upstream-to=${options.ref}`, branch]).then(() => true, () => false) : true
-  const added: WorktreeAdd = upstream
-    ? await worktreeAdd(source, ['worktree', 'add', '--', destination, branch], options.worktreeTimeout ?? WORKTREE_ADD_TIMEOUT)
-    : { ok: false, reason: 'could not track its remote branch', stderr: '', timedOut: false, diskFull: false, running: false }
-  if (!added.ok && added.running) {
-    // Deleting the folder under a process still writing it would only race it; the next start takes another folder.
-    console.error(`[worktree] git worktree add failed (${added.reason}) at ${destination}; something git started is still running, so the folder and branch are left as it is: ${gitReason(added.stderr)}`)
-    throw new GitProjectError('WORKTREE_FAILED', `Could not create the worktree at ${destination}. Check Git and folder permissions, then retry.`)
-  }
-  if (!added.ok && !(added.timedOut && await finishedCheckout(source, destination, branch))) {
-    console.error(`[worktree] git worktree add failed (${added.reason}) at ${destination}: ${gitReason(added.stderr)}`)
-    // A retry starts clean. The folder is this start's own (reserved above), and so is the branch it made.
-    await removePartialWorktree(source, destination, made, admin, registered)
-    if (added.diskFull) throw new GitProjectError('WORKTREE_FAILED', worktreeDiskFull)
-    throw new GitProjectError('WORKTREE_FAILED', `Could not create the worktree at ${destination}. Check Git and folder permissions, then retry.`)
-  }
-  // Harness made this branch: its cleanup may remove it, and a made-up name gives way to the session's.
-  if (!existing) {
-    await git(source, ['config', `branch.${branch}.${HARNESS_BRANCH_KEY}`, placeholder ? 'placeholder' : 'created']).catch(() => '')
-  }
+    if (!added.ok && !(added.timedOut && await finishedCheckout(source, destination, branch))) {
+      console.error(`[worktree] git worktree add failed (${added.reason}) at ${destination}: ${gitReason(added.stderr)}`)
+      // A retry starts clean. The folder is this start's own (reserved above), and so is the branch it made.
+      await removePartialWorktree(source, destination, made, admin, registered)
+      if (added.diskFull) throw new GitProjectError('WORKTREE_FAILED', worktreeDiskFull)
+      throw new GitProjectError('WORKTREE_FAILED', `Could not create the worktree at ${destination}. Check Git and folder permissions, then retry.`)
+    }
+    // Harness made this branch: its cleanup may remove it, and a made-up name gives way to the session's.
+    if (!existing) {
+      await git(source, ['config', `branch.${branch}.${HARNESS_BRANCH_KEY}`, placeholder ? 'placeholder' : 'created']).catch((error: unknown) => {
+        console.error(`[worktree] could not mark ${branch} as Harness's, so it is not renamed after its session: ${gitReason(String((error as { stderr?: string }).stderr ?? error))}`)
+      })
+    }
+    return destination
+  })
   await copyIncluded(root, destination)
   return inside(destination)
+}
+
+const repositoryTurns = new Map<string, Promise<void>>()
+
+/** Runs `body` in the turn of `path`'s repository: a change to its worktrees, branches or config that a start must not
+ *  meet half done (removing a worktree deletes the folder a start's `git worktree add` reads). */
+export async function inRepositoryTurn<T>(path: string, body: () => Promise<T>): Promise<T> {
+  return inTurn(await commonDir(path), body)
+}
+
+/** Runs `body` after every turn already queued for the repository whose git directory is `common`. */
+async function inTurn<T>(common: string, body: () => Promise<T>): Promise<T> {
+  const previous = repositoryTurns.get(common)
+  let done!: () => void
+  const turn = new Promise<void>(resolve => { done = resolve })
+  repositoryTurns.set(common, turn)
+  try {
+    await previous
+    return await body()
+  } finally {
+    done()
+    if (repositoryTurns.get(common) === turn) repositoryTurns.delete(common)
+  }
+}
+
+const fetches = new Map<string, Promise<void>>()
+
+/** Fetches `refspec` once for every start asking for it at the same time: two fetches of one ref at once, one failed to
+ *  lock it and its start went on from the last fetch. A fetch that fails, is slow or offline still starts from what is here. */
+async function fetchOnce(source: string, remote: string, refspec: string): Promise<void> {
+  const key = `${await commonDir(source).catch(() => source)}\0${remote}\0${refspec}`
+  const pending = fetches.get(key)
+  if (pending) return pending
+  const fetch = git(source, ['fetch', '--quiet', '--no-tags', remote, refspec], 10_000).then(() => {}, () => {})
+  fetches.set(key, fetch)
+  try { await fetch } finally { fetches.delete(key) }
 }
 
 /** Ten minutes for `git worktree add`. 120 s failed 2 of 4 Swarm starts on a busy Mac Studio (2026-10-27): the
@@ -478,12 +531,6 @@ async function finishedCheckout(source: string, destination: string, branch: str
   if (changed !== '') return false
   await git(source, ['worktree', 'unlock', '--', destination]).catch(() => '')
   return true
-}
-
-/** `<common git dir>/worktrees`, where git registers each linked worktree in a folder of its own. */
-async function worktreeAdmin(source: string): Promise<string> {
-  const common = await git(source, ['rev-parse', '--git-common-dir']).catch(() => '')
-  return join(isAbsolute(common) ? common : join(source, common), 'worktrees')
 }
 
 /** Removes what a failed `worktree add` left: its registration (locked or not), the folder, and `branch` when this

@@ -369,6 +369,31 @@ SwarmGitHub swarmV4GitHub({
                 },
                 'comments': {'nodes': <Object?>[]},
               },
+              // Harness's train, carrying #5770: its checks run on the combined change.
+              {
+                'number': 5773,
+                'title': 'Train: #5770',
+                'url': 'https://github.com/autonomous-ai/lampOS/pull/5773',
+                'isDraft': false,
+                'headRefName': 'harness-train/1794363575848',
+                'headRefOid': 'c3d4e5f60718293a4b5c6d7e8f90112233445566',
+                'baseRefName': 'main',
+                'body': "Harness's train into main, built to c3d4e5f60718293a4b5c6d7e8f90112233445566.",
+                'mergeable': 'MERGEABLE',
+                'updatedAt': '2026-11-09T07:20:00Z',
+                'labels': {'nodes': <Object?>[]},
+                'closingIssuesReferences': {'nodes': <Object?>[]},
+                'commits': {
+                  'nodes': [
+                    {
+                      'commit': {
+                        'statusCheckRollup': {'state': 'PENDING'},
+                      },
+                    },
+                  ],
+                },
+                'comments': {'nodes': <Object?>[]},
+              },
             ],
           },
         },

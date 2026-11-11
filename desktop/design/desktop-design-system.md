@@ -694,7 +694,9 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   a failing check or a conflict, or still a draft: its builder) and Merging
   (read, its checks running or green: Harness merges it). A card holds its chip
   (`#5770 Merging`), its title on up to three lines, and its agent's face with
-  its branch and last activity. They are the newest 50 the board reads for its
+  its branch and last activity. Harness's train (`Train: #5770`, on a
+  `harness-train/` branch) carries pull requests already read: it is under
+  Merging with no face, and its chip says Checks, Merging or Failing. They are the newest 50 the board reads for its
   chips, those that are no task's included: of lampOS's last 197 builder pull
   requests, one was linked to an issue. A card opens the pull request's own
   chat in the list's place, the task's panel reading its pull request:
@@ -966,10 +968,15 @@ editors keep their own input and scrolling behavior.
 the app opens by itself: once a launch, as the workspace opens on a computer
 whose old Harness Team account is still there. One line, "An old Harness Team
 account is still on this computer. Remove it.", and one action, Remove, which
-opens the system's administrator prompt. Nothing else closes it until the
-removal has run; then the footer shows "Removed." or the CLI's own reason in
-the danger color, with Close and Retry. Cancelled or failed, the next launch
-asks again. `test/old_team_account_test.dart` clicks through it.
+opens the system's administrator prompt. Nothing else closes it until Remove
+is pressed. While the system's prompt waits, the footer says where it is
+("Enter your password in the system's window. It may be behind Harness.") and
+Close or Escape lets the person go, the removal going on to the prompt's
+answer (anh Dee, 2026-11-11: it sat at "Waiting for the administrator prompt…"
+with macOS's window out of sight, and nothing closed it). Once it has run, the
+footer shows "Removed." or the CLI's own reason in the danger color, with
+Close and Retry. Cancelled or failed, the next launch asks again.
+`test/old_team_account_test.dart` clicks through it.
 
 **Pickers** — the same frame and header, inset result rows and a quiet footer
 with relevant keyboard hints. Move Pane uses a tab icon, destination name,
