@@ -27,7 +27,9 @@ function fakeGitHub(open: Json[], closed: Json[] = []) {
   const state = { open, closed, asked: [] as string[], labelAnswer: 200, deleteAnswer: 200, commentAnswer: 201, signedOut: false, applied: false,
     /** Runs as a label's DELETE arrives, before it is answered: a test changes the issue here, or refuses the call with a status. */
     deleted: null as ((issue: Json, label: string) => number | void) | null,
-    files: new Map<string, string>(), checks: [] as Json[], headChecks: new Map<string, Json[]>(), checksDown: false, checksLimited: false, labels: labels as Json[], pulls: [] as Json[], comments: new Map<number, Json[]>(), reviews: new Map<number, Json[]>(), compare: new Map<string, Json>() }
+    files: new Map<string, string>(), checks: [] as Json[], headChecks: new Map<string, Json[]>(), checksDown: false, checksLimited: false, labels: labels as Json[], pulls: [] as Json[], comments: new Map<number, Json[]>(), reviews: new Map<number, Json[]>(), compare: new Map<string, Json>(),
+    /** The files each pull request changes, and the paths GitHub fails on its own side for. */
+    changed: new Map<number, string[]>(), failing: null as RegExp | null }
   const sent: Array<{ method: string; path: string; body: Json }> = []
   const get: GitHubGet = async (path, etag) => {
     state.asked.push(path)
@@ -36,6 +38,7 @@ function fakeGitHub(open: Json[], closed: Json[] = []) {
     // A token that cannot read checks (a fine-grained one without Checks), as GitHub answers it.
     if (state.checksDown && /\/commits\/[0-9a-f]{40}\/check-runs$/.test(url.pathname)) return { status: 403, etag: null, body: { message: 'Resource not accessible by integration' }, resetAt: null }
     if (state.checksLimited && /\/commits\/[0-9a-f]{40}\/check-runs$/.test(url.pathname)) return { status: 403, etag: null, body: {}, resetAt: Date.now() + 60_000 }
+    if (state.failing?.test(url.pathname)) return { status: 500, etag: null, body: null, resetAt: null }
     const file = /^\/repos\/acme\/app\/contents\/(.+)$/.exec(url.pathname)
     const text = file ? state.files.get(decodeURIComponent(file[1]!)) : undefined
     if (file && text === undefined) return { status: 404, etag: null, body: null, resetAt: null }
@@ -54,6 +57,7 @@ function fakeGitHub(open: Json[], closed: Json[] = []) {
       : /^\/repos\/acme\/app\/issues\/\d+\/comments$/.test(url.pathname) ? (state.comments.get(Number(url.pathname.split('/').at(-2))) ?? []).map(records.served)
         .filter(comment => !url.searchParams.has('since') || !(Date.parse(String(comment.created_at)) < Date.parse(url.searchParams.get('since')!)))
       : /^\/repos\/acme\/app\/pulls\/\d+\/reviews$/.test(url.pathname) ? state.reviews.get(Number(url.pathname.split('/').at(-2))) ?? []
+      : /^\/repos\/acme\/app\/pulls\/\d+\/files$/.test(url.pathname) ? (state.changed.get(Number(url.pathname.split('/').at(-2))) ?? []).map(filename => ({ filename }))
       // A head against main, from the commit of main it stands on.
       : /^\/repos\/acme\/app\/compare\/main\.\.\.[0-9a-f]+$/.test(url.pathname) ? state.compare.has(url.pathname.split('...').at(-1)!)
         ? { merge_base_commit: { sha: 'f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0' }, ...state.compare.get(url.pathname.split('...').at(-1)!) as Json } : null
@@ -98,11 +102,12 @@ const crew = (): Crew => ({
   machines: [{ machineId: 'mac', observation: { resources: { memoryTotalBytes: 64 * GiB, projectDiskFreeBytes: 500 * GiB } } }],
 })
 
-function setup(open: Json[], options: { closed?: Json[]; crew?: Crew; numbers?: { pass: (project: LedProject, numbers: Numbers, goal: () => Promise<Score | null>) => Promise<void> } } = {}) {
+function setup(open: Json[], options: { closed?: Json[]; crew?: Crew
+  numbers?: { pass: (project: LedProject, numbers: Numbers, goal: () => Promise<Score | null>, board: () => Promise<string>) => Promise<void> } } = {}) {
   const github = fakeGitHub(open, options.closed)
   const log = vi.fn()
   /** What each pass counted (pmNumbers.ts). */
-  const numbers = vi.fn(async (_project: LedProject, _numbers: Numbers, _goal: () => Promise<Score | null>) => {})
+  const numbers = vi.fn(async (_project: LedProject, _numbers: Numbers, _goal: () => Promise<Score | null>, _board: () => Promise<string>) => {})
   const clock = { now: Date.parse('2026-11-09T07:31:00Z') }
   const pm = { running: true, unreadable: false }
   const make = () => new GitHubAssign({ projects: async () => [PROJECT], crew: async () => options.crew ?? crew(), get: github.get, send: github.send, pmRunning: async () => { if (pm.unreadable) throw new Error('The backend did not answer.'); return pm.running },
@@ -122,7 +127,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     await f.assigner.tick()
     // Juno was given #2 this pass, so nobody is free and no task is open: one in hand before, one given.
     expect(f.labelled()).toEqual([[2, 'builder:juno']])
-    expect(f.numbers.mock.calls).toEqual([[PROJECT, { builders: 2, free: [], open: 0, unsized: 0, held: 2, landed: 1, landedBy: [['Pip', 1]], closed: 1, more: false, activity: Date.parse(merged) }, expect.any(Function)]])
+    expect(f.numbers.mock.calls).toEqual([[PROJECT, { builders: 2, free: [], open: 0, unsized: 0, held: 2, landed: 1, landedBy: [['Pip', 1]], closed: 1, more: false, activity: Date.parse(merged) }, expect.any(Function), expect.any(Function)]])
     // The project's goal is read from its default branch, and only when the numbers ask for it.
     f.github.state.files.set('agents/GOAL.md', '| Sync works | `npm test` |\n| Starts fast | `make start-time` |')
     f.github.state.checks = [{ id: 1, name: 'goal: Sync works', status: 'completed', conclusion: 'success' }]
@@ -134,6 +139,41 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     await g.assigner.tick()
     expect(g.numbers.mock.calls.at(-1)![1]).toMatchObject({ landed: 0, activity: Date.parse(old) })
   })
+  // The day's scoreboard (scoreboard.ts; the allocator's design, package 1): what every later change to the allocator is judged by.
+  it('hands the numbers the day\'s scoreboard, read from GitHub only when they ask for it, and says once a part GitHub does not give', async () => {
+    const at = (minutes: number) => new Date(Date.parse('2026-11-09T07:31:00Z') - minutes * 60_000).toISOString()
+    const landed = (number: number) => ({ number, created_at: at(120), closed_at: at(30), updated_at: at(30), pull_request: { merged_at: at(30) }, labels: [{ name: 'builder:pip' }] })
+    const train = (title: string, merged: string | null) => ({ number: 20, title, author_association: 'MEMBER', closed_at: at(60), updated_at: at(60), pull_request: { merged_at: merged }, labels: [] })
+    const f = setup([], { closed: [landed(9), landed(10), landed(11), train('Train, base moved: #9', null)] })
+    for (const number of [9, 10, 11]) {
+      f.github.state.comments.set(number, [{ body: 'Juno, 15:00: READ-OK f6edb44', author_association: 'MEMBER', created_at: at(100) }])
+      f.github.state.changed.set(number, ['src/hub.ts', `src/own${number}.ts`])
+    }
+    await f.assigner.tick()
+    // Nothing of it is read by the pass itself.
+    expect(f.github.state.asked.some(path => path.includes('/files') || /\/issues\/\d+\/comments/.test(path))).toBe(false)
+    const waited = 'Last 3 landed: 20 min from opened to a first verdict (median of 3), 70 min from the last READ-OK to landing (median of 3); '
+      + 'none was told it was behind or in conflict. Trains: 0 landed, 1 closed without landing (base moved 1).'
+    expect(await f.numbers.mock.calls[0]![3]()).toBe(`${waited} Files touched most, of the last 3 landings: \`src/hub.ts\` 100%.`)
+    expect(f.github.state.asked.filter(path => path.includes('/files') || /\/issues\/\d+\/comments/.test(path))).toHaveLength(6)
+    // The PM's own landed pull requests are the team's too.
+    const g = setup([], { closed: [{ ...landed(9), labels: [{ name: 'builder:faye' }] }] })
+    g.github.state.comments.set(9, [{ body: 'Juno, 15:00: READ-OK f6edb44', author_association: 'MEMBER', created_at: at(100) }])
+    await g.assigner.tick()
+    expect(await g.numbers.mock.calls[0]![3]()).toBe('Last 1 landed: 20 min from opened to a first verdict (median of 1), 70 min from the last READ-OK to landing (median of 1); '
+      + 'none was told it was behind or in conflict.')
+    // The closed list it read was full of the day's: there may be more trains than it held, and the words say so.
+    const h = setup([], { closed: [train('Train: #9', at(60)), ...Array.from({ length: 99 }, (_, n) => ({ number: 100 + n, closed_at: at(60), updated_at: at(60), labels: [] }))] })
+    await h.assigner.tick()
+    expect(h.numbers.mock.calls[0]![1]).toMatchObject({ more: true })
+    expect(await h.numbers.mock.calls[0]![3]()).toBe('Trains, at least: 1 landed.')
+    // A part GitHub does not give is left out, and said once in the log however often the day is posted.
+    f.github.state.failing = /\/files$/
+    expect(await f.numbers.mock.calls[0]![3]()).toBe(waited)
+    await f.numbers.mock.calls[0]![3]()
+    expect(f.log.mock.calls.filter(([line]) => String(line).includes('SCOREBOARD_UNREAD'))).toEqual([['[super-tab] Task assignment: SCOREBOARD_UNREAD acme/app: its files: GitHub answered 500.']])
+  })
+
   it('counts a builder with nothing when no task is open, when none can be given, and when the team has no builder', async () => {
     const f = setup([issue(1, ['size:s', 'builder:pip', 'status:taken'])])
     await f.assigner.tick()
