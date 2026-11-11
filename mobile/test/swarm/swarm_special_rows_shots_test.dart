@@ -16,7 +16,7 @@ import 'package:harness_mobile/terminal/terminal_font_store.dart';
 
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
-import 'swarm_special_rows_test.dart' show backend, routeSource, row;
+import 'swarm_special_rows_test.dart' show backend, row;
 
 /// Review screenshots of the special rows (Tony's list, task 28), on a
 /// 390-point phone in both phone themes, from made-up data only, to the folder
@@ -78,7 +78,6 @@ void main() {
         row('m1', 1, 'Can someone take the login fix?', {
           'kind': 'message',
         }, author: 'River'),
-        row('r1', 2, 'x', routeSource()),
         row('t1', 3, 'River typed `2` + Enter into Nico\'s terminal', {
           'kind': 'terminal-input',
         }),
@@ -98,9 +97,6 @@ void main() {
           'truncated': true,
         }, author: 'Nico'),
       ]);
-      fake.routes['/api/super-tabs/$tab/route-decisions/d1'] = (_) => {
-        'record': {'instructionsRevision': 7},
-      };
       final account = ValueNotifier<String?>(me);
       final host = SwarmHost(
         accountId: () => me,
@@ -125,13 +121,6 @@ void main() {
               ),
             ),
           ),
-        ),
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(
-        find.descendant(
-          of: find.byKey(const ValueKey('swarm-message-r1')),
-          matching: find.text('Details'),
         ),
       );
       await tester.pumpAndSettle();

@@ -275,35 +275,6 @@ void main() {
   });
 
   group('the line sits above a row the task draws', () {
-    testWidgets("its own first unread, not a step's row merged in before it", (
-      tester,
-    ) async {
-      final fake = backend(
-        [said(1, minute: 1), said(2, minute: 10), said(3, minute: 20)],
-        mark: 2,
-        // Never read, and written after the task's mark.
-        steps: [
-          said(
-            1,
-            conversation: step,
-            author: 'agent-rev',
-            text: 'Review note.',
-            minute: 15,
-          ),
-        ],
-      );
-      await pump(tester, fake);
-
-      expect(find.textContaining('Nova · Review'), findsOneWidget);
-      expect(line, findsOneWidget);
-      final at = tester.getTopLeft(line).dy;
-      expect(y(tester, 'Update 2.'), lessThan(at));
-      // Merged in by time before the task's first unread: above the line.
-      expect(y(tester, 'Review note.'), lessThan(at));
-      expect(y(tester, 'Update 3.'), greaterThan(at));
-      expect(marksSent(fake).last, 3);
-      expect(marksSent(fake, step), isEmpty, reason: 'a step reads on its own');
-    });
 
     testWidgets('an answered prompt warning is passed over: the line goes '
         'above the next message, and the chat is read', (tester) async {

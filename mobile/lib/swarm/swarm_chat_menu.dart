@@ -9,12 +9,10 @@ import 'package:harness_mobile/shared/theme/app_icon_size.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
 
-import 'swarm_chat_agents.dart';
 import 'swarm_chat_manage.dart';
 import 'swarm_chat_notify.dart';
 import 'swarm_buddy.dart' show swarmIsOldBuddyChat;
 import 'swarm_reader.dart';
-import 'swarm_work_details_page.dart';
 
 /// The chat menu's Notifications rows (the desktop's chat menu, Slack's
 /// channel notifications): one per [SwarmNotify], the reader's own setting
@@ -127,7 +125,7 @@ Future<void> showSwarmNotifySheet(
 }
 
 /// At the end of a chat's header: ⋮, whose sheet holds Find in chat where
-/// the chat's page offers it ([onFind]), Add agent ([swarmCanAddAgent]), Rename and Archive where the person may
+/// the chat's page offers it ([onFind]), Rename and Archive where the person may
 /// ([swarmChatManage]) and the chat's Notifications
 /// ([swarmNotifySection]), as the desktop's chat menu does for every chat a
 /// person reads, a viewer's too. Nothing while the chat is not
@@ -144,8 +142,8 @@ class SwarmChatMenuButton extends StatefulWidget {
   final SwarmReader reader;
   final String chatId;
 
-  /// Opens find in the chat (swarm_chat_find.dart), after Work details;
-  /// null offers no Find in chat.
+  /// Opens find in the chat (swarm_chat_find.dart); null offers no Find in
+  /// chat.
   final VoidCallback? onFind;
 
   @override
@@ -202,26 +200,14 @@ class _SwarmChatMenuButtonState extends State<SwarmChatMenuButton> {
     widget.reader,
     widget.chatId,
     onShown: (route) => _sheet = route,
-    // Work details, Rename and Archive where the desktop's chat menu has
-    // them; Add agent where its Members does.
+    // Rename and Archive where the desktop's chat menu has them.
     actions: () => [
-      if (swarmHasWorkDetails(widget.reader, widget.chatId))
-        PhoneSheetAction(
-          icon: LucideIcons.info300,
-          label: 'Work details',
-          onTap: () => openSwarmWorkDetails(
-            context,
-            reader: widget.reader,
-            chatId: widget.chatId,
-          ),
-        ),
       if (widget.onFind case final find?)
         PhoneSheetAction(
           icon: LucideIcons.search300,
           label: 'Find in chat',
           onTap: find,
         ),
-      ...swarmAddAgentActions(context, widget.reader, widget.chatId),
       ...swarmChatManageActions(context, widget.reader, widget.chatId),
     ],
   ).whenComplete(() => _sheet = null);
