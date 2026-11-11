@@ -43,6 +43,10 @@ export function createMetrics(hour: LastHour = createLastHour()) {
     help: 'Records of which agent wrote a GitHub comment (superTabs/githubComments.ts), by outcome', labelNames: ['outcome'] as const, registers: [registry] })
   const githubCommentReads = new Counter({ name: 'swarm_github_comment_ids_total',
     help: 'Comment ids the merger and news asked about (superTabs/githubComments.ts), by whether a record answered', labelNames: ['found'] as const, registers: [registry] })
+  const taskTokensWrites = new Counter({ name: 'swarm_task_tokens_writes_total',
+    help: 'Writes of what an agent\'s conversation used on a task (superTabs/taskTokens.ts), by outcome', labelNames: ['outcome'] as const, registers: [registry] })
+  const taskTokensReads = new Counter({ name: 'swarm_task_tokens_reads_total',
+    help: 'Reads of tasks\' tokens (superTabs/taskTokens.ts), by whether a row answered', labelNames: ['found'] as const, registers: [registry] })
   const works = new Set<string>()
   const work = (kind: string) => {
     if (works.has(kind)) return kind
@@ -77,6 +81,10 @@ export function createMetrics(hour: LastHour = createLastHour()) {
       githubCommentReads.inc({ found: 'yes' }, found)
       githubCommentReads.inc({ found: 'no' }, asked - found)
     },
+    /** One write of a task's tokens: created (a new row), updated (its totals moved on), limited. */
+    taskTokensWrite(outcome: 'created' | 'updated' | 'limited') { taskTokensWrites.inc({ outcome }) },
+    /** One read of tasks' tokens, and whether any row answered: how many landed changes had their cost to show. */
+    taskTokensRead(found: boolean) { taskTokensReads.inc({ found: found ? 'yes' : 'no' }) },
     /** A minute of `cpu by kind`, every kind of work's busy ms. */
     busyWindow(window: BusyWindow) {
       for (const [kind, ms] of window) workBusy.inc({ work: work(kind) }, ms / 1000)

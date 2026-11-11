@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/state/new_harness.dart' show newHarnessOpensInBox;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/swarm_switcher.dart';
 import 'package:harness/ws/ws_conn.dart';
@@ -223,6 +224,61 @@ void main() {
       app.swarms.where((s) => s.superTabId == backend.personal),
       hasLength(1),
     );
+    await _end(tester, app);
+  });
+
+  // PSQA, 2026-11-12: the Swarms' names sat 30 points left of the recent harnesses' names above them.
+  testWidgets('on the New Tab page as the app draws it, Recent Swarms\' names '
+      'start where the recent harnesses\' names do, and a click opens one', (
+    tester,
+  ) async {
+    final box = newHarnessOpensInBox;
+    newHarnessOpensInBox = true;
+    addTearDown(() => newHarnessOpensInBox = box);
+    final backend = _Backend()..add('0123456789abcdef01234567', 'Pilot');
+    final app = _computer(backend, entered: true);
+    app.machineStates['m']!.agents = [
+      Agent(
+        id: 'recent',
+        name: 'Polish the desktop composer',
+        engine: 'claude',
+        terminalAvailable: true,
+        lastOpenedAt: DateTime.now().subtract(const Duration(minutes: 5)),
+        lastActivityAt: DateTime.now().subtract(const Duration(minutes: 5)),
+      ),
+    ];
+    await app.superTabs.setTabVisible('0123456789abcdef01234567', false);
+    await app.superTabs.refreshTabs();
+    app.newSwarm(newTabPage: true);
+    await mount(tester, app);
+    await _settle(tester);
+    await captureWindow(tester, _shots, 'new-tab-page-recents');
+
+    final harness = tester
+        .getTopLeft(
+          find.descendant(
+            of: find.byKey(const ValueKey('welcome-sessions')),
+            matching: find.text('Polish the desktop composer'),
+          ),
+        )
+        .dx;
+    for (final name in ['Personal', 'Pilot']) {
+      expect(
+        tester
+            .getTopLeft(
+              find.descendant(
+                of: find.byKey(const ValueKey('welcome-closed-super-tabs')),
+                matching: find.text(name),
+              ),
+            )
+            .dx,
+        moreOrLessEquals(harness, epsilon: .5),
+        reason: name,
+      );
+    }
+    await tester.tap(_row('0123456789abcdef01234567'));
+    await _settle(tester);
+    expect(app.activeSwarm.superTabId, '0123456789abcdef01234567');
     await _end(tester, app);
   });
 
