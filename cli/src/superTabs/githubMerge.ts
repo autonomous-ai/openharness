@@ -19,7 +19,8 @@
  * each head, so the GitHub news brings it to its author (githubMentions.ts).
  *
  * The ready ones land on a train (githubTrain.ts): one branch, one run of the checks on the combined change. Only one that is
- * alone and holds the base's tip, or a fork's, is merged on its own, squashed, as every one was until 2026-11-10.
+ * alone and holds the base's tip, or a fork's whose head GitHub does not take into a train, is merged on its own, squashed, as
+ * every one was until 2026-11-10.
  */
 import { createHash } from 'node:crypto'
 import { labelOf, readerKey, sameKey, teamOf, type Crew } from './assign/crew.js'
