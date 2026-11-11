@@ -12,7 +12,7 @@ export function createPendingLaunches({ receipts, prepare }: {
   let stopped = false
   let opened = false
   let active = 0
-  let timer: ReturnType<typeof setInterval> | undefined
+  let timer: ReturnType<typeof setTimeout> | undefined
   let continuation: ReturnType<typeof setImmediate> | undefined
   let recovering: Promise<void> | undefined
   let scan: AsyncGenerator<PendingCreationIntent | null> | undefined
@@ -28,6 +28,24 @@ export function createPendingLaunches({ receipts, prepare }: {
   const remember = (id: string, at: number) => {
     if (pending.has(id) || pending.size < windowSize) pending.set(id, at)
     else crowded = true // The complete request is already durable on disk.
+  }
+
+  // One timer, set for the next thing due: a pending ID's retry (no sooner than
+  // the pass budget allows), the scan's next window, or the minute's rescan.
+  // A 250 ms interval woke the core four times a second with nothing pending
+  // (0.13% of a core at rest, 2026-11-11). A retry now runs when it is due
+  // rather than on the next quarter-second tick, so none waits longer.
+  const arm = () => {
+    clearTimeout(timer)
+    timer = undefined
+    if (!opened || stopped || recovering) return // The pass arms as it ends.
+    const now = Date.now()
+    let retry = Infinity
+    for (const at of pending.values()) retry = Math.min(retry, at)
+    // A full window waits for an ID to settle; its settlement arms again.
+    const due = Math.min(Math.max(retry, startAfter), scan ? (pending.size < windowSize ? now : Infinity) : scanAt)
+    timer = setTimeout(() => { timer = undefined; void recover() }, Math.max(0, due - now))
+    timer.unref?.()
   }
 
   const prepareOne = async (id: string, request: Record<string, unknown>, authority: CreationAuthority): Promise<PreparedCreation> => {
@@ -60,11 +78,12 @@ export function createPendingLaunches({ receipts, prepare }: {
   const start = (id: string, fingerprint: string, request: Record<string, unknown>, held: CreationHold) => {
     const result = receipts.runIntent(id, fingerprint, request, held, (saved, authority) => bounded(id, saved, authority))
     remember(id, Date.now() + 2_000)
+    arm()
     // Under backlog pressure, a settled hold gives its window slot to the next
     // disk entry. The cursor finishes that pass before revisiting earlier IDs;
     // permanently unavailable choices cannot starve the tail of the directory.
     const release = () => { if (crowded) pending.delete(id) }
-    void result.then(status => { if (status.state !== 'pending') pending.delete(id); else release() }, release)
+    void result.then(status => { if (status.state !== 'pending') pending.delete(id); else release() }, release).then(arm)
     return result
   }
 
@@ -111,6 +130,7 @@ export function createPendingLaunches({ receipts, prepare }: {
     })().finally(() => {
       recovering = undefined
       if (scan && !stopped && pending.size < windowSize) continuation = setImmediate(() => { void recover() })
+      else arm()
     })
     return recovering
   }
@@ -120,13 +140,11 @@ export function createPendingLaunches({ receipts, prepare }: {
     open: () => {
       if (opened || stopped) return
       opened = true
-      timer = setInterval(() => { void recover() }, 250)
-      timer.unref?.()
       void recover()
     },
     stop: () => {
       stopped = true
-      clearInterval(timer); clearImmediate(continuation)
+      clearTimeout(timer); clearImmediate(continuation)
       void scan?.return(null).catch(() => {})
     },
   }

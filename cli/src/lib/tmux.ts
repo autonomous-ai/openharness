@@ -34,9 +34,12 @@ export function cleanPaneTitle(title: string): string | null {
 
 /** Current tmux pane titles keyed by pane id. AI CLIs update this with their live session title. */
 export function listPaneTitles(): Promise<Map<string, string>> {
+  // No server, as tmux said under a minute ago, and still no socket: no titles, without starting tmux (`noServer`).
+  if (noTmuxServerYet()) return Promise.resolve(new Map())
   return new Promise((resolve) => {
-    run('tmux', ['list-panes', '-a', '-F', '#{pane_id}|#{pane_title}'], { timeout: 2000 }, (err, stdout) => {
+    run('tmux', ['list-panes', '-a', '-F', '#{pane_id}|#{pane_title}'], { timeout: 2000 }, (err, stdout, stderr) => {
       const titles = new Map<string, string>()
+      heardFromTmux(err ? String(stderr ?? '') : null)
       if (err) { resolve(titles); return }
       for (const line of stdout.split('\n')) {
         const separator = line.indexOf('|')
@@ -70,6 +73,28 @@ export function isNoTmuxServerError(error: string): boolean {
   const connecting = /error connecting to (.+) \(([^)]*)\)\s*$/im.exec(error)
   if (!connecting) return false
   return /no such file or directory/i.test(connecting[2]) || !existsSync(connecting[1])
+}
+
+/** How long "no server" on a socket whose file is missing is taken as the answer without asking tmux again. */
+export const NO_SERVER_RECHECK_MS = 60_000
+
+/**
+ * The socket tmux last said had no server, its file missing, and when. Until that file is there (a server made it)
+ * or a minute has passed, there are no panes and tmux need not be asked: a daemon at rest started `tmux list-panes`
+ * every pass to hear "no server", a fifth of an idle core's CPU (#3880, measured 2026-11-10). The socket is the one
+ * tmux named, never one worked out here. A server makes its socket as it starts, so it is seen on the next pass.
+ */
+let noServer: { socket: string; at: number } | null = null
+
+/** Note a failed tmux read: "no server" on a socket whose file is missing holds off the next reads (`noTmuxServerYet`). */
+export function heardFromTmux(error: string | null): void {
+  const connecting = error === null ? null : /error connecting to (.+) \(([^)]*)\)\s*$/im.exec(error)
+  noServer = connecting && !existsSync(connecting[1]) ? { socket: connecting[1], at: Date.now() } : null
+}
+
+/** Whether tmux said, under a minute ago, that no server runs, and the socket it named is still missing. */
+export function noTmuxServerYet(): boolean {
+  return noServer !== null && !existsSync(noServer.socket) && Date.now() - noServer.at < NO_SERVER_RECHECK_MS
 }
 
 /** The tmux server the last inventory was read from (`rememberTmuxServer`); null until one was. */
@@ -128,7 +153,7 @@ export async function reviveRemovedTmuxSocket(): Promise<boolean> {
 }
 
 /** Test seam. */
-export function forgetTmuxServer(): void { knownServer = null }
+export function forgetTmuxServer(): void { knownServer = null; noServer = null }
 
 /**
  * The pane's root pid; `'missing'` when tmux answered that it has no such pane, or that no server is

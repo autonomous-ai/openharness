@@ -326,7 +326,13 @@ export class AgentCreationReceipts {
   }
 
   async *pendingIntents(): AsyncGenerator<PendingCreationIntent | null> {
-    this.ensureDirectory()
+    // A scan only reads: the core runs one every minute, and making the folder here fsynced its parent every time
+    // (#3880). No folder is no intent; a folder that is not safe to read still fails, as a read does.
+    try { secureStateDirectory(this.directory, false) }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+      throw storageFailure(this.directory, error)
+    }
     const entries = await opendir(this.directory)
     for await (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith('.json')) { yield null; continue }
