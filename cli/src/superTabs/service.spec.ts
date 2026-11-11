@@ -1002,12 +1002,36 @@ describe('a verdict by command', () => {
       return path.endsWith('/labels') ? { status: 200, etag: null, resetAt: null, body: [{ name: 'builder:juno' }, { name: 'status:taken' }] }
         : { status: 201, etag: null, resetAt: null, body: { id: 9001, html_url: 'https://github.com/acme/app/pull/27#issuecomment-9001' } } })
     expect(await t.service.requests.super_tabs({ action: 'take', tabId: 'tab', harnessId: 'native', repository: 'acme/app', number: 34 }, owner))
-      .toEqual({ ok: true, value: { url: 'https://github.com/acme/app/pull/27#issuecomment-9001', taken: true } })
+      .toEqual({ ok: true, value: { url: 'https://github.com/acme/app/pull/27#issuecomment-9001', taken: true, split: expect.stringContaining('harness super-tab split acme/app#34 s|m|l') } })
     expect(t.sent.map(sent => sent.path)).toEqual(['/repos/acme/app/issues/34/labels', '/repos/acme/app/issues/34/comments'])
     expect(t.sent[1]!.body).toEqual({ body: expect.stringMatching(/^Juno, \d\d:\d\d: taken by Juno$/) })
     expect(t.call).toHaveBeenCalledWith('POST', `/api/super-tabs/tab/github-comments?asAgentId=${t.agentId}`, { repository: 'acme/app', kind: 'issue', commentId: '9001' })
     expect(await t.service.requests.super_tabs({ action: 'take', tabId: 'tab', harnessId: 'native', repository: 'acme/app', number: 0 }, owner)).toEqual({ error: 'INVALID_REQUEST' })
     t.service.port.stop()
+  })
+  // A builder cuts a piece off a task it holds (githubSplit.ts, anh Dee 2026-11-11: "Split what you hold").
+  it('cuts a piece off a task as the calling agent, under its name, and records the cut as that agent\'s', async () => {
+    const t = verdictSetup()
+    t.github.get.mockImplementation(async (path: string) => ({ status: 200, etag: null, resetAt: null,
+      body: path === '/user' ? { login: 'reader-login' } : /\/issues\/34$/.test(path) ? { number: 34, state: 'open', labels: [{ name: 'builder:juno' }, { name: 'part:sync' }] } : [] }))
+    t.github.send.mockImplementation(async (_method: string, path: string, body?: unknown) => { t.sent.push({ path, body })
+      return { status: 201, etag: null, resetAt: null, body: path.endsWith('/issues') ? { id: 5700, number: 57, html_url: 'https://github.com/acme/app/issues/57', labels: [{ name: 'size:s' }] }
+        : { id: 9001, html_url: 'https://github.com/acme/app/issues/34#issuecomment-9001' } } })
+    const split = (over: Record<string, unknown> = {}) => t.service.requests.super_tabs({ action: 'split', tabId: 'tab', harnessId: 'native', repository: 'acme/app', number: 34,
+      size: 's', title: 'Sync the theme', text: 'Only the theme.', ...over }, owner)
+    expect(await split()).toEqual({ ok: true, value: { url: 'https://github.com/acme/app/issues/57', number: 57, cut: true, sized: true } })
+    expect(t.sent).toEqual([{ path: '/repos/acme/app/issues', body: { title: 'Sync the theme', body: 'Only the theme.\n\nPart of #34.', labels: ['size:s', 'part:sync'] } },
+      { path: '/repos/acme/app/issues/34/sub_issues', body: { sub_issue_id: 5700 } },
+      { path: '/repos/acme/app/issues/34/comments', body: { body: expect.stringMatching(/^Juno, \d\d:\d\d: split off #57: Sync the theme$/) } }])
+    expect(t.call).toHaveBeenCalledWith('POST', `/api/super-tabs/tab/github-comments?asAgentId=${t.agentId}`, { repository: 'acme/app', kind: 'issue', commentId: '9001' })
+    expect(await split({ size: 'xl' })).toEqual({ error: 'INVALID_REQUEST' })
+    t.service.port.stop()
+    // With its person's own GitHub login only, as a claim.
+    const u = verdictSetup({ contributorId: 'mate' })
+    expect(await u.service.requests.super_tabs({ action: 'split', tabId: 'tab', harnessId: 'native', repository: 'acme/app', number: 34, size: 's', title: 'Sync the theme', text: '' }, owner))
+      .toEqual({ error: 'AGENT_UNAVAILABLE', detail: 'A task is cut with its person\'s own GitHub login, on that person\'s computer.' })
+    expect(u.github.get).not.toHaveBeenCalled()
+    u.service.port.stop()
   })
   // The CLI gives up after 30 seconds and says "Try again" while the daemon works on: the same command again joins the one
   // still running, and posts nothing of its own (the second review of #3907).
@@ -1020,7 +1044,7 @@ describe('a verdict by command', () => {
         : { status: 201, etag: null, resetAt: null, body: { id: 9001, html_url: 'https://github.com/acme/app/issues/34#issuecomment-9001' } } })
     const take = () => t.service.requests.super_tabs({ action: 'take', tabId: 'tab', harnessId: 'native', repository: 'acme/app', number: 34 }, owner)
     const answers = await Promise.all([take(), take()])
-    expect(answers).toEqual(Array(2).fill({ ok: true, value: { url: 'https://github.com/acme/app/issues/34#issuecomment-9001', taken: true } }))
+    expect(answers).toEqual(Array(2).fill({ ok: true, value: { url: 'https://github.com/acme/app/issues/34#issuecomment-9001', taken: true, split: expect.any(String) } }))
     expect(t.sent.map(sent => sent.path)).toEqual(['/repos/acme/app/issues/34/labels', '/repos/acme/app/issues/34/comments'])
     t.service.port.stop()
     // A verdict the same way; another verdict on the same head is its own command.

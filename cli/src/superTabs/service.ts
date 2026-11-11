@@ -22,6 +22,7 @@ import { GitHubMentions, repositorySlug, watchedAgents } from './githubMentions.
 import { ShippingReporter } from './shipping.js'
 import { GitHubStop, githubRest, type GitHubGet, type GitHubSend } from './githubRest.js'
 import { claimAsked, takeTask } from './githubClaim.js'
+import { splitAsked, splitTask } from './githubSplit.js'
 import { postVerdict, verdictAsked } from './githubVerdict.js'
 import { GitHubAssign } from './githubAssign.js'
 import { GitHubMerge, ledProjects, recordedAuthors, VerdictRecords, type LedProject } from './githubMerge.js'
@@ -445,27 +446,30 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
             throw error
           }
         }
-        // A reader's verdict on a pull request (`read ok|hold`, githubVerdict.ts) and a builder's claim on a task (`take`,
-        // githubClaim.ts): made with this computer's gh under the calling agent's name, on a repository of a project it reads,
-        // and its comment recorded with the backend as that agent's.
-        if (payload.action === 'read' || payload.action === 'take') {
+        // A reader's verdict on a pull request (`read ok|hold`, githubVerdict.ts), a builder's claim on a task (`take`,
+        // githubClaim.ts) and a piece it cuts off one (`split`, githubSplit.ts): made with this computer's gh under the calling
+        // agent's name, on a repository of a project it reads, and its comment recorded with the backend as that agent's.
+        if (payload.action === 'read' || payload.action === 'take' || payload.action === 'split') {
           const verdict = payload.action === 'read' ? verdictAsked(payload) : null, claim = payload.action === 'take' ? claimAsked(payload) : null
-          if (!verdict && !claim) return { error: 'INVALID_REQUEST' }
+          const piece = payload.action === 'split' ? splitAsked(payload) : null
+          if (!verdict && !claim && !piece) return { error: 'INVALID_REQUEST' }
           // This computer's gh login is its person's: only that person's own agent here posts with it, as GitHub news and the
           // merger read with it only for such an agent (githubMentions.ts watchedAgents, githubMerge.ts ledProjects).
           const me = (await core.account.identity().catch(() => null))?.accountId ?? null
           if (!me || agent.contributorId !== me || agent.machineOwnerId !== me) {
             return { error: 'AGENT_UNAVAILABLE', detail: verdict ? 'A verdict is posted with its person\'s own GitHub login, on that person\'s computer.'
-              : 'A task is taken with its person\'s own GitHub login, on that person\'s computer.' }
+              : claim ? 'A task is taken with its person\'s own GitHub login, on that person\'s computer.'
+              : 'A task is cut with its person\'s own GitHub login, on that person\'s computer.' }
           }
           const repositories = new Set(list((await swarm()).state.projects).map(project => repositorySlug(object(project.repository).repositoryUrl)).filter(slug => slug !== null))
           const name = [agent.displayName, agent.name].find((given): given is string => typeof given === 'string' && !!given.trim()) ?? ''
           const record = async (repository: string, commentId: string) => { await backend(core, 'POST', `${path}/github-comments?${identity}`, { repository, kind: 'issue', commentId }) }
           // The CLI gives up after 30 seconds and says "Try again" while this works on: the same command from the same agent
           // joins the one still running, or both would find no comment yet and each post its own.
-          const same = JSON.stringify([agentId, verdict ?? claim])
+          const same = JSON.stringify([agentId, verdict ?? claim ?? piece])
           const deps = { get: github.get, send: github.send, login: loginOf, record }
-          const made = commands.get(same) ?? (verdict ? postVerdict(deps, { name, repositories }, verdict) : takeTask(deps, { name, repositories }, claim!))
+          const made = commands.get(same) ?? (verdict ? postVerdict(deps, { name, repositories }, verdict)
+            : claim ? takeTask(deps, { name, repositories }, claim) : splitTask(deps, { name, repositories }, piece!))
             .finally(() => commands.delete(same))
           commands.set(same, made)
           return { ok: true, value: await made }

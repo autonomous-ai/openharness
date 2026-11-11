@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
-import { CLAIM_LIMIT, claimAsked, takeTask } from './githubClaim.js'
+import { CLAIM_LIMIT, claimAsked, splitHint, takeTask } from './githubClaim.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { SuperTabHostError } from './wire.js'
 
 type Json = Record<string, unknown>
 const NOW = new Date(2026, 10, 11, 14, 5).getTime()
+// A claim's answer says how a task too big is cut (githubSplit.ts): its builder reads it before any code.
+const SPLIT = "Too big for one pull request? harness super-tab split acme/app#34 s|m|l 'TITLE' 'WHAT IT IS' cuts a piece off it, and Harness gives that piece to the builder who can ship it soonest."
 
 /** One repository's issues as GitHub's REST API answers for them (lists and comments by page), and what was sent to it. */
 function setup() {
@@ -73,9 +75,12 @@ function setup() {
 const refusal = async (made: Promise<unknown>) => made.then(() => null, error => error instanceof SuperTabHostError ? { code: error.code, message: error.message } : { thrown: error })
 
 describe('a task\'s claim, made by command', () => {
+  it('names the task in the command its answer gives for cutting it', () => {
+    expect(splitHint('acme/app#34')).toBe(SPLIT)
+  })
   it('marks the issue taken, says so in one comment under the agent\'s name, and records the comment as the agent\'s', async () => {
     const t = setup()
-    expect(await t.take()).toEqual({ url: 'https://github.com/acme/app/issues/34#issuecomment-9001', taken: true })
+    expect(await t.take()).toEqual({ url: 'https://github.com/acme/app/issues/34#issuecomment-9001', taken: true, split: SPLIT })
     expect(t.labelsOf(34)).toEqual(['builder:pip', 'size:s', 'status:taken'])
     expect(t.sent.map(s => `${s.method} ${s.path}`)).toEqual(['POST /repos/acme/app/issues/34/labels', 'POST /repos/acme/app/issues/34/comments'])
     expect(t.sent[0]!.body).toEqual({ labels: ['status:taken'] })
@@ -100,7 +105,7 @@ describe('a task\'s claim, made by command', () => {
       message: 'GitHub answered 502 for acme/app#34 after it was labelled taken. Run the same command again: it finishes the claim.' })
     expect(t.labelsOf(34)).toContain('status:taken')
     t.repo.fail = null
-    expect(await t.take()).toEqual({ url: 'https://github.com/acme/app/issues/34#issuecomment-9001', taken: true })
+    expect(await t.take()).toEqual({ url: 'https://github.com/acme/app/issues/34#issuecomment-9001', taken: true, split: SPLIT })
     expect(t.repo.comments.get(34)).toHaveLength(1)
     // Its own comment could not be looked for, or GitHub did not answer as it was posted: the same again, and what is true is said.
     const v = setup()
@@ -176,7 +181,7 @@ describe('a task\'s claim, made by command', () => {
     await t.take()
     expect(t.record).toHaveBeenLastCalledWith('acme/app', '9001')
     t.repo.comments.set(34, [...t.repo.comments.get(34)!, mine(9104, 'Pip, 16:00: taken by Pip\n\nAgain, after a release.'), mine(9105, 'Thanks!')])
-    expect(await t.take()).toEqual({ url: 'https://github.com/acme/app/issues/34#issuecomment-9104', taken: false })
+    expect(await t.take()).toEqual({ url: 'https://github.com/acme/app/issues/34#issuecomment-9104', taken: false, split: SPLIT })
     expect(t.record).toHaveBeenLastCalledWith('acme/app', '9104')
     expect(t.repo.comments.get(34)).toHaveLength(7)
   })
