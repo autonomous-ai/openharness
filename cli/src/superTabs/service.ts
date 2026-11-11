@@ -232,7 +232,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     // The asks to read GitHub news keeps for each agent as it hands on what GitHub says (githubMentions.ts).
     owed: (agent, repo) => mentions.owed(agent.agentId, repo),
     working: async id => { const now = (await api.agents.activity([id]))[id]; return now === 'working' ? true : now === 'idle' ? false : null },
-    get: github.get,
+    get: github.get, send: github.send,
     tell: (agent, operationId, text) => backend(api, 'POST', `/api/super-tabs/${agent.tabId}/commands`, { operationId, asAgentId: agent.agentId,
       command: { type: 'message.send', conversationId: agent.chat, replyTo: null, recipientIds: [agent.agentId], text, agentOnly: true } }),
     // In its chat, for its person to read and not typed to it: as the host posts an agent's first answer (firstAnswers.ts).
