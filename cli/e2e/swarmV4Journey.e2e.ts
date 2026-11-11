@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, onTestFailed, type TestContext } from 'vitest'
 import { PM_BASICS, SWARM_BASICS } from '../src/lib/swarmSkills.js'
 import { superTabCommand } from '../src/superTabs/command.js'
@@ -205,6 +205,14 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('the Swarm v4 journey, on
     expect(await read()).toMatchObject({ text: rule, version: saved.version })
     // Its one copy is the file in its own folder on its own computer.
     expect(readFileSync(join(agents.Kai.cwd!, 'agents', 'Kai.md'), 'utf8')).toBe(rule)
+    // Its person's own CLAUDE.md on that computer, which Claude Code reads for every session there, in the folder its session
+    // keeps its transcripts under, comes beside them (anh Dee, 2026-11-11: "show users what goes into the agent").
+    const mine = 'Answer in plain words.\n', own = join(B.daemon.root, 'claude', 'CLAUDE.md')
+    writeFileSync(own, mine)
+    expect((await read()).personal).toEqual([{ name: 'CLAUDE.md', path: own.split(sep).join('/'), loadedBy: ['claude'], text: mine, truncated: false }])
+    // And what Harness adds at every start, as the engine was started with it: the Swarm's basics, with the PM's part for the PM.
+    expect(await B.client.request('super_tabs', { action: 'basics', harnessId: agents.Kai.harnessId })).toMatchObject({ ok: true, text: SWARM_BASICS })
+    expect(await A.client.request('super_tabs', { action: 'basics', harnessId: agents.Faye.harnessId })).toMatchObject({ ok: true, text: `${SWARM_BASICS}\n${PM_BASICS}` })
   }, 120_000)
 
   it('a person types to a builder in its chat: the agent is typed exactly that, and its answer comes back into the chat once', async context => {

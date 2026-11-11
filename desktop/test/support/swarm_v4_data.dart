@@ -537,8 +537,17 @@ class SwarmV4Computer {
 
   /// `harnessId/name` -> the file's text.
   final Map<String, String> files;
+
+  /// Every instructions request it was sent. What its Swarm service was asked is in [asked].
   final requests =
       <(String machineId, String type, Map<String, Object?> payload)>[];
+
+  /// What its Swarm service was asked (`super_tabs`): Harness's text for an agent, beside each read.
+  final asked = <Map<String, Object?>>[];
+
+  /// What Harness adds to an agent's instructions at every start, as its Swarm service's `basics` answers it. Null is a
+  /// computer that says none: one from before it answers `INVALID_REQUEST`.
+  String? basics;
 
   /// A code to refuse every request with (`UNSUPPORTED`, `OFFLINE`, ...) until it is null again.
   String? refuse;
@@ -549,10 +558,10 @@ class SwarmV4Computer {
   /// The next save is applied but its answer never comes, as when a link drops after the computer wrote the file.
   bool loseNextReply = false;
 
-  /// What else instructs the agent in its folder, as a read's answer carries it (`shared`, `skipped`), and beside the
-  /// code of a refused read. Null is a computer that sends none (an older one). Objects, so a test can send what the
-  /// app does not understand.
-  Object? shared, skipped;
+  /// What else instructs the agent, in its folder and its person's own on it, as a read's answer carries it (`shared`,
+  /// `personal`, `skipped`, `personalSkipped`), and beside the code of a refused read. Null is a computer that sends none (an older one).
+  /// Objects, so a test can send what the app does not understand.
+  Object? shared, personal, skipped, personalSkipped;
 
   /// Called as a read arrives, and the read is not answered until what it returns completes: a computer slow to answer.
   Future<void> Function()? hold;
@@ -565,11 +574,22 @@ class SwarmV4Computer {
     type,
     payload,
   ) async {
+    if (type == 'super_tabs') {
+      asked.add(payload);
+      if (refuse case final code?) {
+        throw WsRequestFailure(responseType: 'super_tabs_result', code: code);
+      }
+      return basics == null
+          ? {'error': 'INVALID_REQUEST'}
+          : {'ok': true, 'text': basics};
+    }
     requests.add((machineId, type, payload));
     final around = {
       if (type == 'agent_instructions_read') ...{
         'shared': ?shared,
+        'personal': ?personal,
         'skipped': ?skipped,
+        'personalSkipped': ?personalSkipped,
       },
     };
     if (type == 'agent_instructions_read') await hold?.call();

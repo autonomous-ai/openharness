@@ -7,6 +7,7 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/swarm_layout.dart';
 import '../shared/widgets/app_icon_button.dart';
 import '../widgets/desktop_chrome.dart';
+import '../widgets/engine_identity.dart';
 import 'instructions_link.dart';
 import 'model.dart';
 import 'swarm_type.dart';
@@ -46,8 +47,12 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
   /// What the computer last said the file is; null while it is read, or when it could not be.
   SwarmInstructionsFile? _file;
 
-  /// What else instructs the agent in its folder, as the last read said (a refused read says it too): never from a save.
+  /// What else instructs the agent in its folder and on its computer, as the last read said (a refused read says it too):
+  /// never from a save.
   var _shared = SwarmSharedInstructions.none;
+
+  /// What Harness adds to its instructions at every start, as its computer last said; null when it says none.
+  String? _harness;
 
   /// Why the file could not be read, in words.
   String? _readError;
@@ -66,9 +71,9 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
   /// Why the last save was refused, in words.
   String? _saveError;
 
-  /// The files of its folder opened to their text, by place: each starts folded, its name and size (anh Dee, 2026-11-10: a
-  /// project's long AGENTS.md shown whole read as the agent's own instructions).
-  final _open = <int>{};
+  /// The files opened to their text, by group and place (`swarm-shared-0`): each starts folded, its name and size (anh Dee,
+  /// 2026-11-10: a project's long AGENTS.md shown whole read as the agent's own instructions).
+  final _open = <String>{};
 
   /// The most the computer takes: 64 KiB of UTF-8, as its answer `TOO_LARGE` says. Counted in bytes, not characters.
   static const _maxBytes = 65536;
@@ -89,6 +94,7 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
     if (old.agent.id != widget.agent.id || old.name != widget.name) {
       _file = null;
       _shared = SwarmSharedInstructions.none;
+      _harness = null;
       _readError = null;
       _editing = false;
       _saving = false;
@@ -112,23 +118,33 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
     final agent = widget.agent, turn = ++_reading;
     // What shows stays while the read is out (the retry turns); the answer replaces it.
     setState(() => _asking = true);
+    // Asked beside the read, not after it, and never an error: the rest shows without it.
+    final basics = link.basics(agent);
     try {
       final read = await link.read(agent);
+      final harness = await basics;
       if (!mounted || agent.id != widget.agent.id || turn != _reading) return;
       setState(() {
         _file = read.file;
         _shared = read.shared;
+        _harness = harness;
         _readError = null;
         _asking = false;
       });
     } on SwarmInstructionsError catch (error) {
+      final harness = await basics;
       if (!mounted || agent.id != widget.agent.id || turn != _reading) return;
       setState(() {
         _readError = _words(error.code, saving: false);
         // A refusal that says nothing of the others (offline, a timeout) does not take back what was read of them.
-        if (error.shared.files.isNotEmpty || error.shared.skipped.isNotEmpty) {
-          _shared = error.shared;
+        final others = error.shared;
+        if (others.files.isNotEmpty ||
+            others.personal.isNotEmpty ||
+            others.skipped.isNotEmpty ||
+            others.personalSkipped.isNotEmpty) {
+          _shared = others;
         }
+        _harness = harness ?? _harness;
         _asking = false;
       });
     }
@@ -351,8 +367,27 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
           'writes it down here.',
           key: 'swarm-instructions-empty',
         ),
-      if (shared.files.isNotEmpty) _folder(shared.files),
+      if (shared.files.isNotEmpty || shared.skipped.isNotEmpty)
+        _group(
+          'From its folder',
+          'swarm-shared',
+          shared.files,
+          skipped: shared.skipped,
+          skippedKey: 'swarm-skipped',
+        ),
+      if (_harness case final harness?)
+        _group('From Harness', 'swarm-harness', [
+          SwarmSharedFile(name: 'Swarm basics', text: harness),
+        ]),
+      if (shared.personal.isNotEmpty || shared.personalSkipped.isNotEmpty)
+        _group(
+          'From ${widget.machineName}',
+          'swarm-personal',
+          shared.personal,
+          skipped: shared.personalSkipped,
+        ),
     ];
+    final engine = _engineOwn;
     return SingleChildScrollView(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -365,28 +400,45 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
               ),
             block,
           ],
-          for (final (i, skip) in shared.skipped.indexed)
+          if (engine != null) ...[
+            ColoredBox(
+              color: DesktopChrome.rim,
+              child: const SizedBox(height: 1),
+            ),
             Padding(
-              padding: const EdgeInsets.fromLTRB(
-                grid.AppDesktop.panelPadding,
-                0,
-                grid.AppDesktop.panelPadding,
-                grid.AppDesktop.controlGap,
-              ),
+              padding: const EdgeInsets.all(grid.AppDesktop.panelPadding),
               child: Text(
-                _skippedWords(skip),
-                key: ValueKey('swarm-skipped-$i'),
+                engine,
+                key: const ValueKey('swarm-engine-own'),
                 style: DesktopChrome.metadata(),
               ),
             ),
+          ],
         ],
       ),
     );
   }
 
-  /// What else instructs the agent in its folder, read only, under its own heading so it never reads as the agent's own:
-  /// each file folded to its name and size, a click away from its text.
-  Widget _folder(List<SwarmSharedFile> files) => Padding(
+  /// What the agent's engine is told by its maker first, which nobody sees or changes here (anh Dee, 2026-11-11: an empty
+  /// file read as if the agent had no instructions at all).
+  String? get _engineOwn => switch (widget.agent.engine.trim()) {
+    '' => null,
+    'claude' => 'And Claude Code\'s own instructions, from Anthropic.',
+    'codex' => 'And Codex\'s own instructions, from OpenAI.',
+    final engine => 'And ${engineIdentity(engine).label}\'s own instructions.',
+  };
+
+  /// What else instructs the agent, read only, under its own heading so it never reads as the agent's own: the files of its
+  /// folder, what Harness adds, and its person's own on its computer, each file folded to its name and size, a click away
+  /// from its text, and a line for each that is there and not shown. [key] names the group's parts (`swarm-shared-name-0`),
+  /// and [skippedKey] its lines, `<key>-skipped` unless said.
+  Widget _group(
+    String heading,
+    String key,
+    List<SwarmSharedFile> files, {
+    List<SwarmSkippedFile> skipped = const [],
+    String? skippedKey,
+  }) => Padding(
     padding: const EdgeInsets.symmetric(vertical: grid.AppDesktop.controlGap),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -399,21 +451,33 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
             grid.AppDesktop.controlGap,
           ),
           child: Text(
-            'From its folder',
-            key: const ValueKey('swarm-shared-heading'),
+            heading,
+            key: ValueKey('$key-heading'),
             style: DesktopChrome.metadata(),
           ),
         ),
-        for (final (i, one) in files.indexed) _sharedFile(i, one),
+        for (final (i, one) in files.indexed) _sharedFile(key, i, one),
+        for (final (i, skip) in skipped.indexed)
+          Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: grid.AppDesktop.panelPadding,
+              vertical: grid.AppDesktop.controlGap,
+            ),
+            child: Text(
+              _skippedWords(skip),
+              key: ValueKey('${skippedKey ?? '$key-skipped'}-$i'),
+              style: DesktopChrome.metadata(),
+            ),
+          ),
       ],
     ),
   );
 
-  /// A file of the agent's folder: its name and size, its text below once opened, and a line when the computer cut it. One
+  /// A file of one of those groups: its name and size, its text below once opened, and a line when the computer cut it. One
   /// with the text of an earlier file ([SwarmSharedFile.sameAs]) says so in place of its size and has nothing to open.
-  Widget _sharedFile(int index, SwarmSharedFile file) {
-    final same = file.sameAs;
-    final open = same == null && _open.contains(index);
+  Widget _sharedFile(String group, int index, SwarmSharedFile file) {
+    final same = file.sameAs, place = '$group-$index';
+    final open = same == null && _open.contains(place);
     final lines = file.text.isEmpty ? 0 : '\n'.allMatches(file.text).length + 1;
     final row = Padding(
       padding: const EdgeInsets.symmetric(
@@ -425,7 +489,7 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
           Expanded(
             child: Text(
               file.name,
-              key: ValueKey('swarm-shared-name-$index'),
+              key: ValueKey('$group-name-$index'),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: DesktopChrome.control(medium: true),
@@ -439,9 +503,7 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
                 ? '1 line'
                 : '$lines lines',
             key: ValueKey(
-              same != null
-                  ? 'swarm-shared-same-$index'
-                  : 'swarm-shared-size-$index',
+              same != null ? '$group-same-$index' : '$group-size-$index',
             ),
             style: DesktopChrome.metadata(),
           ),
@@ -463,9 +525,9 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
           row
         else
           InkWell(
-            key: ValueKey('swarm-shared-row-$index'),
+            key: ValueKey('$group-row-$index'),
             onTap: () =>
-                setState(() => open ? _open.remove(index) : _open.add(index)),
+                setState(() => open ? _open.remove(place) : _open.add(place)),
             child: Semantics(button: true, expanded: open, child: row),
           ),
         if (open)
@@ -478,7 +540,7 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
             ),
             child: SelectableText(
               file.text,
-              key: ValueKey('swarm-shared-text-$index'),
+              key: ValueKey('$group-text-$index'),
               // At the terminal's size, as the panes beside it (anh Dee, 2026-11-10).
               style: grid.AppType.mono(color: DesktopChrome.foreground)
                   .copyWith(fontSize: SwarmType.sizeOf(context)),
@@ -494,7 +556,7 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
             ),
             child: Text(
               'Cut at 64 KB.',
-              key: ValueKey('swarm-shared-cut-$index'),
+              key: ValueKey('$group-cut-$index'),
               style: DesktopChrome.metadata(),
             ),
           ),
