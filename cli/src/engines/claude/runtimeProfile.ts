@@ -90,7 +90,7 @@ async function claudeAvailableModels(session: RuntimeSession): Promise<string[]>
 
 async function claudeConfiguredEffort(session: RuntimeSession): Promise<string> {
   // A session launched with --effort starts at it: the flag outranks the settings' effortLevel, though Claude Code may still
-  // cap it (maxEffortLevel, its organization's) or step it down on a model without it. Read as the settings' effortLevel
+  // cap it (maxEffortLevel, its organization's), override it (CLAUDE_CODE_EFFORT_LEVEL) or step it down on a model without it. Read as the settings' effortLevel
   // until its first reply recorded its own, the 2026-11-11 rehearsal's Product Manager, launched at xhigh, was announced to its
   // project as running at high (the backend's start line, leadStart.ts otherThanAsked), and Desktop showed high. Only an
   // effort its launch model takes: haiku has none, and a launch flag is never auto (review of #4090).

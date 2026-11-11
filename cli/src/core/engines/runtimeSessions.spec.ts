@@ -154,8 +154,9 @@ describe('core runtime profile authority', () => {
     expect(() => t.sessions.stage({ ...copy, boundAt: 2 }, false, true)).toThrow('ENGINE_STALE_REPLY')
   })
 
-  // A session launched with --effort runs at it, whatever its settings say: the engine reads its configured effort from what
-  // the core sends it (the 2026-11-11 rehearsal's Product Manager, launched at xhigh, was announced as running at high).
+  // A session launched with --effort starts at it, which outranks its settings' effortLevel: the engine reads its configured
+  // effort from what the core sends it (the 2026-11-11 rehearsal's Product Manager, launched at xhigh, was announced as running
+  // at high).
   it('sends the engine the model and effort a session was launched with, and nothing for one launched with none', async () => {
     const t = setup()
     await t.sessions.read(t.s, { kind: 'config' })

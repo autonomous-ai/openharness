@@ -411,8 +411,8 @@ describe('RuntimeProfileManager', () => {
     expect(parseRuntimeProfile(staged.selectedModel(fromEnd))).toMatchObject({ model: 'opus', effort: 'medium' })
   })
 
-  // A session launched with --effort runs at it, whatever its settings say: read as the settings' effortLevel until its first
-  // reply, the 2026-11-11 rehearsal's Product Manager, launched at xhigh, was announced to its project as running at high.
+  // A session launched with --effort starts at it, which outranks its settings' effortLevel: read as the settings' until its
+  // first reply, the 2026-11-11 rehearsal's Product Manager, launched at xhigh, was announced to its project as running at high.
   it('reads a session launched with an effort at that effort, not its settings\', until it shows its own', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'machine-runtime-'))
     cleanup.push(cwd)
