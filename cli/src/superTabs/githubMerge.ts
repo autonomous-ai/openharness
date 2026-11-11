@@ -122,7 +122,6 @@ export const recordedAuthors = (ask: (path: string) => Promise<unknown>) => asyn
   return Object.fromEntries(Object.entries(object(answer.authors)).map(([id, author]) => [id, { name: String(object(author).name ?? '') }]))
 }
 
-/** The projects whose PM is one of this computer's person's agents running here, from the host's roster and the PM's read. */
 /** Whether [project]'s PM runs on this computer: the session of its roster row's agent is registered here ([running], by its
  *  harness id). A project is led here while its PM is stopped too (ledProjects). */
 export function pmRunsHere(roster: Json[], project: LedProject, running: (harnessId: string) => boolean): boolean {
@@ -130,6 +129,7 @@ export function pmRunsHere(roster: Json[], project: LedProject, running: (harnes
   return typeof agent?.harnessId === 'string' && running(agent.harnessId)
 }
 
+/** The projects whose PM is one of this computer's person's agents running here, from the host's roster and the PM's read. */
 export async function ledProjects(deps: { me: string | null; live: (harnessId: string) => boolean | Promise<boolean>; roster: () => Promise<Json[]>
   read: (tabId: string, agentId: string) => Promise<Json> }): Promise<LedProject[]> {
   if (!deps.me) return []

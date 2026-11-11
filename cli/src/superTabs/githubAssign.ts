@@ -277,7 +277,9 @@ export class GitHubAssign {
   private async askReaders(project: LedProject, read: Read, open: Json[], crew: Crew): Promise<Set<number>> {
     const { repo } = project
     const team = teamOf(crew, project.pm)
-    const pmHears = await this.deps.pmRunning(project)
+    // Read only when the PM is the reader left; one that cannot be read is taken as stopped, and the pass goes on.
+    let pmRuns: Promise<boolean> | undefined
+    const pmHears = () => pmRuns ??= this.deps.pmRunning(project).catch(() => false)
     // The tasks whose pull request waits for its readers or its merge, not for its builder (askQuiet).
     const withReaders = new Set<number>()
     const base = String((await this.reads.one(repo, `/repos/${repo}`)).default_branch ?? '')
@@ -293,8 +295,9 @@ export class GitHubAssign {
       // builder (askQuiet asks nothing of it, and it is not taken back).
       if (isHeld(pull)) { for (const task of tasksOf(pull)) withReaders.add(task); continue }
       // Nobody is asked to read a head whose checks failed: its builder fixes it first, and the fix is a new head, read again. Its
-      // task waits on its builder meanwhile, not on readers: askQuiet asks after it, and takes it back from a builder gone.
-      if (await this.failing.failing(repo, head)) continue
+      // task stays its builder's, as one held: taken back, it went to another builder while its pull request was still open
+      // (code review of #4060); its builder's turn's end tells it the checks (nextThing.ts).
+      if (await this.failing.failing(repo, head)) { for (const task of tasksOf(pull)) withReaders.add(task); continue }
       // While who made its verdicts cannot be read, nobody is asked: a READ-OK made by command would read as typed.
       const comments = await this.deps.records.named(project, await pullTalk(this.reads, repo, number))
       if (!comments) { for (const task of tasksOf(pull)) withReaders.add(task); continue }
@@ -378,19 +381,20 @@ export class GitHubAssign {
         // Juno, its PM, read every pull request of Pip's).
         const builder = readerFor(read, author, skip)
         const pm = readerKey(project.pm)
-        const reader = builder ?? (!own(pm) && !skip.has(pm) && pmHears ? { id: pm, name: project.pm } : null)
+        const reader = builder ?? (!own(pm) && !skip.has(pm) && await pmHears() ? { id: pm, name: project.pm } : null)
         if (!reader) {
           // Nobody new can read it. A reader asked about an earlier head, with no verdict on this one, is asked about this one: once,
           // and half an hour after its last ask at the soonest, so a run of pushes is one ask. One asked about this head is not asked
           // again: its own turn's end types it the read it owes (nextThing.ts). Asked again each silent half hour, a pull request had
           // one more comment in its person's name each time (#4055; anh Dee, 2026-11-11: "never spam github as user accounts could
           // be banned").
-          const again = [...asked.keys()].filter(name => !own(name) && !lastAsk(name, true)
+          const stoppedPm = !await pmHears()
+          const again = [...asked.keys()].filter(name => !own(name) && !lastAsk(name, true) && !(stoppedPm && name === pm)
             && !(readers.has(name) && onHead(readers.get(name)!.sha)) && now - lastAsk(name, false) >= READ_WAIT_MS)
             .sort((a, b) => lastAsk(a, false) - lastAsk(b, false))[0]
           if (again) await askNow(written.get(again)!, `the head is now ${head.slice(0, 7)}: please read this pull request`)
           else this.once(`[super-tab] Task assignment: NO_READER ${repo}#${number}@${head.slice(0, 7)}: `
-            + (!own(pm) && !skip.has(pm) && !pmHears ? 'its PM, the reader left, is stopped'
+            + (!own(pm) && stoppedPm ? 'its PM, the reader left, is stopped'
               : [...asked.keys()].some(name => !own(name)) ? 'its readers asked have not read it, and nobody else can' : 'nobody but its author can read it'))
           break
         }

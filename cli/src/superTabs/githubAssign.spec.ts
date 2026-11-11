@@ -104,8 +104,8 @@ function setup(open: Json[], options: { closed?: Json[]; crew?: Crew; numbers?: 
   /** What each pass counted (pmNumbers.ts). */
   const numbers = vi.fn(async (_project: LedProject, _numbers: Numbers, _goal: () => Promise<Score | null>) => {})
   const clock = { now: Date.parse('2026-11-09T07:31:00Z') }
-  const pm = { running: true }
-  const make = () => new GitHubAssign({ projects: async () => [PROJECT], crew: async () => options.crew ?? crew(), get: github.get, send: github.send, pmRunning: async () => pm.running,
+  const pm = { running: true, unreadable: false }
+  const make = () => new GitHubAssign({ projects: async () => [PROJECT], crew: async () => options.crew ?? crew(), get: github.get, send: github.send, pmRunning: async () => { if (pm.unreadable) throw new Error('The backend did not answer.'); return pm.running },
     now: () => clock.now, log, records: new VerdictRecords(github.authors, () => clock.now, log), numbers: options.numbers ?? { pass: numbers } })
   const assigner = make()
   const labelled = () => github.sent.filter(s => /\/issues\/\d+\/labels$/.test(s.path)).map(s => [Number(s.path.split('/').at(-2)), (s.body.labels as string[])[0]])
@@ -630,6 +630,22 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Faye\*\*: please read this pull request/)])
     })
 
+    // Code review of #4060: a stopped PM asked about an earlier head is not asked about the new one either; one whose state cannot be
+    // read is taken as stopped, and the pass goes on.
+    it('asks a stopped PM about a new head no more than about the first, and goes on when its state cannot be read', async () => {
+      const f = setup([], { crew: { builders: [crew().builders[0]!], machines: crew().machines } })
+      f.github.state.pulls = [pull()]
+      f.github.state.comments.set(30, [comment('Harness, 05:00, to **Faye**: please read this pull request, and start your comment with '
+        + 'READ-OK 1234567 or HOLD 1234567 (with the file, line and fix).', { created_at: new Date(f.clock.now - 40 * 60_000).toISOString() })])
+      f.pm.running = false
+      await f.assigner.tick()
+      f.pm.unreadable = true
+      f.clock.now += 60 * 60_000
+      await f.make().tick()
+      expect(asks(f)).toEqual([])
+      expect(f.log.mock.calls.filter(([line]) => /NO_READER acme\/app#30@f6edb44: its PM, the reader left, is stopped/.test(String(line)))).toHaveLength(2)
+    })
+
     // A stop for every repository (GitHub limiting this computer) stops the pass, as any read's: nothing is asked meanwhile.
     it('stops its pass when GitHub limits the read of the checks', async () => {
       const f = setup([], { crew: team })
@@ -651,8 +667,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     })
 
     it('asks nobody to read a pull request on hold, nor one whose checks failed at its head, until they pass', async () => {
-      // Pip's #14, its pull request's task (its branch pip/14).
-      const f = setup([issue(14, ['size:s', 'builder:pip', 'status:taken'])], { crew: team })
+      const f = setup([], { crew: team })
       // On hold, in any case: its task waits with it, so its builder is not called quiet on it (code review of #4060).
       f.github.state.pulls = [pull({ labels: [{ name: 'builder:pip' }, { name: 'Hold' }] })]
       await f.assigner.tick()
@@ -663,8 +678,6 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       f.github.state.headChecks.set(String((failing.head as Json).sha), [{ name: 'ci/required', status: 'completed', conclusion: 'failure' }])
       await f.assigner.tick()
       expect(asks(f)).toEqual([])
-      // Failing, its task waits on its builder, who is not free (code review of #4060): asked after it as after any quiet task.
-      expect(f.numbers.mock.calls.at(-1)![1].free.map(free => free.name)).not.toContain('Pip')
       // Run again and passed: read again once ten minutes are up (a failing head is not read each pass), and its reader asked.
       f.github.state.headChecks.set(String((failing.head as Json).sha), [{ name: 'ci/required', status: 'completed', conclusion: 'success' }])
       await f.assigner.tick()

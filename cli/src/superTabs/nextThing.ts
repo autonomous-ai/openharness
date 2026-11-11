@@ -31,10 +31,10 @@ import { hhmm } from './githubVerdict.js'
 import { identifier, object } from './wire.js'
 
 /** How long after a turn ends its agent is looked at: what was queued for it is typed the moment it ends, and comes first. */
+export const NEXT_SETTLE_MS = 3_000
 /** How long after a turn's end what it was told is read again before its person is told nothing changed: GitHub shows a push
  *  some seconds after it. */
 export const TELL_SETTLE_MS = 60_000
-export const NEXT_SETTLE_MS = 3_000
 /** How many times the same next thing is typed with no change before it goes to the agent's person instead: once. An agent that
  *  heard it and ended its turn with nothing changed is blocked or has chosen, and typing it again each turn spent its turns and
  *  tokens on the same line (Finn, 2026-11-11: "fix and push" on a pull request it could not fix, every minute; anh Dee: "why are
@@ -78,7 +78,10 @@ function titled(repo: string, task: Record<string, unknown>): string {
 }
 
 /** What was typed to an agent: the task, how many times, and whether its person was told. */
-interface Kept { key: string; times: number; told: boolean }
+/** What an agent was typed last ([key], how many times, whether its person was told), and the things its person was told of
+ *  ([done], the last [DONE_KEPT]): each waits for them, and what comes after it is typed. */
+interface Kept { key: string; times: number; told: boolean; done?: string[] }
+const DONE_KEPT = 20
 
 export class NextThing {
   private stopEnds: (() => void) | null = null
@@ -151,6 +154,7 @@ export class NextThing {
     this.timers.clear()
     for (const watched of this.idle.values()) clearTimeout(watched.timer)
     this.idle.clear()
+    this.endedAt.clear()
   }
 
   /** A turn ended: its agent is looked at once the turns close together have settled. One its person stopped is left: they are
@@ -196,7 +200,7 @@ export class NextThing {
     let agent: WatchedAgent | undefined
     try {
       agent = (await this.deps.watched()).find(watched => watched.harnessId === harnessId)
-      if (!agent) this.compacted.delete(harnessId)
+      if (!agent) { this.compacted.delete(harnessId); this.endedAt.delete(harnessId) }
       // Something set it working since its turn ended, or nobody can say: that comes first.
       else if (await this.deps.working(harnessId) === false) {
         const compacted = this.compacted.get(harnessId)
@@ -239,14 +243,10 @@ export class NextThing {
 
   /** Its next thing: the first that waits, typed; or the task it holds, watched while it sits idle with it. */
   private async next(agent: WatchedAgent): Promise<void> {
-    let told = false
     for await (const thing of this.waiting(agent)) {
       if ('held' in thing) return this.watch(agent, thing.repo, thing.held, Date.now(), false)
-      // A thing its person was told of waits for them, and nothing after it is typed meanwhile; the task it holds is still watched
-      // while it sits idle (code review of #4060).
-      if (told) continue
+      // One its person has waits for them: the next is typed, or the task it holds watched.
       if (await this.give(agent, thing.key, thing.typed, thing.did)) return
-      told = true
     }
   }
 
@@ -393,21 +393,29 @@ export class NextThing {
   private async give(agent: WatchedAgent, key: string, typed: string, did: string): Promise<boolean> {
     const memory = this.memory ??= this.load()
     let kept = memory[agent.agentId]
-    if (kept?.key !== key) kept = { key, times: 0, told: false }
+    const done = kept?.done ?? []
+    // Its person has it: what comes after it is typed (code review of #4060: a pull request of its own it could not fix kept every
+    // read it owed others from it).
+    if (done.includes(key)) return false
+    if (kept?.key !== key) kept = { key, times: 0, told: false, ...done.length ? { done } : {} }
     delete memory[agent.agentId]
     memory[agent.agentId] = kept
     if (kept.times >= NEXT_TIMES) {
+      // Told before its things told were kept apart (2026-11-11): its person has it.
       if (kept.told) return false
-      // GitHub shows a push some seconds after it, so a turn that pushed as it ended can read as nothing changed: what is still the
-      // same a while after its turn ended is told (code review of #4060).
-      const wait = (this.endedAt.get(agent.harnessId) ?? 0) + TELL_SETTLE_MS - Date.now()
+      // Told only after a turn of its ended here: one typed before this daemon started (under an older build, typed three times
+      // over) has had no turn since to say nothing changed. And GitHub shows a push some seconds after it, so a turn that pushed as
+      // it ended can read as nothing changed: what is still the same a while after its turn ended is told (code review of #4060).
+      const ended = this.endedAt.get(agent.harnessId)
+      if (ended === undefined) return true
+      const wait = ended + TELL_SETTLE_MS - Date.now()
       if (wait > 0) { this.lookIn(agent.harnessId, wait); return true }
       const name = agent.names[0]!
       await this.deps.say(agent, this.operation(agent, key, 'told'), `Harness ${did} as its turn ended, and nothing changed by its next. `
         + `Harness says it no more: tell ${name} what to do.`)
       kept.told = true
+      kept.done = [...done, key].slice(-DONE_KEPT)
       this.save(memory)
-      // Its person has it now: the task it holds is still watched (next).
       return false
     } else {
       await this.deps.tell(agent, this.operation(agent, key, String(kept.times)), typed)

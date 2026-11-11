@@ -268,9 +268,9 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     f.next.stop()
   })
 
-  // Code review of #4060: one thing its person was told of waits for them; what comes after it is not typed meanwhile, at this turn's
-  // end nor the next.
-  it('types nothing after a thing its person was told of', async () => {
+  // Code review of #4060: one thing its person was told of waits for them, and what comes after it is typed: a pull request of its
+  // own it could not fix kept from it every read it owed others.
+  it('types what comes after a thing its person was told of, and that thing no more', async () => {
     const f = setup({ items: [] })
     f.state.owed = [{ number: 24, sha: HEAD.slice(0, 7) }, { number: 25, sha: HEAD.slice(0, 7) }]
     f.next.start()
@@ -278,19 +278,39 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     await f.end()
     await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
     await f.end()
-    expect(f.told()).toEqual([expect.stringMatching(/^Read acme\/app#24 at /)])
-    expect(f.say).toHaveBeenCalledTimes(1)
+    await f.end()
+    await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
+    await f.end()
+    expect(f.told()).toEqual([expect.stringMatching(/^Read acme\/app#24 at /), expect.stringMatching(/^Read acme\/app#25 at /)])
+    expect(f.say).toHaveBeenCalledTimes(2)
     f.next.stop()
   })
 
-  it('tells its person at its first look after a restart what it was typed before, with nothing changed', async () => {
+  it('tells its person no second time of a thing told before the things told were kept apart', async () => {
+    const f = setup()
+    writeFileSync(f.file, JSON.stringify({ pip: { key: 'acme/app#12', times: 3, told: true } }))
+    const next = f.make()
+    next.start()
+    await f.end()
+    await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
+    expect(f.tell).not.toHaveBeenCalled()
+    expect(f.say).not.toHaveBeenCalled()
+    next.stop()
+  })
+
+  // Code review of #4060: what was typed before a restart, under an older build three times over, had no turn since to say nothing
+  // changed. Its person is told after a turn of its ends here.
+  it('tells its person nothing at the first look after a restart, and after a turn of its ends here', async () => {
     const f = setup()
     f.next.start()
     await f.end()
     f.next.stop()
     const again = f.make()
     again.start()
-    await vi.advanceTimersByTimeAsync(START_LOOK_MS)
+    await vi.advanceTimersByTimeAsync(START_LOOK_MS + TELL_SETTLE_MS)
+    expect(f.say).not.toHaveBeenCalled()
+    await f.end()
+    await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
     expect(f.tell).toHaveBeenCalledTimes(1)
     expect(f.say).toHaveBeenCalledTimes(1)
     again.stop()

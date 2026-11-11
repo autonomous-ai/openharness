@@ -204,4 +204,46 @@ describe('Harness says each thing once on GitHub, over an hour and a restart (gi
     expect(gh.sent.filter(s => s.method === 'PUT')).toHaveLength(1)
     expect(harness.get(16) ?? []).toEqual([])
   }, 60_000)
+
+  // anh Dee, 2026-11-11: "never spam github as user accounts could be banned". A day nobody moves: a reader that never reads, checks
+  // never fixed, a pull request on hold, a task taken and left, one nobody can start, a branch behind and one conflicting. What
+  // Harness says of each is said once, and a few things in all, however long it waits.
+  it('says each thing once over a day nobody moves, and a few things in all', async () => {
+    const clock = { now: START }
+    const gh = liveGitHub(clock)
+    gh.task(3, ['size:s', 'needs:gpu'])
+    gh.task(4, ['size:s', 'builder:pip', 'status:taken'])
+    gh.task(5, ['size:m', 'builder:juno', 'status:taken'])
+    gh.pull(20, sha(20))
+    gh.pull(21, sha(21)); gh.runs.set(sha(21), [{ name: 'test', status: 'completed', conclusion: 'failure' }])
+    gh.pull(22, sha(22), { labels: [{ name: 'builder:pip' }, { name: 'hold' }] })
+    gh.pull(23, sha(23)); gh.say(23, `Juno, 04:00, to **Pip**: READ-OK ${sha(23).slice(0, 7)}`); gh.mergeable.set(23, 'behind')
+    gh.pull(24, sha(24)); gh.say(24, `Juno, 04:00, to **Pip**: READ-OK ${sha(24).slice(0, 7)}`); gh.mergeable.set(24, 'dirty')
+    const make = () => {
+      const deps = { projects: async () => [PROJECT], crew: async () => structuredClone(CREW), get: gh.get, send: gh.send, now: () => clock.now, log: () => {}, records: new VerdictRecords(gh.authors, () => clock.now, () => {}) }
+      return { merger: new GitHubMerge(deps), assigner: new GitHubAssign({ ...deps, numbers: { pass: async () => {} }, pmRunning: async () => true }) }
+    }
+    let loops = make()
+    // A pass every five minutes for a day, the daemon restarting every six hours, as releases restart it.
+    for (let pass = 0; pass < 288; pass++) {
+      if (pass % 72 === 71) loops = make()
+      await loops.merger.tick()
+      await loops.assigner.tick()
+      clock.now += 5 * 60_000
+    }
+    const harness = new Map<number, string[]>()
+    for (const [number, list] of gh.comments) harness.set(number, list.map(c => String(c.body)).filter(body => body.startsWith('Harness, ')).map(same))
+    for (const [number, said] of harness) expect(said, `#${number}: ${JSON.stringify(said, null, 1)}`).toEqual([...new Set(said)])
+    // Measured 2026-11-11: eleven in the day. Each stuck pull request is said once (behind, conflicting); the one nobody reads asks
+    // a builder, then the PM half an hour on; the one needing a GPU says so once; each task left is asked after at 4 h and given
+    // to the other builder at 8 h. The failing one and the held one say nothing on GitHub: their builder's turn's end tells it.
+    const count = [...harness.values()].reduce((sum, said) => sum + said.length, 0)
+    expect(count, JSON.stringify(Object.fromEntries(harness), null, 1)).toBeLessThanOrEqual(12)
+    // Every write once. A take-back takes status:taken off twice in the same moment, in case its builder took it between
+    // (githubAssign.ts giveBack): one write.
+    const writes = [...new Set(gh.sent.filter(s => s.method !== 'POST' || !s.path.endsWith('/comments'))
+      .flatMap(s => s.method === 'POST' && /\/labels$/.test(s.path) && Array.isArray(s.body.labels) ? (s.body.labels as string[]).map(l => `${s.at} ${s.method} ${s.path} ${l}`) : [`${s.at} ${s.method} ${s.path}`]))]
+      .map(write => write.slice(write.indexOf(' ') + 1))
+    expect(writes, JSON.stringify(writes, null, 1)).toEqual([...new Set(writes)])
+  }, 120_000)
 })
