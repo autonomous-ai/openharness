@@ -1,6 +1,7 @@
 import 'package:flutter/widgets.dart';
 
 import '../../finder/widgets/finder_pane_panel.dart' deferred as finder;
+import '../../widgets/agent_drag.dart' show PaneDragHandle;
 import 'deferred_part.dart';
 
 /// The Finder and its editor, with every language's colours (re_highlight,
@@ -18,12 +19,14 @@ class FinderPanePanel extends StatelessWidget {
     this.onGuardClose,
     this.compactHeader = false,
     this.onFixedWidth,
+    this.paneDrag,
   });
 
   final String root;
   final void Function(Future<bool> Function()? guard)? onGuardClose;
   final bool compactHeader;
   final ValueChanged<double?>? onFixedWidth;
+  final PaneDragHandle? paneDrag;
 
   @override
   Widget build(BuildContext context) => DeferredPartView(
@@ -33,6 +36,7 @@ class FinderPanePanel extends StatelessWidget {
       onGuardClose: onGuardClose,
       compactHeader: compactHeader,
       onFixedWidth: onFixedWidth,
+      paneDrag: paneDrag,
     ),
   );
 }
