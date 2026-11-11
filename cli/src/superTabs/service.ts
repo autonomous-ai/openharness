@@ -23,7 +23,7 @@ import { githubRest, type GitHubGet, type GitHubSend } from './githubRest.js'
 import { claimAsked, takeTask } from './githubClaim.js'
 import { postVerdict, verdictAsked } from './githubVerdict.js'
 import { GitHubAssign } from './githubAssign.js'
-import { GitHubMerge, ledProjects, recordedAuthors, type LedProject } from './githubMerge.js'
+import { GitHubMerge, ledProjects, recordedAuthors, VerdictRecords, type LedProject } from './githubMerge.js'
 import { crewOf } from './assign/crew.js'
 
 import { peopleNamed } from './personName.js'
@@ -192,11 +192,13 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   // The crew of a project its PM leads, as the PM reads the Swarm.
   const crewOfProject = (held: () => SwarmSources) => async (project: LedProject) =>
     crewOf((await held().reads.read(project.tabId, project.pmAgentId)).state, project)
+  // Who made each verdict by command, read once for the merger and the assigner alike.
+  const records = new VerdictRecords(recordedAuthors(path => backend(core, 'GET', path)), Date.now, line => console.warn(line))
   const merges = (options.githubMerge ?? ((api, held) => new GitHubMerge({ projects: led(api, held), crew: crewOfProject(held), get: github.get,
-    send: github.send, authors: recordedAuthors(path => backend(api, 'GET', path)) })))(core, sources)
+    send: github.send, records })))(core, sources)
   // Gives their tasks to their builders (githubAssign.ts), from the crew as the PM reads the Swarm.
   const assigns = (options.githubAssign ?? ((api, held) => new GitHubAssign({ projects: led(api, held), crew: crewOfProject(held),
-    get: github.get, send: github.send })))(core, sources)
+    get: github.get, send: github.send, records })))(core, sources)
   // What this computer's person's agents shipped, read from GitHub with their own gh and told to the leaderboard (shipping.ts).
   const shipping = (options.shipping ?? (api => new ShippingReporter(api)))(core)
   // An agent's answer to the launch line the daemon typed as it made it, in its chat with its person (firstAnswers.ts): as
