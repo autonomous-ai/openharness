@@ -1,6 +1,7 @@
 /**
- * `<data dir>/agent-browser.json`: every browser this daemon created with its settings, any delete in progress, and
- * the setup step (spec § Lifecycle). It holds proxy passwords, so it is the person's alone (0600).
+ * `<data dir>/agent-browser.json`: every browser this daemon created with its settings, any delete in progress, the
+ * setup step (spec § Lifecycle), and the agents told their browser is ready. It holds proxy passwords, so it is the
+ * person's alone (0600).
  */
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { PodmanError } from './podman.js'
@@ -13,6 +14,8 @@ export interface BrowserStateData {
   setup: { step: SetupStep } | null
   /** Harness's own Podman machine's connection, once setup made one (spec § Podman); absent for the person's. */
   connection?: string | null
+  /** The agents typed the ready line since their person's last Start (notices.ts); absent in a file from before it. */
+  told?: Record<string, true>
 }
 
 export class StateFile {

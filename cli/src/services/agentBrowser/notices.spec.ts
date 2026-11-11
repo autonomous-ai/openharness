@@ -167,6 +167,8 @@ describe('Notices', () => {
 
   it('a ready line being written when Stop came: no stop line when a command said it, when its outcome is unknown, or after a new Start', () => {
     core.cancels(false)
+    // Another agent's line on its way is not this agent's.
+    notices.ready('a2')
     notices.ready('a1')
     notices.stopped('a1', true)
     core.hear(core.last().deliveryId, 'delivered')
@@ -181,7 +183,7 @@ describe('Notices', () => {
     notices.ready('a1')
     const second = core.last().deliveryId
     core.hear(first, 'delivered')
-    expect(core.typed.map(t => t.text)).toEqual([READY_LINE, READY_LINE, READY_LINE, READY_LINE])
+    expect(core.typed.filter(t => t.agentId === 'a1').map(t => t.text)).toEqual([READY_LINE, READY_LINE, READY_LINE, READY_LINE])
     expect(told()).toEqual({})
     core.hear(second, 'delivered')
     expect(told()).toEqual({ a1: true })
@@ -221,10 +223,11 @@ describe('Notices', () => {
     vi.advanceTimersByTime(NOTICE_RETRY_MS)
     core.hear(core.last().deliveryId, 'rejected', 'queue_expired')
     vi.advanceTimersByTime(2 * NOTICE_RETRY_MS)
-    core.hear(core.last().deliveryId, 'rejected', 'queue_expired')
+    core.hear(core.last().deliveryId, 'rejected')
     vi.advanceTimersByTime(10 * NOTICE_RETRY_MS)
     expect(core.typed.map(t => t.text)).toEqual([STOPPED_LINE, STOPPED_LINE, STOPPED_LINE])
     expect(measure.mock.calls).toEqual([['agent_browser_notice_failed']])
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('notice_failed: the stopped line was not typed after 3 tries (rejected)'))
   })
 
   it('a stop while the ready line waits for its next try: it is never tried again and no stop line follows', () => {
