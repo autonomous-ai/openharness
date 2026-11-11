@@ -5,7 +5,7 @@ import { homedir } from 'node:os'
 import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path'
 import { engineBin, enginePathOverride } from '../../lib/engineBin.js'
 import { engineInstallPaths, engineInstallRecipe, type EngineInstallRecipe } from '../../lib/engineInstall.js'
-import { engineShellArgv, interactiveEngineShell, npmRuntimeBins } from '../../lib/engineLaunch.js'
+import { engineShellArgv, interactiveEngineShell, npmEngineBins } from '../../lib/engineLaunch.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
 import { probeExecFile } from '../../lib/offThreadExec.js'
 import { shellSingleQuote } from '../../lib/shellQuote.js'
@@ -120,7 +120,7 @@ export async function captureLaunchExecutable(engine: AgentEngine, shell?: strin
   // The installer also finds an npm engine beside Harness's own Node (its PATH gains that folder, and
   // `npm prefix -g` names it). Looking only here, a Codex in that folder was "missing": every launch dispatched
   // an installer that found it and exited 0 without a word, and the next launch dispatched another (2026-10-19).
-  if (recipe?.executable.npmGlobal) candidates.push(...npmRuntimeBins().flatMap(bin => recipe.executable.names.map(name => join(bin, name))))
+  if (recipe?.executable.npmGlobal) candidates.push(...npmEngineBins().flatMap(bin => recipe.executable.names.map(name => join(bin, name))))
   // A candidate this account may not reach. Looked past, for a later one it can run; with none, held as before rather
   // than installing over what may be there.
   let unreachable = false

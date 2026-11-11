@@ -502,6 +502,11 @@ describe('stdin for -', () => {
     expect(JSON.parse(print.mock.calls.at(-1)![0]).error).toBe("post - read stdin until nothing more came for 30 s, but stdin was never closed, so nothing was posted. "
       + "Close stdin after the message, as a heredoc does: post GROUP - OPERATION_ID <<'MSG' (the message on the next lines, then MSG alone on a line), or pass it as TEXT.")
     expect(request).not.toHaveBeenCalled()
+    // A verdict's words on stdin are told the verdict's own form, whatever the words would have been.
+    expect(await superTabCommand([...prefix, 'read', 'hold', 'acme/app#27', 'f6edb44', '-'], deps)).toBe(1)
+    expect(JSON.parse(print.mock.calls.at(-1)![0]).error).toBe("read - read stdin until nothing more came for 30 s, but stdin was never closed, so nothing was posted. "
+      + "Close stdin after the message, as a heredoc does: read ok|hold OWNER/REPO#N SHA - <<'MSG' (the message on the next lines, then MSG alone on a line), or pass it as TEXT.")
+    expect(request).not.toHaveBeenCalled()
     // What arrives in time is used as before, read once.
     const stdin = vi.fn(async () => 'Ready\n')
     expect(await superTabCommand([...prefix, 'post', 'lead', '-', 'op-3'], { ...deps, stdin })).toBe(0)
@@ -522,3 +527,39 @@ it('sends answer as the answer to a message, placed by the server', () => {
   }
 })
 
+
+// A builder's claim is made by command (githubClaim.ts).
+it('takes a task by its repository and number, and nothing else', () => {
+  expect(parseSuperTabArgs(['take', 'acme/app#34'], where).payload).toMatchObject({ action: 'take', tabId: '', repository: 'acme/app', number: 34 })
+  expect(parseSuperTabArgs([...prefix, 'take', 'Acme/App.js#3'], where).payload).toMatchObject({ action: 'take', tabId: 'tab', agentId: 'agent', repository: 'Acme/App.js', number: 3 })
+  for (const argv of [['take'], ['take', '34'], ['take', 'acme/app'], ['take', 'acme/app#0'], ['take', 'acme/../app#3'], ['take', 'acme/app#34', 'extra']]) {
+    expect(() => parseSuperTabArgs(argv, where), argv.join(' ')).toThrow('harness super-tab')
+  }
+})
+
+// A reader's verdict is made by command, not typed as a comment (githubVerdict.ts).
+it('reads a verdict on a pull request: ok or hold, the repository and number, the head that was read, and the reader\'s words', () => {
+  expect(parseSuperTabArgs(['read', 'ok', 'acme/app#27', 'f6edb44', 'Ran the tests: 12 pass.'], where).payload).toMatchObject({ action: 'read', tabId: '',
+    repository: 'acme/app', number: 27, verdict: 'READ-OK', sha: 'f6edb44', text: 'Ran the tests: 12 pass.' })
+  // A READ-OK may go without words; a HOLD says what to fix.
+  expect(parseSuperTabArgs([...prefix, 'read', 'ok', 'Acme/App.js#3', 'f6edb44c0ffee0000000000000000000000000ab'], where).payload).toMatchObject({ action: 'read',
+    tabId: 'tab', agentId: 'agent', repository: 'Acme/App.js', number: 3, verdict: 'READ-OK', sha: 'f6edb44c0ffee0000000000000000000000000ab', text: '' })
+  expect(parseSuperTabArgs(['read', 'hold', 'acme/app#27', 'f6edb44', 'src/a.ts:12 reads the old head.'], where).payload).toMatchObject({ verdict: 'HOLD',
+    text: 'src/a.ts:12 reads the old head.' })
+  // The words on stdin for -, as a post's are.
+  const stdin = vi.fn(() => "a.ts:1 it's `%h`\n")
+  expect(parseSuperTabArgs(['read', 'hold', 'acme/app#27', 'f6edb44', '-'], where, stdin, () => false).payload).toMatchObject({ verdict: 'HOLD', text: "a.ts:1 it's `%h`" })
+  expect(stdin).toHaveBeenCalledOnce()
+  expect(() => parseSuperTabArgs(['read', 'hold', 'acme/app#27', 'f6edb44', '-'], where, () => '\n', () => false))
+    .toThrow("read - read no message from stdin, so nothing was posted. Send the message on stdin: read ok|hold OWNER/REPO#N SHA - <<'MSG'")
+  expect(() => parseSuperTabArgs(['read', 'ok', 'acme/app#27', 'f6edb44', '-'], where, () => 'x', () => true))
+    .toThrow('read - reads the message from stdin, but stdin is a terminal, so nothing was posted.')
+  // Words the daemon would refuse are said too long here, with their length, as a post's are.
+  expect(() => parseSuperTabArgs(['read', 'hold', 'acme/app#27', 'f6edb44', 'x'.repeat(32_001)], where))
+    .toThrow('These words are 32,001 characters, and a verdict takes at most 32,000: nothing was posted.')
+  for (const argv of [['read'], ['read', 'ok'], ['read', 'ok', 'acme/app#27'], ['read', 'yes', 'acme/app#27', 'f6edb44'], ['read', 'ok', '27', 'f6edb44'],
+    ['read', 'ok', 'acme/app#0', 'f6edb44'], ['read', 'ok', 'acme/../app#27', 'f6edb44'], ['read', 'ok', 'acme/app#27', 'f6edb4'], ['read', 'ok', 'acme/app#27', 'HEAD'],
+    ['read', 'hold', 'acme/app#27', 'f6edb44'], ['read', 'hold', 'acme/app#27', 'f6edb44', '  '], ['read', 'ok', 'acme/app#27', 'f6edb44', 'fine', 'extra']]) {
+    expect(() => parseSuperTabArgs(argv, where), argv.join(' ')).toThrow('harness super-tab')
+  }
+})

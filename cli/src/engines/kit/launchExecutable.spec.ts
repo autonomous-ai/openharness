@@ -40,7 +40,7 @@ it('distinguishes complete absence from inaccessible or ambiguous candidates', a
 it('looks past a search-path folder this account may not enter, and still never installs with nothing found after it', async () => {
   // A Harness Team account: Homebrew's bin is on every account's PATH (/etc/paths.d/homebrew), its owner's alone (770).
   // The folder beside Harness's Node is left out: it is the machine's own, and could hold a real engine.
-  vi.doMock('../../lib/engineLaunch.js', async (actual) => ({ ...await actual<object>(), npmRuntimeBins: () => [] }))
+  vi.doMock('../../lib/engineLaunch.js', async (actual) => ({ ...await actual<object>(), npmEngineBins: () => [] }))
   const { bin, captureLaunchExecutable } = await fixture()
   vi.doUnmock('../../lib/engineLaunch.js')
   const locked = join(root, 'locked'); mkdirSync(locked); writeFileSync(join(locked, 'opencode'), 'theirs', { mode: 0o700 }); chmodSync(locked, 0o000)
@@ -83,7 +83,7 @@ it('holds dangling command aliases instead of authorizing an installation over t
 // is not there until `nix profile install` makes one. Holding at that link, every Claude Code start on such a Mac
 // waited for good, its own claude in ~/.local/bin, later on the PATH, never reached (desktop 1.3.42, 2026-10-30).
 it('looks past a dangling link on the search path, and still never installs with nothing found after it', async () => {
-  vi.doMock('../../lib/engineLaunch.js', async (actual) => ({ ...await actual<object>(), npmRuntimeBins: () => [] }))
+  vi.doMock('../../lib/engineLaunch.js', async (actual) => ({ ...await actual<object>(), npmEngineBins: () => [] }))
   const { bin, captureLaunchExecutable } = await fixture()
   vi.doUnmock('../../lib/engineLaunch.js')
   const profile = join(root, '.nix-profile'); symlinkSync(join(root, 'state', 'nix', 'profiles', 'profile'), profile)
@@ -93,7 +93,7 @@ it('looks past a dangling link on the search path, and still never installs with
   expect(await captureLaunchExecutable('opencode', '')).toMatchObject({ state: 'ready', executable: { command: file } })
 })
 it('looks past a dangling command link to the engine after it, as a shell does', async () => {
-  vi.doMock('../../lib/engineLaunch.js', async (actual) => ({ ...await actual<object>(), npmRuntimeBins: () => [] }))
+  vi.doMock('../../lib/engineLaunch.js', async (actual) => ({ ...await actual<object>(), npmEngineBins: () => [] }))
   const { bin, captureLaunchExecutable } = await fixture()
   vi.doUnmock('../../lib/engineLaunch.js')
   const first = join(root, 'first'); mkdirSync(first)
@@ -140,6 +140,28 @@ it('finds an npm engine beside Harness\'s Node, where its installer finds it', a
   writeFileSync(join(nodeBin, 'codex'), '#!/usr/bin/env node\n', { mode: 0o700 })
   expect(await captureLaunchExecutable('codex', '')).toMatchObject({ state: 'ready', executable: { command: join(nodeBin, 'codex') } })
 })
+for (const win of [false, true]) {
+  it(`finds an engine installed under the previous Node${win ? ' (Windows)' : ''}`, async () => {
+    // Node 22 -> 24: `current-node` names the new folder, the engine was installed under the old one and is still there.
+    await fixture()
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    if (win) Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+    try {
+      const runtime = join(root, 'runtime-prev'), key = win ? 'win32-x64' : 'linux-x64'
+      const old = join(runtime, `node-v22.23.2-${key}`, ...(win ? [] : ['bin'])), current = join(runtime, `node-v24.22.2-${key}`, ...(win ? [] : ['bin']))
+      mkdirSync(old, { recursive: true }); mkdirSync(current, { recursive: true })
+      writeFileSync(join(current, win ? 'node.exe' : 'node'), '', { mode: 0o700 })
+      writeFileSync(join(runtime, 'current-node'), join(current, win ? 'node.exe' : 'node'))
+      vi.stubEnv('ADAPTER_RUNTIME_DIR', runtime); vi.stubEnv('CODEX_PATH', '')
+      vi.resetModules()
+      const { captureLaunchExecutable } = await import('./launchExecutable.js')
+      expect(await captureLaunchExecutable('codex', '')).toMatchObject({ state: 'install' })
+      const engine = join(old, win ? 'codex.cmd' : 'codex')
+      writeFileSync(engine, win ? '@echo off\r\n' : '#!/usr/bin/env node\n', { mode: 0o700 })
+      expect(await captureLaunchExecutable('codex', '')).toMatchObject({ state: 'ready', executable: { command: engine } })
+    } finally { Object.defineProperty(process, 'platform', platform) }
+  })
+}
 it('leaves the launch PATH alone for a Node the person has, and for an engine that is not a Node script', async () => {
   const { bin, withNodeForScript } = await fixture()
   const script = join(bin, 'codex'), node = join(root, 'harness-node', 'bin', 'node')

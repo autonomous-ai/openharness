@@ -1,7 +1,7 @@
 /**
  * Each session's engine state: a live parser, and the normalizer (an engine with a
  * transcript file) or reader (an engine with a database) that folds every other engine's history.
- * One table instead of fourteen maps, so the questions asked of all of them — does this session have
+ * One table instead of fifteen maps, so the questions asked of all of them — does this session have
  * any, is its turn open, forget it, close its turn, stop the pollers — each have one answer.
  *
  * The maps themselves stay public: attach and ingest create each engine's entry their own way, lazily
@@ -21,6 +21,7 @@ import type { HermesReader } from '../../engines/hermes/reader.js'
 import type { KiloReader } from '../../engines/kilo/reader.js'
 import type { MuseNormalizer } from '../../engines/muse/normalizer.js'
 import type { OpencodeReader } from '../../engines/opencode/reader.js'
+import type { OpenclawLive } from '../../engines/openclaw/live.js'
 import type { PiNormalizer } from '../../engines/pi/normalizer.js'
 import type { OmpNormalizer } from '../../engines/omp/normalizer.js'
 
@@ -40,6 +41,7 @@ export function createSessionNormalizers() {
   const hermesReaders = new Map<string, HermesReader>()
   const devinReaders = new Map<string, DevinReader>()
   const commandcodeNormalizers = new Map<string, CommandCodeNormalizer>()
+  const openclawReaders = new Map<string, OpenclawLive>()
 
   /** Whether this session's engine state says a turn is open right now, whichever engine it is. */
   const sessionTurnState = (sessionId: string): boolean | undefined =>
@@ -57,6 +59,7 @@ export function createSessionNormalizers() {
       ?? hermesReaders.get(sessionId)?.turnOpen
       ?? devinReaders.get(sessionId)?.turnOpen
       ?? commandcodeNormalizers.get(sessionId)?.turnOpen
+      ?? openclawReaders.get(sessionId)?.turnOpen
   const sessionTurnOpen = (sessionId: string): boolean => sessionTurnState(sessionId) ?? false
 
   /** Whether any engine state exists for this session: an attach that finds some is not a first one. */
@@ -75,6 +78,7 @@ export function createSessionNormalizers() {
       || hermesReaders.has(sessionId)
       || devinReaders.has(sessionId)
       || commandcodeNormalizers.has(sessionId)
+      || openclawReaders.has(sessionId)
 
   /** Drop all of a forgotten session's engine state, stopping its database readers' pollers. */
   const forget = (sessionId: string): void => {
@@ -96,6 +100,8 @@ export function createSessionNormalizers() {
     devinReaders.get(sessionId)?.stop()
     devinReaders.delete(sessionId)
     commandcodeNormalizers.delete(sessionId)
+    openclawReaders.get(sessionId)?.stop()
+    openclawReaders.delete(sessionId)
   }
 
   /** Mark the session's turn closed in whichever engine holds it (a cancel). What a closing
@@ -115,6 +121,7 @@ export function createSessionNormalizers() {
     hermesReaders.get(sessionId)?.closeTurn()
     devinReaders.get(sessionId)?.closeTurn()
     commandcodeNormalizers.get(sessionId)?.closeTurn()
+    openclawReaders.get(sessionId)?.closeTurn()
   }
 
   /** Stop every database reader's poller (shutdown, and the handoff to an update). */
@@ -123,12 +130,13 @@ export function createSessionNormalizers() {
     for (const r of kiloReaders.values()) r.stop()
     for (const r of hermesReaders.values()) r.stop()
     for (const r of devinReaders.values()) r.stop()
+    for (const r of openclawReaders.values()) r.stop()
   }
 
   return {
     liveParsers, cursorNormalizers, opencodeReaders, kiloReaders, piNormalizers, ompNormalizers,
     museNormalizers, ampNormalizers, grokNormalizers, agyNormalizers, copilotNormalizers, hermesReaders,
-    devinReaders, commandcodeNormalizers,
+    devinReaders, commandcodeNormalizers, openclawReaders,
     sessionTurnState, sessionTurnOpen, hasState, forget, closeTurns, stopPollers,
   }
 }

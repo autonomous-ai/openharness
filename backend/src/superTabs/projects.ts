@@ -42,8 +42,6 @@ export interface SwarmProject {
   /** The status card at the top of the project chat (Dee, 2026-10-31): the coordinator's last project.report text, which
    *  replaces the one before and posts nothing. Read exactly by those who read the project chat (model.ts visibleState). */
   status?: ProjectStatus | null
-  /** Report watermark per conversation, moved by reports before Swarm v4; kept in its own part (store by parts). */
-  progress?: import('./parts/types.js').ProgressData
   repository?: { machineId: string; cwd: string; repositoryUrl: string | null }
   /** Its Product Manager started by the Swarm on one of its machines, or waiting for one (leadStart.ts). */
   lead?: import('./leadStart.js').LeadPlacement
@@ -52,6 +50,10 @@ export interface SwarmProject {
   leadWaiting?: Array<{ id: string; at: number }>
   /** The one start of its Lead a Desktop of its person's claimed (lead.claim), from [machineId]; cleared when a Lead joins. */
   leadClaim?: { id: string; machineId: string; at: number }
+  /** The 1:1 chat its next Product Manager takes, opened for the person who asked for it (lead.start, lead.claim) before that PM
+   *  is there, and `waiting`: the ids of what they sent there since, at most MAX_PM_CHAT_WAITING (pmChat.ts). Cleared when a PM
+   *  takes it; read only by those who read that chat (model.ts visibleState). */
+  pmChat?: { id: string; waiting?: string[] }
   /** Moves when its repository's GitHub access may have changed: someone allowed it, GitHub sent someone back after
    *  installing the app, or a check that asked GitHub again found a different answer (store.ts githubChanged, githubSeen).
    *  Members' apps read the access again when it moves rather than keeping it 5 minutes (task #2316, Dee 2026-11-03). */
@@ -155,7 +157,7 @@ export function ledProject(state: SuperTabState, agentId: string): SwarmProject 
  *  membership they were listed with, who reads it already (one who can manage it first, else a viewer); else, for a public
  *  project, to the Swarm's owner, who reads it too; else it is nobody's ('' owner): nobody reads it, and the Swarm's owner
  *  sees only that it exists and may delete it (deletableProject). A project from before ownerGeneration whose owner is still
- *  here gets their membership now, which is how the migration fills it. Each project that changed hands, in order. */
+ *  here gets their membership now. Each project that changed hands, in order. */
 export function settleOwners(state: SuperTabState): Array<{ projectId: string; from: string; to: string }> {
   const changed: Array<{ projectId: string; from: string; to: string }> = []
   const people = new Map(state.people.map(p => [p.id, p]))

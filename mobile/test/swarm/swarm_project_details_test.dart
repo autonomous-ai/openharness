@@ -7,9 +7,6 @@ import 'package:harness_mobile/swarm/swarm_invites_sheet.dart';
 import 'package:harness_mobile/swarm/swarm_leaderboard.dart';
 import 'package:harness_mobile/swarm/swarm_project_details.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
-import 'package:harness_mobile/swarm/swarm_project_status.dart';
-import 'package:harness_mobile/swarm/swarm_project_tabs.dart';
-import 'package:harness_mobile/swarm/swarm_project_team.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 
 import '../voice_fakes.dart';
@@ -89,7 +86,6 @@ void main() {
     WidgetTester tester,
     FakeSwarm fake, {
     ValueNotifier<String?>? account,
-    List<SwarmProjectTab> tabs = SwarmProjectTab.homeC,
   }) async {
     account ??= ValueNotifier<String?>(me);
     final computers = FakeComputers(const [])
@@ -114,7 +110,7 @@ void main() {
           canOpenMachine: opens.contains,
           child: SwarmScope(notifier: host, child: child!),
         ),
-        home: SwarmProjectPage(swarmId: tab, projectId: project, tabs: tabs),
+        home: const SwarmProjectPage(swarmId: tab, projectId: project),
       ),
     );
     await tester.pumpAndSettle();
@@ -185,14 +181,7 @@ void main() {
         ),
         findsOneWidget,
       );
-      expect(
-        find.descendant(
-          of: find.byType(SwarmProjectDetailsSheet),
-          matching: find.text('1 human · 2 agents'),
-        ),
-        findsNWidgets(2),
-        reason: 'under the name, and at the end of Team',
-      );
+      expect(find.textContaining('human'), findsNothing);
       final quick = [
         for (final name in ['notifications', 'invite', 'terminal'])
           tester.getTopLeft(detail(name)),
@@ -200,12 +189,12 @@ void main() {
       expect(quick.map((o) => o.dy).toSet(), hasLength(1), reason: 'a row');
       expect(quick[0].dx, lessThan(quick[1].dx));
       expect(quick[1].dx, lessThan(quick[2].dx));
-      final rows = [
-        for (final name in ['status', 'work', 'team', 'leaderboard'])
-          tester.getTopLeft(detail(name)).dy,
-      ];
-      expect(rows, [...rows]..sort());
-      expect(rows.first, greaterThan(quick.first.dy));
+      expect(detail('work'), findsNothing);
+      expect(detail('team'), findsNothing);
+      expect(
+        tester.getTopLeft(detail('leaderboard')).dy,
+        greaterThan(quick.first.dy),
+      );
     });
 
     testWidgets("Invite is the Swarm owner's alone", (tester) async {
@@ -222,7 +211,7 @@ void main() {
       await openDetails(tester);
 
       expect(detail('terminal'), findsNothing);
-      expect(detail('status'), findsOneWidget);
+      expect(detail('leaderboard'), findsOneWidget);
     });
   });
 
@@ -283,9 +272,6 @@ void main() {
 
   group('each row opens its sheet once the details are gone', () {
     for (final (name, type) in [
-      ('status', SwarmProjectStatusSheet),
-      ('work', SwarmProjectSheet),
-      ('team', SwarmProjectTeamSheet),
       ('leaderboard', SwarmLeaderboardPage),
       ('invite', SwarmInvitesSheet),
     ]) {
@@ -316,12 +302,12 @@ void main() {
         'title opens the details again', (tester) async {
       await pump(tester, backend());
       await openDetails(tester);
-      await tester.tap(detail('team'));
+      await tester.tap(detail('leaderboard'));
       await tester.pumpAndSettle();
 
       await tester.tapAt(const Offset(200, 40));
       await tester.pumpAndSettle();
-      expect(find.byType(SwarmProjectTeamSheet), findsNothing);
+      expect(find.byType(SwarmLeaderboardPage), findsNothing);
 
       await openDetails(tester);
       expect(detailsOpen(), isTrue);

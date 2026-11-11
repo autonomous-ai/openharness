@@ -59,6 +59,7 @@ import 'grid_model_picker.dart';
 import 'pane_header_actions.dart';
 import 'pane_share_badge.dart';
 import 'pane_model_status.dart';
+import 'pane_note.dart';
 
 /// The pane header's own horizontal inset.
 const double _stripPadding = 14;
@@ -325,8 +326,8 @@ class _TerminalPanelState extends State<TerminalPanel>
   /// pane does not rebuild this one. See [ModelStartWatch].
   ModelStartPhase? _startPhase;
 
-  /// Whether the model note holds a line under the header — see [_syncNoteLine].
-  bool _noted = false;
+  /// The lines the notes hold under the header — see [_syncNoteLine].
+  int _noteLines = 0;
 
   /// Set while the in-pane control banner is answering a keystroke that went
   /// nowhere (see [_nudgeControlBanner]); cleared by [_controlNudgeTimer].
@@ -367,7 +368,7 @@ class _TerminalPanelState extends State<TerminalPanel>
     terminalThemeStore.addListener(_onFontChanged);
     widget.notifier.modelStarts.addListener(_onModelStartsChanged);
     _startPhase = _startPhaseNow();
-    _noted = _gridNote() != null;
+    _noteLines = _notesNow();
     _afterTerminalMounted();
   }
 
@@ -2335,6 +2336,7 @@ class _TerminalPanelState extends State<TerminalPanel>
             // [PhoneHeader], and keeping this one would stack two.
             if (widget.showHeader) Divider(height: 1, color: AppColors.border),
             ?_modelNote(),
+            ?_namedStateNote(),
             // Reserve space for launch guidance so it cannot cover the shell
             // prompt on the first line. Stream-ownership notices below remain
             // overlays over frozen output until control is restored.
@@ -2586,20 +2588,32 @@ class _TerminalPanelState extends State<TerminalPanel>
 
   /// This agent's model note (`grid.note`), or null when nothing is wrong. Read from the app's
   /// agents, which the pane grid rebuilds this panel on.
-  GridNote? _gridNote() => widget.notifier
+  GridNote? _gridNote() => _agent()?.gridNote;
+
+  Agent? _agent() => widget.notifier
       .stateOf(widget.session.machineId)
       ?.agents
       .where((agent) => agent.id == widget.session.agentId)
-      .firstOrNull
-      ?.gridNote;
+      .firstOrNull;
 
-  /// The note taking or giving back its line resizes the terminal, so the pane re-measures then,
+  int _notesNow() =>
+      (_gridNote() == null ? 0 : 1) + (_agent()?.namedState == null ? 0 : 1);
+
+  /// A note taking or giving back its line resizes the terminal, so the pane re-measures then,
   /// as it does when the composer comes or goes.
   void _syncNoteLine() {
-    final noted = _gridNote() != null;
-    if (noted == _noted) return;
-    _noted = noted;
+    final lines = _notesNow();
+    if (lines == _noteLines) return;
+    _noteLines = lines;
     _afterTerminalMounted(claimFocus: false, scrollToEnd: false);
+  }
+
+  /// What stops the agent that only the person can fix, in the daemon's words, or null.
+  Widget? _namedStateNote() {
+    final state = _agent()?.namedState;
+    return state == null
+        ? null
+        : PaneNote(icon: AppIcons.triangleAlert, text: state);
   }
 
   /// The note under the header while the daemon says this agent's model will not answer, or null.

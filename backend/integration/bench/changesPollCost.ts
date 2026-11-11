@@ -6,9 +6,9 @@ import type { Changes } from '../../src/superTabs/read/contract.js'
 import { readDelta } from '../../src/superTabs/cachedReads.js'
 import { listGroupIndexes } from '../../src/superTabs/parts/indexed.js'
 import { parseArgs } from './config.js'
-import { partsDriver } from './drivers/parts.js'
+import { partsDriver, storeRoutes } from './drivers/parts.js'
 import { machineId, seedAccounts } from './fixtures.js'
-import { storeRoutes } from './legacyDriver.js'
+import { observation } from './load.js'
 import { localDatabase } from './mongo.js'
 import { plan } from './plan.js'
 import { bytesOut } from './probe.js'
@@ -18,13 +18,13 @@ import { benchStamps } from './stamps.js'
 
 /** Past the change reads' 30 s overlap, so the polls after it resend nothing they sent before. */
 const QUIET_MS = 35_000
-const PARTS = new Set(['SwarmHead', 'SwarmMember', 'SwarmGroup', 'SwarmAgent', 'SwarmMachine', 'SwarmStart', 'SwarmProgress'])
+const PARTS = new Set(['SwarmHead', 'SwarmMember', 'SwarmGroup', 'SwarmAgent', 'SwarmMachine', 'SwarmStart'])
 
 interface Poller { label: string; poll(): Promise<{ bytes: number; code: string | null }> }
 
 /**
  * What one `GET changes` poll costs MongoDB with many pollers on one backend process (task #2783): the benchmark's seeded
- * Swarm, every person's windows and every worker agent polling as clients do, then rounds where all of them poll at once,
+ * Swarm, every person's windows and every agent polling as clients do, then rounds where all of them poll at once,
  * after nothing, after one machine's reading, after every machine's and after one post. Per poll: database operations
  * (all, and part reads), what MongoDB sent (`serverStatus` bytes out), the profiler's database time, wall time and reply
  * size; per round, operations and bytes by collection. `--light` polls with `machines=light` as the 17:30 CLI does;
@@ -65,20 +65,19 @@ async function main() {
     }
     const pollers: Poller[] = [
       ...people.flatMap((person, n) => Array.from({ length: windows }, (_, w) => poller(`person ${n} window ${w}`, person))),
-      ...swarm.workers.map(w => poller(`agent ${w.id}`, people[w.machine]!, w.id)),
+      ...swarm.agents.map(a => poller(`agent ${a.id}`, people[a.machine]!, a.id)),
     ]
     let n = 0
-    const reading = (machine: number) => driver.observeMachine(swarm.tabId, people[machine]!, machineId(machine), {
-      generation: swarm.generations[machine]!, quotas: [], tools: {}, runningHarnessIds: machine === 0 ? ['bench-lead'] : [], stoppedHarnessIds: [],
-      resources: { cpuPercent: 10 + (n++ % 50), memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9,
-        projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Bench', os: 'macOS', gpuPercent: null } })
-    const post = () => driver.execute(swarm.tabId, people[0]!, `poll-cost-${n++}`,
-      { type: 'message.send', conversationId: swarm.workers[0]!.group, text: 'One post.', replyTo: null, recipientIds: [] })
+    const reading = (machine: number) => driver.observeMachine(swarm.tabId, people[machine]!, machineId(machine),
+      observation(swarm.generations[machine]!, swarm.agents.filter(a => a.machine === machine).map(a => a.harnessId), 10 + (n++ % 50)))
+    const agent = swarm.agents[0]!
+    const post = () => driver.execute(swarm.tabId, people[agent.machine]!, `poll-cost-${n++}`,
+      { type: 'message.send', conversationId: agent.channel, text: 'One post.', replyTo: null, recipientIds: [] }, agent.id)
     for (const p of pollers) await p.poll()
     await sleep(QUIET_MS)
     for (const p of pollers) await p.poll()
-    process.stdout.write(`${pollers.length} pollers (${people.length} people × ${windows} windows, ${swarm.workers.length} agents), ` +
-      `${config.machines} machines, ${config.groups} groups${light ? ', machines=light' : ''}\n\n`)
+    process.stdout.write(`${pollers.length} pollers (${people.length} people × ${windows} windows, ${swarm.agents.length} agents), ` +
+      `${config.machines} machines, ${config.projects} projects${light ? ', machines=light' : ''}\n\n`)
     process.stdout.write('| Before each round | Ops/poll | Part reads/poll | DB KB/poll | DB ms/poll | Wall ms/poll (p50) | Reply KB/poll |\n|---|---|---|---|---|---|---|\n')
     const detail: string[] = []
     const phases: Array<[string, () => Promise<unknown>]> = [['nothing', async () => {}], ['one machine reading', () => reading(1)],

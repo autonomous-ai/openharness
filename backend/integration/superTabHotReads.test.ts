@@ -9,7 +9,6 @@ import { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import { listGroupIndexes } from '../src/superTabs/parts/indexed.js'
-import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import { machineSwarms, swarmsIn } from '../src/superTabs/swarmRows.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
@@ -17,7 +16,7 @@ import { cursorFor } from '../src/superTabs/read/cursor.js'
 import { lastChangedAt } from '../src/superTabs/parts/index.js'
 import { swarmReadCache } from '../src/superTabs/cache.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
-import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
+import { storeSwarm } from './storedSwarm.test-support.js'
 import { NOW, outsider, owner as ownerActor, peer, swarm } from '../src/superTabs/read/fixture.test-support.js'
 import { storedAssignment } from '../src/superTabs/storedWork.test-support.js'
 import { PROFILE_STAGES, profileEntry, queryShape, type ProfileEntry } from './bench/profile.js'
@@ -74,10 +73,8 @@ async function scene({ sharedMachine, edit }: { sharedMachine?: string; edit?: (
   const tabId = `tab-${randomUUID()}`
   const state = { ...structuredClone(s.state), id: tabId } as SuperTabState
   const message = `${tabId}-m1`
-  await writeLegacySwarm(db, { state, revision: 700, messages: [{ id: message, conversationId: done, sequence: 5, text: 'Done',
-    author: { kind: 'person', id: owner.sub, name: owner.email, membershipGeneration: tabId }, createdAt: new Date(MIGRATED - 2 * DAY) }] })
-  const report = await migrateSwarm(db, tabId, { now: () => MIGRATED })
-  if (!report.ok) throw new Error(report.error)
+  await storeSwarm(db, { state, revision: 700, messages: [{ id: message, conversationId: done, sequence: 5, text: 'Done',
+    author: { kind: 'person', id: owner.sub, name: owner.email, membershipGeneration: tabId }, createdAt: new Date(MIGRATED - 2 * DAY) }] }, MIGRATED)
   await db.swarmGroup.updateMany({ where: { tabId, key: { in: quiet } }, data: { dormant: true } })
   const delivery = { tabId, conversationId: done, machineId, membershipGeneration: tabId, authorKind: 'person', authorId: owner.sub,
     authorGeneration: tabId, status: 'confirmed' }
@@ -115,7 +112,7 @@ const plan = (rows: ProfileEntry[]) => rows.map(r => ({ plan: r.planSummary, doc
 
 /** Timestamp scans match only tabId; the indexed wake query also bounds changedAt and hostMachineIds. */
 function timestampScans(entries: ProfileEntry[]) {
-  return entries.filter(e => /^Swarm(Head|Member|Agent|Group|Machine|Start|Progress)$/.test(e.command?.aggregate as string))
+  return entries.filter(e => /^Swarm(Head|Member|Agent|Group|Machine|Start)$/.test(e.command?.aggregate as string))
     .flatMap(e => {
       const match = (e.command?.pipeline as Array<{ $match?: { tabId?: { $in?: string[] } } }>)?.[0]?.$match
       return match?.tabId?.$in && Object.keys(match).length === 1 ? [{ collection: e.command!.aggregate, ids: match.tabId.$in }] : []
@@ -131,14 +128,14 @@ it('batches cold host timestamp misses across Swarms and leaves warm timestamps 
     const concurrent = await Promise.all([hosts.changes(owner, a.machineId, { full: true }), hosts.changes(owner, a.machineId, { full: true })])
     for (const result of concurrent) expect(new Map(result.tabs.map(t => [t.tabId, t.lastChangedAt]))).toEqual(expected)
   })
-  expect(timestampScans(cold)).toHaveLength(7)
+  expect(timestampScans(cold)).toHaveLength(6)
   for (const scan of timestampScans(cold)) expect(new Set(scan.ids)).toEqual(new Set([a.tabId, b.tabId]))
   expect(timestampScans(await profiled(() => hosts.changes(owner, a.machineId, { full: true })))).toEqual([])
 
   const c = await scene({ sharedMachine: a.machineId })
   swarmReadCache()!.drop(c.tabId)
   const mixed = timestampScans(await profiled(() => hosts.changes(owner, a.machineId, { full: true })))
-  expect(mixed).toHaveLength(7)
+  expect(mixed).toHaveLength(6)
   for (const scan of mixed) expect(scan.ids).toEqual([c.tabId])
 
   const direct = new HostReads(new SuperTabStore(db, () => clock, null, { readCache: null }))
@@ -146,7 +143,7 @@ it('batches cold host timestamp misses across Swarms and leaves warm timestamps 
     expect((await direct.changes(owner, a.machineId, { full: true })).tabs)
       .toEqual((await hosts.changes(owner, a.machineId, { full: true })).tabs)
   })
-  expect(timestampScans(uncached)).toHaveLength(7)
+  expect(timestampScans(uncached)).toHaveLength(6)
   for (const scan of timestampScans(uncached)) expect(new Set(scan.ids)).toEqual(new Set([a.tabId, b.tabId, c.tabId]))
 })
 
@@ -179,7 +176,7 @@ it('reuses the host timestamp at the same stamp, including a repeated wake with 
 /** What lastChangedAt answered before it read one key per Swarm: the newest changedAt over every part, by full scan. */
 async function newestByScan(tabIds: string[]): Promise<Map<string, number>> {
   const newest = new Map<string, number>()
-  for (const name of ['SwarmHead', 'SwarmMember', 'SwarmAgent', 'SwarmGroup', 'SwarmMachine', 'SwarmStart', 'SwarmProgress']) {
+  for (const name of ['SwarmHead', 'SwarmMember', 'SwarmAgent', 'SwarmGroup', 'SwarmMachine', 'SwarmStart']) {
     const reply = await db.$runCommandRaw({ aggregate: name, cursor: {}, pipeline: [{ $match: { tabId: { $in: tabIds } } },
       { $group: { _id: '$tabId', at: { $max: '$changedAt' } } }] }) as unknown as { cursor: { firstBatch: Array<{ _id: string; at: { $date: string } | null }> } }
     for (const row of reply.cursor.firstBatch) {
@@ -198,7 +195,7 @@ it('reads each Swarm\'s newest change from one index key per part collection, wi
   const expected = await newestByScan([a.tabId, b.tabId])
   const entries = await profiled(async () => expect(await lastChangedAt(db, [a.tabId, b.tabId])).toEqual(expected))
   const scans = entries.filter(e => timestampScans([e]).length)
-  expect(scans).toHaveLength(7)
+  expect(scans).toHaveLength(6)
   // A busy Swarm's scan read every key of its parts (prod's largest: 1,300 groups, 873 starts, 721 agents, 2026-10-30).
   for (const scan of scans) expect(scan.keysExamined ?? 0, `${scan.command?.aggregate} ${scan.planSummary}`).toBeLessThanOrEqual(4)
   // A head is one document per Swarm, so its plan may stay an IXSCAN; collections with many parts per Swarm skip them.
@@ -351,7 +348,7 @@ describe('the owner\'s grid poll', () => {
     const head = await db.swarmHead.findFirstOrThrow({ where: { tabId: on.tabId } })
     expect(grids.filter(g => g.tabId === on.tabId)).toEqual([{ tabId: on.tabId, grid: (head.data as { localModels: { grid: string } }).localModels.grid,
       enabled: true, ready: null, members: [peer.email] }])
-    const heavy = entries.filter(e => /\.Swarm(Group|Agent|Machine|Start|Progress)$/.test(e.ns))
+    const heavy = entries.filter(e => /\.Swarm(Group|Agent|Machine|Start)$/.test(e.ns))
     expect(heavy.map(e => e.ns.slice(e.ns.indexOf('.') + 1))).toEqual([])
     // The people read asks for the Swarms with Local models only.
     const people = entries.filter(e => e.ns.endsWith('.SwarmMember'))
@@ -418,7 +415,7 @@ describe('the host poll\'s Swarm lookup', () => {
     // A Swarm whose host cleaned up after the machine left: it lists the machine nowhere.
     const dropped = await scene({ sharedMachine: s.machineId })
     await db.superTab.update({ where: { id: dropped.tabId }, data: { machineIds: { set: [] }, cleanupMachineIds: { set: [] } } })
-    // A Swarm still in one row (format 1) is left for its migration.
+    // A Swarm still in one row (format 1) is never served: the wipe removes it.
     const legacy = await scene({ sharedMachine: s.machineId })
     await db.superTab.update({ where: { id: legacy.tabId }, data: { format: 1 } })
     expect(await machineSwarms(db, 'prod', s.machineId, 500)).toEqual([s.tabId])

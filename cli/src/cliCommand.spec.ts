@@ -121,12 +121,12 @@ function seedRunningDaemon(root: string): { pid: number; exited: Promise<void> }
 }
 
 /** The daemon's status through this user's private socket, plus its occupied TCP control port. */
-async function daemonStatusServer(root: string, machineId: string): Promise<number> {
+async function daemonStatusServer(root: string, machineId: string, extra: Record<string, unknown> = {}): Promise<number> {
   const handler: RequestListener = (_req, res) => {
     res.setHeader('content-type', 'application/json')
     // A daemon says its pid (and, under a master, the master's), as every release with the socket has:
     // start-up tells a live daemon from the core of a master that is gone by it (lib/localSocket.ts).
-    res.end(JSON.stringify({ machineId, version: '0.0.0-test', sessions: [], pid: process.pid, corePid: process.pid }))
+    res.end(JSON.stringify({ machineId, version: '0.0.0-test', sessions: [], pid: process.pid, corePid: process.pid, ...extra }))
   }
   const server = createServer(handler)
   servers.push(server)
@@ -307,6 +307,29 @@ describe('start --repair beside a running daemon', () => {
     expect(result.status).toBe(0)
     expect(result.stdout).toContain('already running')
     expect(result.stdout).not.toContain('installing the Harness grid runtime')
+  }, ONE_RUN_TEST_MS)
+})
+
+describe('status shows the daemon Node', () => {
+  it.each([
+    [{ version: 'v24.22.2', managed: true, migration: null }, /node\s+v24\.22\.2\n/],
+    [{ version: 'v22.23.2', managed: true, migration: 'download-failed' }, /node\s+v22\.23\.2 \(stays on 22: the download failed\)/],
+  ])('%j', async (node, row) => {
+    const root = freshRoot()
+    seedRunningDaemon(root)
+    const port = await daemonStatusServer(root, 'm_other', { node })
+
+    const result = await runAsync(root, ['status'], { PORT: String(port) })
+
+    expect(result.stdout).toMatch(row)
+  }, ONE_RUN_TEST_MS)
+
+  it('shows no row for a daemon too old to report it', async () => {
+    const root = freshRoot()
+    seedRunningDaemon(root)
+    const port = await daemonStatusServer(root, 'm_other')
+
+    expect((await runAsync(root, ['status'], { PORT: String(port) })).stdout).not.toMatch(/^\s+node\s/m)
   }, ONE_RUN_TEST_MS)
 })
 

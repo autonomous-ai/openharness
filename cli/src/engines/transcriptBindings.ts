@@ -26,7 +26,7 @@ export const transcriptRoot: Readonly<Record<AgentEngine, (() => string) | 'stor
   omp: () => join(homedir(), '.omp', 'agent', 'sessions'),
   commandcode: () => join(env.COMMANDCODE_HOME, 'projects'),
   claude: 'store',
-  opencode: null, kilo: null, hermes: null, devin: null, terminal: null,
+  opencode: null, kilo: null, hermes: null, devin: null, openclaw: null, terminal: null,
 }
 export const engineKeepsTranscriptFile = (engine: AgentEngine): boolean => transcriptRoot[engine] !== null
 export const needsHomeCatalog = (engine: AgentEngine, profile?: string | null): boolean =>

@@ -17,7 +17,7 @@ source "$HERE/image-lib.sh"
 PARTIAL=$OUT.partial
 cp --sparse=always "$BASE" "$PARTIAL"
 attach_image "$PARTIAL" +3G
-curl -fsSL https://deb.nodesource.com/setup_22.x -o "$MNT/tmp/nodesource.sh"
+curl -fsSL https://deb.nodesource.com/setup_24.x -o "$MNT/tmp/nodesource.sh"
 chroot "$MNT" /bin/bash -euo pipefail <<'EOF'
 export DEBIAN_FRONTEND=noninteractive LC_ALL=C
 bash /tmp/nodesource.sh >/dev/null 2>&1

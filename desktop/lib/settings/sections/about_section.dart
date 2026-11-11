@@ -118,6 +118,15 @@ class _AboutCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _Identity(state: _PillState.of(notifier, checking: checking)),
+          // Nothing from a daemon too old to say which Node it runs on.
+          if (notifier.daemonNode case final node?) ...[
+            const SizedBox(height: 12),
+            Text(
+              node.line,
+              key: const Key('settings-daemon-node'),
+              style: grid.AppType.body(color: grid.AppPalette.textSecondary),
+            ),
+          ],
           if (!kIsWeb) ...[
             const SizedBox(height: 18),
             Container(height: 1, color: grid.AppPalette.divider),
