@@ -8,7 +8,7 @@ import type { BackendNotice, CoreApi, TurnDelivery, TurnEnd } from '../core/api.
 import { promptHash } from '../lib/promptIdentity.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import type { attachedFiles as attachedFilesType } from './attachments.js'
-import { backend, writeJournal, removeStaleJournalTemps, swarmListedFor, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
+import { backend, writeJournal, removeStaleJournalTemps, swarmListedFor, swarmRoleFor, hostJournalFile, RESTART_SETTLE_MS, SuperTabHost, type SuperTabHostOptions } from './host.js'
 import { ADDED_MAX } from './deliveryContext.js'
 import { SWITCH_ADOPT_MS, SWITCH_HOLD_MS } from './leadSwitch.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
@@ -248,7 +248,9 @@ describe('Super Tab native delivery handoff', () => {
     host.stop()
     const fresh = t.open()
     await fresh.tick()
-    expect(t.saved().entries.delivery.stage).toBe('uncertain')
+    // Cut off by the restart, on the terminal it was moved to: it waits for the core to read that session again, then is typed
+    // there again only if the session does not have it (below, "a message the daemon was killed in the middle of typing").
+    expect(t.saved().entries.delivery).toMatchObject({ stage: 'prepared', restarted: true, harnessId: 'new-harness' })
     expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
   })
   // Agent context design, section 2: a delivery reads the Swarm once, for the lines that say where it is (by what changed
@@ -1212,15 +1214,6 @@ describe('Super Tab native delivery handoff', () => {
     expect(removeStaleJournalTemps(file)).toEqual([])
   })
 
-  it('does not type again after a crash between submission and its native acknowledgement', async () => {
-    const t = setup(), first = t.open()
-    await first.tick(); first.stop()
-    const restarted = t.open()
-    await restarted.tick()
-    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
-    expect(t.receipts).toEqual([expect.objectContaining({ uncertain: true, receipt: expect.stringContaining('restarted') })])
-  })
-
   it('replays a saved receipt after a lost backend acknowledgement without another native send', async () => {
     const t = setup(), first = t.open()
     await first.tick(); t.event('delivered'); first.stop()
@@ -1310,6 +1303,64 @@ describe('Super Tab native delivery handoff', () => {
     vi.mocked(t.core.agents.byAgent).mockReturnValue(undefined)
     await host.tick()
     expect(t.core.turns.deliver).not.toHaveBeenCalled()
+  })
+
+  // Swarm plan, step 1, item 2: "on the real backend, a daemon killed in the middle of an ask types it once after restart". Killed
+  // between the host's intent to type and the core's word on it, the message was marked uncertain and never typed.
+  describe('a message the daemon was killed in the middle of typing', () => {
+    const killedMidway = async () => {
+      const t = setup(), first = t.open()
+      await first.tick()
+      expect(t.saved().entries.delivery.stage).toBe('submitting')
+      const typed = vi.mocked(t.core.turns.deliver).mock.calls[0]![1] as string
+      first.stop()
+      return { t, typed }
+    }
+
+    it('is typed again, once, when its agent did not get it, after the core has had time to read the session again', async () => {
+      const { t, typed } = await killedMidway()
+      vi.mocked(t.core.turns.asks).mockResolvedValue(['Something else.'])
+      const second = t.open()
+      await second.tick()
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+      t.wait(RESTART_SETTLE_MS); await second.tick()
+      expect(vi.mocked(t.core.turns.deliver).mock.calls.map(call => call[1])).toEqual([typed, typed])
+      t.event('delivered')
+      t.wait(1_000); await second.tick()
+      expect(t.receipts).toEqual([expect.objectContaining({ type: 'ack', uncertain: false })])
+      t.wait(60_000); await second.tick()
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
+    })
+
+    it('is acknowledged as delivered, and not typed again, when its agent got it, as its session keeps a prompt', async () => {
+      const { t, typed } = await killedMidway()
+      // The core keeps a prompt with its spaces folded and its first 1,000 characters (lib/commander.ts rememberAsk).
+      vi.mocked(t.core.turns.asks).mockResolvedValue(['Later words.', ` ${typed.replace(/\s+/g, '  ')} `.slice(0, 1_000)])
+      const second = t.open()
+      t.wait(RESTART_SETTLE_MS); await second.tick()
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+      expect(t.receipts).toEqual([expect.objectContaining({ type: 'ack', uncertain: false })])
+    })
+
+    it('waits while the core cannot say, and keeps one from a host before it, which kept no mark of what it typed, uncertain', async () => {
+      const { t } = await killedMidway()
+      vi.mocked(t.core.turns.asks).mockRejectedValueOnce(new Error('core gone'))
+      const second = t.open()
+      t.wait(RESTART_SETTLE_MS); await second.tick()
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+      expect(t.receipts).toEqual([])
+      second.stop()
+      // A journal written by a host from before this one: no mark of what it typed, so nothing can tell, as before.
+      const journal = t.saved()
+      delete journal.entries.delivery.typed
+      journal.entries.delivery.stage = 'submitting'
+      delete journal.entries.delivery.restarted
+      writeFileSync(hostJournalFile(t.dir, 'machine-1'), JSON.stringify(journal))
+      const third = t.open()
+      t.wait(RESTART_SETTLE_MS); await third.tick()
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+      expect(t.receipts).toEqual([expect.objectContaining({ type: 'ack', uncertain: true })])
+    })
   })
 
   it('retains a recovered claim across another lost acknowledgement and restart', async () => {
