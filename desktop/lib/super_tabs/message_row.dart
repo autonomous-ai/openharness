@@ -70,6 +70,7 @@ class SuperTabMessageRow extends StatefulWidget {
     this.joinsBelow = false,
     this.oneOnOne = false,
     this.to = const [],
+    this.storedNames = const {},
     this.onReply,
     this.onOpenAgent,
     this.onOpenReply,
@@ -148,6 +149,9 @@ class SuperTabMessageRow extends StatefulWidget {
   /// The teammates a post is to ([superTabPostTo]), by the name their tags read: each its words do not tag opens its bubble
   /// (`@Juno`), as a group chat addresses a post.
   final List<String> to;
+
+  /// The name each teammate of [to] is stored under, where it differs from the one it shows as ([superTabPostTo]).
+  final Map<String, String> storedNames;
   final VoidCallback? onReply, onOpenAgent;
 
   /// Follows the quote to the original, given this row so that the way back
@@ -840,6 +844,8 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                                         mentions:
                                                             widget.mentions,
                                                         addressed: widget.to,
+                                                        storedNames:
+                                                            widget.storedNames,
                                                         agents:
                                                             widget.agentNames,
                                                         addresses: widget
