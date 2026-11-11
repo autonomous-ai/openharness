@@ -61,28 +61,25 @@ List<SuperTabAgent> superTabPostRecipients(
   ];
 }
 
-/// The names of [superTabPostRecipients] as their tags read them, the names people know them by: a PM is stored under its
-/// role's name, "Product Manager" (anh Dee, 2026-11-11: "the tag Product Manager is also weird just tag the agent"). Those a
-/// post's words do not tag open its bubble (`@Juno`), as a group chat addresses a post (anh Dee, 2026-11-10: "why not use
-/// tag? like in a group chat").
-List<String> superTabPostTo(SuperTabSnapshot? swarm, SuperTabMessage message) =>
-    [
-      for (final agent in superTabPostRecipients(swarm, message))
-        agent.displayName ?? agent.name,
-    ];
-
-/// The name each of [superTabPostTo]'s agents is stored under, by the name it shows as, where the two differ. A tag of either
-/// is its tag, as the backend routes one, so a post that tags its PM "@Product Manager" is not tagged "@Ray" besides. The
-/// post's text is read where it is drawn, once ([SuperTabMessageText.storedNames]): each recipient read it again, 2.2 ms a
-/// row at 2,300 characters (review of #4075).
-Map<String, String> superTabPostStoredNames(
+/// The agents of [superTabPostRecipients] by the names their tags read, the names people know them by ([names]): a PM is stored
+/// under its role's name, "Product Manager" (anh Dee, 2026-11-11: "the tag Product Manager is also weird just tag the agent").
+/// Those a post's words do not tag open its bubble (`@Juno`), as a group chat addresses a post (anh Dee, 2026-11-10: "why not
+/// use tag? like in a group chat"). Beside them, the name each is stored under where it differs ([stored]): a tag of either is
+/// its tag, as the backend routes one, so a post that tags its PM "@Product Manager" is not tagged "@Ray" besides. The post's
+/// text is read where it is drawn, once ([SuperTabMessageText.storedNames]): each recipient read it again, 2.2 ms a row at
+/// 2,300 characters, and a second pass over them cost a row twice its lookups (both reviews of #4075).
+({List<String> names, Map<String, String> stored}) superTabPostTo(
   SuperTabSnapshot? swarm,
   SuperTabMessage message,
-) => {
-  for (final agent in superTabPostRecipients(swarm, message))
-    if (agent.displayName case final shown? when shown != agent.name)
-      shown: agent.name,
-};
+) {
+  final names = <String>[], stored = <String, String>{};
+  for (final agent in superTabPostRecipients(swarm, message)) {
+    final shown = agent.displayName ?? agent.name;
+    names.add(shown);
+    if (shown != agent.name) stored[shown] = agent.name;
+  }
+  return (names: names, stored: stored);
+}
 
 /// What waits under a post that names an agent that was offline when it was posted and still is (`downSince`: its machine has
 /// reported its session gone): "Juno is offline", "Juno and Kai are offline". An agent that was up when it was named has

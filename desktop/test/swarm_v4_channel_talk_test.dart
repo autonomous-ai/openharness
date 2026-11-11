@@ -465,8 +465,8 @@ void main() {
       )['name'] = 'Product Manager';
       final swarm = SuperTabSnapshot.fromJson(server.state);
       final post = ask(['faye', 'juno'], author: 'pip');
-      expect(superTabPostTo(swarm, post), ['Faye', 'Juno']);
-      expect(superTabPostStoredNames(swarm, post), {'Faye': 'Product Manager'});
+      expect(superTabPostTo(swarm, post).names, ['Faye', 'Juno']);
+      expect(superTabPostTo(swarm, post).stored, {'Faye': 'Product Manager'});
     });
 
     test('an agent named twice is named once, and an author never', () {
@@ -475,10 +475,10 @@ void main() {
         superTabPostOfflineLine(swarm, ask(['juno', 'juno'])),
         'Juno is offline',
       );
-      expect(superTabPostTo(swarm, ask(['juno', 'faye', 'juno', 'pip'])), [
-        'Juno',
-        'Pip',
-      ]);
+      expect(
+        superTabPostTo(swarm, ask(['juno', 'faye', 'juno', 'pip'])).names,
+        ['Juno', 'Pip'],
+      );
     });
 
     test(
@@ -520,8 +520,8 @@ void main() {
           'recipientIds': ['juno'],
         });
         expect(superTabPostOfflineLine(team({'juno'}), person), isNull);
-        expect(superTabPostTo(team({'juno'}), person), isEmpty);
-        expect(superTabPostStoredNames(team({'juno'}), person), isEmpty);
+        expect(superTabPostTo(team({'juno'}), person).names, isEmpty);
+        expect(superTabPostTo(team({'juno'}), person).stored, isEmpty);
       },
     );
   });

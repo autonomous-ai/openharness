@@ -150,7 +150,7 @@ class SuperTabMessageRow extends StatefulWidget {
   /// (`@Juno`), as a group chat addresses a post.
   final List<String> to;
 
-  /// The name each teammate of [to] is stored under, where it differs from the one it shows as ([superTabPostStoredNames]).
+  /// The name each teammate of [to] is stored under, where it differs from the one it shows as ([superTabPostTo]).
   final Map<String, String> storedNames;
   final VoidCallback? onReply, onOpenAgent;
 
