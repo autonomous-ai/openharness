@@ -97,6 +97,16 @@ it('the shell an archived agent leaves behind carries no task', async () => {
   expect(archived.firstTask).toBe(TASK)
 })
 
+// An engine that exits before its task is typed leaves its pane a terminal (core/agents/newPane.ts, a restore). Kept, the
+// task waits for any OpenClaw the person starts in that shell, and one they typed it into themselves gets it twice.
+it('an agent whose engine exits to its shell drops the task, and says so', async () => {
+  const { registry, row } = await pending()
+  expect(registry.releaseEngine(row.agentId)!.firstTask).toBeUndefined()
+  expect(disk()[0]).not.toHaveProperty('firstTask')
+  expect(lines).toContain(`[agent] ${row.agentId.slice(0, 8)} first task dropped · its engine exited before it was typed`)
+  expect(lines.filter(line => line.includes(TASK))).toEqual([])
+})
+
 it('a saved row keeps only a text task', async () => {
   const { strictPersistedRow } = await pending()
   const row = disk()[0]
