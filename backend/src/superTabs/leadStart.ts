@@ -137,20 +137,21 @@ export function leadJoined(state: SuperTabState, start: AgentStart, home: Conver
   if (placement) placement.status = 'started'
   const machine = placement?.machineName ?? state.machines?.find(m => m.machineId === start.request.machineId)?.name
   const project = start.request.leadFor && projectsOf(state).find(p => p.id === start.request.leadFor!.projectId)
-  // By its own name, as its posts and tags have it, with its role beside it (anh Dee, 2026-11-11: "the tag Product Manager is
-  // also weird just tag the agent"): it is the first line its project's channel shows.
-  const shown = project ? agentDisplayName(state.agents, agentId) : undefined
-  const who = !project ? start.request.name : shown && shown !== COORDINATOR_NAME ? `${shown}, the ${COORDINATOR_NAME},` : COORDINATOR_NAME
-  const started = `${who} started on ${machine ?? 'its machine'}.`
+  const started = `${project ? pmCalled(agentDisplayName(state.agents, agentId)) : start.request.name} started on ${machine ?? 'its machine'}.`
   const ran = state.agents.find(a => a.id === agentId)?.configuration
   const other = ran && otherThanAsked(start.request, ran)
   return { text: other ? `${started} ${other}` : started, source: machine ? { kind: 'system', machine } : { kind: 'system' } }
 }
 
+/** A Product Manager as its project's channel names it at its start: by its own [name], as its posts and tags have it, with its
+ *  role beside it, since the line is the first the channel shows (anh Dee, 2026-11-11: "the tag Product Manager is also weird
+ *  just tag the agent"). */
+const pmCalled = (name: string | undefined) => name ? `${name}, the ${COORDINATOR_NAME},` : COORDINATOR_NAME
+
 /** A Product Manager's start line when its machine could not launch it with the model and effort it asked for, so it runs its
- *  engine's own model (Desktop's own-machine start; the Swarm's start says it in leadJoined). */
-export const launchRefusedLine = (asked: { model: string; effort?: string }) =>
-  `${COORDINATOR_NAME} started. It asked for ${asked.effort ? `${asked.model} at ${asked.effort}` : asked.model} and runs its engine\u2019s own model there: this machine could not launch it with them.`
+ *  engine's own model (Desktop's own-machine start; the Swarm's start says it in leadJoined), by its [name]. */
+export const launchRefusedLine = (asked: { model: string; effort?: string }, name: string | undefined) =>
+  `${pmCalled(name)} started. It asked for ${asked.effort ? `${asked.model} at ${asked.effort}` : asked.model} and runs its engine\u2019s own model there: this machine could not launch it with them.`
 
 /** A Claude id by its family (`claude-opus-5-5[1m]` is opus), as the CLI's route rates it. */
 const family = (model: string) => /haiku|sonnet|opus|fable/.exec(model.toLowerCase())?.[0] ?? model.toLowerCase()

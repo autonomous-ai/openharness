@@ -240,7 +240,7 @@ describe('a Product Manager\'s start, once its host reports it', () => {
   })
 
   it('says when it runs another model or effort than it asked for, and nothing when it cannot tell', () => {
-    // Each line opens with its name, which the start's id picks; written as NAME here.
+    // Each line opens with its name, which its agent's id picks; written as NAME here.
     const joinedWith = (configuration: AgentConfiguration) => {
       const f = swarm()
       const startId = f.lead('owner-mac').result.startId as string
@@ -267,7 +267,8 @@ describe('a Product Manager\'s start, once its host reports it', () => {
     expect(f.state.agents.find(a => a.id === agentId)).toMatchObject({ machineId: 'owner-mac', machineOwnerId: 'owner', projectId: f.app.projectId })
     // By its own name, as its posts and tags have it, with its role beside it (anh Dee, 2026-11-11: "the tag Product Manager is
     // also weird just tag the agent"): the first line its project's channel shows.
-    const name = agentDisplayName(f.state.agents, agentId)!
+    // The name it is stored under once the command settles, whatever names others already hold.
+    const name = f.state.agents.find(a => a.id === agentId)!.displayName!
     expect(name).not.toBe('Product Manager')
     expect(messages(joined, f.app.conversationId)).toEqual([`${name}, the Product Manager, started on Owner Mac.`])
     expect(f.project().lead).toMatchObject({ status: 'started', machineId: 'owner-mac', machineName: 'Owner Mac' })
