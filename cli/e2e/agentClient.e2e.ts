@@ -184,7 +184,7 @@ describe('Harness for agents, end to end', () => {
     await run('wait', 'kid', '--timeout', '2m')
     const closed = await run('close', 'kid')
     expect(closed.code, closed.err).toBe(0)
-    expect(closed.out.trim()).toMatch(/^kid on .+: closed\. Its conversation is kept; the person can resume it\.\nNext: nothing; you have 0 open of 4\.$/)
+    expect(closed.out.trim()).toMatch(/^kid on .+: closed\. Its conversation is kept; the person can resume it\.\nNext: nothing; you have 0 open of 8\.$/)
     const after = await run('ps', '--all', '--json')
     expect(JSON.parse(after.out).harnesses).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'kid', state: 'stopped', startedBy: 'you' })]))
 
@@ -398,8 +398,8 @@ describe('Harness for agents, end to end', () => {
   // because for its first seconds every read of the Codex process was refused. The fake Codex holds such a descriptor
   // for as long, and its first hook is as late: until then nothing could bind its conversation, as there.
   it.each([
-    ['binds its conversation a few seconds in', 6_000, /^pong on .+: closed\. Its conversation is kept; the person can resume it\.\nNext: nothing; you have 0 open of 4\.$/],
-    ['never binds while the close waits', 120_000, /^pong on .+: closed\. It had not started a conversation, so none was kept\.\nNext: nothing; you have 0 open of 4\.$/],
+    ['binds its conversation a few seconds in', 6_000, /^pong on .+: closed\. Its conversation is kept; the person can resume it\.\nNext: nothing; you have 0 open of 8\.$/],
+    ['never binds while the close waits', 120_000, /^pong on .+: closed\. It had not started a conversation, so none was kept\.\nNext: nothing; you have 0 open of 8\.$/],
   ] as const)('an agent closes a Codex it started a second ago, which %s', async (_, unboundMs, said) => {
     const module = pathToFileURL(join(CLI_ROOT, 'e2e', 'harness', 'fakeEngine.mjs')).href
     const { d } = await signedIn({ agents_start_agents: true }, { before: (d) => {
@@ -475,7 +475,7 @@ describe('Harness for agents, end to end', () => {
     expect(refused).toEqual({ text: 'You did not start theirs, so you may not close it. Only the person can.', isError: false })
     const closed = await server.call('harness_close', { name: 'mcpkid' })
     expect(closed.isError).toBe(false)
-    expect(closed.text).toMatch(/^mcpkid on .+: closed\. Its conversation is kept; the person can resume it\.\nNext: nothing; you have 0 open of 4\.$/)
+    expect(closed.text).toMatch(/^mcpkid on .+: closed\. Its conversation is kept; the person can resume it\.\nNext: nothing; you have 0 open of 8\.$/)
     server.close()
     client.close()
   })
