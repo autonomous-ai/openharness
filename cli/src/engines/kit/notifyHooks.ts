@@ -7,6 +7,7 @@ import { engineName } from '../../lib/agentNames.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
 import { insideWindowsRoots } from '../../lib/secureState.js'
 import { STABLE_NOTIFY } from '../../lib/windows/installLayout.js'
+import { HookScriptMissing } from './hookHeld.js'
 import { HookPreparationHeld } from './nativeHookFiles.js'
 import { cursorDataDir } from '../cursor/contract.js'
 import { nativeHookLocations } from './nativeLocations.js'
@@ -32,6 +33,12 @@ export function hookScriptCandidates(dir: string, script: string | undefined, pl
 }
 export const HOOK_SCRIPT = hookScriptCandidates(cliDir, process.argv[1]).find(existsSync) ?? join(cliDir, '..', '..', '..', 'hook', 'notify.mjs')
 
+/** [script], for a hook line to name: an install refuses one that is not there ([HookScriptMissing]). */
+export function installableHookScript(script: string = HOOK_SCRIPT): string {
+  if (!existsSync(script)) throw new HookScriptMissing(script)
+  return script
+}
+
 /** An engine that declares no Windows hook runner gets no hooks there. That is said once per install and is not a failure. */
 export function hooksNotOnWindows(engine: string): true {
   console.log(`[hooks] ${engine} hooks are not installed on Windows yet`)
@@ -41,10 +48,10 @@ export function hooksNotOnWindows(engine: string): true {
 /**
  * The log line for an install that did not happen, when [error] says why: on Windows one sentence, no stack. A refused
  * hook line (quoteHookCommand) or a held file is the person's to read, and a stack trace there buried the reason (B4.10
- * VM log). Null for any other error or platform: the caller logs as before, so mac and Linux logs do not change.
+ * VM log), and on every platform a missing notify.mjs. Null for any other error or platform: the caller logs as before.
  */
 export function hooksNotInstalled(engine: NotifyEngine, error: unknown, platform: NodeJS.Platform): string | null {
-  if (platform !== 'win32' || !(error instanceof HookPreparationHeld)) return null
+  if (!(error instanceof HookPreparationHeld) || (platform !== 'win32' && !(error instanceof HookScriptMissing))) return null
   return `[hooks] ${engineName(engine)} hooks are not installed: ${error.reason}`
 }
 
@@ -186,6 +193,7 @@ export function command(
   environment?: Readonly<Record<string, string>>,
   runner: Exclude<HookRunner, 'argv'> = 'bash',
 ): string {
+  installableHookScript()
   return quoteHookCommand(runner, hookArgv(port, engine, codexHome, hermesHome, environment)) as string
 }
 

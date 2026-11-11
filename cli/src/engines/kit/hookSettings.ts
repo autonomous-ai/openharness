@@ -13,7 +13,7 @@ import { HARNESS_AGENT_TOOLS, HARNESS_AGENT_VERBS, type HookSettings } from '../
 import { prepareReviewed } from './hookReview.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
 import { isMessagesBlock, messagesCommand, writeMessagesHook } from './messagesHook.js'
-import { HOOK_SCRIPT, hookArgv, hooksNotInstalled, hooksNotOnWindows, identitySettings, isManagedHook, foreignHookBlocks, quoteHookCommand, type CommandHook, type HookBlock, type Settings } from './notifyHooks.js'
+import { HOOK_SCRIPT, hookArgv, hooksNotInstalled, hooksNotOnWindows, identitySettings, installableHookScript, isManagedHook, foreignHookBlocks, quoteHookCommand, type CommandHook, type HookBlock, type Settings } from './notifyHooks.js'
 import { HookPreparationHeld, inspectHookFile, runHookPreparation, type HookPreparationAttempt } from './nativeHookFiles.js'
 import type { NativeHookOptions } from './nativeLocations.js'
 import { hostPlatform } from './windowsFiles.js'
@@ -46,7 +46,8 @@ export async function installHookSettings(engine: HookEngine, settings: HookSett
   // stage, so a healthy launch could be held by the daemon's own refresh.
   try {
     // Inside the try: a path the engine's Windows runner would misread is refused here (quoteHookCommand), and that
-    // is a failed install with its reason, not a rejection (B4.1 review).
+    // is a failed install with its reason, not a rejection (B4.1 review). So is a notify.mjs that is not there.
+    installableHookScript()
     const entry = notifyHookEntry(settings, hookArgv(port, engine, settings.commandNamesHome ? home : undefined, undefined, options.environment), platform)
     if (!entry) return hooksNotOnWindows(engine)
     return await runHookPreparation(files, async attempt => {
