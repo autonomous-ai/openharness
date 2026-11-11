@@ -576,6 +576,9 @@ class _Gallery extends StatelessWidget {
                         ('Kai', false, true, false, 'free'),
                         ('Wren', false, false, false, 'offline'),
                         ('Moss', false, false, false, 'starting'),
+                        ('Ash', false, false, false, 'working'),
+                        ('Juno', false, false, false, 'needs you'),
+                        ('Pip', false, false, false, 'limited until 15:40'),
                       ])
                         SuperTabQuietRow(
                           leading: SuperTabAvatar.agent(
