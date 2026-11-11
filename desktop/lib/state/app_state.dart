@@ -2972,6 +2972,47 @@ class AppNotifier extends ChangeNotifier {
         payload: {'agentId': agentId},
       );
 
+  /// Turns [agentId]'s browser on; the machine types the agent its ready line once the browser is.
+  Future<void> agentBrowserStart(String machineId, String agentId) =>
+      _agentBrowserRequest(
+        machineId,
+        'agent_browser_start',
+        payload: {'agentId': agentId},
+      );
+
+  Future<void> agentBrowserStop(String machineId, String agentId) =>
+      _agentBrowserRequest(
+        machineId,
+        'agent_browser_stop',
+        payload: {'agentId': agentId},
+      );
+
+  /// Sizes Chrome's window to the panel: the window as the machine set it, or null when it could not (an older
+  /// CLI, a browser not ready, a failed call), and the panel then scales the whole screen. Never throws.
+  Future<({int width, int height})?> agentBrowserWindow(
+    String machineId,
+    String agentId,
+    int width,
+    int height,
+  ) async {
+    try {
+      final set = await _agentBrowserRequest(
+        machineId,
+        'agent_browser_window',
+        payload: {'agentId': agentId, 'width': width, 'height': height},
+      );
+      if (set case {'width': final int width, 'height': final int height}) {
+        return (width: width, height: height);
+      }
+      appLog.warn('browser', 'window answered without a size');
+    } on WsRequestFailure catch (e) {
+      appLog.warn('browser', 'window refused: ${e.code}');
+    } on Object catch (e) {
+      appLog.warn('browser', 'window unanswered: ${e.runtimeType}');
+    }
+    return null;
+  }
+
   Future<BrowserSettings> agentBrowserSettings(
     String machineId,
     String agentId,

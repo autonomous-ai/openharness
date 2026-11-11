@@ -80,6 +80,11 @@ const Set<String> encryptedDownTypes = {
   'agent_browser_settings',
   'agent_browser_settings_save',
   'agent_browser_proxy_test',
+  // Start, Stop and the window's size (applicationFrames.ts `MACHINE_REQUESTS`): unsealed, the machine answers
+  // E2EE_REQUIRED.
+  'agent_browser_start',
+  'agent_browser_stop',
+  'agent_browser_window',
   // Its stream's control (applicationFrames.ts `AGENT_BROWSER_DOWN_TYPES`).
   'agent_browser_open',
   'agent_browser_ack',
