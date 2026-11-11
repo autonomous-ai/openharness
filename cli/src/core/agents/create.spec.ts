@@ -31,10 +31,8 @@ import { agentLaunchArgs } from '../../lib/agentAttribution.js'
 import { WindowsBatchLaunchRefused } from '../../lib/windows/launch.js'
 import { SWARM_LAUNCH } from '../../superTabs/inCore/launch.js'
 
-// Real native preparation asks a real `/bin/sh` engine for its help. On a loaded machine its 5 s deadline, not the code,
-// decided (5155 ms at load 60): a creation held, and the DSH launch it left queued answered the next test. What a deadline
-// does is patientExec.spec.ts's to test.
-vi.mock('../../lib/patientExec.js', async (real) => ({ ...await real<object>(), patientDeadline: () => () => {} }))
+// Real native preparation asks the fixture engine for its help: answered in this process (testing/engineHelpInProcess.ts).
+vi.mock('node:child_process', async (real) => (await import('../../testing/engineHelpInProcess.js')).withEngineHelp(await real<typeof import('node:child_process')>()))
 vi.mock('../../lib/gitProject.js', async (real) => ({ ...await real<object>(), harnessMadeWorktree: vi.fn(async () => false) }))
 vi.mock('../../lib/projectFolder.js', async real => {
   const actual = await real<typeof import('../../lib/projectFolder.js')>()
@@ -176,7 +174,8 @@ describe('creating an agent', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.mocked(createAndRegisterPane).mockReset().mockResolvedValue({ ok: true, spawned: { runtime: { paneId: '%1' } }, pending } as never)
   })
-  afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
+  // A launch or an installed harness one test queued and never used answers no other test.
+  afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks(); launchDsh.mockReset(); vi.mocked(installedDsh).mockReset() })
 
   // Swarm v4: no skill file and no skill mode; each Swarm role starts with the team's basics as its launch line.
   it.each(['claude', 'codex'] as const)('attaches each Swarm role before %s pane dispatch', async engine => {
@@ -497,11 +496,9 @@ describe('creating an agent', () => {
 
   it('records the final harness-selected Codex home used by real native preparation', async () => {
     const executable = await import('../../engines/kit/launchExecutable.js')
-    // An engine that runs: a launch that names no mode still asks for its help (nativeLaunch.ts).
-    const engine = join(root, 'engine')
-    writeFileSync(engine, '#!/bin/sh\necho "Usage: engine"\n', { mode: 0o755 })
+    // An engine that runs (the child_process mock above): a launch that names no mode still asks for its help.
     vi.spyOn(executable, 'captureLaunchExecutable').mockResolvedValue({ state: 'ready',
-      executable: { command: engine, identity: 'fixture', current: () => true },
+      executable: { command: '/fixture/engine', identity: 'fixture', current: () => true },
       environment: { HOME: root, PATH: '/fixture/bin' },
     })
     const { inspectNativeLaunch } = await import('../../engines/nativeLaunch.js')
