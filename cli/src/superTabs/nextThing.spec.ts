@@ -553,6 +553,43 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     again.stop()
   })
 
+  // What its person was told of was saved and never read back, so each restart (every release) typed the agent all of it again but
+  // the last, held its next thing behind it, and told its person again.
+  it('keeps what its person was told of over a restart, and types none of it again', async () => {
+    const f = setup({ items: [] })
+    f.state.owed = [{ number: 24, sha: HEAD.slice(0, 7) }, { number: 25, sha: HEAD.slice(0, 7) }]
+    f.next.start()
+    for (let i = 0; i < 2; i++) {
+      await f.end()
+      await f.end()
+      await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
+    }
+    expect(f.say).toHaveBeenCalledTimes(2)
+    f.next.stop()
+    const again = f.make()
+    again.start()
+    await vi.advanceTimersByTimeAsync(START_LOOK_MS)
+    await f.end()
+    await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
+    expect(f.told()).toEqual([expect.stringMatching(/^Read acme\/app#24 at /), expect.stringMatching(/^Read acme\/app#25 at /)])
+    expect(f.say).toHaveBeenCalledTimes(2)
+    again.stop()
+  })
+
+  it('reads from its file the last 20 things its person was told of, and nothing else written there', async () => {
+    const f = setup({ items: [] }), short = HEAD.slice(0, 7)
+    f.state.owed = [{ number: 24, sha: short }, { number: 25, sha: short }]
+    const others = Array.from({ length: 19 }, (_, i) => `acme/app#${100 + i}`), kept = [...others, `acme/app#24 read ${short}`]
+    writeFileSync(f.file, JSON.stringify({ pip: { key: 'acme/app#30', times: 1, told: true,
+      done: [`acme/app#25 read ${short}`, ...others, 7, `acme/app#24 read ${short}`] } }))
+    const next = f.make()
+    next.start()
+    await f.end()
+    expect(f.told()).toEqual([expect.stringMatching(/^Read acme\/app#25 at /)])
+    expect(JSON.parse(readFileSync(f.file, 'utf8'))).toEqual({ pip: { key: `acme/app#25 read ${short}`, times: 1, told: false, done: kept } })
+    next.stop()
+  })
+
   it('says a failure by its name and types it at the next end; one it could not type is tried again under the same operation', async () => {
     const f = setup()
     f.next.start()

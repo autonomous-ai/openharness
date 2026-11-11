@@ -77,7 +77,6 @@ function titled(repo: string, task: Record<string, unknown>): string {
   return title ? `${repo}#${task.number} (${title})` : `${repo}#${task.number}`
 }
 
-/** What was typed to an agent: the task, how many times, and whether its person was told. */
 /** What an agent was typed last ([key], how many times, whether its person was told), and the things its person was told of
  *  ([done], the last [DONE_KEPT]): each waits for them, and what comes after it is typed. */
 interface Kept { key: string; times: number; told: boolean; done?: string[] }
@@ -438,7 +437,9 @@ export class NextThing {
       for (const [id, value] of Object.entries(object(JSON.parse(readFileSync(this.deps.file, 'utf8'))))) {
         const row = object(value)
         if (identifier(id) && typeof row.key === 'string' && Number.isSafeInteger(row.times) && typeof row.told === 'boolean') {
-          kept[id] = { key: row.key, times: row.times as number, told: row.told }
+          // What its person was told of is read back too: left out, each restart (every release) typed it all again.
+          const done = Array.isArray(row.done) ? row.done.filter((key): key is string => typeof key === 'string').slice(-DONE_KEPT) : []
+          kept[id] = { key: row.key, times: row.times as number, told: row.told, ...done.length ? { done } : {} }
         }
       }
     } catch { /* none kept yet, or unreadable: counted from now */ }
