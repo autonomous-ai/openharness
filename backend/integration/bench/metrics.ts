@@ -1,8 +1,8 @@
 /** One call the scenario made, as the client saw it. */
 export interface Sample {
-  /** The command type or the non-command path, e.g. `message.send`, `observeMachine`, `read.full`. */
+  /** The command type or the non-command path, e.g. `message.send`, `observeMachine`, `read.desktop`. */
   op: string
-  /** Who made it, e.g. `agent-03`, `machine-2`, `desktop-0`. */
+  /** Who made it, e.g. `agent-03`, `person-01`, `machine-2`, `desktop:someone`. */
   writer: string
   ms: number
   /** The error code of every database transaction attempt that failed and was retried or given up. */
@@ -70,7 +70,7 @@ export class Recorder {
   private readonly samples: Sample[] = []
   add(sample: Sample): void { this.samples.push(sample) }
   byOp(): Row[] { return grouped(this.samples, s => s.op) }
-  /** By kind of writer: `worker-03` and `worker-11` are both `worker`, `desktop:someone` is `desktop`. */
+  /** By kind of writer: `agent-03` and `agent-11` are both `agent`, `desktop:someone` is `desktop`. */
   byWriterKind(): Row[] { return grouped(this.samples, s => s.writer.split(':')[0]!.replace(/-\d+$/, '')) }
   byWriter(): WriterRow[] {
     return grouped(this.samples, s => s.writer).map(row => {

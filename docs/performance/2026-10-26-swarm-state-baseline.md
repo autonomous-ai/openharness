@@ -8,7 +8,9 @@ same seeds and lanes, on the finished branch for the "after" numbers.
 
 - **Commands** (from `backend/`, after `npm ci`; see [the bench README](../../backend/integration/bench/README.md)):
   `npm run bench:swarm-state` twice (the mixed, busy Swarm), then `npm run bench:swarm-state -- --lane cross-group`
-  once, one after the other.
+  once, one after the other. These are the v1-v3 bench's commands: its work groups, `--lane cross-group` and the legacy
+  driver went in Swarm v4 S19c. The v4 bench's equivalents are `npm run bench:swarm-state` and
+  `npm run bench:swarm-state -- --lane cross-chat` (goal 1, one writer per conversation), on a Swarm v4.
 - **Code measured:** main at `0d3485bad`. All three runs ran from `b71522ab6` on `bench/swarm-state-baseline`, with a
   clean tree. `backend/src` and `backend/prisma` there are identical to main (`git diff --quiet origin/main HEAD --
   backend/src backend/prisma`), and main has had no change under `backend/` through `c84d2bc2e`. The commits after
