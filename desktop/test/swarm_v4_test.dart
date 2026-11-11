@@ -193,9 +193,12 @@ void main() {
       await tester.tap(key('swarm-tasks-button'));
       await tester.pumpAndSettle();
       expect(key('swarm-task-board'), findsOneWidget);
-      // One GraphQL read for the board, of the project's repository.
-      expect(calls.first.take(2), ['api', 'graphql']);
-      expect(calls.first, containsAll(['owner=autonomous-ai', 'name=lampOS']));
+      // One GraphQL read for the board, of the project's repository. The bar reads the project's goal before it, over
+      // REST as the daemon does.
+      final board = calls.firstWhere((call) => call.contains('graphql'));
+      expect(board.take(2), ['api', 'graphql']);
+      expect(board, containsAll(['owner=autonomous-ai', 'name=lampOS']));
+      expect(calls.first.last, endsWith('/contents/agents/GOAL.md'));
       Finder inBoard(Finder f) =>
           find.descendant(of: key('swarm-task-board'), matching: f);
       // Three columns: nobody has it, it is for an agent, someone is on it.

@@ -52,7 +52,9 @@ COMPONENTS = {"cli": "cli", "tests": "cli", "desktop": "desktop", "tui": "tui", 
 # The Windows pipe's shared proof vectors are read by the desktop app's test as well as the CLI's spec.
 ALSO = {"cli/src/lib/ptyHost/": "pty", "cli/src/lib/ptyHostBackend": "pty",
         "cli/src/lib/terminalBackend.contract.ts": "pty", "tui/vendor/": "pty", "term/": "tui",
-        "cli/src/lib/windows/__fixtures__/pipe-auth-vectors.json": "desktop"}
+        "cli/src/lib/windows/__fixtures__/pipe-auth-vectors.json": "desktop",
+        # The goal file's rows, read by goal.ts and by Desktop's reader alike (desktop/test/swarm_goal_test.dart).
+        "cli/src/superTabs/__fixtures__/goal-rows.json": "desktop"}
 # Each Swarm UI style allowlist is checked by its own component's job (check-ui-style.py --only), so
 # it is that component's input: a PR or main commit that changes it runs (never reuses) that suite.
 # Any other file in scripts/ui-style-allowlist/ stays a shared input.
@@ -125,6 +127,8 @@ NOT_READ = {"cli": ("cli/e2e/",)}
 # test data, or a script run only by hand. {source: (why, {path the scan reports, or a folder "dir/" covering it})}.
 # A folder covers only paths named from the repository root: a relative read ("../../cli/x.ts") is always a read.
 NOT_READS = {
+    # A pull request's files in the merger's tests: named, never opened (CLI Swarm v4 security, 2026-11-10).
+    "cli/src/superTabs/githubMerge.spec.ts": ("test data: a pull request's file paths", {"docs/"}),
     **{source: ("test data: owned-code paths and model names", {"desktop/lib/", "desktop/lib/super_tabs/",
                                                                 "desktop/lib/super_tabs/roster.dart"})
        for source in ("backend/src/superTabs/commands.test.ts", "backend/integration/superTabs.test.ts")},
