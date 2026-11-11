@@ -579,6 +579,61 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     })
   })
 
+  // Swarm plan, step 1, item 6: "Nobody waits on it: a task not taken in 10 minutes is open to any agent with room." A task
+  // waits two deep behind its builder's other work while another builder sits with nothing.
+  describe('a task Harness gave that is not taken in 10 minutes, while a builder has nothing', () => {
+    const gave = (name: string, at: string): Json => ({ body: `Harness, ${at.slice(11, 16)}: for **${name}**: it can start in 30 min.`,
+      author_association: 'MEMBER', user: { login: 'deehw' }, created_at: at })
+    const waiting = () => {
+      const f = setup([issue(14, ['size:m', 'builder:pip', 'status:taken']), issue(15, ['size:m', 'builder:pip'])])
+      f.github.state.applied = true
+      return f
+    }
+
+    it('goes back with a line of why, once, and the next plan gives it to the builder with nothing', async () => {
+      const f = waiting()
+      f.github.state.comments.set(15, [gave('Pip', '2026-11-09T07:20:00Z')])
+      await f.assigner.tick()
+      expect(f.github.sent.filter(s => s.method === 'DELETE').map(s => s.path)).toEqual(['/repos/acme/app/issues/15/labels/builder%3Apip',
+        '/repos/acme/app/issues/15/labels/status%3Ataken'])
+      expect(f.said().filter(([n]) => n === 15).map(([, body]) => String(body).replace(/\d\d:\d\d/, 'HH:MM'))).toEqual(['Harness, HH:MM: Pip has not '
+        + 'started it in 11 minutes, and Juno has nothing to do, so this task goes to the builder who can start it next.'])
+      await f.assigner.tick()
+      expect(f.labelled()).toEqual([[15, 'builder:juno']])
+      // Given back to Pip by a person, or by a later plan, while Juno has nothing again: it stays with Pip.
+      f.github.state.open[1] = issue(15, ['size:m', 'builder:pip'])
+      f.clock.now += 60 * 60_000
+      await f.assigner.tick()
+      expect(f.said().filter(([n, body]) => n === 15 && String(body).includes('has nothing to do'))).toHaveLength(1)
+    })
+
+    it('stays while it is new, given by hand, or while nobody else has nothing; and the read is made only then', async () => {
+      const fresh = waiting()
+      fresh.github.state.comments.set(15, [gave('Pip', '2026-11-09T07:25:00Z')])
+      await fresh.assigner.tick()
+      const hand = waiting()
+      hand.github.state.comments.set(15, [gave('Juno', '2026-11-09T07:00:00Z'), { ...gave('Pip', '2026-11-09T07:00:00Z'), author_association: 'NONE' }])
+      await hand.assigner.tick()
+      const busy = waiting()
+      busy.github.state.open.push(issue(16, ['size:s', 'builder:juno']))
+      busy.github.state.comments.set(15, [gave('Pip', '2026-11-09T07:00:00Z')])
+      await busy.assigner.tick()
+      for (const f of [fresh, hand, busy]) expect(f.github.sent.filter(s => s.method === 'DELETE')).toEqual([])
+      expect(busy.github.sent).toEqual([])
+    })
+
+    // Pip's computer has the GPU #15 needs, and Juno's has none: Juno could not take it.
+    it('stays when the builder with nothing cannot take it', async () => {
+      const resources = { memoryTotalBytes: 64 * GiB, projectDiskFreeBytes: 500 * GiB }
+      const team: Crew = { machines: [{ machineId: 'pc', observation: { resources: { ...resources, gpuPercent: 3 } } }, { machineId: 'mac', observation: { resources } }],
+        builders: [{ ...crew().builders[0]!, machineId: 'pc' }, crew().builders[1]!] }
+      const f = setup([issue(14, ['size:m', 'builder:pip', 'status:taken']), issue(15, ['size:m', 'builder:pip', 'needs:gpu'])], { crew: team })
+      f.github.state.comments.set(15, [gave('Pip', '2026-11-09T07:00:00Z')])
+      await f.assigner.tick()
+      expect(f.github.sent.filter(s => s.method === 'DELETE')).toEqual([])
+    })
+  })
+
   it('takes back the tasks of a builder its person is stopping, says why, and gives them to another', async () => {
     const team: Crew = { ...crew(), builders: [crew().builders[0]!], away: [{ name: 'Juno', label: 'builder:juno', why: 'stopping' }] }
     const f = setup([issue(1, ['size:s', 'builder:juno', 'status:taken']), issue(2, ['size:m', 'builder:juno'])], { crew: team })

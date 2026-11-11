@@ -39,6 +39,9 @@ const FLOW_LABELS: ReadonlyArray<{ name: string; color: string; description: str
   { name: 'p1', color: 'd93f0b', description: 'Next' },
   { name: 'p2', color: 'fbca04', description: 'Later' },
 ]
+/** How long a task Harness gave may wait for its builder, untaken, while another builder of the team has nothing (Swarm plan,
+ *  step 1, item 6: "Nobody waits on it: a task not taken in 10 minutes is open to any agent with room"). */
+const WAIT_TAKE_MS = 10 * 60_000
 /** Pages of a hundred open issues and pull requests read each pass: a list that fills them is said (TOO_MANY_OPEN). */
 const ISSUE_PAGES = 10
 /** How long a reader asked for a head has to read it before another reader is asked too, or, with no other, it again; and
@@ -166,6 +169,7 @@ export class GitHubAssign {
     const short = outOfQuota(read)
     if (short.length < read.problem.builders.length) await this.takeBack(repo, issues, short, undefined, withReaders)
     await this.askQuiet(repo, issues, pulls, crew, withReaders)
+    await this.openWaiting(repo, issues, crew, read, short)
     if (!read.free.size) return
     // Nobody can take a task while every list is full: no plan, so a backlog costs no CPU each minute (the daemon at rest
     // keeps under 1% of a core).
@@ -409,6 +413,33 @@ export class GitHubAssign {
         this.quiet.set(key, { since, askedAt: now })
         this.log(`[super-tab] asked ${task.name} about quiet ${repo}#${task.number}`)
       }
+    }
+  }
+
+  /**
+   * A task Harness gave that its builder has not taken in [WAIT_TAKE_MS], while a builder of the team has nothing given or taken
+   * and could take it, goes back with one line of why, and the next plan gives it to the builder who can start it soonest (Swarm
+   * plan, step 1, item 6: "Nobody waits on it"). Two deep, a builder's second task waited for its first however long that took,
+   * while others sat with nothing. One its PM or a person gave stands: Harness gave it when its own word "for **Name**" is on it.
+   * Once a task and builder in a daemon's life, so a plan or a person that gives it back to that builder is not undone.
+   */
+  private async openWaiting(repo: string, issues: Json[], crew: Crew, read: Read, short: AwayBuilder[]): Promise<void> {
+    const idle = crew.builders.filter(b => (read.open.get(b.id) ?? 0) === 0 && !short.some(away => away.label === b.label))
+    if (!idle.length) return
+    const now = this.now()
+    for (const issue of issues) {
+      const labels = labelNames(issue)
+      const builder = crew.builders.find(b => labels.includes(b.label))
+      if (issue.pull_request || !builder || labels.includes('status:taken') || this.backs.has(`${repo}#${issue.number}:back:${builder.label}`)) continue
+      const task = read.problem.tasks.find(t => t.id === `#${issue.number}`)
+      const taker = idle.find(b => b !== builder && !task?.notBuilders.includes(b.id))
+      if (!task || !taker) continue
+      const comments = await this.reads.current(repo, `/repos/${repo}/issues/${issue.number}/comments?per_page=${PAGE}`, 1)
+      const gave = Math.max(0, ...comments.filter(c => readerKey(ownAsk(c, /^Harness, \d\d:\d\d: for \*\*([^*]+)\*\*: /)?.[1] ?? '\n') === readerKey(builder.name))
+        .map(c => Date.parse(String(c.created_at ?? ''))).filter(Number.isFinite))
+      if (!gave || now - gave < WAIT_TAKE_MS) continue
+      await this.takeBack(repo, [issue], [{ name: builder.name, label: builder.label, why: 'stopping' }],
+        `${builder.name} has not started it in ${Math.round((now - gave) / 60_000)} minutes, and ${taker.name} has nothing to do`)
     }
   }
 
