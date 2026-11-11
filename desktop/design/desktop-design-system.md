@@ -762,8 +762,9 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   another project's PM `PM of web` at the right, neither chosen; then Cancel
   and the blue `Choose`. Choosing sends `project.pm`: the agent becomes the
   PM, the one before keeps running in Your Team, nothing is started, and the
-  PM's own chat opens. A refusal is said under the list. With no agents of
-  theirs, one line: `Start an agent in Your Team first.`
+  PM's own chat opens. A refusal of this choice is said under the list; an
+  empty list shows nothing. While the PM New project started is on its way
+  (its chat waits for it), the row says `Starting…`.
 - **Goal score** (`SwarmGoalScore`, `super_tabs/goal_score.dart`; in the
   gallery; [design note](../../docs/design/2026-11-11-swarm-goal/README.md)).
   A project that states its goal in `agents/GOAL.md` says how far it is in its
@@ -813,8 +814,10 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
 - **Choose PM** (`SwarmPmChoose`, `super_tabs/choose_pm.dart`; in the
   gallery). A project's empty channel with no PM shows its owner one card above
   the agents-only line: one line, `This project has no Product Manager.`, and
-  the blue `Choose PM`, which opens Choose PM (Project menu above). Anyone else
-  sees the empty channel as it is.
+  the blue `Choose PM`, which opens Choose PM (Project menu above); not while
+  a PM New project started is on its way. Anyone else sees the empty channel as
+  it is. A message's `Not sent · this chat has no Lead` in a project's channel
+  offers Choose PM too, never a new agent.
 - **Channel talk** (`super_tabs/channel_talk.dart`; anh Dee, 2026-11-09: "i dont
   see any agent to agent chat"; 2026-11-10: "channel chat here replaces the
   queue", "why not use tag? like in a group chat"). A project's channel is where

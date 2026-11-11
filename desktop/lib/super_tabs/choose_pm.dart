@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../logging/app_log.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
 import '../widgets/desktop_chrome.dart';
@@ -20,8 +21,10 @@ Future<void> showChoosePm(
   String projectId,
 ) {
   String? picked;
+  // Why this dialog's own Choose was refused: another command's failure is not said here.
+  String? refused;
   var busy = false;
-  if (!c.hasPendingAction) c.operationError = null;
+  final opened = DateTime.now();
   return showAppDialog<void>(
     context: context,
     builder: (context) => SuperTabDialogScope(
@@ -37,16 +40,34 @@ Future<void> showChoosePm(
             final agents = snapshot == null
                 ? const <SuperTabAgent>[]
                 : superTabMyAgents(snapshot, c.accountId);
+            // Each project's PM, read once a draw.
+            final leading = <String, String>{
+              for (final project in snapshot?.projects ?? const [])
+                ?snapshot!.leadOf(project.id)?.id: project.name,
+            };
             // Why one of them cannot be this project's PM, or null.
             String? why(SuperTabAgent agent) {
               if (agent.id == current) return 'Current';
-              final leads = snapshot?.leadProjectForAgent(agent.id);
-              return leads == null ? null : 'PM of ${leads.name}';
+              final leads = leading[agent.id];
+              return leads == null ? null : 'PM of $leads';
             }
 
-            if (picked != null && agents.every((a) => a.id != picked)) {
+            // A choice that is gone, or became the PM here or elsewhere, is no choice.
+            if (picked != null &&
+                !agents.any((a) => a.id == picked && why(a) == null)) {
               picked = null;
             }
+            void done(Map<String, dynamic> result) {
+              appLog.info(
+                'super-tabs',
+                'PM chosen in ${DateTime.now().difference(opened).inMilliseconds} ms',
+              );
+              Navigator.pop(context);
+              if (result['chatId'] case final String chat) {
+                unawaited(c.select(chat));
+              }
+            }
+
             return AlertDialog(
               title: const Text('Choose PM'),
               content: SizedBox(
@@ -56,11 +77,6 @@ Future<void> showChoosePm(
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      if (agents.isEmpty)
-                        Text(
-                          'Start an agent in Your Team first.',
-                          style: DesktopChrome.text(),
-                        ),
                       for (final agent in agents)
                         ListTile(
                           key: ValueKey('choose-pm-${agent.id}'),
@@ -84,7 +100,7 @@ Future<void> showChoosePm(
                           },
                           onTap: () => update(() => picked = agent.id),
                         ),
-                      if (c.operationError case final error?) ...[
+                      if (refused case final error?) ...[
                         const SizedBox(height: 12),
                         Text(error, style: DesktopChrome.metadata()),
                       ],
@@ -94,14 +110,14 @@ Future<void> showChoosePm(
                           onPressed: c.saving
                               ? null
                               : () async {
+                                  final pm =
+                                      c.pendingCommand?['type'] == 'project.pm';
                                   final result = await c.retry();
                                   if (!context.mounted || result == null) {
                                     return;
                                   }
-                                  if (result['chatId'] case final String chat) {
-                                    Navigator.pop(context);
-                                    unawaited(c.select(chat));
-                                  }
+                                  // Its own Choose, confirmed: done. Another command's: choose now.
+                                  if (pm) done(result);
                                 },
                           child: const Text('Check again'),
                         ),
@@ -120,7 +136,10 @@ Future<void> showChoosePm(
                       busy || c.saving || c.hasPendingAction || picked == null
                       ? null
                       : () async {
-                          update(() => busy = true);
+                          update(() {
+                            busy = true;
+                            refused = null;
+                          });
                           final result = await c.command({
                             'type': 'project.pm',
                             'projectId': projectId,
@@ -128,13 +147,18 @@ Future<void> showChoosePm(
                           });
                           if (!context.mounted) return;
                           if (result == null) {
-                            update(() => busy = false);
+                            // Said by its code alone: no name or project in the log.
+                            appLog.warn(
+                              'super-tabs',
+                              'PM choice refused (${c.operationErrorCode ?? 'unknown'})',
+                            );
+                            update(() {
+                              busy = false;
+                              refused = c.operationError;
+                            });
                             return;
                           }
-                          Navigator.pop(context);
-                          if (result['chatId'] case final String chat) {
-                            unawaited(c.select(chat));
-                          }
+                          done(result);
                         },
                   child: const Text('Choose'),
                 ),

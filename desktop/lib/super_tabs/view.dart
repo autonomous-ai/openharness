@@ -2678,8 +2678,10 @@ class _SuperTabViewState extends State<SuperTabView>
     if (!c.canWrite || snapshot == null || group.archived) return false;
     if (!snapshot.isProjectLead(group.id)) return false;
     final project = snapshot.projectFor(group.id);
+    // A PM New project is starting (its chat waits for it, `pmChatId`) is the one: nothing to choose meanwhile.
     return project != null &&
         project.ownerId == c.accountId &&
+        project.pmChatId == null &&
         snapshot.leadOf(project.id) == null;
   }
 
@@ -3320,7 +3322,11 @@ class _SuperTabViewState extends State<SuperTabView>
         row(
           'Product Manager',
           'choose-pm',
-          value: leadId == null ? 'None' : c.snapshot!.agentName(leadId),
+          value: leadId != null
+              ? c.snapshot!.agentName(leadId)
+              : project.pmChatId != null
+              ? 'Starting…'
+              : 'None',
         ),
       if (editable && owner) row('Delete Project', 'delete', danger: true),
     ];
@@ -3680,7 +3686,17 @@ class _SuperTabViewState extends State<SuperTabView>
             onResolve: (delivery, resolution) =>
                 unawaited(_resolveDelivery(message, delivery, resolution)),
             onAddLead: () {
-              if (c.selected case final group?) widget.onAddAgent(group);
+              final group = c.selected;
+              if (group == null) return;
+              // A project's channel: its PM is chosen from its owner's agents, never started here.
+              if (c.snapshot?.isProjectLead(group.id) == true) {
+                final project = c.snapshot!.projectFor(group.id);
+                if (project != null) {
+                  unawaited(showChoosePm(context, c, project.id));
+                }
+                return;
+              }
+              widget.onAddAgent(group);
             },
           ),
       ],

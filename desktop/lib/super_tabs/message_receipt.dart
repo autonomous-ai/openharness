@@ -227,10 +227,14 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
         c.selected?.leadId == null &&
         // An agent's own chat has no Lead: its agent takes the message.
         c.selected?.isAgentChat != true) {
-      // A project's owner chooses its PM from their agents (choose_pm.dart),
-      // and talks to it in its own chat.
+      // A project's channel: its owner chooses its PM from their agents
+      // (choose_pm.dart), and nothing new is started.
       title = 'Not sent · this chat has no Lead';
-      actions.add(('Add a Lead', c.canWrite ? widget.onAddLead : null));
+      final channel = c.snapshot?.isProjectLead(c.selectedId) == true;
+      actions.add((
+        channel ? 'Choose PM' : 'Add a Lead',
+        c.canWrite ? widget.onAddLead : null,
+      ));
     } else if (delivery?.status == 'cancelled') {
       title = 'Not sent';
     } else if (delivery?.pending == true && offline) {

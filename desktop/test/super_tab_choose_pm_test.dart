@@ -206,6 +206,22 @@ void main() {
     await finish(tester);
   });
 
+  testWidgets('while the PM New project started is on its way, its channel '
+      'offers nothing to choose and the row says Starting…', (tester) async {
+    final server = swarm(pm: null);
+    (server.state['projects'] as List).cast<Map>().first['pmChat'] = {
+      'id': 'pm-chat',
+    };
+    await mount(tester, server);
+    expect(find.text('This project has no Product Manager.'), findsNothing);
+    await settings(tester);
+    expect(
+      find.descendant(of: row, matching: find.text('Starting…')),
+      findsOneWidget,
+    );
+    await finish(tester);
+  });
+
   testWidgets('a refusal is said in the dialog and the PM stays', (
     tester,
   ) async {
