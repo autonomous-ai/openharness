@@ -116,7 +116,8 @@ export class OpenclawLive {
         this.emit(this.normalizer.push(events))
       },
       onStatus: (status) => this.status(status),
-      onFatal: (reason) => { this.unreadable = true; deps.onFatal(reason) },
+      // Its own state replaces the hold on the agent (core/transcripts/attach.ts): read again, the key is counted anew.
+      onFatal: (reason) => { this.unreadable = true; this.sessionMissing = false; deps.onFatal(reason) },
       onRecovered: () => { this.unreadable = false; deps.onRecovered?.() },
       onAgentHeader: (record) => deps.onHeader?.(record),
       busy: () => this.normalizer.turnOpen,
