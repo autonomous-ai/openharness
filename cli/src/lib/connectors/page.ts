@@ -10,6 +10,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { addCustom, cards, disconnect, Flows, signInFor } from './connect.js'
 import { services, type GatewayRow } from './catalog.js'
+import { connectVia, disconnectVia, elsewhere, type ElsewhereDeps } from './elsewhere.js'
 import { ICONS } from './generated/icons.js'
 import { PAGE_FILES } from './generated/page.js'
 import { ConnectorError, locked, readPrivate, validateCode, writePrivate, type Store } from './store.js'
@@ -36,7 +37,12 @@ export class PageServer {
   private offeredAt = 0
   origin = ''
 
-  constructor(readonly vault: Store, private readonly env: NodeJS.ProcessEnv = process.env) {
+  constructor(
+    readonly vault: Store,
+    private readonly env: NodeJS.ProcessEnv = process.env,
+    /** How Claude Code and Codex are found and asked (elsewhere.ts); a spec's fakes. */
+    private readonly engines: ElsewhereDeps = {},
+  ) {
     this.flows = new Flows(vault, env)
     this.server = createServer((request, response) => {
       this.handle(request, response).catch(() => { if (!response.headersSent) this.reply(response, 500, { error: 'Connections failed.' }) })
@@ -91,11 +97,13 @@ export class PageServer {
       if (!/^[0-9a-f]{64}$/.test(nonce)) { this.reply(response, 400, { error: 'Invalid identity challenge.' }); return }
       this.reply(response, 200, { proof: identityProof(this.key, nonce) }); return
     }
-    if (path === '/api/connections' || path.startsWith('/api/flows/')) {
+    if (path === '/api/connections' || path === '/api/elsewhere' || path.startsWith('/api/flows/')) {
       if (!this.authenticated(request)) { this.reply(response, 403, { error: 'Open harness connections again to continue.' }); return }
       this.lastRequest = Date.now()
       try {
-        if (path === '/api/connections') {
+        // Gmail, Calendar and Drive through this computer's Claude Code or Codex (elsewhere.ts).
+        if (path === '/api/elsewhere') this.reply(response, 200, await elsewhere(this.engines))
+        else if (path === '/api/connections') {
           const page = cards(this.vault, await this.gatewayOffers())
           const connections = page.connections.map(card => ({ ...card, icon: ICONS[card.connector] ? `/icons/${card.connector}` : '' }))
           this.reply(response, 200, { ...page, connections })
@@ -139,6 +147,10 @@ export class PageServer {
         const code = validateCode(data.connector)
         await disconnect(this.vault, code, this.env)
         this.reply(response, 200, { connector: code, state: 'not_connected' })
+      } else if (path === '/api/connect_via') {
+        this.reply(response, 200, await connectVia(data.connector, data.via, this.engines))
+      } else if (path === '/api/disconnect_via') {
+        this.reply(response, 200, await disconnectVia(data.connector, data.via, this.engines))
       } else this.reply(response, 404, { error: 'Not found.' })
     } catch (error) {
       this.reply(response, error instanceof ConnectorError ? 400 : 503, { error: error instanceof ConnectorError ? error.message : 'Connection unavailable. Try again.' })

@@ -43,3 +43,9 @@ dialog input,textarea{width:100%;padding:10px 12px;background:#141414;color:inhe
 details{margin-top:14px}summary{cursor:pointer;color:#a3a3a3;font-size:14px}
 .actions{display:flex;justify-content:flex-end;gap:10px;margin-top:20px}.error{color:#f1ac95;min-height:22px;margin-top:10px}
 @media(max-width:560px){main{padding:20px 16px}.toolbar{flex-wrap:wrap}#search{flex-basis:100%}.grid{grid-template-columns:1fr}}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.way{display:flex;gap:12px;align-items:flex-start;justify-content:space-between;padding:12px 0;border-bottom:1px solid #2a2a2a}
+.way-text{display:flex;flex-direction:column;gap:2px;font-size:14px}.way-text strong{font-size:15px}
+.way-state{font-size:12px;font-weight:400;color:#9fb0ff;margin-left:8px}.way-state.warn{color:#ffd28a}
+.ways-note{margin-top:12px!important}
+.way-text .hint{text-align:left}
