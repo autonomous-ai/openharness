@@ -449,7 +449,10 @@ export class GitHubAssign {
       // last waited is of an earlier time its pieces closed.
       const since = new Date(Math.floor((now - PIECES_SAID_MS) / 3_600_000) * 3_600_000).toISOString()
       const comments = await this.reads.current(repo, `/repos/${repo}/issues/${issue.number}/comments?since=${since}&per_page=${PAGE}`, 1)
-      if (!comments.some(c => Date.parse(String(c.created_at ?? '')) >= (this.waited.get(key) ?? 0) && ownAsk(c, /^Harness, \d\d:\d\d, to \*\*[^*]+\*\*: (.*)$/m)?.[1]?.startsWith(line))) {
+      const said = comments.find(c => Date.parse(String(c.created_at ?? '')) >= (this.waited.get(key) ?? 0) && ownAsk(c, /^Harness, \d\d:\d\d, to \*\*[^*]+\*\*: (.*)$/m)?.[1]?.startsWith(line))
+      // Said before a restart: quiet from that word, which GitHub's list may not show as the task's time yet.
+      if (said) this.waited.set(key, Date.parse(String(said.created_at)))
+      else {
         // Not quiet while it is being told, and from this word on once it is.
         this.waited.set(key, now)
         const reply = await this.deps.send('POST', `/repos/${repo}/issues/${issue.number}/comments`,

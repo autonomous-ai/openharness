@@ -850,6 +850,14 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     said(20)
     await f.make().tick()
     expect(told()).toHaveLength(1)
+    // Said twenty hours ago and nothing since, the task is quiet from that word, and its builder is asked, as of any task.
+    const asks = () => f.said().filter(([, body]) => String(body).includes('Are you still on it?')).length
+    expect(asks()).toBe(1)
+    // Found said an hour ago, with GitHub's list still showing the task's older time: quiet from that word, not asked now.
+    f.github.state.open[0]!.updated_at = new Date(f.clock.now - 9 * HOUR).toISOString()
+    said(1)
+    await f.make().tick()
+    expect(asks()).toBe(1)
     // A stranger's comment in the same words is not Harness's, and one of two days ago is not looked back to: it is said.
     for (const [hoursAgo, association] of [[1, 'NONE'], [48, 'MEMBER']] as const) {
       said(hoursAgo, association)
