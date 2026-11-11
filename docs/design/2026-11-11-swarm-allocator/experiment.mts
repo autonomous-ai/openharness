@@ -33,8 +33,10 @@ type Info = 'fixed' | 'learned' | 'oracle'
 type Policy = 'solver' | 'solver1' | 'dispatch' | 'fifo' | 'priced0' | 'priced4' | 'queue'
 
 const PARTS = ['api', 'desktop', 'cli', 'docs'], MIX: Record<Size, number> = { s: 0.5, m: 0.35, l: 0.15 }
-// CORES=8 lets two large tasks share a machine, as the product does: it plans with a machine's cores (8 when unreported) but
-// checks none when a task is taken, so at 6 this model holds the solver's builder to a rule the product does not enforce.
+// The cores a size holds of its machine here: what the product's plan counted until 2026-11-12 (crew.ts SIZES). It counts
+// none since (docs/research/2026-11-11-agents-share-cpu.md), which is CORES=8 here: two builders a machine hold 8 at most, so
+// nothing is held back. At 6 two large tasks cannot share a machine.
+const CPU: Record<Size, number> = { s: 1, m: 2, l: 4 }
 const CORES = Number(process.env.CORES ?? 6), TRUE_HOME = 0.6, TRUE_AWAY = Number(process.env.AWAY ?? 1.2)
 
 function rng(seed: number) { let a = seed >>> 0; return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a)
@@ -81,8 +83,8 @@ function run(seed: number, sigma: number, mislabel: number, n: number, policy: P
   const expected = (t: Task, b: Builder) => info === 'oracle' ? truly(t, b) : minutes(t) * factor(t, b)
   const done = (t: Task, now: number) => t.end !== undefined && t.end <= now
   const eligible = (t: Task, now: number) => t.arrive <= now && !t.builder && t.deps.every(d => done(byId.get(d)!, now))
-  const used = (machine: string) => builders.filter(b => b.machine === machine && b.current).reduce((sum, b) => sum + SIZES[b.current!.label].cpu, 0)
-  const fits = (t: Task, b: Builder) => used(b.machine) + SIZES[t.label].cpu <= CORES
+  const used = (machine: string) => builders.filter(b => b.machine === machine && b.current).reduce((sum, b) => sum + CPU[b.current!.label], 0)
+  const fits = (t: Task, b: Builder) => used(b.machine) + CPU[t.label] <= CORES
   let last: Choice | undefined, solves = 0, idle = 0, now = 0, steps = 0, asked = 0
   for (; tasks.some(t => !done(t, now)) && now < 60 * 24 * 7; now++) {
     for (const b of builders) if (b.current && b.current.end! <= now) b.current = null
@@ -97,7 +99,7 @@ function run(seed: number, sigma: number, mislabel: number, n: number, policy: P
         backs.add(`${t.id}:${b.id}`); b.queue.splice(b.queue.indexOf(t), 1); delete t.builder; delete t.given; open.push(t)
       }
       if (open.length && builders.some(b => (b.current ? 1 : 0) + b.queue.length < deep)) {
-        const plan = (t: Task, pinned?: string): PlanTask => ({ id: t.id, minutes: Math.ceil(minutes(t)), needs: { cpu: SIZES[t.label].cpu, ram: 0, disk: 0 }, spend: {}, floor: 0, kind: 'build',
+        const plan = (t: Task, pinned?: string): PlanTask => ({ id: t.id, minutes: Math.ceil(minutes(t)), needs: { cpu: CPU[t.label], ram: 0, disk: 0 }, spend: {}, floor: 0, kind: 'build',
           part: t.part, weight: t.w, ready: 0, deps: [], independentOf: [], notBuilders: [], files: [], ...(pinned ? { pinned, queuedOn: pinned } : {}) })
         const problem: Problem = { now: 0, objective: 'weighted', switchCost: 30, accounts: [],
           machines: [...new Set(builders.map(b => b.machine))].map(id => ({ id, capacity: { cpu: CORES, ram: 1, disk: 1 } })),
