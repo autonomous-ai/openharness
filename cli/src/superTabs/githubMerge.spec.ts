@@ -8,7 +8,7 @@ type Json = Record<string, unknown>
 const HEAD = 'f6edb44c0ffee0000000000000000000000000ab'
 const OLD = 'a1b2c3d4e5f60000000000000000000000000000'
 const comment = (body: string, extra: Json = {}): Json => ({ body, author_association: 'MEMBER', user: { login: 'deehw' }, created_at: '2026-11-09T12:00:00Z', ...extra })
-/** A pull request of the repository's own branch, as GitHub lists it: not a fork's, which the train leaves to merge alone. */
+/** A pull request of the repository's own branch, as GitHub lists it. */
 const pull = ({ head, ...extra }: Json = {}): Json => ({ number: 4, draft: false, base: { ref: 'main' }, labels: [{ name: 'builder:pip' }], body: 'Closes #2', ...extra,
   head: { sha: HEAD, ref: 'pip/2', repo: { full_name: 'acme/app' }, ...head as Json } })
 

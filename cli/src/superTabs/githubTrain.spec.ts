@@ -35,6 +35,7 @@ function fakeRepo(now: () => number) {
     /** Heads that conflict when merged into a train, heads GitHub does not take into one, and heads main holds already. */
     conflicts: new Set<string>(),
     untaken: new Set<string>(),
+    untakenAnswer: 404,
     inMain: new Set<string>(),
     settings: {} as Json,
     /** Answers a write in GitHub's place, which then changes nothing: a test refuses a call here. */
@@ -111,7 +112,7 @@ function fakeRepo(now: () => number) {
       state.beforeMerge?.(branch)
       const before = state.branches.get(branch)
       if (!before || !state.commits.has(head)) return reply(404)
-      if (state.untaken.has(head)) return reply(404)
+      if (state.untaken.has(head)) return reply(state.untakenAnswer)
       if (state.conflicts.has(head)) return reply(409)
       if (state.inMain.has(head)) return reply(204, null)
       const merged = sha(`${before}+${head}`), under = state.commits.get(before)
@@ -378,6 +379,68 @@ describe('the ready pull requests ride a train (githubTrain.ts)', () => {
     expect(f.writes().filter(w => !w.startsWith('POST /merges') && !w.includes('/git/refs'))).toEqual(['PUT /pulls/5/merge', 'POST /issues/5/comments'])
     await f.tick()
     expect(f.carried()).toEqual([[4, 6]])
+  })
+
+  // Review of #3974. Only "no such head" (404) is GitHub not taking a fork's head: a 422 is its answer to a request it will
+  // not validate or to too many at once, and would have merged every later fork on its own, off the train.
+  it('stops, and merges no fork on its own, on a 422 for its head', async () => {
+    const f = setup()
+    f.add(4); const fork = f.add(5, { fork: true })
+    f.state.untaken.add(fork.head.sha)
+    f.state.untakenAnswer = 422
+    await f.settle()
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual([])
+    expect(f.logged()).toContainEqual(expect.stringContaining('TRAIN_REFUSED acme/app: GitHub answered POST /merges with 422.'))
+  })
+
+  // The same 404 answers a merge into a branch that is gone. The train's own branch deleted under the build is no word on
+  // the fork's head: nothing merges on its own, and the next pass builds again.
+  it('merges no fork on its own when the 404 is for the train\'s own branch, deleted under the build', async () => {
+    const f = setup()
+    f.add(4, { fork: true }); f.add(5, { fork: true }); f.add(6, { fork: true })
+    let merges = 0
+    f.state.beforeMerge = branch => { if (++merges === 2) f.state.branches.delete(branch) }
+    await f.settle()
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual([])
+    expect(f.trains()).toEqual([])
+    f.state.beforeMerge = null
+    await f.tick()
+    expect(f.carried()).toEqual([[4, 5, 6]])
+  })
+
+  // GitHub took its head once, into the train that went red: refused now, it is not merged on the checks that train failed.
+  it('merges no fork on its own that a red train carried at this head', async () => {
+    const f = setup()
+    const fork = f.add(4, { fork: true }); f.add(5)
+    await f.settle()
+    await f.ends(FAILED)
+    f.state.untaken.add(fork.head.sha)
+    await f.tick()
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual([])
+    expect(f.logged()).toContainEqual(expect.stringContaining('TRAIN_REFUSED acme/app: GitHub answered POST /merges with 404.'))
+  })
+
+  it('asks for no more merges once a fork\'s head is refused: no train is opened that pass', async () => {
+    const f = setup()
+    const fork = f.add(4, { fork: true }); f.add(5); f.add(6)
+    f.state.untaken.add(fork.head.sha)
+    await f.settle()
+    expect(f.state.sent.filter(s => s.path === '/merges').map(s => s.body.head)).toEqual([fork.head.sha])
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual(['PUT /pulls/4/merge'])
+  })
+
+  // A fork GitHub takes neither way was tried every 30 seconds for good: a branch made, a merge asked, the branch deleted
+  // and a merge refused each time, on the PM's person's own login.
+  it('tries a fork GitHub takes neither into a train nor on its own with the merger\'s waits, not every pass', async () => {
+    const f = setup()
+    const fork = f.add(4, { fork: true }); f.add(5)
+    f.state.untaken.add(fork.head.sha)
+    f.state.answer = (method, path) => method === 'PUT' && path === '/pulls/4/merge' ? { status: 405 } : undefined
+    await f.settle()
+    expect(f.logged()).toContainEqual(expect.stringContaining('FORK_REFUSED acme/app: GitHub takes #4 neither into a train nor on its own'))
+    const before = f.writes().filter(w => w === 'POST /git/refs').length
+    for (let pass = 0; pass < 20; pass++) await f.tick()
+    expect(f.writes().filter(w => w === 'POST /git/refs').length - before).toBeLessThan(6)
   })
 
   it('stops, and merges nothing on its own, when GitHub does not take the head of a pull request of this repository', async () => {
