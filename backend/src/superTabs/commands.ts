@@ -485,9 +485,12 @@ export function worksInProjectChat(state: SuperTabState, group: Conversation, ag
   return state.conversations.some(c => c.assignment?.agentId === agentId && !c.archived && c.id !== group.id && !c.kind && !c.audience
     && !['lost', 'stopped', 'cancelled'].includes(c.assignment.status) && groupProject(state, c).id === project.id)
 }
-/** Whether [userId] is the person whose Personal Swarm [state] is: its special cases are theirs alone, and anyone they invite
- *  takes part as in any Swarm (anh Dee 2026-11-11). They go with the channel exemptions and lead.claim. */
-const personalOwner = (state: SuperTabState, userId: string): boolean => isPersonalSwarm(state) && userId === state.ownerId
+/** Whether [userId] is the person whose Personal Swarm [state] is, while they are its only person: its special cases are theirs
+ *  alone, and once they invite someone it is a Swarm like any other for everyone (anh Dee 2026-11-11), as their Desktop takes it
+ *  (desktop personal_projects.dart eligible: no Lead start once anyone else is in it, so nothing may wait for one). They go with
+ *  the channel exemptions and lead.claim. */
+const personalOwner = (state: SuperTabState, userId: string): boolean =>
+  userId === state.ownerId && state.people.length === 1 && isPersonalSwarm(state)
 
 /** When a person's last words go in a project's channel: a Desktop from before #3965's release (2026-11-11) posts New project's
  *  opening request and a Personal Swarm's first message there, and the Desktop of #3965 sends both to the PM's own 1:1 chat,
@@ -1017,7 +1020,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // Only a Personal Swarm: its person's Desktop starts the Lead on their own machine, where their project's folder is. A
       // Team Swarm's project gets its coordinator from a person who chooses it (task #2633).
       if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'A person starts a project\'s coordinator.', 403)
-      if (!personalOwner(state, actor.userId)) fail('PERSONAL_SWARM_ONLY', 'Only a Personal Swarm\'s own person starts a project\'s coordinator on their first message.', 409)
+      if (!personalOwner(state, actor.userId)) fail('PERSONAL_SWARM_ONLY', 'Only your own Personal Swarm starts a PM this way.', 409)
       if (state.paused) fail('PAUSED', 'New work is paused in this Swarm.')
       const project = manageProject(state, actor, command.projectId)
       const home = conversation(state, project.leadConversationId)
