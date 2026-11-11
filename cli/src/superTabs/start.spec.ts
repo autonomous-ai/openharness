@@ -94,6 +94,29 @@ describe('a join the server refused', () => {
   })
 })
 
+describe('where a start\'s disk is read', () => {
+  const capacityAsked = (f: ReturnType<typeof fixture>) => f.request.mock.calls.find(c => c[0] === 'super_tabs' && (c[1] as { action?: string }).action === 'capacity')![1]
+  // A Regular agent works in a folder made for it under the worktrees folder (agentFolder.ts). The folder the backend names
+  // (machines.ts homeFolder) only admits it, and nothing has made that one since the Buddy went: read there, every Regular agent's
+  // first start was refused, "Project disk space could not be verified" (the rehearsal, 2026-11-11).
+  it('reads a Regular agent\'s disk where its own folder is made, not at the folder that admits it', async () => {
+    const f = fixture()
+    Object.assign(f.start.request, { regular: true, worktree: false, cwd: '/swarm/tab/.buddy-person' })
+    await inspectCapacity(await f.open() as never, f.start.request)
+    expect(capacityAsked(f)).toMatchObject({ cwd: '/swarm/tab/.buddy-person', worktree: true })
+  })
+  it('reads a start in its own folder there, and a worktree\'s where worktrees are made, as before', async () => {
+    const f = fixture()
+    Object.assign(f.start.request, { worktree: false, cwd: '/repo' })
+    await inspectCapacity(await f.open() as never, f.start.request)
+    expect(capacityAsked(f)).toMatchObject({ cwd: '/repo', worktree: false })
+    f.request.mockClear()
+    Object.assign(f.start.request, { worktree: true })
+    await inspectCapacity(await f.open() as never, f.start.request)
+    expect(capacityAsked(f)).toMatchObject({ cwd: '/repo', worktree: true })
+  })
+})
+
 describe('Swarm permission mode', () => {
   it('admits installed Claude when an API environment is opaque to the vendor login probe', async () => {
     const f = fixture(), request = f.request.getMockImplementation()!
@@ -316,6 +339,10 @@ describe('which branch a worktree starts from', () => {
     const folder = agentFolderFor(projectsRoot(), 'start')
     expect(payload).toMatchObject({ cwd: folder })
     expect(existsSync(join(folder, AGENT_FOLDER_MARK))).toBe(true)
+  })
+  it('is a worktree, not a folder of its own, when a worktree start names a temporary folder', async () => {
+    const [payload] = await created(request => { request.cwd = join(tmpdir(), 'claude-501', '-Users-mac', 'abc', 'scratchpad') })
+    expect(payload).toMatchObject({ projectSource: 'worktree', branchName: 'super-tab/start' })
   })
   // Task #4116 (Swarm v3): a Regular agent starts in no project, in a permanent folder of its own Harness makes and marks.
   it('is a permanent folder of its own for a Regular agent, never the folder the request names', async () => {
