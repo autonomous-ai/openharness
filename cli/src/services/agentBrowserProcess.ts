@@ -97,7 +97,13 @@ export function agentBrowserCoreApi(dataDir: string, ask: Ask, deliveries: Retur
 export function runAgentBrowserService(options: AgentBrowserServiceOptions): ServiceProcess {
   let core: CoreConnection | null = null
   const ask: Ask = (query, payload) => (core ? core.query(query, payload) : Promise.reject(new Error('no core to ask')))
-  const deliveries = turnsLink(ask)
+  const link = turnsLink(ask)
+  // A line asked of no core never left this process: heard `rejected`, so it is tried again (agentBrowser/notices.ts),
+  // not `unknown`, which counts as perhaps typed and is never typed again.
+  const deliveries: ReturnType<typeof turnsLink> = { ...link, turns: { ...link.turns, deliver: (agentId, text, deliveryId, opts) => {
+    if (core) return link.turns.deliver(agentId, text, deliveryId, opts)
+    queueMicrotask(() => link.heard({ kind: 'delivery', event: { deliveryId, sessionId: agentId, state: 'rejected', reason: 'no_core' } }))
+  } } }
   const ports: Pick<CorePorts, 'agentBrowser'> = { agentBrowser: null }
   /** What each browser last showed: a new core, or the same one after this link dropped, hears all of it again. */
   const shown = new Map<string, BrowserState>()
