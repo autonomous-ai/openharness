@@ -597,9 +597,17 @@ class ProjectSidebar extends StatelessWidget {
         _ => null,
       },
     );
-    // Delete is one right-click away, for its person alone (Swarm v4: only its person stops an agent). A project's PM
-    // stays until its project goes.
-    if (agent.contributorId != controller.accountId || !controller.canWrite) {
+    // Pause and Delete are one right-click away and nowhere else (anh Dee, 2026-11-11: "make it subtle. right click you see
+    // pause"). Pause for its person, its machine's owner and the Swarm's owner, who leads the work it would be given (backend
+    // agent.pause); never a project's PM, which gives the work. Delete for its person alone (Swarm v4: only its person stops an
+    // agent). A project's PM stays until its project goes.
+    final mine = agent.contributorId == controller.accountId;
+    final pausable =
+        agent.kind != 'pm' &&
+        (mine ||
+            agent.machineOwnerId == controller.accountId ||
+            controller.isOwner);
+    if (!controller.canWrite || (!mine && !pausable)) {
       return row;
     }
     final kept = snapshot.leadProtectionReason(agent.id);
@@ -610,15 +618,32 @@ class ProjectSidebar extends StatelessWidget {
             context: context,
             at: event.globalPosition,
             children: (close) => [
-              AppMenuItem(
-                label: 'Delete',
-                detail: kept,
-                leadingSlot: false,
-                onPressed: kept == null ? () => close('delete') : null,
-              ),
+              if (pausable)
+                AppMenuItem(
+                  label: agent.paused ? 'Resume' : 'Pause',
+                  leadingSlot: false,
+                  onPressed: () => close('pause'),
+                ),
+              if (mine)
+                AppMenuItem(
+                  label: 'Delete',
+                  detail: kept,
+                  leadingSlot: false,
+                  onPressed: kept == null ? () => close('delete') : null,
+                ),
             ],
           );
-          if (choice == 'delete' && context.mounted) {
+          if (!context.mounted) return;
+          if (choice == 'pause') {
+            final failed = await controller.pauseAgent(
+              agent.id,
+              paused: !agent.paused,
+            );
+            if (failed != null && context.mounted) {
+              ScaffoldMessenger.maybeOf(context)
+                  ?.showSnackBar(SnackBar(content: Text(failed)));
+            }
+          } else if (choice == 'delete') {
             await deleteSwarmAgent(context, controller, agent, name, app: app);
           }
         },
