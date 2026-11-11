@@ -4,8 +4,8 @@ import { join } from 'node:path'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { TurnEnd } from '../core/api.js'
 import type { WatchedAgent } from './githubMentions.js'
-import type { GitHubGet } from './githubRest.js'
-import { NEXT_SETTLE_MS, NEXT_TIMES, NextThing } from './nextThing.js'
+import type { GitHubGet, GitHubSend } from './githubRest.js'
+import { IDLE_ASK_MS, IDLE_BACK_MS, NEXT_SETTLE_MS, NEXT_TIMES, NextThing } from './nextThing.js'
 import { SuperTabHostError } from './wire.js'
 
 type Json = Record<string, unknown>
@@ -57,7 +57,15 @@ function setup(options: { items?: Json[]; working?: boolean | null; watched?: Wa
   const log = vi.fn()
   const file = options.file ?? join(root, `next-${files++}.json`)
   const owed = vi.fn((_agent: WatchedAgent, _repo: string) => state.owed)
-  const make = () => new NextThing({ onEnd, watched: async () => state.watched, owed, working: async () => state.working, get, tell, say, file, log })
+  // What it writes to GitHub, each answered as [refuse] says by its path's end, else 200.
+  const refuse = new Map<string, number>()
+  const written: string[] = []
+  const send = vi.fn<GitHubSend>(async (method, path, body) => {
+    written.push(`${method} ${path}${body ? ` ${JSON.stringify(body)}` : ''}`)
+    const status = [...refuse].find(([end]) => path.endsWith(end))?.[1] ?? 200
+    return { status, etag: null, body: null, resetAt: null }
+  })
+  const make = () => new NextThing({ onEnd, watched: async () => state.watched, owed, working: async () => state.working, get, send, tell, say, file, log })
   let turns = 0
   /** A turn of [harnessId] ending, then the settle after it. */
   const end = async (extra: Partial<TurnEnd> = {}) => {
@@ -66,7 +74,7 @@ function setup(options: { items?: Json[]; working?: boolean | null; watched?: Wa
     await vi.advanceTimersByTimeAsync(NEXT_SETTLE_MS)
   }
   const told = () => tell.mock.calls.map(([, , text]) => text)
-  return { state, listeners, onEnd, calls, tell, say, log, file, owed, make, end, told, next: make() }
+  return { state, listeners, onEnd, calls, tell, say, log, file, owed, send, written, refuse, make, end, told, next: make() }
 }
 
 describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => {
@@ -237,6 +245,92 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     f.next.stop()
   })
 
+  // "An agent with work that is idle 20 minutes is asked once; at an hour its person is told and its work is free to take."
+  it('asks an agent idle 20 minutes with a task in hand once, and at the hour tells its person and gives the task back', async () => {
+    const f = setup({ items: [item(14, 'Add the export', ['status:taken']), item(20, 'Next one')] })
+    f.next.start()
+    await f.end()
+    expect(f.tell).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(IDLE_ASK_MS)
+    expect(f.told()).toEqual(['You hold acme/app#14 (Add the export) and have done nothing on it for 20 minutes: go on with it, or say on it what '
+      + 'holds it: gh issue view 14 --repo acme/app'])
+    await vi.advanceTimersByTimeAsync(IDLE_BACK_MS - IDLE_ASK_MS)
+    expect(f.written.slice(0, 3)).toEqual(['DELETE /repos/acme/app/issues/14/labels/status%3Ataken', 'DELETE /repos/acme/app/issues/14/labels/builder%3Apip',
+      'DELETE /repos/acme/app/issues/14/labels/status%3Ataken'])
+    expect(f.written[3]).toMatch(/^POST \/repos\/acme\/app\/issues\/14\/comments \{"body":"Harness, \d\d:\d\d: Pip held it with nothing done for an hour, so this task goes to the builder who can start it next\."\}$/)
+    expect(f.say.mock.calls.map(([, , text]) => text)).toEqual(['Pip held acme/app#14 (Add the export) with nothing done on it for an hour, so Harness '
+      + 'gave it back for the builder who can start it next.'])
+    // Nothing more: the watch ends with it.
+    await vi.advanceTimersByTimeAsync(IDLE_BACK_MS)
+    expect(f.tell).toHaveBeenCalledTimes(1)
+    f.next.stop()
+  })
+
+  it('starts the 20 minutes over at each turn of its, and says nothing while it works or once the task moved on', async () => {
+    const f = setup({ items: [item(14, '', ['status:taken'])] })
+    f.next.start()
+    await f.end()
+    await vi.advanceTimersByTimeAsync(15 * 60_000)
+    await f.end({ aborted: true })
+    await vi.advanceTimersByTimeAsync(15 * 60_000)
+    expect(f.tell).not.toHaveBeenCalled()
+    // A turn that ran on: its end will look again.
+    await f.end()
+    f.state.working = true
+    await vi.advanceTimersByTimeAsync(IDLE_ASK_MS)
+    expect(f.tell).not.toHaveBeenCalled()
+    // Its pull request opened since, or the task is not taken now: nothing.
+    f.state.working = false
+    for (const items of [[item(14, '', ['status:taken']), item(31, 'Its pull request', [], true)], [item(14, '')]]) {
+      await f.end()
+      f.state.items = items
+      await vi.advanceTimersByTimeAsync(IDLE_ASK_MS)
+      f.state.items = [item(14, '', ['status:taken'])]
+    }
+    expect(f.told().filter(text => text.startsWith('You hold'))).toEqual([])
+    // Asked of an untitled task, by its number; a stop ends the watch.
+    await f.end()
+    await vi.advanceTimersByTimeAsync(IDLE_ASK_MS)
+    expect(f.told().at(-1)).toBe('You hold acme/app#14 and have done nothing on it for 20 minutes: go on with it, or say on it what holds it: gh issue view 14 --repo acme/app')
+    f.next.stop()
+    await vi.advanceTimersByTimeAsync(IDLE_BACK_MS)
+    expect(f.say).not.toHaveBeenCalled()
+  })
+
+  it('watches the oldest of the tasks it holds, and says an ask that could not be typed by its code', async () => {
+    const f = setup({ items: [item(16, 'Later', ['status:taken']), { number: 14, labels: [{ name: 'builder:pip' }, { name: 'status:taken' }] }] })
+    f.tell.mockRejectedValueOnce(new SuperTabHostError('TIMEOUT', 'No answer.', 503))
+    f.next.start()
+    await f.end()
+    await vi.advanceTimersByTimeAsync(IDLE_ASK_MS)
+    expect(f.tell.mock.calls[0]![2]).toMatch(/^You hold acme\/app#14 and have done nothing/)
+    expect(f.log).toHaveBeenCalledWith('[super-tab] next thing of agent pip: TIMEOUT.')
+    f.next.stop()
+  })
+
+  it('says a give-back GitHub refuses, or a mark it kept, by its status, and a read that fails by its code', async () => {
+    const f = setup({ items: [item(14, 'Add the export', ['status:taken'])] })
+    f.refuse.set('labels/builder%3Apip', 403)
+    f.next.start()
+    await f.end()
+    await vi.advanceTimersByTimeAsync(IDLE_BACK_MS)
+    expect(f.log).toHaveBeenCalledWith('[super-tab] next thing of agent pip: acme/app#14 not given back: GitHub answered 403.')
+    expect(f.say).not.toHaveBeenCalled()
+    f.refuse.clear()
+    let clears = 0
+    f.send.mockImplementation(async (method, path) => ({ status: method === 'DELETE' && path.endsWith('status%3Ataken') && clears++ === 1 ? 500 : 200,
+      etag: null, body: null, resetAt: null }))
+    await f.end()
+    await vi.advanceTimersByTimeAsync(IDLE_BACK_MS)
+    expect(f.log).toHaveBeenCalledWith('[super-tab] next thing of agent pip: acme/app#14 kept status:taken: GitHub answered 500.')
+    expect(f.say).toHaveBeenCalledTimes(1)
+    await f.end()
+    f.state.down = true
+    await vi.advanceTimersByTimeAsync(IDLE_ASK_MS)
+    expect(f.log).toHaveBeenCalledWith('[super-tab] next thing of agent pip: UNREACHABLE.')
+    f.next.stop()
+  })
+
   it('waits for its turns to settle: two ends close together are one look', async () => {
     const f = setup()
     f.next.start()
@@ -299,7 +393,7 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     let answer: (() => void) | null = null
     const slow = new Promise<void>(resolve => { answer = resolve })
     const watched = f.state.watched
-    const next = new NextThing({ onEnd: f.onEnd, watched: async () => { await slow; return watched }, owed: () => [], working: async () => false,
+    const next = new NextThing({ onEnd: f.onEnd, watched: async () => { await slow; return watched }, owed: () => [], working: async () => false, send: f.send,
       get: async () => ({ status: 200, etag: null, body: f.state.items, resetAt: null }), tell: f.tell, say: f.say, file: f.file, log: f.log })
     next.start()
     await f.end()
@@ -323,7 +417,7 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
   it('says a failure to read its agents by the terminal, in the daemon\'s log when it has none of its own', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const f = setup()
-    const next = new NextThing({ onEnd: f.onEnd, watched: async () => { throw new Error('offline') }, owed: () => [], working: async () => false,
+    const next = new NextThing({ onEnd: f.onEnd, watched: async () => { throw new Error('offline') }, owed: () => [], working: async () => false, send: f.send,
       get: async () => ({ status: 200, etag: null, body: [], resetAt: null }), tell: f.tell, say: f.say, file: f.file })
     next.start()
     await f.end()
