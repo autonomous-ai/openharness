@@ -125,19 +125,24 @@ class SuperTabMessageText extends StatelessWidget {
     final read =
         (mentions.isNotEmpty || addressed.isNotEmpty) && text.contains('@');
     final said = read ? tagsIn(text) : const <String>[];
-    // Read once, and only for a name of several words.
+    // Read once, and only for a name of several words or an agent the post is to.
     String? words;
+    String prose() => words ??= _prose(text);
     bool tags(String name) =>
         said.any((tag) => _says(tag, name, addresses)) ||
-        read && _Mention.whole(name)?.hasMatch(words ??= _prose(text)) == true;
+        read && _Mention.whole(name)?.hasMatch(prose()) == true;
     bool tagged(String name) {
       final stored = storedNames[name];
       return tags(name) || stored != null && tags(stored);
     }
 
     final unsaid = [
-      for (final name in [...mentions, ...addressed])
+      for (final name in mentions)
         if (!tagged(name)) '@$name',
+      // An agent the post's words name as a teammate writes a name ("thanks Kai, confirmed") is addressed already: its tag
+      // besides read "@Kai thanks Kai" (the rehearsal's channel, 2026-11-11).
+      for (final name in addressed)
+        if (!tagged(name) && !_Mention.writtenIn(text, name, prose)) '@$name',
     ];
     final body = MarkdownBody(
       data: withTags(unsaid, text),
@@ -292,6 +297,13 @@ final _fence = RegExp(r'^ {0,3}(`{3,}|~{3,})');
 final _codeSpan = RegExp(r'(?<!`)(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)');
 final _linkTarget = RegExp(r'\]\([^)\]]*\)');
 final _bareLink = RegExp(r'\b(?:https?://|www\.)\S+', caseSensitive: false);
+
+/// What [_prose] blanks can only be where one of these is: a text with none is its own prose.
+final _mayBlank = RegExp(
+  r'[`~]|\]\(|https?://|www\.|^(?: {4}|\t)',
+  caseSensitive: false,
+  multiLine: true,
+);
 String _blank(Match match) => match[0]!.replaceAll(RegExp(r'[^\n]'), ' ');
 
 /// [text] with what is never a tag blanked out, as Markdown renders it: fenced
@@ -398,6 +410,21 @@ class _Mention extends md.InlineSyntax {
             r'(?![\w+-]|\.[\w+-])',
             caseSensitive: false,
           );
+  }
+
+  /// Whether [text]'s words hold [name] as a teammate writes it: whole and in its own case, not part of a longer word, a path
+  /// or an address ("Kai's", never "kai" or "Kai-only"), and not in code or a link. A row is drawn as often as its chat is, so
+  /// its words ([prose], which only blanks code and links) are read only to confirm a name its text holds beside code or a
+  /// link.
+  static bool writtenIn(String text, String name, String Function() prose) {
+    final words = name.trim().split(_gap);
+    if (!text.contains(words.first)) return false;
+    final written = RegExp(
+      '(?<![\\w@/.-])${words.map(RegExp.escape).join(r'[^\S\n]+')}'
+      r'(?![\w-])',
+    );
+    return written.hasMatch(text) &&
+        (!_mayBlank.hasMatch(text) || written.hasMatch(prose()));
   }
 
   @override

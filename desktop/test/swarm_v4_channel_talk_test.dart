@@ -229,6 +229,39 @@ void main() {
     expect(drawnTags(tester, '#21 is ready.'), ['@Product Manager']);
   });
 
+  // Seen in the rehearsal's channel (2026-11-11): an answer to a teammate that names it in its words opened with its tag besides,
+  // "@Kai thanks Kai, confirmed". A recipient its words name, as a teammate writes a name, is said already.
+  testWidgets('a post that names its agent in its words is not tagged again', (
+    tester,
+  ) async {
+    final server = swarmV4Channel();
+    say(server, 'Faye', 'thanks Juno, confirmed: 41/41.', to: ['juno']);
+    say(server, 'Faye', 'thanks, Pip: all three checks pass.', to: ['pip']);
+    say(server, 'Faye', "Pip's README reads well.", to: ['pip']);
+    say(
+      server,
+      'Faye',
+      'confirmed: the options section reads well.',
+      to: ['pip'],
+    );
+    // Not its name: a word it is part of, another's case, or code.
+    say(
+      server,
+      'Faye',
+      'the juno build and a Juno-only flag are green.',
+      to: ['juno'],
+    );
+    say(server, 'Faye', 'run `Pip` once more.', to: ['pip']);
+    await openSwarmV4(tester, server);
+    expect(tagsIn(tester, 'thanks Juno, confirmed', '@Juno'), 0);
+    expect(drawnTags(tester, 'thanks Juno, confirmed'), isEmpty);
+    expect(tagsIn(tester, 'all three checks pass', '@Pip'), 0);
+    expect(tagsIn(tester, "README reads well", '@Pip'), 0);
+    expect(drawnTags(tester, 'the options section reads well.'), ['@Pip']);
+    expect(drawnTags(tester, 'flag are green'), ['@Juno']);
+    expect(drawnTags(tester, 'once more'), ['@Pip']);
+  });
+
   testWidgets('an agent named twice in a post is tagged once', (tester) async {
     final server = swarmV4Channel();
     say(server, 'Faye', 'read #12.', to: ['juno', 'pip', 'juno']);
