@@ -178,6 +178,53 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     await settle(f)
     expect(f.merges()).toEqual([])
   })
+  // The second review of #3993: what the base did to the file between the two heads' bases, case by case. `at` is where the
+  // head's change begins; the earlier head's begins at line 4 and stands on lines 4 to 6.
+  const base = (patch: string, extra: Json = {}) => ({ files: [{ filename: 'sandbox/quotes.py', status: 'modified', changes: 1, patch, ...extra }] })
+  it.each<[string, number, Json, number]>([
+    ['removed two lines above it: two lines up', 2, base('@@ -1,3 +1,1 @@\n import os\n-a\n-b'), 1],
+    ['added a line right before the first line it stands on: one line down', 5, base('@@ -1,3 +1,4 @@\n import os\n import re\n import sys\n+x'), 1],
+    ['changed lines below it alone: where it was', 4, base('@@ -7,2 +7,6 @@\n tail\n+a\n+b\n+c\n+d\n end'), 1],
+    ['changed a line above and a line below in one hunk: moved by the one above alone', 5, base('@@ -1,9 +1,12 @@\n import os\n+x\n import re\n import sys\n def quote():\n     today\n     days\n     return\n-old\n+new\n+newer\n+newest\n end'), 1],
+    ['changed a line it stands on', 4, base('@@ -3,3 +3,3 @@\n import sys\n-def quote():\n+def quote(n):\n     today'), 0],
+    ['changed 300 files or more', 9, { files: Array.from({ length: 300 }, (_, at) => ({ filename: `docs/${at}.md`, status: 'modified', changes: 1, patch: '@@ -1 +1 @@\n-a\n+b' })) }, 0],
+    ['lists the file twice', 9, { files: [...grew().files, ...grew().files] }, 0],
+  ])('across a rebase onto a base that %s', async (_case, at, main, merges) => {
+    const f = setup()
+    rebased(f, at, main)
+    await settle(f)
+    expect(f.merges()).toHaveLength(merges)
+  })
+
+  it('counts each hunk of a file by itself: one above a change of the base stays, one below it moves', async () => {
+    const two = (first: number, second: number) => ({ files: [{ filename: 'sandbox/quotes.py', status: 'modified', changes: 2,
+      patch: `@@ -${first},3 +${first},4 @@\n a\n+one\n b\n c\n@@ -${second},3 +${second + 1},4 @@\n x\n+two\n y\n z` }] })
+    for (const [second, merges] of [[45, 1], [40, 0]] as const) {
+      const f = setup()
+      f.github.repo.comments.set(4, [comment('Juno, 14:20, to **Pip**: READ-OK a1b2c3d')])
+      f.github.repo.compare.set('a1b2c3d', { merge_base_commit: { sha: M1 }, ...two(4, 40) })
+      f.github.repo.compare.set(HEAD, { merge_base_commit: { sha: M2 }, ...two(4, second) })
+      // The base added five lines between the two.
+      f.github.repo.compare.set(`${M1}...${M2}`, base('@@ -20,2 +20,7 @@\n m\n+a\n+b\n+c\n+d\n+e\n n'))
+      await settle(f)
+      expect(f.merges(), String(second)).toHaveLength(merges)
+    }
+  })
+
+  // A renamed file's lines are numbered in the file as it was named: what the base did above them is under that name.
+  it('counts a renamed file by the name it had: its lines moved by what the base added above them under that name', async () => {
+    const renamed = (at: number) => ({ files: [{ ...changed(['+    days = int(n)', '-    days = 1'], at).files[0], filename: 'sandbox/sayings.py', previous_filename: 'sandbox/quotes.py', status: 'renamed' }] })
+    for (const [at, merges] of [[9, 1], [4, 0]] as const) {
+      const f = setup()
+      f.github.repo.comments.set(4, [comment('Juno, 14:20, to **Pip**: READ-OK a1b2c3d')])
+      f.github.repo.compare.set('a1b2c3d', { merge_base_commit: { sha: M1 }, ...renamed(4) })
+      f.github.repo.compare.set(HEAD, { merge_base_commit: { sha: M2 }, ...renamed(at) })
+      f.github.repo.compare.set(`${M1}...${M2}`, grew())
+      await settle(f)
+      expect(f.merges(), String(at)).toHaveLength(merges)
+    }
+  })
+
   it('counts a READ-OK across a rebase onto a base that changed other files alone, its lines where they were', async () => {
     const f = setup()
     rebased(f, 4, grew('sandbox/other.py'))
