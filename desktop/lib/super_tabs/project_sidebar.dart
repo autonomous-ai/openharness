@@ -8,7 +8,7 @@ import '../state/app_state.dart';
 import '../widgets/desktop_chrome.dart';
 import 'agent_state.dart';
 import 'controller.dart';
-import 'delete_agent.dart';
+import 'remove_agent.dart';
 import 'model.dart';
 import 'places.dart' show SwarmPage;
 import 'my_agents.dart';
@@ -575,7 +575,7 @@ class ProjectSidebar extends StatelessWidget {
         _ => null,
       },
     );
-    // Delete is one right-click away, for its person alone (Swarm v4: only its person stops an agent). A project's PM
+    // Remove is one right-click away, for its person alone (Swarm v4: only its person stops an agent). A project's PM
     // stays until its project goes.
     if (agent.contributorId != controller.accountId || !controller.canWrite) {
       return row;
@@ -589,15 +589,15 @@ class ProjectSidebar extends StatelessWidget {
             at: event.globalPosition,
             children: (close) => [
               AppMenuItem(
-                label: 'Delete',
+                label: 'Remove',
                 detail: kept,
                 leadingSlot: false,
-                onPressed: kept == null ? () => close('delete') : null,
+                onPressed: kept == null ? () => close('remove') : null,
               ),
             ],
           );
-          if (choice == 'delete' && context.mounted) {
-            await deleteSwarmAgent(context, controller, agent, name, app: app);
+          if (choice == 'remove' && context.mounted) {
+            await removeSwarmAgent(context, controller, agent, name, app: app);
           }
         },
         child: row,

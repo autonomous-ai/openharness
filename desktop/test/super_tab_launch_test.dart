@@ -83,6 +83,10 @@ class SuperTabFixtureConnection extends WsConn {
 
   /// Refuses a Stop, as a computer refuses one it may not make.
   bool refuseClose = false;
+
+  /// What a session is doing as its computer answers a close's check (`inspect`): an idle-only close of one doing
+  /// anything else is refused with `SESSION_NOT_IDLE`, as the daemon does.
+  String closeActivity = 'idle';
   bool nativeSurface = false;
   bool failFiles = false, failCreation = false, changeAccountOnUpload = false;
 
@@ -358,6 +362,19 @@ class SuperTabFixtureConnection extends WsConn {
         code: 'CLOSE_REFUSED',
         detail: 'This computer would not stop it.',
         payload: {},
+      );
+    }
+    if (type == 'agent_close' && payload['mode'] == 'inspect') {
+      return {'activity': closeActivity};
+    }
+    if (type == 'agent_close' &&
+        payload['mode'] == 'idle' &&
+        closeActivity != 'idle') {
+      throw WsRequestFailure(
+        responseType: 'agent_close_result',
+        code: 'SESSION_NOT_IDLE',
+        detail: 'It is working.',
+        payload: {'activity': closeActivity},
       );
     }
     if (type == 'agent_create' &&

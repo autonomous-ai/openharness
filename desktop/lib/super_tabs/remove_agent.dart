@@ -10,12 +10,13 @@ import 'dialog_scope.dart';
 import 'model.dart';
 import 'my_agents.dart';
 
-/// Delete an agent from the sidebar (Swarm v4, anh Dee 2026-11-09): the Swarm lets go of it, its chat leaves Your Team,
-/// and its computer stops its session. The same `agent.remove` Remove from Swarm sends, in the words a person uses. The
-/// session stops first, here: the Swarm's removal stops nothing on the computer (backend `agent.remove`), so a deleted agent
-/// went on running, and working, with nothing left to see it by (#3791). A stop its computer refuses keeps the agent, in
-/// its words.
-Future<void> deleteSwarmAgent(
+/// Remove an agent from Your Team (Swarm v4; anh Dee 2026-11-11: as closing a pane): the Swarm lets go of it
+/// (`agent.remove`) and its chat goes. Its session follows the rule a tab's last view has: shown in one of its person's
+/// tabs, it keeps running there; with Your Team its last place, an idle one stops quietly and a working one asks first, in
+/// the review closing a tab's last view shows (`AppNotifier.reviewSessionClose`), whose Cancel keeps the agent as it was.
+/// The session stops before the Swarm lets go of it (the Swarm's removal stops nothing on the computer, backend
+/// `agent.remove`), so a cancel or a stop its computer refuses changes nothing.
+Future<void> removeSwarmAgent(
   BuildContext context,
   SuperTabController c,
   SuperTabAgent agent,
@@ -24,6 +25,7 @@ Future<void> deleteSwarmAgent(
 }) async {
   var busy = false;
   String? stopFailure;
+  final inTab = app != null && _shownInTab(app, agent);
   await showAppDialog<void>(
     context: context,
     builder: (context) => SuperTabDialogScope(
@@ -41,7 +43,7 @@ Future<void> deleteSwarmAgent(
             return PopScope(
               canPop: !busy,
               child: AlertDialog(
-                title: Text('Delete $name?'),
+                title: Text('Remove $name?'),
                 content: SizedBox(
                   width: 400,
                   child: Column(
@@ -49,7 +51,9 @@ Future<void> deleteSwarmAgent(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Its chat and terminal go too.',
+                        inTab
+                            ? 'Its chat goes. It keeps running in your tab.'
+                            : 'Its chat goes and its session stops.',
                         style: DesktopChrome.text(),
                       ),
                       if (stopFailure ?? c.operationError
@@ -67,7 +71,7 @@ Future<void> deleteSwarmAgent(
                     child: const Text('Cancel'),
                   ),
                   FilledButton(
-                    key: const ValueKey('delete-agent-confirm'),
+                    key: const ValueKey('remove-agent-confirm'),
                     style: grid.dangerButtonStyle(),
                     onPressed: !enabled
                         ? null
@@ -76,12 +80,14 @@ Future<void> deleteSwarmAgent(
                               busy = true;
                               stopFailure = null;
                             });
-                            final refused = await _stopSession(app, agent);
+                            final stopped = checking || inTab || app == null
+                                ? (stopped: true, refused: null)
+                                : await _stopLastPlace(app, agent);
                             if (!context.mounted) return;
-                            if (refused != null) {
+                            if (!stopped.stopped) {
                               update(() {
                                 busy = false;
-                                stopFailure = refused;
+                                stopFailure = stopped.refused;
                               });
                               return;
                             }
@@ -99,7 +105,7 @@ Future<void> deleteSwarmAgent(
                               update(() => busy = false);
                             }
                           },
-                    child: Text(checking ? 'Retry' : 'Delete'),
+                    child: Text(checking ? 'Retry' : 'Remove'),
                   ),
                 ],
               ),
@@ -111,28 +117,45 @@ Future<void> deleteSwarmAgent(
   );
 }
 
-/// Stops [agent]'s session where this app reaches its computer, or says why not; null when stopped, or when there is
-/// nothing here to stop (a computer this app does not reach, or a session already stopped).
-Future<String?> _stopSession(AppNotifier? app, SuperTabAgent agent) async {
-  final machine = app?.stateOf(agent.machineId);
+/// Whether one of its person's own tabs shows [agent]'s session: removing it from Your Team then leaves it running there.
+bool _shownInTab(AppNotifier app, SuperTabAgent agent) => app.swarms.any(
+  (tab) =>
+      !tab.isSuperTab &&
+      tab.panes.any(
+        (pane) =>
+            sameMachineId(pane.machineId, agent.machineId) &&
+            (pane.agentId ?? pane.ownerAgentId) == agent.harnessId,
+      ),
+);
+
+/// Stops [agent]'s session as its last view's close does ([AppNotifier.reviewSessionClose]): quietly while idle, after
+/// asking while it works. Not [stopped] when its person kept it running there, with why when its computer refused.
+/// Nothing to stop (a computer this app does not reach, a session already stopped) is stopped.
+Future<({bool stopped, String? refused})> _stopLastPlace(
+  AppNotifier app,
+  SuperTabAgent agent,
+) async {
+  final machine = app.stateOf(agent.machineId);
   final session = machine?.agents
       .where((a) => a.id == agent.harnessId)
       .firstOrNull;
-  if (app == null ||
-      machine == null ||
+  if (machine == null ||
       session == null ||
       session.isStopped ||
       machine.belongsToOtherAccount ||
       machine.connectionStatus != ConnectionStatus.connected) {
-    return null;
+    return (stopped: true, refused: null);
   }
-  final result = await app.prepareSessionClose(agent.machineId, session)('now');
-  if (result['error'] == null) return null;
-  return result['detail'] as String? ?? 'Its session could not be stopped.';
+  final review = app.reviewSessionClose;
+  if (review == null) {
+    return (stopped: false, refused: 'Its session could not be stopped.');
+  }
+  final done = await review([(machine.machine.machineId, session)]);
+  return (stopped: done, refused: null);
 }
 
-/// The view moves off the chat of the agent just deleted, to the next agent's chat or, with none, the first project's channel;
-/// with neither it has nowhere to go, and the deleted chat is gone.
+/// The view moves off the chat of the agent just removed, to the next agent's chat or, with none, the first project's channel;
+/// with neither it has nowhere to go, and the removed chat is gone.
 Future<void> _leaveChatOf(SuperTabController c, SuperTabAgent agent) async {
   final snapshot = c.snapshot;
   if (snapshot == null || agent.chatId != c.selectedId) return;
