@@ -35,8 +35,8 @@ void addNumberedWorkgroups(ConversationServer server, int count) {
   }
 }
 
-/// The Pilot project's PM River, a Builder Luna the board does
-/// not score, and Dee's agent Sparky; another project's agent is named Luna.
+/// The Pilot project's PM River, a Builder Luna and Dee's agent Sparky;
+/// another project's agent is named Luna.
 ConversationServer membersSwarm() {
   final server = humansSwarm();
   final agents = server.state['agents'] as List;
