@@ -1,11 +1,20 @@
 /**
- * The agent browser: a sandboxed Chrome under Podman beside each agent created with Browser, set up by Harness when
+ * The agent browser: a sandboxed Chrome under Podman beside each agent whose Browser is on, set up by Harness when
  * Podman is missing (docs/superpowers/specs/2026-11-10-agent-browser-design.md). Its parts are in agentBrowser/; this
  * wires them to the core: the port the core tells an agent's start, stop and purge, and reads its frame's `browser`
  * through, and the requests the apps send.
  *
- * It looks at Podman only once it is used (an agent with Browser, or a request), or at once when its state file says
- * it was used before: a computer that never ticked Browser never runs Podman for it.
+ * Only the agent's person turns its Browser on and off, from its chat (`agent_browser_start`, `_stop`;
+ * docs/superpowers/specs/2026-11-11-browser-from-chat-design.md). The core sets the agent's flag and tells this port
+ * `attached` or `stopped` in the same turn (`CoreApi.agents.setBrowser`), so the browser starts and stops in the order
+ * the person asked, and comes back with its agent while the flag is on. The agent learns of it from two lines typed
+ * into it (agentBrowser/notices.ts): when its person's Start is ready, and at its person's Stop.
+ *
+ * The settings are its person's before the first Start too: a proxy set then is the one the browser first connects
+ * through, never the machine's own address.
+ *
+ * It looks at Podman only once it is used (an agent whose Browser is on, or a request), or at once when its state file
+ * says it was used before: a computer whose person never started a browser never runs Podman for it.
  */
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
@@ -21,6 +30,7 @@ import { watchEvents } from './agentBrowser/events.js'
 import { exitZone, testProxy, type ExitLookupDeps } from './agentBrowser/exitLookup.js'
 import { download, run, sha256 } from './agentBrowser/hostTools.js'
 import { ensureImage } from './agentBrowser/image.js'
+import { Notices } from './agentBrowser/notices.js'
 import { createPodman, PodmanError, type Podman } from './agentBrowser/podman.js'
 import { humanMode, parseSettings, publicSettings, type BrowserHost } from './agentBrowser/settings.js'
 import { canAskForPassword, Setup } from './agentBrowser/setup.js'
@@ -36,6 +46,8 @@ const LOCAL_ONLY = { error: 'LOCAL_ONLY' }
 const SETUP_INSTALL_FAILURES = new Set(['podman_install_failed', 'podman_manual'])
 // Xvnc listens on 5900 inside the container only (no published port): a viewer's bytes reach it through an exec.
 const VNC_PIPE = ['socat', 'STDIO', 'TCP:127.0.0.1:5900']
+/** Answered by name on Windows, so Desktop says Browser does not run there rather than "update Harness" (spec § Desktop). */
+const NAMED_ON_WINDOWS: ReadonlySet<string> = new Set(['agent_browser_start', 'agent_browser_stop'])
 
 export interface AgentBrowserOptions {
   /** How the core hears a browser's state when this runs in a process of its own (services/agentBrowserProcess.ts);
@@ -83,8 +95,9 @@ function unsupported(ports: Pick<CorePorts, 'agentBrowser'>): ServiceRequests {
     onCloseViewers: () => {},
     stop: () => {},
   }
-  return Object.fromEntries(AGENT_BROWSER_REQUESTS.map(type =>
-    [type, () => (type === 'agent_browser_available' ? { state: 'unsupported' } : { error: 'UNSUPPORTED' })]))
+  return Object.fromEntries(AGENT_BROWSER_REQUESTS.map(type => [type, () => (type === 'agent_browser_available'
+    ? { state: 'unsupported' }
+    : { error: NAMED_ON_WINDOWS.has(type) ? 'NOT_ON_WINDOWS' : 'UNSUPPORTED' })]))
 }
 
 export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBrowser'>, options: AgentBrowserOptions = {}): ServiceRequests {
@@ -99,6 +112,12 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
   const state = new StateFile(statePath)
 
   const containers = new Containers(podman, daemonId, log)
+  const notices = new Notices({ state, turns: core.turns, measure: count, log })
+  /**
+   * The agents whose person's Stop is under way: marked before the core is asked, so the port's `stopped` that follows
+   * is told apart from the agent's own end, and a browser that turns ready meanwhile is owed nothing.
+   */
+  const byPerson = new Set<string>()
   /** The core's streams to this machine's browsers (core/browserStreams.ts), told when one stops or goes. */
   const viewerListeners: Array<(agentId: string) => void> = []
   // Built after setup, which tells it each step.
@@ -117,7 +136,9 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
     host: options.host ?? machineHost(),
     exitZone: proxy => exitZone(proxy, options.lookup),
     changed: (agentId) => {
-      if (options.told) return options.told(agentId, browsers.state(agentId))
+      const shown = browsers.state(agentId)
+      if (shown?.state === 'ready' && !byPerson.has(agentId)) notices.ready(agentId)
+      if (options.told) return options.told(agentId, shown)
       const session = core.agents.byAgent(agentId)
       if (session) core.agents.sync(session)
     },
@@ -164,11 +185,14 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
       void browsers.start(session.agentId)
     },
     stopped(agentId) {
+      // The person's Stop told the agent already; its own end takes back what waits for it.
+      if (!byPerson.delete(agentId)) notices.ended(agentId)
       if (!hasBrowser(agentId)) return
       attached.delete(agentId)
       void browsers.stop(agentId)
     },
     deleted(agentId) {
+      notices.ended(agentId)
       if (!hasBrowser(agentId)) return
       attached.delete(agentId)
       void browsers.delete(agentId)
@@ -185,16 +209,38 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
     stop() {
       stopped = true
       events?.close()
+      notices.close()
     },
   }
 
-  /** A request for one agent's browser from its own person: the agent's id, or why not. */
-  const ownBrowser = (handler: (agentId: string, payload: Reply, asker: Asker) => Reply | Promise<Reply>) => async (payload: Reply, asker: Asker): Promise<Reply> => {
+  const idOf = (payload: Reply) => (typeof payload.agentId === 'string' ? payload.agentId : '')
+  /** The person's Start and Stop go through the core, which owns the agent's flag (`CoreApi.agents.setBrowser`). */
+  const setBrowser = (agentId: string, on: boolean) => core.agents.setBrowser!(agentId, on)
+
+  /**
+   * A request for one agent's browser from its own person: the agent's id, or why not. `anyAgent`: an agent of this
+   * machine, live or stopped, whether or not its browser is on, as the settings are; else only a browser it has.
+   */
+  const ownBrowser = (handler: (agentId: string, payload: Reply, asker: Asker) => Reply | Promise<Reply>, anyAgent = false) => async (payload: Reply, asker: Asker): Promise<Reply> => {
     if (!mayOpenBrowser(asker)) return { error: 'NOT_OWNER' }
     begin()
-    const agentId = typeof payload.agentId === 'string' ? payload.agentId : ''
-    if (!agentId || !browsers.state(agentId)) return { error: 'NO_BROWSER' }
+    const agentId = idOf(payload)
+    if (!agentId || !(browsers.state(agentId) || (anyAgent && await isHere(agentId)))) return { error: 'NO_BROWSER' }
     try { return await handler(agentId, payload, asker) } catch (error) { return named(error) }
+  }
+  /** Whether the core has the agent, live or stopped; a core that cannot say has none. */
+  const isHere = async (agentId: string): Promise<boolean> => {
+    const ids = await core.agents.ids?.().catch(() => null)
+    return !!ids && (ids.live.includes(agentId) || ids.stopped.includes(agentId))
+  }
+
+  /** Retry, and the person's Start of a failed browser: it starts again from the agent's queue. */
+  const retry = (agentId: string, asker: Asker): Reply => {
+    // These come from setup alone, and their Retry runs the install again: its password dialog shows on this
+    // computer, so, as Install, only this computer may ask (spec § Setup).
+    if (!asker.local && SETUP_INSTALL_FAILURES.has(browsers.state(agentId)?.error ?? '')) return LOCAL_ONLY
+    void browsers.retry(agentId)
+    return { ok: true }
   }
 
   return {
@@ -214,6 +260,9 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
       void browsers.setUp()
       return { ok: true }
     },
+    // The relay of an agent launched with the browser's MCP argument asks this for every call, and runs the code it
+    // started with until its agent restarts. Delete on or after 2026-12-18: 30 days after the CLI release that took the
+    // argument away (assumed by 2026-11-18; whoever releases later moves the date).
     agent_browser_state: async (payload, asker) => {
       if (!asker.local) return LOCAL_ONLY
       begin()
@@ -229,14 +278,35 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
         return named(error)
       }
     },
-    agent_browser_retry: ownBrowser((agentId, _payload, asker) => {
-      // These come from setup alone, and their Retry runs the install again: its password dialog shows on this
-      // computer, so, as Install, only this computer may ask (spec § Setup).
-      if (!asker.local && SETUP_INSTALL_FAILURES.has(browsers.state(agentId)?.error ?? '')) return LOCAL_ONLY
-      void browsers.retry(agentId)
+    agent_browser_retry: ownBrowser((agentId, _payload, asker) => retry(agentId, asker)),
+    // The browser itself starts through the port's `attached`, which the core calls as it sets the flag. A browser its
+    // person is stopping is asked of the core all the same: the core switches in the order it is asked, so it starts
+    // again after that stop.
+    agent_browser_start: async (payload, asker) => {
+      if (!mayOpenBrowser(asker)) return { error: 'NOT_OWNER' }
+      const agentId = idOf(payload)
+      const shown = byPerson.has(agentId) ? undefined : browsers.state(agentId)
+      if (shown) return shown.state === 'failed' ? retry(agentId, asker) : { ok: true }
+      const answer = await setBrowser(agentId, true)
+      if ('error' in answer) return answer
+      if (answer.changed) count('agent_browser_started')
       return { ok: true }
-    }),
-    agent_browser_settings: ownBrowser(agentId => publicSettings(browsers.settings(agentId))),
+    },
+    // The volume and the settings stay: the login is there at the next Start.
+    agent_browser_stop: async (payload, asker) => {
+      if (!mayOpenBrowser(asker)) return { error: 'NOT_OWNER' }
+      const agentId = idOf(payload)
+      if (attached.has(agentId)) {
+        byPerson.add(agentId)
+        notices.stopped(agentId, false)
+      }
+      const answer = await setBrowser(agentId, false)
+      // The core told the port nothing to stop: nothing stays marked, and the agent's own end is heard as its own.
+      byPerson.delete(agentId)
+      if ('changed' in answer && answer.changed) count('agent_browser_stopped')
+      return { ok: true }
+    },
+    agent_browser_settings: ownBrowser(agentId => publicSettings(browsers.settings(agentId)), true),
     agent_browser_settings_save: ownBrowser(async (agentId, payload) => {
       const before = browsers.settings(agentId)
       const next = parseSettings(payload.settings, before)
@@ -244,7 +314,7 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
       if (next.proxy && JSON.stringify(next.proxy) !== JSON.stringify(before.proxy)) count('agent_browser_proxy_set')
       else if (!next.proxy && before.proxy) count('agent_browser_proxy_removed')
       return publicSettings(browsers.settings(agentId))
-    }),
+    }, true),
     // A proxy sent without its password is tested with the stored one only when it is the stored proxy, as a save keeps it.
     agent_browser_proxy_test: ownBrowser(async (agentId, payload) => {
       const current = browsers.settings(agentId)
@@ -253,6 +323,6 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
       const answer = await testProxy(proxy, options.lookup)
       count(answer.ok ? 'agent_browser_proxy_test_ok' : 'agent_browser_proxy_test_failed')
       return answer
-    }),
+    }, true),
   }
 }

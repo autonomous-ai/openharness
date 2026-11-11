@@ -712,11 +712,12 @@ export interface SuperTabsPort { connected(): void; disconnected(): void; stop()
 export const SUPER_TAB_FALLBACKS: PortFallbacks<SuperTabsPort> = { connected: undefined, disconnected: undefined, stop: undefined, swarmRole: later(undefined) }
 /**
  * The agent browser (services/agentBrowser.ts): whether Browser can run here, setting it up (this computer only), a
- * browser's state for its agent's tools (this computer only), and Retry and the settings (the machine's own person
- * only, `mayOpenBrowser`).
+ * browser's state for the MCP relay of an agent launched before the browser moved to its chat (this computer only),
+ * and its person's Start and Stop, Retry and the settings (the machine's own person only, `mayOpenBrowser`).
  */
 export const AGENT_BROWSER_REQUESTS = ['agent_browser_available', 'agent_browser_setup', 'agent_browser_retry',
-  'agent_browser_state', 'agent_browser_settings', 'agent_browser_settings_save', 'agent_browser_proxy_test'] as const
+  'agent_browser_state', 'agent_browser_settings', 'agent_browser_settings_save', 'agent_browser_proxy_test',
+  'agent_browser_start', 'agent_browser_stop'] as const
 /** The project and folder readers (services/projects.ts). */
 export const PROJECTS_REQUESTS = ['git_pull_request', 'git_pull_requests_status', 'git_project_info', 'scm_project_info', 'project_preview', 'fs_list_dir', 'agent_read_file',
   'agent_instructions_read', 'agent_instructions_write'] as const
@@ -1078,7 +1079,7 @@ export const AGENT_CLEANUP_FALLBACKS: PortFallbacks<AgentCleanupPort> = { closed
 export interface AgentBrowserPort {
   /** An agent is here and running: its browser starts, for one whose Browser is on. Idempotent, as `ViewersPort.attach`. */
   attached(session: RegisteredSession): void
-  /** The agent stopped: its browser stops, and its profile stays for a resume. */
+  /** The agent stopped, or its person turned its Browser off: its browser stops, and its profile stays. */
   stopped(agentId: string): void
   /** The agent was purged: its browser and its profile go. */
   deleted(agentId: string): void

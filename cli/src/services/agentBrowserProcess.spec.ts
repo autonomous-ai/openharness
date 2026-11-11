@@ -4,6 +4,7 @@ import type { RegisteredSession } from '../lib/registry.js'
 import type { AgentBrowserOptions } from './agentBrowser.js'
 import { agentBrowserCoreApi, runAgentBrowserService } from './agentBrowserProcess.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcessOptions } from './process.js'
+import { turnsLink } from './turnsLink.js'
 
 // The real default reaches a real socket: never in a test.
 vi.mock('./process.js', () => ({ runServiceProcess: vi.fn(() => ({ stop: vi.fn() })) }))
@@ -184,7 +185,8 @@ describe('the agent browser in its own process', () => {
   })
 
   it('is the light services\' core API besides', () => {
-    const api = agentBrowserCoreApi('/data', async () => ({}))
+    const ask = async () => ({})
+    const api = agentBrowserCoreApi('/data', ask, turnsLink(ask))
     expect(api.dataDir).toBe('/data')
     expect(api.agents.live()).toEqual([])
   })

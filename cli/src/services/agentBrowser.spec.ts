@@ -107,7 +107,10 @@ function startSwitching(rows: RegisteredSession[] = [session('a1', { browser: un
     if (row.browser) running.add(row.agentId)
     port!.attached(row)
   }
+  /** While held, the core has not answered yet: what is asked meanwhile waits, in the order it was asked, as on a link. */
+  let held: Promise<void> | null = null
   const setBrowser = vi.fn(async (agentId: string, on: boolean): Promise<BrowserSwitch> => {
+    if (held) await held
     const row = byId.get(agentId)
     if (!on) {
       if (!row?.browser) return { ok: true, changed: false }
@@ -145,6 +148,12 @@ function startSwitching(rows: RegisteredSession[] = [session('a1', { browser: un
     typed,
     /** The agent runs (a create, a resume, a daemon start): the core attaches it. */
     attach: (agentId: string) => attach(byId.get(agentId)!),
+    /** The core answers no switch until the returned function is called: as a core in another process, a round trip away. */
+    hold: () => {
+      let release!: () => void
+      held = new Promise<void>(done => { release = done })
+      return () => { held = null; release() }
+    },
     /** The agent's own end: the port hears it only while its Browser is on. */
     end: (agentId: string) => { if (running.delete(agentId)) port!.stopped(agentId) },
     hear: (deliveryId: string, state: TurnDelivery['state']) => {
@@ -672,6 +681,15 @@ describe('the person\'s Start and Stop', () => {
     expect(counted('agent_browser_enabled')).toBe(1)
   })
 
+  // The service's process started after the core attached the agent, and has not heard it again yet.
+  it('start of a browser that is on and not yet heard of starts it and counts no Start', async () => {
+    const count = vi.fn()
+    const sw = startSwitching([session('a1')], { count })
+    expect(await sw.requests.agent_browser_start!({ agentId: 'a1' }, LOCAL)).toEqual({ ok: true })
+    await ready(sw.port, 'a1')
+    expect(count).not.toHaveBeenCalledWith('agent_browser_started')
+  })
+
   it('start of a failed browser tries again as Retry does', async () => {
     // Another browser of this daemon runs, on a machine with room for one.
     fake.reply('info --format json', { stdout: JSON.stringify({ version: { Version: '5.8.1' }, host: { memTotal: 3 * GiB } }) })
@@ -760,16 +778,29 @@ describe('the person\'s Start and Stop', () => {
   it('a browser that turns ready while its person\'s Stop reaches the core is not told', async () => {
     const sw = startSwitching()
     await sw.requests.agent_browser_start!({ agentId: 'a1' }, LOCAL)
-    const switched = sw.setBrowser.getMockImplementation()!
-    let answer!: () => void
-    const answered = new Promise<void>(done => { answer = done })
-    sw.setBrowser.mockImplementationOnce(async (agentId, on) => { await answered; return switched(agentId, on) })
+    const answer = sw.hold()
     const stopping = sw.requests.agent_browser_stop!({ agentId: 'a1' }, LOCAL)
     await ready(sw.port, 'a1')
     answer()
     expect(await stopping).toEqual({ ok: true })
     expect(sw.port.frameContext('a1')).toBeUndefined()
     expect(sw.typed).toEqual([])
+  })
+
+  it('start while its person\'s Stop reaches the core starts it again after the stop', async () => {
+    const sw = startSwitching()
+    await sw.requests.agent_browser_start!({ agentId: 'a1' }, LOCAL)
+    await ready(sw.port, 'a1')
+    const answer = sw.hold()
+    const stopping = sw.requests.agent_browser_stop!({ agentId: 'a1' }, LOCAL)
+    const starting = sw.requests.agent_browser_start!({ agentId: 'a1' }, LOCAL)
+    answer()
+    expect(await stopping).toEqual({ ok: true })
+    expect(await starting).toEqual({ ok: true })
+    expect(sw.setBrowser.mock.calls).toEqual([['a1', true], ['a1', false], ['a1', true]])
+    expect(sw.rows.get('a1')!.browser).toBe(true)
+    await ready(sw.port, 'a1')
+    expect(asked().filter(call => call.startsWith('create '))).toHaveLength(2)
   })
 
   it('the agent\'s own stop types nothing and keeps the mark; its resume types nothing', async () => {

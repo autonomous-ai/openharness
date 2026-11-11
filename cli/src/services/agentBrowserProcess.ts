@@ -6,20 +6,25 @@
  * The core tells it what happens to agents (`service_event` `attached`, `stopped`, `deleted`) and reads each browser's
  * state from what this process last told it (`browser_state`, core/agentBrowserLink.ts), so a frame never waits on it.
  * It asks the core for what only the core knows: its agents' ids (`agent_ids`), the agent of a pane (`agent_of_pane`),
- * and to hand on a product counter (`count`).
+ * and to hand on a product counter (`count`). It asks the core to turn an agent's Browser on or off, its person's Start
+ * and Stop (`set_browser`): the core tells it `attached` or `stopped` before it answers. And it has the core type its
+ * two lines into an agent (`deliver`, services/turnsLink.ts), and hears what became of them.
  */
-import type { CoreApi, CorePorts } from '../core/api.js'
+import type { BrowserSwitch, CoreApi, CorePorts } from '../core/api.js'
 import type { ProductUsageMetric } from '../lib/productUsageContract.js'
 import { startAgentBrowser } from './agentBrowser.js'
 import type { BrowserState } from './agentBrowser/browsers.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
 import { isSession, processCoreApi } from './processCoreApi.js'
+import { turnsLink } from './turnsLink.js'
 
 type Payload = Record<string, unknown>
 type Ask = (query: string, payload: Payload) => Promise<Payload>
 
 // The service's start waits on this before it deletes anything; no answer in time is no answer.
 const IDS_TIMEOUT_MS = 10_000
+// The core switches in the same turn it is asked: a person's Start or Stop it does not answer in this is a failed one.
+const SWITCH_TIMEOUT_MS = 10_000
 
 export interface AgentBrowserServiceOptions {
   dataDir: string
@@ -40,9 +45,16 @@ function within<T>(ms: number, work: Promise<T>): Promise<T> {
   return Promise.race([work, late]).finally(() => clearTimeout(timer))
 }
 
-/** The core API the agent browser runs on here: the light services' (processCoreApi.ts), with what it asks the core. */
-export function agentBrowserCoreApi(dataDir: string, ask: Ask): CoreApi {
-  const api = processCoreApi(dataDir, 'agentBrowser')
+/** The core's answer to a switch, or null for anything else. */
+function switchOf(answer: Payload): BrowserSwitch | null {
+  if (answer.ok === true && typeof answer.changed === 'boolean') return { ok: true, changed: answer.changed }
+  return answer.error === 'NOT_RUNNING' || answer.error === 'NOT_ALLOWED' ? { error: answer.error } : null
+}
+
+/** The core API the agent browser runs on here: the light services' (processCoreApi.ts), with what it asks the core
+ *  and the turns it delivers through it. */
+export function agentBrowserCoreApi(dataDir: string, ask: Ask, deliveries: ReturnType<typeof turnsLink>): CoreApi {
+  const api = processCoreApi(dataDir, 'agentBrowser', { deliveries })
   return {
     ...api,
     agents: {
@@ -58,6 +70,11 @@ export function agentBrowserCoreApi(dataDir: string, ask: Ask): CoreApi {
         const answer = await ask('agent_of_pane', { pane }).catch(() => null)
         return typeof answer?.agentId === 'string' ? answer.agentId : null
       },
+      setBrowser: async (agentId, on) => {
+        const answer = switchOf(await within(SWITCH_TIMEOUT_MS, ask('set_browser', { agentId, on })))
+        if (!answer) throw new Error('the core gave no answer for the switch')
+        return answer
+      },
     },
     // A count the core cannot take now is lost: counters are measures, never state.
     count: (metric: ProductUsageMetric) => { void ask('count', { metric }).catch(() => {}) },
@@ -67,6 +84,7 @@ export function agentBrowserCoreApi(dataDir: string, ask: Ask): CoreApi {
 export function runAgentBrowserService(options: AgentBrowserServiceOptions): ServiceProcess {
   let core: CoreConnection | null = null
   const ask: Ask = (query, payload) => (core ? core.query(query, payload) : Promise.reject(new Error('no core to ask')))
+  const deliveries = turnsLink(ask)
   const ports: Pick<CorePorts, 'agentBrowser'> = { agentBrowser: null }
   /** What each browser last showed: a new core, or the same one after this link dropped, hears all of it again. */
   const shown = new Map<string, BrowserState>()
@@ -75,7 +93,7 @@ export function runAgentBrowserService(options: AgentBrowserServiceOptions): Ser
     const command = state?.state === 'ready' ? ports.agentBrowser?.streamCommand(agentId) : undefined
     void ask('browser_state', { agentId, ...(state ? { state } : {}), ...(command && 'argv' in command ? { command: command.argv } : {}) }).catch(() => {})
   }
-  const requests = (options.start ?? startAgentBrowser)(agentBrowserCoreApi(options.dataDir, ask), ports, {
+  const requests = (options.start ?? startAgentBrowser)(agentBrowserCoreApi(options.dataDir, ask, deliveries), ports, {
     told: (agentId, state) => {
       if (state) shown.set(agentId, state)
       else shown.delete(agentId)
@@ -90,6 +108,7 @@ export function runAgentBrowserService(options: AgentBrowserServiceOptions): Ser
     token: options.token,
     requests,
     onEvent: (payload) => {
+      if (deliveries.heard(payload)) return
       if (payload.kind === 'attached') {
         if (isSession(payload.session)) port.attached(payload.session)
         return

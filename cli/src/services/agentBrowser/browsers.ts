@@ -376,6 +376,8 @@ export class Browsers {
     await this.deps.containers.remove(agentId)
     this.deps.state.update(s => {
       delete s.browsers[agentId]
+      // The agent is gone: nobody is left owing or owed its ready line (notices.ts).
+      delete s.told?.[agentId]
       s.deleting = s.deleting.filter(id => id !== agentId)
     })
   }
