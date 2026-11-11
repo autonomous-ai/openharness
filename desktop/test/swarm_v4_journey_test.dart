@@ -283,6 +283,57 @@ void main() {
   });
 
   testWidgets(
+    'an agent that asks its person has its name bold in Your Team, and '
+    'reading its chat makes it regular again',
+    (tester) async {
+      final (server, c, _) = await open(tester);
+      FontWeight? weight() => tester
+          .widget<Text>(
+            find.descendant(
+              of: key('super-agent-second'),
+              matching: find.text('second'),
+            ),
+          )
+          .style
+          ?.fontWeight;
+      Future<void> tap(String k) async {
+        await tester.tap(key(k));
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 50)),
+        );
+        await tester.pumpAndSettle();
+        await tester.pump(const Duration(seconds: 1));
+      }
+
+      // Its chat read, the person is in the channel: its name is regular.
+      await tap('super-agent-second');
+      await tap('super-group-lead');
+      expect(weight(), isNot(grid.AppFont.semibold));
+      // It writes to its person in its own chat: its name is bold, as an unread chat's.
+      server.append(
+        'Which build?',
+        conversationId: 'agent-chat-second',
+        agent: true,
+      );
+      server.messages.last['author'] = {
+        'kind': 'agent',
+        'id': 'second',
+        'name': 'second',
+      };
+      await tester.runAsync(c.refresh);
+      await tester.pumpAndSettle();
+      expect(weight(), grid.AppFont.semibold);
+      // Its person opens its chat and reads it (Esc, as its unread bar says), then goes back to the channel: regular.
+      await tap('super-agent-second');
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      await tap('super-group-lead');
+      expect(weight(), isNot(grid.AppFont.semibold));
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
     'an agent that wrote to its person is what asks them, from read marks: '
     'nothing of v3 tags, decisions, reminders or Activity is read',
     (tester) async {
