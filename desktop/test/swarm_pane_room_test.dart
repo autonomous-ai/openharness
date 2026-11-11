@@ -331,6 +331,79 @@ void main() {
       expect(tester.state(find.byType(SwarmIssuePanel)), same(task));
     },
   );
+
+  /// The colour painted nearest under [what]: the ground of the pane it is in.
+  Color? ground(WidgetTester tester, Finder what) {
+    for (final widget in tester.widgetList(
+      find.ancestor(
+        of: what,
+        matching: find.byWidgetPredicate(
+          (w) => w is ColoredBox || w is Material || w is DecoratedBox,
+        ),
+      ),
+    )) {
+      final color = switch (widget) {
+        ColoredBox(:final color) => color,
+        Material(:final color, :final type)
+            when type != MaterialType.transparency =>
+          color,
+        DecoratedBox(:final BoxDecoration decoration) => decoration.color,
+        _ => null,
+      };
+      if (color != null && color.a > 0) return color;
+    }
+    return null;
+  }
+
+  // Design system, Swarm elements, One surface: the left, middle and right panes share one ground, so a pane opened beside the
+  // chat, or in its place, is not a white sheet on the Swarm's grey.
+  for (final size in const [Size(880, 560), Size(1440, 900)]) {
+    for (final brightness in Brightness.values) {
+      final at = '${size.width.toInt()}x${size.height.toInt()}';
+      testWidgets(
+        'every pane stands on the Swarm\'s one ground, at $at, ${brightness.name}',
+        (tester) async {
+          final before = grid.AppTheme.brightness.value;
+          grid.AppTheme.brightness.value = brightness;
+          addTearDown(() => grid.AppTheme.brightness.value = before);
+          void expectGround(String close) {
+            final inView = find.descendant(
+              of: find.byType(SuperTabView),
+              matching: key(close),
+            );
+            expect(inView, findsOneWidget, reason: close);
+            expect(
+              ground(tester, inView),
+              grid.AppPalette.swarmField,
+              reason: close,
+            );
+          }
+
+          await show(tester, size);
+          await tap(tester, key('swarm-info-button'));
+          expectGround('swarm-info-close');
+          await tap(tester, key('swarm-instructions-button'));
+          expectGround('swarm-instructions-close');
+          await tap(tester, key('super-group-lead'));
+          await tap(tester, key('swarm-tasks-button'));
+          expectGround('swarm-tasks-close');
+          await tester.ensureVisible(key('swarm-task-5759'));
+          await tap(tester, key('swarm-task-5759'));
+          expectGround('swarm-issue-close');
+          await tap(tester, key('swarm-issue-close'));
+          await tap(tester, key('swarm-tasks-close'));
+          controller.openThread(
+            server.messages.firstWhere(
+                  (m) => (m['text'] as String).startsWith('#2191'),
+                )['id']
+                as String,
+          );
+          await settle(tester);
+          expectGround('super-thread-close');
+        },
+      );
+    }
+  }
 }
 
 /// Settles, and lets the read mark a chat saves 200 ms after it is read go, so no timer outlives the test.
