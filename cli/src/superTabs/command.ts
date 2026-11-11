@@ -8,7 +8,7 @@ import { resolve } from 'node:path'
 import { uploadAttachments } from './attach.js'
 import { REPLY_TEXT_MAX } from './agentReplies.js'
 import { keyName } from './terminal.js'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { isatty } from 'node:tty'
 import { inDaemonPane, NOT_IN_PANE, runningPane, windowsRunningPane, type PaneProbe, type RunningPane } from '../lib/callerPane.js'
@@ -25,7 +25,7 @@ function harnessIn(frames: PaneFrame[], pane: string, machineId: string): boolea
 
 const ELSEWHERE = 'From a harness, Swarm commands go to this computer\'s own Harness only: leave out --machine and --port, or give this computer\'s own.'
 
-const USAGE = 'harness super-tab [--tab ID] [--agent ID] [--port N --machine ID] status | messages GROUP [--thread ROOT] [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | answer GROUP MESSAGE_ID TEXT|- OPERATION_ID [--to AGENT]... | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | read ok|hold OWNER/REPO#N SHA [TEXT|-] | take OWNER/REPO#N | split OWNER/REPO#N s|m|l TITLE [TEXT|-] | inbox | goal'
+const USAGE = 'harness super-tab [--tab ID] [--agent ID] [--port N --machine ID] status | messages GROUP [--thread ROOT] [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | post GROUP TEXT|- [OPERATION_ID] [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | answer GROUP MESSAGE_ID TEXT|- OPERATION_ID [--to AGENT]... | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | read ok|hold OWNER/REPO#N SHA [TEXT|-] | take OWNER/REPO#N | split OWNER/REPO#N s|m|l TITLE [TEXT|-] | inbox | goal'
 const usageError = () => new Error(USAGE)
 
 /** A message on stdin, for post's TEXT `-`.
@@ -106,6 +106,13 @@ const actionOf = (argv: readonly string[]): string | undefined => {
 /** Stands in for stdin while the arguments are parsed the first time: stdin is read only for a command that wants it. */
 class WantsStdin {}
 
+/** A post's operation when it names none: the same post (its conversation, words, the message it answers and its files) within
+ *  the same hour is one operation, so one sent again after an answer that never came is posted once; the hour after, the same
+ *  words are a new post (a builder's `free: Pip` again the next hour). */
+function madeOperation(group: string, text: string, answers: string, attach: readonly string[], now = Date.now()): string {
+  return `post-${createHash('sha256').update([group, text, answers, ...attach, String(Math.floor(now / 3_600_000))].join('\n')).digest('hex').slice(0, 32)}`
+}
+
 /** [stdin] is asked for what `-` stands for: `post`'s message. */
 export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: () => string = () => readFileSync(0, 'utf8'),
   terminal: () => boolean = () => isatty(0)) {
@@ -142,10 +149,13 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
   else if (action === 'message' && identifier(first) && identifier(second) && positional.length === 3) {
     Object.assign(payload, { conversationId: first, messageId: second })
   }
-  else if (action === 'post' && identifier(first) && typeof second === 'string' && identifier(third)) {
+  else if (action === 'post' && identifier(first) && typeof second === 'string' && (third === undefined || third.startsWith('--') || identifier(third))) {
+    // Its OPERATION_ID may be left out: every message typed to an agent carried the word, and the agent made one up each time
+    // (anh Dee, 2026-11-11: "what are those extra verbose things"). One is made from the post itself and its hour (madeOperation).
+    const given = third !== undefined && !third.startsWith('--')
     let replyTo: string | null = null, answers: string | null = null
     const attach: string[] = [], mentions: string[] = [], to: string[] = []
-    for (let i = 4; i < positional.length; i += 2) {
+    for (let i = given ? 4 : 3; i < positional.length; i += 2) {
       const [flag, value] = [positional[i], positional[i + 1]]
       if (flag === '--reply-to' && identifier(value) && replyTo === null && answers === null) replyTo = value
       // The answer right below a message, in the main flow (task #2929); a reply to it goes in its thread.
@@ -158,10 +168,12 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
       else throw usageError()
     }
     // TEXT `-` is the message on stdin; any other TEXT is the message itself, and stdin is never read.
-    const text = withinPostLimit(second === '-' ? postStdin(stdin, terminal) : second, third)
+    const said = second === '-' ? postStdin(stdin, terminal) : second
+    const operationId = given ? third! : madeOperation(first, said, replyTo ?? answers ?? '', attach)
+    const text = withinPostLimit(said, operationId)
     // A screenshot or a log may go without words.
     if (!text.trim() && !attach.length) throw usageError()
-    Object.assign(payload, { action: 'command', operationId: third, ...(attach.length ? { attach } : {}),
+    Object.assign(payload, { action: 'command', operationId, ...(attach.length ? { attach } : {}),
       command: { type: 'message.send', conversationId: first, text, replyTo, ...(answers ? { answers } : {}), recipientIds: to, ...(mentions.length ? { mentions } : {}) } })
   } else if (action === 'answer' && identifier(first) && identifier(second) && typeof third === 'string' && identifier(positional[4])) {
     // The answer to the message [second] (task #3403): the server puts it in that message's thread, or right below it.
