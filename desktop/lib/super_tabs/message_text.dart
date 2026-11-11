@@ -342,14 +342,9 @@ bool _says(String tag, String name, Map<String, String> addresses) {
 /// `@name` or `@name@domain` for a tagged person; any other `@` stays text.
 /// Parsed as inline Markdown, so code and fenced blocks remain literal.
 class _Mention extends md.InlineSyntax {
-  _Mention(this.people, List<String> agents, this.addresses, this.labels)
-    : mentions = [...people, ...agents],
-      super(tag.pattern) {
-    for (final name in agents) {
-      final first = name.trim().split(_gap).first.toLowerCase();
-      if (name.trim().contains(_gap)) (_spaced[first] ??= []).add(name);
-    }
-  }
+  _Mention(this.people, this.agents, this.addresses, this.labels)
+    : _spaced = _tables[agents] ??= _table(agents),
+      super(tag.pattern);
   // Never right after a letter, digit, `@` or `/` (an address, a path, a
   // link). A name never ends in a dot: `@dee.` closes a sentence.
   static final tag = RegExp(
@@ -358,13 +353,25 @@ class _Mention extends md.InlineSyntax {
   static final _gap = RegExp(r'\s+');
   static final _opens = RegExp(r'^[\w+-]');
 
-  /// The people the message tags, and they with the Swarm's agents.
-  final List<String> people, mentions;
+  /// The people the message tags, and the Swarm's agents.
+  final List<String> people, agents;
   final Map<String, String> addresses, labels;
 
-  /// The agents whose name is several words, by its first word in lower case: only a tag of that word can be one of them, so
-  /// a thousand agents cost a row nothing until its text tags one (review of #3904: a pattern for every name, at every tag).
-  final Map<String, List<String>> _spaced = {};
+  /// The agents whose name is several words, each as the pattern that reads it whole ([whole]), by its first word in lower
+  /// case: only a tag of that word can be one of them. Read once for a list of agents, which the conversation hands every
+  /// row alike (view.dart), so a thousand agents cost a row nothing until its text tags one (review of #3904: each row
+  /// read every name each time it was drawn).
+  final Map<String, List<RegExp>> _spaced;
+  static final _tables = Expando<Map<String, List<RegExp>>>();
+  static Map<String, List<RegExp>> _table(List<String> agents) {
+    final table = <String, List<RegExp>>{};
+    for (final name in agents) {
+      final pattern = whole(name);
+      if (pattern == null) continue;
+      (table[name.trim().split(_gap).first.toLowerCase()] ??= []).add(pattern);
+    }
+    return table;
+  }
 
   /// `@` and all of [name] when it is several words ("first builder", lampOS's PM; "a2a swarm"), in any case and on one line,
   /// or null for a name of one word, or one no tag can open: [tag] reads a word, so `@first builder` was drawn as plain text
@@ -388,8 +395,8 @@ class _Mention extends md.InlineSyntax {
     // several-word name that starts here is the tag, as written; what the pattern matched is its first word.
     Match? spaced;
     if (!people.any((n) => _says(tag, n, addresses))) {
-      for (final name in _spaced[tag] ?? const <String>[]) {
-        final said = whole(name)?.matchAsPrefix(parser.source, parser.pos);
+      for (final name in _spaced[tag] ?? const <RegExp>[]) {
+        final said = name.matchAsPrefix(parser.source, parser.pos);
         if (said != null && said.end > (spaced?.end ?? 0)) spaced = said;
       }
     }
@@ -399,7 +406,10 @@ class _Mention extends md.InlineSyntax {
         ..consume(spaced[0]!.length - match[0]!.length);
       return true;
     }
-    final name = mentions.where((n) => _says(tag, n, addresses)).firstOrNull;
+    final name = people
+        .followedBy(agents)
+        .where((n) => _says(tag, n, addresses))
+        .firstOrNull;
     parser.addNode(
       name == null
           ? md.Text(match[0]!)
