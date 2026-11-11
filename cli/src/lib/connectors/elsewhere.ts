@@ -30,12 +30,20 @@ interface Route {
 }
 
 /** claude.ai's connector directory: Settings ▸ Customize ▸ Connectors (2026-11; Settings ▸ Connectors only points here now). */
-const CLAUDE_CONNECTORS = 'https://claude.ai/new#customize/connectors'
+// `/new/`, not `/new`: the Claude Android app claims `claude.ai/new` (its intent filters), and a phone hands that address
+// to the app, which opens at a chat; `/new/` it does not claim, and the web sends it on to `/new`, at the connector.
+const CLAUDE_CONNECTORS = 'https://claude.ai/new/#customize/connectors'
+
+/**
+ * The marketplace every plugin below comes from. Listing only it takes a second; listing every marketplace waited on
+ * all of them and took over a minute on a Mac, past what the apps wait for an answer.
+ */
+const CODEX_MARKETPLACE = 'openai-curated-remote'
 
 export const ROUTES: Record<string, Route> = {
   gmail: {
     claude: 'Gmail', codex: ['gmail@openai-curated-remote'], claudePage: `${CLAUDE_CONNECTORS}/id/gmail-gmailmcp`,
-    scope: { claude: 'Read, search, draft. No sending.', codex: 'Read, search, manage.', harness: 'Send only.' },
+    scope: { claude: 'Read, search, draft, send.', codex: 'Read, search, manage.', harness: 'Send only.' },
   },
   google_calendar: {
     claude: 'Google Calendar', codex: ['google-calendar@openai-curated-remote'],
@@ -43,7 +51,7 @@ export const ROUTES: Record<string, Route> = {
   },
   google_drive: {
     claude: 'Google Drive', codex: ['google-drive@openai-curated-remote'],
-    scope: { claude: 'Search and read files.', codex: 'Drive, Docs, Sheets, Slides.', harness: 'Only files it creates.' },
+    scope: { claude: 'Search, read, manage files.', codex: 'Drive, Docs, Sheets, Slides.', harness: 'Only files it creates.' },
   },
   // No Harness sign-in: only Claude's connector or Codex's Outlook and SharePoint plugins.
   microsoft_365: {
@@ -129,7 +137,7 @@ export async function elsewhere(deps: ElsewhereDeps = {}): Promise<Elsewhere> {
   const codex = binary('codex')
   const [claudeSaid, codexSaid] = await Promise.all([
     claude ? exec(claude, ['mcp', 'list'], 45_000).then(claudeConnectors, () => ({} as Record<string, ViaState>)) : null,
-    codex ? exec(codex, ['plugin', 'list', '--json'], 45_000).then(codexPlugins, () => new Set<string>()) : null,
+    codex ? exec(codex, ['plugin', 'list', '--json', '--marketplace', CODEX_MARKETPLACE], 45_000).then(codexPlugins, () => new Set<string>()) : null,
   ])
   const result: Elsewhere = {
     engines: { claude: claude !== null, codex: codex !== null }, connections: {}, scopes: {}, services: OWN_CARDS,

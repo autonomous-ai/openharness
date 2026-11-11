@@ -14,10 +14,16 @@ const pending = new Map();  // connector -> flow id
 let engines = {};
 let via = {};
 let scopes = {};
-const ENGINES = [["claude", "Claude", "Claude Code only · via claude.ai"], ["codex", "Codex", "Codex only · via ChatGPT"]];
+const CODEX_ACCOUNTS = "https://chatgpt.com/#settings/Connectors";
+const ENGINES = [["claude", "Claude", "Only Claude Code on the same Claude account"], ["codex", "Codex", "Only Codex on the same ChatGPT account"]];
 const working = new Set();  // "connector:engine" while it is being connected or removed
+// The services this computer may offer through Claude Code or Codex. Until it has said (checkingVia), their card waits
+// rather than offering Harness's own sign-in, which a click would otherwise start before the ways appeared.
+const WAY_CODES = new Set(["gmail", "google_calendar", "google_drive", "microsoft_365"]);
+let checkingVia = false;
 const hasWays = (code) => ENGINES.some(([engine]) => engines[engine] && via[code] && engine in via[code]);
-const onVia = (code) => ENGINES.some(([engine]) => engines[engine] && via[code] && (via[code][engine] || "not_connected") !== "not_connected");
+// Codex's plugin installed counts: whether its account is signed in is ChatGPT's to know.
+const onVia = (code) => ENGINES.some(([engine]) => engines[engine] && via[code] && !["not_connected", undefined].includes(via[code][engine]));
 let noticeTimer = 0;
 // A notice goes away on its own, so a disconnect from earlier does not stand there for good.
 function say(text) {
@@ -59,7 +65,7 @@ function waysCard(item) {
   for (const [engine, name] of ENGINES) {
     const state = engines[engine] ? (via[item.connector] || {})[engine] : undefined;
     if (state === "connected") chips.push(["✓ " + name, ""]);
-    else if (state === "installed") chips.push(["✓ " + name + " · sign-in on first use", ""]);
+    else if (state === "installed") chips.push(["✓ " + name + " · accounts in ChatGPT", ""]);
     else if (state === "reconnect") chips.push([name + " · Reconnect", " warn"]);
   }
   if (item.state === "connected") chips.push(["✓ Harness", ""]);
@@ -96,6 +102,8 @@ function card(item) {
   } else if (item.state !== "not_connected") {
     if (item.state === "reconnect" && !item.custom) actions.append(button("Reconnect", () => connect(item)));
     actions.append(button("×", () => confirmDisconnect(item), "icon", "Disconnect " + item.name));
+  } else if (checkingVia && WAY_CODES.has(item.connector)) {
+    actions.append(node("span", "Checking…", "hint"));
   } else if (item.reason) {
     // Signs in through the Harness account: shown, but not yet connectable.
     actions.append(node("span", item.reason, "hint"));
@@ -143,9 +151,10 @@ async function refresh() {
   const result = await request("/api/connections");
   items = result.connections.sort((a, b) => a.name.localeCompare(b.name));
   $("#signed-out").hidden = result.signed_in;
+  // Slower (it asks Claude Code and Codex), so after the list is on screen; until then those cards wait.
+  checkingVia = true;
   render();
-  // Slower (it asks Claude Code and Codex), so after the list is on screen.
-  loadElsewhere().catch(() => {});
+  loadElsewhere().catch(() => {}).finally(() => { checkingVia = false; render(); });
 }
 async function loadElsewhere() {
   const result = await request("/api/elsewhere");
@@ -187,7 +196,11 @@ function renderWays() {
     line.append(text);
     if (working.has(item.connector + ":" + key) || (key === "harness" && pending.has(item.connector))) line.append(node("span", "Working…", "hint"));
     else if (blocked) line.append(node("span", blocked, "hint"));
-    else if (state && state !== "not_connected" && state !== "reconnect") line.append(button("Remove", onRemove));
+    else if (state && state !== "not_connected" && state !== "reconnect") {
+      // Codex's plugin is in: its accounts (more than one, if wanted) are ChatGPT's, added or chosen there.
+      if (key === "codex") line.append(button("Accounts", () => window.open(CODEX_ACCOUNTS, "_blank", "noopener")));
+      line.append(button("Remove", onRemove));
+    }
     else line.append(button(state === "reconnect" ? "Reconnect" : "Connect", onConnect, "primary"));
     rows.append(line);
   };

@@ -80,6 +80,8 @@ class FakeBackend {
       seal: async (plaintext) => ({ plaintext, for: [...this.machines] }),
       open: async (envelope) => {
         const e = envelope as FakeBackend['envelope']
+        // Sealed for none of the account's machines: nobody will open it (the gateway says so, gateway/start.ts).
+        if (e && !e.for.some(m => this.machines.includes(m))) return { stranded: true }
         return e && e.for.includes(machine) ? { plaintext: e.plaintext, complete: this.machines.every(m => e.for.includes(m)) } : null
       },
     }
@@ -155,6 +157,24 @@ describe('two computers and the backend', () => {
     expect(Object.keys(snapshotOf(c.vault).connections).sort()).toEqual(['linear', 'notion'])
   })
 
+  it('replaces an envelope sealed only for computers the account no longer has, so the ones it has share again', async () => {
+    const backend = new FakeBackend()
+    // Written by a computer since signed out (its key gone from the log), sealed for it and one other gone.
+    backend.envelope = { plaintext: JSON.stringify({ v: 1, connections: { old: { token: token('o1', 50) } }, removed: {} }), for: ['X', 'Y'] }
+    backend.revision = 3
+    const logged: string[] = []
+    const vault = new Store(join(home, 'A'), env())
+    const a = { vault, sync: new VaultSync({ vault, port: backend.port('A'), env: env(), log: (line) => logged.push(line) }) }
+    const b = computer('B', backend)
+    a.vault.save('exa', token('e1', 100))
+    await a.sync.run()
+    expect(logged).toEqual([expect.stringContaining('sealed for computers no longer in the account')])
+    expect(backend.envelope!.for).toEqual(['A', 'B'])
+    expect(Object.keys(JSON.parse(backend.envelope!.plaintext).connections)).toEqual(['exa'])
+    await b.sync.run()
+    expect(Object.keys(snapshotOf(b.vault).connections)).toEqual(['exa'])
+  })
+
   it('reads a backend it cannot reach as nothing to do', async () => {
     const port = vaultPortOf(async () => ({ status: 503, body: { error: 'SERVICE_UNAVAILABLE' } }))
     const a = new VaultSync({ vault: new Store(join(home, 'A'), env()), port, env: env() })
@@ -177,6 +197,7 @@ describe('two computers and the backend', () => {
     expect(await port.write(3, { x: 1 })).toEqual({ written: false, revision: 4, envelope: { e: 2 } })
     expect(await port.seal('p')).toEqual({ sealed: true })
     expect(await port.open({ e: 1 })).toEqual({ plaintext: '{}', complete: true })
+    expect(await vaultPortOf(async () => ({ stranded: true })).open({ e: 1 })).toEqual({ stranded: true })
     expect(calls.map(([op]) => op)).toEqual(['read', 'write', 'seal', 'open'])
   })
 })

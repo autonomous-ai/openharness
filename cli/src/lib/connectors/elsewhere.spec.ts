@@ -50,11 +50,11 @@ describe('Gmail, Calendar and Drive through Claude Code or Codex', () => {
       // One of its three plugins is in: Codex reaches it.
       microsoft_365: { claude: 'not_connected', codex: 'installed' },
     })
-    expect(both.scopes.gmail).toEqual({ claude: 'Read, search, draft. No sending.', codex: 'Read, search, manage.', harness: 'Send only.' })
+    expect(both.scopes.gmail).toEqual({ claude: 'Read, search, draft, send.', codex: 'Read, search, manage.', harness: 'Send only.' })
     // No Harness sign-in for it, and no Harness card: the apps draw it from here.
     expect(both.scopes.microsoft_365.harness).toBeUndefined()
     expect(both.services).toEqual([{ connector: 'microsoft_365', name: 'Microsoft 365', description: expect.stringContaining('Outlook') }])
-    expect(asked).toEqual([['/bin/claude', 'mcp', 'list'], ['/bin/codex', 'plugin', 'list', '--json']])
+    expect(asked).toEqual([['/bin/claude', 'mcp', 'list'], ['/bin/codex', 'plugin', 'list', '--json', '--marketplace', 'openai-curated-remote']])
 
     const none = await elsewhere({ binary: () => null, run })
     expect(none.engines).toEqual({ claude: false, codex: false })
@@ -71,11 +71,11 @@ describe('Gmail, Calendar and Drive through Claude Code or Codex', () => {
     const deps = { binary: (name: string) => `/bin/${name}`, run }
     expect(await connectVia('gmail', 'codex', deps)).toEqual({ url: 'https://chatgpt.com/#settings/Connectors' })
     expect(asked).toEqual([['/bin/codex', 'plugin', 'add', 'gmail@openai-curated-remote']])
-    expect(await connectVia('google_drive', 'claude', deps)).toEqual({ url: 'https://claude.ai/new#customize/connectors' })
+    expect(await connectVia('google_drive', 'claude', deps)).toEqual({ url: 'https://claude.ai/new/#customize/connectors' })
     expect(asked).toHaveLength(1)
     expect(await disconnectVia('google_calendar', 'codex', deps)).toEqual({ url: 'https://chatgpt.com/#settings/Connectors' })
     expect(asked.at(-1)).toEqual(['/bin/codex', 'plugin', 'remove', 'google-calendar@openai-curated-remote'])
-    expect(await disconnectVia('gmail', 'claude', deps)).toEqual({ url: 'https://claude.ai/new#customize/connectors/id/gmail-gmailmcp' })
+    expect(await disconnectVia('gmail', 'claude', deps)).toEqual({ url: 'https://claude.ai/new/#customize/connectors/id/gmail-gmailmcp' })
     expect(asked).toHaveLength(2)
     // Microsoft 365 is three plugins to Codex: all of them in, all of them out.
     await connectVia('microsoft_365', 'codex', deps)

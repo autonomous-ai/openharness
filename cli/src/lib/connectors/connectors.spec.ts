@@ -648,7 +648,7 @@ describe('the page', () => {
     const post = (path: string, body: unknown) => fetch(viaPage.origin + path, { method: 'POST', headers, body: JSON.stringify(body) })
     expect(await (await post('/api/connect_via', { connector: 'google_drive', via: 'codex' })).json()).toEqual({ url: 'https://chatgpt.com/#settings/Connectors' })
     expect(await (await post('/api/disconnect_via', { connector: 'gmail', via: 'codex' })).json()).toEqual({ url: 'https://chatgpt.com/#settings/Connectors' })
-    expect(asked).toEqual(['plugin list --json', 'plugin add google-drive@openai-curated-remote', 'plugin remove gmail@openai-curated-remote'])
+    expect(asked).toEqual(['plugin list --json --marketplace openai-curated-remote', 'plugin add google-drive@openai-curated-remote', 'plugin remove gmail@openai-curated-remote'])
     const refused = await post('/api/connect_via', { connector: 'gmail', via: 'claude' })
     expect(refused.status).toBe(400)
     expect(await refused.json()).toEqual({ error: 'Claude Code is not installed on this computer.' })

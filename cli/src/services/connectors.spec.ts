@@ -122,7 +122,7 @@ describe('the connectors service', () => {
       .toEqual({ url: 'https://chatgpt.com/#settings/Connectors' })
     expect(await requests.connectors({ action: 'disconnect_via', connector: 'gmail', via: 'codex' }, OWNER))
       .toEqual({ url: 'https://chatgpt.com/#settings/Connectors' })
-    expect(asked).toEqual(['plugin list --json', 'plugin add gmail@openai-curated-remote', 'plugin remove gmail@openai-curated-remote'])
+    expect(asked).toEqual(['plugin list --json --marketplace openai-curated-remote', 'plugin add gmail@openai-curated-remote', 'plugin remove gmail@openai-curated-remote'])
     expect(await requests.connectors({ action: 'connect_via', connector: 'gmail', via: 'claude' }, OWNER))
       .toEqual({ error: 'CONNECTORS_FAILED', detail: 'Claude Code is not installed on this computer.' })
   })
@@ -153,6 +153,21 @@ describe('the connectors service', () => {
     hear({ type: 'desk_changed', revision: 1 })
     await new Promise((resolve) => setTimeout(resolve, 20))
     expect(reads()).toBe(before + 2)
+  })
+
+  it('exchanges the account\'s connections before a Refresh lists them, and lists at once without one', async () => {
+    const backend = vi.fn(async (_method: string, _path: string) => ({ status: 200, body: { success: true, data: { revision: 0, envelope: null } } }))
+    const requests = startConnectors(fakeCore({ account: { backend } as never }), { env, port: 0 })
+    await vi.waitFor(() => expect(backend).toHaveBeenCalledWith('GET', '/api/connector-vault'))
+    const reads = () => backend.mock.calls.filter(([, path]) => path === '/api/connector-vault').length
+    const before = reads()
+    await requests.connectors!({ action: 'list' }, OWNER)
+    expect(reads()).toBe(before)
+    expect(await requests.connectors!({ action: 'list', sync: true }, OWNER)).toMatchObject({ shared: true })
+    expect(reads()).toBe(before + 1)
+    // Kept to this computer: nothing to exchange, the list all the same.
+    expect(await startConnectors(fakeCore(), { env, vaultPort: null }).connectors!({ action: 'list', sync: true }, OWNER))
+      .toMatchObject({ shared: false })
   })
 
   it('keeps them on this computer alone while signed out', async () => {

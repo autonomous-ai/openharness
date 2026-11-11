@@ -33,6 +33,8 @@ import { answerVaultOp, VaultSync, vaultPortOf, type VaultPort } from '../lib/co
 export { CONNECTORS_REQUESTS } from '../core/api.js'
 
 const GATEWAY_CACHE_MS = 60_000
+/** How long a Refresh waits for the account's connections to be exchanged before it lists what is here. */
+const SYNC_WAIT_MS = 15_000
 /** How often the bridge looks for connections to keep alive (renew.ts `keepAlive`), and how soon after it starts. */
 const KEEP_ALIVE_EVERY_MS = 3_600_000
 const KEEP_ALIVE_FIRST_MS = 120_000
@@ -192,12 +194,14 @@ export function startConnectors(core: CoreApi, overrides: ConnectorsOverrides = 
   else if (local) listenPipe(vault, overrides.pipePath, deps.retryMs)
   // Stamped now, not at a client's first call: the day counts from this start.
   if (local) { try { retireBridgeKey(vault) } catch { /* The next request tries again. */ } }
-  try { sync(vault, env) } catch { /* A config that cannot be written now is written at the next connect. */ }
+  /** Every agent installed here given its entries; a config that cannot be written now is written at the next change. */
+  const syncAgents = (): void => { try { sync(vault, env) } catch { /* Left as it is. */ } }
+  syncAgents()
 
   // Connections the same on every computer of the account: read now, at each `connectors_changed`, and
   // written whenever this computer's change (here, by `harness connections`, by a renewal in the bridge).
-  if (deps.vaultPort) {
-    const shared = new VaultSync({ vault, port: deps.vaultPort, env, log: console.warn })
+  const shared = deps.vaultPort ? new VaultSync({ vault, port: deps.vaultPort, env, log: console.warn }) : null
+  if (shared) {
     shared.start()
     core.account.onNotice((notice) => {
       if (notice.type === 'connectors_changed') shared.changed(notice.revision)
@@ -225,7 +229,17 @@ export function startConnectors(core: CoreApi, overrides: ConnectorsOverrides = 
     switch (payload.action) {
       // `shared`: a connection made here reaches the account's other computers. The phone signs in
       // through one that says so before one that keeps it to itself (an older CLI says nothing).
-      case 'list': return { ...cards(vault, await gatewayOffers()), shared: deps.vaultPort !== null }
+      // `sync`: the Refresh button. The account's connections are exchanged first (a computer added since the last
+      // write is sealed for), waited on for a while. Then every agent installed here gets its entries again: one
+      // installed since the last connection change (Claude Code or Codex set up after signing in) has none.
+      // Only when the person asks: nothing watches for an agent being installed.
+      case 'list': {
+        if (payload.sync === true) {
+          if (shared) await Promise.race([shared.run(), new Promise((done) => setTimeout(done, SYNC_WAIT_MS).unref())])
+          syncAgents()
+        }
+        return { ...cards(vault, await gatewayOffers()), shared: shared !== null }
+      }
       case 'connect': {
         const code = validateCode(payload.connector)
         return { ...(await flows.start(code, signInFor(vault, code, services(await gatewayOffers())))) }
