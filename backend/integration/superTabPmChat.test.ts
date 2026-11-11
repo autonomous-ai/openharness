@@ -78,4 +78,21 @@ describe('New project\'s request in its PM\'s 1:1 chat', () => {
     const channel = (await f.store.messages(owner, f.tab, f.app.conversationId, {})).messages
     expect(channel.filter(m => m.author.kind === 'person' && !m.source)).toEqual([])
   })
+
+  it('never types what its person deleted while it waited, even a message kept as its thread\'s root', async () => {
+    const f = await swarm()
+    const started = (await f.execute({ type: 'lead.start', projectId: f.app.projectId, machineId: owner.sub, engine: 'claude',
+      repositoryUrl: 'https://github.com/example/app' })).result as { startId: string; chatId: string }
+    const send = async (text: string, replyTo: string | null = null) => String((await f.execute({ type: 'message.send', conversationId: started.chatId, text,
+      replyTo, recipientIds: [] })).result.messageId)
+    const first = await send('Build the sign-in page.')
+    const reply = await send('With a password reset.', first)
+    const gone = await send('Ignore this.')
+    expect((await f.execute({ type: 'message.delete', conversationId: started.chatId, messageId: first })).result.kept).toBe(true)
+    await f.execute({ type: 'message.delete', conversationId: started.chatId, messageId: gone })
+
+    await f.execute({ type: 'agent.startDispatch', startId: started.startId }, randomUUID(), owner.sub)
+    const pm = String((await f.execute({ type: 'agent.started', startId: started.startId, harnessId: randomUUID(), configuration }, randomUUID(), owner.sub)).result.agentId)
+    expect((await f.store.deliveries(owner, f.tab, pm)).map(d => d.messageId)).toEqual([reply])
+  })
 })

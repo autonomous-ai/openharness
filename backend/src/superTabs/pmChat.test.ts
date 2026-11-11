@@ -128,6 +128,57 @@ describe('the PM that joins', () => {
   })
 })
 
+describe('a PM that leads the project another way', () => {
+  /** A session of the owner's shared into the channel, which joins the project alone (#2207). */
+  const shared = (f: ReturnType<typeof swarm>, harnessId: string) => f.run({ type: 'agent.add', conversationId: f.app.conversationId, machineId: 'owner-mac',
+    harnessId, name: 'Mine', configuration: config, lead: false }, owner, hosted).result.agentId as string
+  const named = (f: ReturnType<typeof swarm>, agentId: string) =>
+    f.run({ type: 'conversation.agent', conversationId: f.app.conversationId, agentId, present: true, lead: true })
+
+  it('named by hand, its person\'s, takes the chat with what waited', () => {
+    const f = swarm()
+    const { chatId } = f.lead()
+    const asked = f.send(chatId, 'Build the sign-in page.').result.messageId as string
+    const mine = shared(f, 'by-hand')
+    const effects = named(f, mine)
+    expect(f.chat(chatId).agentIds).toEqual([mine])
+    expect(f.state.agents.find(a => a.id === mine)!.chatId).toBe(chatId)
+    expect(effects.lateDeliveries?.map(d => [d.messageId, d.conversationId])).toEqual([[asked, chatId]])
+    expect(f.project()!.pmChat).toBeUndefined()
+  })
+
+  it('named by hand with a chat of its own already, leaves the chat, which says so', () => {
+    const f = swarm()
+    const { chatId } = f.lead()
+    f.send(chatId, 'Build the sign-in page.')
+    const mine = shared(f, 'by-hand')
+    giveAgentsChats(f.state, NOW)
+    const effects = named(f, mine)
+    expect(f.chat(chatId).agentIds).toEqual([])
+    expect(effects.messages.filter(m => m.conversationId === chatId).map(m => m.text)).toEqual(
+      ['This project\'s Product Manager already has its own chat. Send it what you wrote here.'])
+    expect(f.project()!.pmChat).toBeUndefined()
+  })
+
+  it('added by hand while the Swarm starts one, takes the chat, and the start that loses says nothing there', () => {
+    const f = swarm()
+    const { startId, chatId } = f.lead()
+    const hand = f.run({ type: 'agent.add', conversationId: f.app.conversationId, machineId: 'owner-mac', harnessId: 'by-hand', name: 'Mine',
+      configuration: config, lead: true }, owner, hosted).result.agentId as string
+    expect(f.chat(chatId).agentIds).toEqual([hand])
+    const overtaken = f.started(startId)
+    expect(overtaken.result.refused).toMatch(/already/)
+    expect(overtaken.messages.filter(m => m.conversationId === chatId)).toEqual([])
+  })
+
+  it('no other agent joins the chat while it waits', () => {
+    const f = swarm()
+    const { chatId } = f.lead()
+    expect(refusal(() => f.run({ type: 'agent.add', conversationId: chatId, machineId: 'owner-mac', harnessId: 'regular', name: 'Ada', configuration: config,
+      lead: false }, owner, hosted))).toMatchObject({ code: 'AGENT_CHAT_TAKEN' })
+  })
+})
+
 describe('a PM start that ends without its PM', () => {
   const rowsIn = (effects: { messages: Array<{ conversationId: string; text: string; source?: Record<string, unknown>; recipients: string[] }> }, id: string) =>
     effects.messages.filter(m => m.conversationId === id)
