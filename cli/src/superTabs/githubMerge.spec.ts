@@ -8,6 +8,8 @@ import { commandRecords } from './commandRecords.fake.js'
 type Json = Record<string, unknown>
 const HEAD = 'f6edb44c0ffee0000000000000000000000000ab'
 const OLD = 'a1b2c3d4e5f60000000000000000000000000000'
+/** The commit of main a pull request stands on, and two more of main's, one after the other. */
+const FORK = 'f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0', M1 = '1'.repeat(40), M2 = '2'.repeat(40)
 const comment = (body: string, extra: Json = {}): Json => ({ body, author_association: 'MEMBER', user: { login: 'deehw' }, created_at: '2026-11-09T12:00:00Z', ...extra })
 /** A pull request of the repository's own branch, as GitHub lists it. */
 const pull = ({ head, ...extra }: Json = {}): Json => ({ number: 4, draft: false, base: { ref: 'main' }, labels: [{ name: 'builder:pip' }], body: 'Closes #2', ...extra,
@@ -36,7 +38,11 @@ function fakeGitHub() {
       : /\/issues\/\d+\/comments$/.test(p) ? (repo.comments.get(Number(p.split('/').at(-2))) ?? []).map(records.served)
       : /\/pulls\/\d+\/reviews$/.test(p) ? repo.reviews.get(Number(p.split('/').at(-2))) ?? []
       : /\/pulls\/\d+\/commits$/.test(p) ? repo.commits.get(Number(p.split('/').at(-2))) ?? [{ sha: HEAD }]
-      : /\/compare\/main\.\.\.[0-9a-f]+$/.test(p) ? repo.compare.has(compared) ? { behind_by: 0, ...repo.compare.get(compared) } : compared === HEAD ? { behind_by: 0, files: [] } : null
+      // A head against main, from the commit of main it stands on (FORK unless the test says another); and main's own change
+      // between two of its commits.
+      : /\/compare\/main\.\.\.[0-9a-f]+$/.test(p) ? repo.compare.has(compared) ? { behind_by: 0, merge_base_commit: { sha: FORK }, ...repo.compare.get(compared) }
+        : compared === HEAD ? { behind_by: 0, merge_base_commit: { sha: FORK }, files: [] } : null
+      : /\/compare\/[0-9a-f]+\.\.\.[0-9a-f]+$/.test(p) ? repo.compare.has(p.split('/compare/')[1]!) ? { behind_by: 0, ...repo.compare.get(p.split('/compare/')[1]!) } : null
       : /\/commits\/[0-9a-f]+\/check-runs$/.test(p) ? { check_runs: repo.runs.get(p.split('/').at(-2)!) ?? [] }
       : /\/commits\/[0-9a-f]+\/status$/.test(p) ? { statuses: repo.statuses.get(p.split('/').at(-2)!) ?? [] }
       : /\/pulls\/\d+$/.test(p) ? { mergeable_state: repo.state }
@@ -135,12 +141,46 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
   // waited on a reader who had read it all.
   const changed = (lines: string[], at = 4) => ({ files: [{ filename: 'sandbox/quotes.py', status: 'modified', changes: lines.length,
     patch: [`@@ -${at},3 +${at},${2 + lines.length} @@ def quote():`, '     today = date.today()', ...lines, '     return pick(today)'].join('\n') }] })
+  // Main grew by five lines above the change between the two heads' bases: the same lines, five further down.
+  const grew = (file = 'sandbox/quotes.py') => ({ files: [{ filename: file, status: 'modified', changes: 5, patch: '@@ -1,2 +1,7 @@\n import os\n+a\n+b\n+c\n+d\n+e\n import sys' }] })
+  const rebased = (f: ReturnType<typeof setup>, at: number, main: Json | null = grew()) => {
+    f.github.repo.comments.set(4, [comment('Juno, 14:20, to **Pip**: READ-OK a1b2c3d')])
+    f.github.repo.compare.set('a1b2c3d', { merge_base_commit: { sha: M1 }, ...changed(['+    days = int(n)', '-    days = 1']) })
+    f.github.repo.compare.set(HEAD, { merge_base_commit: { sha: M2 }, ...changed(['+    days = int(n)', '-    days = 1'], at) })
+    if (main) f.github.repo.compare.set(`${M1}...${M2}`, main)
+  }
   it('counts a READ-OK on an earlier head whose change is the same as the head\'s, as lampOS\'s patch_of reads it', async () => {
     const f = setup()
-    f.github.repo.comments.set(4, [comment('Juno, 14:20, to **Pip**: READ-OK a1b2c3d')])
-    // Main moved under it: the same lines among the same lines, now further down.
-    f.github.repo.compare.set('a1b2c3d', changed(['+    days = int(n)', '-    days = 1']))
-    f.github.repo.compare.set(HEAD, changed(['+    days = int(n)', '-    days = 1'], 9))
+    // Main moved under it: the same lines among the same lines, further down by what main added above them.
+    rebased(f, 9)
+    await settle(f)
+    expect(f.merges()).toHaveLength(1)
+  })
+
+  // Review of #3993. The lines around a change do not say where it is when the same lines stand in several places: a step
+  // added to one job of a workflow and the same step added to another read the same, numbers aside (11 of this repository's
+  // 51 workflow files have such places). So the place counts too: where each change begins, moved only by what the base
+  // itself added or removed above it between the two heads' bases.
+  it.each<[string, (f: ReturnType<typeof setup>) => void]>([
+    ['at another place on the same base', f => {
+      f.github.repo.comments.set(4, [comment('Juno, 14:20, to **Pip**: READ-OK a1b2c3d')])
+      f.github.repo.compare.set('a1b2c3d', changed(['+    days = int(n)', '-    days = 1']))
+      f.github.repo.compare.set(HEAD, changed(['+    days = int(n)', '-    days = 1'], 9))
+    }],
+    ['moved by more than main added above them', f => rebased(f, 12)],
+    ['moved though main changed another file alone', f => rebased(f, 9, grew('sandbox/other.py'))],
+    ['on a base whose own change GitHub does not give', f => rebased(f, 9, null)],
+    ['on a base whose change to that file GitHub gives no patch for', f => rebased(f, 9, { files: [{ filename: 'sandbox/quotes.py', status: 'modified', changes: 5 }] })],
+    ['on a base that does not hold the earlier one', f => rebased(f, 9, { ...grew(), behind_by: 2 })],
+  ])('takes no READ-OK on an earlier head whose same lines, among the same lines, are %s', async (_case, arrange) => {
+    const f = setup()
+    arrange(f)
+    await settle(f)
+    expect(f.merges()).toEqual([])
+  })
+  it('counts a READ-OK across a rebase onto a base that changed other files alone, its lines where they were', async () => {
+    const f = setup()
+    rebased(f, 4, grew('sandbox/other.py'))
     await settle(f)
     expect(f.merges()).toHaveLength(1)
   })
@@ -165,6 +205,9 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
   it.each([
     ['a symbolic link', '@@ -0,0 +1 @@\n+../../.env\n\\ No newline at end of file'],
     ['a symbolic link pointed elsewhere', '@@ -1 +1 @@\n-docs/a.md\n\\ No newline at end of file\n+../../.env\n\\ No newline at end of file'],
+    ['a symbolic link removed', '@@ -1 +0,0 @@\n-../../.env\n\\ No newline at end of file'],
+    // Its target may hold a newline: two lines, one mark of no newline at the end.
+    ['a symbolic link to a name of two lines', '@@ -0,0 +1,2 @@\n+d\n+/../../.env\n\\ No newline at end of file'],
     ['a submodule', '@@ -1 +1 @@\n-Subproject commit 1111111111111111111111111111111111111111\n+Subproject commit 2222222222222222222222222222222222222222'],
   ])('takes no READ-OK on an earlier head for a file that may be %s: its kind is not told', async (_case, patch) => {
     const f = setup()
@@ -220,6 +263,16 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
       await settle(unnamed)
       expect(unnamed.merges(), JSON.stringify(extra)).toEqual([])
     }
+  })
+
+  it('still counts a READ-OK for a file with lines around its change that ends with no newline: no link\'s patch has any', async () => {
+    const f = setup()
+    f.github.repo.comments.set(4, [comment('Juno, 14:20, to **Pip**: READ-OK a1b2c3d')])
+    const files = { files: [{ filename: 'docs/notes.md', status: 'modified', changes: 2, patch: '@@ -1,3 +1,3 @@\n one\n two\n-three\n\\ No newline at end of file\n+3\n\\ No newline at end of file' }] }
+    f.github.repo.compare.set('a1b2c3d', files)
+    f.github.repo.compare.set(HEAD, files)
+    await settle(f)
+    expect(f.merges()).toHaveLength(1)
   })
 
   it('never merges on its author\'s own READ-OK, however its two-word name is written', async () => {
