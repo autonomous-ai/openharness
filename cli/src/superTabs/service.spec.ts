@@ -7,7 +7,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
 import type { CoreApi } from '../core/api.js'
 import type { SaidOnCard } from './cards.js'
-import { superTabService } from './service.js'
+import { superTabService, type SuperTabServiceOptions } from './service.js'
+import { GitHubStop } from './githubRest.js'
 import { object } from './wire.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
 import { HostFeed } from './hostFeed.js'
@@ -26,7 +27,7 @@ const leads = (state: Record<string, unknown>, agentId: unknown) => {
 const swarmData = (agent: Record<string, unknown>, path: string, state: Record<string, unknown> = { agents: [agent] }): unknown =>
   path.includes('/hosts/') ? hostForm([{ tabId: 'tab', agent, lead: leads(state, agent.id) }], { tabs: ['tab'] })
     : /^\/api\/super-tabs\/tab\/(parts|changes)/.test(path) ? swarmReply(path, state) : { state }
-function setup(options: { prepareContribution?: typeof import('./contribution.js').prepareContribution } = {}) {
+function setup(options: Pick<SuperTabServiceOptions, 'prepareContribution' | 'nextThings'> = {}) {
   const agentId = createHash('sha256').update(JSON.stringify(['machine-1', 'native'])).digest('hex').slice(0, 24)
   const agent = { id: agentId, machineId: 'machine-1', harnessId: 'native' }
   const call = vi.fn<CoreApi['account']['backend']>(async (_method, path) => ({ status: 200, body: { success: true, data: swarmData(agent, path) } }))
@@ -185,7 +186,7 @@ it('starts the first answers with the host and stops them with the service', asy
 })
 // Swarm plan, step 1, item 1: an agent's next thing, typed as its turn ends (nextThing.ts), with the host.
 it('starts the next things with the host and stops them with the service', async () => {
-  const nextThings = { start: vi.fn(), stop: vi.fn() }
+  const nextThings = { start: vi.fn(), stop: vi.fn(), inbox: vi.fn() }
   const service = superTabService(fakeCore({ account: { backend: vi.fn() } }), { host: () => ({ machineId: 'machine-1', start: vi.fn(), stop: vi.fn() }) as unknown as SuperTabHost,
     shipping: () => ({ start: vi.fn(), stop: vi.fn() }), firstAnswers: () => ({ start: vi.fn(), stop: vi.fn() }), nextThings: () => nextThings })
   expect(nextThings.start).not.toHaveBeenCalled()
@@ -193,6 +194,20 @@ it('starts the next things with the host and stops them with the service', async
   expect(nextThings.start).toHaveBeenCalledOnce()
   service.port.disconnected()
   expect(nextThings.stop).toHaveBeenCalledOnce()
+})
+// Swarm plan, step 1, item 2: what waits for the agent that asks, as its turns' ends type it (nextThing.ts inbox).
+it('lists what waits for the agent in its own pane, and says a GitHub failure by its code', async () => {
+  const inbox = vi.fn(async (_harnessId: string) => ['Next: acme/app#12 Fix the login bug. …'])
+  const t = setup({ nextThings: () => ({ start: vi.fn(), stop: vi.fn(), inbox }) })
+  expect(await t.ask({ action: 'inbox', harnessId: 'native' }, owner)).toEqual({ ok: true, value: { waiting: ['Next: acme/app#12 Fix the login bug. …'] } })
+  expect(inbox).toHaveBeenCalledWith('native')
+  inbox.mockRejectedValueOnce(new GitHubStop('RATE_LIMITED', 'GitHub asks to wait until 14:05.', true, 0))
+  expect(await t.ask({ action: 'inbox', harnessId: 'native' }, owner)).toEqual({ error: 'RATE_LIMITED', detail: 'GitHub asks to wait until 14:05.' })
+  inbox.mockRejectedValueOnce(new Error('Disk full'))
+  expect(await t.ask({ action: 'inbox', harnessId: 'native' }, owner)).toEqual({ error: 'SUPER_TAB_UNAVAILABLE', detail: 'Disk full' })
+  // Only an agent asks it, for itself.
+  expect(await t.ask({ action: 'inbox', harnessId: 'stranger' }, owner)).toMatchObject({ error: 'NOT_IN_SWARM' })
+  expect(inbox).toHaveBeenCalledTimes(3)
 })
 it('limits the owner proxy to Super Tab endpoints and preserves backend failures', async () => {
   const t = setup()
