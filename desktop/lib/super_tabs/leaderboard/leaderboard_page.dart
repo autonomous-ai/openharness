@@ -11,7 +11,6 @@ import '../../widgets/desktop_chrome.dart';
 import '../controller.dart';
 import '../identity.dart';
 import '../model.dart';
-import 'format.dart';
 import 'shipping.dart';
 
 /// The Swarm's leaderboard (anh Dee, 2026-11-09: "encourage people to build more agents that actually make an impact on the
@@ -276,7 +275,7 @@ class _LeaderboardState extends State<SuperTabLeaderboardPage> {
                       ],
                     ),
                     Text(
-                      '${plural(score.agentsShipping, 'agent')} shipping · Level ${score.level}',
+                      '${_plural(score.agentsShipping, 'agent')} shipping · Level ${score.level}',
                       key: ValueKey('leaderboard-detail-${score.personId}'),
                       overflow: TextOverflow.ellipsis,
                       style: grid.AppType.caption(
@@ -322,3 +321,6 @@ class _Loading extends StatelessWidget {
     ],
   );
 }
+
+String _plural(int count, String one) =>
+    '$count ${count == 1 ? one : '${one}s'}';
