@@ -43,8 +43,9 @@ void main() {
           find.text('Start a project, or bring an agent to work with you.'),
           findsOneWidget,
         );
-        // An empty list shows nothing: Projects is its heading and its +, with no words under it.
-        if (at >= 720) {
+        // An empty list shows nothing: Projects is its heading and its +, with no words under it. Under 720 the left pane is
+        // behind Conversations.
+        if (key('super-left-pane').evaluate().isNotEmpty) {
           expect(key('project-sidebar-projects'), findsOneWidget);
           expect(key('project-sidebar-projects-add'), findsOneWidget);
         }
@@ -61,6 +62,21 @@ void main() {
       },
     );
   }
+
+  testWidgets(
+    'a reader who cannot add a project sees no Projects in a Swarm with none: no heading with nothing under it',
+    (tester) async {
+      final server = nothing();
+      for (final person in (server.state['people'] as List).cast<Map>()) {
+        if (person['id'] == 'owner') person['role'] = 'viewer';
+      }
+      await openSwarmV4(tester, server);
+      expect(key('super-left-pane'), findsOneWidget);
+      expect(key('project-sidebar-projects'), findsNothing);
+      expect(find.text('No projects yet.'), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('the same in the dark', (tester) async {
     await openSwarmV4(tester, nothing(), brightness: Brightness.dark);

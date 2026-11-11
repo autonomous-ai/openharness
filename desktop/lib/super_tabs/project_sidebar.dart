@@ -308,25 +308,31 @@ class ProjectSidebar extends StatelessWidget {
       for (final start in _starts)
         if (start.project) start,
     ];
+    final channels = _channels(snapshot, reading);
+    // An empty list shows nothing, or only the action that fills it (design system, Swarm elements, rule 7): Projects with
+    // none is its heading and its +, and with no + to offer, nothing.
+    final projects =
+        channels.isNotEmpty || projectStarts.isNotEmpty || controller.canWrite;
     return [
       ?switcher,
       const SizedBox(height: grid.AppDesktop.groupGap),
       ..._myAgents(snapshot, reading),
-      SuperTabQuietHeading(
-        'Projects',
-        key: const ValueKey('project-sidebar-projects'),
-        collapsed: !controller.projectsGroupOpen,
-        onTap: controller.toggleProjectsGroup,
-        onAdd: controller.canWrite ? onNewProject : null,
-        addTooltip: 'New project',
-        addKey: const ValueKey('project-sidebar-projects-add'),
-      ),
-      if (controller.projectsGroupOpen) ...[
-        for (final start in projectStarts) _startRow(start),
-        // An empty list shows nothing: the heading's + is what fills it (design system, Swarm elements, rule 7).
-        for (final (_, channel) in _channels(snapshot, reading)) channel,
+      if (projects) ...[
+        SuperTabQuietHeading(
+          'Projects',
+          key: const ValueKey('project-sidebar-projects'),
+          collapsed: !controller.projectsGroupOpen,
+          onTap: controller.toggleProjectsGroup,
+          onAdd: controller.canWrite ? onNewProject : null,
+          addTooltip: 'New project',
+          addKey: const ValueKey('project-sidebar-projects-add'),
+        ),
+        if (controller.projectsGroupOpen) ...[
+          for (final start in projectStarts) _startRow(start),
+          for (final (_, channel) in channels) channel,
+        ],
+        const SizedBox(height: grid.AppDesktop.groupGap),
       ],
-      const SizedBox(height: grid.AppDesktop.groupGap),
       ..._yourMachines(),
       ..._humans(snapshot),
     ];
