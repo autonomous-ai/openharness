@@ -234,7 +234,7 @@ Future<List<SuperTabController>> _show(
   tester.view.devicePixelRatio = 1;
   // Taller than the gallery needs: each section is its own image, so the page's height is in none of them, and a
   // section that grows needs no new height.
-  tester.view.physicalSize = const Size(760, 5000);
+  tester.view.physicalSize = const Size(760, 6000);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
