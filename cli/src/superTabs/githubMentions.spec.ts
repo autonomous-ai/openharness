@@ -98,6 +98,17 @@ describe('GitHub news for this computer\'s v4 agents (githubMentions.ts)', () =>
     expect(f.relayed().map(command => command.text)).toEqual(['Harness, 11:58, to **Pip**: please read this pull request, and start your comment with READ-OK f6edb44 or HOLD f6edb44.'])
   })
 
+  // Finn, 2026-11-11: each task was heard twice, the second time as Harness's own note giving it, relayed as its person's words.
+  it('relays not Harness\'s own word giving a task, which the task already told, and still an ask it makes', async () => {
+    const f = setup()
+    await f.mentions.tick()
+    f.github.comments.push(comment(2, 10, 'Harness, 12:00: for **Pip**: it can start now.', { issue_url: 'https://api.github.com/repos/acme/app/issues/9' }),
+      comment(3, 11, 'Harness, 12:01, to **Pip**: please read this pull request, then run harness super-tab read ok acme/app#4 f6edb44.'))
+    await f.mentions.tick()
+    await f.mentions.tick()
+    expect(f.relayed().map(command => command.text)).toEqual(['Harness, 12:01, to **Pip**: please read this pull request, then run harness super-tab read ok acme/app#4 f6edb44.'])
+  })
+
   it('relays nothing a stranger wrote, nor the agent\'s own signed post, nor a word that only looks like its name', async () => {
     const f = setup()
     await f.mentions.tick()

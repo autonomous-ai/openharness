@@ -382,7 +382,7 @@ export const LEARN_MIN = 3, LEARNED_FLOOR = 10, LEARNED_CEILING = 24 * 60
 export function startedAt(comments: Json[]): number | null {
   for (const comment of comments) {
     const first = String(comment.body ?? '').split('\n').find(line => line.trim()) ?? ''
-    if (/\btaken by\b/i.test(first) || /^Harness, \d\d:\d\d: for \*\*/.test(first)) {
+    if (/\btaken by\b/i.test(first) || GIVEN.test(first)) {
       const at = Date.parse(String(comment.created_at ?? ''))
       if (Number.isFinite(at)) return at
     }
@@ -452,4 +452,7 @@ export function readerFor(read: Read, author: string | null, skip: ReadonlySet<s
  *  `harness super-tab read ok owner/repo#24 f6edb44 …`": the reader it names, and the head it is asked to read. An ask from before
  *  the verdict was a command named the head after "READ-OK", and is on open pull requests still: that form can go after
  *  2026-12-10. The assigner finds its own asks by it, and GitHub news keeps each agent's as owed (githubMentions.ts). */
+/** Harness's word giving a task to its builder (githubAssign.ts give): "Harness, 15:40: for **Pip**: it can start now." */
+export const GIVEN = /^Harness, \d\d:\d\d: for \*\*([^*]+)\*\*: /
+
 export const ASKED = /^Harness, \d\d:\d\d, to \*\*([^*]+)\*\*: [^\n]*?please read[^\n]*?(?:super-tab read ok \S+|READ-OK) ([0-9a-f]{7,40})/

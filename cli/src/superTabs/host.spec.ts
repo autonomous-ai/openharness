@@ -4213,11 +4213,12 @@ describe('a person\'s message in an agent\'s own 1:1 chat', () => {
     })
     // What GitHub said, which Harness writes into the person's chat as theirs with a source of its own (backend githubRelay.ts), is
     // text anyone who may comment there wrote: never typed as the person's own words.
-    it('keeps what GitHub said, written into the chat as its person\'s, as it was', async () => {
+    // anh Dee, 2026-11-11 ("what are those extra verbose things"): typed as its person's words, with where it was and a command
+    // to answer in the chat, it read as words they never wrote; it is answered on GitHub.
+    it('types what GitHub said as it came: not as its person\'s words, and with no command to answer in the chat', async () => {
       const github = await wrapped({ author: KEN, text: 'Pip, please read the failing check.', source: { kind: 'github', event: 'comment', on: 'pull', repository: 'acme/app',
         number: 4, login: 'octocat', association: 'MEMBER' } })
-      expect(github.text).toContain('@Ken, to you:\nPip, please read the failing check.')
-      expect(github.text).toContain('Answer: ')
+      expect(github.text).toBe('Pip, please read the failing check.')
     })
     it('owes none of them a reply', async () => {
       const github = { kind: 'github', event: 'comment', on: 'pull', repository: 'acme/app', number: 4, login: 'octocat', association: 'MEMBER' }

@@ -18,7 +18,7 @@
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { ASKED, readerKey, worksOnOf } from './assign/crew.js'
+import { ASKED, GIVEN, readerKey, worksOnOf } from './assign/crew.js'
 import { GitHubReads, GitHubStop, PAGE, Waits, waitWords, type GitHubGet } from './githubRest.js'
 import { permanentRefusal } from './retries.js'
 import { identifier, object, SuperTabHostError } from './wire.js'
@@ -308,6 +308,9 @@ export class GitHubMentions {
       // Edited, not new: GitHub's since is by update time. Never twice, never a stranger's, never on nothing.
       if (kept.seen.includes(item.key) || !TEAM.has(item.association) || !Number.isSafeInteger(item.number)) continue
       if ((item.event === 'comment' && item.createdAt < kept.comments) || (item.event === 'review-comment' && item.createdAt < kept.reviewComments)) continue
+      // Harness's own word giving a task names its builder, which the task itself already told: relayed too, the builder heard
+      // each of its tasks twice, the second as its person's words (Finn, 2026-11-11). It is still read for a reader's ask.
+      if (item.event === 'comment' && GIVEN.test((item.text.split('\n').find(line => line.trim()) ?? '').trim())) { if (agents.length) this.noteAsk(kept, agents, item); kept.seen.push(item.key); continue }
       const owners = kept.owned[String(item.number)] ?? []
       if (item.event === 'comment') this.noteAsk(kept, agents, item)
       let refusal: SuperTabHostError | null = null
