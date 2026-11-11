@@ -367,10 +367,14 @@ export function createBinding({
       // A TUI the person relaunched with another OPENCLAW_STATE_DIR (as the store hold asks) shows the same key, so the
       // pass below never binds it again: its new folder replaces the row's, and the session is let go so the next pass
       // binds it again and attaches its stream there. Before the handover: a task is typed only into a session read.
-      if (agent.sessionId && screen.key === agent.sessionId && openclawFolderReads.get(agent.agentId) !== tuiProcess(observed.processIdentity)) {
+      // A row that kept no folder, on this daemon's first read of its TUI, has its stream on the store these same open
+      // files name (lib/openclawStore.ts): the folder is only recorded, the session kept.
+      const readBefore = openclawFolderReads.get(agent.agentId)
+      if (agent.sessionId && screen.key === agent.sessionId && readBefore !== tuiProcess(observed.processIdentity)) {
+        const streamMayDiffer = !!agent.openclawStateDir || readBefore !== undefined
         const stateDir = await readOpenclawStateDir(agent.agentId, observed.processIdentity)
         if (!current()) return
-        if (stateDir && registry.setOpenclawStateDir(agent.agentId, stateDir)) {
+        if (stateDir && registry.setOpenclawStateDir(agent.agentId, stateDir) && streamMayDiffer) {
           console.log(`[discovery] ${sid(agent.agentId)} openclaw · state folder changed`)
           forgetSession(agent.sessionId, { force: true, keepAgent: true })
           return
