@@ -12,7 +12,7 @@ import {
 } from './harnessSessionLabel.js'
 import { inTmuxRoom } from './tmuxControlGate.js'
 import { tmuxFeatures } from './tmuxVersion.js'
-import { isNoTmuxServerError, rememberTmuxServer, reviveRemovedTmuxSocket } from './tmux.js'
+import { heardFromTmux, isNoTmuxServerError, noTmuxServerYet, rememberTmuxServer, reviveRemovedTmuxSocket } from './tmux.js'
 
 export interface TmuxPaneSnapshot {
   tmuxPane: string
@@ -93,12 +93,15 @@ export type TmuxPaneInventory =
  * every one of the release daemon's panes, and could stop them (e2e/twodaemons.e2e.ts).
  */
 export async function listTmuxPanes(owner: string = harnessPaneOwner(env.ADAPTER_DATA_DIR)): Promise<TmuxPaneInventory> {
+  // No server, as tmux said under a minute ago, and still no socket: no panes, without starting tmux (lib/tmux.ts).
+  if (noTmuxServerYet()) return { ok: true, panes: [] }
   // Printable delimiters survive tmux's POSIX-locale output sanitiser (see PANE_FORMAT).
   const format = paneFormat((await tmuxFeatures()).paneOptions)
   const read = () => execText('tmux', ['list-panes', '-a', '-F', format], 2_000)
   let result = await read()
   // A server whose socket was removed still runs its panes: asked back, it is read again, once.
   if (!result.ok && isNoTmuxServerError(result.error) && await reviveRemovedTmuxSocket()) result = await read()
+  heardFromTmux(result.ok ? null : result.error)
   if (result.ok) await rememberTmuxServer()
   if (!result.ok) {
     // A server does not exist until the first Harness agent (or a user) opens
