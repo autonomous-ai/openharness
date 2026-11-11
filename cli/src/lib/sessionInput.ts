@@ -57,9 +57,10 @@ const AGY_SUBMIT_VERIFY_MS = 8_000
 // Copilot's first hook of a turn is `userPromptSubmitted`, which fires as soon as Enter is accepted —
 // faster than agy's, which waits for the model call. 6s is the same headroom grok gets.
 const COPILOT_SUBMIT_VERIFY_MS = 6_000
-// OpenClaw's TUI draws no composer glyph Harness reads, and the Gateway writes the run's user row as the run starts:
-// its reader's 1s poll surfaces it as turn_started, so it gets OpenCode's poll-sized window.
-const OPENCLAW_SUBMIT_VERIFY_MS = 2_500
+// OpenClaw's TUI draws no composer glyph Harness reads, so only the run's user row confirms a message, and the Gateway
+// writes it as the run starts. A Gateway short of memory stalled 18 s at a time before writing it (lamp, 2026-11-11):
+// three 10 s windows give the row 30 s in all before the message is given up.
+const OPENCLAW_SUBMIT_VERIFY_MS = 10_000
 const CURSOR_TURN_SETTLE_MS = 750
 const SUBMIT_MAX_RETRIES = 2
 /** How long a paste the control lease refused, before a byte was written, waits for the lease, and how
