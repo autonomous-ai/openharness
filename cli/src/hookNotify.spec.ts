@@ -1035,34 +1035,6 @@ describe('hook notify terminal scope', () => {
     expect(() => statSync(join(dataDir, 'registry-boot'))).toThrow()
   })
 
-  // Decided 2026-11-11: a daemon that could not look up in time who is calling answers a retryable 503. It is up, so the
-  // hook asks again, backed off within its budget, and never writes the registry behind its back.
-  it.each(['recovers', 'stays late'] as const)('a session start whose caller the daemon could not look up in time %s', async outcome => {
-    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-unanswered-'))
-    tmpDirs.push(dir)
-    const dataDir = join(dir, 'data')
-    mkdirSync(dataDir)
-    writeLegacyStateFile(join(dataDir, 'registry.json'), '[]')
-    let attempts = 0
-    const server = createServer((req, res) => {
-      req.resume()
-      req.on('end', () => {
-        attempts++
-        if (outcome === 'recovers' && attempts === 3) { res.end('{}'); return }
-        res.writeHead(503, { 'Content-Type': 'application/json', 'Retry-After': '1' })
-        res.end(JSON.stringify({ error: 'PEER_LOOKUP_UNANSWERED', message: 'Harness could not check in time who is calling.' }))
-      })
-    })
-    servers.push(server)
-    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
-    const address = server.address()
-    if (!address || typeof address === 'string') throw new Error('private fixture did not bind')
-    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/swarm-prompt-hooks.json', import.meta.url), 'utf8'))
-    await runHook({ port: address.port, tmuxPane: '%83', engine: 'claude', dataDir, input: recordings.claude.input })
-    expect(attempts).toBe(3)
-    expect(readFileSync(join(dataDir, 'registry.json'), 'utf8')).toBe('[]')
-  })
-
   it.each([
     "import sys, runpy; sys.path.insert(0, '/opt/custom'); runpy.run_module('hermes_cli.main', run_name='__main__')",
     "import os, re, sys; sys.path.insert(0, '/opt/custom'); import hermes_bootstrap; from hermes_cli.main import main; sys.exit(main())",

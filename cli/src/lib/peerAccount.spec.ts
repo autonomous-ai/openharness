@@ -69,12 +69,8 @@ describe('who is at the other end of a loopback connection', () => {
       expect(yes.asked).toEqual([{ HARNESS_PEER_PORT: '50001', HARNESS_OWN_PORT: '18473', HARNESS_DAEMON_PID: String(process.pid) }])
     })
 
-    it('says no for another account, any other answer or a failure, and no answer for a lookup that never finished', async () => {
-      const late = socket({ remotePort: 50_030 })
-      expect(await peerIsThisAccount(late, 'win32', answering('yes', null).run)).toBe('unanswered')
-      // Not kept on the connection: the client is told to ask again (503), and is asked of Windows again.
-      expect(await peerIsThisAccount(late, 'win32', answering('yes\r\n').run)).toBe(true)
-      for (const [stdout, status] of [['no', 0], ['', 0], ['yes yes', 0], ['yes', 1]] as const) {
+    it('says no for another account, any other answer, a failure, or a lookup that never answered', async () => {
+      for (const [stdout, status] of [['no', 0], ['', 0], ['yes yes', 0], ['yes', 1], ['yes', null]] as const) {
         expect(await peerIsThisAccount(socket({ remotePort: 50_002 + (status ?? 9) }), 'win32', answering(stdout, status).run), `${stdout}/${status}`).toBe(false)
       }
       const thrown: WindowsPeerRun = async () => { throw new Error('powershell.exe is not there') }
@@ -346,13 +342,13 @@ describe('who is at the other end of a loopback connection', () => {
       expect(ps.calls).toEqual([windowsListenerQuery(51_794)])
     })
 
-    it('says no without PowerShell for a helper that crashes or says anything else, and no answer for one that hangs', async () => {
+    it('says no without PowerShell for a helper that hangs, crashes or says anything else', async () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       try {
         const answers = [{ status: null, stdout: '' }, { status: 1, stdout: '' }, { status: 101, stdout: 'yes' }, { status: 3221225477, stdout: '' }, { status: 0, stdout: 'yes yes' }, { status: 0, stdout: '' }]
         for (const [i, answer] of answers.entries()) {
           const ps = powershell('yes')
-          expect(await peerIsThisAccount(socket(54_100 + i), 'win32', nativeFirst(native(answer), ps.run)), JSON.stringify(answer)).toBe(answer.status === null ? 'unanswered' : false)
+          expect(await peerIsThisAccount(socket(54_100 + i), 'win32', nativeFirst(native(answer), ps.run)), JSON.stringify(answer)).toBe(false)
           expect(ps.calls).toEqual([])
         }
       } finally {

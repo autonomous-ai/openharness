@@ -20,9 +20,6 @@ import { runPowershellAsync } from './windows/powershell.js'
 /** Yes, no, or `unanswered`: the lookup did not finish in time, which is not a no. The listener answers a retryable 503. */
 export type PeerAccount = (socket: Socket) => Promise<boolean | 'unanswered'>
 
-/** What a listener answers when the secret matched and the lookup gave no answer in time: 503, Retry-After, this code. */
-export const PEER_LOOKUP_UNANSWERED = 'PEER_LOOKUP_UNANSWERED'
-export const PEER_LOOKUP_UNANSWERED_MESSAGE = 'Harness could not check in time that this request comes from your account. Retry in a moment.'
 
 export const LSOF_MS = 3_000
 
@@ -346,12 +343,13 @@ export function peerIsThisAccount(socket: Socket, platform: NodeJS.Platform = pr
     answer = asked.then((result) => {
       const why = result === 'busy' ? 'busy, too many lookups are running; asked again on its next request'
         : result === 'unanswered' ? 'lsof did not answer in time; told to retry'
-        : result === 'timeout' ? 'Windows did not say who the caller is in time; told to retry'
+        : result === 'timeout' ? 'Windows did not say who the caller is in time'
         : typeof result === 'object' ? `the caller is not this account (${result.no})` : 'the caller is not this account'
-      if (result !== true) console.warn(`[peer] ${result === 'unanswered' || result === 'timeout' ? 'could not check' : 'refused'} a valid secret on 127.0.0.1:${socket.localPort}: ${why}`)
-      // No answer in time is not a no: not kept on the connection, and the caller is told to ask again (a 503).
-      if (result === 'busy' || result === 'unanswered' || result === 'timeout') answers.delete(socket)
-      return result === 'unanswered' || result === 'timeout' ? 'unanswered' : result === true
+      if (result !== true) console.warn(`[peer] ${result === 'unanswered' ? 'could not check' : 'refused'} a valid secret on 127.0.0.1:${socket.localPort}: ${why}`)
+      // lsof killed at its limit gave no answer, which is not a no: not kept, and the caller is told to ask again (a 503).
+      // Windows' null status is kept a no: PowerShell gives it to a script that never started as well as to one cut off.
+      if (result === 'busy' || result === 'unanswered') answers.delete(socket)
+      return result === 'unanswered' ? 'unanswered' : result === true
     })
     answers.set(socket, answer)
   }

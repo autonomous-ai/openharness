@@ -23,7 +23,8 @@ import { label } from './catalog.js'
 import { bearer, locked, needsRefresh, refreshable, writePrivate, type Store, type Token } from './store.js'
 import { refresh } from './renew.js'
 import { answer as answerRest, transport } from './rest.js'
-import { PEER_LOOKUP_UNANSWERED_MESSAGE, peerIsThisAccount, type PeerAccount } from '../peerAccount.js'
+import { peerIsThisAccount, type PeerAccount } from '../peerAccount.js'
+import { PEER_LOOKUP_UNANSWERED_MESSAGE } from '../localCredential.js'
 import { newPipePath } from '../windows/pipeAuth.js'
 
 /** Headers an MCP client sends that the service must see. Authorization never comes from the agent. */
@@ -213,7 +214,8 @@ function bridgeHandler(vault: Store, options: BridgeOptions): RequestListener {
     const address = target(request.url ?? '/')
     // An MCP client can only speak HTTP to the address in its configuration, so it cannot check who holds this port,
     // and another account that took it during a restart hears the key (audit H1). A key heard must open nothing. Answered
-    // as an unknown key is, so the answer does not say the key was right.
+    // as an unknown key is, so the answer does not say the key was right. A lookup that gave no answer in time is the one
+    // exception (a 503 to retry): only a caller that already holds the key can be told it.
     // On the 0600 socket the filesystem has already said who the caller is, and a socket's peer has no port to look up.
     const caller = !address || options.socket ? true : await (options.peerAccount ?? peerIsThisAccount)(request.socket)
     if (!address || caller === false) {

@@ -24,8 +24,8 @@ import { sid } from './lib/log.js'
 import { VERSION } from './version.js'
 import { env } from './config/env.js'
 import { hookCredentialMatches, loadOrCreateHookCredential, loadOrCreateHookToken } from './lib/hookAuth.js'
-import { PEER_LOOKUP_UNANSWERED, PEER_LOOKUP_UNANSWERED_MESSAGE, peerIsThisAccount, type PeerAccount } from './lib/peerAccount.js'
-import { LOCAL_CREDENTIAL_REQUIRED, localCredentialMatches } from './lib/localCredential.js'
+import { peerIsThisAccount, type PeerAccount } from './lib/peerAccount.js'
+import { LOCAL_CREDENTIAL_REQUIRED, localCredentialMatches, PEER_LOOKUP_UNANSWERED, PEER_LOOKUP_UNANSWERED_MESSAGE } from './lib/localCredential.js'
 import { routeStoreRequest, type StoreHandler } from './lib/storeProxy.js'
 import type { HookTerminalHint } from './lib/terminalTypes.js'
 import { ENGINES, type AgentEngine } from './engines/types.js'
@@ -564,8 +564,8 @@ export function startHookServer(
       // been heard by another account that held this port during a restart (audit H1), so it counts only from this one.
       const credentialOk = trustedLocal || (localCredentialMatches(hookCredential, req) && await callerIsThisAccount())
       // A secret matched, but who is calling could not be looked up in time (a slow lsof, a busy Windows): not a refusal.
-      // The client asks again (hook/notify.mjs); liveness answers as ever.
-      if (callerAnswer && await callerAnswer === 'unanswered' && !(req.method === 'GET' && url === '/api/health')) {
+      // The client asks again (lib/localTransport.ts). Liveness and the public status answer as ever.
+      if (callerAnswer && await callerAnswer === 'unanswered' && !(req.method === 'GET' && (url === '/api/health' || url === '/api/status'))) {
         res.writeHead(503, { 'Content-Type': 'application/json', 'Retry-After': '1' })
         res.end(JSON.stringify({ error: PEER_LOOKUP_UNANSWERED, message: PEER_LOOKUP_UNANSWERED_MESSAGE })); return
       }

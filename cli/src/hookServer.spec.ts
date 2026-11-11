@@ -1288,10 +1288,10 @@ describe('audit H1: what a secret heard on the daemon\'s port can do', () => {
   })
 
   // Decided 2026-11-11: a lookup that gave no answer in time is not a refusal. The client is told to ask again.
-  it('answers a secret whose caller could not be looked up in time with a retryable 503, and health as before', async () => {
+  it('answers a secret whose caller could not be looked up in time with a retryable 503, and health and status as before', async () => {
     const { port, close } = await serve(async () => 'unanswered')
     try {
-      for (const [path, headers, method] of [['/api/machines', { 'X-Harness-Local': credential() }, 'GET'], ['/api/status', { 'X-Harness-Local': credential() }, 'GET'],
+      for (const [path, headers, method] of [['/api/machines', { 'X-Harness-Local': credential() }, 'GET'],
         ['/api/hook/session-start', { 'x-harness-hook-token': hookToken() }, 'POST'], ['/api/autonomous-device/status', { Authorization: `Bearer ${credential()}` }, 'GET']] as const) {
         const reply = await call(port, path, headers, method)
         expect(reply.status, path).toBe(503)
@@ -1299,6 +1299,8 @@ describe('audit H1: what a secret heard on the daemon\'s port can do', () => {
         expect(await reply.json()).toMatchObject({ error: 'PEER_LOOKUP_UNANSWERED' })
       }
       expect((await call(port, '/api/health', { 'X-Harness-Local': credential() })).status).toBe(200)
+      // A status probe still finds the daemon there: its public status, as without the credential.
+      expect(await (await call(port, '/api/status', { 'X-Harness-Local': credential() })).json()).not.toHaveProperty('secretDetail')
     } finally { await close() }
   })
 
