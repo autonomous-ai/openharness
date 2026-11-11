@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import type { ContributedMachine } from './machines.js'
+import { storedTask } from './storedWork.test-support.js'
 import { createSuperTab, SuperTabError, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
 
 // A project's Product Manager started by the Swarm on the machine its person names (Dee, 10-29, option B). Swarm v3 (task
@@ -151,21 +152,6 @@ describe('the Product Manager\'s model and effort (Scholes\'s roadmap, piece 1)'
     expect(requestOf(codex)).not.toHaveProperty('model')
     expect(requestOf(codex)).not.toHaveProperty('effort')
   })
-  // Only the built-in coordinator default (project instructions, phase 4): an older client's custom lead role default is
-  // read by nothing.
-  it('takes the built-in default whatever an older custom set said, for Claude only', () => {
-    const f = swarm()
-    // The set an older client made, as the state keeps it: role saves are kept nowhere now.
-    const roles = [{ id: 'lead', name: 'Product Manager', kind: 'lead' as const, version: 'v', defaults: { engine: 'codex' as const, model: 'gpt-6.1-sol', effort: 'xhigh' } },
-      { id: 'dev', name: 'Engineer', kind: 'builder' as const, version: 'v' }]
-    Object.assign(f.project(), { skillSet: 'custom', roles: structuredClone(roles) })
-    f.lead('owner-mac', { engine: 'codex' })
-    expect(requestOf(f)).not.toHaveProperty('model')
-    const claude = swarm()
-    Object.assign(claude.project(), { skillSet: 'custom', roles: structuredClone(roles) })
-    claude.lead('owner-mac')
-    expect(requestOf(claude)).toMatchObject({ engine: 'claude', model: 'opus', effort: 'xhigh' })
-  })
   // Task #3022 (Ken, 11-05): a PM runs at high effort or above, whoever starts it.
   it('refuses an effort below high, and changes nothing', () => {
     for (const effort of ['medium', 'low', 'minimal', 'Medium']) {
@@ -179,15 +165,6 @@ describe('the Product Manager\'s model and effort (Scholes\'s roadmap, piece 1)'
       f.lead('owner-mac', { effort })
       expect(requestOf(f)).toMatchObject({ effort })
     }
-  })
-  it('never takes another project\'s role default', () => {
-    const f = swarm()
-    const other = f.run({ type: 'project.create', name: 'Other', visibility: 'private', brief: 'Other work.' }).result.projectId as string
-    Object.assign(f.state.projects!.find(p => p.id === other)!, { skillSet: 'custom', roles: [{ id: 'lead', name: 'PM', kind: 'lead', version: 'v',
-      defaults: { engine: 'codex', model: 'gpt-6.1-sol', effort: 'xhigh' } }] })
-    f.lead('owner-mac', { engine: 'codex' })
-    expect(requestOf(f)).toMatchObject({ engine: 'codex', leadFor: { projectId: f.app.projectId } })
-    expect(requestOf(f)).not.toHaveProperty('model')
   })
 })
 
@@ -289,23 +266,6 @@ describe('a Product Manager\'s start, once its host reports it', () => {
     // Settling it does not call the Product Manager ready for an assignment.
     const settled = f.run({ type: 'agent.startSettled', startId, warning: null }, owner, hosted(f, 'owner-mac'))
     expect(messages(settled, f.app.conversationId)).toEqual([])
-  })
-
-  // Project instructions: the coordinator is called what its project calls it (instructions.ts coordinatorNameOf).
-  it('names the coordinator as its project calls it', () => {
-    const f = swarm()
-    f.run({ type: 'project.coordinatorName', projectId: f.app.projectId, name: 'Coordinator' })
-    const startId = f.lead('owner-mac').result.startId as string
-    expect(f.state.starts!.find(s => s.id === startId)!.request.name).toBe('Coordinator')
-    expect(refusal(() => f.lead('owner-mac'))).toMatchObject({ code: 'LEAD_STARTING', message: 'This project\'s Coordinator is already starting.' })
-    const joined = f.run({ type: 'agent.started', startId, harnessId: 'pm', configuration: { ...config, effort: 'xhigh' } }, owner, hosted(f, 'owner-mac'))
-    expect(messages(joined, f.app.conversationId)).toEqual(['Coordinator started on Owner Mac.'])
-    const agentId = joined.result.agentId as string
-    expect(f.state.agents.find(a => a.id === agentId)!.name).toBe('Coordinator')
-    expect(refusal(() => f.lead('owner-mac'))).toMatchObject({ code: 'LEAD_EXISTS', message: 'This project already has its Coordinator.' })
-    const protectedLead = refusal(() => f.run({ type: 'agent.remove', agentId }))
-    expect(protectedLead).toMatchObject({ code: 'LEAD_PROTECTED' })
-    expect(protectedLead!.message).toContain('is the Coordinator of project App.')
   })
 
   it('failed on the machine the person chose, says why and waits for them', () => {
@@ -419,7 +379,7 @@ describe('a machine hosting a Product Manager', () => {
     const f = swarm()
     f.lead('owner-mac')
     const web = f.run({ type: 'project.create', name: 'Web', visibility: 'public', brief: '' }).result as { projectId: string }
-    const group = f.run({ type: 'conversation.create', projectId: web.projectId, title: 'Work', brief: 'Build it.', checks: [] }).result.conversationId as string
+    const group = storedTask(f.state, { projectId: web.projectId, title: 'Work', brief: 'Build it.' })
     expect(f.run({ type: 'agent.start', request: { conversationId: group, machineId: 'owner-mac', engine: 'claude', name: 'Builder', cwd: `/swarm/${web.projectId}`,
       worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } }, owner,
       { contribution: { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null } }).result.startId).toBeTruthy()

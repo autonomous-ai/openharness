@@ -106,10 +106,10 @@ describe('what each builder starts next (nextPicks)', () => {
 })
 
 describe('the crew a project\'s PM reads (crewOf)', () => {
-  it('takes the regular Claude Code and Codex agents that may work in the project, never the PM, a Buddy, one stopping or down', () => {
+  it('takes the regular Claude Code and Codex agents that may work in the project, never the PM, one stopping or down', () => {
     const agent = (id: string, extra: Json = {}) => ({ id, regular: true, name: id, machineId: 'mac', configuration: { engine: 'claude' }, ...extra })
     const state = { agents: [agent('pm'), agent('pip', { displayName: 'Pip' }), agent('juno', { configuration: { engine: 'codex', model: 'gpt-5.5' } }),
-      agent('buddy', { buddyOf: { personId: 'dee' } }), agent('leaving', { workDecision: 'stop' }), agent('asleep', { downSince: '2026-11-09T10:00:00Z' }),
+      agent('leaving', { workDecision: 'stop' }), agent('asleep', { downSince: '2026-11-09T10:00:00Z' }),
       agent('other', { privateProjectId: 'secret' }), agent('mine', { privateProjectId: 'app' }), agent('shell', { configuration: { engine: 'opencode' } }),
       { id: 'old', name: 'old', machineId: 'mac', configuration: { engine: 'claude' } }],
       machines: [{ machineId: 'mac', name: 'Mac 3', observation: { tools: { xcode: true } } }, { name: 'no id' }] }

@@ -114,7 +114,7 @@ void main() {
   }
 
   // Swarm v4 (anh Dee 2026-11-08): the org name, Your Team, Projects, Top Teams; Manage at the foot. No Decisions, Mentions,
-  // Threads, Projects grid or Buddy, and an agent's row is its face and name only.
+  // Threads or Projects grid, and an agent's row is its face and name only.
   group('the v4 left pane', () {
     void lead(ConversationServer server) {
       (server.state['conversations'] as List)
@@ -181,7 +181,6 @@ void main() {
       expect(key('super-agent-kestrel'), findsOneWidget);
       expect(key('super-agent-orion'), findsOneWidget);
       expect(key('super-agent-tuan-agent'), findsNothing);
-      expect(key('super-swarm-buddy'), findsNothing);
       // The PM still wears the gold ring, and no row says more than its name.
       expect(ring('orion'), findsOneWidget);
       expect(ring('kestrel'), findsNothing);

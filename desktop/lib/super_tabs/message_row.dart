@@ -85,8 +85,6 @@ class SuperTabMessageRow extends StatefulWidget {
     this.thread,
     this.threadUnread = false,
     this.onOpenThread,
-    this.threadTrailing,
-    this.threadEnd,
     this.member,
     this.link,
     this.linkTarget,
@@ -105,12 +103,6 @@ class SuperTabMessageRow extends StatefulWidget {
   /// Opens [message]'s thread: from its reply line, or from an also-sent
   /// reply's mark.
   final VoidCallback? onOpenThread;
-
-  /// Ends the thread line: the mark of a thread's own Buddy session.
-  final Widget? threadTrailing;
-
-  /// After [threadTrailing], outside the thread's link: End session.
-  final Widget? threadEnd;
 
   /// Who a thread's reply author is in the Swarm now, for the faces on its
   /// reply line; without it each shows the face its recorded name gives.
@@ -149,7 +141,7 @@ class SuperTabMessageRow extends StatefulWidget {
   /// lower corner meets it, and a group chat's face waits for the last.
   final bool joinsBelow;
 
-  /// The chat has one other party (a Buddy chat, an agent chat): no names and
+  /// The chat has one other party (an agent's own chat): no names and
   /// no faces, as a one-on-one iMessage draws it.
   final bool oneOnOne;
 
@@ -251,8 +243,7 @@ class SuperTabMessageRow extends StatefulWidget {
   /// Whether [current] joins [previous]'s header: the same sender, within five
   /// minutes on the same day. In the chat, a thread reply shown there stands
   /// on its own with its Replied in thread line; [inThread], replies group. A
-  /// line that draws its own row has no header to share, on either side, and
-  /// a [tagged] row's header is where its tag shows.
+  /// [tagged] row's header is where its tag shows.
   static bool groupsWith(
     SuperTabMessage current,
     SuperTabMessage? previous, {
@@ -260,13 +251,8 @@ class SuperTabMessageRow extends StatefulWidget {
     bool Function(SuperTabMessage) tagged = _untagged,
   }) {
     if (previous == null ||
-        current.drawsOwnRow ||
-        previous.drawsOwnRow ||
         tagged(current) ||
         tagged(previous) ||
-        // A message that started a session stands on its own, with its line.
-        current.sessionRoot ||
-        previous.sessionRoot ||
         // An older reply keeps its quote under its own header.
         (current.replyTo != null && !current.threadReply) ||
         (previous.replyTo != null && !previous.threadReply) ||
@@ -526,8 +512,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
     return InkWell(onTap: widget.onOpenAgent, child: name);
   }
 
-  /// The reader's own message, a task line or proposal sent in their name
-  /// too: drawn as their bubble on the right.
+  /// The reader's own message: drawn as their bubble on the right.
   bool get _own {
     final message = widget.message;
     return widget.readerId.isNotEmpty &&
@@ -726,22 +711,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                             padding: grid
                                                 .AppDesktop
                                                 .bubbleNamePadding,
-                                            child: Wrap(
-                                              spacing: 8,
-                                              crossAxisAlignment:
-                                                  WrapCrossAlignment.center,
-                                              children: [
-                                                _name(nameStyle, finger),
-                                                if (widget.thread?.askTag
-                                                    case final tag?)
-                                                  Text(
-                                                    tag,
-                                                    style: SwarmType.time(
-                                                      context,
-                                                    ),
-                                                  ),
-                                              ],
-                                            ),
+                                            child: _name(nameStyle, finger),
                                           ),
                                         if (message.threadReply &&
                                             widget.onOpenThread != null)
@@ -960,8 +930,6 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                 unread: widget.threadUnread,
                                 onOpen: open,
                                 member: widget.member,
-                                trailing: widget.threadTrailing,
-                                end: widget.threadEnd,
                               ),
                             ),
                         ],
@@ -1202,17 +1170,9 @@ class SuperTabThreadLine extends StatelessWidget {
     required this.unread,
     required this.onOpen,
     this.member,
-    this.trailing,
-    this.end,
   });
 
   final SuperTabThread thread;
-
-  /// Drawn after the line's link, outside it: a thread session's mark.
-  final Widget? trailing;
-
-  /// Drawn last, outside the line's link: End session.
-  final Widget? end;
   final bool unread;
   final VoidCallback onOpen;
 
@@ -1247,18 +1207,6 @@ class SuperTabThreadLine extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    // A session's thread with no reply yet: its mark is the line, and opens it.
-    if (thread.replies == 0 && trailing != null) {
-      final open = SuperTabLink(
-        label: 'Open thread',
-        onTap: onOpen,
-        child: trailing!,
-      );
-      return Padding(
-        padding: const EdgeInsets.only(top: grid.AppDesktop.menuInset),
-        child: end == null ? open : _wrapped([open, _dot, end!]),
-      );
-    }
     final count = thread.replies == 1 ? '1 reply' : '${thread.replies} replies';
     final last = thread.lastAt;
     final lastReply = last == null
@@ -1319,22 +1267,9 @@ class SuperTabThreadLine extends StatelessWidget {
     );
     return Padding(
       padding: const EdgeInsets.only(top: grid.AppDesktop.menuInset),
-      child: trailing == null
-          ? link
-          : _wrapped([
-              link,
-              trailing!,
-              if (end != null) ...[_dot, end!],
-            ]),
+      child: link,
     );
   }
-
-  Widget get _dot =>
-      ExcludeSemantics(child: Text(' · ', style: DesktopChrome.metadata()));
-
-  /// On one line while it fits, and on two in a narrow chat.
-  Widget _wrapped(List<Widget> children) =>
-      Wrap(crossAxisAlignment: WrapCrossAlignment.center, children: children);
 }
 
 /// The reply bar: one target, a hand cursor anywhere on it, reached by Tab and

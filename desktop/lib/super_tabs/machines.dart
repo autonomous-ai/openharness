@@ -149,19 +149,13 @@ List<String> _contributedEngines(Map<String, dynamic> prepared) {
 /// agents as its memory allows. Resolves to [machineId], null when [alive]
 /// ended first or the reader can no longer write. Throws a [SuperTabFailure]
 /// saying why it could not. [setupId] is the caller's to keep between tries: a
-/// setup still running answers the next try with the same one. With
-/// [teamAccountOnly], teammates' work reaches it only through its Harness Team
-/// account once that passes its privacy check (backend superTabs/machines.ts
-/// `teamWorkRefusal`).
+/// setup still running answers the next try with the same one.
 Future<String?> contributeComputer(
   SuperTabController c,
   AppNotifier app,
   String machineId, {
   required String setupId,
   required bool Function() alive,
-  bool teamAccountOnly = false,
-  bool ifMissing = false,
-  bool unlessRemoved = false,
 }) async {
   final prepared = await _prepareContribution(
     c,
@@ -199,9 +193,6 @@ Future<String?> contributeComputer(
     'engines': engines,
     'maxAgents': offered is num ? _clampAgentSlots(offered) : _agentSlotsMin,
     'agents': 'memory',
-    if (teamAccountOnly) 'teamAccountOnly': true,
-    if (ifMissing) 'ifMissing': true,
-    if (unlessRemoved) 'unlessRemoved': true,
   });
   if (result == null) {
     throw SuperTabFailure(
@@ -252,18 +243,11 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   int _revision = 0;
 
   SuperTabController get c => widget.controller;
-  // Team agents only: a Buddy is listed nowhere, and its machine may be its
-  // person's alone, outside the Swarm (backend buddyOnly).
   Set<String> get _ids => {
-    for (final a in c.snapshot?.teamAgents ?? const <SuperTabAgent>[])
-      a.machineId,
+    for (final a in c.snapshot?.agents ?? const <SuperTabAgent>[]) a.machineId,
     for (final m in c.snapshot?.machines ?? const <Map<String, dynamic>>[])
       m['machineId'] as String,
   };
-
-  /// The rows: one per computer, a Mac's Harness Team account inside its Mac's ([SuperTabSnapshot.placeOf]).
-  Iterable<String> get _rowIds =>
-      _ids.where((id) => (c.snapshot?.placeOf(id) ?? id) == id);
 
   @override
   void initState() {
@@ -445,33 +429,23 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   _MachineView _view(String id) {
     final app = widget.app, snapshot = c.snapshot!;
     final shared = snapshot.pool(id);
-    // The Mac's Harness Team account is part of its row: its agents are listed here, and everyone but the Mac's owner
-    // reads its availability, since it runs their agents, also while the owner is away from the Mac. The owner reads
-    // their own computer. Actions stay the Mac's; the backend changes its team account with it.
-    final team = snapshot.teamPoolOf(id);
-    final teamId = team?['machineId'] as String?;
-    final agents = snapshot.teamAgents
-        .where((a) => snapshot.placeOf(a.machineId) == id)
-        .toList();
+    final agents = snapshot.agents.where((a) => a.machineId == id).toList();
     final contributor =
         shared?['contributorId'] as String? ??
         agents.firstOrNull?.contributorId;
     final person = snapshot.people
         .where((p) => p.id == contributor)
         .firstOrNull;
-    final reading = snapshot.readingPoolOf(id, c.accountId);
-    final teammateView = team != null && identical(reading, team);
-    final readId = teammateView ? teamId! : id;
-    final state = app?.stateOf(readId);
+    final state = app?.stateOf(id);
     final observation = superTabMap(
-      reading?['observation'] ?? const <String, dynamic>{},
+      shared?['observation'] ?? const <String, dynamic>{},
     );
     final now = widget.now();
     final received = observation['receivedAt'];
     final observedAt = received is num
         ? DateTime.fromMillisecondsSinceEpoch(received.toInt())
         : null;
-    final sample = _samples[readId];
+    final sample = _samples[id];
     final connected =
         state?.connectionStatus == ConnectionStatus.connected &&
         state?.nodeOnline != false;
@@ -479,7 +453,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     // this very computer when it contributes and its own sample is the newer, which is why it stays live while
     // the Swarm cannot be read. Any other contributing machine is known by what it reports through the Swarm.
     final direct =
-        reading == null ||
+        shared == null ||
         (state?.isLocalMachine == true &&
             sample != null &&
             (observedAt == null || sample.$2.isAfter(observedAt)));
@@ -487,7 +461,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     final age = readingAt == null ? null : now.difference(readingAt);
     // A computer only running someone's agents, never added to the Swarm and not one this Desktop reads (a teammate's
     // Lead computer): nothing reports it but its agents, so it is up while one of them is (group #646, item 5).
-    final agentsOnly = shared == null && team == null && state == null;
+    final agentsOnly = shared == null && state == null;
     final status = agentsOnly
         ? (agents.any((a) => a.downSince == null)
               ? SuperTabMachineStatus.live
@@ -497,7 +471,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             // The Swarm cannot be read: a machine's silence is not known to be its own, so it is not offline.
             unreachable: !direct && c.backendUnreachable,
             refreshing: direct
-                ? _awaiting.contains(readId)
+                ? _awaiting.contains(id)
                 : _swarmReadsAtReturn != null &&
                       c.stateReads <= _swarmReadsAtReturn!,
             connected: direct ? connected : null,
@@ -535,7 +509,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         (agentsOnly && person != null
             ? "${person.shownName}'s computer"
             : 'Unavailable machine');
-    final paused = reading?['paused'] == true;
+    final paused = shared?['paused'] == true;
     final removal = shared?['removal'];
     final cleaning =
         removal is Map && superTabMap(removal)['state'] == 'cleaning';
@@ -645,15 +619,11 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     );
   }
 
-  /// Every agent of the Swarm on [machineId]'s row, its Mac's Harness Team account's included: removing the machine
-  /// takes them all with it.
-  List<SuperTabAgent> _agentsOn(String machineId) {
-    final snapshot = c.snapshot;
-    return [
-      for (final a in snapshot?.agents ?? const <SuperTabAgent>[])
-        if (snapshot!.placeOf(a.machineId) == machineId) a,
-    ];
-  }
+  /// Every agent of the Swarm on [machineId]: removing the machine takes them all with it.
+  List<SuperTabAgent> _agentsOn(String machineId) => [
+    for (final a in c.snapshot?.agents ?? const <SuperTabAgent>[])
+      if (a.machineId == machineId) a,
+  ];
 
   String? _removeReason(String machineId) {
     final snapshot = c.snapshot;
@@ -716,7 +686,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                       preview?.blockedReason ??
                       (preview?.blockedProjectName == null
                           ? null
-                          : 'This machine runs the ${c.snapshot?.coordinatorNameOf(preview!.blockedProjectId ?? '') ?? kDefaultCoordinatorName} of project ${preview!.blockedProjectName}. Delete the project first.');
+                          : 'This machine runs the $kDefaultCoordinatorName of project ${preview!.blockedProjectName}. Delete the project first.');
                   final enabled =
                       permitted &&
                       reason == null &&
@@ -1431,7 +1401,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
 
   /// Keep offline machines in the same list and on the same columns.
   List<_MachineView> _sortedViews() {
-    final views = [for (final id in _rowIds) _view(id)];
+    final views = [for (final id in _ids) _view(id)];
     String key(_MachineView view) =>
         superTabMachineName(view.name).toLowerCase();
     int rank(_MachineView view) => switch (view.status) {
@@ -1631,7 +1601,7 @@ class _RemovalPreview {
       final agent = superTabMap(item);
       final name = agent['name'], projectName = agent['projectName'];
       final task = agent['task'];
-      // A Swarm-wide Buddy has no project: the server sends an empty name.
+      // An agent of no project: the server sends an empty name.
       if (name is! String ||
           name.isEmpty ||
           projectName is! String ||

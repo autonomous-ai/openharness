@@ -25,17 +25,19 @@ describe('delivered turns from a service in its own process', () => {
     expect(heard).toEqual([])
   })
 
-  it('sends answersQuestion with the delivery', async () => {
+  it('sends answersQuestion and personsOwn with the delivery', async () => {
     const query = vi.fn(async () => ({}))
     const link = turnsLink(query)
     link.turns.deliver('agent-1', 'hello', 'd1', { answersQuestion: true, writtenAt: 42 })
     link.turns.deliver('agent-1', 'hello', 'd2')
     link.turns.deliver('agent-1', 'hello', 'd3', { answersQuestion: true })
+    link.turns.deliver('agent-1', 'hello', 'd4', { answersQuestion: true, personsOwn: true })
     await flush()
     expect(query.mock.calls).toEqual([
       ['deliver', { agentId: 'agent-1', text: 'hello', deliveryId: 'd1', answersQuestion: true, writtenAt: 42 }],
       ['deliver', { agentId: 'agent-1', text: 'hello', deliveryId: 'd2' }],
       ['deliver', { agentId: 'agent-1', text: 'hello', deliveryId: 'd3', answersQuestion: true, writtenAt: undefined }],
+      ['deliver', { agentId: 'agent-1', text: 'hello', deliveryId: 'd4', answersQuestion: true, writtenAt: undefined, personsOwn: true }],
     ])
   })
 

@@ -59,23 +59,21 @@ void main() {
     return server;
   }
 
-  /// The reader's own Buddy chat ('offline') with their Buddy running and a
+  /// The reader's chat with their own agent ('offline'), running, and a
   /// thread on message-1.
-  ConversationServer buddyChat() {
+  ConversationServer agentChat() {
     final server = ConversationServer()..threads = true;
     (server.state['conversations'] as List)[1] as Map
-      ..['kind'] = 'buddy'
-      ..['buddyOwnerId'] = 'owner'
+      ..['kind'] = 'agent-chat'
       ..['title'] = 'Wren'
-      ..['agentIds'] = ['buddy-main'];
+      ..['agentIds'] = ['own-agent'];
     (server.state['agents'] as List).add({
-      'id': 'buddy-main',
+      'id': 'own-agent',
       'name': 'Wren',
       'displayName': 'Wren',
       'machineId': 'mac',
       'harnessId': 'h-main',
       'contributorId': 'owner',
-      'buddyOf': {'personId': 'owner', 'generation': 'g1'},
       'configuration': {'engine': 'claude'},
     });
     server.append(
@@ -210,13 +208,13 @@ void main() {
   group('Also send names where it posts', () {
     for (final (kind, full, short) in [
       ('project', 'Also send to #Pilot', 'Also to #Pilot'),
-      ('Buddy', 'Also send to the main chat', 'Also to chat'),
+      ('agent', 'Also send to the main chat', 'Also to chat'),
     ]) {
       testBox('a $kind thread says "$full" on its own line under the box, at '
           'every width', (tester) async {
-        final buddy = kind == 'Buddy';
-        ConversationServer server() => buddy ? buddyChat() : projectChat();
-        final conversation = buddy ? 'offline' : 'lead';
+        final own = kind == 'agent';
+        ConversationServer server() => own ? agentChat() : projectChat();
+        final conversation = own ? 'offline' : 'lead';
         for (final pane in [
           800.0,
           SuperTabPaneLayout.threadWidth,
@@ -290,50 +288,6 @@ void main() {
     });
   });
 
-  // Desktop no longer starts Buddy sessions (S2 of the v1-v3 removal), but a
-  // thread one answered before stays in the Buddy chat the round dial opens:
-  // the box offers only what the server takes there (backend routeBuddySession).
-  group('a Buddy thread a session answered', () {
-    testBox('while the session runs: no Also send, and @ offers no agent', (
-      tester,
-    ) async {
-      final server = buddyChat();
-      ((server.state['conversations'] as List)[1] as Map)['buddySessions'] = [
-        {'thread': 'message-1', 'startId': 'start', 'at': 1},
-      ];
-      await panel(tester, server, 'offline', width: 800);
-      expect(alsoSend, findsNothing);
-      await tester.enterText(
-        find.byKey(const ValueKey('super-thread-composer')),
-        '@',
-      );
-      await tester.pump();
-      expect(find.text('Wren'), findsNothing);
-    });
-
-    testBox('once it ended: kept to read, saying why', (tester) async {
-      final server = buddyChat();
-      server.messages.last['buddySession'] = true;
-      await panel(tester, server, 'offline', width: 800);
-      final field = tester.widget<TextField>(
-        find.byKey(const ValueKey('super-thread-composer')),
-      );
-      expect(field.enabled, isFalse);
-      expect(field.decoration?.hintText, "This thread's session ended.");
-    });
-
-    testBox('a thread with no session takes a reply as any other', (
-      tester,
-    ) async {
-      await panel(tester, buddyChat(), 'offline', width: 800);
-      final field = tester.widget<TextField>(
-        find.byKey(const ValueKey('super-thread-composer')),
-      );
-      expect(field.enabled, isTrue);
-      expect(alsoSend, findsOneWidget);
-    });
-  });
-
   group('at any width and text size', () {
     for (final (width, scale) in [
       (SuperTabPaneLayout.threadWidth, 1.0),
@@ -349,7 +303,7 @@ void main() {
           'the box', (tester) async {
         await panel(
           tester,
-          buddyChat(),
+          agentChat(),
           'offline',
           width: width,
           textScale: scale,
@@ -367,7 +321,7 @@ void main() {
   for (final width in [800.0, SuperTabPaneLayout.rightWidth]) {
     testBox('Tab goes from the reply to the paperclip, send and Also send at '
         '${width.round()}px', (tester) async {
-      await panel(tester, buddyChat(), 'offline', width: width);
+      await panel(tester, agentChat(), 'offline', width: width);
       final order = [
         find.byKey(const ValueKey('new-harness-attach')),
         send,
@@ -398,12 +352,12 @@ void main() {
     });
   }
 
-  testBox('at the thread\'s default width, in the Mac\'s face, a Buddy '
+  testBox('at the thread\'s default width, in the Mac\'s face, an agent '
       'thread shows "Also send to the main chat" whole under the box, and a '
       'project thread names #openharness in full under the box', (
     tester,
   ) async {
-    await panel(tester, buddyChat(), 'offline');
+    await panel(tester, agentChat(), 'offline');
     expectUnderBox(tester);
     expectWhole(tester, alsoSend, 'Also send to the main chat');
     await tester.pumpWidget(const SizedBox());

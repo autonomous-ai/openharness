@@ -13,7 +13,6 @@ describe('the spawn channel protocol', () => {
     [{ type: 'harnessd:ready' }, true],
     [{ type: 'harnessd:heartbeat', rssBytes: 1, heapUsedBytes: 1 }, true],
     [{ type: 'harnessd:heartbeat', rssBytes: 1, heapUsedBytes: 1, loopDelayMs: 12 }, true],
-    [{ type: 'harnessd:heartbeat', rssBytes: 1, heapUsedBytes: 1, loopDelayMs: '12' }, false],
     [{ type: 'harnessd:heartbeat', rssBytes: '1', heapUsedBytes: 1 }, false],
     [{ type: 'harnessd:heartbeat', rssBytes: 1 }, false],
     [{ type: 'harnessd:want', service: 'orchestrator' }, true],

@@ -73,9 +73,9 @@ fi
 if [ -z "$NODE_BIN" ]; then
   NODE_BIN="$(command -v node 2>/dev/null || true)"
 fi
-[ -n "$NODE_BIN" ] || { echo "error: node not found — the CLI is plain JS run by your Node (>= 20)" >&2; exit 1; }
-NODE_MAJOR="$("$NODE_BIN" -e 'process.stdout.write(String(process.versions.node.split(".")[0]))')"
-[ "$NODE_MAJOR" -ge 20 ] || { echo "error: Node >= 20 required (found $("$NODE_BIN" -v))" >&2; exit 1; }
+[ -n "$NODE_BIN" ] || { echo "error: node not found — the CLI is plain JS run by your Node (>= 22.15)" >&2; exit 1; }
+"$NODE_BIN" -e 'const [a, b] = process.versions.node.split(".").map(Number); process.exit(a > 22 || (a === 22 && b >= 15) ? 0 : 1)' \
+  || { echo "error: Harness needs Node 22.15 or newer (found $("$NODE_BIN" -v))" >&2; exit 1; }
 if [ "$DO_BUILD" -eq 1 ]; then
   command -v npm >/dev/null 2>&1 || { echo "error: npm not found (needed for the bundle step; use --no-build to skip)" >&2; exit 1; }
 fi

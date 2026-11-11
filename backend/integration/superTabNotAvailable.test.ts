@@ -9,7 +9,7 @@ import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
-import { MemoryAttachmentStore, MemoryAvatarStore } from '../src/superTabs/attachments.js'
+import { MemoryAttachmentStore } from '../src/superTabs/attachments.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
@@ -36,8 +36,7 @@ beforeAll(async () => {
   })
   db = new PrismaClient({ datasources: { db: { url: uri } } })
   for (const u of users.values()) await db.user.create({ data: { id: u.sub, externalId: `fixture-${u.sub}`, email: u.email, autonomousEnv: u.autonomousEnv } })
-  store = new SuperTabStore(db, () => Date.now(), { store: new MemoryAttachmentStore(), prefix: 'super-tabs', publicBase: 'https://cdn.example.test',
-    avatars: new MemoryAvatarStore('https://avatars.example.test') })
+  store = new SuperTabStore(db, () => Date.now(), { store: new MemoryAttachmentStore(), prefix: 'super-tabs', publicBase: 'https://cdn.example.test' })
   app = Fastify()
   app.addHook('onRoute', route => {
     if (!/^\/api\/super-tabs\/:tabId(?:\/|$)/.test(route.url)) return
@@ -106,11 +105,6 @@ function calls(tab: string, chat: string, project: string) {
     json('POST', 'POST /api/super-tabs/:tabId/conversations/:conversationId/unread', `${t}/conversations/${chat}/unread`, { sequence: 1 }),
     json('POST', 'POST /api/super-tabs/:tabId/conversations/:conversationId/threads/:threadId/read', `${t}/conversations/${chat}/threads/${MISSING}/read`, { sequence: 1 }),
     json('POST', 'POST /api/super-tabs/:tabId/conversations/:conversationId/notifications', `${t}/conversations/${chat}/notifications`, { notify: 'all' }),
-    json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/instructions', `${t}/projects/${project}/instructions`),
-    json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/instructions/revisions', `${t}/projects/${project}/instructions/revisions`),
-    json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/instructions/revisions/:revision', `${t}/projects/${project}/instructions/revisions/1`),
-    json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/rules', `${t}/projects/${project}/rules`),
-    json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/machine-rules', `${t}/projects/${project}/machine-rules`),
     json('POST', 'POST /api/super-tabs/:tabId/attachments/uploads', `${t}/attachments/uploads`, { conversationId: chat, name: 'notes.txt', mime: 'text/plain', size: 12_000_000 }),
     json('POST', 'POST /api/super-tabs/:tabId/attachments/uploads/:uploadId/complete', `${t}/attachments/uploads/${MISSING}/complete`, {}),
     json('POST', 'POST /api/super-tabs/:tabId/attachments/:attachmentId/voice', `${t}/attachments/${MISSING}/voice?lang=en`, {}),
@@ -118,7 +112,6 @@ function calls(tab: string, chat: string, project: string) {
     json('POST', 'POST /api/super-tabs/:tabId/projects/:projectId/github/approve', `${t}/projects/${project}/github/approve`, { scope: 'project' }),
     json('GET', 'GET /api/super-tabs/:tabId/github/owners/:owner', `${t}/github/owners/acme`),
     json('POST', 'POST /api/super-tabs/:tabId/projects/:projectId/github/repository', `${t}/projects/${project}/github/repository`, { owner: 'acme', name: 'notes', private: true }),
-    json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/roles/:roleId', `${t}/projects/${project}/roles/${MISSING}`),
     json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/ci-load', `${t}/projects/${project}/ci-load`),
     // A made-up agent: an outsider is answered as for any Swarm it cannot reach. Asked of the Lead's project, so a member's
     // in-Swarm refusal of an agent it does not run is not taken for the private project's answer.
@@ -127,14 +120,10 @@ function calls(tab: string, chat: string, project: string) {
     // of the repository reads nothing.
     json('POST', 'POST /api/super-tabs/:tabId/github-comments', `${t}/github-comments?asAgentId=${MISSING}`, { repository: 'acme/app', kind: 'issue', commentId: '1' }),
     json('GET', 'GET /api/super-tabs/:tabId/github-comments', `${t}/github-comments?repository=acme/app&ids=issue:1`),
-    json('GET', 'GET /api/super-tabs/:tabId/route-decisions/:decisionId', `${t}/route-decisions/${MISSING}`),
     json('GET', 'GET /api/super-tabs/:tabId/machines/:machineId/removal', `${t}/machines/${MISSING}/removal`),
     json('GET', 'GET /api/super-tabs/:tabId/machines/:machineId/removal/v2', `${t}/machines/${MISSING}/removal/v2`),
     multipart('POST /api/super-tabs/:tabId/attachments', `${t}/attachments`, form([field('conversationId', chat), file('notes.txt', 'text/plain', 'hello')])),
-    json('GET', 'GET /api/super-tabs/:tabId/costs', `${t}/costs`),
-    json('GET', 'GET /api/super-tabs/:tabId/route-decisions', `${t}/route-decisions`),
     json('GET', 'GET /api/super-tabs/:tabId/starts/:startId', `${t}/starts/${MISSING}`),
-    json('GET', 'GET /api/super-tabs/:tabId/conversations/:conversationId/attempts', `${t}/conversations/${chat}/attempts`),
     json('GET', 'GET /api/super-tabs/:tabId/terminal/:requestId', `${t}/terminal/${MISSING}`),
     json('GET', 'GET /api/super-tabs/:tabId/agents/:agentId/deliveries', `${t}/agents/${MISSING}/deliveries`),
     json('GET', 'GET /api/super-tabs/:tabId/agents/:agentId/deliveries/:deliveryId', `${t}/agents/${MISSING}/deliveries/${MISSING}`),

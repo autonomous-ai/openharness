@@ -1,6 +1,6 @@
 import { createPublicKey, generateKeyPairSync, verify } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
-import { cacheSecret, githubAppConfig, GitHubAppError, HARNESS_CO_AUTHOR, PULL_READ_PERMISSIONS, readPrivateKey,
+import { cacheSecret, githubAppConfig, GitHubAppError, HARNESS_CO_AUTHOR, readPrivateKey,
   TOKEN_PERMISSIONS } from './app.js'
 import { FAKE_API, fakeApp, fakeGitHub, throwawayKey } from './fakeGitHub.js'
 import { githubRepository } from './repository.js'
@@ -232,8 +232,9 @@ describe('installation tokens', () => {
   it('never widens a narrow token, whatever the installation granted', async () => {
     const { app, github } = setup()
     github.grants.set(77, { ...today, workflows: 'write', issues: 'write' })
-    await app.createToken(77, repo, PULL_READ_PERMISSIONS)
-    expect(minted(github).map(b => (b as { permissions: unknown }).permissions)).toEqual([PULL_READ_PERMISSIONS])
+    const narrow = { pull_requests: 'read', metadata: 'read' } as const
+    await app.createToken(77, repo, narrow)
+    expect(minted(github).map(b => (b as { permissions: unknown }).permissions)).toEqual([narrow])
     expect(github.calls.filter(c => c.path === '/app/installations/77')).toHaveLength(0)
   })
 
@@ -304,7 +305,7 @@ describe('what installation tokens may never carry (task #1788)', () => {
   it('installation tokens never ask for administration or repository creation', async () => {
     const app = await import('./app.js')
     const sets = Object.entries(app).filter(([name]) => name.endsWith('_PERMISSIONS')) as Array<[string, Record<string, string>]>
-    expect(sets.map(([name]) => name)).toEqual(expect.arrayContaining(['TOKEN_PERMISSIONS', 'GRANTED_TOKEN_PERMISSIONS', 'PULL_READ_PERMISSIONS']))
+    expect(sets.map(([name]) => name)).toEqual(expect.arrayContaining(['TOKEN_PERMISSIONS', 'GRANTED_TOKEN_PERMISSIONS']))
     for (const [, permissions] of sets) {
       for (const never of app.NEVER_ON_INSTALLATION_TOKENS) expect(Object.keys(permissions)).not.toContain(never)
     }

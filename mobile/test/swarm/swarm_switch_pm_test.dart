@@ -8,7 +8,6 @@ import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
 import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
-import 'package:harness_mobile/swarm/swarm_project_tabs.dart';
 import 'package:harness_mobile/swarm/swarm_reader.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
@@ -268,7 +267,6 @@ void main() {
         home: const SwarmProjectPage(
           swarmId: tab,
           projectId: project,
-          tabs: SwarmProjectTab.homeC,
         ),
       ),
     );

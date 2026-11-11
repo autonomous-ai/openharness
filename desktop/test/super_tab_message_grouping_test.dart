@@ -23,7 +23,7 @@ void main() {
     if (shots != null) await loadPreviewFonts();
   });
 
-  const buddy = {
+  const river = {
     'kind': 'agent',
     'id': 'pm',
     'name': 'Lead',
@@ -35,7 +35,7 @@ void main() {
   SuperTabMessage message(
     int n,
     DateTime at, {
-    Map<String, Object> author = buddy,
+    Map<String, Object> author = river,
     String text = 'An update.',
     String? thread,
     bool alsoInChat = false,
@@ -54,17 +54,6 @@ void main() {
     'deliveries': <dynamic>[],
     'source': ?source,
   });
-
-  // The rows view.dart draws for themselves, with no header to join (Diego,
-  // #2547).
-  const ownRows = <String, Map<String, Object?>>{
-    'terminal input': {'kind': 'terminal-input'},
-    'terminal alert': {
-      'kind': 'terminal-alert',
-      'alert': 'prompt',
-      'agentId': 'pm',
-    },
-  };
 
   group('the rule', () {
     // Its header is where its tag shows (#2552), and a message after it is not
@@ -180,47 +169,6 @@ void main() {
       );
     });
 
-    for (final MapEntry(key: line, value: source) in ownRows.entries) {
-      group('after a $line line from the same sender', () {
-        final person = message(1, start, author: ken);
-        final row = message(
-          2,
-          start.add(const Duration(seconds: 20)),
-          source: source,
-        );
-        final plan = message(3, start.add(const Duration(seconds: 30)));
-
-        test('the next message starts a header', () {
-          expect(
-            SuperTabMessageRow.consecutiveUpdates([person, row, plan]),
-            isNot(contains('m3')),
-          );
-          expect(SuperTabMessageRow.groupsWith(plan, row), isFalse);
-        });
-
-        test('the next reply in a thread starts a header', () {
-          expect(
-            SuperTabMessageRow.groupsWith(plan, row, inThread: true),
-            isFalse,
-          );
-        });
-
-        test('the line joins nothing above it', () {
-          expect(
-            SuperTabMessageRow.groupsWith(
-              message(
-                4,
-                start.add(const Duration(seconds: 40)),
-                source: source,
-              ),
-              plan,
-            ),
-            isFalse,
-          );
-        });
-      });
-    }
-
     test('two plain messages ten seconds apart still group', () {
       expect(
         SuperTabMessageRow.groupsWith(
@@ -248,7 +196,7 @@ void main() {
   });
 
   group('on screen', () {
-    /// Huy's case: three Buddy messages in two minutes, a report and a
+    /// Huy's case: three of River's messages in two minutes, a report and a
     /// question among them, then a reply thread on the first.
     Future<ConversationServer> show(WidgetTester tester) async {
       await tester.binding.setSurfaceSize(const Size(1400, 900));
@@ -296,13 +244,13 @@ void main() {
         }
       }
 
-      say('Taken. Building it now.', buddy, const Duration(minutes: 30));
+      say('Taken. Building it now.', river, const Duration(minutes: 30));
       say(
         'Report:\n- tests pass\n- screenshots attached',
-        buddy,
+        river,
         const Duration(minutes: 29),
       );
-      say('Shall I merge it?', buddy, const Duration(minutes: 28));
+      say('Shall I merge it?', river, const Duration(minutes: 28));
       say('First', ken, const Duration(minutes: 27), thread: 'message-1');
       say('Second', ken, const Duration(minutes: 26), thread: 'message-1');
       say('Later', ken, const Duration(minutes: 10), thread: 'message-1');

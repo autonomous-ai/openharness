@@ -100,9 +100,6 @@ void main() {
       ('MacbookPro.local', 'MacbookPro'),
       ('Mac-mini.local', 'Mac-mini'),
       ('build-server.LOCAL', 'build-server'),
-      // A Mac's Harness Team account entry, as the backend reads it (task #3060): its Mac's name, then the label.
-      ('Gray.local · Team account', 'Gray · Team account'),
-      ('Ada’s Mac · Team account', 'Ada’s Mac · Team account'),
     ]) {
       expect(superTabMachineName(hostname), shown);
     }
@@ -316,61 +313,15 @@ void main() {
     },
   );
 
-  // Security review 1 of #2234: a Buddy's machine outside the Swarm is its
-  // person's alone. Their own Buddy row names it and another person's reaches
-  // them with no machine; neither makes a row here.
-  testWidgets('no Buddy adds a machine row: not its person\'s private machine, '
-      'not another person\'s hidden one', (tester) async {
-    final server = ConversationServer();
-    Map<String, dynamic> buddy(String id, String machineId, String person) => {
-      'id': id,
-      'name': 'Buddy',
-      'displayName': 'Buddy',
-      'machineId': machineId,
-      'harnessId': 'native-$id',
-      'contributorId': person,
-      'configuration': {'engine': 'claude'},
-      'buddyOf': {'personId': person, 'generation': 'fixture'},
-    };
-    server.state['agents'] = [
-      buddy('mine', 'private-laptop', 'owner'),
-      buddy('theirs', '', 'maya'),
-    ];
-    server.state['machines'] = [
-      {'machineId': 'm', 'name': 'Studio Mac', 'contributorId': 'owner'},
-    ];
-    final c = server.controller();
-    await c.refresh();
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: SuperTabMachines(controller: c, onAddAgent: (_) {}),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    expect(find.byKey(const ValueKey('super-machine-m')), findsOneWidget);
-    expect(
-      find.byKey(const ValueKey('super-machine-private-laptop')),
-      findsNothing,
-    );
-    expect(find.byKey(const ValueKey('super-machine-')), findsNothing);
-    await tester.pumpWidget(const SizedBox());
-    await c.flush();
-    c.dispose();
-  });
-
   group('an expanded machine shows its agents as one count', () {
     Future<dynamic> mount(
       WidgetTester tester,
       int agents, {
-      int buddies = 0,
       Duration age = Duration.zero,
     }) async {
       final server = ConversationServer();
       server.state['agents'] = [
-        for (var i = 0; i < agents + buddies; i++)
+        for (var i = 0; i < agents; i++)
           {
             'id': 'a$i',
             'name': 'Agent $i',
@@ -379,11 +330,6 @@ void main() {
             'harnessId': 'native-a$i',
             'contributorId': 'owner',
             'configuration': {'engine': 'codex'},
-            if (i >= agents)
-              'buddyOf': {
-                'personId': ['owner', 'maya', 'sam'][(i - agents) % 3],
-                'generation': 'fixture',
-              },
           },
       ];
       server.state['machines'] = [
@@ -492,35 +438,6 @@ void main() {
       );
       await unmount(tester, c);
     });
-
-    testWidgets(
-      'Buddies are personal: three running on the machine add nothing to its count or list',
-      (tester) async {
-        final c = await mount(tester, 2, buddies: 3);
-        expect(
-          find.descendant(
-            of: line,
-            matching: find.text('2 agents · 0 working'),
-          ),
-          findsOneWidget,
-        );
-        await tester.tap(line);
-        await tester.pumpAndSettle();
-        for (final id in ['a0', 'a1']) {
-          expect(
-            find.byKey(ValueKey('super-machine-agent-m-$id')),
-            findsOneWidget,
-          );
-        }
-        for (final id in ['a2', 'a3', 'a4']) {
-          expect(
-            find.byKey(ValueKey('super-machine-agent-m-$id')),
-            findsNothing,
-          );
-        }
-        await unmount(tester, c);
-      },
-    );
 
     testWidgets('twenty: one "20 agents" line, not twenty rows', (
       tester,
@@ -1164,7 +1081,7 @@ void main() {
     );
 
     testWidgets(
-      'a Swarm-wide Buddy has no project: its name is listed alone and Remove still asks',
+      'an agent with no project: its name is listed alone and Remove still asks',
       (tester) async {
         final server = _RemovalServer();
         server.state['machines'] = [machine('owner')];

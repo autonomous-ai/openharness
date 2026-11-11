@@ -24,8 +24,6 @@ export const GRANTED_TOKEN_PERMISSIONS = { workflows: 'write', issues: 'write' }
  *  token only (github/repositoryCreate.ts), so a token minted from the app's key can never create, delete or transfer a
  *  repository, nor widen which repositories the installation covers. */
 export const NEVER_ON_INSTALLATION_TOKENS = ['administration', 'repository_creation', 'installation_repositories'] as const
-/** What the Swarm's tidying reads before it archives a finished group: whether its pull requests are merged or closed. */
-export const PULL_READ_PERMISSIONS = { pull_requests: 'read', metadata: 'read' } as const
 export type TokenPermissions = Readonly<Record<string, 'read' | 'write'>>
 
 /** A refusal with the code clients act on; `details` adds fields beside it, such as the install link. */
@@ -148,7 +146,7 @@ export class GitHubApp {
   }
 
   private async call(method: string, path: string, auth: string | null, body?: unknown):
-    Promise<{ link?: string | null; status: number; body: Record<string, unknown> | unknown[] }> {
+    Promise<{ status: number; body: Record<string, unknown> | unknown[] }> {
     let response: Response
     try {
       response = await this.fetch(`${this.apiUrl}${path}`, {
@@ -163,8 +161,7 @@ export class GitHubApp {
     const text = await response.text().catch(() => '')
     let parsed: unknown = {}
     try { parsed = text ? JSON.parse(text) : {} } catch { parsed = {} }
-    return { status: response.status, body: parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {},
-      link: response.headers.get('link') }
+    return { status: response.status, body: parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {} }
   }
 
   private misconfigured(): GitHubAppError {
@@ -379,14 +376,6 @@ export class GitHubApp {
       throw this.notInstalled(repository)
     }
     throw new GitHubAppError('GITHUB_UNAVAILABLE', `GitHub could not create a token for ${repository.fullName}.`, 502)
-  }
-
-  /** One GET of [path] with an installation [token], for readers that page and judge answers themselves (superTabs/ruleMoves.ts):
-   *  its status, body, and the next page's path from the Link header. Throws [GitHubAppError] when GitHub does not answer. */
-  async get(path: string, token: string): Promise<{ status: number; body: unknown; next?: string }> {
-    const answer = await this.call('GET', path, `Bearer ${token}`)
-    const next = /<https:\/\/[^/>]+(\/[^>]+)>;\s*rel="next"/.exec(answer.link ?? '')?.[1]
-    return { status: answer.status, body: answer.body, ...(next ? { next } : {}) }
   }
 
   /** Ends [token] at once (DELETE /installation/token, authorised by the token itself). One GitHub already ended reads as

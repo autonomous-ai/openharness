@@ -8,7 +8,6 @@ import 'package:harness/state/app_state.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/my_agents.dart';
-import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -90,7 +89,7 @@ void main() {
     expect(find.text('Your Team'), findsOneWidget);
     expect(find.text('Projects'), findsOneWidget);
     expect(key('super-manage'), findsOneWidget);
-    for (final gone in ['Buddies', 'Members', 'Notifications', 'Threads']) {
+    for (final gone in ['Members', 'Notifications', 'Threads']) {
       expect(find.text(gone), findsNothing, reason: gone);
     }
 
@@ -334,73 +333,34 @@ void main() {
     },
   );
 
-  testWidgets(
-    'a Buddy chat from before v4 stays out of the left pane and of '
-    'Option+Shift+Down, and a thread reply offers Also send, no New session',
-    (tester) async {
-      final (server, c, _) = await open(tester);
-      // The person's Buddy chat in the project, unread, on a server that still offers thread sessions.
-      server.state['threadSessions'] = true;
-      server.state['sessionsFromChat'] = true;
-      (server.state['conversations'] as List).add({
-        ...conversationFixture('buddy-owner-lead', "owner's Buddy"),
-        'projectId': 'lead',
-        'kind': 'buddy',
-        'buddyOwnerId': 'owner',
-      });
-      server.append('Your Buddy is ready', conversationId: 'buddy-owner-lead');
-      server.messages.last['author'] = {
-        'kind': 'agent',
-        'id': 'second',
-        'name': 'second',
-      };
-      (server.state['conversations'] as List)
-              .cast<Map>()
-              .last['lastMessageSequence'] =
-          1;
-      server.append('Ship the build?', conversationId: 'agent-chat-second');
-      final root = server.messages.last['id'] as String;
-      await tester.runAsync(c.refresh);
-      await tester.pumpAndSettle();
+  testWidgets("a thread reply in an agent's own chat offers Also send", (
+    tester,
+  ) async {
+    final (server, c, _) = await open(tester);
+    server.append('Ship the build?', conversationId: 'agent-chat-second');
+    final root = server.messages.last['id'] as String;
+    await tester.runAsync(c.refresh);
+    await tester.pumpAndSettle();
 
-      expect(find.text("owner's Buddy"), findsNothing);
-      expect(superTabSidebarOrder(c), isNot(contains('buddy-owner-lead')));
-      // Option+Shift+Down goes to the next unread chat the left pane lists: never the Buddy chat.
-      await tester.tap(key('super-group-lead'));
-      await tester.pumpAndSettle();
-      for (var i = 0; i < 3; i++) {
-        await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
-        await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
-        await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-        await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
-        await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
-        await tester.pumpAndSettle();
-        expect(c.selectedId, isNot('buddy-owner-lead'));
-      }
-
-      // A thread in the agent's own chat: its reply box has Also send and nothing of a Buddy session.
-      await tester.tap(key('super-agent-second'));
-      await tester.pumpAndSettle();
-      c.openThread(root);
-      await tester.pumpAndSettle();
-      expect(key('super-thread-composer'), findsOneWidget);
-      expect(key('super-thread-also-send'), findsOneWidget);
-      expect(key('super-thread-new-session'), findsNothing);
-      await tester.enterText(key('super-thread-composer'), 'Yes, ship it');
-      await tester.pump();
-      await tester.tap(key('super-thread-send'));
-      await tester.pumpAndSettle();
-      final reply = server.posts
-          .map((p) => p['command'] as Map)
-          .lastWhere((m) => m['type'] == 'message.send');
-      expect(reply['conversationId'], 'agent-chat-second');
-      expect(reply['replyTo'], root);
-      expect(reply.containsKey('newSession'), isFalse);
-      expect(tester.takeException(), isNull);
-      // The read marks' save is on its way: let it land.
-      await tester.pump(const Duration(seconds: 1));
-    },
-  );
+    await tester.tap(key('super-agent-second'));
+    await tester.pumpAndSettle();
+    c.openThread(root);
+    await tester.pumpAndSettle();
+    expect(key('super-thread-composer'), findsOneWidget);
+    expect(key('super-thread-also-send'), findsOneWidget);
+    await tester.enterText(key('super-thread-composer'), 'Yes, ship it');
+    await tester.pump();
+    await tester.tap(key('super-thread-send'));
+    await tester.pumpAndSettle();
+    final reply = server.posts
+        .map((p) => p['command'] as Map)
+        .lastWhere((m) => m['type'] == 'message.send');
+    expect(reply['conversationId'], 'agent-chat-second');
+    expect(reply['replyTo'], root);
+    expect(tester.takeException(), isNull);
+    // The read marks' save is on its way: let it land.
+    await tester.pump(const Duration(seconds: 1));
+  });
 
   testWidgets('an empty Swarm says how to start, and one that cannot be read '
       'says so, neither with an error', (tester) async {

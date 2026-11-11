@@ -28,7 +28,6 @@ import 'swarm_message_text.dart';
 import 'swarm_voice_bubble.dart';
 import 'swarm_message_style.dart';
 import 'swarm_face.dart';
-import 'swarm_ship_row.dart';
 import 'swarm_special_rows.dart';
 
 /// `@name` or `@name@domain`, as people tag in chat. Never right after a
@@ -287,7 +286,6 @@ class SwarmMessageRow extends StatelessWidget {
     this.thread,
     this.below,
     this.receipt,
-    this.card,
     this.links,
     this.onLongPress,
     this.references = const {},
@@ -352,11 +350,7 @@ class SwarmMessageRow extends StatelessWidget {
   /// Who wrote it, in a sheet; null where nothing opens.
   final VoidCallback? onAuthor;
 
-  /// Under its text and files: the live card this message is
-  /// (swarm_live_card.dart); null for a plain message.
-  final Widget? card;
-
-  /// Under its text, files and card: the messages its links point at
+  /// Under its text and files: the messages its links point at
   /// (swarm_link_previews.dart); null when it links to none.
   final Widget? links;
 
@@ -401,20 +395,10 @@ class SwarmMessageRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // A ship line is a card, not a message from its author.
-    if (swarmShips(message)) {
-      return SwarmShipRow(
-        key: ValueKey('swarm-message-${message.id}'),
-        message: message,
-      );
-    }
     // Notes that are not chat from their author, as Desktop draws them.
     final special = ValueKey('swarm-message-${message.id}');
     if (message.terminalEvent) {
       return SwarmTerminalRow(key: special, message: message);
-    }
-    if (message.route case final route?) {
-      return SwarmRouteRow(key: special, message: message, route: route);
     }
     // A row kept as it was is not built again: it follows a theme or font
     // change itself.
@@ -514,7 +498,6 @@ class SwarmMessageRow extends StatelessWidget {
               ),
             ?swarmCutShort(message),
             for (final file in message.attachments) _attachment(context, file),
-            ?card,
             ?links,
             ?thread,
             ?below,

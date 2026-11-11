@@ -10,11 +10,10 @@ import { availableSlots, slotCounter, type ContributedMachine } from '../machine
 import * as store from '../parts/index.js'
 import type { Part, SwarmParts } from '../parts/index.js'
 import { canReadGroup, canReadProject, projectsOf } from '../projects.js'
-import { coordinatorNameOf, roleNameOf } from '../instructions.js'
 import { agentChatId, agentKind, inMyAgents, ledProjects } from '../agentKind.js'
-import { personView, withAvatarView } from '../profile.js'
+import { personView } from '../profile.js'
 import { swarmUsernames } from '../usernames.js'
-import type { AgentView, Derived, GroupView, HeadView, LivePart, MachineView, MemberView, ProgressView, StartView } from './contract.js'
+import type { AgentView, Derived, GroupView, HeadView, LivePart, MachineView, MemberView, StartView } from './contract.js'
 
 export interface ReaderParts {
   head: LivePart<HeadView>
@@ -23,7 +22,6 @@ export interface ReaderParts {
   groups: LivePart<GroupView>[]
   machines: LivePart<MachineView>[]
   starts: LivePart<StartView>[]
-  progress: LivePart<ProgressView>[]
 }
 export interface ReaderView {
   /** The reassembled stored state the view was made from, for the read checks of changed parts. */
@@ -37,7 +35,7 @@ export interface ReadExtras {
 }
 
 const HEAD_FIELDS = ['version', 'id', 'name', 'project', 'projects', 'leadsConversationId', 'ownerId', 'environment',
-  'routingPolicy', 'rules', 'paused', 'invitations', 'localModels', 'removedMachines', 'autoJoin'] as const
+  'paused', 'invitations', 'localModels', 'removedMachines', 'autoJoin'] as const
 
 export const envelope = <T>(part: Pick<Part, 'key' | 'version' | 'changedAt'>, data: T): LivePart<T> =>
   ({ key: part.key, version: part.version, changedAt: part.changedAt, data })
@@ -45,7 +43,10 @@ export const envelope = <T>(part: Pick<Part, 'key' | 'version' | 'changedAt'>, d
 /** A group as readers get it: its message counter, a dormant flag only when dormant, never the store's bookkeeping or the
  *  leaderboard's (the leaderboard read sums it), except when it shipped. */
 export function groupView(group: Conversation, seenMachines: ReadonlySet<string>): GroupView {
-  const { messageSeq, reportSeq: _report, lastActivityAt: _activity, ledger, talkedAt: _talkedAt, dormant, audience, ...rest } = withSeenRequirement(group, seenMachines)
+  // `reportSeq`: the report progress that went in S19b; a group written before it still holds 0 until its next write
+  // (parts/write.ts storedData). Goes on or after 2026-12-12, with that drop.
+  const { messageSeq, reportSeq: _report, lastActivityAt: _activity, ledger, talkedAt: _talkedAt, dormant, audience, ...rest }
+    = withSeenRequirement(group, seenMachines) as Conversation & { reportSeq?: number }
   const readers = audience ? { audience } : {}
   const shippedAt = ledger?.shippedAt
   const held = heldView(group)
@@ -67,8 +68,8 @@ export function agentView(agent: Agent): AgentView {
   // A main project goes in the derived row, to its project's readers only: a private one's id says the project exists. A
   // Member's mark names it too (members.ts; security review 2 of #3575), and is its host's alone (read/hostRows.ts sends the
   // agent as stored).
-  const { downNamed: _named, downSince: _since, limitedUntil: _limit, roleId: _role, mainProjectId: _main, member: _member, ...rest } = agent
-  return withAvatarView(rest) as AgentView
+  const { downNamed: _named, downSince: _since, limitedUntil: _limit, mainProjectId: _main, member: _member, ...rest } = agent
+  return personView(rest)
 }
 
 /** `state` is the parts already reassembled, when the caller has it (a read reassembles once). */
@@ -79,11 +80,8 @@ export function readerView(parts: SwarmParts, actor: Actor, now: number, extras:
   const part = <T>(list: Part<T>[]) => { const keyed = new Map(list.map(p => [p.key, p])); return (key: string) => keyed.get(key)! }
   const agentPart = part(parts.agents), groupPart = part(parts.groups), machinePart = part(parts.machines), startPart = part(parts.starts)
   const head = Object.fromEntries(HEAD_FIELDS.filter(field => visible[field] !== undefined).map(field => [field, visible[field]])) as HeadView
-  // Every project names its coordinator; one from before the field reads as the Product Manager (instructions.ts). The progress
-  // is the server's bookkeeping: no reader shows it.
-  if (head.projects) head.projects = head.projects.map(({ progress: _progress, ...project }) => ({ ...project, coordinatorName: coordinatorNameOf(project) }))
   head.invitations = visible.invitations.filter(i => readable.has(i.conversationId))
-  const projects = new Set((visible.projects ?? []).map(p => p.id)), seen = seenMachineIds(visible), names = swarmUsernames(state)
+  const seen = seenMachineIds(visible), names = swarmUsernames(state)
   return {
     state,
     parts: {
@@ -95,14 +93,10 @@ export function readerView(parts: SwarmParts, actor: Actor, now: number, extras:
       groups: groups.map(g => envelope(groupPart(g.id), groupView(g, seen))),
       machines: (visible.machines ?? []).map(m => envelope(machinePart(m.machineId), m)),
       starts: (visible.starts ?? []).filter(s => readable.has(s.request.conversationId)).map(s => envelope(startPart(s.id), s)),
-      progress: parts.progress.filter(p => !p.deleted && projects.has(p.key)).map(p => envelope(p, progressView(p.data!))),
     },
     derived: derive(state, visible, actor, now, extras),
   }
 }
-
-export const progressView = (data: NonNullable<SwarmParts['progress'][number]['data']>): ProgressView =>
-  ({ ...data, requestedAt: data.requestedAt ?? null })
 
 
 function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now: number, extras: ReadExtras): Derived {
@@ -136,9 +130,6 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
       const stored = storedAgents.get(seen.id)!
       return [seen.id, { downSince: seen.downSince ?? null, limitedUntil: seen.limitedUntil ?? null,
         workDecision: seen.workDecision === 'awaiting' && stored.workDecision !== 'awaiting' ? 'awaiting' as const : null,
-        roleId: seen.roleId ?? null,
-        // Derived on every read: who leads a project, and its role set, live outside the agent's own part.
-        roleName: roleNameOf(state, stored),
         // What it is and where its person talks to it, for the left pane's "My agents" (agentKind.ts, task #4116).
         kind: agentKind(state, stored), chatId: agentChatId(state, stored, chat => canReadGroup(state, actor, chat)),
         // Whether it is in this reader's My agents, decided here so every client lists the same (task #4192).

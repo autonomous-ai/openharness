@@ -50,7 +50,7 @@ async function reader(sessions: RegisteredSession[]) {
   return create({
     bySession: (sessionId) => bySession.get(sessionId),
     readerFor: engineTranscriptFor,
-    dbs: { opencode: '/db/opencode.db', kilo: '/db/kilo.db', devin: '/db/devin.db' },
+    dbs: { opencode: '/db/opencode.db', kilo: '/db/kilo.db', devin: '/db/devin.db', openclaw: async () => null },
     hermesDb: async (s) => `/db/hermes-${s.agentId}.db`,
   })
 }
@@ -99,7 +99,7 @@ describe('the last turn of each engine', () => {
 
 it('drops a recap read when its session binding changes and contains worker failures', async () => {
   const s = session('claude', '/read.jsonl')
-  const deps = { bySession: () => s, dbs: { opencode: '', kilo: '', devin: '' }, hermesDb: async () => '' }
+  const deps = { bySession: () => s, dbs: { opencode: '', kilo: '', devin: '', openclaw: async () => null }, hermesDb: async () => '' }
   const result = { userMessage: 'question', assistantText: 'answer' }
   const readerFor = () => ({ historyPage: async () => ({ events: [], timestamp: '' }), lastTurnText: async () => {
     s.transcriptPath = '/replacement.jsonl'

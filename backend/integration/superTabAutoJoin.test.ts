@@ -36,8 +36,8 @@ async function saveState(tab: string, state: SuperTabState) {
   await db.$transaction(async tx => {
     const current = await parts.loadAll(tx, tab)
     const version = Math.max(current.head.version, ...[...current.members, ...current.agents, ...current.groups, ...current.machines,
-      ...current.starts, ...current.progress].map(p => p.version)) + 1
-    for (const model of [tx.swarmHead, tx.swarmMember, tx.swarmAgent, tx.swarmGroup, tx.swarmMachine, tx.swarmStart, tx.swarmProgress] as unknown as
+      ...current.starts].map(p => p.version)) + 1
+    for (const model of [tx.swarmHead, tx.swarmMember, tx.swarmAgent, tx.swarmGroup, tx.swarmMachine, tx.swarmStart] as unknown as
       Array<{ deleteMany(args: unknown): Promise<unknown> }>) await model.deleteMany({ where: { tabId: tab } })
     await parts.insertParts(tx, { ...parts.split(state, { tabId: tab, version, now: Date.now(), visibilityEpoch: current.visibilityEpoch }),
       sequenceBase: current.sequenceBase })

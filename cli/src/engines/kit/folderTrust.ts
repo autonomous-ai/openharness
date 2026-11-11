@@ -10,8 +10,7 @@
  * earlier contributions repaired after an update. It never authorizes the person's other repositories.
  * The other is a Swarm agent in the Swarm's full mode in the checkout of its remote project's own repository, or in a
  * worktree of the repository the person picked for it in this machine's own window (core/agents/launches.ts
- * `swarmCheckout`). A person's one Buddy's folder is Harness's own, and its launch reads no project's settings
- * (superTabs/buddyHome.ts `trustBuddyHome`). Any other existing folder stays the person's question.
+ * `swarmCheckout`). Any other existing folder stays the person's question.
  * The callers decide (core/agents/create.ts, launches.ts). A worktree only inherits the answer its source
  * repo already has.
  *
@@ -30,11 +29,9 @@ export function trustsIn(trust: TrustContract, file: string, path: string): bool
   return trust.format === 'json' ? jsonTrusts(trust, file, path) : tomlTrusts(trust, file, path)
 }
 
-/** Record trust in `cwd` in `file`. `create`: the engine has never run here, so there is no `file` to extend; a JSON one is
- *  made holding that folder's entry alone (a Buddy's own folder, superTabs/buddyHome.ts). Without it a missing file is left
- *  missing: the engine writes it on its first run, and a caller that did not make the folder has no business starting it. */
-export function recordTrustIn(trust: TrustContract, file: string, cwd: string, options: { create?: boolean } = {}): 'trusted' | 'already' | 'skipped' {
-  return trust.format === 'json' ? recordJson(trust, file, cwd, options.create === true) : recordToml(trust, file, cwd)
+/** Record trust in `cwd` in `file`. A missing file is left missing: the engine writes it on its first run. */
+export function recordTrustIn(trust: TrustContract, file: string, cwd: string): 'trusted' | 'already' | 'skipped' {
+  return trust.format === 'json' ? recordJson(trust, file, cwd) : recordToml(trust, file, cwd)
 }
 
 /** A folder as this platform compares it. DESKTOP-0TFH0OJ, 2026-10-23: a Swarm worktree's source came as
@@ -97,18 +94,8 @@ export function recordAcceptanceIn(file: string, key: string): 'accepted' | 'alr
   return 'accepted'
 }
 
-function recordJson(trust: JsonTrust, file: string, cwd: string, create = false): 'trusted' | 'already' | 'skipped' {
-  if (!existsSync(file)) {
-    if (!create) return 'skipped'
-    mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
-    try {
-      writeFileSync(file, JSON.stringify({ [trust.projects]: { [cwd]: { ...structuredClone(trust.entry), [trust.accepted]: true } } }, null, 2), { mode: 0o600, flag: 'wx' })
-      return 'trusted'
-    } catch (error) {
-      // Made meanwhile, by the engine itself: its file is extended below, never replaced.
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-    }
-  }
+function recordJson(trust: JsonTrust, file: string, cwd: string): 'trusted' | 'already' | 'skipped' {
+  if (!existsSync(file)) return 'skipped'
   let config: unknown
   try {
     config = JSON.parse(readFileSync(file, 'utf8'))

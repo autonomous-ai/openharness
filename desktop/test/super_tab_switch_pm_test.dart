@@ -298,8 +298,7 @@ void main() {
       {
         'machineId': 'target',
         'name': 'Mac Two',
-        'contributorId': 'mac',
-        'teamWork': {'allowed': true},
+        'contributorId': 'owner',
         'engines': ['claude', 'codex'],
         'observation': {
           'receivedAt': DateTime.now().millisecondsSinceEpoch,

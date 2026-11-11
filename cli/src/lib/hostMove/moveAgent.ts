@@ -26,7 +26,7 @@ import { seedFromCapture } from './seed.js'
 export const MOVE_MARKER_ENV = 'HARNESS_MOVE_OF'
 
 /** The new engine must be proven running within this, or the move falls back to the old pane. */
-export const MOVE_TIMEOUT_MS = 30_000
+const MOVE_TIMEOUT_MS = 30_000
 /** How often the new pane is probed for its engine. An engine counts once two probes in a row see the same process:
  *  a resume the engine refuses runs for an instant, as `paneSwapDeps`' `waitForProcess` settles for. */
 export const MOVE_PROBE_INTERVAL_MS = 500

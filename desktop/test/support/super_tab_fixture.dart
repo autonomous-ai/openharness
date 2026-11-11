@@ -102,10 +102,6 @@ class SwarmPartsBackend {
           'unreadMarks',
           'threadMarks',
           'chatSettings',
-          'teamAccounts',
-          'threadSessions',
-          'sessionsFromChat',
-          'swarmBuddy',
         }.contains(entry.key))
           entry.key: entry.value,
     };
@@ -172,15 +168,6 @@ class SwarmPartsBackend {
     'agents': <String, dynamic>{},
     'machines': <String, dynamic>{},
     if (state['avatars'] != null) 'avatars': state['avatars'],
-    // Only where the server does not try Team accounts (backend read/views.ts).
-    if (state['teamAccounts'] == false) 'teamAccounts': false,
-    // A server that takes a thread reply's New session (backend read/views.ts).
-    if (state['threadSessions'] == true) 'threadSessions': true,
-    if (state['sessionsFromChat'] == true) 'sessionsFromChat': true,
-    // A server with one Buddy per person for the whole Swarm.
-    if (state['swarmBuddy'] == true) 'swarmBuddy': true,
-    // A server that makes several Buddies per person (#3818).
-    if (state['buddyCap'] case final int cap) 'buddyCap': cap,
     // The reader's own read marks alone, as backend readMarks.ts sends them.
     if ((state['readMarks'] as Map?)?[reader ?? 'owner'] case final Map marks)
       'readMarks': Map<String, dynamic>.from(marks),
@@ -226,10 +213,6 @@ class SwarmPartsBackend {
   ) {
     if (reader == null || part.deleted || !id.startsWith('groups:')) {
       return false;
-    }
-    // A Buddy chat is read by its person alone (backend Buddies, 10-28).
-    if (part.data['kind'] == 'buddy') {
-      return part.data['buddyOwnerId'] != reader;
     }
     final audience = part.data['audience'];
     if (audience is! Map) return false;
@@ -479,10 +462,6 @@ class ConversationServer {
   /// Messages per page, as the backend pages them.
   int messagePage = 100;
 
-  /// Where the ask at each thread's root stands, by root: what the backend's
-  /// summaries say (threads.ts).
-  final threadAsks = <String, String>{};
-
   /// Whether messages are written with threads, as backends from threads on
   /// write them (backend threads.ts).
   bool threads = false;
@@ -638,25 +617,6 @@ class ConversationServer {
   // The effective routing policy answered by GET .../routing-policy.
   Map<String, dynamic>? routingPolicy;
 
-  /// Each project's instructions as GET .../projects/:id/instructions answers them (backend store.ts
-  /// `instructions`), by project id; a project missing here reads as unavailable.
-  final instructions = <String, Map<String, dynamic>>{};
-
-  /// Each project's kept revisions, newest first, each with its `text`: the history read leaves the text out, the
-  /// read of one revision has it.
-  final instructionRevisions = <String, List<Map<String, dynamic>>>{};
-
-  /// False answers the instructions reads as a backend from before them: a 404 without the backend's own code.
-  bool instructionsRoute = true;
-
-  /// Every instructions read, by path.
-  final instructionReads = <String>[];
-
-  /// Each project's rules record as GET .../projects/:id/rules answers it (backend store.ts `projectRules`), by
-  /// project id; a project missing here reads as unavailable. False [rulesRoute] answers as a backend from before it.
-  final projectRules = <String, Map<String, dynamic>>{};
-  bool rulesRoute = true;
-  final rulesReads = <String>[];
   final state = <String, dynamic>{
     'version': 1,
     'id': 'tab',
@@ -903,7 +863,6 @@ class ConversationServer {
           case final thread when thread.length > 1)
         {
           'id': root,
-          'ask': ?threadAsks[root],
           'replies': thread.length - 1,
           'lastSequence': thread.last['sequence'],
           'lastAt': thread.last['createdAt'],
@@ -1216,193 +1175,6 @@ class ConversationServer {
           },
         ];
         revision++;
-      } else if (command['type'] == 'buddy.create' &&
-          command['name'] is String &&
-          command['conversationId'] == null) {
-        // As #3818 makes one of several: a new Buddy in a chat of its own, up to the Swarm's cap.
-        final person = reader ?? 'owner';
-        final conversations = (state['conversations'] as List)
-            .cast<Map<String, dynamic>>();
-        final count = conversations
-            .where(
-              (g) => g['kind'] == 'swarm-buddy' && g['buddyOwnerId'] == person,
-            )
-            .length;
-        if (count >= (state['buddyCap'] as int? ?? 5)) {
-          throw SuperTabFailure(
-            'BUDDY_CAP',
-            'You have $count Buddies, the most this Swarm allows. Remove one '
-                'to add another.',
-            statusCode: 409,
-          );
-        }
-        revision++;
-        final chatId = 'swarm-buddy-$person-$revision';
-        conversations.add({
-          ...conversationFixture(chatId, command['name'] as String),
-          'kind': 'swarm-buddy',
-          'projectId': null,
-          'buddyOwnerId': person,
-          'buddyName': command['name'],
-          'agentIds': <String>[],
-        });
-        output
-          ..['startId'] = 'start-$revision'
-          ..['conversationId'] = chatId;
-      } else if (command['type'] == 'buddy.default') {
-        final person = reader ?? 'owner';
-        for (final g
-            in (state['conversations'] as List).cast<Map<String, dynamic>>()) {
-          if (g['kind'] == 'swarm-buddy' && g['buddyOwnerId'] == person) {
-            g['buddyDefault'] = g['id'] == command['conversationId'];
-          }
-        }
-        revision++;
-      } else if (command['type'] == 'buddy.create') {
-        // As the backend's Buddy create: a start for the reader's Buddy and
-        // its chat, fixed per person and project. The fixture's host starts it
-        // at once.
-        final person = reader ?? 'owner';
-        // With no project, the reader's one Buddy for the Swarm (backend
-        // buddy.create since 10-31): its chat is in no project.
-        final swarm = command['projectId'] == null;
-        final projectId = command['projectId'] as String? ?? '';
-        bool mine(Object? a) =>
-            a is Map &&
-            (a['buddyOf'] as Map?)?['personId'] == person &&
-            (swarm ? a['buddyScope'] == 'swarm' : a['projectId'] == projectId);
-        // As the backend: one Buddy per person and project. A running one
-        // refuses another; a down one is replaced.
-        if ((state['agents'] as List).any(
-          (a) => mine(a) && (a as Map)['downSince'] == null,
-        )) {
-          throw const SuperTabFailure(
-            'BUDDY_EXISTS',
-            'You already have a Buddy in this project.',
-            statusCode: 409,
-          );
-        }
-        revision++;
-        final agentId = 'buddy-$revision';
-        final chatId = swarm
-            ? 'swarm-buddy-$person'
-            : 'buddy-$person-$projectId';
-        final machine = (state['machines'] as List? ?? const [])
-            .cast<Map>()
-            .where((m) => m['machineId'] == command['machineId'])
-            .firstOrNull;
-        final owner = (state['people'] as List? ?? const [])
-            .cast<Map>()
-            .where((p) => p['id'] == person)
-            .firstOrNull;
-        // A test's lists may be typed literals: copy into plain lists.
-        state['agents'] = <dynamic>[
-          for (final a in state['agents'] as List)
-            if (!mine(a)) a,
-        ];
-        state['starts'] = <dynamic>[...state['starts'] as List? ?? const []];
-        (state['starts'] as List).add({
-          'id': 'start-$revision',
-          'machineOwnerId': machine?['contributorId'] ?? person,
-          'request': {
-            'conversationId': chatId,
-            if (!swarm) 'projectId': projectId,
-            if (swarm) 'buddyScope': 'swarm',
-            'machineId': command['machineId'],
-            'engine': command['engine'],
-            'buddyOf': {'personId': person, 'generation': 'fixture'},
-          },
-          'harnessId': 'h-$agentId',
-          'error': null,
-        });
-        (state['agents'] as List).add({
-          'id': agentId,
-          'name': 'Buddy',
-          if (!swarm) 'projectId': projectId,
-          if (swarm) 'buddyScope': 'swarm',
-          'buddyOf': {'personId': person, 'generation': 'fixture'},
-          'machineId': command['machineId'],
-          'harnessId': 'h-$agentId',
-          'contributorId': person,
-          'machineOwnerId': machine?['contributorId'] ?? person,
-          'confidential': true,
-          'configuration': {'engine': command['engine'], 'model': 'default'},
-        });
-        final conversations = (state['conversations'] as List)
-            .cast<Map<String, dynamic>>();
-        final chat = conversations.where((g) => g['id'] == chatId).firstOrNull;
-        if (chat != null) {
-          chat['agentIds'] = [agentId];
-        } else {
-          final name = (owner?['email'] as String? ?? person).split('@').first;
-          conversations.add({
-            ...conversationFixture(chatId, "$name's Buddy"),
-            'kind': swarm ? 'swarm-buddy' : 'buddy',
-            'projectId': swarm ? null : projectId,
-            'buddyOwnerId': person,
-            'agentIds': [agentId],
-          });
-        }
-        output
-          ..['startId'] = 'start-$revision'
-          ..['conversationId'] = chatId;
-      } else if (command['type'] == 'buddy.chat') {
-        // As the backend's: the reader's own Buddy chat in the project, opened
-        // before any Buddy, the same chat a Buddy added later joins.
-        final person = reader ?? 'owner';
-        final swarm = command['projectId'] == null;
-        final projectId = command['projectId'] as String?;
-        final chatId = swarm
-            ? 'swarm-buddy-$person'
-            : 'buddy-$person-$projectId';
-        final conversations = (state['conversations'] as List)
-            .cast<Map<String, dynamic>>();
-        if (!conversations.any((g) => g['id'] == chatId)) {
-          revision++;
-          final owner = (state['people'] as List? ?? const [])
-              .cast<Map>()
-              .where((p) => p['id'] == person)
-              .firstOrNull;
-          final name = (owner?['email'] as String? ?? person).split('@').first;
-          conversations.add({
-            ...conversationFixture(chatId, "$name's Buddy"),
-            'kind': swarm ? 'swarm-buddy' : 'buddy',
-            'projectId': projectId,
-            'buddyOwnerId': person,
-            'agentIds': <String>[],
-          });
-        }
-        output['conversationId'] = chatId;
-      } else if (command['type'] == 'buddy.rename') {
-        // As the backend's: the reader's own Buddy chat keeps the name, or
-        // takes a fresh real one when cleared (task #4568), and its Buddy
-        // shows it at once.
-        final person = reader ?? 'owner';
-        final chat = (state['conversations'] as List)
-            .cast<Map<String, dynamic>>()
-            .where(
-              (g) =>
-                  g['id'] == command['conversationId'] &&
-                  (g['kind'] == 'buddy' || g['kind'] == 'swarm-buddy') &&
-                  g['buddyOwnerId'] == person,
-            )
-            .firstOrNull;
-        if (chat == null) {
-          throw const SuperTabFailure(
-            'NOT_FOUND',
-            'This conversation is unavailable.',
-            statusCode: 404,
-          );
-        }
-        revision++;
-        final shown = command['name'] as String? ?? 'Atlas';
-        chat['buddyName'] = shown;
-        chat['title'] = shown;
-        for (final agent in (state['agents'] as List).cast<Map>()) {
-          if ((chat['agentIds'] as List).contains(agent['id'])) {
-            agent['displayName'] = shown;
-          }
-        }
       } else if (command['type'] == 'agent.rename') {
         // As the backend's: its contributor renames it, for every reader.
         final agent = (state['agents'] as List)
@@ -1443,54 +1215,6 @@ class ConversationServer {
         for (final chat in (state['conversations'] as List).cast<Map>()) {
           (chat['agentIds'] as List).remove(agent['id']);
         }
-      } else if (command['type'] == 'buddy.remove') {
-        revision++;
-        final person = reader ?? 'owner';
-        (state['agents'] as List).removeWhere(
-          (a) =>
-              a is Map &&
-              (a['buddyOf'] as Map?)?['personId'] == person &&
-              (command['projectId'] == null
-                  ? a['buddyScope'] == 'swarm'
-                  : a['projectId'] == command['projectId']),
-        );
-      } else if (command['type'] == 'conversation.create') {
-        revision++;
-        final id = 'group-$revision';
-        final projectId = command['projectId'] ?? 'lead';
-        // The project's Lead is in every new group, a private one included.
-        final leadConversationId =
-            (state['projects'] as List?)
-                ?.cast<Map<String, dynamic>>()
-                .where((p) => p['id'] == projectId)
-                .firstOrNull?['leadConversationId'] ??
-            'lead';
-        final leadId = (state['conversations'] as List)
-            .cast<Map<String, dynamic>>()
-            .where((g) => g['id'] == leadConversationId)
-            .firstOrNull?['leadId'];
-        (state['conversations'] as List).add({
-          ...conversationFixture(id, command['title'] as String),
-          'projectId': projectId,
-          'leadId': leadId,
-          'agentIds': [?leadId],
-          if (command['audience'] case {'personIds': final List people})
-            'audience': {
-              'people': [
-                for (final person in people)
-                  {
-                    'id': person,
-                    'generation':
-                        (state['people'] as List?)
-                            ?.cast<Map>()
-                            .where((p) => p['id'] == person)
-                            .firstOrNull?['generation'] ??
-                        'fixture',
-                  },
-              ],
-            },
-        });
-        output['conversationId'] = id;
       } else if (command['type'] == 'lead.claim') {
         // One start of a project's Lead (backend commands.ts lead.claim):
         // another machine's claim is the one; the same machine claims again.
@@ -1546,6 +1270,10 @@ class ConversationServer {
           if (newAgentChatsDormant) 'dormant': true,
         });
         output['conversationId'] = id;
+      } else if (command['type'] == 'tab.rename') {
+        // As backend commands.ts sets it: the Swarm's one name.
+        revision++;
+        state['name'] = command['name'];
       } else if (command['type'] == 'project.create') {
         revision++;
         final projects = state['projects'] ??= <dynamic>[
@@ -1641,29 +1369,6 @@ class ConversationServer {
           }
           revision++;
         }
-      } else if (command['type'] == 'instructions.save') {
-        output.addAll(_saveInstructions(command, reader ?? 'owner'));
-      } else if (command['type'] == 'note.remove') {
-        _requireMember(reader ?? 'owner');
-        final project = _project(command['projectId'] as String);
-        final document = instructions[project['id']];
-        final notes = document?['notes'] as List? ?? const [];
-        if (!notes.any((n) => (n as Map)['id'] == command['noteId'])) {
-          throw const SuperTabFailure(
-            'NOT_FOUND',
-            'This note is unavailable.',
-            statusCode: 404,
-          );
-        }
-        final notesRevision = ((project['notesRevision'] as int?) ?? 0) + 1;
-        project['notesRevision'] = notesRevision;
-        document!
-          ..['notes'] = [
-            for (final note in notes)
-              if ((note as Map)['id'] != command['noteId']) note,
-          ]
-          ..['notesRevision'] = notesRevision;
-        revision++;
       }
       output.addAll(commandResult);
       final result = {
@@ -1700,32 +1405,6 @@ class ConversationServer {
       return text == null
           ? {'requestId': id, 'ok': false, 'error': 'Its machine is offline.'}
           : {'requestId': id, 'ok': true, 'text': text};
-    }
-    if (uri.pathSegments.length > 5 &&
-        uri.pathSegments[3] == 'projects' &&
-        uri.pathSegments[5] == 'instructions') {
-      return _readInstructions(path, uri);
-    }
-    if (uri.pathSegments.length == 6 &&
-        uri.pathSegments[3] == 'projects' &&
-        uri.pathSegments[5] == 'rules') {
-      rulesReads.add(path);
-      if (!rulesRoute) {
-        throw const SuperTabFailure(
-          'BACKEND_UNAVAILABLE',
-          'Not Found',
-          statusCode: 404,
-        );
-      }
-      final rules = projectRules[uri.pathSegments[4]];
-      if (rules == null) {
-        throw const SuperTabFailure(
-          'NOT_FOUND',
-          'This project is unavailable.',
-          statusCode: 404,
-        );
-      }
-      return jsonDecode(jsonEncode(rules)) as Map<String, dynamic>;
     }
     if (uri.pathSegments.length > 2 &&
         uri.pathSegments[uri.pathSegments.length - 2] == 'attachments') {
@@ -1923,149 +1602,6 @@ class ConversationServer {
     }
     // The whole-Swarm reads are gone (section 4.11): nothing may still ask.
     throw superTabUpdateRequired;
-  }
-
-  Map<String, dynamic> _project(String id) {
-    final projects = state['projects'] ??= <dynamic>[
-      projectFixture('lead', state['name'] as String, 'lead'),
-    ];
-    return (projects as List).cast<Map<String, dynamic>>().firstWhere(
-      (p) => p['id'] == id,
-      orElse: () => throw const SuperTabFailure(
-        'NOT_FOUND',
-        'This project is unavailable.',
-        statusCode: 404,
-      ),
-    );
-  }
-
-  /// A viewer's write is refused as the backend refuses it (model.ts `author`).
-  void _requireMember(String id) {
-    final role = (state['people'] as List? ?? const [])
-        .cast<Map>()
-        .where((p) => p['id'] == id)
-        .firstOrNull?['role'];
-    if (role == 'viewer') {
-      throw const SuperTabFailure(
-        'READ_ONLY',
-        'You have read-only access to this Super Tab.',
-        statusCode: 403,
-      );
-    }
-  }
-
-  /// `instructions.save` as the backend runs it (commands.ts): on the revision the writer read, or refused
-  /// `INSTRUCTIONS_STALE`; a save moves the project's `instructionsRevision` and keeps the text and a revision.
-  Map<String, dynamic> _saveInstructions(Map command, String writer) {
-    // What the backend's schema and access check refuse (commands.ts, instructions.ts), in the order it does.
-    _requireMember(writer);
-    final text = command['text'];
-    final summary = command['summary'];
-    if (text is! String || text.isEmpty || utf8.encode(text).length > 65536) {
-      throw const SuperTabFailure(
-        'VALIDATION_ERROR',
-        'Project instructions are at most 64 KB, and not empty.',
-        statusCode: 400,
-      );
-    }
-    if (summary is! String ||
-        summary.trim().isEmpty ||
-        summary.trim().length > 200 ||
-        summary.contains(RegExp(r'[\r\n]'))) {
-      throw const SuperTabFailure(
-        'VALIDATION_ERROR',
-        'Summarize the change in one line.',
-        statusCode: 400,
-      );
-    }
-    final project = _project(command['projectId'] as String);
-    final projectId = project['id'] as String;
-    final current = (project['instructionsRevision'] as int?) ?? 0;
-    if (command['baseRevision'] != current) {
-      throw SuperTabFailure(
-        'INSTRUCTIONS_STALE',
-        'The instructions changed since revision ${command['baseRevision']}. '
-            'Merge your change into revision $current and save again.',
-        statusCode: 409,
-      );
-    }
-    if (current > 0 && instructions[projectId]?['text'] == text) {
-      return {
-        'projectId': projectId,
-        'revision': current,
-        'hash': instructions[projectId]?['hash'],
-        'unchanged': true,
-      };
-    }
-    final next = current + 1;
-    final hash = 'hash-$projectId-$next';
-    project['instructionsRevision'] = next;
-    instructions[projectId] = {
-      'projectId': projectId,
-      'notes': <dynamic>[],
-      ...?instructions[projectId],
-      'revision': next,
-      'hash': hash,
-      'text': command['text'],
-      'template': false,
-      'coordinatorName': project['coordinatorName'] ?? 'Product Manager',
-      'notesRevision': project['notesRevision'] ?? 0,
-    };
-    (instructionRevisions[projectId] ??= []).insert(0, {
-      'revision': next,
-      'hash': hash,
-      'summary': (summary).trim(),
-      'writtenBy': {'kind': 'person', 'id': writer},
-      'askedBy': command['askedBy'] ?? writer,
-      'at': '2026-10-30T00:00:00Z',
-      'text': command['text'],
-    });
-    revision++;
-    return {'projectId': projectId, 'revision': next, 'hash': hash};
-  }
-
-  /// The three instructions reads (backend routes/superTabs.ts): the document, its kept revisions without their
-  /// text, and one revision with it.
-  Map<String, dynamic> _readInstructions(String path, Uri uri) {
-    instructionReads.add(path);
-    if (!instructionsRoute) {
-      throw const SuperTabFailure(
-        'BACKEND_UNAVAILABLE',
-        'Not Found',
-        statusCode: 404,
-      );
-    }
-    const unavailable = SuperTabFailure(
-      'NOT_FOUND',
-      'This project is unavailable.',
-      statusCode: 404,
-    );
-    final projectId = uri.pathSegments[4];
-    final rest = uri.pathSegments.skip(6).toList();
-    Map<String, dynamic> copy(Object value) =>
-        jsonDecode(jsonEncode(value)) as Map<String, dynamic>;
-    if (rest.isEmpty) {
-      return copy(instructions[projectId] ?? (throw unavailable));
-    }
-    final kept = instructionRevisions[projectId] ?? const [];
-    if (rest.length == 1 && rest.single == 'revisions') {
-      return copy({
-        'projectId': projectId,
-        'revisions': [
-          for (final row in kept) {...row}..remove('text'),
-        ],
-      });
-    }
-    final wanted = rest.length == 2 ? int.tryParse(rest.last) : null;
-    final row = kept.where((r) => r['revision'] == wanted).firstOrNull;
-    if (row == null) {
-      throw const SuperTabFailure(
-        'NOT_FOUND',
-        'This revision is unavailable.',
-        statusCode: 404,
-      );
-    }
-    return copy({'projectId': projectId, ...row});
   }
 
   /// Who asks, for the reads a [controller] makes: a private conversation is

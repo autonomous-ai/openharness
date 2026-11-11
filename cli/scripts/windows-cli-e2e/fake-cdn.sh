@@ -8,7 +8,7 @@
 #   fake-cdn.sh serve              serve $FAKE_CDN_DIR/root on https://$VM_BIND:443 until stopped
 # FAKE_CDN_DIR defaults to .fake-cdn beside this script (git-ignored: it holds the CA key). VM_BIND is the Mac's
 # address on the VM's network (default 192.168.65.1). <version> is the CLI's, a prerelease such as 0.4.18-staging.1;
-# the pty's is PTY_VERSION, else the one the payload's host reports (pty-from-vm), else the CLI's X.Y.Z. NODE_VERSION (default 22.23.2) is the Windows Node staged. PTY_X64_DIR / PTY_ARM64_DIR name
+# the pty's is PTY_VERSION, else the one the payload's host reports (pty-from-vm), else the CLI's X.Y.Z. NODE_VERSION (default 24.22.2) is the Windows Node staged. PTY_X64_DIR / PTY_ARM64_DIR name
 # payload folders (default $FAKE_CDN_DIR/pty/win32-<arch>); a platform without one is left out of the pty manifest.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -62,7 +62,7 @@ pty_from_vm() {
 
 # shellcheck disable=SC2154 # the L_* names are read from fake-cdn.mjs layout, a line at a time
 stage() {
-  local version=${1:?usage: fake-cdn.sh stage <version>} node_version=${NODE_VERSION:-22.23.2}
+  local version=${1:?usage: fake-cdn.sh stage <version>} node_version=${NODE_VERSION:-24.22.2}
   # install.ps1's $HarnessCliVersionPattern, and the pty's X.Y.Z (publish-pty-payload.sh accepts only that).
   [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$ ]] || { echo "error: $version is not a CLI version" >&2; exit 2; }
   local arm64_dir=${PTY_ARM64_DIR:-$dir/pty/win32-arm64} build=$dir/build/$version pty_version

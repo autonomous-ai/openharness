@@ -11,7 +11,6 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import { superTabRoutes } from '../src/routes/superTabs.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
-import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import * as parts from '../src/superTabs/parts/index.js'
 import { swarmTransaction } from '../src/superTabs/cache.js'
 import { guardedWrite } from '../src/superTabs/parts/write.js'
@@ -19,7 +18,7 @@ import { SwarmReads } from '../src/superTabs/read/service.js'
 import { stableId } from '../src/superTabs/model.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import type { Conversation, SuperTabState } from '../src/superTabs/model.js'
-import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
+import { storeSwarm } from './storedSwarm.test-support.js'
 import { READ_MARK_EXPIRY_MS, sweepReadMarks, sweepThreadMarks, THREAD_MARK_CAP, writeThreadMark } from '../src/superTabs/readMarks.js'
 import { listNamedIndexes, NAMED_INDEX } from '../src/superTabs/parts/indexed.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
@@ -79,9 +78,7 @@ async function scene() {
     state.conversations.find(c => c.id === secretGroup)!.lastMessageSequence = 50
   })
   const tabId = `tab-${randomUUID()}`
-  await writeLegacySwarm(db, { state: { ...structuredClone(s.state), id: tabId } as SuperTabState, revision: 3 })
-  const report = await migrateSwarm(db, tabId, { now: () => MIGRATED })
-  if (!report.ok) throw new Error(report.error)
+  await storeSwarm(db, { state: { ...structuredClone(s.state), id: tabId } as SuperTabState, revision: 3 }, MIGRATED)
   return { tabId, web, secretGroup, worker }
 }
 

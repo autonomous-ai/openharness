@@ -10,8 +10,9 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore, transaction } from '../src/superTabs/store.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import type { Command } from '../src/superTabs/commands.js'
+import type { StoredCreate } from '../src/superTabs/steps.test-support.js'
 import { poolRows } from './hostRows.test-support.js'
-import { storeAssignment } from './storedWork.test-support.js'
+import { storeAssignment, storeCreate } from './storedWork.test-support.js'
 import { settleStuckDeliveries } from '../src/superTabs/deliverySettle.js'
 import { compactDeliveries } from '../src/superTabs/deliveryCompaction.js'
 import { stableId, type MessageDraft, type SuperTabState } from '../src/superTabs/model.js'
@@ -51,7 +52,8 @@ async function swarm({ fresh = false, told }: { fresh?: boolean; told?: string[]
   let now = Date.parse('2026-11-02T06:30:00.000Z')
   const timed = new SuperTabStore(db, () => now, null, told ? { deliveriesWaiting: w => { told.push(w.agentId) } } : {})
   const tab = (await timed.create(owner, randomUUID(), 'Digest', 'public')).id
-  const execute = (command: Command, user = owner, asAgentId?: string) => timed.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
+  const execute = (command: Command | StoredCreate, user = owner, asAgentId?: string) => command.type === 'conversation.create'
+    ? storeCreate(db, tab, command, user, asAgentId) : timed.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
   const invitation = await execute({ type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
   await execute({ type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
   for (const [machineId, name] of [['lead-host', 'Lead Mac'], ['test-host', 'Worker Mac']]) {
@@ -106,7 +108,6 @@ async function swarm({ fresh = false, told }: { fresh?: boolean; told?: string[]
 const rowsOf = (tabId: string, where: Record<string, unknown> = {}) => db.superTabDelivery.findMany({ where: { tabId, ...where }, orderBy: { createdAt: 'asc' } })
 const deliveryOf = (messageId: string, agentId: string) => db.superTabDelivery.findUniqueOrThrow({ where: { id: stableId(messageId, agentId) } })
 const kindOf = (message: { source: unknown }) => (message.source as { kind?: string } | null)?.kind
-const digests = async (tabId: string) => (await db.superTabMessage.findMany({ where: { tabId }, orderBy: { sequence: 'asc' } })).filter(m => kindOf(m) === 'notice-digest')
 
 const schedules = async (tabId: string) => (await db.superTabMessage.findMany({ where: { tabId }, orderBy: { sequence: 'asc' } }))
   .filter(m => m.text.includes('Built-in schedule,'))

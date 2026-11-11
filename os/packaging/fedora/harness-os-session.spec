@@ -13,7 +13,7 @@ ExclusiveArch: aarch64
 Source0: payload.tar.gz
 Source1: files.list
 
-Requires: python3, nodejs22, nodejs22-bin, tmux, foot, labwc
+Requires: python3, nodejs24, nodejs24-bin, tmux, foot, labwc
 # Fedora's labwc exits during startup when this executable is absent, even
 # for native Wayland clients. Keep its on-demand server available.
 Requires: /usr/bin/Xwayland

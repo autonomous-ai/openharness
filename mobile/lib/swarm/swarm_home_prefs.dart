@@ -12,22 +12,18 @@ typedef _SwarmHomeKept = ({
   List<String> folds,
   List<String> aside,
   String? swarmId,
-  DateTime? seenAt,
   SwarmHomeFilter filter,
   SwarmHomeSort sort,
   bool unreadsFirst,
-  String? buddySwarm,
 });
 
 /// What the person chose for Swarm Home on this phone (Tony, 2026-10-29):
 /// the projects pinned at its top ([pins]), the one Swarm it shows
 /// ([swarmId]; none shows them all), its filter ([filter]) and how it sorts
-/// ([sort], [unreadsFirst]);
-/// and when they last left the app ([seenAt]), what While you were away
-/// counts from; and the projects whose
+/// ([sort], [unreadsFirst]); and the projects whose
 /// status card is folded ([folded]), as the desktop keeps it on its computer.
 /// Neither the server nor the desktop has pins, so they stay on this phone,
-/// under the account ([store]): ids and a time only, nothing read of a Swarm,
+/// under the account ([store]): ids only, nothing read of a Swarm,
 /// and at most [keptPins] pins and [keptFolds] folds. A Swarm the account no
 /// longer has takes its pins, folds and choice with it ([keepOnly]).
 class SwarmHomePrefs extends ChangeNotifier {
@@ -70,11 +66,6 @@ class SwarmHomePrefs extends ChangeNotifier {
   String? get swarmId => _swarmId;
   String? _swarmId;
 
-  /// The Swarm the Buddy tab last showed, the person's latest pick among
-  /// their Swarms there or on Home; null before they use one.
-  String? get buddySwarmId => _buddySwarmId;
-  String? _buddySwarmId;
-
   /// Which projects Home lists ([swarmHomeFiltered]), kept on this phone as
   /// the desktop keeps its unread filter on its computer.
   SwarmHomeFilter get filter => _filter;
@@ -94,11 +85,6 @@ class SwarmHomePrefs extends ChangeNotifier {
       _sort != SwarmHomeSort.sections ||
       _unreadsFirst;
 
-  /// When the person last left the app ([seen]); null before, as on a new
-  /// phone.
-  DateTime? get seenAt => _seenAt;
-  DateTime? _seenAt;
-
   /// Something was chosen before the choices were read back: it is kept
   /// with what was read, and written only then, so as not to write over it.
   bool _touched = false;
@@ -110,8 +96,7 @@ class SwarmHomePrefs extends ChangeNotifier {
   bool _shownChosen = false,
       _filterChosen = false,
       _sortChosen = false,
-      _unreadsChosen = false,
-      _buddyChosen = false;
+      _unreadsChosen = false;
 
   /// The account's Swarms, as [keepOnly] last heard them; null before. What
   /// is read back is held to them too.
@@ -203,23 +188,9 @@ class SwarmHomePrefs extends ChangeNotifier {
       _shownChosen = true;
       _touched = true;
     }
-    final buddy = swarmId != null && swarmId != _buddySwarmId;
-    if (buddy) _chooseBuddySwarm(swarmId);
-    if (_swarmId == swarmId && !buddy) return;
+    if (_swarmId == swarmId) return;
     _swarmId = swarmId;
     _changed();
-  }
-
-  /// The Buddy tab shows Swarm [swarmId], from now on until another is used.
-  void showBuddy(String swarmId) {
-    if (_buddySwarmId == swarmId) return;
-    _chooseBuddySwarm(swarmId);
-    _changed();
-  }
-
-  void _chooseBuddySwarm(String swarmId) {
-    if (!_loaded) _buddyChosen = true;
-    _buddySwarmId = swarmId;
   }
 
   /// Home lists the projects [filter] lets through.
@@ -256,16 +227,6 @@ class SwarmHomePrefs extends ChangeNotifier {
     _changed();
   }
 
-  /// The person leaves the app at [at]: kept, the later time standing over
-  /// an earlier one, and written. Home does not draw it, so it tells no
-  /// one.
-  void seen(DateTime at) {
-    if (_disposed || !at.isAfter(_seenAt ?? DateTime(0))) return;
-    _seenAt = at;
-    _touched = true;
-    if (_loaded) unawaited(_save());
-  }
-
   /// The account's Swarms are [swarmIds]: the pins and the choice of any
   /// other go, from the phone too, and from what is read back after.
   void keepOnly(Set<String> swarmIds) {
@@ -283,12 +244,7 @@ class SwarmHomePrefs extends ChangeNotifier {
     _aside.removeWhere(other);
     final gone = _swarmId != null && !swarmIds.contains(_swarmId);
     if (gone) _swarmId = null;
-    final buddyGone =
-        _buddySwarmId != null && !swarmIds.contains(_buddySwarmId);
-    if (buddyGone) _buddySwarmId = null;
-    return gone ||
-        buddyGone ||
-        _pins.length + _folds.length + _aside.length != before;
+    return gone || _pins.length + _folds.length + _aside.length != before;
   }
 
   /// At most [keptPins] pins and [keptFolds] folds, the oldest going first;
@@ -324,12 +280,7 @@ class SwarmHomePrefs extends ChangeNotifier {
     if (_disposed) return;
     _loaded = true;
     final read = text == null ? _nothingKept : _decode(text);
-    final (pins, folds, swarmId, seenAt) = (
-      read.pins,
-      read.folds,
-      read.swarmId,
-      read.seenAt,
-    );
+    final (pins, folds, swarmId) = (read.pins, read.folds, read.swarmId);
     // Chosen meanwhile: the pins pinned and cards folded join those read,
     // oldest first, those taken off or opened stay so, and a Swarm chosen
     // stands.
@@ -348,11 +299,6 @@ class SwarmHomePrefs extends ChangeNotifier {
     if (!_filterChosen) _filter = read.filter;
     if (!_sortChosen) _sort = read.sort;
     if (!_unreadsChosen) _unreadsFirst = read.unreadsFirst;
-    if (!_buddyChosen) _buddySwarmId = read.buddySwarm;
-    // Left meanwhile: the later time stands.
-    if (seenAt != null && seenAt.isAfter(_seenAt ?? DateTime(0))) {
-      _seenAt = seenAt;
-    }
     _unpinned.clear();
     _unfolded.clear();
     _unaside.clear();
@@ -369,11 +315,9 @@ class SwarmHomePrefs extends ChangeNotifier {
     folds: [],
     aside: [],
     swarmId: null,
-    seenAt: null,
     filter: SwarmHomeFilter.all,
     sort: SwarmHomeSort.sections,
     unreadsFirst: false,
-    buddySwarm: null,
   );
 
   /// What was kept: written before folds were, it has none; before the
@@ -393,10 +337,6 @@ class SwarmHomePrefs extends ChangeNotifier {
         folds: keys(json['folded']),
         aside: keys(json['aside']),
         swarmId: json['swarm'] is String ? json['swarm'] as String : null,
-        seenAt: switch (json['seen']) {
-          final int ms when ms > 0 => DateTime.fromMillisecondsSinceEpoch(ms),
-          _ => null,
-        },
         filter: json['filter'] == 'mentions'
             ? SwarmHomeFilter.mentions
             : json['unread'] == true
@@ -406,9 +346,6 @@ class SwarmHomePrefs extends ChangeNotifier {
             ? SwarmHomeSort.newest
             : SwarmHomeSort.sections,
         unreadsFirst: json['unreadsFirst'] == true,
-        buddySwarm: json['buddySwarm'] is String
-            ? json['buddySwarm'] as String
-            : null,
       );
     } on FormatException {
       return _nothingKept;
@@ -423,8 +360,6 @@ class SwarmHomePrefs extends ChangeNotifier {
           _folds.isEmpty &&
           _aside.isEmpty &&
           _swarmId == null &&
-          _buddySwarmId == null &&
-          _seenAt == null &&
           !viewChanged) {
         await store.delete(_key);
       } else {
@@ -435,8 +370,6 @@ class SwarmHomePrefs extends ChangeNotifier {
             if (_folds.isNotEmpty) 'folded': [..._folds],
             if (_aside.isNotEmpty) 'aside': [..._aside],
             'swarm': ?_swarmId,
-            'buddySwarm': ?_buddySwarmId,
-            'seen': ?_seenAt?.millisecondsSinceEpoch,
             if (_filter == SwarmHomeFilter.unread) 'unread': true,
             if (_filter == SwarmHomeFilter.mentions) 'filter': 'mentions',
             if (_sort == SwarmHomeSort.newest) 'sort': 'newest',

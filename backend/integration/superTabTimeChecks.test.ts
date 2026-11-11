@@ -9,11 +9,12 @@ import { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
+import type { StoredCreate } from '../src/superTabs/steps.test-support.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
 import { QUIET_CHECK_MS, runTimeCheckPass, timeCheckSwarms } from '../src/superTabs/timeChecks.js'
 import { poolRows } from './hostRows.test-support.js'
 import { plan, profiled, reads } from './plans.test-support.js'
-import { storeAssignment } from './storedWork.test-support.js'
+import { storeAssignment, storeCreate } from './storedWork.test-support.js'
 
 // Task #3385 (anh Dee's Swarm redesign, 11-05): the stall, idle and lost-task follow-ups run in the backend worker, so they
 // keep running while the PM is down. Before, only the PM's own poll ran them: with the PM hung, five people's asks waited 3 to
@@ -49,7 +50,8 @@ async function swarm() {
   let now = Date.parse('2026-11-05T08:00:00.000Z')
   const timed = new SuperTabStore(db, () => now)
   const tab = (await timed.create(owner, randomUUID(), 'Time checks', 'public')).id
-  const execute = (command: Command, user = owner, asAgentId?: string) => timed.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
+  const execute = (command: Command | StoredCreate, user = owner, asAgentId?: string) => command.type === 'conversation.create'
+    ? storeCreate(db, tab, command, user, asAgentId) : timed.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
   const invitation = await execute({ type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
   await execute({ type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
   for (const [machineId, name] of [['lead-host', 'Lead Mac'], ['test-host', 'Worker Mac']]) {
@@ -107,27 +109,6 @@ describe('every agent\'s 1:1 chat', () => {
   })
 })
 
-// Swarm v4 (anh Dee 2026-11-09): only its person stops an agent; the stops the v3 rules asked for are withdrawn once.
-describe('the stops from before v4', () => {
-  it('are withdrawn once by the checks, with the session record that refused messages to the agent', async () => {
-    const f = await swarm()
-    const helper = String((await f.execute({ type: 'agent.add', conversationId: f.group, machineId: 'test-host', harnessId: randomUUID(),
-      name: 'Helper', configuration: config, lead: false }, host)).result.agentId)
-    await f.execute({ type: 'agent.release', agentId: helper, decision: 'stop' })
-    const stopped = (await f.timed.read(owner, f.tab)).state.agents.find(a => a.id === helper)!
-    expect(stopped.workDecision).toBe('stop')
-    await f.timed.runTimeChecks(f.tab)
-    const freed = (await f.timed.read(owner, f.tab)).state.agents.find(a => a.id === helper)!
-    expect(freed.workDecision).toBeUndefined()
-    expect(await db.superTabSessionScope.findMany({ where: { stopReleaseId: stopped.releaseId! } })).toEqual([])
-    expect(await db.superTabRun.findMany({ where: { id: helper, tabId: f.tab } })).toEqual([])
-    // Once: a stop its person asks for after it stands.
-    await f.execute({ type: 'agent.release', agentId: helper, decision: 'stop' })
-    await f.timed.runTimeChecks(f.tab)
-    expect((await f.timed.read(owner, f.tab)).state.agents.find(a => a.id === helper)!.workDecision).toBe('stop')
-  })
-})
-
 describe('the worker\'s pass', () => {
   it('runs the checks of each Swarm active in the last week, writes nothing (Swarm v4), and leaves a deleted one alone', async () => {
     const f = await swarm(), quiet = await swarm()
@@ -158,7 +139,8 @@ describe('the worker\'s pass on a quiet Swarm', () => {
     await runTimeCheckPass(db, counting, f.clock.now + 30_000, undefined, seen)
     expect(calls).toHaveLength(1)
     f.clock.now += 60_000
-    await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Any news?', replyTo: null, recipientIds: [] } as Command)
+    // The worker's post: only agents post in a project's channel (agentsOnly.test.ts).
+    await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Any news?', replyTo: null, recipientIds: [] } as Command, host, f.worker)
     await runTimeCheckPass(db, counting, f.clock.now, undefined, seen)
     expect(calls).toHaveLength(2)
     await runTimeCheckPass(db, counting, f.clock.now + QUIET_CHECK_MS - 1, undefined, seen)

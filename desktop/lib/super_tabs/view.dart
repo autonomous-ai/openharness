@@ -63,7 +63,6 @@ import 'model.dart';
 import 'new_agent.dart' show swarmAttachAgent;
 import 'agent_info.dart';
 import 'identity.dart' show SuperTabAvatar;
-import 'prompt_alerts.dart';
 import 'workgroup_name.dart';
 import 'message_link.dart';
 import 'message_link_swarms.dart';
@@ -72,7 +71,6 @@ import 'message_row.dart';
 import 'message_receipt.dart';
 import 'notifications.dart';
 import 'day_pill.dart';
-import 'terminal_row.dart';
 import 'agent_instructions.dart';
 import '../core/test_run.dart';
 import 'github_issues.dart';
@@ -125,6 +123,7 @@ class SuperTabView extends StatefulWidget {
     this.onNewAgent,
     this.onAttachAgent,
     this.onNewSwarm,
+    this.onRenameSwarm,
     this.onChooseAgentTerminal,
     this.linkSwarms,
     this.voiceRecorder,
@@ -161,6 +160,9 @@ class SuperTabView extends StatefulWidget {
   /// The existing New Swarm, for the Swarm dropdown atop the left bar; none
   /// without it.
   final VoidCallback? onNewSwarm;
+
+  /// Rename in that dropdown, for this Swarm; none without it.
+  final VoidCallback? onRenameSwarm;
   final ValueChanged<SuperTabAgent>? onChooseAgentTerminal;
 
   /// How a message link reaches the account's other Swarms. Without it, and
@@ -401,24 +403,12 @@ class _SuperTabViewState extends State<SuperTabView>
   String _authorName(SuperTabMessage message) =>
       c.snapshot?.authorName(message) ?? message.authorName;
 
-  /// Your own message reads You, in the row and in the quote of it. In your
-  /// Buddy chat the coordinator's private lines read as lines to you, "River
-  /// (PM) → you" with its role's badge: it writes there but cannot read it
-  /// (Lead, 10-29).
+  /// Your own message reads You, in the row and in the quote of it.
   String _shownAuthor(SuperTabController c, SuperTabMessage message) {
     if (message.authorId == c.accountId && !message.fromAgent) return 'You';
     // The controller's own snapshot names the author: a preview may be of
     // another Swarm's message.
-    final name = c.snapshot?.authorName(message) ?? message.authorName;
-    final snapshot = c.snapshot;
-    final project = snapshot?.projectFor(message.conversationId);
-    final chat = project == null ? null : c.buddyChat(project.id);
-    return message.fromAgent &&
-            chat?.id == message.conversationId &&
-            snapshot!.conversation(project!.leadConversationId)?.leadId ==
-                message.authorId
-        ? '$name (${snapshot.roleOf(message.authorId)?.badge ?? 'PM'}) → you'
-        : name;
+    return c.snapshot?.authorName(message) ?? message.authorName;
   }
 
   @override
@@ -429,7 +419,6 @@ class _SuperTabViewState extends State<SuperTabView>
     _composerWrites; // listening before anything is composed
     c.addListener(_changed);
     c.addListener(_holdVoiceAway);
-    c.buddyChatOpener = _openBuddyChat;
     SuperTabChatNotices.of(c).chatShown = _chatShown;
     SuperTabPlaces.of(c).addListener(_takePlace);
     _registerDial();
@@ -534,12 +523,8 @@ class _SuperTabViewState extends State<SuperTabView>
       oldWidget.controller.removeListener(_holdVoiceAway);
       // A take belongs to the Swarm it was recorded in.
       _voice?.discard();
-      if (oldWidget.controller.buddyChatOpener == _openBuddyChat) {
-        oldWidget.controller.buddyChatOpener = null;
-      }
       c.addListener(_changed);
       c.addListener(_holdVoiceAway);
-      c.buddyChatOpener = _openBuddyChat;
       for (final scroll in _scroll.values) {
         scroll.dispose();
       }
@@ -1164,7 +1149,6 @@ class _SuperTabViewState extends State<SuperTabView>
     for (final source in _linkSources) {
       source.removeListener(_linkSourceChanged);
     }
-    if (c.buddyChatOpener == _openBuddyChat) c.buddyChatOpener = null;
     _unregisterDial?.call();
     _dial.cancel();
     _litTimer?.cancel();
@@ -1746,6 +1730,7 @@ class _SuperTabViewState extends State<SuperTabView>
     onOpenPane: _openPane,
     joining: _joining,
     onNewSwarm: widget.onNewSwarm,
+    onRenameSwarm: widget.onRenameSwarm,
     page: _pageShown,
     onManage: _openManage,
     onManageMachines: () {
@@ -1771,21 +1756,6 @@ class _SuperTabViewState extends State<SuperTabView>
       _closeSidebar();
     },
   );
-
-  /// Opens the reader's Buddy chat in [projectId] in front of Notifications,
-  /// pull requests and a terminal, opening it on the server when they have
-  /// none yet: the sidebar's way in and ⇧⌘K's
-  /// ([SuperTabController.buddyChatOpener]).
-  Future<bool> _openBuddyChat(String projectId) {
-    c.leaveDevices();
-    setState(() {
-      _page = null;
-      _showManage = false;
-    });
-    widget.onCloseTerminal?.call();
-    _closeSidebar();
-    return c.openBuddyChat(projectId);
-  }
 
   /// What the menu bar asked to open ([SuperTabController.openNotice]): the chat of an agent that asks the reader.
   void _takeNotice() {
@@ -1948,8 +1918,8 @@ class _SuperTabViewState extends State<SuperTabView>
     // reader may read it, and a refusal looks like a message that is gone.
     final readable = await c.loadGroup(id);
     if (!mounted || request != _jumpRequest || c.accessRevoked) return;
-    // The app may open another chat for it (an old Chat with PM, with Buddies
-    // on): that is not this message, so the reader stays where they are.
+    // The app may open another chat for it (a private chat it hides): that
+    // is not this message, so the reader stays where they are.
     if (!readable || c.landsOn(id) != id) {
       say('Message unavailable');
       return;
@@ -2108,19 +2078,7 @@ class _SuperTabViewState extends State<SuperTabView>
   /// A thread reply shows in its thread, and here only when also sent.
 
   List<SuperTabMessage> _shownMessages(String id, {bool replies = false}) {
-    final messages = c.messages(id);
-    final answered = answeredPromptAlerts(
-      messages,
-      (agentId) => c.snapshot?.agent(agentId),
-    );
-    return messages
-        .where(
-          (m) =>
-              _shown(m) &&
-              (replies || m.inMainStream) &&
-              !answered.contains(m.id),
-        )
-        .toList();
+    return c.messages(id).where((m) => replies || m.inMainStream).toList();
   }
 
   /// [id]'s own rows as its list shows them: without its steps' rows, which
@@ -2129,27 +2087,6 @@ class _SuperTabViewState extends State<SuperTabView>
     for (final m in _shownMessages(id))
       if (m.conversationId == id) m,
   ];
-
-  /// What people never read in a chat, in the list and as a reply's quote: a
-  /// message waiting for an agent, notices older backends stored, the PM's own
-  /// notices about the work (backend NOTICE_READERS).
-  static const _neverShown = {
-    'delivery-hold',
-    'work-stalled',
-    'work-lost',
-    'work-resumed',
-    'idle-stop',
-    'idle',
-    'review-failed',
-    'update-request',
-    'digest-request',
-    'overlap',
-    'pair-loop',
-    'notice-digest',
-  };
-
-  static bool _shown(SuperTabMessage m) =>
-      !_neverShown.contains(m.source['kind']);
 
   /// The row of [id]'s list that shows [messageId], its own. Null while the
   /// message is not loaded.
@@ -2338,37 +2275,6 @@ class _SuperTabViewState extends State<SuperTabView>
   bool get _terminalsVisible =>
       !_devicesVisible && (widget.terminalsVisible || widget.terminal != null);
 
-  /// The reader's own chat with their Buddy.
-  bool _isBuddyChat(SuperTabConversation group) =>
-      c.buddyChat(group.projectId)?.id == group.id;
-
-  /// The reader's Buddy in [group] by the name it goes by (task #4568): its
-  /// agent's, else the name kept on its chat, else "your agent". Null when
-  /// [group] is no Buddy chat of the reader's.
-  String? _buddyName(SuperTabConversation? group) {
-    if (group == null || !_isBuddyChat(group)) return null;
-    final snapshot = c.snapshot!;
-    // The reader's own main Buddy in the Swarm's one Buddy chat, else its
-    // project's.
-    final agent = group.isSwarmBuddyChat && snapshot.buddyCap != null
-        ? group.agentIds
-              .map(snapshot.agent)
-              .whereType<SuperTabAgent>()
-              .where((a) => a.isMainBuddy && a.buddyOf == c.accountId)
-              .firstOrNull
-        : c.buddy(group.projectId);
-    return agent == null
-        ? group.buddyName ?? 'your agent'
-        : snapshot.agentName(agent.id, fallback: agent.name);
-  }
-
-  /// [_buddyName] as a label: capitalized when it is no agent's own name.
-  String _shownBuddyName(SuperTabConversation? group) =>
-      switch (_buddyName(group)) {
-        null || 'your agent' => 'Your agent',
-        final name => name,
-      };
-
   /// The open conversation's name, or what the pane shows instead of one,
   /// named as the sidebar names it: "# openharness", or a workgroup's
   /// [SuperTabWorkgroupName].
@@ -2423,21 +2329,14 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
-  /// [group]'s name as the sidebar names it: "# openharness", a Buddy chat's;
-  /// null for a workgroup, named by [SuperTabWorkgroupName].
+  /// [group]'s name as the sidebar names it: "# openharness"; null for any
+  /// other conversation, named by [SuperTabWorkgroupName].
   String? _groupName(SuperTabConversation group) =>
       c.snapshot!.isProjectLead(group.id)
       ? switch (c.snapshot!.projectFor(group.id)!) {
           final project => '${project.isPrivate ? '' : '# '}${project.name}',
         }
-      // An older Buddy chat in a project says which, as the menu that opens
-      // it does.
-      : c.isEarlierBuddyChat(group)
-      ? 'Earlier Buddy chat · ${c.snapshot!.projects.where((p) => p.id == group.projectId).firstOrNull?.name ?? 'a project'}'
-      // A Buddy chat is named for its agent (task #4568).
-      : _buddyName(group) == null
-      ? null
-      : _shownBuddyName(group);
+      : null;
 
   /// The pictures [messages] show in place, oldest first, each with its
   /// sender as its row shows them and where it was posted, for the viewer.
@@ -2528,7 +2427,6 @@ class _SuperTabViewState extends State<SuperTabView>
       final project = snapshot.projectFor(group.id)!;
       return 'Message ${project.isPrivate ? project.name : '#${project.name}'}';
     }
-    if (_buddyName(group) case final buddy?) return 'Message $buddy';
     // An agent's own chat keeps the title it was opened with; a rename changes the agent (audit finding 8 of #4436).
     if (_ownAgent(group) case final agent?) {
       return 'Message ${snapshot.agentName(agent.id, fallback: agent.name)}';
@@ -2730,13 +2628,13 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
-  /// Whether [message] is said between the two parties of a one-on-one chat
-  /// (a Buddy chat, an agent chat): the reader and that chat's own agent. Its
+  /// Whether [message] is said between the two parties of an agent's own chat:
+  /// the reader and that chat's own agent. Its
   /// bubble carries no name or face (#4529); a line from anyone else there,
   /// such as the PM's to the reader, keeps its name.
   bool _oneOnOne(SuperTabMessage message) =>
       switch (c.snapshot?.conversation(message.conversationId)) {
-        final group? when group.isBuddyChat || group.isAgentChat =>
+        final group? when group.isAgentChat =>
           message.fromAgent
               ? group.agentIds.contains(message.authorId)
               : message.authorId == c.accountId,
@@ -3099,9 +2997,7 @@ class _SuperTabViewState extends State<SuperTabView>
     }
     final isProject =
         group != null && c.snapshot?.isProjectLead(group.id) == true;
-    // The one Buddy has one chat, as a project does.
-    final oneBuddy = group?.isSwarmBuddyChat == true;
-    final restsOnChat = isProject || oneBuddy;
+    final restsOnChat = isProject;
     return Container(
       constraints: const BoxConstraints(minHeight: 52),
       // A phone's rows line up (Huy, 2026-11-02): the sidebar icon starts at
@@ -3343,6 +3239,21 @@ class _SuperTabViewState extends State<SuperTabView>
 
   Future<void> _projectSettings(
     SuperTabConversation group,
+    SuperTabProject opened,
+  ) => showProjectSettings(
+    context,
+    c,
+    opened,
+    () => _projectSettingsRows(
+      group,
+      c.snapshot?.projectById(opened.id) ?? opened,
+    ),
+    rowHeight: _phone ? kFingerTarget : 32,
+  );
+
+  /// Project settings' rows from what is held now: the dialog asks again on each change (task #4705).
+  List<ProjectSettingsRow> _projectSettingsRows(
+    SuperTabConversation group,
     SuperTabProject project,
   ) {
     final editable = c.canWrite && !c.saving && !c.hasPendingAction;
@@ -3359,7 +3270,7 @@ class _SuperTabViewState extends State<SuperTabView>
     // (task #3194).
     final repository = project.repository;
     final leadId = c.snapshot?.conversation(project.leadConversationId)?.leadId;
-    return showProjectSettings(context, c, project, [
+    return [
       if (editable && owner)
         row('Rename project', 'rename', value: project.name),
       row(
@@ -3380,7 +3291,7 @@ class _SuperTabViewState extends State<SuperTabView>
           value: leadId == null ? 'Starting…' : c.snapshot!.agentName(leadId),
         ),
       if (editable && owner) row('Delete Project', 'delete', danger: true),
-    ], rowHeight: _phone ? kFingerTarget : 32);
+    ];
   }
 
   /// The group's ⋮ menu. With [views] (a phone) it opens on the views the
@@ -3402,21 +3313,7 @@ class _SuperTabViewState extends State<SuperTabView>
           ),
           const AppMenuDivider(),
         ],
-        if (_isBuddyChat(group)) ...[
-          // The one Buddy's chat lists the person's older chats in projects
-          // they still read, each read only (spec: history).
-          if (group.isSwarmBuddyChat)
-            for (final project
-                in c.snapshot?.projects ?? const <SuperTabProject>[])
-              // One with nothing in it has no history to keep (security
-              // review 1 of #2437).
-              if (c.buddyChat(project.id) case final earlier?
-                  when earlier.lastMessageSequence > 0)
-                item(
-                  'Earlier chat in ${project.name}',
-                  () => unawaited(c.select(earlier.id)),
-                ),
-        ] else if (editable)
+        if (editable)
           // An agent's own chat renames the agent, whose name its header shows (audit finding 16 of #4436).
           if (_ownAgent(group) case final agent?)
             item('Rename', () => _renameAgent(agent)),
@@ -3425,9 +3322,7 @@ class _SuperTabViewState extends State<SuperTabView>
       builder: (context, menu, _) => AppIconButton(
         key: const ValueKey('super-group-options'),
         icon: AppIcons.ellipsis,
-        tooltip: _isBuddyChat(group)
-            ? 'Chat options'
-            : _ownAgent(group) != null
+        tooltip: _ownAgent(group) != null
             ? 'Agent options'
             : 'Workgroup options',
         onPressed: () => menu.isOpen ? menu.close() : menu.open(),
@@ -3629,15 +3524,6 @@ class _SuperTabViewState extends State<SuperTabView>
         message: message,
       );
     }
-    if (message.terminalEvent) {
-      return SuperTabTerminalRow(
-        key: ValueKey(
-          '${inThread ? 'super-thread-message' : 'super-message'}-${message.id}',
-        ),
-        message: message,
-        controller: c,
-      );
-    }
     final agent = message.fromAgent
         ? c.snapshot?.agent(message.authorId)
         : null;
@@ -3646,13 +3532,8 @@ class _SuperTabViewState extends State<SuperTabView>
     final quoted = answers == null || byId.containsKey(answers)
         ? null
         : c.quoted(message.conversationId, answers);
-    final fetched = quoted?.message;
-    final reply =
-        byId[answers] ?? (fetched != null && _shown(fetched) ? fetched : null);
-    final writable =
-        c.canWrite &&
-        c.selected?.archived == false &&
-        !c.isEarlierBuddyChat(c.selected);
+    final reply = byId[answers] ?? quoted?.message;
+    final writable = c.canWrite && c.selected?.archived == false;
     final root = message.thread;
     final thread = inThread || root != message.id
         ? null
@@ -3716,11 +3597,9 @@ class _SuperTabViewState extends State<SuperTabView>
       onMarkUnread: inThread || !message.inMainStream
           ? null
           : () => unawaited(_markUnread(message)),
-      // Only the author's own plain message (the server decides).
-      onEdit: c.canChange(message)
-          ? (text) => _editMessage(message, text)
-          : null,
-      onDelete: c.canDelete(message)
+      // Only the author's own plain message (the server decides): its edit not where only agents post.
+      onEdit: c.canEdit(message) ? (text) => _editMessage(message, text) : null,
+      onDelete: c.canChange(message)
           ? () => unawaited(_deleteMessage(message))
           : null,
       // A message with a thread is answered there; one from before threads
@@ -3963,7 +3842,7 @@ class _SuperTabViewState extends State<SuperTabView>
     bool tagged(SuperTabMessage m) =>
         (talk && m.namesAgents) ||
         switch (c.thread(m.conversationId, m.id)) {
-          final thread? => thread.askTag != null || thread.replies > 0,
+          final thread? => thread.replies > 0,
           null => false,
         };
     final at = split == null
@@ -4119,13 +3998,7 @@ class _SuperTabViewState extends State<SuperTabView>
       );
     }
     final group = c.selected;
-    // An older Buddy chat in a project reads, but is no longer written to
-    // here, where one Buddy answers in its one chat.
-    final writable =
-        c.canWrite &&
-        group != null &&
-        !group.archived &&
-        !c.isEarlierBuddyChat(group);
+    final writable = c.canWrite && group != null && !group.archived;
     final busy = c.saving || c.uploading;
     final latestOwn = c
         .messages(c.selectedId)
@@ -4311,9 +4184,6 @@ class _SuperTabViewState extends State<SuperTabView>
                     ? 'Conversation unavailable.'
                     : group == null
                     ? 'Loading conversation…'
-                    : _buddyName(group) != null
-                    // One short line that helps the reader act (anh Dee's copy rules, task #4465).
-                    ? "Say what to build, then 'send to the ${c.snapshot!.coordinatorNameOf(group.projectId)}'."
                     // A project's channel nobody has posted in says why: an empty page under the project's name read as broken
                     // (anh Dee, 2026-11-09).
                     : c.snapshot?.isProjectLead(group.id) == true &&
@@ -4628,10 +4498,6 @@ class _SuperTabViewState extends State<SuperTabView>
             );
           },
         ),
-        // A chat kept to read gets one muted bar in place of the box, so
-        // nothing looks typeable: a closed group, or an older Buddy chat in a
-        // project, which also leads to the one Buddy (Lead's design review,
-        // 10-31).
         // Swarm v4 (anh Dee 2026-11-08): only agents post in a project's channel and its tasks' chats. People talk to
         // their own agents.
         if (group != null && _agentsOnly(group))
@@ -4656,34 +4522,6 @@ class _SuperTabViewState extends State<SuperTabView>
                   ),
                 ),
               ),
-            ),
-          )
-        else if (group != null &&
-            (c.isEarlierBuddyChat(group) || group.archived))
-          Padding(
-            key: c.isEarlierBuddyChat(group)
-                ? const ValueKey('super-earlier-buddy-chat')
-                : null,
-            padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    c.isEarlierBuddyChat(group)
-                        ? 'This is an earlier chat, kept to read.'
-                        : 'This group is closed. You can read it but not write.',
-                    style: DesktopChrome.metadata(),
-                  ),
-                ),
-                if (c.isEarlierBuddyChat(group))
-                  TextButton(
-                    key: const ValueKey('super-open-swarm-buddy'),
-                    onPressed: () => unawaited(
-                      c.openBuddyChat(SuperTabController.kSwarmBuddyKey),
-                    ),
-                    child: const Text('Open # buddy'),
-                  ),
-              ],
             ),
           )
         else
@@ -4828,7 +4666,7 @@ class _SuperTabViewState extends State<SuperTabView>
                                       ? null
                                       : group == null
                                       ? 'Loading conversation…'
-                                      : c.canWrite
+                                      : c.canWrite && !group.archived
                                       ? _messageHint(group)
                                       : 'Read-only conversation',
                                   border: InputBorder.none,

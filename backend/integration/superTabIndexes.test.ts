@@ -7,9 +7,6 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import { inConversationOrder, pageDeliveries, pageThreads } from '../src/superTabs/pageReads.js'
-import { costRows } from '../src/superTabs/costs/read.js'
-import { readEvidence } from '../src/superTabs/evidence/store.js'
-import { recentDecisions } from '../src/superTabs/routeDecisions.js'
 import { settleStuckDeliveries } from '../src/superTabs/deliverySettle.js'
 import { listNamedIndexes } from '../src/superTabs/parts/indexed.js'
 import { outsider, owner, peer, richSwarm } from '../src/superTabs/read/fixture.test-support.js'
@@ -25,7 +22,6 @@ const pad = (n: number) => String(n).padStart(3, '0')
 const MESSAGES = 300, AGENTS = 10
 const PAGE = Array.from({ length: 100 }, (_, i) => `A-m${pad(100 + i)}`)
 const T0 = Date.parse('2026-10-28T05:00:00.000Z')
-const GROUPS = Array.from({ length: 360 }, (_, i) => `g${pad(i)}`)
 
 beforeAll(async () => {
   replica = await MongoMemoryReplSet.create({ binary: { version: '7.0.24', downloadDir: join(tmpdir(), 'harness-super-tab-mongodb-binaries') },
@@ -50,22 +46,6 @@ beforeAll(async () => {
   // One delivery with every optional field set, and one older record that never had the hold fields at all.
   await db.superTabDelivery.update({ where: { id: 'A-150-3' }, data: { status: 'delivered', receipt: 'typed', holdReason: 'busy',
     holdSince: new Date(T0 + 7000), deliveredAt: new Date(T0 + 8000), answeredAt: new Date(T0 + 9000) } })
-  // Two Swarms of 360 conversations and 2,000 route decisions each, as a busy Swarm keeps them for 90 days. Every fifth
-  // decision has its pick, override and outcome; every seventh is an older record that never had those fields.
-  const decisions = []
-  for (const tab of ['A', 'B']) {
-    for (let i = 0; i < 2000; i++) {
-      const full = i % 5 === 0
-      decisions.push({ id: `${tab}-d${String(i).padStart(4, '0')}`, tabId: tab, conversationId: GROUPS[i % 360],
-        record: { difficulty: 'medium', candidates: [{ id: 'c0', p: 0.42, slots: 3, title: 'Claude opus high' }, { id: 'c1', p: null, slots: 0 }], why: `route ${i}` },
-        ...full ? { final: { kind: 'new', startId: `s${i}` }, override: { by: 'lead', candidateId: 'c1' }, assignmentId: `as${i}`, outcome: 'done',
-          outcomeAt: new Date(T0 + i * 1000 + 500) } : {},
-        createdAt: new Date(T0 + i * 1000) })
-    }
-  }
-  await db.superTabRouteDecision.createMany({ data: decisions.filter((_, i) => i % 7) })
-  await db.$runCommandRaw({ insert: 'SuperTabRouteDecision', documents: decisions.filter((_, i) => !(i % 7)).map(({ id, createdAt, ...rest }) =>
-    ({ _id: id, ...rest, ...rest.outcomeAt ? { outcomeAt: { $date: rest.outcomeAt.toISOString() } } : {}, createdAt: { $date: createdAt.toISOString() } })) })
   await db.$runCommandRaw({ insert: 'SuperTabDelivery', documents: [{ _id: 'A-150-old', tabId: 'A', conversationId: 'g10', messageId: 'A-m150',
     agentId: 'agent-old', machineId: 'host', membershipGeneration: 'gen', authorKind: 'person', authorId: 'owner', authorGeneration: 'gen',
     status: 'answered', createdAt: { $date: new Date(T0).toISOString() }, updatedAt: { $date: new Date(T0 + 1).toISOString() } }] })
@@ -215,90 +195,23 @@ describe('the delivery poll order', () => {
 
 describe('the delivery pass', () => {
   it('reads the open deliveries through the status index, examining only those it judges, with their dates as Dates', async () => {
-    const open = ['queued', 'claimed', 'uncertain', 'gathered'].map((status, i) => ({ _id: `A-open-${i}`, tabId: 'A', conversationId: 'g1', messageId: 'A-m900',
+    const open = ['queued', 'claimed', 'uncertain'].map((status, i) => ({ _id: `A-open-${i}`, tabId: 'A', conversationId: 'g1', messageId: 'A-m900',
       agentId: `agent-${i}`, machineId: 'host', membershipGeneration: 'gen', authorKind: 'person', authorId: 'owner', authorGeneration: 'gen', status,
       ...status === 'claimed' ? { claimId: 'claim', holdReason: 'team_waiting_user', holdSince: { $date: new Date(T0 + 1000).toISOString() } } : {},
       createdAt: { $date: new Date(T0).toISOString() }, updatedAt: { $date: new Date(T0 + 2000).toISOString() } }))
     await db.$runCommandRaw({ insert: 'SuperTabDelivery', documents: open })
     const judged: Array<{ tabId: string; rows: unknown[] }> = []
     const store = { settleDeliveries: async (tabId: string, rows: unknown[]) => { judged.push({ tabId, rows }); return 0 } }
-    // As the worker has at startup: its plan is named, or a fourth status plans it on `compaction` and sorts.
+    // As the worker has at startup: its plan is named.
     await listNamedIndexes(db)
     const [, profile] = await profiled('SuperTabDelivery', () => settleStuckDeliveries(db, store, T0))
     await db.superTabDelivery.deleteMany({ where: { messageId: 'A-m900' } })
     // One scan of the index per unfinished status, merged in id order.
-    expect(profile).toEqual({ plans: [Array(4).fill('IXSCAN { status: 1, _id: 1 }').join(', ')], docsExamined: 4, returned: 4 })
+    expect(profile).toEqual({ plans: [Array(3).fill('IXSCAN { status: 1, _id: 1 }').join(', ')], docsExamined: 3, returned: 3 })
     expect(judged).toEqual([{ tabId: 'A', rows: [
       expect.objectContaining({ id: 'A-open-0', status: 'queued', holdSince: null, createdAt: new Date(T0), updatedAt: new Date(T0 + 2000) }),
       expect.objectContaining({ id: 'A-open-1', status: 'claimed', holdReason: 'team_waiting_user', holdSince: new Date(T0 + 1000) }),
       expect.objectContaining({ id: 'A-open-2', status: 'uncertain', conversationId: 'g1', agentId: 'agent-2' }),
-      expect.objectContaining({ id: 'A-open-3', status: 'gathered' }),
     ] }])
-  })
-})
-
-describe('cost summary', () => {
-  // The Swarm's cost read (superTabs/costs/read.ts) takes the decisions routed in a period. Never a collection scan, and never
-  // more documents than the period holds, however many the Swarm keeps.
-  it('reads the decisions of a period with one index scan, examining only those', async () => {
-    const [found, profile] = await profiled('SuperTabRouteDecision', () => costRows(db, 'A', T0 + 1500 * 1000))
-    // The fixture's decisions carry no runs, so none is an attempt to summarize; what matters is what Mongo read.
-    expect(found).toEqual({ rows: [], truncated: false })
-    expect(profile).toEqual({ plans: ['IXSCAN { tabId: 1, createdAt: 1 }'], docsExamined: 500, returned: 500 })
-  })
-})
-
-describe('model evidence', () => {
-  // Routing and the weekly report read a Swarm's evidence (superTabs/evidence/store.ts): only the weeks asked for, by index.
-  it('reads the weeks of a period and the last-ten rows with one index scan each, examining only that Swarm\'s rows', async () => {
-    const WEEK = 7 * 86_400_000, MONDAY = Date.UTC(2026, 9, 26)
-    const rows = ['A', 'B'].flatMap(tabId => ['opus', 'sonnet', 'kimi'].flatMap(model => Array.from({ length: 26 }, (_, w) => ({
-      _id: `${tabId}-${model}-${w}`, tabId, projectId: 'p1', engine: 'claude', model, kind: 'backend', week: { $date: new Date(MONDAY - w * WEEK).toISOString() },
-      attempts: 1, updatedAt: { $date: new Date(MONDAY).toISOString() } }))))
-    await db.$runCommandRaw({ insert: 'SuperTabModelEvidence', documents: rows as never })
-    await db.$runCommandRaw({ insert: 'SuperTabModelRecent', documents: ['A', 'B'].flatMap(tabId => ['opus', 'sonnet', 'kimi'].map(model => ({
-      _id: `${tabId}-${model}`, tabId, projectId: 'p1', engine: 'claude', model, kind: 'backend', results: [{ a: 'x', at: MONDAY, passed: true }],
-      updatedAt: { $date: new Date(MONDAY).toISOString() } }))) as never })
-    // The last four weeks: 3 models x 4 weeks.
-    const [read, profile] = await profiled('SuperTabModelEvidence', () => readEvidence(db, 'A', MONDAY - 3 * WEEK))
-    expect(read.models.map(m => [m.model, m.attempts, m.recent])).toEqual([['kimi', 4, [true]], ['opus', 4, [true]], ['sonnet', 4, [true]]])
-    expect(profile).toEqual({ plans: ['IXSCAN { tabId: 1, week: 1 }'], docsExamined: 12, returned: 12 })
-    const [, recent] = await profiled('SuperTabModelRecent', () => readEvidence(db, 'A', MONDAY))
-    expect(recent).toEqual({ plans: ['IXSCAN { tabId: 1, updatedAt: 1 }'], docsExamined: 3, returned: 3 })
-  })
-})
-
-describe('route decision list', () => {
-  const prismaRead = (tabId: string, conversationIds: string[]) => db.superTabRouteDecision.findMany({ where: { tabId, conversationId: { in: conversationIds } },
-    orderBy: { createdAt: 'desc' }, take: 100 })
-
-  it('reads a Lead\'s newest 100 decisions over every conversation with one index scan of 100 documents', async () => {
-    const [rows, profile] = await profiled('SuperTabRouteDecision', () => recentDecisions(db, 'A', GROUPS))
-    expect(rows.map(row => row.id)).toEqual(Array.from({ length: 100 }, (_, i) => `A-d${1999 - i}`))
-    expect(profile).toEqual({ plans: ['IXSCAN { tabId: 1, createdAt: 1 }'], docsExamined: 100, returned: 100 })
-  })
-
-  // Prisma sends `conversationId in [...]` as an $expr $or of one branch per conversation, which Mongo plans branch by branch:
-  // over a Lead's ~360 conversations that took 25 ms of planning per read, against under 1 ms for the plain $in match. Both
-  // examine the same documents, so the plan shape is what tells them apart: one IXSCAN, never an OR of them.
-  it('reads the decisions of a reader\'s few conversations with one index scan, examining only those', async () => {
-    const [rows, profile] = await profiled('SuperTabRouteDecision', () => recentDecisions(db, 'A', ['g007', 'g300']))
-    expect(rows).toHaveLength(11)
-    expect(profile).toEqual({ plans: ['IXSCAN { tabId: 1, conversationId: 1, outcome: 1 }'], docsExamined: 11, returned: 11 })
-  })
-
-  it('returns each decision as the Prisma read did', async () => {
-    const rows = await recentDecisions(db, 'A', ['g000', 'g001'])
-    expect(rows.find(row => row.id === 'A-d1800')).toEqual({ id: 'A-d1800', tabId: 'A', conversationId: 'g000',
-      record: { difficulty: 'medium', candidates: [{ id: 'c0', p: 0.42, slots: 3, title: 'Claude opus high' }, { id: 'c1', p: null, slots: 0 }], why: 'route 1800' },
-      final: { kind: 'new', startId: 's1800' }, override: { by: 'lead', candidateId: 'c1' }, assignmentId: 'as1800', outcome: 'done',
-      outcomeAt: new Date(T0 + 1_800_500), run: null, evidence: null, createdAt: new Date(T0 + 1_800_000) })
-    // Written as an older record: none of the optional fields exist.
-    expect(rows.find(row => row.id === 'A-d0721')).toEqual({ id: 'A-d0721', tabId: 'A', conversationId: 'g001',
-      record: { difficulty: 'medium', candidates: [{ id: 'c0', p: 0.42, slots: 3, title: 'Claude opus high' }, { id: 'c1', p: null, slots: 0 }], why: 'route 721' },
-      final: null, override: null, assignmentId: null, outcome: null, outcomeAt: null, run: null, evidence: null, createdAt: new Date(T0 + 721_000) })
-    expect(await recentDecisions(db, 'A', GROUPS)).toEqual(await prismaRead('A', GROUPS))
-    expect(await recentDecisions(db, 'A', ['g007', 'g300'])).toEqual(await prismaRead('A', ['g007', 'g300']))
-    expect(await recentDecisions(db, 'B', [])).toEqual([])
   })
 })

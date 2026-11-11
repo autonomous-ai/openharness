@@ -7,6 +7,7 @@
  * Moved verbatim out of the reconciler's options in `runForeground` (the core boundary, step 10:
  * docs/design/2026-10-03-harnessd.md). The reconciler itself, with what it scans, stays there.
  */
+import { readOpenclawScreen } from '../../engines/openclaw/contract.js'
 import { externalResumePending } from '../../lib/externalResume.js'
 import { paneReadIdentity } from '../transcripts/readIdentity.js'
 import { isTerminalEngine } from '../../engines/types.js'
@@ -19,7 +20,7 @@ import type { SessionInputController } from '../../lib/sessionInput.js'
 import type { StoppedAgentStore } from '../../lib/stoppedAgents.js'
 import type { DiscoveredTerminalAgent } from '../../lib/terminalAgentDiscovery.js'
 import type { TerminalBackendCoordinator } from '../../lib/terminalBackendCoordinator.js'
-import { primaryRuntime, sameProcessIdentity, sameTerminalPlacement } from '../../lib/terminalRuntime.js'
+import { primaryRuntime, sameProcessIdentity, sameTerminalPlacement, terminalRouteKey } from '../../lib/terminalRuntime.js'
 import { bypassPermissionActive, permissionModeFromArgv } from '../../lib/processTable.js'
 
 export interface DiscoveryDeps {
@@ -79,7 +80,19 @@ export function createDiscoveryHandlers({
       && saved.runtimes.some((runtime) => terminal.runtimes.some((own) => sameTerminalPlacement(runtime, own)))
       && stoppedAgents.resumeReservedAt(saved.agentId) === null)
   }
+  /**
+   * Every `openclaw` command renames its process to `openclaw` (`onboard`, `logs --follow`, `doctor`, `sessions` too:
+   * processTable.ts), so a pane running one is OpenClaw's agent only once its screen shows the TUI: the footer it draws
+   * under its composer (engines/openclaw/contract.ts). Asked before a pane is taken for OpenClaw, never of a row that
+   * is OpenClaw's already, so an overlay over the footer cannot make a running agent look gone.
+   */
+  const showsOpenclaw = async (observed: DiscoveredTerminalAgent): Promise<boolean> => {
+    const runtime = observed.runtimes.find((candidate) => terminalRouteKey(candidate) === observed.primaryRuntimeKey) ?? observed.runtimes[0]
+    const read = runtime ? await terminals.backendFor(runtime)?.capture(runtime).catch(() => null) : null
+    return read?.state === 'succeeded' && readOpenclawScreen(read.value).footer !== null
+  }
   const onDiscovered = async (observed: DiscoveredTerminalAgent): Promise<void> => {
+    if (observed.engine === 'openclaw' && !await showsOpenclaw(observed)) return
     const launching = observed.runtimes
       .map((runtime) => registry.byRuntimeEngine(runtime, observed.engine))
       .find((entry) => entry?.launch?.state !== 'ready')
@@ -119,6 +132,7 @@ export function createDiscoveryHandlers({
   }
   const onObserved = async (observed: DiscoveredTerminalAgent, current: RegisteredSession): Promise<void> => {
     if (externalResumePending(current.externalResume)) return
+    if (observed.engine === 'openclaw' && current.engine !== 'openclaw' && !await showsOpenclaw(observed)) return
     const wasDormant = !current.active
     // Read BEFORE the update, because the update is what overwrites it. `undefined` means the probe
     // could not look, which never counts as a move — see `probeGridAssignment`'s three answers.

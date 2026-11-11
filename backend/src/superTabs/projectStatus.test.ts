@@ -3,7 +3,7 @@ import { applyCommand, commandSchema, type Command, type CommandContext } from '
 import { createSuperTab, visibleState, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
 import { projectOf } from './projects.js'
 import { numberMessages } from './parts/commit.js'
-import { storedAssignment } from './storedWork.test-support.js'
+import { storedAssignment, storedTask } from './storedWork.test-support.js'
 
 // Quiet project chats (Dee, 2026-10-31): a report sets the coordinator's own lines on the project's status card and posts nothing,
 // the server writes the card's lines itself and wakes nobody for them (task #3593), and every project gets the morning digest by default.
@@ -29,8 +29,7 @@ function fixture() {
   run({ type: 'project.cadence', projectId: 'lead', minutes: 5 })
   const lead = add('lead-harness', 'lead', true)
   const leadActor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
-  const group = () => run({ type: 'conversation.create', title: 'Offline editing', brief: 'Save edits while offline.',
-    checks: [{ description: 'Reconnect preserves the edits.', independent: true }] }).result.conversationId as string
+  const group = () => storedTask(state, { checks: [{ description: 'Reconnect preserves the edits.', independent: true }], requesterId: 'owner' })
   return {
     run, add, group, lead, leadActor,
     get state(): SuperTabState { return state },
@@ -39,8 +38,7 @@ function fixture() {
   }
 }
 
-const report = (text: string | null, through: Record<string, number> = {}): Command =>
-  commandSchema.parse({ type: 'project.report', projectId: 'lead', through, text })
+const report = (text: string): Command => commandSchema.parse({ type: 'project.report', projectId: 'lead', text })
 
 describe('the project status card', () => {
   it('is set by a report, replacing the one before, and posts nothing to the chat', () => {
@@ -51,9 +49,6 @@ describe('the project status card', () => {
     f.tick(MINUTE)
     expect(f.run(report('Offline editing: merged'), f.leadActor).messages).toEqual([])
     expect(projectOf(f.state, 'lead').status).toEqual({ text: 'Offline editing: merged', at: new Date(f.now).toISOString(), by: f.lead })
-    // No text only acknowledges: the card stays.
-    expect(f.run(report(null), f.leadActor).messages).toEqual([])
-    expect(projectOf(f.state, 'lead').status!.text).toBe('Offline editing: merged')
   })
 
   it('holds up to 2,000 characters and refuses a longer card', () => {
@@ -75,9 +70,9 @@ describe('the project status card', () => {
     const other = f.add('other-lead', created.result.conversationId as string, true)
     const as: Actor = { kind: 'agent', agentId: other, machineOwnerId: 'host-owner' }
     expect(() => f.run(report('Firmware took over'), as)).toThrow(expect.objectContaining({ code: 'NOT_FOUND', message: 'This project is unavailable.' }))
-    expect(() => f.run(commandSchema.parse({ type: 'project.report', projectId: 'no-such-project', through: {}, text: 'x' }), as))
+    expect(() => f.run(commandSchema.parse({ type: 'project.report', projectId: 'no-such-project', text: 'x' }), as))
       .toThrow(expect.objectContaining({ code: 'NOT_FOUND', message: 'This project is unavailable.' }))
-    f.run(commandSchema.parse({ type: 'project.report', projectId: created.result.projectId, through: {}, text: 'Firmware: flashing' }), as)
+    f.run(commandSchema.parse({ type: 'project.report', projectId: created.result.projectId, text: 'Firmware: flashing' }), as)
     expect(projectOf(f.state, created.result.projectId as string).status!.text).toBe('Firmware: flashing')
     expect(projectOf(f.state, 'lead').status).toBeUndefined()
   })
@@ -117,12 +112,5 @@ describe('no card wake-up for the coordinator (#3593)', () => {
     const f = fixture(), group = f.group()
     f.run({ type: 'conversation.archive', conversationId: group, archived: true })
     expect(f.state.conversations.find(c => c.id === group)!.dormant).toBe(true)
-  })
-
-  it('still takes an older host\'s report with through, and keeps its text as the coordinator\'s own lines', () => {
-    const f = fixture(), group = f.group()
-    f.run(report('Freeze starts Friday.', { [group]: 1 }), f.leadActor)
-    expect(projectOf(f.state, 'lead').status!.text).toBe('Freeze starts Friday.')
-    expect(JSON.stringify(visibleState(f.state, owner))).toContain('Freeze starts Friday.')
   })
 })

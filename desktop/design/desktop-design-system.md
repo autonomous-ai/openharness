@@ -408,10 +408,13 @@ leaderboard) share four rules.
 Goal: every element in a Swarm looks like it came from one hand, Apple-quality
 and never random (anh Dee, 2026-11-07, task #4461). Each element below has one
 implementation; a screen uses it and never draws its own. The gallery
-(`test/swarm_elements_gallery_test.dart`) draws every one in light and dark
-against `test/goldens/swarm-elements-{light,dark}.png`, holding each element
-to its own area: a face or ring may barely differ, an icon or letter a
-quarter of its box, and nothing else outside the words more than 38 pixels.
+(`test/swarm_elements_gallery_test.dart`) draws every one in light and dark,
+each section against its own images,
+`test/goldens/swarm-elements/<section>-{light,dark}.png`, so a pull request
+that changes one element changes only its section's images. It holds each
+element to its own area: a face or ring may barely differ, an icon or letter a
+quarter of its box, and nothing else outside the words more than 38 pixels
+of its section's image.
 
 Seven rules hold the whole Swarm screen to minimal, clear and quiet, with less
 on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
@@ -480,13 +483,21 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   Dee, 2026-11-09: some people keep it out of git). Its person reads it in
   `AppType.mono` and changes it here: `Edit` (a compact `DesktopPill`) turns
   the text into a field, and `Save` and `Cancel` take its place; Save waits for
-  a change. Under the agent's own file, read only, is what else instructs it
-  in its folder (anh Dee, 2026-11-10: Faye's, in lampOS): the project's
-  `AGENTS.md` and `CLAUDE.md`, as that computer sends them, each with its name
-  in 13 medium (its path when it sends one), its text in `AppType.mono`,
-  selectable, and `Cut at 64 KB.` in metadata grey after a text it cut, a
-  hairline between them. A file with the text of one above it (a `CLAUDE.md`
-  linked to `AGENTS.md`) says `Same as AGENTS.md.` instead of repeating it. A
+  a change. An empty own file says so in one metadata line, whatever else the
+  folder holds: `Empty for now. Tell Faye how you want it to work, and it
+  writes it down here.`, and its field, typed into, starts on the hint `Rules
+  for Faye, as you would tell it. It reads them at every start.` (anh Dee,
+  2026-11-10: Arlo's empty file read as the project's long AGENTS.md, and Edit
+  as a blank page). Under the agent's own file, after a hairline and the
+  metadata heading `From its folder`, read only, is what else instructs it in
+  its folder (anh Dee, 2026-11-10: Faye's, in lampOS): the project's
+  `AGENTS.md` and `CLAUDE.md`, as that computer sends them, each folded to a
+  row of its name in 13 medium (its path when it sends one) and its size in
+  metadata grey (`212 lines`) with a `chevronRight`; a click opens it to its
+  text in `AppType.mono`, selectable, with `Cut at 64 KB.` in metadata grey
+  after a text it cut, and folds it again. A file with the text of one above
+  it (a `CLAUDE.md` linked to `AGENTS.md`) says `Same as AGENTS.md.` in place
+  of its size and has nothing to open. A
   file it did not show gets one metadata line (`CLAUDE.md is a link.`,
   `CLAUDE.md isn't text.`, `../AGENTS.md isn't shown: too much text.`). An older computer sends
   none: the agent's own file alone. Edit, Save and the 64 KB limit are for the
@@ -495,9 +506,7 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   agent's own file still shows them, under its one line. A save names the
   version it read, so a change the agent made
   meanwhile is refused (`It changed on Mac 3. Close it and open it again.`)
-  and the typed text stays. Nothing to show (no file of its own, and none of
-  the others has text): `No instructions yet. Tell Faye how
-  you want it to work, and it writes them here.` A computer that cannot be
+  and the typed text stays. A computer that cannot be
   asked says what to do in one line, with a retry icon: `Update Harness on
   Mac 3.`, `Update Harness on this computer.`, `Mac 3 is offline.`, `Faye isn't
   running on Mac 3.`, `agents/Faye.md on Mac 3 isn't a plain file.` Nothing is
@@ -524,7 +533,9 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   `Limited until 14:00`, `Offline`), `Task` (`#5759` and its title: the issues
   of its projects' boards that are taken and labelled for it, read with the
   board's own reader, shown at once from what it read last and read again on
-  opening and each minute while Info is open) and `Folder` in `AppType.mono`.
+  opening and each minute while Info is open), `Folder` in `AppType.mono`, and
+  `Workspace` in `AppType.mono` below it for an engine whose tools work
+  somewhere other than the pane's folder (OpenClaw).
   A row the app has no value for is not drawn; a board that cannot be read
   puts GitHub's reason in the Task row, under the tasks it held when last
   read, so they never read as current. Its text can be selected. Info,
@@ -741,7 +752,7 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   agent's words read nearly the column's width, as Codex's answers do (anh
   Dee, 2026-11-10; `SwarmBubble`, `super_tabs/chat/bubble.dart`,
   `SuperTabMessageRow.shareOf`). Between
-  you and a chat's own agent (a Buddy chat, an agent chat) there are no names
+  you and a chat's own agent (an agent's own chat) there are no names
   or faces; in a group chat a speaker's name sits over their first bubble in
   plain secondary ink at the text's size, and their round 28 face by their
   last. No engine mark: colour is the face's. **One size with the terminal**
@@ -800,7 +811,7 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
 - **Blue.** Blue is for the main action and for your own bubbles, nothing
   else.
 - **Adding or changing one.** A new or changed element updates this section
-  and the gallery, with its images, in the same pull request.
+  and the gallery, with its section's images, in the same pull request.
 
 ## Swarm left pane
 
@@ -812,7 +823,7 @@ dropdowns plain text until hovered; nothing that does not help you decide.
 Top to bottom:
 
 ```text
- autonomous.ai ⌄              org name, semibold 13 primary; ⌄ only on hover
+ autonomous.ai ⌄              org name, semibold 13 primary; ⌄ only on hover; its menu: Personal, your Swarms, Rename (one you may change), New Swarm
  Your Team           ⌄  ∞ +  quiet heading; ⌄ folds the list (open); ∞ (link) Attach agent, + New agent
  ◌  Faye            starting  first: a New agent going on after its form closed, a grey face; a click opens nothing yet
  ◌  Ivy               failed  its start failed: `failed` in red; a click opens its form again with why, and Try again
@@ -844,7 +855,7 @@ Top to bottom:
 | Quiet heading | `SuperTabQuietHeading` | 12 `textSecondary`, its text level with the faces' left edge. A group that folds shows `chevronDown` (`chevronRight` folded) beside its name, always; the org name's chevron shows only while hovered or focused. Your Team and Projects start open, Your Machines and Top Teams folded, except that Your Machines opens by itself while a computer is off, so why an agent is silent is in sight; the reader's choice is kept and then stands. `onAdd` puts the `plus` button at its right, as on every section heading: Your Team's opens New agent, Projects' New project. Your Team also has `onAttach`, the `link` button before the + (tooltip Attach agent; anh Dee 2026-11-09: "like ⌘P, while + is like ⌘N"): ⌘P's picker titled Attach agent, of the Claude Code and Codex sessions running on its person's own computers, those on the team left out and the rest unavailable with why; the one chosen joins with its own chat, which opens. |
 | Team fold | `ProjectSidebar.teamShown` (`super_tabs/project_sidebar.dart`) | Your Team shows at most 8 rows, so Projects stays in sight with forty agents (tester Q1, 2026-11-10: 880x560). The 8 are the rows with something new, then those on a task, then the rest, each in its place in the list; the open agent's row always shows. Under them, a quiet row with `chevronDown`, `N more`, opens every row; then `chevronUp`, `Show fewer`, folds them again. The reader's choice is kept (`agentsAllShown`). |
 | Pane row | `SuperTabQuietRow` (`super_tabs/personal_agents.dart`) | In a person's own Personal Swarm, while they are alone in it, every Claude Code or Codex session they run in their tabs that is not in the Swarm yet (a running session on one of their own computers; a plain shell, a stopped session, a shared computer's and a Team account's are no agents of theirs) is a row after their agents, by name, each once. Its face is the one it wears once it joins (`swarmAgentId`, the Swarm's id for it), its name the one its pane shows (the folder it works in while that is still Untitled Pane), its computer the detail (`Mac laptop · offline` while that computer is). Nothing is sent for it until its person clicks it: the click makes it an agent as Attach does (its own 1:1 chat opens, its terminal shows beside the chat) and the row is then the agent's. The row says `joining` while that goes on and waits, one join at a time; a refusal is said in a line at the foot and the next click finishes the join; a row of a computer that is off does nothing. |
-| Personal project | `PersonalProjects` (`super_tabs/personal_projects.dart`) | In a person's own Personal Swarm, while they are alone in it, Projects are the repos their panes work in: the same repo on two of their computers is one project, named after the repo (`api`; `api (acme/api)` beside another `api`). A pane with no repo is in no project and stays a row of Your Team. A project whose panes are all closed leaves the list until one opens again. Its Tasks board reads the repo's GitHub issues with this computer's `gh`; the server learns only the project's name. No project is named after a tab: the tab projects of v3 are closed once (an empty one goes, one with messages is kept read-only and out of the list). |
+| Personal project | `PersonalProjects` (`super_tabs/personal_projects.dart`) | In a person's own Personal Swarm, while they are alone in it, Projects are the repos their panes work in: the same repo on two of their computers is one project, named after the repo (`api`; `api (acme/api)` beside another `api`). A pane with no repo is in no project and stays a row of Your Team. A project whose panes are all closed leaves the list until one opens again. Its Tasks board reads the repo's GitHub issues with this computer's `gh`; the server learns only the project's name. No project is named after a tab: the tab projects of v3 are closed once (an empty one goes, one with messages is kept read-only and out of the list). The Swarm's own first project (Personal) is not listed while it names no repository, except while its chat is open or has something unread; nothing of it is deleted. |
 | Org name | `SuperTabQuietHeading.org` | Semibold 13 primary, no icon; its chevron only on hover; opens the Swarm menu. |
 | Person | `SuperTabAvatar.person` at 20 | A photo, or an initial on the neutral grey disc. |
 
@@ -893,9 +904,9 @@ Deliberate differences from Desktop, and only these:
 - The terminal keeps its own font, size and palette, as on Desktop.
 - Bottom sheets, which Desktop does not have, round their top corners at the
   card radius (12).
-- Swarm Home starts a new message from a round, 56-point, accent-filled +
-  floating at its bottom right (New message, as Slack Mobile does), not from
-  a button in its top bar.
+- An agent row's status line says a named state (`Agent.namedState`) in the
+  attention tone in place of what the agent is doing, below only Waiting for
+  you, where Desktop puts it in a pane note.
 
 The mobile style check (`scripts/check-ui-style.py`) covers `mobile/lib/swarm`
 with the same rules as Desktop's Swarm code and an allowlist of its own.
@@ -946,7 +957,8 @@ existing controller and does not add a preview.
 **Cmd-P** — a prominent search field, separate compact scope pills, recognizable
 agent marks and clean results. Harnesses is the default scope. Preserve typed
 words when changing scope. Keep result selection stable through live updates.
-Details remain in the existing optional preview. No second search index or
+Details remain in the existing optional preview; its folder line is followed by
+`Workspace · <path>` for an engine whose tools work elsewhere (OpenClaw). No second search index or
 management implementation. Toolbar controls are secondary to the query. Keep
 the editor and footer stationary while results update; do not resize the panel
 on every keystroke or make short lists stretch their individual rows. On wide
@@ -1073,6 +1085,15 @@ names truncate and retain their full-name tooltip. Keep effort in the terminal,
 and keep the icon targets clear at narrow widths. Tab-strip close behavior is
 separate and remains hover-revealed.
 
+**Pane notes** (`PaneNote`) — one 30-point line under the header, in flow so it
+covers none of the terminal, on a 10% warning tint with a 14-point warning-ink
+mark and one body line that truncates with its full text on hover. Two say why
+an agent cannot work: its model not answering (`PaneModelNote`, with Pick
+another where the pane has a picker) and a named state the daemon says only the
+person can fix (`Agent.namedState`, triangle mark, the daemon's sentence as it
+is, such as `OpenClaw Gateway is not running. Start it with openclaw gateway.`).
+A note is gone the moment the daemon stops sending it.
+
 **Focused workspace footer** — `Harnesses N`, `Machines N`, `Models N`, then subscription
 icons with remaining percentages at the left; focused machine, project, branch and PR at the right.
 Harnesses counts connected owned sessions, including idle and starting sessions, and opens Harness
@@ -1099,6 +1120,9 @@ in the footer. Recent-harness context uses its monochrome presentation.
 at page scale. Related settings use grouping and whitespace. Existing artwork,
 terminal previews, native toolbar/footer components and domain-specific visuals
 retain their meaning. Read-only loading/error views use the same hierarchy.
+Settings ▸ About adds one body-size secondary line under the app identity, `Node v24.22.2` or
+`Node v22.23.2 · stays on 22: <reason>`, from the daemon's status; it is absent when the daemon
+sends no Node.
 
 **macOS notification menu** — one Notifications section with up to five unread
 session rows and a route to the full inbox. Use a 13-point semibold session title,

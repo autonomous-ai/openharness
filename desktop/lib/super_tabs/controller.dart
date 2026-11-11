@@ -1757,8 +1757,6 @@ class SuperTabController extends ChangeNotifier {
       if (tagged.isNotEmpty) 'mentions': tagged,
       if (alsoSend) 'alsoSend': true,
       if (ids.isNotEmpty) 'attachmentIds': ids,
-      // As the chat's own send: the server refuses it in an earlier chat.
-      if (oneBuddy) 'oneBuddy': true,
     });
     if (_pending case final pending? when !identical(pending, before)) {
       _sendingMentions[pending['operationId'] as String] = picked;
@@ -1784,10 +1782,7 @@ class SuperTabController extends ChangeNotifier {
   bool messagesRead(String id) => _messages[id] != null;
 
   static bool _listed(SuperTabMessage m) =>
-      m.source['kind'] != 'update-request' &&
-      !m.terminalPrompt &&
-      !m.terminalGap &&
-      !m.instructionsSave;
+      !m.terminalPrompt && !m.terminalGap && !m.leadTerminalNote;
 
   bool hasOlder(String id) => _before[id] != null;
 
@@ -1946,11 +1941,7 @@ class SuperTabController extends ChangeNotifier {
   int _loadedMessageSequence(String id) {
     final mainOnly = snapshot?.conversation(id)?.lastMainSequence != null;
     return _messages[id]?.reversed
-            .where(
-              (m) =>
-                  m.source['kind'] != 'update-request' &&
-                  (!mainOnly || m.inMainStream),
-            )
+            .where((m) => !mainOnly || m.inMainStream)
             .firstOrNull
             ?.sequence ??
         0;
@@ -2676,21 +2667,12 @@ class SuperTabController extends ChangeNotifier {
   List<SuperTabConversation> projectConversations(String projectId) =>
       _indexed()?.byProject[projectId] ?? const [];
 
-  /// [snapshot]'s conversations by project, and each project's [buddyChat],
-  /// worked out once per snapshot: the sidebar asks for them on every
+  /// [snapshot]'s conversations by project, worked out once per snapshot: the sidebar asks for them on every
   /// rebuild, and a snapshot is replaced, never changed, when the Swarm moves.
-  ({
-    SuperTabSnapshot of,
-    Map<String, List<SuperTabConversation>> byProject,
-    Map<String, SuperTabConversation> buddyChats,
-  })?
+  ({SuperTabSnapshot of, Map<String, List<SuperTabConversation>> byProject})?
   _index;
 
-  ({
-    SuperTabSnapshot of,
-    Map<String, List<SuperTabConversation>> byProject,
-    Map<String, SuperTabConversation> buddyChats,
-  })?
+  ({SuperTabSnapshot of, Map<String, List<SuperTabConversation>> byProject})?
   _indexed() {
     final snapshot = this.snapshot;
     if (snapshot == null) return null;
@@ -2698,17 +2680,8 @@ class SuperTabController extends ChangeNotifier {
       return index;
     }
     final byProject = <String, List<SuperTabConversation>>{};
-    final buddyChats = <String, SuperTabConversation>{};
     for (final g in snapshot.conversations) {
       byProject.putIfAbsent(g.projectId, () => []).add(g);
-      if (g.isBuddyChat && g.buddyOwnerId == accountId) {
-        // Of several Buddies (#3818) the default is the one the app opens; with none flagged, the first.
-        if (g.buddyDefault) {
-          buddyChats[g.projectId] = g;
-        } else {
-          buddyChats.putIfAbsent(g.projectId, () => g);
-        }
-      }
     }
     return _index = (
       of: snapshot,
@@ -2716,41 +2689,8 @@ class SuperTabController extends ChangeNotifier {
         for (final MapEntry(:key, :value) in byProject.entries)
           key: List.unmodifiable(value),
       },
-      buddyChats: buddyChats,
     );
   }
-
-  /// The key the reader's one Buddy for the whole Swarm goes by in [buddyChat]
-  /// and [buddy]: its chat and agent
-  /// belong to no project, as the Product Managers' conversation does (spec
-  /// 2026-10-31-one-buddy-per-swarm).
-  static const kSwarmBuddyKey = '';
-
-  /// Whether this Swarm gives each person one Buddy for the whole Swarm, whose
-  /// one chat the round dial opens.
-  bool get oneBuddy => snapshot?.swarmBuddy == true;
-
-  /// Whether [group] is the reader's older Buddy chat in a project, where the
-  /// Swarm gives one Buddy for the whole Swarm: its history reads here, and
-  /// its person talks to their Buddy in its one chat (spec: history).
-  bool isEarlierBuddyChat(SuperTabConversation? group) =>
-      oneBuddy && group != null && group.isBuddyChat && !group.isSwarmBuddyChat;
-
-  /// The signed-in person's chat with their Buddy in [projectId], where the
-  /// PM's private lines to them land too: Buddies replaced Chat with PM in
-  /// every Swarm (Ken, 10-29). It is there before any Buddy is
-  /// ([openBuddyChat]), and stays after one is removed.
-  SuperTabConversation? buddyChat(String projectId) =>
-      _indexed()?.buddyChats[projectId];
-
-  /// The signed-in person's Buddy in [projectId]; null when they have none.
-  /// Its main session only: a thread's own session is never "the Buddy".
-  SuperTabAgent? buddy(String projectId) => snapshot?.agents
-      .where(
-        (a) =>
-            a.isMainBuddy && a.buddyOf == accountId && a.projectId == projectId,
-      )
-      .firstOrNull;
 
   /// Renames the agent [agentId] for everyone in the Swarm (backend
   /// `agent.rename`): only the person who runs it, or its machine's owner, may.
@@ -2767,19 +2707,19 @@ class SuperTabController extends ChangeNotifier {
   }
 
   /// Whether [group] is out of the app: there is no private channel to the
-  /// PM (Ken, 10-29), so no private chat but a Buddy chat is listed or opened,
-  /// the reader's old Chat with PM that an older server still sends included.
-  bool hiddenByBuddies(SuperTabConversation group) =>
-      group.audience != null && !group.isBuddyChat && !group.isAgentChat;
+  /// PM (Ken, 10-29), so no private chat but a person's chat with their own
+  /// agent is listed or opened.
+  bool hiddenPrivate(SuperTabConversation group) =>
+      group.audience != null && !group.isAgentChat;
 
   /// Where opening conversation [id] lands: itself, unless the app hides it.
   String landsOn(String id) => _shownFor(id);
 
-  /// Where conversation [id] opens: a chat [hiddenByBuddies] opens its
+  /// Where conversation [id] opens: a chat [hiddenPrivate] opens its
   /// project's chat, where the PM is talked to; any other opens itself.
   String _shownFor(String id) {
     final group = snapshot?.conversation(id);
-    if (group == null || !hiddenByBuddies(group)) return id;
+    if (group == null || !hiddenPrivate(group)) return id;
     return snapshot!.projects
             .where((p) => p.id == group.projectId)
             .firstOrNull
@@ -2799,13 +2739,10 @@ class SuperTabController extends ChangeNotifier {
     return _heldSinceRead(group) ? count : max(count, 1);
   }
 
-  /// Whether [m] is the reader's own: written by them, not by an agent, a
-  /// terminal or the server in their name.
+  /// Whether [m] is the reader's own: written by them, not by an agent or a
+  /// terminal.
   bool isOwn(SuperTabMessage m) =>
-      !m.fromAgent &&
-      !m.fromTerminal &&
-      !m.postedForAuthor &&
-      m.authorId == accountId;
+      !m.fromAgent && !m.fromTerminal && m.authorId == accountId;
 
   /// Whether what [id]'s main stream gained since sequence [after] is all the reader's own, sent from
   /// any device. Unsure is no: a message that can't be read is told about, never lost.
@@ -2902,7 +2839,7 @@ class SuperTabController extends ChangeNotifier {
       );
       return (message: null);
     }
-    // A chat the app hides (an old Chat with PM, with Buddies on) is not one
+    // A chat the app hides (an old Chat with PM) is not one
     // a link can open, so it is not previewed either.
     if (landsOn(id) != id) return null;
     final held = messages(id).where((m) => m.id == link.messageId).firstOrNull;
@@ -2912,41 +2849,7 @@ class SuperTabController extends ChangeNotifier {
       return quoteGaveUp(id, link.messageId) ? null : (message: null);
     }
     final message = read.message;
-    // A waiting notice is never announced, so it is not previewed either.
-    return message == null || message.source['kind'] == 'delivery-hold'
-        ? null
-        : (message: message);
-  }
-
-  /// Set by the Swarm view on screen: opens a project's Buddy chat in front
-  /// of whatever covers the conversation, Notifications or a terminal.
-  Future<bool> Function(String projectId)? buddyChatOpener;
-
-  /// Opens the reader's [buddyChat] in [projectId], opening it on the server
-  /// first when they have none: every person has one in each project before
-  /// any Buddy (backend buddy.chat), so the PM's private lines never drop.
-  /// The request is one per person, membership and project, so a second click
-  /// or another window gets the same chat back.
-  Future<bool> openBuddyChat(String projectId) async {
-    if (buddyChat(projectId) case final chat?) return select(chat.id);
-    // Where the reader is now: the server may answer late, and by then they may have opened another chat or a terminal.
-    final from = _selectRequest;
-    final me = snapshot?.people.where((p) => p.id == accountId).firstOrNull;
-    // The empty id is the reader's one Buddy chat for the Swarm (spec
-    // 2026-10-31-one-buddy-per-swarm), which names no project.
-    final result = await command({
-      'type': 'buddy.chat',
-      if (projectId != kSwarmBuddyKey) 'projectId': projectId,
-    }, operationId: _buddyChatOperation(projectId, me?.generation));
-    final id = result?['conversationId'];
-    // The chat is made either way; only a reader still where they were when they asked is taken to it (task #4704).
-    return id is String && from == _selectRequest && await select(id);
-  }
-
-  String _buddyChatOperation(String projectId, String? generation) {
-    final id = 'buddy-chat-$projectId-$accountId-${generation ?? ''}';
-    // The backend's operation ids are at most 160 characters.
-    return id.length > 160 ? id.substring(0, 160) : id;
+    return message == null ? null : (message: message);
   }
 
   /// Opens conversation [id], reading it first when it is not held
@@ -4248,12 +4151,6 @@ class SuperTabController extends ChangeNotifier {
           }
         }
       }
-      if (command['type'] == 'conversation.create' &&
-          result['conversationId'] is String) {
-        // A successful create selects its confirmed destination even when the
-        // following read is offline. Never leave the old group's composer active.
-        _moveView(to: result['conversationId'] as String);
-      }
       _pending = null;
       _changed();
       try {
@@ -4475,7 +4372,6 @@ class SuperTabController extends ChangeNotifier {
           'replyTo': replyTo,
           'recipientIds': addressed,
           if (tagged.isNotEmpty) 'mentions': tagged,
-          if (oneBuddy) 'oneBuddy': true,
         },
         result: result,
       ));
@@ -4505,10 +4401,6 @@ class SuperTabController extends ChangeNotifier {
       'recipientIds': addressed,
       if (tagged.isNotEmpty) 'mentions': tagged,
       if (ids.isNotEmpty) 'attachmentIds': ids,
-      // An app that knows one Buddy per Swarm says so: the server then
-      // refuses its write into an older Buddy chat (security review 1 of
-      // #2435). Older apps and phones say nothing and still write there.
-      if (oneBuddy) 'oneBuddy': true,
     });
     // On its way: the message shows in the chat, and the draft is free for
     // the next one. Both are in the save made before the request.

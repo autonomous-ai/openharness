@@ -45,8 +45,10 @@ describe('portable harness adapters', () => {
   it('has a contract for every process engine, with no package allowlist', () => {
     expect(Object.keys(HARNESS_ADAPTERS)).toEqual(PROCESS_ENGINES)
     for (const engine of PROCESS_ENGINES) {
-      expect(compatibleHarnessEngines({ engine })[0]).toBe(engine)
-      expect(new Set(compatibleHarnessEngines({ engine }))).toEqual(new Set(PROCESS_ENGINES))
+      // OpenClaw reads no instructions from the workspace or a flag, so no harness runs on it, its own default included.
+      const harnessEngines = PROCESS_ENGINES.filter(other => other !== 'openclaw')
+      if (engine !== 'openclaw') expect(compatibleHarnessEngines({ engine })[0]).toBe(engine)
+      expect(new Set(compatibleHarnessEngines({ engine }))).toEqual(new Set(harnessEngines))
     }
     expect(compatibleHarnessEngines({})).toEqual([])
     expect(compatibleHarnessEngines({ kind: 'viewer', engine: 'claude' })).toEqual([])
