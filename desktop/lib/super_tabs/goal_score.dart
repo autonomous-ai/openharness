@@ -150,7 +150,7 @@ class _SwarmGoalScoreState extends State<SwarmGoalScore>
           // With no menu to say it in, a read that failed says why here.
           message:
               _error ??
-              'Goal: all ${goal.total} milestones pass on ${goal.branch}',
+              'Goal: all ${goal.total} milestones pass on ${goal.shownBranch}',
           child: Text(
             words,
             key: const ValueKey('swarm-goal'),
@@ -206,7 +206,7 @@ class _SwarmGoalScoreState extends State<SwarmGoalScore>
         ],
         builder: (context, menu, _) => Tooltip(
           message:
-              'Goal: ${goal.passed} of ${goal.total} milestones pass on ${goal.branch}',
+              'Goal: ${goal.passed} of ${goal.total} milestones pass on ${goal.shownBranch}',
           child: Semantics(
             button: true,
             child: InkWell(

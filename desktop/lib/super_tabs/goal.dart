@@ -37,21 +37,32 @@ final _sha = RegExp(r'^[0-9a-f]{40}$');
 /// What a row or a tooltip must not draw: control characters, and the marks that turn a line's direction, which would show
 /// a milestone as other words than its file's.
 final _unshown = RegExp(
-  r'[\u0000-\u001F\u007F-\u009F\u200E\u200F\u202A-\u202E\u2066-\u2069]',
+  r'[\u0000-\u001F\u007F-\u009F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]',
 );
 
 /// The control characters `gh` hands over in caret notation (U+0007 as `^G`), whatever GitHub answers, so that no answer
 /// can drive a terminal (go-gh's asciisanitizer): C0 but tab, line feed, vertical tab and return, and C1.
 final _ghRewrites = RegExp(r'[\u0000-\u0008\u000C\u000E-\u001F\u0080-\u009F]');
 
+/// The same characters' escapes written out as text, a backslash, u and four hex digits in either case: `gh` reads its
+/// answer's JSON text, so it takes `\u001b` written out for the escape and hands it over as `\^[` (review of the Desktop
+/// score, 2026-11-11, on gh 2.83.2).
+final _ghEscapes = RegExp(r'\\u00([0-9A-Fa-f]{2})');
+
+String _caret(int unit) => '^${String.fromCharCode((unit & 0x1F) | 0x40)}';
+
 /// [name] as `gh` hands a name over. The daemon asks GitHub itself and reads a check's name as it is; Desktop reads it
 /// through `gh`, and a milestone's own name from its file, which gh leaves alone. So the two are compared written gh's
 /// way: on a real repository the milestone `A bell <U+0007> in a name` passed for the daemon and was not run here
-/// (2026-11-11).
-String _asGhWrites(String name) => name.replaceAllMapped(
-  _ghRewrites,
-  (found) => '^${String.fromCharCode((found[0]!.codeUnitAt(0) & 0x1F) | 0x40)}',
-);
+/// (2026-11-11). A name with `^G` written and one with U+0007 come to the same: gh leaves no way to tell them apart.
+String _asGhWrites(String name) => name
+    .replaceAllMapped(_ghEscapes, (found) {
+      final unit = int.parse(found[1]!, radix: 16);
+      return _ghRewrites.hasMatch(String.fromCharCode(unit))
+          ? '\\${_caret(unit)}'
+          : found[0]!;
+    })
+    .replaceAllMapped(_ghRewrites, (found) => _caret(found[0]!.codeUnitAt(0)));
 
 /// Whether [unit] is space to JavaScript's `trim`, the daemon's: Dart's own `trim` also takes U+0085, which the daemon
 /// leaves in a milestone's name.
@@ -136,9 +147,10 @@ String? goalFileText(Object? contents) {
     return null;
   }
   try {
-    // GitHub breaks the content into lines.
+    // GitHub breaks the content into lines. Taken out as plain text, not by a pattern: near the 1 MB a file may hold, the
+    // pattern alone took 50 ms of the screen's thread on every read (review, 2026-11-11).
     final bytes = base64.decode(
-      (contents['content'] as String).replaceAll(_spaces, ''),
+      (contents['content'] as String).replaceAll('\n', '').replaceAll('\r', ''),
     );
     final text = utf8.decode(bytes, allowMalformed: true);
     // Dart leaves a file's byte-order mark out of its text, and the daemon's reader keeps it, where it counts toward the
@@ -203,6 +215,10 @@ class SwarmMilestone {
 /// A project's goal as it stands on one commit of its default branch: every milestone of its file, in the file's order.
 class SwarmGoal {
   const SwarmGoal({required this.milestones, required this.branch});
+
+  /// Its branch as a tooltip may show it: a branch's name is the repository's text, and git takes a mark that turns a line's
+  /// direction in one.
+  String get shownBranch => branch.replaceAll(_unshown, '');
 
   /// [rows] scored by the check [runs] of one commit, as GitHub's REST API lists them: each milestone by the newest run of
   /// its name. A run that has not completed, or was skipped or neutral, says nothing of its milestone; one that concluded

@@ -307,6 +307,34 @@ void main() {
     );
   });
 
+  // gh's second rewrite (review of the Desktop score, 2026-11-11, on gh 2.83.2): the text `\u00XX` naming such a character,
+  // a backslash and u written out, comes over as `\^X`, as though the escape were the character. A terminal project may well
+  // name a milestone so.
+  test('a milestone that writes out such a character\'s escape is matched to its check as gh hands the name over', () async {
+    const logs = r'Logs drop \u001b codes';
+    const next = r'A next line \u0085 and \u001B';
+    const kept = r'A tab \u0009, \u000b and \u007f stay';
+    const goal = '| $logs | `a` |\n| $next | `b` |\n| $kept | `c` |';
+    Map<String, Object?> named(int id, String name) => {
+      'id': id,
+      'name': name,
+      'status': 'completed',
+      'conclusion': 'success',
+    };
+    expect(
+      await score(
+        commits([
+          [
+            named(1, r'goal: Logs drop \^[ codes'),
+            named(2, r'goal: A next line \^E and \^['),
+            named(3, 'goal: $kept'),
+          ],
+        ], of: goal),
+      ),
+      (3, 0, 0),
+    );
+  });
+
   // A check run's page is text from outside: a row may send a browser only to github.com, over https.
   test(
     'a run\'s page is a link only when it is github.com\'s over https',
@@ -351,6 +379,19 @@ void main() {
     expect(goal.milestones.single.name, written);
     expect(goal.milestones.single.state, SwarmMilestoneState.passes);
     expect(goal.milestones.single.shown, 'A bell  in a name txet x[31m');
+    // The Arabic letter mark turns a line's direction as its siblings do.
+    expect(
+      const SwarmMilestone(
+        name: 'One \u061C two',
+        state: SwarmMilestoneState.notRun,
+      ).shown,
+      'One  two',
+    );
+    // A branch's name is the repository's text too: git takes a mark that turns a line's direction in one.
+    expect(
+      const SwarmGoal(milestones: [], branch: 'main\u202Eniam').shownBranch,
+      'mainniam',
+    );
     // Words in other scripts, and an emoji, are a name's own.
     expect(
       const SwarmMilestone(
