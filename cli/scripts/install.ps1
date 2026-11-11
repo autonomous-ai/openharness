@@ -30,6 +30,10 @@ $HarnessScriptPath = $MyInvocation.MyCommand.Path
 $HarnessCliVersionPattern = '^\d+\.\d+\.\d+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$'
 $HarnessPtyVersionPattern = '^\d+(\.\d+)*$'
 $HarnessPtyFiles = @('harness-pty.exe', 'harness-launch.exe', 'harness.exe', 'conpty.dll', 'OpenConsole.exe', 'harness-serial.exe', 'harness-tui.exe')
+# Who signs each terminal host file: ours carry the publisher's name (docs/windows-code-signing.md); ConPTY's two files
+# are Microsoft's, signed by Microsoft. cli/src/lib/windows/ptySignatures.ts holds the same two lists for the updater.
+$HarnessPublisher = 'AUTONOMOUS INC.'
+$HarnessMicrosoftFiles = @('conpty.dll', 'OpenConsole.exe')
 
 function Get-HarnessPlatform {
   # The platform from the NATIVE architecture, read where Windows keeps it for the whole system. An x64
@@ -311,6 +315,37 @@ function Test-HarnessPtyFolder([string]$Dir) {
   return $true
 }
 
+function Get-HarnessPtySignatureProblems([string]$Dir) {
+  # One line per terminal host file whose Authenticode signature is not Valid, or not its signer's. Windows itself
+  # judges Valid (the chain, the timestamp, the bytes), as Smart App Control does. Get-AuthenticodeSignature is in
+  # Microsoft.PowerShell.Security, which module autoload would take from a PowerShell 7 PSModulePath (Get-HarnessSha256
+  # says why that fails), so this PowerShell's own copy is imported by its path first.
+  Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
+  $problems = @()
+  foreach ($name in $HarnessPtyFiles) {
+    $signature = Get-AuthenticodeSignature -LiteralPath (Join-Path $Dir $name)
+    $want = if ($HarnessMicrosoftFiles -contains $name) { 'Microsoft Corporation' } else { $HarnessPublisher }
+    $signer = if ($signature.SignerCertificate) { $signature.SignerCertificate.GetNameInfo('SimpleName', $false) } else { '' }
+    if ($signature.Status -ne 'Valid') { $problems += "$name is $($signature.Status)" }
+    elseif ($signer -ne $want) { $problems += "$name is signed by '$signer', not '$want'" }
+  }
+  return $problems
+}
+
+function Assert-HarnessPtySigned([string]$Dir) {
+  # Smart App Control (Windows 11) blocks a program without a valid signature, and a blocked harness-launch.exe leaves
+  # Harness unable to start, so unable to update itself either: an unsigned terminal host is never installed (from
+  # 2026-11-04 to 11-09 production named an unsigned one). HARNESS_ALLOW_UNSIGNED=1 is for a developer's own build.
+  if ($env:HARNESS_ALLOW_UNSIGNED -eq '1') {
+    Write-Host '  Warning: HARNESS_ALLOW_UNSIGNED=1, so the terminal host is installed without checking its signatures.' -ForegroundColor Yellow
+    return
+  }
+  $problems = @(Get-HarnessPtySignatureProblems $Dir)
+  if ($problems.Count -gt 0) {
+    throw "The terminal host is not signed as Harness releases are, so Windows can block it, and it was not installed: $($problems -join '; ')."
+  }
+}
+
 function Install-HarnessNode {
   # runtime\node-<version>-<platform>\node.exe, from nodejs.org's own zip (node-<version>-win-<arch>\node.exe).
   # current-node is written last, and only once node.exe has answered. The CLI, the desktop app and harness.exe
@@ -395,9 +430,13 @@ function Install-HarnessPty {
       $unpacked = Join-Path $staging 'payload'
       Expand-HarnessZip -Tar $Tar -Archive $archive -Destination $unpacked
       if (-not (Test-HarnessPtyFolder $unpacked)) { throw "The terminal host archive lacks one of $($HarnessPtyFiles -join ', ')." }
+      Assert-HarnessPtySigned $unpacked
       if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force }
       Move-Item -LiteralPath $unpacked -Destination $target
     } finally { Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue }
+  } else {
+    # A version folder already here (an earlier install of this version) is put in use only if it is signed too.
+    Assert-HarnessPtySigned $target
   }
   $pointer = Join-Path $ptyRoot 'current-pty'
   $before = ''

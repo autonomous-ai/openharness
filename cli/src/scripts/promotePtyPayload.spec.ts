@@ -55,8 +55,10 @@ file='${cdn}'/"\${url#${CDN}/}"
 cp "$file" "$out"
 `)
   for (const name of ['gcloud', 'curl']) chmodSync(join(shim, name), 0o755)
+  // Both zips found signed on Windows (check-pty-signatures.ps1), unless a case says otherwise.
+  const signedZips = Object.entries(pty).map(([key, entry]) => `${key}=${(entry as { sha256: string }).sha256}`).join(' ')
   const run = (args: string[], env: Record<string, string> = {}) => spawnSync('bash', [script, ...args], {
-    encoding: 'utf8', env: { ...process.env, PATH: `${shim}:${process.env.PATH}`, GCS_BUCKET: 'test-bucket', ...env },
+    encoding: 'utf8', env: { ...process.env, PATH: `${shim}:${process.env.PATH}`, GCS_BUCKET: 'test-bucket', PTY_SIGNED_ZIPS: signedZips, ...env },
   })
   const production = () => JSON.parse(readFileSync(join(bucket, 'harness/pty/metadata.json'), 'utf8'))
   const calls = () => existsSync(log) ? readFileSync(log, 'utf8') : ''
@@ -124,6 +126,30 @@ describe.skipIf(process.platform === 'win32')('promote-pty-payload.sh', () => {
     // The same version again, or a newer one, needs no flag.
     expect(w.run(['1.2.3']).status).toBe(0)
     expect(w.run(['--bogus', '1.2.3']).status).toBe(2)
+  })
+
+  // 2026-11-04 to 11-09: production named an unsigned host, and Smart App Control blocked Harness's own start.
+  it('promotes only zips Windows found signed: none named, one missing, another digest, or a downgrade promote nothing', () => {
+    const w = world('1.2.3')
+    const x64 = (w.pty['win32-x64'] as { sha256: string }).sha256
+    const arm64 = (w.pty['win32-arm64'] as { sha256: string }).sha256
+    for (const signed of ['', `win32-x64=${x64}`, `win32-x64=${x64} win32-arm64=${'b'.repeat(64)}`, `win32-x64=${x64}win32-arm64=${arm64}`]) {
+      const refused = w.run(['1.2.3'], { PTY_SIGNED_ZIPS: signed })
+      expect(refused.status, signed).toBe(1)
+      expect(refused.stderr).toMatch(/the win32-(x64|arm64) zip of 1\.2\.3 \(sha256 [0-9a-f]{64}\) is not one Windows found signed \(PTY_SIGNED_ZIPS\): run cli\/scripts\/windows-ci\/check-pty-signatures\.ps1 -Version 1\.2\.3 on Windows first; nothing was promoted\./)
+    }
+    // Not set at all, and with --allow-downgrade: the same refusal.
+    const unset = spawnSync('bash', ['-c', `unset PTY_SIGNED_ZIPS; exec bash '${script}' 1.2.3`], {
+      encoding: 'utf8', env: { ...process.env, PATH: `${join(w.root, 'shim')}:${process.env.PATH}`, GCS_BUCKET: 'test-bucket' },
+    })
+    expect(unset.status).toBe(1)
+    expect(unset.stderr).toContain('is not one Windows found signed')
+    expect(w.run(['--allow-downgrade', '1.2.3'], { PTY_SIGNED_ZIPS: '' }).status).toBe(1)
+    expect(w.hasProduction()).toBe(false)
+    expect(uploads(w.calls())).toEqual([])
+    // Any order.
+    expect(w.run(['1.2.3'], { PTY_SIGNED_ZIPS: `win32-arm64=${arm64} win32-x64=${x64}` }).status).toBe(0)
+    expect(w.production()).toEqual({ pty: w.pty })
   })
 
   it('refuses a prerelease, a manifest that is not a pty manifest, and promoting a manifest into itself', () => {
