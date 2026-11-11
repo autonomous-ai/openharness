@@ -29,7 +29,7 @@ it.each([['missing', 1], ['stalled', 1], ['missing', 2], ['stalled', 2]] as cons
     if (mode === 'missing') delete files[chunks[0]!]
     else files[chunks[0]!] = "console.error('[fixture] OpenCode reader stalled'); await new Promise(() => {});\n"
     const script = buildWithLean(join(scratch, `${mode}-${major}`), bundle, files)
-    const d = daemon = await IsolatedDaemon.create({ scriptPath: script, env: { HARNESS_CONNECTIONS_PORT: '0' } })
+    const d = daemon = await IsolatedDaemon.create({ scriptPath: script })
     onTestFailed(() => console.log(d.log()))
     const binary = join(d.root, 'bin', 'opencode'), launches = join(d.root, 'launches.jsonl')
     const apiCalls = join(d.root, 'api.jsonl'), nativeModel = join(d.root, 'model.json')
