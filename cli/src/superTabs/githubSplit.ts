@@ -125,7 +125,7 @@ export async function splitTask(deps: VerdictDeps, builder: { name: string; repo
   if (read.status !== 200) throw refused(read.status)
   const issue = object(read.body), labels = labelsOf(issue.labels), mine = labelOf(name)
   const here = (one: Record<string, unknown>) => typeof one.repository_url !== 'string' || one.repository_url.toLowerCase().endsWith(`/repos/${repository}`)
-  if (!here(issue)) throw new SuperTabHostError('TASK_NOT_FOUND', `${at} was moved to another repository.`, 404)
+  if (!here(issue)) throw new SuperTabHostError('TASK_NOT_FOUND', `${at} is now in another repository: moved, or renamed while GitHub did not say its new name (try again in a few minutes).`, 404)
   if (issue.pull_request) throw new SuperTabHostError('NOT_A_TASK', `${at} is a pull request. A task is an issue.`, 409)
   if (issue.state !== 'open') throw new SuperTabHostError('TASK_CLOSED', `${at} is closed.`, 409)
   // The label whole, as a claim reads it (githubClaim.ts). New work outside a builder's own task goes to its PM.

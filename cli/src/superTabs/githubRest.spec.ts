@@ -125,6 +125,14 @@ describe('what GitHub names a repository now (currentNames)', () => {
     expect(await current('b/one')).toBe('b/one')
     expect(get).toHaveBeenCalledTimes(5)
     expect(log.mock.calls).toEqual([['[super-tab] GitHub did not say what b/one is called now: it answered 404']])
+    // A name being asked is asked once, whoever else wants it meanwhile; and only the two hundred asked last are kept.
+    const many = vi.fn<GitHubGet>(async path => ({ status: 200, etag: null, body: { full_name: path.slice('/repos/'.length) }, resetAt: null }))
+    const shared = currentNames(many, () => clock, log)
+    expect(await Promise.all([shared('d/one'), shared('d/one')])).toEqual(['d/one', 'd/one'])
+    expect(many).toHaveBeenCalledTimes(1)
+    for (let n = 0; n < 200; n++) await shared(`e/${n}`)
+    await shared('d/one')
+    expect(many).toHaveBeenCalledTimes(202)
     // By this computer's clock and log when given neither.
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {

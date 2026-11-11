@@ -151,7 +151,7 @@ describe('a task\'s claim, made by command', () => {
     expect((await refusal(t.take(42, { ...t.pip, name: 'Pip Two' })))?.code).toBe('TASK_NOT_YOURS')
     // An issue moved to another repository: GitHub answers for it where it is now, which may be no project of the agent's.
     t.repo.issues.set(43, { number: 43, state: 'open', labels: [{ name: 'builder:pip' }], repository_url: 'https://api.github.com/repos/other/place' })
-    expect(await refusal(t.take(43))).toEqual({ code: 'TASK_NOT_FOUND', message: 'acme/app#43 was moved to another repository.' })
+    expect(await refusal(t.take(43))).toEqual({ code: 'TASK_NOT_FOUND', message: 'acme/app#43 is now in another repository: moved, or renamed while GitHub did not say its new name (try again in a few minutes).' })
     expect(t.sent).toEqual([])
   })
 
