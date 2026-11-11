@@ -12,7 +12,6 @@ import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/color_palette.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
-import 'package:harness_mobile/swarm/swarm_project_tabs.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 
 import '../voice_fakes.dart';
@@ -349,7 +348,6 @@ void main() {
             home: const SwarmProjectPage(
               swarmId: tab,
               projectId: project,
-              tabs: SwarmProjectTab.homeC,
             ),
           ),
         ),
@@ -374,50 +372,11 @@ void main() {
       await tester.tap(key('swarm-project-menu'));
       await tester.pumpAndSettle();
       await capture('menu');
-      await tester.tap(key('swarm-project-menu-work'));
-      await tester.pumpAndSettle();
-      await capture('work');
-      final workList = find.descendant(
-        of: find.byType(SwarmProjectSheet),
-        matching: find.byType(CustomScrollView),
-      );
-      await tester.dragUntilVisible(
-        key('swarm-older'),
-        workList,
-        const Offset(0, -200),
-      );
-      await tester.tap(key('swarm-older'));
-      await tester.pumpAndSettle();
-      await tester.dragUntilVisible(
-        key('swarm-conversation-g-old'),
-        workList,
-        const Offset(0, -200),
-      );
-      await capture('older');
-      await tester.tap(key('swarm-team-close'));
-      await tester.pumpAndSettle();
-      await tester.tap(key('swarm-project-menu'));
-      await tester.pumpAndSettle();
       await tester.tap(key('swarm-project-menu-leaderboard'));
       await tester.pumpAndSettle();
       await capture('leaderboard');
       await tester.tap(key('swarm-leaderboard-close'));
       await tester.pumpAndSettle();
-      await tester.tap(key('swarm-project-menu'));
-      await tester.pumpAndSettle();
-      await tester.tap(key('swarm-project-menu-team'));
-      await tester.pumpAndSettle();
-      await capture('team');
-      await tester.dragUntilVisible(
-        key('swarm-team-see-all'),
-        key('swarm-project-team-list'),
-        const Offset(0, -200),
-      );
-      await tester.pumpAndSettle();
-      await capture('team-see-all');
-      await tester.drag(key('swarm-project-team-list'), const Offset(0, -1000));
-      await tester.pumpAndSettle();
-      await capture('team-agents');
       await tester.pumpWidget(const SizedBox());
       await tester.pump(const Duration(seconds: 30));
       host.dispose();
