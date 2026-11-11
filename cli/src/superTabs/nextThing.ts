@@ -6,28 +6,40 @@
  * turn", 24 Oct), their own work first: findings on their own pull requests, then rebases, then the next task
  * (docs/research/2026-11-10-swarm-study/README.md).
  *
- * This part gives the next task. When a turn of one of this computer's person's agents ends, and a few seconds on nothing
- * else has set it working (a message typed the moment it ended comes first), its project's repository is read as GitHub has
- * it now: its open tasks and pull requests labelled builder:<its name>, one read, a 304 when nothing changed. A task it took
- * (status:taken) with no pull request of its yet is its own work, and nothing is typed. Otherwise the oldest task given to it
- * and not taken is typed to it, as Harness, ending with the command that takes it, as every ask Harness types does. The same
- * task typed three times with no change goes to its person instead, once, and is not typed a fourth time; the counts outlive a
- * restart.
+ * When a turn of one of this computer's person's agents ends, and a few seconds on nothing else has set it working (a message
+ * typed the moment it ended comes first), its project's repository is read as GitHub has it now: its open tasks and pull
+ * requests labelled builder:<its name>, one read, a 304 when nothing changed. Its own work comes first, as lampOS's order has it:
+ * for each pull request of its that is not a draft, a reader's HOLD on its head, then its checks failed at its head, then its
+ * branch behind or conflicting with its base, as the merger reads them (githubMerge.ts verdicts, checksOf, mergeable_state),
+ * which the merger has said on the pull request once and GitHub news brought it, and it slept on. Then a task it took
+ * (status:taken) with no pull request of its yet, which is its own work to go on with: nothing is typed. Then the oldest task
+ * given to it and not taken. What it is typed ends with the command that answers it, as every ask Harness types does. The same
+ * thing typed three times with no change (a push changes a pull request's head) goes to its person instead, once, and is not
+ * typed a fourth time; the counts outlive a restart.
  */
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { TurnEnd } from '../core/api.js'
 import { named } from './agentReplies.js'
-import { labelNames } from './githubAssign.js'
+import { readerKey } from './assign/crew.js'
+import { backLine, giveBack, labelNames } from './githubAssign.js'
 import type { WatchedAgent } from './githubMentions.js'
-import { GitHubReads, GitHubStop, type GitHubGet } from './githubRest.js'
+import { checksOf, pullPeople, pullTalk, verdicts } from './githubMerge.js'
+import { GitHubReads, GitHubStop, type GitHubGet, type GitHubSend } from './githubRest.js'
+import { hhmm } from './githubVerdict.js'
 import { identifier, object } from './wire.js'
 
 /** How long after a turn ends its agent is looked at: what was queued for it is typed the moment it ends, and comes first. */
 export const NEXT_SETTLE_MS = 3_000
 /** How many times the same next thing is typed with no change before it goes to the agent's person instead. */
 export const NEXT_TIMES = 3
+/** How long an agent may sit idle holding a task it took, with no pull request yet, before it is asked once; and before its person
+ *  is told and the task goes back for another builder (Swarm plan, step 1, item 1: "An agent with work that is idle 20 minutes is
+ *  asked once; at an hour its person is told and its work is free to take"). The assigner's own watch, by GitHub's quiet alone,
+ *  asks at 4 hours and moves at 8 (githubAssign.ts): it cannot see a session, and one that works for hours pushes nothing. */
+export const IDLE_ASK_MS = 20 * 60_000
+export const IDLE_BACK_MS = 60 * 60_000
 /** The most agents whose counts are kept; the least recent go first. */
 const MAX_KEPT = 1_000
 
@@ -37,9 +49,14 @@ interface Kept { key: string; times: number; told: boolean }
 export class NextThing {
   private stopEnds: (() => void) | null = null
   private readonly timers = new Map<string, NodeJS.Timeout>()
+  /** Each terminal idle with a task of its own in hand, by its id: the next look at it, and what it holds. */
+  private readonly idle = new Map<string, { timer: NodeJS.Timeout; agent: WatchedAgent; repo: string; task: Record<string, unknown> }>()
   private readonly looking = new Set<string>()
   private readonly reads: GitHubReads
   private memory: Record<string, Kept> | null = null
+  /** The asks to read found made, gone or moved on (`agent:repo#N@sha`), so they are not read again while they are owed: each
+   *  goes once GitHub news no longer keeps its ask, so it holds no more than those do. */
+  private readonly answered = new Set<string>()
   private readonly log: (line: string) => void
 
   constructor(private readonly deps: {
@@ -47,9 +64,13 @@ export class NextThing {
     onEnd: (listener: (end: TurnEnd) => void) => () => void
     /** This computer's person's v4 agents running here, with their builder labels and their projects' repositories. */
     watched: () => Promise<WatchedAgent[]>
+    /** The reads [agent] was asked for in [repo] (githubMentions.ts keeps Harness's asks), the newest last. */
+    owed: (agent: WatchedAgent, repo: string) => Array<{ number: number; sha: string }>
     /** Whether a terminal's turn runs; null when it cannot be said. */
     working: (harnessId: string) => Promise<boolean | null>
     get: GitHubGet
+    /** Writes to GitHub with this person's gh: a task given back. */
+    send: GitHubSend
     /** Types [text] into [agent], as Harness (an agent-only message in its chat, typed as GitHub news is). */
     tell: (agent: WatchedAgent, operationId: string, text: string) => Promise<unknown>
     /** Says [text] to [agent]'s person, in its chat. */
@@ -71,12 +92,21 @@ export class NextThing {
     this.stopEnds = null
     for (const timer of this.timers.values()) clearTimeout(timer)
     this.timers.clear()
+    for (const watched of this.idle.values()) clearTimeout(watched.timer)
+    this.idle.clear()
   }
 
   /** A turn ended: its agent is looked at once the turns close together have settled. One its person stopped is left: they are
    *  at its terminal. */
   private ended(end: TurnEnd): void {
-    if (end.aborted) return
+    // A turn of its, its person's or its own, is no idle time. One its person stopped starts its idle time over, as the look its
+    // other turns get is not made: they are at its terminal.
+    const watched = this.idle.get(end.agentId)
+    this.unwatch(end.agentId)
+    if (end.aborted) {
+      if (watched) this.watch(watched.agent, watched.repo, watched.task, Date.now(), false)
+      return
+    }
     clearTimeout(this.timers.get(end.agentId))
     const timer = setTimeout(() => {
       this.timers.delete(end.agentId)
@@ -102,19 +132,136 @@ export class NextThing {
   }
 
   private async next(agent: WatchedAgent): Promise<void> {
+    const name = agent.names[0]!
     for (const repo of agent.repos) {
       const items = await this.reads.current(repo, `/repos/${repo}/issues?state=open&labels=${encodeURIComponent(agent.label)}&per_page=100`, 1)
       const tasks = items.filter(it => !it.pull_request && Number.isSafeInteger(it.number))
-      const pulls = items.filter(it => it.pull_request)
-      // A task it took with no pull request of its yet is its own work to go on with.
-      if (tasks.filter(task => labelNames(task).includes('status:taken')).length > pulls.length) return
+      const pulls = items.filter(it => it.pull_request && Number.isSafeInteger(it.number)).sort((a, b) => Number(a.number) - Number(b.number))
+      for (const pull of pulls) {
+        const work = await this.ownWork(repo, Number(pull.number))
+        if (work) return this.give(agent, `${repo}#${pull.number} ${work.kind} ${work.head}`, work.typed,
+          `told ${name} that its ${repo}#${pull.number} ${work.what}`)
+      }
+      // A read it was asked for and has not made, before its next task as the plan's order has it (no pull request waits 30
+      // minutes for a first read): typed even while it holds a task of its own, as a read is short.
+      const asks = this.deps.owed(agent, repo)
+      const owed = new Set(asks.map(ask => this.askKey(agent, repo, ask)))
+      for (const key of this.answered) if (key.startsWith(`${agent.agentId}:${repo}#`) && !owed.has(key)) this.answered.delete(key)
+      for (const ask of asks) {
+        const short = await this.owedRead(agent, repo, ask)
+        if (short) {
+          return this.give(agent, `${repo}#${ask.number} read ${short}`, `Read ${repo}#${ask.number} at ${short}, as Harness asked you: `
+            + `harness super-tab read ok ${repo}#${ask.number} ${short} 'what you found' (or read hold, with the file, line and fix)`,
+          `asked ${name} to read ${repo}#${ask.number} at ${short}`)
+        }
+      }
+      // A task it took with no pull request of its yet is its own work to go on with: watched while it sits idle with it.
+      const taken = tasks.filter(task => labelNames(task).includes('status:taken')).sort((a, b) => Number(a.number) - Number(b.number))
+      if (taken.length > pulls.length) return this.watch(agent, repo, taken[0]!, Date.now(), false)
       const next = tasks.filter(task => !labelNames(task).includes('status:taken')).sort((a, b) => Number(a.number) - Number(b.number))[0]
-      if (next) return this.give(agent, `${repo}#${next.number}`, String(next.title ?? '').trim())
+      if (!next) continue
+      const key = `${repo}#${next.number}`, title = String(next.title ?? '').trim()
+      return this.give(agent, key, `Next: ${title ? `${key} ${title}` : key}. It is given to you and nobody has taken it: harness super-tab take ${key}`,
+        `gave ${name} ${title ? `${key} (${title})` : key} as its next task`)
     }
   }
 
-  /** Types [key] to [agent], or says it to its person once it was typed [NEXT_TIMES] times with no change. */
-  private async give(agent: WatchedAgent, key: string, title: string): Promise<void> {
+  /** What stands in the way of [number], a pull request of the agent's, that it fixes itself, the first of: a reader's HOLD on its
+   *  head (one on an earlier head waits for its reader to read the push), its checks failed at its head, its branch behind or
+   *  conflicting with its base. Null for a draft, which is work going on, and for one with none of them, or none known yet. */
+  private async ownWork(repo: string, number: number): Promise<{ kind: string; head: string; typed: string; what: string } | null> {
+    const pull = await this.reads.one(repo, `/repos/${repo}/pulls/${number}`)
+    const head = String(object(pull.head).sha ?? ''), short = head.slice(0, 7), base = String(object(pull.base).ref ?? '')
+    if (pull.draft === true || !head || !base) return null
+    const { readers } = verdicts(await pullTalk(this.reads, repo, number), String(pull.body ?? ''), pullPeople(pull, new Set()))
+    const hold = [...readers.values()].find(reader => reader.verdict === 'HOLD' && head.startsWith(reader.sha))
+    if (hold) {
+      return { kind: 'hold', head: short, what: `has a HOLD from ${hold.name} at ${short}`,
+        typed: `Your ${repo}#${number} has a HOLD from ${hold.name} at ${short}: fix what it asks and push, and it is read again. Read it: gh pr view ${number} --repo ${repo} --comments` }
+    }
+    const runs = (await this.reads.one(repo, `/repos/${repo}/commits/${head}/check-runs?per_page=100`)).check_runs
+    const checks = checksOf(Array.isArray(runs) ? runs.map(object) : [], await this.reads.one(repo, `/repos/${repo}/commits/${head}/status`))
+    if (checks.state === 'failed') {
+      return { kind: 'checks', head: short, what: `failed its checks at ${short}`,
+        typed: `Your ${repo}#${number} failed its checks at ${short}: ${checks.failed.slice(0, 3).join(', ')}. Fix them and push: gh pr checks ${number} --repo ${repo}` }
+    }
+    const state = String(pull.mergeable_state ?? '')
+    if (state === 'behind') {
+      return { kind: 'behind', head: short, what: `is behind ${base}`,
+        typed: `Your ${repo}#${number} is behind ${base}: merge ${base} into it and push: git fetch origin ${base} && git merge origin/${base} && git push` }
+    }
+    if (state === 'dirty') {
+      return { kind: 'dirty', head: short, what: `conflicts with ${base}`,
+        typed: `Your ${repo}#${number} conflicts with ${base}: merge ${base} into it, fix the conflicts and push: git fetch origin ${base} && git merge origin/${base}` }
+    }
+    return null
+  }
+
+  /** Looks again at [agent], idle since [since] with [task] of its own in hand: at [IDLE_ASK_MS] it is asked once, and at
+   *  [IDLE_BACK_MS] (once [asked]) its person is told and the task goes back for another builder. Any turn of its ends this. */
+  private watch(agent: WatchedAgent, repo: string, task: Record<string, unknown>, since: number, asked: boolean): void {
+    this.unwatch(agent.harnessId)
+    const timer = setTimeout(() => {
+      this.idle.delete(agent.harnessId)
+      void this.idleWith(agent, repo, Number(task.number), String(task.title ?? '').trim(), since, asked)
+    }, asked ? IDLE_BACK_MS - IDLE_ASK_MS : IDLE_ASK_MS)
+    timer.unref()
+    this.idle.set(agent.harnessId, { timer, agent, repo, task })
+  }
+
+  private unwatch(harnessId: string): void {
+    clearTimeout(this.idle.get(harnessId)?.timer)
+    this.idle.delete(harnessId)
+  }
+
+  private async idleWith(agent: WatchedAgent, repo: string, number: number, title: string, since: number, asked: boolean): Promise<void> {
+    const key = `${repo}#${number}`, what = title ? `${key} (${title})` : key, name = agent.names[0]!
+    try {
+      // Working, or nobody can say: its turn's end looks again.
+      if (await this.deps.working(agent.harnessId) !== false) return
+      // Still its own, taken, with no pull request of its yet.
+      const items = await this.reads.current(repo, `/repos/${repo}/issues?state=open&labels=${encodeURIComponent(agent.label)}&per_page=100`, 1)
+      const tasks = items.filter(it => !it.pull_request), held = tasks.filter(it => labelNames(it).includes('status:taken'))
+      if (!held.some(it => Number(it.number) === number) || held.length <= items.length - tasks.length) return
+      if (!asked) {
+        await this.deps.tell(agent, this.operation(agent, key, `idle ${since}`), `You hold ${what} and have done nothing on it for 20 minutes: `
+          + `go on with it, or say on it what holds it: gh issue view ${number} --repo ${repo}`)
+        return this.watch(agent, repo, { number, title }, since, true)
+      }
+      const given = await giveBack(this.deps.send, repo, number, agent.label, true)
+      if ('refused' in given) return this.log(`[super-tab] next thing of agent ${agent.agentId}: ${key} not given back: GitHub answered ${given.refused}.`)
+      if (given.takenKept !== null) this.log(`[super-tab] next thing of agent ${agent.agentId}: ${key} kept status:taken: GitHub answered ${given.takenKept}.`)
+      await this.deps.send('POST', `/repos/${repo}/issues/${number}/comments`, { body: backLine(`${name} held it with nothing done for an hour`, hhmm(Date.now())) })
+      await this.deps.say(agent, this.operation(agent, key, `back ${since}`), `${name} held ${what} with nothing done on it for an hour, so Harness `
+        + 'gave it back for the builder who can start it next.')
+    } catch (error) {
+      this.log(`[super-tab] next thing of agent ${agent.agentId}: ${error instanceof GitHubStop ? error.code : named(error)}.`)
+    }
+  }
+
+  /** The head [ask] still waits on [agent]'s read of, short, or null when it does not: the pull request is gone, its head moved on
+   *  (Harness asks again on the new one), or the agent's verdict is on its head. One found so is not read again. */
+  private async owedRead(agent: WatchedAgent, repo: string, ask: { number: number; sha: string }): Promise<string | null> {
+    const key = this.askKey(agent, repo, ask)
+    if (this.answered.has(key)) return null
+    const pull = await this.reads.one(repo, `/repos/${repo}/pulls/${ask.number}`)
+    const head = String(object(pull.head).sha ?? '')
+    if (pull.state === 'open' && head.startsWith(ask.sha)) {
+      const { readers } = verdicts(await pullTalk(this.reads, repo, ask.number), String(pull.body ?? ''), pullPeople(pull, new Set()))
+      const read = agent.names.some(name => head.startsWith(readers.get(readerKey(name))?.sha ?? '\n'))
+      if (!read) return head.slice(0, 7)
+    }
+    this.answered.add(key)
+    return null
+  }
+
+  private askKey(agent: WatchedAgent, repo: string, ask: { number: number; sha: string }): string {
+    return `${agent.agentId}:${repo}#${ask.number}@${ask.sha}`
+  }
+
+  /** Types [typed] to [agent] for [key], or, once that was typed [NEXT_TIMES] times with no change, says to its person, once, what
+   *  Harness [did] that many times. */
+  private async give(agent: WatchedAgent, key: string, typed: string, did: string): Promise<void> {
     const memory = this.memory ??= this.load()
     let kept = memory[agent.agentId]
     if (kept?.key !== key) kept = { key, times: 0, told: false }
@@ -123,12 +270,11 @@ export class NextThing {
     if (kept.times >= NEXT_TIMES) {
       if (kept.told) return
       const name = agent.names[0]!
-      await this.deps.say(agent, this.operation(agent, key, 'told'), `Harness gave ${name} ${title ? `${key} (${title})` : key} as its next task ${NEXT_TIMES} `
-        + `times as its turns ended, and it has not taken it. Harness stops giving it: tell ${name} what to do.`)
+      await this.deps.say(agent, this.operation(agent, key, 'told'), `Harness ${did} ${NEXT_TIMES} times as its turns ended, and nothing `
+        + `changed. Harness stops: tell ${name} what to do.`)
       kept.told = true
     } else {
-      await this.deps.tell(agent, this.operation(agent, key, String(kept.times)),
-        `Next: ${title ? `${key} ${title}` : key}. It is given to you and nobody has taken it: harness super-tab take ${key}`)
+      await this.deps.tell(agent, this.operation(agent, key, String(kept.times)), typed)
       kept.times++
     }
     this.save(memory)

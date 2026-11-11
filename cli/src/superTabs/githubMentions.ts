@@ -18,7 +18,7 @@
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { worksOnOf } from './assign/crew.js'
+import { ASKED, readerKey, worksOnOf } from './assign/crew.js'
 import { GitHubReads, GitHubStop, PAGE, Waits, waitWords, type GitHubGet } from './githubRest.js'
 import { permanentRefusal } from './retries.js'
 import { identifier, object, SuperTabHostError } from './wire.js'
@@ -30,7 +30,7 @@ export const MENTIONS_INTERVAL_MS = 20_000
 export const TEAM: ReadonlySet<unknown> = new Set(['OWNER', 'MEMBER', 'COLLABORATOR'])
 /** Bounds on one pass and on what is kept: a Swarm reads at most this many repositories here, and a burst beyond a page
  *  count is read next pass. */
-const MAX_REPOS = 20, MAX_REVIEWED = 10, MAX_RELAYS = 50, MAX_SEEN = 2_000, MAX_OWNED = 1_000, MAX_ASKED = 200, MAX_HELD = 200
+const MAX_REPOS = 20, MAX_REVIEWED = 10, MAX_RELAYS = 50, MAX_SEEN = 2_000, MAX_OWNED = 1_000, MAX_ASKED = 200, MAX_HELD = 200, MAX_ASKS = 10
 const TEXT_MAX = 4_000, TITLE_MAX = 300
 /** Who the agents here are and what they read, asked again at most this often: each ask reads every agent's Swarm. */
 const AGENTS_FRESH_MS = 60_000
@@ -59,6 +59,9 @@ interface Review extends Said { id: number; lines: Said[] }
 /** What is kept of a repository between passes and restarts: where each feed was read to, what was already handed on, each
  *  agent's tasks already known, and which issues and pull requests carry which builder label. */
 interface RepoMemory { comments: string; reviewComments: string; issues: string; seen: string[]; tasks: Record<string, number[]>
+  /** Each agent's asks to read made by Harness (githubAssign.ts ask), the newest last: the pull request and the head it was asked
+   *  to read, which its next thing types it until it reads (nextThing.ts). */
+  asks?: Record<string, Array<{ number: number; sha: string }>>
   owned: Record<string, string[]>; usedAt: number
   /** The agents already asked what they work on here (askFocus). */
   asked?: string[]
@@ -306,6 +309,7 @@ export class GitHubMentions {
       if (kept.seen.includes(item.key) || !TEAM.has(item.association) || !Number.isSafeInteger(item.number)) continue
       if ((item.event === 'comment' && item.createdAt < kept.comments) || (item.event === 'review-comment' && item.createdAt < kept.reviewComments)) continue
       const owners = kept.owned[String(item.number)] ?? []
+      if (item.event === 'comment') this.noteAsk(kept, agents, item)
       let refusal: SuperTabHostError | null = null
       for (const agent of agents) {
         const relay = 'lines' in item ? reviewFor(item as Review, agent, owners.includes(agent.label)) : sayingFor(item, agent, owners.includes(agent.label))
@@ -323,6 +327,25 @@ export class GitHubMentions {
     if (changed.length) kept.issues = newest(changed, issuesFrom)
     if (comments.length) kept.comments = newest(comments, kept.comments)
     if (lineComments.length) kept.reviewComments = newest(lineComments, kept.reviewComments)
+  }
+
+  /** An ask to read by Harness that [item] is (githubAssign.ts ask: "Harness, 14:20, to **Juno**: please read ..."): kept as owed
+   *  by each agent it names, the newest last and at most [MAX_ASKS] each. An ask of one pull request again replaces the one before. */
+  private noteAsk(kept: RepoMemory, agents: WatchedAgent[], item: Said): void {
+    const ask = ASKED.exec(item.text.slice(0, 500))
+    if (!ask) return
+    for (const agent of agents.filter(watched => watched.names.some(name => readerKey(name) === readerKey(ask[1]!)))) {
+      const asks = (kept.asks ??= {})[agent.agentId] ??= []
+      const before = asks.findIndex(owed => owed.number === item.number)
+      if (before >= 0) asks.splice(before, 1)
+      asks.push({ number: item.number, sha: ask[2]! })
+      if (asks.length > MAX_ASKS) asks.splice(0, asks.length - MAX_ASKS)
+    }
+  }
+
+  /** The reads [agentId] was asked for in [repo], the newest last, as the last pass kept them. */
+  owed(agentId: string, repo: string): Array<{ number: number; sha: string }> {
+    return [...this.load().repos[repo]?.asks?.[agentId] ?? []]
   }
 
   /**

@@ -116,7 +116,7 @@ export interface SuperTabServiceOptions {
   githubTokens?: (core: CoreApi) => Pick<GitHubTokenRefresher, 'start' | 'stop'> & Partial<Pick<GitHubTokenRefresher, 'assigned'>>
 
   /** What reads GitHub for this computer's person's v4 agents (superTabs/githubMentions.ts), for a spec. */
-  githubMentions?: (core: CoreApi, sources: () => SwarmSources) => Pick<GitHubMentions, 'start' | 'stop'>
+  githubMentions?: (core: CoreApi, sources: () => SwarmSources) => Pick<GitHubMentions, 'start' | 'stop' | 'owed'>
   /** What merges by rule the pull requests of the projects whose PM runs here (superTabs/githubMerge.ts), for a spec. */
   githubMerge?: (core: CoreApi, sources: () => SwarmSources) => Pick<GitHubMerge, 'start' | 'stop'>
   /** What gives the tasks of the projects whose PM runs here to their builders (superTabs/githubAssign.ts), for a spec. */
@@ -229,8 +229,10 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     onEnd: listener => api.turns.onEnd(listener),
     watched: async () => watchedAgents({ me: (await api.account.identity().catch(() => null))?.accountId ?? null, live: id => !!api.agents.byAgent(id),
       roster: async () => (await held().feed.current(60_000)).roster, read: async (tabId, agentId) => (await held().reads.read(tabId, agentId)).state }),
+    // The asks to read GitHub news keeps for each agent as it hands on what GitHub says (githubMentions.ts).
+    owed: (agent, repo) => mentions.owed(agent.agentId, repo),
     working: async id => { const now = (await api.agents.activity([id]))[id]; return now === 'working' ? true : now === 'idle' ? false : null },
-    get: github.get,
+    get: github.get, send: github.send,
     tell: (agent, operationId, text) => backend(api, 'POST', `/api/super-tabs/${agent.tabId}/commands`, { operationId, asAgentId: agent.agentId,
       command: { type: 'message.send', conversationId: agent.chat, replyTo: null, recipientIds: [agent.agentId], text, agentOnly: true } }),
     // In its chat, for its person to read and not typed to it: as the host posts an agent's first answer (firstAnswers.ts).
