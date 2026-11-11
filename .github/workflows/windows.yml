@@ -322,6 +322,8 @@ jobs:
           # scheduled task starts, and in this step's environment for the one `harness start` starts below.
           [Environment]::SetEnvironmentVariable('ADAPTER_UPDATE_DISABLE', 'true', 'User')
           $env:ADAPTER_UPDATE_DISABLE = 'true'
+          # This build is signed only by a release (release.yml pty-sign): installed unsigned, as only a test may.
+          $env:HARNESS_ALLOW_UNSIGNED = '1'
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File cli\scripts\install.ps1 -Manifest "$env:RUNNER_TEMP\manifest\install-manifest.json"
           if ($LASTEXITCODE -ne 0) { throw "install.ps1 exited $LASTEXITCODE" }
           # install.ps1 does not start the daemon itself: a task Task Scheduler would not run leaves it down, and the
