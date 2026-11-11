@@ -312,6 +312,23 @@ describe('a session\'s one chat', () => {
   })
 })
 
+// PS-D (2026-11-11): Desktop asks for a repo's project by one request on every computer of its person's; a deleted one came back
+// once its receipt was gone (30 days). The Swarm remembers it.
+describe('a deleted project\'s request', () => {
+  it('makes nothing again, before its receipt goes and after', async () => {
+    const { tab } = await fixture()
+    const op = `personal-repo-${randomUUID()}`
+    const create = () => run(tab, { type: 'project.create', name: 'openharness', visibility: 'private', brief: '' }, owner, undefined, op)
+    const projectId = String((await create()).result.projectId)
+    await run(tab, { type: 'project.delete', projectId })
+    await expect(create()).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    // Its receipt expires (operations.ts, 30 days).
+    expect((await db.superTabOperation.deleteMany({ where: { tabId: tab, result: { equals: { projectId, conversationId: `project-${projectId}` } } } })).count).toBe(1)
+    await expect(create()).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    expect((await store.read(owner, tab)).state.projects!.some(p => p.id === projectId)).toBe(false)
+  })
+})
+
 describe('person removal notices', () => {
   it('records one Lead notice per group and replays removal without another notice or delivery', async () => {
     const { tab, lead } = await fixture()

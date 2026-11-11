@@ -1122,6 +1122,7 @@ export class SuperTabStore {
             readConversation(original, actor, delivery.conversationId)
           }
         }
+        // For projects deleted before deletedProjects (commands.ts project.create): goes on or after 2026-12-12, once their receipts are gone.
         if (command.type === 'project.create' &&
             !projectsOf(original).some(p => p.id === (prior.result as Record<string, unknown>).projectId)) {
           fail('NOT_FOUND', 'This project was deleted. Create a new project.', 404)
