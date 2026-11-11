@@ -2,7 +2,7 @@
 // engines answering on loopback, and the memory the OS reports right now. Nothing here starts, stops,
 // moves or downloads anything; every probe is a file read, a GET, or a read-only system command.
 import { execFile } from 'node:child_process';
-import { open, readdir, readFile, realpath, stat } from 'node:fs/promises';
+import { open, readdir, readFile, readlink, realpath, stat } from 'node:fs/promises';
 import { arch, cpus, freemem, homedir, platform, totalmem } from 'node:os';
 import { basename, dirname, join, relative, sep } from 'node:path';
 import { promisify } from 'node:util';
@@ -283,45 +283,122 @@ export async function scanModels({ roots = defaultRoots(), minBytes = 50 * 1024 
   return { models: models.sort((a, b) => b.bytes - a.bytes), scannedRoots: scanned };
 }
 
-export function parseListeningPorts(lsofOutput) {
-  const ports = new Set();
-  for (const line of lsofOutput.split('\n')) if (line.startsWith('n')) {
-    const port = Number(line.slice(line.lastIndexOf(':') + 1));
-    if (Number.isInteger(port) && port > 0) ports.add(port);
+/**
+ * The programs an engine runs as, by the name each platform gives its process: lsof's command on macOS,
+ * /proc/PID/stat on Linux, tasklist's image without `.exe` on Windows. Ollama's server is `ollama`, llama.cpp's
+ * `llama-server`, LM Studio's its app (`lm-studio` on Linux) or its headless `llmster`. vLLM, SGLang and mlx-lm
+ * are Python: their console scripts carry their own name on Linux only, and on a Mac read as `Python`, so they are
+ * found on their known ports or through the process group `fleet serve` recorded.
+ */
+const ENGINE_PROCESSES = new Set(['ollama', 'llama-server', 'lm studio', 'lm-studio', 'llmster', 'vllm', 'sglang', 'mlx_lm.server']);
+const processName = name => String(name ?? '').toLowerCase().replace(/\.exe$/, '');
+
+/**
+ * `lsof -Fpgcn` listeners: `p` pid, `g` process group, `c` command, then one `n` address per socket. lsof
+ * lists only the person's own processes unless it runs as root.
+ */
+export function parseLsof(text) {
+  const listeners = [];
+  let owner = {};
+  for (const line of text.split('\n')) {
+    const field = line[0], value = line.slice(1);
+    if (field === 'p') owner = { pid: Number(value), group: null, command: null };
+    else if (field === 'g') owner.group = Number(value);
+    else if (field === 'c') owner.command = value;
+    else if (field === 'n') {
+      const port = Number(value.slice(value.lastIndexOf(':') + 1));
+      if (Number.isInteger(port) && port > 0) listeners.push({ port, ...owner });
+    }
   }
-  return [...ports].sort((a, b) => a - b);
+  return listeners;
 }
 
 /**
- * Linux listening TCP ports from `/proc/net/tcp` and `/proc/net/tcp6` (state `0A`, port in hex after the
- * last colon). A file read, so it works where `lsof` is missing — slim containers and many servers [run].
+ * Linux listening TCP sockets from `/proc/net/tcp` and `/proc/net/tcp6` (state `0A`, port in hex after the
+ * last colon, socket inode in column 10). A file read, so it works where `lsof` is missing — slim containers
+ * and many servers [run].
  */
 export function parseProcNetTcp(text) {
-  const ports = new Set();
+  const listeners = [];
   for (const line of text.split('\n')) {
     const cols = line.trim().split(/\s+/);
     if (cols[3] !== '0A') continue;
     const port = parseInt(cols[1]?.slice(cols[1].lastIndexOf(':') + 1) ?? '', 16);
-    if (Number.isInteger(port) && port > 0) ports.add(port);
+    if (Number.isInteger(port) && port > 0) listeners.push({ port, inode: cols[9] });
   }
-  return [...ports].sort((a, b) => a - b);
+  return listeners;
+}
+
+/** `/proc/PID/stat`: the command between the parentheses (it may hold spaces and parentheses), then the group. */
+export function parseProcStat(text) {
+  const close = text.lastIndexOf(')');
+  if (close < 0) return null;
+  return { command: text.slice(text.indexOf('(') + 1, close), group: Number(text.slice(close + 2).split(' ')[2]) };
 }
 
 /** Windows `netstat -ano` lines such as `  TCP    [::]:11434   [::]:0   LISTENING   4812`. */
 export function parseNetstatListening(text) {
-  const ports = new Set();
-  for (const [, port] of text.matchAll(/^\s*TCP\s+\S*:(\d+)\s+\S+\s+LISTENING\b/gim)) ports.add(Number(port));
-  return [...ports].sort((a, b) => a - b);
+  return [...text.matchAll(/^\s*TCP\s+\S*:(\d+)\s+\S+\s+LISTENING\s+(\d+)/gim)]
+    .map(([, port, pid]) => ({ port: Number(port), pid: Number(pid) }));
 }
 
-async function listeningPorts(os) {
+/** `tasklist /FO CSV /NH` rows such as `"ollama.exe","4812","Console","1","10,240 K"`: pid to image name. */
+export function parseTasklist(text) {
+  const names = new Map();
+  for (const [, image, pid] of text.matchAll(/^"([^"]*)","(\d+)"/gm)) names.set(Number(pid), image);
+  return names;
+}
+
+const batches = async (items, work) => { for (let i = 0; i < items.length; i += 64) await Promise.all(items.slice(i, i + 64).map(work)); };
+
+/**
+ * Linux: who holds each listening socket, for the processes that could be an engine — an engine's name, or the
+ * group `fleet serve` recorded. Only their open files are read, and only the person's own can be.
+ */
+async function procOwners(listeners, served) {
+  if (!listeners.length) return listeners;
+  const byInode = new Map(listeners.map(listener => [listener.inode, listener]));
+  const pids = (await readdir('/proc').catch(() => [])).filter(name => /^\d+$/.test(name)).map(Number);
+  const candidates = [];
+  await batches(pids, async pid => {
+    const stat = parseProcStat(await readFile(`/proc/${pid}/stat`, 'utf8').catch(() => ''));
+    if (stat && isEngineListener({ pid, ...stat }, served)) candidates.push({ pid, ...stat });
+  });
+  for (const owner of candidates) {
+    await batches(await readdir(`/proc/${owner.pid}/fd`).catch(() => []), async fd => {
+      const inode = (await readlink(`/proc/${owner.pid}/fd/${fd}`).catch(() => '')).match(/^socket:\[(\d+)\]$/)?.[1];
+      if (inode && byInode.has(inode)) Object.assign(byInode.get(inode), owner);
+    });
+  }
+  return listeners;
+}
+
+/** Every listening TCP socket here, with the process holding it where the platform names it. */
+async function listeners(os, served) {
   if (os === 'linux') {
     const tables = await Promise.all(['/proc/net/tcp', '/proc/net/tcp6'].map(file => readFile(file, 'utf8').catch(() => '')));
-    return parseProcNetTcp(tables.join('\n'));
+    return procOwners(parseProcNetTcp(tables.join('\n')), served);
   }
-  if (os === 'win32') return parseNetstatListening(await output('netstat', ['-ano']));
-  return parseListeningPorts(await output('lsof', ['-nP', '-iTCP', '-sTCP:LISTEN', '-Fn']));
+  if (os === 'win32') {
+    const [sockets, names] = await Promise.all([output('netstat', ['-ano']), output('tasklist', ['/FO', 'CSV', '/NH'])]);
+    const images = parseTasklist(names);
+    return parseNetstatListening(sockets).map(listener => ({ ...listener, command: images.get(listener.pid) ?? null }));
+  }
+  return parseLsof(await output('lsof', ['-nP', '-iTCP', '-sTCP:LISTEN', '-Fpgcn']));
 }
+
+/**
+ * A port to ask for a model list: one an engine's program holds, or a program `fleet serve` started. Anything
+ * else — a dev server, a debugger, Flutter's test runner, which fails its whole file when a stranger connects
+ * first [run] — is never sent a request. A served engine leads its own process group, so the group is matched,
+ * not the PID: a PID the system gave to another program after the engine died leads no group of that number.
+ * Windows has no groups, and there the PID is all there is.
+ */
+export function isEngineListener(listener, served = new Set()) {
+  return ENGINE_PROCESSES.has(processName(listener.command)) || served.has(listener.group ?? listener.pid);
+}
+
+const sortedPorts = list => [...new Set(list.map(listener => listener.port))].sort((a, b) => a - b);
 
 function engineKind(body, ownedBy) {
   if (Array.isArray(body.models) && body.data) return 'llama.cpp';
@@ -504,8 +581,8 @@ export function runnableEngines(os, cpu, gpus) {
   return ['llama.cpp', 'ollama'];
 }
 
-export async function machineState({ env = process.env, home = homedir() } = {}) {
-  const machine = { platform: platform(), arch: arch(), chip: null, memory: null, accelerators: [], engines: [], canRun: [], listeningPorts: [] };
+export async function machineState({ env = process.env, home = homedir(), served = [] } = {}) {
+  const machine = { platform: platform(), arch: arch(), chip: null, memory: null, accelerators: [], engines: [], canRun: [], listeningPorts: [], enginePorts: [] };
   machine.chip = (machine.platform === 'darwin'
     ? (await output('sysctl', ['-n', 'machdep.cpu.brand_string'])).trim()
     : (await readFile('/proc/cpuinfo', 'utf8').catch(() => '')).match(/^model name\s*:\s*(.+)$/m)?.[1])
@@ -531,7 +608,10 @@ export async function machineState({ env = process.env, home = homedir() } = {})
     machine.accelerators.push({ vendor: 'apple', name: machine.chip, active: true, source: 'Apple silicon GPU (built in; budget unknown until llama.cpp is installed)' });
   }
   machine.canRun = runnableEngines(machine.platform, machine.arch, machine.accelerators);
-  machine.listeningPorts = await listeningPorts(machine.platform);
+  const servedPids = new Set(served);
+  const sockets = await listeners(machine.platform, servedPids);
+  machine.listeningPorts = sortedPorts(sockets);
+  machine.enginePorts = sortedPorts(sockets.filter(listener => isEngineListener(listener, servedPids)));
   return machine;
 }
 
@@ -595,7 +675,7 @@ export function summarize({ machine, engines, models, joined = [] }, contextToke
     `gpu       ${gpus.join(' · ') || 'none'}`,
     `installed ${machine.engines.map(e => `${e.kind}${e.version ? ` ${e.version}` : ''}${e.note ? ` (${e.note})` : ''}`).join(' · ') || 'none'}`,
     `can run   ${machine.canRun.join(', ')}`,
-    `answering ${engines.map(e => `${e.kind} ${e.url} [${e.models.slice(0, 3).join(', ')}]`).join(' · ') || 'none'}`,
+    `answering ${engines.map(e => `${e.kind} ${e.url} [${e.models.slice(0, 3).join(', ')}]`).join(' · ') || 'none'} (asked: engines' known ports and ports an engine holds; another port: --port P)`,
     `joined    ${joined.map(j => `${j.grid ?? j.gridId} serving [${j.models.join(', ')}]${j.at ? ` at ${j.at}` : ''}`).join(' · ') || 'none'}${joined.length ? ' — a join to that grid adds to what it serves (Grid 0.3.53+)' : ''}`,
     `ports in use ${machine.listeningPorts.join(' ')}`,
     '',
@@ -630,10 +710,11 @@ export function summarize({ machine, engines, models, joined = [] }, contextToke
 const startLabel = start => (start ? `${start.label}${start.running === undefined ? '' : start.running ? ' (running)' : ' (start it)'}` : '—');
 
 /** The whole picture for one start decision: memory now, engines answering, and models on disk. */
-export async function inventory({ extraRoots = [], extraPorts = [], env = process.env, home = homedir() } = {}) {
-  const machine = await machineState({ env, home });
+export async function inventory({ extraRoots = [], extraPorts = [], served = [], env = process.env, home = homedir() } = {}) {
+  const machine = await machineState({ env, home, served });
   const roots = [...defaultRoots(env, home), ...extraRoots.map(path => ({ source: 'folder', path }))];
-  const ports = [...KNOWN_PORTS, ...machine.listeningPorts.filter(port => port >= 1024), ...extraPorts];
+  // Engines only: their known ports, the ports asked for, and ports an engine holds (machineState).
+  const ports = [...KNOWN_PORTS, ...machine.enginePorts, ...extraPorts];
   const [engines, disk, joined] = await Promise.all([probeEngines(ports), scanModels({ roots }), joinedGrids(env.GRID_HOME || join(home, '.grid'))]);
   if (joined.length) {
     // Run files carry the grid id; the name the agent uses comes from the CLI's own list.
