@@ -22,7 +22,7 @@ import { ShippingReporter } from './shipping.js'
 import { githubRest, type GitHubGet, type GitHubSend } from './githubRest.js'
 import { postVerdict, verdictAsked } from './githubVerdict.js'
 import { GitHubAssign } from './githubAssign.js'
-import { GitHubMerge, ledProjects, type LedProject } from './githubMerge.js'
+import { GitHubMerge, ledProjects, recordedAuthors, type LedProject } from './githubMerge.js'
 import { crewOf } from './assign/crew.js'
 
 import { peopleNamed } from './personName.js'
@@ -189,7 +189,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   const crewOfProject = (held: () => SwarmSources) => async (project: LedProject) =>
     crewOf((await held().reads.read(project.tabId, project.pmAgentId)).state, project)
   const merges = (options.githubMerge ?? ((api, held) => new GitHubMerge({ projects: led(api, held), crew: crewOfProject(held), get: github.get,
-    send: github.send })))(core, sources)
+    send: github.send, authors: recordedAuthors(path => backend(api, 'GET', path)) })))(core, sources)
   // Gives their tasks to their builders (githubAssign.ts), from the crew as the PM reads the Swarm.
   const assigns = (options.githubAssign ?? ((api, held) => new GitHubAssign({ projects: led(api, held), crew: crewOfProject(held),
     get: github.get, send: github.send })))(core, sources)
