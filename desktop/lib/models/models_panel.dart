@@ -302,12 +302,9 @@ class _ModelsPanelState extends State<ModelsPanel> with SectionWakes {
                                 !_editingApi &&
                                 matchingSubscriptions.isNotEmpty)) ...[
                           if (all) _heading('Subscriptions'),
-                          if (matchingSubscriptions.isEmpty)
-                            _empty(
-                              query.isEmpty
-                                  ? 'No subscriptions'
-                                  : 'No matching subscriptions',
-                            ),
+                          // An empty list shows nothing; a search that finds nothing says so.
+                          if (matchingSubscriptions.isEmpty && query.isNotEmpty)
+                            _empty('No matching subscriptions'),
                           for (final row in matchingSubscriptions)
                             _subscription(row),
                         ],
@@ -349,12 +346,9 @@ class _ModelsPanelState extends State<ModelsPanel> with SectionWakes {
                             _retry(controller.error!)
                           else if (controller.models == null)
                             _empty('Finding shared models…')
-                          else if (!matchingShared.any(drawn))
-                            _empty(
-                              query.isEmpty
-                                  ? 'No shared models'
-                                  : 'No matching models',
-                            ),
+                          else if (!matchingShared.any(drawn) &&
+                              query.isNotEmpty)
+                            _empty('No matching models'),
                           for (final shared in matchingShared)
                             if (drawn(shared)) ...[
                               _heading(
