@@ -210,6 +210,35 @@ void main() {
   }
 
   testWidgets(
+    'its header says Leaderboard once, centres the pills\' words, and ends Refresh at the rows\' right edge',
+    (tester) async {
+      final (c, _) = await show(tester);
+      await tap(tester, key('project-sidebar-humans'));
+      await tap(tester, key('super-human-dee'));
+      // The bar above names the page: the page does not say it again.
+      expect(find.text('Leaderboard'), findsOneWidget);
+      for (final (pill, words) in [
+        ('leaderboard-week', 'This week'),
+        ('leaderboard-all', 'All time'),
+      ]) {
+        expect(
+          tester.getCenter(find.text(words)).dy,
+          moreOrLessEquals(tester.getCenter(key(pill)).dy, epsilon: 0.5),
+          reason: words,
+        );
+      }
+      expect(
+        tester.getRect(find.byTooltip('Refresh leaderboard')).right,
+        moreOrLessEquals(
+          tester.getRect(key('leaderboard-row-dee')).right,
+          epsilon: 0.5,
+        ),
+      );
+      await end(tester, c);
+    },
+  );
+
+  testWidgets(
     'a failed read keeps the board and says why, and Retry reads it again',
     (tester) async {
       final (c, server) = await show(tester);
