@@ -13,5 +13,5 @@ export class HookPreparationHeld extends Error {
  * failed at every start, so the agent never bound and nothing said why (a lean build, end to end, 2026-11-11).
  */
 export class HookScriptMissing extends HookPreparationHeld {
-  constructor(script: string) { super(`notify.mjs is not beside cli.js (${script}), so no hook of Harness's could run`); this.name = 'HookScriptMissing' }
+  constructor(script: string) { super(`notify.mjs is missing (${script}), so no hook of Harness's could run`); this.name = 'HookScriptMissing' }
 }

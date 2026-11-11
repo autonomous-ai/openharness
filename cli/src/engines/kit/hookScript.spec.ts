@@ -8,7 +8,8 @@ import { GROK_HOOK_SETTINGS } from '../grok/contract.js'
 import { HookScriptMissing } from './hookHeld.js'
 import { installHookSettings } from './hookSettings.js'
 import { installNativeHookSettings } from './nativeHookSettings.js'
-import { HOOK_SCRIPT, installableHookScript } from './notifyHooks.js'
+import { installHermesHooks } from '../nativeHooks.js'
+import { HOOK_SCRIPT, requireHookScript } from './notifyHooks.js'
 
 vi.mock('node:fs', async original => {
   const actual = await original<typeof import('node:fs')>()
@@ -29,8 +30,8 @@ afterEach(() => {
 })
 
 it('refuses to name a notify.mjs that is not there', () => {
-  expect(() => installableHookScript()).toThrow(HookScriptMissing)
-  expect(() => installableHookScript()).toThrow(`notify.mjs is not beside cli.js (${HOOK_SCRIPT})`)
+  expect(() => requireHookScript()).toThrow(HookScriptMissing)
+  expect(() => requireHookScript()).toThrow(`notify.mjs is missing (${HOOK_SCRIPT})`)
 })
 
 it.each(['linux', 'darwin', 'win32'] as const)('installs no Codex hook naming a missing notify.mjs, and says why in one line (%s)', async platform => {
@@ -38,7 +39,7 @@ it.each(['linux', 'darwin', 'win32'] as const)('installs no Codex hook naming a 
   const home = join(root, 'codex')
   expect(await installHookSettings('codex', codex.settings, 19473, home, {}, platform)).toBe(false)
   expect(fs.existsSync(join(home, codex.settings.file))).toBe(false)
-  expect(said.mock.calls).toEqual([[`[hooks] Codex hooks are not installed: notify.mjs is not beside cli.js (${HOOK_SCRIPT}), so no hook of Harness's could run`]])
+  expect(said.mock.calls).toEqual([[`[hooks] Codex hooks are not installed: notify.mjs is missing (${HOOK_SCRIPT}), so no hook of Harness's could run`]])
 })
 
 it('installs no native hook naming a missing notify.mjs, and says why in one line', async () => {
@@ -46,5 +47,12 @@ it('installs no native hook naming a missing notify.mjs, and says why in one lin
   const file = join(root, 'grok', 'hooks', 'harness.json')
   expect(await installNativeHookSettings({ ...GROK_HOOK_SETTINGS, file }, 19473, {}, 'linux')).toBe(false)
   expect(fs.existsSync(file)).toBe(false)
-  expect(said.mock.calls).toEqual([[expect.stringMatching(/^\[hooks\] .+ hooks are not installed: notify\.mjs is not beside cli\.js/)]])
+  expect(said.mock.calls).toEqual([[expect.stringMatching(/^\[hooks\] .+ hooks are not installed: notify\.mjs is missing/)]])
+})
+
+it('installs no Hermes hook naming a missing notify.mjs: one line, and false rather than a rejection', async () => {
+  const said = vi.spyOn(console, 'error').mockImplementation(() => {})
+  expect(await installHermesHooks(19473, join(root, 'hermes'), {}, 'linux')).toBe(false)
+  expect(fs.existsSync(join(root, 'hermes', 'config.yaml'))).toBe(false)
+  expect(said.mock.calls).toEqual([[`[hooks] Hermes hooks are not installed: notify.mjs is missing (${HOOK_SCRIPT}), so no hook of Harness's could run`]])
 })
