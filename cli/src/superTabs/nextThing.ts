@@ -402,8 +402,6 @@ export class NextThing {
     delete memory[agent.agentId]
     memory[agent.agentId] = kept
     if (kept.times >= NEXT_TIMES) {
-      // Told before its things told were kept apart (2026-11-11): its person has it.
-      if (kept.told) return false
       // Told only after a turn of its ended here: one typed before this daemon started (under an older build, typed three times
       // over) has had no turn since to say nothing changed. And GitHub shows a push some seconds after it, so a turn that pushed as
       // it ended can read as nothing changed: what is still the same a while after its turn ended is told (code review of #4060).
@@ -437,8 +435,11 @@ export class NextThing {
       for (const [id, value] of Object.entries(object(JSON.parse(readFileSync(this.deps.file, 'utf8'))))) {
         const row = object(value)
         if (identifier(id) && typeof row.key === 'string' && Number.isSafeInteger(row.times) && typeof row.told === 'boolean') {
-          // What its person was told of is read back too: left out, each restart (every release) typed it all again.
-          const done = Array.isArray(row.done) ? row.done.filter((key): key is string => typeof key === 'string').slice(-DONE_KEPT) : []
+          // What its person was told of is read back, and the thing a row says it told: a row saved before the list was read back
+          // (v0.6.33, v0.6.34) or kept (older builds) says that one only so. Left out, a restart (every release) gave each again
+          // under the id it was first given with, which the server answers as given: nothing reached the agent, and it slept.
+          const listed = Array.isArray(row.done) ? row.done.filter((key): key is string => typeof key === 'string') : []
+          const done = (row.told && !listed.includes(row.key) ? [...listed, row.key] : listed).slice(-DONE_KEPT)
           kept[id] = { key: row.key, times: row.times as number, told: row.told, ...done.length ? { done } : {} }
         }
       }
