@@ -28,6 +28,8 @@ function fakeRepo(now: () => number) {
     main: [{ sha: sha('main-0'), files: [] as string[] }],
     pulls: new Map<number, FakePull>(),
     comments: new Map<number, Json[]>(),
+    /** What GitHub itself notes on a pull request: nobody can write these. */
+    events: new Map<number, Json[]>(),
     runs: new Map<string, Json[]>(),
     /** What each pull request's head and each train commit holds: the commit of main it stands on, and the files it changes. */
     commits: new Map<string, { on: string; files: string[] }>(),
@@ -85,6 +87,7 @@ function fakeRepo(now: () => number) {
       : p === '/pulls' ? [...state.pulls.values()].filter(pull => pull.state === url.searchParams.get('state')).sort((a, b) => b.updated - a.updated).slice((page - 1) * per, page * per)
       : /^\/issues\/\d+\/comments$/.test(p) ? (state.comments.get(number) ?? []).map(records.served)
       : /^\/pulls\/\d+\/reviews$/.test(p) ? []
+      : /^\/issues\/\d+\/events$/.test(p) ? state.events.get(number) ?? []
       : /^\/pulls\/\d+\/commits$/.test(p) ? [{ sha: state.pulls.get(number)?.head.sha }]
       : /^\/pulls\/\d+$/.test(p) ? { mergeable_state: state.pulls.get(number)?.mergeable_state }
       : p.endsWith('/check-runs') ? { check_runs: state.runs.get(commit) ?? [] }
@@ -616,6 +619,43 @@ describe('a train waits for its own checks, then lands or is closed', () => {
     expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual([])
     expect(f.logged()).toContainEqual('[super-tab] train acme/app#900 closed: its branch does not hold what its body names')
     expect([4, 5, 6].map(number => f.state.pulls.get(number)!.state)).toEqual(['open', 'open', 'open'])
+  })
+
+  // The review of #3909, left open then. Anyone who can push to the repository can make the train's merge commits again by
+  // hand, with the same parents and other content, push them in its place and change the tip in its body: the branch then
+  // reads as built, its checks run on the forgery, and it landed. A branch is rewritten by a forced push, or by deleting it
+  // and making it again, and GitHub notes each on the pull request, where nobody can write.
+  it.each([
+    ['pushed over by force', ['head_ref_force_pushed']],
+    ['deleted and made again', ['head_ref_deleted', 'head_ref_restored', 'reopened']],
+  ])('lands no train whose branch was %s after it was built, though it reads as built', async (_case, events) => {
+    const f = setup()
+    const a = f.add(4), b = f.add(5)
+    await f.settle()
+    const train = f.train(), base = f.state.main[0]!.sha
+    // The same two merges, made by hand: the same parents, and a file nobody read.
+    const one = sha('forged-1'), two = sha('forged-2')
+    f.state.parents.set(one, [base, a.head.sha])
+    f.state.parents.set(two, [one, b.head.sha])
+    f.state.commits.set(two, { on: base, files: ['cli/src/f4.ts', 'cli/src/f5.ts', 'cli/src/unread.ts'] })
+    f.state.branches.set(train.head.ref, two)
+    Object.assign(train, { body: train.body.replace(train.head.sha, two), head: { ...train.head, sha: two } })
+    f.state.events.set(train.number, events.map(event => ({ event })))
+    const forged = f.state.sent.length
+    await f.ends(PASSED)
+    expect(f.writes(forged).filter(w => w.startsWith('PUT'))).toEqual([])
+    expect(f.state.main.at(-1)!.files).not.toContain('cli/src/unread.ts')
+    expect(f.logged()).toContainEqual('[super-tab] train acme/app#900 closed: its branch was rewritten after the train built it')
+    expect([a, b].map(pull => pull.state)).toEqual(['open', 'open'])
+  })
+
+  it('lands a train whose pull request has only the events of an ordinary one', async () => {
+    const f = setup()
+    f.add(4); f.add(5)
+    await f.settle()
+    f.state.events.set(f.train().number, [{ event: 'labeled' }, { event: 'subscribed' }, { event: 'review_requested' }])
+    await f.ends(PASSED)
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual(['PUT /pulls/900/merge'])
   })
 
   it('reads no red or landed train from a closed pull request another login wrote as one', async () => {
