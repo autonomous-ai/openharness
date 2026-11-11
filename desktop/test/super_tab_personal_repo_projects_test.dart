@@ -299,14 +299,19 @@ void main() {
       );
       expect(tester.widget<ListTile>(off).enabled, isFalse);
       expect(
-        find.descendant(of: off, matching: find.text('Offline')),
+        find.descendant(of: off, matching: find.text('Mac laptop · offline')),
         findsOneWidget,
       );
+      // Choose, then wait until the dialog says why or closes: at most 5 s.
       Future<void> choose() async {
         await tester.tap(key('choose-pm-confirm'));
-        for (var i = 0; i < 20; i++) {
+        for (var i = 0; i < 100; i++) {
           await tester.runAsync(() => Future<void>.delayed(Duration.zero));
           await tester.pump(const Duration(milliseconds: 50));
+          if (find.byType(AlertDialog).evaluate().isEmpty ||
+              find.text('Choose your own computer.').evaluate().isNotEmpty) {
+            return;
+          }
         }
       }
 

@@ -85,156 +85,166 @@ Future<void> showChoosePm(
               }
             }
 
-            return AlertDialog(
-              title: const Text('Choose PM'),
-              content: SizedBox(
-                width: 400,
-                child: SingleChildScrollView(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      for (final agent in agents)
-                        ListTile(
-                          key: ValueKey('choose-pm-${agent.id}'),
-                          dense: true,
-                          contentPadding: EdgeInsets.zero,
-                          enabled: why(agent) == null && !busy,
-                          selected: picked == agent.id,
-                          leading: SuperTabAvatar.agent(
-                            agent,
-                            size: SuperTabAvatar.rowSize,
+            // A pane joining is not left half chosen: the dialog stays until its choice is done or refused.
+            return PopScope(
+              canPop: !busy,
+              child: AlertDialog(
+                title: const Text('Choose PM'),
+                content: SizedBox(
+                  width: 400,
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        for (final agent in agents)
+                          ListTile(
+                            key: ValueKey('choose-pm-${agent.id}'),
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                            enabled: why(agent) == null && !busy,
+                            selected: picked == agent.id,
+                            leading: SuperTabAvatar.agent(
+                              agent,
+                              size: SuperTabAvatar.rowSize,
+                            ),
+                            title: Text(
+                              snapshot!.agentName(
+                                agent.id,
+                                fallback: agent.name,
+                              ),
+                            ),
+                            trailing: switch (why(agent)) {
+                              final reason? => Text(
+                                reason,
+                                style: DesktopChrome.metadata(),
+                              ),
+                              null => null,
+                            },
+                            onTap: () => update(() => picked = agent.id),
                           ),
-                          title: Text(
-                            snapshot!.agentName(agent.id, fallback: agent.name),
-                          ),
-                          trailing: switch (why(agent)) {
-                            final reason? => Text(
-                              reason,
+                        for (final pane in panes)
+                          ListTile(
+                            key: ValueKey('choose-pm-${pane.swarmId}'),
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                            // A computer that is off cannot join it.
+                            enabled: !pane.machine.isOffline && !busy,
+                            selected: picked == pane.swarmId,
+                            leading: SuperTabAvatar(
+                              identity: 'agent:${pane.swarmId}',
+                              name: pane.name,
+                              size: SuperTabAvatar.rowSize,
+                              face: true,
+                            ),
+                            title: Text(pane.name),
+                            // Its computer, as its row in Your Team says it: two panes of one name are told apart.
+                            subtitle: Text(
+                              pane.place,
                               style: DesktopChrome.metadata(),
                             ),
-                            null => null,
-                          },
-                          onTap: () => update(() => picked = agent.id),
-                        ),
-                      for (final pane in panes)
-                        ListTile(
-                          key: ValueKey('choose-pm-${pane.swarmId}'),
-                          dense: true,
-                          contentPadding: EdgeInsets.zero,
-                          // A computer that is off cannot join it.
-                          enabled: !pane.machine.isOffline && !busy,
-                          selected: picked == pane.swarmId,
-                          leading: SuperTabAvatar(
-                            identity: 'agent:${pane.swarmId}',
-                            name: pane.name,
-                            size: SuperTabAvatar.rowSize,
-                            face: true,
+                            onTap: () => update(() => picked = pane.swarmId),
                           ),
-                          title: Text(pane.name),
-                          trailing: pane.machine.isOffline
-                              ? Text('Offline', style: DesktopChrome.metadata())
-                              : null,
-                          onTap: () => update(() => picked = pane.swarmId),
-                        ),
-                      if (refused case final error?) ...[
-                        const SizedBox(height: 12),
-                        Text(error, style: DesktopChrome.metadata()),
+                        if (refused case final error?) ...[
+                          const SizedBox(height: 12),
+                          Text(error, style: DesktopChrome.metadata()),
+                        ],
+                        // A command whose answer was lost, this one or another: checked before anything new is sent.
+                        if (c.hasPendingAction)
+                          TextButton(
+                            onPressed: c.saving
+                                ? null
+                                : () async {
+                                    final pm =
+                                        c.pendingCommand?['type'] ==
+                                        'project.pm';
+                                    final result = await c.retry();
+                                    if (!context.mounted || result == null) {
+                                      return;
+                                    }
+                                    // Its own Choose, confirmed: done. Another command's: choose now.
+                                    if (pm) done(result);
+                                  },
+                            child: const Text('Check again'),
+                          ),
                       ],
-                      // A command whose answer was lost, this one or another: checked before anything new is sent.
-                      if (c.hasPendingAction)
-                        TextButton(
-                          onPressed: c.saving
-                              ? null
-                              : () async {
-                                  final pm =
-                                      c.pendingCommand?['type'] == 'project.pm';
-                                  final result = await c.retry();
-                                  if (!context.mounted || result == null) {
-                                    return;
-                                  }
-                                  // Its own Choose, confirmed: done. Another command's: choose now.
-                                  if (pm) done(result);
-                                },
-                          child: const Text('Check again'),
-                        ),
-                    ],
+                    ),
                   ),
                 ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: busy ? null : () => Navigator.pop(context),
-                  child: const Text('Cancel'),
-                ),
-                FilledButton(
-                  key: const ValueKey('choose-pm-confirm'),
-                  onPressed:
-                      busy || c.saving || c.hasPendingAction || picked == null
-                      ? null
-                      : () async {
-                          update(() {
-                            busy = true;
-                            refused = null;
-                          });
-                          var agentId = picked!;
-                          if (panes
-                                  .where((p) => p.swarmId == agentId)
-                                  .firstOrNull
-                              case final pane?) {
-                            try {
-                              final chat = await swarmAttachAgent(
-                                app!,
-                                c.tabId,
-                                pane.machineId,
-                                pane.agent,
-                              );
-                              agentId =
-                                  c.snapshot
-                                      ?.conversation(chat)
-                                      ?.agentIds
-                                      .firstOrNull ??
-                                  agentId;
-                            } catch (failure) {
+                actions: [
+                  TextButton(
+                    onPressed: busy ? null : () => Navigator.pop(context),
+                    child: const Text('Cancel'),
+                  ),
+                  FilledButton(
+                    key: const ValueKey('choose-pm-confirm'),
+                    onPressed:
+                        busy || c.saving || c.hasPendingAction || picked == null
+                        ? null
+                        : () async {
+                            update(() {
+                              busy = true;
+                              refused = null;
+                            });
+                            var agentId = picked!;
+                            if (panes
+                                    .where((p) => p.swarmId == agentId)
+                                    .firstOrNull
+                                case final pane?) {
+                              try {
+                                final chat = await swarmAttachAgent(
+                                  app!,
+                                  c.tabId,
+                                  pane.machineId,
+                                  pane.agent,
+                                );
+                                agentId =
+                                    c.snapshot
+                                        ?.conversation(chat)
+                                        ?.agentIds
+                                        .firstOrNull ??
+                                    agentId;
+                              } catch (failure) {
+                                appLog.warn(
+                                  'super-tabs',
+                                  'A pane chosen as PM could not join '
+                                      '(${failure is SuperTabFailure ? failure.code : failure.runtimeType})',
+                                );
+                                if (!context.mounted) return;
+                                update(() {
+                                  busy = false;
+                                  refused = failure is SuperTabFailure
+                                      ? failure.message
+                                      : "Couldn't join. Try again.";
+                                });
+                                return;
+                              }
+                              if (!context.mounted) return;
+                            }
+                            final result = await c.command({
+                              'type': 'project.pm',
+                              'projectId': projectId,
+                              'agentId': agentId,
+                            });
+                            if (!context.mounted) return;
+                            if (result == null) {
+                              // Said by its code alone: no name or project in the log.
                               appLog.warn(
                                 'super-tabs',
-                                'A pane chosen as PM could not join '
-                                    '(${failure is SuperTabFailure ? failure.code : failure.runtimeType})',
+                                'PM choice refused (${c.operationErrorCode ?? 'unknown'})',
                               );
-                              if (!context.mounted) return;
                               update(() {
                                 busy = false;
-                                refused = failure is SuperTabFailure
-                                    ? failure.message
-                                    : "Couldn't join. Try again.";
+                                refused = c.operationError;
                               });
                               return;
                             }
-                            if (!context.mounted) return;
-                          }
-                          final result = await c.command({
-                            'type': 'project.pm',
-                            'projectId': projectId,
-                            'agentId': agentId,
-                          });
-                          if (!context.mounted) return;
-                          if (result == null) {
-                            // Said by its code alone: no name or project in the log.
-                            appLog.warn(
-                              'super-tabs',
-                              'PM choice refused (${c.operationErrorCode ?? 'unknown'})',
-                            );
-                            update(() {
-                              busy = false;
-                              refused = c.operationError;
-                            });
-                            return;
-                          }
-                          done(result);
-                        },
-                  child: const Text('Choose'),
-                ),
-              ],
+                            done(result);
+                          },
+                    child: const Text('Choose'),
+                  ),
+                ],
+              ),
             );
           },
         ),

@@ -760,11 +760,12 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   from their agents. Choosing again switches it. No new folders."): their own
   agents, each a row with its face and name, the PM itself `Current` and
   another project's PM `PM of web` at the right, neither chosen; in their
-  Personal Swarm, their panes in Your Team not in it yet follow, each as its
-  row draws it, one on a computer that is off `Offline` and not chosen (PSQA,
-  2026-11-12: a person whose agents were all panes met an empty list). Then
-  Cancel and the blue `Choose`. A pane chosen joins first, as a click on its
-  row joins it. Choosing sends `project.pm`: the agent becomes the
+  Personal Swarm, their panes in Your Team not in it yet follow, each with its
+  face, its name and its computer under it as its row says it (`Mac laptop ·
+  offline`, not chosen, while that computer is off; PSQA, 2026-11-12: a person
+  whose agents were all panes met an empty list). Then Cancel and the blue
+  `Choose`. A pane chosen joins first, as a click on its row joins it, and the
+  dialog stays until that is done. Choosing sends `project.pm`: the agent becomes the
   PM, the one before keeps running in Your Team, nothing is started, and the
   PM's own chat opens. A refusal of this choice is said under the list; an
   empty list shows nothing. While the PM New project started is on its way
