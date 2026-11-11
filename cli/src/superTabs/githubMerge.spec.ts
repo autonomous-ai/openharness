@@ -138,11 +138,42 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
   it('counts a READ-OK on an earlier head whose change is the same as the head\'s, as lampOS\'s patch_of reads it', async () => {
     const f = setup()
     f.github.repo.comments.set(4, [comment('Juno, 14:20, to **Pip**: READ-OK a1b2c3d')])
-    // Main moved under it: the same lines, now further down, in other context.
+    // Main moved under it: the same lines among the same lines, now further down.
     f.github.repo.compare.set('a1b2c3d', changed(['+    days = int(n)', '-    days = 1']))
-    f.github.repo.compare.set(HEAD, { files: [{ ...changed(['+    days = int(n)', '-    days = 1'], 9).files[0], patch: changed(['+    days = int(n)', '-    days = 1'], 9).files[0]!.patch.replace('today = date.today()', 'today = clock.today()') }] })
+    f.github.repo.compare.set(HEAD, changed(['+    days = int(n)', '-    days = 1'], 9))
     await settle(f)
     expect(f.merges()).toHaveLength(1)
+  })
+
+  // Review of #3977. Read as lampOS's `git diff -U0 | git patch-id`, a change was its added and removed lines alone: the same
+  // line added in another function of the same file was the same change, and a READ-OK carried to code nobody had read.
+  it.each([
+    ['among other lines', (patch: string) => patch.replace('today = date.today()', 'if admin:')],
+    ['under another heading', (patch: string) => patch.replace('def quote():', 'def grant():')],
+  ])('takes no READ-OK on an earlier head whose same lines are %s on the head', async (_case, moved) => {
+    const f = setup()
+    f.github.repo.comments.set(4, [comment('Juno, 14:20, to **Pip**: READ-OK a1b2c3d')])
+    const read = changed(['+    days = int(n)', '-    days = 1'])
+    f.github.repo.compare.set('a1b2c3d', read)
+    f.github.repo.compare.set(HEAD, { files: [{ ...read.files[0], patch: moved(read.files[0]!.patch) }] })
+    await settle(f)
+    expect(f.merges()).toEqual([])
+  })
+
+  // GitHub's compare does not say what kind of file it lists. A symbolic link's patch is its target as one line with no
+  // newline at its end, and a submodule's is its commit: a regular file with that same text read as the same change.
+  it.each([
+    ['a symbolic link', '@@ -0,0 +1 @@\n+../../.env\n\\ No newline at end of file'],
+    ['a symbolic link pointed elsewhere', '@@ -1 +1 @@\n-docs/a.md\n\\ No newline at end of file\n+../../.env\n\\ No newline at end of file'],
+    ['a submodule', '@@ -1 +1 @@\n-Subproject commit 1111111111111111111111111111111111111111\n+Subproject commit 2222222222222222222222222222222222222222'],
+  ])('takes no READ-OK on an earlier head for a file that may be %s: its kind is not told', async (_case, patch) => {
+    const f = setup()
+    f.github.repo.comments.set(4, [comment('Juno, 14:20, to **Pip**: READ-OK a1b2c3d')])
+    const files = { files: [{ filename: 'docs/link', status: 'modified', changes: 1, patch }] }
+    f.github.repo.compare.set('a1b2c3d', files)
+    f.github.repo.compare.set(HEAD, files)
+    await settle(f)
+    expect(f.merges()).toEqual([])
   })
 
   it.each([
