@@ -1,10 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { builtinSqlite, closeSqliteHandles } from './sqliteBuiltin.js'
 import { sqliteReadAll } from './sqliteRead.js'
-import { enableOffThreadSqlite, resetOffThreadSqlite, sqliteThreadsForTest } from './sqliteThread.js'
+import { enableOffThreadSqlite, failSqliteThreadsForTest, offThreadSqliteActive, resetOffThreadSqlite, sqliteThreadsForTest } from './sqliteThread.js'
 
 // A read the store answers slowly, as a whole Devin session on a 36 GB store did (#1906): counting to ? in SQL.
 const SLOW = 'WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < ?) SELECT count(*) AS n FROM c'
@@ -78,6 +78,30 @@ withBuiltin('SQLite reads off the core\'s thread', () => {
     store.close()
     const read = await sqliteReadAll(db, 'SELECT data FROM blob', [], { maxBuffer: 2_000 })
     expect(read.ok && (read.rows[0].data as Uint8Array).byteLength).toBe(1000)
+  })
+
+  // Harper's review of #4069: a thread that throws as it loads failed every read with nothing said, and was started again
+  // for every poll.
+  it('says why a read thread failed, by name only, and reads on the caller\'s thread after two in a minute', async () => {
+    const said = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      failSqliteThreadsForTest()
+      const query = 'SELECT data FROM message WHERE id = ?'
+      expect(await sqliteReadAll(db, query, ['m1'])).toMatchObject({ ok: false, reason: 'transient' })
+      expect(offThreadSqliteActive()).toBe(true)
+      expect(await sqliteReadAll(db, query, ['m1'])).toMatchObject({ ok: false, reason: 'transient' })
+      expect(said.mock.calls).toEqual([
+        ['[sqlite] a read thread failed: TypeError'],
+        ['[sqlite] a read thread failed: TypeError'],
+        ['[sqlite] the read threads exited twice within a minute; SQLite reads run on the core thread from now on'],
+      ])
+      expect(offThreadSqliteActive()).toBe(false)
+      expect(await sqliteReadAll(db, query, ['m1'])).toEqual({ ok: true, rows: [{ data: 'one' }], via: 'builtin' })
+      expect(sqliteThreadsForTest()).toBe(0)
+      expect(said.mock.calls.flat().join(' ')).not.toContain(db)
+    } finally {
+      said.mockRestore()
+    }
   })
 
   it('reads a store that is not there as transient, and binds parameters as the thread does', async () => {

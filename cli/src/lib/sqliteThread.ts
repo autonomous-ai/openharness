@@ -30,7 +30,7 @@ const MAX_WAITING = 64
 
 // CommonJS, evaluated in the thread: the bundle carries it as a string, with no file of its own. The binding's
 // ExperimentalWarning is filtered here as on the main thread (sqliteBuiltin.ts `builtinSqlite`).
-const threadSource = (): string => `
+const threadSource = (): string => failingForTest ? 'throw new TypeError()' : `
 const { parentPort } = require('node:worker_threads')
 const previous = process.listeners('warning')
 process.removeAllListeners('warning')
@@ -67,7 +67,13 @@ interface Read {
 }
 interface Thread { worker: Worker; read: Read | null }
 
+/** Two exits this close together turn the route off for the rest of the process, as lib/offThreadExec.ts does. */
+const DEATH_WINDOW_MS = 60_000
+
 let enabled = false
+let fallen = false
+let failingForTest = false
+const deaths: number[] = []
 let nextId = 0
 const threads: Thread[] = []
 const waiting: Read[] = []
@@ -79,7 +85,12 @@ export function enableOffThreadSqlite(): void {
 }
 
 export function offThreadSqliteActive(): boolean {
-  return enabled
+  return enabled && !fallen
+}
+
+/** Test seam: every read thread started from now on throws as it loads. */
+export function failSqliteThreadsForTest(): void {
+  failingForTest = true
 }
 
 /** Test seam: how many read threads there are. */
@@ -90,6 +101,9 @@ export function sqliteThreadsForTest(): number {
 /** Test seam: the route off, every thread gone, every waiting read answered. */
 export async function resetOffThreadSqlite(): Promise<void> {
   enabled = false
+  fallen = false
+  failingForTest = false
+  deaths.length = 0
   const stopping = threads.splice(0)
   for (const read of waiting.splice(0)) read.answer({ ok: false, message: 'the SQLite read threads were reset' })
   for (const thread of stopping) thread.read?.answer({ ok: false, message: 'the SQLite read threads were reset' })
@@ -126,7 +140,7 @@ export function readOffThread(dbPath: string, sql: string, params: SqliteParam[]
 
 /** Hand waiting reads to free threads, starting one while there are fewer than [THREADS]. */
 function dispatch(): void {
-  while (waiting.length) {
+  while (waiting.length && !fallen) {
     const thread = threads.find(candidate => !candidate.read) ?? (threads.length < THREADS ? start() : null)
     if (!thread) return
     const read = waiting.shift()!
@@ -148,13 +162,24 @@ function start(): Thread {
     read.answer(reply.ok ? { ok: true, rows: reply.rows } : { ok: false, message: reply.message })
     dispatch()
   })
-  // An uncaught error ends the thread; `exit` follows and answers its read.
-  thread.worker.on('error', () => {})
+  // An uncaught error ends the thread; `exit` follows and answers its read. Its name only: a message can quote a path.
+  thread.worker.on('error', (error) => { console.warn(`[sqlite] a read thread failed: ${error.name}`) })
   thread.worker.once('exit', () => {
     const at = threads.indexOf(thread)
     if (at < 0) return
     threads.splice(at, 1)
     thread.read?.answer({ ok: false, message: 'the SQLite read thread exited' })
+    // A thread that cannot load would otherwise be started again for every poll, and every read would fail (Harper's
+    // review of #4069). Twice in a minute, the core reads on its own thread again, as it did before the read threads.
+    const now = Date.now()
+    deaths.push(now)
+    while (deaths.length && now - deaths[0] > DEATH_WINDOW_MS) deaths.shift()
+    if (deaths.length >= 2 && !fallen) {
+      fallen = true
+      console.warn('[sqlite] the read threads exited twice within a minute; SQLite reads run on the core thread from now on')
+      for (const read of waiting.splice(0)) read.answer({ ok: false, message: 'the SQLite read threads are off' })
+      return
+    }
     dispatch()
   })
   thread.worker.unref()
