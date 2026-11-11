@@ -49,13 +49,31 @@ CHECKS = {
                                                          "cli/src/lib/engineShell*.ts", "cli/src/lib/zsh*.ts",
                                                          "cli/src/lib/loginShellEnv*.ts", "cli/src/lib/userShell*.ts",
                                                          "cli/src/lib/shellQuote*.ts")),
-    "desktop-macos": dict(command="make desktop-test", cwd=".", platform="macos",
+    # `make desktop-test ARGS="--timeout N --workers N"` sets the budget and parallelism, never which tests run:
+    # compiling all 1,022 test files does not fit the 900 s default on an Intel iMac, even an idle one.
+    "desktop-macos": dict(command="make desktop-test", cwd=".", platform="macos", resource_args=("timeout", "workers"),
                           paths=("desktop/macos/*", "desktop/lib/*/mac_*.dart", "desktop/lib/*/macos*.dart",
                                  "desktop/test/macos*.dart", "desktop/pubspec.yaml", "desktop/pubspec.lock")),
 }
 CLI_SHARED = ("cli/package.json", "cli/package-lock.json", "cli/vitest.config.ts", "cli/vitest.setup.ts",
               "cli/vitest.tmpdir.ts", "cli/src/__fixtures__/vitestRun.ts", "cli/tsconfig*.json", "cli/.node-version", "cli/.nvmrc")
 FENCE = re.compile(r"^```harness-local-checks\s*\n(.*?)^```[ \t]*$", re.MULTILINE | re.DOTALL)
+
+
+def resource_args_ok(contract, command):
+    prefix = contract["command"] + ' ARGS="'
+    if not contract.get("resource_args") or not command.startswith(prefix) or not command.endswith('"'):
+        return False
+    words, named = command[len(prefix):-1].split(" "), set()
+    if not words[0] or len(words) % 2:
+        return False
+    for option, value in zip(words[::2], words[1::2]):
+        name = option.removeprefix("--")
+        if (not option.startswith("--") or name not in contract["resource_args"] or name in named
+                or not re.fullmatch(r"[1-9][0-9]{0,4}", value)):
+            return False
+        named.add(name)
+    return True
 
 
 def required_checks(paths):
@@ -100,8 +118,9 @@ def validate_receipts(required, receipts, head):
         command = item.get("command")
         # Worker caps change resource use, not test selection or coverage. Reject
         # all other suffixes rather than accepting narrowed/disabled test runs.
-        command_ok = isinstance(command, str) and re.fullmatch(
+        command_ok = isinstance(command, str) and (re.fullmatch(
             re.escape(contract["command"]) + r"(?: -- --maxWorkers(?:=| )[1-9][0-9]?)?", command)
+            or resource_args_ok(contract, command))
         if (item.get("head") != head or item.get("status") != "passed"
                 or type(item.get("passed")) is not int or item["passed"] <= 0
                 or not command_ok or item.get("cwd") != contract["cwd"]

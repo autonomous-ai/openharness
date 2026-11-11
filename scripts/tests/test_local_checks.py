@@ -63,6 +63,30 @@ class LocalGateTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "desktop-macos"):
             planner.verify(p, needs([r]), "a" * 40)
 
+    def test_the_desktop_suite_may_set_its_budget_and_workers_but_never_narrow_its_tests(self):
+        p = plan(["desktop/macos/Runner/MainFlutterWindow.swift"], local_checks=["desktop-macos"])
+
+        def desktop(command):
+            return receipt("desktop-macos", command=command, cwd=".", platform="macos")
+
+        for command in ['make desktop-test', 'make desktop-test ARGS="--timeout 3600"',
+                        'make desktop-test ARGS="--workers 4"',
+                        'make desktop-test ARGS="--workers 4 --timeout 3600"']:
+            with self.subTest(command=command):
+                self.assertEqual(planner.verify(p, needs([desktop(command)]), "a" * 40)["local_receipts"],
+                                 [desktop(command)])
+        for command in ['make desktop-test ARGS="test/one_test.dart"',
+                        'make desktop-test ARGS="--timeout 3600 test/one_test.dart"',
+                        'make desktop-test ARGS="--timeout 3600 --timeout 60"',
+                        'make desktop-test ARGS="--workers 0"', 'make desktop-test ARGS="--timeout -1"',
+                        'make desktop-test ARGS="--timeout 1e9"', 'make desktop-test ARGS="--timeout  3600"',
+                        'make desktop-test ARGS=""', 'make desktop-test ARGS="--plain-name x"',
+                        'make desktop-test ARGS="--workers 4"; touch x', "make desktop-test ARGS='--workers 4'"]:
+            with self.subTest(command=command), self.assertRaisesRegex(ValueError, "desktop-macos"):
+                planner.verify(p, needs([desktop(command)]), "a" * 40)
+        with self.assertRaisesRegex(ValueError, "cli-core"):
+            planner.verify(plan(), needs([receipt(command='npm run test:core ARGS="--workers 4"')]), "a" * 40)
+
     def test_multiple_checks_need_all_receipts(self):
         p = plan(["cli/src/core/api.ts", "cli/src/harnessd/main.ts"], local_checks=["cli-core", "cli-harnessd"])
         with self.assertRaisesRegex(ValueError, "cli-harnessd"):
