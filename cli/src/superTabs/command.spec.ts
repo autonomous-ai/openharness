@@ -21,25 +21,16 @@ it('keeps an explicit stable receipt for agent messages', () => {
     expect(() => parseSuperTabArgs(argv, where)).toThrow('harness super-tab')
   }
 })
-// anh Dee, 2026-11-11: "what are those extra verbose things". A post may leave its operation out: the same post within the hour is
-// one operation, so one sent again after an answer that never came is posted once; other words, or the next hour, a new one.
-it('makes a post\'s operation from the post and its hour when it names none', () => {
-  // A clock that stays inside one hour, so no run of this test lands on an hour's turn.
-  vi.useFakeTimers()
-  vi.setSystemTime(Date.parse('2026-11-12T05:10:00Z'))
+// anh Dee, 2026-11-11: "what are those extra verbose things". A post may leave its operation out: each run makes a new one, so a
+// builder's second `free: Pip`, or the same words to another agent, is a post of its own (code review of #4120).
+it('makes a new operation for each post that names none, and keeps one that is named', () => {
   const op = (argv: string[]) => String(parseSuperTabArgs([...prefix, ...argv], where).payload.operationId)
-  const first = op(['post', 'lead', 'Ready', '--answers', 'm-1'])
-  expect(first).toMatch(/^post-[0-9a-f]{32}$/)
-  expect(op(['post', 'lead', 'Ready', '--answers', 'm-1'])).toBe(first)
-  expect(op(['post', 'lead', 'Ready', '--answers', 'm-2'])).not.toBe(first)
-  expect(op(['post', 'lead', 'Ready'])).not.toBe(first)
+  const first = op(['post', 'lead', 'free: Pip'])
+  expect(first).toMatch(/^post-[0-9a-f-]{36}$/)
+  expect(op(['post', 'lead', 'free: Pip'])).not.toBe(first)
   expect(parseSuperTabArgs([...prefix, 'post', 'lead', 'Ready', '--answers', 'm-1', '--to', 'pip'], where).payload)
     .toMatchObject({ command: { type: 'message.send', conversationId: 'lead', text: 'Ready', answers: 'm-1', recipientIds: ['pip'] } })
-  vi.setSystemTime(Date.parse('2026-11-12T06:10:00Z'))
-  expect(op(['post', 'lead', 'Ready', '--answers', 'm-1'])).not.toBe(first)
-  // Named, it is the one named, as before.
   expect(op(['post', 'lead', 'Ready', 'op-1'])).toBe('op-1')
-  vi.useRealTimers()
 })
 
 // 2026-10-30: three Reviewer verdicts posted with TEXT - arrived as a single dash, #2345's findings among them.
@@ -57,7 +48,7 @@ it('refuses a post\'s - with an empty or a terminal stdin, naming the fix, and p
   for (const empty of ['', '\n', '  \n\n']) {
     for (const tail of [[], ['--attach', 'a.png']]) {
       expect(() => parseSuperTabArgs([...prefix, 'post', 'lead', '-', 'op-1', ...tail], where, () => empty, () => false))
-        .toThrow("post - read no message from stdin, so nothing was posted. Send the message on stdin: post GROUP - OPERATION_ID <<'MSG'")
+        .toThrow("post - read no message from stdin, so nothing was posted. Send the message on stdin: post GROUP - <<'MSG'")
     }
   }
   // A terminal is never read: reading it would wait for input that never comes.
@@ -521,7 +512,7 @@ describe('stdin for -', () => {
       stdin: () => Promise.reject(new StdinIdle()) }
     expect(await superTabCommand([...prefix, 'post', 'lead', '-', 'op-1'], deps)).toBe(1)
     expect(JSON.parse(print.mock.calls.at(-1)![0]).error).toBe("post - read stdin until nothing more came for 30 s, but stdin was never closed, so nothing was posted. "
-      + "Close stdin after the message, as a heredoc does: post GROUP - OPERATION_ID <<'MSG' (the message on the next lines, then MSG alone on a line), or pass it as TEXT.")
+      + "Close stdin after the message, as a heredoc does: post GROUP - <<'MSG' (the message on the next lines, then MSG alone on a line), or pass it as TEXT.")
     expect(request).not.toHaveBeenCalled()
     // A verdict's words on stdin are told the verdict's own form, whatever the words would have been.
     expect(await superTabCommand([...prefix, 'read', 'hold', 'acme/app#27', 'f6edb44', '-'], deps)).toBe(1)
