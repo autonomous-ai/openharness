@@ -18,6 +18,7 @@ class SuperTabMessageText extends StatelessWidget {
     this.onOpenGroup,
     this.mentions = const [],
     this.addressed = const [],
+    this.storedNames = const {},
     this.agents = const [],
     this.addresses = const {},
     this.labels = const {},
@@ -35,6 +36,10 @@ class SuperTabMessageText extends StatelessWidget {
   /// The agents a post is to (its `recipientIds`), by name: each one its words do not tag opens its first line as a tag, as
   /// a group chat addresses a post (anh Dee, 2026-11-10: "why not use tag? like in a group chat").
   final List<String> addressed;
+
+  /// The name each agent of [addressed] is stored under, by the name it shows as, where the two differ (a PM's "Product
+  /// Manager"): its words tagging that name tag it too, as the backend routes them.
+  final Map<String, String> storedNames;
 
   /// The Swarm's agents' names: an `@name` of one reads as a tag too (Swarm v4: agents talk to each other by name), and
   /// unlike [mentions] an agent the text does not name is never added.
@@ -115,17 +120,24 @@ class SuperTabMessageText extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    // Read only for a message that tags someone: most tag nobody.
-    final said = mentions.isEmpty && addressed.isEmpty
-        ? const <String>[]
-        : tagsIn(text);
-    // Read once, and only for a post to an agent whose name is several words.
+    // Read only for a message to someone with an `@` in it, which every tag has: most tag nobody. A row is drawn as often as
+    // its chat is, so its text is read once here, for every name asked of it.
+    final read =
+        (mentions.isNotEmpty || addressed.isNotEmpty) && text.contains('@');
+    final said = read ? tagsIn(text) : const <String>[];
+    // Read once, and only for a name of several words.
     String? words;
+    bool tags(String name) =>
+        said.any((tag) => _says(tag, name, addresses)) ||
+        read && _Mention.whole(name)?.hasMatch(words ??= _prose(text)) == true;
+    bool tagged(String name) {
+      final stored = storedNames[name];
+      return tags(name) || stored != null && tags(stored);
+    }
+
     final unsaid = [
       for (final name in [...mentions, ...addressed])
-        if (!said.any((tag) => _says(tag, name, addresses)) &&
-            _Mention.whole(name)?.hasMatch(words ??= _prose(text)) != true)
-          '@$name',
+        if (!tagged(name)) '@$name',
     ];
     final body = MarkdownBody(
       data: withTags(unsaid, text),
