@@ -5,7 +5,7 @@
  * is code, run by the Harness of the person whose agent is the project's PM, with that person's own gh login: one merger
  * for a project, as lampOS runs one train bot.
  *
- * A pull request into the default branch is merged, squashed, when
+ * A pull request into the default branch is ready to land when
  * - it is not a draft;
  * - its head has a READ-OK from someone other than its writers: `READ-OK <sha>` as a comment's or a review's own, in its first
  *   line (pullTalk, ownVerdict), the reader the name it is signed with ("Juno, 14:20, to **Pip**: READ-OK f6edb44"), or its
@@ -17,12 +17,16 @@
  * - and GitHub says it can merge.
  * One that cannot, being behind or in conflict, or whose checks failed, is told so on itself, to its author by name, once for
  * each head, so the GitHub news brings it to its author (githubMentions.ts).
+ *
+ * The ready ones land on a train (githubTrain.ts): one branch, one run of the checks on the combined change. Only one that is
+ * alone and holds the base's tip, or a fork's, is merged on its own, squashed, as every one was until 2026-11-10.
  */
 import { createHash } from 'node:crypto'
 import { labelOf, readerKey, sameKey, teamOf, type Crew } from './assign/crew.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { GitHubReads, GitHubStop, PAGE, retryIn, Waits, waitWords } from './githubRest.js'
 import { repositorySlug, TEAM } from './githubMentions.js'
+import { GitHubTrain, type TrainPull } from './githubTrain.js'
 import { identifier, object } from './wire.js'
 
 type Json = Record<string, unknown>
@@ -80,8 +84,9 @@ const SELF = 'Harness'
  *  swarm-sandbox #24-#26 got one note 46 times each when its words carried the time (2026-11-10), and the failing checks of one
  *  head can change and change order. A restart finds a note said by these first words. */
 const NOTES = { unsigned: 'the READ-OK from ', held: 'the HOLD from ', checks: 'checks failed: ', behind: 'it is behind ', dirty: 'it conflicts with ',
-  blocked: 'GitHub\'s rules for ', stacked: 'it carries open ' } as const
+  blocked: 'GitHub\'s rules for ', stacked: 'it carries open ', red: 'its train failed: ' } as const
 type NoteKind = keyof typeof NOTES
+const noteStart = (head: string, kind: NoteKind): string => `not merged yet at ${head.slice(0, 7)}: ${NOTES[kind]}`
 /** How long after a head is first seen its checks may count as passed, and then only when two looks in a row read them the same:
  *  lampOS's merge-when-green.sh waits for "the same in two looks 30 s apart, from 3 min on". A head just pushed has no checks
  *  yet, which read as all passed, and a job that needs another gets its check only when that one ends. */
@@ -94,6 +99,11 @@ const AUTHORS_PAGE = 100, RECORDED_MAX = 5_000, RECORD_SETTLE_MS = 2 * 60_000
 /** How long an answer about a comment is kept before it is asked about again: a record made late (the command run again after
  *  the server refused it) and an agent's new name are read within it, with no restart. */
 const RECORD_AGAIN_MS = 10 * 60_000
+
+/** A ready pull request, with what a note to its author takes (tellOnce). */
+interface Ready extends TrainPull { author: string; comments: Json[] }
+/** The label a person puts on a pull request to keep Harness from landing it (AGENTS.md). */
+const HOLD_LABEL = 'hold'
 
 /** A project whose PM runs on this computer as its person: the merger merges its repository's pull requests, and the
  *  assigner gives its tasks (githubAssign.ts). Its Swarm, its PM and the project, to read its crew as the PM. */
@@ -306,6 +316,7 @@ export class GitHubMerge {
   private readonly waits = new Waits()
   /** The notes said, as `<repo>#<number> <kind> <head>` (NOTES), so each is said once. */
   private readonly told = new Set<string>()
+  private me: string | null = null
   /** When each open team pull request's head (`<repo>#<number>@<head>`) was first seen, and its checks as last read: they count as
    *  passed only once they hold still (CHECKS_SETTLE_MS). Kept for the heads open now, so the memory is the open work. */
   private readonly seenAt = new Map<string, number>()
@@ -390,16 +401,30 @@ export class GitHubMerge {
     if (!pulls.length) { this.forgetHeads(repo, new Set()); return }
     const team = teamOf(await this.deps.crew(project), project.pm)
     const open = new Set<string>()
+    const conflicts = (pull: { number: number; head: string; author: string; comments: Json[] }) =>
+      this.tellOnce(repo, pull.number, pull.head, pull.author, 'dirty', `${base}: rebase it on ${base} and push.`, pull.comments)
+    const train = new GitHubTrain<Ready>({ reads: this.reads, send: this.deps.send, now: this.now, log: this.log }, repo, base, listed, {
+      checks: (number, head) => this.checks(repo, this.see(open, `${repo}#${number}@${head}`), head),
+      login: () => this.login(repo),
+      conflicts,
+      failedAlone: (pull, carried) => this.tellOnce(repo, pull.number, pull.head, pull.author, 'red',
+        `#${carried} carried it alone on ${base}, and its checks failed there. Fix it and push.`, pull.comments),
+      stamp: () => `${SELF}, ${this.clock()}`,
+    })
+    // What a merged train carried is closed by it and read no more: to GitHub it now conflicts with the base that holds it.
+    const landed = await train.landed()
+    const ready: Ready[] = []
+    // Read, and not ready only for now: a train that carries one keeps its green run (githubTrain.ts attend).
+    const waiting = new Set<string>()
     for (const pull of pulls) {
       const number = Number(pull.number), head = String(object(pull.head).sha ?? '')
-      if (!Number.isSafeInteger(number) || !/^[0-9a-f]{40}$/.test(head)) continue
+      if (!Number.isSafeInteger(number) || !/^[0-9a-f]{40}$/.test(head) || landed.has(number)) continue
       const author = authorOf(pull)
       // The team's own pull requests only (assign/crew.ts teamOf): a person's merges as that person's repository does it.
       if (author === null || !team.has(labelOf(author))) continue
+      if ((Array.isArray(pull.labels) ? pull.labels : []).some(label => object(label).name === HOLD_LABEL)) continue
       // Seen from now, whatever it waits for: a read that comes minutes after a push finds the head long settled.
-      const at = `${repo}#${number}@${head}`
-      open.add(at)
-      if (!this.seenAt.has(at)) this.seenAt.set(at, this.now())
+      const at = this.see(open, `${repo}#${number}@${head}`)
       const comments = await this.recordedNames(project, await pullTalk(this.reads, repo, number))
       const people = pullPeople(pull, team)
       const { readers, twoReads } = verdicts(comments, String(pull.body ?? ''), people)
@@ -430,39 +455,71 @@ export class GitHubMerge {
           + `login: its reader signs it, as in "<name>, HH:MM: READ-OK ${head.slice(0, 7)}".`, comments)
         continue
       }
-      const runs = object(await this.reads.one(repo, `/repos/${repo}/commits/${head}/check-runs?per_page=${PAGE}`)).check_runs
-      const checks = checksOf(Array.isArray(runs) ? runs.map(object) : [], await this.reads.one(repo, `/repos/${repo}/commits/${head}/status`))
-      if (checks.state === 'running') continue
+      const checks = await this.checks(repo, at, head)
+      if (checks.state === 'running') { waiting.add(`${number}@${head}`); continue }
       if (checks.state === 'failed') { await this.tellOnce(repo, number, head, author, 'checks', `${checks.failed.slice(0, 3).join(', ')}. Fix them and push.`, comments); continue }
-      // Passed, or none yet: only once they hold still (CHECKS_SETTLE_MS).
-      const before = this.looked.get(at)
-      this.looked.set(at, checks.summary)
-      if (this.now() - this.seenAt.get(at)! < CHECKS_SETTLE_MS || before !== checks.summary) continue
       const detail = await this.reads.one(repo, `/repos/${repo}/pulls/${number}`)
       const state = String(detail.mergeable_state ?? 'unknown')
       if (state === 'behind') { await this.tellOnce(repo, number, head, author, 'behind', `${base}: update the branch and push.`, comments); continue }
-      if (state === 'dirty') { await this.tellOnce(repo, number, head, author, 'dirty', `${base}: rebase it on ${base} and push.`, comments); continue }
+      if (state === 'dirty') { await conflicts({ number, head, author, comments }); continue }
       if (state === 'blocked') { await this.tellOnce(repo, number, head, author, 'blocked', `${base} block the merge. Ask your person.`, comments); continue }
-      if (!['clean', 'has_hooks', 'unstable'].includes(state)) continue
+      if (!['clean', 'has_hooks', 'unstable'].includes(state)) { waiting.add(`${number}@${head}`); continue }
       const carried = await this.carriedPull(repo, number, head, listed)
       if (carried) {
         await this.tellOnce(repo, number, head, author, 'stacked', `#${carried.number}'s commits (its head ${carried.head.slice(0, 7)}), so merging it would `
           + `merge them too. It waits until #${carried.number} merges; then update it from ${base}.`, comments)
         continue
       }
-      const merged = await this.deps.send('PUT', `/repos/${repo}/pulls/${number}/merge`, { merge_method: 'squash', sha: head })
-      if (merged.status !== 200) {
-        // A head that moved (409) or a merge GitHub refused (405) is read again next pass.
-        this.reads.forget(repo)
-        this.note('MERGE_REFUSED', `${repo}#${number}: GitHub answered ${merged.status}`)
-        continue
-      }
-      const by = [...reads.values()].map(r => r.name).join(' and ')
-      await this.comment(repo, number, `${SELF}, ${this.clock()}: merged. READ-OK on ${head.slice(0, 7)} by ${by}, checks green.`)
-      this.log(`[super-tab] merged ${repo}#${number} on ${head.slice(0, 7)} (READ-OK by ${by})`)
-      this.reads.forget(repo)
+      // A train carried it alone at this head and failed: it sits out until its head changes. Its note says so for good, where
+      // GitHub lists a red train only among the hundred pull requests closed last (githubTrain.ts landed).
+      if (this.said(comments, head, 'red')) continue
+      ready.push({ number, head, title: String(pull.title ?? ''), body: String(pull.body ?? ''), readers: [...reads.values()].map(r => r.name),
+        fork: String(object(object(pull.head).repo).full_name ?? '').toLowerCase() !== repo.toLowerCase(), checked: !checks.none, author, comments })
     }
+    for (const pull of await train.carry(ready, waiting)) await this.mergeAlone(repo, pull)
     this.forgetHeads(repo, open)
+  }
+
+  /** Merges one pull request on its own, squashed at its head, as every ready one was before the train. */
+  private async mergeAlone(repo: string, pull: Ready): Promise<void> {
+    const merged = await this.deps.send('PUT', `/repos/${repo}/pulls/${pull.number}/merge`, { merge_method: 'squash', sha: pull.head })
+    // Merged, its head moved (409) or refused by GitHub (405): the repository is read again next pass.
+    this.reads.forget(repo)
+    if (merged.status !== 200) { this.note('MERGE_REFUSED', `${repo}#${pull.number}: GitHub answered ${merged.status}`); return }
+    const by = pull.readers.join(' and ')
+    await this.comment(repo, pull.number, `${SELF}, ${this.clock()}: merged. READ-OK on ${pull.head.slice(0, 7)} by ${by}, checks green.`)
+    this.log(`[super-tab] merged ${repo}#${pull.number} on ${pull.head.slice(0, 7)} (READ-OK by ${by})`)
+  }
+
+  /** This computer's GitHub login, asked once: the train takes only the pull requests it opened for its own (githubTrain.ts). */
+  private async login(repo: string): Promise<string> {
+    if (!this.me) {
+      const login = (await this.reads.one(repo, '/user')).login
+      if (typeof login !== 'string' || !login) throw new GitHubStop('LOGIN_UNREAD', 'GitHub did not say this computer\'s login.', false, this.now())
+      this.me = login
+    }
+    return this.me
+  }
+
+  /** Notes that head [at] (`<repo>#<number>@<head>`) is open now, and first seen now if never before. Returns [at]. */
+  private see(open: Set<string>, at: string): string {
+    open.add(at)
+    if (!this.seenAt.has(at)) this.seenAt.set(at, this.now())
+    return at
+  }
+
+  /** The checks of [head], seen as [at] (checksOf): passed only once they hold still (CHECKS_SETTLE_MS), and running until then.
+   *  A pull request's and a train's alike. */
+  private async checks(repo: string, at: string, head: string): Promise<{ state: 'passed' | 'running' | 'failed'; failed: string[]; none: boolean }> {
+    const runs = object(await this.reads.one(repo, `/repos/${repo}/commits/${head}/check-runs?per_page=${PAGE}`)).check_runs
+    const checks = checksOf(Array.isArray(runs) ? runs.map(object) : [], await this.reads.one(repo, `/repos/${repo}/commits/${head}/status`))
+    // No check and no status at all: a repository with no CI, or CI that has not started on this head.
+    const none = checks.summary === ''
+    if (checks.state !== 'passed') return { ...checks, none }
+    // Passed, or none yet.
+    const before = this.looked.get(at)
+    this.looked.set(at, checks.summary)
+    return this.now() - this.seenAt.get(at)! < CHECKS_SETTLE_MS || before !== checks.summary ? { state: 'running', failed: [], none } : { ...checks, none }
   }
 
   /**
@@ -531,13 +588,17 @@ export class GitHubMerge {
   private async tellOnce(repo: string, number: number, head: string, author: string | null, kind: NoteKind, rest: string, comments: Json[]): Promise<void> {
     const key = `${repo}#${number} ${kind} ${head}`
     if (this.told.has(key)) return
-    const start = `not merged yet at ${head.slice(0, 7)}: ${NOTES[kind]}`
-    if (!comments.some(c => TEAM.has(c.author_association) && String(c.body ?? '').slice(0, 500).includes(start))) {
-      await this.comment(repo, number, `${SELF}, ${this.clock()}${author ? `, to **${author}**` : ''}: ${start}${rest}`)
+    if (!this.said(comments, head, kind)) {
+      await this.comment(repo, number, `${SELF}, ${this.clock()}${author ? `, to **${author}**` : ''}: ${noteStart(head, kind)}${rest}`)
     }
     // Once GitHub has answered: a comment that never reached it (the pass failed, and is tried again) is not told.
     this.told.add(key)
     if (this.told.size > TOLD_MAX) this.told.delete(this.told.values().next().value!)
+  }
+
+  /** Whether one of the team's [comments] is the note of [kind] on [head]. */
+  private said(comments: Json[], head: string, kind: NoteKind): boolean {
+    return comments.some(c => TEAM.has(c.author_association) && String(c.body ?? '').slice(0, 500).includes(noteStart(head, kind)))
   }
 
   private async comment(repo: string, number: number, body: string): Promise<void> {

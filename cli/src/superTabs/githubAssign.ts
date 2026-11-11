@@ -46,8 +46,9 @@ const ISSUE_PAGES = 10
 const READ_WAIT_MS = 2 * 60 * 60_000, READ_ASKS = 3
 /** How Harness's ask about a quiet task begins, after the builder's name: a restart finds it by these words. */
 const QUIET_ASKED = 'nothing has moved on this task for '
-/** Harness's ask of a reader, as askReaders writes it: who was asked, and for which head. */
-const ASKED = /^Harness, \d\d:\d\d, to \*\*([^*]+)\*\*: [^\n]*?please read[^\n]*?READ-OK ([0-9a-f]{7,40})/
+/** Harness's ask of a reader, as `ask` writes it: who was asked, and for which head. An ask from before the verdict was a
+ *  command named the head after "READ-OK", and is on open pull requests still: that form can go after 2026-12-10. */
+const ASKED = /^Harness, \d\d:\d\d, to \*\*([^*]+)\*\*: [^\n]*?please read[^\n]*?(?:super-tab read ok \S+|READ-OK) ([0-9a-f]{7,40})/
 
 export class GitHubAssign {
   private timer: NodeJS.Timeout | null = null
@@ -187,9 +188,9 @@ export class GitHubAssign {
 
   /**
    * Takes back the tasks of builders that cannot work (anh Dee's plan, 2026-11-09: "when a builder stops, stalls or runs
-   * out of quota, Harness takes the task back and gives it to the next best builder"): their builder label, and
-   * status:taken when it was taken, come off, with one line of why; the next plan gives each to another builder. Once a
-   * task, as the label is gone from the next read.
+   * out of quota, Harness takes the task back and gives it to the next best builder"): their builder label and
+   * status:taken come off, with one line of why; the next plan gives each to another builder. Once a task, as the label
+   * is gone from the next read.
    */
   private async takeBack(repo: string, issues: Json[], away: AwayBuilder[], why?: string, keep: ReadonlySet<number> = new Set()): Promise<void> {
     if (!away.length) return
@@ -199,12 +200,22 @@ export class GitHubAssign {
       // status:taken first: a task left taken with no builder is one nobody plans (readProblem), while one left queued for
       // its builder is taken back again next pass. A label already gone is off; anything else GitHub refuses is said, and
       // tried again next pass.
-      let refused = 0
+      let refused = 0, off = false
+      const remove = (label: string) => this.deps.send('DELETE', `/repos/${repo}/issues/${back.number}/labels/${encodeURIComponent(label)}`)
       for (const label of [...back.taken ? ['status:taken'] : [], back.label]) {
-        const reply = await this.deps.send('DELETE', `/repos/${repo}/issues/${back.number}/labels/${encodeURIComponent(label)}`)
+        const reply = await remove(label)
         if (reply.status !== 200 && reply.status !== 404) { refused = reply.status; break }
+        off = label === back.label && reply.status === 200
       }
       if (refused) { this.once(`[super-tab] Task assignment: TAKE_BACK_REFUSED ${repo}#${back.number}: GitHub answered ${refused}`); continue }
+      // And status:taken once more, after the builder's label: a claim made meanwhile (githubClaim.ts) marks the task taken,
+      // and takes its own mark off only when it lands after the label went. Only where this pass took the label off: one
+      // already gone was moved by hand, and its next builder's claim is not this pass's to undo. Refused, it is said: the
+      // task is taken back all the same, and is left taken only if a claim did land.
+      if (off) {
+        const cleared = await remove('status:taken')
+        if (cleared.status !== 200 && cleared.status !== 404) this.once(`[super-tab] Task assignment: TAKEN_NOT_CLEARED ${repo}#${back.number}: GitHub answered ${cleared.status}`)
+      }
       this.backs.add(key)
       await this.deps.send('POST', `/repos/${repo}/issues/${back.number}/comments`,
         { body: `${SELF}, ${this.clock()}: ${back.why}, so this task goes to the builder who can start it next.` })
@@ -422,14 +433,13 @@ export class GitHubAssign {
     return true
   }
 
-  /** One ask of a reader, once per pull request, head and reader: a comment naming it, with the head it reads. One GitHub
-   *  refuses is said, and asked again next pass. */
+  /** One ask of a reader, once per pull request, head and reader: a comment naming it, with the command that makes its
+   *  verdict on the head it reads (githubVerdict.ts). One GitHub refuses is said, and asked again next pass. */
   private async ask(repo: string, number: number, head: string, name: string, what: string, nth = 0): Promise<void> {
     const key = `${repo}#${number}@${head}:${readerKey(name)}${nth ? `:${nth}` : ''}`
     if (this.asks.has(key)) return
-    const clock = this.clock(), sha = head.slice(0, 7)
-    const reply = await this.deps.send('POST', `/repos/${repo}/issues/${number}/comments`, { body: `${SELF}, ${clock}, to **${name}**: ${what}, `
-      + `and start your comment with your name, as in "${name}, ${clock}: READ-OK ${sha}" or "${name}, ${clock}: HOLD ${sha}" with the file, line and fix.` })
+    const reply = await this.deps.send('POST', `/repos/${repo}/issues/${number}/comments`, { body: `${SELF}, ${this.clock()}, to **${name}**: ${what}, `
+      + `then run \`harness super-tab read ok ${repo}#${number} ${head.slice(0, 7)} 'what you found'\`. For a HOLD, read hold in place of read ok, with the file, line and fix.` })
     if (reply.status >= 300) { this.once(`[super-tab] Task assignment: ASK_REFUSED ${repo}#${number}: GitHub answered ${reply.status}`); return }
     this.asks.add(key)
     this.log(`[super-tab] asked ${name} to read ${repo}#${number} at ${head.slice(0, 7)}`)
