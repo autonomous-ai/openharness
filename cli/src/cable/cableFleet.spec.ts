@@ -10,7 +10,7 @@ import { CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DialLog } from './dialLog.js'
 import { DialVerdicts } from './dialPortVerdicts.js'
 import { completeFlash } from '../lib/flashRecovery.js'
-import { createDarwinDialFinder, parseDarwinDialPorts, portInUse, type DialPort } from './serial.js'
+import { SerialToolTimeoutError, createDarwinDialFinder, parseDarwinDialPorts, portInUse, type DialPort } from './serial.js'
 
 // Run the same two-device scenarios against the staged helper before deployment.
 const CableFleet: typeof SourceFleet = process.env.HARNESS_TEST_USB_FLEET
@@ -357,6 +357,27 @@ describe('USB dial fleet', () => {
       expect(f.host.onDialGone).not.toHaveBeenCalled()
       expect(f.host.onDialAttached).toHaveBeenCalledTimes(1)
     } finally { await f.fleet.stop() }
+  })
+
+  it('logs an ioreg that hung, and the next scan still runs and finds the dial', async () => {
+    vi.useFakeTimers()
+    const dump = `+-o Tim <class IOUSBHostDevice>
+  "idVendor" = 12346
+  "idProduct" = 4097
+  "USB Serial Number" = "AA:01"
+  +-o serial
+    "IOCalloutDevice" = "/dev/tim"`
+    const runIoreg = vi.fn<() => Promise<string>>().mockReturnValueOnce(new Promise(() => {})).mockResolvedValue(dump)
+    const f = fixture({ discover: createDarwinDialFinder({ listDev: () => ['cu.tim:1:1'], runIoreg, now: () => Date.now() }) })
+    try {
+      f.fleet.start()
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(f.host.log).toHaveBeenCalledWith(`cable: USB discovery failed: ${String(new SerialToolTimeoutError('ioreg'))}`)
+      expect(f.ports).toHaveLength(0)
+      await f.fleet['scan']()
+      expect(runIoreg).toHaveBeenCalledTimes(2)
+      expect(f.ports.map(p => p.path)).toEqual(['/dev/tim'])
+    } finally { vi.useRealTimers(); await f.fleet.stop() }
   })
 
   it('opens only selected serial numbers', async () => {
