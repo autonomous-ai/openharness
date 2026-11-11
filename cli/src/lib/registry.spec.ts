@@ -1508,6 +1508,54 @@ describe('agent identity: the process owns the agent, the session is bound to it
       expect(reloaded.displayName(reloaded.byAgent(named.agentId)!)).toBe('Local model')
       expect(reloaded.displayName(reloaded.byAgent(unnamed.agentId)!)).toBe('OpenCode harness 9-17 16:00')
     })
+
+    // By hand, 2026-11-11: the person pressed Start before they ever wrote to the agent, so the browser's ready line, typed for the
+    // agent alone (a quiet delivery), was its conversation's first prompt. Claude Code titled the conversation "Harness browser
+    // setup" and Codex "Run harness browser --help", and each agent was called that.
+    it('never takes a title its engine gave in a quiet stretch, then or later: through a restart, a rebind and a stop', async () => {
+      at(2026, 11, 11, 9, 41)
+      let { registry, strictPersistedRow } = await loadRegistryModule()
+      registry.load()
+      const agent = registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%12' }], cwd: '/tmp/demo' })!
+      const name = () => registry.displayName(registry.byAgent(agent.agentId)!)
+      registry.updateTitle(agent.agentId, '✳ Harness browser setup', true)
+      expect(name()).toBe('Claude harness 11-11 9:41')
+      // Out of the stretch it is still the quiet line's title: Claude Code's activity mark moving makes no new one.
+      registry.updateTitle(agent.agentId, '⠂ Harness browser setup')
+      expect(name()).toBe('Claude harness 11-11 9:41')
+      ;({ registry, strictPersistedRow } = await loadRegistryModule())
+      registry.load()
+      registry.updateTitle(agent.agentId, '✳ Harness browser setup')
+      expect(name()).toBe('Claude harness 11-11 9:41')
+      const transcriptPath = join(dataDir, 'session-quiet.jsonl')
+      writeFileSync(transcriptPath, '{}\n')
+      registry.register({ sessionId: 'session-quiet', transcriptPath, tmuxPane: '%12', cwd: '/tmp/demo' })
+      registry.updateTitle('session-quiet', '✳ Harness browser setup')
+      expect(name()).toBe('Claude harness 11-11 9:41')
+      // A stopped agent's record (lib/stoppedAgents.ts) keeps it for its resume.
+      const row = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8')).find((r: { agentId: string }) => r.agentId === agent.agentId)
+      expect(strictPersistedRow(row)?.quietTitle).toBe('Harness browser setup')
+      // A title the engine gives the conversation anew, out of a stretch, names it as any does.
+      registry.updateTitle('session-quiet', '✳ Fix the login test')
+      expect(name()).toBe('Fix the login test')
+    })
+
+    it('keeps the name an agent had through a quiet stretch, and a name its person chose always', async () => {
+      const { registry, isNameChosen } = await loadRegistryModule()
+      registry.load()
+      const agent = registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%13' }], cwd: '/tmp/demo' })!
+      const name = () => registry.displayName(registry.byAgent(agent.agentId)!)
+      registry.updateTitle(agent.agentId, 'Ready | Fix the login test | demo')
+      expect(name()).toBe('Fix the login test')
+      // Codex's terminal title holds its status and its folder beside the title: a new status is the same quiet title.
+      registry.updateTitle(agent.agentId, 'Working | Run harness browser --help | demo', true)
+      registry.updateTitle(agent.agentId, 'Ready | Run harness browser --help | demo')
+      expect(name()).toBe('Fix the login test')
+      registry.rename(agent.agentId, 'Login work')
+      registry.updateTitle(agent.agentId, 'Working | Open the dashboard | demo', true)
+      expect(name()).toBe('Login work')
+      expect(isNameChosen(registry.byAgent(agent.agentId)!)).toBe(true)
+    })
   })
 
   it('keeps the named agent a pane was opened as through binding and reload, and drops one that is not an identifier', async () => {
