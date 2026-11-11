@@ -35,6 +35,8 @@ export interface ExternalPaths {
   commandcodeHome: string
   museHome: string
   agyHome: string
+  /** OpenClaw's state folder: its agents' stores are under it. */
+  openclawStateDir: string
 }
 
 /** An engine's database file: its own override (absolute, or relative to its data folder), else the default. */
@@ -62,6 +64,7 @@ export function externalPaths(vars: NodeJS.ProcessEnv = process.env): ExternalPa
     commandcodeHome: env.COMMANDCODE_HOME,
     museHome: env.MUSE_HOME,
     agyHome: env.AGY_HOME,
+    openclawStateDir: env.OPENCLAW_STATE_DIR,
   }
 }
 
@@ -117,5 +120,6 @@ export function externalProviders(paths: ExternalPaths = externalPaths()): Exter
     loaded('commandcode', 'commandcode', (code) => code.commandcodeProvider({ home: paths.commandcodeHome })),
     loaded('muse', 'muse', (code) => code.museProvider({ home: paths.museHome })),
     loaded('agy', 'agy', (code) => code.agyProvider({ home: paths.agyHome })),
+    loaded('openclaw', 'openclaw', (code) => code.openclawProvider({ stateDir: paths.openclawStateDir })),
   ]
 }

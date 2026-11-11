@@ -35,3 +35,22 @@ export function managedNodePath(): string {
   }
   return process.execPath
 }
+
+/** The lowest Node major the CLI and daemon run on. OpenClaw's install recipe needs 24, run with the Node Harness ships. */
+export const MINIMUM_NODE_MAJOR = 24
+
+const RUNTIME_FOLDER = /^node-v(\d+)\.\d+\.\d+-[^/\\]+$/
+
+/**
+ * The major of a managed Node, read from the folder it was unpacked into (`node-v<major>.<minor>.<patch>-<key>`),
+ * so asking costs no exec. The binary is `bin/node`, `node.exe` on Windows, or a process's name link under
+ * `libexec/harnessd/` (../harnessd/processName.ts). Null for anything else: a Node the product did not lay down.
+ */
+export function nodeMajorOf(binaryPath: string): number | null {
+  const parts = binaryPath.split(/[/\\]/)
+  const at = parts.findLastIndex((part) => RUNTIME_FOLDER.test(part))
+  if (at < 0) return null
+  const inside = parts.slice(at + 1).join('/')
+  if (inside !== 'bin/node' && inside !== 'node.exe' && !/^libexec\/harnessd\/[^/]+$/.test(inside)) return null
+  return Number(RUNTIME_FOLDER.exec(parts[at])![1])
+}

@@ -1,0 +1,40 @@
+ openclaw tui - ws://127.0.0.1:18789 - agent main (main) - session win-check
+
+ session agent:main:win-check
+
+
+reply ok
+
+
+ok — I'm here and the channel's working.
+
+Quick bit of housekeeping first: I'm your new assistant in this workspace. Before I settle in — what would you like to
+call me?
+
+Once you've picked a name, I'll choose a vibe and a signature emoji to go with it.
+ connected | idle
+ agent main (main) | session win-check | deepseek/deepseek-v4.1-flash | deliver:off | tokens 0/1.0m (0%)
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

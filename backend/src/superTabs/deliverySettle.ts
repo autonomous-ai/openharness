@@ -59,7 +59,7 @@ export async function settleStuckDeliveries(db: PrismaClient, store: Pick<SuperT
     const byTab = new Map<string, SuperTabDelivery[]>()
     for (const row of rows) byTab.set(row.tabId, [...byTab.get(row.tabId) ?? [], row])
     for (const [tabId, tabRows] of byTab) {
-      // One Swarm that cannot be read now (it is being migrated) never holds the others back.
+      // One Swarm that cannot be read now (deleted, or busy) never holds the others back.
       try { settled += await store.settleDeliveries(tabId, tabRows, now) } catch (error) {
         logger.warn('[swarm-deliveries] could not settle', { tabId, error: error instanceof Error ? error.message : String(error) })
       }

@@ -38,7 +38,9 @@ describe('tmux output byte fidelity and ownership', () => {
     const wire = Buffer.from('\\033'.repeat(32_000))
     const decoded = decodeTmuxControlBytes(wire)
     expect(Buffer.from(decoded)).toEqual(Buffer.alloc(32_000, 0x1b))
-    expect(decoded.buffer.byteLength).toBeLessThanOrEqual(2 * decoded.byteLength)
+    // A copy under half of Buffer.poolSize lives in the shared pool slab (8 KiB
+    // on Node 22, 64 KiB on Node 24), which never pins the 128 KB wire buffer.
+    expect(decoded.buffer.byteLength).toBeLessThanOrEqual(Math.max(2 * decoded.byteLength, Buffer.poolSize))
   })
 
   it('preserves Unicode bytes split at every position across output notifications', () => {

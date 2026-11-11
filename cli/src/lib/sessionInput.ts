@@ -57,6 +57,9 @@ const AGY_SUBMIT_VERIFY_MS = 8_000
 // Copilot's first hook of a turn is `userPromptSubmitted`, which fires as soon as Enter is accepted —
 // faster than agy's, which waits for the model call. 6s is the same headroom grok gets.
 const COPILOT_SUBMIT_VERIFY_MS = 6_000
+// OpenClaw's TUI draws no composer glyph Harness reads, and the Gateway writes the run's user row as the run starts:
+// its reader's 1s poll surfaces it as turn_started, so it gets OpenCode's poll-sized window.
+const OPENCLAW_SUBMIT_VERIFY_MS = 2_500
 const CURSOR_TURN_SETTLE_MS = 750
 const SUBMIT_MAX_RETRIES = 2
 /** How long a paste the control lease refused, before a byte was written, waits for the lease, and how
@@ -964,6 +967,8 @@ export class SessionInputController {
                           ? AGY_SUBMIT_VERIFY_MS
                           : session.engine === 'copilot'
                             ? COPILOT_SUBMIT_VERIFY_MS
+                            : session.engine === 'openclaw'
+                              ? OPENCLAW_SUBMIT_VERIFY_MS
                       : SUBMIT_VERIFY_MS))
   }
 
@@ -1017,7 +1022,8 @@ export class SessionInputController {
         return
       }
     } else if (session.engine === 'opencode' || session.engine === 'kilo' || session.engine === 'pi' || session.engine === 'hermes' || session.engine === 'muse'
-      || session.engine === 'amp' || session.engine === 'grok' || session.engine === 'agy' || session.engine === 'copilot') {
+      || session.engine === 'amp' || session.engine === 'grok' || session.engine === 'agy' || session.engine === 'copilot'
+      || session.engine === 'openclaw') {
       // OpenCode has no composer glyph, and the submitted text stays visible in the message area, so a
       // pane scrape can't tell "still in the composer" from "already sent". Rely purely on the reader-
       // derived turn_started (a new user row in opencode.db) to clear awaitingFingerprint; if it hasn't

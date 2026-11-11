@@ -101,6 +101,9 @@ describe('API tools', () => {
     store.save({ provider: 'fal', apiKey: secret })
     prepareApiInstructions(store, directory, 'terminal')
     expect(existsSync(join(directory, 'AGENTS.md'))).toBe(false)
+    // OpenClaw's agent reads its own workspace's files, never the pane folder's.
+    prepareApiInstructions(store, directory, 'openclaw')
+    expect(existsSync(join(directory, 'AGENTS.md'))).toBe(false)
     prepareApiInstructions(store, directory, 'codex')
     expect(readFileSync(join(directory, 'AGENTS.md'), 'utf8')).toContain('harness api list')
     const target = join(directory, 'my-instructions.md'); writeFileSync(target, 'Preserve me')

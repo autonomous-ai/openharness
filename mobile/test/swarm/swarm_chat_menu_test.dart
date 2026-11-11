@@ -9,7 +9,6 @@ import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
 import 'package:harness_mobile/swarm/swarm_chat_notify.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
-import 'package:harness_mobile/swarm/swarm_project_tabs.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 
@@ -236,7 +235,6 @@ void main() {
         home: const SwarmProjectPage(
           swarmId: tab,
           projectId: project,
-          tabs: SwarmProjectTab.homeC,
         ),
       );
 
@@ -290,7 +288,6 @@ void main() {
         home: const SwarmProjectPage(
           swarmId: tab,
           projectId: project,
-          tabs: SwarmProjectTab.homeC,
         ),
       );
 
@@ -316,7 +313,6 @@ void main() {
         home: const SwarmProjectPage(
           swarmId: tab,
           projectId: project,
-          tabs: SwarmProjectTab.homeC,
         ),
       );
       await tester.tap(key('swarm-project-menu'));
@@ -326,48 +322,5 @@ void main() {
       expect(key('swarm-find-field'), findsOneWidget);
     });
 
-    testWidgets("with tabs: the project chat's ⋮ finds in it (#2826)", (
-      tester,
-    ) async {
-      await pump(
-        tester,
-        backend(),
-        home: const SwarmProjectPage(
-          swarmId: tab,
-          projectId: project,
-          tabs: SwarmProjectTab.homeB,
-        ),
-      );
-      await open(tester);
-      await tester.tap(find.text('Find in chat'));
-      await tester.pumpAndSettle();
-      expect(key('swarm-find-field'), findsOneWidget);
-    });
-
-    testWidgets("with tabs: ⋮ for the project chat's Notifications while its "
-        'Chat tab is shown, and not on another tab', (tester) async {
-      final fake = backend();
-      await pump(
-        tester,
-        fake,
-        home: const SwarmProjectPage(
-          swarmId: tab,
-          projectId: project,
-          tabs: SwarmProjectTab.homeB,
-        ),
-      );
-
-      expect(key('swarm-chat-menu'), findsOneWidget);
-      await open(tester);
-      await tester.tap(find.text('All new messages'));
-      await tester.pumpAndSettle();
-      expect(sent(fake, path: leadNotifications), [
-        {'notify': 'all'},
-      ]);
-
-      await tester.tap(key('swarm-project-tab-tasks'));
-      await tester.pumpAndSettle();
-      expect(key('swarm-chat-menu'), findsNothing);
-    });
   });
 }

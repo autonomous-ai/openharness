@@ -463,6 +463,21 @@ describe('agent_create, refused before any pane exists', () => {
     expect(create).not.toHaveBeenCalled()
   })
 
+  it('a new OpenClaw agent takes a first task and a folder, and an OpenClaw conversation is resumed by its full key', async () => {
+    const { ask, create } = setup()
+    // The key a new agent opens (`harness-<agentId>`) is the launch's own choice, not a resume: the task and folder go with it.
+    await ask({ engine: 'openclaw', cwd: '/w', prompt: 'Fix the parser' })
+    expect(create).toHaveBeenLastCalledWith(expect.objectContaining({ engine: 'openclaw', cwd: '/w', prompt: 'Fix the parser', resumeSessionId: null }))
+    for (const key of ['agent:main:main', 'agent:main:tui-652cc362-2631-416e-bf1c-6ac369311a20']) {
+      await ask({ engine: 'openclaw', cwd: '/w', resumeSessionId: key })
+      expect(create).toHaveBeenLastCalledWith(expect.objectContaining({ engine: 'openclaw', resumeSessionId: key }))
+    }
+    // Only OpenClaw's ids have colons, and only in its key's shape.
+    const notASession = { error: 'INVALID_SESSION', detail: 'resumeSessionId must be a session id' }
+    expect(await ask({ engine: 'claude', cwd: '/w', resumeSessionId: 'agent:main:main' })).toStrictEqual(notASession)
+    expect(await ask({ engine: 'openclaw', cwd: '/w', resumeSessionId: 'agent:main:../x' })).toStrictEqual(notASession)
+  })
+
   it('a starter that is not another agent: absent is the person, anything else is refused', async () => {
     const { ask, create } = setup()
     const refused = { error: 'INVALID_STARTED_BY', detail: 'startedBy is agent, or absent for the person' }

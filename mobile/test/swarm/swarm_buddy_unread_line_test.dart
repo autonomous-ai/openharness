@@ -6,8 +6,6 @@ import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
-import 'package:harness_mobile/swarm/swarm_project_page.dart';
-import 'package:harness_mobile/swarm/swarm_project_tabs.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 
@@ -285,23 +283,6 @@ void main() {
 
       expect(onScreen(tester, find.text('Update 40.')), isTrue);
       expect(marksSent(fake).last, 40);
-    });
-
-    testWidgets('is also on the Buddy tab of a project', (tester) async {
-      await pump(
-        tester,
-        backend([for (var i = 1; i <= 4; i++) said(i)], mark: 2),
-        home: const SwarmProjectPage(
-          swarmId: tab,
-          projectId: project,
-          tabs: SwarmProjectTab.homeB,
-        ),
-      );
-      await tester.tap(find.byKey(const ValueKey('swarm-project-tab-buddy')));
-      await tester.pumpAndSettle();
-
-      expect(line, findsOneWidget);
-      expect(find.text('Update 4.'), findsOneWidget);
     });
 
     testWidgets('a work chat has it too, from its own mark, and Jump to '

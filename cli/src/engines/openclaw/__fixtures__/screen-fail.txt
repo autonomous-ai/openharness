@@ -1,0 +1,45 @@
+ openclaw tui - ws://127.0.0.1:18789 - agent main - session fail
+
+ session agent:main:fail
+
+ model set to openrouter/nonexistent/no-such-model-x
+
+
+Reply with: hi
+
+
+ run error: This model was not found. Choose another model in the Control UI.
+ connected | error
+ agent main | session fail | nonexistent/no-such-model-x | deliver:off | tokens ?/1.0m
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

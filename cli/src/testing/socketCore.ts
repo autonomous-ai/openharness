@@ -25,6 +25,7 @@ import { createHarnessResourcesReader } from '../lib/harnessResources.js'
 import { createHarnessStorageReader } from '../lib/harnessTelemetry.js'
 import { hermesDb } from '../core/transcripts/databaseHistory.js'
 import { registry } from '../lib/registry.js'
+import { openclawSessionDb } from '../lib/openclawStore.js'
 import { stoppedAgents } from '../lib/stoppedAgents.js'
 import { TranscriptPager } from '../lib/transcriptPages.js'
 import { tmuxPaneInfo } from '../lib/tmux.js'
@@ -37,7 +38,7 @@ export function bindHistory(socket: BackendSocket): void {
     resolve: (id) => registry.resolve(id),
     stopped: () => stoppedAgents.list(),
     pages: new TranscriptPager(),
-    dbs: { opencode: join(env.OPENCODE_DATA_DIR, 'opencode.db'), kilo: join(env.KILO_DATA_DIR, 'kilo.db'), devin: join(env.DEVIN_HOME, 'sessions.db') },
+    dbs: { opencode: join(env.OPENCODE_DATA_DIR, 'opencode.db'), kilo: join(env.KILO_DATA_DIR, 'kilo.db'), devin: join(env.DEVIN_HOME, 'sessions.db'), openclaw: openclawSessionDb },
     hermesDb,
   })
   socket.historyProvider = history.sessionGet

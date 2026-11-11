@@ -17,9 +17,8 @@ import { sweepSwarms } from '../src/superTabs/sweeps.js'
 import { SwarmCache } from '../src/superTabs/cache.js'
 import { DIRECT, readChanged, readLastChangedAt, readLightGroups, readParts } from '../src/superTabs/cachedReads.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
-import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
-import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
+import { storeSwarm } from './storedSwarm.test-support.js'
 import { outsider as outsiderActor, owner as ownerActor, peer as peerActor, richSwarm } from '../src/superTabs/read/fixture.test-support.js'
 import { profiledReads } from './profiledReads.test-support.js'
 
@@ -150,9 +149,7 @@ async function privateScene(extra: (s: ReturnType<typeof richSwarm>) => void = (
   })
   extra(s)
   const tabId = `tab-${randomUUID()}`
-  await writeLegacySwarm(db, { state: { ...structuredClone(s.state), id: tabId } as SuperTabState, revision: 10 })
-  const report = await migrateSwarm(db, tabId)
-  if (!report.ok) throw new Error(report.error)
+  await storeSwarm(db, { state: { ...structuredClone(s.state), id: tabId } as SuperTabState, revision: 10 })
   return { tabId, privateId, secret: s.secret, secretGroup: s.secretGroup, web: s.web, lead: s.lead, done: s.done }
 }
 /** privateScene with an agent of the owner's in Web, on the owner's own machine: only agents post in a project's channel and its
@@ -167,7 +164,7 @@ async function postingScene() {
 const groupKeys = (read: { groups: Array<{ key: string }> }) => read.groups.map(g => g.key)
 
 /** The part collections' reads MongoDB served while `run` ran (its profiler, every operation). */
-const partReads = <T>(run: () => Promise<T>) => profiledReads(db, /\.Swarm(Head|Member|Agent|Group|Machine|Start|Progress)$/, run)
+const partReads = <T>(run: () => Promise<T>) => profiledReads(db, /\.Swarm(Head|Member|Agent|Group|Machine|Start)$/, run)
 
 describe('reads through the cache', () => {
   it('reuses row metadata per pod and observes deletion when the short hold expires', async () => {
@@ -188,19 +185,18 @@ describe('reads through the cache', () => {
     await expect(reads.firstLoad(people.owner, tabId)).rejects.toMatchObject({ code: 'NOT_FOUND' })
   })
 
-  it('checks a changed format at hold expiry and refuses an invalid legacy row', async () => {
+  it('checks a changed format at hold expiry, and answers a row not in parts as a Swarm that does not exist', async () => {
     const { tabId } = await privateScene()
     let now = Date.now()
     const { store } = pod()
     const reads = new SwarmReads(store, { now: () => now })
     await reads.firstLoad(people.owner, tabId)
 
-    // Simulate an incompatible format transition: the fenced v2 state cannot be migrated as a legacy v1 state.
     await db.superTab.update({ where: { id: tabId }, data: { format: 1 } })
     now += 2_999
     await expect(reads.firstLoad(people.owner, tabId)).resolves.toBeDefined()
     now += 1
-    await expect(reads.firstLoad(people.owner, tabId)).rejects.toMatchObject({ code: 'SWARM_MIGRATING' })
+    await expect(reads.firstLoad(people.owner, tabId)).rejects.toMatchObject({ code: 'NOT_FOUND' })
   })
 
   it('reads a Swarm whose stamp did not move without asking Mongo for its parts', async () => {
@@ -349,13 +345,11 @@ describe('a change poll\'s shared light read (DB 2.3)', () => {
     await warm(cache!, tabId)
     const first = await partReads(poll)
     expect(first.byCollection.SwarmHead).toBe(1)
-    expect(first.byCollection.SwarmProgress ?? 0).toBe(0)
     await store.execute(people.owner, tabId, { operationId: `send-${randomUUID()}`,
       command: { type: 'message.send', conversationId: web, text: 'moves the stamp', replyTo: null, recipientIds: [] } }, agentId)
     await warm(cache!, tabId)
     const after = await partReads(poll)
     expect(after.byCollection.SwarmHead).toBe(1)
-    expect(after.byCollection.SwarmProgress ?? 0).toBe(0)
   })
 
 })

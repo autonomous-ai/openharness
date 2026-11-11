@@ -6,7 +6,7 @@ import { legacyDriver, storeRoutes } from '../legacyDriver.js'
 
 const base = '/api/super-tabs'
 /** The parts' collections (backend/prisma/schema.prisma, Swarm state by parts). */
-const PARTS = ['SwarmHead', 'SwarmMember', 'SwarmGroup', 'SwarmAgent', 'SwarmMachine', 'SwarmStart', 'SwarmProgress']
+const PARTS = ['SwarmHead', 'SwarmMember', 'SwarmGroup', 'SwarmAgent', 'SwarmMachine', 'SwarmStart']
 /** A host asks for its whole form at least this often (cli/src/superTabs/hostFeed.ts `HOST_FULL_MS`). */
 const HOST_FULL_MS = 60_000
 

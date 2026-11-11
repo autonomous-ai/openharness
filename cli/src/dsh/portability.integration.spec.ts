@@ -21,6 +21,9 @@ import { prepareHarnessLaunch } from './runtime.js'
 import { dshListRows } from './wire.js'
 import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
 
+/** The engines a harness runs on: OpenClaw reads no instructions from the workspace or a flag (dsh/compatibility.ts). */
+const HARNESS_ENGINES = PROCESS_ENGINES.filter(engine => engine !== 'openclaw')
+
 const store = fileURLToPath(new URL('../../../store/agents', import.meta.url))
 let root: string
 const write = (path: string, body: string, executable = false) => {
@@ -58,12 +61,12 @@ describe('the whole store × engine matrix', () => {
       }
       const pkg = installed(dir)
       const row = dshListRows([pkg], [])[0]!
-      expect(new Set(row.engines as string[])).toEqual(new Set(PROCESS_ENGINES))
-      expect(new Set(dshSupportedEngines(pkg.manifest))).toEqual(new Set(PROCESS_ENGINES))
+      expect(new Set(row.engines as string[])).toEqual(new Set(HARNESS_ENGINES))
+      expect(new Set(dshSupportedEngines(pkg.manifest))).toEqual(new Set(HARNESS_ENGINES))
       const workspace = join(root, 'workspace')
       mkdirSync(workspace)
       const launches = new Map()
-      for (const engine of PROCESS_ENGINES) {
+      for (const engine of HARNESS_ENGINES) {
         const launch = prepareHarnessLaunch(pkg, workspace, engine, engine)
         launches.set(engine, launch)
         // Packages may configure their default engine (KiCad does). Those flags must survive
@@ -90,7 +93,7 @@ describe('the whole store × engine matrix', () => {
       // including after its default and instructions change. Another session cannot retarget it.
       if (pkg.manifest.agent?.instructions) write(join(dir, pkg.manifest.agent.instructions), '# Updated package instructions\n')
       pkg.manifest.engine = 'pi'
-      for (const engine of PROCESS_ENGINES) {
+      for (const engine of HARNESS_ENGINES) {
         const originalLaunch = launches.get(engine)!
         const context = readFileSync(originalLaunch.env.HARNESS_CONTEXT_FILE, 'utf8')
         const restored = prepareHarnessLaunch(pkg, workspace, engine, engine)
@@ -106,7 +109,7 @@ describe('the whole store × engine matrix', () => {
 
 // Each case runs several real child processes. The 5s unit-test default can expire under a full
 // suite's load even when every child succeeds; keep an explicit bounded integration-test budget.
-for (const engine of PROCESS_ENGINES) it(`${engine}: prepare → spawn → tool → verdict → restart → fork`, async () => {
+for (const engine of HARNESS_ENGINES) it(`${engine}: prepare → spawn → tool → verdict → restart → fork`, async () => {
   const dir = join(root, 'package')
   write(join(dir, 'harness.json'), JSON.stringify({ spec: 1, id: 'test/portable', name: 'Portable', engine: 'claude',
     workspace: { template: 'template', marker: 'scene.txt', init: 'init.sh' },

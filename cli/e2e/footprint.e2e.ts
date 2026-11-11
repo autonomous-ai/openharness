@@ -122,7 +122,11 @@ describe.runIf(process.env.FOOTPRINT === '1')('the daemon\'s memory at idle', ()
     let daemon: IsolatedDaemon | undefined
     let client: LocalClient | undefined
     try {
-      const d = daemon = await IsolatedDaemon.create({ env: { BACKEND_WS_URL: backend.wsUrl, WEB_URL: backend.httpUrl, ADAPTER_COMPUTER_ID: ME.computerId } })
+      // The connections bridge on a port of its own: on the default one, held by the developer's own daemon, the edge
+      // tried it again every 5 s and asked lsof whose it was, about 1% of a core in lsof alone, which this table
+      // leaves out as not the daemon's own (2026-11-11).
+      const d = daemon = await IsolatedDaemon.create({ env: { BACKEND_WS_URL: backend.wsUrl, WEB_URL: backend.httpUrl, ADAPTER_COMPUTER_ID: ME.computerId,
+        HARNESS_CONNECTIONS_PORT: '0' } })
       writeFileSync(join(d.root, 'auth', 'session.json'), JSON.stringify({
         version: 1, accessToken: ME.token, autonomousEnv: 'prod', computerId: ME.computerId,
         machineId: ME.machineId, expiresAt: Date.now() + 30 * 24 * 3600_000, updatedAt: Date.now(), signInEpoch: 'e2e',

@@ -1,0 +1,45 @@
+ openclaw tui - ws://127.0.0.1:18789 - agent main - session multi-tool
+
+ session agent:main:multi-tool
+
+
+Make two separate exec tool calls in one step: echo alpha, and echo beta. Then reply with only: done
+
+
+done
+ connected | idle
+ agent main | session multi-tool | deepseek/deepseek-v4.1-flash | deliver:off | tokens 0/1.0m (0%)
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -53,6 +53,7 @@ import { storedLaunchModel, type LaunchModel } from './launchModel.js'
 import { commandcodeTranscriptPath } from '../engines/commandcode/contract.js'
 import { agyTranscriptPath } from '../engines/agy/contract.js'
 import { copilotTranscriptPath } from '../engines/copilot/contract.js'
+import { OPENCLAW_KEY } from '../engines/openclaw/contract.js'
 import { bootChanged, currentBootId } from './bootId.js'
 import { lockOwnerAlive, lockStartMarker, processLockIdentity } from './processLiveness.js'
 import { hardenPrivateStateFileIfPresent, readPrivateStateFile, secureStateDirectory, syncStateDirectory } from './secureState.js'
@@ -221,6 +222,12 @@ export interface RegisteredSession {
    * fleet's activity cards empty forever while their terminals streamed perfectly (openharness#191).
    */
   hermesHome?: string | null
+  /**
+   * OpenClaw only: the state folder its TUI held open when the session was bound (lib/openclawStore.ts). A `--profile`
+   * or `--dev` TUI keeps its store outside the default folder, and once the TUI has exited this is where its history,
+   * usage and checkpoint are read from.
+   */
+  openclawStateDir?: string | null
   /**
    * The domain-specific harness this agent was created as (`autonomous/copper`), or null for a plain
    * engine. NOT a second engine: `engine` stays the base (`claude`, `codex`, …) and every normalizer,
@@ -1384,7 +1391,7 @@ class Registry {
             }
             if (!verified) bound = false
           } else if (bound && engine !== 'cursor' && engine !== 'opencode' && engine !== 'kilo' && engine !== 'pi'
-            && engine !== 'hermes' && engine !== 'commandcode' && engine !== 'devin') {
+            && engine !== 'hermes' && engine !== 'commandcode' && engine !== 'devin' && engine !== 'openclaw') {
             bound = false
             changed = true
           }
@@ -1418,6 +1425,7 @@ class Registry {
           codexHome: typeof rawCodexHome === 'string' && rawCodexHome ? rawCodexHome : null,
           claudeHome: typeof raw?.claudeHome === 'string' && raw.claudeHome ? raw.claudeHome : null,
           hermesHome: typeof raw?.hermesHome === 'string' && raw.hermesHome ? raw.hermesHome : null,
+          ...(typeof raw?.openclawStateDir === 'string' && raw.openclawStateDir ? { openclawStateDir: raw.openclawStateDir } : {}),
           ...normalizedForkedFrom((raw as { forkedFrom?: unknown }).forkedFrom),
           dsh: normalizedDshId((raw as { dsh?: unknown }).dsh),
           dshRuntime: typeof raw.dshRuntime === 'string' && raw.dshRuntime ? raw.dshRuntime : null,
@@ -1726,6 +1734,8 @@ class Registry {
 
   /** Register a terminal route before its engine process exists. */
   openPendingAgent(input: {
+    /** The id the launch already named its session after (OpenClaw's `harness-<agentId>`); a new one otherwise. */
+    agentId?: string
     nativeToken?: string
     engine: AgentEngine
     runtimes: TerminalRuntimeRef[]
@@ -1770,8 +1780,9 @@ class Registry {
     const runtimes = normalizedRuntimes(input.runtimes)
     if (!runtimes.length) return null
     if (runtimes.some((runtime) => this.runtimeIndex.has(terminalRouteKey(runtime)))) return null
+    const agentId = input.agentId ?? randomUUID()
+    if (this.byAgent(agentId)) return null
     const now = Date.now()
-    const agentId = randomUUID()
     const entry: RegisteredSession = {
       schemaVersion: 2,
       active: !externalResume,
@@ -1987,7 +1998,9 @@ class Registry {
       || (engine === 'agy' && !GROK_SESSION_RE.test(sessionId))
       // Copilot's session id is a uuid and names the directory its event stream lives in.
       || (engine === 'copilot' && !GROK_SESSION_RE.test(sessionId))
-      || (engine !== 'cursor' && engine !== 'opencode' && engine !== 'kilo' && engine !== 'pi' && engine !== 'hermes' && engine !== 'commandcode' && engine !== 'devin' && engine !== 'grok' && engine !== 'agy' && engine !== 'copilot' && !transcriptPath)
+      // OpenClaw's session id is its key, `agent:<agentId>:<key>`, which names the agent database it is read from.
+      || (engine === 'openclaw' && !OPENCLAW_KEY.test(sessionId))
+      || (engine !== 'cursor' && engine !== 'opencode' && engine !== 'kilo' && engine !== 'pi' && engine !== 'hermes' && engine !== 'commandcode' && engine !== 'devin' && engine !== 'grok' && engine !== 'agy' && engine !== 'copilot' && engine !== 'openclaw' && !transcriptPath)
       // The already-registered agent (opened at agent_create time) already carries its own
       // CODEX_HOME profile, if it has one other than the default — see RegisteredSession.codexHome.
     ) return null
@@ -2152,6 +2165,8 @@ class Registry {
       // forward like every field here: a bind REBUILDS the row, and a home dropped at the first hook
       // would send the mirror back to the default store (openharness#191).
       hermesHome: input.hermesHome ?? existing?.hermesHome ?? null,
+      // Carried forward too: `/new` rebinds the same TUI, and its store is where it was.
+      ...(existing?.openclawStateDir && engine === 'openclaw' ? { openclawStateDir: existing.openclawStateDir } : {}),
       dsh: existing?.dsh ?? null,
       dshRuntime: existing?.dshRuntime ?? null,
       ...(existing?.swarmSkill ? { swarmSkill: existing.swarmSkill } : {}),
@@ -2627,6 +2642,16 @@ class Registry {
     const session = this.agents.get(agentId)
     if (!session || session.engine !== 'hermes' || session.hermesHome) return false
     session.hermesHome = hermesHome
+    session.touchedAt = Date.now()
+    this.save()
+    return true
+  }
+
+  /** Where an OpenClaw session's TUI keeps its state, read off the TUI while it runs: the one it holds now wins. */
+  setOpenclawStateDir(agentId: string, stateDir: string): boolean {
+    const session = this.agents.get(agentId)
+    if (!session || session.engine !== 'openclaw' || session.openclawStateDir === stateDir) return false
+    session.openclawStateDir = stateDir
     session.touchedAt = Date.now()
     this.save()
     return true
@@ -3182,7 +3207,9 @@ export const registry = new Registry()
 
 function defaultProjectDisplayName(s: RegisteredSession): string {
   const folder = s.cwd ? s.cwd.split('/').filter(Boolean).pop() || s.cwd : s.projectDir
-  return `${folder} · ${(s.sessionId || s.agentId).slice(0, 4)}`
+  // Every OpenClaw key starts `agent:<agentId>:`: it is told apart by its own part (`main`, `tui-22b7208d`).
+  const key = s.engine === 'openclaw' ? OPENCLAW_KEY.exec(s.sessionId)?.[2] : undefined
+  return `${folder} · ${key ? key.slice(0, 12) : (s.sessionId || s.agentId).slice(0, 4)}`
 }
 
 /**
