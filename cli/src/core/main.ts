@@ -94,6 +94,7 @@ import { createRetainExitedSession } from '../lib/retainExitedSession.js'
 import { createKeepAbandonedConversation } from '../lib/keepAbandonedConversation.js'
 import { RESUME_READINESS_BUDGET_MS } from '../lib/resumeStoppedAgent.js'
 import { createConversationOwners } from './agents/conversationOwners.js'
+import { createQuietTitles } from './agents/quietTitles.js'
 import { OpenTabProtection } from '../lib/openTabProtection.js'
 import { sessionCheckpoints } from '../lib/sessionCheckpoint.js'
 import { repairProjectCwds } from '../lib/cwdRepair.js'
@@ -825,6 +826,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     tell: (service, viewer, output) => serviceLinksRef?.notify(service, { type: 'service_event', payload: { kind: 'watch', viewer, output } }) ?? false })
   let holdOfRef: ((agentId: string, deliveryId: string) => Promise<string | null>) | null = null
   let quietTurnRef: ((agentId: string) => void) | null = null
+  // A title an engine gives from a line typed for its agent alone never names it (core/agents/quietTitles.ts). The title sync is
+  // built further down: read at a quiet stretch's edge, never now.
+  const quietTitles = createQuietTitles({ read: () => syncTerminalTitles(), log: (line) => console.error(line) })
   const deliveries = createDeliveries({
     submit: (agentId, text, deliveryId) => backendRef?.onMessage?.(agentId, text, deliveryId),
     cancel: (deliveryId) => backendRef?.onCancelOrchestratorMessage?.(deliveryId) ?? false,
@@ -833,8 +837,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     deliverers: new Set(TURN_DELIVERERS),
     // Built further down: read when a service asks, never now.
     hold: (agentId, deliveryId) => holdOfRef?.(agentId, deliveryId) ?? Promise.resolve(null),
-    // The recaps, built further down: a quiet delivery's turn ends with no recap and no notification.
-    quietStarted: (agentId) => quietTurnRef?.(agentId),
+    // The recaps, built further down: a quiet delivery's turn ends with no recap and no notification, and no title from it names its agent.
+    quietStarted: (agentId) => { quietTurnRef?.(agentId); quietTitles.started(agentId) },
   })
   // Each live turn's end, for the services in this process and the Swarm's in its own, and what each turn answered
   // (core/turns/ends.ts), all said by the event funnel as the turn goes.
@@ -1093,7 +1097,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   gridAnnotationRef = (grid) => (ports.models ?? MODELS_OFF).annotation(grid)
   const attachDsh = (s: RegisteredSession): void => ports.viewers?.attach(s)
   // Every way an agent stops running here passes through this: a stop or other forget, and an engine's own exit.
-  const agentEnded = (agentId: string): void => { ports.viewers?.detach(agentId); agentBrowsers.ended(agentId) }
+  const agentEnded = (agentId: string): void => { ports.viewers?.detach(agentId); agentBrowsers.ended(agentId); quietTitles.ended(agentId) }
 
   // The folders agents work in: branch names and unused worktrees (services/workspaces.ts), started below.
   const syncTerminalTitles = async (): Promise<void> => {
@@ -1112,7 +1116,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // Fall back to the agent id: a terminal that became an engine harness (e.g. opencode typed
       // into a New Terminal) has no engine session id — nothing fired a session-start hook — but its
       // pane title is still readable and should still rename the harness.
-      const updated = registry.updateTitle(session.sessionId || session.agentId, title)
+      const updated = registry.updateTitle(session.sessionId || session.agentId, title, quietTitles.quiet(session.agentId))
       if (!updated) continue
       const after = projectDisplayName(updated)
       if (after !== before) {
@@ -1911,6 +1915,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     working: (agentId) => hostQuiet.noteActivity(agentId, 'working'),
     shortTurns,
     ends: turnEnds,
+    quietTitles,
   })
   // Cursor's Task hooks and the sub-agents they start (core/engines/cursorTasks.ts).
   const cursorTasks = createCursorTaskHooks({ emitSessionEvents, watcher, registry, cursorNormalizers })

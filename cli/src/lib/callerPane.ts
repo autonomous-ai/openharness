@@ -34,7 +34,8 @@ export interface PaneProbe {
 
 const NAMED_ANOTHER = 'This command names a pane it does not run in. Run it as your harness gave it, without setting TMUX_PANE.'
 export const NOT_IN_PANE = 'This command does not run in the Harness pane it names, so it did not run. Run it as your harness gave it, in its own pane.'
-const UNPROVEN = 'Harness could not tell which pane this command runs in, so it did not run it. Run it as your harness gave it, in its own pane.'
+/** No pane proven where one may be: ps or tmux unreadable (a sandbox refuses both), or no parent among the panes. */
+export const UNPROVEN = 'Harness could not tell which pane this command runs in, so it did not run it. Run it as your harness gave it, in its own pane.'
 
 /** A tmux server, as ps names it: `tmux` on macOS (it sets its own title), `tmux: server` on Linux. */
 const isTmuxServer = (command: string): boolean => /^tmux(:|$)/.test(basename(command.split(' ')[0] ?? ''))
