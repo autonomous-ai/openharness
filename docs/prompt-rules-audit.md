@@ -120,6 +120,22 @@ and unsigned, while a task's own record stays on its issue or pull request. It s
 is judgment. The code half is already code: an `@Name` in the channel wakes that agent (backend `recipientIds`), and the
 app shows the post's author and time, and a task's pull request talk in the task's chat.
 
+**Every agent's basics are held under 200 words (Swarm plan, step 1 item 7, 2026-11-10):** `SWARM_BASICS` held 507 words and
+grew with each incident; `cli/src/lib/swarmSkills.spec.ts` now fails at 200. What left, and where it lives:
+
+| Line that left | Where it is now |
+|---|---|
+| Add `status:taken` and comment "taken by <name>" | code: `harness super-tab take` (`cli/src/superTabs/githubClaim.ts`) |
+| "Juno, 14:05: READ-OK <sha>" / "HOLD <sha>", an unsigned READ-OK never counts | code: `harness super-tab read ok\|hold` (`githubVerdict.ts`), and the merger counts the recorded agent (`githubMerge.ts`) |
+| Keep your branch current, fix what Harness says blocks it | said by Harness on the pull request when it applies (`githubMerge.ts` `tellOnce`) |
+| What Harness brings, and where to answer | said with each thing it brings (`githubMentions.ts`) |
+| The channel's manners (what to say, "free", unsigned) | the project's own AGENTS.md where it wants them; `@Name` waking someone stays |
+| The "Works on:" line | asked for when it is needed (`githubMentions.ts`) |
+
+Three things stay as prompt because code reads what they ask for and cannot yet know it another way: a post on GitHub opens
+with the agent's name (`githubMentions.ts` `signedBy`), the branch opens with it (`githubMerge.ts` `authorOf`), and the pull
+request carries the agent's builder label (`githubMentions.ts` finds what is an agent's by it). The safety lines stay (standard 13).
+
 **Reassign a task when its claim goes quiet is already code:** `liveness.ts` drops a task whose lease runs out (5
 minutes with no progress report, 30 minutes quiet), `dispatch.ts` `candidatesFor` hands it on, and `stuck.ts` alerts
 after 10 minutes. The prompts still say 20 minutes; the code waits 30.
