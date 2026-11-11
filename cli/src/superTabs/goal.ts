@@ -40,7 +40,7 @@ const LANDINGS = 5
 export const LINE_MAX = 1_000
 
 /** A milestone and the command that checks it. */
-export interface GoalRow { milestone: string; check: string }
+interface GoalRow { milestone: string; check: string }
 /** How many milestones the goal has, and of them how many pass, fail and wait for their check. */
 export interface Score { total: number; passed: number; failed: number; waiting: number }
 
@@ -70,8 +70,9 @@ export function scoreOf(rows: readonly GoalRow[], runs: readonly Json[]): Score 
   const score: Score = { total: rows.length, passed: 0, failed: 0, waiting: 0 }
   for (const { milestone } of rows) {
     const run = newest.get(`${GOAL_CHECK}${milestone}`)
-    // Skipped, neutral or cancelled (a newer push took its place) says nothing of the milestone: it waits, as one not run.
-    if (run?.status !== 'completed' || ['skipped', 'neutral', 'cancelled'].includes(String(run.conclusion))) score.waiting++
+    // Skipped or neutral says nothing of the milestone: it waits, as one not run. Cancelled fails: GitHub ends a check that ran
+    // past its limit as `cancelled` (seen on a real run, 2026-11-11), and counted as waiting, a hang was never told the PM.
+    if (run?.status !== 'completed' || ['skipped', 'neutral'].includes(String(run.conclusion))) score.waiting++
     else if (run.conclusion === 'success') score.passed++
     else score.failed++
   }

@@ -11,12 +11,12 @@
  * another agent and land on the train. A file that is there already is left as it is.
  */
 import { execFile } from 'node:child_process'
-import { lstatSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
-import { dirname, join, sep } from 'node:path'
+import { lstatSync, mkdirSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { gitEnv } from '../lib/gitProject.js'
 import { GOAL_CHECK, GOAL_FILE, GOAL_MAX, LINE_MAX, MILESTONE_MAX } from './goal.js'
 
-export const GOAL_WORKFLOW = '.github/workflows/goal.yml'
+const GOAL_WORKFLOW = '.github/workflows/goal.yml'
 
 /** The goal file a project starts from: what it is, and the table's head. No row: a milestone is the project's to write. */
 export const GOAL_TEXT = `# Goal
@@ -47,8 +47,9 @@ console.log('rows=' + JSON.stringify([...rows.values()]))`
  *  under the name Harness looks for. A check is the repository's own command, on its main branch only, where what it runs was
  *  read and landed as any change; it reaches the shell as a variable, never as text of the script, and fails when any part of
  *  it does (`-eo pipefail`). One run at a time: a push while one runs waits its turn, and a newer push takes that turn, so
- *  some landing's checks always end however fast landings come (cancelling the run in hand, none ever did). Ten checks run
- *  at once and each has half an hour, so a goal holds no runner for long. */
+ *  some landing's checks always end however fast landings come (cancelling the run in hand, none ever did). Harness looks at
+ *  the last five landings only (goal.ts): where landings come faster than that, it scores the one furthest through. Ten
+ *  checks run at once and each has half an hour, so a goal holds no runner for long. */
 export const goalWorkflow = (base: string): string => `# Runs each check of ${GOAL_FILE} on the main branch, as a check named "${GOAL_CHECK}<milestone>".
 # Harness reads those to show how far the project is from its goal. Add what your checks need (a toolchain, a cache) to the goal job's steps.
 name: goal
@@ -100,8 +101,8 @@ const gitLine = (cwd: string, args: readonly string[]): Promise<string | null> =
 
 /**
  * Writes the goal file and its workflow into the repository [cwd] is in, each only where nothing is there yet (not even a
- * link to nowhere) and only inside the checkout (a folder of it that is a link to elsewhere is not written through), and says
- * what to do next in words an agent reads. The workflow names the main branch as the checkout
+ * link to nowhere), and neither when a folder on the way to one is a link (nothing is written through a link, to elsewhere
+ * or to nowhere), and says what to do next in words an agent reads. The workflow names the main branch as the checkout
  * knows it (origin's HEAD), `main` when it does not say; the answer says which, as a checkout can be behind a rename.
  */
 export async function startGoal(cwd: string, git: (cwd: string, args: readonly string[]) => Promise<string | null> = gitLine): Promise<{ ok: boolean; said: string }> {
@@ -110,13 +111,19 @@ export async function startGoal(cwd: string, git: (cwd: string, args: readonly s
   // A branch's name is git's own, and goes into the workflow as a quoted string.
   const head = (await git(root, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD']))?.replace(/^origin\//, '')
   const base = head && /^[\w./-]{1,200}$/.test(head) ? head : 'main'
+  const files = [[GOAL_FILE, GOAL_TEXT], [GOAL_WORKFLOW, goalWorkflow(base)]] as const
+  // Both files' folders are looked at before either file is written, so the answer is never half of what was done.
+  for (const [path] of files) {
+    for (let folder = dirname(path); folder !== '.'; folder = dirname(folder)) {
+      if (lstatSync(join(root, folder), { throwIfNoEntry: false })?.isSymbolicLink()) return { ok: false, said: `${folder} is a link: nothing was written.` }
+    }
+  }
   const wrote: string[] = [], kept: string[] = []
-  for (const [path, text] of [[GOAL_FILE, GOAL_TEXT], [GOAL_WORKFLOW, goalWorkflow(base)]] as const) {
+  for (const [path, text] of files) {
     const file = join(root, path)
     // Whatever is there, a link to nowhere too: lstat does not follow it, so nothing is written through one.
     if (lstatSync(file, { throwIfNoEntry: false })) { kept.push(path); continue }
     mkdirSync(dirname(file), { recursive: true })
-    if (!`${realpathSync(dirname(file))}${sep}`.startsWith(`${realpathSync(root)}${sep}`)) return { ok: false, said: `${dirname(path)} is a link to outside this checkout: nothing was written there.` }
     writeFileSync(file, text)
     wrote.push(path)
   }

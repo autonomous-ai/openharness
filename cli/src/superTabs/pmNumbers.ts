@@ -147,7 +147,7 @@ const scored = (goal: Score): string => `${goal.passed} of ${counted(goal.total,
   + `${goal.failed || goal.waiting ? `, ${goal.failed} fail${goal.failed === 1 ? 's' : ''} and ${goal.waiting} wait${goal.waiting === 1 ? 's' : ''}` : ''}`
 
 /** A project's goal as a line has it: its score, null when it states none, undefined when it could not be read. */
-export type Goal = Score | null | undefined
+type Goal = Score | null | undefined
 
 /** What the PM is typed when work is short: the builders with nothing ([names]), what is open, what landed, how far the [goal]
  *  is (or how to state one, with the command that writes its file), and what to do. */

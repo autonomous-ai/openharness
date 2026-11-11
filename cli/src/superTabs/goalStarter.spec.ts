@@ -46,9 +46,17 @@ describe('a project\'s goal file and its workflow, written into a checkout', () 
     // Nor a folder of the checkout that is a link to elsewhere: nothing is written outside it.
     const through = folder(), elsewhere = folder()
     symlinkSync(elsewhere, join(through, 'agents'))
-    expect(await startGoal(through, git(through, 'origin/main'))).toEqual({ ok: false, said: 'agents is a link to outside this checkout: nothing was written there.' })
+    expect(await startGoal(through, git(through, 'origin/main'))).toEqual({ ok: false, said: 'agents is a link: nothing was written.' })
     expect(existsSync(join(elsewhere, 'GOAL.md'))).toBe(false)
     expect(existsSync(join(through, '.github'))).toBe(false)
+    // The second file's folder is looked at before the first file is written, and a link to nowhere is said, not thrown.
+    for (const target of [folder(), join(folder(), 'nowhere')]) {
+      const second = folder()
+      symlinkSync(target, join(second, '.github'))
+      expect(await startGoal(second, git(second, 'origin/main'))).toEqual({ ok: false, said: '.github is a link: nothing was written.' })
+      expect(existsSync(join(second, 'agents'))).toBe(false)
+      expect(existsSync(join(target, 'workflows'))).toBe(false)
+    }
     // What it cannot write for another reason is the command's failure.
     const blocked = folder()
     writeFileSync(join(blocked, 'agents'), 'a file where the folder goes')
