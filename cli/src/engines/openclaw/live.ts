@@ -44,6 +44,12 @@ const READY_PASSES = 2
 const QUIET_PANE_MS = 30_000
 /** How long the pane reads a run with no node for the key before the store is said to be the wrong one. */
 const NO_SESSION_MS = 30_000
+/**
+ * How far short of NO_SESSION_MS a pass may read and still count as reaching it: the passes are timed on the event
+ * loop's clock and each reads after a capture of its own, so by `Date.now()` the pass 30 s on lands a few ms either side
+ * of it (end to end, 2026-11-11: short each time, and the hold came a pass later). A tenth of the shortest pass interval.
+ */
+const PASS_JITTER_MS = 500
 
 /** What a bind pass read off the pane (contract.ts `readOpenclawScreen`). */
 interface OpenclawPaneReading {
@@ -155,7 +161,7 @@ export class OpenclawLive {
     }
     if (!running) { this.runWithoutKey = null; return }
     this.runWithoutKey ??= Date.now()
-    if (this.sessionMissing || Date.now() - this.runWithoutKey < NO_SESSION_MS) return
+    if (this.sessionMissing || Date.now() - this.runWithoutKey < NO_SESSION_MS - PASS_JITTER_MS) return
     this.sessionMissing = true
     this.deps.onSessionMissing?.()
   }
