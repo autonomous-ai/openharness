@@ -367,19 +367,27 @@ void main() {
     );
   }
 
-  testWidgets('receipt: no Lead is not sent and offers Add a Lead', (
-    tester,
-  ) async {
-    final f = ReceiptFixture(tester, status: null);
-    await f.show(
-      prepare: () =>
-          (f.server.state['conversations'] as List).first['leadId'] = null,
-    );
-    expect(find.text('Not sent · this chat has no Lead'), findsOneWidget);
-    await tester.tap(find.text('Add a Lead'));
-    expect(f.addedLead, isTrue);
-    await f.close();
-  });
+  // A project's channel: its PM is chosen from its owner's agents, never started (anh Dee, 2026-11-11).
+  testWidgets(
+    'receipt: no Lead in a project\'s channel is not sent and offers Choose PM',
+    (tester) async {
+      final f = ReceiptFixture(tester, status: null);
+      await f.show(
+        prepare: () =>
+            (f.server.state['conversations'] as List).first['leadId'] = null,
+      );
+      expect(find.text('Not sent · this chat has no Lead'), findsOneWidget);
+      expect(find.text('Add a Lead'), findsNothing);
+      await tester.tap(find.text('Choose PM'));
+      await tester.pumpAndSettle();
+      // Choose PM's dialog, and no new agent's form.
+      expect(find.byKey(const ValueKey('choose-pm-confirm')), findsOneWidget);
+      expect(f.addedLead, isFalse);
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      await f.close();
+    },
+  );
 
   testWidgets('receipt: no Lead and no start, with an app, is still not sent', (
     tester,
@@ -393,7 +401,7 @@ void main() {
           (f.server.state['conversations'] as List).first['leadId'] = null,
     );
     expect(find.text('Not sent · this chat has no Lead'), findsOneWidget);
-    expect(find.text('Add a Lead'), findsOneWidget);
+    expect(find.text('Choose PM'), findsOneWidget);
     await f.close();
   });
 

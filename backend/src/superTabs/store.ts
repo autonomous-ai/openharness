@@ -1,4 +1,5 @@
 import { chatlessAgents, giveAgentsChats } from './agentChats.js'
+import { archiveEmptyChats, paneChatId } from './paneChats.js'
 import { canReadProject } from './projects.js'
 import { timeCommand, timedPhase, type CommandPhases } from './commandTiming.js'
 import { refusalLogFields, type DeclaredClient } from './refusalLog.js'
@@ -22,7 +23,8 @@ import { githubRepository } from '../github/repository.js'
 import { commentAuthors, recordComment, sameRepository, type CommentKind } from './githubComments.js'
 import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
-import { DELETED_SWARM_COMMANDS, DELETION_COMMANDS, isPersonalSwarm, notThere } from './deletion.js'
+import { DELETED_SWARM_COMMANDS, DELETION_COMMANDS, isPersonalSwarm, notThere, PERSONAL_SWARM_OPERATION } from './deletion.js'
+import { forgetRemovedPanes } from './removedPanes.js'
 import { applyCommand, authorizeCommandAccess, LOOP_NOTICE_AT, mayResumeStart, operationSchema, postable, reserveHarnessSlot, worksInProjectChat, type Command, type CommandContext } from './commands.js'
 import { redactCredentials } from './credentials.js'
 import { agentOpenDeliveries, OPEN_DELIVERY, compactedDelivery, deliveredCopies, heldPast, messagesById, messagesPast, type MessageEdge, pageDeliveries, pageThreads, refreshReplies, refreshThreads, storedMessages, type PageDelivery } from './pageReads.js'
@@ -591,6 +593,12 @@ export class SuperTabStore {
       if (delivery) groupIds.push(delivery.conversationId)
     }
     if (command.type === 'agent.remove') agentIds.push(command.agentId)
+    // A session's own chat, which an archive by hand may have put to sleep: joining it again opens it again (paneChats.ts).
+    const joining = command.type === 'agent.new' && command.local && command.harnessId ? state.people.find(p => p.id === personId) : undefined
+    if (joining && command.type === 'agent.new') {
+      const kept = state.agents.find(a => a.machineId === command.machineId && a.harnessId === command.harnessId)?.chatId
+      groupIds.push(...kept ? [kept] : [], paneChatId(joining, command.machineId, command.harnessId!))
+    }
     // These only ask about the agent. A coordinator's project chat, always loaded, answers them, and every group it was ever in is
     // what a read by agent gave: 1,668 on prod, growing with every task (Ken's profile, 2026-11-02, up to 1.66 s a read). Filtering
     // that read by dormant would not do: its index has no dormant, so it examines them all, and removals need them (design D8).
@@ -697,7 +705,7 @@ export class SuperTabStore {
         if (prior.requestHash !== requestHash) fail('OPERATION_REUSED', 'Use a new operation ID for a different request.')
         return { id, revision: prior.revision }
       }
-      const state = createSuperTab(id, name, { id: user.sub, email: user.email }, user.autonomousEnv, projectVisibility)
+      const state = createSuperTab(id, name, { id: user.sub, email: user.email }, user.autonomousEnv, projectVisibility, operationId !== PERSONAL_SWARM_OPERATION)
       nameFromAccount(state.people[0]!, await accountNameOf(tx, user.sub))
       // Born in parts: its state lives in the Swarm* parts, and `state` only fences older backends (schema.prisma).
       await tx.superTab.create({ data: { id, ownerId: user.sub, autonomousEnv: user.autonomousEnv, ...indexesOf(state), format: 2, state: { version: 2 } } })
@@ -829,6 +837,23 @@ export class SuperTabStore {
       throw error
     }
     return 'deleted'
+  }
+
+  /** Deletes the repo-less project every Personal Swarm was made with (migration/personalProjectJob.ts), as its owner's
+   *  `project.delete` would, given `personalProject` by the store alone: only as it was made, with nothing in it. 'kept' when
+   *  anything is, or someone else owns it now, which stays a project like any other; 'gone' when the Swarm or the project is not
+   *  there or is not that one. [row]: the Swarm's row as the job read it. */
+  async removePersonalProject(row: { id: string; ownerId: string; autonomousEnv: string }): Promise<'removed' | 'kept' | 'gone'> {
+    const user: AuthUser = { sub: row.ownerId, email: '', autonomousEnv: row.autonomousEnv as AuthUser['autonomousEnv'], role: 'user' }
+    try {
+      await this.executeOnce(user, row.id, { operationId: 'personal-project-removal', command: { type: 'project.delete', projectId: 'lead' } },
+        undefined, undefined, { personalProject: true })
+    } catch (error) {
+      if (error instanceof SuperTabError && ['PERSONAL_PROJECT_KEPT', 'PROJECT_OWNER_REQUIRED'].includes(error.code)) return 'kept'
+      if (error instanceof SuperTabError && error.code === 'NOT_FOUND') return 'gone'
+      throw error
+    }
+    return 'removed'
   }
 
   /** Removes notice [messageId] of a retired kind (migration/retiredNotices.ts) as its author's `message.delete` would, run as the
@@ -1039,7 +1064,7 @@ export class SuperTabStore {
    *  machine.teamGone (takeOutTeamMachines), `wipe` for swarm.delete (wipeSwarm), `retiredNotice` for message.delete
    *  (removeRetiredNotice). */
   private async executeOnce(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string,
-    only: { movedTo?: { machineId: string; ownerId: string }; teamMachineGone?: true; wipe?: true; retiredNotice?: true } = {}) {
+    only: { movedTo?: { machineId: string; ownerId: string }; teamMachineGone?: true; wipe?: true; retiredNotice?: true; personalProject?: true } = {}) {
     const { operationId, command } = operationSchema.parse(input)
     let ended: WorkHold[] = [], started: WorkHold[] = []
     const done = await transaction(this.db, async tx => {
@@ -1097,6 +1122,7 @@ export class SuperTabStore {
             readConversation(original, actor, delivery.conversationId)
           }
         }
+        // For projects deleted before deletedProjects (commands.ts project.create): goes on or after 2026-12-12, once their receipts are gone.
         if (command.type === 'project.create' &&
             !projectsOf(original).some(p => p.id === (prior.result as Record<string, unknown>).projectId)) {
           fail('NOT_FOUND', 'This project was deleted. Create a new project.', 404)
@@ -1119,6 +1145,7 @@ export class SuperTabStore {
       if (command.type === 'machine.teamGone' && only.teamMachineGone) context.teamMachineGone = true
       if (command.type === 'swarm.delete' && only.wipe) context.wipe = true
       if (command.type === 'message.delete' && only.retiredNotice) context.retiredNotice = true
+      if (command.type === 'project.delete' && only.personalProject) context.personalProject = true
       if (command.type === 'machine.moved' && only.movedTo && actor.kind === 'person') {
         context.computerMove = await this.computerMove(tx, original, actor.userId, command.machineId, only.movedTo)
       }
@@ -2661,6 +2688,8 @@ export class SuperTabStore {
         const reservation = state.harnessReservations?.find(r => r.machineId === machineId && r.harnessId === proof.harnessId && r.generation === proof.generation)
         if (!reservation) continue
         state.harnessReservations = state.harnessReservations?.filter(r => r !== reservation)
+        // Its session ended: a record that its person took it out goes with it (removedPanes.ts).
+        forgetRemovedPanes(state, machineId, id => id === proof.harnessId)
         state.releasedHarnesses ??= []
         if (!state.releasedHarnesses.some(r => r.machineId === machineId && r.harnessId === proof.harnessId)) state.releasedHarnesses.push({ machineId, harnessId: proof.harnessId })
         const id = stableId('swarm-session', state.environment, user.sub, stableId(machineId, proof.harnessId))
@@ -3219,6 +3248,9 @@ export class SuperTabStore {
       const all = chatless.length ? (await this.ensure(tx, loaded, { agentIds: chatless })).state : loaded.state
       const state = cloneData(loaded.state), now = this.now()
       giveAgentsChats(state, now, all)
+      // The chats a join left empty, with no agent and no message (paneChats.ts).
+      const archived = archiveEmptyChats(state, now)
+      if (archived) logger.info('[super-tab] archived empty agent chats', { tabId, archived })
       await this.save(tx, loaded, state, clock.next())
       return 0
     })

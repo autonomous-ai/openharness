@@ -1454,10 +1454,13 @@ export function closeCommand(argv: readonly string[], deps: ClientDeps = {}): Pr
 
 /**
  * Limits on starting harnesses (the design's "Limits"): runaway spawning is the risk, and every harness started is
- * the person's tokens. Four at once and one level down (owner, October 12: "be very careful about when to start a new
- * agent so we don't waste user token"): a harness another agent started does its work itself. They were eight and two.
+ * the person's tokens. One level down (owner, October 12: "be very careful about when to start a new agent so we don't
+ * waste user token"): a harness another agent started does its work itself. That, the forty a computer and the starts
+ * in ten minutes are what stop a runaway. Eight at once for one agent (owner, November 11, of the four set a month
+ * before: "that was too long. let's update it"): with four, one agent could not hand a night's packages to a builder
+ * each. It was four from October 12, and eight before.
  */
-export const SPAWN_LIMITS = { livePerHarness: 4, livePerMachine: 40, depth: 1, perWindow: 20, windowMs: 10 * 60_000 } as const
+export const SPAWN_LIMITS = { livePerHarness: 8, livePerMachine: 40, depth: 1, perWindow: 20, windowMs: 10 * 60_000 } as const
 
 /** Said to a harness another agent started when it runs `harness new`. */
 export const DEPTH_REFUSAL = 'A harness another agent started may not start harnesses itself. Do the work yourself, or say in your answer what else is needed.'

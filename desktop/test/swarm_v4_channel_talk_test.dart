@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/channel_talk.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/model.dart';
@@ -42,6 +43,30 @@ void main() {
   /// How many times [tag] is in what the row of the message whose text holds [text] reads.
   int tagsIn(WidgetTester tester, String text, String tag) =>
       RegExp(RegExp.escape(tag)).allMatches(readOf(tester, text)).length;
+
+  /// The words the row of the message whose text holds [text] draws as tags (message_text.dart _MentionName).
+  List<String> drawnTags(WidgetTester tester, String text) {
+    final found = <String>[];
+    void visit(InlineSpan span, TextStyle? inherited) {
+      if (span is! TextSpan) return;
+      final style = inherited?.merge(span.style) ?? span.style;
+      if (span.text case final words?
+          when style?.backgroundColor == grid.AppSurface.accentWash &&
+              style?.fontWeight == FontWeight.w600) {
+        found.add(words);
+      }
+      for (final child in span.children ?? const <InlineSpan>[]) {
+        visit(child, style);
+      }
+    }
+
+    for (final rich in tester.widgetList<RichText>(
+      find.descendant(of: rowOf(text), matching: find.byType(RichText)),
+    )) {
+      visit(rich.text, null);
+    }
+    return found;
+  }
 
   /// No name line anywhere says who a post is to: its tags do.
   final noToLine = find.byWidgetPredicate(
@@ -180,6 +205,29 @@ void main() {
       );
     },
   );
+
+  // anh Dee, 2026-11-11, of the rehearsal's channel: "the tag Product Manager is also weird just tag the agent". A PM is
+  // stored under its role's name and shown under its own (the backend's start names it COORDINATOR_NAME, its person names it
+  // Ray): a post to it said "@Product Manager", and its own "@Ray" in the text was not read as a tag.
+  testWidgets('a post to the PM tags it by its own name, once', (tester) async {
+    final server = swarmV4Channel();
+    (server.state['agents'] as List).cast<Map<String, dynamic>>().firstWhere(
+      (a) => a['id'] == 'faye',
+    )['name'] = 'Product Manager';
+    say(server, 'Pip', '@Faye #9 is up as #19, ready to read.', to: ['faye']);
+    say(server, 'Juno', 'the CI on #19 passed.', to: ['faye']);
+    // The backend routes a tag of either of its names: one by its stored name is its tag already (review of #4075).
+    say(server, 'Kai', '@Product Manager #21 is ready.', to: ['faye']);
+    await openSwarmV4(tester, server);
+    expect(tagsIn(tester, '#9 is up as #19', '@Faye'), 1);
+    expect(tagsIn(tester, 'the CI on #19 passed.', '@Faye'), 1);
+    expect(tagsIn(tester, '#21 is ready.', '@Faye'), 0);
+    expect(tagsIn(tester, '#21 is ready.', '@Product Manager'), 1);
+    // Each is drawn as a tag, not as words.
+    expect(drawnTags(tester, '#9 is up as #19'), ['@Faye']);
+    expect(drawnTags(tester, 'the CI on #19 passed.'), ['@Faye']);
+    expect(drawnTags(tester, '#21 is ready.'), ['@Product Manager']);
+  });
 
   testWidgets('an agent named twice in a post is tagged once', (tester) async {
     final server = swarmV4Channel();
@@ -408,16 +456,29 @@ void main() {
           'recipientIds': to,
         });
 
+    // A tag of either of its names is its tag, as the backend routes one; the row reads the post's text once, where it is
+    // drawn (the review of #4075 measured 2.2 ms a row at 2,300 characters while each recipient read it again).
+    test('a post\'s agents are named as people know them, with the names they are stored under beside', () {
+      final server = swarmV4Channel();
+      (server.state['agents'] as List).cast<Map<String, dynamic>>().firstWhere(
+        (a) => a['id'] == 'faye',
+      )['name'] = 'Product Manager';
+      final swarm = SuperTabSnapshot.fromJson(server.state);
+      final post = ask(['faye', 'juno'], author: 'pip');
+      expect(superTabPostTo(swarm, post).names, ['Faye', 'Juno']);
+      expect(superTabPostTo(swarm, post).stored, {'Faye': 'Product Manager'});
+    });
+
     test('an agent named twice is named once, and an author never', () {
       final swarm = team({'juno', 'pip'});
       expect(
         superTabPostOfflineLine(swarm, ask(['juno', 'juno'])),
         'Juno is offline',
       );
-      expect(superTabPostTo(swarm, ask(['juno', 'faye', 'juno', 'pip'])), [
-        'Juno',
-        'Pip',
-      ]);
+      expect(
+        superTabPostTo(swarm, ask(['juno', 'faye', 'juno', 'pip'])).names,
+        ['Juno', 'Pip'],
+      );
     });
 
     test(
@@ -459,7 +520,8 @@ void main() {
           'recipientIds': ['juno'],
         });
         expect(superTabPostOfflineLine(team({'juno'}), person), isNull);
-        expect(superTabPostTo(team({'juno'}), person), isEmpty);
+        expect(superTabPostTo(team({'juno'}), person).names, isEmpty);
+        expect(superTabPostTo(team({'juno'}), person).stored, isEmpty);
       },
     );
   });
