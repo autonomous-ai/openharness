@@ -580,6 +580,10 @@ Before the plan fixes its numbers, on Claude Code and on Codex, in a Swarm agent
 If an engine cannot read the image file, or asks the person for every command, this spec is revised before the CLI is
 built.
 
+Measured 2026-11-11 ([measurements](2026-11-11-browser-from-chat-measurements.md)). **(Ken)** The two lines are
+delivered quiet: the turn each starts makes no recap and no notification; and `harness browser` joins the commands
+both engines run without asking.
+
 ## Testing
 
 - **CLI specs.**

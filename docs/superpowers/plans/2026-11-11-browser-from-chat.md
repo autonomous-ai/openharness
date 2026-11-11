@@ -14,7 +14,8 @@ Swarm chat, and the agent drives it with `harness browser <command>`: no MCP, no
   the flag's order is the service queue's order.
 - The daemon's `agentBrowser` service keeps one tool server per ready browser (`podman exec -i … browser-tools.mjs`),
   runs the agent's commands through it one at a time, sizes Chrome's window through it, and types two lines into
-  the agent (`CoreApi.turns.deliver`): one when the person's Start is ready, one at the person's Stop.
+  the agent (`CoreApi.turns.deliver`): one when the person's Start is ready, one at the person's Stop. Both are quiet
+  deliveries: the turn each starts ends with no recap and no notification.
 - `harness browser` is a thin CLI: it proves its pane, asks the pane's daemon `agent_browser_run` over the local
   socket, prints the tool's words, and writes screenshots and long output to files in the agent's `$TMPDIR`.
 - Desktop: the Browser button is on every running agent of the person's own machines; the panel has Start, Stop
@@ -34,6 +35,13 @@ them and does not repeat them.
   `harness browser stop` exit 2.
 - **Nothing else reaches the agent.** No file under `cli/src/superTabs/` changes, except the move of `callerPane.ts`
   and the import in `command.ts` (Task 4). Deliveries, their context lines and `plainChat` are untouched.
+- **Quiet lines (Ken, 2026-11-11, option b).** The turn the ready line or the stop line starts makes no recap and no
+  notification, on the daemon and so on every app. The turn path's change is general and small: a `quiet` mark on a
+  delivery, carried to its turn's end (Tasks 21, 22). The code on that path (`core/deliveries.ts`,
+  `core/turns/recaps.ts`, `lib/commander.ts`, `services/recaps.ts`) names no feature. `turns.onEnd` still tells that
+  end: the Swarm still types the agent its next thing.
+- **No asking (Ken, 2026-11-11).** `harness browser …` is in both engines' allow rules, as `harness send` is
+  (Task 20). It has no MCP tool.
 - **No read of the backend or of the Swarm on a command's path.** `agent_browser_run` reads the registry row, the
   pane's process and the service's memory.
 - **Logs and counters carry no content.** A command's arguments, a page's text, an address and a file's path never
@@ -76,6 +84,13 @@ Inputs the spec implies and a person will meet. Each has its test in the task th
    input, empty standard input): typed as text. Task 5.
 5. **The agent ends, or its engine restarts, while a line waits to be typed:** nothing is retried against an agent
    that is gone, nothing is typed twice, and the browser stays owed its ready line. Task 8.
+6. **A line's turn whose start is heard before, or after, the recaps hear that turn start** (the input says `started`
+   inside the funnel for an exact echo, and a moment later for an engine whose prompt is read back): quiet either
+   way, and the person's next turn tells as any turn does. Task 22.
+7. **A quiet turn that starts a sub-agent and ends while it still runs, and the turn after it:** the held end stays
+   quiet when it is let go, and the next turn does not inherit the mark. Task 21.
+8. **A person who denied or asks for `harness browser` in their own Claude Code rules:** no allow is added, in either
+   spelling. Task 20.
 
 ## Contract
 
@@ -111,14 +126,14 @@ Every task uses these names. Requests are answered by `cli/src/services/agentBro
 | File | Holds | Task |
 |---|---|---|
 | `backend/src/types/productUsage.ts`, `cli/src/lib/productUsageContract.ts` | the counters, byte-identical | 1 |
-| `cli/src/lib/registry.ts`, `cli/src/core/agents/lifecycle.ts`, `cli/src/core/api.ts`, `cli/src/core/agentBrowserLink.ts`, `cli/src/core/main.ts` | the flag, set by the core | 2, 12, 15 |
+| `cli/src/lib/registry.ts`, `cli/src/core/agents/lifecycle.ts`, `cli/src/core/api.ts`, `cli/src/core/agentBrowserLink.ts`, `cli/src/core/main.ts` | the flag, set by the core | 2, 12, 15 (`api.ts` and `main.ts` also 22) |
 | `cli/src/lib/e2ee/applicationFrames.ts` | the three sealed requests | 2 |
 | `cli/src/core/agents/create.ts`, `cli/src/lib/launchOverrides.ts` | launches with no browser argument | 3 |
 | `cli/src/lib/callerPane.ts` (moved) | the pane a command runs in | 4 |
 | `cli/assets/browser/browser-tools.json`, `cli/src/agentClient/browserArgs.ts` | commands, examples, help | 5 |
 | `cli/src/agentClient/browserOutput.ts` | the cap and the files | 6 |
 | `cli/src/services/agentBrowser/toolServers.ts` | one tool server per ready browser | 7 |
-| `cli/src/services/agentBrowser/notices.ts`, `stateFile.ts` | the two lines and the `told` mark | 8 |
+| `cli/src/services/agentBrowser/notices.ts`, `stateFile.ts` | the two lines and the `told` mark | 8, 22 (`notices.ts`) |
 | `cli/assets/browser/browser-tools.mjs`, `browser-tools-lib.mjs` | the tool server: calls and the window | 9 |
 | `desktop/tool/browser_viewer/viewer.js`, `desktop/assets/browser/browser_viewer.html` | the page clips to the window | 10 |
 | `cli/src/services/agentBrowser.ts`, `agentBrowserProcess.ts`, `agentBrowser/browsers.ts`, `agentBrowser/settings.ts` | the requests | 12, 15 |
@@ -127,6 +142,9 @@ Every task uses these names. Requests are answered by `cli/src/services/agentBro
 | `desktop/lib/browser/browser_panel.dart`, `desktop/lib/super_tabs/view.dart`, `browser_bridge.dart` | button and panel | 16, 19 |
 | `desktop/design/desktop-design-system.md`, `desktop/test/swarm_elements_gallery_test.dart`, goldens | design doc and gallery | 11, 16, 19 |
 | `cli/e2e/agentBrowser.e2e.ts`, `cli/e2e/agentBrowserPodman.e2e.ts` | end to end | 17, 18 |
+| `cli/src/engines/facets/hooks.ts`, `cli/src/engines/kit/hookSettings.ts`, `cli/src/engines/__fixtures__/hook-installers.golden.json`, `cli/e2e/agentClient.e2e.ts` | `harness browser` in both engines' allow rules | 20 |
+| `cli/src/lib/commander.ts` | a quiet turn's end: no recap, no notification | 21 |
+| `cli/src/core/deliveries.ts`, `cli/src/services/turnsLink.ts`, `cli/src/core/turns/recaps.ts`, `cli/src/services/recaps.ts` | the quiet mark, from a delivery to its turn's end | 22 |
 
 ## Waves
 
@@ -138,9 +156,13 @@ its code commit, run the wave's commands below.
 |---|---|
 | 0 (by hand, gate) | 0 |
 | 1 | 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 |
-| 2 | 12, 13, 14 |
+| 2 | 12, 13, 14, 20, 21 |
 | 3 | 15, 16 |
-| 4 | 17, 18, 19 |
+| 4 | 17, 18, 19, 22 |
+
+Tasks 20 to 22 were added after Task 0 (Ken, 2026-11-11). Why they sit where they do: 20 and 21 share no file with
+12, 13 or 14 and depend on none of them; 22 changes `core/api.ts` (Tasks 12 and 15) and `core/main.ts` (Task 15), so
+it follows both, and it needs Task 21's `ingest`. No fifth wave is needed.
 
 **Wave 1 verify** (in `cli/` unless said):
 
@@ -166,7 +188,10 @@ npx vitest run src/lib/registry.spec.ts src/core/api.spec.ts src/core/agents/lif
 npm run typecheck
 npx vitest run src/services/agentBrowser.spec.ts src/services/agentBrowserProcess.spec.ts \
   src/services/agentBrowser/browsers.spec.ts src/core/api.spec.ts src/agentClient/browser.spec.ts \
-  src/agentClient/help.spec.ts src/architecture.spec.ts --maxWorkers=4
+  src/agentClient/help.spec.ts src/architecture.spec.ts src/engines/kit/hookSettings.spec.ts \
+  src/engines/hookInstallers.golden.spec.ts src/engines/removeHooks.spec.ts src/agentClient/mcp.spec.ts \
+  src/lib/commanderNotifications.spec.ts src/lib/commander.spec.ts src/lib/commanderReplay.spec.ts \
+  src/services/recaps.spec.ts --maxWorkers=4
 (cd ../desktop && flutter analyze lib test && flutter test --no-pub --concurrency=2 --timeout=60s \
   test/browser/browser_requests_test.dart test/e2ee/encrypted_down_types_test.dart test/ws_conn_test.dart)
 ```
@@ -186,6 +211,10 @@ npx vitest run src/services/agentBrowser.spec.ts src/services/agentBrowserProces
 
 ```bash
 npm run typecheck
+npx vitest run src/core/deliveries.spec.ts src/services/turnsLink.spec.ts src/core/turns/recaps.spec.ts \
+  src/core/recapsLink.spec.ts src/services/recaps.spec.ts src/services/recapsProcess.spec.ts \
+  src/services/agentBrowser/notices.spec.ts src/services/agentBrowser.spec.ts \
+  src/services/agentBrowserProcess.spec.ts src/lib/commanderNotifications.spec.ts --maxWorkers=4
 E2E_BUNDLE=1 npx vitest run --config vitest.e2e.config.ts e2e/agentBrowser.e2e.ts
 (cd ../desktop && flutter analyze lib test && flutter test --no-pub --concurrency=2 --timeout=60s test/browser)
 ```
@@ -233,6 +262,11 @@ agents through `harness new` and `harness show`). It gates wave 1: Tasks 5 and 6
     for every `harness` command; or a typed line raises a recap or a notification (keeping the core from doing so
     is a change to the turn path this plan has no task for).
 - [ ] **Step 8: Commit** `docs: browser from chat, engine measurements`.
+
+**Done 2026-11-11** ([measurements](../specs/2026-11-11-browser-from-chat-measurements.md)): `OUTPUT_CAP_CHARS`
+8,000; `HELP_TIME_LINE` yes. Codex was not signed in, so its column is read from its binary, not measured. Two
+findings had no task, and Ken put both in scope: `harness browser` is outside both engines' allow rules (Step 3's
+stand-ins are inside them): Task 20; a typed line's turn raises a recap and a `done` notification: Tasks 21 and 22.
 
 ---
 
@@ -713,6 +747,8 @@ Rules:
   `agentBrowserProcess.spec.ts`: `asks the core to set the flag, and answers what it said`; `delivers its lines
   through the core and hears what became of them`; `a core that does not answer the switch rejects`.
   `browsers.spec.ts`: `a delete removes the agent's told mark with its settings`. `api.spec.ts:283`: the list.
+  Where a case checks a line's delivery, it checks the agent, the text and the id's prefix, never the whole
+  argument list or payload: Task 22 adds an option to it.
 - [ ] **Step 2:** `npx vitest run src/services/agentBrowser.spec.ts src/services/agentBrowserProcess.spec.ts
   src/services/agentBrowser/browsers.spec.ts src/core/api.spec.ts`: FAIL. Commit `test: the person's Start and Stop
   on the agent's machine`.
@@ -795,6 +831,135 @@ machine that cannot be asked).
 - [ ] **Step 3: Green.** Add the three methods and the three types to `encryptedDownTypes`.
 - [ ] **Step 4:** The Desktop command under Wave 2 verify: PASS. Commit `feat: Desktop's start, stop and window
   requests, sealed`.
+
+### Task 20: `harness browser` runs without asking, in both engines
+
+Task 0 found `browser` outside the verbs Harness allows in the engines' own rules. Claude Code in Ask mode asks the
+person before each command (measured with the unlisted `harness status`: `This command requires approval`); Codex
+tries it in its sandbox, which cannot reach the daemon, before it asks to leave (`hooks.ts:91-95`). `harness send`
+is in those rules, and `harness browser` joins it. What a command may do stays Harness's to decide, as for the other
+verbs: only the person starts and stops (exit 2), a command reaches only the browser of the pane it runs in
+(Tasks 13, 15), and a guest's agent is refused.
+
+**Files:**
+- Modify: `cli/src/engines/facets/hooks.ts:91-99` (the verbs and their comment),
+  `cli/src/engines/kit/hookSettings.ts:132-149` (`harnessRules`),
+  `cli/src/engines/__fixtures__/hook-installers.golden.json` (recorded again, never edited by hand),
+  `cli/e2e/agentClient.e2e.ts:483-518` (the lists that case expects: `browser` with its two `Bash` rules and no
+  `mcp__` rule, and in Codex's two lists)
+- Test: `cli/src/engines/kit/hookSettings.spec.ts:155-262`, `cli/src/agentClient/mcp.spec.ts:88-96`
+
+**Depends on:** nothing. Not Task 13: a rule for a command that does not exist yet allows nothing.
+
+**Interfaces, produces (`facets/hooks.ts`):**
+
+```ts
+/** Agent commands that are a shell command only, never an MCP tool: `browser` drives the agent's own browser, and
+ *  nothing of it is MCP (docs/superpowers/specs/2026-11-11-browser-from-chat-design.md). */
+export const HARNESS_SHELL_VERBS = ['browser'] as const
+export type HarnessAgentVerb = keyof typeof HARNESS_AGENT_TOOLS | (typeof HARNESS_SHELL_VERBS)[number]
+export const HARNESS_AGENT_VERBS: HarnessAgentVerb[] =
+  [...(Object.keys(HARNESS_AGENT_TOOLS) as HarnessAgentVerb[]), ...HARNESS_SHELL_VERBS]
+```
+
+`HARNESS_AGENT_TOOLS` does not change: `mcp.spec.ts:94` holds every key of it to a tool of `harness mcp`, and
+`browser` has none. `harnessRules` makes a rule that names `{tool}` only for a verb that has a tool, and a verb's
+group of a kind with no rule left is no group (`withRules` adds a group together or not at all). `removeHooks.ts`
+reads `harnessRules`, so an uninstall takes the new rules with the rest. `RULES_HEADER` lists the verbs, so Codex's
+file changes in its header too, and the daemon writes it again at its next start (`writeRulesFile` compares the
+whole text).
+
+What lands on a computer, written by the daemon as it starts, as today:
+- Claude Code, `permissions.allow`: `Bash(harness browser:*)` and `Bash(<launcher> browser:*)`, after `tell`'s
+  rules; no `mcp__…` rule for it. A deny or an ask of the person's that touches either keeps both out (`unless`).
+- Codex, `rules/harness.rules`: `"browser"` last in each `{verbs}` list and in the header's list of commands.
+
+- [ ] **Step 1: Red.** In `hookSettings.spec.ts`:
+  - the helpers follow the code: `claudeRules` gives a verb its `mcp__` rules only when `HARNESS_AGENT_TOOLS` has
+    it, and `codexRulesFile` names `"browser"` after `"tell"`, in the header too. The cases that use them
+    (`allows Harness's agent commands and MCP tools in Claude Code…`, `adds the rules an earlier release did not
+    have…`, `allows Harness's agent commands in a Codex rules file of its own…`, `rewrites the Codex rules file an
+    earlier release wrote…`) then fail;
+  - new: `allows harness browser in Claude Code by name and by the launcher's path, and no MCP tool for it` (the
+    two `Bash` rules are in `allow`; no rule holds `undefined`, `{tool}` or `browser` after `mcp__`);
+  - new, Review Focus 8: `a deny or an ask for harness browser keeps its allow out in both spellings`;
+  - `allows only Harness's own MCP tools…` expects the tools of `HARNESS_AGENT_TOOLS`' verbs;
+  - new: `harnessRules gives a verb with no tool its commands alone, and no empty group`.
+  In `mcp.spec.ts`: `browser is an agent verb and no MCP tool` (`HARNESS_AGENT_VERBS` holds it, `HARNESS_AGENT_TOOLS`
+  does not, and no tool of `TOOLS` runs it).
+- [ ] **Step 2:** `npx vitest run src/engines/kit/hookSettings.spec.ts src/agentClient/mcp.spec.ts`: FAIL (no rule
+  names `browser`). Commit `test: harness browser is in both engines' allow rules`.
+- [ ] **Step 3: Green.** Implement. Record the fixture: `RECORD_HOOK_GOLDEN=1 npx vitest run
+  src/engines/hookInstallers.golden.spec.ts`; `git diff --stat` on it shows only the rules' lines (the `Bash`
+  rules in Claude Code's lists, the verbs in Codex's file). Change the lists `e2e/agentClient.e2e.ts` expects.
+- [ ] **Step 4:** `npx vitest run src/engines/kit/hookSettings.spec.ts src/engines/hookInstallers.golden.spec.ts
+  src/engines/removeHooks.spec.ts src/agentClient/mcp.spec.ts src/lib/uninstall/command.spec.ts`, `npm run
+  typecheck`, and `E2E_BUNDLE=1 npx vitest run --config vitest.e2e.config.ts e2e/agentClient.e2e.ts -t "without
+  asking"`: PASS. Commit `feat: agents run harness browser without asking, in Claude Code and Codex`; its message
+  says the fixture was recorded again and why, as the fixture's spec asks.
+
+### Task 21: A quiet turn ends with no recap and no notification
+
+Task 0, from the code: every live turn's end makes a recap (`commander.ts:653-712`) and, unless it is a replay, a
+sub-agent's, empty or at a question, a `done` notification (`agentNotifications.ts:24-31`) that Desktop turns into
+an unread mark, a sound, a banner and an OS notification (`app_state.dart:23238-23258`, `:14703-14751`). Nothing
+asks who started the turn. This task gives the turn's end a mark to read; Task 22 sets it for a delivery marked
+`quiet`.
+
+**Desktop has no task, and needs none.** Its alert has one cause: a `turn_summary` whose `notification` is of kind
+`done` (`app_state.dart:23238-23258`, since 2026-09-28, #444), and the daemon makes that notification. A quiet
+turn sends none, so no Desktop alerts, the released ones included: no Desktop code can be made to fail first.
+`desktop/test/notification_parity_test.dart` already holds it (`a sub-agent turn end is not`; `raw, failed, aborted
+and replayed turn ends are silent`, whose `turn_summary` carries no notification). It is seen on a real Desktop, new
+and released, in the by-hand run at the end.
+
+**Files:**
+- Modify: `cli/src/lib/commander.ts` (`SessionState`, `ingest` at `:402-530`, `onTurnEnded` at `:653`)
+- Test: `cli/src/lib/commanderNotifications.spec.ts`
+
+**Depends on:** nothing.
+
+**Interfaces, produces:**
+
+```ts
+/** `quiet`: the turn that ends in this batch was started by a line typed for the agent alone (a delivery marked
+ *  quiet, core/api.ts `DeliveryOptions`): nobody asked for it, so its end makes no recap and no notification. */
+ingest(events: LiveEvent[], sessionId: string, options?: { replay?: boolean; quiet?: boolean }): void
+```
+
+Rules:
+- The mark is the turn's (`SessionState.quiet`): a `turn_started` clears it; a batch said `quiet` sets it at its
+  `turn_ended`, before that end is handled, so an end held for sub-agents keeps it until it is let go
+  (`releaseTurnEnd`), and a new prompt that supersedes a held end drops it.
+- A quiet end, in `onTurnEnded` after the duplicate-close check and before anything is read: the turn closes; the
+  transcript is not read (`readLastTurn`), no summary is cut (`summarize`), nothing is stored (the session's recaps
+  and last full text stay the last real turn's), and `notifications.cancelled(sessionId)` so a second close cannot
+  ring. The devices get `{kind: 'done'}`, which clears the busy card as an empty turn's end
+  does, and no `summary` card. The apps get one `turn_summary` whose payload is `{sessionId, tier: 'silent'}`: no
+  `summary`, no `notification`. Desktop reads only the notification; a phone that waits for a tier files nothing
+  (`mobile/lib/notify/done_notice.dart:108`) instead of telling the end by its old rule four seconds later.
+- One trace line, `turn-end · quiet → done, no recap`, with no content.
+- An interrupted quiet turn takes the cancel path, as any. A batch that does not say `quiet` ends as today.
+- Standard 4: a quiet end does less than any end today (no file read, no summary, no save); every other turn pays
+  one boolean read.
+
+- [ ] **Step 1: Red.** A new group in `commanderNotifications.spec.ts`, `a quiet turn`, with the file's `setup`:
+  - `ends with no recap and no notification: the card goes done, the apps hear a silent tier and nothing else, and
+    nothing is read or cut` (the device's kinds end with `done` and hold no `summary`; `desktop` is exactly one
+    `turn_summary` with `payload: {sessionId: 's', tier: 'silent'}`; `summarize` and `readLastTurn` were not called);
+  - `leaves the agent's last recap as it was` (a real turn, then a quiet one: `mirror.recent('s')` and
+    `mirror.snapshot('s')` are what they were after the first);
+  - `the turn after it tells as any turn does` (a third turn, not said quiet, sends its `done` notification);
+  - Review Focus 7: `an end held for sub-agents stays quiet when it is let go` (the turn starts a sub-agent that
+    still runs at its end; after `subagent_finished` and the settle, no summary and no notification), and `a quiet
+    mark does not reach a turn that began after a held end`;
+  - `a quiet end heard twice is told once`; `an interrupted quiet turn is cancelled as any`.
+- [ ] **Step 2:** `npx vitest run src/lib/commanderNotifications.spec.ts`: FAIL (a summary and a `done` notification
+  are sent). Commit `test: a quiet turn ends with no recap and no notification`.
+- [ ] **Step 3: Green.** Implement.
+- [ ] **Step 4:** `npx vitest run src/lib/commanderNotifications.spec.ts src/lib/commander.spec.ts
+  src/lib/commanderReplay.spec.ts src/services/recaps.spec.ts` and `npm run typecheck`: PASS. Commit `feat: a turn
+  said quiet ends with no recap and no notification`.
 
 ---
 
@@ -1025,6 +1190,115 @@ the page keeps what it shows, and the next settled resize asks again.
 - [ ] **Step 4:** The Desktop command under Wave 4 verify: PASS. Commit `feat: Chrome's window takes the panel's
   size`.
 
+### Task 22: A quiet delivery marks the turn it starts; the browser's two lines are quiet
+
+**(Ken, 2026-11-11, option b.)** The mark rides the delivery path every deliverer already uses: said with the
+delivery, kept by its id, and, when the input says that delivery's turn `started`, carried by the core to that
+turn's end, where Task 21 reads it. Nothing here names the browser but the one option in `notices.ts`.
+
+**Files:**
+- Modify: `cli/src/core/api.ts` (`DeliveryOptions` at `:591-595`, `TurnLifecycle`'s `events` at `:1021`, and their
+  comments), `cli/src/core/deliveries.ts` (`DeliveriesDeps`, `settled` at `:97`, `deliver`, `answer` at `:174`),
+  `cli/src/services/turnsLink.ts:67`, `cli/src/core/turns/recaps.ts` (`RecapDeps`, `mirror.ingest` at `:111`,
+  `cancel`, `forget`, `deleteHistory`, the returned `quietTurn`), `cli/src/core/main.ts` (`createDeliveries` at
+  `:827`, `createRecaps` at `:1497`), `cli/src/services/recaps.ts:124`,
+  `cli/src/services/agentBrowser/notices.ts` (`Turns.deliver`, and `:122`)
+- Test: `cli/src/core/deliveries.spec.ts`, `cli/src/services/turnsLink.spec.ts:28`,
+  `cli/src/core/turns/recaps.spec.ts`, `cli/src/services/recaps.spec.ts`,
+  `cli/src/services/agentBrowser/notices.spec.ts`
+- Not changed: `cli/src/core/recapsLink.ts` and `cli/src/services/recapsProcess.ts` (the lifecycle event crosses
+  whole), `cli/src/core/turns/funnel.ts`, `cli/src/core/turns/ends.ts`, `cli/src/lib/sessionInput.ts`,
+  `cli/src/superTabs/`, Desktop, the phone.
+
+**Depends on:** Tasks 8 and 21; Tasks 12 and 15 (`api.ts` and `main.ts` as they leave them; Task 12 hands the
+service's own process the turns of `turnsLink`).
+
+**Interfaces, produces:**
+
+```ts
+// api.ts. `quiet` marks a line a service types for the agent alone: the turn it starts is nobody's news, and
+// ends with no recap and no notification. `turns.onEnd` still tells that end.
+export interface DeliveryOptions { answersQuestion?: true; writtenAt?: number; personsOwn?: true; quiet?: true }
+// TurnLifecycle: the turn that ends in this batch was started by a quiet delivery.
+| { kind: 'events'; session: RecapSession; events: LiveEvent[]; replay: boolean; quiet?: true }
+
+// deliveries.ts, DeliveriesDeps: the turn a quiet delivery started is open in [agentId], said once, as the input
+// says that delivery `started`.
+quietStarted?: (agentId: string) => void
+
+// core/turns/recaps.ts. RecapDeps: whether the funnel has a turn open in the session (`turnStartedAt`, as
+// main.ts:866 reads it).
+turnRunning: (sessionId: string) => boolean
+// Returned beside `mirror`: the turn open in [agentId] was started by a quiet delivery.
+quietTurn(agentId: string): void
+
+// services/agentBrowser/notices.ts
+export interface Turns {
+  deliver(agentId: string, text: string, deliveryId: string, options?: { quiet?: true }): void
+  …
+}
+```
+
+Rules:
+- **deliveries.ts.** A quiet delivery's id is kept from `turns.deliver` (the core's process) and from `answer`'s
+  `deliver` (`payload.quiet === true`, a service's own process), as `personsOwn` is, the oldest going past
+  `KEPT_DELIVERERS`. Heard `started`: the id is taken off and `quietStarted(event.sessionId)` is said, once. Heard
+  `rejected` or `unknown`: taken off, nothing said (a turn nobody can tie to the line tells as any turn). `queued`
+  and `delivered` keep it. A delivery not marked costs `settled` one lookup in an empty Set.
+- **turnsLink.ts** sends `quiet: true` with the query, beside `answersQuestion` and `personsOwn`. A core older than
+  the service ignores it: that turn tells as before, and nothing fails.
+- **core/turns/recaps.ts.** `quietTurn(agentId)`: the agent's session (`resolve`); none, or no turn running there
+  (`turnRunning`): one line `[recap] quiet · no open turn`, nothing kept (the end was already told; it cannot be
+  taken back). Else the session is kept in a Set. `mirror.ingest`: a batch that is not a replay and holds a
+  `turn_ended` takes the session off and says `quiet: true` with that batch; no other batch looks. `cancel`,
+  `forget` and `deleteHistory` take it off. So the Set holds at most the sessions with a turn open.
+- **Why at the end, by batch.** The input says `started` inside the funnel (`funnel.ts:156`), before the recaps
+  hear that batch, for an exact echo; and a moment later, after reading the engine's own record (`echoes`), for a
+  prompt the engine wrapped. A mark said with the end is right in both orders. A typed delivery waits for an idle
+  pane (`core/input.ts:67-69`), so the turn before it ended in an earlier batch, and `turnStartedAt` is set
+  (`funnel.ts:151`) before the input is told.
+- **main.ts.** `quietStarted` calls the recaps' `quietTurn` through a reference filled when the recaps are built,
+  as `holdOfRef` is; `turnRunning: (sessionId) => turnStartedAt.has(sessionId)`.
+- **services/recaps.ts:124** hands `quiet: event.quiet` to `mirror.ingest` (Task 21).
+- **notices.ts.** Both lines are delivered with `{quiet: true}`, each try.
+- **Compatibility.** No frame changes shape for a turn that is not quiet. For a quiet one the apps get a
+  `turn_summary` with a `tier` and no `summary`: every Desktop reads only `notification` there (2026-09-28, #444),
+  so a Desktop from the last 30 days does not alert either. The phone reads only `tier` there, and `silent` files
+  nothing (a Swarm agent's turns are already `silent` on it, `notifyTier.ts:55`); a phone too old to read tiers
+  tells that end as it tells any. An older CLI types no line at all (Start is `UNSUPPORTED`).
+- **Standard 4.** No timer, no file, no wait, nothing while idle. Per event batch: the `turn_ended` test `ingest`
+  already makes, then one Set removal on a batch that ends a turn. Per delivery event: one Set lookup.
+
+- [ ] **Step 1: Red.**
+  - `deliveries.spec.ts`: `says once that a quiet delivery's turn started, delivered from the core's process and
+    from a service's own, and never for a delivery that is not quiet`; `forgets a quiet delivery that is rejected
+    or past knowing, and keeps one that is queued or only written`; `keeps the last quiet deliveries only`;
+    `says nothing where nobody listens for it` (no `quietStarted`).
+  - `turnsLink.spec.ts:28`: `sends answersQuestion, personsOwn and quiet with the delivery`.
+  - `core/turns/recaps.spec.ts`: `says a turn's end is quiet when a quiet delivery started it, once: the batches
+    before the end, and the next turn's end, do not say it`; Review Focus 6: `the mark holds whether it comes
+    before the recaps hear the turn start or after`; `a mark for an agent with no session, or with no turn
+    running, is dropped and logged`; `a replayed end leaves the mark; a cancel, a forget and a purge take it off`.
+  - `services/recaps.spec.ts`, through `port.lifecycle`: `a turn the core says is quiet gets no recap and no
+    notification, and the session's last recap stays` (the apps' frame is the silent tier alone).
+  - `notices.spec.ts`: `the ready line and the stop line are delivered quiet, each try`.
+- [ ] **Step 2:** `npx vitest run src/core/deliveries.spec.ts src/services/turnsLink.spec.ts
+  src/core/turns/recaps.spec.ts src/services/recaps.spec.ts src/services/agentBrowser/notices.spec.ts`: FAIL.
+  Commit `test: a quiet delivery's turn is told to the recaps as quiet`.
+- [ ] **Step 3: Green.** Implement the rules.
+- [ ] **Step 4:** Same command with `--coverage` and a `--coverage.include=` for each of `src/core/deliveries.ts`,
+  `src/core/turns/recaps.ts`, `src/services/recaps.ts`, `src/services/turnsLink.ts` and
+  `src/services/agentBrowser/notices.ts`: PASS at 100%. Then `npx vitest run src/services/agentBrowser.spec.ts
+  src/services/agentBrowserProcess.spec.ts src/core/recapsLink.spec.ts src/services/recapsProcess.spec.ts
+  src/lib/commanderNotifications.spec.ts` and `npm run typecheck`: PASS.
+- [ ] **Step 5: Numbers (standard 4),** in the task's report, for the pull request. A throwaway script run with
+  `npx tsx`, not committed: 200,000 `mirror.ingest` calls of one `text_delta` batch through the core's
+  `createRecaps` with a port that drops, and 200,000 `settled` calls of a `delivered` event with one listener;
+  three runs each on the task's base commit and on its head, the medians side by side. Not slower beyond the
+  spread of the three runs.
+- [ ] **Step 6:** Commit `feat: quiet deliveries; the browser's ready and stop lines raise no recap and no
+  notification`.
+
 ---
 
 ## At the end
@@ -1032,7 +1306,10 @@ the page keeps what it shows, and the next settled resize asks again.
 1. **Final review** (ken15dev phase 4): one fresh Opus subagent that wrote none of it reviews the branch against
    `main` and both specs, and fixes what it finds. It also checks: `git diff --stat main -- cli/src/superTabs`
    shows only Task 4's move and import; `git grep -n "browser-mcp\|browserMcp\|created with Browser\|Browser ticked"
-   -- cli desktop` finds nothing but the dated compatibility comments.
+   -- cli desktop` finds nothing but the dated compatibility comments; no caller of `turns.deliver` but
+   `agentBrowser/notices.ts` passes `quiet`; and the quiet path names no feature: `git diff main --
+   cli/src/core/deliveries.ts cli/src/core/turns/recaps.ts cli/src/lib/commander.ts cli/src/services/recaps.ts
+   cli/src/services/turnsLink.ts | grep -i '^+.*browser'` finds nothing.
 2. **Local receipts** (`docs/validation-and-release.md`; PR CI does not run these). `python3 scripts/local-checks.py
    --list $(git diff --name-only main...HEAD)` prints what the pull request must carry. Expected, once each, on
    the final head, recorded in the PR body's `harness-local-checks` fence:
@@ -1041,23 +1318,37 @@ the page keeps what it shows, and the next settled resize asks again.
    - `cli-resume`: `npm run test:resume` (`resumeAgentService.ts`, a comment);
    - `make desktop-test` on a Mac (`desktop-macos`): not required by path, run once because the panel's webview is
      macOS and Linux UI.
-   `test:harnessd` is not needed: nothing under `src/harnessd/` changes.
+   `test:harnessd` is not needed: nothing under `src/harnessd/` changes. Tasks 20 to 22 add no receipt: their
+   files ask for `cli-core` alone (`local-checks.py --list`), already here; `cli/src/engines/` and
+   `cli/src/lib/commander.ts` are covered by `cli-tests` on CI.
 3. **CI, once:** push, open the pull request ready with the `hold` label. `ci/required` runs `cli-typecheck`,
    `cli-tests`, `desktop-tests`, `backend-desk`, `backend-integration`, `mobile-checks` and `process-checks`.
 4. **Heavy end to end, once, by hand:** Actions, CLI end to end, Run workflow on the branch with
    `agent_browser_podman` ticked (Task 18's file alone). Put the run's link in the pull request. A second run only
-   after a fix to what it found.
+   after a fix to what it found. `e2e/agentClient.e2e.ts`, whose rules case Task 20 changed, ran that case locally
+   in Task 20 and runs whole in the workflow's schedule: no second heavy run for it.
 5. **By hand, recorded in the pull request** (the spec's list), on macOS and on Linux, with a real Claude Code
    agent and a real Codex agent that ran before the update and are not restarted: Start and the typed line; a
    screenshot each engine reads; Stop mid-task and the login kept; Stop then a request that needs the browser; a
-   new agent's first message arriving exactly as typed; and that `harness browser` runs without asking the person
-   (Task 0's stand-in, now the real command). Resize the panel and see `innerWidth` follow and `screen.width` stay.
+   new agent's first message arriving exactly as typed. Resize the panel and see `innerWidth` follow and
+   `screen.width` stay. And the two things Task 0 found, which no unit test can see whole:
+   - **No asking (Task 20).** `harness browser snapshot` runs with no question in Claude Code's Ask mode and Auto
+     mode and in Codex's default mode (sign Codex in first: Task 0 could not), on an agent started after the
+     update. For the two agents that ran before it, record whether each engine took the new rule without a restart.
+   - **Quiet lines (Tasks 21, 22).** With the agent off screen and Harness not in front, press Start, wait for the
+     agent to answer the ready line, press Stop: no unread mark, no sound, no banner, no OS notification, and the
+     agent's last recap unchanged, on the branch's Desktop and on the released Desktop (an older one) against the
+     branch's CLI; the daemon's log shows `turn-end · quiet` for both turns, in Claude Code and in Codex. A turn the
+     person asks for right after still alerts.
 6. **Hot-path numbers in the pull request** (standard 4): the daemon's CPU at rest with one ready browser whose
    tool server is idle, on `main` and on the branch (at most 1% of one core, no higher than before); the wall time
    of `snapshot` on one page, p50 and p95 over 20 runs, through the relay on `main` and through the CLI on the
-   branch; Task 0's start time beside them.
+   branch; Task 0's start time beside them; Task 22's two medians, before and after (the recaps' `ingest` per
+   batch and `settled` per delivery event).
 7. **The pull request says:** platforms (above); the release order (backend, CLI, Desktop); migration (none) and
-   rollback (the spec's paragraph); the two compatibility entries and their date.
+   rollback (the spec's paragraph); the two compatibility entries and their date; what an older Desktop and an
+   older phone do at a quiet turn's end (Task 22, Compatibility); and that the hook fixture was recorded again for
+   `harness browser`'s rules (Task 20).
 
 ## Where the spec needed a call
 
@@ -1093,11 +1384,34 @@ Each is built as written here; Ken may change any.
     1:1), not device pixels.
 14. **`browser-tools.json` stays in the image** (`COPY .`), where nothing reads it once `tools/list` goes. Left:
     the spec changes nothing in the image.
-15. **A recap or a notification raised by a typed line** has no task: the core cannot tell these deliveries apart
-    today. Task 0 measures it and stops the plan if it happens.
+15. **A recap or a notification raised by a typed line.** Task 0 found both, from the code. **(Ken, 2026-11-11,
+    option b)** built as a quiet delivery (Tasks 21, 22). Four things stay; say if one should go:
+    - Desktop still counts that turn among its finished turns (`turn_ended` is not marked: its own counters, and
+      the once-per-computer phone offer, `app_state.dart:23268-23318`);
+    - the line is kept among the agent's last asks and as its last prompt (`commander.ts` `rememberAsk`, the
+      funnel's `prompts`): both are written as the turn starts, before the delivery is known to be its start;
+    - the mark does not outlive a daemon restart: an agent whose last turn was a quiet one, attached after a
+      restart, has that turn recapped as history (`commander.ts` `catchUp`: on the tile, with no notification);
+    - a line typed while the turn before it holds its end for sub-agents still at work takes that held end's
+      place, as any new prompt does today (`commander.ts:409-414`): that earlier turn is then not recapped or
+      announced. The mark is not known when the line's turn starts, so the commander cannot tell it from a prompt.
 16. **The compatibility dates** assume a release by 2026-11-18.
+17. **`browser` is an agent verb with no MCP tool.** `HARNESS_AGENT_TOOLS` maps each verb to its tool, and
+    `mcp.spec.ts` holds every key to a tool of `harness mcp`. Built: a second list, `HARNESS_SHELL_VERBS`, joined
+    into `HARNESS_AGENT_VERBS`; the map does not change.
+18. **An engine that ran before the update** reads its rules when it chooses: not measured. Until it reads the new
+    one it does what Task 0 measured for an unlisted verb (Claude Code in Ask mode asks; Codex tries in its sandbox
+    first). The by-hand run records it.
+19. **A quiet line's turn is marked only when the input says `started`.** A line the input cannot tie to the turn
+    that followed (`unknown`, `prompt_mismatch`) is not marked, and that turn alerts as today: no turn is made
+    quiet on a guess.
+20. **Desktop has no task for the quiet lines.** Its alert is raised only by the daemon's notification, which a
+    quiet turn does not send; a Desktop test for it would pass before any change (Task 21).
 
 ## Handoff
 
 Plan complete and saved to `docs/superpowers/plans/2026-11-11-browser-from-chat.md`. Execution is **ken15dev
 phase 3**. Please review the plan: does it capture what you want? No code before Ken's go.
+
+Amended 2026-11-11, after Task 0 and with wave 1 under way: Tasks 20 (wave 2), 21 (wave 2) and 22 (wave 4), for the
+allow rules and the quiet lines (Ken: both in scope; quiet lines, option b).
