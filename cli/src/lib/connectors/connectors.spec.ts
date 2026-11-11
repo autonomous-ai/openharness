@@ -17,7 +17,7 @@ import { addApiKey, addCustom, cards, customCode, disconnect, finish, Flows, sig
 import * as gateway from './gateway.js'
 import { LocalSignIn, probe } from './oauth.js'
 import { forgetPage, PAGE_BUILD, PageServer, rememberPage, runningPage } from './page.js'
-import { refresh } from './renew.js'
+import { keepAlive, KEEP_ALIVE_S, refresh } from './renew.js'
 import { call, OFFICIAL_HOSTS } from './call.js'
 import { connectionsCommand } from './command.js'
 import { readPrivate, Store, writePrivate, type Token } from './store.js'
@@ -196,6 +196,39 @@ describe('the bridge', () => {
     expect(answer.headers['www-authenticate']).toBeUndefined()
     expect(JSON.parse(answer.body).error.message).toContain('connected again')
     expect(vault.status('linear', 'Linear', vault.token('linear')).state).toBe('reconnect')
+  })
+
+  it('logs why a service refused a renewal, in its own words', async () => {
+    vault.save('linear', { ...vault.token('linear')!, expires_at: Math.floor(Date.now() / 1000) + 60 })
+    fake.revoked = true
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await expect(refresh(vault, 'linear')).rejects.toThrow('connected again')
+      const said = warn.mock.calls.map(([line]) => String(line)).find(line => line.includes('refused to renew'))
+      expect(said).toMatch(/^\[connections\] linear: .+ refused to renew it \(400 invalid_grant, issued \d{4}-/)
+      expect(said).not.toContain('refresh-1')
+    } finally { warn.mockRestore() }
+  })
+
+  it('keeps a self-signed-in connection alive when it has gone unrenewed for a day, used or not', async () => {
+    const now = Math.floor(Date.now() / 1000)
+    vault.save('linear', { ...vault.token('linear')!, obtained_at: now - 3600, expires_at: now + 3600 })
+    expect(await keepAlive(vault, KEEP_ALIVE_S)).toEqual({})
+    expect(vault.token('linear')!.access_token).toBe('access-1')
+    vault.save('linear', { ...vault.token('linear')!, obtained_at: now - KEEP_ALIVE_S - 1 })
+    expect(await keepAlive(vault, KEEP_ALIVE_S)).toEqual({})
+    expect(vault.token('linear')).toMatchObject({ access_token: 'access-2', refresh_token: 'refresh-2' })
+    expect(vault.token('linear')!.obtained_at).toBeGreaterThanOrEqual(now)
+    // Left alone: a connection already waiting for Reconnect, and the gateway's, which the gateway keeps.
+    vault.save('linear', { ...vault.token('linear')!, obtained_at: now - KEEP_ALIVE_S - 1, needs_reconnect: true })
+    vault.save('github', { access_token: 'gho', refresh: true, source: 'gateway', obtained_at: now - KEEP_ALIVE_S - 1, expires_at: now + 60 })
+    expect(await keepAlive(vault, KEEP_ALIVE_S)).toEqual({})
+    expect(vault.token('linear')!.access_token).toBe('access-2')
+    // A refusal is reported, not thrown.
+    vault.save('linear', { ...vault.token('linear')!, needs_reconnect: false })
+    fake.revoked = true
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try { expect(Object.keys(await keepAlive(vault, KEEP_ALIVE_S))).toEqual(['linear']) } finally { warn.mockRestore() }
   })
 })
 

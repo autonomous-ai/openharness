@@ -14,11 +14,18 @@ import * as gateway from '../lib/connectors/gateway.js'
 import { FakeGateway } from '../testing/connectorServers.js'
 import { serveBridgeSocket } from '../lib/connectors/bridge.js'
 import { LSOF_MS } from '../lib/peerAccount.js'
+import { keepAlive } from '../lib/connectors/renew.js'
 
 // The real socket, but for a failure with no Error to say why, which nothing here can provoke.
 vi.mock('../lib/connectors/bridge.js', async (original) => {
   const real = await original<typeof import('../lib/connectors/bridge.js')>()
   return { ...real, serveBridgeSocket: vi.fn(real.serveBridgeSocket) }
+})
+
+// The real renewal, but for a round that fails outright, which nothing here can provoke.
+vi.mock('../lib/connectors/renew.js', async (original) => {
+  const real = await original<typeof import('../lib/connectors/renew.js')>()
+  return { ...real, keepAlive: vi.fn(real.keepAlive) }
 })
 
 const OWNER = { local: true, owner: true }
@@ -80,6 +87,25 @@ describe('the connectors service', () => {
   // A socket's path has a limit, and an agent's temporary folder can be past it on its own. These tests need the socket.
   const shortHomes: string[] = []
   const shortHome = () => { const made = mkdtempSync('/tmp/hc-'); shortHomes.push(made); return made }
+
+  it('keeps connections signed in from soon after it starts, then hourly, and says which could not be', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval'] })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const vault = new Store(join(home, 'connections'), env)
+      const stale = Math.floor(Date.now() / 1000) - 10
+      // Signed in by this computer, but its OAuth client is gone: the renewal is refused.
+      vault.save('linear', { access_token: 'a', refresh_token: 'r', source: 'dcr', issuer: 'https://gone.example',
+        obtained_at: stale, expires_at: stale + 3600, mcp_entry: { url: 'https://gone.example/mcp', headers: {} } })
+      startConnectors(fakeCore(), { env, vault, keepAliveAfter: 5 })
+      await vi.advanceTimersByTimeAsync(120_000)
+      expect(vi.mocked(keepAlive)).toHaveBeenCalledWith(vault, 5)
+      await vi.waitFor(() => expect(warn.mock.calls.map(([line]) => String(line))).toContain('[connections] could not keep linear signed in: This account needs to be connected again in Connections.'))
+      vi.mocked(keepAlive).mockRejectedValueOnce(new Error('disk gone'))
+      await vi.advanceTimersByTimeAsync(3_600_000)
+      await vi.waitFor(() => expect(warn.mock.calls.map(([line]) => String(line))).toContain('[connections] keeping connections signed in failed: Error: disk gone'))
+    } finally { warn.mockRestore(); vi.useRealTimers() }
+  })
 
   it('answers exactly the request it declares, and only for the owner', async () => {
     const requests = startConnectors(fakeCore(), { env })

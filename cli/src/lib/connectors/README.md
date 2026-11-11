@@ -40,6 +40,13 @@ involved. Renewal goes straight to the service's token endpoint. 78 of Grid's 86
 every one Grid marks `dcr`, plus Linear, Notion, Amplitude and monday.com, which Grid signs in through
 its gateway but whose MCP servers also allow self-registration.
 
+A token is renewed when a request needs it, and also unasked: the daemon renews every `dcr` connection
+that has gone a day (plus up to 12 hours drawn once per start, so the account's computers do not renew
+one token at the same moment) without a renewal (`renew.ts` `keepAlive`), because a service drops a refresh
+token left unused (Canva, Miro and Notion did after four weeks). The renewed token reaches the account's
+other computers, whose own wait starts again from it. A refused renewal is logged with the service's own
+reason and the token's age, never the token, before the connection is marked "Reconnect".
+
 **`app`: through the Harness connector gateway** (`gateway.ts`; backend `routes/connectors.ts`, the same
 requests as Grid's). These services let no computer register itself, so the OAuth app Autonomous
 registered with them is used: `POST /api/connectors/start`, the browser signs in, then

@@ -22,6 +22,7 @@ import { createBridge, serveBridgePipe, serveBridgeSocket } from '../lib/connect
 import { services, type GatewayRow } from '../lib/connectors/catalog.js'
 import { addApiKey, addCustom, cards, disconnect, Flows, signInFor } from '../lib/connectors/connect.js'
 import * as gateway from '../lib/connectors/gateway.js'
+import { keepAlive, KEEP_ALIVE_S } from '../lib/connectors/renew.js'
 import { ConnectorError, Store, validateCode } from '../lib/connectors/store.js'
 import { answerVaultOp, VaultSync, vaultPortOf, type VaultPort } from '../lib/connectors/vaultSync.js'
 
@@ -29,6 +30,12 @@ import { answerVaultOp, VaultSync, vaultPortOf, type VaultPort } from '../lib/co
 export { CONNECTORS_REQUESTS } from '../core/api.js'
 
 const GATEWAY_CACHE_MS = 60_000
+/** How often the bridge looks for connections to keep alive (renew.ts `keepAlive`), and how soon after it starts. */
+const KEEP_ALIVE_EVERY_MS = 3_600_000
+const KEEP_ALIVE_FIRST_MS = 120_000
+/** Up to this much more wait, drawn once per start: the account's computers do not renew one token at the same moment
+ *  (a service that rotates refresh tokens honours only the first), and the first one's renewal resets the others' wait. */
+const KEEP_ALIVE_SPREAD_S = 12 * 3600
 
 export interface ConnectorsDeps {
   vault: Store
@@ -133,6 +140,8 @@ function listenPipe(vault: Store, path: (() => string) | undefined, retryMs: num
 
 export interface ConnectorsOverrides extends Partial<ConnectorsDeps> {
   holderIsMine?: (port: number) => Promise<boolean | null>
+  /** Seconds a connection goes unrenewed before it is kept alive (renew.ts `keepAlive`); by default a day and up to 12 hours more. */
+  keepAliveAfter?: number
   /** The platform it runs on, and on Windows where its pipe is (a test's socket named as a pipe). */
   platform?: NodeJS.Platform
   pipePath?: () => string
@@ -190,6 +199,15 @@ export function startConnectors(core: CoreApi, overrides: ConnectorsOverrides = 
       else if (notice.type === 'device_keys_changed') shared.changed(null)
     })
   }
+
+  const keepAliveAfter = overrides.keepAliveAfter ?? KEEP_ALIVE_S + Math.floor(Math.random() * KEEP_ALIVE_SPREAD_S)
+  const keepRound = (): void => {
+    void keepAlive(vault, keepAliveAfter).then((failed) => {
+      for (const [code, why] of Object.entries(failed)) console.warn(`[connections] could not keep ${code} signed in: ${why}`)
+    }, (error: unknown) => console.warn(`[connections] keeping connections signed in failed: ${String(error)}`))
+  }
+  setTimeout(keepRound, KEEP_ALIVE_FIRST_MS).unref()
+  setInterval(keepRound, KEEP_ALIVE_EVERY_MS).unref()
 
   let offered: Record<string, GatewayRow> = {}
   let offeredAt = 0
