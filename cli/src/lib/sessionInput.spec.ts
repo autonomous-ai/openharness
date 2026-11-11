@@ -15,7 +15,7 @@ import { submissionFor } from '../engines/submissions.js'
 import { submissionPolicy } from '../engines/submissionPolicies.js'
 import type { SubmissionReading } from '../engines/facets/submission.js'
 
-function session(engine: 'claude' | 'codex' | 'cursor' | 'commandcode' = 'codex'): RegisteredSession {
+function session(engine: 'claude' | 'codex' | 'cursor' | 'commandcode' | 'openclaw' = 'codex'): RegisteredSession {
   return {
     schemaVersion: 2,
     active: true,
@@ -1100,6 +1100,47 @@ describe('SessionInputController', () => {
     expect(sendKey).toHaveBeenCalledTimes(2)
     expect(onError).toHaveBeenCalledWith('s1', expect.stringContaining('did not accept'))
     controller.forget('s1')
+  })
+
+  describe('OpenClaw confirmation window', () => {
+    const openclawController = () => {
+      const sendKey = vi.fn(async () => true)
+      const onError = vi.fn()
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+        getSession: () => session('openclaw'),
+        validateRuntime: async () => true,
+        inject: async () => true,
+        sendKey,
+        capture: async () => null,
+        onError,
+      })
+      return { controller, sendKey, onError }
+    }
+
+    it('an OpenClaw message waits 30 s for its user row before it is given up', async () => {
+      vi.useFakeTimers()
+      const { controller, sendKey, onError } = openclawController()
+
+      controller.submit('s1', 'hello')
+      await vi.advanceTimersByTimeAsync(29_900)
+      expect(sendKey).toHaveBeenCalledTimes(2)
+      expect(onError).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(200)
+      expect(onError).toHaveBeenCalledWith('s1', expect.stringContaining('did not accept'))
+      controller.forget('s1')
+    })
+
+    it('a user row 25 s after the paste confirms an OpenClaw message', async () => {
+      vi.useFakeTimers()
+      const { controller, onError } = openclawController()
+
+      controller.submit('s1', 'hello')
+      await vi.advanceTimersByTimeAsync(25_000)
+      controller.onTurnStarted('s1', 'hello')
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(onError).not.toHaveBeenCalled()
+      controller.forget('s1')
+    })
   })
 
   describe('Claude Code and Codex readings from their engine worker', () => {

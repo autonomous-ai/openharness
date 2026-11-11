@@ -279,16 +279,29 @@ class SuperTabFixtureConnection extends WsConn {
           (server.state['agents'] as List).last['projectId'] =
               group['projectId'] ?? 'lead';
           (group['agentIds'] as List).add('lead-agent');
-          // As the v4 backend: a PM gets a chat of its own with its person, which holds its first request.
+          // As the v4 backend: a PM gets a chat of its own with its person, which holds its first request: the one its
+          // claim opened (backend pmChat.ts), else a new one.
           String? pmChat;
           if (command['lead'] == true) {
             group['leadId'] = 'lead-agent';
-            pmChat = 'pm-chat';
-            (server.state['conversations'] as List).add({
-              ...conversationFixture(pmChat, command['name'] as String),
-              'kind': 'agent-chat',
-              'agentIds': ['lead-agent'],
-            });
+            final project = (server.state['projects'] as List?)
+                ?.cast<Map>()
+                .where((p) => p['leadConversationId'] == group['id'])
+                .firstOrNull;
+            if (project?.remove('pmChat') case final Map waiting) {
+              pmChat = waiting['id'] as String;
+              final chat = (server.state['conversations'] as List)
+                  .cast<Map>()
+                  .firstWhere((g) => g['id'] == pmChat);
+              (chat['agentIds'] as List).add('lead-agent');
+            } else {
+              pmChat = 'pm-chat';
+              (server.state['conversations'] as List).add({
+                ...conversationFixture(pmChat, command['name'] as String),
+                'kind': 'agent-chat',
+                'agentIds': ['lead-agent'],
+              });
+            }
             (server.state['agents'] as List).last['chatId'] = pmChat;
           }
           if (command['initialMessage'] is String) {
@@ -1618,10 +1631,23 @@ void main() {
       final project = commandsOf(f, 'project.create').single;
       expect(project['brief'], 'Discuss the architecture.');
       final created = f.app.superTabs.peek(tabId)!.snapshot!.projects.last;
-      // The PM the Swarm starts reads its request in its project's chat.
+      // The request goes to the PM's own 1:1 chat, which lead.start opened
+      // before the PM is up; only agents post in the channel (Swarm v4).
+      final chat = (f.connection.server.state['conversations'] as List)
+          .cast<Map>()
+          .singleWhere((g) => g['title'] == 'Product Manager')['id'];
       final task = commandsOf(f, 'message.send').single;
-      expect(task['conversationId'], created.leadConversationId);
+      expect(task['conversationId'], chat);
       expect(task['text'], 'Discuss the architecture.');
+      // Asked for first, so the chat is there to send to.
+      final types = [
+        for (final post in f.connection.server.posts)
+          (post['command'] as Map)['type'],
+      ];
+      expect(
+        types.indexOf('lead.start'),
+        lessThan(types.indexOf('message.send')),
+      );
       final start = commandsOf(f, 'lead.start').single;
       expect(start, {
         'type': 'lead.start',
@@ -1632,10 +1658,7 @@ void main() {
       });
       expect(created.name, 'project');
       expect(f.connection.calls.where((c) => c.$1 == 'agent_create'), isEmpty);
-      expect(
-        f.app.superTabs.peek(tabId)!.selectedId,
-        created.leadConversationId,
-      );
+      expect(f.app.superTabs.peek(tabId)!.selectedId, chat);
     },
   );
 
@@ -1712,10 +1735,11 @@ void main() {
       ]);
     final box = await f.box(newProject: true, attachments: files, lead: 'far');
     expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
-    final created = f.app.superTabs.peek(tabId)!.snapshot!.projects.last;
     expect(
       f.connection.server.uploads.single['conversationId'],
-      created.leadConversationId,
+      (f.connection.server.state['conversations'] as List)
+          .cast<Map>()
+          .singleWhere((g) => g['title'] == 'Product Manager')['id'],
     );
     expect(commandsOf(f, 'message.send').single['attachmentIds'], [
       'attachment-1',

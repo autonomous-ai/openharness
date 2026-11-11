@@ -153,7 +153,7 @@ const ENGINE_LOCATIONS: Partial<Record<string, readonly string[]>> = {
   agy: ['AGY_HOME', 'AGY_CONFIG_DIR'],
   devin: ['DEVIN_HOME', 'DEVIN_CONFIG_PATH'],
   amp: ['AMP_PLUGIN_DIR'],
-  openclaw: ['OPENCLAW_STATE_DIR'],
+  openclaw: ['OPENCLAW_STATE_DIR', 'OPENCLAW_HOME'],
 }
 
 /** Probe only. No settings, workspace, model or process mutation occurs here. */

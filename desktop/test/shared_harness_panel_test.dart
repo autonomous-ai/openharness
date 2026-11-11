@@ -15,6 +15,7 @@ import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/terminal/terminal_session.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 
+import 'support/loopback_websocket.dart';
 import 'support/real_fonts.dart';
 
 void main() {
@@ -94,7 +95,8 @@ void main() {
         await tester.runAsync(() async {
           server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
           server.listen((request) async {
-            final ws = await WebSocketTransformer.upgrade(request);
+            final ws = await acceptWebSocket(request);
+            if (ws == null) return;
             sockets.add(ws);
             ws.listen((raw) {
               if (closingSockets.contains(ws) ||
@@ -401,7 +403,8 @@ void main() {
       await tester.runAsync(() async {
         server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
         server.listen((request) async {
-          final ws = await WebSocketTransformer.upgrade(request);
+          final ws = await acceptWebSocket(request);
+          if (ws == null) return;
           sockets.add(ws);
           ws.listen((raw) {
             if (raw is! String || ws.readyState != WebSocket.open) return;

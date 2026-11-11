@@ -59,7 +59,7 @@ export type RegisteredMeta = {
 }
 
 export interface BindDeps {
-  registry: Pick<typeof registry, 'inheritName' | 'unbindSession' | 'byAgent' | 'byProcess' | 'register' | 'has' | 'bySession' | 'setIdentityHold' | 'revalidateBinding' | 'setOpenclawStateDir'>
+  registry: Pick<typeof registry, 'inheritName' | 'unbindSession' | 'byAgent' | 'byProcess' | 'register' | 'has' | 'bySession' | 'setIdentityHold' | 'revalidateBinding' | 'setOpenclawStateDir' | 'takeFirstTask' | 'afterTransaction'>
   mirror: Pick<TurnRecaps, 'inheritSummary'>
   forgetSession: (id: string, opts?: { force?: boolean; keepAgent?: boolean; agentId?: string }) => void
   /** The app. */
@@ -68,7 +68,9 @@ export interface BindDeps {
   announceSession: (session: RegisteredSession) => void
   stoppedAgents: Pick<StoppedAgentStore, 'save' | 'finishResume' | 'get'>
   syncRecapPool: () => void
-  input: Pick<SessionInputController, 'forget'>
+  input: Pick<SessionInputController, 'forget' | 'awaitingConfirmation'>
+  /** Types a person's message into an agent's pane (core/input.ts `submitAgent`). */
+  submitAgent: (agentId: string, content: string) => void
   deviceInput: Pick<AutonomousDeviceInput, 'forget'>
   /** Where Copilot, Grok and agy keep their sessions. */
   homes: { copilot: string; grok: string; agy: string }
@@ -77,8 +79,9 @@ export interface BindDeps {
   /** The agent's pane as it shows now, or null when it cannot be read: OpenClaw's TUI names its session nowhere else. */
   capturePane: (agentId: string) => Promise<string | null>
   /** Tells an OpenClaw session's live stream what its pane read on this pass (engines/openclaw/live.ts), and hands the
-   *  capture on to the model chip: the footer draws the model, and this is the pane's one capture. */
-  openclawPaneRead: (sessionId: string, reading: { ready: boolean; gatewayLost: boolean }, capture: string) => void
+   *  capture on to the model chip: the footer draws the model, and this is the pane's one capture. Whether a stream
+   *  took the reading: an agent bound but not yet attached has none. */
+  openclawPaneRead: (sessionId: string, reading: { ready: boolean; gatewayLost: boolean; running: boolean }, capture: string) => boolean
   /** Whether a bound OpenClaw session's pane may show anything its last read did not (live.ts `paneDue`). */
   openclawPaneDue: (sessionId: string) => boolean
   /** The state folder an OpenClaw TUI holds open, or null when its open files cannot be read (lib/openclawStore.ts). */
@@ -87,7 +90,7 @@ export interface BindDeps {
 
 export function createBinding({
   registry, mirror, forgetSession, clients, attachSession, announceSession, stoppedAgents, syncRecapPool,
-  input, deviceInput, homes, owners, capturePane, openclawPaneRead, openclawPaneDue, openclawStateDir,
+  input, submitAgent, deviceInput, homes, owners, capturePane, openclawPaneRead, openclawPaneDue, openclawStateDir,
 }: BindDeps) {
   /**
    * Forks whose engine session has not reported in yet, agentId → the SOURCE's sessionId. A fork's tile
@@ -98,6 +101,18 @@ export function createBinding({
   const pendingForkInherit = new Map<string, string>()
   /** Whether a stop, restart, retarget or resume owns the agent right now (`whileChanging`). */
   let changing: (agentId: string) => boolean = () => false
+  /**
+   * The OpenClaw TUI process whose state folder each agent's was last read from, agentId → `pid:startMarker`. A restart
+   * resumes the same key, so only a new process says the folder may have changed. Cleared at 256 entries rather than
+   * aged: that costs one more read per agent.
+   */
+  const openclawFolderReads = new Map<string, string>()
+  const tuiProcess = (tui: DiscoveredTerminalAgent['processIdentity']): string => `${tui.pid}:${tui.startMarker}`
+  const readOpenclawStateDir = (agentId: string, tui: DiscoveredTerminalAgent['processIdentity']): Promise<string | null> => {
+    if (openclawFolderReads.size >= 256) openclawFolderReads.clear()
+    openclawFolderReads.set(agentId, tuiProcess(tui))
+    return openclawStateDir(tui.pid)
+  }
 
   const handleRegistered = async (entry: RegisteredSession, meta: RegisteredMeta): Promise<void> => {
     const authority = paneReadIdentity(entry)
@@ -237,6 +252,22 @@ export function createBinding({
     void handleRegistered(entry, meta).catch(error => console.error(
       `[agent] ${sid(entry.agentId)} transcript attachment is unavailable: ${error instanceof Error ? error.message : error}`))
   }
+  /**
+   * Takes the agent's first task off its row and types it as the person's own message, under the agent: its turn is
+   * confirmed there (core/turns/funnel.ts), and under the session key it was failed as not accepted. This pass runs inside the
+   * reconcile pass's registry transaction (core/main.ts), which holds saves back: taken after it commits, the removal is
+   * saved before the task is typed, so a daemon that stops in between never types it twice. A pass that reads the pane
+   * again before then takes nothing. A submit that throws has the task off the row already: it is said, not put back.
+   */
+  const handOverFirstTask = (agentId: string): void => {
+    const reason = (error: unknown): string => error instanceof Error ? error.message : String(error)
+    void registry.afterTransaction(() => registry.takeFirstTask(agentId)).then((task) => {
+      if (!task) return
+      console.log(`[agent] ${sid(agentId)} first task handed over`)
+      try { submitAgent(agentId, task) }
+      catch (error) { console.error(`[agent] ${sid(agentId)} first task not typed · ${reason(error)}`) }
+    }, (error) => console.error(`[agent] ${sid(agentId)} first task kept · ${reason(error)}`))
+  }
   const ownTranscript = (engine: 'cursor' | 'grok' | 'agy' | 'copilot', sessionId: string, cwd: string): Promise<string | null> =>
     transcriptOf(engine, engine === 'cursor' ? cursorDataDir() : homes[engine], sessionId, cwd)
   const bindObservedAgent = async (observed: DiscoveredTerminalAgent): Promise<void> => {
@@ -302,13 +333,15 @@ export function createBinding({
       // before the process (`main`, a resume) is the pane's all the same, so nothing is compared with the process's
       // start. A key another agent holds stays that agent's: two panes on `main` share one conversation, and the first
       // keeps it. A bound pane is read when its stream says it may show something new: an idle one is not read every pass.
-      if (agent.sessionId && !openclawPaneDue(agent.sessionId)) return
+      // One a message was typed into is read on every pass until the message is confirmed: the run it starts shows on the
+      // pane before the store, which may never show it (live.ts NO_SESSION_MS counts from the first pass that reads it).
+      if (agent.sessionId && !openclawPaneDue(agent.sessionId) && !input.awaitingConfirmation(agent.agentId)) return
       const captured = await read(() => capturePane(agent.agentId))
       if (!captured?.value || !current()) return
       const screen = readOpenclawScreen(captured.value)
       // Told on every pass, the ones that say a state too: a pass that reads the Gateway gone is what lets the stream
       // close a turn its restart left `running`.
-      if (agent.sessionId) openclawPaneRead(agent.sessionId, { ready: screen.state === 'ready', gatewayLost: screen.gatewayLost }, captured.value)
+      const streamed = !!agent.sessionId && openclawPaneRead(agent.sessionId, { ready: screen.state === 'ready', gatewayLost: screen.gatewayLost, running: screen.running }, captured.value)
       const held = screen.state ? OPENCLAW_SCREEN_HOLDS[screen.state] : undefined
       const ours = !agent.identityHold || OPENCLAW_HOLDS.has(agent.identityHold)
       if (held) {
@@ -331,6 +364,26 @@ export function createBinding({
             `[agent] ${sid(agent.agentId)} transcript attachment is unavailable: ${error instanceof Error ? error.message : error}`))
         }
       }
+      // A TUI the person relaunched with another OPENCLAW_STATE_DIR (as the store hold asks) shows the same key, so the
+      // pass below never binds it again: its new folder replaces the row's, and the session is let go so the next pass
+      // binds it again and attaches its stream there. Before the handover: a task is typed only into a session read.
+      // A row that kept no folder, on this daemon's first read of its TUI, has its stream on the store these same open
+      // files name (lib/openclawStore.ts): the folder is only recorded, the session kept.
+      const readBefore = openclawFolderReads.get(agent.agentId)
+      if (agent.sessionId && screen.key === agent.sessionId && readBefore !== tuiProcess(observed.processIdentity)) {
+        const streamMayDiffer = !!agent.openclawStateDir || readBefore !== undefined
+        const stateDir = await readOpenclawStateDir(agent.agentId, observed.processIdentity)
+        if (!current()) return
+        if (stateDir && registry.setOpenclawStateDir(agent.agentId, stateDir) && streamMayDiffer) {
+          console.log(`[discovery] ${sid(agent.agentId)} openclaw · state folder changed`)
+          forgetSession(agent.sessionId, { force: true, keepAgent: true })
+          return
+        }
+      }
+      // The first task is typed once the Gateway answers, into the session the pane shows, and only with a stream
+      // attached: typed before it, its user row is history, nothing confirms it, and the person sends it again. A pane
+      // that moved to another key binds it below first, and hands the task over on the next pass.
+      if (streamed && agent.firstTask && screen.state === 'ready' && screen.key === agent.sessionId) handOverFirstTask(agent.agentId)
       const key = screen.key
       if (!key || key === agent.sessionId || isRecentlyDeleted(key)) return
       const owner = registry.bySession(key)
@@ -350,7 +403,7 @@ export function createBinding({
       followRegistered(bound.entry, bound)
       console.log(`[discovery] ${moved ? `${sid(agent.agentId)} openclaw session moved ${sid(agent.sessionId)} → ` : 'bound openclaw session '}${sid(key)} via ${observed.primaryRuntimeKey}`)
       // Where its store is once this TUI is gone (a `--profile` TUI's is not the default): read while it runs.
-      const stateDir = await openclawStateDir(observed.processIdentity.pid)
+      const stateDir = await readOpenclawStateDir(bound.entry.agentId, observed.processIdentity)
       if (stateDir) registry.setOpenclawStateDir(bound.entry.agentId, stateDir)
       return
     }
