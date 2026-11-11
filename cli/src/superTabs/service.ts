@@ -20,6 +20,7 @@ import { FirstAnswers } from './firstAnswers.js'
 import { GitHubMentions, repositorySlug, watchedAgents } from './githubMentions.js'
 import { ShippingReporter } from './shipping.js'
 import { githubRest, type GitHubGet, type GitHubSend } from './githubRest.js'
+import { claimAsked, takeTask } from './githubClaim.js'
 import { postVerdict, verdictAsked } from './githubVerdict.js'
 import { GitHubAssign } from './githubAssign.js'
 import { GitHubMerge, ledProjects, recordedAuthors, type LedProject } from './githubMerge.js'
@@ -160,7 +161,10 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   // GitHub as this computer's own gh login, for the news to its person's v4 agents and the merges of their PM's projects:
   // read and merged while the host runs (no host, no Swarm agents here to read or merge for).
   const github = (options.github ?? githubRest)()
-  // This computer's GitHub login, asked once: a verdict made by command looks for its own earlier comment by it (githubVerdict.ts).
+  // The verdicts and claims being made by command now, by agent and what was asked: as many as there are commands running.
+  const commands = new Map<string, Promise<unknown>>()
+  // This computer's GitHub login, asked once: a verdict or a claim made by command looks for its own earlier comment by it
+  // (githubVerdict.ts, githubClaim.ts).
   let githubLogin: Promise<string> | null = null
   const loginOf = () => githubLogin ??= github.get('/user', null).then(reply => {
     const login = object(reply.body).login
@@ -409,22 +413,30 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         if (payload.action === 'status') {
           return { ok: true, value: statusView(answerOf(await swarm()), agentId) }
         }
-        // A reader's verdict on a pull request (`read ok|hold`, githubVerdict.ts): posted with this computer's gh under the
-        // calling agent's name, on a repository of a project it reads, and recorded with the backend as that agent's.
-        if (payload.action === 'read') {
-          const asked = verdictAsked(payload)
-          if (!asked) return { error: 'INVALID_REQUEST' }
+        // A reader's verdict on a pull request (`read ok|hold`, githubVerdict.ts) and a builder's claim on a task (`take`,
+        // githubClaim.ts): made with this computer's gh under the calling agent's name, on a repository of a project it reads,
+        // and its comment recorded with the backend as that agent's.
+        if (payload.action === 'read' || payload.action === 'take') {
+          const verdict = payload.action === 'read' ? verdictAsked(payload) : null, claim = payload.action === 'take' ? claimAsked(payload) : null
+          if (!verdict && !claim) return { error: 'INVALID_REQUEST' }
           // This computer's gh login is its person's: only that person's own agent here posts with it, as GitHub news and the
           // merger read with it only for such an agent (githubMentions.ts watchedAgents, githubMerge.ts ledProjects).
           const me = (await core.account.identity().catch(() => null))?.accountId ?? null
           if (!me || agent.contributorId !== me || agent.machineOwnerId !== me) {
-            return { error: 'AGENT_UNAVAILABLE', detail: 'A verdict is posted with its person\'s own GitHub login, on that person\'s computer.' }
+            return { error: 'AGENT_UNAVAILABLE', detail: verdict ? 'A verdict is posted with its person\'s own GitHub login, on that person\'s computer.'
+              : 'A task is taken with its person\'s own GitHub login, on that person\'s computer.' }
           }
           const repositories = new Set(list((await swarm()).state.projects).map(project => repositorySlug(object(project.repository).repositoryUrl)).filter(slug => slug !== null))
           const name = [agent.displayName, agent.name].find((given): given is string => typeof given === 'string' && !!given.trim()) ?? ''
-          return { ok: true, value: await postVerdict({ get: github.get, send: github.send, login: loginOf,
-            record: async (repository, commentId) => { await backend(core, 'POST', `${path}/github-comments?${identity}`, { repository, kind: 'issue', commentId }) } },
-            { name, repositories }, asked) }
+          const record = async (repository: string, commentId: string) => { await backend(core, 'POST', `${path}/github-comments?${identity}`, { repository, kind: 'issue', commentId }) }
+          // The CLI gives up after 30 seconds and says "Try again" while this works on: the same command from the same agent
+          // joins the one still running, or both would find no comment yet and each post its own.
+          const same = JSON.stringify([agentId, verdict ?? claim])
+          const deps = { get: github.get, send: github.send, login: loginOf, record }
+          const made = commands.get(same) ?? (verdict ? postVerdict(deps, { name, repositories }, verdict) : takeTask(deps, { name, repositories }, claim!))
+            .finally(() => commands.delete(same))
+          commands.set(same, made)
+          return { ok: true, value: await made }
         }
         // A Lead's terminal read or typing (`screen`, `type`): the backend answers only the agent that asked.
         if (payload.action === 'terminalResult') {
