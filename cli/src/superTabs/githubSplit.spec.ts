@@ -277,7 +277,7 @@ describe('a piece cut off a task, by command', () => {
   })
 
   it('finishes with the same command a cut whose issue GitHub could not attach then, and gives nobody the issue meanwhile', async () => {
-    for (const fail of [{ status: 502 }, { status: 429 }, { status: 403, resetAt: NOW + 60_000 }, { status: 0 }]) {
+    for (const fail of [{ status: 502 }, { status: 429 }, { status: 401 }, { status: 403, resetAt: NOW + 60_000 }, { status: 0 }]) {
       const t = setup()
       t.repo.fail = { method: 'POST', path: /\/sub_issues$/, ...fail }
       expect(await refusal(t.split())).toEqual(fail.status ? { code: 'GITHUB_REFUSED', message: `GitHub answered ${fail.status} for acme/app#34. ${AGAIN}` }

@@ -191,7 +191,8 @@ export async function splitTask(deps: VerdictDeps, builder: { name: string; repo
     const reply = await github(() => deps.send('POST', `${task}/sub_issues`, { sub_issue_id: piece!.id }))
     // GitHub failing or limiting on its side is worth the command again: its limit on writes answers 403 or 429, with no word of
     // when it lifts. A 403 or a 404 may also be a login that may not attach, which the same command will not get past.
-    if (reply.status >= 500 || reply.status === 429 || reply.resetAt !== null) throw refused(reply.status)
+    // A 401 is this computer's login refused, which gh signs in again for the next call.
+    if (reply.status >= 500 || reply.status === 429 || reply.status === 401 || reply.resetAt !== null) throw refused(reply.status)
     if (reply.status === 403 || reply.status === 404) {
       throw new SuperTabHostError('GITHUB_REFUSED', `GitHub answered ${reply.status} for ${at}. ${again()} If it answers ${reply.status} again, this login may not attach it: close #${made}.`, 502)
     }

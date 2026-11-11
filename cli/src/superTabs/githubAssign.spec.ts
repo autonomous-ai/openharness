@@ -35,7 +35,9 @@ function fakeGitHub(open: Json[], closed: Json[] = []) {
       // A page of the list, as GitHub pages it.
       : url.pathname === '/repos/acme/app/pulls' ? state.pulls.slice((Number(url.searchParams.get('page') ?? 1) - 1) * Number(url.searchParams.get('per_page') ?? 30),
         Number(url.searchParams.get('page') ?? 1) * Number(url.searchParams.get('per_page') ?? 30))
+      // Since a moment, when the read asks so, as GitHub lists them.
       : /^\/repos\/acme\/app\/issues\/\d+\/comments$/.test(url.pathname) ? (state.comments.get(Number(url.pathname.split('/').at(-2))) ?? []).map(records.served)
+        .filter(comment => !url.searchParams.has('since') || !(Date.parse(String(comment.created_at)) < Date.parse(url.searchParams.get('since')!)))
       : /^\/repos\/acme\/app\/pulls\/\d+\/reviews$/.test(url.pathname) ? state.reviews.get(Number(url.pathname.split('/').at(-2))) ?? []
       // A head against main, from the commit of main it stands on.
       : /^\/repos\/acme\/app\/compare\/main\.\.\.[0-9a-f]+$/.test(url.pathname) ? state.compare.has(url.pathname.split('...').at(-1)!)
@@ -756,10 +758,9 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
   })
 
   // A task that waits on pieces cut off it (githubSplit.ts) is others' to move: never called quiet while they are open. GitHub
-  // does not touch a task as its piece closes, so in the pass that first sees them closed it reads as quiet since its last cut:
-  // its builder is told they are closed, not asked whether it is still on it, and its quiet is counted from that word (third
-  // review of the split).
-  it('never calls quiet a task that waits on its pieces, nor in the pass they close: its builder is told, and its quiet starts there', async () => {
+  // does not touch a task as its piece closes (seen on a real repository, 2026-11-11), so by its own time it is quiet since its
+  // builder's last cut: its quiet is counted from when it last waited, or from the word that its pieces are closed.
+  it('never calls quiet a task that waits on its pieces, and counts its quiet from when they closed', async () => {
     const HOUR = 3_600_000
     const f = setup([issue(1, ['size:l', 'builder:pip', 'status:taken'], { sub_issues_summary: { total: 2, completed: 1 } })])
     f.github.state.open[0]!.updated_at = new Date(f.clock.now).toISOString()
@@ -771,21 +772,51 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     f.github.state.open[0]!.sub_issues_summary = { total: 2, completed: 2 }
     await f.assigner.tick()
     expect(told()).toHaveLength(1)
-    expect(asks()).toEqual([])
-    // GitHub shows the task touched by that word from the next pass on: quiet four hours after it, as any task.
-    f.github.state.open[0]!.updated_at = new Date(f.clock.now).toISOString()
+    // GitHub's list still shows the task's old time on the passes that follow, and for good had the word been refused: it
+    // is quiet four hours after that word, as any task after its last touch.
+    f.clock.now += 60_000
+    await f.assigner.tick()
     f.clock.now += 3 * HOUR
     await f.assigner.tick()
     expect(asks()).toEqual([])
     f.clock.now += HOUR
     await f.assigner.tick()
     expect(asks()).toHaveLength(1)
+    expect(told()).toHaveLength(1)
+  })
+
+  it('counts a task\'s quiet from when it last waited, whatever else is so: a piece opened again, a draft of its builder\'s, a word GitHub refused', async () => {
+    const HOUR = 3_600_000, long = new Date(Date.parse('2026-11-09T07:31:00Z') - 9 * HOUR).toISOString()
+    const asks = (f: ReturnType<typeof setup>) => f.said().filter(([, body]) => String(body).includes('Are you still on it?'))
+    const told = (f: ReturnType<typeof setup>) => f.said().filter(([, body]) => String(body).includes('cut off this task')).map(([, body]) => String(body).replace(/^Harness, \d\d:\d\d, /, ''))
+    // Both pieces close and its builder is told; one is opened again for six hours, and closes again: told again, not asked.
+    const f = setup([issue(1, ['size:l', 'builder:pip', 'status:taken'], { sub_issues_summary: { total: 2, completed: 2 }, updated_at: long })])
+    await f.assigner.tick()
+    // The word of the first time they closed is on the task: it is not the word of the second.
+    f.github.state.comments.set(1, [{ body: `Harness, 07:31, ${told(f)[0]}`, author_association: 'MEMBER', created_at: new Date(f.clock.now).toISOString() }])
+    f.github.state.open[0]!.sub_issues_summary = { total: 2, completed: 1 }
+    for (let hour = 0; hour < 6; hour++) { f.clock.now += HOUR; await f.assigner.tick() }
+    f.github.state.open[0]!.sub_issues_summary = { total: 2, completed: 2 }
+    await f.assigner.tick()
+    expect(told(f)).toHaveLength(2)
+    expect(asks(f)).toEqual([])
+    // A draft pull request of its builder's for the task, older than the cut, is no touch since: told, and not asked.
+    const g = setup([issue(1, ['size:l', 'builder:pip', 'status:taken'], { sub_issues_summary: { total: 1, completed: 0 }, updated_at: long })])
+    g.github.state.pulls = [{ number: 30, draft: true, base: { ref: 'main' }, head: { sha: 'f6edb44c0ffee0000000000000000000000000ab', ref: 'pip/1' }, labels: [{ name: 'builder:pip' }], body: 'Closes #1',
+      updated_at: long }]
+    await g.assigner.tick()
+    g.github.state.open[0]!.sub_issues_summary = { total: 1, completed: 1 }
+    await g.assigner.tick()
+    expect(told(g)).toEqual(['to **Pip**: the piece cut off this task is closed. It is yours to finish, or to close if nothing is left.'])
+    expect(asks(g)).toEqual([])
     // A word GitHub would not take is tried again each pass, and the task is not called quiet meanwhile.
-    const g = setup([issue(1, ['size:l', 'builder:pip', 'status:taken'], { sub_issues_summary: { total: 1, completed: 1 }, updated_at: new Date(Date.parse('2026-11-09T07:31:00Z') - 9 * HOUR).toISOString() })])
-    g.github.state.commentAnswer = 403
-    await g.assigner.tick()
-    await g.assigner.tick()
-    expect(g.said().map(([, body]) => String(body).replace(/^Harness, \d\d:\d\d, /, ''))).toEqual(Array(2).fill('to **Pip**: the piece cut off this task is closed. It is yours to finish, or to close if nothing is left.'))
+    const h = setup([issue(1, ['size:l', 'builder:pip', 'status:taken'], { sub_issues_summary: { total: 1, completed: 1 }, updated_at: long })])
+    h.github.state.commentAnswer = 403
+    await h.assigner.tick()
+    h.clock.now += 5 * HOUR
+    await h.assigner.tick()
+    expect(h.said().map(([, body]) => String(body).replace(/^Harness, \d\d:\d\d, /, ''))).toEqual(Array(2).fill('to **Pip**: the piece cut off this task is closed. It is yours to finish, or to close if nothing is left.'))
+    expect(h.log).toHaveBeenCalledWith('[super-tab] Task assignment: ASK_REFUSED acme/app#1: GitHub answered 403')
   })
 
   it('tells the PM once of a sized task nobody holds that waits on its pieces, and gives it to nobody', async () => {
@@ -799,47 +830,49 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     expect(f.said()).toEqual([[1, expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*Faye\*\*: nobody can start this yet: pieces cut off it are still open\.$/)]])
   })
 
-  it('tells a task\'s builder once that every piece cut off it is closed, and again only a day on or when more were cut', async () => {
+  it('tells a task\'s builder once that every piece cut off it is closed, and finds that word after a restart', async () => {
+    const HOUR = 3_600_000
     const f = setup([issue(1, ['size:l', 'builder:pip', 'status:taken'], { sub_issues_summary: { total: 2, completed: 1 } }),
-      // Given and not taken, with no pieces, another team's, and one whose pull request is open: nothing is said of them.
+      // Given and not taken, with no pieces, and another team's: nothing is said of them.
       issue(2, ['size:l', 'builder:juno'], { sub_issues_summary: { total: 1, completed: 1 } }), issue(3, ['size:l', 'builder:pip', 'status:taken'], { sub_issues_summary: { total: 0, completed: 0 } }),
-      issue(4, ['size:l', 'builder:stranger', 'status:taken'], { sub_issues_summary: { total: 1, completed: 1 } }), issue(5, ['size:l', 'builder:juno', 'status:taken'], { sub_issues_summary: { total: 1, completed: 1 } })])
-    // Juno's own pull request for #5 is open; a stranger's that says it fixes #1 is not Pip's finishing it.
-    f.github.state.pulls = [{ number: 30, draft: true, base: { ref: 'main' }, head: { sha: 'f6edb44c0ffee0000000000000000000000000ab', ref: 'juno/5' }, labels: [{ name: 'builder:juno' }], body: '' },
-      { number: 31, draft: false, base: { ref: 'main' }, head: { sha: 'a6edb44c0ffee0000000000000000000000000ab', ref: 'patch-1' }, labels: [], body: 'Fixes #1' }]
+      issue(4, ['size:l', 'builder:stranger', 'status:taken'], { sub_issues_summary: { total: 1, completed: 1 } })])
     const told = () => f.said().filter(([, body]) => String(body).includes('cut off this task')).map(([number, body]) => [number, String(body).replace(/^Harness, \d\d:\d\d, /, '')])
+    const line = 'to **Pip**: all 2 pieces cut off this task are closed. It is yours to finish, or to close if nothing is left.'
     await f.assigner.tick()
     expect(told()).toEqual([])
     f.github.state.open[0]!.sub_issues_summary = { total: 2, completed: 2 }
     await f.assigner.tick()
     await f.assigner.tick()
-    expect(told()).toEqual([[1, 'to **Pip**: all 2 pieces cut off this task are closed. It is yours to finish, or to close if nothing is left.']])
+    expect(told()).toEqual([[1, line]])
     // After a restart it is found said among the task's comments of the last day, and not said again.
-    f.github.state.comments.set(1, [{ body: 'Harness, 07:31, to **Pip**: all 2 pieces cut off this task are closed. It is yours to finish, or to close if nothing is left.', author_association: 'MEMBER',
-      created_at: new Date(f.clock.now).toISOString() }])
+    const said = (hoursAgo: number, association = 'MEMBER') => f.github.state.comments.set(1, [{ body: `Harness, 07:31, ${line}`, author_association: association,
+      created_at: new Date(f.clock.now - hoursAgo * HOUR).toISOString() }])
+    said(20)
     await f.make().tick()
     expect(told()).toHaveLength(1)
-    // A stranger's comment in the same words is not Harness's: it is said.
-    f.github.state.comments.set(1, [{ body: 'Harness, 07:31, to **Pip**: all 2 pieces cut off this task are closed.', author_association: 'NONE', created_at: new Date(f.clock.now).toISOString() }])
-    await f.make().tick()
-    expect(told()).toHaveLength(2)
-    // One more piece cut and closed is said as three; a single piece in its own words; and a refusal is said in the log and tried again.
-    f.github.state.open[0]!.sub_issues_summary = { total: 3, completed: 3 }
-    f.github.state.open[2]!.sub_issues_summary = { total: 1, completed: 1 }
-    f.github.state.commentAnswer = 403
-    await f.assigner.tick()
-    expect(f.log).toHaveBeenCalledWith('[super-tab] Task assignment: ASK_REFUSED acme/app#1: GitHub answered 403')
-    f.github.state.commentAnswer = 201
-    await f.assigner.tick()
-    expect(told().slice(4)).toEqual([[1, 'to **Pip**: all 3 pieces cut off this task are closed. It is yours to finish, or to close if nothing is left.'],
-      [3, 'to **Pip**: the piece cut off this task is closed. It is yours to finish, or to close if nothing is left.']])
-    // Closed, it is forgotten: opened again as it was, its builder is told again.
+    // A stranger's comment in the same words is not Harness's, and one of two days ago is not looked back to: it is said.
+    for (const [hoursAgo, association] of [[1, 'NONE'], [48, 'MEMBER']] as const) {
+      said(hoursAgo, association)
+      const before = told().length
+      await f.make().tick()
+      expect(told()).toHaveLength(before + 1)
+    }
+    // A task closed is forgotten: opened again as it was, its builder is told again.
     const [first] = f.github.state.open.splice(0, 1)
     await f.assigner.tick()
     f.github.state.open.unshift(first!)
     f.github.state.comments.delete(1)
+    const before = told().length
     await f.assigner.tick()
-    expect(told()).toHaveLength(7)
+    expect(told()).toHaveLength(before + 1)
+  })
+
+  it('tells the PM of no more waiting tasks in a pass than it tells of blocked ones', async () => {
+    const f = setup(Array.from({ length: 7 }, (_, n) => issue(n + 1, ['size:l'], { sub_issues_summary: { total: 1, completed: 0 } })))
+    await f.assigner.tick()
+    expect(f.said()).toHaveLength(5)
+    await f.assigner.tick()
+    expect(f.said().map(([number]) => number).sort()).toEqual([1, 2, 3, 4, 5, 6, 7])
   })
 
   it('moves nothing within a team of one builder: a quiet task stays, and so does one waiting for its quota', async () => {
