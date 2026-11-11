@@ -12,13 +12,13 @@ import { sweepThreadMarks } from './readMarks.js'
 import { sweepChatSettings } from './chatSettings.js'
 import { purgeAgentTombstones } from './agentTombstones.js'
 
-/** Parts whose key is never used twice (conversations, starts, projects' progress) lose their tombstone at `purgeAt`.
+/** Parts whose key is never used twice (conversations, starts) lose their tombstone at `purgeAt`.
  *  A person or machine can come back under the same key, so its tombstone is kept for good, compacted to its
  *  version (`compactTombstones`): versions never reset (spec ruling 6, review round 1). An agent's goes at `purgeAt` once
  *  nothing open names it (agentTombstones.ts). Run by the singleton worker at
  *  startup, like the terminal and mention expiry indexes. */
 export async function ensurePartExpiry(db: PrismaClient): Promise<void> {
-  for (const collection of ['SwarmHead', 'SwarmGroup', 'SwarmStart', 'SwarmProgress']) {
+  for (const collection of ['SwarmHead', 'SwarmGroup', 'SwarmStart']) {
     await ensureIndex(db, collection, { key: { purgeAt: 1 }, name: 'part_purge', expireAfterSeconds: 0 })
   }
 }

@@ -133,7 +133,7 @@ function setup(s?: RegisteredSession, kept: RegisteredSession[] = [], readerFor 
     stopped: vi.fn(() => kept),
     pages,
     readerFor,
-    dbs: { opencode: '/stores/opencode.db', kilo: '/stores/kilo.db', devin: '/stores/sessions.db' },
+    dbs: { opencode: '/stores/opencode.db', kilo: '/stores/kilo.db', devin: '/stores/sessions.db', openclaw: async () => null },
     hermesDb: vi.fn(async () => '/profiles/work/state.db'),
   }
   return { ...createHistory(deps), deps, pages }

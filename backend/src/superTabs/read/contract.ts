@@ -10,7 +10,7 @@ import type { Agent, AgentStart, Conversation, Person, SuperTabState, WorkStatus
 import type { ContributedMachine } from '../machines.js'
 
 export const READ_FORMAT = 2
-export type PartKind = 'head' | 'member' | 'agent' | 'group' | 'machine' | 'start' | 'progress'
+export type PartKind = 'head' | 'member' | 'agent' | 'group' | 'machine' | 'start'
 
 /** A live part: the reader's view of one stored record. */
 export interface LivePart<T> { key: string; version: number; changedAt: number; data: T }
@@ -40,7 +40,7 @@ export type AgentView = Omit<Agent, 'downNamed' | 'downSince' | 'limitedUntil' |
 export interface Audience { people: Array<{ id: string; generation: string }> }
 /** A conversation with its own message counter (`lastMessageSequence` and message sequences compare within one group).
  *  `dormant` is set only on a dormant group fetched on demand; `audience` only on a private conversation. */
-export type GroupView = Omit<Conversation, 'talkedAt' | 'messageSeq' | 'reportSeq' | 'dormant' | 'lastActivityAt' | 'audience' | 'ledger'> & {
+export type GroupView = Omit<Conversation, 'talkedAt' | 'messageSeq' | 'dormant' | 'lastActivityAt' | 'audience' | 'ledger'> & {
   /** When it shipped (ms): its first Done; absent until it has. Nothing else of its ledger is sent. */
   shippedAt?: number
   /** Why a held task is held, or `none` for a hold from before reasons; absent when it is not held (heldReason.ts heldView). */
@@ -51,15 +51,6 @@ export type GroupView = Omit<Conversation, 'talkedAt' | 'messageSeq' | 'reportSe
  *  reader can see. Machines without a contribution are never sent. */
 export type MachineView = ContributedMachine
 export type StartView = AgentStart
-export interface ProgressView {
-  since: number
-  summarizedFloor: number
-  summarized: Record<string, number>
-  requestedFloor: number
-  requested: Record<string, number>
-  requestedAt: number | null
-  requestMessageId?: string
-}
 
 /** Values that change without a part changing (time, or several parts). Recomputed in full on every response;
  *  clients overlay it on the parts. */
@@ -131,7 +122,10 @@ export interface FirstLoad extends ReadMeta {
   groups: LivePart<GroupView>[]
   machines: LivePart<MachineView>[]
   starts: LivePart<StartView>[]
-  progress: LivePart<ProgressView>[]
+  /** Always empty: the report progress part went with Swarm v4 (S19). Released CLIs still require the list (cli
+   *  superTabs/partsStore.ts maps every list, readContract.ts marks it required). It goes not before 2026-12-12, and only once
+   *  a CLI release reads `progress` as optional and is 30 days old. */
+  progress: []
   derived: Derived
   /** Opaque: the reader's summary (`derived` without its marks) as a hash (derivedEtag.ts). Send it back as `derivedEtag` on
    *  the next change read. Absent from an older backend. */
@@ -160,7 +154,8 @@ export interface ChangesDelta extends ReadMeta {
   /** Only for a client that asked: machines whose reading alone moved, which `machines` then leaves out. */
   machineReadings?: MachineReading[]
   starts: PartChange<StartView>[]
-  progress: PartChange<ProgressView>[]
+  /** Always empty, as in a first load. */
+  progress: []
   /** The whole summary, or with `derivedUnchanged` only the reader's moved marks: the client keeps the summary it holds. */
   derived: Derived | ReaderMarks
   /** As a first load's: the summary this reply's reader has now, sent whether or not `derived` carries it. */
@@ -180,7 +175,7 @@ export interface CommandReply {
   result: Record<string, unknown>
   parts: Array<{ kind: PartKind; key: string; version: number }>
   lastChangedAt: number | null
-  /** Only on a replayed receipt from before the migration. */
+  /** Only on a replayed receipt from before the parts (2026-10-26). */
   legacyRevision?: number
 }
 
@@ -290,7 +285,4 @@ export interface HostPool {
   /** The host may say what it launches beyond workers in its readings (leadStart.ts). */
   capabilitiesWanted?: true
 }
-
-/** HTTP 503 on the new routes while a Swarm is still on the old format; clients retry. */
-export const SWARM_MIGRATING = { code: 'SWARM_MIGRATING', status: 503, message: 'This Swarm is being upgraded. Try again in a moment.' } as const
 

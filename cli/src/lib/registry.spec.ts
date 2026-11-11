@@ -89,6 +89,15 @@ describe('registry remote display names', () => {
     delete process.env.CURSOR_HOME
   })
 
+  // Every OpenClaw key starts `agent:main:`, so every OpenClaw agent found in a pane was `<folder> · agen` (E2E 2026-11-10).
+  it('names an OpenClaw agent found in a pane by its key, never by the prefix every key shares', async () => {
+    const { projectDisplayName } = await loadRegistryModule()
+    const found = (sessionId: string) => ({ agentId: 'a-oc', sessionId, engine: 'openclaw', cwd: '/root/e2e-proj', runtimes: [] }) as unknown as RegisteredSession
+    expect(projectDisplayName(found('agent:main:main'))).toBe('e2e-proj · main')
+    expect(projectDisplayName(found('agent:main:e2e-plain'))).toBe('e2e-proj · e2e-plain')
+    expect(projectDisplayName(found('agent:main:tui-22b7208d-0497-4da6-9439-d29689321c48'))).toBe('e2e-proj · tui-22b7208d')
+  })
+
   // tmux takes an APC string as a pane's title, and Claude Code's kitty graphics query named a guest's harness
   // "Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA" (2026-10-22). tmux.ts no longer reads one as a title; one a registry already
   // stored is not a name either.

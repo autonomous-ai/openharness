@@ -77,6 +77,7 @@ import { namedNode } from './harnessd/processName.js'
 import { probeThisMaster, startMaster, startMasterInForeground } from './masterProcess.js'
 import { startServiceProcess } from './serviceProcess.js'
 import { askDataFolderServer, isLocalSocketName, localSocketPath, refuseServedDataFolder, shortSocketFolder, servedFolderDeps } from './lib/localSocket.js'
+import { nodeRow, readNodeStatus, type NodeStatus } from './lib/nodeStatus.js'
 import { legacyDaemonStatus, localDaemonCall, localDaemonStatus } from './lib/daemonEndpoint.js'
 import { ownProcessGroup } from './lib/windows/noWindow.js'
 import { PipeUnproven } from './lib/windows/pipeClient.js'
@@ -1482,7 +1483,7 @@ async function restartDaemonForIdentity(restartIfDown = false): Promise<void> {
 async function runningDaemonStatus(): Promise<{
   version: string; sessions: number; machineId: string | null; connected: boolean
   backendUrl: string | null; autonomousEnv: string | null; signedIn: boolean | null
-  dataDir: string | null; authDir: string | null
+  dataDir: string | null; authDir: string | null; node: NodeStatus | null
 } | null> {
   try {
     const body = await localDaemonStatus(env.ADAPTER_DATA_DIR, env.PORT)
@@ -1504,6 +1505,7 @@ async function runningDaemonStatus(): Promise<{
       signedIn: typeof status?.signedIn === 'boolean' ? status.signedIn : null,
       dataDir: typeof status?.dataDir === 'string' ? status.dataDir : null,
       authDir: typeof status?.authDir === 'string' ? status.authDir : null,
+      node: readNodeStatus(body),
     }
   } catch {
     return null
@@ -1520,6 +1522,8 @@ function printInfoBlock(opts: {
   status: string; pid: number; machineId?: string; sessions: number; version: string
   /** The `device` row's text (this machine's key code and whether the account holds it); only `status` shows it. */
   device?: string
+  /** The daemon's Node, as it reports it; `status` shows it, and an older daemon sends none. */
+  node?: NodeStatus | null
   /** Who keeps the daemon running, when launchd or systemd does (`harness service install`). */
   supervisor?: string
   connection: { backendUrl: string | null; autonomousEnv: string | null; signedIn: boolean; dataDir: string | null; authDir: string | null }
@@ -1537,6 +1541,7 @@ function printInfoBlock(opts: {
   if (machineName) console.log(row('machine', machineName))
   if (opts.device) console.log(row('device', opts.device))
   console.log(row('version', `v${opts.version}`))
+  if (opts.node) console.log(row('node', nodeRow(opts.node)))
   console.log(row('backend', opts.connection.signedIn ? opts.connection.backendUrl ?? 'unknown · daemon not answering' : 'not signed in · harness login'))
   console.log(row('account', opts.connection.autonomousEnv ?? 'unknown · older daemon'))
   if (opts.connection.dataDir) console.log(row('state', tildify(opts.connection.dataDir)))
@@ -2686,6 +2691,7 @@ async function status(): Promise<void> {
     sessions: daemonStatus?.sessions ?? 0,
     // A stopped daemon answers nothing, so this falls back to the local build — which is what will run.
     version: daemonStatus?.version ?? VERSION,
+    node: daemonStatus?.node,
     // Read from disk, not the daemon: it answers the same with the daemon stopped.
     // Signed out, devlog.json is the last account's copy: claiming membership from it would be wrong.
     // It is left on disk at logout on purpose: clearing it would drop the freeze and the rollback

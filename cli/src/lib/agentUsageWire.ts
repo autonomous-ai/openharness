@@ -10,7 +10,7 @@ export type AgentTokenUsage = { totalTokens: number | null; updatedAt: string; i
   /** By the model that answered (agentTokenUsage.ts); absent for an engine whose records name none (OpenCode). */
   models?: Record<string, ModelTokens>; output?: AgentOutputStats; work?: SessionWork }
 export type AgentUsageTarget = Pick<RegisteredSession, 'engine' | 'sessionId' | 'transcriptPath' | 'codexHome' | 'agentId' | 'forkedFrom' | 'registeredAt'>
-  & Partial<Pick<RegisteredSession, 'cwd'>>
+  & Partial<Pick<RegisteredSession, 'cwd' | 'openclawStateDir'>>
 export const USAGE_LIMIT = 512
 export const USAGE_REFRESH_MS = 15_000
 /** Models one session counts apart, `other` among them (OTHER_MODELS). A session switches model a handful of times at most. */

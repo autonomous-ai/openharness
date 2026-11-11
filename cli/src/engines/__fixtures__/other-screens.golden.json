@@ -3710,7 +3710,8 @@
    "commandcode": "3447b884f24dd479",
    "muse": "3447b884f24dd479",
    "pi": "3447b884f24dd479",
-   "terminal": "3447b884f24dd479"
+   "terminal": "3447b884f24dd479",
+   "openclaw": "3447b884f24dd479"
   },
   "lib/__fixtures__/permission-agy.txt": {
    "opencode": "e1349eeb4c696d82",
@@ -3725,7 +3726,8 @@
    "commandcode": "be1de7c334b8b831",
    "muse": "be1de7c334b8b831",
    "pi": "2ce4499309b131f5",
-   "terminal": "be1de7c334b8b831"
+   "terminal": "be1de7c334b8b831",
+   "openclaw": "e1349eeb4c696d82"
   },
   "lib/__fixtures__/permission-claude-edit.txt": {
    "opencode": "9f6c882e0c0f8273",
@@ -3740,7 +3742,8 @@
    "commandcode": "51a6d8f05afd395b",
    "muse": "51a6d8f05afd395b",
    "pi": "9f6c882e0c0f8273",
-   "terminal": "51a6d8f05afd395b"
+   "terminal": "51a6d8f05afd395b",
+   "openclaw": "9f6c882e0c0f8273"
   },
   "lib/__fixtures__/permission-claude-plan.txt": {
    "opencode": "6f3c20366e29a5e9",
@@ -3755,7 +3758,8 @@
    "commandcode": "6f3c20366e29a5e9",
    "muse": "6f3c20366e29a5e9",
    "pi": "5536a015b9ed9455",
-   "terminal": "6f3c20366e29a5e9"
+   "terminal": "6f3c20366e29a5e9",
+   "openclaw": "6f3c20366e29a5e9"
   },
   "lib/__fixtures__/permission-claude.txt": {
    "opencode": "aa8af5b383e77380",
@@ -3770,7 +3774,8 @@
    "commandcode": "a47cc1211cb84f5a",
    "muse": "a47cc1211cb84f5a",
    "pi": "aa8af5b383e77380",
-   "terminal": "a47cc1211cb84f5a"
+   "terminal": "a47cc1211cb84f5a",
+   "openclaw": "aa8af5b383e77380"
   },
   "lib/__fixtures__/permission-codex.txt": {
    "opencode": "f53e3d59db5fc285",
@@ -3785,7 +3790,8 @@
    "commandcode": "45b30080ead5a0a0",
    "muse": "45b30080ead5a0a0",
    "pi": "edf579f19f79e8c6",
-   "terminal": "45b30080ead5a0a0"
+   "terminal": "45b30080ead5a0a0",
+   "openclaw": "f53e3d59db5fc285"
   },
   "lib/__fixtures__/permission-commandcode.txt": {
    "opencode": "6531a98d32cd1d92",
@@ -3800,7 +3806,8 @@
    "commandcode": "76fac484b9675380",
    "muse": "76fac484b9675380",
    "pi": "6531a98d32cd1d92",
-   "terminal": "76fac484b9675380"
+   "terminal": "76fac484b9675380",
+   "openclaw": "6531a98d32cd1d92"
   },
   "lib/__fixtures__/permission-copilot.txt": {
    "opencode": "584c0bbd569f221e",
@@ -3815,7 +3822,8 @@
    "commandcode": "00229f3eeefa0624",
    "muse": "00229f3eeefa0624",
    "pi": "2bbc170ce91fde48",
-   "terminal": "00229f3eeefa0624"
+   "terminal": "00229f3eeefa0624",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/permission-cursor.txt": {
    "opencode": "e334c9cf195dcaf9",
@@ -3830,7 +3838,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/permission-devin-3000-11.txt": {
    "opencode": "e334c9cf195dcaf9",
@@ -3845,7 +3854,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/permission-devin.txt": {
    "opencode": "e334c9cf195dcaf9",
@@ -3860,7 +3870,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/permission-grok.txt": {
    "opencode": "00229f3eeefa0624",
@@ -3875,7 +3886,8 @@
    "commandcode": "00229f3eeefa0624",
    "muse": "00229f3eeefa0624",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "00229f3eeefa0624"
+   "terminal": "00229f3eeefa0624",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/permission-hermes.txt": {
    "opencode": "5873726ebc026bb1",
@@ -3890,7 +3902,8 @@
    "commandcode": "bfa57b6928e458f8",
    "muse": "bfa57b6928e458f8",
    "pi": "00229f3eeefa0624",
-   "terminal": "bfa57b6928e458f8"
+   "terminal": "bfa57b6928e458f8",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/permission-muse.txt": {
    "opencode": "0d0e97dabfab58f6",
@@ -3905,7 +3918,8 @@
    "commandcode": "f3d6d28b7333f403",
    "muse": "f3d6d28b7333f403",
    "pi": "0d0e97dabfab58f6",
-   "terminal": "f3d6d28b7333f403"
+   "terminal": "f3d6d28b7333f403",
+   "openclaw": "0d0e97dabfab58f6"
   },
   "lib/__fixtures__/permission-opencode.txt": {
    "opencode": "a35a75988d749eb3",
@@ -3920,7 +3934,8 @@
    "commandcode": "2bbc170ce91fde48",
    "muse": "2bbc170ce91fde48",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "2bbc170ce91fde48"
+   "terminal": "2bbc170ce91fde48",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/question-agy.txt": {
    "opencode": "e334c9cf195dcaf9",
@@ -3935,7 +3950,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "00229f3eeefa0624",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/question-codex.txt": {
    "opencode": "95023f0b012ec5c8",
@@ -3950,7 +3966,8 @@
    "commandcode": "5681eb7f47e7363f",
    "muse": "5681eb7f47e7363f",
    "pi": "5681eb7f47e7363f",
-   "terminal": "5681eb7f47e7363f"
+   "terminal": "5681eb7f47e7363f",
+   "openclaw": "95023f0b012ec5c8"
   },
   "lib/__fixtures__/question-commandcode-review.txt": {
    "opencode": "6b2305c5c3c557fb",
@@ -3965,7 +3982,8 @@
    "commandcode": "86f38fd15bc8a85d",
    "muse": "86f38fd15bc8a85d",
    "pi": "6b2305c5c3c557fb",
-   "terminal": "86f38fd15bc8a85d"
+   "terminal": "86f38fd15bc8a85d",
+   "openclaw": "6b2305c5c3c557fb"
   },
   "lib/__fixtures__/question-commandcode.txt": {
    "opencode": "e042fb73a1562387",
@@ -3980,7 +3998,8 @@
    "commandcode": "e65ae54a6dc6feef",
    "muse": "e65ae54a6dc6feef",
    "pi": "e042fb73a1562387",
-   "terminal": "e65ae54a6dc6feef"
+   "terminal": "e65ae54a6dc6feef",
+   "openclaw": "e042fb73a1562387"
   },
   "lib/__fixtures__/question-copilot.txt": {
    "opencode": "11079d8ccac73f8a",
@@ -3995,7 +4014,8 @@
    "commandcode": "00229f3eeefa0624",
    "muse": "00229f3eeefa0624",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "00229f3eeefa0624"
+   "terminal": "00229f3eeefa0624",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/question-devin-3000-11.txt": {
    "opencode": "e334c9cf195dcaf9",
@@ -4010,7 +4030,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/question-devin-multi-3000-11.txt": {
    "opencode": "e334c9cf195dcaf9",
@@ -4025,7 +4046,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/question-devin-multi.txt": {
    "opencode": "e334c9cf195dcaf9",
@@ -4040,7 +4062,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/question-devin.txt": {
    "opencode": "e334c9cf195dcaf9",
@@ -4055,7 +4078,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/question-grok.txt": {
    "opencode": "e334c9cf195dcaf9",
@@ -4070,7 +4094,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/question-hermes-lock.txt": {
    "opencode": "01776770672b569b",
@@ -4085,7 +4110,8 @@
    "commandcode": "bfa57b6928e458f8",
    "muse": "bfa57b6928e458f8",
    "pi": "00229f3eeefa0624",
-   "terminal": "bfa57b6928e458f8"
+   "terminal": "bfa57b6928e458f8",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/question-hermes.txt": {
    "opencode": "951d1d78ad694f42",
@@ -4100,7 +4126,8 @@
    "commandcode": "bfa57b6928e458f8",
    "muse": "bfa57b6928e458f8",
    "pi": "00229f3eeefa0624",
-   "terminal": "bfa57b6928e458f8"
+   "terminal": "bfa57b6928e458f8",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/question-kilo.txt": {
    "opencode": "a35a75988d749eb3",
@@ -4115,7 +4142,8 @@
    "commandcode": "6b3c330b3177f3e0",
    "muse": "6b3c330b3177f3e0",
    "pi": "71480d078ddf293d",
-   "terminal": "6b3c330b3177f3e0"
+   "terminal": "6b3c330b3177f3e0",
+   "openclaw": "71480d078ddf293d"
   },
   "lib/__fixtures__/question-multi.txt": {
    "opencode": "931077023c0ea78c",
@@ -4130,7 +4158,8 @@
    "commandcode": "c439ed066c82d5bb",
    "muse": "100dc3006825bbcd",
    "pi": "68a95df51a0c504a",
-   "terminal": "c439ed066c82d5bb"
+   "terminal": "c439ed066c82d5bb",
+   "openclaw": "931077023c0ea78c"
   },
   "lib/__fixtures__/question-muse.txt": {
    "opencode": "7cea8dcc96d8294a",
@@ -4145,7 +4174,8 @@
    "commandcode": "4d7c880e6114332b",
    "muse": "452af7e6b61eca27",
    "pi": "71caa1d09800838f",
-   "terminal": "4d7c880e6114332b"
+   "terminal": "4d7c880e6114332b",
+   "openclaw": "4d7c880e6114332b"
   },
   "lib/__fixtures__/question-opencode-review.txt": {
    "opencode": "e55064c540690cf7",
@@ -4160,7 +4190,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/question-opencode.txt": {
    "opencode": "6c70d81f37296acd",
@@ -4175,7 +4206,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/question-review.txt": {
    "opencode": "6b2305c5c3c557fb",
@@ -4190,7 +4222,8 @@
    "commandcode": "86f38fd15bc8a85d",
    "muse": "86f38fd15bc8a85d",
    "pi": "6b2305c5c3c557fb",
-   "terminal": "86f38fd15bc8a85d"
+   "terminal": "86f38fd15bc8a85d",
+   "openclaw": "6b2305c5c3c557fb"
   },
   "lib/__fixtures__/question-single.txt": {
    "opencode": "31c6bcb9c830ca1b",
@@ -4205,7 +4238,8 @@
    "commandcode": "c7051a5bf40e94d5",
    "muse": "5b82a2fa3c10ca31",
    "pi": "a3711a25fb1ad7bf",
-   "terminal": "c7051a5bf40e94d5"
+   "terminal": "c7051a5bf40e94d5",
+   "openclaw": "31c6bcb9c830ca1b"
   },
   "lib/__fixtures__/question-tabs.txt": {
    "opencode": "de7bf6b7ba248a36",
@@ -4220,7 +4254,8 @@
    "commandcode": "0bd41822c53291ea",
    "muse": "3383e2d5b1269832",
    "pi": "c2e1fbef360d85e4",
-   "terminal": "0bd41822c53291ea"
+   "terminal": "0bd41822c53291ea",
+   "openclaw": "de7bf6b7ba248a36"
   },
   "lib/__fixtures__/takeoverScreens.ts#CLAUDE_HISTORY_SEARCH": {
    "opencode": "e334c9cf195dcaf9",
@@ -4235,7 +4270,8 @@
    "commandcode": "00229f3eeefa0624",
    "muse": "00229f3eeefa0624",
    "pi": "00229f3eeefa0624",
-   "terminal": "00229f3eeefa0624"
+   "terminal": "00229f3eeefa0624",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/takeoverScreens.ts#CLAUDE_HISTORY_SEARCH_NO_MATCH": {
    "opencode": "e334c9cf195dcaf9",
@@ -4250,7 +4286,8 @@
    "commandcode": "00229f3eeefa0624",
    "muse": "00229f3eeefa0624",
    "pi": "00229f3eeefa0624",
-   "terminal": "00229f3eeefa0624"
+   "terminal": "00229f3eeefa0624",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/takeoverScreens.ts#CLAUDE_SIGN_IN": {
    "opencode": "e334c9cf195dcaf9",
@@ -4265,7 +4302,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/takeoverScreens.ts#CLAUDE_TRUST_PROMPT": {
    "opencode": "e334c9cf195dcaf9",
@@ -4280,7 +4318,8 @@
    "commandcode": "00229f3eeefa0624",
    "muse": "00229f3eeefa0624",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "00229f3eeefa0624"
+   "terminal": "00229f3eeefa0624",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/takeoverScreens.ts#CODEX_HISTORY_SEARCH": {
    "opencode": "e334c9cf195dcaf9",
@@ -4295,7 +4334,8 @@
    "commandcode": "00229f3eeefa0624",
    "muse": "00229f3eeefa0624",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "00229f3eeefa0624"
+   "terminal": "00229f3eeefa0624",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/takeoverScreens.ts#CODEX_MODEL_MIGRATION": {
    "opencode": "e334c9cf195dcaf9",
@@ -4310,7 +4350,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/takeoverScreens.ts#CODEX_SIGN_IN": {
    "opencode": "e334c9cf195dcaf9",
@@ -4325,7 +4366,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/takeoverScreens.ts#CODEX_TRANSCRIPT_FIND": {
    "opencode": "e334c9cf195dcaf9",
@@ -4340,7 +4382,8 @@
    "commandcode": "bfa57b6928e458f8",
    "muse": "bfa57b6928e458f8",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "bfa57b6928e458f8"
+   "terminal": "bfa57b6928e458f8",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/takeoverScreens.ts#CODEX_TRANSCRIPT_OVERLAY": {
    "opencode": "e334c9cf195dcaf9",
@@ -4355,7 +4398,8 @@
    "commandcode": "00229f3eeefa0624",
    "muse": "00229f3eeefa0624",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "00229f3eeefa0624"
+   "terminal": "00229f3eeefa0624",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/takeoverScreens.ts#CODEX_TRUST_PROMPT": {
    "opencode": "e334c9cf195dcaf9",
@@ -4370,7 +4414,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/takeoverScreens.ts#CODEX_TRUST_PROMPT_0147": {
    "opencode": "e334c9cf195dcaf9",
@@ -4385,7 +4430,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/takeoverScreens.ts#CODEX_UPDATE_PROMPT": {
    "opencode": "e334c9cf195dcaf9",
@@ -4400,7 +4446,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/rewindPickers.ts#CLAUDE_PROMPT": {
    "opencode": "e334c9cf195dcaf9",
@@ -4415,7 +4462,8 @@
    "commandcode": "bfa57b6928e458f8",
    "muse": "bfa57b6928e458f8",
    "pi": "00229f3eeefa0624",
-   "terminal": "bfa57b6928e458f8"
+   "terminal": "bfa57b6928e458f8",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/rewindPickers.ts#CLAUDE_REWIND_CONFIRM": {
    "opencode": "e334c9cf195dcaf9",
@@ -4430,7 +4478,8 @@
    "commandcode": "00229f3eeefa0624",
    "muse": "00229f3eeefa0624",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "00229f3eeefa0624"
+   "terminal": "00229f3eeefa0624",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/rewindPickers.ts#CLAUDE_REWIND_EMPTY": {
    "opencode": "e334c9cf195dcaf9",
@@ -4445,7 +4494,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/rewindPickers.ts#CLAUDE_REWIND_LIST": {
    "opencode": "e334c9cf195dcaf9",
@@ -4460,7 +4510,8 @@
    "commandcode": "983f17401bfec556",
    "muse": "983f17401bfec556",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "983f17401bfec556"
+   "terminal": "983f17401bfec556",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/rewindPickers.ts#CLAUDE_REWIND_LIST_MESSAGE_FOCUSED": {
    "opencode": "e334c9cf195dcaf9",
@@ -4475,7 +4526,8 @@
    "commandcode": "00229f3eeefa0624",
    "muse": "00229f3eeefa0624",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "00229f3eeefa0624"
+   "terminal": "00229f3eeefa0624",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/rewindPickers.ts#CODEX_BROWSING_FOOTER": {
    "opencode": "e334c9cf195dcaf9",
@@ -4490,7 +4542,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/rewindPickers.ts#CODEX_BROWSING_FULLSCREEN": {
    "opencode": "e334c9cf195dcaf9",
@@ -4505,7 +4558,8 @@
    "commandcode": "bfa57b6928e458f8",
    "muse": "bfa57b6928e458f8",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "bfa57b6928e458f8"
+   "terminal": "bfa57b6928e458f8",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/rewindPickers.ts#CODEX_BROWSING_SCROLLBACK": {
    "opencode": "e334c9cf195dcaf9",
@@ -4520,7 +4574,8 @@
    "commandcode": "00229f3eeefa0624",
    "muse": "00229f3eeefa0624",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "00229f3eeefa0624"
+   "terminal": "00229f3eeefa0624",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/rewindPickers.ts#CODEX_PROMPT": {
    "opencode": "e334c9cf195dcaf9",
@@ -4535,7 +4590,8 @@
    "commandcode": "bfa57b6928e458f8",
    "muse": "bfa57b6928e458f8",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "bfa57b6928e458f8"
+   "terminal": "bfa57b6928e458f8",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "engines/amp/askQuestion.spec.ts#0a0695be4aef": {
    "opencode": "00229f3eeefa0624",
@@ -4550,7 +4606,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "engines/amp/askQuestion.spec.ts#e5e66ea3cc85": {
    "opencode": "e334c9cf195dcaf9",
@@ -4565,7 +4622,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "engines/codex/askQuestion.spec.ts#f1b267ce5e28": {
    "opencode": "d39122b48dfc7c4d",
@@ -4580,7 +4638,8 @@
    "commandcode": "d39122b48dfc7c4d",
    "muse": "d39122b48dfc7c4d",
    "pi": "d39122b48dfc7c4d",
-   "terminal": "d39122b48dfc7c4d"
+   "terminal": "d39122b48dfc7c4d",
+   "openclaw": "d39122b48dfc7c4d"
   },
   "engines/devin/askQuestion.spec.ts#a71a76b79a44": {
    "opencode": "e334c9cf195dcaf9",
@@ -4595,7 +4654,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "engines/devin/askQuestion.spec.ts#c03fd642fb52": {
    "opencode": "e334c9cf195dcaf9",
@@ -4610,7 +4670,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "engines/kilo/askQuestion.spec.ts#199fabd38e6c": {
    "opencode": "a35a75988d749eb3",
@@ -4625,7 +4686,8 @@
    "commandcode": "2bbc170ce91fde48",
    "muse": "2bbc170ce91fde48",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "2bbc170ce91fde48"
+   "terminal": "2bbc170ce91fde48",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "engines/muse/askQuestion.spec.ts#795b45474794": {
    "opencode": "e334c9cf195dcaf9",
@@ -4640,7 +4702,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "engines/pi/runtimeProfile.spec.ts#7abe534ed8f8": {
    "opencode": "e334c9cf195dcaf9",
@@ -4655,7 +4718,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "engines/pi/runtimeProfile.spec.ts#ebead6d05e2d": {
    "opencode": "e334c9cf195dcaf9",
@@ -4670,7 +4734,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "2bbc170ce91fde48",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/askQuestion.more.spec.ts#223d5732fb90": {
    "opencode": "ce1375f92d079bd3",
@@ -4685,7 +4750,8 @@
    "commandcode": "ce1375f92d079bd3",
    "muse": "ce1375f92d079bd3",
    "pi": "ce1375f92d079bd3",
-   "terminal": "ce1375f92d079bd3"
+   "terminal": "ce1375f92d079bd3",
+   "openclaw": "ce1375f92d079bd3"
   },
   "lib/askQuestion.more.spec.ts#62864c6fcb38": {
    "opencode": "e334c9cf195dcaf9",
@@ -4700,7 +4766,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/askQuestion.more.spec.ts#6fb27fc09347": {
    "opencode": "7f101672e312a757",
@@ -4715,7 +4782,8 @@
    "commandcode": "7f101672e312a757",
    "muse": "7f101672e312a757",
    "pi": "7f101672e312a757",
-   "terminal": "7f101672e312a757"
+   "terminal": "7f101672e312a757",
+   "openclaw": "7f101672e312a757"
   },
   "lib/askQuestion.more.spec.ts#78399f453155": {
    "opencode": "e334c9cf195dcaf9",
@@ -4730,7 +4798,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/askQuestion.more.spec.ts#791fb3e4daf6": {
    "opencode": "a7b4f2f8d9fcef56",
@@ -4745,7 +4814,8 @@
    "commandcode": "a7b4f2f8d9fcef56",
    "muse": "a7b4f2f8d9fcef56",
    "pi": "a7b4f2f8d9fcef56",
-   "terminal": "a7b4f2f8d9fcef56"
+   "terminal": "a7b4f2f8d9fcef56",
+   "openclaw": "a7b4f2f8d9fcef56"
   },
   "lib/askQuestion.more.spec.ts#80ae905a0477": {
    "opencode": "a7b4f2f8d9fcef56",
@@ -4760,7 +4830,8 @@
    "commandcode": "a7b4f2f8d9fcef56",
    "muse": "a7b4f2f8d9fcef56",
    "pi": "a7b4f2f8d9fcef56",
-   "terminal": "a7b4f2f8d9fcef56"
+   "terminal": "a7b4f2f8d9fcef56",
+   "openclaw": "a7b4f2f8d9fcef56"
   },
   "lib/askQuestion.more.spec.ts#8c267ec3d5b6": {
    "opencode": "e334c9cf195dcaf9",
@@ -4775,7 +4846,8 @@
    "commandcode": "2bbc170ce91fde48",
    "muse": "2bbc170ce91fde48",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "2bbc170ce91fde48"
+   "terminal": "2bbc170ce91fde48",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/askQuestion.more.spec.ts#cfa4ebb550b2": {
    "opencode": "e334c9cf195dcaf9",
@@ -4790,7 +4862,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/askQuestion.more.spec.ts#e5759e4f7807": {
    "opencode": "e334c9cf195dcaf9",
@@ -4805,7 +4878,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/askQuestion.spec.ts#1386d9b1bd52": {
    "opencode": "e334c9cf195dcaf9",
@@ -4820,7 +4894,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/askQuestion.spec.ts#4f9035fb3cd5": {
    "opencode": "362a5c13b7d08cfa",
@@ -4835,7 +4910,8 @@
    "commandcode": "362a5c13b7d08cfa",
    "muse": "2d4ed56e6a13afc4",
    "pi": "66714f2c1f955595",
-   "terminal": "362a5c13b7d08cfa"
+   "terminal": "362a5c13b7d08cfa",
+   "openclaw": "362a5c13b7d08cfa"
   },
   "lib/askQuestion.spec.ts#5ff13b3bfd0d": {
    "opencode": "e334c9cf195dcaf9",
@@ -4850,7 +4926,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/askQuestion.spec.ts#753a24abb51c": {
    "opencode": "e334c9cf195dcaf9",
@@ -4865,7 +4942,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/askQuestion.spec.ts#95f6c924b7fe": {
    "opencode": "e334c9cf195dcaf9",
@@ -4880,7 +4958,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/askQuestion.spec.ts#a23f8570eb4f": {
    "opencode": "e334c9cf195dcaf9",
@@ -4895,7 +4974,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/askQuestion.spec.ts#cc12dc28c82d": {
    "opencode": "e334c9cf195dcaf9",
@@ -4910,7 +4990,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/askQuestion.spec.ts#fb7360465025": {
    "opencode": "d2dab38d1643954f",
@@ -4925,7 +5006,8 @@
    "commandcode": "d2dab38d1643954f",
    "muse": "6da8262f37162eeb",
    "pi": "f84d20d885617102",
-   "terminal": "d2dab38d1643954f"
+   "terminal": "d2dab38d1643954f",
+   "openclaw": "d2dab38d1643954f"
   },
   "lib/askQuestion.whitespace.spec.ts#9b6198df9fdb": {
    "opencode": "e334c9cf195dcaf9",
@@ -4940,7 +5022,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/closeAgentService.spec.ts#01141dd0bb86": {
    "opencode": "e334c9cf195dcaf9",
@@ -4955,7 +5038,8 @@
    "commandcode": "bfa57b6928e458f8",
    "muse": "bfa57b6928e458f8",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "bfa57b6928e458f8"
+   "terminal": "bfa57b6928e458f8",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/closeAgentService.spec.ts#11d9849fad5f": {
    "opencode": "e334c9cf195dcaf9",
@@ -4970,7 +5054,8 @@
    "commandcode": "bfa57b6928e458f8",
    "muse": "bfa57b6928e458f8",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "bfa57b6928e458f8"
+   "terminal": "bfa57b6928e458f8",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/closeAgentService.spec.ts#4554f66f8d94": {
    "opencode": "e334c9cf195dcaf9",
@@ -4985,7 +5070,8 @@
    "commandcode": "00229f3eeefa0624",
    "muse": "00229f3eeefa0624",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "00229f3eeefa0624"
+   "terminal": "00229f3eeefa0624",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/closeAgentService.spec.ts#48db0d710f75": {
    "opencode": "e334c9cf195dcaf9",
@@ -5000,7 +5086,8 @@
    "commandcode": "bfa57b6928e458f8",
    "muse": "bfa57b6928e458f8",
    "pi": "00229f3eeefa0624",
-   "terminal": "bfa57b6928e458f8"
+   "terminal": "bfa57b6928e458f8",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/closeAgentService.spec.ts#894e8c6c1c83": {
    "opencode": "e334c9cf195dcaf9",
@@ -5015,7 +5102,8 @@
    "commandcode": "983f17401bfec556",
    "muse": "983f17401bfec556",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "983f17401bfec556"
+   "terminal": "983f17401bfec556",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/closeAgentService.spec.ts#acc581b4d226": {
    "opencode": "e334c9cf195dcaf9",
@@ -5030,7 +5118,8 @@
    "commandcode": "bfa57b6928e458f8",
    "muse": "bfa57b6928e458f8",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "bfa57b6928e458f8"
+   "terminal": "bfa57b6928e458f8",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/closeAgentService.spec.ts#b3481e864563": {
    "opencode": "e334c9cf195dcaf9",
@@ -5045,7 +5134,8 @@
    "commandcode": "bfa57b6928e458f8",
    "muse": "bfa57b6928e458f8",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "bfa57b6928e458f8"
+   "terminal": "bfa57b6928e458f8",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/runtimeActivity.spec.ts#15dc3fc72fb1": {
    "opencode": "e334c9cf195dcaf9",
@@ -5060,7 +5150,8 @@
    "commandcode": "bfa57b6928e458f8",
    "muse": "bfa57b6928e458f8",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "bfa57b6928e458f8"
+   "terminal": "bfa57b6928e458f8",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/runtimeActivity.spec.ts#24bc8c8cbc25": {
    "opencode": "e334c9cf195dcaf9",
@@ -5075,7 +5166,8 @@
    "commandcode": "00229f3eeefa0624",
    "muse": "00229f3eeefa0624",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "00229f3eeefa0624"
+   "terminal": "00229f3eeefa0624",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/runtimeActivity.spec.ts#7c28852bf442": {
    "opencode": "e334c9cf195dcaf9",
@@ -5090,7 +5182,8 @@
    "commandcode": "983f17401bfec556",
    "muse": "983f17401bfec556",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "983f17401bfec556"
+   "terminal": "983f17401bfec556",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/runtimeActivity.spec.ts#bac1b4a534fd": {
    "opencode": "e334c9cf195dcaf9",
@@ -5105,7 +5198,8 @@
    "commandcode": "983f17401bfec556",
    "muse": "983f17401bfec556",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "983f17401bfec556"
+   "terminal": "983f17401bfec556",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/runtimeProfileController.spec.ts#032948391497": {
    "opencode": "e334c9cf195dcaf9",
@@ -5120,7 +5214,8 @@
    "commandcode": "2bbc170ce91fde48",
    "muse": "2bbc170ce91fde48",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "2bbc170ce91fde48"
+   "terminal": "2bbc170ce91fde48",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/runtimeProfileController.spec.ts#0fd5b19019e2": {
    "opencode": "e334c9cf195dcaf9",
@@ -5135,7 +5230,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "bfa57b6928e458f8",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/runtimeProfileController.spec.ts#1be04a485484": {
    "opencode": "e334c9cf195dcaf9",
@@ -5150,7 +5246,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/runtimeProfileController.spec.ts#248fe99094e0": {
    "opencode": "e334c9cf195dcaf9",
@@ -5165,7 +5262,8 @@
    "commandcode": "2bbc170ce91fde48",
    "muse": "2bbc170ce91fde48",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "2bbc170ce91fde48"
+   "terminal": "2bbc170ce91fde48",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/runtimeProfileController.spec.ts#2f2761cbf226": {
    "opencode": "e334c9cf195dcaf9",
@@ -5180,7 +5278,8 @@
    "commandcode": "2bbc170ce91fde48",
    "muse": "2bbc170ce91fde48",
    "pi": "2bbc170ce91fde48",
-   "terminal": "2bbc170ce91fde48"
+   "terminal": "2bbc170ce91fde48",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/runtimeProfileController.spec.ts#3c4d0a00306e": {
    "opencode": "e334c9cf195dcaf9",
@@ -5195,7 +5294,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/runtimeProfileController.spec.ts#3fb6a6adbd7c": {
    "opencode": "e334c9cf195dcaf9",
@@ -5210,7 +5310,8 @@
    "commandcode": "2bbc170ce91fde48",
    "muse": "2bbc170ce91fde48",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "2bbc170ce91fde48"
+   "terminal": "2bbc170ce91fde48",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/runtimeProfileController.spec.ts#47bfe6bc3164": {
    "opencode": "e334c9cf195dcaf9",
@@ -5225,7 +5326,8 @@
    "commandcode": "bfa57b6928e458f8",
    "muse": "bfa57b6928e458f8",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "bfa57b6928e458f8"
+   "terminal": "bfa57b6928e458f8",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/runtimeProfileController.spec.ts#4c1fce7e7d96": {
    "opencode": "e334c9cf195dcaf9",
@@ -5240,7 +5342,8 @@
    "commandcode": "2bbc170ce91fde48",
    "muse": "2bbc170ce91fde48",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "2bbc170ce91fde48"
+   "terminal": "2bbc170ce91fde48",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/runtimeProfileController.spec.ts#65846c5b0ccb": {
    "opencode": "e334c9cf195dcaf9",
@@ -5255,7 +5358,8 @@
    "commandcode": "2bbc170ce91fde48",
    "muse": "2bbc170ce91fde48",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "2bbc170ce91fde48"
+   "terminal": "2bbc170ce91fde48",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/runtimeProfileController.spec.ts#6ef12b2eed81": {
    "opencode": "e334c9cf195dcaf9",
@@ -5270,7 +5374,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "bfa57b6928e458f8",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/runtimeProfileController.spec.ts#72fc1b501f8c": {
    "opencode": "e334c9cf195dcaf9",
@@ -5285,7 +5390,8 @@
    "commandcode": "2bbc170ce91fde48",
    "muse": "2bbc170ce91fde48",
    "pi": "2bbc170ce91fde48",
-   "terminal": "2bbc170ce91fde48"
+   "terminal": "2bbc170ce91fde48",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/runtimeProfileController.spec.ts#75a11da44c80": {
    "opencode": "e334c9cf195dcaf9",
@@ -5300,7 +5406,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/runtimeProfileController.spec.ts#7a207f4a14c5": {
    "opencode": "e334c9cf195dcaf9",
@@ -5315,7 +5422,8 @@
    "commandcode": "2bbc170ce91fde48",
    "muse": "2bbc170ce91fde48",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "2bbc170ce91fde48"
+   "terminal": "2bbc170ce91fde48",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/runtimeProfileController.spec.ts#847ec914db6c": {
    "opencode": "e334c9cf195dcaf9",
@@ -5330,7 +5438,8 @@
    "commandcode": "bfa57b6928e458f8",
    "muse": "bfa57b6928e458f8",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "bfa57b6928e458f8"
+   "terminal": "bfa57b6928e458f8",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/runtimeProfileController.spec.ts#8af412159237": {
    "opencode": "e334c9cf195dcaf9",
@@ -5345,7 +5454,8 @@
    "commandcode": "2bbc170ce91fde48",
    "muse": "2bbc170ce91fde48",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "2bbc170ce91fde48"
+   "terminal": "2bbc170ce91fde48",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/runtimeProfileController.spec.ts#a7de854a13db": {
    "opencode": "e334c9cf195dcaf9",
@@ -5360,7 +5470,8 @@
    "commandcode": "2bbc170ce91fde48",
    "muse": "2bbc170ce91fde48",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "2bbc170ce91fde48"
+   "terminal": "2bbc170ce91fde48",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/runtimeProfileController.spec.ts#b07a24fe6ad6": {
    "opencode": "e334c9cf195dcaf9",
@@ -5375,7 +5486,8 @@
    "commandcode": "2bbc170ce91fde48",
    "muse": "2bbc170ce91fde48",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "2bbc170ce91fde48"
+   "terminal": "2bbc170ce91fde48",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/runtimeProfileController.spec.ts#c8e73bc23d66": {
    "opencode": "e334c9cf195dcaf9",
@@ -5390,7 +5502,8 @@
    "commandcode": "2bbc170ce91fde48",
    "muse": "2bbc170ce91fde48",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "2bbc170ce91fde48"
+   "terminal": "2bbc170ce91fde48",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/runtimeProfileController.spec.ts#f335e452d1b6": {
    "opencode": "e334c9cf195dcaf9",
@@ -5405,7 +5518,8 @@
    "commandcode": "2bbc170ce91fde48",
    "muse": "2bbc170ce91fde48",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "2bbc170ce91fde48"
+   "terminal": "2bbc170ce91fde48",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/runtimeProfileController.spec.ts#fc1ee075885f": {
    "opencode": "e334c9cf195dcaf9",
@@ -5420,7 +5534,8 @@
    "commandcode": "2bbc170ce91fde48",
    "muse": "2bbc170ce91fde48",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "2bbc170ce91fde48"
+   "terminal": "2bbc170ce91fde48",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/runtimeProfileController.spec.ts#fc78556999f6": {
    "opencode": "e334c9cf195dcaf9",
@@ -5435,7 +5550,8 @@
    "commandcode": "2bbc170ce91fde48",
    "muse": "2bbc170ce91fde48",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "2bbc170ce91fde48"
+   "terminal": "2bbc170ce91fde48",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/sessionInput.spec.ts#1ae4a7d90a72": {
    "opencode": "e334c9cf195dcaf9",
@@ -5450,7 +5566,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/sessionInput.spec.ts#1e3179279294": {
    "opencode": "e334c9cf195dcaf9",
@@ -5465,7 +5582,8 @@
    "commandcode": "00229f3eeefa0624",
    "muse": "00229f3eeefa0624",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "00229f3eeefa0624"
+   "terminal": "00229f3eeefa0624",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/sessionInput.spec.ts#317238f7959e": {
    "opencode": "e334c9cf195dcaf9",
@@ -5480,7 +5598,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/sessionInput.spec.ts#56c1c5934848": {
    "opencode": "e334c9cf195dcaf9",
@@ -5495,7 +5614,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/sessionInput.spec.ts#5c1c6a3d9bdf": {
    "opencode": "e334c9cf195dcaf9",
@@ -5510,7 +5630,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/sessionInput.spec.ts#74ad262be4ef": {
    "opencode": "e334c9cf195dcaf9",
@@ -5525,7 +5646,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/sessionInput.spec.ts#8f1bdd00dc4a": {
    "opencode": "605fcef7133d0d65",
@@ -5540,7 +5662,8 @@
    "commandcode": "d68db75fbfadc8ad",
    "muse": "d68db75fbfadc8ad",
    "pi": "605fcef7133d0d65",
-   "terminal": "d68db75fbfadc8ad"
+   "terminal": "d68db75fbfadc8ad",
+   "openclaw": "605fcef7133d0d65"
   },
   "lib/sessionInput.spec.ts#acbbb07bcd73": {
    "opencode": "e334c9cf195dcaf9",
@@ -5555,7 +5678,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/sessionInput.spec.ts#b342b760886a": {
    "opencode": "e334c9cf195dcaf9",
@@ -5570,7 +5694,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/sessionInput.spec.ts#bd47421d7826": {
    "opencode": "e334c9cf195dcaf9",
@@ -5585,7 +5710,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/sessionInput.spec.ts#bfcb683314be": {
    "opencode": "e334c9cf195dcaf9",
@@ -5600,7 +5726,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   },
   "lib/sessionInput.spec.ts#c164934b3503": {
    "opencode": "e334c9cf195dcaf9",
@@ -5615,7 +5742,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9"
+   "terminal": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9"
   }
  },
  "keys": {
@@ -5731,6 +5859,20 @@
     [
      "4"
     ]
+   ],
+   "openclaw": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "3"
+    ],
+    [
+     "4"
+    ]
    ]
   },
   "lib/__fixtures__/permission-claude-edit.txt": {
@@ -5812,6 +5954,17 @@
     ]
    ],
    "terminal": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "3"
+    ]
+   ],
+   "openclaw": [
     [
      "1"
     ],
@@ -5911,6 +6064,17 @@
     [
      "3"
     ]
+   ],
+   "openclaw": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "3"
+    ]
    ]
   },
   "lib/__fixtures__/permission-claude.txt": {
@@ -5992,6 +6156,17 @@
     ]
    ],
    "terminal": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "3"
+    ]
+   ],
+   "openclaw": [
     [
      "1"
     ],
@@ -6091,6 +6266,17 @@
     [
      "3"
     ]
+   ],
+   "openclaw": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "3"
+    ]
    ]
   },
   "lib/__fixtures__/permission-commandcode.txt": {
@@ -6172,6 +6358,17 @@
     ]
    ],
    "terminal": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "3"
+    ]
+   ],
+   "openclaw": [
     [
      "1"
     ],
@@ -6417,6 +6614,17 @@
     [
      "3"
     ]
+   ],
+   "openclaw": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "3"
+    ]
    ]
   },
   "lib/__fixtures__/permission-opencode.txt": {
@@ -6526,6 +6734,14 @@
     [
      "2"
     ]
+   ],
+   "openclaw": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ]
    ]
   },
   "lib/__fixtures__/question-commandcode.txt": {
@@ -6607,6 +6823,17 @@
     ]
    ],
    "terminal": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "3"
+    ]
+   ],
+   "openclaw": [
     [
      "1"
     ],
@@ -6878,6 +7105,17 @@
     [
      "3"
     ]
+   ],
+   "openclaw": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "3"
+    ]
    ]
   },
   "lib/__fixtures__/question-multi.txt": {
@@ -6953,6 +7191,17 @@
     ]
    ],
    "terminal": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "3"
+    ]
+   ],
+   "openclaw": [
     [
      "1"
     ],
@@ -7040,6 +7289,17 @@
     ]
    ],
    "terminal": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "3"
+    ]
+   ],
+   "openclaw": [
     [
      "1"
     ],
@@ -7138,6 +7398,14 @@
     [
      "2"
     ]
+   ],
+   "openclaw": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ]
    ]
   },
   "lib/__fixtures__/question-tabs.txt": {
@@ -7213,6 +7481,17 @@
     ]
    ],
    "terminal": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "3"
+    ]
+   ],
+   "openclaw": [
     [
      "1"
     ],
@@ -7334,6 +7613,17 @@
     [
      "5"
     ]
+   ],
+   "openclaw": [
+    [
+     "3"
+    ],
+    [
+     "4"
+    ],
+    [
+     "5"
+    ]
    ]
   },
   "engines/devin/askQuestion.spec.ts#a71a76b79a44": {
@@ -7440,6 +7730,14 @@
     [
      "2"
     ]
+   ],
+   "openclaw": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ]
    ]
   },
   "lib/askQuestion.more.spec.ts#6fb27fc09347": {
@@ -7500,6 +7798,14 @@
     ]
    ],
    "terminal": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ]
+   ],
+   "openclaw": [
     [
      "1"
     ],
@@ -7572,6 +7878,14 @@
     [
      "4"
     ]
+   ],
+   "openclaw": [
+    [
+     "3"
+    ],
+    [
+     "4"
+    ]
    ]
   },
   "lib/askQuestion.more.spec.ts#80ae905a0477": {
@@ -7632,6 +7946,14 @@
     ]
    ],
    "terminal": [
+    [
+     "3"
+    ],
+    [
+     "4"
+    ]
+   ],
+   "openclaw": [
     [
      "3"
     ],
@@ -7744,6 +8066,17 @@
     [
      "3"
     ]
+   ],
+   "openclaw": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "3"
+    ]
    ]
   },
   "lib/askQuestion.spec.ts#fb7360465025": {
@@ -7810,1132 +8143,1140 @@
     [
      "2"
     ]
+   ],
+   "openclaw": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ]
    ]
   }
  },
  "pairs": {
-  "permission-agy+permission-claude-edit": "ad6cf7c18454e4c9",
-  "permission-agy+permission-claude-plan": "3931fe6a2c591392",
-  "permission-agy+permission-claude": "6efcb0f82db07e86",
-  "permission-agy+permission-codex": "67d66ecc9e5f4b6f",
-  "permission-agy+permission-commandcode": "3e53e780e2336e0b",
-  "permission-agy+permission-copilot": "4cc959140ae1d3f8",
-  "permission-agy+permission-cursor": "37b69955c788a4c6",
-  "permission-agy+permission-devin-3000-11": "3988104014270471",
-  "permission-agy+permission-devin": "b54423e9fee77187",
-  "permission-agy+permission-grok": "3d30da2e2ddf119a",
-  "permission-agy+permission-hermes": "1257ee7838d13364",
-  "permission-agy+permission-muse": "c2016730c34a1680",
-  "permission-agy+permission-opencode": "6b7f4f04e78923db",
-  "permission-agy+question-agy": "1de94a23753ba4a3",
-  "permission-agy+question-codex": "70946a2cd5017c5a",
-  "permission-agy+question-commandcode-review": "479d91be5b68ed7e",
-  "permission-agy+question-commandcode": "4d94ff32b0800788",
-  "permission-agy+question-copilot": "83a4c3d3ddbeedc5",
-  "permission-agy+question-devin-3000-11": "295d19eece883035",
-  "permission-agy+question-devin-multi-3000-11": "21f18705919923dd",
-  "permission-agy+question-devin-multi": "7305ee2b45a57752",
-  "permission-agy+question-devin": "940f83b9bfda2fe7",
-  "permission-agy+question-grok": "cebf0a11fadabfe1",
-  "permission-agy+question-hermes-lock": "55df57b4f0b2cde4",
-  "permission-agy+question-hermes": "448b68cb173a812f",
-  "permission-agy+question-kilo": "c647bbb667f736bb",
-  "permission-agy+question-multi": "7feb834f7d49a258",
-  "permission-agy+question-muse": "f224402923f405de",
-  "permission-agy+question-opencode-review": "bce02fe9bace2830",
-  "permission-agy+question-opencode": "506f7d20d05d7a5c",
-  "permission-agy+question-review": "479d91be5b68ed7e",
-  "permission-agy+question-single": "a5232fb0880f04e9",
-  "permission-agy+question-tabs": "f341794b90162f8f",
-  "permission-claude-edit+permission-agy": "c8e012c812a62cef",
-  "permission-claude-edit+permission-claude-plan": "f3f57ffef4e324fe",
-  "permission-claude-edit+permission-claude": "6efcb0f82db07e86",
-  "permission-claude-edit+permission-codex": "67d66ecc9e5f4b6f",
-  "permission-claude-edit+permission-commandcode": "c4839118f2502fc9",
-  "permission-claude-edit+permission-copilot": "532be39333712ffc",
-  "permission-claude-edit+permission-cursor": "079b3b603e9e48b5",
-  "permission-claude-edit+permission-devin-3000-11": "58257d429b154b88",
-  "permission-claude-edit+permission-devin": "fd7c5a95681f509a",
-  "permission-claude-edit+permission-grok": "fdd5c775d6235c55",
-  "permission-claude-edit+permission-hermes": "7b783a0cc2a01050",
-  "permission-claude-edit+permission-muse": "f035cc5bff2edaea",
-  "permission-claude-edit+permission-opencode": "2a542d242db95110",
-  "permission-claude-edit+question-agy": "e7be683ba533a560",
-  "permission-claude-edit+question-codex": "3b8711efab0cbf7d",
-  "permission-claude-edit+question-commandcode-review": "479d91be5b68ed7e",
-  "permission-claude-edit+question-commandcode": "4d94ff32b0800788",
-  "permission-claude-edit+question-copilot": "d3abc8d566ded222",
-  "permission-claude-edit+question-devin-3000-11": "406e3308df76ccbf",
-  "permission-claude-edit+question-devin-multi-3000-11": "57cd5b5d3dc22055",
-  "permission-claude-edit+question-devin-multi": "3ade79036722b6e8",
-  "permission-claude-edit+question-devin": "9cd105525f5c03e0",
-  "permission-claude-edit+question-grok": "485cba952a78f384",
-  "permission-claude-edit+question-hermes-lock": "bc3f835da8f94cc6",
-  "permission-claude-edit+question-hermes": "448b68cb173a812f",
-  "permission-claude-edit+question-kilo": "5e6bc7517882f8d8",
-  "permission-claude-edit+question-multi": "7feb834f7d49a258",
-  "permission-claude-edit+question-muse": "3f869c74b5ccc552",
-  "permission-claude-edit+question-opencode-review": "753e89afb13427fa",
-  "permission-claude-edit+question-opencode": "375116bc9de05474",
-  "permission-claude-edit+question-review": "479d91be5b68ed7e",
-  "permission-claude-edit+question-single": "a5232fb0880f04e9",
-  "permission-claude-edit+question-tabs": "f341794b90162f8f",
-  "permission-claude-plan+permission-agy": "261bfac5ee66271f",
-  "permission-claude-plan+permission-claude-edit": "b03f779096095629",
-  "permission-claude-plan+permission-claude": "6efcb0f82db07e86",
-  "permission-claude-plan+permission-codex": "67d66ecc9e5f4b6f",
-  "permission-claude-plan+permission-commandcode": "c4839118f2502fc9",
-  "permission-claude-plan+permission-copilot": "eeba93a6ea42d820",
-  "permission-claude-plan+permission-cursor": "438e6cbe94ca622f",
-  "permission-claude-plan+permission-devin-3000-11": "5ce2cda92bc5b5d8",
-  "permission-claude-plan+permission-devin": "b24b604ecd058be0",
-  "permission-claude-plan+permission-grok": "5bbde5345c23448f",
-  "permission-claude-plan+permission-hermes": "7b783a0cc2a01050",
-  "permission-claude-plan+permission-muse": "c2016730c34a1680",
-  "permission-claude-plan+permission-opencode": "6b7f4f04e78923db",
-  "permission-claude-plan+question-agy": "ac5eb1822998f57e",
-  "permission-claude-plan+question-codex": "3b8711efab0cbf7d",
-  "permission-claude-plan+question-commandcode-review": "479d91be5b68ed7e",
-  "permission-claude-plan+question-commandcode": "4d94ff32b0800788",
-  "permission-claude-plan+question-copilot": "734f5af53d798c63",
-  "permission-claude-plan+question-devin-3000-11": "a013368510d40990",
-  "permission-claude-plan+question-devin-multi-3000-11": "f92505c0edf95664",
-  "permission-claude-plan+question-devin-multi": "ec54d8195dd62391",
-  "permission-claude-plan+question-devin": "00acd99383b34885",
-  "permission-claude-plan+question-grok": "4cd7b8971e8958e0",
-  "permission-claude-plan+question-hermes-lock": "bc3f835da8f94cc6",
-  "permission-claude-plan+question-hermes": "448b68cb173a812f",
-  "permission-claude-plan+question-kilo": "c647bbb667f736bb",
-  "permission-claude-plan+question-multi": "7feb834f7d49a258",
-  "permission-claude-plan+question-muse": "025e9387d22531e2",
-  "permission-claude-plan+question-opencode-review": "0b8f0093cfe31a5c",
-  "permission-claude-plan+question-opencode": "7443a6a6a5bd168f",
-  "permission-claude-plan+question-review": "479d91be5b68ed7e",
-  "permission-claude-plan+question-single": "a5232fb0880f04e9",
-  "permission-claude-plan+question-tabs": "f341794b90162f8f",
-  "permission-claude+permission-agy": "c8e012c812a62cef",
-  "permission-claude+permission-claude-edit": "ad6cf7c18454e4c9",
-  "permission-claude+permission-claude-plan": "999a772b4ba9e1dd",
-  "permission-claude+permission-codex": "67d66ecc9e5f4b6f",
-  "permission-claude+permission-commandcode": "3e53e780e2336e0b",
-  "permission-claude+permission-copilot": "97aaef9d631f99ed",
-  "permission-claude+permission-cursor": "d328f9111d5b3828",
-  "permission-claude+permission-devin-3000-11": "fe07329f72dcf45e",
-  "permission-claude+permission-devin": "6d09c480cdce532e",
-  "permission-claude+permission-grok": "9beb34a97451b879",
-  "permission-claude+permission-hermes": "1257ee7838d13364",
-  "permission-claude+permission-muse": "f035cc5bff2edaea",
-  "permission-claude+permission-opencode": "2a542d242db95110",
-  "permission-claude+question-agy": "3be36eb255212ecb",
-  "permission-claude+question-codex": "70946a2cd5017c5a",
-  "permission-claude+question-commandcode-review": "479d91be5b68ed7e",
-  "permission-claude+question-commandcode": "4d94ff32b0800788",
-  "permission-claude+question-copilot": "7ff5e1ef00f5e65f",
-  "permission-claude+question-devin-3000-11": "ce969223efb93027",
-  "permission-claude+question-devin-multi-3000-11": "b6ae054f10b643cb",
-  "permission-claude+question-devin-multi": "87500b9974cf94d8",
-  "permission-claude+question-devin": "531883fc2db98e42",
-  "permission-claude+question-grok": "75807312e897e90e",
-  "permission-claude+question-hermes-lock": "55df57b4f0b2cde4",
-  "permission-claude+question-hermes": "448b68cb173a812f",
-  "permission-claude+question-kilo": "5e6bc7517882f8d8",
-  "permission-claude+question-multi": "7feb834f7d49a258",
-  "permission-claude+question-muse": "b9528f6c10a0182f",
-  "permission-claude+question-opencode-review": "7fd2935fbd0f2f59",
-  "permission-claude+question-opencode": "2e834abbfc0ba422",
-  "permission-claude+question-review": "479d91be5b68ed7e",
-  "permission-claude+question-single": "a5232fb0880f04e9",
-  "permission-claude+question-tabs": "f341794b90162f8f",
-  "permission-codex+permission-agy": "e6ec1f94b7e448c8",
-  "permission-codex+permission-claude-edit": "ce660b3f7359221b",
-  "permission-codex+permission-claude-plan": "30b1f0348a192ffd",
-  "permission-codex+permission-claude": "68040565f1d6b263",
-  "permission-codex+permission-commandcode": "839575a4586c670f",
-  "permission-codex+permission-copilot": "4cc959140ae1d3f8",
-  "permission-codex+permission-cursor": "08fd6fdf1aedeaee",
-  "permission-codex+permission-devin-3000-11": "c632e9c8db06d6de",
-  "permission-codex+permission-devin": "74c33b612b357c79",
-  "permission-codex+permission-grok": "3bfb521ec43d63aa",
-  "permission-codex+permission-hermes": "1257ee7838d13364",
-  "permission-codex+permission-muse": "0780efcd7e492959",
-  "permission-codex+permission-opencode": "01f44bc0d4a955c1",
-  "permission-codex+question-agy": "f9c114accdce6c9a",
-  "permission-codex+question-codex": "c384f91ad41980b0",
-  "permission-codex+question-commandcode-review": "2f6061f3207f86ee",
-  "permission-codex+question-commandcode": "073d02af4e929005",
-  "permission-codex+question-copilot": "83a4c3d3ddbeedc5",
-  "permission-codex+question-devin-3000-11": "aae599b16c982a1a",
-  "permission-codex+question-devin-multi-3000-11": "9570327a46b4af53",
-  "permission-codex+question-devin-multi": "5645ced77541c698",
-  "permission-codex+question-devin": "2b4d2c5936410dc5",
-  "permission-codex+question-grok": "76f5d6b60e5aaa5f",
-  "permission-codex+question-hermes-lock": "5c935697408ee7e0",
-  "permission-codex+question-hermes": "da37ec6a34133c70",
-  "permission-codex+question-kilo": "ec17b39fbe122ef3",
-  "permission-codex+question-multi": "671fb01a7b4ea505",
-  "permission-codex+question-muse": "d078bd3b7b4cea66",
-  "permission-codex+question-opencode-review": "71e068ebe703140e",
-  "permission-codex+question-opencode": "fa54533dbd7e074d",
-  "permission-codex+question-review": "2f6061f3207f86ee",
-  "permission-codex+question-single": "870829fa34e567f5",
-  "permission-codex+question-tabs": "84707fe9583b624f",
-  "permission-commandcode+permission-agy": "c8e012c812a62cef",
-  "permission-commandcode+permission-claude-edit": "b03f779096095629",
-  "permission-commandcode+permission-claude-plan": "f3f57ffef4e324fe",
-  "permission-commandcode+permission-claude": "6efcb0f82db07e86",
-  "permission-commandcode+permission-codex": "67d66ecc9e5f4b6f",
-  "permission-commandcode+permission-copilot": "532be39333712ffc",
-  "permission-commandcode+permission-cursor": "5aa99cd785096cd7",
-  "permission-commandcode+permission-devin-3000-11": "c6f2576282b0aa1d",
-  "permission-commandcode+permission-devin": "f7177666e91b5df7",
-  "permission-commandcode+permission-grok": "036ce97e65ba2ebb",
-  "permission-commandcode+permission-hermes": "7b783a0cc2a01050",
-  "permission-commandcode+permission-muse": "f035cc5bff2edaea",
-  "permission-commandcode+permission-opencode": "2a542d242db95110",
-  "permission-commandcode+question-agy": "e7be683ba533a560",
-  "permission-commandcode+question-codex": "3b8711efab0cbf7d",
-  "permission-commandcode+question-commandcode-review": "479d91be5b68ed7e",
-  "permission-commandcode+question-commandcode": "4d94ff32b0800788",
-  "permission-commandcode+question-copilot": "d3abc8d566ded222",
-  "permission-commandcode+question-devin-3000-11": "74bac76eec5a0541",
-  "permission-commandcode+question-devin-multi-3000-11": "9a845e53f32434ba",
-  "permission-commandcode+question-devin-multi": "3ade79036722b6e8",
-  "permission-commandcode+question-devin": "9cd105525f5c03e0",
-  "permission-commandcode+question-grok": "3331ced535f90bf6",
-  "permission-commandcode+question-hermes-lock": "bc3f835da8f94cc6",
-  "permission-commandcode+question-hermes": "448b68cb173a812f",
-  "permission-commandcode+question-kilo": "5e6bc7517882f8d8",
-  "permission-commandcode+question-multi": "7feb834f7d49a258",
-  "permission-commandcode+question-muse": "3f869c74b5ccc552",
-  "permission-commandcode+question-opencode-review": "753e89afb13427fa",
-  "permission-commandcode+question-opencode": "375116bc9de05474",
-  "permission-commandcode+question-review": "479d91be5b68ed7e",
-  "permission-commandcode+question-single": "a5232fb0880f04e9",
-  "permission-commandcode+question-tabs": "f341794b90162f8f",
-  "permission-copilot+permission-agy": "b1282e307da799e4",
-  "permission-copilot+permission-claude-edit": "1ba06a43998aab3a",
-  "permission-copilot+permission-claude-plan": "34ab6167a001a88c",
-  "permission-copilot+permission-claude": "9753d8200aacaf8f",
-  "permission-copilot+permission-codex": "496a7a01d87c21d5",
-  "permission-copilot+permission-commandcode": "4cec0719f99c57a4",
-  "permission-copilot+permission-cursor": "0b31f9b29c9849db",
-  "permission-copilot+permission-devin-3000-11": "fd9368cc8363ef45",
-  "permission-copilot+permission-devin": "3037e138abf0b5e7",
-  "permission-copilot+permission-grok": "2d85e505680d2df7",
-  "permission-copilot+permission-hermes": "5013c5bd5b9fe585",
-  "permission-copilot+permission-muse": "59f50c3cdebcc773",
-  "permission-copilot+permission-opencode": "ebfc03d006a55631",
-  "permission-copilot+question-agy": "f8a4eaec31dcd013",
-  "permission-copilot+question-codex": "e91dc955fbe67d50",
-  "permission-copilot+question-commandcode-review": "bfe452f5faed1f7b",
-  "permission-copilot+question-commandcode": "81d84a1ff79ced7c",
-  "permission-copilot+question-copilot": "0ea16b7547edcc2a",
-  "permission-copilot+question-devin-3000-11": "b07c230fecd552fd",
-  "permission-copilot+question-devin-multi-3000-11": "3aa0ace96b8fe0a2",
-  "permission-copilot+question-devin-multi": "a19a6d73bd782fce",
-  "permission-copilot+question-devin": "a22d74ff6ddeef06",
-  "permission-copilot+question-grok": "17f1090db416f5ee",
-  "permission-copilot+question-hermes-lock": "9fcddd7a2fb839d4",
-  "permission-copilot+question-hermes": "0753e3b6e9db0a1f",
-  "permission-copilot+question-kilo": "09b706d5696cff70",
-  "permission-copilot+question-multi": "9f66b57cced2e18d",
-  "permission-copilot+question-muse": "b05634fac87052a6",
-  "permission-copilot+question-opencode-review": "a4ea8bfcad37b97c",
-  "permission-copilot+question-opencode": "bfb9ca1fef99fb86",
-  "permission-copilot+question-review": "bfe452f5faed1f7b",
-  "permission-copilot+question-single": "27033e0834be0d27",
-  "permission-copilot+question-tabs": "231dd91bb202bd08",
-  "permission-cursor+permission-agy": "45b2dcb0af62532e",
-  "permission-cursor+permission-claude-edit": "dbddaa67437d8fff",
-  "permission-cursor+permission-claude-plan": "438e6cbe94ca622f",
-  "permission-cursor+permission-claude": "6375f358faacbc53",
-  "permission-cursor+permission-codex": "1e58c342907c1cf0",
-  "permission-cursor+permission-commandcode": "5aa99cd785096cd7",
-  "permission-cursor+permission-copilot": "0b31f9b29c9849db",
-  "permission-cursor+permission-devin-3000-11": "f64a142f301279d8",
-  "permission-cursor+permission-devin": "dcc269b4517d679c",
-  "permission-cursor+permission-grok": "d63047af29dfa7d9",
-  "permission-cursor+permission-hermes": "80bf5fbb2c6ff047",
-  "permission-cursor+permission-muse": "7880a9aa883e580c",
-  "permission-cursor+permission-opencode": "378af56adb6458d1",
-  "permission-cursor+question-agy": "fc56c1d10505f191",
-  "permission-cursor+question-codex": "dfebb8b0a6f180fb",
-  "permission-cursor+question-commandcode-review": "199c2cc8199cdaaf",
-  "permission-cursor+question-commandcode": "b4e0e69269114b0a",
-  "permission-cursor+question-copilot": "9c4319e5910ccb98",
-  "permission-cursor+question-devin-3000-11": "0479dbf2a378259d",
-  "permission-cursor+question-devin-multi-3000-11": "11c6e77126acdc1c",
-  "permission-cursor+question-devin-multi": "10322a7548092df1",
-  "permission-cursor+question-devin": "7c7bfedd29d0dfee",
-  "permission-cursor+question-grok": "02067e7f24ae3e0e",
-  "permission-cursor+question-hermes-lock": "42491355cda93bb9",
-  "permission-cursor+question-hermes": "3a305291d491ceab",
-  "permission-cursor+question-kilo": "af021f58a435f609",
-  "permission-cursor+question-multi": "9f66b57cced2e18d",
-  "permission-cursor+question-muse": "2cb3b5e59d4097d4",
-  "permission-cursor+question-opencode-review": "b9048d50ad7c0687",
-  "permission-cursor+question-opencode": "b619c629f652517c",
-  "permission-cursor+question-review": "199c2cc8199cdaaf",
-  "permission-cursor+question-single": "27033e0834be0d27",
-  "permission-cursor+question-tabs": "231dd91bb202bd08",
-  "permission-devin-3000-11+permission-agy": "260adc5dabfd481b",
-  "permission-devin-3000-11+permission-claude-edit": "58257d429b154b88",
-  "permission-devin-3000-11+permission-claude-plan": "5ce2cda92bc5b5d8",
-  "permission-devin-3000-11+permission-claude": "e013a7ebcb9689c6",
-  "permission-devin-3000-11+permission-codex": "a2ff528fd80d22c8",
-  "permission-devin-3000-11+permission-commandcode": "c6f2576282b0aa1d",
-  "permission-devin-3000-11+permission-copilot": "fd9368cc8363ef45",
-  "permission-devin-3000-11+permission-cursor": "1a189d9762c30021",
-  "permission-devin-3000-11+permission-devin": "351a0b21241770c6",
-  "permission-devin-3000-11+permission-grok": "63116f1f17358a49",
-  "permission-devin-3000-11+permission-hermes": "1e473645bb9b0e66",
-  "permission-devin-3000-11+permission-muse": "256258e26822cc9a",
-  "permission-devin-3000-11+permission-opencode": "efb474c028d174a4",
-  "permission-devin-3000-11+question-agy": "9d58e594daaa7299",
-  "permission-devin-3000-11+question-codex": "38877fc8b0eb68ac",
-  "permission-devin-3000-11+question-commandcode-review": "3c1dd2ff441694e8",
-  "permission-devin-3000-11+question-commandcode": "df9346d21d1017b0",
-  "permission-devin-3000-11+question-copilot": "b45bdf6168b7d746",
-  "permission-devin-3000-11+question-devin-3000-11": "e7b43b913992df21",
-  "permission-devin-3000-11+question-devin-multi-3000-11": "90ba049c64ae9d5d",
-  "permission-devin-3000-11+question-devin-multi": "904397156f18aeed",
-  "permission-devin-3000-11+question-devin": "36d9dae7294198de",
-  "permission-devin-3000-11+question-grok": "2676ab811d32a4d5",
-  "permission-devin-3000-11+question-hermes-lock": "2a85299257f4e7b7",
-  "permission-devin-3000-11+question-hermes": "8513d6e9fee23de3",
-  "permission-devin-3000-11+question-kilo": "00d451c805c822a3",
-  "permission-devin-3000-11+question-multi": "47661b8b69e09726",
-  "permission-devin-3000-11+question-muse": "a9c83d8e2f32233a",
-  "permission-devin-3000-11+question-opencode-review": "7f8017d2835219ec",
-  "permission-devin-3000-11+question-opencode": "12fb6f6acff19714",
-  "permission-devin-3000-11+question-review": "3c1dd2ff441694e8",
-  "permission-devin-3000-11+question-single": "33f35d46929eed17",
-  "permission-devin-3000-11+question-tabs": "f474012b1c060927",
-  "permission-devin+permission-agy": "b55da910399d57ff",
-  "permission-devin+permission-claude-edit": "08f6c1c38a1a7ef0",
-  "permission-devin+permission-claude-plan": "f2bf6b813316d229",
-  "permission-devin+permission-claude": "6c48f784a7a95306",
-  "permission-devin+permission-codex": "b84b782e9bc63ae4",
-  "permission-devin+permission-commandcode": "c3a1b916571443b1",
-  "permission-devin+permission-copilot": "3037e138abf0b5e7",
-  "permission-devin+permission-cursor": "bae85e917f0b5af8",
-  "permission-devin+permission-devin-3000-11": "338a76af7a7d104b",
-  "permission-devin+permission-grok": "7ff1bd2f8b8fc31d",
-  "permission-devin+permission-hermes": "b82016c4d407ef85",
-  "permission-devin+permission-muse": "0f52da1d9467739f",
-  "permission-devin+permission-opencode": "0f7750bc776f9612",
-  "permission-devin+question-agy": "ed98ac85f71a1d3f",
-  "permission-devin+question-codex": "2f20a9ddef8b357a",
-  "permission-devin+question-commandcode-review": "242d656faa042d88",
-  "permission-devin+question-commandcode": "6e5a7bb30228ef50",
-  "permission-devin+question-copilot": "b03912e3fbb3295d",
-  "permission-devin+question-devin-3000-11": "e7b43b913992df21",
-  "permission-devin+question-devin-multi-3000-11": "90ba049c64ae9d5d",
-  "permission-devin+question-devin-multi": "904397156f18aeed",
-  "permission-devin+question-devin": "36d9dae7294198de",
-  "permission-devin+question-grok": "d8333e03c79302a6",
-  "permission-devin+question-hermes-lock": "d1ad2e887cea10f4",
-  "permission-devin+question-hermes": "cc4095d267b1831f",
-  "permission-devin+question-kilo": "c614810c75bb8f9e",
-  "permission-devin+question-multi": "bed6cbc7947ebb3d",
-  "permission-devin+question-muse": "249f1085a9823043",
-  "permission-devin+question-opencode-review": "9252a26946003832",
-  "permission-devin+question-opencode": "f07bbab19b8c0645",
-  "permission-devin+question-review": "242d656faa042d88",
-  "permission-devin+question-single": "f621833451c0b9d6",
-  "permission-devin+question-tabs": "db4a4f95d714ded5",
-  "permission-grok+permission-agy": "822c094929b01736",
-  "permission-grok+permission-claude-edit": "fdd5c775d6235c55",
-  "permission-grok+permission-claude-plan": "5bbde5345c23448f",
-  "permission-grok+permission-claude": "566047196b0f4dc0",
-  "permission-grok+permission-codex": "b4d906a3f5515b29",
-  "permission-grok+permission-commandcode": "036ce97e65ba2ebb",
-  "permission-grok+permission-copilot": "2d85e505680d2df7",
-  "permission-grok+permission-cursor": "d63047af29dfa7d9",
-  "permission-grok+permission-devin-3000-11": "63116f1f17358a49",
-  "permission-grok+permission-devin": "7ff1bd2f8b8fc31d",
-  "permission-grok+permission-hermes": "9455eb63de6fb6ee",
-  "permission-grok+permission-muse": "d1254a7de32409c0",
-  "permission-grok+permission-opencode": "c5ab94767e226a1d",
-  "permission-grok+question-agy": "689a2ddd73d34ae9",
-  "permission-grok+question-codex": "e71c9c02e50401eb",
-  "permission-grok+question-commandcode-review": "5ab56bb62511fa30",
-  "permission-grok+question-commandcode": "ba56095ed0645016",
-  "permission-grok+question-copilot": "99801a024088092d",
-  "permission-grok+question-devin-3000-11": "edc527d12a66bbe8",
-  "permission-grok+question-devin-multi-3000-11": "321d25d0094f3d12",
-  "permission-grok+question-devin-multi": "0bfedac58d061fba",
-  "permission-grok+question-devin": "b8a1bec0d896f50e",
-  "permission-grok+question-grok": "81b8744ba2890466",
-  "permission-grok+question-hermes-lock": "a0798a06a689208a",
-  "permission-grok+question-hermes": "851db1d53a89dba7",
-  "permission-grok+question-kilo": "4d09c00a96a473b1",
-  "permission-grok+question-multi": "3034707a1341a7c0",
-  "permission-grok+question-muse": "938fb6ce9b351725",
-  "permission-grok+question-opencode-review": "07acad25314bb9ed",
-  "permission-grok+question-opencode": "e966f9503c3cecd2",
-  "permission-grok+question-review": "5ab56bb62511fa30",
-  "permission-grok+question-single": "f5eae0e948fa527f",
-  "permission-grok+question-tabs": "5d2c3b99e74c0bc7",
-  "permission-hermes+permission-agy": "aae0cb1d239efb11",
-  "permission-hermes+permission-claude-edit": "e10d600b6c8caade",
-  "permission-hermes+permission-claude-plan": "dcf3d89d1542528d",
-  "permission-hermes+permission-claude": "68040565f1d6b263",
-  "permission-hermes+permission-codex": "67d66ecc9e5f4b6f",
-  "permission-hermes+permission-commandcode": "6614d2bbb97902a9",
-  "permission-hermes+permission-copilot": "eeba93a6ea42d820",
-  "permission-hermes+permission-cursor": "6851a83fed6b4fdf",
-  "permission-hermes+permission-devin-3000-11": "1e05ca7f1364a0ba",
-  "permission-hermes+permission-devin": "03e4a96c5f79102e",
-  "permission-hermes+permission-grok": "2a8fbb718bfb3d22",
-  "permission-hermes+permission-muse": "074cfac947cf0b16",
-  "permission-hermes+permission-opencode": "3ba5f1c3425d694c",
-  "permission-hermes+question-agy": "e1198e2adb3ef5fa",
-  "permission-hermes+question-codex": "be30d8b108f7553f",
-  "permission-hermes+question-commandcode-review": "199c2cc8199cdaaf",
-  "permission-hermes+question-commandcode": "b4e0e69269114b0a",
-  "permission-hermes+question-copilot": "734f5af53d798c63",
-  "permission-hermes+question-devin-3000-11": "8670df47364df93e",
-  "permission-hermes+question-devin-multi-3000-11": "d300fd27b03efe65",
-  "permission-hermes+question-devin-multi": "133e59454dd40165",
-  "permission-hermes+question-devin": "47500fd651545159",
-  "permission-hermes+question-grok": "cbe09eab2890e62d",
-  "permission-hermes+question-hermes-lock": "c7cdda5e4d2ce680",
-  "permission-hermes+question-hermes": "3a305291d491ceab",
-  "permission-hermes+question-kilo": "d1059c9facab79c1",
-  "permission-hermes+question-multi": "9f66b57cced2e18d",
-  "permission-hermes+question-muse": "93afddc22336927d",
-  "permission-hermes+question-opencode-review": "d42a786e53b371ef",
-  "permission-hermes+question-opencode": "dece2d812344b8e3",
-  "permission-hermes+question-review": "199c2cc8199cdaaf",
-  "permission-hermes+question-single": "27033e0834be0d27",
-  "permission-hermes+question-tabs": "231dd91bb202bd08",
-  "permission-muse+permission-agy": "261bfac5ee66271f",
-  "permission-muse+permission-claude-edit": "ad6cf7c18454e4c9",
-  "permission-muse+permission-claude-plan": "3931fe6a2c591392",
-  "permission-muse+permission-claude": "6efcb0f82db07e86",
-  "permission-muse+permission-codex": "67d66ecc9e5f4b6f",
-  "permission-muse+permission-commandcode": "3e53e780e2336e0b",
-  "permission-muse+permission-copilot": "97aaef9d631f99ed",
-  "permission-muse+permission-cursor": "caea3a5d77857bd9",
-  "permission-muse+permission-devin-3000-11": "6323d1345a7835f5",
-  "permission-muse+permission-devin": "bf359d615831c8d8",
-  "permission-muse+permission-grok": "8e5f99ef37ca2f0f",
-  "permission-muse+permission-hermes": "1257ee7838d13364",
-  "permission-muse+permission-opencode": "d0694f8822ffb980",
-  "permission-muse+question-agy": "999244d73091cb37",
-  "permission-muse+question-codex": "70946a2cd5017c5a",
-  "permission-muse+question-commandcode-review": "479d91be5b68ed7e",
-  "permission-muse+question-commandcode": "4d94ff32b0800788",
-  "permission-muse+question-copilot": "7ff5e1ef00f5e65f",
-  "permission-muse+question-devin-3000-11": "7d0f293091615843",
-  "permission-muse+question-devin-multi-3000-11": "98d3a3861a31312d",
-  "permission-muse+question-devin-multi": "04d4b5ee86e8f34d",
-  "permission-muse+question-devin": "021f5a5dcd209d11",
-  "permission-muse+question-grok": "e5fab871074bf4df",
-  "permission-muse+question-hermes-lock": "55df57b4f0b2cde4",
-  "permission-muse+question-hermes": "448b68cb173a812f",
-  "permission-muse+question-kilo": "8e6528937039fc30",
-  "permission-muse+question-multi": "7feb834f7d49a258",
-  "permission-muse+question-muse": "f224402923f405de",
-  "permission-muse+question-opencode-review": "4feb3eff85e723d3",
-  "permission-muse+question-opencode": "c7c7ca2fcfa6543b",
-  "permission-muse+question-review": "479d91be5b68ed7e",
-  "permission-muse+question-single": "a5232fb0880f04e9",
-  "permission-muse+question-tabs": "f341794b90162f8f",
-  "permission-opencode+permission-agy": "563cb49b4554b5ed",
-  "permission-opencode+permission-claude-edit": "132bcde6ccff5743",
-  "permission-opencode+permission-claude-plan": "444be28221714894",
-  "permission-opencode+permission-claude": "7aa559d2040e07c9",
-  "permission-opencode+permission-codex": "370eaf8784dea595",
-  "permission-opencode+permission-commandcode": "3b662192f22c6f3a",
-  "permission-opencode+permission-copilot": "26cf6fcc48071f4a",
-  "permission-opencode+permission-cursor": "c770af7e6d33d2b0",
-  "permission-opencode+permission-devin-3000-11": "e0fdac4fd4d068f7",
-  "permission-opencode+permission-devin": "92ba03589252aa31",
-  "permission-opencode+permission-grok": "e991e3c4a57943a4",
-  "permission-opencode+permission-hermes": "ae79ec8d7c69f67d",
-  "permission-opencode+permission-muse": "07b7d5cd5a0c7947",
-  "permission-opencode+question-agy": "d69943fa071bdf43",
-  "permission-opencode+question-codex": "464f1c0adeb1abc2",
-  "permission-opencode+question-commandcode-review": "531095874a504049",
-  "permission-opencode+question-commandcode": "b9b758dbe855310a",
-  "permission-opencode+question-copilot": "5f2f7f6c77fe54bc",
-  "permission-opencode+question-devin-3000-11": "8548d9636584c233",
-  "permission-opencode+question-devin-multi-3000-11": "3edb4de5667b1cf5",
-  "permission-opencode+question-devin-multi": "ad65a4ce038a7c31",
-  "permission-opencode+question-devin": "d3e45221fa3f3dec",
-  "permission-opencode+question-grok": "2c3ec380450a4db8",
-  "permission-opencode+question-hermes-lock": "1d37e23c7c3449ac",
-  "permission-opencode+question-hermes": "c54baa4c2b0f6128",
-  "permission-opencode+question-kilo": "8e6528937039fc30",
-  "permission-opencode+question-multi": "41a35b2f65b948b5",
-  "permission-opencode+question-muse": "307c4e7c00ee6f52",
-  "permission-opencode+question-opencode-review": "32de25eee7b1c29e",
-  "permission-opencode+question-opencode": "ff88a37e7708f4b3",
-  "permission-opencode+question-review": "531095874a504049",
-  "permission-opencode+question-single": "81bb60ae50131d5c",
-  "permission-opencode+question-tabs": "23060293b9e8caa0",
-  "question-agy+permission-agy": "261bfac5ee66271f",
-  "question-agy+permission-claude-edit": "b03f779096095629",
-  "question-agy+permission-claude-plan": "82bafadf9bc7ba0e",
-  "question-agy+permission-claude": "6efcb0f82db07e86",
-  "question-agy+permission-codex": "67d66ecc9e5f4b6f",
-  "question-agy+permission-commandcode": "c4839118f2502fc9",
-  "question-agy+permission-copilot": "f8a4eaec31dcd013",
-  "question-agy+permission-cursor": "6ee06d8c32db908d",
-  "question-agy+permission-devin-3000-11": "9d58e594daaa7299",
-  "question-agy+permission-devin": "ed98ac85f71a1d3f",
-  "question-agy+permission-grok": "689a2ddd73d34ae9",
-  "question-agy+permission-hermes": "13cb8a03764c261d",
-  "question-agy+permission-muse": "c2016730c34a1680",
-  "question-agy+permission-opencode": "d69943fa071bdf43",
-  "question-agy+question-codex": "3b8711efab0cbf7d",
-  "question-agy+question-commandcode-review": "479d91be5b68ed7e",
-  "question-agy+question-commandcode": "4d94ff32b0800788",
-  "question-agy+question-copilot": "6fa4abef7bc86f2e",
-  "question-agy+question-devin-3000-11": "bde6a6748a824545",
-  "question-agy+question-devin-multi-3000-11": "f7a492369cb41529",
-  "question-agy+question-devin-multi": "f0d72c934dd22d7a",
-  "question-agy+question-devin": "781c00d17545c0f1",
-  "question-agy+question-grok": "2bf8435b50df872d",
-  "question-agy+question-hermes-lock": "b7d720d60b2e12f2",
-  "question-agy+question-hermes": "a0206186e836b1c3",
-  "question-agy+question-kilo": "c647bbb667f736bb",
-  "question-agy+question-multi": "7feb834f7d49a258",
-  "question-agy+question-muse": "025e9387d22531e2",
-  "question-agy+question-opencode-review": "e8e2b13f5fcba1dc",
-  "question-agy+question-opencode": "eca159df0cfb9843",
-  "question-agy+question-review": "479d91be5b68ed7e",
-  "question-agy+question-single": "a5232fb0880f04e9",
-  "question-agy+question-tabs": "f341794b90162f8f",
-  "question-codex+permission-agy": "c8e012c812a62cef",
-  "question-codex+permission-claude-edit": "b03f779096095629",
-  "question-codex+permission-claude-plan": "f3f57ffef4e324fe",
-  "question-codex+permission-claude": "6efcb0f82db07e86",
-  "question-codex+permission-codex": "67d66ecc9e5f4b6f",
-  "question-codex+permission-commandcode": "c4839118f2502fc9",
-  "question-codex+permission-copilot": "eeba93a6ea42d820",
-  "question-codex+permission-cursor": "d8aead1e2e83f138",
-  "question-codex+permission-devin-3000-11": "38877fc8b0eb68ac",
-  "question-codex+permission-devin": "2f20a9ddef8b357a",
-  "question-codex+permission-grok": "e71c9c02e50401eb",
-  "question-codex+permission-hermes": "7b783a0cc2a01050",
-  "question-codex+permission-muse": "f035cc5bff2edaea",
-  "question-codex+permission-opencode": "87328baada9ae116",
-  "question-codex+question-agy": "3fb370856abd97c8",
-  "question-codex+question-commandcode-review": "479d91be5b68ed7e",
-  "question-codex+question-commandcode": "4d94ff32b0800788",
-  "question-codex+question-copilot": "734f5af53d798c63",
-  "question-codex+question-devin-3000-11": "b6abb51de848bea8",
-  "question-codex+question-devin-multi-3000-11": "855bf02bd5fbf84a",
-  "question-codex+question-devin-multi": "bd34e216e67d4a25",
-  "question-codex+question-devin": "adf1b0669538b2e5",
-  "question-codex+question-grok": "72e0c071d3a8d585",
-  "question-codex+question-hermes-lock": "bc3f835da8f94cc6",
-  "question-codex+question-hermes": "448b68cb173a812f",
-  "question-codex+question-kilo": "1924a88e4c3a20dd",
-  "question-codex+question-multi": "7feb834f7d49a258",
-  "question-codex+question-muse": "3f869c74b5ccc552",
-  "question-codex+question-opencode-review": "6dd40b435ff29935",
-  "question-codex+question-opencode": "0005c9685ad13587",
-  "question-codex+question-review": "479d91be5b68ed7e",
-  "question-codex+question-single": "a5232fb0880f04e9",
-  "question-codex+question-tabs": "f341794b90162f8f",
-  "question-commandcode-review+permission-agy": "3b961046f7b72348",
-  "question-commandcode-review+permission-claude-edit": "41d6c628ca426c52",
-  "question-commandcode-review+permission-claude-plan": "dd33dff2f7424ab5",
-  "question-commandcode-review+permission-claude": "a648df4b24db4be6",
-  "question-commandcode-review+permission-codex": "1e58c342907c1cf0",
-  "question-commandcode-review+permission-commandcode": "a10dbb957db0ac21",
-  "question-commandcode-review+permission-copilot": "de3677bfa0c3d04e",
-  "question-commandcode-review+permission-cursor": "9a147085490fc1ed",
-  "question-commandcode-review+permission-devin-3000-11": "3c1dd2ff441694e8",
-  "question-commandcode-review+permission-devin": "242d656faa042d88",
-  "question-commandcode-review+permission-grok": "5ab56bb62511fa30",
-  "question-commandcode-review+permission-hermes": "80bf5fbb2c6ff047",
-  "question-commandcode-review+permission-muse": "3e24754bfed5b12e",
-  "question-commandcode-review+permission-opencode": "eca0e43db58d5056",
-  "question-commandcode-review+question-agy": "497bfad7f37b83d6",
-  "question-commandcode-review+question-codex": "264daa6cf33a0fb1",
-  "question-commandcode-review+question-commandcode": "4d94ff32b0800788",
-  "question-commandcode-review+question-copilot": "8feaaed6bc4f8ec2",
-  "question-commandcode-review+question-devin-3000-11": "641b286230784f9d",
-  "question-commandcode-review+question-devin-multi-3000-11": "fc0a6d609bc40d22",
-  "question-commandcode-review+question-devin-multi": "7a938311e4c7b1b4",
-  "question-commandcode-review+question-devin": "4c24260c010d4871",
-  "question-commandcode-review+question-grok": "43c5919053d8f3bb",
-  "question-commandcode-review+question-hermes-lock": "3f38523140fb0def",
-  "question-commandcode-review+question-hermes": "448b68cb173a812f",
-  "question-commandcode-review+question-kilo": "5e6bc7517882f8d8",
-  "question-commandcode-review+question-multi": "7feb834f7d49a258",
-  "question-commandcode-review+question-muse": "623a834bd5fde561",
-  "question-commandcode-review+question-opencode-review": "8b639632a7e51564",
-  "question-commandcode-review+question-opencode": "375116bc9de05474",
-  "question-commandcode-review+question-review": "479d91be5b68ed7e",
-  "question-commandcode-review+question-single": "a5232fb0880f04e9",
-  "question-commandcode-review+question-tabs": "f341794b90162f8f",
-  "question-commandcode+permission-agy": "3b961046f7b72348",
-  "question-commandcode+permission-claude-edit": "41d6c628ca426c52",
-  "question-commandcode+permission-claude-plan": "dd33dff2f7424ab5",
-  "question-commandcode+permission-claude": "a648df4b24db4be6",
-  "question-commandcode+permission-codex": "1e58c342907c1cf0",
-  "question-commandcode+permission-commandcode": "a10dbb957db0ac21",
-  "question-commandcode+permission-copilot": "de3677bfa0c3d04e",
-  "question-commandcode+permission-cursor": "7d756fbbd05fbba5",
-  "question-commandcode+permission-devin-3000-11": "df9346d21d1017b0",
-  "question-commandcode+permission-devin": "496a992fe7cddf47",
-  "question-commandcode+permission-grok": "ba56095ed0645016",
-  "question-commandcode+permission-hermes": "80bf5fbb2c6ff047",
-  "question-commandcode+permission-muse": "3e24754bfed5b12e",
-  "question-commandcode+permission-opencode": "eca0e43db58d5056",
-  "question-commandcode+question-agy": "8ff851f38b651a7d",
-  "question-commandcode+question-codex": "264daa6cf33a0fb1",
-  "question-commandcode+question-commandcode-review": "479d91be5b68ed7e",
-  "question-commandcode+question-copilot": "8feaaed6bc4f8ec2",
-  "question-commandcode+question-devin-3000-11": "c8970b334be14d58",
-  "question-commandcode+question-devin-multi-3000-11": "4c6122ab96c0f82c",
-  "question-commandcode+question-devin-multi": "38b7bdf04483fb8b",
-  "question-commandcode+question-devin": "bf1cc7686b17f0b1",
-  "question-commandcode+question-grok": "e829da21029fa6bc",
-  "question-commandcode+question-hermes-lock": "a13a7bb0c56c5da0",
-  "question-commandcode+question-hermes": "448b68cb173a812f",
-  "question-commandcode+question-kilo": "5e6bc7517882f8d8",
-  "question-commandcode+question-multi": "7feb834f7d49a258",
-  "question-commandcode+question-muse": "623a834bd5fde561",
-  "question-commandcode+question-opencode-review": "0a67d3a47edcccb9",
-  "question-commandcode+question-opencode": "375116bc9de05474",
-  "question-commandcode+question-review": "479d91be5b68ed7e",
-  "question-commandcode+question-single": "a5232fb0880f04e9",
-  "question-commandcode+question-tabs": "f341794b90162f8f",
-  "question-copilot+permission-agy": "e6ec1f94b7e448c8",
-  "question-copilot+permission-claude-edit": "6978771e62fe73f8",
-  "question-copilot+permission-claude-plan": "248ac43ed6f40f2a",
-  "question-copilot+permission-claude": "0b1e3d95c2c8aa6f",
-  "question-copilot+permission-codex": "67d66ecc9e5f4b6f",
-  "question-copilot+permission-commandcode": "e4d150301143bd6a",
-  "question-copilot+permission-copilot": "532be39333712ffc",
-  "question-copilot+permission-cursor": "9c4319e5910ccb98",
-  "question-copilot+permission-devin-3000-11": "b45bdf6168b7d746",
-  "question-copilot+permission-devin": "b03912e3fbb3295d",
-  "question-copilot+permission-grok": "99801a024088092d",
-  "question-copilot+permission-hermes": "7b783a0cc2a01050",
-  "question-copilot+permission-muse": "6c4238c2c175647c",
-  "question-copilot+permission-opencode": "33fc960c03fe2526",
-  "question-copilot+question-agy": "6fa4abef7bc86f2e",
-  "question-copilot+question-codex": "be30d8b108f7553f",
-  "question-copilot+question-commandcode-review": "894898e8d9061274",
-  "question-copilot+question-commandcode": "edb10d1c56958ba7",
-  "question-copilot+question-devin-3000-11": "969b2919b787deb5",
-  "question-copilot+question-devin-multi-3000-11": "ede7809d65c3760d",
-  "question-copilot+question-devin-multi": "204e20d36859df33",
-  "question-copilot+question-devin": "53cd2c1621610719",
-  "question-copilot+question-grok": "585f255d3c3b377f",
-  "question-copilot+question-hermes-lock": "c7cdda5e4d2ce680",
-  "question-copilot+question-hermes": "3a305291d491ceab",
-  "question-copilot+question-kilo": "aeb9563356168edf",
-  "question-copilot+question-multi": "9f66b57cced2e18d",
-  "question-copilot+question-muse": "b05634fac87052a6",
-  "question-copilot+question-opencode-review": "bccbe5e30ba5e683",
-  "question-copilot+question-opencode": "841744cb78a0f21e",
-  "question-copilot+question-review": "894898e8d9061274",
-  "question-copilot+question-single": "27033e0834be0d27",
-  "question-copilot+question-tabs": "231dd91bb202bd08",
-  "question-devin-3000-11+permission-agy": "826940b82d7764c4",
-  "question-devin-3000-11+permission-claude-edit": "406e3308df76ccbf",
-  "question-devin-3000-11+permission-claude-plan": "a013368510d40990",
-  "question-devin-3000-11+permission-claude": "0c72b1e7b8b04ac6",
-  "question-devin-3000-11+permission-codex": "5e516a20b8a018e3",
-  "question-devin-3000-11+permission-commandcode": "c4839118f2502fc9",
-  "question-devin-3000-11+permission-copilot": "532be39333712ffc",
-  "question-devin-3000-11+permission-cursor": "9f3207c20a2d1a10",
-  "question-devin-3000-11+permission-devin-3000-11": "338a76af7a7d104b",
-  "question-devin-3000-11+permission-devin": "351a0b21241770c6",
-  "question-devin-3000-11+permission-grok": "edc527d12a66bbe8",
-  "question-devin-3000-11+permission-hermes": "8cdbd2b1aa879c78",
-  "question-devin-3000-11+permission-muse": "485ea18420a2f673",
-  "question-devin-3000-11+permission-opencode": "62b98c59e2cd09ac",
-  "question-devin-3000-11+question-agy": "a49b73cc9206b60d",
-  "question-devin-3000-11+question-codex": "b6abb51de848bea8",
-  "question-devin-3000-11+question-commandcode-review": "641b286230784f9d",
-  "question-devin-3000-11+question-commandcode": "c8970b334be14d58",
-  "question-devin-3000-11+question-copilot": "969b2919b787deb5",
-  "question-devin-3000-11+question-devin-multi-3000-11": "5421dd5ce78ba281",
-  "question-devin-3000-11+question-devin-multi": "ec54d8195dd62391",
-  "question-devin-3000-11+question-devin": "00acd99383b34885",
-  "question-devin-3000-11+question-grok": "c26c6a82866a9c2e",
-  "question-devin-3000-11+question-hermes-lock": "777c27ee0ba8c24d",
-  "question-devin-3000-11+question-hermes": "def140502a7bb2cd",
-  "question-devin-3000-11+question-kilo": "bd8f27eb539d7ae1",
-  "question-devin-3000-11+question-multi": "5757355562fdb8d5",
-  "question-devin-3000-11+question-muse": "b400cbe9770cbac3",
-  "question-devin-3000-11+question-opencode-review": "bb892d8b5c70c9dc",
-  "question-devin-3000-11+question-opencode": "343ffaea4a7f494a",
-  "question-devin-3000-11+question-review": "641b286230784f9d",
-  "question-devin-3000-11+question-single": "faeb5d5b6fe37907",
-  "question-devin-3000-11+question-tabs": "5a74380d5a8068a2",
-  "question-devin-multi-3000-11+permission-agy": "7b39a9f16def497c",
-  "question-devin-multi-3000-11+permission-claude-edit": "57cd5b5d3dc22055",
-  "question-devin-multi-3000-11+permission-claude-plan": "f92505c0edf95664",
-  "question-devin-multi-3000-11+permission-claude": "f6ebe7b5f424a0d3",
-  "question-devin-multi-3000-11+permission-codex": "60a21cd77c5c3f72",
-  "question-devin-multi-3000-11+permission-commandcode": "c4839118f2502fc9",
-  "question-devin-multi-3000-11+permission-copilot": "532be39333712ffc",
-  "question-devin-multi-3000-11+permission-cursor": "4f91ffd33608f58f",
-  "question-devin-multi-3000-11+permission-devin-3000-11": "338a76af7a7d104b",
-  "question-devin-multi-3000-11+permission-devin": "351a0b21241770c6",
-  "question-devin-multi-3000-11+permission-grok": "321d25d0094f3d12",
-  "question-devin-multi-3000-11+permission-hermes": "a7dd15c8446024f0",
-  "question-devin-multi-3000-11+permission-muse": "207b147776711c5b",
-  "question-devin-multi-3000-11+permission-opencode": "8ea2f20edf21be4d",
-  "question-devin-multi-3000-11+question-agy": "a49b73cc9206b60d",
-  "question-devin-multi-3000-11+question-codex": "855bf02bd5fbf84a",
-  "question-devin-multi-3000-11+question-commandcode-review": "fc0a6d609bc40d22",
-  "question-devin-multi-3000-11+question-commandcode": "4c6122ab96c0f82c",
-  "question-devin-multi-3000-11+question-copilot": "ede7809d65c3760d",
-  "question-devin-multi-3000-11+question-devin-3000-11": "f1c816ede9419eb5",
-  "question-devin-multi-3000-11+question-devin-multi": "ec54d8195dd62391",
-  "question-devin-multi-3000-11+question-devin": "00acd99383b34885",
-  "question-devin-multi-3000-11+question-grok": "ed90c3280f9947e1",
-  "question-devin-multi-3000-11+question-hermes-lock": "a7322fea5593e20a",
-  "question-devin-multi-3000-11+question-hermes": "926ecdff180033ee",
-  "question-devin-multi-3000-11+question-kilo": "437b9ab2351b6281",
-  "question-devin-multi-3000-11+question-multi": "664f14b1bbe5272a",
-  "question-devin-multi-3000-11+question-muse": "385b9542ddcad435",
-  "question-devin-multi-3000-11+question-opencode-review": "a7ac7431bbb2e29f",
-  "question-devin-multi-3000-11+question-opencode": "f3616cec2a3dcd9b",
-  "question-devin-multi-3000-11+question-review": "fc0a6d609bc40d22",
-  "question-devin-multi-3000-11+question-single": "2bc0f8b95f9d1297",
-  "question-devin-multi-3000-11+question-tabs": "89a7327ef82f996b",
-  "question-devin-multi+permission-agy": "f11cd437b5842a2a",
-  "question-devin-multi+permission-claude-edit": "00568b272eef23c4",
-  "question-devin-multi+permission-claude-plan": "eb27343fc5df86fe",
-  "question-devin-multi+permission-claude": "619a2f84b4e95a70",
-  "question-devin-multi+permission-codex": "b664579d5678aa5b",
-  "question-devin-multi+permission-commandcode": "c4839118f2502fc9",
-  "question-devin-multi+permission-copilot": "532be39333712ffc",
-  "question-devin-multi+permission-cursor": "e9f8e50841b4dfaf",
-  "question-devin-multi+permission-devin-3000-11": "338a76af7a7d104b",
-  "question-devin-multi+permission-devin": "351a0b21241770c6",
-  "question-devin-multi+permission-grok": "0bfedac58d061fba",
-  "question-devin-multi+permission-hermes": "aa03e5dd056e9fc2",
-  "question-devin-multi+permission-muse": "b6954845b24071bf",
-  "question-devin-multi+permission-opencode": "fc41f45f2955d3f8",
-  "question-devin-multi+question-agy": "a49b73cc9206b60d",
-  "question-devin-multi+question-codex": "bd34e216e67d4a25",
-  "question-devin-multi+question-commandcode-review": "7a938311e4c7b1b4",
-  "question-devin-multi+question-commandcode": "9e61506741331143",
-  "question-devin-multi+question-copilot": "204e20d36859df33",
-  "question-devin-multi+question-devin-3000-11": "f1c816ede9419eb5",
-  "question-devin-multi+question-devin-multi-3000-11": "5421dd5ce78ba281",
-  "question-devin-multi+question-devin": "00acd99383b34885",
-  "question-devin-multi+question-grok": "18270515aa184bbb",
-  "question-devin-multi+question-hermes-lock": "fed3ceb3e9344c0c",
-  "question-devin-multi+question-hermes": "6b156cae27b5852b",
-  "question-devin-multi+question-kilo": "271ba8dbc0e28a46",
-  "question-devin-multi+question-multi": "b32cea250a718c33",
-  "question-devin-multi+question-muse": "58fe13b24db1a113",
-  "question-devin-multi+question-opencode-review": "b9434d66f6d4e6b0",
-  "question-devin-multi+question-opencode": "291bd717033fc1e4",
-  "question-devin-multi+question-review": "7a938311e4c7b1b4",
-  "question-devin-multi+question-single": "85215fab9467b4bd",
-  "question-devin-multi+question-tabs": "637e415c74132009",
-  "question-devin+permission-agy": "6a79f96bffb6120f",
-  "question-devin+permission-claude-edit": "87a08a3438ebea31",
-  "question-devin+permission-claude-plan": "3ac9ad15af0d5ab0",
-  "question-devin+permission-claude": "21d42f96034caef6",
-  "question-devin+permission-codex": "90cb00ac7d03538b",
-  "question-devin+permission-commandcode": "c4839118f2502fc9",
-  "question-devin+permission-copilot": "532be39333712ffc",
-  "question-devin+permission-cursor": "d73ff0e173245b57",
-  "question-devin+permission-devin-3000-11": "338a76af7a7d104b",
-  "question-devin+permission-devin": "351a0b21241770c6",
-  "question-devin+permission-grok": "b8a1bec0d896f50e",
-  "question-devin+permission-hermes": "71f974ce3156cce3",
-  "question-devin+permission-muse": "b149b28d789f7ea6",
-  "question-devin+permission-opencode": "f89cdfabb95b502c",
-  "question-devin+question-agy": "a49b73cc9206b60d",
-  "question-devin+question-codex": "adf1b0669538b2e5",
-  "question-devin+question-commandcode-review": "4c24260c010d4871",
-  "question-devin+question-commandcode": "ec44b4dcf827a539",
-  "question-devin+question-copilot": "53cd2c1621610719",
-  "question-devin+question-devin-3000-11": "f1c816ede9419eb5",
-  "question-devin+question-devin-multi-3000-11": "5421dd5ce78ba281",
-  "question-devin+question-devin-multi": "ec54d8195dd62391",
-  "question-devin+question-grok": "931b0f02784af4a8",
-  "question-devin+question-hermes-lock": "2d4dde114efb6a3d",
-  "question-devin+question-hermes": "1962a208cf5ca87b",
-  "question-devin+question-kilo": "759609e64d526845",
-  "question-devin+question-multi": "d133943f1e065475",
-  "question-devin+question-muse": "d04275645f583d2c",
-  "question-devin+question-opencode-review": "2a29ddc89f0f0006",
-  "question-devin+question-opencode": "7751ea391dadb8b6",
-  "question-devin+question-review": "4c24260c010d4871",
-  "question-devin+question-single": "6d6b812fc5dc57c7",
-  "question-devin+question-tabs": "40db078a5f948857",
-  "question-grok+permission-agy": "cebf0a11fadabfe1",
-  "question-grok+permission-claude-edit": "485cba952a78f384",
-  "question-grok+permission-claude-plan": "4cd7b8971e8958e0",
-  "question-grok+permission-claude": "75807312e897e90e",
-  "question-grok+permission-codex": "76f5d6b60e5aaa5f",
-  "question-grok+permission-commandcode": "3331ced535f90bf6",
-  "question-grok+permission-copilot": "17f1090db416f5ee",
-  "question-grok+permission-cursor": "02067e7f24ae3e0e",
-  "question-grok+permission-devin-3000-11": "2676ab811d32a4d5",
-  "question-grok+permission-devin": "d8333e03c79302a6",
-  "question-grok+permission-grok": "f576fe8889e85ea5",
-  "question-grok+permission-hermes": "cbe09eab2890e62d",
-  "question-grok+permission-muse": "e5fab871074bf4df",
-  "question-grok+permission-opencode": "2c3ec380450a4db8",
-  "question-grok+question-agy": "2bf8435b50df872d",
-  "question-grok+question-codex": "72e0c071d3a8d585",
-  "question-grok+question-commandcode-review": "43c5919053d8f3bb",
-  "question-grok+question-commandcode": "e829da21029fa6bc",
-  "question-grok+question-copilot": "585f255d3c3b377f",
-  "question-grok+question-devin-3000-11": "c26c6a82866a9c2e",
-  "question-grok+question-devin-multi-3000-11": "ed90c3280f9947e1",
-  "question-grok+question-devin-multi": "18270515aa184bbb",
-  "question-grok+question-devin": "931b0f02784af4a8",
-  "question-grok+question-hermes-lock": "48817d05e88f5478",
-  "question-grok+question-hermes": "79642b0f52e1c529",
-  "question-grok+question-kilo": "f4ea7a62caa77971",
-  "question-grok+question-multi": "1a7f06a2e3cbfbd9",
-  "question-grok+question-muse": "9ed34b4895b6a777",
-  "question-grok+question-opencode-review": "d849f62332c94510",
-  "question-grok+question-opencode": "b5373df36233c66b",
-  "question-grok+question-review": "43c5919053d8f3bb",
-  "question-grok+question-single": "ec191bc02f78c6b3",
-  "question-grok+question-tabs": "8626678b395cf5a6",
-  "question-hermes-lock+permission-agy": "261bfac5ee66271f",
-  "question-hermes-lock+permission-claude-edit": "b03f779096095629",
-  "question-hermes-lock+permission-claude-plan": "f55275a2a90d3435",
-  "question-hermes-lock+permission-claude": "6efcb0f82db07e86",
-  "question-hermes-lock+permission-codex": "67d66ecc9e5f4b6f",
-  "question-hermes-lock+permission-commandcode": "c4839118f2502fc9",
-  "question-hermes-lock+permission-copilot": "eeba93a6ea42d820",
-  "question-hermes-lock+permission-cursor": "cb821f2997a2ceff",
-  "question-hermes-lock+permission-devin-3000-11": "313558e7bbfc9452",
-  "question-hermes-lock+permission-devin": "839b6dad31e6ef61",
-  "question-hermes-lock+permission-grok": "9e5265d2b753bb0a",
-  "question-hermes-lock+permission-hermes": "7b783a0cc2a01050",
-  "question-hermes-lock+permission-muse": "c2016730c34a1680",
-  "question-hermes-lock+permission-opencode": "6b7f4f04e78923db",
-  "question-hermes-lock+question-agy": "527e6991a2597172",
-  "question-hermes-lock+question-codex": "3b8711efab0cbf7d",
-  "question-hermes-lock+question-commandcode-review": "479d91be5b68ed7e",
-  "question-hermes-lock+question-commandcode": "4d94ff32b0800788",
-  "question-hermes-lock+question-copilot": "734f5af53d798c63",
-  "question-hermes-lock+question-devin-3000-11": "833e38a591986094",
-  "question-hermes-lock+question-devin-multi-3000-11": "68ab8ce1e782de4c",
-  "question-hermes-lock+question-devin-multi": "62b22e3accdf86f7",
-  "question-hermes-lock+question-devin": "96d3c813ba51ed1f",
-  "question-hermes-lock+question-grok": "48817d05e88f5478",
-  "question-hermes-lock+question-hermes": "448b68cb173a812f",
-  "question-hermes-lock+question-kilo": "c647bbb667f736bb",
-  "question-hermes-lock+question-multi": "7feb834f7d49a258",
-  "question-hermes-lock+question-muse": "c271044364bef7a3",
-  "question-hermes-lock+question-opencode-review": "ecc61f993648d01e",
-  "question-hermes-lock+question-opencode": "112e8890a80bde3f",
-  "question-hermes-lock+question-review": "479d91be5b68ed7e",
-  "question-hermes-lock+question-single": "a5232fb0880f04e9",
-  "question-hermes-lock+question-tabs": "f341794b90162f8f",
-  "question-hermes+permission-agy": "7a8b100bf46884c7",
-  "question-hermes+permission-claude-edit": "41d6c628ca426c52",
-  "question-hermes+permission-claude-plan": "4dbf57b338efead8",
-  "question-hermes+permission-claude": "a648df4b24db4be6",
-  "question-hermes+permission-codex": "1e58c342907c1cf0",
-  "question-hermes+permission-commandcode": "a10dbb957db0ac21",
-  "question-hermes+permission-copilot": "0f126a6a9d2d4e3b",
-  "question-hermes+permission-cursor": "7b318d5bfb69b4c2",
-  "question-hermes+permission-devin-3000-11": "df79eaf43dc6e09a",
-  "question-hermes+permission-devin": "3d022cbeddf7bee8",
-  "question-hermes+permission-grok": "11ac72cae0119d1d",
-  "question-hermes+permission-hermes": "80bf5fbb2c6ff047",
-  "question-hermes+permission-muse": "f12be6e08b295412",
-  "question-hermes+permission-opencode": "7fc109cfe242add3",
-  "question-hermes+question-agy": "09408ab678e10cf0",
-  "question-hermes+question-codex": "264daa6cf33a0fb1",
-  "question-hermes+question-commandcode-review": "479d91be5b68ed7e",
-  "question-hermes+question-commandcode": "4d94ff32b0800788",
-  "question-hermes+question-copilot": "5c18e953b3c31083",
-  "question-hermes+question-devin-3000-11": "7fa5675c47b252a4",
-  "question-hermes+question-devin-multi-3000-11": "a81b109d07b9bf98",
-  "question-hermes+question-devin-multi": "a78382a482e295a2",
-  "question-hermes+question-devin": "cd09c23963949226",
-  "question-hermes+question-grok": "79642b0f52e1c529",
-  "question-hermes+question-hermes-lock": "e7450daab6057f9a",
-  "question-hermes+question-kilo": "c647bbb667f736bb",
-  "question-hermes+question-multi": "7feb834f7d49a258",
-  "question-hermes+question-muse": "0f2c094d43ced91b",
-  "question-hermes+question-opencode-review": "ecc61f993648d01e",
-  "question-hermes+question-opencode": "112e8890a80bde3f",
-  "question-hermes+question-review": "479d91be5b68ed7e",
-  "question-hermes+question-single": "a5232fb0880f04e9",
-  "question-hermes+question-tabs": "f341794b90162f8f",
-  "question-kilo+permission-agy": "dbe0d32dda580129",
-  "question-kilo+permission-claude-edit": "53bc3b91e4924feb",
-  "question-kilo+permission-claude-plan": "1bc82beb31626140",
-  "question-kilo+permission-claude": "f23a0de72a90b5d0",
-  "question-kilo+permission-codex": "169626cabff6388f",
-  "question-kilo+permission-commandcode": "2beaf1426d258099",
-  "question-kilo+permission-copilot": "bd9bab2e927bb01f",
-  "question-kilo+permission-cursor": "b995a3abfe9c9a1a",
-  "question-kilo+permission-devin-3000-11": "c088de8333993081",
-  "question-kilo+permission-devin": "bf49196afcce5076",
-  "question-kilo+permission-grok": "1075fe82ecac0898",
-  "question-kilo+permission-hermes": "6cac3e08e6ee1bd9",
-  "question-kilo+permission-muse": "607a3a027325e238",
-  "question-kilo+permission-opencode": "d445716dd0720812",
-  "question-kilo+question-agy": "ae4957425ec88c85",
-  "question-kilo+question-codex": "1f468ec5d3f6be70",
-  "question-kilo+question-commandcode-review": "531095874a504049",
-  "question-kilo+question-commandcode": "b9b758dbe855310a",
-  "question-kilo+question-copilot": "2ca56cc7a1f88e14",
-  "question-kilo+question-devin-3000-11": "502250543dddec94",
-  "question-kilo+question-devin-multi-3000-11": "cea332ef700d0e62",
-  "question-kilo+question-devin-multi": "0e1f6f6d7dbc15de",
-  "question-kilo+question-devin": "13c435f6b400863e",
-  "question-kilo+question-grok": "f4ea7a62caa77971",
-  "question-kilo+question-hermes-lock": "df5750852bedebf6",
-  "question-kilo+question-hermes": "c54baa4c2b0f6128",
-  "question-kilo+question-multi": "41a35b2f65b948b5",
-  "question-kilo+question-muse": "616c9ec7cbb8c85f",
-  "question-kilo+question-opencode-review": "32de25eee7b1c29e",
-  "question-kilo+question-opencode": "ff88a37e7708f4b3",
-  "question-kilo+question-review": "531095874a504049",
-  "question-kilo+question-single": "81bb60ae50131d5c",
-  "question-kilo+question-tabs": "23060293b9e8caa0",
-  "question-multi+permission-agy": "5e4dd923a8b52b0e",
-  "question-multi+permission-claude-edit": "cebb584fa38af978",
-  "question-multi+permission-claude-plan": "646a712d050618b9",
-  "question-multi+permission-claude": "e8746b1b9e783b5f",
-  "question-multi+permission-codex": "496a7a01d87c21d5",
-  "question-multi+permission-commandcode": "22d2da9503b3b09c",
-  "question-multi+permission-copilot": "c6cbdbf855338dec",
-  "question-multi+permission-cursor": "17d1171db8da7ad9",
-  "question-multi+permission-devin-3000-11": "9e7af0a2b013bc01",
-  "question-multi+permission-devin": "79c170e276a76a25",
-  "question-multi+permission-grok": "47259f1fdbfe57f2",
-  "question-multi+permission-hermes": "f1215b8c8b703a20",
-  "question-multi+permission-muse": "459e8f4346181098",
-  "question-multi+permission-opencode": "135f7098f847d5eb",
-  "question-multi+question-agy": "1ef4603ff5b27215",
-  "question-multi+question-codex": "a45c57aec17c9ce8",
-  "question-multi+question-commandcode-review": "9a3a9b7a365a0a74",
-  "question-multi+question-commandcode": "87bfad5d23b97efc",
-  "question-multi+question-copilot": "0e0768251daab530",
-  "question-multi+question-devin-3000-11": "3336818dab7beef2",
-  "question-multi+question-devin-multi-3000-11": "cdc30ea4aa02077c",
-  "question-multi+question-devin-multi": "d938880401e9f9cd",
-  "question-multi+question-devin": "2485a05d20e4b9f1",
-  "question-multi+question-grok": "7e3519ddb3bce453",
-  "question-multi+question-hermes-lock": "b5cab2dbd24d9260",
-  "question-multi+question-hermes": "af464ccc0a9a753b",
-  "question-multi+question-kilo": "e585e3d615c05259",
-  "question-multi+question-muse": "421bd317ffd92640",
-  "question-multi+question-opencode-review": "b36506cb0f66a832",
-  "question-multi+question-opencode": "e960e320fc5ba24f",
-  "question-multi+question-review": "9a3a9b7a365a0a74",
-  "question-multi+question-single": "a5232fb0880f04e9",
-  "question-multi+question-tabs": "f341794b90162f8f",
-  "question-muse+permission-agy": "f3f142ad2b00613d",
-  "question-muse+permission-claude-edit": "a35a74385cd3e47e",
-  "question-muse+permission-claude-plan": "929a4e27d8dda6c9",
-  "question-muse+permission-claude": "e8746b1b9e783b5f",
-  "question-muse+permission-codex": "496a7a01d87c21d5",
-  "question-muse+permission-commandcode": "01e49167fa0d43f5",
-  "question-muse+permission-copilot": "532be39333712ffc",
-  "question-muse+permission-cursor": "5e800617e70ca67a",
-  "question-muse+permission-devin-3000-11": "a9c83d8e2f32233a",
-  "question-muse+permission-devin": "249f1085a9823043",
-  "question-muse+permission-grok": "938fb6ce9b351725",
-  "question-muse+permission-hermes": "c80851c3ea95f1fc",
-  "question-muse+permission-muse": "74d625c868752aa9",
-  "question-muse+permission-opencode": "9af09046a69a56b8",
-  "question-muse+question-agy": "7117e02b93a4c972",
-  "question-muse+question-codex": "1dfe4b61edf7c8f7",
-  "question-muse+question-commandcode-review": "9a3a9b7a365a0a74",
-  "question-muse+question-commandcode": "87bfad5d23b97efc",
-  "question-muse+question-copilot": "11715cc03e92e888",
-  "question-muse+question-devin-3000-11": "b400cbe9770cbac3",
-  "question-muse+question-devin-multi-3000-11": "385b9542ddcad435",
-  "question-muse+question-devin-multi": "58fe13b24db1a113",
-  "question-muse+question-devin": "d04275645f583d2c",
-  "question-muse+question-grok": "9ed34b4895b6a777",
-  "question-muse+question-hermes-lock": "9c75445ef5009a2d",
-  "question-muse+question-hermes": "bba45da7f15886f9",
-  "question-muse+question-kilo": "7cf5b2c56b38aaec",
-  "question-muse+question-multi": "7feb834f7d49a258",
-  "question-muse+question-opencode-review": "9eb7d0449ca6d7b9",
-  "question-muse+question-opencode": "823b5540d50b0f40",
-  "question-muse+question-review": "9a3a9b7a365a0a74",
-  "question-muse+question-single": "a5232fb0880f04e9",
-  "question-muse+question-tabs": "f341794b90162f8f",
-  "question-opencode-review+permission-agy": "c5ea38a7db0d09c2",
-  "question-opencode-review+permission-claude-edit": "c802ab8c24564c7b",
-  "question-opencode-review+permission-claude-plan": "fd41018cb4b4a2c9",
-  "question-opencode-review+permission-claude": "919cafb28f65a2f5",
-  "question-opencode-review+permission-codex": "fd716988d6945f88",
-  "question-opencode-review+permission-commandcode": "ca60108501062e71",
-  "question-opencode-review+permission-copilot": "592fbdb541dbedb1",
-  "question-opencode-review+permission-cursor": "e68f96c9bb2fb6ea",
-  "question-opencode-review+permission-devin-3000-11": "7f8017d2835219ec",
-  "question-opencode-review+permission-devin": "9252a26946003832",
-  "question-opencode-review+permission-grok": "07acad25314bb9ed",
-  "question-opencode-review+permission-hermes": "4dbaa2cd6bd14559",
-  "question-opencode-review+permission-muse": "548293a7a9499c0a",
-  "question-opencode-review+permission-opencode": "d445716dd0720812",
-  "question-opencode-review+question-agy": "e8e2b13f5fcba1dc",
-  "question-opencode-review+question-codex": "0ce91061726c2664",
-  "question-opencode-review+question-commandcode-review": "14ecfde0953d91d6",
-  "question-opencode-review+question-commandcode": "efa5f9da1777a614",
-  "question-opencode-review+question-copilot": "fe75d91294b201c5",
-  "question-opencode-review+question-devin-3000-11": "bb892d8b5c70c9dc",
-  "question-opencode-review+question-devin-multi-3000-11": "a7ac7431bbb2e29f",
-  "question-opencode-review+question-devin-multi": "b9434d66f6d4e6b0",
-  "question-opencode-review+question-devin": "2a29ddc89f0f0006",
-  "question-opencode-review+question-grok": "d849f62332c94510",
-  "question-opencode-review+question-hermes-lock": "44d8dd73d353e665",
-  "question-opencode-review+question-hermes": "ddbd462a8cefa63c",
-  "question-opencode-review+question-kilo": "8e6528937039fc30",
-  "question-opencode-review+question-multi": "d1a85e65cf721f17",
-  "question-opencode-review+question-muse": "1fbf99ad1eb86aa4",
-  "question-opencode-review+question-opencode": "8c514066aa397b7c",
-  "question-opencode-review+question-review": "14ecfde0953d91d6",
-  "question-opencode-review+question-single": "62c23ecd8e93c66e",
-  "question-opencode-review+question-tabs": "79dfab985c990fc0",
-  "question-opencode+permission-agy": "c5ea38a7db0d09c2",
-  "question-opencode+permission-claude-edit": "c802ab8c24564c7b",
-  "question-opencode+permission-claude-plan": "fd41018cb4b4a2c9",
-  "question-opencode+permission-claude": "919cafb28f65a2f5",
-  "question-opencode+permission-codex": "fd716988d6945f88",
-  "question-opencode+permission-commandcode": "ca60108501062e71",
-  "question-opencode+permission-copilot": "592fbdb541dbedb1",
-  "question-opencode+permission-cursor": "801f5acd70be4e56",
-  "question-opencode+permission-devin-3000-11": "12fb6f6acff19714",
-  "question-opencode+permission-devin": "f07bbab19b8c0645",
-  "question-opencode+permission-grok": "e966f9503c3cecd2",
-  "question-opencode+permission-hermes": "4dbaa2cd6bd14559",
-  "question-opencode+permission-muse": "548293a7a9499c0a",
-  "question-opencode+permission-opencode": "d445716dd0720812",
-  "question-opencode+question-agy": "eca159df0cfb9843",
-  "question-opencode+question-codex": "0ce91061726c2664",
-  "question-opencode+question-commandcode-review": "14ecfde0953d91d6",
-  "question-opencode+question-commandcode": "efa5f9da1777a614",
-  "question-opencode+question-copilot": "fe75d91294b201c5",
-  "question-opencode+question-devin-3000-11": "343ffaea4a7f494a",
-  "question-opencode+question-devin-multi-3000-11": "f3616cec2a3dcd9b",
-  "question-opencode+question-devin-multi": "291bd717033fc1e4",
-  "question-opencode+question-devin": "7751ea391dadb8b6",
-  "question-opencode+question-grok": "b5373df36233c66b",
-  "question-opencode+question-hermes-lock": "44d8dd73d353e665",
-  "question-opencode+question-hermes": "ddbd462a8cefa63c",
-  "question-opencode+question-kilo": "8e6528937039fc30",
-  "question-opencode+question-multi": "d1a85e65cf721f17",
-  "question-opencode+question-muse": "1fbf99ad1eb86aa4",
-  "question-opencode+question-opencode-review": "2612ab77db487fde",
-  "question-opencode+question-review": "14ecfde0953d91d6",
-  "question-opencode+question-single": "62c23ecd8e93c66e",
-  "question-opencode+question-tabs": "79dfab985c990fc0",
-  "question-review+permission-agy": "3b961046f7b72348",
-  "question-review+permission-claude-edit": "41d6c628ca426c52",
-  "question-review+permission-claude-plan": "dd33dff2f7424ab5",
-  "question-review+permission-claude": "a648df4b24db4be6",
-  "question-review+permission-codex": "1e58c342907c1cf0",
-  "question-review+permission-commandcode": "a10dbb957db0ac21",
-  "question-review+permission-copilot": "de3677bfa0c3d04e",
-  "question-review+permission-cursor": "9a147085490fc1ed",
-  "question-review+permission-devin-3000-11": "3c1dd2ff441694e8",
-  "question-review+permission-devin": "242d656faa042d88",
-  "question-review+permission-grok": "5ab56bb62511fa30",
-  "question-review+permission-hermes": "80bf5fbb2c6ff047",
-  "question-review+permission-muse": "3e24754bfed5b12e",
-  "question-review+permission-opencode": "eca0e43db58d5056",
-  "question-review+question-agy": "497bfad7f37b83d6",
-  "question-review+question-codex": "264daa6cf33a0fb1",
-  "question-review+question-commandcode-review": "479d91be5b68ed7e",
-  "question-review+question-commandcode": "4d94ff32b0800788",
-  "question-review+question-copilot": "8feaaed6bc4f8ec2",
-  "question-review+question-devin-3000-11": "641b286230784f9d",
-  "question-review+question-devin-multi-3000-11": "fc0a6d609bc40d22",
-  "question-review+question-devin-multi": "7a938311e4c7b1b4",
-  "question-review+question-devin": "4c24260c010d4871",
-  "question-review+question-grok": "43c5919053d8f3bb",
-  "question-review+question-hermes-lock": "6fed8a793620915a",
-  "question-review+question-hermes": "448b68cb173a812f",
-  "question-review+question-kilo": "5e6bc7517882f8d8",
-  "question-review+question-multi": "7feb834f7d49a258",
-  "question-review+question-muse": "623a834bd5fde561",
-  "question-review+question-opencode-review": "149b87d4bff67fb0",
-  "question-review+question-opencode": "375116bc9de05474",
-  "question-review+question-single": "a5232fb0880f04e9",
-  "question-review+question-tabs": "f341794b90162f8f",
-  "question-single+permission-agy": "8fde2130ad5331c0",
-  "question-single+permission-claude-edit": "a9ef2174c2d3462a",
-  "question-single+permission-claude-plan": "e987107a9def9238",
-  "question-single+permission-claude": "85fa566c61ed5f2d",
-  "question-single+permission-codex": "4a03a64ec358924c",
-  "question-single+permission-commandcode": "853eb0d5525055ff",
-  "question-single+permission-copilot": "0f126a6a9d2d4e3b",
-  "question-single+permission-cursor": "3d5a74740145c74e",
-  "question-single+permission-devin-3000-11": "33f35d46929eed17",
-  "question-single+permission-devin": "f621833451c0b9d6",
-  "question-single+permission-grok": "f5eae0e948fa527f",
-  "question-single+permission-hermes": "83932a320df8b0c1",
-  "question-single+permission-muse": "3f5e27027b36610b",
-  "question-single+permission-opencode": "f64ce7a9efc3a4c8",
-  "question-single+question-agy": "ae0dc5ac4e18a93d",
-  "question-single+question-codex": "503540d8e0d1b7fc",
-  "question-single+question-commandcode-review": "9a3a9b7a365a0a74",
-  "question-single+question-commandcode": "87bfad5d23b97efc",
-  "question-single+question-copilot": "9d76c2b559b43a9d",
-  "question-single+question-devin-3000-11": "faeb5d5b6fe37907",
-  "question-single+question-devin-multi-3000-11": "2bc0f8b95f9d1297",
-  "question-single+question-devin-multi": "85215fab9467b4bd",
-  "question-single+question-devin": "6d6b812fc5dc57c7",
-  "question-single+question-grok": "ec191bc02f78c6b3",
-  "question-single+question-hermes-lock": "76944fb6a3d4a390",
-  "question-single+question-hermes": "6d4ad56482394768",
-  "question-single+question-kilo": "e585e3d615c05259",
-  "question-single+question-multi": "7feb834f7d49a258",
-  "question-single+question-muse": "623a834bd5fde561",
-  "question-single+question-opencode-review": "41011fe5f8e4cf68",
-  "question-single+question-opencode": "1950eb71631ff11b",
-  "question-single+question-review": "9a3a9b7a365a0a74",
-  "question-single+question-tabs": "f341794b90162f8f",
-  "question-tabs+permission-agy": "5e4dd923a8b52b0e",
-  "question-tabs+permission-claude-edit": "cebb584fa38af978",
-  "question-tabs+permission-claude-plan": "646a712d050618b9",
-  "question-tabs+permission-claude": "e8746b1b9e783b5f",
-  "question-tabs+permission-codex": "496a7a01d87c21d5",
-  "question-tabs+permission-commandcode": "22d2da9503b3b09c",
-  "question-tabs+permission-copilot": "c6cbdbf855338dec",
-  "question-tabs+permission-cursor": "8c6163915fe8187a",
-  "question-tabs+permission-devin-3000-11": "68e3faa8a0554221",
-  "question-tabs+permission-devin": "963443b5ad1eacf9",
-  "question-tabs+permission-grok": "07ff92da217452be",
-  "question-tabs+permission-hermes": "55869baf0748be5a",
-  "question-tabs+permission-muse": "459e8f4346181098",
-  "question-tabs+permission-opencode": "94b4fc58701645ee",
-  "question-tabs+question-agy": "4f7b7f60a7056b63",
-  "question-tabs+question-codex": "a45c57aec17c9ce8",
-  "question-tabs+question-commandcode-review": "9a3a9b7a365a0a74",
-  "question-tabs+question-commandcode": "87bfad5d23b97efc",
-  "question-tabs+question-copilot": "a91cc986aad07692",
-  "question-tabs+question-devin-3000-11": "f53a4f4fb3ddaeed",
-  "question-tabs+question-devin-multi-3000-11": "179c0010b5351ab4",
-  "question-tabs+question-devin-multi": "5a7eb66ee0095333",
-  "question-tabs+question-devin": "aea517d3048907a4",
-  "question-tabs+question-grok": "a89c6ef63a3d4247",
-  "question-tabs+question-hermes-lock": "0ad7af1b97959862",
-  "question-tabs+question-hermes": "79491406c4a93328",
-  "question-tabs+question-kilo": "e585e3d615c05259",
-  "question-tabs+question-multi": "7feb834f7d49a258",
-  "question-tabs+question-muse": "421bd317ffd92640",
-  "question-tabs+question-opencode-review": "6098d7cd5c3389f0",
-  "question-tabs+question-opencode": "750d502edc0cd8e8",
-  "question-tabs+question-review": "9a3a9b7a365a0a74",
-  "question-tabs+question-single": "a5232fb0880f04e9"
+  "permission-agy+permission-claude-edit": "1f21348361324b37",
+  "permission-agy+permission-claude-plan": "5974bcfea6dbda4c",
+  "permission-agy+permission-claude": "6846d1b2bf9b2532",
+  "permission-agy+permission-codex": "a6bbd2c146d34b8b",
+  "permission-agy+permission-commandcode": "01185194e4570b5c",
+  "permission-agy+permission-copilot": "2991ce0f2b1e6eb2",
+  "permission-agy+permission-cursor": "4a9972257beabc5b",
+  "permission-agy+permission-devin-3000-11": "8c2d7b4c0d702e9c",
+  "permission-agy+permission-devin": "fde4178918bdb775",
+  "permission-agy+permission-grok": "6c37940c860f32f4",
+  "permission-agy+permission-hermes": "938a938d6b76bdf7",
+  "permission-agy+permission-muse": "9fbabdc90b9e6b7a",
+  "permission-agy+permission-opencode": "4f15ac3d8d9bb405",
+  "permission-agy+question-agy": "32ee86913f1af228",
+  "permission-agy+question-codex": "f0350362cd51b7b3",
+  "permission-agy+question-commandcode-review": "a27d711c20b89770",
+  "permission-agy+question-commandcode": "9f602dcb6a6075fc",
+  "permission-agy+question-copilot": "14ac04bd91a59cbe",
+  "permission-agy+question-devin-3000-11": "45f4fb979e966ca4",
+  "permission-agy+question-devin-multi-3000-11": "f20916f61cdf0363",
+  "permission-agy+question-devin-multi": "1b523f0764fb32ca",
+  "permission-agy+question-devin": "bcf50e749126210f",
+  "permission-agy+question-grok": "2c5ed55c7c73e00f",
+  "permission-agy+question-hermes-lock": "90f4951f708c00c7",
+  "permission-agy+question-hermes": "186bd7cdd6d53dca",
+  "permission-agy+question-kilo": "62ed3c8180d94033",
+  "permission-agy+question-multi": "acaea1c54d11d6fa",
+  "permission-agy+question-muse": "588e67b7577fc371",
+  "permission-agy+question-opencode-review": "41f063b26f28eb62",
+  "permission-agy+question-opencode": "f2ad243585c84f74",
+  "permission-agy+question-review": "a27d711c20b89770",
+  "permission-agy+question-single": "cce1b373c98ce8bd",
+  "permission-agy+question-tabs": "b968e0ab1ecb77b6",
+  "permission-claude-edit+permission-agy": "50ed8931e2cb5d64",
+  "permission-claude-edit+permission-claude-plan": "66fec1ef58e7a7a4",
+  "permission-claude-edit+permission-claude": "6846d1b2bf9b2532",
+  "permission-claude-edit+permission-codex": "a6bbd2c146d34b8b",
+  "permission-claude-edit+permission-commandcode": "c1e59accd1ec176a",
+  "permission-claude-edit+permission-copilot": "83b3eb8e2dae095f",
+  "permission-claude-edit+permission-cursor": "b2f47070df5c4c46",
+  "permission-claude-edit+permission-devin-3000-11": "93b5787d0bd688fa",
+  "permission-claude-edit+permission-devin": "fa49038e3554cfa1",
+  "permission-claude-edit+permission-grok": "109ae6cf030599cb",
+  "permission-claude-edit+permission-hermes": "3289d64169eef765",
+  "permission-claude-edit+permission-muse": "5bdf5440eb585199",
+  "permission-claude-edit+permission-opencode": "c48ca8a2d946f3a4",
+  "permission-claude-edit+question-agy": "f3bdc60dad7d570e",
+  "permission-claude-edit+question-codex": "c1f4b6916eef6bb6",
+  "permission-claude-edit+question-commandcode-review": "a27d711c20b89770",
+  "permission-claude-edit+question-commandcode": "9f602dcb6a6075fc",
+  "permission-claude-edit+question-copilot": "3687aa240f4a9155",
+  "permission-claude-edit+question-devin-3000-11": "c678f0cd5e4fcc3d",
+  "permission-claude-edit+question-devin-multi-3000-11": "fc70d799463909ee",
+  "permission-claude-edit+question-devin-multi": "c0159e9a42042405",
+  "permission-claude-edit+question-devin": "27e955205c540774",
+  "permission-claude-edit+question-grok": "5d2ad6add96383d1",
+  "permission-claude-edit+question-hermes-lock": "b9e6e4247a946b49",
+  "permission-claude-edit+question-hermes": "186bd7cdd6d53dca",
+  "permission-claude-edit+question-kilo": "2e984fc1e35974bc",
+  "permission-claude-edit+question-multi": "acaea1c54d11d6fa",
+  "permission-claude-edit+question-muse": "491729f1a6a741e1",
+  "permission-claude-edit+question-opencode-review": "f7b74697f6adc080",
+  "permission-claude-edit+question-opencode": "1bb455c6022293e6",
+  "permission-claude-edit+question-review": "a27d711c20b89770",
+  "permission-claude-edit+question-single": "cce1b373c98ce8bd",
+  "permission-claude-edit+question-tabs": "b968e0ab1ecb77b6",
+  "permission-claude-plan+permission-agy": "bb100ebecba04390",
+  "permission-claude-plan+permission-claude-edit": "93ca5ecc00ac56a4",
+  "permission-claude-plan+permission-claude": "6846d1b2bf9b2532",
+  "permission-claude-plan+permission-codex": "a6bbd2c146d34b8b",
+  "permission-claude-plan+permission-commandcode": "c1e59accd1ec176a",
+  "permission-claude-plan+permission-copilot": "f3ce0abce1bcd6cd",
+  "permission-claude-plan+permission-cursor": "d3ce2bec6d526834",
+  "permission-claude-plan+permission-devin-3000-11": "b73440fe0f69b7da",
+  "permission-claude-plan+permission-devin": "12ed5a6beabc2773",
+  "permission-claude-plan+permission-grok": "810be81d56928d24",
+  "permission-claude-plan+permission-hermes": "3289d64169eef765",
+  "permission-claude-plan+permission-muse": "9fbabdc90b9e6b7a",
+  "permission-claude-plan+permission-opencode": "4f15ac3d8d9bb405",
+  "permission-claude-plan+question-agy": "25645a7d9beeb6a8",
+  "permission-claude-plan+question-codex": "c1f4b6916eef6bb6",
+  "permission-claude-plan+question-commandcode-review": "a27d711c20b89770",
+  "permission-claude-plan+question-commandcode": "9f602dcb6a6075fc",
+  "permission-claude-plan+question-copilot": "9e7ff3c7e8c8f0e8",
+  "permission-claude-plan+question-devin-3000-11": "ccabfe1962cd9f65",
+  "permission-claude-plan+question-devin-multi-3000-11": "2f0abcbef46de271",
+  "permission-claude-plan+question-devin-multi": "fada6c3eeaca557d",
+  "permission-claude-plan+question-devin": "c6713992e88426fd",
+  "permission-claude-plan+question-grok": "dd1c411c5e05de02",
+  "permission-claude-plan+question-hermes-lock": "b9e6e4247a946b49",
+  "permission-claude-plan+question-hermes": "186bd7cdd6d53dca",
+  "permission-claude-plan+question-kilo": "62ed3c8180d94033",
+  "permission-claude-plan+question-multi": "acaea1c54d11d6fa",
+  "permission-claude-plan+question-muse": "ef3fb85f38d15a46",
+  "permission-claude-plan+question-opencode-review": "ff68ead6c678c6c5",
+  "permission-claude-plan+question-opencode": "193f52fbfb7fa324",
+  "permission-claude-plan+question-review": "a27d711c20b89770",
+  "permission-claude-plan+question-single": "cce1b373c98ce8bd",
+  "permission-claude-plan+question-tabs": "b968e0ab1ecb77b6",
+  "permission-claude+permission-agy": "50ed8931e2cb5d64",
+  "permission-claude+permission-claude-edit": "1f21348361324b37",
+  "permission-claude+permission-claude-plan": "1c3b32f1349fa7ab",
+  "permission-claude+permission-codex": "a6bbd2c146d34b8b",
+  "permission-claude+permission-commandcode": "01185194e4570b5c",
+  "permission-claude+permission-copilot": "2016865b82639dc0",
+  "permission-claude+permission-cursor": "1a8181997fa3eefb",
+  "permission-claude+permission-devin-3000-11": "e3797e827f1bc6e5",
+  "permission-claude+permission-devin": "93c8cec96f37e894",
+  "permission-claude+permission-grok": "f6615d28152cb1a3",
+  "permission-claude+permission-hermes": "938a938d6b76bdf7",
+  "permission-claude+permission-muse": "5bdf5440eb585199",
+  "permission-claude+permission-opencode": "c48ca8a2d946f3a4",
+  "permission-claude+question-agy": "29943acf69610b91",
+  "permission-claude+question-codex": "f0350362cd51b7b3",
+  "permission-claude+question-commandcode-review": "a27d711c20b89770",
+  "permission-claude+question-commandcode": "9f602dcb6a6075fc",
+  "permission-claude+question-copilot": "a2f24f2d612964e5",
+  "permission-claude+question-devin-3000-11": "33df6677d278cd6a",
+  "permission-claude+question-devin-multi-3000-11": "7067d1728875715a",
+  "permission-claude+question-devin-multi": "ec1e055ee16fa616",
+  "permission-claude+question-devin": "b52994841d153539",
+  "permission-claude+question-grok": "b4adba57395ee92b",
+  "permission-claude+question-hermes-lock": "90f4951f708c00c7",
+  "permission-claude+question-hermes": "186bd7cdd6d53dca",
+  "permission-claude+question-kilo": "2e984fc1e35974bc",
+  "permission-claude+question-multi": "acaea1c54d11d6fa",
+  "permission-claude+question-muse": "a693874e70c14017",
+  "permission-claude+question-opencode-review": "4ed682f2994494d8",
+  "permission-claude+question-opencode": "3dd436a141c8bc43",
+  "permission-claude+question-review": "a27d711c20b89770",
+  "permission-claude+question-single": "cce1b373c98ce8bd",
+  "permission-claude+question-tabs": "b968e0ab1ecb77b6",
+  "permission-codex+permission-agy": "445ef426c71bab7a",
+  "permission-codex+permission-claude-edit": "77948693a6eb07d9",
+  "permission-codex+permission-claude-plan": "affbf138ecdb686d",
+  "permission-codex+permission-claude": "b5ee528a61e645b1",
+  "permission-codex+permission-commandcode": "664c64f0409473e4",
+  "permission-codex+permission-copilot": "2991ce0f2b1e6eb2",
+  "permission-codex+permission-cursor": "858438e6ca55b1f6",
+  "permission-codex+permission-devin-3000-11": "5cd527d8274b90b4",
+  "permission-codex+permission-devin": "b30cb55b4a944b43",
+  "permission-codex+permission-grok": "14ce7a4d738cae98",
+  "permission-codex+permission-hermes": "938a938d6b76bdf7",
+  "permission-codex+permission-muse": "bc0d15a01f0ff627",
+  "permission-codex+permission-opencode": "3adce05377f50a5a",
+  "permission-codex+question-agy": "d36570c7b2f4e466",
+  "permission-codex+question-codex": "77a172cb31893fed",
+  "permission-codex+question-commandcode-review": "4ceb3c3be0de40cc",
+  "permission-codex+question-commandcode": "b6e1748aa9857412",
+  "permission-codex+question-copilot": "14ac04bd91a59cbe",
+  "permission-codex+question-devin-3000-11": "88faf8af158d8990",
+  "permission-codex+question-devin-multi-3000-11": "cacb401efeff5c38",
+  "permission-codex+question-devin-multi": "1c04bc5f1683c78e",
+  "permission-codex+question-devin": "5d20b8e58b381e35",
+  "permission-codex+question-grok": "788a16779b4071a9",
+  "permission-codex+question-hermes-lock": "f9410a3bcd73dd4c",
+  "permission-codex+question-hermes": "b808708a0c0bb71c",
+  "permission-codex+question-kilo": "3a1923176054315f",
+  "permission-codex+question-multi": "d2142a17c1b995ba",
+  "permission-codex+question-muse": "d08e93278697c46d",
+  "permission-codex+question-opencode-review": "a6870ee69ce00159",
+  "permission-codex+question-opencode": "5945dab1bbf2398f",
+  "permission-codex+question-review": "4ceb3c3be0de40cc",
+  "permission-codex+question-single": "cb5329c3e5635675",
+  "permission-codex+question-tabs": "72420f4d96fb18fc",
+  "permission-commandcode+permission-agy": "50ed8931e2cb5d64",
+  "permission-commandcode+permission-claude-edit": "93ca5ecc00ac56a4",
+  "permission-commandcode+permission-claude-plan": "66fec1ef58e7a7a4",
+  "permission-commandcode+permission-claude": "6846d1b2bf9b2532",
+  "permission-commandcode+permission-codex": "a6bbd2c146d34b8b",
+  "permission-commandcode+permission-copilot": "83b3eb8e2dae095f",
+  "permission-commandcode+permission-cursor": "05ecd0e9d0f514fc",
+  "permission-commandcode+permission-devin-3000-11": "0efddecbb300a357",
+  "permission-commandcode+permission-devin": "fef2a7f67c85c434",
+  "permission-commandcode+permission-grok": "916a72f11d2a0480",
+  "permission-commandcode+permission-hermes": "3289d64169eef765",
+  "permission-commandcode+permission-muse": "5bdf5440eb585199",
+  "permission-commandcode+permission-opencode": "c48ca8a2d946f3a4",
+  "permission-commandcode+question-agy": "f3bdc60dad7d570e",
+  "permission-commandcode+question-codex": "c1f4b6916eef6bb6",
+  "permission-commandcode+question-commandcode-review": "a27d711c20b89770",
+  "permission-commandcode+question-commandcode": "9f602dcb6a6075fc",
+  "permission-commandcode+question-copilot": "3687aa240f4a9155",
+  "permission-commandcode+question-devin-3000-11": "9368cf11a537e92b",
+  "permission-commandcode+question-devin-multi-3000-11": "888296ea8d061331",
+  "permission-commandcode+question-devin-multi": "c0159e9a42042405",
+  "permission-commandcode+question-devin": "27e955205c540774",
+  "permission-commandcode+question-grok": "5e7b456472b4cb16",
+  "permission-commandcode+question-hermes-lock": "b9e6e4247a946b49",
+  "permission-commandcode+question-hermes": "186bd7cdd6d53dca",
+  "permission-commandcode+question-kilo": "2e984fc1e35974bc",
+  "permission-commandcode+question-multi": "acaea1c54d11d6fa",
+  "permission-commandcode+question-muse": "491729f1a6a741e1",
+  "permission-commandcode+question-opencode-review": "f7b74697f6adc080",
+  "permission-commandcode+question-opencode": "1bb455c6022293e6",
+  "permission-commandcode+question-review": "a27d711c20b89770",
+  "permission-commandcode+question-single": "cce1b373c98ce8bd",
+  "permission-commandcode+question-tabs": "b968e0ab1ecb77b6",
+  "permission-copilot+permission-agy": "3fcf9268b32053c7",
+  "permission-copilot+permission-claude-edit": "11d819554894082f",
+  "permission-copilot+permission-claude-plan": "bb58eaf478e479be",
+  "permission-copilot+permission-claude": "ff4d63f0487fa4ae",
+  "permission-copilot+permission-codex": "38d45e9ccf5a4454",
+  "permission-copilot+permission-commandcode": "96f86db52eb29d44",
+  "permission-copilot+permission-cursor": "4dd0e6e7617023df",
+  "permission-copilot+permission-devin-3000-11": "51f9777999d194fe",
+  "permission-copilot+permission-devin": "fb88fcd480520cf8",
+  "permission-copilot+permission-grok": "5391bfa40d5d11ad",
+  "permission-copilot+permission-hermes": "3964825c86b9a02d",
+  "permission-copilot+permission-muse": "2a472b13398563df",
+  "permission-copilot+permission-opencode": "47965156e22bba48",
+  "permission-copilot+question-agy": "a6c51c8802db9bfa",
+  "permission-copilot+question-codex": "5c3efc07fdaad27f",
+  "permission-copilot+question-commandcode-review": "32628c48921f3613",
+  "permission-copilot+question-commandcode": "afbe364bfa25fb73",
+  "permission-copilot+question-copilot": "7ada59039843ba79",
+  "permission-copilot+question-devin-3000-11": "546c48d99bf0beba",
+  "permission-copilot+question-devin-multi-3000-11": "becc8d85280cfa34",
+  "permission-copilot+question-devin-multi": "2ca18fa3297f7678",
+  "permission-copilot+question-devin": "8def16015e74d970",
+  "permission-copilot+question-grok": "750a8501df8d9110",
+  "permission-copilot+question-hermes-lock": "ce387f056398cc7d",
+  "permission-copilot+question-hermes": "73d7337f61efc6e7",
+  "permission-copilot+question-kilo": "885f3c8c9e749885",
+  "permission-copilot+question-multi": "6aabcbbc1a7498ff",
+  "permission-copilot+question-muse": "32bb6548599b09a4",
+  "permission-copilot+question-opencode-review": "e40e82200057fe55",
+  "permission-copilot+question-opencode": "9ab450d591ef18c4",
+  "permission-copilot+question-review": "32628c48921f3613",
+  "permission-copilot+question-single": "f6fba64d6b7e5977",
+  "permission-copilot+question-tabs": "e75802c400f2d9d1",
+  "permission-cursor+permission-agy": "91ce8ff3b3ba1c7c",
+  "permission-cursor+permission-claude-edit": "bec27a4cf1c06e50",
+  "permission-cursor+permission-claude-plan": "d3ce2bec6d526834",
+  "permission-cursor+permission-claude": "add72eb12f7f74b7",
+  "permission-cursor+permission-codex": "181ebadf9b5e8836",
+  "permission-cursor+permission-commandcode": "05ecd0e9d0f514fc",
+  "permission-cursor+permission-copilot": "4dd0e6e7617023df",
+  "permission-cursor+permission-devin-3000-11": "d32ddbc4564819d1",
+  "permission-cursor+permission-devin": "8735b647881d94bd",
+  "permission-cursor+permission-grok": "ed5b211f7f6b935e",
+  "permission-cursor+permission-hermes": "2fcbc470799b66ee",
+  "permission-cursor+permission-muse": "2999b7c20e01e7d8",
+  "permission-cursor+permission-opencode": "5a4c646a5598015a",
+  "permission-cursor+question-agy": "5c8e8bb50bf182e7",
+  "permission-cursor+question-codex": "6193d53e525c80d9",
+  "permission-cursor+question-commandcode-review": "153c86dfff19c15e",
+  "permission-cursor+question-commandcode": "30420a6d88ff5317",
+  "permission-cursor+question-copilot": "59920eefc307f582",
+  "permission-cursor+question-devin-3000-11": "a47f2e3be2a0c104",
+  "permission-cursor+question-devin-multi-3000-11": "d65b5263abf70c65",
+  "permission-cursor+question-devin-multi": "7fd2acbe4739b121",
+  "permission-cursor+question-devin": "7e9f9859dc9dda54",
+  "permission-cursor+question-grok": "ca3e47b5ba713a10",
+  "permission-cursor+question-hermes-lock": "37524893747e80ef",
+  "permission-cursor+question-hermes": "544fac5a31e091fd",
+  "permission-cursor+question-kilo": "3c2b3b94d50bda68",
+  "permission-cursor+question-multi": "6aabcbbc1a7498ff",
+  "permission-cursor+question-muse": "fd02d6a929fdee4e",
+  "permission-cursor+question-opencode-review": "1f2f14bdf739917d",
+  "permission-cursor+question-opencode": "debbb06045b7ffe0",
+  "permission-cursor+question-review": "153c86dfff19c15e",
+  "permission-cursor+question-single": "f6fba64d6b7e5977",
+  "permission-cursor+question-tabs": "e75802c400f2d9d1",
+  "permission-devin-3000-11+permission-agy": "b1bfc10b59c48bc1",
+  "permission-devin-3000-11+permission-claude-edit": "93b5787d0bd688fa",
+  "permission-devin-3000-11+permission-claude-plan": "b73440fe0f69b7da",
+  "permission-devin-3000-11+permission-claude": "3a1b15032d3d3db7",
+  "permission-devin-3000-11+permission-codex": "7445d6a7da693cab",
+  "permission-devin-3000-11+permission-commandcode": "0efddecbb300a357",
+  "permission-devin-3000-11+permission-copilot": "51f9777999d194fe",
+  "permission-devin-3000-11+permission-cursor": "397c1ae4f1716426",
+  "permission-devin-3000-11+permission-devin": "238ad1110abfae78",
+  "permission-devin-3000-11+permission-grok": "31950c98b53afed1",
+  "permission-devin-3000-11+permission-hermes": "5ac5c3ce91267052",
+  "permission-devin-3000-11+permission-muse": "d3bd7e8b01beaaa8",
+  "permission-devin-3000-11+permission-opencode": "ada96f8519c6be6b",
+  "permission-devin-3000-11+question-agy": "4d3b89d6dd0cfc6f",
+  "permission-devin-3000-11+question-codex": "75dab8ddd2856a9a",
+  "permission-devin-3000-11+question-commandcode-review": "c849bc183879e3cd",
+  "permission-devin-3000-11+question-commandcode": "0334b21305d01ea1",
+  "permission-devin-3000-11+question-copilot": "810b74dd4de624be",
+  "permission-devin-3000-11+question-devin-3000-11": "de6558f3673d5ae9",
+  "permission-devin-3000-11+question-devin-multi-3000-11": "de653586416f0248",
+  "permission-devin-3000-11+question-devin-multi": "b17aecea62ec40bd",
+  "permission-devin-3000-11+question-devin": "659f29d6b54a703a",
+  "permission-devin-3000-11+question-grok": "0f5b8b70de49655f",
+  "permission-devin-3000-11+question-hermes-lock": "338b8c97765f3129",
+  "permission-devin-3000-11+question-hermes": "b50b41ef2f4afe8d",
+  "permission-devin-3000-11+question-kilo": "511c9db37ec10f93",
+  "permission-devin-3000-11+question-multi": "5de2e4f6ea82c0e4",
+  "permission-devin-3000-11+question-muse": "0a576602f32956e2",
+  "permission-devin-3000-11+question-opencode-review": "7ea1838ad939cd27",
+  "permission-devin-3000-11+question-opencode": "db19d5de9dae3809",
+  "permission-devin-3000-11+question-review": "c849bc183879e3cd",
+  "permission-devin-3000-11+question-single": "371e8848f9ca3dbd",
+  "permission-devin-3000-11+question-tabs": "55180ed7aa5d2851",
+  "permission-devin+permission-agy": "84f073a77283a2f4",
+  "permission-devin+permission-claude-edit": "9f9b2de325651e90",
+  "permission-devin+permission-claude-plan": "3a92cf03def9f258",
+  "permission-devin+permission-claude": "6ae08345dc3ad0e0",
+  "permission-devin+permission-codex": "9e5fabc0f6ac4a98",
+  "permission-devin+permission-commandcode": "a1fb415e4f73fee1",
+  "permission-devin+permission-copilot": "fb88fcd480520cf8",
+  "permission-devin+permission-cursor": "be763f65bcce1ddf",
+  "permission-devin+permission-devin-3000-11": "d396da9d118877e7",
+  "permission-devin+permission-grok": "1a6874c6286bab1d",
+  "permission-devin+permission-hermes": "a73d73371e5d9af6",
+  "permission-devin+permission-muse": "2ceb4147eadcf4b9",
+  "permission-devin+permission-opencode": "640f52ec8fdafd54",
+  "permission-devin+question-agy": "ea71cfada548de06",
+  "permission-devin+question-codex": "13eebf019453ed85",
+  "permission-devin+question-commandcode-review": "057ae12d8056e845",
+  "permission-devin+question-commandcode": "41a3809f679b099a",
+  "permission-devin+question-copilot": "1361be8c53b3805c",
+  "permission-devin+question-devin-3000-11": "de6558f3673d5ae9",
+  "permission-devin+question-devin-multi-3000-11": "de653586416f0248",
+  "permission-devin+question-devin-multi": "b17aecea62ec40bd",
+  "permission-devin+question-devin": "659f29d6b54a703a",
+  "permission-devin+question-grok": "e7811dcac7c41482",
+  "permission-devin+question-hermes-lock": "e28c5e6ca29bda98",
+  "permission-devin+question-hermes": "42d81f29a013c7e3",
+  "permission-devin+question-kilo": "7978d6bc8162b2dc",
+  "permission-devin+question-multi": "075000f00c02ef55",
+  "permission-devin+question-muse": "b41abb2fa371b301",
+  "permission-devin+question-opencode-review": "e76f329e5a54872a",
+  "permission-devin+question-opencode": "3c72d8c5ad140719",
+  "permission-devin+question-review": "057ae12d8056e845",
+  "permission-devin+question-single": "ff340438b94075af",
+  "permission-devin+question-tabs": "746f0d90b9238309",
+  "permission-grok+permission-agy": "2ec0228a274bb98a",
+  "permission-grok+permission-claude-edit": "109ae6cf030599cb",
+  "permission-grok+permission-claude-plan": "810be81d56928d24",
+  "permission-grok+permission-claude": "d8dfd89dc1de89f7",
+  "permission-grok+permission-codex": "207f6fdaf118b453",
+  "permission-grok+permission-commandcode": "916a72f11d2a0480",
+  "permission-grok+permission-copilot": "5391bfa40d5d11ad",
+  "permission-grok+permission-cursor": "ed5b211f7f6b935e",
+  "permission-grok+permission-devin-3000-11": "31950c98b53afed1",
+  "permission-grok+permission-devin": "1a6874c6286bab1d",
+  "permission-grok+permission-hermes": "01ab9118053ee0a8",
+  "permission-grok+permission-muse": "4ab49c76eb1f4035",
+  "permission-grok+permission-opencode": "c5406730fa29eafc",
+  "permission-grok+question-agy": "bba5105fd3c4f5ba",
+  "permission-grok+question-codex": "6bd3449350f642e9",
+  "permission-grok+question-commandcode-review": "d36b52102417f605",
+  "permission-grok+question-commandcode": "38f4dd5413297fb3",
+  "permission-grok+question-copilot": "30625185467abafc",
+  "permission-grok+question-devin-3000-11": "6a3d10bbc91c4e4b",
+  "permission-grok+question-devin-multi-3000-11": "cbefa4766654a19a",
+  "permission-grok+question-devin-multi": "0366ca82575a6e06",
+  "permission-grok+question-devin": "c22f2d4656031118",
+  "permission-grok+question-grok": "b9a8e1a41d92c2c0",
+  "permission-grok+question-hermes-lock": "cf11d922bdd114b7",
+  "permission-grok+question-hermes": "f1ab16b1243f444f",
+  "permission-grok+question-kilo": "79493f9d29867bf4",
+  "permission-grok+question-multi": "fde029f3bcb92839",
+  "permission-grok+question-muse": "bdbb2e53f71ca981",
+  "permission-grok+question-opencode-review": "5a067fa0be322494",
+  "permission-grok+question-opencode": "fac5242230879eac",
+  "permission-grok+question-review": "d36b52102417f605",
+  "permission-grok+question-single": "ee27075f2192b9bc",
+  "permission-grok+question-tabs": "86a1f6b876f91c5c",
+  "permission-hermes+permission-agy": "a72a6f70c963d7de",
+  "permission-hermes+permission-claude-edit": "4b6949f4b8733961",
+  "permission-hermes+permission-claude-plan": "c246d65286496436",
+  "permission-hermes+permission-claude": "b5ee528a61e645b1",
+  "permission-hermes+permission-codex": "a6bbd2c146d34b8b",
+  "permission-hermes+permission-commandcode": "d7867c565ed88efa",
+  "permission-hermes+permission-copilot": "f3ce0abce1bcd6cd",
+  "permission-hermes+permission-cursor": "dfef858983c11be2",
+  "permission-hermes+permission-devin-3000-11": "e0cc56781b2a5755",
+  "permission-hermes+permission-devin": "7fadabc02abd0df1",
+  "permission-hermes+permission-grok": "e4087005220ccaf7",
+  "permission-hermes+permission-muse": "49f747042c2f1049",
+  "permission-hermes+permission-opencode": "ecb173c10d9e0139",
+  "permission-hermes+question-agy": "b96e30379a6a6425",
+  "permission-hermes+question-codex": "83216491e3a0901c",
+  "permission-hermes+question-commandcode-review": "153c86dfff19c15e",
+  "permission-hermes+question-commandcode": "30420a6d88ff5317",
+  "permission-hermes+question-copilot": "9e7ff3c7e8c8f0e8",
+  "permission-hermes+question-devin-3000-11": "606e98687d56bd6f",
+  "permission-hermes+question-devin-multi-3000-11": "d5b0795360eb6dda",
+  "permission-hermes+question-devin-multi": "6f1c2f9663fd5302",
+  "permission-hermes+question-devin": "bc0758d9497cf66f",
+  "permission-hermes+question-grok": "172993bb1c4ed84c",
+  "permission-hermes+question-hermes-lock": "03be0f6ddf92206d",
+  "permission-hermes+question-hermes": "544fac5a31e091fd",
+  "permission-hermes+question-kilo": "86f8d2f9be739b2f",
+  "permission-hermes+question-multi": "6aabcbbc1a7498ff",
+  "permission-hermes+question-muse": "06c4295674f91b50",
+  "permission-hermes+question-opencode-review": "15761c052a9230dd",
+  "permission-hermes+question-opencode": "d35a81e3ffcf869e",
+  "permission-hermes+question-review": "153c86dfff19c15e",
+  "permission-hermes+question-single": "f6fba64d6b7e5977",
+  "permission-hermes+question-tabs": "e75802c400f2d9d1",
+  "permission-muse+permission-agy": "bb100ebecba04390",
+  "permission-muse+permission-claude-edit": "1f21348361324b37",
+  "permission-muse+permission-claude-plan": "5974bcfea6dbda4c",
+  "permission-muse+permission-claude": "6846d1b2bf9b2532",
+  "permission-muse+permission-codex": "a6bbd2c146d34b8b",
+  "permission-muse+permission-commandcode": "01185194e4570b5c",
+  "permission-muse+permission-copilot": "2016865b82639dc0",
+  "permission-muse+permission-cursor": "bc37e3e8e033c287",
+  "permission-muse+permission-devin-3000-11": "bb7ca3208005faf3",
+  "permission-muse+permission-devin": "fd09fbc23c2f7ff2",
+  "permission-muse+permission-grok": "513c819ee425fdc2",
+  "permission-muse+permission-hermes": "938a938d6b76bdf7",
+  "permission-muse+permission-opencode": "b832b83769777e5b",
+  "permission-muse+question-agy": "f47951b39c20a8c8",
+  "permission-muse+question-codex": "f0350362cd51b7b3",
+  "permission-muse+question-commandcode-review": "a27d711c20b89770",
+  "permission-muse+question-commandcode": "9f602dcb6a6075fc",
+  "permission-muse+question-copilot": "a2f24f2d612964e5",
+  "permission-muse+question-devin-3000-11": "e077b3a581806bd8",
+  "permission-muse+question-devin-multi-3000-11": "f13a0c1549033403",
+  "permission-muse+question-devin-multi": "9426bf914eec5831",
+  "permission-muse+question-devin": "a1a3dbd87bb3f246",
+  "permission-muse+question-grok": "f42d921bb3242929",
+  "permission-muse+question-hermes-lock": "90f4951f708c00c7",
+  "permission-muse+question-hermes": "186bd7cdd6d53dca",
+  "permission-muse+question-kilo": "2d04bf89e48aa70e",
+  "permission-muse+question-multi": "acaea1c54d11d6fa",
+  "permission-muse+question-muse": "588e67b7577fc371",
+  "permission-muse+question-opencode-review": "dd41dbecf93c6e47",
+  "permission-muse+question-opencode": "e9373779f2945a2f",
+  "permission-muse+question-review": "a27d711c20b89770",
+  "permission-muse+question-single": "cce1b373c98ce8bd",
+  "permission-muse+question-tabs": "b968e0ab1ecb77b6",
+  "permission-opencode+permission-agy": "0f237d7a86de84e2",
+  "permission-opencode+permission-claude-edit": "05fb968b7254b493",
+  "permission-opencode+permission-claude-plan": "337917b262f9072e",
+  "permission-opencode+permission-claude": "002626a57b10bfab",
+  "permission-opencode+permission-codex": "693695e95ec4504c",
+  "permission-opencode+permission-commandcode": "3a4faeb5e90ca665",
+  "permission-opencode+permission-copilot": "2a54692fdeb385fb",
+  "permission-opencode+permission-cursor": "a35ec3916cae2346",
+  "permission-opencode+permission-devin-3000-11": "ee3b341b5086c09b",
+  "permission-opencode+permission-devin": "80dce70ad6903110",
+  "permission-opencode+permission-grok": "dd046c5655626df1",
+  "permission-opencode+permission-hermes": "aa7c675c598d5f93",
+  "permission-opencode+permission-muse": "c15c85b463dd32a2",
+  "permission-opencode+question-agy": "15320db0bd6f7e01",
+  "permission-opencode+question-codex": "684ea7902cfe4a3e",
+  "permission-opencode+question-commandcode-review": "f7416e518b6e1cde",
+  "permission-opencode+question-commandcode": "45f55a0ea19fb383",
+  "permission-opencode+question-copilot": "d169a9dd31792d13",
+  "permission-opencode+question-devin-3000-11": "7931ba6e9903b855",
+  "permission-opencode+question-devin-multi-3000-11": "dbf41bb5091034d0",
+  "permission-opencode+question-devin-multi": "0a595e7bfe6a5d1a",
+  "permission-opencode+question-devin": "52632f3bd06a7cc7",
+  "permission-opencode+question-grok": "7320fdbc90044c1e",
+  "permission-opencode+question-hermes-lock": "5b19b77d1ee4490e",
+  "permission-opencode+question-hermes": "4d9ea9885b4673b4",
+  "permission-opencode+question-kilo": "2d04bf89e48aa70e",
+  "permission-opencode+question-multi": "5cb9a7b6dcc7d8c6",
+  "permission-opencode+question-muse": "d1452c9644cc9d46",
+  "permission-opencode+question-opencode-review": "a5a4559153c992c3",
+  "permission-opencode+question-opencode": "02cfc2ffdf61eb6e",
+  "permission-opencode+question-review": "f7416e518b6e1cde",
+  "permission-opencode+question-single": "08a05dd7a6679b2c",
+  "permission-opencode+question-tabs": "de4a94f31cd79320",
+  "question-agy+permission-agy": "bb100ebecba04390",
+  "question-agy+permission-claude-edit": "93ca5ecc00ac56a4",
+  "question-agy+permission-claude-plan": "cab9ae54359f23fb",
+  "question-agy+permission-claude": "6846d1b2bf9b2532",
+  "question-agy+permission-codex": "a6bbd2c146d34b8b",
+  "question-agy+permission-commandcode": "c1e59accd1ec176a",
+  "question-agy+permission-copilot": "a6c51c8802db9bfa",
+  "question-agy+permission-cursor": "f494ac2063668946",
+  "question-agy+permission-devin-3000-11": "4d3b89d6dd0cfc6f",
+  "question-agy+permission-devin": "ea71cfada548de06",
+  "question-agy+permission-grok": "bba5105fd3c4f5ba",
+  "question-agy+permission-hermes": "b3d7e834f5fd3f91",
+  "question-agy+permission-muse": "9fbabdc90b9e6b7a",
+  "question-agy+permission-opencode": "15320db0bd6f7e01",
+  "question-agy+question-codex": "c1f4b6916eef6bb6",
+  "question-agy+question-commandcode-review": "a27d711c20b89770",
+  "question-agy+question-commandcode": "9f602dcb6a6075fc",
+  "question-agy+question-copilot": "ef29e70d5076ad91",
+  "question-agy+question-devin-3000-11": "75bba3327fea1364",
+  "question-agy+question-devin-multi-3000-11": "37f7f9f251771f0e",
+  "question-agy+question-devin-multi": "2b608df2bc2f9c69",
+  "question-agy+question-devin": "73935071e3878d6c",
+  "question-agy+question-grok": "a1eb3f10657664d5",
+  "question-agy+question-hermes-lock": "213f3f76e25d0669",
+  "question-agy+question-hermes": "013d4f19092d3dd7",
+  "question-agy+question-kilo": "62ed3c8180d94033",
+  "question-agy+question-multi": "acaea1c54d11d6fa",
+  "question-agy+question-muse": "ef3fb85f38d15a46",
+  "question-agy+question-opencode-review": "0f0d89e34ce82318",
+  "question-agy+question-opencode": "55b372475a3f5824",
+  "question-agy+question-review": "a27d711c20b89770",
+  "question-agy+question-single": "cce1b373c98ce8bd",
+  "question-agy+question-tabs": "b968e0ab1ecb77b6",
+  "question-codex+permission-agy": "50ed8931e2cb5d64",
+  "question-codex+permission-claude-edit": "93ca5ecc00ac56a4",
+  "question-codex+permission-claude-plan": "66fec1ef58e7a7a4",
+  "question-codex+permission-claude": "6846d1b2bf9b2532",
+  "question-codex+permission-codex": "a6bbd2c146d34b8b",
+  "question-codex+permission-commandcode": "c1e59accd1ec176a",
+  "question-codex+permission-copilot": "f3ce0abce1bcd6cd",
+  "question-codex+permission-cursor": "86e4d9a1921dd5b1",
+  "question-codex+permission-devin-3000-11": "75dab8ddd2856a9a",
+  "question-codex+permission-devin": "13eebf019453ed85",
+  "question-codex+permission-grok": "6bd3449350f642e9",
+  "question-codex+permission-hermes": "3289d64169eef765",
+  "question-codex+permission-muse": "5bdf5440eb585199",
+  "question-codex+permission-opencode": "95cf958ef62ef3ca",
+  "question-codex+question-agy": "89ef7e1ce6cac40a",
+  "question-codex+question-commandcode-review": "a27d711c20b89770",
+  "question-codex+question-commandcode": "9f602dcb6a6075fc",
+  "question-codex+question-copilot": "9e7ff3c7e8c8f0e8",
+  "question-codex+question-devin-3000-11": "c0f7a81042a387bf",
+  "question-codex+question-devin-multi-3000-11": "af9f9bb54c82b642",
+  "question-codex+question-devin-multi": "1311e248016d3f13",
+  "question-codex+question-devin": "9519d671b2a80363",
+  "question-codex+question-grok": "503f97e417b3cfa6",
+  "question-codex+question-hermes-lock": "b9e6e4247a946b49",
+  "question-codex+question-hermes": "186bd7cdd6d53dca",
+  "question-codex+question-kilo": "80d46a40bd57e962",
+  "question-codex+question-multi": "acaea1c54d11d6fa",
+  "question-codex+question-muse": "491729f1a6a741e1",
+  "question-codex+question-opencode-review": "87e796af82d423ed",
+  "question-codex+question-opencode": "2029f1bae8c4a8fb",
+  "question-codex+question-review": "a27d711c20b89770",
+  "question-codex+question-single": "cce1b373c98ce8bd",
+  "question-codex+question-tabs": "b968e0ab1ecb77b6",
+  "question-commandcode-review+permission-agy": "51d668c12dc287db",
+  "question-commandcode-review+permission-claude-edit": "19f01ee4870b36d4",
+  "question-commandcode-review+permission-claude-plan": "2062cbc7b3cdd026",
+  "question-commandcode-review+permission-claude": "35c6cc90a42b8399",
+  "question-commandcode-review+permission-codex": "181ebadf9b5e8836",
+  "question-commandcode-review+permission-commandcode": "e853ac3d5e785580",
+  "question-commandcode-review+permission-copilot": "f2549634edb2b985",
+  "question-commandcode-review+permission-cursor": "03cac003ff8da3b9",
+  "question-commandcode-review+permission-devin-3000-11": "c849bc183879e3cd",
+  "question-commandcode-review+permission-devin": "057ae12d8056e845",
+  "question-commandcode-review+permission-grok": "d36b52102417f605",
+  "question-commandcode-review+permission-hermes": "2fcbc470799b66ee",
+  "question-commandcode-review+permission-muse": "d8fb5e29a0b9f470",
+  "question-commandcode-review+permission-opencode": "52f4f9da92efdfe4",
+  "question-commandcode-review+question-agy": "4cf868953f4a888f",
+  "question-commandcode-review+question-codex": "0728244d290f8714",
+  "question-commandcode-review+question-commandcode": "9f602dcb6a6075fc",
+  "question-commandcode-review+question-copilot": "5b273b8700f6bd27",
+  "question-commandcode-review+question-devin-3000-11": "59fc4693d2ff90db",
+  "question-commandcode-review+question-devin-multi-3000-11": "745862e3cd86d6ff",
+  "question-commandcode-review+question-devin-multi": "d34eea090fb15d7c",
+  "question-commandcode-review+question-devin": "912369e7b3d5e6ad",
+  "question-commandcode-review+question-grok": "39c3e3abe483591c",
+  "question-commandcode-review+question-hermes-lock": "e3e2af3ab1b62ea5",
+  "question-commandcode-review+question-hermes": "186bd7cdd6d53dca",
+  "question-commandcode-review+question-kilo": "2e984fc1e35974bc",
+  "question-commandcode-review+question-multi": "acaea1c54d11d6fa",
+  "question-commandcode-review+question-muse": "79091121b65f5f29",
+  "question-commandcode-review+question-opencode-review": "a094f749c8bd2b88",
+  "question-commandcode-review+question-opencode": "1bb455c6022293e6",
+  "question-commandcode-review+question-review": "a27d711c20b89770",
+  "question-commandcode-review+question-single": "cce1b373c98ce8bd",
+  "question-commandcode-review+question-tabs": "b968e0ab1ecb77b6",
+  "question-commandcode+permission-agy": "51d668c12dc287db",
+  "question-commandcode+permission-claude-edit": "19f01ee4870b36d4",
+  "question-commandcode+permission-claude-plan": "2062cbc7b3cdd026",
+  "question-commandcode+permission-claude": "35c6cc90a42b8399",
+  "question-commandcode+permission-codex": "181ebadf9b5e8836",
+  "question-commandcode+permission-commandcode": "e853ac3d5e785580",
+  "question-commandcode+permission-copilot": "f2549634edb2b985",
+  "question-commandcode+permission-cursor": "d090e82f29726ec8",
+  "question-commandcode+permission-devin-3000-11": "0334b21305d01ea1",
+  "question-commandcode+permission-devin": "1d310bb8aa3074c9",
+  "question-commandcode+permission-grok": "38f4dd5413297fb3",
+  "question-commandcode+permission-hermes": "2fcbc470799b66ee",
+  "question-commandcode+permission-muse": "d8fb5e29a0b9f470",
+  "question-commandcode+permission-opencode": "52f4f9da92efdfe4",
+  "question-commandcode+question-agy": "caa0cd848f92d9c6",
+  "question-commandcode+question-codex": "0728244d290f8714",
+  "question-commandcode+question-commandcode-review": "a27d711c20b89770",
+  "question-commandcode+question-copilot": "5b273b8700f6bd27",
+  "question-commandcode+question-devin-3000-11": "f11c428c74e7e033",
+  "question-commandcode+question-devin-multi-3000-11": "ebd3e4ebeda3ff54",
+  "question-commandcode+question-devin-multi": "1d83577c09a3ac55",
+  "question-commandcode+question-devin": "fca752bfc33cf395",
+  "question-commandcode+question-grok": "55dbbbcec50a7cd2",
+  "question-commandcode+question-hermes-lock": "0974b1ccfb8ed5f6",
+  "question-commandcode+question-hermes": "186bd7cdd6d53dca",
+  "question-commandcode+question-kilo": "2e984fc1e35974bc",
+  "question-commandcode+question-multi": "acaea1c54d11d6fa",
+  "question-commandcode+question-muse": "79091121b65f5f29",
+  "question-commandcode+question-opencode-review": "bdc94a81955fbd36",
+  "question-commandcode+question-opencode": "1bb455c6022293e6",
+  "question-commandcode+question-review": "a27d711c20b89770",
+  "question-commandcode+question-single": "cce1b373c98ce8bd",
+  "question-commandcode+question-tabs": "b968e0ab1ecb77b6",
+  "question-copilot+permission-agy": "445ef426c71bab7a",
+  "question-copilot+permission-claude-edit": "5dcbd130eed36643",
+  "question-copilot+permission-claude-plan": "1234af48b7980cf3",
+  "question-copilot+permission-claude": "d6100045716a43ce",
+  "question-copilot+permission-codex": "a6bbd2c146d34b8b",
+  "question-copilot+permission-commandcode": "8fc7af7d625dff12",
+  "question-copilot+permission-copilot": "83b3eb8e2dae095f",
+  "question-copilot+permission-cursor": "59920eefc307f582",
+  "question-copilot+permission-devin-3000-11": "810b74dd4de624be",
+  "question-copilot+permission-devin": "1361be8c53b3805c",
+  "question-copilot+permission-grok": "30625185467abafc",
+  "question-copilot+permission-hermes": "3289d64169eef765",
+  "question-copilot+permission-muse": "b849934d082fa307",
+  "question-copilot+permission-opencode": "5de99d1e7fac6e7f",
+  "question-copilot+question-agy": "ef29e70d5076ad91",
+  "question-copilot+question-codex": "83216491e3a0901c",
+  "question-copilot+question-commandcode-review": "7671e669d326cf1f",
+  "question-copilot+question-commandcode": "de44f113287ef710",
+  "question-copilot+question-devin-3000-11": "e13c113e2dd92d55",
+  "question-copilot+question-devin-multi-3000-11": "569efe9f2bc90286",
+  "question-copilot+question-devin-multi": "63fb08313719c060",
+  "question-copilot+question-devin": "0b202cfc8408d832",
+  "question-copilot+question-grok": "578a55308e384a71",
+  "question-copilot+question-hermes-lock": "03be0f6ddf92206d",
+  "question-copilot+question-hermes": "544fac5a31e091fd",
+  "question-copilot+question-kilo": "3401710e8fa42e31",
+  "question-copilot+question-multi": "6aabcbbc1a7498ff",
+  "question-copilot+question-muse": "32bb6548599b09a4",
+  "question-copilot+question-opencode-review": "6b618a1d1834ae4a",
+  "question-copilot+question-opencode": "b5be0a47c038085e",
+  "question-copilot+question-review": "7671e669d326cf1f",
+  "question-copilot+question-single": "f6fba64d6b7e5977",
+  "question-copilot+question-tabs": "e75802c400f2d9d1",
+  "question-devin-3000-11+permission-agy": "413981723df6bdf5",
+  "question-devin-3000-11+permission-claude-edit": "c678f0cd5e4fcc3d",
+  "question-devin-3000-11+permission-claude-plan": "ccabfe1962cd9f65",
+  "question-devin-3000-11+permission-claude": "59b70db4f18090e1",
+  "question-devin-3000-11+permission-codex": "5d7f730199a2a1a8",
+  "question-devin-3000-11+permission-commandcode": "c1e59accd1ec176a",
+  "question-devin-3000-11+permission-copilot": "83b3eb8e2dae095f",
+  "question-devin-3000-11+permission-cursor": "4cc515fc9a8e0409",
+  "question-devin-3000-11+permission-devin-3000-11": "d396da9d118877e7",
+  "question-devin-3000-11+permission-devin": "238ad1110abfae78",
+  "question-devin-3000-11+permission-grok": "6a3d10bbc91c4e4b",
+  "question-devin-3000-11+permission-hermes": "882b6c02e3b08365",
+  "question-devin-3000-11+permission-muse": "57cf7f2724b6be9b",
+  "question-devin-3000-11+permission-opencode": "dcec46e3aee92ab3",
+  "question-devin-3000-11+question-agy": "b4f4822b7a4ba6a7",
+  "question-devin-3000-11+question-codex": "c0f7a81042a387bf",
+  "question-devin-3000-11+question-commandcode-review": "59fc4693d2ff90db",
+  "question-devin-3000-11+question-commandcode": "f11c428c74e7e033",
+  "question-devin-3000-11+question-copilot": "e13c113e2dd92d55",
+  "question-devin-3000-11+question-devin-multi-3000-11": "5ebe946243bc3109",
+  "question-devin-3000-11+question-devin-multi": "fada6c3eeaca557d",
+  "question-devin-3000-11+question-devin": "c6713992e88426fd",
+  "question-devin-3000-11+question-grok": "eac441c84c58fe42",
+  "question-devin-3000-11+question-hermes-lock": "b13c4e9cca9a09c4",
+  "question-devin-3000-11+question-hermes": "72e3bddb34fab618",
+  "question-devin-3000-11+question-kilo": "77b4f0c86f947bc4",
+  "question-devin-3000-11+question-multi": "fdbb51fdedca0a7c",
+  "question-devin-3000-11+question-muse": "0736346a48bae295",
+  "question-devin-3000-11+question-opencode-review": "af810f928729cef6",
+  "question-devin-3000-11+question-opencode": "6f2cd2826e87cc4d",
+  "question-devin-3000-11+question-review": "59fc4693d2ff90db",
+  "question-devin-3000-11+question-single": "d9dc1bddb5ecd18a",
+  "question-devin-3000-11+question-tabs": "3500ec9500f89096",
+  "question-devin-multi-3000-11+permission-agy": "1a0eb2370e6e9f63",
+  "question-devin-multi-3000-11+permission-claude-edit": "fc70d799463909ee",
+  "question-devin-multi-3000-11+permission-claude-plan": "2f0abcbef46de271",
+  "question-devin-multi-3000-11+permission-claude": "2ba617c39891953d",
+  "question-devin-multi-3000-11+permission-codex": "2a90e95495817b45",
+  "question-devin-multi-3000-11+permission-commandcode": "c1e59accd1ec176a",
+  "question-devin-multi-3000-11+permission-copilot": "83b3eb8e2dae095f",
+  "question-devin-multi-3000-11+permission-cursor": "ab6beb6e4966daec",
+  "question-devin-multi-3000-11+permission-devin-3000-11": "d396da9d118877e7",
+  "question-devin-multi-3000-11+permission-devin": "238ad1110abfae78",
+  "question-devin-multi-3000-11+permission-grok": "cbefa4766654a19a",
+  "question-devin-multi-3000-11+permission-hermes": "e8e3b8b655098de5",
+  "question-devin-multi-3000-11+permission-muse": "32a394d6fb163183",
+  "question-devin-multi-3000-11+permission-opencode": "1c6f0169ee571b98",
+  "question-devin-multi-3000-11+question-agy": "b4f4822b7a4ba6a7",
+  "question-devin-multi-3000-11+question-codex": "af9f9bb54c82b642",
+  "question-devin-multi-3000-11+question-commandcode-review": "745862e3cd86d6ff",
+  "question-devin-multi-3000-11+question-commandcode": "ebd3e4ebeda3ff54",
+  "question-devin-multi-3000-11+question-copilot": "569efe9f2bc90286",
+  "question-devin-multi-3000-11+question-devin-3000-11": "e0e6ef757c9f0004",
+  "question-devin-multi-3000-11+question-devin-multi": "fada6c3eeaca557d",
+  "question-devin-multi-3000-11+question-devin": "c6713992e88426fd",
+  "question-devin-multi-3000-11+question-grok": "573016b19e2009d0",
+  "question-devin-multi-3000-11+question-hermes-lock": "420b424bf1045553",
+  "question-devin-multi-3000-11+question-hermes": "26ae795ce3639667",
+  "question-devin-multi-3000-11+question-kilo": "1fc7e935567ce728",
+  "question-devin-multi-3000-11+question-multi": "3a5420524045b492",
+  "question-devin-multi-3000-11+question-muse": "407a322516d6c1a5",
+  "question-devin-multi-3000-11+question-opencode-review": "e5d0f0d5d3670f47",
+  "question-devin-multi-3000-11+question-opencode": "0cbc1487e13e5b9e",
+  "question-devin-multi-3000-11+question-review": "745862e3cd86d6ff",
+  "question-devin-multi-3000-11+question-single": "3a5b392b976a8ce6",
+  "question-devin-multi-3000-11+question-tabs": "b864ce532b76233e",
+  "question-devin-multi+permission-agy": "43a61d2e0c697fc3",
+  "question-devin-multi+permission-claude-edit": "c991b79b6d487663",
+  "question-devin-multi+permission-claude-plan": "3175c9caac7bc58b",
+  "question-devin-multi+permission-claude": "079e6822dedd0e9b",
+  "question-devin-multi+permission-codex": "9520cfdd509433e7",
+  "question-devin-multi+permission-commandcode": "c1e59accd1ec176a",
+  "question-devin-multi+permission-copilot": "83b3eb8e2dae095f",
+  "question-devin-multi+permission-cursor": "71fe7940e486647f",
+  "question-devin-multi+permission-devin-3000-11": "d396da9d118877e7",
+  "question-devin-multi+permission-devin": "238ad1110abfae78",
+  "question-devin-multi+permission-grok": "0366ca82575a6e06",
+  "question-devin-multi+permission-hermes": "ceea2002a6691d8c",
+  "question-devin-multi+permission-muse": "601e13dd692531ce",
+  "question-devin-multi+permission-opencode": "53937b0afa615f33",
+  "question-devin-multi+question-agy": "b4f4822b7a4ba6a7",
+  "question-devin-multi+question-codex": "1311e248016d3f13",
+  "question-devin-multi+question-commandcode-review": "d34eea090fb15d7c",
+  "question-devin-multi+question-commandcode": "8016798308b04cdc",
+  "question-devin-multi+question-copilot": "63fb08313719c060",
+  "question-devin-multi+question-devin-3000-11": "e0e6ef757c9f0004",
+  "question-devin-multi+question-devin-multi-3000-11": "5ebe946243bc3109",
+  "question-devin-multi+question-devin": "c6713992e88426fd",
+  "question-devin-multi+question-grok": "fa67b7509a5df292",
+  "question-devin-multi+question-hermes-lock": "c8936b4358da183c",
+  "question-devin-multi+question-hermes": "032e2221722098aa",
+  "question-devin-multi+question-kilo": "101a5ec9996337e8",
+  "question-devin-multi+question-multi": "8a1da4797ab3df2f",
+  "question-devin-multi+question-muse": "8e65db4c25ac9030",
+  "question-devin-multi+question-opencode-review": "934b50cd91204080",
+  "question-devin-multi+question-opencode": "155bb7460ba59dd0",
+  "question-devin-multi+question-review": "d34eea090fb15d7c",
+  "question-devin-multi+question-single": "a10747503d6b87b8",
+  "question-devin-multi+question-tabs": "537979f932cd6cd6",
+  "question-devin+permission-agy": "1dabe12b90be5366",
+  "question-devin+permission-claude-edit": "9c5c7f7caeddb357",
+  "question-devin+permission-claude-plan": "b0152523e0bdc011",
+  "question-devin+permission-claude": "a77209de9485f062",
+  "question-devin+permission-codex": "3eba5a5eac575a14",
+  "question-devin+permission-commandcode": "c1e59accd1ec176a",
+  "question-devin+permission-copilot": "83b3eb8e2dae095f",
+  "question-devin+permission-cursor": "a940104ba33acffc",
+  "question-devin+permission-devin-3000-11": "d396da9d118877e7",
+  "question-devin+permission-devin": "238ad1110abfae78",
+  "question-devin+permission-grok": "c22f2d4656031118",
+  "question-devin+permission-hermes": "e8f2d51c5884b8fb",
+  "question-devin+permission-muse": "859173cec48eec99",
+  "question-devin+permission-opencode": "2ff0cfaf6b950321",
+  "question-devin+question-agy": "b4f4822b7a4ba6a7",
+  "question-devin+question-codex": "9519d671b2a80363",
+  "question-devin+question-commandcode-review": "912369e7b3d5e6ad",
+  "question-devin+question-commandcode": "b2b0b8842e1c94e4",
+  "question-devin+question-copilot": "0b202cfc8408d832",
+  "question-devin+question-devin-3000-11": "e0e6ef757c9f0004",
+  "question-devin+question-devin-multi-3000-11": "5ebe946243bc3109",
+  "question-devin+question-devin-multi": "fada6c3eeaca557d",
+  "question-devin+question-grok": "b25c7b7e899ff7c7",
+  "question-devin+question-hermes-lock": "c35c8330da459fba",
+  "question-devin+question-hermes": "aa60e2c6c1e48e68",
+  "question-devin+question-kilo": "9256bbe9b68d2407",
+  "question-devin+question-multi": "22cb8ecd30cac08c",
+  "question-devin+question-muse": "cb41abfea16cd3e0",
+  "question-devin+question-opencode-review": "eb80b75f5d6243d3",
+  "question-devin+question-opencode": "f48ea6876ce28222",
+  "question-devin+question-review": "912369e7b3d5e6ad",
+  "question-devin+question-single": "9cc908943701798c",
+  "question-devin+question-tabs": "f608a2a514e9fa75",
+  "question-grok+permission-agy": "2c5ed55c7c73e00f",
+  "question-grok+permission-claude-edit": "5d2ad6add96383d1",
+  "question-grok+permission-claude-plan": "dd1c411c5e05de02",
+  "question-grok+permission-claude": "b4adba57395ee92b",
+  "question-grok+permission-codex": "788a16779b4071a9",
+  "question-grok+permission-commandcode": "5e7b456472b4cb16",
+  "question-grok+permission-copilot": "750a8501df8d9110",
+  "question-grok+permission-cursor": "ca3e47b5ba713a10",
+  "question-grok+permission-devin-3000-11": "0f5b8b70de49655f",
+  "question-grok+permission-devin": "e7811dcac7c41482",
+  "question-grok+permission-grok": "dc78b516f9868408",
+  "question-grok+permission-hermes": "172993bb1c4ed84c",
+  "question-grok+permission-muse": "f42d921bb3242929",
+  "question-grok+permission-opencode": "7320fdbc90044c1e",
+  "question-grok+question-agy": "a1eb3f10657664d5",
+  "question-grok+question-codex": "503f97e417b3cfa6",
+  "question-grok+question-commandcode-review": "39c3e3abe483591c",
+  "question-grok+question-commandcode": "55dbbbcec50a7cd2",
+  "question-grok+question-copilot": "578a55308e384a71",
+  "question-grok+question-devin-3000-11": "eac441c84c58fe42",
+  "question-grok+question-devin-multi-3000-11": "573016b19e2009d0",
+  "question-grok+question-devin-multi": "fa67b7509a5df292",
+  "question-grok+question-devin": "b25c7b7e899ff7c7",
+  "question-grok+question-hermes-lock": "2971cfe7eefc68a9",
+  "question-grok+question-hermes": "cac7d0ebbea18dcb",
+  "question-grok+question-kilo": "67710a5ebc0fe5cc",
+  "question-grok+question-multi": "c153c9539ab71df4",
+  "question-grok+question-muse": "8d5e8575e5aaf9f1",
+  "question-grok+question-opencode-review": "e999b6a99232f035",
+  "question-grok+question-opencode": "eaffd96106008e59",
+  "question-grok+question-review": "39c3e3abe483591c",
+  "question-grok+question-single": "3a5abdee83520257",
+  "question-grok+question-tabs": "5fc5e940aeb02792",
+  "question-hermes-lock+permission-agy": "bb100ebecba04390",
+  "question-hermes-lock+permission-claude-edit": "93ca5ecc00ac56a4",
+  "question-hermes-lock+permission-claude-plan": "36225405abf1d160",
+  "question-hermes-lock+permission-claude": "6846d1b2bf9b2532",
+  "question-hermes-lock+permission-codex": "a6bbd2c146d34b8b",
+  "question-hermes-lock+permission-commandcode": "c1e59accd1ec176a",
+  "question-hermes-lock+permission-copilot": "f3ce0abce1bcd6cd",
+  "question-hermes-lock+permission-cursor": "580730111ec9e62b",
+  "question-hermes-lock+permission-devin-3000-11": "22f816a8a3415966",
+  "question-hermes-lock+permission-devin": "9cb737a4cc185d92",
+  "question-hermes-lock+permission-grok": "2fac96b49730ab2c",
+  "question-hermes-lock+permission-hermes": "3289d64169eef765",
+  "question-hermes-lock+permission-muse": "9fbabdc90b9e6b7a",
+  "question-hermes-lock+permission-opencode": "4f15ac3d8d9bb405",
+  "question-hermes-lock+question-agy": "fb7bb03c23561498",
+  "question-hermes-lock+question-codex": "c1f4b6916eef6bb6",
+  "question-hermes-lock+question-commandcode-review": "a27d711c20b89770",
+  "question-hermes-lock+question-commandcode": "9f602dcb6a6075fc",
+  "question-hermes-lock+question-copilot": "9e7ff3c7e8c8f0e8",
+  "question-hermes-lock+question-devin-3000-11": "db328c256c5da664",
+  "question-hermes-lock+question-devin-multi-3000-11": "4dde00e0a655f4e5",
+  "question-hermes-lock+question-devin-multi": "a2435e31202bd87d",
+  "question-hermes-lock+question-devin": "0bc84aff45869934",
+  "question-hermes-lock+question-grok": "2971cfe7eefc68a9",
+  "question-hermes-lock+question-hermes": "186bd7cdd6d53dca",
+  "question-hermes-lock+question-kilo": "62ed3c8180d94033",
+  "question-hermes-lock+question-multi": "acaea1c54d11d6fa",
+  "question-hermes-lock+question-muse": "4e0ed4826949027c",
+  "question-hermes-lock+question-opencode-review": "8443f420b8fc77b3",
+  "question-hermes-lock+question-opencode": "9bd88e7eacbb9ced",
+  "question-hermes-lock+question-review": "a27d711c20b89770",
+  "question-hermes-lock+question-single": "cce1b373c98ce8bd",
+  "question-hermes-lock+question-tabs": "b968e0ab1ecb77b6",
+  "question-hermes+permission-agy": "08d06619798d246e",
+  "question-hermes+permission-claude-edit": "19f01ee4870b36d4",
+  "question-hermes+permission-claude-plan": "115e51e92204b381",
+  "question-hermes+permission-claude": "35c6cc90a42b8399",
+  "question-hermes+permission-codex": "181ebadf9b5e8836",
+  "question-hermes+permission-commandcode": "e853ac3d5e785580",
+  "question-hermes+permission-copilot": "400267dfec56e2b2",
+  "question-hermes+permission-cursor": "fa148f0e042ba072",
+  "question-hermes+permission-devin-3000-11": "b65788cd04a0a6b3",
+  "question-hermes+permission-devin": "afe9bf1bff1061b0",
+  "question-hermes+permission-grok": "868a6480f1ae9e55",
+  "question-hermes+permission-hermes": "2fcbc470799b66ee",
+  "question-hermes+permission-muse": "05a6084636d9b775",
+  "question-hermes+permission-opencode": "659c80c0743605f6",
+  "question-hermes+question-agy": "b0c9618565925643",
+  "question-hermes+question-codex": "0728244d290f8714",
+  "question-hermes+question-commandcode-review": "a27d711c20b89770",
+  "question-hermes+question-commandcode": "9f602dcb6a6075fc",
+  "question-hermes+question-copilot": "69af9b28189ac926",
+  "question-hermes+question-devin-3000-11": "8f2913af2826ff69",
+  "question-hermes+question-devin-multi-3000-11": "ac3df8c65e94737e",
+  "question-hermes+question-devin-multi": "5d6d733dd68818de",
+  "question-hermes+question-devin": "252c7ca3de2d1b36",
+  "question-hermes+question-grok": "cac7d0ebbea18dcb",
+  "question-hermes+question-hermes-lock": "958b56953980863d",
+  "question-hermes+question-kilo": "62ed3c8180d94033",
+  "question-hermes+question-multi": "acaea1c54d11d6fa",
+  "question-hermes+question-muse": "01d9b38d18002308",
+  "question-hermes+question-opencode-review": "8443f420b8fc77b3",
+  "question-hermes+question-opencode": "9bd88e7eacbb9ced",
+  "question-hermes+question-review": "a27d711c20b89770",
+  "question-hermes+question-single": "cce1b373c98ce8bd",
+  "question-hermes+question-tabs": "b968e0ab1ecb77b6",
+  "question-kilo+permission-agy": "279f6e61aba6f0cd",
+  "question-kilo+permission-claude-edit": "8d56c2e399295581",
+  "question-kilo+permission-claude-plan": "fbc53045882574f8",
+  "question-kilo+permission-claude": "d2ceb1cf59110296",
+  "question-kilo+permission-codex": "1181f84420095799",
+  "question-kilo+permission-commandcode": "10d5f0783579b21f",
+  "question-kilo+permission-copilot": "c9089d7d476840df",
+  "question-kilo+permission-cursor": "2021a5099c0549a8",
+  "question-kilo+permission-devin-3000-11": "3b464fa0a918ed72",
+  "question-kilo+permission-devin": "9c077618eb241384",
+  "question-kilo+permission-grok": "01fe857536c0fa0c",
+  "question-kilo+permission-hermes": "df352355ef685b7c",
+  "question-kilo+permission-muse": "50454864c066bacb",
+  "question-kilo+permission-opencode": "86816c52ee47d65c",
+  "question-kilo+question-agy": "ec1d1176f251060f",
+  "question-kilo+question-codex": "c7771beb6aeb84db",
+  "question-kilo+question-commandcode-review": "f7416e518b6e1cde",
+  "question-kilo+question-commandcode": "45f55a0ea19fb383",
+  "question-kilo+question-copilot": "641fa6f1c043d9d3",
+  "question-kilo+question-devin-3000-11": "6222ccf162ea1bfe",
+  "question-kilo+question-devin-multi-3000-11": "627d327f5478d624",
+  "question-kilo+question-devin-multi": "9f5b5045c830ee70",
+  "question-kilo+question-devin": "8cac8a4b1f82148f",
+  "question-kilo+question-grok": "67710a5ebc0fe5cc",
+  "question-kilo+question-hermes-lock": "d0d5b6d2ceaca0f9",
+  "question-kilo+question-hermes": "4d9ea9885b4673b4",
+  "question-kilo+question-multi": "5cb9a7b6dcc7d8c6",
+  "question-kilo+question-muse": "d4dcd42be46ce5c0",
+  "question-kilo+question-opencode-review": "a5a4559153c992c3",
+  "question-kilo+question-opencode": "02cfc2ffdf61eb6e",
+  "question-kilo+question-review": "f7416e518b6e1cde",
+  "question-kilo+question-single": "08a05dd7a6679b2c",
+  "question-kilo+question-tabs": "de4a94f31cd79320",
+  "question-multi+permission-agy": "b975ec36ac1fec3f",
+  "question-multi+permission-claude-edit": "f691a48dfbb3f7b5",
+  "question-multi+permission-claude-plan": "5aa32b8b444210ac",
+  "question-multi+permission-claude": "b4aa7ac6c86bfb77",
+  "question-multi+permission-codex": "38d45e9ccf5a4454",
+  "question-multi+permission-commandcode": "215835e31c5e34f0",
+  "question-multi+permission-copilot": "f069abe92b18bf6f",
+  "question-multi+permission-cursor": "72f69a7c44347a46",
+  "question-multi+permission-devin-3000-11": "ed051efe91dd4721",
+  "question-multi+permission-devin": "d190a60fd0589718",
+  "question-multi+permission-grok": "9c11b796ee0313f2",
+  "question-multi+permission-hermes": "0f82d055b14475b3",
+  "question-multi+permission-muse": "132e62ebaff3130f",
+  "question-multi+permission-opencode": "36f157db38d0473f",
+  "question-multi+question-agy": "c99af4271e6a3096",
+  "question-multi+question-codex": "4529bf1503c24f7d",
+  "question-multi+question-commandcode-review": "28adaec30320754a",
+  "question-multi+question-commandcode": "f9d420f904c72754",
+  "question-multi+question-copilot": "d4205ae90b6d01dd",
+  "question-multi+question-devin-3000-11": "df695b94d1e8d3b3",
+  "question-multi+question-devin-multi-3000-11": "c3f9cdecba2b9e45",
+  "question-multi+question-devin-multi": "40fe34cc153c31c7",
+  "question-multi+question-devin": "682e324d7b6bbfac",
+  "question-multi+question-grok": "4cacbf8cde86c38c",
+  "question-multi+question-hermes-lock": "cecb575b8d75ccee",
+  "question-multi+question-hermes": "eb348cb6f8633bb5",
+  "question-multi+question-kilo": "38fa65e83cc7a0ea",
+  "question-multi+question-muse": "af2c6662a38ee4d6",
+  "question-multi+question-opencode-review": "b11916ceceee3d48",
+  "question-multi+question-opencode": "935594c5333bb89f",
+  "question-multi+question-review": "28adaec30320754a",
+  "question-multi+question-single": "cce1b373c98ce8bd",
+  "question-multi+question-tabs": "b968e0ab1ecb77b6",
+  "question-muse+permission-agy": "752960e99c45a86b",
+  "question-muse+permission-claude-edit": "4dba25d9ff89dceb",
+  "question-muse+permission-claude-plan": "d8651684646384f0",
+  "question-muse+permission-claude": "b4aa7ac6c86bfb77",
+  "question-muse+permission-codex": "38d45e9ccf5a4454",
+  "question-muse+permission-commandcode": "f82b17ac6cc6957a",
+  "question-muse+permission-copilot": "83b3eb8e2dae095f",
+  "question-muse+permission-cursor": "11b8962180810d7d",
+  "question-muse+permission-devin-3000-11": "0a576602f32956e2",
+  "question-muse+permission-devin": "b41abb2fa371b301",
+  "question-muse+permission-grok": "bdbb2e53f71ca981",
+  "question-muse+permission-hermes": "ce5be39da063ed6f",
+  "question-muse+permission-muse": "e71f995b60c2c432",
+  "question-muse+permission-opencode": "98a985b50c4fad4d",
+  "question-muse+question-agy": "91e40e141c0e1067",
+  "question-muse+question-codex": "7c0626da8fe882c0",
+  "question-muse+question-commandcode-review": "28adaec30320754a",
+  "question-muse+question-commandcode": "f9d420f904c72754",
+  "question-muse+question-copilot": "2a043f242036e70c",
+  "question-muse+question-devin-3000-11": "0736346a48bae295",
+  "question-muse+question-devin-multi-3000-11": "407a322516d6c1a5",
+  "question-muse+question-devin-multi": "8e65db4c25ac9030",
+  "question-muse+question-devin": "cb41abfea16cd3e0",
+  "question-muse+question-grok": "8d5e8575e5aaf9f1",
+  "question-muse+question-hermes-lock": "715e8118363aa6fc",
+  "question-muse+question-hermes": "5af4e17555cfff39",
+  "question-muse+question-kilo": "a37bcefc2208b69c",
+  "question-muse+question-multi": "acaea1c54d11d6fa",
+  "question-muse+question-opencode-review": "e5500b3d2cdd92b6",
+  "question-muse+question-opencode": "090f8c6e0176c4d8",
+  "question-muse+question-review": "28adaec30320754a",
+  "question-muse+question-single": "cce1b373c98ce8bd",
+  "question-muse+question-tabs": "b968e0ab1ecb77b6",
+  "question-opencode-review+permission-agy": "cd7cb75b6e314ec5",
+  "question-opencode-review+permission-claude-edit": "10e39a801b41b196",
+  "question-opencode-review+permission-claude-plan": "51aacfd3c79db2f1",
+  "question-opencode-review+permission-claude": "b8bd6cf347d4453a",
+  "question-opencode-review+permission-codex": "8bf8786b7a7b5db1",
+  "question-opencode-review+permission-commandcode": "c9ffb5287597bbdd",
+  "question-opencode-review+permission-copilot": "fe0296fe5b2d847b",
+  "question-opencode-review+permission-cursor": "6a7505c7129694c7",
+  "question-opencode-review+permission-devin-3000-11": "7ea1838ad939cd27",
+  "question-opencode-review+permission-devin": "e76f329e5a54872a",
+  "question-opencode-review+permission-grok": "5a067fa0be322494",
+  "question-opencode-review+permission-hermes": "b0e67e0e288f7335",
+  "question-opencode-review+permission-muse": "b071b530fb234160",
+  "question-opencode-review+permission-opencode": "86816c52ee47d65c",
+  "question-opencode-review+question-agy": "0f0d89e34ce82318",
+  "question-opencode-review+question-codex": "50d18ba64e4f73c1",
+  "question-opencode-review+question-commandcode-review": "25347764082bbef8",
+  "question-opencode-review+question-commandcode": "574cccb38096f49a",
+  "question-opencode-review+question-copilot": "f417f1edd36a9b2c",
+  "question-opencode-review+question-devin-3000-11": "af810f928729cef6",
+  "question-opencode-review+question-devin-multi-3000-11": "e5d0f0d5d3670f47",
+  "question-opencode-review+question-devin-multi": "934b50cd91204080",
+  "question-opencode-review+question-devin": "eb80b75f5d6243d3",
+  "question-opencode-review+question-grok": "e999b6a99232f035",
+  "question-opencode-review+question-hermes-lock": "08a414754cc209ab",
+  "question-opencode-review+question-hermes": "eb518020ee1ed9be",
+  "question-opencode-review+question-kilo": "2d04bf89e48aa70e",
+  "question-opencode-review+question-multi": "9b3a3b5dca4c2158",
+  "question-opencode-review+question-muse": "08b2eb5d0e3b6ba8",
+  "question-opencode-review+question-opencode": "6c310af8becc93b2",
+  "question-opencode-review+question-review": "25347764082bbef8",
+  "question-opencode-review+question-single": "6347ce36a584474d",
+  "question-opencode-review+question-tabs": "45be78e45dbd7dcd",
+  "question-opencode+permission-agy": "cd7cb75b6e314ec5",
+  "question-opencode+permission-claude-edit": "10e39a801b41b196",
+  "question-opencode+permission-claude-plan": "51aacfd3c79db2f1",
+  "question-opencode+permission-claude": "b8bd6cf347d4453a",
+  "question-opencode+permission-codex": "8bf8786b7a7b5db1",
+  "question-opencode+permission-commandcode": "c9ffb5287597bbdd",
+  "question-opencode+permission-copilot": "fe0296fe5b2d847b",
+  "question-opencode+permission-cursor": "8920c504e67c562e",
+  "question-opencode+permission-devin-3000-11": "db19d5de9dae3809",
+  "question-opencode+permission-devin": "3c72d8c5ad140719",
+  "question-opencode+permission-grok": "fac5242230879eac",
+  "question-opencode+permission-hermes": "b0e67e0e288f7335",
+  "question-opencode+permission-muse": "b071b530fb234160",
+  "question-opencode+permission-opencode": "86816c52ee47d65c",
+  "question-opencode+question-agy": "55b372475a3f5824",
+  "question-opencode+question-codex": "50d18ba64e4f73c1",
+  "question-opencode+question-commandcode-review": "25347764082bbef8",
+  "question-opencode+question-commandcode": "574cccb38096f49a",
+  "question-opencode+question-copilot": "f417f1edd36a9b2c",
+  "question-opencode+question-devin-3000-11": "6f2cd2826e87cc4d",
+  "question-opencode+question-devin-multi-3000-11": "0cbc1487e13e5b9e",
+  "question-opencode+question-devin-multi": "155bb7460ba59dd0",
+  "question-opencode+question-devin": "f48ea6876ce28222",
+  "question-opencode+question-grok": "eaffd96106008e59",
+  "question-opencode+question-hermes-lock": "08a414754cc209ab",
+  "question-opencode+question-hermes": "eb518020ee1ed9be",
+  "question-opencode+question-kilo": "2d04bf89e48aa70e",
+  "question-opencode+question-multi": "9b3a3b5dca4c2158",
+  "question-opencode+question-muse": "08b2eb5d0e3b6ba8",
+  "question-opencode+question-opencode-review": "79df88508f398651",
+  "question-opencode+question-review": "25347764082bbef8",
+  "question-opencode+question-single": "6347ce36a584474d",
+  "question-opencode+question-tabs": "45be78e45dbd7dcd",
+  "question-review+permission-agy": "51d668c12dc287db",
+  "question-review+permission-claude-edit": "19f01ee4870b36d4",
+  "question-review+permission-claude-plan": "2062cbc7b3cdd026",
+  "question-review+permission-claude": "35c6cc90a42b8399",
+  "question-review+permission-codex": "181ebadf9b5e8836",
+  "question-review+permission-commandcode": "e853ac3d5e785580",
+  "question-review+permission-copilot": "f2549634edb2b985",
+  "question-review+permission-cursor": "03cac003ff8da3b9",
+  "question-review+permission-devin-3000-11": "c849bc183879e3cd",
+  "question-review+permission-devin": "057ae12d8056e845",
+  "question-review+permission-grok": "d36b52102417f605",
+  "question-review+permission-hermes": "2fcbc470799b66ee",
+  "question-review+permission-muse": "d8fb5e29a0b9f470",
+  "question-review+permission-opencode": "52f4f9da92efdfe4",
+  "question-review+question-agy": "4cf868953f4a888f",
+  "question-review+question-codex": "0728244d290f8714",
+  "question-review+question-commandcode-review": "a27d711c20b89770",
+  "question-review+question-commandcode": "9f602dcb6a6075fc",
+  "question-review+question-copilot": "5b273b8700f6bd27",
+  "question-review+question-devin-3000-11": "59fc4693d2ff90db",
+  "question-review+question-devin-multi-3000-11": "745862e3cd86d6ff",
+  "question-review+question-devin-multi": "d34eea090fb15d7c",
+  "question-review+question-devin": "912369e7b3d5e6ad",
+  "question-review+question-grok": "39c3e3abe483591c",
+  "question-review+question-hermes-lock": "840a763ababe537b",
+  "question-review+question-hermes": "186bd7cdd6d53dca",
+  "question-review+question-kilo": "2e984fc1e35974bc",
+  "question-review+question-multi": "acaea1c54d11d6fa",
+  "question-review+question-muse": "79091121b65f5f29",
+  "question-review+question-opencode-review": "ab7b5dac971f6073",
+  "question-review+question-opencode": "1bb455c6022293e6",
+  "question-review+question-single": "cce1b373c98ce8bd",
+  "question-review+question-tabs": "b968e0ab1ecb77b6",
+  "question-single+permission-agy": "8bbc7a8798f6b78b",
+  "question-single+permission-claude-edit": "89ef72a199bb35fb",
+  "question-single+permission-claude-plan": "d273579af10bb26e",
+  "question-single+permission-claude": "54459b1153bdbea9",
+  "question-single+permission-codex": "a90384cf0debdc59",
+  "question-single+permission-commandcode": "a0ba77ba72f56698",
+  "question-single+permission-copilot": "400267dfec56e2b2",
+  "question-single+permission-cursor": "9d8b21a8a342facd",
+  "question-single+permission-devin-3000-11": "371e8848f9ca3dbd",
+  "question-single+permission-devin": "ff340438b94075af",
+  "question-single+permission-grok": "ee27075f2192b9bc",
+  "question-single+permission-hermes": "2d0855b4b4062ed2",
+  "question-single+permission-muse": "620ac5d1248dbb8e",
+  "question-single+permission-opencode": "a383c5a4b85e8b14",
+  "question-single+question-agy": "bf56b3372caae76d",
+  "question-single+question-codex": "c1033e9a7a90b130",
+  "question-single+question-commandcode-review": "28adaec30320754a",
+  "question-single+question-commandcode": "f9d420f904c72754",
+  "question-single+question-copilot": "e0990e4a71fab7b3",
+  "question-single+question-devin-3000-11": "d9dc1bddb5ecd18a",
+  "question-single+question-devin-multi-3000-11": "3a5b392b976a8ce6",
+  "question-single+question-devin-multi": "a10747503d6b87b8",
+  "question-single+question-devin": "9cc908943701798c",
+  "question-single+question-grok": "3a5abdee83520257",
+  "question-single+question-hermes-lock": "32bb489f7b32b266",
+  "question-single+question-hermes": "e1d15b4dde1f5578",
+  "question-single+question-kilo": "38fa65e83cc7a0ea",
+  "question-single+question-multi": "acaea1c54d11d6fa",
+  "question-single+question-muse": "79091121b65f5f29",
+  "question-single+question-opencode-review": "335e30f61c98890f",
+  "question-single+question-opencode": "51af3f0d4c405f3d",
+  "question-single+question-review": "28adaec30320754a",
+  "question-single+question-tabs": "b968e0ab1ecb77b6",
+  "question-tabs+permission-agy": "b975ec36ac1fec3f",
+  "question-tabs+permission-claude-edit": "f691a48dfbb3f7b5",
+  "question-tabs+permission-claude-plan": "5aa32b8b444210ac",
+  "question-tabs+permission-claude": "b4aa7ac6c86bfb77",
+  "question-tabs+permission-codex": "38d45e9ccf5a4454",
+  "question-tabs+permission-commandcode": "215835e31c5e34f0",
+  "question-tabs+permission-copilot": "f069abe92b18bf6f",
+  "question-tabs+permission-cursor": "2acbfcf69dd96a3c",
+  "question-tabs+permission-devin-3000-11": "b30ca57a2819f675",
+  "question-tabs+permission-devin": "1d06e0e87661c742",
+  "question-tabs+permission-grok": "7aa7b5e2e0934b2b",
+  "question-tabs+permission-hermes": "c7038ae61dbe1c5e",
+  "question-tabs+permission-muse": "132e62ebaff3130f",
+  "question-tabs+permission-opencode": "98d3ee542928254a",
+  "question-tabs+question-agy": "79b0dc1445355c0e",
+  "question-tabs+question-codex": "4529bf1503c24f7d",
+  "question-tabs+question-commandcode-review": "28adaec30320754a",
+  "question-tabs+question-commandcode": "f9d420f904c72754",
+  "question-tabs+question-copilot": "8d81e491e47797c1",
+  "question-tabs+question-devin-3000-11": "fb49a5b6bd708ddb",
+  "question-tabs+question-devin-multi-3000-11": "00ad92ff1fc4f8c4",
+  "question-tabs+question-devin-multi": "781b5cf28a4572c5",
+  "question-tabs+question-devin": "c5922376cee9cb95",
+  "question-tabs+question-grok": "60d95a00f5f1ac30",
+  "question-tabs+question-hermes-lock": "99fb94a6ed56310d",
+  "question-tabs+question-hermes": "b56c821953733e2f",
+  "question-tabs+question-kilo": "38fa65e83cc7a0ea",
+  "question-tabs+question-multi": "acaea1c54d11d6fa",
+  "question-tabs+question-muse": "af2c6662a38ee4d6",
+  "question-tabs+question-opencode-review": "29e442bd9084a5a4",
+  "question-tabs+question-opencode": "bb0621e88d083546",
+  "question-tabs+question-review": "28adaec30320754a",
+  "question-tabs+question-single": "cce1b373c98ce8bd"
  },
  "synthetic": {
   "opencode": [
@@ -9402,6 +9743,47 @@
    ]
   ],
   "pi": [
+   [
+    "1"
+   ],
+   [
+    "Down",
+    "Enter"
+   ],
+   [
+    "Right",
+    "Enter"
+   ],
+   [
+    "2"
+   ],
+   [
+    "Down",
+    "Down",
+    "Enter"
+   ],
+   [
+    "Right",
+    "Right",
+    "Enter"
+   ],
+   [
+    "3"
+   ],
+   [
+    "Down",
+    "Down",
+    "Down",
+    "Enter"
+   ],
+   [
+    "Right",
+    "Right",
+    "Right",
+    "Enter"
+   ]
+  ],
+  "openclaw": [
    [
     "1"
    ],
