@@ -17,6 +17,8 @@ interface Tail {
   path: string
   dirty: boolean
   running: Promise<void> | null
+  /** Reads started: a caller is answered only by a read that started after it asked. */
+  reads: number
   timer: ReturnType<typeof setTimeout> | null
   holds: Set<TailHold>
   unheld: Promise<void> | null
@@ -139,10 +141,18 @@ export function createLiveSessions(deps: LiveSessionDeps) {
   async function pollSession(id: string): Promise<void> {
     const tail = tails.get(id)
     if (!tail || stopped || deps.bySession(id)?.interpretationHold) return
+    const asked = tail.reads
     if (tail.unheld) await tail.unheld
-    if (tail.running) return tail.running
-    if (tail.offset !== null || tails.get(id) !== tail) return
+    // A read already running may have started before what this caller wants read was written: a Stop hook drains
+    // the turn it just ended, and that read was answered from a page taken before the turn's last records
+    // (attach.control.spec on Linux CI, run 42932452673). Wait for it and read again; one started since covers it.
+    while (tail.running) {
+      if (tail.reads > asked) return tail.running
+      await tail.running.catch(() => {})
+    }
+    if (stopped || tail.offset !== null || tails.get(id) !== tail || deps.bySession(id)?.interpretationHold) return
     tail.dirty = false
+    tail.reads++
     tail.running = (async () => {
       let more = true
       while (more && !stopped && tails.get(id) === tail && !tail.holds.size && tail.offset === null) {
@@ -260,7 +270,7 @@ export function createLiveSessions(deps: LiveSessionDeps) {
         for (const hold of [...previous.holds]) hold.release()
         if (![...tails.values()].some(other => other.path === previous.path)) deps.unwatch(previous.path)
       }
-      tails.set(id, { path, dirty: false, running: null, timer: null, holds: new Set(), unheld: null,
+      tails.set(id, { path, dirty: false, running: null, reads: 0, timer: null, holds: new Set(), unheld: null,
         release: null, moves: 0, offset: null, rewritten: false })
       deps.watch(path)
       // First-turn delivery follows activation. It never builds one unbounded initialEvents array.
