@@ -164,6 +164,16 @@ void main() {
       await tester.tap(key('super-manage-tab-$tab'));
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull, reason: tab);
+      // Models is the person's own models, behind Your models…: v3's shares of models came from workgroups v4 has
+      // none of, so the v3 board is never read.
+      if (tab == 'models') {
+        expect(key('super-local-models'), findsOneWidget);
+        await tester.pump(const Duration(seconds: 1));
+        expect(
+          server.requested.where((path) => path.contains('/leaderboard')),
+          isEmpty,
+        );
+      }
     }
     expect(find.textContaining(crew), findsNothing);
 
