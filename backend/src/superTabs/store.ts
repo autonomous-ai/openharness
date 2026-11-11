@@ -1112,7 +1112,7 @@ export class SuperTabStore {
       if (command.type === 'message.send' && actor.kind === 'person') {
         author(original, actor, true)
         readConversation(original, actor, command.conversationId)
-        postable(original, actor, command.conversationId)
+        postable(original, actor, command.conversationId, this.now())
       }
       const context: CommandContext = { operationId, now: this.now() }
       if (command.type === 'machine.teamGone' && only.teamMachineGone) context.teamMachineGone = true
@@ -1755,7 +1755,7 @@ export class SuperTabStore {
     const actor = await this.actor(tx, user, state, asAgentId)
     author(state, actor, true)
     readConversation(state, actor, conversationId)
-    postable(state, actor, conversationId)
+    postable(state, actor, conversationId, this.now())
     return { state, actor }
   }
 
