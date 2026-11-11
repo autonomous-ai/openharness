@@ -107,13 +107,28 @@ describe('harness browser', () => {
       { env: { HARNESS_PANE: 'p1' }, probe: NO_TMUX },
       // TMUX_PANE names another agent's pane.
       { env: { TMUX_PANE: '%3' }, probe: PROBE },
-      // ps unreadable.
-      { env: { TMUX_PANE: '%7' }, probe: { ancestors: () => null, panes: () => null } },
     ]
     for (const { env, probe } of cases) {
       const r = await run(['snapshot'], { env, probe })
       expect(r.code).toBe(5)
       expect(r.err).toBe('Run harness browser from your own Harness pane.\n')
+      expect(r.open).not.toHaveBeenCalled()
+    }
+  })
+
+  // Found with a real Codex agent: a piped or `;` command runs in Codex's sandbox, where ps and the tmux socket are refused.
+  // Exit 5 made it give up; exit 1 with the proof's reason lets it run the command again outside the sandbox.
+  it('a pane its environment keeps it from proving is the proof\'s reason, exit 1, and asks nothing', async () => {
+    const cases: Array<{ env: NodeJS.ProcessEnv; probe: PaneProbe }> = [
+      // ps unreadable.
+      { env: { TMUX: '/private/tmp/tmux-501/default,1,0', TMUX_PANE: '%7' }, probe: { ancestors: () => null, panes: () => null } },
+      // The tmux socket refused.
+      { env: { TMUX: '/private/tmp/tmux-501/default,1,0', TMUX_PANE: '%7' }, probe: { ...PROBE, panes: () => null } },
+    ]
+    for (const { env, probe } of cases) {
+      const r = await run(['snapshot'], { env, probe })
+      expect(r.code).toBe(1)
+      expect(r.err).toBe('Harness could not tell which pane this command runs in, so it did not run it. Run it as your harness gave it, in its own pane.\n')
       expect(r.open).not.toHaveBeenCalled()
     }
   })
