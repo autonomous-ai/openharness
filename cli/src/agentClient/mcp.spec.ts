@@ -3,7 +3,7 @@ import { parseNewArgs } from '../lib/newCommand.js'
 import { step } from './commands.js'
 import { describe, expect, it } from 'vitest'
 import { agentOfClient, answer, callerEnv, INSTRUCTIONS, mcpCommand, PROTOCOL_VERSIONS, result, STARTABLE_AGENTS, TOOLS, type McpDeps, type Ran } from './mcp.js'
-import { HARNESS_AGENT_TOOLS } from '../engines/facets/hooks.js'
+import { HARNESS_AGENT_TOOLS, HARNESS_AGENT_VERBS } from '../engines/facets/hooks.js'
 
 /** A runner that records what it was asked and answers [ran]. */
 function runner(ran: Partial<Ran> = {}) {
@@ -93,6 +93,13 @@ describe('harness mcp', () => {
       .map((tool) => [tool.argv({ name: 'x', names: ['x'], task: 't', to: 'x', text: 't' }, '/work')[0], tool.name]))
     expect(runs).toEqual(HARNESS_AGENT_TOOLS)
     expect(Object.keys(HARNESS_AGENT_TOOLS)).not.toContain('settings')
+  })
+
+  it('browser is an agent verb and no MCP tool', () => {
+    // `harness browser` is allowed in the engines' rules as a shell command only: nothing of the browser is MCP.
+    expect(HARNESS_AGENT_VERBS as string[]).toContain('browser')
+    expect(Object.keys(HARNESS_AGENT_TOOLS)).not.toContain('browser')
+    expect(TOOLS.map((tool) => tool.argv({ name: 'x', names: ['x'], task: 't', to: 'x', text: 't' }, '/work')[0])).not.toContain('browser')
   })
 
   it('runs each tool as its verb', async () => {

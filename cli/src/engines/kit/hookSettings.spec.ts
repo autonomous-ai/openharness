@@ -5,14 +5,14 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { env } from '../../config/env.js'
 import { hooks as claude } from '../claude/hookContract.js'
 import { hooks as codex } from '../codex/hookContract.js'
-import { defaultHookHome, installHookSettings } from './hookSettings.js'
+import { defaultHookHome, harnessRules, installHookSettings } from './hookSettings.js'
 import { HOOK_SCRIPT } from './notifyHooks.js'
 import type { HookPreparationProof } from './nativeHookFiles.js'
 import { messagesCommand } from './messagesHook.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
 import * as preparations from './nativeHookFiles.js'
 import { reviewHash, reviewRecords } from './hookReview.js'
-import { HARNESS_AGENT_TOOLS, HARNESS_AGENT_VERBS } from '../facets/hooks.js'
+import { HARNESS_AGENT_TOOLS } from '../facets/hooks.js'
 
 // What every case writes and logs is engines/hookInstallers.golden.spec.ts; these are the kit's own edges.
 let root = ''
@@ -152,13 +152,17 @@ it('reports a held malformed file even when an engine declares no malformed-file
   expect(readFileSync(join(home, 'hooks.json'), 'utf8')).toBe('{not-json')
 })
 
+/** The agent verbs, in order: each with an MCP tool, then `browser`, a shell command only. */
+const AGENT_VERBS: string[] = [...Object.keys(HARNESS_AGENT_TOOLS), 'browser']
+const toolOf = (verb: string): string | undefined => (HARNESS_AGENT_TOOLS as Record<string, string>)[verb]
+
 /** Every rule Harness adds to Claude Code's allow list on this computer, in order: `harness --help`, then each verb's
- *  commands, then its tool. */
+ *  commands, then its tool where it has one. */
 const claudeRules = (skip: { bash?: string[]; mcp?: string[]; help?: boolean } = {}): string[] => [
   ...(skip.help ? [] : ['Bash(harness --help)', 'Bash(harness -h)', `Bash(${join(env.HARNESS_BIN_DIR, 'harness')} --help)`]),
-  ...HARNESS_AGENT_VERBS.flatMap((verb) => [
+  ...AGENT_VERBS.flatMap((verb) => [
     ...(skip.bash?.includes(verb) ? [] : [`Bash(harness ${verb}:*)`, `Bash(${join(env.HARNESS_BIN_DIR, 'harness')} ${verb}:*)`]),
-    ...(skip.mcp?.includes(verb) ? [] : [`mcp__harness__${HARNESS_AGENT_TOOLS[verb]}`, `mcp__plugin_harness_harness__${HARNESS_AGENT_TOOLS[verb]}`]),
+    ...(skip.mcp?.includes(verb) || !toolOf(verb) ? [] : [`mcp__harness__${toolOf(verb)}`, `mcp__plugin_harness_harness__${toolOf(verb)}`]),
   ]),
 ]
 
@@ -212,15 +216,46 @@ it('allows only Harness\'s own MCP tools, not every tool of a server that is als
   const home = join(root, 'claude')
   expect(await installHookSettings('claude', claude.settings, 19473, home)).toBe(true)
   const allow: string[] = JSON.parse(readFileSync(join(home, claude.settings.file), 'utf8')).permissions.allow
-  expect(allow.filter((rule) => rule.startsWith('mcp__'))).toEqual(HARNESS_AGENT_VERBS.flatMap((verb) =>
-    [`mcp__harness__${HARNESS_AGENT_TOOLS[verb]}`, `mcp__plugin_harness_harness__${HARNESS_AGENT_TOOLS[verb]}`]))
+  expect(allow.filter((rule) => rule.startsWith('mcp__'))).toEqual(Object.values(HARNESS_AGENT_TOOLS).flatMap((tool) =>
+    [`mcp__harness__${tool}`, `mcp__plugin_harness_harness__${tool}`]))
   expect(allow.some((rule) => rule.includes('*') && rule.startsWith('mcp__'))).toBe(false)
+})
+
+it('allows harness browser in Claude Code by name and by the launcher\'s path, and no MCP tool for it', async () => {
+  const home = join(root, 'claude')
+  expect(await installHookSettings('claude', claude.settings, 19473, home)).toBe(true)
+  const allow: string[] = JSON.parse(readFileSync(join(home, claude.settings.file), 'utf8')).permissions.allow
+  expect(allow).toContain('Bash(harness browser:*)')
+  expect(allow).toContain(`Bash(${join(env.HARNESS_BIN_DIR, 'harness')} browser:*)`)
+  // Exactly `harness browser …`: nothing broader of Harness's, and no rule of a tool it does not have.
+  expect(allow.filter((rule) => rule.includes('browser'))).toEqual(['Bash(harness browser:*)', `Bash(${join(env.HARNESS_BIN_DIR, 'harness')} browser:*)`])
+  expect(allow.filter((rule) => /undefined|\{tool\}|\{verb\}/.test(rule))).toEqual([])
+})
+
+it('a deny or an ask for harness browser keeps its allow out in both spellings', async () => {
+  const launcher = join(env.HARNESS_BIN_DIR, 'harness')
+  for (const permissions of [{ deny: ['Bash(harness browser:*)'] }, { ask: [`Bash(${launcher} browser navigate:*)`] }]) {
+    const home = mkdtempSync(join(root, 'claude-')), file = join(home, claude.settings.file)
+    writeFileSync(file, JSON.stringify({ permissions }))
+    expect(await installHookSettings('claude', claude.settings, 19473, home)).toBe(true)
+    const written = JSON.parse(readFileSync(file, 'utf8')).permissions
+    expect(written.allow).toEqual(claudeRules({ bash: ['browser'] }))
+    expect(written.allow.some((rule: string) => rule.includes('browser'))).toBe(false)
+  }
+})
+
+it('harnessRules gives a verb with no tool its commands alone, and no empty group', () => {
+  const groups = harnessRules(claude.settings.allow && 'list' in claude.settings.allow ? claude.settings.allow.rules : [])
+  expect(groups.every((group) => group.length > 0)).toBe(true)
+  const launcher = join(env.HARNESS_BIN_DIR, 'harness')
+  expect(groups.filter((group) => group.some((rule) => rule.includes('browser')))).toEqual([['Bash(harness browser:*)', `Bash(${launcher} browser:*)`]])
+  expect(groups.flat().filter((rule) => /undefined|\{tool\}|\{verb\}/.test(rule))).toEqual([])
 })
 
 /** Harness's Codex rules file on this computer, byte for byte. */
 const codexRulesFile = (): string => {
-  const verbs = '["whoami", "ps", "search", "machines", "show", "wait", "new", "close", "send", "tell"]'
-  return "# Written by Harness, which rewrites it: do not edit. Its agent commands (harness whoami, ps, search, machines, show, wait, new, close, send, tell)\n"
+  const verbs = '["whoami", "ps", "search", "machines", "show", "wait", "new", "close", "send", "tell", "browser"]'
+  return "# Written by Harness, which rewrites it: do not edit. Its agent commands (harness whoami, ps, search, machines, show, wait, new, close, send, tell, browser)\n"
     + "# need Harness's daemon, which Codex's sandbox cannot reach, so they run outside it without asking. What each\n"
     + '# may do is for Harness to decide: Settings > Experimental, and an agent gives work to and closes only what it started.\n'
     // Only the launcher's path counts as `harness` by its last part: not a `harness` an agent wrote elsewhere.
