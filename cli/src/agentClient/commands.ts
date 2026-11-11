@@ -1456,10 +1456,9 @@ export function closeCommand(argv: readonly string[], deps: ClientDeps = {}): Pr
  * Limits on starting harnesses (the design's "Limits"): runaway spawning is the risk, and every harness started is
  * the person's tokens. One level down (owner, October 12: "be very careful about when to start a new agent so we don't
  * waste user token"): a harness another agent started does its work itself. That, the forty a computer and the starts
- * in ten minutes are what stop a runaway. Eight at once for one agent (owner, November 11: four "was too long" ago, "let's
- * update it"): a builder for each package of one night's work, and about what a 16-thread computer runs building at once.
- * It was four from October 12, and eight before. The number should come from the machine's cores once an agent has a
- * CPU budget (docs/design/2026-11-11-swarm-allocator, package 7).
+ * in ten minutes are what stop a runaway. Eight at once for one agent (owner, November 11, of the four set a month
+ * before: "that was too long. let's update it"): with four, one agent could not hand a night's packages to a builder
+ * each. It was four from October 12, and eight before.
  */
 export const SPAWN_LIMITS = { livePerHarness: 8, livePerMachine: 40, depth: 1, perWindow: 20, windowMs: 10 * 60_000 } as const
 
