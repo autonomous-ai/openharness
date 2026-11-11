@@ -323,16 +323,8 @@ class ProjectSidebar extends StatelessWidget {
       ),
       if (controller.projectsGroupOpen) ...[
         for (final start in projectStarts) _startRow(start),
-        if (snapshot != null &&
-            projectStarts.isEmpty &&
-            superTabListedProjects(
-              controller,
-              app: app,
-              paneCovered: _paneCovered,
-            ).isEmpty)
-          _noProjects()
-        else
-          for (final (_, channel) in _channels(snapshot, reading)) channel,
+        // An empty list shows nothing: the heading's + is what fills it (design system, Swarm elements, rule 7).
+        for (final (_, channel) in _channels(snapshot, reading)) channel,
       ],
       const SizedBox(height: grid.AppDesktop.groupGap),
       ..._yourMachines(),
@@ -629,24 +621,6 @@ class ProjectSidebar extends StatelessWidget {
     failed: start.failed,
     compact: compact,
     onOpen: start.project ? onNewProject : onNewAgent,
-  );
-
-  /// Open Projects over a Swarm with none, in the names' column.
-  Widget _noProjects() => Padding(
-    key: const ValueKey('super-projects-empty'),
-    padding: EdgeInsets.fromLTRB(
-      SuperTabSectionHeading.indentFor(0) + _iconColumn,
-      SwarmType.sidebarRowPadding(compact: compact),
-      grid.AppDesktop.controlGap,
-      SwarmType.sidebarRowPadding(compact: compact),
-    ),
-    child: Text(
-      'No projects yet.',
-      style: SwarmType.sidebar(
-        compact: compact,
-        color: grid.SidebarInk.inkMuted,
-      ),
-    ),
   );
 
   /// Every project with its workgroups, by name from A to Z. The round dial

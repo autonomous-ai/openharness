@@ -43,6 +43,13 @@ void main() {
           find.text('Start a project, or bring an agent to work with you.'),
           findsOneWidget,
         );
+        // An empty list shows nothing: Projects is its heading and its +, with no words under it.
+        if (at >= 720) {
+          expect(key('project-sidebar-projects'), findsOneWidget);
+          expect(key('project-sidebar-projects-add'), findsOneWidget);
+        }
+        expect(key('super-projects-empty'), findsNothing);
+        expect(find.text('No projects yet.'), findsNothing);
         expect(tester.takeException(), isNull);
         await captureWindow(tester, shots, 'first-nothing-$at');
         await tester.tap(key('super-empty-new-agent'));
