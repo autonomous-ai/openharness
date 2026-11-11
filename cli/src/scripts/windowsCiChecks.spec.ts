@@ -1,4 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -187,4 +188,53 @@ describe('the install job', () => {
   it('runs these checks on Windows, where the PowerShell ones run at all', () => {
     expect(windowsYml).toContain("'src/scripts/windowsCiChecks.spec.ts'")
   })
+})
+
+// release.yml pty-signatures: before a terminal host reaches production, Windows' own check of every file's signature.
+// From 2026-11-04 to 11-09 production named an unsigned host, and Smart App Control blocked Harness's own start.
+describe('check-pty-signatures.ps1', () => {
+  const script = join(process.cwd(), 'scripts', 'windows-ci', 'check-pty-signatures.ps1')
+  const text = readFileSync(script, 'utf8')
+
+  it('uses install.ps1\'s own check, never a variable install.ps1\'s [string]$Manifest parameter would turn into a string', () => {
+    expect(text).toContain(". (Join-Path $PSScriptRoot '..\\install.ps1')")
+    expect(text).toContain('Get-HarnessPtySignatureProblems $unpacked')
+    expect(text).not.toMatch(/^\s*\$manifest\s*=/im)
+    expect(text.split(/\r?\n/).filter((line) => /[^\t\r\x20-\x7e]/.test(line))).toEqual([])
+  })
+
+  /** A local manifest naming one zip of [files] (name -> bytes) for both architectures, as version 9.9.9. */
+  function manifestOf(files: Record<string, Buffer>): string {
+    const dir = mkdtempSync(join(tmpdir(), 'harness-pty-sig-check-'))
+    mkdirSync(join(dir, 'p'))
+    for (const [name, bytes] of Object.entries(files)) writeFileSync(join(dir, 'p', name), bytes)
+    execFileSync(join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe'), ['-a', '-cf', join(dir, 'x.zip'), ...Object.keys(files)], { cwd: join(dir, 'p') })
+    const zip = readFileSync(join(dir, 'x.zip'))
+    const entry = { version: '9.9.9', url: join(dir, 'x.zip'), sha256: createHash('sha256').update(zip).digest('hex'), size: zip.length }
+    writeFileSync(join(dir, 'm.json'), JSON.stringify({ pty: { 'win32-x64': entry, 'win32-arm64': entry } }))
+    return join(dir, 'm.json')
+  }
+  const names = ['harness-pty.exe', 'harness-launch.exe', 'harness.exe', 'conpty.dll', 'OpenConsole.exe', 'harness-serial.exe', 'harness-tui.exe']
+  const check = (manifest: string, version = '9.9.9') => spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Version', version, '-ManifestUrl', manifest], {
+    encoding: 'utf8', env: { ...process.env, GITHUB_OUTPUT: '', GITHUB_STEP_SUMMARY: '', HARNESS_ALLOW_UNSIGNED: '1' }, timeout: 120_000,
+  })
+
+  it.runIf(process.platform === 'win32')('refuses unsigned files, and files signed by someone else, naming each; HARNESS_ALLOW_UNSIGNED changes nothing', () => {
+    const unsigned = check(manifestOf(Object.fromEntries(names.map((name) => [name, Buffer.from(name)]))))
+    expect(unsigned.status).toBe(1)
+    for (const key of ['win32-x64', 'win32-arm64']) for (const name of names) expect(unsigned.stdout).toContain(`::error::${key}: ${name} is UnknownError`)
+    expect(unsigned.stdout).not.toContain('PTY_SIGNED_ZIPS=')
+    // Two of them validly signed, by the OpenJS Foundation (node.exe, 80 MB: two copies keep the zip small).
+    const node = readFileSync(process.execPath)
+    const other = check(manifestOf(Object.fromEntries(names.map((name) => [name, ['harness-launch.exe', 'conpty.dll'].includes(name) ? node : Buffer.from(name)]))))
+    expect(other.status).toBe(1)
+    expect(other.stdout).toContain("::error::win32-x64: harness-launch.exe is signed by 'OpenJS Foundation', not 'AUTONOMOUS INC.'")
+    expect(other.stdout).toContain("::error::win32-x64: conpty.dll is signed by 'OpenJS Foundation', not 'Microsoft Corporation'")
+  }, 240_000)
+
+  it.runIf(process.platform === 'win32')('refuses a manifest that names another version', () => {
+    const wrong = check(manifestOf({ 'harness.exe': Buffer.from('x') }), '9.9.8')
+    expect(wrong.status).toBe(1)
+    expect(wrong.stdout).toContain('::error::win32-x64: the staging manifest names 9.9.9, not 9.9.8')
+  }, 120_000)
 })
