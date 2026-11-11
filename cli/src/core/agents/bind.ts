@@ -99,6 +99,18 @@ export function createBinding({
   const pendingForkInherit = new Map<string, string>()
   /** Whether a stop, restart, retarget or resume owns the agent right now (`whileChanging`). */
   let changing: (agentId: string) => boolean = () => false
+  /**
+   * The OpenClaw TUI process whose state folder each agent's was last read from, agentId → `pid:startMarker`. A restart
+   * resumes the same key, so only a new process says the folder may have changed. Cleared at 256 entries rather than
+   * aged: that costs one more read per agent.
+   */
+  const openclawFolderReads = new Map<string, string>()
+  const tuiProcess = (tui: DiscoveredTerminalAgent['processIdentity']): string => `${tui.pid}:${tui.startMarker}`
+  const readOpenclawStateDir = (agentId: string, tui: DiscoveredTerminalAgent['processIdentity']): Promise<string | null> => {
+    if (openclawFolderReads.size >= 256) openclawFolderReads.clear()
+    openclawFolderReads.set(agentId, tuiProcess(tui))
+    return openclawStateDir(tui.pid)
+  }
 
   const handleRegistered = async (entry: RegisteredSession, meta: RegisteredMeta): Promise<void> => {
     const authority = paneReadIdentity(entry)
@@ -345,6 +357,18 @@ export function createBinding({
             `[agent] ${sid(agent.agentId)} transcript attachment is unavailable: ${error instanceof Error ? error.message : error}`))
         }
       }
+      // A TUI the person relaunched with another OPENCLAW_STATE_DIR (as the store hold asks) shows the same key, so the
+      // pass below never binds it again: its new folder replaces the row's, and the session is let go so the next pass
+      // binds it again and attaches its stream there. Before the handover: a task is typed only into a session read.
+      if (agent.sessionId && screen.key === agent.sessionId && openclawFolderReads.get(agent.agentId) !== tuiProcess(observed.processIdentity)) {
+        const stateDir = await readOpenclawStateDir(agent.agentId, observed.processIdentity)
+        if (!current()) return
+        if (stateDir && registry.setOpenclawStateDir(agent.agentId, stateDir)) {
+          console.log(`[discovery] ${sid(agent.agentId)} openclaw · state folder changed`)
+          forgetSession(agent.sessionId, { force: true, keepAgent: true })
+          return
+        }
+      }
       // The first task is typed once the Gateway answers, into the session the pane shows, and only with a stream
       // attached: typed before it, its user row is history, nothing confirms it, and the person sends it again. A pane
       // that moved to another key binds it below first, and hands the task over on the next pass.
@@ -368,7 +392,7 @@ export function createBinding({
       followRegistered(bound.entry, bound)
       console.log(`[discovery] ${moved ? `${sid(agent.agentId)} openclaw session moved ${sid(agent.sessionId)} → ` : 'bound openclaw session '}${sid(key)} via ${observed.primaryRuntimeKey}`)
       // Where its store is once this TUI is gone (a `--profile` TUI's is not the default): read while it runs.
-      const stateDir = await openclawStateDir(observed.processIdentity.pid)
+      const stateDir = await readOpenclawStateDir(bound.entry.agentId, observed.processIdentity)
       if (stateDir) registry.setOpenclawStateDir(bound.entry.agentId, stateDir)
       return
     }

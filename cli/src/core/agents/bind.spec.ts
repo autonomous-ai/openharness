@@ -1296,7 +1296,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       await run.binding.bindObservedAgent(tui())
       await run.binding.bindObservedAgent(tui())
       expect(run.deps.openclawStateDir).toHaveBeenCalledOnce()
-      const relaunched = tui({ processIdentity: { pid: 7714, startMarker: '2026-11-10T09:00:00Z' } })
+      const relaunched = tui({ processIdentity: { pid: 7714, startMarker: '2026-11-10T09:00:00Z', executable: 'openclaw' } })
       await run.binding.bindObservedAgent(relaunched)
       expect(run.deps.openclawStateDir).toHaveBeenCalledTimes(2)
       // What it remembers is bounded: the 256th agent starts it over, at the cost of one more read for each.
