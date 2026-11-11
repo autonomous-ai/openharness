@@ -257,14 +257,15 @@ export function crewOf(state: Json, project: { pmAgentId: string; projectId: str
     && typeof a.machineId === 'string' && (a.privateProjectId === undefined || a.privateProjectId === null || a.privateProjectId === project.projectId)
     && ['claude', 'codex'].includes(String(object(a.configuration).engine)))
   // Paused by its person or the Swarm's owner (backend agent.pause): given nothing and asked nothing, its pull requests still read
-  // and merged, the tasks it took kept for it as one out of quota keeps them (takeBacks).
-  const away: AwayBuilder[] = team.filter(a => a.workDecision === 'stop' || a.downSince || a.paused === true).map(a => {
+  // and merged, and its tasks go to others as a down machine's do, from when it was paused (takeBacks): a five-minute pause moves
+  // nothing (code review of #4112).
+  const away: AwayBuilder[] = team.filter(a => a.workDecision === 'stop' || a.downSince || typeof a.pausedAt === 'string').map(a => {
     const name = String(a.displayName ?? a.name ?? a.id)
     return a.workDecision === 'stop' ? { name, label: labelOf(name), why: 'stopping' as const }
       : a.downSince ? { name, label: labelOf(name), why: 'down' as const, since: String(a.downSince) }
-      : { name, label: labelOf(name), why: 'paused' as const }
+      : { name, label: labelOf(name), why: 'paused' as const, since: String(a.pausedAt) }
   })
-  const builders = team.filter(a => a.workDecision !== 'stop' && !a.downSince && a.paused !== true)
+  const builders = team.filter(a => a.workDecision !== 'stop' && !a.downSince && typeof a.pausedAt !== 'string')
     .map(a => {
       const name = String(a.displayName ?? a.name ?? a.id)
       const model = object(a.configuration).model
@@ -293,15 +294,16 @@ export function takeBacks(issues: Json[], away: AwayBuilder[], now: number): Tak
     const builder = labels.map(label => byLabel.get(label)).find(Boolean)
     if (!builder) continue
     const taken = labels.includes('status:taken')
-    if (builder.why === 'down') {
+    if (builder.why === 'down' || builder.why === 'paused') {
       const since = Date.parse(builder.since ?? '')
       if (!Number.isFinite(since) || now - since < (taken ? TAKEN_AWAY_MS : QUEUED_AWAY_MS)) continue
     }
-    // Out of quota, or paused: what it took it finishes; what waits for it goes to another.
-    if ((builder.why === 'quota' || builder.why === 'paused') && taken) continue
-    const down = builder.why === 'down' ? `${builder.name}'s machine has been down since ${new Date(Date.parse(builder.since!)).toISOString().slice(11, 16)} UTC`
+    // Out of quota: what it took it finishes; what waits for it goes to another.
+    if (builder.why === 'quota' && taken) continue
+    const at = () => new Date(Date.parse(builder.since!)).toISOString().slice(11, 16)
+    const down = builder.why === 'down' ? `${builder.name}'s machine has been down since ${at()} UTC`
+      : builder.why === 'paused' ? `${builder.name} has been paused since ${at()} UTC`
       : builder.why === 'quota' ? `${builder.name}'s subscription has no room for ${Math.round((builder.until ?? 0) / 60)} h`
-      : builder.why === 'paused' ? `${builder.name} is paused`
       : `${builder.name} is being stopped`
     out.push({ number: Number(issue.number), label: builder.label, taken, why: down })
   }

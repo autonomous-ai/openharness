@@ -47,7 +47,9 @@ const VERDICTS: ReadonlySet<unknown> = new Set(['APPROVED', 'CHANGES_REQUESTED',
 
 /** One of this computer's person's v4 agents and where it is heard: its Swarm, its chat with its person, the names it goes
  *  by, the label of its tasks and pull requests, and the repositories of the projects it reads. */
-export interface WatchedAgent { tabId: string; agentId: string; harnessId: string; chat: string; names: string[]; label: string; repos: string[] }
+/** [paused]: its person or the Swarm's owner paused it (backend agent.pause). GitHub news still reaches it, so nothing said of its
+ *  own pull requests is lost; Harness types it no next thing (nextThing.ts). */
+export interface WatchedAgent { tabId: string; agentId: string; harnessId: string; chat: string; names: string[]; label: string; repos: string[]; paused?: true }
 
 
 /** One thing GitHub said, before it is matched to the agents it reaches. A line comment names the review it is part of. */
@@ -119,8 +121,6 @@ export async function watchedAgents(deps: { me: string | null; live: (harnessId:
     const agent = object(row.agent)
     if (agent.regular !== true || row.closeSession === true || row.stopRequested === true || !identifier(row.tabId) || !identifier(agent.id)) continue
     if (agent.contributorId !== deps.me || agent.machineOwnerId !== deps.me || typeof agent.harnessId !== 'string' || !deps.live(agent.harnessId)) continue
-    // Paused (backend agent.pause): Harness relays it nothing from GitHub and types it no next thing (nextThing.ts) until resumed.
-    if (agent.paused === true) continue
     // The name people see first (backend agentNames.ts: a chosen name, else a free one): it names the agent's label and its
     // instructions file as the assigner and Desktop name them. Its stored name can be its engine's ("Claude Code").
     const names = [...new Set([agent.displayName, agent.name].filter((n): n is string => typeof n === 'string' && !!n.trim())
@@ -134,7 +134,8 @@ export async function watchedAgents(deps: { me: string | null; live: (harnessId:
     const projects = Array.isArray(state.projects) ? state.projects.map(object) : state.project ? [{ repository: state.project }] : []
     const repos = [...new Set(projects.map(p => repositorySlug(object(p.repository).repositoryUrl)).filter((s): s is string => !!s))]
     if (!chat || !identifier(chat.id) || !repos.length) continue
-    watched.push({ tabId: row.tabId, agentId: agent.id, harnessId: agent.harnessId, chat: chat.id, names, label: builderLabel(names[0]!), repos })
+    watched.push({ tabId: row.tabId, agentId: agent.id, harnessId: agent.harnessId, chat: chat.id, names, label: builderLabel(names[0]!), repos,
+      ...typeof agent.pausedAt === 'string' ? { paused: true } : {} })
   }
   return watched
 }

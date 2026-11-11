@@ -3920,23 +3920,27 @@ describe('lead.switch', () => {
 // its session; the CLI gives it no task and types it no nudge while it is paused.
 describe('agent.pause', () => {
   const pause = (agentId: string, paused: boolean): Command => ({ type: 'agent.pause', agentId, paused })
-  const pausedFor = (f: ReturnType<typeof fixture>, reader: Actor, agentId: string) => visibleState(f.state, reader).agents.find(a => a.id === agentId)!.paused
+  const pausedFor = (f: ReturnType<typeof fixture>, reader: Actor, agentId: string) => visibleState(f.state, reader).agents.find(a => a.id === agentId)!.pausedAt
   const peerContributorAgent = (f: ReturnType<typeof fixture>) => { f.invite(); return f.add('mine', 'peer') }
 
   it('lets its person pause and resume it, and every reader sees which', () => {
     const f = fixture(), agentId = peerContributorAgent(f)
     f.run(pause(agentId, true), peer)
-    expect(pausedFor(f, owner, agentId)).toBe(true)
-    expect(pausedFor(f, peer, agentId)).toBe(true)
+    const since = pausedFor(f, owner, agentId)
+    expect(since).toEqual(expect.stringMatching(/^\d{4}-\d\d-\d\dT/))
+    expect(pausedFor(f, peer, agentId)).toBe(since)
+    // Paused again, it keeps the time it was first paused.
+    f.run(pause(agentId, true), peer)
+    expect(pausedFor(f, owner, agentId)).toBe(since)
     f.run(pause(agentId, false), peer)
     expect(pausedFor(f, owner, agentId)).toBeUndefined()
-    expect(f.state.agents.find(a => a.id === agentId)).not.toHaveProperty('paused')
+    expect(f.state.agents.find(a => a.id === agentId)).not.toHaveProperty('pausedAt')
   })
 
   it('lets the Swarm\'s owner and the machine\'s owner pause it', () => {
     const f = fixture(), agentId = peerContributorAgent(f)
     f.run(pause(agentId, true), owner)
-    expect(pausedFor(f, peer, agentId)).toBe(true)
+    expect(pausedFor(f, peer, agentId)).toBeDefined()
     f.state.people.push({ id: 'host-owner', email: 'host-owner@example.com', role: 'collaborator', generation: 'g' } as never)
     f.run(pause(agentId, false), { kind: 'person', userId: 'host-owner', email: 'host-owner@example.com' })
     expect(pausedFor(f, peer, agentId)).toBeUndefined()

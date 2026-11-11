@@ -130,6 +130,27 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     f.next.stop()
   })
 
+  // anh Dee, 2026-11-11: "how do we pause finn while we're fixing bugs rather than finn keep receiving tasks?" Paused, it is typed
+  // nothing at its turn's end nor asked after the task it holds; resumed, its next turn's end types its next thing.
+  it('types a paused agent nothing, at its turn\'s end or idle with its task, and its next thing once it is resumed', async () => {
+    // Watched idle with the task it holds, then paused: nothing asked of it, nothing given back.
+    const f = setup({ items: [item(14, 'Mine', ['status:taken'])] })
+    f.next.start()
+    await f.end()
+    f.state.watched = [{ ...PIP, paused: true }]
+    await vi.advanceTimersByTimeAsync(IDLE_BACK_MS)
+    // Its turn's end while paused types nothing either.
+    f.state.items = [item(12, 'Fix the login bug')]
+    await f.end()
+    expect(f.told()).toEqual([])
+    expect(f.written).toEqual([])
+    f.state.watched = [PIP]
+    f.state.items = [item(12, 'Fix the login bug')]
+    await f.end()
+    expect(f.told()).toEqual([expect.stringMatching(/^Next: acme\/app#12 /)])
+    f.next.stop()
+  })
+
   it('types nothing when nothing waits for it, when it is busy again, or when its person stopped its turn', async () => {
     const f = setup({ items: [item(12, 'Fix the login bug', ['status:taken']), item(30, 'Fix the login bug', [], true)] })
     f.next.start()

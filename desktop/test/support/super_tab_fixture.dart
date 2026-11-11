@@ -1217,9 +1217,9 @@ class ConversationServer {
         }
         revision++;
         if (command['paused'] == true) {
-          agent['paused'] = true;
+          agent['pausedAt'] ??= '2026-11-12T01:00:00Z';
         } else {
-          agent.remove('paused');
+          agent.remove('pausedAt');
         }
       } else if (command['type'] == 'agent.remove') {
         // As the backend's: its contributor or the Swarm's owner withdraws it, and it leaves every chat it was in.

@@ -596,10 +596,16 @@ class ProjectSidebar extends StatelessWidget {
       },
     );
     // Pause and Delete are one right-click away and nowhere else (anh Dee, 2026-11-11: "make it subtle. right click you see
-    // pause"). Pause for its person and the Swarm's owner, who leads the work it would be given; Delete for its person alone
-    // (Swarm v4: only its person stops an agent). A project's PM stays until its project goes.
+    // pause"). Pause for its person, its machine's owner and the Swarm's owner, who leads the work it would be given (backend
+    // agent.pause); never a project's PM, which gives the work. Delete for its person alone (Swarm v4: only its person stops an
+    // agent). A project's PM stays until its project goes.
     final mine = agent.contributorId == controller.accountId;
-    if (!controller.canWrite || (!mine && !controller.isOwner)) {
+    final pausable =
+        agent.kind != 'pm' &&
+        (mine ||
+            agent.machineOwnerId == controller.accountId ||
+            controller.isOwner);
+    if (!controller.canWrite || (!mine && !pausable)) {
       return row;
     }
     final kept = snapshot.leadProtectionReason(agent.id);
@@ -610,11 +616,12 @@ class ProjectSidebar extends StatelessWidget {
             context: context,
             at: event.globalPosition,
             children: (close) => [
-              AppMenuItem(
-                label: agent.paused ? 'Resume' : 'Pause',
-                leadingSlot: false,
-                onPressed: () => close('pause'),
-              ),
+              if (pausable)
+                AppMenuItem(
+                  label: agent.paused ? 'Resume' : 'Pause',
+                  leadingSlot: false,
+                  onPressed: () => close('pause'),
+                ),
               if (mine)
                 AppMenuItem(
                   label: 'Delete',

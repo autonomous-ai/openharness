@@ -1920,8 +1920,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (actor.kind !== 'person' || ![state.ownerId, target.contributorId, target.machineOwnerId].includes(actor.userId)) {
         fail('FORBIDDEN', 'Only the person who runs this agent, its machine\'s owner or the Swarm\'s owner can pause it.', 403)
       }
-      if (command.paused) target.paused = true
-      else delete target.paused
+      // Paused again keeps its first time: its tasks wait from then (the CLI's crew.ts).
+      if (command.paused) target.pausedAt ??= new Date(context.now).toISOString()
+      else delete target.pausedAt
       break
     }
     case 'github.relay':

@@ -485,6 +485,8 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.textContaining('Delete the project first.'), findsOneWidget);
+      // A project's PM gives the work: it is not paused (code review of #4112).
+      expect(find.text('Pause'), findsNothing);
     },
   );
 

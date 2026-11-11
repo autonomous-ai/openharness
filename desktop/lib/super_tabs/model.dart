@@ -171,7 +171,7 @@ class SuperTabAgent {
       profileId = row['profileId'] as String?,
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
       downSince = DateTime.tryParse(row['downSince'] as String? ?? ''),
-      paused = row['paused'] == true,
+      paused = row['pausedAt'] is String,
       confidential = row['confidential'] == true,
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
   final String id, projectId, name, machineId, harnessId, contributorId;
@@ -210,8 +210,8 @@ class SuperTabAgent {
   /// while it runs.
   final DateTime? downSince;
 
-  /// Paused by its person or the Swarm's owner (backend `agent.pause`): its session runs on, and Harness gives it no task and
-  /// types it nothing until it is resumed. False from an older backend.
+  /// Paused by its person, its machine's owner or the Swarm's owner (backend `agent.pause`, `pausedAt`): its session runs on, and
+  /// Harness gives it no task and types it nothing until it is resumed. False from an older backend.
   final bool paused;
 
   /// The account whose computer runs it; a contributor may run agents on a computer another account shared with them.
