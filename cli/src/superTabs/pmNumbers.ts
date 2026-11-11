@@ -18,7 +18,8 @@
  * where its people read the team's talk. Nothing is read for it that the pass did not read already, but the project's goal
  * (goal.ts), and that only as a line that says it is sent: how many of its milestones pass on its main branch. A project
  * with no goal is told in the line how to state one; a goal that could not be read is left out of it. Under the day's counts go
- * each builder's steps (daySteps.ts), read as that post goes, once a day, and left out when they cannot be read.
+ * each builder's steps (daySteps.ts), read beside the pass and never in it: the post waits for them [STEPS_WAIT_MS] at most, and
+ * goes without them when they cannot be read.
  *
  * It says only what is so now: who has nothing, what is open, what landed. Its first three reviews found what more memory and
  * more rules cost: a person told of a night nobody watched, a message kept and typed three hours late, a file written every
@@ -53,6 +54,9 @@ export const SHORT_EVERY_MS = 60 * 60_000
 export const SHORT_TIMES = 3
 /** The hour of this computer's day from which the day's numbers are posted, once. */
 export const DAY_HOUR = 9
+/** How long the day's post waits for each builder's steps, from when it was first due here: a busy repository's are read within
+ *  minutes, and the counts are not held back longer for them. */
+export const STEPS_WAIT_MS = 10 * 60_000
 const DAY_MS = 24 * 60 * 60_000
 /** The most names a line lists, the most letters of a name it says, and the most projects whose counts are kept. */
 const NAMES_MAX = 5, NAME_MAX = 24, MAX_KEPT = 200
@@ -212,14 +216,17 @@ export class PmNumbers {
   /** After a send the server did not take: how many in a row, and when the next goes, by project and kind. */
   private readonly retries = new Map<string, { misses: number; at: number }>()
   private readonly said = new Set<string>()
+  /** Since when each project's day post has waited for its steps, and for which day. */
+  private readonly stepsWait = new Map<string, { day: string; since: number }>()
   private readonly now: () => number
   private readonly log: (line: string) => void
 
   constructor(private readonly deps: {
     /** Sends [text] [how] it goes (messageOf), under [operationId]: the server takes each operation once. */
     send: (how: How, project: LedProject, operationId: string, text: string) => Promise<unknown>
-    /** Each builder's steps over the last 24 hours, the lines under the day's counts (daySteps.ts); null for none. */
-    steps: (project: LedProject) => Promise<string | null>
+    /** Each builder's steps over the last 24 hours, the lines under [day]'s counts (daySteps.ts): null for none, undefined while
+     *  they are read. */
+    steps: (project: LedProject, day: string) => string | null | undefined
     file: string
     now?: () => number
     log?: (line: string) => void
@@ -267,23 +274,25 @@ export class PmNumbers {
     const day = dayOf(at)
     if (at.getHours() >= DAY_HOUR && day > kept.day) {
       // A day in which nothing landed and no task closed has no numbers to post.
-      if (!numbers.landed && !numbers.closed
-        || await this.send('post', project, day, async () => [dayLine(numbers, `${DAYS[at.getDay()]} ${at.getDate()} ${MONTHS[at.getMonth()]}`, await read()),
-          await this.steps(project)].filter(Boolean).join('\n')) !== 'later') kept.day = day
+      if (!numbers.landed && !numbers.closed) kept.day = day
+      else {
+        const steps = this.deps.steps(project, day), waited = this.stepsWait.get(id)
+        const since = waited?.day === day ? waited.since : now
+        this.stepsWait.delete(id)
+        this.stepsWait.set(id, { day, since })
+        if (this.stepsWait.size > MAX_KEPT) this.stepsWait.delete(this.stepsWait.keys().next().value!)
+        if ((steps !== undefined || now - since >= STEPS_WAIT_MS) && await this.send('post', project, day,
+          async () => [dayLine(numbers, `${DAYS[at.getDay()]} ${at.getDate()} ${MONTHS[at.getMonth()]}`, await read()), steps].filter(Boolean).join('\n')) !== 'later') {
+          kept.day = day
+          this.stepsWait.delete(id)
+        }
+      }
     }
     if (JSON.stringify(kept) === before) return
     // Kept in the order they were last written, so the ones dropped past MAX_KEPT are the ones longest untouched.
     delete memory[id]
     memory[id] = kept
     this.save(memory)
-  }
-
-  /** Each builder's steps for the day's post, left out, and said once, when they cannot be read: the counts go all the same. */
-  private steps(project: LedProject): Promise<string | null> {
-    return this.deps.steps(project).catch(error => {
-      this.once(`[super-tab] numbers: STEPS_UNREAD ${project.repo}: ${error instanceof Error ? error.message : String(error)}`)
-      return null
-    })
   }
 
   /**

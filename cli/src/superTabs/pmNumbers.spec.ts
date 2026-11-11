@@ -218,7 +218,7 @@ describe('the numbers, told as they are due', () => {
     }
     const file = join(folder, 'numbers.json')
     /** Each builder's steps for the day's post: none, unless a test gives some. */
-    const steps = vi.fn(async (_project: LedProject): Promise<string | null> => null)
+    const steps = vi.fn((_project: LedProject, _day: string): string | null | undefined => null)
     const make = () => new PmNumbers({ send, steps, file, now: () => clock.now, log })
     /** The project's goal, read when a line that says it is sent: one that cannot be read, unless a test gives another. */
     const goal = vi.fn(async (): Promise<Score | null> => { throw new Error('No goal is read in this test.') })
@@ -532,27 +532,47 @@ describe('the numbers, told as they are due', () => {
     expect(new Set(all.sent.map(([, id]) => id)).size).toBe(5)
   })
 
-  // Swarm plan, step 8: "Numbers posted daily, per builder and per person". One post: the steps go under the day's counts.
-  it('posts each builder\'s steps under the day\'s counts, and the counts alone when the steps cannot be read', async () => {
+  // Swarm plan, step 8: "Numbers posted daily, per builder and per person". One post: the steps go under the day's counts, read
+  // beside the pass (code review of #4051: read in it, a busy repository held every project's assignments for minutes).
+  it('posts each builder\'s steps under the day\'s counts once they are read, and the counts alone when they are none or late', async () => {
     const t = setup(new Date(2026, 10, 11, 9, 0).getTime()), landed = numbers({ free: [] })
-    t.steps.mockResolvedValueOnce('Steps · ready → first verdict 6 min (p90 6 min)\nPip: 7 landed · free → next task 4 min')
+    const lines = 'Steps · ready → first verdict 6 min (p90 6 min)\nPip: 7 landed · free → next task 4 min'
+    // Being read for the first three passes: the post waits for them.
+    t.steps.mockReturnValueOnce(undefined).mockReturnValueOnce(undefined).mockReturnValueOnce(undefined).mockReturnValueOnce(lines)
+    await passes(t, 3, landed)
+    expect(t.sent).toEqual([])
     await passes(t, 1, landed)
-    expect(t.steps).toHaveBeenCalledWith(PROJECT)
-    expect(t.sent).toEqual([['post', expect.any(String), `${dayLine(landed, 'Wed 11 Nov', undefined)}\nSteps · ready → first verdict 6 min (p90 6 min)\n`
-      + 'Pip: 7 landed · free → next task 4 min']])
-    // The next day GitHub cannot be read: the counts go all the same, and that is said once.
+    expect(t.steps).toHaveBeenLastCalledWith(PROJECT, '2026-11-11')
+    expect(t.sent).toEqual([['post', expect.any(String), `${dayLine(landed, 'Wed 11 Nov', undefined)}\n${lines}`]])
+    // None the next day (unread, or nothing of the team's): the counts go at once.
     t.clock.now = new Date(2026, 10, 12, 9, 0).getTime()
-    t.steps.mockRejectedValue(new Error('GitHub did not answer.'))
+    t.steps.mockReturnValue(null)
     await passes(t, 1, landed)
     expect(t.sent.at(-1)).toEqual(['post', expect.any(String), dayLine(landed, 'Thu 12 Nov', undefined)])
+    // Still being read ten minutes after the post was due here: the counts go without them.
     t.clock.now = new Date(2026, 10, 13, 9, 0).getTime()
-    t.steps.mockRejectedValue('no words')
+    t.steps.mockReturnValue(undefined)
+    await passes(t, 10, landed)
+    expect(t.sent).toHaveLength(2)
     await passes(t, 1, landed)
-    expect(t.log.mock.calls.filter(([line]) => String(line).includes('STEPS_UNREAD'))).toEqual([['[super-tab] numbers: STEPS_UNREAD acme/app: GitHub did not answer.'],
-      ['[super-tab] numbers: STEPS_UNREAD acme/app: no words']])
-    // Asked only as the day's post goes.
-    await passes(t, 30, landed)
-    expect(t.steps).toHaveBeenCalledTimes(3)
+    expect(t.sent.at(-1)).toEqual(['post', expect.any(String), dayLine(landed, 'Fri 13 Nov', undefined)])
+    // Not asked at all for a day with nothing to post.
+    t.clock.now = new Date(2026, 10, 14, 9, 0).getTime()
+    const asked = t.steps.mock.calls.length
+    await passes(t, 1, numbers({ free: [], landed: 0, closed: 0 }))
+    expect(t.steps).toHaveBeenCalledTimes(asked)
+  })
+
+  it('keeps no more projects waiting for their steps than it may', async () => {
+    const t = setup(new Date(2026, 10, 11, 9, 0).getTime()), landed = numbers({ free: [] })
+    t.steps.mockReturnValue(undefined)
+    for (let n = 0; n <= 200; n++) await t.numbers.pass({ ...PROJECT, projectId: `project-${n}` }, landed, t.goal)
+    // The first, let go, waits its ten minutes again from its next pass.
+    t.clock.now += 10 * MINUTE
+    await t.numbers.pass({ ...PROJECT, projectId: 'project-0' }, landed, t.goal)
+    expect(t.sent).toEqual([])
+    await t.numbers.pass({ ...PROJECT, projectId: 'project-200' }, landed, t.goal)
+    expect(t.sent).toHaveLength(1)
   })
 
   it('posts the day\'s numbers once, from nine, and none for a day with nothing to say', async () => {
@@ -614,7 +634,7 @@ describe('the numbers, told as they are due', () => {
     vi.useFakeTimers({ now: NOW, toFake: ['Date'] })
     try {
       const sent: string[] = []
-      const ofNow = new PmNumbers({ file: t.file, steps: async () => null, send: async (_how, _project, _id, text) => { if (!sent.length) { sent.push(text); throw new Error('Not yet.') } sent.push(text) } })
+      const ofNow = new PmNumbers({ file: t.file, steps: () => null, send: async (_how, _project, _id, text) => { if (!sent.length) { sent.push(text); throw new Error('Not yet.') } sent.push(text) } })
       await ofNow.pass(PROJECT, numbers({ free: [] }), t.goal)
       expect(warn).toHaveBeenCalledWith('[super-tab] numbers: NOT_SENT acme/app: Not yet.')
       vi.setSystemTime(NOW + MINUTE)

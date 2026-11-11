@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Crew } from './assign/crew.js'
-import { claimant, daySteps, membersOf, stepsOf, stepsText, type Landed, type Member } from './daySteps.js'
-import { GitHubReads, type GitHubGet } from './githubRest.js'
+import { claimant, DaySteps, membersOf, readSteps, stepsOf, stepsText, type Landed, type Member } from './daySteps.js'
+import type { GitHubGet } from './githubRest.js'
 
 type Json = Record<string, unknown>
 const PROJECT = { repo: 'acme/app', pm: 'Faye', tabId: 'tab', pmAgentId: 'faye', projectId: 'app' }
@@ -49,6 +49,15 @@ describe('a landed pull request\'s steps, as the Swarm study measured lampOS\'s'
     expect(stepsOf(pull(9, 'harness', nov10(9), nov10(9, 30)), [], [], members('Pip')).builder).toBeNull()
     // A builder whose name has a space is its label's name, as its pull requests carry it.
     expect(stepsOf(pull(10, 'juno-ray', nov10(9), nov10(9, 30)), [], [], members('Juno Ray')).builder).toBe('juno-ray')
+  })
+
+  // Code review of #4051: as the merger reads verdicts, from the team's logins only, and never the pull request's own builder's.
+  it('counts no verdict from outside the team, nor its own builder\'s', () => {
+    const outsider = { ...said(nov10(9, 5), 'Kai, 09:05: READ-OK 1234567'), author_association: 'NONE' }
+    const own = said(nov10(9, 10), 'Pip, 09:10: READ-OK 1234567')
+    expect(stepsOf(pull(7, 'Pip', nov10(9), nov10(10)), [outsider, own], [], members('Pip', 'Kai'))).toMatchObject({ firstVerdict: null, okToLanded: null })
+    expect(stepsOf(pull(7, 'Pip', nov10(9), nov10(10)), [own, said(nov10(9, 20), '**Kai**, 09:20: READ-OK 1234567')], [], members('Pip', 'Kai')))
+      .toMatchObject({ firstVerdict: 20, okToLanded: 40 })
   })
 
   it('reads a take by its comment, the builder named twice, and nothing else', () => {
@@ -114,13 +123,15 @@ describe('the steps of a project\'s last 24 hours, read from its GitHub', () => 
         pull(8, 'Kai', nov10(11), null), pull(6, 'Pip', nov10(9) - 24 * 60 * MIN, nov10(9) - 23 * 60 * MIN)]
         : url.pathname === '/repos/acme/app/issues/7/comments' ? [said(nov10(9, 6), 'Kai, 09:06: READ-OK 1234567')]
         // Pip's take of its next task; a take with no issue to it is none.
-        : url.pathname === '/repos/acme/app/issues/comments' ? [said(nov10(10, 1), 'Pip, 10:01: taken by Pip'), said(nov10(10, 2), 'Kai, 10:02: on it'),
-          { ...said(nov10(10, 4), 'Pip, 10:04: taken by Pip'), issue_url: 'https://api.github.com/repos/acme/app/issues/9' }]
+        // Pip's take of its next task, the newest first as asked; a take with no issue to it, or from outside the team, is none.
+        : url.pathname === '/repos/acme/app/issues/comments' ? [{ ...said(nov10(10, 3), 'Kai, 10:03: taken by Kai'), author_association: 'NONE',
+          issue_url: 'https://api.github.com/repos/acme/app/issues/10' }, { ...said(nov10(10, 4), 'Pip, 10:04: taken by Pip'), issue_url: 'https://api.github.com/repos/acme/app/issues/9' },
+          said(nov10(10, 2), 'Kai, 10:02: on it'), said(nov10(10, 1), 'Pip, 10:01: taken by Pip')]
         : []
       return { status: 200, etag: null, body, resetAt: null }
     })
     // Kai's machine is down: still on the team, and still in its numbers.
-    const steps = daySteps({ reads: new GitHubReads(get, () => nov10(24 + 9)), crew: async () => crew(['Pip'], ['Kai']), now: () => nov10(24 + 9) })
+    const steps = readSteps({ get, crew: async () => crew(['Pip'], ['Kai']), now: () => nov10(24 + 9) })
     return { get, steps }
   }
 
@@ -132,8 +143,10 @@ describe('the steps of a project\'s last 24 hours, read from its GitHub', () => 
       'Pip: 1 landed · ready → first verdict 6 min · last READ-OK → landed 54 min · free → next task 4 min',
       'Kai: 1 landed · no task taken since its last landed',
     ])
-    // The takes since the day before the window began.
-    expect(t.get.mock.calls.map(([path]) => path)).toContain(`/repos/acme/app/issues/comments?since=${iso(nov10(9) - 24 * 60 * MIN)}&per_page=100`)
+    // The takes since the day before the window began, the newest first; each pull request's last ready within three pages of events.
+    const paths = t.get.mock.calls.map(([path]) => path)
+    expect(paths).toContain(`/repos/acme/app/issues/comments?since=${iso(nov10(9) - 24 * 60 * MIN)}&sort=created&direction=desc&per_page=100`)
+    expect(paths).toContain('/repos/acme/app/issues/7/events?per_page=100')
   })
 
   it('counts what a train carried as landed when the train merged, and no train as anyone\'s', async () => {
@@ -168,7 +181,43 @@ describe('the steps of a project\'s last 24 hours, read from its GitHub', () => 
     vi.useFakeTimers({ now: nov10(24 + 9), toFake: ['Date'] })
     try {
       const get = vi.fn<GitHubGet>(async () => ({ status: 200, etag: null, body: [], resetAt: null }))
-      expect(await daySteps({ reads: new GitHubReads(get), crew: async () => crew(['Pip']) })(PROJECT)).toBeNull()
+      expect(await readSteps({ get, crew: async () => crew(['Pip']) })(PROJECT)).toBeNull()
     } finally { vi.useRealTimers() }
+  })
+})
+
+describe('the steps, read beside the assigner\'s pass', () => {
+  it('starts the read at the first ask of a day, answers it once read, and reads a project once a day', async () => {
+    let finish!: (text: string | null) => void
+    const read = vi.fn((_project: unknown) => new Promise<string | null>(resolve => { finish = resolve }))
+    const steps = new DaySteps(read)
+    expect(steps.of(PROJECT, '2026-11-11')).toBeUndefined()
+    expect(steps.of(PROJECT, '2026-11-11')).toBeUndefined()
+    finish('Steps · 1 closed without landing')
+    await Promise.resolve()
+    expect(steps.of(PROJECT, '2026-11-11')).toBe('Steps · 1 closed without landing')
+    expect(read).toHaveBeenCalledTimes(1)
+    // The next day, read again.
+    expect(steps.of(PROJECT, '2026-11-12')).toBeUndefined()
+    finish(null)
+    await Promise.resolve()
+    expect(steps.of(PROJECT, '2026-11-12')).toBeNull()
+    expect(read).toHaveBeenCalledTimes(2)
+  })
+
+  it('answers none for steps it could not read, and says why once, on this computer\'s log when given none', async () => {
+    const log = vi.fn()
+    const steps = new DaySteps(async () => { throw new Error('GitHub did not answer.') }, log)
+    steps.of(PROJECT, '2026-11-11')
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(steps.of(PROJECT, '2026-11-11')).toBeNull()
+    expect(log).toHaveBeenCalledExactlyOnceWith('[super-tab] numbers: STEPS_UNREAD acme/app: GitHub did not answer.')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const quiet = new DaySteps(async () => { throw 'no words' })
+      quiet.of(PROJECT, '2026-11-11')
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(warn).toHaveBeenCalledWith('[super-tab] numbers: STEPS_UNREAD acme/app: no words')
+    } finally { warn.mockRestore() }
   })
 })

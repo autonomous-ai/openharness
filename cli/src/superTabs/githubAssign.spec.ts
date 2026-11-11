@@ -173,7 +173,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       const team: Crew = { builders: [{ id: 'pip', name: 'Pip', label: 'builder:pip', machineId: 'mac', engine: 'claude' }, { id: 'kai', name: 'Kai', label: 'builder:kai', machineId: 'linux', engine: 'claude' },
         { id: 'ada', name: 'Ada', label: 'builder:ada', machineId: 'linux', engine: 'codex' }],
       machines: [{ machineId: 'mac', observation: mac }, { machineId: 'linux', observation: { resources: { ...mac.resources, os: 'Linux' } } }] }
-      const numbers = new PmNumbers({ file: join(dir, 'numbers.json'), now: () => clock.now, log: () => {}, steps: async () => null, send: async (_how, _project, _id, text) => { sent.push(text) } })
+      const numbers = new PmNumbers({ file: join(dir, 'numbers.json'), now: () => clock.now, log: () => {}, steps: () => null, send: async (_how, _project, _id, text) => { sent.push(text) } })
       // Pip's list is full; #9 needs a Mac, which only Pip has; Kai and Ada have nothing.
       const f = setup([issue(1, ['size:s', 'builder:pip', 'status:taken']), issue(2, ['size:s', 'builder:pip']), issue(9, ['size:s', 'needs:macos'])], { crew: team, numbers })
       for (let minute = 0; minute <= 16; minute++) { f.clock.now = clock.now += 60_000; await f.assigner.tick() }
