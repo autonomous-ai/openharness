@@ -13,7 +13,7 @@ import 'package:harness/super_tabs/sharing.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
-import 'swarm_sharing_test.dart' show SwarmSharingServer;
+import 'support/swarm_sharing_server.dart';
 import 'support/capture.dart';
 import 'support/humans_fixture.dart';
 import 'support/super_tab_fixture.dart';
