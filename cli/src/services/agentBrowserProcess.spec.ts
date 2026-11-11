@@ -84,7 +84,7 @@ describe('the agent browser in its own process', () => {
   it('asks the core for its agents\' ids, and a pane\'s agent, and gets no answer when the core cannot say', async () => {
     const { options, api } = setup()
     await expect(api.agents.ids!()).rejects.toThrow('no core')
-    expect(await api.agents.ofPane!('%7')).toBeNull()
+    expect(await api.agents.ofPane!('%7', [4242])).toBeNull()
     let answer: Record<string, unknown> = { live: ['a1', 7], stopped: ['a2'] }
     const query = vi.fn(async (_query: string, _payload?: Record<string, unknown>) => answer)
     options.onConnected!({ query } satisfies CoreConnection)
@@ -92,11 +92,31 @@ describe('the agent browser in its own process', () => {
     expect(query).toHaveBeenLastCalledWith('agent_ids', {})
     answer = { error: 'UNKNOWN_QUERY' }
     await expect(api.agents.ids!()).rejects.toThrow('no answer')
-    answer = { agentId: 'a1' }
-    expect(await api.agents.ofPane!('%7')).toBe('a1')
+    // The command's parents go with its pane: the core holds the pane's own process to them.
+    answer = { agentId: 'a1', guest: false }
+    expect(await api.agents.ofPane!('%7', [4242, 1])).toEqual({ agentId: 'a1', guest: false })
+    expect(query).toHaveBeenLastCalledWith('agent_of_pane', { pane: '%7', ancestors: [4242, 1] })
+    answer = { agentId: 'kim', guest: true }
+    expect(await api.agents.ofPane!('%8', [4343])).toEqual({ agentId: 'kim', guest: true })
+    // An older relay's `agent_browser_state` names its pane alone.
+    answer = { agentId: 'a1', guest: false }
+    expect(await api.agents.ofPane!('%7')).toEqual({ agentId: 'a1', guest: false })
     expect(query).toHaveBeenLastCalledWith('agent_of_pane', { pane: '%7' })
-    answer = { agentId: null }
-    expect(await api.agents.ofPane!('%7')).toBeNull()
+    // No agent, or an answer that does not say whose it is: none.
+    for (const shape of [{ agentId: null }, { agentId: 'a1' }, { agentId: 'a1', guest: 'no' }, { error: 'UNKNOWN_QUERY' }]) {
+      answer = shape
+      expect(await api.agents.ofPane!('%7', [4242]), JSON.stringify(shape)).toBeNull()
+    }
+  })
+
+  // A command waits on this: a core that does not answer is no agent, never a command left hanging.
+  it('a core that never answers a pane\'s agent is no agent after 10 s', async () => {
+    vi.useFakeTimers()
+    const { options, api } = setup()
+    options.onConnected!({ query: () => new Promise(() => {}) } as CoreConnection)
+    const asked = api.agents.ofPane!('%7', [4242])
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(await asked).toBeNull()
   })
 
   it('a core that never answers the ids is no answer after 10 s', async () => {

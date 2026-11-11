@@ -12,7 +12,7 @@ function setup(live: RegisteredSession[] = []) {
   const sync = vi.fn()
   const count = vi.fn()
   const ids = vi.fn(async () => ({ live: ['a1'], stopped: ['a2'] }))
-  const ofPane = vi.fn(async (pane: string) => (pane === '%7' ? 'a1' : null))
+  const ofPane = vi.fn(async (pane: string, _ancestors?: number[]) => (pane === '%7' ? { agentId: 'a1', guest: false } : pane === '%8' ? { agentId: 'kim', guest: true } : null))
   const core = fakeCore({ count, agents: { sync, ids, ofPane, live: () => live, byAgent: (agentId: string) => live.find(s => s.agentId === agentId) } })
   const notify = vi.fn(() => true)
   const want = vi.fn()
@@ -120,14 +120,19 @@ describe('the agent browser in its own process, as the core sees it', () => {
     expect(closed).toEqual(['a1', 'a2'])
   })
 
-  it('answers the ids of its agents and the agent of a pane', async () => {
+  it('answers the ids of its agents and the agent of a pane, whether it is a guest\'s, held to the parents it was given', async () => {
     const { link, ids, ofPane } = setup()
     expect(await link.answer('agent_ids', {})).toEqual({ live: ['a1'], stopped: ['a2'] })
     expect(ids).toHaveBeenCalled()
-    expect(await link.answer('agent_of_pane', { pane: '%7' })).toEqual({ agentId: 'a1' })
-    expect(await link.answer('agent_of_pane', { pane: '%9' })).toEqual({ agentId: null })
-    expect(await link.answer('agent_of_pane', {})).toEqual({ error: 'INVALID_REQUEST' })
-    expect(ofPane).toHaveBeenCalledTimes(2)
+    expect(await link.answer('agent_of_pane', { pane: '%7', ancestors: [4242, 1] })).toEqual({ agentId: 'a1', guest: false })
+    expect(await link.answer('agent_of_pane', { pane: '%8', ancestors: [4343] })).toEqual({ agentId: 'kim', guest: true })
+    expect(await link.answer('agent_of_pane', { pane: '%9', ancestors: [4242] })).toEqual({ agentId: null })
+    // An older relay's `agent_browser_state` names its pane alone.
+    expect(await link.answer('agent_of_pane', { pane: '%7' })).toEqual({ agentId: 'a1', guest: false })
+    for (const payload of [{}, { pane: 7 }, { pane: '%7', ancestors: 4242 }, { pane: '%7', ancestors: [4242, '1'] }, { pane: '%7', ancestors: [-1] }, { pane: '%7', ancestors: [1.5] }]) {
+      expect(await link.answer('agent_of_pane', payload), JSON.stringify(payload)).toEqual({ error: 'INVALID_REQUEST' })
+    }
+    expect(ofPane.mock.calls).toEqual([['%7', [4242, 1]], ['%8', [4343]], ['%9', [4242]], ['%7', undefined]])
     expect(await link.answer('anything', {})).toEqual({ error: 'UNKNOWN_QUERY' })
     // A core without the calls has no answer to give.
     const bare = createAgentBrowserLink({ core: fakeCore(), notify: () => true, want: () => {} })

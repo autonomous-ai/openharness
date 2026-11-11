@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type AddressInfo, type Server } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createInterface } from 'node:readline'
 import { PassThrough } from 'node:stream'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { emptyPorts, type AgentBrowserPort, type Asker, type BrowserSwitch, type CoreApi, type CorePorts, type ServiceRequests, type TurnDelivery } from '../core/api.js'
@@ -45,6 +46,7 @@ beforeEach(() => {
   })
 })
 afterEach(async () => {
+  vi.useRealTimers()
   await stopAll()
   for (const server of servers.splice(0)) server.close()
   rmSync(dataDir, { recursive: true, force: true })
@@ -97,7 +99,12 @@ const savedState = () => JSON.parse(readFileSync(join(dataDir, 'agent-browser.js
  * row's flag, then the port's `attached` or `stopped`, in the same turn; and an agent's own end and resume tell the port
  * only while its flag is on. The lines it types are recorded, and the spec says what became of them.
  */
-function startSwitching(rows: RegisteredSession[] = [session('a1', { browser: undefined })], over: { count?: (name: string) => void; options?: AgentBrowserOptions } = {}) {
+function startSwitching(rows: RegisteredSession[] = [session('a1', { browser: undefined })], over: {
+  count?: (name: string) => void
+  options?: AgentBrowserOptions
+  agents?: Partial<CoreApi['agents']>
+  core?: Parameters<typeof fakeCore>[0]
+} = {}) {
   const byId = new Map(rows.map(row => [row.agentId, { ...row }]))
   const running = new Set<string>()
   const typed: Array<{ agentId: string; text: string; deliveryId: string }> = []
@@ -127,8 +134,9 @@ function startSwitching(rows: RegisteredSession[] = [session('a1', { browser: un
   })
   const core = fakeCore({
     dataDir,
+    ...over.core,
     ...(over.count ? { count: over.count } : {}),
-    agents: { setBrowser, byAgent: (agentId: string) => byId.get(agentId) },
+    agents: { setBrowser, byAgent: (agentId: string) => byId.get(agentId), ...over.agents },
     turns: {
       // Only what a line is: its agent, its text and its id. A delivery's options are the core's to read.
       deliver: vi.fn((agentId: string, text: string, deliveryId: string) => { typed.push({ agentId, text, deliveryId }) }),
@@ -353,14 +361,26 @@ describe('the agent browser service', () => {
   it('on win32 every other request answers UNSUPPORTED', async () => {
     const { requests } = start(undefined, { platform: 'win32' })
     expect(Object.keys(requests).sort()).toEqual([...AGENT_BROWSER_REQUESTS].sort())
-    const named = ['agent_browser_available', 'agent_browser_start', 'agent_browser_stop']
+    const named = ['agent_browser_available', 'agent_browser_start', 'agent_browser_stop', 'agent_browser_run', 'agent_browser_window']
     for (const type of AGENT_BROWSER_REQUESTS.filter(type => !named.includes(type))) {
       expect(await requests[type]!({ agentId: 'a1', pane: '%1' }, LOCAL), type).toEqual({ error: 'UNSUPPORTED' })
     }
     expect(fake.calls()).toEqual([])
   })
 
-  // Desktop says Windows, not "update Harness", for the person's Start and Stop (spec § Desktop).
+  // Desktop says Windows, not "update Harness", for the person's Start and Stop (spec § Desktop); `harness browser`
+  // exits before it asks, and an older one is told the same.
+  it('on win32 run and window answer NOT_ON_WINDOWS', async () => {
+    const { podman, spawn } = podmanHere()
+    const ofPane = vi.fn(async () => ({ agentId: 'a1', guest: false }))
+    const { requests } = start(fakeCore({ dataDir, agents: { ofPane } }), { platform: 'win32', podman })
+    expect(await requests.agent_browser_run!({ pane: '%7', ancestors: [4242], command: 'snapshot', args: {} }, LOCAL)).toEqual({ error: 'NOT_ON_WINDOWS' })
+    expect(await requests.agent_browser_window!({ agentId: 'a1', width: 1200, height: 800 }, LOCAL)).toEqual({ error: 'NOT_ON_WINDOWS' })
+    expect(ofPane).not.toHaveBeenCalled()
+    expect(fake.calls()).toEqual([])
+    expect(spawn).not.toHaveBeenCalled()
+  })
+
   it('on win32 start and stop answer NOT_ON_WINDOWS and no process starts', async () => {
     const run = vi.fn(async () => ({ code: 0, stdout: '', stderr: '' }))
     const { podman, spawn } = podmanHere()
@@ -494,7 +514,7 @@ describe('the agent browser service', () => {
   })
 
   it('state finds the agent by pane and carries the human mode', async () => {
-    const ofPane = vi.fn(async (pane: string) => (pane === '%7' ? 'a1' : pane === '%8' ? 'plain' : null))
+    const ofPane = vi.fn(async (pane: string) => (pane === '%7' ? { agentId: 'a1', guest: false } : pane === '%8' ? { agentId: 'plain', guest: false } : null))
     const { port, requests } = start(fakeCore({ dataDir, agents: { ofPane } }))
     port.attached(session('a1'))
     await ready(port, 'a1')
@@ -518,7 +538,7 @@ describe('the agent browser service', () => {
     fake.reply('--connection harness images --format json --filter reference=localhost/harness-browser', {
       stdout: JSON.stringify([{ Names: [`localhost/${imageTag(browserAssetsHash(), NOW)}`], Created: 1, Containers: 0 }]),
     })
-    const { port, requests } = start(fakeCore({ dataDir, agents: { ofPane: async () => 'a1' } }))
+    const { port, requests } = start(fakeCore({ dataDir, agents: { ofPane: async () => ({ agentId: 'a1', guest: false }) } }))
     port.attached(session('a1'))
     await ready(port, 'a1')
     expect(await requests.agent_browser_state!({ pane: '%7' }, LOCAL)).toEqual({ agentId: 'a1', state: 'ready', podman: fake.path, connection: 'harness', human: 'normal' })
@@ -526,7 +546,7 @@ describe('the agent browser service', () => {
 
   it('a failed browser\'s state names its failure', async () => {
     fake.reply('info --format json', { stdout: JSON.stringify({ version: { Version: '4.3.0' }, host: { memTotal: 8 * GiB } }) })
-    const { port, requests } = start(fakeCore({ dataDir, agents: { ofPane: async () => 'a1' } }))
+    const { port, requests } = start(fakeCore({ dataDir, agents: { ofPane: async () => ({ agentId: 'a1', guest: false }) } }))
     port.attached(session('a1'))
     await eventually(() => expect(port.frameContext('a1')).toEqual({ state: 'failed', error: 'podman_old' }))
     expect(await requests.agent_browser_state!({ pane: '%7' }, LOCAL)).toMatchObject({ agentId: 'a1', state: 'failed', error: 'podman_old' })
@@ -573,7 +593,7 @@ describe('the agent browser service', () => {
   it('a failure that is not Podman\'s is the service\'s own, and counts against it', async () => {
     const podman = createPodman({ resolve: async () => fake.path, platform: 'linux' })
     const broken = { ...podman, available: async () => { throw new Error('a bug') }, path: async () => { throw new Error('a bug') } }
-    const { port, requests } = start(fakeCore({ dataDir, agents: { ofPane: async () => 'a1' } }), { podman: broken })
+    const { port, requests } = start(fakeCore({ dataDir, agents: { ofPane: async () => ({ agentId: 'a1', guest: false }) } }), { podman: broken })
     await expect(requests.agent_browser_available!({}, LOCAL)).rejects.toThrow('a bug')
     port.attached(session('a1'))
     await eventually(() => expect(port.frameContext('a1')).toEqual({ state: 'failed', error: 'podman_down' }))
@@ -618,7 +638,7 @@ describe('the agent browser service', () => {
 
   it('a browser with no Podman here waits for setup, and its tools are told no path', async () => {
     const missing = createPodman({ resolve: async () => null, exists: () => false, platform: 'linux' })
-    const { port, requests } = start(fakeCore({ dataDir, agents: { ofPane: async () => 'a1' } }), { podman: missing })
+    const { port, requests } = start(fakeCore({ dataDir, agents: { ofPane: async () => ({ agentId: 'a1', guest: false }) } }), { podman: missing })
     port.attached(session('a1'))
     await eventually(() => expect(port.frameContext('a1')).toEqual({ state: 'failed', error: 'needs_setup' }))
     expect(await requests.agent_browser_state!({ pane: '%7' }, LOCAL)).toEqual({ agentId: 'a1', state: 'failed', error: 'needs_setup', podman: '', human: 'normal' })
@@ -887,5 +907,424 @@ describe('the person\'s Start and Stop', () => {
     port.deleted('a1')
     await eventually(() => expect(savedState().browsers).toEqual({}))
     expect(asked()).toContain('volume rm harness-browser-a1')
+  })
+})
+
+/** One line the service wrote to a tool server. */
+type ToolLine = { jsonrpc: string; id: number; method: string; params: Record<string, unknown> }
+
+/** A tool server (`podman exec -i … browser-tools.mjs`) the spec drives: it hears each line the service writes, and
+ *  answers when the spec says. */
+function toolServer(args: string[]) {
+  const stdin = new PassThrough()
+  const stdout = new PassThrough()
+  const heard: ToolLine[] = []
+  createInterface({ input: stdin }).on('line', line => heard.push(JSON.parse(line) as ToolLine))
+  return Object.assign(new EventEmitter(), {
+    args, stdin, stdout, stderr: null, heard,
+    kill: vi.fn(() => true),
+    /** Answers the line it heard last, or the line [id]. */
+    answer(result: unknown, id = heard.at(-1)!.id) { stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id, result })}\n`) },
+  })
+}
+type ToolServer = ReturnType<typeof toolServer>
+
+/** The fake podman, whose tool servers the spec drives; its event stream is the fake's own. */
+function podmanWithTools() {
+  const podman = createPodman({ resolve: async () => fake.path, platform: 'linux' })
+  const real = podman.spawn
+  const tools: ToolServer[] = []
+  const spawn = vi.spyOn(podman, 'spawn').mockImplementation((args) => {
+    if (args[0] !== 'exec') return real(args)
+    const tool = toolServer(args)
+    tools.push(tool)
+    return tool as unknown as ChildProcess
+  })
+  return { podman, spawn, tools }
+}
+
+const TOOL_SERVER_ARGS = (agentId: string) => ['exec', '-i', `harness-browser-${agentId}`, 'node', '/opt/harness-browser/browser-tools.mjs']
+/** The command's parents, as `harness browser` sends them (lib/callerPane.ts `runningPane`). */
+const ANCESTORS = [9001, 4242, 1]
+/** Which pane is whose, as the core proves a pane (core/api.ts `ofPane`, held to the parents it is given). */
+const PANES: Record<string, { agentId: string; guest: boolean }> = {
+  '%7': { agentId: 'a1', guest: false }, '%8': { agentId: 'a2', guest: false }, '%9': { agentId: 'kim', guest: true },
+}
+const page = (text: string) => ({ content: [{ type: 'text', text }] })
+
+/**
+ * The person's agent a1 in pane %7, whose browser its person started and is ready; a2 in %8, whose browser is off; and
+ * a guest's agent, kim, in %9. `run` is `harness browser <command>` from a pane.
+ */
+async function commands(over: { count?: (name: string) => void; core?: Parameters<typeof fakeCore>[0] } = {}) {
+  const tools = podmanWithTools()
+  const ofPane = vi.fn(async (pane: string, _ancestors?: number[]) => PANES[pane] ?? null)
+  const sw = startSwitching([session('a1', { browser: undefined }), session('a2', { browser: undefined }), session('kim', { browser: undefined, guest: 'kim@acme.io' })],
+    { ...over, agents: { ofPane }, options: { podman: tools.podman } })
+  await sw.requests.agent_browser_start!({ agentId: 'a1' }, LOCAL)
+  await ready(sw.port, 'a1')
+  const run = (command: string, args: Record<string, unknown> = {}, more: { pane?: string; asker?: Asker; closed?: AbortSignal } = {}) =>
+    sw.requests.agent_browser_run!({ pane: more.pane ?? '%7', ancestors: ANCESTORS, command, args }, more.asker ?? LOCAL, more.closed)
+  /** The [n]th line the tool server of [agentId] heard (from 1), once it has. */
+  const line = async (n: number, tool = 0) => {
+    await eventually(() => expect(tools.tools[tool]?.heard.length).toBeGreaterThanOrEqual(n))
+    return tools.tools[tool]!.heard[n - 1]!
+  }
+  return { ...sw, ...tools, ofPane, run, line }
+}
+
+describe('the agent\'s commands', () => {
+  it('run is refused to a remote asker', async () => {
+    const c = await commands()
+    for (const asker of [OTHER_DESKTOP, PLAIN_OWNER, SHARE_GUEST]) expect(await c.run('snapshot', {}, { asker })).toEqual({ error: 'LOCAL_ONLY' })
+    expect(c.ofPane).not.toHaveBeenCalled()
+    expect(c.tools).toEqual([])
+  })
+
+  it('the pane gives the agent: held to the command\'s parents, and NO_AGENT for a pane the core does not prove', async () => {
+    const c = await commands()
+    const answer = c.run('snapshot')
+    const heard = await c.line(1)
+    expect(c.ofPane).toHaveBeenCalledWith('%7', ANCESTORS)
+    expect(c.tools[0]!.args).toEqual(TOOL_SERVER_ARGS('a1'))
+    expect(heard).toEqual({ jsonrpc: '2.0', id: heard.id, method: 'tools/call', params: { name: 'browser_snapshot', arguments: {}, _harness: { human: 'normal' } } })
+    c.tools[0]!.answer(page('https://example.com · Example Domain'))
+    expect(await answer).toEqual({ ok: true, text: 'https://example.com · Example Domain' })
+    // Another pane is another agent: a2's browser is off.
+    expect(await c.run('snapshot', {}, { pane: '%8' })).toEqual({ error: 'OFF' })
+    // A pane of no agent, no pane, no parents, and a core that cannot say.
+    expect(await c.run('snapshot', {}, { pane: '%5' })).toEqual({ error: 'NO_AGENT' })
+    for (const payload of [{ ancestors: ANCESTORS }, { pane: '%7' }, { pane: '%7', ancestors: '4242' }]) {
+      expect(await c.requests.agent_browser_run!({ ...payload, command: 'snapshot', args: {} }, LOCAL), JSON.stringify(payload)).toEqual({ error: 'NO_AGENT' })
+    }
+    c.ofPane.mockRejectedValueOnce(new Error('no core'))
+    expect(await c.run('snapshot')).toEqual({ error: 'NO_AGENT' })
+    const bare = start(fakeCore({ dataDir: mkdtempSync(join(dataDir, 'bare-')) }))
+    expect(await bare.requests.agent_browser_run!({ pane: '%7', ancestors: ANCESTORS, command: 'snapshot', args: {} }, LOCAL)).toEqual({ error: 'NO_AGENT' })
+    // Parents that are not pids are not held up as any.
+    await c.requests.agent_browser_run!({ pane: '%8', ancestors: [4242, 'x', null], command: 'snapshot', args: {} }, LOCAL)
+    expect(c.ofPane).toHaveBeenLastCalledWith('%8', [4242])
+    expect(c.tools).toHaveLength(1)
+  })
+
+  it('a guest\'s agent is NOT_ALLOWED', async () => {
+    const c = await commands()
+    expect(await c.run('navigate', { url: 'https://example.com' }, { pane: '%9' })).toEqual({ error: 'NOT_ALLOWED' })
+    expect(c.tools).toEqual([])
+  })
+
+  it('an agent in a regular tab is allowed: it is in no Swarm, and drives its browser as any other', async () => {
+    const c = await commands()
+    // No Swarm here: the core has no door to one.
+    expect(c.core.superTabs).toBeUndefined()
+    const answer = c.run('click', { ref: 'e12' })
+    await c.line(1)
+    c.tools[0]!.answer(page('Clicked'))
+    expect(await answer).toEqual({ ok: true, text: 'Clicked' })
+  })
+
+  it('it answers with the backend and the Swarm unreachable', async () => {
+    const unreachable = () => { throw new Error('unreachable') }
+    const c = await commands({ core: {
+      account: { backend: unreachable, machines: unreachable },
+      superTabs: { attention: unreachable, cards: unreachable, cardRecap: unreachable, shareObservers: unreachable, screen: unreachable, input: unreachable, inputIfScreen: unreachable },
+      superTabRequest: unreachable,
+    } })
+    const answer = c.run('snapshot')
+    await c.line(1)
+    c.tools[0]!.answer(page('Example Domain'))
+    expect(await answer).toEqual({ ok: true, text: 'Example Domain' })
+  })
+
+  it('an unknown command, or arguments that are no object, are INVALID_REQUEST', async () => {
+    const c = await commands()
+    for (const [command, args] of [['start', {}], ['stop', {}], ['', {}], ['toString', {}], ['snapshot', null], ['snapshot', ['e1']], ['snapshot', 'e1']] as const) {
+      expect(await c.requests.agent_browser_run!({ pane: '%7', ancestors: ANCESTORS, command, args }, LOCAL), `${command} ${JSON.stringify(args)}`).toEqual({ error: 'INVALID_REQUEST' })
+    }
+    expect(await c.requests.agent_browser_run!({ pane: '%7', ancestors: ANCESTORS, args: {} }, LOCAL)).toEqual({ error: 'INVALID_REQUEST' })
+    expect(c.tools).toEqual([])
+  })
+
+  it('off, starting, setting up and each failed state answer by name, and start nothing', async () => {
+    const c = await commands()
+    expect(await c.run('snapshot', {}, { pane: '%8' })).toEqual({ error: 'OFF' })
+    await c.requests.agent_browser_start!({ agentId: 'a2' }, LOCAL)
+    await eventually(() => expect(c.port.frameContext('a2')).toEqual({ state: 'starting' }))
+    expect(await c.run('snapshot', {}, { pane: '%8' })).toEqual({ error: 'NOT_READY', state: 'starting' })
+    expect(c.tools).toEqual([])
+
+    // No Podman here: the browser waits for setup, then shows its step while setup runs.
+    const missing = createPodman({ resolve: async () => null, exists: () => false, platform: 'linux' })
+    const spawn = vi.spyOn(missing, 'spawn')
+    const which = async (cmd: string) => (cmd === 'pkexec' || cmd === 'apt-get' ? `/usr/bin/${cmd}` : null)
+    const ofPane = async () => ({ agentId: 'a1', guest: false })
+    const unset = start(fakeCore({ dataDir: mkdtempSync(join(dataDir, 'setup-')), agents: { ofPane } }), {
+      podman: missing, setup: { which, run: () => new Promise(() => {}), interactive: () => true },
+    })
+    const runThere = (requests: ServiceRequests) => requests.agent_browser_run!({ pane: '%7', ancestors: ANCESTORS, command: 'snapshot', args: {} }, LOCAL)
+    unset.port.attached(session('a1'))
+    await eventually(() => expect(unset.port.frameContext('a1')).toEqual({ state: 'failed', error: 'needs_setup' }))
+    expect(await runThere(unset.requests)).toEqual({ error: 'NOT_READY', state: 'needs_setup' })
+    await unset.requests.agent_browser_setup!({}, LOCAL)
+    await eventually(() => expect(unset.port.frameContext('a1')).toEqual({ state: 'setup', step: 'installing' }))
+    expect(await runThere(unset.requests)).toEqual({ error: 'NOT_READY', state: 'setup' })
+    expect(spawn).not.toHaveBeenCalled()
+
+    // A Podman too old.
+    fake.reply('info --format json', { stdout: JSON.stringify({ version: { Version: '4.3.0' }, host: { memTotal: 8 * GiB } }) })
+    const old = podmanWithTools()
+    const failed = start(fakeCore({ dataDir: mkdtempSync(join(dataDir, 'old-')), agents: { ofPane } }), { podman: old.podman })
+    failed.port.attached(session('a1'))
+    await eventually(() => expect(failed.port.frameContext('a1')).toEqual({ state: 'failed', error: 'podman_old' }))
+    expect(await runThere(failed.requests)).toEqual({ error: 'NOT_READY', state: 'podman_old' })
+    expect(old.tools).toEqual([])
+    expect(asked().filter(call => call.startsWith('exec '))).toEqual([])
+  })
+
+  it('the first command starts the tool server once; it starts again after it exits; a state that leaves ready ends it', async () => {
+    const c = await commands()
+    const first = c.run('snapshot')
+    await c.line(1)
+    c.tools[0]!.answer(page('one'))
+    expect(await first).toMatchObject({ ok: true, text: 'one' })
+    const second = c.run('click', { ref: 'e3' })
+    expect((await c.line(2)).params).toMatchObject({ name: 'browser_click', arguments: { ref: 'e3' } })
+    c.tools[0]!.answer(page('Clicked'))
+    expect(await second).toMatchObject({ ok: true, text: 'Clicked' })
+    expect(c.tools).toHaveLength(1)
+    // It dies with its container while a command runs, before Podman's event says so: the browser is starting.
+    const third = c.run('snapshot')
+    await c.line(3)
+    c.tools[0]!.emit('exit')
+    expect(await third).toEqual({ error: 'NOT_READY', state: 'starting' })
+    const fourth = c.run('snapshot')
+    await c.line(1, 1)
+    expect(c.tools.map(tool => tool.args)).toEqual([TOOL_SERVER_ARGS('a1'), TOOL_SERVER_ARGS('a1')])
+    c.tools[1]!.answer(page('four'))
+    expect(await fourth).toMatchObject({ ok: true, text: 'four' })
+    // A change that starts the browser again takes its tool server with it.
+    expect(c.tools[1]!.stdin.writableEnded).toBe(false)
+    await c.requests.agent_browser_settings_save!({ agentId: 'a1', settings: { ...defaultSettings(HOST), screen: '1366x768' } }, LOCAL)
+    await eventually(() => expect(c.tools[1]!.stdin.writableEnded).toBe(true))
+    await ready(c.port, 'a1')
+    const fifth = c.run('snapshot')
+    await c.line(1, 2)
+    c.tools[2]!.answer(page('five'))
+    expect(await fifth).toMatchObject({ ok: true, text: 'five' })
+  })
+
+  it('a screenshot comes back as its image, and a tool\'s own failure is failed with its words', async () => {
+    const c = await commands()
+    const shot = c.run('screenshot')
+    await c.line(1)
+    c.tools[0]!.answer({ content: [{ type: 'image', data: 'AAEC', mimeType: 'image/jpeg' }] })
+    expect(await shot).toEqual({ ok: true, text: '', image: 'AAEC' })
+    const click = c.run('click', { ref: 'e99' })
+    await c.line(2)
+    c.tools[0]!.answer({ content: [{ type: 'text', text: 'Element not found;' }, { type: 'text', text: 'take a new snapshot' }], isError: true })
+    expect(await click).toEqual({ ok: true, text: 'Element not found;\ntake a new snapshot', failed: true })
+  })
+
+  it('the person\'s Stop answers the running command and every waiting one STOPPED, and then types no stop line', async () => {
+    const c = await commands()
+    c.hear(c.typed[0]!.deliveryId, 'delivered')
+    const running = c.run('wait', { text: 'Inbox' })
+    await c.line(1)
+    const waiting = [c.run('snapshot'), c.run('click', { ref: 'e1' })]
+    // The core answers the Stop a round trip later: a command that arrives meanwhile is answered the stop line too.
+    const answer = c.hold()
+    const stopping = c.requests.agent_browser_stop!({ agentId: 'a1' }, LOCAL)
+    expect(await running).toEqual({ error: 'STOPPED' })
+    expect(await Promise.all(waiting)).toEqual([{ error: 'STOPPED' }, { error: 'STOPPED' }])
+    expect(await c.run('snapshot')).toEqual({ error: 'STOPPED' })
+    answer()
+    expect(await stopping).toEqual({ ok: true })
+    expect(c.tools[0]!.stdin.writableEnded).toBe(true)
+    expect(c.typed).toEqual([lineTo('a1', READY_LINE, 'ready')])
+    // Off now: the next command asks for its person.
+    expect(await c.run('snapshot')).toEqual({ error: 'OFF' })
+  })
+
+  it('a Stop with no command running types the stop line', async () => {
+    const c = await commands()
+    c.hear(c.typed[0]!.deliveryId, 'delivered')
+    const done = c.run('snapshot')
+    await c.line(1)
+    c.tools[0]!.answer(page('Example Domain'))
+    await done
+    expect(await c.requests.agent_browser_stop!({ agentId: 'a1' }, LOCAL)).toEqual({ ok: true })
+    expect(c.typed).toEqual([lineTo('a1', READY_LINE, 'ready'), lineTo('a1', STOPPED_LINE, 'stopped')])
+  })
+
+  it('a settings change while a command runs answers NOT_READY starting, and the next after ready works', async () => {
+    const c = await commands()
+    const running = c.run('navigate', { url: 'https://example.com' })
+    await c.line(1)
+    await c.requests.agent_browser_settings_save!({ agentId: 'a1', settings: { ...defaultSettings(HOST), languages: 'vi-VN, en-US' } }, LOCAL)
+    expect(await running).toEqual({ error: 'NOT_READY', state: 'starting' })
+    await ready(c.port, 'a1')
+    const next = c.run('snapshot')
+    await c.line(1, 1)
+    c.tools[1]!.answer(page('Example Domain'))
+    expect(await next).toEqual({ ok: true, text: 'Example Domain' })
+  })
+
+  it('the agent\'s own end while a command runs answers it as a browser that starts again with it', async () => {
+    const c = await commands()
+    const running = c.run('snapshot')
+    await c.line(1)
+    c.end('a1')
+    expect(await running).toEqual({ error: 'NOT_READY', state: 'starting' })
+  })
+
+  it('a call past its limit is TOOL_TIMEOUT, and the next starts another tool server', async () => {
+    const c = await commands()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const navigate = c.run('navigate', { url: 'https://example.com' })
+    await c.line(1)
+    await vi.advanceTimersByTimeAsync(69_999)
+    expect(c.tools[0]!.kill).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(await navigate).toEqual({ error: 'TOOL_TIMEOUT' })
+    expect(c.tools[0]!.kill).toHaveBeenCalled()
+    const snapshot = c.run('snapshot')
+    await c.line(1, 1)
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(await snapshot).toEqual({ error: 'TOOL_TIMEOUT' })
+    expect(c.tools).toHaveLength(2)
+  })
+
+  it('the ninth waiting is BUSY, and a command whose asker went never runs', async () => {
+    const c = await commands()
+    const running = c.run('wait', { text: 'Inbox' })
+    await c.line(1)
+    const gone = new AbortController()
+    const left = c.run('snapshot', {}, { closed: gone.signal })
+    const waiting = Array.from({ length: 7 }, () => c.run('snapshot'))
+    expect(await c.run('snapshot')).toEqual({ error: 'BUSY' })
+    gone.abort()
+    await left
+    c.tools[0]!.answer(page('Done'))
+    expect(await running).toEqual({ ok: true, text: 'Done' })
+    for (let n = 2; n <= 8; n++) {
+      await c.line(n)
+      c.tools[0]!.answer(page(`page ${n}`))
+    }
+    expect(await Promise.all(waiting)).toEqual(Array.from({ length: 7 }, (_, i) => ({ ok: true, text: `page ${i + 2}` })))
+    expect(c.tools[0]!.heard).toHaveLength(8)
+  })
+
+  it('each call carries the human mode of the settings now', async () => {
+    const c = await commands()
+    const human = async () => {
+      const answer = c.run('snapshot')
+      const heard = await c.line(c.tools[0] ? c.tools[0].heard.length + 1 : 1)
+      c.tools[0]!.answer(page('Example Domain'))
+      await answer
+      return (heard.params._harness as { human: string }).human
+    }
+    expect(await human()).toBe('normal')
+    // Human input applies to the next call: the browser is not started again.
+    await c.requests.agent_browser_settings_save!({ agentId: 'a1', settings: { ...defaultSettings(HOST), humanSpeed: 'fast' } }, LOCAL)
+    expect(await human()).toBe('fast')
+    await c.requests.agent_browser_settings_save!({ agentId: 'a1', settings: { ...defaultSettings(HOST), humanInput: false } }, LOCAL)
+    expect(await human()).toBe('off')
+    expect(c.tools).toHaveLength(1)
+  })
+
+  it('a command counts ok or failed, and its log line holds its name and outcome and none of its arguments or the page\'s text', async () => {
+    const count = vi.fn()
+    const c = await commands({ count })
+    const log = vi.spyOn(console, 'log')
+    const navigate = c.run('navigate', { url: 'https://secret.example/inbox?token=hunter2' })
+    await c.line(1)
+    c.tools[0]!.answer(page('https://secret.example/inbox · Private inbox of Kim'))
+    await navigate
+    const typing = c.run('type', { ref: 'e7', text: 'my secret words' })
+    await c.line(2)
+    c.tools[0]!.answer({ ...page('Element e7 is gone: secret.example'), isError: true })
+    await typing
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const hung = c.run('snapshot')
+    await c.line(3)
+    await vi.advanceTimersByTimeAsync(30_000)
+    await hung
+    const counted = count.mock.calls.map(([name]) => name as string).filter(name => name.startsWith('agent_browser_command'))
+    expect(counted).toEqual(['agent_browser_command_ok', 'agent_browser_command_failed', 'agent_browser_command_failed'])
+    const lines = log.mock.calls.map(([line]) => String(line)).filter(line => line.startsWith('agent browser a1: ') && !line.includes('tool server'))
+    expect(lines).toEqual(['agent browser a1: navigate ok', 'agent browser a1: type failed', 'agent browser a1: snapshot tool_timeout'])
+    expect(log.mock.calls.flat().join('\n')).not.toMatch(/secret|hunter2|Kim/)
+  })
+})
+
+describe('the window', () => {
+  it('the window is refused NOT_OWNER for a guest and a machine share, NO_BROWSER when off and NOT_READY while it starts', async () => {
+    const c = await commands()
+    for (const asker of [SHARE_GUEST, PLAIN_OWNER, { ...LOCAL, guest: 'kim@acme.io' }]) {
+      expect(await c.requests.agent_browser_window!({ agentId: 'a1', width: 1200, height: 800 }, asker)).toEqual({ error: 'NOT_OWNER' })
+    }
+    expect(await c.requests.agent_browser_window!({ agentId: 'a2', width: 1200, height: 800 }, LOCAL)).toEqual({ error: 'NO_BROWSER' })
+    expect(await c.requests.agent_browser_window!({ width: 1200, height: 800 }, LOCAL)).toEqual({ error: 'NO_BROWSER' })
+    await c.requests.agent_browser_start!({ agentId: 'a2' }, LOCAL)
+    await eventually(() => expect(c.port.frameContext('a2')).toEqual({ state: 'starting' }))
+    expect(await c.requests.agent_browser_window!({ agentId: 'a2', width: 1200, height: 800 }, LOCAL)).toEqual({ error: 'NOT_READY' })
+    expect(c.tools).toEqual([])
+  })
+
+  it('the size is clamped to 1024x640 and to the screen setting, and the clamped size is what is sent', async () => {
+    const c = await commands()
+    const window = (width: unknown, height: unknown, asker: Asker = LOCAL) => c.requests.agent_browser_window!({ agentId: 'a1', width, height }, asker)
+    const small = window(600.4, 300)
+    expect((await c.line(1)).params).toEqual({ width: 1024, height: 640 })
+    expect(c.tools[0]!.heard[0]!.method).toBe('window')
+    c.tools[0]!.answer({ width: 1024, height: 640 })
+    expect(await small).toEqual({ width: 1024, height: 640 })
+    // The person's other Desktop sizes it too: the last request wins.
+    const wide = window(2560, 1200, OTHER_DESKTOP)
+    expect((await c.line(2)).params).toEqual({ width: 1920, height: 1080 })
+    // Chrome keeps the window inside the screen: its answer is the size.
+    c.tools[0]!.answer({ width: 1920, height: 1053 })
+    expect(await wide).toEqual({ width: 1920, height: 1053 })
+    for (const [width, height] of [['1200', 800], [0, 800], [1200, undefined]]) {
+      expect(await window(width, height), `${String(width)}x${String(height)}`).toEqual({ error: 'INVALID_REQUEST' })
+    }
+    await c.requests.agent_browser_settings_save!({ agentId: 'a1', settings: { ...defaultSettings(HOST), screen: '1366x768' } }, LOCAL)
+    await ready(c.port, 'a1')
+    const held = window(1500, 900)
+    expect((await c.line(1, 1)).params).toEqual({ width: 1366, height: 768 })
+    c.tools[1]!.answer({ width: 1366, height: 768 })
+    expect(await held).toEqual({ width: 1366, height: 768 })
+  })
+
+  it('a tool server that does not answer in 5 s is WINDOW_FAILED and logged window_failed', async () => {
+    const c = await commands()
+    const log = vi.spyOn(console, 'log')
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const window = c.requests.agent_browser_window!({ agentId: 'a1', width: 1200, height: 800 }, LOCAL)
+    await c.line(1)
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(await window).toEqual({ error: 'WINDOW_FAILED' })
+    expect(log).toHaveBeenCalledWith('agent browser a1: window_failed')
+    // Nothing is killed: a command may be running beside it.
+    expect(c.tools[0]!.kill).not.toHaveBeenCalled()
+  })
+
+  it('nothing is written to the state file', async () => {
+    const c = await commands()
+    const before = readFileSync(join(dataDir, 'agent-browser.json'), 'utf8')
+    const window = c.requests.agent_browser_window!({ agentId: 'a1', width: 1200, height: 800 }, LOCAL)
+    await c.line(1)
+    c.tools[0]!.answer({ width: 1200, height: 800 })
+    expect(await window).toEqual({ width: 1200, height: 800 })
+    expect(readFileSync(join(dataDir, 'agent-browser.json'), 'utf8')).toBe(before)
+  })
+
+  it('the service\'s stop ends every tool server', async () => {
+    const c = await commands()
+    const running = c.run('snapshot')
+    await c.line(1)
+    c.port.stop()
+    expect(await running).toEqual({ error: 'NOT_READY', state: 'starting' })
+    expect(c.tools[0]!.stdin.writableEnded).toBe(true)
   })
 })

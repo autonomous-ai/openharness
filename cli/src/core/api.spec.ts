@@ -272,8 +272,37 @@ describe('the core API services stand on', () => {
     const paned = { ...row('live'), runtimes: [{ backend: 'tmux', paneId: '%7' }] } as RegisteredSession
     const core = createCoreApi({ ...deps, registry: { ...deps.registry, list: vi.fn(() => [paned]) } as unknown as CoreApiDeps['registry'] })
     expect(await core.agents.ids!()).toEqual({ live: ['live'], stopped: ['stopped'] })
-    expect(await core.agents.ofPane!('%7')).toBe('live')
+    expect(await core.agents.ofPane!('%7')).toEqual({ agentId: 'live', guest: false })
     expect(await core.agents.ofPane!('%8')).toBeNull()
+  })
+
+  // Review Focus 1 (re-check 2 of #2093): pane ids restart in every tmux server, so a private server inside one agent's
+  // pane counts up to another agent's pane id. `harness browser` sends its parents' pids, and the pane's own process,
+  // read from the daemon's terminal backend, has to be among them.
+  it('ofPane with ancestors is null when the pane\'s process is not among them (another tmux server\'s pane of the same id), and the agent when it is; without ancestors it answers as before', async () => {
+    const deps = coreDeps()
+    const live = { ...row('live'), runtimes: [{ backend: 'tmux', paneId: '%7' }] } as RegisteredSession
+    const kim = { ...row('kim'), guest: 'kim@acme.io', runtimes: [{ backend: 'tmux', paneId: '%8' }] } as RegisteredSession
+    const registry = { ...deps.registry, list: vi.fn(() => [live, kim]) } as unknown as CoreApiDeps['registry']
+    const panePid = vi.fn(async (session: RegisteredSession) => (session.agentId === 'live' ? 4242 : 4343))
+    const core = createCoreApi({ ...deps, registry, panePid })
+    // Run in a private server's %7 inside kim's pane: its parents are kim's pane's, never live's.
+    expect(await core.agents.ofPane!('%7', [9001, 9000, 4343, 1])).toBeNull()
+    expect(await core.agents.ofPane!('%7', [9001, 4242, 1])).toEqual({ agentId: 'live', guest: false })
+    expect(panePid).toHaveBeenLastCalledWith(live)
+    expect(await core.agents.ofPane!('%8', [4343, 1])).toEqual({ agentId: 'kim', guest: true })
+    expect(await core.agents.ofPane!('%9', [4242])).toBeNull()
+    // A pane whose process cannot be read proves nothing.
+    panePid.mockResolvedValueOnce(null)
+    expect(await core.agents.ofPane!('%7', [4242])).toBeNull()
+    panePid.mockRejectedValueOnce(new Error('tmux did not answer'))
+    expect(await core.agents.ofPane!('%7', [4242])).toBeNull()
+    // Nor does a core that cannot read it.
+    expect(await createCoreApi({ ...deps, registry }).agents.ofPane!('%7', [4242])).toBeNull()
+    // Without ancestors, as an older relay's `agent_browser_state` asks: the pane's agent, read from nothing else.
+    const calls = panePid.mock.calls.length
+    expect(await core.agents.ofPane!('%7')).toEqual({ agentId: 'live', guest: false })
+    expect(panePid).toHaveBeenCalledTimes(calls)
   })
 
   // The person's Start and Stop reach the core through the agent browser (core/agents/lifecycle.ts `set`).
@@ -297,7 +326,7 @@ describe('the core API services stand on', () => {
   it('opens an agent\'s browser for this computer and the owner\'s own apps only, never a plain owner or a guest', () => {
     expect(AGENT_BROWSER_REQUESTS).toEqual(['agent_browser_available', 'agent_browser_setup', 'agent_browser_retry',
       'agent_browser_state', 'agent_browser_settings', 'agent_browser_settings_save', 'agent_browser_proxy_test',
-      'agent_browser_start', 'agent_browser_stop'])
+      'agent_browser_start', 'agent_browser_stop', 'agent_browser_run', 'agent_browser_window'])
     expect(mayOpenBrowser({ local: true, owner: true })).toBe(true)
     expect(mayOpenBrowser({ local: false, owner: true, accountOwner: true })).toBe(true)
     expect(mayOpenBrowser({ local: false, owner: true })).toBe(false)
@@ -451,6 +480,10 @@ describe('the core API services stand on', () => {
     }
     // A grid command may run half an hour, and is waited for longer than that.
     expect(LONG_ANSWERS.models!.grid_fleet_run).toBeGreaterThan(30 * 60_000)
+    // An agent's browser command runs up to 70 s (navigation's 60 s and the service's 10 s), and `harness browser`
+    // waits 75 s for it: the core waits longer, so the CLI's own line says it timed out.
+    expect(LONG_ANSWERS.agentBrowser).toEqual({ agent_browser_run: 80_000 })
+    expect(AGENT_BROWSER_REQUESTS).toContain('agent_browser_run')
   })
 
   it('gives a service that acts on no agent nothing to create and no harness to read, and a daemon it was never told of', async () => {
