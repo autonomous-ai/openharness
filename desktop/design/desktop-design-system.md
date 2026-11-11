@@ -947,7 +947,7 @@ Top to bottom:
 
 ```text
  autonomous.ai ⌄              org name, semibold 13 primary; ⌄ only on hover; its menu: Personal, your Swarms, Rename (one you may change), New Swarm
- ⊕  Invite people             its owner only, never in Personal: opens the Swarm's people (Manage people), where a link, a domain or an invitation is made
+ ⊕  Invite people             its owner only, never in Personal: opens the Swarm's people, titled Invite people, where a link, a domain or an invitation is made
  Your Team           ⌄  ∞ +  quiet heading; ⌄ folds the list (open); ∞ (link) Attach agent, + New agent
  ◌  Faye            starting  first: a New agent going on after its form closed, a grey face; a click opens nothing yet
  ◌  Ivy               failed  its start failed: `failed` in red; a click opens its form again with why, and Try again
@@ -982,7 +982,7 @@ Top to bottom:
 | Personal project | `PersonalProjects` (`super_tabs/personal_projects.dart`) | In a person's own Personal Swarm, while they are alone in it, Projects are the repos their panes work in: the same repo on two of their computers is one project, named after the repo (`api`; `api (acme/api)` beside another `api`). A pane with no repo is in no project and stays a row of Your Team. A project whose panes are all closed leaves the list until one opens again. Which project a repo has is asked of the server by the same request on every computer, and nothing of it is kept on one. Its Tasks board reads the repo's GitHub issues with the reader's own `gh`, on every computer: for a repo on GitHub the Desktop sets the project's `owner/name` once (`project.github`), so the server learns the project's name and that, nothing of a pane. No project is named after a tab: the tab projects of v3 are closed once (an empty one goes, one with messages is kept read-only and out of the list; this computer keeps their ids until 2026-12-10). The Swarm's own first project (Personal), which the server keeps only while it has messages, is listed as any project. |
 | Org name | `SuperTabQuietHeading.org` | Semibold 13 primary, no icon; its chevron only on hover; opens the Swarm menu, Personal first. |
 | Personal outside a Swarm | `swarmsToOpen` (`super_tabs/swarm_switcher.dart`) | A person's Personal Swarm is in reach on each of their computers without another Swarm open (anh Dee, 2026-11-11): on the Desktop it is the first of Recent Swarms on the New Tab page and a Swarm draft, and in ⌘K, always, listed once whether it is open, closed or not made yet. Picking it shows it (its tab if one shows it, else in that page's tab), made by the server the first time; one that cannot be made says why in a line at the foot. The web lists only the Swarms closed there. |
-| Invite people | `ProjectSidebar.onInvite` (`super_tabs/project_sidebar.dart`) | A quiet row with `AppIcons.userPlus`, right under the org name, for the Swarm's owner alone (only an owner invites: backend `commands.ts`, `invite.create`), and never in their Personal Swarm, which is theirs alone; it opens the Swarm's people (`showSuperTabSharing`). In sight, not in Manage: people join a Swarm by an invitation, and each brings their agents and computers (anh Dee, 2026-11-11: "it's quite difficult to invite people. i have no idea where to find it. invite should be visible"). |
+| Invite people | `ProjectSidebar.onInvite` (`super_tabs/project_sidebar.dart`) | A quiet row with `AppIcons.userPlus`, right under the org name, for the Swarm's owner alone (only an owner invites: backend `commands.ts`, `invite.create`), and never in their Personal Swarm, which is theirs alone; it opens the Swarm's people (`showSuperTabSharing`), titled Invite people; Manage ▸ Swarm ▸ Manage people opens the same dialog titled Manage people. A dialog's title is the words that opened it (PSQA, 2026-11-12: both said Share Swarm). In sight, not in Manage: people join a Swarm by an invitation, and each brings their agents and computers (anh Dee, 2026-11-11: "it's quite difficult to invite people. i have no idea where to find it. invite should be visible"). |
 | Person | `SuperTabAvatar.person` at 20 | A photo, or an initial on the neutral grey disc. |
 
 The phone keeps its own rows. The browser draws this pane, as the Desktop does.
@@ -1114,7 +1114,9 @@ repo search row.
 **Welcome and New Tab hierarchy** — creation is primary. Show at most six rows
 under “Recent harnesses”, separated from creation controls by 56 points. Use
 small original-color agent marks and one muted neutral ink for names, context,
-heading and timestamps. Use “now” for visits under one minute old. Context
+heading and timestamps. “Recent Swarms” rows wear an 18-point Swarm mark
+(`AppIcons.user` for Personal, `AppIcons.users` for the others) in the marks'
+column, so their names start where the recent harnesses' names do. Use “now” for visits under one minute old. Context
 reuses `StatusLine`, honoring the selected wording, machine/project/branch
 visibility and status font, but omitting ANSI colors and segment backplates.
 It is never a second renderer with a hard-coded dot separator.
