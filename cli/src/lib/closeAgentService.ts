@@ -318,7 +318,10 @@ export class CloseAgentService {
       const activity = observed === 'idle' && resumeMode(s.engine) !== 'conversation' ? 'unknown' : observed
       if (!current()) return { error: 'AGENT_CHANGED' }
       if (request.mode === 'inspect') {
-        return activity === 'idle' && this.deps.backgroundCommands ? { activity, backgroundCommands: await this.backgroundCommands(s) } : { activity }
+        if (activity !== 'idle' || !this.deps.backgroundCommands) return { activity }
+        const backgroundCommands = await this.backgroundCommands(s)
+        // Rechecked after the count as after the activity: the cleanup preview leaves a changing harness out by this.
+        return current() ? { activity, backgroundCommands } : { error: 'AGENT_CHANGED' }
       }
       if (request.mode === 'after_task') {
         if (s.closePlan?.identity === target && s.closePlan.state === 'waiting') return { deferred: true }
