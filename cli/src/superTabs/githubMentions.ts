@@ -18,7 +18,7 @@
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { ASKED, markOf, readerKey, swarmsOf, swarmsOwn, tasksOf, worksOnOf } from './assign/crew.js'
+import { askedToRead, markOf, readerKey, swarmsOf, swarmsOwn, tasksOf, worksOnOf } from './assign/crew.js'
 import { GitHubReads, GitHubStop, PAGE, Waits, waitWords, type GitHubGet } from './githubRest.js'
 import { permanentRefusal } from './retries.js'
 import { identifier, object, SuperTabHostError } from './wire.js'
@@ -421,13 +421,13 @@ export class GitHubMentions {
   /** An ask to read by Harness that [item] is (githubAssign.ts ask: "Harness, 14:20, to **Juno**: please read ..."): kept as owed
    *  by each agent it names, the newest last and at most [MAX_ASKS] each. An ask of one pull request again replaces the one before. */
   private noteAsk(kept: RepoMemory, agents: WatchedAgent[], item: Said): void {
-    const ask = ASKED.exec(item.text.slice(0, 500))
+    const ask = askedToRead(item.text.slice(0, 500))
     if (!ask) return
-    for (const agent of agents.filter(watched => watched.names.some(name => readerKey(name) === readerKey(ask[1]!)))) {
+    for (const agent of agents.filter(watched => watched.names.some(name => readerKey(name) === readerKey(ask.name)))) {
       const asks = (kept.asks ??= {})[agent.agentId] ??= []
       const before = asks.findIndex(owed => owed.number === item.number)
       if (before >= 0) asks.splice(before, 1)
-      asks.push({ number: item.number, sha: ask[2]! })
+      asks.push({ number: item.number, sha: ask.sha })
       if (asks.length > MAX_ASKS) asks.splice(0, asks.length - MAX_ASKS)
     }
   }

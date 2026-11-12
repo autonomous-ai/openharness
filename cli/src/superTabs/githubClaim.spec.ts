@@ -93,7 +93,8 @@ describe('a task\'s claim, made by command', () => {
     expect(t.labelsOf(34)).toEqual(['builder:pip', 'size:s', 'status:taken'])
     expect(t.sent.map(s => `${s.method} ${s.path}`)).toEqual(['POST /repos/acme/app/issues/34/labels', 'POST /repos/acme/app/issues/34/comments'])
     expect(t.sent[0]!.body).toEqual({ labels: ['status:taken'] })
-    expect(t.sent[1]!.body).toEqual({ body: 'Pip, 14:05: taken by Pip' })
+    // As every agent signs, with no clock, which GitHub shows (#4223).
+    expect(t.sent[1]!.body).toEqual({ body: 'Pip: On it.' })
     expect(t.record).toHaveBeenCalledExactlyOnceWith('acme/app', '9001')
   })
 
@@ -228,6 +229,10 @@ describe('a task\'s claim, made by command', () => {
     expect(await t.take()).toEqual({ url: 'https://github.com/acme/app/issues/34#issuecomment-9104', taken: false, split: SPLIT })
     expect(t.record).toHaveBeenLastCalledWith('acme/app', '9104')
     expect(t.repo.comments.get(34)).toHaveLength(7)
+    // As it says it since #4223, and never another agent's of its person's, nor its own that only opens so.
+    t.repo.comments.set(34, [...t.repo.comments.get(34)!, mine(9106, 'Pip: On it.'), mine(9107, 'Juno: On it.'), mine(9108, 'Pip: On it. And the tests after.')])
+    expect(await t.take()).toEqual({ url: 'https://github.com/acme/app/issues/34#issuecomment-9106', taken: false, split: SPLIT })
+    expect(t.repo.comments.get(34)).toHaveLength(10)
   })
 
   // The assigner moves a task nobody took to a builder that is free (githubAssign.ts): a claim made in that moment is undone.
@@ -309,7 +314,7 @@ describe('a claim of a task offered to the builder (taskOffers.ts)', () => {
     expect(await t.take(50)).toEqual({ url: 'https://github.com/acme/app/issues/50#issuecomment-9001', taken: true, split: expect.stringContaining('acme/app#50') })
     expect(t.hold.left).toHaveBeenCalledExactlyOnceWith('acme/app', 50)
     expect(t.sent.map(s => [`${s.method} ${s.path}`, s.body])).toEqual([['POST /repos/acme/app/issues/50/labels', { labels: ['builder:pip', 'status:taken'] }],
-      ['POST /repos/acme/app/issues/50/comments', { body: 'Pip, 14:05: taken by Pip' }]])
+      ['POST /repos/acme/app/issues/50/comments', { body: 'Pip: On it.' }]])
     expect(t.labelsOf(50)).toEqual(['size:s', 'builder:pip', 'status:taken'])
     // Taken, it carries the label: the same command again asks the server nothing.
     expect(await t.take(50)).toMatchObject({ taken: false })

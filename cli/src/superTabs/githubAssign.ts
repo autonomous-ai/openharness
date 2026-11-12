@@ -12,7 +12,7 @@
  * person whose agent is the project's PM, running or stopped there, with their gh. A task its PM or a person gave by hand is
  * never moved.
  */
-import { addElsewhere, areaOf, ASKED, buildingIn, builtOn, dependsOn, hasRoom, heldTasks, labelOf, machineHas, markOf, nextPicks, ofProject, openPieces, OTHER_PROJECTS, outOfQuota, teamOf, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readerKey, readProblem, reasonOf, startedAt, SWARM, takeBacks, takenTasks, tasksOf, worksOnOf, type AwayBuilder, type Crew, type CrewBuilder, type Pick, type Read, type Up } from './assign/crew.js'
+import { addElsewhere, areaOf, askedToRead, buildingIn, builtOn, dependsOn, gaveTo, HARNESS, hasRoom, heldTasks, labelOf, machineHas, markOf, nextPicks, ofProject, openPieces, OTHER_PROJECTS, outOfQuota, teamOf, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readerKey, readProblem, reasonOf, saidTo, startedAt, SWARM, takeBacks, takenTasks, tasksOf, toLine, worksOnOf, type AwayBuilder, type Crew, type CrewBuilder, type Pick, type Read, type Up } from './assign/crew.js'
 import type { Choice } from './assign/model.js'
 import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
@@ -35,7 +35,6 @@ const SOLVE_MS = 1_000
 /** Search steps for each task, up to a ceiling: at 20 tasks the solver takes about 15,000 steps a second, at 200 about 1,300
  *  (benchmark, 2026-11-09), so a small team stops early and a large one uses the second. */
 const STEPS_PER_TASK = 400, MAX_STEPS = 200_000
-const SELF = 'Harness'
 /** Closed tasks whose time is read each pass, and how many are remembered: a slow start, never a slow pass. */
 const MEASURES_PER_PASS = 5, MAX_MEASURED = 500
 /** The labels the team's flow uses (lib/swarmSkills.ts SWARM_BASICS, PM_BASICS), made where a repository lacks them: gh
@@ -488,7 +487,7 @@ export class GitHubAssign {
       if ('refused' in given) { this.once(`[super-tab] Task assignment: TAKE_BACK_REFUSED ${repo}#${back.number}: GitHub answered ${given.refused}`); continue }
       if (given.takenKept !== null) this.once(`[super-tab] Task assignment: TAKEN_NOT_CLEARED ${repo}#${back.number}: GitHub answered ${given.takenKept}`)
       this.backs.add(key)
-      const said = await this.deps.send('POST', `/repos/${repo}/issues/${back.number}/comments`, { body: backLine(back.why, this.clock()) })
+      const said = await this.deps.send('POST', `/repos/${repo}/issues/${back.number}/comments`, { body: backLine(back.why) })
       // Taken back all the same: the labels say so. Its line held or refused is said here (githubWrites.ts holds a line said too often).
       if (said.status >= 300) this.once(`[super-tab] Task assignment: LINE_REFUSED ${repo}#${back.number}: GitHub answered ${said.status}`)
       this.log(`[super-tab] took ${repo}#${back.number} back: ${back.why}`)
@@ -584,16 +583,16 @@ export class GitHubAssign {
       // How often each was asked for this head.
       const onThisHead = new Map<string, number>()
       for (const c of comments) {
-        const found = ownAsk(c, ASKED)
+        const found = askedToRead(ownWords(c))
         if (!found) continue
         // Keyed as the readers are (verdicts): the one asked as "Kai Lee" is the one that answered as "kai-lee".
-        const name = readerKey(found[1]!)
-        written.set(name, found[1]!)
-        if (head.startsWith(found[2]!)) onThisHead.set(name, (onThisHead.get(name) ?? 0) + 1)
+        const name = readerKey(found.name)
+        written.set(name, found.name)
+        if (head.startsWith(found.sha)) onThisHead.set(name, (onThisHead.get(name) ?? 0) + 1)
         const heads = asked.get(name) ?? new Map<string, number>()
         // GitHub dates every comment; one it did not is taken as asked now, as before.
         const at = Date.parse(String(c.created_at ?? ''))
-        heads.set(found[2]!, Math.max(heads.get(found[2]!) ?? 0, Number.isFinite(at) ? at : now))
+        heads.set(found.sha, Math.max(heads.get(found.sha) ?? 0, Number.isFinite(at) ? at : now))
         asked.set(name, heads)
       }
       // A reader asked [READ_WAIT_MS] ago with no verdict since is no longer counted on: another is asked too, and the first
@@ -720,8 +719,8 @@ export class GitHubAssign {
         await this.takeBack(repo, issues.filter(issue => Number(issue.number) === task.number),
           [{ name: task.name, label: task.label, why: 'stopping' }], `${task.name} has had no activity on it since it was asked`)
       } else if (!asked && now - since >= QUIET_ASK_MS) {
-        const reply = await this.deps.send('POST', `/repos/${repo}/issues/${task.number}/comments`, { body: `${SELF}, ${this.clock()}, to **${task.name}**: `
-          + `${QUIET_ASKED}${Math.round((now - since) / 3_600_000)} h. Are you still on it? Say where it stands, or what you need.`
+        const reply = await this.deps.send('POST', `/repos/${repo}/issues/${task.number}/comments`, { body: toLine(task.name,
+          `${QUIET_ASKED}${Math.round((now - since) / 3_600_000)} h. Are you still on it? Say where it stands, or what you need.`)
           // A team's one builder keeps it (below), so it is told no other will take it.
           + (crew.builders.some(b => b.label !== task.label) ? ` With no word in ${Math.round((QUIET_BACK_MS - QUIET_ASK_MS) / 3_600_000)} h it goes to another builder.` : '') })
         if (reply.status >= 300) { this.once(`[super-tab] Task assignment: ASK_REFUSED ${repo}#${task.number}: GitHub answered ${reply.status}`); continue }
@@ -751,14 +750,14 @@ export class GitHubAssign {
       // last waited is of an earlier time its pieces closed.
       const since = new Date(Math.floor((now - PIECES_SAID_MS) / 3_600_000) * 3_600_000).toISOString()
       const comments = await this.reads.current(repo, `/repos/${repo}/issues/${issue.number}/comments?since=${since}&per_page=${PAGE}`, 1)
-      const said = comments.find(c => Date.parse(String(c.created_at ?? '')) >= (this.waited.get(key) ?? 0) && ownAsk(c, /^Harness, \d\d:\d\d, to \*\*[^*]+\*\*: (.*)$/m)?.[1]?.startsWith(line))
+      const said = comments.find(c => Date.parse(String(c.created_at ?? '')) >= (this.waited.get(key) ?? 0) && saidTo(ownWords(c), builder.name)?.startsWith(line))
       // Said before a restart: quiet from that word, which GitHub's list may not show as the task's time yet.
       if (said) this.waited.set(key, Date.parse(String(said.created_at)))
       else {
         // Not quiet while it is being told, and from this word on once it is.
         this.waited.set(key, now)
         const reply = await this.deps.send('POST', `/repos/${repo}/issues/${issue.number}/comments`,
-          { body: `${SELF}, ${this.clock()}, to **${builder.name}**: ${line}. It is yours to finish, or to close if nothing is left.` })
+          { body: toLine(builder.name, `${line}. It is yours to finish, or to close if nothing is left.`) })
         if (reply.status >= 300) { this.once(`[super-tab] Task assignment: ASK_REFUSED ${repo}#${issue.number}: GitHub answered ${reply.status}`); continue }
         this.log(`[super-tab] told ${builder.name} the pieces of ${repo}#${issue.number} are closed`)
       }
@@ -793,7 +792,7 @@ export class GitHubAssign {
       const taker = idle.find(b => b !== builder && !task?.notBuilders.includes(b.id))
       if (!task || !taker) continue
       const comments = await this.reads.current(repo, `/repos/${repo}/issues/${issue.number}/comments?per_page=${PAGE}`, 1)
-      const gave = Math.max(0, ...comments.filter(c => readerKey(ownAsk(c, /^Harness, \d\d:\d\d: for \*\*([^*]+)\*\*: /)?.[1] ?? '\n') === readerKey(builder.name))
+      const gave = Math.max(0, ...comments.filter(c => readerKey(gaveTo(ownWords(c)) ?? '\n') === readerKey(builder.name))
         .map(c => Date.parse(String(c.created_at ?? ''))).filter(Number.isFinite))
       if (!gave || now - gave < WAIT_TAKE_MS) continue
       idle.splice(idle.indexOf(taker), 1)
@@ -808,10 +807,7 @@ export class GitHubAssign {
   private async quietAskedAt(repo: string, number: number, name: string, touched: number): Promise<number | null> {
     const since = new Date(touched - 60_000).toISOString()
     const comments = await this.reads.current(repo, `/repos/${repo}/issues/${number}/comments?since=${since}&per_page=${PAGE}`, 1)
-    const asks = comments.filter(c => {
-      const found = ownAsk(c, /^Harness, \d\d:\d\d, to \*\*([^*]+)\*\*: (.*)$/m)
-      return !!found?.[1] && readerKey(found[1]) === readerKey(name) && found[2]!.startsWith(QUIET_ASKED)
-    }).map(c => Date.parse(String(c.created_at ?? ''))).filter(Number.isFinite)
+    const asks = comments.filter(c => saidTo(ownWords(c), name)?.startsWith(QUIET_ASKED)).map(c => Date.parse(String(c.created_at ?? ''))).filter(Number.isFinite)
     return asks.length ? Math.max(...asks) : null
   }
 
@@ -823,11 +819,11 @@ export class GitHubAssign {
     if (this.blocked.has(key)) return false
     const line = `nobody can start this yet: ${blocked}`
     const comments = await this.reads.current(repo, `/repos/${repo}/issues/${number}/comments?per_page=${PAGE}`, 1)
-    if (comments.some(c => ownAsk(c, new RegExp(`^Harness, \\d\\d:\\d\\d, to \\*\\*[^*]+\\*\\*: ${line.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`)))) {
+    if (comments.some(c => saidTo(ownWords(c), project.pm)?.startsWith(line))) {
       this.blocked.add(key)
       return false
     }
-    const reply = await this.deps.send('POST', `/repos/${repo}/issues/${number}/comments`, { body: `${SELF}, ${this.clock()}, to **${project.pm}**: ${line}.` })
+    const reply = await this.deps.send('POST', `/repos/${repo}/issues/${number}/comments`, { body: toLine(project.pm, `${line}.`) })
     if (reply.status >= 300) { this.once(`[super-tab] Task assignment: ASK_REFUSED ${repo}#${number}: GitHub answered ${reply.status}`); return false }
     this.blocked.add(key)
     this.log(`[super-tab] told ${project.pm} why nobody can start ${repo}#${number}: ${blocked}`)
@@ -853,8 +849,8 @@ export class GitHubAssign {
   private async ask(repo: string, number: number, head: string, name: string, what: string, nth = 0): Promise<void> {
     const key = `${repo}#${number}@${head}:${readerKey(name)}${nth ? `:${nth}` : ''}`
     if (this.asks.has(key)) return
-    const reply = await this.deps.send('POST', `/repos/${repo}/issues/${number}/comments`, { body: `${SELF}, ${this.clock()}, to **${name}**: ${what}, `
-      + `then run \`harness super-tab read ok ${repo}#${number} ${head.slice(0, 7)} 'what you found'\`. For a HOLD, read hold in place of read ok, with the file, line and fix.` })
+    const reply = await this.deps.send('POST', `/repos/${repo}/issues/${number}/comments`, { body: toLine(name, `${what}, `
+      + `then run \`harness super-tab read ok ${repo}#${number} ${head.slice(0, 7)} 'what you found'\`. For a HOLD, read hold in place of read ok, with the file, line and fix.`) })
     if (reply.status >= 300) { this.once(`[super-tab] Task assignment: ASK_REFUSED ${repo}#${number}: GitHub answered ${reply.status}`); return }
     this.asks.add(key)
     this.log(`[super-tab] asked ${name} to read ${repo}#${number} at ${head.slice(0, 7)}`)
@@ -1002,16 +998,11 @@ export class GitHubAssign {
     // One that comes after tasks whose pull requests are up says which branches it is built on.
     const bases = read.bases.get(pick.task)
     const said = await this.deps.send('POST', `/repos/${project.repo}/issues/${number}/comments`,
-      { body: `${SELF}, ${this.clock()}: for **${name}**: ${reasonOf(pick, read)}.${bases ? ` ${builtOn(bases)}.` : ''}` })
+      { body: toLine(name, `this is yours. ${reasonOf(pick, read, true)}.${bases ? ` ${builtOn(bases)}.` : ''}`) })
     // Given all the same: its label is on, and its builder's turn's end types it (nextThing.ts). Its line held or refused is said here.
     if (said.status >= 300) this.once(`[super-tab] Task assignment: LINE_REFUSED ${project.repo}#${number}: GitHub answered ${said.status}`)
     this.log(`[super-tab] gave ${project.repo}#${number} to ${name} (${reasonOf(pick, read)})`)
     return true
-  }
-
-  private clock(): string {
-    const at = new Date(this.now())
-    return `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`
   }
 
   /** Says [line] the first time only; the memory is bounded, oldest first. */
@@ -1061,12 +1052,11 @@ export function blockedWhy(issue: Json | undefined, why: string, crew: Crew, rea
   return null
 }
 
-/** The first line of a comment Harness may have written, matched by [pattern]: only a member's, as Harness writes with the PM's
- *  person's gh, so nobody outside the team can make Harness believe it asked (and never ask), and only its first 500
- *  characters, as Harness's own are short, so a long comment costs nothing. */
-function ownAsk(comment: Json, pattern: RegExp): RegExpExecArray | null {
-  if (!TEAM.has(comment.author_association)) return null
-  return pattern.exec(String(comment.body ?? '').slice(0, 500))
+/** The words of a comment Harness may have written, or none: only a member's, as Harness writes with the PM's person's gh, so
+ *  nobody outside the team can make Harness believe it asked (and never ask), and only its first 500 characters, as Harness's
+ *  own are short, so a long comment costs nothing. */
+function ownWords(comment: Json): string {
+  return TEAM.has(comment.author_association) ? String(comment.body ?? '').slice(0, 500) : ''
 }
 
 /** What taking a task back answered: GitHub refused it (its status), or it is done, with the status GitHub answered when it kept
@@ -1094,8 +1084,8 @@ export async function giveBack(send: GitHubSend, repo: string, number: number, l
   return { takenKept: cleared && cleared.status !== 200 && cleared.status !== 404 ? cleared.status : null }
 }
 
-/** The line a task taken back says on it, as Harness at [at] (HH:MM): [why], and where it goes. */
-export const backLine = (why: string, at: string): string => `${SELF}, ${at}: ${why}, so this task goes to the builder who can start it next.`
+/** The line a task taken back says on it, as Harness: [why], and where it goes. */
+export const backLine = (why: string): string => `${HARNESS}: ${why}, so this task goes to the builder who can start it next.`
 
 export const labelNames = (issue: Json): string[] =>
   (Array.isArray(issue.labels) ? issue.labels : []).map(label => String((label as Json)?.name ?? ''))

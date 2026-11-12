@@ -613,7 +613,7 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     await vi.advanceTimersByTimeAsync(IDLE_BACK_MS - IDLE_ASK_MS)
     expect(f.written.slice(0, 3)).toEqual(['DELETE /repos/acme/app/issues/14/labels/status%3Ataken', 'DELETE /repos/acme/app/issues/14/labels/builder%3Apip',
       'DELETE /repos/acme/app/issues/14/labels/status%3Ataken'])
-    expect(f.written[3]).toMatch(/^POST \/repos\/acme\/app\/issues\/14\/comments \{"body":"Harness, \d\d:\d\d: Pip held it with nothing done for an hour, so this task goes to the builder who can start it next\."\}$/)
+    expect(f.written[3]).toMatch(/^POST \/repos\/acme\/app\/issues\/14\/comments \{"body":"Harness: Pip held it with nothing done for an hour, so this task goes to the builder who can start it next\."\}$/)
     expect(f.say.mock.calls.map(([, , text]) => text)).toEqual(['I held acme/app#14 (Add the export) with nothing done on it for an hour, so Harness '
       + 'gave it back for the builder who can start it next.'])
     // Nothing more: the watch ends with it.

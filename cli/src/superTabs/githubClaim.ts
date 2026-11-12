@@ -15,9 +15,9 @@
  * what is missing, and posts and records only what is not there. The comment is recorded with the backend as the calling
  * agent's (backend superTabs/githubComments.ts).
  */
-import { CLAIM_LIMIT, labelOf, markOf, openPieces, SWARM } from './assign/crew.js'
+import { CLAIM_LIMIT, labelOf, markOf, openPieces, SWARM, tookLine } from './assign/crew.js'
 import type { GitHubReply } from './githubRest.js'
-import { hhmm, projectRepository, recordOwn, type ProjectRepositories, type VerdictDeps } from './githubVerdict.js'
+import { projectRepository, recordOwn, type ProjectRepositories, type VerdictDeps } from './githubVerdict.js'
 import { TAKE_MARGIN_MS } from './taskOffers.js'
 import { object, SuperTabHostError } from './wire.js'
 
@@ -183,10 +183,11 @@ export async function takeTask(deps: VerdictDeps, builder: { name: string; repos
   let comment: Record<string, unknown> | undefined
   if (!changed) {
     const login = String((await github(async () => ({ status: 200, etag: null, resetAt: null, body: await deps.login() }))).body).toLowerCase()
+    // As it says it now, or as it did with its clock ("Pip, 14:05: taken by Pip"), which stays on tasks taken before (#4223).
     const open = `${name}, `, close = `: taken by ${name}`
     const own = (said: Record<string, unknown>): boolean => {
       const line = String(said.body ?? '').split('\n')[0] ?? ''
-      return line.startsWith(open) && line.endsWith(close) && /^\d\d:\d\d$/.test(line.slice(open.length, line.length - close.length))
+      return (line === tookLine(name) || line.startsWith(open) && line.endsWith(close) && /^\d\d:\d\d$/.test(line.slice(open.length, line.length - close.length)))
         && String(object(said.user).login ?? '').toLowerCase() === login
     }
     const last = Math.max(1, Math.ceil((Number(issue.comments) || 0) / PAGE))
@@ -197,7 +198,7 @@ export async function takeTask(deps: VerdictDeps, builder: { name: string; repos
     }
   }
   if (!comment) {
-    const made = await github(() => deps.send('POST', `${task}/comments`, { body: `${name}, ${hhmm((deps.now ?? Date.now)())}: taken by ${name}` }))
+    const made = await github(() => deps.send('POST', `${task}/comments`, { body: tookLine(name) }))
     if (made.status !== 201) throw refused(made.status)
     comment = object(made.body)
     changed = true

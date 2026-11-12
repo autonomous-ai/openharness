@@ -27,7 +27,7 @@
  * every one was until 2026-11-10.
  */
 import { createHash } from 'node:crypto'
-import { dependsOn, labelOf, readerKey, sameKey, tasksOf, teamOf, type Crew } from './assign/crew.js'
+import { dependsOn, gaveTo, labelOf, readerKey, sameKey, tasksOf, teamOf, type Crew } from './assign/crew.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { GitHubReads, GitHubStop, PAGE, retryIn, STOP_ASKING, Waits, waitWords } from './githubRest.js'
 import { projectRepositorySlug, TEAM } from './githubMentions.js'
@@ -138,8 +138,6 @@ const FILES_KEPT = 1_000
  *  lampOS's merge-when-green.sh waits for "the same in two looks 30 s apart, from 3 min on". A head just pushed has no checks
  *  yet, which read as all passed, and a job that needs another gets its check only when that one ends. */
 const CHECKS_SETTLE_MS = 3 * 60_000
-/** How the assigner's word on a task begins when it gives it (githubAssign.ts give): "Harness, 09:30: for **Pip**: ...". */
-const GAVE = /^Harness, \d\d:\d\d: for \*\*([^*]+)\*\*: /
 /** How many notes are remembered, as the train bot keeps the last 5,000 lines of its told list. */
 const TOLD_MAX = 5_000
 /** Records asked for in one request (the backend takes at most 100 ids), how many are remembered, and how long after a comment
@@ -879,7 +877,7 @@ export class GitHubMerge {
     for (const task of tasks) {
       const words = (await this.reads.current(repo, `/repos/${repo}/issues/${task}/comments?per_page=${PAGE}`, 3))
         .filter(c => TEAM.has(c.author_association) && String(object(c.user).login ?? '').toLowerCase() === me)
-        .map(c => GAVE.exec(String(c.body ?? '').slice(0, 500))?.[1]).filter((name): name is string => !!name)
+        .map(c => gaveTo(String(c.body ?? '').slice(0, 500))).filter((name): name is string => !!name)
       const last = words.at(-1)
       if (last && labelOf(last) === labelOf(author)) { found = { name: last, task }; break }
     }

@@ -41,6 +41,16 @@ describe('Harness\'s writes to GitHub in its person\'s name (githubWrites.ts)', 
     expect(f.sent).toHaveLength(4)
   })
 
+  // #4223: Harness signs "Harness: …" with no clock; the merger's and the train's lines still carry one.
+  it('holds a line of Harness\'s signed with no clock as it holds one with, and never an agent\'s own that only names Harness', async () => {
+    const f = setup()
+    const line = 'Harness: Uma, please read this pull request, then run `harness super-tab read ok acme/app#30 166f687 \'what you found\'`.'
+    for (let time = 0; time < 4; time++) await f.gate.send('POST', '/repos/acme/app/issues/30/comments', { body: line })
+    expect(f.sent).toHaveLength(SAME_TEXT_TIMES)
+    for (let time = 0; time < 4; time++) await f.gate.send('POST', '/repos/acme/app/issues/30/comments', { body: 'Harness is slow today.' })
+    expect(f.sent).toHaveLength(SAME_TEXT_TIMES + 4)
+  })
+
   it('leaves out only the clock that signs a line: another time inside it is another line', async () => {
     const f = setup()
     for (const until of ['14:00', '15:00', '16:00']) {

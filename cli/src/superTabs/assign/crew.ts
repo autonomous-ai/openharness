@@ -565,11 +565,12 @@ export function takenTasks(issues: Json[], pulls: Json[], builders: CrewBuilder[
 /** Finished tasks of a size needed before their time replaces the size's guess, and the bounds kept on it. */
 export const LEARN_MIN = 3, LEARNED_FLOOR = 10, LEARNED_CEILING = 24 * 60
 
-/** When a closed task's work began: its builder's "taken by" comment (githubClaim.ts), else Harness's word giving it. */
+/** When a closed task's work began: its builder's comment as it took it (githubClaim.ts: "Lennox: On it.", and "Lennox, 16:52:
+ *  taken by Lennox" before), else Harness's word giving it (gaveTo). */
 export function startedAt(comments: Json[]): number | null {
   for (const comment of comments) {
     const first = String(comment.body ?? '').split('\n').find(line => line.trim()) ?? ''
-    if (/\btaken by\b/i.test(first) || /^Harness, \d\d:\d\d: for \*\*/.test(first)) {
+    if (/\btaken by\b/i.test(first) || TOOK.test(first) || gaveTo(first) !== null) {
       const at = Date.parse(String(comment.created_at ?? ''))
       if (Number.isFinite(at)) return at
     }
@@ -609,11 +610,12 @@ export function nextPicks(plan: Plan, read: Read): Pick[] {
 }
 
 /** Why a builder got a task, in a few words: when it starts it, and the task's area when its person says it works on it. */
-export function reasonOf(pick: Pick, read: Read): string {
+export function reasonOf(pick: Pick, read: Read, to = false): string {
   const task = read.problem.tasks.find(t => t.id === pick.task)
-  const when = pick.start <= 0 ? 'it can start now' : `it can start in ${pick.start < 90 ? `${pick.start} min` : `${Math.round(pick.start / 60)} h`}`
+  // Said to the builder itself ([to]) on the task, or of it in the log.
+  const when = `${to ? 'You' : 'it'} can start ${pick.start <= 0 ? 'now' : `in ${pick.start < 90 ? `${pick.start} min` : `${Math.round(pick.start / 60)} h`}`}`
   const part = task?.part
-  return part && read.builders.get(pick.builder)?.worksOn?.includes(part) ? `${when}, and it works on ${part}` : when
+  return part && read.builders.get(pick.builder)?.worksOn?.includes(part) ? `${when}, and ${to ? 'you work' : 'it works'} on ${part}` : when
 }
 
 /**
@@ -630,8 +632,43 @@ export function readerFor(builders: CrewBuilder[], held: Map<string, number[]>, 
   return candidates[0] ?? null
 }
 
-/** Harness's ask to read a pull request (githubAssign.ts ask): "Harness, 14:20, to **Juno**: please read this pull request, then run
- *  `harness super-tab read ok owner/repo#24 f6edb44 …`": the reader it names, and the head it is asked to read. An ask from before
- *  the verdict was a command named the head after "READ-OK", and is on open pull requests still: that form can go after
- *  2026-12-10. The assigner finds its own asks by it, and GitHub news keeps each agent's as owed (githubMentions.ts). */
-export const ASKED = /^Harness, \d\d:\d\d, to \*\*([^*]+)\*\*: [^\n]*?please read[^\n]*?(?:super-tab read ok \S+|READ-OK) ([0-9a-f]{7,40})/
+/**
+ * Harness's own lines on GitHub, written with its PM's person's login (#4223; anh Dee, 2026-11-12: each comment credited to the
+ * agent who wrote it). It signs as every agent does, its name and a colon, with no clock, which GitHub shows, and names whoever
+ * the line is to once, as a person would: "Harness: Lennox, this is yours. You can start now." Before, "Harness, 09:30: for
+ * **Lennox**: it can start now." and "Harness, 14:20, to **Juno**: please read …": those stay on GitHub's open tasks and pull
+ * requests, so every reader here reads both forms. The old ones can go after 2026-12-14.
+ */
+export const HARNESS = 'Harness'
+/** A line of Harness's to [name]. */
+export const toLine = (name: string, words: string): string => `${HARNESS}: ${name}, ${words}`
+const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/** What Harness said to [name] on a line of [text], after its name, or null when it said nothing to it there. */
+export function saidTo(text: string, name: string): string | null {
+  const now = new RegExp(`^${HARNESS}: ${escaped(name)}, (.*)$`, 'im').exec(text)
+  if (now) return now[1]!
+  const before = /^Harness, \d\d:\d\d, to \*\*([^*]+)\*\*: (.*)$/m.exec(text)
+  return before && readerKey(before[1]!) === readerKey(name) ? before[2]! : null
+}
+
+/** Who Harness gave a task to, when [text] opens with its word giving it (githubAssign.ts give), or null. */
+export function gaveTo(text: string): string | null {
+  return (/^Harness: (.+), this is yours\./.exec(text) ?? /^Harness, \d\d:\d\d: for \*\*([^*]+)\*\*: /.exec(text))?.[1] ?? null
+}
+
+/** A builder's line as it takes a task by command (githubClaim.ts): "Lennox: On it." */
+export const tookLine = (name: string): string => `${name}: On it.`
+const TOOK = /^[^:\n]{1,80}: On it\.$/
+
+/** Harness's ask to read a pull request (githubAssign.ts ask): "Harness: Juno, please read this pull request, then run
+ *  `harness super-tab read ok owner/repo#24 f6edb44 …`", and "Harness, 14:20, to **Juno**: please read …" before: the reader it
+ *  names, and the head it is asked to read. An ask from before the verdict was a command named the head after "READ-OK", and is
+ *  on open pull requests still: that form can go after 2026-12-10. The assigner finds its own asks by it, and GitHub news keeps
+ *  each agent's as owed (githubMentions.ts). */
+export function askedToRead(text: string): { name: string; sha: string } | null {
+  // Its three asks begin so (githubAssign.ts askReaders): the name is all before the last of them, a comma in it or not.
+  const found = /^Harness: (.+), (?:please read|the head is now|your READ-OK on)[^\n]*?super-tab read ok \S+ ([0-9a-f]{7,40})/.exec(text)
+    ?? /^Harness, \d\d:\d\d, to \*\*([^*]+)\*\*: [^\n]*?please read[^\n]*?(?:super-tab read ok \S+|READ-OK) ([0-9a-f]{7,40})/.exec(text)
+  return found ? { name: found[1]!, sha: found[2]! } : null
+}

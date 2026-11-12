@@ -19,9 +19,10 @@ export const TEXTS_PER_MINUTE = 75
 export const TEXTS_PER_HOUR = 200
 export const SAME_TEXT_TIMES = 2
 const MINUTE_MS = 60_000, HOUR_MS = 60 * MINUTE_MS, DAY_MS = 24 * HOUR_MS
-/** Harness's own lines, as every loop signs them (githubAssign.ts, githubMerge.ts, githubTrain.ts), and the clock they carry.
- *  An agent's own words made by command (a take, a cut) are its own, recorded as made: those its command says once. */
-const HARNESS_LINE = /^Harness, \d\d:\d\d\b/
+/** Harness's own lines, as every loop signs them: "Harness: …" (githubAssign.ts), and with the clock the merger's and the
+ *  train's still carry, "Harness, 14:20 …" (githubMerge.ts, githubTrain.ts). An agent's own words made by command (a take, a
+ *  cut) are its own, recorded as made: those its command says once. */
+const HARNESS_LINE = /^Harness(?:, \d\d:\d\d\b|(?=: ))/
 
 export function gatedWrites(github: { get: GitHubGet; send: GitHubSend }, deps: { now?: () => number; log?: (line: string) => void } = {}): { get: GitHubGet; send: GitHubSend } {
   const now = deps.now ?? Date.now

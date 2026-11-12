@@ -208,11 +208,11 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     // The other Lennox's pull request for its task: `builder:lennox`, as this Swarm's Lennox's would be.
     f.github.state.pulls = [{ number: 30, draft: false, base: { ref: 'main' }, head: { sha: 'f6edb44c0ffee0000000000000000000000000ab', ref: 'lennox/3' },
       labels: [{ name: 'builder:lennox' }], body: 'Closes #3', author_association: 'MEMBER', updated_at: quiet }]
-    const wrote = (from = 0) => f.github.sent.slice(from).map(s => [Number(/\/issues\/(\d+)\//.exec(s.path)?.[1]), (s.body.labels as string[] | undefined)?.[0] ?? String(s.body.body).replace(/^Harness, \d\d:\d\d(, to|: for) /, '').slice(0, 40)])
+    const wrote = (from = 0) => f.github.sent.slice(from).map(s => [Number(/\/issues\/(\d+)\//.exec(s.path)?.[1]), (s.body.labels as string[] | undefined)?.[0] ?? String(s.body.body).replace(/^Harness: /, '').slice(0, 40)])
     await f.assigner.tick()
     // Its PM's task gets its Swarm's label and goes to Juno, and its own Lennox is asked about its quiet task. The other Swarm's
     // task is not given, its Lennox's is not asked about, its pull request gets no reader, and its closed task's time is not read.
-    expect(wrote()).toEqual([[1, MARK], [4, '**Lennox**: nothing has moved on this ta'], [1, 'builder:juno'], [1, '**Juno**: it can start now.']])
+    expect(wrote()).toEqual([[1, MARK], [4, expect.stringMatching(/^Lennox, nothing has moved on this task/)], [1, 'builder:juno'], [1, expect.stringMatching(/^Juno, this is yours\. You can start now/)]])
     expect(f.github.state.asked.filter(path => /\/issues\/(3|8|30)\/comments/.test(path))).toEqual([])
     // And the merger is told the other Lennox's pull request is not this Swarm's to land.
     expect(f.others).toEqual([30])
@@ -220,7 +220,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     const sent = f.github.sent.length
     await f.make({ login: 'Ken', project: { ...PROJECT, pm: 'River', tabId: 'tab-ken', pmAgentId: 'river', projectId: 'ken-app' },
       crew: { builders: [{ ...lennox, id: 'ken-lennox' }, { id: 'kai', name: 'Kai', label: 'builder:kai', machineId: 'mac', engine: 'claude' }], machines: crew().machines } }).tick()
-    expect(wrote(sent)).toEqual([[2, KEN], [30, '**Kai**: please read this pull request, '], [2, expect.stringMatching(/^builder:(kai|lennox)$/)], [2, expect.stringContaining('it can start now')]])
+    expect(wrote(sent)).toEqual([[2, KEN], [30, expect.stringMatching(/^Kai, please read this pull request, /)], [2, expect.stringMatching(/^builder:(kai|lennox)$/)], [2, expect.stringContaining('You can start now')]])
     expect(f.github.state.asked.filter(path => /\/issues\/8\/comments/.test(path))).toHaveLength(1)
     expect(f.others).toEqual([])
   })
@@ -417,7 +417,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     expect(given.map(([n]) => n).sort()).toEqual([1, 2])
     expect(given.map(([, label]) => label).sort()).toEqual(['builder:juno', 'builder:pip'])
     const why = new Map(f.said() as Array<[number, string]>)
-    for (const number of [1, 2]) expect(why.get(number)).toMatch(/^Harness, \d\d:\d\d: for \*\*(Pip|Juno)\*\*: it can start now\.$/)
+    for (const number of [1, 2]) expect(why.get(number)).toMatch(/^Harness: (Pip|Juno), this is yours\. You can start now\.$/)
     expect(f.log).toHaveBeenCalledWith(expect.stringMatching(/^\[super-tab\] gave acme\/app#1 to (Pip|Juno) \(it can start now\)$/))
   })
 
@@ -681,7 +681,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     /** Pip's pull request for task [n], not a draft, into main: it waits for its read. */
     const up = (n: number, extra: Json = {}): Json => ({ number: 100 + n, draft: false, base: { ref: 'main' }, head: { sha: head(n), ref: `pip/${n}` },
       labels: [{ name: 'builder:pip' }], body: `Closes #${n}`, ...extra })
-    const given = (f: ReturnType<typeof setup>) => f.said().filter(([, body]) => /^Harness, \d\d:\d\d: for \*\*/.test(String(body))).map(([n, body]) => [n, String(body).replace(/^Harness, \d\d:\d\d: /, '')])
+    const given = (f: ReturnType<typeof setup>) => f.said().filter(([, body]) => /^Harness: .+, this is yours\./.test(String(body))).map(([n, body]) => [n, String(body).replace(/^Harness: /, '')])
 
     // The fault's own test: on the allocator before this, nothing was given.
     it('gives a builder whose two tasks wait on their pull requests\' reads the free task, to start now', async () => {
@@ -690,7 +690,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       await f.assigner.tick()
       expect(f.labelled()).toEqual([[16, 'builder:pip']])
       // Nothing of what is in review is its work now: the line that gives the task says so truly.
-      expect(given(f)).toEqual([[16, 'for **Pip**: it can start now.']])
+      expect(given(f)).toEqual([[16, 'Pip, this is yours. You can start now.']])
       // Its two in review and the one given are all it holds; with the task given it has something to do.
       expect(f.numbers.mock.calls.at(-1)![1]).toMatchObject({ free: [], open: 0, held: 3 })
     })
@@ -729,7 +729,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       f.github.state.pulls = [up(1)]
       await f.assigner.tick()
       expect(f.labelled()).toEqual([[1, 'builder:pip'], [2, 'builder:pip']])
-      expect(given(f).at(-1)).toEqual([2, 'for **Pip**: it can start now.'])
+      expect(given(f).at(-1)).toEqual([2, 'Pip, this is yours. You can start now.'])
     })
 
     it('gives nothing more to a builder with four open, all in review, and does not count it as waiting for a task', async () => {
@@ -947,7 +947,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     /** [builder]'s pull request for task [n], into main. */
     const pullFor = (n: number, builder: string, extra: Json = {}): Json => ({ number: 100 + n, draft: false, base: { ref: 'main' }, head: { sha: head(n), ref: `${builder}/${n}` },
       labels: [{ name: `builder:${builder}` }], body: `Closes #${n}`, author_association: 'MEMBER', ...extra })
-    const lines = (f: ReturnType<typeof setup>, number: number) => f.said().filter(([n]) => n === number).map(([, body]) => String(body).replace(/^Harness, \d\d:\d\d: /, ''))
+    const lines = (f: ReturnType<typeof setup>, number: number) => f.said().filter(([n]) => n === number).map(([, body]) => String(body).replace(/^Harness: /, ''))
 
     it('is given once what it comes after has its pull request up, only to that builder, with the branch to build it on', async () => {
       const f = setup([issue(1, ['size:s']), issue(2, ['size:s', 'p0'], { body: 'Do this after #1.' })])
@@ -966,7 +966,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       f.github.state.pulls = [pullFor(1, 'pip')]
       await f.assigner.tick()
       expect(f.labelled()).toEqual([[1, 'builder:pip'], [2, 'builder:pip']])
-      expect(lines(f, 2)).toEqual(['for **Pip**: it can start now. Build it on the branch of #101 (`pip/1`); its pull request still goes into the default branch.'])
+      expect(lines(f, 2)).toEqual(['Pip, this is yours. You can start now. Build it on the branch of #101 (`pip/1`); its pull request still goes into the default branch.'])
     })
 
     it('waits until what it comes after lands when that builder is away, then goes to who can start it', async () => {
@@ -982,7 +982,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       f.github.state.pulls = []
       await f.assigner.tick()
       expect(f.labelled()).toEqual([[2, 'builder:pip']])
-      expect(lines(f, 2)).toEqual(['for **Pip**: it can start now.'])
+      expect(lines(f, 2)).toEqual(['Pip, this is yours. You can start now.'])
     })
 
     // Taken back for a builder with nothing, it could go to that one builder only: three writes, and an untrue line.
@@ -1037,7 +1037,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       f.github.state.pulls = [{ ...pullFor(1, 'juno'), number: 111 }]
       await f.assigner.tick()
       expect(f.labelled()).toEqual([[2, 'builder:juno']])
-      expect(lines(f, 2)).toEqual(['for **Juno**: it can start now. Build it on the branch of #111 (`juno/1`); its pull request still goes into the default branch.'])
+      expect(lines(f, 2)).toEqual(['Juno, this is yours. You can start now. Build it on the branch of #111 (`juno/1`); its pull request still goes into the default branch.'])
     })
   })
 
@@ -1109,7 +1109,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     expect(f.log).toHaveBeenCalledWith(expect.stringContaining('UNPLACED acme/app#2'))
     // Its PM is told why, by name, on the task: only its person can add the tool, or the PM change the task.
     const told = () => f.said().filter(([n]) => n === 2).map(([, body]) => String(body))
-    expect(told()).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*Faye\*\*: nobody can start this yet: it needs robot-arm, which no builder's machine has\.$/)])
+    expect(told()).toEqual([expect.stringMatching(/^Harness: Faye, nobody can start this yet: it needs robot-arm, which no builder's machine has\.$/)])
     // Said once, not every pass, nor again after a restart that finds it on the task.
     await f.assigner.tick()
     expect(f.log.mock.calls.filter(([line]) => String(line).includes('UNPLACED'))).toHaveLength(1)
@@ -1122,10 +1122,10 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     const f = setup([issue(1, ['size:s'], { body: 'after #2' }), issue(2, ['size:s'], { body: 'after #1' }), issue(3, ['size:l'])],
       { crew: { builders: crew().builders, machines: [{ machineId: 'mac', observation: { resources: { memoryTotalBytes: 4 * GiB, projectDiskFreeBytes: 500 * GiB } } }] } })
     await f.assigner.tick()
-    const lines = f.said().map(([n, body]) => [n, String(body).replace(/^Harness, \d\d:\d\d, /, '')]).sort()
-    expect(lines).toEqual([[1, 'to **Faye**: nobody can start this yet: its "after #N" lines wait on each other.'],
-      [2, 'to **Faye**: nobody can start this yet: its "after #N" lines wait on each other.'],
-      [3, 'to **Faye**: nobody can start this yet: it needs more than any builder\'s machine has.']])
+    const lines = f.said().map(([n, body]) => [n, String(body).replace(/^Harness: /, '')]).sort()
+    expect(lines).toEqual([[1, 'Faye, nobody can start this yet: its "after #N" lines wait on each other.'],
+      [2, 'Faye, nobody can start this yet: its "after #N" lines wait on each other.'],
+      [3, 'Faye, nobody can start this yet: it needs more than any builder\'s machine has.']])
   })
 
   it('says a label GitHub refused once, and gives the task again on the next pass', async () => {
@@ -1167,7 +1167,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     f.github.state.labels.push({ name: 'part:api' })
     await f.assigner.tick()
     expect(f.labelled().sort()).toEqual([[1, 'builder:pip'], [2, 'builder:juno']])
-    expect(new Map(f.said() as Array<[number, string]>).get(1)).toMatch(/for \*\*Pip\*\*: it can start now, and it works on mobile\.$/)
+    expect(new Map(f.said() as Array<[number, string]>).get(1)).toMatch(/^Harness: Pip, this is yours\. You can start now, and you work on mobile\.$/)
     // The area its person named becomes a label the PM labels tasks with, once.
     expect(f.github.sent.filter(s => s.path === '/repos/acme/app/labels').map(s => s.body)).toEqual([{ name: 'part:mobile', color: 'c5def5', description: 'An area of the project' }])
     await f.assigner.tick()
@@ -1184,8 +1184,8 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     await f.assigner.tick()
     expect(f.labelled().sort()).toEqual([[1, 'builder:juno'], [2, 'builder:pip']])
     const why = new Map(f.said() as Array<[number, string]>)
-    expect(why.get(1)).toMatch(/for \*\*Juno\*\*: it can start now, and it works on backend\.$/)
-    expect(why.get(2)).toMatch(/for \*\*Pip\*\*: it can start now, and it works on mobile-app\.$/)
+    expect(why.get(1)).toMatch(/^Harness: Juno, this is yours\. You can start now, and you work on backend\.$/)
+    expect(why.get(2)).toMatch(/^Harness: Pip, this is yours\. You can start now, and you work on mobile-app\.$/)
     expect(f.github.sent.filter(s => s.path === '/repos/acme/app/labels')).toEqual([])
   })
 
@@ -1202,8 +1202,8 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     f.github.state.files.set('agents/Pip.md', 'Works on: ui')
     await f.assigner.tick()
     // Juno's task takes the 90 minutes a middle one is guessed at, not 63: Pip starts when the Mac has room after it.
-    expect(f.said().map(([number, body]) => [number, String(body).replace(/^Harness, \d\d:\d\d: /, '')]))
-      .toEqual([[2, 'for **Pip**: it can start in 2 h, and it works on ui.']])
+    expect(f.said().map(([number, body]) => [number, String(body).replace(/^Harness: /, '')]))
+      .toEqual([[2, 'Pip, this is yours. You can start in 2 h, and you work on ui.']])
   })
 
   describe('readers', () => {
@@ -1228,7 +1228,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
         f.github.state.reviews.set(30, typed.reviews)
         f.github.state.comments.set(30, typed.comments)
         await f.assigner.tick()
-        expect(asks(f)).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*Juno\*\*: your READ-OK on f6edb44 was typed, and only one made by command counts: please read it again, .*super-tab read ok acme\/app#30 f6edb44/)])
+        expect(asks(f)).toEqual([expect.stringMatching(/^Harness: Juno, your READ-OK on f6edb44 was typed, and only one made by command counts: please read it again, .*super-tab read ok acme\/app#30 f6edb44/)])
         // GitHub shows the ask: Juno is reading, and is not asked again until it answers.
         f.github.state.comments.set(30, [...typed.comments, comment(asks(f)[0]!, { created_at: '2026-11-09T07:31:00Z' })])
         await f.make().tick()
@@ -1263,7 +1263,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       f.github.state.pulls = [pull({ labels: [{ name: 'builder:pip-two' }], head: { sha: HEAD, ref: 'pip-two/14' } })]
       f.github.state.comments.set(30, [comment('Pip Two, 07:10, to **Juno**: READ-OK f6edb44')])
       await f.assigner.tick()
-      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*(Pip|Juno)\*\*: please read this pull request/)])
+      expect(asks(f)).toEqual([expect.stringMatching(/^Harness: (Pip|Juno), please read this pull request/)])
     })
 
     // A name the signature pattern cannot read fell back to the shared GitHub login, so its author's own READ-OK read as a reader's.
@@ -1273,7 +1273,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       f.github.state.pulls = [pull({ labels: [{ name: label }], head: { sha: HEAD, ref: 'task/14' } })]
       f.github.state.comments.set(30, [comment(`${name}, 07:10, to **Juno**: READ-OK f6edb44`)])
       await f.assigner.tick()
-      expect(asks(f)).toEqual([expect.stringMatching(/: please read this pull request/)])
+      expect(asks(f)).toEqual([expect.stringMatching(/^Harness: \w+, please read this pull request/)])
       expect(asks(f)[0]).not.toContain(name)
     })
 
@@ -1285,20 +1285,20 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       held.github.state.comments.set(30, [comment('Juno, 07:00: HOLD f6edb44 off by one', { created_at: '2026-11-09T07:00:00Z' }),
         comment('Juno, 07:10: READ-OK f6edb44', { typed: true, created_at: '2026-11-09T07:10:00Z' })])
       await held.assigner.tick()
-      expect(asks(held)).toEqual([expect.stringMatching(/to \*\*Juno\*\*: your READ-OK on f6edb44 was typed/)])
+      expect(asks(held)).toEqual([expect.stringMatching(/^Harness: Juno, your READ-OK on f6edb44 was typed/)])
       const out = setup([], { crew: team })
       out.github.state.pulls = [pull()]
       const ask = (at: string) => comment(`Harness, ${at.slice(11, 16)}, to **Juno**: please read this pull request, then run \`harness super-tab read ok acme/app#30 f6edb44 'what you found'\`.`, { created_at: at })
       out.github.state.comments.set(30, [ask('2026-11-09T06:00:00Z'), ask('2026-11-09T06:20:00Z'), ask('2026-11-09T06:40:00Z'),
         comment('Juno, 07:00: READ-OK f6edb44', { typed: true, created_at: '2026-11-09T07:00:00Z' })])
       await out.assigner.tick()
-      expect(asks(out)).toEqual([expect.stringMatching(/to \*\*Atlas\*\*: please read this pull request/)])
+      expect(asks(out)).toEqual([expect.stringMatching(/^Harness: Atlas, please read this pull request/)])
       const after = setup([], { crew: team })
       after.github.state.pulls = [pull({ user: { login: 'deehw' } })]
       after.github.state.comments.set(30, [comment('Juno, 07:00: READ-OK f6edb44', { created_at: '2026-11-09T07:00:00Z' }),
         comment('HOLD f6edb44: wait', { created_at: '2026-11-09T07:05:00Z' })])
       await after.assigner.tick()
-      expect(asks(after)).toEqual([expect.stringMatching(/to \*\*Atlas\*\*: please read this pull request/)])
+      expect(asks(after)).toEqual([expect.stringMatching(/^Harness: Atlas, please read this pull request/)])
     })
 
     // Review of #3957: while the backend gives no records, only a pull request with a verdict never answered for waits; one
@@ -1319,7 +1319,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
         f.github.state.pulls = [pull({ user: { login: 'deehw' } })]
         f.github.state.comments.set(30, [comment(`HOLD ${sha}: off by one`)])
         await f.assigner.tick()
-        expect(asks(f), sha).toEqual([expect.stringMatching(/to \*\*Atlas\*\*: please read this pull request/)])
+        expect(asks(f), sha).toEqual([expect.stringMatching(/^Harness: Atlas, please read this pull request/)])
       }
     })
 
@@ -1331,7 +1331,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       f.github.state.comments.set(30, [comment('Harness, 07:20, to **Atlas**: please read this pull request, and start your comment with your name, '
         + 'as in "Atlas, 07:20: READ-OK f6edb44" or "Atlas, 07:20: HOLD f6edb44" with the file, line and fix.', { created_at: '2026-11-09T07:20:00Z' })])
       await f.assigner.tick()
-      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Juno\*\*: please read this pull request/)])
+      expect(asks(f)).toEqual([expect.stringMatching(/^Harness: Juno, please read this pull request/)])
     })
 
     // Swarm-sandbox #24, 2026-11-10: after a push, Harness asked "deehw" to read again for an unsigned READ-OK that never
@@ -1341,7 +1341,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       f.github.state.pulls = [pull({ user: { login: 'deehw' } })]
       f.github.state.comments.set(30, [comment('READ-OK 1234567')])
       await f.assigner.tick()
-      expect(asks(f)).toEqual([expect.stringMatching(/: please read this pull request/)])
+      expect(asks(f)).toEqual([expect.stringMatching(/^Harness: \w+, please read this pull request/)])
       expect(asks(f)[0]).not.toContain('deehw')
     })
 
@@ -1350,7 +1350,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       f.github.state.pulls = [pull({ user: { login: 'deehw' } })]
       f.github.state.comments.set(30, [comment('READ-OK f6edb44')])
       await f.assigner.tick()
-      expect(asks(f)).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*Atlas\*\*: please read this pull request, then run `harness super-tab read ok acme\/app#30 f6edb44 /)])
+      expect(asks(f)).toEqual([expect.stringMatching(/^Harness: Atlas, please read this pull request, then run `harness super-tab read ok acme\/app#30 f6edb44 /)])
     })
 
     // The reader Harness asked as "Kai Lee" and that answered as "kai-lee" is one: it read, and is not still waited for.
@@ -1360,14 +1360,14 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       f.github.state.comments.set(30, [comment('Harness, 07:20, to **Kai Lee**: please read this pull request, and start your comment with READ-OK f6edb44 '
         + 'or HOLD f6edb44 (with the file, line and fix).', { created_at: '2026-11-09T07:20:00Z' }), comment('kai-lee, 07:25: READ-OK f6edb44', { created_at: '2026-11-09T07:25:00Z' })])
       await f.assigner.tick()
-      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Atlas\*\*: please read this pull request/)])
+      expect(asks(f)).toEqual([expect.stringMatching(/^Harness: Atlas, please read this pull request/)])
     })
 
     it('asks none of a pull request\'s writers to read it: its label\'s agent nor its branch\'s', async () => {
       const f = setup([], { crew: team })
       f.github.state.pulls = [pull({ labels: [{ name: 'builder:atlas' }], head: { sha: HEAD, ref: 'juno/14' } })]
       await f.assigner.tick()
-      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Pip\*\*: please read this pull request/)])
+      expect(asks(f)).toEqual([expect.stringMatching(/^Harness: Pip, please read this pull request/)])
     })
 
     it('counts a reader who signs its name two ways once for TWO READS, as the merger does, and asks another', async () => {
@@ -1375,7 +1375,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       f.github.state.pulls = [pull({ body: 'Closes #14. TWO READS' })]
       f.github.state.comments.set(30, [comment('Kai Lee, 07:10: READ-OK f6edb44'), comment('kai-lee, 07:12: READ-OK f6edb44')])
       await f.assigner.tick()
-      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Juno\*\*: please read this pull request/)])
+      expect(asks(f)).toEqual([expect.stringMatching(/^Harness: Juno, please read this pull request/)])
     })
 
     it('asks a reader for the team\'s pull request wherever it is among a busy repository\'s hundred and more', async () => {
@@ -1383,7 +1383,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       const people = Array.from({ length: 119 }, (_, i) => pull({ number: 100 + i, labels: [], head: { sha: HEAD, ref: `fix-${i}` }, body: '' }))
       f.github.state.pulls = [...people.slice(0, 110), pull(), ...people.slice(110)]
       await f.assigner.tick()
-      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Atlas\*\*: please read this pull request/)])
+      expect(asks(f)).toEqual([expect.stringMatching(/^Harness: Atlas, please read this pull request/)])
     })
 
     it('takes no outsider\'s comment for its own ask, so the reader it names is still asked', async () => {
@@ -1392,7 +1392,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       f.github.state.comments.set(30, [comment('Harness, 07:30, to **Atlas**: please read this pull request, and start your comment with READ-OK f6edb44 '
         + 'or HOLD f6edb44 (with the file, line and fix).', { author_association: 'NONE', user: { login: 'stranger' } })])
       await f.assigner.tick()
-      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Atlas\*\*: please read this pull request/)])
+      expect(asks(f)).toEqual([expect.stringMatching(/^Harness: Atlas, please read this pull request/)])
     })
 
     it('asks nobody for a pull request that is not the team\'s: a person\'s, or a branch no builder of the team made', async () => {
@@ -1421,7 +1421,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       f.github.state.comments.set(30, [ask('Atlas', '2026-11-09T06:46:00Z')])
       await f.assigner.tick()
       await f.assigner.tick()
-      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Juno\*\*: please read this pull request/)])
+      expect(asks(f)).toEqual([expect.stringMatching(/^Harness: Juno, please read this pull request/)])
       // Atlas reads after all: its READ-OK counts, and nobody more is asked when Juno's ask is old too.
       f.github.state.comments.set(30, [ask('Atlas', '2026-11-09T06:46:00Z'), ask('Juno', '2026-11-09T06:50:00Z'),
         comment('Atlas, 07:30, to **Pip**: READ-OK f6edb44', { created_at: '2026-11-09T07:30:00Z' })])
@@ -1462,7 +1462,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
         for (const body of asks(f).slice(kept)) f.github.state.comments.get(30)!.push(comment(body, { created_at: new Date(f.clock.now).toISOString() }))
         kept = asks(f).length
       }
-      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Faye\*\*: the head is now f6edb44: please read this pull request/)])
+      expect(asks(f)).toEqual([expect.stringMatching(/^Harness: Faye, the head is now f6edb44: please read this pull request/)])
       // Said in the daemon's log, once a process.
       expect(f.log.mock.calls.some(([line]) => /NO_READER acme\/app#30@f6edb44: its readers asked have not read it/.test(String(line)))).toBe(true)
     })
@@ -1479,7 +1479,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       f.pm.running = true
       await f.assigner.tick()
       await f.assigner.tick()
-      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Faye\*\*: please read this pull request/)])
+      expect(asks(f)).toEqual([expect.stringMatching(/^Harness: Faye, please read this pull request/)])
     })
 
     // Code review of #4060: a stopped PM asked about an earlier head is not asked about the new one either; one whose state cannot be
@@ -1547,14 +1547,14 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
         comment('Harness, 05:01, to **Atlas**: the head is now f6edb44, after your HOLD on 1234567: please read it again, and start your comment '
           + 'with READ-OK f6edb44 or HOLD f6edb44 (with the file, line and fix).', { created_at: '2026-11-09T05:01:00Z' })])
       await f.assigner.tick()
-      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Juno\*\*: please read this pull request/)])
+      expect(asks(f)).toEqual([expect.stringMatching(/^Harness: Juno, please read this pull request/)])
       // Juno, asked for an older head 3 hours ago, never answered: Atlas is asked for this one.
       const g = setup([], { crew: team })
       g.github.state.pulls = [pull()]
       g.github.state.comments.set(30, [comment('Harness, 04:31, to **Juno**: please read this pull request, and start your comment with '
         + 'READ-OK 1234567 or HOLD 1234567 (with the file, line and fix).', { created_at: '2026-11-09T04:31:00Z' })])
       await g.assigner.tick()
-      expect(asks(g)).toEqual([expect.stringMatching(/to \*\*Atlas\*\*: please read this pull request/)])
+      expect(asks(g)).toEqual([expect.stringMatching(/^Harness: Atlas, please read this pull request/)])
     })
 
     it('asks one reader for a pull request, never its author, of another model family first, once', async () => {
@@ -1563,7 +1563,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       await f.assigner.tick()
       // A verdict is a command (githubVerdict.ts): the ask carries it whole, with the pull request and the head, and no form
       // to type by hand. Harness writes the comment, so the reader's own name and the time are not the reader's to get right.
-      expect(asks(f)).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*Atlas\*\*: please read this pull request, then run `harness super-tab read ok acme\/app#30 f6edb44 'what you found'`\. For a HOLD, read hold in place of read ok, with the file, line and fix\.$/)])
+      expect(asks(f)).toEqual([expect.stringMatching(/^Harness: Atlas, please read this pull request, then run `harness super-tab read ok acme\/app#30 f6edb44 'what you found'`\. For a HOLD, read hold in place of read ok, with the file, line and fix\.$/)])
       expect(asks(f)[0]).not.toMatch(/READ-OK|start your comment/)
       // In backticks, so GitHub's page shows it as written (it shortens acme/app#30 to #30 elsewhere), and one the CLI takes.
       const command = /`harness super-tab (read ok \S+ \S+) 'what you found'`/.exec(asks(f)[0]!)![1]!
@@ -1583,14 +1583,14 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       const f = setup([issue(40, ['size:s', 'builder:atlas', 'status:taken'])], { crew: four })
       f.github.state.pulls = [pull()]
       await f.assigner.tick()
-      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Bo\*\*: please read this pull request/)])
+      expect(asks(f)).toEqual([expect.stringMatching(/^Harness: Bo, please read this pull request/)])
     })
 
     it('asks two for TWO READS, none while a HOLD stands or for a draft, and none once its head has its READ-OK', async () => {
       const two = setup([], { crew: team })
       two.github.state.pulls = [pull({ body: 'Closes #14. TWO READS' })]
       await two.assigner.tick()
-      expect(asks(two).map(body => /\*\*(\w+)\*\*/.exec(body)![1]).sort()).toEqual(['Atlas', 'Juno'])
+      expect(asks(two).map(body => /^Harness: (\w+),/.exec(body)![1]).sort()).toEqual(['Atlas', 'Juno'])
       const held = setup([], { crew: team })
       held.github.state.pulls = [pull()]
       held.github.state.comments.set(30, [comment('Juno, 14:00: HOLD f6edb44: the day count is off by one.')])
@@ -1622,7 +1622,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
         f.github.state.pulls = [pull({ head: { sha: NEW, ref: 'pip/14' } })]
         f.github.state.comments.set(30, [comment(`Juno, 14:00: ${verdict} f6edb44${verdict === 'HOLD' ? ': the day count is off by one.' : ''}`)])
         await f.assigner.tick()
-        expect(asks(f).map(body => body.replaceAll(/\d\d:\d\d/g, 'HH:MM'))).toEqual([`Harness, HH:MM, to **Juno**: the head is now abcdef1, `
+        expect(asks(f).map(body => body.replaceAll(/\d\d:\d\d/g, 'HH:MM'))).toEqual([`Harness: Juno, the head is now abcdef1, `
           + `after your ${verdict} on f6edb44: please read it again, then run \`harness super-tab read ok acme/app#30 abcdef1 'what you found'\`. For a HOLD, read hold in place of read ok, with the file, line and fix.`])
         // Once: GitHub shows the ask, and Juno is still reading.
         f.github.state.comments.set(30, [...f.github.state.comments.get(30)!, comment(asks(f)[0]!)])
@@ -1635,12 +1635,12 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       const f = setup([], { crew: { builders: [crew().builders[0]!], machines: crew().machines } })
       f.github.state.pulls = [pull()]
       await f.assigner.tick()
-      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Faye\*\*: please read this pull request/)])
+      expect(asks(f)).toEqual([expect.stringMatching(/^Harness: Faye, please read this pull request/)])
       const own = setup([], { crew: { builders: [crew().builders[0]!], machines: crew().machines } })
       own.github.state.pulls = [pull({ labels: [{ name: 'builder:faye' }], head: { sha: 'f6edb44c0ffee0000000000000000000000000ab', ref: 'faye/14' } })]
       await own.assigner.tick()
       await own.assigner.tick()
-      expect(asks(own).filter(body => !body.includes('**Pip**'))).toEqual([])
+      expect(asks(own).filter(body => !body.startsWith('Harness: Pip, '))).toEqual([])
       expect(own.log.mock.calls.filter(([line]) => String(line).includes('NO_READER'))).toHaveLength(0)
     })
   })
@@ -1662,7 +1662,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       await f.assigner.tick()
       expect(f.github.sent.filter(s => s.method === 'DELETE').map(s => s.path)).toEqual(['/repos/acme/app/issues/15/labels/builder%3Apip',
         '/repos/acme/app/issues/15/labels/status%3Ataken'])
-      expect(f.said().filter(([n]) => n === 15).map(([, body]) => String(body).replace(/\d\d:\d\d/, 'HH:MM'))).toEqual(['Harness, HH:MM: Pip has not '
+      expect(f.said().filter(([n]) => n === 15).map(([, body]) => String(body).replace(/\d\d:\d\d/, 'HH:MM'))).toEqual(['Harness: Pip has not '
         + 'started it in 11 minutes, and Juno has nothing to do, so this task goes to the builder who can start it next.'])
       await f.assigner.tick()
       expect(f.labelled()).toEqual([[15, 'builder:juno']])
@@ -1715,7 +1715,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       const back = (f: ReturnType<typeof setup>) => f.said().filter(([n]) => n === 15).map(([, body]) => String(body).replace(/\d\d:\d\d/, 'HH:MM'))
       const room = inReview(3)
       await room.assigner.tick()
-      expect(back(room)).toEqual(['Harness, HH:MM: Pip has not started it in 11 minutes, and Juno has nothing to do, so this task goes to the builder who can start it next.'])
+      expect(back(room)).toEqual(['Harness: Pip has not started it in 11 minutes, and Juno has nothing to do, so this task goes to the builder who can start it next.'])
       const full = inReview(4)
       await full.assigner.tick()
       expect(back(full)).toEqual([])
@@ -1852,7 +1852,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     f.github.state.comments.set(15, [{ body: 'Faye, 18:03, to **Pip**: HOLD c208f63 rebase on main', created_at: '2026-11-09T11:03:00Z',
       author_association: 'OWNER' }])
     await f.assigner.tick()
-    expect(f.said()).toEqual([[15, expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*Faye\*\*: the head is now 6b5ae5a, after your HOLD on c208f63/)]])
+    expect(f.said()).toEqual([[15, expect.stringMatching(/^Harness: Faye, the head is now 6b5ae5a, after your HOLD on c208f63/)]])
   })
 
   // A task that waits on pieces cut off it (githubSplit.ts) is others' to move: never called quiet while they are open. GitHub
@@ -1886,12 +1886,13 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
   it('counts a task\'s quiet from when it last waited, whatever else is so: a piece opened again, a draft of its builder\'s, a word GitHub refused', async () => {
     const HOUR = 3_600_000, long = new Date(Date.parse('2026-11-09T07:31:00Z') - 9 * HOUR).toISOString()
     const asks = (f: ReturnType<typeof setup>) => f.said().filter(([, body]) => String(body).includes('Are you still on it?'))
-    const told = (f: ReturnType<typeof setup>) => f.said().filter(([, body]) => String(body).includes('cut off this task')).map(([, body]) => String(body).replace(/^Harness, \d\d:\d\d, /, ''))
+    const told = (f: ReturnType<typeof setup>) => f.said().filter(([, body]) => String(body).includes('cut off this task')).map(([, body]) => String(body).replace(/^Harness: /, ''))
     // Both pieces close and its builder is told; one is opened again for six hours, and closes again: told again, not asked.
     const f = setup([issue(1, ['size:l', 'builder:pip', 'status:taken'], { sub_issues_summary: { total: 2, completed: 2 }, updated_at: long })])
     await f.assigner.tick()
     // The word of the first time they closed is on the task: it is not the word of the second.
-    f.github.state.comments.set(1, [{ body: `Harness, 07:31, ${told(f)[0]}`, author_association: 'MEMBER', created_at: new Date(f.clock.now).toISOString() }])
+    // As Harness wrote it before #4223, which stays on the task: read as the same word.
+    f.github.state.comments.set(1, [{ body: `Harness, 07:31, to **Pip**: ${told(f)[0]!.slice('Pip, '.length)}`, author_association: 'MEMBER', created_at: new Date(f.clock.now).toISOString() }])
     f.github.state.open[0]!.sub_issues_summary = { total: 2, completed: 1 }
     for (let hour = 0; hour < 6; hour++) { f.clock.now += HOUR; await f.assigner.tick() }
     f.github.state.open[0]!.sub_issues_summary = { total: 2, completed: 2 }
@@ -1905,7 +1906,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     await g.assigner.tick()
     g.github.state.open[0]!.sub_issues_summary = { total: 1, completed: 1 }
     await g.assigner.tick()
-    expect(told(g)).toEqual(['to **Pip**: the piece cut off this task is closed. It is yours to finish, or to close if nothing is left.'])
+    expect(told(g)).toEqual(['Pip, the piece cut off this task is closed. It is yours to finish, or to close if nothing is left.'])
     expect(asks(g)).toEqual([])
     // A word GitHub would not take is tried again each pass, and the task is not called quiet meanwhile.
     const h = setup([issue(1, ['size:l', 'builder:pip', 'status:taken'], { sub_issues_summary: { total: 1, completed: 1 }, updated_at: long })])
@@ -1913,7 +1914,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     await h.assigner.tick()
     h.clock.now += 5 * HOUR
     await h.assigner.tick()
-    expect(h.said().map(([, body]) => String(body).replace(/^Harness, \d\d:\d\d, /, ''))).toEqual(Array(2).fill('to **Pip**: the piece cut off this task is closed. It is yours to finish, or to close if nothing is left.'))
+    expect(h.said().map(([, body]) => String(body).replace(/^Harness: /, ''))).toEqual(Array(2).fill('Pip, the piece cut off this task is closed. It is yours to finish, or to close if nothing is left.'))
     expect(h.log).toHaveBeenCalledWith('[super-tab] Task assignment: ASK_REFUSED acme/app#1: GitHub answered 403')
   })
 
@@ -1925,7 +1926,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     await f.assigner.tick()
     await f.assigner.tick()
     expect(f.labelled()).toEqual([])
-    expect(f.said()).toEqual([[1, expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*Faye\*\*: nobody can start this yet: pieces cut off it are still open\.$/)]])
+    expect(f.said()).toEqual([[1, expect.stringMatching(/^Harness: Faye, nobody can start this yet: pieces cut off it are still open\.$/)]])
   })
 
   it('tells a task\'s builder once that every piece cut off it is closed, and finds that word after a restart', async () => {
@@ -1934,8 +1935,8 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       // Given and not taken, with no pieces, and another team's: nothing is said of them.
       issue(2, ['size:l', 'builder:juno'], { sub_issues_summary: { total: 1, completed: 1 } }), issue(3, ['size:l', 'builder:pip', 'status:taken'], { sub_issues_summary: { total: 0, completed: 0 } }),
       issue(4, ['size:l', 'builder:stranger', 'status:taken'], { sub_issues_summary: { total: 1, completed: 1 } })])
-    const told = () => f.said().filter(([, body]) => String(body).includes('cut off this task')).map(([number, body]) => [number, String(body).replace(/^Harness, \d\d:\d\d, /, '')])
-    const line = 'to **Pip**: all 2 pieces cut off this task are closed. It is yours to finish, or to close if nothing is left.'
+    const told = () => f.said().filter(([, body]) => String(body).includes('cut off this task')).map(([number, body]) => [number, String(body).replace(/^Harness: /, '')])
+    const line = 'Pip, all 2 pieces cut off this task are closed. It is yours to finish, or to close if nothing is left.'
     await f.assigner.tick()
     expect(told()).toEqual([])
     f.github.state.open[0]!.sub_issues_summary = { total: 2, completed: 2 }
@@ -1943,7 +1944,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     await f.assigner.tick()
     expect(told()).toEqual([[1, line]])
     // After a restart it is found said among the task's comments of the last day, and not said again.
-    const said = (hoursAgo: number, association = 'MEMBER') => f.github.state.comments.set(1, [{ body: `Harness, 07:31, ${line}`, author_association: association,
+    const said = (hoursAgo: number, association = 'MEMBER') => f.github.state.comments.set(1, [{ body: `Harness, 07:31, to **Pip**: ${line.slice('Pip, '.length)}`, author_association: association,
       created_at: new Date(f.clock.now - hoursAgo * HOUR).toISOString() }])
     said(20)
     await f.make().tick()
@@ -2017,7 +2018,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       f.github.state.open[0]!.updated_at = ago(f, 5)
       f.github.state.applied = true
       await f.assigner.tick()
-      expect(quietAsks(f)).toEqual([[1, expect.stringMatching(/to \*\*Juno\*\*: nothing has moved on this task for 5 h\. Are you still on it\?/)]])
+      expect(quietAsks(f)).toEqual([[1, expect.stringMatching(/^Harness: Juno, nothing has moved on this task for 5 h\. Are you still on it\?/)]])
       // The ask itself touches the issue; that is no answer.
       f.github.state.open[0]!.updated_at = new Date(f.clock.now + 1_000).toISOString()
       f.clock.now += 2 * HOUR
@@ -2090,7 +2091,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       f.github.state.comments.set(9, [{ body: 'Pip, 02:31, to **Juno**: HOLD f6edb44 app.ts:3 add the test', created_at: ago(f, 5),
         author_association: 'OWNER' }])
       await f.assigner.tick()
-      expect(quietAsks(f)).toEqual([[1, expect.stringContaining('to **Juno**: nothing has moved on this task for 5 h')]])
+      expect(quietAsks(f)).toEqual([[1, expect.stringContaining('Juno, nothing has moved on this task for 5 h')]])
     })
 
     it('asks nothing while a pull request for it moves, and stands down once its builder answers', async () => {
@@ -2126,7 +2127,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     const f = oneAtATime([closedAt(10), closedAt(11), closedAt(12)])
     await f.assigner.tick()
     // Middle tasks took 40 minutes here, not the 90 a size:m is guessed at: Pip starts after 40.
-    expect(f.said().map(([, body]) => String(body).replace(/^Harness, \d\d:\d\d: /, ''))).toEqual(['for **Pip**: it can start in 40 min.'])
+    expect(f.said().map(([, body]) => String(body).replace(/^Harness: /, ''))).toEqual(['Pip, this is yours. You can start in 40 min.'])
   })
 
   it('learns only from tasks done: one closed as not planned is no measure of its size', async () => {
@@ -2134,7 +2135,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     // Three middle tasks closed 10 minutes after they were taken, all dropped: nothing learned, the guess of 90 stands.
     const f = oneAtATime([closedAt(10, 'not_planned'), closedAt(11, 'not_planned'), closedAt(12, 'not_planned')])
     await f.assigner.tick()
-    expect(f.said().map(([, body]) => String(body).replace(/^Harness, \d\d:\d\d: /, ''))).toEqual(['for **Pip**: it can start in 2 h.'])
+    expect(f.said().map(([, body]) => String(body).replace(/^Harness: /, ''))).toEqual(['Pip, this is yours. You can start in 2 h.'])
   })
 
   it('stops while gh is signed out, says so once, and says when it runs again', async () => {

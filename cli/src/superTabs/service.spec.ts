@@ -1216,7 +1216,7 @@ describe('a verdict by command', () => {
     expect(await t.service.requests.super_tabs({ action: 'take', tabId: 'tab', harnessId: 'native', repository: 'acme/app', number: 34 }, owner))
       .toEqual({ ok: true, value: { url: 'https://github.com/acme/app/pull/27#issuecomment-9001', taken: true, split: expect.stringContaining('harness super-tab split acme/app#34 s|m|l') } })
     expect(t.sent.map(sent => sent.path)).toEqual(['/repos/acme/app/issues/34/labels', '/repos/acme/app/issues/34/comments'])
-    expect(t.sent[1]!.body).toEqual({ body: expect.stringMatching(/^Juno, \d\d:\d\d: taken by Juno$/) })
+    expect(t.sent[1]!.body).toEqual({ body: 'Juno: On it.' })
     expect(t.call).toHaveBeenCalledWith('POST', `/api/super-tabs/tab/github-comments?asAgentId=${t.agentId}`, { repository: 'acme/app', kind: 'issue', commentId: '9001' })
     expect(await t.service.requests.super_tabs({ action: 'take', tabId: 'tab', harnessId: 'native', repository: 'acme/app', number: 0 }, owner)).toEqual({ error: 'INVALID_REQUEST' })
     t.service.port.stop()
