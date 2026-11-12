@@ -120,9 +120,11 @@ describe('the connectors service', () => {
     expect(status).toMatchObject({ engines: { claude: false, codex: true }, connections: { gmail: { codex: 'not_connected' } } })
     expect(await requests.connectors({ action: 'connect_via', connector: 'gmail', via: 'codex' }, OWNER))
       .toEqual({ url: 'https://chatgpt.com/#settings/Connectors' })
-    expect(await requests.connectors({ action: 'disconnect_via', connector: 'gmail', via: 'codex' }, OWNER))
-      .toEqual({ url: 'https://chatgpt.com/#settings/Connectors' })
-    expect(asked).toEqual(['plugin list --json --marketplace openai-curated-remote', 'plugin add gmail@openai-curated-remote', 'plugin remove gmail@openai-curated-remote'])
+    // Removed here, and nothing to open.
+    expect(await requests.connectors({ action: 'disconnect_via', connector: 'gmail', via: 'codex' }, OWNER)).toEqual({})
+    // Connecting reads the list again for the plugin's own page; this Codex names none, so ChatGPT's list opens.
+    const list = 'plugin list --json --marketplace openai-curated-remote'
+    expect(asked).toEqual([list, 'plugin add gmail@openai-curated-remote', list, 'plugin remove gmail@openai-curated-remote'])
     expect(await requests.connectors({ action: 'connect_via', connector: 'gmail', via: 'claude' }, OWNER))
       .toEqual({ error: 'CONNECTORS_FAILED', detail: 'Claude Code is not installed on this computer.' })
   })

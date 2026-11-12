@@ -25,6 +25,15 @@ class _ConnectorsApp extends ModelManagerTestApp {
   /// Gmail's state through each engine.
   final via = <String, String>{};
 
+  /// Set: a daemon that splits Microsoft 365's Codex plugins (`elsewhere` `parts`), with each one's state.
+  Map<String, String>? microsoftParts;
+
+  /// How long each action was waited for, by action.
+  final waited = <String, Duration>{};
+
+  /// Set: connect_via answers only once it completes, as Codex still installing its plugin.
+  Completer<void>? holdConnectVia;
+
   Map<String, dynamic> _card(String code, String name, String auth) => {
     'connector': code,
     'name': name,
@@ -44,6 +53,7 @@ class _ConnectorsApp extends ModelManagerTestApp {
   }) async {
     expect(machineId, 'm');
     requests.add(payload);
+    waited[payload['action'] as String] = timeout;
     switch (payload['action']) {
       case 'list':
         return {
@@ -85,6 +95,10 @@ class _ConnectorsApp extends ModelManagerTestApp {
             'gmail': {for (final e in engines!) e: via[e] ?? 'not_connected'},
             'microsoft_365': {for (final e in engines!) e: 'not_connected'},
           },
+          // Each engine's own page for Gmail, where an account is added once it is in.
+          'pages': {
+            'gmail': {for (final e in engines!) e: 'https://$e.example/gmail'},
+          },
           'scopes': {
             'gmail': {
               'claude': 'Read, search and draft email. Cannot send.',
@@ -104,8 +118,30 @@ class _ConnectorsApp extends ModelManagerTestApp {
               'description': 'Outlook mail, calendar and files.',
             },
           ],
+          if (microsoftParts case final split?)
+            'parts': {
+              'microsoft_365': [
+                for (final MapEntry(key: name, value: state) in split.entries)
+                  {
+                    'plugin': '$name@m',
+                    'name': name,
+                    'state': state,
+                    'page': 'https://chatgpt.example/$name',
+                    'icon': switch (name) {
+                      'Outlook mail' => 'outlook_mail',
+                      'Outlook calendar' => 'outlook_calendar',
+                      _ => 'sharepoint',
+                    },
+                  },
+              ],
+            },
         };
+      case 'connect_via' when payload['plugin'] is String:
+        final plugin = payload['plugin'] as String;
+        microsoftParts![plugin.split('@').first] = 'installed';
+        return {'url': 'https://chatgpt.com/settings/plugins-settings/$plugin'};
       case 'connect_via':
+        await holdConnectVia?.future;
         via[payload['via'] as String] = payload['via'] == 'codex'
             ? 'installed'
             : 'connected';
@@ -136,8 +172,11 @@ void main() {
   Future<_ConnectorsApp> pump(
     WidgetTester tester, {
     Set<String>? engines,
+    Map<String, String>? microsoftParts,
   }) async {
-    final app = _ConnectorsApp()..engines = engines;
+    final app = _ConnectorsApp()
+      ..engines = engines
+      ..microsoftParts = microsoftParts;
     tester.view.physicalSize = const Size(1200, 900);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
@@ -191,10 +230,19 @@ void main() {
       expect(find.textContaining('All agents'), findsOneWidget);
       expect(find.textContaining('Your admin may need'), findsOneWidget);
 
-      // Codex installs its plugin and ChatGPT opens; Gmail is connected from then on.
+      // Codex installs its plugin and ChatGPT opens; Gmail is connected from then on. The install
+      // says so while it runs, and is waited for as long as the phone waits, not the list's 20 s.
+      app.holdConnectVia = Completer<void>();
       await tester.tap(
         find.byKey(const ValueKey('connector-way-connect-codex')),
       );
+      await tester.pump();
+      expect(
+        find.text('Installing the Gmail plugin in Codex…'),
+        findsOneWidget,
+      );
+      expect(app.waited['connect_via'], const Duration(seconds: 150));
+      app.holdConnectVia!.complete();
       await tester.pumpAndSettle();
       expect(app.requests.where((r) => r['action'] == 'connect_via').single, {
         'action': 'connect_via',
@@ -206,19 +254,33 @@ void main() {
         Uri.parse('https://chatgpt.com/#settings/Connectors'),
       );
       expect(find.text('✓ Installed'), findsOneWidget);
+      // Installed: a bare icon beside its state opens Gmail's page on ChatGPT, where an account is added.
+      // No Accounts button, and no icon for a way not yet in.
+      expect(find.text('Accounts'), findsNothing);
+      expect(
+        find.byKey(const ValueKey('connector-way-open-harness')),
+        findsNothing,
+      );
+      await tester.tap(find.byKey(const ValueKey('connector-way-open-codex')));
+      await tester.pumpAndSettle();
+      expect(opened.last, Uri.parse('https://codex.example/gmail'));
       await tester.tap(find.text('Done'));
       await tester.pumpAndSettle();
       expect(find.text('CONNECTED  1'), findsOneWidget);
-      expect(find.text('✓ Codex · accounts in ChatGPT'), findsOneWidget);
+      expect(find.text('✓ Codex'), findsOneWidget);
       expect(find.text('Manage'), findsOneWidget);
 
-      // Removed: the plugin goes, and the card goes back to the services to connect.
+      // Removed: the plugin goes, and the card goes back to the services to connect. Nothing opens:
+      // removing it here is all Remove is, even when an older computer still answers a page.
       await tester.tap(find.byKey(const ValueKey('connector-choose-gmail')));
       await tester.pumpAndSettle();
+      final openedBefore = opened.length;
       await tester.tap(
         find.byKey(const ValueKey('connector-way-remove-codex')),
       );
       await tester.pumpAndSettle();
+      expect(opened, hasLength(openedBefore));
+      expect(app.waited['disconnect_via'], const Duration(seconds: 150));
       expect(app.requests.last['action'], 'elsewhere');
       expect(
         find.byKey(const ValueKey('connector-way-connect-codex')),
@@ -240,6 +302,137 @@ void main() {
       expect(app.requests.map((r) => r['action']), ['list', 'elsewhere']);
       // Microsoft 365 connects only through an engine: with none, it is not offered at all.
       expect(find.text('Microsoft 365'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'Claude connected: Remove and its icon open its page on claude.ai, which holds it, and nothing asks the computer',
+    (tester) async {
+      final app = await pump(tester, engines: {'claude'});
+      await tester.tap(find.byKey(const ValueKey('connector-choose-gmail')));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('connector-way-connect-claude')),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('connector-way-row-claude')),
+          matching: find.text('✓ Connected'),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const ValueKey('connector-way-open-claude')));
+      await tester.pumpAndSettle();
+      expect(opened.last, Uri.parse('https://claude.example/gmail'));
+      // Remove: the same page, where Disconnect is; claude.ai's connector is not the computer's to remove.
+      final openedBefore = opened.length;
+      await tester.tap(
+        find.byKey(const ValueKey('connector-way-remove-claude')),
+      );
+      await tester.pumpAndSettle();
+      expect(opened, hasLength(openedBefore + 1));
+      expect(opened.last, Uri.parse('https://claude.example/gmail'));
+      expect(
+        app.requests.where((r) => r['action'] == 'disconnect_via'),
+        isEmpty,
+      );
+    },
+  );
+
+  testWidgets(
+    'Microsoft 365 offers each of its Codex plugins on its own, and connects only the one chosen',
+    (tester) async {
+      final app = await pump(
+        tester,
+        engines: {'claude', 'codex'},
+        microsoftParts: {
+          'Outlook mail': 'not_connected',
+          'Outlook calendar': 'not_connected',
+          'SharePoint': 'installed',
+        },
+      );
+      await tester.tap(
+        find.byKey(const ValueKey('connector-choose-microsoft_365')),
+      );
+      await tester.pumpAndSettle();
+      // Claude's one way, then Codex with each of its three under it, each with its own icon.
+      expect(
+        find.byKey(const ValueKey('connector-way-row-claude')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('connector-way-row-codex')),
+          matching: find.text('Codex'),
+        ),
+        findsOneWidget,
+      );
+      for (final (name, icon) in [
+        ('Outlook mail', 'outlook_mail'),
+        ('Outlook calendar', 'outlook_calendar'),
+        ('SharePoint', 'sharepoint'),
+      ]) {
+        final row = find.byKey(ValueKey('connector-way-row-codex-$name@m'));
+        expect(
+          find.descendant(of: row, matching: find.text(name)),
+          findsOneWidget,
+        );
+        expect(
+          tester
+              .widget<ConnectorMark>(
+                find.descendant(of: row, matching: find.byType(ConnectorMark)),
+              )
+              .code,
+          icon,
+        );
+      }
+      expect(
+        find.byKey(const ValueKey('connector-way-remove-codex-SharePoint@m')),
+        findsOneWidget,
+      );
+      // SharePoint, in, opens its own page; Outlook mail, not yet in, has none to open.
+      expect(
+        find.byKey(const ValueKey('connector-way-open-codex-Outlook mail@m')),
+        findsNothing,
+      );
+      await tester.tap(
+        find.byKey(const ValueKey('connector-way-open-codex-SharePoint@m')),
+      );
+      await tester.pumpAndSettle();
+      expect(opened.last, Uri.parse('https://chatgpt.example/SharePoint'));
+
+      await tester.tap(
+        find.byKey(
+          const ValueKey('connector-way-connect-codex-Outlook calendar@m'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(app.requests.where((r) => r['action'] == 'connect_via').single, {
+        'action': 'connect_via',
+        'connector': 'microsoft_365',
+        'via': 'codex',
+        'plugin': 'Outlook calendar@m',
+      });
+      // Straight to that plugin's own page, and only its row turns installed.
+      expect(
+        opened.last,
+        Uri.parse(
+          'https://chatgpt.com/settings/plugins-settings/Outlook calendar@m',
+        ),
+      );
+      expect(
+        find.byKey(
+          const ValueKey('connector-way-remove-codex-Outlook calendar@m'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(
+          const ValueKey('connector-way-connect-codex-Outlook mail@m'),
+        ),
+        findsOneWidget,
+      );
     },
   );
 

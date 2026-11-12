@@ -156,21 +156,14 @@ class _ConnectorsSectionState extends State<ConnectorsSection> {
         // pane, and the restart runs there, where it can be watched.
         if (_controller.focusedRestartable case final target?) ...[
           const SizedBox(height: 12),
+          // The button first, named for what it restarts: "Restart" alone at the end of the row read as
+          // reloading the list of connectors (2026-11-12).
           Row(
             children: [
-              Expanded(
-                child: Text(
-                  'Restart "${target.agent.displayName}" to use the new tools from your connectors.',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
               OutlinedButton.icon(
                 key: const ValueKey('connectors-restart'),
                 icon: const Icon(AppIcons.rotateCw, size: AppIcons.inlineSize),
-                label: const Text('Restart'),
+                label: const Text('Restart session'),
                 onPressed: () {
                   final navigator = Navigator.of(context);
                   navigator.pop();
@@ -183,6 +176,15 @@ class _ConnectorsSectionState extends State<ConnectorsSection> {
                     ),
                   );
                 },
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  '"${target.agent.displayName}" gets the new tools from your connectors when it starts again.',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
               ),
             ],
           ),
@@ -570,7 +572,6 @@ class _WayChip extends StatelessWidget {
     final color = again ? Colors.amber : theme.colorScheme.primary;
     final text = switch (way.state) {
       'reconnect' => '${way.who} · Reconnect',
-      'installed' => '✓ ${way.who} · accounts in ChatGPT',
       _ => '✓ ${way.who}',
     };
     return Container(
@@ -622,6 +623,8 @@ class _ChooseWayDialog extends StatelessWidget {
         required VoidCallback? onConnect,
         required VoidCallback onRemove,
         String? unavailable,
+        String? page,
+        String? icon,
       }) {
         final on = state != 'not_connected';
         final status = switch (state) {
@@ -632,20 +635,33 @@ class _ChooseWayDialog extends StatelessWidget {
         };
         return Padding(
           key: ValueKey('connector-way-row-$key'),
-          padding: const EdgeInsets.symmetric(vertical: 10),
+          // A part of an engine's way (one of Codex's plugins): under its engine, with its own icon.
+          padding: icon == null
+              ? const EdgeInsets.symmetric(vertical: 10)
+              : const EdgeInsets.fromLTRB(12, 6, 0, 6),
           child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: icon == null
+                ? CrossAxisAlignment.start
+                : CrossAxisAlignment.center,
             children: [
+              if (icon != null) ...[
+                ConnectorMark(code: icon, name: title, size: 22),
+                const SizedBox(width: 10),
+              ],
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(
                       children: [
-                        Text(
-                          title,
-                          style: theme.textTheme.titleSmall?.copyWith(
-                            fontWeight: FontWeight.w700,
+                        // A Codex plugin's name beside its state can be wider than the row.
+                        Flexible(
+                          child: Text(
+                            title,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
                         ),
                         if (status != null) ...[
@@ -659,15 +675,40 @@ class _ChooseWayDialog extends StatelessWidget {
                             ),
                           ),
                         ],
+                        // In: its own page in that engine's account, where an account is added. An icon,
+                        // not a button, beside the state it follows.
+                        if (page != null &&
+                            (state == 'connected' || state == 'installed')) ...[
+                          const SizedBox(width: 6),
+                          Tooltip(
+                            message: 'Open',
+                            child: InkWell(
+                              key: ValueKey('connector-way-open-$key'),
+                              onTap: () => unawaited(controller.openPage(page)),
+                              borderRadius: BorderRadius.circular(4),
+                              child: Icon(
+                                Icons.open_in_new,
+                                size: 14,
+                                color: theme.colorScheme.primary,
+                              ),
+                            ),
+                          ),
+                        ],
                       ],
                     ),
-                    const SizedBox(height: 4),
-                    Text(scope, style: theme.textTheme.bodySmall),
-                    const SizedBox(height: 2),
-                    Text(
-                      who,
-                      style: theme.textTheme.bodySmall?.copyWith(color: muted),
-                    ),
+                    if (scope.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(scope, style: theme.textTheme.bodySmall),
+                    ],
+                    if (who.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        who,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: muted,
+                        ),
+                      ),
+                    ],
                     if (note != null) ...[
                       const SizedBox(height: 2),
                       Text(
@@ -698,23 +739,15 @@ class _ChooseWayDialog extends StatelessWidget {
                   ),
                 )
               else if (on && state != 'reconnect')
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // Codex's plugin is in: its accounts (more than one, if wanted) are ChatGPT's.
-                    if (key == 'codex')
-                      TextButton(
-                        key: const ValueKey('connector-way-accounts-codex'),
-                        onPressed: () =>
-                            unawaited(controller.openCodexAccounts()),
-                        child: const Text('Accounts'),
-                      ),
-                    TextButton(
-                      key: ValueKey('connector-way-remove-$key'),
-                      onPressed: onRemove,
-                      child: const Text('Remove'),
-                    ),
-                  ],
+                // Red, apart at a glance from Connect's blue.
+                FilledButton(
+                  key: ValueKey('connector-way-remove-$key'),
+                  onPressed: onRemove,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppPalette.dangerFill,
+                    foregroundColor: Colors.white,
+                  ),
+                  child: const Text('Remove'),
                 )
               else
                 FilledButton(
@@ -740,21 +773,67 @@ class _ChooseWayDialog extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                for (final engine in engines) ...[
-                  row(
-                    key: engine,
-                    title: ConnectorsController.engineName(engine),
-                    scope: scopes[engine] ?? '',
-                    who: engine == 'claude'
-                        ? 'Only Claude Code on the same Claude account'
-                        : 'Only Codex on the same ChatGPT account',
-                    state: controller.via[code]?[engine] ?? 'not_connected',
-                    waiting: controller.pending.contains('$code:$engine'),
-                    onConnect: () => controller.connectVia(card, engine),
-                    onRemove: () => controller.disconnectVia(card, engine),
-                  ),
-                  Divider(height: 1, color: AppPalette.divider),
-                ],
+                for (final engine in engines)
+                  // ChatGPT connects each of a split service's plugins on its own: Codex, then each
+                  // plugin under it with its own icon.
+                  if (engine == 'codex' && controller.parts[code] != null) ...[
+                    Padding(
+                      key: const ValueKey('connector-way-row-codex'),
+                      padding: const EdgeInsets.only(top: 10, bottom: 2),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            ConnectorsController.engineName(engine),
+                            style: theme.textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            'Only Codex on the same ChatGPT account',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: muted,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    for (final part in controller.parts[code]!)
+                      row(
+                        key: 'codex-${part.plugin}',
+                        title: part.name,
+                        scope: '',
+                        who: '',
+                        state: part.state,
+                        waiting: controller.pending.contains(
+                          ConnectorsController.viaKey(card, engine, part),
+                        ),
+                        onConnect: () =>
+                            controller.connectVia(card, engine, part),
+                        onRemove: () =>
+                            controller.disconnectVia(card, engine, part),
+                        page: part.page,
+                        icon: part.icon ?? code,
+                      ),
+                    const SizedBox(height: 4),
+                    Divider(height: 1, color: AppPalette.divider),
+                  ] else ...[
+                    row(
+                      key: engine,
+                      title: ConnectorsController.engineName(engine),
+                      scope: scopes[engine] ?? '',
+                      who: engine == 'claude'
+                          ? 'Only Claude Code on the same Claude account'
+                          : 'Only Codex on the same ChatGPT account',
+                      state: controller.via[code]?[engine] ?? 'not_connected',
+                      waiting: controller.pending.contains('$code:$engine'),
+                      onConnect: () => controller.connectVia(card, engine),
+                      onRemove: () => controller.disconnectVia(card, engine),
+                      page: controller.pages[code]?[engine],
+                    ),
+                    Divider(height: 1, color: AppPalette.divider),
+                  ],
                 // Not for a service only an engine connects (Microsoft 365).
                 if (controller.harnessWay(code))
                   row(
