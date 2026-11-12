@@ -384,9 +384,11 @@ void main() {
       final id = command(stroke.toString());
       expect(harnessCommandById[id]?.action, shortcut.action);
     }
-    for (final retired in ['cmd+shift+h', 'cmd+u', 'cmd+y']) {
+    for (final retired in ['cmd+u', 'cmd+y']) {
       expect(command(retired), isNull, reason: retired);
     }
+    // A retired chord given again: Hachi's (docs/design/2026-11-12-hachi.md), bound only while it is on.
+    expect(command('cmd+shift+h'), 'hachi.open');
     // ⌥⌘←/→ walk tabs, as in Safari and Chrome; ⇧⌘[ ] no longer do.
     expect(command('cmd+alt+left'), 'swarm.previous');
     expect(command('cmd+alt+right'), 'swarm.next');
