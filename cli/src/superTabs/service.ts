@@ -1,7 +1,6 @@
 import { unsigned } from './signature.js'
 import { quotaOf, readCapabilities } from './capacity.js'
 import { existsSync } from 'node:fs'
-import { availableParallelism } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import type { CoreApi, ServiceRequests, SuperTabsPort } from '../core/api.js'
@@ -307,7 +306,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
       const local = await openDaemon({ dataDir: api.dataDir, port: api.daemon.port, machineId: api.daemon.machineId() })
       try { return quotaOf(object(await local.request('usage_read', {}, 20_000)), engine, false) } finally { local.close() }
     },
-    cores: availableParallelism, onNotice: listener => api.account.onNotice(listener), say: sayToPerson(api),
+    onNotice: listener => api.account.onNotice(listener), say: sayToPerson(api),
     accepted: agent => nextThings.offered(agent.harnessId),
     file: join(api.dataDir, 'super-tab-offers-told.json'),
   })))(core, sources)

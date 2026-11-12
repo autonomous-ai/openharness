@@ -9,9 +9,9 @@
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { buildingIn, DISK_KEPT, machineHas, RESERVE, SIZES, tasksOf } from './assign/crew.js'
+import { buildingIn, DISK_KEPT, machineHas, OTHER_PROJECTS, RESERVE, SIZES } from './assign/crew.js'
 import type { WatchedAgent } from './githubMentions.js'
-import { GitHubReads, type GitHubGet } from './githubRest.js'
+import { GitHubReads, GitHubStop, type GitHubGet } from './githubRest.js'
 import { named } from './agentReplies.js'
 import { object, SuperTabHostError } from './wire.js'
 
@@ -40,9 +40,6 @@ export const ANSWER_QUIET_MS = 60_000
 export const AGENTS_MS = 60_000
 /** Tasks one read of a project's offers asks about at most, as the server takes them (backend taskOffers.ts OFFER_NUMBERS_MAX). */
 export const OFFER_NUMBERS_MAX = 100
-/** How long the server holds a task its agent accepted (backend taskOffers.ts OFFER_TAKE_MS): the hold counted here when an
- *  answer does not say its own. */
-const ACCEPT_HOLD_MS = 10 * 60_000
 /** The answers remembered, so an offer is answered once, and the failures said: far more than a day's offers to one computer's
  *  agents. And what each agent's person was told, kept across restarts. */
 const ANSWERS_KEPT = 500, TOLD_KEPT = 500
@@ -75,39 +72,34 @@ export async function agentOffers(ask: Ask, tabId: string, agentId: string): Pro
   return { offers: offersIn(answer), serverTime: Number(object(answer).serverTime) }
 }
 
-/** [agentId]'s acceptance of the offer of [task], or with [reason] its decline: the offer as the server has it after, and its
- *  time. */
-export async function answerOffer(ask: Ask, tabId: string, agentId: string, task: { repository: string; number: number }, reason: string | null): Promise<{ offer: TaskOffer; serverTime: number }> {
+/** [agentId]'s acceptance of the offer of [task], or with [reason] its decline. */
+export async function answerOffer(ask: Ask, tabId: string, agentId: string, task: { repository: string; number: number }, reason: string | null): Promise<void> {
   const { repository, number } = task
-  const answer = object(await ask('POST', `${path(tabId)}/${reason ? 'decline' : 'accept'}?asAgentId=${agentId}`, reason ? { repository, number, reason } : { repository, number }))
-  return { offer: object(answer.offer) as unknown as TaskOffer, serverTime: Number(answer.serverTime) }
+  await ask('POST', `${path(tabId)}/${reason ? 'decline' : 'accept'}?asAgentId=${agentId}`, reason ? { repository, number, reason } : { repository, number })
 }
 
 /** What a decline says to its agent's person, by its reason: no number, path or account. */
-const WHY: Record<string, string> = { tools: 'it lacks a tool the task needs', cores: 'not enough free cores', memory: 'not enough free memory',
+const WHY: Record<string, string> = { tools: 'it lacks a tool the task needs', memory: 'not enough free memory',
   disk: 'not enough free disk', quota: 'its subscription\'s window has too little left above what you keep' }
-
-/** The cores a task of each size holds of its machine while it runs, as this check counts them: the plan counts none (assign/crew.ts
- *  SIZES, package 7), so this is the one guard (docs/design/2026-11-11-swarm-allocator/offers.md). */
-const SIZE_CORES = { s: 1, m: 2, l: 4 }
 
 const labelsOf = (issue: Json): string[] => (Array.isArray(issue.labels) ? issue.labels.map(object) : []).map(label => String(label.name ?? '').toLowerCase())
 const sizeOf = (labels: string[]) => {
   const size = (labels.find(label => /^size:[sml]$/.test(label))?.slice(5) ?? 'm') as 's' | 'm' | 'l'
-  return { ...SIZES[size], cpu: SIZE_CORES[size] }
+  return SIZES[size]
 }
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
 
 /**
  * Why this computer takes no task [issue] (as GitHub has it) for the agent labelled [label], or null when it does: the task is
  * closed, a pull request, another builder's or taken by someone (`gone`); or this machine lacks a tool its `needs:` labels name
- * (`tools`), the cores its size holds beside the [held] ones of the tasks its agents here build or are about to (`cores`), the
- * free memory it holds or is under critical pressure (`memory`), or the disk it holds above what its person keeps (`disk`); or a
+ * (`tools`), the free memory it holds or is under critical pressure (`memory`), or the disk it holds above what its person keeps
+ * (`disk`); or a
  * known window of the agent's subscription has less room than the task spends above its person's reserve (`quota`). What cannot
  * be read is no reason: the plan gave the task on the machine's last report, and an unknown window is neither unused nor full
- * (services/usage.ts). The cores are counted, never read as a load: a momentary reading once refused every start (capacity.ts).
+ * (services/usage.ts). Cores are not counted, as the plan counts none: each agent gets its share of them as it starts, and a task
+ * held back for them cost more than it saved (package 7, docs/research/2026-11-11-agents-share-cpu.md section 9).
  */
-export function noRoom(input: { issue: Json; label: string; machine: Json; cores: number; held: number; windows: Windows }): string | null {
+export function noRoom(input: { issue: Json; label: string; machine: Json; windows: Windows }): string | null {
   const { issue, machine } = input, labels = labelsOf(issue)
   if (issue.state !== 'open' || issue.pull_request || labels.some(label => label.startsWith('builder:') && label !== input.label)
     || (labels.includes('status:taken') && !labels.includes(input.label))) return 'gone'
@@ -115,7 +107,6 @@ export function noRoom(input: { issue: Json; label: string; machine: Json; cores
   const gpus = Array.isArray(resources.gpus) ? resources.gpus : []
   const seen = { tools: machine.tools, resources: { os: resources.os, ...gpus.length ? { gpuPercent: 0 } : {} } }
   if (labels.some(label => label.startsWith('needs:') && !machineHas(seen, label.slice('needs:'.length)))) return 'tools'
-  if (input.held + size.cpu > input.cores) return 'cores'
   if (resources.memoryPressure === 'critical' || (finite(resources.memoryTotalBytes) && finite(resources.memoryUsedBytes)
     && resources.memoryTotalBytes - resources.memoryUsedBytes < size.ram)) return 'memory'
   if (finite(resources.projectDiskFreeBytes) && resources.projectDiskFreeBytes - DISK_KEPT < size.disk) return 'disk'
@@ -129,9 +120,9 @@ export function noRoom(input: { issue: Json; label: string; machine: Json; cores
  * the server pushes that one of their Swarms changed: at most once in [ANSWER_GAP_MS] for a Swarm, once as it starts for an offer
  * made while it was away, and once a minute for a Swarm no push named ([ANSWER_QUIET_MS]). Each offer is checked (noRoom) and
  * accepted or declined, and is remembered once the server took its answer; one agent's or one offer's failure is said and passes
- * over it alone. Accepted, its agent's next thing is looked at (nextThing.ts), which types it the task while it is idle, and its
- * cores are counted as held until its hold ends. Declined for a want of room, its person is told once for each reason until it
- * accepts again, across restarts. A server without the routes is asked again after [NO_ROUTE_MS].
+ * over it alone. Accepted, its agent's next thing is looked at (nextThing.ts), which types it the task while it is idle. Declined for
+ * a want of room, its person is told once for each reason until it accepts again, across restarts. A server without the routes is
+ * asked again after [NO_ROUTE_MS].
  */
 export class OfferAnswers {
   private stopNotices: (() => void) | null = null
@@ -142,9 +133,6 @@ export class OfferAnswers {
   private chain: Promise<void> = Promise.resolve()
   private agents: { at: number; list: WatchedAgent[] } | null = null
   private readonly answered = new Set<string>()
-  /** The tasks this computer accepted, by `repo#N`, with the cores their size holds, until their hold ends on this clock: its agent
-   *  builds them within it (review of #4153: two agents here accepted work their cores could not hold together). */
-  private readonly holding = new Map<string, { agentId: string; cpu: number; until: number }>()
   /** What each agent's person was told, by agent and reason; read from [file] as it is first needed. */
   private told: Set<string> | null = null
   /** The failure last said of each thing that failed (the agents' read, an agent's offers, an offer), until it passes or changes. */
@@ -165,7 +153,6 @@ export class OfferAnswers {
     /** This machine as it is now, for a task in [cwd] that needs [tools] (capacity.ts readCapabilities). */
     machine: (cwd: string | null, tools: string[]) => Promise<Json>
     windows: (engine: string) => Promise<Windows>
-    cores: () => number
     /** Hears the server's notices; returns how to stop hearing them. */
     onNotice: (listener: (notice: { type: string; tabId?: string }) => void) => () => void
     /** Says [text] to [agent]'s person, in its chat. */
@@ -248,10 +235,12 @@ export class OfferAnswers {
       }
       this.failure(agent.agentId, null)
       this.failure('offers', null)
+      // What it accepted, as the server holds it (a restart forgets nothing); one accepted in this pass joins them.
+      const accepted = offers.filter(o => o.state === 'accepted')
       for (const offer of offers.filter(o => o.state === 'offered')) {
         const key = `${agent.agentId}|${offer.repository}#${offer.number}@${offer.offeredAt}`
         try {
-          await this.decide(agent, offer, agents, key)
+          if (await this.decide(agent, offer, accepted, key)) accepted.push(offer)
           this.failure(key, null)
         } catch (error) { this.failure(key, error) }
       }
@@ -278,106 +267,98 @@ export class OfferAnswers {
 
   /** Says the failure of [what] once until it passes ([error] null) or changes. */
   private failure(what: string, error: unknown): void {
-    if (error === null) { this.failed.delete(what); return }
-    const line = `[super-tab] Task offers: ${noSuchRoute(error) ? 'this Swarm\'s server takes no offers yet' : named(error)}`
+    this.once(what, error === null ? null
+      : `[super-tab] Task offers: ${noSuchRoute(error) ? 'this Swarm\'s server takes no offers yet' : error instanceof GitHubStop ? error.code : named(error)}`)
+  }
+
+  /** Says [line] of [what] once until it is over ([line] null) or changes. */
+  private once(what: string, line: string | null): void {
+    if (line === null) { this.failed.delete(what); return }
     if (this.failed.get(what) === line) return
     this.failed.set(what, line)
     if (this.failed.size > ANSWERS_KEPT) this.failed.delete(this.failed.keys().next().value!)
     this.log(line)
   }
 
-  private async decide(agent: WatchedAgent, offer: TaskOffer, agents: WatchedAgent[], key: string): Promise<void> {
-    if (this.answered.has(key)) return
+  /** Answers [offer] to [agent], beside what it [accepted]; true when it accepted it. */
+  private async decide(agent: WatchedAgent, offer: TaskOffer, accepted: TaskOffer[], key: string): Promise<boolean> {
+    if (this.answered.has(key)) return false
     const task = `${offer.repository}#${offer.number}`
-    const { reason, cpu } = await this.check(agent, offer, agents, task)
-    const answered = await answerOffer(this.deps.ask, agent.tabId, agent.agentId, offer, reason)
+    const reason = await this.check(agent, offer, accepted)
+    await answerOffer(this.deps.ask, agent.tabId, agent.agentId, offer, reason)
     // Remembered once the server took it, so an answer that failed is made again (review of #4153); a repeat is safe there.
     this.answered.add(key)
     if (this.answered.size > ANSWERS_KEPT) this.answered.delete(this.answered.values().next().value!)
     this.log(`[super-tab] ${agent.names[0]} ${reason ? `declined ${task}: ${reason}` : `accepted ${task}`}`)
     const told = this.toldOnce()
     if (!reason) {
-      const left = answered.offer.expiresAt - answered.serverTime
-      this.holding.set(task, { agentId: agent.agentId, cpu, until: this.now() + (Number.isFinite(left) ? left : ACCEPT_HOLD_MS) })
       const ended = [...told].filter(line => line.startsWith(`${agent.agentId}|`))
       for (const line of ended) told.delete(line)
       if (ended.length) this.keep()
-      return this.deps.accepted(agent)
+      this.deps.accepted(agent)
+      return true
     }
     const line = `${agent.agentId}|${reason}`
-    if (!WHY[reason] || told.has(line)) return
+    if (!WHY[reason] || told.has(line)) return false
     // As the agent says it, in its chat with its person (nextThing.ts idleWith), under an id the server takes: the key's hash.
     await this.deps.say(agent, `offer-${createHash('sha256').update(key).digest('hex').slice(0, 40)}`,
       `I was offered ${task}, and this computer has no room for it: ${WHY[reason]}.`)
     told.add(line)
     this.keep()
+    return false
   }
 
-  /** Why [agent] declines [offer] (noRoom), read here: the task as GitHub has it, the tasks this computer's agents build or are
-   *  about to, this machine, and the agent's subscription; and the cores the task's size holds. A task of no project of the agent's
-   *  is gone. */
-  private async check(agent: WatchedAgent, offer: TaskOffer, agents: WatchedAgent[], task: string): Promise<{ reason: string | null; cpu: number }> {
+  /** Why [agent] declines [offer] (noRoom, busy), read here: the task as GitHub has it, this machine, the agent's subscription, and
+   *  what it builds in its other projects or [accepted]. A task of no project of the agent's is gone. */
+  private async check(agent: WatchedAgent, offer: TaskOffer, accepted: TaskOffer[]): Promise<string | null> {
     const repo = offer.repository.toLowerCase()
     // Its agents are read once a minute: one that joined a project since has its repository read again before its offer is
     // declined as gone (review of #4153).
     const projects = agent.repos.includes(repo) ? agent.repos : (await this.agentsAgain()).find(again => again.agentId === agent.agentId)?.repos ?? []
     const issue = projects.includes(repo) ? await this.reads.ifThere(repo, `/repos/${repo}/issues/${offer.number}`) : null
-    if (!issue) return { reason: 'gone', cpu: 0 }
+    if (!issue) return 'gone'
     const session = this.deps.session(agent.harnessId)
     const labels = labelsOf(issue), needs = labels.filter(label => label.startsWith('needs:')).map(label => label.slice('needs:'.length))
-    const reason = noRoom({ issue, label: agent.label, machine: await this.deps.machine(session?.cwd ?? null, needs), cores: this.deps.cores(),
-      held: await this.held(agents.filter(other => other.agentId !== agent.agentId), task),
+    const reason = noRoom({ issue, label: agent.label, machine: await this.deps.machine(session?.cwd ?? null, needs),
       windows: session ? await this.deps.windows(session.engine) : { known: false, windows: [] } })
-    return { reason: reason !== 'gone' && await this.busy(agent, task) ? 'busy' : reason, cpu: sizeOf(labels).cpu }
+    return reason !== 'gone' && await this.busy(agent, repo, accepted) ? 'busy' : reason
   }
 
   /**
-   * Whether [agent] has a task in hand but [task]: one given or taken to it with no pull request of its up, as the plan counts one
-   * it builds in another project (assign/crew.ts buildingIn, package 11), or one it accepted here whose hold has not ended and that
-   * is given to it nowhere yet. A second project's plan reads only labels, so between an accept and its give it saw this agent free
-   * and could offer it a second task (the merge of #4144 and #4153). Declined `busy`, its person is told nothing (WHY).
+   * Whether [agent] has a task in hand: one given or taken to it in another of its Swarm's projects than [own] with no pull request
+   * of its up, as that project's plan counts one (assign/crew.ts buildingIn), or one it [accepted] that is given to it nowhere yet.
+   * A second project's plan reads only labels, so between an accept and its give it saw this agent free and could offer it a
+   * second task (the merge of #4144 and #4153). [own]'s labels count no task of its: its plan counts its own by their pull
+   * requests' branches (githubAssign.ts), and labels could say busy where it says free; they are read only for what is given there.
+   * The others are read as that plan reads them (buildsElsewhere): of projects not archived, the first [OTHER_PROJECTS], one that
+   * cannot be read counting nothing, each said once. Declined `busy`, its person is told nothing (WHY).
    */
-  private async busy(agent: WatchedAgent, task: string): Promise<boolean> {
-    const labelled = await this.labelled(agent)
-    const lists = labelled.map(([repo, items]) => items.filter(item => `${repo}#${item.number}` !== task))
-    if (buildingIn(lists, { id: agent.agentId, label: agent.label }).tasks > 0) return true
-    const given = new Set(labelled.flatMap(([repo, items]) => items.filter(item => !item.pull_request).map(item => `${repo}#${item.number}`)))
-    return this.liveHolds().some(([key, hold]) => hold.agentId === agent.agentId && key !== task && !given.has(key))
+  private async busy(agent: WatchedAgent, own: string, accepted: TaskOffer[]): Promise<boolean> {
+    const others = agent.active.filter(repo => repo !== own)
+    this.once(`others|${agent.agentId}`, others.length > OTHER_PROJECTS
+      ? `[super-tab] Task offers: OTHER_PROJECTS ${agent.names[0]}: of its ${others.length} other projects, the first ${OTHER_PROJECTS} are read for what it builds` : null)
+    const lists = await this.labelled(agent, [own, ...others.slice(0, OTHER_PROJECTS)])
+    if (buildingIn(lists.filter(([repo]) => repo !== own).map(([, items]) => items), { id: agent.agentId, label: agent.label }).tasks > 0) return true
+    const given = new Set(lists.flatMap(([repo, items]) => items.filter(item => !item.pull_request).map(item => `${repo}#${item.number}`)))
+    return accepted.some(held => !given.has(`${held.repository.toLowerCase()}#${held.number}`))
   }
 
-  /** What this computer accepted whose hold has not ended on this clock; one that ended goes. */
-  private liveHolds(): Array<[string, { agentId: string; cpu: number; until: number }]> {
-    for (const [key, hold] of [...this.holding]) if (hold.until <= this.now()) this.holding.delete(key)
-    return [...this.holding]
-  }
-
-  /** [agent]'s open issues and pull requests its label is on, in each of its repositories. */
-  private async labelled(agent: WatchedAgent): Promise<Array<[string, Json[]]>> {
-    const lists: Array<[string, Json[]]> = []
-    for (const repo of agent.repos) {
-      lists.push([repo, await this.reads.current(repo, `/repos/${repo}/issues?state=open&labels=${encodeURIComponent(agent.label)}&per_page=100`, 1)])
-    }
-    return lists
-  }
-
-  /**
-   * The cores held by the tasks [agents] build and those this computer accepted, but [task]: each task one of them took
-   * (status:taken) with no pull request of its yet, and each accepted here whose hold has not ended, at its size's cores, once.
-   * The plan counts no cores (package 7), so this is where a machine is kept within them (the allocator's design: "nothing
-   * checks cores when a task is taken").
-   */
-  private async held(agents: WatchedAgent[], task: string): Promise<number> {
-    const cores = new Map<string, number>()
-    for (const agent of agents) {
-      for (const [repo, items] of await this.labelled(agent)) {
-        const pulled = new Set(items.filter(item => item.pull_request).flatMap(tasksOf))
-        for (const item of items) {
-          if (!item.pull_request && labelsOf(item).includes('status:taken') && !pulled.has(Number(item.number))) cores.set(`${repo}#${item.number}`, sizeOf(labelsOf(item)).cpu)
-        }
+  /** [agent]'s open issues and pull requests its label is on, in each of [repos] at once; one that cannot be read gives none, said
+   *  once until it can. A stop for every repository (a rate limit, gh signed out) fails the answer, as the task's own read does. */
+  private async labelled(agent: WatchedAgent, repos: string[]): Promise<Array<[string, Json[]]>> {
+    const lists = await Promise.all(repos.map(async (repo): Promise<[string, Json[]] | null> => {
+      const what = `${agent.agentId}|${repo}`
+      try {
+        const items = await this.reads.current(repo, `/repos/${repo}/issues?state=open&labels=${encodeURIComponent(agent.label)}&per_page=100`, 1)
+        this.once(what, null)
+        return [repo, items]
+      } catch (error) {
+        if (!(error instanceof GitHubStop) || error.everywhere) throw error
+        this.once(what, `[super-tab] Task offers: ${error.code} ${repo}: ${error.message} ${agent.names[0]} counts as building nothing there.`)
+        return null
       }
-    }
-    for (const [key, hold] of this.liveHolds()) if (key !== task && !cores.has(key)) cores.set(key, hold.cpu)
-    return [...cores.values()].reduce((sum, cpu) => sum + cpu, 0)
+    }))
+    return lists.filter((list): list is [string, Json[]] => list !== null)
   }
 
   /** What each person was told, read from its file as it is first needed: told once for each reason, a restart says it again

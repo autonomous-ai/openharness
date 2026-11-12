@@ -16,7 +16,7 @@ const root = mkdtempSync(join(tmpdir(), 'super-tab-next-thing-'))
 afterAll(() => rmSync(root, { recursive: true, force: true }))
 let files = 0
 
-const PIP: WatchedAgent = { tabId: 'tab', agentId: 'pip', harnessId: 'h-pip', chat: 'chat-pip', names: ['Pip'], label: 'builder:pip', repos: ['acme/app'] }
+const PIP: WatchedAgent = { tabId: 'tab', agentId: 'pip', harnessId: 'h-pip', chat: 'chat-pip', names: ['Pip'], label: 'builder:pip', repos: ['acme/app'], active: ['acme/app'] }
 const TAKE = 'harness super-tab take'
 const HEAD = 'b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0'
 /** A reader's comment on a pull request, as a teammate's verdict reads on GitHub. */

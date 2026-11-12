@@ -10,7 +10,7 @@
  * (githubMentions.ts) then brings to its builder. It runs where the merger runs: in the Harness of the person whose agent is
  * the project's PM, running or stopped there, with their gh. A task its PM or a person gave by hand is never moved.
  */
-import { addElsewhere, areaOf, ASKED, buildingIn, builtOn, dependsOn, hasRoom, heldTasks, labelOf, machineHas, nextPicks, openPieces, outOfQuota, teamOf, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readerKey, readProblem, reasonOf, startedAt, takeBacks, takenTasks, tasksOf, worksOnOf, type AwayBuilder, type Crew, type CrewBuilder, type Pick, type Read, type Up } from './assign/crew.js'
+import { addElsewhere, areaOf, ASKED, buildingIn, builtOn, dependsOn, hasRoom, heldTasks, labelOf, machineHas, nextPicks, openPieces, OTHER_PROJECTS, outOfQuota, teamOf, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readerKey, readProblem, reasonOf, startedAt, takeBacks, takenTasks, tasksOf, worksOnOf, type AwayBuilder, type Crew, type CrewBuilder, type Pick, type Read, type Up } from './assign/crew.js'
 import type { Choice } from './assign/model.js'
 import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
@@ -53,10 +53,6 @@ const FLOW_LABELS: ReadonlyArray<{ name: string; color: string; description: str
 const WAIT_TAKE_MS = 10 * 60_000
 /** Pages of a hundred open issues and pull requests read each pass: a list that fills them is said (TOO_MANY_OPEN). */
 const ISSUE_PAGES = 10
-/** The most of the Swarm's other projects whose repositories are read each pass for what this project's builders build there:
- *  a Swarm has a handful today, and the server allows it a hundred. Past these, its builders count as building nothing in the
- *  rest, which is said once (OTHER_PROJECTS). */
-const OTHER_PROJECTS = 10
 /** Pages of a repository's newest open items a builder whose label has a comma is looked for among (listOf), as a claim does. */
 const COMMA_PAGES = 3
 /** How long a builder found building in another project goes before it is read again when a task is about to be given to it:

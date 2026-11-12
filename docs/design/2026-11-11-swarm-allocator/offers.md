@@ -153,16 +153,16 @@ On the agent's own computer, for an offer to one of its person's own agents runn
 | Check | Declines with |
 |---|---|
 | The task is of a project of the agent's, open, an issue, and carries no other builder's label and no `status:taken` but its own (one read of GitHub) | `gone` |
-| The agent has no other task in hand: none given or taken to it with no pull request of its up, as the plan counts one it builds in another project (`buildingIn`, package 11), and none it accepted here whose hold has not ended and that is given to it nowhere yet. A second project's plan reads only labels, so between an accept and its give it saw the agent free and could offer it a second task (found merging package 11 into this) | `busy` |
+| The agent has no task in hand in another project of its Swarm: none given or taken to it there with no pull request of its up, as that project's plan counts one (`buildingIn`, package 11), and none it accepted there (the server's live accepted offers, so a restart forgets none) that is given to it there nowhere yet. A second project's plan reads only labels, so between an accept and its give it saw the agent free and could offer it a second task (found merging package 11 into this). The offer's own project is not read: its plan counts its own tasks by their pull requests' branches and its offers by this record, and its labels could say busy where its plan says free. The others are read as a plan reads them: projects not archived, the first 10, one that cannot be read counting nothing, each said once | `busy` |
 | The machine has each tool its `needs:` labels name, its system and a GPU as asked (the tools probed here, as a start probes them) | `tools` |
-| The cores of the task's size (1, 2, 4) beside those of the tasks this computer's other agents build (taken, no pull request of theirs yet) and of those it accepted whose hold has not ended, each counted once, fit its logical cores. The plan counts no cores (package 7), so this is the one guard | `cores` |
 | Free memory holds the task's size (s 2 GB, m 4 GB, l 8 GB), and memory pressure is not critical | `memory` |
 | The project's disk, less the 10 GB its person keeps, holds it (1, 2, 4 GB) | `disk` |
 | Each known window of the agent's subscription has room for it above its person's 20% (3, 10, 25% of a 5-hour window; a fifth of that of a weekly one) | `quota` |
 | Later, when `take` is refused for good: at its limit of four, or another builder's label came on as it took it | `limit`, `gone` |
 
-Not checked: CPU as a reading (a momentary one once refused every start, `capacity.ts`): cores are counted, as the
-plan counts them. An agent whose session does not run here is not answered for: its offer lapses. What cannot be read
+Not checked: cores, as the plan counts none. Each agent gets its share of them as it starts, and a task held back for
+them cost more than it saved (package 7, [its study](../../research/2026-11-11-agents-share-cpu.md#9-the-plans-cores)).
+Nor CPU as a reading (a momentary one once refused every start, `capacity.ts`). An agent whose session does not run here is not answered for: its offer lapses. What cannot be read
 (memory, disk, a window) is no reason: an unknown window is not read as unused and not as full, and the offer is
 accepted, as the plan gives to such a builder today. The windows' percentages are read on this computer
 (`usage_read`) and never leave it.

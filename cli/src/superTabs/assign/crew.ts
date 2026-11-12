@@ -34,6 +34,10 @@ export const RESERVE = 20
 export const MEMORY_SHARE = 0.75
 /** Disk its person keeps free whatever the Swarm does. */
 export const DISK_KEPT = 10 * GiB
+/** The most of the Swarm's other projects whose repositories are read for what a builder builds there, by a plan each pass
+ *  (githubAssign.ts) and by its own computer as it answers an offer (taskOffers.ts busy): a Swarm has a handful today, and the
+ *  server allows it a hundred. Past these, it counts as building nothing in the rest, which is said once (OTHER_PROJECTS). */
+export const OTHER_PROJECTS = 10
 /** The most tasks one builder holds open at once, as lampOS set it (four, with sub-agents): past it, work sits on a busy
  *  builder while others have none. A claim is refused past it (githubClaim.ts), and Harness gives a builder nothing at it. */
 export const CLAIM_LIMIT = 4
