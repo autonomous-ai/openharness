@@ -16,7 +16,7 @@ recaps, checkpoints and search rows under every session key, and keeps OpenClaw'
 
 **Tech Stack:** TypeScript (`cli/src`, daemon core and CLI), vitest, `node:sqlite` (Node 24), tmux, the pty host.
 
-**Spec:** [docs/superpowers/specs/2026-11-12-skill-run-isolation-design.md](../specs/2026-11-12-skill-run-isolation-design.md).
+**Spec:** [docs/plans/2026-11-12-skill-run-isolation-design.md](2026-11-12-skill-run-isolation-design.md).
 Read it with this plan, and `AGENTS.md`, `cli/AGENTS.md`, `cli/src/services/AGENTS.md`, `docs/naming-system.md`. The
 spec is the authority, its "(my call)" decisions included.
 
