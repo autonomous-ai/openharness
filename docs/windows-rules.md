@@ -4,6 +4,20 @@ Everything here cost real time on a real Windows computer. Read it before you ch
 process, runs a script, or shows text on Windows, and before you test anything there. A person on Windows
 must see what a person on a Mac sees: the app, and nothing else.
 
+## In short
+
+The rules AGENTS.md carried until 2026-11-11; the sections below have the details.
+
+Every feature looks and works on Windows as on a Mac. Read these rules before changing code that starts a process or
+testing on Windows.
+
+- Never open a window the person did not ask for, not even for a moment, in the product or in tests: `detached: true`
+  flashes consoles and `windowsHide` does not fix it. Use `ownProcessGroup()` in the CLI and `startHidden`/`runHidden`
+  in Desktop.
+- Prove it by recording the windows in the person's session on the signed build; SSH cannot see windows.
+- On a Windows problem, read how the Mac path solves it and do the same the Windows way. A new Windows mistake goes
+  into the rules with a test.
+
 ## 1. Harness never opens a window the person did not ask for
 
 On a Mac a background program has no window. On Windows a console program started by a process that has no
