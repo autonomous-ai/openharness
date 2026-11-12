@@ -18,7 +18,7 @@ import { launchContract } from './launches.js'
 import type { HookPreparationProof } from './kit/nativeHookFiles.js'
 import { nativeHookLocations, nativeProcessEnvironment, type NativeHookOptions } from './kit/nativeLocations.js'
 import { parseMajor, type NativeExecutableSnapshot } from './kit/nativeVersion.js'
-import { OPENCLAW_RUNTIME_PROBE, openclawRuntimeState } from './openclaw/contract.js'
+import { OPENCLAW_LAUNCH, OPENCLAW_RUNTIME_PROBE, openclawRuntimeState } from './openclaw/contract.js'
 import { OPENCODE_VERSION } from './opencode/contract.js'
 import { type AgentEngine, isTerminalEngine } from './types.js'
 
@@ -26,9 +26,13 @@ export interface NativeLaunchSource extends PermissionLaunchChoice {
   codexHome?: string | null
   hermesHome?: string | null
   claudeHome?: string | null
+  /** An OpenClaw run's own `--local` state folder, an absolute path; ignored by every other engine. */
+  openclawLocal?: string | null
 }
 export interface NativeLaunch {
   token?: string
+  /** The `--local` folder this OpenClaw launch runs on: its argv gets `--local`, its pane this folder as its state. */
+  readonly openclawLocal?: string
   executable?: NativeExecutableSnapshot
   opencodeMajor: number | null
   /** Set again after the pane's rc files, before the exact prepared executable. */
@@ -170,6 +174,8 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
   if (source.codexHome) selected.CODEX_HOME = source.codexHome
   if (source.claudeHome) selected.CLAUDE_CONFIG_DIR = source.claudeHome
   if (source.hermesHome) selected.HERMES_HOME = source.hermesHome
+  const openclawLocal = engine === 'openclaw' && source.openclawLocal ? source.openclawLocal : undefined
+  if (openclawLocal) selected.OPENCLAW_STATE_DIR = openclawLocal
   // Windows: a network or device path is no engine home. A creation is refused with the sentence naming the setting.
   // Only the variables this engine's homes come from count: another engine's setting is no reason to refuse this one.
   for (const [key, path] of Object.entries(selected)) {
@@ -235,13 +241,18 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
   let failed: string | null = null
   const launch: NativeLaunch = {
     token: randomUUID(), executable, opencodeMajor, current, ready: () => prepared && current(), ...(startupArgs ? { startupArgs } : {}),
+    ...(openclawLocal ? { openclawLocal } : {}),
     get environment() { return selectedEnvironment },
     get proofs() { return [...dependencies, ...proofs] },
     retain(proof) {
       if (!current() || dependencies.length >= 16 || !proof.current()) return false
       dependencies.push(proof); return true
     },
-    get clearEnvironment() { return LAUNCH_LOCATION_VARIABLES.filter(key => !(key in selectedEnvironment)) },
+    get clearEnvironment() {
+      const unset: string[] = LAUNCH_LOCATION_VARIABLES.filter(key => !(key in selectedEnvironment))
+      // A local run's config, login and sessions all come from its folder, never from the owner's own OpenClaw paths.
+      return openclawLocal ? [...unset, ...OPENCLAW_LAUNCH.localClear] : unset
+    },
     async prepareHooks(port, owner, overrides = {}, clear = []) {
       if (preparing || !executable.current() || !owner() || !dependenciesCurrent()) return false
       preparing = true; valid = false; const attemptRevision = ++revision
