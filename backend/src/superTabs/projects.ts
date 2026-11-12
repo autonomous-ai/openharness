@@ -1,3 +1,4 @@
+import { githubRepository, type GitHubRepository } from '../github/repository.js'
 import { activeWork, agent, author, conversation, fail, isLeads, leadsRemoved, nextConversationNumber, person, type Actor, type Agent, type AgentStart, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
 
 export type ProjectVisibility = 'public' | 'private'
@@ -118,9 +119,27 @@ export function groupProject(state: SuperTabState, group: Conversation): SwarmPr
   return projectOf(state, group.projectId ?? 'lead')
 }
 
-/** The repository address of the project [group] belongs to (null when it has none or the group has no project); never throws. */
-export const groupRepositoryUrl = (state: SuperTabState, group: Conversation): string | null =>
-  projectsOf(state).find(p => p.id === (group.projectId ?? 'lead'))?.repository?.repositoryUrl ?? null
+/** The address the project's GitHub repository is read by: the one its folder is cloned from, else (none, or not on GitHub) the
+ *  one its owner or PM named (commands.ts project.github), the only one a Personal Swarm's project made from a pane's folder has.
+ *  Every reader of a project's GitHub repository goes through this (comments, ships, pull request links; the daemon reads it the
+ *  same way, cli superTabs/githubMentions.ts), so such a project works as one cloned from GitHub. Never a folder to clone from:
+ *  that stays `repository.repositoryUrl`. Parses only when a name was given: pull request links are judged by it for every chat
+ *  on every command (store.ts execute). */
+export function projectGitHubUrl(project: Pick<SwarmProject, 'repository' | 'githubRepository'>): string | null {
+  const cloned = project.repository?.repositoryUrl ?? null
+  return project.githubRepository && !githubRepository(cloned) ? `https://github.com/${project.githubRepository}` : cloned
+}
+
+/** The project's GitHub repository (projectGitHubUrl), or null when it has none on GitHub. */
+export const projectGitHub = (project: Pick<SwarmProject, 'repository' | 'githubRepository'>): GitHubRepository | null =>
+  githubRepository(projectGitHubUrl(project))
+
+/** The address of the project [group] belongs to (projectGitHubUrl; null when it has none or the group has no project); never
+ *  throws. */
+export const groupRepositoryUrl = (state: SuperTabState, group: Conversation): string | null => {
+  const project = projectsOf(state).find(p => p.id === (group.projectId ?? 'lead'))
+  return project ? projectGitHubUrl(project) : null
+}
 
 /** The project a start works in: its conversation's. */
 export function startProject(state: SuperTabState, request: Pick<AgentStartRequest, 'conversationId'>): SwarmProject | undefined {
