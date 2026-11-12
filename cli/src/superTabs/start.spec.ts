@@ -158,7 +158,6 @@ describe('Swarm permission mode', () => {
     for (const flag of ['--dangerously-skip-permissions', '--dangerously-bypass-approvals-and-sandbox']) expect(argv).not.toContain(flag)
   })
 
-
   // Backend #3872: the Team-written guard went with Team accounts, and no start carries `projectSettings: 'off'`. One that does
   // starts as any other: on Codex, in the folder it names, in Auto-approve.
   it('starts work as any other whatever projectSettings a start carries', async () => {

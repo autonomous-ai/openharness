@@ -236,12 +236,11 @@ export function createAgentRestarter({
     // Keep this route through publication, and release only this operation's own reservation.
     const releaseRoute = agentReconciler.holdRoute(routeKey, null)
     try {
-      // A Swarm's PM comes back in full mode (Ken, 11-09): Restart (⌘⇧E) is how a person brings a stuck PM back, and in its
-      // owner's settings it asked before each tool and stood still until someone approved. Every other Swarm agent keeps
-      // the mode it started in, Auto-approve (superTabs/start.ts), or the one its person chose since.
-      const permitted = session.swarmSkill?.role === 'coordinator' ? { ...session, permissionMode: 'full' } : session
-      const restartPermission = await downgradedPermission(permitted,
-        await bypassPermissionFor(permitted, () => liveBypassPermission(session)), 'restart', built.overrides.native)
+      // A Swarm agent, its PM too, comes back in the mode it started in: Auto-approve (superTabs/start.ts, anh Dee 2026-11-12),
+      // as a regular tab's agent keeps its own. A PM's Restart forced full mode (Ken, 11-09) while a PM in its owner's settings
+      // asked before each tool and stood still; in Auto it does not, and full mode turned off every check (task #4215).
+      const restartPermission = await downgradedPermission(session,
+        await bypassPermissionFor(session, () => liveBypassPermission(session)), 'restart', built.overrides.native)
       if (restartPermission.nativeHold || built.overrides.native?.current() === false) return { ok: false, error: 'NATIVE_LAUNCH_HELD', detail: restartPermission.nativeHold ?? 'Waiting for fresh executable and hook evidence.' }
       const dispatchCurrent = () => current() && built.overrides.native?.current() !== false
       const outcome = await restartAgent(

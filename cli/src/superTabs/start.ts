@@ -227,7 +227,6 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
       }
       // Both direct and contributed-host starts reach this boundary. Existing
       // native receipts are read above and never have their permissions changed.
-      // Engines without a full mode retain their existing approving launch flags.
       // A Swarm role is Claude Code's or Codex's alone (core/agents/launches.ts): the engines told the team's basics at launch.
       const swarmEngine = ['claude', 'codex'].includes(String(request.engine)), reviewer = request.role === 'reviewer'
       // A start in a folder of its own ([ownFolder]) gets a permanent one, made, marked and trusted here, and removed when it stops

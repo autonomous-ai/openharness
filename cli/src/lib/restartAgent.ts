@@ -31,8 +31,9 @@ export async function bypassPermissionFor(
 ): Promise<boolean> {
   if (session.permissionMode) return permissionModeApproves(session.permissionMode)
   if (session.bypassPermission !== undefined) return session.bypassPermission
-  // A Swarm agent's mode is its person's choice, or none (task #4215). One Harness started in full mode, cleared since,
-  // still runs with that flag until it relaunches: read back, it would come back in Auto, which nobody chose.
+  // A Swarm agent's mode is the one recorded at its start (Auto-approve since 2026-11-12), or none for one started between
+  // task #4215 and then. One Harness started in full mode, cleared since, still runs with that flag until it relaunches:
+  // read back, it would come back in Auto, which nobody chose.
   if (session.swarmSkill) return false
   return probeLive()
 }
