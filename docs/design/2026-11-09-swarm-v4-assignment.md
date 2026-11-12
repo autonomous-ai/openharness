@@ -91,8 +91,18 @@ Every minute, in the PM's person's Harness, for each project its PM leads from t
   builder holds is queued on it, and one it took (`status:taken`) keeps it busy for half its size, until its pull request
   waits for its readers or its merge: then it takes none of its builder's time. An issue another team's
   label holds is left alone, as is any `builder:` label a person set. `part:` gives the task's part, `p0`-`p2` its weight
-  (8, 4, 2; 1 for none), "after #N" in its text what must end first, and each `needs:` label a tool, system or GPU its
-  builder's machine must report, else that builder never gets it.
+  (8, 4, 2; 1 for none), and each `needs:` label a tool, system or GPU its builder's machine must report, else that
+  builder never gets it.
+- **A task that comes after another** ("after #N" in its text, of an issue still open) is not planned until that one's
+  pull request is up: no draft, into the default branch, by a builder of the team. It is then that builder's alone, and
+  the line that gives it and the one typed to its agent say which branch to build it on. With that builder away
+  (stopping, down, out of quota), or two such tasks with different builders, it waits until they land; one that is closed
+  is not waited for ([the allocator's design](2026-11-11-swarm-allocator/BUILD.md), package 3; until then it was given
+  as soon as the other was taken, before that one had any code). A task a builder holds already is planned as it is.
+  Its pull request then lands after the other's: while a pull request of the team's is open for a task it comes after,
+  the merger does not land it, whichever of that one's commits it holds, and tells its builder once which it waits for
+  (`githubMerge.ts earlierPull`). Held only while it carried the other's newest commit, one built on a commit a reader
+  had held landed that commit before its fix.
 - **Builders** are the project's regular Claude Code and Codex agents as the PM reads the Swarm (`crewOf`): never the PM,
   a Buddy, one stopping, one whose machine is down, or another private project's. A builder is quicker in a part where its
   label was on closed issues: 15% a task, 40% at most.
@@ -110,7 +120,7 @@ Every minute, in the PM's person's Harness, for each project its PM leads from t
 - **Failures** are said once: a label GitHub refused (tried again next pass), a task no builder can do and why, gh signed
   out or rate limited (as the merger: `githubRest.ts`). A sized task nobody can start for a reason its PM can act on is
   said on the task, to the PM by name, once: a need no builder's machine meets ("it needs xcode, which no builder's
-  machine has"), a task larger than every machine, or "after #N" lines that wait on each other (`blockedWhy`). A wait
+  machine has"), a task larger than every machine (`blockedWhy`), or "after #N" lines that wait on each other. A wait
   that passes (busy builders, spent quota, a task it waits on) is not.
 
 ## What an agent works on (built)

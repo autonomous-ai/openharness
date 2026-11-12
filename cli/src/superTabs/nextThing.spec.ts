@@ -101,6 +101,37 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     f.next.stop()
   })
 
+  // The allocator's design, package 3: a task that comes after one whose pull request is up is built on that branch, and both
+  // the line that gives it and this one say so.
+  it('types the branch to build its next task on, when the task comes after ones whose pull requests of its are up', async () => {
+    const after = (number: number, title: string, text: string): Json => ({ ...item(number, title), body: text })
+    const f = setup({ items: [item(12, 'Fix the login bug', ['status:taken']), item(30, 'Fix the login bug', [], true), after(14, 'Add the export', 'After #12, and after #9.')] })
+    f.state.pulls[30] = { body: 'Closes #12', head: { sha: HEAD, ref: 'pip/12' } }
+    f.next.start()
+    await f.end()
+    expect(f.told()).toEqual(['Next: acme/app#14 Add the export. It is given to you and nobody has taken it. Build it on the branch of #30 (`pip/12`); '
+      + `its pull request still goes into the default branch: ${TAKE} acme/app#14`])
+    // Nothing more is read for it than its own pull requests, read for its own work already.
+    expect(f.calls.filter(path => path === '/repos/acme/app/pulls/30')).toHaveLength(1)
+    // A draft is no branch to build on yet, nor a pull request for another task: the line is the plain one.
+    for (const [number, pull] of [[31, { draft: true, body: 'Closes #12' }], [32, { body: 'Closes #13' }]] as Array<[number, Json]>) {
+      const g = setup({ items: [item(number, 'A pull request', [], true), after(14, 'Add the export', 'After #12.')] })
+      g.state.pulls[number] = pull
+      g.next.start()
+      await g.end()
+      expect(g.told(), String(number)).toEqual([`Next: acme/app#14 Add the export. It is given to you and nobody has taken it: ${TAKE} acme/app#14`])
+      g.next.stop()
+    }
+    // A pull request GitHub gives no branch for is named by its number alone.
+    const bare = setup({ items: [item(30, 'Fix the login bug', [], true), after(14, 'Add the export', 'After #12.')] })
+    bare.state.pulls[30] = { body: 'Closes #12', head: { sha: HEAD } }
+    bare.next.start()
+    await bare.end()
+    expect(bare.told()).toEqual([`Next: acme/app#14 Add the export. It is given to you and nobody has taken it. Build it on the branch of #30; its pull request still goes into the default branch: ${TAKE} acme/app#14`])
+    bare.next.stop()
+    f.next.stop()
+  })
+
   it('types nothing while it holds a task it took with no pull request yet: its own work comes first', async () => {
     const f = setup({ items: [item(12, 'Fix the login bug', ['status:taken']), item(14, 'Add the export')] })
     f.next.start()

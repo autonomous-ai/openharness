@@ -247,6 +247,7 @@ class _SuperTabViewState extends State<SuperTabView>
         controller.tabId,
         row.machineId,
         row.agent,
+        name: row.name,
       );
       if (!mounted || c != controller) return;
       // The join opened its chat: what holds the middle steps aside for it.

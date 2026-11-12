@@ -10,6 +10,7 @@ import 'package:harness/state/swarm.dart';
 import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/super_tabs/quiet_rows.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/agent_names.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/model.dart' show stableId;
 import 'package:harness/super_tabs/new_agent.dart';
@@ -172,6 +173,7 @@ void main() {
     List<String> people = const ['owner'],
     void Function(SuperTabLaunchFixture f)? desk,
     List<(String, String, String)> joined = const [('m', 'joined', 'Atlas')],
+    List<Map<String, Object>> removed = const [],
     Size size = const Size(1440, 900),
     Brightness brightness = Brightness.light,
     SuperTabFixtureConnection Function(MemoryStore)? connection,
@@ -188,6 +190,9 @@ void main() {
             'id': person,
             'email': '$person@example.com',
             'role': person == 'owner' ? 'owner' : 'collaborator',
+            // The sessions the reader took out, on their own entry alone.
+            if (person == 'owner' && removed.isNotEmpty)
+              'removedPanes': removed,
           },
       ]
       ..['agents'] = <Map<String, dynamic>>[
@@ -309,6 +314,7 @@ void main() {
     List<String> people = const ['owner'],
     void Function(SuperTabLaunchFixture f)? desk,
     List<(String, String, String)> joined = const [('m', 'joined', 'Atlas')],
+    List<Map<String, Object>> removed = const [],
     Size size = const Size(1440, 900),
     SuperTabFixtureConnection Function(MemoryStore)? connection,
   }) => testWidgets(description, (tester) async {
@@ -319,6 +325,7 @@ void main() {
       people: people,
       desk: desk,
       joined: joined,
+      removed: removed,
       size: size,
       connection: connection,
     );
@@ -441,6 +448,131 @@ void main() {
     expect(c.selectedId, join['conversationId']);
   });
 
+  scene(
+    'the name a row shows is the name it joins under: its folder, or one of the '
+    "Swarm's when it has none or the Swarm has it already",
+    (tester, f, c) async {
+      String shown(String row) =>
+          tester.widget<SuperTabQuietRow>(key(row)).name;
+      expect(shown('super-pane-m-u'), 'api');
+      // Untitled, and named as an agent already in the Swarm: neither keeps that name, each shows the one it gets.
+      for (final row in ['super-pane-m-v', 'super-pane-m-x']) {
+        expect(shown(row), isNot(anyOf('Untitled Pane', 'Atlas')));
+      }
+      for (final row in ['super-pane-m-y', 'super-pane-m-z']) {
+        expect(agentNames, contains(shown(row)), reason: row);
+      }
+      expect({for (final r in names()) r.toLowerCase()}, hasLength(5));
+      // The same on every draw, and an untitled row's stays as others join.
+      final before = names();
+      final untitled = shown('super-pane-m-v');
+      await changed(tester, f);
+      expect(names(), before);
+      for (final (row, harness) in [
+        ('super-pane-m-u', 'u'),
+        ('super-pane-m-v', 'v'),
+        ('super-pane-m-x', 'x'),
+        ('super-pane-m-y', 'y'),
+      ]) {
+        final name = shown(row);
+        await tester.tap(key(row));
+        await joined(tester);
+        final join = f.connection.joins.last['command'] as Map;
+        expect(join, containsPair('harnessId', harness));
+        expect(join, containsPair('name', name), reason: row);
+        // Its chat was asked for under that name, for that very session.
+        final chat =
+            f.connection.server.posts.lastWhere(
+                  (p) => (p['command'] as Map?)?['type'] == 'agent.new',
+                )['command']
+                as Map;
+        expect(chat, containsPair('name', name));
+        expect(chat, containsPair('harnessId', harness));
+        // The fake Swarm keeps one fixed agent id: it forgets this one before the next join.
+        (f.connection.server.state['agents'] as List).removeWhere(
+          (a) => a['id'] == 'lead-agent',
+        );
+        await c.refresh();
+        await changed(tester, f);
+        if (harness == 'u') expect(shown('super-pane-m-v'), untitled);
+      }
+    },
+    desk: (f) {
+      f.app.machineStates['m']!.agents = [
+        session(
+          'u',
+          'harness-8',
+          chosen: false,
+          project: const AgentProject(name: 'api', cwd: '/w/api'),
+        ),
+        session('v', 'harness-9', chosen: false),
+        session('x', 'Atlas'),
+        // Names the Swarm refuses for an agent: one over 60 characters, an engine's.
+        session(
+          'y',
+          'A name far longer than the sixty characters a Swarm keeps for one',
+        ),
+        session('z', 'Claude Code'),
+      ];
+      deskTab(f.app, 'one', [
+        for (final id in ['u', 'v', 'x', 'y', 'z']) pane('m', id),
+      ]);
+    },
+  );
+
+  scene(
+    'Your Team is one list from A to Z, folded by the rule every Swarm has: a pane '
+    'is ranked as its agents are, never put last',
+    (tester, f, c) async {
+      // Ten agents and a pane: eight show, and "Able" is first, by its name.
+      expect(find.text('3 more'), findsOneWidget);
+      expect(key('super-pane-m-able'), findsOneWidget);
+      final rows = find.byWidgetPredicate(
+        (w) =>
+            w is SuperTabQuietRow &&
+            w.key is ValueKey<String> &&
+            ((w.key! as ValueKey<String>).value.startsWith('super-pane-') ||
+                (w.key! as ValueKey<String>).value.startsWith('super-agent-')),
+      );
+      final order = [
+        for (final row in rows.evaluate())
+          (row.widget as SuperTabQuietRow).name,
+      ];
+      expect(order.first, 'Able');
+      expect(order, [...order]..sort());
+    },
+    joined: [
+      for (final name in [
+        'Bea',
+        'Cal',
+        'Dov',
+        'Eli',
+        'Fox',
+        'Gus',
+        'Hal',
+        'Ida',
+        'Jon',
+        'Kit',
+      ])
+        ('m', 'h$name', name),
+    ],
+    desk: (f) {
+      f.app.machineStates['m']!.agents = [session('able', 'Able')];
+      deskTab(f.app, 'one', [pane('m', 'able')]);
+    },
+  );
+
+  scene(
+    'a pane the person took out of the Swarm has no row, on any of their computers',
+    (tester, f, c) async {
+      expect(key('super-pane-m-docs'), findsNothing);
+      expect(key('super-pane-laptop-notes'), findsOneWidget);
+    },
+    removed: const [
+      {'machineId': 'm', 'harnessId': 'docs', 'removedAt': 1},
+    ],
+  );
+
   group('trying to break it', () {
     scene(
       'a desk with no panes lists no rows, and nothing else moves',
@@ -499,21 +631,26 @@ void main() {
     );
 
     scene(
-      'one session name on three computers: three rows, told apart by their '
-      'computers, each joining from its own',
+      'one session name on three computers: three rows, one keeps the name and '
+      "the others show the Swarm's names they join under, each from its own computer",
       (tester, f, c) async {
         expect(paneRows(), findsNWidgets(3));
+        expect(names().where((n) => n == 'Docs bot'), hasLength(1));
+        expect(names().toSet(), hasLength(3));
         for (final (row, place, machine) in [
           ('super-pane-laptop-a1', 'Mac laptop', 'laptop'),
           ('super-pane-studio-a1', 'Mac Studio', 'studio'),
         ]) {
-          expect(inRow(row, find.text('Docs bot')), findsOneWidget);
+          final name = tester.widget<SuperTabQuietRow>(key(row)).name;
           expect(inRow(row, find.text(place)), findsOneWidget);
           await tester.tap(key(row));
           await joined(tester);
           expect(
             f.connection.joins.last['command'],
-            containsPair('machineId', machine),
+            allOf(
+              containsPair('machineId', machine),
+              containsPair('name', name),
+            ),
           );
           // The fake Swarm keeps one fixed agent id: it forgets this one before the next join.
           (f.connection.server.state['agents'] as List).removeWhere(
@@ -553,14 +690,14 @@ void main() {
         );
         // The computer is still there at the row's right edge.
         expect(inRow('super-pane-m-l', find.text('Test host')), findsOneWidget);
-        // A session still under its automatic name is called what it is working on, else Untitled.
+        // A session still under its automatic name is called what it is working on, else the Swarm's name it joins under.
         expect(
           inRow('super-pane-m-t', find.text('Fix the login page')),
           findsOneWidget,
         );
         expect(
-          inRow('super-pane-m-v', find.text('Untitled Pane')),
-          findsOneWidget,
+          agentNames,
+          contains(tester.widget<SuperTabQuietRow>(key('super-pane-m-v')).name),
         );
         // One that is still untitled and works in a folder reads as that folder.
         expect(inRow('super-pane-m-u', find.text('api')), findsOneWidget);
@@ -571,7 +708,7 @@ void main() {
           session('e', '🚀 Ship the release 🎉'),
           session(
             'l',
-            'A session named with far too many words to fit in the left pane of any window at all',
+            'A session named with far too many words to fit a left pane',
           ),
           session('t', 'harness-7', title: 'Fix the login page', chosen: false),
           session(
@@ -693,14 +830,16 @@ void main() {
     },
   );
 
-  scene('a Swarm with other people in it lists no panes of theirs', (
-    tester,
-    f,
-    c,
-  ) async {
-    expect(find.text('Your Team'), findsOneWidget);
-    expect(paneRows(), findsNothing);
-  }, people: const ['owner', 'kim']);
+  // anh Dee, 2026-11-11: the person invites people to their Personal Swarm, and it stays theirs.
+  scene(
+    'their Personal Swarm with someone they invited still lists their own panes, and never the guest\'s',
+    (tester, f, c) async {
+      expect(find.text('Your Team'), findsOneWidget);
+      expect(paneRows(), findsNWidgets(2));
+      expect(key('super-pane-guest-theirs'), findsNothing);
+    },
+    people: const ['owner', 'kim'],
+  );
 
   scene(
     'a Swarm that is not their Personal one lists no panes either',

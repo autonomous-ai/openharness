@@ -143,6 +143,18 @@ builder may raise conflicts: the scoreboard says.
 
 ### 3. A task waits for what it depends on
 
+**Built** (#4121): in `cli/src/superTabs/assign/crew.ts` (`readProblem`: `up`, `bases`, `looped`; `builtOn`),
+`githubAssign.ts` (`askReaders`, the line that gives a task), `nextThing.ts` (the "Next:" line) and `githubMerge.ts`
+(`earlierPull`). *It also waits while that builder holds four or lacks what the task needs. A task a builder holds
+already is planned as before. Tasks whose "after" lines wait on each other are named to their PM. The merger gained a
+rule: a pull request does not land while another open one of the team's is for a task its own task comes after. Built
+on #B at one head, then #B held by a reader and fixed with a push, the second carried #B's earlier commits alone,
+`carriedPull` found nothing, and the held code would have landed through it. The `stacked` note says which pull request
+it waits for and no more: it said "then update it from main", and on GitHub a builder did, for a stack of three: three
+pushes and runs of the checks, a note and a read more. The trial: by a merge commit the second landed with nothing done
+by anyone; a squash under a stack merged clean. Package 4 is stopped (GitHub answers `behind` before `blocked`), so
+where the base requires up-to-date branches the second is still told to update once it is behind.*
+
 **Why.** A task that says "after #B" is given as soon as #B is taken, before #B has any code.
 
 **Today.** `assign/crew.ts`: `dependsOn(body)`; in `readProblem` a dependency this plan does not hold (a taken task)

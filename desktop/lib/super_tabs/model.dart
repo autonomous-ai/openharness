@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:cryptography/dart.dart' show DartSha256;
 
+import '../core/models.dart' show machineIdKey;
 import 'identity.dart' show superTabPersonName;
 import 'profile_model.dart';
 
@@ -59,6 +60,15 @@ class SuperTabPerson {
         final String name when name.trim().isNotEmpty => name,
         _ => null,
       },
+      removedPanes = Set.unmodifiable({
+        if (row['removedPanes'] case final List panes)
+          for (final pane in panes)
+            if (pane case {
+              'machineId': final String machine,
+              'harnessId': final String harness,
+            })
+              (machineIdKey(machine), harness),
+      }),
       username =
           row['username'] as String? ??
           superTabDefaultUsername(_text(row, 'email'));
@@ -70,8 +80,13 @@ class SuperTabPerson {
       joinedVia = person.joinedVia,
       avatar = person.avatar,
       chosenUsername = person.chosenUsername,
+      removedPanes = person.removedPanes,
       name = person.name;
   final String id, email, role;
+
+  /// The sessions this person took out of the Swarm, by machine ([machineIdKey]) and session (backend `removedPanes`): sent
+  /// only on the reader's own entry. Empty from an older backend.
+  final Set<(String, String)> removedPanes;
 
   /// How the Swarm shows and tags them, as the server sends it, worked out in
   /// its join order. From an older server, their default
@@ -612,6 +627,13 @@ class SuperTabSnapshot {
   /// leaves them out (backend model.ts removedMachines). Empty from an older
   /// backend.
   final List<String> removedMachines;
+
+  /// The reader's own sessions they took out of this Swarm, by machine ([machineIdKey]) and session: Your Team leaves them
+  /// out, and only the person's own Attach brings one back. Their own member entry alone carries them
+  /// ([SuperTabPerson.removedPanes]).
+  late final Set<(String, String)> removedPanes = Set.unmodifiable({
+    for (final person in people) ...person.removedPanes,
+  });
 
   /// People at the owner's email domain are added automatically (head
   /// `autoJoin`, every member reads it): someone who leaves is not added back.

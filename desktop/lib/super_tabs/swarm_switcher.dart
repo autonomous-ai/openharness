@@ -101,9 +101,16 @@ class PersonalSwarm extends ChangeNotifier {
     if (_lost[_account]?.remove(id) ?? false) notifyListeners();
   }
 
-  /// A Swarm the person owns named Personal, of those they belong to, with
-  /// no one else in it when it has been read.
+  /// The Swarm the server's list says is their Personal one, whoever they
+  /// invited there; else, from an older server, a Swarm they own named
+  /// Personal with no one else in it when it has been read: a guess for a
+  /// computer that has not picked Personal yet, so a team Swarm they named
+  /// Personal is never taken for it.
   String? _owned(String account) {
+    if (app.superTabs.listedPersonal case final listed?
+        when _usable(listed) && app.superTabs.ownerOf(listed) == account) {
+      return listed;
+    }
     final ids = <String>[
       for (final tab in app.swarms) ?tab.superTabId,
       for (final closed in app.closedSuperTabs) closed.id,
