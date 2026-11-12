@@ -13,7 +13,8 @@
 //     normalizers, turn lifecycle, chips and attach read are exercised for real.
 //
 // A prompt can carry directives that script the turn: `!slow <ms>` holds the answer back,
-// `!tool <command>` runs a tool call first, `!commentary <text>` (Codex) says what it is about to do in a message of its own first,
+// `!tool <command>` runs a tool call first, `!background <command>` (Claude Code) starts the command in the background as
+// its Bash tool's `run_in_background` does, as the engine's own direct child, and ends the turn while it runs, `!commentary <text>` (Codex) says what it is about to do in a message of its own first,
 // `!grow <MiB>` appends that much compaction history
 // before answering (the transcripts that crashed the daemon on 2026-10-03), `!hold` leaves the turn
 // open until the next prompt, `!holdtool <command>` leaves it open with that tool still running (an
@@ -40,7 +41,8 @@
 // the config) takes the prompt off the composer and holds its turn's start, the prompt hook and the record,
 // until the test's release file exists, as a CLI does whose hooks or first record are slow, `!latestop` (Claude
 // Code) has its Stop and the next prompt's hook reach the daemon only after that prompt's turn is on disk (see
-// `lateStop`), `!exit` ends the process.
+// `lateStop`), `!exit` ends the process. A task `harness new` started it with is read for its directive below the line
+// it puts before the task (`[from …, the harness that started you. …]`), as an agent acts on its task, not on that line.
 // Everything else is echoed as the answer. Codex's `/model` is not a prompt: it opens 0.160's model
 // picker over the `models_cache.json` in its CODEX_HOME, and a choice in it is applied to the turns
 // that follow (see `openModelPicker`).
@@ -1344,7 +1346,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
       codex('event_msg', { type: 'item_completed', turn_id: open, item: { type: 'UserMessage', id: open, content: [{ type: 'text', text: prompt, text_elements: [] }] } })
       codex('response_item', { type: 'reasoning', summary: [{ type: 'summary_text', text: `considering: ${prompt}` }] })
     }
-    const directive = /^!(\w+)\s*(.*)$/.exec(prompt)
+    const directive = /^!(\w+)\s*(.*)$/.exec(prompt.replace(START_HEADER, ''))
     if (directive?.[1] === 'grow' || directive?.[1] === 'burst') {
       // `grow` writes the way Codex compacts — a snapshot at a time, with the engine still working in
       // between — so a live tail sees a few MiB per read. `burst` writes it all at once.
@@ -1374,6 +1376,27 @@ export async function run(engine, config = {}, { native = false } = {}) {
       claude({ type: 'assistant', message: { id: `msg_${turn}_n`, role: 'assistant', model: claudeModel, content: [{ type: 'tool_use', id, name: 'Bash', input: { command: directive[2] } }], stop_reason: 'tool_use' } })
       claude({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: `ran ${directive[2]}` }] } })
       await finish(`answer ${turn}: ${prompt}`, true)
+      return
+    }
+    if (engine === 'claude' && directive?.[1] === 'background') {
+      // Claude Code 2.1.322's Bash tool with `run_in_background` (recorded 2026-11-12, docs/plans/2026-11-12-background-count-plan.md):
+      // the command runs in a shell that is the engine's direct child and that the trailing `pwd` keeps alive while it
+      // runs, and the turn ends without waiting for it.
+      const command = directive[2]
+      const id = `toolu_${turn}_sh`
+      claude({ type: 'assistant', message: { id: `msg_${turn}_sh`, role: 'assistant', model: claudeModel, content: [{ type: 'tool_use', id, name: 'Bash', input: { command, run_in_background: true } }], stop_reason: 'tool_use' } })
+      claude({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: `Command running in background with ID: bg_${turn}` }] } })
+      const home = claudeHome ?? join(homedir(), '.claude')
+      const quoted = (text) => `'${text.replaceAll("'", "'\\''")}'`
+      const tag = randomUUID().replaceAll('-', '')
+      const snapshot = join(home, 'shell-snapshots', `snapshot-sh-${Date.now()}-${tag.slice(0, 6)}.sh`)
+      const cwdFile = join(home, `claude-${tag.slice(6, 10)}-cwd`)
+      // Claude Code writes its snapshot before it sources it; a `source` of a missing file ends a POSIX `sh` (macOS's
+      // bash as sh) at once, so the command would never run.
+      mkdirSync(dirname(snapshot), { recursive: true })
+      writeFileSync(snapshot, '')
+      spawn('/bin/sh', ['-c', `source ${quoted(snapshot)} 2>/dev/null || true && eval ${quoted(command)} < /dev/null && pwd -P >| ${quoted(cwdFile)}`], { stdio: 'ignore' })
+      await finish(`started in the background: ${command}`)
       return
     }
     // Codex says what it is about to do in a message of its own, its commentary, ahead of the answer, and its transcript reader leaves
@@ -1884,6 +1907,9 @@ export async function run(engine, config = {}, { native = false } = {}) {
   process.on('SIGTERM', () => process.exit(0))
   setInterval(() => {}, 60_000)
 }
+
+/** The line `harness new` puts before an agent's task (agentClient/commands.ts `startHeader`). */
+const START_HEADER = /^\[from [^\]\n]*, the harness that started you\. It reads your answer itself\.\]\n\n/
 
 /** The options both CLIs read a value after, and Codex's `resume <id>` and `fork <id>`: the word after one is not a
  *  prompt. `--settings <file-or-json>` carries the pull request line of a harness another agent started
