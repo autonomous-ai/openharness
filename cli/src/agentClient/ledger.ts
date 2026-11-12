@@ -22,10 +22,14 @@ import { dirname, join } from 'node:path'
 import { lockOwnerAlive, lockStartMarker, processLockIdentity, type LockGeneration } from '../lib/processLiveness.js'
 
 export interface LedgerMember { machineId: string; agentId: string }
+/** A starter: the harness that ran `harness new`, its name and engine, and whether it is the Hachi harness
+ *  (docs/design/2026-11-12-hachi.md), which the machine a harness runs on reads to let Hachi tell it while the account
+ *  has Hachi on (messages/tell.ts), and to hand it to the person when Hachi closes (services/agentCleanup.ts). */
+export type Starter = LedgerMember & { name: string; engine: string; hachi?: true }
 export interface Started {
   at: number
   /** The harness that ran `harness new`. */
-  by: LedgerMember & { name: string; engine: string }
+  by: Starter
   /** The harness it started, and the creation it was asked for by when that was saved first (`Pending`). */
   child: LedgerMember & { name: string; creationId?: string }
   /** 1 for a harness a person's harness started, 2 for one that harness started. */
@@ -35,7 +39,7 @@ export interface Started {
 /** A harness asked for that has not started yet: its creation on [creation.machineId], and the name it was given. */
 export interface Pending {
   at: number
-  by: LedgerMember & { name: string; engine: string }
+  by: Starter
   creation: { machineId: string; creationId: string; name: string; engine: string }
   depth: number
 }
@@ -116,6 +120,9 @@ const member = (v: unknown): v is LedgerMember => {
   return !!m && typeof m.machineId === 'string' && !!m.machineId && typeof m.agentId === 'string' && !!m.agentId
 }
 
+const starter = (by: Record<string, unknown>): Starter => ({ machineId: by.machineId as string, agentId: by.agentId as string,
+  name: String(by.name ?? ''), engine: String(by.engine ?? ''), ...(by.hachi === true ? { hachi: true as const } : {}) })
+
 export function parseStarted(line: string): Started | null {
   let v: Record<string, unknown>
   try { v = JSON.parse(line) } catch { return null }
@@ -124,7 +131,7 @@ export function parseStarted(line: string): Started | null {
   const by = v.by as unknown as Record<string, unknown>, child = v.child as unknown as Record<string, unknown>
   return {
     at: v.at,
-    by: { machineId: by.machineId as string, agentId: by.agentId as string, name: String(by.name ?? ''), engine: String(by.engine ?? '') },
+    by: starter(by),
     child: { machineId: child.machineId as string, agentId: child.agentId as string, name: String(child.name ?? ''),
       ...(typeof child.creationId === 'string' && child.creationId ? { creationId: child.creationId } : {}) },
     depth: v.depth,
@@ -140,7 +147,7 @@ export function parsePending(line: string): Pending | null {
   const by = v.by as unknown as Record<string, unknown>
   return {
     at: v.at,
-    by: { machineId: by.machineId as string, agentId: by.agentId as string, name: String(by.name ?? ''), engine: String(by.engine ?? '') },
+    by: starter(by),
     creation: { machineId: creation.machineId, creationId: creation.creationId, name: String(creation.name ?? ''), engine: String(creation.engine ?? '') },
     depth: v.depth,
   }

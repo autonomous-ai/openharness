@@ -233,6 +233,8 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
   /** Whether a harness's starter may tell it more work (`agents-tell-agents`): read at each use, as few as they are, so
    *  a switch turned off stops what still waits at the mailbox's next look. */
   const tellOn = (): boolean => readAgentSettings(options.dataDir ?? core.dataDir).agentsTellAgents
+  /** Whether the account has Hachi on, which lets the Hachi harness tell the harnesses it started: read as `tellOn`. */
+  const hachiOn = (): boolean => readAgentSettings(options.dataDir ?? core.dataDir).hachi
   /** Whether a program acting for the person may reply to a harness here (`programs-reply`): read at each use, as `tellOn`. */
   const replyOn = (): boolean => readAgentSettings(options.dataDir ?? core.dataDir).programsReply
 
@@ -330,7 +332,7 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
     // records it, are looked at again at each look: turned off meanwhile, it is refused at once. Whether the harness
     // runs was asked as it was told; a harness away for a moment (a restart) waits as a teammate's message does.
     if (entry.message.tabId === TOLD_TAB) {
-      const refusal = tellRefusal({ on: tellOn(), lineage, self: self(), live: () => true }, entry.message.from, delivery.agentId)
+      const refusal = tellRefusal({ on: tellOn(), hachi: hachiOn(), lineage, self: self(), live: () => true }, entry.message.from, delivery.agentId)
       return refusal ? { refused: refusal.message } : null
     }
 
@@ -644,7 +646,7 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
     if (!agentId) throw new MessageError('USAGE', 'Name the harness to tell.')
     if (!text.trim()) throw new MessageError('USAGE', 'Say what to do: harness tell <name> -- <work>')
     if (text.length > LIMITS.text) throw new MessageError('TOO_LONG', `A message holds at most ${LIMITS.text} characters.`)
-    const refusal = tellRefusal({ on: tellOn(), lineage, self: self(), live: (id) => !!localAgent(id) }, from, agentId)
+    const refusal = tellRefusal({ on: tellOn(), hachi: hachiOn(), lineage, self: self(), live: (id) => !!localAgent(id) }, from, agentId)
     if (refusal) throw new MessageError(refusal.code, refusal.message)
     const key = `${from.machineId}/${from.agentId}`
     const times = (toldAt.get(key) ?? []).filter((t) => now() - t < LIMITS.window)

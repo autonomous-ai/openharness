@@ -10,6 +10,7 @@ import { agentSettingsPath } from '../lib/agentSettings.js'
 import { LEAD_PROTECTED_DETAIL } from '../lib/closeAgentService.js'
 import { setAgentSettingsForTest, signedOutForTest, TEST_ACCOUNT } from '../testing/agentSettings.js'
 import type { Frame } from './model.js'
+import { HACHI_ID } from '../dsh/builtinIds.js'
 
 const NOW = Date.parse('2026-10-11T12:00:00Z')
 
@@ -1078,6 +1079,28 @@ describe('harness new, run by an agent', () => {
     await expect((await agentOrigin(harness(d).deps))!.check()).rejects.toThrow(AGENTS_START_AGENTS_OFF)
   })
 
+  it('lets the Hachi harness start harnesses while the account has Hachi on, and no other agent; records the start as Hachi\'s', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('hachi', { engine: 'claude', dsh: HACHI_ID }), frame('lead', { engine: 'claude' })]
+    setAgentSettingsForTest(dir, { agentsStartAgents: false, hachi: true })
+    const hachi = (await agentOrigin(harness(d, { pane: '%hachi' }).deps))!
+    await expect(hachi.check()).resolves.toBeUndefined()
+    expect(hachi.hachi).toBe(true)
+    // Its starts say so in the ledger: the machine a harness runs on reads it for `harness tell` and the hand-over.
+    hachi.pending!('m', { creationId: 'c1', name: 'api-fix', engine: 'codex' })
+    await hachi.created('m', { id: 'kid', name: 'api-fix' }, 'c1')
+    const ledger = new Ledger(ledgerPath(dir))
+    expect(ledger.parentOf({ machineId: 'm', agentId: 'kid' })?.by).toEqual({ machineId: 'm', agentId: 'hachi', name: 'hachi', engine: 'claude', hachi: true })
+    expect(ledger.pendingOf({ machineId: 'm', agentId: 'hachi' }, NOW)).toEqual([])
+    // Turning Hachi on is the person's yes to Hachi alone: any other agent still needs agents-start-agents.
+    const lead = (await agentOrigin(harness(d).deps))!
+    await expect(lead.check()).rejects.toMatchObject({ code: 'TURNED_OFF' })
+    expect(lead).not.toHaveProperty('hachi')
+    // Hachi off: Hachi is an agent like any other.
+    setAgentSettingsForTest(dir, { agentsStartAgents: false, hachi: false })
+    await expect((await agentOrigin(harness(d, { pane: '%hachi' }).deps))!.check()).rejects.toMatchObject({ code: 'TURNED_OFF' })
+  })
+
   it('names its own harness as the one that started the new one; an agent outside Harness names none', async () => {
     const d = new FakeDaemon()
     d.frames = [frame('lead', { engine: 'claude' })]
@@ -2011,6 +2034,23 @@ describe('harness tell', () => {
       + 'Next: harness wait kid  (until it has answered; then read it: harness show kid)')
     expect(h.ledger.toldBy({ machineId: 'm', agentId: 'lead' }, { machineId: 'm', agentId: 'kid' })).toEqual({
       at: NOW, by: { machineId: 'm', agentId: 'lead' }, told: { machineId: 'm', agentId: 'kid' }, probe: 'Now add tests.' })
+  })
+
+  it('lets the Hachi harness tell what it started while the account has Hachi on, and no other agent', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('hachi', { engine: 'claude', dsh: HACHI_ID }), frame('lead', { engine: 'claude' }), frame('kid'), frame('other')]
+    const r = told()
+    started(new Ledger(ledgerPath(dir)), 'hachi', 'kid')
+    started(new Ledger(ledgerPath(dir)), 'lead', 'other')
+    setAgentSettingsForTest(dir, { agentsTellAgents: false, hachi: true })
+    expect(await tellCommand(['kid', '--', 'Add a test.'], harness(d, { record: r.record, pane: '%hachi' }).deps)).toBe(EXIT.ok)
+    expect(r.calls).toEqual([['m', { action: 'tell', pane: '%hachi', machine: 'studio', agentId: 'kid', text: 'Add a test.' }]])
+    const lead = harness(d, { record: r.record })
+    expect(await tellCommand(['other', '--', 'x'], lead.deps)).toBe(EXIT.refused)
+    expect(lead.err.join('\n')).toContain('agents-tell-agents')
+    setAgentSettingsForTest(dir, { agentsTellAgents: false, hachi: false })
+    expect(await tellCommand(['kid', '--', 'x'], harness(d, { record: r.record, pane: '%hachi' }).deps)).toBe(EXIT.refused)
+    expect(r.calls).toHaveLength(1)
   })
 
   it('on another machine, says who tells it: that machine checks its own record', async () => {

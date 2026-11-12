@@ -586,6 +586,23 @@ describe('harness tell: more work from the harness that started it', () => {
     expect(t.delivered).toEqual([])
   })
 
+  it('lets Hachi tell what it started while the account has Hachi on, from here or another machine, and no other starter', async () => {
+    const t = setup({ tabs: [] })
+    const ledger = new Ledger(ledgerPath(root))
+    ledger.append({ at: 1, depth: 1, by: { machineId: 'm1', agentId: 'lead', name: 'Hachi', engine: 'claude', hachi: true }, child: { machineId: 'm1', agentId: 'web', name: 'web' } })
+    ledger.append({ at: 1, depth: 1, by: { machineId: 'm2', agentId: 'phone', name: 'Hachi', engine: 'claude', hachi: true }, child: { machineId: 'm1', agentId: 'api', name: 'api' } })
+    start('lead', 'gone')
+    t.setting(false)
+    setAgentSettingsForTest(root, { agentsTellAgents: false, hachi: true })
+    expect(await t.ask({ action: 'tell', pane: '%1', agentId: 'web', text: 'Add a test.' })).toMatchObject({ state: 'queued' })
+    expect(await t.ask({ action: 'tell', from: { machineId: 'm2', agentId: 'phone' }, machine: 'laptop', agentId: 'api', text: 'More.' }, OWNER_REMOTE)).toMatchObject({ state: 'queued' })
+    // A start of the same harness's that was not Hachi's: agents-tell-agents still decides it.
+    expect(await t.ask({ action: 'tell', pane: '%1', agentId: 'gone', text: 'x' })).toMatchObject({ error: 'TELL_OFF' })
+    setAgentSettingsForTest(root, { agentsTellAgents: false, hachi: false })
+    expect(await t.ask({ action: 'tell', pane: '%1', agentId: 'web', text: 'x' })).toMatchObject({ error: 'TELL_OFF' })
+    expect(t.delivered).toHaveLength(2)
+  })
+
   it('from another of the owner\'s machines, is checked against this machine\'s own record of who started it', async () => {
     const t = setup({ tabs: [] })
     start('phone', 'web', 'm2', 'claude')
