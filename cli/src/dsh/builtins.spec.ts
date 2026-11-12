@@ -3,8 +3,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, wri
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
-import { ensureBundledCoreHarnesses, ensureBundledDevices, ensureBundledHarnessMonitor, ensureBundledMemories, ensureBundledModelManager,
-  DEVICES_HARNESS_ID, HARNESS_MONITOR_ID, HARNESS_MONITOR_BUILTIN_SOURCE, MEMORIES_BUILTIN_SOURCE, MEMORIES_ID, MODEL_MANAGER_ID, type BundledFiles } from './builtins.js'
+import { ensureBundledCoreHarnesses, ensureBundledDevices, ensureBundledHachi, ensureBundledHarnessMonitor, ensureBundledMemories, ensureBundledModelManager,
+  DEVICES_HARNESS_ID, HACHI_BUILTIN_SOURCE, HACHI_ID, HARNESS_MONITOR_ID, HARNESS_MONITOR_BUILTIN_SOURCE, isHiddenBuiltin, MEMORIES_BUILTIN_SOURCE, MEMORIES_ID,
+  MODEL_MANAGER_ID, type BundledFiles } from './builtins.js'
 import { dshListRows } from './wire.js'
 import { installedDsh, invalidateInstalledDsh, readInstalledIndex, upsertInstalledRecord } from './installed.js'
 import { lockDsh } from './lock.js'
@@ -167,12 +168,12 @@ it('refreshes every bundled core tool together and leaves ordinary Store apps al
   vi.stubGlobal('__DEVICES_BUNDLE__', JSON.stringify(coreFiles(DEVICES_HARNESS_ID)))
   vi.stubGlobal('__HARNESS_MONITOR_BUNDLE__', JSON.stringify(coreFiles(HARNESS_MONITOR_ID)))
   vi.stubGlobal('__MEMORIES_BUNDLE__', JSON.stringify(coreFiles(MEMORIES_ID)))
-  expect(ensureBundledCoreHarnesses()).toBe(true)
+  expect(ensureBundledCoreHarnesses({ hachi: false })).toBe(true)
   expect(installedDsh(MEMORIES_ID)!.source).toBe(MEMORIES_BUILTIN_SOURCE)
   const oldDevices = installedDsh(DEVICES_HARNESS_ID)!, oldMonitor = installedDsh(HARNESS_MONITOR_ID)!
   vi.stubGlobal('__DEVICES_BUNDLE__', JSON.stringify(coreFiles(DEVICES_HARNESS_ID, 'next release')))
   vi.stubGlobal('__HARNESS_MONITOR_BUNDLE__', JSON.stringify(coreFiles(HARNESS_MONITOR_ID, 'next release')))
-  expect(ensureBundledCoreHarnesses()).toBe(true)
+  expect(ensureBundledCoreHarnesses({ hachi: false })).toBe(true)
   expect(installedDsh(DEVICES_HARNESS_ID)!.dir).not.toBe(oldDevices.dir)
   expect(installedDsh(HARNESS_MONITOR_ID)!.dir).not.toBe(oldMonitor.dir)
   expect(existsSync(oldDevices.dir)).toBe(true)
@@ -180,17 +181,17 @@ it('refreshes every bundled core tool together and leaves ordinary Store apps al
   expect(readInstalledIndex().find(row => row.id === blender.id)).toEqual(blender)
   // A CLI rollback restores its corresponding core revision without touching the retained one.
   vi.stubGlobal('__HARNESS_MONITOR_BUNDLE__', JSON.stringify(coreFiles(HARNESS_MONITOR_ID)))
-  expect(ensureBundledCoreHarnesses()).toBe(true)
+  expect(ensureBundledCoreHarnesses({ hachi: false })).toBe(true)
   expect(installedDsh(HARNESS_MONITOR_ID)!.dir).toBe(oldMonitor.dir)
 })
 
 it('an unavailable or invalid core bundle does not prevent the remaining tools from updating', () => {
   const log = vi.fn()
-  expect(ensureBundledCoreHarnesses(log)).toBe(false)
+  expect(ensureBundledCoreHarnesses({ hachi: false }, log)).toBe(false)
   vi.stubGlobal('__MODEL_MANAGER_BUNDLE__', 'invalid json')
   vi.stubGlobal('__DEVICES_BUNDLE__', JSON.stringify(coreFiles(DEVICES_HARNESS_ID)))
   vi.stubGlobal('__HARNESS_MONITOR_BUNDLE__', JSON.stringify(coreFiles(HARNESS_MONITOR_ID)))
-  expect(ensureBundledCoreHarnesses(log)).toBe(false)
+  expect(ensureBundledCoreHarnesses({ hachi: false }, log)).toBe(false)
   expect(log).toHaveBeenCalledWith(expect.stringContaining('Model Manager'))
   expect(installedDsh(DEVICES_HARNESS_ID)).toBeDefined()
   expect(installedDsh(HARNESS_MONITOR_ID)).toBeDefined()
@@ -237,7 +238,7 @@ it('reports a non-Error dependency failure and still prepares the other bundled 
   vi.stubGlobal('__HARNESS_MONITOR_BUNDLE__', JSON.stringify(coreFiles(HARNESS_MONITOR_ID)))
   const failure = vi.spyOn(packageLock, 'lockDsh').mockImplementationOnce(() => { throw 'lock backend unavailable' })
   try {
-    expect(ensureBundledCoreHarnesses(log)).toBe(false)
+    expect(ensureBundledCoreHarnesses({ hachi: false }, log)).toBe(false)
     expect(log).toHaveBeenCalledExactlyOnceWith('[core-harnesses] Could not prepare Model Manager: lock backend unavailable')
     expect(installedDsh(MODEL_MANAGER_ID)).toBeUndefined()
     expect(installedDsh(DEVICES_HARNESS_ID)).toBeDefined()
@@ -260,4 +261,36 @@ it('ships Memories with the release, adopting the Store copy and never a develop
   expect(ensureBundledMemories(coreFiles(MEMORIES_ID, 'next release'))).toBe(true)
   expect(readInstalledIndex().find(row => row.id === MEMORIES_ID)!.dir).toBe(linked)
   expect(ensureBundledMemories({})).toBe(false)
+})
+
+it('ships Hachi as a hidden DSH: its short instructions and the harness skill, from the plugin\'s one copy', async () => {
+  // @ts-expect-error — production build helper is plain ESM without a declaration file
+  const { readHachiBundle } = await import('../../scripts/lib/modelManagerBundle.mjs')
+  const { fileURLToPath } = await import('node:url')
+  const files = readHachiBundle(fileURLToPath(new URL('../../../store/agents/hachi/', import.meta.url))) as BundledFiles
+  // Read on every turn, so it stays cheap (docs/design/2026-11-12-hachi.md, "How it starts").
+  expect(Buffer.byteLength(files['AGENTS.md']!.content)).toBeLessThan(2048)
+  expect(ensureBundledHachi(files)).toBe(true)
+  const installed = installedDsh(HACHI_ID)!
+  expect(installed.source).toBe(HACHI_BUILTIN_SOURCE)
+  expect(installed.manifest.agent?.skills).toEqual(['skills'])
+  expect(readFileSync(join(installed.dir, 'skills/harness/SKILL.md')))
+    .toEqual(readFileSync(new URL('../../../plugins/harness/skills/harness/SKILL.md', import.meta.url)))
+  expect(readFileSync(join(installed.dir, 'AGENTS.md'))).toEqual(readFileSync(new URL('../../../store/agents/hachi/AGENTS.md', import.meta.url)))
+  expect(existsSync(join(installed.dir, 'template', installed.manifest.workspace!.marker!))).toBe(true)
+  // The switch is the only way in: never in the Store's list or New Harness.
+  expect(isHiddenBuiltin(installed)).toBe(true)
+  expect(dshListRows([installed], [])).toEqual([])
+  expect(ensureBundledHachi({})).toBe(false)
+})
+
+it('generates Hachi only while the account\'s hachi switch is on, and keeps it once turned off', () => {
+  vi.stubGlobal('__HACHI_BUNDLE__', JSON.stringify(coreFiles(HACHI_ID)))
+  ensureBundledCoreHarnesses({ hachi: false })
+  expect(installedDsh(HACHI_ID)).toBeUndefined()
+  ensureBundledCoreHarnesses({ hachi: true })
+  expect(installedDsh(HACHI_ID)!.source).toBe(HACHI_BUILTIN_SOURCE)
+  // Off removes nothing: its goals and conversation are there when it is turned on again.
+  ensureBundledCoreHarnesses({ hachi: false })
+  expect(installedDsh(HACHI_ID)).toBeDefined()
 })

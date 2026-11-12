@@ -17,7 +17,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
-import { BUNDLED_HARNESSES } from '../src/dsh/builtinIds.js'
+import { BUNDLED_HARNESSES, HACHI_ID } from '../src/dsh/builtinIds.js'
 import { LocalClient, type Frame } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 
@@ -31,9 +31,10 @@ const installedFile = (d: IsolatedDaemon) => join(d.env.DSH_DIR!, 'installed.jso
 const installed = (d: IsolatedDaemon): Array<Record<string, unknown>> => {
   try { return JSON.parse(readFileSync(installedFile(d), 'utf8')) } catch { return [] }
 }
+/** Hachi is left out: its switch is off here, so no package of it is generated. */
 const bundledInstalled = (d: IsolatedDaemon): boolean => {
   const records = installed(d)
-  return BUNDLED_HARNESSES.every((harness) => records.some((record) =>
+  return BUNDLED_HARNESSES.filter((harness) => harness.id !== HACHI_ID).every((harness) => records.some((record) =>
     record.id === harness.id && record.source === harness.source && typeof record.revision === 'string'))
 }
 

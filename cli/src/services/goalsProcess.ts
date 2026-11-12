@@ -25,7 +25,10 @@ export function runGoalsService(options: GoalsServiceOptions): ServiceProcess {
   const refresh = async (): Promise<void> => {
     live = agentsIn(await core?.query('live').catch(() => null)) ?? live
   }
-  const answers = startGoals(processCoreApi(options.dataDir, 'goals', { live: () => live }))
+  // Its measures go to the core, which counts Hachi's and nothing else (core/agentQueries.ts `count`).
+  // Only Hachi's requests count, and none is answered as Hachi's before a core has said which harness is Hachi.
+  const ask = async (query: string, payload: Record<string, unknown>) => core!.query(query, payload)
+  const answers = startGoals(processCoreApi(options.dataDir, 'goals', { live: () => live, ask }))
   const requests: ServiceRequests = Object.fromEntries(Object.entries(answers).map(([type, handle]) =>
     [type, async (payload: Record<string, unknown>, asker: Parameters<typeof handle>[1]) => { await refresh(); return handle(payload, asker) }]))
   return (options.run ?? runServiceProcess)({

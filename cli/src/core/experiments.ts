@@ -83,6 +83,9 @@ export function createAgentSettingsSync(deps: {
   onNotice: (listener: (notice: BackendNotice) => void) => () => void
   /** Agent Messages' switch changed here (core/api.ts `MessagesPort.settingsChanged`). */
   messagesChanged: () => void
+  /** The account turned Hachi on: its package must be in place before the person's first ⇧⌘H creates it, and the Store
+   *  that puts it there may not be running (core/viewersWake.ts). Absent, nobody is told. */
+  hachiOn?: () => void
   everyMs?: number
   log?: (line: string) => void
 }) {
@@ -106,6 +109,7 @@ export function createAgentSettingsSync(deps: {
       return answer
     }
     if (said.settings.agentMessages !== before.agentMessages) deps.messagesChanged()
+    if (said.settings.hachi && !before.hachi) deps.hachiOn?.()
     return answer
   }
 

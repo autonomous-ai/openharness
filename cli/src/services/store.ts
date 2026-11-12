@@ -12,6 +12,8 @@
 import type { CoreApi, CorePorts, ServiceRequests } from '../core/api.js'
 import { storeLaunchPort } from './storeLaunch.js'
 import { ensureBundledCoreHarnesses } from '../dsh/builtins.js'
+import { agentSettingsPath, readAgentSettings } from '../lib/agentSettings.js'
+import { watchSettingFile } from '../messages/settingWatch.js'
 import { refreshDshRegistry } from '../dsh/catalog.js'
 import { removeDsh } from '../dsh/install.js'
 import { mutateDsh } from '../dsh/service.js'
@@ -26,16 +28,28 @@ export interface StoreDeps {
   remove: typeof removeDsh
   mutate: typeof mutateDsh
   rows: typeof dshListRows
+  watch: typeof watchSettingFile
 }
 
-const DEFAULTS: StoreDeps = { prepare: ensureBundledCoreHarnesses, refresh: refreshDshRegistry, remove: removeDsh, mutate: mutateDsh, rows: dshListRows }
+const DEFAULTS: StoreDeps = { prepare: ensureBundledCoreHarnesses, refresh: refreshDshRegistry, remove: removeDsh, mutate: mutateDsh, rows: dshListRows, watch: watchSettingFile }
 
 const internal = (error: unknown): Record<string, unknown> =>
   ({ error: 'INTERNAL', detail: error instanceof Error ? error.message : String(error) })
 
 export function startStore(core: CoreApi, deps: StoreDeps = DEFAULTS): ServiceRequests {
   // Release-owned harnesses follow this build; setup belongs to the Store in either process mode.
-  deps.prepare()
+  const hachiOn = (): boolean => readAgentSettings(core.dataDir).hachi
+  let hachi = hachiOn()
+  deps.prepare({ hachi })
+  // Hachi turned on while the Store runs is put in place at once: the person's first ⇧⌘H creates it and must not wait
+  // for the Store's next start. Only the turn from off to on prepares: the file is written for every setting, and the
+  // watch says it may have changed once more as it starts. Turned off, an installed Hachi stays, with its goals and
+  // conversation. The watch keeps no process alive, and the Store has no stop of its own: it ends with its process.
+  deps.watch(agentSettingsPath(core.dataDir), () => {
+    const now = hachiOn()
+    if (now && !hachi) deps.prepare({ hachi: true })
+    hachi = now
+  })
   return {
     dsh_list: () => deps.refresh().then((catalog) => ({ dsh: deps.rows(undefined, catalog) }), internal),
     // The clone under ~/.harness/dsh goes (a linked install loses only its link), and the index forgets

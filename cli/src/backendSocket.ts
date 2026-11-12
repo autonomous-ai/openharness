@@ -1040,7 +1040,8 @@ export class BackendSocket {
     }
     const launchMeasured = productUsageLaunch(type, (frame.payload as { creationId?: unknown } | undefined)?.creationId,
       signal => this.toGateway('usage', gateway => gateway.usageLaunch?.(signal)), (frame.payload as { engine?: unknown } | undefined)?.engine,
-      (frame.payload as { startedBy?: unknown } | undefined)?.startedBy === 'agent')
+      (frame.payload as { startedBy?: unknown } | undefined)?.startedBy === 'agent',
+      (frame.payload as { startedByHachi?: unknown } | undefined)?.startedByHachi === true)
     const usageSource = productUsageSource(local, !!connId && this.toolClients.has(connId), role, frame.payload)
     const measured = productUsageRequest(type, (metric) => this.toGateway('usage', (gateway) => gateway.usageCounter?.(metric)), Date.now, usageSource,
       (frame.payload as { userAction?: unknown } | undefined)?.userAction === true)

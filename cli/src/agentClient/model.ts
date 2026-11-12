@@ -4,6 +4,7 @@
  */
 import { PTY_HOST_PANE } from '../lib/ptyHost/instance.js'
 import type { AgentLaunch } from '../lib/registry.js'
+import { HACHI_ID } from '../dsh/builtinIds.js'
 import { engineName } from '../messages/model.js'
 import type { Ledger, LedgerMember } from './ledger.js'
 
@@ -28,6 +29,8 @@ export interface Frame {
   parentAgentId?: string | null
   /** `agent` when another agent started it, here or from another machine or outside Harness. */
   startedBy?: string | null
+  /** The harness package it runs, by id (`autonomous/hachi`); null for a plain agent. */
+  dsh?: string | null
   /** `cloud`: a harness in its maker's cloud (lib/cloudAgents.ts), with no pane and no session. Its state and words are
    *  the cloud service's: `cloud.state` and `cloud_transcript`. */
   location?: string
@@ -49,6 +52,9 @@ export interface Caller extends LedgerMember {
   outside?: boolean
   /** Another agent started this harness, as the core's row says (`startedBy`, `parentAgentId`): one level down. */
   startedByAgent?: boolean
+  /** The Hachi harness (docs/design/2026-11-12-hachi.md): while the account has Hachi on, it starts and tells harnesses
+   *  without `agents-start-agents` and `agents-tell-agents`, by the person's turning Hachi on. */
+  hachi?: true
 }
 
 /** `installing`, `starting`, `failed`: a harness asked for that has not started (commands.ts `Asked`). */
@@ -141,7 +147,8 @@ export function callerOf(frames: Frame[], pane: string | undefined, machineId: s
     || !!pty && f.terminal?.runtimes?.some(r => r.backend === 'ptyhost' && r.instance === pty[1] && r.paneId === pty[2]))
   const frame = on.find((f) => f.status === 'active') ?? on.filter(isAgent).sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))[0]
   if (!frame || !isAgent(frame)) return null
-  return { machineId, agentId: frame.id, name: frame.name || frame.id.slice(0, 8), engine: frame.engine ?? '', ...(frame.startedBy === 'agent' || frame.parentAgentId ? { startedByAgent: true } : {}) }
+  return { machineId, agentId: frame.id, name: frame.name || frame.id.slice(0, 8), engine: frame.engine ?? '', ...(frame.startedBy === 'agent' || frame.parentAgentId ? { startedByAgent: true } : {}),
+    ...(frame.dsh === HACHI_ID ? { hachi: true as const } : {}) }
 }
 
 /**

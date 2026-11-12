@@ -129,6 +129,13 @@ it('marks a launch an agent started, and only that one', () => {
   productUsageLaunch('agent_create', ID, emit, 'claude')
   expect(emit.mock.calls.flat()).toEqual([{ id: ID, phase: 'start', engine: 'claude', agentStarted: true }, { id: ID, phase: 'start', engine: 'claude' }])
 })
+it('marks a launch Hachi started as Hachi\'s, only as an agent\'s launch', () => {
+  const emit = vi.fn()
+  productUsageLaunch('agent_create', ID, emit, 'codex', true, true)
+  productUsageLaunch('agent_create', ID, emit, 'codex', false, true)
+  expect(emit.mock.calls.flat()).toEqual([{ id: ID, phase: 'start', engine: 'codex', agentStarted: true, hachiStarted: true },
+    { id: ID, phase: 'start', engine: 'codex' }])
+})
 
 it('keeps a setup refusal\'s fixed code for the separate setup diagnostic, leaving other kinds alone', () => {
   const emit = vi.fn()

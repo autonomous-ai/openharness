@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { DEVICES_BUILTIN_SOURCE, DEVICES_HARNESS_ID, HARNESS_MONITOR_BUILTIN_SOURCE, HARNESS_MONITOR_ID, MEMORIES_BUILTIN_SOURCE, MEMORIES_ID, MODEL_MANAGER_BUILTIN_SOURCE, MODEL_MANAGER_ID } from './builtinIds.js'
+import { DEVICES_BUILTIN_SOURCE, DEVICES_HARNESS_ID, HACHI_BUILTIN_SOURCE, HACHI_ID, HARNESS_MONITOR_BUILTIN_SOURCE, HARNESS_MONITOR_ID, MEMORIES_BUILTIN_SOURCE, MEMORIES_ID, MODEL_MANAGER_BUILTIN_SOURCE, MODEL_MANAGER_ID } from './builtinIds.js'
 import { dshRootDir, isBrokenDsh, readInstalledIndex, resolveInstalled, upsertInstalledRecord } from './installed.js'
 import { lockDsh } from './lock.js'
 import { readDshManifest } from './manifest.js'
@@ -10,7 +10,7 @@ import { samePackageSource } from './updates.js'
 import { builtinFiles } from './bundledFiles.js'
 
 export {
-  DEVICES_BUILTIN_SOURCE, DEVICES_HARNESS_ID, HARNESS_MONITOR_BUILTIN_SOURCE, HARNESS_MONITOR_ID, isHiddenBuiltin, MEMORIES_BUILTIN_SOURCE,
+  DEVICES_BUILTIN_SOURCE, DEVICES_HARNESS_ID, HACHI_BUILTIN_SOURCE, HACHI_ID, HARNESS_MONITOR_BUILTIN_SOURCE, HARNESS_MONITOR_ID, isHiddenBuiltin, MEMORIES_BUILTIN_SOURCE,
   MEMORIES_ID, MODEL_MANAGER_ID,
 } from './builtinIds.js'
 export type BundledFiles = Record<string, { content: string; executable: boolean; encoding?: 'base64' }>
@@ -48,12 +48,23 @@ export function ensureBundledMemories(files?: BundledFiles): boolean {
     what: 'Memories', legacyPath: 'store/agents/memories' })
 }
 
-/** Core app DSHs ship with the release. Store applications keep their explicit Update action. */
-export function ensureBundledCoreHarnesses(log: (line: string) => void = console.warn): boolean {
+/** Hachi, the person's own harness that starts and follows their others (docs/design/2026-11-12-hachi.md). Hidden: the
+ *  account's `hachi` switch is the only way in. Its `harness` skill is the plugin's own, which its build adds
+ *  (scripts/lib/modelManagerBundle.mjs `readHachiBundle`). */
+export function ensureBundledHachi(files?: BundledFiles): boolean {
+  files ??= builtinFiles('hachi')
+  if (!files?.['harness.json']) return false
+  return installBuiltin({ id: HACHI_ID, source: HACHI_BUILTIN_SOURCE, folder: 'hachi', files, what: 'Hachi' })
+}
+
+/** Core app DSHs ship with the release. Store applications keep their explicit Update action. Hachi is generated only
+ *  while [hachi], the account's switch as this computer keeps it, is on: off, nothing of it is (the design's "Off").
+ *  Turning it off removes nothing; an installed Hachi keeps its goals and conversation for when it is on again. */
+export function ensureBundledCoreHarnesses(options: { hachi: boolean }, log: (line: string) => void = console.warn): boolean {
   let ready = true
   for (const [name, install] of [
     ['Model Manager', ensureBundledModelManager], ['Devices', ensureBundledDevices], ['Harness Monitor', ensureBundledHarnessMonitor],
-    ['Memories', ensureBundledMemories],
+    ['Memories', ensureBundledMemories], ...(options.hachi ? [['Hachi', ensureBundledHachi] as const] : []),
   ] as const) {
     try { if (!install()) ready = false }
     catch (error) {
