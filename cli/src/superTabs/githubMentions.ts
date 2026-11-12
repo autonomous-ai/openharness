@@ -18,7 +18,7 @@
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { ASKED, readerKey, worksOnOf } from './assign/crew.js'
+import { ASKED, markOf, readerKey, swarmsOf, tasksOf, worksOnOf } from './assign/crew.js'
 import { GitHubReads, GitHubStop, PAGE, Waits, waitWords, type GitHubGet } from './githubRest.js'
 import { permanentRefusal } from './retries.js'
 import { identifier, object, SuperTabHostError } from './wire.js'
@@ -32,6 +32,8 @@ export const TEAM: ReadonlySet<unknown> = new Set(['OWNER', 'MEMBER', 'COLLABORA
  *  count is read next pass. */
 const MAX_REPOS = 20, MAX_REVIEWED = 10, MAX_RELAYS = 50, MAX_SEEN = 2_000, MAX_OWNED = 1_000, MAX_ASKED = 200, MAX_HELD = 200, MAX_ASKS = 10
 const TEXT_MAX = 4_000, TITLE_MAX = 300
+/** Pages of a hundred of a repository's labels a Swarm's is looked for among, as the assigner does (githubAssign.ts). */
+const LABEL_PAGES = 10
 /** Who the agents here are and what they read, asked again at most this often: each ask reads every agent's Swarm. */
 const AGENTS_FRESH_MS = 60_000
 /** A thread that relays this many times to one agent within LOOP_WINDOW_MS is paused for it: an agent that forgets to sign
@@ -69,6 +71,10 @@ interface RepoMemory { comments: string; reviewComments: string; issues: string;
    *  to read, which its next thing types it until it reads (nextThing.ts). */
   asks?: Record<string, Array<{ number: number; sha: string }>>
   owned: Record<string, string[]>; usedAt: number
+  /** The Swarms' labels each issue and pull request carries, in lower case; a pull request that carries none has its tasks'
+   *  (swarmsOf, tasksOf). And each Swarm's own label here, by the Swarm's id, once found (mine). */
+  swarms?: Record<string, string[]>
+  marks?: Record<string, string>
   /** The agents already asked what they work on here (askFocus). */
   asked?: string[]
   /** What a paused thread brought, in the order it came, kept until its agent's thread is quiet; at most MAX_HELD, and how
@@ -290,6 +296,7 @@ export class GitHubMentions {
       if (kept.tasks[agent.agentId]) continue
       const open = (await this.reads.changed(repo, `/repos/${repo}/issues?state=open&labels=${encodeURIComponent(agent.label)}&per_page=${PAGE}`)).filter(issue => Number.isSafeInteger(issue.number))
       for (const issue of open) kept.owned[String(issue.number)] = [...new Set([...kept.owned[String(issue.number)] ?? [], agent.label])]
+      for (const issue of open) noteSwarms(kept, issue)
       kept.tasks[agent.agentId] = open.filter(issue => !issue.pull_request).map(issue => Number(issue.number))
     }
     // Issues and pull requests changed since the last read: whose task or pull request each is, new tasks, and the pull requests
@@ -301,12 +308,36 @@ export class GitHubMentions {
       if (!Number.isSafeInteger(number)) continue
       const labels = (Array.isArray(issue.labels) ? issue.labels.map(object) : []).map(l => String(l.name ?? '')).filter(name => name.startsWith('builder:'))
       if (labels.length) kept.owned[String(number)] = labels; else delete kept.owned[String(number)]
+      noteSwarms(kept, issue)
     }
     trim(kept.owned, MAX_OWNED)
+    trim(kept.swarms ?? {}, MAX_OWNED)
+    // Whether issue or pull request [number] is [agent]'s Swarm's to hear of, in a repository several Swarms build. Builders in
+    // different Swarms may share a name, so `builder:lennox`, or "to **Lennox**", alone names none of them: Dee's Swarm's Lennox
+    // heard Harness ask about #3880, which 0xken15's Swarm's Lennox held, and answered it (#4219). One that carries a Swarm's
+    // label is that Swarm's. An issue that carries none is no Swarm's task; a pull request that carries none, and whose tasks
+    // carry none that is known, is heard as before. A Swarm with no label here yet (its PM's Harness is a CLI from before the
+    // label, until 2026-12-14, 30 days after the one that writes it is released) hears as before, but never what carries
+    // another Swarm's. Its label is found by the Swarm's id in its description (markOf), read once a pass at the most, and
+    // only when something is there to hear.
+    const looked = new Map<string, string | null>()
+    const mine = async (agent: WatchedAgent, number: number, pull: boolean): Promise<boolean> => {
+      let mark = kept.marks?.[agent.tabId] ?? looked.get(agent.tabId)
+      if (mark === undefined) {
+        mark = markOf(await this.reads.current(repo, `/repos/${repo}/labels?per_page=${PAGE}`, LABEL_PAGES), agent.tabId)?.toLowerCase() ?? null
+        looked.set(agent.tabId, mark)
+        if (mark) (kept.marks ??= {})[agent.tabId] = mark
+      }
+      const on = kept.swarms?.[String(number)] ?? []
+      return on.length ? mark !== null && on.includes(mark) : pull || mark === null
+    }
     const tasks: Array<{ agent: WatchedAgent; issue: Json }> = []
     for (const issue of changed) {
       if (issue.pull_request || issue.state !== 'open') continue
-      for (const agent of agents) if (kept.owned[String(issue.number)]?.includes(agent.label) && !kept.tasks[agent.agentId]!.includes(Number(issue.number))) tasks.push({ agent, issue })
+      for (const agent of agents) {
+        if (kept.owned[String(issue.number)]?.includes(agent.label) && !kept.tasks[agent.agentId]!.includes(Number(issue.number))
+          && await mine(agent, Number(issue.number), false)) tasks.push({ agent, issue })
+      }
     }
     for (const { agent, issue } of tasks) {
       // Only the repository's people can label an issue: a labelled one is the team's task, whoever opened it.
@@ -353,9 +384,11 @@ export class GitHubMentions {
       if (kept.seen.includes(item.key) || !TEAM.has(item.association) || !Number.isSafeInteger(item.number)) continue
       if ((item.event === 'comment' && item.createdAt < kept.comments) || (item.event === 'review-comment' && item.createdAt < kept.reviewComments)) continue
       const owners = kept.owned[String(item.number)] ?? []
-      if (item.event === 'comment') this.noteAsk(kept, agents, item)
+      const hearing: WatchedAgent[] = []
+      for (const agent of agents) if (await mine(agent, item.number, item.on === 'pull')) hearing.push(agent)
+      if (item.event === 'comment') this.noteAsk(kept, hearing, item)
       let refusal: SuperTabHostError | null = null
-      for (const agent of agents) {
+      for (const agent of hearing) {
         const relay = 'lines' in item ? reviewFor(item as Review, agent, owners.includes(agent.label)) : sayingFor(item, agent, owners.includes(agent.label))
         if (relay) refusal = await this.hand(repo, agent, kept, item.number, relays, item.key, relay) ?? refusal
       }
@@ -595,6 +628,13 @@ const verdictWord = (verdict: string | undefined) => verdict === 'APPROVED' ? 'A
 /** The newest update time among [rows], never older than [from]: where the feed is read from next. */
 const newest = (rows: Json[], from: string) => rows.reduce((top, row) => String(row.updated_at ?? '') > top ? String(row.updated_at) : top, from)
 /** Keeps only the [max] most recently added keys of [record]. */
+/** Keeps the Swarms' labels [issue] carries: its own, or, for a pull request with none, those of the tasks it is for. */
+function noteSwarms(kept: RepoMemory, issue: Json): void {
+  const swarms = kept.swarms ??= {}, own = swarmsOf(issue)
+  const on = own.length || !issue.pull_request ? own : [...new Set(tasksOf(issue).flatMap(task => swarms[String(task)] ?? []))]
+  if (on.length) swarms[String(issue.number)] = on; else delete swarms[String(issue.number)]
+}
+
 function trim(record: Record<string, unknown>, max: number): void {
   const keys = Object.keys(record)
   for (const key of keys.slice(0, Math.max(0, keys.length - max))) delete record[key]

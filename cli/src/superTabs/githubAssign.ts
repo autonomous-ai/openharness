@@ -12,7 +12,7 @@
  * person whose agent is the project's PM, running or stopped there, with their gh. A task its PM or a person gave by hand is
  * never moved.
  */
-import { addElsewhere, areaOf, ASKED, buildingIn, builtOn, dependsOn, hasRoom, heldTasks, labelOf, machineHas, nextPicks, ofProject, openPieces, OTHER_PROJECTS, outOfQuota, teamOf, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readerKey, readProblem, reasonOf, startedAt, SWARM, takeBacks, takenTasks, tasksOf, worksOnOf, type AwayBuilder, type Crew, type CrewBuilder, type Pick, type Read, type Up } from './assign/crew.js'
+import { addElsewhere, areaOf, ASKED, buildingIn, builtOn, dependsOn, hasRoom, heldTasks, labelOf, machineHas, markOf, nextPicks, ofProject, openPieces, OTHER_PROJECTS, outOfQuota, teamOf, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readerKey, readProblem, reasonOf, startedAt, SWARM, takeBacks, takenTasks, tasksOf, worksOnOf, type AwayBuilder, type Crew, type CrewBuilder, type Pick, type Read, type Up } from './assign/crew.js'
 import type { Choice } from './assign/model.js'
 import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
@@ -141,6 +141,9 @@ export class GitHubAssign {
    *  do not show labelled yet, by `repo#N`, forgotten once they do or the task is no longer open (stamp). */
   private readonly marks = new Map<string, string>()
   private readonly stamped = new Set<string>()
+  /** The tasks read as its Swarm's whose label is not written yet, by `repo#N`, as each pass finds them: one is labelled before
+   *  it is given, as its builder takes only a task that carries its Swarm's label (githubClaim.ts). */
+  private readonly unwritten = new Set<string>()
   private offUntil = 0
   private logged = ''
   private readonly now: () => number
@@ -153,6 +156,9 @@ export class GitHubAssign {
     repositories: (project: LedProject) => Promise<string[]>
     /** The name of [project]'s Swarm, as its PM reads it, for its label in a repository (mark). */
     swarm: (project: LedProject) => Promise<string>
+    /** Takes the open pull requests of [project]'s repository that are another Swarm's, as each pass reads them, for the merger
+     *  (githubMerge.ts), which lands none of them. */
+    others: (project: LedProject, pulls: ReadonlySet<number>) => void
     get: GitHubGet; send: GitHubSend; now?: () => number; log?: (line: string) => void; intervalMs?: number
     /** Who made each verdict by command, the merger's own (githubMerge.ts VerdictRecords): only such a READ-OK is a read. */
     records: VerdictRecords
@@ -217,7 +223,8 @@ export class GitHubAssign {
   private async assign(project: LedProject): Promise<void> {
     const { repo } = project
     const mark = await this.mark(project)
-    if (!mark) return
+    // With no label of its own, no pull request can be told as another Swarm's.
+    if (!mark) { this.deps.others(project, new Set()); return }
     const everyone = await this.stamp(repo, await this.reads.current(repo, `/repos/${repo}/issues?state=open&per_page=${PAGE}`, ISSUE_PAGES), mark)
     // Only this Swarm's: another's tasks and pull requests in the repository are never planned, given, asked about, taken back
     // or measured here.
@@ -250,7 +257,8 @@ export class GitHubAssign {
     await this.measure(repo, closed)
     const minutes = learnedMinutes([...this.took].filter(([key, took]) => key.startsWith(`${repo}#`) && took).map(([, took]) => took!))
     // Open pull requests, drafts included: a draft is where a task's work shows before it is read.
-    const pulls = (await this.reads.current(repo, openPullsPath(repo), PULL_PAGES)).filter(ours)
+    const everyPull = await this.reads.current(repo, openPullsPath(repo), PULL_PAGES), pulls = everyPull.filter(ours)
+    this.deps.others(project, new Set(everyPull.filter(pull => !ours(pull)).map(pull => Number(pull.number))))
     // The tasks whose pull request waits for its readers or its merge, readers asked as needed (with no builder here, its
     // PM): their builders have done their part, so none is called quiet, and one whose builder went away is kept, as its
     // pull request merges without it. Another builder would do it again.
@@ -357,7 +365,7 @@ export class GitHubAssign {
     const known = this.marks.get(key)
     if (known) return known
     const swarms = (await this.reads.current(repo, `/repos/${repo}/labels?per_page=${PAGE}`, LABEL_PAGES)).filter(label => String(label.name ?? '').toLowerCase().startsWith(SWARM))
-    let name = swarms.map(label => [String(label.name), String(label.description ?? '')]).find(([, description]) => description.split(/\s+/).includes(tabId))?.[0] ?? null
+    let name = markOf(swarms, tabId)
     if (!name && make) {
       const words = (await this.deps.swarm(project)).trim().toLowerCase().replace(/[\s,]+/g, '-').slice(0, 30) || tabId.slice(0, 8)
       const wanted = swarms.some(label => String(label.name).toLowerCase() === `${SWARM}${words}`) ? `${SWARM}${words}-${tabId.slice(0, 8)}` : `${SWARM}${words}`
@@ -382,6 +390,7 @@ export class GitHubAssign {
     const labelled = (issue: Json) => labelNames(issue).some(name => name.toLowerCase().startsWith(SWARM))
     const open = new Map(listed.map(issue => [`${repo}#${issue.number}`, issue]))
     for (const key of [...this.stamped]) if (key.startsWith(`${repo}#`) && (!open.has(key) || labelled(open.get(key)!))) this.stamped.delete(key)
+    for (const key of [...this.unwritten]) if (key.startsWith(`${repo}#`)) this.unwritten.delete(key)
     let stamps = 0
     const out: Json[] = []
     for (const issue of listed) {
@@ -398,6 +407,7 @@ export class GitHubAssign {
           this.log(`[super-tab] labelled ${repo}#${issue.number} ${mark}`)
         }
       }
+      if (!this.stamped.has(key)) this.unwritten.add(key)
       out.push({ ...issue, labels: [...(Array.isArray(issue.labels) ? issue.labels : []), { name: mark }] })
     }
     return out
@@ -958,6 +968,14 @@ export class GitHubAssign {
     if (!builder || !Number.isSafeInteger(number)) return false
     const { name, label } = builder
     if (this.now() < (this.coordinated.get(`${project.tabId}|${project.repo}`) ?? 0)) return false
+    // Its Swarm's label first, where its write still waited (stamp): its builder takes only a task that carries it.
+    const key = `${project.repo}#${number}`
+    if (this.unwritten.has(key)) {
+      const put = await this.deps.send('POST', `/repos/${project.repo}/issues/${number}/labels`, { labels: [this.marks.get(`${project.repo}|${project.tabId}`)!] })
+      if (put.status !== 200) { this.once(`[super-tab] Task assignment: SWARM_LABEL_REFUSED ${key}: GitHub answered ${put.status}`); return false }
+      this.unwritten.delete(key)
+      this.stamped.add(key)
+    }
     if (builder.offers && this.now() >= this.offersFrom) {
       try {
         await this.deps.offers.offer(project, number, builder.id)

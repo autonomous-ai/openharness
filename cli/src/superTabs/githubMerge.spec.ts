@@ -95,11 +95,15 @@ function setup() {
   const costs = vi.fn(async (_project: LedProject, _numbers: number[]): Promise<ReadRow[]> => [])
   /** The files most landings of the project touch, as its day's scoreboard named them: none unless a test gives some. */
   const hot: string[] = []
+  /** The open pull requests the assigner read as another Swarm's (githubAssign.ts): none unless a test gives some. */
+  const others = new Set<number>()
+  /** Whether the assigner's pass has read the repository once. */
+  const assigner = { read: true }
   const merger = new GitHubMerge({ projects: async () => [{ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }],
-    crew: team, get: github.get, send: github.send, now: () => clock.now, log, records: new VerdictRecords(github.authors, () => clock.now, log), costs, hot: () => hot })
+    crew: team, get: github.get, send: github.send, now: () => clock.now, log, records: new VerdictRecords(github.authors, () => clock.now, log), costs, hot: () => hot, others: () => assigner.read ? others : null })
   const merges = () => github.sent.filter(s => s.method === 'PUT')
   const comments = () => github.sent.filter(s => s.method === 'POST').map(s => String((s.body as Json).body))
-  return { github, merger, log, merges, comments, clock, crew: team, costs, hot }
+  return { github, merger, log, merges, comments, clock, crew: team, costs, hot, others, assigner }
 }
 
 /** Two passes three minutes apart: a head's checks count as passed only once they hold still (githubMerge.ts CHECKS_SETTLE_MS), so
@@ -116,6 +120,23 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     await settle(f)
     expect(f.merges()).toEqual([{ method: 'PUT', path: '/repos/acme/app/pulls/4/merge', body: { merge_method: 'squash', sha: HEAD } }])
     expect(f.comments()).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d: merged\. READ-OK on f6edb44 by Juno, checks green\.$/)])
+  })
+
+  // #4219: builders in different Swarms may share a name, so `builder:pip` on a branch `pip/2` does not say whose it is. The
+  // assigner reads that from the repository's issues (assign/crew.ts ofProject), and the merger reads no task for it.
+  it('lands and says nothing of a pull request that is another Swarm\'s Pip\'s, nor of any before the assigner has read the repository', async () => {
+    const f = setup()
+    f.others.add(4)
+    await settle(f)
+    expect([f.merges(), f.comments()]).toEqual([[], []])
+    // The other Swarm's Harness, for which it is its own Pip's, lands it.
+    f.others.clear()
+    f.assigner.read = false
+    await settle(f)
+    expect([f.merges(), f.comments()]).toEqual([[], []])
+    f.assigner.read = true
+    await settle(f)
+    expect(f.merges()).toEqual([{ method: 'PUT', path: '/repos/acme/app/pulls/4/merge', body: { merge_method: 'squash', sha: HEAD } }])
   })
 
   // Swarm allocator, package 12: the comment that says a change landed carries what it cost its builder, from the rows its
@@ -1515,7 +1536,7 @@ describe('the merger counts the agent the backend recorded for a verdict', () =>
     const authors = vi.fn(async (_project: { repo: string }, ids: string[]) => Object.fromEntries(ids.filter(id => names[id]).map(id => [id, { name: names[id]! }])))
     const log = vi.fn()
     const merger = new GitHubMerge({ projects: async () => [{ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }],
-      crew: async () => crew, get: github.get, send: github.send, now: () => clock.now, log, records: new VerdictRecords(authors, () => clock.now, log), costs: async () => [], hot: () => [] })
+      crew: async () => crew, get: github.get, send: github.send, now: () => clock.now, log, records: new VerdictRecords(authors, () => clock.now, log), costs: async () => [], hot: () => [], others: () => new Set() })
     return { github, merger, clock, authors, log, merges: () => github.sent.filter(s => s.method === 'PUT'),
       comments: () => github.sent.filter(s => s.method === 'POST').map(s => String((s.body as Json).body)) }
   }

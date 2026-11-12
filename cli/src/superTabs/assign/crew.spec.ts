@@ -539,9 +539,9 @@ describe('which of a repository\'s issues and pull requests are a Swarm\'s (ofPr
     expect(rows.filter(ofProject(rows, 'swarm:acme')).map(row => row.number)).toEqual([1, 2])
     expect(rows.filter(ofProject(rows, 'swarm:acme-0f0f0f0f')).map(row => row.number)).toEqual([3])
   })
-  it('leaves a pull request with another Swarm\'s label, or with none and for an open task that carries another\'s', () => {
+  it('leaves a pull request with another Swarm\'s label, or with none and for an open issue that is not its Swarm\'s', () => {
     const pulls = [pull(11, 'Closes #1'), pull(12, 'Closes #3'), pull(13, 'Closes #4'), pull(14, ''), pull(15, 'Closes #1', ['swarm:acme-0f0f0f0f']), pull(16, 'Closes #3', ['swarm:acme']),
       { number: 17, labels: [], body: '', head: { ref: 'lennox/3' } }]
-    expect(pulls.filter(ofProject(rows, 'swarm:acme')).map(row => row.number)).toEqual([11, 13, 14, 16])
+    expect(pulls.filter(ofProject(rows, 'swarm:acme')).map(row => row.number)).toEqual([11, 14, 16])
   })
 })

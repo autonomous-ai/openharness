@@ -113,20 +113,29 @@ export const labelOf = (name: string): string => `builder:${name.trim().toLowerC
  *  2026-11-12): builders in different Swarms may share a name, so `builder:lennox` alone names none of them. */
 export const SWARM = 'swarm:'
 
+/** The Swarm's labels on an issue or pull request, in lower case. */
+export const swarmsOf = (row: Json): string[] => labelsOf(row).map(label => label.toLowerCase()).filter(label => label.startsWith(SWARM))
+
+/** The name of the label of the Swarm with id [swarm] among a repository's [labels]: the `swarm:` one whose description holds
+ *  that id, so two Swarms of one name there are told apart, and never one found by its name alone. Null when it has none. */
+export const markOf = (labels: Json[], swarm: string): string | null => {
+  const found = labels.find(label => String(label.name ?? '').toLowerCase().startsWith(SWARM) && String(label.description ?? '').split(/\s+/).includes(swarm))
+  return found ? String(found.name) : null
+}
+
 /**
  * Which of a repository's issues and pull requests are the Swarm's whose label there is [mark], told from [rows], its issues as
  * GitHub lists them. Several Swarms may build one repository, and each one's Harness planned, gave, asked about and took back
  * every sized issue in it: Tony's gave Dee's #4208 to its own builder a minute after it was opened, and #3880, held by 0xken15's
  * Swarm's Lennox, read as Dee's Swarm's Lennox's (#4212). An issue is the Swarm's when it carries [mark], which Harness puts on
  * its PM's tasks (githubAssign.ts) and a piece takes from its task (githubSplit.ts). A pull request carries a Swarm's label only
- * when someone put one on: one that carries none is another Swarm's when it is for an open issue that carries another's (tasksOf).
+ * when someone put one on: one that carries none is not the Swarm's when it is for an open issue that is not (tasksOf).
  */
 export function ofProject(rows: Json[], mark: string): (row: Json) => boolean {
-  const swarms = (row: Json) => labelsOf(row).map(label => label.toLowerCase()).filter(label => label.startsWith(SWARM))
-  const own = (row: Json) => swarms(row).includes(mark.toLowerCase())
+  const own = (row: Json) => swarmsOf(row).includes(mark.toLowerCase())
   const isPull = (row: Json) => !!row.pull_request || !!row.head
-  const others = new Set(rows.filter(row => !isPull(row) && swarms(row).length && !own(row)).map(row => Number(row.number)))
-  return row => !isPull(row) || swarms(row).length ? own(row) : !tasksOf(row).some(task => others.has(task))
+  const others = new Set(rows.filter(row => !isPull(row) && !own(row)).map(row => Number(row.number)))
+  return row => !isPull(row) || swarmsOf(row).length ? own(row) : !tasksOf(row).some(task => others.has(task))
 }
 
 /** The labels of a project's team: its builders' (away ones too) and its PM's. Harness asks readers for, and merges, only

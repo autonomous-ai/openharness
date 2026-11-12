@@ -66,7 +66,8 @@ that runs it, `harness super-tab goal` shows what it states, and the PM is told 
 - Several Swarms can build one repository. Harness puts its Swarm's label (`swarm:<Swarm name>`, with the Swarm's id in
   the label's description) on the tasks its PM opens, and gives out, asks about and takes back only tasks that carry it.
   An issue someone else opened becomes a task of your Swarm once you put that label on it. Builders in different Swarms
-  may share a name.
+  may share a name: a builder hears of and takes only tasks that carry its Swarm's label, and Harness lands only its
+  own Swarm's pull requests.
 - An issue you label `builder:<name>` yourself stays with that builder, unless it stops, its computer is down, it is
   quiet for eight hours, it took it and an hour passed with no pull request, or, before taking it, its subscription ran
   out.

@@ -231,13 +231,17 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   const numbers = new PmNumbers({ file: join(core.dataDir, 'super-tab-numbers.json'), send: sendAsPm })
   // What a landed change cost its builder is read of the server as the project's PM, for the comment that says it landed
   // (taskTokens.ts).
+  // The open pull requests the assigner's last pass read as another Swarm's, by project, which the merger lands none of.
+  const others = new Map<string, ReadonlySet<number>>()
   const merges = (options.githubMerge ?? ((api, held) => new GitHubMerge({ projects: led(api, held), crew: crewOfProject(held), get: github.get,
-    send: github.send, records, costs: readTaskTokens(path => backend(api, 'GET', path)), hot: project => numbers.hot(project) })))(core, sources)
+    send: github.send, records, costs: readTaskTokens(path => backend(api, 'GET', path)), hot: project => numbers.hot(project),
+    others: project => others.get(`${project.tabId}|${project.repo}`) ?? null })))(core, sources)
   // Gives their tasks to their builders (githubAssign.ts), from the crew as the PM reads the Swarm.
   const assigns = (options.githubAssign ?? ((api, held) => new GitHubAssign({ projects: led(api, held), crew: crewOfProject(held),
     // The Swarm's projects as its PM's person reads it, read by what changed, as every Swarm read is: the PM reads only its own.
     repositories: async project => swarmRepositories((await held().reads.read(project.tabId)).state),
     swarm: async project => String((await held().reads.read(project.tabId, project.pmAgentId)).state.name ?? ''),
+    others: (project, pulls) => { others.set(`${project.tabId}|${project.repo}`, pulls) },
     get: github.get, send: github.send, records, numbers,
     say: (project, operationId, text) => sendAsPm('say', project, operationId, text),
     pmRunning: async project => pmRunsHere((await held().feed.current(60_000)).roster, project, id => !!api.agents.byAgent(id)),
@@ -562,7 +566,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
             const found = [...repositories.values()].find(repository => repository.github === now)
             if (found) repositories.set(asked, found)
           }
-          const builder = { name, repositories }, resolved = repositories.get(asked)?.github ?? asked
+          const builder = { name, repositories, swarm: String(payload.tabId) }, resolved = repositories.get(asked)?.github ?? asked
           const record = async (repository: string, commentId: string) => { await backend(core, 'POST', `${path}/github-comments?${identity}`, { repository, kind: 'issue', commentId }) }
           // The CLI gives up after 30 seconds and says "Try again" while this works on: the same command from the same agent
           // joins the one still running, or both would find no comment yet and each post its own. By either name of its repository.

@@ -272,6 +272,46 @@ describe('GitHub news for this computer\'s v4 agents (githubMentions.ts)', () =>
     expect(f.relayed().map(c => [c.event, c.text])).toEqual([['review', 'Two things.'], ['review', 'And a third.'], ['review-comment', 'Late, but here.']])
   })
 
+  // #4219: Dee's Swarm's Lennox heard Harness ask "Lennox" about #3880, which 0xken15's Swarm's Lennox held, and answered it.
+  it('brings each Lennox only its own Swarm\'s news where two Swarms, each with a Lennox, build one repository', async () => {
+    const DEE = 'd6004d45908ca1c85fca67f0', KEN = '0f0f0f0f0f0f0f0f0f0f0f0f'
+    const lennox = (tabId: string, agentId: string): WatchedAgent => ({ ...PIP, tabId, agentId, harnessId: `h-${agentId}`, chat: `chat-${agentId}`, names: ['Lennox'], label: 'builder:lennox' })
+    // Each Lennox on its own person's computer, reading the same repository.
+    const heard = async (agent: WatchedAgent) => {
+      const f = setup([agent])
+      // Two Swarms of one name: each one's label is found by the id in its description.
+      f.github.state.labels = [{ name: 'swarm:acme', description: `Swarm ${DEE}` }, { name: 'Swarm:Acme-0f0f0f0f', description: `Swarm ${KEN}` }]
+      // The other Swarm's Lennox holds #20 already.
+      f.github.issues.push(issue(20, -100, ['builder:lennox', 'swarm:acme-0f0f0f0f']))
+      await f.mentions.tick()
+      // A task for each Lennox; Harness asks "Lennox" about #20; and a read on the pull request for #14, which carries no Swarm's label.
+      f.github.issues.push(issue(13, 10, ['builder:lennox', 'swarm:acme']), issue(14, 11, ['builder:lennox', 'Swarm:Acme-0f0f0f0f']),
+        issue(30, 12, ['builder:lennox'], { pull_request: {}, body: 'Lennox: Closes #14' }))
+      f.github.issues[0]!.updated_at = at(13)
+      f.github.comments.push(comment(1, 13, 'Harness, 16:39, to **Lennox**: nothing has moved on this task for 43 h. Are you still on it?',
+        { issue_url: 'https://api.github.com/repos/acme/app/issues/20', html_url: 'https://github.com/acme/app/issues/20#issuecomment-1' }),
+      comment(2, 14, 'Kiri: READ-OK f6edb44', { issue_url: 'https://api.github.com/repos/acme/app/issues/30', html_url: 'https://github.com/acme/app/pull/30#issuecomment-2' }))
+      await f.mentions.tick()
+      // An issue with no Swarm's label is no Swarm's task once a Swarm has its label here: neither Lennox is told of it.
+      const labelReads = () => f.github.calls.filter(path => path.includes('/labels?')).length, before = labelReads()
+      f.github.issues.push(issue(15, 20, ['builder:lennox']))
+      await f.mentions.tick()
+      // The label was found once: a later pass asks GitHub for no labels.
+      expect(labelReads()).toBe(before)
+      return f.relayed().map(command => [command.event, command.number])
+    }
+    expect(await heard(lennox(DEE, 'dee-lennox'))).toEqual([['task', 13]])
+    expect(await heard(lennox(KEN, 'ken-lennox'))).toEqual([['task', 14], ['comment', 20], ['comment', 30]])
+  })
+  it('brings a Swarm with no label in the repository yet its news as before, but none of what carries another Swarm\'s', async () => {
+    const f = setup()
+    f.github.state.labels = [{ name: 'swarm:acme', description: 'Swarm 0f0f0f0f0f0f0f0f0f0f0f0f' }]
+    await f.mentions.tick()
+    f.github.issues.push(issue(13, 10, ['builder:pip']), issue(14, 11, ['builder:pip', 'swarm:acme']))
+    await f.mentions.tick()
+    expect(f.relayed().map(command => [command.event, command.number])).toEqual([['task', 13]])
+  })
+
   it('tells the agent of an issue newly labelled for it, not one it already had, nor its own pull request\'s label', async () => {
     const f = setup()
     f.github.issues.push(issue(2, -100, ['builder:pip']))

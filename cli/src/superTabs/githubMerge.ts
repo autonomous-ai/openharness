@@ -651,7 +651,12 @@ export class GitHubMerge {
      *  readTaskTokens), read as the project's PM. */
     costs: (project: LedProject, numbers: number[]) => Promise<ReadRow[]>
     /** The files most landings of [project] touch, as its day's scoreboard named them and its numbers keep them (pmNumbers.ts). */
-    hot: (project: LedProject) => readonly string[] }) {
+    hot: (project: LedProject) => readonly string[]
+    /** The open pull requests of [project]'s repository that are another Swarm's, as the assigner's last pass read them from the
+     *  repository's issues (githubAssign.ts, assign/crew.ts ofProject): builders in different Swarms may share a name, so a
+     *  `builder:` label and a branch alone do not say whose a pull request is (#4219). Null until that pass has read once:
+     *  nothing is landed or said before. The merger reads no task for it. */
+    others: (project: LedProject) => ReadonlySet<number> | null }) {
     this.now = deps.now ?? Date.now
     this.log = deps.log ?? (line => console.warn(line))
     this.reads = new GitHubReads(deps.get, this.now)
@@ -717,6 +722,8 @@ export class GitHubMerge {
     const pulls = listed.filter(pull => pull.draft !== true && object(pull.base).ref === base)
     // The team, read of the PM's Swarm (a changes read on the backend), only when a pull request could merge.
     if (!pulls.length) { this.forgetHeads(repo, new Set()); return }
+    const others = this.deps.others(project)
+    if (!others) return
     const team = teamOf(await this.deps.crew(project), project.pm)
     const open = new Set<string>()
     const conflicts = (pull: { number: number; head: string; author: string; comments: Json[] }) =>
@@ -747,7 +754,7 @@ export class GitHubMerge {
       const number = Number(pull.number), head = String(object(pull.head).sha ?? '')
       if (!Number.isSafeInteger(number) || !/^[0-9a-f]{40}$/.test(head) || landed.has(number)) continue
       const author = authorOf(pull)
-      if (author === null || isHeld(pull)) continue
+      if (author === null || isHeld(pull) || others.has(number)) continue
       // The team's own pull requests only (assign/crew.ts teamOf): a person's merges as that person's repository does it.
       if (!team.has(labelOf(author))) {
         // Nor a task Harness here gave a builder who has left the team since: its PM is told, or it waits for good with nobody
