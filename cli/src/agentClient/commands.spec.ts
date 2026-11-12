@@ -971,6 +971,18 @@ describe('harness delete', () => {
     expect(await run(['devin-1'])).toMatchObject({ code: EXIT.usage, err: ["devin-1 runs in its maker's cloud: delete it there.", expect.any(String)] })
     expect(requests('agent_purge')).toEqual([])
   })
+
+  it('never reaches another machine through a harness the agent started there', async () => {
+    const { d } = setupDelete({ deleted: true }, {})
+    const mini = new FakeDaemon()
+    mini.frames = [frame('far')]
+    started(new Ledger(ledgerPath(dir)), 'lead', 'far', 'mini')
+    const h = harness(d, { others: { mini } })
+    expect(await deleteCommand(['far'], h.deps)).toBe(EXIT.usage)
+    expect(h.err[0]).toBe('far runs on another machine: harness delete works on this computer only.')
+    expect([...d.requests, ...mini.requests].filter((r) => r.type === 'agent_purge')).toEqual([])
+    expect(mini.closed).toBe(true)
+  })
 })
 
 describe('harness new, run by an agent', () => {
