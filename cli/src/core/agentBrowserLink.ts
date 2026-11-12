@@ -67,12 +67,16 @@ export function createAgentBrowserLink(deps: {
   const viewerListeners: Array<(agentId: string) => void> = []
   let up = false
   const event = (payload: Payload, opts?: { untilDelivered?: boolean }) => { notify({ type: 'service_event', payload }, opts) }
-  // A stop or a purge ends the browser's viewers here and now, whether or not the process is there to hear it.
+  // A stop or a purge ends the browser's viewers here and now, whether or not the process is there to hear it, and
+  // sends the agent's frame without its browser: what the process says of it from now on is not kept, and a panel
+  // whose frame was not sent again went on showing the browser ready or starting (CLI 0.6.40, 2026-11-12).
   const forget = (agentId: string) => {
     attached.delete(agentId)
     states.delete(agentId)
     commands.delete(agentId)
     for (const listener of viewerListeners) listener(agentId)
+    const session = core.agents.byAgent(agentId)
+    if (session) core.agents.sync(session)
   }
 
   const port: AgentBrowserPort = {
