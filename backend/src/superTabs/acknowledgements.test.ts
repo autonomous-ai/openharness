@@ -4,11 +4,14 @@ import { isAcknowledgement } from './acknowledgements.js'
 import { owner, stepsFixture } from './steps.test-support.js'
 
 describe('isAcknowledgement (task #3391)', () => {
-  it.each(['on it', 'On it!', 'Got it.', 'got it, thanks', 'Thanks!', 'thank you', 'Will do', 'Noted. Will do.', 'Understood 👍', 'ack', 'copy that'])(
+  it.each(['on it', 'On it!', 'Got it.', 'got it, thanks', 'Thanks!', 'thank you', 'Will do', 'Noted. Will do.', 'Understood 👍', 'ack', 'copy that',
+    // Emoji alone says nothing in words (the rehearsal of 2026-11-11: the PM's 👍 under each builder's "stopping").
+    '👍', '👍🏽', '👋', '🙏🙏', '✅ ', '👍!', '❤️'])(
     'reads %j as an acknowledgement', text => expect(isAcknowledgement(text)).toBe(true))
 
   it.each(['Yes at 1a2b3c', 'Yes', 'ok', 'Done', 'on it?', 'got it #12', 'thanks, merged', 'on it: https://github.com/a/b/pull/3',
-    'see github.com/a/b', 'Will do after the build', 'will do in 5 minutes', 'on it @Ken', 'Thanks for the review, fixed in abc123', '', '   ', '👍',
+    'see github.com/a/b', 'Will do after the build', 'will do in 5 minutes', 'on it @Ken', 'Thanks for the review, fixed in abc123', '', '   ',
+    'Yes 👍', 'ok 👍', '👍?', '1️⃣', '@Ken 👍', '...',
     // A courtesy after an answer does not make the answer an acknowledgement (review of #3391: Hugo).
     'Yes, thanks.', 'Okay, thanks.', 'Yes', 'Yep, got it', 'Sure, will do', 'ok, on it', 'Great, thanks'])(
     'lets %j through', text => expect(isAcknowledgement(text)).toBe(false))
@@ -40,6 +43,30 @@ describe('an agent post that only acknowledges', () => {
       { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } }).result.conversationId as string
     expect(() => send(f, null, 'on it', {}, chat)).not.toThrow()
     expect(() => send(f, null, 'thanks', {}, chat)).not.toThrow()
+  })
+
+  // The rehearsal of 2026-11-11: Kai posted "thanks @Ray, stopping. 👋" and the PM replied 👍, which reached Kai, the agent whose
+  // message it answered, and started its turn again; the same under Cy's.
+  const under = (f: ReturnType<typeof stepsFixture>, by: string, text: string, author: string) =>
+    f.run({ type: 'message.send', conversationId: 'lead', text, replyTo: 'bye', recipientIds: [] } as Command, f.as(by),
+      { reply: { id: 'bye', conversationId: 'lead', author: { kind: 'agent', id: author }, createdAt: 0, thread: 'bye' } as never })
+
+  it('of emoji alone, under another agent\'s goodbye, is refused, so it reaches nobody', () => {
+    const f = stepsFixture()
+    for (const text of ['👍', '👋', '🙏']) expect(() => under(f, f.lead, text, f.dev)).toThrow(expect.objectContaining({ code: 'ACK_ONLY' }))
+    // An answer in words still reaches the agent it answers.
+    expect(under(f, f.lead, 'Yes 👍', f.dev).messages.filter(m => m.source?.kind !== 'system').map(m => m.recipients)).toEqual([[f.dev]])
+  })
+
+  it('says to answer in words, as an emoji may have meant yes', () => {
+    const f = stepsFixture()
+    expect(() => under(f, f.lead, '👍', f.dev)).toThrow(expect.objectContaining({ message: expect.stringMatching(/answer.*in words/i) }))
+  })
+
+  it('of emoji alone still reaches the agent from its person, whose answer it can be', () => {
+    const f = stepsFixture()
+    const chat = f.state.conversations.find(c => c.kind === 'agent-chat' && c.agentIds.includes(f.lead))!.id
+    expect(send(f, null, '👍', {}, chat).messages.filter(m => m.source?.kind !== 'system').map(m => m.recipients)).toEqual([[f.lead]])
   })
 
   it('passes with a tag or a note to itself', () => {
