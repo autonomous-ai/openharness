@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { registry, type RegisteredSession } from './registry.js'
 import { StoppedAgentStore } from './stoppedAgents.js'
 import { AgentCreationReceiptError } from './agentCreationReceipt.js'
+import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
 import { SessionCheckpointStore } from './sessionCheckpoint.js'
 import { PurgeAgentService, inspectNativeHistory, eraseNativeHistory, sessionDataBytes, type PurgeRequest } from './purgeAgentService.js'
 import { builtinSqlite } from './sqliteBuiltin.js'
@@ -273,6 +274,37 @@ it('refuses symlinks, hard links, foreign conversation names and monitor deletio
   expect(await review()).toHaveProperty('error')
   expect(stop).not.toHaveBeenCalled()
 })
+// A lamp's run teardown deletes its harness while an OpenClaw --local run still reads "starting local runtime": the
+// launch is stopped, as a close stops it, and erased; refused only while it cannot be stopped yet, and said so.
+describe('a harness still starting', () => {
+  beforeEach(() => {
+    Object.assign(session, { launch: { state: 'starting' }, sessionId: '', transcriptPath: null, processIdentity: null })
+    target.sessionId = null
+  })
+
+  it('is stopped and erased, its engine found between the review and the delete', async () => {
+    const plan = await review()
+    expect(plan.reviewId).toEqual(expect.any(String))
+    session.processIdentity = { pid: 4242, startMarker: 'Thu Nov 12 10:00:00 2026', executable: 'codex' }
+    expect(await remove(plan.reviewId)).toMatchObject({ deleted: true, sessionDeleted: true })
+    expect(stop).toHaveBeenCalledOnce()
+    expect(eraseRecords).toHaveBeenCalledOnce()
+    expect(deleted).toHaveBeenCalledOnce()
+    expect(stopped.get(session.agentId)).toBeNull()
+  })
+
+  it('that cannot be stopped yet is refused in plain words, nothing deleted', async () => {
+    const plan = await review()
+    stop.mockRejectedValueOnce(new IdentityReadUnavailable('the native control descriptor type is unavailable'))
+    const refused = await remove(plan.reviewId)
+    expect(refused).toMatchObject({ error: 'DELETE_REFUSED', stopped: false, sessionDeleted: false })
+    expect(refused.detail).toBe('This harness is still starting. Try again in a moment.')
+    expect(eraseRecords).not.toHaveBeenCalled()
+    expect(deleted).not.toHaveBeenCalled()
+    expect(registry.byAgent(session.agentId)).toBeDefined()
+  })
+})
+
 it('can explicitly review remaining checkpoints after an interrupted partial deletion', async () => {
   await checkpoints.save(session, { screen: 'keep until confirmed' })
   stopped.save(session); registry.removeAgent(session.agentId)
