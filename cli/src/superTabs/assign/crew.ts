@@ -27,8 +27,8 @@ export const SIZES: Record<'s' | 'm' | 'l', { minutes: number; ram: number; disk
 }
 /** A priority's weight in the plan: a p0 waiting a minute counts as a p2 waiting four. */
 export const WEIGHTS: Record<string, number> = { p0: 8, p1: 4, p2: 2 }
-/** The percent of each window its person keeps for their own work: Swarm work never spends it (AGENTS.md, contributed
- *  capacity: "their quota is never drained without them knowing"). */
+/** The percent of each window its person keeps for their own work: Swarm work never spends it (docs/product.md, "Your
+ *  computers": an agent runs on its own person's computers, under their own login). */
 export const RESERVE = 20
 /** Of a machine's memory, what Swarm work may hold: its person keeps the rest. */
 export const MEMORY_SHARE = 0.75
