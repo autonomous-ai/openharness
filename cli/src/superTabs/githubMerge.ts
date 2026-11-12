@@ -95,7 +95,7 @@ const SELF = 'Harness'
  *  swarm-sandbox #24-#26 got one note 46 times each when its words carried the time (2026-11-10), and the failing checks of one
  *  head can change and change order. A restart finds a note said by these first words. */
 const NOTES = { unsigned: 'the READ-OK from ', held: 'the HOLD from ', checks: 'checks failed: ', behind: 'it is behind ', dirty: 'it conflicts with ',
-  blocked: 'GitHub\'s rules for ', stacked: 'it lands after ', red: 'its train failed: ' } as const
+  blocked: 'GitHub\'s rules for ', stacked: 'it lands after ', red: 'its train failed: ', left: 'its builder ' } as const
 type NoteKind = keyof typeof NOTES
 /** How the `stacked` note began until 2026-11-12, when it ended "then update it from main": one posted then is still its head's
  *  note, so a restart does not say it again in today's words. These can go after 2026-12-12. */
@@ -116,6 +116,8 @@ const TASKS_READ_MAX = 5
  *  lampOS's merge-when-green.sh waits for "the same in two looks 30 s apart, from 3 min on". A head just pushed has no checks
  *  yet, which read as all passed, and a job that needs another gets its check only when that one ends. */
 const CHECKS_SETTLE_MS = 3 * 60_000
+/** How the assigner's word on a task begins when it gives it (githubAssign.ts give): "Harness, 09:30: for **Pip**: ...". */
+const GAVE = /^Harness, \d\d:\d\d: for \*\*([^*]+)\*\*: /
 /** How many notes are remembered, as the train bot keeps the last 5,000 lines of its told list. */
 const TOLD_MAX = 5_000
 /** Records asked for in one request (the backend takes at most 100 ids), how many are remembered, and how long after a comment
@@ -589,6 +591,8 @@ export class GitHubMerge {
   private readonly waits = new Waits()
   /** The notes said, as `<repo>#<number> <kind> <head>` (NOTES), so each is said once. */
   private readonly told = new Set<string>()
+  /** For each pull request off the team at a head, the builder Harness here gave its task and the task, or null: read once. */
+  private readonly givenLeft = new Map<string, { name: string; task: number } | null>()
   private me: string | null = null
   /** When each open team pull request's head (`<repo>#<number>@<head>`) was first seen, and its checks as last read: they count as
    *  passed only once they hold still (CHECKS_SETTLE_MS). Kept for the heads open now, so the memory is the open work. */
@@ -696,9 +700,19 @@ export class GitHubMerge {
       const number = Number(pull.number), head = String(object(pull.head).sha ?? '')
       if (!Number.isSafeInteger(number) || !/^[0-9a-f]{40}$/.test(head) || landed.has(number)) continue
       const author = authorOf(pull)
+      if (author === null || isHeld(pull)) continue
       // The team's own pull requests only (assign/crew.ts teamOf): a person's merges as that person's repository does it.
-      if (author === null || !team.has(labelOf(author))) continue
-      if (isHeld(pull)) continue
+      if (!team.has(labelOf(author))) {
+        // Nor a task Harness here gave a builder who has left the team since: its PM is told, or it waits for good with nobody
+        // told (#3787: swarm-sandbox #15, READ-OK and green for hours after Attach renamed its builder). Only such a task: a shared
+        // repository carries dozens of builder: labels from older teams and tools, and none of them is this PM's to hear of.
+        const gave = await this.gaveLeft(repo, number, head, pull, author)
+        if (gave) {
+          await this.tellOnce(repo, number, head, project.pm, 'left', `${gave.name} is not on the team: Harness lands only the team's `
+            + `pull requests. Put ${gave.name} back on it, or give #${gave.task} to one of its builders.`, await pullTalk(this.reads, repo, number))
+        }
+        continue
+      }
       // Seen from now, whatever it waits for: a read that comes minutes after a push finds the head long settled.
       const at = this.see(open, `${repo}#${number}@${head}`)
       // Only a READ-OK made by command is a read: while the records cannot be read, nothing merges (said once, VerdictRecords).
@@ -774,6 +788,29 @@ export class GitHubMerge {
       }
     }
     this.forgetHeads(repo, open)
+  }
+
+  /**
+   * The builder Harness on this computer gave [pull]'s task, when that builder is [author], with the task: its last word "for
+   * **Name**" on one of the pull request's tasks, posted with this computer's login (the PM's person's, as Harness posts). Read
+   * once for each head, and at most [TASKS_READ_MAX] tasks.
+   */
+  private async gaveLeft(repo: string, number: number, head: string, pull: Json, author: string): Promise<{ name: string; task: number } | null> {
+    const key = `${repo}#${number}@${head}`
+    if (this.givenLeft.has(key)) return this.givenLeft.get(key)!
+    const tasks = tasksOf(pull).slice(0, TASKS_READ_MAX)
+    const me = tasks.length ? (await this.login(repo)).toLowerCase() : ''
+    let found: { name: string; task: number } | null = null
+    for (const task of tasks) {
+      const words = (await this.reads.current(repo, `/repos/${repo}/issues/${task}/comments?per_page=${PAGE}`, 3))
+        .filter(c => TEAM.has(c.author_association) && String(object(c.user).login ?? '').toLowerCase() === me)
+        .map(c => GAVE.exec(String(c.body ?? '').slice(0, 500))?.[1]).filter((name): name is string => !!name)
+      const last = words.at(-1)
+      if (last && labelOf(last) === labelOf(author)) { found = { name: last, task }; break }
+    }
+    this.givenLeft.set(key, found)
+    if (this.givenLeft.size > TOLD_MAX) this.givenLeft.delete(this.givenLeft.keys().next().value!)
+    return found
   }
 
   /** Merges one pull request on its own, squashed at its head, as every ready one was before the train. */
