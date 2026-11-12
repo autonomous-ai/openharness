@@ -317,9 +317,13 @@ export class FleetRouter implements FleetRouting {
    *
    * NEVER falls back to the selected machine. A wrong answer here does not fail — it delivers the user's
    * turn to a different computer, which is the worst outcome this whole feature can produce.
+   *
+   * An agent whose machine dropped off the carousel is still that machine's (#3691): the last machine it was listed on,
+   * which an agent never leaves. Read as '' it was this computer's, and a turn sent while its machine was gone went to
+   * this computer's door and was lost, where it is refused for the machine that did not answer (sendTurn).
    */
   machineOf(agentId: string): string {
-    return this.agentMachine.get(agentId) ?? this.seenOn.get(agentId) ?? ''
+    return this.agentMachine.get(agentId) ?? this.seenOn.get(agentId) ?? this.knownAgents.get(agentId)?.machineId ?? ''
   }
 
   /** Whether this daemon's last list held that agent — see CableHost.knows. */
