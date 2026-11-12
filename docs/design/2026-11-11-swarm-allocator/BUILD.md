@@ -402,6 +402,11 @@ Write its plan and cost; it runs on anh Dee's word.
 
 ### 15. A price for a subscription's window
 
+**Built** (#4111): the price, `priceOf` in `cli/src/superTabs/assign/schedule.ts`, counted in the plan's score. *Not built:
+a spend learned by class and model, and the 90th percentile, which need package 12's rows from real days. Found, in
+the model and by reading the code: the reserve is not kept today, since a task starts when it is given and nothing checks the window as it is taken; that
+check is package 16's.*
+
 **Today.** The solver already keeps each window above its person's reserve, with a fixed spend for each size (3, 10
 and 25% of a five-hour window). Claude's window is known only after a reply, and is unknown after an hour or a reset;
 unknown is never read as unused (`cli/src/services/usage.ts` `claudeReading`; pull request #3468).

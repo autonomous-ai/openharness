@@ -22,9 +22,10 @@ machine, each running one task at a time with its model. Given:
 - **machines**: CPU, memory and disk for Swarm work, after their person's own reserve;
 - **subscriptions**: each window's percent left, its resets, and the reserve its person keeps;
 
-find, for every task, its builder, model and start, so that the priority-weighted finish time is least, then the cost,
-and at no minute does a builder run two tasks, a machine go past its CPU, memory or disk, a limited model run past its
-limit, two builders change the same file, or a window be spent past its reserve.
+find, for every task, its builder, model and start, so that the priority-weighted finish time is least, then the cost
+(each model's cost for its minutes, and what is spent of each subscription's window at that window's price), and at no
+minute does a builder run two tasks, a machine go past its CPU, memory or disk, a limited model run past its limit, two
+builders change the same file, or a window be spent past its reserve.
 
 This is a multi-mode resource-constrained project scheduling problem: NP-hard, and well studied.
 
@@ -41,6 +42,15 @@ This is a multi-mode resource-constrained project scheduling problem: NP-hard, a
   others from shuffled priorities. Seeded and bounded by iterations and time.
 - **Stable plans.** Running work is fixed; moving a queued task costs a switching penalty, so a new plan changes the last
   only where it gains.
+- **A window's price.** A percent of a subscription's window costs `need / (need + room)`: its room is what is left above
+  its person's reserve, and its need is what the whole allowance, spent evenly over the window's period, would still
+  spend before its reset. So next to nothing where the room would lapse before the reset, a half for a window on its pace,
+  and nearer 1 the further the room has run ahead of the reset. A window whose use is not known is priced as one on its
+  pace, never as unused. A plan's cost counts each task's spend at it, a percent at price 1 as a minute of the cheapest
+  model: of builders as fast, the one whose window would lapse gets the task. A task's whole spend is under 30 such units
+  against 1,000 for a minute of its time, so with up to twelve subscriptions it never costs a minute. It reads the window
+  alone, so a task starting or ending does not move it
+  ([the allocator's package 15](2026-11-11-swarm-allocator/BUILD.md), `schedule.ts` `priceOf`).
 
 ## Evidence
 

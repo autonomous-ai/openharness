@@ -96,6 +96,8 @@ export const NAMED_INDEX = {
   SuperTabThread: { id: { _id: 1 } },
   /** Which agent wrote a GitHub comment, by its id (githubComments.ts commentAuthors). */
   SuperTabGithubComment: { id: { _id: 1 } },
+  /** What agents' conversations used on some issues and pull requests of a repository (taskTokens.ts taskTokens). */
+  SuperTabTaskTokens: { numbers: { tabId: 1, repository: 1, number: 1 } },
   /** `age`: chat settings back at the default, untouched for a week (chatSettings.ts sweepChatSettings). */
   SuperTabChatSetting: { age: { updatedAt: 1 } },
 } as const

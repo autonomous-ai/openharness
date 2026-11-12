@@ -147,7 +147,7 @@ describe('what each builder starts next (nextPicks)', () => {
     expect(new Set(picks.map(p => p.builder)).size).toBe(2)
     // Only a free task is given: a plan that has a held one first for a builder with room gives that builder the free one.
     const placed = (task: string, start: number) => ({ task, builder: 'pip', mode: 0, start, end: start + 90 })
-    expect(nextPicks({ placements: [placed('#8', 0), placed('#3', 90)], unplaced: [], score: 0, makespan: 180, cost: 0 }, read)).toEqual([{ task: '#3', builder: 'pip', start: 90 }])
+    expect(nextPicks({ placements: [placed('#8', 0), placed('#3', 90)], unplaced: [], score: 0, makespan: 180, cost: 0, priced: 0 }, read)).toEqual([{ task: '#3', builder: 'pip', start: 90 }])
   })
 
   it('says when the builder can start it and what it finished in its part', () => {
@@ -375,15 +375,21 @@ describe('taking work back from a builder that cannot work (takeBacks)', () => {
     expect(down(TAKEN_AWAY_MS)).toEqual([3, 4])
     expect(takeBacks(issues, [{ name: 'Atlas', label: 'builder:atlas', why: 'down', since: at(TAKEN_AWAY_MS) }], NOW)[0]!.why)
       .toBe(`Atlas's machine has been down since ${at(TAKEN_AWAY_MS).slice(11, 16)} UTC`)
+    // Paused, as down: a five-minute pause moves nothing; the queued go after half an hour, the taken after three (code review of #4112).
+    const paused = (ms: number) => takeBacks(issues, [{ name: 'Juno', label: 'builder:juno', why: 'paused', since: at(ms) }], NOW).map(b => [b.number, b.why])
+    expect(paused(5 * 60_000)).toEqual([])
+    expect(paused(QUEUED_AWAY_MS)).toEqual([[1, `Juno has been paused since ${at(QUEUED_AWAY_MS).slice(11, 16)} UTC`]])
+    expect(paused(TAKEN_AWAY_MS).map(([number]) => number)).toEqual([1, 2])
   })
 
   it('reads who is away from the PM\'s read: being stopped, or down', () => {
     const agent = (id: string, extra: Json = {}) => ({ id, regular: true, name: id, displayName: id[0]!.toUpperCase() + id.slice(1), machineId: 'mac',
       configuration: { engine: 'claude' }, ...extra })
-    const { builders, away } = crewOf({ agents: [agent('pip'), agent('juno', { workDecision: 'stop' }), agent('atlas', { downSince: '2026-11-09T10:00:00Z' })] },
-      { pmAgentId: 'pm', projectId: 'app' })
+    const { builders, away } = crewOf({ agents: [agent('pip'), agent('juno', { workDecision: 'stop' }), agent('atlas', { downSince: '2026-11-09T10:00:00Z' }),
+      agent('finn', { pausedAt: '2026-11-09T11:00:00Z' })] }, { pmAgentId: 'pm', projectId: 'app' })
     expect(builders.map(b => b.id)).toEqual(['pip'])
-    expect(away).toEqual([{ name: 'Juno', label: 'builder:juno', why: 'stopping' }, { name: 'Atlas', label: 'builder:atlas', why: 'down', since: '2026-11-09T10:00:00Z' }])
+    expect(away).toEqual([{ name: 'Juno', label: 'builder:juno', why: 'stopping' }, { name: 'Atlas', label: 'builder:atlas', why: 'down', since: '2026-11-09T10:00:00Z' },
+      { name: 'Finn', label: 'builder:finn', why: 'paused', since: '2026-11-09T11:00:00Z' }])
   })
 })
 

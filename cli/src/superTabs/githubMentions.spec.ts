@@ -738,6 +738,9 @@ describe('whom it reads for (watchedAgents)', () => {
       roster: async () => [row({}), row({ id: 'ken', contributorId: 'ken' }), row({ id: 'old', regular: false }), row({ id: 'gone', harnessId: 'h-gone' }),
         row({ id: 'stopping' }, { stopRequested: true }), row({ id: 'theirs', machineOwnerId: 'ken' })] })
     expect(watched).toEqual([{ tabId: 'tab', agentId: 'pip', harnessId: 'h-pip', chat: 'chat-pip', names: ['Pip'], label: 'builder:pip', repos: ['acme/app'] }])
+    // A paused one is still watched, so nothing said of its own pull requests is lost, and marked so: it is typed nothing.
+    const paused = await watchedAgents({ me: 'dee', live: () => true, read, roster: async () => [row({ pausedAt: '2026-11-12T01:00:00Z' })] })
+    expect(paused.map(agent => agent.paused)).toEqual([true])
   })
 
   // The assigner and Desktop name an agent by the name people see; a stored name can be its engine's ("Claude Code").

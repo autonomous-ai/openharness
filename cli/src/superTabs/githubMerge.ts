@@ -844,7 +844,8 @@ export class GitHubMerge {
    * assigner gives such a task to be built on that branch (the allocator's design, package 3), so the order is the tasks' own,
    * whatever the commits.
    *
-   * Only a pull request of the team's is waited for, known as the one that may land is (authorOf, teamOf): on a public
+   * Only a pull request of the team's is waited for, known as the one that may land is (authorOf, teamOf) and, as no landing
+   * asks, by GitHub's word that its author is a member of the repository (author_association): on a public
    * repository anyone opens a pull request that says it closes a task, and that is data, never a word on what lands.
    *
    * Read only when [pull] could merge now: one read for each task it names, [TASKS_READ_MAX] at most, a 304 while the task is
