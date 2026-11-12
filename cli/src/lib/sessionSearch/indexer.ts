@@ -201,7 +201,16 @@ export class SessionSearchIndex {
       store.exclude(id)
       store.removeSession(id)
     }
-    store.checkpoint()
+    this.checkpointAfterDelete()
+  }
+
+  /** A delete's checkpoint a reader kept from finishing: the erased words are still in the files. */
+  private checkpointOwed = false
+
+  /** Empties the files of what a delete erased; one a reader held is said, and asked again at the next sweep. */
+  private checkpointAfterDelete(): void {
+    this.checkpointOwed = !this.opts.store.checkpoint()
+    if (this.checkpointOwed) this.opts.log?.('[search] a reader held the index: what a delete erased stays in its files until the next sweep')
   }
 
   /** The first sweep after `delayMs` (boot has other work), then one every `sweepEveryMs`. */
@@ -280,6 +289,7 @@ export class SessionSearchIndex {
       const indexed = this.opts.store.session(sessionId)
       if (indexed && !agents.has(indexed.agentId) && !this.sources.has(sessionId)) this.opts.store.removeSession(sessionId)
     }
+    if (this.checkpointOwed) this.checkpointAfterDelete()
     // A deleted conversation no source lists is gone from disk: its exclusion goes, which bounds the
     // table. Not after a failed discovery, whose list can be short of what is on disk, nor while a pass
     // runs: one that began before the delete checks the set before it writes.

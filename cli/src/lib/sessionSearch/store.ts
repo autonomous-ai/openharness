@@ -567,14 +567,15 @@ export class SessionSearchStore {
    * own merges reach them, and the merge frees their pages for the pragma to zero. Only after a delete
    * that removed rows, since a merge rewrites the whole index (4.2 s on a 725 MB one) and a purge deletes
    * once per session key. Then moves the WAL into the database and empties it, so the pages that held
-   * the words leave the WAL file too.
+   * the words leave the WAL file too. False when a reader's open read kept it from finishing: the words
+   * stay in the files until a later one finishes.
    */
-  checkpoint(): void {
+  checkpoint(): boolean {
     if (this.erased) {
       this.db.exec("INSERT INTO turns_fts (turns_fts) VALUES ('optimize')")
       this.erased = false
     }
-    this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
+    return Number(this.statement('PRAGMA wal_checkpoint(TRUNCATE)').get()?.busy) === 0
   }
 
   /**
