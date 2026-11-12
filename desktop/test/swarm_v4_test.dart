@@ -560,6 +560,8 @@ void main() {
     await tester.tap(key('swarm-instructions-close'));
     await tester.pumpAndSettle();
     expect(find.text('agents/second.md'), findsNothing);
+    // Opening a pane beside a chat is saved with the chat's view 200 ms later (controller.dart showBeside).
+    await tester.pump(const Duration(milliseconds: 300));
   });
 
   testWidgets(
@@ -1103,6 +1105,8 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('agents/first builder.md'), findsNothing);
       expect(tester.takeException(), isNull);
+      // Opening a pane beside a chat is saved with the chat's view 200 ms later (controller.dart showBeside).
+      await tester.pump(const Duration(milliseconds: 300));
     },
   );
 

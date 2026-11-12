@@ -209,7 +209,7 @@ class _SuperTabViewState extends State<SuperTabView>
   /// Opens the chat of an agent chosen in My agents in the middle: the Board closes and the chat takes its place.
   void _openAgentChat(String id) {
     c.leaveDevices();
-    widget.onCloseTerminal?.call();
+    _leaveFor(id);
     setState(() {
       _page = null;
       _showManage = false;
@@ -987,7 +987,7 @@ class _SuperTabViewState extends State<SuperTabView>
     for (var i = at + step; i >= 0 && i < order.length; i += step) {
       final group = snapshot.conversation(order[i]);
       if (group == null || !c.unreadShown(group)) continue;
-      widget.onCloseTerminal?.call();
+      _leaveFor(group.id);
       setState(() {
         _page = null;
         _showManage = false;
@@ -1753,7 +1753,7 @@ class _SuperTabViewState extends State<SuperTabView>
     final request = c.noticeRequest;
     if (request == null || c.snapshot == null) return;
     c.noticeRequest = null;
-    widget.onCloseTerminal?.call();
+    if (request.kind == 'chat') _leaveFor(request.id);
     setState(() {
       _page = null;
       _showManage = false;
@@ -1770,7 +1770,7 @@ class _SuperTabViewState extends State<SuperTabView>
       _page = page;
       _showManage = false;
     });
-    widget.onCloseTerminal?.call();
+    // A page outranks a terminal in the pane: the chat's terminal stays, for when its person comes back to it.
   }
 
   /// The page on screen: none under Devices or once access is gone.
@@ -1860,7 +1860,7 @@ class _SuperTabViewState extends State<SuperTabView>
   bool _openConversation(String conversationId) {
     final group = c.snapshot?.conversation(conversationId);
     if (c.accessRevoked || group == null) return false;
-    widget.onCloseTerminal?.call();
+    _leaveFor(conversationId);
     _closeSidebar();
     setState(() {
       _page = null;
@@ -1930,7 +1930,7 @@ class _SuperTabViewState extends State<SuperTabView>
       );
       return;
     }
-    widget.onCloseTerminal?.call();
+    _leaveFor(id);
     _closeSidebar();
     c.select(id);
     // A thread reply opens its thread; one shown only there has no row in the
@@ -2767,14 +2767,30 @@ class _SuperTabViewState extends State<SuperTabView>
               gate: widget.app!.instructionsGate,
             ));
 
-  /// An agent's instructions file, open beside its chat (Swarm v4).
-  bool _instructionsOpen = false;
+  /// An agent's instructions file, what the app knows of it, and its own Chrome, each open beside its chat (Swarm v4). Kept
+  /// per chat, as its terminal is (controller.dart besidePane): a person who opens one, goes to another chat and comes back
+  /// finds it open (anh Dee, 2026-11-12). One is open at a time; setting one false closes it only when it is the one open.
+  bool get _instructionsOpen => c.besidePane(c.selectedId) == 'instructions';
+  set _instructionsOpen(bool open) => _beside('instructions', open);
+  bool get _infoOpen => c.besidePane(c.selectedId) == 'info';
+  set _infoOpen(bool open) => _beside('info', open);
+  bool get _browserOpen => c.besidePane(c.selectedId) == 'browser';
+  set _browserOpen(bool open) => _beside('browser', open);
 
-  /// What the app knows of the agent, open beside its chat (Swarm v4).
-  bool _infoOpen = false;
+  void _beside(String pane, bool open) {
+    if (open) {
+      c.showBeside(c.selectedId, pane);
+    } else if (c.besidePane(c.selectedId) == pane) {
+      c.showBeside(c.selectedId, null);
+    }
+  }
 
-  /// The agent's own Chrome, open beside its chat (Swarm v4).
-  bool _browserOpen = false;
+  /// Leaving for chat [target]: a terminal stays with the chat it was opened beside, and shows again when its person comes back
+  /// (anh Dee, 2026-11-12: "i open the terminal side by side and i go to another chat and come back and the terminal is
+  /// closed"). Only a move within the chat on screen closes it, so what it moves to is not under a terminal.
+  void _leaveFor(String? target) {
+    if (target == c.selectedId) widget.onCloseTerminal?.call();
+  }
 
   /// Keep each pane's state (what is typed in the instructions, what the tasks read and where they are scrolled) as a window
   /// resize moves it between the right pane and the chat's place.
