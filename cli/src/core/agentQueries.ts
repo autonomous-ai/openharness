@@ -7,15 +7,22 @@ import { usageTargetKey, usageTarget, validUsageTarget } from '../lib/agentUsage
  * - `advertised`: the live agents the apps are shown (the monitor samples them);
  * - `agentUsage`: an agent's cached usage reading;
  * - `count`: one of Hachi's daemon counters, none other (`HACHI_DAEMON_METRICS`), as the agent browser's process hands
- *   on its own (core/agentBrowserLink.ts): Hachi's services in the edge host have no other way to the recorder.
+ *   on its own (core/agentBrowserLink.ts): Hachi's services in the edge host have no other way to the recorder;
+ * - `hachi_goal_done`: a goal Hachi closed, for every window of the account (`clients.hachiGoalDone`), which decides
+ *   whether it is the live Hachi's.
  * Each is read as it is asked, so the service works from the registry as it is at that moment.
  */
 import { HACHI_DAEMON_METRICS, type HachiDaemonMetric } from '../lib/hachiMetrics.js'
-import type { CoreApi } from './api.js'
+import type { CoreApi, HachiGoalDone } from './api.js'
 
 const COUNTED: ReadonlySet<unknown> = new Set(HACHI_DAEMON_METRICS)
 
-export function answerAgentQuery(core: Pick<CoreApi, 'agents' | 'usage' | 'count'>, query: string, payload: Record<string, unknown> = {}): Record<string, unknown> | Promise<Record<string, unknown>> {
+export function answerAgentQuery(core: Pick<CoreApi, 'agents' | 'usage' | 'count' | 'clients'>, query: string, payload: Record<string, unknown> = {}): Record<string, unknown> | Promise<Record<string, unknown>> {
+  if (query === 'hachi_goal_done') {
+    const { agentId, goalId, title } = payload
+    core.clients.hachiGoalDone?.({ agentId, goalId, title } as HachiGoalDone)
+    return { ok: true }
+  }
   if (query === 'count') {
     if (!COUNTED.has(payload.metric)) return { error: 'INVALID_REQUEST' }
     core.count?.(payload.metric as HachiDaemonMetric)

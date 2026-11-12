@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
 import { AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS, mayOpenBrowser, CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, emptyPorts, LANE_OFF, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, TURN_DELIVERERS, TURN_END_HEARERS, WIFI_FALLBACKS, WIFI_OFF, type CoreApiDeps, type SwarmAgentDeps } from './api.js'
 import { FAIL, readFallback } from './serviceHost.js'
+import { HACHI_ID } from '../dsh/builtinIds.js'
 
 const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/work/app' }) as RegisteredSession
 
@@ -413,6 +414,27 @@ describe('the core API services stand on', () => {
     createCoreApi({ ...deps, log: undefined }).clients.sendLocal({ type: 'nothing' } as unknown as Parameters<typeof core.clients.sendLocal>[0])
     expect(warn).toHaveBeenCalledWith('[services] the devices sent a window nothing, which is not theirs to send')
     warn.mockRestore()
+  })
+
+  // Hachi 5a (OPENHARNES-15): `harness goal done` on Hachi's home tells every window of the account, here and away.
+  it('lets the goals tell the windows a goal of the live Hachi harness closed, and nothing else', () => {
+    const deps = coreDeps()
+    expect(createCoreApi(deps).clients.hachiGoalDone).toBeUndefined()
+    const hachi = { ...row('hachi'), dsh: HACHI_ID }
+    const registry = { ...deps.registry, byAgent: vi.fn((id: string) => (id === 'hachi' ? hachi : id === 'live' ? row('live') : undefined)) } as unknown as CoreApiDeps['registry']
+    const hachiGoalDone = vi.fn()
+    const core = createCoreApi({ ...deps, registry, hachiGoalDone })
+    const told = { agentId: 'hachi', goalId: 'g1', title: 'flaky login test' }
+    core.clients.hachiGoalDone!({ ...told, extra: 'dropped' } as typeof told)
+    expect(hachiGoalDone.mock.calls).toEqual([[told]])
+    // A goals process speaks as a service: whose goal it is, and its shape, are decided here.
+    for (const notice of [
+      { ...told, agentId: 'live' }, { ...told, agentId: 'gone' }, { ...told, goalId: '' }, { ...told, goalId: 7 },
+      { ...told, title: '' }, { ...told, title: 'x'.repeat(81) }, null,
+    ]) core.clients.hachiGoalDone!(notice as typeof told)
+    expect(hachiGoalDone).toHaveBeenCalledTimes(1)
+    expect(deps.log).toHaveBeenCalledWith('[services] the goals sent a goal done that is not the live Hachi\'s')
+    expect(deps.log).toHaveBeenCalledTimes(7)
   })
 
   it('answers ⌘K, when the devices fail, with no agent picked and nothing sent, saying why', async () => {

@@ -197,6 +197,50 @@ describe('the goals\' measures', () => {
   })
 })
 
+describe('the goal\'s notice for the windows (hachi_goal_done)', () => {
+  const telling = () => {
+    const hachiGoalDone = vi.fn()
+    goals = startGoals(fakeCore({ dataDir: dir, clients: { hachiGoalDone }, agents: { live: () => [session('hachi', '%1', HACHI_ID), session('lead', '%2', null)] } }), { now: () => clock })
+    return hachiGoalDone
+  }
+
+  it('tells the windows once, as the goal really closes: Hachi\'s harness, the goal and its title', async () => {
+    const told = telling()
+    const goal = await open('flaky login test')
+    await add(goal.id, 'c1', { agentId: 'a1' })
+    expect(told).not.toHaveBeenCalled()
+    await ask('goal_done', { id: goal.id })
+    expect(told.mock.calls).toEqual([[{ agentId: 'hachi', goalId: goal.id, title: 'flaky login test' }]])
+    // Done again: the notice it raised is not raised again.
+    await ask('goal_done', { id: goal.id })
+    expect(told).toHaveBeenCalledTimes(1)
+  })
+
+  it('tells nothing for a refused done: an empty goal, one it does not know, another caller, or one it could not save', async () => {
+    const told = telling()
+    const empty = await open('empty')
+    expect(await ask('goal_done', { id: empty.id })).toMatchObject({ error: 'GOAL_EMPTY' })
+    expect(await ask('goal_done', { id: 'nope' })).toMatchObject({ error: 'UNKNOWN_GOAL' })
+    const goal = await open()
+    await add(goal.id, 'c1', { agentId: 'a1' })
+    expect(await ask('goal_done', { id: goal.id, pane: '%2' })).toMatchObject({ error: 'NOT_HACHI' })
+    expect(await ask('goal_done', { id: goal.id }, { local: false, owner: true })).toMatchObject({ error: 'NOT_HACHI' })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    chmodSync(join(dir, 'hachi'), 0o500)
+    try { expect(await ask('goal_done', { id: goal.id })).toMatchObject({ error: 'NOT_SAVED' }) } finally { chmodSync(join(dir, 'hachi'), 0o700) }
+    expect(told).not.toHaveBeenCalled()
+    // Saved at last, it is told once.
+    await ask('goal_done', { id: goal.id })
+    expect(told).toHaveBeenCalledTimes(1)
+  })
+
+  it('closes the goal on a core that offers no way to the windows', async () => {
+    const goal = await open()
+    await add(goal.id, 'c1', { agentId: 'a1' })
+    expect((await ask('goal_done', { id: goal.id })).goal.doneAt).toBe(NOW)
+  })
+})
+
 it('closes a goal whose harnesses were handed to the person when Hachi closed (services/hachiHandOver.ts)', async () => {
   const goal = await open()
   await add(goal.id, 'c1', { agentId: 'a1' })

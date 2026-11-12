@@ -226,6 +226,9 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
     clients: {
       viewerChanged: () => {}, viewerFrame: () => false, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {},
       windows: (frame) => { void ask?.('windows', { frame }).catch(() => {}) },
+      // A goal Hachi closed, for every window of the account (core/agentQueries.ts `hachi_goal_done`). One the core
+      // cannot take now is lost, as a count is: the goal is closed and kept, and its notice is a courtesy.
+      hachiGoalDone: (notice) => { void ask?.('hachi_goal_done', { ...notice }).catch(() => {}) },
       // Handed to the core in order; whether the relay took it is the core's to know, and a lost observer's
       // close follows.
       observer: (connId, type, payload) => {
