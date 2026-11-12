@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { inspectCapacity, MODEL_REPORT_WAIT_MS, startAgent } from './start.js'
-import { buildEngineCommandArgv } from '../lib/engineLaunch.js'
+import { buildEngineCommandArgv, permissionModeFlags } from '../lib/engineLaunch.js'
 import { SuperTabHostError } from './wire.js'
 const where = { port: 14001, machineId: 'lead-machine', dataDir: '/fixture' }
 function fixture(options: { refused?: string; loseClose?: boolean; refuse?: string; loseCancel?: boolean; loseFailure?: boolean; launchModel?: string[]; acceptedLaunchModel?: { model: string | null; effort: string | null }; refuseModel?: string; frame?: string; guest?: boolean; identity?: { sessionId: string; createdAt: string }; screen?: string } = {}) {
@@ -140,33 +140,34 @@ describe('Swarm permission mode', () => {
       : request(type, payload, ms))
     expect(await inspectCapacity(await f.open() as never, f.start.request)).toMatchObject({ allowed: true, engine: { installed: true, signedIn: false } })
   })
-  // Swarm v3 (task #4215): each agent starts with its owner's own settings. A mode an older backend still relays is the
-  // PM's, not the person's, so it is not used either.
-  it.each(['claude', 'codex'] as const)('starts %s with its owner\'s own permission settings', async engine => {
+  // Each agent starts in Auto-approve, as a new agent in a regular tab does (anh Dee, 2026-11-12). In its owner's own default,
+  // Codex refused every ask to leave its sandbox, and the rehearsal's Codex builder could do nothing (2026-11-11). A mode an
+  // older backend still relays is the PM's, not the person's, so it is not used: never full mode (task #4215).
+  it.each(['claude', 'codex'] as const)('starts %s in Auto-approve, whatever mode a start carries', async engine => {
     const f = fixture()
     Object.assign(f.start.request, { engine, permissionMode: 'full' })
     const result = await startAgent({ tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)
     expect(result).toMatchObject({ ok: true })
     const payload = f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!
-    expect(payload).toMatchObject({ bypassPermission: false, swarmRole: 'dev' })
-    expect(payload).not.toHaveProperty('permissionMode')
+    expect(payload).toMatchObject({ permissionMode: 'auto', bypassPermission: true, swarmRole: 'dev' })
     // On Windows a launch first verifies the flags the engine's startup takes (lib/windows/engineStart.ts); given here as a
     // verified launch gives them, so this reads the permission flags alone (Window of Tim, #3815).
-    const argv = buildEngineCommandArgv(engine, { bypassPermission: payload.bypassPermission as boolean,
+    const argv = buildEngineCommandArgv(engine, { bypassPermission: payload.bypassPermission as boolean, permissionMode: payload.permissionMode as string,
       ...(process.platform === 'win32' ? { native: { startupArgs: [] } as never } : {}) })
-    for (const flag of ['--dangerously-skip-permissions', '--dangerously-bypass-approvals-and-sandbox', '--permission-mode', '--ask-for-approval', '--sandbox']) {
-      expect(argv).not.toContain(flag)
-    }
+    expect(argv).toEqual(expect.arrayContaining([...permissionModeFlags(engine, 'auto')!]))
+    for (const flag of ['--dangerously-skip-permissions', '--dangerously-bypass-approvals-and-sandbox']) expect(argv).not.toContain(flag)
   })
 
+
   // Backend #3872: the Team-written guard went with Team accounts, and no start carries `projectSettings: 'off'`. One that does
-  // starts as any other: on Codex, in the folder it names, in its owner's own permission mode.
+  // starts as any other: on Codex, in the folder it names, in Auto-approve.
   it('starts work as any other whatever projectSettings a start carries', async () => {
     const f = fixture()
     Object.assign(f.start.request, { engine: 'codex', projectSettings: 'off', worktree: false, cwd: '/repo' })
     expect(await startAgent({ tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ ok: true })
     const payload = f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!
-    expect(payload).not.toHaveProperty('permissionMode')
+    expect(payload).toMatchObject({ permissionMode: 'auto' })
+    expect(payload).not.toHaveProperty('projectSettings')
     expect(f.start.error).toBeNull()
   })
 
@@ -1248,7 +1249,8 @@ describe('neutral start prompts', () => {
   })
   it('keeps the agent_create payload keys unchanged for old machines', async () => {
     // The keys this payload carried before roleName existed (worktree fixture); an older machine's launches.ts refuses others.
-    const base = ['branchBase', 'branchName', 'bypassPermission', 'creationId', 'engine', 'gitSource', 'name', 'projectSource', 'prompt', 'startedBy', 'swarmRole']
+    // permissionMode is one every machine has taken since New Harness ▸ Advanced.
+    const base = ['branchBase', 'branchName', 'bypassPermission', 'creationId', 'engine', 'gitSource', 'name', 'permissionMode', 'projectSource', 'prompt', 'startedBy', 'swarmRole']
     for (const extra of [lead, {}, { role: 'reviewer' }]) {
       for (const roleName of [undefined, 'Tester']) {
         const { payload } = await starts(extra, roleName)
@@ -1261,7 +1263,7 @@ describe('neutral start prompts', () => {
   // Project instructions, phase 4 (decision 1): the CLI's kinds stay inside it this release; an older machine's launches.ts
   // takes lead, dev and review alone, and refuses a key it does not know.
   it('sends an older machine only the role values it knows', async () => {
-    const keys = ['branchBase', 'branchName', 'bypassPermission', 'creationId', 'engine', 'gitSource', 'name', 'projectSource', 'prompt', 'startedBy', 'swarmRole']
+    const keys = ['branchBase', 'branchName', 'bypassPermission', 'creationId', 'engine', 'gitSource', 'name', 'permissionMode', 'projectSource', 'prompt', 'startedBy', 'swarmRole']
     for (const [extra, roleName, swarmRole] of [[{}, 'Tester', 'dev'], [{}, undefined, 'dev'], [lead, 'Product Manager', 'lead'], [lead, undefined, 'lead'],
       [{ role: 'reviewer' }, 'Reviewer', 'review'], [{ role: 'reviewer' }, undefined, 'review'], [{ role: 'builder' }, 'Engineer', 'dev']] as const) {
       const { payload } = await starts(extra, roleName)

@@ -376,7 +376,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         // The phone's answers to Claude Code's first-run questions here, asked as it sets this computer up
         // (engines/launchPrep.ts answerFirstRun): its owner's, as the setup is.
         if (payload.action === 'claudeFirstRun') {
-          // Its theme and first-run screens only: an agent runs in its owner's own permission mode (task #4215), so a phone's
+          // Its theme and first-run screens only: no Swarm agent starts in full mode (task #4215), so a phone's
           // `acceptFullMode` from before is read as nothing.
           if (typeof payload.theme !== 'string') return { error: 'INVALID_REQUEST' }
           return answerFirstRun('claude', { theme: payload.theme }) ? { ok: true } : { error: 'FIRST_RUN_UNANSWERED' }

@@ -238,7 +238,7 @@ export function createAgentRestarter({
     try {
       // A Swarm's PM comes back in full mode (Ken, 11-09): Restart (⌘⇧E) is how a person brings a stuck PM back, and in its
       // owner's settings it asked before each tool and stood still until someone approved. Every other Swarm agent keeps
-      // the mode its person chose, or none (#4215).
+      // the mode it started in, Auto-approve (superTabs/start.ts), or the one its person chose since.
       const permitted = session.swarmSkill?.role === 'coordinator' ? { ...session, permissionMode: 'full' } : session
       const restartPermission = await downgradedPermission(permitted,
         await bypassPermissionFor(permitted, () => liveBypassPermission(session)), 'restart', built.overrides.native)

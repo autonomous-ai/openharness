@@ -248,11 +248,13 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
       // Project instructions, phase 4 (decision 1): a coordinator or an agent, sent in the values a machine on an older CLI takes
       // (lead, dev, and review for an older client's Reviewer, which keeps its Reviewer kind).
       const role = wireRole({ role: lead ? 'coordinator' : 'agent', ...(reviewer ? { fallback: 'review' as const } : {}) })
-      // Swarm v3 (task #4215): a PM and an agent start with their owner's own permission settings: no mode, so the
-      // engine opens in the person's own default. Forced full mode turned off every check on people's own computers, where
-      // Anthropic says to use it only in isolated environments.
-      const payload: Json = { engine: request.engine, name: request.name, creationId, startedBy: 'agent', bypassPermission: false,
-        ...(swarmEngine ? { swarmRole: role } : {}),
+      // A PM and an agent start in Auto-approve, as a new agent in a regular tab does (anh Dee, 2026-11-12; Desktop
+      // core/permission_modes.dart `kDefaultPermissionMode`). In its owner's own default, Codex refused every ask to leave its
+      // sandbox, and the rehearsal's Codex builder could do nothing (2026-11-11). Auto-approve keeps each engine's own checks
+      // (lib/engineLaunch.ts PERMISSION_MODES). Never full mode, which turned off every check on people's own computers, where
+      // Anthropic says to use it only in isolated environments (task #4215).
+      const payload: Json = { engine: request.engine, name: request.name, creationId, startedBy: 'agent', bypassPermission: swarmEngine,
+        ...(swarmEngine ? { swarmRole: role, permissionMode: 'auto' } : {}),
         prompt: `${startNote(request.name)}${handoffPrompt}`.trim(),
         ...(agentFolder ? { cwd: agentFolder } : request.worktree ? { projectSource: 'worktree', gitSource: request.cwd, branchName: `super-tab/${startId}`,
           // No branch named: the repository's default branch, fetched, not the host checkout's old HEAD.

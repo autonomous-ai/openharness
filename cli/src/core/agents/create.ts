@@ -155,7 +155,7 @@ export function createAgentCreator({
     // a worktree of a local repository, itself, and sends the folder as a plain cwd. 2026-10-30: a Cmd+S Swarm's PM sat
     // at Claude Code's "do you trust this folder?", which no Swarm view shows; it read Idle and every message to it was
     // withheld. The person chose that repository for the Swarm in this window, so a Claude Code Swarm agent, in whatever mode
-    // its owner's settings give (task #4215), is trusted in a Git checkout directly in the projects root or a worktree Harness
+    // it runs in (task #4215), is trusted in a Git checkout directly in the projects root or a worktree Harness
     // made, read from disk.
     // Never from a relayed request, which could name any repository here. Codex's trust also sets defaults for the
     // person's own sessions in that folder, so it stays theirs to give.
