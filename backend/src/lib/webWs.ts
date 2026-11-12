@@ -421,7 +421,7 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
       send({ type: 'node_status', payload: { online, status: lifecycle === 'unknown' ? 'offline' : lifecycle } })
     })(), 'web-ws seed node_status', { userId: user.sub, machineId })
   }
-  const bindAgent = async (machineIdRaw: unknown, refuseOffline: boolean): Promise<void> => {
+  const bindAgent = async (machineIdRaw: unknown, refuseOffline: boolean, relayIsolated: boolean): Promise<void> => {
     if (typeof machineIdRaw !== 'string' || !machineIdRaw) return
     const machineId = machineIdRaw
     const gen = ++selectGen
@@ -480,8 +480,10 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
     }
     if (closed || gen !== selectGen) return
     client?.detach()
-    // A guest never hears the machine's broadcasts, only what the machine addresses to it (lib/hub.ts).
-    client = attachHubClient(ws, machineId, 'web', { guest: !!shared })
+    // A guest never hears the machine's broadcasts, only what the machine addresses to it (lib/hub.ts). Nor does a daemon's
+    // background relay, which is also no app. Keyed on `relayIsolation`, never `tool`: an older daemon sends a tool's select
+    // on the upstream it shares with the desktop window, which would then hear nothing (OPENHARNES-13).
+    client = attachHubClient(ws, machineId, 'web', { guest: !!shared, relayIsolated })
     currentAgentId = machineId
     currentBinding = binding
     watchShare(shared ? machineId : null)
@@ -594,8 +596,8 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
       }
     }
     if (type === 'machine_select') {
-      const payload = frame.payload as { machineId?: unknown; offline?: unknown } | undefined
-      await bindAgent(payload?.machineId, payload?.offline === 'refuse')
+      const payload = frame.payload as { machineId?: unknown; offline?: unknown; relayIsolation?: unknown } | undefined
+      await bindAgent(payload?.machineId, payload?.offline === 'refuse', payload?.relayIsolation === true)
       return
     }
     if (type === 'machine_deselect') {
