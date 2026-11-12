@@ -687,7 +687,7 @@ class _ChooseWayDialog extends StatelessWidget {
                               onTap: () => unawaited(controller.openPage(page)),
                               borderRadius: BorderRadius.circular(4),
                               child: Icon(
-                                Icons.open_in_new,
+                                AppIcons.externalLink,
                                 size: 14,
                                 color: theme.colorScheme.primary,
                               ),
