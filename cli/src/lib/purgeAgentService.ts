@@ -22,8 +22,12 @@ import { LEAD_PROTECTED_DETAIL, unusedChat } from './closeAgentService.js'
 import { inspectWorkspace, inspectWorktree, removeReviewedWorktree, type WorktreeReview } from './worktreeDeletion.js'
 
 const exec = promisify(execFile)
-const identity = (s: RegisteredSession) => JSON.stringify([s.agentId, s.engine, s.sessionId,
-  s.registeredAt, s.boundAt, s.cwd, s.codexHome, s.hermesHome, s.transcriptPath, s.processIdentity, s.runtimes])
+/** [withProcess] false for a harness reviewed before its engine's process was known: the one it gains is the engine
+ *  its launch started, not a replacement (stopAgentService.ts `starting`). */
+const identity = (s: RegisteredSession, withProcess = true) => JSON.stringify([s.agentId, s.engine, s.sessionId,
+  s.registeredAt, s.boundAt, s.cwd, s.codexHome, s.hermesHome, s.transcriptPath, withProcess ? s.processIdentity : undefined, s.runtimes])
+/** A launch under way whose engine cannot be stopped yet (its conversation unreadable for its first seconds). */
+const STILL_STARTING = 'This harness is still starting. Try again in a moment.'
 const conversation = (s: RegisteredSession) => JSON.stringify([s.engine, s.codexHome, s.hermesHome, s.sessionId])
 const fail = (message: string): never => { throw new Error(message) }
 type File = { path: string; dev: bigint; ino: bigint; bytes: number }
@@ -320,7 +324,7 @@ export class PurgeAgentService {
   private current(request: Pick<PurgeRequest, 'agentId' | 'sessionId' | 'createdAt'>, deletingHistory = true): RegisteredSession {
     const s = this.deps.live(request.agentId) ?? this.deps.stopped.get(request.agentId)
     if (!s || (s.sessionId || null) !== request.sessionId || s.registeredAt !== request.createdAt) return fail('This harness changed. Refresh and review deletion again.')
-    if (s.dsh === 'autonomous/harness-monitor' || s.launch?.state === 'starting') return fail('This harness cannot be deleted from this monitor.')
+    if (s.dsh === 'autonomous/harness-monitor') return fail('This harness cannot be deleted from this monitor.')
     if (this.deps.restarting(s.agentId)) return fail('Wait for the current harness operation to finish, then try again.')
     if (deletingHistory && s.sessionId && this.deps.sessions().some(other => other.agentId !== s.agentId && other.sessionId === s.sessionId)) {
       return fail('Another harness uses this conversation. Its shared history cannot be deleted here.')
@@ -357,7 +361,7 @@ export class PurgeAgentService {
           try { worktree = await inspectWorktree(current, this.deps.sessions()) }
           catch (error) { worktreeReason = error instanceof Error ? error.message : 'The worktree could not be verified.' }
         }
-        if (identity(this.current(request, !request.includeWorktree)) !== signature) return fail('The harness changed while checking its data. Try again.')
+        if (identity(this.current(request, !request.includeWorktree), !!current.processIdentity) !== signature) return fail('The harness changed while checking its data. Try again.')
         const sessionBytes = history?.bytes == null ? null : history.bytes + checkpointFiles.reduce((n, f) => n + f.bytes, 0)
         const paths = history ? [history.file?.path ?? history.missingFile ?? history.database, ...checkpointFiles.map(f => f.path)].filter(Boolean) : []
         const reviewId = randomUUID()
@@ -372,7 +376,8 @@ export class PurgeAgentService {
           } } : {}) }
       }
       const review = this.reviews.get(request.reviewId ?? '')
-      if (!review || review.signature !== identity(current)) return fail('The deletion review expired or changed. Review this harness again.')
+      const withProcess = !!review?.session.processIdentity
+      if (!review || review.signature !== identity(current, withProcess)) return fail('The deletion review expired or changed. Review this harness again.')
       reviewedId = request.reviewId
       worktreeDeleted = review.worktreeDeleted === true
       if (!sessionData && !worktreeData) return fail('Select session data, worktree data, or both.')
@@ -390,8 +395,14 @@ export class PurgeAgentService {
         if (this.deps.live(request.agentId)) {
           await this.deps.stop(request.agentId, { current: () => {
             const live = this.deps.live(request.agentId)
-            return !!live && identity(live) === review.signature
-          }, ...await this.unstartedChat(this.deps.live(request.agentId)) })
+            return !!live && identity(live, withProcess) === review.signature
+          }, ...await this.unstartedChat(this.deps.live(request.agentId)) }).catch((error: unknown) => {
+            // A launch still under way is stopped as a close stops it; one whose engine cannot be read yet is not.
+            if (review.session.launch?.state === 'starting' && this.deps.live(request.agentId)
+              // AgentStopError by its code: the monitor's process imports this module, not the stop service.
+              && (error instanceof IdentityReadUnavailable || (error as { code?: unknown } | null)?.code === 'STOP_UNCONFIRMED')) fail(STILL_STARTING)
+            throw error
+          })
         }
         if (this.deps.live(request.agentId)) return fail('The harness did not stop. No session data was deleted.')
         stopped = true
