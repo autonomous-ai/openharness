@@ -49,6 +49,11 @@ describe('Hermes\'s home on the live terminal discovery path', () => {
     expect(loadEngine).not.toHaveBeenCalled()
   })
 
+  it('finds the home of a Hermes that only has a HOME of its own', async () => {
+    readProcessEnv.mockResolvedValue({ HOME: '/sandbox/agent' })
+    expect(await homes()).toEqual({ hermes: '/sandbox/agent/.hermes', claude: null })
+  })
+
   it('preserves an unknown home when the process environment cannot be read', async () => {
     readProcessEnv.mockResolvedValue(null)
     expect(await homes()).toEqual({ hermes: undefined, claude: null })
