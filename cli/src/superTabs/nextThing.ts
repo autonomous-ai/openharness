@@ -272,11 +272,13 @@ export class NextThing {
         // over, a restart (every release) asked it again 20 minutes on, under a new operation (#4125).
         const idle = (this.memory ??= this.load())[agent.agentId]?.idle
         const kept = idle?.terminal === agent.harnessId && idle.task === `${thing.repo}#${thing.held.number}` ? idle : undefined
-        // Asked, it is not asked again, but its task goes back only after an hour idle seen from now. Only the look as Harness starts
-        // finds a watch asked (a turn's end drops it first), and a turn that ended while nothing heard it was never heard: a builder
-        // that worked on it then lost it "with nothing done on it for an hour", said on GitHub and to its person (review of #4129).
-        const back = kept?.back === undefined ? undefined : Date.now() + IDLE_BACK_MS
-        return this.watch(agent, thing.repo, thing.held, kept?.since ?? Date.now(), back)
+        // Its task goes back no sooner than an hour after this look, asked or not, and one asked is not asked again. Only the look as
+        // Harness starts finds a watch kept (a turn's end drops it first), and a turn that ended while nothing heard it was never heard:
+        // a builder that worked on it then lost it "with nothing done on it for an hour", said on GitHub and to its person. Not asked
+        // as far as its file says, it may have been, with the answer lost: asked again under its operation, it hears nothing new
+        // (reviews of #4129). A new watch's hour is its own.
+        const floor = Date.now() + IDLE_BACK_MS
+        return this.watch(agent, thing.repo, thing.held, kept?.since ?? Date.now(), kept?.back === undefined ? undefined : floor, floor)
       }
       // One its person has waits for them: the next is typed, or the task it holds watched.
       if (await this.give(agent, thing.key, thing.typed, thing.did)) return this.keepIdle(agent, null)
@@ -363,15 +365,15 @@ export class NextThing {
   }
 
   /** Looks again at [agent], idle since [since] with [task] of its own in hand: at [IDLE_ASK_MS] it is asked once, and once asked,
-   *  at [back] its person is told and the task goes back for another builder. Any turn of its ends this. Kept in its file, for the
-   *  look as Harness starts again to go on with. */
-  private watch(agent: WatchedAgent, repo: string, task: Record<string, unknown>, since: number, back?: number): void {
+   *  at [back] (no sooner than [floor]) its person is told and the task goes back for another builder. Any turn of its ends this.
+   *  Kept in its file, for the look as Harness starts again to go on with. */
+  private watch(agent: WatchedAgent, repo: string, task: Record<string, unknown>, since: number, back?: number, floor = 0): void {
     this.unwatch(agent.harnessId)
     // Kept while its look reads, so a stop of its person's then starts the next watch as one before it does: dropped, the stop found
     // none, and the task was never asked about again (review of #4129). A time gone by while Harness was down comes at once, at 0:
     // Node 24 warns of a negative delay (TimeoutNegativeWarning).
     const watched = { agent, repo, task, timer: setTimeout(() => {
-      void this.idleWith(agent, repo, Number(task.number), String(task.title ?? '').trim(), since, back)
+      void this.idleWith(agent, repo, Number(task.number), String(task.title ?? '').trim(), since, back, floor)
         .finally(() => { if (this.idle.get(agent.harnessId) === watched) this.idle.delete(agent.harnessId) })
     }, Math.max(0, (back ?? since + IDLE_ASK_MS) - Date.now())) }
     watched.timer.unref()
@@ -408,7 +410,7 @@ export class NextThing {
     if (ids.length) this.save(memory)
   }
 
-  private async idleWith(agent: WatchedAgent, repo: string, number: number, title: string, since: number, back?: number): Promise<void> {
+  private async idleWith(agent: WatchedAgent, repo: string, number: number, title: string, since: number, back: number | undefined, floor: number): Promise<void> {
     const key = `${repo}#${number}`, what = titled(repo, { number, title }), name = agent.names[0]!
     // Whether this watch is the one its file keeps: a turn of its that ends while this awaits drops it, and its end's look starts the
     // next. Asked or re-armed after, it went on with the old start: the task went back 40 minutes on (review of #4129).
@@ -428,7 +430,7 @@ export class NextThing {
         // and one the server has in a release's other words was asked.
         await this.once('tell', agent, this.operation(agent, key, `idle ${since}`), `You hold ${what} and have done nothing on it for 20 minutes: `
           + `go on with it, or say on it what holds it: gh issue view ${number} --repo ${repo}`)
-        if (ours()) this.watch(agent, repo, { number, title }, since, Date.now() + IDLE_BACK_MS - IDLE_ASK_MS)
+        if (ours()) this.watch(agent, repo, { number, title }, since, Math.max(Date.now() + IDLE_BACK_MS - IDLE_ASK_MS, floor))
         return
       }
       // The watch goes before the task does: a turn of its that ends while it goes back keeps the watch its end's look makes.

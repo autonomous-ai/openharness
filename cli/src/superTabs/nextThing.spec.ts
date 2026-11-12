@@ -759,7 +759,7 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
 
   // Review of #4129: an ask asked again after a restart, which the server has under its operation in other words (a release that
   // changed them, a title edited), was refused, never re-armed, and its task never went back.
-  it('takes an ask the server has under its operation in other words as asked, and gives the task back at its hour', async () => {
+  it('takes an ask the server has under its operation in other words as asked, and gives the task back an hour after its look', async () => {
     const f = setup({ items: [item(14, 'Add the export', ['status:taken'])] })
     writeFileSync(f.file, JSON.stringify({ pip: { key: '', times: 0, told: false, idle: { terminal: 'h-pip', task: 'acme/app#14', since: Date.now() - IDLE_ASK_MS } } }))
     f.tell.mockRejectedValueOnce(new SuperTabHostError('OPERATION_REUSED', 'That operation was used with other words.', 409))
@@ -767,7 +767,9 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     await vi.advanceTimersByTimeAsync(START_LOOK_MS + 1)
     expect(f.tell).toHaveBeenCalledTimes(1)
     expect(f.log).not.toHaveBeenCalled()
-    await vi.advanceTimersByTimeAsync(IDLE_BACK_MS - IDLE_ASK_MS)
+    await vi.advanceTimersByTimeAsync(IDLE_BACK_MS - 2)
+    expect(f.say).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
     expect(f.say.mock.calls.map(([, , text]) => text)).toEqual([expect.stringMatching(/^I held acme\/app#14 /)])
     f.next.stop()
   })
@@ -785,23 +787,28 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     }
   })
 
-  it('asks again, under the operation it asked under, a watch its file kept from before the ask was saved', async () => {
+  // Review of #4129: the ask typed again reaches no one, so a builder that worked on it in a turn never heard lost it 40 minutes on.
+  it('asks again, under the operation it asked under, a watch its file kept from before the ask was saved, and gives back an hour on', async () => {
     const f = setup({ items: [item(14, 'Add the export', ['status:taken'])] })
     f.next.start()
     await f.end()
     await vi.advanceTimersByTimeAsync(IDLE_ASK_MS)
     const [, first, text] = f.tell.mock.calls[0]!
     f.next.stop()
-    // Stopped as it typed the ask, before it saved that it had: its file says only when the watch began. The server answers the
-    // same operation with the same words as given, so the builder hears it once.
+    // Stopped as it typed the ask, or its answer lost as the backend's link dropped, before it saved that it had: its file says only
+    // when the watch began. The server answers the same operation with the same words as given, so the builder hears it once.
     const saved = JSON.parse(readFileSync(f.file, 'utf8'))
     delete saved.pip.idle.back
     writeFileSync(f.file, JSON.stringify(saved))
     const again = f.make()
     again.start()
-    // Its 20 minutes are long over: asked as the look finds it.
+    // Its 20 minutes are long over: asked as the look finds it, and its task goes back an hour after that look.
     await vi.advanceTimersByTimeAsync(START_LOOK_MS + 1)
     expect(f.tell.mock.calls.slice(1)).toEqual([[PIP, first, text]])
+    await vi.advanceTimersByTimeAsync(IDLE_BACK_MS - 2)
+    expect(f.written).toEqual([])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(f.say.mock.calls.map(([, , said]) => said)).toEqual([expect.stringMatching(/^I held acme\/app#14 /)])
     again.stop()
   })
 
