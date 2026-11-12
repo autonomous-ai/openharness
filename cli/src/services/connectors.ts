@@ -5,7 +5,7 @@
  *
  * `connectors` takes `{action}`: `list`, `connect` {connector}, `flow` {flow}, `disconnect` {connector},
  * `custom` {name, url, headers}, `callback` {flow, url}; and for Gmail, Calendar and Drive through this computer's
- * Claude Code or Codex instead of Harness, `elsewhere`, `connect_via` / `disconnect_via` {connector, via}, which answer
+ * Claude Code or Codex instead of Harness, `elsewhere`, `connect_via` / `disconnect_via` {connector, via, plugin?}, which answer
  * the page to open in that engine's account (lib/connectors/elsewhere.ts). The app opens a returned `authorize_url` in the
  * browser and follows the flow. A phone signing in for this computer opens it in its own browser and,
  * for a service this computer signs in to itself, sends back the redirect to 127.0.0.1 it caught as
@@ -278,8 +278,8 @@ export function startConnectors(core: CoreApi, ports: CorePorts, overrides: Conn
       case 'callback': return { ...flows.deliver(String(payload.flow ?? ''), String(payload.url ?? '')) }
       // Gmail, Calendar and Drive through this computer's Claude Code or Codex instead (lib/connectors/elsewhere.ts).
       case 'elsewhere': return { ...(await elsewhere(overrides.elsewhere)) }
-      case 'connect_via': return await connectVia(payload.connector, payload.via, overrides.elsewhere)
-      case 'disconnect_via': return await disconnectVia(payload.connector, payload.via, overrides.elsewhere)
+      case 'connect_via': return await connectVia(payload.connector, payload.via, overrides.elsewhere, payload.plugin)
+      case 'disconnect_via': return await disconnectVia(payload.connector, payload.via, overrides.elsewhere, payload.plugin)
       default: return { error: 'CONNECTORS_FAILED', detail: 'Unknown action.' }
     }
   }

@@ -47,5 +47,8 @@ details{margin-top:14px}summary{cursor:pointer;color:#a3a3a3;font-size:14px}
 .way{display:flex;gap:12px;align-items:flex-start;justify-content:space-between;padding:12px 0;border-bottom:1px solid #2a2a2a}
 .way-text{display:flex;flex-direction:column;gap:2px;font-size:14px}.way-text strong{font-size:15px}
 .way-state{font-size:12px;font-weight:400;color:#9fb0ff;margin-left:8px}.way-state.warn{color:#ffd28a}
+.way-open{display:inline-flex;vertical-align:middle;margin-left:6px;color:#9fb0ff}.way-open:hover{color:#c4cfff}
 .ways-note{margin-top:12px!important}
 .way-text .hint{text-align:left}
+/* One engine's parts (Codex's plugins): under its heading, each with its own icon. */
+.way-head{border-bottom:none;padding-bottom:4px}.way.part{align-items:center;padding:8px 0 8px 12px;justify-content:flex-start}.way.part .way-text{flex:1}.part-icon{width:22px;height:22px;border-radius:5px;flex:none}
