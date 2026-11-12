@@ -17,11 +17,13 @@ export const OWN_CARRIED_MAX = 16 * 1024
 
 /** The agent's own `agents/<name>.md` (lib/agentInstructions.ts), after the basics: its person's rules for it, which its Desktop
  *  shows and saves. Claude Code reads CLAUDE.md and Codex AGENTS.md by themselves, and neither reads this file, so Alba never saw
- *  what its person wrote there (anh Dee, 2026-11-11). In the engine's own instructions, it holds through a compaction. */
+ *  what its person wrote there (anh Dee, 2026-11-11). In the engine's own instructions, it holds through a compaction. It comes
+ *  first wherever it differs from anything else the agent is told, the project's AGENTS.md included, as its Desktop says
+ *  ("Yours first; it wins where they differ", super_tabs/agent_instructions.dart; anh Dee, 2026-11-12). */
 function ownInstructions(own?: { cwd: string | null; name: string | null }): string {
   if (!own?.cwd || !own.name) return ''
   const read = readInstructionsAtLaunch(own.cwd, own.name, OWN_CARRIED_MAX)
-  const place = `agents/${own.name}.md, which your person keeps and which come first where they differ from the above`
+  const place = `agents/${own.name}.md, which your person keeps and which come first wherever they differ from anything else you are told, your project's AGENTS.md included`
   if (read === 'TOO_LARGE') return `\n\nYour own instructions are in ${place}: read them now, and again after a compaction.`
   const text = read?.trim()
   return text ? `\n\nYour own instructions, from ${place}:\n${text}` : ''
