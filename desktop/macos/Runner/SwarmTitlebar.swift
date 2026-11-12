@@ -2614,6 +2614,7 @@ private final class SwarmTabStrip: NSView {
       tab.activity = HarnessNativeActivity(row["activity"] as? [String: Any])
       tab.canShowAgentMessages = row["canShowAgentMessages"] as? Bool == true
       tab.canInvitePeople = row["canInvitePeople"] as? Bool == true
+      tab.fixed = row["fixed"] as? Bool == true
       tab.superTabPaused = row["superTabPaused"] as? Bool
       tab.applyShared(row["shared"] as? [String: Any])
       tab.emit = { [weak self, weak tab] method, args in
@@ -3055,7 +3056,12 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
     didSet { if canInvitePeople != oldValue { updateMessagesItems() } }
   }
   var superTabPaused: Bool? { didSet { updateMessagesItems() } }
+  /// Hachi's tab (docs/design/2026-11-12-hachi.md): first, with no ×, and not renamed, moved or closed here.
+  var fixed = false {
+    didSet { if fixed != oldValue { updateMessagesItems(); updateAccessoryVisibility() } }
+  }
   private var pauseSuperTabItem: NSMenuItem?
+  private var fixedItems: [NSMenuItem] = []
   func applyShared(_ shared: [String: Any]?) {
     let count = shared?["count"] as? Int
     let role = count == nil ? nil : shared?["role"] as? String
@@ -3224,7 +3230,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
       menu.addItem(item)
       return item
     }
-    _ = item("Rename Tab…", #selector(renameSwarm))
+    fixedItems.append(item("Rename Tab…", #selector(renameSwarm)))
     pauseSuperTabItem = item("Pause new work", #selector(pauseSuperTab))
     let separator = NSMenuItem.separator()
     menu.addItem(separator)
@@ -3236,8 +3242,9 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
     shareItems["stopSharingTab"] = item("Stop Sharing Tab", #selector(stopSharing))
     shareItems["moveTabHere"] = item("Move Here", #selector(moveHere))
     shareItems["leaveTab"] = item("Leave Tab", #selector(leaveTab))
-    menu.addItem(.separator())
-    _ = item("Close Tab", #selector(closeSwarm))
+    let closeSeparator = NSMenuItem.separator()
+    menu.addItem(closeSeparator)
+    fixedItems += [closeSeparator, item("Close Tab", #selector(closeSwarm))]
     self.menu = menu
     updateMessagesItems()
     updateAccessibility()
@@ -3277,7 +3284,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   /// Hovering reveals the tab's ×; at rest it shows its name and status.
   var isRevealed: Bool { actionsEnabled && hovered }
   private func updateAccessoryVisibility() {
-    closeButton.isHidden = !isRevealed
+    closeButton.isHidden = !isRevealed || fixed
   }
   /// Whether each sharing row applies: Invite People… for an unshared tab or the owner's; Stop Sharing Tab and
   /// Move Here (another of the owner's computers) for the owner; Leave Tab for a member.
@@ -3297,6 +3304,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
     pauseSuperTabItem?.title = superTabPaused == true ? "Resume new work" : "Pause new work"
     for item in messagesItems { item.isHidden = !canShowAgentMessages }
     for (action, item) in shareItems { item.isHidden = !offers(action) }
+    for item in fixedItems { item.isHidden = fixed }
     messagesSeparator?.isHidden = (messagesItems + Array(shareItems.values)).allSatisfy(\.isHidden)
   }
   private func invalidateLabel() {
@@ -3465,7 +3473,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
     // AppKit's click count can span different controls, especially after a
     // close shifts the next tab under the pointer. Rename only when this tab
     // owned the first press as well.
-    if event.clickCount == 2, let first,
+    if event.clickCount == 2, !fixed, let first,
        event.timestamp - first.time <= NSEvent.doubleClickInterval,
        hypot(event.locationInWindow.x - first.point.x,
              event.locationInWindow.y - first.point.y) <= 4 {
@@ -3487,12 +3495,12 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   }
   override func otherMouseUp(with event: NSEvent) {
     defer { middleDown = false }
-    guard middleDown, event.buttonNumber == 2, actionsEnabled else { return }
+    guard middleDown, event.buttonNumber == 2, actionsEnabled, !fixed else { return }
     guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
     emit?("close", ["id": swarmId])
   }
   override func mouseDragged(with event: NSEvent) {
-    guard actionsEnabled else { return }
+    guard actionsEnabled, !fixed else { return }
     if hypot(event.locationInWindow.x - downPoint.x, event.locationInWindow.y - downPoint.y) < 5 { return }
     let item = NSPasteboardItem()
     item.setString(swarmId, forType: swarmPasteboardType)

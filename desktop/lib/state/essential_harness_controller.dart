@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 import '../core/models.dart';
 import '../core/harness_defaults.dart';
 import '../core/project_folder.dart';
@@ -59,14 +61,30 @@ class EssentialHarnessController {
   bool get opening => _opening != null;
 
   /// Whether a click would open one rather than create one: one in a tab on any machine, or one on
-  /// the machine a new one would be made on (stopped ones included), exactly as [open] looks.
-  bool get exists =>
-      _inTab() != null ||
-      (app.ownedActionMachine?.agents.any((a) => a.dsh == essential.id) ??
-          false);
+  /// a machine [searched] (stopped ones included), exactly as [open] looks.
+  bool get exists => inTab() != null || _found() != null;
+
+  /// The machines a click looks on, after the tabs, before it creates one: the one a new one would be
+  /// made on.
+  @protected
+  Iterable<MachineState> get searched => [?app.ownedActionMachine];
+
+  /// The first machine [searched] that has one, stopped ones included.
+  MachineState? _found() => searched
+      .where((machine) => machine.agents.any((a) => a.dsh == essential.id))
+      .firstOrNull;
+
+  /// Puts a new tab for it in front, empty: a tab of its own named for it.
+  @protected
+  void openTab() => app.newSwarm(name: essential.name);
+
+  /// One this window just created, on [machine].
+  @protected
+  void created(MachineState machine, Agent agent) {}
 
   /// The first tab showing this harness, with its machine and agent.
-  ({String tab, MachineState machine, Agent agent})? _inTab() {
+  @protected
+  ({String tab, MachineState machine, Agent agent})? inTab() {
     for (final tab in app.swarms) {
       for (final pane in tab.panes) {
         final machine = app.stateOf(pane.machineId);
@@ -95,7 +113,7 @@ class EssentialHarnessController {
     final id = essential.id, name = essential.name;
     // Reuse the tab even after focus moves to a different machine, including an offline harness that
     // is still open.
-    if (_inTab() case (:final tab, machine: final owner, :final agent)) {
+    if (inTab() case (:final tab, machine: final owner, :final agent)) {
       app.selectSwarm(tab);
       final machineId = owner.machine.machineId;
       try {
@@ -115,7 +133,7 @@ class EssentialHarnessController {
       }
       return null;
     }
-    final owner = app.ownedActionMachine;
+    final owner = _found() ?? app.ownedActionMachine;
     if (owner == null) return 'Connect a machine to open $name.';
     if (!identical(_owner, owner)) {
       _owner = owner;
@@ -170,6 +188,7 @@ class EssentialHarnessController {
           if (!_current(owner)) return null;
           if (error != null) return error;
           agent = existing();
+          if (agent != null) created(owner, agent);
         }
       }
       if (agent == null) {
@@ -190,7 +209,7 @@ class EssentialHarnessController {
       if (tab != null) {
         app.selectSwarm(tab.id);
       } else {
-        app.newSwarm(name: name);
+        openTab();
         if (app.activeSwarm.panes.isNotEmpty) {
           return 'Close a tab to make room for $name.';
         }
