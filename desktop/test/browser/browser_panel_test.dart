@@ -472,7 +472,6 @@ void main() {
     expect(find.text('Stopping browser…'), findsOneWidget);
     app.browser(const AgentBrowser(state: 'starting'));
     await tester.pump();
-    await tester.pump(BrowserStream.openTimeout);
     expect(find.text('Stopping browser…'), findsOneWidget);
     expect(find.text('Starting browser…'), findsNothing);
     expect(find.text('Browser stopped'), findsNothing);
@@ -504,6 +503,27 @@ void main() {
     await tester.pump();
     expect(key('browser-screen'), findsOneWidget);
     expect(find.text('Update Harness on Ken Mac first'), findsOneWidget);
+  });
+
+  // Review, 2026-11-12: CLI 0.6.40 with its browser in its own process never sent the agent's frame again after a
+  // Stop, and the panel said Stopping for good.
+  testWidgets('a Stop the machine takes while it still says the browser is '
+      'on goes back to what it says, never Stopping for good', (
+    tester,
+  ) async {
+    await showOpen(tester);
+    await tester.tap(find.byTooltip('Stop'));
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('Stopping browser…'), findsOneWidget);
+    await tester.pump(BrowserStream.openTimeout);
+    await tester.pump();
+    expect(find.text('Stopping browser…'), findsNothing);
+    expect(app.streams, hasLength(2));
+    app.answer();
+    await tester.pump();
+    await tester.pump();
+    expect(key('browser-screen'), findsOneWidget);
   });
 
   testWidgets('Paste sends the clipboard\'s text to the browser, and the gear '
