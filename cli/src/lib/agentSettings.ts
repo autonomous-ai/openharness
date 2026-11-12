@@ -39,21 +39,29 @@ export interface AgentSettings {
    *  theirs in a pane (`harness reply`, messages/replyLocal.ts), as the person could by typing in Harness. Off by
    *  default, and not `agents-tell-agents`, which is about agents (#1628). */
   programsReply: boolean
+  /** Hachi is on: the person's own harness that starts and follows their other harnesses (docs/design/2026-11-12-hachi.md),
+   *  which the start and tell gates let through while it is. Kept here so they read it without the network. Turning it on
+   *  is the person's yes for those gates, so only Settings ▸ Experimental turns it: it is no `harness settings` name, and
+   *  an agent cannot turn it on for them. */
+  hachi: boolean
 }
 
-export const AGENT_SETTINGS_DEFAULTS: AgentSettings = { agentsStartAgents: false, pullRequestLine: false, agentMessages: false, agentMessagesHideSummary: false, agentsTellAgents: false, programsReply: false }
+/** The settings `harness settings` turns, which an agent may turn on with the person's yes: every one but Hachi's. */
+export type GrantableSetting = Exclude<keyof AgentSettings, 'hachi'>
+
+export const AGENT_SETTINGS_DEFAULTS: AgentSettings = { agentsStartAgents: false, pullRequestLine: false, agentMessages: false, agentMessagesHideSummary: false, agentsTellAgents: false, programsReply: false, hachi: false }
 
 /** Each setting's name in `harness settings`, and its key. */
-export const AGENT_SETTING_NAMES: Record<string, keyof AgentSettings> = { 'agents-start-agents': 'agentsStartAgents', 'agents-tell-agents': 'agentsTellAgents', 'pull-request-line': 'pullRequestLine', 'agent-messages': 'agentMessages', 'agent-messages-hide-summary': 'agentMessagesHideSummary', 'programs-reply': 'programsReply' }
+export const AGENT_SETTING_NAMES: Record<string, GrantableSetting> = { 'agents-start-agents': 'agentsStartAgents', 'agents-tell-agents': 'agentsTellAgents', 'pull-request-line': 'pullRequestLine', 'agent-messages': 'agentMessages', 'agent-messages-hide-summary': 'agentMessagesHideSummary', 'programs-reply': 'programsReply' }
 
 /** Each setting's account experiment, as the backend names it (lib/experimentalSettings.ts `experimentalFeatures`). */
-export const AGENT_SETTING_EXPERIMENTS: Record<keyof AgentSettings, string> = { agentsStartAgents: 'agents_start_agents', pullRequestLine: 'agent_pull_request_line', agentMessages: 'agent_messages', agentMessagesHideSummary: 'agent_messages_hide_summary', agentsTellAgents: 'agents_tell_agents', programsReply: 'programs_reply' }
+export const AGENT_SETTING_EXPERIMENTS: Record<keyof AgentSettings, string> = { agentsStartAgents: 'agents_start_agents', pullRequestLine: 'agent_pull_request_line', agentMessages: 'agent_messages', agentMessagesHideSummary: 'agent_messages_hide_summary', agentsTellAgents: 'agents_tell_agents', programsReply: 'programs_reply', hachi: 'hachi' }
 
 /** The flag an agent adds to `harness settings <name> on` once the person said yes to it (agentClient/settings.ts). */
 export const PERSON_SAID_YES = '--person-said-yes'
 
 /** What an agent asks the person before it turns each setting on: one question they can answer yes or no. */
-export const AGENT_SETTING_QUESTIONS: Record<keyof AgentSettings, string> = {
+export const AGENT_SETTING_QUESTIONS: Record<GrantableSetting, string> = {
   agentsStartAgents: 'May I start other agents (Claude Code, Codex) in harnesses of their own, for work that can run beside mine?',
   agentsTellAgents: 'May I give more work to the harnesses I started, in the conversations they already have?',
   pullRequestLine: 'May a harness another agent started say so in the pull requests it opens?',
