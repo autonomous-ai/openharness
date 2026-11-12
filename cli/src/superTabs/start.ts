@@ -6,7 +6,6 @@ import { admission, quotaOf, type Requirements } from './capacity.js'
 import { identifier, object } from './wire.js'
 import { wireRole } from '../lib/swarmSkills.js'
 import { agentFolderFor, prepareAgentFolder, temporaryFolder } from './agentFolder.js'
-import { SAID_MAX } from './lastWords.js'
 import { projectsRoot } from '../lib/projectFolder.js'
 
 type Json = Record<string, unknown>
@@ -105,16 +104,15 @@ export async function inspectCapacity(target: Daemon, request: Json) {
 }
 
 const ENGINE_NAMES: Record<string, string> = { claude: 'Claude Code', codex: 'Codex' }
-/** Why a start's agent ended, as its machine read it from the pane its engine left (lastWords.ts), or null when it did not say:
- *  the rehearsal's Codex builders (2026-11-11) said only "has since stopped". What a machine answers is data, so only a whole
- *  status and one short line are told. "<Engine> exited" is what the backend counts as the engine's failure, not its machine's
- *  (backend superTabs/engineHealth.ts). */
-function engineLeft(engine: unknown, exit: unknown): string | null {
-  const { status, said } = object(exit)
+/** Why a start's agent ended, as its machine read how its engine left its pane (engineExit.ts), in fixed words; null when it did
+ *  not say. The rehearsal's Codex builders (2026-11-11) said only "has since stopped". What a machine answers is data: only a
+ *  whole status and `option: true` are told. "<Engine> exited" is what the backend counts as the engine's failure, not its
+ *  machine's (backend superTabs/engineHealth.ts). */
+function exitReason(engine: unknown, exit: unknown): string | null {
+  const { status, option } = object(exit)
   if (!Number.isSafeInteger(status)) return null
-  const line = typeof said === 'string' && said && Array.from(said).length <= SAID_MAX && !/[\u0000-\u001f\u007f-\u009f]/.test(said) ? said : null
-  const name = ENGINE_NAMES[String(engine)] ?? 'Its engine'
-  return `${name} exited at launch${line ? `: “${line}”.` : ` with status ${status}.`} Create a new start request to continue.`
+  const refused = option === true ? ': it did not accept an option Harness started it with' : ''
+  return `${ENGINE_NAMES[String(engine)] ?? 'Its engine'} exited at launch with status ${status}${refused}. Create a new start request to continue.`
 }
 
 /** Whether the machine launches `engine` with a model of its own for that session (lib/launchModel.ts). A daemon from
@@ -316,7 +314,10 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
         detail: 'The agent was created, but its capacity receipt is not confirmed. Keep this start ID and resume it before starting another agent.' }
     }
     if (reservation.released === true) {
-      const detail = engineLeft(request.engine, reservation.engineExit) ?? 'The agent was created and has since stopped. Create a new start request to continue.'
+      // Its engine left a moment ago and its pane does not say how yet (engineExit.ts): failed now, it would never say.
+      if (reservation.engineExit === 'leaving') return { error: 'START_PENDING', startId, creationId, harnessId: nativeId,
+        detail: 'Its engine has just exited. Resume this same start request; do not make another start request.' }
+      const detail = exitReason(request.engine, reservation.engineExit) ?? 'The agent was created and has since stopped. Create a new start request to continue.'
       requireSuccess(await scoped({ action: 'command', operationId: `failed-${startId}`, command: { type: 'agent.startFailed', startId, error: detail } }))
       return { error: 'START_FAILED', startId, detail }
     }

@@ -521,8 +521,8 @@ it.each([true, false])('reconciles a previously created but unavailable harness 
   expect(f.request.mock.calls.some(c => c[0] === 'agent_create')).toBe(false)
 })
 
-// The rehearsal's Codex builders Nova and Vesper (2026-11-11) quit at launch, and all their Swarm read was "has since stopped": why
-// sat on a shell pane no Swarm view shows. Its machine reads what the engine said as it left (lastWords.ts), and the start says it.
+// The rehearsal's Codex builders Nova and Vesper (2026-11-11) quit at launch, and all their Swarm read was "has since stopped". Its
+// machine reads how the engine left the pane it kept (engineExit.ts), in fixed words, and the start says so.
 describe('a start whose engine left as it launched', () => {
   const STOPPED = 'The agent was created and has since stopped. Create a new start request to continue.'
   const leftWith = (engineExit: unknown, engine = 'codex') => {
@@ -540,22 +540,34 @@ describe('a start whose engine left as it launched', () => {
   }
 
   it.each([
-    [{ status: 2, said: "error: unexpected argument '--add-dir' found" }, 'codex',
-      "Codex exited at launch: “error: unexpected argument '--add-dir' found”. Create a new start request to continue."],
-    [{ status: 1, said: 'Error: Invalid API key' }, 'claude', 'Claude Code exited at launch: “Error: Invalid API key”. Create a new start request to continue.'],
-    [{ status: 1, said: null }, 'codex', 'Codex exited at launch with status 1. Create a new start request to continue.'],
+    [{ status: 2, option: true }, 'codex',
+      'Codex exited at launch with status 2: it did not accept an option Harness started it with. Create a new start request to continue.'],
+    [{ status: 1, option: true }, 'claude',
+      'Claude Code exited at launch with status 1: it did not accept an option Harness started it with. Create a new start request to continue.'],
+    [{ status: 0, option: false }, 'codex', 'Codex exited at launch with status 0. Create a new start request to continue.'],
     // A machine from before it, or a pane that went with its engine, says nothing of it.
     [undefined, 'codex', STOPPED],
-    // What a machine answers is data: a said that is not one short line is not told, nor a status that is not a whole number.
-    [{ status: 1, said: 'two\nlines' }, 'codex', 'Codex exited at launch with status 1. Create a new start request to continue.'],
-    [{ status: 1, said: 'x'.repeat(301) }, 'codex', 'Codex exited at launch with status 1. Create a new start request to continue.'],
-    [{ status: 1.5, said: 'error: x' }, 'codex', STOPPED],
+    // What a machine answers is data: only a whole status, and an option refused when it says true.
+    [{ status: 1, option: 'yes', said: 'secret words' }, 'codex', 'Codex exited at launch with status 1. Create a new start request to continue.'],
+    [{ status: 1.5, option: true }, 'codex', STOPPED],
     ['exited', 'codex', STOPPED],
-  ])('fails it with what its engine said: %j', async (engineExit, engine, detail) => {
+  ])('fails it with how its engine left: %j', async (engineExit, engine, detail) => {
     const f = leftWith(engineExit, engine)
     expect(await startAgent({ tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toEqual({ error: 'START_FAILED', startId: 'start', detail })
     expect(f.start.error).toBe(detail)
     expect(f.scoped).toHaveBeenCalledWith({ action: 'command', operationId: 'failed-start', command: { type: 'agent.startFailed', startId: 'start', error: detail } })
+  })
+
+  // The review of #4134: its row became a shell before its wrapper said how the engine left. Failed then, the start would never say:
+  // it waits for its next pass, which reads it.
+  it('waits a pass while its engine is still leaving, then says how it left', async () => {
+    const f = leftWith('leaving')
+    expect(await startAgent({ tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toEqual({ error: 'START_PENDING', startId: 'start',
+      creationId: 'super-native-receipt', harnessId: 'native', detail: 'Its engine has just exited. Resume this same start request; do not make another start request.' })
+    expect(f.start.error).toBeNull()
+    const again = leftWith({ status: 2, option: true })
+    expect(await startAgent({ tabId: 'tab', startId: 'start' }, again.scoped, where, again.open)).toMatchObject({ error: 'START_FAILED',
+      detail: 'Codex exited at launch with status 2: it did not accept an option Harness started it with. Create a new start request to continue.' })
   })
 })
 
