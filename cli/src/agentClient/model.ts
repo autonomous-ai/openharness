@@ -3,6 +3,7 @@
  * a harness's row in `harness ps`, which harness a name means, and its last turn from a page of its transcript.
  */
 import { PTY_HOST_PANE } from '../lib/ptyHost/instance.js'
+import type { AgentLaunch } from '../lib/registry.js'
 import { engineName } from '../messages/model.js'
 import type { Ledger, LedgerMember } from './ledger.js'
 
@@ -15,6 +16,8 @@ export interface Frame {
   engine?: string
   status?: string
   activity?: { state?: string } | null
+  /** Its launch; `failed`, live or stopped, is one that started nothing, with its code and words. */
+  launch?: AgentLaunch | null
   tmuxPane?: string | null
   /** Where it runs: a PTY host's pane is named by its instance and pane (Windows). */
   terminal?: { runtimes?: Array<{ backend?: string; instance?: string; paneId?: string }> } | null
@@ -71,6 +74,16 @@ export interface Row {
   about?: string
   /** A cloud harness's maker state, beside [state]. Absent for a harness on this machine. */
   cloud?: CloudMeta
+  /** Why its launch started nothing (`failureOf`). Absent when it did not fail. */
+  failure?: Failure
+}
+
+export interface Failure { error: string; detail: string | null }
+
+/** Why [frame]'s launch failed, or nothing: the daemon keeps the reason on the row and in its archive. */
+export function failureOf(frame: Frame): Failure | undefined {
+  const launch = frame.launch
+  return launch?.state === 'failed' ? { error: launch.error, detail: launch.detail ?? null } : undefined
 }
 
 /** What `ps`, `show` and `wait` JSON say about a cloud harness, beside Harness's own state. */
@@ -175,6 +188,7 @@ export function rowsOf(frames: Frame[], ctx: RowContext): Row[] {
     const last = frame.updatedAt ? Date.parse(frame.updatedAt) : NaN
     if (state === 'stopped' && (!ctx.all || !(ctx.now - last < STOPPED_WITHIN_MS))) continue
     const cloud = cloudMeta(frame)
+    const failure = failureOf(frame)
     const member = { machineId: ctx.machineId, agentId: frame.id }
     const you = ctx.caller?.agentId === frame.id && ctx.caller.machineId === ctx.machineId
     const parent = ctx.ledger.parentOf(member)
@@ -192,6 +206,7 @@ export function rowsOf(frames: Frame[], ctx: RowContext): Row[] {
       self: you,
       lastActive: Number.isFinite(last) ? new Date(last).toISOString() : null,
       ...(cloud ? { cloud } : {}),
+      ...(failure ? { failure } : {}),
     })
   }
   // Working first, then by last activity: what an agent choosing where work goes looks at first.

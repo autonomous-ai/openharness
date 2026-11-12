@@ -32,7 +32,7 @@ import { messagesRpc, type Rpc } from '../messages/rpc.js'
 import { PERSON_AGENT_ID, REPLY_OFF_TEXT } from '../messages/replyLocal.js'
 import { TELL_OFF_TEXT } from '../messages/tell.js'
 import { sendPane } from '../messages/command.js'
-import { asSaid, callerOf, clip, cloudMeta, cloudTurn, forAgent, isAgent, lastTurn, matching, outsideCaller, rowsOf, stateOf, STOPPED_WITHIN_MS, type Caller, type CloudMeta, type Frame, type HistoryEvent, type Row, type State } from './model.js'
+import { asSaid, callerOf, clip, cloudMeta, cloudTurn, failureOf, forAgent, isAgent, lastTurn, matching, outsideCaller, rowsOf, stateOf, STOPPED_WITHIN_MS, type Caller, type CloudMeta, type Failure, type Frame, type HistoryEvent, type Row, type State } from './model.js'
 
 export interface ClientDeps {
   pane?: string | undefined
@@ -556,6 +556,9 @@ const wantsJson = (argv: readonly string[]): boolean => argv.includes('--json')
 
 // ── ps ─────────────────────────────────────────────────────────────────────────────────────────────
 
+/** A failed launch as `ps` and `show` say it: its words, or its code when it has none. */
+const failedLine = (failure: Failure): string => `failed: ${failure.detail ?? failure.error}`
+
 export function formatRows(rows: Row[], now: number, on = 'this machine'): string {
   if (!rows.length) return `No harnesses on ${on}.`
   const width = Math.min(32, Math.max(4, ...rows.map((r) => r.name.length)))
@@ -563,7 +566,8 @@ export function formatRows(rows: Row[], now: number, on = 'this machine'): strin
   const lines = rows.map((r) => {
     const name = clip(r.name, width).padEnd(width)
     const line = `${name}  ${clip(r.agent, 11).padEnd(11)}  ${r.state.padEnd(11)}  ${clip(r.self ? `${r.startedBy} (you)` : r.startedBy, 12).padEnd(12)}  ${ago(r.lastActive, now).padEnd(6)}  ${tilde(r.folder)}${r.branch ? ` (${r.branch})` : ''}`
-    const about = r.about ?? (r.asks?.length ? `asked: ${r.asks[0]}` : '')
+    // Why it started nothing comes first: what it was about never ran.
+    const about = r.failure ? failedLine(r.failure) : r.about ?? (r.asks?.length ? `asked: ${r.asks[0]}` : '')
     return about ? `${line}\n${' '.repeat(2)}${clip(about.replace(/\s+/g, ' '), 200)}` : line
   })
   return [head, ...lines].join('\n')
@@ -743,12 +747,14 @@ export function showCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
         // `close` and `tell` take no cloud harness.
         : showNext(s.env, state, t.yours && t.frame.location !== 'cloud', at, tellsHere(o, s.pane))
       const cloud = cloudMeta(t.frame)
+      const failure = failureOf(t.frame)
       const result = {
         name: t.frame.name, id: t.frame.id, agent: engineName(t.frame.engine ?? ''), machine: t.machine, state, startedBy,
         folder: t.frame.project?.cwd ?? null, branch: t.frame.project?.branch ?? null,
         ask: turn?.ask ?? null, answer: clip(answer, chars), truncated: answer.length > chars, tools: turn?.tools ?? 0, next,
         ...(state === 'needs-input' ? { needsPerson: true } : {}),
         ...(cloud ? { cloud } : {}),
+        ...(failure ? { failure } : {}),
         ...(t.frame.cloud?.links?.length ? { links: t.frame.cloud.links } : {}),
         ...(pendingTell ? { told: { at: new Date(pendingTell.at).toISOString(), taken: false } } : {}),
       }
@@ -756,6 +762,7 @@ export function showCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
       else {
         s.out(`${result.name} on ${result.machine}: ${stateSaid(state)} · ${result.agent} · started by ${startedBy}`)
         s.out(`folder: ${tilde(result.folder)}${result.branch ? ` (${result.branch})` : ''}`)
+        if (failure) s.out(failedLine(failure))
         if (!turn) s.out('No turn yet.')
         else {
           s.out(`asked: ${clip(result.ask ?? '', 600)}`)

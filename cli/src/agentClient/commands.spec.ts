@@ -206,7 +206,7 @@ describe('harness ps', () => {
   // A launch that failed for a named reason started nothing: what the person reads says why, live or stopped.
   it('says why a harness never started, before what it is about, live or stopped', async () => {
     const d = new FakeDaemon()
-    const inUse = { state: 'failed', error: 'OPENCLAW_FOLDER_IN_USE', detail: 'Another OpenClaw is using this folder. Give each run its own --local folder.' }
+    const inUse = { state: 'failed', error: 'OPENCLAW_FOLDER_IN_USE', detail: 'Another OpenClaw is using this folder. Give each run its own --local folder.' } as const
     d.frames = [frame('taken', { launch: inUse }), frame('gone', { status: 'stopped', launch: { state: 'failed', error: 'OPENCLAW_FOLDER_GONE' } }), frame('fine', { launch: { state: 'ready' } })]
     const h = harness(d, { pane: undefined })
     expect(await psCommand(['--all'], h.deps)).toBe(EXIT.ok)
@@ -394,7 +394,7 @@ describe('harness show', () => {
 
   it('says why a harness never started', async () => {
     const d = new FakeDaemon()
-    const gone = { state: 'failed', error: 'OPENCLAW_FOLDER_GONE', detail: "This run's OpenClaw folder is gone." }
+    const gone = { state: 'failed', error: 'OPENCLAW_FOLDER_GONE', detail: "This run's OpenClaw folder is gone." } as const
     d.frames = [frame('gone', { sessionId: '', status: 'stopped', launch: gone }), frame('fine', { sessionId: '' })]
     const h = harness(d, { pane: undefined })
     expect(await showCommand(['gone'], h.deps)).toBe(EXIT.ok)
