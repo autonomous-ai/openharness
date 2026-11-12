@@ -1483,7 +1483,8 @@ export function deleteCommand(argv: readonly string[], deps: ClientDeps = {}): P
         throw new AgentClientError('NOT_YOURS', 'That is your own harness. The person deletes it.')
       }
       if (o.caller && !t.yours) throw new AgentClientError('NOT_YOURS', `You did not start ${name}, so you may not delete it. Only the person can.`)
-      const which = { agentId: t.frame.id, sessionId: t.frame.sessionId ?? null, createdAt: Date.parse(t.frame.createdAt ?? '') }
+      // A harness with no conversation yet lists '' and purge reads it as none (null): '' was "changed" for good.
+      const which = { agentId: t.frame.id, sessionId: t.frame.sessionId || null, createdAt: Date.parse(t.frame.createdAt ?? '') }
       const failed = (reply: Record<string, unknown>) => {
         if (reply.error) throw new AgentClientError(String(reply.error), typeof reply.detail === 'string' && reply.detail ? reply.detail : `Could not delete ${name}.`)
       }
