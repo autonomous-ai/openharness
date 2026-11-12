@@ -665,7 +665,8 @@ export class SuperTabHost {
     if (!out) return false
     // Another sign-in than the one refused: asked at once (the second review of #4221).
     const signIn = this.signIn()
-    if (signIn !== null && signIn !== out.signIn) out.now = true
+    // Another sign-in, or the session written again: asked at once, its wait from 5 s again (the fifth review of #4221).
+    if (signIn !== null && signIn !== out.signIn) { out.now = true; out.wait = SIGNED_OUT_FIRST_MS }
     out.signIn = signIn
     if (signIn === null || out.asking) return true
     // A wait that ran out starts another, in which one push may ask again.
@@ -681,19 +682,22 @@ export class SuperTabHost {
     const asked = out.signIn
     try {
       await backend(this.core, 'GET', '/api/auth/me')
-    } catch {
+    } catch (error) {
       out.asking = false
-      // Refused: a wait twice as long. Another sign-in that came meanwhile still asks at once.
+      // Refused: a wait twice as long. Not answered (a timeout, a 503): asked again after 5 s, as nothing was refused (the fifth
+      // review of #4221). Another sign-in that came meanwhile still asks at once.
       out.now = out.signIn !== asked
-      out.wait = Math.min(out.wait * 2, SIGNED_OUT_MAX_MS)
-      out.next = this.now() + out.wait
+      if (signedOut(error)) out.wait = Math.min(out.wait * 2, SIGNED_OUT_MAX_MS)
+      out.next = this.now() + (signedOut(error) ? out.wait : SIGNED_OUT_FIRST_MS)
       return
     }
     if (this.signedOut !== out || this.stopped) return
     this.signedOutLast = { wait: out.wait, at: this.now() }
     this.signedOut = null
-    // What waited on a list or a claim while signed out is read at once, not after its backoff.
+    // What waited on a list or a claim while signed out is read at once, not after its backoff; and every running agent's list
+    // is read, as the pass that found the sign-out may have spent a push for one (the fifth review of #4221: a message lost).
     this.deliveryRetries.clear()
+    this.pushAll = true
     this.log('Signed in again: this Swarm goes on.')
     if (out.terminal) void this.terminal.waiting()
     void this.tick()
