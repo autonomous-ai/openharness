@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Daemon } from '../agentClient/daemon.js'
-import { profileId } from '../lib/claudeProfiles.js'
+import { profileId } from '../lib/claudeHomes.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { readFixture } from './fixtures/read/index.js'
 // Each trust fixture moves the engine homes; do not reuse a login-shell snapshot captured by another fixture.

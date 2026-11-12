@@ -188,6 +188,9 @@ const EDGE: RegExp[] = [
   /^engines\/(claude|codex)\/(hooks|installHooks)\.ts$/,
   // Claude Code's stop of a `claude --bg` job holding a session it resumes runs in its worker (#4146).
   /^engines\/(backgroundJobs|claude\/backgroundJob)\.ts$/,
+  // Linking a Claude Code profile and what a reported profile id stands for are models' and usage's: the core checks a
+  // launch's Claude home against the listing alone (lib/claudeHomes.ts, #4147).
+  /^lib\/claudeProfiles\.ts$/,
   // Their launch specifics are declared data too (launch.ts): Codex's startup probe and retry and its own-login
   // provider are the kit's, in core, and never a worker's (docs/design/2026-10-08-engine-launch.md).
   /^engines\/codex\/ownLoginProvider\.ts$/, /^lib\/codexStartupRetry\.ts$/,
