@@ -3,9 +3,8 @@
  * 2026-11-07-members-and-leads, section 1): each readable project with what it is and its Lead, and the row that starts
  * picked. Worked out from the projects and their chats, so the read loads nothing beyond the Swarm's first load.
  */
-import { githubRepository } from '../github/repository.js'
 import type { Actor, SuperTabState } from './model.js'
-import { canReadProject, projectsOf } from './projects.js'
+import { canReadProject, projectGitHub, projectsOf } from './projects.js'
 
 export interface ProjectRow {
   id: string
@@ -26,7 +25,7 @@ export function projectList(state: SuperTabState, actor: Actor, invitedTo?: stri
     const leadId = state.conversations.find(c => c.id === project.leadConversationId)?.leadId
     const lead = leadId ? state.agents.find(a => a.id === leadId) : undefined
     return { id: project.id, name: project.name, about: project.about ?? null,
-      repositoryName: project.about ? null : githubRepository(project.repository?.repositoryUrl)?.name ?? null,
+      repositoryName: project.about ? null : projectGitHub(project)?.name ?? null,
       lead: lead ? { agentId: lead.id, name: lead.displayName ?? lead.name } : null, waiting: 0 }
   })
   projects.sort((a, b) => a.name.localeCompare(b.name))

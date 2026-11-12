@@ -10,10 +10,9 @@ import type { PrismaClient } from '@prisma/client'
 import { ensureIndex } from '../lib/db/indexes.js'
 import { metrics } from '../lib/metrics.js'
 import { createRateLimiter } from '../lib/rateLimit.js'
-import { githubRepository } from '../github/repository.js'
 import { fail } from './model.js'
 import { readBy } from './parts/indexed.js'
-import type { SwarmProject } from './projects.js'
+import { projectGitHub, type SwarmProject } from './projects.js'
 
 export const COMMENT_KINDS = ['issue', 'review', 'review-comment'] as const
 export type CommentKind = typeof COMMENT_KINDS[number]
@@ -32,7 +31,7 @@ export const commentKey = (tabId: string, repository: string, kind: CommentKind,
 
 /** Whether [project] works on [repository] (`owner/name`, any case). */
 export const sameRepository = (project: SwarmProject, repository: string): boolean =>
-  githubRepository(project.repository?.repositoryUrl ?? '')?.fullName.toLowerCase() === repository.toLowerCase()
+  projectGitHub(project)?.fullName.toLowerCase() === repository.toLowerCase()
 
 /** Run by the release's schema step before db push (lib/db/schemaRelease.ts), as the operation receipts' expiry is. */
 export async function ensureCommentExpiry(db: PrismaClient): Promise<void> {
