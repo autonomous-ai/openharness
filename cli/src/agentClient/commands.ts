@@ -1476,6 +1476,8 @@ export function deleteCommand(argv: readonly string[], deps: ClientDeps = {}): P
       t = await target(s, o, names[0])
       const name = t.frame.name ?? t.frame.id.slice(0, 8)
       if (t.frame.location === 'cloud') throw new UsageError(`${name} runs in its maker's cloud: delete it there.`)
+      // An agent's harness on another machine is found by its record: its purge is that machine's owner's to ask.
+      if (t.remote) throw new UsageError(`${name} runs on another machine: harness delete works on this computer only.`)
       if (o.orphan) throw new AgentClientError('NOT_YOURS', ORPHAN, 'ORPHAN')
       if (o.caller && o.caller.agentId === t.frame.id && t.machineId === o.where.machineId) {
         throw new AgentClientError('NOT_YOURS', 'That is your own harness. The person deletes it.')
