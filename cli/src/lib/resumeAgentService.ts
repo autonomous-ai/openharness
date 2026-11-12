@@ -3,7 +3,7 @@ import type { AdoptSwarmSkill } from '../core/api.js'
 import { transcriptSize, type RelaunchMarks } from '../core/transcripts/relaunch.js'
 import { isTerminalEngine } from '../engines/types.js'
 import { installedDsh } from '../dsh/installed.js'
-import { engineKeepsTranscriptFile, registry as liveRegistry, type RegisteredSession } from './registry.js'
+import { engineKeepsTranscriptFile, inSwarmAuto, registry as liveRegistry, type RegisteredSession } from './registry.js'
 import { controlTranscriptEvidence } from '../engines/transcriptBindings.js'
 import { materializeResumeTranscript } from '../engines/resumeTranscript.js'
 import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
@@ -235,7 +235,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
         if (!permissionModeFlags(saved.engine, permissionMode)) return { ok: false, error: 'INVALID_PERMISSION_MODE' }
         const choice = { permissionMode, bypassPermission: permissionModeApproves(permissionMode) }
         saved = { ...saved, ...choice }
-      }
+      } else saved = inSwarmAuto(saved) // One the Swarm started, saved with no mode before 2026-11-12 (lib/registry.ts).
       if (saved.grid && !saved.gridLaunch) return { ok: false, error: 'GRID_CREDENTIAL_REQUIRED', detail: 'The saved provider configuration is unavailable.' }
       if (saved.dsh && !installedDsh(saved.dsh)) return { ok: false, error: 'INVALID_DSH', detail: 'Install this harness from the Harness Store before resuming it.' }
       if (!saved.cwd) return { ok: false, error: 'CWD_NOT_FOUND', detail: 'The saved project folder is no longer available.' }

@@ -701,15 +701,17 @@ function withoutForcedModes(rows: Array<Partial<RegisteredSession>>): { rows: Ar
  */
 const swarmStarted = (row: Partial<RegisteredSession>) => row.startedBy === 'agent' && !row.parentAgentId
 
+/** [row] in Auto-approve when it is one of those agents, else [row] itself. Also what Open uses for a stopped one, which is
+ *  saved outside this file (lib/stoppedAgents.ts) and so outside the sweep. */
+export function inSwarmAuto<T extends Partial<RegisteredSession>>(row: T): T {
+  if (row?.permissionMode != null || (row.engine !== 'claude' && row.engine !== 'codex') || !parseSwarmSkill(row.swarmSkill)
+    || !swarmStarted(row)) return row
+  return { ...row, permissionMode: 'auto', bypassPermission: true }
+}
+
 function withSwarmAuto(rows: Array<Partial<RegisteredSession>>): { rows: Array<Partial<RegisteredSession>>; given: number } {
-  let given = 0
-  const kept = rows.map((row) => {
-    if (row?.permissionMode !== undefined || (row.engine !== 'claude' && row.engine !== 'codex') || !parseSwarmSkill(row.swarmSkill)
-      || !swarmStarted(row)) return row
-    given++
-    return { ...row, permissionMode: 'auto', bypassPermission: true }
-  })
-  return { rows: kept, given }
+  const kept = rows.map(inSwarmAuto)
+  return { rows: kept, given: kept.filter((row, i) => row !== rows[i]).length }
 }
 
 /** A legacy `tmuxPane` adds a tmux runtime unless it is a listed runtime's own projection (`paneProjection`). */
