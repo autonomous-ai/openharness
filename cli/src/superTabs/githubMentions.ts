@@ -49,7 +49,11 @@ const VERDICTS: ReadonlySet<unknown> = new Set(['APPROVED', 'CHANGES_REQUESTED',
  *  by, the label of its tasks and pull requests, and the repositories of the projects it reads. */
 /** [paused]: its person or the Swarm's owner paused it (backend agent.pause). GitHub news still reaches it, so nothing said of its
  *  own pull requests is lost; Harness types it no next thing (nextThing.ts). */
-export interface WatchedAgent { tabId: string; agentId: string; harnessId: string; chat: string; names: string[]; label: string; repos: string[]; paused?: true }
+/** An agent of this computer's person's, running here, and the repositories of its Swarm's projects: [repos] all of them, [active]
+ *  those of projects not archived, the ones a plan reads for what its builders build in the others (githubAssign.ts
+ *  swarmRepositories). */
+export interface WatchedAgent { tabId: string; agentId: string; harnessId: string; chat: string; names: string[]; label: string; repos: string[]
+  active: string[]; paused?: true }
 
 
 /** One thing GitHub said, before it is matched to the agents it reaches. A line comment names the review it is part of. */
@@ -145,9 +149,10 @@ export async function watchedAgents(deps: { me: string | null; live: (harnessId:
       .find(c => c.kind === 'agent-chat' && Array.isArray(c.agentIds) && c.agentIds.includes(agent.id))
     // A Swarm from before projects keeps its one repository on the Swarm itself.
     const projects = Array.isArray(state.projects) ? state.projects.map(object) : state.project ? [{ repository: state.project }] : []
-    const repos = [...new Set(projects.map(projectRepositorySlug).filter((s): s is string => !!s))]
+    const slugs = (list: Json[]) => [...new Set(list.map(projectRepositorySlug).filter((s): s is string => !!s))]
+    const repos = slugs(projects), active = slugs(projects.filter(project => project.archived !== true))
     if (!chat || !identifier(chat.id) || !repos.length) continue
-    watched.push({ tabId: row.tabId, agentId: agent.id, harnessId: agent.harnessId, chat: chat.id, names, label: builderLabel(names[0]!), repos,
+    watched.push({ tabId: row.tabId, agentId: agent.id, harnessId: agent.harnessId, chat: chat.id, names, label: builderLabel(names[0]!), repos, active,
       ...typeof agent.pausedAt === 'string' ? { paused: true } : {} })
   }
   return watched

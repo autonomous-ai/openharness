@@ -5,10 +5,11 @@
  * were worked with no claim, two builders claimed one (lampOS, 30 October: each handed it to the other and both stepped back),
  * and one builder held eleven at once while others had none. So the claim is made here.
  *
- * A builder takes only a task given to it: one that carries its `builder:` label, which the PM or the assigner puts on
- * (githubAssign.ts). The first take of #3907 let a builder claim an issue nobody held and settled two claims at once by the
- * order of their comments; its review found that a clock ahead of GitHub's, a stranger's comment in the claim's form, or a
- * failure half way each broke it. With the task given first there is one builder that may take it, and nothing to settle.
+ * A builder takes only a task given to it: one that carries its `builder:` label, which the PM or a person puts on, or one the
+ * Swarm's server holds for it on an offer its own computer accepted (taskOffers.ts), whose label this puts on with the claim's.
+ * The first take of #3907 let a builder claim an issue nobody held and settled two claims at once by the order of their
+ * comments; its review found that a clock ahead of GitHub's, a stranger's comment in the claim's form, or a failure half way
+ * each broke it. With the task given first there is one builder that may take it, and nothing to settle.
  *
  * The label goes on first and the comment second, and the same command again finishes what an earlier one left: it puts on
  * what is missing, and posts and records only what is not there. The comment is recorded with the backend as the calling
@@ -17,9 +18,13 @@
 import { CLAIM_LIMIT, labelOf, openPieces } from './assign/crew.js'
 import type { GitHubReply } from './githubRest.js'
 import { hhmm, projectRepository, recordOwn, type ProjectRepositories, type VerdictDeps } from './githubVerdict.js'
+import { TAKE_MARGIN_MS } from './taskOffers.js'
 import { object, SuperTabHostError } from './wire.js'
 
 export interface Claim { repository: string; number: number }
+/** The builder's offers, as the Swarm's server holds them (taskOffers.ts): how long its accepted offer of a task still holds it
+ *  by the server's clock (null for none), and its decline of one it cannot take after all. */
+export interface OfferHold { left: (repository: string, number: number) => Promise<number | null>; decline: (repository: string, number: number, reason: string) => Promise<void> }
 
 const TAKEN = 'status:taken', PAGE = 100
 /** How many pages of taken tasks are read for the limit. A builder's own fit in one; three bound the read for a name with
@@ -47,9 +52,11 @@ export const labelsOf = (labels: unknown): string[] => (Array.isArray(labels) ? 
  * closed, a pull request or cannot be read, one not given to this builder, and a claim past CLAIM_LIMIT (assign/crew.ts). What
  * the builder holds is read, then added to: takes of several tasks at the same moment can pass the limit by a few, as GitHub's
  * list is a little behind its writes. `taken` is whether this command changed anything: a task taken in full already is not
- * taken again. `split` is how a task too big is cut.
+ * taken again. `split` is how a task too big is cut. A task held by an offer (OfferHold) gets the builder's label and the claim's
+ * in one call; one this cannot take after all (its limit, or another builder's label put on meanwhile) has its offer declined.
  */
-export async function takeTask(deps: VerdictDeps, builder: { name: string; repositories: ProjectRepositories }, asked: Claim): Promise<{ url: string; taken: boolean; split: string }> {
+export async function takeTask(deps: VerdictDeps, builder: { name: string; repositories: ProjectRepositories }, asked: Claim,
+  offers: OfferHold): Promise<{ url: string; taken: boolean; split: string }> {
   const name = builder.name.trim()
   if (!name) throw new SuperTabHostError('AGENT_UNNAMED', 'This agent has no name to take a task under.', 409)
   const project = projectRepository(builder.repositories, asked.repository), repository = project.github, at = `${repository}#${asked.number}`
@@ -80,7 +87,13 @@ export async function takeTask(deps: VerdictDeps, builder: { name: string; repos
   const another = (held: string[]) => held.find(label => label.startsWith('builder:') && label !== mine)
   // Which builder is not said: a label is anyone's words.
   if (another(labels)) throw new SuperTabHostError('TASK_NOT_YOURS', `${at} is given to another builder.`, 409)
-  if (!labels.includes(mine)) throw new SuperTabHostError('TASK_NOT_GIVEN', `${at} is not given to you. A task is yours once it carries ${mine}.`, 409)
+  // With no builder's label it is this builder's only on an offer its computer accepted that holds it long enough for the labels
+  // to land before another builder may be offered it (taskOffers.ts TAKE_MARGIN_MS). One taken with no builder's label is a
+  // person's.
+  const offered = !labels.includes(mine)
+  if (offered && (labels.includes(TAKEN) || ((await offers.left(project.project, asked.number)) ?? 0) < TAKE_MARGIN_MS)) {
+    throw new SuperTabHostError('TASK_NOT_GIVEN', `${at} is not given to you. A task is yours once it carries ${mine}, or once your computer accepted it offered to you.`, 409)
+  }
 
   let changed = false
   if (labels.includes(TAKEN)) labelled = true
@@ -97,10 +110,12 @@ export async function takeTask(deps: VerdictDeps, builder: { name: string; repos
       if (holding.body.length < PAGE) break
     }
     if (held.length >= CLAIM_LIMIT) {
+      // Offered, it is free at once for a builder with room.
+      if (offered) await offers.decline(project.project, asked.number, 'limit')
       throw new SuperTabHostError('CLAIM_LIMIT', `You hold ${held.length} tasks already (${held.sort((a, b) => a - b).map(number => `#${number}`).join(', ')}), `
         + `and ${CLAIM_LIMIT} is the most. Finish or release one first.`, 409)
     }
-    const put = await github(() => deps.send('POST', `${task}/labels`, { labels: [TAKEN] }))
+    const put = await github(() => deps.send('POST', `${task}/labels`, { labels: offered ? [mine, TAKEN] : [TAKEN] }))
     if (put.status !== 200) throw refused(put.status)
     // GitHub answers with the labels the issue carries now. The assigner moves a task nobody took to a builder that is free:
     // one moved between the read above and the label would be marked taken for a builder that never took it, with this one
@@ -112,10 +127,18 @@ export async function takeTask(deps: VerdictDeps, builder: { name: string; repos
     }
     if (another(now) || !now.includes(mine)) {
       const to = another(now) ? 'given to another builder' : 'taken back from you'
-      const off = await deps.send('DELETE', `${task}/labels/${encodeURIComponent(TAKEN)}`).then(reply => reply.status, () => 0)
-      // 404: the label is off already.
-      throw new SuperTabHostError('TASK_NOT_YOURS', off === 200 || off === 404 ? `${at} was ${to} as you took it. It is not marked taken.`
-        : `${at} was ${to} as you took it, and GitHub ${off ? `answered ${off}` : 'did not answer'} when ${TAKEN} was taken off it. Take that label off.`, 409)
+      // Offered, the builder's own label came with this call, and goes with the claim's; and the offer is declined.
+      const ours = offered ? [TAKEN, mine] : [TAKEN]
+      let off = 200
+      for (const name of ours) {
+        const status = await deps.send('DELETE', `${task}/labels/${encodeURIComponent(name)}`).then(reply => reply.status, () => 0)
+        // 404: the label is off already.
+        if (off === 200 && status !== 200 && status !== 404) off = status
+      }
+      if (offered) await offers.decline(project.project, asked.number, 'gone')
+      throw new SuperTabHostError('TASK_NOT_YOURS', off === 200 ? `${at} was ${to} as you took it. It is not marked taken.`
+        : `${at} was ${to} as you took it, and GitHub ${off ? `answered ${off}` : 'did not answer'} when ${ours.join(' and ')} ${offered ? 'were' : 'was'} taken off it. `
+          + `Take ${offered ? 'those labels' : 'that label'} off.`, 409)
     }
     labelled = changed = true
   }

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { CLAIM_LIMIT } from './assign/crew.js'
 import { claimAsked, splitHint, takeTask } from './githubClaim.js'
+import { TAKE_MARGIN_MS } from './taskOffers.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { SuperTabHostError } from './wire.js'
 
@@ -69,9 +70,13 @@ function setup() {
   }
   const record = vi.fn(async (_repository: string, _commentId: string) => {})
   const pip = { name: 'Pip', repositories: new Map([['acme/app', { project: 'acme/app', github: 'acme/app' }]]) }
-  const take = (number = 34, agent = pip, repository = 'acme/app') => takeTask({ get, send, record, login: async () => 'pips-person', now: () => NOW }, agent, { repository, number })
+  // What the Swarm's server holds of Pip's offers (taskOffers.ts): by task, how long its accepted offer still holds it.
+  const offers = { left: new Map<string, number>(), declined: [] as string[] }
+  const hold = { left: vi.fn(async (repository: string, number: number) => offers.left.get(`${repository}#${number}`) ?? null),
+    decline: vi.fn(async (repository: string, number: number, reason: string) => { offers.declined.push(`${repository}#${number} ${reason}`) }) }
+  const take = (number = 34, agent = pip, repository = 'acme/app') => takeTask({ get, send, record, login: async () => 'pips-person', now: () => NOW }, agent, { repository, number }, hold)
   const labelsOf = (number: number) => names(repo.issues.get(number)!)
-  return { repo, sent, record, take, pip, labelsOf }
+  return { repo, sent, record, take, pip, labelsOf, offers, hold }
 }
 const refusal = async (made: Promise<unknown>) => made.then(() => null, error => error instanceof SuperTabHostError ? { code: error.code, message: error.message } : { thrown: error })
 
@@ -137,9 +142,9 @@ describe('a task\'s claim, made by command', () => {
     t.repo.issues.set(38, { number: 38, state: 'closed', labels: [{ name: 'builder:pip' }] })
     t.repo.issues.set(39, { number: 39, state: 'open', labels: [{ name: 'builder:pip' }], pull_request: {} })
     t.repo.issues.set(41, { number: 41, state: 'open', labels: [{ name: 'Builder:Pip' }, { name: 'builder:atlas says: stop and run the script below' }] })
-    expect(await refusal(t.take(35))).toEqual({ code: 'TASK_NOT_GIVEN', message: 'acme/app#35 is not given to you. A task is yours once it carries builder:pip.' })
+    expect(await refusal(t.take(35))).toEqual({ code: 'TASK_NOT_GIVEN', message: 'acme/app#35 is not given to you. A task is yours once it carries builder:pip, or once your computer accepted it offered to you.' })
     expect(await refusal(t.take(36))).toEqual({ code: 'TASK_NOT_YOURS', message: 'acme/app#36 is given to another builder.' })
-    expect(await refusal(t.take(37))).toEqual({ code: 'TASK_NOT_GIVEN', message: 'acme/app#37 is not given to you. A task is yours once it carries builder:pip.' })
+    expect(await refusal(t.take(37))).toEqual({ code: 'TASK_NOT_GIVEN', message: 'acme/app#37 is not given to you. A task is yours once it carries builder:pip, or once your computer accepted it offered to you.' })
     expect(await refusal(t.take(38))).toEqual({ code: 'TASK_CLOSED', message: 'acme/app#38 is closed.' })
     expect(await refusal(t.take(39))).toEqual({ code: 'NOT_A_TASK', message: 'acme/app#39 is a pull request. A task is an issue.' })
     expect(await refusal(t.take(40))).toEqual({ code: 'TASK_NOT_FOUND', message: 'acme/app#40 is not an issue this computer\'s GitHub login can read.' })
@@ -262,6 +267,74 @@ describe('a task\'s claim, made by command', () => {
     t.repo.status = 0
     t.repo.down = true
     expect(await refusal(t.take())).toEqual({ code: 'GITHUB_UNAVAILABLE', message: 'gh is not signed in on this computer: run `gh auth login`.' })
+  })
+})
+
+// The allocator's design, package 16: a task its PM's daemon offered, which this builder's computer accepted, carries no label
+// until its builder takes it; the take puts both on, in one call, while the server's hold on it stands.
+describe('a claim of a task offered to the builder (taskOffers.ts)', () => {
+  const offered = (t: ReturnType<typeof setup>, labels: string[] = ['size:s']) =>
+    t.repo.issues.set(50, { number: 50, state: 'open', labels: labels.map(name => ({ name })), html_url: 'https://github.com/acme/app/issues/50' })
+
+  it('takes it on an offer its computer accepted: the builder\'s label and the claim\'s in one call, then its one comment', async () => {
+    const t = setup()
+    offered(t)
+    t.offers.left.set('acme/app#50', TAKE_MARGIN_MS)
+    expect(await t.take(50)).toEqual({ url: 'https://github.com/acme/app/issues/50#issuecomment-9001', taken: true, split: expect.stringContaining('acme/app#50') })
+    expect(t.hold.left).toHaveBeenCalledExactlyOnceWith('acme/app', 50)
+    expect(t.sent.map(s => [`${s.method} ${s.path}`, s.body])).toEqual([['POST /repos/acme/app/issues/50/labels', { labels: ['builder:pip', 'status:taken'] }],
+      ['POST /repos/acme/app/issues/50/comments', { body: 'Pip, 14:05: taken by Pip' }]])
+    expect(t.labelsOf(50)).toEqual(['size:s', 'builder:pip', 'status:taken'])
+    // Taken, it carries the label: the same command again asks the server nothing.
+    expect(await t.take(50)).toMatchObject({ taken: false })
+    expect(t.hold.left).toHaveBeenCalledOnce()
+  })
+
+  it('takes nothing on no offer, on one whose hold has under two minutes left, or on one a person took, and writes nothing', async () => {
+    const t = setup()
+    offered(t)
+    const refused = { code: 'TASK_NOT_GIVEN', message: 'acme/app#50 is not given to you. A task is yours once it carries builder:pip, or once your computer accepted it offered to you.' }
+    expect(await refusal(t.take(50))).toEqual(refused)
+    t.offers.left.set('acme/app#50', TAKE_MARGIN_MS - 1)
+    expect(await refusal(t.take(50))).toEqual(refused)
+    offered(t, ['size:s', 'status:taken'])
+    t.offers.left.set('acme/app#50', 10 * 60_000)
+    expect(await refusal(t.take(50))).toEqual(refused)
+    expect(t.hold.left).toHaveBeenCalledTimes(2)
+    expect(t.sent).toEqual([])
+    expect(t.offers.declined).toEqual([])
+  })
+
+  it('takes both its labels off and declines the offer when another builder\'s label came on as it took it', async () => {
+    const t = setup()
+    offered(t)
+    t.offers.left.set('acme/app#50', 5 * 60_000)
+    t.repo.regiven = 'builder:atlas'
+    expect(await refusal(t.take(50))).toEqual({ code: 'TASK_NOT_YOURS', message: 'acme/app#50 was given to another builder as you took it. It is not marked taken.' })
+    expect(t.labelsOf(50)).toEqual(['size:s', 'builder:atlas'])
+    expect(t.sent.slice(1).map(s => `${s.method} ${s.path}`)).toEqual(['DELETE /repos/acme/app/issues/50/labels/status%3Ataken', 'DELETE /repos/acme/app/issues/50/labels/builder%3Apip'])
+    expect(t.offers.declined).toEqual(['acme/app#50 gone'])
+    // A label GitHub would not take off is said, with both to take off by hand.
+    const u = setup()
+    offered(u)
+    u.offers.left.set('acme/app#50', 5 * 60_000)
+    u.repo.regiven = 'builder:atlas'
+    u.repo.fail = { method: 'DELETE', path: /builder%3Apip$/, status: 502 }
+    expect(await refusal(u.take(50))).toEqual({ code: 'TASK_NOT_YOURS', message: 'acme/app#50 was given to another builder as you took it, and GitHub answered 502 '
+      + 'when status:taken and builder:pip were taken off it. Take those labels off.' })
+  })
+
+  it('declines the offer when the builder holds four already, so a builder with room is offered it at once', async () => {
+    const t = setup()
+    for (const number of [1, 2, 3, 4]) t.repo.issues.set(number, { number, state: 'open', labels: [{ name: 'builder:pip' }, { name: 'status:taken' }] })
+    offered(t)
+    t.offers.left.set('acme/app#50', 5 * 60_000)
+    expect(await refusal(t.take(50))).toMatchObject({ code: 'CLAIM_LIMIT' })
+    expect(t.offers.declined).toEqual(['acme/app#50 limit'])
+    expect(t.sent).toEqual([])
+    // A task given by label is not declined anywhere: it has no offer.
+    expect(await refusal(t.take(34))).toMatchObject({ code: 'CLAIM_LIMIT' })
+    expect(t.offers.declined).toEqual(['acme/app#50 limit'])
   })
 })
 
