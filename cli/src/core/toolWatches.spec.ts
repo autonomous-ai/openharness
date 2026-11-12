@@ -12,6 +12,14 @@ const activity = (agentId: string, state: string, type = 'agent_activity') =>
   ({ type, agentId, dbSessionId: `s-${agentId}`, payload: { agentId, sessionId: `s-${agentId}`, activity: { state, epoch: 'e', revision: 1, validForMs: 0 } } })
 
 describe('a tool\'s watch on the harnesses it named', () => {
+  it('is told a turn end no one asked for as such: Hachi counts its own turns by it (docs/design/2026-11-12-hachi.md)', () => {
+    const { watches, sent } = setup()
+    watches.watch('local:t', true, ['a'])
+    watches.tell({ type: 'turn_ended', agentId: 'a', subagent: true, payload: { agentId: 'a', activity: { state: 'idle' } } })
+    watches.tell({ type: 'turn_ended', agentId: 'a', payload: { agentId: 'a', activity: { state: 'idle' } } })
+    expect(sent.map(({ frame }) => frame.payload)).toEqual([{ agentId: 'a', state: 'idle', subagent: true }, { agentId: 'a', state: 'idle' }])
+  })
+
   it('gets the state events of the harnesses it named, and nothing of any other', () => {
     const { watches, sent } = setup()
     expect(watches.watch('local:t', true, ['a', 'b'])).toEqual({ ok: true })

@@ -737,7 +737,7 @@ const tellStep = (env: NodeJS.ProcessEnv, at: string): string => step(env, 'tell
 
 /** Whether [o]'s caller may tell the harnesses it started: a harness in a pane, while the person allows it. */
 const tellsHere = (o: Opened, pane: string | undefined): boolean =>
-  !!o.caller && !o.caller.outside && !!pane && readAgentSettings(o.where.dataDir).agentsTellAgents
+  !!o.caller && !o.caller.outside && !!pane && tellsOn(o.where.dataDir, o.caller)
 
 /**
  * What an agent's `ps` ends with: its idle harness to read and then close (one left open after its answer is read sits
@@ -785,7 +785,7 @@ function contextFor(s: Setup, o: Opened): Context {
   const caller = o.caller
   return buildContext({
     caller, orphan: o.orphan, machine: o.machine,
-    signedIn: !!readAuthSession(), switchOn: readAgentSettings(o.where.dataDir).agentsStartAgents,
+    signedIn: !!readAuthSession(), switchOn: caller ? startsOn(o.where.dataDir, caller) : readAgentSettings(o.where.dataDir).agentsStartAgents,
     check: caller ? spawnCheck(caller, live, o.ledger, o.where.machineId, s.now(), waiting) : null,
     count: caller ? spawnCount(caller, live, o.ledger, s.now(), waiting) : null,
     limits: SPAWN_LIMITS, machines: machinesForContext(o.where), closeStep: step(s.env, 'close', '<name>'),
@@ -1154,7 +1154,7 @@ export function tellCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
       if (!caller || caller.outside || !s.pane) {
         throw new AgentClientError('NOT_YOURS', 'harness tell runs in the pane of the harness that started the one it tells. To talk to a harness yourself, open it in Harness.')
       }
-      if (!readAgentSettings(o.where.dataDir).agentsTellAgents) throw new AgentClientError('TELL_OFF', TELL_OFF_TEXT)
+      if (!tellsOn(o.where.dataDir, caller)) throw new AgentClientError('TELL_OFF', TELL_OFF_TEXT)
       t = await target(s, o, names[0], away)
       const name = t.frame.name ?? t.frame.id.slice(0, 8)
       if (t.frame.location === 'cloud') throw new UsageError(`${name} runs in its maker's cloud: harness tell reaches a harness in a pane only.`)
@@ -1991,6 +1991,21 @@ export function addressOf(caller: Caller): string {
   return /^[\w.-]+( [\w.-]+)?$/.test(caller.name) && caller.name.length <= 40 ? (caller.name.includes(' ') ? `"${caller.name}"` : caller.name) : caller.agentId.slice(0, 8)
 }
 
+/**
+ * Whether the person lets [caller] start harnesses (`agents-start-agents`), or tell the ones it started
+ * (`agents-tell-agents`), as this machine keeps the account's experiments. The Hachi harness may while the account has
+ * Hachi on: turning Hachi on is the person's yes to Hachi doing so, and to no other agent
+ * (docs/design/2026-11-12-hachi.md, "Starting others needs the person's yes"). Every limit still holds.
+ */
+const startsOn = (dataDir: string, caller: Caller): boolean => {
+  const settings = readAgentSettings(dataDir)
+  return settings.agentsStartAgents || (!!caller.hachi && settings.hachi)
+}
+const tellsOn = (dataDir: string, caller: Caller): boolean => {
+  const settings = readAgentSettings(dataDir)
+  return settings.agentsTellAgents || (!!caller.hachi && settings.hachi)
+}
+
 /** A start refused before anything is asked of the machine. */
 const refusing = (code: string, message: string, reason?: string): NewOrigin => ({
   check: async () => { throw new AgentClientError(code, message, reason) }, prompt: (text) => text, created: async () => null, answer: () => ({ effect: '', next: [] }),
@@ -2018,8 +2033,10 @@ export async function agentOrigin(deps: ClientDeps = {}, record: Rpc = messagesR
   if (!caller) return null
   // The person's say: the account's experiment, as the machine the agent runs on keeps it (Settings ▸ Experimental,
   // `harness settings`).
-  if (!readAgentSettings(o.where.dataDir).agentsStartAgents) return refusing('TURNED_OFF', AGENTS_START_AGENTS_OFF, 'SWITCH_OFF')
+  if (!startsOn(o.where.dataDir, caller)) return refusing('TURNED_OFF', AGENTS_START_AGENTS_OFF, 'SWITCH_OFF')
+  const by = { machineId: caller.machineId, agentId: caller.agentId, name: caller.name, engine: caller.engine, ...(caller.hachi ? { hachi: true as const } : {}) }
   return {
+    ...(caller.hachi ? { hachi: true as const } : {}),
     // A harness in a pane here: the new one is opened beside it in the windows. An agent outside Harness has no pane.
     ...(caller.outside ? {} : { parentAgentId: caller.agentId }),
     check: async () => {
@@ -2062,8 +2079,7 @@ export async function agentOrigin(deps: ClientDeps = {}, record: Rpc = messagesR
     // a second harness.
     pending: (machineId, creation) => {
       try {
-        o.ledger.append({ at: s.now(), by: { machineId: caller.machineId, agentId: caller.agentId, name: caller.name, engine: caller.engine },
-          creation: { machineId, ...creation }, depth: o.ledger.depthOf(caller) + 1 })
+        o.ledger.append({ at: s.now(), by, creation: { machineId, ...creation }, depth: o.ledger.depthOf(caller) + 1 })
         return null
       } catch {
         return `Harness could not record that you asked for ${creation.name || 'the harness'}: it may still start. Do not start it again.`
@@ -2097,7 +2113,7 @@ export async function agentOrigin(deps: ClientDeps = {}, record: Rpc = messagesR
       const name = typeof agent.name === 'string' ? agent.name : ''
       const row: Started = {
         at: s.now(),
-        by: { machineId: caller.machineId, agentId: caller.agentId, name: caller.name, engine: caller.engine },
+        by,
         child: { machineId, agentId: id, name, ...(creationId ? { creationId } : {}) },
         depth: o.ledger.depthOf(caller) + 1,
       }

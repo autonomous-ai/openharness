@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, uti
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { Ledger, LedgerBusyError, ledgerPath, parsePending, parseStarted, PENDING_WITHIN_MS, ROTATE_BYTES, type Closed, type Pending, type Started, type Told } from './ledger.js'
+import { Ledger, LedgerBusyError, ledgerPath, parseHanded, parsePending, parseStarted, PENDING_WITHIN_MS, ROTATE_BYTES, type Closed, type Pending, type Started, type Told } from './ledger.js'
 
 const dirs: string[] = []
 const fresh = (): Ledger => {
@@ -186,5 +186,34 @@ setTimeout(() => fs.unlinkSync(lock), 300)`
     expect(existsSync(path)).toBe(false)
     // A live owner's lock is its own.
     expect(existsSync(`${path}.lock`)).toBe(true)
+  })
+})
+
+describe('a harness handed to the person', () => {
+  it('has no starter from its hand-over on: not its starter\'s child, no depth, until a start newer than the hand-over', () => {
+    const ledger = fresh()
+    const hachi = { machineId: 'm', agentId: 'hachi' }, kid = { machineId: 'm', agentId: 'kid' }, other = { machineId: 'm2', agentId: 'other' }
+    ledger.append({ ...row('hachi', 'kid', 1, 1), by: { ...row('hachi', 'kid').by, hachi: true } })
+    ledger.append({ ...row('hachi', 'other', 1, 2), child: { ...other, name: 'other' } })
+    expect(ledger.handedAt(kid)).toBeNull()
+    ledger.append({ at: 5, from: hachi, handed: kid })
+    expect(ledger.parentOf(kid)).toBeNull()
+    expect(ledger.depthOf(kid)).toBe(0)
+    expect(ledger.handedAt(kid)).toBe(5)
+    expect(ledger.childrenOf(hachi).map((r) => r.child.agentId)).toEqual(['other'])
+    // Started again by an agent after it was handed over (a new start of the same id): that start counts.
+    ledger.append(row('lead', 'kid', 1, 9))
+    expect(ledger.parentOf(kid)?.by.agentId).toBe('lead')
+    expect(ledger.handedAt(kid)).toBeNull()
+  })
+
+  it('reads a starter\'s Hachi mark, and checks every hand-over line it reads', () => {
+    expect(parseStarted(JSON.stringify({ ...row('hachi', 'kid'), by: { ...row('hachi', 'kid').by, hachi: true } }))?.by.hachi).toBe(true)
+    expect(parseStarted(JSON.stringify({ ...row('hachi', 'kid'), by: { ...row('hachi', 'kid').by, hachi: 'yes' } }))?.by).not.toHaveProperty('hachi')
+    for (const bad of [{ at: 'x', from: { machineId: 'm', agentId: 'a' }, handed: { machineId: 'm', agentId: 'b' } }, { at: 1, from: {}, handed: { machineId: 'm', agentId: 'b' } },
+      { at: 1, from: { machineId: 'm', agentId: 'a' } }, null, 'nope']) {
+      expect(parseHanded(JSON.stringify(bad))).toBeNull()
+    }
+    expect(parseHanded('{')).toBeNull()
   })
 })

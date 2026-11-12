@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MACHINE_ADDON_REQUESTS } from '../core/api.js'
 import { runServiceProcess, type ServiceProcessOptions } from './process.js'
 import { runMachineAddonsService } from './machineAddonsProcess.js'
-import { answerExperimentQuery, answerMachineAddonsQuery } from '../core/experimentQueries.js'
+import { answerExperimentQuery, answerDaemonQuery } from '../core/experimentQueries.js'
 import { fakeCore } from '../testing/fakeCore.js'
 
 // The real default reaches a real socket: never in a test.
@@ -20,7 +20,7 @@ function setup() {
   // The core's own answers, in core/main.ts's order: the machine add-ons' door before the experiments' check.
   const core = fakeCore({ daemon: { machineId: () => 'm_account' } as never })
   const query = vi.fn(async (name: string, payload: Record<string, unknown> = {}) =>
-    answerMachineAddonsQuery(core, 'machineAddons', name) ?? await answerExperimentQuery(core, new Set(['orchestrator']), 'machineAddons', name, payload) ?? {})
+    answerDaemonQuery(core, 'machineAddons', name) ?? await answerExperimentQuery(core, new Set(['orchestrator']), 'machineAddons', name, payload) ?? {})
   return { wire: () => wire, query }
 }
 

@@ -1,4 +1,9 @@
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
+import { agentSettingsPath } from '../lib/agentSettings.js'
+import { setAgentSettingsForTest } from '../testing/agentSettings.js'
 import type { DshInstallProgress } from '../dsh/install.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { storeLaunchPort } from './storeLaunch.js'
@@ -9,23 +14,48 @@ vi.mock('./storeLaunch.js', () => ({ storeLaunchPort: vi.fn() }))
 
 const ASKER = { local: true, owner: true }
 
-function setup(over: Partial<StoreDeps> = {}) {
+function setup(over: Partial<StoreDeps> = {}, dataDir = '/data') {
   const deps: StoreDeps = {
     prepare: vi.fn(() => true),
     refresh: vi.fn(async () => [{ id: 'acme/thing' }] as never),
     rows: vi.fn((_installed, catalog) => (catalog ?? []).map((entry: { id: string }) => ({ id: entry.id, installed: false }))),
     remove: vi.fn(() => ({ ok: true as const })),
     mutate: vi.fn(async ({ id }: { id?: string }) => ({ ok: true as const, id: id ?? 'acme/from-url' })),
+    watch: vi.fn(() => () => {}),
     ...over,
   }
-  const core = fakeCore()
+  const core = fakeCore({ dataDir })
   return { core, deps, requests: startStore(core, deps) }
 }
 
 describe('the store service', () => {
   it('prepares the release-owned harnesses before answering requests', () => {
     const { deps } = setup()
-    expect(deps.prepare).toHaveBeenCalledOnce()
+    expect(deps.prepare).toHaveBeenCalledExactlyOnceWith({ hachi: false })
+  })
+  it('puts Hachi in place when its switch turns on while it runs, and generates nothing of it while off', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'store-hachi-'))
+    let changed = (): void => {}
+    const watch = vi.fn((_path: string, listener: () => void) => { changed = listener; return () => {} })
+    const { deps } = setup({ watch }, dataDir)
+    expect(watch).toHaveBeenCalledWith(agentSettingsPath(dataDir), expect.any(Function))
+    changed()
+    expect(deps.prepare).toHaveBeenCalledExactlyOnceWith({ hachi: false })
+    setAgentSettingsForTest(dataDir, { hachi: true })
+    changed()
+    expect(deps.prepare).toHaveBeenLastCalledWith({ hachi: true })
+    // Another setting written while it stays on prepares nothing more.
+    changed()
+    expect(deps.prepare).toHaveBeenCalledTimes(2)
+    // Turned off, nothing is removed or prepared; on again, it is looked at again.
+    setAgentSettingsForTest(dataDir, { hachi: false })
+    changed()
+    expect(deps.prepare).toHaveBeenCalledTimes(2)
+    setAgentSettingsForTest(dataDir, { hachi: true })
+    changed()
+    expect(deps.prepare).toHaveBeenCalledTimes(3)
+    // Started with it on, it prepares Hachi with the rest.
+    expect(setup({}, dataDir).deps.prepare).toHaveBeenCalledExactlyOnceWith({ hachi: true })
   })
   it('installs the same launch port in the explicit inline mode', () => {
     const ports = emptyPorts()

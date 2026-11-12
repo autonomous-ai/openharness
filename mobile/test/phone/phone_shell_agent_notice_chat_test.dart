@@ -29,6 +29,42 @@ class NoticeApp extends DevicesApp {
   }) => fake.request(method, path, body: body);
 }
 
+/// Nova's own chat with [me] (Swarm v4: every agent has one with its person).
+const novaChat = 'chat-agent-builder';
+
+/// A first load where Nova (`harness-agent-builder` on mac-1) works on task
+/// g1 and, when [chat] is 'own', has its own chat with [me], in no project
+/// and read only by its person (backend agentChats.ts `giveAgentsChats`).
+/// 'unlisted' names a chat the read does not carry; 'none' names none.
+Map<String, dynamic> novaLoad({String chat = 'own'}) => firstLoad(
+  agents: [
+    agent('agent-lead', name: 'Lead', displayName: 'River'),
+    {
+      ...agent('agent-builder', displayName: 'Nova'),
+      if (chat != 'none') 'chatId': novaChat,
+    },
+  ],
+  groups: [
+    groupData(
+      'g1',
+      status: 'working',
+      workerId: 'agent-builder',
+      agentIds: ['agent-builder'],
+    ),
+    if (chat == 'own')
+      {
+        ...groupData(
+          novaChat,
+          title: 'Chat',
+          kind: 'agent-chat',
+          agentIds: ['agent-builder'],
+          audience: [me],
+        ),
+        'projectId': null,
+      },
+  ],
+);
+
 void main() {
   late NoticeApp app;
   setUp(() {
@@ -52,11 +88,7 @@ void main() {
       (tester) async {
         final read = Completer<Object?>();
         app.fake.routes['/api/super-tabs/list'] = (_) => read.future;
-        app.fake.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad(
-          groups: [
-            groupData('g1', status: 'working', agentIds: ['agent-builder']),
-          ],
-        );
+        app.fake.routes['/api/super-tabs/$tab/parts'] = (_) => novaLoad();
         experimentalFeaturesStore.value = {PhoneExperiment.swarm};
         await tester.pumpWidget(MaterialApp(home: PhoneShell(notifier: app)));
         await tester.pump();
@@ -161,7 +193,7 @@ void main() {
           ],
           'next': null,
         };
-        app.fake.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad();
+        app.fake.routes['/api/super-tabs/$tab/parts'] = (_) => novaLoad();
         experimentalFeaturesStore.value = on ? {PhoneExperiment.swarm} : {};
         await tester.pumpWidget(MaterialApp(home: PhoneShell(notifier: app)));
         for (var i = 0; i < 5; i++) {
@@ -203,33 +235,40 @@ void main() {
           find.byType(SwarmConversationPage),
           on ? findsOneWidget : findsNothing,
         );
+        if (on) {
+          expect(
+            tester
+                .widget<SwarmConversationPage>(
+                  find.byType(SwarmConversationPage),
+                )
+                .conversationId,
+            novaChat,
+          );
+        }
         expect(find.byType(AgentHome), on ? findsNothing : findsOneWidget);
         await tester.pumpWidget(const SizedBox());
       });
     }
   }
 
+  // Swarm v4: an agent's notice opens its own chat with its person, as its
+  // Your Team row does, never the task it works on or its project's channel;
+  // with no chat of its own to open, its terminal, as with Swarm off.
   for (final on in [true, false]) {
     for (final cold in [true, false]) {
-      for (final assigned in [true, false]) {
-        testWidgets('agent notice Swarm=$on cold=$cold assigned=$assigned', (
+      for (final chat in ['own', 'none', 'unlisted', 'elsewhere']) {
+        testWidgets('agent notice Swarm=$on cold=$cold chat=$chat', (
           tester,
         ) async {
           experimentalFeaturesStore.value = on ? {PhoneExperiment.swarm} : {};
-          app.fake.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad(
-            groups: [
-              if (assigned)
-                groupData(
-                  'g1',
-                  status: 'working',
-                  workerId: 'agent-builder',
-                  agentIds: ['agent-builder'],
-                ),
-            ],
-          );
+          app.fake.routes['/api/super-tabs/$tab/parts'] = (_) =>
+              novaLoad(chat: chat == 'elsewhere' ? 'own' : chat);
+          // 'elsewhere': an agent of the computer's that is in no Swarm.
           void tap() => app.agentNotices.system.opened.value = (
             machineId: 'mac-1',
-            agentId: 'harness-agent-builder',
+            agentId: chat == 'elsewhere'
+                ? 'harness-agent-solo'
+                : 'harness-agent-builder',
           );
           if (cold) tap();
           await tester.pumpWidget(MaterialApp(home: PhoneShell(notifier: app)));
@@ -242,16 +281,18 @@ void main() {
               await tester.pump(const Duration(milliseconds: 100));
             }
           }
-          if (on) {
+          if (on && chat == 'own') {
             final page = tester.widget<SwarmConversationPage>(
               find.byType(SwarmConversationPage),
             );
-            expect(page.conversationId, assigned ? 'g1' : leadChat);
+            expect(page.conversationId, novaChat);
             expect(find.byType(AgentHome), findsNothing);
           } else {
             expect(find.byType(AgentHome), findsOneWidget);
             expect(find.byType(SwarmConversationPage), findsNothing);
           }
+          // No "unavailable" note: the terminal is the agent's to open.
+          expect(find.byType(SnackBar), findsNothing);
           expect(app.agentNotices.system.opened.value, isNull);
           await tester.pumpWidget(const SizedBox());
         });
