@@ -18,7 +18,7 @@
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { ASKED, markOf, readerKey, swarmsOf, tasksOf, worksOnOf } from './assign/crew.js'
+import { ASKED, markOf, readerKey, swarmsOf, swarmsOwn, tasksOf, worksOnOf } from './assign/crew.js'
 import { GitHubReads, GitHubStop, PAGE, Waits, waitWords, type GitHubGet } from './githubRest.js'
 import { permanentRefusal } from './retries.js'
 import { identifier, object, SuperTabHostError } from './wire.js'
@@ -317,12 +317,10 @@ export class GitHubMentions {
     trim(kept.swarms ?? {}, MAX_OWNED)
     // Whether issue or pull request [number] is [agent]'s Swarm's to hear of, in a repository several Swarms build. Builders in
     // different Swarms may share a name, so `builder:lennox`, or "to **Lennox**", alone names none of them: Dee's Swarm's Lennox
-    // heard Harness ask about #3880, which 0xken15's Swarm's Lennox held, and answered it (#4219). One that carries a Swarm's
-    // label is that Swarm's. An issue that carries none is no Swarm's task; a pull request that carries none, and whose tasks
-    // carry none that is known, is heard as before. A Swarm with no label here yet (its PM's Harness is a CLI from before the
-    // label, until 2026-12-14, 30 days after the one that writes it is released) hears as before, but never what carries
-    // another Swarm's. Its label is found by the Swarm's id in its description (markOf), read once a pass at the most, and
-    // only when something is there to hear.
+    // heard Harness ask about #3880, which 0xken15's Swarm's Lennox held, and answered it (#4219). By the Swarms' labels it
+    // carries (assign/crew.ts swarmsOwn), a pull request that carries none by its tasks' where they are known. Its Swarm's
+    // label is found by the Swarm's id in its description (markOf), read once a pass at the most, and only when something is
+    // there to hear.
     const looked = new Map<string, string | null>()
     const mine = async (agent: WatchedAgent, number: number, pull: boolean): Promise<boolean> => {
       let mark = kept.marks?.[agent.tabId] ?? looked.get(agent.tabId)
@@ -331,8 +329,7 @@ export class GitHubMentions {
         looked.set(agent.tabId, mark)
         if (mark) (kept.marks ??= {})[agent.tabId] = mark
       }
-      const on = kept.swarms?.[String(number)] ?? []
-      return on.length ? mark !== null && on.includes(mark) : pull || mark === null
+      return swarmsOwn(kept.swarms?.[String(number)] ?? [], mark, pull)
     }
     const tasks: Array<{ agent: WatchedAgent; issue: Json }> = []
     for (const issue of changed) {

@@ -39,7 +39,9 @@ function setup(options: { items?: Json[]; working?: boolean | null; watched?: Wa
     // Its live offers on the Swarm's server (taskOffers.ts), with the server's time, and each task as GitHub has it by number.
     offers: { offers: [] as TaskOffer[], serverTime: 0 }, offersDown: false, issues: {} as Record<number, Json>,
     // Set, the next read waits on it: GitHub slow to answer that one.
-    hold: null as Promise<void> | null }
+    hold: null as Promise<void> | null,
+    // The repository's labels: no Swarm's unless a case gives some, as before Harness wrote them.
+    labels: [] as Json[] }
   const pullOf = (number: number): Json => ({ number, state: 'open', draft: false, body: '', user: { login: 'dee' },
     head: { sha: HEAD, ref: `pip/${number}` }, base: { ref: 'main' }, mergeable_state: 'clean', ...state.pulls[number] })
   const listeners = new Set<(end: TurnEnd) => void>()
@@ -54,6 +56,7 @@ function setup(options: { items?: Json[]; working?: boolean | null; watched?: Wa
     const ok = (body: unknown) => ({ status: 200, etag: null, body, resetAt: null })
     const url = new URL(`https://api.github.com${path}`)
     if (url.pathname === '/repos/acme/app/issues') return ok(state.items)
+    if (url.pathname === '/repos/acme/app/labels') return ok(state.labels)
     const one = /^\/repos\/acme\/app\/issues\/(\d+)$/.exec(url.pathname)
     if (one) return ok(state.issues[Number(one[1])])
     const pull = /^\/repos\/acme\/app\/pulls\/(\d+)$/.exec(url.pathname)
@@ -112,7 +115,8 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     await f.end()
     expect(f.told()).toEqual([`Next: acme/app#12 Fix the login bug. It is given to you and nobody has taken it: ${TAKE} acme/app#12`])
     expect(f.tell.mock.calls[0]![0]).toBe(PIP)
-    expect(f.calls).toEqual(['/repos/acme/app/issues?state=open&labels=builder%3Apip&per_page=100'])
+    // With the repository's labels, for its Swarm's own (#4219).
+    expect(f.calls).toEqual(['/repos/acme/app/issues?state=open&labels=builder%3Apip&per_page=100', '/repos/acme/app/labels?per_page=100'])
     f.next.stop()
   })
 
@@ -616,6 +620,50 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     await vi.advanceTimersByTimeAsync(IDLE_BACK_MS)
     expect(f.tell).toHaveBeenCalledTimes(1)
     f.next.stop()
+  })
+
+  // #4219: Dee's Swarm's Lennox was told every twenty minutes that it held #3880, which 0xken15's Swarm's Lennox held as
+  // `builder:lennox`, and an hour idle its computer would have taken that task's labels off and written on it.
+  it('tells an agent it holds, and gives back for it, only its own Swarm\'s task where another Swarm\'s builder of its name holds one', async () => {
+    const DEE = 'd6004d45908ca1c85fca67f0', KEN = '0f0f0f0f0f0f0f0f0f0f0f0f', mine: WatchedAgent = { ...PIP, tabId: DEE }
+    // Two Swarms of one name: each one's label is found by the id in its description.
+    const labels = [{ name: 'swarm:acme', description: `Swarm ${DEE}` }, { name: 'Swarm:Acme-0f0f0f0f', description: `Swarm ${KEN}` }]
+    const labelReads = (f: ReturnType<typeof setup>) => f.calls.filter(path => path.startsWith('/repos/acme/app/labels')).length
+    const f = setup({ items: [item(3880, 'Daemon at rest', ['status:taken', 'swarm:acme-0f0f0f0f'])], watched: [mine] })
+    f.state.labels = labels
+    f.next.start()
+    await f.end()
+    await vi.advanceTimersByTimeAsync(IDLE_BACK_MS + IDLE_ASK_MS)
+    expect([f.told(), f.written]).toEqual([[], []])
+    // Its Swarm's label is kept once found: a later look reads no labels.
+    await f.end()
+    expect(labelReads(f)).toBe(1)
+    f.next.stop()
+    // Its own Swarm's task, as before.
+    const g = setup({ items: [item(14, 'Add the export', ['status:taken', 'swarm:acme'])], watched: [mine] })
+    g.state.labels = labels
+    g.next.start()
+    await g.end()
+    await vi.advanceTimersByTimeAsync(IDLE_ASK_MS)
+    expect(g.told()).toEqual([expect.stringMatching(/^You hold acme\/app#14 \(Add the export\) and have done nothing on it for 20 minutes/)])
+    g.next.stop()
+    // A task with no Swarm's label is no Swarm's, once its Swarm has a label there.
+    const h = setup({ items: [item(14, 'Add the export', ['status:taken'])], watched: [mine] })
+    h.state.labels = labels
+    h.next.start()
+    await h.end()
+    await vi.advanceTimersByTimeAsync(IDLE_ASK_MS)
+    expect(h.told()).toEqual([])
+    h.next.stop()
+    // A Swarm with no label there yet holds as before, and its label is looked for again ten minutes on.
+    const old = setup({ items: [item(14, 'Add the export', ['status:taken'])] })
+    old.next.start()
+    await old.end()
+    expect(labelReads(old)).toBe(1)
+    await vi.advanceTimersByTimeAsync(IDLE_ASK_MS)
+    expect(old.told()).toEqual([expect.stringMatching(/^You hold acme\/app#14 /)])
+    expect(labelReads(old)).toBe(2)
+    old.next.stop()
   })
 
   it('starts the 20 minutes over at each turn of its, and says nothing while it works or once the task moved on', async () => {

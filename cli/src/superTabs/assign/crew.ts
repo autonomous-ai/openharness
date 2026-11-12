@@ -123,6 +123,14 @@ export const markOf = (labels: Json[], swarm: string): string | null => {
   return found ? String(found.name) : null
 }
 
+/** Whether an issue, or a pull request ([pull]), that carries the Swarms' labels [on] is its builder's own Swarm's to hear of
+ *  and to hold, where that Swarm's label is [mark], or null when it has none in the repository yet (githubMentions.ts,
+ *  nextThing.ts). One that carries a Swarm's label is that Swarm's. An issue that carries none is no Swarm's task; a pull request
+ *  that carries none is read as before. A Swarm with no label yet (its PM's Harness is a CLI from before the label, until
+ *  2026-12-14, 30 days after the one that writes it is released) reads as before, but never what carries another Swarm's. */
+export const swarmsOwn = (on: readonly string[], mark: string | null, pull: boolean): boolean =>
+  on.length ? mark !== null && on.includes(mark.toLowerCase()) : pull || mark === null
+
 /**
  * Which of a repository's issues and pull requests are the Swarm's whose label there is [mark], told from [rows], its issues as
  * GitHub lists them. Several Swarms may build one repository, and each one's Harness planned, gave, asked about and took back
