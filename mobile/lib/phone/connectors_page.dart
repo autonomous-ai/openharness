@@ -179,6 +179,13 @@ class _ConnectorsPageState extends State<ConnectorsPage>
           .whereType<Map>()
           .map((row) => _Card(row.cast<String, dynamic>()))
           .toList();
+      // What this computer's Claude Code and Codex said is laid on the new list at once: in its
+      // order, with Microsoft 365, not the computer's order for the seconds until they answer again.
+      final machineId = _machineId;
+      final said = machineId == null || _viaFrom != machineId
+          ? null
+          : _viaSaid[_app]?[machineId];
+      if (said != null) _applyVia(machineId!, said);
     });
     // Slower (the computer asks its Claude Code and Codex), so after the list is on screen.
     unawaited(_loadVia());
@@ -194,6 +201,14 @@ class _ConnectorsPageState extends State<ConnectorsPage>
   /// Per service, what each way lets an agent do (`claude`, `codex`, `harness`).
   Map<String, Map<String, String>> _scopes = const {};
 
+  /// Per service Codex splits (Microsoft 365), each of its plugins (`elsewhere` `parts`): ChatGPT
+  /// connects each on its own, so each is offered on its own. An older computer says none.
+  Map<String, List<_Part>> _parts = const {};
+
+  /// Per service, its own page in each engine's account (`elsewhere` `pages`): claude.ai's connector,
+  /// or the Codex plugin's page on ChatGPT, where an account is added once it is in.
+  Map<String, Map<String, String>> _pages = const {};
+
   /// The computer [_engines], [_via] and [_scopes] were read from. Another computer starts with
   /// none of them: what one computer has is never shown as another's.
   String? _viaFrom;
@@ -202,6 +217,8 @@ class _ConnectorsPageState extends State<ConnectorsPage>
     _engines = const {};
     _via = const {};
     _scopes = const {};
+    _parts = const {};
+    _pages = const {};
     _viaFrom = null;
     _cards = _cards?.where((c) => c.auth != _viaOnly).toList();
   }
@@ -288,6 +305,16 @@ class _ConnectorsPageState extends State<ConnectorsPage>
     setState(() => _applyVia(machineId, reply));
   }
 
+  /// Each way a service is in by through an engine, as `engine:service` (and `:plugin` for a part).
+  Set<String> _waysIn() => {
+    for (final MapEntry(key: code, value: states) in _via.entries)
+      for (final MapEntry(key: engine, value: state) in states.entries)
+        if (state == 'connected' || state == 'installed') '$engine:$code',
+    for (final MapEntry(key: code, value: parts) in _parts.entries)
+      for (final part in parts)
+        if (part.state == 'installed') 'codex:$code:${part.plugin}',
+  };
+
   /// [reply], what [machineId] said its Claude Code and Codex hold, as the page's state. In a setState.
   void _applyVia(String machineId, Map<String, dynamic> reply) {
     Map<String, Map<String, String>> table(Object? raw) => {
@@ -299,6 +326,8 @@ class _ConnectorsPageState extends State<ConnectorsPage>
                 if (v is String) '$k': v,
             },
     };
+    // What was in before, on this same computer: a way that comes in since is a new connection.
+    final wasIn = _viaFrom == machineId ? _waysIn() : null;
     final said = reply['engines'];
     _engines = {
       if (said is Map)
@@ -307,7 +336,42 @@ class _ConnectorsPageState extends State<ConnectorsPage>
     };
     _via = table(reply['connections']);
     _scopes = table(reply['scopes']);
+    _pages = table(reply['pages']);
+    _parts = {
+      if (reply['parts'] case final Map raw)
+        for (final MapEntry(:key, :value) in raw.entries)
+          if (value is List)
+            '$key': [
+              for (final part in value)
+                if (part case {
+                  'plugin': final String plugin,
+                  'name': final String name,
+                })
+                  (
+                    plugin: plugin,
+                    name: name,
+                    state: part['state'] is String
+                        ? part['state'] as String
+                        : 'not_connected',
+                    page: part['page'] is String
+                        ? part['page'] as String
+                        : null,
+                    icon: part['icon'] is String
+                        ? part['icon'] as String
+                        : null,
+                  ),
+            ],
+    };
     _viaFrom = machineId;
+    // An agent already running reads a new connector only when it starts again, and only its own
+    // engine's: a Claude connection is nothing to a Codex session. Only once it is in, not when its
+    // sign-in page opens (left unfinished, there is nothing to restart for).
+    if (wasIn != null) {
+      final cameIn = {
+        for (final way in _waysIn().difference(wasIn)) way.split(':').first,
+      };
+      if (cameIn.contains(_lastOpened?.$2.engine)) _restartGlow = true;
+    }
     // Services only an engine connects (Microsoft 365): a card of their own where the computer has
     // an engine for them. Added once, after the computer's own list.
     final cards = [...?_cards?.where((c) => c.auth != _viaOnly)];
@@ -329,19 +393,51 @@ class _ConnectorsPageState extends State<ConnectorsPage>
   /// The `auth` of a card the computer's Harness list does not have: only an engine connects it.
   static const _viaOnly = 'elsewhere';
 
-  /// What a service with ways says under its name: the ways it is connected by.
-  String _waysDetail(_Card card) => [
-    for (final MapEntry(key: engine, value: name) in _engineNames.entries)
-      if (_engines.contains(engine))
-        switch (_via[card.code]?[engine]) {
-          'connected' => name,
-          'installed' => '$name (accounts in ChatGPT)',
-          'reconnect' => '$name: reconnect',
-          _ => null,
-        },
-    if (card.connected) 'Harness',
-    if (card.needsAttention) 'Harness: reconnect',
-  ].nonNulls.join(' · ');
+  /// What a service with ways shows under its name: a chip for each way it is in by, as the
+  /// desktop's card does (✓ Claude, ✓ Codex; amber for one to sign in to again). Null when none.
+  Widget? _waysChips(_Card card) {
+    final chips = [
+      for (final MapEntry(key: engine, value: name) in _engineNames.entries)
+        if (_engines.contains(engine))
+          switch (_via[card.code]?[engine]) {
+            'connected' || 'installed' => ('✓ $name', false),
+            'reconnect' => ('$name · Reconnect', true),
+            _ => null,
+          },
+      if (card.connected) ('✓ Harness', false),
+      if (card.needsAttention) ('Harness · Reconnect', true),
+    ].nonNulls;
+    if (chips.isEmpty) return null;
+    return Wrap(
+      spacing: 6,
+      runSpacing: 4,
+      children: [
+        for (final (text, again) in chips)
+          Builder(
+            builder: (context) {
+              final color = again
+                  ? AppPalette.warn
+                  : AppPalette.accentOnSurface;
+              return Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.16),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  text,
+                  style: TextStyle(
+                    color: color,
+                    fontSize: 12,
+                    fontWeight: AppFont.semibold,
+                  ),
+                ),
+              );
+            },
+          ),
+      ],
+    );
+  }
 
   /// Gmail, Calendar or Drive: through the computer's Claude Code or Codex (only those it has), or
   /// Harness's own sign-in, each with what it lets an agent do.
@@ -353,8 +449,16 @@ class _ConnectorsPageState extends State<ConnectorsPage>
       'reconnect' => 'Reconnect',
       _ => 'Connect',
     };
-    final codexIn =
-        _engines.contains('codex') && _via[card.code]?['codex'] == 'installed';
+    // What the way is in by, beside its name, as the desktop's rows say it.
+    String? label(String? state) => switch (state) {
+      'connected' => '✓ Connected',
+      'installed' => '✓ Installed',
+      'reconnect' => 'Needs sign-in again',
+      _ => null,
+    };
+    // A way that is in offers its own page in that engine's account, where an account is added.
+    String? openable(String? state, String? page) =>
+        state == 'connected' || state == 'installed' ? page : null;
     const who = {
       'claude': 'Only Claude Code on the same Claude account',
       'codex': 'Only Codex on the same ChatGPT account',
@@ -366,11 +470,34 @@ class _ConnectorsPageState extends State<ConnectorsPage>
             String title,
             String detail,
             String value,
+            String? label,
             VoidCallback? act,
+            String? page,
+            // A part of an engine's way (one of Codex's plugins): its icon's code, drawn under the engine.
+            String? mark,
           })
         >[
           for (final MapEntry(key: engine, value: name) in _engineNames.entries)
-            if (_engines.contains(engine))
+            // ChatGPT connects each of a split service's plugins on its own, so each is a way of its own.
+            if (_engines.contains(engine) &&
+                engine == 'codex' &&
+                _parts[card.code] != null)
+              for (final part in _parts[card.code]!)
+                (
+                  key: 'codex-${part.plugin}',
+                  title: part.name,
+                  detail: '',
+                  value: _busy.contains('${card.code}:$engine:${part.plugin}')
+                      ? 'Installing…'
+                      : status(part.state),
+                  label: label(part.state),
+                  act: part.state == 'installed'
+                      ? () => unawaited(_disconnectVia(card, engine, part))
+                      : () => unawaited(_connectVia(card, engine, part)),
+                  page: openable(part.state, part.page),
+                  mark: part.icon ?? card.code,
+                )
+            else if (_engines.contains(engine))
               (
                 key: engine,
                 title: name,
@@ -378,11 +505,17 @@ class _ConnectorsPageState extends State<ConnectorsPage>
                 value: _busy.contains('${card.code}:$engine')
                     ? (engine == 'codex' ? 'Installing…' : 'Working…')
                     : status(_via[card.code]?[engine]),
+                label: label(_via[card.code]?[engine]),
                 act: switch (_via[card.code]?[engine]) {
                   'connected' ||
                   'installed' => () => unawaited(_disconnectVia(card, engine)),
                   _ => () => unawaited(_connectVia(card, engine)),
                 },
+                page: openable(
+                  _via[card.code]?[engine],
+                  _pages[card.code]?[engine],
+                ),
+                mark: null,
               ),
           // Not for a service only an engine connects (Microsoft 365).
           if (scope.isEmpty || scope.containsKey('harness'))
@@ -395,8 +528,13 @@ class _ConnectorsPageState extends State<ConnectorsPage>
                   : card.needsAttention
                   ? 'Reconnect'
                   : card.connected
-                  ? 'Connected'
+                  ? 'Remove'
                   : 'Connect',
+              label: card.connected
+                  ? '✓ Connected'
+                  : card.needsAttention
+                  ? 'Needs sign-in again'
+                  : null,
               act:
                   !(card.connected ||
                       card.needsAttention ||
@@ -405,6 +543,8 @@ class _ConnectorsPageState extends State<ConnectorsPage>
                   : card.connected
                   ? () => unawaited(_disconnect(card))
                   : () => unawaited(_connect(card)),
+              page: null,
+              mark: null,
             ),
         ];
     final route = phoneSheetRoute<void>(
@@ -432,12 +572,57 @@ class _ConnectorsPageState extends State<ConnectorsPage>
               const SizedBox(height: 14),
               // One bordered card per way, apart from each other: in one card they read as a
               // paragraph.
-              for (final way in ways) ...[
+              for (final (i, way) in ways.indexed) ...[
+                // The first of an engine's parts: the engine above them, once.
+                if (way.mark != null && (i == 0 || ways[i - 1].mark == null))
+                  Padding(
+                    key: const Key('connector-way-codex'),
+                    padding: const EdgeInsets.fromLTRB(4, 2, 4, 8),
+                    child: Row(
+                      children: [
+                        Icon(
+                          LucideIcons.bot300,
+                          size: 22,
+                          color: AppPalette.textSecondary,
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Codex',
+                                style: TextStyle(
+                                  color: AppPalette.textPrimary,
+                                  fontSize: 16,
+                                  fontWeight: AppFont.semibold,
+                                ),
+                              ),
+                              Text(
+                                who['codex']!,
+                                style: TextStyle(
+                                  color: AppPalette.textFaint,
+                                  fontSize: 12.5,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 _WayCard(
                   key: Key('connector-way-${way.key}'),
                   icon: way.key == 'harness'
                       ? LucideIcons.plug300
                       : LucideIcons.bot300,
+                  mark: way.mark,
+                  status: way.label,
+                  fill: switch (way.value) {
+                    'Connect' || 'Reconnect' => AppPalette.accent,
+                    'Remove' => AppPalette.dangerFill,
+                    _ => null,
+                  },
                   title: way.title,
                   detail: way.detail,
                   value: way.value,
@@ -447,14 +632,13 @@ class _ConnectorsPageState extends State<ConnectorsPage>
                           Navigator.of(sheet).pop();
                           way.act!();
                         },
-                  // Codex's plugin is in: the accounts it uses are ChatGPT's, more than one if the
-                  // person wants. Added there.
-                  onAddAccount: way.key == 'codex' && codexIn
-                      ? () {
-                          Navigator.of(sheet).pop();
-                          unawaited(_openEngine('codex', _chatGptConnectors));
-                        }
-                      : null,
+                  onOpen: switch (way.page) {
+                    final page? => () {
+                      Navigator.of(sheet).pop();
+                      unawaited(_openEngine(way.key, page));
+                    },
+                    null => null,
+                  },
                 ),
                 const SizedBox(height: 10),
               ],
@@ -474,15 +658,16 @@ class _ConnectorsPageState extends State<ConnectorsPage>
   /// Through [engine]'s own account: the computer installs Codex's plugin first, then the page to
   /// connect it on opens here, in this phone's browser (the connection is the account's, not a
   /// computer's).
-  Future<void> _connectVia(_Card card, String engine) async {
+  Future<void> _connectVia(_Card card, String engine, [_Part? part]) async {
     final machineId = _machineId;
-    final key = '${card.code}:$engine';
+    final key = '${card.code}:$engine${part == null ? '' : ':${part.plugin}'}';
+    final name = part?.name ?? card.name;
     if (machineId == null || _busy.contains(key)) return;
     setState(() {
       _busy.add(key);
       _say(
         engine == 'codex'
-            ? 'Installing the ${card.name} plugin in Codex on ${_machineName(machineId)}…'
+            ? 'Installing the $name plugin in Codex on ${_machineName(machineId)}…'
             : '',
       );
     });
@@ -493,13 +678,14 @@ class _ConnectorsPageState extends State<ConnectorsPage>
       'action': 'connect_via',
       'connector': card.code,
       'via': engine,
+      'plugin': ?part?.plugin,
     }, timeout: const Duration(seconds: 150));
     if (!mounted) return;
     final url = reply['url'] as String?;
     if (reply['error'] != null || url == null) {
       setState(() {
         _busy.remove(key);
-        _say('${card.name}: ${_failure(reply)}', fades: true);
+        _say('$name: ${_failure(reply)}', fades: true);
       });
       return;
     }
@@ -507,14 +693,12 @@ class _ConnectorsPageState extends State<ConnectorsPage>
     if (!mounted) return;
     setState(() {
       _busy.remove(key);
-      // A running Claude Code or Codex reads a new connector only when it starts again.
-      _restartGlow = true;
       _say(
         !opened
-            ? 'Open $url to connect ${card.name}.'
+            ? 'Open $url to connect $name.'
             : engine == 'codex'
-            ? 'Codex has the ${card.name} plugin. Connect ${card.name} in ChatGPT; Codex asks for Google sign-in the first time it uses it.'
-            : 'Connect ${card.name} on claude.ai. Claude Code on ${_machineName(machineId)} gets it in a moment.',
+            ? 'Codex has the $name plugin. Connect $name in ChatGPT; Codex asks for sign-in the first time it uses it.'
+            : 'Connect $name on claude.ai. Claude Code on ${_machineName(machineId)} gets it in a moment.',
         fades: true,
       );
     });
@@ -523,9 +707,6 @@ class _ConnectorsPageState extends State<ConnectorsPage>
 
   /// The computer is installing [card]'s Codex plugin ([_connectVia]): its row says so, the whole time.
   bool _installing(_Card card) => _busy.contains('${card.code}:codex');
-
-  /// ChatGPT's connectors, where Codex's plugins are signed in (cli/src/lib/connectors/elsewhere.ts).
-  static const _chatGptConnectors = 'https://chatgpt.com/#settings/Connectors';
 
   /// [url], where [engine]'s connectors are managed, in a browser tab of this app's own, as Harness's
   /// sign-in opens. The web, not the engine's app: handed to the system, a claude.ai or chatgpt.com
@@ -543,27 +724,37 @@ class _ConnectorsPageState extends State<ConnectorsPage>
     return launchUrl(uri, mode: LaunchMode.inAppBrowserView);
   }
 
-  /// Stop [engine] using [card]: the computer removes Codex's plugin, and the engine's account page
-  /// opens, where the grant itself is ended.
-  Future<void> _disconnectVia(_Card card, String engine) async {
+  /// Remove [engine]'s way to [card], or one [part] of it. Codex's plugin is removed on the computer,
+  /// and that is all: no page opens (one nobody asked for, on every Remove, was in the way,
+  /// 2026-11-12). Claude's connector is claude.ai's, which neither Claude Code nor Harness can take
+  /// out (`claude mcp remove` knows only the computer's own servers): its page opens there.
+  Future<void> _disconnectVia(_Card card, String engine, [_Part? part]) async {
+    if (engine == 'claude') {
+      if (_pages[card.code]?['claude'] case final page?) {
+        await _openEngine(engine, page);
+      }
+      if (mounted) {
+        setState(
+          () => _say('Disconnect ${card.name} on claude.ai.', fades: true),
+        );
+      }
+      return;
+    }
     final machineId = _machineId;
+    final name = part?.name ?? card.name;
     if (machineId == null) return;
     final reply = await _app.connectors(machineId, {
       'action': 'disconnect_via',
       'connector': card.code,
       'via': engine,
+      'plugin': ?part?.plugin,
     }, timeout: const Duration(seconds: 90));
-    if (!mounted) return;
-    final url = reply['url'] as String?;
-    if (url != null) await _openEngine(engine, url);
     if (!mounted) return;
     setState(
       () => _say(
         reply['error'] != null
-            ? '${card.name}: ${_failure(reply)}'
-            : engine == 'codex'
-            ? 'Codex stopped using ${card.name}. To end its access to your Google account, disconnect it in ChatGPT too.'
-            : 'Disconnect ${card.name} on claude.ai: Claude Code follows your claude.ai account.',
+            ? '$name: ${_failure(reply)}'
+            : 'Codex stopped using $name.',
         fades: true,
       ),
     );
@@ -1096,10 +1287,13 @@ class _ConnectorsPageState extends State<ConnectorsPage>
                                 ),
                                 title: card.name,
                                 detail: _hasWays(card.code)
-                                    ? _waysDetail(card)
+                                    ? null
                                     : card.needsAttention
                                     ? 'Connect again'
                                     : card.description,
+                                below: _hasWays(card.code)
+                                    ? _waysChips(card)
+                                    : null,
                                 value: _installing(card)
                                     ? 'Installing…'
                                     : _hasWays(card.code)
@@ -1134,11 +1328,14 @@ class _ConnectorsPageState extends State<ConnectorsPage>
                               // signed in yet) says so here, under Available.
                               detail:
                                   _hasWays(card.code) &&
-                                      _waysDetail(card).isNotEmpty
-                                  ? _waysDetail(card)
+                                      _waysChips(card) != null
+                                  ? null
                                   : card.reason.isNotEmpty
                                   ? card.reason
                                   : card.description,
+                              below: _hasWays(card.code)
+                                  ? _waysChips(card)
+                                  : null,
                               value: _busy.contains(card.code)
                                   ? 'Signing in…'
                                   : _installing(card)
@@ -1277,6 +1474,17 @@ class _ConnectorMark extends StatelessWidget {
   }
 }
 
+/// One of the plugins Codex splits a service into (Microsoft 365), as `elsewhere` `parts` names it:
+/// PLUGIN@MARKETPLACE, its name, `installed` or `not_connected`, its own page on ChatGPT and its icon's
+/// code in [connectorIcons].
+typedef _Part = ({
+  String plugin,
+  String name,
+  String state,
+  String? page,
+  String? icon,
+});
+
 /// One way to connect a service, in the Connect sheet: who it is, what it can do and who gets it,
 /// and its state in a button-like pill at the right. Dimmed, and not tappable, when [onTap] is null.
 class _WayCard extends StatelessWidget {
@@ -1287,10 +1495,23 @@ class _WayCard extends StatelessWidget {
     required this.detail,
     required this.value,
     required this.onTap,
-    this.onAddAccount,
+    this.onOpen,
+    this.mark,
+    this.fill,
+    this.status,
   });
 
+  /// [value] filled in this colour, apart at a glance: Connect blue, Remove red; outlined when null.
+  final Color? fill;
+
+  /// What it is in by (✓ Connected, ✓ Installed, Needs sign-in again), beside [title].
+  final String? status;
+
   final IconData icon;
+
+  /// A part of an engine's way (one of Codex's plugins): its icon's code, drawn in place of [icon],
+  /// the card set in under its engine.
+  final String? mark;
   final String title;
 
   /// What it can do, then who gets it, on two lines.
@@ -1298,8 +1519,9 @@ class _WayCard extends StatelessWidget {
   final String value;
   final VoidCallback? onTap;
 
-  /// "+ Add account" under [detail], a tap of its own: Codex's accounts, more than one if wanted.
-  final VoidCallback? onAddAccount;
+  /// A blue icon beside [title], a tap of its own: the service's own page in that engine's account,
+  /// where an account is added. Only for a way that is in.
+  final VoidCallback? onOpen;
 
   @override
   Widget build(BuildContext context) {
@@ -1307,7 +1529,8 @@ class _WayCard extends StatelessWidget {
     final lines = detail.split('\n');
     final live = onTap != null;
     final edge = AppPalette.textFaint.withValues(alpha: 0.45);
-    return Opacity(
+    final mark = this.mark;
+    final card = Opacity(
       opacity: live ? 1 : 0.6,
       child: Material(
         color: AppGlass.rowFill,
@@ -1322,29 +1545,70 @@ class _WayCard extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
             child: Row(
               children: [
-                Icon(icon, size: 22, color: AppPalette.textSecondary),
+                if (mark == null)
+                  Icon(icon, size: 22, color: AppPalette.textSecondary)
+                else
+                  _ConnectorMark(code: mark, name: title),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        title,
-                        style: TextStyle(
-                          color: AppPalette.textPrimary,
-                          fontSize: 16,
-                          fontWeight: AppFont.semibold,
-                        ),
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              title,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: AppPalette.textPrimary,
+                                fontSize: 16,
+                                fontWeight: AppFont.semibold,
+                              ),
+                            ),
+                          ),
+                          // What it is in by, as the desktop's rows say it: blue, amber to sign in again.
+                          if (status case final status?) ...[
+                            const SizedBox(width: 8),
+                            Text(
+                              status,
+                              style: TextStyle(
+                                color: status.startsWith('✓')
+                                    ? AppPalette.accentOnSurface
+                                    : AppPalette.warn,
+                                fontSize: 12.5,
+                                fontWeight: AppFont.semibold,
+                              ),
+                            ),
+                          ],
+                          if (onOpen case final open?)
+                            // An icon, not a button; a finger-sized target around it.
+                            InkWell(
+                              key: const Key('connector-way-open'),
+                              onTap: open,
+                              borderRadius: BorderRadius.circular(6),
+                              child: Padding(
+                                padding: const EdgeInsets.all(6),
+                                child: Icon(
+                                  Icons.open_in_new,
+                                  size: 16,
+                                  color: AppPalette.accentOnSurface,
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
-                      const SizedBox(height: 3),
-                      Text(
-                        lines.first,
-                        style: TextStyle(
-                          color: AppPalette.textSecondary,
-                          fontSize: 14,
-                          height: 1.3,
+                      if (lines.first.isNotEmpty) ...[
+                        const SizedBox(height: 3),
+                        Text(
+                          lines.first,
+                          style: TextStyle(
+                            color: AppPalette.textSecondary,
+                            fontSize: 14,
+                            height: 1.3,
+                          ),
                         ),
-                      ),
+                      ],
                       if (lines.length > 1) ...[
                         const SizedBox(height: 2),
                         Text(
@@ -1352,36 +1616,6 @@ class _WayCard extends StatelessWidget {
                           style: TextStyle(
                             color: AppPalette.textFaint,
                             fontSize: 12.5,
-                          ),
-                        ),
-                      ],
-                      if (onAddAccount case final add?) ...[
-                        const SizedBox(height: 6),
-                        InkWell(
-                          key: const Key('connector-way-add-account'),
-                          onTap: add,
-                          borderRadius: BorderRadius.circular(6),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 4),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  LucideIcons.plus300,
-                                  size: 16,
-                                  color: AppPalette.accentOnSurface,
-                                ),
-                                const SizedBox(width: 4),
-                                Text(
-                                  'Add account',
-                                  style: TextStyle(
-                                    color: AppPalette.accentOnSurface,
-                                    fontSize: 14,
-                                    fontWeight: AppFont.semibold,
-                                  ),
-                                ),
-                              ],
-                            ),
                           ),
                         ),
                       ],
@@ -1394,14 +1628,18 @@ class _WayCard extends StatelessWidget {
                     horizontal: 12,
                     vertical: 6,
                   ),
+                  // Filled as the desktop's buttons are: Connect blue, Remove red.
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: edge),
+                    color: fill,
+                    border: fill != null ? null : Border.all(color: edge),
                   ),
                   child: Text(
                     value,
                     style: TextStyle(
-                      color: AppPalette.textPrimary,
+                      color: fill != null
+                          ? Colors.white
+                          : AppPalette.textPrimary,
                       fontSize: 13,
                       fontWeight: AppFont.semibold,
                     ),
@@ -1413,6 +1651,9 @@ class _WayCard extends StatelessWidget {
         ),
       ),
     );
+    return mark == null
+        ? card
+        : Padding(padding: const EdgeInsets.only(left: 18), child: card);
   }
 }
 

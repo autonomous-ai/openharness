@@ -94,6 +94,10 @@ class ConnectorsController extends ChangeNotifier {
   /// Services only an engine connects (Microsoft 365), which the Harness list has no card for (`elsewhere` `services`).
   List<ConnectorCard> viaOnly = const [];
 
+  /// Per service Codex splits (Microsoft 365), each of its plugins (`elsewhere` `parts`): ChatGPT connects each on
+  /// its own, so each is offered on its own. A daemon from before says none, and the service is one Codex row.
+  Map<String, List<ViaPart>> parts = const {};
+
   /// The cards to show: the Harness list, and the engine-only services it does not have.
   List<ConnectorCard> get shownCards => [
     ...cards,
@@ -116,13 +120,12 @@ class ConnectorsController extends ChangeNotifier {
       ) ??
       false;
 
-  /// ChatGPT's connectors, where the accounts Codex's plugins use are added, or the main one chosen: more than
-  /// one Google account if the person wants. Codex's own, not Harness's to hold.
-  static final codexAccounts = Uri.parse(
-    'https://chatgpt.com/#settings/Connectors',
-  );
+  /// Per service, its own page in each engine's account (`elsewhere` `pages`): claude.ai's connector, or the
+  /// Codex plugin's page on ChatGPT, where an account is added or its settings changed once it is in.
+  Map<String, Map<String, String>> pages = const {};
 
-  Future<void> openCodexAccounts() => openInBrowser(codexAccounts);
+  /// [page], one of [pages] or a [ViaPart]'s, in the browser.
+  Future<void> openPage(String page) => openInBrowser(Uri.parse(page));
 
   /// What the last action came to. It goes away on its own: Settings keeps this page alive, and a
   /// "disconnected" from days ago was still standing there.
@@ -269,6 +272,28 @@ class ConnectorsController extends ChangeNotifier {
       };
       via = table(answer['connections']);
       scopes = table(answer['scopes']);
+      pages = table(answer['pages']);
+      parts = {
+        if (answer['parts'] case final Map raw)
+          for (final MapEntry(:key, :value) in raw.entries)
+            if (value is List)
+              '$key': [
+                for (final part in value)
+                  if (part case {
+                    'plugin': final String plugin,
+                    'name': final String name,
+                  })
+                    ViaPart(
+                      plugin,
+                      name,
+                      part['state'] is String
+                          ? part['state'] as String
+                          : 'not_connected',
+                      part['page'] is String ? part['page'] as String : null,
+                      part['icon'] is String ? part['icon'] as String : null,
+                    ),
+              ],
+      };
       viaOnly = [
         for (final row in (answer['services'] as List? ?? const []))
           if (row is Map)
@@ -284,11 +309,35 @@ class ConnectorsController extends ChangeNotifier {
     }
   }
 
-  /// Connect [card] through [engine]'s own account: Codex installs its plugin first. The page the
-  /// person signs in on opens in the browser; the card follows what the engine says for a few minutes.
-  Future<void> connectVia(ConnectorCard card, String engine) async {
-    notice = '';
-    final key = '${card.code}:$engine';
+  /// How long connect_via and disconnect_via are waited for, as the phone waits. Codex adds or removes
+  /// a service's plugins one after another (Microsoft 365 is three), a few seconds each and longer the
+  /// first time; waited for 20 s, a Mac's first Connect gave up while the plugins went on installing,
+  /// and ChatGPT never opened (2026-11-12).
+  static const viaWait = Duration(seconds: 150);
+
+  /// What [pending] holds while [card] connects through [engine], or through one [part] of it.
+  static String viaKey(ConnectorCard card, String engine, [ViaPart? part]) =>
+      '${card.code}:$engine${part == null ? '' : ':${part.plugin}'}';
+
+  /// [card]'s state through [engine], or through one [part] of it.
+  String viaState(ConnectorCard card, String engine, [ViaPart? part]) {
+    if (part == null) return via[card.code]?[engine] ?? 'not_connected';
+    for (final p in parts[card.code] ?? const <ViaPart>[]) {
+      if (p.plugin == part.plugin) return p.state;
+    }
+    return 'not_connected';
+  }
+
+  /// Connect [card] through [engine]'s own account, or one [part] of it: Codex installs its plugin first. The
+  /// page the person signs in on opens in the browser; the card follows what the engine says for a few minutes.
+  Future<void> connectVia(
+    ConnectorCard card,
+    String engine, [
+    ViaPart? part,
+  ]) async {
+    final key = viaKey(card, engine, part);
+    final name = part?.name ?? card.name;
+    notice = engine == 'codex' ? 'Installing the $name plugin in Codex…' : '';
     pending.add(key);
     _changed();
     try {
@@ -296,18 +345,19 @@ class ConnectorsController extends ChangeNotifier {
         'action': 'connect_via',
         'connector': card.code,
         'via': engine,
-      });
+        'plugin': ?part?.plugin,
+      }, timeout: viaWait);
       final url = answer['url'] as String?;
       final who = engineName(engine);
       if (url != null && !await openInBrowser(Uri.parse(url))) {
-        notice = 'Open this address to connect ${card.name} for $who: $url';
+        notice = 'Open this address to connect $name for $who: $url';
       } else {
         notice = engine == 'codex'
-            ? 'Codex has the ${card.name} plugin. Connect ${card.name} in ChatGPT; Codex asks for Google sign-in the first time it uses it.'
-            : 'Connect ${card.name} on claude.ai. Claude Code on this computer gets it in a moment.';
+            ? 'Codex has the $name plugin. Connect $name in ChatGPT; Codex asks for sign-in the first time it uses it.'
+            : 'Connect $name on claude.ai. Claude Code on this computer gets it in a moment.';
       }
     } catch (e) {
-      notice = '${card.name}: ${_message(e)}';
+      notice = '$name: ${_message(e)}';
       pending.remove(key);
       _changed();
       return;
@@ -317,29 +367,38 @@ class ConnectorsController extends ChangeNotifier {
     // Back from the browser: the card shows it as soon as the engine does.
     final deadline = DateTime.now().add(_signInFor);
     while (!_disposed &&
-        via[card.code]?[engine] == 'not_connected' &&
+        viaState(card, engine, part) == 'not_connected' &&
         DateTime.now().isBefore(deadline)) {
       await Future<void>.delayed(pollEvery * 10);
       await refreshVia();
     }
   }
 
-  /// Stop [engine] using [card]: Codex's plugin is removed on that computer, and the engine's
-  /// account page opens, where the grant itself is ended.
-  Future<void> disconnectVia(ConnectorCard card, String engine) async {
+  /// Remove [engine]'s way to [card], or one [part] of it. Codex's plugin is removed on that computer, and
+  /// that is all: no page opens (one nobody asked for, on every Remove, was in the way, 2026-11-12). Claude's
+  /// connector is claude.ai's, and neither Claude Code nor Harness can take it out (`claude mcp remove` knows
+  /// only the computer's own servers): Remove opens its page there, where Disconnect is.
+  Future<void> disconnectVia(
+    ConnectorCard card,
+    String engine, [
+    ViaPart? part,
+  ]) async {
+    if (engine == 'claude') {
+      if (pages[card.code]?['claude'] case final page?) await openPage(page);
+      notice = 'Disconnect ${card.name} on claude.ai.';
+      return;
+    }
+    final name = part?.name ?? card.name;
     try {
-      final answer = await _ask({
+      await _ask({
         'action': 'disconnect_via',
         'connector': card.code,
         'via': engine,
-      });
-      final url = answer['url'] as String?;
-      if (url != null) await openInBrowser(Uri.parse(url));
-      notice = engine == 'codex'
-          ? 'Codex stopped using ${card.name}. To end its access to your Google account, disconnect it in ChatGPT too.'
-          : 'Disconnect ${card.name} on claude.ai: Claude Code follows your claude.ai account.';
+        'plugin': ?part?.plugin,
+      }, timeout: viaWait);
+      notice = 'Codex stopped using $name.';
     } catch (e) {
-      notice = '${card.name}: ${_message(e)}';
+      notice = '$name: ${_message(e)}';
     }
     await refreshVia();
   }
@@ -465,6 +524,24 @@ class ConnectorsController extends ChangeNotifier {
 }
 
 /// The computer answered, and said no: a reason to stop, unlike a request that did not get through.
+/// One of the plugins Codex splits a service into (Microsoft 365: Outlook mail, Outlook calendar, SharePoint).
+class ViaPart {
+  const ViaPart(this.plugin, this.name, this.state, [this.page, this.icon]);
+
+  /// PLUGIN@MARKETPLACE, as the daemon names it in `connect_via` `plugin`.
+  final String plugin;
+  final String name;
+
+  /// `installed` or `not_connected`.
+  final String state;
+
+  /// Its own page on ChatGPT, where an account is added once it is in.
+  final String? page;
+
+  /// Its icon's code in [connectorIcons] (Outlook's, SharePoint's).
+  final String? icon;
+}
+
 class _Refused implements Exception {
   const _Refused(this.message);
 
