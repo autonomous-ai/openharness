@@ -53,12 +53,17 @@ const MACHINE_REQUESTS = new Set([...SHELL_REQUESTS, 'agent_purge', 'agent_workt
   'agent_browser_available', 'agent_browser_retry', 'agent_browser_settings', 'agent_browser_settings_save', 'agent_browser_proxy_test',
   'agent_browser_start', 'agent_browser_stop', 'agent_browser_window',
   // A sign-in a phone caught for a page a harness's program opened (core/terminals/browser.ts): it holds the code.
-  'browser_callback', ...ROUTE_COMMAND_TYPES])
+  'browser_callback',
+  // Another of the owner's machines following harnesses here (gateway/harnessWatch.ts): their ids and what they do.
+  'harness_watch', ...ROUTE_COMMAND_TYPES])
 const MACHINE_RESULTS = new Set([...MACHINE_REQUESTS].map(type => `${type}_result`))
 /** The pair brain, machine to machine (daemons/BRAIN.md). A watch carries question text and recaps; the
  * writes (answer, send, stop, start, pause, resume) act on a harness through the owning machine's floor
  * (pair/owner.ts). Sealed both ways, always: the relay sees the outer type only. */
 export const PAIR_RESULTS = new Set([...PAIR_REQUESTS].map(type => `${type}_result`))
+/** What a `harness_watch` is told (gateway/harnessWatch.ts): sealed to the watching connection alone, so a frame of
+ * this type that is not pairwise sealed was made up by the relay and is dropped (lib/remoteRelay.ts). */
+export const HARNESS_EVENT = 'harness_event'
 /** Pushed to one watcher with the daemon's `wrapTarget` (pairwise, that connection only), never broadcast. */
 export const PAIR_PUSHES = new Set(['pair_event'])
 /** The loopback-only `pair` request's reply. Listed so a relayed `pair` (refused LOCAL_ONLY) is answered
