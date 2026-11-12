@@ -15,7 +15,8 @@ export type { SwarmRole, SwarmSkillGrant }
 /**
  * What every Swarm agent is told as it starts (anh Dee, 2026-11-09: the Swarm's basics are the product's, not
  * each repository's to copy): how a Swarm v4 team works, the same in every project, as lampOS's builders work. The
- * project's own AGENTS.md outranks it where they differ, and the agent's own agents/<name>.md both (superTabs/inCore/launch.ts). In the engine's own instructions (Claude Code's
+ * project's own AGENTS.md outranks it where they differ, and the agent's own agents/<name>.md both (superTabs/inCore/launch.ts),
+ * except its process and data rules, which no file in the repository outranks (the reviews of #4226). In the engine's own instructions (Claude Code's
  * --append-system-prompt, Codex's developer_instructions), so it holds through compaction and every relaunch.
  *
  * Held under 200 words (docs/plans/2026-11-10-swarm-plan.md, step 1 item 7; 507 on 2026-11-10): what code does is not said
@@ -37,11 +38,11 @@ export type { SwarmRole, SwarmSkillGrant }
  * (#3720: an agent runs on its own person's computer); a safety rule about processes keeps its line (AGENTS.md standard 13).
  * The template matters on a Mac, where a bare `mktemp -d` ignores TMPDIR (lib/agentTmp.ts gives each agent its own).
  */
-export const SWARM_BASICS = `You are a Swarm agent shipping one project; its AGENTS.md outranks these basics, except the last two lines.
+export const SWARM_BASICS = `You are a Swarm agent on one project; its AGENTS.md outranks these basics, except the process and data rules.
 - Your tasks are GitHub issues labelled builder:<your name>. First: harness super-tab take OWNER/REPO#N. Branch <your name>/<N>; its pull request says "Closes #N" and has that label.
 - On GitHub, open each comment with your name ("Pip: ...").
-- Asked to read a pull request: harness super-tab read ok|hold OWNER/REPO#N SHA 'what you found'. Never read your own or merge.
-- Harness brings you what's said to you: answer there. Never watch GitHub yourself (no Monitor or polling): when you wait, end your turn, Harness wakes you.
+- To read a pull request: harness super-tab read ok|hold OWNER/REPO#N SHA 'what you found'. Never read your own or merge.
+- Harness brings you what's said to you: answer there. Never watch GitHub yourself (no Monitor, polling or sleep): to wait, end your turn, Harness wakes you.
 - Your project's channel is the team's chat: harness super-tab status shows it, harness super-tab post CHANNEL 'message' NEW_ID posts. @Name wakes someone.
 - Post briefly, as on Slack: what shipped, what's blocked, decisions; never your setup.
 - Stop only processes you started, by the process id you recorded, never by name (pkill, killall, taskkill /IM); no sudo or system-wide installs; temporary files only in your own folder (mktemp -d "\${TMPDIR:-/tmp}/name.XXXXXX", on Windows a folder under $env:TEMP); never remove another agent's worktree.
@@ -64,7 +65,8 @@ const textVersion = (text: string) => createHash('sha256').update(text).digest('
 
 /** The team's basics the Swarm starts an agent with, at a launch and every relaunch (superTabs/inCore/launch.ts), by whether
  *  it is its project's PM, and their name (their hash). Its project's own AGENTS.md (or CLAUDE.md) the engine reads by itself;
- *  its own agents/<name>.md Harness carries after these (superTabs/inCore/launch.ts). Both outrank these where they differ. */
+ *  its own agents/<name>.md Harness carries after these (superTabs/inCore/launch.ts). Both outrank these where they differ, except
+ *  the process and data rules, named by subject: a PM's basics end with its role line, not with those rules. */
 export function swarmBasics(lead: boolean): { text: string; version: string } {
   const text = lead ? `${SWARM_BASICS}\n${PM_BASICS}` : SWARM_BASICS
   return { text, version: textVersion(text) }
