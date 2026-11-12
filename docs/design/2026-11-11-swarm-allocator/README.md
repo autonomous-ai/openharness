@@ -29,7 +29,7 @@ machine"; "agents create worktrees, so disk and storage go out fast."
 | It said | What was found |
 |---|---|
 | A twenty-line rule beats today's solver by 10 to 30%, so the search goes | The same solver holding one task ahead of each builder, not two, gets nearly all of that. With a machine's cores as the product plans them, the solver and the rule are level, and the second critique found the search 11 to 25% ahead of its own first plan on heavy days (its own runs: the script has no flag for it). What costs time is the second task ahead: 0 to 6% on light days and 17 to 19% on heavy ones with the cores the product plans (3 to 12% and 21 to 26% at 6) |
-| Matching work to the agent that does it best saves about 40% of the work | That restates the experiment's assumption that an agent is twice as fast in its own area. At 1.5× it is 25%, at 1.2× 13%, at none 0. Nobody has measured it |
+| Matching work to the agent that does it best saves about 40% of the work | That restates the experiment's assumption that an agent is twice as fast in its own area. At 1.5× it is 25%, at 1.2× 13%, at none 0. lampOS's record has since measured 1.12, within noise ([the study](../../research/2026-11-12-area-worth/README.md)) |
 | A lane starts no more than it lands in its usual hours | That is its own average, used as a ceiling: it can never grow, and it ratchets down. In the critique's simulation it took 113 landings a day to 88, 26 or 6 |
 | Writers in an area go up by one, and halve on a conflict | At lampOS's 7% conflict rate it sits at one writer for 43% of landings, and a project with one area gets two builders |
 | A change with break chance q rides with 1/q − 1 others, so 20 is safe at 2% | Only if a run is all or nothing and breaks are independent. At 1.9% a train of 20 passes 68% of the time; counting changes held mid-run, about 42% |
@@ -73,7 +73,7 @@ Not known, with how each would be found:
 
 | Question | How |
 |---|---|
-| Is an agent faster, or held less, in an area it has worked in? | lampOS's record: a builder's later tasks in an area against its first |
+| Is an agent faster, or held less, in an area it has worked in? | lampOS's record: a builder's later tasks in an area against its first. *Found on 12 November*: 1.12 times as fast, within noise, and held no less often ([the study](../../research/2026-11-12-area-worth/README.md)) |
 | What does a task cost in tokens, by model and by stage? | Nothing counts it. The server's cost record went with v3 on 10 November (#3908); each daemon still counts its own conversations |
 | Does a cheaper model land the same work? | Fifty closed tasks run again on three tiers, the project's tests the judge |
 | What does a list one deep do with reads and landings in the loop? | The model ends at the build. Live, on our own Swarm, the week after against the week before on the scoreboard: the change ships on, with no switch between two rules |
@@ -183,11 +183,13 @@ on the agent's own computer. The measurements in the table of what is not known 
 [`experiment.mts`](experiment.mts) runs today's solver and simple rules on the same simulated days (from `cli/`; its
 head says how to vary it). The tables below are
 `SEEDS=1,2,3 CASES=0:0:80,0.7:0.3:80,1:0.3:80,0:0:160,0.7:0.3:160 ONLY=fifo,solver,solver1,priced0 npx tsx ../docs/design/2026-11-11-swarm-allocator/experiment.mts`,
-with `CORES=8` for the second. The solver's rows vary a little with the computer: its search stops on a wall clock.
+with `CORES=8` for the second, and `AWAY=1.2` for both today: they were made when the script assumed a builder twice as
+fast in its own area. The solver's rows vary a little with the computer: its search stops on a wall clock.
 
 - **The days.** 12 builders on 6 machines. 80 tasks (a light day) or 160 (more than they can do) arrive over ten
-  hours. A builder is assumed twice as fast in its own area. With noise, minutes spread as agents' runs do, and three
-  labels in ten are a size off.
+  hours. A builder takes 1.12 times as long outside its own area as in it (0.672 of a size's minutes against 0.6), as
+  lampOS's record measured ([an area's measured speed](#an-areas-measured-speed)); every other table in this section
+  assumed twice as long (1.2). With noise, minutes spread as agents' runs do, and three labels in ten are a size off.
 - **It ends at the build.** No reads, checks, holds, landings, models or tokens. And a task starts the minute it is
   given: in the product a builder with nothing waits a pass (up to 60 s) and GitHub's news (20 s) for it, about the
   size of the light days' gain.
@@ -223,7 +225,35 @@ branch):
   same over more seeds, and the search 11 to 25% ahead of its own first plan on heavy days.
 - **Both tables give the solver today's fixed guesses** of a size's minutes and an area's speed. Given the real
   speeds, the rule scores 55, 53, 50, 98 and 91.
-- **First come is far behind either**, but by how much rests on the assumed twofold speed in an agent's own area.
+- **First come is far behind either** in these tables, but by how much rested on the assumed twofold speed in an
+  agent's own area: at the measured 1.12 it is 4% behind on a light day and 41% on a heavy one (below).
+
+### An area's measured speed
+
+Until 12 November the script assumed a builder twice as fast in its own area: 0.6 of a size's minutes there, 1.2
+elsewhere. lampOS's record measured 1.12 ([the study](../../research/2026-11-12-area-worth/README.md): an area a
+builder had landed work in, against one it had not), so its default is now 0.6 and 0.672. The plan still guesses
+threefold (0.5 and 1.5): the product's `FOCUS` and `AWAY` for an area a person names in "Works on:", which stay. The
+noisy days at 8 cores, three seeds, both assumptions run on this computer on 12 November
+(`SEEDS=1,2,3 CASES=0.7:0.3:80,0.7:0.3:160 ONLY=fifo,solver,solver1,priced0 CORES=8`, with `AWAY=1.2` for twice; the
+solver's rows of both side by side, as they stop on a wall clock):
+
+| Day | Outside its area | First come | Solver, two ahead | Solver, one ahead | Rule | Solver, two ahead, given the real speeds | Rule, given them |
+|---|---|---|---|---|---|---|---|
+| Light, noise | twice, assumed | 90 | 54 | 51 | 51 | 53 | 53 |
+| Light, noise | 1.12, measured | 52 | 52 | 50 | 51 | 48 | 48 |
+| Heavy, noise | twice, assumed | 293 | 104 | 84 | 86 | 106 | 90 |
+| Heavy, noise | 1.12, measured | 103 | 85 | 73 | 76 | 86 | 67 |
+
+- **The rows for twice match the 8-core table above** (the solver one ahead had 86 on the heavy day there: its search
+  stops on a wall clock).
+- **One ahead still gains**: 4% on the light day and 14% on the heavy one at 1.12, where it was 6% and 19% at twice.
+- **Most of first come's lag was the assumption.** At 1.12 it takes 4% longer than the solver one ahead on the light day
+  (52 against 50) and 41% on the heavy one (103 against 73), where it took 76% and three and a half times as long.
+- **The threefold guess costs, if a named area is worth what a practised one is.** Given the real speeds, the rule
+  scores 48 and 67 where it scores 51 and 76 with the guess: 6% and 13%. At twice the guess cost nothing. That guess is
+  the product's for an area a person names, which the study could not measure, so these rows say what keeping it costs
+  if a named area is worth no more. The script has no row for the solver one ahead given the real speeds.
 
 ### Subscriptions' windows, and a window's price (package 15)
 
@@ -231,7 +261,8 @@ With `SUBS` the model has subscriptions (the script's head says how, and what is
 evenly, each has a 5-hour window that refills, a task spends its size's percent of it (3, 10 and 25, the product's
 table), and at nothing left its tasks stop until the reset. The plan is told what the product is told. All rows below:
 8 cores, the solver one ahead, a budget large enough that its step cap binds (`BUDGET=600000`), so they are the same on
-any computer: `SEEDS=1,2,3 CASES=0:0:160 ONLY=solver1 CORES=8 SUBS=6 BUDGET=600000 npx tsx …/experiment.mts`.
+any computer: `SEEDS=1,2,3 CASES=0:0:160 ONLY=solver1 CORES=8 SUBS=6 BUDGET=600000 npx tsx …/experiment.mts`, with
+`AWAY=1.2` today, as above.
 
 **Today's solver**, which keeps each window above its person's reserve and has no price (the commit before the price):
 
