@@ -4,8 +4,8 @@
  * chat"). New Agent and New Project start an agent with "You are <name>." and its person's request (Desktop
  * launch_prompt.dart), which the daemon types as it creates the agent, so no delivery owes that turn a reply: the host owes
  * replies only to what it types (agentReplies.ts). Swarm plan, step 1, item 2: every message arrives, or says it did not. A new
- * project's PM is started by the Swarm with "You are <name>." alone (start.ts), and its answer goes in its chat the same way
- * (anh Dee, 2026-11-12: Lou's "Lou here, I'm set up as PM" stayed in its terminal).
+ * project's PM, started by Desktop's New Project with its brief or by the Swarm with its name alone (start.ts), has its answer
+ * go in its chat the same way (anh Dee, 2026-11-12: Lou's "Lou here, I'm set up as PM" stayed in its terminal).
  *
  * That first turn's end is heard as every live turn's is (core.turns.onEnd) and known by its prompt's hash
  * (lib/promptIdentity.ts): "You are <name>." alone, or before its person's request, which the server keeps as their words in
@@ -45,7 +45,7 @@ const ENDS_KEPT = 4
 const TERMINALS_HEARD = 256
 
 /** One of this computer's person's v4 agents running here: its Swarm, its member id, its terminal, its chat with its person and
- *  the names it is told it is. `lead` for a project's PM that is no Regular agent: the Swarm started it, typed only its name. */
+ *  the names it is told it is. `lead` for a project's PM that is no Regular agent: Desktop's New Project or the Swarm started it. */
 export interface FirstAnswerAgent { tabId: string; agentId: string; harnessId: string; chat: string; names: string[]; lead?: true }
 
 /** What is kept between passes and restarts: the agents looked at, oldest first, and since when each other one is looked at. */
@@ -195,12 +195,8 @@ export class FirstAnswers {
   private async answer(agent: FirstAnswerAgent): Promise<string | null | undefined> {
     const ends = this.heard.get(agent.harnessId)
     if (ends) {
-      // A PM's launch line is its name alone: its person wrote it no request, and one started in a former PM's place is typed that
-      // PM's handoff record after it (start.ts), whose answer is about the record, no greeting.
-      const launches = this.launches.get(agent.agentId) ?? (agent.lead ? launchHashes(agent.names, [])
-        : await this.deps.words(agent).then(words => launchHashes(agent.names, words), () => null))
+      const launches = await this.launchesOf(agent)
       if (!launches) return undefined
-      this.launches.set(agent.agentId, launches)
       const first = ends.find(end => launches.has(end.prompt))
       if (first?.aborted) {
         this.log(`[super-tab] no first answer posted for agent ${agent.agentId}: its first turn was interrupted.`)
@@ -218,8 +214,24 @@ export class FirstAnswers {
     if (await this.deps.working(agent.harnessId) !== false) return undefined
     const last = await this.deps.lastTurn(agent.harnessId)
     if (!last) return undefined
-    const launched = agent.lead ? agent.names.some(name => last.userMessage === `You are ${name}.`) : launchLine(last.userMessage, agent.names)
-    return launched ? last.assistantText.trim() || null : null
+    // A PM's launch line is one of its own (launchHashes): "You are <name>.", alone or before the brief its person wrote in New
+    // Project (Desktop launch.dart). Not one started in a former PM's place, typed that PM's handoff record after its name
+    // (start.ts): its first turn answers the record, no greeting, and the record is no word of its person's.
+    if (agent.lead) {
+      const launches = await this.launchesOf(agent)
+      if (!launches) return undefined
+      return launches.has(promptHash(last.userMessage)) ? last.assistantText.trim() || null : null
+    }
+    return launchLine(last.userMessage, agent.names) ? last.assistantText.trim() || null : null
+  }
+
+  /** [agent]'s launch lines, once its person's words in its chat were read; null when they cannot be read now. */
+  private async launchesOf(agent: FirstAnswerAgent): Promise<Set<string> | null> {
+    const known = this.launches.get(agent.agentId)
+    if (known) return known
+    const launches = await this.deps.words(agent).then(words => launchHashes(agent.names, words), () => null)
+    if (launches) this.launches.set(agent.agentId, launches)
+    return launches
   }
 
   /** [row]'s agent when it is one to look at: a regular v4 agent or a project's PM of [me]'s, running here, in a Swarm that gives
