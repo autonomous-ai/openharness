@@ -1050,10 +1050,11 @@ describe('a task\'s steps in messages', () => {
 describe('a verdict by command', () => {
   const HEAD = 'f6edb44c0ffee0000000000000000000000000ab'
   /** [counted]: the real count of tasks' tokens, on a data folder and a core's reading of the agent's conversation, in place of a stand-in. */
-  function verdictSetup(given: Record<string, unknown> = {}, counted?: { dataDir: string; usage: NonNullable<CoreApi['usage']> }) {
+  function verdictSetup(given: Record<string, unknown> = {}, counted?: { dataDir: string; usage: NonNullable<CoreApi['usage']> },
+    project: Record<string, unknown> = { id: 'app', repository: { repositoryUrl: 'https://github.com/Acme/App.git' } }) {
     const agentId = createHash('sha256').update(JSON.stringify(['machine-1', 'native'])).digest('hex').slice(0, 24)
     const agent = { id: agentId, machineId: 'machine-1', harnessId: 'native', displayName: 'Juno', contributorId: 'me', machineOwnerId: 'me', ...given }
-    const state = { agents: [agent], projects: [{ id: 'app', repository: { repositoryUrl: 'https://github.com/Acme/App.git' } }] }
+    const state = { agents: [agent], projects: [project] }
     const call = vi.fn<CoreApi['account']['backend']>(async (_method, path) => ({ status: 200, body: { success: true,
       data: path.includes('/github-comments') ? { recorded: true } : swarmData(agent, path, state) } }))
     const core = fakeCore({ account: { backend: call, identity: vi.fn(async () => ({ accountId: 'me' }) as never) }, agents: { byAgent: vi.fn(() => ({ agentId: 'native' }) as never) },
@@ -1077,6 +1078,29 @@ describe('a verdict by command', () => {
     expect(await t.read()).toEqual({ ok: true, value: { url: 'https://github.com/acme/app/pull/27#issuecomment-9001', head: HEAD, posted: true } })
     expect(t.sent).toEqual([{ path: '/repos/acme/app/issues/27/comments', body: { body: expect.stringMatching(new RegExp(`^Juno, \\d\\d:\\d\\d: READ-OK ${HEAD}\\n\\nRan the tests\\.$`)) } }])
     expect(t.call).toHaveBeenCalledWith('POST', `/api/super-tabs/tab/github-comments?asAgentId=${t.agentId}`, { repository: 'acme/app', kind: 'issue', commentId: '9001' })
+    t.service.port.stop()
+  })
+  // A Personal Swarm's project made from a pane's folder has no address to clone, only the GitHub repository Desktop named for it
+  // (backend commands.ts project.github): its agents read, take and cut there as a cloned project's do.
+  it('reads, takes and cuts on the GitHub repository a project was given when its folder has no address', async () => {
+    const t = verdictSetup({}, undefined, { id: 'pane', repository: { cwd: '/Users/me/pane', repositoryUrl: null }, githubRepository: 'Acme/App' })
+    expect(await t.read()).toEqual({ ok: true, value: { url: 'https://github.com/acme/app/pull/27#issuecomment-9001', head: HEAD, posted: true } })
+    expect(t.sent.map(sent => sent.path)).toEqual(['/repos/acme/app/issues/27/comments'])
+    expect(t.call).toHaveBeenCalledWith('POST', `/api/super-tabs/tab/github-comments?asAgentId=${t.agentId}`, { repository: 'acme/app', kind: 'issue', commentId: '9001' })
+    const labels = [{ name: 'builder:juno' }]
+    t.github.get.mockImplementation(async (path: string) => ({ status: 200, etag: null, resetAt: null,
+      body: path === '/user' ? { login: 'reader-login' } : /\/issues\/34$/.test(path) ? { number: 34, state: 'open', labels } : [] }))
+    t.github.send.mockImplementation(async (_method: string, path: string, body?: unknown) => { t.sent.push({ path, body })
+      return path.endsWith('/labels') ? { status: 200, etag: null, resetAt: null, body: [...labels, { name: 'status:taken' }, { name: 'size:s' }] }
+        : { status: 201, etag: null, resetAt: null, body: path.endsWith('/issues') ? { id: 5700, number: 57, html_url: 'https://github.com/acme/app/issues/57', labels: [] }
+          : { id: 9002, html_url: 'https://github.com/acme/app/issues/34#issuecomment-9002' } } })
+    expect(await t.service.requests.super_tabs({ action: 'take', tabId: 'tab', harnessId: 'native', repository: 'acme/app', number: 34 }, owner))
+      .toMatchObject({ ok: true, value: { taken: true } })
+    labels.push({ name: 'status:taken' })
+    expect(await t.service.requests.super_tabs({ action: 'split', tabId: 'tab', harnessId: 'native', repository: 'acme/app', number: 34, size: 's', title: 'Sync the theme', text: '' }, owner))
+      .toMatchObject({ ok: true, value: { number: 57, cut: true } })
+    expect(t.sent.map(sent => sent.path)).toContain('/repos/acme/app/issues')
+    expect(await t.read({ repository: 'other/thing' })).toMatchObject({ error: 'REPOSITORY_NOT_PROJECT' })
     t.service.port.stop()
   })
   // Swarm allocator, package 12: a verdict made by command is a boundary of its reader's work, and a claim the start of its

@@ -15,7 +15,7 @@ import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { GitHubReads, GitHubStop, PAGE, Waits } from './githubRest.js'
 import { authorOf, FailingHeads, isHeld, isWriter, openPullsPath, PULL_PAGES, pullPeople, pullTalk, RECORD_SETTLE_MS, sameChange, verdicts, type LedProject, type VerdictRecords } from './githubMerge.js'
-import { repositorySlug, TEAM } from './githubMentions.js'
+import { projectRepositorySlug, TEAM } from './githubMentions.js'
 import { goalOf, type Score } from './goal.js'
 import { numbersOf, type Numbers } from './pmNumbers.js'
 import { boardOf, boardWords } from './scoreboard.js'
@@ -833,5 +833,5 @@ export const labelNames = (issue: Json): string[] =>
 export function swarmRepositories(state: Json): string[] {
   const projects = (Array.isArray(state.projects) ? state.projects : []).map(project => project && typeof project === 'object' ? project as Json : {})
   return [...new Set(projects.filter(project => project.archived !== true)
-    .map(project => repositorySlug((project.repository as Json | undefined)?.repositoryUrl)).filter((slug): slug is string => slug !== null))]
+    .map(projectRepositorySlug).filter((slug): slug is string => slug !== null))]
 }
