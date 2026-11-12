@@ -223,7 +223,7 @@ an area the repository already has one for in its own spelling.*
 **Why.** `part:Backend` and an agent's "Works on: backend" do not match; the label's side is compared as written.
 
 **Change.** A `part:` label's value is read through `areaOf` wherever an area is read (`assign/crew.ts`: a task's
-part, a builder's finished parts, `contextOf`'s keys). Words that differ ("backend engine" and "backend") stay two
+part, `contextOf`'s keys). Words that differ ("backend engine" and "backend") stay two
 areas: mapping them is package 13's.
 
 **Proof.** Specs; the gate.
@@ -369,10 +369,13 @@ in what a person must do. Then build the one he picks.
 
 ### 12. Tokens for a task, and the cost on a landed change
 
-**Built, the server's half** (#4109): `backend/src/superTabs/taskTokens.ts` and its two routes, kept 90 days. The
-daemon's half is built and not in a pull request (branch `swarm-task-tokens`): the landing comment would say the
-builder's model, minutes, tokens and fix rounds, public on a public repository, which waits for anh Dee's word. The
-server's half was released in `v1.4.80_backend`.
+**Built** (#4109, the server's half, released in `v1.4.80_backend`; #4143, the daemon's):
+`backend/src/superTabs/taskTokens.ts` and its two routes, kept 90 days; `cli/src/superTabs/taskTokens.ts`, which counts
+each agent's tokens on its person's own computer, between the boundaries its turns' ends and its commands show, and
+writes a row as a piece of work stops. *The landing comment says its builder, model (as code), minutes, tokens and fix
+rounds on a private repository only (GitHub's `visibility: private`; an internal one is read by its whole enterprise);
+on a public one it says none of them, and the rows stay on the server for the project's members (anh Dee's call, 12
+November). Not built: the window's percent at each boundary (package 15's), and the tokens in the day's post.*
 
 **Why.** No saving can be claimed, and no model or price chosen, without it. Each daemon counts its conversations'
 tokens by model and kind (`cli/src/lib/agentTokenUsage.ts`); nothing ties a count to a task. The server's cost
@@ -409,6 +412,13 @@ by hand.
 **Public repositories only**, until anh Dee decides for private ones: a task's title and text go to Jev.
 
 ### 14. A model for each task
+
+**Designed** (#4113): [the design](model-for-each-task.md), [the tiers experiment's plan and cost](tiers-experiment.md)
+and [the mockup of the one screen change](model-choice-mockup.html), kept on anh Dee's word of 12 November ("just take
+care of it all"). The code waits for package 12's daemon half: the rule weighs nothing until a class has 20 finished
+tasks on a model, from real rows. The experiment is not run now: only 17 of its 50 tasks may qualify, none is sized,
+and it would take about 3¼ weeks of his subscription, a fifth of each window kept for him. It runs when 50 qualify, on
+his word.
 
 **Read first.** What v3's routing was and why it went: eight designs, removed in #3908. And
 `cli/src/engines/claude/launch.ts`: `--model` and `--effort` are for the session (Codex's launch has neither);
@@ -486,14 +496,22 @@ workflow in server code (the plan's "Not built"): the server referees one record
 
 ## Research, alongside
 
-- **An area's worth.** *Study done; constants not changed* ([the study](../../research/2026-11-12-area-worth/README.md)): in lampOS's record a
+- **An area's worth.** *Study done; the learning discount removed, "Works on:" kept* ([the study](../../research/2026-11-12-area-worth/README.md)): in lampOS's record a
   builder was 1.12 times as fast in an area it had landed work in (0.85 to 1.49), and held no less often: no
-  measurable difference. Neither the planned threefold spread nor the 40% learning discount is supported. The study
-  could not test an area a person declares (5 role files named one), so `FOCUS`, `AWAY` and the learning steps are
-  not changed yet: 1.0 for all of them would let a person's "Works on:" steer nothing, which is anh Dee's to choose.
+  measurable difference. Neither the planned threefold spread nor the 40% learning discount is supported. anh Dee
+  left the call to the session building this on 12 November. *Removed*: a builder is no quicker in a part for the tasks it finished
+  there. The plan took 0.85, 0.70 and 0.60 of its time after 1, 2 and 3 or more; the record has 0.83, 0.93 and 0.90,
+  each interval holding 1. Keeping a part's tasks on the builder that did them before gained no speed, drew more holds
+  there (2 points a doubling) and left other builders idle. `readProblem` counts no closed issues by part, and the line
+  that gives a task no longer says "it finished 2 part:api tasks". *Kept*: `FOCUS` and `AWAY` in `assign/crew.ts`, a
+  person's "Works on:", a strong pull as before. It is a person steering their agent, which the study could not test (5
+  role files named an area), and at 1.0 it would steer nothing. *The experiment* takes the study's estimate, 1.12, between a
+  builder's own area and another, where it assumed two ([its rows under both](README.md#an-areas-speed-from-the-study)): one
+  ahead still gains (4% on the light day, 14% on the heavy one), and if a named area is worth no more than a practised
+  one, the kept guess costs the rule 6% and 13%.
   Asked: from lampOS's record on GitHub, read only: is a builder faster, or held less, on its later
   tasks in an area than on its first? Method and numbers in `docs/research/`. Then the experiment's assumed twofold
-  speed, and the product's own guess (`FOCUS` and `AWAY` in `assign/crew.ts`: threefold), are replaced by what was
-  found.
+  speed, and the product's own guess (`FOCUS` and `AWAY` in `assign/crew.ts`: threefold), were to be replaced by what
+  was found.
 
 An idea beyond these packages goes to anh Dee as a proposal.

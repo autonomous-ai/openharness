@@ -578,19 +578,21 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   setup; Cancel does nothing.
 - **Browser panel** (`BrowserPanel`, `browser/browser_panel.dart`). The agent's
   own Chrome, beside its chat or in its place as the other panes. Its header is
-  `Browser` in 13 medium, then `Stop` (a compact quiet `DesktopPill`, there in
-  every state while the browser is on, a failed one too, with no
-  confirmation), the gear (`Browser settings`, which opens them in the panel,
-  off too), Paste (`AppIcons.clipboardPaste`, which sends the clipboard's
-  text, only while the screen shows) and ×. × only hides the panel: the
-  browser runs on. Off, one centred line in 13, `A sandboxed Chrome the agent
+  `Browser` in 13 medium, then Stop (`AppIcons.circleStop`, tooltip `Stop`,
+  an `AppIconButton` as the gear is, never a bare square, which is an
+  unticked box and Maximize; there in every state while the browser is on, a
+  failed one too, with no confirmation), the gear (`Browser settings`, which
+  opens them in the panel, off too), Paste (`AppIcons.clipboardPaste`, which
+  sends the clipboard's text, only while the screen shows) and ×. × only
+  hides the panel: the browser runs on. Off, one centred line in 13, `A sandboxed Chrome the agent
   drives`, and the blue `Start` under it. Ready, the screen fills the panel:
   the bundled noVNC page in the native webview, which the person uses as the
   agent does. It shows Chrome's window at 1:1, and the window follows the
   panel: the panel asks the computer for its size when the screen opens and
-  300 ms after the panel last changed size (at least 1024x640, at most the
-  Device setting's screen). Only a window that cannot fit, or one the computer
-  could not size, is scaled to fit. While it sets up, four lines in 13, `Podman
+  300 ms after the panel last changed size (at most the Device setting's
+  screen). Only a window that is not the panel's size (one Chrome would not
+  make that narrow, too, or another Desktop's), or one the computer could not
+  size, is scaled to fit. While it sets up, four lines in 13, `Podman
   installed`, `Starting Podman…`, `Building browser`, `Starting browser`, each
   after a mark as Import's steps have: ticked when done, a small spinner on the
   current one, an empty circle (and the line muted) for those to come.
@@ -619,15 +621,19 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   line under the buttons, `Proxy works · 203.0.113.7 · Asia/Ho_Chi_Minh` or
   `Proxy is not reachable`, gone at the next proxy edit. Then rows, a 12 grey
   label in a 96 column and its control: `Time zone` (a field, `Auto` when
-  empty), `Language`, `Screen` (the five sizes, `1920 × 1080`), `Human input`
-  (a ticked square, as Worktree's, never a blue switch: blue is Save's, and
-  the speed beside it, dimmed while off). `Advanced` (a quiet pill with a
+  empty), `Language`, `Screen` (three portrait sizes, `1080 × 1920` the
+  default, as the panel is taller than wide, then five landscape ones,
+  `1920 × 1080` first; a size only a newer computer offers is kept, last),
+  `Human input` (a ticked square, as Worktree's, never a blue switch: blue is
+  Save's, and the speed beside it, dimmed while off). `Advanced` (a quiet pill with a
   right chevron, down when open) holds `Device`, off by default, `GPU, CPU,
   memory` beside it in faint, and when on four fields for what to report.
   Save waits for a change and for every field to be valid. A failure is one
   12 grey line under the header: `Only its owner can open this browser`,
-  `Reconnect this machine to open its browser`, or for a save the machine
-  refused, `Browser settings weren't saved. Check them and save again.`
+  `Reconnect this machine to open its browser`, `Update Harness on Mac
+  Studio for this screen` when an older computer refuses a portrait screen,
+  or for another save the machine refused, `Browser settings weren't saved.
+  Check them and save again.`
 - **Agent face.** An agent with no chosen picture wears a face
   (`SuperTabAvatarFace`, `avatar_art.dart`) in rows, cards and chat:
   a round disc with a soft top-to-bottom fill, two eyes and a small smile.

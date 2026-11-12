@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { basename, join } from 'path'
+import type * as ClaudeHomesModule from './claudeHomes.js'
 import type * as ClaudeProfilesModule from './claudeProfiles.js'
 
 let dataDir = ''
@@ -13,10 +14,11 @@ vi.mock('../engines/kit/windowsFiles.js', async original => {
   return { ...actual, hostPlatform: () => host.win32 ? 'win32' : actual.hostPlatform() }
 })
 
-async function loadModule(): Promise<typeof ClaudeProfilesModule> {
+/** The listing (claudeHomes.ts) and the rest (claudeProfiles.ts), loaded fresh for this test's data folder. */
+async function loadModule(): Promise<typeof ClaudeHomesModule & typeof ClaudeProfilesModule> {
   vi.resetModules()
   process.env.ADAPTER_DATA_DIR = dataDir
-  return import('./claudeProfiles.js')
+  return { ...await import('./claudeHomes.js'), ...await import('./claudeProfiles.js') }
 }
 
 function account(folder: string, oauthAccount: Record<string, string>): void {

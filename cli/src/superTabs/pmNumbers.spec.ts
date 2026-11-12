@@ -51,7 +51,7 @@ describe('a project\'s counts after an assigner\'s pass', () => {
     // next. One only given, with a sub-issue under it, is in its list as any other. Counted as the assigner reads them.
     const waiting = { sub_issues_summary: { total: 2, completed: 1 } }
     const issues = [task(1, ['builder:pip', 'status:taken'], waiting), task(2, ['builder:kai'], waiting), task(3, ['builder:ada', 'status:taken'], { sub_issues_summary: { total: 2, completed: 2 } })]
-    const cut = counts({ issues, read: readProblem({ now: NOW, issues, closed: [], crew: crew(), withReaders: new Set(), up: new Map() }) })
+    const cut = counts({ issues, read: readProblem({ now: NOW, issues, crew: crew(), withReaders: new Set(), up: new Map() }) })
     expect(cut.free.map(free => free.name)).toEqual(['Bo', 'Pip'])
   })
 

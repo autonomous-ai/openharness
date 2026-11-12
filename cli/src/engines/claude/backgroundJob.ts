@@ -14,9 +14,13 @@
  * not the JSON array documented — is swallowed into a no-op. A background job this cannot read or stop
  * must never block the resume it exists to unblock; the resume still runs and reports Claude Code's own
  * refusal if the job really is in the way.
+ *
+ * It runs in Claude Code's engine worker (engines/worker/backgroundJobRequests.ts), never in the core, which says
+ * what it answered (core/engines/backgroundJobs.ts, #4146).
  */
 import { execFile } from 'node:child_process'
-import { patientExec } from './patientExec.js'
+import { patientExec } from '../../lib/patientExec.js'
+import type { BackgroundJobStopped } from '../facets/backgroundJob.js'
 
 export interface ClaudeAgentListEntry {
   id?: string
@@ -64,7 +68,6 @@ export interface StopConflictingBackgroundJobOptions {
   /** The environment the resume launch itself will run with (its `CLAUDE_CONFIG_DIR`, grid/gateway
    *  variables): the job list and stop must be read from the SAME jobs store the resume will see. */
   env?: NodeJS.ProcessEnv
-  log?: (message: string) => void
   exec?: ClaudeAgentsExec
   sleep?: (ms: number) => Promise<void>
   now?: () => number
@@ -77,23 +80,19 @@ export interface StopConflictingBackgroundJobOptions {
 
 const defaultSleep = (ms: number) => new Promise<void>(resolve => { const t = setTimeout(resolve, ms); t.unref?.() })
 
-export async function stopConflictingBackgroundJob(options: StopConflictingBackgroundJobOptions): Promise<void> {
+/** The job holding the session that it found, and whether `claude stop` took it; null when none held it. */
+export async function stopConflictingBackgroundJob(options: StopConflictingBackgroundJobOptions): Promise<BackgroundJobStopped | null> {
   const {
-    bin, sessionId, env, log = () => {}, exec = defaultExec, sleep = defaultSleep, now = Date.now,
+    bin, sessionId, env, exec = defaultExec, sleep = defaultSleep, now = Date.now,
     listTimeoutMs = 3_000, stopTimeoutMs = 3_000, pollBudgetMs = 5_000, pollIntervalMs = 250,
   } = options
-  const shortSession = sessionId.slice(0, 8)
   const job = conflictingBackgroundJob(await liveBackgroundJobs(bin, exec, listTimeoutMs, env), sessionId)
-  if (!job?.id) return
-  const stopped = await exec(bin, ['stop', job.id], stopTimeoutMs, env)
-  if (stopped === null) {
-    log(`[resume] could not stop background job ${job.id} holding session ${shortSession} — resuming anyway`)
-    return
-  }
-  log(`[resume] stopped background job ${job.id} holding session ${shortSession}`)
+  if (!job?.id) return null
+  if (await exec(bin, ['stop', job.id], stopTimeoutMs, env) === null) return { job: job.id, stopped: false }
   const deadline = now() + pollBudgetMs
   while (now() < deadline) {
-    if (!conflictingBackgroundJob(await liveBackgroundJobs(bin, exec, listTimeoutMs, env), sessionId)) return
+    if (!conflictingBackgroundJob(await liveBackgroundJobs(bin, exec, listTimeoutMs, env), sessionId)) break
     await sleep(pollIntervalMs)
   }
+  return { job: job.id, stopped: true }
 }

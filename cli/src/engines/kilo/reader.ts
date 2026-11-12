@@ -45,6 +45,15 @@ export async function readKiloMessages(
   sessionId: string,
   after?: Cursor | null,
 ): Promise<KiloMessage[]> {
+  return await loadKiloMessages(dbPath, sessionId, after) ?? []
+}
+
+/** As [readKiloMessages], but null when the store did not answer (locked, mid-write, past its deadline). */
+async function loadKiloMessages(
+  dbPath: string,
+  sessionId: string,
+  after?: Cursor | null,
+): Promise<KiloMessage[] | null> {
   if (!ID_RE.test(sessionId)) return []
   const bounded = !!after && ID_RE.test(after.id) && Number.isFinite(after.tc)
   const cond = bounded
@@ -62,7 +71,7 @@ export async function readKiloMessages(
   const result = await sqliteReadAll(dbPath, sql, params, { maxBuffer: MAX_BUFFER })
   if (!result.ok) {
     if (result.reason === 'missing') throw new KiloSqliteMissing()
-    return [] // db locked / transient — retry next tick
+    return null // db locked / transient — retry next tick
   }
   const rows = result.rows
 
@@ -118,6 +127,8 @@ export class KiloReader {
   private open = false
   private thinking = 0
   private cursor: Cursor | null = null
+  /** Whether the session's rows were read once and seeded; until then nothing is emitted (#4065). */
+  private hydrated = false
   private readonly emittedText = new Map<string, number>() // partId → chars already emitted
   private readonly thinkingIds = new Map<string, string>() // reasoning partId → stable thinkingId
   private readonly toolStarted = new Set<string>()
@@ -132,9 +143,7 @@ export class KiloReader {
   /** Hydrate silently (no replay), then start polling. */
   async start(): Promise<void> {
     try {
-      const all = await readKiloMessages(this.deps.dbPath, this.deps.sessionId, null)
-      const opening = this.hydrate(all)
-      if (opening.length) this.deps.onEvents(opening)
+      await this.seed()
     } catch (err) {
       if (err instanceof KiloSqliteMissing) { this.deps.onFatal?.(err); return }
     }
@@ -143,6 +152,18 @@ export class KiloReader {
 
   stop(): void {
     if (this.timer) { clearInterval(this.timer); this.timer = null }
+  }
+
+  /**
+   * Read the whole session and seed from it. A store that does not answer leaves the reader unseeded, and the next tick
+   * reads in full again: with no cursor yet, an incremental read would emit the whole history as new (#4065).
+   */
+  private async seed(): Promise<void> {
+    const all = await loadKiloMessages(this.deps.dbPath, this.deps.sessionId, null)
+    if (!all) return
+    this.hydrated = true
+    const opening = this.hydrate(all)
+    if (opening.length) this.deps.onEvents(opening)
   }
 
   /**
@@ -211,6 +232,7 @@ export class KiloReader {
     if (this.polling) return
     this.polling = true
     try {
+      if (!this.hydrated) { await this.seed(); return }
       const batch = await readKiloMessages(this.deps.dbPath, this.deps.sessionId, this.cursor)
       if (batch.length === 0) return
       const events: LiveEvent[] = []
