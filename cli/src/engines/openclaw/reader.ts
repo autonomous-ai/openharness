@@ -471,16 +471,19 @@ export class OpenclawReader {
       }
       this.said = null
       if (!this.hydrated) {
-        this.hydrated = true
         // Attached to a key that already had rows, whether this is the first read or the first good one after a
-        // failed one (locked, being replaced): they are history, never live.
+        // failed one (locked, being replaced): they are history, never live. Hydrated only once every page of it is
+        // read: marked before, a hydrate that failed on a later page left no cursor, and the next poll replayed the
+        // whole conversation live (#4065).
         if (!this.born) {
           const hydrated = await this.hydrate(node)
+          this.hydrated = true
           if (this.stopped) return
           this.deps.onHydrated(hydrated, node.status)
           this.deps.onStatus?.(node.status)
           return
         }
+        this.hydrated = true
       }
       let page: { events: OpenclawEvent[]; full: boolean }
       if (!this.cursor || node.windowId !== this.cursor.windowId) {
