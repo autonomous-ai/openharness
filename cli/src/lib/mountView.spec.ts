@@ -17,6 +17,24 @@ it('has no answer for a filesystem the daemon does not mount, or one it has cove
   const covered = [...ours, ...parseMountinfo('41 40 0:50 / /data/agents rw - tmpfs tmpfs rw\n')]
   expect(hostPath('/home/agent/.hermes', remapped, covered)).toBeNull()
 })
+it('has no answer through a mount that a later mount over its parent folder covers', () => {
+  // The daemon's /data/agents (8:17) came first; a tmpfs mounted over /data since hides it, on the daemon's side or the
+  // sandbox's. The deepest mount point over a path is not the mount it is on (proc(5), mountinfo's parent ID).
+  const hidden = parseMountinfo('25 1 8:1 / / rw - ext4 /dev/sda1 rw\n40 25 8:17 / /data/agents rw - ext4 /dev/sdb1 rw\n'
+    + '43 25 0:50 / /data rw - tmpfs tmpfs rw\n')
+  expect(hostPath('/home/agent/.hermes', remapped, hidden)).toBeNull()
+  const theirs = parseMountinfo('90 80 8:1 / / rw - ext4 /dev/sda1 rw\n91 90 8:17 /agents/a1 /home/agent rw - ext4 /dev/sdb1 rw\n'
+    + '95 90 0:71 / /home rw - tmpfs tmpfs rw\n')
+  expect(hostPath('/home/agent/.hermes', theirs, ours)).toBeNull()
+  // One mounted on top of a mount point is that point's own child, and covers it.
+  const onTop = [...ours, ...parseMountinfo('44 40 0:51 / /data rw - tmpfs tmpfs rw\n')]
+  expect(hostPath('/home/agent/.hermes', remapped, onTop)).toBeNull()
+})
+it('has no answer from a mount list with no root', () => {
+  expect(hostPath('/home/agent/.hermes', parseMountinfo('91 90 8:17 /agents/a1 /home/agent rw - ext4 /dev/sdb1 rw\n'), ours)).toBeNull()
+  const loop = parseMountinfo('25 26 8:1 / / rw - ext4 /dev/sda1 rw\n26 25 8:1 / / rw - ext4 /dev/sda1 rw\n')
+  expect(hostPath('/data', loop, loop)).toBeNull()
+})
 it('takes the mount on top, the deepest root, and escaped names', () => {
   const stacked = [...remapped, ...parseMountinfo('94 90 0:72 / /work rw - tmpfs tmpfs rw\n')]
   expect(hostPath('/work/src', stacked, ours)).toBeNull()
