@@ -16,9 +16,9 @@ The rules AGENTS.md carried until 2026-11-11; the sections below have the detail
   the same tree keeps it; conflicts, dependencies or relevant code changes do not.
 - A documented, unchanged failure needs no new baseline. New failures need investigation. Never call an incomplete or
   failed suite passing, and never skip a required check to save time.
-- PR CI runs only the Linux unit checks of changed components; the one required check is `ci/required`. Push work in
-  progress as a draft; mark it ready, then keep the head stable while CI and review run. Review independently of
-  implementation. Base the branch on current `main`.
+- PR CI runs the Linux unit checks of changed components, and of each suite that reads a changed file (`PR_READS`); the
+  one required check is `ci/required`. Push work in progress as a draft; mark it ready, then keep the head stable while
+  CI and review run. Review independently of implementation. Base the branch on current `main`.
 - Never start extra runs: no manual CI run beside the automatic one, no pushes to retrigger. Read the failure, fix it,
   push once. Rerun only a recorded flaky test.
 - Checks PR CI does not run are yours when you touch their area: the CLI coverage gates (`npm run test:core`,
