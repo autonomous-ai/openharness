@@ -3001,3 +3001,105 @@ describe('harness goal (Hachi\'s goals, services/goals.ts)', () => {
     await expect((await agentOrigin(other.deps))!.goal!.check('g1')).rejects.toMatchObject({ code: 'NOT_HACHI' })
   })
 })
+
+describe('harness ps --machines (every machine of the account in one read)', () => {
+  const machines = async () => [
+    { machineId: 'm', label: 'studio', status: 'running', current: true },
+    { machineId: 'office-id', label: 'office', status: 'running', current: false },
+    { machineId: 'laptop-id', label: 'laptop', status: 'offline', current: false },
+    { machineId: 'mini-id', label: 'Mac mini', status: 'running', current: false },
+    // Another account's machine shared with this one is not the person's own: never listed.
+    { machineId: 'shared-id', label: 'lab', status: 'running', current: false, sharedBy: 'Ana' },
+  ]
+  /** studio here, office answering, laptop not linked, and the mini answering nothing at all. */
+  const fleet = () => {
+    const d = new FakeDaemon(), office = new FakeDaemon('office-id')
+    d.frames = [frame('lead', { engine: 'claude' }), frame('kid', { activity: { state: 'working' } })]
+    office.frames = [frame('api', { engine: 'claude' })]
+    const opened: string[] = []
+    let late: FakeDaemon | null = null
+    const h = harness(d, { machines, answerMs: 20, open: async (_w, machineId) => {
+      opened.push(machineId ?? 'm')
+      if (!machineId || machineId === 'm') return d
+      if (machineId === 'office-id') return office
+      if (machineId === 'mini-id') {
+        // Opens only after the answer is due: closed once it does, never listed.
+        await new Promise((done) => setTimeout(done, 60))
+        return late = new FakeDaemon('mini-id')
+      }
+      throw new AgentClientError('NO_PEER_LINK', 'not linked')
+    } })
+    started(h.ledger, 'lead', 'kid')
+    started(h.ledger, 'lead', 'api', 'office-id')
+    return { d, office, h, opened, late: () => late }
+  }
+
+  it('asks every machine at once, and lists one that does not answer in time as unreachable, never leaves it out', async () => {
+    const { h, office, opened, late } = fleet()
+    expect(await psCommand(['--machines'], h.deps)).toBe(EXIT.ok)
+    const text = h.out.join('\n')
+    expect(text).toMatch(/^You: Claude Code "lead" \(lead\), inside Harness, on studio\./)
+    expect(text).toContain('studio (this machine):\nNAME')
+    expect(text).toMatch(/kid +Codex +working +you /)
+    expect(text).toMatch(/office:\nNAME[^\n]*\napi +Claude Code +idle +you /)
+    expect(text).toContain('laptop: unreachable. not linked')
+    expect(text).toContain('Mac mini: unreachable. It did not answer in 5 s.')
+    expect(text).not.toContain('lab')
+    expect(opened.sort()).toEqual(['laptop-id', 'm', 'mini-id', 'office-id'])
+    expect(office.closed).toBe(true)
+    await new Promise((done) => setTimeout(done, 80))
+    expect(late()?.closed).toBe(true)
+  })
+
+  it('answers a program in JSON: each machine, whether it answered, and its harnesses', async () => {
+    const { h } = fleet()
+    expect(await psCommand(['--machines', '--json'], h.deps)).toBe(EXIT.ok)
+    const said = JSON.parse(h.out.join('\n'))
+    expect(said.you).toBe('lead')
+    expect(said.machines.map((m: Record<string, unknown>) => [m.machine, m.state])).toEqual([
+      ['studio', 'ok'], ['office', 'ok'], ['laptop', 'unreachable'], ['Mac mini', 'unreachable']])
+    expect(said.machines[1]).toMatchObject({ machineId: 'office-id', current: false, harnesses: [{ name: 'api', machine: 'office', startedBy: 'you', yours: true }] })
+    expect(said.machines[2]).toEqual({ machineId: 'laptop-id', machine: 'laptop', current: false, state: 'unreachable', detail: 'not linked' })
+    expect(said.machines[3]).toMatchObject({ state: 'unreachable', detail: 'It did not answer in 5 s.' })
+  })
+
+  it('closes the line to a machine that opened but did not list in time, so nothing holds the process', async () => {
+    const d = new FakeDaemon(), slow = new FakeDaemon('office-id')
+    d.frames = [frame('lead', { engine: 'claude' })]
+    slow.request = () => new Promise(() => {})
+    const h = harness(d, { machines, answerMs: 20, open: async (_w, machineId) => !machineId || machineId === 'm' ? d : machineId === 'office-id' ? slow : Promise.reject(new Error('no')) })
+    expect(await psCommand(['--machines'], h.deps)).toBe(EXIT.ok)
+    expect(h.out.join('\n')).toContain('office: unreachable. It did not answer in 5 s.')
+    expect(slow.closed).toBe(true)
+  })
+
+  it('takes no --machine and no names beside it', async () => {
+    const { h, d } = fleet()
+    expect(await psCommand(['--machines', '--machine', 'office'], h.deps)).toBe(EXIT.usage)
+    expect(h.err[0]).toBe('--machines lists every machine: leave out --machine.')
+    expect(await psCommand(['--machines', 'kid'], h.deps)).toBe(EXIT.usage)
+    expect(h.err).toContain('harness ps takes no names. To read one: harness show kid')
+    expect(d.requests).toEqual([])
+  })
+
+  it('asks at most 32 other machines; the rest are listed as not asked', async () => {
+    const many = async () => [{ machineId: 'm', label: 'studio', status: 'running', current: true },
+      ...Array.from({ length: 34 }, (_, i) => ({ machineId: `id-${i}`, label: `box-${i}`, status: 'running', current: false }))]
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' })]
+    const asked: string[] = []
+    const h = harness(d, { machines: many, answerMs: 20, open: async (_w, machineId) => {
+      if (!machineId || machineId === 'm') return d
+      asked.push(machineId)
+      const other = new FakeDaemon(machineId)
+      return other
+    } })
+    expect(await psCommand(['--machines', '--json'], h.deps)).toBe(EXIT.ok)
+    const said = JSON.parse(h.out.join('\n')).machines as Array<Record<string, unknown>>
+    expect(asked).toHaveLength(32)
+    expect(said.filter((m) => m.state === 'not_asked').map((m) => m.machine)).toEqual(['box-32', 'box-33'])
+    const text = harness(d, { machines: many, answerMs: 20, open: h.deps.open })
+    expect(await psCommand(['--machines'], text.deps)).toBe(EXIT.ok)
+    expect(text.out.join('\n')).toContain('box-33: not asked; at most 32 machines are asked at once.')
+  })
+})

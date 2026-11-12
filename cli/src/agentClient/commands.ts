@@ -52,14 +52,18 @@ export interface ClientDeps {
   record?: Rpc
   /** The account's machines, for `--machine` (cli.ts asks the backend, as `harness new` does). */
   machines?: () => Promise<NewMachine[]>
+  /** How long `ps --machines` waits on each other machine. */
+  answerMs?: number
 }
 
 const ON_MACHINE = '--machine <name> is another of your machines, by its name or id as harness new takes it; this one when left out.'
 
-export const PS_USAGE = `Usage: harness ps [--machine <name>] [--all] [--json]
+export const PS_USAGE = `Usage: harness ps [--machine <name> | --machines] [--all] [--json]
 
 The harnesses on a machine: name, agent, state, who started it, when it was last active, and what it is about.
 --all adds the ones stopped in the last week.
+--machines lists every machine of yours at once: each is asked for 5 s, and one that does not answer is listed as
+unreachable.
 ${ON_MACHINE}`
 export const SHOW_USAGE = `Usage: harness show [--machine <name>] <name> [--chars N] [--json]
 
@@ -180,6 +184,11 @@ const DEFAULT_INTERVAL_MS = 3_000
 const PUSHED_BACKSTOP_MS = 60_000
 /** How many harnesses `ps` asks what they are about; the rest list without it. */
 const ABOUT_MAX = 40
+/** How long `ps --machines` waits on each other machine (docs/design/2026-11-12-hachi.md): Hachi's read of every
+ *  harness, after a restart too, must not hang on one machine that is asleep. */
+const PS_MACHINES_ANSWER_MS = 5_000
+/** How many other machines `ps --machines` asks at once: the rest are listed as not asked. */
+const PS_MACHINES_MAX = 32
 /** A harness that never worked while waited on, with nothing in its transcript: nothing to wait for. */
 const QUIET_LOOKS = 3
 /** How long a new harness may take to start and have its task typed (a Codex start with its trust prompt is the
@@ -231,6 +240,7 @@ function setup(deps: ClientDeps) {
     })),
     intervalMs: deps.intervalMs ?? DEFAULT_INTERVAL_MS,
     record: deps.record ?? messagesRpc,
+    answerMs: deps.answerMs ?? PS_MACHINES_ANSWER_MS,
     machines: deps.machines ?? (async (): Promise<NewMachine[]> => {
       throw new AgentClientError('MACHINES_UNAVAILABLE', 'Harness could not list your machines here.')
     }),
@@ -604,7 +614,12 @@ async function describeRows(daemon: Daemon, rows: Row[]): Promise<void> {
 
 export function psCommand(argv: readonly string[], deps: ClientDeps = {}): Promise<number> {
   return run(PS_USAGE, deps, wantsJson, argv, async (s) => {
-    const { names, flags, machine } = words(argv, { '--all': 'flag', '--json': 'flag' })
+    const { names, flags, machine } = words(argv, { '--all': 'flag', '--json': 'flag', '--machines': 'flag' })
+    if (flags.has('--machines')) {
+      if (machine !== null) throw new UsageError('--machines lists every machine: leave out --machine.')
+      if (names.length) throw new UsageError(`harness ps takes no names. To read one: harness show ${names[0]}`)
+      return psMachines(s, flags.has('--all'), flags.has('--json'))
+    }
     const away = await machineOf(s, s.where(), machine)
     if (names.length) throw new UsageError(`harness ps takes no names. To read one: harness show ${onAway(names[0], away)}`)
     const all = flags.has('--all')
@@ -639,6 +654,66 @@ export function psCommand(argv: readonly string[], deps: ClientDeps = {}): Promi
       return EXIT.ok
     } finally { line?.close(); o.daemon.close() }
   })
+}
+
+/** One machine in `ps --machines`: its harnesses, or why it has none to show. */
+interface MachineRows {
+  machineId: string; machine: string; current: boolean
+  state: 'ok' | 'unreachable' | 'not_asked'
+  detail?: string
+  harnesses?: Row[]
+}
+
+/**
+ * `ps --machines`: the harnesses of every machine of the account's own (never one shared with it), all asked at once,
+ * each for [s.answerMs] at most: Hachi's read of where things are, and of what is still its own after a restart. One
+ * that does not answer is listed as unreachable with why, never left out; one that answers late is closed unread.
+ */
+async function psMachines(s: Setup, all: boolean, json: boolean): Promise<number> {
+  const mine = (await s.machines()).filter((m) => !m.sharedBy && !m.toAdd)
+  const o = await opened(s, all)
+  try {
+    const rowsOn = async (daemon: Daemon, machineId: string, machine: string, frames: Frame[]): Promise<Row[]> => {
+      const rows = rowsOf(frames, { machineId, machine, caller: o.caller, ledger: o.ledger, now: s.now(), all })
+      await describeRows(daemon, rows)
+      return rows
+    }
+    const others = mine.filter((m) => !m.current && m.machineId !== o.where.machineId)
+    const ask = async (m: NewMachine): Promise<MachineRows> => {
+      const one = { machineId: m.machineId, machine: m.label, current: false }
+      let late = false, line: Daemon | null = null, timer: NodeJS.Timeout | undefined
+      const answered = (async () => {
+        const daemon = line = await s.open(o.where, m.machineId)
+        if (late) { daemon.close(); return null }
+        try { return await rowsOn(daemon, m.machineId, m.label, await list(daemon, all)) } finally { daemon.close() }
+      })()
+      const due = new Promise<null>((done) => { timer = setTimeout(done, s.answerMs, null) })
+      try {
+        const rows = await Promise.race([answered, due])
+        if (rows) return { ...one, state: 'ok', harnesses: rows }
+        // Its line closed now, not when its own request gives up: an open line holds the process after it printed.
+        late = true
+        ;(line as Daemon | null)?.close()
+        answered.catch(() => {})
+        return { ...one, state: 'unreachable', detail: `It did not answer in ${PS_MACHINES_ANSWER_MS / 1000} s.` }
+      } catch (error) {
+        return { ...one, state: 'unreachable', detail: error instanceof Error ? error.message : String(error) }
+      } finally { clearTimeout(timer) }
+    }
+    const machines: MachineRows[] = [
+      { machineId: o.where.machineId, machine: o.machine, current: true, state: 'ok', harnesses: await rowsOn(o.daemon, o.where.machineId, o.machine, o.frames) },
+      ...await Promise.all(others.slice(0, PS_MACHINES_MAX).map(ask)),
+      ...others.slice(PS_MACHINES_MAX).map((m): MachineRows => ({ machineId: m.machineId, machine: m.label, current: false, state: 'not_asked',
+        detail: `At most ${PS_MACHINES_MAX} machines are asked at once.` })),
+    ]
+    const context = contextFor(s, o)
+    if (json) { s.out(JSON.stringify({ you: o.caller ? o.caller.name : null, context, machines }, null, 1)); return EXIT.ok }
+    const said = machines.map((m) => m.state === 'ok' ? `${m.machine}${m.current ? ' (this machine)' : ''}:\n${formatRows(m.harnesses!, s.now(), m.machine)}`
+      : m.state === 'unreachable' ? `${m.machine}: unreachable. ${m.detail}`
+      : `${m.machine}: not asked; at most ${PS_MACHINES_MAX} machines are asked at once.`)
+    s.out([o.caller || o.orphan ? formatContext(context) : null, ...said].filter(Boolean).join('\n\n'))
+    return EXIT.ok
+  } finally { o.daemon.close() }
 }
 
 /** What `show` says to do next, from its state and whose it is: never `close` for a harness the caller did not start.
