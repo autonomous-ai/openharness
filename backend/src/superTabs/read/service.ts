@@ -426,11 +426,13 @@ export class SwarmReads {
       this.store.view(ids).then(view => readLastChangedAts(this.db, view, ids))])
     return { tabs: page.map(row => {
       const head = heads.get(row.id)![0]!.data as { name: string; paused: boolean; personal?: true }
-      // Only the reader's own Personal Swarm is marked (a round dial's Personal | Team picker); another person's is not theirs
-      // to be told apart. Its head says so, or its id is derived from its owner and environment (deletion.ts).
-      const personal = row.ownerId === user.sub && isPersonalSwarm({ id: row.id, environment: user.autonomousEnv, ownerId: row.ownerId, personal: head.personal })
+      // A Personal Swarm: its head says so, or its id is derived from its owner and environment (deletion.ts). `personal` stays
+      // the reader's own alone (a round dial's Personal | Team picker, and Desktops before 2026-11-12, take it for theirs);
+      // `personalSwarm` marks every one, so a member's apps name another person's after them (anh Dee, 2026-11-12).
+      const personalSwarm = isPersonalSwarm({ id: row.id, environment: user.autonomousEnv, ownerId: row.ownerId, personal: head.personal })
       return { id: row.id, name: head.name, ownerId: row.ownerId, paused: head.paused, lastChangedAt: newest.get(row.id) ?? null,
-        ...personal ? { personal: true as const } : {} }
+        ...personalSwarm && row.ownerId === user.sub ? { personal: true as const } : {},
+        ...personalSwarm ? { personalSwarm: true as const } : {} }
     }), next: rows.length > 100 ? rows[99]!.id : null }
   }
 
