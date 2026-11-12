@@ -37,7 +37,7 @@ import {
 import { RemoteViewerProxy } from './remoteViewerProxy.js'
 import { VIEWER_UP_TYPES } from './viewerWire.js'
 import { isWrapped } from './e2ee/core.js'
-import { admitRelayedPairFrame, AGENT_BROWSER_DOWN_TYPES, AGENT_BROWSER_UP_TYPES, isPairFrameType } from './e2ee/applicationFrames.js'
+import { admitRelayedPairFrame, AGENT_BROWSER_DOWN_TYPES, AGENT_BROWSER_UP_TYPES, HARNESS_EVENT, isPairFrameType } from './e2ee/applicationFrames.js'
 import { declaredClientQuery } from './declaredClient.js'
 
 const CONNECT_TIMEOUT_MS = 15_000
@@ -795,8 +795,8 @@ export class RemoteRelayPool {
           return
         }
         // The relay cannot inject response bytes/headers into a local browser in plaintext, nor open or close an
-        // agent browser's stream: those are sealed to this session alone.
-        if (typeof frame.type === 'string' && (VIEWER_UP_TYPES.has(frame.type) || AGENT_BROWSER_UP_TYPES.has(frame.type) || AGENT_BROWSER_DOWN_TYPES.has(frame.type))
+        // agent browser's stream, nor tell a watcher a harness changed: those are sealed to this session alone.
+        if (typeof frame.type === 'string' && (VIEWER_UP_TYPES.has(frame.type) || AGENT_BROWSER_UP_TYPES.has(frame.type) || AGENT_BROWSER_DOWN_TYPES.has(frame.type) || frame.type === HARNESS_EVENT)
           && (!isWrapped(frame.payload) || frame.payload.__e2e?.k !== 'p')) return
         // Nor a question, a recap or an answer's result for the pair brain (applicationFrames.ts).
         if (typeof frame.type === 'string' && isPairFrameType(frame.type) && !admitRelayedPairFrame(frame)) return
