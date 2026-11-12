@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { processCoreApi } from '../services/processCoreApi.js'
-import { answerExperimentQuery, answerMachineAddonsQuery, createForExperiment, creationForExperiment } from './experimentQueries.js'
+import { answerExperimentQuery, answerDaemonQuery, createForExperiment, creationForExperiment } from './experimentQueries.js'
 
 const agent = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/w' }) as RegisteredSession
 const experiments = new Set(['orchestrator'])
@@ -373,11 +373,16 @@ it('lets only the Swarm service reopen a Lead or close a member, by a valid agen
 describe('what the add-ons of a device that is this machine ask of the core', () => {
   it('is told this daemon\'s address, though not an experiment, and nothing else of the experiments\' doors', async () => {
     const core = fakeCore({ daemon: { machineId: () => 'm_account' } as never })
-    expect(answerMachineAddonsQuery(core, 'machineAddons', 'daemon')).toEqual({ command: 'harness', port: 18473, machineId: 'm_account', autonomousEnv: 'prod' })
+    expect(answerDaemonQuery(core, 'machineAddons', 'daemon')).toEqual({ command: 'harness', port: 18473, machineId: 'm_account', autonomousEnv: 'prod' })
     // The experiments' check alone would refuse it: the reason the core asks this first (core/main.ts).
     expect(await answerExperimentQuery(core, experiments, 'machineAddons', 'daemon', {})).toEqual({ error: 'NOT_AN_EXPERIMENT' })
-    expect(answerMachineAddonsQuery(core, 'machineAddons', 'shown')).toBeNull()
-    expect(answerMachineAddonsQuery(core, 'wifi', 'daemon')).toBeNull()
+    expect(answerDaemonQuery(core, 'machineAddons', 'shown')).toBeNull()
+    expect(answerDaemonQuery(core, 'wifi', 'daemon')).toBeNull()
+  })
+
+  it('is told to Hachi\'s service and the agent cleanup, which reach this daemon and the owner\'s other machines as a tool does', () => {
+    const core = fakeCore({ daemon: { machineId: () => 'm_account' } as never })
+    for (const service of ['hachi', 'agentCleanup']) expect(answerDaemonQuery(core, service, 'daemon')).toMatchObject({ port: 18473, machineId: 'm_account' })
   })
 })
 

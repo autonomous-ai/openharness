@@ -863,6 +863,18 @@ describe('harness new: the daemon', () => {
     expect(await newCommand(deps(['codex', '--', 'go'], outside, { origin: async () => ({ ...origin, parentAgentId: undefined }) }))).toBe(0)
     expect(outside.sent[1]!.payload.startedBy).toBe('agent')
     expect(outside.sent[1]!.payload).not.toHaveProperty('parentAgentId')
+    expect(outside.sent[1]!.payload).not.toHaveProperty('startedByHachi')
+  })
+
+  it('run by Hachi: says so on the create, beside the agent that started it, so its launches count as Hachi\'s too', async () => {
+    const origin = {
+      check: async () => {}, prompt: (text: string) => text, created: async () => null, answer: () => ({ effect: '', next: [] }),
+      parentAgentId: 'hachi-agent', hachi: true as const,
+    }
+    const socket = new FakeSocket((frame) => frame.type === 'fs_list_dir' ? { path: '/Users/mini', entries: [] }
+      : frame.type === 'agent_create' ? { state: 'created', agent: { id: 'kid', name: 'kid' } } : null)
+    expect(await newCommand(deps(['codex', '--', 'review it'], socket, { origin: async () => origin }))).toBe(0)
+    expect(socket.sent[1]!.payload).toMatchObject({ startedBy: 'agent', startedByHachi: true, parentAgentId: 'hachi-agent' })
   })
 
   it('turns the machine\'s refusal into words, and a usage slip into the usage', async () => {

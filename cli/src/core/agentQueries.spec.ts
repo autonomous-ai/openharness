@@ -35,6 +35,21 @@ describe('what a service in its own process may ask the core of the agents', () 
     expect(await answerAgentQuery(core, 'agentUsage', { target })).toMatchObject({ value: { totalTokens: 4 } })
   })
 
+  it('hands on one of Hachi\'s daemon counters, and refuses any other name', () => {
+    const count = vi.fn()
+    const core = fakeCore({ count })
+    expect(answerAgentQuery(core, 'count', { metric: 'hachi_wake_done' })).toEqual({ ok: true })
+    expect(count).toHaveBeenCalledWith('hachi_wake_done')
+    // The App's, the launch twins and the person's days are counted where they happen, never by a service.
+    for (const metric of ['ui_desktop_hachi_switch_on', 'launch_hachi_started_claude', 'hachi_person_turn_days', 'create_requests', 'PRIVATE_CANARY', 7]) {
+      expect(answerAgentQuery(core, 'count', { metric })).toEqual({ error: 'INVALID_REQUEST' })
+    }
+    expect(answerAgentQuery(core, 'count')).toEqual({ error: 'INVALID_REQUEST' })
+    expect(count).toHaveBeenCalledTimes(1)
+    // A core that offers no counter takes it and counts nothing.
+    expect(answerAgentQuery(fakeCore(), 'count', { metric: 'hachi_turns_person' })).toEqual({ ok: true })
+  })
+
   // A Swarm attempt's end read an agent's usage fresh, for the backend's costs, which went with backend S8 (#3908).
   it('answers no fresh usage read', async () => {
     const core = fakeCore({ agents: { all: () => [...live, ...stopped], live: () => live } })

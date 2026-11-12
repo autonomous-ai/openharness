@@ -3,7 +3,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { swarmBasics } from '../lib/swarmSkills.js'
+import { PM_BASICS, SWARM_BASICS, swarmBasics } from '../lib/swarmSkills.js'
 import { describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
 import type { CoreApi } from '../core/api.js'
@@ -68,8 +68,12 @@ describe('restart role lookup through the service', () => {
       ? hostForm([{ tabId: 'tab', agent: lead }, { tabId: 'tab', agent: builder }])
       : swarmReply(path, { agents: [lead, builder], conversations: [{ leadId: 'lead', agentIds: ['builder'] }] }) } }))
     const service = superTabService(fakeCore({ account: { backend: call } }))
-    expect(await service.requests.super_tabs({ action: 'basics', harnessId: 'lead-native' }, owner)).toEqual({ ok: true, text: swarmBasics(true).text })
-    expect(await service.requests.super_tabs({ action: 'basics', harnessId: 'builder-native' }, owner)).toEqual({ ok: true, text: swarmBasics(false).text })
+    // The joined text for an older Desktop, and every agent's and the PM's apart for Desktop to show the PM's under the PM
+    // (anh Dee, 2026-11-12: "PM basics.. shouldn't that be part of devon?").
+    expect(await service.requests.super_tabs({ action: 'basics', harnessId: 'lead-native' }, owner))
+      .toEqual({ ok: true, text: swarmBasics(true).text, swarm: SWARM_BASICS, pm: PM_BASICS })
+    expect(await service.requests.super_tabs({ action: 'basics', harnessId: 'builder-native' }, owner))
+      .toEqual({ ok: true, text: swarmBasics(false).text, swarm: SWARM_BASICS })
     expect(swarmBasics(true).text).not.toBe(swarmBasics(false).text)
     expect(await service.requests.super_tabs({ action: 'basics', harnessId: 'personal' }, owner)).toEqual({ ok: true })
     expect(await service.requests.super_tabs({ action: 'basics', harnessId: 'lead-native' }, visitor)).toMatchObject({ error: 'OWNER_REQUIRED' })

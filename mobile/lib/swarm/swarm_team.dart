@@ -15,9 +15,14 @@ List<SuperTabAgent> swarmMyAgents(SuperTabSnapshot snapshot, String accountId) {
       (agent.displayName ?? agent.name).toLowerCase();
   return [
     for (final agent in snapshot.agents)
-      if (agent.myAgent ?? agent.contributorId == accountId) agent,
+      if (swarmAgentIsMine(agent, accountId)) agent,
   ]..sort((a, b) => name(a).compareTo(name(b)));
 }
+
+/// Whether [accountId] brought [agent]: the backend's `myAgent` when it sends
+/// one, else whose agent it is (Desktop's `mine`).
+bool swarmAgentIsMine(SuperTabAgent agent, String accountId) =>
+    agent.myAgent ?? agent.contributorId == accountId;
 
 /// Whether [agent] is a Product Manager, for its face's colour: the backend's
 /// kind when it sends one, else whether it leads a project (Desktop's

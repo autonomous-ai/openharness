@@ -236,6 +236,16 @@ describe('recaps, as the core keeps them', () => {
     // Review Focus 6: the input says `started` inside the funnel, before the recaps hear that batch, for an exact echo; and a
     // moment later, after the engine's own record is read, for a prompt the engine wrapped. The mark is read at the end, so
     // either order is quiet.
+    it('says whether the turn open now was started by a quiet delivery, until its end is heard', () => {
+      const { recaps } = setup()
+      recaps.mirror.ingest([started], 's1')
+      expect(recaps.quietTurnOpen('s1')).toBe(false)
+      recaps.quietTurn('a1')
+      expect(recaps.quietTurnOpen('s1')).toBe(true)
+      recaps.mirror.ingest([ended], 's1')
+      expect(recaps.quietTurnOpen('s1')).toBe(false)
+    })
+
     it('the mark holds whether it comes before the recaps hear the turn start or after', () => {
       const { recaps, port } = setup()
       recaps.quietTurn('a1')
