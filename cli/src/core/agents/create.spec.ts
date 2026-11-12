@@ -30,7 +30,7 @@ import { harnessMadeWorktree } from '../../lib/gitProject.js'
 import { NativeFiles } from '../../engines/kit/nativeFiles.js'
 import { agentLaunchArgs } from '../../lib/agentAttribution.js'
 import { WindowsBatchLaunchRefused } from '../../lib/windows/launch.js'
-import { SWARM_LAUNCH } from '../../superTabs/inCore/launch.js'
+import { swarmLaunch, type MachineSession } from '../../superTabs/inCore/launch.js'
 
 // Real native preparation asks the fixture engine for its help: answered in this process (testing/engineHelpInProcess.ts).
 vi.mock('node:child_process', async (real) => (await import('../../testing/engineHelpInProcess.js')).withEngineHelp(await real<typeof import('node:child_process')>()))
@@ -139,6 +139,8 @@ const request = (over: Record<string, unknown> = {}) => ({
 }) as unknown as Parameters<ReturnType<typeof createAgentCreator>>[0]
 
 const pending = { agentId: 'a1', sessionId: '', engine: 'claude' } as RegisteredSession
+/** The Swarm's part of a launch, on a machine of 16 cores with no session yet. */
+const SWARM_LAUNCH = swarmLaunch(() => [], () => 16)
 const owner = { pid: 7, engine: 'claude' } as SessionOwner
 
 function setup(over: Partial<CreateAgentDeps> = {}) {
@@ -267,6 +269,26 @@ describe('creating an agent', () => {
     expect(agentTmpLaunch).toHaveBeenLastCalledWith('claude', expect.objectContaining({ role: 'agent', key: expect.any(String) }))
     expect(vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0].env).toMatchObject({ HARNESS_DSH: 'blender', TMPDIR: '/data/agent-tmp/one' })
     expect(extraArgs().filter(arg => arg.startsWith('--add-dir'))).toEqual(['--add-dir=/data/agent-tmp/one'])
+  })
+
+  // anh Dee, 2026-11-11: "with multiple agents, it's CPU constraint". A Swarm's agent starts with its share of this machine's
+  // cores in its environment, for its tools to size themselves by (docs/research/2026-11-11-agents-share-cpu.md).
+  it('starts a Swarm\'s agent with its share of this machine\'s cores in its environment, and a person\'s own session with none', async () => {
+    const env = () => vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0].env ?? {}
+    /** Each start on a machine of 16 cores where two of the Swarm's sessions and a person's own are already. */
+    const here: MachineSession[] = [{ swarmSkill: { key: 'harness-claude-1' } }, {}, { swarmSkill: { key: 'harness-codex-2' } }]
+    const onThisMachine = () => ({ swarmLaunch: swarmLaunch(() => here, () => 16) })
+    for (const swarmRole of ['coordinator', 'agent']) {
+      expect(await setup(onThisMachine()).create(request({ swarmRole }))).toMatchObject({ ok: true })
+      // This one makes three: 16 cores over three.
+      expect(env()).toMatchObject({ HARNESS_CORES: '5' })
+    }
+    // The launch's own variables are beside it, as before.
+    vi.mocked(installedDsh).mockReturnValueOnce(installed() as never).mockReturnValueOnce(installed() as never)
+    expect(await setup(onThisMachine()).create(request({ dsh: 'blender', swarmRole: 'agent' }))).toMatchObject({ ok: true })
+    expect(env()).toMatchObject({ HARNESS_DSH: 'blender', HARNESS_CORES: '5' })
+    expect(await setup(onThisMachine()).create(request({}))).toMatchObject({ ok: true })
+    expect(env()).not.toHaveProperty('HARNESS_CORES')
   })
 
   // On a shared model a Swarm session keeps the grid's web tools.

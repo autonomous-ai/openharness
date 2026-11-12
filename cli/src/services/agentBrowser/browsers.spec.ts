@@ -498,6 +498,72 @@ describe('Browsers', () => {
     expect(shown(r, 'a1')).toBe('none')
   })
 
+  // CLI 0.6.40 on a Mac (2026-11-12): a Stop came while Podman was still asked about an exit, and the exit was taken
+  // for a crash. It logged "starting it again in 1 s", showed `starting`, and armed a restart the stop had already
+  // cleared for, which started the browser again after the stop had removed it.
+  it('an exit still being looked at when the browser is stopped is not restarted, logged or shown starting; a crash while it is on still is', async () => {
+    const r = rig()
+    await r.browsers.start('a1')
+    const code = deferred<number | null>()
+    r.containers.exitCode.mockImplementationOnce(() => code.promise)
+    r.crash('a1', 0)
+    await settle()
+    expect(r.containers.exitCode).toHaveBeenCalledOnce()
+    const stopped = r.browsers.stop('a1')
+    code.resolve(0)
+    await stopped
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(r.logged.filter(line => line.includes('starting it again'))).toEqual([])
+    expect(r.seen.get('a1')).toEqual(['starting', 'ready', 'none'])
+    expect(r.containers.start).toHaveBeenCalledOnce()
+    expect(r.running.has('a1')).toBe(false)
+    expect(shown(r, 'a1')).toBe('none')
+    await r.browsers.start('a1')
+    r.crash('a1', 0)
+    await settle()
+    expect(shown(r, 'a1')).toBe('starting')
+    expect(r.logged.at(-1)).toBe('agent browser a1: the browser exited (0); starting it again in 1 s')
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(shown(r, 'a1')).toBe('ready')
+    expect(r.containers.start).toHaveBeenCalledTimes(3)
+  })
+
+  // Review, 2026-11-12: an exit heard again while Podman was asked about it (the event, and the look at what runs after
+  // the stream reconnected) armed a second restart. The first one's timer was lost, so a stop did not clear it, and it
+  // started the browser after the stop.
+  it('one exit heard twice while it is looked at restarts the browser once, and a stop after it leaves it off', async () => {
+    const r = rig()
+    await r.browsers.start('a1')
+    const code = deferred<number | null>()
+    r.containers.exitCode.mockImplementationOnce(() => code.promise)
+    r.crash('a1', 0)
+    await settle()
+    r.browsers.exited('a1')
+    code.resolve(0)
+    await settle()
+    expect(r.logged.filter(line => line.includes('starting it again'))).toEqual(['agent browser a1: the browser exited (0); starting it again in 1 s'])
+    await r.browsers.stop('a1')
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(r.containers.start).toHaveBeenCalledOnce()
+    expect(r.running.has('a1')).toBe(false)
+    expect(shown(r, 'a1')).toBe('none')
+  })
+
+  it('a stop while the start looks for the ready marker leaves the browser off, never ready', async () => {
+    const r = rig()
+    const ready = deferred<boolean>()
+    r.containers.ready.mockImplementationOnce(() => ready.promise)
+    const started = r.browsers.start('a1')
+    await settle()
+    expect(r.containers.ready).toHaveBeenCalledOnce()
+    const stopped = r.browsers.stop('a1')
+    ready.resolve(true)
+    await Promise.all([started, stopped])
+    expect(r.seen.get('a1')).toEqual(['starting', 'none'])
+    expect(r.measured).not.toContain('agent_browser_start_ok')
+    expect(shown(r, 'a1')).toBe('none')
+  })
+
   it('operations are serialized per agent; different agents run in parallel', async () => {
     const r = rig()
     const slow = deferred<{ limitsDropped: string[] }>()

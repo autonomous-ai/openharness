@@ -23,6 +23,8 @@ import { engineLaunches } from '../engines/launches.js'
 import { masterRunsEngineNativeControl } from '../harnessd/services.js'
 import { masterRunsEngineBackgroundJob } from '../harnessd/services.js'
 import { createBackgroundJobs } from './engines/backgroundJobs.js'
+import { masterRunsEngineProviderMove } from '../harnessd/services.js'
+import { createProviderMoves } from './engines/providerMoves.js'
 import { submissionPolicy } from '../engines/submissionPolicies.js'
 import { createSubmissionTransport } from './engines/submissionTransport.js'
 import { masterRunsEngineSubmission } from '../harnessd/services.js'
@@ -721,6 +723,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The Swarm switch (harnessd/services.ts `HARNESS_SWARM`, on unless set off): its code in this process comes from one
   // entry, loaded only while it is on (superTabs/inCore.ts), and its service is left off with it.
   const swarm = swarmOn(harnessd) ? await import('../superTabs/inCore.js') : null
+  // The Swarm's part of a launch (superTabs/inCore/launch.ts), which shares this machine's cores among the Swarm's sessions here.
+  const swarmLaunch = swarm?.swarmLaunch(() => registry.list())
   const knownServices = servicesOn(harnessd, KNOWN_SERVICES)
   const outOfProcess = servicesTheMasterRuns(harnessd, knownServices)
   // The viewers' process (the viewers and the Store) runs once something needs it (core/viewersWake.ts).
@@ -741,9 +745,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const isolatedNativeControl = (engine: string): boolean => nativeControlHosted && isolatedLive(engine)
   const backgroundJobHosted = masterRunsEngineBackgroundJob(harnessd, process.ppid)
   const isolatedBackgroundJob = (engine: string): boolean => backgroundJobHosted && isolatedLive(engine)
+  const providerMoveHosted = masterRunsEngineProviderMove(harnessd, process.ppid)
+  const isolatedProviderMove = (engine: string): boolean => providerMoveHosted && isolatedLive(engine)
   const isolatedSubmission = (engine: string): boolean => submissionHosted && isolatedLive(engine)
   const isolatedRuntime = (engine: string): boolean => runtimeHosted && isolatedLive(engine)
-  const inline = knownServices.some((name) => !outOfProcess.has(name)) || !runtimeHosted || !screenHosted || !modelControlHosted || !questionControlHosted || !submissionHosted || !nativeControlHosted || !backgroundJobHosted
+  const inline = knownServices.some((name) => !outOfProcess.has(name)) || !runtimeHosted || !screenHosted || !modelControlHosted || !questionControlHosted || !submissionHosted || !nativeControlHosted || !backgroundJobHosted || !providerMoveHosted
     ? await import('../services/inline.js') : null
   // The Swarm's side of the services that act on it, for those of them that run in this process while it is on
   // (superTabs/inServices.ts): off, or with them in their own processes, none of it is loaded here.
@@ -774,6 +780,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const backgroundJobs = createBackgroundJobs({
     call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
     handles: isolatedBackgroundJob, inline: engine => isolatedBackgroundJob(engine) ? undefined : inline?.backgroundJobFor(engine),
+  })
+  // A retarget between a grid and the own login forks a Codex conversation in Codex's worker (#4145).
+  const providerMoves = createProviderMoves({
+    call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
+    handles: isolatedProviderMove, inline: engine => isolatedProviderMove(engine) ? undefined : inline?.providerMoveFor(engine),
   })
   // Which engine workers are linked now: a close's read refused by a restart waits here for the new link.
   const engineLinks = createEngineLinks()
@@ -1698,6 +1709,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       submissionTransport.connected(service)
       nativeControls.connected(service)
       backgroundJobs.connected(service)
+      providerMoves.connected(service)
       engineLinks.connected(service)
       modelControls.connected(service)
       questionControls.connected(service)
@@ -1725,6 +1737,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       submissionTransport.disconnected(service)
       nativeControls.disconnected(service)
       backgroundJobs.disconnected(service)
+      providerMoves.disconnected(service)
       engineLinks.disconnected(service)
       modelControls.disconnected(service)
       questionControls.disconnected(service)
@@ -2528,7 +2541,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   const launchOverridesDeps: LaunchOverridesDeps = {
     // A Swarm session's skill and GitHub App on every relaunch; off, such a session is not relaunched.
-    ...(swarm ? { swarm: swarm.SWARM_LAUNCH } : {}),
+    ...(swarmLaunch ? { swarm: swarmLaunch } : {}),
     publishConfig: publishGridConfigDir,
     machine: gridLaunchMachine,
     native: prepareNativeLaunch,
@@ -2869,7 +2882,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   // Creating an agent (core/agents/create.ts).
   const creator = createAgentCreator({
-    ...(swarm ? { swarmLaunch: swarm.SWARM_LAUNCH } : {}),
+    ...(swarmLaunch ? { swarmLaunch } : {}),
     publishConfig: publishGridConfigDir,
     native: prepareNativeLaunch,
     dshLaunch,
@@ -2954,6 +2967,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     refreshGridAssignment: gridAssignments.refresh,
     announceSession,
     opencodeDb: OPENCODE_DB,
+    moveConversation: providerMoves.move,
   })
 
   // Stopping, purging and resuming an agent (core/agents/lifecycle.ts).
@@ -3157,7 +3171,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The requests that start an agent's process, and the receipts of those asked with a creationId
   // (core/agents/launches.ts). The orchestrator and the cable create and fork through the socket's slots.
   const launches = createLaunchRequests({
-    ...(swarm ? { swarmLaunch: swarm.SWARM_LAUNCH } : {}),
+    ...(swarmLaunch ? { swarmLaunch } : {}),
     claudeHomeListed: (home) => claudeHomeListed(home, machineIdNow()),
     receipts: new AgentCreationReceipts(join(env.ADAPTER_DATA_DIR, 'agent-creations')),
     createAgent: () => backend.onCreateAgent, forkAgent: () => backend.onForkAgent,
@@ -3393,12 +3407,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     if (ports.wifi) wifiCore.started(appVoiceFocus ?? null)
   }
   devicePartsBuilt = true
-
-  // Worktrees Harness made that no live or stopped harness uses and nothing would miss
-  // (services/workspaces.ts): a few minutes after start, once restored agents are back in the
-  // registry, then twice a day. Only the end-to-end harness shortens the first wait.
-  setTimeout(() => ports.workspaces?.sweepUnused(), Number(harnessd.HARNESSD_TEST_SWEEP_AFTER_MS) || 5 * 60_000).unref()
-  setInterval(() => ports.workspaces?.sweepUnused(), 12 * 3600_000).unref()
 
 
   // Every card bound for the Wi-Fi device goes to the devices too: the dial is told what the Wi-Fi device is,

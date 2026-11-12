@@ -150,6 +150,31 @@ describe('deleting a Swarm', () => {
     expect(Object.keys(await read(member))).not.toContain(mine)
   })
 
+  // anh Dee, 2026-11-12: someone invited to another person's Personal Swarm sees it as that person's ("Dee's Swarm"), so
+  // their apps are told it is a Personal Swarm. `personal` on the list stays the reader's own (the dial's Personal | Team
+  // picker and Desktops before this read it so); `personalSwarm` marks every Personal Swarm on the list, and the read's head
+  // says `personal`, to every member.
+  it('tells every member a Personal Swarm is one, and keeps the list\'s own mark for its owner', async () => {
+    const w = world(), f = await swarm(w)
+    const mine = (await w.store.create(owner, PERSONAL_SWARM_OPERATION, 'Personal')).id
+    const execute = (command: Command, as = owner) => w.store.execute(as, mine, { operationId: randomUUID(), command })
+    const conversationId = String((await execute({ type: 'project.create', name: 'openharness', visibility: 'public', brief: '' })).result.conversationId)
+    const invitation = await execute({ type: 'invite.create', email: member.email, role: 'collaborator', conversationId })
+    await execute({ type: 'invite.accept', inviteId: invitation.result.inviteId as string }, member)
+    const marks = (tabs: Array<{ id: string; personal?: true; personalSwarm?: true }>) =>
+      Object.fromEntries(tabs.map(t => [t.id, { personal: t.personal, personalSwarm: t.personalSwarm }]))
+    for (const list of [(who: AuthUser) => w.store.list(who), (who: AuthUser) => w.reads.list(who)]) {
+      expect(marks((await list(owner)).tabs)).toMatchObject({ [mine]: { personal: true, personalSwarm: true },
+        [f.tab]: { personal: undefined, personalSwarm: undefined } })
+      expect(marks((await list(member)).tabs)).toMatchObject({ [mine]: { personal: undefined, personalSwarm: true },
+        [f.tab]: { personal: undefined, personalSwarm: undefined } })
+    }
+    for (const who of [owner, member]) {
+      expect((await w.reads.firstLoad(who, mine)).head.data.personal).toBe(true)
+      expect((await w.reads.firstLoad(who, f.tab)).head.data).not.toHaveProperty('personal')
+    }
+  })
+
   it('stops its agents through their host and releases the machine, whose host still confirms both', async () => {
     const w = world(), f = await swarm(w)
     await f.execute({ type: 'swarm.delete', name: 'Lampos' })

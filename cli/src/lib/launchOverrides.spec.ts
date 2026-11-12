@@ -48,7 +48,7 @@ function deps(overrides: Partial<LaunchOverridesDeps> = {}) {
     // consult the config.toml of whoever is running the suite.
     readCodexConfig: () => null,
     // The Swarm on, as by default (`HARNESS_SWARM`); a test of it off leaves it out.
-    swarm: { basics: (lead) => swarmBasics(lead).text, github: (key) => swarmGitHubLaunch(key), args: swarmEngineArgs },
+    swarm: { basics: (lead) => swarmBasics(lead).text, github: (key) => swarmGitHubLaunch(key), args: swarmEngineArgs, cores: () => ({}) },
     ...overrides,
   }
   return { d, calls }
@@ -526,7 +526,7 @@ describe('buildLaunchOverrides — machine MCP servers (#1872)', () => {
   // it was started under go to the Swarm, which reads the file again each time.
   it('hands the Swarm the row\'s folder and the name it was started under, for the agent\'s own instructions', async () => {
     const basics = vi.fn((_lead: boolean, _own?: { cwd: string | null; name: string | null }) => 'basics')
-    const swarm = { basics, github: () => null, args: () => [] }
+    const swarm = { basics, github: () => null, args: () => [], cores: () => ({}) }
     await buildLaunchOverrides(deps({ readAttribution: () => null, swarm }).d, 'claude', { startedBy: null, cwd: '/work', name: 'Faye',
       swarmSkill: { role: 'agent', key: 'harness-claude-x' } }, 'a', () => true)
     await buildLaunchOverrides(deps({ readAttribution: () => null, swarm }).d, 'claude', { startedBy: null, swarmSkill: { role: 'agent', key: 'harness-claude-x' } }, 'a', () => true)
@@ -662,7 +662,7 @@ describe('buildLaunchOverrides — the owner\'s private temporary folder (audit 
 
   // Task #4395: a relaunch rebuilds the engine's arguments, so the agent's own folder is added again, with its TMPDIR.
   it('names the saved Swarm skill of an agent, whose key names its folder, and adds its own folder again', async () => {
-    const swarm = { args: () => [], basics: () => 'x' }
+    const swarm = { args: () => [], basics: () => 'x', cores: () => ({}) }
     told({ TMPDIR: '/data/agent-tmp/one' }, ['--add-dir=/data/agent-tmp/one'])
     const result = await buildLaunchOverrides(deps({ swarm } as never).d, 'claude', { cwd: '/w', swarmSkill: { role: 'agent', key: 'k' } as never }, 'a')
     expect(agentTmpLaunch).toHaveBeenLastCalledWith('claude', { role: 'agent', key: 'k' })
@@ -674,6 +674,26 @@ describe('buildLaunchOverrides — the owner\'s private temporary folder (audit 
     told({ TMPDIR: '/data/agent-tmp', CODEX_HOME: '/data/not-this' })
     const result = await buildLaunchOverrides(deps().d, 'codex', { codexHome: '/home/u/.codex-work' }, 'a')
     expect(result).toMatchObject({ ok: true, overrides: { env: { TMPDIR: '/data/agent-tmp', CODEX_HOME: '/home/u/.codex-work' } } })
+  })
+})
+
+// anh Dee, 2026-11-11: "with multiple agents, it's CPU constraint" (docs/research/2026-11-11-agents-share-cpu.md). A relaunch
+// rebuilds the pane's environment, so a Swarm's agent is given its share of this machine's cores again, as the agents here are
+// counted then.
+describe('buildLaunchOverrides — a Swarm agent\'s share of this machine\'s cores', () => {
+  const swarm = { args: () => [], basics: () => 'x', github: () => null, cores: vi.fn((key: string) => ({ HARNESS_CORES: key === 'k' ? '4' : '16' })) }
+
+  it('reaches a Swarm agent\'s relaunch by its key, beside the launch\'s own variables', async () => {
+    const result = await buildLaunchOverrides(deps({ swarm }).d, 'codex', { cwd: '/w', codexHome: '/home/u/.codex-work', swarmSkill: { role: 'agent', key: 'k' } }, 'a')
+    expect(swarm.cores).toHaveBeenLastCalledWith('k')
+    expect(result).toMatchObject({ ok: true, overrides: { env: { HARNESS_CORES: '4', CODEX_HOME: '/home/u/.codex-work' } } })
+  })
+
+  it('gives a person\'s own session none', async () => {
+    swarm.cores.mockClear()
+    const result = await buildLaunchOverrides(deps({ swarm }).d, 'claude', { cwd: '/w' }, 'a')
+    expect(swarm.cores).not.toHaveBeenCalled()
+    expect((result as { overrides: { env: Record<string, string> } }).overrides.env).not.toHaveProperty('HARNESS_CORES')
   })
 })
 

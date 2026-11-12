@@ -30,8 +30,9 @@ import { dependsOn, labelOf, readerKey, sameKey, tasksOf, teamOf, type Crew } fr
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { GitHubReads, GitHubStop, PAGE, retryIn, Waits, waitWords } from './githubRest.js'
 import { repositorySlug, TEAM } from './githubMentions.js'
-import { GitHubTrain, TRAIN_MARK, type TrainPull } from './githubTrain.js'
-import { identifier, object } from './wire.js'
+import { APP, GitHubTrain, STATUS, TRAIN_MARK, type TrainPull } from './githubTrain.js'
+import { COST_NUMBERS, costLine, TASK_NUMBER_MAX, type ReadRow } from './taskTokens.js'
+import { identifier, object, within } from './wire.js'
 
 type Json = Record<string, unknown>
 
@@ -95,7 +96,7 @@ const SELF = 'Harness'
  *  swarm-sandbox #24-#26 got one note 46 times each when its words carried the time (2026-11-10), and the failing checks of one
  *  head can change and change order. A restart finds a note said by these first words. */
 const NOTES = { unsigned: 'the READ-OK from ', held: 'the HOLD from ', checks: 'checks failed: ', behind: 'it is behind ', dirty: 'it conflicts with ',
-  blocked: 'GitHub\'s rules for ', stacked: 'it lands after ', red: 'its train failed: ', left: 'its builder ' } as const
+  blocked: 'GitHub\'s rules for ', stacked: 'it lands after ', red: 'its train failed: ', left: 'its builder ', unreported: 'its train never got ' } as const
 type NoteKind = keyof typeof NOTES
 /** How the `stacked` note began until 2026-11-12, when it ended "then update it from main": one posted then is still its head's
  *  note, so a restart does not say it again in today's words. These can go after 2026-12-12. */
@@ -127,6 +128,12 @@ export const RECORD_SETTLE_MS = 2 * 60_000
 /** How long an answer about a comment is kept before it is asked about again: a record made late (the command run again after
  *  the server refused it) and an agent's new name are read within it, with no restart. */
 const RECORD_AGAIN_MS = 10 * 60_000
+
+/** How long the comment that says a change landed waits for the server's word on what it cost (taskTokens.ts): the change has
+ *  landed, and its comment is what tells its author and closes it. */
+export const COST_WAIT_MS = 5_000
+/** How long a repository's costs are not asked for again after the server did not give one. */
+export const COST_AGAIN_MS = 15 * 60_000
 
 /** A ready pull request, with what a note to its author takes (tellOnce). */
 interface Ready extends TrainPull { author: string; comments: Json[] }
@@ -520,15 +527,17 @@ export const pullPeople = (pull: Json, team: ReadonlySet<string>): PullPeople =>
 /** The pull request's author by name: its builder label, else its branch's first part (`pip/12`). */
 export const authorOf = (pull: Json): string | null => writersOf(pull)[0] ?? null
 
-/** Whether every check on a head passed (none at all passes), is still running, or failed with which names, and what was read,
- *  in one line, to tell two looks apart. */
-export function checksOf(runs: Json[], status: Json): { state: 'passed' | 'running' | 'failed'; failed: string[]; summary: string } {
-  const failed: string[] = [], seen: string[] = []
+/** Whether every check on a head passed (none at all passes), is still running, or failed with which names; what made them
+ *  (`sources`: each check run's app, each status by its context), which a train's tip must show of its riders' (githubTrain.ts
+ *  attend); and what was read, in one line, to tell two looks apart. */
+export function checksOf(runs: Json[], status: Json): { state: 'passed' | 'running' | 'failed'; failed: string[]; sources: string[]; summary: string } {
+  const failed: string[] = [], seen: string[] = [], sources = new Set<string>()
   let running = false
   // GitHub lists each check's latest run (check-runs' filter=latest): two of one name are two checks, two workflows' jobs, and
   // either failing fails the head (code review of #4060).
   for (const run of runs) {
     seen.push(`${String(run.name ?? '')}:${String(run.status ?? '')}:${String(run.conclusion ?? '')}`)
+    sources.add(`${APP}${String(object(run.app).slug ?? '')}`)
     if (run.status !== 'completed') { running = true; continue }
     if (!['success', 'neutral', 'skipped'].includes(String(run.conclusion))) failed.push(String(run.name ?? 'a check'))
   }
@@ -536,11 +545,12 @@ export function checksOf(runs: Json[], status: Json): { state: 'passed' | 'runni
     // The train's own mark on the tip it built is no check of it: counted, a train whose CI had not started read as passed.
     if (each.context === TRAIN_MARK) continue
     seen.push(`${String(each.context ?? '')}:${String(each.state ?? '')}`)
+    sources.add(`${STATUS}${String(each.context ?? '')}`)
     if (each.state === 'pending') running = true
     else if (each.state !== 'success') failed.push(String(each.context ?? 'a status'))
   }
   // Each named once: a workflow's check run and the status it sets share a name (#4055: "ci/required, process-checks, ci/required").
-  return { state: failed.length ? 'failed' : running ? 'running' : 'passed', failed: [...new Set(failed)], summary: seen.sort().join('|') }
+  return { state: failed.length ? 'failed' : running ? 'running' : 'passed', failed: [...new Set(failed)], sources: [...sources], summary: seen.sort().join('|') }
 }
 
 /** [head]'s checks as [reads] has them: its check runs and its combined status (checksOf). */
@@ -605,6 +615,8 @@ export class GitHubMerge {
   private readonly named = new Map<string, string>()
   private offUntil = 0
   private logged = ''
+  /** Each repository whose landed changes' costs the server did not give, and when it is asked again: said once. */
+  private readonly costless = new Map<string, number>()
   private readonly now: () => number
   private readonly log: (line: string) => void
 
@@ -613,7 +625,10 @@ export class GitHubMerge {
     send: GitHubSend; now?: () => number; log?: (line: string) => void; intervalMs?: number
     /** Who made each verdict by command (githubVerdict.ts), as the backend recorded it: only such a READ-OK is a read. One for
      *  the merger and the assigner. */
-    records: VerdictRecords }) {
+    records: VerdictRecords
+    /** What the server keeps of what a project's issues and pull requests [numbers] cost their builders (taskTokens.ts
+     *  readTaskTokens), read as the project's PM. */
+    costs: (project: LedProject, numbers: number[]) => Promise<ReadRow[]> }) {
     this.now = deps.now ?? Date.now
     this.log = deps.log ?? (line => console.warn(line))
     this.reads = new GitHubReads(deps.get, this.now)
@@ -683,13 +698,21 @@ export class GitHubMerge {
     const open = new Set<string>()
     const conflicts = (pull: { number: number; head: string; author: string; comments: Json[] }) =>
       this.tellOnce(repo, pull.number, pull.head, pull.author, 'dirty', `${base}: rebase it on ${base} and push.`, pull.comments)
+    // What a landed change cost its builder is said on a private repository only, as GitHub's answer above says it: on a public
+    // one the builder's model and what the change used of its person's subscription would be public in that person's name (anh
+    // Dee's call, 12 November). By its visibility: GitHub calls an internal repository, which its whole enterprise reads,
+    // private too (review of #4143). Its rows stay on the server, for the project's members, and are not asked for.
+    const cost = about.visibility === 'private' ? (number: number) => this.cost(project, listed, number) : async () => ''
     const train = new GitHubTrain<Ready>({ reads: this.reads, send: this.deps.send, now: this.now, log: this.log }, current, base, listed, {
       checks: (number, head) => this.checks(repo, this.see(open, `${repo}#${number}@${head}`), head),
       login: () => this.login(repo),
       conflicts,
       failedAlone: (pull, carried) => this.tellOnce(repo, pull.number, pull.head, pull.author, 'red',
         `#${carried} carried it alone on ${base}, and its checks failed there. Fix it and push.`, pull.comments),
+      unreported: (pull, carried, sources) => this.tellOnce(repo, pull.number, pull.head, pull.author, 'unreported', `${sources.slice(0, 3).join(', ')}, `
+        + `which this head has: #${carried} waited 90 min for it. It sits out of trains until it has a new head, or your person lands it.`, pull.comments),
       stamp: () => `${SELF}, ${this.clock()}`,
+      cost,
     })
     // What a merged train carried is closed by it and read no more: to GitHub it now conflicts with the base that holds it.
     const landed = await train.landed()
@@ -774,16 +797,17 @@ export class GitHubMerge {
         await this.tellOnce(repo, number, head, author, 'stacked', `#${earlier.pull}, which is open for #${earlier.after}: its own task #${earlier.task} comes after that one.`, comments)
         continue
       }
-      // A train carried it alone at this head and failed: it sits out until its head changes. Its note says so for good, where
-      // GitHub lists a red train only among the hundred pull requests closed last (githubTrain.ts landed).
-      if (this.said(comments, head, 'red')) continue
+      // A train carried it alone at this head and failed, or waited out its time for what this head has and no train gets: it sits
+      // out until its head changes. Its note says so for good, where GitHub lists a train only among the hundred pull requests
+      // closed last (githubTrain.ts landed and attend).
+      if (this.said(comments, head, 'red') || this.said(comments, head, 'unreported')) continue
       ready.push({ number, head, title: String(pull.title ?? ''), body: String(pull.body ?? ''), readers: [...reads.values()].map(r => r.name),
-        fork: String(object(object(pull.head).repo).full_name ?? '').toLowerCase() !== current, checked: !checks.none, author, comments })
+        fork: String(object(object(pull.head).repo).full_name ?? '').toLowerCase() !== current, sources: checks.sources, author, comments })
     }
     for (const pull of await train.carry(ready, waiting)) {
       // A fork GitHub took neither into a train nor on its own: tried again with the merger's waits, not every pass (each
       // try makes and deletes a branch).
-      if (!await this.mergeAlone(repo, pull) && pull.fork) {
+      if (!await this.mergeAlone(repo, pull, cost) && pull.fork) {
         throw new GitHubStop('FORK_REFUSED', `GitHub takes #${pull.number} neither into a train nor on its own.`, false, this.now())
       }
     }
@@ -814,7 +838,7 @@ export class GitHubMerge {
   }
 
   /** Merges one pull request on its own, squashed at its head, as every ready one was before the train. */
-  private async mergeAlone(repo: string, pull: Ready): Promise<boolean> {
+  private async mergeAlone(repo: string, pull: Ready, cost: (number: number) => Promise<string>): Promise<boolean> {
     const merged = await this.deps.send('PUT', `/repos/${repo}/pulls/${pull.number}/merge`, { merge_method: 'squash', sha: pull.head })
     // Merged, its head moved (409) or refused by GitHub (405): the repository is read again next pass, by either name.
     this.reads.forget(repo)
@@ -822,9 +846,33 @@ export class GitHubMerge {
     if (now && now !== repo) this.reads.forget(now)
     if (merged.status !== 200) { this.note('MERGE_REFUSED', `${repo}#${pull.number}: GitHub answered ${merged.status}`); return false }
     const by = pull.readers.join(' and ')
-    await this.comment(repo, pull.number, `${SELF}, ${this.clock()}: merged. READ-OK on ${pull.head.slice(0, 7)} by ${by}, checks green.`)
+    await this.comment(repo, pull.number, `${SELF}, ${this.clock()}: merged. READ-OK on ${pull.head.slice(0, 7)} by ${by}, checks green.${await cost(pull.number)}`)
     this.log(`[super-tab] merged ${repo}#${pull.number} on ${pull.head.slice(0, 7)} (READ-OK by ${by})`)
     return true
+  }
+
+  /**
+   * What pull request [number] cost its builder, as the sentence the comment that says it landed gains (taskTokens.ts costLine):
+   * from the server's rows for it and the tasks it closes, written by its builder's own daemon. Empty when that daemon wrote
+   * none (an older one, or a pull request that is no agent's), and when the server gives none within COST_WAIT_MS: a landing
+   * never waits on its cost or fails for it. That is said once for a repository, and once more when it is read again; for
+   * COST_AGAIN_MS it is not asked again, so a train of twenty waits on a server that is down once, not twenty times.
+   */
+  private async cost(project: LedProject, listed: Json[], number: number): Promise<string> {
+    const pull = listed.find(one => Number(one.number) === number), author = pull ? authorOf(pull) : null
+    const againAt = this.costless.get(project.repo)
+    if (!pull || !author || (againAt !== undefined && this.now() < againAt)) return ''
+    // Its branch may name its own number (`pip/4` for #4): each number is asked once. A number no issue can have ("Closes #0")
+    // would have the server refuse the whole read, and the repository's comments go without the sentence for COST_AGAIN_MS.
+    const numbers = [...new Set([number, ...tasksOf(pull)])].filter(task => task >= 1 && task <= TASK_NUMBER_MAX).slice(0, COST_NUMBERS)
+    const rows = await within(this.deps.costs(project, numbers), COST_WAIT_MS)
+    if (!rows) {
+      if (againAt === undefined) this.log(`[super-tab] a landed change's cost could not be read: it is not said · COST_UNREAD ${project.repo}`)
+      this.costless.set(project.repo, this.now() + COST_AGAIN_MS)
+      return ''
+    }
+    if (this.costless.delete(project.repo)) this.log(`[super-tab] landed changes' costs are read again · ${project.repo}`)
+    return costLine(rows, author, this.now())
   }
 
   /** This computer's GitHub login, asked once: the train takes only the pull requests it opened for its own (githubTrain.ts). */
@@ -846,15 +894,13 @@ export class GitHubMerge {
 
   /** The checks of [head], seen as [at] (checksOf): passed only once they hold still (CHECKS_SETTLE_MS), and running until then.
    *  A pull request's and a train's alike. */
-  private async checks(repo: string, at: string, head: string): Promise<{ state: 'passed' | 'running' | 'failed'; failed: string[]; none: boolean }> {
+  private async checks(repo: string, at: string, head: string): Promise<ReturnType<typeof checksOf>> {
     const checks = await headChecks(this.reads, repo, head)
-    // No check and no status at all: a repository with no CI, or CI that has not started on this head.
-    const none = checks.summary === ''
-    if (checks.state !== 'passed') return { ...checks, none }
+    if (checks.state !== 'passed') return checks
     // Passed, or none yet.
     const before = this.looked.get(at)
     this.looked.set(at, checks.summary)
-    return this.now() - this.seenAt.get(at)! < CHECKS_SETTLE_MS || before !== checks.summary ? { state: 'running', failed: [], none } : { ...checks, none }
+    return this.now() - this.seenAt.get(at)! < CHECKS_SETTLE_MS || before !== checks.summary ? { ...checks, state: 'running' } : checks
   }
 
   /** Another open pull request (a draft too) whose head is among [number]'s commits, or null: merging [number] would merge that one's
@@ -923,7 +969,11 @@ export class GitHubMerge {
     const key = `${repo}#${number} ${kind} ${head}`
     if (this.told.has(key)) return
     if (!this.said(comments, head, kind)) {
-      await this.comment(repo, number, `${SELF}, ${this.clock()}${author ? `, to **${author}**` : ''}: ${noteStart(head, NOTES[kind])}${rest}`)
+      const taken = await this.comment(repo, number, `${SELF}, ${this.clock()}${author ? `, to **${author}**` : ''}: ${noteStart(head, NOTES[kind])}${rest}`)
+      // The note that sits a pull request out of trains is all that keeps it out (mergeReady): one GitHub did not take is not taken
+      // as said, and is said again when a train next waits out its time on that pull request, every 90 minutes at most (review 2
+      // of #4139). Any other note is said each pass it applies, so a refused one is not tried again.
+      if (!taken && kind === 'unreported') return
     }
     // Once GitHub has answered: a comment that never reached it (the pass failed, and is tried again) is not told.
     this.told.add(key)
@@ -936,9 +986,11 @@ export class GitHubMerge {
     return comments.some(c => TEAM.has(c.author_association) && starts.some(start => String(c.body ?? '').slice(0, 500).includes(start)))
   }
 
-  private async comment(repo: string, number: number, body: string): Promise<void> {
+  /** Posts [body] on [number]; whether GitHub took it. */
+  private async comment(repo: string, number: number, body: string): Promise<boolean> {
     const reply = await this.deps.send('POST', `/repos/${repo}/issues/${number}/comments`, { body })
     if (reply.status !== 201) this.note('COMMENT_FAILED', `${repo}#${number}: GitHub answered ${reply.status}`)
+    return reply.status === 201
   }
 
   private clock(): string {

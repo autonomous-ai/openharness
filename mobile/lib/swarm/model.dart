@@ -972,6 +972,7 @@ class SuperTabSnapshot {
       swarmBuddy = row['swarmBuddy'] == true,
       buddyCap = (row['buddyCap'] as num?)?.toInt(),
       autoJoin = row['autoJoin'] == true,
+      personal = row['personal'] == true,
       mentionsWaiting = (row['mentionsWaiting'] as num?)?.toInt() ?? 0,
       mentionsDigest = row['mentionsDigest'] as String?,
       _releaseTimes = {
@@ -1101,6 +1102,9 @@ class SuperTabSnapshot {
   /// back. Read as the desktop's model reads it; the phone does not show it
   /// yet.
   final bool autoJoin;
+
+  /// It is its owner's Personal Swarm (head `personal`). Read as the desktop's model reads it; the phone does not show it.
+  final bool personal;
 
   /// The reader's tags still waiting for them, Swarm-wide; 0 from a backend
   /// before tags (spec 2026-10-24-lead-mentions.md).

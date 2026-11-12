@@ -1253,15 +1253,15 @@ export const MONITOR_OFF: MonitorPort = {
   storage: async () => new Map(),
 }
 
-/** The core's calls into workspaces: name made-up worktree branches after their sessions, on each
- *  terminal-title pass, and sweep the worktrees nothing uses, when the core says it is time. */
+/** The core's call into workspaces: name made-up worktree branches after their sessions, on each terminal-title pass. No
+ *  worktree is removed on a timer (#4166, #711): the daemon swept clean, week-idle ones twice a day, including those their
+ *  person chose to keep and the gitignored files in them. */
 export interface WorkspacesPort {
   nameBranches(): void
-  sweepUnused(): void
 }
 
-/** What the core gets when workspaces fails: branches keep their names and nothing is swept. */
-export const WORKSPACES_FALLBACKS: PortFallbacks<WorkspacesPort> = { nameBranches: undefined, sweepUnused: undefined }
+/** What the core gets when workspaces fails: branches keep their names. */
+export const WORKSPACES_FALLBACKS: PortFallbacks<WorkspacesPort> = { nameBranches: undefined }
 
 /** The core's calls into Agent Messages: whether one of its typed deliveries (a `team:` id) may still be written,
  *  asked in line as it is written (core/input.ts); and that the core's copy of the account's switch changed
@@ -1323,9 +1323,9 @@ export type SwarmAgents = Required<Pick<CoreApi['agents'], 'closeSwarm' | 'keepL
 
 type SwarmSkill = NonNullable<RegisteredSession['swarmSkill']>
 /** The Swarm's part of an agent's start (superTabs/inCore/launch.ts), handed to the launches while the Swarm is on: the
- *  roles a start may ask for, the team's basics the engine starts with, and the Harness GitHub App's git and gh at the
- *  relaunch of a session started with it before the App's removal (null where it has none; lib/swarmGitHub.ts, until
- *  2026-12-10). */
+ *  roles a start may ask for, the team's basics the engine starts with, its share of this machine's cores, and the Harness
+ *  GitHub App's git and gh at the relaunch of a session started with it before the App's removal (null where it has none;
+ *  lib/swarmGitHub.ts, until 2026-12-10). */
 export interface SwarmLaunch {
   role(value: unknown): value is SwarmSkill['role']
   /** The team's basics in the engine's own instructions at a launch and every relaunch, the PM's part for its project's
@@ -1335,6 +1335,9 @@ export interface SwarmLaunch {
   github(key: string): { env: Record<string, string>; clearEnv: string[] } | null
   /** The engine's arguments for a session the Swarm starts, never for a person's own (lib/swarmEngineArgs.ts). */
   args(engine: string): string[]
+  /** The variables a session the Swarm starts gets at its launch and every relaunch, never a person's own: its share of this
+   *  machine's cores (HARNESS_CORES), for its tools to size themselves by. [key] is the session's creation key. */
+  cores(key: string): Record<string, string>
 }
 
 /** Give an agent its person attached (Desktop's Attach, started outside the Swarm) its Swarm role at its first restart or

@@ -27,9 +27,10 @@ import { gatedWrites } from './githubWrites.js'
 import { claimAsked, takeTask } from './githubClaim.js'
 import { Cuts, sameCut, splitAsked, splitTask } from './githubSplit.js'
 import { postVerdict, verdictAsked } from './githubVerdict.js'
-import { GitHubAssign } from './githubAssign.js'
+import { GitHubAssign, swarmRepositories } from './githubAssign.js'
 import { GitHubMerge, ledProjects, pmRunsHere, recordedAuthors, VerdictRecords, type LedProject } from './githubMerge.js'
 import { numbersSender, PmNumbers } from './pmNumbers.js'
+import { readTaskTokens, TaskTokens } from './taskTokens.js'
 import { crewOf, labelOf } from './assign/crew.js'
 
 import { peopleNamed } from './personName.js'
@@ -134,6 +135,8 @@ export interface SuperTabServiceOptions {
   firstAnswers?: (core: CoreApi, sources: () => SwarmSources) => Pick<FirstAnswers, 'start' | 'stop'>
   /** What types an agent its next thing as its turn ends (superTabs/nextThing.ts), for a spec. */
   nextThings?: (core: CoreApi, sources: () => SwarmSources) => Pick<NextThing, 'start' | 'stop' | 'inbox'>
+  /** What counts the tokens each agent's conversation uses on each task (superTabs/taskTokens.ts), for a spec. */
+  taskTokens?: (core: CoreApi) => Pick<TaskTokens, 'start' | 'stop' | 'looked' | 'read' | 'took'>
 }
 const LOCAL_ONLY = 'An agent speaks to the Swarm through its own computer\'s Harness only, not through another machine.'
 /** What an agent's commands send as the agent: a post or an answer, and a read of another agent's terminal or typing into it.
@@ -212,14 +215,19 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     crewOf((await held().reads.read(project.tabId, project.pmAgentId)).state, project)
   // Who made each verdict by command, read once for the merger and the assigner alike.
   const records = new VerdictRecords(recordedAuthors(path => backend(core, 'GET', path)), Date.now, line => console.warn(line))
+  // What a landed change cost its builder is read of the server as the project's PM, for the comment that says it landed
+  // (taskTokens.ts).
   const merges = (options.githubMerge ?? ((api, held) => new GitHubMerge({ projects: led(api, held), crew: crewOfProject(held), get: github.get,
-    send: github.send, records })))(core, sources)
+    send: github.send, records, costs: readTaskTokens(path => backend(api, 'GET', path)) })))(core, sources)
   // Gives their tasks to their builders (githubAssign.ts), from the crew as the PM reads the Swarm.
   const assigns = (options.githubAssign ?? ((api, held) => {
     // A project's numbers, sent as its PM into the Swarm as the PM reads it (pmNumbers.ts messageOf).
     const numbers = new PmNumbers({ file: join(api.dataDir, 'super-tab-numbers.json'),
       send: numbersSender(async project => (await held().reads.read(project.tabId, project.pmAgentId)).state, (path, body) => backend(api, 'POST', path, body)) })
-    return new GitHubAssign({ projects: led(api, held), crew: crewOfProject(held), get: github.get, send: github.send, records, numbers,
+    return new GitHubAssign({ projects: led(api, held), crew: crewOfProject(held),
+      // The Swarm's projects as its PM's person reads it, read by what changed, as every Swarm read is: the PM reads only its own.
+      repositories: async project => swarmRepositories((await held().reads.read(project.tabId)).state),
+      get: github.get, send: github.send, records, numbers,
       pmRunning: async project => pmRunsHere((await held().feed.current(60_000)).roster, project, id => !!api.agents.byAgent(id)) })
   }))(core, sources)
   // What this computer's person's agents shipped, read from GitHub with their own gh and told to the leaderboard (shipping.ts).
@@ -242,6 +250,18 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
       command: { type: 'message.send', conversationId: agent.chat, text, replyTo: null, recipientIds: [] } }),
     file: join(api.dataDir, 'super-tab-first-answers.json'),
   })))(core, sources)
+  // What each of this person's agents' conversations used on each task (taskTokens.ts), counted here, where a task's boundaries
+  // are seen, and kept by the Swarm's server for the project's members. The count is the core's last reading of the agent's
+  // conversation (memory only); a row goes to the server as the agent it is of, as its verdicts' records do.
+  const taskTokens = (options.taskTokens ?? (api => new TaskTokens({
+    onEnd: listener => api.turns.onEnd(listener),
+    count: async harnessId => {
+      const session = api.agents.byAgent(harnessId)
+      return (session ? await api.usage?.(session) : null)?.models ?? null
+    },
+    send: (agent, row) => backend(api, 'POST', `/api/super-tabs/${agent.tabId}/task-tokens?asAgentId=${agent.agentId}`, row),
+    file: join(api.dataDir, 'super-tab-task-tokens.json'),
+  })))(core)
   // An agent's next thing, typed as its turn ends (nextThing.ts): its next task while it holds none of its own, read from its
   // project's repository with this person's gh, typed as Harness tells it GitHub news, and said to its person once it was given
   // the same three times.
@@ -261,6 +281,8 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     team: async agent => new Set(list((await held().reads.read(agent.tabId, agent.agentId)).state.agents)
       .map(a => labelOf(String(a.displayName ?? a.name ?? a.id)))),
     named: (agent, repo, comments) => records.named({ repo, pm: '', tabId: agent.tabId, pmAgentId: agent.agentId, projectId: '' }, comments),
+    // What each look found the agent with says which task its turns' tokens were for.
+    looked: (agent, hands) => { void taskTokens.looked(agent, hands) },
   })))(core, sources)
   const wake = () => {
     const machine = core.daemon.machineId()
@@ -273,6 +295,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     assigns.start()
     shipping.start()
     firstAnswers.start()
+    taskTokens.start()
     nextThings.start()
     return host
   }
@@ -292,7 +315,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   const tokens = (options.githubTokens ?? (api => new GitHubTokenRefresher(api, sources)))(core)
   // The server's word that one of this machine's Swarms changed, heard while no host runs (Amon, #3215).
   let hostWake: (() => void) | null = null
-  const disconnect = () => { hostWake?.(); hostWake = null; preparations.clear(); claudeSignIns.stop(); host?.stop(); host = null; mentions.stop(); merges.stop(); assigns.stop(); shipping.stop(); firstAnswers.stop(); nextThings.stop(); held = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null; tokens.stop() }
+  const disconnect = () => { hostWake?.(); hostWake = null; preparations.clear(); claudeSignIns.stop(); host?.stop(); host = null; mentions.stop(); merges.stop(); assigns.stop(); shipping.stop(); firstAnswers.stop(); nextThings.stop(); taskTokens.stop(); held = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null; tokens.stop() }
   const port = {
     connected: () => {
       tokens.start()
@@ -518,12 +541,21 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           // A cut is the same cut whatever its words or size: sent again with other words, it joins the one that runs.
           const same = JSON.stringify([agentId, verdict ? { ...verdict, repository: resolved } : claim ? { ...claim, repository: resolved } : sameCut({ ...piece!, repository: resolved })])
           const deps = { get: github.get, send: github.send, login: loginOf, record }
-          const made = commands.get(same) ?? (verdict ? postVerdict(deps, builder, verdict)
+          const running = commands.get(same)
+          const made = running ?? (verdict ? postVerdict(deps, builder, verdict)
             : claim ? takeTask(deps, builder, claim)
             : cuts.run(agentId, () => splitTask(deps, builder, piece!)))
             .finally(() => commands.delete(same))
           commands.set(same, made)
-          return { ok: true, value: await made }
+          const value = await made
+          // A verdict it posted is a boundary of its reader's work, and a task it took the start of its builder's: its tokens are
+          // counted by them (taskTokens.ts). Told once, by the call that made it, and never for a command that found it made already.
+          if (!running) {
+            const counted = { tabId: String(payload.tabId), agentId, harnessId: agent.harnessId }
+            if (verdict && object(value).posted === true) void taskTokens.read(counted, repositories.get(asked)!.project, verdict.number)
+            if (claim && object(value).taken === true) void taskTokens.took(counted)
+          }
+          return { ok: true, value }
         }
         // A Lead's terminal read or typing (`screen`, `type`): the backend answers only the agent that asked.
         if (payload.action === 'terminalResult') {

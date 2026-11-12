@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart' show immutable, listEquals, setEquals;
 import '../core/fuzzy_match.dart';
 import '../core/local_key_value_store.dart';
 import '../core/models.dart';
+import '../super_tabs/swarm_name.dart';
 import '../widgets/engine_identity.dart';
 import 'app_state.dart';
 import 'harness_placement.dart';
@@ -201,7 +202,7 @@ class SwarmNavigationHistory {
       app.focusedPaneId,
       for (final swarm in app.swarms) ...[
         swarm.id,
-        swarm.name,
+        _shownName(app, swarm),
         swarm.kind,
         for (final pane in swarm.panes)
           (
@@ -530,6 +531,10 @@ class SwarmSearchSelection {
   final List<SwarmDestination> agents;
 }
 
+/// [swarm]'s name in the palette and the menus: a Swarm's tab as [swarmTabShownName] names it.
+String _shownName(AppNotifier app, Swarm swarm) =>
+    swarmTabShownName(app, swarm) ?? swarm.name;
+
 List<Object?> _catalogPresentation(
   AppNotifier app,
   List<SavedSwarmProject> projects, {
@@ -541,7 +546,7 @@ List<Object?> _catalogPresentation(
   ...projects,
   for (final swarm in app.swarms) ...[
     swarm.id,
-    swarm.name,
+    _shownName(app, swarm),
     swarm.kind,
     for (final pane in swarm.panes)
       (
@@ -684,13 +689,17 @@ class SwarmLocationCatalog {
           (machine.key, agent.id): agent,
     };
     return _entries = List.unmodifiable([
-      for (final swarm in app.swarms) ...[
-        _swarm(app, swarm),
+      // Each tab's name worked out once, for its row and every pane's.
+      for (final (swarm, name) in [
+        for (final swarm in app.swarms) (swarm, _shownName(app, swarm)),
+      ]) ...[
+        _swarm(app, swarm, name),
         for (final pane in swarm.panes)
           if (pane.agentId != null)
             _location(
               app,
               swarm,
+              name,
               pane,
               agents[(pane.machineId, pane.agentId!)],
             ),
@@ -698,18 +707,18 @@ class SwarmLocationCatalog {
     ]);
   }
 
-  SwarmDestination _swarm(AppNotifier app, Swarm swarm) {
+  SwarmDestination _swarm(AppNotifier app, Swarm swarm, String name) {
     final machineLabel = _swarmMachineLabel(app, [
       for (final pane in swarm.panes)
         if (pane.agentId != null) pane.machineId,
     ]);
     return SwarmDestination(
       id: swarmDestinationId(swarm.id),
-      title: swarm.name,
+      title: name,
       detail: _agentCountLabel(swarm.panes.map((pane) => pane.agentId)),
       machineLabel: machineLabel,
       swarmId: swarm.id,
-      swarmName: swarm.name,
+      swarmName: name,
       isStore: swarm.isStore,
       current: swarm.id == app.activeSwarmId,
       searchFields: [machineLabel],
@@ -719,6 +728,7 @@ class SwarmLocationCatalog {
   SwarmDestination _location(
     AppNotifier app,
     Swarm swarm,
+    String swarmName,
     TerminalPane pane,
     Agent? agent,
   ) {
@@ -748,7 +758,7 @@ class SwarmLocationCatalog {
         leading: machine?.nodeOnline == false ? 'Offline' : null,
       ),
       swarmId: swarm.id,
-      swarmName: swarm.name,
+      swarmName: swarmName,
       paneId: pane.id,
       machineId: pane.machineId,
       machineLabel: machineLabel,
@@ -765,7 +775,7 @@ class SwarmLocationCatalog {
         project?.cwd,
         engine,
         label,
-        swarm.name,
+        swarmName,
       ],
       titleFields: agent?.title == null ? 1 : 2,
     );
@@ -1281,13 +1291,27 @@ String _swarmMachineLabel(AppNotifier app, Iterable<String> machineIds) {
   return app.stateOf(id)?.machine.displayName ?? id;
 }
 
+/// The tab a closed agent was in, as [_shownName] names it while the tab is open; else as it was named then.
+String _closedAgentSwarm(AppNotifier app, ClosedAgent entry) =>
+    switch (app.swarms.where((s) => s.id == entry.swarmId).firstOrNull) {
+      final tab? => _shownName(app, tab),
+      null => entry.swarmName,
+    };
+
 List<SwarmDestination> closedWorkDestinations(AppNotifier app) => [
   for (final entry in app.closedHistory)
     if (entry is ClosedSwarm)
       SwarmDestination(
         id: entry.historyId,
         closedId: entry.historyId,
-        title: entry.name,
+        title: switch (entry.superTabId) {
+          final id? when entry.kind == 'superTab' => swarmShownName(
+            app,
+            id,
+            entry.name,
+          ),
+          _ => entry.name,
+        },
         engine: entry.engine,
         isStore: entry.kind == 'store',
         members: {
@@ -1309,7 +1333,8 @@ List<SwarmDestination> closedWorkDestinations(AppNotifier app) => [
         id: entry.historyId,
         closedId: entry.historyId,
         title: entry.name,
-        detail: '${entry.machineName} · ${entry.swarmName} · Recently closed',
+        detail:
+            '${entry.machineName} · ${_closedAgentSwarm(app, entry)} · Recently closed',
         swarmId: null,
         machineId: entry.machineId,
         machineLabel:
@@ -1318,7 +1343,11 @@ List<SwarmDestination> closedWorkDestinations(AppNotifier app) => [
         agentId: entry.agentId,
         engine: entry.engine,
         current: false,
-        searchFields: [entry.machineName, entry.swarmName, entry.engine],
+        searchFields: [
+          entry.machineName,
+          _closedAgentSwarm(app, entry),
+          entry.engine,
+        ],
       ),
 ];
 
@@ -1375,7 +1404,7 @@ List<SwarmDestination> swarmDestinations(
     result.add(
       SwarmDestination(
         id: swarmDestinationId(swarm.id),
-        title: swarm.name,
+        title: _shownName(app, swarm),
         engine: panes.length == 1
             ? agents[agentDestinationId(
                         panes.single.machineId,

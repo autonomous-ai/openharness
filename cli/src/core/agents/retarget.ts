@@ -26,10 +26,9 @@ import { parseRuntimeProfile } from '../../lib/runtimeProfileWire.js'
 import type { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
 import { canRestart, restartTargetOf } from '../../lib/terminalBackend.js'
 import { launchContract } from '../../engines/launches.js'
-import { moveCodexConversation } from '../../engines/codex/providerMove.js'
+import type { MoveConversation } from '../../engines/facets/providerMove.js'
 import { engineBin } from '../../lib/engineBin.js'
 import { sessionCodexHome } from '../../lib/engineHomes.js'
-import { windowsEngineArgv } from '../../lib/windows/launch.js'
 import type { TerminalBackendCoordinator } from '../../lib/terminalBackendCoordinator.js'
 import { terminalRouteKey } from '../../lib/terminalRuntime.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
@@ -71,12 +70,14 @@ export interface RetargetDeps {
   /** The Swarm role of an agent its person attached, read before it is relaunched (superTabs/inCore/adoption.ts). Absent while the
    *  Swarm is off. */
   adoptSwarmSkill?: AdoptSwarmSkill
+  /** Forks a conversation for its new provider, in its engine's worker (core/engines/providerMoves.ts); absent, none is. */
+  moveConversation?: MoveConversation
 }
 
 export function createAgentRetargeter({
   sessionTurnOpen, purgeBusy, terminals, registry, runtimeProfiles, launchOverridesDeps, acquireTerminalControl,
   relaunchOverrides, downgradedPermission, agentReconciler, restartJobs, paneSwapDeps, liveBypassPermission,
-  announceSession, refreshGridAssignment, opencodeDb, noBackendCode = 'TMUX_UNAVAILABLE', adoptSwarmSkill,
+  announceSession, refreshGridAssignment, opencodeDb, noBackendCode = 'TMUX_UNAVAILABLE', adoptSwarmSkill, moveConversation,
 }: RetargetDeps) {
   const authority = createLaunchAuthority({ byAgent: id => registry.byAgent(id),
     revision: id => restartJobs.revision(id), cancelled: () => false })
@@ -318,12 +319,12 @@ export function createAgentRetargeter({
         retargetPermission.bypassPermission === true,
         { ...paneSwapDeps(session, place, !grid && !backend.clearEnv ? { ...built.overrides, clearPaneEnv: gridEnvVarNames(session.engine) } : built.overrides,
           retargetPermission.permissionMode ?? null, dispatchCurrent), isCurrent: dispatchCurrent,
-          ...(movesProvider ? { prepareFork: () => {
+          ...(movesProvider && moveConversation ? { prepareFork: () => {
             const env: NodeJS.ProcessEnv = { ...process.env, CODEX_HOME: sessionCodexHome(session), ...built.overrides.env, ...built.overrides.native?.environment }
             if (!grid) for (const name of gridEnvVarNames(session.engine)) delete env[name]
-            return moveCodexConversation({
-              sessionId: session.sessionId, toGrid: !!grid, args: built.overrides.extraArgs ?? [], env,
-              argv: (codexArgs) => windowsEngineArgv(session.engine, [built.overrides.native?.executable?.command ?? engineBin(session.engine), ...codexArgs]),
+            return moveConversation(session.engine, {
+              sessionId: session.sessionId, toGrid: !!grid, args: [...built.overrides.extraArgs ?? []], env,
+              command: built.overrides.native?.executable?.command ?? engineBin(session.engine),
               ...(session.cwd ? { cwd: session.cwd } : {}),
             })
           } } : {}) },
