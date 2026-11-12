@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { transcriptOf, processSessionOf } from '../../engines/identities.js'
 import { loadEngine } from '../../engines/inProcess.js'
+import { HERMES_SANDBOX_HOLD } from '../../engines/hermes/contract.js'
 import { OPENCLAW_STATES } from '../../engines/openclaw/contract.js'
 import { OpenclawLive } from '../../engines/openclaw/live.js'
 import { continuationOf } from '../../engines/sessionFiles.js'
@@ -837,6 +838,165 @@ describe('binding a running process to its session', () => {
       await run.binding.bindObservedAgent(observed())
       expect(run.deps.registry.register).toHaveBeenCalledTimes(1)
       expect(run.deps.attachSession).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('a Hermes followed from its terminal record', () => {
+    const follow = vi.fn<NonNullable<BindDeps['hermesTerminal']>['follow']>()
+    const fellBack = vi.fn<NonNullable<BindDeps['hermesTerminal']>['fellBack']>()
+    const hermes = (over: Partial<DiscoveredTerminalAgent> = {}) => observed({ engine: 'hermes', ...over })
+    /** A binding with the record's judgment, and the Hermes row its pane holds. */
+    const withRecord = (row: Partial<RegisteredSession> = {}) => {
+      const run = setup({ hermesTerminal: { follow, fellBack } })
+      const entry = agent({ engine: 'hermes', sessionId: '', ...row })
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(entry)
+      vi.mocked(run.deps.registry.register).mockImplementation(input => ({ entry: agent({ engine: 'hermes', sessionId: input.sessionId }), ...meta({ isNew: true }) }) as never)
+      return { run, entry }
+    }
+    const said = (): string[] => vi.mocked(console.log).mock.calls.map(([line]) => String(line))
+    beforeEach(() => { follow.mockReset().mockResolvedValue('none'); fellBack.mockReset() })
+
+    it('holds a Hermes whose sandbox it cannot see, once, and asks nothing', async () => {
+      const { run, entry } = withRecord()
+      await run.binding.bindObservedAgent(hermes({ sandbox: 'unseen' }))
+      await run.binding.bindObservedAgent(hermes({ sandbox: 'unseen' }))
+      expect(run.deps.registry.setIdentityHold).toHaveBeenCalledWith('a1', HERMES_SANDBOX_HOLD)
+      expect(entry.identityHold).toBe(HERMES_SANDBOX_HOLD)
+      expect(run.deps.announceSession).toHaveBeenCalledExactlyOnceWith(entry)
+      expect(said()).toEqual([`[discovery] a1 binding held · ${HERMES_SANDBOX_HOLD}`])
+      expect(follow).not.toHaveBeenCalled()
+      expect(findLiveSession).not.toHaveBeenCalled()
+      expect(run.deps.registry.register).not.toHaveBeenCalled()
+    })
+
+    it('lets the hold go when the sandbox is seen again, and binds on the next pass', async () => {
+      const { run, entry } = withRecord({ identityHold: HERMES_SANDBOX_HOLD })
+      await run.binding.bindObservedAgent(hermes({ sandbox: { cwd: '/work' } }))
+      expect(entry).not.toHaveProperty('identityHold')
+      expect(run.deps.announceSession).toHaveBeenCalledExactlyOnceWith(entry)
+      expect(follow).not.toHaveBeenCalled()
+      follow.mockResolvedValue({ sessionId: 'S' })
+      await run.binding.bindObservedAgent(hermes({ sandbox: { cwd: '/work' } }))
+      expect(follow).toHaveBeenCalledWith(entry, expect.objectContaining({ sandboxed: true }), expect.anything())
+      expect(run.deps.registry.register).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'S', source: 'hermes-terminal' }))
+    })
+
+    it('binds an unbound Hermes to the session its record names, without the repair', async () => {
+      const { run, entry } = withRecord()
+      follow.mockResolvedValue({ sessionId: 'S', hermesHome: '/data/agents/a1/.hermes' })
+      const seen = hermes({ cwd: '/data/work/p1' })
+      await run.binding.bindObservedAgent(seen)
+      expect(follow).toHaveBeenCalledExactlyOnceWith(entry, { ...seen, sandboxed: false },
+        { current: expect.any(Function), mayClaim: expect.any(Function), hold: expect.any(Function) })
+      expect(findLiveSession).not.toHaveBeenCalled()
+      expect(run.deps.registry.register).toHaveBeenCalledWith(expect.objectContaining({ engine: 'hermes', sessionId: 'S', hermesHome: '/data/agents/a1/.hermes',
+        cwd: '/data/work/p1', source: 'hermes-terminal', hookEvent: 'HermesTerminal', runtimes: seen.runtimes,
+        primaryRuntimeKey: seen.primaryRuntimeKey, processIdentity: seen.processIdentity }))
+      expect(vi.mocked(run.deps.registry.register).mock.calls.at(-1)![0]).not.toHaveProperty('hermesHomeDerived')
+      expect(run.deps.attachSession).toHaveBeenCalledOnce()
+      expect(said()).toEqual(['[discovery] bound hermes session S via tmux:%0'])
+      expect(fellBack).not.toHaveBeenCalled()
+    })
+
+    it('marks the home it binds with when Harness worked that home out', async () => {
+      const { run } = withRecord()
+      follow.mockResolvedValue({ sessionId: 'S', hermesHome: '/data/agents/a1/.hermes' })
+      await run.binding.bindObservedAgent(hermes({ hermesHomeDerived: true }))
+      expect(run.deps.registry.register).toHaveBeenCalledWith(expect.objectContaining({ hermesHome: '/data/agents/a1/.hermes', hermesHomeDerived: true }))
+      // No home given: no mark of its own.
+      follow.mockResolvedValue({ sessionId: 'T' })
+      await run.binding.bindObservedAgent(hermes({ hermesHomeDerived: true }))
+      expect(vi.mocked(run.deps.registry.register).mock.calls.at(-1)![0]).not.toHaveProperty('hermesHome')
+      expect(vi.mocked(run.deps.registry.register).mock.calls.at(-1)![0]).not.toHaveProperty('hermesHomeDerived')
+    })
+
+    it('tells the agent the session was taken from', async () => {
+      const { run } = withRecord()
+      const previous = agent({ agentId: 'old', engine: 'hermes', sessionId: 'S', processIdentity: { pid: 1, startMarker: '2026-10-04T09:00:00Z' } } as Partial<RegisteredSession>)
+      run.bySession.set('S', previous)
+      follow.mockResolvedValue({ sessionId: 'S' })
+      await run.binding.bindObservedAgent(hermes())
+      expect(run.deps.input.forget).toHaveBeenCalledWith('old')
+      expect(run.deps.deviceInput.forget).toHaveBeenCalledWith('old')
+      expect(run.deps.announceSession).toHaveBeenCalledWith(previous)
+    })
+
+    it('switches a bound Hermes through the rotation, and attaches the new session', async () => {
+      const { run } = withRecord({ sessionId: 'old' })
+      follow.mockResolvedValue({ sessionId: 'S' })
+      const seen = hermes()
+      await run.binding.bindObservedAgent(seen)
+      expect(said()).toEqual(['[discovery] a1 switched hermes session old → S'])
+      expect(run.deps.registry.register).toHaveBeenCalledExactlyOnceWith({ engine: 'hermes', sessionId: 'S', cwd: '/work', source: 'hermes-terminal',
+        runtimes: seen.runtimes, primaryRuntimeKey: seen.primaryRuntimeKey, processIdentity: seen.processIdentity, hookEvent: 'HermesTerminal' })
+      expect(run.deps.attachSession).toHaveBeenCalledOnce()
+      expect(findLiveSession).not.toHaveBeenCalled()
+      // A rotation the registry refused, or one that was not new, attaches nothing more.
+      vi.mocked(run.deps.registry.register).mockReturnValueOnce(null).mockReturnValueOnce({ entry: agent({ engine: 'hermes', sessionId: 'S' }), ...meta() } as never)
+      await run.binding.bindObservedAgent(seen)
+      await run.binding.bindObservedAgent(seen)
+      expect(run.deps.attachSession).toHaveBeenCalledOnce()
+    })
+
+    it('confirms a resumed Hermes without a switch', async () => {
+      const { run } = withRecord({ sessionId: 'S', resumeOnly: true, lastHookAt: 0 })
+      vi.mocked(run.deps.registry.register).mockReturnValue({ entry: agent({ engine: 'hermes', sessionId: 'S' }), ...meta() } as never)
+      follow.mockResolvedValue({ sessionId: 'S' })
+      await run.binding.bindObservedAgent(hermes())
+      expect(run.deps.registry.register).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: 'S', source: 'hermes-terminal', hookEvent: 'HermesTerminal' }))
+      expect(said()).toEqual([])
+      expect(run.deps.attachSession).not.toHaveBeenCalled()
+    })
+
+    it('does nothing while a record waits', async () => {
+      for (const sessionId of ['', 'old']) {
+        const { run } = withRecord({ sessionId })
+        follow.mockResolvedValue('wait')
+        await run.binding.bindObservedAgent(hermes())
+        expect(run.deps.registry.register).not.toHaveBeenCalled()
+      }
+      expect(findLiveSession).not.toHaveBeenCalled()
+    })
+
+    it('drops what it was told when the pane changed hands meanwhile', async () => {
+      const { run } = withRecord()
+      follow.mockImplementation(async () => {
+        vi.mocked(run.deps.registry.byProcess).mockReturnValue(agent({ agentId: 'other', engine: 'hermes', sessionId: '', cwd: '/elsewhere' }))
+        return { sessionId: 'S' }
+      })
+      await run.binding.bindObservedAgent(hermes())
+      expect(run.deps.registry.register).not.toHaveBeenCalled()
+      expect(findLiveSession).not.toHaveBeenCalled()
+    })
+
+    it('falls back to the repair with the folder the sandbox names, binds the daemon\'s path of it, and says so once', async () => {
+      const { run } = withRecord()
+      vi.mocked(findLiveSession).mockResolvedValueOnce({ sessionId: 'found' } as never)
+      await run.binding.bindObservedAgent(hermes({ cwd: '/data/work/p1', sandbox: { cwd: '/work' } }))
+      expect(findLiveSession).toHaveBeenCalledWith('hermes', '/work', expect.any(Number), expect.anything())
+      expect(run.deps.registry.register).toHaveBeenCalledWith(expect.objectContaining({ cwd: '/data/work/p1', source: 'process-repair' }))
+      expect(fellBack).toHaveBeenCalledExactlyOnceWith('a1')
+      // Found nothing, or bound nothing new: nothing said.
+      await run.binding.bindObservedAgent(hermes())
+      vi.mocked(findLiveSession).mockResolvedValueOnce({ sessionId: 'again' } as never)
+      vi.mocked(run.deps.registry.register).mockReturnValueOnce({ entry: agent({ engine: 'hermes', sessionId: 'again' }), ...meta() } as never)
+      await run.binding.bindObservedAgent(hermes())
+      expect(fellBack).toHaveBeenCalledOnce()
+    })
+
+    it('leaves the other engines and a binding with no hermesTerminal as they were', async () => {
+      const { run } = withRecord({ engine: 'claude' })
+      vi.mocked(findLiveSession).mockResolvedValueOnce({ sessionId: 'found', transcriptPath: '/t/found.jsonl' } as never)
+      await run.binding.bindObservedAgent(observed())
+      expect(run.deps.registry.register).toHaveBeenCalledWith(expect.objectContaining({ engine: 'claude', source: 'process-repair' }))
+      expect(follow).not.toHaveBeenCalled()
+      expect(fellBack).not.toHaveBeenCalled()
+      // A Hermes in a sandbox it cannot see, with no record's judgment, is left to the repair as before.
+      const plain = setup()
+      vi.mocked(plain.deps.registry.byProcess).mockReturnValue(agent({ engine: 'hermes', sessionId: '' }))
+      await plain.binding.bindObservedAgent(hermes({ sandbox: 'unseen' }))
+      expect(plain.deps.registry.setIdentityHold).not.toHaveBeenCalled()
+      expect(findLiveSession).toHaveBeenLastCalledWith('hermes', '/work', expect.any(Number), expect.anything())
     })
   })
 })
