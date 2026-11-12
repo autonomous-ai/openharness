@@ -15,13 +15,15 @@
  *
  * A row is keyed by the number the work is on (the task's issue until it has a pull request, the pull request after) and
  * goes to the Swarm's server when its work stops (backend superTabs/taskTokens.ts): counts and ids only, never a title or a
- * word. The daemon that lands a change reads its builder's rows and says them in the comment it posts (costLine).
+ * word. The server keeps the last write of a row to arrive, so a row's writes go one at a time (IN_FLIGHT_MS). The daemon
+ * that lands a change on a private repository reads its builder's rows and says them in the comment it posts (costLine).
  *
  * The count is the core's last reading (CoreApi.usage), up to 15 seconds behind the transcript: what a mark misses, the next
  * one counts. One it does not know is unknown, never zero: no mark is made.
  */
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { usageModelName } from '../lib/agentUsageWire.js'
 import { labelOf } from './assign/crew.js'
 import { retryIn } from './githubRest.js'
 import { identifier, object, SuperTabHostError } from './wire.js'
@@ -52,8 +54,12 @@ const MAX_MODELS = 16, OTHER = 'other'
 const MAX_AGENTS = 200, MAX_ROWS = 100
 /** Issues and pull requests one read of the server asks about (backend MAX_TASK_NUMBERS). */
 export const COST_NUMBERS = 20
-/** A model's name as the comment may show it: no slash, colon or at sign, so nothing in it reads as a link or a mention. */
-const PLAIN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
+/** How long a write that has not come back may still reach the server, which keeps the last write of a row to arrive (its
+ *  review: a late write with earlier totals replaces later ones). The backend call gives up at 25 seconds (core/gatewayLink.ts),
+ *  and the server may still finish a write it had read by then. So a row is written again only once the server took its last
+ *  write, or this long after that write went, by this daemon or by one started meanwhile (anh Dee's call, 12 November: one
+ *  write in flight for a row). */
+const IN_FLIGHT_MS = 60_000
 
 const all = (model: Model): number => PARTS.reduce((total, part) => total + model[part], 0)
 const sum = (counts: Counts): number => Object.values(counts).reduce((total, model) => total + all(model), 0)
@@ -102,13 +108,15 @@ function countsOf(value: unknown): Counts | null {
 const asCounts = (tokens: TaskRow['tokens']): Counts => Object.fromEntries(tokens.map(({ model, ...of }) => [model, of]))
 const asTokens = (counts: Counts): TaskRow['tokens'] => Object.entries(counts).map(([model, of]) => ({ model, ...of }))
 
-/** A row's models as they are read back from a file or the server: each named, with its counts; null when one is not. */
+/** A row's models as they are read back from a file or the server: each named as an engine names one (lib/agentUsageWire.ts),
+ *  with its counts; null when one is not. Another daemon wrote it, and the comment shows its name as code: no backtick or space
+ *  in it can end the code. */
 function tokensOf(value: unknown): TaskRow['tokens'] | null {
   if (!Array.isArray(value)) return null
   const tokens: TaskRow['tokens'] = []
   for (const kept of value) {
     const of = modelOf(kept), model = object(kept).model
-    if (!of || typeof model !== 'string' || !model) return null
+    if (!of || typeof model !== 'string' || usageModelName(model) !== model) return null
     tokens.push({ model, ...of })
   }
   return tokens
@@ -120,11 +128,12 @@ const compact = (n: number): string => n >= 999_500 ? `${(n / 1e6).toFixed(1)}M`
 /**
  * The sentence the comment of a landed change gains, from the server's [rows] for the pull request and the tasks it closes:
  * " Built by pip on `claude-sonnet-5-5`: 42 min, 1.2M tokens, 1 fix round." Its builder as the pull request names it
- * ([author]); the model that used the most; the minutes from when its builder's work on it began (it took the task) to [now],
- * the landing; every token its builder's conversation used building and fixing it, cache reads too, as an agent's total is
- * shown; its rounds, which only fixes have: the pushes after it was up for reading. Only the rows of the pull request's own
- * builder count, by the server's name for each row's agent: another agent's row says nothing here. Empty when there is none.
- * On a public repository this is public.
+ * ([author]); the model that used the most, as its engine names it, as code: GitHub links and tags nothing in it (anh Dee's
+ * call, 12 November); the minutes from when its builder's work on it began (it took the task) to [now], the landing; every
+ * token its builder's conversation used building and fixing it, cache reads too, as an agent's total is shown; its rounds,
+ * which only fixes have: the pushes after it was up for reading. Only the rows of the pull request's own builder count, by the
+ * server's name for each row's agent: another agent's row says nothing here. Empty when there is none. Said on a private
+ * repository only (githubMerge.ts).
  */
 export function costLine(rows: readonly ReadRow[], author: string, now: number): string {
   const own = rows.filter(row => row.kind !== 'read' && row.name !== null && labelOf(row.name) === labelOf(author))
@@ -135,7 +144,7 @@ export function costLine(rows: readonly ReadRow[], author: string, now: number):
   const model = Object.keys(models).sort((a, b) => all(models[b]!) - all(models[a]!) || a.localeCompare(b))[0]!
   const minutes = Math.max(1, Math.round((now - Math.min(...own.map(row => row.startedAt))) / 60_000))
   const rounds = own.reduce((count, row) => count + row.rounds, 0)
-  return ` Built by ${author}${PLAIN.test(model) ? ` on \`${model}\`` : ''}: ${minutes} min, ${compact(total)} tokens, ${rounds} fix ${rounds === 1 ? 'round' : 'rounds'}.`
+  return ` Built by ${author} on \`${model}\`: ${minutes} min, ${compact(total)} tokens, ${rounds} fix ${rounds === 1 ? 'round' : 'rounds'}.`
 }
 
 /** The server's rows for a project's issues and pull requests [numbers] (at most COST_NUMBERS), read as the project's PM
@@ -171,8 +180,9 @@ interface Kept {
   /** Its open pull requests as each repository last listed them, each with its head once a look read it. A repository that
    *  is not here was never listed: its pull requests are not new the first time. */
   pulls: Record<string, Record<string, { head: string; draft: boolean } | null>>
-  /** Its rows, by `<repository>#<number> <kind>`: the totals so far, and whether the server has them. */
-  rows: Record<string, { row: TaskRow; sent: boolean }>
+  /** Its rows, by `<repository>#<number> <kind>`: the totals so far, whether the server has them, and when a write of them went
+   *  that the server has not taken. */
+  rows: Record<string, { row: TaskRow; sent: boolean; sending?: number }>
 }
 
 export class TaskTokens {
@@ -233,7 +243,7 @@ export class TaskTokens {
     return this.queued(agent.harnessId, async memory => {
       const kept = this.agent(memory, agent)
       this.give(kept, await this.mark(agent.harnessId, kept), repo, number, 'read', true)
-      await this.flush(kept, key => key === `${repo}#${number} read`)
+      await this.flush(memory, kept, key => key === `${repo}#${number} read`)
       return true
     })
   }
@@ -269,7 +279,7 @@ export class TaskTokens {
       if (opened) kept.began = null
       // The task it still holds is still growing: its row goes once its pull request is up, or it is given back.
       const growing = new Set(hands.filter(hand => hand.held !== null).map(hand => `${hand.repo}#${hand.held} build`))
-      await this.flush(kept, key => !growing.has(key))
+      await this.flush(memory, kept, key => !growing.has(key))
       return true
     })
   }
@@ -301,23 +311,28 @@ export class TaskTokens {
     const kept = agent.rows[key] ?? { row: { repository: repo, number, kind, tokens: [], rounds: 0, startedAt: kind === 'build' ? agent.began ?? now : now, endedAt: now }, sent: false }
     const counts = asCounts(kept.row.tokens)
     add(counts, tokens)
-    // Moved to the end: the rows touched least lately go first when there are too many.
+    // Moved to the end: the rows touched least lately go first when there are too many. It keeps when its last write went, while
+    // the server has not taken that one.
     delete agent.rows[key]
-    agent.rows[key] = { row: { ...kept.row, tokens: asTokens(counts), rounds: kept.row.rounds + (round ? 1 : 0), endedAt: now }, sent: false }
+    agent.rows[key] = { ...kept, row: { ...kept.row, tokens: asTokens(counts), rounds: kept.row.rounds + (round ? 1 : 0), endedAt: now }, sent: false }
     const keys = Object.keys(agent.rows)
     for (const old of keys.slice(0, Math.max(0, keys.length - MAX_ROWS))) delete agent.rows[old]
   }
 
-  /** Writes to the server each row of [agent] it does not have yet, of those [due]. One the server refuses for good (it is not
-   *  a row it takes, or this agent may not write it) is let go, as the same write would be refused again; any other failure
-   *  keeps the rows for the agent's next look, no sooner than the wait, and is said once. */
-  private async flush(agent: Kept, due: (key: string) => boolean): Promise<void> {
+  /** Writes to the server each row of [agent] it does not have yet, of those [due], but one whose last write may still be on
+   *  its way (IN_FLIGHT_MS): that write is kept in [memory]'s file as it goes. One the server refuses for good (it is not a row
+   *  it takes, or this agent may not write it) is let go, as the same write would be refused again; any other failure keeps
+   *  the rows for the agent's next look, no sooner than the wait, and is said once. */
+  private async flush(memory: Record<string, Kept>, agent: Kept, due: (key: string) => boolean): Promise<void> {
     if (this.now() < this.againAt) return
     for (const [key, kept] of Object.entries(agent.rows)) {
-      if (kept.sent || !due(key)) continue
+      if (kept.sent || !due(key) || (kept.sending !== undefined && this.now() < kept.sending + IN_FLIGHT_MS)) continue
+      kept.sending = this.now()
+      this.save(memory)
       try {
         await this.deps.send({ tabId: agent.tabId, agentId: agent.agentId }, kept.row)
         kept.sent = true
+        delete kept.sending
         if (this.misses) this.log('[super-tab] tasks\' tokens are kept by the server again')
         this.misses = 0
       } catch (error) {
@@ -360,8 +375,10 @@ export class TaskTokens {
             [number, typeof object(seen).head === 'string' ? { head: object(seen).head as string, draft: object(seen).draft === true } : null]))
         }
         for (const [key, saved] of Object.entries(object(agent.rows))) {
-          const row = rowOf(object(saved).row), repository = object(object(saved).row).repository
-          if (row && typeof repository === 'string') rows[key] = { row: { repository, ...row }, sent: object(saved).sent === true }
+          const row = rowOf(object(saved).row), repository = object(object(saved).row).repository, sending = object(saved).sending
+          if (row && typeof repository === 'string') {
+            rows[key] = { row: { repository, ...row }, sent: object(saved).sent === true, ...typeof sending === 'number' ? { sending } : {} }
+          }
         }
         kept[id] = { tabId: agent.tabId, agentId: agent.agentId, at: agent.at, from, carried, began: typeof agent.began === 'number' ? agent.began : null, pulls, rows }
       }

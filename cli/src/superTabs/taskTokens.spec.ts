@@ -278,7 +278,8 @@ describe('tokens for a task, counted on its builder\'s own computer (taskTokens.
     await f.ledger.looked(PIP, [hand(null, { 30: 'bbb' })])
     expect(f.send).toHaveBeenCalledTimes(1)
     expect(f.log.mock.calls).toEqual([['[super-tab] tasks\' tokens are not kept by the server: they wait here · TOKENS_UNSENT NOT_FOUND']])
-    // 30 seconds on it is tried again, and fails again: the next try is a minute on. Nothing more is said.
+    // 30 seconds on it is tried again, with the row whose write did not go yet (the other waits out its minute), and fails
+    // again: the next try is a minute on. Nothing more is said.
     f.state.now += 30_000
     f.state.down = new Error('socket hang up')
     await f.ledger.looked(PIP, [hand(null, { 30: 'bbb' })])
@@ -295,6 +296,55 @@ describe('tokens for a task, counted on its builder\'s own computer (taskTokens.
     await f.ledger.looked(PIP, [hand(null, { 30: 'bbb' })])
     expect(f.send).toHaveBeenCalledTimes(4)
     expect(f.log).toHaveBeenCalledTimes(2)
+  })
+
+  // The server keeps the last write of a row to arrive (anh Dee's call, 12 November: the daemon keeps them in order). A write that
+  // did not come back may still be on its way: its row is written again only once that one can no longer arrive.
+  it('writes a row one write at a time: one not answered keeps its row a minute, from a later look and from a daemon started meanwhile', async () => {
+    const f = setup()
+    await f.ledger.looked(PIP, [hand(null)])
+    await f.turn(1_000)
+    // Its draft is up and the row's write goes; the daemon restarts before the server answers.
+    let going!: () => void
+    const gone = new Promise<void>(resolve => { going = resolve })
+    f.send.mockImplementationOnce(() => { going(); return new Promise<void>(() => {}) })
+    void f.ledger.looked(PIP, [hand(null, { 30: 'a-draft' })])
+    await gone
+    const again = f.make()
+    await again.looked(PIP, [hand(null, { 30: 'a-draft' })])
+    expect(f.send).toHaveBeenCalledTimes(1)
+    // A minute after it went, it is written, and a row answered is written again at its next change at once.
+    f.state.now += MIN
+    await again.looked(PIP, [hand(null, { 30: 'a-draft' })])
+    f.state.counts['h-pip'] = of(1_300)
+    await again.ended('h-pip')
+    await again.looked(PIP, [hand(null, { 30: 'b-draft' })])
+    expect(f.rows()).toEqual([`tab/pip acme/app#30 build ${SONNET}:1000 rounds=0`, `tab/pip acme/app#30 build ${SONNET}:1300 rounds=0`])
+    // In one daemon too: a write that failed with no word from the server keeps its row the minute, though the others go at 30 seconds.
+    const g = setup()
+    await g.ledger.looked(PIP, [hand(null)])
+    await g.turn(1_000)
+    g.state.down = new SuperTabHostError('BACKEND_TIMEOUT', 'The Harness backend did not answer within 20s.', 504)
+    await g.ledger.looked(PIP, [hand(null, { 30: 'a-draft' })])
+    g.state.down = null
+    g.state.now += 30_000
+    // More building on that draft goes to its row, which still waits; a new pull request's row goes at once.
+    await g.turn(10, PIP, 0)
+    await g.ledger.looked(PIP, [hand(null, { 30: 'b-draft' })])
+    await g.turn(5, PIP, 0)
+    await g.ledger.looked(PIP, [hand(null, { 30: 'b-draft', 31: 'new' })])
+    expect(g.rows()).toEqual([`tab/pip acme/app#31 build ${SONNET}:5 rounds=0`])
+    // Its minute over, it goes, and fails with no word again: the next minute counts from that write, whatever the wait says.
+    g.state.now += 30_000
+    g.state.down = new SuperTabHostError('BACKEND_TIMEOUT', 'The Harness backend did not answer within 20s.', 504)
+    await g.ledger.looked(PIP, [hand(null, { 30: 'b-draft', 31: 'new' })])
+    g.state.down = null
+    g.state.now += 30_000
+    await g.ledger.looked(PIP, [hand(null, { 30: 'b-draft', 31: 'new' })])
+    expect(g.send).toHaveBeenCalledTimes(3)
+    g.state.now += 30_000
+    await g.ledger.looked(PIP, [hand(null, { 30: 'b-draft', 31: 'new' })])
+    expect(g.rows().slice(1)).toEqual([`tab/pip acme/app#30 build ${SONNET}:1010 rounds=0`])
   })
 
   it('lets go of a row the server refuses for good, says which, and writes the others', async () => {
@@ -342,7 +392,8 @@ describe('tokens for a task, counted on its builder\'s own computer (taskTokens.
     writeFileSync(f.file, JSON.stringify({
       'h-pip': { tabId: 'tab', agentId: 'pip', at: T0, from: of(1_000), carried: of(50), began: 'yesterday',
         pulls: { 'acme/app': { 30: { head: 'aaa', draft: false }, 31: { head: 7 } } },
-        rows: { 'acme/app#30 build': { row, sent: false }, 'acme/app#31 build': { row: { ...row, tokens: [{ model: SONNET, input: -1 }] }, sent: false },
+        // A write said to be on its way at a time that is no number holds nothing.
+        rows: { 'acme/app#30 build': { row, sent: false, sending: String(T0) }, 'acme/app#31 build': { row: { ...row, tokens: [{ model: SONNET, input: -1 }] }, sent: false },
           'acme/app#32 build': { row: { ...row, tokens: 'many' } }, 'acme/app#33 build': { row: { ...row, tokens: [{ ...tokens(1)[0], model: '' }] } },
           'acme/app#34 build': { row: { ...row, repository: 7 } }, 'acme/app#35 build': { row: { ...row, kind: 'review' } } } },
       'h-bad-id': { tabId: 'not an id', agentId: 'x', at: T0, from: null, carried: {} },
@@ -447,10 +498,11 @@ describe('the sentence a landed change\'s comment gains', () => {
     expect(costLine(rows, 'pip', NOW)).toBe(' Built by pip on `claude-sonnet-5-5`: 12 min, 2k tokens, 2 fix rounds.')
   })
 
-  // The name is another daemon's words, posted under this person's login: one that could read as a link or a mention is not said.
-  it('leaves out a model whose name is not a plain one, and names the first of two that used the same', () => {
-    for (const model of ['https://example.com/x', 'owner/model', '@someone', 'a model', 'x'.repeat(65)]) {
-      expect(costLine([row({ tokens: tokens(1_000, model) })], 'pip', NOW), model).toBe(' Built by pip: 42 min, 1k tokens, 0 fix rounds.')
+  // The name is its engine's own text, written by another daemon and posted under this person's login: as code, nothing in it
+  // links or tags (anh Dee's call, 12 November).
+  it('names the model as its engine names it, as code, and the first of two that used the same', () => {
+    for (const model of ['https://example.com/x', 'owner/model', '@someone', 'claude-sonnet-4-5@20250929', 'x'.repeat(120)]) {
+      expect(costLine([row({ tokens: tokens(1_000, model) })], 'pip', NOW), model).toBe(` Built by pip on \`${model}\`: 42 min, 1k tokens, 0 fix rounds.`)
     }
     expect(costLine([row({ tokens: [...tokens(500, 'gpt-5.5'), ...tokens(500, 'claude-opus-5-5')] })], 'pip', NOW)).toContain(' on `claude-opus-5-5`: ')
   })
@@ -461,7 +513,9 @@ describe('the server\'s rows for a landed change', () => {
     const good = { number: 14, kind: 'build', agentId: 'pip', name: 'Pip', tokens: tokens(700), rounds: 0, startedAt: T0, endedAt: T0 + MIN }
     const ask = vi.fn(async (_path: string): Promise<unknown> => ({ rows: [good, { ...good, number: 30, kind: 'fix', name: 7, rounds: 2 },
       { ...good, number: '14' }, { ...good, kind: 'review' }, { ...good, rounds: 1.5 }, { ...good, startedAt: 'today' }, { ...good, endedAt: null },
-      { ...good, tokens: [{ model: SONNET, input: 1 }] }, { ...good, tokens: {} }, 'words', null] }))
+      { ...good, tokens: [{ model: SONNET, input: 1 }] }, { ...good, tokens: {} }, 'words', null,
+      // A model's name no engine gives: one that could end its code in the comment, or one past the server's length.
+      ...['a`b @team `c', 'a model', 'x'.repeat(121), ''].map(model => ({ ...good, tokens: tokens(700, model) }))] }))
     const read = readTaskTokens(ask)
     expect(await read({ tabId: 'tab', repo: 'acme/app', pmAgentId: 'juno' }, [30, 14])).toEqual([
       { number: 14, kind: 'build', name: 'Pip', tokens: tokens(700), rounds: 0, startedAt: T0, endedAt: T0 + MIN },

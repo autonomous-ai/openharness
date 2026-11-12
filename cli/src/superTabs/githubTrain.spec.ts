@@ -259,6 +259,7 @@ describe('the ready pull requests ride a train (githubTrain.ts)', () => {
   // landed, from the rows its builder's daemon wrote (taskTokens.ts). One read of the server for each, and no more comments.
   it('says in each landed change\'s comment what that change cost its builder', async () => {
     const f = setup()
+    f.state.settings = { private: true }
     const first = f.add(4, { body: 'Closes #2' }), second = f.add(5)
     const taken = f.clock.now
     const row = (number: number, kind: ReadRow['kind'], n: number, rounds = 0): ReadRow => ({ number, kind, name: 'Pip', rounds, startedAt: taken, endedAt: taken,
@@ -279,6 +280,7 @@ describe('the ready pull requests ride a train (githubTrain.ts)', () => {
 
   it('waits once, not once for each rider, on a server that does not give the costs', async () => {
     const f = setup()
+    f.state.settings = { private: true }
     f.add(4)
     f.add(5)
     f.costs.mockRejectedValue(new Error('the server did not answer'))
@@ -287,6 +289,20 @@ describe('the ready pull requests ride a train (githubTrain.ts)', () => {
     expect(f.said(4)).toEqual([expect.stringMatching(/landed in #900 as \w{7}\. READ-OK on \w{7} by Juno, checks green\.$/)])
     expect(f.said(5)).toEqual([expect.stringMatching(/landed in #900 as \w{7}\. READ-OK on \w{7} by Juno, checks green\.$/)])
     expect(f.costs).toHaveBeenCalledTimes(1)
+  })
+
+  // anh Dee's call, 12 November: what a change cost its builder is said on a private repository only.
+  it('says nothing of what a rider cost on a public repository, and asks the server nothing for it', async () => {
+    const f = setup()
+    f.state.settings = { private: false }
+    f.add(4)
+    f.add(5)
+    f.costs.mockResolvedValue([{ number: 4, kind: 'build', name: 'Pip', rounds: 0, startedAt: f.clock.now, endedAt: f.clock.now,
+      tokens: [{ model: 'claude-sonnet-5-5', input: 9_000, output: 0, cacheRead: 0, cacheWrite: 0 }] }])
+    await f.settle()
+    await f.ends(PASSED)
+    for (const rider of [4, 5]) expect(f.said(rider)).toEqual([expect.stringMatching(/landed in #900 as \w{7}\. READ-OK on \w{7} by Juno, checks green\.$/)])
+    expect(f.costs).not.toHaveBeenCalled()
   })
 
   // Code review of #4056: autonomous-harness, renamed openharness, keeps its old name in its project, and GitHub answers for it under

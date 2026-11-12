@@ -691,7 +691,10 @@ export class GitHubMerge {
     const open = new Set<string>()
     const conflicts = (pull: { number: number; head: string; author: string; comments: Json[] }) =>
       this.tellOnce(repo, pull.number, pull.head, pull.author, 'dirty', `${base}: rebase it on ${base} and push.`, pull.comments)
-    const cost = (number: number) => this.cost(project, listed, number)
+    // What a landed change cost its builder is said on a private repository only, as GitHub's answer above says it: on a public
+    // one the builder's model and what the change used of its person's subscription would be public in that person's name (anh
+    // Dee's call, 12 November). Its rows stay on the server, for the project's members, and are not asked for.
+    const cost = about.private === true ? (number: number) => this.cost(project, listed, number) : async () => ''
     const train = new GitHubTrain<Ready>({ reads: this.reads, send: this.deps.send, now: this.now, log: this.log }, current, base, listed, {
       checks: (number, head) => this.checks(repo, this.see(open, `${repo}#${number}@${head}`), head),
       login: () => this.login(repo),

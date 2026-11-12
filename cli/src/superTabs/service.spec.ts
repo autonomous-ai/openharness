@@ -1049,6 +1049,17 @@ describe('a verdict by command', () => {
     expect(t.taskTokens.read).toHaveBeenCalledTimes(1)
     t.service.port.stop()
   })
+  // The server takes a row for the repository its project names: GitHub's newer name for it would be no project's.
+  it('tells it of a verdict by the name its project has for the repository, though the command names it as GitHub does since a rename', async () => {
+    const t = verdictSetup()
+    t.github.get.mockImplementation(async (path: string) => ({ status: 200, etag: null, resetAt: null,
+      body: path === '/user' ? { login: 'reader-login' } : path === '/repos/acme/app' ? { full_name: 'Acme/App2' } : path.includes('/comments') ? []
+        : { state: 'open', head: { sha: HEAD, ref: 'pip/12' }, labels: [{ name: 'builder:pip' }] } }))
+    expect(await t.read({ repository: 'acme/app2' })).toMatchObject({ ok: true, value: { posted: true } })
+    expect(t.sent.map(sent => sent.path)).toEqual(['/repos/acme/app2/issues/27/comments'])
+    expect(t.taskTokens.read.mock.calls).toEqual([[{ tabId: 'tab', agentId: t.agentId, harnessId: 'native' }, 'acme/app', 27]])
+    t.service.port.stop()
+  })
   it('counts what a reader\'s conversation used between two verdicts, from the core\'s reading of it, and writes it to the server as that agent', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'super-tab-service-tokens-'))
     try {
