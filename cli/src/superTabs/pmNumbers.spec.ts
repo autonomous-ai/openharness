@@ -190,7 +190,7 @@ describe('what Harness says of the counts', () => {
     expect(shortLine(['Ada', 'Kai'], numbers(), '14:00', goal)).toBe('Harness, 14:00: Ada and Kai have nothing to do, and no sized task is open. 12 pull requests landed in the last 24 hours. '
       + 'The goal (agents/GOAL.md): 41 of 60 checks pass on the main branch, 3 fail and 16 wait. Open the next tasks as issues, each with its part:, size: and p0-p2 labels. '
       + 'If the work is done, tell your person.')
-    expect(shortLine(['Ada'], numbers(), '14:00', null)).toContain('in the last 24 hours. The project states no goal: `harness super-tab goal` in your checkout writes agents/GOAL.md and the workflow that checks it. Open the next tasks')
+    expect(shortLine(['Ada'], numbers(), '14:00', null)).toContain('in the last 24 hours. The project states no goal: ask your person what it is for, then `harness super-tab goal write` in your checkout writes agents/GOAL.md and the workflow that checks it. Open the next tasks')
     expect(shortLine(['Ada'], numbers(), '14:00', undefined)).toContain('in the last 24 hours. Open the next tasks')
     expect(dayLine(numbers(), goal, '')).toMatch(/ and 3 are in hand\. Goal: 41 of 60 checks pass on the main branch, 3 fail and 16 wait\.$/)
     expect(dayLine(numbers(), { total: 2, passed: 2, failed: 0, waiting: 0 }, '')).toMatch(/ Goal: 2 of 2 checks pass on the main branch\.$/)

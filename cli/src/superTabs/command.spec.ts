@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PassThrough } from 'node:stream'
-import { resolve } from 'node:path'
+import { execFileSync } from 'node:child_process'
+import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import { gitEnv } from '../lib/gitProject.js'
 import { parseSuperTabArgs, readStdin, StdinIdle, superTabCommand } from './command.js'
 import type { Where } from '../agentClient/daemon.js'
 const where = { port: 14001, dataDir: '/fixture', machineId: 'machine' }
@@ -564,18 +568,49 @@ it('lists what waits for the agent in its pane, a line each, and says when nothi
   expect(JSON.parse(print.mock.calls.at(-1)![0])).toEqual({ error: 'RATE_LIMITED', detail: 'GitHub asks to wait.' })
 })
 
-// A project's goal file and its workflow are written into the caller's checkout (goalStarter.ts): the daemon has no part in it.
-it('writes a goal file in the checkout it runs in, says what it wrote, and asks nothing of the daemon', async () => {
-  expect(parseSuperTabArgs(['goal'], where).payload).toMatchObject({ action: 'goal' })
-  expect(() => parseSuperTabArgs(['goal', 'acme/app'], where)).toThrow('harness super-tab')
+// A project's goal is read from, and its files written into, the caller's checkout (goalStarter.ts): the daemon has no part in
+// it. `goal` alone only shows it: a new PM ran it "to see what it did", found two files it had not meant to write, and deleted
+// them (anh Dee's Lou, 2026-11-12). Writing them is `goal write`.
+it('shows the goal with goal, writes its files with goal write, and asks nothing of the daemon', async () => {
+  expect(parseSuperTabArgs(['goal'], where).payload).toMatchObject({ action: 'goal', write: false })
+  expect(parseSuperTabArgs(['goal', 'write'], where).payload).toMatchObject({ action: 'goal', write: true })
+  for (const wrong of [['goal', 'acme/app'], ['goal', 'write', 'now']]) expect(() => parseSuperTabArgs(wrong, where)).toThrow('harness super-tab')
   const print = vi.fn(), open = vi.fn()
-  const deps = { where: () => where, pane: undefined, open, print, goal: vi.fn(async () => ({ ok: true, said: 'Wrote agents/GOAL.md and .github/workflows/goal.yml.' })) }
+  const deps = { where: () => where, pane: undefined, open, print, goal: vi.fn(async (write: boolean) => ({ ok: true, said: write ? 'Wrote agents/GOAL.md.' : 'No goal yet.' })) }
   expect(await superTabCommand(['goal'], deps)).toBe(0)
-  expect(print).toHaveBeenLastCalledWith('Wrote agents/GOAL.md and .github/workflows/goal.yml.')
+  expect(deps.goal).toHaveBeenLastCalledWith(false)
+  expect(print).toHaveBeenLastCalledWith('No goal yet.')
+  expect(await superTabCommand(['goal', 'write'], deps)).toBe(0)
+  expect(deps.goal).toHaveBeenLastCalledWith(true)
+  expect(print).toHaveBeenLastCalledWith('Wrote agents/GOAL.md.')
   deps.goal.mockResolvedValueOnce({ ok: false, said: 'This folder is in no git repository: run it in your checkout of the project.' })
   expect(await superTabCommand(['goal'], deps)).toBe(1)
   expect(print).toHaveBeenLastCalledWith('This folder is in no git repository: run it in your checkout of the project.')
   expect(open).not.toHaveBeenCalled()
+})
+
+// The bug itself, through the real command and a real checkout: `goal` alone wrote two files a new PM had not meant to write
+// (anh Dee's Lou, 2026-11-12). Nothing stands in for goalStarter.ts here (the second review of #4205: a swapped choice of
+// which to run passed every test that did).
+it('writes nothing in a real checkout with goal, and both files with goal write', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'goal-command-')))
+  try {
+    execFileSync('git', ['init', '-q'], { cwd: root, env: gitEnv(process.env) })
+    vi.spyOn(process, 'cwd').mockReturnValue(root)
+    const print = vi.fn(), open = vi.fn()
+    const deps = { where: () => where, pane: undefined, open, print }
+    expect(await superTabCommand(['goal'], deps)).toBe(0)
+    expect(print.mock.calls.at(-1)![0]).toMatch(/^This checkout states no goal yet/)
+    expect(existsSync(join(root, 'agents'))).toBe(false)
+    expect(existsSync(join(root, '.github'))).toBe(false)
+    expect(await superTabCommand(['goal', 'write'], deps)).toBe(0)
+    expect(existsSync(join(root, 'agents/GOAL.md'))).toBe(true)
+    expect(existsSync(join(root, '.github/workflows/goal.yml'))).toBe(true)
+    expect(open).not.toHaveBeenCalled()
+  } finally {
+    vi.mocked(process.cwd).mockRestore()
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 // A builder's claim is made by command (githubClaim.ts).
