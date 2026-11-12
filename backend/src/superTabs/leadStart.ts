@@ -5,7 +5,7 @@
 import { admitMachineStart, contributedEngines, failTeamWork, machineContribution, NOT_YOUR_COMPUTER, projectFolder,
   noRepositoryStart, type ContributedMachine } from './machines.js'
 import { actorKey, fail, person, type AgentStart, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
-import { BUILT_IN_ROLE_DEFAULTS, projectsOf, type SwarmProject } from './projects.js'
+import { addressedRepository, BUILT_IN_ROLE_DEFAULTS, projectsOf, type SwarmProject } from './projects.js'
 import { failureNotice, publicReason } from './startFailure.js'
 import { COORDINATOR_NAME } from './roleNames.js'
 import { agentDisplayName } from './agentNames.js'
@@ -99,7 +99,7 @@ export function placeLead(state: SuperTabState, project: SwarmProject, by: Perso
     membershipGeneration: contributor.generation, machineOwnerId: pool.contributorId, hostGrant: null, request: start,
     harnessId: null, dispatched: false, error: null, requestedAt: context.now }
   state.starts.push(recorded)
-  project.repository ??= { machineId: pool.machineId, cwd: start.cwd, repositoryUrl: request.repositoryUrl ?? null }
+  project.repository ??= addressedRepository({ machineId: pool.machineId, cwd: start.cwd, repositoryUrl: request.repositoryUrl ?? null }, context.now)
   project.lead = { status: 'starting', machineId: pool.machineId, machineName: pool.name, startId }
   return recorded
 }

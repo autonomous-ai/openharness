@@ -64,8 +64,8 @@ describe('starting a project\'s Product Manager on a Swarm machine', () => {
     // Memory and disk gate it; CPU is one momentary sample, so a busy machine admits it as it does a routed Builder (Diego, 10-30).
     expect(f.state.starts![0]!.request.requirements).toEqual({ memoryBytes: 2 * 1024 ** 3, diskBytes: 1024 ** 3, maxCpuPercent: 100, tools: ['git'], devices: [], quotaRequired: false })
     expect(f.project().lead).toMatchObject({ status: 'starting', machineId: 'owner-mac', machineName: 'Owner Mac', startId: started.result.startId })
-    // The repository it clones, recorded for the project.
-    expect(f.project().repository).toEqual({ machineId: 'owner-mac', cwd: `/swarm/${f.app.projectId}`, repositoryUrl: REPO })
+    // The repository it clones, recorded for the project, with when it got its address (githubComments.ts repositoryProject).
+    expect(f.project().repository).toEqual({ machineId: 'owner-mac', cwd: `/swarm/${f.app.projectId}`, repositoryUrl: REPO, addressedAt: 50_000_000 })
   })
 
   it('on a teammate\'s Mac, is refused: it starts only on its person\'s own computer, and records nothing', () => {
