@@ -716,7 +716,15 @@ class _SwarmSharingDialogState extends State<SwarmSharingDialog> {
           if (c.operationError != null)
             Padding(
               padding: const EdgeInsets.only(top: 8),
-              child: Text(c.operationError!, style: DesktopChrome.metadata()),
+              // A Swarm with no project yet, as a new Personal one is, takes no email invitation (backend NO_PROJECT): said
+              // with where to make one.
+              child: Text(
+                c.operationErrorCode == 'NO_PROJECT'
+                    ? 'Create a project before inviting people: + beside Projects.'
+                    : c.operationError!,
+                key: const Key('swarm-sharing-error'),
+                style: DesktopChrome.metadata(),
+              ),
             ),
           if (c.hasPendingAction)
             Align(

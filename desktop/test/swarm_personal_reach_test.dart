@@ -8,6 +8,7 @@ import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/new_harness.dart' show newHarnessOpensInBox;
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/personal_projects.dart';
 import 'package:harness/super_tabs/swarm_switcher.dart';
 import 'package:harness/ws/ws_conn.dart';
 
@@ -48,7 +49,13 @@ class _Backend {
       return {
         'tabs': [
           for (final MapEntry(key: id, value: name) in names.entries)
-            {'id': id, 'name': name, 'ownerId': 'owner'},
+            {
+              'id': id,
+              'name': name,
+              'ownerId': 'owner',
+              // As the backend's list: only on the reader's own Personal Swarm.
+              if (id == personal) 'personal': true,
+            },
         ],
         'next': null,
       };
@@ -222,6 +229,39 @@ void main() {
     expect(backend.servers, hasLength(2));
     expect(
       app.swarms.where((s) => s.superTabId == backend.personal),
+      hasLength(1),
+    );
+    await _end(tester, app);
+  });
+
+  // PSQA, 2026-11-12: a computer that had not picked Personal took it for any Swarm once someone was invited there, as it
+  // guessed Personal by its name and its people: the switcher listed it twice, and Your Team had no panes there.
+  testWidgets('on a computer that has not picked Personal yet, their Personal '
+      'with someone they invited is still Personal: listed once, with their '
+      'panes', (tester) async {
+    final backend = _Backend()..personal = 'personal0123456789abcdef';
+    backend.add(backend.personal!, 'Personal');
+    (backend.servers[backend.personal]!.state['people'] as List).add({
+      'id': 'kim',
+      'email': 'kim@example.com',
+      'role': 'collaborator',
+    });
+    final app = _computer(backend, entered: true);
+    await app.superTabs.refreshTabs();
+    final c = await app.superTabs.open(backend.personal!);
+    await c.refresh();
+    expect(c.snapshot!.people, hasLength(2));
+    await mount(tester, app);
+    await _settle(tester);
+    expect(PersonalSwarm.of(app).id, backend.personal);
+    // Its Your Team holds their panes and its Projects their repos, as on the computer that picked it.
+    expect(PersonalProjects.of(app).eligible(c), isTrue);
+    expect(
+      swarmChoices(app).where((choice) => choice.id == backend.personal),
+      isEmpty,
+    );
+    expect(
+      swarmsToOpen(app, personal: true).where((s) => s.name == 'Personal'),
       hasLength(1),
     );
     await _end(tester, app);

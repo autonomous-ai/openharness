@@ -629,12 +629,15 @@ void main() {
         await PersonalProjects.of(team.app).sync(tc);
         expect(_commands(team), isEmpty);
 
+        // Someone they invited changes nothing: it is still their Personal Swarm, with their repos' projects.
         final shared = SuperTabLaunchFixture();
         _desk(shared);
         final sc = await _personal(shared, people: ['owner', 'kim']);
         await PersonalProjects.of(shared.app).sync(sc);
-        expect(_commands(shared), isEmpty);
-        expect(PersonalProjects.of(shared.app).panesFor(sc, 'lead'), isEmpty);
+        expect(
+          [for (final p in _commands(shared)) p['command']['name']],
+          ['api', 'web'],
+        );
       },
     );
 
@@ -661,30 +664,34 @@ void main() {
       );
     });
 
-    test('an answer after someone joined Personal is dropped', () async {
-      final f = SuperTabLaunchFixture();
-      _desk(f);
-      final c = await _personal(f);
-      final hold = f.connection.server.holdCommands = Completer<void>();
-      final syncing = PersonalProjects.of(f.app).sync(c);
-      await Future<void>.delayed(Duration.zero);
-      (f.connection.server.state['people'] as List).add({
-        'id': 'kim',
-        'email': 'kim@example.com',
-        'role': 'collaborator',
-      });
-      await c.refresh();
-      hold.complete();
-      await syncing;
-      expect(_commands(f), hasLength(1));
-      expect(PersonalProjects.of(f.app).knownForTest('owner', tabId), isEmpty);
-      expect(
-        await f.app.superTabs.storage.read(
-          PersonalProjects.storageKey('owner'),
-        ),
-        isNull,
-      );
-    });
+    // anh Dee, 2026-11-11: the person invites people to their Personal Swarm, and it stays theirs.
+    test(
+      'an answer after someone joined Personal is kept: it is still theirs',
+      () async {
+        final f = SuperTabLaunchFixture();
+        _desk(f);
+        final c = await _personal(f);
+        final hold = f.connection.server.holdCommands = Completer<void>();
+        final syncing = PersonalProjects.of(f.app).sync(c);
+        await Future<void>.delayed(Duration.zero);
+        (f.connection.server.state['people'] as List).add({
+          'id': 'kim',
+          'email': 'kim@example.com',
+          'role': 'collaborator',
+        });
+        await c.refresh();
+        hold.complete();
+        await syncing;
+        expect(
+          [for (final p in _commands(f)) p['command']['name']],
+          ['api', 'web'],
+        );
+        expect(
+          PersonalProjects.of(f.app).knownForTest('owner', tabId),
+          hasLength(2),
+        );
+      },
+    );
 
     test('losing access drops answers in flight and what was kept', () async {
       final f = SuperTabLaunchFixture();
@@ -1203,12 +1210,14 @@ void main() {
 
       final team = SuperTabLaunchFixture();
       _desk(team);
-      final tc = await _personal(team, people: const ['owner', 'kim']);
+      team.app.bindSuperTab(team.app.activeSwarmId, tabId, 'Pilot');
+      final tc = await team.app.superTabs.open(tabId);
+      await tc.refresh();
       expect(PersonalProjects.of(team.app).hidden(tc, 'lead'), isFalse);
     });
 
-    // Personal is its person's alone: they own it, and still see no Invite people there (review of #4067).
-    testWidgets('Personal shows no Invite people, though its person owns it', (
+    // anh Dee, 2026-11-11: the person invites people to their Personal Swarm, as to any Swarm.
+    testWidgets('Personal shows its owner Invite people, as any Swarm does', (
       tester,
     ) async {
       await tester.binding.setSurfaceSize(const Size(1280, 800));
@@ -1233,7 +1242,7 @@ void main() {
         ),
       );
       await tester.pump();
-      expect(find.text('Invite people'), findsNothing);
+      expect(find.text('Invite people'), findsOneWidget);
       await tester.pumpWidget(const SizedBox());
       await c.flush();
       f.app.superTabs.dispose();
