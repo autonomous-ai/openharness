@@ -80,10 +80,11 @@ export interface Row {
 
 export interface Failure { error: string; detail: string | null }
 
-/** Why [frame]'s launch failed, or nothing: the daemon keeps the reason on the row and in its archive. */
+/** Why [frame]'s launch failed, or nothing: the daemon keeps the reason on the row and in its archive. A resume not
+ *  confirmed yet is not a failure: its engine may be running (the desk says "Not confirmed"). */
 export function failureOf(frame: Frame): Failure | undefined {
   const launch = frame.launch
-  return launch?.state === 'failed' ? { error: launch.error, detail: launch.detail ?? null } : undefined
+  return launch?.state === 'failed' && launch.error !== 'RESUME_UNCONFIRMED' ? { error: launch.error, detail: launch.detail ?? null } : undefined
 }
 
 /** What `ps`, `show` and `wait` JSON say about a cloud harness, beside Harness's own state. */
