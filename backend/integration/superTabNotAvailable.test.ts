@@ -130,7 +130,7 @@ function calls(tab: string, chat: string, project: string) {
     json('POST', 'POST /api/super-tabs/:tabId/task-offers', `${t}/task-offers?asAgentId=${MISSING}`, { repository: 'acme/app', number: 1, agentId: MISSING }),
     json('POST', 'POST /api/super-tabs/:tabId/task-offers/accept', `${t}/task-offers/accept?asAgentId=${MISSING}`, { repository: 'acme/app', number: 1 }),
     json('POST', 'POST /api/super-tabs/:tabId/task-offers/decline', `${t}/task-offers/decline?asAgentId=${MISSING}`, { repository: 'acme/app', number: 1, reason: 'memory' }),
-    json('GET', 'GET /api/super-tabs/:tabId/task-offers', `${t}/task-offers?repository=acme/app`),
+    json('GET', 'GET /api/super-tabs/:tabId/task-offers', `${t}/task-offers?repository=acme/app&numbers=1`),
     json('GET', 'GET /api/super-tabs/:tabId/task-offers/mine', `${t}/task-offers/mine?asAgentId=${MISSING}`),
     json('GET', 'GET /api/super-tabs/:tabId/machines/:machineId/removal', `${t}/machines/${MISSING}/removal`),
     json('GET', 'GET /api/super-tabs/:tabId/machines/:machineId/removal/v2', `${t}/machines/${MISSING}/removal/v2`),

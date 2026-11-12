@@ -1361,9 +1361,8 @@ model SuperTabTaskOffer {
   declinedAt DateTime?
   declined   String?
 
-  /// A project's offers, live or just ended (taskOffers.ts projectOffers); and a Swarm's records, removed with it (purge.ts).
-  @@index([tabId, projectId, expiresAt])
-  /// An agent's live offers (taskOffers.ts agentOffers).
+  /// An agent's live offers (taskOffers.ts agentOffers); and a Swarm's records, removed with it (purge.ts). A project's read asks
+  /// for its tasks by their ids (taskOffers.ts projectOffers).
   @@index([tabId, agentId, expiresAt])
   /// A record goes a day after expiresAt (taskOffers.ts ensureOfferExpiry). Declared so db push keeps the index; the schema step
   /// makes it, with its expiry, before the push.

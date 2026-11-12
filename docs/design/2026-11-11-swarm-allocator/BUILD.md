@@ -468,10 +468,10 @@ That only the price leaves a person's computer waits for package 16: today the p
 
 ### 16. Offers accepted on the agent's own computer
 
-**Built, the server's half** (#NNNN): the offer record and its five routes, `backend/src/superTabs/taskOffers.ts`,
+**Built, the server's half** (#4152): the offer record and its five routes, `backend/src/superTabs/taskOffers.ts`,
 as [its design](offers.md) says.
 
-**Built, the daemon's half** (#NNNN): `cli/src/superTabs/taskOffers.ts` (an agent's own computer checks an offer and
+**Built, the daemon's half** (#4153): `cli/src/superTabs/taskOffers.ts` (an agent's own computer checks an offer and
 answers it), `githubAssign.ts` (the PM's daemon offers in place of labelling, and rests a builder that declines or lets
 one lapse), `githubClaim.ts` (`take` on an accepted offer), `nextThing.ts`, `assign/crew.ts` and `machines.ts`
 (`taskOffers` among a machine's capabilities). *The daemon checks cores too: the cores of the tasks its computer's

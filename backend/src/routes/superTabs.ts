@@ -34,6 +34,7 @@ import { SwarmReads } from '../superTabs/read/service.js'
 import { NOTIFY_LEVELS } from '../superTabs/chatSettings.js'
 import { COMMENT_KINDS, MAX_COMMENT_IDS } from '../superTabs/githubComments.js'
 import { MAX_TASK_MODELS, MAX_TASK_NUMBERS, TASK_KINDS } from '../superTabs/taskTokens.js'
+import { OFFER_NUMBERS_MAX } from '../superTabs/taskOffers.js'
 import { HostReads } from '../superTabs/read/host.js'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { markNothingNew } from '../lib/routeLatency.js'
@@ -80,7 +81,9 @@ const taskTokensReadQuery = z.object({ repository, asAgentId: id.optional(),
 const offerBody = z.object({ repository, number: issueNumber, agentId: id }).strict()
 const offerAnswerBody = z.object({ repository, number: issueNumber }).strict()
 const offerDeclineBody = offerAnswerBody.extend({ reason: z.string().regex(/^[a-z]{1,20}$/) }).strict()
-const offersQuery = z.object({ repository, asAgentId: id.optional() }).strict()
+// Its PM asks for the tasks it plans, a hundred at a time.
+const offersQuery = z.object({ repository, asAgentId: id.optional(),
+  numbers: z.string().max(1_100).transform(numbers => numbers.split(',')).pipe(z.array(z.string().regex(/^[1-9]\d{0,9}$/).transform(Number)).min(1).max(OFFER_NUMBERS_MAX)) }).strict()
 const uploadParams = z.object({ tabId: id, uploadId: id })
 const voiceParams = z.object({ tabId: id, attachmentId: id })
 const voiceQuery = agentQuery.extend({ lang: z.string().max(16).optional() })
@@ -391,7 +394,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     (req, reply) => respond(reply, () => store.agentTaskOffers(req.user!, req.params.tabId, req.query.asAgentId)))
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof offersQuery> }>('/api/super-tabs/:tabId/task-offers',
     { preHandler: [validateParams(tabParams), validateQuery(offersQuery)] },
-    (req, reply) => respond(reply, () => store.projectTaskOffers(req.user!, req.params.tabId, req.query.repository, req.query.asAgentId)))
+    (req, reply) => respond(reply, () => store.projectTaskOffers(req.user!, req.params.tabId, req.query.repository, req.query.numbers, req.query.asAgentId)))
   // The CI load a CLI's route read (retired with it, above NO_APP): who may read the project hears what a server without the app
   // said; anyone else is refused as before.
   app.get<{ Params: z.infer<typeof projectParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/projects/:projectId/ci-load',

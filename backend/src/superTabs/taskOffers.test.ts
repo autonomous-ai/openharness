@@ -128,6 +128,17 @@ describe('a task offered to one agent', () => {
     expect(rows.get('tab|acme/app|15')).toMatchObject({ declinedAt: null })
   })
 
+  // Review of #4152: an accept whose clock read a moment before a decline's matched the declined record, and held its task ten
+  // minutes more (on MongoDB, an accept and a decline at once with clocks a millisecond apart: 16 of 40 ended so).
+  it('is not accepted once it was declined, nor declined again, whatever moment the answer\'s clock reads', async () => {
+    const { db, rows } = database()
+    await offer(db)
+    await declineOffer(db, { ...answer('oak', NOW + 5), reason: 'memory' })
+    expect(await refusal(() => acceptOffer(db, answer('oak', NOW + 4)))).toMatchObject({ code: 'OFFER_NOT_LIVE', status: 409 })
+    expect(await declineOffer(db, { ...answer('oak', NOW + 4), reason: 'disk' })).toMatchObject({ state: 'declined', declined: 'memory', expiresAt: NOW + 5 })
+    expect(rows.get(KEY)).toMatchObject({ acceptedAt: null, declined: 'memory', declinedAt: new Date(NOW + 5), expiresAt: new Date(NOW + 5) })
+  })
+
   it('may be declined after it was accepted, while it is live', async () => {
     const { db } = database()
     await offer(db)
@@ -164,6 +175,18 @@ describe('a task offered to one agent', () => {
     expect(await offer(db, { byAgentId: 'busy', number: 1, now: NOW + 2 })).toMatchObject({ number: 1 })
     expect(await refusal(() => offer(db, { byAgentId: 'busy', number: 9001, now: NOW + 2 }))).toMatchObject({ code: 'RATE_LIMITED', status: 429 })
     expect(await offer(db, { byAgentId: 'calm', number: 9002, now: NOW + 2 })).toMatchObject({ number: 9002 })
+  })
+
+  // Review of #4152: each refusal of a task another agent's offer holds counted against the hour, so a PM refused 1,199 times was
+  // refused every new offer for the rest of it.
+  it('counts no offer refused because another agent\'s holds the task against the Product Manager\'s hour', async () => {
+    const { db } = database()
+    const patient = (over: Partial<Parameters<typeof offerTask>[1]>) => offer(db, { tabId: 'patient-tab', byAgentId: 'patient', ...over })
+    await patient({ number: 1 })
+    for (let i = 0; i < OFFERS_PER_HOUR; i++) {
+      expect(await refusal(() => patient({ number: 1, agentId: 'ash', now: NOW + 1 })), String(i)).toMatchObject({ code: 'OFFER_LIVE', status: 409 })
+    }
+    expect(await patient({ number: 2, now: NOW + 2 })).toMatchObject({ number: 2, state: 'offered' })
   })
 
   it('reads as what its times say on the clock it is read by', () => {

@@ -90,7 +90,7 @@ export function createMetrics(hour: LastHour = createLastHour()) {
     /** One read of tasks' tokens, and whether any row answered: how many landed changes had their cost to show. */
     taskTokensRead(found: boolean) { taskTokensReads.inc({ found: found ? 'yes' : 'no' }) },
     /** One offer of a task or one answer to it: offered, again (the same one, nothing written), live (refused: another agent's
-     *  offer of the task stands, so a second coordinator or a PM's daemon that forgot its offers shows here first), limited (the
+     *  offer of the task stands, so a PM's daemon that forgot its offers shows here first; counted against no hour), limited (the
      *  PM's hourly offers), declined, late (an answer to an offer that is not this agent's live one). */
     taskOffer(outcome: 'offered' | 'again' | 'live' | 'limited' | 'declined' | 'late') { taskOffers.inc({ outcome }) },
     /** An offer its agent's daemon accepted, [seconds] after it was made: what the two minutes an offer waits rest on. */
