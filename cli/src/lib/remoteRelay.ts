@@ -37,7 +37,7 @@ import {
 import { RemoteViewerProxy } from './remoteViewerProxy.js'
 import { VIEWER_UP_TYPES } from './viewerWire.js'
 import { isWrapped } from './e2ee/core.js'
-import { admitRelayedPairFrame, AGENT_BROWSER_DOWN_TYPES, AGENT_BROWSER_UP_TYPES, isPairFrameType } from './e2ee/applicationFrames.js'
+import { admitRelayedPairFrame, AGENT_BROWSER_DOWN_TYPES, AGENT_BROWSER_UP_TYPES, HARNESS_EVENT, isPairFrameType } from './e2ee/applicationFrames.js'
 import { declaredClientQuery } from './declaredClient.js'
 
 const CONNECT_TIMEOUT_MS = 15_000
@@ -433,12 +433,21 @@ export class RemoteRelayPool {
         ? { ...frame, payload: { ...framePayload(frame), relayIsolation: true } } : frame),
     }, onClosed)
     let detached = false
+    // A watch on the other machine lives as long as this connection (gateway/harnessWatch.ts): shelved, it would outlive
+    // the client that asked, and the next background client handed it would be told that harness's changes unasked
+    // (review of #4197). So a session that asked for one closes with its client, and the other machine ends the watch.
+    let watched = false
     return {
       ...session,
+      send: (frame) => {
+        if (frame.type === 'harness_watch') watched = true
+        return session.send(frame)
+      },
       detach: () => {
         if (detached) return
         detached = true
         session.detach() // the pool's own linger starts here
+        if (watched) { pool.invalidate(machineId, { code: 1000, reason: 'watch ended' }); return }
         const idle = this.idleIsolated.get(machineId) ?? []
         if (idle.length >= ISOLATED_IDLE_MAX) { pool.invalidate(machineId, { code: 1000, reason: 'shelf full' }); return }
         idle.push(pool)
@@ -795,8 +804,8 @@ export class RemoteRelayPool {
           return
         }
         // The relay cannot inject response bytes/headers into a local browser in plaintext, nor open or close an
-        // agent browser's stream: those are sealed to this session alone.
-        if (typeof frame.type === 'string' && (VIEWER_UP_TYPES.has(frame.type) || AGENT_BROWSER_UP_TYPES.has(frame.type) || AGENT_BROWSER_DOWN_TYPES.has(frame.type))
+        // agent browser's stream, nor tell a watcher a harness changed: those are sealed to this session alone.
+        if (typeof frame.type === 'string' && (VIEWER_UP_TYPES.has(frame.type) || AGENT_BROWSER_UP_TYPES.has(frame.type) || AGENT_BROWSER_DOWN_TYPES.has(frame.type) || frame.type === HARNESS_EVENT)
           && (!isWrapped(frame.payload) || frame.payload.__e2e?.k !== 'p')) return
         // Nor a question, a recap or an answer's result for the pair brain (applicationFrames.ts).
         if (typeof frame.type === 'string' && isPairFrameType(frame.type) && !admitRelayedPairFrame(frame)) return

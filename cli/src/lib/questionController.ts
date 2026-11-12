@@ -436,8 +436,8 @@ export interface QuestionWatcherDeps {
   readQuestion(session: RegisteredSession, capture: string): PaneView | Promise<PaneView>
   getSession: (sessionId: string) => RegisteredSession | undefined
   capture: (terminalTarget: string, historyLines?: number) => Promise<string | null>
-  /** Skip the capture entirely when no device is listening — nothing would consume the question. */
-  hasDevice: () => boolean
+  /** Skip the capture entirely when nobody is listening for [sessionId]'s question — nothing would consume it. */
+  hasDevice: (sessionId: string) => boolean
   /** A dialog is open on screen. Fires ONCE per distinct question (until it changes or closes). */
   onQuestion: (sessionId: string, requestId: string, questions: ShapedQuestion[], detail?: { permission: boolean; dialog: string }) => void
   /**
@@ -681,7 +681,7 @@ export class QuestionWatcher {
     if (!terminalTarget || session?.active === false || (session?.engine && !pollsQuestions(session.engine))) { this.stop(sessionId); return }
     // Both of these silently do nothing, which is how a live dialog can sit on the terminal with no trace
     // in the log. Say it once per transition rather than every 1.5s tick.
-    const blocked = !this.deps.hasDevice() ? 'no device' : this.deps.isDriving?.(sessionId) ? 'driving an answer' : ''
+    const blocked = !this.deps.hasDevice(sessionId) ? 'no device' : this.deps.isDriving?.(sessionId) ? 'driving an answer' : ''
     if (blocked !== (this.blocked.get(sessionId) ?? '')) {
       this.blocked.set(sessionId, blocked)
       console.log(`[question] ${sessionId.slice(0, 8)} watcher ${blocked ? `paused · ${blocked}` : 'polling'}`)
@@ -701,7 +701,7 @@ export class QuestionWatcher {
       if (this.pendingPolls.get(sessionId) === pending) this.pendingPolls.delete(sessionId)
     }
     if (pending.cancelled || generation !== questionCaptureGeneration(this.deps.getSession(sessionId))
-      || !this.deps.hasDevice() || this.deps.isDriving?.(sessionId)) return
+      || !this.deps.hasDevice(sessionId) || this.deps.isDriving?.(sessionId)) return
     if (capture === null) {
       // Unavailable is not an empty pane, and breaks a run of confirmed misses.
       this.misses.delete(sessionId)

@@ -225,6 +225,9 @@ const EDGE: RegExp[] = [
   /^lib\/(gridLaunch|gridWebMcp|apiModels|gridAssignment|apiConnections)\.ts$/,
   // The change-agent handoff reads and redacts history and runs git: the edge host owns that work.
   /^lib\/agentHandoff\.ts$/,
+  // Codex's profiles and their discovery: a launch on a profile home has its connections written by the connectors
+  // service (ConnectorsPort.syncProfileHome), and the profiles' lists are models' and usage's.
+  /^lib\/(codexProfiles|codexProfileDiscovery)\.ts$/,
   // Usage owns all aggregate readers and ledgers. Core reads validated wire snapshots only.
   /^lib\/(agentTokenUsage|agentOutputStats|sessionWork)\.ts$/,
   // The relay's own parts, the gateway's alone: the windows' sessions to other machines, P2P and STUN, the

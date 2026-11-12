@@ -196,7 +196,7 @@ import { createEngineHooks, installEngineHooks, installOpencodePluginBeforeSpawn
 import { createCursorDiscovery } from './engines/cursorDiscovery.js'
 import { createCursorTaskHooks, loadPendingCursorTasks } from './engines/cursorTasks.js'
 import { databaseHistory, hermesDb } from './transcripts/databaseHistory.js'
-import { CLOUD_FALLBACKS, CLOUD_REQUESTS, type CloudCore, CONNECTORS_REQUESTS, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARED_MACHINES_REQUESTS, MEMORY_REQUESTS, ROUTER_REQUESTS, createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, MACHINE_ADDON_REQUESTS, HANDOFF_REQUESTS, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, OS_DEVICE_REQUESTS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_FALLBACKS, STORE_OFF, STORE_REQUESTS, MESSAGES_FALLBACKS, MESSAGES_REQUESTS, TURN_DELIVERERS, TURN_END_HEARERS, USAGE_FALLBACKS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WIFI_FALLBACKS, WINDOW_NAMES_REQUESTS, WORKSPACES_FALLBACKS, WORKSPACES_REQUESTS, type GatewayAccount, type GatewayOps, type GatewayStatus, type RouteAnswer, type WindowFocus } from './api.js'
+import { CLOUD_FALLBACKS, CLOUD_REQUESTS, type CloudCore, CONNECTORS_FALLBACKS, CONNECTORS_OFF, CONNECTORS_REQUESTS, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARED_MACHINES_REQUESTS, MEMORY_REQUESTS, ROUTER_REQUESTS, createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, MACHINE_ADDON_REQUESTS, HANDOFF_REQUESTS, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, OS_DEVICE_REQUESTS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_FALLBACKS, STORE_OFF, STORE_REQUESTS, MESSAGES_FALLBACKS, MESSAGES_REQUESTS, TURN_DELIVERERS, TURN_END_HEARERS, USAGE_FALLBACKS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WIFI_FALLBACKS, WINDOW_NAMES_REQUESTS, WORKSPACES_FALLBACKS, WORKSPACES_REQUESTS, type GatewayAccount, type GatewayOps, type GatewayStatus, type RouteAnswer, type WindowFocus } from './api.js'
 import { createServiceHost, testFaults } from './serviceHost.js'
 import { SUPER_TAB_REQUESTS, SUPER_TAB_FALLBACKS } from './api.js'
 import { startStalls } from './stall.js'
@@ -205,6 +205,7 @@ import { createViewerStreams } from './viewerStreams.js'
 import { createViewersLink } from './viewersLink.js'
 import { createWorkspacesLink } from './workspacesLink.js'
 import { createMonitorLink } from './monitorLink.js'
+import { createConnectorsLink } from './connectorsLink.js'
 import { createSharedMachinesLink } from './sharedMachinesLink.js'
 import { createGuestCreate } from './agents/guestCreate.js'
 import { createStoreLink } from './storeLink.js'
@@ -1502,6 +1503,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     agentIdFor: (sessionId) => agentIdFor(sessionId),
     sessionTurnOpen,
     someoneCanAnswer,
+    followedByTool: (agentId) => backend.followedByTool(agentId),
     deviceInput,
   })
   const questions = asking.questions
@@ -1832,8 +1834,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   if (!swarm) serviceHost.leaveOff('superTabs', SUPER_TAB_REQUESTS)
   else if (!outOfProcess.has('superTabs')) serviceHost.start('superTabs', swarm.startSuperTabs, coreApi, SUPER_TAB_FALLBACKS, SUPER_TAB_REQUESTS)
   if (!outOfProcess.has('handoff')) serviceHost.serve('handoff', (core) => inline!.startHandoff(core, undefined, undefined, swarmServices?.recordReplacement), coreApi, HANDOFF_REQUESTS)
-  // Connected services' MCP bridge and the Connectors screen (services/connectors.ts): here, or in the edge host.
-  if (!outOfProcess.has('connectors')) serviceHost.serve('connectors', inline!.startConnectors, coreApi, CONNECTORS_REQUESTS)
+  // Connected services' MCP bridge and the Connectors screen (services/connectors.ts): here, or in the edge host
+  // (services/connectorsProcess.ts), asked through its port (core/connectorsLink.ts) for a profile home's entries.
+  if (outOfProcess.has('connectors')) ports.connectors = createConnectorsLink((type, payload, waitMs) => serviceLinks.call('connectors', type, payload, waitMs))
+  else serviceHost.start('connectors', inline!.startConnectors, coreApi, CONNECTORS_FALLBACKS, CONNECTORS_REQUESTS)
   // Sharing this machine with other accounts, and the machines shared with this one (services/sharedMachines.ts).
   // Its port builds a guest's harness (core/agents/guestCreate.ts), asked of the edge host (core/sharedMachinesLink.ts).
   if (outOfProcess.has('sharedMachines')) ports.sharedMachines = createSharedMachinesLink((type, payload) => serviceLinks.call('sharedMachines', type, payload))
@@ -2911,6 +2915,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
     // The backend's word, else what the models service works out (services/models.ts).
     privateGridName: async () => backend.gridName() ?? await (ports.models ?? MODELS_OFF).privateGridName(),
+    syncProfileHome: (engine, folder) => (ports.connectors ?? CONNECTORS_OFF).syncProfileHome(engine, folder),
   })
   backend.onCreateAgent = creator
 

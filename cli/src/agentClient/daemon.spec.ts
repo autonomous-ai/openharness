@@ -258,3 +258,61 @@ describe('a request too large for the daemon', () => {
     await expect(waiting).rejects.toMatchObject({ code: 'REQUEST_TOO_LARGE' })
   })
 })
+
+// `harness wait` and `watch` follow what the daemon pushes for the harnesses they named (core/toolWatches.ts), and a
+// daemon too old to push answers `agents_watch` UNSUPPORTED: they then look every 3 s, as before.
+describe('a line that follows pushed state events', () => {
+  const line = (answer: Record<string, unknown>) => {
+    const sent: Array<{ type: string; payload: Record<string, unknown> }> = []
+    const socket = new EventEmitter() as unknown as ClientSocket & EventEmitter
+    const push = (frame: unknown) => socket.emit('message', Buffer.from(JSON.stringify(frame)), false)
+    Object.assign(socket, {
+      send: (text: string) => {
+        const frame = JSON.parse(text)
+        sent.push(frame)
+        if (frame.type === 'machine_select') setImmediate(() => push({ type: 'connected', payload: {} }))
+        if (frame.type === 'agents_watch') setImmediate(() => push({ type: 'agents_watch_result', payload: { requestId: frame.payload.requestId, ...answer } }))
+      },
+      close: vi.fn(),
+    })
+    setImmediate(() => socket.emit('open'))
+    return { sent, push, socket }
+  }
+  const where = { port: 1, dataDir: '/nowhere', machineId: 'm1' }
+
+  it('names the harnesses, and hears each pushed state event of one of them', async () => {
+    const { sent, push, socket } = line({ ok: true })
+    const daemon = await openDaemon(where, 'm1', () => socket)
+    const heard: string[] = []
+    expect(await daemon.watch!(['a', 'b'], (agentId) => heard.push(agentId))).toBe(true)
+    expect(sent.at(-1)).toMatchObject({ type: 'agents_watch', payload: { agentIds: ['a', 'b'] } })
+    push({ type: 'agent_activity', agentId: 'a', payload: { agentId: 'a', state: 'working' } })
+    push({ type: 'turn_ended', agentId: 'b', payload: { agentId: 'b', state: 'idle' } })
+    push({ type: 'commander_question', agentId: 'a', payload: { agentId: 'a', requestId: 'q' } })
+    push({ type: 'commander_question_close', agentId: 'a', payload: { agentId: 'a', requestId: 'q' } })
+    push({ type: 'agent_deleted', agentId: 'b', payload: { agentId: 'b' } })
+    // What is not a state event, names no harness, or is binary is not heard.
+    push({ type: 'text_delta', agentId: 'a', payload: { agentId: 'a' } })
+    push({ type: 'turn_ended', payload: {} })
+    socket.emit('message', Buffer.from('{}'), true)
+    expect(heard).toEqual(['a', 'b', 'a', 'a', 'b'])
+    daemon.close()
+  })
+
+  it('says no from a daemon too old to push, and hears nothing then', async () => {
+    const { push, socket } = line({ error: 'UNSUPPORTED' })
+    const daemon = await openDaemon(where, 'm1', () => socket)
+    const heard: string[] = []
+    expect(await daemon.watch!(['a'], (agentId) => heard.push(agentId))).toBe(false)
+    push({ type: 'turn_ended', agentId: 'a', payload: { agentId: 'a' } })
+    expect(heard).toEqual([])
+    daemon.close()
+  })
+
+  it('hears nothing before it asked', async () => {
+    const { push, socket } = line({ ok: true })
+    const daemon = await openDaemon(where, 'm1', () => socket)
+    push({ type: 'turn_ended', agentId: 'a', payload: { agentId: 'a' } })
+    daemon.close()
+  })
+})

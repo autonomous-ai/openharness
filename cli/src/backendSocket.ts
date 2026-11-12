@@ -50,6 +50,7 @@ import { BACKEND_ONLY_DOWN_TYPES, GATEWAY_REQUEST_TYPES, isLocalClientId, logSaf
 import { sid, logFrame } from './lib/log.js'
 import { spreadNotice } from './lib/spreadNotice.js'
 import { eventAgentId, GUEST_REFUSALS, guestVerdict } from './core/guestPolicy.js'
+import { createToolWatches } from './core/toolWatches.js'
 
 export { isLocalClientId, type DownTransport }
 
@@ -122,9 +123,12 @@ export class BackendSocket {
   /**
    * Loopback clients that are TOOLS, not windows (`machine_select { tool: true }`): `harness pair`, the
    * `harnessd` MCP server. They get their RPC replies like any local client, but they are not a person at
-   * this computer — not presence, not a window to push to, and never what wakes the pair brain.
+   * this computer — not presence, not a window to push to, and never what wakes the pair brain. What they are
+   * pushed is the state of the harnesses each named (`agents_watch`), and nothing else.
    */
   private readonly toolClients = new Set<string>()
+  /** Which harnesses each tool follows, and what it is told of them (core/toolWatches.ts). */
+  private readonly toolWatches = createToolWatches({ sendTo: (connId, frame) => this.sendLocalTo(connId, frame as Frame) })
   /** The windows that are `harness tui`, not the desktop app: each surface is its own presence. */
   private readonly tuiClients = new Set<string>()
   private terminalStreams: TerminalStreamManager | null = null
@@ -630,8 +634,11 @@ export class BackendSocket {
     try { this.onFrameSent?.(frame) } catch { /* the frame goes out regardless */ }
     if (logged(frame)) logFrame('→', 'web', frame)
     for (const [connId, sink] of this.localClients) {
+      // A tool dropped every event it was sent: an agent's `harness wait` was handed each harness's every text_delta.
+      if (this.toolClients.has(connId)) continue
       if (!sink.sendFrame(frame)) void this.unregisterLocalClient(connId)
     }
+    this.toolWatches.tell(frame)
     this.toRemoteApps(frame)
   }
 
@@ -678,6 +685,8 @@ export class BackendSocket {
       if (logged(sent)) logFrame('→', 'local', sent)
       if (!sink.sendFrame(sent)) void this.unregisterLocalClient(connId)
     }
+    // A question goes to the windows this way (core/questions.ts); a frame made per window is never a state event.
+    if (typeof frame !== 'function') this.toolWatches.tell(frame)
   }
 
   /** One frame to ONE window on this computer, if it is one. Never queued, never to the cloud. */
@@ -751,6 +760,8 @@ export class BackendSocket {
    *  the group key, so the backend relays only ciphertext; system/presence frames pass through. */
   sendCommander(frame: Frame): void {
     this.onOutboundCommander?.(frame)
+    // A harness that stopped is `agent_deleted` to the devices alone (`publishStoppedAgent`).
+    this.toolWatches.tell(frame)
     if (isLocalOnly(frame)) return
     if (env.LOG_FRAMES) logFrame('→', 'device', frame)
     // The sentence a processing card carries for the Pro's cable stays on this computer (onOutboundCommander).
@@ -782,6 +793,9 @@ export class BackendSocket {
   /** A loopback client that said it is a tool (`harness pair`, the MCP server), not a window. */
   isToolClient(connId: string): boolean { return this.toolClients.has(connId) }
 
+  /** A tool here follows [agentId] by what is pushed it (core/toolWatches.ts). */
+  followedByTool(agentId: string): boolean { return this.toolWatches.follows(agentId) }
+
   /** A service's fixed-name product counter (core/api.ts `CoreApi.count`), into the gateway's report as the socket's own. */
   countUsage(metric: ProductUsageMetric): void { this.toGateway('usage', (gateway) => gateway.usageCounter?.(metric)) }
 
@@ -808,6 +822,7 @@ export class BackendSocket {
   async unregisterLocalClient(connId: string): Promise<void> {
     if (!this.localClients.delete(connId)) return
     if (!this.toolClients.delete(connId)) this.onLocalClient?.(connId, false)
+    this.toolWatches.closed(connId)
     this.tuiClients.delete(connId)
     this.rowStateWindows.delete(connId)
     this.viewerStreams?.closed(connId); this.ownerCommands.closeConnection(connId); this.onConnectionClosed?.(connId)
@@ -1151,6 +1166,11 @@ export class BackendSocket {
         case 'agents_list':
           if (this.agentsProvider) await this.agentsProvider(payload, () => (local ? null : role), answer, guest)
           else reply(type, requestId, { error: 'UNSUPPORTED' })
+          return
+
+        // A tool follows the harnesses it names by what is pushed it (core/toolWatches.ts).
+        case 'agents_watch':
+          reply(type, requestId, this.toolWatches.watch(connId, this.toolClients.has(connId), payload.agentIds))
           return
 
         // The conversation an agent holds, and how long it is (core/transcripts/history.ts, bound by cli.ts).

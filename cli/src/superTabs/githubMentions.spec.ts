@@ -775,6 +775,16 @@ describe('whom it reads for (watchedAgents)', () => {
   it('reads for nobody while no one is signed in here', async () => {
     expect(await watchedAgents({ me: null, live: () => true, read, roster: async () => [row({})] })).toEqual([])
   })
+
+  // A Personal Swarm's project made from a pane's folder has no address to clone, only the GitHub repository Desktop named for it
+  // (backend commands.ts project.github): its agents hear GitHub there as a cloned project's do.
+  it('reads the GitHub repository a project was given when its folder has no address', async () => {
+    const watched = await watchedAgents({ me: 'dee', live: () => true, roster: async () => [row({})], read: async () => ({
+      conversations: [{ id: 'chat-pip', kind: 'agent-chat', agentIds: ['pip'] }],
+      projects: [{ repository: { cwd: '/Users/dee/pane', repositoryUrl: null }, githubRepository: 'Acme/Pane' }, { githubRepository: 'acme/web' },
+        { repository: { repositoryUrl: 'https://github.com/acme/app.git' }, githubRepository: 'acme/app' }] }) })
+    expect(watched.map(agent => agent.repos)).toEqual([['acme/pane', 'acme/web', 'acme/app']])
+  })
 })
 
 describe('names, labels and repositories', () => {
