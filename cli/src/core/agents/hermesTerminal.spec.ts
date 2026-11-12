@@ -25,6 +25,7 @@ const observed = (over: Partial<HermesObserved> = {}): HermesObserved => ({
 })
 const pass = (over: Partial<HermesPass> = {}) => ({ current: vi.fn(() => true), mayClaim: vi.fn((_sessionId: string) => true), hold: vi.fn((_error: unknown) => {}), ...over })
 
+let clock = 0
 function setup(platform: NodeJS.Platform = 'linux') {
   const deps = {
     platform,
@@ -38,12 +39,14 @@ function setup(platform: NodeJS.Platform = 'linux') {
     endedSince: vi.fn(async (_home: string, _sessionId: string, _sinceMs: number) => false),
     storeStamp: vi.fn(async (_home: string) => 'store'),
     recordSeen: vi.fn((_home: string) => {}),
+    now: vi.fn(() => clock),
   }
   return { deps, t: createHermesTerminal(deps) }
 }
 
 let log: MockInstance<typeof console.log>
 beforeEach(() => {
+  clock = 0
   log = vi.spyOn(console, 'log').mockImplementation(() => {})
 })
 afterEach(() => vi.restoreAllMocks())
@@ -231,6 +234,28 @@ describe('following a Hermes from its terminal record', () => {
     resumed.deps.storeStamp.mockResolvedValue('readable again')
     resumed.deps.endedSince.mockResolvedValue(true)
     expect(await resumed.t.follow(row, observed(), pass())).toEqual({ sessionId: OLD })
+  })
+
+  it('asks a store it could not read again a minute on, though it never changed', async () => {
+    // A read can fail on the daemon's side (its read threads busy past the deadline) with nothing written to the store
+    // since: waiting for a change alone would leave the agent where it was until Hermes next writes, after any idle.
+    const { deps, t } = setup()
+    deps.kind.mockRejectedValueOnce(new Error('the SQLite read passed its deadline'))
+    expect(await t.follow(agent(), observed(), pass())).toBe('wait')
+    clock += 59_999
+    expect(await t.follow(agent(), observed(), pass())).toBe('wait')
+    expect(deps.kind).toHaveBeenCalledOnce()
+    clock += 1
+    expect(await t.follow(agent(), observed(), pass())).toEqual({ sessionId: S })
+    expect(deps.kind).toHaveBeenCalledTimes(2)
+
+    // A store that had no row is still asked only once it changed.
+    deps.kind.mockResolvedValue('waiting')
+    deps.stamp.mockResolvedValue('8:60:2000')
+    await t.follow(agent(), observed(), pass())
+    clock += 600_000
+    expect(await t.follow(agent(), observed(), pass())).toBe('wait')
+    expect(deps.kind).toHaveBeenCalledTimes(3)
   })
 
   it('says once why a record is ignored, and lets the fallback run', async () => {
