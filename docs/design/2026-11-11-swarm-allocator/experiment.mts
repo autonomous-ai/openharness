@@ -1,8 +1,9 @@
 // The first experiment of the allocator's redesign (README.md beside this file). One claim: does the planned search
 // (the product's solver, run each minute, lists two deep as the allocator kept them until BUILD.md's package 2) finish work
 // sooner than a rule that decides only when a builder is free? A model, not a measurement: its numbers are only as good as
-// the assumptions in `world` below. One is measured: a builder takes 1.12 times as long outside its own area as in it, as
-// lampOS's record has it for an area it had landed nothing in against one it had (0.85 to 1.49 times:
+// the assumptions in `world` below. One is the study's estimate: a builder takes 1.12 times as long outside its own area as
+// in it, as lampOS's record has it for an area it had landed nothing in against one it had (a fit of opened-to-landed time,
+// within noise, applied here to build minutes; 0.85 to 1.49 times:
 // docs/research/2026-11-12-area-worth). Until 12 November this assumed twice as long. The solver's "fixed" plan still
 // guesses half the time in a builder's area and half as long again elsewhere, the product's guess for an area a person
 // names (FOCUS and AWAY in assign/crew.ts), which the study could not test.
@@ -14,7 +15,7 @@
 //   ONLY=fifo,priced0      the policies to run; the solver's rows take minutes, the others seconds
 //   CORES=8                a machine's cores (6 by default)
 //   AWAY=1.2               a task's minutes outside a builder's area, as a factor on its size, where inside it is 0.6: 0.672,
-//                          the default, is 1.12 times as long, as measured; 1.2 twice, as assumed until 12 November; 0.9 one
+//                          the default, is 1.12 times as long, the study's estimate; 1.2 twice, as assumed until 12 November; 0.9 one
 //                          and a half times; 0.6 no more
 //   SUBS=6                 subscriptions the builders share evenly (6: one a machine, as the product reads them), each with a
 //                          5-hour window; without it nobody's work spends anything, as in the README's tables
