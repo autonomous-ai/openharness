@@ -20,10 +20,13 @@ export type AgentClosePlan = {
 export const LEAD_PROTECTED_DETAIL = 'This harness is the Product Manager of a Swarm project. Delete its project first to stop it.'
 export const LEAD_SWITCHING_DETAIL = 'This Product Manager is already switching its agent. Wait for it to finish.'
 
-/** `changeId`: the Change agent switch this `now` close is part of, which its handoff was prepared for (superTabs/leadSwitch.ts). */
-export type AgentCloseRequest = { agentId: string; sessionId: string; createdAt: string; mode: CloseMode; onlyIfHidden?: boolean; onlyIfOriginalLaunch?: boolean; expiresAt?: number; changeId?: string }
-/** `withoutConversation`: closed while still starting, before Harness could read its conversation, so none is kept. */
-export type AgentCloseResult = { closed?: true; withoutConversation?: true; deferred?: true; cancelled?: true; error?: string; detail?: string; activity?: CloseActivity }
+/** `changeId`: the Change agent switch this `now` close is part of, which its handoff was prepared for (superTabs/leadSwitch.ts).
+ *  `background`, the cleanup's alone and only with `idle`: `refuse` while any background command runs, `count` closes
+ *  whatever runs (past its ceiling) and says how many. */
+export type AgentCloseRequest = { agentId: string; sessionId: string; createdAt: string; mode: CloseMode; onlyIfHidden?: boolean; onlyIfOriginalLaunch?: boolean; expiresAt?: number; changeId?: string; background?: 'refuse' | 'count' }
+/** `withoutConversation`: closed while still starting, before Harness could read its conversation, so none is kept.
+ *  `backgroundCommands`: how many an idle harness still runs; `null` when Harness cannot know. */
+export type AgentCloseResult = { closed?: true; withoutConversation?: true; deferred?: true; cancelled?: true; error?: string; detail?: string; activity?: CloseActivity; backgroundCommands?: number | null }
 
 /**
  * How long a close waits for a harness still starting to bind its first conversation, trying again meanwhile.
@@ -92,10 +95,11 @@ function young(s: RegisteredSession, at: number): boolean {
 function stillStarting(s: RegisteredSession, at: number): boolean {
   return !!s.launch && !s.forkedFrom && young(s, at) && !s.sessionId && !s.transcriptPath && s.boundAt == null
 }
-/** What makes two requests the same one: the agent, the mode, and whether it holds only while no tab
- *  shows the agent. A cleanup that finds the agent on screen again must not answer the person's own close. */
+/** What makes two requests the same one: the agent, the mode, whether it holds only while no tab
+ *  shows the agent, and its rule for background commands. A cleanup that finds the agent on screen again must not
+ *  answer the person's own close, and its refusal over a background command must not answer a window's close. */
 function jobKey(request: AgentCloseRequest): string {
-  return JSON.stringify([request.agentId, request.mode, request.onlyIfHidden === true, request.onlyIfOriginalLaunch === true, request.expiresAt])
+  return JSON.stringify([request.agentId, request.mode, request.onlyIfHidden === true, request.onlyIfOriginalLaunch === true, request.expiresAt, request.background])
 }
 function matches(s: RegisteredSession | undefined, request: AgentCloseRequest, at: number): s is RegisteredSession {
   if (!s || (request.expiresAt !== undefined && request.expiresAt <= at) || (request.onlyIfOriginalLaunch && s.startedBy !== 'agent') || new Date(s.registeredAt).toISOString() !== request.createdAt) return false
@@ -128,6 +132,8 @@ export interface CloseAgentServiceDeps {
   /** Whether its pane shows a question the engine asks before any conversation: the folder's trust, or an MCP server the
    *  folder brings (`trust_open`). */
   atStartupQuestion?(s: RegisteredSession): Promise<boolean>
+  /** How many background commands its engine still runs; `null` when Harness cannot know. */
+  backgroundCommands?(s: RegisteredSession): Promise<number | null>
   now?: () => number
   sleep?: (ms: number) => Promise<void>
 }
@@ -311,7 +317,9 @@ export class CloseAgentService {
       // whether the session has unfinished work.
       const activity = observed === 'idle' && resumeMode(s.engine) !== 'conversation' ? 'unknown' : observed
       if (!current()) return { error: 'AGENT_CHANGED' }
-      if (request.mode === 'inspect') return { activity }
+      if (request.mode === 'inspect') {
+        return activity === 'idle' && this.deps.backgroundCommands ? { activity, backgroundCommands: await this.backgroundCommands(s) } : { activity }
+      }
       if (request.mode === 'after_task') {
         if (s.closePlan?.identity === target && s.closePlan.state === 'waiting') return { deferred: true }
         let created = false
@@ -330,6 +338,14 @@ export class CloseAgentService {
         return { deferred: true }
       }
       if (request.mode === 'idle' && activity !== 'idle') return { error: 'SESSION_NOT_IDLE', activity }
+      let background: number | null = null
+      if (request.mode === 'idle' && request.background) {
+        // Read once, here, and not again in beforeStop: a command starts only in a turn, and a turn makes the activity
+        // `working`, which beforeStop rechecks.
+        background = await this.backgroundCommands(s)
+        if (!current()) return { error: 'AGENT_CHANGED' }
+        if (request.background === 'refuse' && (background ?? 0) > 0) return { error: 'SESSION_NOT_IDLE', activity, backgroundCommands: background }
+      }
       await this.deps.stop(s.agentId, {
         ...(withoutConversation ? { withoutConversation: () => { unkept = true } } : {}),
         // The pass a Product Manager's switch earned rides with this one stop, and with no other (security review 1 of #2493).
@@ -366,7 +382,9 @@ export class CloseAgentService {
         },
       })
       this.idleSince.delete(s.agentId)
-      return unkept ? { closed: true, withoutConversation: true } : { closed: true }
+      const closed: AgentCloseResult = unkept ? { closed: true, withoutConversation: true } : { closed: true }
+      // Only a `count` close gets here with any running.
+      return (background ?? 0) > 0 ? { ...closed, backgroundCommands: background } : closed
     } catch (error) {
       if (error instanceof CloseRefused) return { error: 'SESSION_NOT_IDLE', activity: error.activity }
       const code = (error as { code?: unknown })?.code
@@ -377,6 +395,11 @@ export class CloseAgentService {
       return { error: typeof code === 'string' ? code : 'CLOSE_FAILED',
         detail: error instanceof Error ? error.message : 'Could not close this session safely. Please try again.' }
     }
+  }
+
+  /** A reader that fails is unknown, and unknown never blocks a close. */
+  private async backgroundCommands(s: RegisteredSession): Promise<number | null> {
+    try { return await this.deps.backgroundCommands?.(s) ?? null } catch { return null }
   }
 
   private pending(): RegisteredSession[] { return this.deps.registry.list().filter(s => s.closePlan?.state === 'waiting') }
