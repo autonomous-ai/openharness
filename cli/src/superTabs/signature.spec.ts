@@ -30,6 +30,27 @@ describe('an agent\'s post without its own signature', () => {
       expect(unsigned(text, names), text).toBe(left)
     }
   })
+  // anh Dee, 2026-11-12, of Lennox's "@Devon Lennox: Flutter 3.47.2 … is now on Mac 3": "why does lenox put 'Lenox:' there. it's
+  // awkward. no human conversation is like that on slack". The signature came after the person it was addressed to.
+  it('leaves out its signature after the mentions a post opens with, and keeps the mentions', () => {
+    for (const [text, names, left] of [
+      ['@Devon Lennox: Flutter 3.47.2 is now on Mac 3.', ['Lennox'], '@Devon Flutter 3.47.2 is now on Mac 3.'],
+      ['@Devon @Cy Lennox, 16:25: ready for #4208.', ['Lennox'], '@Devon @Cy ready for #4208.'],
+      ['@Devon **Lennox:** ready.', ['Lennox'], '@Devon ready.'],
+      ['  @Devon   Lennox: ready.', ['Lennox'], '@Devon ready.'],
+    ] as const) {
+      expect(unsigned(text, names), text).toBe(left)
+    }
+    // A mention then its name as a word, someone else's name, or nothing after it: no signature.
+    for (const [text, names] of [
+      ['@Devon Lennox, can you read #12?', ['Lennox']],
+      ['@Devon Cy: done.', ['Lennox']],
+      ['@Devon Lennox:', ['Lennox']],
+      ['@Lennox: done.', ['Lennox']],
+    ] as const) {
+      expect(unsigned(text, names), text).toBe(text)
+    }
+  })
   it('keeps a post that only starts with its name, someone else\'s name, or nothing after the signature', () => {
     for (const [text, names] of [
       ['Ray, can you read #12?', ['Ray']],

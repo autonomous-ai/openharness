@@ -10,6 +10,9 @@
  * bold or italics closed before its colon or after, perhaps with a role's word or two in brackets ("Ray (PM)"), then a colon, or
  * a comma, a time (with "pm" or a zone such as "UTC") and a colon. "Ray, can you read #12?" opens with its name and is no
  * signature; nor are "vale: 3 errors", a linter's report, and "Ray, 9:00 call: agenda" (review of #4074).
+ *
+ * After the mentions a post opens with too, which stay: "@Devon Lennox: Flutter 3.47.2 is now on Mac 3" (anh Dee, 2026-11-12:
+ * "why does lenox put 'Lenox:' there. it's awkward").
  */
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
@@ -17,8 +20,22 @@ const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
  *  post that opens "Claude Code: ..." is about the engine. */
 const ENGINE = /^(?:claude(?: code)?|codex|opencode|pi)$/i
 
-/** [text] without a signature of any of [names] at its start; as it is when it has none, or nothing after it. */
+/** The mentions a post opens with ("@Devon @Cy "), each a word of its own. */
+const MENTIONS = /^\s*((?:@[^\s@]+\s+)+)/
+
+/** [text] without a signature of any of [names] at its start, or after the mentions it opens with; as it is when it has none,
+ *  or nothing after it. */
 export function unsigned(text: string, names: ReadonlyArray<string | null | undefined>): string {
+  const mentions = MENTIONS.exec(text)
+  if (mentions) {
+    const said = signedOff(text.slice(mentions[0].length), names)
+    return said === null ? text : `${mentions[1]!.trim().split(/\s+/).join(' ')} ${said}`
+  }
+  return signedOff(text, names) ?? text
+}
+
+/** What [text] says after a signature of any of [names] at its very start, or null when it has none or nothing after it. */
+function signedOff(text: string, names: ReadonlyArray<string | null | undefined>): string | null {
   for (const raw of names) {
     const name = raw?.trim()
     if (!name || ENGINE.test(name)) continue
@@ -38,5 +55,5 @@ export function unsigned(text: string, names: ReadonlyArray<string | null | unde
     const said = text.slice(end).trimStart()
     if (said) return said
   }
-  return text
+  return null
 }
