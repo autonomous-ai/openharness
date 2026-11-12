@@ -14,6 +14,7 @@ import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/widgets/web_pane_panel.dart';
+import 'package:harness/ws/ws_conn.dart';
 
 import '../support/fake_browser_view.dart';
 
@@ -51,6 +52,9 @@ class _App extends AppNotifier {
   }
 
   final asked = <String>[];
+
+  /// What the machine answers the next Stop with, when it does not take it.
+  Object? stopRefused;
   final streams = <({BrowserStream stream, List<(String, Map)> frames})>[];
   var availability = const BrowserAvailability(BrowserAvailability.needsSetup);
 
@@ -104,8 +108,10 @@ class _App extends AppNotifier {
       asked.add('start $agentId');
 
   @override
-  Future<void> agentBrowserStop(String machineId, String agentId) async =>
-      asked.add('stop $agentId');
+  Future<void> agentBrowserStop(String machineId, String agentId) async {
+    asked.add('stop $agentId');
+    if (stopRefused case final refused?) throw refused;
+  }
 
   @override
   Future<BrowserSettings> agentBrowserSettings(
@@ -447,6 +453,57 @@ void main() {
     app.answer();
     await tester.pump();
     expect(key('browser-screen'), findsOneWidget);
+  });
+
+  // anh Dee, 2026-11-12: Stop showed "Starting browser…" while the browser was being stopped.
+  testWidgets('Stop shows "Stopping browser…" from the press until the '
+      'machine says the browser is off, never "Starting browser…"', (
+    tester,
+  ) async {
+    await showOpen(tester);
+    await tester.tap(find.byTooltip('Stop'));
+    await tester.pump();
+    expect(app.asked, ['stop a1']);
+    expect(find.text('Stopping browser…'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(key('browser-screen'), findsNothing);
+    // The machine ends the stream; an older one may say starting before off.
+    await closeWith(tester, 'agent');
+    expect(find.text('Stopping browser…'), findsOneWidget);
+    app.browser(const AgentBrowser(state: 'starting'));
+    await tester.pump();
+    await tester.pump(BrowserStream.openTimeout);
+    expect(find.text('Stopping browser…'), findsOneWidget);
+    expect(find.text('Starting browser…'), findsNothing);
+    expect(find.text('Browser stopped'), findsNothing);
+    expect(app.streams, hasLength(1));
+    app.browser(null);
+    await tester.pump();
+    expect(find.text('Stopping browser…'), findsNothing);
+    expect(find.text('A sandboxed Chrome the agent drives'), findsOneWidget);
+    // The next Start is a start again.
+    app.browser(const AgentBrowser(state: 'starting'));
+    await tester.pump();
+    expect(find.text('Starting browser…'), findsOneWidget);
+  });
+
+  testWidgets('a Stop the machine does not take goes back to the screen, '
+      'with why', (tester) async {
+    app.stopRefused = const WsRequestFailure(
+      responseType: 'agent_browser_stop_result',
+      code: 'UNSUPPORTED',
+    );
+    await showOpen(tester);
+    await tester.tap(find.byTooltip('Stop'));
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('Stopping browser…'), findsNothing);
+    expect(app.streams, hasLength(2));
+    app.answer();
+    await tester.pump();
+    await tester.pump();
+    expect(key('browser-screen'), findsOneWidget);
+    expect(find.text('Update Harness on Ken Mac first'), findsOneWidget);
   });
 
   testWidgets('Paste sends the clipboard\'s text to the browser, and the gear '
