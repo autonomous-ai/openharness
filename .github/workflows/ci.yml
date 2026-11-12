@@ -677,7 +677,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.CLI_NODE_VERSION }}
-      - run: node --test daemons/tools/card.test.mjs
+      - run: node --test daemons/tools/card.test.mjs daemons/tools/generate.test.mjs
 
   # The Harness PTY host (pty/, on term/): its Rust tests, then the CLI's terminal contract for the
   # ptyhost backend against the host just built (tmux's half needs tmux and runs locally). Selected by
