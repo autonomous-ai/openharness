@@ -54,6 +54,8 @@ export interface NewArgs {
   model: string | null
   /** OpenClaw's `--local` state folder, absolute: its runtime and tools run in the pane's process, on that folder. */
   local: string | null
+  /** The Hachi goal it is started for (`harness goal open`), recorded under it once made; null for none. */
+  goal: string | null
   json: boolean
 }
 
@@ -85,6 +87,7 @@ export const NEW_USAGE = [
   '  --repo <r>    a cloud coding agent\'s GitHub repository: owner/name or https://github.com/owner/name',
   '                 (Cursor Cloud needs one; Devin Cloud works without)',
   '  --acu-limit <n>  the most ACUs Devin Cloud may spend (1-1000; 5 when left out)',
+  '  --goal <id>    Hachi only: the goal it is started for (harness goal open), recorded under it',
   '  --json         print the result as one JSON line',
   '',
   'An agent refused (its limits, or the person has not let agents start agents) exits 5: do not retry.',
@@ -115,6 +118,7 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string; p
   let acuLimit: number | null = null
   let model: string | null = null
   let local: string | null = null
+  let goal: string | null = null
   let json = false
   const value = (flag: string, index: number): string => {
     const next = argv[index + 1]
@@ -143,6 +147,11 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string; p
       i++
     }
     else if (word === '--local') { local = value(word, i); i++ }
+    else if (word === '--goal') {
+      goal = value(word, i).trim()
+      if (!goal) throw new NewUsageError('--goal needs a value.')
+      i++
+    }
     else if (word === '--repo') {
       repo = value(word, i).trim()
       if (!repo) throw new NewUsageError('--repo needs a value.')
@@ -225,7 +234,7 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string; p
     if (machine === null) cwd = env.cwd
     else projectName = ''
   }
-  return { agent: words[0] ?? 'claude', machine, cwd, projectName, mode, prompt, name, repo, acuLimit, model, local, json }
+  return { agent: words[0] ?? 'claude', machine, cwd, projectName, mode, prompt, name, repo, acuLimit, model, local, goal, json }
 }
 
 /** The `agent_create` payload for [args]: the same fields the app's box sends. [baseEngine] is the
@@ -388,6 +397,12 @@ export interface NewOrigin {
   /** The caller's own harness, by agent id, when it is one on this computer: a harness started here records it, and the
    *  windows open it beside the caller's pane. Absent for an agent outside Harness. */
   parentAgentId?: string
+  /** Hachi's goals (`--goal`, services/goals.ts): [check] rejects a goal the caller may not start work for; [add] records
+   *  a harness under it, by its creation and, once made, its id, and says what to print when that could not be kept. */
+  goal?: {
+    check(id: string): Promise<void>
+    add(id: string, harness: { machineId: string; creationId: string; agentId?: string }): Promise<string | null>
+  }
 }
 
 /** How long `harness new` takes at most to answer an agent: within Codex's one-minute MCP tool timeout, with room. */
@@ -607,6 +622,12 @@ export async function newCommand(deps: NewCommandDeps): Promise<number> {
       return 0
     }
     await origin?.check()
+    // A goal is Hachi's (services/goals.ts): checked before anything starts, so work for a goal it may not use never
+    // does. After the limits, so a refused start says why it was refused.
+    if (args.goal !== null) {
+      if (!origin?.goal) throw new AgentClientError('NOT_HACHI', 'Only Hachi starts harnesses for a goal. Start it without --goal.')
+      await origin.goal.check(args.goal)
+    }
     const session = await daemonSession(deps, machineId)
     try {
       // An older daemon drops the folder it does not know and runs OpenClaw on the shared Gateway, tools and all.
@@ -669,6 +690,11 @@ export async function newCommand(deps: NewCommandDeps): Promise<number> {
       if (origin && (result.state === 'pending' || result.state === 'unconfirmed')) {
         const unrecorded = origin.pending?.(machineId, { creationId, name: args.name ?? '', engine: String(payload.engine) })
         if (unrecorded) deps.error(unrecorded)
+        // It starts by itself later: recorded under its goal now, by its creation.
+        if (args.goal !== null) {
+          const unrecordedGoal = await origin.goal!.add(args.goal, { machineId, creationId })
+          if (unrecordedGoal) deps.error(unrecordedGoal)
+        }
       }
       // A launch the daemon holds (a native launch waiting its turn) is still on its way: asked after until it is not,
       // for a minute. Given up on at once, it could start later with an agent's task and no record of who started it
@@ -742,6 +768,10 @@ export async function newCommand(deps: NewCommandDeps): Promise<number> {
       const agent = (result.agent ?? {}) as Record<string, unknown>
       const warning = await origin?.created(machineId, agent, creationId)
       if (warning) deps.error(warning)
+      if (args.goal !== null && typeof agent.id === 'string') {
+        const unrecorded = await origin!.goal!.add(args.goal, { machineId, creationId, agentId: agent.id })
+        if (unrecorded) deps.error(unrecorded)
+      }
       // An agent is told it is starting (never that its task is done), what changed, and what to run next.
       const told = origin?.answer(agent, { local, machine: args.machine })
       if (args.json) deps.output(JSON.stringify({ ok: true, machineId, agent, ...(trustNote ? { note: trustNote } : {}), ...(told ? { effect: told.effect, next: told.next } : {}) }))

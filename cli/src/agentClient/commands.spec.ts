@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { addressOf, agentOrigin, AGENTS_START_AGENTS_OFF, closeCommand, deleteCommand, DEPTH_REFUSAL, EXIT, parseDuration, psCommand, refusalNext, replyCommand, resumeCommand, routeCommand, showCommand, spawnCheck, spawnCount, spawnRefusal, SPAWN_LIMITS, step, tellCommand, waitCommand, watchCommand, whoamiCommand, type ClientDeps } from './commands.js'
+import { addressOf, agentOrigin, AGENTS_START_AGENTS_OFF, closeCommand, deleteCommand, DEPTH_REFUSAL, EXIT, GOAL_USAGE, goalCommand, parseDuration, psCommand, refusalNext, replyCommand, resumeCommand, routeCommand, showCommand, spawnCheck, spawnCount, spawnRefusal, SPAWN_LIMITS, step, tellCommand, waitCommand, watchCommand, whoamiCommand, type ClientDeps } from './commands.js'
 import { RefusedError, type Rpc } from '../messages/rpc.js'
 import { AgentClientError, type Daemon, type Where } from './daemon.js'
 import { Ledger, ledgerPath } from './ledger.js'
@@ -2887,5 +2887,117 @@ describe('harness resume (a program acting for the person reopens a closed harne
     away.deps.machines = async () => [{ machineId: 'm', label: 'studio', current: true }, { machineId: 'm2', label: 'office', current: false }] as never
     expect(await replyCommand(['--machine', 'office', 'weather', '--', 'add dark mode'], away.deps)).toBe(EXIT.refused)
     expect(away.err[0]).toContain('Resume it with harness resume --machine office weather, then reply')
+  })
+})
+
+describe('harness goal (Hachi\'s goals, services/goals.ts)', () => {
+  const goal = (id: string, over: Record<string, unknown> = {}) => ({ id, title: 'flaky login test', harnesses: [], openedAt: NOW, lastStartAt: null, doneAt: null, ...over })
+  /** A daemon whose goals service answers [answers] by type, and records what it was asked. */
+  const goals = (answers: Record<string, (payload: Record<string, unknown>) => Record<string, unknown>>) => {
+    const d = new FakeDaemon()
+    d.frames = [frame('hachi', { engine: 'claude', tmuxPane: '%lead' })]
+    Object.assign(d.extra, answers)
+    return d
+  }
+
+  it('opens a goal in the person\'s words, from Hachi\'s pane, and says how to start its work', async () => {
+    const d = goals({ goal_open: (payload) => ({ goal: goal('3fa2b1c9', { title: payload.title }) }) })
+    const h = harness(d)
+    expect(await goalCommand(['open', 'flaky', 'login', 'test'], h.deps)).toBe(EXIT.ok)
+    expect(d.requests).toEqual([{ type: 'goal_open', payload: { title: 'flaky login test', pane: '%lead' } }])
+    expect(h.out).toEqual(['Goal 3fa2b1c9 opened: flaky login test.\nNext: harness new <agent> --goal 3fa2b1c9 --name <name> <project> -- <task>  (for each piece of its work)'])
+    expect(d.closed).toBe(true)
+    const json = harness(d)
+    expect(await goalCommand(['open', 'flaky login test', '--json'], json.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(json.out[0])).toMatchObject({ goal: { id: '3fa2b1c9', title: 'flaky login test' }, next: [{ run: expect.stringContaining('--goal 3fa2b1c9') }] })
+  })
+
+  it('closes a goal, and is refused (exit 5) one no harness was started for', async () => {
+    let started = false
+    const d = goals({ goal_done: (payload) => started ? { goal: goal(String(payload.id), { doneAt: NOW }) }
+      : { error: 'GOAL_EMPTY', message: 'No harness was started for that goal, so it is not done.' } })
+    const empty = harness(d)
+    expect(await goalCommand(['done', 'g1'], empty.deps)).toBe(EXIT.refused)
+    expect(empty.err).toEqual(['No harness was started for that goal, so it is not done.'])
+    started = true
+    const done = harness(d)
+    expect(await goalCommand(['done', 'g1'], done.deps)).toBe(EXIT.ok)
+    expect(done.out).toEqual(['Goal g1 done: flaky login test.'])
+    expect(d.requests.at(-1)).toEqual({ type: 'goal_done', payload: { id: 'g1', pane: '%lead' } })
+    const json = harness(d)
+    expect(await goalCommand(['done', 'g1', '--json'], json.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(json.out[0])).toMatchObject({ goal: { id: 'g1', doneAt: NOW } })
+  })
+
+  it('lists the goals: open ones and those closed this week, with how many harnesses each has', async () => {
+    const d = goals({ goal_list: () => ({ goals: [goal('g2', { title: 'review api', harnesses: [{ machineId: 'm', creationId: 'c1', agentId: 'a1' }] }),
+      goal('g1', { harnesses: [{}, {}], doneAt: NOW })] }) })
+    const h = harness(d)
+    expect(await goalCommand(['list'], h.deps)).toBe(EXIT.ok)
+    expect(h.out).toEqual(['g2  open  1 harness    review api\ng1  done  2 harnesses  flaky login test'])
+    const json = harness(d)
+    expect(await goalCommand(['list', '--json'], json.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(json.out[0]).goals.map((g: { id: string }) => g.id)).toEqual(['g2', 'g1'])
+    const none = harness(goals({ goal_list: () => ({ goals: [] }) }))
+    expect(await goalCommand(['list'], none.deps)).toBe(EXIT.ok)
+    expect(none.out).toEqual(['No goals.'])
+  })
+
+  it('exits 5 for any caller but Hachi, as every refusal, and 1 for a daemon that keeps no goals', async () => {
+    const d = goals({
+      goal_open: () => ({ error: 'NOT_HACHI', message: 'Only Hachi keeps goals.' }),
+      goal_done: () => ({ error: 'NOT_HACHI', message: 'Only Hachi keeps goals.' }),
+      goal_list: () => ({ error: 'NOT_HACHI', message: 'Only Hachi keeps goals.' }),
+    })
+    for (const argv of [['open', 'x'], ['done', 'g1'], ['list']]) {
+      const h = harness(d, { pane: undefined })
+      expect(await goalCommand([...argv, '--json'], h.deps)).toBe(EXIT.refused)
+      expect(JSON.parse(h.out[0])).toMatchObject({ error: 'NOT_HACHI', code: 'NOT_HACHI', detail: 'Only Hachi keeps goals.' })
+    }
+    // No pane at all is asked as none: the service refuses it.
+    expect(d.requests.every((r) => r.payload.pane === '')).toBe(true)
+    // A daemon from before goals answers with no words of its own.
+    const old = harness(goals({}))
+    expect(await goalCommand(['list'], old.deps)).toBe(EXIT.failed)
+    expect(old.err).toEqual(['Harness did not keep the goal (UNKNOWN).'])
+  })
+
+  it('takes a title to open, one id to close, nothing to list, and no machine', async () => {
+    const d = goals({})
+    for (const [argv, said] of [
+      [['open'], 'Give the goal in the person\'s words: harness goal open <title>'],
+      [['done'], 'Name one goal by its id.'],
+      [['done', 'a', 'b'], 'Name one goal by its id.'],
+      [['list', 'x'], 'harness goal list takes nothing more.'],
+      [['shut', 'g1'], 'Unknown goal command shut.'],
+      [['list', '--machine', 'office'], 'harness goal takes no --machine: Hachi keeps its goals where it runs.'],
+    ] as const) {
+      const h = harness(d)
+      expect(await goalCommand(argv, h.deps)).toBe(EXIT.usage)
+      expect(h.err[0]).toBe(said)
+    }
+    const help = harness(d)
+    expect(await goalCommand([], help.deps)).toBe(EXIT.ok)
+    expect(help.out[0]).toBe(GOAL_USAGE)
+    expect(d.requests).toEqual([])
+  })
+
+  it('gives harness new --goal its check and its record, asked of the caller\'s own daemon', async () => {
+    const d = goals({
+      goal_list: () => ({ goals: [goal('g1'), goal('g2', { doneAt: NOW })] }),
+      goal_add: (payload) => payload.id === 'g1' ? { goal: goal('g1') } : { error: 'GOAL_DONE', message: 'That goal is done.' },
+    })
+    d.frames = [frame('lead', { engine: 'claude' })]
+    const h = harness(d)
+    const origin = (await agentOrigin(h.deps))!
+    await expect(origin.goal!.check('g1')).resolves.toBeUndefined()
+    await expect(origin.goal!.check('g2')).rejects.toMatchObject({ code: 'GOAL_DONE' })
+    await expect(origin.goal!.check('g9')).rejects.toMatchObject({ code: 'UNKNOWN_GOAL', message: 'No goal g9. harness goal list lists them.' })
+    expect(await origin.goal!.add('g1', { machineId: 'm', creationId: 'c1', agentId: 'k1' })).toBeNull()
+    expect(d.requests.at(-1)).toEqual({ type: 'goal_add', payload: { id: 'g1', machineId: 'm', creationId: 'c1', agentId: 'k1', pane: '%lead' } })
+    expect(await origin.goal!.add('g2', { machineId: 'm', creationId: 'c2' })).toBe('It was started, but not recorded under goal g2: That goal is done.')
+    // Hachi's goals are refused to anyone else by the service, through the same check.
+    const other = harness(goals({ goal_list: () => ({ error: 'NOT_HACHI', message: 'Only Hachi keeps goals.' }) }))
+    await expect((await agentOrigin(other.deps))!.goal!.check('g1')).rejects.toMatchObject({ code: 'NOT_HACHI' })
   })
 })

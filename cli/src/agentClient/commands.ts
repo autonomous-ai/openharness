@@ -138,9 +138,11 @@ and, if not, who can change that; how many of yours are open, and how many start
 export const EXIT = { ok: 0, failed: 1, usage: 2, needsInput: 3, stopped: 4, refused: 5, timeout: 124 } as const
 
 /** Not a failure: the caller may not do this. It should not retry; it tells the person or does the work itself.
- *  `TELL_OFF` and `NOT_RUNNING` are `harness tell`'s, `REPLY_OFF` is `harness reply`'s: retried, they are refused the
+ *  `TELL_OFF` and `NOT_RUNNING` are `harness tell`'s, `REPLY_OFF` is `harness reply`'s, and `NOT_HACHI`, `GOAL_EMPTY`,
+ *  `GOAL_LIMIT`, `GOAL_DONE` and `GOAL_FULL` are `harness goal`'s (services/goals.ts): retried, they are refused the
  *  same. `NOT_IDLE` is not among them: once the harness has finished, the reply is taken. */
-export const REFUSED_CODES: ReadonlySet<string> = new Set(['SPAWN_LIMIT', 'TURNED_OFF', 'NOT_YOURS', 'TELL_OFF', 'NOT_RUNNING', 'REPLY_OFF'])
+export const REFUSED_CODES: ReadonlySet<string> = new Set(['SPAWN_LIMIT', 'TURNED_OFF', 'NOT_YOURS', 'TELL_OFF', 'NOT_RUNNING', 'REPLY_OFF',
+  'NOT_HACHI', 'GOAL_EMPTY', 'GOAL_LIMIT', 'GOAL_DONE', 'GOAL_FULL'])
 
 /** What a refused caller may do instead: close one of its own when it is at its limit; otherwise the message says. */
 export function refusalNext(env: NodeJS.ProcessEnv, error: AgentClientError): NextStep[] {
@@ -1588,6 +1590,68 @@ export function deleteCommand(argv: readonly string[], deps: ClientDeps = {}): P
   })
 }
 
+// ── goal ───────────────────────────────────────────────────────────────────────────────────────────
+
+export const GOAL_USAGE = `Usage: harness goal open <title…> [--json]
+       harness goal done <id> [--json]
+       harness goal list [--json]
+
+Hachi's goals. open names one in the person's own words (at most 80 characters) and says its id: start each harness
+for it with harness new --goal <id>. done closes it once its harnesses are done, which tells the person; it is refused
+for a goal no harness was started for. list shows the open ones and those closed this week.
+Only Hachi keeps goals: any other caller exits 5.`
+
+/** A goal as the goals service answers it (services/goals.ts `Goal`). */
+interface GoalRow { id: string; title: string; harnesses: unknown[]; openedAt: number; lastStartAt: number | null; doneAt: number | null }
+
+/** One of Hachi's goal requests to the daemon of the caller's pane, which reads who asks from that pane, never from
+ *  what is sent: a refusal is thrown with the service's own words. */
+async function askGoals(s: Setup, type: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const daemon = await s.open(s.where())
+  try {
+    const reply = await daemon.request(type, { ...payload, pane: s.pane ?? '' })
+    if (typeof reply.error === 'string') {
+      throw new AgentClientError(reply.error, typeof reply.message === 'string' && reply.message ? reply.message : `Harness did not keep the goal (${reply.error}).`)
+    }
+    return reply
+  } finally { daemon.close() }
+}
+
+/** `harness goal`: Hachi opens, closes and lists its goals (docs/design/2026-11-12-hachi.md, "Goals"). */
+export function goalCommand(argv: readonly string[], deps: ClientDeps = {}): Promise<number> {
+  return run(GOAL_USAGE, deps, wantsJson, argv, async (s) => {
+    const { names, flags, machine } = words(argv, { '--json': 'flag' })
+    if (machine !== null) throw new UsageError('harness goal takes no --machine: Hachi keeps its goals where it runs.')
+    const [verb, ...rest] = names
+    const json = flags.has('--json')
+    if (verb === 'open') {
+      const title = rest.join(' ').trim()
+      if (!title) throw new UsageError('Give the goal in the person\'s words: harness goal open <title>')
+      const goal = (await askGoals(s, 'goal_open', { title })).goal as GoalRow
+      const next: NextStep[] = [{ run: `harness new <agent> --goal ${goal.id} --name <name> <project> -- <task>`, when: 'for each piece of its work' }]
+      s.out(json ? JSON.stringify({ goal, next }) : `Goal ${goal.id} opened: ${goal.title}.\n${formatNext(next)}`)
+      return EXIT.ok
+    }
+    if (verb === 'done') {
+      if (rest.length !== 1) throw new UsageError('Name one goal by its id.')
+      const goal = (await askGoals(s, 'goal_done', { id: rest[0] })).goal as GoalRow
+      s.out(json ? JSON.stringify({ goal }) : `Goal ${goal.id} done: ${goal.title}.`)
+      return EXIT.ok
+    }
+    if (verb === 'list') {
+      if (rest.length) throw new UsageError('harness goal list takes nothing more.')
+      const goals = (await askGoals(s, 'goal_list', {})).goals as GoalRow[]
+      const count = (n: number) => `${n} harness${n === 1 ? '' : 'es'}`
+      const width = Math.max(0, ...goals.map((g) => count(g.harnesses.length).length))
+      s.out(json ? JSON.stringify({ goals }) : goals.length
+        ? goals.map((g) => `${g.id}  ${g.doneAt === null ? 'open' : 'done'}  ${count(g.harnesses.length).padEnd(width)}  ${g.title}`).join('\n')
+        : 'No goals.')
+      return EXIT.ok
+    }
+    throw new UsageError(verb ? `Unknown goal command ${verb}.` : '')
+  })
+}
+
 // ── new, run by an agent ───────────────────────────────────────────────────────────────────────────
 
 /**
@@ -1812,6 +1876,19 @@ export async function agentOrigin(deps: ClientDeps = {}, record: Rpc = messagesR
       } catch {
         return `${name || 'The harness'} runs on a machine whose Harness did not record who started it: there, its limits start from zero.`
       }
+    },
+    goal: {
+      // Asked of the goals service, which answers Hachi alone: anyone else's check is refused there (NOT_HACHI).
+      check: async (id) => {
+        const goal = ((await askGoals(s, 'goal_list', {})).goals as GoalRow[]).find((g) => g.id === id)
+        if (!goal) throw new AgentClientError('UNKNOWN_GOAL', `No goal ${id}. harness goal list lists them.`)
+        if (goal.doneAt !== null) throw new AgentClientError('GOAL_DONE', `Goal ${id} is done. Open a new one for new work.`)
+      },
+      add: async (id, harness) => {
+        try { await askGoals(s, 'goal_add', { id, ...harness }); return null } catch (error) {
+          return `It was started, but not recorded under goal ${id}: ${(error as Error).message}`
+        }
+      },
     },
     answer: (agent, at) => {
       const name = addressOf({ machineId: '', agentId: String(agent.id ?? ''), name: String(agent.name ?? ''), engine: '' })

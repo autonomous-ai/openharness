@@ -13,8 +13,14 @@ const env = { cwd: '/work/repo', home: '/home/me', platform: 'linux' as const }
 describe('harness new: the words', () => {
   it('asks nothing: claude, here, on this machine', () => {
     expect(parseNewArgs([], env)).toEqual({
-      agent: 'claude', machine: null, cwd: '/work/repo', projectName: null, mode: null, prompt: null, name: null, repo: null, acuLimit: null, model: null, local: null, json: false,
+      agent: 'claude', machine: null, cwd: '/work/repo', projectName: null, mode: null, prompt: null, name: null, repo: null, acuLimit: null, model: null, local: null, goal: null, json: false,
     })
+  })
+
+  it('takes the goal a harness is started for (harness goal open)', () => {
+    expect(parseNewArgs(['codex', '--goal', '3fa2b1c9', 'api', '--', 'fix it'], env)).toMatchObject({ agent: 'codex', goal: '3fa2b1c9', projectName: 'api' })
+    expect(() => parseNewArgs(['codex', '--goal'], env)).toThrow('--goal needs a value.')
+    expect(() => parseNewArgs(['codex', '--goal', ' '], env)).toThrow('--goal needs a value.')
   })
 
   it('sends a model as the app\'s box does, for the machine to check, and none for a terminal', () => {
@@ -675,6 +681,64 @@ describe('harness new: the daemon', () => {
     const socket = new FakeSocket((frame) => frame.type === 'agent_create' ? { state: 'created', agent: { id: 'k1', name: 'cx' } } : null)
     expect(await newCommand(deps(['codex', '--name', 'cx'], socket, { origin: async () => origin }))).toBe(0)
     expect(created).toEqual([['m2', { id: 'k1', name: 'cx' }, socket.sent.find((f) => f.type === 'agent_create')!.payload.creationId]])
+  })
+
+  describe('--goal: a harness Hachi starts for one of its goals', () => {
+    const goalOrigin = (goal: { check?: (id: string) => Promise<void>; add?: (id: string, harness: Record<string, unknown>) => Promise<string | null> } = {}) => {
+      const checked: string[] = [], added: Array<[string, Record<string, unknown>]> = []
+      const origin = { check: async () => {}, prompt: (text: string) => text, created: async () => null, answer: () => ({ effect: '', next: [] }), pending: () => null,
+        goal: {
+          check: goal.check ?? (async (id: string) => { checked.push(id) }),
+          add: goal.add ?? (async (id: string, harness: Record<string, unknown>) => { added.push([id, harness]); return null }),
+        } }
+      return { origin, checked, added }
+    }
+
+    it('checks the goal before anything starts, and records the harness under it once made', async () => {
+      const { origin, checked, added } = goalOrigin()
+      const socket = new FakeSocket((frame) => frame.type === 'agent_create' ? { state: 'created', agent: { id: 'k1', name: 'api-fix' } } : null)
+      expect(await newCommand(deps(['codex', '--goal', 'g1', '--name', 'api-fix'], socket, { origin: async () => origin }))).toBe(0)
+      const creationId = socket.sent.find((f) => f.type === 'agent_create')!.payload.creationId
+      expect(checked).toEqual(['g1'])
+      expect(added).toEqual([['g1', { machineId: 'm2', creationId, agentId: 'k1' }]])
+    })
+
+    it('records one still installing by its creation, as it starts by itself later', async () => {
+      const { origin, added } = goalOrigin()
+      let clock = 0
+      const installing = { state: 'pending', held: { service: 'install', detail: 'Installing Codex.' } }
+      const socket = new FakeSocket((frame) => frame.type === 'agent_create' || frame.type === 'agent_create_status' ? installing : null)
+      const d = deps(['codex', '--goal', 'g1', '--name', 'cx'], socket, { origin: async () => origin, now: () => clock, sleep: async (ms) => { clock += ms } })
+      expect(await newCommand(d)).toBe(0)
+      expect(added).toEqual([['g1', { machineId: 'm2', creationId: socket.sent.find((f) => f.type === 'agent_create')!.payload.creationId }]])
+    })
+
+    it('starts nothing for a goal it may not use: not Hachi exits 5, an unknown goal 1', async () => {
+      for (const [error, code] of [[new AgentClientError('NOT_HACHI', 'Only Hachi keeps goals.'), 5], [new AgentClientError('UNKNOWN_GOAL', 'No such goal.'), 1]] as const) {
+        const { origin } = goalOrigin({ check: async () => { throw error } })
+        const socket = new FakeSocket(() => null)
+        const d = deps(['codex', '--goal', 'g1'], socket, { origin: async () => origin })
+        expect(await newCommand(d)).toBe(code)
+        expect(d.err).toEqual([error.message])
+        expect(socket.sent).toEqual([])
+      }
+      // The person, or an agent with no goals (no origin, or one that keeps none), is refused the same.
+      for (const origin of [null, { ...goalOrigin().origin, goal: undefined }]) {
+        const socket = new FakeSocket(() => null)
+        const d = deps(['codex', '--goal', 'g1', '--json'], socket, { origin: async () => origin })
+        expect(await newCommand(d)).toBe(5)
+        expect(JSON.parse(d.out[0]!)).toMatchObject({ ok: false, code: 'NOT_HACHI' })
+        expect(socket.sent).toEqual([])
+      }
+    })
+
+    it('says so, and keeps the harness, when it could not be recorded under the goal', async () => {
+      const { origin } = goalOrigin({ add: async () => 'api-fix was started but not recorded under goal g1: Harness could not save the goal on this computer.' })
+      const socket = new FakeSocket((frame) => frame.type === 'agent_create' ? { state: 'created', agent: { id: 'k1', name: 'api-fix' } } : null)
+      const d = deps(['codex', '--goal', 'g1', '--name', 'api-fix'], socket, { origin: async () => origin })
+      expect(await newCommand(d)).toBe(0)
+      expect(d.err).toEqual(['api-fix was started but not recorded under goal g1: Harness could not save the goal on this computer.'])
+    })
   })
 
   it('reads the folder off the harness the machine made', async () => {
