@@ -507,17 +507,22 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
         close(4403, 'machine mismatch')
         return
       }
+      // A tool reads only its own replies, so it gets a background pool like any other, never the window's shared one:
+      // that upstream would carry the tool's select when the tool dialled first. `relayIsolation` upstream tells the
+      // backend it hears only frames addressed to it and is no app on that machine (OPENHARNES-13).
+      const isolated = payload?.relayIsolation === true || payload?.tool === true
       // The local client observed a live RPC time out against an otherwise-"connected" machine —
       // its pooled entry is suspect (most commonly the relayed machine's own Harness process
       // restarted, dropping its E2EE session without the transport itself ever closing). Drop it
       // so this select dials fresh instead of handing back the same dead session again.
       if (payload?.forceReconnect === true) {
-        if (payload?.relayIsolation === true) options.relayPool.invalidateIsolated(requestedMachineId)
+        if (isolated) options.relayPool.invalidateIsolated(requestedMachineId)
         else options.relayPool.invalidate(requestedMachineId)
       }
       try {
-        relay = payload?.relayIsolation === true
-          ? await options.relayPool.acquireIsolated(requestedMachineId, options.autonomousEnv, frame, terminalSink, close)
+        relay = isolated
+          ? await options.relayPool.acquireIsolated(requestedMachineId, options.autonomousEnv,
+            { ...frame, payload: { ...payload, relayIsolation: true } }, terminalSink, close)
           : await options.relayPool.acquire(requestedMachineId, options.autonomousEnv, frame, terminalSink, close)
         if (ws.readyState !== WebSocket.OPEN) { relay.detach(); return }
         selected = true
