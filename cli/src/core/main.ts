@@ -169,6 +169,9 @@ import { createHistory } from './transcripts/history.js'
 import { createRelaunchMarks, transcriptSize } from './transcripts/relaunch.js'
 import { createForgetSession } from './agents/forget.js'
 import { createBinding } from './agents/bind.js'
+import { createHermesTerminal } from './agents/hermesTerminal.js'
+import { hermesSessionKind, hermesTerminalNames, hermesTerminalStamp, readHermesTerminal } from '../engines/identities.js'
+import { hermesRecordSeen } from '../engines/nativeHooks.js'
 import { createDiscoveryHandlers } from './agents/discovery.js'
 import { createLaunchHelpers, gridLaunchThrough } from './agents/launch.js'
 import { createLaunchAuthority } from './agents/launchAuthority.js'
@@ -2034,6 +2037,18 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
     openclawPaneDue: (sessionId) => normalizers.openclawReaders.get(sessionId)?.paneDue() ?? true,
     openclawStateDir: (pid) => openclawStateDir(pid),
+    hermesTerminal: createHermesTerminal({
+      platform: process.platform,
+      defaultHome: env.HERMES_HOME,
+      registry,
+      paneInfo: (runtime) => terminals.backendFor(runtime)?.paneInfo(runtime) ?? Promise.resolve(null),
+      names: hermesTerminalNames,
+      stamp: hermesTerminalStamp,
+      read: readHermesTerminal,
+      kind: hermesSessionKind,
+      recordSeen: (home) => { void hermesRecordSeen(home) },
+      now: Date.now,
+    }),
   })
   binding.whileChanging((agentId) => restorePanes.busy(agentId))
   const pendingForkInherit = binding.pendingForkInherit
