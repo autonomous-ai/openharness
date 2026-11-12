@@ -24,6 +24,7 @@ class BrowserSettings {
     '1366x768',
   ];
   static const speeds = ['slow', 'normal', 'fast'];
+  static final _size = RegExp(r'^[1-9][0-9]{2,4}x[1-9][0-9]{2,4}$');
 
   final BrowserProxy? proxy;
 
@@ -43,7 +44,8 @@ class BrowserSettings {
       proxy: BrowserProxy.fromJson(j['proxy']),
       timeZone: zone is String && zone.isNotEmpty ? zone : null,
       languages: languages is String ? languages : '',
-      screen: screens.contains(j['screen'])
+      // A size from a newer machine stays as it is: falling back would change the screen at the next save.
+      screen: j['screen'] is String && _size.hasMatch(j['screen'] as String)
           ? j['screen'] as String
           : screens.first,
       humanInput: j['humanInput'] is bool ? j['humanInput'] as bool : true,
