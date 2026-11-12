@@ -146,8 +146,10 @@ class _BrowserPanelState extends State<BrowserPanel> {
   bool _settings = false;
 
   /// Its person pressed Stop, and the machine has not yet said the browser is off: its stream closing and any state
-  /// it says meanwhile are the stop's, never a start.
+  /// it says meanwhile are the stop's, never a start. A machine that took the Stop and still says on when [_stopEnds]
+  /// fires is shown as it says.
   bool _stopping = false;
+  Timer? _stopEnds;
 
   /// A request the machine did not take, in one line.
   String? _refused;
@@ -184,6 +186,7 @@ class _BrowserPanelState extends State<BrowserPanel> {
   void dispose() {
     _app.removeListener(_sync);
     _waitEnds?.cancel();
+    _stopEnds?.cancel();
     _end();
     super.dispose();
   }
@@ -197,6 +200,7 @@ class _BrowserPanelState extends State<BrowserPanel> {
       _failure = null;
       _routeLosses = 0;
       _stopping = false;
+      _stopEnds?.cancel();
     }
     if (_waiting != null && browser != _waiting) _waiting = null;
     if (_waiting == null) _waitEnds?.cancel();
@@ -348,14 +352,15 @@ class _BrowserPanelState extends State<BrowserPanel> {
     _sync();
   }
 
-  /// Sends [request] to the agent's machine, and says so in one line when it was not taken.
-  Future<void> _ask(Future<void> Function() request) async {
+  /// Sends [request] to the agent's machine, and says so in one line when it was not taken: whether it was.
+  Future<bool> _ask(Future<void> Function() request) async {
     setState(() => _refused = null);
     try {
       await request();
+      return true;
     } catch (error) {
       appLog.warn('browser', 'request to ${widget.machineId} failed: $error');
-      if (!mounted) return;
+      if (!mounted) return false;
       setState(
         () => _refused = switch (error) {
           StateError(:final message) => message,
@@ -368,6 +373,7 @@ class _BrowserPanelState extends State<BrowserPanel> {
           _ => 'Browser isn\'t available on $_machineName right now',
         },
       );
+      return false;
     }
   }
 
@@ -377,11 +383,25 @@ class _BrowserPanelState extends State<BrowserPanel> {
   Future<void> _stop() async {
     _stopping = true;
     _sync();
-    await _ask(() => _app.agentBrowserStop(widget.machineId, widget.agentId));
-    // Taken, the mark holds until the machine says off; refused, the browser is as it was.
-    if (!mounted || _refused == null) return;
-    _stopping = false;
-    _sync();
+    final taken = await _ask(
+      () => _app.agentBrowserStop(widget.machineId, widget.agentId),
+    );
+    // The machine said off already.
+    if (!mounted || !_stopping) return;
+    if (!taken) {
+      // Refused, the browser is as it was.
+      _stopping = false;
+      return _sync();
+    }
+    // Taken, the mark holds until the machine says off, for as long as an open waits for it. CLI 0.6.40 with its
+    // browser in its own process never sent the agent's frame again, and the panel said Stopping for good.
+    _stopEnds?.cancel();
+    _stopEnds = Timer(BrowserStream.openTimeout, () {
+      if (!mounted || !_stopping) return;
+      appLog.warn('browser', 'browser on ${widget.machineId} did not stop');
+      _stopping = false;
+      _sync();
+    });
   }
 
   Future<void> _install() async {

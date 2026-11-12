@@ -599,7 +599,8 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   Starting, the spinner over `Starting browser…`. From the person's Stop
   until the computer says the browser is off, the same spinner over
   `Stopping browser…`, never the starting line; a Stop the computer did not
-  take goes back to what the browser shows. Otherwise one centred line in
+  take, or took and still shows on 20 s later, goes back to what the browser
+  shows. Otherwise one centred line in
   13 with at most one blue button under it: the failed states' words (`Podman
   is not running` and Retry, `Browser isn't set up` and Install on that
   computer, `Set up Browser on Ken Mac first` from another, `Browser data
