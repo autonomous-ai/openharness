@@ -135,6 +135,22 @@ describe('what a daemon is told to read', () => {
     expect(await told()).toBeUndefined()
   })
 
+  // A Personal Swarm's project made from a pane's folder has no address to clone, only the GitHub repository Desktop named for it
+  // (project.github): its ships count as a cloned project's do, and a private one only for its readers, as every project. A name in
+  // another case than another project's address is that repository, read once.
+  it('names the GitHub repository a project was given when its folder has no address', async () => {
+    const t = await scene()
+    const head = await db.swarmHead.findUniqueOrThrow({ where: { id: `${t}:head` } })
+    const data = head.data as { projects: Array<Record<string, unknown>> }
+    const named = (id: string, githubRepository: string, extra: Record<string, unknown> = {}) => ({ id, name: id, ownerId: owner.sub, visibility: 'public',
+      members: [], repository: { machineId: MAC.ann, cwd: `/panes/${id}`, repositoryUrl: null }, githubRepository, ...extra })
+    data.projects.push(named('pane', 'acme/pane'), named('bare', 'acme/bare', { repository: undefined }), named('again', 'Acme/Web'),
+      named('hidden', 'acme/hidden', { visibility: 'private' }))
+    await db.swarmHead.update({ where: { id: head.id }, data: { data: data as never } })
+    expect((await targets(MAC.ann, ann)).body.data.swarms.find((s: { tabId: string }) => s.tabId === t)?.repositories)
+      .toEqual(['acme/api', 'acme/bare', 'acme/pane', 'acme/web'])
+  })
+
   it('tells nothing of another person\'s agents, another machine, a removed agent or a Swarm the person is not in', async () => {
     expect((await targets(MAC.bob, ann)).body.data.swarms).toEqual([])
     expect((await targets(MAC.ann, bob)).body.data.swarms).toEqual([])
