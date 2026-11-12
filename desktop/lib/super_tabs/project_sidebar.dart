@@ -106,7 +106,7 @@ class ProjectSidebar extends StatelessWidget {
   final VoidCallback? onManage;
 
   /// Opens the Swarm's people, to invite someone: a row under the Swarm's name for its owner, the one person who may invite
-  /// (backend commands.ts, invite.create), and never in their Personal Swarm, which is theirs alone. People join a Swarm by
+  /// (backend commands.ts, invite.create), their Personal Swarm too (anh Dee, 2026-11-11). People join a Swarm by
   /// an invitation, and Manage people was the only way there (anh Dee, 2026-11-11: "it's quite difficult to invite people.
   /// i have no idea where to find it. invite should be visible").
   final VoidCallback? onInvite;
@@ -304,12 +304,6 @@ class ProjectSidebar extends StatelessWidget {
     onTap: onTap,
   );
 
-  /// Whether this is the person's Personal Swarm, theirs alone (manage_page.dart, swarm_switcher.dart).
-  bool get _personal => switch (app) {
-    final app? => PersonalSwarm.of(app).id == controller.tabId,
-    null => false,
-  };
-
   /// The Desktop's left pane (Swarm v4, anh Dee 2026-11-08): the org name, Invite people for its owner, Your Team,
   /// Projects, then Top Teams; Manage stays at the foot. Nothing else.
   List<Widget> _desktop(
@@ -328,7 +322,8 @@ class ProjectSidebar extends StatelessWidget {
         channels.isNotEmpty || projectStarts.isNotEmpty || controller.canWrite;
     return [
       ?switcher,
-      if (onInvite case final invite? when controller.isOwner && !_personal)
+      // Its owner invites people to any Swarm of theirs, their Personal one too (anh Dee, 2026-11-11).
+      if (onInvite case final invite? when controller.isOwner)
         _iconRow(
           key: 'project-sidebar-invite',
           icon: AppIcons.userPlus,
@@ -746,7 +741,7 @@ class ProjectSidebar extends StatelessWidget {
   // shared rows drawn in it.
   @override
   Widget build(BuildContext context) => grid.SidebarInk.scope(
-    // PersonalSwarm: which Swarm is the person's own decides Invite people, and it can be known only after the pane is drawn.
+    // PersonalSwarm: which Swarm is the person's own decides its pane rows, and it can be known only after the pane is drawn.
     child: switch ([
       ?leaderboard,
       ?agentStates,
