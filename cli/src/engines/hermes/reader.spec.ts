@@ -1,10 +1,22 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { execFileSync } from 'child_process'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { HermesReader, readHermesMessages } from './reader.js'
 import type { LiveEvent } from '../../lib/normalize.js'
+import { sqliteReadAll } from '../../lib/sqliteRead.js'
+
+// The real reads, with a seam to make one of them go unanswered, as a busy store or the read threads' deadline does.
+vi.mock('../../lib/sqliteRead.js', async (real) => {
+  const actual = await real<typeof import('../../lib/sqliteRead.js')>()
+  return { ...actual, sqliteReadAll: vi.fn(actual.sqliteReadAll) }
+})
+
+/** Polls until the store has been read [more] times since [from]: the read that seeds a reader, and a poll after it. */
+async function readsPast(from: number, more = 2): Promise<void> {
+  await vi.waitFor(() => expect(vi.mocked(sqliteReadAll).mock.calls.length).toBeGreaterThanOrEqual(from + more), { timeout: 5_000, interval: 10 })
+}
 
 const hasSqlite = (() => {
   try { execFileSync('sqlite3', ['-version'], { stdio: 'ignore' }); return true } catch { return false }
@@ -108,5 +120,24 @@ d('HermesReader (sqlite3 CLI)', () => {
     await reader.start()
     expect(reader.turnOpen).toBe(true)
     reader.stop()
+  })
+
+  // #4065: a first read the store did not answer left the cursor at 0, and the next poll emitted the whole session as new.
+  it('reads the session in full again after a first read the store did not answer, and emits only what is new', async () => {
+    insert(db, { id: 1, role: 'user', content: 'an old prompt' })
+    insert(db, { id: 2, role: 'assistant', content: 'an old answer', finishReason: 'stop' })
+    vi.mocked(sqliteReadAll).mockResolvedValueOnce({ ok: false, reason: 'transient' })
+    const events: LiveEvent[] = []
+    const reader = new HermesReader({ dbPath: db, sessionId: SID, onEvents: (e) => events.push(...e), pollMs: 20 })
+    try {
+      await reader.start()
+      await readsPast(vi.mocked(sqliteReadAll).mock.calls.length)
+      expect(events).toEqual([])
+      insert(db, { id: 3, role: 'user', content: 'a new prompt' })
+      await vi.waitFor(() => expect(events.length).toBeGreaterThan(0), { timeout: 5_000, interval: 10 })
+    } finally {
+      reader.stop()
+    }
+    expect(events).toEqual([{ type: 'turn_started', payload: { userMessage: 'a new prompt' } }])
   })
 })

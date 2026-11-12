@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { execFileSync } from 'child_process'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
@@ -7,6 +7,18 @@ import { OpencodeReader, readOpencodeMessages } from './reader.js'
 import { opencodeV2TurnOpen } from '../launchControl.js'
 import { lastOpencodeTurnText, opencodeMessagesToEvents } from './normalizer.js'
 import type { LiveEvent } from '../../lib/normalize.js'
+import { sqliteReadAll } from '../../lib/sqliteRead.js'
+
+// The real reads, with a seam to make one of them go unanswered, as a busy store or the read threads' deadline does.
+vi.mock('../../lib/sqliteRead.js', async (real) => {
+  const actual = await real<typeof import('../../lib/sqliteRead.js')>()
+  return { ...actual, sqliteReadAll: vi.fn(actual.sqliteReadAll) }
+})
+
+/** Polls until the store has been read [more] times since [from]: the read that seeds a reader, and a poll after it. */
+async function readsPast(from: number, more = 2): Promise<void> {
+  await vi.waitFor(() => expect(vi.mocked(sqliteReadAll).mock.calls.length).toBeGreaterThanOrEqual(from + more), { timeout: 5_000, interval: 10 })
+}
 
 const hasSqlite = (() => {
   try { execFileSync('sqlite3', ['-version'], { stdio: 'ignore' }); return true } catch { return false }
@@ -192,6 +204,30 @@ d('OpencodeReader (sqlite3 CLI)', () => {
     expect(deltas).toContain('Hel')
     expect(deltas).toContain('lo world')
   })
+
+  // #4065: a first read the store did not answer left no cursor, and the next poll emitted the whole session as new. This
+  // store has no session_message table: its first read finds none, as ever, and the legacy read after it goes unanswered.
+  it('reads the session in full again after a first read the store did not answer, and emits only what is new', async () => {
+    insertMessage(db, 'm1', 1, { role: 'user' }, [{ id: 'p1', tc: 1, data: { type: 'text', text: 'an old prompt' } }])
+    insertMessage(db, 'm2', 2, { role: 'assistant' }, [
+      { id: 'p2', tc: 2, data: { type: 'text', text: 'an old answer' } },
+      { id: 'p3', tc: 3, data: { type: 'step-finish', reason: 'stop' } },
+    ])
+    const actual = await vi.importActual<typeof import('../../lib/sqliteRead.js')>('../../lib/sqliteRead.js')
+    vi.mocked(sqliteReadAll).mockImplementationOnce(actual.sqliteReadAll).mockResolvedValueOnce({ ok: false, reason: 'transient' })
+    const events: LiveEvent[] = []
+    const reader = new OpencodeReader({ dbPath: db, sessionId: SID, onEvents: (e) => events.push(...e), pollMs: 20 })
+    try {
+      await reader.start()
+      await readsPast(vi.mocked(sqliteReadAll).mock.calls.length, 3)
+      expect(events).toEqual([])
+      insertMessage(db, 'm3', 4, { role: 'user' }, [{ id: 'p4', tc: 4, data: { type: 'text', text: 'a new prompt' } }])
+      await vi.waitFor(() => expect(events.length).toBeGreaterThan(0), { timeout: 5_000, interval: 10 })
+    } finally {
+      reader.stop()
+    }
+    expect(events).toEqual([{ type: 'turn_started', payload: { userMessage: 'a new prompt' } }])
+  })
 })
 
 /**
@@ -361,6 +397,26 @@ d('OpencodeReader (OpenCode 2 session_message)', () => {
     expect(text).toBe('Hello')
     expect(events[events.length - 1].type).toBe('turn_ended')
     expect(reader.turnOpen).toBe(false)
+  })
+
+  // #4065, for an OpenCode 2 session: a first read the store did not answer must not read as a v1 session either.
+  it('reads the session in full again after a first read the store did not answer, and emits only what is new', async () => {
+    user(1, 'an old prompt')
+    assistant(2, [{ type: 'text', text: 'an old answer' }], 'stop')
+    idle(3, 'succeeded')
+    vi.mocked(sqliteReadAll).mockResolvedValueOnce({ ok: false, reason: 'transient' })
+    const events: LiveEvent[] = []
+    const reader = new OpencodeReader({ dbPath: db, sessionId: SID, onEvents: (e) => events.push(...e), pollMs: 20 })
+    try {
+      await reader.start()
+      await readsPast(vi.mocked(sqliteReadAll).mock.calls.length)
+      expect(events).toEqual([])
+      user(4, 'a new prompt')
+      await vi.waitFor(() => expect(events.length).toBeGreaterThan(0), { timeout: 5_000, interval: 10 })
+    } finally {
+      reader.stop()
+    }
+    expect(events).toEqual([{ type: 'turn_started', payload: { userMessage: 'a new prompt' } }])
   })
 })
 

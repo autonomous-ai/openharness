@@ -53,18 +53,30 @@ export async function readOpencodeMessages(
   sessionId: string,
   after?: Cursor | null,
 ): Promise<OcMessage[]> {
+  return await loadOpencodeMessages(dbPath, sessionId, after) ?? []
+}
+
+/** As [readOpencodeMessages], but null when the store did not answer (locked, mid-write, past its deadline). */
+async function loadOpencodeMessages(
+  dbPath: string,
+  sessionId: string,
+  after?: Cursor | null,
+): Promise<OcMessage[] | null> {
   if (!ID_RE.test(sessionId)) return []
   if (!after || after.seq !== undefined) {
     const afterSeq = Number.isFinite(after?.seq) ? Math.trunc(after!.seq!) : -1
     const afterTimeCreated = after?.seq !== undefined ? after.tc : undefined
     const v2 = await readV2Messages(dbPath, sessionId, afterSeq, afterTimeCreated)
-    if (v2.length > 0 || after) return v2
+    if (v2 === null || v2.length > 0 || after) return v2
   }
   return readLegacyMessages(dbPath, sessionId, after ?? null)
 }
 
-/** The user, assistant and idle rows of an OpenCode 2 session after `afterSeq`, in order. Empty for a v1 session. */
-async function readV2Messages(dbPath: string, sessionId: string, afterSeq: number, afterTimeCreated?: number): Promise<OcMessage[]> {
+/**
+ * The user, assistant and idle rows of an OpenCode 2 session after `afterSeq`, in order. Empty for a v1 session, null
+ * when the store did not answer.
+ */
+async function readV2Messages(dbPath: string, sessionId: string, afterSeq: number, afterTimeCreated?: number): Promise<OcMessage[] | null> {
   const types = OC_V2_TURN_TYPES.map((type) => `'${type}'`).join(', ')
   let sql: string
   let params: (string | number)[]
@@ -82,7 +94,8 @@ async function readV2Messages(dbPath: string, sessionId: string, afterSeq: numbe
   const result = await sqliteReadAll(dbPath, sql, params, { maxBuffer: MAX_BUFFER })
   if (!result.ok) {
     if (result.reason === 'missing') throw new OpencodeSqliteMissing()
-    return [] // no `session_message` table (OpenCode 1), or locked / transient — the caller falls back or retries
+    // A store with no `session_message` table (OpenCode 1) reads from the legacy tables; anything else is retried.
+    return /no such table/.test(String(result.error?.message)) ? [] : null
   }
   const messages: OcMessage[] = []
   for (const row of result.rows) {
@@ -95,7 +108,7 @@ async function readV2Messages(dbPath: string, sessionId: string, afterSeq: numbe
 }
 
 /** The legacy `message`/`part` tables: OpenCode 1's conversation. */
-async function readLegacyMessages(dbPath: string, sessionId: string, after: Cursor | null): Promise<OcMessage[]> {
+async function readLegacyMessages(dbPath: string, sessionId: string, after: Cursor | null): Promise<OcMessage[] | null> {
   const bounded = !!after && ID_RE.test(after.id) && Number.isFinite(after.tc)
   const cond = bounded
     ? 'AND (m.time_created > ? OR (m.time_created = ? AND m.id > ?)) '
@@ -112,7 +125,7 @@ async function readLegacyMessages(dbPath: string, sessionId: string, after: Curs
   const result = await sqliteReadAll(dbPath, sql, params, { maxBuffer: MAX_BUFFER })
   if (!result.ok) {
     if (result.reason === 'missing') throw new OpencodeSqliteMissing()
-    return [] // db locked / transient — retry next tick
+    return null // db locked / transient — retry next tick
   }
   const rows = result.rows
 
@@ -162,6 +175,8 @@ export class OpencodeReader {
   private open = false
   private thinking = 0
   private cursor: Cursor | null = null
+  /** Whether the session's rows were read once and seeded; until then nothing is emitted (#4065). */
+  private hydrated = false
   private readonly emittedText = new Map<string, number>() // partId → chars already emitted
   private readonly thinkingIds = new Map<string, string>() // reasoning partId → stable thinkingId
   private readonly toolStarted = new Set<string>()
@@ -176,9 +191,7 @@ export class OpencodeReader {
   /** Hydrate silently (no replay), then start polling. */
   async start(): Promise<void> {
     try {
-      const all = await readOpencodeMessages(this.deps.dbPath, this.deps.sessionId, null)
-      const opening = this.hydrate(all)
-      if (opening.length) this.deps.onEvents(opening)
+      await this.seed()
     } catch (err) {
       if (err instanceof OpencodeSqliteMissing) { this.deps.onFatal?.(err); return }
     }
@@ -187,6 +200,18 @@ export class OpencodeReader {
 
   stop(): void {
     if (this.timer) { clearInterval(this.timer); this.timer = null }
+  }
+
+  /**
+   * Read the whole session and seed from it. A store that does not answer leaves the reader unseeded, and the next tick
+   * reads in full again: with no cursor yet, an incremental read would emit the whole history as new (#4065).
+   */
+  private async seed(): Promise<void> {
+    const all = await loadOpencodeMessages(this.deps.dbPath, this.deps.sessionId, null)
+    if (!all) return
+    this.hydrated = true
+    const opening = this.hydrate(all)
+    if (opening.length) this.deps.onEvents(opening)
   }
 
   /**
@@ -255,6 +280,7 @@ export class OpencodeReader {
     if (this.polling) return
     this.polling = true
     try {
+      if (!this.hydrated) { await this.seed(); return }
       const batch = await readOpencodeMessages(this.deps.dbPath, this.deps.sessionId, this.cursor)
       if (batch.length === 0) return
       const events: LiveEvent[] = []
