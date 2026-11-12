@@ -28,6 +28,7 @@ import { E2eeManager, type LinkedPeer, type PairResult } from '../lib/e2ee/manag
 import { MachinePeerStore } from '../lib/e2ee/machinePeers.js'
 import { logFrame, sid } from '../lib/log.js'
 import { BACKEND_ONLY_DOWN_TYPES, GATEWAY_REQUEST_TYPES, isLocalClientId, logSafeType } from '../lib/relayFrames.js'
+import { createHarnessWatches } from './harnessWatch.js'
 import { encodeTerminalHop, TerminalBinaryKind, TerminalHopDirection, type TerminalBinaryClear } from '../lib/terminalBinary.js'
 import {
   TerminalP2pResponderPool,
@@ -124,6 +125,8 @@ export class RelayGateway implements GatewayPort {
    * A stream keeps its route until it closes; when the route goes, the stream ends.
    */
   private readonly browserStreams = new Map<string, Map<string, BrowserRoute>>()
+  /** Another of the owner's machines following harnesses here (harnessWatch.ts): each change sealed to its connection. */
+  private readonly harnessWatches = createHarnessWatches({ send: (connId, payload) => this.target(connId, 'harness_event', payload) })
   /** Cross-instance commander (device) client count, from backend `__clients` frames. */
   private commanderCount = 0
   /** Until when a terminal app of the account counts as open, from the backend's `__tui_open`; null until it has said
@@ -262,6 +265,7 @@ export class RelayGateway implements GatewayPort {
     this.core.linkDown()
     this.setCommanderCount(0, null) // active count is unknown until the next __clients snapshot
     void this.terminalP2p.stop()
+    this.harnessWatches.clear()
     this.p2pPendingOpens.clear()
     this.p2pStreams.clear()
     this.liveStreams.clear()
@@ -326,6 +330,8 @@ export class RelayGateway implements GatewayPort {
    *  never reaches a guest (manager.ts `groupKeyFor`, backend/src/lib/hub.ts), so its sessions are sent
    *  the frame sealed for each of them. */
   broadcast(frame: Frame, guest?: string): void {
+    // Before the viewer gate below: a machine following a harness here is told its changes while no app views it.
+    this.harnessWatches.observe(frame)
     if ((frame.type === 'turn_started' || frame.type === 'turn_ended' || frame.type === 'text_delta' || frame.type === 'error') && typeof frame.agentId === 'string') {
       const interrupted = frame.type === 'turn_ended' && (frame.payload as { aborted?: unknown } | undefined)?.aborted === true
       try { this.productUsage?.observe(frame.type, frame.agentId, frame.replay === true, interrupted) } catch { /* Work continues without metrics. */ }
@@ -600,7 +606,9 @@ export class RelayGateway implements GatewayPort {
     // An app that connects sends its E2EE hello first, before the backend's next `__clients` counts it: live events flow
     // again from that frame on, so it misses nothing it could open. The backend's own frames (connId '' or `__`) and a
     // device's are no app viewing. A reconnecting device's hello, before it is known as one, opens it for a minute.
-    if (connId && !type.startsWith('__') && !this.isDeviceConn(connId)) this.lastRemoteFrameAt = Date.now()
+    // A machine renewing its harness_watch is no app viewing: opening the gate for it would send the very transcript the
+    // watch exists to keep off the relay (harnessWatch.ts).
+    if (connId && !type.startsWith('__') && type !== 'harness_watch' && !this.isDeviceConn(connId)) this.lastRemoteFrameAt = Date.now()
     // E2EE control frames (pairing/handshake) are handled by the manager, never as node RPCs.
     if (type.startsWith('e2e_')) {
       const deviceBefore = deviceDump.enabled && (this.isDeviceConn(connId) || (type === 'e2e_pair_intent' && (frame.payload as { role?: unknown } | undefined)?.role === 'device'))
@@ -676,6 +684,14 @@ export class RelayGateway implements GatewayPort {
       await this.manage(connId, type, payload)
       return
     }
+    // Another of the owner's machines (or an app of the owner's) following harnesses here; never a device or a guest,
+    // which may not see this machine's harnesses (harnessWatch.ts).
+    if (type === 'harness_watch') {
+      this.logRequest(connId, opened)
+      const allowed = role === 'web' && this.guestOf(connId) === undefined
+      this.reply(connId, type, payload.requestId, allowed ? this.harnessWatches.watch(connId, payload) : { error: 'NOT_ALLOWED' })
+      return
+    }
     // `unwrapDown` opened it, so its envelope counter is a number.
     if (type.startsWith('terminal_')) this.noteTerminalInputRoute(connId, type, payload, transport, (frame.payload as WrappedPayload).__e2e.n)
     else if (type === 'agent_browser_open') this.noteBrowserOpen(connId, payload, transport)
@@ -728,6 +744,7 @@ export class RelayGateway implements GatewayPort {
       this.liveStreams.delete(connId)
       this.forgetRoutes(connId)
       this.forgetBrowserStreams(connId)
+      this.harnessWatches.closed(connId)
       await this.core.disconnected(connId)
       return
     }
