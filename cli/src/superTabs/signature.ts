@@ -40,7 +40,8 @@ export function unsigned(text: string, names: ReadonlyArray<string | null | unde
     const tags = mentions[0].trim().split(/\s+/).join(' ')
     return OPENS_BLOCK.test(said) ? `${tags}\n\n${said}` : `${tags} ${said}`
   }
-  return signedOff(text, names) ?? text
+  // From its first word: the server trims a post's ends (backend commands.ts), so an indent kept here would reach nobody.
+  return signedOff(text, names)?.trimStart() ?? text
 }
 
 /** What [text] says after a signature of any of [names] at its very start, or null when it has none or nothing after it. */
@@ -60,9 +61,10 @@ function signedOff(text: string, names: ReadonlyArray<string | null | undefined>
       if (!text.startsWith(markup, end)) continue
       end += markup.length
     }
-    // From its first word: the server trims a post's ends (backend commands.ts), so an indent kept here would reach nobody.
-    const said = text.slice(end).trimStart()
-    if (said) return said
+    // The rest of the signature's own line, and the blank lines after it, go; the indent of the first line after them stays, as
+    // it may open a code block after mentions (the second review of #4210). Spaces on the signature's line are no indent.
+    const said = text.slice(end).replace(/^[ \t]*/, '').replace(/^(?:\r?\n[ \t]*(?=\r?\n))*\r?\n/, '')
+    if (said.trim()) return said
   }
   return null
 }

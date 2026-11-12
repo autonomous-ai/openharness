@@ -45,6 +45,11 @@ describe('an agent\'s post without its own signature', () => {
       ['@Devon Lennox:\n```\nnpm test\n```', ['Lennox'], '@Devon\n\n```\nnpm test\n```'],
       ['@Devon Lennox:\n## Plan\nship', ['Lennox'], '@Devon\n\n## Plan\nship'],
       ['@Devon Lennox:\n| a | b |\n|---|---|', ['Lennox'], '@Devon\n\n| a | b |\n|---|---|'],
+      ['@Devon Lennox:\n\n    npm test\n    npm run build', ['Lennox'], '@Devon\n\n    npm test\n    npm run build'],
+      ['@Devon Lennox:\n> quoted', ['Lennox'], '@Devon\n\n> quoted'],
+      ['@Devon Lennox:\n1. one\n2. two', ['Lennox'], '@Devon\n\n1. one\n2. two'],
+      // Spaces on the signature's own line are no indent: the text after them is a paragraph.
+      ['@Devon Lennox:     ready', ['Lennox'], '@Devon ready'],
     ] as const) {
       expect(unsigned(text, names), text).toBe(left)
     }
