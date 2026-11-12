@@ -614,8 +614,8 @@ void main() {
       await tester.pump(const Duration(seconds: 7));
     });
 
-    testWidgets('Home has no Projects caption and no filter icon (anh Dee, '
-        "2026-11-04); the switcher's Sort and filter, under the Swarms, opens "
+    testWidgets('Home has no filter icon (anh Dee, 2026-11-04) and its '
+        "Projects caption only under Your Team; the switcher's Sort and filter, under the Swarms, opens "
         'the sheet: its options, then Mark all read, then Refresh', (
       tester,
     ) async {
@@ -623,7 +623,12 @@ void main() {
       host.session!.home.pin(tab, project, true);
       await tester.pumpAndSettle();
       expect(key('swarm-home-view'), findsNothing);
-      expect(find.text('Projects'), findsNothing);
+      // Projects is captioned only under Your Team (Swarm v4).
+      expect(find.text('Projects'), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.text('Your Team')).dy,
+        lessThan(tester.getTopLeft(find.text('Projects')).dy),
+      );
       expect(find.text('Pinned'), findsNothing);
       expect(key('swarm-mark-all-read'), findsNothing);
 

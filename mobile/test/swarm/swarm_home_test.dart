@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
@@ -13,6 +12,7 @@ import 'package:harness_mobile/swarm/swarm_home_list.dart';
 import 'package:harness_mobile/swarm/swarm_home_rows.dart';
 import 'package:harness_mobile/swarm/swarm_inbox.dart';
 import 'package:harness_mobile/swarm/swarm_agents.dart';
+import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
@@ -425,7 +425,7 @@ void main() {
         y(tester, 'swarm-switch-$tab'),
         lessThan(y(tester, 'swarm-switch-agents')),
       );
-      expect(inside('swarm-switch-agents', find.text('Agents')), findsOne);
+      expect(inside('swarm-switch-agents', find.text('Agents')), findsOneWidget);
       expect(
         tester.getSize(key('swarm-switch-agents')).height,
         greaterThanOrEqualTo(44),
@@ -763,7 +763,11 @@ void main() {
         reason: "its ink 8 points in, the tile 4 in from it",
       );
       expect(tester.widget<Text>(key('swarm-title')).data, 'Phone Swarm');
-      expect(find.text('Projects'), findsNothing, reason: 'no heading');
+      expect(
+        [find.text('Your Team'), find.text('Projects')],
+        everyElement(findsOneWidget),
+        reason: "the person's agents, then the projects, as on Desktop",
+      );
       expect(key('swarm-home-view'), findsNothing, reason: 'no filter icon');
       expect(key('swarm-needs-count'), findsNothing);
       expect(
@@ -848,6 +852,267 @@ void main() {
 
   });
 
+  group('Your Team (Swarm v4, as on Desktop)', () {
+    /// One of the person's agents, [name], on the Mac Studio, with its own
+    /// chat `chat-<id>` unless [chat] is false.
+    Map<String, dynamic> mine(String id, String name, {bool chat = true}) => {
+      ...agent(id, displayName: name, machineId: 'mac-studio'),
+      if (chat) 'chatId': 'chat-$id',
+    };
+
+    /// Mobile with [agents], each one's chat read unless its id is in
+    /// [unread], and its task g1; someone else's Theo, with a chat of his
+    /// own, besides.
+    FakeSwarm team(
+      List<Map<String, dynamic>> agents, {
+      Set<String> unread = const {},
+    }) {
+      final fake = backend();
+      final all = [
+        ...agents,
+        {
+          ...agent('a-theo', displayName: 'Theo'),
+          'contributorId': 'person-other',
+          'chatId': 'chat-a-theo',
+        },
+      ];
+      fake.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad(
+        agents: all,
+        machines: [
+          {'machineId': 'mac-studio', 'name': 'Mac Studio'},
+        ],
+        groups: [
+          groupData('g1', title: 'Fix login', number: 4),
+          for (final a in all)
+            if (a['chatId'] case final String chat)
+              // An agent's own chat is in no project (backend
+              // projects.ts isAgentChat).
+              {
+                ...groupData(
+                  chat,
+                  title: 'Chat',
+                  kind: 'agent-chat',
+                  agentIds: [a['id'] as String],
+                  lastMessageSequence: 3,
+                ),
+                'projectId': null,
+              },
+        ],
+        derived: {
+          'readMarks': {
+            for (final a in all)
+              if (a['chatId'] case final String chat)
+                chat: unread.contains(a['id']) ? 1 : 3,
+          },
+        },
+      );
+      return fake;
+    }
+
+    Finder row(String id) => key('swarm-agent-$tab-$id');
+
+    testWidgets("the person's own agents, A to Z, under Your Team over "
+        "Projects; another's agent is not in it", (tester) async {
+      await pump(tester, team([mine('a-nova', 'Nova'), mine('a-ada', 'Ada')]));
+
+      expect(row('a-ada'), findsOneWidget);
+      expect(row('a-nova'), findsOneWidget);
+      expect(row('a-theo'), findsNothing);
+      expect(
+        inside('swarm-agent-$tab-a-ada', find.text('Ada')),
+        findsOneWidget,
+      );
+      final ys = [
+        y(tester, 'swarm-team'),
+        tester.getTopLeft(row('a-ada')).dy,
+        tester.getTopLeft(row('a-nova')).dy,
+        y(tester, 'swarm-projects'),
+        y(tester, 'swarm-project-$tab-$project'),
+      ];
+      expect(ys, orderedEquals([...ys]..sort()));
+      expect(
+        tester.getSize(row('a-ada')).height,
+        greaterThanOrEqualTo(44),
+        reason: 'a 44-point tap target',
+      );
+    });
+
+    testWidgets("a row opens the agent's own chat, under its name and where "
+        'it runs, as Desktop\'s agent bar says them', (tester) async {
+      await pump(tester, team([mine('a-ada', 'Ada')]));
+
+      await tester.tap(row('a-ada'));
+      await tester.pumpAndSettle();
+
+      final page = tester.widget<SwarmConversationPage>(
+        find.byType(SwarmConversationPage),
+      );
+      expect((page.swarmId, page.conversationId), (tab, 'chat-a-ada'));
+      Finder header(String k) =>
+          find.descendant(of: key('swarm-chat-header'), matching: key(k));
+      expect(tester.widget<Text>(header('swarm-title')).data, 'Ada');
+      expect(
+        tester.widget<Text>(header('swarm-subtitle')).data,
+        'Mac Studio · Claude Code',
+      );
+    });
+
+    testWidgets("a task's chat keeps its project under its name", (
+      tester,
+    ) async {
+      await pump(tester, team([mine('a-ada', 'Ada')]));
+
+      unawaited(
+        Navigator.of(tester.element(key('swarm-title-button')))
+            .push(swarmChatRoute(swarmId: tab, conversationId: 'g1')),
+      );
+      await tester.pumpAndSettle();
+
+      final subtitle = find.descendant(
+        of: key('swarm-chat-header'),
+        matching: key('swarm-subtitle'),
+      );
+      expect(tester.widget<Text>(subtitle).data, 'Mobile');
+    });
+
+    testWidgets('an agent with no chat yet is listed, and opens nothing', (
+      tester,
+    ) async {
+      await pump(tester, team([mine('a-ada', 'Ada', chat: false)]));
+
+      expect(row('a-ada'), findsOneWidget);
+      await tester.tap(row('a-ada'));
+      await tester.pumpAndSettle();
+      expect(find.byType(SwarmConversationPage), findsNothing);
+    });
+
+    testWidgets('a row with something new is bold, with a dot; a read one '
+        'is neither', (tester) async {
+      await pump(
+        tester,
+        team(
+          [mine('a-ada', 'Ada'), mine('a-nova', 'Nova')],
+          unread: {'a-nova'},
+        ),
+      );
+
+      expect(
+        weightOf(tester, 'swarm-agent-$tab-a-nova', 'Nova'),
+        AppFont.semibold,
+      );
+      expect(
+        inside('swarm-agent-$tab-a-nova', key('swarm-agent-unread')),
+        findsOneWidget,
+      );
+      expect(
+        weightOf(tester, 'swarm-agent-$tab-a-ada', 'Ada'),
+        isNot(AppFont.semibold),
+      );
+      expect(
+        inside('swarm-agent-$tab-a-ada', key('swarm-agent-unread')),
+        findsNothing,
+      );
+    });
+
+    testWidgets('past nine agents, eight rows and N more, those with '
+        'something new first; N more opens them all, Show fewer folds them '
+        'back', (tester) async {
+      const names = 'ABCDEFGHIJK';
+      await pump(
+        tester,
+        team(
+          [for (final n in names.split('')) mine('a-$n', 'Agent $n')],
+          unread: {'a-K'},
+        ),
+      );
+
+      final shown = 'ABCDEFGK'.split('');
+      for (final n in names.split('')) {
+        expect(
+          row('a-$n'),
+          shown.contains(n) ? findsOneWidget : findsNothing,
+          reason: 'Agent $n',
+        );
+      }
+      expect(inside('swarm-team-more', find.text('3 more')), findsOneWidget);
+      expect(
+        tester.getTopLeft(row('a-K')).dy,
+        greaterThan(tester.getTopLeft(row('a-G')).dy),
+        reason: 'in its place, A to Z',
+      );
+
+      await tester.tap(key('swarm-team-more'));
+      await tester.pumpAndSettle();
+      for (final n in names.split('')) {
+        expect(row('a-$n'), findsOneWidget, reason: 'Agent $n');
+      }
+      expect(
+        inside('swarm-team-more', find.text('Show fewer')),
+        findsOneWidget,
+      );
+
+      await tester.tap(key('swarm-team-more'));
+      await tester.pumpAndSettle();
+      expect(row('a-H'), findsNothing);
+      expect(inside('swarm-team-more', find.text('3 more')), findsOneWidget);
+    });
+
+    testWidgets('nine agents show every row, with no N more', (tester) async {
+      await pump(
+        tester,
+        team([for (final n in 'ABCDEFGHI'.split('')) mine('a-$n', 'Agent $n')]),
+      );
+      expect(row('a-I'), findsOneWidget);
+      expect(key('swarm-team-more'), findsNothing);
+    });
+
+    testWidgets('a folded agent with something new makes N more bold', (
+      tester,
+    ) async {
+      const names = 'ABCDEFGHIJK';
+      await pump(
+        tester,
+        team(
+          [for (final n in names.split('')) mine('a-$n', 'Agent $n')],
+          unread: {for (final n in 'ABCDEFGHI'.split('')) 'a-$n'},
+        ),
+      );
+      expect(row('a-I'), findsNothing);
+      expect(weightOf(tester, 'swarm-team-more', '3 more'), AppFont.semibold);
+    });
+
+    testWidgets('under Unread, only the agents with something new; under '
+        'Mentions, none: an agent\'s chat has no tags to list', (tester) async {
+      final host = await pump(
+        tester,
+        team(
+          [mine('a-ada', 'Ada'), mine('a-nova', 'Nova')],
+          unread: {'a-nova'},
+        ),
+      );
+
+      host.session!.home.setFilter(SwarmHomeFilter.unread);
+      await tester.pumpAndSettle();
+      expect(row('a-nova'), findsOneWidget);
+      expect(row('a-ada'), findsNothing);
+
+      host.session!.home.setFilter(SwarmHomeFilter.mentions);
+      await tester.pumpAndSettle();
+      expect(row('a-nova'), findsNothing);
+      expect(find.text('Your Team'), findsNothing);
+    });
+
+    testWidgets("with none of the person's agents, Home has no captions, as "
+        'before (anh Dee, 2026-11-04)', (tester) async {
+      await pump(tester, team(const []));
+
+      expect(find.text('Your Team'), findsNothing);
+      expect(find.text('Projects'), findsNothing);
+      expect(row('a-theo'), findsNothing);
+      expect(key('swarm-project-$tab-$project'), findsOneWidget);
+    });
+  });
+
   group('several Swarms', () {
     const second = 'tab-2';
 
@@ -917,8 +1182,8 @@ void main() {
       for (final (i, k) in order.indexed.skip(1)) {
         expect(y(tester, order[i - 1]), lessThan(y(tester, k)), reason: k);
       }
-      expect(inside(mobileRow, find.text('#Mobile')), findsOne);
-      expect(inside(backendRow, find.text('#Backend')), findsOne);
+      expect(inside(mobileRow, find.text('#Mobile')), findsOneWidget);
+      expect(inside(backendRow, find.text('#Backend')), findsOneWidget);
       expect(
         inside(mobileRow, find.textContaining('Swarm', findRichText: true)),
         findsNothing,

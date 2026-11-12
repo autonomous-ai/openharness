@@ -51,6 +51,7 @@ import 'swarm_message_actions.dart';
 import 'swarm_read_marks.dart';
 import 'swarm_session.dart';
 import 'swarm_style.dart';
+import 'swarm_team.dart' show swarmAgentWhere;
 import 'swarm_thread.dart';
 import 'swarm_thread_line.dart';
 import 'swarm_thread_page.dart';
@@ -1397,7 +1398,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
             title: view.known || c.state == SwarmChatState.lost
                 ? view.title
                 : null,
-            subtitle: view.project ?? view.swarm,
+            subtitle: view.where ?? view.project ?? view.swarm,
             // The person's own Buddy chat: its Notifications, Rename Buddy,
             // Remove Buddy. Any other chat: its Notifications (the desktop's
             // chat menu).
@@ -2557,6 +2558,7 @@ class _ChatView {
     required this.title,
     required this.project,
     required this.swarm,
+    required this.where,
     required this.canPost,
     required this.archived,
     required this.old,
@@ -2600,6 +2602,12 @@ class _ChatView {
         .where((p) => p.id == group?.projectId)
         .firstOrNull
         ?.name;
+    // An agent's own chat with the person: the agent by its name, and where
+    // it runs under it, as Desktop's agent bar says them (Swarm v4).
+    final chatAgent =
+        group != null && group.isAgentChat && group.agentIds.isNotEmpty
+        ? snapshot?.agent(group.agentIds.first)
+        : null;
     // The person's one Buddy chat for the Swarm is in no project: its
     // Swarm's name stands under it instead, the Swarm the Buddy tab switches
     // between (Tony, 11-03).
@@ -2635,7 +2643,11 @@ class _ChatView {
           ? 'Chat'
           : old
           ? 'Old chat'
-          : buddy ?? group.label,
+          : buddy ??
+                (chatAgent == null
+                    ? group.label
+                    : snapshot!.agentName(chatAgent.id, fallback: group.label)),
+      where: chatAgent == null ? null : swarmAgentWhere(snapshot!, chatAgent),
       project: buddy != null && project != null ? '#$project' : project,
       swarm: swarm,
       canPost: c.canPost,
@@ -2677,6 +2689,10 @@ class _ChatView {
   /// The Swarm's name, under the person's one Buddy chat for it; null for any
   /// other chat.
   final String? swarm;
+
+  /// Where an agent's own chat's agent runs, "Mac Studio · Claude Code"; null
+  /// for any other chat.
+  final String? where;
   final bool canPost, archived;
 
   /// An older Buddy chat, kept to read ([swarmIsOldBuddyChat]).
@@ -2734,6 +2750,7 @@ class _ChatView {
       other.title == title &&
       other.project == project &&
       other.swarm == swarm &&
+      other.where == where &&
       other.canPost == canPost &&
       other.archived == archived &&
       other.old == old &&
@@ -2752,6 +2769,7 @@ class _ChatView {
     title,
     project,
     swarm,
+    where,
     canPost,
     archived,
     old,

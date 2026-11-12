@@ -221,9 +221,19 @@ void main() {
         lessThan(tester.getTopLeft(key('swarm-project-$tab-$project')).dy),
       );
       expect(
-        find.text('Projects'),
-        findsNothing,
-        reason: 'one Swarm: no heading, the title names it',
+        find.text('Phone Swarm'),
+        findsOneWidget,
+        reason: 'one Swarm: no heading naming it, the title does',
+      );
+      // The person's agents over them, as Desktop's left pane: Your Team,
+      // then Projects (Swarm v4).
+      expect(
+        tester.getTopLeft(key('swarm-team')).dy,
+        lessThan(tester.getTopLeft(key('swarm-projects')).dy),
+      );
+      expect(
+        tester.getTopLeft(key('swarm-projects')).dy,
+        lessThan(tester.getTopLeft(key('swarm-project-$tab-$project')).dy),
       );
 
       final row = key('swarm-project-$tab-$project');
