@@ -47,6 +47,9 @@ export interface SwarmProject {
   /** Its GitHub repository as `owner/name`, set by its owner's client or its coordinator (commands.ts project.github): its Tasks
    *  board on every computer. Absent until set. */
   githubRepository?: string
+  /** When it was named (epoch ms), as `repository.addressedAt` is for its clone address. Absent on a name set before this was
+   *  kept (2026-11-12). */
+  githubRepositoryAt?: number
   /** Its Product Manager started by the Swarm on one of its machines, or waiting for one (leadStart.ts). */
   lead?: import('./leadStart.js').LeadPlacement
   /** A Personal Swarm project chat with no Lead: its person's messages sent there, delivered to its Lead once it joins

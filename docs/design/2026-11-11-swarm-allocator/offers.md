@@ -114,9 +114,13 @@ it, so a member could make a later project on a repository and hold its tasks wi
 repository's project is, of the Swarm's projects on it that have a PM, the one that got its address first
 (`githubComments.ts` `repositoryProject`): only its PM offers, and its readers read the offers. A project's record
 keeps when it got its address (`repository.addressedAt`), at every write that gives it one: its lead's first
-`agent.add`, `project.repository`, a PM's start, and a tab's project from before projects. Its second review found
+`agent.add`, `project.repository`, a PM's start, and a tab's project from before projects. A project can instead name
+its GitHub repository (`project.github`, the only one a Personal Swarm's project made from a pane's folder has; #4195):
+its record keeps when it named it (`githubRepositoryAt`), the same name again keeping its first time, and a project
+counts from the earlier of its address and its name when both are that repository. Without it, a later project that
+only named the repository came first. Its second review found
 that the first project MADE was not it: a member's older project with no address, given the repository after its
-owner's, became its only coordinator. An address set before its time was kept has none, and comes first, in the order
+owner's, became its only coordinator. An address or name set before its time was kept has none, and comes first, in the order
 the projects were made; a project with no PM (its PM's start not joined yet, its session closed) is passed over, or it
 would stop every later project on its repository from offering. A later project on the same repository offers
 nothing (`PM_REQUIRED`), and its readers alone read nothing (`NOT_FOUND`); when the coordinator changes, the offers of

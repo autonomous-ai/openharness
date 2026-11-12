@@ -10,6 +10,7 @@ import type { PrismaClient } from '@prisma/client'
 import { ensureIndex } from '../lib/db/indexes.js'
 import { metrics } from '../lib/metrics.js'
 import { createRateLimiter } from '../lib/rateLimit.js'
+import { githubRepository } from '../github/repository.js'
 import { fail } from './model.js'
 import { readBy } from './parts/indexed.js'
 import { projectGitHub, projectsOf, type SwarmProject } from './projects.js'
@@ -35,18 +36,22 @@ export const sameRepository = (project: SwarmProject, repository: string): boole
   projectGitHub(project)?.fullName.toLowerCase() === repository.toLowerCase()
 
 /**
- * The project of [repository] in a Swarm: of its projects on it that have a PM, the one that got its address first. A project's
+ * The project of [repository] in a Swarm: of its projects on it that have a PM, the one that got it first. A project's
  * repository is set by its owner or lead with no proof of access to it, so a repository has one coordinator in a Swarm, this
  * project's PM (taskOffers.ts): a member who makes or fills a later project on it holds none of its tasks (reviews of #4152).
  * The first MADE was not it: a project with no address yet can get one later, and became the coordinator over the project
- * already working on it. One whose address was set before its time was kept comes first, in the order projects were made; one
- * with no PM (its start not yet joined, its session closed) is passed over, or it would stop every later project on its
- * repository from offering.
+ * already working on it. A project gets it with its clone address or with its name (projectGitHub), whichever came first. One
+ * that got it before these times were kept comes first, in the order projects were made; one with no PM (its start not yet
+ * joined, its session closed) is passed over, or it would stop every later project on its repository from offering.
  */
 export function repositoryProject(state: SuperTabState, repository: string): SwarmProject | undefined {
   const led = new Set(state.conversations.filter(c => c.leadId && state.agents.some(a => a.id === c.leadId)).map(c => c.id))
+  const name = repository.toLowerCase()
+  const since = (project: SwarmProject): number => Math.min(
+    githubRepository(project.repository?.repositoryUrl)?.fullName.toLowerCase() === name ? project.repository?.addressedAt ?? 0 : Infinity,
+    project.githubRepository?.toLowerCase() === name ? project.githubRepositoryAt ?? 0 : Infinity)
   return projectsOf(state).filter(project => sameRepository(project, repository) && led.has(project.leadConversationId))
-    .sort((a, b) => (a.repository?.addressedAt ?? 0) - (b.repository?.addressedAt ?? 0))[0]
+    .sort((a, b) => since(a) - since(b))[0]
 }
 
 /** Run by the release's schema step before db push (lib/db/schemaRelease.ts), as the operation receipts' expiry is. */
