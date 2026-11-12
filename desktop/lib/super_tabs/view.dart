@@ -1753,7 +1753,6 @@ class _SuperTabViewState extends State<SuperTabView>
     final request = c.noticeRequest;
     if (request == null || c.snapshot == null) return;
     c.noticeRequest = null;
-    if (request.kind == 'chat') _leaveFor(request.id);
     setState(() {
       _page = null;
       _showManage = false;
@@ -1780,13 +1779,13 @@ class _SuperTabViewState extends State<SuperTabView>
   bool get _notificationsVisible => _pageShown != null;
 
   /// Where the reader is, for Back and Forward: a page, or the chat with the
-  /// thread open beside it. Elsewhere (Manage, a terminal, Tasks, pull
-  /// requests) is no place of its own.
+  /// thread open beside it. Elsewhere (Manage, Tasks, pull requests) is no
+  /// place of its own. A chat with its terminal open is still that chat: the
+  /// terminal stays with it (`_leaveFor`), and Back from the next chat comes
+  /// back to it (the review of #4213).
   SuperTabPlace? get _place {
     if (_pageShown case final page?) return SuperTabPlace.page(page);
-    if (_manageOpen ||
-        _terminalsVisible ||
-        c.snapshot?.conversation(c.selectedId) == null) {
+    if (_manageOpen || c.snapshot?.conversation(c.selectedId) == null) {
       return null;
     }
     return SuperTabPlace.chat(c.selectedId, root: c.threadOnScreen);
@@ -1810,7 +1809,8 @@ class _SuperTabViewState extends State<SuperTabView>
     final place = SuperTabPlaces.of(c).takeStep();
     if (place == null || !mounted) return;
     if (place.page case final page?) return _openPage(page);
-    if (!_openConversation(place.conversationId!)) return;
+    // A step back or forward goes to a place as it was, its terminal too.
+    if (!_openConversation(place.conversationId!, leave: false)) return;
     if (place.root case final root?) {
       c.openThread(root);
     } else {
@@ -1857,10 +1857,10 @@ class _SuperTabViewState extends State<SuperTabView>
 
   /// Opens chat [conversationId] from a row of a page; false when it is
   /// gone or the reader's access is.
-  bool _openConversation(String conversationId) {
+  bool _openConversation(String conversationId, {bool leave = true}) {
     final group = c.snapshot?.conversation(conversationId);
     if (c.accessRevoked || group == null) return false;
-    _leaveFor(conversationId);
+    if (leave) _leaveFor(conversationId);
     _closeSidebar();
     setState(() {
       _page = null;

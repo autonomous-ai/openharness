@@ -1261,6 +1261,9 @@ class SuperTabController extends ChangeNotifier {
       return;
     }
     _terminals[conversationId] = '*';
+    // A terminal opened for a chat takes the place of the pane it kept beside it ([besidePane]), however it was asked for:
+    // a Waiting on you notice, Manage or My agents opened it behind a kept Info (the review of #4213).
+    _panes.remove(conversationId);
     _moveView();
     _saveSoon();
     _changed();
@@ -1300,6 +1303,7 @@ class SuperTabController extends ChangeNotifier {
       _terminals.remove(conversationId);
     } else {
       _terminals[conversationId] = agentId;
+      _panes.remove(conversationId);
     }
     _saveSoon();
     _changed();

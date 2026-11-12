@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/places.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/swarm_v4_data.dart';
@@ -132,6 +133,48 @@ void main() {
       await awayAndBack(tester);
       expect(key('swarm-agent-info'), findsNothing);
       expect(find.text('Terminal fixture'), findsOneWidget);
+    },
+  );
+
+  // The review of #4213: back in a chat with its terminal open, Back stepped to that same chat, closed its terminal and went
+  // nowhere. A chat with its terminal open is a place, and a step never closes a terminal.
+  testWidgets(
+    'Back and Forward go between chats with their terminals as they were',
+    (tester) async {
+      await show(tester);
+      await tap(tester, key('swarm-terminal-button'));
+      await awayAndBack(tester);
+      expect(find.text('Terminal fixture'), findsOneWidget);
+      SuperTabPlaces.of(controller).step(-1);
+      await settle(tester);
+      expect(controller.selectedId, 'agent-chat-second');
+      expect(find.text('Terminal fixture'), findsNothing);
+      SuperTabPlaces.of(controller).step(1);
+      await settle(tester);
+      expect(controller.selectedId, 'agent-chat-first builder');
+      expect(find.text('Terminal fixture'), findsOneWidget);
+    },
+  );
+
+  // The review of #4213: a terminal opened from outside the bar (a Waiting on you notice, Manage, My agents) was hidden behind
+  // the Info its chat had kept, as a pane comes before a terminal.
+  testWidgets(
+    'a terminal opened for a chat from outside its bar takes the place of the pane the chat kept',
+    (tester) async {
+      await show(tester);
+      await tap(tester, key('swarm-info-button'));
+      await awayAndBack(tester);
+      expect(key('swarm-agent-info'), findsOneWidget);
+      controller.selectTerminal(controller.selectedId, 'first builder');
+      await settle(tester);
+      expect(find.text('Terminal fixture'), findsOneWidget);
+      expect(key('swarm-agent-info'), findsNothing);
+      controller.selectTerminal(controller.selectedId, null);
+      await tap(tester, key('swarm-instructions-button'));
+      controller.selectGroupTerminals(controller.selectedId);
+      await settle(tester);
+      expect(find.text('Terminal fixture'), findsOneWidget);
+      expect(controller.besidePane(controller.selectedId), isNull);
     },
   );
 
