@@ -32,7 +32,9 @@ function setup(options: { items?: Json[]; working?: boolean | null; watched?: Wa
     pulls: {} as Record<number, Json>, comments: {} as Record<number, Json[]>, runs: {} as Record<string, Json[]>,
     owed: [] as Array<{ number: number; sha: string }>,
     // The team's builder labels, and who the backend recorded as each verdict comment's writer, by its id.
-    team: new Set<string>(), recorded: {} as Record<number, string>, recordsDown: false }
+    team: new Set<string>(), recorded: {} as Record<number, string>, recordsDown: false,
+    // While set, every read waits on it: GitHub slow to answer.
+    hold: null as Promise<void> | null }
   const pullOf = (number: number): Json => ({ number, state: 'open', draft: false, body: '', user: { login: 'dee' },
     head: { sha: HEAD, ref: `pip/${number}` }, base: { ref: 'main' }, mergeable_state: 'clean', ...state.pulls[number] })
   const listeners = new Set<(end: TurnEnd) => void>()
@@ -40,6 +42,7 @@ function setup(options: { items?: Json[]; working?: boolean | null; watched?: Wa
   const calls: string[] = []
   const get: GitHubGet = async path => {
     calls.push(path)
+    if (state.hold) await state.hold
     if (state.down) throw new SuperTabHostError('GITHUB_UNAVAILABLE', 'No answer.', 503)
     const ok = (body: unknown) => ({ status: 200, etag: null, body, resetAt: null })
     const url = new URL(`https://api.github.com${path}`)
@@ -641,9 +644,64 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     expect(f.say).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(1)
     expect(f.say.mock.calls.map(([, , text]) => text)).toEqual([expect.stringMatching(/^I held acme\/app#14 \(Add the export\) with nothing done on it for an hour/)])
-    // Given back: nothing of the watch is left to go on with.
-    expect(JSON.parse(readFileSync(f.file, 'utf8')).pip.idle).toBeUndefined()
+    // Given back: nothing of the watch is left to go on with, nor the row kept for it alone.
+    expect(JSON.parse(readFileSync(f.file, 'utf8'))).toEqual({})
     again.stop()
+  })
+
+  // Review of #4129: a turn of its that ended while the 20-minute look awaited GitHub or the ask dropped the watch, and the look
+  // went on to ask, or re-armed the watch with its old start, which the turn's end's look then went on with: the task went back
+  // 40 minutes on, "with nothing done on it for an hour", though the agent had just worked.
+  it('neither asks nor re-arms a watch a turn of its ended while it was looked at, and starts the next at that turn\'s end', async () => {
+    for (const slow of ['read', 'ask'] as const) {
+      const f = setup({ items: [item(14, 'Add the export', ['status:taken'])] })
+      f.next.start()
+      await f.end()
+      let answer!: () => void
+      const answered = new Promise<void>(resolve => { answer = resolve })
+      if (slow === 'read') f.state.hold = answered
+      else f.tell.mockImplementationOnce(async () => { await answered; return {} })
+      await vi.advanceTimersByTimeAsync(IDLE_ASK_MS)
+      for (const listener of f.listeners) listener({ agentId: 'h-pip', sessionId: 's-pip', aborted: false, prompt: 'p', turnId: 99 })
+      f.state.hold = null
+      answer()
+      await vi.advanceTimersByTimeAsync(NEXT_SETTLE_MS)
+      expect(f.told()).toHaveLength(slow === 'read' ? 0 : 1)
+      expect(JSON.parse(readFileSync(f.file, 'utf8')).pip.idle).toEqual({ terminal: 'h-pip', task: 'acme/app#14', since: Date.now() })
+      // Its next watch starts at that turn's end: asked 20 minutes on, and nothing given back at the old hour.
+      await vi.advanceTimersByTimeAsync(IDLE_BACK_MS - IDLE_ASK_MS)
+      expect(f.written).toEqual([])
+      expect(f.told().filter(text => text.startsWith('You hold'))).toHaveLength(slow === 'read' ? 1 : 2)
+      f.next.stop()
+    }
+  })
+
+  // Review of #4129: an ask asked again after a restart, which the server has under its operation in other words (a release that
+  // changed them, a title edited), was refused, never re-armed, and its task never went back.
+  it('takes an ask the server has under its operation in other words as asked, and gives the task back at its hour', async () => {
+    const f = setup({ items: [item(14, 'Add the export', ['status:taken'])] })
+    writeFileSync(f.file, JSON.stringify({ pip: { key: '', times: 0, told: false, idle: { terminal: 'h-pip', task: 'acme/app#14', since: Date.now() - IDLE_ASK_MS } } }))
+    f.tell.mockRejectedValueOnce(new SuperTabHostError('OPERATION_REUSED', 'That operation was used with other words.', 409))
+    f.next.start()
+    await vi.advanceTimersByTimeAsync(START_LOOK_MS + 1)
+    expect(f.tell).toHaveBeenCalledTimes(1)
+    expect(f.log).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(IDLE_BACK_MS - IDLE_ASK_MS)
+    expect(f.say.mock.calls.map(([, , text]) => text)).toEqual([expect.stringMatching(/^I held acme\/app#14 /)])
+    f.next.stop()
+  })
+
+  it('keeps the rest of a row when its watch goes, at a turn\'s end or a look that finds it paused, and no row kept for it alone', async () => {
+    const counts = { key: 'acme/app#12', times: 1, told: false }, alone = { key: '', times: 0, told: false }
+    for (const [drop, row] of [['turn', counts], ['paused', counts], ['turn', alone]] as const) {
+      const f = setup({ items: [item(14, 'Add the export', ['status:taken'])], ...drop === 'paused' ? { watched: [{ ...PIP, paused: true }] } : {} })
+      writeFileSync(f.file, JSON.stringify({ pip: { ...row, idle: { terminal: 'h-pip', task: 'acme/app#14', since: Date.now() } } }))
+      f.next.start()
+      if (drop === 'turn') for (const listener of f.listeners) listener({ agentId: 'h-pip', sessionId: 's-pip', aborted: false, prompt: 'p', turnId: 1 })
+      else await vi.advanceTimersByTimeAsync(START_LOOK_MS)
+      expect(JSON.parse(readFileSync(f.file, 'utf8'))).toEqual(row.key ? { pip: row } : {})
+      f.next.stop()
+    }
   })
 
   it('asks again, under the operation it asked under, a watch its file kept from before the ask was saved', async () => {
@@ -702,7 +760,7 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
       if (change === 'paused') h.state.watched = [{ ...PIP, paused: true }]
       else h.state.items = [item(14, 'Add the export')]
       await vi.advanceTimersByTimeAsync(IDLE_ASK_MS)
-      expect(JSON.parse(readFileSync(h.file, 'utf8')).pip.idle).toBeUndefined()
+      expect(JSON.parse(readFileSync(h.file, 'utf8'))).toEqual({})
       expect(h.tell).not.toHaveBeenCalled()
       h.next.stop()
     }
@@ -722,7 +780,7 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     const again = f.make()
     again.start()
     await vi.advanceTimersByTimeAsync(START_LOOK_MS)
-    expect(JSON.parse(readFileSync(f.file, 'utf8')).pip).toEqual({ key: '', times: 0, told: false })
+    expect(JSON.parse(readFileSync(f.file, 'utf8'))).toEqual({})
     again.stop()
     // Resumed an hour on with no turn, and Harness restarts: its watch starts at that look, and nothing goes back.
     await vi.advanceTimersByTimeAsync(60 * 60_000)
