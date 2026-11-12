@@ -284,7 +284,8 @@ with the master's token.
 - **Proposed, not built: the same for the whole core.** A list of the files the core's process loads, checked by
   the test, so that adding one is a line in a pull request that a reviewer sees. In the 43 hours before this
   audit, 14 of 79 changes to the CLI changed that set and added 17 files, among them `agentClient/ledger.ts`
-  (363 lines for one call) and `engines/claude/backgroundCommands.ts` (engine code, in the core). It is not a line
-  count: comments and fixes never trip it.
+  (363 lines for one call) and `engines/claude/backgroundCommands.ts` (engine code, in the core). While the audit
+  ran, one more change added 7 files and 1,017 lines (#4239: 99,454 lines in 563 files). It is not a line count:
+  comments and fixes never trip it.
 - **Proposed: hold the engines' code out by folder, not by name.** The test names the Claude Code and Codex files
   the core must not load; a new file is not on the list.
