@@ -34,6 +34,13 @@ describe('Swarm sessions without skill files (task #4673)', () => {
 
   // anh Dee, 2026-11-11, of the PM's chat with its person: "it should be like a human conversation". In the rehearsal the PM
   // answered "next: --json and --top" with a table, a section on what the issues settle and three paragraphs on the goal.
+  // anh Dee's Devon, 2026-11-12, learned of the goal only from the line Harness types when work runs short, and judged one too
+  // much for a one-task ask. Keeping it from what its person asks is the PM's; its command is code (goalStarter.ts).
+  it('tells the PM, and no other agent, to keep the project\'s goal from what its person asks', () => {
+    expect(swarmBasics(true).text).toContain('Keep the project\'s goal in agents/GOAL.md, a row for each milestone your person asks for and the command that checks it: harness super-tab goal shows it, goal write starts it.')
+    expect(swarmBasics(false).text).not.toContain('agents/GOAL.md')
+  })
+
   it('tells the PM to answer its person in a few lines, the detail on the issues, and no other agent', () => {
     expect(swarmBasics(true).text).toContain('Answer your person in a few lines, as a teammate would on Slack; the detail goes on the issues.')
     expect(swarmBasics(false).text).not.toContain('Answer your person in a few lines')
@@ -75,7 +82,9 @@ describe('Swarm sessions without skill files (task #4673)', () => {
       // anh Dee, 2026-11-11: "it should be like a human conversation", of a PM's replies that read as its own narration.
       expect(rules).toContain('answer there.')
       // The review of #4074: a post that answers nothing, such as a PM's hand-off, is as brief; an issue's body need not be.
-      expect(rules).toContain('- Post briefly, as on Slack.')
+      // anh Dee, 2026-11-12, of a builder posting the tools it installed and a PM's how-to: the channel holds what the team needs
+      // to know, as people's Slack does; Harness sees a machine's tools itself.
+      expect(rules).toContain('- Post briefly, as on Slack: what shipped, what\'s blocked, decisions; never your setup.')
     }
   })
   // AGENTS.md standard 13: a safety rule about processes keeps its line. The shell guard that enforced these is gone with team
