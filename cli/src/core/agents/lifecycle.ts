@@ -53,6 +53,7 @@ export interface LifecycleDeps {
   announceSession: ResumeAgentServiceDeps['announceSession']
   relaunchOverrides: ResumeAgentServiceDeps['relaunchOverrides']
   prepareSessionResume: ResumeAgentServiceDeps['prepareSessionResume']
+  stopBackgroundJob?: ResumeAgentServiceDeps['stopBackgroundJob']
   refreshGridWebSearch: ResumeAgentServiceDeps['refreshGridWebSearch']
   attachDsh: ResumeAgentServiceDeps['attachDsh']
   attachBrowser?: ResumeAgentServiceDeps['attachBrowser']
@@ -80,7 +81,7 @@ export class LeadProtectedError extends Error {
 export function createAgentLifecycle({
   registry, stoppedAgents, restartJobs, createBackend, noBackendCode, backendFor, agentReconciler, forgetSession, markDeleted, clearDeleted, stopNative, settlePane, cancelExternal,
   sessionCheckpoints, mirror, sessionSearch, send, pinnedControls, retainExitedSession, announceSession,
-  relaunchOverrides, prepareSessionResume, refreshGridWebSearch, adoptSwarmSkill, attachDsh, attachBrowser, attachSession, relaunchMarks, stopped, purged, atFolderTrust, atEmptyComposer, moveHeld,
+  relaunchOverrides, prepareSessionResume, stopBackgroundJob, refreshGridWebSearch, adoptSwarmSkill, attachDsh, attachBrowser, attachSession, relaunchMarks, stopped, purged, atFolderTrust, atEmptyComposer, moveHeld,
   leadProtected,
 }: LifecycleDeps) {
   /**
@@ -120,7 +121,7 @@ export function createAgentLifecycle({
 
   const resume = createResumeAgentService({
     registry, stoppedAgents, createBackend, noBackendCode, backendFor, restartJobs, stopJobs, pinnedControls,
-    retainExitedSession, announceSession, relaunchOverrides, prepareSessionResume, adoptSwarmSkill,
+    retainExitedSession, announceSession, relaunchOverrides, prepareSessionResume, stopBackgroundJob, adoptSwarmSkill,
     refreshGridWebSearch, clearDeleted, attachDsh, attachBrowser, attachSession, relaunchMarks,
   })
   const resumeAgent: ResumeAgent = (id, permissionMode, launchArgs) => {
