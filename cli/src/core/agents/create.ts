@@ -156,10 +156,11 @@ export function createAgentCreator({
     // at Claude Code's "do you trust this folder?", which no Swarm view shows; it read Idle and every message to it was
     // withheld. The person chose that repository for the Swarm in this window, so a Claude Code Swarm agent, in whatever mode
     // its owner's settings give (task #4215), is trusted in a Git checkout directly in the projects root or a worktree Harness
-    // made, read from disk.
-    // Never from a relayed request, which could name any repository here. Codex's trust also sets defaults for the
-    // person's own sessions in that folder, so it stays theirs to give.
-    const trustSwarmFolder = !trustEmptyProject && context?.local === true && !dsh && engine === 'claude' && !!input.swarmRole
+    // made, read from disk. A Codex Swarm agent too (anh Dee, 2026-11-12): Codex asks the same question there, with no one
+    // at its terminal. Its trust also sets defaults for the person's own Codex sessions in that checkout, which they chose
+    // for the Swarm.
+    // Never from a relayed request, which could name any repository here.
+    const trustSwarmFolder = !trustEmptyProject && context?.local === true && !dsh && (engine === 'claude' || engine === 'codex') && !!input.swarmRole
       && await swarmFolder(cwd)
     if (!authority.current()) return stale()
     // A harness can pin its permission mode (`dshPinnedPermissionMode`): the Grid harness starts model

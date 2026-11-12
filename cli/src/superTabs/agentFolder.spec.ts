@@ -41,6 +41,18 @@ describe('the folder Harness makes for an agent whose start named a temporary on
     expect(projects[folder].hasTrustDialogAccepted).toBe(true)
   })
 
+  // The rehearsal's Codex builder (2026-11-11) worked only because its person's config trusted the whole home folder; anywhere
+  // else Codex asks "Do you trust the files in this folder?" in a terminal no Swarm view shows.
+  it('is trusted alone in Codex\'s config for a Codex agent', async () => {
+    const root = temp('agent-root-'), codex = temp('agent-codex-')
+    writeFileSync(join(codex, 'config.toml'), 'model = "gpt-5"\n')
+    const folder = agentFolderFor(root, 's1')
+    await prepareAgentFolder(folder, 'codex', { HOME: root, CODEX_HOME: codex })
+    const config = readFileSync(join(codex, 'config.toml'), 'utf8')
+    expect(config).toContain(`[projects."${folder}"]\ntrust_level = "trusted"`)
+    expect(config.match(/\[projects\./g)).toHaveLength(1)
+  })
+
   // Security review of #3341 (Readycheck): a folder or link already at that path was marked and trusted, and a link wrote
   // the mark outside. Only a folder Harness made, or one it made and marked before, is ever used.
   it('refuses a link or an unmarked folder already where it would go, and writes nothing through it', async () => {

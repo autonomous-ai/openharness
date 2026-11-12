@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { swarmEngineArgs } from './swarmEngineArgs.js'
 
 describe('what the Swarm adds to an engine\'s argv', () => {
-  it('turns off Codex\'s startup update check, whose "Update available" screen holds an agent nobody is at', () => {
-    expect(swarmEngineArgs('codex')).toEqual(['-c', 'check_for_update_on_startup=false'])
+  // Its sandbox had no network: the rehearsal's Codex builder reached neither Harness nor GitHub (2026-11-11).
+  it('turns off Codex\'s startup update check, whose "Update available" screen holds an agent nobody is at, and gives its sandbox network', () => {
+    expect(swarmEngineArgs('codex')).toEqual(['-c', 'check_for_update_on_startup=false', '-c', 'sandbox_workspace_write.network_access=true'])
   })
 
   // The shell guard is gone (anh Dee, 2026-11-09): a Swarm agent runs with its person's own settings, and no hook of Harness's

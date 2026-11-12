@@ -98,7 +98,10 @@ export function agentInstructionArgs(engine: AgentEngine | string, said: { instr
   const told = launch?.harnessInstructions
   const status = statusLineArgs(launch?.statusLine, place)
   if (!attribution && !told) return status
-  said = { ...said, instructions: said.instructions && told?.also ? `${said.instructions} ${told.also}` : said.instructions }
+  // A Swarm session's sandbox has network (codex/launch.ts `swarmArgs`): its harness commands work inside it, and an ask to run
+  // them outside is refused where its person's settings refuse every such ask, as the rehearsal's Orin's were (2026-11-11).
+  const also = place.swarmInstructions ? null : told?.also
+  said = { ...said, instructions: said.instructions && also ? `${said.instructions} ${also}` : said.instructions }
   if (attribution?.kind === 'instruction') {
     const instructions: Instruction[] = [
       ...(said.instructions && told?.kind === 'attribution' ? [{ text: said.instructions, mark: said.instructions }] : []),

@@ -38,7 +38,7 @@ export function agentFolderFor(root: string, startId: string): string {
 }
 
 /**
- * Makes [folder] private and marked as Harness's, and answers Claude Code's folder question for it alone. Only a folder this
+ * Makes [folder] private and marked as Harness's, and answers Claude Code's or Codex's folder question for it alone. Only a folder this
  * makes now, or one it made and marked for the same start before, is used: a link or an unmarked folder already there, or a
  * link in place of agent-home, is refused before anything is written, so neither a mark nor a trust lands elsewhere (security
  * review of #3341). Throws when it refuses; a failed trust write only leaves the question.
@@ -54,9 +54,10 @@ export async function prepareAgentFolder(folder: string, engine: unknown, enviro
   const mark = join(folder, AGENT_FOLDER_MARK)
   if (made) writeFileSync(mark, 'A Swarm agent\'s folder, made by Harness; removed when the agent stops and nothing of its work is left.\n', { flag: 'wx', mode: 0o600 })
   else if (!lstatSync(mark, { throwIfNoEntry: false })?.isFile()) throw new Error('the agent folder is not one Harness made')
-  if (engine !== 'claude') return
-  // The environment the launch reads its Claude home from (a CLAUDE_CONFIG_DIR its login shell sets).
-  try { folderTrust('claude', undefined, environment ?? await launchEnvironment() ?? undefined)?.record(folder) }
+  // Codex asks too: the rehearsal's Codex builder (2026-11-11) was spared only by its person's config trusting the whole home.
+  if (engine !== 'claude' && engine !== 'codex') return
+  // The environment the launch reads its Claude or Codex home from (a CLAUDE_CONFIG_DIR or CODEX_HOME its login shell sets).
+  try { folderTrust(engine, undefined, environment ?? await launchEnvironment() ?? undefined)?.record(folder) }
   catch (error) { console.warn(`[super-tabs] could not answer the folder question for an agent: ${(error as Error).message}`) }
 }
 

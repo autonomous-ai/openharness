@@ -80,6 +80,13 @@ describe('what Harness tells an agent as it starts', () => {
     }
   })
 
+  // A Swarm Codex's sandbox has network (engines/codex/launch.ts `swarmArgs`), so its harness commands work inside it. Told to
+  // run them outside, the rehearsal's Orin (2026-11-11) asked to, was refused by its person's settings, and stopped.
+  it('tells a Swarm Codex nothing of running harness commands outside its sandbox', () => {
+    expect(agentLaunchArgs('codex', null, { cwd: '/w', read: () => null, swarmInstructions: 'Swarm.' }, dataDir)).toEqual(codexValue('Swarm.'))
+    expect(agentLaunchArgs('codex', null, { cwd: '/w', read: () => null }, dataDir)).toEqual(codexValue(CODEX_TOLD))
+  })
+
   it('joins every appended system prompt into one, for Claude Code; leaves other engines\' arguments alone', () => {
     expect(joinedInstructions('claude', ['--system-prompt-snapshot', 'off', '--append-system-prompt', 'grid', '--agent', 'x', '--append-system-prompt', 'ours']))
       .toEqual(['--system-prompt-snapshot', 'off', '--agent', 'x', '--append-system-prompt', 'grid\n\nours'])

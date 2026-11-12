@@ -225,14 +225,21 @@ describe('creating an agent', () => {
   })
 
   // Codex's "Update available" screen held a Swarm agent's task with no one at its terminal (Studio Codex, 2026-10-29).
-  it('starts a Swarm Codex without its startup update check, and every other Codex and Swarm engine as it was', async () => {
+  // Its sandbox had no network, so a Swarm Codex could reach neither Harness nor GitHub (the rehearsal's Orin, 2026-11-11).
+  it('starts a Swarm Codex without its startup update check and with network in its sandbox, and every other Codex and Swarm engine as it was', async () => {
     const extraArgsOf = async (over: Record<string, unknown>) => {
       await setup().create(request({ cwd: folder(), ...over }))
       return (vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1] as { extraArgs?: string[] }).extraArgs ?? []
     }
-    for (const role of ['coordinator', 'agent'] as const) expect(await extraArgsOf({ engine: 'codex', swarmRole: role })).toEqual(expect.arrayContaining(['-c', 'check_for_update_on_startup=false']))
-    expect(await extraArgsOf({ engine: 'codex' })).not.toContain('check_for_update_on_startup=false')
-    expect(await extraArgsOf({ engine: 'claude', swarmRole: 'agent' })).not.toContain('check_for_update_on_startup=false')
+    const swarmOnly = ['check_for_update_on_startup=false', 'sandbox_workspace_write.network_access=true']
+    for (const role of ['coordinator', 'agent'] as const) {
+      const args = await extraArgsOf({ engine: 'codex', swarmRole: role })
+      for (const setting of swarmOnly) expect(args[args.indexOf(setting) - 1], setting).toBe('-c')
+    }
+    for (const over of [{ engine: 'codex' }, { engine: 'claude', swarmRole: 'agent' }]) {
+      const args = await extraArgsOf(over)
+      for (const setting of swarmOnly) expect(args).not.toContain(setting)
+    }
   })
 
   // Swarm v3 (task #4215): a Swarm agent starts with its owner's own settings. Harness wrote full mode's warning acceptance
@@ -372,7 +379,8 @@ describe('creating an agent', () => {
   // 2026-10-30: a Cmd+S Swarm's PM, in a clone or worktree the desktop made and sent as a plain cwd, sat at Claude Code's
   // trust question, which no Swarm view shows.
   // Its owner's own mode since task #4215: the trust follows the Swarm's checkout, not full mode.
-  it('trusts a local Claude Swarm agent in any mode in a clone in the projects root or a worktree Harness made', async () => {
+  // A Codex Swarm agent too since 2026-11-12: Codex asks the same question there, and no one is at its terminal either.
+  it('trusts a local Claude or Codex Swarm agent in any mode in a clone in the projects root or a worktree Harness made', async () => {
     vi.mocked(projectsRoot).mockReturnValue(root)
     try {
       const clone = folder(), plain = folder(['README.md']), worktree = join(folder(), 'worktree')
@@ -389,13 +397,19 @@ describe('creating an agent', () => {
       expect(harnessMadeWorktree).toHaveBeenCalledWith(worktree, root)
       await prepare({ cwd: clone, permissionMode: 'ask' })
       expect(preTrustClaudeProject).toHaveBeenCalledTimes(3)
-      // Not the person's own folder, not relayed, not outside a Swarm, not for Codex.
+      // A Codex Swarm agent's, in the config.toml of the profile it starts with.
+      expect((await prepare({ cwd: worktree, engine: 'codex', codexHome: '/fixture/profile' })).ok).toBe(true)
+      expect(preTrustCodexProject).toHaveBeenCalledWith(worktree, '/fixture/profile')
+      // Not the person's own folder, not relayed, not outside a Swarm, not for another engine.
       await prepare({ cwd: plain })
       await prepare({ cwd: clone }, false)
       await prepare({ cwd: clone, swarmRole: null, permissionMode: 'full', bypassPermission: true })
-      await prepare({ cwd: clone, engine: 'codex' })
+      await prepare({ cwd: plain, engine: 'codex' })
+      await prepare({ cwd: clone, engine: 'codex' }, false)
+      await prepare({ cwd: clone, engine: 'codex', swarmRole: null })
+      await prepare({ cwd: clone, engine: 'opencode' })
       expect(preTrustClaudeProject).toHaveBeenCalledTimes(3)
-      expect(preTrustCodexProject).not.toHaveBeenCalled()
+      expect(preTrustCodexProject).toHaveBeenCalledTimes(1)
     } finally {
       vi.mocked(projectsRoot).mockReset()
       vi.mocked(harnessMadeWorktree).mockReset().mockResolvedValue(false)

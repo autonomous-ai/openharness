@@ -135,8 +135,14 @@ export const launch: EngineLaunch = {
    * the person's file, as `screen.args` does. Only for sessions the Swarm starts: a person's Codex keeps asking, and
    * updating Codex stays their choice. Codex that still shows the prompt is answered with Skip by the host
    * (superTabs/terminal.ts).
+   *
+   * Its sandbox, in the person's workspace-write mode, has no network, so a Swarm Codex could reach neither Harness's daemon
+   * nor GitHub: the rehearsal's Orin (2026-11-11) said "Harness status was blocked by the environment's approval policy, so
+   * I couldn't retrieve my assigned work". Network on, its writes stay in its folder (anh Dee, 2026-11-12). It does not make
+   * `.git` writable: Codex keeps a checkout's and a worktree's git folder read-only, so a commit still needs its person's
+   * approval, or full access in their own settings (task #4215). Codex's other modes ignore the setting.
    */
-  swarmArgs: ['-c', 'check_for_update_on_startup=false'],
+  swarmArgs: ['-c', 'check_for_update_on_startup=false', '-c', 'sandbox_workspace_write.network_access=true'],
   /**
    * Codex 0.162.1 has no setting for its attribution's text: its own line ("Generated with [Codex](…)") is an
    * instruction in its developer message (`<git_attribution>`), on or off by workspace. `developer_instructions` is
@@ -152,6 +158,7 @@ export const launch: EngineLaunch = {
   },
   // Beside the attribution's instruction, in the one `developer_instructions` value (facets/launch.ts).
   // Its sandbox keeps a command from Harness's socket and port: told only that Harness was not running, an agent ran
-  // `harness start` and asked the person to let it start Harness (a fresh Mac, 2026-10-12; lib/unreachable.ts).
+  // `harness start` and asked the person to let it start Harness (a fresh Mac, 2026-10-12; lib/unreachable.ts). Not a Swarm
+  // session's, whose sandbox has network (`swarmArgs`; engines/launches.ts `agentInstructionArgs`).
   harnessInstructions: { kind: 'attribution', also: 'Codex\'s sandbox cannot reach Harness: run each harness command outside it, with escalated permissions.' },
 }
