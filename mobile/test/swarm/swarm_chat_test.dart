@@ -829,20 +829,44 @@ void main() {
 
   testWidgets('the @ picker lists the chat\'s agents with role and state, '
       'narrowed by what is typed', (tester) async {
-    await pump(tester, backend([message('m1', 1)]));
+    await pump(
+      tester,
+      backend(
+        [message('m1', 1)],
+        agents: [
+          agent('agent-lead', name: 'Lead', displayName: 'River'),
+          {
+            ...agent('agent-builder', displayName: 'Nova'),
+            'pausedAt': '2026-11-12T08:00:00.000Z',
+          },
+        ],
+      ),
+    );
 
     await tester.enterText(find.byType(TextField), '@');
     await tester.pump();
     expect(key('swarm-mention-picker'), findsOneWidget);
     expect(key('swarm-pick-agent-lead'), findsOneWidget);
     expect(key('swarm-pick-agent-builder'), findsOneWidget);
+    // Its state as on Your Team, in grey: never the work it holds read as
+    // working (g1's assignment), and nothing for one the phone knows nothing
+    // of.
     expect(
       find.descendant(
         of: key('swarm-pick-agent-builder'),
-        matching: find.text('Working'),
+        matching: find.text('paused'),
       ),
       findsOneWidget,
     );
+    expect(
+      tester
+          .widget<Text>(key('swarm-mention-state-agent-builder'))
+          .style
+          ?.color,
+      grid.AppPalette.textFaint,
+    );
+    expect(key('swarm-mention-state-agent-lead'), findsNothing);
+    expect(find.text('Working'), findsNothing);
     expect(
       find.descendant(
         of: key('swarm-pick-agent-lead'),

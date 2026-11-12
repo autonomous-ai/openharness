@@ -13,6 +13,8 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
 
+import 'model.dart';
+import 'swarm_agent_state.dart';
 import 'swarm_agents.dart';
 import 'swarm_home_list.dart';
 import 'swarm_home_rows.dart';
@@ -621,6 +623,33 @@ class _SwarmPageState extends State<SwarmPage> {
       final open = _teamOpen.contains(swarm.id);
       final rows = swarmTeamRows(team, open: open);
       String key(String name) => several ? '$name-${swarm.id}' : name;
+      // What each one does, as its computer says it: a row is drawn again
+      // when that changes, not the whole of Home.
+      final agents = swarmAgentsOf(context);
+      Widget member(
+        SuperTabAgent agent,
+        SuperTabConversation? chat,
+        bool unread,
+      ) {
+        SwarmTeamRow draw() => SwarmTeamRow(
+          key: ValueKey('swarm-agent-${swarm.id}-${agent.id}'),
+          agent: agent,
+          name: snapshot.agentName(agent.id, fallback: agent.name),
+          pm: swarmAgentIsPm(snapshot, agent),
+          unread: unread,
+          state: swarmAgentStateIn(reader, agent, agents),
+          onTap: chat == null
+              ? null
+              : () => _openChat(context, swarm.id, chat.id),
+          onLongPress: swarmMayPauseAgent(reader, agent.id)
+              ? () => unawaited(showSwarmAgentMenu(context, reader, agent.id))
+              : null,
+        );
+        return agents == null
+            ? draw()
+            : ListenableBuilder(listenable: agents, builder: (_, _) => draw());
+      }
+
       return [
         SwarmCaption(
           'Your Team',
@@ -632,16 +661,7 @@ class _SwarmPageState extends State<SwarmPage> {
           children: [
             for (final i in rows.shown)
               if (team[i] case (:final agent, :final chat, :final unread))
-                SwarmTeamRow(
-                  key: ValueKey('swarm-agent-${swarm.id}-${agent.id}'),
-                  agent: agent,
-                  name: snapshot.agentName(agent.id, fallback: agent.name),
-                  pm: swarmAgentIsPm(snapshot, agent),
-                  unread: unread,
-                  onTap: chat == null
-                      ? null
-                      : () => _openChat(context, swarm.id, chat.id),
-                ),
+                member(agent, chat, unread),
             if (team.length > swarmTeamShown + 1)
               SwarmTeamFoldRow(
                 key: ValueKey(key('swarm-team-more')),

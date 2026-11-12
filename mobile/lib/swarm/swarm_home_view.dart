@@ -105,8 +105,12 @@ Map<String, dynamic> _agent(SuperTabAgent a) => {
   'role': ?a.role,
   'roleId': ?a.roleId,
   'roleName': ?a.roleName,
+  // What its row on Your Team says it does (swarm_agent_state.dart).
   'limitedUntil': ?a.limitedUntil?.toIso8601String(),
   'downSince': ?a.downSince?.toIso8601String(),
+  // Only that it is paused is read, not since when.
+  if (a.paused) 'pausedAt': '',
+  if (a.alerting.isNotEmpty) 'alerting': a.alerting,
   'avatar': ?_preset(a.avatar),
   'configuration': {
     for (final key in const ['engine', 'model', 'effort'])

@@ -4,7 +4,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/parts.dart';
 import 'package:harness_mobile/swarm/swarm_buddy.dart';
-import 'package:harness_mobile/swarm/team_glance.dart';
 import 'package:harness_mobile/swarm/swarm_home_cache.dart';
 import 'package:harness_mobile/swarm/swarm_inbox.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
@@ -147,7 +146,7 @@ void main() {
       expect(swarmBuddyChat(reader, project)?.id, 'buddy-me');
       expect(swarmBuddy(reader, project)?.id, 'agent-wren');
       expect(
-        swarmTeamGlance(reader.snapshot!).agents,
+        swarmTeamAgents(reader.snapshot!),
         isEmpty,
         reason: 'a Buddy is no one\'s team, from the Home kept too',
       );

@@ -25,6 +25,8 @@ import 'swarm_code_block.dart';
 import 'swarm_outbox.dart';
 import 'swarm_post_line.dart';
 import 'swarm_agent_rename.dart';
+import 'swarm_agent_state.dart';
+import 'swarm_agents.dart';
 import 'swarm_attach.dart';
 import 'swarm_buddy.dart';
 import 'swarm_buddy_chat.dart';
@@ -62,7 +64,6 @@ import 'swarm_voice.dart';
 import 'swarm_voice_bubble.dart';
 import 'swarm_voice_send.dart' show SwarmVoicePosted;
 import 'voice_length.dart';
-import 'team_glance.dart';
 
 final _conversationReferencePattern = RegExp(r'(?<![\w/])#([1-9][0-9]*)(?!\w)');
 
@@ -2397,6 +2398,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               people: c.mentionablePeople,
               agents: c.mentionable,
               snapshot: snapshot,
+              me: c.reader.accountId,
               query: query,
               onPick: (id) {
                 c.completeMention(id);
@@ -3511,6 +3513,7 @@ class SwarmMentionPicker extends StatelessWidget {
     required this.people,
     required this.agents,
     required this.snapshot,
+    required this.me,
     required this.query,
     required this.onPick,
   });
@@ -3518,6 +3521,9 @@ class SwarmMentionPicker extends StatelessWidget {
   final List<SuperTabPerson> people;
   final List<SuperTabAgent> agents;
   final SuperTabSnapshot snapshot;
+
+  /// The reader, to whom an agent of their own `needs you`.
+  final String me;
   final String query;
 
   /// The person's or agent's id.
@@ -3526,10 +3532,8 @@ class SwarmMentionPicker extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
-    final glances = {
-      for (final glance in swarmTeamGlance(snapshot).agents)
-        glance.agent.id: glance,
-    };
+    // What each agent does, as on Your Team (swarm_agent_state.dart).
+    final harnesses = swarmAgentsOf(context);
     final prefix = query.toLowerCase();
     final shownPeople = [
       for (final person in people)
@@ -3664,24 +3668,37 @@ class SwarmMentionPicker extends StatelessWidget {
                               ],
                             ),
                           ),
-                          if (glances[agent.id] case final glance?) ...[
-                            Container(
-                              width: 7,
-                              height: 7,
-                              decoration: BoxDecoration(
-                                color: _stateColor(tty, glance.state),
-                                shape: BoxShape.circle,
+                          ListenableBuilder(
+                            listenable: Listenable.merge([?harnesses]),
+                            builder: (context, _) => switch (swarmAgentState(
+                              agent,
+                              activity: harnesses?.activityOf(
+                                agent.machineId,
+                                agent.harnessId,
                               ),
-                            ),
-                            const SizedBox(width: 6),
-                            Text(
-                              glance.label,
-                              style: swarmChatText(
-                                13,
-                                color: AppPalette.textSecondary,
+                              me: me,
+                            )) {
+                              final state? => Padding(
+                                padding: const EdgeInsets.only(
+                                  left: AppSpace.s,
+                                ),
+                                child: Text(
+                                  state,
+                                  key: ValueKey(
+                                    'swarm-mention-state-${agent.id}',
+                                  ),
+                                  maxLines: 1,
+                                  style: AppType.caption(
+                                    color: AppPalette.textFaint,
+                                    fontFeatures: const [
+                                      FontFeature.tabularFigures(),
+                                    ],
+                                  ),
+                                ),
                               ),
-                            ),
-                          ],
+                              null => const SizedBox.shrink(),
+                            },
+                          ),
                         ],
                       ),
                     ),
@@ -3691,15 +3708,6 @@ class SwarmMentionPicker extends StatelessWidget {
     );
   }
 }
-
-/// The dot beside what an agent is doing: green working, yellow waiting or
-/// stuck, red down or limited, faint idle.
-Color _stateColor(Tty tty, SwarmAgentState state) => switch (state) {
-  SwarmAgentState.working => tty.green,
-  SwarmAgentState.waiting || SwarmAgentState.stuck => tty.yellow,
-  SwarmAgentState.down || SwarmAgentState.limited => tty.red,
-  _ => AppPalette.textFaint,
-};
 
 /// The composer's field inside [SwarmComposerCard]: text that grows with
 /// what is typed, 1 to 5 lines and then scrolls, in the app's own face, with

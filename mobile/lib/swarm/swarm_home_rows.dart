@@ -251,7 +251,9 @@ class SwarmTeamRow extends StatelessWidget {
     required this.name,
     required this.pm,
     required this.unread,
+    this.state,
     required this.onTap,
+    this.onLongPress,
   });
 
   final SuperTabAgent agent;
@@ -260,13 +262,22 @@ class SwarmTeamRow extends StatelessWidget {
   /// A Product Manager, whose face wears the PM's colour as in its chat.
   final bool pm;
   final bool unread;
+
+  /// What it is doing, in a word or two at the row's end
+  /// (swarm_agent_state.dart); null says nothing.
+  final String? state;
   final VoidCallback? onTap;
+
+  /// Its menu: Pause or Resume (`showSwarmAgentMenu`); null where the reader
+  /// may not.
+  final VoidCallback? onLongPress;
 
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     return _Tap(
       onTap: onTap,
+      onLongPress: onLongPress,
       child: ConstrainedBox(
         constraints: const BoxConstraints(
           minHeight: SwarmHomeProjectRow.height,
@@ -305,6 +316,19 @@ class SwarmTeamRow extends StatelessWidget {
                   ),
                 ),
               ),
+              // Quiet, as Desktop's row detail: grey, never a colour.
+              if (state case final state?) ...[
+                const SizedBox(width: AppSpace.s),
+                Text(
+                  state,
+                  key: const ValueKey('swarm-agent-state'),
+                  maxLines: 1,
+                  style: AppType.caption(
+                    color: AppPalette.textFaint,
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+                ),
+              ],
               if (unread) ...[
                 const SizedBox(width: 12),
                 SizedBox.square(

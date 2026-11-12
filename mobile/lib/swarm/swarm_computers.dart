@@ -127,7 +127,7 @@ class AppSwarmComputers extends ChangeNotifier
 }
 
 /// The app's harnesses for Swarm ([SwarmAgents]), from [agentIndex]: told of
-/// when how many work changes.
+/// when how many work, or what one of them does, changes.
 class AppSwarmAgents extends ChangeNotifier implements SwarmAgents {
   AppSwarmAgents(this.notifier) {
     notifier.addListener(_changed);
@@ -137,14 +137,32 @@ class AppSwarmAgents extends ChangeNotifier implements SwarmAgents {
   final AppNotifier notifier;
   int? _working;
 
+  /// What each harness doing something does, by `machineId/harnessId`.
+  Map<String, SwarmHarnessActivity> _activities = const {};
+
   @override
   int? get working => _working;
+
+  @override
+  SwarmHarnessActivity? activityOf(String machineId, String harnessId) =>
+      _activities['$machineId/$harnessId'];
 
   void _changed() {
     final index = notifier.machinesAnswered ? agentIndex(notifier) : null;
     final working = index?.where((entry) => entry.isWorking).length;
-    if (working == _working) return;
+    // A question on its screen comes before the turn it asked in, as on
+    // Desktop.
+    final activities = {
+      for (final entry in index ?? const <AgentEntry>[])
+        if (notifier.questionFor(entry.machineId, entry.agent.id) != null)
+          '${entry.machineId}/${entry.agent.id}':
+              SwarmHarnessActivity.needsInput
+        else if (entry.isWorking)
+          '${entry.machineId}/${entry.agent.id}': SwarmHarnessActivity.working,
+    };
+    if (working == _working && mapEquals(activities, _activities)) return;
     _working = working;
+    _activities = activities;
     notifyListeners();
   }
 
