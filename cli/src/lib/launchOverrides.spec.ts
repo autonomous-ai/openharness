@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { agentTmpLaunch } from './agentTmp.js'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { env } from '../config/env.js'
 import { agentSettingsPath } from './agentSettings.js'
 import { setAgentSettingsForTest, signedOutForTest } from '../testing/agentSettings.js'
@@ -709,5 +709,40 @@ describe('buildLaunchOverrides — the model the session was launched with', () 
   it('keeps the remembered model beside a launch effort that names no model', async () => {
     const result = await buildLaunchOverrides(deps().d, 'claude', { subscriptionModel: 'opus', launchModel: { model: null, effort: 'xhigh' } }, 'a')
     expect(result).toMatchObject({ ok: true, overrides: { env: { ANTHROPIC_MODEL: 'opus' }, extraArgs: ['--effort', 'xhigh'] } })
+  })
+})
+
+// An OpenClaw run started with `--local <folder>` relaunches on that folder or not at all: a restore, a restart or a resume
+// that came back on the shared state folder would mix this run into every other OpenClaw's.
+describe('a local OpenClaw row relaunches local or not at all', () => {
+  const folder = mkdtempSync(join(tmpdir(), 'openclaw-local-'))
+  afterAll(() => rmSync(folder, { recursive: true, force: true }))
+  const launch = (local?: string) => ({
+    current: () => true, opencodeMajor: null, proofs: [],
+    environment: local ? { OPENCLAW_STATE_DIR: local } : {}, ...(local ? { openclawLocal: local } : {}),
+  }) as unknown as NativeLaunch
+
+  it('a local row whose folder is gone is refused before anything is asked, and never held', async () => {
+    const native = vi.fn(async () => ({ ok: true as const, launch: launch(folder) }))
+    const { d } = deps({ native })
+    const built = await buildLaunchOverrides(d, 'openclaw', { cwd: folder, openclawLocal: join(folder, 'gone') }, 'agent-1')
+    expect(built).toEqual({ ok: false, error: 'OPENCLAW_FOLDER_GONE', detail: "This run's OpenClaw folder is gone." })
+    expect(native).not.toHaveBeenCalled()
+    const file = join(folder, 'file')
+    writeFileSync(file, '')
+    expect(await buildLaunchOverrides(d, 'openclaw', { cwd: folder, openclawLocal: file }, 'agent-1')).toMatchObject({ error: 'OPENCLAW_FOLDER_GONE' })
+    expect(native).not.toHaveBeenCalled()
+  })
+
+  it('a local row relaunches only on a launch prepared for its folder', async () => {
+    const native = vi.fn(async () => ({ ok: true as const, launch: launch(folder) }))
+    const built = await buildLaunchOverrides(deps({ native }).d, 'openclaw', { cwd: folder, openclawLocal: folder }, 'agent-1')
+    expect(built).toMatchObject({ ok: true, overrides: { native: { openclawLocal: folder }, env: { OPENCLAW_STATE_DIR: folder } } })
+    expect(native).toHaveBeenCalledWith('openclaw', expect.objectContaining({ openclawLocal: folder }), expect.anything())
+    const unprepared = { ok: false, error: 'OPENCLAW_LOCAL_UNPREPARED', detail: 'This Harness could not prepare the --local folder. Nothing was started.' }
+    for (const answer of [launch(), launch(join(folder, 'other'))]) {
+      expect(await buildLaunchOverrides(deps({ native: async () => ({ ok: true, launch: answer }) }).d, 'openclaw', { cwd: folder, openclawLocal: folder }, 'agent-1')).toEqual(unprepared)
+    }
+    expect(await buildLaunchOverrides(deps().d, 'openclaw', { cwd: folder, openclawLocal: folder }, 'agent-1')).toEqual(unprepared)
   })
 })
