@@ -235,7 +235,7 @@ describe('creating an agent', () => {
     expect(await extraArgsOf({ engine: 'claude', swarmRole: 'agent' })).not.toContain('check_for_update_on_startup=false')
   })
 
-  // Swarm v3 (task #4215): a Swarm agent starts with its owner's own settings. Harness wrote full mode's warning acceptance
+  // Swarm v3 (task #4215): Harness writes nothing into a person's own settings for a Swarm agent. It wrote full mode's warning acceptance
   // into them for every Swarm agent in full mode (2026-10-26); a person who chooses full mode answers Claude Code's own warning.
   it('writes nothing into the person\'s settings for a Swarm agent, with no mode or in full mode', async () => {
     const home = mkdtempSync(join(tmpdir(), 'own-settings-')), config = join(home, 'claude'), settings = join(config, 'settings.json')
@@ -252,7 +252,7 @@ describe('creating an agent', () => {
   })
 
   // Audit M1, and task #4395: an agent's private temporary folder is its TMPDIR and, for Claude Code, is added to its working
-  // directories, so its owner's own settings ask nothing for its mktemp files; the launch's own variables win.
+  // directories, so its mode's checks ask nothing for its mktemp files; the launch's own variables win.
   it('gives the agent its private temporary folder as TMPDIR and as its one added folder, and lets the launch\'s own variables win', async () => {
     const tmp = { env: { TMPDIR: '/data/agent-tmp/one' }, args: ['--add-dir=/data/agent-tmp/one'] }
     const extraArgs = () => (vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1] as { extraArgs?: string[] }).extraArgs ?? []
@@ -371,7 +371,7 @@ describe('creating an agent', () => {
 
   // 2026-10-30: a Cmd+S Swarm's PM, in a clone or worktree the desktop made and sent as a plain cwd, sat at Claude Code's
   // trust question, which no Swarm view shows.
-  // Its owner's own mode since task #4215: the trust follows the Swarm's checkout, not full mode.
+  // In any mode since task #4215: the trust follows the Swarm's checkout, not full mode.
   it('trusts a local Claude Swarm agent in any mode in a clone in the projects root or a worktree Harness made', async () => {
     vi.mocked(projectsRoot).mockReturnValue(root)
     try {

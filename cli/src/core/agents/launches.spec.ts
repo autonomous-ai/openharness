@@ -950,7 +950,7 @@ describe('agent_create with a receipt', () => {
 
   // WIN-DELL and the Mac Studio, 2026-10-26: Swarm Leads in a reused or fresh checkout of the project's repository sat at
   // Claude Code's trust question, and so did the next Lead in a worktree of it, its source never answered.
-  it('trusts a Swarm agent\'s checkout of its remote project in its owner\'s own mode, and no other existing folder', async () => {
+  it('trusts a Swarm agent\'s checkout of its remote project in any mode, and no other existing folder', async () => {
     const { ask, replies } = setup()
     const launch = async (payload: Record<string, unknown>, n: number) => { await ask({ creationId: `${CREATION}-${n}`, ...payload }); await vi.waitFor(() => expect(replies).toHaveLength(n)) }
     const remote = { projectSource: 'remote', repositoryUrl: 'https://github.com/acme/app.git' }

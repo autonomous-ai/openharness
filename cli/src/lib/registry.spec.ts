@@ -679,6 +679,8 @@ describe('registry remote display names', () => {
       at('swarm-ask', '%55', { swarmSkill, permissionMode: 'ask' }),
     ]
     writeFileSync(join(dataDir, 'registry.json'), JSON.stringify(saved), { mode: 0o600 })
+    // The later Auto-approve sweep has run (its own test is below): this one reads the forced-mode sweep alone.
+    writeFileSync(join(dataDir, 'registry-swarm-auto'), '1')
     // As a machine upgrading from a build before the sweep: no marker yet.
     rmSync(join(dataDir, 'registry-own-modes'), { force: true })
 
@@ -701,6 +703,49 @@ describe('registry remote display names', () => {
     const { registry: later } = await loadRegistryModule()
     later.load()
     expect([later.byAgent('swarm-full')?.permissionMode, later.byAgent('swarm-full')?.bypassPermission]).toEqual(['full', true])
+  })
+
+  // A Swarm agent starts in Auto-approve since 2026-11-12 (anh Dee). One started between task #4215 and then has no mode, and a
+  // restart or restore reapplies none: a PM stood still before each tool, and Codex refused every ask to leave its sandbox.
+  it('gives, once, Auto-approve to each saved Claude Code or Codex Swarm agent with no mode, and keeps every recorded mode', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    registry.openProcessAgent({ agentId: 'template', engine: 'claude', tmuxPane: '%60', processIdentity: processIdentity(960) })
+    const [row] = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))
+    const at = (agentId: string, pane: string, fields: Record<string, unknown>) => ({ ...row, agentId, sessionId: '', processIdentity: null,
+      tmuxPane: pane, runtimes: [{ backend: 'tmux', paneId: pane }], primaryRuntimeKey: `tmux\u0000${pane}`, ...fields })
+    const lead = { role: 'lead', key: 'swarm-lead' }, dev = { role: 'dev', key: 'swarm-dev' }
+    const saved = [
+      at('pm', '%61', { swarmSkill: lead, bypassPermission: false }),
+      at('codex-builder', '%62', { engine: 'codex', swarmSkill: dev }),
+      at('swarm-ask', '%63', { swarmSkill: dev, permissionMode: 'ask', bypassPermission: false }),
+      at('own', '%64', { bypassPermission: false }),
+      at('opencode-swarm', '%65', { engine: 'opencode', swarmSkill: dev }),
+    ]
+    writeFileSync(join(dataDir, 'registry.json'), JSON.stringify(saved), { mode: 0o600 })
+    // As a machine upgrading from a build before this sweep, which already ran the forced-mode one.
+    writeFileSync(join(dataDir, 'registry-own-modes'), '1')
+    rmSync(join(dataDir, 'registry-swarm-auto'), { force: true })
+
+    const { registry: reloaded } = await loadRegistryModule()
+    reloaded.load()
+    const modeOf = (registered: typeof reloaded, id: string) => [registered.byAgent(id)?.permissionMode, registered.byAgent(id)?.bypassPermission]
+    for (const id of ['pm', 'codex-builder']) expect(modeOf(reloaded, id), id).toEqual(['auto', true])
+    expect(reloaded.byAgent('swarm-ask')?.permissionMode).toBe('ask')
+    for (const id of ['own', 'opencode-swarm']) expect(reloaded.byAgent(id)?.permissionMode, id).toBeUndefined()
+    const persisted = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8')) as Array<Record<string, unknown>>
+    expect(persisted.find(entry => entry.agentId === 'pm')).toMatchObject({ permissionMode: 'auto', bypassPermission: true })
+    expect(existsSync(join(dataDir, 'registry-swarm-auto'))).toBe(true)
+
+    // Once: a Swarm agent a person later sets to no mode keeps it.
+    writeFileSync(join(dataDir, 'registry.json'), JSON.stringify(persisted.map(entry => {
+      if (entry.agentId !== 'pm') return entry
+      const { permissionMode: _mode, ...rest } = entry
+      return { ...rest, bypassPermission: false }
+    })), { mode: 0o600 })
+    const { registry: later } = await loadRegistryModule()
+    later.load()
+    expect(later.byAgent('pm')?.permissionMode).toBeUndefined()
   })
 
   it('repairs a Codex parent registry entry overwritten with a child rollout', async () => {

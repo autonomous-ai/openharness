@@ -164,7 +164,7 @@ describe('discovery', () => {
       expect(mode, 'this fixture must name a mode').not.toBeNull()
     })
 
-    // Swarm v3 (task #4215): a Swarm agent's mode is the one its person chose, or none. An agent Harness once started in
+    // A Swarm agent's mode is the one on its row (Auto-approve since 2026-11-12), never read back. An agent Harness once started in
     // full mode still runs with that flag until it relaunches; read back, the relaunch would skip permissions again.
     it('never reads a Swarm agent\'s permissions off its process', async () => {
       const run = setup()
