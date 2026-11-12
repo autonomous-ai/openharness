@@ -441,17 +441,58 @@ withBuiltin('pages by bytes', () => {
     expect(events).toEqual([])
   })
 
-  it('the live tail drains a backlog over its polls, a page at a time', async () => {
+  // A new window after a rewind or fork is read live from its start: at one 4 MiB page a poll, a 300 MiB window took
+  // about 100 s to show anything new, where 500 rows a poll took about 6 s. On this thread, so fake timers count polls.
+  it('a poll reads pages until it has 500 rows or is caught up, handing each page on as it is read', async () => {
+    await resetOffThreadSqlite()
+    vi.useFakeTimers()
     const { path, db } = wal('plain')
-    const { reader: tail, events } = reader(path, KEY)
+    const windowId = windowOf(db, KEY)
+    const { reader: tail, deps } = reader(path, KEY, { pollMs: 1_000 })
     await tail.start()
-    vi.mocked(sqliteReadAll).mockClear()
-    append(db, windowOf(db, KEY), upTo(8, 19).map((seq) => ({ seq, json: message(`live-${seq}`, MIB) })))
-    await vi.waitFor(() => expect(seqs(events)).toEqual(upTo(8, 19)), { timeout: 10_000 })
+    deps.onStatus.mockClear()
+    const batches = (): number[][] => deps.onEvents.mock.calls.map(([batch]) => seqs(batch))
+    // Twelve rows of 1 MiB: four pages of three, in one poll.
+    append(db, windowId, upTo(8, 19).map((seq) => ({ seq, json: message(`big-${seq}`, MIB) })))
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(batches()).toEqual([[8, 9, 10], [11, 12, 13], [14, 15, 16], [17, 18, 19]])
+    expect(deps.onStatus).toHaveBeenCalledOnce()
+    // 1,200 small rows: 500 a poll, and the status only once the last is read.
+    deps.onEvents.mockClear(); deps.onStatus.mockClear()
+    db.exec('BEGIN'); append(db, windowId, upTo(20, 1219).map((seq) => ({ seq, json: message(`small-${seq}`, 10) }))); db.exec('COMMIT')
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(batches().map((batch) => batch.length)).toEqual([500])
+    expect(deps.onStatus).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(batches().map((batch) => batch.length)).toEqual([500, 500, 200])
+    expect(deps.onStatus).toHaveBeenCalledOnce()
     tail.stop()
-    const reads = (await pageReads(vi.mocked(sqliteReadAll))).filter((read) => read.rows.length)
-    expect(reads.length).toBeGreaterThanOrEqual(4)
-    expect(reads.every((read) => read.ok && withinBudget(read))).toBe(true)
+  })
+
+  it('a poll whose later page fails keeps what it handed on, and the next goes on from there', async () => {
+    await resetOffThreadSqlite()
+    vi.useFakeTimers()
+    const { path, db } = wal('plain')
+    const { reader: tail, deps, events } = reader(path, KEY, { pollMs: 1_000 })
+    await tail.start()
+    deps.onStatus.mockClear()
+    append(db, windowOf(db, KEY), upTo(8, 19).map((seq) => ({ seq, json: message(`big-${seq}`, MIB) })))
+    const actual = await vi.importActual<typeof import('../../lib/sqliteRead.js')>('../../lib/sqliteRead.js')
+    let pages = 0
+    vi.mocked(sqliteReadAll).mockImplementation(async (...args) =>
+      args[1].startsWith('WITH RECURSIVE candidate AS (') && ++pages === 2 ? { ok: false, reason: 'transient' } : actual.sqliteReadAll(...args))
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(seqs(events)).toEqual([8, 9, 10])
+      expect(deps.onStatus).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1_000)
+    } finally {
+      tail.stop()
+      vi.mocked(sqliteReadAll).mockImplementation(actual.sqliteReadAll)
+    }
+    expect(seqs(events)).toEqual(upTo(8, 19))
+    expect(deps.onStatus).toHaveBeenCalledOnce()
   })
 
   it('steps past a row over the row cap, says so once, and reads on', async () => {
