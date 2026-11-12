@@ -37,6 +37,7 @@ function setup(platform: NodeJS.Platform = 'linux') {
     read: vi.fn(async (_home: string, _names: readonly string[], _sinceMs: number) => RECORD),
     kind: vi.fn(async (_home: string, _sessionId: string): Promise<'own' | 'waiting' | 'other'> => 'own'),
     endedSince: vi.fn(async (_home: string, _sessionId: string, _sinceMs: number) => false),
+    storeStamp: vi.fn(async (_home: string) => 'store'),
     recordSeen: vi.fn((_home: string) => {}),
     now: vi.fn(() => clock),
   }
@@ -168,38 +169,73 @@ describe('following a Hermes from its terminal record', () => {
     expect(await t.follow(resumed, observed(), unreadable)).toBe('wait')
     expect(unreadable.hold).not.toHaveBeenCalled()
     expect(deps.kind).not.toHaveBeenCalled()
+    deps.storeStamp.mockResolvedValue('readable again')
     deps.endedSince.mockResolvedValueOnce(true)
     expect(await t.follow(resumed, observed(), pass({ current: vi.fn(() => false) }))).toBe('wait')
+    expect(deps.endedSince).toHaveBeenCalledTimes(2)
   })
 
-  it('never falls back while a record of this process waits for its row', async () => {
+  it('never falls back while a record of this process waits for its row, and says nothing of it', async () => {
+    // Hermes writes a CLI session's row on its first turn (run_agent.py `_ensure_db_session`): waiting is normal.
     const { deps, t } = setup()
     deps.kind.mockResolvedValue('waiting')
     expect(await t.follow(agent(), observed(), pass())).toBe('wait')
+    deps.storeStamp.mockResolvedValue('written')
     expect(await t.follow(agent(), observed(), pass())).toBe('wait')
     expect(deps.kind).toHaveBeenCalledTimes(2)
-    expect(log.mock.calls).toEqual([['[discovery] a1 hermes terminal record ignored · its session is not in its store']])
+    expect(log).not.toHaveBeenCalled()
   })
 
-  it('asks the store on 24 passes, then once a minute', async () => {
+  it('asks the store again on the first pass after it changed, however long the agent was idle', async () => {
     const { deps, t } = setup()
     deps.kind.mockResolvedValue('waiting')
-    for (let passes = 0; passes < 24; passes++, clock += 5_000) await t.follow(agent(), observed(), pass())
-    expect(deps.kind).toHaveBeenCalledTimes(24)
-    const lastAsk = clock - 5_000
     expect(await t.follow(agent(), observed(), pass())).toBe('wait')
-    expect(deps.kind).toHaveBeenCalledTimes(24)
-    clock = lastAsk + 60_001
-    await t.follow(agent(), observed(), pass())
-    expect(deps.kind).toHaveBeenCalledTimes(25)
-    clock += 5_000
-    await t.follow(agent(), observed(), pass())
-    expect(deps.kind).toHaveBeenCalledTimes(25)
+    expect(deps.storeStamp).toHaveBeenCalledWith(HOME)
+    // Idle five minutes, past the repair's two eager ones: no store query while the store is unchanged.
+    for (let passes = 0; passes < 60; passes++, clock += 5_000) expect(await t.follow(agent(), observed(), pass())).toBe('wait')
+    expect(deps.kind).toHaveBeenCalledOnce()
+    expect(deps.storeStamp).toHaveBeenCalledTimes(61)
+    // The first message writes the row, and the store's -wal with it: bound on the next pass.
+    deps.storeStamp.mockResolvedValue('row written')
+    deps.kind.mockResolvedValue('own')
+    expect(await t.follow(agent(), observed(), pass())).toEqual({ sessionId: S })
+    expect(deps.kind).toHaveBeenCalledTimes(2)
+  })
 
-    // A record replaced by another is asked about afresh.
+  it('asks afresh about a record replaced by another, the store unchanged', async () => {
+    const { deps, t } = setup()
+    deps.kind.mockResolvedValue('waiting')
+    await t.follow(agent(), observed(), pass())
     deps.stamp.mockResolvedValue('8:60:2000')
     await t.follow(agent(), observed(), pass())
-    expect(deps.kind).toHaveBeenCalledTimes(26)
+    expect(deps.kind).toHaveBeenCalledTimes(2)
+  })
+
+  it('asks a store it could not read again only once it changed, holding an unbound agent once', async () => {
+    const { deps, t } = setup()
+    deps.kind.mockRejectedValue(new Error('the store is busy'))
+    const first = pass(), again = pass()
+    expect(await t.follow(agent(), observed(), first)).toBe('wait')
+    clock += 120_000
+    expect(await t.follow(agent(), observed(), again)).toBe('wait')
+    expect(deps.kind).toHaveBeenCalledOnce()
+    expect(first.hold).toHaveBeenCalledOnce()
+    expect(again.hold).not.toHaveBeenCalled()
+    deps.storeStamp.mockResolvedValue('readable again')
+    deps.kind.mockResolvedValue('own')
+    expect(await t.follow(agent(), observed(), pass())).toEqual({ sessionId: S })
+
+    // As is a resumed row's, whose own session's end could not be read.
+    const resumed = setup()
+    resumed.deps.endedSince.mockRejectedValue(new Error('the store is busy'))
+    const row = agent({ sessionId: OLD, resumeOnly: true, lastHookAt: 0 })
+    expect(await resumed.t.follow(row, observed(), pass())).toBe('wait')
+    clock += 120_000
+    expect(await resumed.t.follow(row, observed(), pass())).toBe('wait')
+    expect(resumed.deps.endedSince).toHaveBeenCalledOnce()
+    resumed.deps.storeStamp.mockResolvedValue('readable again')
+    resumed.deps.endedSince.mockResolvedValue(true)
+    expect(await resumed.t.follow(row, observed(), pass())).toEqual({ sessionId: OLD })
   })
 
   it('says once why a record is ignored, and lets the fallback run', async () => {

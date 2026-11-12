@@ -5,7 +5,7 @@
  * view, and Harness reads them at the daemon's path of them.
  */
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { env } from '../config/env.js'
@@ -16,7 +16,7 @@ vi.mock('../lib/processEnv.js', async (real) => ({ ...await real<object>(), read
 const processView = vi.hoisted(() => vi.fn())
 vi.mock('../lib/processMounts.js', async (real) => ({ ...await real<object>(), processView }))
 
-const { probeHermesHome, probeHermesHomeDerived, probeHermesSandbox, hermesSessionKind, hermesSessionEndedSince, hermesTerminalNames, hermesTerminalStamp, readHermesTerminal } = await import('./identities.js')
+const { probeHermesHome, probeHermesHomeDerived, probeHermesSandbox, hermesSessionKind, hermesSessionEndedSince, hermesStoreStamp, hermesTerminalNames, hermesTerminalStamp, readHermesTerminal } = await import('./identities.js')
 
 const { DatabaseSync } = process.getBuiltinModule('node:sqlite') as {
   DatabaseSync: new (path: string) => { exec(sql: string): void; prepare(sql: string): { run(...args: (string | number | null)[]): void }; close(): void }
@@ -130,6 +130,32 @@ describe('a session in a Hermes home\'s own store', () => {
     expect(await hermesSessionKind(join(home, 'no-such-home'), '20261112_100009_cccccc')).toBe('waiting')
     writeFileSync(join(broken, 'state.db'), 'not a database')
     await expect(hermesSessionKind(broken, '20261112_100009_cccccc')).rejects.toBeInstanceOf(IdentityReadUnavailable)
+  })
+})
+
+describe('what a Hermes home\'s store is now', () => {
+  it('changes when a write lands in the store or its -wal, and not otherwise', async () => {
+    const idle = await hermesStoreStamp(home)
+    expect(await hermesStoreStamp(home)).toBe(idle)
+    // A running Hermes writes its turns to the -wal.
+    writeFileSync(join(home, 'state.db-wal'), 'a frame')
+    const written = await hermesStoreStamp(home)
+    expect(written).not.toBe(idle)
+    writeFileSync(join(home, 'state.db-wal'), 'a frame, then another')
+    const grown = await hermesStoreStamp(home)
+    expect(grown).not.toBe(written)
+    // A checkpoint moves them into the store.
+    utimesSync(join(home, 'state.db'), new Date('2030-01-01T00:00:00Z'), new Date('2030-01-01T00:00:00Z'))
+    expect(await hermesStoreStamp(home)).not.toBe(grown)
+  })
+
+  it('stamps a home with no store yet, until its store is made', async () => {
+    const empty = join(root, 'no-store-yet')
+    mkdirSync(empty, { recursive: true })
+    const none = await hermesStoreStamp(empty)
+    expect(await hermesStoreStamp(empty)).toBe(none)
+    writeFileSync(join(empty, 'state.db'), '')
+    expect(await hermesStoreStamp(empty)).not.toBe(none)
   })
 })
 
