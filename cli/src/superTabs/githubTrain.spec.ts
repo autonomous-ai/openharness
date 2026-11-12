@@ -1056,8 +1056,8 @@ describe('a train lands only once CI has reported on its tip', () => {
     expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual(['PUT /pulls/900/merge'])
   })
 
-  // A status has no app: what reports by status (a CLA bot, a CI that does) is told apart by its context.
-  it('waits for each status its riders had, by its context', async () => {
+  // A status has no app: what reports by status (a CLA bot, a CI that does) is told apart by its context, on every pull request.
+  it('waits for each status every rider had, by its context', async () => {
     const f = setup()
     for (const number of [4, 5]) {
       const head = f.add(number).head.sha
@@ -1070,6 +1070,60 @@ describe('a train lands only once CI has reported on its tip', () => {
     status(f, f.train().head.sha, 'license/cla')
     await f.settle()
     expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual(['PUT /pulls/900/merge'])
+  })
+
+  // Review of #4139. Every train carries every ready pull request, so one whose head had what no train gets held every train out
+  // of time, for good: over a day of passes 16 trains, none landed, 126 writes and 16 runs of CI, and nobody told.
+  const day = async (f: ReturnType<typeof setup>) => {
+    // Passes 30 seconds apart, CI green on each train's tip once it is built, the daemon restarting at noon.
+    for (let pass = 0; pass < 2_880; pass++) {
+      if (pass === 1_440) f.restart()
+      const open = f.train()
+      if (open) f.state.runs.set(open.head.sha, CI)
+      await f.tick()
+    }
+  }
+  const merged = (f: ReturnType<typeof setup>) => [4, 5, 6].filter(number => f.state.pulls.get(number)!.merged_at !== null)
+
+  it('lands every rider over a day when one had a status set by hand: no train waits for a status only some riders had', async () => {
+    const f = setup()
+    for (const number of [4, 5, 6]) f.state.runs.set(f.add(number).head.sha, CI)
+    status(f, f.state.pulls.get(5)!.head.sha, 'qa/approved')
+    await day(f)
+    expect(merged(f)).toEqual([4, 5, 6])
+    expect(f.trains()).toHaveLength(1)
+    expect(f.state.sent).toHaveLength(11)
+  }, 60_000)
+
+  it('lands the others over a day when one rider had a check of an app no train gets: that one is told once and sits out', async () => {
+    const f = setup()
+    for (const number of [4, 5, 6]) f.state.runs.set(f.add(number).head.sha, CI)
+    const head = f.state.pulls.get(5)!.head.sha
+    f.state.runs.set(head, [...CI, { name: 'fork', status: 'completed', conclusion: 'success', app: { slug: 'fork-checker' } }])
+    await day(f)
+    expect(merged(f)).toEqual([4, 6])
+    expect(f.carried()).toEqual([[4, 5, 6], [4, 6]])
+    expect(f.trains()[0]).toMatchObject({ state: 'closed', title: 'Train, out of time: #4 #5 #6' })
+    expect(f.said(5)).toEqual([expect.stringMatching(new RegExp(`^Harness, \\d\\d:\\d\\d, to \\*\\*pip\\*\\*: not merged yet at ${head.slice(0, 7)}: its train never got `
+      + 'app fork-checker, which this head has: #900 waited 90 min for it\\. It sits out of trains until it has a new head, or your person lands it\\.$'))])
+    // The first train, closed; the note; the second train, landed: nothing more.
+    expect(f.state.sent).toHaveLength(18)
+    // At a new head it rides again.
+    f.push(5)
+    await f.settle()
+    await f.settle()
+    expect(f.carried().at(-1)).toEqual([5])
+  }, 60_000)
+
+  // Review of #4139: a rider no longer ready ends the train at once, as rider changed, before any wait for what has not come.
+  it('closes at once as rider changed when a member got a HOLD, though CI has not reported on its tip yet', async () => {
+    const f = setup()
+    status(f, await ride(f, { 4: CI, 5: CI }), 'license/cla')
+    const built = f.state.sent.length, branch = f.train().head.ref
+    f.say(5, `Kai, 15:00: HOLD ${f.state.pulls.get(5)!.head.sha.slice(0, 7)} the day count is off by one`)
+    await f.settle()
+    expect(f.writes(built)).toEqual(['PATCH /pulls/900', `DELETE /git/refs/heads/${branch}`])
+    expect(f.trains()[0]).toMatchObject({ state: 'closed', title: 'Train, rider changed: #4 #5' })
   })
 })
 

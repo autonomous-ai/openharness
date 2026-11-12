@@ -68,6 +68,9 @@ const BUILT = /\bbuilt to ([0-9a-f]{40})\b/
 /** The commit status the train puts on the tip it built. Anyone who can push can add a status, and GitHub says who made each:
  *  only a tip with this one from this computer's login is a train's. It is no check of the train (githubMerge.ts checksOf). */
 export const TRAIN_MARK = 'harness/train'
+/** How what made a head's checks is written (githubMerge.ts checksOf): an app by its slug, a status by its context. Anyone who
+ *  can push sets a status under any name, so the two are never read as one. */
+export const APP = 'app ', STATUS = 'status '
 /** Pages of a hundred of a tip's statuses read for the mark, the newest first: under more than these it is not found, and the
  *  train is closed and built again. */
 const MARK_PAGES = 10
@@ -93,6 +96,7 @@ export interface TrainHost<T extends TrainPull> {
   login(): Promise<string>
   conflicts(pull: T): Promise<void>
   failedAlone(pull: T, train: number): Promise<void>
+  unreported(pull: T, train: number, sources: readonly string[]): Promise<void>
   stamp(): string
 }
 
@@ -219,7 +223,7 @@ export class GitHubTrain<T extends TrainPull> {
   }
 
   /** The open [train]: its checks running, it waits; failed, it is closed as red; passed, it lands if every member is still
-   *  ready at its head and what the base gained since changes nothing it tested. */
+   *  ready at its head, what made its riders' checks has reported on it, and what the base gained since changes nothing it tested. */
   private async attend(train: Train, ready: readonly T[], waiting: ReadonlySet<string>): Promise<void> {
     // Its branch is not at the tip its body says the train built: someone pushed to it, or wrote the body.
     if (train.head !== train.tip) return this.close(train, 'other', 'its branch is not at the tip the train built')
@@ -231,22 +235,12 @@ export class GitHubTrain<T extends TrainPull> {
     if (ahead.behind_by !== 0) return this.close(train, 'moved', `${this.base} moved under it`)
     const checks = await this.host.checks(train.number, train.head)
     if (checks.state === 'failed') return this.close(train, 'red', 'its checks failed')
-    // Each member as it rides: ready at the head the train carries it at.
-    const riders = train.members.map(member => ready.find(pull => pull.number === member.number && pull.head === member.head))
-    // What made checks on a rider's own head and has made none on the tip: CI has not run there yet. Actions can take minutes to
-    // make a run, and another tool's status (a CLA bot's, one set by hand) is there at once: alone, it read as passed and the
-    // train landed (two reviews of 12 November). By app, not by a check's name, which is not the same from one pull request to
-    // the next: GitHub names a job CI skipped by its template ("desktop-tests (${{ matrix.os }}, ${{ matrix.shard }})") and one
-    // it ran by its rows, and a check run by hand stays on its pull request's head. A check that runs only when certain files
-    // change starts on the tip with the rest of CI, from the same event, and the train waits while any check runs.
-    const unreported = [...new Set(riders.flatMap(pull => pull?.sources ?? []))].filter(source => !checks.sources.includes(source))
-    if (checks.state === 'running' || unreported.length) {
-      if (this.deps.now() - train.openedAt > TRAIN_WAIT_MS) {
-        await this.close(train, 'late', `its checks did not finish in 90 min${unreported.length ? `; nothing came from ${unreported.slice(0, 3).join(', ')}` : ''}`)
-      }
+    if (checks.state === 'running') {
+      if (this.deps.now() - train.openedAt > TRAIN_WAIT_MS) await this.close(train, 'late', 'its checks did not finish in 90 min')
       return
     }
     // Read again right before landing: a HOLD since, a new head or a closed one, and the train is built again without it.
+    const riders = train.members.map(member => ready.find(pull => pull.number === member.number && pull.head === member.head))
     if (!riders.every(pull => pull !== undefined)) {
       // One that only waits at its head (its own check runs again, GitHub has not yet said whether it merges, a daemon just
       // started has not seen its checks hold still) keeps the train's green run, for as long as a train may wait.
@@ -254,6 +248,29 @@ export class GitHubTrain<T extends TrainPull> {
       if (waits && this.deps.now() - train.openedAt < TRAIN_WAIT_MS) return
       // One that only waited, until the train's own time ran out, changed nothing.
       return this.close(train, waits ? 'late' : 'changed', 'a pull request it carries is no longer ready at its head')
+    }
+    // What made checks on its riders' heads and none on its tip: CI has not run there yet (two reviews of 12 November: a CLA
+    // bot's status, there at once while Actions took minutes, read as passed alone, and the train landed). Each app that ran a
+    // rider's checks, not each check's name, which changes from one pull request to the next: GitHub names a job CI skipped by
+    // its template ("desktop-tests (${{ matrix.os }}, ${{ matrix.shard }})") and one it ran by its rows, and a check run by hand
+    // stays on its pull request's head. One that runs only when certain files change starts on the tip with the rest of CI. A
+    // status only when every rider had it: anyone sets one (a person, a bot on a comment or a label), and one some riders lacked
+    // says nothing of what CI runs (review of #4139).
+    const unreported = [...new Set(riders.flatMap(pull => pull.sources))]
+      .filter(source => (source.startsWith(APP) || riders.every(pull => pull.sources.includes(source))) && !checks.sources.includes(source))
+    if (unreported.length) {
+      if (this.deps.now() - train.openedAt <= TRAIN_WAIT_MS) return
+      await this.close(train, 'late', `its checks did not finish in 90 min; nothing came from ${unreported.slice(0, 3).join(', ')}`)
+      // Where none of its riders' apps came, CI is down or not running here: the next train waits again, as one whose checks
+      // never finish. Where one did, CI ran and these never came, as no train gets them: each rider that had one is told once at
+      // its head and sits out of trains until that changes, or every train would carry it and wait out its time, for good
+      // (review of #4139).
+      if (!riders.some(pull => pull.sources.some(source => source.startsWith(APP) && checks.sources.includes(source)))) return
+      for (const pull of riders) {
+        const its = unreported.filter(source => pull.sources.includes(source))
+        if (its.length) await this.host.unreported(pull, train.number, its)
+      }
+      return
     }
     if (!await this.holds(train, String(object(ahead.merge_base_commit).sha ?? ''))) return this.close(train, 'other', 'its branch does not hold what its body names')
     // A merge commit where the repository allows one: each member's own commits reach the base, so GitHub marks each merged

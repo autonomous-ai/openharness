@@ -27,7 +27,7 @@ import { labelOf, readerKey, sameKey, teamOf, type Crew } from './assign/crew.js
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { GitHubReads, GitHubStop, PAGE, retryIn, Waits, waitWords } from './githubRest.js'
 import { repositorySlug, TEAM } from './githubMentions.js'
-import { GitHubTrain, TRAIN_MARK, type TrainPull } from './githubTrain.js'
+import { APP, GitHubTrain, STATUS, TRAIN_MARK, type TrainPull } from './githubTrain.js'
 import { identifier, object } from './wire.js'
 
 type Json = Record<string, unknown>
@@ -92,7 +92,7 @@ const SELF = 'Harness'
  *  swarm-sandbox #24-#26 got one note 46 times each when its words carried the time (2026-11-10), and the failing checks of one
  *  head can change and change order. A restart finds a note said by these first words. */
 const NOTES = { unsigned: 'the READ-OK from ', held: 'the HOLD from ', checks: 'checks failed: ', behind: 'it is behind ', dirty: 'it conflicts with ',
-  blocked: 'GitHub\'s rules for ', stacked: 'it carries open ', red: 'its train failed: ' } as const
+  blocked: 'GitHub\'s rules for ', stacked: 'it carries open ', red: 'its train failed: ', unreported: 'its train never got ' } as const
 type NoteKind = keyof typeof NOTES
 const noteStart = (head: string, kind: NoteKind): string => `not merged yet at ${head.slice(0, 7)}: ${NOTES[kind]}`
 /** Which of these notes a comment of the team's is, on whatever head, or null: the day's scoreboard counts the pull requests
@@ -517,7 +517,7 @@ export function checksOf(runs: Json[], status: Json): { state: 'passed' | 'runni
   // either failing fails the head (code review of #4060).
   for (const run of runs) {
     seen.push(`${String(run.name ?? '')}:${String(run.status ?? '')}:${String(run.conclusion ?? '')}`)
-    sources.add(`app ${String(object(run.app).slug ?? '')}`)
+    sources.add(`${APP}${String(object(run.app).slug ?? '')}`)
     if (run.status !== 'completed') { running = true; continue }
     if (!['success', 'neutral', 'skipped'].includes(String(run.conclusion))) failed.push(String(run.name ?? 'a check'))
   }
@@ -525,8 +525,7 @@ export function checksOf(runs: Json[], status: Json): { state: 'passed' | 'runni
     // The train's own mark on the tip it built is no check of it: counted, a train whose CI had not started read as passed.
     if (each.context === TRAIN_MARK) continue
     seen.push(`${String(each.context ?? '')}:${String(each.state ?? '')}`)
-    // A status has no app, and anyone who can push sets one under any context: one named as an app is still no check of that app.
-    sources.add(`status ${String(each.context ?? '')}`)
+    sources.add(`${STATUS}${String(each.context ?? '')}`)
     if (each.state === 'pending') running = true
     else if (each.state !== 'success') failed.push(String(each.context ?? 'a status'))
   }
@@ -678,6 +677,8 @@ export class GitHubMerge {
       conflicts,
       failedAlone: (pull, carried) => this.tellOnce(repo, pull.number, pull.head, pull.author, 'red',
         `#${carried} carried it alone on ${base}, and its checks failed there. Fix it and push.`, pull.comments),
+      unreported: (pull, carried, sources) => this.tellOnce(repo, pull.number, pull.head, pull.author, 'unreported', `${sources.slice(0, 3).join(', ')}, `
+        + `which this head has: #${carried} waited 90 min for it. It sits out of trains until it has a new head, or your person lands it.`, pull.comments),
       stamp: () => `${SELF}, ${this.clock()}`,
     })
     // What a merged train carried is closed by it and read no more: to GitHub it now conflicts with the base that holds it.
@@ -743,9 +744,10 @@ export class GitHubMerge {
           + `merge them too. It waits until #${carried.number} merges; then update it from ${base}.`, comments)
         continue
       }
-      // A train carried it alone at this head and failed: it sits out until its head changes. Its note says so for good, where
-      // GitHub lists a red train only among the hundred pull requests closed last (githubTrain.ts landed).
-      if (this.said(comments, head, 'red')) continue
+      // A train carried it alone at this head and failed, or waited out its time for what this head has and no train gets: it sits
+      // out until its head changes. Its note says so for good, where GitHub lists a train only among the hundred pull requests
+      // closed last (githubTrain.ts landed and attend).
+      if (this.said(comments, head, 'red') || this.said(comments, head, 'unreported')) continue
       ready.push({ number, head, title: String(pull.title ?? ''), body: String(pull.body ?? ''), readers: [...reads.values()].map(r => r.name),
         fork: String(object(object(pull.head).repo).full_name ?? '').toLowerCase() !== current, sources: checks.sources, author, comments })
     }
