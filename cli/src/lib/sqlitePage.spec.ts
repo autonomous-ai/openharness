@@ -161,10 +161,12 @@ withBuiltin('a store page bounded by bytes', () => {
     expect(await readStorePages(db, events('w1'))).toEqual({ ok: false, reason: 'transient' })
   })
 
-  // Skipped where there is no sqlite3 CLI (Linux CI, Windows), as the engine specs' CLI cases are. The escaped text is
-  // small on purpose: the CLI takes 25 s to write 1 MiB of control characters as JSON, against a 5 s deadline.
+  // Skipped where there is no sqlite3 CLI (Windows), as the engine specs' CLI cases are. The escaped text is small on
+  // purpose: the CLI takes 25 s to write 1 MiB of control characters as JSON, against a 5 s deadline. Its control
+  // character is one JSON names (\b): sqlite3 3.45 to 3.49 (Ubuntu 24.04 and 26.04) write the others as `u0001`, with
+  // no backslash, and no reader can tell that from the text "u0001".
   cli('reads the same pages through the sqlite3 CLI, sized in its own SQL, under six times the limit', async () => {
-    const escaped = 'q"\\\n\u0001'.repeat(2000) // quotes, backslashes, newlines and a control character
+    const escaped = 'q"\\\n\b'.repeat(2000) // quotes, backslashes, newlines and a control character
     for (let i = 0; i < 12; i++) put('cli', i, 'x'.repeat(500 * KIB))
     put('cli', 12, escaped); put('cli', 13, 'tail')
     overrideBuiltinSqlite(null)
