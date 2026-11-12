@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
 import '../state/app_state.dart';
+import '../super_tabs/swarm_switcher.dart' show swarmShownName;
 import 'desktop_chrome.dart';
 
 /// ⇧⌘M — send the focused pane to another tab.
@@ -46,7 +47,10 @@ List<_Destination> _destinationsFor(AppNotifier notifier, String sourceId) => [
     if (swarm.id != sourceId && !swarm.isUtility && !swarm.isOrchestrator)
       _Destination(
         id: swarm.id,
-        label: swarm.name,
+        label: switch (swarm.superTabId) {
+          final id? => swarmShownName(notifier, id, swarm.name),
+          null => swarm.name,
+        },
         detail: switch (swarm.panes
             .where((pane) => pane.agentId != null)
             .length) {

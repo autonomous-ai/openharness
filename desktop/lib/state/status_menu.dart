@@ -1,5 +1,6 @@
 import '../notify/alert_sounds.dart';
 import '../super_tabs/my_agents.dart';
+import '../super_tabs/swarm_switcher.dart' show swarmShownName;
 import 'app_state.dart';
 import 'harness_activity.dart';
 import 'harness_sessions.dart';
@@ -221,7 +222,7 @@ List<Map<String, Object?>> statusMenuSwarmEntries(AppNotifier app) {
         'message': statusMenuMessage(said?.text ?? ''),
         'unread': true,
         'activity': needs,
-        'tabName': snapshot.name,
+        'tabName': swarmShownName(app, id, snapshot.name),
         'detail': '',
         'receivedAt': said?.createdAt?.millisecondsSinceEpoch,
       });

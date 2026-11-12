@@ -18,6 +18,25 @@ import 'section_heading.dart' show SuperTabSectionHeading;
 
 const kPersonalSwarmName = 'Personal';
 
+/// The one way the Desktop names Swarm [id], named [name] (anh Dee, 2026-11-12): to someone invited to another person's
+/// Personal Swarm it is that person's, "Dee's Swarm", so Personal is only ever the reader's own; their own and every other
+/// Swarm by its name. The server tells a reader only their own Personal apart (backend store.ts `list`), so another
+/// person's is the one named Personal that someone else owns. Its owner is named as the Swarm shows them
+/// ([SuperTabPerson.shownName]: the name they set, else their username), as read here; before any read here has them,
+/// plain Swarm. Shown only: the Swarm stays named Personal.
+String swarmShownName(AppNotifier app, String id, String name) {
+  final owner = app.superTabs.ownerOf(id);
+  if (name.trim() != kPersonalSwarmName ||
+      owner == null ||
+      owner == app.currentUser?.id) {
+    return name;
+  }
+  return switch (app.superTabs.personOf(id, owner)) {
+    final person? => "${person.shownName}'s Swarm",
+    null => 'Swarm',
+  };
+}
+
 /// The request id Personal is created with. The server derives a new Swarm's
 /// id from the signed-in account and this id (backend superTabs/store.ts
 /// `create`), so each person has one Personal Swarm, made once whichever
@@ -257,12 +276,16 @@ const kPersonalSwarmRow = kPersonalSwarmOperation;
 
 /// The Swarms a person opens from outside a Swarm (the New Tab page, a Swarm draft, ⌘K): on the Desktop, Personal first,
 /// always, then those closed on this computer, so their Personal Swarm is in reach on each of their computers without
-/// another Swarm open (anh Dee, 2026-11-11). Without [personal] (the web's host), the Swarms closed there alone.
+/// another Swarm open (anh Dee, 2026-11-11). Without [personal] (the web's host), the Swarms closed there alone. Each by
+/// [swarmShownName], in its order.
 List<({String id, String name})> swarmsToOpen(
   AppNotifier app, {
   required bool personal,
 }) {
-  final closed = app.closedSuperTabs;
+  final closed = [
+    for (final tab in app.closedSuperTabs)
+      (id: tab.id, name: swarmShownName(app, tab.id, tab.name)),
+  ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
   if (!personal || app.currentUser == null) return closed;
   final known = PersonalSwarm.of(app).id;
   return [
@@ -272,7 +295,7 @@ List<({String id, String name})> swarmsToOpen(
   ];
 }
 
-/// The Swarms the dropdown lists under Personal, by name: every Swarm the
+/// The Swarms the dropdown lists under Personal, by [swarmShownName]: every Swarm the
 /// person belongs to, open in a tab here or closed, but not Personal and not
 /// one whose read was taken away. Only Swarms the signed-in account's own
 /// list or read named: a tab left from another account lists nothing.
@@ -294,7 +317,7 @@ List<SwarmChoice> swarmChoices(AppNotifier app) {
           app.superTabs.peek(id)?.accessRevoked != true)
         (
           id: id,
-          name: name.trim().isEmpty ? 'Swarm' : name,
+          name: name.trim().isEmpty ? 'Swarm' : swarmShownName(app, id, name),
           waiting: app.superTabs.agentsAsking(id),
         ),
   ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
@@ -372,7 +395,8 @@ class _SwarmSwitcherState extends State<SwarmSwitcher> {
     // Taken away since the menu was drawn: nothing to show.
     final choice = swarmChoices(app).where((c) => c.id == id).firstOrNull;
     if (tab == null || choice == null) return;
-    app.showSuperTabIn(tab, choice.id, choice.name);
+    // The tab keeps the Swarm's own name; it is shown by [swarmShownName].
+    app.showSuperTabIn(tab, choice.id, app.superTabName(id) ?? choice.name);
   }
 
   void _pickPersonal() {
@@ -394,7 +418,11 @@ class _SwarmSwitcherState extends State<SwarmSwitcher> {
           ? kPersonalSwarmName
           : current == null
           ? 'Swarm'
-          : app.superTabName(current) ?? c.snapshot?.name ?? 'Swarm';
+          : swarmShownName(
+              app,
+              current,
+              app.superTabName(current) ?? c.snapshot?.name ?? 'Swarm',
+            );
       final choices = swarmChoices(app);
       final personalWaiting = personalId == null || isPersonal
           ? 0

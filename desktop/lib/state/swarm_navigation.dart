@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart' show immutable, listEquals, setEquals;
 import '../core/fuzzy_match.dart';
 import '../core/local_key_value_store.dart';
 import '../core/models.dart';
+import '../super_tabs/swarm_switcher.dart' show swarmShownName;
 import '../widgets/engine_identity.dart';
 import 'app_state.dart';
 import 'harness_placement.dart';
@@ -201,7 +202,7 @@ class SwarmNavigationHistory {
       app.focusedPaneId,
       for (final swarm in app.swarms) ...[
         swarm.id,
-        swarm.name,
+        _shownName(app, swarm),
         swarm.kind,
         for (final pane in swarm.panes)
           (
@@ -530,6 +531,12 @@ class SwarmSearchSelection {
   final List<SwarmDestination> agents;
 }
 
+/// [swarm]'s name in the palette and the menus: a Swarm's tab as [swarmShownName] names it.
+String _shownName(AppNotifier app, Swarm swarm) => switch (swarm.superTabId) {
+  final id? when swarm.isSuperTab => swarmShownName(app, id, swarm.name),
+  _ => swarm.name,
+};
+
 List<Object?> _catalogPresentation(
   AppNotifier app,
   List<SavedSwarmProject> projects, {
@@ -541,7 +548,7 @@ List<Object?> _catalogPresentation(
   ...projects,
   for (final swarm in app.swarms) ...[
     swarm.id,
-    swarm.name,
+    _shownName(app, swarm),
     swarm.kind,
     for (final pane in swarm.panes)
       (
@@ -705,11 +712,11 @@ class SwarmLocationCatalog {
     ]);
     return SwarmDestination(
       id: swarmDestinationId(swarm.id),
-      title: swarm.name,
+      title: _shownName(app, swarm),
       detail: _agentCountLabel(swarm.panes.map((pane) => pane.agentId)),
       machineLabel: machineLabel,
       swarmId: swarm.id,
-      swarmName: swarm.name,
+      swarmName: _shownName(app, swarm),
       isStore: swarm.isStore,
       current: swarm.id == app.activeSwarmId,
       searchFields: [machineLabel],
@@ -748,7 +755,7 @@ class SwarmLocationCatalog {
         leading: machine?.nodeOnline == false ? 'Offline' : null,
       ),
       swarmId: swarm.id,
-      swarmName: swarm.name,
+      swarmName: _shownName(app, swarm),
       paneId: pane.id,
       machineId: pane.machineId,
       machineLabel: machineLabel,
@@ -765,7 +772,7 @@ class SwarmLocationCatalog {
         project?.cwd,
         engine,
         label,
-        swarm.name,
+        _shownName(app, swarm),
       ],
       titleFields: agent?.title == null ? 1 : 2,
     );
@@ -1375,7 +1382,7 @@ List<SwarmDestination> swarmDestinations(
     result.add(
       SwarmDestination(
         id: swarmDestinationId(swarm.id),
-        title: swarm.name,
+        title: _shownName(app, swarm),
         engine: panes.length == 1
             ? agents[agentDestinationId(
                         panes.single.machineId,

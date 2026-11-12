@@ -521,6 +521,21 @@ class SuperTabClient {
   String? ownerOf(String id) => _loaded[id]?.snapshot?.ownerId ?? _owners[id];
   Map<String, String> _owners = const {};
 
+  /// Person [userId] as this Desktop last read them: in Swarm [id] first, else in another Swarm open or closed here. Null
+  /// when no Swarm read here has them.
+  SuperTabPerson? personOf(String id, String userId) {
+    for (final snapshot in [
+      ?(_loaded[id]?.snapshot ?? _closedSnapshots[id]),
+      for (final controller in _loaded.values) ?controller.snapshot,
+      ..._closedSnapshots.values,
+    ]) {
+      for (final person in snapshot.people) {
+        if (person.id == userId) return person;
+      }
+    }
+    return null;
+  }
+
   /// The reader's own Personal Swarm, as the last full list read said (backend store.ts `list`, `personal`): known
   /// whoever they invited there. Null from an older backend, or before a list answered.
   String? get listedPersonal => _listedPersonal;

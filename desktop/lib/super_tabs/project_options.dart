@@ -6,12 +6,14 @@ import 'package:flutter/material.dart';
 import '../core/github_repository.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
+import '../state/app_state.dart';
 import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
 import 'detail_dialog.dart';
 import 'dialog_scope.dart';
 import 'model.dart';
 import 'project_visibility.dart';
+import 'swarm_switcher.dart' show swarmShownName;
 
 /// The spacing scale's steps (4, 8, 12) from the shared control gap, as the leaderboard rows take them.
 const _gap = DesktopChrome.controlGap;
@@ -119,12 +121,13 @@ typedef ProjectSettingsRow = ({
 /// doing its work. Under the
 /// title, the project and its Swarm; each row's current value on the right in
 /// the quieter metadata role; a destructive row in the theme's error ink,
-/// below a rule, as a menu sets one apart (task #3194).
+/// below a rule, as a menu sets one apart (task #3194). The Swarm by [swarmShownName], with [app].
 Future<void> showProjectSettings(
   BuildContext context,
   SuperTabController c,
   SuperTabProject project,
   List<ProjectSettingsRow> Function() rows, {
+  AppNotifier? app,
   double rowHeight = 32,
 }) => showAppDialog<void>(
   context: context,
@@ -136,7 +139,13 @@ Future<void> showProjectSettings(
       listenable: c,
       builder: (context, _) => SuperTabDetailDialog(
         title: 'Project settings',
-        detail: [project.name, ?c.snapshot?.name].join(' · '),
+        detail: [
+          project.name,
+          ?switch ((app, c.snapshot?.name)) {
+            (final app?, final name?) => swarmShownName(app, c.tabId, name),
+            (_, final name) => name,
+          },
+        ].join(' · '),
         body: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [

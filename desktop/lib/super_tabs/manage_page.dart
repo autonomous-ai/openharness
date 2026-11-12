@@ -19,7 +19,7 @@ import 'machines.dart';
 import 'model.dart';
 import 'sharing.dart';
 import 'swarm_delete.dart';
-import 'swarm_switcher.dart' show PersonalSwarm;
+import 'swarm_switcher.dart' show PersonalSwarm, swarmShownName;
 
 /// What Manage shows (docs/plans/2026-11-02-quiet-swarm-design.md, screens 10,
 /// 10b, 10c): what used to stand in the sidebar and the Swarm dropdown, one
@@ -295,7 +295,13 @@ class _ManageSwarmState extends State<_ManageSwarm> {
         vertical: grid.AppDesktop.controlGap,
       ),
       children: [
-        _fact('Name', _value(snapshot.name)),
+        _fact(
+          'Name',
+          _value(switch (widget.app) {
+            final app? => swarmShownName(app, c.tabId, snapshot.name),
+            null => snapshot.name,
+          }),
+        ),
         if (owner != null) _fact('Owner', _value(owner.shownName)),
         _fact(
           'People',
