@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { KIB, MIB, pageReads, withinBudget } from '../testing/storePages.js'
-import { builtinSqlite, closeSqliteHandles, overrideBuiltinSqlite, type DatabaseLike } from './sqliteBuiltin.js'
+import { builtinSqlite, closeSqliteHandles, overrideBuiltinSqlite, type DatabaseConstructor, type DatabaseLike } from './sqliteBuiltin.js'
 import { MAX_ROW_BYTES, PAGE_BYTES, PAGE_ROWS, oversizeRow, readStorePage, readStorePages, utf8Bytes, type StorePage } from './sqlitePage.js'
 import { sqliteReadAll, type SqliteRow } from './sqliteRead.js'
 import { enableOffThreadSqlite, resetOffThreadSqlite } from './sqliteThread.js'
@@ -95,6 +95,26 @@ withBuiltin('a store page bounded by bytes', () => {
     const nulls = await readStorePages(db, events('nulls'))
     expect(nulls.ok && nulls.rows.length).toBe(1201)
     expect((await pageReads(vi.mocked(sqliteReadAll))).map((seen) => seen.rows.length)).toEqual([500, 500, 201])
+  })
+
+  // Sizing every candidate of a page read each one's overflow chain in OpenClaw's store, where a row's size is stored
+  // after its payload: a whole-history read of 600 compressed 1 MiB rows went from 0.95 s to 4.5 s
+  // (scripts/benchmark-store-pages.ts).
+  it('sizes only the rows a page keeps and the one past its budget', async () => {
+    // On this thread, through a handle whose size function hears which rows it weighs.
+    await resetOffThreadSqlite()
+    const weighed: number[] = []
+    type Weighing = new (path: string | URL, options: { readOnly: boolean }) => DatabaseLike & { function(name: string, fn: (seq: number) => number): void }
+    class Counting extends (builtinSqlite() as unknown as Weighing) {
+      constructor(path: string | URL, options: { readOnly: boolean }) {
+        super(path, options)
+        this.function('weigh', (seq) => { weighed.push(seq); return MIB })
+      }
+    }
+    overrideBuiltinSqlite(Counting as unknown as DatabaseConstructor)
+    for (let i = 0; i < 100; i++) put('w1', i, 'x')
+    expect(await readStorePage(db, { ...events('w1'), size: 'weigh(t.seq)' }, null)).toMatchObject({ ok: true, full: true, last: [3] })
+    expect(weighed.sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4])
   })
 
   it('reads a message with its parts as one unit: its data once, its parts in order, never split', async () => {
