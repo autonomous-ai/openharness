@@ -25,7 +25,7 @@ import { agentFolderEmpty, removableAgentFolder } from './agentFolder.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
 import { cleanupClosed } from './cleanupCloses.js'
 import { repositoryKey } from './repositoryKey.js'
-import { profileId } from '../lib/claudeProfiles.js'
+import { profileId } from '../lib/claudeHomes.js'
 
 const finite = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v : null
 const list = (v: unknown) => Array.isArray(v) ? v.map(object) : []

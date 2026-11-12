@@ -3,7 +3,7 @@ import { existsSync, linkSync, realpathSync, mkdirSync, readdirSync, unlinkSync,
 import { join } from 'node:path'
 import type { CoreApi } from '../core/api.js'
 import { readPrivateStateFile, secureStateDirectory, syncStateDirectory } from '../lib/secureState.js'
-import { profileId } from '../lib/claudeProfiles.js'
+import { profileId } from '../lib/claudeHomes.js'
 import { parseRuntimeProfile } from '../lib/runtimeProfileWire.js'
 import { handoffIntentHash } from '../lib/handoffAuthority.js'
 import { validateHandoff } from '../lib/handoffValidation.js'
