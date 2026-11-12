@@ -50,6 +50,10 @@ describe('an agent\'s post without its own signature', () => {
       ['@Devon Lennox:\n1. one\n2. two', ['Lennox'], '@Devon\n\n1. one\n2. two'],
       // Spaces on the signature's own line are no indent: the text after them is a paragraph.
       ['@Devon Lennox:     ready', ['Lennox'], '@Devon ready'],
+      // A block marker on the signature's own line was inline text, and stays so (the third review of #4210).
+      ['@Devon Lennox: 1. merged #4208, 2. next', ['Lennox'], '@Devon 1. merged #4208, 2. next'],
+      ['@Devon Lennox: > 90% pass now', ['Lennox'], '@Devon > 90% pass now'],
+      ['@Devon Lennox: # of tests is 5', ['Lennox'], '@Devon # of tests is 5'],
     ] as const) {
       expect(unsigned(text, names), text).toBe(left)
     }

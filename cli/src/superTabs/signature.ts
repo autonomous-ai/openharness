@@ -35,17 +35,19 @@ const OPENS_BLOCK = new RegExp('^(?: {4}|\\t| {0,3}(?:[-*+](?:[ \\t\\n]|$)|#{1,6
 export function unsigned(text: string, names: ReadonlyArray<string | null | undefined>): string {
   const mentions = MENTIONS.exec(text)
   if (mentions) {
-    const said = signedOff(text.slice(mentions[0].length), names)
-    if (said === null) return text
+    const off = signedOff(text.slice(mentions[0].length), names)
+    if (off === null) return text
     const tags = mentions[0].trim().split(/\s+/).join(' ')
-    return OPENS_BLOCK.test(said) ? `${tags}\n\n${said}` : `${tags} ${said}`
+    // Only what began on a line of its own can be a block: a marker on the signature's line was inline text.
+    return off.ownLine && OPENS_BLOCK.test(off.said) ? `${tags}\n\n${off.said}` : `${tags} ${off.said}`
   }
   // From its first word: the server trims a post's ends (backend commands.ts), so an indent kept here would reach nobody.
-  return signedOff(text, names)?.trimStart() ?? text
+  return signedOff(text, names)?.said.trimStart() ?? text
 }
 
-/** What [text] says after a signature of any of [names] at its very start, or null when it has none or nothing after it. */
-function signedOff(text: string, names: ReadonlyArray<string | null | undefined>): string | null {
+/** What [text] says after a signature of any of [names] at its very start, and whether that began on a line of its own; null
+ *  when it has no signature or nothing after it. */
+function signedOff(text: string, names: ReadonlyArray<string | null | undefined>): { said: string; ownLine: boolean } | null {
   for (const raw of names) {
     const name = raw?.trim()
     if (!name || ENGINE.test(name)) continue
@@ -63,8 +65,9 @@ function signedOff(text: string, names: ReadonlyArray<string | null | undefined>
     }
     // The rest of the signature's own line, and the blank lines after it, go; the indent of the first line after them stays, as
     // it may open a code block after mentions (the second review of #4210). Spaces on the signature's line are no indent.
-    const said = text.slice(end).replace(/^[ \t]*/, '').replace(/^(?:\r?\n[ \t]*(?=\r?\n))*\r?\n/, '')
-    if (said.trim()) return said
+    const rest = text.slice(end).replace(/^[ \t]*/, '')
+    const said = rest.replace(/^(?:\r?\n[ \t]*(?=\r?\n))*\r?\n/, '')
+    if (said.trim()) return { said, ownLine: said !== rest }
   }
   return null
 }
