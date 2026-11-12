@@ -235,10 +235,13 @@ the same words are never said twice. **A cloud harness's state is its maker's, n
 `waiting_for_user` both when it asks and when it has only finished (#1449), so `needs_person` comes either way: read
 `question` and `cloud.providerStatus` to tell. A Devin put to sleep once it finished is `stopped`
 (`providerStatus` `suspended`/`inactivity`), with its answer as `summary`. The words are the harness's own, as they
-are, Devin's `ATTACHMENT:` lines included; `ask` leaves out the line `harness new` puts before a task. It looks every
-3 s, as `wait` does, so a watch of another machine's harness is one `agents_list` over the machine link every 3 s. It reads with the requests
-`wait` makes, over the same socket: one `agents_list` a round, the screen for a harness here that the daemon does not
-already say is working, and the last transcript page only when the harness changed. Nothing reports failing tests
+are, Devin's `ATTACHMENT:` lines included; `ask` leaves out the line `harness new` puts before a task. As `wait` does,
+it follows a harness here by what Harness pushes when it changes (`agents_watch`: its activity, its turn's end, a
+question opening or closing, the harness going), and looks again only then, to confirm an idle look, and once a minute
+as a backstop. It looks every 3 s at a cloud harness, a harness on another machine (one `agents_list` over the machine
+link each time) and on a daemon too old to push. It reads with the requests `wait` makes, over the same socket: one
+`agents_list` a look, the screen for a harness here that the daemon does not already say is working, and the last
+transcript page only when the harness changed. Nothing reports failing tests
 during a turn yet, so there is no event for them.
 
 `harness whoami` says, for an agent, where it is and what it may do before it acts (`--json` gives the same as

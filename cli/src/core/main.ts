@@ -1502,6 +1502,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     agentIdFor: (sessionId) => agentIdFor(sessionId),
     sessionTurnOpen,
     someoneCanAnswer,
+    followedByTool: (agentId) => backend.followedByTool(agentId),
     deviceInput,
   })
   const questions = asking.questions
