@@ -8,7 +8,7 @@ import { execFile } from 'node:child_process'
 import { psEnv } from './childLocale.js'
 import { patientExec } from './patientExec.js'
 import { processStartTicks } from './processLiveness.js'
-import { hermesGatewayProcess, liveProcessRows, parseProcessRow, withStartTicks, type ProcessRow } from './processTable.js'
+import { codexSharedServerProcess, hermesGatewayProcess, liveProcessRows, parseProcessRow, withStartTicks, type ProcessRow } from './processTable.js'
 import { sameProcessIdentity } from './terminalRuntime.js'
 import type { ProcessIdentity } from './terminalTypes.js'
 
@@ -73,9 +73,9 @@ export async function engineDescendants(
   const queue = [...children.get(root.pid) ?? []]
   for (let next = 0; next < queue.length && tree.length < TREE_LIMIT; next++) {
     const row = queue[next]!
-    // Hermes' gateway serves every Hermes session from under whichever pane started it: neither it nor what it runs is
-    // this engine's to stop.
-    if (hermesGatewayProcess(row)) continue
+    // Hermes' gateway and Codex's shared app server serve every session of their engine from under whichever pane
+    // started them: neither they nor what they run are this engine's to stop.
+    if (hermesGatewayProcess(row) || codexSharedServerProcess(row)) continue
     tree.push({ pid: row.pid, pgid: Number(row.executable), startMarker: row.startMarker,
       ...(row.startTicks !== undefined ? { startTicks: row.startTicks } : {}) })
     for (const child of children.get(row.pid) ?? []) queue.push(child)
