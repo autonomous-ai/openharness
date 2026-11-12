@@ -52,7 +52,7 @@ function liveGitHub(clock: { now: number }) {
       author_association: 'MEMBER', created_at: updatedAt, updated_at: updatedAt })
   const pull = (number: number, head: string, extra: Json = {}) => {
     const row = { number, draft: false, state: 'open', base: { ref: 'main' }, head: { sha: head, ref: `pip/${number}`, repo: { full_name: REPO } }, labels: [{ name: 'builder:pip' }],
-      user: { login: OPENER }, body: '', updated_at: iso(), ...extra }
+      user: { login: OPENER }, author_association: 'MEMBER', body: '', updated_at: iso(), ...extra }
     pulls.set(number, row)
     issues.set(number, { ...row, title: `PR ${number}`, pull_request: {}, author_association: 'MEMBER' })
     runs.set(head, [{ name: 'test', status: 'completed', conclusion: 'success' }])

@@ -172,6 +172,8 @@ describe('a task that comes after another', () => {
       const read = readProblem({ now: NOW, crew: crew(), closed: [], issues: [first, after(2, 'Do it after #1.'), issue(3, ['size:s'])], withReaders: new Set(), up: new Map() })
       expect(read.problem.tasks.map(t => t.id).filter(id => id !== '#1')).toEqual(['#3'])
       expect(read.free.has('#2')).toBe(false)
+      // Open all the same, which its PM's numbers say (review of #4121: it was told none was open).
+      expect(read.waits).toBe(1)
       expect(read.bases.size).toBe(0)
       // With two builders free, the one that comes after is not given with the first: only what is planned is.
       expect(nextPicks(solve(read.problem, { seed: 1, budgetMs: 2_000 }).plan, read).some(pick => pick.task === '#2')).toBe(false)
@@ -184,6 +186,7 @@ describe('a task that comes after another', () => {
     expect(read.problem.tasks.map(t => [t.id, t.pinned ?? null, t.deps])).toEqual([['#2', 'juno', []], ['#3', null, []]])
     expect([...read.free]).toEqual(['#2', '#3'])
     expect(Object.fromEntries(read.bases)).toEqual({ '#2': [{ pull: 30, branch: 'juno/1' }] })
+    expect(read.waits).toBe(0)
     // Pip and Atlas are free too, and get the other task; the one that comes after #1 is Juno's, to start now.
     const picks = nextPicks(solve(read.problem, { seed: 1, budgetMs: 2_000 }).plan, read)
     expect(picks.find(pick => pick.task === '#2')).toEqual({ task: '#2', builder: 'juno', start: 0 })
@@ -211,11 +214,17 @@ describe('a task that comes after another', () => {
     const two = [first, issue(4, ['size:m', 'builder:juno', 'status:taken']), after(2, 'after #1, after #4')]
     expect(planned(two, [up(1, 30), up(4, 31, 'juno')], crew(), [1, 4])).toEqual([])
     expect(planned(two, [up(1, 30)], crew(), [1])).toEqual([])
+    // Each is open all the same, and counted so.
+    expect(readProblem({ now: NOW, crew: crew(), closed: [], issues: two, withReaders: new Set([1, 4]), up: new Map([up(1, 30), up(4, 31, 'juno')]) }).waits).toBe(1)
     // Both with one builder: it is that builder's, built on both branches.
     const both = readProblem({ now: NOW, crew: crew(), closed: [], issues: [first, issue(4, ['size:m', 'builder:pip', 'status:taken']), after(2, 'after #1, after #4')],
       withReaders: new Set([1, 4]), up: new Map([up(1, 30), up(4, 31)]) })
     expect(both.problem.tasks.map(t => [t.id, t.pinned])).toEqual([['#2', 'pip']])
     expect(both.bases.get('#2')).toEqual([{ pull: 30, branch: 'pip/1' }, { pull: 31, branch: 'pip/4' }])
+    // One pull request for both: its branch is named once.
+    const one = readProblem({ now: NOW, crew: crew(), closed: [], issues: [first, issue(4, ['size:m', 'builder:pip', 'status:taken']), after(2, 'after #1, after #4')],
+      withReaders: new Set([1, 4]), up: new Map([up(1, 30), [4, [{ pull: 30, branch: 'pip/1', label: 'builder:pip' }]]]) })
+    expect(one.bases.get('#2')).toEqual([{ pull: 30, branch: 'pip/1' }])
   })
 
   it('waits on nothing that is closed, on no pull request, and not at all once a builder holds it', () => {

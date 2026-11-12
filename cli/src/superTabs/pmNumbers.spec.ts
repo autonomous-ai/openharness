@@ -23,7 +23,7 @@ const crew = (): Crew => ({
 /** What the assigner read: each builder's open tasks and how many of them it builds (the others wait for their read or their
  *  merge), and the sized tasks nobody holds. */
 const read = (lists: Record<string, [open: number, building: number]>, free: string[]): Read => ({ open: new Map(Object.entries(lists).map(([id, [open]]) => [id, open])),
-  building: new Map(Object.entries(lists).map(([id, [, building]]) => [id, building])), free: new Set(free) } as unknown as Read)
+  building: new Map(Object.entries(lists).map(([id, [, building]]) => [id, building])), free: new Set(free), waits: 0 } as unknown as Read)
 const task = (number: number, labels: string[], more: Json = {}): Json => ({ number, labels: labels.map(name => ({ name })), ...more })
 const free = (...names: string[]) => names.map(name => ({ id: name.toLowerCase(), name }))
 const numbers = (over: Partial<Numbers> = {}): Numbers => ({ builders: 4, free: free('Ada', 'Kai'), open: 0, unsized: 0, held: 3, landed: 12, landedBy: [['Pip', 7], ['Kai', 5]],
@@ -224,6 +224,13 @@ describe('what Harness says of the counts', () => {
 
   // Through what is counted. A sized task open is one Harness did not give: perhaps one no builder's machine can take
   // (needs:robot-arm), which is no task ready (review of #4081).
+  // A task that waits for what it comes after is given to nobody yet, and is open all the same: its PM was told that no
+  // sized task was open, and then its person (review of #4121).
+  it('counts as open a sized task that waits for what it comes after', () => {
+    const lists = Object.fromEntries(crew().builders.map(builder => [builder.id, [0, 0] as [number, number]]))
+    expect(counts({ read: { ...read(lists, ['#9']), waits: 2 } }).open).toBe(3)
+  })
+
   it('says a sized task Harness did not give is open, not ready', () => {
     const n = counts({ read: read(Object.fromEntries(crew().builders.map(builder => [builder.id, [0, 0]])), ['9']) })
     expect(dayLine({ ...n, landed: 1, landedBy: [['Pip', 1]] }, undefined, ''))

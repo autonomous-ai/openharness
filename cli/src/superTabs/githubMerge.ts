@@ -854,9 +854,11 @@ export class GitHubMerge {
    * other hold both: no order lands both, each is told which it waits for, and the lines are their PM's to change.
    */
   private async earlierPull(repo: string, number: number, pull: Json, open: Json[], team: ReadonlySet<string>): Promise<{ pull: number; task: number; after: number } | null> {
-    // The task each other open pull request of the team's is for, made only once a task says it comes after another.
+    // The task each other open pull request of the team's is for, made only once a task says it comes after another. Of the
+    // team's: its branch or label names a builder, and GitHub says its author is a member of the repository, as every word
+    // Harness takes from a comment: anyone can name a fork's branch `pip/2` (review of #4121).
     let others: Map<number, number> | null = null
-    const ofTeam = (other: Json): boolean => { const author = authorOf(other); return author !== null && team.has(labelOf(author)) }
+    const ofTeam = (other: Json): boolean => { const author = authorOf(other); return author !== null && team.has(labelOf(author)) && TEAM.has(other.author_association) }
     for (const task of tasksOf(pull).slice(0, TASKS_READ_MAX)) {
       const issue = await this.reads.ifThere(repo, `/repos/${repo}/issues/${task}`)
       if (!issue || issue.pull_request) continue

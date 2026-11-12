@@ -74,6 +74,9 @@ export interface Read {
   bases: Map<string, Base[]>
   /** The free tasks whose "after #N" lines wait on each other: none can start until its PM changes one. */
   looped: string[]
+  /** How many free tasks are not planned for what they come after: open all the same, which the PM's numbers count
+   *  (pmNumbers.ts). Left out of them, its PM was told no sized task was open while one waited (review of #4121). */
+  waits: number
   /** Each builder's finished tasks by part, from the closed issues its label was on. */
   done: Map<string, Map<string, number>>
   /** The builders by id, for their names and labels. */
@@ -238,6 +241,7 @@ export function readProblem(input: { now: number; issues: Json[]; closed: Json[]
   const bases = new Map<string, Base[]>()
   /** The free tasks not planned as what they come after has no pull request up, each with those it names. */
   const waiting = new Map<string, string[]>()
+  let waits = 0
   const done = new Map<string, Map<string, number>>()
   for (const issue of input.closed) {
     if (issue.pull_request) continue
@@ -289,13 +293,14 @@ export function readProblem(input: { now: number; issues: Json[]; closed: Json[]
     const after = holder ? [] : dependsOn(issue.body).filter(n => openNumbers.has(n))
     const under = after.map(n => input.up.get(n) ?? [])
     // One of them has no pull request up yet: this is not planned.
-    if (under.some(pulls => !pulls.length)) { waiting.set(id, after.map(n => `#${n}`)); continue }
+    if (under.some(pulls => !pulls.length)) { waiting.set(id, after.map(n => `#${n}`)); waits++; continue }
     // With every one up it is built on their branches, so it is their builder's alone. With that builder away (stopping, down,
     // out of quota), holding four or without what the task needs, or with two builders', it waits until they land.
     const owners = [...new Set(under.flat().map(pull => pull.label))]
     const on = owners.length === 1 ? byLabel.get(owners[0]!) : undefined
-    if (after.length && (!on || spent.has(on.id) || notBuilders.includes(on.id))) continue
-    if (on) bases.set(id, under.flat().map(({ pull, branch }) => ({ pull, branch })))
+    if (after.length && (!on || spent.has(on.id) || notBuilders.includes(on.id))) { waits++; continue }
+    // Each pull request once: one that closes two of the tasks it comes after is one branch.
+    if (on) bases.set(id, [...new Map(under.flat().map(({ pull, branch }) => [pull, { pull, branch }])).values()])
     const priority = labels.find(label => label in WEIGHTS)
     tasks.push({
       id, minutes: shape.minutes, needs: { cpu: shape.cpu, ram: shape.ram, disk: shape.disk },
@@ -331,7 +336,7 @@ export function readProblem(input: { now: number; issues: Json[]; closed: Json[]
     const cores = typeof resources.cpuCores === 'number' && Number.isSafeInteger(resources.cpuCores) && resources.cpuCores > 0 ? resources.cpuCores : CORES
     return { id, capacity: { cpu: cores, ram: memory, disk: Math.max(0, free - DISK_KEPT) } }
   })
-  return { problem: { now: 0, machines: problemMachines, accounts, builders, tasks, objective: 'weighted', switchCost: 30 }, open, building, free, bases, looped, done,
+  return { problem: { now: 0, machines: problemMachines, accounts, builders, tasks, objective: 'weighted', switchCost: 30 }, open, building, free, bases, looped, waits, done,
     builders: new Map(crew.builders.map(b => [b.id, b])) }
 }
 

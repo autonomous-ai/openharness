@@ -152,8 +152,8 @@ on #B at one head, then #B held by a reader and fixed with a push, the second ca
 `carriedPull` found nothing, and the held code would have landed through it. The `stacked` note says which pull request
 it waits for and no more: it said "then update it from main", and on GitHub a builder did, for a stack of three: three
 pushes and runs of the checks, a note and a read more. The trial: by a merge commit the second landed with nothing done
-by anyone; a squash under a stack merged clean. Until package 4, where the base requires up-to-date branches the second
-is still told to update once it is behind.*
+by anyone; a squash under a stack merged clean. Package 4 is stopped (GitHub answers `behind` before `blocked`), so
+where the base requires up-to-date branches the second is still told to update once it is behind.*
 
 **Why.** A task that says "after #B" is given as soon as #B is taken, before #B has any code.
 

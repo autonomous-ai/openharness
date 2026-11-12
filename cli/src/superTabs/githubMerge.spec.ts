@@ -14,7 +14,7 @@ const FORK = 'f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0', M1 = '1'.repeat(40), M2
 const UNDER = 'b0b0b0b0c0ffee000000000000000000000000ab', FIXED = 'c1c1c1c1c0ffee000000000000000000000000ab'
 const comment = (body: string, extra: Json = {}): Json => ({ body, author_association: 'MEMBER', user: { login: 'deehw' }, created_at: '2026-11-09T12:00:00Z', ...extra })
 /** A pull request of the repository's own branch, as GitHub lists it. */
-const pull = ({ head, ...extra }: Json = {}): Json => ({ number: 4, draft: false, base: { ref: 'main' }, labels: [{ name: 'builder:pip' }], body: 'Closes #2', ...extra,
+const pull = ({ head, ...extra }: Json = {}): Json => ({ number: 4, draft: false, base: { ref: 'main' }, labels: [{ name: 'builder:pip' }], body: 'Closes #2', author_association: 'MEMBER', ...extra,
   head: { sha: HEAD, ref: 'pip/2', repo: { full_name: 'acme/app' }, ...head as Json } })
 
 /** One repository as GitHub's REST API answers for it, with ETags, and what was sent to it. */
@@ -897,6 +897,10 @@ describe('a pull request lands after the one its task comes after', () => {
     // change of the team's whose task comes after #2 would stop landing. Only a pull request of the team's is waited for.
     ['the other pull request is by nobody of the team', f => { f.github.repo.pulls[0] = pull({ number: 5, labels: [], head: { sha: UNDER, ref: 'fix-quotes' } }) }],
     ['the other is a fork\'s, by nobody of the team', f => { f.github.repo.pulls[0] = pull({ number: 5, labels: [], head: { sha: UNDER, ref: 'fix-quotes', repo: { full_name: 'kai/app' } } }) }],
+    // Anyone can name a fork's branch like a builder's: GitHub's own word that its author is a member is asked too (review of #4121).
+    ['the other is a fork\'s on a branch named like a builder\'s, by nobody of the team', f => {
+      f.github.repo.pulls[0] = pull({ number: 5, labels: [], author_association: 'CONTRIBUTOR', head: { sha: UNDER, ref: 'pip/2', repo: { full_name: 'kai/app' } } })
+    }],
   ])('lands it all the same when %s', async (_case, arrange) => {
     const f = setup()
     stack(f, [{ sha: HEAD }])

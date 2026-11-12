@@ -308,8 +308,10 @@ export class GitHubAssign {
       if (!Number.isSafeInteger(number) || !/^[0-9a-f]{40}$/.test(head)) continue
       const author = authorOf(pull)
       if (author === null || !team.has(labelOf(author))) continue
-      // Up for its tasks whatever follows: one on hold or with failed checks still has the code a later task is built on.
-      for (const task of tasksOf(pull)) up.set(task, [...up.get(task) ?? [], { pull: number, branch: String((pull.head as Json).ref ?? ''), label: labelOf(author) }])
+      // Up for its tasks whatever follows: one on hold or with failed checks still has the code a later task is built on. Only
+      // one GitHub says is by a member of the repository: anyone can name a fork's branch `pip/1` and say it closes #1, which
+      // read as Pip's gave Pip the next task on an outsider's branch (review of #4121).
+      if (TEAM.has(pull.author_association)) for (const task of tasksOf(pull)) up.set(task, [...up.get(task) ?? [], { pull: number, branch: String((pull.head as Json).ref ?? ''), label: labelOf(author) }])
       // One on hold waits for a person to lift it: nobody is asked to read it meanwhile, and its task waits with it, not its
       // builder (askQuiet asks nothing of it, and it is not taken back).
       if (isHeld(pull)) { for (const task of tasksOf(pull)) withReaders.add(task); continue }
