@@ -358,6 +358,36 @@ it('routes the stop signal through the agent signaller', async () => {
   try { await createStopAgentService(deps)(row.agentId) } finally { setAgentSignaller(null) }
   expect(injected).toHaveBeenCalledExactlyOnceWith(78, 'SIGKILL')
 })
+// A tool an engine spawned `detached` leaves its group and session: the stop lists the engine's tree and signals it,
+// through the same signaller as the engine (#4173). The real termination runs here, with no grace to wait out.
+const { terminateDeletedAgent: realTerminate } = await vi.importActual<typeof import('./deleteAgentFallback.js')>('./deleteAgentFallback.js')
+it("a stop hands the engine's tree to the termination", async () => {
+  const injected = vi.fn(); setAgentSignaller(injected)
+  vi.mocked(terminateDeletedAgent).mockImplementation((entry, actions) => realTerminate(entry, actions, 0, 0))
+  vi.mocked(checkPidRuntime).mockResolvedValueOnce({ state: 'alive' }).mockResolvedValue({ state: 'gone', reason: 'exited' })
+  const descendants = vi.fn(async () => [{ pid: 90, pgid: 90, startMarker: 'tool' }])
+  deps.processTree = { descendants, survivors: vi.fn(async () => []) }
+  try { await createStopAgentService(deps)(row.agentId) } finally { setAgentSignaller(null) }
+  expect(descendants).toHaveBeenCalledExactlyOnceWith({ pid: 77, executable: 'codex', startMarker: 'fixture' })
+  expect(injected).toHaveBeenCalledWith(77, 'SIGTERM')
+  expect(injected).toHaveBeenCalledWith(-90, 'SIGTERM')
+  expect(registry.byAgent(row.agentId)).toBeUndefined()
+})
+it("a terminal and a guest's harness list no tree", async () => {
+  vi.mocked(terminateDeletedAgent).mockImplementation((entry, actions) => realTerminate(entry, actions, 0, 0))
+  vi.mocked(checkPidRuntime).mockResolvedValueOnce({ state: 'alive' }).mockResolvedValue({ state: 'gone', reason: 'exited' })
+  const descendants = vi.fn(async () => [])
+  deps.processTree = { descendants, survivors: vi.fn(async () => []) }
+  deps.wait = vi.fn(async () => {})
+  Object.assign(row, { engine: 'terminal', sessionId: '' })
+  await createStopAgentService(deps)(row.agentId)
+  const guest = registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%45' }], cwd: '/tmp' })!
+  Object.assign(guest, { guest: 'kim@example.com', sessionId: 'saved', processIdentity: { pid: 78, executable: 'codex', startMarker: 'fixture' } })
+  await createStopAgentService(deps)(guest.agentId)
+  expect(registry.byAgent(row.agentId)).toBeUndefined()
+  expect(registry.byAgent(guest.agentId)).toBeUndefined()
+  expect(descendants).not.toHaveBeenCalled()
+})
 it('only signals through the validated process deleter and does not erase a newer stop job', async () => {
   const signal = vi.spyOn(process, 'kill').mockReturnValue(true)
   vi.mocked(terminateDeletedAgent).mockImplementation(async (entry, actions) => {
