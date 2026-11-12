@@ -140,6 +140,7 @@ import { createTerminalRequests } from './terminals/requests.js'
 import { createBrowser } from './terminals/browser.js'
 import { loopbackAnswer } from '../lib/loopbackGet.js'
 import { writeBrowserShim } from '../lib/browserShim.js'
+import { backgroundCommands } from '../lib/backgroundCommands.js'
 import { createAgentEvents } from './agents/events.js'
 import { createSessionNormalizers } from './transcripts/normalizers.js'
 import { createInput } from './input.js'
@@ -3063,6 +3064,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     announceSession,
     engineReady: (engine, ms) => engineLinks.ready(engine, ms),
     stoppedAgents,
+    backgroundCommands: (s) => backgroundCommands(s),
     ...(swarm ? {
       leadProtected: (agentId: string, changeId?: string) => swarm.leadCloseProtected(env.ADAPTER_DATA_DIR, agentId, changeId),
       leadSwitching: (agentId: string, changeId: string) => swarm.leadSwitching(env.ADAPTER_DATA_DIR, agentId, changeId),
