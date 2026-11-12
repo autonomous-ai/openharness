@@ -150,6 +150,8 @@ export interface SessionSearchIndexOptions {
 const NO_TURN_DELETE = Number.MAX_SAFE_INTEGER
 /** Rows written per transaction on a long first pass. */
 const WRITE_BATCH = 32
+/** How many times a delete's checkpoint a reader held is asked again before the sweep takes it over. */
+const CHECKPOINT_RETRIES = 5
 
 /** The folders a session ran in, as a person would name them: the last two path segments. */
 export function folderWords(cwd: string | null | undefined): string {
@@ -206,11 +208,25 @@ export class SessionSearchIndex {
 
   /** A delete's checkpoint a reader kept from finishing: the erased words are still in the files. */
   private checkpointOwed = false
+  private checkpointRetry: ReturnType<typeof setTimeout> | undefined
 
-  /** Empties the files of what a delete erased; one a reader held is said, and asked again at the next sweep. */
-  private checkpointAfterDelete(): void {
-    this.checkpointOwed = !this.opts.store.checkpoint()
-    if (this.checkpointOwed) this.opts.log?.('[search] a reader held the index: what a delete erased stays in its files until the next sweep')
+  /**
+   * Empties the files of what a delete erased. One a reader held is said, and asked again 1, 2, 4, 8 and 16 s later
+   * without waiting for the reader (a search's read lasts milliseconds); one held past those, at each sweep.
+   */
+  private checkpointAfterDelete(retry = 0): void {
+    clearTimeout(this.checkpointRetry)
+    this.checkpointRetry = undefined
+    if (this.stopped) return
+    this.checkpointOwed = !this.opts.store.checkpoint(retry === 0)
+    if (!this.checkpointOwed) return
+    if (retry === 0) this.opts.log?.('[search] a reader held the index: what a delete erased stays in its files until it lets go')
+    if (retry >= CHECKPOINT_RETRIES) return
+    this.checkpointRetry = setTimeout(() => {
+      try { this.checkpointAfterDelete(retry + 1) }
+      catch (error) { this.opts.log?.(`[search] checkpoint after a delete failed: ${error instanceof Error ? error.message : String(error)}`) }
+    }, 1_000 * 2 ** retry)
+    this.checkpointRetry.unref?.()
   }
 
   /** The first sweep after `delayMs` (boot has other work), then one every `sweepEveryMs`. */
@@ -228,6 +244,7 @@ export class SessionSearchIndex {
   stop(): void {
     this.stopped = true
     if (this.sweepTimer) clearTimeout(this.sweepTimer)
+    clearTimeout(this.checkpointRetry)
     for (const timer of this.touches.values()) clearTimeout(timer)
     this.touches.clear()
     this.queue.clear()

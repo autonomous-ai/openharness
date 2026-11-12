@@ -559,7 +559,7 @@ describe('SessionSearchIndex forgetting', () => {
     reader.exec('BEGIN')
     reader.prepare('SELECT count(*) FROM turns').all()
     index.deleteHistory('s1')
-    expect(logs).toContain('[search] a reader held the index: what a delete erased stays in its files until the next sweep')
+    expect(logs).toContain('[search] a reader held the index: what a delete erased stays in its files until it lets go')
     reader.exec('COMMIT')
     reader.close()
     index.sweep(); await drained(index)

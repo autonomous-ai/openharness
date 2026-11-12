@@ -18,6 +18,8 @@ import type { IndexedTurn } from './turns.js'
 
 // Rebuild schema 10's external-engine index with Codex app/editor context removed from asks.
 const SCHEMA_VERSION = '11'
+/** How long the daemon's connection waits for another's lock (a reader's, for a checkpoint). */
+const BUSY_WAIT_MS = 1_000
 
 /** Database path shared with the CLI without loading CLI commands into search. */
 export const SESSION_SEARCH_FILE = 'session-search.db'
@@ -347,7 +349,7 @@ export class SessionSearchStore {
       db.exec('PRAGMA journal_mode = WAL')
       db.exec('PRAGMA synchronous = NORMAL')
     }
-    db.exec('PRAGMA busy_timeout = 1000')
+    db.exec(`PRAGMA busy_timeout = ${BUSY_WAIT_MS}`)
     const store = new SessionSearchStore(db)
     store.migrate()
     store.forgetForGood()
@@ -568,14 +570,17 @@ export class SessionSearchStore {
    * that removed rows, since a merge rewrites the whole index (4.2 s on a 725 MB one) and a purge deletes
    * once per session key. Then moves the WAL into the database and empties it, so the pages that held
    * the words leave the WAL file too. False when a reader's open read kept it from finishing: the words
-   * stay in the files until a later one finishes.
+   * stay in the files until a later one finishes. Without [wait], a reader is not waited for: the wait
+   * holds this thread, the daemon's, for up to BUSY_WAIT_MS.
    */
-  checkpoint(): boolean {
+  checkpoint(wait = true): boolean {
     if (this.erased) {
       this.db.exec("INSERT INTO turns_fts (turns_fts) VALUES ('optimize')")
       this.erased = false
     }
-    return Number(this.statement('PRAGMA wal_checkpoint(TRUNCATE)').get()?.busy) === 0
+    if (!wait) this.db.exec('PRAGMA busy_timeout = 0')
+    try { return Number(this.statement('PRAGMA wal_checkpoint(TRUNCATE)').get()?.busy) === 0 }
+    finally { if (!wait) this.db.exec(`PRAGMA busy_timeout = ${BUSY_WAIT_MS}`) }
   }
 
   /**
