@@ -567,6 +567,40 @@ describe('SessionSearchIndex forgetting', () => {
     expect(bytes.includes('zanzibarquokka')).toBe(false)
   })
 
+  // A search's read lasts milliseconds: the delete's words leave the files a second after it, not at a sweep minutes on.
+  it('a checkpoint a reader held is asked again a second later, a few times at most', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      store.writeSession({ sessionId: 's9', agentId: 'a1', engine: 'claude', path: '', header: 's9 work', size: 0, mtime: 0,
+        resumeOffset: 0, resumeTurn: 0, lastAt: 1, turns: 1 }, 0, [{ turn: 0, offset: 0, at: null, ask: 'email zanzibarquokka', answer: 'sent', tools: '' }])
+      store.checkpoint()
+      const checkpoint = vi.spyOn(store, 'checkpoint')
+      const reader = new (builtinSqlite()!)(path, { readOnly: true })
+      reader.exec('BEGIN')
+      reader.prepare('SELECT count(*) FROM turns').all()
+      index.deleteHistory('s1')
+      vi.advanceTimersByTime(1_000)
+      expect(checkpoint).toHaveBeenCalledTimes(2)
+      reader.exec('COMMIT')
+      reader.close()
+      vi.advanceTimersByTime(2_000)
+      expect(checkpoint).toHaveBeenCalledTimes(3)
+      const bytes = Buffer.concat(['', '-wal'].filter((suffix) => existsSync(path + suffix)).map((suffix) => readFileSync(path + suffix)))
+      expect(bytes.includes('zanzibarquokka')).toBe(false)
+      vi.advanceTimersByTime(60_000)
+      expect(checkpoint).toHaveBeenCalledTimes(3)
+      // One a reader never lets go is asked again a few times, then left to the sweep.
+      const held = new (builtinSqlite()!)(path, { readOnly: true })
+      held.exec('BEGIN')
+      held.prepare('SELECT count(*) FROM turns').all()
+      index.deleteHistory('s2')
+      vi.advanceTimersByTime(10 * 60_000)
+      expect(checkpoint).toHaveBeenCalledTimes(3 + 1 + 5)
+      held.exec('COMMIT')
+      held.close()
+    } finally { vi.useRealTimers() }
+  })
+
   it('a pass still reading a deleted conversation does not write it back, though a sweep meanwhile found it gone', async () => {
     let read: ((events: LiveEvent[]) => void) | undefined
     sources = [...sources, { ...source('a3', 'h1'), readHistory: () => new Promise<LiveEvent[]>((resolve) => { read = resolve }) }]
