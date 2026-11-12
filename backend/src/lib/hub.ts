@@ -82,7 +82,7 @@ export function deliverUpLocal(machineId: string, msg: UpBusMsg): void {
     // frame is not a broadcast. Without this, `e2e_status_result` etc. never reach a paired device
     // (commanders are filtered by `!commanderEligible` and by the `_result` suppression).
     if (!msg.targetConnId) {
-      if (c.guest) return                                              // a guest hears only what is addressed to it
+      if (c.guest || c.relayIsolated) return                           // a guest or background relay hears only what is addressed to it
       if (c.kind === 'web' && msg.webEligible === false) return        // device-only frame (forwardToCommander)
       if (c.kind === 'commander' && !msg.commanderEligible) return     // preserve COMMANDER_FORWARD filter
       // RPC replies (`<x>_result`) are answered to the device directly by deviceWs (trimmed); the
@@ -354,13 +354,15 @@ export async function startPodRoutes(): Promise<() => void> {
 }
 
 /** Register a client socket into the hub. The caller still owns the socket's 'message' handler. */
-export function attachHubClient(socket: WebSocket, machineId: string, kind: ClientKind, opts: { guest?: boolean } = {}): HubClient {
+export function attachHubClient(socket: WebSocket, machineId: string, kind: ClientKind, opts: { guest?: boolean; relayIsolated?: boolean } = {}): HubClient {
   const connId = randomUUID()
   ;(socket as Alive).__hubLastAlive = Date.now()
   // Wired ONCE per socket because a web socket re-attaches on every agent switch. Note this does NOT
   // touch __hubDeadlineMs: a device sets its own (shorter) deadline before any machine attaches.
   wireLiveness(socket)
-  const first = registry.addClient({ connId, machineId, kind, socket, ...(opts.guest ? { guest: true } : {}) })
+  const first = registry.addClient({
+    connId, machineId, kind, socket, ...(opts.guest ? { guest: true } : {}), ...(opts.relayIsolated ? { relayIsolated: true } : {}),
+  })
   if (podRoutes) void recordConnOwners([connId], registry.PROCESS_ID)
 
   if (first) {
