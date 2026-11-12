@@ -54,7 +54,7 @@ that process. A process per risk, not per feature (`SERVICE_HOSTS` in `src/harne
 | `engine-claude`, `engine-codex` | history, live parsers, runtime profiles, screens, submission readings, model control, question navigation and Codex's app-server connection (`src/engines/worker/`) | engine behavior outside core; snapshots and revocable model- and question-control grants | on demand |
 | `search` | search | native `node:sqlite`, the index's memory | always |
 | `viewers` | viewers, store | the viewer servers, the remote viewer streams and rendered surfaces, minutes-long installs | on demand |
-| `edge` | workspaces, usage, monitor, projects, handoff, recaps, windowNames, shell, connectors, sharedMachines, agentCleanup, messages, osDevice | light pure-JS services: isolated from the core, not from each other | always |
+| `edge` | workspaces, usage, monitor, projects, handoff, recaps, windowNames, shell, connectors, sharedMachines, agentCleanup, messages, osDevice, goals | light pure-JS services: isolated from the core, not from each other | always |
 | `gateway` | gateway | network, crypto and pure-JS WebRTC: the attack surface | on demand |
 | `models` | models | grid's installs, downloads and commands | on demand |
 | `devices` | devices, wifi | the dials' serial ports, the fleet's lane, the voice router's worker, the Wi-Fi device | on demand |

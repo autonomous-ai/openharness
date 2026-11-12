@@ -200,6 +200,7 @@ Machine:
   harness close <name> [--now] save a harness's screen and stop it; an agent closes only what it started
   harness delete <name>        stop a harness and erase its conversation and what Harness kept of it
   harness tell <name> -- <w>   from an agent's pane: more work for a harness it started (agents-tell-agents)
+  harness goal open|done|list  Hachi's goals: the one its harnesses are started for (new --goal), and when it is done
   harness reply <name> -- <w>  say words to a cloud harness (Devin Cloud, Cursor Cloud, Fo): its answer or what next
   harness route [--send] -- <w>  which harness words belong to, or new work; --send types them into an idle one (programs-reply)
   harness resume <name>        open a closed harness again, with its conversation, for a program to reply to (programs-reply)
@@ -2757,7 +2758,7 @@ async function logsExportCommand(json: boolean): Promise<void> {
 
 import { orchestratorCommand } from './orchestrator/command.js'
 import { paneOwner, sendCommand, sendPane } from './messages/command.js'
-import { agentOrigin, closeCommand, deleteCommand, psCommand, replyCommand, resumeCommand, routeCommand, showCommand, tellCommand, waitCommand, watchCommand, whoamiCommand } from './agentClient/commands.js'
+import { agentOrigin, closeCommand, deleteCommand, goalCommand, psCommand, replyCommand, resumeCommand, routeCommand, showCommand, tellCommand, waitCommand, watchCommand, whoamiCommand } from './agentClient/commands.js'
 import { agentsHelp, helpFor } from './agentClient/help.js'
 import { openUrlCommand } from './agentClient/openUrl.js'
 import { harnessRunner, mcpCommand } from './agentClient/mcp.js'
@@ -2869,6 +2870,10 @@ switch (cmd) {
     break
   case 'delete':
     deleteCommand(rest).then(code => { process.exitCode = code }).catch(onError)
+    break
+  // Hachi's goals (services/goals.ts): the daemon answers Hachi alone, so this needs no machine list.
+  case 'goal':
+    goalCommand(rest).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'orchestrator':
     orchestratorCommand(rest).then(code => { process.exitCode = code }).catch(onError)
