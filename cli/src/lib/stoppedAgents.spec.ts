@@ -269,6 +269,14 @@ describe('stopped harness persistence', () => {
     expect(registry.byAgent(saved.agentId)?.lastOpenedAt).toBe(opened)
   })
 
+  it('the archive keeps a local row\'s folder and its earlier session keys', async () => {
+    const { registry, StoppedAgentStore, store } = await fixture()
+    const local = registry.openPendingAgent({ engine: 'openclaw', runtimes: [{ backend: 'tmux', paneId: '%11' }], cwd: '/tmp/work', openclawLocal: '/run/skill-1' })!
+    store.save({ ...local, sessionId: 'agent:main:tui-2', earlierSessionIds: ['agent:main:harness-1'], active: false })
+    expect(new StoppedAgentStore(join(directory, 'stopped-agents')).get(local.agentId)).toMatchObject({
+      openclawLocal: '/run/skill-1', openclawStateDir: '/run/skill-1', earlierSessionIds: ['agent:main:harness-1'] })
+  })
+
   it('T1 keeps a fork origin with its parent session through save, get and list', async () => {
     const { registry, StoppedAgentStore, store } = await fixture()
     const origin = { agentId: 'p', name: 'Parent', sessionId: 'p-sess', transcriptPath: '/x/p-sess.jsonl' }
