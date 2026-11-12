@@ -6,7 +6,7 @@
  * finds the agent by the pane, so a command reaches only its own agent's browser. It never starts or stops one.
  */
 import type { Readable, Writable } from 'node:stream'
-import { runningPane, type PaneProbe } from '../lib/callerPane.js'
+import { runningPane, UNPROVEN, type PaneProbe } from '../lib/callerPane.js'
 import { browserHelp, parseBrowserArgs } from './browserArgs.js'
 import { BrowserFilesError, capOutput, saveScreenshot } from './browserOutput.js'
 import { EXIT } from './commands.js'
@@ -81,9 +81,12 @@ export async function browserCommand(argv: readonly string[], io: BrowserIo = pr
   if ('help' in parsed) return say(io.stdout, browserHelp(), EXIT.ok)
   if ('usage' in parsed) return say(io.stderr, parsed.usage, EXIT.usage)
   const env = deps.env ?? process.env
-  // The pane from the command's parents: a TMUX_PANE that names another pane, or a pane that cannot be proven (a pty
-  // host's on macOS or Linux), is refused rather than taken at its word.
-  const { pane, ancestors } = runningPane(env, deps.probe, deps.platform)
+  // The pane from the command's parents: a TMUX_PANE that names another pane, or no pane at all (a person's terminal, a
+  // pty host's on macOS or Linux), is refused rather than taken at its word. A pane its environment keeps it from proving
+  // (Codex's sandbox refuses ps and the tmux socket) fails with the proof's reason, as super-tab's does, so it is run again
+  // outside the sandbox.
+  const { pane, ancestors, refused } = runningPane(env, deps.probe, deps.platform)
+  if (refused === UNPROVEN) return say(io.stderr, UNPROVEN, EXIT.failed)
   if (!pane) return say(io.stderr, NO_PANE, EXIT.refused)
   const { command } = parsed
   const args = parsed.stdin === 'text' ? { ...parsed.args, text: await readAll(io.stdin) } : parsed.args

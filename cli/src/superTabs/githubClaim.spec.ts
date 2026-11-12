@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import { CLAIM_LIMIT, claimAsked, splitHint, takeTask } from './githubClaim.js'
+import { CLAIM_LIMIT } from './assign/crew.js'
+import { claimAsked, splitHint, takeTask } from './githubClaim.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { SuperTabHostError } from './wire.js'
 

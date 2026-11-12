@@ -22,9 +22,10 @@ machine, each running one task at a time with its model. Given:
 - **machines**: CPU, memory and disk for Swarm work, after their person's own reserve;
 - **subscriptions**: each window's percent left, its resets, and the reserve its person keeps;
 
-find, for every task, its builder, model and start, so that the priority-weighted finish time is least, then the cost,
-and at no minute does a builder run two tasks, a machine go past its CPU, memory or disk, a limited model run past its
-limit, two builders change the same file, or a window be spent past its reserve.
+find, for every task, its builder, model and start, so that the priority-weighted finish time is least, then the cost
+(each model's cost for its minutes, and what is spent of each subscription's window at that window's price), and at no
+minute does a builder run two tasks, a machine go past its CPU, memory or disk, a limited model run past its limit, two
+builders change the same file, or a window be spent past its reserve.
 
 This is a multi-mode resource-constrained project scheduling problem: NP-hard, and well studied.
 
@@ -41,6 +42,15 @@ This is a multi-mode resource-constrained project scheduling problem: NP-hard, a
   others from shuffled priorities. Seeded and bounded by iterations and time.
 - **Stable plans.** Running work is fixed; moving a queued task costs a switching penalty, so a new plan changes the last
   only where it gains.
+- **A window's price.** A percent of a subscription's window costs `need / (need + room)`: its room is what is left above
+  its person's reserve, and its need is what the whole allowance, spent evenly over the window's period, would still
+  spend before its reset. So next to nothing where the room would lapse before the reset, a half for a window on its pace,
+  and nearer 1 the further the room has run ahead of the reset. A window whose use is not known is priced as one on its
+  pace, never as unused. A plan's cost counts each task's spend at it, a percent at price 1 as a minute of the cheapest
+  model: of builders as fast, the one whose window would lapse gets the task. A task's whole spend is under 30 such units
+  against 1,000 for a minute of its time, so with up to twelve subscriptions it never costs a minute. It reads the window
+  alone, so a task starting or ending does not move it
+  ([the allocator's package 15](2026-11-11-swarm-allocator/BUILD.md), `schedule.ts` `priceOf`).
 
 ## Evidence
 
@@ -78,10 +88,21 @@ Code is everything that can be counted or checked; the PM's guide keeps only jud
 Every minute, in the PM's person's Harness, for each project its PM leads from there (`githubMerge.ts ledProjects`):
 
 - **Tasks** are the repository's open issues the PM sized (`size:s`, `size:m`, `size:l`) that no builder holds. One a
-  builder holds is queued on it, and one it took (`status:taken`) keeps it busy for half its size. An issue another team's
+  builder holds is queued on it, and one it took (`status:taken`) keeps it busy for half its size, until its pull request
+  waits for its readers or its merge: then it takes none of its builder's time. An issue another team's
   label holds is left alone, as is any `builder:` label a person set. `part:` gives the task's part, `p0`-`p2` its weight
-  (8, 4, 2; 1 for none), "after #N" in its text what must end first, and each `needs:` label a tool, system or GPU its
-  builder's machine must report, else that builder never gets it.
+  (8, 4, 2; 1 for none), and each `needs:` label a tool, system or GPU its builder's machine must report, else that
+  builder never gets it.
+- **A task that comes after another** ("after #N" in its text, of an issue still open) is not planned until that one's
+  pull request is up: no draft, into the default branch, by a builder of the team. It is then that builder's alone, and
+  the line that gives it and the one typed to its agent say which branch to build it on. With that builder away
+  (stopping, down, out of quota), or two such tasks with different builders, it waits until they land; one that is closed
+  is not waited for ([the allocator's design](2026-11-11-swarm-allocator/BUILD.md), package 3; until then it was given
+  as soon as the other was taken, before that one had any code). A task a builder holds already is planned as it is.
+  Its pull request then lands after the other's: while a pull request of the team's is open for a task it comes after,
+  the merger does not land it, whichever of that one's commits it holds, and tells its builder once which it waits for
+  (`githubMerge.ts earlierPull`). Held only while it carried the other's newest commit, one built on a commit a reader
+  had held landed that commit before its fix.
 - **Builders** are the project's regular Claude Code and Codex agents as the PM reads the Swarm (`crewOf`): never the PM,
   a Buddy, one stopping, one whose machine is down, or another private project's. A builder is quicker in a part where its
   label was on closed issues: 15% a task, 40% at most.
@@ -90,13 +111,16 @@ Every minute, in the PM's person's Harness, for each project its PM leads from t
   ten minutes); a machine whose daemon reports none is planned as 8 cores. **Subscriptions** are each machine's engine windows as it reported them, a 20% reserve kept for its person.
 - **Sizes** until estimates are learned: s 30 minutes, 1 core, 2 GB, 1 GB, 3% of a 5-hour window; m 90, 2, 4 GB, 2 GB, 10%;
   l 240, 4, 8 GB, 4 GB, 25%; a weekly window spends a fifth of that.
-- **The plan** is the solver's, from the last plan (so it changes only where it gains), in a second at most. Each builder
-  gets the free tasks it starts next until it holds two: `builder:<name>` on the issue and one comment, "Harness, 15:40: for
+- **The plan** is the solver's, from the last plan (so it changes only where it gains), in a second at most. A builder
+  with no task to build and fewer than four open gets the free task it starts next, one at a time (until it held two, before
+  11 November: [the allocator's design](2026-11-11-swarm-allocator/BUILD.md), package 2). A task is one its builder builds
+  while given or taken with no pull request yet, with a draft, or with one a reader's HOLD stands on; one whose pull request
+  waits for its readers or its merge is not. It is given as `builder:<name>` on the issue and one comment, "Harness, 15:40: for
   **Pip**: it can start now, and it finished 3 part:api tasks." GitHub news then brings each its task.
 - **Failures** are said once: a label GitHub refused (tried again next pass), a task no builder can do and why, gh signed
   out or rate limited (as the merger: `githubRest.ts`). A sized task nobody can start for a reason its PM can act on is
   said on the task, to the PM by name, once: a need no builder's machine meets ("it needs xcode, which no builder's
-  machine has"), a task larger than every machine, or "after #N" lines that wait on each other (`blockedWhy`). A wait
+  machine has"), a task larger than every machine (`blockedWhy`), or "after #N" lines that wait on each other. A wait
   that passes (busy builders, spent quota, a task it waits on) is not.
 
 ## What an agent works on (built)
@@ -106,7 +130,9 @@ must be more proactive and ask the user what area they want the agent to focus o
 
 - **Where it is said:** the `Works on:` line at the top of the agent's instructions file in each project's repository,
   `agents/<Name>.md`, which its person reads and changes beside its chat. Areas are the project's `part:` labels' words
-  ("Works on: Mobile, backend"), or `anything`. One place: no setting, no second list.
+  ("Works on: Mobile, backend"), or `anything`. One place: no setting, no second list. A label is its area however it is
+  spelled: `part:Backend` is the backend an agent works on, and `part:Mobile App` is mobile-app (`assign/crew.ts areaOf`).
+  Words that differ ("backend engine" and "backend") are two areas.
 - **Who says it:** with its first task in a repository, if its file has no such line, Harness tells the agent (only it
   reads it) to ask its person, in their chat, which area to focus on, naming the repository's areas so far. Its person
   answers in plain words; the agent writes the line in a pull request of its own. Once per agent and repository
@@ -114,7 +140,7 @@ must be more proactive and ask the user what area they want the agent to focus o
 - **What it does:** in the plan an agent takes half the time in its areas and half as long again in others once it named
   some (`assign/crew.ts FOCUS`, `AWAY`), on top of what it learned. So a mobile agent gets mobile tasks first, others take
   one only when it is well behind, and it takes other work when its own area has none.
-- **Labels:** an area an agent works on that has no `part:` label yet gets one, made by the assigner, so its PM labels
+- **Labels:** an area an agent works on that has no `part:` label yet, however spelled, gets one, made by the assigner, so its PM labels
   tasks with the same words. So do the flow's own labels (status:taken, size:s/m/l, p0 to p2) and each builder's, in a
   repository that lacks them: gh refuses to add a label a repository does not have, so in a fresh one a builder could not
   take its first task, nor the PM size one (`githubAssign.ts labelRepo`). Labels are read only when the team needs one

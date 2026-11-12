@@ -70,6 +70,21 @@ describe('the event funnel', () => {
     expect(shortTurns.holding('s1')).toBe(30_000)
   })
 
+  // A title an engine gives while its agent's last turn was a line typed for it alone never names it (core/agents/quietTitles.ts): that
+  // stretch ends as the agent's next turn starts, told before the input can say a quiet delivery started the turn.
+  it('tells the quiet titles of each live turn start, before the input hears it, never of a re-read', () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const turnStarted = vi.fn()
+    const { funnel, deps } = setup('claude', { quietTitles: { turnStarted } })
+    funnel('s1', [started(), text(), ended()])
+    expect(turnStarted.mock.calls).toEqual([['a1']])
+    expect(turnStarted.mock.invocationCallOrder[0])
+      .toBeLessThan((deps.input.onTurnStarted as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0])
+    funnel('s1', [started(), ended()], { replay: true })
+    funnel('s1', [started(), ended()], { resumed: true })
+    expect(turnStarted).toHaveBeenCalledTimes(1)
+  })
+
   it('sends the clients a shell result without its outputTail, and still feeds the commander mirror with it', () => {
     const sent: Array<{ payload: object }> = []
     const { funnel, deps } = setup('claude', { clients: { send: vi.fn((f: { payload: object }) => { sent.push(f) }) } as never })

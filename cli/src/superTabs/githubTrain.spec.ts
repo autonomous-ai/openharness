@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { GitHubMerge, VerdictRecords } from './githubMerge.js'
 import { commandRecords } from './commandRecords.fake.js'
-import { landingMessage, nextTrain, splitRed, trainBody, trainOfBody } from './githubTrain.js'
+import { landingMessage, nextTrain, splitRed, trainBody, trainEnd, trainOfBody } from './githubTrain.js'
 import type { Crew } from './assign/crew.js'
 import type { GitHubGet, GitHubReply, GitHubSend } from './githubRest.js'
 
@@ -89,6 +89,8 @@ function fakeRepo(now: () => number) {
       // A page of the list, the most recently updated first, as GitHub pages it.
       : p === '/pulls' ? [...state.pulls.values()].filter(pull => pull.state === url.searchParams.get('state')).sort((a, b) => b.updated - a.updated).slice((page - 1) * per, page * per)
       : /^\/issues\/\d+\/comments$/.test(p) ? (state.comments.get(number) ?? []).map(records.served)
+      // A task a pull request names, with no words of its own; or, by a pull request's number, that pull request.
+      : /^\/issues\/\d+$/.test(p) ? { number, body: '', ...state.pulls.has(number) ? { pull_request: {} } : {} }
       : /^\/pulls\/\d+\/reviews$/.test(p) ? []
       // A commit's statuses, the newest first, a page at a time; and the last of each context, as GitHub's combined status gives them.
       : /^\/commits\/[0-9a-f]+\/statuses$/.test(p) ? [...state.statuses.get(p.split('/')[2]!) ?? []].reverse().slice((page - 1) * per, page * per)
@@ -355,7 +357,8 @@ describe('the ready pull requests ride a train (githubTrain.ts)', () => {
     const before = f.state.sent.length
     await f.tick()
     expect(f.writes(before)).toEqual(['PATCH /pulls/901', 'DELETE /git/refs/heads/harness-train/second'])
-    expect(f.state.pulls.get(901)!.state).toBe('closed')
+    // Closed for no reason the day's numbers name: it keeps its title.
+    expect(f.state.pulls.get(901)).toMatchObject({ state: 'closed', title: 'Train: #4 #5' })
     expect(first.state).toBe('open')
   })
 
@@ -589,7 +592,8 @@ describe('a train waits for its own checks, then lands or is closed', () => {
     change(f)
     await f.ends(PASSED)
     expect(f.writes(built)).toEqual(['PATCH /pulls/900', `DELETE /git/refs/heads/${first.head.ref}`])
-    expect(first).toMatchObject({ state: 'closed', title: 'Train: #4 #5 #6', merged_at: null })
+    // Its title says why, for the day's numbers (scoreboard.ts).
+    expect(first).toMatchObject({ state: 'closed', title: 'Train, rider changed: #4 #5 #6', merged_at: null })
     expect(f.logged()).toContainEqual('[super-tab] train acme/app#900 closed: a pull request it carries is no longer ready at its head')
     await f.tick()
     expect(f.carried()).toEqual([[4, 5, 6], [4, 6]])
@@ -622,7 +626,8 @@ describe('a train waits for its own checks, then lands or is closed', () => {
     f.state.pulls.get(5)!.mergeable_state = 'unknown'
     await f.ends(PASSED)
     await f.tick(90 * 60_000)
-    expect(f.trains()[0]).toMatchObject({ state: 'closed', merged_at: null })
+    // Nothing of it changed: it ran out of time, and its title says so.
+    expect(f.trains()[0]).toMatchObject({ state: 'closed', merged_at: null, title: 'Train, out of time: #4 #5' })
     expect(f.logged()).toContainEqual('[super-tab] train acme/app#900 closed: a pull request it carries is no longer ready at its head')
   })
 
@@ -643,6 +648,7 @@ describe('a train waits for its own checks, then lands or is closed', () => {
     await f.ends(PASSED)
     expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual([])
     expect(f.logged()).toContainEqual('[super-tab] train acme/app#900 closed: its branch does not hold what its body names')
+    expect(f.state.pulls.get(900)).toMatchObject({ state: 'closed', title: 'Train: #4 #5' })
     expect([4, 5, 6].map(number => f.state.pulls.get(number)!.state)).toEqual(['open', 'open', 'open'])
   })
 
@@ -712,7 +718,8 @@ describe('a train waits for its own checks, then lands or is closed', () => {
     const tip = f.train().head.sha
     f.state.statuses.set(tip, [...f.state.statuses.get(tip)!, ...Array.from({ length: 1_100 }, (_, at) => ({ context: `noise/${at}`, state: 'success', creator: { login: 'mallory' } }))])
     await f.tick()
-    expect(f.trains()[0]).toMatchObject({ state: 'closed', merged_at: null })
+    // Closed for no reason the day's numbers name: it keeps the title it was built with.
+    expect(f.trains()[0]).toMatchObject({ state: 'closed', merged_at: null, title: 'Train: #4 #5' })
     expect(f.logged()).toContainEqual('[super-tab] train acme/app#900 closed: its tip is not one the train built')
   })
 
@@ -760,7 +767,7 @@ describe('a train waits for its own checks, then lands or is closed', () => {
     f.state.runs.delete(f.train().head.sha)
     await f.settle()
     await f.tick(90 * 60_000)
-    expect(f.trains()[0]).toMatchObject({ state: 'closed', merged_at: null })
+    expect(f.trains()[0]).toMatchObject({ state: 'closed', merged_at: null, title: 'Train, out of time: #4 #5' })
     expect(f.logged()).toContainEqual('[super-tab] train acme/app#900 closed: its checks did not finish in 90 min')
   })
 
@@ -827,7 +834,7 @@ describe('a train waits for its own checks, then lands or is closed', () => {
     }
     await f.ends(PASSED)
     expect(f.writes(built)).toEqual(['PUT /pulls/900/merge', 'PATCH /pulls/900', `DELETE /git/refs/heads/${branch}`])
-    expect(f.state.pulls.get(900)).toMatchObject({ state: 'closed', merged_at: null, title: 'Train: #4 #5' })
+    expect(f.state.pulls.get(900)).toMatchObject({ state: 'closed', merged_at: null, title: 'Train, base moved: #4 #5' })
     expect(f.logged()).toContainEqual('[super-tab] train acme/app#900 closed: main moved under it')
   })
 
@@ -880,6 +887,7 @@ describe('a train waits for its own checks, then lands or is closed', () => {
     // At once, and not when its run ends: a run on a base that moved lands nothing.
     await f.tick()
     expect(f.writes(built)).toEqual(['PATCH /pulls/900', expect.stringMatching(/^DELETE /)])
+    expect(f.state.pulls.get(900)).toMatchObject({ state: 'closed', merged_at: null, title: 'Train, base moved: #4 #5' })
     await f.settle()
     expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual([])
     expect(f.logged()).toContainEqual('[super-tab] train acme/app#900 closed: main moved under it')
@@ -901,7 +909,7 @@ describe('a train waits for its own checks, then lands or is closed', () => {
     await f.settle()
     expect(f.writes(built).slice(0, 2)).toEqual(['PATCH /pulls/900', `DELETE /git/refs/heads/${train.head.ref}`])
     expect(f.writes(built).filter(w => w.startsWith('PUT'))).toEqual([])
-    expect(train.merged_at).toBeNull()
+    expect(train).toMatchObject({ state: 'closed', merged_at: null, title: 'Train: #4 #5' })
   })
 
   it('closes a train whose checks have not finished in 90 minutes, and builds it again', async () => {
@@ -911,7 +919,7 @@ describe('a train waits for its own checks, then lands or is closed', () => {
     await f.tick(89 * 60_000)
     expect(f.train().number).toBe(900)
     await f.tick(2 * 60_000)
-    expect(f.state.pulls.get(900)).toMatchObject({ state: 'closed', title: 'Train: #4 #5' })
+    expect(f.state.pulls.get(900)).toMatchObject({ state: 'closed', title: 'Train, out of time: #4 #5' })
     expect(f.logged()).toContainEqual('[super-tab] train acme/app#900 closed: its checks did not finish in 90 min')
     await f.tick()
     expect(f.carried()).toEqual([[4, 5], [4, 5]])
@@ -1145,6 +1153,18 @@ describe('the train\'s parts', () => {
     for (const body of ['', `built to ${sha('tip')}`, `#4 at ${head(4)}, READ-OK by Juno`, `built to ${sha('tip')}\n#4 at ${head(4).slice(0, 12)}, READ-OK by Juno`,
       `built to ${sha('tip')}\n#4 at ${head(4)}, READ-OK by Juno\n#4 at ${head(5)}, READ-OK by Juno`,
       trainBody('main', sha('tip'), Array.from({ length: 21 }, (_, i) => member(i + 1)))]) expect(trainOfBody(body), body).toBeNull()
+  })
+
+  it('says why a train closed without landing by the title it was closed with, and nothing of a title that is no train\'s', () => {
+    expect(trainEnd('Train, red: #4 #5')).toBe('red')
+    expect(trainEnd('Train, base moved: #4')).toBe('moved')
+    expect(trainEnd('Train, rider changed: #4 #5 #6')).toBe('changed')
+    expect(trainEnd('Train, out of time: #1234567890')).toBe('late')
+    // Closed for another reason, or landed, it keeps the title it was built with.
+    expect(trainEnd('Train: #4 #5')).toBe('other')
+    for (const title of ['', 'Train: ', 'Train: improve the docs', 'Train: #4 and #5', 'Train: #0', 'Train, late: #4', 'Train, red:#4', 'Trains run on time', 'A Train: #4', 'Train, red: #4 #']) {
+      expect(trainEnd(title), title).toBeNull()
+    }
   })
 
   it('splits a red train in two halves, and one of one not at all', () => {

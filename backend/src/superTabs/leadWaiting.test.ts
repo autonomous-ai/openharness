@@ -129,3 +129,41 @@ describe('a Team Swarm project chat with no Lead', () => {
     expect(f.join('h1', false).lateDeliveries).toBeUndefined()
   })
 })
+
+// anh Dee 2026-11-11: a Personal Swarm is a regular one, which its person may invite people to. Its special cases are its own
+// person's while they are alone in it, as their Desktop takes it: once someone is invited, everyone posts and is answered as in any
+// Swarm, and nothing waits for a Lead nobody starts.
+describe('a person invited to a Personal Swarm', () => {
+  const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
+  const invited = () => {
+    const f = fixture()
+    const { inviteId } = f.run({ type: 'invite.create', email: peer.email, role: 'collaborator', conversationId: f.conversationId }).result
+    f.run({ type: 'invite.accept', inviteId: inviteId as string }, peer)
+    return f
+  }
+  const post = (f: ReturnType<typeof fixture>, conversationId: string, text: string) =>
+    f.run({ type: 'message.send', conversationId, text, replyTo: null, recipientIds: [] }, peer)
+
+  it('posts in the owner\'s project channel only as in any Swarm, and nothing of theirs waits', () => {
+    const f = invited()
+    f.run({ type: 'project.sharing', projectId: f.projectId, visibility: 'public', memberIds: [] })
+    expect(refusal(() => post(f, f.conversationId, 'hello'))).toBe('AGENTS_ONLY')
+    // Their own new project's opening request is kept for its PM, as in any Swarm, and waits for no Lead.
+    const theirs = f.run({ type: 'project.create', name: 'Theirs', visibility: 'public', brief: '' }, peer).result as { projectId: string; conversationId: string }
+    post(f, theirs.conversationId, 'make it blue')
+    expect(projectsOf(f.state).find(p => p.id === theirs.projectId)!.leadWaiting).toBeUndefined()
+  })
+
+  it('makes the owner\'s Swarm one like any other: nobody claims a Lead start, and the owner\'s message waits for none', () => {
+    const f = invited()
+    const theirs = f.run({ type: 'project.create', name: 'Theirs', visibility: 'public', brief: '' }, peer).result.projectId as string
+    expect(refusal(() => f.run({ type: 'lead.claim', projectId: theirs, machineId: 'peer-mac' }, peer))).toBe('PERSONAL_SWARM_ONLY')
+    expect(refusal(() => f.claim('mac'))).toBe('PERSONAL_SWARM_ONLY')
+    // Its first message there is New project's opening request, as in any Swarm: kept for the PM, waiting for no Lead start.
+    f.send('hello')
+    expect(f.project().leadWaiting).toBeUndefined()
+    // Alone in it again, its special cases are its person's again.
+    f.run({ type: 'member.remove', userId: peer.userId })
+    expect(f.claim('mac')).toBe('start')
+  })
+})

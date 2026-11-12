@@ -269,7 +269,7 @@ Launches cannot wait on the network, so each daemon keeps a copy in its data fol
 Spawning is cheap, so runaway spawning is the risk (the Jev loops cost $60 at one caller), and every harness started
 spends the person's tokens. Every limit refuses with a clear error; nothing is dropped silently.
 
-- Live harnesses started by one harness: 4 (8 until October 12).
+- Live harnesses started by one harness: 8 (4 from October 12 to November 11; 8 before).
 - Live harnesses started by agents, per machine: 40.
 - Depth: one level. A harness another agent started may not start harnesses itself (two levels until October 12):
   `A harness another agent started may not start harnesses itself. Do the work yourself, or say in your answer what

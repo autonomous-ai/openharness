@@ -72,8 +72,16 @@ export const startNote = (name: unknown): string => {
   return shown ? `You are ${shown}.` : ''
 }
 
-/** Whether a start's folder is made in Harness's worktrees folder, whose disk then admits it (disk.ts). */
-const madeInWorktrees = (request: Json) => request.worktree === true
+/** A start that works in a folder of its own, made for it here under the worktrees folder (agentFolder.ts): a Regular agent
+ *  (backend agent.new, task #4116), which starts in no project, or one whose folder is a temporary one, a scratchpad, which Claude
+ *  Code asks about on every run and nobody answers (computer's Dee, Scholes 11-06, #3713). */
+const ownFolder = (request: Json) => request.worktree !== true
+  && (request.regular === true || (typeof request.cwd === 'string' && temporaryFolder(request.cwd)))
+/** Whether a start's folder is made under the worktrees folder, where its disk is then read: a worktree, or a folder of its own.
+ *  The folder the backend names for a Regular agent (machines.ts homeFolder) only admits it, and nothing has made it since the Buddy
+ *  went: read there, every Regular agent's first start was refused, "Project disk space could not be verified" (the rehearsal,
+ *  2026-11-11). */
+const madeInWorktrees = (request: Json) => request.worktree === true || ownFolder(request)
 
 export async function inspectCapacity(target: Daemon, request: Json) {
   const wanted = object(request.requirements)
@@ -210,12 +218,9 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
       // Engines without a full mode retain their existing approving launch flags.
       // A Swarm role is Claude Code's or Codex's alone (core/agents/launches.ts): the engines told the team's basics at launch.
       const swarmEngine = ['claude', 'codex'].includes(String(request.engine)), reviewer = request.role === 'reviewer'
-      // A start that works in the folder it names, when that folder is a temporary one: a scratchpad, which Claude Code asks
-      // about on every run and nobody answers (computer's Dee, Scholes 11-06, #3713). The agent gets a permanent folder of its
-      // own, made, marked and trusted here, and removed when it stops (agentFolder.ts, machines.ts).
-      // So does a Regular agent (backend agent.new, task #4116), which starts in no project: the backend's folder only admits it.
-      const agentFolder = request.worktree !== true && (request.regular === true || (typeof request.cwd === 'string' && temporaryFolder(request.cwd)))
-        ? agentFolderFor(projectsRoot(), startId) : null
+      // A start in a folder of its own ([ownFolder]) gets a permanent one, made, marked and trusted here, and removed when it stops
+      // (agentFolder.ts, machines.ts): the backend's folder only admits it.
+      const agentFolder = ownFolder(request) ? agentFolderFor(projectsRoot(), startId) : null
       // A folder there Harness did not make is refused, and so is the start: it never runs, or trusts, in someone else's folder.
       if (agentFolder) {
         try { await prepareAgentFolder(agentFolder, request.engine) }

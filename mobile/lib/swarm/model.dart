@@ -48,6 +48,9 @@ class SuperTabPerson {
       joinedVia = row['joinedVia'] as String?,
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
       chosenUsername = row['username'] as String?,
+      removedPanes = row['removedPanes'] is List
+          ? List.unmodifiable(row['removedPanes'] as List)
+          : const [],
       name = switch (row['name']) {
         final String name when name.trim().isNotEmpty => name,
         _ => null,
@@ -63,6 +66,7 @@ class SuperTabPerson {
       joinedVia = person.joinedVia,
       avatar = person.avatar,
       chosenUsername = person.chosenUsername,
+      removedPanes = person.removedPanes,
       name = person.name;
   final String id, email, role;
   final SuperTabAvatarPicture? avatar;
@@ -73,6 +77,10 @@ class SuperTabPerson {
 
   /// The name the server sent; null from a server without usernames.
   final String? chosenUsername;
+
+  /// The sessions this person took out of the Swarm (backend `removedPanes`, on the reader's own entry), read as the
+  /// desktop's model reads it; the phone draws nothing of it.
+  final List<Object?> removedPanes;
 
   /// The name they set for the Swarm to show ("Minh Nguyen"), before choosing
   /// one went; null when they never set one, and from an older server.
@@ -179,6 +187,7 @@ class SuperTabAgent {
       profileId = row['profileId'] as String?,
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
       downSince = DateTime.tryParse(row['downSince'] as String? ?? ''),
+      paused = row['pausedAt'] is String,
       workDecision = switch (row['workDecision']) {
         final String decision when _workDecisions.contains(decision) =>
           decision,
@@ -253,6 +262,10 @@ class SuperTabAgent {
   /// Since when its machine has reported its session gone, or its host confirmed a stop (backend machines.ts). Null
   /// while it runs.
   final DateTime? downSince;
+
+  /// Paused by its person, its machine's owner or the Swarm's owner (backend `agent.pause`, `pausedAt`), as the desktop reads
+  /// it: Harness gives it no task and types it nothing until it is resumed. False from an older backend.
+  final bool paused;
 
   /// What its project's Lead decided once its work was over (backend
   /// model.ts `workDecision`): `awaiting` a decision, kept (`keep`) for more
@@ -645,10 +658,17 @@ class SuperTabProject {
         (row['canChat'] as List? ?? const []).whereType<String>(),
       ),
       deciderId = row['decider'] is String ? row['decider'] as String : null,
+      githubRepository = row['githubRepository'] is String
+          ? row['githubRepository'] as String
+          : null,
       pmChatId = row['pmChat'] is Map
           ? superTabMap(row['pmChat'])['id'] as String?
           : null;
   final String id, name, ownerId, leadConversationId;
+
+  /// The GitHub repository (`owner/name`) its owner's Desktop set (backend `project.github`), read as the desktop's model
+  /// reads it; the phone draws nothing of it yet.
+  final String? githubRepository;
 
   /// The 1:1 chat its next PM takes, open while that PM starts (backend pmChat.ts), read as the desktop's model reads
   /// it: only its person reads it, so null for anyone else, once a PM took it, and from a backend before it.

@@ -64,6 +64,42 @@ describe('reads with their ETags kept (GitHubReads)', () => {
     expect(etags).toEqual([null, null, null])
   })
 
+  it('asks outright for a list by its pages, as many as it may, and keeps nothing of them', async () => {
+    const path = '/repos/acme/app/issues/7/comments?per_page=100', full = Array.from({ length: 100 }, (_, id) => ({ id }))
+    const asked: string[] = [], etags: Array<string | null> = []
+    const get = answering({ [path]: full, [`${path}&page=2`]: full, [`${path}&page=3`]: [{ id: 'last' }] })
+    const reads = new GitHubReads(async (url, etag) => { asked.push(url); etags.push(etag); return get(url, etag) })
+    expect(await reads.freshPages('acme/app', path, 2)).toHaveLength(200)
+    expect(await reads.freshPages('acme/app', path, 3)).toHaveLength(201)
+    expect(asked).toEqual([path, `${path}&page=2`, path, `${path}&page=2`, `${path}&page=3`])
+    expect(etags).toEqual([null, null, null, null, null])
+    // An answer that is no list stops the repository's read, as any list's does.
+    await expect(new GitHubReads(answering({ [path]: { message: 'no' } })).freshPages('acme/app', path, 3)).rejects.toMatchObject({ code: 'GH_FAILED' })
+    // A feed's 304 is still nothing new.
+    expect(await new GitHubReads(async () => ({ status: 304, etag: '"same"', body: null, resetAt: null })).changed('acme/app', path)).toEqual([])
+  })
+
+  // Review of scoreboard.ts: a list of two issues, cut off once on its way, read as empty for three passes.
+  it('fails a read whose answer did not arrive whole, and never keeps it for an empty one', async () => {
+    const path = '/repos/acme/app/issues?state=open', whole = [{ id: 1 }, { id: 2 }]
+    let cut = true
+    const etags: Array<string | null> = []
+    const reads = new GitHubReads(async (_url, etag) => {
+      etags.push(etag)
+      if (cut) return { status: 200, etag: '"list"', body: null, resetAt: null }
+      return etag === '"list"' ? { status: 304, etag: '"list"', body: null, resetAt: null } : { status: 200, etag: '"list"', body: whole, resetAt: null }
+    })
+    const failed = { code: 'GH_FAILED', message: 'GitHub\'s answer did not arrive whole.', everywhere: false }
+    for (const read of [() => reads.current('acme/app', path), () => reads.changed('acme/app', path), () => reads.one('acme/app', path), () => reads.fresh('acme/app', path),
+      () => reads.freshPages('acme/app', path, 3), () => reads.file('acme/app', 'agents/GOAL.md')]) await expect(read()).rejects.toMatchObject(failed)
+    // Nothing of it was kept: the next read asks with no ETag, and has the list.
+    cut = false
+    etags.length = 0
+    expect(await reads.current('acme/app', path)).toEqual(whole)
+    expect(await reads.current('acme/app', path)).toEqual(whole)
+    expect(etags).toEqual([null, '"list"'])
+  })
+
   it('stops one repository it cannot read and every repository while gh is signed out', async () => {
     const unreadable = new GitHubReads(async () => ({ status: 404, etag: null, body: null, resetAt: null }))
     await expect(unreadable.current('acme/secret', '/repos/acme/secret/pulls')).rejects.toMatchObject({ code: 'UNREADABLE', everywhere: false })
@@ -97,6 +133,32 @@ describe('a file of a repository (GitHubReads.file)', () => {
     now += 5 * 60_000
     await reads.file('acme/app', 'agents/First builder.md')
     expect(asked.length).toBe(before + 1)
+  })
+
+  // A pull request's task by its number (githubMerge.ts earlierPull): a number that is no issue's is GitHub's answer, a 404,
+  // or a 410 for an issue that was deleted. Read as a repository this login cannot read, it stopped every landing there.
+  it('reads an object that may not be there: nothing for a 404 or a 410, not asked for again for five minutes, and any other answer as ever', async () => {
+    let now = 0
+    const asked: string[] = []
+    const get: GitHubGet = async (path, etag) => {
+      asked.push(path)
+      const status = path.endsWith('/issues/7') ? 404 : path.endsWith('/issues/8') ? 410 : path.endsWith('/issues/9') ? 403 : etag === '"i"' ? 304 : 200
+      return { status, etag: status === 200 || status === 304 ? '"i"' : null, body: status === 200 ? { number: 3, body: 'after #2' } : null, resetAt: null }
+    }
+    const reads = new GitHubReads(get, () => now)
+    // There: its answer, and its last answer again on a 304.
+    expect(await reads.ifThere('acme/app', '/repos/acme/app/issues/3')).toEqual({ number: 3, body: 'after #2' })
+    expect(await reads.ifThere('acme/app', '/repos/acme/app/issues/3')).toEqual({ number: 3, body: 'after #2' })
+    expect(await reads.ifThere('acme/app', '/repos/acme/app/issues/7')).toBeNull()
+    expect(await reads.ifThere('acme/app', '/repos/acme/app/issues/8')).toBeNull()
+    const before = asked.length
+    expect(await reads.ifThere('acme/app', '/repos/acme/app/issues/7')).toBeNull()
+    expect(asked.length).toBe(before)
+    now += 5 * 60_000
+    expect(await reads.ifThere('acme/app', '/repos/acme/app/issues/7')).toBeNull()
+    expect(asked.length).toBe(before + 1)
+    // Refused is not missing: it stops the repository's pass, as any read.
+    await expect(reads.ifThere('acme/app', '/repos/acme/app/issues/9')).rejects.toMatchObject({ code: 'UNREADABLE', everywhere: false })
   })
 })
 
