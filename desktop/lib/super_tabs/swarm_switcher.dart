@@ -10,6 +10,7 @@ import '../widgets/desktop_chrome.dart';
 import 'count_badge.dart' show SuperTabCountBadge;
 import 'controller.dart';
 import 'section_heading.dart' show SuperTabSectionHeading;
+import 'swarm_name.dart';
 
 /// The Swarm dropdown at the top of a Swarm tab's left bar (Dee, 10-30): the
 /// Swarm the tab shows, and in its menu Personal, every other Swarm the
@@ -257,12 +258,16 @@ const kPersonalSwarmRow = kPersonalSwarmOperation;
 
 /// The Swarms a person opens from outside a Swarm (the New Tab page, a Swarm draft, ⌘K): on the Desktop, Personal first,
 /// always, then those closed on this computer, so their Personal Swarm is in reach on each of their computers without
-/// another Swarm open (anh Dee, 2026-11-11). Without [personal] (the web's host), the Swarms closed there alone.
+/// another Swarm open (anh Dee, 2026-11-11). Without [personal] (the web's host), the Swarms closed there alone. Each by
+/// [swarmShownName], in its order.
 List<({String id, String name})> swarmsToOpen(
   AppNotifier app, {
   required bool personal,
 }) {
-  final closed = app.closedSuperTabs;
+  final closed = [
+    for (final tab in app.closedSuperTabs)
+      (id: tab.id, name: swarmShownName(app, tab.id, tab.name)),
+  ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
   if (!personal || app.currentUser == null) return closed;
   final known = PersonalSwarm.of(app).id;
   return [
@@ -272,7 +277,7 @@ List<({String id, String name})> swarmsToOpen(
   ];
 }
 
-/// The Swarms the dropdown lists under Personal, by name: every Swarm the
+/// The Swarms the dropdown lists under Personal, by [swarmShownName]: every Swarm the
 /// person belongs to, open in a tab here or closed, but not Personal and not
 /// one whose read was taken away. Only Swarms the signed-in account's own
 /// list or read named: a tab left from another account lists nothing.
@@ -294,7 +299,7 @@ List<SwarmChoice> swarmChoices(AppNotifier app) {
           app.superTabs.peek(id)?.accessRevoked != true)
         (
           id: id,
-          name: name.trim().isEmpty ? 'Swarm' : name,
+          name: name.trim().isEmpty ? 'Swarm' : swarmShownName(app, id, name),
           waiting: app.superTabs.agentsAsking(id),
         ),
   ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
@@ -372,7 +377,8 @@ class _SwarmSwitcherState extends State<SwarmSwitcher> {
     // Taken away since the menu was drawn: nothing to show.
     final choice = swarmChoices(app).where((c) => c.id == id).firstOrNull;
     if (tab == null || choice == null) return;
-    app.showSuperTabIn(tab, choice.id, choice.name);
+    // The tab keeps the Swarm's own name; it is shown by [swarmShownName].
+    app.showSuperTabIn(tab, choice.id, app.superTabName(id) ?? choice.name);
   }
 
   void _pickPersonal() {
@@ -394,7 +400,11 @@ class _SwarmSwitcherState extends State<SwarmSwitcher> {
           ? kPersonalSwarmName
           : current == null
           ? 'Swarm'
-          : app.superTabName(current) ?? c.snapshot?.name ?? 'Swarm';
+          : swarmShownName(
+              app,
+              current,
+              app.superTabName(current) ?? c.snapshot?.name ?? 'Swarm',
+            );
       final choices = swarmChoices(app);
       final personalWaiting = personalId == null || isPersonal
           ? 0

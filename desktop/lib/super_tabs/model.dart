@@ -543,6 +543,7 @@ class SuperTabSnapshot {
           if (id is String) id,
       ],
       autoJoin = row['autoJoin'] == true,
+      personal = row['personal'] == true,
       chatSettings = Map.unmodifiable({
         if (row['chatSettings'] case final Map settings)
           for (final MapEntry(:key, :value) in settings.entries)
@@ -638,6 +639,9 @@ class SuperTabSnapshot {
   /// People at the owner's email domain are added automatically (head
   /// `autoJoin`, every member reads it): someone who leaves is not added back.
   final bool autoJoin;
+
+  /// It is its owner's Personal Swarm (head `personal`, every member reads it since 2026-11-12); false from an older server.
+  final bool personal;
 
   /// The reader's own notification setting by conversation (backend chatSettings.ts); a chat not listed is at
   /// [SuperTabNotify.mentions]. Never another person's.
