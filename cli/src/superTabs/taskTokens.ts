@@ -52,8 +52,9 @@ const MAX_MODELS = 16, OTHER = 'other'
 /** The agents and the rows of each that are kept, the least lately marked going first: a row stays while its work may go on,
  *  as the server takes the totals so far. */
 const MAX_AGENTS = 200, MAX_ROWS = 100
-/** Issues and pull requests one read of the server asks about (backend MAX_TASK_NUMBERS). */
-export const COST_NUMBERS = 20
+/** Issues and pull requests one read of the server asks about (backend MAX_TASK_NUMBERS), and the largest number it takes for
+ *  one (2^31 - 1, as its routes check). */
+export const COST_NUMBERS = 20, TASK_NUMBER_MAX = 2_147_483_647
 /** How long a write that has not come back may still reach the server, which keeps the last write of a row to arrive (its
  *  review: a late write with earlier totals replaces later ones). The backend call gives up at 25 seconds (core/gatewayLink.ts),
  *  and the server may still finish a write it had read by then. So a row is written again only once the server took its last
@@ -187,8 +188,10 @@ interface Kept {
 
 export class TaskTokens {
   private stopEnds: (() => void) | null = null
+  /** What is kept of each agent, by the terminal it runs in; of one whose terminal another agent took over, by
+   *  `<tabId>/<agentId>` until it is seen in another (agent). */
   private memory: Record<string, Kept> | null = null
-  /** Each agent's marks, one after another: a turn's end is counted before the look that follows it. */
+  /** Each terminal's marks, one after another: a turn's end is counted before the look that follows it. */
   private readonly queues = new Map<string, Promise<void>>()
   /** The writes the server did not take in a row, and when the next may go: 30 seconds, doubling to 15 minutes. */
   private misses = 0
@@ -221,12 +224,14 @@ export class TaskTokens {
   }
 
   /** A turn in terminal [harnessId] ended: what it used is carried until a look says what it was for. Only an agent a look
-   *  or a command has shown to be one of this person's in a project: any other terminal's turns cost nothing here. */
+   *  or a command has shown to be one of this person's in a project: any other terminal's turns cost nothing here. Nothing is
+   *  saved: its count and what it carries move together, so a daemon that stops before the next look counts the same tokens
+   *  there, from the count saved before. A turn's end is the most frequent mark, and the file holds every agent's rows. */
   ended(harnessId: string): Promise<void> {
     return this.queued(harnessId, async memory => {
       const agent = memory[harnessId]
       if (agent) add(agent.carried, await this.mark(harnessId, agent))
-      return !!agent
+      return false
     })
   }
 
@@ -284,11 +289,21 @@ export class TaskTokens {
     })
   }
 
-  /** The agent's entry, made at its first look or command. */
+  /** The agent's entry, by the terminal it runs in, made at its first look or command there. One that moved to a new terminal
+   *  (Change agent: replacements.ts, the backend's agent.rebind) takes its entry along, counted from that terminal's first
+   *  reading: left with its old terminal, its rows were stranded there and its next write took the server's totals down
+   *  (review of #4143). A terminal another agent took over starts afresh from the count it read last, and what the first
+   *  agent kept waits for it under `<tabId>/<agentId>`, which no terminal's id can be: never written as the new one's. */
   private agent(memory: Record<string, Kept>, agent: { tabId: string; agentId: string; harnessId: string }): Kept {
-    const kept = memory[agent.harnessId] ??= { tabId: agent.tabId, agentId: agent.agentId, at: this.now(), from: null, carried: {}, began: null, pulls: {}, rows: {} }
-    kept.tabId = agent.tabId
-    kept.agentId = agent.agentId
+    const theirs = (kept: Kept): boolean => kept.tabId === agent.tabId && kept.agentId === agent.agentId
+    const here: Kept | undefined = memory[agent.harnessId]
+    if (here && theirs(here)) return here
+    if (here) memory[`${here.tabId}/${here.agentId}`] = here
+    const moved = Object.keys(memory).find(id => theirs(memory[id]!))
+    const kept: Kept = moved ? { ...memory[moved]!, from: null }
+      : { tabId: agent.tabId, agentId: agent.agentId, at: this.now(), from: here?.from ?? null, carried: {}, began: null, pulls: {}, rows: {} }
+    if (moved) delete memory[moved]
+    memory[agent.harnessId] = kept
     return kept
   }
 

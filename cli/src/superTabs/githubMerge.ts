@@ -31,7 +31,7 @@ import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { GitHubReads, GitHubStop, PAGE, retryIn, Waits, waitWords } from './githubRest.js'
 import { repositorySlug, TEAM } from './githubMentions.js'
 import { GitHubTrain, TRAIN_MARK, type TrainPull } from './githubTrain.js'
-import { COST_NUMBERS, costLine, type ReadRow } from './taskTokens.js'
+import { COST_NUMBERS, costLine, TASK_NUMBER_MAX, type ReadRow } from './taskTokens.js'
 import { identifier, object, within } from './wire.js'
 
 type Json = Record<string, unknown>
@@ -693,8 +693,9 @@ export class GitHubMerge {
       this.tellOnce(repo, pull.number, pull.head, pull.author, 'dirty', `${base}: rebase it on ${base} and push.`, pull.comments)
     // What a landed change cost its builder is said on a private repository only, as GitHub's answer above says it: on a public
     // one the builder's model and what the change used of its person's subscription would be public in that person's name (anh
-    // Dee's call, 12 November). Its rows stay on the server, for the project's members, and are not asked for.
-    const cost = about.private === true ? (number: number) => this.cost(project, listed, number) : async () => ''
+    // Dee's call, 12 November). By its visibility: GitHub calls an internal repository, which its whole enterprise reads,
+    // private too (review of #4143). Its rows stay on the server, for the project's members, and are not asked for.
+    const cost = about.visibility === 'private' ? (number: number) => this.cost(project, listed, number) : async () => ''
     const train = new GitHubTrain<Ready>({ reads: this.reads, send: this.deps.send, now: this.now, log: this.log }, current, base, listed, {
       checks: (number, head) => this.checks(repo, this.see(open, `${repo}#${number}@${head}`), head),
       login: () => this.login(repo),
@@ -818,8 +819,10 @@ export class GitHubMerge {
     const pull = listed.find(one => Number(one.number) === number), author = pull ? authorOf(pull) : null
     const againAt = this.costless.get(project.repo)
     if (!pull || !author || (againAt !== undefined && this.now() < againAt)) return ''
-    // Its branch may name its own number (`pip/4` for #4): each number is asked once.
-    const rows = await within(this.deps.costs(project, [...new Set([number, ...tasksOf(pull)])].slice(0, COST_NUMBERS)), COST_WAIT_MS)
+    // Its branch may name its own number (`pip/4` for #4): each number is asked once. A number no issue can have ("Closes #0")
+    // would have the server refuse the whole read, and the repository's comments go without the sentence for COST_AGAIN_MS.
+    const numbers = [...new Set([number, ...tasksOf(pull)])].filter(task => task >= 1 && task <= TASK_NUMBER_MAX).slice(0, COST_NUMBERS)
+    const rows = await within(this.deps.costs(project, numbers), COST_WAIT_MS)
     if (!rows) {
       if (againAt === undefined) this.log(`[super-tab] a landed change's cost could not be read: it is not said · COST_UNREAD ${project.repo}`)
       this.costless.set(project.repo, this.now() + COST_AGAIN_MS)

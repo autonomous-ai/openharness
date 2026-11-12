@@ -26,8 +26,8 @@ function fakeGitHub() {
     // The tasks, as issues: #2 is the one `pull()` closes. And the status GitHub answers with for a task it does not give.
     issues: new Map<number, Json>([[2, { number: 2, body: 'Say a quote a day.' }]]), refused: new Map<number, number>(),
     state: 'clean', mergeAnswer: 200, signedOut: false, down: false, status: 0, sendFails: 0,
-    // Whether GitHub says the repository is private: a public one unless a test says.
-    private: false as boolean | undefined }
+    // Who GitHub says may see the repository: public unless a test says. An internal one, an enterprise's, is `private` too.
+    visibility: 'public' as 'public' | 'private' | 'internal' | undefined }
   const sent: Array<{ method: string; path: string; body: unknown }> = []
   /** Every read asked, and whether it carried the last answer's ETag. */
   const asked: string[] = []
@@ -42,7 +42,7 @@ function fakeGitHub() {
     if (refused) return { status: refused, etag: null, body: null, resetAt: null }
     // Each pull request here is alone and holds main's tip (`behind_by` 0), so it merges on its own; the train is githubTrain.spec.ts.
     const compared = p.split('...').at(-1)!
-    const body = p === '/repos/acme/app' ? { default_branch: 'main', private: repo.private }
+    const body = p === '/repos/acme/app' ? { default_branch: 'main', ...repo.visibility ? { private: repo.visibility !== 'public', visibility: repo.visibility } : {} }
       : p === '/repos/acme/app/pulls' && url.searchParams.get('state') === 'closed' ? []
       // A page of the list, as GitHub pages it.
       : p === '/repos/acme/app/pulls' ? repo.pulls.slice((Number(url.searchParams.get('page') ?? 1) - 1) * Number(url.searchParams.get('per_page') ?? 30),
@@ -109,7 +109,7 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
   // builder's own daemon wrote (taskTokens.ts). The same comment: nothing more is written to GitHub.
   it('says in the comment that it merged what the change cost its builder: its model, minutes, tokens and fix rounds', async () => {
     const f = setup()
-    f.github.repo.private = true
+    f.github.repo.visibility = 'private'
     const taken = f.clock.now - 39 * 60_000
     const tokens = [{ model: 'claude-sonnet-5-5', input: 1_200, output: 3_400, cacheRead: 0, cacheWrite: 0 }]
     f.costs.mockResolvedValue([{ number: 2, kind: 'build', name: 'Pip', tokens, rounds: 0, startedAt: taken, endedAt: taken + 60_000 },
@@ -123,11 +123,12 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
   })
 
   // anh Dee's call, 12 November: on a public repository the builder's model and what the change used of its person's
-  // subscription would be public in that person's name. Its rows stay on the server, for the project's members.
+  // subscription would be public in that person's name, and an internal one is read by its whole enterprise. Its rows stay on
+  // the server, for the project's members.
   it('says nothing of what a change cost on a repository GitHub does not say is private, and asks the server nothing for it', async () => {
-    for (const visibility of [false, undefined]) {
+    for (const visibility of ['public', 'internal', undefined] as const) {
       const f = setup()
-      f.github.repo.private = visibility
+      f.github.repo.visibility = visibility
       f.costs.mockResolvedValue([{ number: 4, kind: 'build', name: 'Pip', rounds: 0, startedAt: f.clock.now, endedAt: f.clock.now,
         tokens: [{ model: 'claude-sonnet-5-5', input: 9_000, output: 0, cacheRead: 0, cacheWrite: 0 }] }])
       await settle(f)
@@ -140,7 +141,7 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
 
   it('merges and says so as before when the cost cannot be read, says that once, leaves the server alone a quarter of an hour after each miss, and says once when it is read again', async () => {
     const f = setup()
-    f.github.repo.private = true
+    f.github.repo.visibility = 'private'
     /** The next pull request, alone and ready, merged at [at]: seen a pass before, its checks holding still since. */
     const mergeNext = async (number: number, at: number) => {
       f.github.repo.pulls = [pull({ number, head: { ref: `pip/${number + 100}` }, body: '' })]
@@ -180,15 +181,26 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
 
   it('asks the server about no more than twenty numbers, however many issues a pull request says it closes', async () => {
     const f = setup()
-    f.github.repo.private = true
+    f.github.repo.visibility = 'private'
     f.github.repo.pulls = [pull({ body: Array.from({ length: 30 }, (_, i) => `Closes #${100 + i}`).join('\n') })]
     await settle(f)
     expect(f.costs.mock.calls[0]![1]).toEqual([4, ...Array.from({ length: 19 }, (_, i) => 100 + i)])
   })
 
+  // The server refuses a read that asks about any number no issue can have, and a refused read leaves the sentence out of the
+  // repository's comments for a quarter of an hour (review of #4143).
+  it('asks about no number an issue cannot have, whatever a pull request\'s text says it closes, and twenty it can', async () => {
+    const f = setup()
+    f.github.repo.visibility = 'private'
+    const closes = ['Closes #0', 'Closes #12345678901', 'Closes #2147483648', 'Closes #2147483647', ...Array.from({ length: 21 }, (_, i) => `Closes #${100 + i}`)]
+    f.github.repo.pulls = [pull({ body: closes.join('\n') })]
+    await settle(f)
+    expect(f.costs.mock.calls.map(([, numbers]) => numbers)).toEqual([[4, 2_147_483_647, ...Array.from({ length: 18 }, (_, i) => 100 + i)]])
+  })
+
   it('asks about each number once, though a pull request\'s branch names its own', async () => {
     const f = setup()
-    f.github.repo.private = true
+    f.github.repo.visibility = 'private'
     f.github.repo.pulls = [pull({ head: { ref: 'pip/4' } })]
     await settle(f)
     expect(f.costs.mock.calls.map(([, numbers]) => numbers)).toEqual([[4, 2]])
@@ -198,7 +210,7 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     vi.useFakeTimers()
     try {
       const f = setup()
-      f.github.repo.private = true
+      f.github.repo.visibility = 'private'
       f.costs.mockReturnValue(new Promise<ReadRow[]>(() => {}))
       await f.merger.tick()
       f.clock.now += 3 * 60_000

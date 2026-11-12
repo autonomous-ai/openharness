@@ -347,6 +347,72 @@ describe('tokens for a task, counted on its builder\'s own computer (taskTokens.
     expect(g.rows().slice(1)).toEqual([`tab/pip acme/app#30 build ${SONNET}:1010 rounds=0`])
   })
 
+  // Change agent (replacements.ts, the backend's agent.rebind): the same Swarm agent goes on in a new terminal. Kept by its old
+  // terminal alone, its rows were left there, and its next write took the server's totals down (review of #4143).
+  it('goes on with an agent\'s rows when it moves to a new terminal, counted from that terminal\'s first reading', async () => {
+    const f = setup()
+    const MOVED = { ...PIP, harnessId: 'h-pip-2' }, AGAIN = { ...PIP, harnessId: 'h-pip-3' }
+    await f.ledger.looked(PIP, [hand(null)])
+    await f.ledger.took(PIP)
+    await f.turn(3_000)
+    await f.ledger.looked(PIP, [hand(14)])
+    // Changed while it builds #14: what the new terminal's conversation counted before its first look there is no work of its.
+    f.state.counts['h-pip-2'] = of(70_000)
+    await f.ledger.looked(MOVED, [hand(14)])
+    await f.turn(500, MOVED)
+    await f.ledger.looked(MOVED, [hand(null, { 30: 'aaa' })])
+    expect(f.rows()).toEqual([`tab/pip acme/app#14 build ${SONNET}:3000 rounds=0`, `tab/pip acme/app#30 build ${SONNET}:500 rounds=0`])
+    await f.turn(400, MOVED)
+    await f.ledger.looked(MOVED, [hand(null, { 30: 'bbb' })])
+    // Changed again once its fix is written: the next fix adds to that row.
+    f.state.counts['h-pip-3'] = of(5)
+    await f.ledger.looked(AGAIN, [hand(null, { 30: 'bbb' })])
+    await f.turn(50, AGAIN)
+    await f.ledger.looked(AGAIN, [hand(null, { 30: 'ccc' })])
+    expect(f.rows().slice(2)).toEqual([`tab/pip acme/app#30 fix ${SONNET}:400 rounds=1`, `tab/pip acme/app#30 fix ${SONNET}:450 rounds=2`])
+    // A terminal it left is no agent's: a late turn's end there counts nothing, and the agent is kept once, by its terminal now.
+    f.state.counts['h-pip'] = of(9_999_999)
+    await f.ledger.ended('h-pip')
+    await f.ledger.looked(AGAIN, [hand(null, { 30: 'ddd' })])
+    expect(f.send).toHaveBeenCalledTimes(4)
+    expect(Object.keys(JSON.parse(readFileSync(f.file, 'utf8')))).toEqual(['h-pip-3'])
+  })
+
+  // A terminal another agent takes over: what it kept is the first agent's, and goes on with it where it is seen next, never as
+  // the new one's (review of #4143).
+  it('never writes one agent\'s rows as another\'s that took its terminal over, and writes them as its own where it is seen again', async () => {
+    const f = setup()
+    const OAK = { tabId: 'tab2', agentId: 'oak', harnessId: 'h-pip' }, BACK = { ...PIP, harnessId: 'h-pip-2' }
+    await f.ledger.looked(PIP, [hand(null)])
+    await f.turn(1_000)
+    f.state.down = new SuperTabHostError('BACKEND_UNAVAILABLE', 'Could not reach this Super Tab.', 503)
+    await f.ledger.looked(PIP, [hand(null, { 30: 'aaa' })])
+    f.state.down = null
+    f.state.now += 2 * MIN
+    await f.turn(7)
+    // The same terminal, now another Swarm's agent, with a pull request of its own in another repository: what it uses from
+    // the first agent's last mark is its own.
+    f.state.counts['h-pip'] = of(1_020)
+    await f.ledger.looked(OAK, [hand(null, { 5: 'zzz' }, 'oak/site')])
+    await f.turn(20, OAK)
+    await f.ledger.looked(OAK, [hand(null, { 5: 'yyy' }, 'oak/site')])
+    expect(f.rows()).toEqual([`tab2/oak oak/site#5 fix ${SONNET}:33 rounds=1`])
+    f.state.counts['h-pip-2'] = of(0)
+    await f.ledger.looked(BACK, [hand(null, { 30: 'aaa' })])
+    expect(f.rows().slice(1)).toEqual([`tab/pip acme/app#30 build ${SONNET}:1000 rounds=0`])
+  })
+
+  // A turn's end is the most frequent mark, and the file holds every agent's rows (up to 100 each): it is not written then.
+  it('writes no file as a turn ends: a daemon that stops before the next look counts that turn there', async () => {
+    const f = setup()
+    await f.ledger.looked(PIP, [hand(14)])
+    const kept = readFileSync(f.file, 'utf8')
+    await f.turn(500)
+    expect(readFileSync(f.file, 'utf8')).toBe(kept)
+    await f.make().looked(PIP, [hand(null, { 30: 'aaa' })])
+    expect(f.rows()).toEqual([`tab/pip acme/app#30 build ${SONNET}:500 rounds=0`])
+  })
+
   it('lets go of a row the server refuses for good, says which, and writes the others', async () => {
     const f = setup()
     await f.ledger.looked(PIP, [hand(14)])
