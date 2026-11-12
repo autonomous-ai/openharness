@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { bindPullRequestCards, cleanPullRequestLinks } from './cards.js'
 import { githubRepository } from '../github/repository.js'
-import { appendPullRequestUrls, projectPullRequestUrl, pullRequestLinks, type Conversation } from './model.js'
+import { appendPullRequestUrls, projectPullRequestUrl, pullRequestLinks, type Conversation, type SuperTabState } from './model.js'
+import { groupRepositoryUrl, projectGitHub, type SwarmProject } from './projects.js'
 
 const REPO = 'https://github.com/autonomous-ai/openharness.git'
 const WRONG_OWNER = 'https://github.com/openharness/openharness/pull/1'
@@ -54,5 +55,25 @@ describe('a project\'s pull request links', () => {
     const group = { pullRequestUrls: [WRONG_OWNER] } as unknown as Conversation
     appendPullRequestUrls(group, [`See ${RIGHT} and https://github.com/autonomous-ai/other/pull/4`], REPO)
     expect(group.pullRequestUrls).toEqual([RIGHT])
+  })
+
+  // A Personal Swarm's project made from a pane's folder has no address to clone, only the GitHub repository Desktop named for it
+  // (commands.ts project.github): its links are judged by that one, as a project cloned from GitHub has its own judged.
+  it('judges by the GitHub repository a project was given when its folder has no address, and by its address first', () => {
+    const named = { id: 'p', repository: { machineId: 'm', cwd: '/x', repositoryUrl: null }, githubRepository: 'autonomous-ai/openharness' } as SwarmProject
+    expect(projectGitHub(named)).toEqual({ owner: 'autonomous-ai', name: 'openharness', fullName: 'autonomous-ai/openharness' })
+    expect(projectGitHub({ ...named, repository: undefined })?.fullName).toBe('autonomous-ai/openharness')
+    expect(projectGitHub({ ...named, repository: { machineId: 'm', cwd: '/x', repositoryUrl: 'git@github.com:Acme/App.git' } })?.fullName).toBe('Acme/App')
+    expect(projectGitHub({ ...named, githubRepository: undefined })).toBeNull()
+    const state = { projects: [named], conversations: [] } as unknown as SuperTabState
+    const group = { id: 'g', projectId: 'p', pullRequestUrls: [] } as unknown as Conversation
+    expect(groupRepositoryUrl(state, group)).toBe('https://github.com/autonomous-ai/openharness')
+    appendPullRequestUrls(group, [`${WRONG_OWNER} https://github.com/Autonomous-AI/OpenHarness/pull/1`], groupRepositoryUrl(state, group))
+    expect(group.pullRequestUrls).toEqual([RIGHT])
+    expect(groupRepositoryUrl(state, { ...group, projectId: 'gone' } as Conversation)).toBeNull()
+    const cloned = (repositoryUrl: string, githubRepository?: string) => ({ projects: [{ ...named, repository: { machineId: 'm', cwd: '/x', repositoryUrl }, githubRepository }],
+      conversations: [] }) as unknown as SuperTabState
+    expect(groupRepositoryUrl(cloned(REPO), group)).toBe(REPO)
+    expect(groupRepositoryUrl(cloned('https://gitlab.com/acme/app', 'acme/app'), group)).toBe('https://github.com/acme/app')
   })
 })

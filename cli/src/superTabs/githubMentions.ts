@@ -116,6 +116,15 @@ export function repositorySlug(url: unknown): string | null {
   return m ? `${m[1]}/${m[2]}`.toLowerCase() : null
 }
 
+/** A project's GitHub repository, as repositorySlug names it: the one its folder is cloned from, else the one its owner or PM named
+ *  (backend commands.ts project.github), the only one a Personal Swarm's project made from a pane's folder has. Every reader of a
+ *  project's repository on GitHub here goes through this (backend projects.ts projectGitHub), so such a project's PM gives tasks,
+ *  asks for reads and lands as one cloned from GitHub. Never a folder to clone from: that stays `repository.repositoryUrl`. */
+export const projectRepositorySlug = (project: unknown): string | null => {
+  const { repository, githubRepository } = object(project)
+  return repositorySlug(object(repository).repositoryUrl) ?? (typeof githubRepository === 'string' ? repositorySlug(`https://github.com/${githubRepository}`) : null)
+}
+
 /** This computer's person's v4 agents running here, from the host's roster and each agent's own read of its Swarm. */
 export async function watchedAgents(deps: { me: string | null; live: (harnessId: string) => boolean; roster: () => Promise<Json[]>
   read: (tabId: string, agentId: string) => Promise<Json> }): Promise<WatchedAgent[]> {
@@ -136,7 +145,7 @@ export async function watchedAgents(deps: { me: string | null; live: (harnessId:
       .find(c => c.kind === 'agent-chat' && Array.isArray(c.agentIds) && c.agentIds.includes(agent.id))
     // A Swarm from before projects keeps its one repository on the Swarm itself.
     const projects = Array.isArray(state.projects) ? state.projects.map(object) : state.project ? [{ repository: state.project }] : []
-    const repos = [...new Set(projects.map(p => repositorySlug(object(p.repository).repositoryUrl)).filter((s): s is string => !!s))]
+    const repos = [...new Set(projects.map(projectRepositorySlug).filter((s): s is string => !!s))]
     if (!chat || !identifier(chat.id) || !repos.length) continue
     watched.push({ tabId: row.tabId, agentId: agent.id, harnessId: agent.harnessId, chat: chat.id, names, label: builderLabel(names[0]!), repos,
       ...typeof agent.pausedAt === 'string' ? { paused: true } : {} })

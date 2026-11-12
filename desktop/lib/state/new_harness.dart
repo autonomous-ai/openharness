@@ -1478,8 +1478,9 @@ class NewHarnessController extends ChangeNotifier {
   String get _settingsEngine => _agentPreview ?? _engine;
   LocalCodexProfile? get _settingsProfile =>
       _settingsEngine == _engine ? _profile : null;
-  // A Product Manager the Swarm starts on another machine starts there with
-  // its owner's own permission settings (task #4215): no choice to offer.
+  // A Product Manager the Swarm starts on another machine starts there in
+  // Auto-approve, as every Swarm agent does (cli superTabs/start.ts): no
+  // choice to offer.
   List<PermissionMode> get _settingsModes =>
       leadThroughSwarm ? const [] : permissionModesOf(_baseOf(_settingsEngine));
   String get _settingsMode =>

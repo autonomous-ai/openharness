@@ -34,8 +34,17 @@ export interface Daemon {
   /** The machine this line reaches. */
   machineId: string
   request(type: string, payload?: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>>
+  /**
+   * Follows [agentIds] by what the daemon pushes (`agents_watch`, core/toolWatches.ts): [heard] is told the harness each
+   * state event is about. False from a daemon too old to push to tools, or one that refused the watch; the caller then
+   * looks for itself. A line a test makes may have none.
+   */
+  watch?(agentIds: string[], heard: (agentId: string) => void): Promise<boolean>
   close(): void
 }
+
+/** What the daemon pushes a watch (core/toolWatches.ts). */
+const PUSHED = new Set(['agent_activity', 'turn_ended', 'commander_question', 'commander_question_close', 'agent_deleted'])
 
 /** The least of a WebSocket this needs, so a test can hand in a fake. */
 export interface ClientSocket {
@@ -80,6 +89,7 @@ export async function openDaemon(where: Where, machineId: string = where.machine
   return new Promise((resolveOpen, rejectOpen) => {
     const waiting = new Map<string, { done: (payload: Record<string, unknown>) => void; fail: (error: Error) => void; timer: NodeJS.Timeout }>()
     let ready = false, closed = false
+    let heard: ((agentId: string) => void) | null = null
     const failAll = (error: AgentClientError): void => {
       closed = true
       for (const entry of waiting.values()) { clearTimeout(entry.timer); entry.fail(error) }
@@ -95,7 +105,7 @@ export async function openDaemon(where: Where, machineId: string = where.machine
     socket.on('open', () => socket.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1, tool: true } })))
     socket.on('message', (raw, binary) => {
       if (binary) return
-      let frame: { type?: string; payload?: Record<string, unknown> }
+      let frame: { type?: string; agentId?: unknown; payload?: Record<string, unknown> }
       try { frame = JSON.parse(raw.toString()) } catch { return }
       // The daemon refused a frame too large for it, and closes the line: what waits on it hears why, with the daemon's own numbers.
       if (frame.type === 'frame_too_large') { failAll(new AgentClientError('REQUEST_TOO_LARGE', refusedLineText(frame.payload))); return }
@@ -106,33 +116,47 @@ export async function openDaemon(where: Where, machineId: string = where.machine
       }
       if (!ready && frame.type === 'connected') {
         ready = true
+        const request: Daemon['request'] = (type, payload = {}, timeoutMs = DEFAULT_TIMEOUT_MS) => new Promise((done, fail) => {
+          if (closed) { fail(new AgentClientError('DISCONNECTED', 'The connection to Harness closed.')); return }
+          const requestId = randomUUID()
+          const text = JSON.stringify({ type, payload: { ...payload, requestId } })
+          // Past what the daemon's socket takes, said here with its size: sent, the daemon would refuse it and close the line.
+          const bytes = Buffer.byteLength(text)
+          if (bytes > LOCAL_JSON_MAX_BYTES) { fail(new AgentClientError('REQUEST_TOO_LARGE', tooLargeText(bytes))); return }
+          const timer = setTimeout(() => {
+            waiting.delete(requestId)
+            fail(new AgentClientError('TIMEOUT', `Harness did not answer ${type} in time. Try again.`))
+          }, timeoutMs)
+          waiting.set(requestId, { done, fail, timer })
+          socket.send(text)
+        })
         resolveOpen({
           machineId,
           close: () => { closed = true; socket.close() },
-          request: (type, payload = {}, timeoutMs = DEFAULT_TIMEOUT_MS) => new Promise((done, fail) => {
-            if (closed) { fail(new AgentClientError('DISCONNECTED', 'The connection to Harness closed.')); return }
-            const requestId = randomUUID()
-            const text = JSON.stringify({ type, payload: { ...payload, requestId } })
-            // Past what the daemon's socket takes, said here with its size: sent, the daemon would refuse it and close the line.
-            const bytes = Buffer.byteLength(text)
-            if (bytes > LOCAL_JSON_MAX_BYTES) { fail(new AgentClientError('REQUEST_TOO_LARGE', tooLargeText(bytes))); return }
-            const timer = setTimeout(() => {
-              waiting.delete(requestId)
-              fail(new AgentClientError('TIMEOUT', `Harness did not answer ${type} in time. Try again.`))
-            }, timeoutMs)
-            waiting.set(requestId, { done, fail, timer })
-            socket.send(text)
-          }),
+          request,
+          watch: async (agentIds, listener) => {
+            // Listening before the daemon answers: a change pushed between its answer and the caller's next look is kept.
+            heard = listener
+            const reply = await request('agents_watch', { agentIds })
+            if (reply.ok === true) return true
+            heard = null
+            return false
+          },
         })
         return
       }
       const requestId = frame.payload?.requestId
       const entry = typeof requestId === 'string' ? waiting.get(requestId) : undefined
-      if (!entry || !frame.payload) return
+      if (!entry) {
+        // A question's own requestId is the daemon's, never one of ours.
+        const agentId = frame.agentId ?? frame.payload?.agentId
+        if (heard && PUSHED.has(frame.type ?? '') && typeof agentId === 'string' && agentId) heard(agentId)
+        return
+      }
       waiting.delete(requestId as string)
       clearTimeout(entry.timer)
       // A refusal is an answer: the caller reads `error` itself, as each request's codes mean different things.
-      entry.done(frame.payload)
+      entry.done(frame.payload!)
     })
   })
 }

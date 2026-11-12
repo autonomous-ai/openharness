@@ -393,7 +393,10 @@ No core change, no new service.
   `session_get` with a `limit`, a page at a time from the end, at most four pages: never the whole transcript
   (the attach OOM, October 3). The answer is the text after the turn's last tool call.
 - **`wait`**: a round every 3 s: one live list per machine, and the screen (`inspect`) only for a harness the daemon
-  does not already call working. Done when it is idle on two looks in a row with the same last turn, and it either
+  does not already call working. Since Hachi 2 (docs/design/2026-11-12-hachi.md), a harness here is followed by what
+  the daemon pushes for the harnesses a tool names (`agents_watch`, `core/toolWatches.ts`): a round comes when one
+  changes, to confirm an idle look, or once a minute as a backstop, and every 3 s only for a cloud harness, another
+  machine's or an older daemon. Done when it is idle on two looks in a row with the same last turn, and it either
   worked while waited on or has answered (text after its last tool call). A draft in its box is not done. The history
   readers end every newest page with a `done` event whether the turn ended or not, so `done` is never read as the
   end (the review caught `wait` returning at once after a `send`). A harness with nothing asked of it two minutes

@@ -11,21 +11,25 @@ const object = (value: unknown): Json => value && typeof value === 'object' && !
 const GiB = 1024 ** 3
 
 /**
- * What a task of each size takes until finished tasks teach better (the design's Next 2): minutes of work, what it holds of
- * its machine while it runs, and the percent of a 5-hour window it spends. A weekly window is spent a fifth as fast.
+ * What a task of each size takes until finished tasks teach better (the design's Next 2): minutes of work, the memory and
+ * disk it holds of its machine while it runs, and the percent of a 5-hour window it spends. A weekly window is spent a fifth
+ * as fast.
+ *
+ * No cores. A size held 1, 2 or 4 of its machine's, a guess nothing checked when a task was taken, and one that did not keep a
+ * machine working: four agents' test runs at once, the most it let 16 cores take, all failed, each sized to the whole machine
+ * whatever its task's size (docs/research/2026-11-11-agents-share-cpu.md). A machine's cores are shared where its agents
+ * start (inCore/launch.ts), and the plan holds no task back for them.
  */
-export const SIZES: Record<'s' | 'm' | 'l', { minutes: number; cpu: number; ram: number; disk: number; spend: number }> = {
-  s: { minutes: 30, cpu: 1, ram: 2 * GiB, disk: 1 * GiB, spend: 3 },
-  m: { minutes: 90, cpu: 2, ram: 4 * GiB, disk: 2 * GiB, spend: 10 },
-  l: { minutes: 240, cpu: 4, ram: 8 * GiB, disk: 4 * GiB, spend: 25 },
+export const SIZES: Record<'s' | 'm' | 'l', { minutes: number; ram: number; disk: number; spend: number }> = {
+  s: { minutes: 30, ram: 2 * GiB, disk: 1 * GiB, spend: 3 },
+  m: { minutes: 90, ram: 4 * GiB, disk: 2 * GiB, spend: 10 },
+  l: { minutes: 240, ram: 8 * GiB, disk: 4 * GiB, spend: 25 },
 }
 /** A priority's weight in the plan: a p0 waiting a minute counts as a p2 waiting four. */
 export const WEIGHTS: Record<string, number> = { p0: 8, p1: 4, p2: 2 }
 /** The percent of each window its person keeps for their own work: Swarm work never spends it (docs/product.md, "Your
  *  computers": an agent runs on its own person's computers, under their own login). */
 export const RESERVE = 20
-/** Cores a machine is planned with when its daemon reports none (one before 0.5.86): two large tasks at once. */
-export const CORES = 8
 /** Of a machine's memory, what Swarm work may hold: its person keeps the rest. */
 export const MEMORY_SHARE = 0.75
 /** Disk its person keeps free whatever the Swarm does. */
@@ -70,6 +74,10 @@ export interface Read {
   /** Of those, the ones it builds: still its own work to do. Given or taken with no pull request yet, with a draft, or with
    *  one a reader's HOLD stands on; not one whose pull request waits for its readers or its merge. */
   building: Map<string, number>
+  /** How many tasks each builder builds in the Swarm's other projects' repositories, as read before a task was given to it
+   *  ([addElsewhere]); one not read is not in it. Each project is planned on its own PM's person's computer, and each gave the
+   *  same agent a task building (the allocator's design, package 11). */
+  elsewhere: Map<string, number>
   /** The tasks no builder holds, which this may give. */
   free: Set<string>
   /** The pull requests each free task is built on, by task: one that comes after tasks whose pull requests are up. */
@@ -125,6 +133,8 @@ const valueOf = (labels: string[], prefix: string): string | undefined =>
 /** The area a task's `part:` label names ([areaOf]), however the label spells it: `part:Backend` is the backend an agent
  *  "Works on". Compared as written, it was no area of that agent's (the allocator's design, package 5). */
 const partOf = (labels: string[]): string | undefined => { const part = valueOf(labels, 'part:'); return part === undefined ? part : areaOf(part) }
+/** The size a task's `size:` label gives it, of those Harness reads. */
+const sizeOf = (labels: string[]): 's' | 'm' | 'l' | undefined => { const size = valueOf(labels, 'size:'); return size === 's' || size === 'm' || size === 'l' ? size : undefined }
 
 /** A pull request a task is built on: its number and its branch. */
 export interface Base { pull: number; branch: string }
@@ -172,13 +182,14 @@ export function heldTasks(issues: Json[], builders: CrewBuilder[]): Map<string, 
 }
 
 /**
- * Whether Harness gives a builder a task now: it builds none, and holds fewer than [CLAIM_LIMIT] open (the allocator's design,
- * package 2). Two deep, a second task was given ahead of the one in hand, which in the design's model cost up to a fifth of a
- * heavy day; and a change waiting for its read filled its builder's list, so a builder with two in review was given nothing.
- * The plan's picks, its gate, the tasks that go back for a builder with nothing, and the PM's numbers all ask it here.
+ * Whether Harness gives a builder a task now: it builds none, here or in the Swarm's other projects (package 11), and holds
+ * fewer than [CLAIM_LIMIT] open here (the allocator's design, package 2). Two deep, a second task was given ahead of the one in
+ * hand, which in the design's model cost up to a fifth of a heavy day; and a change waiting for its read filled its builder's
+ * list, so a builder with two in review was given nothing. The plan's picks, its gate, the tasks that go back for a builder
+ * with nothing, and the PM's numbers all ask it here.
  */
-export const hasRoom = (read: { open: Map<string, number>; building: Map<string, number> }, builder: string): boolean =>
-  read.building.get(builder) === 0 && read.open.get(builder)! < CLAIM_LIMIT
+export const hasRoom = (read: { open: Map<string, number>; building: Map<string, number>; elsewhere: Map<string, number> }, builder: string): boolean =>
+  read.building.get(builder)! + (read.elsewhere.get(builder) ?? 0) === 0 && read.open.get(builder)! < CLAIM_LIMIT
 
 /** Whether a machine has what a `needs:` label asks: a tool it reports, its system, or a GPU. */
 export function machineHas(observation: Json | undefined, need: string): boolean {
@@ -260,8 +271,7 @@ export function readProblem(input: { now: number; issues: Json[]; crew: Crew; wi
     // Nobody's, with pieces cut off it still open (its builder was stopped, or gave it back): others build those, and given
     // out whole it would be built beside them. It is planned once they are closed (third review of the split).
     if (!holder && openPieces(issue)) continue
-    const sized = valueOf(labels, 'size:')
-    const size = sized === 's' || sized === 'm' || sized === 'l' ? sized : undefined
+    const size = sizeOf(labels)
     // Not sized: the PM has not made it a task yet. One a builder holds counts as a middle one.
     if (!size && !holder) continue
     // The time this project's finished tasks of the size took, once there are enough of them (learnedMinutes).
@@ -293,7 +303,7 @@ export function readProblem(input: { now: number; issues: Json[]; crew: Crew; wi
     if (on) bases.set(id, [...new Map(under.flat().map(({ pull, branch }) => [pull, { pull, branch }])).values()])
     const priority = labels.find(label => label in WEIGHTS)
     tasks.push({
-      id, minutes: shape.minutes, needs: { cpu: shape.cpu, ram: shape.ram, disk: shape.disk },
+      id, minutes: shape.minutes, needs: { cpu: 0, ram: shape.ram, disk: shape.disk },
       spend: Object.fromEntries([...windowNames].map(name => [name, everyOf(name) === 300 ? shape.spend : shape.spend / 5])),
       floor: 0, kind: 'build', part: partOf(labels), weight: priority ? WEIGHTS[priority]! : 1, ready: 0,
       deps: dependsOn(issue.body).filter(n => openNumbers.has(n)).map(n => `#${n}`),
@@ -322,12 +332,41 @@ export function readProblem(input: { now: number; issues: Json[]; crew: Crew; wi
     const memory = typeof resources.memoryTotalBytes === 'number' ? resources.memoryTotalBytes * MEMORY_SHARE : 16 * GiB
     const free = typeof resources.projectDiskFreeBytes === 'number' ? resources.projectDiskFreeBytes
       : typeof resources.diskFreeBytes === 'number' ? resources.diskFreeBytes : 60 * GiB
-    // Its cores as it reports them (a daemon since 0.5.86); an older one is planned as CORES.
-    const cores = typeof resources.cpuCores === 'number' && Number.isSafeInteger(resources.cpuCores) && resources.cpuCores > 0 ? resources.cpuCores : CORES
-    return { id, capacity: { cpu: cores, ram: memory, disk: Math.max(0, free - DISK_KEPT) } }
+    // No cores, as no task holds any (SIZES).
+    return { id, capacity: { cpu: 0, ram: memory, disk: Math.max(0, free - DISK_KEPT) } }
   })
-  return { problem: { now: 0, machines: problemMachines, accounts, builders, tasks, objective: 'weighted', switchCost: 30 }, open, building, free, bases, looped, waits,
+  return { problem: { now: 0, machines: problemMachines, accounts, builders, tasks, objective: 'weighted', switchCost: 30 }, open, building, elsewhere: new Map(), free, bases, looped, waits,
     builders: new Map(crew.builders.map(b => [b.id, b])) }
+}
+
+/**
+ * What [builder] builds in the Swarm's other projects' repositories, from [lists]: its own open issues and pull requests in each
+ * (its label on them), as GitHub lists them there. A task there is building as package 2 counts it here, but for what that list
+ * alone can show: no open pull request of its that GitHub says is not a draft names it ("Closes #N"). Its verdicts there are not
+ * read, so a reader's HOLD there counts as in review, as failed checks do here. With the minutes those tasks keep it busy, as
+ * they would here: half a task's size once taken, its whole size while only given. What waits there for its read or its merge
+ * counts for nothing: a builder's four open are each project's own, as a project whose merger is off would otherwise cap its
+ * builders in every other (review of #4144).
+ */
+export function buildingIn(lists: Json[][], builder: CrewBuilder): { tasks: number; minutes: number } {
+  let tasks = 0, minutes = 0
+  for (const listed of lists) {
+    const up = new Set(listed.filter(item => item.pull_request && item.draft === false && labelsOf(item).includes(builder.label)).flatMap(tasksOf))
+    const items = new Map(listed.map(item => [Number(item.number), item]))
+    for (const number of heldTasks(listed, [builder]).get(builder.id)!.filter(task => !up.has(task))) {
+      const labels = labelsOf(items.get(number)!)
+      tasks++
+      minutes += Math.ceil(SIZES[sizeOf(labels) ?? 'm'].minutes / (labels.includes('status:taken') ? 2 : 1))
+    }
+  }
+  return { tasks, minutes }
+}
+
+/** Counts in [read] what [builder] builds elsewhere ([found], buildingIn): against its room here ([hasRoom]), and as its busy
+ *  time in the plan (the allocator's design, package 11). */
+export function addElsewhere(read: Read, builder: string, found: { tasks: number; minutes: number }): void {
+  read.elsewhere.set(builder, found.tasks)
+  read.problem.builders.find(b => b.id === builder)!.busyUntil += found.minutes
 }
 
 /**

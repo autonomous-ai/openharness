@@ -10,7 +10,7 @@
  */
 import { readdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { AGENT_SETTING_EXPERIMENTS, agentSettingsFromAnswer, ownsAgentSettings, readAgentSettings, saveAgentSettings, type AgentSettings } from '../lib/agentSettings.js'
+import { AGENT_SETTING_EXPERIMENTS, AGENT_SETTING_NAMES, agentSettingsFromAnswer, ownsAgentSettings, readAgentSettings, saveAgentSettings, type AgentSettings } from '../lib/agentSettings.js'
 import type { AuthSession } from '../lib/authSession.js'
 import type { BackendNotice } from './api.js'
 
@@ -58,6 +58,7 @@ type Answer = { status: number; body: Record<string, unknown> }
 
 /** What `harness settings` and an older window's Settings ▸ Agents are told while this computer is signed out. */
 export const AGENT_SETTINGS_SIGNED_OUT = 'Sign in to Harness to change this: what agents may do is an experiment of your account (Settings ▸ Experimental).'
+const GRANTABLE: ReadonlySet<string> = new Set(Object.values(AGENT_SETTING_NAMES))
 const ACCOUNT_UNAVAILABLE = 'Harness could not reach your account to change this. Try again in a moment.'
 
 /**
@@ -168,8 +169,10 @@ export function createAgentSettingsSync(deps: {
      * Agents, written through to the account's experiments. Signed out there is no account to write to.
      */
     async settingsWrite(body: unknown): Promise<Answer> {
+      // Only the settings `harness settings` names: Hachi's switch is the person's yes, given in Settings ▸ Experimental
+      // alone (docs/design/2026-11-12-hachi.md), so no agent turns it through here.
       const changes = body && typeof body === 'object'
-        ? Object.entries(body as Record<string, unknown>).filter(([key, value]) => key in AGENT_SETTING_EXPERIMENTS && typeof value === 'boolean')
+        ? Object.entries(body as Record<string, unknown>).filter(([key, value]) => GRANTABLE.has(key) && typeof value === 'boolean')
         : []
       if (!changes.length) return { status: 400, body: { error: { code: 'BAD_REQUEST', message: 'Nothing to change: send {"agentsStartAgents": true|false}, {"pullRequestLine": true|false}, {"agentMessages": true|false}, {"agentMessagesHideSummary": true|false}, {"agentsTellAgents": true|false} or {"programsReply": true|false}.' } } }
       const asked = deps.session()

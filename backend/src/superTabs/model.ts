@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { githubRepository } from '../github/repository.js'
 import { cloneData } from './cloneData.js'
 import { autoJoinOn } from './autoJoinDomain.js'
+import { isPersonalSwarm } from './deletion.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { personView } from './profile.js'
 import { removedPanesFor } from './removedPanes.js'
@@ -475,7 +476,8 @@ export interface SuperTabState {
    *  gets it (visibleState). */
   deletedProjects?: Array<{ id: string; at: number }>
   /** Its owner's Personal Swarm (deletion.ts isPersonalSwarm): set on every one made since 2026-11-12, as one made after its
-   *  person's last was deleted has an id of its own (store.ts create). Read by the server alone: a list marks the reader's own. */
+   *  person's last was deleted has an id of its own (store.ts create). Every member's read says it (visibleState); a list marks
+   *  the reader's own as `personal` and every one as `personalSwarm`. */
   personal?: true
   /** Conversations of a kind a later release added, set aside unchanged by a release that does not know it (parkLaterConversations). */
   parkedConversations?: Conversation[]
@@ -796,6 +798,9 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
     delete start.request.handoffChangeId
   }
   if (autoJoinOn(state)) visible.autoJoin = true
+  // Every reader is told it is its owner's Personal Swarm, its own mark or one made before the mark (anh Dee, 2026-11-12:
+  // someone invited sees another person's as theirs, "Dee's Swarm").
+  if (isPersonalSwarm(state)) (visible as SuperTabState).personal = true
   // A machine taken out says who owned it: a reader gets the ids of their own, which is all their sync asks.
   const ownRemoved = actor.kind === 'person' ? (visible.removedMachines ?? []).filter(r => r.contributorId === actor.userId).map(r => r.machineId) : []
   if (ownRemoved.length) (visible as { removedMachines?: unknown }).removedMachines = ownRemoved

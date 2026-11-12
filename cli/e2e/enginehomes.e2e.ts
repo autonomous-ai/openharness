@@ -16,6 +16,7 @@ import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
 import { assertHooksContained, CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { sharedCodex } from './harness/sharedCodex.js'
+import { Store } from '../src/lib/connectors/store.js'
 
 type Engine = 'claude' | 'codex'
 type Row = Record<string, any>
@@ -683,4 +684,30 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     expect(readFileSync(config, 'utf8')).toContain(engine === 'claude' ? JSON.stringify(folder) : `[projects.${JSON.stringify(folder)}]`)
     client.close()
   }, 300_000)
+
+  // The connections an agent on a profile home reads are written there by connected services in the edge host
+  // (core/connectorsLink.ts), not by the core; when that fails the agent starts with the config as it was.
+  it.each([
+    ['gets the connections there from the edge host', ''],
+    ['starts all the same when they cannot be written', 'connectors.syncProfileHome'],
+  ])('an agent on a Claude profile %s', async (_, faults) => {
+    const d = await IsolatedDaemon.create({ env: { HARNESS_CONNECTIONS_PORT: '0', ...(faults ? { HARNESSD_TEST_FAULTS: faults } : {}) } })
+    daemon = d
+    onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
+    // A connection made in Connections, and a Claude profile Claude Code has run in.
+    const vault = new Store(join(d.env.HOME!, '.harness', 'connections'))
+    mkdirSync(vault.root, { recursive: true, mode: 0o700 })
+    vault.save('linear', { access_token: 'e2e-not-a-credential', source: 'dcr', mcp_entry: { url: 'https://mcp.linear.example/mcp', headers: {} } })
+    const profile = join(d.env.HOME!, '.claude-work')
+    mkdirSync(profile)
+    writeFileSync(join(profile, '.claude.json'), '{}')
+    await d.start()
+    const client = await LocalClient.connect(d)
+    const created = await client.request('agent_create', { engine: 'claude', cwd: d.projectsDir, bypassPermission: true, claudeHome: profile }, 90_000)
+    expect(created.error, JSON.stringify(created)).toBeUndefined()
+    const servers = JSON.parse(readFileSync(join(profile, '.claude.json'), 'utf8')).mcpServers
+    if (faults) expect(servers).toBeUndefined()
+    else expect(Object.keys(servers)).toEqual(['linear'])
+    client.close()
+  }, 120_000)
 })

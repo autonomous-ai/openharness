@@ -532,9 +532,21 @@ class SwarmConversation extends ChangeNotifier
     return refused == null;
   }
 
-  /// The person may post here: a writer of the Swarm, in a conversation that
-  /// is not archived, nor an older Buddy chat kept to read.
-  bool get canPost {
+  /// The person may post here: a writer ([writes]) in a chat people write
+  /// in, not one where only agents post ([agentsOnly]).
+  bool get canPost => writes && !agentsOnly;
+
+  /// A project's channel, where only agents post (Swarm v4, anh Dee
+  /// 2026-11-08): people read it and talk to their own agents, each in a chat
+  /// of its own. The backend refuses a person's post or edit there
+  /// (commands.ts `postable`, AGENTS_ONLY); Desktop's composer follows the
+  /// same rule (view.dart `_agentsOnly`).
+  bool get agentsOnly => reader.snapshot?.isProjectLead(id) ?? false;
+
+  /// A writer of the Swarm, in a conversation that is not archived, nor an
+  /// older Buddy chat kept to read. Their own message may go even where only
+  /// agents post: the backend takes a delete there ([mayDelete]).
+  bool get writes {
     final snapshot = reader.snapshot;
     final group = conversation;
     if (snapshot == null ||
@@ -1130,7 +1142,7 @@ class SwarmConversation extends ChangeNotifier
   /// Buddy proposals are delete-only, for the attributed person whose id
   /// also matches their source. The backend independently authorizes this.
   bool mayDelete(SuperTabMessage message) =>
-      canPost &&
+      writes &&
       message.author['kind'] == 'person' &&
       message.authorId == reader.accountId &&
       (message.source.isEmpty ||
@@ -1172,7 +1184,10 @@ class SwarmConversation extends ChangeNotifier
     Map<String, dynamic> command,
     String failed,
   ) async {
-    if (_disposed || !mayChange(message)) return failed;
+    final may = command['type'] == 'message.delete'
+        ? mayDelete(message)
+        : mayChange(message);
+    if (_disposed || !may) return failed;
     final epoch = _epoch;
     SuperTabMessage? shown() =>
         messages.where((m) => m.id == message.id).firstOrNull;
@@ -1261,6 +1276,8 @@ class SwarmConversation extends ChangeNotifier
   /// (the desktop's `_resolveDelivery`): `resend` sends it again, `received`
   /// says it arrived. Then the message and what the backend wrote are read
   /// again; a refusal says why in [error]. True once the backend took it.
+  /// A writer's answer, not a post: the backend takes it where only agents
+  /// post too (commands.ts `delivery.resolve`).
   Future<bool> resolveDelivery(
     SuperTabMessage message,
     SuperTabDelivery delivery,
@@ -1268,7 +1285,7 @@ class SwarmConversation extends ChangeNotifier
   ) async {
     final deliveryId = delivery.id;
     if (_disposed ||
-        !canPost ||
+        !writes ||
         _resolving != null ||
         deliveryId == null ||
         delivery.status != 'uncertain' ||
@@ -1661,6 +1678,15 @@ class _Changes extends ChangeNotifier {
 const swarmMentionedAgentLeft =
     'A mentioned agent is no longer in this conversation. '
     'Remove its mention or choose another agent.';
+
+/// What a chat where only agents post ([SwarmConversation.agentsOnly]) shows
+/// in its composer's place, in the desktop's words (`view.dart`).
+const swarmAgentsOnlyLine =
+    'Only agents post here. To change what happens, talk to your agents.';
+
+/// What a project's channel nobody has posted in says, in the desktop's words
+/// (`channel_talk.dart` `superTabEmptyChannel`).
+const swarmEmptyChannel = 'No posts yet. Agents talk to each other here.';
 
 /// The @ of a box — the chat's composer, a thread's reply box
 /// ([SwarmThread]): the name typed after an @, and the agents and people

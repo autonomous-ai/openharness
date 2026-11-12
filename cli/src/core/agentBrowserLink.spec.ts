@@ -111,6 +111,25 @@ describe('the agent browser in its own process, as the core sees it', () => {
     expect(link.port.streamCommand('a1')).toEqual({ error: 'NO_BROWSER' })
   })
 
+  // Out of its process, a stop sent the windows nothing: the Browser panel kept the browser's last state, ready or
+  // starting, until something else about the agent changed (CLI 0.6.40, 2026-11-12).
+  it('a stop, a delete and a move send the agent\'s frame again, without its browser', async () => {
+    const { link, sync } = setup([row('a1'), row('a2'), row('a3')])
+    for (const agentId of ['a1', 'a2', 'a3']) {
+      link.port.attached(row(agentId))
+      await link.answer('browser_state', { agentId, state: { state: 'ready' } })
+    }
+    sync.mockClear()
+    link.port.stopped('a1')
+    link.port.deleted('a2')
+    link.port.moved('a3', row('b1'), true)
+    expect(sync.mock.calls).toEqual([[row('a1')], [row('a2')], [row('a3')]])
+    for (const agentId of ['a1', 'a2', 'a3']) expect(link.port.frameContext(agentId)).toBeUndefined()
+    // An agent the registry no longer has gets no frame.
+    link.port.stopped('gone')
+    expect(sync).toHaveBeenCalledTimes(3)
+  })
+
   it('a stop and a delete close the browser\'s viewers at once', () => {
     const { link } = setup()
     const closed: string[] = []

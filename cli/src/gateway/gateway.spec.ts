@@ -411,6 +411,59 @@ describe('ui gate', () => {
   })
 })
 
+describe('harness_watch: another machine following harnesses here', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+  const noUi = (socket: BackendSocket) => dispatchDown(socket, { type: '__clients', payload: { ui: 0, commander: 0, commanderActive: 0, uiGate: true } }, '')
+  const broadcastTypes = (socket: BackendSocket) => upstreamOf(socket).queue
+    .filter((item) => !(item.msg as { targetConnId?: string }).targetConnId).map((item) => (item.msg as { frame: Frame }).frame.type)
+
+  it('answers sealed to the asker, then seals each change to it alone while the viewer gate holds every live event', async () => {
+    const socket = relaySocket(MACHINE), gateway = gatewayOf(socket)
+    // The relay's link is up: a push to one connection is sent only while it is.
+    vi.spyOn(gateway, 'connected').mockReturnValue(true)
+    gateway.broadcast({ type: 'agent_synced', payload: { agent: { id: 'a1', status: 'active', activity: { state: 'idle' } } } })
+    const home = await pairedClient(socket, 'home', { machineId: 'b2'.repeat(16) })
+    await pairedClient(socket, 'phone')
+    await vi.advanceTimersByTimeAsync(UI_QUIET_MS)
+    await noUi(socket)
+    await dispatchDown(socket, home.seal('harness_watch', { requestId: 'w', agentIds: ['a1'] }), 'home')
+    const [answer] = queuedFor(socket, 'home').filter((frame) => frame.type === 'harness_watch_result')
+    expect(home.open(answer)).toEqual({ requestId: 'w', leaseMs: 300_000, renewMs: 240_000, agents: [{ agentId: 'a1', state: 'idle' }] })
+
+    upstreamOf(socket).queue.length = 0
+    gateway.broadcast({ type: 'turn_heartbeat', agentId: 'a1', payload: { activity: { state: 'working' } } })
+    gateway.broadcast({ type: 'text_delta', agentId: 'a1', payload: { content: 'PRIVATE_CANARY' } })
+    // The watch is no app viewing: the live events stay held, its asking included.
+    expect(broadcastTypes(socket)).toEqual([])
+    const told = queuedFor(socket, 'home')
+    expect(told.map((frame) => frame.type)).toEqual(['harness_event'])
+    expect(JSON.stringify(told)).not.toContain('a1')
+    expect(home.open(told[0])).toEqual({ agentId: 'a1', state: 'working' })
+    expect(queuedFor(socket, 'phone')).toEqual([])
+    await socket.stop()
+  })
+
+  it('is refused to a guest and a device, and ends with the asker\'s connection', async () => {
+    const socket = relaySocket(MACHINE), gateway = gatewayOf(socket)
+    const colleague = await pairedClient(socket, 'colleague', { shared: true })
+    const dial = await pairedClient(socket, 'dial', { role: 'device' })
+    for (const [client, connId] of [[colleague, 'colleague'], [dial, 'dial']] as const) {
+      await dispatchDown(socket, client.seal('harness_watch', { requestId: 'w', agentIds: ['a1'] }), connId)
+      const [refused] = queuedFor(socket, connId).filter((frame) => frame.type === 'harness_watch_result')
+      expect(client.open(refused)).toEqual({ requestId: 'w', error: 'NOT_ALLOWED' })
+    }
+    vi.spyOn(gateway, 'connected').mockReturnValue(true)
+    const home = await pairedClient(socket, 'home')
+    await dispatchDown(socket, home.seal('harness_watch', { requestId: 'w', agentIds: ['a1'] }), 'home')
+    await dispatchDown(socket, { type: '__client_disconnected', payload: {} }, 'home')
+    upstreamOf(socket).queue.length = 0
+    gateway.broadcast({ type: 'turn_heartbeat', agentId: 'a1', payload: { activity: { state: 'working' } } })
+    expect(queuedFor(socket, 'home')).toEqual([])
+    await socket.stop()
+  })
+})
+
 describe('the trust edges the split made visible', () => {
   it('a process on this computer cannot send the backend hub\'s own frames: it once could set how many devices watch', async () => {
     const socket = relaySocket(MACHINE)

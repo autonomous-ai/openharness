@@ -69,8 +69,8 @@ jobs:
           cache-dependency-path: cli/package-lock.json
       - name: Install tmux, the shells the tests launch through, and lsof
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends tmux zsh tcsh dash lsof
+          # Through a mirror outage: one DNS outage failed every shard here before any test ran (#4186).
+          sudo bash ../scripts/apt-install.sh tmux zsh tcsh dash lsof
           # Every daemon watches its data folder and the engines' transcript folders, and a file
           # starts dozens of daemons one after another; the runner's default instance limit is 128.
           sudo sysctl -w fs.inotify.max_user_instances=1024 fs.inotify.max_user_watches=524288
@@ -93,7 +93,7 @@ jobs:
       # behind tests whose fake backend still answered the old way.
       - name: Set up the real backend and its in-memory Mongo and Redis
         run: |
-          sudo apt-get install -y -q --no-install-recommends redis-server
+          sudo bash ../scripts/apt-install.sh redis-server
           (cd ../backend && npm ci --no-audit --no-fund)
           mkdir -p "$RUNNER_TEMP/test-services" && cd "$RUNNER_TEMP/test-services"
           echo '{"name":"test-services","private":true}' > package.json
@@ -229,10 +229,9 @@ jobs:
           cache-dependency-path: cli/package-lock.json
       - name: Install tmux and zsh, and record Podman
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends tmux zsh lsof
+          sudo bash ../scripts/apt-install.sh tmux zsh lsof
           # The runner image ships Podman; installed only if a future image does not.
-          command -v podman || sudo apt-get install -y -q --no-install-recommends podman
+          command -v podman || sudo bash ../scripts/apt-install.sh podman
           # As in the shards: zsh's compinit stops every agent's pane at a question while a
           # completion folder is writable by others.
           insecure=$(zsh -fc 'autoload -U compaudit && compaudit' 2>/dev/null | grep '^/' | sort -u || true)

@@ -453,6 +453,28 @@ describe('a turn, delivered and said so', () => {
     expect(router.lastRouted()?.agentId).toBe('ghost')
   })
 
+  // #3691: B killed, its list timed out and dropped it off the carousel in the same moment, and from then a turn for its
+  // agent was no longer refused: the agent was in no list, read as this computer's, and went to this computer's door.
+  it('refuses a turn for an agent whose machine dropped off the carousel, never handing it to this computer', async () => {
+    const fleet = fleetOf([REMOTE], { other: [{ id: 'r1', name: 'api' }] })
+    const local = localOf()
+    const router = new FleetRouter(local, fleet)
+    await settled(router)
+    ;(fleet.listAgents as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('agents_list timed out'))
+    fleet.reachable = () => ({ ok: false, at: Date.now() })
+    const now = Date.now()
+    vi.spyOn(Date, 'now').mockReturnValue(now + 60_000)
+    await settled(router)
+    expect(await router.listAgentsFlat()).toEqual([])
+    expect(router.sendTurn('r1', 'while it is away')).toEqual({ ok: false, machine: 'office-imac', reason: 'the last request to it did not come back' })
+    expect(local.sendTurn).not.toHaveBeenCalled()
+    // It answers again: the turn goes to it, and still never to this computer.
+    fleet.reachable = () => ({ ok: true, at: Date.now() })
+    expect(router.sendTurn('r1', 'it is back')).toEqual({ ok: true })
+    expect(fleet.sendTurn).toHaveBeenLastCalledWith('other', 'r1', 'it is back')
+    expect(local.sendTurn).not.toHaveBeenCalled()
+  })
+
   it('is refused for a machine whose last request did not come back, and never for one never asked', async () => {
     const fleet = fleetOf([REMOTE], { other: [{ id: 'r1', name: 'api' }] })
     const log = vi.fn()

@@ -340,8 +340,12 @@ void main() {
     );
     await tap(tester, 'swarm-browser-button');
     expect(find.text('Podman is not running'), findsOneWidget);
-    await tap(tester, 'swarm-browser-stop');
+    // Its spinner turns until the machine says the browser is off.
+    await tester.tap(key('swarm-browser-stop'));
+    await tester.pump();
+    await tester.pump();
     expect(app.asked, ['stop host/session-second']);
+    expect(find.text('Stopping browser…'), findsOneWidget);
     await frame(tester, app, null);
     expect(find.text('Podman is not running'), findsNothing);
     expect(find.text(off), findsOneWidget);

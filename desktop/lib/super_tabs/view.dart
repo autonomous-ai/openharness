@@ -3291,6 +3291,7 @@ class _SuperTabViewState extends State<SuperTabView>
       group,
       c.snapshot?.projectById(opened.id) ?? opened,
     ),
+    app: widget.app,
     rowHeight: _phone ? kFingerTarget : 32,
   );
 

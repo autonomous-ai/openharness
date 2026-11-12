@@ -124,11 +124,13 @@ void main() {
   };
 
   /// One Swarm whose chat g1 reads [page] as its latest messages, with the
-  /// lines of [threads]; [members] are who is in it, the reader an owner.
+  /// lines of [threads]; [members] are who is in it, the reader an owner. g1
+  /// is its project's channel if [channel].
   FakeSwarm backend(
     List<Map<String, dynamic>> page, {
     List<Map<String, dynamic>> threads = const [],
     List<Map<String, dynamic>>? members,
+    bool channel = false,
   }) {
     final fake = FakeSwarm();
     fake.routes['/api/super-tabs/list'] = (_) => {
@@ -139,6 +141,7 @@ void main() {
     };
     fake.routes['/api/super-tabs/$tab/parts'] = (_) => {
       ...firstLoad(
+        head: channel ? channelHead('g1') : null,
         groups: [
           groupData(
             'g1',
@@ -296,6 +299,31 @@ void main() {
       expect(delete, findsOneWidget);
       expect(edit, findsNothing);
       expect(find.text('Ship the parser today.'), findsNothing);
+    });
+
+    // Swarm v4: only agents post in a project's channel. The backend refuses
+    // an edit there as it does a post, and takes a delete (commands.ts
+    // `message.edit`, `message.delete`).
+    testWidgets('in a project\'s channel, your own message keeps Delete '
+        'message, never Edit, and Delete goes', (tester) async {
+      final fake = backend([
+        message('m1', 1, text: 'Before', author: 'agent-builder'),
+        message('m2', 2, text: 'Plan'),
+      ], channel: true);
+      await pump(tester, fake);
+
+      await tester.longPress(find.text('Plan'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-copy-link'), findsOneWidget);
+      expect(edit, findsNothing);
+      await tester.tap(delete);
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+      await tester.pumpAndSettle();
+
+      expect(fake.commands, [
+        {'type': 'message.delete', 'conversationId': 'g1', 'messageId': 'm2'},
+      ]);
     });
 
     testWidgets('never for a person who may not write here', (tester) async {

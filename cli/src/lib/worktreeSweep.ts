@@ -1,76 +1,37 @@
+/**
+ * Removing one worktree Harness made, by the rule the Swarm's host asks it for (superTabs/machines.ts
+ * `removeStoppedWorktree`): no session in it, nothing uncommitted, untouched for [idleMs] and, on no branch, no commit only it
+ * has. The branch stays, unless Harness made it and its commits are all on other branches or the remote. Anything that does
+ * not pass is left exactly as it is. Nothing sweeps the worktrees folder on a timer any more (#4166, #711): that removed clean,
+ * week-idle worktrees their person chose to keep, gitignored files and all.
+ */
 import { execFile } from 'node:child_process'
 import { constants, type Dirent } from 'node:fs'
-import { access, lstat, mkdir, readdir, readFile, rmdir, stat, writeFile } from 'node:fs/promises'
-import { basename, dirname, join, normalize, relative, resolve, sep } from 'node:path'
+import { access, lstat, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { basename, dirname, join, relative, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { inRepositoryTurn } from './gitProject.js'
 import { upgradeOlderRuntimeIgnore } from './harnessRuntimeIgnore.js'
 
 const exec = promisify(execFile)
 
-/** A week without a commit, a checkout or an index write. */
-export const WORKTREE_IDLE_MS = 7 * 24 * 3600_000
-
-/** git as itself: none of the repository settings a parent process left in the environment. */
+/**
+ * git as itself: none of the repository settings a parent process left in the environment, and not the three repository
+ * settings below that ran a program or hid new files from the checks here (a filter driver its config names still runs on a
+ * status). `core.fsmonitor` names a program git runs on a status, which lib/gitProject.ts turns off too; a hook runs as a
+ * branch goes, which lib/worktreeDeletion.ts turns off too; and with `status.showUntrackedFiles=no` a worktree holding new
+ * files read as clean, to `git status` and to `git worktree remove`, which asks git the same, so it was removed, new files
+ * and all (review of the allocator's package 6, 12 November). A `-c` reaches the git that git itself starts.
+ */
 export async function git(cwd: string, args: string[]): Promise<string> {
   const env = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' }
   for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE']) delete (env as NodeJS.ProcessEnv)[key]
-  return (await exec('git', ['-C', cwd, ...args], { timeout: 30_000, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024, env }))
+  const guarded = ['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'status.showUntrackedFiles=normal']
+  return (await exec('git', [...guarded, '-C', cwd, ...args], { timeout: 30_000, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024, env }))
     .stdout.replace(/\r?\n$/, '')
 }
 
-async function isLinkedCheckout(path: string): Promise<boolean> {
-  try {
-    const [folder, marker] = await Promise.all([lstat(path), lstat(join(path, '.git'))])
-    return folder.isDirectory() && marker.isFile()
-  } catch { return false }
-}
-
-/** Checkouts in Harness's worktrees folder: `<repo>/<name>`, and the flat `<name>` older builds made. */
-async function candidates(home: string): Promise<string[]> {
-  let entries: string[]
-  try { entries = await readdir(home) } catch { return [] }
-  const found: string[] = []
-  for (const entry of entries.filter(name => !name.startsWith('.'))) {
-    const path = join(home, entry)
-    if (await isLinkedCheckout(path)) { found.push(path); continue }
-    let children: string[] = []
-    try { if ((await lstat(path)).isDirectory()) children = await readdir(path) } catch { continue }
-    for (const child of children.filter(name => !name.startsWith('.'))) {
-      if (await isLinkedCheckout(join(path, child))) found.push(join(path, child))
-    }
-  }
-  return found
-}
-
-/**
- * Removes the worktrees Harness made that nothing uses and nothing would miss: under
- * `<root>/worktrees`, no live or stopped harness working in it (a stopped one can be resumed there),
- * nothing uncommitted, untouched for [idleMs], and — on no branch — no commit only it has. The
- * branch stays, unless Harness made it and its commits are all on other branches or the remote. Anything that does not pass is left exactly as it is.
- */
-export async function sweepWorktrees(input: {
-  root: string
-  inUse: Iterable<string | null | undefined>
-  now?: number
-  idleMs?: number
-}): Promise<string[]> {
-  const home = join(input.root, 'worktrees')
-  const used = [...input.inUse].filter((cwd): cwd is string => typeof cwd === 'string' && cwd.length > 0).map(cwd => normalize(cwd))
-  const removed: string[] = []
-  for (const path of await candidates(home)) {
-    if (used.some(cwd => cwd === path || cwd.startsWith(path + sep))) continue
-    try {
-      if (!await sweepOne(path, input.now ?? Date.now(), input.idleMs ?? WORKTREE_IDLE_MS)) continue
-      removed.push(path)
-      // The repository's folder goes with its last worktree; the worktrees folder itself stays.
-      if (dirname(path) !== home) await rmdir(dirname(path)).catch(() => {})
-    } catch { /* left as it is */ }
-  }
-  return removed
-}
-
-/** Why a worktree that passed every check above was kept anyway, by a fixed code: an error's own text can carry its path.
+/** Why a worktree that passed every check was kept anyway, by a fixed code: an error's own text can carry its path.
  *  UNWRITABLE: a folder in it git could not empty, so nothing was touched. NOT_REMOVED: git began and failed; whatever is
  *  left keeps its record, so git still works there. */
 export class WorktreeKept extends Error {

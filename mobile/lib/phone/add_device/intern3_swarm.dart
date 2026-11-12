@@ -5,12 +5,17 @@ import 'package:flutter/foundation.dart';
 import '../../swarm/swarm_buddy.dart';
 import '../../swarm/swarm_home_top.dart' show swarmHomeOffers;
 import '../../swarm/swarm_inbox.dart';
-import '../../swarm/swarm_lead_start.dart'
-    show swarmPersonalName, swarmPersonalOperation;
 import '../../swarm/swarm_reader.dart';
 import '../../swarm/swarm_request.dart';
 import '../../swarm/swarm_session.dart';
 import '../../swarm/swarm_start.dart';
+
+/// The name Desktop gives the person's Personal Swarm (`kPersonalSwarmName`).
+const swarmPersonalName = 'Personal';
+
+/// The request id Desktop creates the Personal Swarm with (`kPersonalSwarmOperation`): the server derives the Swarm's id
+/// from the account and it (backend superTabs/store.ts `create`), so whichever app asks first, a person has one.
+const swarmPersonalOperation = 'personal-swarm';
 
 /// What Start does after Set up Intern 3, with Swarm on, in order.
 enum Intern3SwarmStep {

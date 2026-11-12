@@ -191,6 +191,8 @@ const EDGE: RegExp[] = [
   // Linking a Claude Code profile and what a reported profile id stands for are models' and usage's: the core checks a
   // launch's Claude home against the listing alone (lib/claudeHomes.ts, #4147).
   /^lib\/claudeProfiles\.ts$/,
+  // Codex's fork of a conversation for its new provider, a retarget's, runs in its worker (#4145).
+  /^engines\/(providerMoves|codex\/providerMove)\.ts$/,
   // Their launch specifics are declared data too (launch.ts): Codex's startup probe and retry and its own-login
   // provider are the kit's, in core, and never a worker's (docs/design/2026-10-08-engine-launch.md).
   /^engines\/codex\/ownLoginProvider\.ts$/, /^lib\/codexStartupRetry\.ts$/,
@@ -223,6 +225,9 @@ const EDGE: RegExp[] = [
   /^lib\/(gridLaunch|gridWebMcp|apiModels|gridAssignment|apiConnections)\.ts$/,
   // The change-agent handoff reads and redacts history and runs git: the edge host owns that work.
   /^lib\/agentHandoff\.ts$/,
+  // Codex's profiles and their discovery: a launch on a profile home has its connections written by the connectors
+  // service (ConnectorsPort.syncProfileHome), and the profiles' lists are models' and usage's.
+  /^lib\/(codexProfiles|codexProfileDiscovery)\.ts$/,
   // Usage owns all aggregate readers and ledgers. Core reads validated wire snapshots only.
   /^lib\/(agentTokenUsage|agentOutputStats|sessionWork)\.ts$/,
   // The relay's own parts, the gateway's alone: the windows' sessions to other machines, P2P and STUN, the
