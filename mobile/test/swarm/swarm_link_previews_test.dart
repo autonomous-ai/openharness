@@ -114,14 +114,6 @@ void main() {
       ],
     );
     fake.routes['/api/super-tabs/tab-2/changes'] = (_) => changes(cursor: 'c2');
-    for (final swarm in [tab, 'tab-2']) {
-      fake.routes['/api/super-tabs/$swarm/decisions?state=open'] = (_) => {
-        'decisions': <Object>[],
-      };
-      fake.routes['/api/super-tabs/$swarm/mentions?state=waiting'] = (_) => {
-        'mentions': <Object>[],
-      };
-    }
     fake.routes[messages] = (_) => {
       'messages': page.reversed.toList(),
       'next': next,

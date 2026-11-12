@@ -1,16 +1,8 @@
 import 'model.dart';
 import 'swarm_buddy.dart';
 
-/// One Swarm as Home last drew it: a state [SuperTabSnapshot.fromJson] reads,
-/// thinned to what Home, its drawer and a project's rows draw, and each
-/// conversation's partner ([swarmPartners]). Its Buddy chats and Buddies say
-/// whose they are, as a read does, for [SwarmBuddies.read].
-typedef SwarmHomeSwarm = ({
-  Map<String, dynamic> state,
-  Map<String, String> partners,
-});
-
-/// [snapshot] thinned to what Home draws: its projects, its agents by name,
+/// [snapshot] as Home last drew it, a state [SuperTabSnapshot.fromJson]
+/// reads, thinned to what Home draws: its projects, its agents by name,
 /// engine and status, each conversation's title, project, people, work
 /// status and when it last changed, people's usernames, and the built-in
 /// pictures people and agents wear. Nothing a chat
@@ -18,57 +10,53 @@ typedef SwarmHomeSwarm = ({
 /// status — nor machines, starts or what waits on the person, which come
 /// with the next read. [buddies] marks the Buddy chats and Buddies, so none
 /// is drawn as work before that read.
-SwarmHomeSwarm swarmHomeSwarm(
-  SuperTabSnapshot snapshot,
-  Map<String, String> partners, {
+Map<String, dynamic> swarmHomeSwarm(
+  SuperTabSnapshot snapshot, {
   SwarmBuddies buddies = SwarmBuddies.none,
-}) => (
-  state: {
-    'version': 1,
-    'id': snapshot.id,
-    'name': snapshot.name,
-    'ownerId': snapshot.ownerId,
-    'paused': snapshot.paused,
-    if (snapshot.swarmBuddy) 'swarmBuddy': true,
-    'projects': [for (final p in snapshot.projects) _project(p)],
-    'people': [
-      for (final p in snapshot.people)
+}) => {
+  'version': 1,
+  'id': snapshot.id,
+  'name': snapshot.name,
+  'ownerId': snapshot.ownerId,
+  'paused': snapshot.paused,
+  if (snapshot.swarmBuddy) 'swarmBuddy': true,
+  'projects': [for (final p in snapshot.projects) _project(p)],
+  'people': [
+    for (final p in snapshot.people)
+      {
+        'id': p.id,
+        'email': '',
+        'username': ?p.chosenUsername,
+        'name': ?p.name,
+        'role': p.role,
+        'avatar': ?_preset(p.avatar),
+      },
+  ],
+  'agents': [
+    for (final a in snapshot.agents)
+      // A thread's own session is not drawn: kept, it would read as the
+      // Buddy until the next read.
+      if (a.buddySession == null)
         {
-          'id': p.id,
-          'email': '',
-          'username': ?p.chosenUsername,
-          'name': ?p.name,
-          'role': p.role,
-          'avatar': ?_preset(p.avatar),
+          ..._agent(a),
+          if (buddies.buddyOwners[a.id] case final owner?)
+            'buddyOf': {'personId': owner},
         },
-    ],
-    'agents': [
-      for (final a in snapshot.agents)
-        // A thread's own session is not drawn: kept, it would read as the
-        // Buddy until the next read.
-        if (a.buddySession == null)
-          {
-            ..._agent(a),
-            if (buddies.buddyOwners[a.id] case final owner?)
-              'buddyOf': {'personId': owner},
-          },
-    ],
-    'conversations': [
-      for (final c in snapshot.conversations)
-        {
-          ..._conversation(c),
-          if (buddies.chatOwners[c.id] case final owner?) ...{
-            'kind': c.isSwarmBuddyChat ? 'swarm-buddy' : 'buddy',
-            'buddyOwnerId': owner,
-          },
+  ],
+  'conversations': [
+    for (final c in snapshot.conversations)
+      {
+        ..._conversation(c),
+        if (buddies.chatOwners[c.id] case final owner?) ...{
+          'kind': c.isSwarmBuddyChat ? 'swarm-buddy' : 'buddy',
+          'buddyOwnerId': owner,
         },
-    ],
-    'machines': const <Object>[],
-    'starts': const <Object>[],
-    'invitations': const <Object>[],
-  },
-  partners: {...partners},
-);
+      },
+  ],
+  'machines': const <Object>[],
+  'starts': const <Object>[],
+  'invitations': const <Object>[],
+};
 
 /// A built-in picture by its name. An uploaded one is not kept: its signed
 /// link opens the picture, and comes again with the next read.

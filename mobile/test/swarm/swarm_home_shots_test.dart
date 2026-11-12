@@ -228,47 +228,9 @@ void main() {
         agents: [agentIn('p-brand', 'agent-ivy', 'Ivy', name: 'Lead')],
         groups: [chat('p-brand', 'lead-p-brand', 'brand', leadId: 'agent-ivy')],
       );
-      const derived = {'decisionsWaiting': 1, 'mentionsWaiting': 1};
       for (final id in [tab, other]) {
         fake.routes['/api/super-tabs/$id/changes'] = (_) =>
-            changes(cursor: 'c2', derived: id == tab ? derived : const {});
-        fake.routes['/api/super-tabs/$id/decisions?state=open'] = (_) => {
-          'decisions': [
-            if (id == tab)
-              {
-                'id': 'd1',
-                'projectId': 'p-oh',
-                'projectName': 'openharness',
-                'conversationId': 'g-ship',
-                'conversationTitle': 'Batch AB',
-                'askerName': 'River',
-                'question': 'PR #2154 is ready to merge. Merge it?',
-                'options': ['Merge', 'Wait'],
-                'recommended': 0,
-                'createdAt': DateTime.fromMillisecondsSinceEpoch(
-                  ago(minute * 2),
-                ).toUtc().toIso8601String(),
-              },
-          ],
-        };
-        fake.routes['/api/super-tabs/$id/mentions?state=waiting'] = (_) => {
-          'mentions': [
-            if (id == tab)
-              {
-                'id': 'm1',
-                'projectId': 'p-desk',
-                'projectName': 'desktop-app',
-                'conversationId': 'lead-p-desk',
-                'conversationTitle': 'desktop-app',
-                'messageId': 'msg-1',
-                'leadName': 'Pike',
-                'text': 'Can you check the installer copy?',
-                'createdAt': DateTime.fromMillisecondsSinceEpoch(
-                  ago(minute * 48),
-                ).toUtc().toIso8601String(),
-              },
-          ],
-        };
+            changes(cursor: 'c2');
       }
       final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
         ..value = {PhoneExperiment.swarm};
@@ -298,7 +260,6 @@ void main() {
       // Read once: what was there is read; then web-2's work moves on.
       fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
         cursor: 'c3',
-        derived: derived,
         groups: [
           {
             ...part(

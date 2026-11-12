@@ -22,11 +22,6 @@ Map<String, T> _byId<T>(List<T> rows, String Function(T row) idOf) => {
   for (final row in rows.reversed) idOf(row): row,
 };
 
-/// Work that waits on a person: the agent needs a decision (`needs_human`) or
-/// is stuck (`blocked`). Both stay active work until the agent moves on.
-bool superTabWorkWaits(Object? status) =>
-    status == 'needs_human' || status == 'blocked';
-
 /// What a project calls its coordinator when the backend names none (one from before project instructions), and
 /// what every new project starts with.
 const kDefaultCoordinatorName = 'Product Manager';
@@ -972,8 +967,6 @@ class SuperTabSnapshot {
       swarmBuddy = row['swarmBuddy'] == true,
       buddyCap = (row['buddyCap'] as num?)?.toInt(),
       autoJoin = row['autoJoin'] == true,
-      mentionsWaiting = (row['mentionsWaiting'] as num?)?.toInt() ?? 0,
-      mentionsDigest = row['mentionsDigest'] as String?,
       _releaseTimes = {
         if (row['releaseTimes'] case final Map projects)
           for (final MapEntry(key: project, value: times) in projects.entries)
@@ -983,18 +976,6 @@ class SuperTabSnapshot {
                   if (part is String && at is num) part: at.toInt(),
               },
       },
-      decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
-      decisionsDigest = row['decisionsDigest'] as String?,
-      promptsWaiting = List.unmodifiable([
-        for (final wait in row['promptsWaiting'] as List? ?? const [])
-          if (wait case {
-            'agentId': final String agentId,
-            'conversationId': final String conversationId,
-          })
-            (agentId: agentId, conversationId: conversationId),
-      ]),
-      activityDigest = row['activityDigest'] as String?,
-      remindersDigest = row['remindersDigest'] as String?,
       chatSettings = Map.unmodifiable({
         if (row['chatSettings'] case final Map settings)
           for (final MapEntry(:key, :value) in settings.entries)
@@ -1102,40 +1083,10 @@ class SuperTabSnapshot {
   /// yet.
   final bool autoJoin;
 
-  /// The reader's tags still waiting for them, Swarm-wide; 0 from a backend
-  /// before tags (spec 2026-10-24-lead-mentions.md).
-  final int mentionsWaiting;
-
-  /// Which tags wait, as a digest that moves when they change though the
-  /// count may not; null from a backend before it (superTabs/mentions.ts).
-  final String? mentionsDigest;
-
   /// When each release part of [projectId] may next open, in ms: 0 is now (backend releases.ts nextReleaseAt, task #3827).
   Map<String, int> releaseTimesOf(String projectId) =>
       _releaseTimes[projectId] ?? const {};
   final Map<String, Map<String, int>> _releaseTimes;
-
-  /// Decisions asked of the reader and not yet answered, Swarm-wide; 0 from a
-  /// backend before decisions (backend superTabs/decisions.ts).
-  final int decisionsWaiting;
-
-  /// Which decisions wait, as a digest that moves when they change though the
-  /// count may not; null from a backend before it (superTabs/decisions.ts).
-  final String? decisionsDigest;
-
-  /// The task agents at a prompt in their terminals that wait for the reader,
-  /// as the backend chose them (superTabs/promptWaits.ts, task #3029); empty
-  /// from a backend before it.
-  final List<({String agentId, String conversationId})> promptsWaiting;
-
-  /// Which of the reader's Activity rows are unread, as a digest (backend superTabs/activity.ts); null from a backend
-  /// before it. Read as the desktop's model reads it; the phone shows no Activity yet.
-  final String? activityDigest;
-
-  /// Which reminders the reader has set and when each is due, as a digest that moves when one is set, replaced or
-  /// cleared; null from a backend before reminders (superTabs/reminders.ts). Read as the desktop's is; the phone
-  /// shows no reminders yet.
-  final String? remindersDigest;
 
   /// The reader's own notification setting by conversation, `all`, `mentions` or `muted` (backend chatSettings.ts),
   /// as stored: the phone applies it through `SwarmReader.notifyOf`.
@@ -1811,15 +1762,19 @@ class SuperTabMessage {
   bool get terminalGap => fromTerminal && source['phase'] == 'gap';
 
   /// A note v1-v3 posted that v4 has no row for: an instructions save (#3165),
-  /// a routing note and its override, a ship line. No chat row and nothing
-  /// unread: the backend posts none now and removes the old ones a page at a
-  /// time, so one may still be read until it is gone.
+  /// a routing note and its override, a ship line, a Lead's typing into a
+  /// terminal or a machine's alert about one (v4 marks the agent instead;
+  /// Desktop's `leadTerminalNote`). No chat row and nothing unread: the
+  /// backend posts none now and removes the old ones a page at a time, so one
+  /// may still be read until it is gone.
   bool get retiredNotice => _retiredKinds.contains(source['kind']);
   static const _retiredKinds = {
     'instructions',
     'route',
     'route-override',
     'ship',
+    'terminal-alert',
+    'terminal-input',
   };
 
   /// A task's root the server posted in its person's name (plain chat, #2294):
@@ -1827,24 +1782,6 @@ class SuperTabMessage {
   /// is unread for them as anyone else's message is.
   bool get postedForAuthor => _taskRootKinds.contains(source['kind']);
 
-  /// The agent a "waiting at a prompt" note is about; null for any other row.
-  String? get promptAlertAgentId =>
-      source['kind'] == 'terminal-alert' && source['alert'] == 'prompt'
-      ? source['agentId'] as String?
-      : null;
-
-  /// The Product Manager a usage-limit note is about; null for any other row
-  /// (desktop model.dart).
-  String? get leadLimitAgentId =>
-      source['kind'] == 'terminal-alert' &&
-          source['alert'] == 'limit' &&
-          source['lead'] == true
-      ? source['agentId'] as String?
-      : null;
-
-  /// A note the backend writes about a terminal: a Lead's typing, or an alert.
-  bool get terminalEvent =>
-      source['kind'] == 'terminal-input' || source['kind'] == 'terminal-alert';
   String? get terminalNote {
     if (!fromTerminal) return null;
     final phase = source['phase'];

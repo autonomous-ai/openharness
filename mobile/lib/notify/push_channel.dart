@@ -59,8 +59,8 @@ class PushChannel {
   static const shownTimeout = Duration(milliseconds: 500);
 
   /// The keys of Harness's pushes still in the notification centre. The server keys a push as the
-  /// app keys its own notice for the same reply or tag (`backend/src/push/notices.ts`), so the app
-  /// does not post it a second time ([SwarmTold.addAll]). Empty where it cannot tell.
+  /// app keys its own notice for the same chat (`backend/src/push/notices.ts`), so the app does not
+  /// post it a second time ([SwarmTold.pushesShown]). Empty where it cannot tell.
   Future<Set<String>> shown() async {
     try {
       final keys = await _channel

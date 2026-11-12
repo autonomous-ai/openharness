@@ -4,8 +4,8 @@
 /// change here, and in the one place each names.
 library;
 
-/// 1. The way in. True: Find, and a Swarm mark on Home's title with how many
-/// things wait on the person (`swarm_mark.dart`). False: Find only.
+/// 1. The way in. True: Find, and a Swarm mark on Home's title
+/// (`swarm_mark.dart`). False: Find only.
 const swarmHomeMark = true;
 
 // 2. The first screen: Swarm Home — the projects as channels, the quiet ones
@@ -23,7 +23,3 @@ const swarmSendsFiles = true;
 /// 5. Notices: on the phone while Harness is open; push to a closed app is
 /// backend work for later. False posts none (`swarm_session.dart`).
 const swarmLocalNotices = true;
-
-/// 6. A decision's answer cannot be changed once sent: one tap holds it this
-/// long, with Undo, before it goes. Zero sends at once.
-const swarmUndoWindow = Duration(seconds: 3);

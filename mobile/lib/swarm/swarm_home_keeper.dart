@@ -66,9 +66,8 @@ class SwarmHomeKeeper {
             (
               id: swarm.id,
               name: swarm.name,
-              view: swarmHomeSwarm(
+              state: swarmHomeSwarm(
                 reader.snapshot!,
-                reader.partners,
                 buddies: reader.buddies,
               ),
             ),

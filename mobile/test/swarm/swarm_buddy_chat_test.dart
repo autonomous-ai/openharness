@@ -54,20 +54,6 @@ void main() {
     'createdAt': DateTime.utc(2026, 10, 29, 1, minute).toIso8601String(),
   };
 
-  /// A question River asked the person in work chat g1 of the project.
-  Map<String, dynamic> decision(String id, {int minute = 0}) => {
-    'id': id,
-    'projectId': project,
-    'projectName': 'Mobile',
-    'conversationId': 'g1',
-    'conversationTitle': 'Fix login',
-    'askerName': 'River',
-    'question': 'Ship #2090 tonight?',
-    'options': ['Yes', 'Tomorrow'],
-    'recommended': 0,
-    'createdAt': DateTime.utc(2026, 10, 29, 1, minute).toIso8601String(),
-  };
-
   Map<String, dynamic> machine(
     String id,
     String name, {
@@ -98,10 +84,8 @@ void main() {
     List<Map<String, dynamic>> others = const [],
     List<Map<String, dynamic>> machines = const [],
     List<Map<String, dynamic>> starts = const [],
-    List<Map<String, dynamic>> decisions = const [],
     String role = 'owner',
   }) {
-    final derived = {'decisionsWaiting': decisions.length};
     final fake = FakeSwarm();
     fake.routes['/api/super-tabs/list'] = (_) => {
       'tabs': [
@@ -126,18 +110,11 @@ void main() {
         ],
         machines: machines,
         starts: starts,
-        derived: derived,
       ),
       'members': [part(me, 1, person(me, role: role))],
     };
     fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
-        changes(cursor: 'c2', derived: derived);
-    fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
-      'decisions': decisions,
-    };
-    fake.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
-      'mentions': <Object>[],
-    };
+        changes(cursor: 'c2');
     fake.routes[messages] = (_) => {
       'messages': page.reversed.toList(),
       'next': null,
@@ -424,101 +401,6 @@ void main() {
       expect(post['recipientIds'], ['agent-lead']);
     });
 
-    // Tony's phone list, task 26, as Desktop's decisions_view.dart.
-    group('a question here also offers', () {
-      Future<FakeSwarm> open(
-        WidgetTester tester, {
-        List<Map<String, dynamic>>? decisions,
-      }) async {
-        final fake = backend(
-          buddy: wren(),
-          page: [message('m1', 1, author: 'agent-wren')],
-          decisions: decisions ?? [decision('d1', minute: 2)],
-        );
-        await pump(tester, fake);
-        return fake;
-      }
-
-      testWidgets('its coordinator deciding, held for Undo, then sent as a '
-          'delegation', (tester) async {
-        final fake = await open(tester);
-        await tester.tap(find.text('Let Product Manager decide'));
-        await tester.pump();
-        expect(find.text('Leaving it to Product Manager'), findsOneWidget);
-        await tester.pump(const Duration(seconds: 10));
-        await tester.pumpAndSettle();
-        expect(fake.commands.single, {
-          'type': 'decision.answer',
-          'decisionId': 'd1',
-          'delegate': true,
-        });
-      });
-
-      testWidgets('and Undo takes it back, sending nothing', (tester) async {
-        final fake = await open(tester);
-        await tester.tap(find.text('Let Product Manager decide'));
-        await tester.pump();
-        await tester.tap(key('swarm-undo-d1'));
-        await tester.pump(const Duration(seconds: 10));
-        await tester.pumpAndSettle();
-        expect(fake.commands, isEmpty);
-        expect(find.text('Let Product Manager decide'), findsOneWidget);
-      });
-
-      testWidgets('not with no recommended option to take', (tester) async {
-        await open(
-          tester,
-          decisions: [
-            {...decision('d1', minute: 2), 'recommended': null},
-          ],
-        );
-        expect(find.text('Let Product Manager decide'), findsNothing);
-        expect(find.text('Not now'), findsOneWidget);
-      });
-
-      testWidgets('Not now, folding it to one line here with Show, sending '
-          'nothing, and a question asked later still shows', (tester) async {
-        final fake = await open(
-          tester,
-          decisions: [decision('d1', minute: 2), decision('d2', minute: 3)],
-        );
-        await tester.tap(key('swarm-decision-later-d1'));
-        await tester.pumpAndSettle();
-        expect(key('swarm-ask-d1'), findsNothing);
-        expect(key('swarm-ask-d2'), findsOneWidget);
-        expect(find.text('1 decision set aside'), findsOneWidget);
-        expect(fake.commands, isEmpty);
-
-        await tester.tap(key('swarm-decision-later-d2'));
-        await tester.pumpAndSettle();
-        expect(find.text('2 decisions set aside'), findsOneWidget);
-
-        await tester.tap(key('swarm-decisions-show'));
-        await tester.pumpAndSettle();
-        expect(key('swarm-ask-d1'), findsOneWidget);
-        expect(key('swarm-ask-d2'), findsOneWidget);
-        expect(key('swarm-decisions-aside'), findsNothing);
-      });
-    });
-
-    testWidgets('every open question the PM asked the person in the project '
-        'shows here and is answered in place', (tester) async {
-      final fake = backend(
-        buddy: wren(),
-        page: [message('m1', 1, author: 'agent-wren')],
-        decisions: [decision('d1', minute: 2)],
-      );
-      await pump(tester, fake);
-
-      expect(key('swarm-ask-d1'), findsOneWidget);
-      expect(find.text('Ship #2090 tonight?'), findsOneWidget);
-
-      await tester.tap(key('swarm-option-d1-1'));
-      await tester.pump();
-      expect(find.text('Sending “Tomorrow”'), findsOneWidget);
-      await tester.pump(const Duration(seconds: 10));
-      await tester.pumpAndSettle();
-    });
 
     testWidgets('offline, it says so, the chat stays, and Start again starts '
         'it on the same machine and agent', (tester) async {

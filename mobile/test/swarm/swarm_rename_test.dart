@@ -58,12 +58,6 @@ void main() {
       ...changes(cursor: 'c$version', lastChangedAt: version),
       'head': part('head', version, headData(name: name)),
     };
-    fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
-      'decisions': <Object>[],
-    };
-    fake.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
-      'mentions': <Object>[],
-    };
     fake.routes['/api/super-tabs/$tab/commands'] = (body) async {
       final command = body!['command'] as Map<String, dynamic>;
       if (wait case final waiting?) await waiting.future;

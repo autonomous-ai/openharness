@@ -5,7 +5,6 @@ import 'package:flutter/foundation.dart';
 import '../core/local_key_value_store.dart';
 import '../logging/app_log.dart';
 import 'model.dart';
-import 'swarm_asks.dart';
 import 'swarm_buddy.dart';
 import 'swarm_home_cache.dart';
 import 'swarm_kept.dart';
@@ -13,8 +12,6 @@ import 'swarm_home_keeper.dart';
 import 'swarm_read_marks.dart';
 import 'swarm_reader.dart';
 import 'swarm_request.dart';
-import 'swarm_threads.dart';
-import 'waiting_work.dart';
 
 /// One of the account's Swarms, as the list names it.
 typedef SwarmListing = ({String id, String name});
@@ -34,59 +31,9 @@ typedef SwarmInvitation = ({
   String role,
 });
 
-/// Something a Swarm asks of the person, with the Swarm it is in.
-sealed class SwarmNeed {
-  SwarmNeed(this.swarmId);
-  final String swarmId;
-
-  /// The conversation it is about, to open from it.
-  String get conversationId;
-
-  /// Stable across reads: what a notice is keyed by.
-  String get key;
-}
-
-/// A decision asked of the person, answered with one tap.
-class SwarmDecisionNeed extends SwarmNeed {
-  SwarmDecisionNeed(super.swarmId, this.decision);
-  final SuperTabDecision decision;
-  @override
-  String get conversationId => decision.conversationId;
-  @override
-  String get key => keyOf(decision.id);
-
-  /// The key of decision [id]'s need: what Activity opens at for its notice.
-  static String keyOf(String id) => 'decision:$id';
-}
-
-/// A Lead's tag of the person.
-class SwarmMentionNeed extends SwarmNeed {
-  SwarmMentionNeed(super.swarmId, this.mention);
-  final SuperTabMention mention;
-  @override
-  String get conversationId => mention.conversationId;
-  @override
-  String get key => 'mention:${mention.id}';
-}
-
-/// Work waiting on the person ([swarmWaitingWork]).
-class SwarmWorkNeed extends SwarmNeed {
-  SwarmWorkNeed(super.swarmId, this.work);
-  final SwarmWaitingWork work;
-  @override
-  String get conversationId => work.conversation.id;
-  @override
-  String get key =>
-      'work:$swarmId:${work.conversation.id}:'
-      '${work.conversation.assignment?['id']}:${work.status}';
-}
-
-/// The account's Swarms on this phone, and everything they ask of the person
-/// in one list ([needs]): open decisions first, then Lead tags, then work
-/// waiting on them.
+/// The account's Swarms on this phone.
 ///
-/// Each read is the list, then one change read per Swarm (whose `derived`
-/// counts say whether there are decisions or tags to read). It reads only
+/// Each read is the list, then one change read per Swarm. It reads only
 /// while [shown], as a [SwarmReader] does. One per account: a Swarm that
 /// leaves the list is dropped with everything read of it.
 class SwarmInbox extends ChangeNotifier {
@@ -129,15 +76,14 @@ class SwarmInbox extends ChangeNotifier {
     for (final swarm in kept) {
       final SuperTabSnapshot snapshot;
       try {
-        snapshot = SuperTabSnapshot.fromJson(swarm.view.state);
+        snapshot = SuperTabSnapshot.fromJson(swarm.state);
       } on FormatException {
         continue;
       }
-      final buddies = SwarmBuddies.read(swarm.view.state, accountId);
+      final buddies = SwarmBuddies.read(swarm.state, accountId);
       swarmMarkBuddies(snapshot, buddies);
       _readers.putIfAbsent(swarm.id, () => _open(swarm.id))
         ..snapshot = snapshot
-        ..partners = swarm.view.partners
         ..buddies = buddies;
       shown.add((id: swarm.id, name: swarm.name));
     }
@@ -154,9 +100,6 @@ class SwarmInbox extends ChangeNotifier {
 
   /// The account's Swarms, in the list's order.
   List<SwarmListing> swarms = const [];
-
-  /// What the Swarms ask of the person, across all of them.
-  List<SwarmNeed> needs = const [];
 
   /// What the last read of the list could not do; null once one succeeds.
   String? error;
@@ -342,25 +285,13 @@ class SwarmInbox extends ChangeNotifier {
     return invitations;
   }
 
-  /// An ask or waiting work that arrived after its Swarm's first read: what a
-  /// phone notice tells.
-  void Function(SwarmNeed need)? onArrived;
-
-  /// Swarm [swarmId] was read, and [needs] already hold what that read
-  /// found: what takes a notice down once its need stays gone.
+  /// Swarm [swarmId] was read: what tells of a chat's new messages.
   void Function(String swarmId)? onSwarmRead;
 
-  /// Swarms read during a read of the list, told once [needs] are worked
-  /// out at its end.
+  /// Swarms read during a read of the list, told once it ends.
   final _readDuringList = <String>{};
 
   final _readers = <String, SwarmReader>{};
-  final _asks = <String, SwarmAsks>{};
-  final _threads = <String, SwarmThreads>{};
-
-  /// Each Swarm's waiting work as last seen: null until its first read, whose
-  /// waiting work is not news.
-  final _workSeen = <String, Set<String>>{};
   Future<void>? _refreshing;
   Timer? _poll;
   bool _shown = false, _disposed = false;
@@ -369,7 +300,7 @@ class SwarmInbox extends ChangeNotifier {
   /// told once, at its end.
   bool _polling = false;
 
-  /// A Swarm's reader or asks told of a change since the last notify.
+  /// A Swarm's reader told of a change since the last notify.
   bool _below = false;
 
   /// While no computer can be asked, the next read comes this soon — 2 seconds, doubling up to
@@ -379,18 +310,6 @@ class SwarmInbox extends ChangeNotifier {
 
   /// [id]'s reader, while it is listed.
   SwarmReader? reader(String id) => _readers[id];
-
-  /// [id]'s decisions and tags, while it is listed.
-  SwarmAsks? asks(String id) => _asks[id];
-
-  /// [id]'s followed threads, while it is listed: made when first asked for,
-  /// and read only while something shows it ([SwarmThreads]).
-  SwarmThreads? threads(String id) {
-    if (_disposed) return null;
-    final reader = _readers[id];
-    if (reader == null) return null;
-    return _threads[id] ??= SwarmThreads(reader, asks: _asks[id]);
-  }
 
   bool get shown => _shown;
 
@@ -538,8 +457,8 @@ class SwarmInbox extends ChangeNotifier {
     }
   }
 
-  /// [reader] answered a read: told after the reader's own notify, which
-  /// works out [needs] again, or at the end of the list read under way.
+  /// [reader] answered a read: told after the reader's own notify, or at the
+  /// end of the list read under way.
   void _readerRead(String id, SwarmReader reader) {
     scheduleMicrotask(() {
       if (_disposed || !identical(_readers[id], reader)) return;
@@ -559,21 +478,12 @@ class SwarmInbox extends ChangeNotifier {
 
   /// Whether a poll reads Swarm [id] again, listed as last changed at
   /// [listedAt]: only when there may be something new. Its last change
-  /// moved; it holds no Swarm yet, or its last read failed; or an ask waits
-  /// in it, or its asks could not be read — decisions and tags are not
-  /// parts, and one answered or done on another device moves no last-change
-  /// time.
+  /// moved, it holds no Swarm yet, or its last read failed.
   bool _due(String id, int listedAt) {
-    final reader = _readers[id]!, asks = _asks[id]!;
-    final snapshot = reader.snapshot;
-    return snapshot == null ||
+    final reader = _readers[id]!;
+    return reader.snapshot == null ||
         reader.error != null ||
-        reader.lastChangedAt != listedAt ||
-        snapshot.decisionsWaiting > 0 ||
-        snapshot.mentionsWaiting > 0 ||
-        asks.decisions.isNotEmpty ||
-        asks.mentions.isNotEmpty ||
-        asks.error != null;
+        reader.lastChangedAt != listedAt;
   }
 
   /// Every page of the list before any is applied: a failed page cannot drop
@@ -640,13 +550,6 @@ class SwarmInbox extends ChangeNotifier {
     _keptWatches[id] = watch;
     reader.addListener(watch);
     kept.addListener(watch);
-    _asks[id] = SwarmAsks(reader)
-      ..onArrived = ((ask) => onArrived?.call(switch (ask) {
-        final SuperTabDecision decision => SwarmDecisionNeed(id, decision),
-        final SuperTabMention mention => SwarmMentionNeed(id, mention),
-        _ => throw StateError('Unknown ask $ask'),
-      }))
-      ..addListener(_asked);
     return reader;
   }
 
@@ -703,8 +606,6 @@ class SwarmInbox extends ChangeNotifier {
     final watch = _keptWatches.remove(id);
     if (watch != null) kept.removeListener(watch);
     if (lost) kept.dropSwarm(id);
-    final threads = _threads.remove(id);
-    _asks.remove(id)?.dispose();
     final reader = _readers.remove(id)?..removeListener(_relay);
     if (reader != null) {
       if (watch != null) reader.removeListener(watch);
@@ -713,109 +614,27 @@ class SwarmInbox extends ChangeNotifier {
       // the inbox closing keeps them, written now, for the next one.
       if (!lost) marks?.dispose();
       reader.revoke();
-      threads?.dispose();
       if (lost) marks?.dispose();
       reader.dispose();
     }
-    _workSeen.remove(id);
   }
 
   /// A Swarm's reader told of a change: what it holds is drawn through the
-  /// inbox (Home's projects, the work waiting), so it is told on, once per
-  /// list read at most.
+  /// inbox (Home's projects), so it is told on, once per list read at most.
   void _relay() {
     _below = true;
     if (!_polling) _rebuild();
   }
 
-  /// A Swarm's asks told of a change: shown at once, poll or not. A Done or
-  /// an answer is the person's own tap, and a slow read of another Swarm
-  /// must not hold it back.
-  void _asked() {
-    _below = true;
-    _rebuild();
-  }
-
-  /// Works out [needs] again; notifies when they, the inbox itself ([told])
-  /// or a Swarm below it changed.
+  /// Notifies when the inbox itself ([told]) or a Swarm below it changed.
   void _rebuild({bool told = false}) {
     if (_disposed) return;
-    final decisions = <SwarmNeed>[], mentions = <SwarmNeed>[];
-    final work = <SwarmNeed>[];
-    for (final MapEntry(key: id, value: reader) in _readers.entries) {
-      final snapshot = reader.snapshot;
-      if (snapshot == null) continue;
-      final asks = _asks[id]!;
-      decisions.addAll([
-        for (final d in asks.decisions) SwarmDecisionNeed(id, d),
-      ]);
-      mentions.addAll([for (final m in asks.mentions) SwarmMentionNeed(id, m)]);
-      final waiting = [
-        for (final w in swarmWaitingWork(
-          snapshot,
-          accountId,
-          partners: reader.partners,
-        ))
-          SwarmWorkNeed(id, w),
-      ];
-      final seen = _workSeen[id];
-      if (seen != null) {
-        for (final need in waiting) {
-          if (!seen.contains(need.key)) onArrived?.call(need);
-        }
-      }
-      // The Home kept is not a read: what it shows waiting is not seen.
-      if (reader.generation > 0) {
-        _workSeen[id] = {for (final need in waiting) need.key};
-      }
-      work.addAll(waiting);
-    }
-    int newest(SwarmNeed a, SwarmNeed b) =>
-        (_at(b) ?? DateTime(0)).compareTo(_at(a) ?? DateTime(0));
-    final next = [
-      ...decisions..sort(newest),
-      ...mentions..sort(newest),
-      ...work,
-    ];
-    final same = _sameNeeds(next, needs);
-    if (!same) needs = List.unmodifiable(next);
-    final tell = told || !same || _below;
+    final tell = told || _below;
     _below = false;
     if (!tell) return;
     notifyListeners();
     _home?.keep(_readers, swarms);
   }
-
-  /// The same asks of the same reads, in the same order: decisions and tags
-  /// as their [SwarmAsks] keeps them, work of the same snapshot.
-  static bool _sameNeeds(List<SwarmNeed> a, List<SwarmNeed> b) {
-    if (a.length != b.length) return false;
-    for (var n = 0; n < a.length; n++) {
-      final same = switch ((a[n], b[n])) {
-        (
-          SwarmDecisionNeed(decision: final x),
-          SwarmDecisionNeed(decision: final y),
-        ) =>
-          identical(x, y),
-        (
-          SwarmMentionNeed(mention: final x),
-          SwarmMentionNeed(mention: final y),
-        ) =>
-          identical(x, y),
-        (final SwarmWorkNeed x, final SwarmWorkNeed y) =>
-          x.key == y.key && identical(x.work.snapshot, y.work.snapshot),
-        _ => false,
-      };
-      if (!same || a[n].swarmId != b[n].swarmId) return false;
-    }
-    return true;
-  }
-
-  static DateTime? _at(SwarmNeed need) => switch (need) {
-    SwarmDecisionNeed(:final decision) => decision.createdAt,
-    SwarmMentionNeed(:final mention) => mention.createdAt,
-    SwarmWorkNeed() => null,
-  };
 
   @override
   void dispose() {

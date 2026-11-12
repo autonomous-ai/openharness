@@ -10,7 +10,6 @@ import 'swarm_home_list.dart';
 typedef _SwarmHomeKept = ({
   List<String> pins,
   List<String> folds,
-  List<String> aside,
   String? swarmId,
   SwarmHomeFilter filter,
   SwarmHomeSort sort,
@@ -34,9 +33,6 @@ class SwarmHomePrefs extends ChangeNotifier {
   /// The most pins kept; the oldest goes first.
   static const keptPins = 50;
 
-  /// The most decisions set aside kept; the oldest goes first.
-  static const keptAside = 200;
-
   /// The most folded status cards kept, as the desktop keeps
   /// (`SuperTabController.statusFoldedKept`); the oldest goes first.
   static const keptFolds = 200;
@@ -56,11 +52,6 @@ class SwarmHomePrefs extends ChangeNotifier {
   /// oldest first.
   Set<String> get folds => Set.unmodifiable(_folds);
   final _folds = <String>{};
-
-  /// The open decisions set aside in the person's Buddy chat with Not now,
-  /// by [swarmHomeProjectKey] of their Swarm and id, oldest first: kept on this
-  /// phone, as the desktop keeps them on its computer.
-  final _aside = <String>{};
 
   /// The one Swarm Home shows; null for all of them.
   String? get swarmId => _swarmId;
@@ -92,7 +83,7 @@ class SwarmHomePrefs extends ChangeNotifier {
   /// Before the choices are read back: the pins taken off and the cards
   /// unfolded meanwhile, which what is read does not bring back, and whether
   /// a Swarm was chosen to show, which stands over the one read.
-  final _unpinned = <String>{}, _unfolded = <String>{}, _unaside = <String>{};
+  final _unpinned = <String>{}, _unfolded = <String>{};
   bool _shownChosen = false,
       _filterChosen = false,
       _sortChosen = false,
@@ -143,41 +134,6 @@ class SwarmHomePrefs extends ChangeNotifier {
     }
     if (on ? !_folds.add(key) : !_folds.remove(key)) return;
     _cap();
-    _changed();
-  }
-
-  /// Whether decision [id] of [swarmId] is set aside with Not now.
-  bool decisionAside(String swarmId, String id) =>
-      _aside.contains(swarmHomeProjectKey(swarmId, id));
-
-  /// Sets decisions [ids] of [swarmId] aside, or shows them again.
-  void setDecisionsAside(
-    String swarmId,
-    Iterable<String> ids, {
-    required bool aside,
-  }) {
-    var moved = false;
-    for (final id in ids) {
-      final key = swarmHomeProjectKey(swarmId, id);
-      if (!_loaded) {
-        if (aside) {
-          _unaside.remove(key);
-        } else if (_unaside.add(key)) {
-          _touched = true;
-        }
-      }
-      moved |= aside ? _aside.add(key) : _aside.remove(key);
-    }
-    if (!moved) return;
-    _cap();
-    _changed();
-  }
-
-  /// Decisions [ids] of [swarmId] are answered: nothing keeps them aside.
-  void forgetDecisionsAside(String swarmId, Iterable<String> ids) {
-    final keys = [for (final id in ids) swarmHomeProjectKey(swarmId, id)];
-    if (!keys.any(_aside.contains)) return;
-    _aside.removeAll(keys);
     _changed();
   }
 
@@ -237,14 +193,13 @@ class SwarmHomePrefs extends ChangeNotifier {
   /// Drops the pins, folds and choice of any Swarm but [swarmIds]; whether
   /// any went.
   bool _keep(Set<String> swarmIds) {
-    final before = _pins.length + _folds.length + _aside.length;
+    final before = _pins.length + _folds.length;
     bool other(String key) => !swarmIds.contains(key.split('/').first);
     _pins.removeWhere(other);
     _folds.removeWhere(other);
-    _aside.removeWhere(other);
     final gone = _swarmId != null && !swarmIds.contains(_swarmId);
     if (gone) _swarmId = null;
-    return gone || _pins.length + _folds.length + _aside.length != before;
+    return gone || _pins.length + _folds.length != before;
   }
 
   /// At most [keptPins] pins and [keptFolds] folds, the oldest going first;
@@ -257,8 +212,8 @@ class SwarmHomePrefs extends ChangeNotifier {
       return true;
     }
 
-    final pins = trim(_pins, keptPins), aside = trim(_aside, keptAside);
-    return trim(_folds, keptFolds) || pins || aside;
+    final pins = trim(_pins, keptPins);
+    return trim(_folds, keptFolds) || pins;
   }
 
   void _changed() {
@@ -294,14 +249,12 @@ class SwarmHomePrefs extends ChangeNotifier {
 
     merge(_pins, pins, _unpinned);
     merge(_folds, folds, _unfolded);
-    merge(_aside, read.aside, _unaside);
     if (!_shownChosen) _swarmId = swarmId;
     if (!_filterChosen) _filter = read.filter;
     if (!_sortChosen) _sort = read.sort;
     if (!_unreadsChosen) _unreadsFirst = read.unreadsFirst;
     _unpinned.clear();
     _unfolded.clear();
-    _unaside.clear();
     // Swarms the account lost meanwhile take what was read of them too.
     final kept = _swarms;
     final dropped = kept != null && _keep(kept);
@@ -313,7 +266,6 @@ class SwarmHomePrefs extends ChangeNotifier {
   static const _SwarmHomeKept _nothingKept = (
     pins: [],
     folds: [],
-    aside: [],
     swarmId: null,
     filter: SwarmHomeFilter.all,
     sort: SwarmHomeSort.sections,
@@ -335,11 +287,8 @@ class SwarmHomePrefs extends ChangeNotifier {
       return (
         pins: keys(json['pins']),
         folds: keys(json['folded']),
-        aside: keys(json['aside']),
         swarmId: json['swarm'] is String ? json['swarm'] as String : null,
-        filter: json['filter'] == 'mentions'
-            ? SwarmHomeFilter.mentions
-            : json['unread'] == true
+        filter: json['unread'] == true
             ? SwarmHomeFilter.unread
             : SwarmHomeFilter.all,
         sort: json['sort'] == 'newest'
@@ -358,7 +307,6 @@ class SwarmHomePrefs extends ChangeNotifier {
     try {
       if (_pins.isEmpty &&
           _folds.isEmpty &&
-          _aside.isEmpty &&
           _swarmId == null &&
           !viewChanged) {
         await store.delete(_key);
@@ -368,10 +316,8 @@ class SwarmHomePrefs extends ChangeNotifier {
           jsonEncode({
             'pins': [..._pins],
             if (_folds.isNotEmpty) 'folded': [..._folds],
-            if (_aside.isNotEmpty) 'aside': [..._aside],
             'swarm': ?_swarmId,
             if (_filter == SwarmHomeFilter.unread) 'unread': true,
-            if (_filter == SwarmHomeFilter.mentions) 'filter': 'mentions',
             if (_sort == SwarmHomeSort.newest) 'sort': 'newest',
             if (_unreadsFirst) 'unreadsFirst': true,
           }),

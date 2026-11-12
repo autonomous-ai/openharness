@@ -81,7 +81,7 @@ void main() {
   });
 
   group('a Swarm notice', () {
-    const target = (swarmId: 'tab-1', conversationId: 'g9', messageId: null, decisionId: null, threadId: null);
+    const target = (swarmId: 'tab-1', conversationId: 'g9', messageId: null, threadId: null);
     const swarm = (
       key: 'decision:d1',
       title: 'River asks you',
@@ -150,7 +150,7 @@ void main() {
     });
 
     test('a tap on a thread notice brings back its thread', () async {
-      const inThread = (swarmId: 'tab-1', conversationId: 'g9', messageId: 'reply-r2', decisionId: null, threadId: 'root-1');
+      const inThread = (swarmId: 'tab-1', conversationId: 'g9', messageId: 'reply-r2', threadId: 'root-1');
       expect(decodeSwarmPayload(encodeSwarmPayload(inThread)), inThread);
     });
 
@@ -544,7 +544,6 @@ void main() {
         swarmId: 's1',
         conversationId: 'c1',
         messageId: 'm1',
-        decisionId: null,
         threadId: 't1',
       ));
       expect(notices.opened.value, isNull);
@@ -556,7 +555,6 @@ void main() {
         swarmId: 's/1',
         conversationId: 'c1',
         messageId: 'm1',
-        decisionId: null,
         threadId: null,
       ));
     });

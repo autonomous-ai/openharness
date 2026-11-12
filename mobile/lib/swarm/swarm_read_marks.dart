@@ -96,8 +96,7 @@ class SwarmReadMarkSender<K> {
 /// each chat's id and a number. The first read of a Swarm on this phone, with
 /// no mark yet from the phone or the server, counts what is already there as
 /// read (Tony, 2026-10-29), so a new phone does not start with every chat in
-/// bold; the Home kept from before is no read. That first mark is no read of
-/// a tag, though: a tag already waiting then still counts ([tagsReadThrough]).
+/// bold; the Home kept from before is no read.
 /// Nothing is unread until the marks are read back. Access lost takes them off the phone too.
 class SwarmReadMarks extends ChangeNotifier {
   SwarmReadMarks(
@@ -155,11 +154,6 @@ class SwarmReadMarks extends ChangeNotifier {
   /// The phone's own marks, by chat.
   final _marks = <String, int>{};
 
-  /// The marks of [_marks] that only the first read set, by chat: no read by
-  /// the person. Kept apart in what the phone keeps too, so a phone before
-  /// them reads [_marks] as it always has.
-  final _firstRead = <String, int>{};
-
   /// The phone's own thread marks, by chat then thread root.
   final _threads = <String, Map<String, int>>{};
 
@@ -211,20 +205,6 @@ class SwarmReadMarks extends ChangeNotifier {
         )
       : null;
 
-  /// How far the person has read [conversationId] for its tags: the higher
-  /// of the server's mark and this phone's, leaving out the first read's,
-  /// which saw nothing (the desktop's `readMark`). Null as [readThrough] is.
-  int? tagsReadThrough(String conversationId) =>
-      _loaded && !reader.accessRevoked
-      ? max(
-          reader.snapshot?.readMarks[conversationId] ?? 0,
-          max(switch (_marks[conversationId]) {
-            final mark? when mark != _firstRead[conversationId] => mark,
-            _ => 0,
-          }, _held[conversationId] ?? 0),
-        )
-      : null;
-
   /// How far the person has read [root]'s thread in [conversationId]: the
   /// higher of the server's thread mark, from any of their devices, and this
   /// phone's; null until the phone's are read back, and once access is lost.
@@ -267,18 +247,8 @@ class SwarmReadMarks extends ChangeNotifier {
       sequence,
       kept: reader.snapshot?.readMarks[conversationId] ?? 0,
     );
-    // Seen through the first read's mark, or through the chat's newest
-    // message in its main stream when replies only in a thread came after
-    // it: the mark is the person's own now.
-    final first = _firstRead[conversationId];
-    final main = reader.snapshot?.conversation(conversationId)?.mainSequence;
-    final seen =
-        first != null &&
-        (sequence >= first || (main != null && sequence >= main));
-    if (seen) _firstRead.remove(conversationId);
-    final moved = sequence > (_marks[conversationId] ?? 0);
-    if (!moved && !seen) return;
-    if (moved) _marks[conversationId] = sequence;
+    if (sequence <= (_marks[conversationId] ?? 0)) return;
+    _marks[conversationId] = sequence;
     _saveSoon();
     notifyListeners();
   }
@@ -341,7 +311,6 @@ class SwarmReadMarks extends ChangeNotifier {
 
   Future<void> _load() async {
     final held = <String, int>{};
-    final first = <String, int>{};
     final threads = <String, Map<String, int>>{};
     var found = false;
     try {
@@ -352,12 +321,6 @@ class SwarmReadMarks extends ChangeNotifier {
             if (key is String && value is num) held[key] = value.toInt();
           }
           found = true;
-        }
-        // Absent from what a phone before them wrote.
-        if (value case {'firstRead': final Map marks}) {
-          for (final MapEntry(:key, :value) in marks.entries) {
-            if (key is String && value is num) first[key] = value.toInt();
-          }
         }
         // Absent from what a phone before thread marks wrote.
         if (value case {'threads': final Map kept}) {
@@ -378,10 +341,6 @@ class SwarmReadMarks extends ChangeNotifier {
     final marked = _marks.isNotEmpty || _threads.isNotEmpty;
     for (final MapEntry(:key, :value) in held.entries) {
       if (value > (_marks[key] ?? 0)) _marks[key] = value;
-    }
-    // A first read's mark stays one while nothing read moved it on.
-    for (final MapEntry(:key, :value) in first.entries) {
-      if (_marks[key] == value) _firstRead[key] = value;
     }
     // A thread read before the marks were back keeps the higher of the two.
     for (final MapEntry(key: id, value: roots) in threads.entries) {
@@ -416,7 +375,6 @@ class SwarmReadMarks extends ChangeNotifier {
       for (final group in snapshot.conversations) {
         if (group.lastMessageSequence > (_marks[group.id] ?? 0)) {
           _marks[group.id] = group.lastMessageSequence;
-          _firstRead[group.id] = group.lastMessageSequence;
         }
       }
     }
@@ -435,7 +393,6 @@ class SwarmReadMarks extends ChangeNotifier {
     // A held Mark all read belongs to the access that is gone: never sent.
     _held.clear();
     _marks.clear();
-    _firstRead.clear();
     _threads.clear();
     _started = false;
     unawaited(store?.delete(_key).catchError((Object _) {}));
@@ -453,7 +410,6 @@ class SwarmReadMarks extends ChangeNotifier {
     _trim();
     final value = jsonEncode({
       'marks': _marks,
-      if (_firstRead.isNotEmpty) 'firstRead': _firstRead,
       if (_threads.isNotEmpty) 'threads': _threads,
     });
     unawaited(store?.write(_key, value).catchError((Object _) {}));
@@ -463,7 +419,6 @@ class SwarmReadMarks extends ChangeNotifier {
   /// first, then the oldest kept.
   void _trim() {
     _trimThreads();
-    _firstRead.removeWhere((id, first) => _marks[id] != first);
     if (_marks.length <= kept) return;
     final read = {
       for (final group in reader.snapshot?.conversations ?? const []) group.id,
@@ -478,7 +433,6 @@ class SwarmReadMarks extends ChangeNotifier {
     while (_marks.length > kept) {
       _marks.remove(_marks.keys.first);
     }
-    _firstRead.removeWhere((id, _) => !_marks.containsKey(id));
   }
 
   /// At most [keptThreads] thread marks: those of chats the Swarm's read no

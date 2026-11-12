@@ -79,12 +79,6 @@ void main() {
         groups: [part(chat, version, chatData())],
       );
     };
-    swarm.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
-      'decisions': <Object>[],
-    };
-    swarm.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
-      'mentions': <Object>[],
-    };
     for (final id in [chat, leadChat]) {
       swarm.routes['/api/super-tabs/$tab/conversations/$id/messages'] = (_) => {
         'messages': <Object>[],

@@ -112,7 +112,6 @@ void main() {
         'next': null,
       };
       const derived = {
-        'decisionsWaiting': 1,
         'readMarks': {leadChat: 5},
       };
       final load = firstLoad(
@@ -224,25 +223,6 @@ void main() {
             ],
             'next': null,
           };
-      fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
-        'decisions': [
-          {
-            'id': 'd1',
-            'projectId': project,
-            'projectName': 'Mobile',
-            'conversationId': 'g2',
-            'conversationTitle': 'Saved views cache',
-            'askerName': 'River',
-            'question': 'Merge #2160?',
-            'options': ['Merge', 'Wait'],
-            'recommended': 0,
-            'createdAt': ago(3),
-          },
-        ],
-      };
-      fake.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
-        'mentions': <Object>[],
-      };
       fake.routes['/api/super-tabs/$tab/conversations/$leadChat/messages'] =
           (_) => {
             'messages': [

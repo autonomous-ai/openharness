@@ -74,18 +74,10 @@ void main() {
                       .reduce((a, b) => a > b ? a : b),
           ),
         ],
-        derived: {'decisionsWaiting': 0},
       ),
       'members': [part(me, 1, person(me))],
     };
-    fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
-        changes(cursor: 'c2', derived: {'decisionsWaiting': 0});
-    fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
-      'decisions': <Object>[],
-    };
-    fake.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
-      'mentions': <Object>[],
-    };
+    fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
     fake.routes[messages] = (_) => {
       'messages': page.reversed.toList(),
       'next': next,
@@ -543,7 +535,6 @@ void main() {
     fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
       cursor: 'c3',
       lastChangedAt: 200,
-      derived: {'decisionsWaiting': 0},
       groups: [
         part(
           'g1',

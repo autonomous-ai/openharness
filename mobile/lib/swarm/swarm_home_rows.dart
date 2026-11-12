@@ -7,13 +7,11 @@ import 'package:harness_mobile/phone/tty_controls.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
-import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
 
 import 'swarm_home_list.dart';
 import 'swarm_inbox.dart';
 import 'swarm_row.dart';
-import 'swarm_style.dart';
 
 /// The rows of Swarm Home: a project with how many people read it, how many
 /// agents are running and when it last moved, its tile a dot and its name a
@@ -66,20 +64,16 @@ class SwarmInvitationRow extends StatelessWidget {
 
 /// One project on Home, on one line as Slack's channels (Tony, 2026-11-03):
 /// its name as a channel's ("#openharness") — bold and bright with something
-/// new in it, quiet otherwise — and at its end the tags
-/// waiting in it ("@2", filled), else a dot while it is unread (anh Dee,
-/// 2026-11-04), or a skeleton in the tags' place while what
-/// waits is on its way ([tagsLoading]). No dot for how its team is: one on
-/// every row said little, and the name already says what waits on the person
+/// new in it, quiet otherwise — and at its end a dot while it is unread (anh
+/// Dee, 2026-11-04). No dot for how its team is: one on every row said little
 /// (Tony, 2026-11-03). No second line: who reads it and how long ago it moved
-/// were the same on every row. A private project has a lock at its end,
-/// after its tags, as the desktop's sidebar marks it. A tap opens it; a long
+/// were the same on every row. A private project has a lock before its name,
+/// as the desktop's sidebar marks it. A tap opens it; a long
 /// press offers its pin ([onLongPress]).
 class SwarmHomeProjectRow extends StatelessWidget {
   const SwarmHomeProjectRow({
     super.key,
     required this.project,
-    this.tagsLoading = false,
     required this.onTap,
     this.onLongPress,
   });
@@ -89,16 +83,13 @@ class SwarmHomeProjectRow extends StatelessWidget {
 
   final SwarmHomeProject project;
 
-  /// What waits in its Swarm is not read yet: its tags may still come.
-  final bool tagsLoading;
   final VoidCallback onTap;
   final VoidCallback? onLongPress;
 
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
-    final news = project.news;
-    final bright = news.bold || news.tags > 0;
+    final bright = project.unread;
     // A private project's lock takes the # mark's place, as the desktop's
     // sidebar marks it (#2876): the row's right side is for its notifications.
     final private = project.project.isPrivate;
@@ -127,7 +118,7 @@ class SwarmHomeProjectRow extends StatelessWidget {
               ],
               Expanded(
                 child: Semantics(
-                  label: bright && news.tags == 0 ? 'Unread messages' : null,
+                  label: bright ? 'Unread messages' : null,
                   child: Text.rich(
                     TextSpan(text: name),
                     key: const ValueKey('swarm-project-name'),
@@ -144,19 +135,7 @@ class SwarmHomeProjectRow extends StatelessWidget {
                   ),
                 ),
               ),
-              if (news.tags > 0) ...[
-                const SizedBox(width: 12),
-                SwarmTags(news.tags, filled: true),
-              ] else if (tagsLoading) ...[
-                const SizedBox(width: 12),
-                // As big as the filled tags it stands for.
-                const Skeleton(
-                  key: ValueKey('swarm-project-tags-loading'),
-                  width: 36,
-                  height: 20,
-                  radius: 10,
-                ),
-              ] else if (news.bold) ...[
+              if (bright) ...[
                 // Unread, as anh Dee's Home draws it (2026-11-04); heard in
                 // the name's words.
                 const SizedBox(width: 12),

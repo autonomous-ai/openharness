@@ -121,20 +121,6 @@ bool swarmCanSwitchPm(SwarmReader reader, String projectId) =>
     swarmMaySwitchLead(reader.snapshot, projectId, reader.accountId) &&
     swarmLeadOf(reader.snapshot, projectId)?.switchRequest == null;
 
-/// The project whose Product Manager the usage-limit note [message] offers
-/// Switch PM… for: while that PM's machine still alerts about the limit (as a
-/// prompt note stops saying anything once answered) and [swarmCanSwitchPm].
-/// Null for every other note (Desktop's `SuperTabTerminalRow._canSwitch`).
-String? swarmLimitNoteSwitchPm(SwarmReader reader, SuperTabMessage message) {
-  final id = message.leadLimitAgentId, snapshot = reader.snapshot;
-  if (id == null || snapshot == null) return null;
-  final lead = snapshot.agent(id), project = snapshot.leadProjectForAgent(id);
-  if (lead == null || project == null || !lead.alerting.contains('limit')) {
-    return null;
-  }
-  return swarmCanSwitchPm(reader, project.id) ? project.id : null;
-}
-
 /// Why [projectId]'s Product Manager cannot be switched now, as Desktop's
 /// dialog says it before Switch is pressed: no fresh reading from its
 /// machine, or a Harness there too old to switch one (backend

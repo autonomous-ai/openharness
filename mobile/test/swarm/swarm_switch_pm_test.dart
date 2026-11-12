@@ -21,7 +21,7 @@ import 'swarm_fixture.dart';
 /// Switch PM on the phone (Desktop's switch_pm.dart, spec
 /// 2026-11-02-pm-switch-engine-account-design.md section 8): who is offered
 /// it in the project's ⋮ › Project settings…, as Desktop's project menu has
-/// it, and on the PM's limit note, what its dialog lists — the machines to
+/// it, what its dialog lists — the machines to
 /// move it to, their accounts and the Swarm's models — when its machine
 /// cannot switch it, what Switch sends, a refusal, and the PM reading
 /// Switching… after.
@@ -156,30 +156,6 @@ void main() {
     },
   };
 
-  /// [hour]:[minute] of today, in local time.
-  DateTime today(int hour, int minute) {
-    final now = DateTime.now();
-    return DateTime(now.year, now.month, now.day, hour, minute);
-  }
-
-  /// The PM's usage-limit note in its project chat (backend terminal.ts).
-  Map<String, dynamic> limitNote({String agentId = 'agent-lead'}) => {
-    'id': 'n1',
-    'conversationId': leadChat,
-    'sequence': 2,
-    'text': 'River hit a usage limit.',
-    'author': {'kind': 'agent', 'id': agentId, 'name': 'River'},
-    'createdAt': DateTime.utc(2026, 11, 3, 8).toIso8601String(),
-    'source': {
-      'kind': 'terminal-alert',
-      'alert': 'limit',
-      'agentId': agentId,
-      'lead': agentId == 'agent-lead' ? true : null,
-      // Today, so the note names the time alone.
-      'limitedUntil': today(18, 5).toIso8601String(),
-    },
-  };
-
   /// What the next command answers instead of the server.
   FutureOr<Object?> Function()? answer;
 
@@ -192,7 +168,6 @@ void main() {
     Map<String, dynamic>? machine,
     List<Map<String, dynamic>> others = const [],
     FutureOr<Object?> Function()? policy,
-    List<Map<String, dynamic>> messages = const [],
   }) {
     final fake = FakeSwarm();
     // Unrouted, the read fails: Default alone.
@@ -226,15 +201,9 @@ void main() {
       'members': [part(me, 1, person(me, role: role))],
     };
     fake.routes[changesPath] = (_) => changes(cursor: 'c2');
-    fake.routes['/api/super-tabs/$tab/decisions'] = (_) => {
-      'decisions': <Object>[],
-    };
-    fake.routes['/api/super-tabs/$tab/mentions'] = (_) => {
-      'mentions': <Object>[],
-    };
     fake.routes['/api/super-tabs/$tab/conversations/$leadChat/messages'] =
         (_) => {
-          'messages': messages.reversed.toList(),
+          'messages': <Object>[],
           'threads': <Object>[],
           'next': null,
         };
@@ -303,7 +272,6 @@ void main() {
   Finder key(String value) => find.byKey(ValueKey(value));
   // Project settings…'s row (the limit note's has its own key).
   final menuItem = find.text('Switch PM…');
-  final noteAction = key('swarm-limit-switch-pm');
   final dialog = find.byType(SwarmSwitchPmDialog);
   final confirm = key('swarm-switch-pm-confirm');
 
@@ -1275,94 +1243,6 @@ void main() {
           expect(at.right, lessThanOrEqualTo(rect.right), reason: id);
         }
       }
-    });
-  });
-
-  group('the PM\'s limit note', () {
-    testWidgets('offers Switch PM… while its machine still alerts about the '
-        'limit, and opens the dialog', (tester) async {
-      await pump(
-        tester,
-        backend(
-          pm: pmData({
-            'alerting': ['limit'],
-          }),
-          messages: [limitNote()],
-        ),
-      );
-      expect(find.textContaining('River hit a usage limit.'), findsOneWidget);
-      expect(find.textContaining('until 18:05'), findsOneWidget);
-      expect(noteAction, findsOneWidget);
-      await tester.tap(noteAction);
-      await tester.pumpAndSettle();
-      expect(dialog, findsOneWidget);
-      expect(find.text('Codex · Side'), findsOneWidget);
-    });
-
-    testWidgets('leaves once the limit alert ends or a switch is under way', (
-      tester,
-    ) async {
-      final fake = backend(
-        pm: pmData({
-          'alerting': ['limit'],
-        }),
-        messages: [limitNote()],
-      );
-      final host = await pump(tester, fake);
-      expect(noteAction, findsOneWidget);
-
-      await readAgain(
-        tester,
-        fake,
-        host,
-        pm: pmData({
-          'alerting': ['limit'],
-          'switchRequest': switching(),
-        }),
-      );
-      expect(noteAction, findsNothing);
-      expect(find.textContaining('River hit a usage limit.'), findsOneWidget);
-
-      fake.routes[changesPath] = (_) => {
-        ...changes(cursor: 'c4', lastChangedAt: 300),
-        'agents': [part('agent-lead', 3, pmData())],
-      };
-      await host.session!.inbox.reader(tab)!.refresh();
-      await tester.pumpAndSettle();
-      expect(noteAction, findsNothing);
-    });
-
-    testWidgets('not once its machine no longer alerts', (tester) async {
-      await pump(tester, backend(messages: [limitNote()]));
-      expect(find.textContaining('until 18:05'), findsOneWidget);
-      expect(noteAction, findsNothing);
-    });
-
-    testWidgets('not to a viewer', (tester) async {
-      await pump(
-        tester,
-        backend(
-          role: 'viewer',
-          pm: pmData({
-            'alerting': ['limit'],
-          }),
-          messages: [limitNote()],
-        ),
-      );
-      expect(noteAction, findsNothing);
-    });
-
-    testWidgets('a worker\'s limit note never offers it', (tester) async {
-      await pump(
-        tester,
-        backend(
-          pm: pmData({
-            'alerting': ['limit'],
-          }),
-          messages: [limitNote(agentId: 'agent-builder')],
-        ),
-      );
-      expect(noteAction, findsNothing);
     });
   });
 

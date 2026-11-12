@@ -6,9 +6,7 @@ import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/parts.dart';
 import 'package:harness_mobile/swarm/swarm_buddy.dart';
 import 'package:harness_mobile/swarm/swarm_home_cache.dart';
-import 'package:harness_mobile/swarm/swarm_pm_chat.dart';
 import 'package:harness_mobile/swarm/team_glance.dart';
-import 'package:harness_mobile/swarm/waiting_work.dart';
 
 import 'swarm_fixture.dart';
 
@@ -16,9 +14,9 @@ import 'swarm_fixture.dart';
 /// what Home draws, encrypted under a key in the Keychain, and gone with the
 /// account, the Swarm switch, or the person's access.
 void main() {
-  /// A Swarm whose work g1 waits on the person, with everything Home does
-  /// not draw filled in: a brief, checks, a question, emails.
-  ({SuperTabSnapshot snapshot, Map<String, String> partners}) read() {
+  /// A Swarm with everything Home does not draw filled in: a brief, checks,
+  /// a question, emails.
+  SuperTabSnapshot read() {
     final load = firstLoad(
       groups: [
         {
@@ -43,51 +41,35 @@ void main() {
         },
       ],
     );
-    final state = SuperTabParts.firstLoad(load).state;
-    return (
-      snapshot: SuperTabSnapshot.fromJson(state),
-      partners: swarmPartners(state),
-    );
+    return SuperTabSnapshot.fromJson(SuperTabParts.firstLoad(load).state);
   }
 
   group('the view kept', () {
     test('draws Home as the Swarm did', () {
-      final (:snapshot, :partners) = read();
+      final snapshot = read();
 
-      final kept = swarmHomeSwarm(snapshot, partners);
-      final back = SuperTabSnapshot.fromJson(kept.state);
+      final back = SuperTabSnapshot.fromJson(swarmHomeSwarm(snapshot));
 
       expect(back.name, snapshot.name);
       expect([for (final p in back.projects) p.name], ['Mobile']);
       final project = back.projects.single;
-      expect(swarmPmName(back, project), 'River');
       expect(
         swarmTeamGlance(back, projectId: project.id).line,
         swarmTeamGlance(snapshot, projectId: project.id).line,
       );
-      final waiting = swarmWaitingWork(back, me, partners: kept.partners);
-      expect(
-        [for (final w in waiting) w.conversation.label],
-        ['#4 Rotate the keys'],
-      );
-      expect(waiting.single.status, 'needs_human');
-      expect(waiting.single.agentName, 'Nova');
+      expect(back.conversation('g1')!.label, '#4 Rotate the keys');
     });
 
     test('keeps nothing Home does not draw', () {
-      final (:snapshot, :partners) = read();
+      final snapshot = read();
 
-      final text = jsonEncode(swarmHomeSwarm(snapshot, partners).state);
+      final text = jsonEncode(swarmHomeSwarm(snapshot));
 
       expect(text, isNot(contains('The secret plan')));
       expect(text, isNot(contains('Keys rotated')));
       expect(text, isNot(contains('Which vault')));
       expect(text, isNot(contains('@example.com')));
-      final back = SuperTabSnapshot.fromJson(
-        swarmHomeSwarm(snapshot, partners).state,
-      );
-      expect(back.decisionsWaiting, 0);
-      expect(back.mentionsWaiting, 0);
+      final back = SuperTabSnapshot.fromJson(swarmHomeSwarm(snapshot));
       expect(back.conversation('g1')!.lastMessageSequence, 0);
     });
   });
@@ -111,9 +93,8 @@ void main() {
 
       final kept = swarmHomeSwarm(
         SuperTabSnapshot.fromJson(state),
-        swarmPartners(state),
         buddies: buddies,
-      ).state;
+      );
       final back = SwarmBuddies.read(kept, me);
 
       expect(back.ownChats, {project: 'buddy-me'});
@@ -128,10 +109,7 @@ void main() {
     test('keep none where there are none', () {
       final state = SuperTabParts.firstLoad(firstLoad()).state;
 
-      final kept = swarmHomeSwarm(
-        SuperTabSnapshot.fromJson(state),
-        swarmPartners(state),
-      ).state;
+      final kept = swarmHomeSwarm(SuperTabSnapshot.fromJson(state));
 
       expect(SwarmBuddies.read(kept, me).chatOwners, isEmpty);
       expect(SwarmBuddies.read(kept, me).ownBuddies, isEmpty);
@@ -171,7 +149,7 @@ void main() {
 
     test('a built-in picture is kept by its name', () {
       final back = SuperTabSnapshot.fromJson(
-        swarmHomeSwarm(faces(), const {}).state,
+        swarmHomeSwarm(faces()),
       );
       expect(
         (back.agent('agent-builder')!.avatar! as SuperTabPresetAvatar).key,
@@ -189,12 +167,11 @@ void main() {
 
       final kept = swarmHomeSwarm(
         named({...person(me), 'username': 'river'}),
-        const {},
-      ).state;
+      );
       expect(jsonEncode(kept), isNot(contains('$me@example.com')));
       expect(SuperTabSnapshot.fromJson(kept).people.single.username, 'river');
 
-      final older = swarmHomeSwarm(named(person(me)), const {}).state;
+      final older = swarmHomeSwarm(named(person(me)));
       expect(
         (older['people'] as List).single as Map,
         isNot(contains('username')),
@@ -208,7 +185,7 @@ void main() {
         snapshot.agent('agent-lead')!.avatar,
         isA<SuperTabUploadedAvatar>(),
       );
-      final kept = swarmHomeSwarm(snapshot, const {}).state;
+      final kept = swarmHomeSwarm(snapshot);
       final text = jsonEncode(kept);
       expect(text, isNot(contains('storage.googleapis.com')));
       expect(text, isNot(contains('sig=secret')));
@@ -231,14 +208,7 @@ void main() {
     });
 
     List<SwarmHomeEntry> home() {
-      final (:snapshot, :partners) = read();
-      return [
-        (
-          id: tab,
-          name: 'Phone Swarm',
-          view: swarmHomeSwarm(snapshot, partners),
-        ),
-      ];
+      return [(id: tab, name: 'Phone Swarm', state: swarmHomeSwarm(read()))];
     }
 
     test('reads back for its account', () async {
@@ -247,9 +217,8 @@ void main() {
       final back = await cache.read(me);
 
       expect([for (final s in back!) s.name], ['Phone Swarm']);
-      final snapshot = SuperTabSnapshot.fromJson(back.single.view.state);
+      final snapshot = SuperTabSnapshot.fromJson(back.single.state);
       expect(snapshot.projects.single.name, 'Mobile');
-      expect(back.single.view.partners, {'g1': me});
     });
 
     test('is sealed on disk under a key kept in the Keychain', () async {

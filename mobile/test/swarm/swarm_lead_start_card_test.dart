@@ -99,12 +99,6 @@ void main() {
     };
     swarm.routes['/api/super-tabs/$tab/parts'] = (_) => load ?? personalLoad();
     swarm.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
-    swarm.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
-      'decisions': <Object>[],
-    };
-    swarm.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
-      'mentions': <Object>[],
-    };
     swarm.routes['/api/super-tabs/$tab/leaderboard'] = (_) =>
         leaderboardData(people: const []);
     swarm.routes['/api/super-tabs/$tab/conversations/$personalChat/messages'] =

@@ -353,12 +353,6 @@ Future<void> showChat(
     ],
   };
   fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
-  fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
-    'decisions': <Object>[],
-  };
-  fake.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
-    'mentions': <Object>[],
-  };
   fake.routes[messages] = (_) => {
     'messages': [
       {

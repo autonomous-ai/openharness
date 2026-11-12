@@ -12,7 +12,6 @@ import 'swarm_chat_notify.dart';
 import 'swarm_kept.dart';
 import 'swarm_read_marks.dart';
 import 'swarm_request.dart';
-import 'waiting_work.dart';
 
 /// A Swarm of this many groups and agents or more is made into what the
 /// screens draw off the UI isolate: on the owner's iPhone 14 a 1.3 MB Swarm took 73 to 93 ms
@@ -23,7 +22,6 @@ const swarmParseOffThreadParts = 100;
 /// What the screens draw of a Swarm, worked out from its parts.
 typedef _View = ({
   SuperTabSnapshot snapshot,
-  Map<String, String> partners,
   SwarmBuddies buddies,
 });
 
@@ -39,7 +37,6 @@ _View _viewOf(SuperTabParts parts, String accountId) {
   }
   return (
     snapshot: SuperTabSnapshot.fromJson(state),
-    partners: swarmPartners(state),
     buddies: SwarmBuddies.read(state, accountId),
   );
 }
@@ -96,9 +93,6 @@ class SwarmReader extends ChangeNotifier {
 
   /// The Swarm as last read; null before the first read and after access ends.
   SuperTabSnapshot? snapshot;
-
-  /// Each conversation's partner, the person its work needs ([swarmPartners]).
-  Map<String, String> partners = const {};
 
   /// The Buddy chats and Buddies held, the reader's own by project
   /// ([swarmBuddyChat], [swarmBuddy]).
@@ -307,7 +301,6 @@ class SwarmReader extends ChangeNotifier {
 
   void _show(_View view) {
     snapshot = view.snapshot;
-    partners = view.partners;
     buddies = view.buddies;
     swarmMarkBuddies(view.snapshot, view.buddies);
     _views++;
@@ -328,7 +321,6 @@ class SwarmReader extends ChangeNotifier {
     _notifySending.clear();
     _notifyKept.clear();
     snapshot = null;
-    partners = const {};
     buddies = SwarmBuddies.none;
     _parts = null;
     _heldLoad = 0;

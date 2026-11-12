@@ -24,9 +24,7 @@ void main() {
       ],
       'next': null,
     };
-    const derived = {'decisionsWaiting': 1, 'mentionsWaiting': 0};
     fake.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad(
-      derived: derived,
       head: headData(
         projects: [
           // One line each since 2026-11-03: ten fit on the phone now.
@@ -44,22 +42,7 @@ void main() {
       ),
       agents: [agent('agent-lead', name: 'Lead', displayName: 'River')],
     );
-    fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
-        changes(cursor: 'c2', derived: derived);
-    fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
-      'decisions': [
-        {
-          'id': 'd1',
-          'conversationId': 'g9',
-          'askerName': 'River',
-          'question': 'Ship it?',
-          'options': ['Yes', 'No'],
-        },
-      ],
-    };
-    fake.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
-      'mentions': <Object>[],
-    };
+    fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
     return fake;
   }
 
@@ -131,43 +114,6 @@ void main() {
     await toHarnessAndBack(tester);
 
     expect(offset(tester), scrolled);
-  });
-
-  testWidgets('Home out of sight mutes no notice', (tester) async {
-    await pump(tester);
-    final need = host.session!.inbox.needs.single;
-    choice.showHarness();
-    await tester.pumpAndSettle();
-
-    host.session!.announce(need);
-
-    expect(notices.shown.single.title, 'River asks you');
-  });
-
-  testWidgets('Home dropped while out of sight (Swarm turned off) leaves '
-      'another Swarm screen muting them', (tester) async {
-    await pump(tester);
-    final session = host.session!;
-    final need = session.inbox.needs.single;
-    choice.showHarness();
-    await tester.pumpAndSettle();
-    // Another Swarm screen up meanwhile (a chat).
-    session.enter();
-
-    choice.features.value = const {};
-    await tester.pumpAndSettle();
-    expect(find.byType(SwarmPage, skipOffstage: false), findsNothing);
-    session.announce(need);
-
-    expect(notices.shown, isEmpty, reason: 'Home left once, when hidden');
-  });
-
-  testWidgets('Home in sight mutes them, as before', (tester) async {
-    await pump(tester);
-
-    host.session!.announce(host.session!.inbox.needs.single);
-
-    expect(notices.shown, isEmpty);
   });
 
   testWidgets('Home out of sight builds nothing when its Swarms change', (

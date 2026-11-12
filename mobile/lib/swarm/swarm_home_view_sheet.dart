@@ -24,7 +24,6 @@ String swarmHomeSortLabel(SwarmHomePrefs home) {
 String swarmHomeFilterLabel(SwarmHomeFilter filter) => switch (filter) {
   SwarmHomeFilter.all => 'All projects',
   SwarmHomeFilter.unread => 'Unread',
-  SwarmHomeFilter.mentions => 'Mentions',
 };
 
 /// Sort by and Filter, from Home's top bar: each says what is on, and opens to
@@ -219,7 +218,7 @@ class _ViewSheetState extends State<_ViewSheet> {
                     padding: EdgeInsetsDirectional.only(
                       start: AppSpace.m + AppSpace.m,
                     ),
-                    child: SwarmCaption('Unreads and mentions'),
+                    child: SwarmCaption('Unreads'),
                   ),
                   for (final (first, title) in const [
                     (false, 'Show in order'),

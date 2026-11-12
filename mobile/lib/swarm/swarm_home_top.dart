@@ -21,8 +21,7 @@ import 'swarm_start.dart';
 import 'swarm_style.dart';
 
 /// The top of Swarm Home, direction C, as Tony's prototype C1 draws it
-/// (2026-10-30): the Swarm switcher in its title ([showSwarmSwitcher]). While
-/// you were away is the need-you line since 2026-11-04 (`SwarmNeedLine`).
+/// (2026-10-30): the Swarm switcher in its title ([showSwarmSwitcher]).
 
 /// Whether the account's Swarms are still to come, a failed read still trying:
 /// never from a server without the list, which no read will bring.

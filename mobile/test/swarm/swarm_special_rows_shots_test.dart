@@ -78,13 +78,6 @@ void main() {
         row('m1', 1, 'Can someone take the login fix?', {
           'kind': 'message',
         }, author: 'River'),
-        row('t1', 3, 'River typed `2` + Enter into Nico\'s terminal', {
-          'kind': 'terminal-input',
-        }),
-        row('t2', 4, 'Nico is waiting at a prompt', {
-          'kind': 'terminal-alert',
-          'alert': 'other',
-        }),
         {
           ...row('p1', 5, 'Asked by dee.\nGoal: Activity read fix', {
             'kind': 'buddy-proposal',

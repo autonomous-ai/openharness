@@ -9,7 +9,6 @@ import 'package:harness_mobile/api/api_client.dart';
 import 'package:harness_mobile/auth/auth_session.dart';
 import 'package:harness_mobile/core/config.dart';
 import 'package:harness_mobile/core/models.dart';
-import 'package:harness_mobile/swarm/swarm_asks.dart';
 import 'package:harness_mobile/swarm/swarm_conversation.dart';
 import 'package:harness_mobile/swarm/swarm_reader.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
@@ -140,82 +139,42 @@ void main() {
   });
 
   test(
-    'a decision answer reaches the backend with every machine offline',
+    'retrying an unconfirmed post retains its command and operation ID',
     () async {
       final p = await phone();
-      final asks = SwarmAsks(await reader(p.rig));
-      addTearDown(asks.dispose);
-      final decision = SuperTabDecision.fromJson({
-        'id': 'decision-1',
-        'conversationId': 'g1',
-        'question': 'Ship?',
-        'options': ['Yes', 'No'],
-      });
-
-      expect(await asks.answer(decision, 1), isTrue);
-      expect(p.backend.writes.single['command'], {
-        'type': 'decision.answer',
-        'decisionId': 'decision-1',
-        'choice': 1,
-      });
-      expect(p.backend.bearers, ['Bearer phone-person-token']);
+      var lost = true;
+      p.backend.onWrite = (options) {
+        if (lost) {
+          throw DioException.connectionError(
+            requestOptions: options,
+            reason: 'reply lost',
+          );
+        }
+        return (
+          status: 200,
+          body: {
+            'success': true,
+            'data': {
+              'result': {'messageId': 'posted-1'},
+            },
+          },
+        );
+      };
+      final r = await reader(p.rig);
+      final chat = SwarmConversation(r, 'g1');
+      addTearDown(chat.dispose);
+      await chat.load();
+      chat.draft = 'Send exactly once';
+      expect(await chat.send(), isFalse);
+      lost = false;
+      expect(await chat.send(), isTrue);
+      expect(p.backend.writes, hasLength(2));
+      expect(p.backend.writes[1], p.backend.writes[0]);
+      expect(p.backend.writes[0]['operationId'], isNotEmpty);
       expect(p.rig.conn('mac').payloadsOf('super_tabs'), isEmpty);
       await settle();
     },
   );
-
-  for (final action in ['post', 'answer']) {
-    test(
-      'retrying an unconfirmed $action retains its command and operation ID',
-      () async {
-        final p = await phone();
-        var lost = true;
-        p.backend.onWrite = (options) {
-          if (lost) {
-            throw DioException.connectionError(
-              requestOptions: options,
-              reason: 'reply lost',
-            );
-          }
-          return (
-            status: 200,
-            body: {
-              'success': true,
-              'data': {
-                'result': {'messageId': 'posted-1'},
-              },
-            },
-          );
-        };
-        final r = await reader(p.rig);
-        if (action == 'post') {
-          final chat = SwarmConversation(r, 'g1');
-          addTearDown(chat.dispose);
-          await chat.load();
-          chat.draft = 'Send exactly once';
-          expect(await chat.send(), isFalse);
-          lost = false;
-          expect(await chat.send(), isTrue);
-        } else {
-          final asks = SwarmAsks(r);
-          addTearDown(asks.dispose);
-          final decision = SuperTabDecision.fromJson({
-            'id': 'd1',
-            'conversationId': 'g1',
-          });
-          expect(await asks.answer(decision, 1), isFalse);
-          lost = false;
-          // A changed tap cannot silently change an answer whose receipt is pending.
-          expect(await asks.answer(decision, 0), isTrue);
-        }
-        expect(p.backend.writes, hasLength(2));
-        expect(p.backend.writes[1], p.backend.writes[0]);
-        expect(p.backend.writes[0]['operationId'], isNotEmpty);
-        expect(p.rig.conn('mac').payloadsOf('super_tabs'), isEmpty);
-        await settle();
-      },
-    );
-  }
 
   for (final status in [0, 500, 503]) {
     test(

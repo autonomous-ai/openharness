@@ -9,7 +9,6 @@ import 'package:harness_mobile/swarm/swarm_home_cache.dart';
 import 'package:harness_mobile/swarm/swarm_home_list.dart';
 import 'package:harness_mobile/swarm/swarm_home_prefs.dart';
 import 'package:harness_mobile/swarm/swarm_reader.dart';
-import 'package:harness_mobile/swarm/swarm_unread.dart';
 
 import '../voice_fakes.dart' show MemoryKeyValueStore;
 import 'swarm_fixture.dart';
@@ -76,7 +75,7 @@ void main() {
       });
 
       final back = SuperTabSnapshot.fromJson(
-        jsonDecode(jsonEncode(swarmHomeSwarm(read, const {}).state))
+        jsonDecode(jsonEncode(swarmHomeSwarm(read)))
             as Map<String, dynamic>,
       );
 
@@ -132,7 +131,7 @@ void main() {
     });
 
     test("leaves out the person's Buddy chat and a private chat, as a "
-        "project's news does", () {
+        "project's unread does", () {
       final snapshot = swarmOf([
         chat('lead-p1', 'p1', ago(600)),
         {...chat('buddy', 'p1', ago(1)), 'kind': 'buddy', 'buddyOwnerId': me},
@@ -168,7 +167,7 @@ void main() {
       String id, {
       int? minutes,
       String swarmId = tab,
-      SwarmProjectNews news = swarmNoProjectNews,
+      bool unread = false,
     }) => SwarmHomeProject(
       swarmId: swarmId,
       project: SuperTabProject.fromJson({
@@ -178,7 +177,7 @@ void main() {
         'leadConversationId': 'lead-$id',
       }),
       active: minutes == null ? null : at(ago(minutes)),
-      news: news,
+      unread: unread,
     );
     List<String> ids(List<SwarmHomeProject> projects) => [
       for (final p in projects) p.project.id,
@@ -189,7 +188,7 @@ void main() {
         String id,
         String name,
         int minutes, {
-        SwarmProjectNews news = swarmNoProjectNews,
+        bool unread = false,
       }) => SwarmHomeProject(
         swarmId: tab,
         project: SuperTabProject.fromJson({
@@ -199,7 +198,7 @@ void main() {
           'leadConversationId': 'lead-$id',
         }),
         active: at(ago(minutes)),
-        news: news,
+        unread: unread,
       );
       for (final updated in [false, true]) {
         final lists = swarmHomeLists(
@@ -208,9 +207,7 @@ void main() {
               'z',
               '# Zebra',
               updated ? 0 : 10,
-              news: updated
-                  ? (bold: true, tags: 1, hasWaitingTag: true)
-                  : swarmNoProjectNews,
+              unread: updated,
             ),
             named('b', 'beta', 1),
             named('a2', '# ALPHA', 3),
@@ -220,7 +217,7 @@ void main() {
           now: now,
         );
         expect(ids(lists.recent), ['a1', 'a2', 'b', 'z']);
-        expect(lists.recent.last.news.bold, updated);
+        expect(lists.recent.last.unread, updated);
       }
     });
 
@@ -294,28 +291,15 @@ void main() {
       final lists = swarmHomeLists(
         [
           project('a', minutes: 5),
-          project(
-            'b',
-            minutes: 60 * 30,
-            news: (bold: false, tags: 1, hasWaitingTag: true),
-          ),
-          project(
-            'c',
-            minutes: 60 * 31,
-            news: (bold: true, tags: 0, hasWaitingTag: false),
-          ),
+          project('b', minutes: 60 * 30, unread: true),
+          project('c', minutes: 60 * 31, unread: true),
           project('d', minutes: 60 * 32),
-          project(
-            'task-tag',
-            minutes: 60 * 33,
-            news: (bold: false, tags: 0, hasWaitingTag: true),
-          ),
         ],
         pins: const {},
         now: now,
       );
 
-      expect(ids(lists.recent), ['a', 'b', 'c', 'task-tag']);
+      expect(ids(lists.recent), ['a', 'b', 'c']);
       expect(ids(lists.quiet), ['d']);
     });
 

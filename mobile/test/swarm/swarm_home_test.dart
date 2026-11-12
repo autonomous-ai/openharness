@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
@@ -108,13 +107,11 @@ void main() {
       ],
       'next': null,
     };
-    const derived = {'decisionsWaiting': 1, 'mentionsWaiting': 1};
     Map<String, dynamic> inWeb(Map<String, dynamic> row) => {
       ...row,
       'projectId': web,
     };
     fake.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad(
-      derived: derived,
       head: headData(
         projects: [
           {
@@ -183,34 +180,7 @@ void main() {
         ),
       ],
     );
-    fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
-        changes(cursor: 'c2', derived: derived);
-    fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
-      'decisions': [
-        {
-          'id': 'd1',
-          'projectName': 'Mobile',
-          'conversationId': 'g1',
-          'conversationTitle': 'Fix login',
-          'askerName': 'River',
-          'question': 'Ship it behind a flag?',
-          'options': ['Yes', 'No'],
-        },
-      ],
-    };
-    fake.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
-      'mentions': [
-        {
-          'id': 'm1',
-          'projectName': 'Mobile',
-          'conversationId': 'g1',
-          'conversationTitle': 'Fix login',
-          'messageId': 'msg-1',
-          'leadName': 'River',
-          'text': 'Can you check the copy?',
-        },
-      ],
-    };
+    fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
     fake.routes['/api/super-tabs/$tab/commands'] = (body) => {
       'result': switch (body?['command']) {
         {'type': 'buddy.chat', 'projectId': web} => {
@@ -320,7 +290,6 @@ void main() {
   void moveOn(FakeSwarm fake, Map<String, Map<String, dynamic>> groups) =>
       fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
         cursor: 'c3',
-        derived: const {'decisionsWaiting': 1, 'mentionsWaiting': 1},
         groups: [
           for (final MapEntry(:key, :value) in groups.entries)
             part(key, 30, value),
@@ -568,8 +537,8 @@ void main() {
       );
     });
 
-    testWidgets('a project with a task-chat tag stays quiet without a number; '
-        'the rest are quiet; each on one line, with no people and no time', (
+    testWidgets('projects with nothing new are quiet, each on one line, with '
+        'no people and no time', (
       tester,
     ) async {
       final semantics = tester.ensureSemantics();
@@ -578,8 +547,6 @@ void main() {
       const mobileRow = 'swarm-project-$tab-$project';
       const webRow = 'swarm-project-$tab-$web';
       expect(weightOf(tester, mobileRow, 'Mobile'), isNot(AppFont.semibold));
-      expect(inside(mobileRow, find.byType(SwarmTags)), findsNothing);
-      expect(find.bySemanticsLabel(RegExp('1 mention')), findsNothing);
       expect(weightOf(tester, webRow, 'Web'), isNot(AppFont.semibold));
       expect(inside(webRow, find.textContaining('@')), findsNothing);
       for (final row in [mobileRow, webRow]) {
@@ -629,7 +596,6 @@ void main() {
         expect(weightOf(tester, webRow, 'Web'), AppFont.semibold);
         expect(inside(webRow, key('swarm-project-unread')), findsOneWidget);
         expect(inside(webRow, find.textContaining('@')), findsNothing);
-        expect(inside(webRow, find.byType(SwarmTags)), findsNothing);
       },
     );
 
@@ -681,10 +647,7 @@ void main() {
       final now = DateTime.utc(2026, 10, 29, 10);
       int ago(int minutes) =>
           now.subtract(Duration(minutes: minutes)).millisecondsSinceEpoch;
-      final fake = backend()
-        ..routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
-          'mentions': <Object>[],
-        };
+      final fake = backend();
       timed(fake, {
         for (final id in mobileChats) id: ago(60 * 48),
         webLead: ago(5),
@@ -778,31 +741,6 @@ void main() {
       );
     });
 
-    testWidgets('a task-chat tag keeps its project under Mentions without a '
-        'project-chat count', (tester) async {
-      final fake = backend();
-      final load = fake.routes['/api/super-tabs/$tab/parts']!;
-      fake.routes['/api/super-tabs/$tab/parts'] = (body) async => {
-        ...await load(body) as Map<String, dynamic>,
-        'agents': <Object>[],
-      };
-      final host = await pump(tester, fake);
-      host.session!.home.setFilter(SwarmHomeFilter.mentions);
-      await tester.pumpAndSettle();
-
-      final row = key('swarm-project-$tab-$project');
-      expect(row, findsOneWidget);
-      expect(
-        inside('swarm-project-$tab-$project', find.byType(SwarmTags)),
-        findsNothing,
-      );
-      expect(
-        weightOf(tester, 'swarm-project-$tab-$project', 'Mobile'),
-        isNot(AppFont.semibold),
-        reason: 'a task tag keeps it listed without bolding its project chat',
-      );
-    });
-
     testWidgets('back from a project, Home still has its title, and it opens '
         'the switcher', (tester) async {
       await pump(tester, backend());
@@ -845,7 +783,6 @@ void main() {
       expect((page.swarmId, page.projectId), (tab, web));
       expectHomeCProject('Web');
     });
-
   });
 
   group('several Swarms', () {
@@ -881,12 +818,6 @@ void main() {
       );
       fake.routes['/api/super-tabs/$second/changes'] = (_) =>
           changes(cursor: 'c2');
-      fake.routes['/api/super-tabs/$second/decisions?state=open'] = (_) => {
-        'decisions': <Object>[],
-      };
-      fake.routes['/api/super-tabs/$second/mentions?state=waiting'] = (_) => {
-        'mentions': <Object>[],
-      };
       return fake;
     }
 
@@ -1318,39 +1249,6 @@ void main() {
       await frames(tester);
       expect(key('swarm-switch-loading'), findsNothing);
       expect(key('swarm-switch-$tab'), findsOneWidget);
-    });
-
-    testWidgets('a row has a skeleton where its tags go until what waits is '
-        'read, then its tags, or nothing', (tester) async {
-      final fake = backend();
-      final asked = hold(fake, '/api/super-tabs/$tab/mentions?state=waiting');
-      final host = await pump(tester, fake, settle: false);
-      await frames(tester);
-      const mobileRow = 'swarm-project-$tab-$project';
-      const webRow = 'swarm-project-$tab-$web';
-
-      expect(host.session!.inbox.asks(tab)!.loading, isTrue);
-      for (final row in [mobileRow, webRow]) {
-        expect(inside(row, key('swarm-project-tags-loading')), findsOneWidget);
-        expect(inside(row, find.byType(SwarmTags)), findsNothing);
-      }
-      final tall = tester.getSize(key(mobileRow)).height;
-
-      asked.complete();
-      await tester.pumpAndSettle();
-
-      expect(key('swarm-project-tags-loading'), findsNothing);
-      expect(
-        inside(mobileRow, find.byType(SwarmTags)),
-        findsNothing,
-        reason: "the tag is in a task chat, not the project chat",
-      );
-      expect(inside(webRow, find.byType(SwarmTags)), findsNothing);
-      expect(
-        tester.getSize(key(mobileRow)).height,
-        closeTo(tall, .01),
-        reason: 'the tags come where the skeleton was',
-      );
     });
 
     testWidgets('before the list answers, the projects are skeleton rows, '

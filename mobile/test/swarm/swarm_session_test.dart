@@ -10,7 +10,6 @@ import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/swarm/parts.dart';
 import 'package:harness_mobile/swarm/swarm_face.dart';
 import 'package:harness_mobile/swarm/swarm_home_cache.dart';
-import 'package:harness_mobile/swarm/swarm_inbox.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_start.dart';
@@ -21,12 +20,11 @@ import 'swarm_fixture.dart';
 
 /// The account's Swarm on the phone: made while Swarm is turned on and someone
 /// is signed in, read while Harness is in front, telling the person what
-/// arrives unless they are looking at it, and holding a decision's answer
-/// for Undo.
+/// arrives unless they are looking at it.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  /// One Swarm `a` whose open decision is d1, asked in conversation g9.
+  /// One Swarm `a` where a v1-v3 decision, d1, is still open and counted.
   FakeSwarm backend() {
     final fake = FakeSwarm();
     fake.routes['/api/super-tabs/list'] = (_) => {
@@ -50,9 +48,6 @@ void main() {
           'options': ['Yes', 'No'],
         },
       ],
-    };
-    fake.routes['/api/super-tabs/a/mentions?state=waiting'] = (_) => {
-      'mentions': <Object>[],
     };
     fake.routes['/api/super-tabs/a/commands'] = (_) => {
       'result': <String, dynamic>{},
@@ -101,10 +96,7 @@ void main() {
       (
         id: 'a',
         name: 'Swarm a',
-        view: (
-          state: SuperTabParts.firstLoad(firstLoad(tabId: 'a')).state,
-          partners: const <String, String>{},
-        ),
+        state: SuperTabParts.firstLoad(firstLoad(tabId: 'a')).state,
       ),
     ]);
 
@@ -298,23 +290,8 @@ void main() {
       },
     );
 
-    test('a session dropped takes its notices off the lock screen', () async {
-      await features.set(PhoneExperiment.swarm, true);
-      final h = host();
-      final s = h.session!;
-      s.foreground = false;
-      await s.inbox.refresh();
-      await settle();
-      s.announce(s.inbox.needs.single);
-      expect(notices.shown, hasLength(1));
-
-      account.value = 'person-other';
-
-      expect(notices.cancelled, [notices.shown.single.key]);
-    });
-
     group("the app icon's count", () {
-      /// Swarm on, and the session's Swarm read once: one decision waits.
+      /// Swarm on, and the session's Swarm read once.
       Future<SwarmSession> read() async {
         await features.set(PhoneExperiment.swarm, true);
         final s = host().session!;
@@ -323,11 +300,12 @@ void main() {
         return s;
       }
 
-      test('is what the drawer counts after a read', () async {
-        final s = await read();
+      test('a v1-v3 decision still open posts no notice and leaves no count; '
+          'the first read takes off one left before', () async {
+        await read();
 
-        expect(s.inbox.needs, hasLength(1));
-        expect(notices.badges.last, 1);
+        expect(notices.shown, isEmpty);
+        expect(notices.badges, [0]);
       });
 
       test('clears when the person signs out', () async {
@@ -353,77 +331,6 @@ void main() {
 
         expect(notices.badges.last, 0);
       });
-    });
-  });
-
-  group('a tag in a chat the person muted (anh Dee, 2026-11-09)', () {
-    /// Swarm `a` with one tag by Ann waiting in [chat], its project's channel
-    /// unless named, which the reader set to [notify].
-    Future<(SwarmSession, _Notices)> tagged(
-      String notify, {
-      String chat = leadChat,
-    }) async {
-      final fake = backend();
-      final derived = {
-        'decisionsWaiting': 0,
-        'mentionsWaiting': 1,
-        'chatSettings': {chat: notify},
-      };
-      fake.routes['/api/super-tabs/a/parts'] = (_) => firstLoad(
-        tabId: 'a',
-        groups: [groupData('g1', title: 'Fix login')],
-        derived: derived,
-      );
-      fake.routes['/api/super-tabs/a/changes'] = (_) =>
-          changes(cursor: 'c2', derived: derived);
-      fake.routes['/api/super-tabs/a/decisions?state=open'] = (_) => {
-        'decisions': <Object>[],
-      };
-      fake.routes['/api/super-tabs/a/mentions?state=waiting'] = (_) => {
-        'mentions': [
-          {
-            'id': 'm1',
-            'projectName': 'Mobile',
-            'conversationId': chat,
-            'conversationTitle': 'Mobile',
-            'messageId': 'msg-1',
-            'leadName': 'Ann',
-            'leadKind': 'person',
-            'text': 'Can you check the copy?',
-          },
-        ],
-      };
-      final notices = _Notices();
-      final s = session(fake, notices: notices)..foreground = false;
-      await s.inbox.refresh();
-      await settle();
-      return (s, notices);
-    }
-
-    test('posts nothing, as its push, yet counts on the badge', () async {
-      final (s, notices) = await tagged('muted', chat: 'g1');
-      s.announce(s.inbox.needs.single);
-
-      expect(notices.shown, isEmpty);
-      expect(notices.badges.last, 1);
-    });
-
-    // Swarm v4 has no way to unmute a project's channel, so a mute kept from
-    // before is read as Mentions only, as the server now pushes its tags
-    // (lead, 2026-11-10).
-    test("rings in a project's channel muted before", () async {
-      final (s, notices) = await tagged('muted');
-      s.announce(s.inbox.needs.single);
-
-      expect(notices.shown.single.title, 'Ann tagged you');
-      expect(s.inbox.reader('a')!.snapshot!.chatSettings[leadChat], 'muted');
-    });
-
-    test('rings in a chat that is not muted', () async {
-      final (s, notices) = await tagged('mentions');
-      s.announce(s.inbox.needs.single);
-
-      expect(notices.shown.single.title, 'Ann tagged you');
     });
   });
 
@@ -481,94 +388,6 @@ void main() {
       async.elapse(const Duration(minutes: 2));
       expect(lists(), 1);
       s.dispose();
-    });
-  });
-
-  test('tells what arrives, unless a Swarm screen is up', () async {
-    final notices = _Notices();
-    final s = session(backend(), notices: notices);
-    await s.inbox.refresh();
-    await settle();
-    final need = s.inbox.needs.single;
-
-    s.enter();
-    s.announce(need);
-    expect(notices.shown, isEmpty);
-
-    s.leave();
-    s.announce(need);
-    expect(notices.shown.single.title, 'River asks you');
-  });
-
-  group('an answer', () {
-    test('is held for Undo, then sent once', () {
-      fakeAsync((async) {
-        final fake = backend();
-        final s = SwarmSession(
-          accountId: me,
-          request: fake.request,
-          notices: _Notices(),
-        );
-        s.inbox.refresh();
-        async.flushMicrotasks();
-        final need = s.inbox.needs.whereType<SwarmDecisionNeed>().single;
-
-        s.hold(need, 0);
-        expect(s.held(need), 0);
-        async.elapse(const Duration(seconds: 2));
-        expect(fake.commands, isEmpty, reason: 'still in its Undo window');
-
-        async.elapse(const Duration(seconds: 2));
-        expect(fake.commands.single, {
-          'type': 'decision.answer',
-          'decisionId': 'd1',
-          'choice': 0,
-        });
-        expect(s.held(need), isNull);
-        s.dispose();
-      });
-    });
-
-    test('undone in time is never sent', () {
-      fakeAsync((async) {
-        final fake = backend();
-        final s = SwarmSession(
-          accountId: me,
-          request: fake.request,
-          notices: _Notices(),
-        );
-        s.inbox.refresh();
-        async.flushMicrotasks();
-        final need = s.inbox.needs.whereType<SwarmDecisionNeed>().single;
-
-        s.hold(need, 1);
-        async.elapse(const Duration(seconds: 1));
-        s.undo(need);
-        async.elapse(const Duration(seconds: 10));
-
-        expect(fake.commands, isEmpty);
-        expect(s.held(need), isNull);
-        s.dispose();
-      });
-    });
-
-    test('held when the account leaves is dropped, not sent', () {
-      fakeAsync((async) {
-        final fake = backend();
-        final s = SwarmSession(
-          accountId: me,
-          request: fake.request,
-          notices: _Notices(),
-        );
-        s.inbox.refresh();
-        async.flushMicrotasks();
-        s.hold(s.inbox.needs.whereType<SwarmDecisionNeed>().single, 0);
-
-        s.dispose();
-        async.elapse(const Duration(seconds: 10));
-
-        expect(fake.commands, isEmpty);
-      });
     });
   });
 

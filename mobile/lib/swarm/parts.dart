@@ -476,27 +476,6 @@ class SuperTabParts {
     if (_derived['otherProjectsWork'] case final List work) {
       state['otherProjectsWork'] = work;
     }
-    if (_derived['mentionsWaiting'] case final num waiting) {
-      state['mentionsWaiting'] = waiting.toInt();
-    }
-    if (_derived['mentionsDigest'] case final String digest) {
-      state['mentionsDigest'] = digest;
-    }
-    if (_derived['decisionsWaiting'] case final num waiting) {
-      state['decisionsWaiting'] = waiting.toInt();
-    }
-    if (_derived['decisionsDigest'] case final String digest) {
-      state['decisionsDigest'] = digest;
-    }
-    if (_derived['promptsWaiting'] case final List waiting) {
-      state['promptsWaiting'] = waiting;
-    }
-    if (_derived['remindersDigest'] case final String digest) {
-      state['remindersDigest'] = digest;
-    }
-    if (_derived['activityDigest'] case final String digest) {
-      state['activityDigest'] = digest;
-    }
     // When each release may next open, per project (backend releases.ts nextReleaseAt, task #3827).
     if (_derived['releaseTimes'] case final Map times) {
       state['releaseTimes'] = times;

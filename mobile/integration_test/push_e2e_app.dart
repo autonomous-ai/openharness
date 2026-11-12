@@ -114,8 +114,6 @@ FakeSwarm _swarm() {
     ],
   );
   fake.routes['$path/changes'] = (_) => changes(cursor: 'c2');
-  fake.routes['$path/decisions'] = (_) => {'decisions': <Object>[]};
-  fake.routes['$path/mentions'] = (_) => {'mentions': <Object>[]};
   fake.routes['$path/activity'] = (_) => {'items': <Object>[]};
   fake.routes['$path/commands'] = (_) => <String, dynamic>{'result': {}};
   // Whatever else a screen reads: nothing there.

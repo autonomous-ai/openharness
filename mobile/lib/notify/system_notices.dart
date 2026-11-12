@@ -27,7 +27,6 @@ typedef SwarmNoticeTarget = ({
   String swarmId,
   String conversationId,
   String? messageId,
-  String? decisionId,
   String? threadId,
 });
 
@@ -45,19 +44,19 @@ typedef SwarmNoticeMessage = ({
   bool quiet,
 });
 
-/// The notification centre's Swarm notices: decisions asked of the person,
-/// Lead tags, work waiting on them.
+/// The notification centre's Swarm notices: new messages in an agent's 1:1
+/// chat and in chats set to All new messages.
 ///
 /// Not on [SystemNotices], whose stand-ins would all have to answer it:
 /// [LocalSystemNotices] and [SilentSystemNotices] carry both.
 abstract interface class SwarmNotices {
   Future<void> showSwarm(SwarmNoticeMessage message);
 
-  /// Takes the notice [key] names back down: its need was met somewhere else.
+  /// Takes the notice [key] names back down: what it told was read.
   Future<void> cancelSwarm(String key);
 
-  /// Shows [count] on the app icon: what the Swarms ask of the person, the
-  /// drawer's waiting count. Zero takes it off.
+  /// Shows [count] on the app icon. Only zero is set now, taking off the count
+  /// v1-v3 left there (what waited on the person).
   Future<void> setSwarmBadge(int count);
 
   /// The Swarm notice tapped last — what the shell opens. Reset to null by
@@ -162,9 +161,9 @@ const _swarmChannel = 'swarm-needs-you';
 const _swarmQuietChannel = 'swarm-quiet';
 
 /// How Android names the Swarm channel, here and when a notice makes it.
-const _swarmChannelName = 'Swarm needs you';
+const _swarmChannelName = 'Swarm messages';
 const _swarmChannelDescription =
-    'A Swarm asks you to decide, tags you, or has work waiting on you.';
+    'New messages from your agents, and in chats set to All new messages.';
 
 /// Android draws an FCM push under its tag with this id (the server tags it with the notice's key), so a
 /// Swarm notice posted under the same tag and id replaces the push, and the other way round.
@@ -546,8 +545,6 @@ String encodeSwarmPayload(SwarmNoticeTarget target) =>
     '${target.messageId != null
         ? '/message/${Uri.encodeComponent(target.messageId!)}'
               '${target.threadId != null ? '/thread/${Uri.encodeComponent(target.threadId!)}' : ''}'
-        : target.decisionId != null
-        ? '/decision/${Uri.encodeComponent(target.decisionId!)}'
         : ''}';
 
 @visibleForTesting
@@ -558,9 +555,7 @@ SwarmNoticeTarget? decodeSwarmPayload(String? payload) {
       parts.any((p) => p.isEmpty)) {
     return null;
   }
-  if (parts.length >= 4 && !const ['message', 'decision'].contains(parts[2])) {
-    return null;
-  }
+  if (parts.length >= 4 && parts[2] != 'message') return null;
   // A message in a thread names its root after it (encodeSwarmPayload).
   if (parts.length == 6 && (parts[2] != 'message' || parts[4] != 'thread')) {
     return null;
@@ -569,12 +564,7 @@ SwarmNoticeTarget? decodeSwarmPayload(String? payload) {
     return (
       swarmId: Uri.decodeComponent(parts[0]),
       conversationId: Uri.decodeComponent(parts[1]),
-      messageId: parts.length >= 4 && parts[2] == 'message'
-          ? Uri.decodeComponent(parts[3])
-          : null,
-      decisionId: parts.length == 4 && parts[2] == 'decision'
-          ? Uri.decodeComponent(parts[3])
-          : null,
+      messageId: parts.length >= 4 ? Uri.decodeComponent(parts[3]) : null,
       threadId: parts.length == 6 ? Uri.decodeComponent(parts[5]) : null,
     );
   } on ArgumentError {

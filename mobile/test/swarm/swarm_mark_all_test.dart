@@ -85,12 +85,6 @@ void main() {
     );
     fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
         changes(cursor: 'c2', derived: derived);
-    fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
-      'decisions': <Object>[],
-    };
-    fake.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
-      'mentions': <Object>[],
-    };
     fake.routes['/api/super-tabs/$tab/conversations/'] = (body) => {
       'sequence': body?['sequence'],
       'messages': <Object>[],
@@ -483,7 +477,7 @@ void main() {
     Finder key(String value) => find.byKey(ValueKey(value));
     Finder row(String projectId) => key('swarm-project-$tab-$projectId');
     bool bold(WidgetTester tester, String projectId) =>
-        tester.widget<SwarmHomeProjectRow>(row(projectId)).project.news.bold;
+        tester.widget<SwarmHomeProjectRow>(row(projectId)).project.unread;
 
     /// Opens Sort and filter, where Mark all read is (2026-11-03), from the
     /// Swarm switcher (2026-11-04).
