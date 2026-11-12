@@ -54,6 +54,10 @@ const ISSUE_PAGES = 10
 const OTHER_PROJECTS = 10
 /** Pages of a repository's newest open items a builder whose label has a comma is looked for among (listOf), as a claim does. */
 const COMMA_PAGES = 3
+/** How long a builder found building in another project goes before it is read again when a task is about to be given to it:
+ *  the plan's estimate of that work can be four hours (a large task only given), and one that finished it early sat with
+ *  nothing beside free tasks until then (review of #4144). Its busy time in the plan stays the estimate. */
+const RECHECK_MS = 15 * 60_000
 /** How long a reader asked for a head has to read it before another reader is asked too, or, with no other, it again; and
  *  how many asks one reader gets for one head. Thirty minutes (Swarm plan, step 1, item 1: "No verdict in 30 minutes: another is
  *  asked"; lampOS's first verdict came at 6 minutes at the median and 37 at p90): two hours until 11-11, and v4's sandbox #27
@@ -95,9 +99,9 @@ export class GitHubAssign {
   /** How long each of the Swarm's other repositories that could not be read is left alone. */
   private readonly unreadOthers = new Waits()
   /** What each builder was found building in the Swarm's other projects as a pass of a project was about to give it a task, by
-   *  `<project's repository> <label>`: how many tasks, and until when the plan counts it busy with them. Forgotten then, or when
-   *  it is no builder of that project's any more. */
-  private readonly away = new Map<string, { tasks: number; until: number }>()
+   *  `<project's repository> <label>`: how many tasks, until when the plan counts it busy with them, and when it is read again.
+   *  Forgotten then, or when it is no builder of that project's any more. */
+  private readonly away = new Map<string, { tasks: number; until: number; recheck: number }>()
   /** Each builder's own list in a repository as this pass read it, by `<repository> <label>`: one computer leading several of a
    *  Swarm's projects reads each once a pass. */
   private readonly fresh = new Map<string, Promise<Json[]>>()
@@ -203,12 +207,13 @@ export class GitHubAssign {
     // Read after them: such a task is not one its builder builds, and takes none of its time in the plan; and a task that
     // comes after another waits for that one's pull request to be up.
     const read = readProblem({ now: this.now(), issues, crew, withReaders, up, minutes })
-    // What a builder was found building in the Swarm's other projects as a task was about to be given to it, while the plan
-    // counts it busy there: it has no room here, and the task goes to another (buildsElsewhere).
+    // What a builder was found building in the Swarm's other projects as a task was about to be given to it, until it is read
+    // again: it has no room here, it is busy in the plan for what is left of the estimate, and the task goes to another
+    // (buildsElsewhere).
     for (const [key, away] of this.away) {
       if (!key.startsWith(`${repo} `)) continue
       const builder = crew.builders.find(b => key === `${repo} ${b.label}`)
-      if (!builder || away.until <= this.now()) this.away.delete(key)
+      if (!builder || away.recheck <= this.now()) this.away.delete(key)
       else addElsewhere(read, builder.id, { tasks: away.tasks, minutes: Math.ceil((away.until - this.now()) / 60_000) })
     }
     const elsewhere = this.buildsElsewhere(project, read)
@@ -231,9 +236,10 @@ export class GitHubAssign {
    * crewOf), and each project is planned on its own PM's person's computer, so each gave the same agent a task building (the
    * allocator's design, package 11, option (a): docs/design/2026-11-11-swarm-allocator/one-view.md). Read for every builder with
    * room each pass instead, a Swarm of twelve builders and ten other projects asked GitHub 120 times a pass in its person's name
-   * (review of #4144). Its own list in each (listOf), with a task given there from here that GitHub's lists do not show yet. One
-   * found building there counts as having no room here, and as busy, for as long as the plan counts it busy with that work
-   * (buildingIn: fifteen minutes at the least), and is not read again before; the task is planned again next pass. At most
+   * (review of #4144). Its own list in each (listOf), all at once, so two PMs' plans race for one builder within one round
+   * trip, with a task given there from here that GitHub's lists do not show yet. One found building there counts as having no
+   * room here, and is busy in the plan for as long as the plan counts that work (buildingIn); it is read again [RECHECK_MS] on
+   * at the latest, so one that finished early is given a task here then. The task is planned again next pass. At most
    * [OTHER_PROJECTS] repositories. The Swarm, or a repository, that cannot be read is said once, and its builders count as
    * building nothing there; a repository is asked again only after a wait that grows (Waits). GitHub failing on its own side, or
    * limiting this login, stops the pass, as for the project's own.
@@ -249,24 +255,25 @@ export class GitHubAssign {
       if (others.length > OTHER_PROJECTS) {
         this.once(`[super-tab] Task assignment: OTHER_PROJECTS ${project.repo}: of the Swarm's ${others.length} other projects, the first ${OTHER_PROJECTS} are read for what its builders build`)
       }
-      const lists: Json[][] = []
-      for (const other of others.slice(0, OTHER_PROJECTS)) {
-        if (this.unreadOthers.held(other, this.now())) continue
+      const lists = await Promise.all(others.slice(0, OTHER_PROJECTS).map(async (other): Promise<Json[]> => {
+        if (this.unreadOthers.held(other, this.now())) return []
         try {
           const listed = await this.listOf(other, builder)
           // Given there from here (its project led here too): GitHub's lists can lag behind the label.
           const given = [...this.given].filter(([key, label]) => key.startsWith(`${other}#`) && label === builder.label).map(([key]) => Number(key.slice(other.length + 1)))
-          lists.push([...listed, ...given.filter(number => !listed.some(item => Number(item.number) === number)).map(number => ({ number, labels: [{ name: builder.label }] }))])
           this.unreadOthers.ok(other)
+          return [...listed, ...given.filter(number => !listed.some(item => Number(item.number) === number)).map(number => ({ number, labels: [{ name: builder.label }] }))]
         } catch (error) {
           if (!(error instanceof GitHubStop) || error.everywhere) throw error
           this.unreadOthers.miss(other, this.now(), error.until - this.now())
           this.once(`[super-tab] Task assignment: ${error.code} ${other}: ${error.message} ${project.repo}'s builders count as building nothing there.`)
+          return []
         }
-      }
+      }))
       const found = buildingIn(lists, builder)
       if (!found.tasks) return false
-      this.away.set(`${project.repo} ${builder.label}`, { tasks: found.tasks, until: this.now() + found.minutes * 60_000 })
+      const until = this.now() + found.minutes * 60_000
+      this.away.set(`${project.repo} ${builder.label}`, { tasks: found.tasks, until, recheck: Math.min(until, this.now() + RECHECK_MS) })
       addElsewhere(read, builder.id, found)
       return true
     }

@@ -57,10 +57,12 @@ names, so it bounds each project, not the Swarm.
   in review, as failed checks already do here: its builder may be given a task here while it fixes that. A pull request
   tied to its task only by its branch, which the list does not show, leaves its task building: its builder waits.
 - **A builder found building elsewhere** is not given the task; the task is planned again next pass, for another. The
-  builder has no room here, and is busy in the plan, for as long as the plan counts it busy with that work: half a task's
-  size taken, its whole size while only given, so fifteen minutes at the least. It is not read again before then: read
-  again each pass, every builder busy elsewhere that a project had work for was read every pass, which was the volume
-  this replaces. Then it is read again when a pass is next about to give it a task, a 304 while nothing of its changed.
+  builder is busy in the plan for as long as the plan counts that work (half a task's size taken, its whole size while
+  only given), and has no room here until it is read again: fifteen minutes on at the latest, when a pass is next about
+  to give it a task, a 304 while nothing of its changed. So one that finishes early is given a task here within fifteen
+  minutes, where waiting for the estimate kept one that finished a large task in eight minutes idle for four hours
+  (review of #4144). Read again each pass instead, every builder busy elsewhere that a project had work for was read
+  every pass, which was the volume this replaces.
 - **Four open stays each project's own.** What waits there for its read or its merge counts for nothing here: counted
   against a builder's four everywhere, a project whose merger is off would cap its builders in every other project
   (review of #4144). The day's post counts in hand only the project's own: a public channel never counts a private
@@ -72,14 +74,15 @@ names, so it bounds each project, not the Swarm.
   least for one it cannot read. A Swarm that cannot be read is said once and counts as nothing, and the project is
   planned all the same. GitHub failing on its own side or limiting the login stops the pass, as for the project's own.
 - **The count**, per project a PM leads. A pass reads at most ten requests for each builder it is about to give a task
-  to (one task a builder a pass), so none on a pass with nothing to give. A builder is read at most once a task it is
-  given, and once each fifteen minutes at the most while it builds elsewhere and the project has work for it. With
+  to (one task a builder a pass), all at once, so none on a pass with nothing to give. A builder is read at most once a
+  task it is given, and once each fifteen minutes at the most while it builds elsewhere and the project has work for it. With
   twelve builders that are always busy in other projects while this one always has work: at most 4 reads an hour each,
   480 an hour in all, 11,520 a day, against 172,800 before; each is a 304, which GitHub does not count, while nothing of
   that builder's there changed. With a project that gives a hundred tasks a day: 1,000 more. No write.
 - **The race.** Two PMs' plans give one builder a task each only when both are about to give it one within one GitHub
-  round trip: each reads its lists and writes its label back to back. Two passes started at the same instant race
-  every time (the loop test runs them so: three times in two hours, each time a builder held one task from each project,
-  given in the same minute, and no pass after gave it another). Two computers' passes fall at their own seconds of the
-  minute: for a builder both are about to give a task, about twice a round trip in sixty seconds, under 2% at half a
-  second.
+  round trip: each reads its lists in all the other repositories at once, then writes its label. Read one after another,
+  that was a round trip for each repository, about five seconds at eleven projects. Two passes started at the same
+  instant race every time (the loop test runs them so: three times in two hours, each time a builder held one task from
+  each project, given in the same minute, and no pass after gave it another). Two computers' passes fall at their own
+  seconds of the minute: for a builder both are about to give a task, about twice a round trip in sixty seconds, under
+  2% at half a second.

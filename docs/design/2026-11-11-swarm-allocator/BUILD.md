@@ -362,12 +362,13 @@ statuses only.
 it reads that builder's own list in each of the Swarm's other projects' repositories (`buildsElsewhere`,
 `swarmRepositories`), and `assign/crew.ts` counts what it builds there against its room (`buildingIn`, `addElsewhere`,
 `hasRoom`). *anh Dee was not there to pick; under his "take care of it all" the session that built it chose (a). Only
-building counts across projects: four open stays each project's own, as a project whose merger is off would otherwise cap
-its builders everywhere (review of #4144). A builder found building elsewhere is given nothing there for as long as the
-plan counts it busy with that work, and is not read again before. A task there is in review when an open pull request of
-its builder that GitHub says is not a draft names it: its verdicts there are not read, so a reader's HOLD there counts as
-in review. Two PMs' plans can still give one builder a task each when both are about to within one round trip. The
-claim's limit (`githubClaim.ts`) still counts one repository: it reads none of these counts.*
+building counts across projects: four open stays each project's own, as a project whose merger is off would otherwise
+cap its builders everywhere (review of #4144). A builder found building elsewhere is busy in the plan for as long as the
+plan counts that work, and is given nothing here until it is read again, fifteen minutes on at the latest. A task there
+is in review when an open pull request of its builder that GitHub says is not a draft names it: its verdicts there are
+not read, so a reader's HOLD there counts as in review. Its lists in the other repositories are read at once, and two
+PMs' plans can still give one builder a task each when both are about to within that one round trip. The claim's limit
+(`githubClaim.ts`) still counts one repository: it reads none of these counts.*
 
 **Why.** Every regular agent builds for every public project of its Swarm, and each project plans on its own PM's
 person's computer, without seeing the others.

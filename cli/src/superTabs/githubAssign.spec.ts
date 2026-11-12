@@ -32,9 +32,11 @@ function fakeGitHub(open: Json[], closed: Json[] = []) {
     changed: new Map<number, string[]>(), failing: null as RegExp | null,
     /** The open issues and pull requests of the Swarm's other projects' repositories, by repository; null for one this login
      *  cannot read. And each answer's path and status, as given. */
-    elsewhere: new Map<string, Json[] | null>(), replies: [] as Array<[string, number]> }
+    elsewhere: new Map<string, Json[] | null>(), replies: [] as Array<[string, number]>,
+    /** How many requests are being answered now, and the most at once. */
+    flying: 0, most: 0 }
   const sent: Array<{ method: string; path: string; body: Json }> = []
-  const get: GitHubGet = async (path, etag) => {
+  const answer: GitHubGet = async (path, etag) => {
     state.asked.push(path)
     if (state.signedOut) throw Object.assign(new Error('gh is not signed in on this computer: run `gh auth login`.'), { code: 'GH_SIGNED_OUT' })
     const url = new URL(`https://api.github.com${path}`)
@@ -101,6 +103,12 @@ function fakeGitHub(open: Json[], closed: Json[] = []) {
       return { status: 200, etag: null, body: [], resetAt: null }
     }
     return { status: path.endsWith('/comments') ? state.commentAnswer : 201, etag: null, body: {}, resetAt: null }
+  }
+  // Each answer comes a moment later, as over the wire: requests made at once are in flight together.
+  const get: GitHubGet = async (path, etag) => {
+    state.most = Math.max(state.most, ++state.flying)
+    await Promise.resolve()
+    try { return await answer(path, etag) } finally { state.flying-- }
   }
   return { state, sent, get, send, authors: records.authors }
 }
@@ -394,19 +402,34 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       expect([swarm.mock.calls.length, [...g.github.state.asked, ...h.github.state.asked].filter(path => path.startsWith('/repos/acme/web/')).length]).toEqual([0, 0])
     })
 
-    it('reads a builder found building elsewhere again only once the plan counts that task done, with its ETag, and gives it the task once that task\'s pull request is up', async () => {
+    it('reads a builder found building elsewhere again fifteen minutes on, with its ETag, and gives it the task once that task\'s pull request is up', async () => {
       const f = setup([issue(16, ['size:s'])], { crew: alone, repositories: SWARM })
       f.github.state.elsewhere.set('acme/web', [taken(3)])
       await f.assigner.tick()
-      // A middle task it took counts for half its time: forty-five minutes in which it is not read, given nothing, nor counted as waiting.
-      await minutes(f, 44)
+      // A middle task it took keeps it busy for forty-five minutes in the plan; for fifteen it is not read, given nothing, nor
+      // counted as waiting.
+      await minutes(f, 14)
       expect([f.labelled(), answered(f, 'acme/web'), f.numbers.mock.calls.at(-1)![1].free]).toEqual([[], [200], []])
       await minutes(f, 1)
       expect(answered(f, 'acme/web')).toEqual([200, 304])
-      // Its pull request goes up there: the next read finds it with nothing to build there, and it is given the task.
+      // Its pull request goes up there: the next read, fifteen minutes on, finds it with nothing to build there, and it is given the task.
       f.github.state.elsewhere.set('acme/web', [taken(3), pullFor(3)])
-      await minutes(f, 45)
+      await minutes(f, 15)
       expect([answered(f, 'acme/web'), f.labelled()]).toEqual([[200, 304, 200], [[16, 'builder:pip']]])
+    })
+
+    // Review of #4144: read again only when the plan's estimate ran out, a builder only given a large task elsewhere, which it
+    // finished in eight minutes, sat with nothing beside free tasks until the four hours of that estimate were over.
+    it('gives a builder that finishes early elsewhere a task here within fifteen minutes', async () => {
+      const f = setup([issue(16, ['size:s'])], { crew: alone, repositories: SWARM })
+      f.github.state.elsewhere.set('acme/web', [issue(3, ['size:l', 'builder:pip'])])
+      await f.assigner.tick()
+      await minutes(f, 8)
+      f.github.state.elsewhere.set('acme/web', [])
+      await minutes(f, 6)
+      expect(f.labelled()).toEqual([])
+      await minutes(f, 1)
+      expect(f.labelled()).toEqual([[16, 'builder:pip']])
     })
 
     // A project whose merger is off keeps its builders' pull requests waiting for ever: counted against a builder's four everywhere,
@@ -505,6 +528,8 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       f.github.state.elsewhere.set('acme/p10', [taken(3)])
       await f.assigner.tick()
       expect(others.map(repo => asked(f, repo))).toEqual([...Array<number>(10).fill(1), 0, 0])
+      // All ten at once, so two PMs' plans race for one builder within one round trip, not ten.
+      expect(f.github.state.most).toBe(10)
       expect(f.labelled()).toEqual([[16, 'builder:pip']])
       expect(f.log.mock.calls.filter(([line]) => String(line).includes('OTHER_PROJECTS')))
         .toEqual([['[super-tab] Task assignment: OTHER_PROJECTS acme/app: of the Swarm\'s 12 other projects, the first 10 are read for what its builders build']])
