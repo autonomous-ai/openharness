@@ -1,6 +1,6 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -162,6 +162,19 @@ setTimeout(() => fs.unlinkSync(lock), 300)`
     ledger.append(STARTED)
     expect(ledger.all()).toHaveLength(1)
     expect(existsSync(`${ledger.path}.lock`)).toBe(false)
+  })
+
+  // A writer makes the lock, then writes its name into it: one that reads it between the two must not take it.
+  it('waits for a lock that names no one yet, and takes it over only once it is old', () => {
+    const path = placed().path
+    writeFileSync(`${path}.lock`, '')
+    expect(() => new Ledger(path, 50).append(STARTED)).toThrow(new LedgerBusyError())
+    expect(existsSync(`${path}.lock`)).toBe(true)
+    const old = new Date(Date.now() - 60_000)
+    utimesSync(`${path}.lock`, old, old)
+    new Ledger(path, 50).append(STARTED)
+    expect(new Ledger(path).all()).toHaveLength(1)
+    expect(existsSync(`${path}.lock`)).toBe(false)
   })
 
   it('gives up after its wait with nothing written, an append and a rewrite alike', () => {
