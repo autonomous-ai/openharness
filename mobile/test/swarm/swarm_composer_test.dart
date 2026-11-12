@@ -50,13 +50,16 @@ void main() {
 
   /// Chat g1 with River and Nova in it (or [agentIds]), reading [page], with
   /// [members] in its Swarm and the line of a thread under m1 if [threads];
-  /// its project's channel if [channel].
+  /// its project's channel if [channel]; the person's own chat with Nova if
+  /// [agentChat], in no project and sent with no audience, as the backend
+  /// may (Desktop's audit finding 12 of task #4211).
   FakeSwarm backend(
     List<Map<String, dynamic>> page, {
     List<String> agentIds = const ['agent-lead', 'agent-builder'],
     List<Map<String, dynamic>>? members,
     bool threads = false,
     bool channel = false,
+    bool agentChat = false,
   }) {
     final fake = FakeSwarm();
     fake.routes['/api/super-tabs/list'] = (_) => {
@@ -69,13 +72,25 @@ void main() {
       ...firstLoad(
         head: channel ? channelHead('g1') : null,
         groups: [
-          groupData(
-            'g1',
-            title: 'Fix login',
-            agentIds: agentIds,
-            status: 'working',
-            lastMessageSequence: page.length,
-          ),
+          if (agentChat)
+            {
+              ...groupData(
+                'g1',
+                title: 'Chat',
+                agentIds: const ['agent-builder'],
+                kind: 'agent-chat',
+                lastMessageSequence: page.length,
+              ),
+              'projectId': null,
+            }
+          else
+            groupData(
+              'g1',
+              title: 'Fix login',
+              agentIds: agentIds,
+              status: 'working',
+              lastMessageSequence: page.length,
+            ),
         ],
       ),
       'members': [
@@ -557,6 +572,62 @@ void main() {
       );
 
       expect(key('swarm-tag'), findsOneWidget);
+    });
+
+    testWidgets("none in an agent's own chat: its one agent gets every "
+        'message, and nobody else reads it; a typed @ offers that agent '
+        'alone, as on Desktop', (tester) async {
+      await pump(
+        tester,
+        backend(
+          [message('m1', 1)],
+          agentChat: true,
+          members: [
+            person(me),
+            person('dee', role: 'collaborator'),
+          ],
+        ),
+      );
+
+      expect(key('swarm-field'), findsOneWidget);
+      expect(key('swarm-attach'), findsOneWidget);
+      expect(key('swarm-tag'), findsNothing);
+
+      await type(tester, 'ask @');
+      expect(key('swarm-mention-picker'), findsOneWidget);
+      expect(key('swarm-pick-agent-builder'), findsOneWidget);
+      expect(key('swarm-pick-person-dee'), findsNothing);
+    });
+
+    testWidgets("none in a thread of an agent's own chat either", (
+      tester,
+    ) async {
+      await pump(
+        tester,
+        backend(
+          [
+            message('m1', 1, thread: 'm1'),
+            message('m2', 2, text: 'Looks good.', thread: 'm1', replyTo: 'm1'),
+          ],
+          agentChat: true,
+          threads: true,
+          members: [
+            person(me),
+            person('dee', role: 'collaborator'),
+          ],
+        ),
+      );
+      await tester.tap(key('swarm-thread-line-m1'));
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-thread-field'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: key('swarm-thread-box'),
+          matching: key('swarm-tag'),
+        ),
+        findsNothing,
+      );
     });
   });
 
