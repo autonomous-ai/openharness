@@ -20,9 +20,10 @@
 import { startedAt, tasksOf } from './assign/crew.js'
 import { noteOf, verdictOf } from './githubMerge.js'
 import { TEAM } from './githubMentions.js'
-import { GitHubStop, PAGE, type GitHubReads } from './githubRest.js'
+import { GitHubStop, PAGE, STOP_ASKING, type GitHubReads } from './githubRest.js'
 import { trainEnd, type TrainEnd } from './githubTrain.js'
-import { landedOf, listed, plainPath, timeOf } from './pmNumbers.js'
+import { landedOf, listed, timeOf } from './pmNumbers.js'
+import { plainPath } from './plainPath.js'
 import { object } from './wire.js'
 
 type Json = Record<string, unknown>
@@ -40,10 +41,6 @@ const AT_ONCE = 6
 /** A file is named when more than one in [HOT_ONE_IN] of the week's landings touched it, and [HOT_LANDINGS] at least: of five
  *  landings one alone is a fifth, and says nothing. The [HOT_MAX] most touched are named. */
 const HOT_ONE_IN = 10, HOT_LANDINGS = 3, HOT_MAX = 3
-/** The failures after which this login is not to ask again for a while: a rate limit, gh signed out or missing. One answer
- *  GitHub failed on its own side, or that never came, is none: read on, the files were dropped for the day by one 500 on one
- *  request for comments (its third review). */
-const STOPS: ReadonlySet<string> = new Set(['RATE_LIMITED', 'GH_SIGNED_OUT', 'GH_MISSING'])
 
 /** A wait in minutes, as the median over the changes that show it, and how many those were. */
 interface Wait { minutes: number; of: number }
@@ -94,7 +91,7 @@ function trainsOf(closed: readonly Json[], now: number): Board['trains'] {
 /**
  * The scoreboard of [repo] at [now], from the [closed] list the assigner's pass read (one page of the issues and pull requests
  * closed last) and the [team]'s labels (assign/crew.ts teamOf). [unread] is told the part GitHub did not give, and why: no more
- * of that part is asked, and the others are read all the same, unless GitHub said to stop asking ([STOPS]).
+ * of that part is asked, and the others are read all the same, unless GitHub said to stop asking (githubRest.ts STOP_ASKING).
  */
 export async function boardOf(reads: GitHubReads, repo: string, input: { now: number; closed: readonly Json[]; team: ReadonlySet<string> },
   unread: (part: 'waits' | 'files' | 'conflicts', why: string) => void): Promise<Board> {
@@ -106,7 +103,7 @@ export async function boardOf(reads: GitHubReads, repo: string, input: { now: nu
   let stopped: string | null = null
   const part = <T>(name: 'waits' | 'files' | 'conflicts', read: () => Promise<T>): Promise<T | null> => (stopped === null ? read() : Promise.reject(new Error(stopped))).catch(error => {
     const why = error instanceof Error ? error.message : String(error)
-    if (error instanceof GitHubStop && STOPS.has(error.code)) stopped = why
+    if (error instanceof GitHubStop && STOP_ASKING.has(error.code)) stopped = why
     unread(name, why)
     return null
   })

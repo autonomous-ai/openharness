@@ -26,7 +26,8 @@ function fakeGitHub() {
     // The tasks, as issues: #2 is the one `pull()` closes. And the status GitHub answers with for a task it does not give.
     issues: new Map<number, Json>([[2, { number: 2, body: 'Say a quote a day.' }]]), refused: new Map<number, number>(),
     // The files each pull request touches, by its number, by name or as GitHub lists one renamed: none unless a test gives some.
-    files: new Map<number, Array<string | Json>>(),
+    // And how GitHub fails the reads a test names: an answer cut off on its way, a timeout, a rate limit, or a status.
+    files: new Map<number, Array<string | Json>>(), failing: new Map<RegExp, 'cut' | 'timeout' | 'limited' | number>(),
     state: 'clean', mergeAnswer: 200, signedOut: false, down: false, status: 0, sendFails: 0,
     // Who GitHub says may see the repository: public unless a test says. An internal one, an enterprise's, is `private` too.
     visibility: 'public' as 'public' | 'private' | 'internal' | undefined }
@@ -38,6 +39,11 @@ function fakeGitHub() {
     if (repo.signedOut) throw Object.assign(new Error('gh is not signed in on this computer: run `gh auth login`.'), { code: 'GH_SIGNED_OUT' })
     if (repo.down) throw Object.assign(new Error('fetch failed'), { code: 'ECONNRESET' })
     if (repo.status) return { status: repo.status, etag: null, body: null, resetAt: null }
+    for (const [pattern, answer] of repo.failing) {
+      if (!pattern.test(path)) continue
+      if (answer === 'timeout') throw Object.assign(new Error('The operation was aborted due to timeout'), { code: 'TimeoutError' })
+      return { status: answer === 'cut' ? 200 : answer === 'limited' ? 403 : answer, etag: null, body: null, resetAt: answer === 'limited' ? Date.parse('2026-11-09T09:00:00Z') : null }
+    }
     const url = new URL(`https://api.github.com${path}`)
     const p = url.pathname
     const refused = repo.refused.get(Number(/\/issues\/(\d+)$/.exec(p)?.[1]))
@@ -1218,6 +1224,15 @@ describe('a pull request on a file most changes touch is told of another builder
     expect(restarted.comments()).toEqual([])
   })
 
+  // The note is found by how it begins: another of Harness's notes on it is none of it.
+  it('tells it all the same when Harness said something else on it before', async () => {
+    const f = setup()
+    pair(f)
+    f.github.repo.comments.get(6)!.push(comment('Harness, 14:00, to **pip**: #6 waits for its checks.', { author_association: 'OWNER' }))
+    await f.merger.tick()
+    expect(f.comments()).toEqual([expect.stringMatching(TOLD)])
+  })
+
   // GitHub lists a file renamed by its name now, and the one it had: one that moves the file away touches it as much.
   it('takes a file renamed by the older one, by the name it had, as one it touches', async () => {
     const f = setup()
@@ -1239,7 +1254,7 @@ describe('a pull request on a file most changes touch is told of another builder
     expect(f.comments()).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*pip\*\*: #4 already touches `src\/store\.ts` and #5 `backend\/src\/superTabs\/commands\.ts`, which most changes touch: read them before you change those files again\.$/)])
   })
 
-  // As the list is named once a day, and a draft becomes one up: it is told of each such other once, when it is first seen.
+  // As the list is named once a day, and a draft becomes one up: it is told once such an other is first seen.
   it('tells it of another builder\'s older one once that one is on such a file: after the files are known, or once it is up', async () => {
     for (const arrange of [(f: Fixture) => { f.hot.splice(0) }, (f: Fixture) => { f.github.repo.pulls[0] = { ...f.github.repo.pulls[0]!, draft: true } }]) {
       const f = setup()
@@ -1253,6 +1268,69 @@ describe('a pull request on a file most changes touch is told of another builder
       await passes(f, 2)
       expect(f.comments()).toEqual([expect.stringMatching(TOLD)])
     }
+  })
+
+  // A files read GitHub does not give is no reason to stop landing: an answer cut off on its way (a hundred files with their
+  // patches against the 10 s deadline, githubRest.ts), a 500 or a timeout stopped every landing of the repository, and a timeout
+  // every project its PM leads, for as long as that head stood (review of #4177). That head touches nothing, said once.
+  it.each(['cut', 500, 'timeout'] as const)('lands as before and tells nothing when the older one\'s files are not given (%s), said once and read once for the head', async answer => {
+    const f = setup()
+    pair(f)
+    f.github.repo.failing.set(/\/pulls\/5\/files/, answer)
+    await settle(f)
+    expect(f.merges()).toEqual([landed(6)])
+    expect(f.comments()).toEqual([MERGED])
+    // The passes after it ask no more of that head.
+    await passes(f, 4)
+    expect(f.github.asked.filter(path => path.includes('/pulls/5/files'))).toHaveLength(1)
+    expect(f.log.mock.calls.map(([line]) => String(line)).filter(line => line.includes('FILES_UNREAD'))).toEqual([expect.stringMatching(/^\[super-tab\] FILES_UNREAD acme\/app#5: /)])
+    expect(f.log.mock.calls.some(([line]) => String(line).includes('stopped'))).toBe(false)
+  })
+
+  // GitHub saying to stop asking stops the pass, as at every read: nothing is asked of it meanwhile.
+  it('stops the pass as before when GitHub limits the files read', async () => {
+    const f = setup()
+    pair(f)
+    f.github.repo.failing.set(/\/pulls\/5\/files/, 'limited')
+    await settle(f)
+    expect(f.merges()).toEqual([])
+    expect(f.log.mock.calls.some(([line]) => /stopped · RATE_LIMITED/.test(String(line)))).toBe(true)
+  })
+
+  /** Older pull requests of other builders on [files], each on one of them in turn, and Pip's #1500, newest, on all of them. */
+  function many(f: Fixture, names: readonly string[], files: readonly string[]): void {
+    f.hot.push(...files)
+    f.crew.mockResolvedValue({ builders: [builder('Pip'), ...names.map(builder)], machines: [] })
+    f.github.repo.pulls = [...names.map((name, at) => pull({ number: 1000 + at, labels: [{ name: `builder:${name.toLowerCase()}` }], body: `Closes #${2000 + at}`,
+      head: { sha: (at + 1).toString(16).padStart(40, 'd'), ref: `${name.toLowerCase()}/${2000 + at}` } })), pull({ number: 1500, body: 'Closes #13', head: { sha: HEAD, ref: 'pip/13' } })]
+    names.forEach((_, at) => f.github.repo.files.set(1000 + at, [files[at % files.length]!]))
+    f.github.repo.files.set(1500, [...files])
+    f.github.repo.comments = new Map()
+  }
+  /** What is said on #1500: each of the others is told of the ones older than itself, on its own. */
+  const on1500 = (f: Fixture) => f.github.sent.filter(s => s.path.endsWith('/issues/1500/comments')).map(s => String((s.body as Json).body))
+  const NAMES = ['Kai', 'Ada', 'Bo', 'Cy', 'Di', 'Ed', 'Fy', 'Gu', 'Hu', 'Io', 'Jo', 'Lu']
+
+  it('names the oldest three and how many more, once', async () => {
+    const f = setup()
+    many(f, NAMES, [HUB])
+    await passes(f, 3)
+    expect(on1500(f)).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*pip\*\*: #1000 already touches `backend\/src\/superTabs\/commands\.ts`, #1001 `backend\/src\/superTabs\/commands\.ts` and #1002 `backend\/src\/superTabs\/commands\.ts`, which most changes touch, and 9 more do too: read them before you change those files again\.$/)])
+  })
+
+  // A note that named every older one grew past the 500 letters a restart read of it, and was said again at each (review of #4177).
+  it('is not said again after a restart, however long the note it said', async () => {
+    const files = ['one', 'two', 'three'].map(name => `src/${'deep/'.repeat(20)}${name}.ts`)
+    const f = setup()
+    many(f, NAMES.slice(0, 5), files)
+    await passes(f, 3)
+    const said = on1500(f)
+    expect(said).toEqual([expect.stringContaining('#1000 already touches `…')])
+    const restarted = setup()
+    many(restarted, NAMES.slice(0, 5), files)
+    restarted.github.repo.comments.set(1500, [comment(said[0]!, { author_association: 'OWNER' })])
+    await passes(restarted, 3)
+    expect(on1500(restarted)).toEqual([])
   })
 
   it.each<[string, (f: Fixture) => void]>([
@@ -1279,22 +1357,29 @@ describe('a pull request on a file most changes touch is told of another builder
   })
 
   // On the merger's pass, every 30 seconds: a head's files do not change, and a push is a new head.
-  it('reads files once for each head, only while some file is one most changes touch and another builder\'s older one is up, and no task', async () => {
+  it('reads files once for each head, only while some file is one most changes touch and another builder\'s older one is up, and no task, until it is told', async () => {
     const files = (f: Fixture) => f.github.asked.filter(path => path.includes('/files'))
-    // Not read yet: it stays open, and is looked at each pass.
+    const PIP = '/repos/acme/app/pulls/6/files?per_page=100', KAI = '/repos/acme/app/pulls/5/files?per_page=100'
+    // Not read yet: it stays open, and is looked at each pass. Its files are read, and the other's only once its own touch such a file.
     const f = setup()
     pair(f)
     f.github.repo.comments.set(6, [])
+    f.github.repo.files.set(6, ['src/pip.ts'])
     await settle(f)
     await passes(f, 2)
-    expect(files(f)).toEqual(['/repos/acme/app/pulls/6/files?per_page=100', '/repos/acme/app/pulls/5/files?per_page=100'])
+    expect(files(f)).toEqual([PIP])
+    // A push is a new head: its files are read once more.
+    f.github.repo.files.set(6, ['src/pip.ts', HUB])
+    f.github.repo.pulls[1] = pull({ number: 6, body: 'Closes #13', head: { sha: 'e'.repeat(40), ref: 'pip/13' } })
+    await passes(f, 2)
+    expect(files(f)).toEqual([PIP, PIP, KAI])
+    expect(f.comments()).toEqual([expect.stringMatching(TOLD)])
     expect(f.github.asked.some(path => /\/issues\/\d+(?: |$)/.test(path))).toBe(false)
-    // A push to #5 is a new head: its files are read once more.
+    // Told, it reads no more, of either one, whatever is pushed.
     f.github.repo.pulls[0] = pull({ number: 5, labels: [{ name: 'builder:kai' }], body: 'Closes #12', head: { sha: FIXED, ref: 'kai/12' } })
     await passes(f, 2)
     expect(files(f)).toHaveLength(3)
-    // None while no file is one most changes touch, or while the only older one is no other builder's on its way to land; and the
-    // other's only once its own touches such a file.
+    // None while no file is one most changes touch, or while the only older one is no other builder's on its way to land.
     for (const arrange of [(g: Fixture) => { g.hot.splice(0) }, (g: Fixture) => { g.github.repo.pulls[0] = { ...g.github.repo.pulls[0]!, draft: true } },
       (g: Fixture) => { g.github.repo.pulls[0] = pull({ number: 5, body: 'Closes #12', head: { sha: UNDER, ref: 'pip/12' } }) }]) {
       const g = setup()
@@ -1303,11 +1388,6 @@ describe('a pull request on a file most changes touch is told of another builder
       await settle(g)
       expect(files(g)).toEqual([])
     }
-    const apart = setup()
-    pair(apart)
-    apart.github.repo.files.set(6, ['src/pip.ts'])
-    await settle(apart)
-    expect(files(apart)).toEqual(['/repos/acme/app/pulls/6/files?per_page=100'])
   })
 })
 

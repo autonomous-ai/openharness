@@ -306,10 +306,10 @@ describe('Harness says each thing once on GitHub, over an hour and a restart (gi
     const harness = [...gh.comments.values()].flat().map(c => String(c.body)).filter(body => body.startsWith('Harness, '))
     expect(harness).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*pip\*\*: #25 already touches `app\/hub\.py`, which most changes touch: read it before you change that file again\.$/)])
     expect(gh.sent.filter(s => s.method !== 'POST' || !s.path.endsWith('/comments'))).toEqual([])
-    // Each one's files once for each of the day's five daemons, and no task of either.
+    // Each one's files once, by the day's first daemon: the four after it find the note said, and read none. And no task of either.
     const reads = (pattern: RegExp) => gh.asked.filter(path => pattern.test(path)).length
-    expect(reads(/\/pulls\/26\/files/)).toBe(5)
-    expect(reads(/\/pulls\/25\/files/)).toBe(5)
+    expect(reads(/\/pulls\/26\/files/)).toBe(1)
+    expect(reads(/\/pulls\/25\/files/)).toBe(1)
     expect(reads(/\/issues\/[78]$/)).toBe(0)
   }, 120_000)
 })

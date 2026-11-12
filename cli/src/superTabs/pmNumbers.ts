@@ -43,6 +43,7 @@ import type { LedProject } from './githubMerge.js'
 import { PAGE, retryIn } from './githubRest.js'
 import { TRAIN_TITLE } from './githubTrain.js'
 import { hhmm } from './githubVerdict.js'
+import { plainPath } from './plainPath.js'
 import { identifier, object, SuperTabHostError } from './wire.js'
 
 type Json = Record<string, unknown>
@@ -77,34 +78,27 @@ export interface Numbers { builders: number; free: Array<{ id: string; name: str
 export const plainName = (name: string): string =>
   [...name.normalize('NFKC').replace(/\s+/g, ' ').replace(/[^\p{L}\p{M}\p{N} _-]/gu, '').replace(/ +/g, ' ').trim()].slice(0, NAME_MAX).join('').trim() || 'a builder'
 
-/** The most letters of a file's path a line says: its end, where its name is. */
-const PATH_MAX = 100
-
-/** A file's path as a line says it: its letters, digits, spaces and `. _ / + -`, the last [PATH_MAX] of them. A path is the
- *  text of whoever landed the file, and the line is typed to an agent and posted where an @ tags, a link is followed and a
- *  backtick ends its code span (plainName, for a name). */
-export function plainPath(path: string): string {
-  const letters = [...path.replace(/[^\p{L}\p{M}\p{N} ._/+-]/gu, '')]
-  return letters.length > PATH_MAX ? `…${letters.slice(1 - PATH_MAX).join('')}` : letters.join('')
-}
-
 /** A time as GitHub gives it, in milliseconds; 0 for one it does not give. */
 export const timeOf = (at: unknown): number => { const time = Date.parse(String(at ?? '')); return Number.isFinite(time) ? time : 0 }
 
 /**
  * The team's pull requests among the [closed] that landed, each with its builder's label and when: merged, or closed by a train
  * that landed squashed within [window] of [now], which merged only itself and names what it carried in its title
- * (githubTrain.ts). The team's own, by a label of [team] (assign/crew.ts teamOf): a person's pull request, or anyone's in a
- * shared repository, is theirs. One reading of what landed, for the day's counts and its scoreboard (scoreboard.ts).
+ * (githubTrain.ts). Each of those landed when its train did: the train closes them one by one once it merged, seconds apart,
+ * and timed by its own closing, one rider read as landed after another of the same train (review of #4177). The team's own, by
+ * a label of [team] (assign/crew.ts teamOf): a person's pull request, or anyone's in a shared repository, is theirs. One reading
+ * of what landed, for the day's counts and its scoreboard (scoreboard.ts).
  */
 export function landedOf(closed: readonly Json[], team: { has: (label: string) => boolean }, now: number, window: number): Array<{ pull: Json; label: string; at: number }> {
   const pulls = closed.filter(item => item.pull_request)
-  const recent = (train: Json) => { const merged = timeOf(object(train.pull_request).merged_at); return merged > 0 && now - merged < window }
-  const carried = new Set(pulls.filter(pull => String(pull.title ?? '').startsWith(TRAIN_TITLE) && recent(pull))
-    .flatMap(train => [...String(train.title).matchAll(/#([1-9]\d{0,9})\b/g)].map(found => Number(found[1]))))
+  const merged = (pull: Json): number => timeOf(object(pull.pull_request).merged_at)
+  // Each pull request a recent train's title names, with when that train landed.
+  const carried = new Map(pulls.filter(pull => String(pull.title ?? '').startsWith(TRAIN_TITLE) && merged(pull) > 0 && now - merged(pull) < window)
+    .flatMap(train => [...String(train.title).matchAll(/#([1-9]\d{0,9})\b/g)].map(found => [Number(found[1]), merged(train)] as const)))
   return pulls.flatMap(pull => {
-    const label = labelsOf(pull).find(name => team.has(name))
-    const at = timeOf(object(pull.pull_request).merged_at || (carried.has(Number(pull.number)) ? pull.closed_at : null))
+    const label = labelsOf(pull).find(name => team.has(name)), train = carried.get(Number(pull.number))
+    // Closed before the train landed, it was not the train that closed it.
+    const at = merged(pull) || (train !== undefined && timeOf(pull.closed_at) >= train ? train : 0)
     return label && at ? [{ pull, label, at }] : []
   })
 }

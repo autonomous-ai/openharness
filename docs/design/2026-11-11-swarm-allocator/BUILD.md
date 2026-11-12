@@ -288,17 +288,19 @@ stops counting them. No engine's own setting is changed.
 
 ### 8. Hot files
 
-**Built** (#NNNN): in `cli/src/superTabs/scoreboard.ts` (the files of the conflicts), `pmNumbers.ts` (the list kept
+**Built** (#4177): in `cli/src/superTabs/scoreboard.ts` (the files of the conflicts), `pmNumbers.ts` (the list kept
 with the project's record, and the PM's clause) and `githubMerge.ts` (`near`, `tellNear`). *The list is kept with the
 day's post's record and read nowhere else: a day with no post, or whose files were not read, keeps the last one. A
 conflict's files are counted from when its task was given or taken (its branch is made then), else from its opening,
-to its own landing: a conflict found as a train is built is with a rider that lands after the note. The PM's clause is
-said once for each list. The note promises no order ("#12 already touches `F`, which most changes touch: read it before
-you change that file again"): the train lands changes that do not conflict together, and tells a real conflict to its
-author. It is said once for each pull request and each older one of another builder's on its way to land (no draft,
-not on hold), as it opens, or as such an overlap first shows (the list is named once a day, a draft becomes one up).
-The third use is not built: with no hold, a task given on another's branch names no "after #N", so nothing makes it
-wait for that one, and held code that was fixed there with a push would land through it.*
+to its own landing: a conflict found as a train is built is with a rider that lands after the note, and the riders of
+one train landed together. The PM's clause is said once for each list. The note promises no order ("#12 already
+touches `F`, which most changes touch: read it before you change that file again"): the train lands changes that do
+not conflict together, and tells a real conflict to its author. It is said once for each pull request, as it opens or
+as such an overlap first shows (the list is named once a day, a draft becomes one up), and names the oldest three of
+other builders' on their way to land (no draft, not on hold) and how many more. A files read GitHub does not give is
+taken as none for that head, and said in the log: a note is no reason to stop landing. The third use is not built:
+with no hold, a task given on another's branch names no "after #N", so nothing makes it wait for that one, and held
+code that was fixed there with a push would land through it.*
 
 **Why.** A quarter of this repository's landings touch one file, and three more files a seventh or more each.
 

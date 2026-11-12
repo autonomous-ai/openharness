@@ -154,7 +154,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     expect(f.github.state.asked.some(path => path.includes('/files') || /\/issues\/\d+\/comments/.test(path))).toBe(false)
     const waited = 'Last 3 landed: 20 min from opened to a first verdict (median of 3), 70 min from the last READ-OK to landing (median of 3); '
       + 'none was told it was behind or in conflict. Trains: 0 landed, 1 closed without landing (base moved 1).'
-    // With the files most landings touch, which the numbers keep for the merger and the assigner (the allocator's design, package 8).
+    // With the files most landings touch, which the numbers keep for the merger (the allocator's design, package 8).
     expect(await f.numbers.mock.calls[0]![3]()).toEqual({ words: `${waited} Files touched most, of the last 3 landings: \`src/hub.ts\` 100%.`, hot: ['src/hub.ts'] })
     expect(f.github.state.asked.filter(path => path.includes('/files') || /\/issues\/\d+\/comments/.test(path))).toHaveLength(6)
     // The PM's own landed pull requests are the team's too.

@@ -245,6 +245,17 @@ describe('the files the changes told they conflict shared with what landed meanw
     expect(quiet.asked).toHaveLength(7 + 7)
   })
 
+  // A squashed train closes its riders one after another, seconds apart (githubTrain.ts finish): they landed together, and the
+  // train found no conflict between them (review of #4177).
+  it('counts nothing a change shares with another rider of its own train, closed by that train seconds after it', async () => {
+    const train = { number: 9, title: 'Train: #1 #2', labels: [], author_association: 'MEMBER', created_at: ago(2 * HOUR), closed_at: ago(HOUR), pull_request: { merged_at: ago(HOUR) } }
+    const rider = (number: number, closedAgo: number) => ({ number, title: `Change ${number}`, labels: [{ name: 'builder:pip' }], created_at: ago(5 * HOUR), closed_at: ago(closedAgo),
+      pull_request: { merged_at: null } })
+    const read = await board([train, rider(1, HOUR), rider(2, HOUR - 2000)], github({ 2: [note(3 * HOUR, CONFLICT)] }, { 1: ['src/hub.ts'], 2: ['src/hub.ts', 'src/own.ts'] }))
+    expect(read.waits).toMatchObject({ read: 2, conflict: 1 })
+    expect(read.conflicts).toEqual([])
+  })
+
   it('names three files at most, the most shared first, and none for a change GitHub gave no time of its opening', async () => {
     const closed = [...[1, 2, 3, 4].map(number => change(number, 5 * HOUR, number * MINUTE)), change(10, 6 * HOUR, 3 * HOUR), { ...change(11, 0, 4 * MINUTE), created_at: null }]
     const talk = Object.fromEntries([1, 2, 3, 4, 11].map(number => [number, [note(HOUR, CONFLICT)]]))
