@@ -11,6 +11,7 @@ import { backend, identifier, object, SuperTabHostError, within } from './wire.j
 import { isCoordinator, isStep } from './agentContext.js'
 import { swarmBasics, wireRole } from '../lib/swarmSkills.js'
 import { CapacityReservations, type ReservationBook } from './reservations.js'
+import { engineLastWords } from './lastWords.js'
 import { ContributionPreparations, ownerRequest, prepareContribution } from './contribution.js'
 import { ClaudeSignIns } from './claudeSignIn.js'
 import { answerFirstRun } from '../engines/launchPrep.js'
@@ -318,7 +319,13 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         // Machine access also authorizes native creation. These actions expose
         // only that host's admission/receipt, never its account or private roster.
         if (payload.action === 'reserveCapacity') return await reservations().reserve(payload, closed)
-        if (payload.action === 'observeCapacity') return await reservations().observe(payload.creationId, closed)
+        if (payload.action === 'observeCapacity') {
+          const observed = await reservations().observe(payload.creationId, closed)
+          // A start whose agent ended is told what its engine said as it left, from the pane this machine kept (lastWords.ts):
+          // its own agent's words, which the caller that created it could read in that pane anyway.
+          const engineExit = observed.released === true && identifier(observed.harnessId) ? await engineLastWords(core, observed.harnessId) : null
+          return engineExit ? { ...observed, engineExit } : observed
+        }
         if (payload.action === 'returnCapacity') return await reservations().giveBack(payload.creationId, closed)
         // Only this machine's own host, which read the Swarm's verdict for its start (machines.ts): a relayed caller could
         // otherwise free memory a start still holds (issue #2989).

@@ -26,6 +26,8 @@ const FILES = ['src/superTabs/shortCommand.ts', ...IN_CORE,
   'src/superTabs/shipping.ts', 'src/superTabs/shippingRead.ts',
   // Every write to GitHub in its person's name, said once and held under GitHub's limits (anh Dee, 11-11: "never spam github").
   'src/superTabs/githubWrites.ts',
+  // What an engine said as it left a start's pane, which the start's failure says (the rehearsal's Codex builders, 11-11).
+  'src/superTabs/lastWords.ts',
 ]
 export default defineConfig({
   test: {

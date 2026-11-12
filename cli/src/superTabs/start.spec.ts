@@ -521,6 +521,44 @@ it.each([true, false])('reconciles a previously created but unavailable harness 
   expect(f.request.mock.calls.some(c => c[0] === 'agent_create')).toBe(false)
 })
 
+// The rehearsal's Codex builders Nova and Vesper (2026-11-11) quit at launch, and all their Swarm read was "has since stopped": why
+// sat on a shell pane no Swarm view shows. Its machine reads what the engine said as it left (lastWords.ts), and the start says it.
+describe('a start whose engine left as it launched', () => {
+  const STOPPED = 'The agent was created and has since stopped. Create a new start request to continue.'
+  const leftWith = (engineExit: unknown, engine = 'codex') => {
+    const f = fixture(), request = f.request.getMockImplementation()!
+    Object.assign(f.start.request, { engine })
+    f.start.dispatched = true
+    f.request.mockImplementation(async (type, payload) => {
+      if (type === 'agent_create_status') return { creationId: f.start.creationId, state: 'created', agent: { id: 'native', engine } }
+      if (type === 'super_tabs' && payload?.action === 'observeCapacity') {
+        return { ok: true, reservationId: f.start.creationId, harnessId: 'native', released: true, ...engineExit === undefined ? {} : { engineExit } }
+      }
+      return request(type, payload)
+    })
+    return f
+  }
+
+  it.each([
+    [{ status: 2, said: "error: unexpected argument '--add-dir' found" }, 'codex',
+      "Codex exited at launch: “error: unexpected argument '--add-dir' found”. Create a new start request to continue."],
+    [{ status: 1, said: 'Error: Invalid API key' }, 'claude', 'Claude Code exited at launch: “Error: Invalid API key”. Create a new start request to continue.'],
+    [{ status: 1, said: null }, 'codex', 'Codex exited at launch with status 1. Create a new start request to continue.'],
+    // A machine from before it, or a pane that went with its engine, says nothing of it.
+    [undefined, 'codex', STOPPED],
+    // What a machine answers is data: a said that is not one short line is not told, nor a status that is not a whole number.
+    [{ status: 1, said: 'two\nlines' }, 'codex', 'Codex exited at launch with status 1. Create a new start request to continue.'],
+    [{ status: 1, said: 'x'.repeat(301) }, 'codex', 'Codex exited at launch with status 1. Create a new start request to continue.'],
+    [{ status: 1.5, said: 'error: x' }, 'codex', STOPPED],
+    ['exited', 'codex', STOPPED],
+  ])('fails it with what its engine said: %j', async (engineExit, engine, detail) => {
+    const f = leftWith(engineExit, engine)
+    expect(await startAgent({ tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toEqual({ error: 'START_FAILED', startId: 'start', detail })
+    expect(f.start.error).toBe(detail)
+    expect(f.scoped).toHaveBeenCalledWith({ action: 'command', operationId: 'failed-start', command: { type: 'agent.startFailed', startId: 'start', error: detail } })
+  })
+})
+
 it('applies a routed model and effort to the created agent through the ordinary runtime switch', async () => {
   const f = fixture(), request = f.request.getMockImplementation()!
   f.request.mockImplementation(async (type, payload) => type === 'agent_update'

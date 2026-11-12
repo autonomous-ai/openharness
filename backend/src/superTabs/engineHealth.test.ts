@@ -54,6 +54,9 @@ describe('an engine whose starts fail on a machine', () => {
     'Codex sign-in failed.',
     'Codex is installed but cannot run: it exited with status 1',
     'The agent was created and has since stopped. Create a new start request to continue.',
+    // The same start, told what its engine said as it left (cli superTabs/start.ts, lastWords.ts).
+    'Codex exited at launch: “error: unexpected argument \'--add-dir\' found”. Create a new start request to continue.',
+    'Claude Code exited at launch with status 1. Create a new start request to continue.',
   ])('counts the engine’s own failure: %s', error => {
     const pool = machine(), state = stateWith(pool)
     expect(noteStartFailed(state, start({}, error), NOW)).toBeNull()
