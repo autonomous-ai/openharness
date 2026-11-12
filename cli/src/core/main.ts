@@ -1034,6 +1034,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     sendToWindow: (connId, frame) => localWsServerRef?.sendToWindow(connId, frame) ?? false,
     hasWindow: () => backendRef?.hasLocalClient() ?? false,
     devicesChanged: (payload) => backendRef?.send({ type: 'harness_devices_changed', payload }),
+    // A goal Hachi closed: every window here and the owner's apps away, sealed for them (createCoreApi checks it).
+    hachiGoalDone: (notice) => backendRef?.send({ type: 'hachi_goal_done', payload: { ...notice } }),
     wifi: wifiCore.api,
     dialWatching: (watching) => {
       const attached = watching && !dialWatching

@@ -27,6 +27,18 @@ it('asks the core to count Hachi\'s counters, never waiting on it nor throwing w
   expect(() => processCoreApi('/data', 'messages').count!('hachi_turns_wake')).not.toThrow()
 })
 
+it('asks the core to tell the windows a goal Hachi closed, never waiting on it nor throwing when it cannot', async () => {
+  const ask = vi.fn(async (): Promise<Record<string, unknown>> => ({ ok: true }))
+  const api = processCoreApi('/data', 'goals', { ask })
+  const done = { agentId: 'hachi', goalId: 'g1', title: 'flaky login test' }
+  api.clients.hachiGoalDone!(done)
+  expect(ask).toHaveBeenCalledWith('hachi_goal_done', done)
+  ask.mockRejectedValueOnce(new Error('Disconnected'))
+  expect(() => api.clients.hachiGoalDone!(done)).not.toThrow()
+  await Promise.resolve()
+  expect(() => processCoreApi('/data', 'goals').clients.hachiGoalDone!(done)).not.toThrow()
+})
+
 it('asks the core what holds a delivery from its pane, and hears nothing from a core that cannot say', async () => {
   const ask = vi.fn(async (): Promise<Record<string, unknown>> => ({ hold: 'team_waiting_draft' }))
   const api = processCoreApi('/data', 'superTabs', { ask })

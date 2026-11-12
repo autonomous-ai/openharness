@@ -2,7 +2,8 @@
  * Hachi's verbs on the real daemon (docs/design/2026-11-12-hachi.md, "How it acts"): a harness on the autonomous/hachi
  * package, signed in to a fake backend whose account has a second machine that never answers. From its pane it opens a
  * goal (kept by the goals service in the edge host, mode 0600), starts a harness for it, follows everything it started
- * in one stream, reads its work in facts, lists every machine with the silent one as unreachable, and closes the goal.
+ * in one stream, reads its work in facts, lists every machine with the silent one as unreachable, and closes the goal:
+ * the window here and the owner's apps away (sealed, through the relay) are told it once (`hachi_goal_done`, Hachi 5a).
  * An ordinary agent beside it may not keep goals (exit 5), and a goal with no harness is never done.
  *
  * The package itself is issue 5's (OPENHARNES-5): here a harness of that id is installed from a repository, which is
@@ -12,6 +13,7 @@ import { execFileSync, spawn } from 'node:child_process'
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
+import { WebSocket } from 'ws'
 import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
@@ -140,13 +142,36 @@ describe('Hachi\'s verbs, end to end', () => {
     // The CLI's own start, the backend's list, and at most the 5 s wait on office.
     expect(Date.now() - began).toBeLessThan(20_000)
 
-    // Done, once: the second close changes nothing.
+    // An app of the owner's away from this desk, on the relay: it hears the machine's broadcasts, sealed.
+    await until('the machine to be connected to the backend', () => relay.nodeUp(ME.machineId) || null, 30_000)
+    const away = new WebSocket(`${relay.wsUrl}/api/web-ws?autonomousEnv=prod`, [ME.token])
+    await new Promise<void>((resolve, reject) => { away.once('open', () => resolve()); away.once('error', reject) })
+    const selected = new Promise<void>((resolve) => away.on('message', (raw) => {
+      const frame = JSON.parse(String(raw)) as { type?: string; payload?: { machineId?: string } }
+      if (frame.type === 'connected' && frame.payload?.machineId === ME.machineId) resolve()
+    }))
+    away.send(JSON.stringify({ type: 'machine_select', payload: { machineId: ME.machineId } }))
+    await selected
+    const relayed = () => [...relay.webReceived.values()].flat().filter((frame) => frame.type === 'hachi_goal_done')
+
+    // Done, once: the second close changes nothing, and tells nobody again.
+    const told = client.next((frame) => frame.type === 'hachi_goal_done', 30_000, 'the goal\'s notice')
     const done = await asHachi('goal', 'done', goal.id, '--json')
     expect(done.code, done.out + done.err).toBe(0)
     const doneAt = JSON.parse(done.out).goal.doneAt
     expect(doneAt).toEqual(expect.any(Number))
+    expect((await told).payload).toEqual({ agentId: hachi.id, goalId: goal.id, title: 'flaky login test' })
+    const away1 = await until('the notice relayed to the app away', () => relayed()[0] ?? null, 30_000, 100)
+    // Sealed: the relay carries the person's words only as ciphertext.
+    expect(away1.payload).toEqual({ __e2e: expect.any(Object) })
+    expect(JSON.stringify(away1)).not.toContain('flaky')
     expect(JSON.parse((await asHachi('goal', 'done', goal.id, '--json')).out).goal.doneAt).toBe(doneAt)
+    // The goals tell the core before they answer, on the one link they answer on: once the CLI has its answer, a second
+    // notice would already be on its way to the window, ahead of this round trip's reply.
+    await client.request('agents_list', {}, 30_000)
+    expect(client.frames.filter((frame) => frame.type === 'hachi_goal_done')).toHaveLength(1)
     expect(statSync(file).mode & 0o777).toBe(0o600)
+    away.close()
     client.close()
   }, 300_000)
 })

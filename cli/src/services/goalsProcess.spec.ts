@@ -32,11 +32,16 @@ describe('Hachi\'s goals in their own process', () => {
     expect(query).toHaveBeenCalledWith('live')
     // Its measures are counted by the core (core/agentQueries.ts `count`).
     expect(query).toHaveBeenLastCalledWith('count', { metric: 'hachi_goal_opened' })
+    // A goal it closes is told to the windows through the core (core/agentQueries.ts `hachi_goal_done`).
+    const goal = (await requests.goal_open!({ pane: '%1', title: 'flaky' }, LOCAL)).goal as { id: string }
+    await requests.goal_add!({ pane: '%1', id: goal.id, machineId: 'm', creationId: 'c1' }, LOCAL)
+    await requests.goal_done!({ pane: '%1', id: goal.id }, LOCAL)
+    expect(query).toHaveBeenCalledWith('hachi_goal_done', { agentId: 'hachi', goalId: goal.id, title: 'flaky' })
     // A core that cannot say leaves what it said last.
     answer = { error: 'UNKNOWN_QUERY' }
     query.mockRejectedValueOnce(new Error('the core went away'))
-    expect((await requests.goal_list!({ pane: '%1' }, LOCAL)).goals).toHaveLength(1)
-    expect((await requests.goal_list!({ pane: '%1' }, LOCAL)).goals).toHaveLength(1)
+    expect((await requests.goal_list!({ pane: '%1' }, LOCAL)).goals).toHaveLength(2)
+    expect((await requests.goal_list!({ pane: '%1' }, LOCAL)).goals).toHaveLength(2)
   })
 
   it('runs as a real service by default, answering every request the core routes to it', () => {

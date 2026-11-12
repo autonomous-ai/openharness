@@ -14,7 +14,7 @@
 import { randomBytes } from 'node:crypto'
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { Asker, CoreApi, ServiceRequests } from '../core/api.js'
+import { HACHI_GOAL_TITLE_MAX, type Asker, type CoreApi, type ServiceRequests } from '../core/api.js'
 import { HACHI_ID } from '../dsh/builtinIds.js'
 import { sessionForPaneId } from '../lib/terminalRuntime.js'
 
@@ -22,7 +22,7 @@ import { sessionForPaneId } from '../lib/terminalRuntime.js'
 export { GOALS_REQUESTS } from '../core/api.js'
 
 export const GOALS_OPEN_MAX = 50
-export const GOAL_TITLE_MAX = 80
+export const GOAL_TITLE_MAX = HACHI_GOAL_TITLE_MAX
 /** Harnesses one goal records: five times what Hachi may run at once (agentClient/commands.ts `SPAWN_LIMITS`). */
 export const GOAL_HARNESSES_MAX = 40
 export const GOAL_KEPT_MS = 7 * 24 * 60 * 60_000
@@ -91,18 +91,20 @@ export function startGoals(core: CoreApi, deps: { now?: () => number } = {}): Se
   }
   const NOT_SAVED = { error: 'NOT_SAVED', message: 'Harness could not save the goal on this computer. Try again in a moment.' }
 
-  /** The Hachi harness, by the pane the request came from on this machine; anything else is no caller. */
-  const hachi = (payload: Record<string, unknown>, asker: Asker): boolean => {
-    if (!asker.local || typeof payload.pane !== 'string' || !payload.pane) return false
-    return sessionForPaneId(core.agents.live(), payload.pane)?.dsh === HACHI_ID
+  /** The Hachi harness's agent id, by the pane the request came from on this machine; anything else is no caller. */
+  const hachi = (payload: Record<string, unknown>, asker: Asker): string | null => {
+    if (!asker.local || typeof payload.pane !== 'string' || !payload.pane) return null
+    const session = sessionForPaneId(core.agents.live(), payload.pane)
+    return session?.dsh === HACHI_ID ? session.agentId : null
   }
   /** A request only Hachi may make, on the goals as they are kept. */
-  const asked = (run: (payload: Record<string, unknown>, goals: Goal[], pruned: boolean) => Record<string, unknown>) =>
+  const asked = (run: (payload: Record<string, unknown>, goals: Goal[], pruned: boolean, hachiId: string) => Record<string, unknown>) =>
     (payload: Record<string, unknown>, asker: Asker): Record<string, unknown> => {
-      if (!hachi(payload, asker)) return NOT_HACHI
+      const hachiId = hachi(payload, asker)
+      if (!hachiId) return NOT_HACHI
       const { goals, pruned } = read()
       leftBehind(goals)
-      return run(payload, goals, pruned)
+      return run(payload, goals, pruned, hachiId)
     }
   /** Counts each goal left open a day after its last start, once (Measures: does work Hachi starts finish?). Looked at
    *  as Hachi asks: it asks after every restart (`harness goal list`), and nothing else needs a timer for it. */
@@ -152,7 +154,7 @@ export function startGoals(core: CoreApi, deps: { now?: () => number } = {}): Se
       return write(goals) ? { goal } : NOT_SAVED
     }),
 
-    goal_done: asked((payload, goals) => {
+    goal_done: asked((payload, goals, _pruned, hachiId) => {
       const goal = goals.find((g) => g.id === payload.id)
       if (!goal) return { error: 'UNKNOWN_GOAL', message: 'No such goal. harness goal list lists them.' }
       // Done twice is done once: the notice it raises is not raised again.
@@ -160,8 +162,10 @@ export function startGoals(core: CoreApi, deps: { now?: () => number } = {}): Se
       if (!goal.harnesses.length) return { error: 'GOAL_EMPTY', message: 'No harness was started for that goal, so it is not done. Start its work with harness new --goal <id>.' }
       goal.doneAt = now()
       if (!write(goals)) return NOT_SAVED
-      // The signal a program can check that a goal finished: counted here, never from what Hachi writes.
+      // The signal a program can check that a goal finished: counted here, and told to every window of the account for
+      // its one notice, never from what Hachi writes. Only once it is saved, so a retry after NOT_SAVED tells it once.
       core.count?.('hachi_goal_done')
+      core.clients.hachiGoalDone?.({ agentId: hachiId, goalId: goal.id, title: goal.title })
       return { goal }
     }),
 

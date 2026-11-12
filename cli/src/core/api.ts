@@ -31,6 +31,7 @@ import type { GridAccess } from '../lib/gridAttach.js'
 import type { createHarnessResourcesReader } from '../lib/harnessResources.js'
 import type { createHarnessStorageReader } from '../lib/harnessTelemetry.js'
 import type { AgentGridTarget, GridAnnotation } from '../lib/gridAnnotation.js'
+import { HACHI_ID } from '../dsh/builtinIds.js'
 import { GRID_FLEET_MAX_TIMEOUT_MS } from '../lib/gridFleetProtocol.js'
 import type { GridLaunchAnswer, GridLaunchOverride, GridLaunchRequest } from '../lib/gridLaunchWire.js'
 import type { NewAgentModel } from '../lib/newAgentModel.js'
@@ -123,6 +124,11 @@ export interface UsagePort {
   stop(): void
 }
 export const USAGE_FALLBACKS: PortFallbacks<UsagePort> = { read: later(FAIL), stop: undefined }
+
+/** What `hachi_goal_done` tells the windows: Hachi's harness (the pane in view gets no notice), the goal and its title. */
+export interface HachiGoalDone { agentId: string; goalId: string; title: string }
+/** The longest title a goal keeps (services/goals.ts `GOAL_TITLE_MAX`), and so the longest a notice carries. */
+export const HACHI_GOAL_TITLE_MAX = 80
 
 export interface CoreApi {
   /** Last aggregate observation, never a transcript read. Optional for services that do not ask. */
@@ -380,6 +386,11 @@ export interface CoreApi {
     turnCard(frame: TurnCardFrame): void
     /** A turn's recap for the apps (`turn_summary`, or `turn_summary_pending` while one is being cut). */
     turnSummary(frame: TurnSummaryFrame): void
+    /** A goal the live Hachi harness closed (`harness goal done`, services/goals.ts): one `hachi_goal_done` for every
+     *  window of the account, here and on its other computers, which shows its one notice (docs/design/2026-11-12-hachi.md,
+     *  "How it tells the person"). Sealed for the relay: the title is the person's words (lib/e2ee/manager.ts). Only the
+     *  live Hachi's, decided by the core (`createCoreApi`). Absent where the core offers a service none. */
+    hachiGoalDone?(notice: HachiGoalDone): void
   }
   /** How an agent's shell reaches this daemon: the command that runs this harness's CLI, the port the daemon
    *  serves and the machine it serves as. An experiment writes them into the prompts of the agents it runs
@@ -2130,6 +2141,8 @@ export interface CoreApiDeps {
   turnSummary: CoreApi['clients']['turnSummary']
   /** Where a service's product counters go (`count`); absent, nowhere. */
   count?: CoreApi['count']
+  /** Every window of the account, here and away, told a goal Hachi closed (`clients.hachiGoalDone`); absent, none is. */
+  hachiGoalDone?: (notice: HachiGoalDone) => void
   log?: (line: string) => void
 }
 
@@ -2139,7 +2152,7 @@ export function createCoreApi({
   runtimeProfile, setRuntime, fork, create, creationStatus, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, viewerFrame, machine, activityText, activitySnapshot, activity, summaries,
   closeAgent, activityAt, resumeAgent, swarmAgents, setBrowser, moveBrowser, panePid,
   signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, cloud, superTabs, superTabRequest, cloudRows, lastTurn, turnCard, turnSummary,
-  count, log = (line) => console.warn(line),
+  count, hachiGoalDone, log = (line) => console.warn(line),
 }: CoreApiDeps): CoreApi {
   // The devices reach the windows through these alone, and only with their own frames: a devices process
   // speaks to the core as a service, and what it may put in front of a person is decided here, not there.
@@ -2148,6 +2161,15 @@ export function createCoreApi({
   const refused = (type: unknown): void => log(`[services] the devices sent a window ${String(type).slice(0, 40)}, which is not theirs to send`)
   // The recaps reach the devices and the apps through their own two doors, and only with their own frames.
   const refusedRecap = (type: unknown): void => log(`[services] the recaps sent ${String(type).slice(0, 40)}, which is not theirs to send`)
+  // A goals process speaks to the core as a service: a goal's notice goes to every window of the account only for the
+  // live Hachi harness here, and only with its three fields, whatever the process sends.
+  const goalText = (v: unknown, max: number): v is string => typeof v === 'string' && v.length > 0 && v.length <= max
+  const goalDone = hachiGoalDone && ((notice: HachiGoalDone): void => {
+    const { agentId, goalId, title } = notice ?? {}
+    if (typeof agentId === 'string' && registry.byAgent(agentId)?.dsh === HACHI_ID && goalText(goalId, 128) && goalText(title, HACHI_GOAL_TITLE_MAX)) {
+      hachiGoalDone({ agentId, goalId, title })
+    } else log('[services] the goals sent a goal done that is not the live Hachi\'s')
+  })
   return {
     dataDir,
     terminals,
@@ -2226,6 +2248,7 @@ export function createCoreApi({
       },
       turnCard: (frame) => { if (TURN_CARD_TYPES.has(frame?.type)) turnCard(frame); else refusedRecap(frame?.type) },
       turnSummary: (frame) => { if (TURN_SUMMARY_TYPES.has(frame?.type)) turnSummary(frame); else refusedRecap(frame?.type) },
+      ...(goalDone ? { hachiGoalDone: goalDone } : {}),
     },
     daemon,
     wifi,
