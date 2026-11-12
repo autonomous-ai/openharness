@@ -96,4 +96,14 @@ describe('which agent wrote a GitHub comment', () => {
     await expect(store.githubCommentAuthors(stranger, s.tab, 'acme/app', ids)).rejects.toMatchObject({ code: 'NOT_FOUND', status: 404 })
     await expect(store.githubCommentAuthors(peer, s.tab, 'acme/unknown', ids)).rejects.toMatchObject({ code: 'NOT_FOUND', status: 404 })
   })
+
+  // A Personal Swarm's project made from a pane's folder has no address to clone, only the GitHub repository Desktop named for it
+  // (project.github): its PM's comments there are recorded and read as a cloned project's are.
+  it('records and reads on the GitHub repository a project was given when its folder has no address', async () => {
+    const s = await scene()
+    await store.execute(owner, s.tab, { operationId: randomUUID(), command: { type: 'project.github', projectId: s.docs.projectId, repository: 'Acme/Docs' } })
+    expect(await s.record(s.docs.agentId, '401', owner, 'acme/docs')).toEqual({ recorded: true })
+    expect(await store.githubCommentAuthors(peer, s.tab, 'ACME/docs', ['issue:401'])).toEqual({ authors: { 'issue:401': { agentId: s.docs.agentId, name: 'Ivy' } } })
+    await expect(s.record(s.docs.agentId, '402', owner, 'acme/app')).rejects.toMatchObject({ code: 'REPOSITORY_NOT_PROJECT', status: 422 })
+  })
 })

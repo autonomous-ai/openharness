@@ -1,6 +1,6 @@
 /**
  * The SCMs this daemon knows, and the one-call-per-stage functions the rest of the daemon uses
- * instead of naming an implementation. Callers (`agentFrame`, the workspaces service's rename and sweep,
+ * instead of naming an implementation. Callers (`agentFrame`, the workspaces service's rename,
  * `projectFolder`, `launchOverrides`, the instruction-file writers) ask "whichever SCM this is" and
  * get an answer; a second SCM is one more entry in `scmProjects`, not one more branch at each call site.
  *
@@ -56,20 +56,6 @@ export async function renameScmProject(cwd: string, title: string | null, scms: 
     if (renamed) return renamed
   }
   return null
-}
-
-/** Every SCM sweeps its own idle workspaces under `root`; the paths removed, in SCM order. `inUse`
- *  is read once here, because an iterable handed to two implementations would be empty for the second. */
-export async function sweepScmProjects(input: {
-  root: string
-  inUse: Iterable<string | null | undefined>
-  now?: number
-  idleMs?: number
-}, scms: readonly ScmProject[] = scmProjects): Promise<string[]> {
-  const inUse = [...input.inUse]
-  const removed: string[] = []
-  for (const scm of scms) removed.push(...await scm.sweep({ ...input, inUse }))
-  return removed
 }
 
 /** The pane environment a workspace's record asks for, or undefined when there is none to ask —

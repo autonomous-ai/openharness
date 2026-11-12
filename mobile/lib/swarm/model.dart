@@ -972,6 +972,7 @@ class SuperTabSnapshot {
       swarmBuddy = row['swarmBuddy'] == true,
       buddyCap = (row['buddyCap'] as num?)?.toInt(),
       autoJoin = row['autoJoin'] == true,
+      personal = row['personal'] == true,
       mentionsWaiting = (row['mentionsWaiting'] as num?)?.toInt() ?? 0,
       mentionsDigest = row['mentionsDigest'] as String?,
       _releaseTimes = {
@@ -1102,6 +1103,9 @@ class SuperTabSnapshot {
   /// yet.
   final bool autoJoin;
 
+  /// It is its owner's Personal Swarm (head `personal`). Read as the desktop's model reads it; the phone does not show it.
+  final bool personal;
+
   /// The reader's tags still waiting for them, Swarm-wide; 0 from a backend
   /// before tags (spec 2026-10-24-lead-mentions.md).
   final int mentionsWaiting;
@@ -1177,6 +1181,17 @@ class SuperTabSnapshot {
 
   bool isProjectLead(String conversationId) =>
       _leadConversations.contains(conversationId);
+
+  /// The project whose PM [chatId], the reader's 1:1 chat with it, waits for while it starts.
+  SuperTabProject? projectWaitingIn(String chatId) =>
+      projects.where((p) => p.pmChatId == chatId).firstOrNull;
+
+  /// [projectId]'s PM: the Lead of its channel, if the Swarm lists that agent.
+  SuperTabAgent? leadOf(String projectId) {
+    final id = conversation(projectById(projectId)?.leadConversationId ?? '')
+        ?.leadId;
+    return id == null ? null : agent(id);
+  }
 
   SuperTabProject? leadProjectForAgent(String agentId) =>
       _projectsByLead[agentId];

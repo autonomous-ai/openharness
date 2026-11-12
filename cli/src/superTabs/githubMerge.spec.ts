@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
-import { authorOf, checksOf, GitHubMerge, ledProjects, noteOf, pmRunsHere, recordedAuthors, verdictOf, VerdictRecords, verdicts } from './githubMerge.js'
+import { authorOf, checksOf, COST_AGAIN_MS, COST_WAIT_MS, GitHubMerge, ledProjects, noteOf, pmRunsHere, recordedAuthors, verdictOf, VerdictRecords, verdicts, type LedProject } from './githubMerge.js'
+import type { ReadRow } from './taskTokens.js'
 import type { Crew } from './assign/crew.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { commandRecords } from './commandRecords.fake.js'
@@ -24,7 +25,9 @@ function fakeGitHub() {
     runs: new Map<string, Json[]>([[HEAD, [{ name: 'test', status: 'completed', conclusion: 'success' }]]]), statuses: new Map<string, Json[]>(),
     // The tasks, as issues: #2 is the one `pull()` closes. And the status GitHub answers with for a task it does not give.
     issues: new Map<number, Json>([[2, { number: 2, body: 'Say a quote a day.' }]]), refused: new Map<number, number>(),
-    state: 'clean', mergeAnswer: 200, signedOut: false, down: false, status: 0, sendFails: 0 }
+    state: 'clean', mergeAnswer: 200, signedOut: false, down: false, status: 0, sendFails: 0,
+    // Who GitHub says may see the repository: public unless a test says. An internal one, an enterprise's, is `private` too.
+    visibility: 'public' as 'public' | 'private' | 'internal' | undefined }
   const sent: Array<{ method: string; path: string; body: unknown }> = []
   /** Every read asked, and whether it carried the last answer's ETag. */
   const asked: string[] = []
@@ -39,7 +42,9 @@ function fakeGitHub() {
     if (refused) return { status: refused, etag: null, body: null, resetAt: null }
     // Each pull request here is alone and holds main's tip (`behind_by` 0), so it merges on its own; the train is githubTrain.spec.ts.
     const compared = p.split('...').at(-1)!
-    const body = p === '/repos/acme/app' ? { default_branch: 'main' }
+    const body = p === '/repos/acme/app' ? { default_branch: 'main', ...repo.visibility ? { private: repo.visibility !== 'public', visibility: repo.visibility } : {} }
+      // This computer's login: the one the team's comments here come from (`comment`).
+      : p === '/user' ? { login: 'deehw' }
       : p === '/repos/acme/app/pulls' && url.searchParams.get('state') === 'closed' ? []
       // A page of the list, as GitHub pages it.
       : p === '/repos/acme/app/pulls' ? repo.pulls.slice((Number(url.searchParams.get('page') ?? 1) - 1) * Number(url.searchParams.get('per_page') ?? 30),
@@ -77,11 +82,13 @@ function setup() {
   const crew: Crew = { builders: [{ id: 'pip', name: 'Pip', label: 'builder:pip', machineId: 'mac', engine: 'claude' }], machines: [] }
   const team = vi.fn(async () => crew)
   const clock = { now: Date.parse('2026-11-09T07:31:00Z') }
+  // What the server keeps of what each change cost its builder (taskTokens.ts): nothing, unless a test says.
+  const costs = vi.fn(async (_project: LedProject, _numbers: number[]): Promise<ReadRow[]> => [])
   const merger = new GitHubMerge({ projects: async () => [{ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }],
-    crew: team, get: github.get, send: github.send, now: () => clock.now, log, records: new VerdictRecords(github.authors, () => clock.now, log) })
+    crew: team, get: github.get, send: github.send, now: () => clock.now, log, records: new VerdictRecords(github.authors, () => clock.now, log), costs })
   const merges = () => github.sent.filter(s => s.method === 'PUT')
   const comments = () => github.sent.filter(s => s.method === 'POST').map(s => String((s.body as Json).body))
-  return { github, merger, log, merges, comments, clock, crew: team }
+  return { github, merger, log, merges, comments, clock, crew: team, costs }
 }
 
 /** Two passes three minutes apart: a head's checks count as passed only once they hold still (githubMerge.ts CHECKS_SETTLE_MS), so
@@ -98,6 +105,125 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     await settle(f)
     expect(f.merges()).toEqual([{ method: 'PUT', path: '/repos/acme/app/pulls/4/merge', body: { merge_method: 'squash', sha: HEAD } }])
     expect(f.comments()).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d: merged\. READ-OK on f6edb44 by Juno, checks green\.$/)])
+  })
+
+  // Swarm allocator, package 12: the comment that says a change landed carries what it cost its builder, from the rows its
+  // builder's own daemon wrote (taskTokens.ts). The same comment: nothing more is written to GitHub.
+  it('says in the comment that it merged what the change cost its builder: its model, minutes, tokens and fix rounds', async () => {
+    const f = setup()
+    f.github.repo.visibility = 'private'
+    const taken = f.clock.now - 39 * 60_000
+    const tokens = [{ model: 'claude-sonnet-5-5', input: 1_200, output: 3_400, cacheRead: 0, cacheWrite: 0 }]
+    f.costs.mockResolvedValue([{ number: 2, kind: 'build', name: 'Pip', tokens, rounds: 0, startedAt: taken, endedAt: taken + 60_000 },
+      { number: 4, kind: 'fix', name: 'Pip', tokens, rounds: 1, startedAt: taken + 120_000, endedAt: taken + 180_000 },
+      { number: 4, kind: 'read', name: 'Juno', tokens, rounds: 1, startedAt: taken, endedAt: taken }])
+    await settle(f)
+    expect(f.comments()).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d: merged\. READ-OK on f6edb44 by Juno, checks green\. Built by pip on `claude-sonnet-5-5`: 42 min, 9k tokens, 1 fix round\.$/)])
+    // Asked once, as the project's PM, for the pull request and the task it closes.
+    expect(f.costs.mock.calls).toEqual([[{ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }, [4, 2]]])
+    expect(f.github.sent.filter(s => s.method === 'POST')).toHaveLength(1)
+  })
+
+  // anh Dee's call, 12 November: on a public repository the builder's model and what the change used of its person's
+  // subscription would be public in that person's name, and an internal one is read by its whole enterprise. Its rows stay on
+  // the server, for the project's members.
+  it('says nothing of what a change cost on a repository GitHub does not say is private, and asks the server nothing for it', async () => {
+    for (const visibility of ['public', 'internal', undefined] as const) {
+      const f = setup()
+      f.github.repo.visibility = visibility
+      f.costs.mockResolvedValue([{ number: 4, kind: 'build', name: 'Pip', rounds: 0, startedAt: f.clock.now, endedAt: f.clock.now,
+        tokens: [{ model: 'claude-sonnet-5-5', input: 9_000, output: 0, cacheRead: 0, cacheWrite: 0 }] }])
+      await settle(f)
+      expect(f.comments(), String(visibility)).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d: merged\. READ-OK on f6edb44 by Juno, checks green\.$/)])
+      expect(f.costs).not.toHaveBeenCalled()
+      // Its privacy is in the read of the repository each pass makes already.
+      expect(f.github.asked.filter(path => path.startsWith('/repos/acme/app ') || path === '/repos/acme/app')).toHaveLength(2)
+    }
+  })
+
+  it('merges and says so as before when the cost cannot be read, says that once, leaves the server alone a quarter of an hour after each miss, and says once when it is read again', async () => {
+    const f = setup()
+    f.github.repo.visibility = 'private'
+    /** The next pull request, alone and ready, merged at [at]: seen a pass before, its checks holding still since. */
+    const mergeNext = async (number: number, at: number) => {
+      f.github.repo.pulls = [pull({ number, head: { ref: `pip/${number + 100}` }, body: '' })]
+      f.github.repo.comments.set(number, [comment('Juno, 14:20, to **Pip**: READ-OK f6edb44')])
+      await f.merger.tick()
+      f.clock.now = at
+      await f.merger.tick()
+    }
+    const unread = () => f.log.mock.calls.map(([line]) => String(line)).filter(line => line.includes('cost'))
+    const MIN = 60_000
+    f.costs.mockRejectedValue(new Error('the server did not answer'))
+    await settle(f)
+    const first = f.clock.now
+    expect(unread()).toEqual(['[super-tab] a landed change\'s cost could not be read: it is not said · COST_UNREAD acme/app'])
+    // Within the quarter it is not asked again. As the quarter ends it is, and misses again: nothing more is said.
+    await mergeNext(5, first + 10 * MIN)
+    expect(f.costs).toHaveBeenCalledTimes(1)
+    await mergeNext(6, first + COST_AGAIN_MS)
+    expect(f.costs).toHaveBeenCalledTimes(2)
+    // The quarter counts again from that miss.
+    await mergeNext(7, first + 2 * COST_AGAIN_MS - 1)
+    expect(f.costs).toHaveBeenCalledTimes(2)
+    expect(unread()).toHaveLength(1)
+    f.costs.mockResolvedValue([])
+    await mergeNext(8, first + 2 * COST_AGAIN_MS + 5 * MIN)
+    expect(f.costs).toHaveBeenCalledTimes(3)
+    expect(unread()).toEqual([expect.stringContaining('COST_UNREAD'), '[super-tab] landed changes\' costs are read again · acme/app'])
+    // Each merged and said so as before; by its branch alone, a pull request names its task too.
+    expect(f.comments()).toHaveLength(5)
+    for (const said of f.comments()) expect(said).toMatch(/merged\. READ-OK on f6edb44 by Juno, checks green\.$/)
+    expect(f.costs.mock.calls.at(-1)![1]).toEqual([8, 108])
+    // Read again, the next miss is said anew.
+    f.costs.mockRejectedValue(new Error('the server did not answer'))
+    await mergeNext(9, f.clock.now + 5 * MIN)
+    expect(unread()).toHaveLength(3)
+  })
+
+  it('asks the server about no more than twenty numbers, however many issues a pull request says it closes', async () => {
+    const f = setup()
+    f.github.repo.visibility = 'private'
+    f.github.repo.pulls = [pull({ body: Array.from({ length: 30 }, (_, i) => `Closes #${100 + i}`).join('\n') })]
+    await settle(f)
+    expect(f.costs.mock.calls[0]![1]).toEqual([4, ...Array.from({ length: 19 }, (_, i) => 100 + i)])
+  })
+
+  // The server refuses a read that asks about any number no issue can have, and a refused read leaves the sentence out of the
+  // repository's comments for a quarter of an hour (review of #4143).
+  it('asks about no number an issue cannot have, whatever a pull request\'s text says it closes, and twenty it can', async () => {
+    const f = setup()
+    f.github.repo.visibility = 'private'
+    const closes = ['Closes #0', 'Closes #12345678901', 'Closes #2147483648', 'Closes #2147483647', ...Array.from({ length: 21 }, (_, i) => `Closes #${100 + i}`)]
+    f.github.repo.pulls = [pull({ body: closes.join('\n') })]
+    await settle(f)
+    expect(f.costs.mock.calls.map(([, numbers]) => numbers)).toEqual([[4, 2_147_483_647, ...Array.from({ length: 18 }, (_, i) => 100 + i)]])
+  })
+
+  it('asks about each number once, though a pull request\'s branch names its own', async () => {
+    const f = setup()
+    f.github.repo.visibility = 'private'
+    f.github.repo.pulls = [pull({ head: { ref: 'pip/4' } })]
+    await settle(f)
+    expect(f.costs.mock.calls.map(([, numbers]) => numbers)).toEqual([[4, 2]])
+  })
+
+  it('does not hold the comment for a server that never answers: past the wait it is posted without the cost', async () => {
+    vi.useFakeTimers()
+    try {
+      const f = setup()
+      f.github.repo.visibility = 'private'
+      f.costs.mockReturnValue(new Promise<ReadRow[]>(() => {}))
+      await f.merger.tick()
+      f.clock.now += 3 * 60_000
+      const pass = f.merger.tick()
+      await vi.advanceTimersByTimeAsync(COST_WAIT_MS - 1)
+      expect(f.merges()).toHaveLength(1)
+      expect(f.comments()).toEqual([])
+      await vi.advanceTimersByTimeAsync(1)
+      await pass
+      expect(f.comments()).toEqual([expect.stringMatching(/merged\. READ-OK on f6edb44 by Juno, checks green\.$/)])
+    } finally { vi.useRealTimers() }
   })
 
   // lampOS merge-when-green.sh: checks count as passed only once they are "the same in two looks 30 s apart, from 3 min on". A
@@ -673,6 +799,39 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     }
   })
 
+  // #3787: on swarm-sandbox, #15 by builder:pip had its READ-OK and green checks and waited for hours, said to nobody: Attach had
+  // given Pip a new name, so the team no longer had a builder:pip. Only a task Harness gave that builder is told of: a shared
+  // repository carries dozens of builder: labels from older teams and tools (lampOS about 55).
+  it('tells the PM, once for each head, of a pull request for a task Harness gave a builder who is no longer on the team', async () => {
+    const f = setup()
+    f.crew.mockResolvedValue({ builders: [{ id: 'amari', name: 'Amari', label: 'builder:amari', machineId: 'mac', engine: 'claude' }], machines: [] })
+    f.github.repo.comments.set(2, [comment('Harness, 09:30: for **Pip**: it can start now.')])
+    await settle(f)
+    expect(f.merges()).toEqual([])
+    expect(f.comments()).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*Juno\*\*: not merged yet at f6edb44: its builder Pip is not on the team: Harness lands only the team's pull requests\. Put Pip back on it, or give #2 to one of its builders\.$/)])
+    f.github.repo.comments.set(4, [...f.github.repo.comments.get(4)!, comment(f.comments()[0]!)])
+    await settle(f)
+    expect(f.comments()).toHaveLength(1)
+    f.github.repo.pulls = [pull({ head: { sha: UNDER } })]
+    f.github.repo.runs.set(UNDER, [{ name: 'test', status: 'completed', conclusion: 'success' }])
+    await settle(f)
+    expect(f.comments()).toHaveLength(2)
+    expect(f.comments()[1]).toContain('not merged yet at b0b0b0b: its builder Pip is not on the team')
+  })
+
+  it('says nothing of a builder: label off the team that Harness here never gave the task to', async () => {
+    for (const given of [[], [comment('Harness, 09:30: for **Pip**: it can start now.', { user: { login: 'someone-else' } })],
+      [comment('Harness, 09:30: for **Pip**: it can start now.'), comment('Harness, 10:30: for **Amari**: it can start now.')],
+      [comment('Harness, 09:30: for **Pip**: it can start now.', { author_association: 'NONE' })]]) {
+      const f = setup()
+      f.crew.mockResolvedValue({ builders: [{ id: 'amari', name: 'Amari', label: 'builder:amari', machineId: 'mac', engine: 'claude' }], machines: [] })
+      f.github.repo.comments.set(2, given)
+      await settle(f)
+      expect(f.comments()).toEqual([])
+      expect(f.merges()).toEqual([])
+    }
+  })
+
   it('merges nothing on a READ-OK of an older head, by its author, by a stranger, or while a HOLD stands', async () => {
     for (const said of [[comment('Juno, 14:20, to **Pip**: READ-OK a1b2c3d')], [comment('Pip, 14:21: READ-OK f6edb44')],
       [comment('READ-OK f6edb44', { author_association: 'NONE', user: { login: 'stranger' } })],
@@ -1065,8 +1224,14 @@ describe('the rule\'s parts', () => {
       .toEqual(['ci/required'])
     expect(checksOf([{ id: 1, name: 'ci/required', status: 'completed', conclusion: 'failure' }], { statuses: [{ state: 'failure', context: 'ci/required' }] }).failed)
       .toEqual(['ci/required'])
-    expect(checksOf([{ name: 'lint', status: 'completed', conclusion: 'failure' }], { statuses: [{ state: 'error', context: 'ci/required' }] }))
-      .toEqual({ state: 'failed', failed: ['lint', 'ci/required'], summary: 'ci/required:error|lint:completed:failure' })
+    expect(checksOf([{ name: 'lint', status: 'completed', conclusion: 'failure', app: { slug: 'github-actions' } }], { statuses: [{ state: 'error', context: 'ci/required' }] }))
+      .toEqual({ state: 'failed', failed: ['lint', 'ci/required'], sources: ['app github-actions', 'status ci/required'], summary: 'ci/required:error|lint:completed:failure' })
+    // What made them, which a train's tip must show of its riders' (githubTrain.ts attend): each check run's app, run or skipped,
+    // and each status by its context, never read as an app's. The train's own mark on its tip is none.
+    expect(checksOf([{ name: 'ci/required', status: 'completed', conclusion: 'success', app: { slug: 'github-actions' } },
+      { name: 'desktop-tests (${{ matrix.os }})', status: 'completed', conclusion: 'skipped', app: { slug: 'github-actions' } }, { name: 'scan', status: 'queued', app: { slug: 'codecov' } }],
+    { statuses: [{ state: 'success', context: 'github-actions' }, { state: 'success', context: 'harness/train' }] }).sources)
+      .toEqual(['app github-actions', 'app codecov', 'status github-actions'])
     // What was read, in any order GitHub lists it, as one line: two looks that read the same are the same.
     expect(checksOf([{ name: 'b', status: 'completed', conclusion: 'success' }, { name: 'a', status: 'completed', conclusion: 'success' }], {}).summary)
       .toBe(checksOf([{ name: 'a', status: 'completed', conclusion: 'success' }, { name: 'b', status: 'completed', conclusion: 'success' }], {}).summary)
@@ -1079,6 +1244,20 @@ describe('the rule\'s parts', () => {
     const found = await ledProjects({ me: 'dee', live: id => id === 'h-juno', read, roster: async () => [row({}), row({ id: 'ken', contributorId: 'ken' }),
       row({ id: 'pip' }, { lead: false }), row({ id: 'gone', harnessId: 'h-gone' })] })
     expect(found).toEqual([{ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }])
+  })
+
+  // A Personal Swarm's project made from a pane's folder has no address to clone, only the GitHub repository Desktop named for it
+  // (backend commands.ts project.github): its PM lands there as a cloned project's does.
+  it('merges for a project on the GitHub repository it was given when its folder has no address', async () => {
+    const row = { tabId: 'tab', lead: true, ledConversationId: 'lead', agent: { id: 'juno', harnessId: 'h-juno', name: 'Juno', contributorId: 'dee', machineOwnerId: 'dee' } }
+    const led = (project: Json) => ledProjects({ me: 'dee', live: () => true, roster: async () => [row],
+      read: async () => ({ projects: [{ id: 'pane', leadConversationId: 'lead', ...project }] }) })
+    expect(await led({ repository: { cwd: '/Users/dee/pane', repositoryUrl: null }, githubRepository: 'Acme/Pane' }))
+      .toEqual([{ repo: 'acme/pane', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'pane' }])
+    expect(await led({ githubRepository: 'acme/pane' })).toEqual([expect.objectContaining({ repo: 'acme/pane' })])
+    // The address it is cloned from comes first, and a name that is no owner/name is none.
+    expect(await led({ repository: { repositoryUrl: 'https://github.com/acme/app' }, githubRepository: 'acme/pane' })).toEqual([expect.objectContaining({ repo: 'acme/app' })])
+    expect(await led({ repository: { repositoryUrl: null }, githubRepository: 'acme/pane/extra' })).toEqual([])
   })
 
   it('counts a PM stopped here as leading, as the service asks the core whether it is stopped', async () => {
@@ -1103,7 +1282,7 @@ describe('the merger counts the agent the backend recorded for a verdict', () =>
     const authors = vi.fn(async (_project: { repo: string }, ids: string[]) => Object.fromEntries(ids.filter(id => names[id]).map(id => [id, { name: names[id]! }])))
     const log = vi.fn()
     const merger = new GitHubMerge({ projects: async () => [{ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }],
-      crew: async () => crew, get: github.get, send: github.send, now: () => clock.now, log, records: new VerdictRecords(authors, () => clock.now, log) })
+      crew: async () => crew, get: github.get, send: github.send, now: () => clock.now, log, records: new VerdictRecords(authors, () => clock.now, log), costs: async () => [] })
     return { github, merger, clock, authors, log, merges: () => github.sent.filter(s => s.method === 'PUT'),
       comments: () => github.sent.filter(s => s.method === 'POST').map(s => String((s.body as Json).body)) }
   }

@@ -923,6 +923,32 @@ describe('local CLI WebSocket', () => {
     })
   }
 
+  // A tool reaching another machine hears only its own replies and is no app there (OPENHARNES-13): its select takes a
+  // background pool of its own and tells the backend so with `relayIsolation`. A window keeps the shared pool.
+  for (const tool of [true, false]) {
+    it(`relays a ${tool ? 'tool' : 'window'}'s select for another machine on ${tool ? 'an isolated' : 'the shared'} pool`, async () => {
+      const sessionFor = async (_machine: string, _env: string, _select: unknown, sink: LocalClientSink) => {
+        sink.sendFrame({ type: 'connected', payload: { machineId: 'remote' } })
+        return { send: async () => {}, sendBinary: async () => {}, detach: () => {} }
+      }
+      const pool = { acquire: vi.fn(sessionFor), acquireIsolated: vi.fn(sessionFor), invalidate: vi.fn(), invalidateIsolated: vi.fn() }
+      const url = await start(new FakeBackend(), { relayPool: pool as unknown as NonNullable<LocalWsServerOptions['relayPool']>, autonomousEnv: 'prod' })
+      const ws = new WebSocket(url)
+      await onceOpen(ws)
+      const ready = onceMessage(ws)
+      const select = { machineId: 'remote', localProtocolVersion: 1, forceReconnect: true, ...(tool ? { tool: true } : {}) }
+      ws.send(JSON.stringify({ type: 'machine_select', payload: select }))
+      await ready
+      const [used, unused] = tool ? [pool.acquireIsolated, pool.acquire] : [pool.acquire, pool.acquireIsolated]
+      expect(unused).not.toHaveBeenCalled()
+      expect(used).toHaveBeenCalledOnce()
+      expect(used.mock.calls[0]![2]).toEqual({ type: 'machine_select', payload: tool ? { ...select, relayIsolation: true } : select })
+      expect(tool ? pool.invalidateIsolated : pool.invalidate).toHaveBeenCalledWith('remote')
+      expect(tool ? pool.invalidate : pool.invalidateIsolated).not.toHaveBeenCalled()
+      ws.close()
+    })
+  }
+
   it('follows an explicit app_focus, and keeps it off the wire', async () => {
     const backend = new FakeBackend()
     const moves: Array<{ machineId: string; agentId: string }> = []

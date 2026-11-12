@@ -17,8 +17,8 @@
  */
 import type { Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import type { CoreApi, ServiceRequests } from '../core/api.js'
-import { bridgePort, bridgeSocketPath, retireBridgeKey, rotateHarnessKey, saveBridgePort, sync } from '../lib/connectors/agents.js'
+import type { CoreApi, CorePorts, ServiceRequests } from '../core/api.js'
+import { bridgePort, bridgeSocketPath, retireBridgeKey, rotateHarnessKey, saveBridgePort, sync, syncProfileHome } from '../lib/connectors/agents.js'
 import { portHolderIsThisAccount } from '../lib/peerAccount.js'
 import { createBridge, serveBridgePipe, serveBridgeSocket } from '../lib/connectors/bridge.js'
 import { services, type GatewayRow } from '../lib/connectors/catalog.js'
@@ -27,7 +27,8 @@ import * as gateway from '../lib/connectors/gateway.js'
 import { connectVia, disconnectVia, elsewhere, type ElsewhereDeps } from '../lib/connectors/elsewhere.js'
 import { keepAlive, KEEP_ALIVE_S } from '../lib/connectors/renew.js'
 import { ConnectorError, Store, validateCode } from '../lib/connectors/store.js'
-import { answerVaultOp, VaultSync, vaultPortOf, type VaultPort } from '../lib/connectors/vaultSync.js'
+import { answerVaultOp } from '../lib/connectors/vaultOps.js'
+import { VaultSync, vaultPortOf, type VaultPort } from '../lib/connectors/vaultSync.js'
 
 /** The request connectors answers for the apps, declared in core/api.ts for the core to route. */
 export { CONNECTORS_REQUESTS } from '../core/api.js'
@@ -161,7 +162,7 @@ export interface ConnectorsOverrides extends Partial<ConnectorsDeps> {
   pipePath?: () => string
 }
 
-export function startConnectors(core: CoreApi, overrides: ConnectorsOverrides = {}): ServiceRequests {
+export function startConnectors(core: CoreApi, ports: CorePorts, overrides: ConnectorsOverrides = {}): ServiceRequests {
   const env = overrides.env ?? process.env
   const store = overrides.vault ?? new Store(undefined, env)
   const deps: ConnectorsDeps = {
@@ -204,6 +205,17 @@ export function startConnectors(core: CoreApi, overrides: ConnectorsOverrides = 
   /** Every agent installed here given its entries; a config that cannot be written now is written at the next change. */
   const syncAgents = (): void => { try { sync(vault, env) } catch { /* Left as it is. */ } }
   syncAgents()
+  // The core asks as an agent launches on a profile home (core/api.ts ConnectorsPort). A home that cannot be written now
+  // (the vault's lock held past its wait, a read-only folder) launches with what its config holds, and is said here: never
+  // a failure of this service, which a few launches in a busy minute would switch off.
+  ports.connectors = {
+    syncProfileHome: async (engine, folder) => {
+      try { return syncProfileHome(vault, engine, folder, env) } catch (error) {
+        console.warn(`[connections] could not update ${engine}:${folder} · ${(error as Error).message}`)
+        return []
+      }
+    },
+  }
 
   // Connections the same on every computer of the account: read now, at each `connectors_changed`, and
   // written whenever this computer's change (here, by `harness connections`, by a renewal in the bridge).

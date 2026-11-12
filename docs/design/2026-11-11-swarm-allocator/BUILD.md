@@ -130,7 +130,7 @@ opening tasks). `DEEP` goes, from every reader of a list: `readProblem`, `nextPi
 `githubAssign.ts`, `openWaiting` and `readerFor`, and `pmNumbers.ts`. `experiment.mts` calls `nextPicks` with a depth
 and builds its own read: it is this package's proof, and is kept running. `PM_BASICS` says what is true, and its
 entry in `docs/prompt-rules-audit.md` follows. Until package 11 this is for each project: a builder of two public
-projects holds one task building in each.
+projects holds one task building in each. *Since package 11, one across them.*
 
 **First.** The test that shows the fault: a builder with two tasks whose pull requests wait for a read, and a free
 sized task. Today nothing is given. If that test passes on `main`, the fault is not there: stop and say so.
@@ -223,7 +223,7 @@ an area the repository already has one for in its own spelling.*
 **Why.** `part:Backend` and an agent's "Works on: backend" do not match; the label's side is compared as written.
 
 **Change.** A `part:` label's value is read through `areaOf` wherever an area is read (`assign/crew.ts`: a task's
-part, a builder's finished parts, `contextOf`'s keys). Words that differ ("backend engine" and "backend") stay two
+part, `contextOf`'s keys). Words that differ ("backend engine" and "backend") stay two
 areas: mapping them is package 13's.
 
 **Proof.** Specs; the gate.
@@ -238,9 +238,10 @@ people give their own folders.
 The rule to bring anh Dee again: only `node_modules`, `.dart_tool` and `.next`, only where a `.gitignore` rule names the
 folder itself, and the review's other findings closed first.
 
-**Today.** A sweep exists: `cli/src/lib/worktreeSweep.ts`, run by the workspaces service. It removes a worktree
-Harness made when no live or stopped harness works in it, nothing is uncommitted, it was untouched for a week, and no
-commit is only there. On anh Dee's computer 114 such worktrees of this repository still hold 109 GB.
+**Today.** Nothing removes a worktree on a timer: the workspaces service's sweep (`cli/src/lib/worktreeSweep.ts`, a
+worktree Harness made when no live or stopped harness works in it, nothing is uncommitted, it was untouched for a week,
+and no commit is only there) is gone since #4166, as it removed worktrees their person chose to keep. Cleaning up is
+the person's, from the app (#711: #4167, #4168). On anh Dee's computer 114 worktrees of this repository hold 109 GB.
 
 **First: find out why they stay.** For each kept worktree, which condition keeps it: a stopped harness, a week not
 yet gone, something uncommitted or untracked, a commit only there. Count them and their gigabytes. Reading only: run
@@ -264,11 +265,17 @@ and each that lets it go.
 
 ### 7. CPU
 
-**Built, not in a pull request yet** (branch `cli-swarm-cpu-share`). Each agent a Swarm starts gets its share of its computer's cores
-(`HARNESS_CORES`), and the CLI's unit suite takes half of it; the plan stops counting cores (the mismatch). Measured on
-one Mac of 16 threads: an eighth of the CLI's unit suite started two or four at once, each sized to the machine, failed
-on deadlines every time; sized to half its share, none did. Owed: the write-up in `docs/research/`, a review, and the
-core checks (`npm run test:core`).
+**Built** (#4150): the share, `swarmLaunch` in `cli/src/superTabs/inCore/launch.ts`, given as `HARNESS_CORES` at a
+Swarm agent's first launch (`core/agents/create.ts`) and every relaunch (`lib/launchOverrides.ts`); this repository's
+CLI suite takes half of it, never more than the machine has (`cli/src/testing/suiteWorkers.ts`). The plan counts no
+cores (`assign/crew.ts` `SIZES`): the smaller way to settle the mismatch, as a check when a task is taken needs
+package 16's offer. The study:
+[docs/research/2026-11-11-agents-share-cpu.md](../../research/2026-11-11-agents-share-cpu.md). *Measured on one Mac of
+16 threads: four runs at once of an eighth of the CLI's unit suite, each sized to the machine, failed 12 of 12; at half
+a share 16 of 16 passed, taking 1.5 to 2.7 times as long. Not built: a lower priority (`nice -n 10` did not stop four
+at once failing; macOS's background policy kept the person's own work quick and the runs failing) and the system's
+controls on Linux and Windows (not tried). Agents started at the same moment count each other; each share is said in
+the daemon's log, in counts. An agent keeps the share it was started with until it is relaunched.*
 
 **Today.** Nothing limits what an agent's tools take. Each test runner sizes its workers to the whole machine (the
 CLI's suite to half its cores, Desktop's to at most 12), whatever else runs there. And the plan keeps a machine
@@ -357,6 +364,18 @@ statuses only.
 
 ### 11. One view of an agent across a Swarm's projects
 
+**Built** (#4144): option (a), [the options and why](one-view.md): just before `githubAssign.ts` gives a builder a task,
+it reads that builder's own list in each of the Swarm's other projects' repositories (`buildsElsewhere`,
+`swarmRepositories`), and `assign/crew.ts` counts what it builds there against its room (`buildingIn`, `addElsewhere`,
+`hasRoom`). *anh Dee was not there to pick; under his "take care of it all" the session that built it chose (a). Only
+building counts across projects: four open stays each project's own, as a project whose merger is off would otherwise
+cap its builders everywhere (review of #4144). A builder found building elsewhere is busy in the plan for as long as the
+plan counts that work, and is given nothing here until it is read again, fifteen minutes on at the latest. A task there
+is in review when an open pull request of its builder that GitHub says is not a draft names it: its verdicts there are
+not read, so a reader's HOLD there counts as in review. Its lists in the other repositories are read at once, and two
+PMs' plans can still give one builder a task each when both are about to within that one round trip. The claim's limit
+(`githubClaim.ts`) still counts one repository: it reads none of these counts.*
+
 **Why.** Every regular agent builds for every public project of its Swarm, and each project plans on its own PM's
 person's computer, without seeing the others.
 
@@ -369,10 +388,13 @@ in what a person must do. Then build the one he picks.
 
 ### 12. Tokens for a task, and the cost on a landed change
 
-**Built, the server's half** (#4109): `backend/src/superTabs/taskTokens.ts` and its two routes, kept 90 days. The
-daemon's half is built and not in a pull request (branch `swarm-task-tokens`): the landing comment would say the
-builder's model, minutes, tokens and fix rounds, public on a public repository, which waits for anh Dee's word. The
-server's half was released in `v1.4.80_backend`.
+**Built** (#4109, the server's half, released in `v1.4.80_backend`; #4143, the daemon's):
+`backend/src/superTabs/taskTokens.ts` and its two routes, kept 90 days; `cli/src/superTabs/taskTokens.ts`, which counts
+each agent's tokens on its person's own computer, between the boundaries its turns' ends and its commands show, and
+writes a row as a piece of work stops. *The landing comment says its builder, model (as code), minutes, tokens and fix
+rounds on a private repository only (GitHub's `visibility: private`; an internal one is read by its whole enterprise);
+on a public one it says none of them, and the rows stay on the server for the project's members (anh Dee's call, 12
+November). Not built: the window's percent at each boundary (package 15's), and the tokens in the day's post.*
 
 **Why.** No saving can be claimed, and no model or price chosen, without it. Each daemon counts its conversations'
 tokens by model and kind (`cli/src/lib/agentTokenUsage.ts`); nothing ties a count to a task. The server's cost
@@ -494,14 +516,22 @@ workflow in server code (the plan's "Not built"): the server referees one record
 
 ## Research, alongside
 
-- **An area's worth.** *Study done; constants not changed* ([the study](../../research/2026-11-12-area-worth/README.md)): in lampOS's record a
+- **An area's worth.** *Study done; the learning discount removed, "Works on:" kept* ([the study](../../research/2026-11-12-area-worth/README.md)): in lampOS's record a
   builder was 1.12 times as fast in an area it had landed work in (0.85 to 1.49), and held no less often: no
-  measurable difference. Neither the planned threefold spread nor the 40% learning discount is supported. The study
-  could not test an area a person declares (5 role files named one), so `FOCUS`, `AWAY` and the learning steps are
-  not changed yet: 1.0 for all of them would let a person's "Works on:" steer nothing, which is anh Dee's to choose.
+  measurable difference. Neither the planned threefold spread nor the 40% learning discount is supported. anh Dee
+  left the call to the session building this on 12 November. *Removed*: a builder is no quicker in a part for the tasks it finished
+  there. The plan took 0.85, 0.70 and 0.60 of its time after 1, 2 and 3 or more; the record has 0.83, 0.93 and 0.90,
+  each interval holding 1. Keeping a part's tasks on the builder that did them before gained no speed, drew more holds
+  there (2 points a doubling) and left other builders idle. `readProblem` counts no closed issues by part, and the line
+  that gives a task no longer says "it finished 2 part:api tasks". *Kept*: `FOCUS` and `AWAY` in `assign/crew.ts`, a
+  person's "Works on:", a strong pull as before. It is a person steering their agent, which the study could not test (5
+  role files named an area), and at 1.0 it would steer nothing. *The experiment* takes the study's estimate, 1.12, between a
+  builder's own area and another, where it assumed two ([its rows under both](README.md#an-areas-speed-from-the-study)): one
+  ahead still gains (4% on the light day, 14% on the heavy one), and if a named area is worth no more than a practised
+  one, the kept guess costs the rule 6% and 13%.
   Asked: from lampOS's record on GitHub, read only: is a builder faster, or held less, on its later
   tasks in an area than on its first? Method and numbers in `docs/research/`. Then the experiment's assumed twofold
-  speed, and the product's own guess (`FOCUS` and `AWAY` in `assign/crew.ts`: threefold), are replaced by what was
-  found.
+  speed, and the product's own guess (`FOCUS` and `AWAY` in `assign/crew.ts`: threefold), were to be replaced by what
+  was found.
 
 An idea beyond these packages goes to anh Dee as a proposal.

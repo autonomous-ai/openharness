@@ -1,17 +1,30 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
-import { GitHubMerge, VerdictRecords } from './githubMerge.js'
+import { GitHubMerge, VerdictRecords, type LedProject } from './githubMerge.js'
+import type { ReadRow } from './taskTokens.js'
 import { commandRecords } from './commandRecords.fake.js'
-import { landingMessage, nextTrain, splitRed, trainBody, trainEnd, trainOfBody } from './githubTrain.js'
+import { landingMessage, nextTrain, splitRed, trainBody, trainEnd, trainOfBody, trainReceipts } from './githubTrain.js'
 import type { Crew } from './assign/crew.js'
 import type { GitHubGet, GitHubReply, GitHubSend } from './githubRest.js'
 
 type Json = Record<string, unknown>
 const sha = (seed: string): string => createHash('sha1').update(seed).digest('hex')
-const PASSED = [{ name: 'test', status: 'completed', conclusion: 'success' }]
-const FAILED = [{ name: 'test', status: 'completed', conclusion: 'failure' }]
-const RUNNING = [{ name: 'test', status: 'in_progress', conclusion: null }]
+/** A head's check runs as GitHub lists them, each with the app that ran it. */
+const ACTIONS = { slug: 'github-actions' }
+const PASSED = [{ name: 'test', status: 'completed', conclusion: 'success', app: ACTIONS }]
+const FAILED = [{ name: 'test', status: 'completed', conclusion: 'failure', app: ACTIONS }]
+const RUNNING = [{ name: 'test', status: 'in_progress', conclusion: null, app: ACTIONS }]
 const REPO = '/repos/acme/app'
+/** A local check receipt for [head], as scripts/local-checks.py reads one, and a body that gives [receipts] as a pull request's does. */
+const receipt = (head: string, over: Json = {}): Json =>
+  ({ check: 'cli-core', command: 'npm run test:core', cwd: 'cli', head, status: 'passed', passed: 12, platform: 'macos', ...over })
+const fence = (receipts: unknown): string => `Closes #2\n\n\`\`\`harness-local-checks\n${JSON.stringify(receipts)}\n\`\`\`\n`
+/** The receipts a train's [body] carries, as scripts/local-checks.py FENCE finds them: one fence of JSON, or none. */
+const carriedReceipts = (body: string): unknown => {
+  const fences = [...body.matchAll(/^```harness-local-checks\s*\n([\s\S]*?)^```[ \t]*$/gm)]
+  expect(fences.length).toBeLessThanOrEqual(1)
+  return fences[0] ? JSON.parse(fences[0][1]!) : null
+}
 
 interface FakePull { number: number; state: 'open' | 'closed'; draft: boolean; title: string; body: string; created_at: string; updated: number; merged_at: string | null
   merge_commit_sha: string | null; head: { sha: string; ref: string; repo: { full_name: string } }; base: { ref: string }; labels: Array<{ name: string }>
@@ -179,10 +192,12 @@ function setup(project = 'acme/app') {
   const log = vi.fn()
   // Pip builds; Juno is the PM, and reads.
   const crew: Crew = { builders: [{ id: 'pip', name: 'Pip', label: 'builder:pip', machineId: 'mac', engine: 'claude' }], machines: [] }
+  // What the server keeps of what each change cost its builder (taskTokens.ts): nothing, unless a test says.
+  const costs = vi.fn(async (_project: LedProject, _numbers: number[]): Promise<ReadRow[]> => [])
   const start = () => new GitHubMerge({ projects: async () => [{ repo: project, pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }],
-    crew: async () => crew, get: repo.get, send: repo.send, now: () => clock.now, log, records: new VerdictRecords(repo.authors, () => clock.now, log) })
+    crew: async () => crew, get: repo.get, send: repo.send, now: () => clock.now, log, records: new VerdictRecords(repo.authors, () => clock.now, log), costs })
   const f = {
-    state, log, clock, merger: start(), mark: repo.mark,
+    state, log, clock, costs, merger: start(), mark: repo.mark,
     /** A daemon restart: a new merger, which remembers nothing. */
     restart: () => { f.merger = start() },
     say: (number: number, body: string) => state.comments.set(number, [...state.comments.get(number) ?? [],
@@ -252,6 +267,59 @@ describe('the ready pull requests ride a train (githubTrain.ts)', () => {
     expect(pull.state).toBe('closed')
   })
 
+  // Swarm allocator, package 12: each change a train lands is told what it cost its own builder, in the comment that says it
+  // landed, from the rows its builder's daemon wrote (taskTokens.ts). One read of the server for each, and no more comments.
+  it('says in each landed change\'s comment what that change cost its builder', async () => {
+    const f = setup()
+    f.state.settings = { private: true, visibility: 'private' }
+    const first = f.add(4, { body: 'Closes #2' }), second = f.add(5)
+    const taken = f.clock.now
+    const row = (number: number, kind: ReadRow['kind'], n: number, rounds = 0): ReadRow => ({ number, kind, name: 'Pip', rounds, startedAt: taken, endedAt: taken,
+      tokens: [{ model: 'claude-sonnet-5-5', input: n, output: 0, cacheRead: 0, cacheWrite: 0 }] })
+    f.costs.mockImplementation(async (_project, numbers) => numbers[0] === 4 ? [row(2, 'build', 1_200_000), row(4, 'fix', 50_000, 2)] : [])
+    await f.settle()
+    await f.ends(PASSED)
+    const minutes = Math.round((f.clock.now - taken) / 60_000)
+    expect(f.said(4)).toEqual([expect.stringMatching(new RegExp(`^Harness, \\d\\d:\\d\\d: landed in #900 as \\w{7}\\. READ-OK on ${first.head.sha.slice(0, 7)} by Juno, checks green\\. `
+      + `Built by pip on \`claude-sonnet-5-5\`: ${minutes} min, 1\\.3M tokens, 2 fix rounds\\.$`))])
+    // One whose builder's daemon wrote nothing is told it landed as before.
+    expect(f.said(5)).toEqual([expect.stringMatching(new RegExp(`^Harness, \\d\\d:\\d\\d: landed in #900 as \\w{7}\\. READ-OK on ${second.head.sha.slice(0, 7)} by Juno, checks green\\.$`))])
+    expect(f.costs.mock.calls.map(([project, numbers]) => [project.repo, numbers])).toEqual([['acme/app', [4, 2]], ['acme/app', [5]]])
+    // A pass later finds them told: nothing more is read or said.
+    await f.tick()
+    expect(f.costs).toHaveBeenCalledTimes(2)
+  })
+
+  it('waits once, not once for each rider, on a server that does not give the costs', async () => {
+    const f = setup()
+    f.state.settings = { private: true, visibility: 'private' }
+    f.add(4)
+    f.add(5)
+    f.costs.mockRejectedValue(new Error('the server did not answer'))
+    await f.settle()
+    await f.ends(PASSED)
+    expect(f.said(4)).toEqual([expect.stringMatching(/landed in #900 as \w{7}\. READ-OK on \w{7} by Juno, checks green\.$/)])
+    expect(f.said(5)).toEqual([expect.stringMatching(/landed in #900 as \w{7}\. READ-OK on \w{7} by Juno, checks green\.$/)])
+    expect(f.costs).toHaveBeenCalledTimes(1)
+  })
+
+  // anh Dee's call, 12 November: what a change cost its builder is said on a private repository only; an internal one, which
+  // GitHub also calls private, is read by its whole enterprise (review of #4143).
+  it('says nothing of what a rider cost on a public or an internal repository, and asks the server nothing for it', async () => {
+    for (const settings of [{ private: false, visibility: 'public' }, { private: true, visibility: 'internal' }]) {
+      const f = setup()
+      f.state.settings = settings
+      f.add(4)
+      f.add(5)
+      f.costs.mockResolvedValue([{ number: 4, kind: 'build', name: 'Pip', rounds: 0, startedAt: f.clock.now, endedAt: f.clock.now,
+        tokens: [{ model: 'claude-sonnet-5-5', input: 9_000, output: 0, cacheRead: 0, cacheWrite: 0 }] }])
+      await f.settle()
+      await f.ends(PASSED)
+      for (const rider of [4, 5]) expect(f.said(rider), settings.visibility).toEqual([expect.stringMatching(/landed in #900 as \w{7}\. READ-OK on \w{7} by Juno, checks green\.$/)])
+      expect(f.costs).not.toHaveBeenCalled()
+    }
+  })
+
   // Code review of #4056: autonomous-harness, renamed openharness, keeps its old name in its project, and GitHub answers for it under
   // the new one: compared with the old name, every pull request read as a fork and no train as one.
   it('lands a pull request of a repository renamed since its project was made, as it does by the name GitHub has now', async () => {
@@ -282,6 +350,32 @@ describe('the ready pull requests ride a train (githubTrain.ts)', () => {
     expect(f.train().body.split('\n').slice(2)).toEqual([`#4 at ${a.head.sha}, READ-OK by Juno`, `#5 at ${b.head.sha}, READ-OK by Juno`, `#7 at ${c.head.sha}, READ-OK by Juno`])
     expect(f.train().body).toContain(`built to ${f.train().head.sha}`)
     expect(f.logged()).toContainEqual(expect.stringContaining('train acme/app#900 built on'))
+  })
+
+  // Train #4115, 2026-11-11: CI asks for each local check's receipt at the head it ran on, and nobody runs one on a train's merge
+  // commit, so a train that changed cli-core went red, and no CLI pull request could land.
+  it('carries each member\'s local check receipts at its own head in its body, and nothing else of the member\'s body', async () => {
+    const f = setup()
+    const head = (number: number) => sha(`head-${number}`), harnessd = { check: 'cli-harnessd', command: 'npm run test:harnessd' }
+    f.add(4, { files: ['cli/src/core/api.ts'], body: fence([{ ...receipt(head(4)), note: 'not read' }, receipt(sha('another'))]) })
+    f.add(5, { files: ['docs/guide.md'] })
+    f.add(6, { files: ['cli/src/harnessd/main.ts'], body: fence([receipt(head(6), harnessd)]) })
+    // Two fences, or one that is no JSON list, give no receipt: the member's own CI refuses them too.
+    f.add(7, { body: fence([receipt(head(7))]) + fence([receipt(head(7))]) })
+    f.add(8, { body: '```harness-local-checks\nnot json\n```' })
+    f.add(9, { body: fence({ head: head(9) }) })
+    await f.settle()
+    const body = f.train().body
+    expect(trainOfBody(body)!.members.map(m => m.number)).toEqual([4, 5, 6, 7, 8, 9])
+    expect(carriedReceipts(body)).toEqual([receipt(head(4)), receipt(head(6), harnessd)])
+    expect(body).not.toContain('Closes')
+  })
+
+  it('writes no receipts into a train none of whose members gives one', async () => {
+    const f = setup()
+    f.add(4); f.add(5, { body: 'No local check needed.' })
+    await f.settle()
+    expect(carriedReceipts(f.train().body)).toBeNull()
   })
 
   it('carries twenty at most, and the rest on the next train', async () => {
@@ -599,6 +693,20 @@ describe('a train waits for its own checks, then lands or is closed', () => {
     expect(f.carried()).toEqual([[4, 5, 6], [4, 6]])
   })
 
+  // A rider is fixed by its head: read again and green at a new one, it is still not what the train carries and tested.
+  it('lands nothing of a member read again at a new head since: the train is closed and built with that head', async () => {
+    const f = setup()
+    f.add(4); f.add(5)
+    await f.settle()
+    const built = f.state.sent.length
+    const pushed = f.push(5)
+    await f.ends(PASSED)
+    expect(f.writes(built)).toEqual(['PATCH /pulls/900', `DELETE /git/refs/heads/${f.trains()[0]!.head.ref}`])
+    expect(f.trains()[0]).toMatchObject({ state: 'closed', title: 'Train, rider changed: #4 #5', merged_at: null })
+    await f.tick()
+    expect(f.train().body).toContain(`#5 at ${pushed}`)
+  })
+
   // A member that only waits is still read and still at its head: its own check runs again, or GitHub has not yet said whether
   // it merges (it works that out anew each time main moves). After a daemon restart every member's checks wait three minutes to
   // hold still, as the train's own do, and whichever is looked at first decided whether a green run was thrown away.
@@ -768,7 +876,7 @@ describe('a train waits for its own checks, then lands or is closed', () => {
     await f.settle()
     await f.tick(90 * 60_000)
     expect(f.trains()[0]).toMatchObject({ state: 'closed', merged_at: null, title: 'Train, out of time: #4 #5' })
-    expect(f.logged()).toContainEqual('[super-tab] train acme/app#900 closed: its checks did not finish in 90 min')
+    expect(f.logged()).toContainEqual('[super-tab] train acme/app#900 closed: its checks did not finish in 90 min; nothing came from app github-actions')
   })
 
   it('takes for its train only a pull request this computer\'s login opened', async () => {
@@ -967,6 +1075,261 @@ describe('a train waits for its own checks, then lands or is closed', () => {
   })
 })
 
+// Two reviews of 12 November. Another tool's status is on a train's tip at once (a CLA bot's, one set by hand), while Actions can
+// take minutes to make a run. The train waited only for a tip with no check at all, so that status alone read as passed once it
+// held still, and the train landed a combined change CI had never run.
+describe('a train lands only once CI has reported on its tip', () => {
+  const CI = [{ name: 'ci/required', status: 'completed', conclusion: 'success', app: ACTIONS }]
+  /** A green status of [context] on [head], once, as a tool sets it. */
+  const status = (f: ReturnType<typeof setup>, head: string, context: string) => {
+    const now = f.state.statuses.get(head) ?? []
+    if (!now.some(each => each.context === context)) f.state.statuses.set(head, [...now, { context, state: 'success' }])
+  }
+  /** Pip's pull requests, each green on its own head with the check runs [runs] gives it, carried on a train on whose tip Actions
+   *  has made no run yet. Its tip. */
+  const ride = async (f: ReturnType<typeof setup>, runs: Record<number, Json[]>): Promise<string> => {
+    for (const [number, list] of Object.entries(runs)) f.state.runs.set(f.add(Number(number)).head.sha, list)
+    await f.settle()
+    const tip = f.train().head.sha
+    f.state.runs.set(tip, [])
+    return tip
+  }
+
+  it.each<[string, string[], Json[]]>([
+    ['a CLA bot\'s status', ['license/cla'], []],
+    ['a status set by hand, named as the riders\' check', ['ci/required'], []],
+    ['a status set by hand, named as the app that ran the riders\' checks', ['github-actions'], []],
+    ['another app\'s check run', [], [{ name: 'license/cla', status: 'completed', conclusion: 'success', app: { slug: 'cla-checker' } }]],
+  ])('does not land on %s alone, held still past the settle time, and lands once ci/required passed on it', async (_case, contexts, runs) => {
+    const f = setup()
+    const tip = await ride(f, { 4: CI, 5: CI })
+    for (const context of contexts) status(f, tip, context)
+    f.state.runs.set(tip, runs)
+    for (let look = 0; look < 4; look++) await f.settle()
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual([])
+    expect(f.train().state).toBe('open')
+    await f.ends([...runs, ...CI])
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual(['PUT /pulls/900/merge'])
+  })
+
+  it('closes it out of time when CI never reports on its tip, says so once, and builds the next', async () => {
+    const f = setup()
+    status(f, await ride(f, { 4: CI, 5: CI }), 'license/cla')
+    const built = f.state.sent.length, branch = f.train().head.ref
+    // Nothing is written, nor logged, while it waits.
+    for (let pass = 0; pass < 8; pass++) await f.tick(10 * 60_000)
+    expect(f.writes(built)).toEqual([])
+    expect(f.logged().filter(line => line.includes('#900'))).toEqual([expect.stringContaining('train acme/app#900 built on')])
+    await f.tick(15 * 60_000)
+    expect(f.writes(built)).toEqual(['PATCH /pulls/900', `DELETE /git/refs/heads/${branch}`])
+    expect(f.trains()[0]).toMatchObject({ state: 'closed', merged_at: null, title: 'Train, out of time: #4 #5' })
+    await f.tick()
+    expect(f.logged().filter(line => line.includes('#900 closed')))
+      .toEqual(['[super-tab] train acme/app#900 closed: its checks did not finish in 90 min; nothing came from app github-actions'])
+    expect(f.carried()).toEqual([[4, 5], [4, 5]])
+  })
+
+  // A check that runs only when certain files change: CI made no run on #4 (no workflow reads what it changed) and ran on #5.
+  it('waits for the app that ran checks on one rider only', async () => {
+    const f = setup()
+    status(f, await ride(f, { 4: [], 5: CI }), 'license/cla')
+    for (let look = 0; look < 4; look++) await f.settle()
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual([])
+    await f.ends(CI)
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual(['PUT /pulls/900/merge'])
+  })
+
+  // Measured on this repository, 12 November. A job CI skipped is named by its template ("desktop-tests (${{ matrix.os }},
+  // ${{ matrix.shard }})" on #4111) and one it ran by its rows ("desktop-tests (ubuntu-22.04, 1)" on #4089). And a check run by
+  // hand rides on its pull request's head: 71 of the newest 100 manual runs were on branches, 19 of them CLI end to end, and a
+  // train never runs one. Waited for by its name, such a check held every train its rider rode until it ran out of time.
+  it.each<[string, Json]>([
+    ['run by hand', { name: 'e2e (macOS, full disk)', status: 'completed', conclusion: 'success', app: ACTIONS }],
+    ['skipped and named by its template', { name: 'desktop-tests (${{ matrix.os }}, ${{ matrix.shard }})', status: 'completed', conclusion: 'skipped', app: ACTIONS }],
+  ])('lands on what CI ran on its tip, without a check one rider had %s', async (_case, check) => {
+    const f = setup()
+    await ride(f, { 4: CI, 5: [...CI, check] })
+    await f.ends(CI)
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual(['PUT /pulls/900/merge'])
+  })
+
+  // A status has no app: what reports by status (a CLA bot, a CI that does) is told apart by its context, on every pull request.
+  it('waits for each status every rider had, by its context', async () => {
+    const f = setup()
+    for (const number of [4, 5]) {
+      const head = f.add(number).head.sha
+      f.state.runs.set(head, CI)
+      status(f, head, 'license/cla')
+    }
+    await f.settle()
+    await f.ends(CI)
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual([])
+    status(f, f.train().head.sha, 'license/cla')
+    await f.settle()
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual(['PUT /pulls/900/merge'])
+  })
+
+  // Review of #4139. Every train carries every ready pull request, so one whose head had what no train gets held every train out
+  // of time, for good: over a day of passes 16 trains, none landed, 126 writes and 16 runs of CI, and nobody told.
+  /** Passes 30 seconds apart for a day, the daemon restarting at noon. [tip] puts on an open train's tip what CI and other tools
+   *  have made there [at] that time of the day: CI green, as soon as it is built, unless a test says otherwise. */
+  const day = async (f: ReturnType<typeof setup>, tip: (head: string, at: number) => void = head => f.state.runs.set(head, CI)) => {
+    for (let pass = 0; pass < 2_880; pass++) {
+      if (pass === 1_440) f.restart()
+      const open = f.train()
+      if (open) tip(open.head.sha, pass * 30_000)
+      await f.tick()
+    }
+  }
+  const merged = (f: ReturnType<typeof setup>) => [4, 5, 6].filter(number => f.state.pulls.get(number)!.merged_at !== null)
+
+  it('lands every rider over a day when one had a status set by hand: no train waits for a status only some riders had', async () => {
+    const f = setup()
+    for (const number of [4, 5, 6]) f.state.runs.set(f.add(number).head.sha, CI)
+    status(f, f.state.pulls.get(5)!.head.sha, 'qa/approved')
+    await day(f)
+    expect(merged(f)).toEqual([4, 5, 6])
+    expect(f.trains()).toHaveLength(1)
+    expect(f.state.sent).toHaveLength(11)
+  }, 60_000)
+
+  it('lands the others over a day when one rider had a check of an app no train gets: that one is told once and sits out', async () => {
+    const f = setup()
+    for (const number of [4, 5, 6]) f.state.runs.set(f.add(number).head.sha, CI)
+    const head = f.state.pulls.get(5)!.head.sha
+    f.state.runs.set(head, [...CI, { name: 'fork', status: 'completed', conclusion: 'success', app: { slug: 'fork-checker' } }])
+    await day(f)
+    expect(merged(f)).toEqual([4, 6])
+    expect(f.carried()).toEqual([[4, 5, 6], [4, 6]])
+    expect(f.trains()[0]).toMatchObject({ state: 'closed', title: 'Train, out of time: #4 #5 #6' })
+    expect(f.said(5)).toEqual([expect.stringMatching(new RegExp(`^Harness, \\d\\d:\\d\\d, to \\*\\*pip\\*\\*: not merged yet at ${head.slice(0, 7)}: its train never got `
+      + 'app fork-checker, which this head has: #900 waited 90 min for it\\. It sits out of trains until it has a new head, or your person lands it\\.$'))])
+    // The first train, closed; the note; the second train, landed: nothing more.
+    expect(f.state.sent).toHaveLength(18)
+    // At a new head it rides again.
+    f.push(5)
+    await f.settle()
+    await f.settle()
+    expect(f.carried().at(-1)).toEqual([5])
+  }, 60_000)
+
+  // Review of #4139: a rider no longer ready ends the train at once, as rider changed, before any wait for what has not come.
+  it('closes at once as rider changed when a member got a HOLD, though CI has not reported on its tip yet', async () => {
+    const f = setup()
+    status(f, await ride(f, { 4: CI, 5: CI }), 'license/cla')
+    const built = f.state.sent.length, branch = f.train().head.ref
+    f.say(5, `Kai, 15:00: HOLD ${f.state.pulls.get(5)!.head.sha.slice(0, 7)} the day count is off by one`)
+    await f.settle()
+    expect(f.writes(built)).toEqual(['PATCH /pulls/900', `DELETE /git/refs/heads/${branch}`])
+    expect(f.trains()[0]).toMatchObject({ state: 'closed', title: 'Train, rider changed: #4 #5' })
+  })
+
+  // Review 2 of #4139. As on main, a tip with nothing at all waits where a rider had anything, though its riders had nothing in
+  // common to wait for: #5's one check is a status #4 does not have.
+  it('waits while its tip has nothing at all where a rider had a check, though its riders had none in common', async () => {
+    const f = setup()
+    for (const number of [4, 5]) f.state.runs.set(f.add(number).head.sha, [])
+    status(f, f.state.pulls.get(5)!.head.sha, 'ci/external')
+    await f.settle()
+    f.state.runs.set(f.train().head.sha, [])
+    for (let pass = 0; pass < 10; pass++) await f.tick(10 * 60_000)
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual([])
+    expect(f.trains()[0]).toMatchObject({ state: 'closed', title: 'Train, out of time: #4 #5' })
+    expect(f.logged()).toContainEqual('[super-tab] train acme/app#900 closed: its checks did not finish in 90 min; nothing came from status ci/external')
+    // Nothing came at all: no sign CI ran, so nobody is told.
+    expect([...f.said(4), ...f.said(5)]).toEqual([])
+    await f.tick()
+    const tip = f.train().head.sha
+    f.state.runs.set(tip, [])
+    status(f, tip, 'ci/external')
+    await f.settle()
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual(['PUT /pulls/901/merge'])
+  })
+
+  // Review 2 of #4139. In an Actions outage the CLA bot still posts on every tip: no sign CI ran, so nobody is set aside.
+  it('lands every rider after an Actions outage, with a CLA status on every rider and every tip, and tells nobody', async () => {
+    const f = setup()
+    for (const number of [4, 5, 6]) {
+      const head = f.add(number).head.sha
+      f.state.runs.set(head, CI)
+      status(f, head, 'license/cla')
+    }
+    // Actions makes no run for the day's first three hours.
+    await day(f, (head, at) => { f.state.runs.set(head, at < 3 * 3_600_000 ? [] : CI); status(f, head, 'license/cla') })
+    expect(merged(f)).toEqual([4, 5, 6])
+    expect([4, 5, 6].flatMap(number => f.said(number)).filter(said => said.includes('not merged yet'))).toEqual([])
+    expect(f.trains().map(train => train.title)).toEqual(['Train, out of time: #4 #5 #6', 'Train: #4 #5 #6'])
+    expect(f.state.sent).toHaveLength(19)
+  }, 60_000)
+
+  // Review 2 of #4139. CI that reports by status, and a CLA bot that posts on every rider and never on a train. No rider had an
+  // app, so CI's status on the tip is the sign CI ran: each rider is told once, and no train waits out its time again.
+  it('tells each rider once and builds no more, where CI reports by status and every rider had one no train gets', async () => {
+    const f = setup()
+    const heads = [4, 5, 6].map(number => {
+      const head = f.add(number).head.sha
+      f.state.runs.set(head, [])
+      status(f, head, 'ci/external')
+      status(f, head, 'license/cla')
+      return head
+    })
+    await day(f, head => { f.state.runs.set(head, []); status(f, head, 'ci/external') })
+    expect(merged(f)).toEqual([])
+    expect(f.trains()).toHaveLength(1)
+    for (const [at, number] of [4, 5, 6].entries()) {
+      expect(f.said(number)).toEqual([expect.stringContaining(`not merged yet at ${heads[at]!.slice(0, 7)}: its train never got status license/cla, which this head has`)])
+    }
+    // The train, closed out of time, and one note to each rider.
+    expect(f.state.sent).toHaveLength(11)
+  }, 60_000)
+
+  // Review 2 of #4139. The note is all that keeps a rider out of trains: one GitHub did not take is not taken as said, and is said
+  // again when the next train waits out its time on that rider.
+  it('says its note again when GitHub did not take it, and the rider sits out once GitHub has', async () => {
+    const f = setup()
+    for (const number of [4, 5, 6]) f.state.runs.set(f.add(number).head.sha, CI)
+    f.state.runs.set(f.state.pulls.get(5)!.head.sha, [...CI, { name: 'fork', status: 'completed', conclusion: 'success', app: { slug: 'fork-checker' } }])
+    let refused = 0
+    f.state.answer = (method, path) => method === 'POST' && path === '/issues/5/comments' && refused++ === 0 ? { status: 403 } : undefined
+    await day(f)
+    expect(merged(f)).toEqual([4, 6])
+    expect(f.carried()).toEqual([[4, 5, 6], [4, 5, 6], [4, 6]])
+    expect(f.said(5)).toHaveLength(1)
+    expect(f.state.sent).toHaveLength(27)
+  }, 60_000)
+
+  // Any other note is said each time it applies (here at each train built), so one GitHub refused is not tried again.
+  it('tries a refused note of another kind no more: a member\'s conflict is said once for its head, taken or not', async () => {
+    const f = setup()
+    f.add(4); const b = f.add(5); f.add(6)
+    f.state.conflicts.add(b.head.sha)
+    f.state.answer = (method, path) => method === 'POST' && path === '/issues/5/comments' ? { status: 403 } : undefined
+    await f.settle()
+    await f.ends(PASSED)
+    await f.tick()
+    expect(f.writes().filter(write => write === 'POST /issues/5/comments')).toHaveLength(1)
+  })
+
+  // Review 2 of #4139. Where no rider had an app, only a status every rider had is a sign CI ran: one some riders had (a bot's,
+  // on a label) can come on a tip whether CI runs or not.
+  it('tells nobody where no rider had an app and only a status some riders had came on its tip', async () => {
+    const f = setup()
+    for (const number of [4, 5]) {
+      const head = f.add(number).head.sha
+      f.state.runs.set(head, [])
+      status(f, head, 'ci/external')
+    }
+    status(f, f.state.pulls.get(4)!.head.sha, 'qa/approved')
+    await f.settle()
+    const tip = f.train().head.sha
+    f.state.runs.set(tip, [])
+    status(f, tip, 'qa/approved')
+    for (let pass = 0; pass < 10; pass++) await f.tick(10 * 60_000)
+    expect(f.trains()[0]).toMatchObject({ state: 'closed', title: 'Train, out of time: #4 #5' })
+    expect([...f.said(4), ...f.said(5)]).toEqual([])
+  })
+})
+
 // The second review of #3995. A closed train's title and body are still anyone's to write who can write to the repository, and
 // they were believed: a pull request named in a landed train's body afterwards was told "landed" and closed, or left alone for
 // good; a closed train retitled as red made Harness tell a pull request that it had failed alone.
@@ -1153,6 +1516,20 @@ describe('the train\'s parts', () => {
     for (const body of ['', `built to ${sha('tip')}`, `#4 at ${head(4)}, READ-OK by Juno`, `built to ${sha('tip')}\n#4 at ${head(4).slice(0, 12)}, READ-OK by Juno`,
       `built to ${sha('tip')}\n#4 at ${head(4)}, READ-OK by Juno\n#4 at ${head(5)}, READ-OK by Juno`,
       trainBody('main', sha('tip'), Array.from({ length: 21 }, (_, i) => member(i + 1)))]) expect(trainOfBody(body), body).toBeNull()
+  })
+
+  it('carries receipts up to what a body GitHub and local-checks.py take holds, and reads its members back', () => {
+    const members = Array.from({ length: 20 }, (_, i) => member(i + 1))
+    const pulls = members.map(m => ({ head: m.head, body: fence(Array.from({ length: 32 }, (_, k) => receipt(m.head, { check: `check-${k}`, command: 'x'.repeat(200) }))) }))
+    const receipts = trainReceipts(pulls), body = trainBody('main', sha('tip'), members, receipts)
+    expect(body.length).toBeLessThanOrEqual(65_536)
+    expect(receipts.length).toBeGreaterThan(100)
+    expect(receipts.length).toBeLessThan(20 * 32)
+    // The first members' come first: the rest of a member it leaves out is what that member's check says is missing.
+    expect(receipts).toEqual(pulls.flatMap(pull => carriedReceipts(pull.body) as Json[]).slice(0, receipts.length))
+    expect(carriedReceipts(body)).toEqual(receipts)
+    expect(trainOfBody(body)).toEqual({ tip: sha('tip'), members })
+    expect(trainOfBody(trainBody('main', sha('tip'), members, receipts).replace(/\n/g, '\r\n'))).toEqual({ tip: sha('tip'), members })
   })
 
   it('says why a train closed without landing by the title it was closed with, and nothing of a title that is no train\'s', () => {

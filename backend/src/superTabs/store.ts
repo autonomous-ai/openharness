@@ -764,9 +764,12 @@ export class SuperTabStore {
     const heads = await this.heads(rows.slice(0, 100))
     return { tabs: rows.slice(0, 100).flatMap(row => {
       const head = heads.get(row.id)
-      return head ? [{ id: row.id, name: head.name, ownerId: row.ownerId, revision: row.revision, paused: head.paused,
-        // Only on the reader's own Personal Swarm: another person's is not theirs to be told apart.
-        ...(isPersonalSwarm(head) && head.ownerId === user.sub ? { personal: true as const } : {}) }] : []
+      if (!head) return []
+      // `personal` on the reader's own Personal Swarm alone, `personalSwarm` on every one (read/service.ts list).
+      const personalSwarm = isPersonalSwarm(head)
+      return [{ id: row.id, name: head.name, ownerId: row.ownerId, revision: row.revision, paused: head.paused,
+        ...(personalSwarm && head.ownerId === user.sub ? { personal: true as const } : {}),
+        ...(personalSwarm ? { personalSwarm: true as const } : {}) }]
     }), next: rows.length > 100 ? rows[99]!.id : null }
   }
 

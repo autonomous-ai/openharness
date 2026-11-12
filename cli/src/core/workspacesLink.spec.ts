@@ -18,9 +18,8 @@ function setup(connected = true) {
   })
   const notify = vi.fn(() => connected)
   const forgetProject = vi.fn()
-  const lines: string[] = []
-  const link = createWorkspacesLink(core, notify, forgetProject, (line) => lines.push(line))
-  return { core, notify, forgetProject, lines, link, port: link.port, live, stopped }
+  const link = createWorkspacesLink(core, notify, forgetProject)
+  return { core, notify, forgetProject, link, port: link.port, live, stopped }
 }
 
 describe('workspaces in their own process, as the core tells them', () => {
@@ -33,31 +32,13 @@ describe('workspaces in their own process, as the core tells them', () => {
     expect(notify.mock.calls).toEqual([[{ type: 'service_event', payload: { kind: 'nameBranches', agents: live } }]])
   })
 
-  it('tells the process to sweep now, with nothing that could go stale: it asks for the folders in use as it starts', () => {
-    const { notify, port, lines, core } = setup()
-    port.sweepUnused()
-    expect(notify.mock.calls).toEqual([[{ type: 'service_event', payload: { kind: 'sweep' } }]])
+  // #4166: the daemon swept clean, week-idle worktrees twice a day, the ones their person chose to keep too. The core
+  // neither asks the process to sweep nor lists every folder in use for one.
+  it('never tells the process to sweep, and lists no folders for one', () => {
+    const { link, port, core } = setup()
+    expect(Object.keys(port)).toEqual(['nameBranches'])
+    expect(link.answer('agents', {})).toEqual({ error: 'UNKNOWN_QUERY' })
     expect(core.agents.all).not.toHaveBeenCalled()
-    expect(lines).toEqual([])
-  })
-
-  it('skips a sweep it decides while the process is not running, and says so: never held for later', () => {
-    const { notify, port, lines } = setup(false)
-    port.sweepUnused()
-    expect(notify).toHaveBeenCalledOnce()
-    expect(notify.mock.calls[0]).toHaveLength(1)
-    expect(lines).toEqual(['[worktrees] sweep skipped: the workspaces process is not running; the next one is on its timer'])
-  })
-
-  it('answers the process every agent, live then stopped, when it starts a sweep', () => {
-    const { link, live, stopped } = setup()
-    expect(link.answer('agents', {})).toEqual({ agents: [...live, stopped] })
-  })
-
-  it('lets a failure to list the agents fail the question, so nothing is swept', () => {
-    const { link, core } = setup()
-    vi.mocked(core.agents.all).mockImplementationOnce(() => { throw new Error('a stopped agent could not be read') })
-    expect(() => link.answer('agents', {})).toThrow('a stopped agent could not be read')
   })
 
   it('sends a renamed agent\'s frame again, read fresh', () => {
@@ -80,11 +61,5 @@ describe('workspaces in their own process, as the core tells them', () => {
 
   it('refuses a question it does not know', () => {
     expect(setup().link.answer('context', {})).toEqual({ error: 'UNKNOWN_QUERY' })
-  })
-
-  it('logs on the console by default', () => {
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    createWorkspacesLink(fakeCore(), () => false, vi.fn()).port.sweepUnused()
-    expect(log).toHaveBeenCalledWith(expect.stringContaining('sweep skipped'))
   })
 })

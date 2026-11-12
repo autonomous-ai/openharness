@@ -124,7 +124,7 @@ describe('the account\'s agent experiments, kept for this computer', () => {
   })
   afterEach(() => { vi.useRealTimers(); rmSync(dataDir, { recursive: true, force: true }) })
 
-  const OFF = { agentsStartAgents: false, pullRequestLine: false, agentMessages: false, agentMessagesHideSummary: false, agentsTellAgents: false, programsReply: false }
+  const OFF = { agentsStartAgents: false, pullRequestLine: false, agentMessages: false, agentMessagesHideSummary: false, agentsTellAgents: false, programsReply: false, hachi: false }
   /** The account's answer, as backend routes/experimentalSettings.ts gives it. */
   const account = (features: Record<string, boolean>, accountId = 'acct') =>
     ({ status: 200, body: { success: true, data: { accountId, revision: 1, features: { share_button: false, ...features }, available: {} } } })
@@ -358,6 +358,23 @@ describe('the account\'s agent experiments, kept for this computer', () => {
     answers.push(async () => account({}))
     await t.sync.settingsWrite({ agentsTellAgents: false, byAgent: ' ' })
     expect(lines).toHaveLength(2)
+  })
+
+  // docs/design/2026-11-12-hachi.md: the start and tell gates read `hachi` from this copy without the network, and the
+  // Settings ▸ Experimental switch is the only way in: it is the person's yes, so no agent turns it on for them.
+  it('keeps Hachi\'s switch for this computer\'s gates, and never takes it from `harness settings`', async () => {
+    const t = setup()
+    answer(account({ hachi: true }))
+    await t.sync.sync()
+    expect(kept()).toEqual({ ...OFF, hachi: true })
+    expect(t.want).not.toHaveBeenCalled()
+    for (const body of [{ hachi: true }, { hachi: false }, { hachi: true, byAgent: 'Claude Code' }]) {
+      expect(await t.sync.settingsWrite(body)).toMatchObject({ status: 400, body: { error: { code: 'BAD_REQUEST' } } })
+    }
+    expect(t.backend).toHaveBeenCalledOnce()
+    answer(account({}))
+    await t.sync.sync()
+    expect(kept()).toEqual(OFF)
   })
 
   it('refuses a write with nothing in it, signed out, or with the account out of reach, and says why', async () => {

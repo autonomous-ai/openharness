@@ -21,9 +21,9 @@ const crew = (): Crew => ({
   machines: [], away: [{ name: 'Cy', label: 'builder:cy', why: 'down', since: ago(HOUR) }],
 })
 /** What the assigner read: each builder's open tasks and how many of them it builds (the others wait for their read or their
- *  merge), and the sized tasks nobody holds. */
+ *  merge), none built in the Swarm's other projects, and the sized tasks nobody holds. */
 const read = (lists: Record<string, [open: number, building: number]>, free: string[]): Read => ({ open: new Map(Object.entries(lists).map(([id, [open]]) => [id, open])),
-  building: new Map(Object.entries(lists).map(([id, [, building]]) => [id, building])), free: new Set(free), waits: 0 } as unknown as Read)
+  building: new Map(Object.entries(lists).map(([id, [, building]]) => [id, building])), free: new Set(free), waits: 0, elsewhere: new Map() } as unknown as Read)
 const task = (number: number, labels: string[], more: Json = {}): Json => ({ number, labels: labels.map(name => ({ name })), ...more })
 const free = (...names: string[]) => names.map(name => ({ id: name.toLowerCase(), name }))
 const numbers = (over: Partial<Numbers> = {}): Numbers => ({ builders: 4, free: free('Ada', 'Kai'), open: 0, unsized: 0, held: 3, landed: 12, landedBy: [['Pip', 7], ['Kai', 5]],
@@ -51,7 +51,7 @@ describe('a project\'s counts after an assigner\'s pass', () => {
     // next. One only given, with a sub-issue under it, is in its list as any other. Counted as the assigner reads them.
     const waiting = { sub_issues_summary: { total: 2, completed: 1 } }
     const issues = [task(1, ['builder:pip', 'status:taken'], waiting), task(2, ['builder:kai'], waiting), task(3, ['builder:ada', 'status:taken'], { sub_issues_summary: { total: 2, completed: 2 } })]
-    const cut = counts({ issues, read: readProblem({ now: NOW, issues, closed: [], crew: crew(), withReaders: new Set(), up: new Map() }) })
+    const cut = counts({ issues, read: readProblem({ now: NOW, issues, crew: crew(), withReaders: new Set(), up: new Map() }) })
     expect(cut.free.map(free => free.name)).toEqual(['Bo', 'Pip'])
   })
 

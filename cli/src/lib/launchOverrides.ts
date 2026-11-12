@@ -117,14 +117,15 @@ export interface LaunchOverridesDeps {
   /** Read an engine's settings for the pull request line (engines/launches.ts `attributionArgs`). A seam, like
    *  `readCodexConfig`: absent ⇒ the real file. */
   readAttribution?: (path: string) => string | null
-  /** What the Swarm gives every relaunch of a session it started: the team's basics (lib/swarmSkills.ts) and the Harness
-   *  GitHub App's git and gh (lib/swarmGitHub.ts), handed in by the core from
+  /** What the Swarm gives every relaunch of a session it started: the team's basics (lib/swarmSkills.ts), its share of this
+   *  machine's cores and the Harness GitHub App's git and gh (lib/swarmGitHub.ts), handed in by the core from
    *  superTabs/inCore.ts. Absent while the Swarm is off (`HARNESS_SWARM`), when such a session is not relaunched: as
    *  with a harness package that is missing, starting it without its role would silently change what it is. */
   swarm?: {
     basics(lead: boolean, own?: { cwd: string | null; name: string | null }): string
     github(key: string): { env: Record<string, string>; clearEnv: string[] } | null
     args(engine: string): string[]
+    cores(key: string): Record<string, string>
   }
 }
 
@@ -346,7 +347,10 @@ export async function prepareLaunchOverrides(
     // added again (lib/agentTmp.ts, task #4395). The launch's own variables win over it.
     const tmp = agentTmpLaunch(engine, source.swarmSkill)
     if (tmp.args.length) overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...tmp.args] }
-    const launchEnv = { ...tmp.env, ...overrides.env, ...native?.environment }
+    // A Swarm agent's share of this machine's cores, as at agent_create (core/api.ts `SwarmLaunch.cores`): counted again at each
+    // relaunch, as the Swarm's agents here may have changed since.
+    const cores = source.swarmSkill ? swarm!.cores(source.swarmSkill.key) : undefined
+    const launchEnv = { ...tmp.env, ...cores, ...overrides.env, ...native?.environment }
     return { ok: true, overrides: { ...overrides, ...(native ? { native } : {}), env: launchEnv, clearEnv: [...overrides.clearEnv, ...harnessEnvToClear(overrides.env)] } }
   } }
 }

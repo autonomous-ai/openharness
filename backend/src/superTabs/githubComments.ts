@@ -10,10 +10,9 @@ import type { PrismaClient } from '@prisma/client'
 import { ensureIndex } from '../lib/db/indexes.js'
 import { metrics } from '../lib/metrics.js'
 import { createRateLimiter } from '../lib/rateLimit.js'
-import { githubRepository } from '../github/repository.js'
 import { fail } from './model.js'
 import { readBy } from './parts/indexed.js'
-import { projectsOf, type SwarmProject } from './projects.js'
+import { projectGitHub, projectsOf, type SwarmProject } from './projects.js'
 import type { SuperTabState } from './model.js'
 
 export const COMMENT_KINDS = ['issue', 'review', 'review-comment'] as const
@@ -33,7 +32,7 @@ export const commentKey = (tabId: string, repository: string, kind: CommentKind,
 
 /** Whether [project] works on [repository] (`owner/name`, any case). */
 export const sameRepository = (project: SwarmProject, repository: string): boolean =>
-  githubRepository(project.repository?.repositoryUrl ?? '')?.fullName.toLowerCase() === repository.toLowerCase()
+  projectGitHub(project)?.fullName.toLowerCase() === repository.toLowerCase()
 
 /**
  * The project of [repository] in a Swarm: of its projects on it that have a PM, the one that got its address first. A project's

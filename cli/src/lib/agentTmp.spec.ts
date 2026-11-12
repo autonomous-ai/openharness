@@ -16,8 +16,8 @@ const deps = (dataDir: string, over: Partial<AgentTmpDeps> = {}): AgentTmpDeps =
 const none = { env: {}, args: [] }
 
 describe('who gets the private temporary folder', () => {
-  // Task #4395: since #4215 an agent starts in its owner's own settings, which on the Mac Studio block reads outside the working
-  // directories, and since v3 there is no Team computer, so agents used the system's folder and stopped at Claude Code's
+  // Task #4395: an agent whose mode checks its actions had reads outside the working
+  // directories blocked on the Mac Studio, and since v3 there is no Team computer, so agents used the system's folder and stopped at Claude Code's
   // question for their own mktemp file (Authorder, 11-07). Each Swarm agent gets a folder of its own, added to Claude Code's
   // working directories: Claude Code reads an added folder's own skills and settings, so one shared folder would let an
   // agent plant them for the others.

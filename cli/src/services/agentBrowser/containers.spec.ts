@@ -76,7 +76,7 @@ describe('Containers', () => {
       '--tmpfs /tmp:rw,size=256m', '--tmpfs /home/browser:rw,size=256m,mode=1777', '--tmpfs /var/tmp:rw,size=16m', '--tmpfs /run:rw,size=16m',
       '-v harness-browser-a1:/var/lib/harness-browser-profile',
       '--memory 2g', '--cpus 2', '--pids-limit 512', '--shm-size 1g',
-      '-e TZ=Asia/Ho_Chi_Minh', '-e ACCEPT_LANG=vi-VN, en-US', '-e SCREEN=1920x1080',
+      '-e TZ=Asia/Ho_Chi_Minh', '-e ACCEPT_LANG=vi-VN, en-US', '-e SCREEN=1080x1920',
     ]))
     expect(args).toContain('--read-only')
     expect(args.at(-1)).toBe(IMAGE)

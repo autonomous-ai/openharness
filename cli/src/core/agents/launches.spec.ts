@@ -17,7 +17,7 @@ import { parseProjectFolder, prepareProjectFolder, ProjectFolderError, Repositor
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createLaunchRequests, type CreateAgent, type ForkAgent, type LaunchRequestDeps, type RestartAgent, type ResumeAgent } from './launches.js'
 import * as pendingLaunches from './pendingLaunches.js'
-import { SWARM_LAUNCH } from '../../superTabs/inCore/launch.js'
+import { swarmLaunch } from '../../superTabs/inCore/launch.js'
 
 /**
  * The requests that start an agent's process, answered by the core: every refusal before a pane exists,
@@ -97,7 +97,7 @@ function setup(over: Partial<LaunchRequestDeps> = {}, launches: { create?: Creat
     createAgent: () => create, forkAgent: () => fork, resumeAgent: () => resume, restartAgent: () => restart,
     byAgent: (id) => known.get(id), toProject: vi.fn(async (s: RegisteredSession) => frameOf(s)),
     modelTarget: resolveNewAgentModel,
-    swarmLaunch: SWARM_LAUNCH,
+    swarmLaunch: swarmLaunch(() => []),
     stoppedAgent: () => undefined,
     ...over,
   }
@@ -950,7 +950,7 @@ describe('agent_create with a receipt', () => {
 
   // WIN-DELL and the Mac Studio, 2026-10-26: Swarm Leads in a reused or fresh checkout of the project's repository sat at
   // Claude Code's trust question, and so did the next Lead in a worktree of it, its source never answered.
-  it('trusts a Swarm agent\'s checkout of its remote project in its owner\'s own mode, and no other existing folder', async () => {
+  it('trusts a Swarm agent\'s checkout of its remote project in any mode, and no other existing folder', async () => {
     const { ask, replies } = setup()
     const launch = async (payload: Record<string, unknown>, n: number) => { await ask({ creationId: `${CREATION}-${n}`, ...payload }); await vi.waitFor(() => expect(replies).toHaveLength(n)) }
     const remote = { projectSource: 'remote', repositoryUrl: 'https://github.com/acme/app.git' }

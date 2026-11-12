@@ -23,10 +23,11 @@ export type GroupChange = LivePart<GroupView> | Tombstone | DormantStub
 
 /** The head as a reader sees it: no sharing, overlap alerts, retired number or parked groups; projects and
  *  invitations filtered (invitations only for the Swarm owner). `autoJoin`: people at the owner's domain join by themselves
- *  (autoJoin.ts), from the sharing the head holds; who declined is never sent. */
+ *  (autoJoin.ts), from the sharing the head holds; who declined is never sent. `personal`: it is its owner's Personal Swarm
+ *  (deletion.ts isPersonalSwarm), told to every member since 2026-11-12; an older server omits it. */
 export type HeadView = Pick<SuperTabState, 'version' | 'id' | 'name' | 'project' | 'leadsConversationId' | 'ownerId'
   | 'environment' | 'paused' | 'invitations' | 'localModels' | 'removedMachines'
-  | 'autoJoin'> & {
+  | 'autoJoin' | 'personal'> & {
   /** Fixed columns for the chosen preset (task #3896); an older server omits both, meaning Full. */
   projects?: Array<import('../projects.js').SwarmProject & {
     process: import('../process.js').ProjectProcess; columns: readonly import('../process.js').BoardColumn[]
@@ -182,8 +183,11 @@ export interface CommandReply {
 /** GET /api/super-tabs/list[?after=][&mentions=1] */
 export interface SwarmList {
   tabs: Array<{ id: string; name: string; ownerId: string; paused: boolean; lastChangedAt: number | null
-    /** Only on the reader's own Personal Swarm. */
-    personal?: true }>
+    /** Only on the reader's own Personal Swarm (the round dial's Personal | Team picker and Desktops before 2026-11-12 read
+     *  it so). */
+    personal?: true
+    /** On every Personal Swarm, the reader's own or one they were invited to (since 2026-11-12; an older server omits it). */
+    personalSwarm?: true }>
   next: string | null
 }
 

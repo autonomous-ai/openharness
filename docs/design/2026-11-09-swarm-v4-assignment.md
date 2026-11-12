@@ -2,7 +2,9 @@
 
 Status: built. The solver (`cli/src/superTabs/assign/search.ts`, `schedule.ts`) and the assigner that feeds it and applies
 its plan (`assign/crew.ts`, `githubAssign.ts`) run in the Harness of the person whose agent is the project's PM. Moving
-work, learned task times and CPU cores are built; learned memory, disk and spend are next (below).
+work and learned task times are built; learned memory, disk and spend are next (below). The plan counts no CPU cores
+since 12 November: each agent a Swarm starts gets its share of its machine's cores instead
+([the allocator's design](2026-11-11-swarm-allocator/BUILD.md), package 7).
 
 anh Dee, 2026-11-09: "this is a classic optimization problem. N tasks. M machines with cpu ssd token. how do we best
 assign them." "The bottleneck is a combination of cpu disk token etc." Assignment is the core of a Swarm: the right task
@@ -104,19 +106,23 @@ Every minute, in the PM's person's Harness, for each project its PM leads from t
   (`githubMerge.ts earlierPull`). Held only while it carried the other's newest commit, one built on a commit a reader
   had held landed that commit before its fix.
 - **Builders** are the project's regular Claude Code and Codex agents as the PM reads the Swarm (`crewOf`): never the PM,
-  a Buddy, one stopping, one whose machine is down, or another private project's. A builder is quicker in a part where its
-  label was on closed issues: 15% a task, 40% at most.
-- **Machines** give Swarm work 75% of their memory and their project disk less 10 GB, and their cores as their daemon
-  reports them (`cpuCores`, since 0.5.86; a backend before it refuses the field by name, and the daemon leaves it out for
-  ten minutes); a machine whose daemon reports none is planned as 8 cores. **Subscriptions** are each machine's engine windows as it reported them, a 20% reserve kept for its person.
-- **Sizes** until estimates are learned: s 30 minutes, 1 core, 2 GB, 1 GB, 3% of a 5-hour window; m 90, 2, 4 GB, 2 GB, 10%;
-  l 240, 4, 8 GB, 4 GB, 25%; a weekly window spends a fifth of that.
+  a Buddy, one stopping, one whose machine is down, or another private project's. What a builder finished in a part makes
+  it no quicker there in the plan: lampOS's record showed no such gain ([the study](../research/2026-11-12-area-worth/README.md);
+  until 12 November each task it finished there took 15% off, to 40%).
+- **Machines** give Swarm work 75% of their memory and their project disk less 10 GB. Their cores are not planned: a
+  daemon still reports them (`cpuCores`, since 0.5.86) for a PM's Harness from before 12 November, until 2026-12-12, and
+  the plan holds no task back for them. Each agent the Swarm starts on a machine gets its share of its cores
+  (`HARNESS_CORES`, [the study](../research/2026-11-11-agents-share-cpu.md)). **Subscriptions** are each machine's engine windows as it reported them, a 20% reserve kept for its person.
+- **Sizes** until estimates are learned: s 30 minutes, 2 GB, 1 GB, 3% of a 5-hour window; m 90, 4 GB, 2 GB, 10%; l 240,
+  8 GB, 4 GB, 25%; a weekly window spends a fifth of that. Until 12 November a size held 1, 2 or 4 cores too.
 - **The plan** is the solver's, from the last plan (so it changes only where it gains), in a second at most. A builder
   with no task to build and fewer than four open gets the free task it starts next, one at a time (until it held two, before
   11 November: [the allocator's design](2026-11-11-swarm-allocator/BUILD.md), package 2). A task is one its builder builds
   while given or taken with no pull request yet, with a draft, or with one a reader's HOLD stands on; one whose pull request
-  waits for its readers or its merge is not. It is given as `builder:<name>` on the issue and one comment, "Harness, 15:40: for
-  **Pip**: it can start now, and it finished 3 part:api tasks." GitHub news then brings each its task.
+  waits for its readers or its merge is not. One found building a task in another project of the Swarm, from its own list in
+  that project's repository read just before a task is given to it, is given none ([package 11](2026-11-11-swarm-allocator/one-view.md)). It is given as
+  `builder:<name>` on the issue and one comment, "Harness, 15:40: for
+  **Pip**: it can start now, and it works on api." GitHub news then brings each its task.
 - **Failures** are said once: a label GitHub refused (tried again next pass), a task no builder can do and why, gh signed
   out or rate limited (as the merger: `githubRest.ts`). A sized task nobody can start for a reason its PM can act on is
   said on the task, to the PM by name, once: a need no builder's machine meets ("it needs xcode, which no builder's
@@ -138,8 +144,9 @@ must be more proactive and ask the user what area they want the agent to focus o
   answers in plain words; the agent writes the line in a pull request of its own. Once per agent and repository
   (`githubMentions.ts askFocus`).
 - **What it does:** in the plan an agent takes half the time in its areas and half as long again in others once it named
-  some (`assign/crew.ts FOCUS`, `AWAY`), on top of what it learned. So a mobile agent gets mobile tasks first, others take
-  one only when it is well behind, and it takes other work when its own area has none.
+  some (`assign/crew.ts FOCUS`, `AWAY`). So a mobile agent gets mobile tasks first, others take one only when it is well
+  behind, and it takes other work when its own area has none. It stays so though lampOS's record found an area a builder
+  only worked in worth nothing measurable: it is a person steering their agent, which that record could not test.
 - **Labels:** an area an agent works on that has no `part:` label yet, however spelled, gets one, made by the assigner, so its PM labels
   tasks with the same words. So do the flow's own labels (status:taken, size:s/m/l, p0 to p2) and each builder's, in a
   repository that lacks them: gh refuses to add a label a repository does not have, so in a fresh one a builder could not

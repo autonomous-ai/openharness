@@ -530,8 +530,9 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   const local = localModelAllowed(state, request, now)
   const settings = (['codexHome', 'gridModel', 'gridName'] as const).filter(key => request[key] && !(local && key !== 'codexHome'))
   if (settings.length) refused.push(`${settings.join(', ')} (it runs with its own default account settings, so leave ${settings.length > 1 ? 'them' : 'it'} out)`)
-  // Swarm v3 (task #4215): an agent starts with its owner's own permission settings, so a start names no mode. Last, in the
-  // words a CLI from before full mode answers by sending the start again without it (cli superTabs/start.ts before #4215).
+  // A start names no mode: the machine starts each Swarm agent in Auto-approve itself (cli superTabs/start.ts, anh Dee
+  // 2026-11-12), never in one a request names, which was full mode before task #4215. Last, in the words a CLI from before
+  // full mode answers by sending the start again without it (cli superTabs/start.ts before #4215).
   if (request.permissionMode !== undefined) refused.push('permissionMode (it runs with its own default account settings, so leave it out)')
   if (refused.length) {
     fail('OUTSIDE_CONTRIBUTION', `${pool.name} accepts only its contributed project folder, engines and default account settings. Refused: ${refused.join('; ')}.`, 403)
