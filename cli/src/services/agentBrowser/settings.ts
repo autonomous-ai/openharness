@@ -149,22 +149,14 @@ export function humanMode(s: BrowserSettings): 'off' | 'slow' | 'normal' | 'fast
   return s.humanInput ? s.humanSpeed : 'off'
 }
 
-// The smallest window a page lays out for a desktop; below it pages switch to their phone layout.
-const MIN_WINDOW = { width: 1024, height: 640 }
+const isSize = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && Math.round(value) >= 1
 
-const isSize = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0
-
-/** The size Chrome's window takes for the panel's (spec: The window fits the panel): whole numbers, at least
- *  1024x640, at most `screen` ("1080x1920"); null for anything that is not two positive numbers. A panel under
- *  1024x640 grows by one factor on both sides, so the window keeps the panel's shape and the viewer, scaling it down
- *  evenly, fills the panel; only the screen's cap can change the shape. Every screen in SCREENS is at least 1024 wide,
- *  portrait ones too, so a window always has a desktop's width. */
+/** The size Chrome's window takes for the panel's (spec: The window fits the panel): the panel's, in whole numbers,
+ *  at most `screen` ("1080x1920"); null for anything that is not two sizes of at least one pixel. No floor: a person
+ *  drags a real Chrome narrow too, and Chrome keeps its own minimum, answering the size it set for the viewer to
+ *  scale. */
 export function clampWindow(width: unknown, height: unknown, screen: string): { width: number; height: number } | null {
   if (!isSize(width) || !isSize(height)) return null
   const [maxWidth, maxHeight] = screen.split('x').map(Number) as [number, number]
-  const grow = Math.max(1, MIN_WINDOW.width / width, MIN_WINDOW.height / height)
-  return {
-    width: Math.round(Math.min(maxWidth, width * grow)),
-    height: Math.round(Math.min(maxHeight, height * grow)),
-  }
+  return { width: Math.min(maxWidth, Math.round(width)), height: Math.min(maxHeight, Math.round(height)) }
 }

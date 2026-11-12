@@ -28,7 +28,7 @@ describe('agent browser settings', () => {
     const raw = { ...withProxy, proxy: { ...withProxy.proxy } }
     expect(parseSettings(raw, current)).toEqual(withProxy)
     expect(() => parseSettings({ ...raw, screen: '800x600' }, current)).toThrow(/screen/)
-    // Rotated monitors, every one at least 1024 wide, beside the landscape ones.
+    // Rotated monitors beside the landscape ones.
     for (const screen of ['1080x1920', '1200x1920', '1050x1680', '1920x1080', '1366x768']) {
       expect(parseSettings({ ...raw, screen }, current).screen).toBe(screen)
     }
