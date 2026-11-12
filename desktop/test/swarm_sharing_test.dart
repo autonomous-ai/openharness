@@ -62,7 +62,11 @@ Future<SuperTabController> _open(
         home: Scaffold(
           body: Builder(
             builder: (context) => TextButton(
-              onPressed: () => showSuperTabSharing(context, controller),
+              onPressed: () => showSuperTabSharing(
+                context,
+                controller,
+                title: 'Manage people',
+              ),
               child: const Text('Share'),
             ),
           ),
@@ -317,6 +321,34 @@ void main() {
             .onPressed,
         isNotNull,
       );
+    },
+  );
+
+  // A new Personal Swarm has no project (backend #4094), and a Swarm with none takes no email invitation (NO_PROJECT).
+  testWidgets(
+    'inviting in a Swarm with no project yet says to make one, and where',
+    (tester) async {
+      final server = SwarmSharingServer()
+        ..refuse = {
+          'code': 'NO_PROJECT',
+          'message': 'Create a project before inviting people.',
+        };
+      await _open(tester, server);
+      final before = (server.state['invitations'] as List).length;
+      await tester.enterText(
+        find.byKey(const Key('swarm-invite-email')),
+        'leo@example.com',
+      );
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('swarm-invite-send')));
+      await tester.pumpAndSettle();
+      expect(
+        find.text(
+          'Create a project before inviting people: + beside Projects.',
+        ),
+        findsOneWidget,
+      );
+      expect(server.state['invitations'] as List, hasLength(before));
     },
   );
 

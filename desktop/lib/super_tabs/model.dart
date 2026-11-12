@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:cryptography/dart.dart' show DartSha256;
 
+import '../core/models.dart' show machineIdKey;
 import 'identity.dart' show superTabPersonName;
 import 'profile_model.dart';
 
@@ -59,6 +60,15 @@ class SuperTabPerson {
         final String name when name.trim().isNotEmpty => name,
         _ => null,
       },
+      removedPanes = Set.unmodifiable({
+        if (row['removedPanes'] case final List panes)
+          for (final pane in panes)
+            if (pane case {
+              'machineId': final String machine,
+              'harnessId': final String harness,
+            })
+              (machineIdKey(machine), harness),
+      }),
       username =
           row['username'] as String? ??
           superTabDefaultUsername(_text(row, 'email'));
@@ -70,8 +80,13 @@ class SuperTabPerson {
       joinedVia = person.joinedVia,
       avatar = person.avatar,
       chosenUsername = person.chosenUsername,
+      removedPanes = person.removedPanes,
       name = person.name;
   final String id, email, role;
+
+  /// The sessions this person took out of the Swarm, by machine ([machineIdKey]) and session (backend `removedPanes`): sent
+  /// only on the reader's own entry. Empty from an older backend.
+  final Set<(String, String)> removedPanes;
 
   /// How the Swarm shows and tags them, as the server sends it, worked out in
   /// its join order. From an older server, their default
@@ -164,13 +179,11 @@ class SuperTabAgent {
       atPrompt =
           row['alerting'] is List &&
           (row['alerting'] as List).contains('prompt'),
-      switchRequest = row['switchRequest'] is Map
-          ? Map.unmodifiable(superTabMap(row['switchRequest']))
-          : null,
       gridModel = row['gridModel'] as String?,
       profileId = row['profileId'] as String?,
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
       downSince = DateTime.tryParse(row['downSince'] as String? ?? ''),
+      paused = row['pausedAt'] is String,
       confidential = row['confidential'] == true,
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
   final String id, projectId, name, machineId, harnessId, contributorId;
@@ -193,10 +206,6 @@ class SuperTabAgent {
   /// can answer (the Swarm host's terminal watch, cli superTabs/terminal.ts; the backend's `alerting`).
   final bool atPrompt;
 
-  /// A Product Manager's engine switch that is asked for and not yet
-  /// done (backend `switchRequest`); null otherwise.
-  final Map<String, dynamic>? switchRequest;
-
   /// The model on the Swarm's grid it runs on; null on its own subscription
   /// (backend Agent.gridModel).
   final String? gridModel;
@@ -208,6 +217,10 @@ class SuperTabAgent {
   /// Since when its machine has reported its session gone, or its host confirmed a stop (backend machines.ts). Null
   /// while it runs.
   final DateTime? downSince;
+
+  /// Paused by its person, its machine's owner or the Swarm's owner (backend `agent.pause`, `pausedAt`): its session runs on, and
+  /// Harness gives it no task and types it nothing until it is resumed. False from an older backend.
+  final bool paused;
 
   /// The account whose computer runs it; a contributor may run agents on a computer another account shared with them.
   final String machineOwnerId;
@@ -313,6 +326,9 @@ class SuperTabConversation {
   final int reactionSeq;
 }
 
+/// A GitHub `owner/name`.
+final _ownerName = RegExp(r'^[\w.-]+/[\w.-]+$');
+
 class SuperTabProject {
   SuperTabProject.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
@@ -339,10 +355,18 @@ class SuperTabProject {
         row['repositoryCreation'],
       ),
       archived = row['archived'] == true,
+      githubRepository = switch (row['githubRepository']) {
+        final String name when _ownerName.hasMatch(name) => name,
+        _ => null,
+      },
       pmChatId = row['pmChat'] is Map
           ? superTabMap(row['pmChat'])['id'] as String?
           : null;
   final String id, name, ownerId, leadConversationId;
+
+  /// The GitHub repository (`owner/name`) its owner's Desktop set for it when its record names no address (backend
+  /// `project.github`): what its Tasks board reads on every computer. Null until set, and from a backend before it.
+  final String? githubRepository;
 
   /// The 1:1 chat its next PM takes, open while that PM starts (backend pmChat.ts): only its person reads it, so null
   /// for anyone else, once a PM took it, and from a backend before it.
@@ -604,6 +628,13 @@ class SuperTabSnapshot {
   /// backend.
   final List<String> removedMachines;
 
+  /// The reader's own sessions they took out of this Swarm, by machine ([machineIdKey]) and session: Your Team leaves them
+  /// out, and only the person's own Attach brings one back. Their own member entry alone carries them
+  /// ([SuperTabPerson.removedPanes]).
+  late final Set<(String, String)> removedPanes = Set.unmodifiable({
+    for (final person in people) ...person.removedPanes,
+  });
+
   /// People at the owner's email domain are added automatically (head
   /// `autoJoin`, every member reads it): someone who leaves is not added back.
   final bool autoJoin;
@@ -661,16 +692,6 @@ class SuperTabSnapshot {
     final id = conversation(projectById(projectId)?.leadConversationId ?? '')
         ?.leadId;
     return id == null ? null : agent(id);
-  }
-
-  /// Whether [accountId] may switch [projectId]'s Product Manager: the project's
-  /// owner, or the owner of the machine it runs on (the backend decides again).
-  bool maySwitchLead(String projectId, String? accountId) {
-    final lead = leadOf(projectId);
-    return lead != null &&
-        accountId != null &&
-        (projectById(projectId)?.ownerId == accountId ||
-            lead.machineOwnerId == accountId);
   }
 
   /// The role [agentId] goes by, and its badge: the role the backend names (`roleName`), else its kind's (Product
@@ -836,32 +857,6 @@ List<SuperTabServedModel> superTabServedModels(
           name: m['name'] is String
               ? m['name'] as String
               : m['model'] as String,
-        ),
-  ];
-}
-
-/// One account of a machine as its report lists it (backend
-/// `observation.profiles`, each engine's default alone): opaque id, and what
-/// is left of its allowance when known.
-typedef SuperTabProfile = ({
-  String engine,
-  String id,
-  int? leftPercent,
-  DateTime? resetsAt,
-});
-
-/// The accounts [pool] reports; empty from a machine that reports none.
-List<SuperTabProfile> superTabProfilesOf(Map<String, dynamic>? pool) {
-  final observation = pool?['observation'];
-  final rows = observation is Map ? observation['profiles'] : null;
-  return [
-    for (final p in rows is List ? rows : const [])
-      if (p is Map && p['engine'] is String && p['id'] is String)
-        (
-          engine: p['engine'] as String,
-          id: p['id'] as String,
-          leftPercent: (p['leftPercent'] as num?)?.toInt(),
-          resetsAt: DateTime.tryParse(p['resetsAt'] as String? ?? ''),
         ),
   ];
 }

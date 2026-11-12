@@ -480,6 +480,21 @@ class SuperTabClient {
     return sent;
   }
 
+  /// The sessions, as (computer key, harness id), that are agents of a Swarm other than [tabId], as this Desktop last read
+  /// each Swarm open here or closed here and still the account's: what one Swarm knows of the others without a read. A
+  /// closed Swarm no longer listed (deleted, or left) holds nobody, where [_leadOfHarness] keeps protecting its PMs.
+  Set<(String, String)> agentsOutside(String tabId) => {
+    for (final (id, snapshot) in [
+      for (final c in loadedControllers)
+        if (c.snapshot case final snapshot?) (c.tabId, snapshot),
+      for (final MapEntry(:key, :value) in _closedSnapshots.entries)
+        if (_listed.contains(key)) (key, value),
+    ])
+      if (id != tabId)
+        for (final agent in snapshot.agents)
+          (machineIdKey(agent.machineId), agent.harnessId),
+  };
+
   String? _leadOfHarness(String machineId, String harnessId) {
     for (final snapshot in [
       for (final controller in loadedControllers) ?controller.snapshot,
@@ -506,6 +521,11 @@ class SuperTabClient {
   String? ownerOf(String id) => _loaded[id]?.snapshot?.ownerId ?? _owners[id];
   Map<String, String> _owners = const {};
 
+  /// The reader's own Personal Swarm, as the last full list read said (backend store.ts `list`, `personal`): known
+  /// whoever they invited there. Null from an older backend, or before a list answered.
+  String? get listedPersonal => _listedPersonal;
+  String? _listedPersonal;
+
   void bind(String? account) {
     if (_account == account) return;
     for (final timer in _viewSaves.values) {
@@ -530,6 +550,7 @@ class SuperTabClient {
     _creating.clear();
     _visibility.clear();
     _owners = const {};
+    _listedPersonal = null;
     _listed = const {};
     _listAnswers = 0;
     _listAsked.clear();
@@ -625,6 +646,7 @@ class SuperTabClient {
         if (generation != _generation) return;
         final tabs = <String, SuperTabListing>{};
         final owners = <String, String>{};
+        String? personal;
         final cursors = <String>{};
         String? after;
         do {
@@ -641,6 +663,7 @@ class SuperTabClient {
             final id = row['id'] as String;
             tabs[id] = (id: id, name: row['name'] as String);
             if (row['ownerId'] case final String owner) owners[id] = owner;
+            if (row['personal'] == true) personal = id;
           }
           after = page['next'] as String?;
           if (after != null && !cursors.add(after)) {
@@ -649,6 +672,7 @@ class SuperTabClient {
         } while (after != null);
         discoveryError = null;
         _owners = owners;
+        _listedPersonal = personal;
         _listed = tabs.keys.toSet();
         _listAnswers++;
         final hidden = Set<String>.unmodifiable({..._hidden, ..._creating});

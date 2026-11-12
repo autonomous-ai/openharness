@@ -386,8 +386,8 @@ export function createAgentCreator({
     // The person's machine MCP servers (lib/machineMcp.ts, #1872), beside the grid's and their own: read at each launch,
     // as every relaunch reads them again (`buildLaunchOverrides`).
     const machineMcp = machineMcpLaunchArgs(engine, cwd)
-    // The agent's private temporary folder: its TMPDIR, and, for a Swarm agent, its one added working directory, so its owner's
-    // own settings ask nothing for its mktemp files (lib/agentTmp.ts, task #4395).
+    // The agent's private temporary folder: its TMPDIR, and, for a Swarm agent of an engine that takes one (Claude Code), its one
+    // added working directory, so its owner's own settings ask nothing for its mktemp files (lib/agentTmp.ts, task #4395).
     const tmp = agentTmpLaunch(engine, swarmSkill)
     const extraArgs = joinedInstructions(engine, [...tmp.args, ...(gridLaunch?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, native ? native.opencodeMajor : opencode ? await opencode.opencodeMajorVersion() : null) : []), ...machineMcp, ...(swarmLaunch && swarmSkill ? swarmLaunch.args(engine) : []), ...told])
     // The first prompt is a launch option only — never part of `extraArgs`, which the registry row

@@ -50,7 +50,8 @@ export interface Task {
   /** Minutes at speed 1, and what it holds of its machine while it runs. */
   minutes: number
   needs: Resources
-  /** Percent of each quota window it spends at policy cost 2 (the route's scale), by window name. */
+  /** Percent of each quota window it spends at policy cost 2 (the route's scale), by window name: the room it must find
+   *  there to start, so its class's 90th percentile once classes are learned, and its size's guess until then. */
   spend: Record<string, number>
   /** The least quality it takes, and the kind its quality is read for. */
   floor: number
@@ -92,6 +93,8 @@ export interface Plan {
   makespan: number
   /** Policy cost × minutes, the v3 prototype's measure. */
   cost: number
+  /** Each task's spend of its subscription's windows, in percent, at each window's price (schedule.ts priceOf). */
+  priced: number
 }
 
 /** A candidate the search moves through: the order tasks are placed in, and each one's builder and mode. */

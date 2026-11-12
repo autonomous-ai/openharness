@@ -116,8 +116,8 @@ export class Waits {
   /** A pass ran through: its stops start again. */
   ran(): void { this.stops = 0 }
 }
-/** How long a file found missing is not asked for again: an agent's instructions file is written rarely, and a 404 is not
- *  free against GitHub's limit as a 304 is. */
+/** How long what was found missing is not asked for again: an agent's instructions file is written rarely, a number that
+ *  is no issue's stays none, and a 404 is not free against GitHub's limit as a 304 is. */
 const MISSING_MS = 5 * 60_000
 
 /**
@@ -153,10 +153,23 @@ export class GitHubReads {
     return this.read(repo, path, false, false, true)
   }
 
+  /** Up to [maxPages] pages of a list as it is now, asked outright and not kept (fresh): the comments and files of closed pull
+   *  requests, read once a day (scoreboard.ts), which kept under their ETags would push out the ones every pass asks with. */
+  async freshPages(repo: string, path: string, maxPages: number): Promise<Json[]> {
+    return this.pages(repo, path, maxPages, false, true)
+  }
+
   /** A file of [repo]'s default branch as text, its last answer again on a 304. Null when it is not there: a missing file
    *  is an answer here, never a repository this login cannot read, and it is not asked again for [MISSING_MS]. */
   async file(repo: string, path: string): Promise<string | null> {
-    const url = `/repos/${repo}/contents/${path.split('/').map(encodeURIComponent).join('/')}`
+    const body = await this.ifThere(repo, `/repos/${repo}/contents/${path.split('/').map(encodeURIComponent).join('/')}`)
+    return typeof body?.content === 'string' && body.encoding === 'base64' ? Buffer.from(body.content, 'base64').toString('utf8') : null
+  }
+
+  /** One object as it is now, its last answer again on a 304, or null when GitHub says it is not there: a file, or an issue
+   *  by a number a pull request names (githubMerge.ts earlierPull). Not there is an answer, never a repository this login
+   *  cannot read, and it is not asked for again for [MISSING_MS]. */
+  async ifThere(repo: string, url: string): Promise<Json | null> {
     if ((this.missing.get(url) ?? 0) > this.now()) return null
     const body = object(await this.read(repo, url, true, true))
     if (body.missing === true) {
@@ -165,7 +178,7 @@ export class GitHubReads {
       return null
     }
     this.missing.delete(url)
-    return typeof body.content === 'string' && body.encoding === 'base64' ? Buffer.from(body.content, 'base64').toString('utf8') : null
+    return body
   }
 
   /** Forgets [repo]'s answers: what was read but not acted on is read again, never answered by a 304. */
@@ -174,10 +187,10 @@ export class GitHubReads {
     for (const url of [...this.missing.keys()]) if (url.startsWith(`/repos/${repo}/`)) this.missing.delete(url)
   }
 
-  private async pages(repo: string, path: string, maxPages: number, keep: boolean): Promise<Json[]> {
+  private async pages(repo: string, path: string, maxPages: number, keep: boolean, once = false): Promise<Json[]> {
     const rows: Json[] = []
     for (let page = 1; page <= maxPages; page++) {
-      const body = await this.read(repo, page === 1 ? path : `${path}&page=${page}`, keep)
+      const body = await this.read(repo, page === 1 ? path : `${path}&page=${page}`, keep, false, once)
       if (body === null) return rows
       if (!Array.isArray(body)) throw new GitHubStop('GH_FAILED', 'GitHub answered something unreadable.', false, this.now())
       rows.push(...body.map(object))
@@ -186,9 +199,10 @@ export class GitHubReads {
     return rows
   }
 
-  /** The body of [url], its kept body on a 304 when [keep], or null on a 304 otherwise. With [fileMissing] a 404 answers
-   *  `{ missing: true }`: a file that is not there. [once]: asked with no ETag, and nothing of the answer kept. */
-  private async read(repo: string, url: string, keep: boolean, fileMissing = false, once = false): Promise<unknown> {
+  /** The body of [url], its kept body on a 304 when [keep], or null on a 304 otherwise. With [mayBeMissing] a 404, or the
+   *  410 GitHub gives for an issue that was deleted, answers `{ missing: true }`: what was asked for is not there. [once]:
+   *  asked with no ETag, and nothing of the answer kept. */
+  private async read(repo: string, url: string, keep: boolean, mayBeMissing = false, once = false): Promise<unknown> {
     const last = once ? undefined : this.kept.get(url)
     const reply = await this.get(url, last?.etag ?? null).catch(error => {
       const code = typeof error?.code === 'string' ? error.code : 'GH_FAILED'
@@ -199,10 +213,14 @@ export class GitHubReads {
     if (reply.status === 304) return keep ? last?.body ?? null : null
     if (reply.resetAt !== null) throw new GitHubStop('RATE_LIMITED', 'GitHub is limiting this computer\'s requests.', true, Math.min(reply.resetAt, this.now() + LIMIT_MAX_MS))
     if (reply.status === 401) throw new GitHubStop('GH_SIGNED_OUT', 'GitHub refused this computer\'s gh login: run gh auth login.', true, this.now() + OFF_RETRY_MS)
-    if (reply.status === 404 && fileMissing) return { missing: true }
+    if ((reply.status === 404 || reply.status === 410) && mayBeMissing) return { missing: true }
     if (reply.status === 404 || reply.status === 403) throw new GitHubStop('UNREADABLE', `this computer's gh login cannot read ${repo}.`, false, this.now() + UNREADABLE_RETRY_MS)
     // GitHub failing on its own side stops every repository; any other answer is about this one (it still goes when it next can).
     if (reply.status !== 200) throw new GitHubStop('GH_FAILED', `GitHub answered ${reply.status}.`, reply.status >= 500, this.now())
+    // A 200 with no body is an answer cut off on its way (a list of a hundred files with their patches is 600 KB against the
+    // 10 s deadline). Read as empty, it counted as nothing with nothing said; kept under its ETag, a list of two issues read
+    // as none for three passes, until the list next changed (reviews of scoreboard.ts).
+    if (reply.body === null) throw new GitHubStop('GH_FAILED', 'GitHub\'s answer did not arrive whole.', false, this.now())
     if (reply.etag && !once) {
       this.kept.delete(url)
       this.kept.set(url, { etag: reply.etag, body: keep ? reply.body : null })

@@ -254,7 +254,7 @@ describe('creating an agent', () => {
     } finally { rmSync(home, { recursive: true, force: true }) }
   })
 
-  // Audit M1, and task #4395: an agent's private temporary folder is its TMPDIR and is added to the engine's working
+  // Audit M1, and task #4395: an agent's private temporary folder is its TMPDIR and, for Claude Code, is added to its working
   // directories, so its owner's own settings ask nothing for its mktemp files; the launch's own variables win.
   it('gives the agent its private temporary folder as TMPDIR and as its one added folder, and lets the launch\'s own variables win', async () => {
     const tmp = { env: { TMPDIR: '/data/agent-tmp/one' }, args: ['--add-dir=/data/agent-tmp/one'] }

@@ -66,6 +66,9 @@ the mockup of the choice package 14 adds to a screen.
 
 ### 1. The scoreboard
 
+**Built** (#4064): `cli/src/superTabs/scoreboard.ts`. What follows is what was asked; where the build differs it says so
+in *italics*.
+
 **Why.** Everything after it is judged by it. Today's daily post has counts only.
 
 **Today.** `cli/src/superTabs/pmNumbers.ts` (`numbersOf`, `dayLine`: the day's post in the project's channel, from
@@ -83,6 +86,8 @@ one is marked, in its title.
   it ran out of time). A train closed without landing says its cause in its title, as a red one does, with the
   write that closes it: no new write, and nothing to read but the closed list the pass has;
 - the files most landings touched in the last seven days, when one is in more than a tenth of them, with its share.
+  *The words count the landings read ("of the last 43 landings") and name no window: the closed list the pass reads is
+  one page, which on a busy repository is hours. A file is named at three landings or more.*
 
 Counts, medians and file paths only. Bounded: at most the newest 50 changes landed in the day are read for their
 times, and the newest 50 landed in the week for their files, once a day, when the post is due. A part that cannot be
@@ -95,6 +100,10 @@ line it would post for this repository's own last day, read from GitHub without 
 building and in fixes come with package 12's boundaries, and which files a conflict was on with package 8.
 
 ### 2. One task building, at most four open
+
+**Built** (#4091): in `cli/src/superTabs/assign/crew.ts` (`heldTasks`, `hasRoom`), `githubAssign.ts` and `pmNumbers.ts`.
+*`CLAIM_LIMIT` is defined in `assign/crew.ts`. No free task is planned on a builder that holds four. A pull request that
+is red or in conflict counts as in review: the assigner reads no checks.*
 
 **Why.** Two faults. A change waiting for its read fills its builder's list, so a builder with two in review is given
 nothing and is not counted idle. And a second task is given ahead, which in the model costs 0 to 6% of
@@ -134,6 +143,18 @@ builder may raise conflicts: the scoreboard says.
 
 ### 3. A task waits for what it depends on
 
+**Built** (#4121): in `cli/src/superTabs/assign/crew.ts` (`readProblem`: `up`, `bases`, `looped`; `builtOn`),
+`githubAssign.ts` (`askReaders`, the line that gives a task), `nextThing.ts` (the "Next:" line) and `githubMerge.ts`
+(`earlierPull`). *It also waits while that builder holds four or lacks what the task needs. A task a builder holds
+already is planned as before. Tasks whose "after" lines wait on each other are named to their PM. The merger gained a
+rule: a pull request does not land while another open one of the team's is for a task its own task comes after. Built
+on #B at one head, then #B held by a reader and fixed with a push, the second carried #B's earlier commits alone,
+`carriedPull` found nothing, and the held code would have landed through it. The `stacked` note says which pull request
+it waits for and no more: it said "then update it from main", and on GitHub a builder did, for a stack of three: three
+pushes and runs of the checks, a note and a read more. The trial: by a merge commit the second landed with nothing done
+by anyone; a squash under a stack merged clean. Package 4 is stopped (GitHub answers `behind` before `blocked`), so
+where the base requires up-to-date branches the second is still told to update once it is behind.*
+
 **Why.** A task that says "after #B" is given as soon as #B is taken, before #B has any code.
 
 **Today.** `assign/crew.ts`: `dependsOn(body)`; in `readProblem` a dependency this plan does not hold (a taken task)
@@ -161,6 +182,15 @@ package 4 lets ride.
 
 ### 4. Behind is not a reason to rework
 
+**Stopped** (#4085, a draft with the `hold` label), as "GitHub's behaviour is checked on GitHub" says. GitHub answers
+`behind` before `blocked`: in two public repositories with up-to-date branches and a required review, every open pull
+request behind its base read `behind` (14 of 14 in one, each with its review still required; 6 of 6 in the other, one
+with no approving review and two required checks that never reported). So "only behind"
+cannot be read from `mergeable_state`, and a change the repository's rules block would ride the train after the next
+landing. Waits for anh Dee: drop it, or let a behind change ride only where the base's rules, read from GitHub, are its
+checks and up-to-date branches alone. Where the base asks no up-to-date branches GitHub says `clean`, and the train
+already carries such a change.
+
 **Why.** Each landing puts every other change behind `main`; each is then told to update, rebuilds and runs CI again
 (its READ-OK carries over a plain update: `sameChange`). On this repository `main` took up to ten landings in an
 hour.
@@ -187,6 +217,9 @@ built, a tip the train itself marked.
 
 ### 5. An area is its label, however it is spelled
 
+**Built** (#4093): `partOf` in `cli/src/superTabs/assign/crew.ts`. *Also: `githubAssign.ts` makes no `part:` label for
+an area the repository already has one for in its own spelling.*
+
 **Why.** `part:Backend` and an agent's "Works on: backend" do not match; the label's side is compared as written.
 
 **Change.** A `part:` label's value is read through `areaOf` wherever an area is read (`assign/crew.ts`: a task's
@@ -196,6 +229,14 @@ areas: mapping them is package 13's.
 **Proof.** Specs; the gate.
 
 ### 6. Disk
+
+**Not shipped.** Measured: the sweep's folder held 29 worktrees (21.6 GB); 116 more that agents made (56.4 GB) are
+outside it; and its idle week never ended, as `git gc` rewrites every reflog. A first build (branch
+`cli-worktree-disk`) freed dependencies and build output in idle worktrees; its review said hold: it deleted a folder
+no rule names whenever each file in it was ignored on its own (`.env`, keys, a local database), and `build` is a name
+people give their own folders.
+The rule to bring anh Dee again: only `node_modules`, `.dart_tool` and `.next`, only where a `.gitignore` rule names the
+folder itself, and the review's other findings closed first.
 
 **Today.** A sweep exists: `cli/src/lib/worktreeSweep.ts`, run by the workspaces service. It removes a worktree
 Harness made when no live or stopped harness works in it, nothing is uncommitted, it was untouched for a week, and no
@@ -222,6 +263,12 @@ it removed, and never forces.
 and each that lets it go.
 
 ### 7. CPU
+
+**Built, not in a pull request yet** (branch `cli-swarm-cpu-share`). Each agent a Swarm starts gets its share of its computer's cores
+(`HARNESS_CORES`), and the CLI's unit suite takes half of it; the plan stops counting cores (the mismatch). Measured on
+one Mac of 16 threads: an eighth of the CLI's unit suite started two or four at once, each sized to the machine, failed
+on deadlines every time; sized to half its share, none did. Owed: the write-up in `docs/research/`, a review, and the
+core checks (`npm run test:core`).
 
 **Today.** Nothing limits what an agent's tools take. Each test runner sizes its workers to the whole machine (the
 CLI's suite to half its cores, Desktop's to at most 12), whatever else runs there. And the plan keeps a machine
@@ -287,6 +334,13 @@ code.
 
 ### 10. End-to-end tests across machines
 
+**Designed** (#4114, a draft held for anh Dee): the design and a first slice: a project's suites file, a shard's
+result said by command as a commit status, and a suite's status read as a check. The next slice runs a train's code on
+people's computers, in their name, with no sandbox: his to decide. Found by its red test: a train with any one commit
+status on its tip and no check of its own lands on what CI never ran. Main still has it (`checksOf` in
+`githubMerge.ts`): one green status from any bot lets a train land before CI starts. That draft closes it for `suite:`
+statuses only.
+
 **For private teams.** An open project needs the sandbox first, which was set aside on 11 November.
 
 **Design first**, in the pull request's Design section:
@@ -314,6 +368,11 @@ in what a person must do. Then build the one he picks.
 **Proof.** Specs; on a Swarm of two public projects, a builder holds one task building across both.
 
 ### 12. Tokens for a task, and the cost on a landed change
+
+**Built, the server's half** (#4109): `backend/src/superTabs/taskTokens.ts` and its two routes, kept 90 days. The
+daemon's half is built and not in a pull request (branch `swarm-task-tokens`): the landing comment would say the
+builder's model, minutes, tokens and fix rounds, public on a public repository, which waits for anh Dee's word. The
+server's half was released in `v1.4.80_backend`.
 
 **Why.** No saving can be claimed, and no model or price chosen, without it. Each daemon counts its conversations'
 tokens by model and kind (`cli/src/lib/agentTokenUsage.ts`); nothing ties a count to a task. The server's cost
@@ -378,6 +437,11 @@ Write its plan and cost; it runs on anh Dee's word.
 
 ### 15. A price for a subscription's window
 
+**Built** (#4111): the price, `priceOf` in `cli/src/superTabs/assign/schedule.ts`, counted in the plan's score. *Not built:
+a spend learned by class and model, and the 90th percentile, which need package 12's rows from real days. Found, in
+the model and by reading the code: the reserve is not kept today, since a task starts when it is given and nothing checks the window as it is taken; that
+check is package 16's.*
+
 **Today.** The solver already keeps each window above its person's reserve, with a fixed spend for each size (3, 10
 and 25% of a five-hour window). Claude's window is known only after a reply, and is unknown after an hour or a reset;
 unknown is never read as unused (`cli/src/services/usage.ts` `claudeReading`; pull request #3468).
@@ -396,6 +460,8 @@ critique's case, three to eight large tasks a window, shown not to swing.
 That only the price leaves a person's computer waits for package 16: today the plan reads the percentages.
 
 ### 16. Offers accepted on the agent's own computer
+
+**Begun**: the server's half (the offer record), not pushed.
 
 **Why.** A machine takes work only when it has the room, checked where the truth is; a person's quota need not
 leave their computer; a label is set by the one who does the work.
@@ -420,7 +486,12 @@ workflow in server code (the plan's "Not built"): the server referees one record
 
 ## Research, alongside
 
-- **An area's worth.** From lampOS's record on GitHub, read only: is a builder faster, or held less, on its later
+- **An area's worth.** *Study done; constants not changed* ([the study](../../research/2026-11-12-area-worth/README.md)): in lampOS's record a
+  builder was 1.12 times as fast in an area it had landed work in (0.85 to 1.49), and held no less often: no
+  measurable difference. Neither the planned threefold spread nor the 40% learning discount is supported. The study
+  could not test an area a person declares (5 role files named one), so `FOCUS`, `AWAY` and the learning steps are
+  not changed yet: 1.0 for all of them would let a person's "Works on:" steer nothing, which is anh Dee's to choose.
+  Asked: from lampOS's record on GitHub, read only: is a builder faster, or held less, on its later
   tasks in an area than on its first? Method and numbers in `docs/research/`. Then the experiment's assumed twofold
   speed, and the product's own guess (`FOCUS` and `AWAY` in `assign/crew.ts`: threefold), are replaced by what was
   found.
