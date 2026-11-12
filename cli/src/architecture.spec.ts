@@ -188,6 +188,8 @@ const EDGE: RegExp[] = [
   /^engines\/(claude|codex)\/(hooks|installHooks)\.ts$/,
   // Claude Code's stop of a `claude --bg` job holding a session it resumes runs in its worker (#4146).
   /^engines\/(backgroundJobs|claude\/backgroundJob)\.ts$/,
+  // Codex's fork of a conversation for its new provider, a retarget's, runs in its worker (#4145).
+  /^engines\/(providerMoves|codex\/providerMove)\.ts$/,
   // Their launch specifics are declared data too (launch.ts): Codex's startup probe and retry and its own-login
   // provider are the kit's, in core, and never a worker's (docs/design/2026-10-08-engine-launch.md).
   /^engines\/codex\/ownLoginProvider\.ts$/, /^lib\/codexStartupRetry\.ts$/,
