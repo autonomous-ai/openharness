@@ -51,6 +51,11 @@ describe('Swarm sessions without skill files (task #4673)', () => {
   // task's own record stays on GitHub, where Harness shows it in the task's chat.
   // Step 1, item 7 of docs/plans/2026-11-10-swarm-plan.md: every agent's basics held 507 words and grew with each incident.
   // What code does left them, and they are held under 200 words: the next rule is code, or the project's own AGENTS.md.
+  // The pane says "Yours first; it wins where they differ" (anh Dee, 2026-11-12): the basics yield to the project's AGENTS.md,
+  // and both to the agent's own file (superTabs/inCore/launch.ts), so the basics never claim to come first themselves.
+  it('says the project\'s AGENTS.md outranks the basics, not that it comes first over everything', () => {
+    expect(SWARM_BASICS.split('\n')[0]).toBe('You are a Swarm agent shipping one project; its AGENTS.md outranks these basics.')
+  })
   it('holds every agent\'s basics under 200 words', () => {
     expect(SWARM_BASICS.split(/\s+/).filter(Boolean).length).toBeLessThan(200)
   })
