@@ -271,6 +271,18 @@ describe('the event funnel', () => {
     ])
   })
 
+  it('tells every screen the end of a turn a quiet delivery started is no one\'s news (Hachi\'s wake), and a re-read end is not marked', () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const quietTurnOpen = vi.fn((_sessionId: string) => true)
+    const { funnel, deps } = setup('claude', { quietTurnOpen })
+    funnel('s1', [started('[harness] api @studio: done.')])
+    funnel('s1', [ended(false)])
+    funnel('s1', [ended(false)], { replay: true })
+    const ends = vi.mocked(deps.clients.send).mock.calls.slice(1).map(([frame]) => frame as Record<string, any>)
+    expect(ends.map((end) => end.subagent)).toEqual([true, undefined])
+    expect(quietTurnOpen).toHaveBeenCalledWith('s1')
+  })
+
   it('leaves the device\'s input alone across a native turn boundary, and Command Code\'s question watcher running', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const native = setup('codex')

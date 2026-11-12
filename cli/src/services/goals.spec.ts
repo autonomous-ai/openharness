@@ -3,10 +3,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { GOALS_REQUESTS, type Asker, type ServiceRequests } from '../core/api.js'
+import { Ledger, ledgerPath } from '../agentClient/ledger.js'
 import { HACHI_ID } from '../dsh/builtinIds.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { GOAL_HARNESSES_MAX, GOAL_KEPT_MS, GOAL_TITLE_MAX, GOALS_OPEN_MAX, goalsPath, startGoals } from './goals.js'
+import { GOAL_HARNESSES_MAX, GOAL_KEPT_MS, GOAL_LEFT_MS, GOAL_TITLE_MAX, GOALS_OPEN_MAX, goalsPath, startGoals } from './goals.js'
 
 const NOW = Date.parse('2026-11-12T12:00:00Z')
 const LOCAL: Asker = { local: true, owner: true }
@@ -154,4 +155,51 @@ describe('harness goal, kept by the service', () => {
     expect((await ask('goal_list', {})).goals).toEqual([])
     log.mockRestore()
   })
+})
+
+describe('the goals\' measures', () => {
+  const counting = () => {
+    const count = vi.fn()
+    goals = startGoals(fakeCore({ dataDir: dir, count, agents: { live: () => [session('hachi', '%1', HACHI_ID)] } }), { now: () => clock })
+    return count
+  }
+
+  it('counts a goal opened and done, once each, with no title or id', async () => {
+    const count = counting()
+    const goal = await open()
+    await add(goal.id, 'c1', { agentId: 'a1' })
+    await ask('goal_done', { id: goal.id })
+    await ask('goal_done', { id: goal.id })
+    expect(count.mock.calls).toEqual([['hachi_goal_opened'], ['hachi_goal_done']])
+  })
+
+  it('counts once a goal still open a day after its last harness started, or after it opened with none', async () => {
+    const count = counting()
+    const started = await open('started')
+    await add(started.id, 'c1', { agentId: 'a1' })
+    clock += 60_000
+    const empty = await open('empty')
+    clock += GOAL_LEFT_MS - 1
+    await ask('goal_list', {})
+    expect(count.mock.calls.filter(([m]) => m === 'hachi_goal_left')).toHaveLength(1)
+    clock += 60_000
+    await ask('goal_list', {})
+    await ask('goal_list', {})
+    expect(count.mock.calls.filter(([m]) => m === 'hachi_goal_left')).toHaveLength(2)
+    // Kept across a restart of the service: counted once, ever.
+    goals = startGoals(fakeCore({ dataDir: dir, count, agents: { live: () => [session('hachi', '%1', HACHI_ID)] } }), { now: () => clock })
+    await ask('goal_list', {})
+    expect(count.mock.calls.filter(([m]) => m === 'hachi_goal_left')).toHaveLength(2)
+    expect((await ask('goal_list', {})).goals.map((g: Record<string, unknown>) => g.id).sort()).toEqual([started.id, empty.id].sort())
+    // Left is no end: it can still be done.
+    expect((await ask('goal_done', { id: started.id })).goal.doneAt).toBe(clock)
+    expect(empty.id).toBeTruthy()
+  })
+})
+
+it('closes a goal whose harnesses were handed to the person when Hachi closed (services/hachiHandOver.ts)', async () => {
+  const goal = await open()
+  await add(goal.id, 'c1', { agentId: 'a1' })
+  new Ledger(ledgerPath(dir)).append({ at: NOW, from: { machineId: 'm', agentId: 'hachi' }, handed: { machineId: 'm', agentId: 'a1' } })
+  expect((await ask('goal_done', { id: goal.id })).goal.doneAt).toBe(NOW)
 })

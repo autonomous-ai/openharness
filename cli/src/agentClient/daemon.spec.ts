@@ -299,6 +299,38 @@ describe('a line that follows pushed state events', () => {
     daemon.close()
   })
 
+  it('hands each pushed event on whole, its type and payload, for a listener that tells them apart', async () => {
+    const { push, socket } = line({ ok: true })
+    const daemon = await openDaemon(where, 'm1', () => socket)
+    const heard: unknown[] = []
+    await daemon.watch!(['a'], (agentId, event) => heard.push([agentId, event]))
+    push({ type: 'turn_ended', agentId: 'a', payload: { agentId: 'a', state: 'idle', subagent: true } })
+    expect(heard).toEqual([['a', { type: 'turn_ended', payload: { agentId: 'a', state: 'idle', subagent: true } }]])
+    daemon.close()
+  })
+
+  it('follows harnesses on another machine by what it pushes (harness_watch), with what each is doing now', async () => {
+    const sent: Array<Record<string, any>> = []
+    const socket = Object.assign(new EventEmitter(), {
+      send: (text: string) => {
+        const frame = JSON.parse(text)
+        sent.push(frame)
+        const push = (f: unknown) => socket.emit('message', Buffer.from(JSON.stringify(f)), false)
+        if (frame.type === 'machine_select') setImmediate(() => push({ type: 'connected', payload: {} }))
+        if (frame.type === 'harness_watch') setImmediate(() => push({ type: 'harness_watch_result', payload: { requestId: frame.payload.requestId, leaseMs: 300_000, agents: [{ agentId: 'far', state: 'working' }] } }))
+      },
+      close: vi.fn(),
+    })
+    setImmediate(() => socket.emit('open'))
+    const daemon = await openDaemon(where, 'm2', () => socket as never)
+    const heard: unknown[] = []
+    expect(await daemon.harnessWatch!(['far'], (agentId, event) => heard.push([agentId, event.payload]))).toMatchObject({ agents: [{ agentId: 'far', state: 'working' }] })
+    expect(sent.at(-1)).toMatchObject({ type: 'harness_watch', payload: { agentIds: ['far'] } })
+    socket.emit('message', Buffer.from(JSON.stringify({ type: 'harness_event', payload: { agentId: 'far', state: 'idle' } })), false)
+    expect(heard).toEqual([['far', { agentId: 'far', state: 'idle' }]])
+    daemon.close()
+  })
+
   it('says no from a daemon too old to push, and hears nothing then', async () => {
     const { push, socket } = line({ error: 'UNSUPPORTED' })
     const daemon = await openDaemon(where, 'm1', () => socket)

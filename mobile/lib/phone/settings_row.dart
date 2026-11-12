@@ -154,10 +154,15 @@ class SettingsRow extends StatelessWidget {
     this.destructive = false,
     this.nested = false,
     this.detailLines = 2,
+    this.below,
   });
 
   final String title;
   final String? detail;
+
+  /// Something under [title] that is not words: the chips a connector shows for the ways it is in
+  /// by. In place of [detail] in the Swarm look, after it in the phone's own.
+  final Widget? below;
 
   /// The current setting, shown at the right. Paired with [onTap] it gets a chevron.
   final String? value;
@@ -244,6 +249,10 @@ class SettingsRow extends StatelessWidget {
                       height: 1.4,
                     ),
                   ),
+                ],
+                if (below case final below?) ...[
+                  const SizedBox(height: 5),
+                  below,
                 ],
               ],
             ),
@@ -337,20 +346,22 @@ class SettingsRow extends StatelessWidget {
     return SwarmRow(
       leading: leading ?? (glyph == null ? null : SwarmRowGlyph(glyph)),
       title: title,
-      detail: detail == null
-          ? null
-          : Text(
-              detail,
-              maxLines: detailLines,
-              // As the phone's own look: an ellipsis with no line limit still cuts to one line.
-              overflow: detailLines == null
-                  ? TextOverflow.clip
-                  : TextOverflow.ellipsis,
-              style: AppType.caption(
-                color: AppPalette.textSecondary,
-                height: 1.35,
-              ),
-            ),
+      detail:
+          below ??
+          (detail == null
+              ? null
+              : Text(
+                  detail,
+                  maxLines: detailLines,
+                  // As the phone's own look: an ellipsis with no line limit still cuts to one line.
+                  overflow: detailLines == null
+                      ? TextOverflow.clip
+                      : TextOverflow.ellipsis,
+                  style: AppType.caption(
+                    color: AppPalette.textSecondary,
+                    height: 1.35,
+                  ),
+                )),
       trailing:
           trailing ??
           (value == null

@@ -193,7 +193,9 @@ export function createRecaps({
     const asks = recentAsksOf(projectId, n)
     return { agentId: projectId, events, asks }
   }
-  return { mirror, isSubagentSession, question, recent, recentAsks: recentAsksOf, agentRecent, quietTurn }
+  /** Whether the turn open in [sessionId] was started by a quiet delivery: its end is marked as no one's news. */
+  const quietTurnOpen = (sessionId: string): boolean => quiet.has(sessionId)
+  return { mirror, isSubagentSession, question, recent, recentAsks: recentAsksOf, agentRecent, quietTurn, quietTurnOpen }
 }
 
 export type Recaps = ReturnType<typeof createRecaps>

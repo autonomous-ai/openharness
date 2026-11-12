@@ -17,6 +17,7 @@ import '../swarm/swarm_project_page.dart' show swarmChatRoute;
 import '../swarm/swarm_thread.dart' show SwarmThreadFocus;
 import '../swarm/swarm_you_page.dart';
 import '../swarm/swarm_session.dart';
+import '../swarm/swarm_team.dart' show swarmAgentChat;
 import 'agent_home.dart';
 import 'approve_sign_in.dart';
 import 'browser_handoff.dart';
@@ -280,13 +281,17 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   // Shared by notification reads, explicit root changes and route transitions.
   int _navigationRequest = 0;
 
+  /// With Swarm on: the agent's own chat with its person, as its Your Team
+  /// row opens it (Swarm v4, Desktop's `superTabAgentChat`), never a task's
+  /// chat or its project's channel. One in no Swarm, or whose chat this phone
+  /// does not list, opens its terminal, as with Swarm off.
   Future<void> _openSwarmAgent(
     SwarmSession session,
     String machineId,
     String harnessId,
   ) async {
     final request = ++_navigationRequest;
-    // Join the cold-start read; a background tap must use the current assignment.
+    // Join the cold-start read; a background tap must see the agent's chat.
     await session.inbox.refresh();
     if (!mounted ||
         _swarm.session != session ||
@@ -300,24 +305,10 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
         if (agent.machineId != machineId || agent.harnessId != harnessId) {
           continue;
         }
-        final groups = snapshot.conversations.where(
-          (g) =>
-              !g.closed && !snapshot.isProjectLead(g.id) && g.audience == null,
-        );
-        final assigned = groups.where(
-          (g) =>
-              g.assignment?['agentId'] == agent.id &&
-              !const ['done', 'cancelled'].contains(g.assignment?['status']),
-        );
-        final member = groups.where((g) => g.agentIds.contains(agent.id));
-        final conversationId =
-            assigned.firstOrNull?.id ??
-            member.firstOrNull?.id ??
-            snapshot.projectById(agent.projectId)?.leadConversationId;
-        if (conversationId != null) {
+        if (swarmAgentChat(snapshot, agent) case final chat?) {
           _showNoticedChat((
             swarmId: swarm.id,
-            conversationId: conversationId,
+            conversationId: chat.id,
             messageId: null,
             decisionId: null,
             threadId: null,
@@ -326,10 +317,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
         }
       }
     }
-    _showSwarm();
-    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-      const SnackBar(content: Text('This agent’s chat is unavailable.')),
-    );
+    _openAgentAtHome(machineId, harnessId);
   }
 
   /// A tapped "new device" notice: that device's page. One this phone has just been told of opens as

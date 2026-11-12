@@ -56,6 +56,23 @@ void main() {
     });
   });
 
+  test("swarmAgentIsMine: the backend's myAgent when it sends one, else "
+      'whose agent it is', () {
+    final snapshot = read(
+      agents: [
+        agent('a-mine'),
+        theirs(agent('a-them')),
+        {...agent('a-not'), 'myAgent': false},
+        {...theirs(agent('a-lent')), 'myAgent': true},
+      ],
+    );
+    bool mine(String id) => swarmAgentIsMine(snapshot.agent(id)!, me);
+    expect(mine('a-mine'), isTrue);
+    expect(mine('a-them'), isFalse);
+    expect(mine('a-not'), isFalse);
+    expect(mine('a-lent'), isTrue);
+  });
+
   test("swarmAgentIsPm: the backend's kind when it sends one, else whether "
       'it leads a project', () {
     final snapshot = read(
