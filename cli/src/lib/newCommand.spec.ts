@@ -614,6 +614,17 @@ describe('harness new: the daemon', () => {
     expect(spacedMcp.d.out[0]!.split('\n').at(-1)).toBe('Next: harness_wait (names: "code review")  (until it has started and answered)')
   })
 
+  it('says an agent\'s ask it could not record, and goes on with the start', async () => {
+    const warning = 'Harness could not record that you asked for cx: it may still start. Do not start it again.'
+    const origin = { check: async () => {}, prompt: (text: string) => text, created: async () => null, answer: () => ({ effect: '', next: [] }),
+      pending: () => warning }
+    const socket = new FakeSocket((frame) => frame.type === 'agent_create' ? { state: 'pending' }
+      : frame.type === 'agent_create_status' ? { state: 'created', agent: { id: 'h1', name: 'cx' } } : null)
+    const d = deps(['codex', '--name', 'cx'], socket, { origin: async () => origin, sleep: async () => {} })
+    expect(await newCommand(d)).toBe(0)
+    expect(d.err).toEqual([warning])
+  })
+
   it('names no harness it was given no name for, and asks for at least ten seconds however long the setup took', async () => {
     let clock = 0
     const installing = { state: 'pending', held: { service: 'install', detail: 'Installing Codex.' } }

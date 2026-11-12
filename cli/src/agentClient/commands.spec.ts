@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -1462,6 +1462,25 @@ describe('an agent asking again for a harness it already has', () => {
     await origin.created('m', { id: 'k5', name: 'cx' }, 'c5')
     expect(h.ledger.pendingOf({ machineId: 'm', agentId: 'lead' }, NOW)).toEqual([])
     expect(h.ledger.parentOf({ machineId: 'm', agentId: 'k5' })?.child).toEqual({ machineId: 'm', agentId: 'k5', name: 'cx', creationId: 'c5' })
+  })
+
+  // The create is already sent by then: a refusal ("try again") would start a second harness.
+  it('a harness asked for or started while the ledger is busy is said, never refused', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' })]
+    const h = harness(d, { ledger: (data) => new Ledger(ledgerPath(data), 20) })
+    const origin = (await agentOrigin(h.deps))!
+    // Another writer, alive, holds the ledger's lock past the wait.
+    mkdirSync(join(dir, 'agent-client'), { recursive: true })
+    writeFileSync(`${ledgerPath(dir)}.lock`, JSON.stringify({ pid: process.ppid, startMarker: '' }))
+    expect(origin.pending!('m', { creationId: 'c6', name: 'cx', engine: 'codex' }))
+      .toBe('Harness could not record that you asked for cx: it may still start. Do not start it again.')
+    expect(await origin.created('m', { id: 'k6', name: 'cx' }, 'c6'))
+      .toBe('cx is starting, but Harness could not record that you started it. Do not start it again.')
+    expect(await origin.created('m', { id: 'k7' }, 'c7'))
+      .toBe('The harness is starting, but Harness could not record that you started it. Do not start it again.')
+    rmSync(`${ledgerPath(dir)}.lock`)
+    expect(origin.pending!('m', { creationId: 'c8', name: 'cy', engine: 'codex' })).toBeNull()
   })
 })
 
