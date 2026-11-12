@@ -14,6 +14,7 @@ import 'package:harness_mobile/shared/widgets/touch_target.dart';
 import 'swarm_agents.dart';
 import 'swarm_home_view_sheet.dart';
 import 'swarm_inbox.dart';
+import 'swarm_name.dart';
 import 'swarm_rename.dart';
 import 'swarm_row.dart';
 import 'swarm_session.dart';
@@ -47,8 +48,10 @@ SwarmListing? swarmHomeNamed(SwarmInbox inbox, List<SwarmListing> shown) =>
 /// "All Swarms" over several, "Swarm" before there is one, or once the one
 /// Swarm's read is taken away.
 String swarmHomeTitle(SwarmInbox inbox, List<SwarmListing> shown) =>
-    swarmHomeNamed(inbox, shown)?.name ??
-    (shown.length > 1 ? 'All Swarms' : 'Swarm');
+    switch (swarmHomeNamed(inbox, shown)) {
+      final swarm? => swarmShownName(inbox, swarm.id, swarm.name),
+      null => shown.length > 1 ? 'All Swarms' : 'Swarm',
+    };
 
 /// The Swarms Home can show, from its title: All Swarms over several, each
 /// Swarm, the one shown ticked, then Sort and filter ([onView]) and the agents on the person's computers
@@ -197,8 +200,10 @@ class _Switcher extends StatelessWidget {
               for (final swarm in swarms)
                 SwarmRow(
                   key: ValueKey('swarm-switch-${swarm.id}'),
-                  leading: SwarmProjectTile(swarm.name),
-                  title: swarm.name,
+                  leading: SwarmProjectTile(
+                    swarmShownName(inbox, swarm.id, swarm.name),
+                  ),
+                  title: swarmShownName(inbox, swarm.id, swarm.name),
                   trailing: _trailing(
                     swarm == shown ? tick('Shown on Swarm Home') : null,
                     // Its menu, for someone with something in it to do,

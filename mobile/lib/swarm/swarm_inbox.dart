@@ -155,6 +155,31 @@ class SwarmInbox extends ChangeNotifier {
   /// The account's Swarms, in the list's order.
   List<SwarmListing> swarms = const [];
 
+  /// Who owns Swarm [id], as its read says, else as the last list said; null
+  /// for one not listed (Desktop's `SuperTabClient.ownerOf`).
+  String? ownerOf(String id) => _readers[id]?.snapshot?.ownerId ?? _owners[id];
+  Map<String, String> _owners = const {};
+
+  /// Whether Swarm [id] is its owner's Personal Swarm, whoever's: its read
+  /// says so (head `personal`), or the last list did (`personalSwarm`, backend
+  /// #4179). False from an older backend (Desktop's `isPersonalSwarm`).
+  bool isPersonalSwarm(String id) =>
+      _readers[id]?.snapshot?.personal == true || _personalSwarms.contains(id);
+  Set<String> _personalSwarms = const {};
+
+  /// Person [userId] as a read here has them: in Swarm [id] first, else in
+  /// another of the account's Swarms. Null when no read has them.
+  SuperTabPerson? personOf(String id, String userId) {
+    for (final reader in [?_readers[id], ..._readers.values]) {
+      if (reader.accessRevoked) continue;
+      for (final person
+          in reader.snapshot?.people ?? const <SuperTabPerson>[]) {
+        if (person.id == userId) return person;
+      }
+    }
+    return null;
+  }
+
   /// What the Swarms ask of the person, across all of them.
   List<SwarmNeed> needs = const [];
 
@@ -451,14 +476,22 @@ class SwarmInbox extends ChangeNotifier {
 
   /// What a screen draws of the inbox itself: a read that leaves it as it
   /// was tells nobody.
-  Object get _face =>
-      (swarms, error, loaded, invitations, invitationsFailed, noComputer);
+  Object get _face => (
+    swarms,
+    _owners,
+    _personalSwarms,
+    error,
+    loaded,
+    invitations,
+    invitationsFailed,
+    noComputer,
+  );
 
   Future<void> _read() async {
     final before = _face;
     _polling = true;
     try {
-      final (:listed, :changedAt) = await _list();
+      final (:listed, :changedAt, :owners, :personal) = await _list();
       List<SwarmInvitation>? invited;
       Object? unread;
       if (listed.isEmpty || _invitationsDue) {
@@ -477,6 +510,9 @@ class SwarmInbox extends ChangeNotifier {
       }
       if (_disposed) return;
       if (!listEquals(listed, swarms)) swarms = listed;
+      // Kept as they were when the list says the same, so it tells nobody.
+      if (!mapEquals(owners, _owners)) _owners = owners;
+      if (!setEquals(personal, _personalSwarms)) _personalSwarms = personal;
       _listedIds = {for (final swarm in listed) swarm.id};
       _dropUnlisted();
       // What was read of them stays while they cannot be read again.
@@ -578,11 +614,20 @@ class SwarmInbox extends ChangeNotifier {
 
   /// Every page of the list before any is applied: a failed page cannot drop
   /// Swarms (the desktop's `refreshTabs`). With each Swarm's last change, 0
-  /// for one never changed.
-  Future<({List<SwarmListing> listed, Map<String, int> changedAt})>
+  /// for one never changed, its owner, and which are Personal Swarms.
+  Future<
+    ({
+      List<SwarmListing> listed,
+      Map<String, int> changedAt,
+      Map<String, String> owners,
+      Set<String> personal,
+    })
+  >
   _list() async {
     final listed = <String, SwarmListing>{};
     final changedAt = <String, int>{};
+    final owners = <String, String>{};
+    final personal = <String>{};
     final cursors = <String>{};
     String? after;
     do {
@@ -616,13 +661,20 @@ class SwarmInbox extends ChangeNotifier {
         // A rename on its way is shown until a read after it carries it.
         listed[id] = (id: id, name: _renaming[id]?.$1 ?? row['name'] as String);
         changedAt[id] = (row['lastChangedAt'] as num?)?.toInt() ?? 0;
+        if (row['ownerId'] case final String owner) owners[id] = owner;
+        if (row['personalSwarm'] == true) personal.add(id);
       }
       after = page['next'] as String?;
       if (after != null && !cursors.add(after)) {
         throw const FormatException('Repeated tab cursor');
       }
     } while (after != null);
-    return (listed: listed.values.toList(), changedAt: changedAt);
+    return (
+      listed: listed.values.toList(),
+      changedAt: changedAt,
+      owners: owners,
+      personal: personal,
+    );
   }
 
   SwarmReader _open(String id) {

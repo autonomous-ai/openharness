@@ -38,6 +38,7 @@ import 'swarm_face.dart';
 import 'swarm_file_picker.dart';
 import 'swarm_outgoing_files.dart';
 import 'swarm_inbox.dart';
+import 'swarm_name.dart';
 import 'swarm_reader.dart';
 import 'swarm_link_previews.dart';
 import 'swarm_message_edit.dart';
@@ -2674,12 +2675,12 @@ class _ChatView {
     // The person's one Buddy chat for the Swarm is in no project: its
     // Swarm's name stands under it instead, the Swarm the Buddy tab switches
     // between (Tony, 11-03).
-    final swarm = buddyProject == swarmBuddyKey
-        ? session.inbox.swarms
-              .where((s) => s.id == reader.tabId)
-              .firstOrNull
-              ?.name
+    final listed = buddyProject == swarmBuddyKey
+        ? session.inbox.swarms.where((s) => s.id == reader.tabId).firstOrNull
         : null;
+    final swarm = listed == null
+        ? null
+        : swarmShownName(session.inbox, listed.id, listed.name);
     // Only the person's own Buddy chat holds decisions, its project's, as
     // Desktop shows them above it; every other chat leaves them to Activity
     // (Dee, 11-01: they blocked the project chat). A chat not open to the

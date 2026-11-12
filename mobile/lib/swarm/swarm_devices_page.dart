@@ -12,6 +12,7 @@ import 'swarm_machine_menu.dart';
 import 'swarm_machines.dart';
 import 'swarm_row.dart';
 import 'swarm_session.dart';
+import 'swarm_name.dart';
 import 'swarm_start.dart';
 import 'swarm_style.dart';
 
@@ -114,7 +115,9 @@ class SwarmDevicesPage extends StatelessWidget {
             child: SwarmMachinesSection(
               key: ValueKey('swarm-machine-section-${swarm.id}'),
               reader: reader,
-              swarmName: swarms.length > 1 ? swarm.name : null,
+              swarmName: swarms.length > 1
+                  ? swarmShownName(inbox, swarm.id, swarm.name)
+                  : null,
               open: (id) => unawaited(showSwarmMachine(context, reader, id)),
               menu: (id, name) => unawaited(
                 showSwarmMachineMenu(context, reader, id, name: name),

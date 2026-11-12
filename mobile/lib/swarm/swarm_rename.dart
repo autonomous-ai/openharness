@@ -11,6 +11,7 @@ import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import 'swarm_buddy.dart' show swarmCanWrite;
 import 'swarm_inbox.dart';
+import 'swarm_name.dart';
 import 'swarm_style.dart';
 
 /// The longest name a Swarm takes here: the desktop's Rename Tab's
@@ -87,7 +88,7 @@ Future<void> showSwarmMenu(
   try {
     await showPhoneSheet(
       context,
-      title: name,
+      title: swarmShownName(inbox, swarmId, name),
       onShown: (route) => sheet = route,
       actions: _swarmMenuActions(context, inbox, swarmId),
     );
