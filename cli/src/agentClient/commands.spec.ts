@@ -207,19 +207,23 @@ describe('harness ps', () => {
   it('says why a harness never started, before what it is about, live or stopped', async () => {
     const d = new FakeDaemon()
     const inUse = { state: 'failed', error: 'OPENCLAW_FOLDER_IN_USE', detail: 'Another OpenClaw is using this folder. Give each run its own --local folder.' } as const
-    d.frames = [frame('taken', { launch: inUse }), frame('gone', { status: 'stopped', launch: { state: 'failed', error: 'OPENCLAW_FOLDER_GONE' } }), frame('fine', { launch: { state: 'ready' } })]
+    d.frames = [frame('taken', { launch: inUse }), frame('gone', { status: 'stopped', launch: { state: 'failed', error: 'OPENCLAW_FOLDER_GONE' } }), frame('fine', { launch: { state: 'ready' } }),
+      // Not confirmed is not failed: its engine may be running (the desk says "Not confirmed").
+      frame('unsure', { launch: { state: 'failed', error: 'RESUME_UNCONFIRMED', detail: 'Check the terminal.' } })]
     const h = harness(d, { pane: undefined })
     expect(await psCommand(['--all'], h.deps)).toBe(EXIT.ok)
     const out = h.out.join('\n')
     expect(out).toMatch(/^taken .*\n  failed: Another OpenClaw is using this folder\. Give each run its own --local folder\.$/m)
     expect(out).toMatch(/^gone .*\n  failed: OPENCLAW_FOLDER_GONE$/m)
     expect(out).toMatch(/^fine .*\n  fine recap$/m)
+    expect(out).toMatch(/^unsure .*\n  unsure recap$/m)
     const json = harness(d, { pane: undefined })
     expect(await psCommand(['--all', '--json'], json.deps)).toBe(EXIT.ok)
     const rows = JSON.parse(json.out[0]).harnesses as Array<{ name: string; failure?: unknown }>
     expect(rows.find((r) => r.name === 'taken')!.failure).toEqual({ error: 'OPENCLAW_FOLDER_IN_USE', detail: inUse.detail })
     expect(rows.find((r) => r.name === 'gone')!.failure).toEqual({ error: 'OPENCLAW_FOLDER_GONE', detail: null })
     expect(rows.find((r) => r.name === 'fine')!.failure).toBeUndefined()
+    expect(rows.find((r) => r.name === 'unsure')!.failure).toBeUndefined()
   })
 
   it('prints JSON for programs, and asks for stopped ones with --all', async () => {

@@ -224,6 +224,9 @@ describe('stopped harness persistence', () => {
     expect(store.get(saved.agentId)!.launch).toEqual(failed)
     store.save({ ...saved, launch: { state: 'held', service: 'models', detail: 'Waiting for models.' } })
     expect(store.get(saved.agentId)!.launch).toEqual({ state: 'ready' })
+    // Not confirmed is not failed: its engine may have run, and a stopped harness has no terminal to check.
+    store.save({ ...saved, launch: { state: 'failed', error: 'RESUME_UNCONFIRMED', detail: 'Check the terminal.' } })
+    expect(store.get(saved.agentId)!.launch).toEqual({ state: 'ready' })
   })
 
   it('patches one field of an archive without touching its name or activity time', async () => {
