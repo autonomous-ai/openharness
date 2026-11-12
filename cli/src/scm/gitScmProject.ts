@@ -11,7 +11,6 @@
 import { agentProject, forgetAgentProject } from '../lib/agentProject.js'
 import { nameBranchAfterSession } from '../lib/branchNaming.js'
 import { prepareGitProject, readGitProject } from '../lib/gitProject.js'
-import { sweepWorktrees } from '../lib/worktreeSweep.js'
 import type { PrepareOptions, ScmDescription, ScmDetectOptions, ScmDetectResult, ScmLaunchRecord, ScmProject } from './types.js'
 
 export class GitScmProject implements ScmProject {
@@ -47,10 +46,6 @@ export class GitScmProject implements ScmProject {
 
   rename(cwd: string, title: string | null): Promise<string | null> {
     return nameBranchAfterSession(cwd, title)
-  }
-
-  sweep(input: { root: string; inUse: Iterable<string | null | undefined>; now?: number; idleMs?: number }): Promise<string[]> {
-    return sweepWorktrees(input)
   }
 
   /** A worktree is a folder, and the folder is the row's `cwd`: nothing to re-apply. */
