@@ -2,11 +2,13 @@
  * Run: node --import tsx scripts/benchmark-store-pages.ts [--src <the cli/src of a tree>] [output.json]
  * `--src` (default: this tree's) is where every module and fixture is loaded from, so the same script measures the base.
  */
+import { randomBytes } from 'node:crypto'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { pathToFileURL } from 'node:url'
+import { zstdCompressSync } from 'node:zlib'
 
 const args = process.argv.slice(2)
 const at = args.indexOf('--src')
@@ -67,6 +69,31 @@ function buildOpenclaw(path: string): void {
       const content = 'a'.repeat(seq % 100 === 0 ? 2 * MIB : 2 * KIB)
       const json = JSON.stringify({ type: 'message', id: `b-${seq}`, message: { role: 'user', content } })
       event.all(window, seq, json, 1794299459000 + seq, Buffer.byteLength(json), 'message', 'user')
+      active.all(window, 1000 + seq, seq)
+    }
+    db.exec('COMMIT')
+  } finally { db.close() }
+}
+
+/** OpenClaw's recorded `plain` scenario, then 600 rows stored as zstd, each 1 MiB inflated, half of it random so a blob
+ *  stays near 512 KiB. A compressed row's size and hidden check are stored after its blob, so sizing one reads the
+ *  blob's whole overflow chain. */
+function buildOpenclawCompressed(path: string): void {
+  const db = new Database(path, { readOnly: false })
+  try {
+    const fixtures = join(src, 'engines/openclaw/__fixtures__')
+    db.exec(readFileSync(join(fixtures, 'schema.sql'), 'utf8'))
+    db.exec(readFileSync(join(fixtures, 'plain.sql'), 'utf8'))
+    const window = String(db.prepare('SELECT current_session_id AS id FROM session_nodes WHERE session_key = ?').all(OPENCLAW_KEY)[0]?.id)
+    // Seq 6 is the fixture's compressed assistant row: each new row takes its navigation columns.
+    const event = db.prepare('INSERT INTO transcript_events (session_id, seq, event_zstd, created_at, event_utf8_bytes, navigation_json, navigation_type, message_role) ' +
+      'SELECT session_id, ?, ?, ?, ?, navigation_json, navigation_type, message_role FROM transcript_events WHERE session_id = ? AND seq = 6')
+    const active = db.prepare('INSERT INTO session_transcript_active_events (session_id, active_position, event_seq, message_position, context_eligible) VALUES (?, ?, ?, NULL, 1)')
+    db.exec('BEGIN')
+    for (let seq = 8; seq < 608; seq++) {
+      const content = randomBytes(384 * KIB).toString('base64') + 'a'.repeat(512 * KIB)
+      const json = JSON.stringify({ type: 'message', id: `z-${seq}`, message: { role: 'assistant', content } })
+      event.all(seq, zstdCompressSync(Buffer.from(json)), 1794299459000 + seq, Buffer.byteLength(json), window)
       active.all(window, 1000 + seq, seq)
     }
     db.exec('COMMIT')
@@ -134,6 +161,8 @@ async function measure(read: () => Promise<number | null>): Promise<{ count: num
 const stores = [
   { store: 'openclaw', unit: 'events', file: 'openclaw-agent.sqlite', build: buildOpenclaw,
     // OpenClaw throws on a refused page.
+    read: async (db: string) => { try { return (await openclaw.readOpenclawHistory(db, OPENCLAW_KEY)).length } catch { return null } } },
+  { store: 'openclaw-compressed', unit: 'events', file: 'openclaw-compressed.sqlite', build: buildOpenclawCompressed,
     read: async (db: string) => { try { return (await openclaw.readOpenclawHistory(db, OPENCLAW_KEY)).length } catch { return null } } },
   { store: 'opencode', unit: 'messages', file: 'opencode.db', build: buildOpencode,
     // OpenCode returns no message for a store that did not answer.

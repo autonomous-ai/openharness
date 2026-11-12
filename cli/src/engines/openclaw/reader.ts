@@ -79,8 +79,9 @@ const eventsPage = (where: string, params: SqliteParam[]): StorePage => ({
     { as: 'event_zstd', sql: `CASE WHEN ${HIDDEN_SQL} THEN NULL ELSE t.event_zstd END` }],
   // A plain row weighs its text. A compressed one weighs what it inflates to, never less than its blob: the store's
   // CHECK bounds both at 4 MiB, and nothing ties event_utf8_bytes to a plain row's length. The stored size counts
-  // at most what `decode` inflates: past the CHECK, two sizes near 2^62 overflowed the page's running sum, and the
-  // page failed on every read.
+  // at most what `decode` inflates: a size past the CHECK (2^62, on an edited store) would put a row that inflates
+  // within 4 MiB over the row cap, never read. Summed with `sum() OVER`, two such sizes overflowed and failed the page
+  // on every read.
   size: `CASE WHEN ${HIDDEN_SQL} THEN 0 ELSE coalesce(${utf8Bytes('t.event_json')}, max(min(coalesce(t.event_utf8_bytes, 0), ${MAX_EVENT_BYTES}), length(t.event_zstd))) END`,
 })
 const LIVE = 't.session_id = ?'

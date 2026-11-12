@@ -19,6 +19,10 @@
  *  - a 46 MiB OpenCode session: one unpaged read 74 to 78 ms, 13 pages ordered here 119 to 128 ms (ordered in SQL,
  *    181 to 188 ms). A 20,000-row Hermes session: one read 70 ms, 40 pages 84 to 92 ms.
  *  - the `sqlite3` CLI writes its rows as JSON, where a control character becomes `\u00XX`: six bytes for one.
+ *  - OpenClaw stores a row's size and hidden check after its payload, so sizing a row reads its whole overflow chain.
+ *    Sizing all 500 candidates (`sum() OVER`) took a whole-history read of 600 compressed 1 MiB rows from 0.95 s to
+ *    4.5 s; sized one at a time and stopped at the cut, 0.99 s (scripts/benchmark-store-pages.ts). The walk is a
+ *    recursive CTE, SQLite 3.8.3: older than the window functions a page already needs (3.25).
  */
 import { sid } from './log.js'
 import { builtinSqlite } from './sqliteBuiltin.js'
@@ -81,21 +85,26 @@ function statement(page: StorePage, cursor: boolean): { sql: string; fixed: numb
     ? `(${page.size ?? sizeOf([...key, ...columns])}) + coalesce((SELECT sum(${fixed} + ${sizeOf([...key, ...parts.columns])}) FROM ${parts.table} p WHERE ${parts.on}), 0)`
     : page.size ?? sizeOf([...key, ...columns])
   const more = `(k.scanned = ${PAGE_ROWS} OR k.held < k.scanned)`
-  // The rows are sized without their payloads, and only those kept are joined back for theirs, by rowid: the key is
-  // unique only inside the scope. CROSS JOIN keeps SQLite's loop order, so no other row's payload is read. A NULL size
-  // counts 0: a NULL running total would keep one row a page. A row over the cap counts its whole size, so it sits
-  // alone on its page, as any row over the budget does.
-  let sql = `WITH sized AS (
-  SELECT t.rowid AS rid, ${keys.map((sql, i) => `${sql} AS k${i}`).join(', ')}, coalesce(${size}, 0) AS size
-  FROM ${table} t
-  WHERE (${page.where})${cursor ? ` AND (${keys.join(', ')}) > (${keys.map(() => '?').join(', ')})` : ''}
-  ORDER BY ${keys.join(', ')} LIMIT ${PAGE_ROWS}
-), run AS (
-  SELECT rid, size, sum(size) OVER (ORDER BY ${ks} ROWS UNBOUNDED PRECEDING) AS total,
-    row_number() OVER (ORDER BY ${ks}) AS n, count(*) OVER () AS scanned
-  FROM sized
+  // The candidates are their rowids and keys alone. The walk sizes them one at a time, in key order, and stops at the
+  // first past the budget, so only the rows kept and that one are sized; only those kept are joined back for their
+  // payloads, by rowid: the key is unique only inside the scope. CROSS JOIN keeps SQLite's loop order, so no other
+  // row is read. A NULL size counts 0: a NULL running total would keep one row a page. A row over the cap counts its
+  // whole size, so it sits alone on its page, as any row over the budget does.
+  const walked = `coalesce(${size}, 0)`
+  let sql = `WITH RECURSIVE candidate AS (
+  SELECT rid, row_number() OVER (ORDER BY ${ks}) AS n, count(*) OVER () AS scanned
+  FROM (SELECT t.rowid AS rid, ${keys.map((sql, i) => `${sql} AS k${i}`).join(', ')}
+    FROM ${table} t
+    WHERE (${page.where})${cursor ? ` AND (${keys.join(', ')}) > (${keys.map(() => '?').join(', ')})` : ''}
+    ORDER BY ${keys.join(', ')} LIMIT ${PAGE_ROWS})
+), walk(n, rid, scanned, size, before) AS (
+  SELECT c.n, c.rid, c.scanned, ${walked}, 0 FROM candidate c CROSS JOIN ${table} t ON t.rowid = c.rid WHERE c.n = 1
+  UNION ALL
+  SELECT c.n, c.rid, c.scanned, ${walked}, w.before + w.size
+  FROM walk w CROSS JOIN candidate c ON c.n = w.n + 1 CROSS JOIN ${table} t ON t.rowid = c.rid
+  WHERE w.before + w.size <= ${PAGE_BYTES}
 ), kept AS (
-  SELECT rid, size, n, scanned, count(*) OVER () AS held FROM run WHERE n = 1 OR total <= ${PAGE_BYTES}
+  SELECT rid, size, n, scanned, count(*) OVER () AS held FROM walk WHERE n = 1 OR before + size <= ${PAGE_BYTES}
 )
 SELECT k.n AS page_n, ${more} AS page_more, k.size > ${MAX_ROW_BYTES} AS page_big${parts ? ', 0 AS page_part' : ''},
   ${[...key.map((column) => `${column.sql} AS ${quoted(column.as)}`),

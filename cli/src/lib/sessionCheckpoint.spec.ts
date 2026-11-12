@@ -243,7 +243,7 @@ it.each(['opencode', 'kilo', 'hermes', 'devin'] as const)('exports %s through re
   row.transcriptPath = null
   const sql = vi.mocked(sqliteReadAll).mockReset().mockImplementation(async (_db, query) => ({ ok: true, via: 'builtin', rows:
     query.includes('pragma_table_xinfo') ? [{ name: 'id', pk: 1 }, { name: 'message', pk: 0 }]
-      : query.startsWith('WITH sized AS (') ? [{ page_n: 1, page_more: 0, page_big: 0, id: 'conversation', message: 'Stored in WAL' }]
+      : query.startsWith('WITH RECURSIVE candidate AS (') ? [{ page_n: 1, page_more: 0, page_big: 0, id: 'conversation', message: 'Stored in WAL' }]
         : [{ id: 'conversation', message: 'Stored in WAL' }] }))
   await store.save(row)
   const saved = JSON.parse(await readFile(join(directory, (await manifest()).file), 'utf8'))
@@ -258,7 +258,7 @@ it.each(['opencode', 'kilo', 'hermes', 'devin'] as const)('exports %s through re
   // Then the one-row table by SELECT *, each conversation table by its columns, then its pages (#4188); every read but
   // the columns' is of this conversation. Kilo reads `message` and `part`.
   const calls = sql.mock.calls.map(([, query, params]) => [query.split(' ').slice(0, 3).join(' '), params])
-  const paged = [['SELECT name, pk', [expect.any(String)]], ['WITH sized AS', ['conversation']]]
+  const paged = [['SELECT name, pk', [expect.any(String)]], ['WITH RECURSIVE candidate', ['conversation']]]
   expect(calls).toEqual([['SELECT * FROM', ['conversation']], ...paged, ...(engine === 'kilo' ? paged : [])])
 })
 it('treats a locked or missing database as a save failure, never an empty successful backup', async () => {

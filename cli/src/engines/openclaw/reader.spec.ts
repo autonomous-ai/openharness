@@ -427,7 +427,7 @@ withBuiltin('pages by bytes', () => {
     const actual = await vi.importActual<typeof import('../../lib/sqliteRead.js')>('../../lib/sqliteRead.js')
     let pages = 0
     vi.mocked(sqliteReadAll).mockImplementation(async (...args) =>
-      args[1].startsWith('WITH sized AS (') && ++pages === 2 ? { ok: false, reason: 'transient' } : actual.sqliteReadAll(...args))
+      args[1].startsWith('WITH RECURSIVE candidate AS (') && ++pages === 2 ? { ok: false, reason: 'transient' } : actual.sqliteReadAll(...args))
     vi.spyOn(console, 'error').mockImplementation(() => undefined)
     const { reader: tail, deps, events } = reader(path, KEY)
     try {

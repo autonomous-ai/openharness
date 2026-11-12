@@ -62,9 +62,9 @@ and name). A page, read after a cursor in key order:
 - holds at most `N` rows (a count cap, as OpenClaw's 500 today);
 - takes rows while the running total of their sizes, this row included, stays within the page budget `B`; the first
   row is always taken, so a page always moves the cursor;
-- sizes every row in SQL without returning its payload (a running `sum() OVER (ORDER BY key)` over an inner query
-  that is itself limited to `N` rows, then a join back on the key for the payloads of the rows kept, so payloads
-  outside the page never reach the reply);
+- sizes its rows in SQL without returning their payloads: an inner query of at most `N` keys, sized one at a time in
+  key order and stopping at the first row past the budget, so only the rows kept and that one are sized; then a join
+  back for the payloads of the rows kept, so payloads outside the page never reach the reply;
 - returns a row whose size passes the row cap `R` with no payload and a flag, so the caller steps past it;
 - says whether it is full: cut by count or by bytes. A caller reads again after the last row's key while it is full.
 
@@ -177,6 +177,9 @@ Ken's go covered the spec, the plan and the build; these are the main session's 
   no stub in the transcript.
 - OpenCode 1 and Kilo page by whole messages (a message with its parts), never splitting one.
 - The checkpoint fails on a row over `R` instead of dropping it.
+- A page's running size stops at the cut rather than a `sum() OVER` of all `N` candidates: OpenClaw stores a row's
+  size after its payload, so sizing one reads all of it, and sizing 500 a page took a whole-history read of 600
+  compressed 1 MiB rows from 0.95 s to 4.5 s (0.99 s stopped at the cut).
 
 ## Constraints from the builder check
 
