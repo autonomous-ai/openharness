@@ -260,6 +260,8 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
         const chosen = { ...selectedEnvironment }
         for (const key of clear) if (LAUNCH_LOCATION_VARIABLES.includes(key as typeof LAUNCH_LOCATION_VARIABLES[number])) delete chosen[key]
         for (const key of LAUNCH_LOCATION_VARIABLES) if (overrides[key] !== undefined) chosen[key] = overrides[key]
+        // A local run is on its folder whatever a launch adds or clears: unset or replaced, it would run on the shared one.
+        if (openclawLocal) chosen.OPENCLAW_STATE_DIR = openclawLocal
         if (Object.entries(chosen).some(([key, path]) => key !== 'PATH' && path && (!isAbsolute(path) || path.includes('\0') || path.length > 4096))) return false
         const homes = nativeHookLocations(chosen)
         const confirmed: HookPreparationProof[] = []
