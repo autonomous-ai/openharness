@@ -10,7 +10,7 @@ import { usageTargetKey, usageTarget, validUsageTarget } from '../lib/agentUsage
  *   on its own (core/agentBrowserLink.ts): Hachi's services in the edge host have no other way to the recorder.
  * Each is read as it is asked, so the service works from the registry as it is at that moment.
  */
-import { HACHI_DAEMON_METRICS, type HachiDaemonMetric } from '../lib/productUsageContract.js'
+import { HACHI_DAEMON_METRICS, type HachiDaemonMetric } from '../lib/hachiMetrics.js'
 import type { CoreApi } from './api.js'
 
 const COUNTED: ReadonlySet<unknown> = new Set(HACHI_DAEMON_METRICS)
