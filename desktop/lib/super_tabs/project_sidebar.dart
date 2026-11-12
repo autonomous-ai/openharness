@@ -8,7 +8,7 @@ import '../state/app_state.dart';
 import '../widgets/desktop_chrome.dart';
 import 'agent_state.dart';
 import 'controller.dart';
-import 'delete_agent.dart';
+import 'remove_agent.dart';
 import 'model.dart';
 import 'places.dart' show SwarmPage;
 import 'my_agents.dart';
@@ -597,9 +597,9 @@ class ProjectSidebar extends StatelessWidget {
         _ => null,
       },
     );
-    // Pause and Delete are one right-click away and nowhere else (anh Dee, 2026-11-11: "make it subtle. right click you see
+    // Pause and Remove are one right-click away and nowhere else (anh Dee, 2026-11-11: "make it subtle. right click you see
     // pause"). Pause for its person, its machine's owner and the Swarm's owner, who leads the work it would be given (backend
-    // agent.pause); never a project's PM, which gives the work. Delete for its person alone (Swarm v4: only its person stops an
+    // agent.pause); never a project's PM, which gives the work. Remove for its person alone, by the rule closing its last view has (Swarm v4: only its person stops an
     // agent). A project's PM stays until its project goes.
     final mine = agent.contributorId == controller.accountId;
     final pausable =
@@ -626,10 +626,10 @@ class ProjectSidebar extends StatelessWidget {
                 ),
               if (mine)
                 AppMenuItem(
-                  label: 'Delete',
+                  label: 'Remove',
                   detail: kept,
                   leadingSlot: false,
-                  onPressed: kept == null ? () => close('delete') : null,
+                  onPressed: kept == null ? () => close('remove') : null,
                 ),
             ],
           );
@@ -643,8 +643,8 @@ class ProjectSidebar extends StatelessWidget {
               ScaffoldMessenger.maybeOf(context)
                   ?.showSnackBar(SnackBar(content: Text(failed)));
             }
-          } else if (choice == 'delete') {
-            await deleteSwarmAgent(context, controller, agent, name, app: app);
+          } else if (choice == 'remove') {
+            await removeSwarmAgent(context, controller, agent, name, app: app);
           }
         },
         child: row,
