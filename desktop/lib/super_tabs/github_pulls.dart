@@ -87,11 +87,6 @@ class SwarmPull {
     r'(?<![\w-])(READ-OK|HOLD)\s+([0-9a-f]{7,40})(?![0-9a-f])',
   );
 
-  /// The name a comment is signed with in its first words ("Juno, 14:20, to **Pip**: …").
-  static final _signature = RegExp(
-    r'^\W*([A-Za-z][\w-]*(?: [A-Za-z][\w-]*)?)\**\s*[,:(]',
-  );
-
   /// What a first line opens with that is no reader's name: a verdict, or a reader's shorthand for one.
   static final _notAName = RegExp(r'^(?:READ-OK|HOLD|LGTM)\b');
 
@@ -122,12 +117,6 @@ class SwarmPull {
           swarmSameKey(agent.displayName ?? agent.name),
     };
   }
-
-  /// Who may give a verdict: the repository's people, as GitHub names them.
-  static const _team = {'OWNER', 'MEMBER', 'COLLABORATOR'};
-
-  /// Harness's own posts, which say what it merged and never judge.
-  static const _harness = 'Harness';
 
   /// A pull request as the GraphQL read in [SwarmGitHub.pulls] answers it (its default branch beside it), or null for
   /// anything else.
@@ -268,7 +257,10 @@ class SwarmPull {
     final last =
         <String, ({String verdict, String sha, String at, bool own})>{};
     for (final comment in comments) {
-      if (!_team.contains(comment['authorAssociation'])) continue;
+      // Only the repository's people may give a verdict.
+      if (!SwarmSignature.team.contains(comment['authorAssociation'])) {
+        continue;
+      }
       final text = comment['body'] is String ? comment['body'] as String : '';
       final first = text
           .split('\n')
@@ -280,7 +272,7 @@ class SwarmPull {
       final login = author is Map && author['login'] is String
           ? author['login'] as String
           : '';
-      var signed = _signature.firstMatch(first)?.group(1);
+      var signed = SwarmSignature.read(first)?.name;
       // A verdict's own words ("READ-OK f6edb44: looks good") are no name.
       if (signed != null && _notAName.hasMatch(signed)) signed = null;
       // Every agent of a person posts as that person's login, which opened the pull request: from it, only a teammate's
@@ -292,7 +284,8 @@ class SwarmPull {
               team == null ||
               !team.map(swarmSameKey).contains(swarmSameKey(signed)));
       final reader = own ? login : signed ?? login;
-      if (reader.isEmpty || reader == _harness) continue;
+      // Harness's own posts say what it merged and never judge.
+      if (reader.isEmpty || reader == SwarmSignature.harness) continue;
       final at = comment['createdAt'] is String
           ? comment['createdAt'] as String
           : '';

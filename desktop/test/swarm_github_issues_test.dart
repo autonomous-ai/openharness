@@ -140,6 +140,7 @@ void main() {
 
   Map<String, Object?> comment(int n, String who, String body) => {
     'author': {'login': who},
+    'authorAssociation': 'MEMBER',
     'body': body,
     'createdAt': '2026-11-09T0$n:00:00Z',
     'url': 'u#$n',
@@ -184,7 +185,8 @@ void main() {
         comment(3, 'deehw', '**First builder**, 09:4x: mine.'),
         {
           'author': {'login': 'leo'},
-          'body': 'no signature here',
+          'authorAssociation': 'NONE',
+          'body': 'Migrate: not mine to sign',
         },
       ], earlier: 'cursor-1');
     });
@@ -197,12 +199,64 @@ void main() {
     expect(result.createdAt, DateTime.utc(2026, 11, 9, 1));
     expect(result.issue.comments, 3);
     expect(result.earlier, 'cursor-1');
-    expect(result.comments.map((c) => c.signedBy), [
-      'Migrate',
+    // Signed by the Swarm's agents, however they are spelled there; "leo" is not one of the repository's people.
+    const agents = ['migrate', 'First builder'];
+    expect(result.comments.map((c) => c.signedAmong(agents)?.name), [
+      'migrate',
       'First builder',
       null,
     ]);
+    expect(result.comments.map((c) => c.signedAmong(agents)?.text), [
+      'done.',
+      'mine.',
+      null,
+    ]);
     expect(result.comments.map((c) => c.author), ['69tc', 'deehw', 'leo']);
+  });
+
+  // #4222: one reader of an agent's signature for the task's chat and the pull request's reads.
+  test('reads a signature: the name, and the post after it', () {
+    (String, String)? read(String body) => switch (SwarmSignature.read(body)) {
+      final signed? => (signed.name, signed.text),
+      null => null,
+    };
+    expect(read('Devon: found while handing out #4208.'), (
+      'Devon',
+      'found while handing out #4208.',
+    ));
+    expect(read('Lennox, 16:52: taken by Lennox'), (
+      'Lennox',
+      'taken by Lennox',
+    ));
+    expect(read('Harness, 17:15, to **Kiri**: please read this.'), (
+      'Harness',
+      'please read this.',
+    ));
+    expect(read('Migrate, 09:3x GMT+7: done.'), ('Migrate', 'done.'));
+    expect(read('**Faye** (PM): READ-OK f6edb44'), ('Faye', 'READ-OK f6edb44'));
+    expect(read('First builder, 10:05: READ-OK f6edb44\nmore'), (
+      'First builder',
+      'READ-OK f6edb44\nmore',
+    ));
+    // The words alone: whose name it is, is its caller's to say.
+    expect(read('Note: both rows are in the sheet.')?.$1, 'Note');
+    expect(read('no signature here'), isNull);
+    expect(read('Three plain words: no name'), isNull);
+    expect(read('READ-OK f6edb44'), isNull);
+  });
+
+  test('a signature counts only from the repository\'s people, and only an agent\'s or Harness\'s', () {
+    SwarmSignature? signed(String body, {bool fromTeam = true}) =>
+        SwarmIssueComment(
+          body: body,
+          fromTeam: fromTeam,
+        ).signedAmong(const ['Devon', 'First builder']);
+    expect(signed('devon: lower case')?.name, 'Devon');
+    expect(signed('first-builder, 09:40: as its label')?.name, 'First builder');
+    expect(signed('Harness, 17:15: for Devon')?.name, 'Harness');
+    expect(signed('Note: both rows are in the sheet.'), isNull);
+    expect(signed('Lennox: another Swarm\'s'), isNull);
+    expect(signed('Devon: an outsider\'s', fromTeam: false), isNull);
   });
 
   test('reads the page of comments before a cursor, and where the page before that starts', () async {

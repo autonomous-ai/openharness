@@ -96,8 +96,44 @@ class SwarmIssue {
 /// What a post in a GitHub chat is: a comment, or on a pull request a review, a line comment, or its merge.
 enum SwarmTalk { comment, review, line, merged }
 
-/// One comment on an issue or a pull request: an agent's post, signed by its name in its first words ("Migrate, 09:3x GMT+7:
-/// …"), as lampOS's builders sign theirs, under its person's GitHub account. On a pull request, also a review with its verdict,
+/// An agent's signature, the first words of a post it writes on GitHub with its person's login: "Devon: …" as the Swarm's
+/// basics ask, Harness's older "Lennox, 16:52, to **Pip**: …", and "**Faye** (PM): …". The one reader of it: the task's and
+/// pull request's chats name their posts by it, and a pull request's reads are counted by it ([SwarmPull.standingOf]), as
+/// the merger reads one (cli superTabs/githubMerge.ts).
+class SwarmSignature {
+  const SwarmSignature(this.name, this.text);
+
+  /// The name it is signed with, as written.
+  final String name;
+
+  /// The post after its signature.
+  final String text;
+
+  /// Harness's own name on what it posts.
+  static const harness = 'Harness';
+
+  /// The repository's people, as GitHub names them: only their logins post for the Swarm's agents.
+  static const team = {'OWNER', 'MEMBER', 'COLLABORATOR'};
+
+  /// One or two plain words, then what Harness adds (a role in brackets, the time, who it is to), then a colon or a comma.
+  static final _pattern = RegExp(
+    r'^\W*([A-Za-z][\w-]*(?: [A-Za-z][\w-]*)?)\**\s*'
+    r'(?:(?:\([^)\n]*\)\s*)?(?:,\s*\d{1,2}:[\dx]{2}(?: [A-Z]{2,4}(?:[+-]\d{1,2})?)?)?'
+    r'(?:,\s*to\s+\**[^:*\n]+\**)?\s*[:,]|\([^)\n]*\))\s*',
+  );
+
+  /// The signature [body] opens with, by its words alone: whether its name is anyone's is the caller's to say. Null when
+  /// it opens with none.
+  static SwarmSignature? read(String body) {
+    final text = body.trimLeft(), match = _pattern.firstMatch(text);
+    return match == null
+        ? null
+        : SwarmSignature(match.group(1)!, text.substring(match.end));
+  }
+}
+
+/// One comment on an issue or a pull request: an agent's post, signed by its name in its first words ("Devon: …") under its
+/// person's GitHub account. On a pull request, also a review with its verdict,
 /// a line comment with its place, or when it merged ([talk]).
 class SwarmIssueComment {
   const SwarmIssueComment({
@@ -109,6 +145,7 @@ class SwarmIssueComment {
     this.verdict,
     this.path,
     this.line,
+    this.fromTeam = false,
   });
 
   final String body;
@@ -117,6 +154,9 @@ class SwarmIssueComment {
   final String? url;
   final SwarmTalk talk;
 
+  /// Its login is one of the repository's people's ([SwarmSignature.team]).
+  final bool fromTeam;
+
   /// A review's verdict in GitHub's words: `APPROVED`, `CHANGES_REQUESTED`, `COMMENTED`.
   final String? verdict;
 
@@ -124,11 +164,18 @@ class SwarmIssueComment {
   final String? path;
   final int? line;
 
-  /// The name it is signed with: the words before its first comma, when they read as a name. Null otherwise.
-  String? get signedBy {
-    final match = RegExp(r'^\**([A-Z][\w-]*(?: [A-Za-z][\w-]*)?)\**,')
-        .firstMatch(body.trimLeft());
-    return match?.group(1);
+  /// Its signature, named as the Swarm names that agent: only on a post from one of the repository's people, and only
+  /// the name of one of [agents], the Swarm's, or Harness. "Note: …" and an outsider's "Devon: …" are no signature.
+  SwarmSignature? signedAmong(Iterable<String> agents) {
+    final signature = fromTeam ? SwarmSignature.read(body) : null;
+    if (signature == null) return null;
+    final key = swarmSameKey(signature.name);
+    for (final agent in [...agents, SwarmSignature.harness]) {
+      if (swarmSameKey(agent) == key) {
+        return SwarmSignature(agent, signature.text);
+      }
+    }
+    return null;
   }
 }
 
@@ -145,7 +192,11 @@ class SwarmIssueThread {
     this.branch,
     this.mergedAt,
     this.reviews = const [],
+    this.fromTeam = false,
   });
+
+  /// Whoever opened it is one of the repository's people ([SwarmSignature.team]): its text may be signed by an agent.
+  final bool fromTeam;
 
   final SwarmIssue issue;
   final String body;
@@ -536,6 +587,7 @@ class SwarmGitHub {
           : null,
       mergedAt: mergedAt,
       reviews: pull ? _reviewsOf(map['reviews'], mergedAt) : const [],
+      fromTeam: _fromTeam(map),
     );
     final key = '$repository#$number';
     _threads.remove(key);
@@ -626,6 +678,9 @@ class SwarmGitHub {
     return (repository.substring(0, at), repository.substring(at + 1));
   }
 
+  static bool _fromTeam(Map<Object?, Object?> row) =>
+      SwarmSignature.team.contains(row['authorAssociation']);
+
   static ({List<SwarmIssueComment> comments, String? earlier}) _commentsOf(
     Object? value,
   ) {
@@ -639,6 +694,7 @@ class SwarmGitHub {
               author: _login(row['author']),
               createdAt: _time(row['createdAt']),
               url: row['url'] is String ? row['url'] as String : null,
+              fromTeam: _fromTeam(row),
             ),
       ],
       earlier: info is Map && info['hasPreviousPage'] == true
@@ -668,6 +724,7 @@ class SwarmGitHub {
               createdAt: _time(row['createdAt']),
               url: row['url'] is String ? row['url'] as String : null,
               talk: SwarmTalk.line,
+              fromTeam: _fromTeam(row),
               path: row['path'] is String ? row['path'] as String : null,
               line: row['line'] is int ? row['line'] as int : null,
             ),
@@ -682,6 +739,7 @@ class SwarmGitHub {
             url: review['url'] is String ? review['url'] as String : null,
             talk: SwarmTalk.review,
             verdict: verdict,
+            fromTeam: _fromTeam(review),
           ),
         );
       }
@@ -754,22 +812,24 @@ class SwarmGitHub {
       'comments(last:30){nodes{body createdAt authorAssociation author{login}}}}}}}';
 
   static const _commentFields =
-      'pageInfo{hasPreviousPage startCursor} nodes{body createdAt url author{login}}';
+      'pageInfo{hasPreviousPage startCursor} '
+      'nodes{body createdAt url authorAssociation author{login}}';
 
   static const _threadQuery =
       r'query($owner:String!,$name:String!,$number:Int!,$last:Int!){'
       r'repository(owner:$owner,name:$name){issue(number:$number){'
-      '$_issueFields body state '
+      '$_issueFields body state authorAssociation '
       'comments(last:\$last){totalCount $_commentFields}}}}';
 
-  static const _talkFields = 'body createdAt url author{login}';
+  static const _talkFields =
+      'body createdAt url authorAssociation author{login}';
 
   static const _pullThreadQuery =
       r'query($owner:String!,$name:String!,$number:Int!,$last:Int!){'
       r'repository(owner:$owner,name:$name){pullRequest(number:$number){'
-      '$_issueFields body state mergedAt headRefName '
+      '$_issueFields body state authorAssociation mergedAt headRefName '
       'comments(last:\$last){totalCount $_commentFields} '
-      'reviews(last:$pullReviews){nodes{state submittedAt body url author{login} '
+      'reviews(last:$pullReviews){nodes{state submittedAt body url authorAssociation author{login} '
       'comments(first:$reviewLines){nodes{$_talkFields path line}}}}}}}';
 
   static const _pullEarlierQuery =
