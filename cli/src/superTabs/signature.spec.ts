@@ -30,6 +30,43 @@ describe('an agent\'s post without its own signature', () => {
       expect(unsigned(text, names), text).toBe(left)
     }
   })
+  // anh Dee, 2026-11-12, of Lennox's "@Devon Lennox: Flutter 3.47.2 … is now on Mac 3": "why does lenox put 'Lenox:' there. it's
+  // awkward. no human conversation is like that on slack". The signature came after the person it was addressed to.
+  it('leaves out its signature after the mentions a post opens with, and keeps the mentions', () => {
+    for (const [text, names, left] of [
+      ['@Devon Lennox: Flutter 3.47.2 is now on Mac 3.', ['Lennox'], '@Devon Flutter 3.47.2 is now on Mac 3.'],
+      ['@Devon @Cy Lennox, 16:25: ready for #4208.', ['Lennox'], '@Devon @Cy ready for #4208.'],
+      ['@Devon **Lennox:** ready.', ['Lennox'], '@Devon ready.'],
+      ['  @Devon   Lennox: ready.', ['Lennox'], '@Devon ready.'],
+      ['@Devon\n\nLennox: ready.\n\nSecond.', ['Lennox'], '@Devon ready.\n\nSecond.'],
+      // What follows opens a block: the mentions keep a line of their own, or it no longer renders (review of #4210), as the
+      // server joins tags and a post (backend mentions.ts withTags).
+      ['@Devon Lennox:\n\n- one\n- two', ['Lennox'], '@Devon\n\n- one\n- two'],
+      ['@Devon Lennox:\n```\nnpm test\n```', ['Lennox'], '@Devon\n\n```\nnpm test\n```'],
+      ['@Devon Lennox:\n## Plan\nship', ['Lennox'], '@Devon\n\n## Plan\nship'],
+      ['@Devon Lennox:\n| a | b |\n|---|---|', ['Lennox'], '@Devon\n\n| a | b |\n|---|---|'],
+      ['@Devon Lennox:\n\n    npm test\n    npm run build', ['Lennox'], '@Devon\n\n    npm test\n    npm run build'],
+      ['@Devon Lennox:\n> quoted', ['Lennox'], '@Devon\n\n> quoted'],
+      ['@Devon Lennox:\n1. one\n2. two', ['Lennox'], '@Devon\n\n1. one\n2. two'],
+      // Spaces on the signature's own line are no indent: the text after them is a paragraph.
+      ['@Devon Lennox:     ready', ['Lennox'], '@Devon ready'],
+      // A block marker on the signature's own line was inline text, and stays so (the third review of #4210).
+      ['@Devon Lennox: 1. merged #4208, 2. next', ['Lennox'], '@Devon 1. merged #4208, 2. next'],
+      ['@Devon Lennox: > 90% pass now', ['Lennox'], '@Devon > 90% pass now'],
+      ['@Devon Lennox: # of tests is 5', ['Lennox'], '@Devon # of tests is 5'],
+    ] as const) {
+      expect(unsigned(text, names), text).toBe(left)
+    }
+    // A mention then its name as a word, someone else's name, or nothing after it: no signature.
+    for (const [text, names] of [
+      ['@Devon Lennox, can you read #12?', ['Lennox']],
+      ['@Devon Cy: done.', ['Lennox']],
+      ['@Devon Lennox:', ['Lennox']],
+      ['@Lennox: done.', ['Lennox']],
+    ] as const) {
+      expect(unsigned(text, names), text).toBe(text)
+    }
+  })
   it('keeps a post that only starts with its name, someone else\'s name, or nothing after the signature', () => {
     for (const [text, names] of [
       ['Ray, can you read #12?', ['Ray']],
