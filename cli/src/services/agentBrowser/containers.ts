@@ -1,7 +1,8 @@
 /**
  * One container per agent, with its profile volume, its own network and its proxy secret, all named
- * `harness-browser-<agentId>` (the secret `harness-proxy-<agentId>`) and labelled with this daemon, so a dev or test
- * daemon on the same Podman never touches another's (spec § The container).
+ * `harness-browser-<profile>` (the secret `harness-proxy-<profile>`), and labelled with its agent and this daemon, so a
+ * dev or test daemon on the same Podman never touches another's (spec § The container). The profile is the agent's id
+ * until its browser moves with its pane to another agent (decision 19): the names stay, the label is the new agent's.
  */
 import { PodmanError, type Podman } from './podman.js'
 import { settingsHash, type BrowserSettings } from './settings.js'
@@ -28,11 +29,16 @@ const LIMITS = [
 // Podman's own error texts for a thing that is not there (libpod define.ErrNoSuch*, ErrNoSuchNetwork).
 const GONE = /no such (container|volume|secret)|network not found/i
 
-// Podman lists `Labels: null` for a container with none.
-interface Listed { Image: string; State: string; ExitCode: number; Labels: Record<string, string> | null }
+// Another container holds the name a new one is made under (containers/storage's ErrDuplicateName, as Podman words
+// it: `the container name "…" is already in use by …`).
+const IN_USE = /already in use/i
 
-const nameOf = (agentId: string) => `harness-browser-${agentId}`
-const secretOf = (agentId: string) => `harness-proxy-${agentId}`
+// Podman lists `Labels: null` for a container with none.
+interface Listed { Names: string[]; Image: string; State: string; ExitCode: number; Labels: Record<string, string> | null }
+
+const NAME = 'harness-browser-'
+const nameOf = (profile: string) => `${NAME}${profile}`
+const secretOf = (profile: string) => `harness-proxy-${profile}`
 
 async function unlessGone(work: Promise<unknown>): Promise<void> {
   try {
@@ -54,13 +60,13 @@ export class Containers {
    * `secretId` is the proxy's random id, which changes with its password ('' without a proxy). A start that fails removes what it made, so
    * nothing it left runs, holds a network or keeps the password in Podman.
    */
-  async start(agentId: string, image: string, settings: BrowserSettings, timeZone: string, secretId: string): Promise<{ limitsDropped: string[] }> {
+  async start(agentId: string, profile: string, image: string, settings: BrowserSettings, timeZone: string, secretId: string): Promise<{ limitsDropped: string[] }> {
     const labels = ['--label', `harness.agent=${agentId}`, '--label', `harness.daemon=${this.daemonId}`]
-    await this.podman.run(['network', 'create', '--ignore', ...labels, nameOf(agentId)])
+    await this.podman.run(['network', 'create', '--ignore', ...labels, nameOf(profile)])
     try {
-      return await this.create(agentId, image, settings, timeZone, secretId, labels)
+      return await this.create(agentId, profile, image, settings, timeZone, secretId, labels)
     } catch (error) {
-      await this.stop(agentId).catch((cleanup: unknown) => {
+      await this.stop(profile).catch((cleanup: unknown) => {
         this.log(`agent browser ${agentId}: a failed start was not cleaned up: ${(cleanup as Error).message}`)
       })
       throw error
@@ -68,16 +74,16 @@ export class Containers {
   }
 
   /** The container goes with its network: Podman will not remove a network any container, even a stopped one, uses. */
-  async stop(agentId: string): Promise<void> {
-    await this.removeContainer(nameOf(agentId))
-    await unlessGone(this.podman.run(['network', 'rm', nameOf(agentId)]))
+  async stop(profile: string): Promise<void> {
+    await this.removeContainer(nameOf(profile))
+    await unlessGone(this.podman.run(['network', 'rm', nameOf(profile)]))
     // Every start makes the secret again, so the password is in Podman only while its container is.
-    await unlessGone(this.podman.run(['secret', 'rm', secretOf(agentId)]))
+    await unlessGone(this.podman.run(['secret', 'rm', secretOf(profile)]))
   }
 
-  async remove(agentId: string): Promise<void> {
-    await this.stop(agentId)
-    await unlessGone(this.podman.run(['volume', 'rm', nameOf(agentId)]))
+  async remove(profile: string): Promise<void> {
+    await this.stop(profile)
+    await unlessGone(this.podman.run(['volume', 'rm', nameOf(profile)]))
   }
 
   /**
@@ -85,11 +91,13 @@ export class Containers {
    * exit address creates the container again too. The proxy's random id stands in for its password: a hash of the
    * password on argv and a label could be tried against guesses (review, 2026-11-10).
    */
-  private async create(agentId: string, image: string, settings: BrowserSettings, timeZone: string, secretId: string, labels: string[]): Promise<{ limitsDropped: string[] }> {
-    const name = nameOf(agentId)
+  private async create(agentId: string, profile: string, image: string, settings: BrowserSettings, timeZone: string, secretId: string, labels: string[]): Promise<{ limitsDropped: string[] }> {
+    const name = nameOf(profile)
     await this.podman.run(['volume', 'create', '--ignore', ...labels, name])
     const hash = settingsHash({ ...settings, timeZone, proxy: settings.proxy && { ...settings.proxy, password: secretId } })
-    const existing = await this.find(agentId)
+    // Only a container of this name is this browser: the agent's own under another name, which a move's failed stop
+    // left, is not.
+    const existing = await this.find(agentId, name)
     // A locally built image is listed under Podman's `localhost/` prefix.
     if (existing && [image, `localhost/${image}`].includes(existing.Image) && existing.Labels?.['harness.settings'] === hash) {
       if (existing.State !== 'running') await this.podman.run(['start', name])
@@ -98,12 +106,12 @@ export class Containers {
     if (existing) await this.removeContainer(name)
     if (settings.proxy) {
       // Removed, then made: `secret create --replace` came in Podman 4.7, and 4.6 is supported.
-      await unlessGone(this.podman.run(['secret', 'rm', secretOf(agentId)]))
+      await unlessGone(this.podman.run(['secret', 'rm', secretOf(profile)]))
       // The password goes on stdin only: never an argument or an environment variable.
-      await this.podman.run(['secret', 'create', secretOf(agentId), '-'], { stdin: JSON.stringify(settings.proxy) })
+      await this.podman.run(['secret', 'create', secretOf(profile), '-'], { stdin: JSON.stringify(settings.proxy) })
     } else {
       // A proxy taken out of the settings must not leave its password in Podman.
-      await unlessGone(this.podman.run(['secret', 'rm', secretOf(agentId)]))
+      await unlessGone(this.podman.run(['secret', 'rm', secretOf(profile)]))
     }
     const rest = [
       '--name', name, ...labels, '--label', `harness.settings=${hash}`,
@@ -114,13 +122,14 @@ export class Containers {
       '--tmpfs', '/var/tmp:rw,size=16m', '--tmpfs', '/run:rw,size=16m',
       '-v', `${name}:${PROFILE}`,
       '-e', `TZ=${timeZone}`, '-e', `ACCEPT_LANG=${settings.languages}`, '-e', `SCREEN=${settings.screen}`,
-      ...(settings.proxy ? ['--secret', `${secretOf(agentId)},target=harness-proxy`, '-e', 'PROXY=1'] : []),
+      ...(settings.proxy ? ['--secret', `${secretOf(profile)},target=harness-proxy`, '-e', 'PROXY=1'] : []),
       ...(settings.device ? ['-e', `DEVICE=${JSON.stringify(settings.device)}`] : []),
       image,
     ]
     const kept: Array<(typeof LIMITS)[number]> = [...LIMITS]
     const limitsDropped: string[] = []
-    // Each refusal drops one limit, so this ends.
+    let inUseRemoved = false
+    // Each refusal drops one limit, and a name in use is removed once, so this ends.
     for (;;) {
       try {
         await this.podman.run(['create', ...kept.flatMap(limit => limit.args), '--shm-size', '1g', ...rest])
@@ -128,8 +137,15 @@ export class Containers {
         await this.podman.run(['start', name])
         return { limitsDropped }
       } catch (error) {
-        // The agent id and the image are names, not Podman's words: an agent called "cpu-bot" is no cpu refusal.
-        const said = (error as Error).message.split(agentId).join('<agent>').split(image).join('<image>')
+        // The agent id, the profile and the image are names, not Podman's words: an agent called "cpu-bot" is no cpu
+        // refusal.
+        const said = (error as Error).message.split(agentId).join('<agent>').split(profile).join('<profile>').split(image).join('<image>')
+        // The previous agent's container, which its stop at a move left under this name and that agent's label.
+        if (!inUseRemoved && IN_USE.test(said)) {
+          inUseRemoved = true
+          await this.removeContainer(name)
+          continue
+        }
         const limit = kept.find(candidate => candidate.refused.test(said))
         if (!limit) throw error
         await this.removeContainer(name)
@@ -140,10 +156,14 @@ export class Containers {
     }
   }
 
-  /** Volumes are never swept: an unlisted one may still hold a person's login. */
+  /**
+   * Volumes are never swept: an unlisted one may still hold a person's login. A stray is stopped by the name Podman
+   * lists for it, never one made from its label: after a move, `harness-browser-<its agent>` can be another agent's
+   * running browser.
+   */
   async sweep(listedAgentIds: Set<string>): Promise<number> {
-    const strays = (await this.mine(['-a'])).map(container => container.Labels!['harness.agent']!).filter(agentId => !listedAgentIds.has(agentId))
-    for (const agentId of strays) await this.stop(agentId)
+    const strays = (await this.mine(['-a'])).filter(container => !listedAgentIds.has(container.Labels!['harness.agent']!))
+    for (const stray of strays) await this.stop(stray.Names[0]!.slice(NAME.length))
     return strays.length
   }
 
@@ -151,8 +171,8 @@ export class Containers {
     return (await this.mine([])).filter(container => container.State === 'running').map(container => container.Labels!['harness.agent']!)
   }
 
-  async ready(agentId: string): Promise<boolean> {
-    return await this.podman.run(['exec', nameOf(agentId), 'test', '-f', READY_MARKER]).then(() => true, () => false)
+  async ready(profile: string): Promise<boolean> {
+    return await this.podman.run(['exec', nameOf(profile), 'test', '-f', READY_MARKER]).then(() => true, () => false)
   }
 
   /** null while it runs, and when there is none. */
@@ -161,16 +181,18 @@ export class Containers {
     return !container || container.State === 'running' ? null : container.ExitCode
   }
 
-  execArgs(agentId: string, cmd: string[]): string[] {
-    return ['exec', '-i', nameOf(agentId), ...cmd]
+  execArgs(profile: string, cmd: string[]): string[] {
+    return ['exec', '-i', nameOf(profile), ...cmd]
   }
 
   private async removeContainer(name: string): Promise<void> {
     await unlessGone(this.podman.run(['rm', '--force', '--time', STOP_SECONDS, name]))
   }
 
-  private async find(agentId: string): Promise<Listed | undefined> {
-    return (await this.list(['-a', '--filter', `label=harness.agent=${agentId}`])).find(container => container.Labels?.['harness.agent'] === agentId)
+  /** The agent's container, by its label; with [name], only one of that name. */
+  private async find(agentId: string, name?: string): Promise<Listed | undefined> {
+    return (await this.list(['-a', '--filter', `label=harness.agent=${agentId}`]))
+      .find(container => container.Labels?.['harness.agent'] === agentId && (name === undefined || container.Names[0] === name))
   }
 
   /** The label is checked here as well as filtered by Podman: another daemon's container is never ours to touch. */

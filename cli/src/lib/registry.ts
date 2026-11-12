@@ -63,6 +63,7 @@ import { externalReservations, externalResumePending, externalResumeIds, parseEx
 import type { StartedBy } from './agentAttribution.js'
 import { PTY_HOST_INSTANCE } from './ptyHost/instance.js'
 import { isKittyGraphicsCommand } from './terminalTitle.js'
+import { sid } from './log.js'
 
 export type { ProcessIdentity } from './terminalTypes.js'
 
@@ -191,10 +192,18 @@ export interface RegisteredSession {
    */
   launchArgs?: string[]
   /**
-   * Created with Browser ticked: the agent browser service (services/agentBrowser.ts) runs a sandboxed Chrome beside it.
-   * Chosen once at creation and carried forward, like `codexHome`. Absent for an agent without one.
+   * Its Browser is on: the agent browser service (services/agentBrowser.ts) runs a sandboxed Chrome beside it while it
+   * runs. Set by its person's Start (or an older Desktop's create), cleared only by their Stop (`setBrowser`), and
+   * carried through a stop and a resume. Absent while its Browser is off.
    */
   browser?: true
+  /**
+   * On the shell an exit left (`releaseEngine(id, true)`): the agent whose engine ended in this pane. The pane's next
+   * agent takes that agent's browser (decision 19). A search of saved agents by pane is no proof of this: pane ids
+   * restart with every tmux server. Gone once an engine is adopted here, and once that agent runs again under its own
+   * id. Never in a saved record.
+   */
+  previousAgentId?: string
   /**
    * The CODEX_HOME folder this agent was launched against, if one was chosen instead of `~/.codex`.
    * Codex only. Unlike `grid`, this is chosen once at creation and never re-derived from the live
@@ -228,6 +237,12 @@ export interface RegisteredSession {
    * usage and checkpoint are read from.
    */
   openclawStateDir?: string | null
+  /**
+   * The first task its launch carried, for an engine that is handed it by typing rather than in argv (OpenClaw), until
+   * it is typed into the pane. Saved with the row, so a daemon restart before the engine is ready still types it; taken
+   * off durably before it is typed (`takeFirstTask`), so it is typed at most once. Never on the agent's frame.
+   */
+  firstTask?: string
   /**
    * The domain-specific harness this agent was created as (`autonomous/copper`), or null for a plain
    * engine. NOT a second engine: `engine` stays the base (`claude`, `codex`, …) and every normalizer,
@@ -314,6 +329,12 @@ export interface RegisteredSession {
   tmuxPane: string
   source: string | null
   title: string | null
+  /**
+   * The title its engine gave its conversation from a line typed for the agent alone (a quiet delivery,
+   * core/agents/quietTitles.ts), as `sessionDisplayTitle` reads one: never its name (`updateTitle`). Kept on the row because the
+   * engine shows it again after a restart or a resume (Codex keeps the first name it gave a thread). Absent until there is one.
+   */
+  quietTitle?: string
   model: string | null
   cliVersion: string | null
   processIdentity: ProcessIdentity | null
@@ -720,7 +741,7 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
   // Taken out of the spread and put back only when it is a real moment: the spread would otherwise
   // carry a hand-edited string or a negative number straight into the frame's `toISOString()`.
   // `forkedFrom` is out too, so an invalid one is dropped rather than spread back in as-is.
-  const { identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, admissionHold: _admission, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, launchModel: rawLaunchModel, externalResume: _externalResume, startedBy: rawStartedBy, parentAgentId: rawParentAgentId, swarmSkill: rawSwarmSkill, launchArgs: rawLaunchArgs, browser: rawBrowser, ...rest } = row
+  const { identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, admissionHold: _admission, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, launchModel: rawLaunchModel, externalResume: _externalResume, startedBy: rawStartedBy, parentAgentId: rawParentAgentId, swarmSkill: rawSwarmSkill, launchArgs: rawLaunchArgs, browser: rawBrowser, quietTitle: rawQuietTitle, firstTask: rawFirstTask, ...rest } = row
   const lastOpenedAt = normalizedOpenedAt(rawOpenedAt)
   // Out of the spread for the same reason: a half-formed record is dropped, never relaunched with.
   const scmLaunch = parseScmLaunchRecord(rawScmLaunch)
@@ -729,14 +750,17 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
   // review), and is kept as this release keeps it (project instructions, phase 4).
   const swarmSkill = parseSwarmSkill(rawSwarmSkill)
   const launchArgs = storedLaunchArgs(rawLaunchArgs)
+  const firstTask = storedFirstTask(rawFirstTask)
   return {
     ...rest,
     ...(externalResume ? { externalResume } : {}),
+    ...(firstTask ? { firstTask } : {}),
     ...(scmLaunch ? { scmLaunch } : {}),
     ...(launchModel ? { launchModel } : {}),
     ...(swarmSkill ? { swarmSkill } : {}),
     ...(launchArgs ? { launchArgs } : {}),
     ...(rawBrowser === true ? { browser: true as const } : {}),
+    ...(typeof rawQuietTitle === 'string' && rawQuietTitle ? { quietTitle: rawQuietTitle } : {}),
     ...(normalizedClosePlan(rawClosePlan) ? { closePlan: normalizedClosePlan(rawClosePlan)! } : {}),
     schemaVersion: 2,
     active,
@@ -782,6 +806,16 @@ export function parentAgentIdOf(value: unknown): string | null {
 /** Only a non-empty array of strings is a saved flag list; anything else on disk is dropped, never launched with. */
 function storedLaunchArgs(value: unknown): string[] | undefined {
   return Array.isArray(value) && value.length > 0 && value.every(w => typeof w === 'string') ? [...value] : undefined
+}
+
+/** Only a non-empty string is a saved first task; anything else on disk is dropped, never typed into a pane. */
+function storedFirstTask(value: unknown): string | undefined {
+  return typeof value === 'string' && value ? value : undefined
+}
+
+/** Says a first task is on the agent's row, by the agent's short id only: the task is the person's words. */
+function firstTaskKept(agentId: string): void {
+  console.log(`[agent] ${sid(agentId)} first task kept`)
 }
 
 /** `parentAgentId` as a row keeps it: only beside `startedBy: 'agent'`, and only an agent id. */
@@ -1426,6 +1460,7 @@ class Registry {
           claudeHome: typeof raw?.claudeHome === 'string' && raw.claudeHome ? raw.claudeHome : null,
           hermesHome: typeof raw?.hermesHome === 'string' && raw.hermesHome ? raw.hermesHome : null,
           ...(typeof raw?.openclawStateDir === 'string' && raw.openclawStateDir ? { openclawStateDir: raw.openclawStateDir } : {}),
+          ...(storedFirstTask(raw.firstTask) ? { firstTask: storedFirstTask(raw.firstTask) } : {}),
           ...normalizedForkedFrom((raw as { forkedFrom?: unknown }).forkedFrom),
           dsh: normalizedDshId((raw as { dsh?: unknown }).dsh),
           dshRuntime: typeof raw.dshRuntime === 'string' && raw.dshRuntime ? raw.dshRuntime : null,
@@ -1436,6 +1471,8 @@ class Registry {
           ...(rawScmLaunch ? { scmLaunch: rawScmLaunch } : {}),
           ...(storedLaunchArgs(raw.launchArgs) ? { launchArgs: storedLaunchArgs(raw.launchArgs) } : {}),
           ...(raw.browser === true ? { browser: true as const } : {}),
+          ...(typeof raw.quietTitle === 'string' && raw.quietTitle ? { quietTitle: raw.quietTitle } : {}),
+          ...(engine === 'terminal' && parentAgentIdOf(raw.previousAgentId) ? { previousAgentId: raw.previousAgentId as string } : {}),
           ...(storedLaunchModel((raw as { launchModel?: unknown }).launchModel) ? { launchModel: storedLaunchModel((raw as { launchModel?: unknown }).launchModel) } : {}),
           // ⚠️ Rehydrated EXPLICITLY, like every field above it. A row is rebuilt from this list on
           // load, so a field added to the type and the setter but not to this list is written to
@@ -1611,7 +1648,7 @@ class Registry {
        * state keys on the sessionId, and the caller needs both to finish the
        * removal it was never told to do.
        */
-      evicted: { agentId: string; sessionId: string } | null
+      evicted: { agentId: string; sessionId: string; browser?: true } | null
     } | null {
 
     if (this.writeBlocked) return null
@@ -1670,7 +1707,7 @@ class Registry {
     }
 
     const agentId = input.agentId || randomUUID()
-    let evicted: { agentId: string; sessionId: string } | null = null
+    let evicted: { agentId: string; sessionId: string; browser?: true } | null = null
 
     for (const runtime of runtimes) {
       const otherId = this.runtimeIndex.get(terminalRouteKey(runtime))
@@ -1686,7 +1723,7 @@ class Registry {
       // Only when it has nothing left. An agent that still owns another pane is
       // alive and simply narrower; it must not be announced as deleted.
       if (!other.runtimes.length) {
-        evicted ??= { agentId: other.agentId, sessionId: other.sessionId }
+        evicted ??= { agentId: other.agentId, sessionId: other.sessionId, ...(other.browser ? { browser: true as const } : {}) }
       }
 
     }
@@ -1770,8 +1807,10 @@ class Registry {
     parentAgentId?: string | null
     /** The guest it is started for — see RegisteredSession.guest. */
     guest?: string | null
-    /** Created with Browser ticked — see RegisteredSession.browser. */
+    /** Its Browser is on from the start (an older Desktop's create) — see RegisteredSession.browser. */
     browser?: boolean
+    /** The first task to type once the engine is ready — see RegisteredSession.firstTask. */
+    firstTask?: string
   }): RegisteredSession | null {
     if (this.writeBlocked) return null
     const externalResume = input.externalResume === undefined ? undefined : parseExternalResume(input.externalResume)
@@ -1816,6 +1855,7 @@ class Registry {
       ...normalizedParent(input.startedBy, input.parentAgentId),
       ...(input.guest ? { guest: input.guest } : {}),
       ...(input.browser ? { browser: true as const } : {}),
+      ...(input.firstTask ? { firstTask: input.firstTask } : {}),
       transcriptPath: null,
       projectDir: basename(input.cwd ?? '') || agentId,
       cwd: input.cwd ?? null,
@@ -1839,6 +1879,7 @@ class Registry {
       this.terminalAvailableAgents.delete(entry.agentId)
       return null
     }
+    if (entry.firstTask) firstTaskKept(agentId)
     return this.byAgent(entry.agentId) ?? null
   }
 
@@ -1864,8 +1905,21 @@ class Registry {
     }
     this.index(entry)
     this.terminalAvailableAgents.add(entry.agentId)
+    this.forgetPreviousAgent(entry.agentId)
     this.save()
     return entry
+  }
+
+  /**
+   * [agentId] runs again under its own id, and its browser came back with it (decision 14): no shell's next agent may
+   * take it. One pass over the live rows, at a resume only. Not saved here: the caller's save carries it.
+   */
+  private forgetPreviousAgent(agentId: string): void {
+    for (const row of this.agents.values()) {
+      if (row.previousAgentId !== agentId) continue
+      delete row.previousAgentId
+      row.touchedAt = Date.now()
+    }
   }
 
   /** Every name an agent on this machine answers to: default names, project names, renames. */
@@ -2141,6 +2195,8 @@ class Registry {
       ...(existing?.launchArgs ? { launchArgs: existing.launchArgs } : {}),
       // And its browser: dropped at the first hook, the agent's browser would stop with its next start.
       ...(existing?.browser ? { browser: true as const } : {}),
+      // And the title its engine gave from a quiet line: dropped, a resumed conversation's title would name the agent.
+      ...(existing?.quietTitle ? { quietTitle: existing.quietTitle } : {}),
       defaultName: existing?.defaultName,
       transcriptPath: effectiveTranscriptPath,
       projectDir: engine === 'grok' || engine === 'agy' || engine === 'copilot'
@@ -2167,6 +2223,8 @@ class Registry {
       hermesHome: input.hermesHome ?? existing?.hermesHome ?? null,
       // Carried forward too: `/new` rebinds the same TUI, and its store is where it was.
       ...(existing?.openclawStateDir && engine === 'openclaw' ? { openclawStateDir: existing.openclawStateDir } : {}),
+      // And the task not yet typed: the bind is what lets it be typed, so dropping it here would lose it every time.
+      ...(existing?.firstTask ? { firstTask: existing.firstTask } : {}),
       dsh: existing?.dsh ?? null,
       dshRuntime: existing?.dshRuntime ?? null,
       ...(existing?.swarmSkill ? { swarmSkill: existing.swarmSkill } : {}),
@@ -2319,6 +2377,7 @@ class Registry {
     this.traceLaunch(entry.agentId, saved.launch, entry.launch, `reinstateArchived from ${terminal.agentId}`)
     this.index(entry)
     this.terminalAvailableAgents.add(entry.agentId)
+    this.forgetPreviousAgent(entry.agentId)
     try { this.save() } catch {
       this.drop(entry)
       this.terminalAvailableAgents.delete(entry.agentId)
@@ -2335,6 +2394,8 @@ class Registry {
     this.drop(entry)
     entry.engine = engine
     entry.terminalHost = true
+    // The row is an agent now: the pane's browser, if it was to move, has been read before this (decision 19).
+    delete entry.previousAgentId
     this.traceLaunch(entry.agentId, entry.launch, { state: 'ready' }, `adoptEngine ${engine}`)
     entry.launch = { state: 'ready' }
     entry.active = true
@@ -2375,8 +2436,19 @@ class Registry {
     // The shell under a new identity is the person's, not a harness an agent started: kept, a window took the new id for
     // a new child and opened the shell beside the agent, even after the person had closed the child (review of #1217).
     if (separateShell) delete entry.parentAgentId
-    // Its browser is the archived agent's, with that agent's logins: never the shell's.
-    if (separateShell) delete entry.browser
+    // Its browser is the archived agent's, with that agent's logins: never the shell's. Its flag stays with that agent
+    // until a new agent takes this pane, which the shell names for it (decision 19). A release in place names nobody.
+    if (separateShell) {
+      delete entry.browser
+      entry.previousAgentId = original.agentId
+    }
+    // And its first task: the shell under a new identity would carry a copy beside the archived agent's. A row that stays
+    // has had its launch end before the task was typed, and an engine the person starts in its shell is theirs: one they
+    // typed the task into themselves would get it twice.
+    if (entry.firstTask) {
+      delete entry.firstTask
+      if (!separateShell) console.log(`[agent] ${sid(agentId)} first task dropped · its engine exited before it was typed`)
+    }
     this.releaseBinding(entry)
     delete entry.resumeOnly
     delete entry.externalResume
@@ -2499,14 +2571,39 @@ class Registry {
     return true
   }
 
-  /** A launch dispatch is durable before tmux may replace the inert shell. */
-  beginExternalDispatch(agentId: string): RegisteredSession | null {
+  /**
+   * A launch dispatch is durable before tmux may replace the inert shell. A [firstTask] the launch carries is committed
+   * in the same save: a dispatch on disk without it would start an engine that is never told what to do.
+   */
+  beginExternalDispatch(agentId: string, firstTask?: string): RegisteredSession | null {
     const row = this.byAgent(agentId)
     if (row?.externalResume?.phase !== 'admitted' || row.launch?.state !== 'held') return null
-    const prior = row.launch, active = row.active, intent = row.externalResume
+    const prior = row.launch, active = row.active, intent = row.externalResume, priorTask = row.firstTask
     row.launch = { state: 'starting' }; row.active = true; row.externalResume = { ...intent, dispatched: true }
-    try { this.save(true, false, agentId) } catch (error) { row.launch = prior; row.active = active; row.externalResume = intent; throw error }
+    if (firstTask) row.firstTask = firstTask
+    try { this.save(true, false, agentId) } catch (error) {
+      row.launch = prior; row.active = active; row.externalResume = intent
+      if (priorTask) row.firstTask = priorTask
+      else delete row.firstTask
+      throw error
+    }
+    if (firstTask) firstTaskKept(agentId)
     return row
+  }
+
+  /**
+   * The agent's first task, taken off its row for the one caller that types it (core/agents/bind.ts). The removal is
+   * saved before the task is returned, so a daemon that stops in between never types it a second time. Null for an
+   * agent that is gone, has no session bound yet (nothing to type into) or has no task. A save that fails puts the task
+   * back and throws; inside a registry transaction every strict save does, so the caller takes it in `afterTransaction`.
+   */
+  takeFirstTask(agentId: string): string | null {
+    const row = this.agents.get(agentId)
+    const task = row?.firstTask
+    if (!row?.sessionId || !task) return null
+    delete row.firstTask
+    try { this.save(true) } catch (error) { row.firstTask = task; throw error }
+    return task
   }
 
   setClosePlan(agentId: string, plan: RegisteredSession['closePlan'] | null): RegisteredSession | null {
@@ -2717,6 +2814,19 @@ class Registry {
     return true
   }
 
+  /** Turn [agentId]'s Browser on or off (RegisteredSession.browser), as its person's Start and Stop do through the core
+   *  (core/agents/lifecycle.ts `createAgentBrowserLifecycle`): the live row as saved, or null when no live row has that id. */
+  setBrowser(agentId: string, on: boolean): RegisteredSession | null {
+    const session = this.agents.get(agentId)
+    if (!session) return null
+    if ((session.browser === true) === on) return session
+    if (on) session.browser = true
+    else delete session.browser
+    session.touchedAt = Date.now()
+    this.save()
+    return session
+  }
+
   /** Save the extra launch words [agentId] relaunches with (RegisteredSession.launchArgs); an empty list removes them. */
   setLaunchArgs(agentId: string, args: string[]): boolean {
     const session = this.agents.get(agentId)
@@ -2755,12 +2865,25 @@ class Registry {
     return true
   }
 
-  updateTitle(sessionId: string, title: string | null): RegisteredSession | null {
+  /**
+   * The engine's title for [sessionId]'s conversation, as the title sync reads it. [quiet]: the agent's last turn was a line typed
+   * for it alone (core/agents/quietTitles.ts), so a title that would name it is that line's: kept as its `quietTitle` and not taken,
+   * then or later. The agent keeps the name it had until its engine titles the conversation anew.
+   */
+  updateTitle(sessionId: string, title: string | null, quiet = false): RegisteredSession | null {
     const session = this.resolve(sessionId)
     if (!session) return null
     const next = titleDisplayName(title)
     const current = titleDisplayName(session.title)
     if (next === current) return session
+    // Only a title that changed pays for this: the sync reads every agent's title every 5 s, and most are as they were.
+    const naming = namingTitle(next, session)
+    if (naming && (quiet || naming === session.quietTitle)) {
+      if (naming === session.quietTitle) return session
+      session.quietTitle = naming
+      this.save()
+      return session
+    }
     session.title = next
     session.touchedAt = Date.now()
     this.save()

@@ -169,7 +169,7 @@ class SuperTabLaunch {
             initialTask: saved['initialMessage'] as String?,
             swarmRole: saved['lead'] == true ? 'lead' : 'dev',
             actionLabel: saved['newProject'] == true
-                ? 'New Project'
+                ? 'New project'
                 : saved['lead'] == true && saved['coordinator'] != true
                 ? 'New Swarm'
                 : 'New Harness',
@@ -591,22 +591,49 @@ class SuperTabLaunch {
   static SuperTabUpload? uploadForTest;
 
   /// New Project's Product Manager started by the Swarm, not this Desktop
-  /// (backend leadStart.ts): creates the project, posts the task and files
-  /// to its chat, where such a Product Manager reads its request, and asks
-  /// the Swarm to start it on [LeadSwarmStart.machineId]. Each step keeps
-  /// its receipt in the journal, so a retry repeats none of them.
+  /// (backend leadStart.ts): creates the project, asks the Swarm to start it
+  /// on [LeadSwarmStart.machineId], and sends the task and files to the PM's
+  /// own 1:1 chat, which that start opens at once (backend pmChat.ts) and the
+  /// PM takes when it joins: only agents post in a project's channel. Each step
+  /// keeps its receipt in the journal, so a retry repeats none of them.
   Future<void> startInSwarm(LeadSwarmStart start) async {
     checkAccount();
     saved['initialMessage'] = start.task;
     await _createProject(start.task);
     final tabId = saved['tabId'] as String;
-    final conversationId = saved['conversationId'] as String;
     Future<Map<String, dynamic>> send(String operationId, Map command) =>
         app.superTabs.map(
           'POST',
           '/api/super-tabs/$tabId/commands',
           body: {'operationId': operationId, 'command': command},
         );
+    // Kept as first sent until the Swarm answers it: after an unclear failure
+    // a retry repeats it, perhaps already committed, rather than asking again.
+    // Its replay answers the same chat.
+    if (saved['chatId'] == null) {
+      saved['leadStartRequest'] ??= {
+        'operationId': superTabOperationId(),
+        'command': {
+          'type': 'lead.start',
+          'projectId': saved['projectId'],
+          'machineId': start.machineId,
+          // No model: the Swarm fills its role's default where the owner's
+          // model list and rules allow it (backend commands.ts lead.start).
+          'engine': start.engine,
+          'repositoryUrl': ?start.repositoryUrl,
+        },
+      };
+      await persist();
+      final answer = superTabMap((await _replay('leadStartRequest'))['result']);
+      saved['chatId'] =
+          answer['chatId'] as String? ??
+          (throw const SuperTabFailure(
+            'UPDATE_REQUIRED',
+            'This Swarm’s server needs an update to start a PM.',
+          ));
+      await persist();
+    }
+    final chatId = saved['chatId'] as String;
     if (saved['taskPosted'] != true &&
         (start.task.isNotEmpty || start.files.isNotEmpty)) {
       // Written once, with its files' ids: a retry after a lost reply sends
@@ -618,7 +645,7 @@ class SuperTabLaunch {
             superTabMap(
                   (await upload(
                     tabId: tabId,
-                    conversationId: conversationId,
+                    conversationId: chatId,
                     name: file.name,
                     mime: mimeForName(file.name),
                     file: file,
@@ -633,7 +660,7 @@ class SuperTabLaunch {
           'operationId': superTabOperationId(),
           'command': {
             'type': 'message.send',
-            'conversationId': conversationId,
+            'conversationId': chatId,
             'text': start.task,
             'replyTo': null,
             'recipientIds': const <String>[],
@@ -647,22 +674,6 @@ class SuperTabLaunch {
       saved.remove('taskRequest');
       await persist();
     }
-    // Kept as first sent until the Swarm answers it: after an unclear failure
-    // a retry repeats it, perhaps already committed, rather than asking again.
-    saved['leadStartRequest'] ??= {
-      'operationId': superTabOperationId(),
-      'command': {
-        'type': 'lead.start',
-        'projectId': saved['projectId'],
-        'machineId': start.machineId,
-        // No model: the Swarm fills its role's default where the owner's
-        // model list and rules allow it (backend commands.ts lead.start).
-        'engine': start.engine,
-        'repositoryUrl': ?start.repositoryUrl,
-      },
-    };
-    await persist();
-    await _replay('leadStartRequest');
     final title = start.title ?? 'New project';
     saved['title'] = title;
     await persist();
@@ -674,7 +685,7 @@ class SuperTabLaunch {
     final controller = await app.superTabs.open(tabId);
     await controller.refresh();
     checkAccount();
-    if (_destination?.inBackground != true) controller.select(conversationId);
+    if (_destination?.inBackground != true) controller.select(chatId);
     await app.superTabs.storage.delete(key);
   }
 
@@ -868,9 +879,9 @@ class SuperTabLaunch {
   /// whose request changed. Only a definite refusal drops it, so the next
   /// attempt (perhaps to another machine) is a new request; any other failure
   /// may have been committed and keeps it.
-  Future<void> _replay(String key) async {
+  Future<Map<String, dynamic>> _replay(String key) async {
     try {
-      await app.superTabs.map(
+      return await app.superTabs.map(
         'POST',
         '/api/super-tabs/${saved['tabId']}/commands',
         body: superTabMap(saved[key]),

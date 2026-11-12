@@ -10,10 +10,7 @@ import 'package:collection/collection.dart' show compareNatural;
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
-import '../browser/browser_availability.dart';
 import '../core/home_dir.dart';
-import '../core/runtime_platform.dart';
-import '../logging/app_log.dart';
 import '../core/codex_profiles.dart';
 import '../core/launch_setup.dart';
 import '../core/dsh_catalog.dart';
@@ -622,7 +619,6 @@ class NewHarnessController extends ChangeNotifier {
           .probeEngines(_machineId, force: true)
           .then((_) => _adoptAccountAgent()),
     );
-    unawaited(_loadBrowserAvailability());
     final initialMachine = _machineId;
     // A guest is listed no harnesses or folders there (asGuest): nothing to ask.
     if (!asGuest) {
@@ -1046,73 +1042,6 @@ class NewHarnessController extends ChangeNotifier {
     }
     error = null;
     _refresh();
-  }
-
-  /// Browser is drawn: Swarm New agent, on the desktop build, not on Windows.
-  bool get offersBrowser => browserOffered(
-    web: kIsWeb,
-    windows: RuntimePlatform.isWindows,
-    offersBrowser: integration?.offersBrowser ?? false,
-  );
-
-  bool _browser = false;
-
-  /// Set up Browser was answered Install on this machine: Start asks no more.
-  bool _browserSetUp = false;
-  BrowserAvailability? _browserAvailability;
-  int _browserAsk = 0;
-
-  /// Why the machine cannot take a Browser now, or null when it can. While its answer is on its way the pill works:
-  /// an agent made then still gets its Browser, whose panel says what the machine lacks.
-  String? get browserUnavailable => switch (_browserAvailability?.state) {
-    BrowserAvailability.needsSetup when _machine?.isLocalMachine != true =>
-      'Set up Browser on $machineLabel first',
-    BrowserAvailability.unsupported => 'Update Harness on $machineLabel first',
-    BrowserAvailability.unavailable =>
-      'Browser isn\'t available on $machineLabel right now',
-    _ => null,
-  };
-
-  /// Whether the agent is made with its own Browser.
-  bool get browser => _browser && offersBrowser && browserUnavailable == null;
-
-  /// This computer has no Podman: Start asks to set it up (Set up Browser) before the agent is made.
-  bool get browserNeedsSetup =>
-      _browserAvailability?.state == BrowserAvailability.needsSetup &&
-      _machine?.isLocalMachine == true &&
-      !_browserSetUp;
-
-  /// What Set up Browser says beyond its body.
-  BrowserAvailability? get browserAvailability => _browserAvailability;
-
-  void toggleBrowser() {
-    if (locked || browserUnavailable != null) return;
-    _browser = !_browser;
-    notifyListeners();
-  }
-
-  Future<void> _loadBrowserAvailability() async {
-    if (!offersBrowser) return;
-    final ask = ++_browserAsk;
-    _browserAvailability = null;
-    final answer = await app.agentBrowserAvailable(_machineId);
-    if (_disposed || ask != _browserAsk) return;
-    _browserAvailability = answer;
-    notifyListeners();
-  }
-
-  /// Install in Set up Browser: this computer's daemon starts installing Podman, and the agent is made at once, its
-  /// Browser panel showing the setup's progress.
-  Future<bool> setUpBrowser() async {
-    try {
-      await app.agentBrowserSetup(_machineId);
-    } catch (failure) {
-      appLog.warn('browser', 'setup refused', error: failure);
-      _fail('Browser isn\'t available on $machineLabel right now');
-      return false;
-    }
-    _browserSetUp = true;
-    return true;
   }
 
   void retryGitProject() {
@@ -1787,7 +1716,7 @@ class NewHarnessController extends ChangeNotifier {
     final machines = integration?.leadMachines;
     if (machines == null) return null;
     if (_paused(machines)) {
-      return '$kLeadSwarmPaused. New Project can start once it resumes.';
+      return '$kLeadSwarmPaused. New project can start once it resumes.';
     }
     if (leadNone) return 'No machine can run the Product Manager now.';
     if (!_leadPicked) return kLeadChooseMachine;
@@ -2874,8 +2803,6 @@ class NewHarnessController extends ChangeNotifier {
     if (_machineId == id) return;
     _projectsByMachine[_machineId] = _project;
     _machineId = id;
-    _browserSetUp = false;
-    unawaited(_loadBrowserAvailability());
     _modelCatalog = null;
     _loadingModels = false;
     _modelRequest++;
@@ -4965,7 +4892,6 @@ class NewHarnessController extends ChangeNotifier {
       model: model,
       dsh: harness,
       swarmRole: integration?.swarmRole,
-      browser: browser,
       // Sent exactly as written; an agent that cannot take one is never sent it.
       prompt: takesTask && files.isEmpty && launchMessage.isNotEmpty
           ? launchMessage

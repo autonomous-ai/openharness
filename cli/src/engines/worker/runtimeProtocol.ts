@@ -63,8 +63,14 @@ export function runtimeContext(value: unknown, engine: ReaderEngine): RuntimeCon
   if (s.engine !== engine || !label(s.agentId) || !text(s.sessionId, 200) || !nullable(s.model) || !nullable(s.cliVersion)
     || (s.transcriptPath !== null && !path(s.transcriptPath)) || (s.cwd !== null && !path(s.cwd))
     || (s.codexHome != null && !path(s.codexHome))) return null
+  const launched = s.launchModel
+  const launchModel = launched === undefined ? undefined
+    : record(launched) && nullable(launched.model) && nullable(launched.effort)
+      ? { model: launched.model, effort: launched.effort } : null
+  if (launchModel === null) return null
   const session: RuntimeSession = { agentId: s.agentId, sessionId: s.sessionId, engine, model: s.model, cliVersion: s.cliVersion,
-    cwd: s.cwd, transcriptPath: s.transcriptPath, ...(s.codexHome === undefined ? {} : { codexHome: s.codexHome }) }
+    cwd: s.cwd, transcriptPath: s.transcriptPath, ...(s.codexHome === undefined ? {} : { codexHome: s.codexHome }),
+    ...(launchModel ? { launchModel } : {}) }
   const control = controlOf(value.control, session)
   if (control === null) return null
   const { model, effort, mode, cliVersion, observedAt, settingsEffort } = value.state

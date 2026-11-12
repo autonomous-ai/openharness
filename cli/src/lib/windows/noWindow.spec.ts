@@ -29,7 +29,10 @@ function sources(dir: string): string[] {
 
 /** Each `detached:` in a file's code that is not plainly false. Read from its syntax, so a comment or a string names nothing. */
 function detachedOptions(file: string): number {
-  const tree = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, false)
+  const text = readFileSync(file, 'utf8')
+  // Only a file that spells the word can name it: parsing all of them took 1.9 s alone, past 5 s on a loaded Mac.
+  if (!text.includes('detached')) return 0
+  const tree = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, false)
   let found = 0
   const visit = (node: ts.Node): void => {
     const named = (ts.isPropertyAssignment(node) || ts.isShorthandPropertyAssignment(node)) && ts.isIdentifier(node.name) && node.name.text === 'detached'

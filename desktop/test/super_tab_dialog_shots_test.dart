@@ -1,5 +1,5 @@
 // The five Swarm dialogs Ken asked to polish (2026-10-28), photographed light and dark for review: machine details,
-// person profile, Project details, Share Swarm and Add machine, over in-memory Swarms only. Then a machine's settings,
+// person profile, Project details, the Swarm's people and Add machine, over in-memory Swarms only. Then a machine's settings,
 // with its optional agent limit (Dee, 2026-10-29).
 import 'dart:io';
 
@@ -12,7 +12,7 @@ import 'package:harness/super_tabs/project_options.dart';
 import 'package:harness/super_tabs/sharing.dart';
 
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
-import 'swarm_sharing_test.dart' show SwarmSharingServer;
+import 'support/swarm_sharing_server.dart';
 import 'support/capture.dart';
 import 'support/super_tab_fixture.dart';
 
@@ -286,7 +286,8 @@ void main() {
         brightness,
         Builder(
           builder: (context) => TextButton(
-            onPressed: () => showSuperTabSharing(context, c),
+            onPressed: () =>
+                showSuperTabSharing(context, c, title: 'Manage people'),
             child: const Text('open'),
           ),
         ),

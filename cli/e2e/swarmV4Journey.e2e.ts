@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, onTestFailed, type TestContext } from 'vitest'
 import { PM_BASICS, SWARM_BASICS } from '../src/lib/swarmSkills.js'
 import { superTabCommand } from '../src/superTabs/command.js'
@@ -205,6 +205,14 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('the Swarm v4 journey, on
     expect(await read()).toMatchObject({ text: rule, version: saved.version })
     // Its one copy is the file in its own folder on its own computer.
     expect(readFileSync(join(agents.Kai.cwd!, 'agents', 'Kai.md'), 'utf8')).toBe(rule)
+    // Its person's own CLAUDE.md on that computer, which Claude Code reads for every session there, in the folder its session
+    // keeps its transcripts under, comes beside them (anh Dee, 2026-11-11: "show users what goes into the agent").
+    const mine = 'Answer in plain words.\n', own = join(B.daemon.root, 'claude', 'CLAUDE.md')
+    writeFileSync(own, mine)
+    expect((await read()).personal).toEqual([{ name: 'CLAUDE.md', path: own.split(sep).join('/'), loadedBy: ['claude'], text: mine, truncated: false }])
+    // And what Harness adds at every start, as the engine was started with it: the Swarm's basics, with the PM's part for the PM.
+    expect(await B.client.request('super_tabs', { action: 'basics', harnessId: agents.Kai.harnessId })).toMatchObject({ ok: true, text: SWARM_BASICS })
+    expect(await A.client.request('super_tabs', { action: 'basics', harnessId: agents.Faye.harnessId })).toMatchObject({ ok: true, text: `${SWARM_BASICS}\n${PM_BASICS}` })
   }, 120_000)
 
   it('a person types to a builder in its chat: the agent is typed exactly that, and its answer comes back into the chat once', async context => {
@@ -230,7 +238,7 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('the Swarm v4 journey, on
     expect(typedToKai).toContain('@Pip, to you:\n@Kai can you review #12?')
     const line = typedToKai.split('\n').find(l => l.startsWith('Answer: ')) ?? ''
     const question = (await messages(channel)).find(m => m.text === '@Kai can you review #12?')!
-    expect(line).toContain(`post '${channel}' 'your message' UNIQUE_OPERATION_ID`)
+    expect(line).toContain(`post '${channel}' 'your message' --`)
     expect(line).toMatch(new RegExp(`--(answers|reply-to) '${question.id}' --to '${agents.Pip.id}'$`))
     // The agent's answer is its own post, as that line says: Harness posts an agent's turn only in its 1:1 chat.
     const flag = line.includes('--reply-to') ? '--reply-to' : '--answers'
@@ -268,6 +276,29 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('the Swarm v4 journey, on
     await until('Kai to be typed the line once its computer is back', () => typedInto('Kai').some(p => p.includes('@Kai the build is red, can you look?')) || null, 180_000, 1_000)
   }, 360_000)
 
+  // Swarm plan, step 1, item 2: "on the real backend, a daemon killed in the middle of an ask types it once after restart". Kai's
+  // engine takes the message off its prompt and holds its turn's start (the fake engine's !latestart, a CLI whose hooks are slow),
+  // and every process of its computer's daemon is killed: the host had written that it was typing the message, and nothing told it
+  // what became of it. It was marked uncertain and never typed again, nor known as typed; now, once the daemon is back, the
+  // agent's session is asked.
+  it('a daemon killed in the middle of typing a message, back, neither loses it nor types it twice', async context => {
+    step(context)
+    const typed = '!latestart is the build green now?'
+    await command({ type: 'message.send', conversationId: agents.Kai.chat, text: typed, replyTo: null, recipientIds: [] })
+    await until('Kai\'s engine to take the message', () => jsonLines<string>(join(B.daemon.root, 'submitted-prompts')).includes(typed) || null, 120_000, 500)
+    await B.daemon.crash()
+    writeFileSync(join(B.daemon.root, 'submitted-prompts.release'), '')
+    await B.daemon.start()
+    // Thrown while it is not, so that a timeout says where its delivery stood.
+    await until('the message to read as delivered', async () => {
+      const statuses = ((await messages(agents.Kai.chat)).find(m => m.text === typed)?.deliveries ?? []).map((d: Record<string, any>) => d.status)
+      if (!statuses.includes('delivered')) throw new Error(`its deliveries: ${JSON.stringify(statuses)}`)
+      return true
+    }, 180_000, 1_000)
+    expect(typedInto('Kai').filter(p => p === typed)).toHaveLength(1)
+    expect(jsonLines<string>(join(B.daemon.root, 'submitted-prompts')).filter(p => p === typed)).toHaveLength(1)
+  }, 360_000)
+
   it('nothing was typed or posted twice, now that everything after it has arrived', async context => {
     step(context)
     // Every later step's message has arrived by now, so a copy of an earlier one that was going to come would have.
@@ -275,6 +306,7 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('the Swarm v4 journey, on
     once(typedInto('Pip'), 'Please say hello to the team, then wait.')
     once(typedInto('Pip'), 'Yes: reading #12 now.')
     for (const line of ['@Kai can you review #12?', '@Kai are you still there?', '@Kai the build is red, can you look?']) once(typedInto('Kai'), line)
+    expect(typedInto('Kai').filter(p => p === '!latestart is the build green now?')).toHaveLength(1)
     expect((await messages(agents.Pip.chat)).filter(m => m.author?.kind === 'agent' && String(m.text).includes('Please say hello to the team'))).toHaveLength(1)
     expect((await messages(channel)).filter(m => m.text === 'Yes: reading #12 now.')).toHaveLength(1)
   }, 120_000)

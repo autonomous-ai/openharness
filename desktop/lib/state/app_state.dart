@@ -8,6 +8,7 @@ import '../measurement/speed_marks.dart';
 import '../measurement/product_runtime_health.dart';
 import '../measurement/product_connections.dart';
 import '../core/crash_log.dart';
+import '../core/first_task.dart';
 import '../core/guest_folders.dart';
 import '../measurement/desktop_setup_report.dart';
 import 'attached_task_delivery.dart';
@@ -2938,8 +2939,9 @@ class AppNotifier extends ChangeNotifier {
     return _conn(machineId).request(type, payload: payload, timeout: timeout);
   }
 
-  /// Whether New agent may offer Browser on [machineId]. Never throws: a daemon too old to know the request is
-  /// [BrowserAvailability.unsupported], and one whose service did not answer is [BrowserAvailability.unavailable].
+  /// Whether [machineId] can run a browser, for the Browser panel's Install. Never throws: a daemon too old to know
+  /// the request is [BrowserAvailability.unsupported], and one whose service did not answer is
+  /// [BrowserAvailability.unavailable].
   Future<BrowserAvailability> agentBrowserAvailable(String machineId) async {
     try {
       return BrowserAvailability.fromJson(
@@ -2963,14 +2965,54 @@ class AppNotifier extends ChangeNotifier {
   Future<void> agentBrowserSetup(String machineId) =>
       _agentBrowserRequest(machineId, 'agent_browser_setup');
 
-  /// Restarts Windows to finish setup, from this computer only.
-
+  /// Starts [agentId]'s failed browser again; a failed install is retried from this computer only (`LOCAL_ONLY`).
   Future<void> agentBrowserRetry(String machineId, String agentId) =>
       _agentBrowserRequest(
         machineId,
         'agent_browser_retry',
         payload: {'agentId': agentId},
       );
+
+  /// Turns [agentId]'s browser on; the machine types the agent its ready line once the browser is.
+  Future<void> agentBrowserStart(String machineId, String agentId) =>
+      _agentBrowserRequest(
+        machineId,
+        'agent_browser_start',
+        payload: {'agentId': agentId},
+      );
+
+  Future<void> agentBrowserStop(String machineId, String agentId) =>
+      _agentBrowserRequest(
+        machineId,
+        'agent_browser_stop',
+        payload: {'agentId': agentId},
+      );
+
+  /// Sizes Chrome's window to the panel: the window as the machine set it, or null when it could not (an older
+  /// CLI, a browser not ready, a failed call), and the panel then scales the whole screen. Never throws.
+  Future<({int width, int height})?> agentBrowserWindow(
+    String machineId,
+    String agentId,
+    int width,
+    int height,
+  ) async {
+    try {
+      final set = await _agentBrowserRequest(
+        machineId,
+        'agent_browser_window',
+        payload: {'agentId': agentId, 'width': width, 'height': height},
+      );
+      if (set case {'width': final int width, 'height': final int height}) {
+        return (width: width, height: height);
+      }
+      appLog.warn('browser', 'window answered without a size');
+    } on WsRequestFailure catch (e) {
+      appLog.warn('browser', 'window refused: ${e.code}');
+    } on Object catch (e) {
+      appLog.warn('browser', 'window unanswered: ${e.runtimeType}');
+    }
+    return null;
+  }
 
   Future<BrowserSettings> agentBrowserSettings(
     String machineId,
@@ -15874,9 +15916,6 @@ class AppNotifier extends ChangeNotifier {
     PaneSplitRequest? split,
     AgentCreationAttempt? attempt,
     HarnessPlacement? placement,
-
-    /// Gives the agent its own sandboxed Chrome (Swarm New agent's Browser).
-    bool browser = false,
   }) async {
     final creation = attempt ?? AgentCreationAttempt();
     final launch = creation._launchModelDropped ? null : creation.launchModel;
@@ -15912,8 +15951,6 @@ class AppNotifier extends ChangeNotifier {
       // a general session. Same absent-unless-asked rule as `prompt`, and the
       // same refusal for an engine that has no such thing (`AGENT_UNSUPPORTED`).
       'agent': ?agent,
-      // Absent unless asked for, as above: an older daemon ignores it.
-      if (browser) 'browser': true,
     };
     Future<String?> ask() => _create(
       machineId,
@@ -18178,7 +18215,9 @@ class AppNotifier extends ChangeNotifier {
         change.handoffHeld = false;
         return 'The conversation changed. Choose the agent again to start a new switch.';
       }
-      if (reply['error'] != 'UNSUPPORTED') {
+      // A machine from before the handoff file, or one that does not know the new engine (BAD_ENGINE: omp before
+      // #1509), falls back to the excerpt; its own refusal of the engine, if any, comes with the start.
+      if (reply['error'] != 'UNSUPPORTED' && reply['error'] != 'BAD_ENGINE') {
         return agentHandoffHeldMessage(
           reply['error'],
           reply['hold'],
@@ -18246,7 +18285,7 @@ class AppNotifier extends ChangeNotifier {
       return 'This harness has no project folder to open with another agent.';
     }
     if (source.dsh != 'autonomous/pair' &&
-        supportsAgentHandoff(change.engine) &&
+        takesHandoff(change.engine) &&
         !change.contextLoaded) {
       final error = await _loadSwitchHandoff(machineId, change, source, folder);
       if (error != null) return error;

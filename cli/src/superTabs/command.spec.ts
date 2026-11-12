@@ -15,12 +15,24 @@ it('keeps an explicit stable receipt for agent messages', () => {
   // An agent in its own pane may leave its Swarm out: its daemon takes the one it is in (service.ts).
   expect(parseSuperTabArgs(['status'], where).payload).toMatchObject({ action: 'status', tabId: '' })
   expect(() => parseSuperTabArgs(['--tab', '../other', 'status'], where)).toThrow('harness super-tab')
-  for (const argv of [[], [...prefix, 'post', 'lead', 'Ready'], [...prefix, 'messages', '../other'],
+  for (const argv of [[], [...prefix, 'post', 'lead'], [...prefix, 'messages', '../other'],
     [...prefix, 'message', 'lead'], [...prefix, 'message', 'lead', '../other'], [...prefix, 'message', 'lead', 'id', 'extra'],
     ['--port', 'no', 'messages', 'lead'], ['--machine', '', 'messages', 'lead'], [...prefix, 'messages', 'lead', 'extra']]) {
     expect(() => parseSuperTabArgs(argv, where)).toThrow('harness super-tab')
   }
 })
+// anh Dee, 2026-11-11: "what are those extra verbose things". A post may leave its operation out: each run makes a new one, so a
+// builder's second `free: Pip`, or the same words to another agent, is a post of its own (code review of #4120).
+it('makes a new operation for each post that names none, and keeps one that is named', () => {
+  const op = (argv: string[]) => String(parseSuperTabArgs([...prefix, ...argv], where).payload.operationId)
+  const first = op(['post', 'lead', 'free: Pip'])
+  expect(first).toMatch(/^post-[0-9a-f-]{36}$/)
+  expect(op(['post', 'lead', 'free: Pip'])).not.toBe(first)
+  expect(parseSuperTabArgs([...prefix, 'post', 'lead', 'Ready', '--answers', 'm-1', '--to', 'pip'], where).payload)
+    .toMatchObject({ command: { type: 'message.send', conversationId: 'lead', text: 'Ready', answers: 'm-1', recipientIds: ['pip'] } })
+  expect(op(['post', 'lead', 'Ready', 'op-1'])).toBe('op-1')
+})
+
 // 2026-10-30: three Reviewer verdicts posted with TEXT - arrived as a single dash, #2345's findings among them.
 it('reads a post\'s message from stdin for -, once, without its last line break', () => {
   const stdin = vi.fn(() => "Ready: no\n- P1: it's '%h %s'\n"), terminal = vi.fn(() => false)
@@ -36,7 +48,7 @@ it('refuses a post\'s - with an empty or a terminal stdin, naming the fix, and p
   for (const empty of ['', '\n', '  \n\n']) {
     for (const tail of [[], ['--attach', 'a.png']]) {
       expect(() => parseSuperTabArgs([...prefix, 'post', 'lead', '-', 'op-1', ...tail], where, () => empty, () => false))
-        .toThrow("post - read no message from stdin, so nothing was posted. Send the message on stdin: post GROUP - OPERATION_ID <<'MSG'")
+        .toThrow("post - read no message from stdin, so nothing was posted. Send the message on stdin: post GROUP - <<'MSG'")
     }
   }
   // A terminal is never read: reading it would wait for input that never comes.
@@ -500,12 +512,17 @@ describe('stdin for -', () => {
       stdin: () => Promise.reject(new StdinIdle()) }
     expect(await superTabCommand([...prefix, 'post', 'lead', '-', 'op-1'], deps)).toBe(1)
     expect(JSON.parse(print.mock.calls.at(-1)![0]).error).toBe("post - read stdin until nothing more came for 30 s, but stdin was never closed, so nothing was posted. "
-      + "Close stdin after the message, as a heredoc does: post GROUP - OPERATION_ID <<'MSG' (the message on the next lines, then MSG alone on a line), or pass it as TEXT.")
+      + "Close stdin after the message, as a heredoc does: post GROUP - <<'MSG' (the message on the next lines, then MSG alone on a line), or pass it as TEXT.")
     expect(request).not.toHaveBeenCalled()
     // A verdict's words on stdin are told the verdict's own form, whatever the words would have been.
     expect(await superTabCommand([...prefix, 'read', 'hold', 'acme/app#27', 'f6edb44', '-'], deps)).toBe(1)
     expect(JSON.parse(print.mock.calls.at(-1)![0]).error).toBe("read - read stdin until nothing more came for 30 s, but stdin was never closed, so nothing was posted. "
       + "Close stdin after the message, as a heredoc does: read ok|hold OWNER/REPO#N SHA - <<'MSG' (the message on the next lines, then MSG alone on a line), or pass it as TEXT.")
+    expect(request).not.toHaveBeenCalled()
+    // And a piece's words its own.
+    expect(await superTabCommand([...prefix, 'split', 'acme/app#34', 'm', 'Sync the theme', '-'], deps)).toBe(1)
+    expect(JSON.parse(print.mock.calls.at(-1)![0]).error).toBe("split - read stdin until nothing more came for 30 s, but stdin was never closed, so nothing was posted. "
+      + "Close stdin after the message, as a heredoc does: split OWNER/REPO#N s|m|l TITLE - <<'MSG' (the message on the next lines, then MSG alone on a line), or pass it as TEXT.")
     expect(request).not.toHaveBeenCalled()
     // What arrives in time is used as before, read once.
     const stdin = vi.fn(async () => 'Ready\n')
@@ -547,12 +564,44 @@ it('lists what waits for the agent in its pane, a line each, and says when nothi
   expect(JSON.parse(print.mock.calls.at(-1)![0])).toEqual({ error: 'RATE_LIMITED', detail: 'GitHub asks to wait.' })
 })
 
+// A project's goal file and its workflow are written into the caller's checkout (goalStarter.ts): the daemon has no part in it.
+it('writes a goal file in the checkout it runs in, says what it wrote, and asks nothing of the daemon', async () => {
+  expect(parseSuperTabArgs(['goal'], where).payload).toMatchObject({ action: 'goal' })
+  expect(() => parseSuperTabArgs(['goal', 'acme/app'], where)).toThrow('harness super-tab')
+  const print = vi.fn(), open = vi.fn()
+  const deps = { where: () => where, pane: undefined, open, print, goal: vi.fn(async () => ({ ok: true, said: 'Wrote agents/GOAL.md and .github/workflows/goal.yml.' })) }
+  expect(await superTabCommand(['goal'], deps)).toBe(0)
+  expect(print).toHaveBeenLastCalledWith('Wrote agents/GOAL.md and .github/workflows/goal.yml.')
+  deps.goal.mockResolvedValueOnce({ ok: false, said: 'This folder is in no git repository: run it in your checkout of the project.' })
+  expect(await superTabCommand(['goal'], deps)).toBe(1)
+  expect(print).toHaveBeenLastCalledWith('This folder is in no git repository: run it in your checkout of the project.')
+  expect(open).not.toHaveBeenCalled()
+})
+
 // A builder's claim is made by command (githubClaim.ts).
 it('takes a task by its repository and number, and nothing else', () => {
   expect(parseSuperTabArgs(['take', 'acme/app#34'], where).payload).toMatchObject({ action: 'take', tabId: '', repository: 'acme/app', number: 34 })
   expect(parseSuperTabArgs([...prefix, 'take', 'Acme/App.js#3'], where).payload).toMatchObject({ action: 'take', tabId: 'tab', agentId: 'agent', repository: 'Acme/App.js', number: 3 })
   for (const argv of [['take'], ['take', '34'], ['take', 'acme/app'], ['take', 'acme/app#0'], ['take', 'acme/../app#3'], ['take', 'acme/app#34', 'extra']]) {
     expect(() => parseSuperTabArgs(argv, where), argv.join(' ')).toThrow('harness super-tab')
+  }
+})
+
+// A builder cuts a piece off a task it holds by command (githubSplit.ts).
+it('cuts a piece off a task: the repository and number, its size, its title, and what it is', () => {
+  expect(parseSuperTabArgs(['split', 'acme/app#34', 'm', 'Sync the theme', 'Only the theme.'], where).payload).toMatchObject({ action: 'split', tabId: '',
+    repository: 'acme/app', number: 34, size: 'm', title: 'Sync the theme', text: 'Only the theme.' })
+  // What it is may be left out, or come on stdin as a post's does.
+  expect(parseSuperTabArgs([...prefix, 'split', 'Acme/App.js#3', 'l', ' Sync '], where).payload).toMatchObject({ action: 'split', tabId: 'tab', agentId: 'agent',
+    repository: 'Acme/App.js', number: 3, size: 'l', title: 'Sync', text: '' })
+  const stdin = vi.fn(() => "Read `theme` at start.\nWrite it on change.\n")
+  expect(parseSuperTabArgs(['split', 'acme/app#34', 's', 'Sync the theme', '-'], where, stdin, () => false).payload).toMatchObject({ text: 'Read `theme` at start.\nWrite it on change.' })
+  expect(() => parseSuperTabArgs(['split', 'acme/app#34', 's', 'Sync the theme', '-'], where, () => 'x', () => true))
+    .toThrow("split - reads the message from stdin, but stdin is a terminal, so nothing was posted. Send the message on stdin: split OWNER/REPO#N s|m|l TITLE - <<'MSG'")
+  for (const argv of [['split'], ['split', 'acme/app#34'], ['split', 'acme/app#34', 'm'], ['split', 'acme/app#34', 'xl', 'Title'], ['split', '34', 'm', 'Title'],
+    ['split', 'acme/app#0', 'm', 'Title'], ['split', 'acme/../app#3', 'm', 'Title'], ['split', 'acme/app#34', 'm', ' '], ['split', 'acme/app#34', 'm', 'a\nb'],
+    ['split', 'acme/app#34', 'm', 'Title', 'words', 'extra'], ['split', 'acme/app#34', 'm', 'Title', 'x'.repeat(32_001)]]) {
+    expect(() => parseSuperTabArgs(argv, where), argv.join(' ').slice(0, 80)).toThrow('harness super-tab')
   }
 })
 

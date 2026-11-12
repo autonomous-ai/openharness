@@ -538,6 +538,8 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       ...(payload.startedBy === 'agent' ? { startedBy: 'agent' as const } : {}),
       ...(launchModel.state === 'ok' ? { launchModel: launchModel.launchModel } : {}),
       ...(parentAgentId ? { parentAgentId } : {}),
+      // A Desktop from before Browser left New agent still sends its checkbox (`browser: true`): its Browser is on, and
+      // the browser starts once the agent runs. Delete on or after 2026-12-18.
       ...(payload.browser === true ? { browser: true } : {}),
     }
     // The fingerprint names the role in the wire's values, as every receipt from before role kinds does: a start asked again

@@ -1,16 +1,22 @@
 import { createHash } from 'node:crypto'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { Crew } from './assign/crew.js'
 import { parseSuperTabArgs } from './command.js'
 import { GitHubAssign } from './githubAssign.js'
-import { VerdictRecords } from './githubMerge.js'
+import { VerdictRecords, type LedProject } from './githubMerge.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { commandRecords } from './commandRecords.fake.js'
+import type { Score } from './goal.js'
+import { PmNumbers, type Numbers } from './pmNumbers.js'
 
 type Json = Record<string, unknown>
 const GiB = 1024 ** 3
 const issue = (number: number, labels: string[], extra: Json = {}): Json => ({ number, labels: labels.map(name => ({ name })), ...extra })
 const PROJECT = { repo: 'acme/app', pm: 'Faye', tabId: 'tab', pmAgentId: 'faye', projectId: 'app' }
+const TIP = 'c0ffee0000000000000000000000000000000001'
 
 /** One repository's issues as GitHub's REST API answers them, with ETags, and what was sent to it. Labels sent are kept
  *  only once [applied] says GitHub's lists show them. */
@@ -18,24 +24,40 @@ function fakeGitHub(open: Json[], closed: Json[] = []) {
   const records = commandRecords()
   // A repository already set up for the flow: its labels, and its builders' (a fresh one is set apart below).
   const labels = ['status:taken', 'size:s', 'size:m', 'size:l', 'p0', 'p1', 'p2', 'builder:pip', 'builder:juno', 'builder:atlas'].map(name => ({ name }))
-  const state = { open, closed, labelAnswer: 200, deleteAnswer: 200, commentAnswer: 201, signedOut: false, applied: false,
+  const state = { open, closed, asked: [] as string[], labelAnswer: 200, deleteAnswer: 200, commentAnswer: 201, signedOut: false, applied: false,
     /** Runs as a label's DELETE arrives, before it is answered: a test changes the issue here, or refuses the call with a status. */
     deleted: null as ((issue: Json, label: string) => number | void) | null,
-    files: new Map<string, string>(), labels: labels as Json[], pulls: [] as Json[], comments: new Map<number, Json[]>(), reviews: new Map<number, Json[]>(), compare: new Map<string, Json>() }
+    files: new Map<string, string>(), checks: [] as Json[], headChecks: new Map<string, Json[]>(), checksDown: false, checksLimited: false, labels: labels as Json[], pulls: [] as Json[], comments: new Map<number, Json[]>(), reviews: new Map<number, Json[]>(), compare: new Map<string, Json>(),
+    /** The files each pull request changes, and the paths GitHub fails on its own side for. */
+    changed: new Map<number, string[]>(), failing: null as RegExp | null }
   const sent: Array<{ method: string; path: string; body: Json }> = []
   const get: GitHubGet = async (path, etag) => {
+    state.asked.push(path)
     if (state.signedOut) throw Object.assign(new Error('gh is not signed in on this computer: run `gh auth login`.'), { code: 'GH_SIGNED_OUT' })
     const url = new URL(`https://api.github.com${path}`)
+    // A token that cannot read checks (a fine-grained one without Checks), as GitHub answers it.
+    if (state.checksDown && /\/commits\/[0-9a-f]{40}\/check-runs$/.test(url.pathname)) return { status: 403, etag: null, body: { message: 'Resource not accessible by integration' }, resetAt: null }
+    if (state.checksLimited && /\/commits\/[0-9a-f]{40}\/check-runs$/.test(url.pathname)) return { status: 403, etag: null, body: {}, resetAt: Date.now() + 60_000 }
+    if (state.failing?.test(url.pathname)) return { status: 500, etag: null, body: null, resetAt: null }
     const file = /^\/repos\/acme\/app\/contents\/(.+)$/.exec(url.pathname)
     const text = file ? state.files.get(decodeURIComponent(file[1]!)) : undefined
     if (file && text === undefined) return { status: 404, etag: null, body: null, resetAt: null }
     const body = file ? { encoding: 'base64', content: Buffer.from(text!).toString('base64') }
       : url.pathname === '/repos/acme/app' ? { default_branch: 'main' }
+      // Main's last commit and its checks, where a project's goal is scored (goal.ts).
+      : url.pathname === '/repos/acme/app/commits' ? url.searchParams.get('sha') === 'main' ? [{ sha: TIP, parents: [] }] : null
+      : url.pathname === `/repos/acme/app/commits/${TIP}/check-runs` ? { check_runs: state.checks }
+      // A pull request's head's checks, none unless a test gives some; and its combined status.
+      : /^\/repos\/acme\/app\/commits\/[0-9a-f]{40}\/check-runs$/.test(url.pathname) ? { check_runs: state.headChecks.get(url.pathname.split('/')[5]!) ?? [] }
+      : /^\/repos\/acme\/app\/commits\/[0-9a-f]{40}\/status$/.test(url.pathname) ? { state: 'success', statuses: [] }
       // A page of the list, as GitHub pages it.
       : url.pathname === '/repos/acme/app/pulls' ? state.pulls.slice((Number(url.searchParams.get('page') ?? 1) - 1) * Number(url.searchParams.get('per_page') ?? 30),
         Number(url.searchParams.get('page') ?? 1) * Number(url.searchParams.get('per_page') ?? 30))
+      // Since a moment, when the read asks so, as GitHub lists them.
       : /^\/repos\/acme\/app\/issues\/\d+\/comments$/.test(url.pathname) ? (state.comments.get(Number(url.pathname.split('/').at(-2))) ?? []).map(records.served)
+        .filter(comment => !url.searchParams.has('since') || !(Date.parse(String(comment.created_at)) < Date.parse(url.searchParams.get('since')!)))
       : /^\/repos\/acme\/app\/pulls\/\d+\/reviews$/.test(url.pathname) ? state.reviews.get(Number(url.pathname.split('/').at(-2))) ?? []
+      : /^\/repos\/acme\/app\/pulls\/\d+\/files$/.test(url.pathname) ? (state.changed.get(Number(url.pathname.split('/').at(-2))) ?? []).map(filename => ({ filename }))
       // A head against main, from the commit of main it stands on.
       : /^\/repos\/acme\/app\/compare\/main\.\.\.[0-9a-f]+$/.test(url.pathname) ? state.compare.has(url.pathname.split('...').at(-1)!)
         ? { merge_base_commit: { sha: 'f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0' }, ...state.compare.get(url.pathname.split('...').at(-1)!) as Json } : null
@@ -80,31 +102,349 @@ const crew = (): Crew => ({
   machines: [{ machineId: 'mac', observation: { resources: { memoryTotalBytes: 64 * GiB, projectDiskFreeBytes: 500 * GiB } } }],
 })
 
-function setup(open: Json[], options: { closed?: Json[]; crew?: Crew } = {}) {
+function setup(open: Json[], options: { closed?: Json[]; crew?: Crew
+  numbers?: { pass: (project: LedProject, numbers: Numbers, goal: () => Promise<Score | null>, board: () => Promise<string>) => Promise<void> } } = {}) {
   const github = fakeGitHub(open, options.closed)
   const log = vi.fn()
+  /** What each pass counted (pmNumbers.ts). */
+  const numbers = vi.fn(async (_project: LedProject, _numbers: Numbers, _goal: () => Promise<Score | null>, _board: () => Promise<string>) => {})
   const clock = { now: Date.parse('2026-11-09T07:31:00Z') }
-  const make = () => new GitHubAssign({ projects: async () => [PROJECT], crew: async () => options.crew ?? crew(), get: github.get, send: github.send,
-    now: () => clock.now, log, records: new VerdictRecords(github.authors, () => clock.now, log) })
+  const pm = { running: true, unreadable: false }
+  const make = () => new GitHubAssign({ projects: async () => [PROJECT], crew: async () => options.crew ?? crew(), get: github.get, send: github.send, pmRunning: async () => { if (pm.unreadable) throw new Error('The backend did not answer.'); return pm.running },
+    now: () => clock.now, log, records: new VerdictRecords(github.authors, () => clock.now, log), numbers: options.numbers ?? { pass: numbers } })
   const assigner = make()
   const labelled = () => github.sent.filter(s => /\/issues\/\d+\/labels$/.test(s.path)).map(s => [Number(s.path.split('/').at(-2)), (s.body.labels as string[])[0]])
   const said = () => github.sent.filter(s => s.path.endsWith('/comments')).map(s => [Number(s.path.split('/').at(-2)), String(s.body.body)])
-  return { github, assigner, make, log, labelled, said, clock }
+  return { github, assigner, make, log, labelled, said, clock, numbers, pm }
 }
 
 describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () => {
-  it('gives each builder what it starts next, two deep, labelled, with one line of why', async () => {
+  // What a pass read is counted for the project's PM and its people (pmNumbers.ts; anh Dee, 2026-11-11: "Numbers when work runs short").
+  it('counts each pass: the builders with nothing after its plan, the tasks nobody holds, and what landed', async () => {
+    const merged = new Date(Date.parse('2026-11-09T07:31:00Z') - 3_600_000).toISOString()
+    const f = setup([issue(1, ['size:s', 'builder:pip', 'status:taken']), issue(2, ['size:m'])],
+      { closed: [{ number: 9, pull_request: { merged_at: merged }, labels: [{ name: 'builder:pip' }], updated_at: merged }, issue(8, ['size:s', 'builder:juno'], { closed_at: merged, updated_at: merged })] })
+    await f.assigner.tick()
+    // Juno was given #2 this pass, so nobody is free and no task is open: one in hand before, one given.
+    expect(f.labelled()).toEqual([[2, 'builder:juno']])
+    expect(f.numbers.mock.calls).toEqual([[PROJECT, { builders: 2, free: [], open: 0, unsized: 0, held: 2, landed: 1, landedBy: [['Pip', 1]], closed: 1, more: false, activity: Date.parse(merged) }, expect.any(Function), expect.any(Function)]])
+    // The project's goal is read from its default branch, and only when the numbers ask for it.
+    f.github.state.files.set('agents/GOAL.md', '| Sync works | `npm test` |\n| Starts fast | `make start-time` |')
+    f.github.state.checks = [{ id: 1, name: 'goal: Sync works', status: 'completed', conclusion: 'success' }]
+    expect(f.github.state.asked.some(path => path.includes('GOAL.md') || path.includes('check-runs'))).toBe(false)
+    expect(await f.numbers.mock.calls[0]![2]()).toEqual({ total: 2, passed: 1, failed: 0, waiting: 1 })
+    // A landing more than a day old is the team's last, and no landing of the day: the pass counts from its own clock.
+    const old = new Date(Date.parse('2026-11-09T07:31:00Z') - 30 * 3_600_000).toISOString()
+    const g = setup([], { closed: [{ number: 9, pull_request: { merged_at: old }, labels: [{ name: 'builder:pip' }], updated_at: old }] })
+    await g.assigner.tick()
+    expect(g.numbers.mock.calls.at(-1)![1]).toMatchObject({ landed: 0, activity: Date.parse(old) })
+  })
+  // The day's scoreboard (scoreboard.ts; the allocator's design, package 1): what every later change to the allocator is judged by.
+  it('hands the numbers the day\'s scoreboard, read from GitHub only when they ask for it, and says once a part GitHub does not give', async () => {
+    const at = (minutes: number) => new Date(Date.parse('2026-11-09T07:31:00Z') - minutes * 60_000).toISOString()
+    const landed = (number: number) => ({ number, created_at: at(120), closed_at: at(30), updated_at: at(30), pull_request: { merged_at: at(30) }, labels: [{ name: 'builder:pip' }] })
+    const train = (title: string, merged: string | null) => ({ number: 20, title, author_association: 'MEMBER', closed_at: at(60), updated_at: at(60), pull_request: { merged_at: merged }, labels: [] })
+    const f = setup([], { closed: [landed(9), landed(10), landed(11), train('Train, base moved: #9', null)] })
+    for (const number of [9, 10, 11]) {
+      f.github.state.comments.set(number, [{ body: 'Juno, 15:00: READ-OK f6edb44', author_association: 'MEMBER', created_at: at(100) }])
+      f.github.state.changed.set(number, ['src/hub.ts', `src/own${number}.ts`])
+    }
+    await f.assigner.tick()
+    // Nothing of it is read by the pass itself.
+    expect(f.github.state.asked.some(path => path.includes('/files') || /\/issues\/\d+\/comments/.test(path))).toBe(false)
+    const waited = 'Last 3 landed: 20 min from opened to a first verdict (median of 3), 70 min from the last READ-OK to landing (median of 3); '
+      + 'none was told it was behind or in conflict. Trains: 0 landed, 1 closed without landing (base moved 1).'
+    expect(await f.numbers.mock.calls[0]![3]()).toBe(`${waited} Files touched most, of the last 3 landings: \`src/hub.ts\` 100%.`)
+    expect(f.github.state.asked.filter(path => path.includes('/files') || /\/issues\/\d+\/comments/.test(path))).toHaveLength(6)
+    // The PM's own landed pull requests are the team's too.
+    const g = setup([], { closed: [{ ...landed(9), labels: [{ name: 'builder:faye' }] }] })
+    g.github.state.comments.set(9, [{ body: 'Juno, 15:00: READ-OK f6edb44', author_association: 'MEMBER', created_at: at(100) }])
+    await g.assigner.tick()
+    expect(await g.numbers.mock.calls[0]![3]()).toBe('Last 1 landed: 20 min from opened to a first verdict (median of 1), 70 min from the last READ-OK to landing (median of 1); '
+      + 'none was told it was behind or in conflict.')
+    // The closed list it read was full of the day's: there may be more trains than it held, and the words say so.
+    const h = setup([], { closed: [train('Train: #9', at(60)), ...Array.from({ length: 99 }, (_, n) => ({ number: 100 + n, closed_at: at(60), updated_at: at(60), labels: [] }))] })
+    await h.assigner.tick()
+    expect(h.numbers.mock.calls[0]![1]).toMatchObject({ more: true })
+    expect(await h.numbers.mock.calls[0]![3]()).toBe('Trains, at least: 1 landed.')
+    // A part GitHub does not give is left out, and said once in the log however often the day is posted.
+    f.github.state.failing = /\/files$/
+    expect(await f.numbers.mock.calls[0]![3]()).toBe(waited)
+    await f.numbers.mock.calls[0]![3]()
+    expect(f.log.mock.calls.filter(([line]) => String(line).includes('SCOREBOARD_UNREAD'))).toEqual([['[super-tab] Task assignment: SCOREBOARD_UNREAD acme/app: its files: GitHub answered 500.']])
+  })
+
+  it('counts a builder with nothing when no task is open, when none can be given, and when the team has no builder', async () => {
+    const f = setup([issue(1, ['size:s', 'builder:pip', 'status:taken'])])
+    await f.assigner.tick()
+    expect(f.numbers.mock.calls.at(-1)![1]).toMatchObject({ builders: 2, free: [{ id: 'juno', name: 'Juno' }], open: 0, held: 1 })
+    // A task GitHub would not label for its builder was not given: its builder still has nothing, and the task is open.
+    const g = setup([issue(2, ['size:m'])])
+    g.github.state.labelAnswer = 403
+    await g.assigner.tick()
+    expect(g.numbers.mock.calls.at(-1)![1]).toMatchObject({ free: [{ id: 'juno', name: 'Juno' }, { id: 'pip', name: 'Pip' }], open: 1, held: 0 })
+    const h = setup([issue(2, ['size:m']), issue(3, [])], { crew: { builders: [], machines: [] } })
+    await h.assigner.tick()
+    expect(h.numbers.mock.calls.at(-1)![1]).toMatchObject({ builders: 0, free: [], open: 1, unsized: 1, held: 0 })
+  })
+  it('counts what the PM landed under its name, a task given and not yet shown labelled as its builder\'s, and a spent builder as not free on any path', async () => {
+    const merged = new Date(Date.parse('2026-11-09T07:31:00Z') - 3_600_000).toISOString()
+    const f = setup([issue(2, ['size:m'])], { closed: [{ number: 9, pull_request: { merged_at: merged }, labels: [{ name: 'builder:faye' }], updated_at: merged }] })
+    await f.assigner.tick()
+    expect(f.numbers.mock.calls.at(-1)![1]).toMatchObject({ landedBy: [['Faye', 1]] })
+    // GitHub's list does not show the label yet: the task is its builder's all the same, and that builder is not free.
+    const given = f.labelled()[0]![1] === 'builder:juno' ? 'Juno' : 'Pip'
+    await f.assigner.tick()
+    expect(f.numbers.mock.calls.at(-1)![1].free.map(free => free.name)).toEqual([given === 'Juno' ? 'Pip' : 'Juno'])
+    // Juno's subscription is spent: with nothing Harness can give, and with a task given this pass, Juno is still not counted as waiting.
+    const resetsAt = new Date(Date.parse('2026-11-09T07:31:00Z') + 3 * 3_600_000).toISOString()
+    const spent: Crew = { builders: [crew().builders[0]!, { ...crew().builders[1]!, machineId: 'spent' }],
+      machines: [crew().machines[0]!, { machineId: 'spent', observation: { ...crew().machines[0]!.observation,
+        quotas: [{ engine: 'claude', known: true, windows: [{ name: 'five_hour', usedPercent: 99, resetsAt }] }] } }] }
+    const full = setup([issue(1, ['size:s', 'builder:pip', 'status:taken']), issue(2, ['size:s', 'builder:pip']), issue(3, ['size:s', 'needs:gpu'])], { crew: spent })
+    await full.assigner.tick()
+    expect(full.numbers.mock.calls.at(-1)![1]).toMatchObject({ free: [] })
+    const giving = setup([issue(3, ['size:s'])], { crew: spent })
+    await giving.assigner.tick()
+    expect(giving.labelled()).toEqual([[3, 'builder:pip']])
+    expect(giving.numbers.mock.calls.at(-1)![1]).toMatchObject({ free: [] })
+  })
+
+  // The assigner and the numbers together, as the daemon runs them (the fourth review: no test did, and one open task that no
+  // free builder could take silenced the rule for every builder).
+  it('tells the PM of builders that wait beside a task only another\'s machine can take', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'assign-numbers-'))
+    try {
+      const sent: string[] = [], clock = { now: Date.parse('2026-11-09T07:31:00Z') }
+      const mac = { resources: { memoryTotalBytes: 64 * GiB, projectDiskFreeBytes: 500 * GiB, os: 'macOS' } }
+      const team: Crew = { builders: [{ id: 'pip', name: 'Pip', label: 'builder:pip', machineId: 'mac', engine: 'claude' }, { id: 'kai', name: 'Kai', label: 'builder:kai', machineId: 'linux', engine: 'claude' },
+        { id: 'ada', name: 'Ada', label: 'builder:ada', machineId: 'linux', engine: 'codex' }],
+      machines: [{ machineId: 'mac', observation: mac }, { machineId: 'linux', observation: { resources: { ...mac.resources, os: 'Linux' } } }] }
+      const numbers = new PmNumbers({ file: join(dir, 'numbers.json'), now: () => clock.now, log: () => {}, send: async (_how, _project, _id, text) => { sent.push(text) } })
+      // Pip has work to build; #9 needs a Mac, which only Pip has; Kai and Ada have nothing.
+      const f = setup([issue(1, ['size:s', 'builder:pip', 'status:taken']), issue(2, ['size:s', 'builder:pip']), issue(9, ['size:s', 'needs:macos'])], { crew: team, numbers })
+      for (let minute = 0; minute <= 16; minute++) { f.clock.now = clock.now += 60_000; await f.assigner.tick() }
+      expect(f.labelled()).toEqual([])
+      expect(sent).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d: Ada and Kai have nothing to do, and the 1 sized task open was not given to them\. /)])
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  it('counts as having nothing a builder whose one task waits on its pull request\'s readers, and not one whose subscription has no room', async () => {
+    const f = setup([issue(14, ['size:s', 'builder:pip', 'status:taken'])])
+    f.github.state.pulls = [{ number: 30, draft: false, base: { ref: 'main' }, head: { sha: 'f6edb44c0ffee0000000000000000000000000ab', ref: 'pip/14' },
+      labels: [{ name: 'builder:pip' }], body: 'Closes #14' }]
+    await f.assigner.tick()
+    expect(f.numbers.mock.calls.at(-1)![1]).toMatchObject({ free: [{ id: 'juno', name: 'Juno' }, { id: 'pip', name: 'Pip' }], held: 1 })
+    // A second task of Pip's in review leaves it with nothing to build still: it is counted as waiting for a task, and given
+    // the one that opens (the allocator's design, package 2: two in review filled its list, and it was given nothing).
+    f.github.state.open.push(issue(15, ['size:s', 'builder:pip', 'status:taken']))
+    f.github.state.pulls.push({ number: 31, draft: false, base: { ref: 'main' }, head: { sha: 'a6edb44c0ffee0000000000000000000000000ab', ref: 'pip/15' },
+      labels: [{ name: 'builder:pip' }], body: 'Closes #15' })
+    await f.assigner.tick()
+    expect(f.numbers.mock.calls.at(-1)![1].free.map(free => free.name)).toEqual(['Juno', 'Pip'])
+    f.github.state.open.push(issue(16, ['size:s']))
+    await f.assigner.tick()
+    expect(f.labelled()).toEqual([[16, 'builder:pip']])
+    expect(f.numbers.mock.calls.at(-1)![1].free.map(free => free.name)).toEqual(['Juno'])
+    // Juno's subscription is spent until a reset three hours off: it is given nothing, and is not counted as waiting for work.
+    const resetsAt = new Date(Date.parse('2026-11-09T07:31:00Z') + 3 * 3_600_000).toISOString()
+    const g = setup([issue(1, ['size:s', 'builder:pip', 'status:taken'])], { crew: { builders: [crew().builders[0]!, { ...crew().builders[1]!, machineId: 'spent' }],
+      machines: [crew().machines[0]!, { machineId: 'spent', observation: { ...crew().machines[0]!.observation,
+        quotas: [{ engine: 'claude', known: true, windows: [{ name: 'five_hour', usedPercent: 99, resetsAt }] }] } }] } })
+    await g.assigner.tick()
+    expect(g.numbers.mock.calls.at(-1)![1]).toMatchObject({ builders: 2, free: [] })
+  })
+  it('gives each builder with nothing to build what it starts next, one task each, labelled, with one line of why', async () => {
     const f = setup([issue(1, ['size:s', 'p0']), issue(2, ['size:m', 'p1']), issue(3, ['size:m']), issue(4, ['size:m']), issue(5, ['size:m'])])
     await f.assigner.tick()
     const given = f.labelled()
-    expect(given).toHaveLength(4)
-    expect(given.filter(([, label]) => label === 'builder:pip')).toHaveLength(2)
-    expect(given.filter(([, label]) => label === 'builder:juno')).toHaveLength(2)
-    // The p0 and the p1 go first, each to a builder that can start it now.
-    expect(given.map(([n]) => n)).toEqual(expect.arrayContaining([1, 2]))
+    // The p0 and the p1 go first, one to each builder, which can start it now; the other three wait for a builder to be free.
+    expect(given.map(([n]) => n).sort()).toEqual([1, 2])
+    expect(given.map(([, label]) => label).sort()).toEqual(['builder:juno', 'builder:pip'])
     const why = new Map(f.said() as Array<[number, string]>)
-    expect(why.get(1)).toMatch(/^Harness, \d\d:\d\d: for \*\*(Pip|Juno)\*\*: it can start now\.$/)
+    for (const number of [1, 2]) expect(why.get(number)).toMatch(/^Harness, \d\d:\d\d: for \*\*(Pip|Juno)\*\*: it can start now\.$/)
     expect(f.log).toHaveBeenCalledWith(expect.stringMatching(/^\[super-tab\] gave acme\/app#1 to (Pip|Juno) \(it can start now\)$/))
+  })
+
+  // The allocator's design, package 2 (docs/design/2026-11-11-swarm-allocator): a change waiting for its read filled its builder's
+  // list, so a builder with two in review was given nothing until one landed, and was not counted as having nothing; and a second
+  // task was given ahead of the one in hand, which in the design's model cost up to a fifth of a heavy day.
+  describe('one task building, at most four open', () => {
+    /** Pip builds alone, so what it is given, or not, is the rule's own doing. */
+    const alone: Crew = { builders: [crew().builders[0]!], machines: crew().machines }
+    const head = (n: number) => `${(0xf6edb40 + n).toString(16)}${'0'.repeat(33)}`
+    const taken = (n: number) => issue(n, ['size:m', 'builder:pip', 'status:taken'])
+    /** Pip's pull request for task [n], not a draft, into main: it waits for its read. */
+    const up = (n: number, extra: Json = {}): Json => ({ number: 100 + n, draft: false, base: { ref: 'main' }, head: { sha: head(n), ref: `pip/${n}` },
+      labels: [{ name: 'builder:pip' }], body: `Closes #${n}`, ...extra })
+    const given = (f: ReturnType<typeof setup>) => f.said().filter(([, body]) => /^Harness, \d\d:\d\d: for \*\*/.test(String(body))).map(([n, body]) => [n, String(body).replace(/^Harness, \d\d:\d\d: /, '')])
+
+    // The fault's own test: on the allocator before this, nothing was given.
+    it('gives a builder whose two tasks wait on their pull requests\' reads the free task, to start now', async () => {
+      const f = setup([taken(14), taken(15), issue(16, ['size:s'])], { crew: alone })
+      f.github.state.pulls = [up(14), up(15)]
+      await f.assigner.tick()
+      expect(f.labelled()).toEqual([[16, 'builder:pip']])
+      // Nothing of what is in review is its work now: the line that gives the task says so truly.
+      expect(given(f)).toEqual([[16, 'for **Pip**: it can start now.']])
+      // Its two in review and the one given are all it holds; with the task given it has something to do.
+      expect(f.numbers.mock.calls.at(-1)![1]).toMatchObject({ free: [], open: 0, held: 3 })
+    })
+
+    it('gives nothing to a builder with a task still its own to build: given, taken with no pull request, with a draft, or with a HOLD on its head', async () => {
+      const building: Array<[string, Json, Json[], Json[]]> = [
+        ['given and not taken', issue(14, ['size:m', 'builder:pip']), [], []],
+        ['taken, with no pull request', taken(14), [], []],
+        ['a draft', taken(14), [up(14, { draft: true })], []],
+        ['a HOLD on its head', taken(14), [up(14)], [{ body: `Faye, 07:10, to **Pip**: HOLD ${head(14).slice(0, 7)} app.ts:3 add the test`, created_at: '2026-11-09T07:10:00Z', author_association: 'OWNER' }]],
+      ]
+      for (const [what, task, pulls, comments] of building) {
+        const f = setup([task, issue(16, ['size:s'])], { crew: alone })
+        f.github.state.pulls = pulls
+        f.github.state.comments.set(114, comments)
+        await f.assigner.tick()
+        expect(f.labelled(), what).toEqual([])
+        // Not counted as waiting for a task either: it has one.
+        expect(f.numbers.mock.calls.at(-1)![1], what).toMatchObject({ free: [], open: 1, held: 1 })
+      }
+    })
+
+    it('gives a builder one task a pass, and the next only once the first is up for its read', async () => {
+      const f = setup([issue(1, ['size:s', 'p0']), issue(2, ['size:s', 'p1']), issue(3, ['size:s'])], { crew: alone })
+      f.github.state.applied = true
+      await f.assigner.tick()
+      expect(f.labelled()).toEqual([[1, 'builder:pip']])
+      // Given and not taken, then taken, then a draft: still the one it builds, pass after pass.
+      await f.assigner.tick()
+      f.github.state.open[0] = taken(1)
+      await f.assigner.tick()
+      f.github.state.pulls = [up(1, { draft: true })]
+      await f.assigner.tick()
+      expect(f.labelled()).toEqual([[1, 'builder:pip']])
+      // Its pull request is up: the next task is given in that pass, to start now.
+      f.github.state.pulls = [up(1)]
+      await f.assigner.tick()
+      expect(f.labelled()).toEqual([[1, 'builder:pip'], [2, 'builder:pip']])
+      expect(given(f).at(-1)).toEqual([2, 'for **Pip**: it can start now.'])
+    })
+
+    it('gives nothing more to a builder with four open, all in review, and does not count it as waiting for a task', async () => {
+      const f = setup([taken(11), taken(12), taken(13), issue(16, ['size:s'])], { crew: alone })
+      f.github.state.pulls = [up(11), up(12), up(13)]
+      f.github.state.applied = true
+      await f.assigner.tick()
+      // Three in review: there is room for a fourth.
+      expect(f.labelled()).toEqual([[16, 'builder:pip']])
+      f.github.state.open[3] = taken(16)
+      f.github.state.pulls.push(up(16))
+      f.github.state.open.push(issue(17, ['size:s']))
+      await f.assigner.tick()
+      expect(f.labelled()).toEqual([[16, 'builder:pip']])
+      // Its PM cannot end that wait by opening tasks, so it is not told of it.
+      expect(f.numbers.mock.calls.at(-1)![1]).toMatchObject({ free: [], open: 1, held: 4 })
+    })
+
+  })
+
+  // The allocator's design, package 3: a task that says "after #B" was given as soon as #B was taken, before #B had any code; and
+  // of #1 and #2 "after #1", both free, with two builders, both were given in one pass.
+  describe('a task that comes after another', () => {
+    const head = (n: number) => `${(0xa6edb40 + n).toString(16)}${'0'.repeat(33)}`
+    /** [builder]'s pull request for task [n], into main. */
+    const pullFor = (n: number, builder: string, extra: Json = {}): Json => ({ number: 100 + n, draft: false, base: { ref: 'main' }, head: { sha: head(n), ref: `${builder}/${n}` },
+      labels: [{ name: `builder:${builder}` }], body: `Closes #${n}`, author_association: 'MEMBER', ...extra })
+    const lines = (f: ReturnType<typeof setup>, number: number) => f.said().filter(([n]) => n === number).map(([, body]) => String(body).replace(/^Harness, \d\d:\d\d: /, ''))
+
+    it('is given once what it comes after has its pull request up, only to that builder, with the branch to build it on', async () => {
+      const f = setup([issue(1, ['size:s']), issue(2, ['size:s', 'p0'], { body: 'Do this after #1.' })])
+      f.github.state.applied = true
+      await f.assigner.tick()
+      // Only #1 is given: Juno has nothing, and the task that comes after waits, urgent as it is.
+      expect(f.labelled()).toEqual([[1, 'builder:pip']])
+      expect(f.numbers.mock.calls.at(-1)![1]).toMatchObject({ free: [{ id: 'juno', name: 'Juno' }], open: 1 })
+      // Taken, then a draft: #1 has no code to build on yet.
+      f.github.state.open[0] = issue(1, ['size:s', 'builder:pip', 'status:taken'])
+      await f.assigner.tick()
+      f.github.state.pulls = [pullFor(1, 'pip', { draft: true })]
+      await f.assigner.tick()
+      expect(f.labelled()).toEqual([[1, 'builder:pip']])
+      // Its pull request is up: the next goes to Pip, who has the branch, not to Juno, who has nothing.
+      f.github.state.pulls = [pullFor(1, 'pip')]
+      await f.assigner.tick()
+      expect(f.labelled()).toEqual([[1, 'builder:pip'], [2, 'builder:pip']])
+      expect(lines(f, 2)).toEqual(['for **Pip**: it can start now. Build it on the branch of #101 (`pip/1`); its pull request still goes into the default branch.'])
+    })
+
+    it('waits until what it comes after lands when that builder is away, then goes to who can start it', async () => {
+      const team: Crew = { ...crew(), builders: [crew().builders[0]!], away: [{ name: 'Juno', label: 'builder:juno', why: 'stopping' }] }
+      const f = setup([issue(1, ['size:s', 'builder:juno', 'status:taken']), issue(2, ['size:s'], { body: 'after #1' })], { crew: team })
+      f.github.state.pulls = [pullFor(1, 'juno')]
+      await f.assigner.tick()
+      await f.assigner.tick()
+      // Juno's task is kept while its pull request waits for its read; what comes after it is given to nobody.
+      expect(f.labelled()).toEqual([])
+      // It lands: #1 is closed, and nothing is left to wait for.
+      f.github.state.open.shift()
+      f.github.state.pulls = []
+      await f.assigner.tick()
+      expect(f.labelled()).toEqual([[2, 'builder:pip']])
+      expect(lines(f, 2)).toEqual(['for **Pip**: it can start now.'])
+    })
+
+    // Taken back for a builder with nothing, it could go to that one builder only: three writes, and an untrue line.
+    it('stays with its builder, untaken for ten minutes, while another builder has nothing', async () => {
+      const f = setup([issue(1, ['size:s', 'builder:pip', 'status:taken']), issue(2, ['size:s', 'builder:pip'], { body: 'after #1' })])
+      f.github.state.pulls = [pullFor(1, 'pip')]
+      f.github.state.comments.set(2, [{ body: 'Harness, 07:20: for **Pip**: it can start now. Build it on the branch of #101 (`pip/1`); its pull request still goes into the default branch.',
+        author_association: 'MEMBER', user: { login: 'deehw' }, created_at: '2026-11-09T07:20:00Z' }])
+      await f.assigner.tick()
+      expect(f.github.sent.filter(s => s.method === 'DELETE')).toEqual([])
+      expect(lines(f, 2)).toEqual([])
+      // What it came after has landed and is closed: it is any builder's now, and goes back for the one with nothing.
+      f.github.state.open.shift()
+      f.github.state.pulls = []
+      await f.assigner.tick()
+      expect(lines(f, 2)).toEqual(['Pip has not started it in 11 minutes, and Juno has nothing to do, so this task goes to the builder who can start it next.'])
+    })
+
+    // Anything from outside is data: anyone can name a fork's branch `pip/1` and say it closes #1. Read as Pip's, it got #2
+    // given to Pip before #1 had code, on an outsider's branch (review of #4121). GitHub's own word that its author is a
+    // member of the repository is asked too.
+    it('takes no outsider\'s pull request for what it comes after, on a branch named like a builder\'s', async () => {
+      const f = setup([issue(1, ['size:s', 'builder:juno', 'status:taken']), issue(2, ['size:s'], { body: 'after #1' })])
+      f.github.state.pulls = [pullFor(1, 'pip', { labels: [], author_association: 'CONTRIBUTOR', head: { sha: head(1), ref: 'pip/1', repo: { full_name: 'kai/app' } } })]
+      await f.assigner.tick()
+      expect(f.labelled()).toEqual([])
+      expect(lines(f, 2)).toEqual([])
+      expect(f.numbers.mock.calls.at(-1)![1]).toMatchObject({ open: 1 })
+    })
+
+    // On hold, or with failed checks, it has the code a later task is built on, and its builder, who fixes it first, has room.
+    it.each<[string, (f: ReturnType<typeof setup>) => void]>([
+      ['on hold', f => { f.github.state.pulls = [pullFor(1, 'pip', { labels: [{ name: 'builder:pip' }, { name: 'hold' }] })] }],
+      ['with failed checks', f => {
+        f.github.state.pulls = [pullFor(1, 'pip')]
+        f.github.state.headChecks.set(head(1), [{ name: 'ci/required', status: 'completed', conclusion: 'failure' }])
+      }],
+    ])('is given to the builder whose pull request for what it comes after is up, %s', async (_case, arrange) => {
+      const f = setup([issue(1, ['size:s', 'builder:pip', 'status:taken']), issue(2, ['size:s'], { body: 'after #1' })])
+      arrange(f)
+      await f.assigner.tick()
+      expect(f.labelled()).toEqual([[2, 'builder:pip']])
+    })
+
+    it('waits while two builders each have a pull request up for what it comes after', async () => {
+      const team: Crew = { ...crew(), builders: [...crew().builders, { id: 'atlas', name: 'Atlas', label: 'builder:atlas', machineId: 'mac', engine: 'codex' }] }
+      const f = setup([issue(1, ['size:s', 'builder:pip', 'status:taken']), issue(2, ['size:s'], { body: 'after #1' })], { crew: team })
+      f.github.state.pulls = [pullFor(1, 'pip'), { ...pullFor(1, 'juno'), number: 111 }]
+      await f.assigner.tick()
+      expect(f.labelled()).toEqual([])
+      // One of them closes its own: the other's branch is the one to build on.
+      f.github.state.pulls = [{ ...pullFor(1, 'juno'), number: 111 }]
+      await f.assigner.tick()
+      expect(f.labelled()).toEqual([[2, 'builder:juno']])
+      expect(lines(f, 2)).toEqual(['for **Juno**: it can start now. Build it on the branch of #111 (`juno/1`); its pull request still goes into the default branch.'])
+    })
   })
 
   it('gives a task once, though GitHub\'s lists have not caught up with its label yet', async () => {
@@ -115,14 +455,16 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     expect(f.said()).toHaveLength(1)
   })
 
-  it('keeps two deep while GitHub\'s list lags behind the labels it gave', async () => {
+  it('keeps one task with each builder while GitHub\'s list lags behind the labels it gave', async () => {
     const f = setup([issue(1, ['size:s']), issue(2, ['size:s']), issue(3, ['size:s']), issue(4, ['size:s']), issue(5, ['size:s']), issue(6, ['size:s'])])
     await f.assigner.tick()
-    // The list still shows no labels: nobody gets a third task.
+    // The list still shows no labels: nobody gets a second task, and no task is given twice.
     f.github.state.open.push(issue(7, ['size:s']))
     await f.assigner.tick()
+    await f.assigner.tick()
     const count = (label: string) => f.labelled().filter(([, l]) => l === label).length
-    expect([count('builder:pip'), count('builder:juno')]).toEqual([2, 2])
+    expect([count('builder:pip'), count('builder:juno')]).toEqual([1, 1])
+    expect(new Set(f.labelled().map(([n]) => n)).size).toBe(2)
   })
 
   it('leaves a task a person took without a builder label', async () => {
@@ -149,17 +491,18 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     expect(full.log.mock.calls.filter(([line]) => String(line).includes('TOO_MANY_OPEN acme/app: the newest 1000 open issues'))).toHaveLength(1)
   })
 
-  it('gives nothing the PM has not sized, nothing to a team with no builders, and keeps a full list full', async () => {
+  it('gives nothing the PM has not sized, nothing to a team with no builders, and nothing while every builder has a task to build', async () => {
     const unsized = setup([issue(1, ['part:api'])])
     await unsized.assigner.tick()
     expect(unsized.github.sent).toEqual([])
     const nobody = setup([issue(1, ['size:s'])], { crew: { builders: [], machines: [] } })
     await nobody.assigner.tick()
     expect(nobody.github.sent).toEqual([])
-    const full = setup([issue(1, ['size:m', 'builder:pip']), issue(2, ['size:m', 'builder:pip']), issue(3, ['size:m', 'builder:juno']),
-      issue(4, ['size:m', 'builder:juno']), issue(5, ['size:s'])])
-    await full.assigner.tick()
-    expect(full.github.sent).toEqual([])
+    // No plan is made then, so a backlog costs nothing each minute: a task no machine can build is said once somebody has room.
+    const building = setup([issue(1, ['size:m', 'builder:pip']), issue(3, ['size:m', 'builder:juno', 'status:taken']), issue(5, ['size:s']), issue(6, ['size:s', 'needs:robot-arm'])])
+    await building.assigner.tick()
+    expect(building.github.sent).toEqual([])
+    expect(building.log.mock.calls.some(([line]) => String(line).includes('UNPLACED'))).toBe(false)
   })
 
   it('gives what only one machine can build to a builder on it, and says when none can', async () => {
@@ -235,6 +578,21 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     expect(f.github.sent.filter(s => s.path === '/repos/acme/app/labels').map(s => s.body)).toEqual([{ name: 'part:mobile', color: 'c5def5', description: 'An area of the project' }])
     await f.assigner.tick()
     expect(f.github.sent.filter(s => s.path === '/repos/acme/app/labels')).toHaveLength(1)
+  })
+
+  // The allocator's design, package 5: the label's side was compared as written, so a task labelled `part:Backend` was no task
+  // of the area of an agent that "Works on: backend", and Harness made a second label beside the repository's own.
+  it('gives a task to the builder that works on its area however the label spells it, and makes no second label for that area', async () => {
+    const f = setup([issue(1, ['size:s', 'part:Backend']), issue(2, ['size:s', 'part:Mobile App'])])
+    f.github.state.files.set('agents/Pip.md', 'Works on: mobile app')
+    f.github.state.files.set('agents/Juno.md', 'Works on: backend')
+    f.github.state.labels.push({ name: 'part:Mobile App' }, { name: 'part:Backend' })
+    await f.assigner.tick()
+    expect(f.labelled().sort()).toEqual([[1, 'builder:juno'], [2, 'builder:pip']])
+    const why = new Map(f.said() as Array<[number, string]>)
+    expect(why.get(1)).toMatch(/for \*\*Juno\*\*: it can start now, and it works on backend\.$/)
+    expect(why.get(2)).toMatch(/for \*\*Pip\*\*: it can start now, and it works on mobile-app\.$/)
+    expect(f.github.sent.filter(s => s.path === '/repos/acme/app/labels')).toEqual([])
   })
 
   describe('readers', () => {
@@ -460,30 +818,114 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       expect(asks(f)).toHaveLength(1)
     })
 
-    it('asks the only reader again after 30 silent minutes, at most twice more for a head, after a restart too', async () => {
-      // Half the wait for a verdict.
-      const STEP = 15 * 60_000
+    // #4055, anh Dee, 2026-11-11: "never spam github as user accounts could be banned". Asked again each silent half hour, the
+    // pull request had one more comment, in its person's name, each time; its reader is reminded in its own terminal instead.
+    it('asks the only reader once for a head, and not again however long it is silent, after a restart too', async () => {
       const askedAt = (at: string) => comment(`Harness, ${at.slice(11, 16)}, to **Faye**: please read this pull request, and start your `
         + 'comment with READ-OK f6edb44 or HOLD f6edb44 (with the file, line and fix).', { created_at: at })
-      // Pip builds alone; Faye, its PM, was asked 45 minutes ago and has said nothing since (stopped when it was asked).
+      // Pip builds alone; Faye, its PM, was asked 45 minutes ago and has said nothing since.
       const f = setup([], { crew: { builders: [crew().builders[0]!], machines: crew().machines } })
       f.github.state.pulls = [pull()]
-      const iso = (ms: number) => new Date(ms).toISOString()
-      const first = iso(f.clock.now - 3 * STEP)
-      f.github.state.comments.set(30, [askedAt(first)])
+      f.github.state.comments.set(30, [askedAt(new Date(f.clock.now - 45 * 60_000).toISOString())])
+      for (const later of [0, 60, 240]) {
+        f.clock.now += later * 60_000
+        await f.make().tick()
+      }
+      expect(asks(f)).toEqual([])
+    })
+
+    // Code review of #4060: a push is a change to read. The reader asked about the head before, with no verdict on it, is asked
+    // about the new one once, half an hour after its last ask at the soonest, and then not again.
+    it('asks a reader asked about an earlier head about the new one, once, half an hour after its last ask', async () => {
+      const f = setup([], { crew: { builders: [crew().builders[0]!], machines: crew().machines } })
+      f.github.state.pulls = [pull()]
+      f.github.state.comments.set(30, [comment('Harness, 05:00, to **Faye**: please read this pull request, and start your comment with '
+        + 'READ-OK 1234567 or HOLD 1234567 (with the file, line and fix).', { created_at: new Date(f.clock.now - 10 * 60_000).toISOString() })])
+      await f.make().tick()
+      expect(asks(f)).toEqual([])
+      // Each pass a fresh process, which knows what it asked only as GitHub keeps it.
+      let kept = 0
+      for (const later of [20, 0, 60, 240]) {
+        f.clock.now += later * 60_000
+        await f.make().tick()
+        for (const body of asks(f).slice(kept)) f.github.state.comments.get(30)!.push(comment(body, { created_at: new Date(f.clock.now).toISOString() }))
+        kept = asks(f).length
+      }
+      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Faye\*\*: the head is now f6edb44: please read this pull request/)])
+      // Said in the daemon's log, once a process.
+      expect(f.log.mock.calls.some(([line]) => /NO_READER acme\/app#30@f6edb44: its readers asked have not read it/.test(String(line)))).toBe(true)
+    })
+
+    // The swarm-sandbox, 2026-11-10: Juno, its PM and only reader, was asked while stopped and never heard it (GitHub news brings
+    // what is said only while an agent runs). Asked once it runs; until then the daemon says why nobody reads it.
+    it('asks its PM to read only while it runs here', async () => {
+      const f = setup([], { crew: { builders: [crew().builders[0]!], machines: crew().machines } })
+      f.github.state.pulls = [pull()]
+      f.pm.running = false
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([])
+      expect(f.log.mock.calls.some(([line]) => /NO_READER acme\/app#30@f6edb44: its PM, the reader left, is stopped/.test(String(line)))).toBe(true)
+      f.pm.running = true
+      await f.assigner.tick()
       await f.assigner.tick()
       expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Faye\*\*: please read this pull request/)])
-      f.github.state.comments.set(30, [askedAt(first), askedAt(iso(f.clock.now))])
-      f.clock.now += STEP
+    })
+
+    // Code review of #4060: a stopped PM asked about an earlier head is not asked about the new one either; one whose state cannot be
+    // read is taken as stopped, and the pass goes on.
+    it('asks a stopped PM about a new head no more than about the first, and goes on when its state cannot be read', async () => {
+      const f = setup([], { crew: { builders: [crew().builders[0]!], machines: crew().machines } })
+      f.github.state.pulls = [pull()]
+      f.github.state.comments.set(30, [comment('Harness, 05:00, to **Faye**: please read this pull request, and start your comment with '
+        + 'READ-OK 1234567 or HOLD 1234567 (with the file, line and fix).', { created_at: new Date(f.clock.now - 40 * 60_000).toISOString() })])
+      f.pm.running = false
+      await f.assigner.tick()
+      f.pm.unreadable = true
+      f.clock.now += 60 * 60_000
+      await f.make().tick()
+      expect(asks(f)).toEqual([])
+      expect(f.log.mock.calls.filter(([line]) => /NO_READER acme\/app#30@f6edb44: its PM, the reader left, is stopped/.test(String(line)))).toHaveLength(2)
+    })
+
+    // A stop for every repository (GitHub limiting this computer) stops the pass, as any read's: nothing is asked meanwhile.
+    it('stops its pass when GitHub limits the read of the checks', async () => {
+      const f = setup([], { crew: team })
+      f.github.state.pulls = [pull()]
+      f.github.state.checksLimited = true
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([])
+      expect(f.log.mock.calls.some(([line]) => /RATE_LIMITED|limiting/.test(String(line)))).toBe(true)
+    })
+
+    it('asks readers as before when the checks cannot be read, and says so once', async () => {
+      const f = setup([], { crew: team })
+      f.github.state.pulls = [pull()]
+      f.github.state.checksDown = true
+      await f.assigner.tick()
       await f.assigner.tick()
       expect(asks(f)).toHaveLength(1)
-      f.clock.now += STEP + 60_000
-      await f.make().tick()
-      expect(asks(f)).toHaveLength(2)
-      f.github.state.comments.set(30, [askedAt(first), askedAt(iso(f.clock.now - 2 * STEP)), askedAt(iso(f.clock.now))])
-      f.clock.now += 3 * STEP
-      await f.make().tick()
-      expect(asks(f)).toHaveLength(2)
+      expect(f.log.mock.calls.filter(([line]) => /CHECKS_UNREAD acme\/app/.test(String(line)))).toHaveLength(1)
+    })
+
+    it('asks nobody to read a pull request on hold, nor one whose checks failed at its head, until they pass', async () => {
+      const f = setup([], { crew: team })
+      // On hold, in any case: its task waits with it, so its builder is not called quiet on it (code review of #4060).
+      f.github.state.pulls = [pull({ labels: [{ name: 'builder:pip' }, { name: 'Hold' }] })]
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([])
+      expect(f.numbers.mock.calls.at(-1)![1].free.map(free => free.name)).toContain('Pip')
+      const failing = pull()
+      f.github.state.pulls = [failing]
+      f.github.state.headChecks.set(String((failing.head as Json).sha), [{ name: 'ci/required', status: 'completed', conclusion: 'failure' }])
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([])
+      // Run again and passed: read again once ten minutes are up (a failing head is not read each pass), and its reader asked.
+      f.github.state.headChecks.set(String((failing.head as Json).sha), [{ name: 'ci/required', status: 'completed', conclusion: 'success' }])
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([])
+      f.clock.now += 10 * 60_000
+      await f.assigner.tick()
+      expect(asks(f)).toHaveLength(1)
     })
 
     it('measures a reader asked again after a push from that ask, and one that never answered from its last', async () => {
@@ -522,6 +964,15 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       f.github.state.comments.set(30, [comment(asks(f)[0]!)])
       await f.make().tick()
       expect(asks(f)).toHaveLength(1)
+    })
+
+    // Of two readers of another model family, the one that holds fewer open tasks, however their names sort.
+    it('asks the reader that holds the fewest tasks, among those of another model family', async () => {
+      const four: Crew = { builders: [...team.builders, { id: 'bo', name: 'Bo', label: 'builder:bo', machineId: 'mac', engine: 'codex' }], machines: team.machines }
+      const f = setup([issue(40, ['size:s', 'builder:atlas', 'status:taken'])], { crew: four })
+      f.github.state.pulls = [pull()]
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Bo\*\*: please read this pull request/)])
     })
 
     it('asks two for TWO READS, none while a HOLD stands or for a draft, and none once its head has its READ-OK', async () => {
@@ -584,7 +1035,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
   })
 
   // Swarm plan, step 1, item 6: "Nobody waits on it: a task not taken in 10 minutes is open to any agent with room." A task
-  // waits two deep behind its builder's other work while another builder sits with nothing.
+  // waits with a builder that does not take it while another builder sits with nothing.
   describe('a task Harness gave that is not taken in 10 minutes, while a builder has nothing', () => {
     const gave = (name: string, at: string): Json => ({ body: `Harness, ${at.slice(11, 16)}: for **${name}**: it can start in 30 min.`,
       author_association: 'MEMBER', user: { login: 'deehw' }, created_at: at })
@@ -611,6 +1062,19 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       expect(f.said().filter(([n, body]) => n === 15 && String(body).includes('has nothing to do'))).toHaveLength(1)
     })
 
+    // The sandbox, 2026-11-11: with one builder free, both of two waiting tasks went back, and the plan then had two to give to it.
+    it('takes back one task for each builder with nothing, the oldest first', async () => {
+      const team: Crew = { ...crew(), builders: [...crew().builders, { id: 'atlas', name: 'Atlas', label: 'builder:atlas', machineId: 'mac', engine: 'codex' }] }
+      // Pip works on #14 and waits on #15; Atlas waits on #17, untaken; Juno has nothing.
+      const f = setup([issue(14, ['size:m', 'builder:pip', 'status:taken']), issue(15, ['size:m', 'builder:pip']), issue(17, ['size:m', 'builder:atlas'])],
+        { crew: team })
+      f.github.state.applied = true
+      f.github.state.comments.set(15, [gave('Pip', '2026-11-09T07:00:00Z')])
+      f.github.state.comments.set(17, [gave('Atlas', '2026-11-09T07:05:00Z')])
+      await f.assigner.tick()
+      expect(f.said().filter(([, body]) => String(body).includes('has nothing to do')).map(([n]) => n)).toEqual([15])
+    })
+
     it('stays while it is new, given by hand, or while nobody else has nothing; and the read is made only then', async () => {
       const fresh = waiting()
       fresh.github.state.comments.set(15, [gave('Pip', '2026-11-09T07:25:00Z')])
@@ -624,6 +1088,27 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       await busy.assigner.tick()
       for (const f of [fresh, hand, busy]) expect(f.github.sent.filter(s => s.method === 'DELETE')).toEqual([])
       expect(busy.github.sent).toEqual([])
+    })
+
+    // The allocator's design, package 2: a builder whose tasks are all up for their read has nothing to build, and with fewer
+    // than four open it would be given the task; with four it would not, so the task stays where it is.
+    it('goes back for a builder whose own tasks wait on their pull requests\' reads, while that builder has room for it', async () => {
+      const inReview = (count: number) => {
+        const tasks = Array.from({ length: count }, (_, i) => 20 + i)
+        const f = setup([issue(15, ['size:m', 'builder:pip']), ...tasks.map(n => issue(n, ['size:m', 'builder:juno', 'status:taken']))])
+        f.github.state.pulls = tasks.map(n => ({ number: 100 + n, draft: false, base: { ref: 'main' }, head: { sha: `${(0xf6edb40 + n).toString(16)}${'0'.repeat(33)}`, ref: `juno/${n}` },
+          labels: [{ name: 'builder:juno' }], body: `Closes #${n}` }))
+        f.github.state.comments.set(15, [gave('Pip', '2026-11-09T07:20:00Z')])
+        return f
+      }
+      const back = (f: ReturnType<typeof setup>) => f.said().filter(([n]) => n === 15).map(([, body]) => String(body).replace(/\d\d:\d\d/, 'HH:MM'))
+      const room = inReview(3)
+      await room.assigner.tick()
+      expect(back(room)).toEqual(['Harness, HH:MM: Pip has not started it in 11 minutes, and Juno has nothing to do, so this task goes to the builder who can start it next.'])
+      const full = inReview(4)
+      await full.assigner.tick()
+      expect(back(full)).toEqual([])
+      expect(full.github.sent.filter(s => s.method === 'DELETE')).toEqual([])
     })
 
     // Pip's computer has the GPU #15 needs, and Juno's has none: Juno could not take it.
@@ -649,9 +1134,14 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       '/repos/acme/app/issues/1/labels/builder%3Ajuno', '/repos/acme/app/issues/1/labels/status%3Ataken',
       '/repos/acme/app/issues/2/labels/builder%3Ajuno', '/repos/acme/app/issues/2/labels/status%3Ataken'])
     expect(f.said().filter(([, body]) => String(body).includes('is being stopped')).map(([n]) => n)).toEqual([1, 2])
-    // The next plan gives both to Pip, two deep.
+    // The next plan gives Pip the first of them, and the other once that one is up for its read.
     await f.assigner.tick()
-    expect(f.labelled().map(([n, label]) => [n, label]).sort()).toEqual([[1, 'builder:pip'], [2, 'builder:pip']])
+    await f.assigner.tick()
+    expect(f.labelled()).toEqual([[1, 'builder:pip']])
+    f.github.state.open[0] = issue(1, ['size:s', 'builder:pip', 'status:taken'])
+    f.github.state.pulls = [{ number: 30, draft: false, base: { ref: 'main' }, head: { sha: 'f6edb44c0ffee0000000000000000000000000ab', ref: 'pip/1' }, labels: [{ name: 'builder:pip' }], body: 'Closes #1' }]
+    await f.assigner.tick()
+    expect(f.labelled()).toEqual([[1, 'builder:pip'], [2, 'builder:pip']])
   })
 
   // githubClaim.ts marks a task taken, and takes its own mark off only when it sees its builder's label gone. One that lands
@@ -754,6 +1244,132 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     expect(f.said()).toEqual([[15, expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*Faye\*\*: the head is now 6b5ae5a, after your HOLD on c208f63/)]])
   })
 
+  // A task that waits on pieces cut off it (githubSplit.ts) is others' to move: never called quiet while they are open. GitHub
+  // does not touch a task as its piece closes (seen on a real repository, 2026-11-11), so by its own time it is quiet since its
+  // builder's last cut: its quiet is counted from when it last waited, or from the word that its pieces are closed.
+  it('never calls quiet a task that waits on its pieces, and counts its quiet from when they closed', async () => {
+    const HOUR = 3_600_000
+    const f = setup([issue(1, ['size:l', 'builder:pip', 'status:taken'], { sub_issues_summary: { total: 2, completed: 1 } })])
+    f.github.state.open[0]!.updated_at = new Date(f.clock.now).toISOString()
+    const asks = () => f.said().filter(([, body]) => String(body).includes('Are you still on it?'))
+    const told = () => f.said().filter(([, body]) => String(body).includes('cut off this task'))
+    for (const hours of [5, 20, 30]) { f.clock.now += hours * HOUR; await f.assigner.tick() }
+    expect(asks()).toEqual([])
+    expect(f.github.state.asked.filter(path => path.includes('/issues/1/comments'))).toEqual([])
+    f.github.state.open[0]!.sub_issues_summary = { total: 2, completed: 2 }
+    await f.assigner.tick()
+    expect(told()).toHaveLength(1)
+    // GitHub's list still shows the task's old time on the passes that follow, and for good had the word been refused: it
+    // is quiet four hours after that word, as any task after its last touch.
+    f.clock.now += 60_000
+    await f.assigner.tick()
+    f.clock.now += 3 * HOUR
+    await f.assigner.tick()
+    expect(asks()).toEqual([])
+    f.clock.now += HOUR
+    await f.assigner.tick()
+    expect(asks()).toHaveLength(1)
+    expect(told()).toHaveLength(1)
+  })
+
+  it('counts a task\'s quiet from when it last waited, whatever else is so: a piece opened again, a draft of its builder\'s, a word GitHub refused', async () => {
+    const HOUR = 3_600_000, long = new Date(Date.parse('2026-11-09T07:31:00Z') - 9 * HOUR).toISOString()
+    const asks = (f: ReturnType<typeof setup>) => f.said().filter(([, body]) => String(body).includes('Are you still on it?'))
+    const told = (f: ReturnType<typeof setup>) => f.said().filter(([, body]) => String(body).includes('cut off this task')).map(([, body]) => String(body).replace(/^Harness, \d\d:\d\d, /, ''))
+    // Both pieces close and its builder is told; one is opened again for six hours, and closes again: told again, not asked.
+    const f = setup([issue(1, ['size:l', 'builder:pip', 'status:taken'], { sub_issues_summary: { total: 2, completed: 2 }, updated_at: long })])
+    await f.assigner.tick()
+    // The word of the first time they closed is on the task: it is not the word of the second.
+    f.github.state.comments.set(1, [{ body: `Harness, 07:31, ${told(f)[0]}`, author_association: 'MEMBER', created_at: new Date(f.clock.now).toISOString() }])
+    f.github.state.open[0]!.sub_issues_summary = { total: 2, completed: 1 }
+    for (let hour = 0; hour < 6; hour++) { f.clock.now += HOUR; await f.assigner.tick() }
+    f.github.state.open[0]!.sub_issues_summary = { total: 2, completed: 2 }
+    await f.assigner.tick()
+    expect(told(f)).toHaveLength(2)
+    expect(asks(f)).toEqual([])
+    // A draft pull request of its builder's for the task, older than the cut, is no touch since: told, and not asked.
+    const g = setup([issue(1, ['size:l', 'builder:pip', 'status:taken'], { sub_issues_summary: { total: 1, completed: 0 }, updated_at: long })])
+    g.github.state.pulls = [{ number: 30, draft: true, base: { ref: 'main' }, head: { sha: 'f6edb44c0ffee0000000000000000000000000ab', ref: 'pip/1' }, labels: [{ name: 'builder:pip' }], body: 'Closes #1',
+      updated_at: long }]
+    await g.assigner.tick()
+    g.github.state.open[0]!.sub_issues_summary = { total: 1, completed: 1 }
+    await g.assigner.tick()
+    expect(told(g)).toEqual(['to **Pip**: the piece cut off this task is closed. It is yours to finish, or to close if nothing is left.'])
+    expect(asks(g)).toEqual([])
+    // A word GitHub would not take is tried again each pass, and the task is not called quiet meanwhile.
+    const h = setup([issue(1, ['size:l', 'builder:pip', 'status:taken'], { sub_issues_summary: { total: 1, completed: 1 }, updated_at: long })])
+    h.github.state.commentAnswer = 403
+    await h.assigner.tick()
+    h.clock.now += 5 * HOUR
+    await h.assigner.tick()
+    expect(h.said().map(([, body]) => String(body).replace(/^Harness, \d\d:\d\d, /, ''))).toEqual(Array(2).fill('to **Pip**: the piece cut off this task is closed. It is yours to finish, or to close if nothing is left.'))
+    expect(h.log).toHaveBeenCalledWith('[super-tab] Task assignment: ASK_REFUSED acme/app#1: GitHub answered 403')
+  })
+
+  it('tells the PM once of a sized task nobody holds that waits on its pieces, and gives it to nobody', async () => {
+    const f = setup([issue(1, ['size:l'], { sub_issues_summary: { total: 2, completed: 1 } }),
+      // Not sized, held, or taken with no builder: not the PM's to be told of so.
+      issue(2, [], { sub_issues_summary: { total: 1, completed: 0 } }), issue(3, ['size:s', 'builder:pip'], { sub_issues_summary: { total: 1, completed: 0 } }),
+      issue(4, ['size:s', 'status:taken'], { sub_issues_summary: { total: 1, completed: 0 } })])
+    await f.assigner.tick()
+    await f.assigner.tick()
+    expect(f.labelled()).toEqual([])
+    expect(f.said()).toEqual([[1, expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*Faye\*\*: nobody can start this yet: pieces cut off it are still open\.$/)]])
+  })
+
+  it('tells a task\'s builder once that every piece cut off it is closed, and finds that word after a restart', async () => {
+    const HOUR = 3_600_000
+    const f = setup([issue(1, ['size:l', 'builder:pip', 'status:taken'], { sub_issues_summary: { total: 2, completed: 1 } }),
+      // Given and not taken, with no pieces, and another team's: nothing is said of them.
+      issue(2, ['size:l', 'builder:juno'], { sub_issues_summary: { total: 1, completed: 1 } }), issue(3, ['size:l', 'builder:pip', 'status:taken'], { sub_issues_summary: { total: 0, completed: 0 } }),
+      issue(4, ['size:l', 'builder:stranger', 'status:taken'], { sub_issues_summary: { total: 1, completed: 1 } })])
+    const told = () => f.said().filter(([, body]) => String(body).includes('cut off this task')).map(([number, body]) => [number, String(body).replace(/^Harness, \d\d:\d\d, /, '')])
+    const line = 'to **Pip**: all 2 pieces cut off this task are closed. It is yours to finish, or to close if nothing is left.'
+    await f.assigner.tick()
+    expect(told()).toEqual([])
+    f.github.state.open[0]!.sub_issues_summary = { total: 2, completed: 2 }
+    await f.assigner.tick()
+    await f.assigner.tick()
+    expect(told()).toEqual([[1, line]])
+    // After a restart it is found said among the task's comments of the last day, and not said again.
+    const said = (hoursAgo: number, association = 'MEMBER') => f.github.state.comments.set(1, [{ body: `Harness, 07:31, ${line}`, author_association: association,
+      created_at: new Date(f.clock.now - hoursAgo * HOUR).toISOString() }])
+    said(20)
+    await f.make().tick()
+    expect(told()).toHaveLength(1)
+    // Said twenty hours ago and nothing since, the task is quiet from that word, and its builder is asked, as of any task.
+    const asks = () => f.said().filter(([, body]) => String(body).includes('Are you still on it?')).length
+    expect(asks()).toBe(1)
+    // Found said an hour ago, with GitHub's list still showing the task's older time: quiet from that word, not asked now.
+    f.github.state.open[0]!.updated_at = new Date(f.clock.now - 9 * HOUR).toISOString()
+    said(1)
+    await f.make().tick()
+    expect(asks()).toBe(1)
+    // A stranger's comment in the same words is not Harness's, and one of two days ago is not looked back to: it is said.
+    for (const [hoursAgo, association] of [[1, 'NONE'], [48, 'MEMBER']] as const) {
+      said(hoursAgo, association)
+      const before = told().length
+      await f.make().tick()
+      expect(told()).toHaveLength(before + 1)
+    }
+    // A task closed is forgotten: opened again as it was, its builder is told again.
+    const [first] = f.github.state.open.splice(0, 1)
+    await f.assigner.tick()
+    f.github.state.open.unshift(first!)
+    f.github.state.comments.delete(1)
+    const before = told().length
+    await f.assigner.tick()
+    expect(told()).toHaveLength(before + 1)
+  })
+
+  it('tells the PM of no more waiting tasks in a pass than it tells of blocked ones', async () => {
+    const f = setup(Array.from({ length: 7 }, (_, n) => issue(n + 1, ['size:l'], { sub_issues_summary: { total: 1, completed: 0 } })))
+    await f.assigner.tick()
+    expect(f.said()).toHaveLength(5)
+    await f.assigner.tick()
+    expect(f.said().map(([number]) => number).sort()).toEqual([1, 2, 3, 4, 5, 6, 7])
+  })
+
   it('moves nothing within a team of one builder: a quiet task stays, and so does one waiting for its quota', async () => {
     const HOUR = 3_600_000
     const one: Crew = { builders: [crew().builders[0]!], machines: crew().machines }
@@ -802,6 +1418,20 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       expect(f.github.sent.filter(s => s.method === 'DELETE').map(s => s.path)).toEqual(['/repos/acme/app/issues/1/labels/status%3Ataken',
         '/repos/acme/app/issues/1/labels/builder%3Ajuno', '/repos/acme/app/issues/1/labels/status%3Ataken'])
       expect(f.said().some(([, body]) => String(body).includes('Juno has had no activity on it since it was asked'))).toBe(true)
+    })
+
+    // Code review of #4084: a line held back (githubWrites.ts) or refused was dropped without a word; the task moves all the same.
+    it('takes a task back and gives it on all the same when GitHub refuses their lines, and says each line was not written', async () => {
+      const f = setup([issue(1, ['size:s', 'builder:juno', 'status:taken'])])
+      f.github.state.open[0]!.updated_at = ago(f, 5)
+      await f.assigner.tick()
+      f.github.state.commentAnswer = 429
+      f.clock.now += 5 * HOUR
+      await f.assigner.tick()
+      await f.assigner.tick()
+      expect(f.log).toHaveBeenCalledWith(expect.stringMatching(/^\[super-tab\] took acme\/app#1 back: /))
+      expect(f.log).toHaveBeenCalledWith('[super-tab] Task assignment: LINE_REFUSED acme/app#1: GitHub answered 429')
+      expect(f.log).toHaveBeenCalledWith(expect.stringMatching(/^\[super-tab\] gave acme\/app#1 to /))
     })
 
     it('after a restart, asks no second time, and gives the task to another 4 hours after its ask', async () => {
@@ -871,27 +1501,29 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     })
   })
 
+  /** Pip and Juno on one computer with memory for one middle task at a time. Juno holds #1, which its PM gave it; #2 is free. A
+   *  builder is given one task at a time, so the time the plan gives a size shows in when Pip can start #2: once #1 ends. */
+  const oneAtATime = (closed: Json[]) => {
+    const f = setup([issue(1, ['size:m', 'builder:juno']), issue(2, ['size:m'])], { closed,
+      crew: { builders: crew().builders, machines: [{ machineId: 'mac', observation: { resources: { memoryTotalBytes: 6 * GiB, projectDiskFreeBytes: 500 * GiB } } }] } })
+    for (const n of [10, 11, 12]) f.github.state.comments.set(n, [{ body: 'Juno, 12:00, taken by Juno.', created_at: '2026-11-09T05:00:00Z' }])
+    return f
+  }
+
   it('plans with the time this project\'s finished tasks of a size took', async () => {
     const closedAt = (n: number) => ({ ...issue(n, ['size:m', 'builder:juno']), closed_at: '2026-11-09T05:40:00Z' })
-    const one: Crew = { ...crew(), builders: [crew().builders[0]!] }
-    const f = setup([issue(1, ['size:m']), issue(2, ['size:m'])], { crew: one, closed: [closedAt(10), closedAt(11), closedAt(12)] })
-    for (const n of [10, 11, 12]) f.github.state.comments.set(n, [{ body: 'Juno, 12:00, taken by Juno.', created_at: '2026-11-09T05:00:00Z' }])
+    const f = oneAtATime([closedAt(10), closedAt(11), closedAt(12)])
     await f.assigner.tick()
-    // Middle tasks took 40 minutes here, not the 90 a size:m is guessed at: Pip's second starts after 40.
-    expect(f.said().map(([, body]) => String(body).replace(/^Harness, \d\d:\d\d: /, '')).sort())
-      .toEqual(['for **Pip**: it can start in 40 min.', 'for **Pip**: it can start now.'])
+    // Middle tasks took 40 minutes here, not the 90 a size:m is guessed at: Pip starts after 40.
+    expect(f.said().map(([, body]) => String(body).replace(/^Harness, \d\d:\d\d: /, ''))).toEqual(['for **Pip**: it can start in 40 min.'])
   })
 
   it('learns only from tasks done: one closed as not planned is no measure of its size', async () => {
     const closedAt = (n: number, reason: string) => ({ ...issue(n, ['size:m', 'builder:juno']), closed_at: '2026-11-09T05:10:00Z', state_reason: reason })
-    const one: Crew = { ...crew(), builders: [crew().builders[0]!] }
     // Three middle tasks closed 10 minutes after they were taken, all dropped: nothing learned, the guess of 90 stands.
-    const f = setup([issue(1, ['size:m']), issue(2, ['size:m'])], { crew: one,
-      closed: [closedAt(10, 'not_planned'), closedAt(11, 'not_planned'), closedAt(12, 'not_planned')] })
-    for (const n of [10, 11, 12]) f.github.state.comments.set(n, [{ body: 'Juno, 12:00, taken by Juno.', created_at: '2026-11-09T05:00:00Z' }])
+    const f = oneAtATime([closedAt(10, 'not_planned'), closedAt(11, 'not_planned'), closedAt(12, 'not_planned')])
     await f.assigner.tick()
-    expect(f.said().map(([, body]) => String(body).replace(/^Harness, \d\d:\d\d: /, '')).sort())
-      .toEqual(['for **Pip**: it can start in 2 h.', 'for **Pip**: it can start now.'])
+    expect(f.said().map(([, body]) => String(body).replace(/^Harness, \d\d:\d\d: /, ''))).toEqual(['for **Pip**: it can start in 2 h.'])
   })
 
   it('stops while gh is signed out, says so once, and says when it runs again', async () => {

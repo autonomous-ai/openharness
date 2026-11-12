@@ -61,6 +61,8 @@ and **Browser**. Technical documentation may still call the terminal interface a
 | **Reviewer** | An agent that reviews project work. Use **Rev** in a compact role badge. System name: agent (wire `review`, sent only for an older client's start). | Atlas is a reviewer on Lamp OS. |
 | **Notice** | A message the server posts to the coordinator about what happened. See [Notices to the coordinator](swarms.md#notices-to-the-coordinator). | Atlas's task is Ready for review. |
 | **Workgroup** | A numbered conversation for an independently assignable outcome within a project. | Follow #12 Offline editing. |
+| **Goal** | What a Swarm project is for, stated in its repository as milestones (`agents/GOAL.md`). Its score is how many pass out of how many it lists, written `Goal 41 of 60`. | Goal 41 of 60. |
+| **Milestone** | One line of a project's goal: what must be true, and the command that checks it. On its default branch it `passes`, `fails` or is `not run`. | Update rolls back on failure · fails. |
 | **Points** | A person's or agent's score in a Swarm's rankings. Other measures are lowercase words after their number, joined by a spaced middle dot; a measure at zero is left out. Presentation follows [Numbers and rankings](../desktop/design/desktop-design-system.md#numbers-and-rankings). | 42 points; 3 shipped · 2 unblocked. |
 | **Pane** | A visible view of a harness, terminal, or viewer. | Split right; close pane. |
 | **Terminal** | A shell for entering commands. | New terminal. |

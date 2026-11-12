@@ -1743,13 +1743,23 @@ class _PaneContent extends StatelessWidget {
     }
 
     // A folder browsed in place: no agent and no terminal behind it.
+    // Any tile but one alone in its tab is carried by its header, whatever it shows.
+    PaneDragHandle? carry(BoxConstraints constraints) => single
+        ? null
+        : PaneDragHandle(
+            ref: PaneDragRef(paneId: pane.id),
+            size: constraints.biggest,
+          );
     if (pane.finderRoot case final root? when pane.isFinder) {
-      return FinderPanePanel(
-        key: ValueKey('finder-pane-${pane.id}'),
-        root: root,
-        onGuardClose: (guard) => pane.beforeClose = guard,
-        onFixedWidth: (width) => notifier.setPaneFixedWidth(pane.id, width),
-        compactHeader: swarmMode,
+      return LayoutBuilder(
+        builder: (context, constraints) => FinderPanePanel(
+          key: ValueKey('finder-pane-${pane.id}'),
+          root: root,
+          onGuardClose: (guard) => pane.beforeClose = guard,
+          onFixedWidth: (width) => notifier.setPaneFixedWidth(pane.id, width),
+          compactHeader: swarmMode,
+          paneDrag: carry(constraints),
+        ),
       );
     }
 
@@ -1760,31 +1770,34 @@ class _PaneContent extends StatelessWidget {
       final owner = machine?.agents
           .where((agent) => agent.id == pane.ownerAgentId)
           .firstOrNull;
-      return WebPanePanel(
-        key: ValueKey('web-pane-${pane.id}'),
-        notifier: notifier,
-        pane: pane,
-        title: viewerPaneName(owner, machine?.dsh.entries ?? const []),
-        visible: visible,
-        ownerName: owner?.name ?? pane.ownerAgentId ?? 'Viewer',
-        ownerEngine: owner?.identityEngine,
-        ownerDisplayName: owner?.identityDisplayName,
-        verdict: owner?.verdict,
-        working:
-            owner != null &&
-            notifier.agentIsProcessing(pane.machineId, owner.id),
-        onClose: close,
-        compactHeader: swarmMode,
-        zoomed: notifier.zoomedPaneId == pane.id,
-        onToggleZoom:
-            superPane == null &&
-                swarmMode &&
-                (!single || notifier.zoomedPaneId == pane.id)
-            ? () {
-                notifier.focusPane(pane.id);
-                notifier.toggleZoomPane();
-              }
-            : null,
+      return LayoutBuilder(
+        builder: (context, constraints) => WebPanePanel(
+          key: ValueKey('web-pane-${pane.id}'),
+          paneDrag: carry(constraints),
+          notifier: notifier,
+          pane: pane,
+          title: viewerPaneName(owner, machine?.dsh.entries ?? const []),
+          visible: visible,
+          ownerName: owner?.name ?? pane.ownerAgentId ?? 'Viewer',
+          ownerEngine: owner?.identityEngine,
+          ownerDisplayName: owner?.identityDisplayName,
+          verdict: owner?.verdict,
+          working:
+              owner != null &&
+              notifier.agentIsProcessing(pane.machineId, owner.id),
+          onClose: close,
+          compactHeader: swarmMode,
+          zoomed: notifier.zoomedPaneId == pane.id,
+          onToggleZoom:
+              superPane == null &&
+                  swarmMode &&
+                  (!single || notifier.zoomedPaneId == pane.id)
+              ? () {
+                  notifier.focusPane(pane.id);
+                  notifier.toggleZoomPane();
+                }
+              : null,
+        ),
       );
     }
     final session = pane.session;

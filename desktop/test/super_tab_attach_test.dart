@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -6,23 +8,34 @@ import 'package:harness/core/models.dart';
 import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shortcuts/app_keymap.dart';
+import 'package:harness/state/app_state.dart';
+import 'package:harness/state/swarm.dart';
 import 'package:harness/state/swarm_catalog.dart';
+import 'package:harness/state/terminal_pane.dart';
+import 'package:harness/super_tabs/model.dart';
 import 'package:harness/widgets/swarm_switcher.dart';
 
 import 'keymap_host_test.dart' show MemoryKeymap;
+import 'support/capture.dart';
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
+
+/// Set to a folder to write the pull request's pictures of Remove there.
+final _shots = Platform.environment['REMOVE_AGENT_SHOTS'];
 
 /// Attach, beside + in Your Team (Swarm v4, anh Dee 2026-11-09: "this is like cmd p. while + is like cmd n"), clicked
 /// through as a person does: ⌘P's picker of the agents running on their own computers, and the one chosen joins their
 /// team with its own chat.
 void main() {
+  setUpAll(() => loadCaptureFonts(_shots));
   Finder key(String k) => find.byKey(ValueKey(k));
   final harness = RegExp('harness', caseSensitive: false);
 
-  /// With [nothingRunning], no session runs on the person's computers.
+  /// With [nothingRunning], no session runs on the person's computers; with [full], the Swarm tab already shows as many
+  /// panes as a tab holds.
   Future<SuperTabLaunchFixture> open(
     WidgetTester tester, {
     bool nothingRunning = false,
+    bool full = false,
   }) async {
     final f = SuperTabLaunchFixture();
     f.connection.journaled = false;
@@ -85,6 +98,12 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    if (full) {
+      final tab = f.app.activeSwarm;
+      for (var id = 1 << 20; tab.panes.length < AppNotifier.maxPanes; id++) {
+        tab.panes.add(TerminalPane(id: id, machineId: 'm'));
+      }
+    }
     return f;
   }
 
@@ -147,6 +166,46 @@ void main() {
     },
   );
 
+  // QA 2026-11-12: Attach's footer said "No room for another harness." once the Swarm tab was full. An agent joins the
+  // team, so the tab's pane count never limits Attach, nor + Add agent.
+  testWidgets('a full Swarm tab still attaches, and says nothing of room', (
+    tester,
+  ) async {
+    final f = await open(tester, full: true);
+    final results = find.byType(SwarmSearchResults);
+    final room = find.descendant(
+      of: results,
+      matching: find.textContaining(RegExp('room|full')),
+    );
+    // Add agent (Cmd-O) to the Lead chat: an agent running here, or a new one.
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyO);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+    await tester.pumpAndSettle();
+    var search = tester.widget<SwarmSearchResults>(results).search;
+    expect(search.harnessContext?.action, 'Add agent');
+    expect(f.app.activeSwarm.panes, hasLength(AppNotifier.maxPanes));
+    expect(room, findsNothing);
+    expect(search.rows.where((row) => row.isCreate), hasLength(1));
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+
+    await tester.tap(key('project-sidebar-agents-attach'));
+    await tester.pumpAndSettle();
+    search = tester.widget<SwarmSearchResults>(results).search;
+    expect(search.selected?.agentId, 'docs-session');
+    expect(f.app.activeSwarm.panes, hasLength(AppNotifier.maxPanes));
+    expect(room, findsNothing);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    final join = f.connection.joins.single['command'] as Map;
+    expect(join, containsPair('harnessId', 'docs-session'));
+    expect(f.app.superTabs.peek(tabId)!.selectedId, join['conversationId']);
+    await tester.pumpWidget(const SizedBox());
+    await f.app.superTabs.peek(tabId)!.flush();
+    f.app.superTabs.dispose();
+  });
+
   // anh Dee 2026-11-10: "i should be able to attach stopped sessions too … resume + attach in one step".
   testWidgets('Attach speaks of agents when nothing matches, and an empty '
       'list says nothing', (tester) async {
@@ -164,10 +223,7 @@ void main() {
     await tester.tap(key('project-sidebar-agents-attach'));
     await tester.pumpAndSettle();
     final results = find.byType(SwarmSearchResults);
-    expect(
-      tester.widget<SwarmSearchResults>(results).search.rows,
-      isEmpty,
-    );
+    expect(tester.widget<SwarmSearchResults>(results).search.rows, isEmpty);
     expect(find.textContaining(harness), findsNothing);
     expect(
       find.descendant(of: results, matching: find.textContaining('yet')),
@@ -214,64 +270,11 @@ void main() {
     f.app.superTabs.dispose();
   });
 
-  // anh Dee 2026-11-09: Delete means "its computer stops its session"; the Swarm's own removal stops nothing there (#3791).
-  testWidgets(
-    'Delete stops the session on its computer, then the Swarm lets go of it',
-    (tester) async {
-      final f = await open(tester);
-      await tester.tap(key('project-sidebar-agents-attach'));
-      await tester.pumpAndSettle();
-      await tester.enterText(
-        find.byKey(const ValueKey('swarm-search-input')),
-        'Docs bot',
-      );
-      await tester.pumpAndSettle();
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-      await tester.pumpAndSettle();
-      final c = f.app.superTabs.peek(tabId)!;
-      final member = c.snapshot!.agents.singleWhere(
-        (a) => a.harnessId == 'docs-session',
-      );
-
-      await tester.tap(
-        key('super-agent-${member.id}'),
-        buttons: kSecondaryButton,
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Delete'));
-      await tester.pumpAndSettle();
-      await tester.tap(key('delete-agent-confirm'));
-      await tester.pumpAndSettle();
-
-      final closes = f.connection.calls.where(
-        (call) => call.$1 == 'agent_close',
-      );
-      expect(closes, hasLength(1));
-      expect(closes.single.$2, containsPair('agentId', 'docs-session'));
-      expect(closes.single.$2, containsPair('mode', 'now'));
-      final removal = f.connection.server.posts
-          .map((post) => post['command'] as Map)
-          .singleWhere((command) => command['type'] == 'agent.remove');
-      expect(removal, containsPair('agentId', member.id));
-      expect(
-        f.app
-            .stateOf('m')!
-            .agents
-            .firstWhere((a) => a.id == 'docs-session')
-            .isStopped,
-        isTrue,
-      );
-      await tester.pumpWidget(const SizedBox());
-      await c.flush();
-      f.app.superTabs.dispose();
-    },
-  );
-
-  testWidgets('a Stop its computer refuses keeps the agent, and says why', (
-    tester,
+  /// Attaches Docs bot through the picker, as a person does, and right-clicks Remove on its row: the agent it made.
+  Future<SuperTabAgent> attachThenRemove(
+    WidgetTester tester,
+    SuperTabLaunchFixture f,
   ) async {
-    final f = await open(tester);
-    f.connection.refuseClose = true;
     await tester.tap(key('project-sidebar-agents-attach'));
     await tester.pumpAndSettle();
     await tester.enterText(
@@ -281,33 +284,162 @@ void main() {
     await tester.pumpAndSettle();
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
-    final c = f.app.superTabs.peek(tabId)!;
-    final member = c.snapshot!.agents.singleWhere(
-      (a) => a.harnessId == 'docs-session',
-    );
+    final member = f.app.superTabs
+        .peek(tabId)!
+        .snapshot!
+        .agents
+        .singleWhere((a) => a.harnessId == 'docs-session');
     await tester.tap(
       key('super-agent-${member.id}'),
       buttons: kSecondaryButton,
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Delete'));
+    await tester.tap(find.text('Remove'));
     await tester.pumpAndSettle();
-    await tester.tap(key('delete-agent-confirm'));
-    await tester.pumpAndSettle();
+    return member;
+  }
 
-    expect(find.text('This computer would not stop it.'), findsOneWidget);
-    expect(key('delete-agent-confirm'), findsOneWidget);
+  List<Map> closes(SuperTabLaunchFixture f) => [
+    for (final call in f.connection.calls)
+      if (call.$1 == 'agent_close' && call.$2['mode'] != 'inspect') call.$2,
+  ];
+
+  List<Map> removals(SuperTabLaunchFixture f) => [
+    for (final post in f.connection.server.posts)
+      if ((post['command'] as Map)['type'] == 'agent.remove')
+        post['command'] as Map,
+  ];
+
+  Future<void> done(WidgetTester tester, SuperTabLaunchFixture f) async {
+    await tester.pumpWidget(const SizedBox());
+    await f.app.superTabs.peek(tabId)!.flush();
+    f.app.superTabs.dispose();
+  }
+
+  // anh Dee 2026-11-11: removing an agent from Your Team follows the rule closing a pane has.
+  testWidgets('Remove, with Your Team its last place: an idle session stops '
+      'quietly, then the Swarm lets go of it', (tester) async {
+    final f = await open(tester);
+    final member = await attachThenRemove(tester, f);
+    expect(find.text('Remove Docs bot?'), findsOneWidget);
+    expect(find.text('Its chat goes and its session stops.'), findsOneWidget);
+    await tester.tap(key('remove-agent-confirm'));
+    await tester.pumpAndSettle();
+    // No question: it was idle.
+    expect(key('session-close-now'), findsNothing);
+    expect(closes(f), hasLength(1));
+    expect(closes(f).single, containsPair('agentId', 'docs-session'));
+    expect(closes(f).single, containsPair('mode', 'idle'));
+    expect(removals(f).single, containsPair('agentId', member.id));
     expect(
-      f.connection.server.posts.where(
-        (post) => (post['command'] as Map)['type'] == 'agent.remove',
-      ),
+      f.app
+          .stateOf('m')!
+          .agents
+          .firstWhere((a) => a.id == 'docs-session')
+          .isStopped,
+      isTrue,
+    );
+    await done(tester, f);
+  });
+
+  testWidgets('Remove of a working session asks first, as closing its last '
+      'view does: Cancel keeps it all, Stop stops it and removes it', (
+    tester,
+  ) async {
+    final f = await open(tester);
+    f.connection.closeActivity = 'working';
+    final member = await attachThenRemove(tester, f);
+    await captureWindow(tester, _shots, 'remove-agent');
+    await tester.tap(key('remove-agent-confirm'));
+    await tester.pumpAndSettle();
+    await captureWindow(tester, _shots, 'remove-agent-working');
+    expect(find.text('1 session is still working.'), findsOneWidget);
+    // The review's own Cancel, over the Remove dialog.
+    await tester.tap(find.text('Cancel').last);
+    await tester.pumpAndSettle();
+    expect(closes(f), isEmpty);
+    expect(removals(f), isEmpty);
+    expect(
+      f.app.superTabs
+          .peek(tabId)!
+          .snapshot!
+          .agents
+          .any((a) => a.id == member.id),
+      isTrue,
+    );
+    // Asked again, and this time Stop.
+    await tester.tap(key('remove-agent-confirm'));
+    await tester.pumpAndSettle();
+    await tester.tap(key('session-close-now'));
+    await tester.pumpAndSettle();
+    expect(closes(f).single, containsPair('mode', 'now'));
+    expect(removals(f).single, containsPair('agentId', member.id));
+    expect(key('remove-agent-confirm'), findsNothing);
+    await done(tester, f);
+  });
+
+  testWidgets('Remove of an agent its person still shows in a tab only takes '
+      'it off the list: its session keeps running there', (tester) async {
+    final f = await open(tester);
+    f.app.swarms.add(
+      Swarm(id: 'desk', name: 'Work')
+        ..panes.add(
+          TerminalPane(id: 77, machineId: 'm', agentId: 'docs-session'),
+        ),
+    );
+    final member = await attachThenRemove(tester, f);
+    expect(
+      find.text('Its chat goes. It keeps running in your tab.'),
+      findsOneWidget,
+    );
+    await tester.tap(key('remove-agent-confirm'));
+    await tester.pumpAndSettle();
+    expect(
+      f.connection.calls.where((call) => call.$1 == 'agent_close'),
       isEmpty,
     );
-    expect(c.snapshot!.agents.any((a) => a.id == member.id), isTrue);
+    expect(removals(f).single, containsPair('agentId', member.id));
+    expect(
+      f.app
+          .stateOf('m')!
+          .agents
+          .firstWhere((a) => a.id == 'docs-session')
+          .isStopped,
+      isFalse,
+    );
+    await done(tester, f);
+  });
+
+  testWidgets('a Stop its computer refuses keeps the agent, and says why', (
+    tester,
+  ) async {
+    final f = await open(tester);
+    f.connection.refuseClose = true;
+    final member = await attachThenRemove(tester, f);
+    await tester.tap(key('remove-agent-confirm'));
+    await tester.pumpAndSettle();
+    expect(find.text('This computer would not stop it.'), findsOneWidget);
+    await tester.tap(find.text('Keep open'));
+    await tester.pumpAndSettle();
+    expect(key('remove-agent-confirm'), findsOneWidget);
+    expect(removals(f), isEmpty);
+    // Closing past the refusal in the review: the session still runs, so the Swarm keeps it, and says so.
+    await tester.tap(key('remove-agent-confirm'));
+    await tester.pumpAndSettle();
+    await tester.tap(key('session-close-view'));
+    await tester.pumpAndSettle();
+    expect(find.text('Its session is still running.'), findsOneWidget);
+    expect(removals(f), isEmpty);
+    expect(
+      f.app.superTabs
+          .peek(tabId)!
+          .snapshot!
+          .agents
+          .any((a) => a.id == member.id),
+      isTrue,
+    );
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
-    await tester.pumpWidget(const SizedBox());
-    await c.flush();
-    f.app.superTabs.dispose();
+    await done(tester, f);
   });
 }

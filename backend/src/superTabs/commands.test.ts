@@ -10,6 +10,7 @@ import { agentOnly, agentRole, createSuperTab, visibleState, type Actor, type Ag
 import { LEAD_CAPABILITY, leadHost } from './leadStart.js'
 import { NOW, owner as richOwner, peer as richPeer, richSwarm } from './read/fixture.test-support.js'
 import { groupView } from './read/views.js'
+import { MAX_REMOVED_PANES, REMOVED_PANE_KEEP_MS } from './removedPanes.js'
 import { weekStart } from './leaderboard/week.js'
 import { lentIn, weekSpan } from './leaderboard/rolling.js'
 import { storedAssignment, storedStatus, storedTask } from './storedWork.test-support.js'
@@ -955,15 +956,17 @@ it('records the lead project once and accepts only Claude Code and Codex contrib
   }
 })
 it('says in the project chat when a Product Manager on its person\'s own Mac could not launch on the model its role asks for', () => {
+  // By its own name, as the start the Swarm makes says it (leadJoined), with its role beside it (review of #4095).
   const join = (extra: Record<string, unknown>, lead = true) => {
     const f = fixture(), project = { cwd: '/repo', repositoryUrl: 'https://github.com/example/project' }
     const effects = f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'pm', name: 'Lead', configuration: config, lead, project, ...extra } as Command, owner,
       { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })
-    return effects.messages.filter(m => m.conversationId === 'lead').map(m => m.text)
+    const name = f.state.agents.find(a => a.harnessId === 'pm')!.displayName!
+    return effects.messages.filter(m => m.conversationId === 'lead').map(m => m.text.replace(name, 'NAME'))
   }
   // Each after the row naming who added it (#2207).
   expect(join({ launchRefused: { model: 'opus', effort: 'xhigh' } })).toEqual(
-    ['Product Manager started. It asked for opus at xhigh and runs its engine\u2019s own model there: this machine could not launch it with them.', expect.stringMatching(/^owner added \S+\.$/)])
+    ['NAME, the Product Manager, started. It asked for opus at xhigh and runs its engine\u2019s own model there: this machine could not launch it with them.', expect.stringMatching(/^owner added \S+\.$/)])
   expect(join({})).toEqual([expect.stringMatching(/^owner added \S+\.$/)])
   // Only a Product Manager's start says it.
   expect(join({ launchRefused: { model: 'opus', effort: 'xhigh' } }, false)).not.toContainEqual(expect.stringContaining('could not launch'))
@@ -2404,25 +2407,82 @@ describe('Lead protection', () => {
     expect(f.state.closingSessions).toEqual([closing(lead, 'docs-lead')])
   })
 
-  it('asks the host to close the session of every agent a person removes, and shows it to nobody else', () => {
-    const f = fixture(), worker = f.add('worker')
+  // anh Dee 2026-11-11: taking an agent out of a Swarm is closing a view of it, which never stops it unasked.
+  const panes = (f: ReturnType<typeof fixture>, personId = 'owner') => f.state.people.find(p => p.id === personId)?.removedPanes
+  const read = (f: ReturnType<typeof fixture>, reader: Extract<Actor, { kind: 'person' }>, of = 'owner', now = 1000) =>
+    visibleState(f.state, reader, now).people.find(p => p.id === of)
+
+  it('leaves the session of an agent a person takes out running, and records it for that person alone', () => {
+    const f = fixture()
+    f.invite()
+    const worker = f.add('worker'), theirs = f.add('theirs', 'peer')
     f.run({ type: 'agent.remove', agentId: worker })
-    expect(f.state.closingSessions).toEqual([closing(worker, 'worker')])
-    expect(visibleState(f.state, owner)).not.toHaveProperty('closingSessions')
+    expect(f.state.closingSessions).toBeUndefined()
+    expect(f.state.agents.map(a => a.id)).toEqual([theirs])
+    expect(panes(f)).toEqual([{ machineId: 'host', harnessId: 'worker', removedAt: 1000 }])
+    expect(read(f, owner)).toMatchObject({ removedPanes: [{ machineId: 'host', harnessId: 'worker', removedAt: 1000 }] })
+    expect(read(f, peer)).not.toHaveProperty('removedPanes')
 
     const g = fixture(), other = g.add('other')
     g.run({ type: 'machine.remove', machineId: 'host' })
-    expect(g.state.closingSessions).toEqual([closing(other, 'other')])
+    expect(g.state.agents.some(a => a.id === other)).toBe(false)
+    expect(g.state.closingSessions).toBeUndefined()
+    expect(panes(g)).toEqual([expect.objectContaining({ harnessId: 'other' })])
 
+    // Whoever leaves takes their agents out with them, still running, and their records go with them.
     const h = fixture()
     h.invite()
-    const theirs = h.add('theirs', 'peer')
+    h.run({ type: 'agent.remove', agentId: h.add('earlier', 'peer') }, peer)
+    expect(panes(h, 'peer')).toHaveLength(1)
+    h.add('theirs', 'peer')
     h.run({ type: 'member.remove', userId: 'peer' }, peer)
-    expect(h.state.closingSessions).toEqual([closing(theirs, 'theirs')])
+    expect(h.state.agents).toEqual([])
+    expect(h.state.closingSessions).toBeUndefined()
+    expect(h.state.people.map(p => p.id)).toEqual(['owner'])
+  })
+
+  it('closes the session only on a confirmed delete or a Stop its person asked for', () => {
+    const f = fixture(), worker = f.add('worker')
+    f.run({ type: 'agent.release', agentId: worker, decision: 'stop' })
+    f.run({ type: 'agent.remove', agentId: worker })
+    expect(f.state.closingSessions).toEqual([closing(worker, 'worker')])
+    expect(panes(f)).toBeUndefined()
+    expect(visibleState(f.state, owner)).not.toHaveProperty('closingSessions')
+
+    const g = fixture(), other = g.add('other')
+    g.run({ type: 'swarm.delete', name: 'Pilot' })
+    expect(g.state.closingSessions).toEqual([closing(other, 'other')])
+  })
+
+  it('forgets a taken-out session once it or its machine is added again, keeps a person\'s newest, and lets old ones lapse', () => {
+    const f = fixture(), worker = f.add('worker')
+    f.run({ type: 'agent.remove', agentId: worker })
+    f.add('worker')
+    expect(panes(f)).toBeUndefined()
+
+    const own = { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } }
+    const contribute = { type: 'machine.contribute', machineId: 'host', name: 'Studio', cwd: '/repo', engines: ['claude'], maxAgents: 2 } as Command
+    const m = fixture()
+    m.run(contribute, owner, own)
+    m.add('kept')
+    const removalId = m.run({ type: 'machine.remove', machineId: 'host' }).result.removalId as string
+    expect(panes(m)).toHaveLength(1)
+    m.run({ type: 'machine.cleaned', machineId: 'host', removalId })
+    m.run(contribute, owner, own)
+    expect(panes(m)).toBeUndefined()
+
+    const g = fixture()
+    g.state.people[0]!.removedPanes = Array.from({ length: MAX_REMOVED_PANES }, (_, i) => ({ machineId: 'host', harnessId: `old-${i}`, removedAt: 1000 }))
+    g.run({ type: 'agent.remove', agentId: g.add('worker') })
+    expect(panes(g)).toHaveLength(MAX_REMOVED_PANES)
+    expect(panes(g)!.at(-1)).toMatchObject({ harnessId: 'worker' })
+    expect(panes(g)!.some(r => r.harnessId === 'old-0')).toBe(false)
+    expect(read(g, owner, 'owner', 1000 + REMOVED_PANE_KEEP_MS)).not.toHaveProperty('removedPanes')
   })
 
   it('drops a close request and the slot held for its session once the machine owner says it closed', () => {
     const f = fixture(), worker = f.add('worker')
+    f.run({ type: 'agent.release', agentId: worker, decision: 'stop' })
     f.run({ type: 'agent.remove', agentId: worker })
     expect(f.state.harnessReservations).toEqual([expect.objectContaining({ machineId: 'host', harnessId: 'worker' })])
     const closed = { type: 'agent.sessionClosed', agentId: worker, harnessId: 'worker' } as Command
@@ -2440,6 +2500,7 @@ describe('Lead protection', () => {
 
   it('forgets a close request when the same session is added back before its host closed it', () => {
     const f = fixture(), worker = f.add('worker')
+    f.run({ type: 'agent.release', agentId: worker, decision: 'stop' })
     f.run({ type: 'agent.remove', agentId: worker })
     f.add('worker')
     expect(f.state.closingSessions).toBeUndefined()
@@ -2804,7 +2865,7 @@ describe('credentials in every command', () => {
     ['A folder a host opens, or a URL or ref held to its shape', ['agent.add project.cwd', 'agent.add project.repositoryUrl', 'github.relay repository', 'github.relay login',
       'agent.new repositoryUrl', 'agent.start request.cwd', 'agent.start request.codexHome', 'agent.start request.branchRef',
       'agent.start request.requirements.devices[]', 'lead.start branchRef', 'lead.start repositoryUrl',
-      'machine.contribute cwd', 'project.repository repositoryUrl', 'tab.project project.cwd', 'tab.project project.repositoryUrl']],
+      'machine.contribute cwd', 'project.repository repositoryUrl', 'project.github repository', 'tab.project project.cwd', 'tab.project project.repositoryUrl']],
     ['An id, an account key, a time or a time zone', ['agent.rebind profileId', 'project.closeTab tabOperation']],
     ['The address an invitation goes to, which its person signs in with', ['invite.create email']],
   ]
@@ -3854,6 +3915,48 @@ describe('lead.switch', () => {
       expect(sweepLiveness(plain.f.state, 1000)).toEqual([])
       expect(plain.agent().switchRequest).toBeUndefined()
     })
+  })
+})
+
+// anh Dee, 2026-11-11: "how do we pause finn while we're fixing bugs rather than finn keep receiving tasks?" A paused agent keeps
+// its session; the CLI gives it no task and types it no nudge while it is paused.
+describe('agent.pause', () => {
+  const pause = (agentId: string, paused: boolean): Command => ({ type: 'agent.pause', agentId, paused })
+  const pausedFor = (f: ReturnType<typeof fixture>, reader: Actor, agentId: string) => visibleState(f.state, reader).agents.find(a => a.id === agentId)!.pausedAt
+  const peerContributorAgent = (f: ReturnType<typeof fixture>) => { f.invite(); return f.add('mine', 'peer') }
+
+  it('lets its person pause and resume it, and every reader sees which', () => {
+    const f = fixture(), agentId = peerContributorAgent(f)
+    f.run(pause(agentId, true), peer)
+    const since = pausedFor(f, owner, agentId)
+    expect(since).toEqual(expect.stringMatching(/^\d{4}-\d\d-\d\dT/))
+    expect(pausedFor(f, peer, agentId)).toBe(since)
+    // Paused again, it keeps the time it was first paused.
+    f.run(pause(agentId, true), peer)
+    expect(pausedFor(f, owner, agentId)).toBe(since)
+    f.run(pause(agentId, false), peer)
+    expect(pausedFor(f, owner, agentId)).toBeUndefined()
+    expect(f.state.agents.find(a => a.id === agentId)).not.toHaveProperty('pausedAt')
+  })
+
+  it('lets the Swarm\'s owner and the machine\'s owner pause it', () => {
+    const f = fixture(), agentId = peerContributorAgent(f)
+    f.run(pause(agentId, true), owner)
+    expect(pausedFor(f, peer, agentId)).toBeDefined()
+    f.state.people.push({ id: 'host-owner', email: 'host-owner@example.com', role: 'collaborator', generation: 'g' } as never)
+    f.run(pause(agentId, false), { kind: 'person', userId: 'host-owner', email: 'host-owner@example.com' })
+    expect(pausedFor(f, peer, agentId)).toBeUndefined()
+  })
+
+  it('refuses a teammate who is none of them, and any agent, writing nothing', () => {
+    const f = fixture(), agentId = f.add('mine'), other = f.add('other')
+    f.invite()
+    const before = JSON.stringify(f.state)
+    for (const actor of [peer, { kind: 'agent', agentId: other, machineOwnerId: 'host-owner' }, { kind: 'agent', agentId, machineOwnerId: 'host-owner' }] as Actor[]) {
+      expect(() => f.run(pause(agentId, true), actor), JSON.stringify(actor)).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+    }
+    expect(JSON.stringify(f.state)).toBe(before)
+    expect(commandSchema.safeParse({ type: 'agent.pause', agentId, paused: 'yes' }).success).toBe(false)
   })
 })
 

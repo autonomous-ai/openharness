@@ -8,7 +8,7 @@ import type { BackendNotice, CoreApi, TurnDelivery, TurnEnd } from '../core/api.
 import { promptHash } from '../lib/promptIdentity.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import type { attachedFiles as attachedFilesType } from './attachments.js'
-import { backend, writeJournal, removeStaleJournalTemps, swarmListedFor, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
+import { backend, writeJournal, removeStaleJournalTemps, swarmListedFor, swarmRoleFor, hostJournalFile, RESTART_SETTLE_MS, SuperTabHost, type SuperTabHostOptions } from './host.js'
 import { ADDED_MAX } from './deliveryContext.js'
 import { SWITCH_ADOPT_MS, SWITCH_HOLD_MS } from './leadSwitch.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
@@ -248,7 +248,9 @@ describe('Super Tab native delivery handoff', () => {
     host.stop()
     const fresh = t.open()
     await fresh.tick()
-    expect(t.saved().entries.delivery.stage).toBe('uncertain')
+    // Cut off by the restart, on the terminal it was moved to: it waits for the core to read that session again, then is typed
+    // there again only if the session does not have it (below, "a message the daemon was killed in the middle of typing").
+    expect(t.saved().entries.delivery).toMatchObject({ stage: 'prepared', restarted: true, harnessId: 'new-harness' })
     expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
   })
   // Agent context design, section 2: a delivery reads the Swarm once, for the lines that say where it is (by what changed
@@ -796,7 +798,7 @@ describe('Super Tab native delivery handoff', () => {
     await t.open().tick()
     const prompt = vi.mocked(t.core.turns.deliver).mock.calls[0]![1] as string
     expect(prompt).toContain('@sam, to you:\nHow is it going?')
-    expect(prompt).toContain("post 'lead' 'your message' UNIQUE_OPERATION_ID --answers 'message'")
+    expect(prompt).toContain("post 'lead' 'your message' --answers 'message'")
     // Swarm v4: nothing but the message and how to answer it; no Swarm preamble or reply rules.
     expect(prompt).not.toContain('Ask questions and post results')
     expect(prompt).not.toContain('helpful colleague')
@@ -854,7 +856,7 @@ describe('Super Tab native delivery handoff', () => {
     const t = setup({ author: { kind: 'agent', id: 'a0000000000000000000000r', name: 'Reviewer 1' }, text: 'Two findings.' })
     await t.open().tick()
     const prompt = vi.mocked(t.core.turns.deliver).mock.calls[0]![1] as string
-    expect(prompt).toContain("post 'lead' 'your message' UNIQUE_OPERATION_ID --answers 'message' --to 'a0000000000000000000000r'")
+    expect(prompt).toContain("post 'lead' 'your message' --answers 'message' --to 'a0000000000000000000000r'")
     const person = setup({ author: { kind: 'person', id: 'p1', name: 'sam@example.com' }, text: 'Hi' })
     await person.open().tick()
     expect(vi.mocked(person.core.turns.deliver).mock.calls[0]![1] as string).not.toContain('--to')
@@ -1212,15 +1214,6 @@ describe('Super Tab native delivery handoff', () => {
     expect(removeStaleJournalTemps(file)).toEqual([])
   })
 
-  it('does not type again after a crash between submission and its native acknowledgement', async () => {
-    const t = setup(), first = t.open()
-    await first.tick(); first.stop()
-    const restarted = t.open()
-    await restarted.tick()
-    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
-    expect(t.receipts).toEqual([expect.objectContaining({ uncertain: true, receipt: expect.stringContaining('restarted') })])
-  })
-
   it('replays a saved receipt after a lost backend acknowledgement without another native send', async () => {
     const t = setup(), first = t.open()
     await first.tick(); t.event('delivered'); first.stop()
@@ -1310,6 +1303,138 @@ describe('Super Tab native delivery handoff', () => {
     vi.mocked(t.core.agents.byAgent).mockReturnValue(undefined)
     await host.tick()
     expect(t.core.turns.deliver).not.toHaveBeenCalled()
+  })
+
+  // Swarm plan, step 1, item 2: "on the real backend, a daemon killed in the middle of an ask types it once after restart". Killed
+  // between the host's intent to type and the core's word on it, the message was marked uncertain and never typed.
+  describe('a message the daemon was killed in the middle of typing', () => {
+    /** The agent's session as the core shows it, and the last turn its engine wrote, as the core reads it from its transcript. */
+    const session = (t: ReturnType<typeof setup>, lastPrompt: string | null) => {
+      vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', sessionId: 'session' } as never)
+      vi.mocked(t.core.transcripts.lastTurn).mockResolvedValue(lastPrompt === null ? null : { userMessage: lastPrompt, assistantText: 'Done.' })
+    }
+    const killedMidway = async () => {
+      const t = setup(), first = t.open()
+      await first.tick()
+      expect(t.saved().entries.delivery.stage).toBe('submitting')
+      const typed = vi.mocked(t.core.turns.deliver).mock.calls[0]![1] as string
+      first.stop()
+      return { t, typed }
+    }
+
+    it('is typed again, once, when its agent did not take it, after its engine has had time to write a prompt it took', async () => {
+      const { t, typed } = await killedMidway()
+      session(t, 'Something else.')
+      const second = t.open()
+      await second.tick()
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+      t.wait(RESTART_SETTLE_MS); await second.tick()
+      expect(t.core.transcripts.lastTurn).toHaveBeenCalledWith('session')
+      expect(vi.mocked(t.core.turns.deliver).mock.calls.map(call => call[1])).toEqual([typed, typed])
+      t.event('delivered')
+      t.wait(1_000); await second.tick()
+      expect(t.receipts).toEqual([expect.objectContaining({ type: 'ack', uncertain: false })])
+      t.wait(60_000); await second.tick()
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
+    })
+
+    // Code review of #4047: the core reads null when it cannot read the transcript as when there is no turn, so null says nothing.
+    it('is left uncertain when the core reads no last turn, as it does when it cannot read one', async () => {
+      const { t } = await killedMidway()
+      session(t, null)
+      const second = t.open()
+      t.wait(RESTART_SETTLE_MS); await second.tick()
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+      expect(t.receipts).toEqual([expect.objectContaining({ uncertain: true, receipt: expect.stringContaining('restarted') })])
+    })
+
+    it('is acknowledged as delivered when a turn of it ended since the restart, whatever turn came after it', async () => {
+      const { t, typed } = await killedMidway()
+      // It took the message and answered it; its next thing was typed at that turn's end, and is its last turn now.
+      session(t, 'Your next thing: #12.')
+      const second = t.open()
+      t.end({ prompt: promptHash(typed) })
+      t.end({ prompt: promptHash('Your next thing: #12.'), turnId: 2 })
+      t.wait(RESTART_SETTLE_MS); await second.tick()
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+      expect(t.receipts).toEqual([expect.objectContaining({ type: 'ack', uncertain: false })])
+    })
+
+    // Code review of #4047: a turn since the restart may be over the message it took, so its last turn being another says nothing.
+    it('is left uncertain when another turn ended since the restart, which may hide it', async () => {
+      const { t } = await killedMidway()
+      session(t, 'Your next thing: #12.')
+      const second = t.open()
+      t.end({ prompt: promptHash('Your next thing: #12.') })
+      t.wait(RESTART_SETTLE_MS); await second.tick()
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+      expect(t.receipts).toEqual([expect.objectContaining({ uncertain: true, receipt: expect.stringContaining('restarted') })])
+      // Turns of an agent no restart cut a message off for are not kept.
+      t.end({ agentId: 'another', prompt: promptHash('Hello.') })
+    })
+
+    it('is acknowledged as delivered, and not typed again, when the last prompt its engine wrote is the message', async () => {
+      const { t, typed } = await killedMidway()
+      // As the engine wrote it, with its own line ends and spaces.
+      session(t, ` ${typed.replace(/\n/g, '\r\n')} `)
+      const second = t.open()
+      t.wait(RESTART_SETTLE_MS); await second.tick()
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+      expect(t.receipts).toEqual([expect.objectContaining({ type: 'ack', uncertain: false })])
+    })
+
+    it('waits while its agent works, as its last turn is not over', async () => {
+      const { t, typed } = await killedMidway()
+      session(t, 'An older prompt.')
+      vi.mocked(t.core.agents.activity).mockResolvedValue({ harness: 'working' })
+      const second = t.open()
+      t.wait(RESTART_SETTLE_MS); await second.tick()
+      t.wait(60_000); await second.tick()
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+      expect(t.receipts).toEqual([])
+      // Its turn over, the last prompt is the message: it took it.
+      vi.mocked(t.core.agents.activity).mockResolvedValue({ harness: 'idle' })
+      vi.mocked(t.core.transcripts.lastTurn).mockResolvedValue({ userMessage: typed, assistantText: 'Done.' })
+      t.wait(1_000); await second.tick()
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+      expect(t.receipts).toEqual([expect.objectContaining({ type: 'ack', uncertain: false })])
+    })
+
+    it('is left uncertain, as before, when the core cannot read the session, or has no session bound to it', async () => {
+      for (const lost of ['unread', 'unbound'] as const) {
+        const { t } = await killedMidway()
+        session(t, 'Something else.')
+        if (lost === 'unread') vi.mocked(t.core.transcripts.lastTurn).mockRejectedValue(new Error('core gone'))
+        else vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness' } as never)
+        const second = t.open()
+        t.wait(RESTART_SETTLE_MS); await second.tick()
+        expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+        expect(t.receipts).toEqual([expect.objectContaining({ uncertain: true, receipt: expect.stringContaining('restarted') })])
+      }
+    })
+
+    it('is left uncertain when its member has changed terminals since: the earlier one alone could say', async () => {
+      const { t } = await killedMidway()
+      session(t, 'Something else.')
+      t.row.agent.harnessId = 'new-harness'
+      const second = t.open()
+      t.wait(RESTART_SETTLE_MS); await second.tick()
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+      expect(t.receipts).toEqual([expect.objectContaining({ uncertain: true, receipt: expect.stringContaining('changed terminals') })])
+    })
+
+    it('is left uncertain, as before, from a journal of a host before this one, which kept no mark of what it typed', async () => {
+      const { t } = await killedMidway()
+      session(t, 'Something else.')
+      const journal = t.saved()
+      delete journal.entries.delivery.typed
+      writeFileSync(hostJournalFile(t.dir, 'machine-1'), JSON.stringify(journal))
+      const second = t.open()
+      t.wait(RESTART_SETTLE_MS); await second.tick()
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+      expect(t.receipts).toEqual([expect.objectContaining({ uncertain: true, receipt: expect.stringContaining('restarted') })])
+    })
+
   })
 
   it('retains a recovered claim across another lost acknowledgement and restart', async () => {
@@ -1635,8 +1760,8 @@ describe('the super-tab command in delivered input', () => {
     const host = new SuperTabHost(t.core, 'machine-1', { log: vi.fn(), agentCommand }); hosts.push(host)
     await host.tick()
     const text = String(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1])
-    expect(text).toContain(`Answer: harness super-tab --tab 'tab' --agent 'agent' post 'lead'`)
-    expect(text).toContain(`harness super-tab --tab 'tab' --agent 'agent' message 'lead' 'earlier'`)
+    expect(text).toContain(`Answer: harness super-tab --tab 'tab' post 'lead'`)
+    expect(text).toContain(`harness super-tab --tab 'tab' message 'lead' 'earlier'`)
     expect(text).not.toContain('--port')
     t.event('rejected', 'team_waiting_busy')
     await host.tick()
@@ -1668,7 +1793,7 @@ describe('the super-tab command in delivered input', () => {
   it('marks it after the reply it quotes (audit M3)', async () => {
     const author = { kind: 'agent', id: 'team-agent', name: 'Tester' }
     const reply = await delivered({ text: 'Yes.', author, replyTo: 'earlier' }, { otherAccount: true })
-    expect(reply).toContain(`harness super-tab --tab 'tab' --agent 'agent' message 'lead' 'earlier'\n\n${OTHER_ACCOUNT}@Tester, to you:\nYes.`)
+    expect(reply).toContain(`harness super-tab --tab 'tab' message 'lead' 'earlier'\n\n${OTHER_ACCOUNT}@Tester, to you:\nYes.`)
   })
   it('falls back to the full command when the lookup fails, and does not ask again', async () => {
     const t = setup()
@@ -1676,7 +1801,7 @@ describe('the super-tab command in delivered input', () => {
     const host = new SuperTabHost(t.core, 'machine-1', { log: vi.fn(), agentCommand }); hosts.push(host)
     await host.tick()
     expect(String(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]))
-      .toContain(`Answer: ${t.core.daemon.command} super-tab --port ${t.core.daemon.port} --machine 'machine-1' --tab 'tab' --agent 'agent' post 'lead'`)
+      .toContain(`Answer: ${t.core.daemon.command} super-tab --port ${t.core.daemon.port} --machine 'machine-1' --tab 'tab' post 'lead'`)
     t.event('rejected', 'team_waiting_busy')
     await host.tick()
     expect(agentCommand).toHaveBeenCalledTimes(1)
@@ -1686,7 +1811,7 @@ describe('the super-tab command in delivered input', () => {
     const host = new SuperTabHost(t.core, 'machine-1', { log: vi.fn() }); hosts.push(host)
     await host.tick()
     expect(String(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]))
-      .toContain(`Answer: ${t.core.daemon.command} super-tab --port ${t.core.daemon.port} --machine 'machine-1' --tab 'tab' --agent 'agent' post 'lead'`)
+      .toContain(`Answer: ${t.core.daemon.command} super-tab --port ${t.core.daemon.port} --machine 'machine-1' --tab 'tab' post 'lead'`)
   })
 })
 
@@ -1762,6 +1887,15 @@ describe('Super Tab attachments in delivered input', () => {
   const settle = () => new Promise(resolve => setTimeout(resolve, 50))
   /** A pass, given half a second: an old host waited on the download for the whole of it. */
   const pass = (host: SuperTabHost) => Promise.race([host.tick(), new Promise(resolve => setTimeout(resolve, 500))])
+  /** Turns the event loop until [done], without a timer: with setTimeout faked, a pass waiting on one never ends, and fails
+   *  here after 4 s of real time with what it waits for, rather than at the case's timeout. */
+  const until = async (done: () => boolean) => {
+    const giveUp = performance.now() + 4_000
+    while (!done()) {
+      if (performance.now() > giveUp) throw new Error('the pass is still waiting on a timer')
+      await new Promise(resolve => setImmediate(resolve))
+    }
+  }
   it('keeps delivering to other agents while one delivery\'s file downloads, claims it again meanwhile, then delivers it', async () => {
     const t = setup()
     const second = { id: 'agent-2', harnessId: 'harness-2', machineId: 'machine-1' }
@@ -1888,24 +2022,51 @@ describe('Super Tab attachments in delivered input', () => {
     await pass(host)
     expect(delivered()).toEqual(['harness-a: The model.', 'harness-a: Next.'])
   })
+  // A message a restart cut off is decided before the agent's later ones ("a message the daemon was killed in the middle of typing").
+  it('holds its agent\'s later messages until it is decided, then they follow it, in order', async () => {
+    const t = setup()
+    const agents = [{ id: 'a', deliveries: [{ id: 'first', text: 'The model.' }] as Array<{ id: string; text: string }> }]
+    const { delivered } = swarmOf(t, agents)
+    const first = t.open()
+    await pass(first)
+    expect(delivered()).toEqual(['harness-a: The model.'])
+    first.stop()
+    agents[0]!.deliveries.push({ id: 'second', text: 'Next.' })
+    vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness-a', sessionId: 'session-a' } as never)
+    vi.mocked(t.core.transcripts.lastTurn).mockResolvedValue({ userMessage: vi.mocked(t.core.turns.deliver).mock.calls[0]![1] as string, assistantText: 'Done.' })
+    const second = t.open()
+    await pass(second)
+    expect(delivered()).toEqual(['harness-a: The model.'])
+    t.wait(RESTART_SETTLE_MS); await pass(second)
+    expect(delivered()).toEqual(['harness-a: The model.', 'harness-a: Next.'])
+  })
   // Review 1 of the PR, P2-3: one big file sent to many agents must not hold the loop that serves every agent for each of them.
   it('waits on new downloads at most once a pass, however many deliveries wait for files, and serves the others in it', async () => {
     const t = setup()
     const waiting = ['a', 'b', 'c', 'd', 'e'].map(id => ({ id, deliveries: [{ id: `big-${id}`, text: 'The model.', attachments: [BIG] }] }))
     const { delivered } = swarmOf(t, [...waiting, { id: 'z', deliveries: [{ id: 'plain', text: 'Hello.' }] }])
     const { attachedFiles } = slowFiles()
-    const host = t.open({ attachedFiles, downloadWaitMs: 200 })
-    const started = Date.now()
-    await host.tick()
-    // One wait of 200 ms; one per waiting delivery would take 5 x 200 = 1,000 ms. (Under 600 failed on a busy CI runner, at 600.)
-    expect(Date.now() - started).toBeLessThan(1_000)
-    expect(delivered()).toEqual(['harness-z: Hello.'])
-    expect(attachedFiles).toHaveBeenCalledTimes(6)
-    // Known to be slow, they hold no later pass at all.
-    t.wait(30_000)
-    const again = Date.now()
-    await host.tick()
-    expect(Date.now() - again).toBeLessThan(150)
+    // Counted in waits, not wall time: only the timers are faked, so a pass that waited again would never end.
+    // (Measured in wall time, the bound failed on a busy CI runner at 600 ms and on a busy Mac at 1,000.)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const host = t.open({ attachedFiles, downloadWaitMs: 200 })
+      let passed = false
+      const first = host.tick().then(() => { passed = true })
+      // The pass's wait is set as its first download starts. One wait of 200 ms; one per waiting delivery would be 5 x 200.
+      await until(() => attachedFiles.mock.calls.length > 0)
+      await vi.advanceTimersByTimeAsync(200)
+      await until(() => passed)
+      await first
+      expect(delivered()).toEqual(['harness-z: Hello.'])
+      expect(attachedFiles).toHaveBeenCalledTimes(6)
+      // Known to be slow, they hold no later pass at all: it ends without the clock moving.
+      t.wait(30_000)
+      let again = false
+      const later = host.tick().then(() => { again = true })
+      await until(() => again)
+      await later
+    } finally { vi.useRealTimers() }
   })
   it('delivers a message of files alone', async () => {
     const t = setup({ text: '', attachments: [{ id: 'a1', name: 'a.log', mime: 'text/plain', size: 1, url: 'https://cdn.example.test/a.log' }] })
@@ -4037,7 +4198,7 @@ describe('a person\'s message in an agent\'s own 1:1 chat', () => {
     it('keeps a message in any other conversation as it was, golden', async () => {
       const { text, t } = await wrapped({ author: KEN }, 'lead')
       expect(text).toBe('In "" (conversation lead).\n\n@Ken, to you:\nok, ship it\n\n'
-        + 'Answer: harness super-tab --port 18473 --machine \'machine-1\' --tab \'tab\' --agent \'agent\' post \'lead\' \'your message\' UNIQUE_OPERATION_ID --answers \'message\'')
+        + 'Answer: harness super-tab --port 18473 --machine \'machine-1\' --tab \'tab\' post \'lead\' \'your message\' --answers \'message\'')
       expect(reads(t).length).toBeGreaterThan(0)
     })
     it('keeps an agent\'s message in its chat, a system row and an agent-only notice as they were', async () => {
@@ -4052,11 +4213,12 @@ describe('a person\'s message in an agent\'s own 1:1 chat', () => {
     })
     // What GitHub said, which Harness writes into the person's chat as theirs with a source of its own (backend githubRelay.ts), is
     // text anyone who may comment there wrote: never typed as the person's own words.
-    it('keeps what GitHub said, written into the chat as its person\'s, as it was', async () => {
+    // anh Dee, 2026-11-11 ("what are those extra verbose things"): typed as its person's words, with where it was and a command
+    // to answer in the chat, it read as words they never wrote; it is answered on GitHub.
+    it('types what GitHub said as it came: not as its person\'s words, and with no command to answer in the chat', async () => {
       const github = await wrapped({ author: KEN, text: 'Pip, please read the failing check.', source: { kind: 'github', event: 'comment', on: 'pull', repository: 'acme/app',
         number: 4, login: 'octocat', association: 'MEMBER' } })
-      expect(github.text).toContain('@Ken, to you:\nPip, please read the failing check.')
-      expect(github.text).toContain('Answer: ')
+      expect(github.text).toBe('Pip, please read the failing check.')
     })
     it('owes none of them a reply', async () => {
       const github = { kind: 'github', event: 'comment', on: 'pull', repository: 'acme/app', number: 4, login: 'octocat', association: 'MEMBER' }

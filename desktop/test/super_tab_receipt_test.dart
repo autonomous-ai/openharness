@@ -7,7 +7,6 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
-import 'package:harness/super_tabs/personal_lead.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -368,75 +367,24 @@ void main() {
     );
   }
 
-  testWidgets('receipt: no Lead is not sent and offers Add a Lead', (
-    tester,
-  ) async {
-    final f = ReceiptFixture(tester, status: null);
-    await f.show(
-      prepare: () =>
-          (f.server.state['conversations'] as List).first['leadId'] = null,
-    );
-    expect(find.text('Not sent · this chat has no Lead'), findsOneWidget);
-    await tester.tap(find.text('Add a Lead'));
-    expect(f.addedLead, isTrue);
-    await f.close();
-  });
-
-  // Huy, 11-04 (task #2633): in a Personal Swarm the message waits for the
-  // Lead Desktop starts, which the line says, or why it could not start.
-  testWidgets('receipt: no Lead in a Personal project says its Lead starts', (
-    tester,
-  ) async {
-    final app = createApp(connected: true);
-    addTearDown(app.dispose);
-    final f = ReceiptFixture(tester, status: null);
-    await f.show(
-      app: app,
-      prepare: () =>
-          (f.server.state['conversations'] as List).first['leadId'] = null,
-    );
-    PersonalLeadStarter.of(app).setStatusForTest(
-      f.controller,
-      'lead',
-      PersonalLeadStatus.starting(clock.now()),
-    );
-    await tester.pump();
-    expect(find.text('Starting a Lead…'), findsOneWidget);
-    expect(find.textContaining('Not sent'), findsNothing);
-    expect(find.text('Add a Lead'), findsNothing);
-    await f.close();
-  });
-
+  // A project's channel: its PM is chosen from its owner's agents, never started (anh Dee, 2026-11-11).
   testWidgets(
-    'receipt: a Personal project\'s Lead that could not start says why and '
-    'offers Add a Lead',
+    'receipt: no Lead in a project\'s channel is not sent and offers Choose PM',
     (tester) async {
-      final app = createApp(connected: true);
-      addTearDown(app.dispose);
       final f = ReceiptFixture(tester, status: null);
       await f.show(
-        app: app,
         prepare: () =>
             (f.server.state['conversations'] as List).first['leadId'] = null,
       );
-      PersonalLeadStarter.of(app).setStatusForTest(
-        f.controller,
-        'lead',
-        const PersonalLeadStatus.failed(
-          'Claude Code and Codex aren’t signed in on Studio',
-        ),
-      );
-      await tester.pump();
-      expect(
-        find.text(
-          'Couldn’t start a Lead: Claude Code and Codex aren’t signed in on '
-          'Studio',
-        ),
-        findsOneWidget,
-      );
-      expect(find.textContaining('Not sent'), findsNothing);
-      await tester.tap(find.text('Add a Lead'));
-      expect(f.addedLead, isTrue);
+      expect(find.text('Not sent · this chat has no Lead'), findsOneWidget);
+      expect(find.text('Add a Lead'), findsNothing);
+      await tester.tap(find.text('Choose PM'));
+      await tester.pumpAndSettle();
+      // Choose PM's dialog, and no new agent's form.
+      expect(find.byKey(const ValueKey('choose-pm-confirm')), findsOneWidget);
+      expect(f.addedLead, isFalse);
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
       await f.close();
     },
   );
@@ -453,7 +401,7 @@ void main() {
           (f.server.state['conversations'] as List).first['leadId'] = null,
     );
     expect(find.text('Not sent · this chat has no Lead'), findsOneWidget);
-    expect(find.text('Add a Lead'), findsOneWidget);
+    expect(find.text('Choose PM'), findsOneWidget);
     await f.close();
   });
 

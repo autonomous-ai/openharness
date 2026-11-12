@@ -25,7 +25,11 @@ export class StoppedAgentStore {
   private readonly catalogCache = new Map<string, { fingerprint: string; bytes: number; at: number; session: RegisteredSession }>()
   private catalogCacheBytes = 0
 
-  constructor(private readonly directory = join(env.ADAPTER_DATA_DIR, 'stopped-agents')) {}
+  constructor(
+    private readonly directory = join(env.ADAPTER_DATA_DIR, 'stopped-agents'),
+    // Only tests pass another: going past the real bound would take 2,049 files on disk.
+    private readonly cacheRecords = CATALOG_CACHE_RECORDS,
+  ) {}
 
   get(agentId: string): RegisteredSession | null {
     if (!SAFE_ID.test(agentId)) return null
@@ -93,7 +97,7 @@ export class StoppedAgentStore {
     this.forgetCatalogRecord(agentId)
     const session = this.get(agentId)
     const bytes = Number(before.size)
-    if (session && this.catalogCache.size < CATALOG_CACHE_RECORDS
+    if (session && this.catalogCache.size < this.cacheRecords
       && this.catalogCacheBytes + bytes <= CATALOG_CACHE_BYTES
       && catalogFingerprint(lstatSync(file, { bigint: true })) === fingerprint) {
       this.catalogCache.set(agentId, { fingerprint, bytes, at: now, session: structuredClone(session) })
@@ -154,16 +158,19 @@ export class StoppedAgentStore {
     delete snapshot.identityHold
     delete snapshot.interpretationHold
     delete snapshot.evidenceRevision
+    // The agent that ended in a shell's pane belongs to that pane; a stopped shell opened again is a new pane.
+    delete snapshot.previousAgentId
     // A snapshot without a tmux pane omits the legacy alias just like registry persistence.
     if (!snapshot.tmuxPane) delete (snapshot as Partial<RegisteredSession>).tmuxPane
     atomicWriteJson(join(this.directory, `${session.agentId}.json`), { version: 1, session: snapshot })
     this.forgetCatalogRecord(session.agentId)
   }
 
-  /** Correct one field of an archive in place — the folder a Claude row drifted out of (cwdRepair.ts).
-   *  Not `save`: that recomputes the name and stamps `touchedAt`, and a repair must not reorder the
+  /** Correct one field of an archive in place — the folder a Claude row drifted out of (cwdRepair.ts), or its
+   *  Browser flag as the browser moves with its pane (decision 19): `browser: undefined` takes it out of the file.
+   *  Not `save`: that recomputes the name and stamps `touchedAt`, and a patch must not reorder the
    *  catalog or rename anything. Nothing else on the row changes. */
-  patch(agentId: string, patch: Partial<Pick<RegisteredSession, 'cwd'>>): boolean {
+  patch(agentId: string, patch: Partial<Pick<RegisteredSession, 'cwd' | 'browser'>>): boolean {
     const saved = this.get(agentId)
     if (!saved) return false
     secureStateDirectory(dirname(this.directory))

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { chmodSync, constants, openSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -7,6 +7,11 @@ import type { RegisteredSession } from './registry.js'
 vi.mock('node:fs', async original => { const fs = await original<typeof import('node:fs')>(); return { ...fs, openSync: vi.fn(fs.openSync), readFileSync: vi.fn(fs.readFileSync) } })
 
 let directory = ''
+// The first import compiles registry.js's whole module graph: seconds on a loaded Mac. Paid once here, it stays out of the
+// first test's 5 s; each test's own import after resetModules only runs the compiled modules again.
+beforeAll(async () => {
+  await import('./stoppedAgents.js')
+}, 60_000)
 beforeEach(() => {
   vi.resetModules()
   directory = mkdtempSync(join(tmpdir(), 'harness-stopped-'))
@@ -168,24 +173,25 @@ describe('saved catalog reads', () => {
   })
 
   it('bounds cached record count without thrashing or hiding a larger catalog', async () => {
-    const { saved, store } = await fixture()
-    store.save(saved)
+    const { saved, StoppedAgentStore } = await fixture()
     const base = join(directory, 'stopped-agents')
+    // A bound of 8 behaves as the real 2,048 does, with 10 files instead of 2,050: writing and deleting those outlasted
+    // the test's 30 s and its cleanup's 10 s on a loaded Mac.
+    const store = new StoppedAgentStore(base, 8)
+    store.save(saved)
     rmSync(join(base, `${saved.agentId}.json`))
-    for (let i = 0; i < 2050; i++) {
-      const agentId = `bounded-${String(i).padStart(4, '0')}`
+    for (let i = 0; i < 10; i++) {
+      const agentId = `bounded-${String(i).padStart(2, '0')}`
       writeFileSync(join(base, `${agentId}.json`), JSON.stringify({ version: 1,
         session: { ...saved, agentId } }), { mode: 0o600 })
     }
-    expect(store.list()).toHaveLength(2050)
+    expect(store.list()).toHaveLength(10)
     for (let pass = 0; pass < 2; pass++) {
       vi.mocked(readFileSync).mockClear()
-      expect(store.list()).toHaveLength(2050)
+      expect(store.list()).toHaveLength(10)
       expect(readFileSync).toHaveBeenCalledTimes(2)
     }
-  // 2,050 files written and listed three times: 0.8 to 0.9 s alone on the Mac Studio, 7.7 s inside `npm run test:resume`
-  // beside six other files at a load of 6 to 7, past the 5 s default (task #4405).
-  }, 30_000)
+  })
 })
 
 async function fixture() {
@@ -220,6 +226,32 @@ describe('stopped harness persistence', () => {
     expect(after.touchedAt).toBe(before.touchedAt)
     expect(after.defaultName).toBe('harness Desktop')
     expect(store.patch('never-saved', { cwd: '/tmp' })).toBe(false)
+  })
+
+  // A stopped shell that is opened again is a new pane: the agent that ended in its old one is nobody's to take.
+  it('a saved record never keeps previousAgentId', async () => {
+    const { saved, store } = await fixture()
+    store.save({ ...saved, previousAgentId: 'agent-that-ended' })
+    const file = JSON.parse(readFileSync(join(directory, 'stopped-agents', `${saved.agentId}.json`), 'utf8')) as { session: Record<string, unknown> }
+    expect(file.session).not.toHaveProperty('previousAgentId')
+    expect(store.get(saved.agentId)).not.toHaveProperty('previousAgentId')
+  })
+
+  // The browser moves with its pane (decision 19): a stopped agent's flag is written in place.
+  it('patch sets and clears browser in place: the name and touchedAt stay, a cleared flag is absent from the file, and an id with no record answers false', async () => {
+    const { saved, store } = await fixture()
+    store.save({ ...saved, defaultName: 'harness Desktop' })
+    const before = store.get(saved.agentId)!
+    expect(store.patch(saved.agentId, { browser: true })).toBe(true)
+    expect(store.get(saved.agentId)).toEqual({ ...before, browser: true })
+    expect(store.patch(saved.agentId, { browser: undefined })).toBe(true)
+    const file = JSON.parse(readFileSync(join(directory, 'stopped-agents', `${saved.agentId}.json`), 'utf8')) as { session: Record<string, unknown> }
+    expect(file.session).not.toHaveProperty('browser')
+    const after = store.get(saved.agentId)!
+    expect(after).toEqual(before)
+    expect(after.touchedAt).toBe(before.touchedAt)
+    expect(after.defaultName).toBe('harness Desktop')
+    expect(store.patch('never-saved', { browser: true })).toBe(false)
   })
 
   // The global "last used" order must not forget an agent because it was paused: the archive keeps

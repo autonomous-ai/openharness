@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { defaultSettings, humanMode, parseSettings, publicSettings, settingsHash, type BrowserSettings } from './settings.js'
+import { clampWindow, defaultSettings, humanMode, parseSettings, publicSettings, settingsHash, type BrowserSettings } from './settings.js'
 
 const host = { timeZone: 'Asia/Ho_Chi_Minh', languages: 'vi-VN' }
 
@@ -104,5 +104,18 @@ describe('agent browser settings', () => {
   it('humanMode is off when human input is off', () => {
     expect(humanMode({ ...withProxy, humanInput: false, humanSpeed: 'slow' })).toBe('off')
     expect(humanMode({ ...withProxy, humanSpeed: 'fast' })).toBe('fast')
+  })
+
+  // Chrome's window takes the panel's size, held to what a person's window could be on that screen (spec: The window
+  // fits the panel).
+  it('clampWindow rounds, holds 1024x640 and the screen, and is null for anything but two positive numbers', () => {
+    expect(clampWindow(1137.4, 843.6, '1920x1080')).toEqual({ width: 1137, height: 844 })
+    expect(clampWindow(600, 300, '1920x1080')).toEqual({ width: 1024, height: 640 })
+    expect(clampWindow(2560, 1440, '1920x1080')).toEqual({ width: 1920, height: 1080 })
+    expect(clampWindow(1500, 900, '1366x768')).toEqual({ width: 1366, height: 768 })
+    expect(clampWindow(1920, 1080, '1920x1080')).toEqual({ width: 1920, height: 1080 })
+    for (const [width, height] of [[0, 800], [1200, -1], ['1200', 800], [1200, null], [undefined, 800], [Number.NaN, 800], [1200, Number.POSITIVE_INFINITY]]) {
+      expect(clampWindow(width, height, '1920x1080'), `${String(width)}x${String(height)}`).toBeNull()
+    }
   })
 })

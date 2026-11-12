@@ -9,6 +9,7 @@ import 'agent_names.dart';
 import 'controller.dart';
 import 'launch_prompt.dart';
 import 'model.dart';
+import 'personal_agents.dart' show swarmAgentId, swarmJoinName, swarmTakenNames;
 
 /// How long a join waits between tries: the add is one operation, so trying it again never adds the agent twice.
 const swarmJoinRetries = [Duration(seconds: 1), Duration(seconds: 3)];
@@ -98,7 +99,6 @@ HarnessLaunchIntegration swarmNewAgent(
     // A Swarm agent runs Claude Code or Codex, on its person's own computer and account.
     engines: const ['claude', 'codex'],
     ownMachinesOnly: true,
-    offersBrowser: true,
     swarmRole: 'dev',
     prepare: (machine, text, base) async {
       final snapshot = await app.superTabs.readSnapshot(tabId);
@@ -160,16 +160,19 @@ const _nameRefusals = {
 /// Attach, beside + in Your Team (Swarm v4, anh Dee 2026-11-09: "this is like cmd p. while + is like cmd n"), and a click on a
 /// pane's row in Your Team: an agent already running on one of its person's own computers joins their team as + New agent's
 /// does, with its own 1:1 chat, which opens; the chat's id is the answer. A stopped one is resumed first, in the same step
-/// (anh Dee 2026-11-10). It keeps its own name (anh Dee 2026-11-10, attaching juno and pip: "they got different name?")
-/// unless that name is automatic or the Swarm already uses or refuses it, or another join begun here holds it, when it gets
-/// one of the Swarm's. Nothing is typed into it: it goes on with what it was doing, and its daemon tells it the team's ways
+/// (anh Dee 2026-11-10). It keeps its own name (anh Dee 2026-11-10, attaching juno and pip: "they got different name?"), the
+/// one its row in Your Team shows (`swarmJoinName`), unless it has none or the Swarm already uses or refuses it, or another
+/// join begun here holds it, when it gets one of the Swarm's. Nothing is typed into it: it goes on with what it was doing, and its daemon tells it the team's ways
 /// once it is in (cli superTabs/host.ts). A join the connection lost is tried again as the same operation, which never adds
 /// it twice; one that failed is finished by the next try ([_Join]).
+///
+/// [name] is the name its row in Your Team showed (personal_agents.dart), which it keeps.
 Future<String> swarmAttachAgent(
   AppNotifier app,
   String tabId,
   String machineId,
   Agent native, {
+  String? name,
   Future<void> Function(Duration) wait = Future<void>.delayed,
 }) async {
   final engine = native.engine;
@@ -187,25 +190,21 @@ Future<String> swarmAttachAgent(
   final joins = _joins[app] ??= {};
   final key = (tabId, machineId, native.id);
   // The names its Swarm has, and those other joins begun here into it hold.
-  Future<List<String>> taken() async => [
-    for (final agent in (await app.superTabs.readSnapshot(tabId)).agents)
-      agent.displayName ?? agent.name,
+  Future<Set<String>> taken() async => {
+    ...swarmTakenNames(await app.superTabs.readSnapshot(tabId)),
     for (final MapEntry(key: other, :value) in joins.entries)
-      if (other != key && other.$1 == tabId) value.name,
-  ];
+      if (other != key && other.$1 == tabId) value.name.toLowerCase(),
+  };
+  // The name its row in Your Team shows, or the one that row would (personal_agents.dart), so ⌘P and a click agree.
+  final seed = swarmAgentId(machineId, native.id);
   var join = joins[key];
   if (join == null) {
-    final names = await taken();
-    final own = native.name.trim();
-    final keepOwn =
-        own.isNotEmpty &&
-        !isAutomaticHarnessName(own) &&
-        !names.any((name) => name.toLowerCase() == own.toLowerCase());
+    final chosen = name ?? swarmJoinName(native, seed, await taken());
     join = joins[key] ??= (
       operation: superTabOperationId(),
       step: 'chat',
-      name: keepOwn ? own : freshAgentName(names),
-      own: keepOwn,
+      name: chosen,
+      own: true,
       model: native.modelName,
       effort: native.modelEffort,
     );
@@ -239,10 +238,12 @@ Future<String> swarmAttachAgent(
     }
   }
 
+  // Its session named, so a try from another view or computer of the person's finds the same chat (backend agent.new).
   Future<Map<String, dynamic>> newChat(String step) => run(step, {
     'type': 'agent.new',
     'kind': 'regular',
     'machineId': machineId,
+    'harnessId': native.id,
     'engine': engine,
     'name': current.name,
     'local': true,
@@ -262,7 +263,10 @@ Future<String> swarmAttachAgent(
     current = joins[key] = (
       operation: current.operation,
       step: 'chat-named',
-      name: freshAgentName([...await taken(), current.name]),
+      name: swarmJoinName(native, seed, {
+        ...await taken(),
+        current.name.toLowerCase(),
+      }),
       own: false,
       model: current.model,
       effort: current.effort,

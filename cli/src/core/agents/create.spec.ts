@@ -23,6 +23,7 @@ import { createAgentCreator, type CreateAgentDeps } from './create.js'
 import { prepareInstructionWrites } from '../../scm/scmProjects.js'
 import { opencodeMajorVersion } from '../../engines/launchControl.js'
 import { installOpencodePlugin } from '../../engines/nativeHooks.js'
+import { missingHookScript } from '../../engines/kit/notifyHooks.js'
 import type { NativeLaunch } from '../../engines/nativeLaunch.js'
 import { projectsRoot } from '../../lib/projectFolder.js'
 import { harnessMadeWorktree } from '../../lib/gitProject.js'
@@ -31,10 +32,8 @@ import { agentLaunchArgs } from '../../lib/agentAttribution.js'
 import { WindowsBatchLaunchRefused } from '../../lib/windows/launch.js'
 import { SWARM_LAUNCH } from '../../superTabs/inCore/launch.js'
 
-// Real native preparation asks a real `/bin/sh` engine for its help. On a loaded machine its 5 s deadline, not the code,
-// decided (5155 ms at load 60): a creation held, and the DSH launch it left queued answered the next test. What a deadline
-// does is patientExec.spec.ts's to test.
-vi.mock('../../lib/patientExec.js', async (real) => ({ ...await real<object>(), patientDeadline: () => () => {} }))
+// Real native preparation asks the fixture engine for its help: answered in this process (testing/engineHelpInProcess.ts).
+vi.mock('node:child_process', async (real) => (await import('../../testing/engineHelpInProcess.js')).withEngineHelp(await real<typeof import('node:child_process')>()))
 vi.mock('../../lib/gitProject.js', async (real) => ({ ...await real<object>(), harnessMadeWorktree: vi.fn(async () => false) }))
 vi.mock('../../lib/projectFolder.js', async real => {
   const actual = await real<typeof import('../../lib/projectFolder.js')>()
@@ -62,6 +61,7 @@ vi.mock('../../engines/inProcess.js', async (real) => {
   const actual = await real<typeof import('../../engines/inProcess.js')>()
   return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
 })
+vi.mock('../../engines/kit/notifyHooks.js', async (real) => ({ ...await real<object>(), missingHookScript: vi.fn(() => null) }))
 vi.mock('../../engines/launchControl.js', () => ({ opencodeMajorVersion: vi.fn(async () => 2) }))
 vi.mock('../../engines/kit/nativePlugin.js', () => ({
   prepareNativePlugin: vi.fn(() => ({ verify: () => {}, commit: async () => ({ verify: () => {} }) })),
@@ -176,7 +176,8 @@ describe('creating an agent', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.mocked(createAndRegisterPane).mockReset().mockResolvedValue({ ok: true, spawned: { runtime: { paneId: '%1' } }, pending } as never)
   })
-  afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
+  // A launch or an installed harness one test queued and never used answers no other test.
+  afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks(); launchDsh.mockReset(); vi.mocked(installedDsh).mockReset() })
 
   // Swarm v4: no skill file and no skill mode; each Swarm role starts with the team's basics as its launch line.
   it.each(['claude', 'codex'] as const)('attaches each Swarm role before %s pane dispatch', async engine => {
@@ -250,7 +251,7 @@ describe('creating an agent', () => {
     } finally { rmSync(home, { recursive: true, force: true }) }
   })
 
-  // Audit M1, and task #4395: an agent's private temporary folder is its TMPDIR and is added to the engine's working
+  // Audit M1, and task #4395: an agent's private temporary folder is its TMPDIR and, for Claude Code, is added to its working
   // directories, so its owner's own settings ask nothing for its mktemp files; the launch's own variables win.
   it('gives the agent its private temporary folder as TMPDIR and as its one added folder, and lets the launch\'s own variables win', async () => {
     const tmp = { env: { TMPDIR: '/data/agent-tmp/one' }, args: ['--add-dir=/data/agent-tmp/one'] }
@@ -477,6 +478,19 @@ describe('creating an agent', () => {
     expect(createAndRegisterPane).not.toHaveBeenCalled()
   })
 
+  // #3954: every install refuses while notify.mjs is missing, and the create said only "Waiting to confirm the engine's
+  // native hooks", which waiting never changes.
+  it('names a missing notify.mjs, and what to do, where a held create says why', async () => {
+    vi.mocked(missingHookScript).mockReturnValue('/opt/harness/hook/notify.mjs')
+    try {
+      const launch = { current: () => true, environment: { HOME: root }, prepareHooks: async () => false } as unknown as NativeLaunch
+      expect(await setup({ native: async () => ({ ok: true, launch }) }).create(request())).toEqual({ ok: false, error: 'NATIVE_LAUNCH_HELD',
+        unavailable: 'native', detail: 'Harness’s hook script is missing (/opt/harness/hook/notify.mjs). Reinstall Harness, then start the agent again.' })
+      expect(missingHookScript).toHaveBeenLastCalledWith('claude')
+      expect(createAndRegisterPane).not.toHaveBeenCalled()
+    } finally { vi.mocked(missingHookScript).mockReturnValue(null) }
+  })
+
   it('refuses, with the engine\'s own reason, an engine that ran and failed instead of holding the creation', async () => {
     const detail = 'Codex is installed but cannot run: /usr/bin/env: ‘node’: No such file or directory'
     const broken = { ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native', detail, refusal: 'ENGINE_CANNOT_RUN' } as const
@@ -508,11 +522,9 @@ describe('creating an agent', () => {
 
   it('records the final harness-selected Codex home used by real native preparation', async () => {
     const executable = await import('../../engines/kit/launchExecutable.js')
-    // An engine that runs: a launch that names no mode still asks for its help (nativeLaunch.ts).
-    const engine = join(root, 'engine')
-    writeFileSync(engine, '#!/bin/sh\necho "Usage: engine"\n', { mode: 0o755 })
+    // An engine that runs (the child_process mock above): a launch that names no mode still asks for its help.
     vi.spyOn(executable, 'captureLaunchExecutable').mockResolvedValue({ state: 'ready',
-      executable: { command: engine, identity: 'fixture', current: () => true },
+      executable: { command: '/fixture/engine', identity: 'fixture', current: () => true },
       environment: { HOME: root, PATH: '/fixture/bin' },
     })
     const { inspectNativeLaunch } = await import('../../engines/nativeLaunch.js')
@@ -735,6 +747,35 @@ describe('creating an agent', () => {
       expect(vi.mocked(createAndRegisterPane).mock.calls[0][0]).toMatchObject({ bypassPermission: true, permissionMode: null })
     })
 
+    // The argv the pane really gets, so the task's absence from it is the launch's, not this spec's mock's (without
+    // the install step, whose recipe this spec stubs).
+    const launchedFor = async (over: Record<string, unknown>) => {
+      const real = await vi.importActual<typeof import('../../lib/engineLaunch.js')>('../../lib/engineLaunch.js')
+      vi.mocked(buildEngineLaunchArgv).mockImplementationOnce((engine, options) => real.buildEngineLaunchArgv(engine, { ...options, installIfMissing: undefined }))
+      expect(await setup().create(request(over))).toMatchObject({ ok: true })
+      return vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
+    }
+
+    it('an OpenClaw first task is kept for typing, not launched with', async () => {
+      const pane = await launchedFor({ engine: 'openclaw', prompt: 'Fix the parser' })
+      expect(pane.firstTask).toBe('Fix the parser')
+      expect(pane.argv.join(' ')).not.toContain('Fix the parser')
+      expect(pane.argv.join(' ')).not.toContain('--message')
+    })
+
+    it('a Swarm launch takes the same path', async () => {
+      const pane = await launchedFor({ engine: 'openclaw', prompt: 'Fix the parser', swarmRole: 'agent' })
+      expect(pane.firstTask).toBe('Fix the parser')
+      expect(pane.argv.join(' ')).not.toContain('Fix the parser')
+      expect(pane.argv.join(' ')).not.toContain('--message')
+    })
+
+    it('an engine that takes its first prompt in argv keeps none', async () => {
+      const pane = await launchedFor({ engine: 'claude', prompt: 'Fix the parser' })
+      expect(pane).not.toHaveProperty('firstTask')
+      expect(pane.argv.join(' ')).toContain('Fix the parser')
+    })
+
     it('opens a terminal ready at once, with nothing to watch', async () => {
       vi.mocked(createAndRegisterPane).mockResolvedValueOnce({ ok: true, spawned: { runtime: { paneId: '%2' } }, pending: { ...pending, engine: 'terminal' } } as never)
       const { deps, create } = setup()
@@ -760,7 +801,7 @@ describe('creating an agent', () => {
       vi.mocked(installedDsh).mockReset().mockReturnValue(undefined)
     })
 
-    it('with Browser ticked, the row says so and its browser is attached; without, neither', async () => {
+    it('with an older Desktop\'s browser: true, the row says so and its browser is attached; without, neither', async () => {
       const attachBrowser = vi.fn()
       vi.mocked(createAndRegisterPane).mockResolvedValue({ ok: true, spawned: { runtime: { paneId: '%1' } }, pending: { ...pending, browser: true } } as never)
       const { create } = setup({ attachBrowser })
@@ -957,24 +998,16 @@ describe('creating an agent', () => {
       } finally { rmSync(join(env.ADAPTER_DATA_DIR, 'mcp-servers.json'), { force: true }) }
     })
 
-    it('browser:true adds the args; absent adds nothing', async () => {
+    it('no launch carries a browser argument: Claude Code, Codex and OpenCode, with browser:true and without', async () => {
       const { create } = setup()
-      await create(request({ browser: true }))
-      expect((vi.mocked(buildEngineLaunchArgv).mock.calls[0][1] as Record<string, unknown>).extraArgs).toEqual([
-        '--mcp-config={"mcpServers":{"browser":{"type":"stdio","command":"harness","args":["browser-mcp"]}}}'])
-      vi.mocked(buildEngineLaunchArgv).mockClear()
-      await create(request())
-      expect(JSON.stringify(vi.mocked(buildEngineLaunchArgv).mock.calls[0][1])).not.toContain('browser-mcp')
-    })
-
-    it('browser:true gives Codex its own args, and an engine with no browser MCP form nothing', async () => {
-      const { create } = setup()
-      await create(request({ engine: 'codex', browser: true }))
-      expect((vi.mocked(buildEngineLaunchArgv).mock.calls[0][1] as Record<string, unknown>).extraArgs).toEqual(expect.arrayContaining([
-        '-c', 'mcp_servers.browser.command="harness"', '-c', 'mcp_servers.browser.args=["browser-mcp"]']))
-      vi.mocked(buildEngineLaunchArgv).mockClear()
-      await create(request({ engine: 'opencode', browser: true }))
-      expect(JSON.stringify(vi.mocked(buildEngineLaunchArgv).mock.calls[0][1])).not.toContain('browser-mcp')
+      for (const engine of ['claude', 'codex', 'opencode'] as const) {
+        for (const browser of [true, undefined]) {
+          vi.mocked(buildEngineLaunchArgv).mockClear()
+          await create(request({ engine, ...(browser ? { browser } : {}) }))
+          const argv = ((vi.mocked(buildEngineLaunchArgv).mock.calls[0][1] as { extraArgs?: string[] }).extraArgs ?? []).join(' ')
+          for (const word of ['browser-mcp', 'mcp_servers.browser', '"browser"']) expect(argv).not.toContain(word)
+        }
+      }
     })
 
     it('gives a Swarm agent the machine MCP servers, as its owner\'s own session has them', async () => {

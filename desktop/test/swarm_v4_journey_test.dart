@@ -9,6 +9,7 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/my_agents.dart';
 import 'package:harness/super_tabs/view.dart';
+import 'package:harness/ws/ws_conn.dart';
 
 import 'support/super_tab_fixture.dart';
 import 'support/swarm_v4_channel.dart';
@@ -233,12 +234,11 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
   });
 
-  // Ticking Browser, Start and Install are the New agent form's (super_tab_new_agent_launch_test.dart); this is what the
-  // person sees next, in the agent's chat.
-  testWidgets('a browser agent: Browser opens its setup beside its chat, '
-      'follows it, and closes', (tester) async {
-    final app = createApp(connected: true);
-    void browser(AgentBrowser state) {
+  testWidgets('an agent\'s Browser, from its chat: off, Start, its setup '
+      'beside the chat, Stop, and closed', (tester) async {
+    final daemon = _BrowserDaemon();
+    final app = createApp(connected: true, connectionForTest: (_) => daemon);
+    void browser(AgentBrowser? state) {
       app.stateOf('host')!.agents = [
         Agent(
           id: 'session-second',
@@ -260,7 +260,7 @@ void main() {
       ..nodeOnline = true
       ..connectionStatus = ConnectionStatus.connected
       ..agentLoadStatus = AgentLoadStatus.loaded;
-    browser(const AgentBrowser(state: 'setup', step: 'installing'));
+    browser(null);
     final server = swarmV4Server();
     await openSwarmV4(
       tester,
@@ -273,11 +273,22 @@ void main() {
     await tester.tap(key('swarm-browser-button'));
     await tester.pump();
     expect(key('swarm-browser-panel'), findsOneWidget);
-    expect(find.text('Podman installed'), findsOneWidget);
-    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.text('A sandboxed Chrome the agent drives'), findsOneWidget);
     // The chat stays beside it.
     expect(find.byType(EditableText), findsOneWidget);
+    await tester.tap(key('swarm-browser-start'));
+    await tester.pump();
+    expect(daemon.requests, [
+      [
+        'agent_browser_start',
+        {'agentId': 'session-second'},
+      ],
+    ]);
 
+    browser(const AgentBrowser(state: 'setup', step: 'installing'));
+    await tester.pump();
+    expect(find.text('Podman installed'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
     browser(const AgentBrowser(state: 'setup', step: 'building'));
     await tester.pump();
     expect(find.byIcon(AppIcons.circleCheck), findsNWidgets(2));
@@ -285,10 +296,21 @@ void main() {
     await tester.pump();
     expect(find.text('Starting browser…'), findsOneWidget);
 
+    await tester.tap(key('swarm-browser-stop'));
+    await tester.pump();
+    expect(daemon.requests.last, [
+      'agent_browser_stop',
+      {'agentId': 'session-second'},
+    ]);
+    browser(null);
+    await tester.pump();
+    expect(find.text('A sandboxed Chrome the agent drives'), findsOneWidget);
+
     await tester.tap(key('swarm-browser-close'));
     await tester.pumpAndSettle();
     expect(key('swarm-browser-panel'), findsNothing);
     expect(find.byType(EditableText), findsOneWidget);
+    expect(daemon.requests, hasLength(2));
     expect(tester.takeException(), isNull);
   });
 
@@ -300,6 +322,16 @@ void main() {
       List<String> asking() => [
         for (final (_, chat) in superTabAgentsAsking(c)) chat.id,
       ];
+      // Its name in Your Team: semibold while it asks, regular once read.
+      FontWeight? weight() => tester
+          .widget<Text>(
+            find.descendant(
+              of: key('super-agent-second'),
+              matching: find.text('second'),
+            ),
+          )
+          .style
+          ?.fontWeight;
       Future<void> tap(String k) async {
         await tester.tap(key(k));
         await tester.runAsync(
@@ -313,6 +345,7 @@ void main() {
       await tap('super-agent-second');
       await tap('super-group-lead');
       expect(asking(), isNot(contains('agent-chat-second')));
+      expect(weight(), FontWeight.w400);
       // The agent writes in its own chat: its row is bold, and the Swarm counts it.
       server.append(
         'Which build?',
@@ -327,11 +360,13 @@ void main() {
       await tester.runAsync(c.refresh);
       await tester.pumpAndSettle();
       expect(asking(), contains('agent-chat-second'));
+      expect(weight(), grid.AppFont.semibold);
       // Its chat opened and read (Esc, as its unread bar says): nothing asks any more.
       await tap('super-agent-second');
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
       expect(asking(), isNot(contains('agent-chat-second')));
+      expect(weight(), FontWeight.w400);
       final v3 = RegExp(
         r'/api/super-tabs/[^/]+/'
         r'(mentions|decisions|reminders|activity|threads|inbox)(/read)?(\?.*)?$',
@@ -441,4 +476,35 @@ void main() {
     expect(find.byType(EditableText), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+}
+
+/// `host`'s daemon as the Browser panel asks it: each `agent_browser_*` request, answered `{ok: true}`; nothing else.
+class _BrowserDaemon extends WsConn {
+  _BrowserDaemon()
+    : super(
+        wsBaseUrl: 'ws://fixture.invalid',
+        autonomousEnv: 'test',
+        machineId: 'host',
+        accessTokenProvider: (_, _) async => '',
+        onAuthFailure: (_) {},
+        onEvent: (_) {},
+        onStatus: (_) {},
+      );
+
+  /// Each request as `[type, payload]`.
+  final requests = <List<Object>>[];
+
+  @override
+  bool get isReady => true;
+
+  @override
+  Future<Map<String, dynamic>> request(
+    String type, {
+    Map<String, dynamic> payload = const {},
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    if (!type.startsWith('agent_browser')) return const {};
+    requests.add([type, Map.of(payload)]);
+    return const {'ok': true};
+  }
 }

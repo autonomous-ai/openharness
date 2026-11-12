@@ -33,7 +33,7 @@ function setup() {
     return { status: 201, etag: null, body: made, resetAt: null }
   }
   const record = vi.fn(async (_repository: string, _commentId: string) => {})
-  const juno = { name: 'Juno', repositories: new Set(['acme/app']) }
+  const juno = { name: 'Juno', repositories: new Map([['acme/app', { project: 'acme/app', github: 'acme/app' }]]) }
   const ok: Verdict = { repository: 'acme/app', number: 27, verdict: 'READ-OK', sha: 'f6edb44', text: 'Ran the tests on the head: 12 pass.' }
   const run = (asked: Verdict = ok, reader = juno) => postVerdict({ get, send, record, login: async () => 'reader-login', now: () => NOW }, reader, asked)
   return { repo, sent, asked, record, run, ok, juno }
@@ -55,6 +55,18 @@ describe('a read\'s verdict, made by command', () => {
     await t.run({ ...t.ok, text: '  ' })
     expect(t.sent.map(s => (s.body as Json).body)).toEqual([
       `Juno, 16:21: HOLD ${HEAD}\n\nsrc/a.ts:12 reads the old head. Compare against the new one.`, `Juno, 16:21: READ-OK ${HEAD}`])
+  })
+
+  // The rehearsal, 2026-11-11: "Cy, 13:00: READ-OK 6690db2…" then "Cy: Matches #29." in the same comment. The basics tell an
+  // agent to open each GitHub comment with its name, and it signed the words this line already signs.
+  it('leaves out the reader\'s own name at the start of its words, which its line signs already', async () => {
+    const t = setup()
+    await t.run({ ...t.ok, text: 'Juno: Matches #29. The tests pass.' })
+    await t.run({ ...t.ok, verdict: 'HOLD', text: '**Juno:** src/a.ts:12 reads the old head.' })
+    // Another's name, or its own only in passing, stays.
+    await t.run({ ...t.ok, verdict: 'HOLD', text: 'Pip: the fix in src/a.ts:12 is Juno\'s.' })
+    expect(t.sent.map(s => (s.body as Json).body)).toEqual([`Juno, 16:21: READ-OK ${HEAD}\n\nMatches #29. The tests pass.`,
+      `Juno, 16:21: HOLD ${HEAD}\n\nsrc/a.ts:12 reads the old head.`, `Juno, 16:21: HOLD ${HEAD}\n\nPip: the fix in src/a.ts:12 is Juno's.`])
   })
 
   it('refuses a head that moved since the reader was asked, naming the new one, and posts nothing', async () => {

@@ -176,6 +176,16 @@ void main() {
     // The retry repeats the committed start under its original operation.
     expect(starts.toSet(), hasLength(1));
     expect(recovered, NewHarnessOutcome.created, reason: box.error);
+    // Its answer names the PM's one chat, where the request goes.
+    final chats = [
+      for (final group in (c.server.state['conversations'] as List).cast<Map>())
+        if (group['kind'] == 'agent-chat') group['id'],
+    ];
+    final sent = c.attempts
+        .where((p) => (p['command'] as Map)['type'] == 'message.send')
+        .map((p) => (p['command'] as Map)['conversationId'])
+        .toSet();
+    expect(sent, {chats.single});
   });
 
   test('a start that took its machine’s last slot recovers after its reply is lost', () async {

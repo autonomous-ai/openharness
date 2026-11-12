@@ -1,22 +1,25 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/browser/browser_panel.dart';
-import 'package:harness/browser/browser_pill.dart';
 import 'package:harness/browser/browser_settings.dart';
 import 'package:harness/browser/browser_settings_page.dart';
 import 'package:harness/browser/browser_setup_dialog.dart';
+import 'package:harness/browser/browser_stream.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/theme/app_icons.dart';
+import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/super_tabs/chat/chat_card.dart';
 import 'package:harness/super_tabs/chat/chat_time.dart';
 import 'package:harness/super_tabs/chat/composer_pill.dart';
@@ -24,12 +27,15 @@ import 'package:harness/super_tabs/chat/send_button.dart';
 import 'package:harness/super_tabs/swarm_type.dart';
 import 'package:harness/super_tabs/terminal_button.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
+import 'package:harness/widgets/web_pane_panel.dart';
 import 'package:harness/shared/theme/app_type.dart';
 import 'package:harness/state/harness_attachments.dart';
 import 'package:harness/super_tabs/channel_talk.dart';
 import 'package:harness/super_tabs/quiet_rows.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/github_issues.dart';
 import 'package:harness/super_tabs/github_row.dart';
+import 'package:harness/super_tabs/goal_score.dart';
 import 'package:harness/super_tabs/task_board.dart';
 import 'package:harness/super_tabs/agent_instructions.dart';
 import 'package:harness/super_tabs/avatar_art.dart';
@@ -42,11 +48,14 @@ import 'package:harness/super_tabs/message_receipt.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/personal_agents.dart';
+import 'package:harness/super_tabs/choose_pm.dart' show SwarmPmChoose;
 import 'package:harness/super_tabs/project_sidebar.dart'
     show SuperTabFoldRow, SwarmStartRow;
 import 'package:harness/super_tabs/reply_box.dart';
 import 'package:harness/terminal/terminal_typography.dart';
 
+import 'support/fake_browser_view.dart';
+import 'support/swarm_goal_gh.dart';
 import 'support/swarm_v4_data.dart';
 import 'support/super_tab_fixture.dart';
 
@@ -206,7 +215,8 @@ Future<List<SuperTabController>> _show(
   final old = grid.AppTheme.brightness.value;
   grid.AppTheme.brightness.value = brightness;
   addTearDown(() => grid.AppTheme.brightness.value = old);
-  // Faye's pane reads her own file and, under it, the project's AGENTS.md and CLAUDE.md, as her computer sends them.
+  // Faye's pane reads her own file and, under it, the project's AGENTS.md and CLAUDE.md, what Harness adds at every start and
+  // her person's own CLAUDE.md, as her computer sends them.
   final computer =
       SwarmV4Computer(
           files: {'h/Faye': 'Answer in Vietnamese.\nNever push to main.'},
@@ -225,18 +235,29 @@ Future<List<SuperTabController>> _show(
         ]
         ..skipped = [
           {'name': 'CLAUDE.local.md', 'why': 'link'},
+        ]
+        ..basics = 'You are a Swarm agent on a team shipping one project.\n- Your tasks are GitHub issues labelled builder:<your name>.'
+        ..personal = [
+          {
+            'name': 'CLAUDE.md',
+            'path': '~/.claude/CLAUDE.md',
+            'text': 'Answer in plain words.',
+            'truncated': false,
+          },
         ];
   // The task cards read the lampOS review Swarm's channel.
   final c = swarmV4Server().controller(account: 'owner');
   addTearDown(c.dispose);
   await c.refresh();
-  // Faye's Browser settings, as her computer keeps them.
+  // Faye's Browser settings, as her computer keeps them, and her running browser's screen.
   final browserApp = _BrowserSettingsApp();
   addTearDown(browserApp.dispose);
+  WebPanePanel.webviewAvailableForTest = true;
+  addTearDown(() => WebPanePanel.webviewAvailableForTest = null);
   tester.view.devicePixelRatio = 1;
   // Taller than the gallery needs: each section is its own image, so the page's height is in none of them, and a
   // section that grows needs no new height.
-  tester.view.physicalSize = const Size(760, 6000);
+  tester.view.physicalSize = const Size(760, 6600);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
@@ -251,6 +272,8 @@ Future<List<SuperTabController>> _show(
           swarm: c,
           instructions: computer.link,
           browserApp: browserApp,
+          goal: _goal(pass: 41, fail: 3, notRun: 16).github,
+          goalDone: _goal(pass: 60).github,
         ),
       ),
     ),
@@ -258,11 +281,33 @@ Future<List<SuperTabController>> _show(
   // The pane's read answers after the first frame, and shows on the next.
   await tester.pump();
   await tester.pump();
+  // The second score is drawn as the mouse over it shows it.
+  final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+  await mouse.addPointer(location: Offset.zero);
+  addTearDown(mouse.removePointer);
+  await mouse.moveTo(tester.getCenter(find.byKey(_Gallery.goalHovered)));
   // Its folder's files start folded; AGENTS.md is opened, as a person clicks it, and CLAUDE.md stays folded.
   await tester.tap(find.byKey(const ValueKey('swarm-shared-row-0')));
   await tester.pump();
   expect(tester.takeException(), isNull);
   return [c];
+}
+
+/// A project's goal as `gh` answers for it: so many milestones that pass, fail and have no run yet, as the design note's
+/// lampOS has 41, 3 and 16 of its 60.
+FakeGoalGitHub _goal({required int pass, int fail = 0, int notRun = 0}) {
+  final names = [
+    for (var n = 1; n <= pass + fail + notRun; n++) 'Milestone $n',
+  ];
+  return FakeGoalGitHub(
+    file: [for (final name in names) '| $name | `make check` |'].join('\n'),
+    landings: [
+      FakeLanding([
+        for (final (n, name) in names.take(pass + fail).indexed)
+          goalRun(n + 1, name, n < pass ? 'success' : 'failure'),
+      ]),
+    ],
+  );
 }
 
 /// Takes the gallery down and lets the bars' chats save, so no timer outlives the test.
@@ -456,7 +501,13 @@ class _Gallery extends StatelessWidget {
     required this.swarm,
     required this.instructions,
     required this.browserApp,
+    required this.goal,
+    required this.goalDone,
   });
+
+  /// `gh` for a project whose goal is 41 of 60, and for one whose every milestone passes.
+  final SwarmGitHub goal, goalDone;
+  static const goalHovered = ValueKey('gallery-goal-hovered');
 
   /// Where Browser settings reads Faye's.
   final AppNotifier browserApp;
@@ -557,6 +608,16 @@ class _Gallery extends StatelessWidget {
                     children: [
                       // The v4 left pane (anh Dee 2026-11-08): your team by face and name, then projects.
                       SuperTabQuietHeading.org('autonomous.ai', onTap: () {}),
+                      // Its owner's alone: invites someone to the Swarm.
+                      SuperTabQuietRow(
+                        leading: Icon(
+                          AppIcons.userPlus,
+                          size: AppIcons.inlineSize,
+                          color: grid.SidebarInk.inkMuted,
+                        ),
+                        name: 'Invite people',
+                        onTap: () {},
+                      ),
                       SuperTabQuietHeading(
                         'Your Team',
                         collapsed: false,
@@ -578,6 +639,7 @@ class _Gallery extends StatelessWidget {
                         ('Quinn', false, false, true, 'on #12'),
                         ('Kai', false, true, false, 'free'),
                         ('Wren', false, false, false, 'offline'),
+                        ('Finn', false, false, false, 'paused'),
                         ('Moss', false, false, false, 'starting'),
                         ('Ash', false, false, false, 'working'),
                         ('Juno', false, false, false, 'needs you'),
@@ -612,6 +674,19 @@ class _Gallery extends StatelessWidget {
                         name: 'Docs bot',
                         detail: 'Mac Studio',
                         onTap: () {},
+                      ),
+                      // Its computer off: it says so, as an agent's row does, and does nothing.
+                      SuperTabQuietRow(
+                        leading: SuperTabAvatar(
+                          identity: 'agent:${swarmAgentId('laptop', 'notes')}',
+                          name: 'Release notes',
+                          size: SuperTabQuietRow.faceSize,
+                          face: true,
+                          offline: true,
+                        ),
+                        name: 'Release notes',
+                        detail: 'offline',
+                        onTap: null,
                       ),
                       // While a click joins it: it waits.
                       SuperTabQuietRow(
@@ -852,28 +927,6 @@ class _Gallery extends StatelessWidget {
               ),
             ],
           ),
-          section(
-            'browser-pill',
-            'Browser in New agent: off, on, this computer to set up, another computer to set up',
-            [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  BrowserPill(on: false, onPressed: () {}),
-                  gap(),
-                  BrowserPill(on: true, onPressed: () {}),
-                  gap(),
-                  BrowserPill(on: true, needsSetup: true, onPressed: () {}),
-                  gap(),
-                  BrowserPill(
-                    on: false,
-                    unavailable: 'Set up Browser on Ken Mac first',
-                    onPressed: () {},
-                  ),
-                ],
-              ),
-            ],
-          ),
           section('browser-setup', 'Set up Browser', [
             const SizedBox(
               width: 500,
@@ -898,20 +951,23 @@ class _Gallery extends StatelessWidget {
           ),
           section(
             'browser-bar',
-            'Browser in an agent\'s bar, closed and open; its panel setting up, and failed',
+            'Browser in an agent\'s bar, plain, open and running; its panel off, running and failed',
             [
               Row(
                 children: [
-                  SizedBox(child: BrowserButton(open: false, onPressed: () {})),
+                  BrowserButton(open: false, onPressed: () {}),
                   gap(),
-                  SizedBox(child: BrowserButton(open: true, onPressed: () {})),
+                  BrowserButton(open: true, onPressed: () {}),
+                  gap(),
+                  BrowserButton(open: false, running: true, onPressed: () {}),
                 ],
               ),
               const SizedBox(height: 8),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              Wrap(
+                spacing: 16,
+                runSpacing: 8,
                 children: [
-                  for (final agent in ['faye-setup', 'faye-failed']) ...[
+                  for (final agent in ['faye-off', 'faye-ready', 'faye-failed'])
                     SizedBox(
                       width: 340,
                       height: 230,
@@ -921,10 +977,9 @@ class _Gallery extends StatelessWidget {
                         agentId: agent,
                         thisComputer: true,
                         onClose: () {},
+                        newView: _Screen.new,
                       ),
                     ),
-                    gap(),
-                  ],
                 ],
               ),
             ],
@@ -950,6 +1005,46 @@ class _Gallery extends StatelessWidget {
               ),
             ),
           ]),
+          section(
+            'goal',
+            'Goal: at rest, hovered, every milestone passing; its menu\'s rows',
+            [
+              Row(
+                children: [
+                  SwarmGoalScore(repository: 'acme/lampos', github: goal),
+                  gap(),
+                  SwarmGoalScore(
+                    key: goalHovered,
+                    repository: 'acme/lampos',
+                    github: goal,
+                  ),
+                  gap(),
+                  SwarmGoalScore(repository: 'acme/done', github: goalDone),
+                ],
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                width: 320,
+                child: Column(
+                  children: [
+                    AppMenuItem(
+                      label: 'Update rolls back on failure',
+                      state: 'fails',
+                      stateFailed: true,
+                      leadingSlot: false,
+                      onPressed: () {},
+                    ),
+                    AppMenuItem(
+                      label: 'Busy room is detected',
+                      state: 'not run',
+                      leadingSlot: false,
+                      onPressed: () {},
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
           // Empty means empty (anh Dee's rule 7): each element with nothing optional, and no words for what
           // is not there.
           section('empty-row', 'Empty: a row', [
@@ -973,11 +1068,11 @@ class _Gallery extends StatelessWidget {
           ]),
           section(
             'instructions',
-            'Instructions: the agent\'s own file, then its folder\'s files, read only and folded',
+            'Instructions: the agent\'s own file, then what else goes into it, read only and folded: its folder\'s, Harness\'s, its person\'s own, and its engine\'s',
             [
               SizedBox(
                 width: 380,
-                height: 500,
+                height: 640,
                 child: SwarmAgentInstructions(
                   agent: _agent('Faye'),
                   machineName: 'Mac Studio',
@@ -994,6 +1089,11 @@ class _Gallery extends StatelessWidget {
               height: 60,
               child: SuperTabEmptyWords(superTabEmptyChannel),
             ),
+          ]),
+          // A project's channel with no PM, as its owner sees it (anh Dee 2026-11-11): one line and Choose PM, which picks
+          // one of their agents.
+          section('pm-choose', 'Choose PM: a project with no PM', [
+            const SizedBox(width: 440, child: SwarmPmChoose(onChoose: _noop)),
           ]),
           // What GitHub said to a person's agent, in their chat with it (anh Dee 2026-11-09): a card on the left, not a bubble.
           section(
@@ -1023,7 +1123,7 @@ class _BrowserSettingsApp extends AppNotifier {
         authSession: AuthSession(),
         configStore: null,
       ) {
-    // Her computer, with one browser building and one whose Podman is down.
+    // Her computer, with one agent's browser off, one's running and one's whose Podman is down.
     const machine = Machine(
       machineId: 'm',
       authMode: MachineAuthMode.remote,
@@ -1035,11 +1135,12 @@ class _BrowserSettingsApp extends AppNotifier {
       ..connectionStatus = ConnectionStatus.connected
       ..agentLoadStatus = AgentLoadStatus.loaded
       ..agents = const [
+        Agent(id: 'faye-off', name: 'Faye', engine: 'claude'),
         Agent(
-          id: 'faye-setup',
+          id: 'faye-ready',
           name: 'Faye',
           engine: 'claude',
-          browser: AgentBrowser(state: 'setup', step: 'building'),
+          browser: AgentBrowser(state: 'ready'),
         ),
         Agent(
           id: 'faye-failed',
@@ -1048,6 +1149,29 @@ class _BrowserSettingsApp extends AppNotifier {
           browser: AgentBrowser(state: 'failed', error: 'podman_down'),
         ),
       ];
+  }
+
+  /// The running browser's stream, opened as soon as it is asked for.
+  @override
+  BrowserStream browserStream(String machineId, String agentId) {
+    late final BrowserStream stream;
+    stream = BrowserStream(
+      machineId: machineId,
+      agentId: agentId,
+      send: (type, payload) async {
+        if (type == 'agent_browser_open') {
+          scheduleMicrotask(
+            () => stream.handleFrame('agent_browser_open_result', {
+              'requestId': payload['requestId'],
+              'streamId': '0f8fad5b-d9cb-469f-a165-70867728950e',
+            }),
+          );
+        }
+        return true;
+      },
+      sendBinary: (_) async => true,
+    );
+    return stream;
   }
 
   @override
@@ -1063,6 +1187,23 @@ class _BrowserSettingsApp extends AppNotifier {
       passwordSet: true,
     ),
     languages: 'vi-VN, en-US',
+  );
+}
+
+/// A running browser's screen, as its page would draw a site: a page under an address bar.
+class _Screen extends FakeBrowserView {
+  _Screen() : super(ready: true);
+
+  @override
+  Widget build(BuildContext context) => const ColoredBox(
+    key: ValueKey('browser-screen'),
+    color: Color(0xFFFFFFFF),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ColoredBox(color: Color(0xFFDEE1E6), child: SizedBox(height: 28)),
+      ],
+    ),
   );
 }
 
@@ -1276,3 +1417,5 @@ class _NearlyComparator extends LocalFileComparator {
     throw FlutterError('$golden: $problem. What it drew: ${drawn.path}');
   }
 }
+
+void _noop() {}

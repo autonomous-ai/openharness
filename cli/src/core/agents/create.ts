@@ -28,12 +28,11 @@ import { enginePathOverride } from '../../lib/engineBin.js'
 import { engineInstallRecipe } from '../../lib/engineInstall.js'
 import {
   buildEngineCommandArgv, buildEngineLaunchArgv, engineLaunchEnv, namedAgentArgs, permissionModeApproves, permissionModeFlags,
-  refusePermissionFlagIfUnsupported, supportsFirstPrompt, supportsNamedAgent, NamedAgentUnsupportedError,
+  refusePermissionFlagIfUnsupported, supportsFirstPrompt, supportsNamedAgent, typedFirstPrompt, NamedAgentUnsupportedError,
 } from '../../lib/engineLaunch.js'
 import { setUpWithin } from '../../lib/setUpWithin.js'
 import { agentLaunchArgs, joinedInstructions } from '../../lib/agentAttribution.js'
 import { machineMcpLaunchArgs } from '../../lib/machineMcp.js'
-import { browserMcpArgs } from '../../lib/browserMcpArgs.js'
 import { writeGridConfigDir } from '../../lib/gridConfigDir.js'
 import { describeGridLaunch, gridConfigHandOff, gridConflictingEnvToClear, type GridLaunchAnswer, type GridLaunchMachine, type GridLaunchRequest, type GridWebSearchStatus } from '../../lib/gridLaunchWire.js'
 import { syncProfileHome } from '../../lib/connectors/agents.js'
@@ -45,6 +44,7 @@ import type { LaunchAuthority, LaunchPreparation } from '../../lib/launchPrepara
 import type { publishGridConfigDir } from '../../lib/publishedGridConfig.js'
 import { nativeHookLocations } from '../../engines/kit/nativeLocations.js'
 import { engineHooks } from '../../engines/hooks.js'
+import { hooksHeldDetail } from '../../engines/kit/hooksHeldDetail.js'
 import { folderTrust } from '../../engines/launchPrep.js'
 import { projectsRoot } from '../../lib/projectFolder.js'
 import { harnessMadeWorktree } from '../../lib/gitProject.js'
@@ -81,7 +81,8 @@ export interface CreateAgentDeps {
   watchNewPane: ReturnType<typeof createPaneWatcher>
   announceSession: (session: RegisteredSession) => void
   attachDsh: (session: RegisteredSession) => void
-  /** Its browser starts, for an agent created with Browser (core/api.ts `AgentBrowserPort.attached`). */
+  /** Its browser starts, for an agent whose Browser is on from the start: an older Desktop's create (core/api.ts
+   *  `AgentBrowserPort.attached`). */
   attachBrowser?: (session: RegisteredSession) => void
   prepareApiTools: (cwd: string | null | undefined, engine: string) => void
   /** The hook server's port, which installed engine hooks post to. */
@@ -113,6 +114,11 @@ async function swarmFolder(cwd: string): Promise<boolean> {
   const root = projectsRoot()
   if (dirname(cwd) === root) return stat(join(cwd, '.git')).then(info => info.isDirectory(), () => false)
   return harnessMadeWorktree(cwd, root)
+}
+
+/** A create held because [engine]'s hooks are not in place (kit/hooksHeldDetail.ts). */
+function hooksHeld(engine: string, waiting: string) {
+  return { ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native', detail: hooksHeldDetail(engine, waiting) } as const
 }
 
 export function createAgentCreator({
@@ -329,9 +335,7 @@ export function createAgentCreator({
       } catch (error) { console.warn(`[agent] pre-trust ${cwd} · ${error instanceof Error ? error.message : error}`) }
     }
     if (native && !await native.prepareHooks(hooksDisabled ? 0 : hookPort, authority.current,
-      { ...gridLaunch?.env, ...dshEnv }, gridLaunch ? gridConflictingEnvToClear(gridLaunch) : [])) return {
-      ok: false, error: 'NATIVE_LAUNCH_HELD', detail: 'Waiting to confirm the engine’s native hooks.', unavailable: 'native',
-    }
+      { ...gridLaunch?.env, ...dshEnv }, gridLaunch ? gridConflictingEnvToClear(gridLaunch) : [])) return hooksHeld(engine, 'Waiting to confirm the engine’s native hooks.')
     // Harness configuration can change the profile after executable discovery. Binding and Resume
     // must retain the home the prepared child will actually use.
     if (engine === 'codex' && native) codexHome = nativeHookLocations(native.environment).CODEX_HOME
@@ -339,9 +343,7 @@ export function createAgentCreator({
     // THAT folder, not the one `harness login` already installed into — without this, such an agent
     // fires no hook at all (no SessionStart/UserPromptSubmit/Stop) and never streams a single event.
     // Idempotent, so paying this on every create against an already-set-up profile is free.
-    if (!native && codexHome && !hooksDisabled && !await engineHooks.codex.installIn(hookPort, codexHome)) return {
-      ok: false, error: 'NATIVE_LAUNCH_HELD', detail: 'Waiting to confirm Codex’s hooks in the selected profile.', unavailable: 'native',
-    }
+    if (!native && codexHome && !hooksDisabled && !await engineHooks.codex.installIn(hookPort, codexHome)) return hooksHeld('codex', 'Waiting to confirm Codex’s hooks in the selected profile.')
     // An agent on a profile home reads that home's MCP config, not the default's: it gets the connections there too.
     const profileHome = engine === 'claude' ? claudeHome : engine === 'codex' ? codexHome : null
     if (profileHome && (engine === 'claude' || engine === 'codex')) {
@@ -382,16 +384,15 @@ export function createAgentCreator({
     // The person's machine MCP servers (lib/machineMcp.ts, #1872), beside the grid's and their own: read at each launch,
     // as every relaunch reads them again (`buildLaunchOverrides`).
     const machineMcp = machineMcpLaunchArgs(engine, cwd)
-    // A Browser agent's `browser` MCP server (lib/browserMcpArgs.ts), as every relaunch adds it again. `harness` by name:
-    // the pane's PATH runs it, as it runs every other `harness` verb the agent calls.
-    const browserMcp = browser && (engine === 'claude' || engine === 'codex') ? browserMcpArgs(engine, 'harness') : []
-    // The agent's private temporary folder: its TMPDIR, and, for a Swarm agent, its one added working directory, so its owner's
-    // own settings ask nothing for its mktemp files (lib/agentTmp.ts, task #4395).
+    // The agent's private temporary folder: its TMPDIR, and, for a Swarm agent of an engine that takes one (Claude Code), its one
+    // added working directory, so its owner's own settings ask nothing for its mktemp files (lib/agentTmp.ts, task #4395).
     const tmp = agentTmpLaunch(engine, swarmSkill)
-    const extraArgs = joinedInstructions(engine, [...tmp.args, ...(gridLaunch?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, native ? native.opencodeMajor : opencode ? await opencode.opencodeMajorVersion() : null) : []), ...machineMcp, ...browserMcp, ...(swarmLaunch && swarmSkill ? swarmLaunch.args(engine) : []), ...told])
+    const extraArgs = joinedInstructions(engine, [...tmp.args, ...(gridLaunch?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, native ? native.opencodeMajor : opencode ? await opencode.opencodeMajorVersion() : null) : []), ...machineMcp, ...(swarmLaunch && swarmSkill ? swarmLaunch.args(engine) : []), ...told])
     // The first prompt is a launch option only — never part of `extraArgs`, which the registry row
     // carries into a relaunch (engineLaunch.ts, `firstPrompt`).
     const firstPrompt = prompt
+    // An engine that takes it typed gets it on its row instead, typed once its pane is ready (core/agents/bind.ts).
+    const firstTask = typedFirstPrompt(engine, firstPrompt ?? undefined)
     // Chosen before the pane, so the launch can name its session after the agent (engineLaunch.ts `agentId`).
     const agentId = randomUUID()
     const launchOptions = { agentId, ...(native ? { native } : {}), bypassPermission, ...(permissionMode ? { permissionMode } : {}), extraArgs: extraArgs.length ? extraArgs : undefined, installIfMissing, clearEnv, cwd, harnessNode: dsh ? true : undefined, ...(firstPrompt ? { firstPrompt } : {}), ...(launchModel ? { launchModel } : {}), terminalHint: { machineName: terminalHintMachineName() } }
@@ -450,6 +451,7 @@ export function createAgentCreator({
       startedBy: startedBy ?? null,
       parentAgentId: parentAgentId ?? null,
       ...(browser ? { browser: true } : {}),
+      ...(firstTask ? { firstTask } : {}),
     })
     if (!result.ok) return { ok: false, error: result.error, detail: result.detail }
     const { spawned, pending } = result

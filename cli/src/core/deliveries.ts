@@ -39,6 +39,9 @@ export interface DeliveriesDeps {
   deliverers: ReadonlySet<string>
   /** What holds a typed delivery from the agent's pane now, read with nothing written (core/input.ts `holdOf`); absent, nothing. */
   hold?: (agentId: string, deliveryId: string) => Promise<string | null>
+  /** The turn a quiet delivery (`DeliveryOptions.quiet`) started is open in [agentId]: said once, as the input says that
+   *  delivery `started` (core/turns/recaps.ts `quietTurn`); absent, nobody listens. */
+  quietStarted?: (agentId: string) => void
   log?: (line: string) => void
   now?: () => number
 }
@@ -85,18 +88,25 @@ export function createDeliveries(deps: DeliveriesDeps) {
   /** Deliveries from a person's message, which close a question open on the pane, until they settle. */
   const answering = new Map<string, { writtenAt?: number }>()
   const answers = (writtenAt: unknown) => Number.isFinite(writtenAt) ? { writtenAt: writtenAt as number } : {}
+  /** Mark a delivery in [marks], as the newest: the oldest past KEPT_DELIVERERS is forgotten, so a mark never settled cannot pile up. */
+  const keep = (marks: Set<string>, deliveryId: string): void => {
+    marks.delete(deliveryId)
+    marks.add(deliveryId)
+    if (marks.size > KEPT_DELIVERERS) marks.delete(marks.values().next().value!)
+  }
   /** Deliveries of a person's own words in their agent's 1:1 chat (`DeliveryOptions.personsOwn`), which the short-turn guard never
    *  holds. Kept through a write the pane held (`team_waiting_*`), as its maker asks what holds it before it writes it again; gone
    *  once it settles otherwise, and the oldest past KEPT_DELIVERERS. */
   const own = new Set<string>()
-  const markOwn = (deliveryId: string): void => {
-    own.delete(deliveryId)
-    own.add(deliveryId)
-    if (own.size > KEPT_DELIVERERS) own.delete(own.values().next().value!)
-  }
+  /** Quiet deliveries (`DeliveryOptions.quiet`) whose turn has not been heard to start. Kept while `queued` or only written
+   *  (`delivered`): the input says `started` once the turn it typed begins. `rejected` or `unknown` takes one off and says
+   *  nothing, as a turn nobody can tie to the line tells as any turn does: none is made quiet on a guess. */
+  const quiet = new Set<string>()
   const settled = (event: TurnDelivery): void => {
     if (event.state !== 'queued') answering.delete(event.deliveryId)
     if (event.state !== 'queued' && !(event.state === 'rejected' && event.reason?.startsWith('team_waiting_'))) own.delete(event.deliveryId)
+    // One lookup in a Set that is empty unless a quiet line is on its way.
+    if (event.state !== 'queued' && event.state !== 'delivered' && quiet.delete(event.deliveryId) && event.state === 'started') deps.quietStarted?.(event.sessionId)
     for (const listener of listeners) {
       try { listener(event) } catch (error) {
         log(`[deliveries] a listener failed on ${event.deliveryId.slice(0, 40)} · ${error instanceof Error ? error.message : String(error)}`)
@@ -110,7 +120,8 @@ export function createDeliveries(deps: DeliveriesDeps) {
   const turns: Pick<CoreApi['turns'], 'deliver' | 'cancelDelivery' | 'onDelivery' | 'leaseDeliveries' | 'holdOf'> = {
     deliver: (agentId, content, deliveryId, options) => {
       if (options?.answersQuestion) answering.set(deliveryId, answers(options.writtenAt))
-      if (options?.personsOwn) markOwn(deliveryId)
+      if (options?.personsOwn) keep(own, deliveryId)
+      if (options?.quiet) keep(quiet, deliveryId)
       submit(agentId, content, deliveryId)
     },
     cancelDelivery: (deliveryId) => cancel(deliveryId),
@@ -171,7 +182,8 @@ export function createDeliveries(deps: DeliveriesDeps) {
       makers.set(deliveryId, service)
       if (makers.size > KEPT_DELIVERERS) makers.delete(makers.keys().next().value!)
       if (payload.answersQuestion === true) answering.set(deliveryId, answers(payload.writtenAt))
-      if (payload.personsOwn === true) markOwn(deliveryId)
+      if (payload.personsOwn === true) keep(own, deliveryId)
+      if (payload.quiet === true) keep(quiet, deliveryId)
       submit(agentId, payload.text, deliveryId)
       return {}
     },

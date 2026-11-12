@@ -9,11 +9,11 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { env } from '../../config/env.js'
-import { HARNESS_AGENT_TOOLS, HARNESS_AGENT_VERBS, type HookSettings } from '../facets/hooks.js'
+import { HARNESS_AGENT_TOOLS, HARNESS_AGENT_VERBS, type HarnessAgentVerb, type HookSettings } from '../facets/hooks.js'
 import { prepareReviewed } from './hookReview.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
 import { isMessagesBlock, messagesCommand, writeMessagesHook } from './messagesHook.js'
-import { HOOK_SCRIPT, hookArgv, hooksNotInstalled, hooksNotOnWindows, identitySettings, isManagedHook, foreignHookBlocks, quoteHookCommand, type CommandHook, type HookBlock, type Settings } from './notifyHooks.js'
+import { HOOK_SCRIPT, hookArgv, hooksNotInstalled, hooksNotOnWindows, identitySettings, isManagedHook, requireHookScript, foreignHookBlocks, quoteHookCommand, type CommandHook, type HookBlock, type Settings } from './notifyHooks.js'
 import { HookPreparationHeld, inspectHookFile, runHookPreparation, type HookPreparationAttempt } from './nativeHookFiles.js'
 import type { NativeHookOptions } from './nativeLocations.js'
 import { hostPlatform } from './windowsFiles.js'
@@ -44,11 +44,14 @@ export async function installHookSettings(engine: HookEngine, settings: HookSett
   // A startup refresh and a launch share the entire installation. Releasing the
   // reservation between notify and Messages let each revoke the other's second
   // stage, so a healthy launch could be held by the daemon's own refresh.
+  // Before the notify.mjs check, as in nativeHookSettings.ts: an engine with no Windows runner skips its hooks there whether
+  // or not the file is (#3954 review).
+  if (platform === 'win32' && !settings.win32Runner) return hooksNotOnWindows(engine)
   try {
     // Inside the try: a path the engine's Windows runner would misread is refused here (quoteHookCommand), and that
-    // is a failed install with its reason, not a rejection (B4.1 review).
-    const entry = notifyHookEntry(settings, hookArgv(port, engine, settings.commandNamesHome ? home : undefined, undefined, options.environment), platform)
-    if (!entry) return hooksNotOnWindows(engine)
+    // is a failed install with its reason, not a rejection (B4.1 review). So is a notify.mjs that is not there.
+    requireHookScript(engine)
+    const entry = notifyHookEntry(settings, hookArgv(port, engine, settings.commandNamesHome ? home : undefined, undefined, options.environment), platform)!
     return await runHookPreparation(files, async attempt => {
       await installNotifyHooks(settings, port, home, entry, attempt, platform)
       // Windows: Agent Messages' block is a POSIX shell line, and the allowance names the POSIX launcher. Neither is
@@ -130,22 +133,26 @@ async function installMessagesBlock(settings: HookSettings, home: string, attemp
 /**
  * The declared rules as this computer has them (facets/hooks.ts HarnessAllowance): its paths in place of
  * `{launcher}`, `{node}` and `{cli}`, every verb as one Starlark list in place of `{verbs}`, and a rule that names
- * `{verb}` or `{tool}` once for each agent verb. In groups that are added together or not at all: the rules naming no
- * verb, then each verb's rules of one kind (`Bash(…)`, `mcp__…`), its spellings of the same command.
+ * `{verb}` or `{tool}` once for each agent verb (`{tool}` only for a verb with an MCP tool). In groups that are added
+ * together or not at all: the rules naming no verb, then each verb's rules of one kind (`Bash(…)`, `mcp__…`), its
+ * spellings of the same command; a kind with no rule for a verb is no group.
  */
 export function harnessRules(rules: readonly string[], quote: (path: string) => string = (path) => path): string[][] {
   const paths: Record<string, string> = {
     launcher: join(env.HARNESS_BIN_DIR, 'harness'), node: managedNodePath(), cli: join(env.ADAPTER_CLI_DIR, 'cli.js'),
   }
   const verbs = `[${HARNESS_AGENT_VERBS.map((verb) => JSON.stringify(verb)).join(', ')}]`
-  const fill = (rule: string, verb?: keyof typeof HARNESS_AGENT_TOOLS): string => rule.replace(/\{(launcher|node|cli|verbs|verb|tool)\}/g,
-    (_, name: string) => name === 'verbs' ? verbs : name === 'verb' ? verb! : name === 'tool' ? HARNESS_AGENT_TOOLS[verb!] : quote(paths[name]))
+  const tools: Partial<Record<HarnessAgentVerb, string>> = HARNESS_AGENT_TOOLS
+  const fill = (rule: string, verb?: HarnessAgentVerb): string => rule.replace(/\{(launcher|node|cli|verbs|verb|tool)\}/g,
+    (_, name: string) => name === 'verbs' ? verbs : name === 'verb' ? verb! : name === 'tool' ? tools[verb!]! : quote(paths[name]))
   const perVerb = (rule: string) => /\{(verb|tool)\}/.test(rule)
+  const has = (rule: string, verb: HarnessAgentVerb) => !rule.includes('{tool}') || verb in tools
   const kind = (rule: string) => /^[A-Za-z]*/.exec(rule)![0]
   const whole = rules.filter((rule) => !perVerb(rule)).map((rule) => fill(rule))
   const kinds = [...new Set(rules.filter(perVerb).map(kind))]
   return [...(whole.length ? [whole] : []),
-    ...HARNESS_AGENT_VERBS.flatMap((verb) => kinds.map((k) => rules.filter((rule) => perVerb(rule) && kind(rule) === k).map((rule) => fill(rule, verb))))]
+    ...HARNESS_AGENT_VERBS.flatMap((verb) => kinds.map((k) => rules.filter((rule) => perVerb(rule) && kind(rule) === k && has(rule, verb))
+      .map((rule) => fill(rule, verb))).filter((group) => group.length > 0))]
 }
 
 /**

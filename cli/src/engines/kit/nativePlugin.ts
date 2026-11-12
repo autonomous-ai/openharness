@@ -1,6 +1,7 @@
 /** Native plugin bytes are engine declarations. Installing them never loads an interpreter. */
 import { mkdirSync } from 'node:fs'
-import { HookPreparationHeld, inspectHookFile, type HookFilePublication, runHookPreparation, type HookPreparationAttempt, type HookPreparationOptions } from './nativeHookFiles.js'
+import { dirname } from 'node:path'
+import { HookPreparationHeld, directoryChanged, inspectHookFile, type HookFilePublication, runHookPreparation, type HookPreparationAttempt, type HookPreparationOptions } from './nativeHookFiles.js'
 
 export interface NativePlugin {
   file: string
@@ -33,7 +34,8 @@ export function prepareNativePlugin(rule: NativePlugin, values: NativePluginValu
     observed.verify()
     for (const directory of current ? [] : rule.directories ?? []) {
       attempt.verify(); attempt.check()
-      mkdirSync(directory.path, { recursive: true, mode: directory.mode })
+      const created = mkdirSync(directory.path, { recursive: true, mode: directory.mode })
+      if (created) directoryChanged(attempt, dirname(created))
     }
     const published = await observed.replace(source, attempt)
     console.log(current ? rule.messages.current : rule.messages.installed.replace('{file}', () => rule.file))

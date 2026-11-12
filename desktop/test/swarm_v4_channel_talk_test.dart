@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/channel_talk.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/model.dart';
@@ -42,6 +43,30 @@ void main() {
   /// How many times [tag] is in what the row of the message whose text holds [text] reads.
   int tagsIn(WidgetTester tester, String text, String tag) =>
       RegExp(RegExp.escape(tag)).allMatches(readOf(tester, text)).length;
+
+  /// The words the row of the message whose text holds [text] draws as tags (message_text.dart _MentionName).
+  List<String> drawnTags(WidgetTester tester, String text) {
+    final found = <String>[];
+    void visit(InlineSpan span, TextStyle? inherited) {
+      if (span is! TextSpan) return;
+      final style = inherited?.merge(span.style) ?? span.style;
+      if (span.text case final words?
+          when style?.backgroundColor == grid.AppSurface.accentWash &&
+              style?.fontWeight == FontWeight.w600) {
+        found.add(words);
+      }
+      for (final child in span.children ?? const <InlineSpan>[]) {
+        visit(child, style);
+      }
+    }
+
+    for (final rich in tester.widgetList<RichText>(
+      find.descendant(of: rowOf(text), matching: find.byType(RichText)),
+    )) {
+      visit(rich.text, null);
+    }
+    return found;
+  }
 
   /// No name line anywhere says who a post is to: its tags do.
   final noToLine = find.byWidgetPredicate(
@@ -178,6 +203,135 @@ void main() {
         find.descendant(of: rowOf('Still here?'), matching: find.text('Pip')),
         findsOneWidget,
       );
+    },
+  );
+
+  // anh Dee, 2026-11-11, of the rehearsal's channel: "the tag Product Manager is also weird just tag the agent". A PM is
+  // stored under its role's name and shown under its own (the backend's start names it COORDINATOR_NAME, its person names it
+  // Ray): a post to it said "@Product Manager", and its own "@Ray" in the text was not read as a tag.
+  testWidgets('a post to the PM tags it by its own name, once', (tester) async {
+    final server = swarmV4Channel();
+    (server.state['agents'] as List).cast<Map<String, dynamic>>().firstWhere(
+      (a) => a['id'] == 'faye',
+    )['name'] = 'Product Manager';
+    say(server, 'Pip', '@Faye #9 is up as #19, ready to read.', to: ['faye']);
+    say(server, 'Juno', 'the CI on #19 passed.', to: ['faye']);
+    // The backend routes a tag of either of its names: one by its stored name is its tag already (review of #4075).
+    say(server, 'Kai', '@Product Manager #21 is ready.', to: ['faye']);
+    await openSwarmV4(tester, server);
+    expect(tagsIn(tester, '#9 is up as #19', '@Faye'), 1);
+    expect(tagsIn(tester, 'the CI on #19 passed.', '@Faye'), 1);
+    expect(tagsIn(tester, '#21 is ready.', '@Faye'), 0);
+    expect(tagsIn(tester, '#21 is ready.', '@Product Manager'), 1);
+    // Each is drawn as a tag, not as words.
+    expect(drawnTags(tester, '#9 is up as #19'), ['@Faye']);
+    expect(drawnTags(tester, 'the CI on #19 passed.'), ['@Faye']);
+    expect(drawnTags(tester, '#21 is ready.'), ['@Product Manager']);
+  });
+
+  // Seen in the rehearsal's channel (2026-11-11): an answer to a teammate that names it in its words opened with its tag besides,
+  // "@Kai thanks Kai, confirmed". A recipient its words name, as a teammate writes a name, is said already.
+  testWidgets('a post that names its agent in its words is not tagged again', (
+    tester,
+  ) async {
+    final server = swarmV4Channel();
+    say(server, 'Faye', 'thanks Juno, confirmed: 41/41.', to: ['juno']);
+    say(server, 'Faye', 'thanks, Pip: all three checks pass.', to: ['pip']);
+    say(server, 'Faye', "Pip's README reads well.", to: ['pip']);
+    say(
+      server,
+      'Faye',
+      'confirmed: the options section reads well.',
+      to: ['pip'],
+    );
+    // Not its name: a word it is part of, another's case, or code.
+    say(
+      server,
+      'Faye',
+      'the juno build and a Juno-only flag are green.',
+      to: ['juno'],
+    );
+    say(server, 'Faye', 'run `Pip` once more.', to: ['pip']);
+    await openSwarmV4(tester, server);
+    expect(tagsIn(tester, 'thanks Juno, confirmed', '@Juno'), 0);
+    expect(drawnTags(tester, 'thanks Juno, confirmed'), isEmpty);
+    expect(tagsIn(tester, 'all three checks pass', '@Pip'), 0);
+    expect(tagsIn(tester, "README reads well", '@Pip'), 0);
+    expect(drawnTags(tester, 'the options section reads well.'), ['@Pip']);
+    expect(drawnTags(tester, 'flag are green'), ['@Juno']);
+    expect(drawnTags(tester, 'once more'), ['@Pip']);
+  });
+
+  // Its review (#4097): only a post to that one agent, and only the name as words, never in a path, an address, a link's
+  // address or code.
+  testWidgets(
+    'a name in words counts for a post to that agent alone, and never in a path, an address, a link or code',
+    (tester) async {
+      final server = swarmV4Channel();
+      // To two: whom it is to stays said, though its words name one of them.
+      say(
+        server,
+        'Faye',
+        "Juno, Pip's fix in #12 needs a review.",
+        to: ['juno', 'pip'],
+      );
+      say(server, 'Faye', 'Juno/README.md is updated.', to: ['juno']);
+      say(server, 'Faye', 'Juno.md is updated.', to: ['juno']);
+      say(server, 'Faye', 'see src/Juno now.', to: ['juno']);
+      say(server, 'Faye', 'see [the guide](Juno) first', to: ['juno']);
+      say(server, 'Faye', 'see www.example.com/?who=Juno now', to: ['juno']);
+      say(server, 'Faye', '    Juno says hi', to: ['juno']);
+      say(server, 'Faye', 'mail Juno@example.com about it.', to: ['juno']);
+      say(
+        server,
+        'Faye',
+        'see [the docs](https://example.com/Juno) first.',
+        to: ['juno'],
+      );
+      say(
+        server,
+        'Faye',
+        'see https://example.com/?who=Juno later.',
+        to: ['juno'],
+      );
+      say(server, 'Faye', 'the fence:\n~~~\nJuno\n~~~\nruns.', to: ['juno']);
+      say(server, 'Faye', 'the block:\n\n    Juno\n\nruns too.', to: ['juno']);
+      say(server, 'Faye', 'done, Juno.', to: ['juno']);
+      // Tall enough that every post's row is drawn.
+      await openSwarmV4(tester, server, size: const Size(1440, 2400));
+      expect(drawnTags(tester, 'needs a review'), ['@Juno', '@Pip']);
+      for (final kept in [
+        'README.md is updated',
+        'Juno.md is updated',
+        'see src/Juno now.',
+        'the guide',
+        'who=Juno now',
+        'Juno says hi',
+        'about it',
+        'first.',
+        'later.',
+        'runs.',
+        'runs too.',
+      ]) {
+        expect(drawnTags(tester, kept), ['@Juno'], reason: kept);
+      }
+      expect(drawnTags(tester, 'done, Juno.'), isEmpty);
+    },
+  );
+
+  testWidgets(
+    'a name of several words, or not in English letters, counts the same way',
+    (tester) async {
+      final server = swarmV4Channel(pip: 'First Builder', juno: 'Huy');
+      say(server, 'Faye', 'thanks First Builder, merged.', to: ['pip']);
+      say(server, 'Faye', 'thanks First\nBuilder, rebased.', to: ['pip']);
+      say(server, 'Faye', 'thanks Huy, landed.', to: ['juno']);
+      say(server, 'Faye', 'Huyền’s fix is in.', to: ['juno']);
+      await openSwarmV4(tester, server);
+      expect(drawnTags(tester, 'merged.'), isEmpty);
+      expect(drawnTags(tester, 'rebased.'), ['@First Builder']);
+      expect(drawnTags(tester, 'landed.'), isEmpty);
+      expect(drawnTags(tester, 'fix is in.'), ['@Huy']);
     },
   );
 
@@ -408,16 +562,29 @@ void main() {
           'recipientIds': to,
         });
 
+    // A tag of either of its names is its tag, as the backend routes one; the row reads the post's text once, where it is
+    // drawn (the review of #4075 measured 2.2 ms a row at 2,300 characters while each recipient read it again).
+    test('a post\'s agents are named as people know them, with the names they are stored under beside', () {
+      final server = swarmV4Channel();
+      (server.state['agents'] as List).cast<Map<String, dynamic>>().firstWhere(
+        (a) => a['id'] == 'faye',
+      )['name'] = 'Product Manager';
+      final swarm = SuperTabSnapshot.fromJson(server.state);
+      final post = ask(['faye', 'juno'], author: 'pip');
+      expect(superTabPostTo(swarm, post).names, ['Faye', 'Juno']);
+      expect(superTabPostTo(swarm, post).stored, {'Faye': 'Product Manager'});
+    });
+
     test('an agent named twice is named once, and an author never', () {
       final swarm = team({'juno', 'pip'});
       expect(
         superTabPostOfflineLine(swarm, ask(['juno', 'juno'])),
         'Juno is offline',
       );
-      expect(superTabPostTo(swarm, ask(['juno', 'faye', 'juno', 'pip'])), [
-        'Juno',
-        'Pip',
-      ]);
+      expect(
+        superTabPostTo(swarm, ask(['juno', 'faye', 'juno', 'pip'])).names,
+        ['Juno', 'Pip'],
+      );
     });
 
     test(
@@ -459,7 +626,8 @@ void main() {
           'recipientIds': ['juno'],
         });
         expect(superTabPostOfflineLine(team({'juno'}), person), isNull);
-        expect(superTabPostTo(team({'juno'}), person), isEmpty);
+        expect(superTabPostTo(team({'juno'}), person).names, isEmpty);
+        expect(superTabPostTo(team({'juno'}), person).stored, isEmpty);
       },
     );
   });

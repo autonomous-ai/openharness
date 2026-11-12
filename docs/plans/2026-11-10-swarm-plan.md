@@ -1,7 +1,8 @@
 # Swarm: the plan from here
 
 Status: step 1 agreed by anh Dee on 2026-11-10, without the sandbox experiment for now; the rest is proposed. Rewritten
-that day on his direction ("What Swarm is", below).
+that day on his direction ("What Swarm is", below). On 11 November he went through the 1,000-agent run point by point
+and decided each ("Decided on 11 November", near the end); the lines those decisions change say so where they stand.
 It does not replace the v4 design ([2026-11-08-swarm-v4.md](2026-11-08-swarm-v4.md)); it says what Swarm is for, what
 v4 still lacks, and the order of work. The evidence is
 [docs/research/2026-11-10-swarm-study/](../research/2026-11-10-swarm-study/README.md): lampOS's process and its
@@ -60,9 +61,9 @@ open project and land a change the same day, with no risk to their computer or t
 | When anyone can join | So |
 |---|---|
 | The project cannot trust a joiner's agent | No builder merges: the Swarm's own train agent lands, by rules that are code. A read counts from any agent but the author, known from the session that made it. In an open project, standing (earned by landed work and by reads that held up) decides who may read what. |
-| A joiner cannot trust the project's text | Each agent works in a sandbox on its person's computer: the project's files and nothing else. The person's logins stay with the daemon. What a stranger wrote is data, never an instruction. |
+| A joiner cannot trust the project's text | What a stranger wrote is data, never an instruction. A sandbox for each agent, with the person's logins held outside it, was proposed here and is not built now (11 Nov): each person keeps their own credentials on their own computer and contributes through GitHub. |
 | Nobody can read everything | State is GitHub's own: issues, labels, pull requests. An agent looks up what it needs; it is sent only what is addressed to it. Orders are written once in the channel. |
-| There are more hands than cut work | Anyone may cut a task smaller. The first to take a task owns it, up to a limit. Each area has a captain. |
+| There are more hands than cut work | An agent cuts a task it took smaller, and the allocator gives the pieces out. One PM for now; captains for a larger project (11 Nov). Not first to take: who gets a task is the allocator's to decide. |
 | The checks are the ceiling | A project starts from a goal file: rows, each with a check. A train for each area, then a train of trains. Joiners give compute for checks as well as agents. |
 | Every lab's agent is there | Nothing in the protocol belongs to one engine: commands, and the repository's files. A task says the least model that may take it. A read comes from another family when one can. |
 | Each person gives what they choose, and no two agents are alike | Agents, hours, and a share of their computer and subscription. The PM's allocator gives each task to the agent that can ship it soonest inside those limits, area by area. |
@@ -78,12 +79,14 @@ These decide an argument. Each is what lampOS and the 1,000-agent run did, and w
    How a project works is text in its repository, changed by pull request. v2 pushed one process to every team and
    took it back in days.
 3. **State is data an agent looks up, not talk it must read.**
-4. **The PM decides what the work is, and its allocator gives each task to the agent that can ship it soonest.** An
-   agent with room and no task takes an open one. Anyone may cut a task smaller.
+4. **The PM decides what the work is, and its allocator gives each task to the agent that can ship it soonest.** A
+   task not taken in ten minutes goes to an agent with nothing. An agent cuts a task it took smaller, and the pieces
+   are given out the same way (11 Nov).
 5. **Only the Swarm's own train agent lands changes, by rules that are code, and what lands was tested as it
    lands.** No builder merges.
 6. **Who did a thing is a person's account and a record made outside the agent**, never a name it types.
-7. **Trust runs both ways.** The project is safe from a joiner's agent, and the joiner from the project.
+7. **Trust runs both ways.** The project is safe from a joiner's agent, and the joiner from the project. The first
+   half is built (reads, the train, identity from the session); the second waits with the sandbox (11 Nov).
 8. **Nothing stops unseen.** A stopped session, a spent quota and a full disk are facts Harness has. An agent that
    ends its turn is given its next thing. Agents give up early (helpers called 47 of 60 statements infeasible, and
    most were proved), so "blocked" gets a second look.
@@ -104,6 +107,9 @@ These decide an argument. Each is what lampOS and the 1,000-agent run did, and w
         hundreds of people, a few agents each                         |   talk                       |
                                                                       +------------------------------+
 ```
+
+The sandbox and the daemon holding the logins are not built now (11 Nov): the agent is the lab's CLI on its person's
+computer with their own login, as today.
 
 | Part | Today (v4) | Missing |
 |---|---|---|
@@ -185,8 +191,9 @@ five times full) and many agents on one account, not issues as tasks.
 Why: lampOS's bot changed how it reads comments 12 times in nine days and still carried the wrong thing at least 18
 times. v4 has needed 24 repairs to the same reading in two days.
 
-- A task is a GitHub issue. A piece cut from it is a sub-issue, and anyone may cut one. The first agent to take an
-  issue owns it, up to a limit on how many one agent holds.
+- A task is a GitHub issue. A piece cut from it is a sub-issue: an agent cuts one off a task it took
+  (`harness super-tab split`), and the allocator gives it out as any task. An agent takes only a task given to it, up
+  to four at once. Not first to take (11 Nov: "first agent takes tasks may not be optimal").
 - A verdict and a claim are made by command: `harness read ok 27`, `harness read hold 27 "<file, line, fix>"`,
   `harness take 34`. Harness writes the comment or the label on GitHub in one fixed form, and the backend keeps which
   agent wrote it (it already stores that for every comment). Every ask Harness types carries the command that
@@ -221,9 +228,15 @@ Why: lampOS's combined run caught 6 breaks no pull request's own checks could. O
 lands on checks from an older base.
 
 - Harness builds a train: the main branch's tip with every ready pull request on it, one run, then main moves to it.
-- If main moved meanwhile, the train lands as it is only when no file is shared and no build input changed.
-- Changes that no check reads go in a lane of their own and land in minutes.
+- Not built: landing a train as it is when main moved but no file is shared, and a lane of its own for changes no
+  check reads. A train whose base moved is built again. Which files a project's checks read is the project's to know
+  (this repository's own planner reads some documentation), and "no landing on older checks" is a gate below. Looked
+  at again when a project's run is long enough for the rebuilds to cost.
 - Harness rebases. An author hears only of a real conflict.
+- A change built on another lands after it: one that carries another open pull request's commits, or whose task says
+  it comes after a task with a pull request of the team's still open, waits for that one. Its builder is told once
+  which it waits for, and is asked for nothing ([the allocator's design](../design/2026-11-11-swarm-allocator/BUILD.md),
+  package 3).
 - A red train is cut in half to find its pull request. lampOS's bot blamed by crate and was wrong 8 times in 22.
 - Each Swarm has its own agent for the train (anh Dee, 10 Nov; no app account of ours), on the computer and the
   account of a person the project lets land. It runs the train, says why a change did not land, and mends the train
@@ -251,8 +264,9 @@ differ. The 1,000-agent run could let the first helper to grab a task own it bec
   and has not run on a real team. Its evidence so far is a spec: twelve small made-up problems, and a replay of one
   recorded night (26 October: 42 tasks, 6 computers) from the old scheduler's files. Its first real test is here.
 - A builder that a person or the PM names for a task stands.
-- Nobody waits on it: a task not taken in 10 minutes is open to any agent with room, and an agent with room and
-  nothing given takes an open task.
+- Nobody waits on it: a task not taken in 10 minutes goes to an agent with nothing. And the PM is told when a builder
+  has had nothing for five minutes or sized tasks have run out, with the counts and the goal's score, then hourly; a
+  builder it was told of three times goes to its person. The same counts are posted once a day in the channel.
 - It reads only what changed, and runs on any computer of a person the project trusts, as the train does.
 - For thousands it works by area: the PM places agents on areas, and each area allocates its own tasks. There is no
   one plan over everything.
@@ -342,7 +356,7 @@ The cut is a third party's, and three of its changes touch these halves:
   and the sandbox, and the agent takes a starter task. Thirty minutes to the first pull request.
 - Standing: earned by changes that landed and stayed, and by reads that held up; lost by a revert. It decides whose
   read counts in which area. The leaderboard already drops a ship that is reverted within seven days.
-- The sandbox, before the door opens (skipped for now, anh Dee, 10 Nov): for each engine, the lightest one in which
+- The sandbox (skipped on 10 Nov; on 11 Nov not now, nor the gateway, the tool-call classifier or the monitor): for each engine, the lightest one in which
   the lab's own CLI runs on its person's subscription with only the project's folder, the person's logins held by the
   daemon, and a network that reaches the model and the Git remote.
 - Each computer reports what its person gives (agents, hours, a share of the computer and the subscription), and the
@@ -393,6 +407,24 @@ The cut is a third party's, and three of its changes touch these halves:
 | 7 | Allocation is the PM's: it decides the work, its allocator gives each task to an agent, by area at this size | Yes |
 | 8 | Each Swarm has its own agent that lands trains; no app account of ours | Yours, 10 Nov |
 | 9 | The first open project: Harness or lampOS, both already open source | Decided later (yours, 10 Nov) |
+
+## Decided on 11 November
+
+anh Dee read the 1,000-agent run again ("we want every team to be able to run like anthropic with thousands of
+agents") and decided each thing it did, one by one.
+
+| What the run did | Decided |
+|---|---|
+| A sandbox for each agent: no network, no credentials | Not now |
+| A gateway as the only way out, holding the credentials | No: "the USER keeps their own credential on their own machine. not through a gateway. multiple users get together to work on a project. they contribute to the project via github." |
+| A classifier on every tool call; a block stops the team | Neither now, nor a Stop for a whole Swarm |
+| An offline monitor over every agent's actions | Not now |
+| The first helper to claim a task owns it | No: "first agent takes tasks may not be optimal. resouce allocation is an important problem we solve for users. N tasks, M agents (with ssd, cpu, and tokens), how to best assign them." The allocator gives tasks, as code, in the PM's name |
+| Any helper splits a task too big for it | Yes: an agent splits a task it holds into sub-issues that others are given. New work outside its task goes to the PM |
+| Crews with captains; the lead moves agents between areas | "pm only for now. for larger projects, we'll add captains (sub-pm). pm should do the allocator job." |
+| A goal of statements, each checked on main | Yes: a goal file in the repository with a check for each milestone; CI runs them on main, Harness shows the score, and the PM cuts tasks toward it |
+| The harness reminds the lead to keep going | Yes: the PM is told the counts when work runs short, hourly; the same are posted once a day for people |
+| The toolchain built into every agent's image | Not now; the proof run measures how long agents wait on setup and builds |
 
 ## Not built
 

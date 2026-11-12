@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
-import { CLAIM_LIMIT, claimAsked, takeTask } from './githubClaim.js'
+import { CLAIM_LIMIT } from './assign/crew.js'
+import { claimAsked, splitHint, takeTask } from './githubClaim.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { SuperTabHostError } from './wire.js'
 
 type Json = Record<string, unknown>
 const NOW = new Date(2026, 10, 11, 14, 5).getTime()
+// A claim's answer says how a task too big is cut (githubSplit.ts): its builder reads it before any code.
+const SPLIT = "Too big for one pull request? harness super-tab split acme/app#34 s|m|l 'TITLE' 'WHAT IT IS' cuts a piece off it, and Harness gives that piece to the builder who can ship it soonest."
 
 /** One repository's issues as GitHub's REST API answers for them (lists and comments by page), and what was sent to it. */
 function setup() {
@@ -65,7 +68,7 @@ function setup() {
     return { status: 404, etag: null, body: null, resetAt: null }
   }
   const record = vi.fn(async (_repository: string, _commentId: string) => {})
-  const pip = { name: 'Pip', repositories: new Set(['acme/app']) }
+  const pip = { name: 'Pip', repositories: new Map([['acme/app', { project: 'acme/app', github: 'acme/app' }]]) }
   const take = (number = 34, agent = pip, repository = 'acme/app') => takeTask({ get, send, record, login: async () => 'pips-person', now: () => NOW }, agent, { repository, number })
   const labelsOf = (number: number) => names(repo.issues.get(number)!)
   return { repo, sent, record, take, pip, labelsOf }
@@ -73,9 +76,12 @@ function setup() {
 const refusal = async (made: Promise<unknown>) => made.then(() => null, error => error instanceof SuperTabHostError ? { code: error.code, message: error.message } : { thrown: error })
 
 describe('a task\'s claim, made by command', () => {
+  it('names the task in the command its answer gives for cutting it', () => {
+    expect(splitHint('acme/app#34')).toBe(SPLIT)
+  })
   it('marks the issue taken, says so in one comment under the agent\'s name, and records the comment as the agent\'s', async () => {
     const t = setup()
-    expect(await t.take()).toEqual({ url: 'https://github.com/acme/app/issues/34#issuecomment-9001', taken: true })
+    expect(await t.take()).toEqual({ url: 'https://github.com/acme/app/issues/34#issuecomment-9001', taken: true, split: SPLIT })
     expect(t.labelsOf(34)).toEqual(['builder:pip', 'size:s', 'status:taken'])
     expect(t.sent.map(s => `${s.method} ${s.path}`)).toEqual(['POST /repos/acme/app/issues/34/labels', 'POST /repos/acme/app/issues/34/comments'])
     expect(t.sent[0]!.body).toEqual({ labels: ['status:taken'] })
@@ -100,7 +106,7 @@ describe('a task\'s claim, made by command', () => {
       message: 'GitHub answered 502 for acme/app#34 after it was labelled taken. Run the same command again: it finishes the claim.' })
     expect(t.labelsOf(34)).toContain('status:taken')
     t.repo.fail = null
-    expect(await t.take()).toEqual({ url: 'https://github.com/acme/app/issues/34#issuecomment-9001', taken: true })
+    expect(await t.take()).toEqual({ url: 'https://github.com/acme/app/issues/34#issuecomment-9001', taken: true, split: SPLIT })
     expect(t.repo.comments.get(34)).toHaveLength(1)
     // Its own comment could not be looked for, or GitHub did not answer as it was posted: the same again, and what is true is said.
     const v = setup()
@@ -146,8 +152,20 @@ describe('a task\'s claim, made by command', () => {
     expect((await refusal(t.take(42, { ...t.pip, name: 'Pip Two' })))?.code).toBe('TASK_NOT_YOURS')
     // An issue moved to another repository: GitHub answers for it where it is now, which may be no project of the agent's.
     t.repo.issues.set(43, { number: 43, state: 'open', labels: [{ name: 'builder:pip' }], repository_url: 'https://api.github.com/repos/other/place' })
-    expect(await refusal(t.take(43))).toEqual({ code: 'TASK_NOT_FOUND', message: 'acme/app#43 was moved to another repository.' })
+    expect(await refusal(t.take(43))).toEqual({ code: 'TASK_NOT_FOUND', message: 'acme/app#43 is now in another repository: moved, or renamed while GitHub did not say its new name (try again in a few minutes).' })
     expect(t.sent).toEqual([])
+  })
+
+  // autonomous-harness, renamed openharness on GitHub (2026-11-11): its project kept the old name, which cannot change, and every
+  // take was refused, by the new name as no project's repository and by the old as moved, since GitHub answers it as the new one.
+  it('takes a task of a repository renamed since its project was made, by either name, and records it under the project\'s', async () => {
+    const t = setup(), renamed = { project: 'acme/old', github: 'acme/app' }
+    const pip = { ...t.pip, repositories: new Map([['acme/old', renamed], ['acme/app', renamed]]) }
+    expect(await t.take(34, pip, 'acme/old')).toMatchObject({ taken: true })
+    expect(t.record).toHaveBeenLastCalledWith('acme/old', expect.any(String))
+    expect(t.sent.every(({ path }) => path.startsWith('/repos/acme/app/'))).toBe(true)
+    expect(await refusal(t.take(34, pip, 'acme/app'))).toBeNull()
+    expect(t.record).toHaveBeenLastCalledWith('acme/old', expect.any(String))
   })
 
   // The second review of #3907: a login with no right to label is the likeliest refusal, and it was not pinned.
@@ -176,7 +194,7 @@ describe('a task\'s claim, made by command', () => {
     await t.take()
     expect(t.record).toHaveBeenLastCalledWith('acme/app', '9001')
     t.repo.comments.set(34, [...t.repo.comments.get(34)!, mine(9104, 'Pip, 16:00: taken by Pip\n\nAgain, after a release.'), mine(9105, 'Thanks!')])
-    expect(await t.take()).toEqual({ url: 'https://github.com/acme/app/issues/34#issuecomment-9104', taken: false })
+    expect(await t.take()).toEqual({ url: 'https://github.com/acme/app/issues/34#issuecomment-9104', taken: false, split: SPLIT })
     expect(t.record).toHaveBeenLastCalledWith('acme/app', '9104')
     expect(t.repo.comments.get(34)).toHaveLength(7)
   })
@@ -225,6 +243,12 @@ describe('a task\'s claim, made by command', () => {
     t.repo.issues.set(50, { number: 50, state: 'open', labels: [{ name: 'builder:pip' }] })
     expect(await refusal(t.take(50))).toEqual({ code: 'CLAIM_LIMIT', message: 'You hold 4 tasks already (#1, #2, #3, #34), and 4 is the most. Finish or release one first.' })
     expect(t.labelsOf(50)).toEqual(['builder:pip'])
+    // A task that waits on pieces cut off it is others' to build (githubSplit.ts): it is not one of the four.
+    Object.assign(t.repo.issues.get(2)!, { sub_issues_summary: { total: 3, completed: 1 } })
+    expect((await t.take(50)).taken).toBe(true)
+    t.repo.issues.set(51, { number: 51, state: 'open', labels: [{ name: 'builder:pip' }] })
+    Object.assign(t.repo.issues.get(2)!, { sub_issues_summary: { total: 3, completed: 3 } })
+    expect(await refusal(t.take(51))).toMatchObject({ code: 'CLAIM_LIMIT', message: expect.stringContaining('You hold 5 tasks already (#1, #2, #3, #34, #50)') })
     // GitHub reads a comma in its labels filter as "and": a name with one is counted by the taken label alone.
     const junior = { ...t.pip, name: 'Pip, Jr' }
     for (const number of [60, 61, 62, 63, 64]) t.repo.issues.set(number, { number, state: 'open', labels: [{ name: 'builder:pip,-jr' }, ...(number < 64 ? [{ name: 'status:taken' }] : [])] })

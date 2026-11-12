@@ -19,7 +19,10 @@ export const CODE = /^[a-z0-9][a-z0-9_-]{0,47}$/
 /** Codes saved before the catalog followed Grid's, and Grid's code for them now. */
 export const RENAMED: Record<string, string> = { apollo: 'apollo_io', supermetrics_marketing: 'supermetrics' }
 
-export class ConnectorError extends Error {}
+export class ConnectorError extends Error {
+  /** The service's or gateway's own words for a refusal, for the log: never shown to an agent. */
+  detail?: string
+}
 
 export type Source = 'dcr' | 'gateway' | 'custom'
 export interface McpEntry { url: string, headers: Record<string, string> }

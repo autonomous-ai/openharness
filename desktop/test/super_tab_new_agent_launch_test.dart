@@ -6,13 +6,13 @@ import 'package:harness/super_tabs/agent_names.dart';
 import 'package:harness/super_tabs/controller.dart' show SuperTabFailure;
 import 'package:harness/super_tabs/new_agent.dart';
 import 'package:harness/widgets/new_harness_form.dart';
-import 'package:harness/ws/ws_conn.dart';
 
 import 'super_tab_launch_test.dart'
     show SuperTabFixtureConnection, SuperTabLaunchFixture, tabId;
 import 'swarm_state_test.dart' show MemoryStore;
 
-/// This computer, with no Podman. Every request is recorded, and the Browser requests are answered as its daemon would.
+/// This computer, with no Podman: every request is recorded, and `agent_browser_available` is answered as its daemon
+/// would, so a New agent that still asked would offer to set Browser up.
 class _NoPodman extends SuperTabFixtureConnection {
   _NoPodman(MemoryStore store) : super(store, local: true);
 
@@ -65,7 +65,6 @@ void main() {
     final box = await _newAgent(SuperTabLaunchFixture());
     final integration = box.integration!;
     expect(integration.ownMachinesOnly, isTrue);
-    expect(integration.offersBrowser, isTrue);
     expect(integration.engines, ['claude', 'codex']);
     expect(integration.leadMachines, isNull);
     expect(box.actionLabel, 'New agent');
@@ -147,9 +146,8 @@ void main() {
   });
 
   testWidgets(
-    'Start with needs_setup opens the dialog; Cancel creates nothing; '
-    'Install calls agentBrowserSetup and creates the agent with '
-    'browser:true',
+    'New agent shows no Browser pill, and Start creates the agent with no '
+    'browser and no setup request',
     (tester) async {
       final f = SuperTabLaunchFixture(connectionFactory: _NoPodman.new);
       final box = (await tester.runAsync(() => _newAgent(f)))!;
@@ -170,35 +168,22 @@ void main() {
         ),
       );
       await tester.pump();
-      await tester.tap(find.byKey(const ValueKey('new-harness-field-browser')));
-      await tester.pump();
-      final start = find.byKey(const ValueKey('new-harness-field-start'));
-      await tester.tap(start);
-      await tester.pump();
-      expect(find.text('Set up Browser'), findsOneWidget);
-      await tester.tap(find.text('Cancel'));
-      await tester.pump();
-      expect(find.text('Set up Browser'), findsNothing);
-      final asked = f.connection.calls.map((c) => c.$1);
-      expect(asked, isNot(contains('agent_browser_setup')));
-      expect(asked, isNot(contains('agent_create')));
-      expect(_commands(f), isEmpty);
-
-      await tester.tap(start);
-      await tester.pump();
-      await tester.tap(find.text('Install'));
+      expect(
+        find.byKey(const ValueKey('new-harness-field-browser')),
+        findsNothing,
+      );
+      await tester.tap(find.byKey(const ValueKey('new-harness-field-start')));
       for (var i = 0; i < 20; i++) {
         await tester.pump();
       }
-      expect(
-        f.connection.calls.where((c) => c.$1 == 'agent_browser_setup'),
-        hasLength(1),
-      );
+      expect(find.text('Set up Browser'), findsNothing);
       final create = f.connection.calls.singleWhere(
         (c) => c.$1 == 'agent_create',
       );
-      expect(create.$2['browser'], isTrue);
-      expect(find.text('Set up Browser'), findsNothing);
+      expect(create.$2.containsKey('browser'), isFalse);
+      final asked = f.connection.calls.map((c) => c.$1);
+      expect(asked, isNot(contains('agent_browser_setup')));
+      expect(asked, isNot(contains('agent_browser_available')));
       await tester.pumpWidget(const SizedBox());
       f.dispose();
       await tester.pump(const Duration(seconds: 1));
@@ -233,10 +218,12 @@ void main() {
         final name = chat['name'] as String;
         // An automatic name gives way to one of the Swarm's, as + New agent's.
         expect(agentNames, contains(name));
+        // Its session named, so a second try from anywhere finds the same chat (backend agent.new `harnessId`).
         expect(chat, {
           'type': 'agent.new',
           'kind': 'regular',
           'machineId': 'm',
+          'harnessId': 'h1',
           'engine': 'claude',
           'name': name,
           'local': true,

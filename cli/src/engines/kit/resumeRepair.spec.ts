@@ -160,7 +160,9 @@ describe('preparing a stopped Codex session for resume', () => {
       readSync(repaired, actual, 0, actual.length, statSync(file).size - actual.length)
       expect(actual).toEqual(expected)
     } finally { closeSync(repaired) }
-  }, 30_000)
+  // Over 512 MiB written, then read four times and copied twice with full flushes: about 2.7 GB through the disk.
+  // 8 s on CI's runner, 14 s alone on an Intel Mac at load 8, 34-66 s there beside two other files.
+  }, 120_000)
 
   it('preserves UTF-8, CRLF, blank lines, and a final record without a newline across chunk boundaries', () => {
     const original = '\r\n' + history(badReasoning(), { ...message,

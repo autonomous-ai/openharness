@@ -19,7 +19,7 @@ import type { TurnRecaps } from '../turns/recaps.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
 import { enginePathOverride } from '../../lib/engineBin.js'
 import { engineInstallRecipe } from '../../lib/engineInstall.js'
-import { buildEngineCommandArgv, buildEngineLaunchArgv, engineLaunchEnv, namedAgentArgs, refusePermissionFlagIfUnsupported, supportsNamedAgent } from '../../lib/engineLaunch.js'
+import { buildEngineCommandArgv, buildEngineLaunchArgv, engineLaunchEnv, namedAgentArgs, refusePermissionFlagIfUnsupported, supportsNamedAgent, typedFirstPrompt } from '../../lib/engineLaunch.js'
 import { forkName, planFork } from '../../lib/forkAgent.js'
 import { buildHarnessSessionLabel } from '../../lib/harnessSessionLabel.js'
 import { projectDisplayName, type registry, type RegisteredSession } from '../../lib/registry.js'
@@ -35,6 +35,7 @@ import type { LaunchAuthority, LaunchPreparation } from '../../lib/launchPrepara
 import type { LaunchOverridesDeps } from '../../lib/launchOverrides.js'
 import type { AgentEngine } from '../../engines/types.js'
 import { nativeHookLocations } from '../../engines/kit/nativeLocations.js'
+import { hooksHeldDetail } from '../../engines/kit/hooksHeldDetail.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 
 type ForkAgent = NonNullable<BackendSocket['onForkAgent']>
@@ -136,7 +137,7 @@ export function createAgentForker({
     if (!built.ok) return built
     if (built.overrides.native && prepareNative && !await prepareNative(built.overrides.native, owner,
       { ...built.overrides.env, ...dshEnv }, [...built.overrides.clearEnv, ...harnessEnvToClear(dshEnv)])) {
-      return { ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native', detail: 'Waiting to confirm the fork’s final native configuration.' }
+      return { ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native', detail: hooksHeldDetail(engine, 'Waiting to confirm the fork’s final native configuration.') }
     }
     if (!current()) return changed
     const dispatchCurrent = () => current() && built.overrides.native?.current() !== false
@@ -146,6 +147,8 @@ export function createAgentForker({
     const forkMajor = built.overrides.native ? built.overrides.native.opencodeMajor : opencode ? await opencode.opencodeMajorVersion() : null
     const extraArgs = [...built.overrides.extraArgs, ...dshArgs, ...(source.agent && supportsNamedAgent(engine, forkMajor) ? namedAgentArgs(engine, source.agent, forkMajor) : [])]
     const firstPrompt = plan.level === 'native' ? (prompt ?? undefined) : plan.firstPrompt
+    // An engine that takes it typed gets it on its row instead, typed once its pane is ready (core/agents/bind.ts).
+    const firstTask = typedFirstPrompt(engine, firstPrompt)
     // The fork's own id, chosen before its pane, as create chooses one (engineLaunch.ts `agentId`).
     const forkId = randomUUID()
     const launchOptions = {
@@ -202,6 +205,8 @@ export function createAgentForker({
         ? nativeHookLocations(built.overrides.native.environment).CODEX_HOME : source.codexHome ?? null,
       // Its account, as its source's restart keeps it: on the row, or a restart of the fork runs on the default account.
       claudeHome: source.claudeHome ?? null,
+      // The flags it launched with (relaunchOverrides), so its effort is read as launched and its restart passes them again.
+      ...(source.launchModel ? { launchModel: source.launchModel } : {}),
       dshRuntime: source.dsh ? label : null,
       dsh: source.dsh ?? null,
       agent: source.agent ?? null,
@@ -214,6 +219,7 @@ export function createAgentForker({
         agentId: source.agentId, name: sourceName,
         ...(source.sessionId ? { sessionId: source.sessionId, ...(source.transcriptPath ? { transcriptPath: source.transcriptPath } : {}) } : {}),
       },
+      ...(firstTask ? { firstTask } : {}),
     })
     if (!result.ok) return { ok: false, error: result.error, detail: result.detail }
     const { spawned, pending } = result

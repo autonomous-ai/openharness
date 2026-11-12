@@ -98,8 +98,13 @@ export const HARNESS_AGENT_TOOLS = {
   whoami: 'harness_whoami', ps: 'harness_list', search: 'harness_search', machines: 'harness_machines', show: 'harness_read', wait: 'harness_wait', new: 'harness_start', close: 'harness_close', send: 'harness_send',
   tell: 'harness_tell',
 } as const
-export type HarnessAgentVerb = keyof typeof HARNESS_AGENT_TOOLS
-export const HARNESS_AGENT_VERBS = Object.keys(HARNESS_AGENT_TOOLS) as HarnessAgentVerb[]
+/** Agent commands that are a shell command only, never an MCP tool: `browser` drives the agent's own browser, and
+ *  nothing of it is MCP (docs/superpowers/specs/2026-11-11-browser-from-chat-design.md). Only the person starts and
+ *  stops it, and a command reaches only the browser of the pane it runs in: Harness decides, as for the other verbs. */
+export const HARNESS_SHELL_VERBS = ['browser'] as const
+export type HarnessAgentVerb = keyof typeof HARNESS_AGENT_TOOLS | (typeof HARNESS_SHELL_VERBS)[number]
+export const HARNESS_AGENT_VERBS: HarnessAgentVerb[] =
+  [...(Object.keys(HARNESS_AGENT_TOOLS) as HarnessAgentVerb[]), ...HARNESS_SHELL_VERBS]
 
 /**
  * Harness's agent commands (HARNESS_AGENT_VERBS) and its MCP tools allowed in the engine's own permission rules, so
@@ -120,8 +125,8 @@ export const HARNESS_AGENT_VERBS = Object.keys(HARNESS_AGENT_TOOLS) as HarnessAg
  * A rule may name `{launcher}` (the `harness` in `~/.local/bin`), `{node}` and `{cli}` (the managed Node and the CLI's
  * bundle), filled in with this computer's paths as it is installed: an agent runs `harness` by its full path too,
  * where a rule for the bare name does not apply. A Codex lead sent that way, so each send asked to leave the sandbox
- * (2026-10-12). `{verb}` and `{tool}` make the rule once for each agent verb, naming it or its MCP tool; `{verbs}`
- * names every verb as one list.
+ * (2026-10-12). `{verb}` and `{tool}` make the rule once for each agent verb, naming it or its MCP tool (a rule naming
+ * `{tool}` only for a verb that has one); `{verbs}` names every verb as one list.
  */
 export type HarnessAllowance =
   | { list: readonly [string, string]; unless?: readonly string[]; rules: readonly string[] }

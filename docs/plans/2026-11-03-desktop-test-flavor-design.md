@@ -96,7 +96,7 @@ signs in again through `stop` and `start`, never through the copy's button.
 - The test daemon is on its own port, socket and pid file, so Desktop's daemon-owner guard
   (`DaemonOwnerGuard`, which restarts a daemon Desktop did not launch) sees only the test daemon.
 - launchd is never asked (see the table).
-- Where the CLI asks the account database rather than `HOME` (`cli/src/superTabs/callerPane.ts` finds a tmux binary
+- Where the CLI asks the account database rather than `HOME` (`cli/src/lib/callerPane.ts` finds a tmux binary
   to run in the account's `~/.harness/runtime`), it only reads; `cli/src/config/startHome.ts` already keeps start, stop,
   login and logout under another `HOME` on that home's data folder.
 - The proof is a test (plan task 3): with a fake "real" home holding a session, settings and a LaunchAgents

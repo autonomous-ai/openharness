@@ -15,10 +15,9 @@ import 'package:harness/super_tabs/join_link.dart';
 import 'package:harness/super_tabs/sharing.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
 
-import 'support/super_tab_fixture.dart';
+import 'support/swarm_sharing_server.dart';
 
-const _token = '1234567890123456789012345678901234567890123';
-const _secondToken = 'abcdefghijabcdefghijabcdefghijabcdefghijabc';
+const _token = swarmSharingToken;
 const _link = SwarmJoinLink('tab', token: _token);
 
 class _Store implements LocalKeyValueStore {
@@ -29,75 +28,6 @@ class _Store implements LocalKeyValueStore {
   Future<void> write(String key, String value) async => values[key] = value;
   @override
   Future<void> delete(String key) async => values.remove(key);
-}
-
-class SwarmSharingServer extends ConversationServer {
-  Map<String, dynamic> access = {'mode': 'invited', 'role': 'collaborator'};
-  int sharingRevision = 0, sharingReads = 0;
-  String token = _token;
-  bool loseSharingReply = false, stale = false, failSharingRead = false;
-  Completer<void>? hold;
-  final sharingPosts = <Map<String, dynamic>>[];
-  final sharingReceipts = <String, Map<String, dynamic>>{};
-
-  Map<String, dynamic> get settings => {
-    'revision': sharingRevision,
-    'access': Map<String, dynamic>.from(access),
-    'joinUrl': access['mode'] == 'invited'
-        ? null
-        : SwarmJoinLink(
-            'tab',
-            token: access['mode'] == 'link' ? token : null,
-          ).url,
-  };
-
-  @override
-  Future<Map<String, dynamic>> request(
-    String method,
-    String path, {
-    Map<String, dynamic>? body,
-  }) async {
-    if (path.endsWith('/sharing')) {
-      await hold?.future;
-      if (method == 'GET') {
-        sharingReads++;
-        if (failSharingRead) {
-          throw const SuperTabFailure(
-            'NOT_FOUND',
-            'Not found',
-            statusCode: 404,
-          );
-        }
-        return settings;
-      }
-      sharingPosts.add(Map<String, dynamic>.from(body!));
-      final operation = body['operationId'] as String;
-      if (sharingReceipts[operation] case final receipt?) return receipt;
-      if (stale) {
-        throw const SuperTabFailure(
-          'REVISION_CHANGED',
-          'Sharing changed',
-          statusCode: 409,
-        );
-      }
-      access = Map<String, dynamic>.from(body['access'] as Map);
-      if (body['rotateLink'] == true) token = _secondToken;
-      sharingRevision++;
-      final result = settings;
-      sharingReceipts[operation] = result;
-      if (loseSharingReply) throw TimeoutException('lost reply');
-      return result;
-    }
-    final command = body?['command'] as Map?;
-    if (command?['type'] == 'invite.create') {
-      (state['invitations'] as List).add({
-        'id': 'invitation',
-        'email': command!['email'],
-        'role': command['role'],
-      });
-    }
-    return super.request(method, path, body: body);
-  }
 }
 
 Future<SuperTabController> _open(
@@ -132,7 +62,11 @@ Future<SuperTabController> _open(
         home: Scaffold(
           body: Builder(
             builder: (context) => TextButton(
-              onPressed: () => showSuperTabSharing(context, controller),
+              onPressed: () => showSuperTabSharing(
+                context,
+                controller,
+                title: 'Manage people',
+              ),
               child: const Text('Share'),
             ),
           ),
@@ -387,6 +321,34 @@ void main() {
             .onPressed,
         isNotNull,
       );
+    },
+  );
+
+  // A new Personal Swarm has no project (backend #4094), and a Swarm with none takes no email invitation (NO_PROJECT).
+  testWidgets(
+    'inviting in a Swarm with no project yet says to make one, and where',
+    (tester) async {
+      final server = SwarmSharingServer()
+        ..refuse = {
+          'code': 'NO_PROJECT',
+          'message': 'Create a project before inviting people.',
+        };
+      await _open(tester, server);
+      final before = (server.state['invitations'] as List).length;
+      await tester.enterText(
+        find.byKey(const Key('swarm-invite-email')),
+        'leo@example.com',
+      );
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('swarm-invite-send')));
+      await tester.pumpAndSettle();
+      expect(
+        find.text(
+          'Create a project before inviting people: + beside Projects.',
+        ),
+        findsOneWidget,
+      );
+      expect(server.state['invitations'] as List, hasLength(before));
     },
   );
 

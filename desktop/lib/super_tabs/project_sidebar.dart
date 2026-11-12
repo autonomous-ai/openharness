@@ -8,7 +8,7 @@ import '../state/app_state.dart';
 import '../widgets/desktop_chrome.dart';
 import 'agent_state.dart';
 import 'controller.dart';
-import 'delete_agent.dart';
+import 'remove_agent.dart';
 import 'model.dart';
 import 'places.dart' show SwarmPage;
 import 'my_agents.dart';
@@ -35,6 +35,7 @@ class ProjectSidebar extends StatelessWidget {
     this.onNewSwarm,
     this.onRenameSwarm,
     this.onManage,
+    this.onInvite,
     this.onManageMachines,
     this.manageSelected = false,
     this.devicesSelected = false,
@@ -103,6 +104,12 @@ class ProjectSidebar extends StatelessWidget {
 
   /// Opens Manage (Machines, Models, Devices, Swarm), the row at the foot.
   final VoidCallback? onManage;
+
+  /// Opens the Swarm's people, to invite someone: a row under the Swarm's name for its owner, the one person who may invite
+  /// (backend commands.ts, invite.create), their Personal Swarm too (anh Dee, 2026-11-11). People join a Swarm by
+  /// an invitation, and Manage people was the only way there (anh Dee, 2026-11-11: "it's quite difficult to invite people.
+  /// i have no idea where to find it. invite should be visible").
+  final VoidCallback? onInvite;
 
   /// Opens Manage on its Machines, where a computer in Your Machines is managed.
   final VoidCallback? onManageMachines;
@@ -297,8 +304,8 @@ class ProjectSidebar extends StatelessWidget {
     onTap: onTap,
   );
 
-  /// The Desktop's left pane (Swarm v4, anh Dee 2026-11-08): the org name, Your Team, Projects, then Top Teams; Manage
-  /// stays at the foot. Nothing else.
+  /// The Desktop's left pane (Swarm v4, anh Dee 2026-11-08): the org name, Invite people for its owner, Your Team,
+  /// Projects, then Top Teams; Manage stays at the foot. Nothing else.
   List<Widget> _desktop(
     SuperTabSnapshot? snapshot,
     _SidebarReading reading, {
@@ -308,33 +315,39 @@ class ProjectSidebar extends StatelessWidget {
       for (final start in _starts)
         if (start.project) start,
     ];
+    final channels = _channels(snapshot, reading);
+    // An empty list shows nothing, or only the action that fills it (design system, Swarm elements, rule 7): Projects with
+    // none is its heading and its +, and with no + to offer, nothing.
+    final projects =
+        channels.isNotEmpty || projectStarts.isNotEmpty || controller.canWrite;
     return [
       ?switcher,
+      // Its owner invites people to any Swarm of theirs, their Personal one too (anh Dee, 2026-11-11).
+      if (onInvite case final invite? when controller.isOwner)
+        _iconRow(
+          key: 'project-sidebar-invite',
+          icon: AppIcons.userPlus,
+          name: 'Invite people',
+          onTap: invite,
+        ),
       const SizedBox(height: grid.AppDesktop.groupGap),
       ..._myAgents(snapshot, reading),
-      SuperTabQuietHeading(
-        'Projects',
-        key: const ValueKey('project-sidebar-projects'),
-        collapsed: !controller.projectsGroupOpen,
-        onTap: controller.toggleProjectsGroup,
-        onAdd: controller.canWrite ? onNewProject : null,
-        addTooltip: 'New project',
-        addKey: const ValueKey('project-sidebar-projects-add'),
-      ),
-      if (controller.projectsGroupOpen) ...[
-        for (final start in projectStarts) _startRow(start),
-        if (snapshot != null &&
-            projectStarts.isEmpty &&
-            superTabListedProjects(
-              controller,
-              app: app,
-              paneCovered: _paneCovered,
-            ).isEmpty)
-          _noProjects()
-        else
-          for (final (_, channel) in _channels(snapshot, reading)) channel,
+      if (projects) ...[
+        SuperTabQuietHeading(
+          'Projects',
+          key: const ValueKey('project-sidebar-projects'),
+          collapsed: !controller.projectsGroupOpen,
+          onTap: controller.toggleProjectsGroup,
+          onAdd: controller.canWrite ? onNewProject : null,
+          addTooltip: 'New project',
+          addKey: const ValueKey('project-sidebar-projects-add'),
+        ),
+        if (controller.projectsGroupOpen) ...[
+          for (final start in projectStarts) _startRow(start),
+          for (final (_, channel) in channels) channel,
+        ],
+        const SizedBox(height: grid.AppDesktop.groupGap),
       ],
-      const SizedBox(height: grid.AppDesktop.groupGap),
       ..._yourMachines(),
       ..._humans(snapshot),
     ];
@@ -472,9 +485,10 @@ class ProjectSidebar extends StatelessWidget {
   /// every one to reach a project).
   static const teamShown = 8;
 
-  /// Your Team's rows: every one when at most one more than [teamShown] would show, or once the reader opened them all;
-  /// else the [teamShown] that matter most (something new first, then on a task, then the rest; a pane not in the Swarm
-  /// yet last), each where it stands in the list, plus the open one, and "N more". Only the rows shown are built.
+  /// Your Team's rows, one list from A to Z, a pane not in the Swarm yet among its agents by the name it joins under (so it
+  /// keeps its place as it joins): every one when at most one more than [teamShown] would show, or once the reader opened
+  /// them all; else the [teamShown] that matter most (something new first, then on a task, then the rest), each where it
+  /// stands in the list, plus the open one, and "N more". Only the rows shown are built.
   List<Widget> _teamRows(SuperTabSnapshot snapshot, _SidebarReading reading) {
     final agents = reading.myAgents;
     final count = agents.length + reading.panes.length;
@@ -483,7 +497,30 @@ class ProjectSidebar extends StatelessWidget {
     Widget build(int i) => i < agents.length
         ? _agentRow(snapshot, agents[i].$1, agents[i].$2)
         : _paneRow(reading.panes[i - agents.length]);
-    final all = [for (var i = 0; i < count; i++) i];
+    // Both lists come from A to Z (superTabMyAgents, personalAgents): merged once, so a pane keeps its place as it joins.
+    final all = <int>[];
+    if (reading.panes.isEmpty) {
+      for (var i = 0; i < count; i++) {
+        all.add(i);
+      }
+    } else {
+      final agentNames = [
+        for (final (agent, _) in agents)
+          (agent.displayName ?? agent.name).toLowerCase(),
+      ];
+      final paneNames = [
+        for (final pane in reading.panes) pane.name.toLowerCase(),
+      ];
+      var a = 0, p = 0;
+      while (a < agents.length || p < paneNames.length) {
+        if (p == paneNames.length ||
+            (a < agents.length && agentNames[a].compareTo(paneNames[p]) <= 0)) {
+          all.add(a++);
+        } else {
+          all.add(agents.length + p++);
+        }
+      }
+    }
     if (count <= teamShown + 1) return [for (final i in all) build(i)];
     if (controller.agentsAllShown) {
       return [
@@ -492,18 +529,19 @@ class ProjectSidebar extends StatelessWidget {
       ];
     }
     int rank(int i) {
-      if (i >= agents.length) return 3;
+      if (i >= agents.length) return 2;
       final (agent, chat) = agents[i];
       if (unread(chat)) return 0;
       return agentStates?.taskOf(agent) != null ? 1 : 2;
     }
 
+    // Positions in the list, by what matters most, each rank in list order.
     final ranks = [for (final i in all) rank(i)];
-    final order = [...all]
-      ..sort((a, b) {
-        final byRank = ranks[a].compareTo(ranks[b]);
-        return byRank != 0 ? byRank : a.compareTo(b);
-      });
+    final order = [
+      for (var r = 0; r <= 2; r++)
+        for (var at = 0; at < all.length; at++)
+          if (ranks[at] == r) all[at],
+    ];
     final shown = {
       ...order.take(teamShown),
       for (var i = 0; i < agents.length; i++)
@@ -537,6 +575,8 @@ class ProjectSidebar extends StatelessWidget {
         name: pane.name,
         size: SuperTabQuietRow.faceSize,
         face: true,
+        // Grey while its computer is off, as an agent's face is.
+        offline: pane.machine.isOffline,
       ),
       name: pane.name,
       detail: busy ? 'joining' : pane.place,
@@ -577,9 +617,17 @@ class ProjectSidebar extends StatelessWidget {
         _ => null,
       },
     );
-    // Delete is one right-click away, for its person alone (Swarm v4: only its person stops an agent). A project's PM
-    // stays until its project goes.
-    if (agent.contributorId != controller.accountId || !controller.canWrite) {
+    // Pause and Remove are one right-click away and nowhere else (anh Dee, 2026-11-11: "make it subtle. right click you see
+    // pause"). Pause for its person, its machine's owner and the Swarm's owner, who leads the work it would be given (backend
+    // agent.pause); never a project's PM, which gives the work. Remove for its person alone, by the rule closing its last view has (Swarm v4: only its person stops an
+    // agent). A project's PM stays until its project goes.
+    final mine = agent.contributorId == controller.accountId;
+    final pausable =
+        agent.kind != 'pm' &&
+        (mine ||
+            agent.machineOwnerId == controller.accountId ||
+            controller.isOwner);
+    if (!controller.canWrite || (!mine && !pausable)) {
       return row;
     }
     final kept = snapshot.leadProtectionReason(agent.id);
@@ -590,16 +638,33 @@ class ProjectSidebar extends StatelessWidget {
             context: context,
             at: event.globalPosition,
             children: (close) => [
-              AppMenuItem(
-                label: 'Delete',
-                detail: kept,
-                leadingSlot: false,
-                onPressed: kept == null ? () => close('delete') : null,
-              ),
+              if (pausable)
+                AppMenuItem(
+                  label: agent.paused ? 'Resume' : 'Pause',
+                  leadingSlot: false,
+                  onPressed: () => close('pause'),
+                ),
+              if (mine)
+                AppMenuItem(
+                  label: 'Remove',
+                  detail: kept,
+                  leadingSlot: false,
+                  onPressed: kept == null ? () => close('remove') : null,
+                ),
             ],
           );
-          if (choice == 'delete' && context.mounted) {
-            await deleteSwarmAgent(context, controller, agent, name, app: app);
+          if (!context.mounted) return;
+          if (choice == 'pause') {
+            final failed = await controller.pauseAgent(
+              agent.id,
+              paused: !agent.paused,
+            );
+            if (failed != null && context.mounted) {
+              ScaffoldMessenger.maybeOf(context)
+                  ?.showSnackBar(SnackBar(content: Text(failed)));
+            }
+          } else if (choice == 'remove') {
+            await removeSwarmAgent(context, controller, agent, name, app: app);
           }
         },
         child: row,
@@ -631,24 +696,6 @@ class ProjectSidebar extends StatelessWidget {
     failed: start.failed,
     compact: compact,
     onOpen: start.project ? onNewProject : onNewAgent,
-  );
-
-  /// Open Projects over a Swarm with none, in the names' column.
-  Widget _noProjects() => Padding(
-    key: const ValueKey('super-projects-empty'),
-    padding: EdgeInsets.fromLTRB(
-      SuperTabSectionHeading.indentFor(0) + _iconColumn,
-      SwarmType.sidebarRowPadding(compact: compact),
-      grid.AppDesktop.controlGap,
-      SwarmType.sidebarRowPadding(compact: compact),
-    ),
-    child: Text(
-      'No projects yet.',
-      style: SwarmType.sidebar(
-        compact: compact,
-        color: grid.SidebarInk.inkMuted,
-      ),
-    ),
   );
 
   /// Every project with its workgroups, by name from A to Z. The round dial
@@ -694,7 +741,13 @@ class ProjectSidebar extends StatelessWidget {
   // shared rows drawn in it.
   @override
   Widget build(BuildContext context) => grid.SidebarInk.scope(
-    child: switch ([?leaderboard, ?agentStates, ?app?.swarmStarts]) {
+    // PersonalSwarm: which Swarm is the person's own decides its pane rows, and it can be known only after the pane is drawn.
+    child: switch ([
+      ?leaderboard,
+      ?agentStates,
+      ?app?.swarmStarts,
+      if (app case final app?) PersonalSwarm.of(app),
+    ]) {
       final List<Listenable> sources when sources.isNotEmpty =>
         ListenableBuilder(
           listenable: Listenable.merge(sources),
@@ -909,7 +962,7 @@ List<String> superTabSidebarOrder(
 
 /// The projects a list of them offers, from A to Z: the Swarm's, less an archived one, and in the person's own Personal
 /// Swarm (personal_projects.dart, worked out once a call) less v3's tab projects and those it hides: a project whose
-/// panes are all closed (task #3042) and the Swarm's first project while it names no repository. A hidden one stays while
+/// panes are all closed (task #3042). A hidden one stays while
 /// its chat is open, unless something covers the chat ([paneCovered]), and while that chat has something unread. None
 /// left out without the app, which holds the panes.
 List<SuperTabProject> superTabListedProjects(

@@ -80,7 +80,11 @@ class WebPanePanel extends StatefulWidget {
     this.zoomed = false,
     this.compactHeader = false,
     this.visible = true,
+    this.paneDrag,
   });
+
+  /// The header carries the pane to another tile, as a terminal's does; null when it is alone in its tab.
+  final PaneDragHandle? paneDrag;
 
   final AppNotifier notifier;
   final bool visible;
@@ -228,6 +232,28 @@ class _WebPanePanelState extends State<WebPanePanel> {
         .runJavaScript(
           "document.documentElement.dataset.hostVisible='$shown';"
           "document.dispatchEvent(new Event('harness-host-visibility'))",
+        )
+        .catchError((_) {});
+  }
+
+  /// Whether the page was last told this pane draws a browser bar over it, so a rebuild that changed nothing runs no script.
+  bool? _stampedBar;
+
+  /// A web harness's pane has its own browser bar (back, reload, widths), so a viewer that draws the same controls
+  /// over its page hides them while `data-harness-browser-bar` is on its root (the Isolated Web Viewer's
+  /// preview.html): two rows of Reload and widths, one over the other, read as a fault (owner, 2026-11-11).
+  /// A page that never heard of it is untouched; one that is not under the bar is told nothing.
+  void _stampBar() {
+    final controller = _controller;
+    if (controller == null || _loadedUrl == null) return;
+    final bar = _browserBar;
+    if (bar == (_stampedBar ?? false)) return;
+    _stampedBar = bar;
+    controller
+        .runJavaScript(
+          bar
+              ? "document.documentElement.setAttribute('data-harness-browser-bar','')"
+              : "document.documentElement.removeAttribute('data-harness-browser-bar')",
         )
         .catchError((_) {});
   }
@@ -397,6 +423,8 @@ class _WebPanePanelState extends State<WebPanePanel> {
                 _stampTheme();
                 _stampedShown = null;
                 _stampShown();
+                _stampedBar = null;
+                _stampBar();
               },
               onWebResourceError: (error) {
                 // Only the page itself: a harness's viewer pulls fonts, models
@@ -550,6 +578,7 @@ class _WebPanePanelState extends State<WebPanePanel> {
     grid.AppTheme.watch(context);
     // The theme is a dependency of this build; a change here reaches the page too.
     _stampTheme();
+    _stampBar();
     return ColoredBox(
       color: grid.AppPalette.windowBg,
       child: Column(
@@ -585,8 +614,11 @@ class _WebPanePanelState extends State<WebPanePanel> {
     );
   }
 
-  Widget _header(BuildContext context) =>
-      MediaQuery.withNoTextScaling(child: Builder(builder: _buildHeader));
+  Widget _header(BuildContext context) => PaneCarry(
+    handle: widget.paneDrag,
+    label: widget.title,
+    child: MediaQuery.withNoTextScaling(child: Builder(builder: _buildHeader)),
+  );
 
   Widget _buildHeader(BuildContext context) {
     TerminalFontScope.watch(context);

@@ -17,6 +17,8 @@ import { PM_BASICS, SWARM_BASICS, swarmBasics } from './swarmSkills.js'
 import { swarmEngineArgs } from './swarmEngineArgs.js'
 import { swarmGitHubLaunch } from './swarmGitHub.js'
 import { writeMachineMcp } from './machineMcp.js'
+import { missingHookScript } from '../engines/kit/notifyHooks.js'
+import type { NativeLaunch } from '../engines/nativeLaunch.js'
 
 const GRID: GridLaunchOverride = {
   networkId: 'grid-abc',
@@ -33,6 +35,7 @@ vi.mock('../engines/inProcess.js', async (real) => {
   const actual = await real<typeof import('../engines/inProcess.js')>()
   return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
 })
+vi.mock('../engines/kit/notifyHooks.js', async (real) => ({ ...await real<object>(), missingHookScript: vi.fn(() => null) }))
 
 function deps(overrides: Partial<LaunchOverridesDeps> = {}) {
   const calls: string[] = []
@@ -55,6 +58,26 @@ function deps(overrides: Partial<LaunchOverridesDeps> = {}) {
 // agents, and a harness another agent started adds its pull request line once the account has that on: both off by
 // default, so each relaunch below shows only what it is about. Each has its own describe, which turns it on.
 afterEach(() => { rmSync(agentSettingsPath(env.ADAPTER_DATA_DIR), { force: true }); signedOutForTest() })
+
+// Review of #3954: a resume or relaunch held by a missing notify.mjs said "Waiting to confirm…", which waiting never changes.
+describe('a resume or relaunch held because notify.mjs is missing', () => {
+  const named = 'Harness’s hook script is missing (/opt/harness/hook/notify.mjs). Reinstall Harness, then start the agent again.'
+  beforeEach(() => { vi.mocked(missingHookScript).mockReturnValue('/opt/harness/hook/notify.mjs') })
+  afterEach(() => { vi.mocked(missingHookScript).mockReturnValue(null) })
+
+  it('names the file and what to do when the native hooks are not prepared', async () => {
+    const launch = { current: () => true, environment: { HOME: '/fixture/home' } } as unknown as NativeLaunch
+    const { d } = deps({ native: async () => ({ ok: true, launch }), prepareNative: async () => false })
+    expect(await buildLaunchOverrides(d, 'claude', {}, 'agent-1')).toEqual({ ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native', detail: named })
+    expect(missingHookScript).toHaveBeenLastCalledWith('claude')
+  })
+
+  it('names the file and what to do when a Codex profile\'s hooks are not installed', async () => {
+    const { d } = deps({ installCodexHooks: () => false })
+    expect(await buildLaunchOverrides(d, 'codex', { codexHome: '/profiles/work' }, 'agent-1')).toEqual({ ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native', detail: named })
+    expect(missingHookScript).toHaveBeenLastCalledWith('codex')
+  })
+})
 
 describe('buildLaunchOverrides — a relaunch comes back where the agent was', () => {
   it('awaits profile hook durability, holds an unavailable profile and checks ownership after completion', async () => {
@@ -426,14 +449,15 @@ describe('buildLaunchOverrides — machine MCP servers (#1872)', () => {
     expect(JSON.stringify(hermes)).not.toContain('lamp-mcp')
   })
 
-  it('relaunch of a browser agent keeps the args', async () => {
-    const claude = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude', { startedBy: null, cwd: null, browser: true }, 'a')
-    expect(claude).toMatchObject({ ok: true, overrides: { extraArgs: [
-      '--mcp-config={"mcpServers":{"browser":{"type":"stdio","command":"harness","args":["browser-mcp"]}}}'] } })
-    const codex = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'codex', { startedBy: null, cwd: null, browser: true }, 'a')
-    expect(codex.ok && codex.overrides.extraArgs).toEqual(expect.arrayContaining(['mcp_servers.browser.command="harness"', 'mcp_servers.browser.args=["browser-mcp"]']))
-    const plain = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude', { startedBy: null, cwd: null }, 'a')
-    expect(JSON.stringify(plain)).not.toContain('browser-mcp')
+  it('a relaunch of an agent whose browser is on adds no browser argument', async () => {
+    // A relaunch's source is the agent's registry row (core/agents/launch.ts), its `browser` flag among the rest.
+    const row = { startedBy: null, cwd: null, browser: true as const }
+    for (const engine of ['claude', 'codex'] as const) {
+      const relaunch = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, engine, row, 'a')
+      expect(relaunch.ok).toBe(true)
+      const argv = relaunch.ok ? relaunch.overrides.extraArgs.join(' ') : ''
+      for (const word of ['browser-mcp', 'mcp_servers.browser', '"browser"']) expect(argv).not.toContain(word)
+    }
   })
 
   it('relaunches a Swarm agent with them, as its owner\'s own session', async () => {

@@ -134,7 +134,6 @@ class _SwarmAgentInfoState extends State<SwarmAgentInfo>
       ?SwarmTaskBoard.repositoryOf(
         widget.controller,
         project.leadConversationId,
-        app: widget.app,
       ),
   };
 
@@ -193,7 +192,8 @@ class _SwarmAgentInfoState extends State<SwarmAgentInfo>
     grid.AppTheme.watch(context);
     return ColoredBox(
       key: const ValueKey('swarm-agent-info'),
-      color: DesktopChrome.surface,
+      // The Swarm's one ground, beside the chat or in its place (design system, One surface).
+      color: grid.AppPalette.swarmField,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [

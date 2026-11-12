@@ -9,8 +9,9 @@
  * - `creation_status`: read the exact native receipt without exposing its launch request;
  * - `keep_lead_alive`, `close_member`: for the Super Tab service alone, reopen a stopped Swarm Lead and close a member
  *   whose session its backend ended, each only as core/api.ts allows;
- * - `last_turn`: a session's last turn as its engine recorded it, for the Super Tab service alone: what a Swarm process of the release
- *   before (0.5.82) asks, kept until 2026-12-10;
+ * - `last_turn`: a session's last turn as its engine recorded it, for the Super Tab service alone: after a restart that cut a message
+ *   off in the middle of typing, whether its agent took it (superTabs/host.ts hadBeforeRestart), and what a Swarm process of 0.5.82
+ *   asks at a turn's end;
  * - `turn_answer`: what the turn of a session that ended answered, named as its end named it (its prompt's hash and its number),
  *   for the Super Tab service alone: it posts the answer of the turn that ended into its agent's person's chat;
  * - `stop_turn`: stop an agent's turn;
@@ -118,7 +119,8 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
       const ids = Array.isArray(payload.agentIds) ? payload.agentIds.filter((id): id is string => typeof id === 'string').slice(0, 64) : []
       return { activity: await core.agents.activity(ids) }
     }
-    // What a Swarm process of the release before asks at a turn's end (0.5.82, which matched the transcript's last turn): until 2026-12-10.
+    // Whether an agent took a message a restart cut off in the middle of typing (superTabs/host.ts hadBeforeRestart), and what a Swarm
+    // process of 0.5.82 asks at a turn's end.
     case 'last_turn': {
       if (service !== 'superTabs') return { error: 'NOT_SUPER_TABS' }
       const sessionId = text(payload.sessionId)
