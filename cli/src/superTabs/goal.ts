@@ -8,7 +8,7 @@
  *
  * So a project lists its milestones in `agents/GOAL.md`, a table of two columns: what must be true, and the command that
  * checks it, in backticks. The repository's own CI runs each command on its main branch as a check named `goal: <milestone>`
- * (the workflow `harness super-tab goal` writes does, goalStarter.ts); Harness runs nothing. Here the file is read from the
+ * (the workflow `harness super-tab goal write` writes does, goalStarter.ts); Harness runs nothing. Here the file is read from the
  * default branch, and the checks from the newest of that branch's last landings on which every milestone's check has ended: a
  * milestone passes when its check concluded success there, fails when it concluded any other way that is a verdict (a failure, or cancelled as one that ran past its limit is), and waits
  * otherwise. The

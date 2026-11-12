@@ -1,5 +1,6 @@
 /**
- * A project's goal file and the workflow that checks it, written into an agent's checkout: `harness super-tab goal`.
+ * A project's goal file and the workflow that checks it, in an agent's checkout: shown by `harness super-tab goal`, written by
+ * `harness super-tab goal write`.
  *
  * Harness scores a goal from checks named `goal: <milestone>` on the main branch (goal.ts) and runs none itself: the
  * repository's CI does. What reads the file there must read it exactly as Harness does, row for row, or a milestone waits for
@@ -11,10 +12,10 @@
  * another agent and land on the train. A file that is there already is left as it is.
  */
 import { execFile } from 'node:child_process'
-import { lstatSync, mkdirSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { gitEnv } from '../lib/gitProject.js'
-import { GOAL_CHECK, GOAL_FILE, GOAL_MAX, LINE_MAX, MILESTONE_MAX } from './goal.js'
+import { GOAL_CHECK, GOAL_FILE, GOAL_MAX, goalRows, LINE_MAX, MILESTONE_MAX } from './goal.js'
 
 const GOAL_WORKFLOW = '.github/workflows/goal.yml'
 
@@ -133,4 +134,29 @@ export async function startGoal(cwd: string, git: (cwd: string, args: readonly s
   if (!wrote.length) return { ok: true, said: `${GOAL_FILE} and ${GOAL_WORKFLOW} are there already. Add a row to ${GOAL_FILE} for each milestone: ${row}` }
   return { ok: true, said: `Wrote ${wrote.join(' and ')}${kept.length ? ` (${kept[0]} was there already)` : ''}. Add a row to ${GOAL_FILE} for each milestone: ${row} `
     + `Then commit ${wrote.length > 1 ? 'both' : 'it'} on a branch of yours and open a pull request, as for any change. The checks run on ${base} once it lands.` }
+}
+
+/** The most a goal file is read for showing: far more than [GOAL_MAX] rows of [LINE_MAX] characters. */
+const SHOWN_MAX = 256 * 1024
+
+/**
+ * What the goal of the repository [cwd] is in states, in words an agent reads: its milestones and their checks, read as
+ * Harness and the workflow read them (goal.ts goalRows), or that there is none yet and how to start one. Writes nothing: a new
+ * PM ran the command "to see what it did", and the two files it then found it had not meant to write it deleted (anh Dee's
+ * Lou, 2026-11-12). Nothing is read through a link, which could name any file on this computer.
+ */
+export async function showGoal(cwd: string, git: (cwd: string, args: readonly string[]) => Promise<string | null> = gitLine): Promise<{ ok: boolean; said: string }> {
+  const root = await git(cwd, ['rev-parse', '--show-toplevel'])
+  if (!root) return { ok: false, said: 'This folder is in no git repository: run it in your checkout of the project.' }
+  const file = lstatSync(join(root, GOAL_FILE), { throwIfNoEntry: false })
+  if (!file) return { ok: true, said: `This project states no goal yet: ${GOAL_FILE} is not in this checkout. Ask your person what the `
+    + `project is for, then \`harness super-tab goal write\` writes ${GOAL_FILE} and the workflow that checks it.` }
+  if (!file.isFile()) return { ok: true, said: `${GOAL_FILE} is not a plain file (a link or a folder): it was not read.` }
+  const rows = file.size > SHOWN_MAX ? [] : goalRows(readFileSync(join(root, GOAL_FILE), 'utf8'))
+  const workflow = lstatSync(join(root, GOAL_WORKFLOW), { throwIfNoEntry: false })?.isFile()
+  const missing = workflow ? '' : ` Its workflow, ${GOAL_WORKFLOW}, is not in this checkout: \`harness super-tab goal write\` writes it.`
+  if (!rows.length) return { ok: true, said: `${GOAL_FILE} states no milestone yet. Add a row for each: | what must be true | \`the command that proves it\` |${missing}` }
+  const listed = rows.map(row => `\n- ${row.milestone}: \`${row.check}\``).join('')
+  return { ok: true, said: `${GOAL_FILE} states ${rows.length} milestone${rows.length === 1 ? '' : 's'}, each checked on the main branch`
+    + `${workflow ? ` by ${GOAL_WORKFLOW}` : ''}:${listed}${missing ? `\n${missing.trim()}` : ''}` }
 }

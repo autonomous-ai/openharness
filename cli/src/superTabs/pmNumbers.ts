@@ -174,7 +174,7 @@ type Goal = Score | null | undefined
  *  package 8). */
 export const shortLine = (names: readonly string[], n: Numbers, at: string, goal: Goal, hot: readonly string[] = []): string => `Harness, ${at}: ${nothing(names)}, and ${noTask(n, names.length)}`
   + `. ${landedWords(n)} in the last 24 hours.`
-  + (goal ? ` The goal (${GOAL_FILE}): ${scored(goal)}.` : goal === null ? ` The project states no goal: \`harness super-tab goal\` in your checkout writes ${GOAL_FILE} and the workflow that checks it.` : '')
+  + (goal ? ` The goal (${GOAL_FILE}): ${scored(goal)}.` : goal === null ? ` The project states no goal: ask your person what it is for, then \`harness super-tab goal write\` in your checkout writes ${GOAL_FILE} and the workflow that checks it.` : '')
   + ` Open the next tasks as issues, each with its part:, size: and p0-p2 labels${n.unsized ? ', or size the ones that wait' : ''}`
   + `${hot.length ? `; most changes touch ${listed(hot.map(path => `\`${plainPath(path)}\``))}, so cut tasks that split ${hot.length === 1 ? 'it' : 'them'} by feature` : ''}. `
   + 'If the work is done, tell your person.'
