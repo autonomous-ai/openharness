@@ -1310,18 +1310,23 @@ describe('the window', () => {
     expect(c.tools).toEqual([])
   })
 
-  it('the size is clamped to 1024x640 and to the screen setting, and the clamped size is what is sent', async () => {
+  it('the size is the panel\'s, clamped to the screen setting, and what Chrome set is the answer', async () => {
     const c = await commands()
     const window = (width: unknown, height: unknown, asker: Asker = LOCAL) => c.requests.agent_browser_window!({ agentId: 'a1', width, height }, asker)
-    // The Browser panel beside a chat, narrower than 1024: the window grows in its shape, so it fills the panel.
-    const small = window(780, 935)
-    expect((await c.line(1)).params).toEqual({ width: 1024, height: 1227 })
+    // The Browser panel beside a chat: the window is asked at exactly its size.
+    const panel = window(780, 935)
+    expect((await c.line(1)).params).toEqual({ width: 780, height: 935 })
     expect(c.tools[0]!.heard[0]!.method).toBe('window')
-    c.tools[0]!.answer({ width: 1024, height: 1227 })
-    expect(await small).toEqual({ width: 1024, height: 1227 })
+    c.tools[0]!.answer({ width: 780, height: 935 })
+    expect(await panel).toEqual({ width: 780, height: 935 })
+    // Narrower than Chrome allows: Chrome keeps its own minimum, and that is the answer the viewer scales.
+    const narrow = window(400, 900)
+    expect((await c.line(2)).params).toEqual({ width: 400, height: 900 })
+    c.tools[0]!.answer({ width: 500, height: 900 })
+    expect(await narrow).toEqual({ width: 500, height: 900 })
     // The person's other Desktop sizes it too: the last request wins.
     const tall = window(1400, 2400, OTHER_DESKTOP)
-    expect((await c.line(2)).params).toEqual({ width: 1080, height: 1920 })
+    expect((await c.line(3)).params).toEqual({ width: 1080, height: 1920 })
     // Chrome keeps the window inside the screen: its answer is the size.
     c.tools[0]!.answer({ width: 1080, height: 1893 })
     expect(await tall).toEqual({ width: 1080, height: 1893 })

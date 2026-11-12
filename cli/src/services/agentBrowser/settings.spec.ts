@@ -111,27 +111,20 @@ describe('agent browser settings', () => {
     expect(humanMode({ ...withProxy, humanSpeed: 'fast' })).toBe('fast')
   })
 
-  // Chrome's window takes the panel's size, held to what a person's window could be on that screen (spec: The window
-  // fits the panel).
-  it('clampWindow rounds, holds 1024x640 and the screen, and is null for anything but two positive numbers', () => {
+  // Chrome's window takes the panel's size, held to the screen (spec: The window fits the panel). No floor: Chrome
+  // keeps its own minimum and answers the size it set.
+  it('clampWindow rounds, holds the screen, and is null for anything but two sizes of at least one pixel', () => {
     expect(clampWindow(1137.4, 843.6, '1920x1080')).toEqual({ width: 1137, height: 844 })
-    // A panel under 1024x640 grows by one factor on both sides, so the window keeps its shape and fills the panel.
-    expect(clampWindow(600, 300, '1920x1080')).toEqual({ width: 1280, height: 640 })
-    expect(clampWindow(780, 935, '1080x1920')).toEqual({ width: 1024, height: 1227 })
-    expect(clampWindow(1000, 500, '1920x1080')).toEqual({ width: 1280, height: 640 })
-    // Only the screen can take the shape away.
-    expect(clampWindow(780, 935, '1920x1080')).toEqual({ width: 1024, height: 1080 })
+    // The Browser panel beside a chat gets a window of exactly its size, a narrow one too.
+    expect(clampWindow(780, 935, '1080x1920')).toEqual({ width: 780, height: 935 })
+    expect(clampWindow(400, 900, '1080x1920')).toEqual({ width: 400, height: 900 })
+    expect(clampWindow(600, 300, '1920x1080')).toEqual({ width: 600, height: 300 })
+    expect(clampWindow(1500, 2500, '1080x1920')).toEqual({ width: 1080, height: 1920 })
     expect(clampWindow(2560, 1440, '1920x1080')).toEqual({ width: 1920, height: 1080 })
     expect(clampWindow(1500, 900, '1366x768')).toEqual({ width: 1366, height: 768 })
     expect(clampWindow(1920, 1080, '1920x1080')).toEqual({ width: 1920, height: 1080 })
-    // A tall panel on a portrait screen: the width rises to 1024 and the height with it.
-    expect(clampWindow(900, 1400, '1080x1920')).toEqual({ width: 1024, height: 1593 })
-    expect(clampWindow(1400, 2400, '1080x1920')).toEqual({ width: 1080, height: 1920 })
-    // A shape too extreme for the screen keeps the floor and the cap, never a side past either.
-    expect(clampWindow(10, 5000, '1080x1920')).toEqual({ width: 1024, height: 1920 })
-    expect(clampWindow(5000, 10, '1080x1920')).toEqual({ width: 1080, height: 640 })
-    expect(clampWindow(Number.MIN_VALUE, 800, '1080x1920')).toEqual({ width: 1080, height: 1920 })
-    for (const [width, height] of [[0, 800], [1200, -1], ['1200', 800], [1200, null], [undefined, 800], [Number.NaN, 800], [1200, Number.POSITIVE_INFINITY]]) {
+    expect(clampWindow(10, 5000, '1080x1920')).toEqual({ width: 10, height: 1920 })
+    for (const [width, height] of [[0, 800], [0.4, 800], [Number.MIN_VALUE, 800], [1200, -1], ['1200', 800], [1200, null], [undefined, 800], [Number.NaN, 800], [1200, Number.POSITIVE_INFINITY]]) {
       expect(clampWindow(width, height, '1920x1080'), `${String(width)}x${String(height)}`).toBeNull()
     }
   })
