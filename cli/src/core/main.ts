@@ -2224,7 +2224,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const agentSettings = createAgentSettingsSync({ dataDir: env.ADAPTER_DATA_DIR, backend: proxyBackend, session: readAuthSession,
     // Agent Messages is told when its switch changes, wherever it runs: off, it reads it again only when told or its
     // file changes (messages/service.ts).
-    onNotice: (listener) => experimentHooks.onNotice(listener), messagesChanged: () => ports.messages?.settingsChanged() })
+    onNotice: (listener) => experimentHooks.onNotice(listener), messagesChanged: () => ports.messages?.settingsChanged(),
+    // Hachi's package is put in place by the Store (dsh/builtins.ts), whose process may not be running yet.
+    hachiOn: () => viewersWake.ask('store', 'Hachi to put in place') })
   // Windows: the daemon's pipe takes only requests that prove this token (lib/windows/pipeAuth.ts). It is made on
   // the first start and kept in the data folder, in the profile.
   const pipeToken = process.platform === 'win32' ? ensureDaemonToken(env.ADAPTER_DATA_DIR) : null
