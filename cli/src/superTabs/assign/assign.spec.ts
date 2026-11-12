@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import type { Builder, Choice, Mode, Problem, Task } from './model.js'
-import { HORIZON_MINUTES, schedule } from './schedule.js'
+import { HORIZON_MINUTES, priceOf, schedule } from './schedule.js'
 import { criticalPath, mulberry32, solve } from './search.js'
 
 const GB = 1024 ** 3
@@ -245,3 +245,127 @@ describe('a search its time cuts short', () => {
   })
 })
 
+// The allocator's package 15 (docs/design/2026-11-11-swarm-allocator/BUILD.md). The first version's price read a window's
+// need from its present rate and its tasks in hand, and its critique found it swung where a window holds three to eight
+// large tasks: one starting or ending moved it over its whole range (window-price.mts beside BUILD.md runs the case).
+describe('a subscription window\'s price (schedule.ts priceOf)', () => {
+  const window = (left: number, resetsAt: number, every: number | null = 300) => ({ name: '5-hour', left, resetsAt, every })
+  const sonnet = (account: string) => [mode({ model: 'sonnet', cost: 2, account })]
+  // Short is ahead of its pace: 10 of room and 270 minutes to its reset. Spare would lapse: 60 of room and 15 minutes.
+  // Unknown reports no window.
+  const short = { id: 'short', reserve: 20, windows: [window(30, 270)] }
+  const spare = { id: 'spare', reserve: 20, windows: [window(80, 15)] }
+  const unknown = { id: 'unknown', reserve: 20, windows: [] }
+  const small = task('t', { minutes: 60, spend: { '5-hour': 6 } })
+  const sure = { budgetMs: 60_000 }
+
+  it('is next to nothing where the room would lapse before the reset, a half on its pace, and nears 1 as the room runs out', () => {
+    // Just refilled, and half way on its pace: the need to the reset is the room.
+    expect(priceOf(window(100, 300), 20, 0)).toBe(0.5)
+    expect(priceOf(window(60, 150), 20, 0)).toBe(0.5)
+    expect(priceOf(window(60, 1_150), 20, 1_000)).toBe(0.5)
+    // A weekly window half way on its pace, by its own period.
+    expect(priceOf(window(60, 5_040, 10_080), 20, 0)).toBe(0.5)
+    // 60 of room, 15 minutes: the even pace would spend 4 of it. 10 of room, 270 minutes: it would spend 72.
+    expect(priceOf(spare.windows[0]!, 20, 0)).toBeCloseTo(4 / 64, 12)
+    expect(priceOf(short.windows[0]!, 20, 0)).toBeCloseTo(72 / 82, 12)
+    expect(priceOf(window(100, 1), 20, 0)).toBeLessThan(0.004)
+    // At its person's reserve, under it, and all of it reserved: nothing to spend.
+    expect(priceOf(window(20, 270), 20, 0)).toBe(1)
+    expect(priceOf(window(5, 270), 20, 0)).toBe(1)
+    expect(priceOf(window(100, 270), 100, 0)).toBe(1)
+  })
+
+  it('prices a window it cannot place on its pace as one on it, never as unused', () => {
+    // No known period; a reset that has passed.
+    expect(priceOf(window(100, 300, null), 20, 0)).toBe(0.5)
+    expect(priceOf(window(100, 0), 20, 0)).toBe(0.5)
+    expect(priceOf(window(100, 990), 20, 1_000)).toBe(0.5)
+  })
+
+  it('counts a task\'s spend at it in the plan\'s cost: of two builders as fast, the one whose window would lapse gets the task', () => {
+    const p = problem({ accounts: [short, spare], builders: [builder('a', { modes: sonnet('short') }), builder('b', { modes: sonnet('spare') })], tasks: [small] })
+    const { plan } = solve(p, sure)
+    expect(at(plan, 't')).toMatchObject({ builder: 'b', start: 0 })
+    // 6 over 60 minutes: 1.5 before Spare's reset at its price, 4.5 after at a window just refilled.
+    expect(plan.priced).toBeCloseTo(1.5 * 4 / 64 + 4.5 * 0.5, 12)
+    const onShort = schedule(p, choice(['t'], { t: 'a' }))
+    expect(onShort.priced).toBeCloseTo(6 * 72 / 82, 12)
+    // The score counts a percent at price 1 as a minute of the cheapest model, and nothing else differs between the two.
+    expect(onShort.score - plan.score).toBeCloseTo(onShort.priced - plan.priced, 6)
+    // A model that spends no subscription pays none.
+    expect(schedule(problem({ tasks: [small] }), choice(['t'], { t: 'a' })).priced).toBe(0)
+    // The same plan a thousand minutes on, its resets as far off: a window is priced from the plan's now.
+    const later = problem({ now: 1_000, accounts: [short, spare].map(account => ({ ...account, windows: account.windows.map(w => ({ ...w, resetsAt: w.resetsAt + 1_000 })) })),
+      builders: p.builders, tasks: [small] })
+    expect(solve(later, sure).plan.priced).toBeCloseTo(plan.priced, 12)
+  })
+
+  it('sums what every task of a plan spends: two tasks, one on each window', () => {
+    // Short has room for one task, so one goes to each builder, and each is priced at its own window.
+    const full = task('u', { minutes: 60, spend: { '5-hour': 10 } })
+    const p = problem({ accounts: [short, spare], builders: [builder('a', { modes: sonnet('short') }), builder('b', { modes: sonnet('spare') })],
+      tasks: [{ ...full, id: 't', weight: 2 }, full] })
+    const { plan } = solve(p, sure)
+    expect([at(plan, 't'), at(plan, 'u')].map(placed => placed.start)).toEqual([0, 0])
+    expect(new Set([at(plan, 't').builder, at(plan, 'u').builder]).size).toBe(2)
+    // 10 on Spare: 2.5 before its reset at its price, 7.5 after at a window just refilled. 10 on Short at its price.
+    expect(plan.priced).toBeCloseTo(2.5 * 4 / 64 + 7.5 * 0.5 + 10 * 72 / 82, 12)
+  })
+
+  it('counts a window a subscription does not report as unknown: dearer than one that would lapse, cheaper than one running short', () => {
+    const accounts = [short, unknown, spare]
+    const pick = (...ids: string[]) => at(solve(problem({ accounts, builders: ids.map(id => builder(id, { modes: sonnet(id) })), tasks: [small] }), sure).plan, 't').builder
+    expect(pick('short', 'unknown', 'spare')).toBe('spare')
+    expect(pick('short', 'unknown')).toBe('unknown')
+    expect(pick('unknown', 'spare')).toBe('spare')
+    // Its whole spend at a half, at the model's cost as the spend is scaled.
+    const on = (cost: number) => schedule(problem({ accounts, builders: [builder('a', { modes: [mode({ cost, account: 'unknown' })] })], tasks: [small] }), choice(['t'], { t: 'a' })).priced
+    expect([on(2), on(3)]).toEqual([3, 4.5])
+  })
+
+  it('never costs a minute: a builder a minute quicker gets the task, though its window is the one running short', () => {
+    const quick = builder('quick', { modes: sonnet('short'), context: { ui: 0.98 } }), slow = builder('slow', { modes: sonnet('spare') })
+    for (const builders of [[quick, slow], [slow, quick]]) {
+      const { plan, first } = solve(problem({ accounts: [short, spare], builders, tasks: [{ ...small, part: 'ui' }] }), sure)
+      expect([at(plan, 't'), at(first, 't')].map(placed => [placed.builder, placed.end])).toEqual([['quick', 59], ['quick', 59]])
+    }
+  })
+
+  it('does not swing where three to eight large tasks fill a window: a start or an end moves it by a minute\'s spend, no more', () => {
+    for (let large = 3; large <= 8; large++) {
+      // Two builders take large tasks back to back, so many a window: each spends 80/large percent over 600/large minutes,
+      // which is the window's even pace. A pass a minute; a builder that ends a task starts its next one pass later.
+      const spend = 80 / large, minutes = Math.round(600 / large)
+      const builders = [{ end: -1, next: 0 }, { end: -1, next: Math.round(minutes / 2) }]
+      let left = 100, last: number | null = null, atStartOrEnd = 0, otherwise = 0
+      for (let now = 0; now < 300; now++) {
+        let event = false
+        for (const b of builders) {
+          if (b.end >= 0 && b.end <= now) { b.end = -1; b.next = now + 1; event = true }
+          if (b.end < 0 && b.next <= now) { b.end = now + minutes; event = true }
+        }
+        const price = priceOf(window(left, 300 - now), 20, 0)
+        if (last !== null && event) atStartOrEnd = Math.max(atStartOrEnd, Math.abs(price - last))
+        if (last !== null && !event) otherwise = Math.max(otherwise, Math.abs(price - last))
+        last = price
+        left -= builders.filter(b => b.end >= 0).length * spend / minutes
+      }
+      expect(atStartOrEnd).toBeLessThan(0.02)
+      expect(otherwise).toBeLessThan(0.05)
+    }
+  })
+
+  it('gives the next task to the same subscription before and after another large task starts or ends', () => {
+    // Two subscriptions with the same room, Near a little nearer its reset, so a little cheaper. Each task is a third of a room.
+    const near = { id: 'near', reserve: 20, windows: [window(100, 200)] }, far = { id: 'far', reserve: 20, windows: [window(100, 210)] }
+    const large = (id: string) => task(id, { minutes: 240, spend: { '5-hour': 25 } })
+    const builders = (busy: Record<string, number>) => ['f1', 'f2', 'n1', 'n2', 'n3'].map(id => builder(id, { modes: sonnet(id[0] === 'n' ? 'near' : 'far'), busyUntil: busy[id] ?? 0 }))
+    const whose = (p: Problem, id: string) => at(solve(p, sure).plan, id).builder[0]
+    // X and Y wait; then X has started on a builder of Near: Y is Near's before and after.
+    expect(whose(problem({ accounts: [near, far], builders: builders({}), tasks: [large('x'), large('y')] }), 'y')).toBe('n')
+    expect(whose(problem({ accounts: [near, far], builders: builders({ n1: 120 }), tasks: [large('y')] }), 'y')).toBe('n')
+    // A large task on Far is about to end: Y is Near's, as it is once that task has ended (the plan above).
+    expect(whose(problem({ accounts: [near, far], builders: builders({ f1: 1, n1: 120 }), tasks: [large('y')] }), 'y')).toBe('n')
+  })
+})

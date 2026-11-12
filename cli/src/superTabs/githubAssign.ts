@@ -185,7 +185,7 @@ export class GitHubAssign {
     const read = readProblem({ now: this.now(), issues, closed, crew, withReaders, minutes })
     // One whose machine is down keeps its tasks while nobody else can take them: they would only come back to it, labels and
     // comments twice over. One its person is stopping gives them back all the same, for whoever joins.
-    await this.takeBack(repo, issues, (crew.away ?? []).filter(away => away.why !== 'down' || crew.builders.length > 0), undefined, withReaders)
+    await this.takeBack(repo, issues, (crew.away ?? []).filter(away => (away.why !== 'down' && away.why !== 'paused') || crew.builders.length > 0), undefined, withReaders)
     const { short, picks } = await this.plan(project, issues, pulls, crew, read, withReaders)
     // What this pass read, counted: who has nothing after it, what is open, what landed.
     const numbers = numbersOf({ now: this.now(), crew, pm: project.pm, issues, read, short, picks, closed })

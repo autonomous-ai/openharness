@@ -433,28 +433,66 @@ void main() {
   );
 
   testWidgets(
-    'its person deletes an agent: right-click, Delete, confirm, gone',
+    'its person removes an agent: right-click, Remove, confirm, gone',
     (tester) async {
       final c = await show(tester);
-      // Its chat is the one open, as it is when a person deletes the agent they are talking to.
+      // Its chat is the one open, as it is when a person removes the agent they are talking to.
       await tester.tap(key('super-agent-second'));
       await tester.pumpAndSettle();
       expect(c.selectedId, 'agent-chat-second');
       await tester.tap(key('super-agent-second'), buttons: kSecondaryButton);
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Delete'));
+      await tester.tap(find.text('Remove'));
       await tester.pumpAndSettle();
-      expect(find.text('Delete second?'), findsOneWidget);
-      await tester.tap(key('delete-agent-confirm'));
+      expect(find.text('Remove second?'), findsOneWidget);
+      await tester.tap(key('remove-agent-confirm'));
       await tester.pumpAndSettle();
       expect(key('super-agent-second'), findsNothing);
       expect(key('super-agent-third'), findsOneWidget);
-      // The view leaves the deleted agent's chat for another agent's.
+      // The view leaves the removed agent's chat for another agent's.
       expect(c.selectedId, isNot('agent-chat-second'));
       expect(c.selectedId, startsWith('agent-chat-'));
       expect(find.text('Mac Studio · Claude Code'), findsOneWidget);
       // The read mark saves 200 ms after a chat is read.
       await tester.pump(const Duration(milliseconds: 300));
+    },
+  );
+
+  // anh Dee, 2026-11-11: "how do we pause finn while we're fixing bugs rather than finn keep receiving tasks?" and "make it
+  // subtle. right click you see pause". A paused agent's row says so, quietly, and the same right-click resumes it.
+  testWidgets(
+    'its person pauses an agent: right-click, Pause, the row says paused; right-click, Resume',
+    (tester) async {
+      final c = await show(tester);
+      await tester.tap(key('super-agent-second'), buttons: kSecondaryButton);
+      await tester.pumpAndSettle();
+      expect(find.text('Pause'), findsOneWidget);
+      await tester.tap(find.text('Pause'));
+      await tester.pumpAndSettle();
+      final agent = c.snapshot!.agents.firstWhere((a) => a.name == 'second');
+      expect(agent.paused, isTrue);
+      expect(
+        find.descendant(
+          of: key('super-agent-second'),
+          matching: find.text('paused'),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(key('super-agent-second'), buttons: kSecondaryButton);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Resume'));
+      await tester.pumpAndSettle();
+      expect(
+        c.snapshot!.agents.firstWhere((a) => a.name == 'second').paused,
+        isFalse,
+      );
+      expect(
+        find.descendant(
+          of: key('super-agent-second'),
+          matching: find.text('paused'),
+        ),
+        findsNothing,
+      );
     },
   );
 
@@ -464,7 +502,7 @@ void main() {
       await show(tester);
       await tester.tap(key('super-agent-second'), buttons: kSecondaryButton);
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Delete'));
+      await tester.tap(find.text('Remove'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
@@ -475,6 +513,8 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.textContaining('Delete the project first.'), findsOneWidget);
+      // A project's PM gives the work: it is not paused (code review of #4112).
+      expect(find.text('Pause'), findsNothing);
     },
   );
 
