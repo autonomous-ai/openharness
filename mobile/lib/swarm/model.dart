@@ -1182,6 +1182,17 @@ class SuperTabSnapshot {
   bool isProjectLead(String conversationId) =>
       _leadConversations.contains(conversationId);
 
+  /// The project whose PM [chatId], the reader's 1:1 chat with it, waits for while it starts.
+  SuperTabProject? projectWaitingIn(String chatId) =>
+      projects.where((p) => p.pmChatId == chatId).firstOrNull;
+
+  /// [projectId]'s PM: the Lead of its channel, if the Swarm lists that agent.
+  SuperTabAgent? leadOf(String projectId) {
+    final id = conversation(projectById(projectId)?.leadConversationId ?? '')
+        ?.leadId;
+    return id == null ? null : agent(id);
+  }
+
   SuperTabProject? leadProjectForAgent(String agentId) =>
       _projectsByLead[agentId];
 

@@ -640,8 +640,9 @@ class _SwarmPageState extends State<SwarmPage> {
 
   /// New project, from the Swarm switcher: its sheet over Home, for every
   /// Swarm listed, opening on the one [shown] if Home shows one and it is
-  /// not paused (Dee, 11-01); the project it made opens, unless Home or the
-  /// account changed meanwhile, or the project is no longer Home's to list.
+  /// not paused (Dee, 11-01); the PM's own chat its brief went to opens, as
+  /// Desktop's does, unless Home or the account changed meanwhile, or the
+  /// project is no longer Home's to list.
   Future<void> _newProject(
     SwarmSession session,
     List<SwarmListing> shown,
@@ -655,7 +656,11 @@ class _SwarmPageState extends State<SwarmPage> {
     );
     if (made == null || !mounted || _session != session) return;
     if (!swarmHomeListed(session.inbox, made.swarmId, made.projectId)) return;
-    _openProject(context, made.swarmId, made.projectId);
+    unawaited(
+      Navigator.of(context).push(
+        swarmChatRoute(swarmId: made.swarmId, conversationId: made.chatId),
+      ),
+    );
   }
 
   /// A long press on a project: Pin to top, or Unpin. The project taken away

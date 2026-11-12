@@ -279,7 +279,9 @@ void main() {
       },
     );
 
-    for (final openWith in ['replies', 'Reply']) {
+    // Only agents post in the project chat (Swarm v4): its replies line
+    // opens the thread, and no Reply is offered there.
+    for (final openWith in ['replies', 'tap']) {
       testWidgets('$kind $openWith opens the ordinary project thread', (
         tester,
       ) async {
@@ -310,16 +312,18 @@ void main() {
         // A reaction an older server still sends shows nowhere.
         expect(find.text('❤️'), findsNothing);
         expect(find.text('1 reply'), findsOneWidget);
-        if (openWith == 'Reply') {
+        if (openWith == 'tap') {
           await tester.tap(find.text('Offline drafts'));
           await tester.pumpAndSettle();
-          expect(find.text('Reply in thread'), findsOneWidget);
-          await tester.tap(find.byKey(const ValueKey('swarm-reply-line-1')));
-        } else {
-          await tester.tap(
-            find.byKey(const ValueKey('swarm-thread-line-line-1')),
+          expect(find.text('Reply in thread'), findsNothing);
+          expect(
+            find.byKey(const ValueKey('swarm-reply-line-1')),
+            findsNothing,
           );
         }
+        await tester.tap(
+          find.byKey(const ValueKey('swarm-thread-line-line-1')),
+        );
         await tester.pumpAndSettle();
         final page = tester.widget<SwarmThreadPage>(
           find.byType(SwarmThreadPage),
@@ -342,19 +346,17 @@ void main() {
     }
   }
 
-  testWidgets('legacy task without a target opens ordinary inline Reply', (
-    tester,
-  ) async {
+  testWidgets('legacy task without a target offers no inline Reply: only '
+      'agents post in the project chat', (tester) async {
     final fake = taskLineBackend([taskLine(target: null)], target: false);
     await pumpTaskChat(tester, fake);
     expect(find.text('Fix login · working'), findsOneWidget);
     await tester.tap(find.text('Fix login · working'));
     await tester.pumpAndSettle();
-    expect(find.text('Reply'), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('swarm-reply-line-1')));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('swarm-quote-line-1')), findsNothing);
-    expect(find.textContaining('Reply to'), findsOneWidget);
+    expect(find.text('Reply'), findsNothing);
+    expect(find.byKey(const ValueKey('swarm-reply-line-1')), findsNothing);
+    expect(find.textContaining('Reply to'), findsNothing);
+    expect(find.byKey(const ValueKey('swarm-agents-only')), findsOneWidget);
     expect(find.byType(SwarmConversationPage), findsOneWidget);
   });
 

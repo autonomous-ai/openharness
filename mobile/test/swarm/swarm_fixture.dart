@@ -58,6 +58,17 @@ Map<String, dynamic> headData({
   'invitations': <Object>[],
 };
 
+/// The Swarm's head with [conversationId] as its project's channel, where
+/// only agents post (Swarm v4, backend commands.ts `postable`).
+Map<String, dynamic> channelHead(String conversationId) => headData(
+  projects: [
+    {
+      ...(headData()['projects'] as List).single as Map<String, dynamic>,
+      'leadConversationId': conversationId,
+    },
+  ],
+);
+
 Map<String, dynamic> person(String id, {String role = 'owner'}) => {
   'id': id,
   'email': '$id@example.com',
