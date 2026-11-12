@@ -351,6 +351,12 @@ line for each (`[agent-cleanup] closed kid (3f2a9c1e): …`).
   restore writes nothing a conversation's time is read from, and a child the person resumed to read was closed again
   within a minute (the review of #1234). So the cleanup closes nothing in its first half hour after it starts, and an
   engine that keeps no dated transcript (only Claude Code and Codex declare one) is never closed for being idle.
+  Nor one that still runs background commands: `closeStarted` answers `SESSION_NOT_IDLE` with `backgroundCommands`,
+  logged once (`[agent-cleanup] left kid (3f2a9c1e) open: 2 background commands running`) and asked again five
+  minutes later, until it has sat two hours (`BACKGROUND_CLOSE_MS`) after its last answer: then it is closed whatever
+  runs, and the log line carries the count (`…, with 2 background commands running. Its conversation is kept.`). An
+  agent often leaves a dev server or a watcher running on purpose, and a stale Hermes entry never ends. Only the
+  cleanup's link can pass that ceiling (`closeStarted`'s `pastCeiling`); a window's or the phone's Close is unchanged.
 - **Never the person's.** Neither touches a harness the person typed or pasted into from a window or the phone (a
   `message` frame, or terminal input that is more than what the terminal sends by itself: focus, its attributes, the
   mouse, `lib/typedInput.ts`). It is theirs from then on, kept in `<data>/agent-cleanup.json` across restarts. A harness

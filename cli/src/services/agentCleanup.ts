@@ -12,7 +12,10 @@
  *   `LOOK_EVERY_MS`, by when its conversation last moved (`CoreApi.agents.lastActivity`), so a look costs no screen
  *   read until one has been quiet that long. Its process starting again counts as moving: a resume writes nothing a
  *   conversation's time is read from, and a harness the person resumed to read its answer was closed again within a
- *   minute (the review of #1234).
+ *   minute (the review of #1234). Nor one that still runs background commands (a dev server, a test watcher), which the
+ *   core refuses with their count (`SESSION_NOT_IDLE`, `backgroundCommands`), said once: until it has sat
+ *   `BACKGROUND_CLOSE_MS` after its last answer, when it is closed whatever runs. An agent often leaves a server or a
+ *   watcher running on purpose and a stale Hermes entry never ends, so without a ceiling it would stay open for ever.
  * - **Never the person's.** Neither touches a harness the person typed or pasted into from a window or the phone: it is
  *   theirs from then on, and kept so in `<data>/agent-cleanup.json` across restarts. A harness the person started is
  *   never one this may close: the core refuses (`CoreApi.agents.closeStarted`).
@@ -30,6 +33,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { Ledger, ledgerPath } from '../agentClient/ledger.js'
 import type { AgentCleanupPort, CoreApi, CorePorts } from '../core/api.js'
+import { backgroundSaid } from '../lib/backgroundSaid.js'
 import type { AgentCloseResult } from '../lib/closeAgentService.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { createMessagesRpc } from '../messages/rpc.js'
@@ -37,6 +41,8 @@ import { createHachiHandOver } from './hachiHandOver.js'
 
 /** How long a harness another agent started may sit idle after its last answer before it is closed. */
 export const IDLE_CLOSE_MS = 30 * 60_000
+/** How long one that still runs background commands may sit after its last answer before it is closed whatever runs. */
+export const BACKGROUND_CLOSE_MS = 2 * 60 * 60_000
 /** How often the harnesses agents started are looked at. */
 export const LOOK_EVERY_MS = 60_000
 /** How long one that would not close (working after all, waiting for the person) is left before it is asked again. */
@@ -103,6 +109,8 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
   const askAgainAt = new Map<string, number>()
   /** The ones whose close failed for more than their state, said once each. */
   const said = new Set<string>()
+  /** The ones left open for their background commands, said once each. */
+  const leftOpen = new Set<string>()
   /** When each run of a harness was first seen here: one seen since less than IDLE_CLOSE_MS is not closed, whatever
    *  its conversation says. A cleanup that just started has seen every run just now, so it closes nothing for its
    *  first half hour: not the harnesses the person typed into before it kept them (`joined`). */
@@ -131,13 +139,16 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
     }
   }
 
-  /** Closes [s] as the core lets this; a close done is said. */
-  const close = async (s: RegisteredSession, mode: 'idle' | 'now', why: string): Promise<AgentCloseResult> => {
+  /** Closes [s] as the core lets this, whatever background commands it runs once [pastCeiling]; a close done is said. */
+  const close = async (s: RegisteredSession, mode: 'idle' | 'now', why: string, pastCeiling = false): Promise<AgentCloseResult> => {
     // Recheck after an activity read: a shared team may have adopted this agent
     // while cleanup was waiting. This is independent of visible terminal panes.
     if (retainedHarnesses(core.dataDir).has(s.agentId)) return { error: 'SESSION_RETAINED' }
-    const result: AgentCloseResult = await (core.agents.closeStarted?.(s.agentId, mode) ?? Promise.resolve({ error: 'UNSUPPORTED' }))
-    if (result.closed) log(`[agent-cleanup] closed ${label(s)}: ${why}. Its conversation is kept.`)
+    // The ceiling is passed only when reached, so a core from before it is asked as it always was.
+    const closing = pastCeiling ? core.agents.closeStarted?.(s.agentId, mode, true) : core.agents.closeStarted?.(s.agentId, mode)
+    const result: AgentCloseResult = await (closing ?? Promise.resolve({ error: 'UNSUPPORTED' }))
+    const running = result.backgroundCommands ?? 0
+    if (result.closed) log(`[agent-cleanup] closed ${label(s)}: ${why}${running > 0 ? `, with ${backgroundSaid(running)}` : ''}. Its conversation is kept.`)
     if (result.closed && deps.closed && !deps.closed(core.dataDir, s.agentId)) {
       log(`[agent-cleanup] could not tell the Swarm it closed ${label(s)}: a task given to it now is lost.`)
     }
@@ -190,6 +201,7 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
       const gone = (id: string) => !live.some((s) => s.agentId === id)
       for (const id of askAgainAt.keys()) if (gone(id)) askAgainAt.delete(id)
       for (const id of said) if (gone(id)) said.delete(id)
+      for (const id of leftOpen) if (gone(id)) leftOpen.delete(id)
       const runs = new Set(live.map(incarnation))
       for (const run of seen.keys()) if (!runs.has(run)) seen.delete(run)
       for (const s of live) if (!seen.has(incarnation(s))) seen.set(incarnation(s), now())
@@ -209,9 +221,14 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
         const quiet = now() - Math.max(last, since)
         if (quiet < IDLE_CLOSE_MS) continue
         const why = `another agent started it, and it has sat idle ${Math.round(quiet / 60_000)} minutes`
-        const result = await close(s, 'idle', why)
+        const result = await close(s, 'idle', why, quiet >= BACKGROUND_CLOSE_MS)
         if (result.closed) continue
         askAgainAt.set(s.agentId, now() + ASK_AGAIN_MS)
+        const running = result.backgroundCommands ?? 0
+        if (running > 0 && !leftOpen.has(s.agentId)) {
+          leftOpen.add(s.agentId)
+          log(`[agent-cleanup] left ${label(s)} open: ${backgroundSaid(running)}`)
+        }
         // Working after all, or waiting for the person: asked again later, nothing to say. Anything else is said once.
         if (result.error !== 'SESSION_NOT_IDLE' && result.error !== 'SESSION_RETAINED' && !said.has(s.agentId)) {
           said.add(s.agentId)

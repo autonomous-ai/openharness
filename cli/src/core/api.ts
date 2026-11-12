@@ -207,9 +207,12 @@ export interface CoreApi {
     summaries(agentIds: string[]): Promise<Record<string, string>>
     /** Close a harness another agent started (`startedBy: agent`) as `agent_close` closes one: its screen saved, its
      *  process stopped, its conversation kept. `idle` refuses one that works, waits for the person or holds a draft
-     *  (`SESSION_NOT_IDLE`); `now` does not. Any other harness is refused (`NOT_AGENT_STARTED`): the agent cleanup
-     *  (services/agentCleanup.ts) closes those, and nothing else. Absent where the core does not let a service close. */
-    closeStarted?(agentId: string, mode: 'idle' | 'now'): Promise<AgentCloseResult>
+     *  (`SESSION_NOT_IDLE`), and one that still runs background commands (with `backgroundCommands`) until
+     *  [pastCeiling], when it is closed whatever runs and the count comes with it; `now` does not. Any other harness is
+     *  refused (`NOT_AGENT_STARTED`): the agent cleanup (services/agentCleanup.ts) closes those, and nothing else. Only
+     *  the cleanup reaches this (from its own process through core/agentCleanupLink.ts), so no client can name the
+     *  ceiling. Absent where the core does not let a service close. */
+    closeStarted?(agentId: string, mode: 'idle' | 'now', pastCeiling?: boolean): Promise<AgentCloseResult>
     /** Close only the recorded native identity started for a Swarm. Missing live sessions are already gone. */
     closeSwarm?(request: { agentId: string; creationId?: string; sessionId?: string; createdAt?: string; expiresAt?: number }): Promise<AgentCloseResult>
     /** Reopen a Swarm Lead whose session is gone, on its own conversation, as a resume does: nothing is typed into it
@@ -2202,12 +2205,13 @@ export function createCoreApi({
       ...swarmAgents?.({ byAgent: id => registry.byAgent(id), stoppedIds: () => stoppedAgents.ids(), closeAgent, resumeAgent, creationStatus }),
       // Decided here, not in the service: whatever the cleanup asks, from its process or this one, the core closes only
       // a harness another agent started, the conversation it reviewed (`agent_close`'s identity), and keeps it.
-      closeStarted: async (agentId, mode) => {
+      closeStarted: async (agentId, mode, pastCeiling) => {
         const session = registry.byAgent(agentId)
         if (!session) return { error: 'AGENT_CHANGED' }
         if (session.startedBy !== 'agent') return { error: 'NOT_AGENT_STARTED' }
         if (!closeAgent) return { error: 'UNSUPPORTED' }
-        return closeAgent({ agentId, sessionId: session.sessionId, createdAt: new Date(session.registeredAt).toISOString(), mode })
+        const background = mode === 'idle' ? { background: pastCeiling === true ? 'count' as const : 'refuse' as const } : {}
+        return closeAgent({ agentId, sessionId: session.sessionId, createdAt: new Date(session.registeredAt).toISOString(), mode, ...background })
       },
       lastActivity: async (agentId) => {
         const session = registry.byAgent(agentId)
