@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -153,37 +153,52 @@ describe('the workflow that checks a goal', () => {
 
 // `harness super-tab goal` alone: what the checkout's goal states, written nowhere (anh Dee's Lou, 2026-11-12, ran it to see).
 describe('a project\'s goal, shown from a checkout', () => {
+  const NONE = 'This checkout states no goal yet: agents/GOAL.md is not in it. Pull main first if another agent may have added '
+    + 'one; if not, ask your person what the project is for, then `harness super-tab goal write` writes agents/GOAL.md and the '
+    + 'workflow that checks it.'
+  const NO_WORKFLOW = 'Its workflow, .github/workflows/goal.yml, is not in this checkout: `harness super-tab goal write` writes it.'
+
   it('says there is none yet, and how to start one once its person says what the project is for, writing nothing', async () => {
     const root = folder()
-    expect(await showGoal(join(root, 'cli'), git(root, 'origin/main'))).toEqual({ ok: true, said: 'This project states no goal yet: '
-      + 'agents/GOAL.md is not in this checkout. Ask your person what the project is for, then `harness super-tab goal write` '
-      + 'writes agents/GOAL.md and the workflow that checks it.' })
+    expect(await showGoal(join(root, 'cli'), git(root, 'origin/main'))).toEqual({ ok: true, said: NONE })
     expect(existsSync(join(root, 'agents'))).toBe(false)
     expect(existsSync(join(root, '.github'))).toBe(false)
+    // The main branch as the checkout knows it.
+    expect((await showGoal(root, git(root, 'origin/trunk'))).said).toContain('Pull trunk first')
   })
 
   it('lists the milestones a goal file states and their checks, and says when its workflow is missing or it states none', async () => {
     const root = folder()
     mkdirSync(join(root, 'agents'))
     writeFileSync(join(root, 'agents/GOAL.md'), GOAL_TEXT)
-    expect(await showGoal(root, git(root, null))).toEqual({ ok: true, said: `agents/GOAL.md states no milestone yet. Add a row for each: ${ROW} `
-      + 'Its workflow, .github/workflows/goal.yml, is not in this checkout: `harness super-tab goal write` writes it.' })
+    expect(await showGoal(root, git(root, null))).toEqual({ ok: true, said: `agents/GOAL.md in this checkout states no milestone yet. Add a row for each: ${ROW} ${NO_WORKFLOW}` })
     writeFileSync(join(root, 'agents/GOAL.md'), `${GOAL_TEXT}| Builds | \`npm run build\` |\n| Tests pass | \`npm test\` |\n`)
     mkdirSync(join(root, '.github/workflows'), { recursive: true })
     writeFileSync(join(root, '.github/workflows/goal.yml'), goalWorkflow('main'))
-    expect(await showGoal(root, git(root, null))).toEqual({ ok: true, said: 'agents/GOAL.md states 2 milestones, each checked on the '
-      + 'main branch by .github/workflows/goal.yml:\n- Builds: `npm run build`\n- Tests pass: `npm test`' })
+    expect(await showGoal(root, git(root, null))).toEqual({ ok: true, said: 'agents/GOAL.md in this checkout states 2 milestones, each '
+      + 'checked on main by .github/workflows/goal.yml once it lands there:\n- Builds: `npm run build`\n- Tests pass: `npm test`' })
+    // Its workflow there, and no row.
+    writeFileSync(join(root, 'agents/GOAL.md'), GOAL_TEXT)
+    expect(await showGoal(root, git(root, null))).toEqual({ ok: true, said: `agents/GOAL.md in this checkout states no milestone yet. Add a row for each: ${ROW}` })
     // One milestone, its workflow gone.
     rmSync(join(root, '.github'), { recursive: true })
     writeFileSync(join(root, 'agents/GOAL.md'), `${GOAL_TEXT}| Builds | \`npm run build\` |\n`)
-    expect(await showGoal(root, git(root, null))).toEqual({ ok: true, said: 'agents/GOAL.md states 1 milestone, each checked on the '
-      + 'main branch:\n- Builds: `npm run build`\nIts workflow, .github/workflows/goal.yml, is not in this checkout: `harness super-tab goal write` writes it.' })
-    // A file far larger than any goal is not read: no milestone is listed from it.
-    writeFileSync(join(root, 'agents/GOAL.md'), `${GOAL_TEXT}| Builds | \`npm run build\` |\n${'x'.repeat(300 * 1024)}\n`)
-    expect((await showGoal(root, git(root, null))).said).toMatch(/^agents\/GOAL\.md states no milestone yet\./)
+    expect(await showGoal(root, git(root, null))).toEqual({ ok: true, said: 'agents/GOAL.md in this checkout states 1 milestone, '
+      + `checked on main once it lands there:\n- Builds: \`npm run build\`\n${NO_WORKFLOW}` })
   })
 
-  it('reads no goal through a link, and none outside a repository', async () => {
+  // Harness reads the file through GitHub's contents API, about 1 MB of it, and the workflow reads it whole: a longer file
+  // still states its rows, so it is not called empty here (the review of #4205).
+  it('reads a long goal file whole up to what Harness reads, and says so of one past it rather than calling it empty', async () => {
+    const root = folder()
+    mkdirSync(join(root, 'agents'))
+    writeFileSync(join(root, 'agents/GOAL.md'), `${GOAL_TEXT}| Builds | \`npm run build\` |\n\n${'notes '.repeat(60_000)}\n`)
+    expect((await showGoal(root, git(root, null))).said).toContain('states 1 milestone')
+    writeFileSync(join(root, 'agents/GOAL.md'), `${GOAL_TEXT}| Builds | \`npm run build\` |\n\n${'notes '.repeat(200_000)}\n`)
+    expect(await showGoal(root, git(root, null))).toEqual({ ok: false, said: 'agents/GOAL.md is over 1 MB, more than Harness reads of it: shorten it.' })
+  })
+
+  it('reads no goal through a link, of the file or a folder on its way, and none outside a repository', async () => {
     const root = folder(), elsewhere = folder()
     writeFileSync(join(elsewhere, 'GOAL.md'), `${GOAL_TEXT}| Secret | \`cat x\` |\n`)
     mkdirSync(join(root, 'agents'))
@@ -192,6 +207,27 @@ describe('a project\'s goal, shown from a checkout', () => {
     const other = folder()
     mkdirSync(join(other, 'agents/GOAL.md'), { recursive: true })
     expect((await showGoal(other, git(other, null))).said).toBe('agents/GOAL.md is not a plain file (a link or a folder): it was not read.')
+    // A link in place of the agents folder, or of the workflow's folder.
+    const linked = folder()
+    symlinkSync(elsewhere, join(linked, 'agents'))
+    expect(await showGoal(linked, git(linked, null))).toEqual({ ok: true, said: 'agents is a link: agents/GOAL.md was not read.' })
+    const workflows = folder(), outside = folder()
+    mkdirSync(join(workflows, 'agents'))
+    writeFileSync(join(workflows, 'agents/GOAL.md'), `${GOAL_TEXT}| Builds | \`npm run build\` |\n`)
+    mkdirSync(join(outside, 'workflows'))
+    writeFileSync(join(outside, 'workflows/goal.yml'), goalWorkflow('main'))
+    symlinkSync(outside, join(workflows, '.github'))
+    expect((await showGoal(workflows, git(workflows, null))).said).toContain(NO_WORKFLOW)
     expect(await showGoal(root, git(null, null))).toEqual({ ok: false, said: 'This folder is in no git repository: run it in your checkout of the project.' })
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('names a goal file it may not read', async () => {
+    const root = folder()
+    mkdirSync(join(root, 'agents'))
+    writeFileSync(join(root, 'agents/GOAL.md'), GOAL_TEXT)
+    chmodSync(join(root, 'agents/GOAL.md'), 0o000)
+    try {
+      expect(await showGoal(root, git(root, null))).toEqual({ ok: false, said: 'agents/GOAL.md could not be read here (EACCES).' })
+    } finally { chmodSync(join(root, 'agents/GOAL.md'), 0o600) }
   })
 })

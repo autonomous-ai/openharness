@@ -17,7 +17,8 @@
  * line: a train that lands as a merge commit brings its members' commits with it, which were never pushed to the branch and
  * carry no check of it (its second review). A project with no file, or no row, has no goal.
  *
- * Only counts leave here. A milestone's words are the repository's text, and none of them is typed to an agent.
+ * Only counts leave here. A milestone's words are the repository's text, and none of them is typed to an agent by Harness: an
+ * agent reads its own checkout's (`harness super-tab goal`, goalStarter.ts showGoal), as reading the file would give it.
  */
 import type { GitHubReads } from './githubRest.js'
 import { PAGE } from './githubRest.js'
