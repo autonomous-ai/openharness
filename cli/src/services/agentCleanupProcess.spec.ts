@@ -53,7 +53,7 @@ describe('the agent cleanup in its own process', () => {
     const query = vi.fn(async (_query: string, _payload?: Record<string, unknown>) => answer)
     options.onConnected!({ query } satisfies CoreConnection)
     await refresh()
-    expect(query).toHaveBeenLastCalledWith('live', {})
+    expect(query).toHaveBeenCalledWith('live', {})
     expect(api.agents.live().map((s) => s.agentId)).toEqual(['k1'])
     answer = { error: 'UNKNOWN_QUERY' }
     await refresh()
@@ -61,6 +61,18 @@ describe('the agent cleanup in its own process', () => {
     options.onDisconnected!()
     await refresh()
     expect(api.agents.live()).toEqual([])
+  })
+
+  it('learns from the core how its daemon is reached, once, for what it asks of other machines', async () => {
+    const { options, api, refresh } = setup()
+    const query = vi.fn(async (name: string): Promise<Record<string, unknown>> => name === 'daemon'
+      ? { command: 'harness', port: 18473, machineId: 'machine-1', autonomousEnv: 'prod' } : { agents: [] })
+    options.onConnected!({ query } satisfies CoreConnection)
+    await refresh()
+    await refresh()
+    expect(api.daemon.port).toBe(18473)
+    expect(api.daemon.machineId()).toBe('machine-1')
+    expect(query.mock.calls.filter(([name]) => name === 'daemon')).toHaveLength(1)
   })
 
   it('asks the core when a harness last moved and to close it, and takes no answer as none and not closed', async () => {
@@ -112,7 +124,7 @@ describe('the agent cleanup in its own process', () => {
       const log = vi.spyOn(console, 'log').mockImplementation(() => {})
       options.onEvent!({ kind: 'closed', agentId: 'lead' })
       await vi.advanceTimersByTimeAsync(0)
-      expect(query.mock.calls).toEqual([['live', {}], ['closeStarted', { agentId: 'k1', mode: 'now' }]])
+      expect(query.mock.calls).toEqual([['live', {}], ['daemon', {}], ['closeStarted', { agentId: 'k1', mode: 'now' }]])
       expect(log).toHaveBeenCalledWith(expect.stringMatching(/^\[agent-cleanup\] closed a harness \(k1\): the harness that started it was closed/))
       service.stop()
     } finally { vi.useRealTimers() }

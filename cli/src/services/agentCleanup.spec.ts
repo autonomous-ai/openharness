@@ -7,6 +7,8 @@ import type { AgentCloseResult } from '../lib/closeAgentService.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { RETENTION_LAPSE_MS, retainContributions, retainedHarnesses, retentionFile } from '../superTabs/retention.js'
+import { Ledger, ledgerPath } from '../agentClient/ledger.js'
+import { GONE_MS } from './hachiHandOver.js'
 import { ASK_AGAIN_MS, CASCADE_RETRY_MS, CASCADE_TRIES, createAgentCleanup, IDLE_CLOSE_MS, JOINED_MAX, joinedPath, LOOK_EVERY_MS, startAgentCleanup, type AgentCleanupDeps } from './agentCleanup.js'
 
 const NOW = Date.parse('2026-10-12T12:00:00Z')
@@ -253,6 +255,80 @@ describe('closing the harnesses a closed harness started', () => {
     await vi.advanceTimersByTimeAsync((CASCADE_TRIES - 1) * CASCADE_RETRY_MS)
     await tries
     expect(timed.closeStarted).toHaveBeenCalledTimes(CASCADE_TRIES)
+  })
+})
+
+describe('handing what Hachi started to the person, however Hachi closes', () => {
+  // docs/design/2026-11-12-hachi.md: closing Hachi would end the person's builders and reviewers.
+  const HACHI = { machineId: 'machine-1', agentId: 'hachi', name: 'Hachi', engine: 'claude', hachi: true as const }
+  const startedByHachi = (agentId: string, machineId = 'machine-1', at = NOW - MIN) =>
+    new Ledger(ledgerPath(dir)).append({ at, depth: 1, by: HACHI, child: { machineId, agentId, name: agentId } })
+  const hachiKid = (agentId: string) => kid(agentId, { parentAgentId: 'hachi', active: true })
+
+  it('hands them over when Hachi stops, here and on its other machines, instead of closing them', async () => {
+    const sessions = [hachiKid('api'), hachiKid('rev'), kid('lead-kid', { active: true })]
+    startedByHachi('api')
+    startedByHachi('rev')
+    startedByHachi('far', 'machine-2')
+    const tell = vi.fn(async () => ({ handed: true }))
+    const count = vi.fn()
+    const t = setup(sessions, {}, { tell })
+    ;(t.core as { count?: unknown }).count = count
+    t.cleanup.port.closed('hachi')
+    await settle()
+    expect(t.closeStarted).not.toHaveBeenCalled()
+    expect(tell.mock.calls).toEqual([['machine-2', { action: 'handed', row: { at: NOW, from: { machineId: 'machine-1', agentId: 'hachi' }, handed: { machineId: 'machine-2', agentId: 'far' } } }]])
+    const ledger = new Ledger(ledgerPath(dir))
+    expect(ledger.childrenOf({ machineId: 'machine-1', agentId: 'hachi' })).toEqual([])
+    expect(ledger.parentOf({ machineId: 'machine-1', agentId: 'api' })).toBeNull()
+    expect(count.mock.calls).toEqual([['hachi_handed_to_person'], ['hachi_handed_to_person'], ['hachi_handed_to_person']])
+    // Never closed later for sitting idle: they are the person's.
+    t.advance(2 * IDLE_CLOSE_MS)
+    await t.cleanup.look()
+    t.advance(2 * IDLE_CLOSE_MS)
+    await t.cleanup.look()
+    expect(t.closeStarted).not.toHaveBeenCalled()
+    // Another agent's harnesses still close with their starter.
+    t.cleanup.port.closed('lead')
+    await settle()
+    expect(t.closeStarted.mock.calls).toEqual([['lead-kid', 'now']])
+  })
+
+  it('hands them over once Hachi has been gone a while without a stop (its process died, a reboot), never at a blip', async () => {
+    const sessions = [row('hachi', { active: true, dsh: 'autonomous/hachi' }), hachiKid('api')]
+    startedByHachi('api')
+    startedByHachi('far', 'machine-2')
+    let reachable = false
+    const tell = vi.fn(async () => { if (!reachable) throw new Error('asleep'); return { handed: true } })
+    const t = setup(sessions, { api: 0 }, { tell })
+    await t.cleanup.look()
+    // Gone: its process died. A core starting again marks it inactive for a moment, which is no hand-over.
+    sessions[0] = { ...sessions[0], active: false }
+    await t.cleanup.look()
+    t.advance(GONE_MS - 1)
+    await t.cleanup.look()
+    sessions[0] = { ...sessions[0], active: true }
+    t.advance(GONE_MS)
+    await t.cleanup.look()
+    expect(tell).not.toHaveBeenCalled()
+    sessions.splice(0, 1)
+    await t.cleanup.look()
+    t.advance(GONE_MS)
+    await t.cleanup.look()
+    const ledger = new Ledger(ledgerPath(dir))
+    expect(ledger.parentOf({ machineId: 'machine-1', agentId: 'api' })).toBeNull()
+    // The other machine was asleep: still Hachi's there and here, asked again at the next look.
+    expect(ledger.childrenOf({ machineId: 'machine-1', agentId: 'hachi' }).map((r) => r.child.agentId)).toEqual(['far'])
+    expect(t.log).toHaveBeenCalledWith('[hachi] could not hand far to the person on its machine yet: asleep. Asked again at the next look.')
+    reachable = true
+    t.advance(LOOK_EVERY_MS)
+    await t.cleanup.look()
+    expect(ledger.childrenOf({ machineId: 'machine-1', agentId: 'hachi' })).toEqual([])
+    expect(tell).toHaveBeenCalledTimes(2)
+    // Nothing left to hand over: no more asking.
+    t.advance(LOOK_EVERY_MS)
+    await t.cleanup.look()
+    expect(tell).toHaveBeenCalledTimes(2)
   })
 })
 

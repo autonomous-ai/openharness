@@ -14,11 +14,12 @@
  */
 import { answerAgentQuery } from './agentQueries.js'
 import type { AgentCleanupPort, CoreApi } from './api.js'
+import { daemonAddress } from './experimentQueries.js'
 import type { ServiceFrame } from './serviceLinks.js'
 
 type Payload = Record<string, unknown>
 
-export function createAgentCleanupLink(core: Pick<CoreApi, 'agents' | 'usage'>, notify: (frame: ServiceFrame, opts?: { untilDelivered?: boolean }) => boolean) {
+export function createAgentCleanupLink(core: Pick<CoreApi, 'agents' | 'usage' | 'daemon'>, notify: (frame: ServiceFrame, opts?: { untilDelivered?: boolean }) => boolean) {
   /** The harnesses the process was told the person joined: it keeps them itself (services/agentCleanup.ts). */
   const told = new Set<string>()
   const port: AgentCleanupPort = {
@@ -33,6 +34,9 @@ export function createAgentCleanupLink(core: Pick<CoreApi, 'agents' | 'usage'>, 
   }
 
   const answer = async (query: string, payload: Payload): Promise<Payload> => {
+    // How this daemon is reached: what Hachi started on another machine is handed to the person through it
+    // (services/hachiHandOver.ts).
+    if (query === 'daemon') return daemonAddress(core)
     if (query !== 'closeStarted' && query !== 'lastActivity') return answerAgentQuery(core, query, payload)
     const agentId = typeof payload.agentId === 'string' ? payload.agentId : ''
     if (!agentId) return { error: 'INVALID_REQUEST' }

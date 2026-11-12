@@ -54,7 +54,7 @@ import { accountsIn, markerLabel, markerName, markerNameWithId, sharedTabsFor } 
 import { sharedTabIdOf } from './sharedTabsRoster.js'
 import { SharedTabs } from './sharedTabs.js'
 import { carries, checkHandedOver, cleanText, fitsRequest, RateCounter, statusCode, wireMessage, type TabContext } from './tabDelivery.js'
-import { Ledger, ledgerPath, parseStarted } from '../agentClient/ledger.js'
+import { Ledger, ledgerPath, parseHanded, parseStarted } from '../agentClient/ledger.js'
 import { watchSettingFile } from './settingWatch.js'
 import { ActivityIn, ActivityOut, type ActivityNow, type ActivityState } from './tabActivity.js'
 import { cleanSummary } from '../lib/activitySummary.js'
@@ -613,6 +613,23 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
     if (!core.agents.live().some((s) => s.agentId === row.child.agentId)) throw new MessageError('UNKNOWN_HARNESS', 'No such harness on this machine.')
     lineage.append(row)
     return { recorded: true }
+  }
+
+  /**
+   * The Hachi harness on another of the owner's machines closed, and a harness it started here is the person's now
+   * (services/hachiHandOver.ts): kept in this machine's record, so this machine's idle cleanup never closes it and Hachi
+   * may no longer tell it. Only what this machine records that Hachi started, and only by that Hachi; asked twice, once.
+   */
+  function handed(payload: Record<string, unknown>): Record<string, unknown> {
+    const row = parseHanded(JSON.stringify(payload.row ?? null))
+    if (!row || row.handed.machineId !== self() || row.from.machineId === self()) throw new MessageError('INVALID_RECORD', 'That is not a harness another machine started here.')
+    if (lineage.handedAt(row.handed) !== null) return { handed: true }
+    const parent = lineage.parentOf(row.handed)
+    if (!parent?.by.hachi || parent.by.machineId !== row.from.machineId || parent.by.agentId !== row.from.agentId) {
+      throw new MessageError('NOT_YOURS', 'That harness was not started by that Hachi, as this machine records it.')
+    }
+    lineage.append({ ...row, at: Math.max(row.at, parent.at) })
+    return { handed: true }
   }
 
   /** When each starter told, for the rate limit: the same 30 in 10 minutes a `harness send` sender has. */
@@ -1667,7 +1684,7 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
         // A pane is only this machine's to name; a hand-over, its status and its names are another machine's
         // daemon's to ask, over the relay, never a process here's.
         const fromHere = ['send'].includes(String(payload.action))
-        if (['send', 'deliver', 'status', 'who', 'started', 'tab_pub', 'tab_pin', 'tab_pin_changed', 'tab_keychange'].includes(String(payload.action)) && asker.local !== fromHere) {
+        if (['send', 'deliver', 'status', 'who', 'started', 'handed', 'tab_pub', 'tab_pin', 'tab_pin_changed', 'tab_keychange'].includes(String(payload.action)) && asker.local !== fromHere) {
           throw new MessageError(fromHere ? 'LOCAL_ONLY' : 'REMOTE_ONLY', fromHere ? 'harness send runs in a pane on this machine.' : 'Only another of your machines hands messages over.')
         }
         // The person's own windows, here or over the relay, manage shared tabs; another of the owner's machines asks
@@ -1680,6 +1697,7 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
           case 'status': return statusOf(payload)
           case 'who': return whoAre(payload)
           case 'started': return started(payload)
+          case 'handed': return handed(payload)
           // From a pane here, or another of the owner's machines over the relay: `tell` tells them apart.
           case 'tell': return tell(payload, asker.local)
           // A program acting for the person, here or on another of the owner's machines (replyLocal.ts).

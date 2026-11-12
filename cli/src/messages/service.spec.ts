@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -505,6 +505,25 @@ describe('a harness and the harnesses it started', () => {
     expect((await t.ask({ action: 'send', pane: '%1', to: 'abcdef', text: 'x' })).recipients).toEqual([{ name: 'so we have built it, then', state: 'queued' }])
     // Too short to be an id's start.
     expect((await t.ask({ action: 'send', pane: '%1', to: 'abcde', text: 'x' })).error).toBe('UNKNOWN_RECIPIENT')
+  })
+
+  it('hand a harness Hachi started from another machine to the person, as that machine says, once', async () => {
+    const t = setup()
+    const ledger = new Ledger(ledgerPath(root))
+    ledger.append({ at: 5, depth: 1, by: { machineId: 'm2', agentId: 'hachi', name: 'Hachi', engine: 'claude', hachi: true }, child: { machineId: 'm1', agentId: 'web', name: 'web' } })
+    ledger.append({ at: 5, depth: 1, by: { machineId: 'm2', agentId: 'lead', name: 'lead', engine: 'claude' }, child: { machineId: 'm1', agentId: 'api', name: 'api' } })
+    const row = { at: 9, from: { machineId: 'm2', agentId: 'hachi' }, handed: { machineId: 'm1', agentId: 'web' } }
+    expect((await t.ask({ action: 'handed', row }, OWNER_LOCAL)).error).toBe('REMOTE_ONLY')
+    expect((await t.ask({ action: 'handed' }, OWNER_REMOTE)).error).toBe('INVALID_RECORD')
+    expect((await t.ask({ action: 'handed', row: { ...row, handed: { machineId: 'm3', agentId: 'web' } } }, OWNER_REMOTE)).error).toBe('INVALID_RECORD')
+    // Only what Hachi started, as this machine records it, and only by that Hachi.
+    expect((await t.ask({ action: 'handed', row: { ...row, from: { machineId: 'm2', agentId: 'lead' }, handed: { machineId: 'm1', agentId: 'api' } } }, OWNER_REMOTE)).error).toBe('NOT_YOURS')
+    expect((await t.ask({ action: 'handed', row: { ...row, from: { machineId: 'm2', agentId: 'other' } } }, OWNER_REMOTE)).error).toBe('NOT_YOURS')
+    expect(await t.ask({ action: 'handed', row }, OWNER_REMOTE)).toEqual({ handed: true })
+    expect(ledger.parentOf({ machineId: 'm1', agentId: 'web' })).toBeNull()
+    // Asked again (its answer was lost): done once.
+    expect(await t.ask({ action: 'handed', row }, OWNER_REMOTE)).toEqual({ handed: true })
+    expect(readFileSync(ledgerPath(root), 'utf8').split('\n').filter((line) => line.includes('"handed"'))).toHaveLength(1)
   })
 
   it('keep the record of a harness another machine started here, from that machine only', async () => {

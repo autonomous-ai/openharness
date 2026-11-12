@@ -49,6 +49,8 @@ describe('the agent cleanup in its own process, as the core sees it', () => {
     expect(closeStarted).toHaveBeenCalledTimes(2)
     // The live agents, as any light service asks for them.
     expect(await link.answer('live', {})).toEqual({ agents: [row('kid', { startedBy: 'agent' }), row('mine')] })
+    // How this daemon is reached: what Hachi started on another machine is handed over through it.
+    expect(await link.answer('daemon', {})).toEqual({ command: 'harness', port: 18473, machineId: 'machine-1', autonomousEnv: 'prod' })
   })
 
   it('closes nothing, and knows no time, in a core that cannot', async () => {

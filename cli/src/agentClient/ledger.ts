@@ -16,6 +16,11 @@
  * The file is not only appended to: deleting a harness rewrites it without the `Told` lines naming that harness
  * (`forgetTold`), whose `probe` keeps the opening words of a `tell`. Every writer, an append and that rewrite alike,
  * takes one lock, `<file>.lock`: a rewrite in place once lost a line appended during it (the review of #1180).
+ *
+ * A harness the Hachi harness started is handed to the person when Hachi closes, however it closes
+ * (docs/design/2026-11-12-hachi.md, "What Hachi started never closes with it"): a `Handed` line says so, and from it on
+ * the harness has no starter here, so neither the cascade nor the idle cleanup closes it (services/agentCleanup.ts) and
+ * Hachi may no longer tell or close it. Older readers skip that line too.
  */
 import { appendFileSync, closeSync, constants, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -61,6 +66,13 @@ export interface Told {
   by: LedgerMember
   told: LedgerMember
   probe: string
+}
+
+/** [handed], which [from] started, became the person's at [at]: a start of it before then is not [from]'s any more. */
+export interface Handed {
+  at: number
+  from: LedgerMember
+  handed: LedgerMember
 }
 
 /** How long a pending line is asked after. An install ends within twenty minutes (engines/kit/nativeInstall.ts). */
@@ -169,10 +181,18 @@ export function parseTold(line: string): Told | null {
   return { at: v.at, by: { machineId: by.machineId, agentId: by.agentId }, told: { machineId: told.machineId, agentId: told.agentId }, probe: v.probe }
 }
 
+export function parseHanded(line: string): Handed | null {
+  let v: Record<string, unknown>
+  try { v = JSON.parse(line) } catch { return null }
+  if (!v || typeof v !== 'object' || typeof v.at !== 'number' || !member(v.from) || !member(v.handed)) return null
+  const from = v.from as unknown as LedgerMember, handed = v.handed as unknown as LedgerMember
+  return { at: v.at, from: { machineId: from.machineId, agentId: from.agentId }, handed: { machineId: handed.machineId, agentId: handed.agentId } }
+}
+
 const same = (a: LedgerMember, b: LedgerMember): boolean => a.machineId === b.machineId && a.agentId === b.agentId
 
 export class Ledger {
-  private cache: { key: string; rows: Started[]; pending: Pending[]; closed: Closed[]; told: Told[] } | null = null
+  private cache: { key: string; rows: Started[]; pending: Pending[]; closed: Closed[]; told: Told[]; handed: Handed[] } | null = null
   constructor(readonly path: string, private readonly lockWaitMs = LEDGER_LOCK_WAIT_MS) {}
 
   /** Where the older lines went when the file passed its size. */
@@ -182,11 +202,11 @@ export class Ledger {
    *  only when either changed. */
   all(): Started[] { return this.read().rows }
 
-  private read(): { rows: Started[]; pending: Pending[]; closed: Closed[]; told: Told[] } {
+  private read(): { rows: Started[]; pending: Pending[]; closed: Closed[]; told: Told[]; handed: Handed[] } {
     const files = [this.previous, this.path].map((path) => { try { const st = statSync(path); return { path, key: `${st.mtimeMs}:${st.size}` } } catch { return null } })
     const key = files.map((f) => f?.key ?? '-').join('|')
     if (this.cache?.key === key) return this.cache
-    const rows: Started[] = [], pending: Pending[] = [], closed: Closed[] = [], told: Told[] = []
+    const rows: Started[] = [], pending: Pending[] = [], closed: Closed[] = [], told: Told[] = [], handed: Handed[] = []
     for (const file of files) {
       if (!file) continue
       let text = ''
@@ -200,14 +220,16 @@ export class Ledger {
         const close = parseClosed(line)
         if (close) { closed.push(close); continue }
         const tell = parseTold(line)
-        if (tell) told.push(tell)
+        if (tell) { told.push(tell); continue }
+        const over = parseHanded(line)
+        if (over) handed.push(over)
       }
     }
-    this.cache = { key, rows, pending, closed, told }
+    this.cache = { key, rows, pending, closed, told, handed }
     return this.cache
   }
 
-  append(row: Started | Pending | Closed | Told): void {
+  append(row: Started | Pending | Closed | Told | Handed): void {
     this.locked(() => {
       appendFileSync(this.path, `${JSON.stringify(row)}\n`, { mode: 0o600 })
       // Past its size the file becomes the previous one, by a rename: a reader sees each line in one file or the other.
@@ -281,17 +303,30 @@ export class Ledger {
     if (!this.parentOf(row.child)) this.append(row)
   }
 
-  /** The line that says who started [m], or null when the person did. */
+  /** The line that says who started [m], or null when the person did, or it was handed to them since. */
   parentOf(m: LedgerMember): Started | null {
-    return this.all().findLast((row) => same(row.child, m)) ?? null
+    const row = this.all().findLast((each) => same(each.child, m)) ?? null
+    return row && !this.handedSince(row) ? row : null
   }
 
-  /** The harnesses [m] started, newest last. */
+  /** The harnesses [m] started and still has, newest last: none handed to the person since. */
   childrenOf(m: LedgerMember): Started[] {
     // One a harness, its latest line: two verbs recording the same start at once (`record`) both write it, and a child
     // counted twice met the limits early and matched no name (two rows for one).
     const children = new Map(this.all().filter((row) => same(row.by, m)).map((row) => [`${row.child.machineId}/${row.child.agentId}`, row]))
-    return [...children.values()].sort((a, b) => a.at - b.at)
+    return [...children.values()].filter((row) => !this.handedSince(row)).sort((a, b) => a.at - b.at)
+  }
+
+  /** When [m] was handed to the person, or null while the start recorded last for it is still its starter's. */
+  handedAt(m: LedgerMember): number | null {
+    const row = this.all().findLast((each) => same(each.child, m))
+    const handed = this.read().handed.findLast((each) => same(each.handed, m))
+    return handed && (!row || handed.at >= row.at) ? handed.at : null
+  }
+
+  /** Whether [row]'s child was handed to the person at or after [row]'s start, by the harness that started it. */
+  private handedSince(row: Started): boolean {
+    return this.read().handed.some((each) => same(each.handed, row.child) && same(each.from, row.by) && each.at >= row.at)
   }
 
   /** When [by] last closed [m] with `harness close`, or null when it did not. */
