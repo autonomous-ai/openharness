@@ -118,7 +118,7 @@ export const TOOLS: Tool[] = [
   },
   {
     name: 'harness_wait',
-    description: `Wait until harnesses stop working, then say each one's state. Waits up to timeout_seconds (${WAIT_DEFAULT_S} by default); if they are still working then, call it again.`,
+    description: `Wait until harnesses stop working and the background commands they started have ended, then say each one's state. Waits up to timeout_seconds (${WAIT_DEFAULT_S} by default); if they are still working then, call it again.`,
     inputSchema: schema({
       names: { type: 'array', items: { type: 'string' }, minItems: 1, description: 'The harnesses to wait for.' },
       any: { type: 'boolean', description: 'Return when the first one is done, not all.' },
@@ -133,7 +133,7 @@ export const TOOLS: Tool[] = [
   },
   {
     name: 'harness_read',
-    description: 'A harness\'s state and its last turn: what it was asked and what it answered.',
+    description: 'A harness\'s state and its last turn: what it was asked and what it answered, and how many background commands it still runs when idle.',
     inputSchema: schema({ name: { type: 'string' }, chars: { type: 'number', minimum: 1, description: 'How much of the answer (4000 characters by default).' } }, ['name']),
     annotations: { readOnlyHint: true },
     argv: (a) => ['show', str(a.name), ...(typeof a.chars === 'number' && a.chars > 0 ? ['--chars', String(Math.floor(a.chars))] : [])],
