@@ -375,10 +375,13 @@ in what a person must do. Then build the one he picks.
 
 ### 12. Tokens for a task, and the cost on a landed change
 
-**Built, the server's half** (#4109): `backend/src/superTabs/taskTokens.ts` and its two routes, kept 90 days. The
-daemon's half is built and not in a pull request (branch `swarm-task-tokens`): the landing comment would say the
-builder's model, minutes, tokens and fix rounds, public on a public repository, which waits for anh Dee's word. The
-server's half was released in `v1.4.80_backend`.
+**Built** (#4109, the server's half, released in `v1.4.80_backend`; #4143, the daemon's):
+`backend/src/superTabs/taskTokens.ts` and its two routes, kept 90 days; `cli/src/superTabs/taskTokens.ts`, which counts
+each agent's tokens on its person's own computer, between the boundaries its turns' ends and its commands show, and
+writes a row as a piece of work stops. *The landing comment says its builder, model (as code), minutes, tokens and fix
+rounds on a private repository only (GitHub's `visibility: private`; an internal one is read by its whole enterprise);
+on a public one it says none of them, and the rows stay on the server for the project's members (anh Dee's call, 12
+November). Not built: the window's percent at each boundary (package 15's), and the tokens in the day's post.*
 
 **Why.** No saving can be claimed, and no model or price chosen, without it. Each daemon counts its conversations'
 tokens by model and kind (`cli/src/lib/agentTokenUsage.ts`); nothing ties a count to a task. The server's cost

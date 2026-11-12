@@ -286,6 +286,14 @@ Future<List<SuperTabController>> _show(
   await mouse.addPointer(location: Offset.zero);
   addTearDown(mouse.removePointer);
   await mouse.moveTo(tester.getCenter(find.byKey(_Gallery.goalHovered)));
+  // One browser is being stopped, as a person presses its Stop.
+  await tester.tap(
+    find.descendant(
+      of: find.byKey(const ValueKey('gallery-browser-faye-stopping')),
+      matching: find.byKey(const ValueKey('swarm-browser-stop')),
+    ),
+  );
+  await tester.pump();
   // Its folder's files start folded; AGENTS.md is opened, as a person clicks it, and CLAUDE.md stays folded.
   await tester.tap(find.byKey(const ValueKey('swarm-shared-row-0')));
   await tester.pump();
@@ -951,7 +959,7 @@ class _Gallery extends StatelessWidget {
           ),
           section(
             'browser-bar',
-            'Browser in an agent\'s bar, plain, open and running; its panel off, running and failed',
+            'Browser in an agent\'s bar, plain, open and running; its panel off, running, failed and stopping',
             [
               Row(
                 children: [
@@ -967,8 +975,14 @@ class _Gallery extends StatelessWidget {
                 spacing: 16,
                 runSpacing: 8,
                 children: [
-                  for (final agent in ['faye-off', 'faye-ready', 'faye-failed'])
+                  for (final agent in [
+                    'faye-off',
+                    'faye-ready',
+                    'faye-failed',
+                    'faye-stopping',
+                  ])
                     SizedBox(
+                      key: ValueKey('gallery-browser-$agent'),
                       width: 340,
                       height: 230,
                       child: BrowserPanel(
@@ -1123,7 +1137,7 @@ class _BrowserSettingsApp extends AppNotifier {
         authSession: AuthSession(),
         configStore: null,
       ) {
-    // Her computer, with one agent's browser off, one's running and one's whose Podman is down.
+    // Her computer, with one agent's browser off, one's running, one's whose Podman is down, and one's she is stopping.
     const machine = Machine(
       machineId: 'm',
       authMode: MachineAuthMode.remote,
@@ -1148,8 +1162,19 @@ class _BrowserSettingsApp extends AppNotifier {
           engine: 'claude',
           browser: AgentBrowser(state: 'failed', error: 'podman_down'),
         ),
+        Agent(
+          id: 'faye-stopping',
+          name: 'Faye',
+          engine: 'claude',
+          browser: AgentBrowser(state: 'ready'),
+        ),
       ];
   }
+
+  /// A Stop her computer has taken and not yet finished: the browser is still on.
+  @override
+  Future<void> agentBrowserStop(String machineId, String agentId) =>
+      Completer<void>().future;
 
   /// The running browser's stream, opened as soon as it is asked for.
   @override
