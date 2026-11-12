@@ -514,6 +514,7 @@ void main() {
   testWidgets('Stop is an icon in the header in every state but off', (
     tester,
   ) async {
+    final semantics = tester.ensureSemantics();
     for (final browser in [
       const AgentBrowser(state: 'setup', step: 'installing'),
       const AgentBrowser(state: 'starting'),
@@ -524,8 +525,17 @@ void main() {
       app.asked.clear();
       await show(tester, browser);
       expect(key('swarm-browser-stop'), findsOneWidget, reason: browser.state);
-      // An icon as the gear is, named by its tooltip, with no word in the header.
+      // An icon as the gear is, named by its tooltip to a screen reader too, with no word in the header.
       expect(find.byTooltip('Stop'), findsOneWidget);
+      expect(
+        tester.getSemantics(
+          find.descendant(
+            of: key('swarm-browser-stop'),
+            matching: find.byType(IconButton),
+          ),
+        ),
+        containsSemantics(tooltip: 'Stop', isButton: true),
+      );
       expect(find.text('Stop'), findsNothing);
       expect(
         tester.getSize(key('swarm-browser-stop')),
@@ -543,6 +553,7 @@ void main() {
     }
     await show(tester, null);
     expect(key('swarm-browser-stop'), findsNothing);
+    semantics.dispose();
   });
 
   testWidgets('the panel closes from its ×', (tester) async {

@@ -578,12 +578,13 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   setup; Cancel does nothing.
 - **Browser panel** (`BrowserPanel`, `browser/browser_panel.dart`). The agent's
   own Chrome, beside its chat or in its place as the other panes. Its header is
-  `Browser` in 13 medium, then Stop (`AppIcons.square`, tooltip `Stop`, an
-  `AppIconButton` as the gear is, there in every state while the browser is
-  on, a failed one too, with no confirmation), the gear (`Browser settings`, which opens them in the panel,
-  off too), Paste (`AppIcons.clipboardPaste`, which sends the clipboard's
-  text, only while the screen shows) and ×. × only hides the panel: the
-  browser runs on. Off, one centred line in 13, `A sandboxed Chrome the agent
+  `Browser` in 13 medium, then Stop (`AppIcons.circleStop`, tooltip `Stop`,
+  an `AppIconButton` as the gear is, never a bare square, which is an
+  unticked box and Maximize; there in every state while the browser is on, a
+  failed one too, with no confirmation), the gear (`Browser settings`, which
+  opens them in the panel, off too), Paste (`AppIcons.clipboardPaste`, which
+  sends the clipboard's text, only while the screen shows) and ×. × only
+  hides the panel: the browser runs on. Off, one centred line in 13, `A sandboxed Chrome the agent
   drives`, and the blue `Start` under it. Ready, the screen fills the panel:
   the bundled noVNC page in the native webview, which the person uses as the
   agent does. It shows Chrome's window at 1:1, and the window follows the
@@ -621,15 +622,17 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   label in a 96 column and its control: `Time zone` (a field, `Auto` when
   empty), `Language`, `Screen` (three portrait sizes, `1080 × 1920` the
   default, as the panel is taller than wide, then five landscape ones,
-  `1920 × 1080` first), `Human input`
-  (a ticked square, as Worktree's, never a blue switch: blue is Save's, and
-  the speed beside it, dimmed while off). `Advanced` (a quiet pill with a
+  `1920 × 1080` first; a size only a newer computer offers is kept, last),
+  `Human input` (a ticked square, as Worktree's, never a blue switch: blue is
+  Save's, and the speed beside it, dimmed while off). `Advanced` (a quiet pill with a
   right chevron, down when open) holds `Device`, off by default, `GPU, CPU,
   memory` beside it in faint, and when on four fields for what to report.
   Save waits for a change and for every field to be valid. A failure is one
   12 grey line under the header: `Only its owner can open this browser`,
-  `Reconnect this machine to open its browser`, or for a save the machine
-  refused, `Browser settings weren't saved. Check them and save again.`
+  `Reconnect this machine to open its browser`, `Update Harness on Mac
+  Studio for this screen` when an older computer refuses a portrait screen,
+  or for another save the machine refused, `Browser settings weren't saved.
+  Check them and save again.`
 - **Agent face.** An agent with no chosen picture wears a face
   (`SuperTabAvatarFace`, `avatar_art.dart`) in rows, cards and chat:
   a round disc with a soft top-to-bottom fill, two eyes and a small smile.

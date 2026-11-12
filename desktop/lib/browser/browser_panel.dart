@@ -414,9 +414,10 @@ class _BrowserPanelState extends State<BrowserPanel> {
                   ),
                 ),
                 if (_browser != null)
+                  // Not a bare square: that is an unticked box in its settings and Maximize in the window's bar.
                   AppIconButton(
                     key: const ValueKey('swarm-browser-stop'),
-                    icon: AppIcons.square,
+                    icon: AppIcons.circleStop,
                     tooltip: 'Stop',
                     onPressed: _stop,
                   ),
