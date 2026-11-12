@@ -220,7 +220,7 @@ import { createDeliveries } from './deliveries.js'
 import { createTerminalWatch } from './terminalWatch.js'
 import { createSharingLink } from './sharingLink.js'
 import { createAgentSettingsSync, createExperimentHooks, wakeExperiments } from './experiments.js'
-import { answerExperimentQuery, answerMachineAddonsQuery, createForExperiment, creationForExperiment } from './experimentQueries.js'
+import { answerExperimentQuery, answerDaemonQuery, createForExperiment, creationForExperiment } from './experimentQueries.js'
 import { answerConnectorsQuery } from './connectorsQueries.js'
 import { answerSharedMachinesQuery } from './sharedMachinesQueries.js'
 import { inlineSharedMachinesPort } from '../lib/sharedMachinesPort.js'
@@ -1684,7 +1684,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       ?? (service === 'messages' ? await messagesLink.answer(query, payload) : null)
       ?? await answerConnectorsQuery(coreApi, service, query, payload)
       ?? await answerSharedMachinesQuery(sharedMachinesAccount, service, query, payload)
-      ?? answerMachineAddonsQuery(coreApi, service, query)
+      ?? answerDaemonQuery(coreApi, service, query)
       ?? await answerExperimentQuery(coreApi, experiments, service, query, payload)
       ?? await terminalWatch.answer(service, query, payload)
       ?? (service === 'orchestrator' ? orchestratorLink.answer(query, payload) : null)

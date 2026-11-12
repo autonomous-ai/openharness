@@ -65,7 +65,7 @@ function setup(live: RegisteredSession[]) {
     open: async (machineId) => { const line = new Line(machineId); lines.push(line); return line },
     later: (ms, run) => { const t = { at: clock + ms, run, cancelled: false }; timers.push(t); return () => { t.cancelled = true } },
     every: (_ms, run) => { files.set('every', run); return () => files.delete('every') },
-    watchFile: (path, changed) => { files.set(path, changed); return () => files.delete(path) },
+    watchFile: (path, changed) => { const each = () => changed(); files.set(path, each); return () => { if (files.get(path) === each) files.delete(path) } },
     refresh: async () => {},
   }
   const service = startHachi(core, deps)
@@ -122,6 +122,53 @@ describe('Hachi\'s wakes, from what its harnesses push', () => {
     self.push('hachi', 'turn_ended', { state: 'idle', subagent: true })
     self.push('hachi', 'turn_ended', { state: 'idle' })
     expect(t.count.mock.calls.map(([m]) => m)).toEqual(expect.arrayContaining(['hachi_wake_done', 'hachi_wake_needs_person', 'hachi_turns_wake', 'hachi_turns_person']))
+    t.service.stop()
+  })
+
+  it('wakes Hachi for a harness it started that was done before it was followed, here or on another machine', async () => {
+    setAgentSettingsForTest(dir, { hachi: true })
+    const live = [hachiRow()]
+    const t = setup(live)
+    await t.look()
+    // Started after the service: working until heard otherwise. Here, it answered before its watch was asked.
+    live.push(row('quick'))
+    new Ledger(ledgerPath(dir)).append({ at: NOW + 1_000, depth: 1, by: { machineId: SELF, agentId: 'hachi', name: 'Hachi', engine: 'claude', hachi: true }, child: { machineId: SELF, agentId: 'quick', name: 'quick' } })
+    new Ledger(ledgerPath(dir)).append({ at: NOW + 1_000, depth: 1, by: { machineId: SELF, agentId: 'hachi', name: 'Hachi', engine: 'claude', hachi: true }, child: { machineId: 'machine-2', agentId: 'far', name: 'far' } })
+    const original = Line.prototype.request
+    Line.prototype.request = async function (type, payload) {
+      if (type === 'agents_list') { this.requests.push([type, payload!]); return { agents: [{ id: 'quick', status: 'active', activity: { state: 'idle' } }, { id: 'other', status: 'stopped' }] } }
+      return original.call(this, type, payload)
+    }
+    const away = async function (this: Line, ids: string[], heard: (agentId: string, event: PushedEvent) => void) {
+      this.watched.push([...ids]); this.heard = heard
+      return { agents: ids.map((agentId) => ({ agentId, state: 'idle' })) }
+    }
+    const before = Line.prototype.harnessWatch
+    Line.prototype.harnessWatch = away
+    try { await t.look() } finally { Line.prototype.request = original; Line.prototype.harnessWatch = before }
+    await t.advance(WAKE_COALESCE_MS)
+    const self = t.lineFor(SELF, 'hachi')
+    expect(self.requests.find(([type]) => type === 'agent_messages')![1].items).toEqual([
+      { name: 'quick', machine: 'studio', state: 'done' }, { name: 'far', machine: 'Mac mini', state: 'done' }])
+    // Asked once, as it was first followed; not at every look.
+    await t.look()
+    expect(t.lines.flatMap((l) => l.requests).filter(([type]) => type === 'agents_list')).toHaveLength(1)
+    t.service.stop()
+  })
+
+  it('watches the ledger once Hachi\'s first start has made it, so a start is followed at once', async () => {
+    setAgentSettingsForTest(dir, { hachi: true })
+    const t = setup([hachiRow(), row('api')])
+    await t.look()
+    expect(t.files.has(ledgerPath(dir))).toBe(true)
+    const before = t.files.get(ledgerPath(dir))
+    startedByHachi('api')
+    await t.look()
+    // Armed again on the file now there: a watch on a missing file hears nothing (messages/settingWatch.ts).
+    expect(t.files.get(ledgerPath(dir))).not.toBe(before)
+    const armed = t.files.get(ledgerPath(dir))
+    await t.look()
+    expect(t.files.get(ledgerPath(dir))).toBe(armed)
     t.service.stop()
   })
 

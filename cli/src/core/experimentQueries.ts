@@ -70,11 +70,16 @@ export function daemonAddress(core: Pick<CoreApi, 'daemon'>): Payload {
   return { command: core.daemon.command, port: core.daemon.port, machineId: core.daemon.machineId(), autonomousEnv: core.daemon.autonomousEnv }
 }
 
-/** What the add-ons of a device that is this machine ask in their own process (services/machineAddonsProcess.ts):
- *  this daemon's address, for the account's machine id. Answered before the experiments' check, which would refuse
- *  it as NOT_AN_EXPERIMENT; any other query of theirs is not answered here. */
-export function answerMachineAddonsQuery(core: Pick<CoreApi, 'daemon'>, service: string, query: string): Payload | null {
-  return service === 'machineAddons' && query === 'daemon' ? daemonAddress(core) : null
+/** The services, not experiments, that ask how this daemon is reached: the add-ons of a device that is this machine
+ *  (services/machineAddonsProcess.ts), for the account's machine id; Hachi's service (services/hachi.ts), which follows
+ *  harnesses here and on the owner's other machines as a tool does; and the agent cleanup, which hands what Hachi
+ *  started on another machine to the person there (services/hachiHandOver.ts). */
+const DAEMON_ASKERS: ReadonlySet<string> = new Set(['machineAddons', 'hachi', 'agentCleanup'])
+
+/** This daemon's address, to those services. Answered before the experiments' check, which would refuse it as
+ *  NOT_AN_EXPERIMENT; any other query of theirs is not answered here. */
+export function answerDaemonQuery(core: Pick<CoreApi, 'daemon'>, service: string, query: string): Payload | null {
+  return DAEMON_ASKERS.has(service) && query === 'daemon' ? daemonAddress(core) : null
 }
 
 /** The answer to an experiment's query, or null when it is not one of these. */

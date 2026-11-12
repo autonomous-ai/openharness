@@ -16,7 +16,7 @@
  * `harness close --now` does; what Hachi started is then the person's (services/hachiHandOver.ts).
  */
 import { hostname } from 'node:os'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { openDaemon, type Daemon, type PushedEvent } from '../agentClient/daemon.js'
 import { Ledger, ledgerPath, type Started } from '../agentClient/ledger.js'
@@ -106,6 +106,10 @@ export function startHachi(core: CoreApi, given: Partial<HachiDeps> = {}): { sto
   let hachi: RegisteredSession | null = null
   let on = false
   let stopped = false
+  /** A harness Hachi started while this service runs was started with work: it is working until heard otherwise, so
+   *  one that is done before its watch was asked still wakes Hachi. Each is seeded once. */
+  const startedAt = deps.now()
+  const seeded = new Set<string>()
 
   const wakes = createHachiWakes({
     now: deps.now, later: deps.later, log: deps.log,
@@ -156,7 +160,11 @@ export function startHachi(core: CoreApi, given: Partial<HachiDeps> = {}): { sto
         for (const each of Array.isArray(answer.agents) ? answer.agents as Array<{ agentId?: unknown; state?: unknown }> : []) {
           if (typeof each.agentId === 'string') heard(each.agentId, { type: 'harness_event', payload: { agentId: each.agentId, state: each.state } })
         }
-      } else if (!await current.line.watch!(ids, heard)) throw new Error('this daemon does not push to tools')
+      } else {
+        if (!await current.line.watch!(ids, heard)) throw new Error('this daemon does not push to tools')
+        // What each is doing now, read once as it is first followed: a change before the watch was asked is not missed.
+        if (current.ids !== named && key !== 'self') await snapshot(current.line, ids, heard)
+      }
       current.ids = named
       current.renewAt = deps.now() + RENEW_MS
     } catch (error) {
@@ -165,6 +173,15 @@ export function startHachi(core: CoreApi, given: Partial<HachiDeps> = {}): { sto
     }
   }
   let names = machineNames(core.dataDir)
+
+  /** This machine's harnesses [ids], as its list says them now, heard as pushed events would say them. */
+  const snapshot = async (line: Daemon, ids: string[], heard: (agentId: string, event: PushedEvent) => void): Promise<void> => {
+    const answer = await line.request('agents_list', {})
+    for (const frame of (answer.agents ?? []) as Array<{ id: string; status?: string; activity?: { state?: string } | null }>) {
+      if (!ids.includes(frame.id)) continue
+      heard(frame.id, frame.status === 'stopped' ? { type: 'agent_deleted', payload: {} } : { type: 'agent_activity', payload: { state: frame.activity?.state } })
+    }
+  }
 
   /** Turned off while Hachi runs: nothing more wakes it, and it is closed, its conversation kept. */
   const off = async (): Promise<void> => {
@@ -187,6 +204,8 @@ export function startHachi(core: CoreApi, given: Partial<HachiDeps> = {}): { sto
 
   const look = async (): Promise<void> => {
     await deps.refresh()
+    // The ledger is made by Hachi's first start, and a watch on a file not there yet hears nothing: armed again once it is.
+    if (!ledgerWatch.armed && existsSync(ledgerPath(core.dataDir))) { ledgerWatch.stop(); ledgerWatch = watchLedger() }
     const was = on
     on = readAgentSettings(core.dataDir).hachi
     if (!on) { if (was) await off(); else teardown(); return }
@@ -205,8 +224,9 @@ export function startHachi(core: CoreApi, given: Partial<HachiDeps> = {}): { sto
     children.clear()
     for (const [machineId, started] of byMachine) {
       for (const r of started.slice(-WATCH_MAX)) {
-        children.set(`${machineId}/${r.child.agentId}`, { key: `${machineId}/${r.child.agentId}`, name: r.child.name || r.child.agentId.slice(0, 8),
-          machine: names(machineId, self), machineId, agentId: r.child.agentId })
+        const child = { key: `${machineId}/${r.child.agentId}`, name: r.child.name || r.child.agentId.slice(0, 8), machine: names(machineId, self), machineId, agentId: r.child.agentId }
+        children.set(child.key, child)
+        if (r.at >= startedAt && !seeded.has(child.key)) { seeded.add(child.key); wakes.heard(child, 'working') }
       }
     }
     await follow('self', self, [hachi.agentId], heardHachi)
@@ -232,9 +252,12 @@ export function startHachi(core: CoreApi, given: Partial<HachiDeps> = {}): { sto
     })().finally(() => { looking = null })
   }
 
+  /** The ledger's watch, and whether its file was there to watch. */
+  const watchLedger = () => ({ armed: existsSync(ledgerPath(core.dataDir)), stop: deps.watchFile(ledgerPath(core.dataDir), request) })
+  let ledgerWatch = watchLedger()
   const unwatch = [
     deps.watchFile(agentSettingsPath(core.dataDir), request),
-    deps.watchFile(ledgerPath(core.dataDir), request),
+    () => ledgerWatch.stop(),
     deps.every(FOLLOW_EVERY_MS, request),
   ]
   request()
