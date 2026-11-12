@@ -4,7 +4,7 @@ import { captureResumeIdentity } from './captureResumeIdentity.js'
 import { isTerminalEngine } from '../engines/types.js'
 import { IdentityReadUnavailable, ObservedConversationUnavailable } from '../engines/kit/identityScan.js'
 import { controlTranscriptEvidence, engineKeepsTranscriptFile } from '../engines/transcriptBindings.js'
-import type { registry as liveRegistry, RegisteredSession } from './registry.js'
+import { withHermesHome, type registry as liveRegistry, type RegisteredSession } from './registry.js'
 import type { StoppedAgentStore } from './stoppedAgents.js'
 import type { AgentRestartCoordinator } from './restartAgent.js'
 import type { TerminalBackend } from './terminalBackend.js'
@@ -145,8 +145,8 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
         throw new AgentStopError('Harness changed while saving its conversation. Try stopping again.')
       }
       const current = registry.resolve(sessionId)!
-      const s = current.sessionId && current.sessionId !== captured.sessionId ? { ...current } : { ...current, sessionId: captured.sessionId,
-        transcriptPath: captured.transcriptPath, hermesHome: captured.hermesHome, boundAt: captured.boundAt, source: captured.source }
+      const s = current.sessionId && current.sessionId !== captured.sessionId ? { ...current } : withHermesHome({ ...current, sessionId: captured.sessionId,
+        transcriptPath: captured.transcriptPath, boundAt: captured.boundAt, source: captured.source }, captured)
       binding = bindingIdentity(current)
       const transcript = !guest && s.sessionId && s.transcriptPath && engineKeepsTranscriptFile(s.engine)
         ? controlTranscriptEvidence(s.engine, s.sessionId, s.transcriptPath, s.codexHome ?? undefined, s.cwd) : undefined

@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { env } from '../config/env.js'
 import { isTerminalEngine } from '../engines/types.js'
-import { atomicWriteJson, projectDisplayName, strictPersistedRow, type RegisteredSession } from './registry.js'
+import { atomicWriteJson, projectDisplayName, strictPersistedRow, withHermesHome, type RegisteredSession } from './registry.js'
 import { readPrivateStateFile, secureStateDirectory, syncStateDirectory } from './secureState.js'
 import { sameProcessIdentity } from './terminalRuntime.js'
 import { conversationKey } from './conversationIdentity.js'
@@ -127,8 +127,8 @@ export class StoppedAgentStore {
       && (!session.hermesHome || session.hermesHome === previous.hermesHome)
       && sameProcessIdentity(session.processIdentity, previous.processIdentity)
       && session.processIdentity!.executable === previous.processIdentity!.executable) {
-      session = { ...session, sessionId: previous.sessionId, transcriptPath: previous.transcriptPath,
-        hermesHome: previous.hermesHome, boundAt: previous.boundAt, source: previous.source }
+      session = withHermesHome({ ...session, sessionId: previous.sessionId, transcriptPath: previous.transcriptPath,
+        boundAt: previous.boundAt, source: previous.source }, previous)
     }
     // With optional readers absent, Stop can capture a path the live row has not learned.
     // Hooks during its checkpoint and the final forget both save that pathless row. They

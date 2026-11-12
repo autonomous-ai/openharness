@@ -9,10 +9,10 @@
  * `agent_recent` answered zero for the life of the agent (openharness#191).
  *
  * ⚠️ **THE SESSION ID IS THE ONLY EVIDENCE THAT NEEDS NO ASSUMPTION.** The obvious fix is to read
- * `HERMES_HOME` off the live process, the way `codexHomeProbe` reads `CODEX_HOME` — and that is done
- * below, because it is free when it works. But whether Hermes exports it for a `-p` session is the
- * engine's business and changes between versions, and a pane the daemon did not create may be gone by
- * the time anyone asks. A session id is unique and its row exists in exactly one store, so "which home
+ * `HERMES_HOME` off the live process, the way `codexHomeProbe` reads `CODEX_HOME` — and
+ * `probeHermesHome` (engines/identities.ts) does, because it is free when it works. But whether Hermes
+ * exports it for a `-p` session is the engine's business and changes between versions, and a pane the
+ * daemon did not create may be gone by the time anyone asks. A session id is unique and its row exists in exactly one store, so "which home
  * holds this session" is answerable by looking, at the cost of one indexed lookup per home, once per
  * agent — the answer is then filled onto the registry row and never asked again (see
  * `RegisteredSession.hermesHome`).
@@ -24,12 +24,10 @@
 import { realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import { env } from '../../config/env.js'
-import { HERMES_HISTORY_ID_RE, HERMES_HOMES, HERMES_PROFILE, HERMES_CONFIG_HOMES, hermesDbPath } from './contract.js'
+import { HERMES_HISTORY_ID_RE, HERMES_HOMES, HERMES_CONFIG_HOMES, hermesDbPath } from './contract.js'
 import { forgetStoreHomes, listStoreHomes } from '../kit/storeHomes.js'
 import { nativeHookHomes } from '../kit/nativeHookHomes.js'
-import { profileFromEnv } from '../kit/processFacts.js'
 import { sqliteReadAll } from '../../lib/sqliteRead.js'
-import type { AgentEngine } from '../types.js'
 
 /** `YYYYMMDD_HHMMSS_<hex>`, or an editor's (ACP) uuid — the shapes `reader.ts` reads history for. */
 const SESSION_ID_RE = HERMES_HISTORY_ID_RE
@@ -93,20 +91,4 @@ export async function findHermesHomeForSession(
     if (result.ok && result.rows.length > 0) return home
   }
   return null
-}
-
-/**
- * The home a live `hermes` process was launched under, read off its environment — the free answer,
- * when the engine offers it. Contract copied from `codexHomeFromEnv`: a path when the process runs
- * under a non-default home, `null` when it runs under this machine's default (or says nothing), and
- * `undefined` from the probe when the process could not be read at all, which must never overwrite
- * what the registry already knows.
- */
-export function hermesHomeFromEnv(
-  engine: AgentEngine,
-  processEnv: Record<string, string>,
-  defaultHome = env.HERMES_HOME,
-): string | null {
-  if (engine !== 'hermes') return null
-  return profileFromEnv(HERMES_PROFILE, processEnv, defaultHome)
 }
