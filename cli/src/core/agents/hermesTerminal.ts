@@ -12,10 +12,8 @@ import { START_SLACK_MS } from '../../lib/sessionRepair.js'
 import type { DiscoveredTerminalAgent } from '../../lib/terminalAgentDiscovery.js'
 import { terminalRouteKey } from '../../lib/terminalRuntime.js'
 import type { TerminalPaneInfo, TerminalRuntimeRef } from '../../lib/terminalTypes.js'
+import { REPAIR_EAGER_ATTEMPTS, REPAIR_RETRY_MS } from './bind.js'
 
-/** The repair's rhythm (bind.ts): a record waiting for its store row is asked about on 24 passes, then once a minute. */
-const EAGER_ASKS = 24
-const ASK_RETRY_MS = 60_000
 /** Agents remembered; past it, those the registry no longer has are dropped, or all (one more read and line each). */
 const MAX_AGENTS = 256
 
@@ -126,7 +124,8 @@ export function createHermesTerminal(deps: HermesTerminalDeps) {
     }
     if (!pass.mayClaim(sessionId)) return 'wait'
     const now = deps.now()
-    if (run.asks >= EAGER_ASKS && now - run.lastAsk < ASK_RETRY_MS) return 'wait'
+    // A record waiting for its store row is asked about in the repair's own rhythm.
+    if (run.asks >= REPAIR_EAGER_ATTEMPTS && now - run.lastAsk < REPAIR_RETRY_MS) return 'wait'
     run.asks += 1
     run.lastAsk = now
     let kind: Awaited<ReturnType<HermesTerminalDeps['kind']>>

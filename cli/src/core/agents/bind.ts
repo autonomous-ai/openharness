@@ -29,13 +29,13 @@ import type { createHermesTerminal } from './hermesTerminal.js'
 import type { DiscoveredTerminalAgent } from '../../lib/terminalAgentDiscovery.js'
 
 /** Between session-binding attempts for a process whose engine store is not resolvable yet. */
-const REPAIR_RETRY_MS = 60_000
+export const REPAIR_RETRY_MS = 60_000
 /** A NEW process is waiting for a session that is about to appear. Muse makes
  *  this concrete — its session is only claimable once the user has typed, because a file with no turn in
  *  it cannot be told apart from the ones muse opens for itself. Backing off a full minute there costs the
  *  FIRST message: the pane answers while web and device show nothing. So keep sweeping for a while first,
  *  then settle into the slow rhythm for processes that will never resolve. */
-const REPAIR_EAGER_ATTEMPTS = 24   // ≈2 min at the 5s sweep
+export const REPAIR_EAGER_ATTEMPTS = 24   // ≈2 min at the 5s sweep
 
 /** What an OpenClaw agent says while its pane shows a screen its TUI cannot work for Harness on. */
 const OPENCLAW_HOLDS = new Set<string>(Object.values(OPENCLAW_SCREEN_HOLDS))
