@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { env } from '../config/env.js'
 import { openLocalWs } from './localTransport.js'
+import { statSync } from 'node:fs'
 import { readdir, readFile, realpath } from 'node:fs/promises'
 import { dirname, isAbsolute, join, posix, resolve, win32 } from 'node:path'
 import { addressOf, atMachineRefusal, EXIT, machineOption, refusalNext, REFUSED_CODES, step, VIA_MCP_ENV } from '../agentClient/commands.js'
@@ -51,6 +52,8 @@ export interface NewArgs {
   acuLimit: number | null
   /** The model to launch with, as the engine names it (`haiku`, `gpt-5.4-mini`); the machine checks it (lib/launchModel.ts). */
   model: string | null
+  /** OpenClaw's `--local` state folder, absolute: its runtime and tools run in the pane's process, on that folder. */
+  local: string | null
   json: boolean
 }
 
@@ -78,6 +81,7 @@ export const NEW_USAGE = [
   '                   harness new codex -- fix the flaky login test',
   '  --name <n>     the harness\'s name until the agent titles its session',
   '  --model <m>    the model it launches with, as the agent names it: haiku, opus, gpt-5.4-mini',
+  '  --local <dir>  OpenClaw only: run it and its tools in this process, on the state folder <dir> (you make it)',
   '  --repo <r>    a cloud coding agent\'s GitHub repository: owner/name or https://github.com/owner/name',
   '                 (Cursor Cloud needs one; Devin Cloud works without)',
   '  --acu-limit <n>  the most ACUs Devin Cloud may spend (1-1000; 5 when left out)',
@@ -94,7 +98,10 @@ const looksLikePath = (word: string, windows: boolean): boolean =>
   word === '.' || word === '..' || word === '~' || /^(\/|~\/|\.\/|\.\.\/)/.test(word)
   || (windows && /^([A-Za-z]:[\\/]|\\\\|~\\|\.\\|\.\.\\)/.test(word))
 
-export function parseNewArgs(argv: string[], env: { cwd: string; home: string; platform?: NodeJS.Platform }): NewArgs {
+/** Whether [path] is a directory on this computer; a link to one is. */
+const isDirectory = (path: string): boolean => { try { return statSync(path).isDirectory() } catch { return false } }
+
+export function parseNewArgs(argv: string[], env: { cwd: string; home: string; platform?: NodeJS.Platform; isFolder?: (path: string) => boolean }): NewArgs {
   const windows = (env.platform ?? process.platform) === 'win32'
   const path = windows ? win32 : posix
   const words: string[] = []
@@ -107,6 +114,7 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string; p
   let repo: string | null = null
   let acuLimit: number | null = null
   let model: string | null = null
+  let local: string | null = null
   let json = false
   const value = (flag: string, index: number): string => {
     const next = argv[index + 1]
@@ -134,6 +142,7 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string; p
       if (!model) throw new NewUsageError('--model needs a value.')
       i++
     }
+    else if (word === '--local') { local = value(word, i); i++ }
     else if (word === '--repo') {
       repo = value(word, i).trim()
       if (!repo) throw new NewUsageError('--repo needs a value.')
@@ -166,6 +175,13 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string; p
       folder = word
     }
     else words.push(word)
+  }
+  if (local !== null) {
+    if (words[0] !== 'openclaw') throw new NewUsageError('--local is for OpenClaw only.')
+    if (machine !== null) throw new NewUsageError('--local runs on this computer only.')
+    // Resolved here, against where it was typed: the daemon's working directory is not the caller's.
+    local = path.resolve(env.cwd, local)
+    if (!(env.isFolder ?? isDirectory)(local)) throw new NewUsageError(`${local} is not a folder.`)
   }
   if ((repo !== null || acuLimit !== null) && !isCloudAgent(words[0])) {
     throw new NewUsageError(`${repo !== null ? '--repo' : '--acu-limit'} is for a cloud agent: harness new devin-cloud ${repo !== null ? '--repo owner/name' : '--acu-limit 10'} -- <task>`)
@@ -209,7 +225,7 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string; p
     if (machine === null) cwd = env.cwd
     else projectName = ''
   }
-  return { agent: words[0] ?? 'claude', machine, cwd, projectName, mode, prompt, name, repo, acuLimit, model, json }
+  return { agent: words[0] ?? 'claude', machine, cwd, projectName, mode, prompt, name, repo, acuLimit, model, local, json }
 }
 
 /** The `agent_create` payload for [args]: the same fields the app's box sends. [baseEngine] is the
@@ -240,6 +256,7 @@ export function newAgentPayload(args: NewArgs, cwd: string | null, baseEngine = 
     ...(args.repo ? { repositoryUrl: args.repo } : {}),
     ...(args.acuLimit !== null ? { acuLimit: args.acuLimit } : {}),
     ...(args.model !== null ? { model: args.model } : {}),
+    ...(args.local !== null ? { openclawLocal: args.local } : {}),
     creationId: randomUUID(),
   }
 }
@@ -475,6 +492,8 @@ function projectExists(args: NewArgs, folder: string | null, at: { local: boolea
 export function daemonSession(deps: Pick<NewCommandDeps, 'port' | 'connect' | 'timeoutMs'>, machineId: string): Promise<{
   request: (type: string, payload: Record<string, unknown>) => Promise<Record<string, unknown>>
   close: () => void
+  /** What the daemon says it can do (localWsServer.ts `LOCAL_TOOL_FEATURES`); none from one older than the list. */
+  features: string[]
 }> {
   return new Promise((resolveSession, rejectSession) => {
     const socket = openLocalWs(env.ADAPTER_DATA_DIR, deps.port, deps.connect)
@@ -498,8 +517,10 @@ export function daemonSession(deps: Pick<NewCommandDeps, 'port' | 'connect' | 't
       try { frame = JSON.parse(data.toString()) } catch { return }
       if (!ready && frame.type === 'connected') {
         ready = true
+        const features = frame.payload?.features
         resolveSession({
           close: () => socket.close(),
+          features: Array.isArray(features) ? features.filter((feature): feature is string => typeof feature === 'string') : [],
           request: (type, payload) => new Promise((done, fail) => {
             const requestId = randomUUID()
             const timer = setTimeout(() => { waiting.delete(requestId); fail(new Error(`Harness did not answer ${type} in time.`)) }, deps.timeoutMs ?? 90_000)
@@ -587,6 +608,10 @@ export async function newCommand(deps: NewCommandDeps): Promise<number> {
     await origin?.check()
     const session = await daemonSession(deps, machineId)
     try {
+      // An older daemon drops the folder it does not know and runs OpenClaw on the shared Gateway, tools and all.
+      if (args.local !== null && !session.features.includes('openclaw-local')) {
+        throw new Error('This Harness daemon is too old for --local. Restart Harness.')
+      }
       let cwd = args.cwd
       if (cwd !== null && (cwd === '~' || cwd.startsWith('~/'))) {
         // Another machine's home: ask it. `fs_list_dir` with no path answers with the home it listed.
