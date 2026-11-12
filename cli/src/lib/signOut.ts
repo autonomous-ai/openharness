@@ -9,7 +9,7 @@
  * sign-in. Every removal is written to harness.log with the command and the processes above it.
  */
 import { execFileSync } from 'child_process'
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readlinkSync, writeFileSync } from 'fs'
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readlinkSync, renameSync, rmSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
 import { env } from '../config/env.js'
 import { clearAuthSession } from './authSession.js'
@@ -142,11 +142,21 @@ export function removeSignIn(reason: string, asked: SignOutAsked, chain: () => r
  *  signed the person out. Never trimmed but by this. */
 export const REMOVALS_FILE = 'sign-in-removals.log'
 const REMOVALS_KEPT = 20
+/** The most of one removal's line kept, in bytes: a process's command line can be any length. */
+const REMOVAL_LINE_MAX = 2_048
 
+/** Written beside the file and renamed over it, so a crash or a second removal at once never leaves it half written (the review
+ *  of #4221); its person's alone, whatever mode a file there had before. */
 function keepRemoval(line: string): void {
-  const file = join(env.ADAPTER_DATA_DIR, REMOVALS_FILE)
+  const file = join(env.ADAPTER_DATA_DIR, REMOVALS_FILE), temporary = `${file}.${process.pid}.tmp`
   try {
+    const kept = Buffer.byteLength(line) > REMOVAL_LINE_MAX ? Buffer.from(line).subarray(0, REMOVAL_LINE_MAX - 3).toString('utf8') + '…' : line
     const before = existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean) : []
-    writeFileSync(file, [...before.slice(-(REMOVALS_KEPT - 1)), line].join('\n') + '\n', { mode: 0o600 })
-  } catch { /* a record, not a gate, as harness.log's line is */ }
+    writeFileSync(temporary, [...before.slice(-(REMOVALS_KEPT - 1)), kept].join('\n') + '\n', { mode: 0o600 })
+    chmodSync(temporary, 0o600)
+    renameSync(temporary, file)
+  } catch {
+    // A record, not a gate, as harness.log's line is.
+    try { rmSync(temporary, { force: true }) } catch { /* nothing was left */ }
+  }
 }

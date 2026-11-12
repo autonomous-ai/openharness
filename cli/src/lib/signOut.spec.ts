@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { describe, expect, it, vi } from 'vitest'
 import { env } from '../config/env.js'
@@ -92,6 +92,21 @@ describe('the removals kept apart from harness.log', () => {
     expect(lines).toHaveLength(20)
     expect(lines[0]).toContain('reason=reset-5 ')
     expect(lines[19]).toContain('reason=reset-24 ')
+  })
+
+  // The review of #4221: a line of any length, a file left world-readable before, and a write cut short each cost the history.
+  it('cuts a line to 2 KB, keeps the file to its person alone, and writes it whole or not at all', () => {
+    const kept = join(env.ADAPTER_DATA_DIR, REMOVALS_FILE)
+    rmSync(kept, { force: true })
+    writeFileSync(kept, 'an earlier removal\n')
+    chmodSync(kept, 0o644)
+    removeSignIn('logout', 'terminal', () => [{ pid: 2, command: 'x'.repeat(10_000) }])
+    const lines = readFileSync(kept, 'utf8').trimEnd().split('\n')
+    expect(lines[0]).toBe('an earlier removal')
+    expect(Buffer.byteLength(lines[1]!)).toBeLessThanOrEqual(2_048)
+    expect(statSync(kept).mode & 0o777).toBe(0o600)
+    // Written beside it and renamed over it: no half-written file, and nothing left beside it.
+    expect(readdirSync(env.ADAPTER_DATA_DIR).filter(name => name.startsWith(`${REMOVALS_FILE}.`))).toEqual([])
   })
 
   it('still removes the sign-in when the kept file cannot be written', () => {

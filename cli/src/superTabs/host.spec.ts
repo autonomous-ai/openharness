@@ -210,24 +210,84 @@ describe('the host tick on the host form', () => {
   })
   // anh Dee's Mac, 2026-11-12: signed out, the host logged "Not signed in. Run `harness login`." twice a second until harness.log
   // reached its cap, and its trim erased the record of what had signed the person out (lib/signOut.ts).
-  it('says once that this computer is signed out, asks next to nothing while it is, and says once that it goes on', async () => {
-    const t = setup(), host = t.open()
-    const working = vi.mocked(t.call).getMockImplementation()!
-    vi.mocked(t.call).mockImplementation(async () => ({ status: 401, body: { success: false, error: { code: 'NOT_SIGNED_IN', message: 'Not signed in. Run `harness login`.' } } }))
-    for (let second = 0; second < 60; second++) {
-      await host.tick(); await host.reconcileStops(); await host.reconcileReceipts(); host.engineSignedIn()
-      await Promise.resolve()
-      t.wait(1_000)
+  describe('signed out', () => {
+    const OUT = 'Not signed in on this computer: this Swarm waits for a sign-in (harness login).'
+    const BACK = 'Signed in again: this Swarm goes on.'
+    const refused = (status: number, code: string) => async () => ({ status, body: { success: false, error: { code, message: 'No.' } } })
+    const lines = (t: ReturnType<typeof setup>) => t.log.mock.calls.map(([line]) => line)
+    const asked = (t: ReturnType<typeof setup>) => vi.mocked(t.call).mock.calls.map(([, path]) => path)
+    /** [seconds] of the daemon's one-second tick, as host.start's interval runs it. */
+    const run = async (t: ReturnType<typeof setup>, host: ReturnType<ReturnType<typeof setup>['open']>, seconds: number) => {
+      for (let second = 0; second < seconds; second++) {
+        await host.tick(); await host.reconcileStops(); await host.reconcileReceipts(); host.engineSignedIn()
+        for (let i = 0; i < 5; i++) await Promise.resolve()
+        t.wait(1_000)
+      }
     }
-    expect(t.log.mock.calls.map(([line]) => line)).toEqual(['Not signed in on this computer: this Swarm waits for a sign-in (harness login).'])
-    // The first pass, then a look after 5, 10 and 20 seconds: four requests in a minute where there were 120 and more.
-    expect(vi.mocked(t.call).mock.calls.length).toBeLessThanOrEqual(4)
-    vi.mocked(t.call).mockImplementation(working)
-    t.wait(5 * 60_000)
-    await host.tick()
-    expect(t.log).toHaveBeenLastCalledWith('Signed in again: this Swarm goes on.')
-    expect(t.log).toHaveBeenCalledTimes(2)
+
+    it('says so once, asks the server nothing while no session is on disk, and goes on within a second of a sign-in', async () => {
+      const t = setup(), session = { there: false }
+      const host = t.open({ sessionThere: () => session.there })
+      const working = vi.mocked(t.call).getMockImplementation()!
+      vi.mocked(t.call).mockImplementation(refused(401, 'NOT_SIGNED_IN'))
+      await run(t, host, 60)
+      expect(lines(t)).toEqual([OUT])
+      // The pass that found it, and nothing after: 62 requests and 120 lines a minute before.
+      expect(asked(t)).toHaveLength(1)
+      vi.mocked(t.call).mockImplementation(working)
+      session.there = true
+      await run(t, host, 2)
+      expect(lines(t)).toEqual([OUT, BACK])
+      expect(asked(t)).toContain('/api/auth/me')
+      // The pass runs as soon as the server has said so.
+      expect(asked(t).slice(asked(t).indexOf('/api/auth/me') + 1).some(path => path.includes('/hosts/'))).toBe(true)
+    })
+
+    // The review of #4221: a pass that resolved from cached rows read as signed in again, while every request still failed.
+    it('says it goes on only once the server has answered, and waits longer each time a session on disk is refused', async () => {
+      const t = setup()
+      const host = t.open({ sessionThere: () => true })
+      const working = vi.mocked(t.call).getMockImplementation()!
+      vi.mocked(t.call).mockImplementation(refused(401, 'UNAUTHORIZED'))
+      await run(t, host, 60)
+      expect(lines(t)).toEqual([OUT])
+      // The pass, then a look at 5, 15 and 35 s: a server that refuses the session is asked less and less often.
+      expect(asked(t).filter(path => path === '/api/auth/me')).toHaveLength(3)
+      vi.mocked(t.call).mockImplementation(working)
+      await run(t, host, 60)
+      expect(lines(t)).toEqual([OUT, BACK])
+    })
+
+    it('looks at once when the server pushes work while it waits, and keeps the push for the pass after', async () => {
+      const t = setup()
+      const host = t.open({ sessionThere: () => true })
+      const working = vi.mocked(t.call).getMockImplementation()!
+      vi.mocked(t.call).mockImplementation(refused(401, 'NOT_SIGNED_IN'))
+      await run(t, host, 2)
+      vi.mocked(t.call).mockImplementation(working)
+      vi.mocked(t.call).mockClear()
+      t.push({ type: 'super_tab_deliveries' } as BackendNotice)
+      for (let i = 0; i < 10; i++) await Promise.resolve()
+      await host.tick()
+      expect(asked(t)[0]).toBe('/api/auth/me')
+      expect(lines(t)).toEqual([OUT, BACK])
+    })
+
+    // The review of #4221: an engine signed in while the account was signed out lost the reset of its cached reading.
+    it('still forgets the engine readings when an engine signs in, and reports nothing to the server', async () => {
+      const t = setup()
+      const host = t.open({ sessionThere: () => false })
+      vi.mocked(t.call).mockImplementation(refused(401, 'NOT_SIGNED_IN'))
+      await host.tick()
+      const reset = vi.spyOn(ContributedMachines.prototype, 'engineSignedIn')
+      vi.mocked(t.call).mockClear()
+      host.engineSignedIn()
+      expect(reset).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(t.call)).not.toHaveBeenCalled()
+      reset.mockRestore()
+    })
   })
+
   // Diego 10-29: a host form whose body timed out after the headers read as '200 OK, {}', so the host paused this machine's
   // Swarm work for a minute behind 'Update Harness'. Through the gateway's real backend helper, it is a timeout that is logged and retried.
   it('logs a feed read that times out after the headers as unreachable and reads again the next second', async () => {
