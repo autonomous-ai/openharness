@@ -1190,7 +1190,9 @@ export async function run(engine, config = {}, { native = false } = {}) {
       codex('compacted', { message: 'Summary of the conversation so far.', replacement_history: [] })
     }
   }
-  const finish = async (text) => {
+  // [thought]: the final message thought first. Claude Code writes each block of a message as a line of its own, each with the
+  // message's stop reason (2.1.322): its thinking, then its text, both `end_turn`, under one message id.
+  const finish = async (text, thought = false) => {
     if (latePrompt) {
       const { release, hooks } = latePrompt
       latePrompt = null
@@ -1198,6 +1200,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
       await hooks
     }
     if (engine === 'claude') {
+      if (thought) claude({ type: 'assistant', message: { id: `msg_${turn}`, role: 'assistant', model: claudeModel, content: [{ type: 'thinking', thinking: 'how to say it' }], stop_reason: 'end_turn' } })
       claude({ type: 'assistant', message: { id: `msg_${turn}`, role: 'assistant', model: claudeModel, content: [{ type: 'text', text }], stop_reason: 'end_turn' } })
     } else {
       codex('event_msg', { type: 'item_completed', item: { type: 'AgentMessage', content: [{ type: 'Text', text }], phase: 'final_answer' } })
@@ -1362,6 +1365,16 @@ export async function run(engine, config = {}, { native = false } = {}) {
         codex('response_item', { type: 'function_call', call_id: id, name: 'exec_command', arguments: JSON.stringify({ cmd: directive[2] }) })
         codex('response_item', { type: 'function_call_output', call_id: id, output: `ran ${directive[2]}` })
       }
+    }
+    // A turn that says what it does, runs a tool, and thinks before its answer, as a Swarm PM's did (Devon, 2026-11-12): its answer is
+    // the text after its last tool, written as Claude Code writes a message that thought first.
+    if (engine === 'claude' && directive?.[1] === 'narrate') {
+      const id = `call_${turn}`
+      claude({ type: 'assistant', message: { id: `msg_${turn}_n`, role: 'assistant', model: claudeModel, content: [{ type: 'text', text: `On it: ${directive[2]}` }], stop_reason: 'tool_use' } })
+      claude({ type: 'assistant', message: { id: `msg_${turn}_n`, role: 'assistant', model: claudeModel, content: [{ type: 'tool_use', id, name: 'Bash', input: { command: directive[2] } }], stop_reason: 'tool_use' } })
+      claude({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: `ran ${directive[2]}` }] } })
+      await finish(`answer ${turn}: ${prompt}`, true)
+      return
     }
     // Codex says what it is about to do in a message of its own, its commentary, ahead of the answer, and its transcript reader leaves
     // such a message out of what the turn said.
