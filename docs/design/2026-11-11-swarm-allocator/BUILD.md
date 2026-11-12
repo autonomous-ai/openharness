@@ -468,7 +468,8 @@ That only the price leaves a person's computer waits for package 16: today the p
 
 ### 16. Offers accepted on the agent's own computer
 
-**Begun**: the server's half (the offer record), not pushed.
+**Built, the server's half** (#NNNN): the offer record and its five routes, `backend/src/superTabs/taskOffers.ts`,
+as [its design](offers.md) says. Until the daemon's half lands nothing calls them, and every task is given by label.
 
 **Why.** A machine takes work only when it has the room, checked where the truth is; a person's quota need not
 leave their computer; a label is set by the one who does the work.

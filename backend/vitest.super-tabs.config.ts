@@ -61,6 +61,7 @@ export default defineConfig({ test: {
     'integration/superTabWipe.test.ts',
     'integration/superTabGithubComments.test.ts',
     'integration/superTabTaskTokens.test.ts',
+    'integration/superTabTaskOffers.test.ts',
     'integration/superTabChatPush.test.ts',
     'integration/superTabRequestReads.test.ts',
     'integration/superTabVoiceMessages.test.ts',
