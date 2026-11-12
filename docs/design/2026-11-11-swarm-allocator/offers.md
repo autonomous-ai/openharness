@@ -51,9 +51,8 @@ out from the fields as it is read; nothing stores a state, and nothing moves one
 
 | Index | Serves |
 |---|---|
-| `_id` | The offer, the accept and the decline: each reads or writes the one document of its task |
-| `tabId, projectId, expiresAt` | A project's offers, live or ended in the last 10 minutes |
-| `tabId, agentId, expiresAt` | An agent's live offers |
+| `_id` | The offer, the accept and the decline: each reads or writes the one document of its task. And a project's offers: the documents of the tasks its reader asks about, at most 100 a read |
+| `tabId, agentId, expiresAt` | An agent's live offers; and a Swarm's records, removed with it |
 | `expiresAt`, with an expiry (`task_offer_expiry`) | Removes a document a day after it ended |
 
 ## One live for a task, under two requests at once
@@ -70,10 +69,17 @@ Not a read then a write. The offer is **one write**: an upsert of the task's `_i
 MongoDB applies a write to one document atomically, so of two offers at once one is applied and the other then
 matches nothing and meets the unique key.
 
-An accept and a decline are each one conditional update (`findAndModify`): `_id`, this agent, `expiresAt > now` (an
-accept also "not accepted yet", so asking twice extends nothing). A lapsed offer cannot be accepted, an offer cannot
-be accepted by another agent, and an accept racing a newer offer of the same task finds another `agentId` and changes
-nothing.
+An accept and a decline are each one conditional update (`findAndModify`): `_id`, this agent, `expiresAt > now`, and
+"not declined yet" (an accept also "not accepted yet", so asking twice extends nothing). A lapsed offer cannot be
+accepted, an offer cannot be accepted by another agent, and an accept racing a newer offer of the same task finds
+another `agentId` and changes nothing. A decline is final whatever moment an answer's clock reads: its review found an
+accept whose clock read a moment before the decline's (another server's) still matched the decline's expiry, and held
+the task ten minutes more (16 of 40 at once on MongoDB, clocks a millisecond apart).
+
+What stands for the task is read first, and answers before anything is counted: the same offer again is the standing
+record, and another agent's live offer refuses this one (`OFFER_LIVE`). Only a new offer counts against the PM's hour:
+its review found each refusal counted, so 1,199 of them refused every new offer for the rest of the hour. The
+conditional write still decides two offers at once.
 
 **Found while building it.** The first version used Prisma's `updateMany` with a filter, as the read marks do. Read
 in the profiler, Prisma sends that as two commands: a read of the ids the filter matches, then an update **by id
@@ -91,17 +97,27 @@ All under `/api/super-tabs/:tabId/task-offers`. The server enforces who; a daemo
 
 | Route | Who may call it | What |
 |---|---|---|
-| `POST ?asAgentId=<PM>` `{ repository, number, agentId }` | The computer that runs `asAgentId`, signed in as that agent's own person; and `asAgentId` is the PM of a project on that repository. The agent offered reads that project and is not the PM itself | Offers the task. `409 OFFER_LIVE` while another agent's offer of it is live. At most 1,200 new offers an hour for one PM |
+| `POST ?asAgentId=<PM>` `{ repository, number, agentId }` | The computer that runs `asAgentId`, signed in as that agent's own person; and `asAgentId` is the PM of the repository's project, the first made on it in the Swarm. The agent offered reads that project, is not the PM itself, and runs on its own person's computer | Offers the task. `409 OFFER_LIVE` while another agent's offer of it is live. `422 AGENT_NOT_OWN_COMPUTER` for an agent on a computer lent to its person. At most 1,200 new offers an hour for one PM |
 | `POST /accept?asAgentId=<agent>` `{ repository, number }` | The computer that runs `asAgentId`, signed in as that agent's own person; and the live offer of the task is that agent's | Accepts. `409 OFFER_NOT_LIVE` otherwise, in one answer whether it lapsed, was declined, is another's or never was |
 | `POST /decline?asAgentId=<agent>` `{ repository, number, reason }` | The same | Declines, with a reason word. Also after accepting, while it is live |
-| `GET ?repository=<owner/name>[&asAgentId=…]` | A person or an agent that reads a project on that repository | That project's offers, live or ended in the last 10 minutes: at most 200, and whether there are more |
+| `GET ?repository=<owner/name>&numbers=<n,…>[&asAgentId=…]` | A person or an agent that reads the repository's project | The offers of the tasks asked (at most 100 a read; its PM asks for the tasks it plans), live or ended in the last 10 minutes |
 | `GET /mine?asAgentId=<agent>` | The computer that runs `asAgentId`, signed in as that agent's own person | The agent's live offers: at most 20 |
 
 Every answer carries the server's time, so no daemon compares its own clock with an expiry.
 
 A Swarm the caller cannot reach answers as every Swarm route does: one "not available", whether it is missing,
 left or never joined. Inside a Swarm the caller reads, a refusal keeps its own words (`PM_REQUIRED`,
-`AGENT_NOT_IN_PROJECT`, `OFFER_LIVE`, `OFFER_NOT_LIVE`).
+`AGENT_NOT_IN_PROJECT`, `AGENT_NOT_OWN_COMPUTER`, `OFFER_LIVE`, `OFFER_NOT_LIVE`).
+
+**One coordinator for a repository.** A project's repository is set by its owner or lead with no proof of access to
+it, so a member could make a later project on a repository and hold its tasks with offers to their own agents. The
+repository's project is the first made on it in the Swarm (`githubComments.ts` `repositoryProject`): only its PM
+offers, and its readers read the offers. A later project on the same repository offers nothing (`PM_REQUIRED`).
+
+**Agents on lent computers.** An agent on a computer lent to its person runs under the lender's sign-in, which never
+answers for it, so it is offered nothing (`AGENT_NOT_OWN_COMPUTER`, and the PM's daemon never asks). It is given its
+tasks by label until the label path ends on 14 December 2026, and then none: whether such an agent gets tasks after
+that date is a product call left open.
 
 **Told, not polled.** When an offer is stored, the server tells the offered agent's computer that its Swarm changed,
 through the push hosts already hear (`swarm_host_changed`). The daemon then reads `/mine`. No new frame, and nothing in
@@ -212,31 +228,37 @@ Dates:
    | Purge | A day after `expiresAt` |
    | The same task again | The same `_id`: the new offer overwrites the old. There is no version to reset |
 
-   Readers of "all offers": the project read lists live ones and those ended in the last 10 minutes, and says which;
-   the agent's read lists live ones only.
+   Readers of "all offers": the project read lists, of the tasks asked, the live ones and those ended in the last 10
+   minutes, and says which; the agent's read lists live ones only.
 2. **Concurrency.** A write locks one document, the task's. Invariants: one live offer for a task (the `_id`, and the
    replace only where `expiresAt <= now`); only its agent answers it (`agentId` in the filter); a lapsed offer is
-   never accepted (`expiresAt > now` in the same update). No transaction spans two documents. The Swarm's state is
-   read for the access check and never written.
-3. **Read cost.** The project read loads and sends at most 200 rows of about 250 bytes, and its index holds only the
-   project's live and just-ended offers. The agent's read, at most 20. An ended offer leaves the agent's list, so a
-   removal reaches its reader. A test reads each plan: documents examined equal documents returned.
-4. **Scale.** At ten times today (300 builders in one project) there are at most 300 live offers: the project read
-   says `more`, and a task whose offer the PM's daemon did not see is refused a second offer, so nothing is given
-   twice. Warns first: `swarm_task_offers_total{outcome="live"}` (a second coordinator, or a PM's daemon that forgot
-   its offers) and `{outcome="limited"}` (a PM near its hourly limit).
+   never accepted (`expiresAt > now` in the same update); a declined one is never accepted nor declined again
+   (`declinedAt: null` in the same update), whatever an answer's clock reads. No transaction spans two documents. The
+   Swarm's state is read for the access check and never written.
+3. **Read cost.** The project read loads the documents of the tasks its reader asks about, by their ids: at most 100
+   rows of about 250 bytes a read (its PM asks for the tasks it plans, a hundred at a time). The agent's read, at most
+   20. An ended offer leaves the agent's list, so a removal reaches its reader. A test reads each plan: documents
+   examined equal documents returned.
+4. **Scale.** At ten times today (300 builders in one project) there are at most 300 live offers; the PM's daemon
+   reads them in three reads of 100, and a task whose offer it did not see is refused a second offer, so nothing is
+   given twice. (The first read, by the project, listed 200 and said `more` with no way past it: its review.) Warns
+   first: `swarm_task_offers_total{outcome="live"}` (a PM's daemon that forgot its offers) and `{outcome="limited"}`
+   (a PM near its hourly limit).
 5. **Compatibility.** Above. Existing readers of the new record: none.
 6. **Migration and rollback.** The release's schema step makes the expiry index before the push, as it does the
    verdict records'. No stored data is rewritten. Rolled back, the previous release reads none of it, the rows
    expire by their index, and daemons fall back to labels.
-7. **Audience.** One predicate, `canReadProject`, on both reads. Copies of a record: the two reads. The push carries
-   only the Swarm's id. Nothing is in the Swarm's state, a change feed, a notification, a chat or a log; the
+7. **Audience.** One predicate, `canReadProject`: the project read is the repository's project's readers' (the first
+   project made on it); the agent's read its own person's computer's. Copies of a record: the two reads. The push
+   carries only the Swarm's id. Nothing is in the Swarm's state, a change feed, a notification, a chat or a log; the
    counters carry no id.
 8. **Identity.** An offer is made as the PM, and an answer as the offered agent, each from the computer that runs
    that agent, signed in as that agent's own person: the owner of a lent machine can neither offer nor answer for
-   another person's agent there, and that person cannot from any other computer. A take's writes are made with that
-   person's own `gh` (`service.ts`, unchanged). Where the identity is missing the call is refused; nothing falls
-   back to the machine's owner.
+   another person's agent there, and that person cannot from any other computer; and no offer is made to an agent on a
+   computer lent to its person, which nobody can answer. A take's writes are made with that person's own `gh`
+   (`service.ts`, unchanged). Where the identity is missing the call is refused; nothing falls back to the machine's
+   owner. A repository has one coordinator in a Swarm, the PM of its first project: a member's later project on it
+   offers nothing.
 9. **Failure.** A refusal has a code and words. An offer nobody answers lapses and the PM's daemon logs it once for
    that builder. One accepted and not taken lapses, and its agent's idle watch tells its person. A task everyone
    declined is said once to its PM, on the task. A server without the routes is said once in the log and worked
@@ -249,7 +271,8 @@ Dates:
 | Attack | Stopped by |
 |---|---|
 | **A task given twice**: two offers live for one task | One document for a task. The insert fails on the key; the replace matches only an ended record; both are single-document writes |
-| ... two daemons both coordinate | Only the project's PM, from the computer that runs it, may offer. The record refuses the second whoever it is |
+| ... two daemons both coordinate | Only the PM of the repository's first project, from the computer that runs it, may offer. The record refuses the second whoever it is |
+| ... an accept racing a decline | The accept matches only a record not declined: a decline is final whatever the accept's clock reads |
 | ... an agent takes on an offer that just lapsed | `take` asks the server at that moment and needs 2 minutes left; the next agent's `take` reads the issue fresh and stops at another builder's label |
 | ... a label given by hand beside an offer | `take` refuses a task that carries another builder's label, as today, before it writes |
 | **A task never given**: an offer that is never answered | It lapses by the server's clock in 2 minutes; accepted, in 10. Nobody can lengthen it, and asking to accept twice extends nothing |
@@ -258,13 +281,11 @@ Dates:
 | **An offer forged by another member**: offering as the PM | The caller's own computer must run the agent it speaks as, under that agent's own person's sign-in, and that agent must be the project's PM. Another member is refused before anything is written |
 | ... accepting or declining another agent's offer | The same check, and the update's filter names the agent: another agent's answer changes nothing |
 | ... offering to an agent outside the project | The agent must read the project. One answer whether it does not or does not exist |
+| ... a member's later project on the repository | One coordinator for a repository in a Swarm: its first project's PM. A later project's PM offers nothing (`PM_REQUIRED`) |
 | ... filling the collection | 1,200 new offers an hour for one PM; a repeat of a standing offer writes nothing |
 
-Two cases the record does not close, each no worse than today:
+One case the record does not close, no worse than today:
 
-- **A second project on the same repository, in the same Swarm.** The task is the issue, so its PM's offers hold
-  tasks from the first project's PM for as long as each lives. Today the same PM can put its builder's label on any
-  issue: the record gives it no new power, and each refusal is counted (`live`).
 - **Two Swarms on one repository.** A record is its Swarm's own, as a verdict record is, so each Swarm sees the
   other's offered task as free until it is taken: at most 12 minutes, where a label showed within seconds. Both may
   offer it. The second `take` reads the issue and stops at the first's label, so the task is built once and one
@@ -293,7 +314,7 @@ profiler in `integration/superTabTaskOffers.test.ts`):
 
 | Call | Operations on the offers | Plan | Examined | All database operations |
 |---|---|---|---|---|
-| A project's offers (7 listed of its 87, among about 300 in the collection) | 1 read | `IXSCAN { tabId, projectId, expiresAt }` | 7 keys, 7 documents, 7 returned, 2.3 kB | 8 on a cold cache |
+| A project's offers, the 7 tasks asked (of its 87, among about 300 in the collection) | 1 read | `IXSCAN { _id }` | 9 keys (one for each task and the seeks between them), 7 documents, 7 returned | Not counted again |
 | An agent's own (2 listed of its 42) | 1 read | `IXSCAN { tabId, agentId, expiresAt }` | 2 keys, 2 documents, 2 returned, 0.8 kB | 3 |
 | Offer, new or in place of an ended one | 1 read, 1 write | `IXSCAN { _id }` each | 1 key, 1 document | 10 |
 | The same offer again | 1 read | `IXSCAN { _id }` | 1 key, 1 document | 9 |
@@ -318,7 +339,9 @@ plans, which do not change with the machine; times on a laptop running other sui
 
 - An agent's daemon answers within seconds of being told. Not built, so not timed. The server counts the seconds
   from each offer to its accept (`swarm_task_offer_accept_seconds`), which will say whether two minutes is right.
-- The servers' clocks agree to within a second. An expiry is compared on whichever server takes the call.
+- The servers' clocks agree to within a second. An expiry is compared on whichever server takes the call. Where they
+  do not, a decline still ends its offer for good (`declinedAt: null` in every answer's filter); a lapse may come a
+  moment early or late.
 - GitHub applies two labels given in one call together, and a label write lands within 10 seconds. Not tried on
   GitHub tonight (nothing may be written there): the daemon's half tries it in the scratch repository first, as the
   build's rules ask.

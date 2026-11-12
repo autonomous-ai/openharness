@@ -20,7 +20,7 @@ import { wavDurationMs } from '../lib/wav.js'
 import { agentText, MAX_VOICE_BYTES, MAX_VOICE_MS, VOICE_CLAIM_MS, VOICE_READ_MS, VOICE_TYPES, voiceFacts, voiceTranscript, voiceWaveform, type StoredVoice, type VoiceFacts } from './voiceMessages.js'
 import { machineAlive } from '../lib/prisma.js'
 import { githubRepository } from '../github/repository.js'
-import { commentAuthors, recordComment, sameRepository, type CommentKind } from './githubComments.js'
+import { commentAuthors, recordComment, repositoryProject, sameRepository, type CommentKind } from './githubComments.js'
 import { recordTaskTokens, taskTokens, type TaskTokens } from './taskTokens.js'
 import * as taskOffers from './taskOffers.js'
 import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
@@ -2445,21 +2445,27 @@ export class SuperTabStore {
     return { rows }
   }
 
-  /** Offers task [number] of [repository] to agent [agentId] (taskOffers.ts), as the Product Manager [asAgentId]: only the PM of a
-   *  project on that repository, from its own person's computer (asOwnAgent: the coordinator is the PM's person's daemon), and
-   *  only to an agent that reads that project and is not the PM itself, as the Swarm is now (not the read cache). One that does
-   *  not read it and one that does not exist are refused in the same words. The offered agent's computer is then told its Swarm
-   *  changed, as a host is of any change that concerns it, so its daemon reads its offers at once and none polls for them. */
+  /** Offers task [number] of [repository] to agent [agentId] (taskOffers.ts), as the Product Manager [asAgentId]: only the PM of the
+   *  repository's project (repositoryProject: the first made on it), from its own person's computer (asOwnAgent: the coordinator is
+   *  the PM's person's daemon), and only to an agent that reads that project, is not the PM itself and runs on its own person's
+   *  computer, as the Swarm is now (not the read cache). One that does not read it and one that does not exist are refused in the
+   *  same words. The offered agent's computer is then told its Swarm changed, as a host is of any change that concerns it, so its
+   *  daemon reads its offers at once and none polls for them. */
   async offerTask(user: AuthUser, tabId: string, asAgentId: string, task: { repository: string; number: number; agentId: string }) {
     const offered = await transaction(this.db, async tx => {
       const { state } = await this.load(tx, user, tabId)
       await this.asOwnAgent(tx, user, state, asAgentId)
       const project = ledProject(state, asAgentId)
-      if (!project || !sameRepository(project, task.repository)) fail('PM_REQUIRED', 'Only the Product Manager of a project on that repository offers its tasks.', 403)
+      if (!project || project.id !== repositoryProject(state, task.repository)?.id) {
+        fail('PM_REQUIRED', 'Only the Product Manager of the first project made on that repository offers its tasks.', 403)
+      }
       const target = state.agents.find(a => a.id === task.agentId)
       if (!target || target.id === asAgentId || !canReadProject(state, { kind: 'agent', agentId: target.id, machineOwnerId: target.machineOwnerId }, project)) {
         fail('AGENT_NOT_IN_PROJECT', 'That agent works in no project of this repository.', 422)
       }
+      // On a computer lent to its person it runs under the lender's sign-in, which never answers for it (asOwnAgent): its offer would
+      // only hold the task until it lapsed (review of #4152).
+      if (target.contributorId !== target.machineOwnerId) fail('AGENT_NOT_OWN_COMPUTER', 'That agent runs on a computer lent to its person, which cannot answer for it.', 422)
       return { projectId: project.id, machineId: target.machineId }
     })
     const now = this.now()
@@ -2498,15 +2504,15 @@ export class SuperTabStore {
     return { offers: await taskOffers.agentOffers(this.db, tabId, asAgentId, now), serverTime: now }
   }
 
-  /** The offers of [repository]'s tasks, live or just ended, made for a project of it the reader may read (taskOffers.ts
-   *  projectOffers); a reader who may read none hears what a project that does not exist says. */
-  async projectTaskOffers(user: AuthUser, tabId: string, repository: string, asAgentId?: string) {
+  /** The offers of [repository]'s tasks [numbers], live or just ended, made for the repository's project (repositoryProject), to a
+   *  reader who may read that project (taskOffers.ts projectOffers); any other hears what a project that does not exist says. */
+  async projectTaskOffers(user: AuthUser, tabId: string, repository: string, numbers: readonly number[], asAgentId?: string) {
     const { state } = await this.readLoad(user, tabId)
     const actor = await this.actor(this.db, user, state, asAgentId)
-    const readable = projectsOf(state).filter(p => sameRepository(p, repository) && canReadProject(state, actor, p)).map(p => p.id)
-    if (!readable.length) fail('NOT_FOUND', 'This project is unavailable.', 404)
+    const project = repositoryProject(state, repository)
+    if (!project || !canReadProject(state, actor, project)) fail('NOT_FOUND', 'This project is unavailable.', 404)
     const now = this.now()
-    return { ...await taskOffers.projectOffers(this.db, tabId, readable, now), serverTime: now }
+    return { offers: await taskOffers.projectOffers(this.db, { tabId, projectId: project.id, repository, numbers, now }), serverTime: now }
   }
 
   /** A project's name as [userId] may see it now, for the page GitHub sends them back to after approving its repository

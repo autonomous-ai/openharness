@@ -65,7 +65,8 @@ async function call(as: AuthUser, method: 'GET' | 'POST', path: string, payload?
 /** The owner's Swarm with the peer and a third member in it. Project Web, on github.com/Acme/App, has its PM Juno on the owner's
  *  computer; project Docs, with no repository, its PM Ivy there too. Each person has an agent of their own on their own computer:
  *  Ada (the owner's), Oak (the peer's), Ash (the third's). On a computer the lender lent the peer run two of the peer's agents:
- *  Elm, a builder of Web, and Kit, the PM of the peer's project Lent on github.com/Acme/Lent. */
+ *  Elm, a builder of Web, and Kit, the PM of the peer's project Lent on github.com/Acme/Lent. The third member made a project of
+ *  their own on Web's repository after Web, Second, whose PM Moss runs on their computer. */
 async function scene() {
   const tab = (await store.create(owner, randomUUID(), 'Offers')).id
   const run = (command: Command | StoredCreate, as: AuthUser = owner) => command.type === 'conversation.create' ? storeCreate(db, tab, command, as)
@@ -94,14 +95,18 @@ async function scene() {
   const lent = (await run({ type: 'project.create', name: 'Lent', visibility: 'public', brief: '' }, peer)).result as { projectId: string; conversationId: string }
   const kit = String((await run({ type: 'agent.add', conversationId: lent.conversationId, machineId: MAC.lent, harnessId: randomUUID(), name: 'Kit',
     configuration: config, lead: true, project: { cwd: '/work/Lent', repositoryUrl: 'https://github.com/Acme/Lent.git' } } as Command, peer)).result.agentId)
+  const second = (await run({ type: 'project.create', name: 'Second', visibility: 'public', brief: '' }, third)).result as { projectId: string; conversationId: string }
+  const moss = String((await run({ type: 'agent.add', conversationId: second.conversationId, machineId: MAC.third, harnessId: randomUUID(), name: 'Moss',
+    configuration: config, lead: true, project: { cwd: '/work/Second', repositoryUrl: 'https://github.com/acme/app' } } as Command, third)).result.agentId)
   const t = `${tab}/task-offers`
-  return { tab, web, docs, ada, oak, ash, elm, kit,
+  return { tab, web, docs, ada, oak, ash, elm, kit, second, moss,
     offer: (number: number, agentId: string, as: AuthUser = owner, pm = web.agentId, repository = 'acme/app') =>
       call(as, 'POST', `${t}?asAgentId=${pm}`, { repository, number, agentId }),
     accept: (number: number, agentId: string, as: AuthUser, repository = 'acme/app') => call(as, 'POST', `${t}/accept?asAgentId=${agentId}`, { repository, number }),
     decline: (number: number, agentId: string, as: AuthUser, reason = 'memory') => call(as, 'POST', `${t}/decline?asAgentId=${agentId}`, { repository: 'acme/app', number, reason }),
     mine: (agentId: string, as: AuthUser) => call(as, 'GET', `${t}/mine?asAgentId=${agentId}`),
-    listed: (as: AuthUser, agentId?: string, repository = 'acme/app') => call(as, 'GET', `${t}?repository=${repository}${agentId ? `&asAgentId=${agentId}` : ''}`),
+    listed: (as: AuthUser, agentId?: string, repository = 'acme/app', numbers: readonly number[] = [1, 2, 3]) =>
+      call(as, 'GET', `${t}?repository=${repository}&numbers=${numbers.join(',')}${agentId ? `&asAgentId=${agentId}` : ''}`),
     row: (number: number) => db.superTabTaskOffer.findUnique({ where: { id: `${tab}|acme/app|${number}` } }) }
 }
 type Scene = Awaited<ReturnType<typeof scene>>
@@ -139,6 +144,21 @@ describe('offering a task', () => {
     expect(await offered(lender)).toMatchObject({ status: 403, code: 'FORBIDDEN' })
     expect(await offered(peer)).toMatchObject({ status: 403, code: 'FORBIDDEN' })
     expect(await db.superTabTaskOffer.count({ where: { tabId: s.tab, repository: 'acme/lent' } })).toBe(0)
+  })
+
+  // Review of #4152: a project's repository is set by its owner or lead with no proof of access, so a member could make a second
+  // project on a repository and hold its tasks with offers to their own agents. A repository has one coordinator in a Swarm.
+  it('is the PM\'s of the first project made on the repository alone: a later project on it offers nothing', async () => {
+    expect(await s.offer(140, s.ash, third, s.moss)).toMatchObject({ status: 403, code: 'PM_REQUIRED' })
+    expect(await s.row(140)).toBeNull()
+    expect(await s.offer(140, s.ash)).toMatchObject({ status: 200, data: { offer: { agentId: s.ash } } })
+  })
+
+  // Review of #4152: an agent on a computer lent to its person can never answer (the lender's sign-in runs it), so its offer would
+  // only hold the task until it lapsed.
+  it('is refused for an agent on a computer lent to its person, which cannot answer for it', async () => {
+    expect(await s.offer(150, s.elm)).toMatchObject({ status: 422, code: 'AGENT_NOT_OWN_COMPUTER' })
+    expect(await s.row(150)).toBeNull()
   })
 
   it('is refused for an agent that does not read the project, in one answer whether it exists or not, and for the PM itself', async () => {
@@ -263,7 +283,9 @@ describe('answering an offer', () => {
   })
 
   it('refuses the owner of a lent computer answering for another person\'s agent there, and that person from any other computer', async () => {
-    await s.offer(302, s.elm)
+    // No offer is made to Elm (above); one stored all the same is answered by nobody.
+    await db.superTabTaskOffer.create({ data: { id: `${s.tab}|acme/app|302`, tabId: s.tab, projectId: s.web.projectId, repository: 'acme/app', number: 302,
+      agentId: s.elm, offeredAt: new Date(clock.now), expiresAt: new Date(clock.now + ANSWER_MS), acceptedAt: null, declinedAt: null, declined: null } })
     // The lender's computer runs Elm, but Elm is the peer's agent: a task is taken in its own person's name.
     expect(await s.accept(302, s.elm, lender)).toMatchObject({ status: 403, code: 'FORBIDDEN' })
     expect(await s.decline(302, s.elm, lender)).toMatchObject({ status: 403, code: 'FORBIDDEN' })
@@ -296,6 +318,18 @@ describe('answering an offer', () => {
     // An accepted offer may still be declined while it is live: its agent could not take it after all.
     await s.accept(304, s.ash, third)
     expect(await s.decline(304, s.ash, third, 'limit')).toMatchObject({ status: 200, data: { offer: { state: 'declined', declined: 'limit' } } })
+  })
+
+  // Review of #4152: an accept whose clock read a moment before a decline's held the declined task ten minutes more.
+  it('is not accepted after its decline, though the accept\'s clock reads a moment before the decline\'s', async () => {
+    await s.offer(306, s.oak)
+    const at = clock.now
+    clock.now = at + 5
+    await s.decline(306, s.oak, peer)
+    clock.now = at + 4
+    expect(await s.accept(306, s.oak, peer)).toMatchObject({ status: 409, code: 'OFFER_NOT_LIVE' })
+    expect(await s.row(306)).toMatchObject({ acceptedAt: null, declined: 'memory', expiresAt: new Date(at + 5) })
+    clock.now = at + 5
   })
 
   it('takes one lower-case word as a reason, and no other', async () => {
@@ -342,7 +376,7 @@ describe('reading offers', () => {
     ]
     // The PM, a member, and a member's agent that reads the project, by any case of the repository's name.
     for (const [as, agentId] of [[owner, t.web.agentId], [peer, undefined], [third, t.ash]] as const) {
-      expect(await t.listed(as, agentId, 'Acme/App'), as.email).toEqual({ status: 200, code: undefined, data: { offers: expected, more: false, serverTime: at } })
+      expect(await t.listed(as, agentId, 'Acme/App'), as.email).toEqual({ status: 200, code: undefined, data: { offers: expected, serverTime: at } })
     }
     expect(await t.listed(stranger)).toMatchObject({ status: 404, code: 'NOT_FOUND' })
     expect(await t.listed(peer, undefined, 'acme/other')).toMatchObject({ status: 404, code: 'NOT_FOUND' })
@@ -359,16 +393,19 @@ describe('reading offers', () => {
     expect(((await t.listed(peer)).data!.offers as Array<{ number: number }>).map(o => o.number)).toEqual([2])
   })
 
-  it('lists at most two hundred of a project\'s offers, the ones that end last, and says there are more', async () => {
+  // Review of #4152: a project's read listed at most two hundred and said there were more, with no way to read them: about seven
+  // times today, below the design's own case of ten. Its PM asks for the tasks it plans.
+  it('lists the offers of the tasks its reader asks about, a hundred at most a read', async () => {
     const t = await scene()
     const row = (number: number, expiresAt: number) => ({ id: `${t.tab}|acme/app|${number}`, tabId: t.tab, projectId: t.web.projectId, repository: 'acme/app', number,
       agentId: t.oak, offeredAt: new Date(clock.now), expiresAt: new Date(expiresAt), acceptedAt: null, declinedAt: null, declined: null })
     await db.superTabTaskOffer.createMany({ data: Array.from({ length: 201 }, (_, i) => row(i + 1, clock.now + 1_000 + i)) })
-    const listed = await t.listed(peer)
-    expect(listed).toMatchObject({ status: 200, data: { more: true } })
-    const numbers = (listed.data!.offers as Array<{ number: number }>).map(o => o.number)
-    expect(numbers.length).toBe(200)
-    expect([numbers[0], numbers.at(-1)]).toEqual([201, 2])
+    const hundred = Array.from({ length: 100 }, (_, i) => i + 101)
+    const listed = await t.listed(peer, undefined, 'acme/app', hundred)
+    expect(((listed.data!.offers as Array<{ number: number }>).map(o => o.number))).toEqual([...hundred].reverse())
+    expect(((await t.listed(peer, undefined, 'acme/app', [201, 5, 9_999])).data!.offers as Array<{ number: number }>).map(o => o.number)).toEqual([201, 5])
+    expect(await t.listed(peer, undefined, 'acme/app', [...hundred, 1])).toMatchObject({ status: 400 })
+    expect(await t.listed(peer, undefined, 'acme/app', [])).toMatchObject({ status: 400 })
     // An agent's own list holds at most twenty, the ones that end first.
     const mine = (await t.mine(t.oak, peer)).data!.offers as Array<{ number: number }>
     expect(mine.map(o => o.number)).toEqual(Array.from({ length: 20 }, (_, i) => i + 1))
@@ -397,9 +434,11 @@ describe('each query of an offer', () => {
       expect(answered).toBe(200)
       return plan(entries.filter(e => e.ns.endsWith('.SuperTabTaskOffer') && e.op !== 'insert'))
     }
-    // The project's: its three live offers and the four ended half a minute ago.
-    const project = await on(() => t.listed(peer))
-    expect(project).toEqual([{ plan: 'IXSCAN { tabId: 1, projectId: 1, expiresAt: 1 }', docsExamined: 7, keysExamined: 7, returned: 7, hint: { tabId: 1, projectId: 1, expiresAt: 1 } }])
+    // The project's, for the tasks its PM asks about: its three live offers and the four ended half a minute ago, each by its id.
+    // A key for each task asked, and the seeks between them: at most two for each (nine for these seven, measured).
+    const project = await on(() => t.listed(peer, undefined, 'acme/app', [11, 12, 13, 3_000, 3_001, 3_002, 3_003]))
+    expect(project).toEqual([{ plan: 'IXSCAN { _id: 1 }', docsExamined: 7, keysExamined: expect.any(Number), returned: 7, hint: { _id: 1 } }])
+    expect(project[0]!.keysExamined).toBeLessThanOrEqual(2 * 7)
     // An agent's: Ash's two live ones, of its forty-two records in this Swarm.
     const mine = await on(() => t.mine(t.ash, third))
     expect(mine).toEqual([{ plan: 'IXSCAN { tabId: 1, agentId: 1, expiresAt: 1 }', docsExamined: 2, keysExamined: 2, returned: 2, hint: { tabId: 1, agentId: 1, expiresAt: 1 } }])

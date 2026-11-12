@@ -13,7 +13,8 @@ import { createRateLimiter } from '../lib/rateLimit.js'
 import { githubRepository } from '../github/repository.js'
 import { fail } from './model.js'
 import { readBy } from './parts/indexed.js'
-import type { SwarmProject } from './projects.js'
+import { projectsOf, type SwarmProject } from './projects.js'
+import type { SuperTabState } from './model.js'
 
 export const COMMENT_KINDS = ['issue', 'review', 'review-comment'] as const
 export type CommentKind = typeof COMMENT_KINDS[number]
@@ -33,6 +34,12 @@ export const commentKey = (tabId: string, repository: string, kind: CommentKind,
 /** Whether [project] works on [repository] (`owner/name`, any case). */
 export const sameRepository = (project: SwarmProject, repository: string): boolean =>
   githubRepository(project.repository?.repositoryUrl ?? '')?.fullName.toLowerCase() === repository.toLowerCase()
+
+/** The project of [repository] in a Swarm: the first made of its projects on it. A project's repository is set by its owner or
+ *  lead with no proof of access to it, so a repository has one coordinator in a Swarm, this project's PM (taskOffers.ts): a
+ *  member who makes a later project on it holds none of its tasks (review of #4152). */
+export const repositoryProject = (state: SuperTabState, repository: string): SwarmProject | undefined =>
+  projectsOf(state).find(project => sameRepository(project, repository))
 
 /** Run by the release's schema step before db push (lib/db/schemaRelease.ts), as the operation receipts' expiry is. */
 export async function ensureCommentExpiry(db: PrismaClient): Promise<void> {

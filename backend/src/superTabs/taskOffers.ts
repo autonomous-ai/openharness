@@ -30,8 +30,9 @@ const OFFER_EXPIRY_MS = 24 * 60 * 60_000
 /** New offers one Product Manager may make in an hour: ten times what thirty builders take (four an hour each), low enough that a
  *  loop cannot fill the collection. */
 export const OFFERS_PER_HOUR = 1_200
-/** Offers one read lists at most: a project's, and an agent's own. */
-export const PROJECT_OFFERS_MAX = 200, AGENT_OFFERS_MAX = 20
+/** Tasks one read of a project's offers asks about at most (its PM asks for the tasks it plans, a hundred at a time), and the
+ *  offers an agent's own read lists at most. */
+export const OFFER_NUMBERS_MAX = 100, AGENT_OFFERS_MAX = 20
 
 const offerLimit = createRateLimiter('task-offer', 60 * 60_000, OFFERS_PER_HOUR)
 const COLLECTION = 'SuperTabTaskOffer'
@@ -81,22 +82,27 @@ const notLive = (): never => {
  * it is inserted; where an ended one stands it is replaced; where a live one stands the filter matches nothing, the insert that
  * follows meets the unique id, and nothing is written. Never a read then a write (Prisma's own updateMany is one: it reads the
  * ids its filter matches, then updates by id alone, so two requests at once both win): of two offers at once MongoDB applies one
- * to the document, and the other then matches nothing. The same offer again (this agent's, still live) answers the standing
- * record and writes nothing, so a daemon's retry costs nothing; only a new offer counts against the Product Manager's hour,
- * every pod together.
+ * to the document, and the other then matches nothing. What stands is read first, and answers before anything is counted: the
+ * same offer again (this agent's, still live) is the standing record, so a daemon's retry costs nothing, and another agent's live
+ * offer refuses this one (review of #4152: each such refusal counted against the hour, and 1,199 of them refused every new offer
+ * for the rest of it). Only a new offer counts against the Product Manager's hour, every pod together.
  */
 export async function offerTask(db: Offers, input: { tabId: string; projectId: string; byAgentId: string; repository: string; number: number
   agentId: string; now: number }): Promise<TaskOffer> {
   const id = offerKey(input.tabId, input.repository, input.number)
-  const standing = async () => {
+  // The live offer of the task as it stands, this agent's as it is; another agent's is refused. Null when none is live.
+  const standing = async (): Promise<TaskOffer | null> => {
     const held = await db.superTabTaskOffer.findUnique({ where: { id } })
-    return held && held.agentId === input.agentId && ['offered', 'accepted'].includes(offerState(held, input.now)) ? held : null
+    if (!held || !['offered', 'accepted'].includes(offerState(held, input.now))) return null
+    if (held.agentId !== input.agentId) {
+      metrics.taskOffer('live')
+      return fail('OFFER_LIVE', 'This task is offered to another agent until it answers or the offer lapses.', 409)
+    }
+    metrics.taskOffer('again')
+    return view(held, input.now)
   }
   const again = await standing()
-  if (again) {
-    metrics.taskOffer('again')
-    return view(again, input.now)
-  }
+  if (again) return again
   if (!await offerLimit.allows(`${input.tabId}:${input.byAgentId}`, input.now)) {
     metrics.taskOffer('limited')
     fail('RATE_LIMITED', `A Product Manager offers at most ${OFFERS_PER_HOUR} tasks an hour. Try again later.`, 429)
@@ -110,14 +116,12 @@ export async function offerTask(db: Offers, input: { tabId: string; projectId: s
   if (written.n !== 1) {
     // Only the unique id may have refused it: anything else is a write that failed, and is said as one.
     if (written.writeErrors?.[0]?.code !== DUPLICATE_KEY) throw new Error('A task offer could not be stored.')
-    // A live offer of the task stands: this agent's own, made at the same moment, is this one again.
+    // Another offer was written between the read and the write: this agent's own, made at the same moment, is this one again, and
+    // another agent's refuses it. One that ended again by the time it is read was live a moment ago, and refuses it as well.
     const won = await standing()
-    if (!won) {
-      metrics.taskOffer('live')
-      fail('OFFER_LIVE', 'This task is offered to another agent until it answers or the offer lapses.', 409)
-    }
-    metrics.taskOffer('again')
-    return view(won, input.now)
+    if (won) return won
+    metrics.taskOffer('live')
+    fail('OFFER_LIVE', 'This task is offered to another agent until it answers or the offer lapses.', 409)
   }
   metrics.taskOffer('offered')
   return view({ ...offer, offeredAt: new Date(input.now), expiresAt: new Date(expiresAt) }, input.now)
@@ -132,14 +136,16 @@ async function change(db: Offers, query: Record<string, unknown>, set: Record<st
 }
 
 /**
- * [agentId]'s acceptance of the offer of a task: one update that matches only its own live offer not yet accepted, so a lapsed
- * offer, another agent's, and a newer offer of the same task to another agent are each left as they are. Accepted, it holds the
- * task [OFFER_TAKE_MS] from now. Asked again while that stands it answers the same and extends nothing: an agent cannot hold a
- * task by accepting it over and over.
+ * [agentId]'s acceptance of the offer of a task: one update that matches only its own live offer neither accepted nor declined, so
+ * a lapsed offer, a declined one, another agent's, and a newer offer of the same task to another agent are each left as they are.
+ * A decline is final whatever moment the accept's clock reads: one read a moment before the decline's (another server's) still
+ * matched its expiry, and held the declined task ten minutes more (review of #4152). Accepted, it holds the task [OFFER_TAKE_MS]
+ * from now. Asked again while that stands it answers the same and extends nothing: an agent cannot hold a task by accepting it
+ * over and over.
  */
 export async function acceptOffer(db: Offers, input: { tabId: string; repository: string; number: number; agentId: string; now: number }): Promise<TaskOffer> {
   const id = offerKey(input.tabId, input.repository, input.number)
-  const accepted = await change(db, { _id: id, agentId: input.agentId, expiresAt: { $gt: at(input.now) }, acceptedAt: null },
+  const accepted = await change(db, { _id: id, agentId: input.agentId, expiresAt: { $gt: at(input.now) }, acceptedAt: null, declinedAt: null },
     { acceptedAt: at(input.now), expiresAt: at(input.now + OFFER_TAKE_MS) })
   if (accepted) {
     metrics.taskOfferAccepted((input.now - accepted.offeredAt.getTime()) / 1000)
@@ -152,13 +158,14 @@ export async function acceptOffer(db: Offers, input: { tabId: string; repository
 }
 
 /**
- * [agentId]'s decline of the offer of a task, with why in one word: one update that matches only its own live offer, accepted or
- * not, and ends it at once by bringing its expiry to now. The same decline again answers the record as it was declined.
+ * [agentId]'s decline of the offer of a task, with why in one word: one update that matches only its own live offer not declined
+ * yet, accepted or not, and ends it at once by bringing its expiry to now. The same decline again answers the record as it was
+ * declined, whatever its clock or its word.
  */
 export async function declineOffer(db: Offers, input: { tabId: string; repository: string; number: number; agentId: string; reason: string
   now: number }): Promise<TaskOffer> {
   const id = offerKey(input.tabId, input.repository, input.number)
-  const declined = await change(db, { _id: id, agentId: input.agentId, expiresAt: { $gt: at(input.now) } },
+  const declined = await change(db, { _id: id, agentId: input.agentId, expiresAt: { $gt: at(input.now) }, declinedAt: null },
     { declinedAt: at(input.now), declined: input.reason, expiresAt: at(input.now) })
   if (declined) {
     metrics.taskOffer('declined')
@@ -170,13 +177,16 @@ export async function declineOffer(db: Offers, input: { tabId: string; repositor
   return view(held, input.now)
 }
 
-/** The offers of the projects [projectIds] of [tabId], live or ended in the last [OFFER_SHOWN_MS], the ones that end last first:
- *  at most [PROJECT_OFFERS_MAX], and whether there are more. One read by the project index, named. */
-export async function projectOffers(db: Offers, tabId: string, projectIds: readonly string[], now: number): Promise<{ offers: TaskOffer[]; more: boolean }> {
-  const rows = await readBy(db as never, COLLECTION, 'project', [
-    { $match: { tabId, projectId: { $in: [...projectIds] }, expiresAt: { $gt: at(now - OFFER_SHOWN_MS) } } },
-    { $sort: { expiresAt: -1 } }, { $limit: PROJECT_OFFERS_MAX + 1 }])
-  return { offers: rows.slice(0, PROJECT_OFFERS_MAX).map(row => view(prismaRow<Row>(COLLECTION, row), now)), more: rows.length > PROJECT_OFFERS_MAX }
+/** The offers of [repository]'s tasks [numbers] (at most [OFFER_NUMBERS_MAX]) in [tabId] made for [projectId], live or ended in the
+ *  last [OFFER_SHOWN_MS], the ones that end last first. Its PM asks for the tasks it plans: a read by a cap and a `more` gave it no
+ *  way past two hundred, about seven times today and below the design's own case of ten (review of #4152). One read of the tasks'
+ *  own documents, by their ids. */
+export async function projectOffers(db: Offers, input: { tabId: string; projectId: string; repository: string; numbers: readonly number[]
+  now: number }): Promise<TaskOffer[]> {
+  const ids = [...new Set(input.numbers)].map(number => offerKey(input.tabId, input.repository, number))
+  const rows = await readBy(db as never, COLLECTION, 'id', [
+    { $match: { _id: { $in: ids }, projectId: input.projectId, expiresAt: { $gt: at(input.now - OFFER_SHOWN_MS) } } }, { $sort: { expiresAt: -1 } }])
+  return rows.map(row => view(prismaRow<Row>(COLLECTION, row), input.now))
 }
 
 /** The live offers of [agentId] in [tabId], the ones that end first first: at most [AGENT_OFFERS_MAX]. One read by the agent
