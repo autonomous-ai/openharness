@@ -11,6 +11,8 @@ import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { commandRecords } from './commandRecords.fake.js'
 import type { Score } from './goal.js'
 import { PmNumbers, type Numbers } from './pmNumbers.js'
+import type { TaskOffer } from './taskOffers.js'
+import { SuperTabHostError } from './wire.js'
 
 type Json = Record<string, unknown>
 const GiB = 1024 ** 3
@@ -102,6 +104,38 @@ const crew = (): Crew => ({
   machines: [{ machineId: 'mac', observation: { resources: { memoryTotalBytes: 64 * GiB, projectDiskFreeBytes: 500 * GiB } } }],
 })
 
+/** The Swarm's server's offers (backend superTabs/taskOffers.ts), as it keeps them: one record for a task, live two minutes for
+ *  an answer and ten once accepted, a second offer of a live one refused. [missing]: a server from before the routes; [down]: one
+ *  that does not answer. */
+function fakeServer(clock: { now: number }) {
+  const records = new Map<number, { agentId: string; offeredAt: number; expiresAt: number; acceptedAt?: number; declined?: string }>()
+  const state = { missing: false, down: false, offered: [] as Array<[number, string]> }
+  const refuse = () => {
+    if (state.missing) throw new SuperTabHostError('BACKEND_UNAVAILABLE', 'Route not found', 404)
+    if (state.down) throw new SuperTabHostError('BACKEND_UNAVAILABLE', 'No answer.', 503)
+  }
+  const stateOf = (r: { expiresAt: number; acceptedAt?: number; declined?: string }) =>
+    r.declined ? 'declined' as const : r.expiresAt <= clock.now ? 'lapsed' as const : r.acceptedAt ? 'accepted' as const : 'offered' as const
+  const offers = {
+    offer: vi.fn(async (_project: LedProject, number: number, agentId: string) => {
+      refuse()
+      const held = records.get(number)
+      if (held && held.expiresAt > clock.now && held.agentId !== agentId) throw new SuperTabHostError('OFFER_LIVE', 'This task is offered to another agent.', 409)
+      if (!held || held.expiresAt <= clock.now) records.set(number, { agentId, offeredAt: clock.now, expiresAt: clock.now + 2 * 60_000 })
+      state.offered.push([number, agentId])
+    }),
+    listed: vi.fn(async (_project: LedProject): Promise<TaskOffer[]> => {
+      refuse()
+      return [...records].filter(([, r]) => r.expiresAt > clock.now - 10 * 60_000).map(([number, r]) => ({ repository: 'acme/app', number, agentId: r.agentId,
+        state: stateOf(r), offeredAt: r.offeredAt, expiresAt: r.expiresAt, ...r.acceptedAt ? { acceptedAt: r.acceptedAt } : {}, ...r.declined ? { declined: r.declined } : {} }))
+    }),
+  }
+  /** Its agent's computer answers the offer of task [number]. */
+  const accept = (number: number) => { const r = records.get(number)!; r.acceptedAt = clock.now; r.expiresAt = clock.now + 10 * 60_000 }
+  const decline = (number: number, reason: string) => { const r = records.get(number)!; r.declined = reason; r.expiresAt = clock.now }
+  return { state, records, offers, accept, decline }
+}
+
 function setup(open: Json[], options: { closed?: Json[]; crew?: Crew
   numbers?: { pass: (project: LedProject, numbers: Numbers, goal: () => Promise<Score | null>, board: () => Promise<string>) => Promise<void> } } = {}) {
   const github = fakeGitHub(open, options.closed)
@@ -110,12 +144,13 @@ function setup(open: Json[], options: { closed?: Json[]; crew?: Crew
   const numbers = vi.fn(async (_project: LedProject, _numbers: Numbers, _goal: () => Promise<Score | null>, _board: () => Promise<string>) => {})
   const clock = { now: Date.parse('2026-11-09T07:31:00Z') }
   const pm = { running: true, unreadable: false }
+  const server = fakeServer(clock)
   const make = () => new GitHubAssign({ projects: async () => [PROJECT], crew: async () => options.crew ?? crew(), get: github.get, send: github.send, pmRunning: async () => { if (pm.unreadable) throw new Error('The backend did not answer.'); return pm.running },
-    now: () => clock.now, log, records: new VerdictRecords(github.authors, () => clock.now, log), numbers: options.numbers ?? { pass: numbers } })
+    now: () => clock.now, log, records: new VerdictRecords(github.authors, () => clock.now, log), numbers: options.numbers ?? { pass: numbers }, offers: server.offers })
   const assigner = make()
   const labelled = () => github.sent.filter(s => /\/issues\/\d+\/labels$/.test(s.path)).map(s => [Number(s.path.split('/').at(-2)), (s.body.labels as string[])[0]])
   const said = () => github.sent.filter(s => s.path.endsWith('/comments')).map(s => [Number(s.path.split('/').at(-2)), String(s.body.body)])
-  return { github, assigner, make, log, labelled, said, clock, numbers, pm }
+  return { github, assigner, make, log, labelled, said, clock, numbers, pm, server }
 }
 
 describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () => {
@@ -269,6 +304,150 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
   // The allocator's design, package 2 (docs/design/2026-11-11-swarm-allocator): a change waiting for its read filled its builder's
   // list, so a builder with two in review was given nothing until one landed, and was not counted as having nothing; and a second
   // task was given ahead of the one in hand, which in the design's model cost up to a fifth of a heavy day.
+  // The allocator's design, package 16: a builder whose own computer answers offers is offered its task on the Swarm's server, and
+  // its computer takes it once it has room; nothing is written on GitHub for it until then.
+  describe('offers', () => {
+    /** Pip, whose computer answers offers; and Juno, on a computer from before them, when [juno]. */
+    const offering = (juno = false): Crew => ({ builders: [{ id: 'pip', name: 'Pip', label: 'builder:pip', machineId: 'mac', engine: 'claude', offers: true },
+      ...juno ? [{ id: 'juno', name: 'Juno', label: 'builder:juno', machineId: 'old', engine: 'claude' }] : []],
+      machines: [{ machineId: 'mac', observation: { resources: { memoryTotalBytes: 64 * GiB, projectDiskFreeBytes: 500 * GiB } } },
+        { machineId: 'old', observation: { resources: { memoryTotalBytes: 64 * GiB, projectDiskFreeBytes: 500 * GiB } } }] })
+
+    it('offers a task to a builder whose computer answers offers, writes nothing on GitHub, and offers it nobody else while it holds', async () => {
+      const f = setup([issue(1, ['size:s'])], { crew: offering() })
+      await f.assigner.tick()
+      expect(f.server.state.offered).toEqual([[1, 'pip']])
+      expect(f.log).toHaveBeenCalledWith('[super-tab] offered acme/app#1 to Pip (it can start now)')
+      expect([f.labelled(), f.said()]).toEqual([[], []])
+      // Held by its live offer, it is the builder's: nothing more is offered while it lasts, and the numbers counted it as given.
+      expect(f.numbers.mock.calls[0]![1]).toMatchObject({ free: [] })
+      f.clock.now += 60_000
+      await f.assigner.tick()
+      expect(f.server.state.offered).toEqual([[1, 'pip']])
+      // Read from no list (the server did not answer), the task it offered a moment ago is still the builder's.
+      f.server.state.down = true
+      f.clock.now += 30_000
+      await f.assigner.tick()
+      expect(f.server.offers.offer).toHaveBeenCalledOnce()
+      expect(f.log).toHaveBeenCalledWith('[super-tab] Task assignment: OFFER_FAILED acme/app: BACKEND_UNAVAILABLE')
+    })
+
+    it('gives by label beside it to a builder whose computer does not answer offers', async () => {
+      const f = setup([issue(1, ['size:s']), issue(2, ['size:s'])], { crew: offering(true) })
+      await f.assigner.tick()
+      expect(f.server.state.offered).toHaveLength(1)
+      expect(f.labelled()).toHaveLength(1)
+      expect([f.server.state.offered[0]![1], f.labelled()[0]![1]]).toEqual(['pip', 'builder:juno'])
+    })
+
+    it('rests a builder that declined or let an offer lapse, ten minutes doubling to two hours, and ends the rest when it accepts', async () => {
+      const f = setup([issue(1, ['size:s'])], { crew: offering() })
+      const offers = () => f.server.state.offered.length
+      await f.assigner.tick()
+      f.server.decline(1, 'memory')
+      await f.assigner.tick()
+      expect(f.log).toHaveBeenCalledWith('[super-tab] Pip declined acme/app#1 (memory): offered nothing for 10 min')
+      expect(offers()).toBe(1)
+      f.clock.now += 10 * 60_000 - 1
+      await f.assigner.tick()
+      expect(offers()).toBe(1)
+      f.clock.now += 1
+      await f.assigner.tick()
+      expect(offers()).toBe(2)
+      // Unanswered, it lapses: twenty minutes.
+      f.clock.now += 2 * 60_000
+      await f.assigner.tick()
+      expect(f.log).toHaveBeenCalledWith('[super-tab] Pip let the offer of acme/app#1 lapse: offered nothing for 20 min')
+      f.clock.now += 20 * 60_000
+      await f.assigner.tick()
+      expect(offers()).toBe(3)
+      for (const minutes of [40, 80, 120, 120]) {
+        f.clock.now += 2 * 60_000
+        await f.assigner.tick()
+        expect(f.log).toHaveBeenCalledWith(`[super-tab] Pip let the offer of acme/app#1 lapse: offered nothing for ${minutes} min`)
+        f.clock.now += minutes * 60_000
+        await f.assigner.tick()
+      }
+      // Accepted, its rest is over: the next lapse rests it ten minutes again.
+      f.server.accept(1)
+      await f.assigner.tick()
+      f.clock.now += 10 * 60_000
+      await f.assigner.tick()
+      expect(f.log).toHaveBeenLastCalledWith('[super-tab] Pip let the offer of acme/app#1 lapse: offered nothing for 10 min')
+    })
+
+    it('rests nobody for an offer taken: the server never hears of a take, and its offer lapses with the task its builder\'s', async () => {
+      const f = setup([issue(1, ['size:s'])], { crew: offering() })
+      await f.assigner.tick()
+      f.server.accept(1)
+      f.github.state.open[0] = issue(1, ['size:s', 'builder:pip', 'status:taken'])
+      f.clock.now += 10 * 60_000
+      await f.assigner.tick()
+      expect(f.log.mock.calls.filter(([line]) => String(line).includes('offered nothing'))).toEqual([])
+    })
+
+    it('moves no task given by label for a builder resting from offers', async () => {
+      // Juno, on a computer from before offers, was given #15 by label twenty minutes ago and has not taken it; Pip rests.
+      const f = setup([issue(1, ['size:s']), issue(15, ['size:m', 'builder:juno'])], { crew: offering(true) })
+      f.github.state.comments.set(15, [{ body: 'Harness, 07:11: for **Juno**: it can start now.', author_association: 'MEMBER', user: { login: 'pm-person' },
+        created_at: '2026-11-09T07:11:00Z' }])
+      f.github.state.open[0] = issue(1, ['size:s', 'builder:juno', 'status:taken'])
+      f.server.records.set(2, { agentId: 'pip', offeredAt: f.clock.now - 60_000, expiresAt: f.clock.now - 1, declined: 'memory' })
+      f.github.state.open.push(issue(2, ['size:s']))
+      await f.assigner.tick()
+      expect(f.log).toHaveBeenCalledWith('[super-tab] Pip declined acme/app#2 (memory): offered nothing for 10 min')
+      expect(f.github.sent.filter(s => s.method === 'DELETE')).toEqual([])
+      // Rested no more, it has nothing, and #15 goes back for it.
+      f.clock.now += 10 * 60_000
+      await f.assigner.tick()
+      expect(f.github.sent.filter(s => s.method === 'DELETE').map(s => s.path)).toEqual(['/repos/acme/app/issues/15/labels/builder%3Ajuno',
+        '/repos/acme/app/issues/15/labels/status%3Ataken'])
+    })
+
+    it('reads a task a live offer holds as its agent\'s, though this daemon did not make it (a restart, another coordinator)', async () => {
+      const f = setup([issue(1, ['size:s']), issue(2, ['size:s'])], { crew: offering() })
+      f.server.records.set(1, { agentId: 'pip', offeredAt: f.clock.now - 60_000, expiresAt: f.clock.now + 60_000 })
+      await f.assigner.tick()
+      // Pip builds #1 on its offer: nothing more is offered to it.
+      expect(f.server.state.offered).toEqual([])
+      expect(f.numbers.mock.calls[0]![1]).toMatchObject({ free: [], open: 1 })
+    })
+
+    it('leaves a task another agent\'s offer holds, and says it once', async () => {
+      const f = setup([issue(1, ['size:s'])], { crew: offering() })
+      f.server.records.set(1, { agentId: 'someone', offeredAt: f.clock.now, expiresAt: f.clock.now + 120_000 })
+      await f.assigner.tick()
+      f.clock.now += 1_000
+      await f.assigner.tick()
+      expect(f.server.state.offered).toEqual([])
+      expect(f.log.mock.calls.filter(([line]) => String(line).includes('OFFER_FAILED'))).toEqual([['[super-tab] Task assignment: OFFER_FAILED acme/app#1: OFFER_LIVE']])
+      expect(f.labelled()).toEqual([])
+    })
+
+    it('gives by label while the server has no offers, and asks it again ten minutes on', async () => {
+      const f = setup([issue(1, ['size:s']), issue(2, ['size:s'])], { crew: offering() })
+      f.server.state.missing = true
+      await f.assigner.tick()
+      expect(f.labelled()).toEqual([[1, 'builder:pip']])
+      expect(f.server.offers.offer).not.toHaveBeenCalled()
+      expect(f.log).toHaveBeenCalledWith('[super-tab] Task assignment: NO_OFFERS: this Swarm\'s server takes no offers, so tasks are given by label')
+      expect(f.server.offers.listed).toHaveBeenCalledOnce()
+      // An offer refused so (a server rolled back between its read and the offer) goes by label at once.
+      const g = setup([issue(1, ['size:s'])], { crew: offering() })
+      g.server.offers.offer.mockRejectedValueOnce(new SuperTabHostError('BACKEND_UNAVAILABLE', 'Route not found', 404))
+      await g.assigner.tick()
+      expect(g.labelled()).toEqual([[1, 'builder:pip']])
+      expect(g.server.offers.listed).toHaveBeenCalledOnce()
+      f.server.state.missing = false
+      f.clock.now += 10 * 60_000 - 1
+      await f.assigner.tick()
+      expect(f.server.offers.listed).toHaveBeenCalledOnce()
+      f.clock.now += 1
+      await f.assigner.tick()
+      expect(f.server.offers.listed).toHaveBeenCalledTimes(2)
+    })
+  })
+
   describe('one task building, at most four open', () => {
     /** Pip builds alone, so what it is given, or not, is the rule's own doing. */
     const alone: Crew = { builders: [crew().builders[0]!], machines: crew().machines }

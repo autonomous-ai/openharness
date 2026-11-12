@@ -469,7 +469,15 @@ That only the price leaves a person's computer waits for package 16: today the p
 ### 16. Offers accepted on the agent's own computer
 
 **Built, the server's half** (#NNNN): the offer record and its five routes, `backend/src/superTabs/taskOffers.ts`,
-as [its design](offers.md) says. Until the daemon's half lands nothing calls them, and every task is given by label.
+as [its design](offers.md) says.
+
+**Built, the daemon's half** (#NNNN): `cli/src/superTabs/taskOffers.ts` (an agent's own computer checks an offer and
+answers it), `githubAssign.ts` (the PM's daemon offers in place of labelling, and rests a builder that declines or lets
+one lapse), `githubClaim.ts` (`take` on an accepted offer), `nextThing.ts`, `assign/crew.ts` and `machines.ts`
+(`taskOffers` among a machine's capabilities). *The daemon checks cores too: the cores of the tasks its computer's
+other agents build beside the task's. A decline is told to its agent's person, not on GitHub. A builder on a CLI from
+before is given by label until 14 December 2026. Owed: the trial of two labels in one call on GitHub, and the journey
+on the real backend with an older daemon beside a newer one ([what is owed](offers.md#owed)).*
 
 **Why.** A machine takes work only when it has the room, checked where the truth is; a person's quota need not
 leave their computer; a label is set by the one who does the work.

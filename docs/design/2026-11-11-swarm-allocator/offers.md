@@ -1,8 +1,8 @@
 # Offers accepted on the agent's own computer
 
-Package 16 of [the allocator's build](BUILD.md). Status, 12 November: this design and **the server's half are built**;
-**the daemon's half is not** ([Not built yet](#not-built-yet)). Written before the code; the numbers under
-[Measured](#measured-modelled-assumed) were added after it ran.
+Package 16 of [the allocator's build](BUILD.md). Status, 12 November: this design, **the server's half** and **the
+daemon's half are built**, each in a pull request of its own; [what is owed](#owed) is listed at the end. Written before
+the code; the numbers under [Measured](#measured-modelled-assumed) were added after it ran.
 
 ## In short
 
@@ -123,23 +123,28 @@ was on its way to GitHub, and the next agent would take it too. An accepted offe
 
 ## What the daemon checks, and what it says
 
-On the agent's own computer, for an offer to one of its person's own agents:
+On the agent's own computer, for an offer to one of its person's own agents running there
+(`cli/src/superTabs/taskOffers.ts` `noRoom`, read in this order):
 
 | Check | Declines with |
 |---|---|
-| The agent's session runs here | `stopped` |
-| The issue is open, is an issue, and carries no other builder's label (one read of GitHub) | `gone` |
+| The task is of a project of the agent's, open, an issue, and carries no other builder's label and no `status:taken` but its own (one read of GitHub) | `gone` |
+| The machine has each tool its `needs:` labels name, its system and a GPU as asked (the tools probed here, as a start probes them) | `tools` |
+| The cores of the task's size (1, 2, 4) beside those of the tasks this computer's other agents build (taken, no pull request of theirs yet) fit its logical cores | `cores` |
 | Free memory holds the task's size (s 2 GB, m 4 GB, l 8 GB), and memory pressure is not critical | `memory` |
 | The project's disk, less the 10 GB its person keeps, holds it (1, 2, 4 GB) | `disk` |
 | Each known window of the agent's subscription has room for it above its person's 20% (3, 10, 25% of a 5-hour window; a fifth of that of a weekly one) | `quota` |
-| Later, when `take` is refused for good: at its limit of four, or the task closed or given to another | `limit`, `gone` |
+| Later, when `take` is refused for good: at its limit of four, or another builder's label came on as it took it | `limit`, `gone` |
 
-Not checked: CPU (a momentary reading once refused every start, `capacity.ts`; package 7 settles cores), and tools
-(the plan already reads them from this machine's own report). An unknown window is not read as unused and not as
-full: the offer is accepted, as the plan gives to such a builder today.
+Not checked: CPU as a reading (a momentary one once refused every start, `capacity.ts`): cores are counted, as the
+plan counts them. An agent whose session does not run here is not answered for: its offer lapses. What cannot be read
+(memory, disk, a window) is no reason: an unknown window is not read as unused and not as full, and the offer is
+accepted, as the plan gives to such a builder today. The windows' percentages are read on this computer
+(`usage_read`) and never leave it.
 
 A decline says one word. No number, no path, no account. Its person is told once in the agent's chat, per reason,
-until it accepts again ("Pip was offered acme/app#14 and this computer has no room for it: not enough free memory").
+until it accepts again ("I was offered acme/app#14, and this computer has no room for it: not enough free memory").
+A task gone is not said.
 
 Then `take`:
 
@@ -147,7 +152,9 @@ Then `take`:
   daemon gave);
 - without it: only on a live accepted offer of the task for this agent, read from `/mine`, with at least 2 minutes
   left by the server's clock. Each GitHub call ends within 10 seconds and a take makes at most five, so its labels
-  land while its hold stands. It then puts `builder:<name>` and `status:taken` on in one call.
+  land while its hold stands. It then puts `builder:<name>` and `status:taken` on in one call. If that call's answer
+  shows another builder's label, it takes its own two off and declines `gone`; refused at its limit of four, it
+  declines `limit`.
 
 ## Offered again, with no write to GitHub on a timer
 
@@ -159,11 +166,13 @@ A lapsed or declined task looks free on GitHub, so the PM's next pass (each minu
 one small write to the server, rewriting the same document.
 
 What bounds a stuck case is a rest, kept in the PM's daemon's memory: a builder that declined or let an offer lapse is
-offered nothing for 10 minutes, doubling to 2 hours while it keeps doing so, and at once again after it accepts.
+offered nothing for 10 minutes, doubling to 2 hours while it keeps doing so, and at once again after it accepts. An
+offer taken lapses too (the server never hears of a take), but its task then carries its builder's label, and nobody
+rests for it.
 
 | Stuck case | Writes to GitHub a day | Writes to the server a day |
 |---|---|---|
-| A task every one of M builders declines for one reason | 1, ever: the PM is told why once on the task | At most 16 offers and 16 declines a builder (10, 20, 40, 80 minutes, then every 2 hours) |
+| A task every one of M builders declines for one reason | 0. Each builder's person is told once in its chat, for each reason | At most 16 offers and 16 declines a builder (10, 20, 40, 80 minutes, then every 2 hours) |
 | A builder whose daemon never answers | 0 | At most 16 offers |
 | An agent that accepts and never takes | 0 from offers. Its own idle watch types the task three times, then tells its person (`nextThing.ts`, unchanged) | At most 16 offers and 16 accepts |
 | Today, a task given by label that nobody takes | 4 for each builder it is moved to (label, comment, take back, comment) | 0 |
@@ -237,10 +246,11 @@ Dates:
    another person's agent there, and that person cannot from any other computer. A take's writes are made with that
    person's own `gh` (`service.ts`, unchanged). Where the identity is missing the call is refused; nothing falls
    back to the machine's owner.
-9. **Failure.** A refusal has a code and words. An offer nobody answers lapses and the PM's daemon logs it once for
-   that builder. One accepted and not taken lapses, and its agent's idle watch tells its person. A task everyone
-   declined is said once to its PM, on the task. A server without the routes is said once in the log and worked
-   around. A PM at its hourly limit is told `429` and tries next pass.
+9. **Failure.** A refusal has a code and words. An offer nobody answers lapses, and the PM's daemon logs it once with
+   the builder's rest. One accepted and not taken lapses, and its agent was typed it once and its person told once
+   (`nextThing.ts`). A decline for a want of room is told once to its agent's person, for each reason. A server
+   without the routes is said once in each daemon's log and worked around. A PM at its hourly limit is told `429`,
+   said once in its log, and tries next pass.
 10. **Platforms.** The server: Linux. The daemon's half: macOS, Linux and Windows alike; it starts no process and
     opens no window. No screen changes.
 
@@ -316,7 +326,7 @@ plans, which do not change with the machine; times on a laptop running other sui
 
 **Assumed, not measured**:
 
-- An agent's daemon answers within seconds of being told. Not built, so not timed. The server counts the seconds
+- An agent's daemon answers within seconds of being told. Built, and timed only in specs, not on the real backend. The server counts the seconds
   from each offer to its accept (`swarm_task_offer_accept_seconds`), which will say whether two minutes is right.
 - The servers' clocks agree to within a second. An expiry is compared on whichever server takes the call.
 - GitHub applies two labels given in one call together, and a label write lands within 10 seconds. Not tried on
@@ -326,65 +336,33 @@ plans, which do not change with the machine; times on a laptop running other sui
   week after against the week before.
 - `experiment.mts` was not run for this package: it changes who may take a task, not who is planned for it.
 
-## Not built yet
+## Owed
 
-**The daemon's half: all of it.** No daemon offers, answers or reads an offer yet, so the server's routes are not
-called and every task is given by label, as before. It was not built on 12 November because it could not be whole
-and safe that night:
+Built, in two pull requests, the server's first:
 
-- its trials on GitHub could not be made (nothing could be written there);
-- its proof is the journey on the real backend with an older daemon beside a newer one, which is a session of its own;
-- it changes who is given a task, and the build asks for a review that hunts for a task given twice before it lands.
+- **The server's half** (`backend/src/superTabs/taskOffers.ts`): the record, its five routes, the push.
+- **The daemon's half**: the client and the agent's side (`cli/src/superTabs/taskOffers.ts`: the checks above,
+  answered as the server pushes that the agent's Swarm changed, at most once in 20 seconds for a Swarm, and once as the
+  daemon starts); `take` on an accepted offer (`githubClaim.ts`); an accepted offer as the agent's next thing
+  (`nextThing.ts`); `taskOffers` among the machine's capabilities (`machines.ts`); and the PM's side (`assign/crew.ts`
+  `crewOf`, `githubAssign.ts`): it offers where the builder's own computer answers offers, reads the project's offers
+  once a pass, reads a live offer's task as its agent's, rests a builder that declined or let one lapse, and gives by
+  label to a builder on a CLI from before, until 14 December 2026.
 
-What is left, in order, as one pull request after the backend's release is live:
+Not done, and owed before the daemon's half is called proven:
 
-1. **On GitHub first**, in the scratch repository: two labels in one `POST /issues/N/labels`; what that call's answer
-   lists when another label was put on a moment before; a `take` racing a label put by hand. If GitHub does not act
-   as this design expects, stop and report.
-2. **The server's client**, a new `cli/src/superTabs/taskOffers.ts`: `offer`, `accept`, `decline`, `mine`, `listed`
-   over `backend()`. "No such route" is a 404 whose code is not `NOT_FOUND` (the Swarm's own refusal is); it is
-   remembered 10 minutes, as `READINGS_RETRY_MS` is.
-3. **The agent's side**, a loop in that file started by `service.ts` `wake()`:
-   - whose: this person's own agents on this computer (`contributorId` and `machineOwnerId` both this person),
-     running or not;
-   - when: on `swarm_host_changed` naming a Swarm (`core.account.onNotice`), at most once in 20 seconds for a Swarm,
-     and once a minute besides;
-   - each offer not yet answered: the checks of [the table above](#what-the-daemon-checks-and-what-it-says)
-     (`readCapabilities` for memory and disk, `usage_read` with `quotaOf` for the windows, one read of the issue),
-     then `accept` or `decline`;
-   - accepted: typed to the agent once ("Next: acme/app#14 Add the export. It is offered to you until 15:52: harness
-     super-tab take acme/app#14"), under an operation id made of the task and its `offeredAt`;
-   - `nextThing.ts`: an accepted offer not yet taken is the agent's next task, after its own work, as `owed` is for
-     reads;
-   - a decline is said once for each reason to its person.
-4. **`take`** (`githubClaim.ts` `takeTask`): with the builder's label on the task, unchanged. Without it, `mine` must
-   list an accepted offer of the task with 2 minutes left by `serverTime`; then both labels in one call. If the
-   call's answer shows another builder's label, it takes its own two off and declines `gone`. Refused at the limit
-   of four, it declines `limit`.
-5. **`taskOffers` among the machine's capabilities** (`machines.ts` `CAPABILITIES`), in the same release as 3 and 4:
-   a daemon that says it speaks offers answers them.
-6. **The PM's side** (`githubAssign.ts`, `assign/crew.ts`):
-   - `crewOf` carries each machine's capabilities;
-   - each pass reads the project's offers once; a live offer's task with no builder label is read as held by its
-     agent, as `given` does for a label today;
-   - `give` offers where the builder's computer speaks offers and the server has the routes; `OFFER_LIVE` skips the
-     task; no such route gives by label for 10 minutes, leaving alone any task it offered in the last 12;
-   - the rest for a builder that declined or lapsed, and the one line to the PM for a task everyone declined
-     (`sayBlocked`, once for a task and its reasons);
-   - `openWaiting` moves only tasks given by label: it finds them by its own "for **Name**" comment, which an offer
-     never writes;
-   - an offer counts as a pick in the PM's numbers.
-7. **Specs** for each of 2 to 6 and for every row of the compatibility table; the new file on
-   `vitest.super-tabs.config.ts`'s list; mutation checks on the capability test, the no-such-route test, the
-   2-minute margin and the label check after the write.
-8. **The journey** on the real backend: an older daemon beside a newer one in one project, and a server without the
+1. **On GitHub**, in the scratch repository: two labels in one `POST /issues/N/labels`; what that call's answer lists
+   when another label was put on a moment before; a `take` racing a label put by hand. Nothing could be written on
+   GitHub while it was built. If GitHub does not act as this design expects, stop and report.
+2. **The journey** on the real backend: an older daemon beside a newer one in one project, and a server without the
    routes.
-9. **The date** the label path ends, written beside that code.
+3. **The date**: on or after 14 December 2026, `give`'s label path and `openWaiting` go, and a builder on an older
+   daemon is given nothing and its PM is told once. Then the quota percentages leave the machine's report, with
+   package 15's price.
 
-After that date, each a pull request of its own: `give`'s label path and `openWaiting` go; the quota percentages
-leave the machine's report, with package 15's price.
-
-Also not built, on purpose: nothing in Desktop shows an offer.
+Also not built, on purpose: nothing in Desktop shows an offer; no once-a-minute read of an agent's offers beside the
+push (a lost push lets an offer lapse, and its builder rests ten minutes); a task everyone declined is not said on
+GitHub.
 
 A doubt for whoever builds it: the read marks (`readMarks.ts` `raise`, `lowerReadMark`) and three claims in
 `store.ts` rest on the same Prisma `updateMany` with a filter that this package found to be a read then a write. That

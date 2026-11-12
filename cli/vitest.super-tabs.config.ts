@@ -28,6 +28,8 @@ const FILES = ['src/superTabs/shortCommand.ts', ...IN_CORE,
   'src/superTabs/githubWrites.ts',
   // How an engine left a start's pane, in fixed words, which the start's failure says (the rehearsal's Codex builders, 11-11).
   'src/superTabs/engineExit.ts',
+  // A task offered to one agent, and answered by its own computer (the allocator's design, package 16, 11-12).
+  'src/superTabs/taskOffers.ts',
 ]
 export default defineConfig({
   test: {

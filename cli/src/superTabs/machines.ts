@@ -14,6 +14,7 @@ import type { SwarmSources } from './host.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
 import { readCapabilities, quotaOf, meteredEngine, quotaUnknownReason } from './capacity.js'
+import { SPEAKS_OFFERS } from './assign/crew.js'
 import { startAgent, type ScopedRequest } from './start.js'
 import { settleHiddenScreen } from './startScreen.js'
 import { prepareSwarmStart } from './projectFolder.js'
@@ -180,6 +181,9 @@ CAPABILITIES.push('leadSwitch')
 /** This host sends its PM's turn with the PM's delivery list read (host.ts, task #3545): only then does the backend keep people's
  *  messages and crew needs to that PM for its inbox, which goes when its turn ends. */
 CAPABILITIES.push('turnInbox')
+/** This host answers the offers made to its person's agents here (taskOffers.ts OfferAnswers): their PM's daemon offers them
+ *  tasks, where it labels them for an agent on a computer from before (assign/crew.ts crewOf). */
+CAPABILITIES.push(SPEAKS_OFFERS)
 /** The backend's answer that this machine may no longer act in the Swarm: signed out, its contribution revoked or its host
  *  unavailable (backend store.ts observeMachine), or the Swarm gone. */
 const lostAccess = (error: unknown) => error instanceof SuperTabHostError && [401, 403, 404].includes(error.status)

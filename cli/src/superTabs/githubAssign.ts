@@ -4,10 +4,11 @@
  * combination of cpu disk token etc.", "lets write the best algo"). The PM labels what each task touches and needs and how
  * big and urgent it is (part:, needs:, size:, p0-p2); this reads those with the project's builders and what their machines
  * last reported, plans with the solver (assign/search.ts), and gives each builder with nothing to build what it starts next
- * (one task at a time, four open at most: assign/crew.ts hasRoom): `builder:<name>` on the issue and one line saying why.
- * GitHub news (githubMentions.ts) then brings the task to its
- * builder. It runs where the merger runs: in the Harness of the person whose agent is the project's PM, running or stopped there, with their gh.
- * A task its PM or a person gave by hand is never moved.
+ * (one task at a time, four open at most: assign/crew.ts hasRoom): an offer of it on the Swarm's server, which the builder's own
+ * computer accepts once it has room and takes in its person's name (taskOffers.ts, the allocator's package 16); or, to a builder
+ * whose computer does not answer offers, `builder:<name>` on the issue and one line saying why, which GitHub news
+ * (githubMentions.ts) then brings to its builder. It runs where the merger runs: in the Harness of the person whose agent is
+ * the project's PM, running or stopped there, with their gh. A task its PM or a person gave by hand is never moved.
  */
 import { areaOf, ASKED, builtOn, dependsOn, hasRoom, heldTasks, labelOf, machineHas, nextPicks, openPieces, outOfQuota, teamOf, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readerKey, readProblem, reasonOf, startedAt, takeBacks, takenTasks, tasksOf, worksOnOf, type AwayBuilder, type Crew, type Pick, type Read, type Up } from './assign/crew.js'
 import type { Choice } from './assign/model.js'
@@ -19,6 +20,8 @@ import { TEAM } from './githubMentions.js'
 import { goalOf, type Score } from './goal.js'
 import { numbersOf, type Numbers } from './pmNumbers.js'
 import { boardOf, boardWords } from './scoreboard.js'
+import { named } from './agentReplies.js'
+import { NO_ROUTE_MS, noSuchRoute, type TaskOffer } from './taskOffers.js'
 
 type Json = Record<string, unknown>
 
@@ -57,6 +60,12 @@ const READ_WAIT_MS = 30 * 60_000, READ_ASKS = 3
 const PIECES_SAID_MS = 24 * 60 * 60_000
 /** How Harness's ask about a quiet task begins, after the builder's name: a restart finds it by these words. */
 const QUIET_ASKED = 'nothing has moved on this task for '
+/** How long an offer can hold its task on the server at the most (backend taskOffers.ts: two minutes for an answer, ten more
+ *  once accepted): a task this daemon offered that long ago is free if no read says otherwise, and given by label to nobody. */
+const OFFER_HOLD_MS = 12 * 60_000
+/** How long a builder that declined an offer or let it lapse is offered nothing, at first and at most: doubling while it keeps
+ *  doing so, as its computer has no room or does not answer, and over once it accepts one. A rest is this daemon's own memory. */
+const REST_MS = 10 * 60_000, REST_MAX_MS = 2 * 60 * 60_000
 export class GitHubAssign {
   private timer: NodeJS.Timeout | null = null
   private running: Promise<void> | null = null
@@ -86,6 +95,14 @@ export class GitHubAssign {
   private readonly quiet = new Map<string, { since: number; askedAt: number }>()
   /** Each finished task's size and the minutes its work took, by repository and issue; null when it cannot be told. */
   private readonly took = new Map<string, { size: string; minutes: number } | null>()
+  /** The tasks this daemon offered, by `repo#N`: its agent's while no read of the server says otherwise, for as long as an offer
+   *  can hold one, and given by label to nobody meanwhile. */
+  private readonly offered = new Map<string, { agentId: string; at: number }>()
+  /** Each builder resting from offers (REST_MS), by agent id; and the ended offers already counted, by `repo#N@offeredAt`. */
+  private readonly rests = new Map<string, { until: number; ms: number }>()
+  private readonly ended = new Set<string>()
+  /** Until when this Swarm's server is taken to have no offers (taskOffers.ts noSuchRoute): every task goes by label meanwhile. */
+  private offersFrom = 0
   private projects: { at: number; list: LedProject[] } | null = null
   private offUntil = 0
   private logged = ''
@@ -102,7 +119,9 @@ export class GitHubAssign {
     pmRunning: (project: LedProject) => Promise<boolean>
     /** Takes what a pass counted of a project, for its PM and its people, and how to read its goal and what its day's
      *  scoreboard says when a line says them (pmNumbers.ts PmNumbers). */
-    numbers: { pass: (project: LedProject, numbers: Numbers, goal: () => Promise<Score | null>, board: () => Promise<string>) => Promise<void> } }) {
+    numbers: { pass: (project: LedProject, numbers: Numbers, goal: () => Promise<Score | null>, board: () => Promise<string>) => Promise<void> }
+    /** The Swarm's server, as [project]'s PM: an offer of a task to an agent, and the project's offers (taskOffers.ts). */
+    offers: { offer: (project: LedProject, number: number, agentId: string) => Promise<void>; listed: (project: LedProject) => Promise<TaskOffer[]> } }) {
     this.now = deps.now ?? Date.now
     this.log = deps.log ?? (line => console.warn(line))
     this.reads = new GitHubReads(deps.get, this.now)
@@ -162,6 +181,7 @@ export class GitHubAssign {
     for (const key of [...this.backs]) if (key.startsWith(`${repo}#`) && !open.has(key.slice(0, key.indexOf(':back:')))) this.backs.delete(key)
     for (const key of [...this.blocked]) if (key.startsWith(`${repo}#`) && !open.has(key.slice(0, key.indexOf(':blocked:')))) this.blocked.delete(key)
     for (const key of [...this.pieces, ...this.waited.keys()]) if (key.startsWith(`${repo}#`) && !open.has(key)) { this.pieces.delete(key); this.waited.delete(key) }
+    for (const key of [...this.offered.keys()]) if (key.startsWith(`${repo}#`) && !open.has(key)) this.offered.delete(key)
     const issues = listed.map(issue => {
       const key = `${repo}#${issue.number}`, label = this.given.get(key)
       if (!label) return issue
@@ -169,6 +189,7 @@ export class GitHubAssign {
       return { ...issue, labels: [...(Array.isArray(issue.labels) ? issue.labels : []), { name: label }] }
     })
     const crew = await this.deps.crew(project)
+    const offers = await this.offersOf(project, crew, issues)
     // What each builder works on in this project: the Works on line of its instructions file here (agents/<Name>.md).
     for (const builder of crew.builders) builder.worksOn = worksOnOf(await this.reads.file(repo, `agents/${builder.name}.md`))
     await this.labelRepo(repo, crew)
@@ -183,7 +204,8 @@ export class GitHubAssign {
     const { withReaders, up } = await this.askReaders(project, issues, pulls, crew)
     // Read after them: such a task is not one its builder builds, and takes none of its time in the plan; and a task that
     // comes after another waits for that one's pull request to be up.
-    const read = readProblem({ now: this.now(), issues, closed, crew, withReaders, up, minutes })
+    const read = readProblem({ now: this.now(), issues: this.heldByOffers(repo, issues, offers, crew), closed, crew, withReaders, up, minutes })
+    this.rest(read)
     // One whose machine is down keeps its tasks while nobody else can take them: they would only come back to it, labels and
     // comments twice over. One its person is stopping gives them back all the same, for whoever joins.
     await this.takeBack(repo, issues, (crew.away ?? []).filter(away => (away.why !== 'down' && away.why !== 'paused') || crew.builders.length > 0), undefined, withReaders)
@@ -535,7 +557,8 @@ export class GitHubAssign {
    * Once a task and builder in a daemon's life, so a plan or a person that gives it back to that builder is not undone.
    */
   private async openWaiting(repo: string, issues: Json[], crew: Crew, read: Read, short: AwayBuilder[]): Promise<void> {
-    const idle = crew.builders.filter(b => hasRoom(read, b.id) && !short.some(away => away.label === b.label))
+    // One resting from offers (rest) is given nothing now, so nothing is moved for it.
+    const idle = crew.builders.filter(b => hasRoom(read, b.id) && !short.some(away => away.label === b.label) && !((this.rests.get(b.id)?.until ?? 0) > this.now()))
     if (!idle.length) return
     const now = this.now()
     const open = new Set(issues.filter(issue => !issue.pull_request).map(issue => Number(issue.number)))
@@ -616,12 +639,94 @@ export class GitHubAssign {
     this.log(`[super-tab] asked ${name} to read ${repo}#${number} at ${head.slice(0, 7)}`)
   }
 
-  /** Labels the task for its builder and says why on it, as Harness, in its PM's person's name. Whether it was given. */
+  /**
+   * [project]'s offers as the Swarm's server has them, read once a pass while a builder's own computer answers offers: a live one
+   * holds its task for its agent (heldByOffers); one declined or let lapse while its task is still free among the open [issues]
+   * rests its builder, for [REST_MS] doubling to [REST_MAX_MS], and one accepted ends its rest. One taken lapses too, as the
+   * server never hears of a take: its task carries its builder's label then, and rests nobody. None while the server is taken to
+   * have no offers.
+   */
+  private async offersOf(project: LedProject, crew: Crew, issues: Json[]): Promise<TaskOffer[]> {
+    if (!crew.builders.some(builder => builder.offers) || this.now() < this.offersFrom) return []
+    let offers: TaskOffer[]
+    try { offers = await this.deps.offers.listed(project) } catch (error) {
+      this.noOffers(error, project.repo)
+      return []
+    }
+    const keyOf = (offer: TaskOffer) => `${project.repo}#${offer.number}@${offer.offeredAt}`
+    const listed = new Set(offers.map(keyOf))
+    for (const key of [...this.ended]) if (key.startsWith(`${project.repo}#`) && !listed.has(key)) this.ended.delete(key)
+    const free = new Set(issues.filter(issue => !labelNames(issue).some(name => name.startsWith('builder:'))).map(issue => Number(issue.number)))
+    for (const offer of offers) {
+      if (offer.state === 'accepted') this.rests.delete(offer.agentId)
+      if ((offer.state !== 'declined' && offer.state !== 'lapsed') || this.ended.has(keyOf(offer))) continue
+      this.ended.add(keyOf(offer))
+      if (!free.has(offer.number)) continue
+      const ms = Math.min(REST_MAX_MS, 2 * (this.rests.get(offer.agentId)?.ms ?? REST_MS / 2))
+      this.rests.set(offer.agentId, { until: this.now() + ms, ms })
+      const name = crew.builders.find(builder => builder.id === offer.agentId)?.name ?? offer.agentId
+      this.log(`[super-tab] ${name} ${offer.state === 'declined' ? `declined ${project.repo}#${offer.number} (${offer.declined})` : `let the offer of ${project.repo}#${offer.number} lapse`}: offered nothing for ${ms / 60_000} min`)
+    }
+    return offers
+  }
+
+  /** [issues] with each task an offer holds read as its agent's, as its label would be: those live on the server, and those this
+   *  daemon offered that no read showed ended, for as long as an offer can hold one. Only the plan reads them so: what takes a task
+   *  back or asks about one reads its labels alone, as an offer is never undone on GitHub. */
+  private heldByOffers(repo: string, issues: Json[], offers: TaskOffer[], crew: Crew): Json[] {
+    const holders = new Map<number, string>()
+    for (const [key, mine] of [...this.offered]) {
+      if (this.now() - mine.at >= OFFER_HOLD_MS) this.offered.delete(key)
+      else if (key.startsWith(`${repo}#`)) holders.set(Number(key.slice(repo.length + 1)), mine.agentId)
+    }
+    for (const offer of offers) {
+      if (offer.state === 'offered' || offer.state === 'accepted') holders.set(offer.number, offer.agentId)
+      else { holders.delete(offer.number); this.offered.delete(`${repo}#${offer.number}`) }
+    }
+    const labels = new Map(crew.builders.map(builder => [builder.id, builder.label]))
+    return issues.map(issue => {
+      const label = labels.get(holders.get(Number(issue.number)) ?? '')
+      return label && !labelNames(issue).some(name => name.startsWith('builder:')) ? { ...issue, labels: [...labelNames(issue).map(name => ({ name })), { name: label }] } : issue
+    })
+  }
+
+  /** No free task is planned on a builder resting from offers: the plan gives it to another. */
+  private rest(read: Read): void {
+    const resting = [...this.rests].filter(([, rest]) => rest.until > this.now()).map(([id]) => id)
+    for (const task of read.problem.tasks) if (resting.length && read.free.has(task.id)) task.notBuilders = [...new Set([...task.notBuilders, ...resting])]
+  }
+
+  /** An offer, or the read of a project's offers, failed: a server without the routes is not asked about offers for [NO_ROUTE_MS],
+   *  and every task is given by label meanwhile; anything else (another agent's offer of the task stands, a server that is down)
+   *  is said once, and the task waits for the next pass. */
+  private noOffers(error: unknown, at: string): void {
+    if (!noSuchRoute(error)) return this.once(`[super-tab] Task assignment: OFFER_FAILED ${at}: ${named(error)}`)
+    this.offersFrom = this.now() + NO_ROUTE_MS
+    this.once(`[super-tab] Task assignment: NO_OFFERS: this Swarm's server takes no offers, so tasks are given by label`)
+  }
+
+  /** Gives the task to its builder, as Harness, in its PM's person's name: offered, to a builder whose own computer answers
+   *  offers, which takes it itself once it has room, with nothing on GitHub until then; else labelled for it, with one line on it
+   *  saying why. Whether it was given. */
   private async give(project: LedProject, read: Read, pick: Pick): Promise<boolean> {
     const builder = read.builders.get(pick.builder)
     const number = Number(pick.task.slice(1))
     if (!builder || !Number.isSafeInteger(number)) return false
     const { name, label } = builder
+    if (builder.offers && this.now() >= this.offersFrom) {
+      try {
+        await this.deps.offers.offer(project, number, builder.id)
+        this.offered.set(`${project.repo}#${number}`, { agentId: builder.id, at: this.now() })
+        this.log(`[super-tab] offered ${project.repo}#${number} to ${name} (${reasonOf(pick, read)})`)
+        return true
+      } catch (error) {
+        this.noOffers(error, `${project.repo}#${number}`)
+        if (!noSuchRoute(error)) return false
+      }
+    }
+    // By label: to a builder whose computer does not answer offers, a CLI from before them, until 2026-12-14 (30 days after the CLI
+    // that answers them is released), when such a builder is given nothing, and this and openWaiting go; and while the server has
+    // no offers.
     const labelled = await this.deps.send('POST', `/repos/${project.repo}/issues/${number}/labels`, { labels: [label] })
     if (labelled.status !== 200) {
       this.once(`[super-tab] Task assignment: LABEL_REFUSED ${project.repo}#${number}: GitHub answered ${labelled.status}`)

@@ -12,9 +12,10 @@
  * for each pull request of its that is not a draft, a reader's HOLD on its head, then its checks failed at its head, then its
  * branch behind or conflicting with its base, as the merger reads them (githubMerge.ts verdicts, checksOf, mergeable_state),
  * which the merger has said on the pull request once and GitHub news brought it, and it slept on. Then a task it took
- * (status:taken) with no pull request of its yet, which is its own work to go on with: nothing is typed. Then the oldest task
- * given to it and not taken, with the branches to build it on when it comes after tasks whose pull requests of its are up
- * (the allocator's design, package 3). What it is typed ends with the command that answers it, as every ask Harness types
+ * (status:taken) with no pull request of its yet, which is its own work to go on with: nothing is typed. Then a task offered to
+ * it that its computer accepted (taskOffers.ts), which holds it for it a few minutes only. Then the oldest task given to it and
+ * not taken, with the branches to build it on when it comes after tasks whose pull requests of its are up (the allocator's
+ * design, package 3). What it is typed ends with the command that answers it, as every ask Harness types
  * does. The same thing typed three times with no change (a push changes a pull request's head) goes to its person instead,
  * once, and is not typed a fourth time; the counts outlive a restart.
  */
@@ -29,6 +30,7 @@ import type { WatchedAgent } from './githubMentions.js'
 import { FailingHeads, headChecks, isHeld, pullPeople, pullTalk, verdicts } from './githubMerge.js'
 import { GitHubReads, GitHubStop, type GitHubGet, type GitHubSend } from './githubRest.js'
 import { hhmm } from './githubVerdict.js'
+import { TAKE_MARGIN_MS, type TaskOffer } from './taskOffers.js'
 import { identifier, object, SuperTabHostError } from './wire.js'
 
 /** How long after a turn ends its agent is looked at: what was queued for it is typed the moment it ends, and comes first. */
@@ -126,6 +128,8 @@ export class NextThing {
     /** [comments] with the agent the backend recorded as each verdict's writer (githubMerge.ts VerdictRecords.named), asked as
      *  [agent]; null while the records cannot be read. Only a READ-OK made by command is a read. */
     named: (agent: WatchedAgent, repo: string, comments: Record<string, unknown>[]) => Promise<Record<string, unknown>[] | null>
+    /** [agent]'s live offers on the Swarm's server, with its time as it read them (taskOffers.ts agentOffers). */
+    offers: (agent: WatchedAgent) => Promise<{ offers: TaskOffer[]; serverTime: number }>
     file: string
     log?: (line: string) => void
   }) {
@@ -215,6 +219,11 @@ export class NextThing {
     }
   }
 
+  /** Its computer accepted a task offered to [harnessId] (taskOffers.ts): it is typed it while idle, as at its turn's end. */
+  offered(harnessId: string): void {
+    this.lookIn(harnessId, 0)
+  }
+
   /** Everything that waits for the agent in terminal [harnessId], a line each, in the order its turns' ends type them, read as GitHub
    *  has it now (`harness super-tab inbox`; Swarm plan, step 1, item 2: "One command lists what waits for an agent"): at most
    *  [INBOX_MAX]. None for a terminal that is not one of this computer's person's agents in a project. Nothing is typed or counted. */
@@ -253,6 +262,9 @@ export class NextThing {
 
   /** What waits for [agent], in lampOS's order, read a thing at a time, so its next thing reads no further than itself. */
   private async *waiting(agent: WatchedAgent): AsyncGenerator<Waiting> {
+    // Its offers, read once for all its repositories as they are first needed. A server that cannot say is no offer: a task given
+    // by label still comes.
+    let offered: Promise<{ offers: TaskOffer[]; serverTime: number }> | null = null
     for (const repo of agent.repos) {
       const items = await this.reads.current(repo, `/repos/${repo}/issues?state=open&labels=${encodeURIComponent(agent.label)}&per_page=100`, 1)
       const tasks = items.filter(it => !it.pull_request && Number.isSafeInteger(it.number))
@@ -282,6 +294,19 @@ export class NextThing {
       if (held) {
         yield { held, repo }
         continue
+      }
+      // An offer it accepted, which holds the task for it until its expiry, by the server's clock: it is told the last minute, on
+      // its own clock, a take goes through (githubClaim.ts), and is told none that has less left.
+      offered ??= this.deps.offers(agent).catch(() => ({ offers: [], serverTime: 0 }))
+      const { offers, serverTime } = await offered
+      const takeable = offers.filter(o => o.state === 'accepted' && o.repository === repo && o.expiresAt - serverTime >= TAKE_MARGIN_MS)
+      for (const offer of takeable.sort((a, b) => a.number - b.number)) {
+        const task = await this.reads.one(repo, `/repos/${repo}/issues/${offer.number}`)
+        // Taken already (its label is on), or closed or given to another since: nothing to take.
+        if (task.state !== 'open' || labelNames(task).some(name => name.startsWith('builder:'))) continue
+        const key = `${repo}#${offer.number}`, title = String(task.title ?? '').trim()
+        yield { key: `${key} offer ${offer.offeredAt}`, typed: `Next: ${title ? `${key} ${title}` : key}. It is offered to you until ${hhmm(Date.now() + offer.expiresAt - TAKE_MARGIN_MS - serverTime)}: `
+          + `harness super-tab take ${key}`, did: `offered me ${titled(repo, { number: offer.number, title })} as my next task` }
       }
       const next = tasks.filter(task => !labelNames(task).includes('status:taken')).sort((a, b) => Number(a.number) - Number(b.number))[0]
       if (!next) continue
