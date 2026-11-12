@@ -173,7 +173,7 @@ const waitsOnPieces = (issue: Json, labels: string[]): boolean => labels.include
  * choice (readerFor) and a problem's lists (readProblem) count by it: readers are asked before the problem is read, as the
  * problem needs to know which tasks are in review.
  */
-export function heldTasks(issues: Json[], builders: CrewBuilder[]): Map<string, number[]> {
+export function heldTasks(issues: Json[], builders: Array<{ id: string; label: string }>): Map<string, number[]> {
   const byLabel = new Map(builders.map(b => [b.label, b]))
   const held = new Map<string, number[]>(builders.map(b => [b.id, []]))
   for (const issue of issues) {
@@ -351,7 +351,7 @@ export function readProblem(input: { now: number; issues: Json[]; crew: Crew; wi
  * counts for nothing: a builder's four open are each project's own, as a project whose merger is off would otherwise cap its
  * builders in every other (review of #4144).
  */
-export function buildingIn(lists: Json[][], builder: CrewBuilder): { tasks: number; minutes: number } {
+export function buildingIn(lists: Json[][], builder: { id: string; label: string }): { tasks: number; minutes: number } {
   let tasks = 0, minutes = 0
   for (const listed of lists) {
     const up = new Set(listed.filter(item => item.pull_request && item.draft === false && labelsOf(item).includes(builder.label)).flatMap(tasksOf))

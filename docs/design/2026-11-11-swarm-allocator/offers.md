@@ -153,6 +153,7 @@ On the agent's own computer, for an offer to one of its person's own agents runn
 | Check | Declines with |
 |---|---|
 | The task is of a project of the agent's, open, an issue, and carries no other builder's label and no `status:taken` but its own (one read of GitHub) | `gone` |
+| The agent has no other task in hand: none given or taken to it with no pull request of its up, as the plan counts one it builds in another project (`buildingIn`, package 11), and none it accepted here whose hold has not ended and that is given to it nowhere yet. A second project's plan reads only labels, so between an accept and its give it saw the agent free and could offer it a second task (found merging package 11 into this) | `busy` |
 | The machine has each tool its `needs:` labels name, its system and a GPU as asked (the tools probed here, as a start probes them) | `tools` |
 | The cores of the task's size (1, 2, 4) beside those of the tasks this computer's other agents build (taken, no pull request of theirs yet) and of those it accepted whose hold has not ended, each counted once, fit its logical cores. The plan counts no cores (package 7), so this is the one guard | `cores` |
 | Free memory holds the task's size (s 2 GB, m 4 GB, l 8 GB), and memory pressure is not critical | `memory` |
@@ -169,7 +170,7 @@ accepted, as the plan gives to such a builder today. The windows' percentages ar
 A decline says one word. No number, no path, no account. Its person is told once in the agent's chat, per reason,
 until it accepts again, and a restart says it again no more: what was told is kept in a file
 (`super-tab-offers-told.json`). ("I was offered acme/app#14, and this computer has no room for it: not enough free
-memory".) A task gone is not said.
+memory".) A task gone, or an agent busy, is not said.
 
 Then `take`:
 

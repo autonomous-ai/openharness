@@ -9,7 +9,7 @@
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { DISK_KEPT, machineHas, RESERVE, SIZES, tasksOf } from './assign/crew.js'
+import { buildingIn, DISK_KEPT, machineHas, RESERVE, SIZES, tasksOf } from './assign/crew.js'
 import type { WatchedAgent } from './githubMentions.js'
 import { GitHubReads, type GitHubGet } from './githubRest.js'
 import { named } from './agentReplies.js'
@@ -144,7 +144,7 @@ export class OfferAnswers {
   private readonly answered = new Set<string>()
   /** The tasks this computer accepted, by `repo#N`, with the cores their size holds, until their hold ends on this clock: its agent
    *  builds them within it (review of #4153: two agents here accepted work their cores could not hold together). */
-  private readonly holding = new Map<string, { cpu: number; until: number }>()
+  private readonly holding = new Map<string, { agentId: string; cpu: number; until: number }>()
   /** What each agent's person was told, by agent and reason; read from [file] as it is first needed. */
   private told: Set<string> | null = null
   /** The failure last said of each thing that failed (the agents' read, an agent's offers, an offer), until it passes or changes. */
@@ -298,7 +298,7 @@ export class OfferAnswers {
     const told = this.toldOnce()
     if (!reason) {
       const left = answered.offer.expiresAt - answered.serverTime
-      this.holding.set(task, { cpu, until: this.now() + (Number.isFinite(left) ? left : ACCEPT_HOLD_MS) })
+      this.holding.set(task, { agentId: agent.agentId, cpu, until: this.now() + (Number.isFinite(left) ? left : ACCEPT_HOLD_MS) })
       const ended = [...told].filter(line => line.startsWith(`${agent.agentId}|`))
       for (const line of ended) told.delete(line)
       if (ended.length) this.keep()
@@ -328,7 +328,36 @@ export class OfferAnswers {
     const reason = noRoom({ issue, label: agent.label, machine: await this.deps.machine(session?.cwd ?? null, needs), cores: this.deps.cores(),
       held: await this.held(agents.filter(other => other.agentId !== agent.agentId), task),
       windows: session ? await this.deps.windows(session.engine) : { known: false, windows: [] } })
-    return { reason, cpu: sizeOf(labels).cpu }
+    return { reason: reason !== 'gone' && await this.busy(agent, task) ? 'busy' : reason, cpu: sizeOf(labels).cpu }
+  }
+
+  /**
+   * Whether [agent] has a task in hand but [task]: one given or taken to it with no pull request of its up, as the plan counts one
+   * it builds in another project (assign/crew.ts buildingIn, package 11), or one it accepted here whose hold has not ended and that
+   * is given to it nowhere yet. A second project's plan reads only labels, so between an accept and its give it saw this agent free
+   * and could offer it a second task (the merge of #4144 and #4153). Declined `busy`, its person is told nothing (WHY).
+   */
+  private async busy(agent: WatchedAgent, task: string): Promise<boolean> {
+    const labelled = await this.labelled(agent)
+    const lists = labelled.map(([repo, items]) => items.filter(item => `${repo}#${item.number}` !== task))
+    if (buildingIn(lists, { id: agent.agentId, label: agent.label }).tasks > 0) return true
+    const given = new Set(labelled.flatMap(([repo, items]) => items.filter(item => !item.pull_request).map(item => `${repo}#${item.number}`)))
+    return this.liveHolds().some(([key, hold]) => hold.agentId === agent.agentId && key !== task && !given.has(key))
+  }
+
+  /** What this computer accepted whose hold has not ended on this clock; one that ended goes. */
+  private liveHolds(): Array<[string, { agentId: string; cpu: number; until: number }]> {
+    for (const [key, hold] of [...this.holding]) if (hold.until <= this.now()) this.holding.delete(key)
+    return [...this.holding]
+  }
+
+  /** [agent]'s open issues and pull requests its label is on, in each of its repositories. */
+  private async labelled(agent: WatchedAgent): Promise<Array<[string, Json[]]>> {
+    const lists: Array<[string, Json[]]> = []
+    for (const repo of agent.repos) {
+      lists.push([repo, await this.reads.current(repo, `/repos/${repo}/issues?state=open&labels=${encodeURIComponent(agent.label)}&per_page=100`, 1)])
+    }
+    return lists
   }
 
   /**
@@ -340,18 +369,14 @@ export class OfferAnswers {
   private async held(agents: WatchedAgent[], task: string): Promise<number> {
     const cores = new Map<string, number>()
     for (const agent of agents) {
-      for (const repo of agent.repos) {
-        const items = await this.reads.current(repo, `/repos/${repo}/issues?state=open&labels=${encodeURIComponent(agent.label)}&per_page=100`, 1)
+      for (const [repo, items] of await this.labelled(agent)) {
         const pulled = new Set(items.filter(item => item.pull_request).flatMap(tasksOf))
         for (const item of items) {
           if (!item.pull_request && labelsOf(item).includes('status:taken') && !pulled.has(Number(item.number))) cores.set(`${repo}#${item.number}`, sizeOf(labelsOf(item)).cpu)
         }
       }
     }
-    for (const [key, hold] of [...this.holding]) {
-      if (hold.until <= this.now()) this.holding.delete(key)
-      else if (key !== task && !cores.has(key)) cores.set(key, hold.cpu)
-    }
+    for (const [key, hold] of this.liveHolds()) if (key !== task && !cores.has(key)) cores.set(key, hold.cpu)
     return [...cores.values()].reduce((sum, cpu) => sum + cpu, 0)
   }
 
