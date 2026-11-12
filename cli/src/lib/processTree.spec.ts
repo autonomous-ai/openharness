@@ -58,6 +58,24 @@ describe('an engine\'s process tree', () => {
     expect(await engineDescendants(ENGINE, 'darwin', async () => '')).toBeNull()
   })
 
+  // Linux derives `lstart` from the boot time, which moves when the clock is stepped (a device's NTP after boot): the
+  // engine's saved marker then reads differently, and only its start ticks still name it.
+  it('on Linux finds the engine and its survivors by their start ticks, after the clock was stepped', async () => {
+    const ticks = new Map([[500, 7000], [501, 7001], [502, 7002], [600, 9000]])
+    const ticksOf = (pid: number) => ticks.get(pid) ?? null
+    const stepped = PS.replaceAll('Thu Nov 12 10:', 'Thu Nov 12 11:')
+    const engine = { ...ENGINE, startTicks: 7000 }
+    const found = await engineDescendants(engine, 'linux', async () => stepped, ticksOf)
+    expect(found!.map((p) => p.pid)).toEqual([501, 502])
+    expect(found![1]).toMatchObject({ pid: 502, startTicks: 7002 })
+    // Saved before another step: the ticks still say which is the same process, and a reused pid is not.
+    const members = [{ pid: 502, pgid: 502, startMarker: 'Thu Nov 12 10:00:03 2026', startTicks: 7002 },
+      { pid: 600, pgid: 600, startMarker: 'Thu Nov 12 11:00:06 2026', startTicks: 1 }]
+    expect(await treeSurvivors(members, async () => stepped, 'linux', ticksOf)).toEqual([members[0]])
+    // Off Linux there are no ticks: the marker decides, as before.
+    expect(await engineDescendants(engine, 'darwin', async () => stepped, ticksOf)).toEqual([])
+  })
+
   it('stops at 1024 processes', async () => {
     const children = Array.from({ length: 2000 }, (_, at) => `${1000 + at}   500   500 Thu Nov 12 10:00:02 2026 node tool.js`)
     const found = await engineDescendants(ENGINE, 'darwin', async () => `${PS}${children.join('\n')}\n`)
