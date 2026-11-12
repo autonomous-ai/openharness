@@ -1,0 +1,58 @@
+name: tmp sandbox hooks
+
+# TEMPORARY, for #4194's Linux sandbox check; removed before the pull request. It runs Hermes inside
+# `unshare` (cli/e2e/hermesTerminalRecord.e2e.ts), which cli-e2e.yml cannot: its runners' AppArmor
+# refuses unprivileged user namespaces, so the sandbox group skips there.
+on:
+  push:
+    branches: ['0xken15/sandbox-hooks']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tmp-sandbox-hooks-${{ github.ref }}
+  cancel-in-progress: true
+
+# The same pin as cli-e2e.yml.
+env:
+  CLI_NODE_VERSION: 24.22.2
+
+jobs:
+  sandbox:
+    name: sandbox (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # x64, and ARM64 as the device is.
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: cli
+    env:
+      # tmux mangles what it prints without a UTF-8 locale, as in cli-e2e.yml.
+      LANG: C.UTF-8
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.CLI_NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - name: Install tmux
+        run: |
+          sudo bash ../scripts/apt-install.sh tmux
+          tmux -V
+      - run: npm ci --no-audit --no-fund
+      - name: Allow unprivileged user namespaces
+        run: |
+          # Ubuntu 24.04's AppArmor refuses them by default; this runner only.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          unshare --user --map-root-user --mount --pid --fork true
+      - name: Hermes in a sandbox, end to end
+        run: |
+          # The sandbox covers /tmp with its own, so the test's root lives outside it.
+          mkdir -p ~/e2e-tmp
+          TMPDIR=~/e2e-tmp HARNESS_E2E_REQUIRE_SANDBOX=1 npx vitest run --config vitest.e2e.config.ts e2e/hermesTerminalRecord.e2e.ts
