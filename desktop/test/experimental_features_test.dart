@@ -146,7 +146,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.text('Hachi'), findsOneWidget);
-    expect(find.textContaining('⇧⌘H opens it.'), findsOneWidget);
+    expect(find.textContaining('starts and follows harnesses'), findsOneWidget);
     final toggle = find.byKey(const ValueKey('experimental-hachi'));
     expect(tester.widget<Switch>(toggle).value, isFalse);
     expect(store.isAvailable(hachi), isTrue);

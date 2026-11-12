@@ -64,7 +64,9 @@ enum ExperimentalFeature {
   hachi(
     'hachi',
     'Hachi',
-    'Turn on to get Hachi, a Claude Code or Codex of yours that starts and follows harnesses for you. ⇧⌘H opens it.',
+    // No key here: Windows shows this line too, and its key is Alt+Shift+H. The welcome hint and the
+    // palette name the key each platform takes.
+    'Turn on to get Hachi, a Claude Code or Codex of yours that starts and follows harnesses for you.',
   );
 
   const ExperimentalFeature(this.id, this.label, this.description);
