@@ -22,6 +22,7 @@ import { incompatibleHarnessEngine } from '../../dsh/compatibility.js'
 import type { DshThrough } from './dshThrough.js'
 import * as opencodeLaunch from '../../engines/launchControl.js'
 import { isTerminalEngine, type AgentEngine } from '../../engines/types.js'
+import { OPENCLAW_LOCAL } from '../../engines/openclaw/contract.js'
 import { engineLabel } from '../../lib/agentNames.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
 import { enginePathOverride } from '../../lib/engineBin.js'
@@ -117,6 +118,10 @@ async function swarmFolder(cwd: string): Promise<boolean> {
   return harnessMadeWorktree(cwd, root)
 }
 
+function isFolder(path: string): boolean {
+  try { return statSync(path).isDirectory() } catch { return false }
+}
+
 /** A create held because [engine]'s hooks are not in place (kit/hooksHeldDetail.ts). */
 function hooksHeld(engine: string, waiting: string) {
   return { ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native', detail: hooksHeldDetail(engine, waiting) } as const
@@ -133,6 +138,9 @@ export function createAgentCreator({
     if (!authority.current()) return stale()
     if (input.swarmRole && !swarmLaunch) return { ok: false, error: 'SWARM_SKILL_FAILED', detail: 'The Swarm is off on this computer (HARNESS_SWARM).' }
     let { engine, cwd, bypassPermission, permissionMode, grid, codexHome, claudeHome, dsh, prompt, name, agent, scmLaunchRecord, startedBy, parentAgentId, launchModel, browser } = input
+    const openclawLocal = input.openclawLocal ?? undefined
+    // Checked again here: a saved launch runs later, and a run without its folder never falls back to the shared one.
+    if (openclawLocal && !isFolder(openclawLocal)) return { ok: false, error: 'OPENCLAW_FOLDER_GONE', detail: OPENCLAW_LOCAL.folderGone }
     let createBackend = initialBackend
     if (!createBackend && recoverBackend) {
       createBackend = await recoverBackend()
@@ -180,6 +188,8 @@ export function createAgentCreator({
     // which nobody is waiting on, still holds.
     if (inspected && !inspected.ok) return inspected.refusal ? { ok: false, error: inspected.refusal, detail: inspected.detail } : inspected
     const native = inspected?.ok ? inspected.launch : undefined
+    // Only a launch prepared for this folder starts a local run: any other would run on the shared state folder.
+    if (openclawLocal && native?.openclawLocal !== openclawLocal) return { ok: false, error: 'OPENCLAW_LOCAL_UNPREPARED', detail: OPENCLAW_LOCAL.unprepared }
     if (engine === 'codex' && native) codexHome = nativeHookLocations(native.environment).CODEX_HOME
     const current = () => authority.current() && (!native || native.current())
     if (!current()) return stale()
@@ -453,6 +463,7 @@ export function createAgentCreator({
       parentAgentId: parentAgentId ?? null,
       ...(browser ? { browser: true } : {}),
       ...(firstTask ? { firstTask } : {}),
+      ...(openclawLocal ? { openclawLocal } : {}),
     })
     if (!result.ok) return { ok: false, error: result.error, detail: result.detail }
     const { spawned, pending } = result

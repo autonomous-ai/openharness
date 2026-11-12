@@ -512,9 +512,8 @@ answers it), `githubAssign.ts` (the PM's daemon offers in place of labelling, an
 one lapse), `githubClaim.ts` (`take` on an accepted offer), `nextThing.ts`, `assign/crew.ts` and `machines.ts`
 (`taskOffers` among a machine's capabilities). *The daemon counts no cores, as the plan counts none (package 7). It
 declines as busy an offer to an agent with a task in hand in another of its projects, as that project's plan counts
-one, or accepted in any project and not given yet. A decline for want of room is told to its agent's person, once for each
-reason, not on GitHub. A builder on a CLI from before is given by label until 14
-December 2026. Owed: the trial of two labels in one call on GitHub, and the journey on the real backend with an older
+one, or accepted in any project and not given yet. A decline for want of room is told to its agent's person, once for
+each reason, not on GitHub. A builder on a CLI from before is given by label until 14 December 2026. Owed: the trial of two labels in one call on GitHub, and the journey on the real backend with an older
 daemon beside a newer one ([what is owed](offers.md#owed)).*
 
 **Why.** A machine takes work only when it has the room, checked where the truth is; a person's quota need not

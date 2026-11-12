@@ -399,7 +399,8 @@ export class CommanderMirror {
     this.opts.send({ type: 'commander_event', agentId: this.opts.agentIdFor?.(sessionId) ?? sessionId, dbSessionId: sessionId, ...(name ? { name } : {}), payload: subagent ? { ...payload, subagent: true } : payload })
   }
 
-  /** Recap diagnostics stay in the adapter log; the web only gets summary pending/done state. */
+  /** Recap diagnostics stay in the adapter log; the web only gets summary pending/done state. Lengths and ids
+   *  only, never an ask, an answer or a recap: the log outlives `harness delete`. */
   private trace(_sessionId: string, line: string, isError = false): void {
     ;(isError ? console.error : console.log)(`[recap] ${line}`)
   }
@@ -509,7 +510,7 @@ export class CommanderMirror {
             if (!st.agents.some((a) => a.id === id)) st.agents.push({ id, desc, startedAt: Date.now(), doneMs: null })
             this.emit(sessionId, { kind: 'agents', agents: agentRows(st.agents) })
             const running = st.agents.filter((a) => a.doneMs === null).length
-            console.log(`[subagents] ${sessionId.slice(0, 8)} ${running}/${st.agents.length} running · "${desc.slice(0, 40)}"`)
+            console.log(`[subagents] ${sessionId.slice(0, 8)} ${running}/${st.agents.length} running`)
           }
           if (tool === 'TodoWrite') {
             const todos = (e.payload.input as TodoInput | undefined)?.todos
@@ -555,7 +556,7 @@ export class CommanderMirror {
           if (ASYNC_LAUNCH_ACK.test(e.payload.output || '')) break
           done.doneMs = e.payload.durationSeconds ? e.payload.durationSeconds * 1000 : Date.now() - done.startedAt
           this.emit(sessionId, { kind: 'agents', agents: agentRows(st.agents) })
-          this.onSubagentDone(sessionId, st, done.desc)
+          this.onSubagentDone(sessionId, st)
           break
         }
 
@@ -564,7 +565,7 @@ export class CommanderMirror {
           if (!done || done.doneMs !== null) break
           done.doneMs = Date.now() - done.startedAt
           this.emit(sessionId, { kind: 'agents', agents: agentRows(st.agents) })
-          this.onSubagentDone(sessionId, st, done.desc)
+          this.onSubagentDone(sessionId, st)
           break
         }
 
@@ -616,8 +617,7 @@ export class CommanderMirror {
         this.armDeadline(sessionId, st, heldAt)
         return
       }
-      const stuck = held.map((a) => a.desc).join(', ')
-      console.log(`[subagents] ${sessionId.slice(0, 8)} turn-end RELEASED by timeout · still running: ${stuck}`)
+      console.log(`[subagents] ${sessionId.slice(0, 8)} turn-end RELEASED by timeout · ${held.length} still running`)
       // Given up on, not done: the person did not get their answer, and a beep for that is the very ring
       // this exists to remove. The tile still gets the recap.
       st.abandoned = true
@@ -644,9 +644,9 @@ export class CommanderMirror {
   }
 
   /** A sub-agent finished: log it, and if it was the last one, let the held turn-end go through. */
-  private onSubagentDone(sessionId: string, st: SessionState, desc: string): void {
+  private onSubagentDone(sessionId: string, st: SessionState): void {
     const running = st.agents.filter(holdsTurn).length
-    console.log(`[subagents] ${sessionId.slice(0, 8)} ${running}/${st.agents.length} still running · done "${desc.slice(0, 40)}"`)
+    console.log(`[subagents] ${sessionId.slice(0, 8)} ${running}/${st.agents.length} still running · one done`)
     if (!st.endPending || running > 0) return
     this.armSettle(sessionId, st)
   }
@@ -819,18 +819,16 @@ export class CommanderMirror {
       // No assistant TEXT block accumulated this turn (thinking/tools don't count) → nothing to
       // summarize. Happens when: a new prompt closed the turn before any text arrived (back-to-back
       // messages), or a tools/thinking-only turn ended with no final text. Graceful: clear busy, no recap.
-      const ask = userMessage.replace(/\s+/g, ' ').trim().slice(0, 60)
       st.summarizing = false
       this.opts.changed?.(sessionId)
-      this.trace(sessionId, `${sid} turn-end · empty assistant text → done · source=${source}${ask ? ` · ask="${ask}"` : ' · (no user prompt captured this turn)'}`)
+      this.trace(sessionId, `${sid} turn-end · empty assistant text → done · source=${source} · askLen=${userMessage.length}`)
       this.emit(sessionId, { kind: 'done', text: 'done' })
       return
     }
 
-    const ask = userMessage.replace(/\s+/g, ' ').trim().slice(0, 60)
     // Read BEFORE the new summary is stored below, or the "previous" recap is this turn's own.
     const previousRecap = this.summaries.get(sessionId)
-    this.trace(sessionId, `${sid} summarizing · source=${source} · textLen=${text.length} · device=${device}${this.opts.recapForce ? ' · recapForce' : ''}${ask ? ` · ask="${ask}"` : ''} · prev=${previousRecap ? 'yes' : 'none'}`)
+    this.trace(sessionId, `${sid} summarizing · source=${source} · textLen=${text.length} · device=${device}${this.opts.recapForce ? ' · recapForce' : ''} · askLen=${userMessage.length} · prev=${previousRecap ? 'yes' : 'none'}`)
     // Device: busy "Summarizing…" card. Web: the "Summarizing for device…" indicator (mirrors the
     // node's handleBrainSummaryEvent — the web ignores the summary text, only toggles the flag).
     //
@@ -862,7 +860,7 @@ export class CommanderMirror {
           const { recap, body } = splitSummary(summary)
           const notification = this.notifications.completed(sessionId, body || recap,
             (this.opts.isSubagent?.(sessionId) ?? false) || st.abandoned)
-          this.trace(sessionId, `${sid} done in ${ms}ms · recap="${recap}" · bodyLen=${body.length}`)
+          this.trace(sessionId, `${sid} done in ${ms}ms · recapLen=${recap.length} · bodyLen=${body.length}`)
           this.emit(sessionId, { kind: 'done', text: 'done' })
           // One decision feeds both clients. A silent recap still updates the
           // device's tile; only real completed results create inbox entries.
@@ -933,7 +931,7 @@ export class CommanderMirror {
         this.stored(sessionId)
         this.saveSoon()
         const { recap, body } = splitSummary(summary)
-        this.trace(sessionId, `${sid} caught up a turn that ended unseen · recap="${recap}" · bodyLen=${body.length}`)
+        this.trace(sessionId, `${sid} caught up a turn that ended unseen · recapLen=${recap.length} · bodyLen=${body.length}`)
         this.emit(sessionId, { kind: 'summary', text: body || recap, recap, notification: null, restored: true })
       })
       .catch((err) => {

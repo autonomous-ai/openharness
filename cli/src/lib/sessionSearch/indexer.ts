@@ -150,6 +150,8 @@ export interface SessionSearchIndexOptions {
 const NO_TURN_DELETE = Number.MAX_SAFE_INTEGER
 /** Rows written per transaction on a long first pass. */
 const WRITE_BATCH = 32
+/** How many times a delete's checkpoint a reader held is asked again before the sweep takes it over. */
+const CHECKPOINT_RETRIES = 5
 
 /** The folders a session ran in, as a person would name them: the last two path segments. */
 export function folderWords(cwd: string | null | undefined): string {
@@ -176,16 +178,55 @@ export class SessionSearchIndex {
   /** Callers waiting for a session's next pass (`tail`). */
   private readonly waiters = new Map<string, Array<() => void>>()
 
-  private readonly deletedSessions = new Set<string>()
+  /** Conversations deleted here, kept out while a source still lists them (store.ts `excluded`). */
+  private readonly deletedSessions: Set<string>
+  /** Of those, the ones the last read of the sources still listed. */
+  private deletedListed = new Set<string>()
 
-  constructor(private readonly opts: SessionSearchIndexOptions) {}
+  constructor(private readonly opts: SessionSearchIndexOptions) {
+    this.deletedSessions = opts.store.excluded()
+  }
 
+  /**
+   * Forgets a deleted harness's conversation and every other one filed under its agent (those before a
+   * `/new`), but only the one named of the conversations Harness did not start: they all share the
+   * empty agent id. Each is excluded on disk, so a restart does not index again what its engine keeps
+   * (OpenClaw's store), and the WAL is emptied so their words leave that file too.
+   */
   deleteHistory(sessionId: string): void {
-    this.deletedSessions.add(sessionId)
-    this.sources.delete(sessionId)
-    this.queue.delete(sessionId)
-    this.dirty.delete(sessionId)
-    this.opts.store.removeSession(sessionId)
+    const store = this.opts.store
+    for (const id of new Set([sessionId, ...store.sessionsOf(store.session(sessionId)?.agentId ?? '')])) {
+      this.deletedSessions.add(id)
+      this.sources.delete(id)
+      this.queue.delete(id)
+      this.dirty.delete(id)
+      store.exclude(id)
+      store.removeSession(id)
+    }
+    this.checkpointAfterDelete()
+  }
+
+  /** A delete's checkpoint a reader kept from finishing: the erased words are still in the files. */
+  private checkpointOwed = false
+  private checkpointRetry: ReturnType<typeof setTimeout> | undefined
+
+  /**
+   * Empties the files of what a delete erased. One a reader held is said, and asked again 1, 2, 4, 8 and 16 s later
+   * without waiting for the reader (a search's read lasts milliseconds); one held past those, at each sweep.
+   */
+  private checkpointAfterDelete(retry = 0): void {
+    clearTimeout(this.checkpointRetry)
+    this.checkpointRetry = undefined
+    if (this.stopped) return
+    this.checkpointOwed = !this.opts.store.checkpoint(retry === 0)
+    if (!this.checkpointOwed) return
+    if (retry === 0) this.opts.log?.('[search] a reader held the index: what a delete erased stays in its files until it lets go')
+    if (retry >= CHECKPOINT_RETRIES) return
+    this.checkpointRetry = setTimeout(() => {
+      try { this.checkpointAfterDelete(retry + 1) }
+      catch (error) { this.opts.log?.(`[search] checkpoint after a delete failed: ${error instanceof Error ? error.message : String(error)}`) }
+    }, 1_000 * 2 ** retry)
+    this.checkpointRetry.unref?.()
   }
 
   /** The first sweep after `delayMs` (boot has other work), then one every `sweepEveryMs`. */
@@ -203,6 +244,7 @@ export class SessionSearchIndex {
   stop(): void {
     this.stopped = true
     if (this.sweepTimer) clearTimeout(this.sweepTimer)
+    clearTimeout(this.checkpointRetry)
     for (const timer of this.touches.values()) clearTimeout(timer)
     this.touches.clear()
     this.queue.clear()
@@ -263,6 +305,17 @@ export class SessionSearchIndex {
       // Harness did not start, while its file does.
       const indexed = this.opts.store.session(sessionId)
       if (indexed && !agents.has(indexed.agentId) && !this.sources.has(sessionId)) this.opts.store.removeSession(sessionId)
+    }
+    if (this.checkpointOwed) this.checkpointAfterDelete()
+    // A deleted conversation no source lists is gone from disk: its exclusion goes, which bounds the
+    // table. Not after a failed discovery, whose list can be short of what is on disk, nor while a pass
+    // runs: one that began before the delete checks the set before it writes.
+    if (!this.discoveryFailed && !this.running) {
+      for (const id of this.deletedSessions) {
+        if (this.deletedListed.has(id)) continue
+        this.deletedSessions.delete(id)
+        this.opts.store.include(id)
+      }
     }
     const newest = [...this.sources.values()].sort((a, b) => b.changedAt - a.changedAt)
     for (const source of newest) this.queue.add(source.sessionId)
@@ -391,13 +444,16 @@ export class SessionSearchIndex {
   private refreshSources(force = false): void {
     if (!force && Date.now() - this.sourcesReadAt < 5_000) return
     const next = new Map<string, SearchSource>()
+    const deletedListed = new Set<string>()
     for (const source of this.opts.sources()) {
-      if (!source.sessionId || this.deletedSessions.has(source.sessionId)) continue
+      if (!source.sessionId) continue
+      if (this.deletedSessions.has(source.sessionId)) { deletedListed.add(source.sessionId); continue }
       const known = next.get(source.sessionId)
       // One session can be listed live and stopped at once: the fresher record wins.
       if (!known || source.changedAt > known.changedAt) next.set(source.sessionId, source)
     }
     this.sources = next
+    this.deletedListed = deletedListed
     this.sourcesReadAt = Date.now()
   }
 

@@ -87,7 +87,7 @@ DEPENDS = {
     "companions": ("cli/", "docs/research/2026-09-30-memory-batch-extraction-cases.json",
                    "docs/research/2026-09-30-memory-extraction-cases.json"),
     # Its generators write (and its checks may compare) these outputs.
-    "daemons": ("backend/src/lib/daemonRoster.g.ts", "cli/src/", "desktop/assets/daemon-art/",
+    "daemons": ("backend/src/lib/daemonRoster.g.ts", "companions/src/companion/", "desktop/assets/daemon-art/",
                 "desktop/lib/daemons/illustrated_alignment.g.dart", "desktop/lib/daemons/plates.g.dart",
                 "desktop/lib/daemons/roster.g.dart", "mobile/lib/daemons/plates.g.dart", "mobile/lib/daemons/roster.g.dart"),
     "firmware": ("cli/scripts/", "cli/src/", "daemons/plates/tux.mjs", "daemons/review/traits.html",
@@ -139,7 +139,8 @@ PR_READS = {
     "companions": ("cli/", "docs/research/2026-09-30-memory-batch-extraction-cases.json",
                    "docs/research/2026-09-30-memory-extraction-cases.json"),
     # Its generators write (and its checks may compare) these outputs.
-    "daemons": ("backend/src/lib/daemonRoster.g.ts", "desktop/assets/daemon-art/",
+    "daemons": ("backend/src/lib/daemonRoster.g.ts", "companions/src/companion/plates/",
+                "companions/src/companion/roster.g.ts", "desktop/assets/daemon-art/",
                 "desktop/lib/daemons/illustrated_alignment.g.dart", "desktop/lib/daemons/plates.g.dart",
                 "desktop/lib/daemons/roster.g.dart", "mobile/lib/daemons/plates.g.dart", "mobile/lib/daemons/roster.g.dart"),
     "firmware": ("daemons/plates/tux.mjs", "daemons/review/traits.html",
@@ -243,8 +244,6 @@ NOT_READS = {
     "cli/src/superTabs/scoreboard.spec.ts": ("test data: the files landings touched most", {"backend/", "docs/"}),
     "companions/src/application/modelProfile.spec.ts": ("test data: a model name", {"provider/"}),
     "companions/src/memory/lessons/signals.spec.ts": ("test data: a test id", {"tests/"}),
-    "daemons/tools/generate.mjs": ("a generator run by hand (daemons-checks runs card.test.mjs only); what it writes "
-                                   "under cli/src/pair/, a folder the CLI no longer has, no suite reads", {"cli/"}),
     "desktop/tool/native_benchmark/connected_stack.mjs": ("a benchmark run by hand against the built CLI", {"cli/"}),
     "desktop/tool/test_test_flavor_isolation.py": ("a macOS check run by hand with the CLI's installed packages", {"cli/"}),
     "devices/harness-device/firmware/test/device_release_check.py": ("a release check run by hand that fingerprints the "

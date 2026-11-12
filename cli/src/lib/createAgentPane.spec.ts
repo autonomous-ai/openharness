@@ -187,6 +187,23 @@ describe('createAndRegisterPane', () => {
     expect(openPendingAgent.mock.calls[1]![0]).not.toHaveProperty('firstTask')
   })
 
+  it('a local launch\'s folder goes on its row', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const openPendingAgent = vi.spyOn(registry, 'openPendingAgent')
+    const local = await createAndRegisterPane({
+      tmuxBackend: fakeTmux([succeeded('%1')]), registry, engine: 'openclaw', cwd: '/tmp/demo', sessionLabel: 'harness-openclaw-1',
+      argv: ['openclaw', 'tui', '--local'], openclawLocal: '/runs/one',
+    })
+    expect(openPendingAgent).toHaveBeenCalledWith(expect.objectContaining({ openclawLocal: '/runs/one' }))
+    expect(local.ok && local.pending).toMatchObject({ openclawLocal: '/runs/one', openclawStateDir: '/runs/one' })
+    await createAndRegisterPane({
+      tmuxBackend: fakeTmux([succeeded('%2')]), registry, engine: 'openclaw', cwd: '/tmp/demo', sessionLabel: 'harness-openclaw-2',
+      argv: ['openclaw', 'tui'],
+    })
+    expect(openPendingAgent.mock.calls[1]![0]).not.toHaveProperty('openclawLocal')
+  })
+
   it('does not retry a tmux spawn failure', async () => {
     const { registry } = await loadRegistryModule()
     registry.load()

@@ -45,8 +45,8 @@ signed in while the team works.
 7. **When builders have nothing to do**, the PM is told, with the numbers. From 09:00 on the PM's computer, on a day
    something landed or a task closed, the day's numbers are posted in the channel.
 
-A project can state its goal as checks: `harness super-tab goal` in a checkout writes `agents/GOAL.md` and the workflow
-that runs it, and the PM is told how many pass.
+A project can state its goal as checks: `harness super-tab goal write` in a checkout writes `agents/GOAL.md` and the workflow
+that runs it, `harness super-tab goal` shows what it states, and the PM is told how many pass.
 
 ## When nothing moves
 

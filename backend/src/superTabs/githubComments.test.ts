@@ -99,11 +99,15 @@ describe('the project of a repository', () => {
   // #4195: a project made from a pane's folder has no clone address, only the GitHub repository its owner or PM names.
   it('counts a repository a project names from when it named it, and the earlier of its name and its address', () => {
     const named = (id: string, at: number, repositoryUrl: string | null = null, addressedAt?: number): SwarmProject =>
-      ({ ...project(id, repositoryUrl, addressedAt), githubRepository: 'acme/app', githubRepositoryAt: at })
+      ({ ...project(id, repositoryUrl, addressedAt), githubRepository: 'Acme/App', githubRepositoryAt: at })
     expect(repositoryProject(state([project('web', APP, 1_000), named('late', 2_000)], ['web', 'late']), 'acme/app')?.id).toBe('web')
-    expect(repositoryProject(state([project('web', APP, 1_000), named('early', 500)], ['web', 'early']), 'acme/app')?.id).toBe('early')
+    expect(repositoryProject(state([project('web', APP, 1_000), named('early', 500)], ['web', 'early']), 'ACME/app')?.id).toBe('early')
     // Named first, its clone address filled in later: it has had the repository since it named it.
     expect(repositoryProject(state([project('web', APP, 1_000), named('both', 500, APP, 3_000)], ['web', 'both']), 'acme/app')?.id).toBe('both')
+    // A name of another repository lends no time to the one its address names, nor an address off GitHub to the one it names.
+    const decoy = { ...project('decoy', APP, 3_000), githubRepository: 'acme/decoy', githubRepositoryAt: 500 }
+    expect(repositoryProject(state([project('web', APP, 1_000), decoy], ['web', 'decoy']), 'acme/app')?.id).toBe('web')
+    expect(repositoryProject(state([project('web', APP, 1_000), named('gitlab', 3_000, 'https://gitlab.com/acme/app.git', 500)], ['web', 'gitlab']), 'acme/app')?.id).toBe('web')
   })
 
   it('passes over a project with no PM: its lead not there, or no agent of that id', () => {

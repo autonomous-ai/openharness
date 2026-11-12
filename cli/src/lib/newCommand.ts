@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { env } from '../config/env.js'
 import { openLocalWs } from './localTransport.js'
+import { statSync } from 'node:fs'
 import { readdir, readFile, realpath } from 'node:fs/promises'
 import { dirname, isAbsolute, join, posix, resolve, win32 } from 'node:path'
 import { addressOf, atMachineRefusal, EXIT, machineOption, refusalNext, REFUSED_CODES, step, VIA_MCP_ENV } from '../agentClient/commands.js'
@@ -51,6 +52,10 @@ export interface NewArgs {
   acuLimit: number | null
   /** The model to launch with, as the engine names it (`haiku`, `gpt-5.4-mini`); the machine checks it (lib/launchModel.ts). */
   model: string | null
+  /** OpenClaw's `--local` state folder, absolute: its runtime and tools run in the pane's process, on that folder. */
+  local: string | null
+  /** The Hachi goal it is started for (`harness goal open`), recorded under it once made; null for none. */
+  goal: string | null
   json: boolean
 }
 
@@ -78,9 +83,11 @@ export const NEW_USAGE = [
   '                   harness new codex -- fix the flaky login test',
   '  --name <n>     the harness\'s name until the agent titles its session',
   '  --model <m>    the model it launches with, as the agent names it: haiku, opus, gpt-5.4-mini',
+  '  --local <dir>  OpenClaw only: run it and its tools in this process, on the state folder <dir> (you make it)',
   '  --repo <r>    a cloud coding agent\'s GitHub repository: owner/name or https://github.com/owner/name',
   '                 (Cursor Cloud needs one; Devin Cloud works without)',
   '  --acu-limit <n>  the most ACUs Devin Cloud may spend (1-1000; 5 when left out)',
+  '  --goal <id>    Hachi only: the goal it is started for (harness goal open), recorded under it',
   '  --json         print the result as one JSON line',
   '',
   'An agent refused (its limits, or the person has not let agents start agents) exits 5: do not retry.',
@@ -94,7 +101,10 @@ const looksLikePath = (word: string, windows: boolean): boolean =>
   word === '.' || word === '..' || word === '~' || /^(\/|~\/|\.\/|\.\.\/)/.test(word)
   || (windows && /^([A-Za-z]:[\\/]|\\\\|~\\|\.\\|\.\.\\)/.test(word))
 
-export function parseNewArgs(argv: string[], env: { cwd: string; home: string; platform?: NodeJS.Platform }): NewArgs {
+/** Whether [path] is a directory on this computer; a link to one is. */
+const isDirectory = (path: string): boolean => { try { return statSync(path).isDirectory() } catch { return false } }
+
+export function parseNewArgs(argv: string[], env: { cwd: string; home: string; platform?: NodeJS.Platform; isFolder?: (path: string) => boolean }): NewArgs {
   const windows = (env.platform ?? process.platform) === 'win32'
   const path = windows ? win32 : posix
   const words: string[] = []
@@ -107,6 +117,8 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string; p
   let repo: string | null = null
   let acuLimit: number | null = null
   let model: string | null = null
+  let local: string | null = null
+  let goal: string | null = null
   let json = false
   const value = (flag: string, index: number): string => {
     const next = argv[index + 1]
@@ -132,6 +144,12 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string; p
     else if (word === '--model') {
       model = value(word, i).trim()
       if (!model) throw new NewUsageError('--model needs a value.')
+      i++
+    }
+    else if (word === '--local') { local = value(word, i); i++ }
+    else if (word === '--goal') {
+      goal = value(word, i).trim()
+      if (!goal) throw new NewUsageError('--goal needs a value.')
       i++
     }
     else if (word === '--repo') {
@@ -166,6 +184,13 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string; p
       folder = word
     }
     else words.push(word)
+  }
+  if (local !== null) {
+    if (words[0] !== 'openclaw') throw new NewUsageError('--local is for OpenClaw only.')
+    if (machine !== null) throw new NewUsageError('--local runs on this computer only.')
+    // Resolved here, against where it was typed: the daemon's working directory is not the caller's.
+    local = path.resolve(env.cwd, local)
+    if (!(env.isFolder ?? isDirectory)(local)) throw new NewUsageError(`${local} is not a folder.`)
   }
   if ((repo !== null || acuLimit !== null) && !isCloudAgent(words[0])) {
     throw new NewUsageError(`${repo !== null ? '--repo' : '--acu-limit'} is for a cloud agent: harness new devin-cloud ${repo !== null ? '--repo owner/name' : '--acu-limit 10'} -- <task>`)
@@ -209,7 +234,7 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string; p
     if (machine === null) cwd = env.cwd
     else projectName = ''
   }
-  return { agent: words[0] ?? 'claude', machine, cwd, projectName, mode, prompt, name, repo, acuLimit, model, json }
+  return { agent: words[0] ?? 'claude', machine, cwd, projectName, mode, prompt, name, repo, acuLimit, model, local, goal, json }
 }
 
 /** The `agent_create` payload for [args]: the same fields the app's box sends. [baseEngine] is the
@@ -240,6 +265,7 @@ export function newAgentPayload(args: NewArgs, cwd: string | null, baseEngine = 
     ...(args.repo ? { repositoryUrl: args.repo } : {}),
     ...(args.acuLimit !== null ? { acuLimit: args.acuLimit } : {}),
     ...(args.model !== null ? { model: args.model } : {}),
+    ...(args.local !== null ? { openclawLocal: args.local } : {}),
     creationId: randomUUID(),
   }
 }
@@ -363,13 +389,20 @@ export interface NewOrigin {
   /** The caller's harness by [name] for the same agent on the same machine, already running or still on its way, said
    *  instead of starting a second; else null. */
   existing?(name: string | null, asking: { machineId: string; engine: string }): Promise<ExistingHarness | null>
-  /** Records a harness asked for that has not started yet, so the caller follows it by name once this has answered. */
-  pending?(machineId: string, creation: { creationId: string; name: string; engine: string }): void
+  /** Records a harness asked for that has not started yet, so the caller follows it by name once this has answered; a
+   *  warning to print when the record could not be kept. */
+  pending?(machineId: string, creation: { creationId: string; name: string; engine: string }): string | null
   /** What the start changed, and what to run next: wait for it, then read it. */
   answer(agent: Record<string, unknown>, at: { local: boolean; machine: string | null }): { effect: string; next: NextStep[] }
   /** The caller's own harness, by agent id, when it is one on this computer: a harness started here records it, and the
    *  windows open it beside the caller's pane. Absent for an agent outside Harness. */
   parentAgentId?: string
+  /** Hachi's goals (`--goal`, services/goals.ts): [check] rejects a goal the caller may not start work for; [add] records
+   *  a harness under it, by its creation and, once made, its id, and says what to print when that could not be kept. */
+  goal?: {
+    check(id: string): Promise<void>
+    add(id: string, harness: { machineId: string; creationId: string; agentId?: string }): Promise<string | null>
+  }
 }
 
 /** How long `harness new` takes at most to answer an agent: within Codex's one-minute MCP tool timeout, with room. */
@@ -475,6 +508,8 @@ function projectExists(args: NewArgs, folder: string | null, at: { local: boolea
 export function daemonSession(deps: Pick<NewCommandDeps, 'port' | 'connect' | 'timeoutMs'>, machineId: string): Promise<{
   request: (type: string, payload: Record<string, unknown>) => Promise<Record<string, unknown>>
   close: () => void
+  /** What the daemon says it can do (localWsServer.ts `LOCAL_TOOL_FEATURES`); none from one older than the list. */
+  features: string[]
 }> {
   return new Promise((resolveSession, rejectSession) => {
     const socket = openLocalWs(env.ADAPTER_DATA_DIR, deps.port, deps.connect)
@@ -498,8 +533,10 @@ export function daemonSession(deps: Pick<NewCommandDeps, 'port' | 'connect' | 't
       try { frame = JSON.parse(data.toString()) } catch { return }
       if (!ready && frame.type === 'connected') {
         ready = true
+        const features = frame.payload?.features
         resolveSession({
           close: () => socket.close(),
+          features: Array.isArray(features) ? features.filter((feature): feature is string => typeof feature === 'string') : [],
           request: (type, payload) => new Promise((done, fail) => {
             const requestId = randomUUID()
             const timer = setTimeout(() => { waiting.delete(requestId); fail(new Error(`Harness did not answer ${type} in time.`)) }, deps.timeoutMs ?? 90_000)
@@ -585,8 +622,18 @@ export async function newCommand(deps: NewCommandDeps): Promise<number> {
       return 0
     }
     await origin?.check()
+    // A goal is Hachi's (services/goals.ts): checked before anything starts, so work for a goal it may not use never
+    // does. After the limits, so a refused start says why it was refused.
+    if (args.goal !== null) {
+      if (!origin?.goal) throw new AgentClientError('NOT_HACHI', 'Only Hachi starts harnesses for a goal. Start it without --goal.')
+      await origin.goal.check(args.goal)
+    }
     const session = await daemonSession(deps, machineId)
     try {
+      // An older daemon drops the folder it does not know and runs OpenClaw on the shared Gateway, tools and all.
+      if (args.local !== null && !session.features.includes('openclaw-local')) {
+        throw new Error('This Harness daemon is too old for --local. Restart Harness.')
+      }
       let cwd = args.cwd
       if (cwd !== null && (cwd === '~' || cwd.startsWith('~/'))) {
         // Another machine's home: ask it. `fs_list_dir` with no path answers with the home it listed.
@@ -641,7 +688,13 @@ export async function newCommand(deps: NewCommandDeps): Promise<number> {
       // Recorded before any waiting: an agent's call that is cut off (a tool's timeout) leaves a harness that may still
       // start, and it is then the agent's, by name, for `ps`, `wait` and the check above.
       if (origin && (result.state === 'pending' || result.state === 'unconfirmed')) {
-        origin.pending?.(machineId, { creationId, name: args.name ?? '', engine: String(payload.engine) })
+        const unrecorded = origin.pending?.(machineId, { creationId, name: args.name ?? '', engine: String(payload.engine) })
+        if (unrecorded) deps.error(unrecorded)
+        // It starts by itself later: recorded under its goal now, by its creation.
+        if (args.goal !== null) {
+          const unrecordedGoal = await origin.goal!.add(args.goal, { machineId, creationId })
+          if (unrecordedGoal) deps.error(unrecordedGoal)
+        }
       }
       // A launch the daemon holds (a native launch waiting its turn) is still on its way: asked after until it is not,
       // for a minute. Given up on at once, it could start later with an agent's task and no record of who started it
@@ -715,6 +768,10 @@ export async function newCommand(deps: NewCommandDeps): Promise<number> {
       const agent = (result.agent ?? {}) as Record<string, unknown>
       const warning = await origin?.created(machineId, agent, creationId)
       if (warning) deps.error(warning)
+      if (args.goal !== null && typeof agent.id === 'string') {
+        const unrecorded = await origin!.goal!.add(args.goal, { machineId, creationId, agentId: agent.id })
+        if (unrecorded) deps.error(unrecorded)
+      }
       // An agent is told it is starting (never that its task is done), what changed, and what to run next.
       const told = origin?.answer(agent, { local, machine: args.machine })
       if (args.json) deps.output(JSON.stringify({ ok: true, machineId, agent, ...(trustNote ? { note: trustNote } : {}), ...(told ? { effect: told.effect, next: told.next } : {}) }))
