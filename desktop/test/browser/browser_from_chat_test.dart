@@ -266,6 +266,8 @@ void main() {
     expect(screen, findsOneWidget);
     expect(app.asked, isEmpty);
     semantics.dispose();
+    // Opening a pane beside a chat is saved with the chat's view 200 ms later (controller.dart showBeside).
+    await tester.pump(const Duration(milliseconds: 300));
   });
 
   testWidgets('needs setup: Start, then Install on this computer opens Set up '

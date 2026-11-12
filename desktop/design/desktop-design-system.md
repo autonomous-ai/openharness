@@ -481,7 +481,10 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   `Chat` pill (`SwarmBackToChat`: a compact quiet pill with a left chevron,
   one word, in the gallery) leads back to the chat, its composer ready to
   type; it closes only what is in the chat's place, so a pane beside stays.
-  The bar's own icon, or the pane's ×, closes it as well. A pane comes before
+  The bar's own icon, or the pane's ×, closes it as well. What is open beside
+  an agent's chat (its terminal, Info, Instructions or Browser) is kept per
+  chat, with the rest of the chat's saved view: going to another chat and back
+  finds it as it was, until the bar's icon or the pane's × closes it. A pane comes before
   a terminal in the chat's place, as it does in the right pane. A task's
   thread opens as a drawer over the chat below 1080, as before. What is typed
   in Instructions, and what Tasks and a task have read and where they are
