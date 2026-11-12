@@ -16,7 +16,7 @@ import type { registry, RegisteredSession } from '../../lib/registry.js'
 import type { TerminalBackendCoordinator } from '../../lib/terminalBackendCoordinator.js'
 import type { TerminalRuntimeRef } from '../../lib/terminalTypes.js'
 import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
-import { terminalRuntimeLabel } from '../../lib/terminalRuntime.js'
+import { terminalRouteKey, terminalRuntimeLabel } from '../../lib/terminalRuntime.js'
 import { createLaunchAuthority } from './launchAuthority.js'
 
 export interface PaneWatcherDeps {
@@ -28,6 +28,8 @@ export interface PaneWatcherDeps {
   retainExitedSession: (session: RegisteredSession, announce: boolean) => void
   /** The backend that holds a new pane: its process, state and hold (`isHeld`) are asked of it. */
   terminals: Pick<TerminalBackendCoordinator, 'backendFor'>
+  /** Keeps discovery off a pane until the returned release (TerminalAgentReconciler.holdRoute, with no timer). */
+  holdRoute: (routeKey: string) => () => void
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => {
@@ -35,7 +37,7 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => {
   timer.unref?.()
 })
 
-export function createPaneWatcher({ registry, announceSession, triggerHint, captureTerminal, retainExitedSession, terminals }: PaneWatcherDeps) {
+export function createPaneWatcher({ registry, announceSession, triggerHint, captureTerminal, retainExitedSession, terminals, holdRoute }: PaneWatcherDeps) {
   /**
    * Watch a pane this daemon just opened until its engine process shows up (ready), dies (failed), or
    * ten minutes pass. Shared by create and fork: the two open panes the same way and wait the same way.
@@ -49,6 +51,10 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
     // binding. Stop, a newer launch or discovery can supersede it while tmux waits.
     const current = nativeToken ? createLaunchAuthority({ byAgent: id => registry.byAgent(id),
       revision: () => 0, cancelled: () => false })(pending.agentId, pending) : () => true
+    // A local OpenClaw's process shows seconds before its TUI draws. Discovery seeing it would mark the launch ready and
+    // supersede this watcher, which then never releases the pane's hold, says it ready, binds it or says a folder in
+    // use: the pane is this watcher's alone until it is done.
+    const releaseRoute = local ? holdRoute(terminalRouteKey(spawned.runtime)) : () => {}
     try {
       // Create and fork open the pane through this backend, so it is there; reported below if not.
       const backend = terminals.backendFor(spawned.runtime)
@@ -68,6 +74,8 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
           const ready = registry.setLaunch(pending.agentId, { state: 'ready' })
           await backend.releaseHold(spawned.runtime)
           if (ready) announceSession(ready)
+          // Before the hint: the pass it asks for is the one that must see this pane again.
+          releaseRoute()
           void triggerHint(spawned.runtime, engine).catch((error) => {
             console.warn(`[agent] background bind failed · ${engine} · ${error instanceof Error ? error.message : error}`)
           })
@@ -170,6 +178,8 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
       console.warn(`[agent] create timed out · ${engine} · agent ${pending.agentId}`)
     } catch (error) {
       console.warn(`[agent] create watch failed · ${engine} · ${error instanceof Error ? error.message : error}`)
+    } finally {
+      releaseRoute()
     }
   }
   return watchNewPane

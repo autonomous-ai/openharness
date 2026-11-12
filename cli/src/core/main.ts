@@ -2862,6 +2862,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     captureTerminal,
     retainExitedSession,
     terminals,
+    holdRoute: (key) => agentReconciler.holdRoute(key, null),
   })
 
   // Opening a conversation Harness did not start, and taking it over from a terminal (core/agents/adopt.ts).
