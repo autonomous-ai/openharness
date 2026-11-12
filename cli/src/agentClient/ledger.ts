@@ -89,14 +89,23 @@ function lockText(lock: string): string | null {
   }
 }
 
-/** Removes [lock] when the process it names is gone, and says whether to try for it again at once. A lock that names
- *  no one (its writer died between making it and writing its pid) has no owner either. */
+/** A lock that names no one is a writer between making it and writing its pid, unless it is older than this: its writer
+ *  died in between. Under the wait, so a waiter still takes such a lock over. */
+const OWNERLESS_STALE_MS = 1_000
+
+function ownerlessStale(lock: string): boolean {
+  try { return Date.now() - statSync(lock).mtimeMs > OWNERLESS_STALE_MS } catch { return true }
+}
+
+/** Removes [lock] when the process it names is gone, or it has named no one for too long, and says whether to try for
+ *  it again at once. */
 function takeOver(lock: string): boolean {
   const seen = lockText(lock)
   if (seen === null) return true
   let owner: (LockGeneration & { pid?: unknown }) | null = null
   try { owner = JSON.parse(seen) } catch { /* names no one */ }
-  if (lockOwnerAlive(Number(owner?.pid), lockStartMarker(owner))) return false
+  const pid = Number(owner?.pid)
+  if (pid > 0 ? lockOwnerAlive(pid, lockStartMarker(owner)) : !ownerlessStale(lock)) return false
   // The check can run `ps`, for milliseconds: a lock let go and taken meanwhile is a live writer's, not this one's.
   if (lockText(lock) === seen) rmSync(lock, { force: true })
   return true
