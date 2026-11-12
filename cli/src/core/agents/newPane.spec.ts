@@ -390,6 +390,29 @@ describe('watching a new pane', () => {
       expect(released).toHaveBeenCalledOnce()
     })
 
+    // The hold has no timer: a way out that kept it would leave the pane unbound for the daemon's life.
+    it.each(['closed', 'pane gone', 'pane dead', 'no backend', 'capture failed', 'timed out'] as const)(
+      'gives its pane back to discovery however it ends: %s', async (exit) => {
+        const { holdRoute, released, pass } = discovery()
+        const { deps, rows, watch } = setup({ holdRoute,
+          ...exit === 'no backend' ? { terminals: { backendFor: vi.fn(() => undefined) } } : {} })
+        rows.set('a1', starting)
+        if (exit === 'closed') rows.delete('a1')
+        if (exit === 'pane gone') paneState.mockResolvedValue('gone')
+        if (exit === 'pane dead') paneState.mockResolvedValue({ dead: true, engineExit: null } as never)
+        if (exit === 'capture failed') {
+          vi.mocked(resolvePaneEngineProcess).mockResolvedValue(identity as never)
+          vi.mocked(deps.captureTerminal).mockRejectedValue(new Error('tmux timed out'))
+        }
+        const done = watch('openclaw', starting, spawned, ['openclaw'], undefined, exit === 'timed out' ? 100 : undefined)
+        await vi.advanceTimersByTimeAsync(1_000)
+        await done
+        expect(released).toHaveBeenCalledExactlyOnceWith(terminalRouteKey(runtime))
+        // Discovery has the pane again: its next pass marks the run ready.
+        pass(rows)
+        if (exit !== 'closed') expect(rows.get('a1')?.launch).toEqual({ state: 'ready' })
+      })
+
     it('says local on its ready line, and no folder', async () => {
       const { deps, rows, watch } = setup()
       rows.set('a1', local)
