@@ -134,9 +134,16 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     f.assigner.read = false
     await settle(f)
     expect([f.merges(), f.comments()]).toEqual([[], []])
+    // A wait that lasts is said once, and that it is over.
+    const waits = () => f.log.mock.calls.map(([line]) => String(line)).filter(line => line.includes('merging by rule waits') || line.includes('merging by rule goes on'))
+    expect(waits()).toEqual([])
+    f.clock.now += 5 * 60_000
+    await f.merger.tick(); await f.merger.tick()
+    expect(waits()).toEqual(['[super-tab] merging by rule waits · acme/app: task assignment has not read its pull requests yet, so none is landed'])
     f.assigner.read = true
     await settle(f)
     expect(f.merges()).toEqual([{ method: 'PUT', path: '/repos/acme/app/pulls/4/merge', body: { merge_method: 'squash', sha: HEAD } }])
+    expect(waits().slice(1)).toEqual(['[super-tab] merging by rule goes on · acme/app'])
   })
 
   // Swarm allocator, package 12: the comment that says a change landed carries what it cost its builder, from the rows its

@@ -129,13 +129,19 @@ export const markOf = (labels: Json[], swarm: string): string | null => {
  * every sized issue in it: Tony's gave Dee's #4208 to its own builder a minute after it was opened, and #3880, held by 0xken15's
  * Swarm's Lennox, read as Dee's Swarm's Lennox's (#4212). An issue is the Swarm's when it carries [mark], which Harness puts on
  * its PM's tasks (githubAssign.ts) and a piece takes from its task (githubSplit.ts). A pull request carries a Swarm's label only
- * when someone put one on: one that carries none is not the Swarm's when it is for an open issue that is not (tasksOf).
+ * when someone put one on: one that carries none is the Swarm's when it is for one of the Swarm's open tasks, whatever else it
+ * names ("Closes #1. Fixes #7", #7 a person's report), and is not when it is only for open issues that are not (tasksOf).
  */
 export function ofProject(rows: Json[], mark: string): (row: Json) => boolean {
   const own = (row: Json) => swarmsOf(row).includes(mark.toLowerCase())
   const isPull = (row: Json) => !!row.pull_request || !!row.head
-  const others = new Set(rows.filter(row => !isPull(row) && !own(row)).map(row => Number(row.number)))
-  return row => !isPull(row) || swarmsOf(row).length ? own(row) : !tasksOf(row).some(task => others.has(task))
+  const issues = rows.filter(row => !isPull(row))
+  const ours = new Set(issues.filter(own).map(row => Number(row.number))), others = new Set(issues.filter(row => !own(row)).map(row => Number(row.number)))
+  return row => {
+    if (!isPull(row) || swarmsOf(row).length) return own(row)
+    const tasks = tasksOf(row)
+    return tasks.some(task => ours.has(task)) || !tasks.some(task => others.has(task))
+  }
 }
 
 /** The labels of a project's team: its builders' (away ones too) and its PM's. Harness asks readers for, and merges, only

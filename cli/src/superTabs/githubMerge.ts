@@ -43,6 +43,8 @@ export const MERGE_INTERVAL_MS = 30_000
  *  repository has over a hundred open (lampOS and openharness about 110 each, 2026-11-10), and the team's own can be any of
  *  them. The newest thirty alone left an older team pull request unread and unmerged for good. */
 export const PULL_PAGES = 3
+/** How long the merger waits for the assigner's first read of a repository's pull requests before it says so. */
+const UNREAD_SAID_MS = 5 * 60_000
 export const openPullsPath = (repo: string): string => `/repos/${repo}/pulls?state=open&sort=updated&direction=desc&per_page=${PAGE}`
 /** How often the projects whose PM runs here are asked again: each ask reads the PM's Swarm. */
 const PROJECTS_FRESH_MS = 60_000
@@ -623,6 +625,9 @@ export class GitHubMerge {
   /** For each pull request off the team at a head, the builder Harness here gave its task and the task, or null: read once. */
   private readonly givenLeft = new Map<string, { name: string; task: number } | null>()
   private me: string | null = null
+  /** Since when each repository's pull requests wait for the assigner's first read (deps.others), and which were said to. */
+  private readonly unread = new Map<string, number>()
+  private readonly unreadSaid = new Set<string>()
   /** When each open team pull request's head (`<repo>#<number>@<head>`) was first seen, and its checks as last read: they count as
    *  passed only once they hold still (CHECKS_SETTLE_MS). Kept for the heads open now, so the memory is the open work. */
   private readonly seenAt = new Map<string, number>()
@@ -723,7 +728,19 @@ export class GitHubMerge {
     // The team, read of the PM's Swarm (a changes read on the backend), only when a pull request could merge.
     if (!pulls.length) { this.forgetHeads(repo, new Set()); return }
     const others = this.deps.others(project)
-    if (!others) return
+    if (!others) {
+      // Said once it has lasted: every start waits a moment for the assigner's first pass, and one that fails each pass before
+      // it reads the pull requests would stop all landing with no word here (Kiri's read of #4228).
+      const since = this.unread.get(repo) ?? this.now()
+      this.unread.set(repo, since)
+      if (this.now() - since >= UNREAD_SAID_MS && !this.unreadSaid.has(repo)) {
+        this.unreadSaid.add(repo)
+        this.log(`[super-tab] merging by rule waits · ${repo}: task assignment has not read its pull requests yet, so none is landed`)
+      }
+      return
+    }
+    this.unread.delete(repo)
+    if (this.unreadSaid.delete(repo)) this.log(`[super-tab] merging by rule goes on · ${repo}`)
     const team = teamOf(await this.deps.crew(project), project.pm)
     const open = new Set<string>()
     const conflicts = (pull: { number: number; head: string; author: string; comments: Json[] }) =>

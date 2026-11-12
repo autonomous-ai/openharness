@@ -34,6 +34,9 @@ const MAX_REPOS = 20, MAX_REVIEWED = 10, MAX_RELAYS = 50, MAX_SEEN = 2_000, MAX_
 const TEXT_MAX = 4_000, TITLE_MAX = 300
 /** Pages of a hundred of a repository's labels a Swarm's is looked for among, as the assigner does (githubAssign.ts). */
 const LABEL_PAGES = 10
+/** How long a comment on an issue that carries no Swarm's label yet is kept for a later pass: Harness labels a task its PM
+ *  opens on its next pass, a minute on, thirty tasks a pass (githubAssign.ts stamp). */
+const LABEL_WAIT_MS = 10 * 60_000
 /** Who the agents here are and what they read, asked again at most this often: each ask reads every agent's Swarm. */
 const AGENTS_FRESH_MS = 60_000
 /** A thread that relays this many times to one agent within LOOP_WINDOW_MS is paused for it: an agent that forgets to sign
@@ -379,6 +382,8 @@ export class GitHubMentions {
       if (review?.number === line.number && !kept.seen.includes(line.key)) review.lines.push(line)
       else loose.push(line)
     }
+    /** The oldest comment left for the next pass, by when it was written. */
+    let waiting = ''
     for (const item of [...said, ...reviews, ...loose]) {
       // Edited, not new: GitHub's since is by update time. Never twice, never a stranger's, never on nothing.
       if (kept.seen.includes(item.key) || !TEAM.has(item.association) || !Number.isSafeInteger(item.number)) continue
@@ -386,6 +391,15 @@ export class GitHubMentions {
       const owners = kept.owned[String(item.number)] ?? []
       const hearing: WatchedAgent[] = []
       for (const agent of agents) if (await mine(agent, item.number, item.on === 'pull')) hearing.push(agent)
+      // A new comment on an issue with no Swarm's label yet, which some agent's Swarm would need: the label may be on its way
+      // (the PM opens a task and says something on it before Harness's next pass labels it), or not in the issues' feed yet.
+      // It is left for the next pass, unseen, and the feed is read from it again; handed on then, or passed over once it is
+      // old. Recorded as seen now, it was lost for good (Kiri's read of #4228).
+      if (item.event === 'comment' && item.on === 'issue' && hearing.length < agents.length && !kept.swarms?.[String(item.number)]?.length
+        && this.now() - Date.parse(item.createdAt) < LABEL_WAIT_MS) {
+        if (!waiting || item.createdAt < waiting) waiting = item.createdAt
+        continue
+      }
       if (item.event === 'comment') this.noteAsk(kept, hearing, item)
       let refusal: SuperTabHostError | null = null
       for (const agent of hearing) {
@@ -403,6 +417,7 @@ export class GitHubMentions {
     // whenever a newer pull request had moved it past its own.
     if (changed.length) kept.issues = newest(changed, issuesFrom)
     if (comments.length) kept.comments = newest(comments, kept.comments)
+    if (waiting && waiting < kept.comments) kept.comments = waiting
     if (lineComments.length) kept.reviewComments = newest(lineComments, kept.reviewComments)
   }
 
@@ -627,7 +642,6 @@ const cut = (text: string, max: number) => text.length > max ? `${text.slice(0, 
 const verdictWord = (verdict: string | undefined) => verdict === 'APPROVED' ? 'Approved.' : verdict === 'CHANGES_REQUESTED' ? 'Changes requested.' : 'Commented.'
 /** The newest update time among [rows], never older than [from]: where the feed is read from next. */
 const newest = (rows: Json[], from: string) => rows.reduce((top, row) => String(row.updated_at ?? '') > top ? String(row.updated_at) : top, from)
-/** Keeps only the [max] most recently added keys of [record]. */
 /** Keeps the Swarms' labels [issue] carries: its own, or, for a pull request with none, those of the tasks it is for. */
 function noteSwarms(kept: RepoMemory, issue: Json): void {
   const swarms = kept.swarms ??= {}, own = swarmsOf(issue)
@@ -635,6 +649,7 @@ function noteSwarms(kept: RepoMemory, issue: Json): void {
   if (on.length) swarms[String(issue.number)] = on; else delete swarms[String(issue.number)]
 }
 
+/** Keeps only the [max] most recently added keys of [record]. */
 function trim(record: Record<string, unknown>, max: number): void {
   const keys = Object.keys(record)
   for (const key of keys.slice(0, Math.max(0, keys.length - max))) delete record[key]

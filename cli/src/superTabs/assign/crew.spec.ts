@@ -543,5 +543,7 @@ describe('which of a repository\'s issues and pull requests are a Swarm\'s (ofPr
     const pulls = [pull(11, 'Closes #1'), pull(12, 'Closes #3'), pull(13, 'Closes #4'), pull(14, ''), pull(15, 'Closes #1', ['swarm:acme-0f0f0f0f']), pull(16, 'Closes #3', ['swarm:acme']),
       { number: 17, labels: [], body: '', head: { ref: 'lennox/3' } }]
     expect(pulls.filter(ofProject(rows, 'swarm:acme')).map(row => row.number)).toEqual([11, 14, 16])
+    // One for a task of its Swarm is its Swarm's, whatever else it names: a person's report it also fixes (Kiri's read of #4228).
+    expect([pull(18, 'Closes #1. Fixes #4'), pull(19, 'Closes #3. Fixes #4')].filter(ofProject(rows, 'swarm:acme')).map(row => row.number)).toEqual([18])
   })
 })

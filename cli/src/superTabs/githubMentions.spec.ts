@@ -303,6 +303,36 @@ describe('GitHub news for this computer\'s v4 agents (githubMentions.ts)', () =>
     expect(await heard(lennox(DEE, 'dee-lennox'))).toEqual([['task', 13]])
     expect(await heard(lennox(KEN, 'ken-lennox'))).toEqual([['task', 14], ['comment', 20], ['comment', 30]])
   })
+  // Kiri's read of #4228: the PM opens a task and says something on it before Harness's next pass labels it for its Swarm.
+  // Recorded as seen in that pass, the comment never reached the task's builder.
+  it('brings a comment on a task once its Swarm\'s label is on, when the comment came first, and passes over one that never gets it', async () => {
+    const f = setup()
+    f.github.state.labels = [{ name: 'swarm:acme', description: 'Swarm tab' }]
+    await f.mentions.tick()
+    const onIssue = (id: number, seconds: number, number: number, body: string) => comment(id, seconds, body,
+      { issue_url: `https://api.github.com/repos/acme/app/issues/${number}`, html_url: `https://github.com/acme/app/issues/${number}#issuecomment-${id}` })
+    f.github.issues.push(issue(16, 10, ['builder:pip']), issue(17, 10, []))
+    f.github.comments.push(onIssue(1, 11, 16, 'Faye: start with the parser.'), onIssue(2, 12, 17, 'Faye: Pip, what do you think?'))
+    f.clock.now += 20_000
+    await f.mentions.tick()
+    expect(f.relayed()).toEqual([])
+    // Harness labels the task a pass later: the task is news then, and so is what was said on it.
+    Object.assign(f.github.issues[0]!, { labels: [{ name: 'builder:pip' }, { name: 'swarm:acme' }], updated_at: at(40) })
+    f.clock.now += 40_000
+    await f.mentions.tick()
+    await f.mentions.tick()
+    expect(f.relayed().map(command => [command.event, command.number])).toEqual([['task', 16], ['comment', 16]])
+    // The other issue never gets a Swarm's label: its comment is passed over once it is ten minutes old, and read no more.
+    f.clock.now += 11 * 60_000
+    await f.mentions.tick()
+    f.github.comments.push(onIssue(3, 800, 16, 'Faye: Pip, and the tests.'))
+    f.github.issues[0]!.updated_at = at(800)
+    await f.mentions.tick()
+    expect(f.relayed().map(command => [command.event, command.number]).slice(2)).toEqual([['comment', 16]])
+    // The feed is not kept back for it: the next pass reads from the newest comment on.
+    await f.mentions.tick()
+    expect(new URL(`https://api.github.com${f.github.calls.findLast(path => path.includes('/issues/comments'))!}`).searchParams.get('since')).toBe(at(800))
+  })
   it('brings a Swarm with no label in the repository yet its news as before, but none of what carries another Swarm\'s', async () => {
     const f = setup()
     f.github.state.labels = [{ name: 'swarm:acme', description: 'Swarm 0f0f0f0f0f0f0f0f0f0f0f0f' }]
