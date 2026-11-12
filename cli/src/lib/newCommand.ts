@@ -380,8 +380,9 @@ export interface NewOrigin {
   /** The caller's harness by [name] for the same agent on the same machine, already running or still on its way, said
    *  instead of starting a second; else null. */
   existing?(name: string | null, asking: { machineId: string; engine: string }): Promise<ExistingHarness | null>
-  /** Records a harness asked for that has not started yet, so the caller follows it by name once this has answered. */
-  pending?(machineId: string, creation: { creationId: string; name: string; engine: string }): void
+  /** Records a harness asked for that has not started yet, so the caller follows it by name once this has answered; a
+   *  warning to print when the record could not be kept. */
+  pending?(machineId: string, creation: { creationId: string; name: string; engine: string }): string | null
   /** What the start changed, and what to run next: wait for it, then read it. */
   answer(agent: Record<string, unknown>, at: { local: boolean; machine: string | null }): { effect: string; next: NextStep[] }
   /** The caller's own harness, by agent id, when it is one on this computer: a harness started here records it, and the
@@ -666,7 +667,8 @@ export async function newCommand(deps: NewCommandDeps): Promise<number> {
       // Recorded before any waiting: an agent's call that is cut off (a tool's timeout) leaves a harness that may still
       // start, and it is then the agent's, by name, for `ps`, `wait` and the check above.
       if (origin && (result.state === 'pending' || result.state === 'unconfirmed')) {
-        origin.pending?.(machineId, { creationId, name: args.name ?? '', engine: String(payload.engine) })
+        const unrecorded = origin.pending?.(machineId, { creationId, name: args.name ?? '', engine: String(payload.engine) })
+        if (unrecorded) deps.error(unrecorded)
       }
       // A launch the daemon holds (a native launch waiting its turn) is still on its way: asked after until it is not,
       // for a minute. Given up on at once, it could start later with an agent's task and no record of who started it

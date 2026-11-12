@@ -582,7 +582,7 @@ describe('harness new: the daemon', () => {
     const installing = { state: 'pending', held: { service: 'install', detail: 'Installing Codex. The harness starts once it is installed.' } }
     const pending: Array<[string, Record<string, unknown>]> = []
     const origin = { check: async () => {}, prompt: (text: string) => text, created: async () => null, answer: () => ({ effect: '', next: [] }), existing: async () => null,
-      pending: (machineId: string, creation: Record<string, unknown>) => { pending.push([machineId, creation]) } }
+      pending: (machineId: string, creation: Record<string, unknown>) => { pending.push([machineId, creation]); return null } }
     const run = async (env: NodeJS.ProcessEnv, json = false, name = 'cx') => {
       let clock = 0
       const socket = new FakeSocket((frame) => frame.type === 'agent_create' || frame.type === 'agent_create_status' ? installing : frame.type === 'agent_create_cancel' ? { state: 'cancelled' } : null)
@@ -629,7 +629,7 @@ describe('harness new: the daemon', () => {
     let clock = 0
     const installing = { state: 'pending', held: { service: 'install', detail: 'Installing Codex.' } }
     // Forty seconds gone before the machine answered: a slow line to another machine.
-    const origin = { check: async () => { clock += 45_000 }, prompt: (text: string) => text, created: async () => null, answer: () => ({ effect: '', next: [] }), pending: () => {} }
+    const origin = { check: async () => { clock += 45_000 }, prompt: (text: string) => text, created: async () => null, answer: () => ({ effect: '', next: [] }), pending: () => null }
     let asks = 0
     const socket = new FakeSocket((frame) => frame.type === 'agent_create' ? installing : frame.type === 'agent_create_status' ? (asks++, installing) : null)
     const d = deps(['codex'], socket, { origin: async () => origin, now: () => clock, sleep: async (ms) => { clock += ms } })
@@ -641,7 +641,7 @@ describe('harness new: the daemon', () => {
 
   it('still cancels an agent\'s launch held for anything but an install, at 40 seconds', async () => {
     let clock = 0
-    const origin = { check: async () => {}, prompt: (text: string) => text, created: async () => null, answer: () => ({ effect: '', next: [] }), pending: () => {} }
+    const origin = { check: async () => {}, prompt: (text: string) => text, created: async () => null, answer: () => ({ effect: '', next: [] }), pending: () => null }
     const socket = new FakeSocket((frame) => frame.type === 'agent_create_cancel' ? { state: 'cancelled' }
       : frame.type === 'agent_create' || frame.type === 'agent_create_status' ? { state: 'pending', held: { service: 'native', detail: 'Waiting.' } } : null)
     const d = deps(['codex', '--name', 'cx'], socket, { origin: async () => origin, now: () => clock, sleep: async (ms) => { clock += ms } })
@@ -670,7 +670,7 @@ describe('harness new: the daemon', () => {
 
   it('records the creation a harness was asked by when the machine made it', async () => {
     const created: unknown[][] = []
-    const origin = { check: async () => {}, prompt: (text: string) => text, answer: () => ({ effect: '', next: [] }), pending: () => {},
+    const origin = { check: async () => {}, prompt: (text: string) => text, answer: () => ({ effect: '', next: [] }), pending: () => null,
       created: async (...args: unknown[]) => { created.push(args); return null } }
     const socket = new FakeSocket((frame) => frame.type === 'agent_create' ? { state: 'created', agent: { id: 'k1', name: 'cx' } } : null)
     expect(await newCommand(deps(['codex', '--name', 'cx'], socket, { origin: async () => origin }))).toBe(0)

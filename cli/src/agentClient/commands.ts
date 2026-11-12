@@ -1671,9 +1671,16 @@ export async function agentOrigin(deps: ClientDeps = {}, record: Rpc = messagesR
         note: `"${called}" is already running: you started it ${when}. Wait for it with ${step(s.env, 'wait', called)} `
           + `or read it with ${step(s.env, 'show', called)}. Do not start it again; to start a new one by that name, close it first (${step(s.env, 'close', called)}).` }
     },
+    // Both records follow the create: a failure to keep one is said, never a refusal, whose "try again" would start
+    // a second harness.
     pending: (machineId, creation) => {
-      o.ledger.append({ at: s.now(), by: { machineId: caller.machineId, agentId: caller.agentId, name: caller.name, engine: caller.engine },
-        creation: { machineId, ...creation }, depth: o.ledger.depthOf(caller) + 1 })
+      try {
+        o.ledger.append({ at: s.now(), by: { machineId: caller.machineId, agentId: caller.agentId, name: caller.name, engine: caller.engine },
+          creation: { machineId, ...creation }, depth: o.ledger.depthOf(caller) + 1 })
+        return null
+      } catch {
+        return `Harness could not record that you asked for ${creation.name || 'the harness'}: it may still start. Do not start it again.`
+      }
     },
     prompt: (text, machineId) => {
       // Said once, at the top: the task is from an agent, not the person (a teammate's tmux paste read as the
@@ -1707,7 +1714,9 @@ export async function agentOrigin(deps: ClientDeps = {}, record: Rpc = messagesR
         child: { machineId, agentId: id, name, ...(creationId ? { creationId } : {}) },
         depth: o.ledger.depthOf(caller) + 1,
       }
-      o.ledger.record(row)
+      try { o.ledger.record(row) } catch {
+        return `${name || 'The harness'} is starting, but Harness could not record that you started it. Do not start it again.`
+      }
       if (machineId === o.where.machineId) return null
       // The other machine keeps the line too: there the new harness's limits and depth start from it. Without it a
       // harness started on another machine was one the person started there, and a chain hopping between machines had
