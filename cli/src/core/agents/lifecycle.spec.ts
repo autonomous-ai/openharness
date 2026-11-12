@@ -54,6 +54,7 @@ function setup(over: Partial<LifecycleDeps> = {}) {
     refreshGridWebSearch: vi.fn(),
     attachDsh: vi.fn(),
     attachSession: vi.fn(async () => true),
+    eraseRecords: vi.fn(async () => {}),
     ...over,
   }
   const lifecycle = createAgentLifecycle(deps)
@@ -147,6 +148,7 @@ describe('stopping, purging and resuming an agent', () => {
       expect(purge.stopped).toBe(deps.stoppedAgents)
       expect(purge.checkpoints).toBe(deps.sessionCheckpoints)
       expect(purge.stop).toBe(lifecycle.stopAgent)
+      expect(purge.eraseRecords).toBe(deps.eraseRecords)
       expect(purge.leadProtected).toBeUndefined()
     })
 
@@ -182,6 +184,25 @@ describe('stopping, purging and resuming an agent', () => {
       expect(deps.sessionSearch?.deleteHistory).toHaveBeenCalledWith('s1')
       expect(deps.registry.deleteSavedNames).toHaveBeenCalledWith(['a1', 's1'])
       expect(deps.send).toHaveBeenCalledWith({ type: 'agent_deleted', payload: { agentId: 'a1', retained: false } })
+    })
+
+    it('a purge forgets the recaps, the search rows and the names under every session key, then its other records', async () => {
+      const closed = row({ engine: 'openclaw', sessionId: 'k2', earlierSessionIds: ['k1'], registeredAt: 7 })
+      const { deps, lifecycle } = setup({
+        registry: { byAgent: vi.fn(() => undefined), list: vi.fn(() => []), deleteSavedNames: vi.fn() } as unknown as LifecycleDeps['registry'],
+        stoppedAgents: { list: vi.fn(() => [closed]), get: vi.fn((id: string) => (id === 'a1' ? closed : undefined)),
+          beginResume: vi.fn(() => 'held'), finishResume: vi.fn(), remove: vi.fn() } as unknown as LifecycleDeps['stoppedAgents'],
+        sessionCheckpoints: { deletionFiles: vi.fn(() => []) } as never,
+      })
+      const target = { agentId: 'a1', sessionId: 'k2', createdAt: 7 }
+      const { reviewId } = await lifecycle.purgeAgentService.request({ ...target, mode: 'inspect' })
+      expect(await lifecycle.purgeAgentService.request({ ...target, mode: 'delete', reviewId: String(reviewId) })).toMatchObject({ deleted: true, sessionDeleted: true })
+      expect(vi.mocked(deps.mirror.deleteHistory).mock.calls).toEqual([['k2'], ['k1']])
+      expect(vi.mocked(deps.sessionSearch!.deleteHistory).mock.calls).toEqual([['k2'], ['k1']])
+      expect(deps.registry.deleteSavedNames).toHaveBeenCalledWith(['a1', 'k2', 'k1'])
+      expect(deps.eraseRecords).toHaveBeenCalledWith(closed)
+      expect(deps.send).toHaveBeenCalledWith({ type: 'agent_deleted', payload: { agentId: 'a1', retained: false } })
+      expect(vi.mocked(deps.eraseRecords).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(deps.send).mock.invocationCallOrder[0]!)
     })
 
     it('with no session yet, or no search index, forgets only what there is', () => {
