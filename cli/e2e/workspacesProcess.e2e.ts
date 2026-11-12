@@ -2,14 +2,13 @@
  * Workspaces in their own process, the edge host (harnessd/services.ts `SERVICE_HOSTS`), on the real daemon
  * (`HARNESSD_SERVICES=workspaces`: the edge host running workspaces alone; here also with search and the
  * viewers): the branch Harness made up for a worktree takes its session's name, renamed by the workspaces
- * process and shown on the agent's frame by the core; and the worktree sweep runs there, when the core's
- * timer says. Whatever happens to the process costs workspaces alone. Stopped, hung, killed or crashing on
- * every start, the core never restarts, agents keep working, and frames keep their branch names, which
- * the core reads itself. A sweep the core decides while the process is down is skipped and never run
- * later. A core that restarts leaves the process running.
+ * process and shown on the agent's frame by the core. Whatever happens to the process costs workspaces alone. Stopped,
+ * hung, killed or crashing on every start, the core never restarts, agents keep working, and frames keep their branch
+ * names, which the core reads itself. A core that restarts leaves the process running. Nothing removes a worktree on a
+ * timer (#4166).
  */
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
@@ -37,15 +36,6 @@ function worktree(d: IsolatedDaemon, repo: string, name: string, placeholder = f
   if (placeholder) git(d, repo, 'config', `branch.${name}.harness`, 'placeholder')
   return path
 }
-/** Nothing in it changed for eight days: past the sweep's week. */
-function idle(d: IsolatedDaemon, path: string): void {
-  const gitDir = git(d, path, 'rev-parse', '--absolute-git-dir')
-  const then = new Date(Date.now() - 8 * 24 * 3600_000)
-  for (const file of [path, join(gitDir, 'HEAD'), join(gitDir, 'index'), join(gitDir, 'logs', 'HEAD')]) {
-    if (existsSync(file)) utimesSync(file, then, then)
-  }
-}
-
 /** The workspaces process the master runs now, the edge host: the last one it said it started. Read from
  *  its log, never from the process table, where another daemon's services could be. */
 const workspacesPid = (d: IsolatedDaemon): number | null => {
@@ -147,15 +137,10 @@ describe('workspaces in their own process', () => {
     client.close()
   })
 
-  it('killed outright, it is brought back; a sweep the core decides meanwhile is skipped and never run later', async () => {
-    let repo = ''
-    let unused = ''
+  it('killed outright, it is brought back, and names the branch it missed', async () => {
     let cwd = ''
-    const d = await fresh({ HARNESSD_TEST_SWEEP_AFTER_MS: '10000', HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '15000' }, (d) => {
-      repo = repository(d)
-      unused = worktree(d, repo, 'old-idea')
-      idle(d, unused)
-      cwd = worktree(d, repo, 'brave-otter', true)
+    const d = await fresh({ HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '15000' }, (d) => {
+      cwd = worktree(d, repository(d), 'brave-otter', true)
     })
     await until('the core to be ready', () => ready(d) >= 1 || null, 30_000, 100)
     const first = workspacesPid(d)!
@@ -163,14 +148,9 @@ describe('workspaces in their own process', () => {
     const client = await LocalClient.connect(d)
     const agent = await create(d, client, cwd)
     await turn(client, agent.id, 'while workspaces was gone')
-    await until('the core to skip the sweep it decided while workspaces was down',
-      () => d.log().includes('[worktrees] sweep skipped: the workspaces process is not running') || null, 30_000, 200)
     await until('workspaces to be back', () => restarts(d) >= 1 && connected(d) >= 2 || null, 60_000, 200)
     await name(d, agent, 'Fix the login page')
     await named(d, client, agent, cwd)
-    // Back, it never ran the sweep it missed: the idle worktree nothing uses is still there.
-    expect(existsSync(unused)).toBe(true)
-    expect(d.log()).not.toContain('[worktrees] removed')
     expect(d.coresStarted()).toBe(1)
     client.close()
   })
@@ -210,28 +190,6 @@ describe('workspaces in their own process', () => {
     await named(d, client, agent, cwd)
     expect(workspacesPid(d)).toBe(workspaces)
     expect(restarts(d)).toBe(0)
-    client.close()
-  })
-
-  it('the sweep runs in the workspaces process when the core says: it removes a week-idle worktree nothing uses, and keeps one an agent works in', async () => {
-    let unused = ''
-    let used = ''
-    const d = await fresh({ HARNESSD_TEST_SWEEP_AFTER_MS: '20000' }, (d) => {
-      const repo = repository(d)
-      unused = worktree(d, repo, 'old-idea')
-      used = worktree(d, repo, 'still-going')
-    })
-    const client = await LocalClient.connect(d)
-    const agent = await create(d, client, used)
-    // Both idle for a week: only the agent working in one keeps it.
-    idle(d, unused)
-    idle(d, used)
-    await until('the sweep to remove the unused worktree', () => d.log().includes('[worktrees] removed 1 unused worktree(s)') || null, 60_000, 250)
-    expect(existsSync(unused)).toBe(false)
-    expect(existsSync(used)).toBe(true)
-    expect(d.log().split('[worktrees] removed').length - 1).toBe(1)
-    await turn(client, agent.id, 'my worktree is still here')
-    expect(d.coresStarted()).toBe(1)
     client.close()
   })
 })

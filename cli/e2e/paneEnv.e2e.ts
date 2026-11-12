@@ -9,6 +9,7 @@
  */
 import { execFile } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { availableParallelism } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
@@ -29,10 +30,10 @@ const row = async (client: LocalClient, agentId: string): Promise<Row | undefine
   (await client.request<{ agents: Row[] }>('agents_list', { includeStopped: true }, 30_000)).agents.find((agent) => agent.id === agentId)
 const isTurn = (type: string, agentId: string) => (frame: Frame) => frame.type === type && frame.agentId === agentId
 
-async function create(d: IsolatedDaemon, client: LocalClient, engine: Engine | 'terminal', folder: string): Promise<Row> {
+async function create(d: IsolatedDaemon, client: LocalClient, engine: Engine | 'terminal', folder: string, over: Record<string, unknown> = {}): Promise<Row> {
   const cwd = join(d.projectsDir, folder)
   mkdirSync(cwd, { recursive: true })
-  const created = await client.request('agent_create', { engine, cwd, ...(engine === 'terminal' ? {} : { bypassPermission: true }) }, 90_000)
+  const created = await client.request('agent_create', { engine, cwd, ...(engine === 'terminal' ? {} : { bypassPermission: true }), ...over }, 90_000)
   expect(created.error, `${folder}: ${JSON.stringify(created)}`).toBeUndefined()
   return until(`${folder} to start`, async () => {
     const agent = await row(client, created.agent.id)
@@ -49,19 +50,28 @@ const AGENT_SESSION = {
 const HARNESSD = 'HARNESSD_'
 const SESSION = 'AI_AGENT,CLAUDECODE,CLAUDE_CODE_MESSAGING,CLAUDE_CODE_SESSION,CODEX_THREAD'
 
-/** The names an agent's engine has that start with [prefixes], asked as an agent reads its environment (fakeEngine `!env`). */
-async function engineHas(client: LocalClient, agentId: string, prefixes = HARNESSD): Promise<string> {
-  const ended = client.next(isTurn('turn_ended', agentId), 45_000, 'turn_ended (!env)')
-  client.send('message', { agentId, content: `!env ${prefixes}` })
+/** What an agent's engine answers to [directive] (fakeEngine), read from its thread by the answer's [lead]. */
+async function engineAnswer(client: LocalClient, agentId: string, directive: string, lead: string): Promise<string> {
+  const ended = client.next(isTurn('turn_ended', agentId), 45_000, `turn_ended (${directive})`)
+  client.send('message', { agentId, content: directive })
   await ended
   const { sessionId } = (await row(client, agentId))!
-  return until('the !env answer in the thread', async () => {
+  return until(`the ${directive} answer in the thread`, async () => {
     const page = await client.request<{ events?: Array<{ type: string; payload: Record<string, any> }> }>('session_get', { sessionId, limit: 200 }, 30_000)
     const answer = (page.events ?? []).filter((event) => event.type === 'text_delta').map((event) => String(event.payload.content))
-      .find((text) => text.startsWith(`env ${prefixes}: `))
-    return answer?.slice(`env ${prefixes}: `.length) ?? null
+      .find((text) => text.startsWith(lead))
+    return answer?.slice(lead.length) ?? null
   }, 15_000, 250)
 }
+
+/** The names an agent's engine has that start with [prefixes], asked as an agent reads its environment (fakeEngine `!env`). */
+const engineHas = (client: LocalClient, agentId: string, prefixes = HARNESSD): Promise<string> =>
+  engineAnswer(client, agentId, `!env ${prefixes}`, `env ${prefixes}: `)
+
+/** The share of the machine's cores an agent's engine was started with (fakeEngine `!cores`); [tag] tells this answer from
+ *  the thread's earlier ones. */
+const coresOf = (client: LocalClient, agentId: string, tag: string): Promise<string> =>
+  engineAnswer(client, agentId, `!cores ${tag}`, `cores ${tag}: `)
 
 /** The names starting with [prefixes] in the environment of the shell a pane runs, written to a file by that shell. */
 async function shellHas(d: IsolatedDaemon, pane: string, name: string, prefixes = HARNESSD): Promise<string[]> {
@@ -131,6 +141,50 @@ describe('a pane\'s environment', () => {
     expect(d.log()).toContain(`[terminal] tmux: removed ${Object.keys(AGENT_SESSION).sort().join(', ')} from the environment new panes start with`)
     const client = await LocalClient.connect(d)
     await expectNoneIn(d, client, SESSION)
+    client.close()
+  }, 300_000)
+
+  // anh Dee, 2026-11-11: "with multiple agents, it's CPU constraint" (docs/research/2026-11-11-agents-share-cpu.md). A Swarm's
+  // agent starts with its share of this machine's cores (superTabs/inCore/launch.ts); a person's own session with none, not
+  // even when the daemon was started from the shell of a Swarm agent that has one.
+  it('gives a Swarm\'s agent its share of the machine\'s cores at its start and when it is resumed, and a person\'s own session none', async () => {
+    const d = await IsolatedDaemon.create({ env: { ANTHROPIC_API_KEY: 'fixture-not-a-credential', HARNESS_CORES: '3' } })
+    daemon = d
+    onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
+    await d.start()
+    const client = await LocalClient.connect(d)
+    const own = await create(d, client, 'claude', 'own')
+    expect(await engineHas(client, own.id, 'HARNESS_CORES')).toBe('(none)')
+    const agent = await create(d, client, 'claude', 'swarm', { swarmRole: 'dev' })
+    // The Swarm's only agent here has the whole machine: the person's own session takes no part of it, and the share the
+    // daemon's own shell had is not its.
+    expect(await coresOf(client, agent.id, 'started')).toBe(String(availableParallelism()))
+    // Stopped and resumed, it is in a new pane, whose environment is built again (lib/launchOverrides.ts).
+    expect((await client.request('agent_delete', { agentId: agent.id }, 90_000)).error).toBeUndefined()
+    await until('the Swarm\'s agent to stop', async () => (await row(client, agent.id))?.status === 'stopped' || null, 60_000, 500)
+    expect((await client.request('agent_resume', { agentId: agent.id }, 90_000)).error).toBeUndefined()
+    await until('the Swarm\'s agent to be active again', async () => {
+      const again = await row(client, agent.id)
+      return again?.sessionId && again.status === 'active' ? again : null
+    }, 60_000, 500)
+    expect(await coresOf(client, agent.id, 'resumed')).toBe(String(availableParallelism()))
+    client.close()
+  }, 300_000)
+
+  // The review of #4150: no test checked that the daemon counts its Swarm's agents (core/main.ts hands the share the core's
+  // registry). Those already running count, across a restart too, as the restarted daemon reads their rows again.
+  it('shares the machine\'s cores among the Swarm\'s agents here, one running from before a restart counted', async () => {
+    const d = await created()
+    await d.start()
+    let client = await LocalClient.connect(d)
+    const first = await create(d, client, 'claude', 'swarm-first', { swarmRole: 'dev' })
+    expect(await coresOf(client, first.id, 'first')).toBe(String(availableParallelism()))
+    client.close()
+    await d.restart()
+    client = await LocalClient.connect(d)
+    await until('the first Swarm agent back after the restart', async () => (await row(client, first.id))?.status === 'active' || null, 60_000, 500)
+    const second = await create(d, client, 'claude', 'swarm-second', { swarmRole: 'dev' })
+    expect(await coresOf(client, second.id, 'second')).toBe(String(Math.max(1, Math.floor(availableParallelism() / 2))))
     client.close()
   }, 300_000)
 })

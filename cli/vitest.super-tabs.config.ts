@@ -30,6 +30,8 @@ const FILES = ['src/superTabs/shortCommand.ts', ...IN_CORE,
   'src/superTabs/taskTokens.ts',
   // How an engine left a start's pane, in fixed words, which the start's failure says (the rehearsal's Codex builders, 11-11).
   'src/superTabs/engineExit.ts',
+  // The unit suite's workers, sized to its Swarm agent's share of the machine's cores (anh Dee, 11-11).
+  'src/testing/suiteWorkers.ts',
   // A file's path as a line says it, in the numbers, the scoreboard and the merger's notes (the allocator's design, package 8).
   'src/superTabs/plainPath.ts',
 ]

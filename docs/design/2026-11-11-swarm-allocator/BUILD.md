@@ -238,9 +238,10 @@ people give their own folders.
 The rule to bring anh Dee again: only `node_modules`, `.dart_tool` and `.next`, only where a `.gitignore` rule names the
 folder itself, and the review's other findings closed first.
 
-**Today.** A sweep exists: `cli/src/lib/worktreeSweep.ts`, run by the workspaces service. It removes a worktree
-Harness made when no live or stopped harness works in it, nothing is uncommitted, it was untouched for a week, and no
-commit is only there. On anh Dee's computer 114 such worktrees of this repository still hold 109 GB.
+**Today.** Nothing removes a worktree on a timer: the workspaces service's sweep (`cli/src/lib/worktreeSweep.ts`, a
+worktree Harness made when no live or stopped harness works in it, nothing is uncommitted, it was untouched for a week,
+and no commit is only there) is gone since #4166, as it removed worktrees their person chose to keep. Cleaning up is
+the person's, from the app (#711: #4167, #4168). On anh Dee's computer 114 worktrees of this repository hold 109 GB.
 
 **First: find out why they stay.** For each kept worktree, which condition keeps it: a stopped harness, a week not
 yet gone, something uncommitted or untracked, a commit only there. Count them and their gigabytes. Reading only: run
@@ -264,11 +265,17 @@ and each that lets it go.
 
 ### 7. CPU
 
-**Built, not in a pull request yet** (branch `cli-swarm-cpu-share`). Each agent a Swarm starts gets its share of its computer's cores
-(`HARNESS_CORES`), and the CLI's unit suite takes half of it; the plan stops counting cores (the mismatch). Measured on
-one Mac of 16 threads: an eighth of the CLI's unit suite started two or four at once, each sized to the machine, failed
-on deadlines every time; sized to half its share, none did. Owed: the write-up in `docs/research/`, a review, and the
-core checks (`npm run test:core`).
+**Built** (#4150): the share, `swarmLaunch` in `cli/src/superTabs/inCore/launch.ts`, given as `HARNESS_CORES` at a
+Swarm agent's first launch (`core/agents/create.ts`) and every relaunch (`lib/launchOverrides.ts`); this repository's
+CLI suite takes half of it, never more than the machine has (`cli/src/testing/suiteWorkers.ts`). The plan counts no
+cores (`assign/crew.ts` `SIZES`): the smaller way to settle the mismatch, as a check when a task is taken needs
+package 16's offer. The study:
+[docs/research/2026-11-11-agents-share-cpu.md](../../research/2026-11-11-agents-share-cpu.md). *Measured on one Mac of
+16 threads: four runs at once of an eighth of the CLI's unit suite, each sized to the machine, failed 12 of 12; at half
+a share 16 of 16 passed, taking 1.5 to 2.7 times as long. Not built: a lower priority (`nice -n 10` did not stop four
+at once failing; macOS's background policy kept the person's own work quick and the runs failing) and the system's
+controls on Linux and Windows (not tried). Agents started at the same moment count each other; each share is said in
+the daemon's log, in counts. An agent keeps the share it was started with until it is relaunched.*
 
 **Today.** Nothing limits what an agent's tools take. Each test runner sizes its workers to the whole machine (the
 CLI's suite to half its cores, Desktop's to at most 12), whatever else runs there. And the plan keeps a machine
