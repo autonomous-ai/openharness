@@ -242,6 +242,9 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
       get autonomousEnv() { return daemon().autonomousEnv },
     },
     wifi: UNASKED.wifi,
+    // Hachi's daemon counters, handed to the core (core/agentQueries.ts `count`), which refuses any other name. A count
+    // the core cannot take now is lost: counters are measures, never state.
+    count: (metric) => { void ask?.('count', { metric }).catch(() => {}) },
     // The cloud agents' doors (core/experimentQueries.ts): told to the core in order, never waited on. A core
     // that is not connected hears it all again when it is (services/cloudProcess.ts `republish`). A question's
     // id travels as `questionId`: `requestId` is the query's own, which the link writes over.

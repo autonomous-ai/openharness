@@ -16,6 +16,17 @@ it('grants typed deliveries only in its connected service namespace and refuses 
   expect(await processCoreApi('/data', 'worker').turns.leaseDeliveries('worker', {})).toBe(false)
 })
 
+it('asks the core to count Hachi\'s counters, never waiting on it nor throwing when it cannot', async () => {
+  const ask = vi.fn(async (): Promise<Record<string, unknown>> => ({ ok: true }))
+  const api = processCoreApi('/data', 'messages', { ask })
+  api.count!('hachi_wake_done')
+  expect(ask).toHaveBeenCalledWith('count', { metric: 'hachi_wake_done' })
+  ask.mockRejectedValueOnce(new Error('Disconnected'))
+  expect(() => api.count!('hachi_turns_wake')).not.toThrow()
+  await Promise.resolve()
+  expect(() => processCoreApi('/data', 'messages').count!('hachi_turns_wake')).not.toThrow()
+})
+
 it('asks the core what holds a delivery from its pane, and hears nothing from a core that cannot say', async () => {
   const ask = vi.fn(async (): Promise<Record<string, unknown>> => ({ hold: 'team_waiting_draft' }))
   const api = processCoreApi('/data', 'superTabs', { ask })

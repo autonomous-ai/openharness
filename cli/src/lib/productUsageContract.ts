@@ -252,6 +252,14 @@ export const PRODUCT_USAGE_HACHI_METRICS = [
   ...(['under_1m', '1m_to_15m', 'over_15m'] as const).map(bucket => `hachi_needs_person_answer_${bucket}` as const),
   'hachi_open_failed_home_asleep', 'hachi_open_failed_create_failed', 'hachi_mailbox_failed',
 ] as const
+type HachiMetric = typeof PRODUCT_USAGE_HACHI_METRICS[number]
+/** Hachi's counters a daemon service may hand the core to count (core/agentQueries.ts `count`). Not the App's
+ *  (`ui_desktop_*`), and not those the recorder derives itself (gateway/productUsage.ts): the launch twins, from the
+ *  create, and the days the person typed to Hachi, from `hachi_turns_person`. */
+export const HACHI_DAEMON_METRICS = PRODUCT_USAGE_HACHI_METRICS.filter(
+  (metric): metric is Exclude<HachiMetric, `ui_desktop_${string}` | `launch_hachi_${string}` | 'hachi_person_turn_days'> =>
+    !metric.startsWith('ui_desktop_') && !metric.startsWith('launch_hachi_') && metric !== 'hachi_person_turn_days')
+export type HachiDaemonMetric = typeof HACHI_DAEMON_METRICS[number]
 export const PRODUCT_USAGE_METRICS = [
   ...PRODUCT_HEALTH_METRICS,
   'active_installation_days', 'working_installation_days', 'first_work_installations',

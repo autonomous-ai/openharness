@@ -397,6 +397,9 @@ export interface NewOrigin {
   /** The caller's own harness, by agent id, when it is one on this computer: a harness started here records it, and the
    *  windows open it beside the caller's pane. Absent for an agent outside Harness. */
   parentAgentId?: string
+  /** The caller is the Hachi harness (docs/design/2026-11-12-hachi.md): its starts are counted as Hachi's too
+   *  (`launch_hachi_*`), beside every agent's (`launch_agent_*`). */
+  hachi?: true
   /** Hachi's goals (`--goal`, services/goals.ts): [check] rejects a goal the caller may not start work for; [add] records
    *  a harness under it, by its creation and, once made, its id, and says what to print when that could not be kept. */
   goal?: {
@@ -679,9 +682,12 @@ export async function newCommand(deps: NewCommandDeps): Promise<number> {
       const asked = origin && args.prompt ? { ...args, prompt: origin.prompt(args.prompt, machineId) } : args
       // Started by an agent: the machine records it, and the pull requests it opens say so (lib/agentAttribution.ts).
       // Started by a harness on this computer: which one, so the windows open it beside that harness.
+      // Started by Hachi: a word of its own beside `startedBy`, which other code reads as any agent's, so the daemon that
+      // makes it counts the launch as Hachi's too (`launch_hachi_*`).
       const parent = origin && local ? origin.parentAgentId ?? null : null
       const payload: Record<string, unknown> = {
-        ...newAgentPayload(asked, cwd, baseEngine), ...(origin ? { startedBy: 'agent' } : {}), ...(parent ? { parentAgentId: parent } : {}),
+        ...newAgentPayload(asked, cwd, baseEngine), ...(origin ? { startedBy: 'agent' } : {}), ...(origin?.hachi ? { startedByHachi: true } : {}),
+        ...(parent ? { parentAgentId: parent } : {}),
       }
       let result = await session.request('agent_create', payload)
       const creationId = String(payload.creationId)
