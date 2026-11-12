@@ -525,6 +525,15 @@ it.each(['same', 'missing', 'different'] as const)('preserves an unbound Hermes 
     hermesHome: mode === 'different' ? hermesHome : saved.hermesHome,
   })
 })
+it('an unbound Hermes observation with no home keeps the saved home with the mark it was saved with', async () => {
+  const { saved, store } = await fixture()
+  Object.assign(saved, { engine: 'hermes', hermesHome: '/fixture/sandbox/.hermes', hermesHomeDerived: true })
+  store.save(saved)
+  const { hermesHome: _home, hermesHomeDerived: _mark, ...unbound } = saved
+  store.save({ ...unbound, sessionId: '', transcriptPath: null })
+  // Without the mark, a resume would export the daemon's path of a home Harness worked out (registry.ts hermesHomeDerived).
+  expect(store.get(saved.agentId)).toMatchObject({ sessionId: saved.sessionId, hermesHome: '/fixture/sandbox/.hermes', hermesHomeDerived: true })
+})
 it('a pathless observation of the same conversation keeps its captured native path', async () => {
   const { saved, store } = await fixture()
   saved.hermesHome = '/fixture/hermes'

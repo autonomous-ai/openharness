@@ -240,6 +240,12 @@ it.each([['missing', 'claude'], ['stalled', 'codex']] as const)(
     Object.assign(d.env, homes, { HOOK_INSTALL_ENGINES: 'claude,codex,cursor,opencode,kilo,pi,amp,hermes,devin,commandcode,grok,agy,copilot' })
     mkdirSync(homes.HERMES_HOME!, { recursive: true })
     writeFileSync(join(homes.HERMES_HOME!, 'config.yaml'), 'model: fixture\n')
+    // An older Hermes of the test's own, which keeps Harness's hook: the daemon never runs the computer's Hermes.
+    const hermes = join(d.root, 'bin', 'hermes'); d.env.HERMES_PATH = hermes
+    writeFileSync(hermes, `#!${process.execPath}
+if (process.argv.includes('--version')) { console.log('Hermes Agent v0.21.5 (2026.10.7)'); process.exit(0) }
+process.exit(2);
+`, { mode: 0o755 })
     const binary = join(d.root, 'bin', 'opencode'); d.env.OPENCODE_PATH = binary
     writeFileSync(binary, `#!${process.execPath}
 if (process.argv.includes('--version')) { console.log('opencode v2.0.18'); process.exit(0) }

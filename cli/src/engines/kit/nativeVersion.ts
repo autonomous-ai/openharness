@@ -25,6 +25,18 @@ export function parseMajor(rule: VersionRule, output: string): number | null {
   return match ? Number(match[1]) : null
 }
 
+export type Release = readonly [number, number, number]
+
+export function parseRelease(rule: VersionRule, output: string): Release | null {
+  const match = rule.output.exec(output)
+  return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null
+}
+
+export function releaseAtLeast(release: Release, floor: Release): boolean {
+  for (let part = 0; part < 3; part++) if (release[part] !== floor[part]) return release[part]! > floor[part]!
+  return true
+}
+
 export function nativeVersionProbe(rule: VersionRule, binary: () => string, environment?: NodeJS.ProcessEnv): NativeVersionProbe {
   // One attempt resolves one command. Previously identity() and read() resolved
   // independently, so a PATH/config change could cache B's answer under A's key.
@@ -63,26 +75,30 @@ export function nativeVersionProbe(rule: VersionRule, binary: () => string, envi
 
 /** Compatibility behavior: one answer per installed file; absent files have no cache key.
  * Whole-launch preparation replaces this legacy cache policy with its snapshot. */
-const publishing = new WeakMap<Map<string, number | null>, Map<string, object>>()
-export async function majorVersion(rule: VersionRule, probe: VersionProbe, memo: Map<string, number | null>): Promise<number | null> {
+const publishing = new WeakMap<Map<string, unknown>, Map<string, object>>()
+export async function probedVersion<T>(read: (output: string) => T | null, probe: VersionProbe, memo: Map<string, T | null>): Promise<T | null> {
   const identity = probe.identity()
   if (identity !== null && memo.has(identity)) return memo.get(identity) ?? null
   const attempts = publishing.get(memo) ?? new Map<string, object>()
   publishing.set(memo, attempts)
   const ticket = {}
   if (identity !== null) attempts.set(identity, ticket)
-  let major: number | null
-  try { major = parseMajor(rule, await probe.read()) } catch { major = null }
+  let version: T | null
+  try { version = read(await probe.read()) } catch { version = null }
   // An upgrade may replace the executable while --version is in flight. The
   // answer belongs only to the complete file identity inspected before spawning.
   const current = identity === probe.identity()
   if (identity !== null) {
     // A late failed read cannot erase a newer successful observation of this
     // file. The synchronous implementation could never overlap in this way.
-    if (attempts.get(identity) !== ticket) return current ? major : null
+    if (attempts.get(identity) !== ticket) return current ? version : null
     attempts.delete(identity)
-    if (current) memo.set(identity, major)
+    if (current) memo.set(identity, version)
   }
   if (!current) return null
-  return major
+  return version
+}
+
+export function majorVersion(rule: VersionRule, probe: VersionProbe, memo: Map<string, number | null>): Promise<number | null> {
+  return probedVersion(output => parseMajor(rule, output), probe, memo)
 }

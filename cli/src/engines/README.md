@@ -314,6 +314,18 @@ session. Amp keys `lastThreadByTerminal` in its `session.json` by `tmux:<pane>@<
 an exact pane→thread map. Harness does not use it (the repair path is asked about a directory, not a
 pane) but it is the kind of thing to look for before assuming a scan is the only option.
 
+An engine that writes down which session a terminal is on needs neither a hook nor a scan: Hermes
+v0.21.6+ with its default CLI is followed from `<HERMES_HOME>/terminal-sessions/<terminal id>` on macOS
+and Linux, and v0.21.6 is the minimum for following it without a hook. An older Hermes, one whose
+version cannot be read, and a home whose `config.yaml` says `display.interface: tui` (the TUI writes no
+record) keep the hook until 2026-12-07 or later (#4207); Windows keeps hooks. A run that writes no
+record in a home set to the CLI (`hermes --tui`, `HERMES_TUI=1`, `session.terminal_continue: false`) is
+bound once, and its session switches are not followed. A restart, resume or fork names a Hermes home
+only when the process itself set `HERMES_HOME`; a home worked out from its `HOME` is worked out again
+by the new process. A wrapper named `hermes` must `exec` what it starts: Harness reads the shallowest
+process that reads as Hermes, and a wrapper that stays the parent is read in place of the Hermes inside
+its sandbox.
+
 Either way, two more files:
 
 | File | What to add |

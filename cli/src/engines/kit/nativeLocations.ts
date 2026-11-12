@@ -29,6 +29,8 @@ export function nativeOpencodeStore(vars: Readonly<Record<string, string>>): str
 
 export interface NativeHookOptions extends HookPreparationOptions {
   environment?: Readonly<Record<string, string>>
+  /** The executable a launch runs, whose version decides an engine's hooks (Hermes); absent, the one a launch would run. */
+  executable?: { command: string }
 }
 
 export function nativeHookLocations(vars: Readonly<Record<string, string>>) {
