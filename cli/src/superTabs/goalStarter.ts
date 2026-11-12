@@ -1,5 +1,6 @@
 /**
- * A project's goal file and the workflow that checks it, written into an agent's checkout: `harness super-tab goal`.
+ * A project's goal file and the workflow that checks it, in an agent's checkout: shown by `harness super-tab goal`, written by
+ * `harness super-tab goal write`.
  *
  * Harness scores a goal from checks named `goal: <milestone>` on the main branch (goal.ts) and runs none itself: the
  * repository's CI does. What reads the file there must read it exactly as Harness does, row for row, or a milestone waits for
@@ -11,10 +12,10 @@
  * another agent and land on the train. A file that is there already is left as it is.
  */
 import { execFile } from 'node:child_process'
-import { lstatSync, mkdirSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { gitEnv } from '../lib/gitProject.js'
-import { GOAL_CHECK, GOAL_FILE, GOAL_MAX, LINE_MAX, MILESTONE_MAX } from './goal.js'
+import { GOAL_CHECK, GOAL_FILE, GOAL_MAX, goalRows, LINE_MAX, MILESTONE_MAX } from './goal.js'
 
 const GOAL_WORKFLOW = '.github/workflows/goal.yml'
 
@@ -101,24 +102,39 @@ const gitLine = (cwd: string, args: readonly string[]): Promise<string | null> =
   execFile('git', args, { cwd, timeout: 10_000, windowsHide: true, env: gitEnv(process.env) }, (error, stdout) => resolve(error ? null : String(stdout).trim().split('\n')[0]!))
 })
 
+type Git = (cwd: string, args: readonly string[]) => Promise<string | null>
+
+/** The main branch as the checkout [root] knows it (origin's HEAD), `main` when it does not say. A branch's name is git's own,
+ *  and goes into the workflow as a quoted string. */
+async function mainBranch(root: string, git: Git): Promise<string> {
+  const head = (await git(root, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD']))?.replace(/^origin\//, '')
+  return head && /^[\w./-]{1,200}$/.test(head) ? head : 'main'
+}
+
+/** The first folder on [path]'s way from [root] that is a link, or null: nothing is written or read through one, which could
+ *  name any folder on this computer. */
+function linkedFolder(root: string, path: string): string | null {
+  for (let folder = dirname(path); folder !== '.'; folder = dirname(folder)) {
+    if (lstatSync(join(root, folder), { throwIfNoEntry: false })?.isSymbolicLink()) return folder
+  }
+  return null
+}
+
 /**
  * Writes the goal file and its workflow into the repository [cwd] is in, each only where nothing is there yet (not even a
  * link to nowhere), and neither when a folder on the way to one is a link (nothing is written through a link, to elsewhere
  * or to nowhere), and says what to do next in words an agent reads. The workflow names the main branch as the checkout
  * knows it (origin's HEAD), `main` when it does not say; the answer says which, as a checkout can be behind a rename.
  */
-export async function startGoal(cwd: string, git: (cwd: string, args: readonly string[]) => Promise<string | null> = gitLine): Promise<{ ok: boolean; said: string }> {
+export async function startGoal(cwd: string, git: Git = gitLine): Promise<{ ok: boolean; said: string }> {
   const root = await git(cwd, ['rev-parse', '--show-toplevel'])
   if (!root) return { ok: false, said: 'This folder is in no git repository: run it in your checkout of the project.' }
-  // A branch's name is git's own, and goes into the workflow as a quoted string.
-  const head = (await git(root, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD']))?.replace(/^origin\//, '')
-  const base = head && /^[\w./-]{1,200}$/.test(head) ? head : 'main'
+  const base = await mainBranch(root, git)
   const files = [[GOAL_FILE, GOAL_TEXT], [GOAL_WORKFLOW, goalWorkflow(base)]] as const
   // Both files' folders are looked at before either file is written: a link refuses the whole command, not its second half.
   for (const [path] of files) {
-    for (let folder = dirname(path); folder !== '.'; folder = dirname(folder)) {
-      if (lstatSync(join(root, folder), { throwIfNoEntry: false })?.isSymbolicLink()) return { ok: false, said: `${folder} is a link: nothing was written.` }
-    }
+    const linked = linkedFolder(root, path)
+    if (linked) return { ok: false, said: `${linked} is a link: nothing was written.` }
   }
   const wrote: string[] = [], kept: string[] = []
   for (const [path, text] of files) {
@@ -133,4 +149,56 @@ export async function startGoal(cwd: string, git: (cwd: string, args: readonly s
   if (!wrote.length) return { ok: true, said: `${GOAL_FILE} and ${GOAL_WORKFLOW} are there already. Add a row to ${GOAL_FILE} for each milestone: ${row}` }
   return { ok: true, said: `Wrote ${wrote.join(' and ')}${kept.length ? ` (${kept[0]} was there already)` : ''}. Add a row to ${GOAL_FILE} for each milestone: ${row} `
     + `Then commit ${wrote.length > 1 ? 'both' : 'it'} on a branch of yours and open a pull request, as for any change. The checks run on ${base} once it lands.` }
+}
+
+/** The most of a goal file Harness reads: GitHub's contents API answers with a file's content up to 1 MB (githubRest.ts file). */
+const SHOWN_MAX = 1024 * 1024
+
+/**
+ * What the goal in the checkout [cwd] is in states, in words an agent reads: its milestones and their checks, read as Harness
+ * and the workflow read them (goal.ts goalRows), or that there is none yet and how to start one. Writes nothing: a new PM ran
+ * the command "to see what it did", and the two files it then found it had not meant to write it deleted (anh Dee's Lou,
+ * 2026-11-12). Its own checkout, which can be behind the main branch Harness scores, so it says "this checkout". Nothing is
+ * read through a link, of the file or a folder on its way. The milestones are the agent's own checkout's text, as a read of
+ * the file would give it: Harness itself types none to an agent (goal.ts).
+ */
+export async function showGoal(cwd: string, git: Git = gitLine): Promise<{ ok: boolean; said: string }> {
+  const root = await git(cwd, ['rev-parse', '--show-toplevel'])
+  if (!root) return { ok: false, said: 'This folder is in no git repository: run it in your checkout of the project.' }
+  const base = await mainBranch(root, git)
+  let rows: ReturnType<typeof goalRows>
+  try {
+    const linked = linkedFolder(root, GOAL_FILE)
+    if (linked) return { ok: false, said: `${linked} is a link: ${GOAL_FILE} was not read.` }
+    const file = lstatSync(join(root, GOAL_FILE), { throwIfNoEntry: false })
+    if (!file) return { ok: true, said: `This checkout states no goal yet: ${GOAL_FILE} is not in it. Pull ${base} first if another agent `
+      + `may have added one; if not, ask your person what the project is for, then \`harness super-tab goal write\` writes ${GOAL_FILE} `
+      + 'and the workflow that checks it.' }
+    if (!file.isFile()) return { ok: false, said: `${GOAL_FILE} is not a plain file (a link or a folder): it was not read.` }
+    if (file.size > SHOWN_MAX) return { ok: false, said: `${GOAL_FILE} is over 1 MB, more than Harness reads of it: shorten it.` }
+    rows = goalRows(readFileSync(join(root, GOAL_FILE), 'utf8'))
+  } catch (error) {
+    return { ok: false, said: `${GOAL_FILE} could not be read here (${(error as NodeJS.ErrnoException).code}).` }
+  }
+  const missing = workflowNote(root)
+  if (!rows.length) return { ok: true, said: `${GOAL_FILE} in this checkout states no milestone yet. Add a row for each: `
+    + `| what must be true | \`the command that proves it\` |${missing ? ` ${missing}` : ''}` }
+  const listed = rows.map(row => `\n- ${row.milestone}: \`${row.check}\``).join('')
+  return { ok: true, said: `${GOAL_FILE} in this checkout states ${rows.length === 1 ? '1 milestone, checked' : `${rows.length} milestones, each checked`} `
+    + `on ${base}${missing ? '' : ` by ${GOAL_WORKFLOW}`} once it lands there:${listed}${missing ? `\n${missing}` : ''}` }
+}
+
+/** What is wrong with the checkout's goal workflow, in words that send the agent nowhere `goal write` refuses; '' when it is
+ *  there. Named apart from the goal file, which reads well whatever the workflow's path does (the review of #4205). */
+function workflowNote(root: string): string {
+  try {
+    const linked = linkedFolder(root, GOAL_WORKFLOW)
+    if (linked) return `Its workflow's folder, ${linked}, is a link: the workflow was not read, and \`harness super-tab goal write\` writes nothing through it.`
+    const workflow = lstatSync(join(root, GOAL_WORKFLOW), { throwIfNoEntry: false })
+    if (workflow?.isFile()) return ''
+    if (workflow) return `Its workflow, ${GOAL_WORKFLOW}, is not a plain file (a link or a folder): it was not read.`
+  } catch (error) {
+    return `Its workflow, ${GOAL_WORKFLOW}, could not be read here (${(error as NodeJS.ErrnoException).code}).`
+  }
+  return `Its workflow, ${GOAL_WORKFLOW}, is not in this checkout: \`harness super-tab goal write\` writes it.`
 }
