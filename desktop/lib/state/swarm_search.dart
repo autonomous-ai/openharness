@@ -20,6 +20,7 @@ import '../core/models.dart'
 import '../core/relative_time.dart';
 
 import 'account_devices.dart' show AccountDevice;
+import '../super_tabs/swarm_name.dart';
 import 'app_state.dart';
 import '../core/first_task.dart';
 import 'harness_placement.dart';
@@ -117,7 +118,8 @@ class SwarmSearchController extends ChangeNotifier {
        _cache = catalog ?? SwarmSearchCatalog(),
        _locations = locations ?? SwarmLocationCatalog(),
        targetId = app.activeSwarmId,
-       targetName = app.activeSwarm.name {
+       targetName =
+           swarmTabShownName(app, app.activeSwarm) ?? app.activeSwarm.name {
     if (activityFirst &&
         history == null &&
         !navigating &&
@@ -1107,7 +1109,8 @@ class SwarmSearchController extends ChangeNotifier {
   /// visible and make subsequent creation target the workspace that remains.
   void followRemainingWorkspace() {
     targetId = app.activeSwarmId;
-    targetName = app.activeSwarm.name;
+    targetName =
+        swarmTabShownName(app, app.activeSwarm) ?? app.activeSwarm.name;
     _refresh(force: true);
   }
 

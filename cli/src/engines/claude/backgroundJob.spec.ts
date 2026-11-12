@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { conflictingBackgroundJob, stopConflictingBackgroundJob, type ClaudeAgentListEntry } from './claudeBackgroundJob.js'
+import { conflictingBackgroundJob, stopConflictingBackgroundJob, type ClaudeAgentListEntry } from './backgroundJob.js'
 
 const BG_MATCH: ClaudeAgentListEntry = { id: '06b52258', sessionId: 's1', kind: 'background' }
 const BG_OTHER: ClaudeAgentListEntry = { id: 'aaaa1111', sessionId: 's2', kind: 'background' }
@@ -37,7 +37,7 @@ describe('stopConflictingBackgroundJob', () => {
       if (args[0] === 'stop') return ''
       throw new Error(`unexpected exec ${args.join(' ')}`)
     }
-    await stopConflictingBackgroundJob({ bin: 'claude', sessionId: 's1', exec })
+    expect(await stopConflictingBackgroundJob({ bin: 'claude', sessionId: 's1', exec })).toEqual({ job: '06b52258', stopped: true })
     expect(calls).toEqual([
       { args: ['agents', '--json'], timeoutMs: 3_000 },
       { args: ['stop', '06b52258'], timeoutMs: 3_000 },
@@ -51,28 +51,26 @@ describe('stopConflictingBackgroundJob', () => {
       calls.push([...args])
       return args[0] === 'agents' ? JSON.stringify([BG_OTHER]) : ''
     }
-    await stopConflictingBackgroundJob({ bin: 'claude', sessionId: 's1', exec })
+    expect(await stopConflictingBackgroundJob({ bin: 'claude', sessionId: 's1', exec })).toBeNull()
     expect(calls).toEqual([['agents', '--json']])
   })
 
   it('is a no-op when the listing fails (missing subcommand, non-zero exit, timeout)', async () => {
     const calls: string[][] = []
     const exec = async (_bin: string, args: readonly string[]) => { calls.push([...args]); return null }
-    await expect(stopConflictingBackgroundJob({ bin: 'claude', sessionId: 's1', exec })).resolves.toBeUndefined()
+    await expect(stopConflictingBackgroundJob({ bin: 'claude', sessionId: 's1', exec })).resolves.toBeNull()
     expect(calls).toEqual([['agents', '--json']])
   })
 
   it('is a no-op when the listing is not the documented JSON array', async () => {
     const exec = async (_bin: string, args: readonly string[]) => args[0] === 'agents' ? 'not json' : ''
-    await expect(stopConflictingBackgroundJob({ bin: 'claude', sessionId: 's1', exec })).resolves.toBeUndefined()
+    await expect(stopConflictingBackgroundJob({ bin: 'claude', sessionId: 's1', exec })).resolves.toBeNull()
   })
 
-  it('resolves without throwing when the stop call itself fails', async () => {
-    const log: string[] = []
+  it('says the job it could not stop when the stop call itself fails, without throwing', async () => {
     const exec = async (_bin: string, args: readonly string[]) =>
       args[0] === 'agents' ? JSON.stringify([BG_MATCH]) : null
-    await expect(stopConflictingBackgroundJob({ bin: 'claude', sessionId: 's1', exec, log: m => log.push(m) })).resolves.toBeUndefined()
-    expect(log[0]).toContain('could not stop background job 06b52258')
+    await expect(stopConflictingBackgroundJob({ bin: 'claude', sessionId: 's1', exec })).resolves.toEqual({ job: '06b52258', stopped: false })
   })
 
   it('gives up waiting for the job to leave the listing after its bounded budget, never hanging', async () => {
@@ -85,7 +83,8 @@ describe('stopConflictingBackgroundJob', () => {
       listCalls++
       return JSON.stringify([BG_MATCH]) // never leaves the listing
     }
-    await stopConflictingBackgroundJob({ bin: 'claude', sessionId: 's1', exec, now, sleep, pollBudgetMs: 1_000, pollIntervalMs: 250 })
+    expect(await stopConflictingBackgroundJob({ bin: 'claude', sessionId: 's1', exec, now, sleep, pollBudgetMs: 1_000, pollIntervalMs: 250 }))
+      .toEqual({ job: '06b52258', stopped: true })
     // One list before the stop, then polls while now() < deadline (4 more at 250ms steps to reach 1000).
     expect(listCalls).toBe(5)
     expect(clock).toBeGreaterThanOrEqual(1_000)

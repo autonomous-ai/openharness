@@ -166,7 +166,7 @@ describe('Harness says each thing once on GitHub, over an hour and a restart (gi
 
     const make = () => {
       const deps = { projects: async () => [PROJECT], crew: async () => structuredClone(CREW), get: gh.get, send: gh.send, now: () => clock.now, log: () => {}, records: new VerdictRecords(gh.authors, () => clock.now, () => {}) }
-      return { merger: new GitHubMerge({ ...deps, hot: () => [] }), assigner: new GitHubAssign({ ...deps, numbers: { pass: async () => {} }, pmRunning: async () => true }) }
+      return { merger: new GitHubMerge({ ...deps, costs: async () => [], hot: () => [] }), assigner: new GitHubAssign({ ...deps, numbers: { pass: async () => {} }, pmRunning: async () => true }) }
     }
     let loops = make()
     for (let pass = 0; pass < PASSES; pass++) {
@@ -250,7 +250,7 @@ describe('Harness says each thing once on GitHub, over an hour and a restart (gi
     gh.pull(24, sha(24)); gh.say(24, `Juno, 04:00, to **Pip**: READ-OK ${sha(24).slice(0, 7)}`); gh.mergeable.set(24, 'dirty')
     const make = () => {
       const deps = { projects: async () => [PROJECT], crew: async () => structuredClone(CREW), get: gh.get, send: gh.send, now: () => clock.now, log: () => {}, records: new VerdictRecords(gh.authors, () => clock.now, () => {}) }
-      return { merger: new GitHubMerge({ ...deps, hot: () => [] }), assigner: new GitHubAssign({ ...deps, numbers: { pass: async () => {} }, pmRunning: async () => true }) }
+      return { merger: new GitHubMerge({ ...deps, costs: async () => [], hot: () => [] }), assigner: new GitHubAssign({ ...deps, numbers: { pass: async () => {} }, pmRunning: async () => true }) }
     }
     let loops = make()
     // A pass every five minutes for a day, the daemon restarting every six hours, as releases restart it.
@@ -292,7 +292,7 @@ describe('Harness says each thing once on GitHub, over an hour and a restart (gi
     gh.files.set(26, ['app/b.py', 'app/hub.py'])
     const make = () => {
       const deps = { projects: async () => [PROJECT], crew: async () => structuredClone(CREW), get: gh.get, send: gh.send, now: () => clock.now, log: () => {}, records: new VerdictRecords(gh.authors, () => clock.now, () => {}) }
-      return { merger: new GitHubMerge({ ...deps, hot: () => hot }), assigner: new GitHubAssign({ ...deps, numbers: { pass: async () => {} }, pmRunning: async () => true }) }
+      return { merger: new GitHubMerge({ ...deps, costs: async () => [], hot: () => hot }), assigner: new GitHubAssign({ ...deps, numbers: { pass: async () => {} }, pmRunning: async () => true }) }
     }
     let loops = make()
     // A pass every five minutes for a day, the daemon restarting every six hours.

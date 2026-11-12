@@ -23,7 +23,8 @@ import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
 import { ensureManagedGrid, startGridPinRecheck } from '../lib/runtimeInstall.js'
 import { ApiConnections, apiConnectionsRequest } from '../lib/apiConnections.js'
 import { apiModelsRequest, apiTargetAnswer, refreshApiFor, rememberSavedApis } from '../lib/apiModels.js'
-import { linkClaudeProfile, listClaudeProfiles, profileId } from '../lib/claudeProfiles.js'
+import { linkClaudeProfile } from '../lib/claudeProfiles.js'
+import { listClaudeProfiles, profileId } from '../lib/claudeHomes.js'
 import { linkCodexProfile, listCodexProfiles } from '../lib/codexProfiles.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { compactRuntimePickerModels, launchTarget, MODELS_REQUESTS, startModels, swarmLaunchTarget } from './models.js'
@@ -97,9 +98,11 @@ vi.mock('../lib/apiModels.js', () => ({
   refreshApiFor: vi.fn(() => (override: unknown) => ({ override, apiBase: 'https://api.example.test/v1' })),
   apiTargetAnswer: vi.fn(async () => ({ detail: 'This API is not saved. Add it in Models → APIs.' })),
 }))
-vi.mock('../lib/claudeProfiles.js', async (importOriginal) => ({
-  profileId: (await importOriginal<typeof import('../lib/claudeProfiles.js')>()).profileId,
+vi.mock('../lib/claudeHomes.js', async (importOriginal) => ({
+  profileId: (await importOriginal<typeof import('../lib/claudeHomes.js')>()).profileId,
   listClaudeProfiles: vi.fn((observed: string[]) => observed.map((path) => ({ id: 'p', path, label: 'Claude' }))),
+}))
+vi.mock('../lib/claudeProfiles.js', () => ({
   linkClaudeProfile: vi.fn((path: string) => (path ? { profile: { id: 'p', path, label: 'Linked' } } : { error: 'INVALID_PATH' })),
 }))
 vi.mock('../lib/codexProfiles.js', () => ({

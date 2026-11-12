@@ -89,6 +89,7 @@ import '../super_tabs/message_link.dart' show swarmMessageLinkInbox;
 import '../super_tabs/workspace.dart';
 import '../super_tabs/swarm_switcher.dart'
     show PersonalSwarm, kPersonalSwarmRow, swarmsToOpen;
+import '../super_tabs/swarm_name.dart';
 import '../super_tabs/actions.dart';
 import '../super_tabs/controller.dart' show SuperTabController, SuperTabFailure;
 import 'swarm_menu_bus.dart';
@@ -3124,7 +3125,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (swarm == null) return;
     final name = await showSwarmRenameDialog(
       context,
-      workspaceTabNames(app)[id] ?? swarm.name,
+      // A Swarm's own name, which the rename replaces for everyone, not the name it is shown by here.
+      swarm.isSuperTab && swarm.superTabId != null
+          ? swarm.name
+          : workspaceTabNames(app)[id] ?? swarm.name,
       keymap: _keymap,
       // A Swarm is renamed for everyone in it, not as this window's tab.
       swarm: swarm.superTabId != null,
@@ -6517,7 +6521,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
           ? _attachContext(superTabTarget.tabId)
           : HarnessPickerContext(
               title:
-                  'Add agent to ${contribution?.snapshot?.name ?? app.activeSwarm.name}',
+                  'Add agent to ${swarmShownName(app, superTabTarget.tabId, contribution?.snapshot?.name ?? app.activeSwarm.name)}',
               description: contributionProject?.isPrivate == true
                   ? 'Starts in ${groupTitle ?? 'Lead'}. Only members of ${contributionProject!.name} can access it.'
                   : 'Starts in ${groupTitle ?? 'Lead'}.',
@@ -9376,7 +9380,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                 builder: (context) {
                                   final nameHint = workspaceTabTooltip(
                                     labels[index],
-                                    swarm.name,
+                                    // A Swarm's tab is its shown name alone.
+                                    swarmTabShownName(app, swarm) ?? swarm.name,
                                     clipped:
                                         DesktopWorkspaceTab.naturalWidth(
                                           context,

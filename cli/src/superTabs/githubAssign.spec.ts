@@ -597,6 +597,23 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     expect(f.github.sent.filter(s => s.path === '/repos/acme/app/labels')).toEqual([])
   })
 
+  // The study of an area's worth (docs/research/2026-11-12-area-worth): in lampOS's record a builder was no quicker in an area
+  // for the work it had landed there (0.83, 0.93 and 0.90 of the time after 1, 2 and 3 or more, each interval holding 1). The
+  // plan took 15% off a builder's time in a part for each task it had finished there, to 40%, and the line said how many.
+  it('plans a builder no quicker in a part for the tasks it finished there and does not count them; the area its person names still counts', async () => {
+    // Juno holds a p0 api task, and Pip, which works on ui, may take the ui one. The Mac has room for one middle task at a
+    // time. Each has finished two tasks of the part it is on.
+    const finished = [issue(10, ['builder:juno', 'part:api']), issue(11, ['builder:juno', 'part:api']), issue(12, ['builder:pip', 'part:ui']),
+      issue(13, ['builder:pip', 'part:ui'])]
+    const f = setup([issue(1, ['size:m', 'part:api', 'p0', 'builder:juno']), issue(2, ['size:m', 'part:ui'])], { closed: finished,
+      crew: { builders: crew().builders, machines: [{ machineId: 'mac', observation: { resources: { memoryTotalBytes: 6 * GiB, projectDiskFreeBytes: 500 * GiB } } }] } })
+    f.github.state.files.set('agents/Pip.md', 'Works on: ui')
+    await f.assigner.tick()
+    // Juno's task takes the 90 minutes a middle one is guessed at, not 63: Pip starts when the Mac has room after it.
+    expect(f.said().map(([number, body]) => [number, String(body).replace(/^Harness, \d\d:\d\d: /, '')]))
+      .toEqual([[2, 'for **Pip**: it can start in 2 h, and it works on ui.']])
+  })
+
   describe('readers', () => {
     const HEAD = 'f6edb44c0ffee0000000000000000000000000ab'
     const pull = (extra: Json = {}): Json => ({ number: 30, draft: false, base: { ref: 'main' }, head: { sha: HEAD, ref: 'pip/14' },

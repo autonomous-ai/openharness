@@ -59,6 +59,7 @@ abstract final class AppIcons {
   static const circle = LucideIcons.circle400;
   static const circleAlert = LucideIcons.circleAlert400;
   static const circleCheck = LucideIcons.circleCheck400;
+  static const circleStop = LucideIcons.circleStop400;
   static const circleCheckBig = LucideIcons.circleCheckBig400;
   static const circleDashed = LucideIcons.circleDashed400;
   static const circleDot = LucideIcons.circleDot400;

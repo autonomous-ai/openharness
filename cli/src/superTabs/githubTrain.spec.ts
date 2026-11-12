@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
-import { GitHubMerge, VerdictRecords } from './githubMerge.js'
+import { GitHubMerge, VerdictRecords, type LedProject } from './githubMerge.js'
+import type { ReadRow } from './taskTokens.js'
 import { commandRecords } from './commandRecords.fake.js'
-import { landingMessage, nextTrain, splitRed, trainBody, trainEnd, trainOfBody } from './githubTrain.js'
+import { landingMessage, nextTrain, splitRed, trainBody, trainEnd, trainOfBody, trainReceipts } from './githubTrain.js'
 import type { Crew } from './assign/crew.js'
 import type { GitHubGet, GitHubReply, GitHubSend } from './githubRest.js'
 
@@ -12,6 +13,16 @@ const PASSED = [{ name: 'test', status: 'completed', conclusion: 'success' }]
 const FAILED = [{ name: 'test', status: 'completed', conclusion: 'failure' }]
 const RUNNING = [{ name: 'test', status: 'in_progress', conclusion: null }]
 const REPO = '/repos/acme/app'
+/** A local check receipt for [head], as scripts/local-checks.py reads one, and a body that gives [receipts] as a pull request's does. */
+const receipt = (head: string, over: Json = {}): Json =>
+  ({ check: 'cli-core', command: 'npm run test:core', cwd: 'cli', head, status: 'passed', passed: 12, platform: 'macos', ...over })
+const fence = (receipts: unknown): string => `Closes #2\n\n\`\`\`harness-local-checks\n${JSON.stringify(receipts)}\n\`\`\`\n`
+/** The receipts a train's [body] carries, as scripts/local-checks.py FENCE finds them: one fence of JSON, or none. */
+const carriedReceipts = (body: string): unknown => {
+  const fences = [...body.matchAll(/^```harness-local-checks\s*\n([\s\S]*?)^```[ \t]*$/gm)]
+  expect(fences.length).toBeLessThanOrEqual(1)
+  return fences[0] ? JSON.parse(fences[0][1]!) : null
+}
 
 interface FakePull { number: number; state: 'open' | 'closed'; draft: boolean; title: string; body: string; created_at: string; updated: number; merged_at: string | null
   merge_commit_sha: string | null; head: { sha: string; ref: string; repo: { full_name: string } }; base: { ref: string }; labels: Array<{ name: string }>
@@ -179,10 +190,12 @@ function setup(project = 'acme/app') {
   const log = vi.fn()
   // Pip builds; Juno is the PM, and reads.
   const crew: Crew = { builders: [{ id: 'pip', name: 'Pip', label: 'builder:pip', machineId: 'mac', engine: 'claude' }], machines: [] }
+  // What the server keeps of what each change cost its builder (taskTokens.ts): nothing, unless a test says.
+  const costs = vi.fn(async (_project: LedProject, _numbers: number[]): Promise<ReadRow[]> => [])
   const start = () => new GitHubMerge({ projects: async () => [{ repo: project, pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }],
-    crew: async () => crew, get: repo.get, send: repo.send, now: () => clock.now, log, records: new VerdictRecords(repo.authors, () => clock.now, log), hot: () => [] })
+    crew: async () => crew, get: repo.get, send: repo.send, now: () => clock.now, log, records: new VerdictRecords(repo.authors, () => clock.now, log), costs, hot: () => [] })
   const f = {
-    state, log, clock, merger: start(), mark: repo.mark,
+    state, log, clock, costs, merger: start(), mark: repo.mark,
     /** A daemon restart: a new merger, which remembers nothing. */
     restart: () => { f.merger = start() },
     say: (number: number, body: string) => state.comments.set(number, [...state.comments.get(number) ?? [],
@@ -252,6 +265,59 @@ describe('the ready pull requests ride a train (githubTrain.ts)', () => {
     expect(pull.state).toBe('closed')
   })
 
+  // Swarm allocator, package 12: each change a train lands is told what it cost its own builder, in the comment that says it
+  // landed, from the rows its builder's daemon wrote (taskTokens.ts). One read of the server for each, and no more comments.
+  it('says in each landed change\'s comment what that change cost its builder', async () => {
+    const f = setup()
+    f.state.settings = { private: true, visibility: 'private' }
+    const first = f.add(4, { body: 'Closes #2' }), second = f.add(5)
+    const taken = f.clock.now
+    const row = (number: number, kind: ReadRow['kind'], n: number, rounds = 0): ReadRow => ({ number, kind, name: 'Pip', rounds, startedAt: taken, endedAt: taken,
+      tokens: [{ model: 'claude-sonnet-5-5', input: n, output: 0, cacheRead: 0, cacheWrite: 0 }] })
+    f.costs.mockImplementation(async (_project, numbers) => numbers[0] === 4 ? [row(2, 'build', 1_200_000), row(4, 'fix', 50_000, 2)] : [])
+    await f.settle()
+    await f.ends(PASSED)
+    const minutes = Math.round((f.clock.now - taken) / 60_000)
+    expect(f.said(4)).toEqual([expect.stringMatching(new RegExp(`^Harness, \\d\\d:\\d\\d: landed in #900 as \\w{7}\\. READ-OK on ${first.head.sha.slice(0, 7)} by Juno, checks green\\. `
+      + `Built by pip on \`claude-sonnet-5-5\`: ${minutes} min, 1\\.3M tokens, 2 fix rounds\\.$`))])
+    // One whose builder's daemon wrote nothing is told it landed as before.
+    expect(f.said(5)).toEqual([expect.stringMatching(new RegExp(`^Harness, \\d\\d:\\d\\d: landed in #900 as \\w{7}\\. READ-OK on ${second.head.sha.slice(0, 7)} by Juno, checks green\\.$`))])
+    expect(f.costs.mock.calls.map(([project, numbers]) => [project.repo, numbers])).toEqual([['acme/app', [4, 2]], ['acme/app', [5]]])
+    // A pass later finds them told: nothing more is read or said.
+    await f.tick()
+    expect(f.costs).toHaveBeenCalledTimes(2)
+  })
+
+  it('waits once, not once for each rider, on a server that does not give the costs', async () => {
+    const f = setup()
+    f.state.settings = { private: true, visibility: 'private' }
+    f.add(4)
+    f.add(5)
+    f.costs.mockRejectedValue(new Error('the server did not answer'))
+    await f.settle()
+    await f.ends(PASSED)
+    expect(f.said(4)).toEqual([expect.stringMatching(/landed in #900 as \w{7}\. READ-OK on \w{7} by Juno, checks green\.$/)])
+    expect(f.said(5)).toEqual([expect.stringMatching(/landed in #900 as \w{7}\. READ-OK on \w{7} by Juno, checks green\.$/)])
+    expect(f.costs).toHaveBeenCalledTimes(1)
+  })
+
+  // anh Dee's call, 12 November: what a change cost its builder is said on a private repository only; an internal one, which
+  // GitHub also calls private, is read by its whole enterprise (review of #4143).
+  it('says nothing of what a rider cost on a public or an internal repository, and asks the server nothing for it', async () => {
+    for (const settings of [{ private: false, visibility: 'public' }, { private: true, visibility: 'internal' }]) {
+      const f = setup()
+      f.state.settings = settings
+      f.add(4)
+      f.add(5)
+      f.costs.mockResolvedValue([{ number: 4, kind: 'build', name: 'Pip', rounds: 0, startedAt: f.clock.now, endedAt: f.clock.now,
+        tokens: [{ model: 'claude-sonnet-5-5', input: 9_000, output: 0, cacheRead: 0, cacheWrite: 0 }] }])
+      await f.settle()
+      await f.ends(PASSED)
+      for (const rider of [4, 5]) expect(f.said(rider), settings.visibility).toEqual([expect.stringMatching(/landed in #900 as \w{7}\. READ-OK on \w{7} by Juno, checks green\.$/)])
+      expect(f.costs).not.toHaveBeenCalled()
+    }
+  })
+
   // Code review of #4056: autonomous-harness, renamed openharness, keeps its old name in its project, and GitHub answers for it under
   // the new one: compared with the old name, every pull request read as a fork and no train as one.
   it('lands a pull request of a repository renamed since its project was made, as it does by the name GitHub has now', async () => {
@@ -282,6 +348,32 @@ describe('the ready pull requests ride a train (githubTrain.ts)', () => {
     expect(f.train().body.split('\n').slice(2)).toEqual([`#4 at ${a.head.sha}, READ-OK by Juno`, `#5 at ${b.head.sha}, READ-OK by Juno`, `#7 at ${c.head.sha}, READ-OK by Juno`])
     expect(f.train().body).toContain(`built to ${f.train().head.sha}`)
     expect(f.logged()).toContainEqual(expect.stringContaining('train acme/app#900 built on'))
+  })
+
+  // Train #4115, 2026-11-11: CI asks for each local check's receipt at the head it ran on, and nobody runs one on a train's merge
+  // commit, so a train that changed cli-core went red, and no CLI pull request could land.
+  it('carries each member\'s local check receipts at its own head in its body, and nothing else of the member\'s body', async () => {
+    const f = setup()
+    const head = (number: number) => sha(`head-${number}`), harnessd = { check: 'cli-harnessd', command: 'npm run test:harnessd' }
+    f.add(4, { files: ['cli/src/core/api.ts'], body: fence([{ ...receipt(head(4)), note: 'not read' }, receipt(sha('another'))]) })
+    f.add(5, { files: ['docs/guide.md'] })
+    f.add(6, { files: ['cli/src/harnessd/main.ts'], body: fence([receipt(head(6), harnessd)]) })
+    // Two fences, or one that is no JSON list, give no receipt: the member's own CI refuses them too.
+    f.add(7, { body: fence([receipt(head(7))]) + fence([receipt(head(7))]) })
+    f.add(8, { body: '```harness-local-checks\nnot json\n```' })
+    f.add(9, { body: fence({ head: head(9) }) })
+    await f.settle()
+    const body = f.train().body
+    expect(trainOfBody(body)!.members.map(m => m.number)).toEqual([4, 5, 6, 7, 8, 9])
+    expect(carriedReceipts(body)).toEqual([receipt(head(4)), receipt(head(6), harnessd)])
+    expect(body).not.toContain('Closes')
+  })
+
+  it('writes no receipts into a train none of whose members gives one', async () => {
+    const f = setup()
+    f.add(4); f.add(5, { body: 'No local check needed.' })
+    await f.settle()
+    expect(carriedReceipts(f.train().body)).toBeNull()
   })
 
   it('carries twenty at most, and the rest on the next train', async () => {
@@ -1153,6 +1245,20 @@ describe('the train\'s parts', () => {
     for (const body of ['', `built to ${sha('tip')}`, `#4 at ${head(4)}, READ-OK by Juno`, `built to ${sha('tip')}\n#4 at ${head(4).slice(0, 12)}, READ-OK by Juno`,
       `built to ${sha('tip')}\n#4 at ${head(4)}, READ-OK by Juno\n#4 at ${head(5)}, READ-OK by Juno`,
       trainBody('main', sha('tip'), Array.from({ length: 21 }, (_, i) => member(i + 1)))]) expect(trainOfBody(body), body).toBeNull()
+  })
+
+  it('carries receipts up to what a body GitHub and local-checks.py take holds, and reads its members back', () => {
+    const members = Array.from({ length: 20 }, (_, i) => member(i + 1))
+    const pulls = members.map(m => ({ head: m.head, body: fence(Array.from({ length: 32 }, (_, k) => receipt(m.head, { check: `check-${k}`, command: 'x'.repeat(200) }))) }))
+    const receipts = trainReceipts(pulls), body = trainBody('main', sha('tip'), members, receipts)
+    expect(body.length).toBeLessThanOrEqual(65_536)
+    expect(receipts.length).toBeGreaterThan(100)
+    expect(receipts.length).toBeLessThan(20 * 32)
+    // The first members' come first: the rest of a member it leaves out is what that member's check says is missing.
+    expect(receipts).toEqual(pulls.flatMap(pull => carriedReceipts(pull.body) as Json[]).slice(0, receipts.length))
+    expect(carriedReceipts(body)).toEqual(receipts)
+    expect(trainOfBody(body)).toEqual({ tip: sha('tip'), members })
+    expect(trainOfBody(trainBody('main', sha('tip'), members, receipts).replace(/\n/g, '\r\n'))).toEqual({ tip: sha('tip'), members })
   })
 
   it('says why a train closed without landing by the title it was closed with, and nothing of a title that is no train\'s', () => {

@@ -183,7 +183,7 @@ export class GitHubAssign {
     const { withReaders, up } = await this.askReaders(project, issues, pulls, crew)
     // Read after them: such a task is not one its builder builds, and takes none of its time in the plan; and a task that
     // comes after another waits for that one's pull request to be up.
-    const read = readProblem({ now: this.now(), issues, closed, crew, withReaders, up, minutes })
+    const read = readProblem({ now: this.now(), issues, crew, withReaders, up, minutes })
     // One whose machine is down keeps its tasks while nobody else can take them: they would only come back to it, labels and
     // comments twice over. One its person is stopping gives them back all the same, for whoever joins.
     await this.takeBack(repo, issues, (crew.away ?? []).filter(away => (away.why !== 'down' && away.why !== 'paused') || crew.builders.length > 0), undefined, withReaders)
