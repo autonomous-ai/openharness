@@ -71,6 +71,16 @@ function heldTask(items: Record<string, unknown>[]): Record<string, unknown> | n
   return open.length > named.filter(tasks => !tasks.length).length ? open[0]! : null
 }
 
+/** The watch a row of the file keeps, or none for a value no watch here could have saved. A time ahead of [now] (a clock set back,
+ *  or a bad file) held an ask or a give-back off by that much, or past a timer's reach, which fires at once (review of #4129). */
+function keptIdle(value: unknown, now: number): Idle | undefined {
+  const { terminal, task, since, asked } = object(value)
+  const time = (at: unknown, from: number): at is number => Number.isSafeInteger(at) && (at as number) >= from && (at as number) <= now
+  if (!identifier(terminal) || typeof task !== 'string' || !time(since, 0)) return undefined
+  if (asked === undefined) return { terminal, task, since }
+  return time(asked, since) ? { terminal, task, since, asked } : undefined
+}
+
 /** A task by its key and its title, as an agent and its person are told of it: `acme/app#14 (Add the export)`. */
 function titled(repo: string, task: Record<string, unknown>): string {
   const title = String(task.title ?? '').trim()
@@ -204,8 +214,13 @@ export class NextThing {
     let agent: WatchedAgent | undefined
     try {
       agent = (await this.deps.watched()).find(watched => watched.harnessId === harnessId)
-      // A paused agent is typed nothing until it is resumed (backend agent.pause); its next turn's end after looks again.
-      if (!agent || agent.paused) { this.compacted.delete(harnessId); this.endedAt.delete(harnessId) }
+      // A paused agent is typed nothing until it is resumed (backend agent.pause); its next turn's end after looks again. Its time
+      // paused is no idle time: a watch kept from before is not gone on with by a restart after it is resumed (review of #4129).
+      if (!agent || agent.paused) {
+        this.compacted.delete(harnessId)
+        this.endedAt.delete(harnessId)
+        if (agent) this.keepIdle(agent, null)
+      }
       // Something set it working since its turn ended, or nobody can say: that comes first.
       else if (await this.deps.working(harnessId) === false) {
         const compacted = this.compacted.get(harnessId)
@@ -355,7 +370,9 @@ export class NextThing {
   /** Keeps [idle] in [agent]'s row of its file as the watch on it, or drops the watch (null). */
   private keepIdle(agent: WatchedAgent, idle: Idle | null): void {
     const memory = this.memory ??= this.load()
-    const kept: Kept = { ...memory[agent.agentId] ?? { key: '', times: 0, told: false } }
+    const row = memory[agent.agentId]
+    if (!idle && !row?.idle) return
+    const kept: Kept = { ...row ?? { key: '', times: 0, told: false } }
     delete kept.idle
     delete memory[agent.agentId]
     memory[agent.agentId] = idle ? { ...kept, idle } : kept
@@ -481,7 +498,7 @@ export class NextThing {
   }
 
   private load(): Record<string, Kept> {
-    const kept: Record<string, Kept> = {}
+    const kept: Record<string, Kept> = {}, now = Date.now()
     try {
       for (const [id, value] of Object.entries(object(JSON.parse(readFileSync(this.deps.file, 'utf8'))))) {
         const row = object(value)
@@ -491,11 +508,7 @@ export class NextThing {
           // under the id it was first given with, which the server answers as given: nothing reached the agent, and it slept.
           const listed = Array.isArray(row.done) ? row.done.filter((key): key is string => typeof key === 'string') : []
           const done = (row.told && !listed.includes(row.key) ? [...listed, row.key] : listed).slice(-DONE_KEPT)
-          const watch = object(row.idle)
-          const idle = identifier(watch.terminal) && typeof watch.task === 'string' && Number.isSafeInteger(watch.since)
-            && (watch.asked === undefined || Number.isSafeInteger(watch.asked))
-            ? { terminal: watch.terminal, task: watch.task, since: watch.since as number, ...watch.asked === undefined ? {} : { asked: watch.asked as number } }
-            : undefined
+          const idle = keptIdle(row.idle, now)
           kept[id] = { key: row.key, times: row.times as number, told: row.told, ...done.length ? { done } : {}, ...idle ? { idle } : {} }
         }
       }

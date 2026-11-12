@@ -677,10 +677,47 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     }
   })
 
+  // Review of #4129: paused across a restart, the look as Harness started left the watch kept, and a restart after it was resumed
+  // went on with it: the task went back half a minute after that restart, its time paused counted as idle.
+  it('drops a kept watch when the look as Harness starts finds its agent paused: its time paused is no idle time', async () => {
+    const f = setup({ items: [item(14, 'Add the export', ['status:taken'])] })
+    f.next.start()
+    await f.end()
+    // Asked at 20 minutes, paused at 25, and Harness restarts at 30: its look finds it paused.
+    await vi.advanceTimersByTimeAsync(IDLE_ASK_MS + 5 * 60_000)
+    f.state.watched = [{ ...PIP, paused: true }]
+    await vi.advanceTimersByTimeAsync(5 * 60_000)
+    f.next.stop()
+    const again = f.make()
+    again.start()
+    await vi.advanceTimersByTimeAsync(START_LOOK_MS)
+    expect(JSON.parse(readFileSync(f.file, 'utf8')).pip).toEqual({ key: '', times: 0, told: false })
+    again.stop()
+    // Resumed an hour on with no turn, and Harness restarts: its watch starts at that look, and nothing goes back.
+    await vi.advanceTimersByTimeAsync(60 * 60_000)
+    f.state.watched = [PIP]
+    const third = f.make()
+    third.start()
+    await vi.advanceTimersByTimeAsync(START_LOOK_MS + IDLE_ASK_MS - 1)
+    expect(f.told()).toHaveLength(1)
+    expect(f.written).toEqual([])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(f.told()).toHaveLength(2)
+    third.stop()
+    // A paused agent with nothing kept: nothing is written for it.
+    const g = setup({ items: [item(14, 'Add the export', ['status:taken'])], watched: [{ ...PIP, paused: true }] })
+    g.next.start()
+    await g.end()
+    expect(() => readFileSync(g.file)).toThrow(/ENOENT/)
+    g.next.stop()
+  })
+
   it('reads from its file an idle watch of a terminal, a task and its times, and no other value', async () => {
     const since = Date.now() - IDLE_BACK_MS
+    // A time ahead of now (a clock set back, or a bad file) is no watch either: past a timer's reach, it fired at once.
     for (const idle of [{ terminal: 'h pip', task: 'acme/app#14', since }, { terminal: 'h-pip', task: 14, since }, { terminal: 'h-pip', task: 'acme/app#14', since: 'then' },
-      { terminal: 'h-pip', task: 'acme/app#14', since, asked: 'soon' }, 'h-pip']) {
+      { terminal: 'h-pip', task: 'acme/app#14', since, asked: 'soon' }, 'h-pip', { terminal: 'h-pip', task: 'acme/app#14', since: Date.now() + 30 * 86_400_000 },
+      { terminal: 'h-pip', task: 'acme/app#14', since, asked: Date.now() + 86_400_000 }, { terminal: 'h-pip', task: 'acme/app#14', since, asked: since - 1 }]) {
       const f = setup({ items: [item(14, 'Add the export', ['status:taken'])] })
       writeFileSync(f.file, JSON.stringify({ pip: { key: 'acme/app#12', times: 1, told: false, idle } }))
       f.next.start()
