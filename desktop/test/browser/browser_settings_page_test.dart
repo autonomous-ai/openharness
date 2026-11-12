@@ -214,24 +214,44 @@ void main() {
     expect(enabled(tester, 'remove'), isFalse);
   });
 
-  testWidgets('Screen offers exactly the five sizes', (tester) async {
+  testWidgets('Screen offers the three portrait sizes first, then the five '
+      'landscape ones', (tester) async {
     await open(tester);
     await tester.tap(_key('screen'));
     await tester.pumpAndSettle();
-    for (final size in [
+    const others = [
+      '1080 × 1920',
+      '1200 × 1920',
+      '1050 × 1680',
       '1680 × 1050',
       '1536 × 864',
       '1440 × 900',
       '1366 × 768',
-    ]) {
+    ];
+    for (final size in others) {
       expect(find.text(size), findsOneWidget, reason: size);
     }
     // The chosen one, in the field and in the menu.
     expect(find.text('1920 × 1080'), findsNWidgets(2));
-    await tester.tap(find.text('1366 × 768'));
+    // Top to bottom in the menu: portrait, then landscape.
+    final tops = [
+      for (final size in [...others.take(3), '1920 × 1080', ...others.skip(3)])
+        tester.getTopLeft(find.text(size).last).dy,
+    ];
+    expect(tops, [...tops]..sort());
+    await tester.tap(find.text('1080 × 1920'));
     await tester.pumpAndSettle();
     await tap(tester, 'save');
-    expect(app.saves.single['screen'], '1366x768');
+    expect(app.saves.single['screen'], '1080x1920');
+  });
+
+  testWidgets('an agent with no screen saved shows the portrait default', (
+    tester,
+  ) async {
+    app.stored = {...app.stored}..remove('screen');
+    await open(tester);
+    expect(find.text('1080 × 1920'), findsOneWidget);
+    expect(find.text('1920 × 1080'), findsNothing);
   });
 
   testWidgets('Human input off disables the speed choice', (tester) async {

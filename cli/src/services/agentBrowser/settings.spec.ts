@@ -9,12 +9,13 @@ const withProxy: BrowserSettings = {
 }
 
 describe('agent browser settings', () => {
-  it("defaults follow the machine's zone and language", () => {
+  // Portrait by default: the Desktop's Browser panel sits beside the chat and is taller than wide.
+  it("defaults follow the machine's zone and language, on a portrait screen", () => {
     expect(defaultSettings(host)).toEqual({
       proxy: null,
       timeZone: null,
       languages: 'vi-VN',
-      screen: '1920x1080',
+      screen: '1080x1920',
       humanInput: true,
       humanSpeed: 'normal',
       device: null,
@@ -27,6 +28,10 @@ describe('agent browser settings', () => {
     const raw = { ...withProxy, proxy: { ...withProxy.proxy } }
     expect(parseSettings(raw, current)).toEqual(withProxy)
     expect(() => parseSettings({ ...raw, screen: '800x600' }, current)).toThrow(/screen/)
+    // Rotated monitors, every one at least 1024 wide, beside the landscape ones.
+    for (const screen of ['1080x1920', '1200x1920', '1050x1680', '1920x1080', '1366x768']) {
+      expect(parseSettings({ ...raw, screen }, current).screen).toBe(screen)
+    }
     for (const port of [0, 65536, 80.5, '80']) {
       expect(() => parseSettings({ ...raw, proxy: { ...raw.proxy, port } }, current)).toThrow(/proxy\.port/)
     }
@@ -114,6 +119,9 @@ describe('agent browser settings', () => {
     expect(clampWindow(2560, 1440, '1920x1080')).toEqual({ width: 1920, height: 1080 })
     expect(clampWindow(1500, 900, '1366x768')).toEqual({ width: 1366, height: 768 })
     expect(clampWindow(1920, 1080, '1920x1080')).toEqual({ width: 1920, height: 1080 })
+    // A tall panel on a portrait screen: the width holds at 1024, the height follows the panel.
+    expect(clampWindow(900, 1400, '1080x1920')).toEqual({ width: 1024, height: 1400 })
+    expect(clampWindow(1400, 2400, '1080x1920')).toEqual({ width: 1080, height: 1920 })
     for (const [width, height] of [[0, 800], [1200, -1], ['1200', 800], [1200, null], [undefined, 800], [Number.NaN, 800], [1200, Number.POSITIVE_INFINITY]]) {
       expect(clampWindow(width, height, '1920x1080'), `${String(width)}x${String(height)}`).toBeNull()
     }

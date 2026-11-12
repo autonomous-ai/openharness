@@ -131,7 +131,9 @@ void main() {
       'humanSpeed': 'warp',
     });
     expect(odd.proxy, isNull);
-    expect(odd.screen, '1920x1080');
+    expect(odd.screen, '1080x1920');
+    expect(BrowserSettings.screens.first, '1080x1920');
+    expect(const BrowserSettings(languages: 'en-US').screen, '1080x1920');
     expect(odd.humanInput, isTrue);
     expect(odd.humanSpeed, 'normal');
     expect(odd.device, isNull);
