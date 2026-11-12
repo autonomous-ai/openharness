@@ -48,6 +48,7 @@ import { elapsedSecondsOf } from '../lib/footerTimer.js'
 import { sqlitePreflightMessage } from '../lib/sqliteAvailability.js'
 import { loginShellCaptureLine, warmLoginShellEnvironment } from '../lib/loginShellEnv.js'
 import { enableOffThreadExec } from '../lib/offThreadExec.js'
+import { enableOffThreadSqlite } from '../lib/sqliteThread.js'
 import type { AppSwarms } from '../cable/cableSession.js'
 import type { UnreadNotification } from '../lib/notificationRead.js'
 import { claudeHomeListed } from '../lib/claudeProfiles.js'
@@ -496,6 +497,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   coreLink.onUpdate((version) => { void daemonBoot.applyStagedUpdate(version) })
   // The core's probes spawn from a worker, so a terminal's keystrokes never wait behind one (lib/offThreadExec.ts).
   enableOffThreadExec()
+  // Its SQLite reads run on read threads, so a slow store never holds it past the master's heartbeats (lib/sqliteThread.ts).
+  enableOffThreadSqlite()
   // What the master told this core, read from here: runCore took it out of process.env before anything
   // could hand it to a child (lib/harnessdEnv.ts).
   const harnessd = harnessdEnv()
