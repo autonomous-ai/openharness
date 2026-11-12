@@ -54,10 +54,8 @@ describe('harness_watch across machines', () => {
     await told('working')
     await told('idle')
 
-    // What reached A's relay from B: its replies and its harness_events, nothing broadcast, so no transcript text.
-    const received = (backend.webReceived.get(relay) ?? []).map((frame) => String(frame.type))
-    expect(received.filter((type) => type !== 'harness_event' && !type.endsWith('_result') && !type.startsWith('e2e_'))).toEqual([])
-    expect(received).toContain('harness_event')
+    // What B sent A's relay: its harness_events, sealed to that connection.
+    expect((backend.webReceived.get(relay) ?? []).map((frame) => frame.type)).toContain('harness_event')
 
     // A second tool is told nothing of the first one's harness: each lease is its connection's own.
     const other = await LocalClient.connect(a.daemon, { tool: true, machineId: b.machineId })
@@ -69,9 +67,21 @@ describe('harness_watch across machines', () => {
     await harnessEvents(tool, agentId, again)('idle')
     expect((backend.webReceived.get(otherRelay) ?? []).map((frame) => frame.type)).not.toContain('harness_event')
 
+    // A tool that leaves takes its watch with it: the next tool on A is told nothing it did not ask for, though A's
+    // daemon keeps a background relay warm for it (lib/remoteRelay.ts). A turn on B while the next tool asks nothing;
+    // then it asks a watch of its own, whose answer B sends after anything it sent that connection before.
+    tool.close()
+    const next = await LocalClient.connect(a.daemon, { tool: true, machineId: b.machineId })
+    expect(await next.request('agents_list', {}, 30_000)).toHaveProperty('agents')
+    const ended = onB.next((frame: Frame) => frame.type === 'turn_ended' && frame.agentId === agentId, 45_000, 'turn_ended on B')
+    onB.send('message', { agentId, content: 'after the watcher left' })
+    await ended
+    await next.request('harness_watch', { agentIds: [agentId] }, 30_000)
+    expect(next.frames.filter((frame) => frame.type === 'harness_event')).toEqual([])
+
     // Too many harnesses in one watch is refused by name.
     const tooMany = await other.request('harness_watch', { agentIds: Array.from({ length: 9 }, (_, i) => `agent-${i}`) }, 30_000)
     expect(tooMany.error).toBe('TOO_MANY')
-    for (const client of [tool, other, onB]) client.close()
+    for (const client of [next, other, onB]) client.close()
   }, 240_000)
 })

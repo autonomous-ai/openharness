@@ -57,6 +57,18 @@ describe('harness_watch', () => {
     expect(sent.map((s) => s.payload)).toEqual([{ agentId: 'a', state: 'working' }, { agentId: 'a', state: 'idle' }])
   })
 
+  // History read again (an attach, a resume, a rewritten transcript) is marked `replay` (core/turns/funnel.ts): it says
+  // what happened, not what happens, and a watcher woken by each old turn would be woken for nothing.
+  it('takes no state from replayed history', () => {
+    const { w, sent } = watches()
+    w.observe(synced('a'))
+    w.watch('conn', { agentIds: ['a'] })
+    for (const type of ['turn_started', 'turn_ended', 'turn_started']) w.observe({ type, agentId: 'a', replay: true, payload: { agentId: 'a' } })
+    w.observe({ type: 'agent_activity', agentId: 'a', replay: true, payload: { activity: { state: 'working' } } })
+    expect(sent).toEqual([])
+    expect(w.watch('conn', { agentIds: ['a'] })).toMatchObject({ agents: [{ agentId: 'a', state: 'idle' }] })
+  })
+
   it('takes an activity it cannot name, or a frame naming no harness, as no change', () => {
     const { w, sent } = watches()
     w.watch('conn', { agentIds: ['a'] })
