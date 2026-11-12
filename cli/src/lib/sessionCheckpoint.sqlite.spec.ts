@@ -150,7 +150,7 @@ withBuiltin('a conversation larger than the row cap', () => {
   })
 
   it('fails on a row over the row cap instead of dropping it', async () => {
-    // The read threads stay off: today this row is read and saved here.
+    // The read threads stay off: on the caller's thread, before #4188, this row was read and saved.
     conversation('hermes', ['before', 'x'.repeat(33 * MIB), 'after'])
     const { SessionCheckpointStore, SessionCheckpointError } = await import('./sessionCheckpoint.js')
     await expect(new SessionCheckpointStore(directory).save({ agentId: 'fixture', sessionId: 'wanted', engine: 'hermes', hermesHome: root } as RegisteredSession))

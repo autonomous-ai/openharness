@@ -26,8 +26,8 @@ import { sqliteReadAll, type SqliteParam, type SqliteReadResult, type SqliteRow 
 
 /** A page's budget: the rows it keeps add up to at most this, unless its first row alone is larger. */
 export const PAGE_BYTES = 4 * 1024 * 1024
-/** A row past this is never read. Today's whole-read limit, so no row shown before is dropped (OpenCode rows of
- *  7.5 MB are on record, sqliteRead.ts). */
+/** A row past this is never read. The whole-read limit before #4188, so no row shown then is dropped (OpenCode rows
+ *  of 7.5 MB are on record, sqliteRead.ts). */
 export const MAX_ROW_BYTES = 32 * 1024 * 1024
 /** Rows a page sizes at most: sizing 500 costs 0.16 ms, and their names and numbers stay small next to PAGE_BYTES. */
 export const PAGE_ROWS = 500
