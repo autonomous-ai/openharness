@@ -5,13 +5,18 @@ class BrowserSettings {
     this.proxy,
     this.timeZone,
     required this.languages,
-    this.screen = '1920x1080',
+    this.screen = '1080x1920',
     this.humanInput = true,
     this.humanSpeed = 'normal',
     this.device,
   });
 
+  /// Portrait first, the first the default (the machine's too): the Browser panel sits beside the chat, taller than
+  /// wide, and a landscape screen left black bands above and below the page.
   static const screens = [
+    '1080x1920',
+    '1200x1920',
+    '1050x1680',
     '1920x1080',
     '1680x1050',
     '1536x864',

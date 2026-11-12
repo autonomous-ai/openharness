@@ -414,11 +414,10 @@ class _BrowserPanelState extends State<BrowserPanel> {
                   ),
                 ),
                 if (_browser != null)
-                  DesktopPill(
+                  AppIconButton(
                     key: const ValueKey('swarm-browser-stop'),
-                    label: 'Stop',
-                    compact: true,
-                    quiet: true,
+                    icon: AppIcons.square,
+                    tooltip: 'Stop',
                     onPressed: _stop,
                   ),
                 AppIconButton(

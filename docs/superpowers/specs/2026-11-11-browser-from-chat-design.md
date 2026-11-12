@@ -397,7 +397,8 @@ removes the container, the volume, the network, the secret and the settings.
 - **(Ken) Why not the screen.** Changing the X screen to the panel's size would give odd sizes (1137x843) and a
   `screen.width` that changes mid-session, two signals bot checks weigh. A window's size changes all the time for
   real people, so `innerWidth` following the panel is ordinary.
-- **The screen** stays the Device setting's size (`screen`, default 1920x1080), as today.
+- **The screen** stays the Device setting's size (`screen`, default 1080x1920, portrait since 2026-11-12:
+  the panel is taller than wide).
 - **The window.** Chrome's window sits at 0,0 and takes the panel's size in screen pixels, at least 1024x640 and at
   most the screen. It is not maximized. Its size changes through the tool server's CDP connection
   (`Browser.getWindowForTarget`, then `Browser.setWindowBounds`), not through the window manager.
@@ -431,7 +432,7 @@ removes the container, the volume, the network, the secret and the settings.
 ```
 Off                                   Running
 ┌──────────────────────────────┐      ┌──────────────────────────────────────┐
-│ Browser          [⚙] [⎘]   ✕ │      │ Browser         ( Stop ) [⚙] [⎘]   ✕ │
+│ Browser          [⚙] [⎘]   ✕ │      │ Browser              [■] [⚙] [⎘]   ✕ │
 │──────────────────────────────│      │──────────────────────────────────────│
 │                              │      │ ┌──────────────────────────────────┐ │
 │   A sandboxed Chrome the     │      │ │ mail.google.com                  │ │

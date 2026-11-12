@@ -1318,11 +1318,11 @@ describe('the window', () => {
     c.tools[0]!.answer({ width: 1024, height: 640 })
     expect(await small).toEqual({ width: 1024, height: 640 })
     // The person's other Desktop sizes it too: the last request wins.
-    const wide = window(2560, 1200, OTHER_DESKTOP)
-    expect((await c.line(2)).params).toEqual({ width: 1920, height: 1080 })
+    const tall = window(1400, 2400, OTHER_DESKTOP)
+    expect((await c.line(2)).params).toEqual({ width: 1080, height: 1920 })
     // Chrome keeps the window inside the screen: its answer is the size.
-    c.tools[0]!.answer({ width: 1920, height: 1053 })
-    expect(await wide).toEqual({ width: 1920, height: 1053 })
+    c.tools[0]!.answer({ width: 1080, height: 1893 })
+    expect(await tall).toEqual({ width: 1080, height: 1893 })
     for (const [width, height] of [['1200', 800], [0, 800], [1200, undefined]]) {
       expect(await window(width, height), `${String(width)}x${String(height)}`).toEqual({ error: 'INVALID_REQUEST' })
     }

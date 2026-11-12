@@ -578,9 +578,9 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   setup; Cancel does nothing.
 - **Browser panel** (`BrowserPanel`, `browser/browser_panel.dart`). The agent's
   own Chrome, beside its chat or in its place as the other panes. Its header is
-  `Browser` in 13 medium, then `Stop` (a compact quiet `DesktopPill`, there in
-  every state while the browser is on, a failed one too, with no
-  confirmation), the gear (`Browser settings`, which opens them in the panel,
+  `Browser` in 13 medium, then Stop (`AppIcons.square`, tooltip `Stop`, an
+  `AppIconButton` as the gear is, there in every state while the browser is
+  on, a failed one too, with no confirmation), the gear (`Browser settings`, which opens them in the panel,
   off too), Paste (`AppIcons.clipboardPaste`, which sends the clipboard's
   text, only while the screen shows) and ×. × only hides the panel: the
   browser runs on. Off, one centred line in 13, `A sandboxed Chrome the agent
@@ -619,7 +619,9 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   line under the buttons, `Proxy works · 203.0.113.7 · Asia/Ho_Chi_Minh` or
   `Proxy is not reachable`, gone at the next proxy edit. Then rows, a 12 grey
   label in a 96 column and its control: `Time zone` (a field, `Auto` when
-  empty), `Language`, `Screen` (the five sizes, `1920 × 1080`), `Human input`
+  empty), `Language`, `Screen` (three portrait sizes, `1080 × 1920` the
+  default, as the panel is taller than wide, then five landscape ones,
+  `1920 × 1080` first), `Human input`
   (a ticked square, as Worktree's, never a blue switch: blue is Save's, and
   the speed beside it, dimmed while off). `Advanced` (a quiet pill with a
   right chevron, down when open) holds `Device`, off by default, `GPU, CPU,

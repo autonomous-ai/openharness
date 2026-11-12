@@ -7,7 +7,9 @@ export interface BrowserHost {
 }
 
 const SCHEMES = ['http', 'https', 'socks5'] as const
-const SCREENS = ['1920x1080', '1680x1050', '1536x864', '1440x900', '1366x768'] as const
+// Portrait first, and the default: the Desktop's Browser panel sits beside the chat, taller than wide, and a
+// 1920x1080 window left black bands above and below it. Each is a real monitor turned on its side.
+const SCREENS = ['1080x1920', '1200x1920', '1050x1680', '1920x1080', '1680x1050', '1536x864', '1440x900', '1366x768'] as const
 const SPEEDS = ['slow', 'normal', 'fast'] as const
 
 export type BrowserSettings = {
@@ -37,7 +39,7 @@ export function defaultSettings(host: BrowserHost): BrowserSettings {
     proxy: null,
     timeZone: null,
     languages: host.languages,
-    screen: '1920x1080',
+    screen: '1080x1920',
     humanInput: true,
     humanSpeed: 'normal',
     device: null,
@@ -153,7 +155,8 @@ const MIN_WINDOW = { width: 1024, height: 640 }
 const isSize = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0
 
 /** The size Chrome's window takes for the panel's (spec: The window fits the panel): whole numbers, at least
- *  1024x640, at most `screen` ("1920x1080"); null for anything that is not two positive numbers. */
+ *  1024x640, at most `screen` ("1080x1920"); null for anything that is not two positive numbers. Every screen in
+ *  SCREENS is at least 1024 wide, portrait ones too, so a window always has a desktop's width. */
 export function clampWindow(width: unknown, height: unknown, screen: string): { width: number; height: number } | null {
   if (!isSize(width) || !isSize(height)) return null
   const [maxWidth, maxHeight] = screen.split('x').map(Number) as [number, number]
