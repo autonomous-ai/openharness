@@ -1,9 +1,17 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { execFileSync } from 'child_process'
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { DevinReader, readDevinMessages } from './reader.js'
+import { sqliteReadAll } from '../../lib/sqliteRead.js'
+import type { LiveEvent } from '../../lib/normalize.js'
+
+// The real reads, with a seam to make one of them go unanswered, as a busy store or the read threads' deadline does.
+vi.mock('../../lib/sqliteRead.js', async (real) => {
+  const actual = await real<typeof import('../../lib/sqliteRead.js')>()
+  return { ...actual, sqliteReadAll: vi.fn(actual.sqliteReadAll) }
+})
 
 /**
  * Integration test for the turn-close path, driven through a real `sqlite3` DB and a real log file —
@@ -131,5 +139,30 @@ d('DevinReader turn close', () => {
 
     expect(aborted).toEqual([])
     expect(reader.turnOpen).toBe(true) // still running — must not be force-closed
+  })
+
+  // #4065: a first read the store did not answer left the cursor at 0, and the next poll emitted the whole session as new.
+  it('reads the session in full again after a first read the store did not answer, and emits only what is new', async () => {
+    const f = fixture()
+    insert(f, userRow('m-1', 'an old prompt'))
+    insert(f, { message_id: 'm-2', role: 'assistant', content: 'an old answer', metadata: { finish_reason: 'stop' } })
+    vi.mocked(sqliteReadAll).mockResolvedValueOnce({ ok: false, reason: 'transient' })
+    const events: LiveEvent[] = []
+    const reader = new DevinReader({
+      dbPath: f.db, devinHome: f.home, sessionId: f.sessionId, pollMs: 20, onEvents: (e) => events.push(...e),
+    })
+    try {
+      await reader.start()
+      const reads = vi.mocked(sqliteReadAll).mock.calls.length
+      // The read that seeds it, and a poll after it.
+      await vi.waitFor(() => expect(vi.mocked(sqliteReadAll).mock.calls.length).toBeGreaterThanOrEqual(reads + 2), { timeout: 5_000, interval: 10 })
+      expect(events).toEqual([])
+      insert(f, userRow('m-3', 'a new prompt'))
+      await vi.waitFor(() => expect(events.length).toBeGreaterThan(0), { timeout: 5_000, interval: 10 })
+    } finally {
+      reader.stop()
+    }
+    expect(JSON.stringify(events)).toContain('a new prompt')
+    expect(JSON.stringify(events)).not.toContain('old')
   })
 })
