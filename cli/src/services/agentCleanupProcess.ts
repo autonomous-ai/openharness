@@ -29,7 +29,7 @@ export interface AgentCleanupServiceOptions {
 /** The core API the cleanup runs on here: the light services' (processCoreApi.ts), with the two ways it acts. */
 export function agentCleanupCoreApi(dataDir: string, live: () => RegisteredSession[], ask: (query: string, payload: Record<string, unknown>) => Promise<Record<string, unknown>>,
   daemon: () => DaemonAddress | null = () => null): CoreApi {
-  const api = processCoreApi(dataDir, 'agentCleanup', { live, daemon })
+  const api = processCoreApi(dataDir, 'agentCleanup', { live, daemon, ask })
   return {
     ...api,
     agents: {

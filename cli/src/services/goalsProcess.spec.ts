@@ -29,7 +29,9 @@ describe('Hachi\'s goals in their own process', () => {
     const query = vi.fn(async (_name: string) => answer)
     onConnected!({ query } satisfies CoreConnection)
     expect(await requests.goal_open!({ pane: '%1', title: 'ship it' }, LOCAL)).toMatchObject({ goal: { title: 'ship it' } })
-    expect(query).toHaveBeenLastCalledWith('live')
+    expect(query).toHaveBeenCalledWith('live')
+    // Its measures are counted by the core (core/agentQueries.ts `count`).
+    expect(query).toHaveBeenLastCalledWith('count', { metric: 'hachi_goal_opened' })
     // A core that cannot say leaves what it said last.
     answer = { error: 'UNKNOWN_QUERY' }
     query.mockRejectedValueOnce(new Error('the core went away'))

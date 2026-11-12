@@ -85,6 +85,9 @@ describe('the agent cleanup in its own process', () => {
     expect(await api.agents.closeStarted!('k1', 'now')).toEqual({ closed: true })
     expect(query).toHaveBeenLastCalledWith('closeStarted', { agentId: 'k1', mode: 'now' })
     expect(api.agents.byAgent('k1')?.agentId).toBe('k1')
+    // What Hachi started handed to the person is counted by the core (core/agentQueries.ts `count`).
+    api.count!('hachi_handed_to_person')
+    expect(query).toHaveBeenLastCalledWith('count', { metric: 'hachi_handed_to_person' })
     const gone = agentCleanupCoreApi(dir, () => [], async () => { throw new Error('the core went away') })
     expect(await gone.agents.lastActivity!('k1')).toBeNull()
     expect(await gone.agents.closeStarted!('k1', 'idle')).toEqual({ error: 'SERVICE_UNAVAILABLE' })
