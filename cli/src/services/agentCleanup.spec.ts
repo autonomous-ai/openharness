@@ -9,7 +9,7 @@ import { fakeCore } from '../testing/fakeCore.js'
 import { RETENTION_LAPSE_MS, retainContributions, retainedHarnesses, retentionFile } from '../superTabs/retention.js'
 import { Ledger, ledgerPath } from '../agentClient/ledger.js'
 import { GONE_MS } from './hachiHandOver.js'
-import { ASK_AGAIN_MS, CASCADE_RETRY_MS, CASCADE_TRIES, createAgentCleanup, IDLE_CLOSE_MS, JOINED_MAX, joinedPath, LOOK_EVERY_MS, startAgentCleanup, type AgentCleanupDeps } from './agentCleanup.js'
+import { ASK_AGAIN_MS, BACKGROUND_CLOSE_MS, CASCADE_RETRY_MS, CASCADE_TRIES, createAgentCleanup, IDLE_CLOSE_MS, JOINED_MAX, joinedPath, LOOK_EVERY_MS, startAgentCleanup, type AgentCleanupDeps } from './agentCleanup.js'
 
 const NOW = Date.parse('2026-10-12T12:00:00Z')
 const MIN = 60_000
@@ -26,7 +26,7 @@ afterEach(() => { rmSync(dir, { recursive: true, force: true }); vi.useRealTimer
 /** The cleanup on a fake core: [sessions] are the live agents, [quietFor] how long ago each last moved. */
 function setup(sessions: RegisteredSession[], quietFor: Record<string, number | null> = {}, over: AgentCleanupDeps & { refuse?: Record<string, AgentCloseResult> } = {}) {
   let clock = NOW
-  const closeStarted = vi.fn(async (agentId: string, _mode: 'idle' | 'now'): Promise<AgentCloseResult> => {
+  const closeStarted = vi.fn(async (agentId: string, _mode: 'idle' | 'now', _pastCeiling?: boolean): Promise<AgentCloseResult> => {
     const refused = over.refuse?.[agentId]
     if (refused) return refused
     sessions.splice(sessions.findIndex((s) => s.agentId === agentId), 1)
@@ -425,6 +425,54 @@ describe('closing a harness another agent started once it has sat idle', () => {
     gone.advance(IDLE_CLOSE_MS)
     await gone.cleanup.look()
     expect(gone.closeStarted).toHaveBeenCalledTimes(2)
+  })
+
+  it('leaves one that still runs background commands open, says so once, and closes it once it has sat two hours', async () => {
+    expect(BACKGROUND_CLOSE_MS).toBe(2 * 60 * 60_000)
+    const sessions = [kid('kid')]
+    const refuse: Record<string, AgentCloseResult> = { kid: { error: 'SESSION_NOT_IDLE', activity: 'idle', backgroundCommands: 2 } }
+    // How long ago its last answer was, at each look.
+    const quiet: Record<string, number | null> = { kid: IDLE_CLOSE_MS }
+    const t = setup(sessions, quiet, { refuse })
+    await t.cleanup.look()
+    t.advance(IDLE_CLOSE_MS)
+    await t.cleanup.look()
+    t.advance(ASK_AGAIN_MS)
+    await t.cleanup.look()
+    expect(t.closeStarted.mock.calls).toEqual([['kid', 'idle'], ['kid', 'idle']])
+    expect(t.log.mock.calls).toEqual([['[agent-cleanup] left kid (kid) open: 2 background commands running']])
+    // Two hours after its last answer: closed whatever runs, one line with the count.
+    delete refuse.kid
+    quiet.kid = BACKGROUND_CLOSE_MS
+    t.closeStarted.mockImplementationOnce(async () => { sessions.splice(0, 1); return { closed: true, backgroundCommands: 2 } })
+    t.advance(BACKGROUND_CLOSE_MS)
+    await t.cleanup.look()
+    expect(t.closeStarted).toHaveBeenLastCalledWith('kid', 'idle', true)
+    expect(t.log).toHaveBeenLastCalledWith(expect.stringMatching(/^\[agent-cleanup\] closed kid \(kid\): another agent started it, and it has sat idle \d+ minutes, with 2 background commands running\. Its conversation is kept\.$/))
+    // Gone, it is forgotten: back and refused again, it is said again.
+    await t.cleanup.look()
+    sessions.push(kid('kid'))
+    refuse.kid = { error: 'SESSION_NOT_IDLE', activity: 'idle', backgroundCommands: 1 }
+    quiet.kid = IDLE_CLOSE_MS
+    await t.cleanup.look()
+    t.advance(IDLE_CLOSE_MS)
+    await t.cleanup.look()
+    expect(t.log).toHaveBeenLastCalledWith('[agent-cleanup] left kid (kid) open: 1 background command running')
+    expect(t.log).toHaveBeenCalledTimes(3)
+  })
+
+  it('past two hours closes one that answers no count with the usual line, and a starter\'s close never says the ceiling', async () => {
+    const sessions = [kid('old'), kid('orphan', { parentAgentId: 'gone' })]
+    const t = setup(sessions, { old: BACKGROUND_CLOSE_MS })
+    await t.cleanup.look()
+    t.advance(BACKGROUND_CLOSE_MS)
+    await t.cleanup.look()
+    await t.cleanup.closeStartedBy('gone')
+    expect(t.closeStarted.mock.calls).toEqual([['old', 'idle', true], ['orphan', 'now']])
+    expect(t.log.mock.calls.map(([line]) => line)).toEqual([
+      '[agent-cleanup] closed old (old): another agent started it, and it has sat idle 120 minutes. Its conversation is kept.',
+      '[agent-cleanup] closed orphan (orphan): the harness that started it was closed. Its conversation is kept.',
+    ])
   })
 
   it('says once a close that failed for more than its state, and again only once it has come back', async () => {

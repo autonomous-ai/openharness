@@ -19,6 +19,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
 import { askThePersonFirst, readAgentSettings } from '../lib/agentSettings.js'
+import { backgroundSaid } from '../lib/backgroundSaid.js'
 import { MAX_FIRST_PROMPT_CHARS } from '../lib/engineLaunch.js'
 import { NewUsageError, resolveNewMachine, type NewMachine, type NewOrigin } from '../lib/newCommand.js'
 import { engineName, MessageError } from '../messages/model.js'
@@ -67,7 +68,8 @@ unreachable.
 ${ON_MACHINE}`
 export const SHOW_USAGE = `Usage: harness show [--machine <name>] <name> [--chars N] [--work] [--json]
 
-A harness's state and its last turn: what it was asked and what it answered (the first N characters, 4000 by default).
+A harness's state and its last turn: what it was asked and what it answered (the first N characters, 4000 by default),
+and how many background commands it still runs when idle.
 --work says its work instead, as facts read on its machine: its branch, its pull request, the files and lines it
 changed, and its checks.
 ${ON_MACHINE}`
@@ -108,7 +110,8 @@ and only while the person allows it (harness settings agents-tell-agents).
 ${ON_MACHINE}`
 export const WAIT_USAGE = `Usage: harness wait [--machine <name>] <name>[,<name>…] [--any] [--timeout 30m] [--json]
 
-Waits until each harness has stopped working, then prints its state. --any returns when the first one does.
+Waits until each harness has stopped working and the background commands it started have ended, then prints its state.
+--any returns when the first one does.
 Exit status: 0 idle or closed by you, 3 one needs the person (a question or a permission), 4 one stopped or is gone,
 124 timed out.
 --timeout takes 90s, 30m, 2h; 0 waits as long as it takes.
@@ -116,8 +119,9 @@ ${ON_MACHINE}`
 export const WATCH_USAGE = `Usage: harness watch [--machine <name>] <name> | --mine [--chars N] [--timeout 30m] [--json]
 
 Follows one harness and prints a line each time it changes: started, working, needs_person (its last words),
-done (its answer), idle (nothing asked of it), failed, stopped (with its last answer). With --json each line is one
-JSON object, for a program to read. The first line is how it stands now; the same state with new words is a new line.
+background (idle, with commands it started still running: how many), done (its answer), idle (nothing asked of it),
+failed, stopped (with its last answer). With --json each line is one JSON object, for a program to read. The first
+line is how it stands now; the same state with new words, or background with a new number, is a new line.
 It hears each change of a harness here as Harness pushes it, as wait does, and looks every 3 s at a cloud harness
 or a harness on another machine. A cloud harness's state is its maker's: Devin Cloud says needs_person both when it
 asks and when it has only finished, so read the words and cloud.providerStatus.
@@ -128,8 +132,8 @@ ${ON_MACHINE}`
 export const CLOSE_USAGE = `Usage: harness close [--machine <name>] <name> [--now] [--json]
 
 Saves the harness's screen and stops it. Its conversation is kept: the person can resume it.
-It is refused while the harness is working, unless --now. An agent may close only harnesses it started:
-closing another's exits 5.
+It is refused while the harness is working or still runs background commands, unless --now. An agent may close only
+harnesses it started: closing another's exits 5.
 ${ON_MACHINE}`
 export const DELETE_USAGE = `Usage: harness delete <name> [--json]
 
@@ -480,18 +484,16 @@ async function targetAway(s: Setup, o: Opened, name: string, away: Away): Promis
 type Screen = 'working' | 'needs-input' | 'idle' | 'draft'
 
 /** What the screen says now (the windows' read, `agent_close` `inspect`); null when it cannot be read. `draft`:
- *  text waits in its box, the person's or a message being typed, so the agent is about to work. */
-async function inspect(t: { daemon: Daemon; frame: Frame }): Promise<Screen | null> {
+ *  text waits in its box, the person's or a message being typed, so the agent is about to work. `background`: how many
+ *  background commands an idle harness still runs; null when the daemon cannot say (an older one sends no field). */
+async function inspect(t: { daemon: Daemon; frame: Frame }): Promise<{ screen: Screen | null; background: number | null }> {
   const reply = await t.daemon.request('agent_close', {
     agentId: t.frame.id, sessionId: t.frame.sessionId ?? '', createdAt: t.frame.createdAt ?? '', mode: 'inspect',
   }).catch(() => ({} as Record<string, unknown>))
-  switch (reply.activity) {
-    case 'working': return 'working'
-    case 'needs_input': return 'needs-input'
-    case 'idle': return 'idle'
-    case 'draft': return 'draft'
-    default: return null
-  }
+  const screen = reply.activity === 'working' ? 'working' : reply.activity === 'needs_input' ? 'needs-input'
+    : reply.activity === 'idle' ? 'idle' : reply.activity === 'draft' ? 'draft' : null
+  const n = reply.backgroundCommands
+  return { screen, background: screen === 'idle' && Number.isInteger(n) && (n as number) >= 0 ? n as number : null }
 }
 
 /** The last turn, from the end of the transcript, a page at a time: never the whole file (the attach OOM). */
@@ -721,14 +723,14 @@ async function psMachines(s: Setup, all: boolean, json: boolean): Promise<number
 
 /** What `show` says to do next, from its state and whose it is: never `close` for a harness the caller did not start.
  *  Idle and the caller's: a harness left open after its answer is read sits there for nobody (owner, October 12). */
-function showNext(env: NodeJS.ProcessEnv, state: State, yours: boolean, at: string, canTell = false): NextStep[] {
+function showNext(env: NodeJS.ProcessEnv, state: State, yours: boolean, at: string, canTell: boolean, background: number | null): NextStep[] {
   if (state === 'needs-input') return [{ tell: 'tell the person; only they answer it (a question or a permission).' }]
   if (state === 'working' || state === 'unknown' || state === 'starting' || state === 'installing') return [{ run: step(env, 'wait', at), when: 'until it stops working' }]
-  if (state === 'idle' && yours) {
-    const close: NextStep = { run: step(env, 'close', at), when: 'once you have what you need' }
-    // It keeps what it learned: more work for it costs less than a new harness told everything again.
-    return canTell ? [{ run: tellStep(env, at), when: 'to give it more work in the same conversation' }, close] : [close]
-  }
+  // It keeps what it learned: more work for it costs less than a new harness told everything again.
+  const tell: NextStep[] = canTell ? [{ run: tellStep(env, at), when: 'to give it more work in the same conversation' }] : []
+  // Its engine tells it when they end, and it usually takes a turn to read them: not done yet, whoever started it.
+  if (state === 'idle' && background) return [{ run: step(env, 'wait', at), when: 'until its background commands end' }, ...(yours ? tell : [])]
+  if (state === 'idle' && yours) return [...tell, { run: step(env, 'close', at), when: 'once you have what you need' }]
   return []
 }
 
@@ -826,7 +828,8 @@ export function showCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
       }
       const listed = stateOf(t.frame)
       // A cloud harness has no screen: its state is the cloud service's.
-      const screen = listed === 'stopped' || listed === 'offline' || t.frame.location === 'cloud' ? null : await inspect(t)
+      const { screen, background } = listed === 'stopped' || listed === 'offline' || t.frame.location === 'cloud'
+        ? { screen: null, background: null } : await inspect(t)
       const state: State = screen === 'draft' ? 'idle' : screen ?? listed
       const parent = o.ledger.parentOf({ machineId: t.machineId, agentId: t.frame.id })
       const startedBy = t.yours ? 'you' : parent ? parent.by.name : 'person'
@@ -848,13 +851,14 @@ export function showCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
         ? [{ run: `harness reply ${at} -- <the person's answer>`, when: 'it waits for the person: tell them what it asks' }]
         : pendingTell && state !== 'needs-input' ? [{ run: step(s.env, 'wait', at), when: 'until it has taken the work you told it' }]
         // `close` and `tell` take no cloud harness.
-        : showNext(s.env, state, t.yours && t.frame.location !== 'cloud', at, tellsHere(o, s.pane))
+        : showNext(s.env, state, t.yours && t.frame.location !== 'cloud', at, tellsHere(o, s.pane), background)
       const cloud = cloudMeta(t.frame)
       const failure = failureOf(t.frame)
       const result = {
         name: t.frame.name, id: t.frame.id, agent: engineName(t.frame.engine ?? ''), machine: t.machine, state, startedBy,
         folder: t.frame.project?.cwd ?? null, branch: t.frame.project?.branch ?? null,
         ask: turn?.ask ?? null, answer: clip(answer, chars), truncated: answer.length > chars, tools: turn?.tools ?? 0, next,
+        ...(state === 'idle' ? { backgroundCommands: background } : {}),
         ...(state === 'needs-input' ? { needsPerson: true } : {}),
         ...(cloud ? { cloud } : {}),
         ...(failure ? { failure } : {}),
@@ -875,6 +879,7 @@ export function showCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
         }
         for (const link of result.links ?? []) s.out(`${link.label}: ${link.url}`)
         if (pendingTell) s.out(`It has not taken the work you told it ${ago(new Date(pendingTell.at).toISOString(), s.now())} ago yet: this answer is to the work before.`)
+        if (background) s.out(backgroundSaid(background))
         const said = formatNext(next)
         if (said) s.out(said)
       }
@@ -1330,6 +1335,8 @@ export function waitCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
       const sawWorking = new Set<Target>()
       /** Idle looks in a row, on the same turn. */
       const idle = new Map<Target, { turn: string; looks: number }>()
+      /** Idle at its last look with background commands still running: how many, for a timeout to say. */
+      const background = new Map<Target, number>()
       // Ended because the caller closed it: what it asked for, not a failure. A real Codex lead closed its harness and
       // then waited on it, as it had queued, and was answered "Failed (exit 4) · stopped · it was stopped". Not when its
       // conversation went on after that close (the person reopened it), or a minute past it on another machine's clock.
@@ -1339,6 +1346,7 @@ export function waitCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
         return closedAt !== null && !(active > closedAt + CLOCK_SLACK_MS) ? 'closed' : state
       }
       const look = async (t: Target, frames: Frame[]): Promise<Settled | null> => {
+        background.delete(t)
         const frame = frames.find((f) => f.id === t.frame.id)
         // Not live: stopped, or gone. Asked of the full list only then. The stopped frame is the one this wait
         // ended on: the frame from before the wait still has the maker's earlier status (lampOS, #1449).
@@ -1355,12 +1363,15 @@ export function waitCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
           return state === 'idle' || state === 'needs-input' || state === 'failed' ? state : null
         }
         // The daemon says it is working: no need to read its screen.
-        const screen = frame.activity?.state === 'working' ? 'working' : await inspect(t)
+        const { screen, background: running } = frame.activity?.state === 'working' ? { screen: 'working' as const, background: null } : await inspect(t)
         // Working, by the daemon's word or the screen's: what comes next is pushed, whatever it is (its turn's end, its
         // activity, a question, which the daemon looks for on the screen of a harness a tool follows). Not a draft.
         if (screen === 'working' && !t.remote) pushedNext.add(t)
         else pushedNext.delete(t)
         if (screen === 'working') { sawWorking.add(t); idle.delete(t); return null }
+        // Idle with background commands still running is not done: its engine tells it when they end, and it usually
+        // takes a turn to read them. Their end is pushed by nothing, so it is looked at again each interval.
+        if (running) { background.set(t, running); idle.delete(t); return null }
         if (screen === 'needs-input') return 'needs-input'
         if (screen === 'draft' || (screen === null && stateOf(frame) !== 'idle')) { idle.delete(t); return null }
         // Idle, on two looks in a row with the same last turn: a message sent just before is typed within a look,
@@ -1417,10 +1428,12 @@ export function waitCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
         const quiet = pushing && !following.length && targets.every((t) => settled.has(t) || pushedNext.has(t))
         await push.sleep(Math.min(quiet ? PUSHED_BACKSTOP_MS : s.intervalMs, Math.max(0, deadline - s.now())))
       }
-      const results: Array<{ name: string; id: string; state: Settled | 'installing' | 'starting'; detail?: string; cloud?: CloudMeta }> = [
+      const results: Array<{ name: string; id: string; state: Settled | 'installing' | 'starting'; detail?: string; cloud?: CloudMeta; backgroundCommands?: number }> = [
         ...targets.filter((t) => settled.has(t)).map((t) => {
           const cloud = cloudMeta(t.frame)
-          return { name: t.frame.name ?? t.frame.id.slice(0, 8), id: t.frame.id, state: settled.get(t)!, ...(cloud ? { cloud } : {}) }
+          // Held by its background commands at its last look, so it timed out on them.
+          const running = background.get(t)
+          return { name: t.frame.name ?? t.frame.id.slice(0, 8), id: t.frame.id, state: settled.get(t)!, ...(cloud ? { cloud } : {}), ...(running ? { backgroundCommands: running } : {}) }
         }),
         // Not started yet when the wait ended: said as what it waits for, which is what the agent waits on.
         ...following.filter((a) => gave.has(a)).map((a) => {
@@ -1442,7 +1455,7 @@ export function waitCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
         const read = step(s.env, 'show', onAway(addressOf({ machineId: '', agentId: r.id, name: r.name, engine: '' }), away))
         const next = r.state === 'idle' ? `read it: ${read}`
           : r.state === 'needs-input' ? 'it waits for the person (a question or a permission); only the person answers it'
-          : r.state === 'timeout' ? `still working; wait again or read it: ${read}`
+          : r.state === 'timeout' ? `${r.backgroundCommands ? backgroundSaid(r.backgroundCommands) : 'still working'}; wait again or read it: ${read}`
           : r.state === 'installing' || r.state === 'starting' ? `${askedLine(s.env, following.find((a) => a.row.creation.creationId === r.id)!, away)}`
           : r.state === 'failed' && targets.some((t) => t.frame.id === r.id) ? `it failed in the cloud; what it said and its links: ${read}`
           : r.state === 'failed' ? `it never started: ${r.detail || 'its machine refused it'}`
@@ -1465,8 +1478,9 @@ export function waitCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
 
 // ── watch ──────────────────────────────────────────────────────────────────────────────────────────
 
-/** What `harness watch` says changed. `idle`: idle with nothing asked of it, so nothing done to report. */
-export type WatchEvent = 'started' | 'working' | 'needs_person' | 'done' | 'idle' | 'failed' | 'stopped'
+/** What `harness watch` says changed. `idle`: idle with nothing asked of it, so nothing done to report. `background`:
+ *  idle after a turn with background commands it started still running, so not done yet. */
+export type WatchEvent = 'started' | 'working' | 'needs_person' | 'background' | 'done' | 'idle' | 'failed' | 'stopped'
 
 /** A cloud harness's maker state as an event; none while it is unknown. */
 const CLOUD_EVENTS: Partial<Record<State, WatchEvent>> = {
@@ -1475,7 +1489,7 @@ const CLOUD_EVENTS: Partial<Record<State, WatchEvent>> = {
 
 /** The state a harness here is in at each event: its frame says only working or idle, the screen the rest. */
 const EVENT_STATES: Record<WatchEvent, State> = {
-  started: 'starting', working: 'working', needs_person: 'needs-input', done: 'idle', idle: 'idle', failed: 'failed', stopped: 'stopped',
+  started: 'starting', working: 'working', needs_person: 'needs-input', background: 'idle', done: 'idle', idle: 'idle', failed: 'failed', stopped: 'stopped',
 }
 
 type LastTurn = Awaited<ReturnType<typeof readLastTurn>>
@@ -1490,7 +1504,7 @@ const listOrNull = (daemon: Daemon): Promise<Frame[] | null> => list(daemon, fal
  * One harness `watch` follows, by `wait`'s looks (the maker's state for a cloud harness; the daemon's activity, then the
  * screen, then two idle looks on one turn for one here): [say] is told each change once.
  */
-function follower(s: Setup, o: Opened, h: Target, say: (event: WatchEvent, turn: LastTurn) => void) {
+function follower(s: Setup, o: Opened, h: Target, say: (event: WatchEvent, turn: LastTurn, running: number | null) => void) {
   /** The last line said, as its event and the turn it spoke of: a line is said only when this changes. */
   let printed: string | null = null
   let sawWorking = false
@@ -1506,9 +1520,12 @@ function follower(s: Setup, o: Opened, h: Target, say: (event: WatchEvent, turn:
   /** The last look told the harness's state for certain, so its next change is pushed: working, its question, its
    *  answer. A draft in its box is looked at again in an interval: the person typing is pushed by nothing. */
   let pushedNext = false
+  /** The background commands the last look read: said on its `background`, `done` and `idle` lines. */
+  let running: number | null = null
   /** This round's event: null while it can't be told yet (an idle look not yet confirmed, a state unknown). */
   const look = async (live: Frame[]): Promise<WatchEvent | null> => {
     pushedNext = false
+    running = null
     const frame = live.find((f) => f.id === h.frame.id)
     if (!frame) {
       const stopped = (await list(h.daemon, true)).find((f) => f.id === h.frame.id)
@@ -1518,9 +1535,12 @@ function follower(s: Setup, o: Opened, h: Target, say: (event: WatchEvent, turn:
     h.frame = frame
     if (frame.status === 'stopped') return 'stopped'
     if (frame.location === 'cloud') return CLOUD_EVENTS[stateOf(frame)] ?? null
-    const screen = frame.activity?.state === 'working' ? 'working' : await inspect(h)
+    const { screen, background } = frame.activity?.state === 'working' ? { screen: 'working' as const, background: null } : await inspect(h)
+    running = background
     if (screen === 'working' || screen === 'draft') { sawWorking = true; idle = null; pushedNext = screen === 'working'; return 'working' }
     if (screen === 'needs-input') { idle = null; pushedNext = true; return 'needs_person' }
+    // Not done while they run (wait's rule); their end is pushed by nothing, so it is looked at again each interval.
+    if (running) { idle = null; return 'background' }
     if (screen === null && stateOf(frame) !== 'idle') { idle = null; return null }
     // Idle on two looks in a row with the same last turn, as `wait` decides it (#1180).
     const turn = await turnNow()
@@ -1547,11 +1567,12 @@ function follower(s: Setup, o: Opened, h: Target, say: (event: WatchEvent, turn:
         throw error
       })
       if (!event) return null
-      const turn = event !== 'started' && event !== 'idle' ? await turnNow() : null
-      const key = `${event}\u0000${event === 'working' ? turn?.ask ?? '' : keyOf(turn)}`
+      const turn = event !== 'started' && event !== 'idle' && event !== 'background' ? await turnNow() : null
+      // A `background` line is new when their number changes.
+      const key = `${event}\u0000${event === 'working' ? turn?.ask ?? '' : event === 'background' ? running : keyOf(turn)}`
       if (key !== printed) {
         printed = key
-        say(event, turn)
+        say(event, turn, running)
       }
       return event
     },
@@ -1585,7 +1606,7 @@ export function watchCommand(argv: readonly string[], deps: ClientDeps = {}): Pr
       const deadline = timeoutMs > 0 ? s.now() + timeoutMs : Infinity
       const push = pushedBy(s)
       const pushing = !h.remote && h.frame.location !== 'cloud' && await push.follow(o.daemon, [h.frame.id])
-      const f = follower(s, o, h, (event, turn) => printWatch(s, json, chars, h, event, turn))
+      const f = follower(s, o, h, (event, turn, running) => printWatch(s, json, chars, h, event, turn, running))
       for (;;) {
         const live = await listOrNull(h.daemon)
         const event = live && await f.round(live)
@@ -1635,7 +1656,7 @@ async function watchMine(s: Setup, json: boolean, chars: number, timeoutMs: numb
       }
       for (const frame of ids.map((id) => named(live).find((f) => f.id === id && f.status !== 'stopped')).filter((f): f is Frame & { name: string } => !!f)) {
         const t: Target = { daemon, frame, machineId, machine: labelOf(machineId), yours: true, remote: !here }
-        followers.push(follower(s, o, t, (event, turn) => printWatch(s, json, chars, t, event, turn, t.machine)))
+        followers.push(follower(s, o, t, (event, turn, running) => printWatch(s, json, chars, t, event, turn, running, t.machine)))
       }
     }
     if (!followers.length) {
@@ -1683,7 +1704,7 @@ const withoutStartHeader = (ask: string): string => ask.replace(START_HEADER, ''
 
 /** One `watch` line: a JSON object with `--json`, else the time, the harness, the event and its words. */
 function printWatch(s: Setup, json: boolean, chars: number, t: Target, event: WatchEvent,
-  turn: { ask: string | null; answer: string; tools: number } | null, machine?: string): void {
+  turn: { ask: string | null; answer: string; tools: number } | null, running: number | null, machine?: string): void {
   const text = turn?.answer ?? ''
   const words: Record<string, unknown> = event === 'working' ? { ask: turn?.ask ? withoutStartHeader(turn.ask) : null }
     : event === 'needs_person' ? { question: clip(text, chars), truncated: text.length > chars }
@@ -1696,10 +1717,13 @@ function printWatch(s: Setup, json: boolean, chars: number, t: Target, event: Wa
   const line = {
     event, at, name: t.frame.name ?? t.frame.id.slice(0, 8), id: t.frame.id, ...(machine ? { machine } : {}), agent: engineName(t.frame.engine ?? ''),
     state: t.frame.location === 'cloud' && event !== 'stopped' ? stateOf(t.frame) : EVENT_STATES[event], ...words,
+    // A cloud harness has no screen to count them on.
+    ...(t.frame.location !== 'cloud' && (event === 'background' || event === 'done' || event === 'idle') ? { backgroundCommands: running } : {}),
     ...(cloud ? { cloud } : {}), ...(t.frame.cloud?.links?.length ? { links: t.frame.cloud.links } : {}),
   }
   if (json) { s.out(JSON.stringify(line)); return }
-  const said = typeof words.question === 'string' ? words.question : typeof words.summary === 'string' ? words.summary
+  const said = event === 'background' && running ? backgroundSaid(running)
+    : typeof words.question === 'string' ? words.question : typeof words.summary === 'string' ? words.summary
     : typeof words.ask === 'string' ? `asked: ${clip(words.ask, 200)}` : ''
   s.out(`${at.slice(11, 19)}Z ${line.name}${machine ? ` @${machine}` : ''}: ${event.replace('_', ' ')}${said ? `: ${said}` : ''}`)
 }
@@ -1744,11 +1768,18 @@ export function closeCommand(argv: readonly string[], deps: ClientDeps = {}): Pr
       }
       // An agent closes only what it started; the person, at a terminal, closes anything.
       if (o.caller && !t.yours) throw new AgentClientError('NOT_YOURS', `You did not start ${name}, so you may not close it. Only the person can.`)
+      const anyway = s.env[VIA_MCP_ENV] === '1' ? 'now: true' : '--now'
+      // Idle with background commands still running is not done, and a close would end them (it ends the engine's whole
+      // process tree). Refused here, not by the daemon: its idle close keeps its rule for the windows' Close.
+      if (!flags.has('--now')) {
+        const { background } = await inspect(t)
+        if (background) throw new AgentClientError('WORKING', `${name}: ${backgroundSaid(background)}; ${anyway} closes anyway`)
+      }
       const reply = await t.daemon.request('agent_close', {
         agentId: t.frame.id, sessionId: t.frame.sessionId ?? '', createdAt: t.frame.createdAt ?? '', mode: flags.has('--now') ? 'now' : 'idle',
       }, 60_000)
       if (reply.error === 'SESSION_NOT_IDLE') {
-        throw new AgentClientError('WORKING', `${name} is ${reply.activity === 'needs_input' ? 'waiting for the person' : 'working'}. Wait for it (${step(s.env, 'wait', onAway(name, away))}), or close it anyway with ${s.env[VIA_MCP_ENV] === '1' ? 'now: true' : '--now'}.`)
+        throw new AgentClientError('WORKING', `${name} is ${reply.activity === 'needs_input' ? 'waiting for the person' : 'working'}. Wait for it (${step(s.env, 'wait', onAway(name, away))}), or close it anyway with ${anyway}.`)
       }
       if (reply.error === 'AGENT_CHANGED') throw new AgentClientError('AGENT_CHANGED', `${name} changed while closing. Check it with ${step(s.env, 'show', onAway(name, away))}, then try again.`)
       // Its machine cannot read which conversation it is in just now, and closing it would lose that conversation. The

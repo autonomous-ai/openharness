@@ -84,6 +84,11 @@ describe('the agent cleanup in its own process', () => {
     expect(await api.agents.lastActivity!('k2')).toBeNull()
     expect(await api.agents.closeStarted!('k1', 'now')).toEqual({ closed: true })
     expect(query).toHaveBeenLastCalledWith('closeStarted', { agentId: 'k1', mode: 'now' })
+    // Past the ceiling is said only when it is.
+    await api.agents.closeStarted!('k1', 'idle', true)
+    expect(query).toHaveBeenLastCalledWith('closeStarted', { agentId: 'k1', mode: 'idle', pastCeiling: true })
+    await api.agents.closeStarted!('k1', 'idle')
+    expect(query).toHaveBeenLastCalledWith('closeStarted', { agentId: 'k1', mode: 'idle' })
     expect(api.agents.byAgent('k1')?.agentId).toBe('k1')
     // What Hachi started handed to the person is counted by the core (core/agentQueries.ts `count`).
     api.count!('hachi_handed_to_person')

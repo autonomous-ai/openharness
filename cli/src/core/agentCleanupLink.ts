@@ -39,7 +39,9 @@ export function createAgentCleanupLink(core: Pick<CoreApi, 'agents' | 'usage' | 
     if (query === 'lastActivity') return { at: await (core.agents.lastActivity?.(agentId) ?? null) }
     const mode = payload.mode === 'idle' || payload.mode === 'now' ? payload.mode : null
     if (!mode) return { error: 'INVALID_REQUEST' }
-    return { ...await (core.agents.closeStarted?.(agentId, mode) ?? { error: 'UNSUPPORTED' }) }
+    // Past the ceiling only when the process says so in those words: anything else keeps the refusal.
+    const closing = payload.pastCeiling === true ? core.agents.closeStarted?.(agentId, mode, true) : core.agents.closeStarted?.(agentId, mode)
+    return { ...await (closing ?? { error: 'UNSUPPORTED' }) }
   }
 
   return { port, answer }

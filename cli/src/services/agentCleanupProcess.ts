@@ -35,7 +35,8 @@ export function agentCleanupCoreApi(dataDir: string, live: () => RegisteredSessi
     agents: {
       ...api.agents,
       // Not answered (the core gone, a link that dropped) is not closed: asked again at the next look.
-      closeStarted: async (agentId, mode) => await ask('closeStarted', { agentId, mode }).catch(() => ({ error: 'SERVICE_UNAVAILABLE' })) as AgentCloseResult,
+      closeStarted: async (agentId, mode, pastCeiling) =>
+        await ask('closeStarted', { agentId, mode, ...(pastCeiling ? { pastCeiling } : {}) }).catch(() => ({ error: 'SERVICE_UNAVAILABLE' })) as AgentCloseResult,
       lastActivity: async (agentId) => {
         const answer = await ask('lastActivity', { agentId }).catch(() => null)
         return typeof answer?.at === 'number' ? answer.at : null

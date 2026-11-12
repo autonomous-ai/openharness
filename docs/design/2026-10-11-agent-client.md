@@ -351,6 +351,12 @@ line for each (`[agent-cleanup] closed kid (3f2a9c1e): …`).
   restore writes nothing a conversation's time is read from, and a child the person resumed to read was closed again
   within a minute (the review of #1234). So the cleanup closes nothing in its first half hour after it starts, and an
   engine that keeps no dated transcript (only Claude Code and Codex declare one) is never closed for being idle.
+  Nor one that still runs background commands: `closeStarted` answers `SESSION_NOT_IDLE` with `backgroundCommands`,
+  logged once (`[agent-cleanup] left kid (3f2a9c1e) open: 2 background commands running`) and asked again five
+  minutes later, until it has sat two hours (`BACKGROUND_CLOSE_MS`) after its last answer: then it is closed whatever
+  runs, and the log line carries the count (`…, with 2 background commands running. Its conversation is kept.`). An
+  agent often leaves a dev server or a watcher running on purpose, and a stale Hermes entry never ends. Only the
+  cleanup's link can pass that ceiling (`closeStarted`'s `pastCeiling`); a window's or the phone's Close is unchanged.
 - **Never the person's.** Neither touches a harness the person typed or pasted into from a window or the phone (a
   `message` frame, or terminal input that is more than what the terminal sends by itself: focus, its attributes, the
   mouse, `lib/typedInput.ts`). It is theirs from then on, kept in `<data>/agent-cleanup.json` across restarts. A harness
@@ -391,7 +397,9 @@ No core change, no new service.
   no transcript read) for up to 40 live harnesses. 0.8 s for 22 harnesses on the owner's Mac.
 - **`show`**: `agent_close` in `inspect` mode for needs-input (the screen, as the windows read it), and
   `session_get` with a `limit`, a page at a time from the end, at most four pages: never the whole transcript
-  (the attach OOM, October 3). The answer is the text after the turn's last tool call.
+  (the attach OOM, October 3). The answer is the text after the turn's last tool call. An idle harness's `inspect`
+  also answers `backgroundCommands`, how many background commands it still runs (`null` when Harness cannot know, and
+  from an older daemon); above 0, `show` says so and names `wait`, not `close`.
 - **`wait`**: a round every 3 s: one live list per machine, and the screen (`inspect`) only for a harness the daemon
   does not already call working. Since Hachi 2 (docs/design/2026-11-12-hachi.md), a harness here is followed by what
   the daemon pushes for the harnesses a tool names (`agents_watch`, `core/toolWatches.ts`): a round comes when one
@@ -400,8 +408,13 @@ No core change, no new service.
   worked while waited on or has answered (text after its last tool call). A draft in its box is not done. The history
   readers end every newest page with a `done` event whether the turn ended or not, so `done` is never read as the
   end (the review caught `wait` returning at once after a `send`). A harness with nothing asked of it two minutes
-  after it started is done. Cost per round here: a live list 10 ms, an inspect 29 to 48 ms, a transcript page 7 ms.
-- **`close`**: `agent_close`, `idle` mode (or `now`). An agent closes only what it started; the person anything.
+  after it started is done. Idle with `backgroundCommands` above 0 is not done: its idle looks start over, and it is
+  looked at every 3 s, as their end is pushed by nothing; a timeout meanwhile says the count. Cost per round here: a
+  live list 10 ms, an inspect 29 to 48 ms, a transcript page 7 ms. An idle Claude Code harness's inspect also reads
+  the process table once for its count: about 45 ms more (median of 20, M2 Max with 711 processes, 2026-11-12).
+- **`close`**: `agent_close`, `idle` mode (or `now`). An agent closes only what it started; the person anything. In
+  `idle` mode it inspects first and refuses on the client, sending no close, while `backgroundCommands` is above 0: the
+  daemon's `idle` close keeps its rule for the windows' Close.
 - **`new`**: `lib/newCommand.ts` asks `agentOrigin()` when run from an agent's pane: the limits, the header, the
   record. The limits count the caller's harnesses on other machines as those machines list them (one closed there
   frees its place); a machine that cannot be asked has its last day's starts counted. A harness started on another
