@@ -1,6 +1,6 @@
 import '../notify/alert_sounds.dart';
 import '../super_tabs/my_agents.dart';
-import '../super_tabs/swarm_switcher.dart' show swarmShownName;
+import '../super_tabs/swarm_name.dart';
 import 'app_state.dart';
 import 'harness_activity.dart';
 import 'harness_sessions.dart';

@@ -19,7 +19,8 @@ import 'machines.dart';
 import 'model.dart';
 import 'sharing.dart';
 import 'swarm_delete.dart';
-import 'swarm_switcher.dart' show PersonalSwarm, swarmShownName;
+import 'swarm_name.dart';
+import 'swarm_switcher.dart' show PersonalSwarm;
 
 /// What Manage shows (docs/plans/2026-11-02-quiet-swarm-design.md, screens 10,
 /// 10b, 10c): what used to stand in the sidebar and the Swarm dropdown, one

@@ -521,13 +521,14 @@ class SuperTabClient {
   String? ownerOf(String id) => _loaded[id]?.snapshot?.ownerId ?? _owners[id];
   Map<String, String> _owners = const {};
 
-  /// Person [userId] as this Desktop last read them: in Swarm [id] first, else in another Swarm open or closed here. Null
-  /// when no Swarm read here has them.
+  /// Person [userId] as this Desktop last read them: in Swarm [id] first, else in another Swarm open here, or closed here
+  /// and still the account's. Null when no such read has them.
   SuperTabPerson? personOf(String id, String userId) {
     for (final snapshot in [
       ?(_loaded[id]?.snapshot ?? _closedSnapshots[id]),
       for (final controller in _loaded.values) ?controller.snapshot,
-      ..._closedSnapshots.values,
+      for (final MapEntry(:key, :value) in _closedSnapshots.entries)
+        if (_listed.contains(key)) value,
     ]) {
       for (final person in snapshot.people) {
         if (person.id == userId) return person;

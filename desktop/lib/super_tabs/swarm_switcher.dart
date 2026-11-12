@@ -10,32 +10,12 @@ import '../widgets/desktop_chrome.dart';
 import 'count_badge.dart' show SuperTabCountBadge;
 import 'controller.dart';
 import 'section_heading.dart' show SuperTabSectionHeading;
+import 'swarm_name.dart';
 
 /// The Swarm dropdown at the top of a Swarm tab's left bar (Dee, 10-30): the
 /// Swarm the tab shows, and in its menu Personal, every other Swarm the
 /// person belongs to and New Swarm. Picking one shows it in the same tab
 /// ([AppNotifier.showSuperTabIn]); nothing else about tabs changes.
-
-const kPersonalSwarmName = 'Personal';
-
-/// The one way the Desktop names Swarm [id], named [name] (anh Dee, 2026-11-12): to someone invited to another person's
-/// Personal Swarm it is that person's, "Dee's Swarm", so Personal is only ever the reader's own; their own and every other
-/// Swarm by its name. The server tells a reader only their own Personal apart (backend store.ts `list`), so another
-/// person's is the one named Personal that someone else owns. Its owner is named as the Swarm shows them
-/// ([SuperTabPerson.shownName]: the name they set, else their username), as read here; before any read here has them,
-/// plain Swarm. Shown only: the Swarm stays named Personal.
-String swarmShownName(AppNotifier app, String id, String name) {
-  final owner = app.superTabs.ownerOf(id);
-  if (name.trim() != kPersonalSwarmName ||
-      owner == null ||
-      owner == app.currentUser?.id) {
-    return name;
-  }
-  return switch (app.superTabs.personOf(id, owner)) {
-    final person? => "${person.shownName}'s Swarm",
-    null => 'Swarm',
-  };
-}
 
 /// The request id Personal is created with. The server derives a new Swarm's
 /// id from the signed-in account and this id (backend superTabs/store.ts

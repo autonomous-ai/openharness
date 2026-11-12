@@ -13,7 +13,7 @@ import 'detail_dialog.dart';
 import 'dialog_scope.dart';
 import 'model.dart';
 import 'project_visibility.dart';
-import 'swarm_switcher.dart' show swarmShownName;
+import 'swarm_name.dart';
 
 /// The spacing scale's steps (4, 8, 12) from the shared control gap, as the leaderboard rows take them.
 const _gap = DesktopChrome.controlGap;

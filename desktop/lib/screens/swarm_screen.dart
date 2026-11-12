@@ -88,7 +88,8 @@ import '../super_tabs/launch.dart';
 import '../super_tabs/message_link.dart' show swarmMessageLinkInbox;
 import '../super_tabs/workspace.dart';
 import '../super_tabs/swarm_switcher.dart'
-    show PersonalSwarm, kPersonalSwarmRow, swarmShownName, swarmsToOpen;
+    show PersonalSwarm, kPersonalSwarmRow, swarmsToOpen;
+import '../super_tabs/swarm_name.dart';
 import '../super_tabs/actions.dart';
 import '../super_tabs/controller.dart' show SuperTabController, SuperTabFailure;
 import 'swarm_menu_bus.dart';
@@ -3125,7 +3126,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     final name = await showSwarmRenameDialog(
       context,
       // A Swarm's own name, which the rename replaces for everyone, not the name it is shown by here.
-      swarm.superTabId != null
+      swarm.isSuperTab && swarm.superTabId != null
           ? swarm.name
           : workspaceTabNames(app)[id] ?? swarm.name,
       keymap: _keymap,
@@ -9380,9 +9381,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                   final nameHint = workspaceTabTooltip(
                                     labels[index],
                                     // A Swarm's tab is its shown name alone.
-                                    swarm.superTabId != null
-                                        ? names[swarm.id]!
-                                        : swarm.name,
+                                    swarmTabShownName(app, swarm) ?? swarm.name,
                                     clipped:
                                         DesktopWorkspaceTab.naturalWidth(
                                           context,
