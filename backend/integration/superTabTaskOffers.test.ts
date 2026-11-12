@@ -151,7 +151,7 @@ describe('offering a task', () => {
 
   // Review of #4152: a project's repository is set by its owner or lead with no proof of access, so a member could make a second
   // project on a repository and hold its tasks with offers to their own agents. A repository has one coordinator in a Swarm.
-  it('is the PM\'s of the first project made on the repository alone: a later project on it offers nothing', async () => {
+  it('is the PM\'s of the project that got the repository first alone: a later project on it offers nothing', async () => {
     expect(await s.offer(140, s.ash, third, s.moss)).toMatchObject({ status: 403, code: 'PM_REQUIRED' })
     expect(await s.row(140)).toBeNull()
     expect(await s.offer(140, s.ash)).toMatchObject({ status: 200, data: { offer: { agentId: s.ash } } })

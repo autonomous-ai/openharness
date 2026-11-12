@@ -97,7 +97,7 @@ All under `/api/super-tabs/:tabId/task-offers`. The server enforces who; a daemo
 
 | Route | Who may call it | What |
 |---|---|---|
-| `POST ?asAgentId=<PM>` `{ repository, number, agentId }` | The computer that runs `asAgentId`, signed in as that agent's own person; and `asAgentId` is the PM of the repository's project: of the Swarm's projects on it with a PM, the one that got its address first. The agent offered reads that project, is not the PM itself, and runs on its own person's computer | Offers the task. `409 OFFER_LIVE` while another agent's offer of it is live. `422 AGENT_NOT_OWN_COMPUTER` for an agent on a computer lent to its person. At most 1,200 new offers an hour for one PM |
+| `POST ?asAgentId=<PM>` `{ repository, number, agentId }` | The computer that runs `asAgentId`, signed in as that agent's own person; and `asAgentId` is the PM of the repository's project: of the Swarm's projects on it with a PM, the one that got it first, by its address or its name. The agent offered reads that project, is not the PM itself, and runs on its own person's computer | Offers the task. `409 OFFER_LIVE` while another agent's offer of it is live. `422 AGENT_NOT_OWN_COMPUTER` for an agent on a computer lent to its person. At most 1,200 new offers an hour for one PM |
 | `POST /accept?asAgentId=<agent>` `{ repository, number }` | The computer that runs `asAgentId`, signed in as that agent's own person; and the live offer of the task is that agent's | Accepts. `409 OFFER_NOT_LIVE` otherwise, in one answer whether it lapsed, was declined, is another's or never was |
 | `POST /decline?asAgentId=<agent>` `{ repository, number, reason }` | The same | Declines, with a reason word. Also after accepting, while it is live |
 | `GET ?repository=<owner/name>&numbers=<n,…>[&asAgentId=…]` | A person or an agent that reads the repository's project | The offers of the tasks asked (at most 100 a read; its PM asks for the tasks it plans), live or ended in the last 10 minutes |
@@ -111,7 +111,7 @@ left or never joined. Inside a Swarm the caller reads, a refusal keeps its own w
 
 **One coordinator for a repository.** A project's repository is set by its owner or lead with no proof of access to
 it, so a member could make a later project on a repository and hold its tasks with offers to their own agents. The
-repository's project is, of the Swarm's projects on it that have a PM, the one that got its address first
+repository's project is, of the Swarm's projects on it that have a PM, the one that got it first by its address or its name
 (`githubComments.ts` `repositoryProject`): only its PM offers, and its readers read the offers. A project's record
 keeps when it got its address (`repository.addressedAt`), at every write that gives it one: its lead's first
 `agent.add`, `project.repository`, a PM's start, and a tab's project from before projects. A project can instead name
@@ -260,8 +260,8 @@ Dates:
 6. **Migration and rollback.** The release's schema step makes the expiry index before the push, as it does the
    verdict records'. No stored data is rewritten. Rolled back, the previous release reads none of it, the rows
    expire by their index, and daemons fall back to labels.
-7. **Audience.** One predicate, `canReadProject`: the project read is the repository's project's readers' (the first
-   project made on it); the agent's read its own person's computer's. Copies of a record: the two reads. The push
+7. **Audience.** One predicate, `canReadProject`: the project read is the repository's project's readers' (the one
+   that got it first, by its address or its name); the agent's read its own person's computer's. Copies of a record: the two reads. The push
    carries only the Swarm's id. Nothing is in the Swarm's state, a change feed, a notification, a chat or a log; the
    counters carry no id.
 8. **Identity.** An offer is made as the PM, and an answer as the offered agent, each from the computer that runs
@@ -269,7 +269,7 @@ Dates:
    another person's agent there, and that person cannot from any other computer; and no offer is made to an agent on a
    computer lent to its person, which nobody can answer. A take's writes are made with that person's own `gh`
    (`service.ts`, unchanged). Where the identity is missing the call is refused; nothing falls back to the machine's
-   owner. A repository has one coordinator in a Swarm, the PM of the project that got its address first: a member's later project on it
+   owner. A repository has one coordinator in a Swarm, the PM of the project that got it first, by its address or its name: a member's later project on it
    offers nothing.
 9. **Failure.** A refusal has a code and words. An offer nobody answers lapses and the PM's daemon logs it once for
    that builder. One accepted and not taken lapses, and its agent's idle watch tells its person. A task everyone
@@ -293,7 +293,7 @@ Dates:
 | **An offer forged by another member**: offering as the PM | The caller's own computer must run the agent it speaks as, under that agent's own person's sign-in, and that agent must be the project's PM. Another member is refused before anything is written |
 | ... accepting or declining another agent's offer | The same check, and the update's filter names the agent: another agent's answer changes nothing |
 | ... offering to an agent outside the project | The agent must read the project. One answer whether it does not or does not exist |
-| ... a member's later project on the repository, or an older one given its address later | One coordinator for a repository in a Swarm: the PM of the project that got its address first. A later one's PM offers nothing (`PM_REQUIRED`) |
+| ... a member's later project on the repository, or an older one given its address later | One coordinator for a repository in a Swarm: the PM of the project that got it first, by its address or its name. A later one's PM offers nothing (`PM_REQUIRED`) |
 | ... filling the collection | 1,200 new offers an hour for one PM; a repeat of a standing offer writes nothing |
 
 One case the record does not close, no worse than today:

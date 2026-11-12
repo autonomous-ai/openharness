@@ -102,8 +102,8 @@ export const PROJECT_STATUS_MAX = 2_000
 
 
 /** Where a project works: its folder on a machine, and the address its folder is cloned from, once it has one. `addressedAt`:
- *  when it got that address (epoch ms), as the project that got a repository's address first coordinates it
- *  (githubComments.ts repositoryProject). Absent on an address set before this was kept (2026-11-12), and on none yet. */
+ *  when it got that address (epoch ms), as the project that got a repository first, by its address or its name
+ *  (githubRepositoryAt), coordinates it (githubComments.ts repositoryProject). Absent on an address set before this was kept (2026-11-12), and on none yet. */
 export interface ProjectRepository { machineId: string; cwd: string; repositoryUrl: string | null; addressedAt?: number }
 
 /** [repository] as it is first written at [now], with when it got its address if it has one. */
