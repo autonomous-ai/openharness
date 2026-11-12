@@ -172,7 +172,8 @@ package 4 lets ride.
 
 **Stopped** (#4085, a draft with the `hold` label), as "GitHub's behaviour is checked on GitHub" says. GitHub answers
 `behind` before `blocked`: in two public repositories with up-to-date branches and a required review, every open pull
-request behind its base read `behind` though its review was still required (14 of 14, and 6 of 6). So "only behind"
+request behind its base read `behind` (14 of 14 in one, each with its review still required; 6 of 6 in the other, one
+with no approving review and two required checks that never reported). So "only behind"
 cannot be read from `mergeable_state`, and a change the repository's rules block would ride the train after the next
 landing. Waits for anh Dee: drop it, or let a behind change ride only where the base's rules, read from GitHub, are its
 checks and up-to-date branches alone. Where the base asks no up-to-date branches GitHub says `clean`, and the train
@@ -218,9 +219,10 @@ areas: mapping them is package 13's.
 ### 6. Disk
 
 **Not shipped.** Measured: the sweep's folder held 29 worktrees (21.6 GB); 116 more that agents made (56.4 GB) are
-outside it; and its idle week never ended, as `git gc` rewrites every reflog. A first build freed dependencies and
-build output in idle worktrees; its review said hold: a folder no rule ignores was deleted when each file in it is
-ignored by a rule of its own (`.env`, keys, a local database), and `build` is a name people give their own folders.
+outside it; and its idle week never ended, as `git gc` rewrites every reflog. A first build (branch
+`cli-worktree-disk`) freed dependencies and build output in idle worktrees; its review said hold: it deleted a folder
+no rule names whenever each file in it was ignored on its own (`.env`, keys, a local database), and `build` is a name
+people give their own folders.
 The rule to bring anh Dee again: only `node_modules`, `.dart_tool` and `.next`, only where a `.gitignore` rule names the
 folder itself, and the review's other findings closed first.
 
@@ -250,7 +252,7 @@ and each that lets it go.
 
 ### 7. CPU
 
-**Built, not in a pull request yet.** Each agent a Swarm starts gets its share of its computer's cores
+**Built, not in a pull request yet** (branch `cli-swarm-cpu-share`). Each agent a Swarm starts gets its share of its computer's cores
 (`HARNESS_CORES`), and the CLI's unit suite takes half of it; the plan stops counting cores (the mismatch). Measured on
 one Mac of 16 threads: an eighth of the CLI's unit suite started two or four at once, each sized to the machine, failed
 on deadlines every time; sized to half its share, none did. Owed: the write-up in `docs/research/`, a review, and the
@@ -323,7 +325,9 @@ code.
 **Designed** (#4114, a draft held for anh Dee): the design and a first slice: a project's suites file, a shard's
 result said by command as a commit status, and a suite's status read as a check. The next slice runs a train's code on
 people's computers, in their name, with no sandbox: his to decide. Found by its red test: a train with any one commit
-status on its tip and no check of its own lands on what CI never ran; closed there for `suite:` statuses only.
+status on its tip and no check of its own lands on what CI never ran. Main still has it (`checksOf` in
+`githubMerge.ts`): one green status from any bot lets a train land before CI starts. That draft closes it for `suite:`
+statuses only.
 
 **For private teams.** An open project needs the sandbox first, which was set aside on 11 November.
 
@@ -354,9 +358,9 @@ in what a person must do. Then build the one he picks.
 ### 12. Tokens for a task, and the cost on a landed change
 
 **Built, the server's half** (#4109): `backend/src/superTabs/taskTokens.ts` and its two routes, kept 90 days. The
-daemon's half is built and not in a pull request: the landing comment would say the builder's model, minutes, tokens
-and fix rounds, public on a public repository, which waits for anh Dee's word. Not deployed: the next backend release
-carries the server's half.
+daemon's half is built and not in a pull request (branch `swarm-task-tokens`): the landing comment would say the
+builder's model, minutes, tokens and fix rounds, public on a public repository, which waits for anh Dee's word. The
+server's half was released in `v1.4.80_backend`.
 
 **Why.** No saving can be claimed, and no model or price chosen, without it. Each daemon counts its conversations'
 tokens by model and kind (`cli/src/lib/agentTokenUsage.ts`); nothing ties a count to a task. The server's cost
@@ -445,7 +449,7 @@ That only the price leaves a person's computer waits for package 16: today the p
 
 ### 16. Offers accepted on the agent's own computer
 
-**Begun**: the server's half (the offer record), not in a pull request.
+**Begun**: the server's half (the offer record), not pushed.
 
 **Why.** A machine takes work only when it has the room, checked where the truth is; a person's quota need not
 leave their computer; a label is set by the one who does the work.
@@ -470,7 +474,7 @@ workflow in server code (the plan's "Not built"): the server referees one record
 
 ## Research, alongside
 
-- **An area's worth.** *Done* ([the study](../../research/2026-11-12-area-worth/README.md)): in lampOS's record a
+- **An area's worth.** *Study done; constants not changed* ([the study](../../research/2026-11-12-area-worth/README.md)): in lampOS's record a
   builder was 1.12 times as fast in an area it had landed work in (0.85 to 1.49), and held no less often: no
   measurable difference. Neither the planned threefold spread nor the 40% learning discount is supported. The study
   could not test an area a person declares (5 role files named one), so `FOCUS`, `AWAY` and the learning steps are

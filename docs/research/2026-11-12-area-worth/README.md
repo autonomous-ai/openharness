@@ -34,7 +34,8 @@
 ## Method, data and limits
 
 **What was asked of GitHub.** 66 GraphQL and 54 REST requests (budgets 120 and 300; 3 failed), each a line in
-`area-worth-data/requests.log`, the queries verbatim in `area-worth.py`. `gh api rate_limit` before: 2,450 REST
+`area-worth-data/requests.log`, the queries verbatim in `area-worth.py` (all but the two dropped GraphQL pages and the
+two REST calls for the repository's size). `gh api rate_limit` before: 2,450 REST
 and 4,875 GraphQL points left; after, in a new hour shared with other work: 1,680 and 4,755.
 
 | step | request | count |

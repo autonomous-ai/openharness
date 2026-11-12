@@ -12,7 +12,7 @@ its request budgets (120 GraphQL, 300 REST). Run with `python3 -I` (the data fol
     python3 -I area-worth.py more-reads     # GraphQL, 1: the comments past the 60th of the four that have them
     python3 -I area-worth.py claims 12      # GraphQL, 10: when each task issue was labelled status:taken
     python3 -I area-worth.py files          # no network: the files each pull request changed, from the clone
-    python3 -I area-worth.py analyze        # no network: every number in area-worth.md
+    python3 -I area-worth.py analyze        # no network: every number in README.md
     python3 -I area-worth.py selfcheck      # no network: how often the tests cry wolf when nothing is there
 
 The clone `files` reads was made once, by hand, with no API request (commits and trees only, 21 MB):
@@ -892,7 +892,7 @@ def binomial_two_sided(k, n):
 
 
 # ---------------------------------------------------------------------------------------------------------
-# The analysis. Everything printed here is in area-worth.md.
+# The analysis. Everything printed here is in README.md.
 
 BANDS = [(0, 50, "1-50"), (51, 200, "51-200"), (201, 500, "201-500"), (501, 1500, "501-1500"),
          (1501, 10 ** 9, "over 1500")]
