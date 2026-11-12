@@ -5,6 +5,9 @@ import { captureLaunchExecutable } from './kit/launchExecutable.js'
 import { LAUNCH_LOCATION_VARIABLES, nativeHookLocations } from './kit/nativeLocations.js'
 import { engineHooks } from './hooks.js'
 import * as hooks from './nativeHooks.js'
+import { buildEngineLaunchArgv } from '../lib/engineLaunch.js'
+import { shellSingleQuote } from '../lib/shellQuote.js'
+import { launchScriptOf } from '../testing/launchScript.js'
 
 const fixture = vi.hoisted(() => ({ identity: '', current: true, hooks: true, version: '2.0.0', help: '--auto --permission-mode --approve-for-me', calls: [] as string[], pending: [] as (() => void)[], stalled: false, failed: false, environments: [] as NodeJS.ProcessEnv[], exit: 0, stderr: '' }))
 vi.mock('./kit/launchExecutable.js', async original => ({ ...await original<typeof import('./kit/launchExecutable.js')>(), captureLaunchExecutable: vi.fn(async (engine: string) => ({ state: 'ready',
@@ -372,6 +375,40 @@ it('an explicit claudeHome is adopted as a known home, so its transcripts bind',
   if (!result.ok) throw Error(result.detail)
   expect(await result.launch.prepareHooks(19473, () => true)).toBe(true)
   expect(confirmHome).toHaveBeenCalledWith('claude', '/fixture/profile')
+})
+
+describe('a local OpenClaw launch', () => {
+  const AGENT = 'aaaaaaaa-1111-4222-8333-000000000001'
+  const LOCAL_CLEAR = ['OPENCLAW_CONFIG_PATH', 'OPENCLAW_AGENT_DIR', 'OPENCLAW_OAUTH_DIR', 'OPENCLAW_WORKSPACE_DIR']
+  // A launch shell that sets its own state folder, as an owner's profile would.
+  const shellWithState = () => vi.mocked(captureLaunchExecutable).mockResolvedValueOnce({ state: 'ready',
+    executable: { command: '/fixture/engine', identity: `${fixture.identity}:openclaw`, current: () => fixture.current },
+    environment: { HOME: '/fixture/home', PATH: '/fixture/bin', OPENCLAW_STATE_DIR: '/shell/state' } } as never)
+  it('pins its folder and clears the other OpenClaw paths', async () => {
+    shellWithState()
+    const found = await inspectNativeLaunch('openclaw', { openclawLocal: "/run/it's" })
+    if (!found.ok) throw new Error(found.detail)
+    expect(found.launch.openclawLocal).toBe("/run/it's")
+    expect(found.launch.environment.OPENCLAW_STATE_DIR).toBe("/run/it's")
+    expect(found.launch.clearEnvironment).toEqual(expect.arrayContaining(LOCAL_CLEAR))
+    const script = launchScriptOf(buildEngineLaunchArgv('openclaw', { native: found.launch, agentId: AGENT }, '/bin/zsh', '/opt/node', 'grid', null))
+    expect(script).toContain(`export OPENCLAW_STATE_DIR=${shellSingleQuote("/run/it's")}`)
+    expect(script.indexOf('OPENCLAW_CONFIG_PATH')).toBeLessThan(script.indexOf('export OPENCLAW_STATE_DIR='))
+  })
+  it('a launch with no folder, and another engine given one, are as before', async () => {
+    shellWithState()
+    const shared = await inspectNativeLaunch('openclaw', {})
+    if (!shared.ok) throw new Error(shared.detail)
+    expect(shared.launch).not.toHaveProperty('openclawLocal')
+    expect(shared.launch.environment.OPENCLAW_STATE_DIR).toBe('/shell/state')
+    for (const key of LOCAL_CLEAR) expect(shared.launch.clearEnvironment).not.toContain(key)
+    const plain = await inspectNativeLaunch('claude', {})
+    const given = await inspectNativeLaunch('claude', { openclawLocal: '/run/skill-1' })
+    if (!plain.ok || !given.ok) throw new Error('fixture held')
+    expect(given.launch).not.toHaveProperty('openclawLocal')
+    expect(given.launch.environment).toEqual(plain.launch.environment)
+    expect(given.launch.clearEnvironment).toEqual(plain.launch.clearEnvironment)
+  })
 })
 
 // Windows has no launch script to probe Codex's owned-process flag before each run (engines/kit/launchStartup.ts):
