@@ -395,6 +395,16 @@ describe('a local OpenClaw launch', () => {
     expect(script).toContain(`export OPENCLAW_STATE_DIR=${shellSingleQuote("/run/it's")}`)
     expect(script.indexOf('OPENCLAW_CONFIG_PATH')).toBeLessThan(script.indexOf('export OPENCLAW_STATE_DIR='))
   })
+  it('keeps its folder through what the launch adds or clears as it prepares', async () => {
+    shellWithState()
+    const found = await inspectNativeLaunch('openclaw', { openclawLocal: '/run/skill-1' })
+    if (!found.ok) throw new Error(found.detail)
+    expect(await found.launch.prepareHooks(0, () => true, { OPENCLAW_STATE_DIR: '/shared/state' })).toBe(true)
+    expect(found.launch.environment.OPENCLAW_STATE_DIR).toBe('/run/skill-1')
+    expect(await found.launch.prepareHooks(0, () => true, {}, ['OPENCLAW_STATE_DIR'])).toBe(true)
+    expect(found.launch.environment.OPENCLAW_STATE_DIR).toBe('/run/skill-1')
+    expect(found.launch.clearEnvironment).not.toContain('OPENCLAW_STATE_DIR')
+  })
   it('a launch with no folder, and another engine given one, are as before', async () => {
     shellWithState()
     const shared = await inspectNativeLaunch('openclaw', {})
