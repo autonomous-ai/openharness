@@ -155,6 +155,7 @@ describe('the OpenClaw contract', () => {
       expect(columns.filter((column) => !recorded.get(table)?.has(column)), table).toEqual([])
     }
     expect(OPENCLAW_COLUMNS.transcript_events).toContain('navigation_json')
+    expect(OPENCLAW_COLUMNS.transcript_events).toContain('event_utf8_bytes')
   })
 
   it('finds an agent\'s database in the state folder, or where the config moved the agent', () => {
