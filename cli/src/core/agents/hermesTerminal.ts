@@ -27,6 +27,8 @@ export interface HermesTerminalDeps {
   read: (home: string, names: readonly string[], sinceMs: number) => Promise<TerminalRecordRead>
   /** Throws when the store cannot be read. */
   kind: (home: string, sessionId: string) => Promise<'own' | 'waiting' | 'other'>
+  /** Whether the session was ended at or after a moment. Throws when the store cannot be read. */
+  endedSince: (home: string, sessionId: string, sinceMs: number) => Promise<boolean>
   /** Told each time an agent's process is first seen keeping a record in a home. */
   recordSeen: (home: string) => void
   now: () => number
@@ -81,6 +83,7 @@ export function createHermesTerminal(deps: HermesTerminalDeps) {
     const entry = entryOf(agent.agentId)
     const { pid, startMarker } = observed.processIdentity
     const process = `${pid}:${startMarker}`
+    const startedAtMs = Date.parse(startMarker)
     if (entry.run?.process !== process) entry.run = { process, asks: 0, lastAsk: 0, recordSeen: false }
     const run = entry.run
     let names = run.names
@@ -96,7 +99,6 @@ export function createHermesTerminal(deps: HermesTerminalDeps) {
     const stamp = await deps.stamp(home, names)
     let known = run.known
     if (known?.stamp !== stamp) {
-      const startedAtMs = Date.parse(startMarker)
       const read: TerminalRecordRead = Number.isFinite(startedAtMs)
         ? await deps.read(home, names, startedAtMs - START_SLACK_MS)
         : { state: 'none' }
@@ -128,6 +130,19 @@ export function createHermesTerminal(deps: HermesTerminalDeps) {
     if (run.asks >= REPAIR_EAGER_ATTEMPTS && now - run.lastAsk < REPAIR_RETRY_MS) return 'wait'
     run.asks += 1
     run.lastAsk = now
+    // A resume not yet confirmed is failed by any other session (registry.ts RESUME_SESSION_MISMATCH), and a `/new` typed
+    // before a pass read the record leaves it naming only the new one. Hermes ends the session a terminal leaves: the
+    // resumed one ended since this process started was open in it, and is confirmed first; the next pass follows.
+    if (agent.resumeOnly && agent.lastHookAt === 0 && agent.sessionId) {
+      let left: boolean
+      try {
+        left = await deps.endedSince(home, agent.sessionId, startedAtMs - START_SLACK_MS)
+      } catch {
+        return 'wait'
+      }
+      if (!pass.current()) return 'wait'
+      if (left) return { sessionId: agent.sessionId }
+    }
     let kind: Awaited<ReturnType<HermesTerminalDeps['kind']>>
     try {
       kind = await deps.kind(home, sessionId)

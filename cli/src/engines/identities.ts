@@ -10,11 +10,12 @@ import { env } from '../config/env.js'
 import { readProcessEnv } from '../lib/processEnv.js'
 import { processView } from '../lib/processMounts.js'
 import type { ProcessIdentity } from '../lib/terminalTypes.js'
-import { HERMES_HISTORY_ID_RE, HERMES_HOME_RULE, HERMES_SOURCE, HERMES_TERMINAL_RECORD, hermesDbPath } from './hermes/contract.js'
+import { HERMES_HISTORY_ID_RE, HERMES_HOME_RULE, HERMES_SESSION_END, HERMES_SOURCE, HERMES_TERMINAL_RECORD, hermesDbPath } from './hermes/contract.js'
 import { homeFromEnvironment, homeIsNamed } from './kit/processHome.js'
 import { readTerminalRecord, terminalRecordNames, terminalRecordStamp, type Terminal, type TerminalRecordRead } from './kit/terminalRecord.js'
 import { isInteractiveSource, readStoreSessionSource } from './kit/storeSource.js'
 import { IdentityReadUnavailable } from './kit/identityScan.js'
+import { sqliteReadAll } from '../lib/sqliteRead.js'
 import type { AgentEngine } from './types.js'
 
 const transcripts = { cursor: CURSOR_TRANSCRIPT, grok: GROK_TRANSCRIPT, agy: AGY_TRANSCRIPT, copilot: COPILOT_TRANSCRIPT }
@@ -108,4 +109,16 @@ export async function hermesSessionKind(home: string, sessionId: string): Promis
   if (source === null) return 'waiting'
   if (typeof source === 'object') throw new IdentityReadUnavailable('the Hermes session source is unavailable')
   return isInteractiveSource(HERMES_SOURCE, source) ? 'own' : 'other'
+}
+
+/**
+ * Whether a session was ended at or after [sinceMs]. Hermes ends the session a terminal leaves and opens again one it
+ * resumes, so one ended since a process started was open in that process. Throws when the store cannot be read.
+ */
+export async function hermesSessionEndedSince(home: string, sessionId: string, sinceMs: number): Promise<boolean> {
+  if (!HERMES_HISTORY_ID_RE.test(sessionId)) return false
+  const result = await sqliteReadAll(hermesDbPath(home), HERMES_SESSION_END.query, [sessionId], { maxBuffer: HERMES_SESSION_END.maxBuffer })
+  if (!result.ok) throw new IdentityReadUnavailable('the Hermes session end is unavailable')
+  const ended = result.rows[0]?.[HERMES_SESSION_END.column]
+  return typeof ended === 'number' && ended * 1000 >= sinceMs
 }

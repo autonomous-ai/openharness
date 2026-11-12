@@ -448,9 +448,7 @@ export function createBinding({
       if (answer !== 'none' && agent.sessionId) {
         // `/new`, `/resume`, a branch and a compression split all rewrite the record: the rotation the Copilot switch
         // takes, so the reader, the recaps and the apps see a session change as they saw one from a hook.
-        if (answer.sessionId !== agent.sessionId) {
-          console.log(`[discovery] ${sid(agent.agentId)} switched hermes session ${sid(agent.sessionId)} → ${sid(answer.sessionId)}`)
-        }
+        const was = agent.sessionId
         const rotated = commit({
           engine: 'hermes',
           sessionId: answer.sessionId,
@@ -461,7 +459,11 @@ export function createBinding({
           processIdentity: observed.processIdentity,
           hookEvent: 'HermesTerminal',
         })
-        if (rotated?.isNew) followRegistered(rotated.entry, rotated)
+        if (!rotated?.isNew) return
+        // Said once the registry took it: a switch it refuses (a resume that reopened another conversation) is retried
+        // in the repair's rhythm, and is no switch.
+        if (answer.sessionId !== was) console.log(`[discovery] ${sid(agent.agentId)} switched hermes session ${sid(was)} → ${sid(answer.sessionId)}`)
+        followRegistered(rotated.entry, rotated)
         return
       }
       if (answer !== 'none') followed = answer

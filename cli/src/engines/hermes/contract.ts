@@ -154,6 +154,17 @@ export const HERMES_TERMINAL_RECORD = {
   time: 'ts',
 } as const
 
+/**
+ * When a session ended, in seconds since the epoch, or NULL while it is open (`hermes_state.py` `end_session`): the
+ * session a terminal leaves (`/new`, `/resume`, a branch, a compression split, its exit) is ended then, and one it
+ * resumes is opened again (`reopen_session`).
+ */
+export const HERMES_SESSION_END = {
+  query: "SELECT CASE WHEN typeof(ended_at) IN ('integer', 'real') THEN ended_at END AS ended FROM sessions WHERE id = ? LIMIT 2;",
+  column: 'ended',
+  maxBuffer: 1 << 16,
+} as const
+
 /** A home set to the TUI writes no terminal record (`hermes_cli/main.py` `_config_default_interface_early`). */
 export const HERMES_INTERFACE = { file: 'config.yaml', section: 'display', key: 'interface', tui: 'tui', maxBytes: 1 << 20 } as const
 
