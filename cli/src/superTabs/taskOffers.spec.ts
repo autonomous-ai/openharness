@@ -390,7 +390,7 @@ describe('the offers made to this computer\'s agents, answered here (OfferAnswer
     const web = (number: number, offeredAt: number, state: TaskOffer['state'] = 'offered'): TaskOffer => ({ ...f.offer(number, offeredAt), repository: 'acme/web', state })
     const there = (...items: Json[]) => f.state.labelled.set('acme/web|builder:pip', items)
     f.state.watched = [{ ...PIP, repos: ['acme/app', 'acme/web'], active: ['acme/app', 'acme/web'] }, JUNO]
-    for (const number of [3, 15, 16, 17, 18, 19, 20, 21, 22]) f.state.tasks.set(number, task(['size:s']))
+    for (const number of [3, 15, 16, 17, 18, 19, 20, 21, 22, 23]) f.state.tasks.set(number, task(['size:s']))
     f.state.tasks.set(19, task([], { state: 'closed' }))
     // Offered one in each project in one pass: it takes the first, and the second waits for it.
     f.state.offers.set('pip', [web(3, 1), f.offer(15, 2)])
@@ -412,13 +412,18 @@ describe('the offers made to this computer\'s agents, answered here (OfferAnswer
     f.state.labelled.set('acme/app|builder:pip', [item(13, ['builder:pip', 'status:taken', 'size:s'])])
     f.state.offers.set('pip', [web(3, 1, 'accepted'), f.offer(20, 7)])
     await fresh.answer('tab')
-    // Accepted in the offer's own project and given there nowhere yet: in hand all the same.
+    // Accepted in the offer's own project and given there nowhere yet: in hand all the same. Given there, its pull request up
+    // while the hold lasts: free (its own labels are read for this alone).
     f.state.labelled.set('acme/app|builder:pip', [])
     f.state.offers.set('pip', [{ ...f.offer(21, 8), state: 'accepted' }, f.offer(22, 9)])
     await fresh.answer('tab')
+    f.state.labelled.set('acme/app|builder:pip', [item(21, ['builder:pip', 'status:taken', 'size:s']),
+      item(41, ['builder:pip'], { pull_request: {}, draft: false, body: 'Closes #21' })])
+    f.state.offers.set('pip', [{ ...f.offer(21, 8), state: 'accepted' }, f.offer(23, 10)])
+    await fresh.answer('tab')
     expect(f.answered().map(([path, body]) => [path, (body as Json).number, (body as Json).reason])).toEqual([['accept?asAgentId=pip', 3, undefined],
       ['decline?asAgentId=pip', 15, 'busy'], ['decline?asAgentId=pip', 16, 'busy'], ['decline?asAgentId=pip', 19, 'gone'], ['decline?asAgentId=pip', 17, 'busy'],
-      ['decline?asAgentId=pip', 18, 'busy'], ['accept?asAgentId=pip', 20, undefined], ['decline?asAgentId=pip', 22, 'busy']])
+      ['decline?asAgentId=pip', 18, 'busy'], ['accept?asAgentId=pip', 20, undefined], ['decline?asAgentId=pip', 22, 'busy'], ['accept?asAgentId=pip', 23, undefined]])
     expect(f.say).not.toHaveBeenCalled()
   })
 
@@ -426,8 +431,8 @@ describe('the offers made to this computer\'s agents, answered here (OfferAnswer
     const f = setup()
     const others = Array.from({ length: 12 }, (_, i) => `acme/p${i}`)
     f.state.watched = [{ ...PIP, repos: ['acme/app', 'acme/old', 'acme/gone', ...others], active: ['acme/app', 'acme/gone', ...others] }, JUNO]
-    // Given to it in an archived project, a task no plan counts.
-    f.state.labelled.set('builder:pip', [])
+    // Taken by it in an archived project, a task no plan counts.
+    f.state.labelled.set('acme/old|builder:pip', [{ number: 9, labels: [{ name: 'builder:pip' }, { name: 'status:taken' }] }])
     await f.answers.answer('tab')
     f.state.tasks.set(15, task(['size:s']))
     f.state.offers.set('pip', [f.offer(15, 2)])

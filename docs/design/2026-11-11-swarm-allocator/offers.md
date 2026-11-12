@@ -148,12 +148,12 @@ was on its way to GitHub, and the next agent would take it too. An accepted offe
 ## What the daemon checks, and what it says
 
 On the agent's own computer, for an offer to one of its person's own agents running there
-(`cli/src/superTabs/taskOffers.ts` `noRoom`, read in this order):
+(`cli/src/superTabs/taskOffers.ts` `noRoom` and `busy`, read in this order):
 
 | Check | Declines with |
 |---|---|
 | The task is of a project of the agent's, open, an issue, and carries no other builder's label and no `status:taken` but its own (one read of GitHub) | `gone` |
-| The agent has no task in hand in another project of its Swarm: none given or taken to it there with no pull request of its up, as that project's plan counts one (`buildingIn`, package 11), and none it accepted there (the server's live accepted offers, so a restart forgets none) that is given to it there nowhere yet. A second project's plan reads only labels, so between an accept and its give it saw the agent free and could offer it a second task (found merging package 11 into this). The offer's own project is not read: its plan counts its own tasks by their pull requests' branches and its offers by this record, and its labels could say busy where its plan says free. The others are read as a plan reads them: projects not archived, the first 10, one that cannot be read counting nothing, each said once | `busy` |
+| The agent has no task in hand: none given or taken to it in another project of its Swarm with no pull request of its up, as that project's plan counts one (`buildingIn`, package 11), and none it accepted in any project (the server's live accepted offers, so a restart forgets none) that is given to it nowhere yet. A second project's plan reads only labels, so between an accept and its give it saw the agent free and could offer it a second task (found merging package 11 into this). The offer's own project counts none of its tasks by labels: its plan counts them by their pull requests' branches, and its labels could say busy where its plan says free; they are read only for which accepted offers are given there. The others are read as a plan reads them: projects not archived, the first 10, one that cannot be read counting nothing, each said once | `busy` |
 | The machine has each tool its `needs:` labels name, its system and a GPU as asked (the tools probed here, as a start probes them) | `tools` |
 | Free memory holds the task's size (s 2 GB, m 4 GB, l 8 GB), and memory pressure is not critical | `memory` |
 | The project's disk, less the 10 GB its person keeps, holds it (1, 2, 4 GB) | `disk` |
