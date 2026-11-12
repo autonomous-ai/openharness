@@ -38,6 +38,13 @@ describe('an agent\'s post without its own signature', () => {
       ['@Devon @Cy Lennox, 16:25: ready for #4208.', ['Lennox'], '@Devon @Cy ready for #4208.'],
       ['@Devon **Lennox:** ready.', ['Lennox'], '@Devon ready.'],
       ['  @Devon   Lennox: ready.', ['Lennox'], '@Devon ready.'],
+      ['@Devon\n\nLennox: ready.\n\nSecond.', ['Lennox'], '@Devon ready.\n\nSecond.'],
+      // What follows opens a block: the mentions keep a line of their own, or it no longer renders (review of #4210), as the
+      // server joins tags and a post (backend mentions.ts withTags).
+      ['@Devon Lennox:\n\n- one\n- two', ['Lennox'], '@Devon\n\n- one\n- two'],
+      ['@Devon Lennox:\n```\nnpm test\n```', ['Lennox'], '@Devon\n\n```\nnpm test\n```'],
+      ['@Devon Lennox:\n## Plan\nship', ['Lennox'], '@Devon\n\n## Plan\nship'],
+      ['@Devon Lennox:\n| a | b |\n|---|---|', ['Lennox'], '@Devon\n\n| a | b |\n|---|---|'],
     ] as const) {
       expect(unsigned(text, names), text).toBe(left)
     }

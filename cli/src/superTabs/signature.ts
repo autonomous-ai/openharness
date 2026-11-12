@@ -21,7 +21,14 @@ const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 const ENGINE = /^(?:claude(?: code)?|codex|opencode|pi)$/i
 
 /** The mentions a post opens with ("@Devon @Cy "), each a word of its own. */
-const MENTIONS = /^\s*((?:@[^\s@]+\s+)+)/
+const MENTIONS = /^\s*(?:@[^\s@]+\s+)+/
+
+/** Text that opens with a block (a list, heading, quote, table, code, divider or link definition), which the mentions before it
+ *  leave on a line of their own, so that it still renders. The server's rule for tags and a post (backend superTabs/mentions.ts
+ *  withTags), and Desktop's (super_tabs/message_text.dart withTags): kept the same in all three. */
+const OPENS_BLOCK = new RegExp('^(?: {4}|\\t| {0,3}(?:[-*+](?:[ \\t\\n]|$)|#{1,6}(?:[ \\t\\n]|$)|>'
+  + '|\\d{1,9}[.)](?:[ \\t\\n]|$)|```|~~~|\\||\\[[^\\]\\n]+\\]:'
+  + '|(?:(?:\\*[ \\t]*){3,}|(?:-[ \\t]*){3,}|(?:_[ \\t]*){3,})(?:\\n|$)))')
 
 /** [text] without a signature of any of [names] at its start, or after the mentions it opens with; as it is when it has none,
  *  or nothing after it. */
@@ -29,7 +36,9 @@ export function unsigned(text: string, names: ReadonlyArray<string | null | unde
   const mentions = MENTIONS.exec(text)
   if (mentions) {
     const said = signedOff(text.slice(mentions[0].length), names)
-    return said === null ? text : `${mentions[1]!.trim().split(/\s+/).join(' ')} ${said}`
+    if (said === null) return text
+    const tags = mentions[0].trim().split(/\s+/).join(' ')
+    return OPENS_BLOCK.test(said) ? `${tags}\n\n${said}` : `${tags} ${said}`
   }
   return signedOff(text, names) ?? text
 }
