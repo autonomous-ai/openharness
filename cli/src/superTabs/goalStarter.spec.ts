@@ -210,14 +210,30 @@ describe('a project\'s goal, shown from a checkout', () => {
     // A link in place of the agents folder, or of the workflow's folder.
     const linked = folder()
     symlinkSync(elsewhere, join(linked, 'agents'))
-    expect(await showGoal(linked, git(linked, null))).toEqual({ ok: true, said: 'agents is a link: agents/GOAL.md was not read.' })
+    expect(await showGoal(linked, git(linked, null))).toEqual({ ok: false, said: 'agents is a link: agents/GOAL.md was not read.' })
     const workflows = folder(), outside = folder()
     mkdirSync(join(workflows, 'agents'))
     writeFileSync(join(workflows, 'agents/GOAL.md'), `${GOAL_TEXT}| Builds | \`npm run build\` |\n`)
     mkdirSync(join(outside, 'workflows'))
     writeFileSync(join(outside, 'workflows/goal.yml'), goalWorkflow('main'))
     symlinkSync(outside, join(workflows, '.github'))
-    expect((await showGoal(workflows, git(workflows, null))).said).toContain(NO_WORKFLOW)
+    expect((await showGoal(workflows, git(workflows, null))).said).toContain('Its workflow\'s folder, .github, is a link: the workflow was not '
+      + 'read, and `harness super-tab goal write` writes nothing through it.')
+    // The workflow itself a link, and a file where its folder goes: named apart from the goal file, which still reads.
+    rmSync(join(workflows, '.github'))
+    mkdirSync(join(workflows, '.github/workflows'), { recursive: true })
+    symlinkSync(join(outside, 'workflows/goal.yml'), join(workflows, '.github/workflows/goal.yml'))
+    expect(await showGoal(workflows, git(workflows, null))).toMatchObject({ ok: true, said: expect.stringContaining('Its workflow, '
+      + '.github/workflows/goal.yml, is not a plain file (a link or a folder): it was not read.') })
+    rmSync(join(workflows, '.github'), { recursive: true })
+    mkdirSync(join(workflows, '.github'))
+    writeFileSync(join(workflows, '.github/workflows'), 'not a folder')
+    expect(await showGoal(workflows, git(workflows, null))).toMatchObject({ ok: true, said: expect.stringMatching(
+      /states 1 milestone[\s\S]*Its workflow, \.github\/workflows\/goal\.yml, could not be read here \(ENOTDIR\)\.$/) })
+    // A file where the agents folder goes: the goal file's own path fails, and says so.
+    const flat = folder()
+    writeFileSync(join(flat, 'agents'), 'not a folder')
+    expect(await showGoal(flat, git(flat, null))).toEqual({ ok: false, said: 'agents/GOAL.md could not be read here (ENOTDIR).' })
     expect(await showGoal(root, git(null, null))).toEqual({ ok: false, said: 'This folder is in no git repository: run it in your checkout of the project.' })
   })
 

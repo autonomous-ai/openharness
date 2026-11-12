@@ -166,24 +166,39 @@ export async function showGoal(cwd: string, git: Git = gitLine): Promise<{ ok: b
   const root = await git(cwd, ['rev-parse', '--show-toplevel'])
   if (!root) return { ok: false, said: 'This folder is in no git repository: run it in your checkout of the project.' }
   const base = await mainBranch(root, git)
-  const linked = linkedFolder(root, GOAL_FILE)
-  if (linked) return { ok: true, said: `${linked} is a link: ${GOAL_FILE} was not read.` }
+  let rows: ReturnType<typeof goalRows>
   try {
+    const linked = linkedFolder(root, GOAL_FILE)
+    if (linked) return { ok: false, said: `${linked} is a link: ${GOAL_FILE} was not read.` }
     const file = lstatSync(join(root, GOAL_FILE), { throwIfNoEntry: false })
     if (!file) return { ok: true, said: `This checkout states no goal yet: ${GOAL_FILE} is not in it. Pull ${base} first if another agent `
       + `may have added one; if not, ask your person what the project is for, then \`harness super-tab goal write\` writes ${GOAL_FILE} `
       + 'and the workflow that checks it.' }
-    if (!file.isFile()) return { ok: true, said: `${GOAL_FILE} is not a plain file (a link or a folder): it was not read.` }
+    if (!file.isFile()) return { ok: false, said: `${GOAL_FILE} is not a plain file (a link or a folder): it was not read.` }
     if (file.size > SHOWN_MAX) return { ok: false, said: `${GOAL_FILE} is over 1 MB, more than Harness reads of it: shorten it.` }
-    const rows = goalRows(readFileSync(join(root, GOAL_FILE), 'utf8'))
-    const workflow = !linkedFolder(root, GOAL_WORKFLOW) && lstatSync(join(root, GOAL_WORKFLOW), { throwIfNoEntry: false })?.isFile()
-    const missing = workflow ? '' : `Its workflow, ${GOAL_WORKFLOW}, is not in this checkout: \`harness super-tab goal write\` writes it.`
-    if (!rows.length) return { ok: true, said: `${GOAL_FILE} in this checkout states no milestone yet. Add a row for each: `
-      + `| what must be true | \`the command that proves it\` |${missing ? ` ${missing}` : ''}` }
-    const listed = rows.map(row => `\n- ${row.milestone}: \`${row.check}\``).join('')
-    return { ok: true, said: `${GOAL_FILE} in this checkout states ${rows.length === 1 ? '1 milestone, checked' : `${rows.length} milestones, each checked`} `
-      + `on ${base}${workflow ? ` by ${GOAL_WORKFLOW}` : ''} once it lands there:${listed}${missing ? `\n${missing}` : ''}` }
+    rows = goalRows(readFileSync(join(root, GOAL_FILE), 'utf8'))
   } catch (error) {
     return { ok: false, said: `${GOAL_FILE} could not be read here (${(error as NodeJS.ErrnoException).code}).` }
   }
+  const missing = workflowNote(root)
+  if (!rows.length) return { ok: true, said: `${GOAL_FILE} in this checkout states no milestone yet. Add a row for each: `
+    + `| what must be true | \`the command that proves it\` |${missing ? ` ${missing}` : ''}` }
+  const listed = rows.map(row => `\n- ${row.milestone}: \`${row.check}\``).join('')
+  return { ok: true, said: `${GOAL_FILE} in this checkout states ${rows.length === 1 ? '1 milestone, checked' : `${rows.length} milestones, each checked`} `
+    + `on ${base}${missing ? '' : ` by ${GOAL_WORKFLOW}`} once it lands there:${listed}${missing ? `\n${missing}` : ''}` }
+}
+
+/** What is wrong with the checkout's goal workflow, in words that send the agent nowhere `goal write` refuses; '' when it is
+ *  there. Named apart from the goal file, which reads well whatever the workflow's path does (the review of #4205). */
+function workflowNote(root: string): string {
+  try {
+    const linked = linkedFolder(root, GOAL_WORKFLOW)
+    if (linked) return `Its workflow's folder, ${linked}, is a link: the workflow was not read, and \`harness super-tab goal write\` writes nothing through it.`
+    const workflow = lstatSync(join(root, GOAL_WORKFLOW), { throwIfNoEntry: false })
+    if (workflow?.isFile()) return ''
+    if (workflow) return `Its workflow, ${GOAL_WORKFLOW}, is not a plain file (a link or a folder): it was not read.`
+  } catch (error) {
+    return `Its workflow, ${GOAL_WORKFLOW}, could not be read here (${(error as NodeJS.ErrnoException).code}).`
+  }
+  return `Its workflow, ${GOAL_WORKFLOW}, is not in this checkout: \`harness super-tab goal write\` writes it.`
 }

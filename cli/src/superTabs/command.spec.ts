@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PassThrough } from 'node:stream'
-import { resolve } from 'node:path'
+import { execFileSync } from 'node:child_process'
+import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import { gitEnv } from '../lib/gitProject.js'
 import { parseSuperTabArgs, readStdin, StdinIdle, superTabCommand } from './command.js'
 import type { Where } from '../agentClient/daemon.js'
 const where = { port: 14001, dataDir: '/fixture', machineId: 'machine' }
@@ -583,6 +587,30 @@ it('shows the goal with goal, writes its files with goal write, and asks nothing
   expect(await superTabCommand(['goal'], deps)).toBe(1)
   expect(print).toHaveBeenLastCalledWith('This folder is in no git repository: run it in your checkout of the project.')
   expect(open).not.toHaveBeenCalled()
+})
+
+// The bug itself, through the real command and a real checkout: `goal` alone wrote two files a new PM had not meant to write
+// (anh Dee's Lou, 2026-11-12). Nothing stands in for goalStarter.ts here (the second review of #4205: a swapped choice of
+// which to run passed every test that did).
+it('writes nothing in a real checkout with goal, and both files with goal write', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'goal-command-')))
+  try {
+    execFileSync('git', ['init', '-q'], { cwd: root, env: gitEnv(process.env) })
+    vi.spyOn(process, 'cwd').mockReturnValue(root)
+    const print = vi.fn(), open = vi.fn()
+    const deps = { where: () => where, pane: undefined, open, print }
+    expect(await superTabCommand(['goal'], deps)).toBe(0)
+    expect(print.mock.calls.at(-1)![0]).toMatch(/^This checkout states no goal yet/)
+    expect(existsSync(join(root, 'agents'))).toBe(false)
+    expect(existsSync(join(root, '.github'))).toBe(false)
+    expect(await superTabCommand(['goal', 'write'], deps)).toBe(0)
+    expect(existsSync(join(root, 'agents/GOAL.md'))).toBe(true)
+    expect(existsSync(join(root, '.github/workflows/goal.yml'))).toBe(true)
+    expect(open).not.toHaveBeenCalled()
+  } finally {
+    vi.mocked(process.cwd).mockRestore()
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 // A builder's claim is made by command (githubClaim.ts).
