@@ -446,6 +446,8 @@ void main() {
             ground(tester, key('swarm-browser-close')),
             grid.AppPalette.swarmField,
           );
+          // Opening a pane beside a chat is saved with the chat's view 200 ms later (controller.dart showBeside).
+          await tester.pump(const Duration(milliseconds: 300));
         },
       );
     }
