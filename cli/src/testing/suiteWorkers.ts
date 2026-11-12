@@ -13,7 +13,8 @@ import { availableParallelism } from 'node:os'
 
 export function suiteWorkers(env: NodeJS.ProcessEnv = process.env, machine: number = availableParallelism()): number {
   const share = Number(env.HARNESS_CORES)
-  // Anything but a count of cores is no share: the run sizes itself to the machine, as outside a Swarm.
-  const cores = Number.isSafeInteger(share) && share > 0 ? share : machine
+  // Anything but a count of cores is no share: the run sizes itself to the machine, as outside a Swarm. A share is never
+  // more than the machine has: one carried to a smaller machine (a shell or a daemon its agent started) takes that one's.
+  const cores = Number.isSafeInteger(share) && share > 0 ? Math.min(share, machine) : machine
   return Math.max(1, Math.floor(cores / 2))
 }

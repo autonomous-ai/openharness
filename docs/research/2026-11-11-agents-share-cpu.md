@@ -10,9 +10,9 @@
 ## The short version
 
 1. **Several runs at once, each sized to the whole machine, fail.** An eighth of the CLI's unit suite takes 79 to
-   115 s alone with the suite's own 8 workers, and every run alone passed (6 of 6). Started four at once, each with 8
-   workers, each took 204 to 230 s and all 12 failed, in three sets; two at once, 98 and 151 s, and all 4 failed. Most
-   failed files were a hook or a case past its deadline. *(measured)*
+   115 s alone with the suite's own 8 workers, and those 4 runs passed, as did one alone with 4 workers and one with 2.
+   Started four at once, each with 8 workers, each took 204 to 230 s and all 12 failed, in three sets; two at once, 98
+   and 151 s, and all 4 failed. Most failed files were a hook or a case past its deadline. *(measured)*
 2. **Given half its share of the cores, every run passed.** Four at once with 2 workers each, and two at once with 4
    each: 20 runs of 20 passed, 10 sized by Vitest's own variable before the change and 10 by the share a Swarm now
    gives. With a whole share each (four runs of 4 workers: 16 on 16 threads), 2 of 4 failed. *(measured)*
@@ -26,9 +26,10 @@
    not measured)*
 5. **A share costs a run that is alone.** With 4 workers a lone run takes 95 s, with 2 workers 176 s, against 79 s
    with 8. *(measured)*
-6. **A lower priority did nothing for the runs.** Under `nice -n 10`, and under macOS's background policy
-   (`taskpolicy -b`), four at once failed as before, 8 runs of 8. A longer deadline did not save them either: with
-   hooks given 30 s, 4 of 4 failed. *(measured)*
+6. **A lower priority did not stop four at once failing.** Under `nice -n 10` four at once failed as before, 4 of 4,
+   in 172 s against 204 to 225 s without it; a pair under it passed, in 139 s, where a pair without it failed in 98 s:
+   one sample each. Under macOS's background policy (`taskpolicy -b`) four at once failed, 4 of 4. A longer deadline
+   did not save them either: with hooks given 30 s, 4 of 4 failed. *(measured)*
 7. **The background policy protects the person's own work, and so does a share.** Beside 16 processes that only
    compute, a fixed piece of the person's work took 1.9 times as long as alone at normal priority, and no less at
    `nice` 10 or 20; under the background policy, 1.3 times. Beside four suite runs under it, and beside runs at half a
@@ -42,7 +43,8 @@
    failed 4 of 4. *(measured)*
 10. **The plan stops counting cores.** It let 16 cores take four large tasks at once, which is four runs at once, and
     nothing checked it when a task was taken. *(read in the code)*
-11. **The share's weak point:** an agent keeps the share it was started with until it is relaunched. Four agents
+11. **The share's weak point:** an agent keeps the share it was started with until it is relaunched (agents started
+    at the same moment count each other since the review of #4150, section 8). Four agents
     started one after another get 16, 8, 5 and 4 cores: 8, 4, 2 and 2 workers, 16 in all, as many as in the set where 2
     of 4 runs failed. *(modelled from the code; not measured)*
 
@@ -122,11 +124,12 @@ person's own session starts, so they are sized as before. *(measured)*
 
 - **Four at once take 1.8 to 2.9 times as long as one, and every run fails.** Two at once fail too.
 - **What fails is deadlines.** Over every run sized to the machine two or four at once, with or without `nice`, the
-  background policy or longer hooks (30 runs, 28 failed, 83 failed files): 45 were a hook past its 10 s (the golden
-  files `dshLaunchShapes`, `otherRuntime` and once `otherTranscripts`, whose setup imports much of the daemon's code
-  afresh); 22 a hook or a case past Vitest's deadline (10 s, 30 s); 16 an assertion that failed under load
-  (`complete: false` where `true` was due, a path not yet written). Every one of those files passed in every run alone
-  and in every run at half a share. *(measured)*
+  background policy or longer hooks (30 runs, 28 failed, 83 failed files): 54 were a hook past its deadline: 43 a
+  file's setup past its 10 s (the golden files `dshLaunchShapes`, `otherRuntime` and once `otherTranscripts`, whose
+  setup imports much of the daemon's code afresh), 2 the same past 30 s in the set whose hooks had 30 s, and 9 a
+  case's setup past 10 s (`controlTranscript`); 13 a case past its own deadline (30 s, and 120 s for `otherRuntime`'s);
+  16 an assertion that failed under load (`complete: false` where `true` was due, a path not yet written). Every one
+  of those files passed in every run alone and in every run at half a share. *(measured)*
 
 ## 2. Each run with a share
 
@@ -163,9 +166,10 @@ policies" *(read: `man taskpolicy`)*. The person's work is the probe. *(measured
 | 2 | `nice -n 10` | 139, 139 | 0 of 2 | 116 / 147 / 235 |
 | 1 | nothing | 79 | 0 of 1 | 114 / 144 / 189 |
 
-- **`nice` changed nothing that can be told from noise.** Four runs fail as before, and one burst in ten of the
-  person's work still takes four times its time alone. The pair under `nice` passed in 139 s where the pair without it
-  failed in 98 s: one sample each, and no reason is known why `nice` would do either.
+- **`nice` did not stop four at once failing.** Four runs under it failed as before, in 172 s against 204 to 225 s
+  without it, and one burst in ten of the person's work still took four times its time alone. The pair under it passed,
+  in 139 s, where the pair without it failed in 98 s: one sample each, and no reason is known why `nice` would do
+  either.
 - **The background policy protects the person, and nothing else.** Under it the person's work is nearly as quick as
   beside nothing (one burst in ten at 142 ms, against 115 to 117), and the runs fail as before, a little slower.
 - **A share protects the person too**: 8 workers on the machine in all leave room.
@@ -276,7 +280,7 @@ nothing of Harness would size itself by it.
 | Tried, on macOS | What it did | Kept |
 |---|---|---|
 | A share of the cores, through Vitest's own variable (`VITEST_MAX_WORKERS`) | At half a share every run passed, 10 of 10 (section 2) | The share. Not the variable: it overrides a suite that asks for one file at a time (section 6) |
-| A lower priority (`nice -n 10`) | Four runs failed as before; the person's work as slow as without it (section 3) | No |
+| A lower priority (`nice -n 10`) | Four at once failed as before, though quicker; a pair passed where a pair without it failed, one sample each; the person's work as slow as without it (section 3) | No: it did not stop four at once failing |
 | The system's control for a group of processes (`taskpolicy -b`, which every child inherits) | Four runs failed as before, a little slower; the person's work kept its pace (section 3) | No: a share protects the person as well, and its runs pass |
 | Hooks given 30 s instead of 10 | Four runs failed as before (section 1.2) | No |
 | The same controls on Linux and Windows | Not tried (section 7) | |
@@ -286,8 +290,15 @@ nothing of Harness would size itself by it.
   (`cli/src/superTabs/inCore/launch.ts`). At its first launch and at every relaunch, counted again each time. A
   person's own session gets none, and a daemon started from an agent's shell hands it to no pane.
 - **The variable is Harness's own, and a project's tools read it.** This repository's CLI suite does: its workers are
-  half the cores it may use, the machine's or its share (`cli/src/testing/suiteWorkers.ts`). No tool's own variable is
-  set, and no engine's own setting is changed.
+  half the cores it may use, the machine's or its share, and never more than the machine has
+  (`cli/src/testing/suiteWorkers.ts`). No tool's own variable is set, and no engine's own setting is changed.
+- **Agents started at the same moment count each other.** A start registers its row only once its pane exists, so
+  each worked out its share before the others' rows were there, and each took the whole machine (the review of #4150).
+  Each now counts the agents handed a share whose rows are not registered yet, for two minutes at most. *(Read and
+  tested in `launch.spec.ts`; not measured on a machine.)*
+- **The daemon counts the Swarm's agents in its registry**, those running from before a restart too
+  (`e2e/paneEnv.e2e.ts`), and **says each share in its log**, in counts only: `[swarm] a Swarm agent's share of this
+  machine's cores: 4 of 16, among 4 of the Swarm's agents here`.
 
 Workers after the change, as the suite's config gives them (`suiteWorkers.spec.ts` asks Vitest's own
 `resolveConfig`), and counted with the 11 spec files of section 6 where they are two or fewer *(measured)*: the
@@ -330,6 +341,10 @@ two: the daemon checks cores as a task is taken, or the plan stops counting them
   runs at once, and those all failed (section 1.2). What a run takes is set by its runner, the same whatever its
   task's size *(read: `cli/vitest.config.ts` before this change: half the machine)*.
 - **What keeps it working is the share**, where the agents start (section 8).
+- **On a machine of 8 cores or fewer the count let two large tasks run at once and held a third and a fourth back.**
+  Nothing holds them back now. Their agents share the cores through `HARNESS_CORES`, but a tool that ignores it
+  (Desktop's suite, the backend's, a build) still sizes itself to the whole machine, and nothing limits how many such
+  runs go at once *(read in the code)*.
 - **Holding a task back costs time.** In the design's model a machine of 6 cores, where two large tasks cannot run
   together, does 6 to 10% worse than one of 8, where nothing is held back *(modelled: [the experiment's
   tables](../design/2026-11-11-swarm-allocator/README.md#the-experiment), the solver one ahead)*. The model has no

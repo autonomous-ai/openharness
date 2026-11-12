@@ -9,6 +9,7 @@
  */
 import { execFile } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { availableParallelism } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
@@ -49,19 +50,28 @@ const AGENT_SESSION = {
 const HARNESSD = 'HARNESSD_'
 const SESSION = 'AI_AGENT,CLAUDECODE,CLAUDE_CODE_MESSAGING,CLAUDE_CODE_SESSION,CODEX_THREAD'
 
-/** The names an agent's engine has that start with [prefixes], asked as an agent reads its environment (fakeEngine `!env`). */
-async function engineHas(client: LocalClient, agentId: string, prefixes = HARNESSD): Promise<string> {
-  const ended = client.next(isTurn('turn_ended', agentId), 45_000, 'turn_ended (!env)')
-  client.send('message', { agentId, content: `!env ${prefixes}` })
+/** What an agent's engine answers to [directive] (fakeEngine), read from its thread by the answer's [lead]. */
+async function engineAnswer(client: LocalClient, agentId: string, directive: string, lead: string): Promise<string> {
+  const ended = client.next(isTurn('turn_ended', agentId), 45_000, `turn_ended (${directive})`)
+  client.send('message', { agentId, content: directive })
   await ended
   const { sessionId } = (await row(client, agentId))!
-  return until('the !env answer in the thread', async () => {
+  return until(`the ${directive} answer in the thread`, async () => {
     const page = await client.request<{ events?: Array<{ type: string; payload: Record<string, any> }> }>('session_get', { sessionId, limit: 200 }, 30_000)
     const answer = (page.events ?? []).filter((event) => event.type === 'text_delta').map((event) => String(event.payload.content))
-      .find((text) => text.startsWith(`env ${prefixes}: `))
-    return answer?.slice(`env ${prefixes}: `.length) ?? null
+      .find((text) => text.startsWith(lead))
+    return answer?.slice(lead.length) ?? null
   }, 15_000, 250)
 }
+
+/** The names an agent's engine has that start with [prefixes], asked as an agent reads its environment (fakeEngine `!env`). */
+const engineHas = (client: LocalClient, agentId: string, prefixes = HARNESSD): Promise<string> =>
+  engineAnswer(client, agentId, `!env ${prefixes}`, `env ${prefixes}: `)
+
+/** The share of the machine's cores an agent's engine was started with (fakeEngine `!cores`); [tag] tells this answer from
+ *  the thread's earlier ones. */
+const coresOf = (client: LocalClient, agentId: string, tag: string): Promise<string> =>
+  engineAnswer(client, agentId, `!cores ${tag}`, `cores ${tag}: `)
 
 /** The names starting with [prefixes] in the environment of the shell a pane runs, written to a file by that shell. */
 async function shellHas(d: IsolatedDaemon, pane: string, name: string, prefixes = HARNESSD): Promise<string[]> {
@@ -146,7 +156,9 @@ describe('a pane\'s environment', () => {
     const own = await create(d, client, 'claude', 'own')
     expect(await engineHas(client, own.id, 'HARNESS_CORES')).toBe('(none)')
     const agent = await create(d, client, 'claude', 'swarm', { swarmRole: 'dev' })
-    expect(await engineHas(client, agent.id, 'HARNESS_CORES')).toBe('HARNESS_CORES')
+    // The Swarm's only agent here has the whole machine: the person's own session takes no part of it, and the share the
+    // daemon's own shell had is not its.
+    expect(await coresOf(client, agent.id, 'started')).toBe(String(availableParallelism()))
     // Stopped and resumed, it is in a new pane, whose environment is built again (lib/launchOverrides.ts).
     expect((await client.request('agent_delete', { agentId: agent.id }, 90_000)).error).toBeUndefined()
     await until('the Swarm\'s agent to stop', async () => (await row(client, agent.id))?.status === 'stopped' || null, 60_000, 500)
@@ -155,8 +167,24 @@ describe('a pane\'s environment', () => {
       const again = await row(client, agent.id)
       return again?.sessionId && again.status === 'active' ? again : null
     }, 60_000, 500)
-    // Asked by another prefix: the thread still holds the first answer.
-    expect(await engineHas(client, agent.id, 'HARNESS_CORE')).toBe('HARNESS_CORES')
+    expect(await coresOf(client, agent.id, 'resumed')).toBe(String(availableParallelism()))
+    client.close()
+  }, 300_000)
+
+  // The review of #4150: no test checked that the daemon counts its Swarm's agents (core/main.ts hands the share the core's
+  // registry). Those already running count, across a restart too, as the restarted daemon reads their rows again.
+  it('shares the machine\'s cores among the Swarm\'s agents here, one running from before a restart counted', async () => {
+    const d = await created()
+    await d.start()
+    let client = await LocalClient.connect(d)
+    const first = await create(d, client, 'claude', 'swarm-first', { swarmRole: 'dev' })
+    expect(await coresOf(client, first.id, 'first')).toBe(String(availableParallelism()))
+    client.close()
+    await d.restart()
+    client = await LocalClient.connect(d)
+    await until('the first Swarm agent back after the restart', async () => (await row(client, first.id))?.status === 'active' || null, 60_000, 500)
+    const second = await create(d, client, 'claude', 'swarm-second', { swarmRole: 'dev' })
+    expect(await coresOf(client, second.id, 'second')).toBe(String(Math.max(1, Math.floor(availableParallelism() / 2))))
     client.close()
   }, 300_000)
 })

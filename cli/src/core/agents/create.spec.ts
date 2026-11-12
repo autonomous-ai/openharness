@@ -139,9 +139,8 @@ const request = (over: Record<string, unknown> = {}) => ({
 }) as unknown as Parameters<ReturnType<typeof createAgentCreator>>[0]
 
 const pending = { agentId: 'a1', sessionId: '', engine: 'claude' } as RegisteredSession
-/** This machine's sessions, as the Swarm's part of a launch counts its agents among them, on a machine of 16 cores. */
-let machineSessions: MachineSession[] = []
-const SWARM_LAUNCH = swarmLaunch(() => machineSessions, () => 16)
+/** The Swarm's part of a launch, on a machine of 16 cores with no session yet. */
+const SWARM_LAUNCH = swarmLaunch(() => [], () => 16)
 const owner = { pid: 7, engine: 'claude' } as SessionOwner
 
 function setup(over: Partial<CreateAgentDeps> = {}) {
@@ -276,20 +275,20 @@ describe('creating an agent', () => {
   // cores in its environment, for its tools to size themselves by (docs/research/2026-11-11-agents-share-cpu.md).
   it('starts a Swarm\'s agent with its share of this machine\'s cores in its environment, and a person\'s own session with none', async () => {
     const env = () => vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0].env ?? {}
-    machineSessions = [{ swarmSkill: { key: 'harness-claude-1' } }, {}, { swarmSkill: { key: 'harness-codex-2' } }]
-    try {
-      for (const swarmRole of ['coordinator', 'agent']) {
-        expect(await setup().create(request({ swarmRole }))).toMatchObject({ ok: true })
-        // Two of the Swarm's sessions are here already, and this one makes three: 16 cores over three.
-        expect(env()).toMatchObject({ HARNESS_CORES: '5' })
-      }
-      // The launch's own variables are beside it, as before.
-      vi.mocked(installedDsh).mockReturnValueOnce(installed() as never).mockReturnValueOnce(installed() as never)
-      expect(await setup().create(request({ dsh: 'blender', swarmRole: 'agent' }))).toMatchObject({ ok: true })
-      expect(env()).toMatchObject({ HARNESS_DSH: 'blender', HARNESS_CORES: '5' })
-      expect(await setup().create(request({}))).toMatchObject({ ok: true })
-      expect(env()).not.toHaveProperty('HARNESS_CORES')
-    } finally { machineSessions = [] }
+    /** Each start on a machine of 16 cores where two of the Swarm's sessions and a person's own are already. */
+    const here: MachineSession[] = [{ swarmSkill: { key: 'harness-claude-1' } }, {}, { swarmSkill: { key: 'harness-codex-2' } }]
+    const onThisMachine = () => ({ swarmLaunch: swarmLaunch(() => here, () => 16) })
+    for (const swarmRole of ['coordinator', 'agent']) {
+      expect(await setup(onThisMachine()).create(request({ swarmRole }))).toMatchObject({ ok: true })
+      // This one makes three: 16 cores over three.
+      expect(env()).toMatchObject({ HARNESS_CORES: '5' })
+    }
+    // The launch's own variables are beside it, as before.
+    vi.mocked(installedDsh).mockReturnValueOnce(installed() as never).mockReturnValueOnce(installed() as never)
+    expect(await setup(onThisMachine()).create(request({ dsh: 'blender', swarmRole: 'agent' }))).toMatchObject({ ok: true })
+    expect(env()).toMatchObject({ HARNESS_DSH: 'blender', HARNESS_CORES: '5' })
+    expect(await setup(onThisMachine()).create(request({}))).toMatchObject({ ok: true })
+    expect(env()).not.toHaveProperty('HARNESS_CORES')
   })
 
   // On a shared model a Swarm session keeps the grid's web tools.

@@ -5,7 +5,7 @@ import { expect, it, vi } from 'vitest'
 import { swarmGitHubLaunch } from '../../lib/swarmGitHub.js'
 import { env } from '../../config/env.js'
 import { PM_BASICS, SWARM_BASICS, swarmBasics, swarmBasicsSince } from '../../lib/swarmSkills.js'
-import { coreShare, OWN_CARRIED_MAX, swarmLaunch, type MachineSession } from './launch.js'
+import { coreShare, HANDED_FOR_MS, OWN_CARRIED_MAX, swarmLaunch, type MachineSession } from './launch.js'
 
 // The Harness GitHub App's launch writes files in the daemon's folder (lib/swarmGitHub.ts): never this machine's here.
 vi.mock('../../lib/swarmGitHub.js', () => ({ swarmGitHubLaunch: vi.fn(() => null) }))
@@ -90,4 +90,41 @@ it('rounds a share of the cores down, and never below one core', () => {
 
 it('shares the cores this machine has', () => {
   expect(swarmLaunch(() => []).cores('one')).toEqual({ HARNESS_CORES: String(availableParallelism()) })
+})
+
+// The review of #4150: agents started at the same moment each worked out their share before any of their rows was
+// registered, so each took the whole machine.
+it('counts the agents handed a share whose rows are not registered yet, as agents started at the same moment are', () => {
+  let rows: MachineSession[] = []
+  const launch = swarmLaunch(() => rows, () => 16)
+  // Three started at once: none of their rows is there yet.
+  expect(['one', 'two', 'three'].map(key => launch.cores(key).HARNESS_CORES)).toEqual(['16', '8', '5'])
+  // Their rows came: each is counted once, by its row, and a fourth starts beside them.
+  rows = ['one', 'two', 'three'].map(key => ({ swarmSkill: { key } }))
+  expect(launch.cores('four')).toEqual({ HARNESS_CORES: '4' })
+  // A relaunch of one of them is counted once, with the fourth whose row has not come yet.
+  expect(launch.cores('two')).toEqual({ HARNESS_CORES: '4' })
+})
+
+it('stops counting an agent whose row never came, two minutes after it was handed its share', () => {
+  vi.useFakeTimers({ toFake: ['Date'], now: 0 })
+  try {
+    const launch = swarmLaunch(() => [], () => 16)
+    expect(launch.cores('failed')).toEqual({ HARNESS_CORES: '16' })
+    // Two minutes on, it still counts.
+    vi.setSystemTime(HANDED_FOR_MS)
+    expect(launch.cores('next')).toEqual({ HARNESS_CORES: '8' })
+    // A moment later it does not; the one after it still does.
+    vi.setSystemTime(HANDED_FOR_MS + 1)
+    expect(launch.cores('third')).toEqual({ HARNESS_CORES: '8' })
+  } finally { vi.useRealTimers() }
+})
+
+// Standard 8: each share is measured where it is given, in counts only.
+it('says each share it gives in the log, with no name', () => {
+  const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+  try {
+    swarmLaunch(() => [{ swarmSkill: { key: 'harness-claude-1' } }, {}], () => 16).cores('harness-codex-2')
+    expect(log.mock.calls).toEqual([['[swarm] a Swarm agent\'s share of this machine\'s cores: 8 of 16, among 2 of the Swarm\'s agents here']])
+  } finally { log.mockRestore() }
 })

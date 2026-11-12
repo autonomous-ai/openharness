@@ -26,6 +26,14 @@ it('sizes itself to the machine when the share is not a count of cores', () => {
   for (const said of ['', '0', '-4', '2.5', 'many']) expect(suiteWorkers({ HARNESS_CORES: said }, 16), said).toBe(8)
 })
 
+// The review of #4150: a share is this machine's cores or fewer. One carried to a smaller machine, by a shell or a daemon
+// an agent started, takes no more than that machine has.
+it('takes no more than the machine has, whatever share it is told', () => {
+  expect(suiteWorkers({ HARNESS_CORES: '32' }, 16)).toBe(8)
+  expect(suiteWorkers({ HARNESS_CORES: '17' }, 16)).toBe(8)
+  expect(suiteWorkers({ HARNESS_CORES: '16' }, 4)).toBe(2)
+})
+
 // The suite's own config (cli/vitest.config.ts), as Vitest reads it: a share reaches a run only through it.
 it('sizes the unit suite by its config, which asks for these workers', async () => {
   const workers = async (cores: string) => {

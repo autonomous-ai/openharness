@@ -264,15 +264,17 @@ and each that lets it go.
 
 ### 7. CPU
 
-**Built** (#NNNN): the share, `swarmLaunch` in `cli/src/superTabs/inCore/launch.ts`, given as `HARNESS_CORES` at a
+**Built** (#4150): the share, `swarmLaunch` in `cli/src/superTabs/inCore/launch.ts`, given as `HARNESS_CORES` at a
 Swarm agent's first launch (`core/agents/create.ts`) and every relaunch (`lib/launchOverrides.ts`); this repository's
-CLI suite takes half of it (`cli/src/testing/suiteWorkers.ts`). The plan counts no cores (`assign/crew.ts` `SIZES`):
-the smaller way to settle the mismatch, as a check when a task is taken needs package 16's offer. The study:
+CLI suite takes half of it, never more than the machine has (`cli/src/testing/suiteWorkers.ts`). The plan counts no
+cores (`assign/crew.ts` `SIZES`): the smaller way to settle the mismatch, as a check when a task is taken needs
+package 16's offer. The study:
 [docs/research/2026-11-11-agents-share-cpu.md](../../research/2026-11-11-agents-share-cpu.md). *Measured on one Mac of
 16 threads: four runs at once of an eighth of the CLI's unit suite, each sized to the machine, failed 12 of 12; at half
-a share 16 of 16 passed, taking 1.5 to 2.7 times as long. Not built: a lower priority (`nice` did nothing; macOS's
-background policy kept the person's own work quick and the runs failing) and the system's controls on Linux and
-Windows (not tried). An agent keeps the share it was started with until it is relaunched.*
+a share 16 of 16 passed, taking 1.5 to 2.7 times as long. Not built: a lower priority (`nice -n 10` did not stop four
+at once failing; macOS's background policy kept the person's own work quick and the runs failing) and the system's
+controls on Linux and Windows (not tried). Agents started at the same moment count each other; each share is said in
+the daemon's log, in counts. An agent keeps the share it was started with until it is relaunched.*
 
 **Today.** Nothing limits what an agent's tools take. Each test runner sizes its workers to the whole machine (the
 CLI's suite to half its cores, Desktop's to at most 12), whatever else runs there. And the plan keeps a machine
