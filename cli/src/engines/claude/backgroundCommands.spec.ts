@@ -18,6 +18,17 @@ it('takes the same wrapper under another shell', () => {
   expect(claudeBackgroundCommands(rows("/bin/bash -c source '/home/u/.claude/shell-snapshots/snapshot-bash-1794472199641-ab12cd.sh' 2>/dev/null || true && eval 'npm test' < /dev/null && pwd -P >| /tmp/claude-1a2b-cwd"))).toBe(1)
 })
 
+// Not recorded: the shape @anthropic-ai/sandbox-runtime 0.0.82 builds and Claude Code 2.1.322 runs as `/bin/sh -c <bwrap …>`
+// on Linux with the sandbox on. sh execs bwrap, which stays the engine's child, and the snapshot shell runs below it.
+const BWRAP = "bwrap --new-session --die-with-parent --unshare-net --ro-bind / / --bind /home/u/p /home/u/p --dev /dev --unshare-pid --proc /proc -- /usr/bin/bash -c exec 9<&- || exit 126; source '/home/u/.claude/shell-snapshots/snapshot-bash-1794472199641-ab12cd.sh' 2>/dev/null || true && eval 'npm test' < /dev/null && pwd -P >| /tmp/claude-1a2b-cwd"
+const SOCAT = 'socat UNIX-LISTEN:/tmp/claude-http-0a1b2c3d4e5f6a7b.sock,fork,reuseaddr TCP:localhost:41231,keepalive,keepidle=10,keepintvl=5,keepcnt=3'
+
+it('counts a sandboxed command by the bwrap that runs its shell, and none of the sandbox\'s helpers', () => {
+  expect(claudeBackgroundCommands(rows(BWRAP, SOCAT, SOCAT))).toBe(1)
+  expect(claudeBackgroundCommands(rows(BWRAP.replace(/^bwrap/, '/usr/bin/bwrap'), BWRAP))).toBe(2)
+  expect(claudeBackgroundCommands(rows(SOCAT, 'bwrap --new-session --ro-bind / / -- /bin/sh -c /home/u/.claude/hooks/x.sh'))).toBe(0)
+})
+
 it('leaves out a shell that is not its Bash tool\'s, and a program that only names a snapshot', () => {
   expect(claudeBackgroundCommands(rows(
     '/bin/sh -c /Users/u/.harness/hook/notify.sh',                                  // a hook: a shell, no snapshot
