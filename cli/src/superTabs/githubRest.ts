@@ -147,6 +147,18 @@ export class GitHubReads {
     return this.pages(repo, path, maxPages, true)
   }
 
+  /** [current], or none when GitHub says what the list is of is not there: the comments of an issue a pull request names by a
+   *  number that is no issue's ("Closes #99999"). Not there is an answer, never a repository this login cannot read: one such
+   *  pull request, open, stopped every landing of its repository (#4233). It is not asked for again for [MISSING_MS]. */
+  async currentIfThere(repo: string, path: string, maxPages = 3): Promise<Json[]> {
+    if ((this.missing.get(path) ?? 0) > this.now()) return []
+    const rows = await this.pages(repo, path, maxPages, true, false, true)
+    if (rows !== null) { this.missing.delete(path); return rows }
+    this.missing.set(path, this.now() + MISSING_MS)
+    if (this.missing.size > MAX_KEPT) this.missing.delete(this.missing.keys().next().value!)
+    return []
+  }
+
   /** One object as it is now: its last answer again on a 304. */
   async one(repo: string, path: string): Promise<Json> {
     const body = await this.read(repo, path, true)
@@ -163,6 +175,11 @@ export class GitHubReads {
    *  requests, read once a day (scoreboard.ts), which kept under their ETags would push out the ones every pass asks with. */
   async freshPages(repo: string, path: string, maxPages: number): Promise<Json[]> {
     return this.pages(repo, path, maxPages, false, true)
+  }
+
+  /** [freshPages], or none when GitHub says what the list is of is not there (currentIfThere). */
+  async freshPagesIfThere(repo: string, path: string, maxPages: number): Promise<Json[]> {
+    return await this.pages(repo, path, maxPages, false, true, true) ?? []
   }
 
   /** A file of [repo]'s default branch as text, its last answer again on a 304. Null when it is not there: a missing file
@@ -193,11 +210,15 @@ export class GitHubReads {
     for (const url of [...this.missing.keys()]) if (url.startsWith(`/repos/${repo}/`)) this.missing.delete(url)
   }
 
-  private async pages(repo: string, path: string, maxPages: number, keep: boolean, once = false): Promise<Json[]> {
+  /** With [mayBeMissing], null when GitHub says what the list is of is not there. */
+  private async pages(repo: string, path: string, maxPages: number, keep: boolean, once?: boolean, mayBeMissing?: false): Promise<Json[]>
+  private async pages(repo: string, path: string, maxPages: number, keep: boolean, once: boolean, mayBeMissing: true): Promise<Json[] | null>
+  private async pages(repo: string, path: string, maxPages: number, keep: boolean, once = false, mayBeMissing = false): Promise<Json[] | null> {
     const rows: Json[] = []
     for (let page = 1; page <= maxPages; page++) {
-      const body = await this.read(repo, page === 1 ? path : `${path}&page=${page}`, keep, false, once)
+      const body = await this.read(repo, page === 1 ? path : `${path}&page=${page}`, keep, mayBeMissing, once)
       if (body === null) return rows
+      if (mayBeMissing && object(body).missing === true) return page === 1 ? null : rows
       if (!Array.isArray(body)) throw new GitHubStop('GH_FAILED', 'GitHub answered something unreadable.', false, this.now())
       rows.push(...body.map(object))
       if (body.length < PAGE) break
@@ -220,7 +241,11 @@ export class GitHubReads {
     if (reply.resetAt !== null) throw new GitHubStop('RATE_LIMITED', 'GitHub is limiting this computer\'s requests.', true, Math.min(reply.resetAt, this.now() + LIMIT_MAX_MS))
     if (reply.status === 401) throw new GitHubStop('GH_SIGNED_OUT', 'GitHub refused this computer\'s gh login: run gh auth login.', true, this.now() + OFF_RETRY_MS)
     if ((reply.status === 404 || reply.status === 410) && mayBeMissing) return { missing: true }
-    if (reply.status === 404 || reply.status === 403) throw new GitHubStop('UNREADABLE', `this computer's gh login cannot read ${repo}.`, false, this.now() + UNREADABLE_RETRY_MS)
+    // The read that failed, by its path with no query, and its status: every read of the repository answered 200 by hand while
+    // one of a pull request's stopped each pass, and the line named neither (#4233).
+    if (reply.status === 404 || reply.status === 403) {
+      throw new GitHubStop('UNREADABLE', `this computer's gh login cannot read ${repo}: GitHub answered ${reply.status} for ${url.split('?')[0]}.`, false, this.now() + UNREADABLE_RETRY_MS)
+    }
     // GitHub failing on its own side stops every repository; any other answer is about this one (it still goes when it next can).
     if (reply.status !== 200) throw new GitHubStop('GH_FAILED', `GitHub answered ${reply.status}.`, reply.status >= 500, this.now())
     // A 200 with no body is an answer cut off on its way (a list of a hundred files with their patches is 600 KB against the

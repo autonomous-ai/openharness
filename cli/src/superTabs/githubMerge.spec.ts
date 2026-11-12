@@ -941,6 +941,33 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     expect(out.merges()).toHaveLength(1)
   })
 
+  // #4233: nothing the Swarm built landed for seven hours. Another Swarm's train, #4182, stood open on
+  // `harness-train/1794456964862`; its branch read as the task 1794456964862, whose comments GitHub answers 404 for, and every
+  // pass stopped there with "this computer's gh login cannot read" the repository, which it read by hand without fault.
+  it('lands the team\'s ready pull request beside another Swarm\'s open train, and one that closes a number that is no issue\'s', async () => {
+    const f = setup()
+    f.github.repo.pulls = [
+      pull({ number: 4182, title: 'Train: #4164 #4178', body: 'Harness\'s train into main.\n\n#4164 at 1568fc1, READ-OK by Harper', labels: [], head: { sha: 'ab'.repeat(20), ref: 'harness-train/1794456964862' } }),
+      pull({ number: 9, body: 'Kai: Closes #99999', labels: [{ name: 'builder:kai' }], head: { sha: 'cd'.repeat(20), ref: 'kai/works-on' } }),
+      pull()]
+    // As GitHub answers for the comments of an issue that is not there.
+    f.github.repo.failing.set(/\/issues\/(1794456964862|99999)\/comments/, 404)
+    await settle(f)
+    expect(f.log.mock.calls.map(([line]) => String(line)).filter(line => line.includes('stopped'))).toEqual([])
+    expect(f.merges().map(merge => merge.path)).toEqual(['/repos/acme/app/pulls/4/merge'])
+    // The train's branch names no task: nothing is asked of GitHub for it.
+    expect(f.github.asked.filter(path => path.includes('1794456964862'))).toEqual([])
+  })
+
+  // Which read failed, by its path with no query, and its status: the line named only the repository (#4233).
+  it('names the read GitHub refused, and its status, when it stops for a repository', async () => {
+    const f = setup()
+    f.github.repo.failing.set(/\/pulls\/4\/reviews/, 403)
+    await f.merger.tick()
+    expect(f.log.mock.calls.map(([line]) => String(line))).toEqual([expect.stringContaining(
+      'merging by rule stopped · UNREADABLE acme/app: this computer\'s gh login cannot read acme/app: GitHub answered 403 for /repos/acme/app/pulls/4/reviews. (again in')])
+  })
+
   it('says a repository it cannot read once, for as long as it cannot, and not that it runs again meanwhile', async () => {
     const f = setup()
     f.github.repo.status = 404

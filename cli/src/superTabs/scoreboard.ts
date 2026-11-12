@@ -149,7 +149,7 @@ export async function boardOf(reads: GitHubReads, repo: string, input: { now: nu
     // neither, is counted from its opening, which misses what landed while it was built.
     const began = await each(conflicting, async ({ pull }) => {
       const task = tasksOf(pull)[0]
-      return (task === undefined ? null : startedAt(await reads.freshPages(repo, `/repos/${repo}/issues/${task}/comments?per_page=${PAGE}`, 1))) ?? timeOf(pull.created_at)
+      return (task === undefined ? null : startedAt(await reads.freshPagesIfThere(repo, `/repos/${repo}/issues/${task}/comments?per_page=${PAGE}`, 1))) ?? timeOf(pull.created_at)
     })
     const shared = new Map<string, number>()
     for (const [at, { pull, at: landedAt }] of conflicting.entries()) {

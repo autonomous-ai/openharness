@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { addElsewhere, buildingIn, builtOn, contextOf, crewOf, learnedMinutes, openPieces, outOfQuota, startedAt, takenTasks, QUEUED_AWAY_MS, readerFor, takeBacks, TAKEN_AWAY_MS, CLAIM_LIMIT, dependsOn, hasRoom, heldTasks, labelOf, machineHas, MEMORY_SHARE, nextPicks, readProblem, reasonOf, RESERVE, SIZES, worksOnOf, type Crew, type CrewBuilder } from './crew.js'
+import { addElsewhere, buildingIn, builtOn, contextOf, crewOf, learnedMinutes, openPieces, outOfQuota, startedAt, takenTasks, QUEUED_AWAY_MS, readerFor, takeBacks, TAKEN_AWAY_MS, CLAIM_LIMIT, dependsOn, hasRoom, heldTasks, labelOf, machineHas, MEMORY_SHARE, nextPicks, readProblem, reasonOf, RESERVE, SIZES, worksOnOf, type Crew, type CrewBuilder, tasksOf } from './crew.js'
 import { solve } from './search.js'
 
 type Json = Record<string, unknown>
@@ -477,6 +477,17 @@ describe('the tasks builders took, and when each was last touched (takenTasks)',
       { number: 1, label: 'builder:pip', name: 'Pip', touched: Date.parse(t(2)) },
       { number: 2, label: 'builder:juno', name: 'Juno', touched: Date.parse(t(1)) },
     ])
+  })
+})
+
+// #4233: a train's branch ends in the time it was made, and read as a task, its comments were asked of GitHub, which has no
+// such issue: that 404 stopped every landing of the repository.
+describe('the tasks a pull request is for (tasksOf)', () => {
+  it('reads the issues it closes and its builder\'s branch for one, and only numbers an issue can have', () => {
+    expect(tasksOf({ body: 'Closes #14. Fixes #7', head: { ref: 'pip/14' } })).toEqual([14, 7])
+    expect(tasksOf({ body: '', head: { ref: 'pip/9' } })).toEqual([9])
+    expect(tasksOf({ body: 'Train: #4164 #4178', head: { ref: 'harness-train/1794456964862' } })).toEqual([])
+    expect(tasksOf({ body: 'Closes #0, closes #99999999999', head: { ref: 'pip/works-on' } })).toEqual([])
   })
 })
 

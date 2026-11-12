@@ -767,7 +767,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       await f.assigner.tick()
       expect(f.labelled()).toEqual([[16, 'builder:pip']])
       const said = (g: ReturnType<typeof setup>) => g.log.mock.calls.filter(([line]) => String(line).includes('acme/secret'))
-      expect(said(f)).toEqual([['[super-tab] Task assignment: UNREADABLE acme/secret: this computer\'s gh login cannot read acme/secret. acme/app\'s builders count as building nothing there.']])
+      expect(said(f)).toEqual([['[super-tab] Task assignment: UNREADABLE acme/secret: this computer\'s gh login cannot read acme/secret: GitHub answered 404 for /repos/acme/secret/issues. acme/app\'s builders count as building nothing there.']])
       // GitHub refusing the label keeps the task free, so each pass is about to give it to Pip again: asked again ten minutes on,
       // not each pass, and not said again; left alone longer each time, to a quarter of an hour; once read again, a new failure
       // waits ten minutes, not the longest.
