@@ -13,7 +13,7 @@ const messageSchema = z.object({ id: nativeId, created: time, updated: time, dat
   hasReply: z.boolean(), hasLaterUser: z.boolean(), afterOverflow: z.boolean() })
 
 async function query(path: string, sql: string, params: SqliteParam[]) {
-  const result = await sqliteReadAll(path, sql, params, { maxBuffer: 768 * 1024, cliTimeoutMs: 1000 })
+  const result = await sqliteReadAll(path, sql, params, { maxBuffer: 768 * 1024, timeoutMs: 1000 })
   if (!result.ok) throw new MemoryError('source_unavailable')
   return result.rows
 }

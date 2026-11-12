@@ -1,6 +1,6 @@
 # Feature design rules
 
-Ken's rules, set on 2026-10-27; [AGENTS.md](../AGENTS.md#feature-design-rules) carries the short version. This is
+Ken's rules, set on 2026-10-27; [AGENTS.md](../AGENTS.md) carries the short version (code standard 5). This is
 the detailed version: what a good answer to each line contains, and the incidents behind it. Incident ids (D1–D12)
 point to the [post-mortem of #1755](postmortems/2026-10-27-1755-design-rework.md), which has the evidence and the
 cost of each.
@@ -182,3 +182,15 @@ Reviewed revision: ______  Reviewer: ______  Each line: answered / N/A because �
 
 Review again when a measured limit is under 10x away, or the same bug needs a second patch.
 ```
+
+## Tech limits
+
+Designed for 10x today's scale. Each is checked on the current build; a resource less than 10x below its limit needs a
+design review.
+
+- Swarm message, post to agent: p95 ≤ 1 s; a phone answer reaches the agent in ≤ 2 s.
+- Hot-path queries: p95 ≤ 100 ms, none scans a collection.
+- Desktop at rest with 16 terminals: ≤ 1% of one core, ≤ 500 MB. Daemon at rest: ≤ 1% of one core.
+- Remote terminal echo over a direct connection: p95 ≤ 50 ms.
+- `ci/required`: ≤ 15 min.
+- Backend cost per active Swarm falls as Swarms grow.
