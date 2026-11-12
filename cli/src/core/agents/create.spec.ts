@@ -478,6 +478,41 @@ describe('creating an agent', () => {
     expect(createAndRegisterPane).not.toHaveBeenCalled()
   })
 
+  describe('a --local OpenClaw run', () => {
+    const authority = { id: 'local', label: 'harness-openclaw-local', current: () => true, hold: () => {} }
+    const prepared = (openclawLocal?: string) => ({ ok: true as const, launch: { current: () => true, environment: { HOME: root },
+      prepareHooks: async () => true, opencodeMajor: null, ...(openclawLocal ? { openclawLocal } : {}) } as unknown as NativeLaunch })
+
+    it('a local create hands its folder to the native launch and to the row', async () => {
+      const local = folder()
+      const native = vi.fn<NonNullable<CreateAgentDeps['native']>>(async (_engine, source) => prepared(source.openclawLocal ?? undefined))
+      expect(await setup({ native }).create(request({ engine: 'openclaw', openclawLocal: local }))).toMatchObject({ ok: true })
+      expect(native.mock.calls[0][1]).toMatchObject({ openclawLocal: local })
+      expect(vi.mocked(createAndRegisterPane).mock.calls[0][0]).toMatchObject({ engine: 'openclaw', openclawLocal: local })
+      await setup({ native }).create(request({ engine: 'openclaw' }))
+      expect(vi.mocked(createAndRegisterPane).mock.calls[1][0]).not.toHaveProperty('openclawLocal')
+    })
+
+    it('a folder gone by the time a saved launch runs is refused, and nothing is launched', async () => {
+      const local = folder()
+      rmSync(local, { recursive: true })
+      const native = vi.fn<NonNullable<CreateAgentDeps['native']>>(async (_engine, source) => prepared(source.openclawLocal ?? undefined))
+      expect(await setup({ native }).create.prepare(request({ engine: 'openclaw', openclawLocal: local }), authority))
+        .toEqual({ ok: false, error: 'OPENCLAW_FOLDER_GONE', detail: "This run's OpenClaw folder is gone." })
+      expect(native).not.toHaveBeenCalled()
+      expect(createAndRegisterPane).not.toHaveBeenCalled()
+    })
+
+    it('a local create never starts on a launch that was not prepared for its folder', async () => {
+      const local = folder()
+      const unprepared = { ok: false, error: 'OPENCLAW_LOCAL_UNPREPARED', detail: 'This Harness could not prepare the --local folder. Nothing was started.' }
+      for (const native of [async () => prepared(), async () => prepared(folder()), undefined]) {
+        expect(await setup({ native }).create.prepare(request({ engine: 'openclaw', openclawLocal: local }), authority)).toEqual(unprepared)
+      }
+      expect(createAndRegisterPane).not.toHaveBeenCalled()
+    })
+  })
+
   // #3954: every install refuses while notify.mjs is missing, and the create said only "Waiting to confirm the engine's
   // native hooks", which waiting never changes.
   it('names a missing notify.mjs, and what to do, where a held create says why', async () => {
