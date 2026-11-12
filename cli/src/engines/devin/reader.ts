@@ -62,6 +62,15 @@ export async function readDevinMessages(
   sessionId: string,
   afterRowId?: number | null,
 ): Promise<DvMessage[]> {
+  return await loadDevinMessages(dbPath, sessionId, afterRowId) ?? []
+}
+
+/** As [readDevinMessages], but null when the store did not answer (locked, mid-write, past its deadline). */
+async function loadDevinMessages(
+  dbPath: string,
+  sessionId: string,
+  afterRowId?: number | null,
+): Promise<DvMessage[] | null> {
   if (!isDevinSessionId(sessionId)) return []
   const bounded = Number.isFinite(afterRowId as number) && (afterRowId as number) > 0
   const sql = `SELECT ${COLUMNS} FROM message_nodes WHERE session_id = ?${bounded ? ' AND row_id > ?' : ''}`
@@ -71,7 +80,7 @@ export async function readDevinMessages(
   const result = await sqliteReadAll(dbPath, sql, params, { maxBuffer: MAX_BUFFER })
   if (!result.ok) {
     if (result.reason === 'missing') throw new DevinSqliteMissing()
-    return [] // db locked / mid-write — retry next tick
+    return null // db locked / mid-write — retry next tick
   }
   const rows = result.rows
 
@@ -116,6 +125,8 @@ export class DevinReader {
   private timer: NodeJS.Timeout | null = null
   private polling = false
   private cursor = 0
+  /** Whether the session's rows were read once and seeded; until then nothing is emitted (#4065). */
+  private hydrated = false
   /** message_ids already emitted — survives across polls, unlike readDevinMessages' per-call dedupe. */
   private readonly seen = new Set<string>()
   private state: TurnState = newTurnState()
@@ -132,21 +143,31 @@ export class DevinReader {
   /** Hydrate silently (no replay), then start polling. */
   async start(): Promise<void> {
     try {
-      const all = await readDevinMessages(this.deps.dbPath, this.deps.sessionId)
-      this.hydrate(all)
+      await this.seed()
     } catch (err) {
       if (err instanceof DevinSqliteMissing) { this.deps.onFatal?.(err); return }
     }
     this.errors.seekToEnd() // never replay a failure logged before we attached
-    // …except the one case where replaying matters: we attached to a turn that is ALREADY stuck open
-    // because it died before the daemon (re)started. Its failure is in the log but behind our offset, so
-    // look back explicitly — otherwise a restart leaves the web spinning exactly as it was.
-    this.healStuckTurn()
     this.timer = setInterval(() => { void this.tick() }, this.deps.pollMs ?? POLL_MS)
   }
 
   stop(): void {
     if (this.timer) { clearInterval(this.timer); this.timer = null }
+  }
+
+  /**
+   * Read the whole session and seed from it. A store that does not answer leaves the reader unseeded, and the next tick
+   * reads in full again: with the cursor still at 0, an incremental read would emit the whole history as new (#4065).
+   */
+  private async seed(): Promise<void> {
+    const all = await loadDevinMessages(this.deps.dbPath, this.deps.sessionId)
+    if (!all) return
+    this.hydrated = true
+    this.hydrate(all)
+    // The one case where replaying matters: we attached to a turn that is ALREADY stuck open because it died before
+    // the daemon (re)started. Its failure is in the log but behind our offset, so look back explicitly — otherwise a
+    // restart leaves the web spinning exactly as it was.
+    this.healStuckTurn()
   }
 
   /** Seed state from existing rows without emitting, so only NEW activity streams after attach. */
@@ -189,15 +210,18 @@ export class DevinReader {
     if (this.polling) return
     this.polling = true
     try {
-      const batch = await readDevinMessages(this.deps.dbPath, this.deps.sessionId, this.cursor)
-      const events: LiveEvent[] = []
-      for (const msg of batch) {
-        this.cursor = Math.max(this.cursor, msg.rowId)
-        if (this.seen.has(msg.messageId)) continue
-        this.seen.add(msg.messageId)
-        events.push(...devinMessageToEvents(msg, this.state))
+      if (!this.hydrated) await this.seed()
+      else {
+        const batch = await readDevinMessages(this.deps.dbPath, this.deps.sessionId, this.cursor)
+        const events: LiveEvent[] = []
+        for (const msg of batch) {
+          this.cursor = Math.max(this.cursor, msg.rowId)
+          if (this.seen.has(msg.messageId)) continue
+          this.seen.add(msg.messageId)
+          events.push(...devinMessageToEvents(msg, this.state))
+        }
+        if (events.length) this.deps.onEvents(events)
       }
-      if (events.length) this.deps.onEvents(events)
       // NOT gated on `batch.length`: a failed turn is precisely the case where no new row ever arrives.
       this.checkTurnFailure()
     } catch (err) {
