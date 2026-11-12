@@ -173,7 +173,7 @@ A wave's tasks depend on nothing in the same wave and share no file, tests inclu
 | 1 | 1 Contract · 2 Home from an environment · 3 Mount view · 4 Terminal record · 5 Release version · 13 A home Harness worked out is not exported |
 | 2 | 6 Process mounts · 7 Home and record doors · 8 Which Hermes keeps a record · 9 The pass's judgment |
 | 3 | 10 Sandbox on the discovery path · 11 Hooks by version and interface |
-| 4 | 12 Bind, wiring, end to end |
+| 4 | 12 Bind, wiring, end to end · 14 Temporary workflow for the Linux sandbox check |
 
 Task 13 was added after the first draft and keeps its number so the others keep theirs; it is written after Task 5.
 
@@ -1336,6 +1336,34 @@ it.runIf(process.env.HARNESS_E2E_REQUIRE_SANDBOX === '1')('ran the sandbox cases
   → PASS; the end-to-end command of Step 2, plus `e2e/hermesAdmission.e2e.ts` → PASS on this computer.
 - [ ] **Step 5:** Commit.
 
+### Task 14: Temporary workflow for the Linux sandbox check (TEMPORARY, removed before the pull request)
+
+**Files:** `.github/workflows/tmp-sandbox-hooks.yml` (new). Nothing else.
+
+**Depends on:** nothing (it runs Task 12's `e2e/hermesTerminalRecord.e2e.ts` once both are on the branch). **Effort:**
+medium. **No red test:** one commit, per ken15dev's temporary-workflow rule.
+
+Verification check 3 (Hermes inside `unshare`) has no workflow that can run it: `cli-e2e.yml` runs on Linux runners
+whose AppArmor refuses unprivileged user namespaces, so its sandbox group skips. This file runs it on GitHub instead of
+a box of Ken's.
+
+- `on: push: branches: ['0xken15/sandbox-hooks']` only (no `pull_request`, no `workflow_dispatch`, no schedule).
+- `permissions: contents: read`; no secrets; nothing that releases, publishes, deploys, uploads or writes outside its
+  own run.
+- `concurrency: { group: tmp-sandbox-hooks-${{ github.ref }}, cancel-in-progress: true }`.
+- One job, matrix `runner: [ubuntu-24.04, ubuntu-24.04-arm]` (the device is ARM64), `timeout-minutes: 30`,
+  `fail-fast: false`. Steps:
+  1. `actions/checkout` and `actions/setup-node` with the same Node pin and npm cache settings `cli-e2e.yml` uses
+     (`CLI_NODE_VERSION`), then `npm ci` in `cli/` as `cli-e2e.yml` does.
+  2. `sudo apt-get install -y tmux` if `cli-e2e.yml` installs it that way (copy its step).
+  3. `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` (this runner only), then the probe
+     `unshare --user --map-root-user --mount --pid --fork true` must exit 0.
+  4. From `cli/`: `mkdir -p ~/e2e-tmp && TMPDIR=~/e2e-tmp HARNESS_E2E_REQUIRE_SANDBOX=1 npx vitest run --config
+     vitest.e2e.config.ts e2e/hermesTerminalRecord.e2e.ts`.
+- A file comment says it is temporary, for #4194's Linux sandbox check, removed before the pull request.
+
+Commit: `ci(tmp): run the Hermes sandbox end-to-end check on Linux x64 and ARM64 (temporary, #4194)`.
+
 ## Verification
 
 None of these touches production, the developer's own `~/.hermes` or `~/.harness`, daemon (18473) or tmux server: every
@@ -1356,7 +1384,10 @@ followed, no hook written, the fallback said once, an older Hermes's hook kept, 
 a `HOME` of its own followed and restarted with no `HERMES_HOME` of Harness's, after a daemon restart too), the
 sandbox group reported skipped, and the other two files green.
 
-**3. End to end on Linux, inside a sandbox** (a disposable Linux box, never one that serves people):
+**3. End to end on Linux, inside a sandbox**, on GitHub through Task 14's temporary workflow
+(`.github/workflows/tmp-sandbox-hooks.yml`, x64 and ARM64 runners, run by pushing the feature branch). Both legs must
+pass with `ran the sandbox cases` passing, not skipped. If the runners refuse `unshare` even after the sysctl, fall
+back to a disposable box as below. The box route (a disposable Linux box, never one that serves people):
 - The box: x86-64 or ARM64 Linux with Node 24, tmux, git and util-linux, and this branch checked out with
   `npm ci` run in `cli/`. First ask it: `unshare --user --map-root-user --mount --pid --fork true; echo $?` must print
   `0`.
