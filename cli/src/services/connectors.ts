@@ -93,6 +93,9 @@ function listen(bridge: Server, port: number, retryMs: number, moving?: Moving):
   let gap = 1
   let toldMine = false
   let toldUnknown = false
+  // The port is tried again while an ask is out: lsof under load takes up to LSOF_MS, and a try that waited on it held a
+  // port this account had let go for that long (task #3640).
+  let asking = false
   bridge.on('listening', () => {
     if (leaving) moving!.moved((bridge.address() as AddressInfo).port, port)
     leaving = false
@@ -102,9 +105,14 @@ function listen(bridge: Server, port: number, retryMs: number, moving?: Moving):
   bridge.on('error', (error: Error) => {
     tries++
     if (tries === 1) console.warn(`[connections] bridge port ${port} is not available (${error.message}); trying again every ${retryMs} ms`)
-    if (!moving || tries < TRIES_BEFORE_ASKING || leaving) { again(); return }
-    if (skip > 0) { skip--; again(); return }
+    again()
+    if (!moving || tries < TRIES_BEFORE_ASKING || leaving || asking) return
+    if (skip > 0) { skip--; return }
+    asking = true
     void moving.holderIsMine(port).then((mine) => {
+      asking = false
+      // The port was taken while the ask was out: its answer is about a hold that has ended.
+      if (bridge.listening) return
       notMine = mine === false ? notMine + 1 : 0
       leaving = notMine >= 2
       if (mine !== false && moving.local) {
@@ -120,7 +128,6 @@ function listen(bridge: Server, port: number, retryMs: number, moving?: Moving):
         toldUnknown = true
         console.warn(`[connections] cannot tell which account holds bridge port ${port}; the bridge keeps trying the port and asking`)
       }
-      again()
     })
   })
   bridge.listen(port, '127.0.0.1')

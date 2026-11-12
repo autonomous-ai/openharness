@@ -294,22 +294,46 @@ describe('the connectors service', () => {
     const said = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
       startConnectors(fakeCore(), { vault, env: free, offered: async () => ({}), retryMs: 5, ...(holderIsMine ? { holderIsMine } : {}) })
-      // Well past the tries before it asks, with time for the lookup.
-      await new Promise(resolve => setTimeout(resolve, 400))
+      // Until the lookup has answered, which the real one under load takes up to LSOF_MS to do (task #3640).
+      await vi.waitFor(() => expect(said.mock.calls.flat().join(' ')).toMatch(/a process of this account holds|cannot tell which account holds/),
+        { timeout: 10_000, interval: 10 })
       expect(bridgePort(free, new Store(join(home, 'store'), free))).toBe(taken)
       expect(said.mock.calls.flat().join(' ')).not.toContain('moved')
       await new Promise<void>(resolve => holder.close(() => resolve()))
-      let status = 0
-      for (let n = 0; n < 200 && !status; n++) {
-        await new Promise(resolve => setTimeout(resolve, 10))
-        status = await answered(`http://127.0.0.1:${taken}/x/linear/mcp`)
-      }
-      expect(status).toBe(404)
+      await vi.waitFor(async () => expect(await answered(`http://127.0.0.1:${taken}/x/linear/mcp`)).toBe(404), { timeout: 10_000, interval: 10 })
     } finally {
       said.mockRestore()
       holder.close()
     }
-  // Its waits add up past the default 5 s on a loaded machine: it timed out once in a full coverage run.
+  }, 30_000)
+
+  // lsof under load takes up to LSOF_MS (3 s) to say whose the port is; the bridge waited on it before trying the port again,
+  // and the real-lookup test above timed out at 30 s on a loaded Mac (task #3640).
+  it('takes the port once it is let go while asking whose it is has not answered yet', async () => {
+    const holder = await holdPort()
+    const taken = (holder.address() as { port: number }).port
+    const { HARNESS_CONNECTIONS_PORT: _named, ...free } = env
+    const vault = new Store(join(home, 'store'), free)
+    saveBridgePort(vault, taken)
+    const said = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let asking!: () => void, answer!: (mine: boolean) => void
+    const asked = new Promise<void>(resolve => { asking = resolve })
+    try {
+      // A lookup still running, as a slow lsof is.
+      startConnectors(fakeCore(), { vault, env: free, offered: async () => ({}), retryMs: 5,
+        holderIsMine: () => { asking(); return new Promise<boolean>(resolve => { answer = resolve }) } })
+      await asked
+      await new Promise<void>(resolve => holder.close(() => resolve()))
+      await vi.waitFor(async () => expect(await answered(`http://127.0.0.1:${taken}/x/linear/mcp`)).toBe(404), { timeout: 10_000, interval: 10 })
+      // Its answer, late, is about a hold that has ended: nothing is said of it.
+      answer(true)
+      await new Promise(resolve => setImmediate(resolve))
+      expect(said.mock.calls.flat().join(' ')).not.toContain('a process of this account holds')
+      expect(await answered(`http://127.0.0.1:${taken}/x/linear/mcp`)).toBe(404)
+    } finally {
+      said.mockRestore()
+      holder.close()
+    }
   }, 30_000)
 
   it('does not move on one answer: a handover ending just then reads as another account, so it tries the port again first', async () => {
