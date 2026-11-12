@@ -324,6 +324,10 @@ describe('watching a new pane', () => {
       paneState.mockResolvedValue({ dead: false, engineExit: 1 } as never)
       vi.mocked(deps.captureTerminal).mockResolvedValueOnce('error: unknown option')
       await watch('openclaw', local, spawned, ['openclaw'], undefined)
+      // A pane that could not be read says nothing of a lock.
+      vi.mocked(deps.captureTerminal).mockResolvedValueOnce(null)
+      await watch('openclaw', local, spawned, ['openclaw'], undefined)
+      expect(deps.registry.releaseEngine).toHaveBeenCalledTimes(2)
       expect(deps.registry.releaseEngine).toHaveBeenCalledWith('a1')
       expect(deps.registry.setLaunch).not.toHaveBeenCalled()
     })
