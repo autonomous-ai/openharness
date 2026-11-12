@@ -2,7 +2,8 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
-  OPENCLAW_COLUMNS, OPENCLAW_KEY, OPENCLAW_LAUNCH, OPENCLAW_STATES, openclawAgentDb, openclawDefaultStateDir, readOpenclawScreen,
+  OPENCLAW_COLUMNS, OPENCLAW_KEY, OPENCLAW_LAUNCH, OPENCLAW_LOCAL, OPENCLAW_STATES, OPENCLAW_STORE_KEPT, isOpenclawLocalStopped,
+  openclawAgentDb, openclawDefaultStateDir, openclawFolderInUse, openclawLocalStopped, readOpenclawScreen,
 } from './contract.js'
 
 const FIXTURES = join(import.meta.dirname, '__fixtures__')
@@ -191,5 +192,53 @@ describe('the OpenClaw contract', () => {
     expect(OPENCLAW_LAUNCH.firstPrompt).toBe('typed')
     expect(OPENCLAW_LAUNCH.environment).toEqual(['OPENCLAW_STATE_DIR', 'OPENCLAW_HOME'])
     expect(OPENCLAW_STATES.noSessions).toBe("Harness cannot find this OpenClaw's sessions. Start Harness with the Gateway's OPENCLAW_STATE_DIR, then restart this agent.")
+  })
+
+  const local = (status: string) => fixture('screen-plain.txt')
+    .replace('openclaw tui - ws://127.0.0.1:18789 - ', 'openclaw tui - local embedded - ').replace(' connected | idle', ` ${status}`)
+
+  it('reads a local run off its status line', () => {
+    expect(readOpenclawScreen(local('local ready | idle'))).toMatchObject({ key: 'agent:main:plain', url: null, state: 'ready', running: false, stopped: null })
+    expect(readOpenclawScreen(local('local ready')).state).toBe('ready')
+    expect(readOpenclawScreen(local('starting local runtime'))).toMatchObject({ state: 'busy', running: false })
+    expect(readOpenclawScreen(local('⠏ running • 6s | local ready'))).toMatchObject({ state: 'busy', running: true })
+    expect(readOpenclawScreen(local('local runtime stopped: boom | idle'))).toMatchObject({ state: 'local-stopped', stopped: 'boom' })
+    expect(readOpenclawScreen(local('local runtime stopped | idle'))).toMatchObject({ state: 'local-stopped', stopped: '' })
+    expect(readOpenclawScreen(local('local stopped | idle'))).toMatchObject({ state: 'local-stopped', stopped: null })
+    expect(readOpenclawScreen(local('local runtime stopped: model relay refused the\n request | idle')))
+      .toMatchObject({ state: 'local-stopped', stopped: 'model relay refused the request' })
+    expect(readOpenclawScreen(fixture('screen-plain.txt')).stopped).toBeNull()
+  })
+
+  it('a stopped line the model wrote above a live status line is not a stop', () => {
+    const said = fixture('screen-plain.txt').replace(' connected | idle', ' local runtime stopped: said\n connected | idle')
+    expect(readOpenclawScreen(said)).toMatchObject({ state: 'ready', stopped: null })
+  })
+
+  it('says a stopped local run, with its reason when it has one', () => {
+    expect(openclawLocalStopped('boom')).toBe("OpenClaw's local run stopped: boom")
+    expect(openclawLocalStopped('')).toBe("OpenClaw's local run stopped.")
+    expect(openclawLocalStopped(null)).toBe("OpenClaw's local run stopped.")
+    expect(isOpenclawLocalStopped("OpenClaw's local run stopped: boom")).toBe(true)
+    expect(isOpenclawLocalStopped(OPENCLAW_STATES.noGateway)).toBe(false)
+    expect(Object.values(OPENCLAW_STATES).some(isOpenclawLocalStopped)).toBe(false)
+  })
+
+  it('knows the words OpenClaw leaves when its folder is taken', () => {
+    expect(openclawFolderInUse('A Gateway is running for this state directory (pid 7, port 18789). Run without --local to use it')).toBe(true)
+    expect(openclawFolderInUse('Error: failed to acquire gateway state ownership')).toBe(true)
+    expect(openclawFolderInUse(fixture('screen-no-token.txt'))).toBe(false)
+  })
+
+  it('the local launch words and copy read as written', () => {
+    expect(OPENCLAW_LAUNCH.local).toEqual(['--local'])
+    expect(OPENCLAW_LAUNCH.resumeLocal('agent:main:harness-1')).toEqual(['--session', 'agent:main:harness-1'])
+    expect(OPENCLAW_LAUNCH.localClear).toEqual(['OPENCLAW_CONFIG_PATH', 'OPENCLAW_AGENT_DIR', 'OPENCLAW_OAUTH_DIR', 'OPENCLAW_WORKSPACE_DIR'])
+    expect(OPENCLAW_LOCAL).toMatchObject({ notOpenclaw: '--local is for OpenClaw only.',
+      folderInUse: 'Another OpenClaw is using this folder. Give each run its own --local folder.',
+      folderGone: "This run's OpenClaw folder is gone.", noFork: 'This run cannot be forked.',
+      unprepared: 'This Harness could not prepare the --local folder. Nothing was started.' })
+    expect(OPENCLAW_LOCAL.notFolder('/nowhere')).toBe('/nowhere is not a folder.')
+    expect(OPENCLAW_STORE_KEPT).toBe("OpenClaw's store is kept: delete its session with OpenClaw.")
   })
 })
