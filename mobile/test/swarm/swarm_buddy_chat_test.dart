@@ -378,8 +378,10 @@ void main() {
       expect(find.byType(SwarmRoleBadge), findsNothing);
     });
 
-    testWidgets("the PM's line is answered in the project chat, with the PM "
-        'mentioned, where everyone reads it', (tester) async {
+    // Swarm v4 (anh Dee, 2026-11-08): only agents post in a project's
+    // channel, so nothing sends the person there to answer the PM.
+    testWidgets("the PM's line offers no Answer in: only agents post in the "
+        'project chat', (tester) async {
       final fake = backend(
         buddy: wren(),
         page: [
@@ -387,41 +389,12 @@ void main() {
           message('m2', 2, author: 'agent-wren', minute: 1),
         ],
       );
-      fake.routes['/api/super-tabs/$tab/conversations/$leadChat/messages'] = (
-        _,
-      ) => {'messages': <Object>[], 'next': null};
       await pump(tester, fake);
 
-      expect(key('swarm-answer-in-m2'), findsNothing, reason: 'the Buddy');
-      expect(
-        find.descendant(
-          of: key('swarm-answer-in-m1'),
-          matching: find.text('Answer in #Mobile'),
-        ),
-        findsOneWidget,
-      );
-      expect(find.text('Everyone there reads it'), findsOneWidget);
-
-      await tester.tap(find.text('Answer in #Mobile'));
-      await tester.pumpAndSettle();
-
-      expect(
-        key('swarm-project-chat-$leadChat'),
-        findsOneWidget,
-        reason: 'the project chat',
-      );
-      expectHomeCProject('Mobile');
-      expect(
-        tester.widget<TextField>(find.byType(TextField)).controller!.text,
-        '@River ',
-      );
-      await tester.enterText(find.byType(TextField), '@River Use swarm_buddy');
-      await tester.pump();
-      await tester.tap(key('swarm-send'));
-      await tester.pumpAndSettle();
-      final post = fake.commands.single;
-      expect(post['conversationId'], leadChat);
-      expect(post['recipientIds'], ['agent-lead']);
+      expect(find.text('Which flag name?'), findsOneWidget);
+      expect(find.textContaining('Answer in'), findsNothing);
+      expect(find.text('Everyone there reads it'), findsNothing);
+      expect(fake.commands, isEmpty);
     });
 
     // Tony's phone list, task 26, as Desktop's decisions_view.dart.
@@ -1193,6 +1166,5 @@ void main() {
       ),
     );
     expect(find.text('River (PM) → you'), findsOneWidget);
-    expect(key('swarm-answer-in-m1'), findsNothing, reason: 'posts nothing');
   });
 }

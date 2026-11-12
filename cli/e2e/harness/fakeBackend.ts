@@ -20,7 +20,9 @@
  *   `connected {userId}`, `machine_select` binds it to one machine (`connected {machineId}`, then that
  *   machine's `node_status`), and from then on what it sends goes down to the machine's node under its
  *   own connection id. A broadcast from the node reaches every web client of that machine unless it is
- *   `webEligible: false`; a frame targeted at a connection reaches that one only. A web client leaving
+ *   `webEligible: false`; a frame targeted at a connection reaches that one only. A daemon's background relay
+ *   (`machine_select { relayIsolation: true }`) hears no broadcast, only what is targeted at it, and is no app; with
+ *   `uiGate` on, `__clients` counts the machine's apps and offers the viewer gate. A web client leaving
  *   is `__client_disconnected` to the node, and the node coming and going is `node_status {online}` to
  *   the machine's web clients, as the real backend's node role publishes them.
  *
@@ -90,6 +92,9 @@ interface WebClient {
   machineId: string | null
   /** Who opened it: a machine's daemon (its account's), or a phone of FAKE_ACCOUNT. */
   by: FakeMachine
+  /** A daemon's background relay (`machine_select { relayIsolation: true }`): as the real hub, it hears only the frames
+   *  addressed to it and is no app (backend lib/registry.ts `relayIsolated`). */
+  isolated?: boolean
 }
 
 /** One device socket: a commander on every machine of the account, one connection id per machine. */
@@ -135,6 +140,10 @@ export class FakeBackend {
   private down = false
   /** How long everything relayed between a machine and its web clients is held, ms. */
   latencyMs = 0
+  /** On: `__clients` counts the machine's apps and offers the viewer gate, as the real backend does (backend lib/hub.ts
+   *  `recomputeAndSendClients`), so a machine holds its live events while no app views it. Off by default: the fleets
+   *  written before the gate expect every event relayed. */
+  uiGate = false
   /** How long what each machine sends up to the devices' lanes is held, ms, by machine id: a machine slow to answer
    *  (Diego's, 10-30), not a slow relay. Its handshakes and replies come late alike; what goes down to it does not. */
   readonly slowUp = new Map<string, number>()
@@ -627,8 +636,8 @@ export class FakeBackend {
       return
     }
     if (envelope.commanderEligible) for (const device of this.devices) this.upToDevice(device, machineId, tagged)
-    // The real hub: web clients get every broadcast that is not device-only.
-    if (envelope.webEligible !== false) this.toWebClients(machineId, envelope.frame)
+    // The real hub: web clients get every broadcast that is not device-only, but a background relay none (lib/hub.ts).
+    if (envelope.webEligible !== false) for (const client of this.webClients) if (client.machineId === machineId && !client.isolated) this.toWeb(client, envelope.frame)
   }
 
   /** The real hub strips only the hop header; the terminal body stays sealed.
@@ -671,9 +680,10 @@ export class FakeBackend {
 
   private sendClients(machineId: string): void {
     const commanders = [...this.devices].filter((device) => device.ws.readyState === WebSocket.OPEN).length
+    const ui = [...this.webClients].filter((client) => client.machineId === machineId && !client.isolated).length
     this.sendNode(machineId, '', {
       type: '__clients',
-      payload: { commander: commanders, commanderActive: commanders, commanderJoinGeneration: this.generation },
+      payload: { commander: commanders, commanderActive: commanders, commanderJoinGeneration: this.generation, ...(this.uiGate ? { ui, uiGate: true } : {}) },
     })
   }
 
@@ -691,6 +701,7 @@ export class FakeBackend {
       this.webClients.delete(client)
       const machineId = client.machineId
       if (machineId) this.relay(() => this.sendNode(machineId, client.connId, { type: '__client_disconnected', payload: {} }))
+      if (machineId && this.uiGate) this.sendClients(machineId)
     })
   }
 
@@ -707,6 +718,8 @@ export class FakeBackend {
         return
       }
       client.machineId = machineId
+      client.isolated = frame.payload?.relayIsolation === true
+      if (this.uiGate) this.sendClients(machineId)
       client.ws.send(json({ type: 'connected', payload: { machineId, p2p: null } }))
       client.ws.send(json({ type: 'node_status', payload: { online: this.nodeUp(machineId) } }))
       return

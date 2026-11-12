@@ -80,9 +80,6 @@ const { preTrustClaudeProject, preTrustCodexProject } = trust
 vi.mock('../../engines/launchPrep.js', () => ({ folderTrust: (engine: string, profile?: string | null) => engine === 'claude'
     ? { trusts: (path: string) => trust.claudeTrusts(path), record: (path: string) => trust.preTrustClaudeProject(path) }
     : engine === 'codex' ? { trusts: (path: string) => trust.codexTrusts(path, profile), record: (path: string) => trust.preTrustCodexProject(path, profile) } : null }))
-// The connections an agent on a profile home is given (lib/connectors/agents.ts): never written into a real folder here.
-const syncProfileHome = vi.hoisted(() => vi.fn((_vault: unknown, _engine: string, _home: string): string[] => []))
-vi.mock('../../lib/connectors/agents.js', () => ({ syncProfileHome }))
 vi.mock('../../lib/createAgentPane.js', () => ({ createAndRegisterPane: vi.fn() }))
 // The pull request line (lib/agentAttribution.ts) reads the person's engine settings: never this machine's here.
 vi.mock('../../lib/agentAttribution.js', () => ({
@@ -163,6 +160,7 @@ function setup(over: Partial<CreateAgentDeps> = {}) {
     privateGridName: vi.fn(async () => 'grid-me'),
     dshLaunch: { launch: launchDsh, materialize: async () => ({ ok: true, ...await materializeWorkspace() }) },
     swarmLaunch: SWARM_LAUNCH,
+    syncProfileHome: vi.fn(async () => []),
     ...over,
   }
   return { deps, create: createAgentCreator(deps) }
@@ -237,7 +235,7 @@ describe('creating an agent', () => {
     expect(await extraArgsOf({ engine: 'claude', swarmRole: 'agent' })).not.toContain('check_for_update_on_startup=false')
   })
 
-  // Swarm v3 (task #4215): a Swarm agent starts with its owner's own settings. Harness wrote full mode's warning acceptance
+  // Swarm v3 (task #4215): Harness writes nothing into a person's own settings for a Swarm agent. It wrote full mode's warning acceptance
   // into them for every Swarm agent in full mode (2026-10-26); a person who chooses full mode answers Claude Code's own warning.
   it('writes nothing into the person\'s settings for a Swarm agent, with no mode or in full mode', async () => {
     const home = mkdtempSync(join(tmpdir(), 'own-settings-')), config = join(home, 'claude'), settings = join(config, 'settings.json')
@@ -254,7 +252,7 @@ describe('creating an agent', () => {
   })
 
   // Audit M1, and task #4395: an agent's private temporary folder is its TMPDIR and, for Claude Code, is added to its working
-  // directories, so its owner's own settings ask nothing for its mktemp files; the launch's own variables win.
+  // directories, so its mode's checks ask nothing for its mktemp files; the launch's own variables win.
   it('gives the agent its private temporary folder as TMPDIR and as its one added folder, and lets the launch\'s own variables win', async () => {
     const tmp = { env: { TMPDIR: '/data/agent-tmp/one' }, args: ['--add-dir=/data/agent-tmp/one'] }
     const extraArgs = () => (vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1] as { extraArgs?: string[] }).extraArgs ?? []
@@ -393,7 +391,7 @@ describe('creating an agent', () => {
 
   // 2026-10-30: a Cmd+S Swarm's PM, in a clone or worktree the desktop made and sent as a plain cwd, sat at Claude Code's
   // trust question, which no Swarm view shows.
-  // Its owner's own mode since task #4215: the trust follows the Swarm's checkout, not full mode.
+  // In any mode since task #4215: the trust follows the Swarm's checkout, not full mode.
   it('trusts a local Claude Swarm agent in any mode in a clone in the projects root or a worktree Harness made', async () => {
     vi.mocked(projectsRoot).mockReturnValue(root)
     try {
@@ -576,11 +574,12 @@ describe('creating an agent', () => {
     expect(createAndRegisterPane).toHaveBeenCalledTimes(1)
   })
 
-  it('gives an agent on a Claude or Codex profile home the connections there, and one on the default home none', async () => {
-    const { create } = setup()
+  it('asks connected services for the connections of an agent on a Claude or Codex profile home, and none for the default home', async () => {
+    const syncProfileHome = vi.fn<CreateAgentDeps['syncProfileHome']>(async () => [])
+    const { create } = setup({ syncProfileHome })
     expect(await create(request({ engine: 'claude', claudeHome: '/profiles/claude-work' }))).toMatchObject({ ok: true })
     expect(await create(request({ engine: 'codex', codexHome: '/profiles/codex-work' }))).toMatchObject({ ok: true })
-    expect(syncProfileHome.mock.calls.map(([, engine, home]) => [engine, home])).toEqual([['claude', '/profiles/claude-work'], ['codex', '/profiles/codex-work']])
+    expect(syncProfileHome.mock.calls).toEqual([['claude', '/profiles/claude-work'], ['codex', '/profiles/codex-work']])
     syncProfileHome.mockClear()
     expect(await create(request({ engine: 'claude' }))).toMatchObject({ ok: true })
     expect(await create(request({ engine: 'codex' }))).toMatchObject({ ok: true })
@@ -588,17 +587,15 @@ describe('creating an agent', () => {
     expect(syncProfileHome).not.toHaveBeenCalled()
   })
 
-  it('still launches when the connections cannot be written into a profile home', async () => {
-    syncProfileHome.mockImplementationOnce(() => { throw new Error('read-only') })
-    expect(await setup().create(request({ engine: 'claude', claudeHome: '/profiles/claude-work' }))).toMatchObject({ ok: true })
-  })
-
-  it('says what went wrong when that failure is not an Error, and still launches', async () => {
-    syncProfileHome.mockImplementationOnce(() => { throw 'plain reason' })
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    expect(await setup().create(request({ engine: 'claude', claudeHome: '/profiles/claude-work' }))).toMatchObject({ ok: true })
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('connections for /profiles/claude-work · plain reason'))
-    warn.mockRestore()
+  it('starts an agent on a profile home once its connections are there, which the engine reads as it starts', async () => {
+    let written!: (names: string[]) => void
+    const syncProfileHome = vi.fn<CreateAgentDeps['syncProfileHome']>(() => new Promise((resolve) => { written = resolve }))
+    const launch = setup({ syncProfileHome }).create(request({ engine: 'claude', claudeHome: '/profiles/claude-work' }))
+    await vi.waitFor(() => expect(syncProfileHome).toHaveBeenCalledTimes(1))
+    expect(createAndRegisterPane).not.toHaveBeenCalled()
+    written(['gmail'])
+    expect(await launch).toMatchObject({ ok: true })
+    expect(createAndRegisterPane).toHaveBeenCalledTimes(1)
   })
 
   it('reaches the existing first-install pane route when OpenCode is absent', async () => {

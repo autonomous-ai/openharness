@@ -6,7 +6,7 @@ describe('what the Swarm adds to an engine\'s argv', () => {
     expect(swarmEngineArgs('codex')).toEqual(['-c', 'check_for_update_on_startup=false'])
   })
 
-  // The shell guard is gone (anh Dee, 2026-11-09): a Swarm agent runs with its person's own settings, and no hook of Harness's
+  // The shell guard is gone (anh Dee, 2026-11-09): a Swarm agent runs in the mode it starts in, and no hook of Harness's
   // runs before its tools.
   it('gives no hook to run before a tool, on any engine', () => {
     for (const engine of ['claude', 'codex']) {

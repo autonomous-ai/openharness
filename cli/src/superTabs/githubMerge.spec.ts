@@ -1479,6 +1479,20 @@ describe('the rule\'s parts', () => {
     expect(found).toEqual([{ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }])
   })
 
+  // A Personal Swarm's project made from a pane's folder has no address to clone, only the GitHub repository Desktop named for it
+  // (backend commands.ts project.github): its PM lands there as a cloned project's does.
+  it('merges for a project on the GitHub repository it was given when its folder has no address', async () => {
+    const row = { tabId: 'tab', lead: true, ledConversationId: 'lead', agent: { id: 'juno', harnessId: 'h-juno', name: 'Juno', contributorId: 'dee', machineOwnerId: 'dee' } }
+    const led = (project: Json) => ledProjects({ me: 'dee', live: () => true, roster: async () => [row],
+      read: async () => ({ projects: [{ id: 'pane', leadConversationId: 'lead', ...project }] }) })
+    expect(await led({ repository: { cwd: '/Users/dee/pane', repositoryUrl: null }, githubRepository: 'Acme/Pane' }))
+      .toEqual([{ repo: 'acme/pane', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'pane' }])
+    expect(await led({ githubRepository: 'acme/pane' })).toEqual([expect.objectContaining({ repo: 'acme/pane' })])
+    // The address it is cloned from comes first, and a name that is no owner/name is none.
+    expect(await led({ repository: { repositoryUrl: 'https://github.com/acme/app' }, githubRepository: 'acme/pane' })).toEqual([expect.objectContaining({ repo: 'acme/app' })])
+    expect(await led({ repository: { repositoryUrl: null }, githubRepository: 'acme/pane/extra' })).toEqual([])
+  })
+
   it('counts a PM stopped here as leading, as the service asks the core whether it is stopped', async () => {
     const row = { tabId: 'tab', lead: true, ledConversationId: 'lead', agent: { id: 'juno', harnessId: 'h-juno', name: 'Juno', contributorId: 'dee',
       machineOwnerId: 'dee' } }

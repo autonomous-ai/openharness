@@ -421,6 +421,8 @@ const LOCK_DIR = join(env.ADAPTER_DATA_DIR, 'registry.json.lock')
 const PRE_V2_BACKUP_FILE = join(env.ADAPTER_DATA_DIR, 'registry.pre-v2.json')
 /** Written once this machine's saved agents are cleared of the permission modes Harness forced (`withoutForcedModes`). */
 const OWN_MODES_FILE = join(env.ADAPTER_DATA_DIR, 'registry-own-modes')
+/** Written once this machine's saved Swarm agents with no mode are given Auto-approve (`withSwarmAuto`). */
+const SWARM_AUTO_FILE = join(env.ADAPTER_DATA_DIR, 'registry-swarm-auto')
 const NAME_OVERRIDES = new Map<string, string>()
 
 const PANE_RE = /^%\d+$/
@@ -685,6 +687,31 @@ function withoutForcedModes(rows: Array<Partial<RegisteredSession>>): { rows: Ar
     return own
   })
   return { rows: kept, cleared }
+}
+
+/**
+ * A Swarm agent starts in Auto-approve since 2026-11-12 (anh Dee: as a new agent in a regular tab does), and a restart or
+ * restore reapplies the saved mode. One started between task #4215 and then has none, and kept coming back in its owner's own
+ * default, where a PM stood still before each tool and Codex refused every ask to leave its sandbox. So the first load of a
+ * build with this gives each such Claude Code or Codex agent the Swarm started Auto-approve, once (`SWARM_AUTO_FILE`). Only one
+ * the Swarm started (superTabs/inCore/adoption.ts `swarmStarted`): a person's own agent attached to a Swarm also carries a
+ * Swarm role, often with no mode (`harness new` in its own settings, a Codex in Ask), and keeps its own default. Every mode a
+ * person picks for a Swarm-started agent is recorded on its row, so one with none was never theirs. Its pane takes the mode at
+ * its next relaunch (a Restart, or the computer's restart). Review after 2027-01-12.
+ */
+const swarmStarted = (row: Partial<RegisteredSession>) => row.startedBy === 'agent' && !row.parentAgentId
+
+/** [row] in Auto-approve when it is one of those agents, else [row] itself. Also what Open uses for a stopped one, which is
+ *  saved outside this file (lib/stoppedAgents.ts) and so outside the sweep. */
+export function inSwarmAuto<T extends Partial<RegisteredSession>>(row: T): T {
+  if (row?.permissionMode != null || (row.engine !== 'claude' && row.engine !== 'codex') || !parseSwarmSkill(row.swarmSkill)
+    || !swarmStarted(row)) return row
+  return { ...row, permissionMode: 'auto', bypassPermission: true }
+}
+
+function withSwarmAuto(rows: Array<Partial<RegisteredSession>>): { rows: Array<Partial<RegisteredSession>>; given: number } {
+  const kept = rows.map(inSwarmAuto)
+  return { rows: kept, given: kept.filter((row, i) => row !== rows[i]).length }
 }
 
 /** A legacy `tmuxPane` adds a tmux runtime unless it is a listed runtime's own projection (`paneProjection`). */
@@ -1338,14 +1365,21 @@ class Registry {
       const ownModes = !existsSync(OWN_MODES_FILE)
       if (ownModes) {
         const swept = withoutForcedModes(arr)
-        if (swept.cleared) console.log(`[registry] ${swept.cleared} agent(s) start with their owner's own permission settings again`)
+        if (swept.cleared) console.log(`[registry] ${swept.cleared} agent(s) no longer keep a permission mode Harness forced`)
+        arr = swept.rows
+      }
+      // After the forced modes are cleared: a Swarm agent full mode was forced on comes back in Auto-approve too.
+      const swarmAuto = !existsSync(SWARM_AUTO_FILE)
+      if (swarmAuto) {
+        const swept = withSwarmAuto(arr)
+        if (swept.given) console.log(`[registry] ${swept.given} Swarm agent(s) start in Auto-approve`)
         arr = swept.rows
       }
       // The rollback copy is the file as found, retired runtimes and all — not the cleaned rows.
       if (arr.some((row) => row.schemaVersion !== 2)) {
         atomicWriteJson(PRE_V2_BACKUP_FILE, stored, true)
       }
-      let changed = strippedRetired || (ownModes && arr.some((row, i) => row !== parsed[i]))
+      let changed = strippedRetired || ((ownModes || swarmAuto) && arr.some((row, i) => row !== parsed[i]))
       if (rebooted) {
         this.rebooted = true
         console.log(`[registry] machine rebooted since last run — ${arr.length} agent(s) kept with their process identity cleared (stale panes, restored on start)`)
@@ -1566,12 +1600,16 @@ class Registry {
       }
       if (changed) this.save()
       if (ownModes) atomicWriteJson(OWN_MODES_FILE, Date.now())
+      if (swarmAuto) atomicWriteJson(SWARM_AUTO_FILE, Date.now())
     } catch (error) {
       if (error instanceof SyntaxError) this.quarantine(`is not JSON (${error.message})`)
       else if (existsSync(FILE)) {
         this.writeBlocked = true
         console.error('[registry] registry is unreadable; refusing to overwrite it:', error instanceof Error ? error.message : error)
-      } else atomicWriteJson(OWN_MODES_FILE, Date.now())
+      } else {
+        atomicWriteJson(OWN_MODES_FILE, Date.now())
+        atomicWriteJson(SWARM_AUTO_FILE, Date.now())
+      }
       // A genuinely absent file starts empty. A file that cannot be opened safely (a symlink, another
       // owner, open permissions) is left exactly as it is, and nothing is written over it.
     }

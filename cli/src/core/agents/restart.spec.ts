@@ -583,15 +583,14 @@ describe('restarting an agent', () => {
       expect(run.deps.agentReconciler.releaseRoute).toHaveBeenCalledWith(routeKey)
     })
 
-    // Ken, 11-09: a PM brought back with Restart (⌘⇧E) came up in its owner's settings, asking before each tool, and stood
-    // still until a person approved. Since #4215 a Swarm agent restarts in the mode its person chose, or none.
-    it('restarts a Swarm\'s PM in full mode; any other Swarm agent keeps its own mode', async () => {
-      const pm = agent({ swarmSkill: { role: 'coordinator', key: 'p1' } } as Partial<RegisteredSession>)
+    // A PM's Restart (⌘⇧E) forced full mode (Ken, 11-09) while a PM in its owner's settings stood still before each tool.
+    // Since 2026-11-12 a Swarm agent starts in Auto-approve, and a PM, as any Swarm agent, comes back in the mode it has.
+    it('restarts a Swarm\'s PM and any other Swarm agent in its own mode, never full mode', async () => {
+      const pm = agent({ swarmSkill: { role: 'coordinator', key: 'p1' }, permissionMode: 'auto' } as Partial<RegisteredSession>)
       const run = setup(pm)
       expect(await run.restart('a1')).toMatchObject({ ok: true })
-      const full = { ...pm, permissionMode: 'full' }
-      expect(bypassPermissionFor).toHaveBeenCalledWith(full, expect.any(Function))
-      expect(run.deps.downgradedPermission).toHaveBeenCalledWith(full, true, 'restart', undefined)
+      expect(bypassPermissionFor).toHaveBeenCalledWith(pm, expect.any(Function))
+      expect(run.deps.downgradedPermission).toHaveBeenCalledWith(pm, true, 'restart', undefined)
 
       vi.mocked(bypassPermissionFor).mockClear()
       const worker = agent({ swarmSkill: { role: 'agent', key: 'p1' } } as Partial<RegisteredSession>)

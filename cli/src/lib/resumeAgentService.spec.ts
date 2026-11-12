@@ -308,6 +308,26 @@ describe('production resume handler', () => {
     expect(registry.byAgent(saved.agentId)?.permissionMode).toBe(permissionMode)
   })
 
+  // An agent the Swarm started between task #4215 and 2026-11-12 was saved with no mode, and a stopped one is not in the
+  // registry the start-up sweep reads (lib/registry.ts `withSwarmAuto`): Open brings it back in Auto-approve. A person's own
+  // agent attached to a Swarm keeps its own default.
+  it('opens a stopped Swarm-started agent with no mode in Auto-approve', async () => {
+    const swarmSkill = { role: 'agent', key: 'swarm-dev' } as RegisteredSession['swarmSkill']
+    rewrite({ permissionMode: undefined, bypassPermission: false, swarmSkill, startedBy: 'agent' })
+    expect(await createResumeAgentService(deps)(saved.agentId)).toMatchObject({ ok: true, session: { permissionMode: 'auto', bypassPermission: true } })
+    expect(buildEngineLaunchArgv).toHaveBeenLastCalledWith('codex', expect.objectContaining({ permissionMode: 'auto', bypassPermission: true }))
+    registry.load()
+    expect(registry.byAgent(saved.agentId)?.permissionMode).toBe('auto')
+  })
+
+  it('opens a person\'s own agent attached to a Swarm, saved with no mode, in its own default', async () => {
+    const swarmSkill = { role: 'agent', key: 'swarm-dev' } as RegisteredSession['swarmSkill']
+    rewrite({ permissionMode: undefined, bypassPermission: false, swarmSkill, startedBy: undefined })
+    expect(await createResumeAgentService(deps)(saved.agentId)).toMatchObject({ ok: true })
+    const launched = vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1] as { permissionMode?: string | null; bypassPermission?: boolean }
+    expect([launched.permissionMode ?? null, launched.bypassPermission]).toEqual([null, false])
+  })
+
   it('carries the captured native launch and token through permission, argv and registration', async () => {
     const native: NativeLaunch = { token: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', opencodeMajor: null,
       environment: {}, proofs: [], current: vi.fn(() => true),

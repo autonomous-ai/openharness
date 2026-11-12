@@ -20,7 +20,7 @@ import { cardId, SwarmCards, type CardChat } from './cards.js'
 import { GitHubTokenRefresher, githubToken } from './github.js'
 import { FirstAnswers } from './firstAnswers.js'
 import { NextThing } from './nextThing.js'
-import { GitHubMentions, repositorySlug, watchedAgents, type WatchedAgent } from './githubMentions.js'
+import { GitHubMentions, projectRepositorySlug, watchedAgents, type WatchedAgent } from './githubMentions.js'
 import { ShippingReporter } from './shipping.js'
 import { currentNames, GitHubStop, githubRest, type GitHubGet, type GitHubSend } from './githubRest.js'
 import { gatedWrites } from './githubWrites.js'
@@ -398,7 +398,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         // The phone's answers to Claude Code's first-run questions here, asked as it sets this computer up
         // (engines/launchPrep.ts answerFirstRun): its owner's, as the setup is.
         if (payload.action === 'claudeFirstRun') {
-          // Its theme and first-run screens only: an agent runs in its owner's own permission mode (task #4215), so a phone's
+          // Its theme and first-run screens only: no Swarm agent starts in full mode (task #4215), so a phone's
           // `acceptFullMode` from before is read as nothing.
           if (typeof payload.theme !== 'string') return { error: 'INVALID_REQUEST' }
           return answerFirstRun('claude', { theme: payload.theme }) ? { ok: true } : { error: 'FIRST_RUN_UNANSWERED' }
@@ -518,7 +518,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
               : claim ? 'A task is taken with its person\'s own GitHub login, on that person\'s computer.'
               : 'A task is cut with its person\'s own GitHub login, on that person\'s computer.' }
           }
-          const slugs = list((await swarm()).state.projects).map(project => repositorySlug(object(project.repository).repositoryUrl)).filter(slug => slug !== null)
+          const slugs = list((await swarm()).state.projects).map(projectRepositorySlug).filter(slug => slug !== null)
           const name = [agent.displayName, agent.name].find((given): given is string => typeof given === 'string' && !!given.trim()) ?? ''
           // Each project's repository by its project's name and by what GitHub names it now, for one renamed since
           // (githubVerdict.ts ProjectRepositories), and a name asked that is neither by what GitHub names it now (renamed twice).

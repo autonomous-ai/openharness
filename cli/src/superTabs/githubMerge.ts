@@ -30,7 +30,7 @@ import { createHash } from 'node:crypto'
 import { dependsOn, labelOf, readerKey, sameKey, tasksOf, teamOf, type Crew } from './assign/crew.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { GitHubReads, GitHubStop, PAGE, retryIn, STOP_ASKING, Waits, waitWords } from './githubRest.js'
-import { repositorySlug, TEAM } from './githubMentions.js'
+import { projectRepositorySlug, TEAM } from './githubMentions.js'
 import { APP, GitHubTrain, STATUS, TRAIN_MARK, type TrainPull } from './githubTrain.js'
 import { plainPath } from './plainPath.js'
 import { COST_NUMBERS, costLine, TASK_NUMBER_MAX, type ReadRow } from './taskTokens.js'
@@ -192,7 +192,7 @@ export async function ledProjects(deps: { me: string | null; live: (harnessId: s
     if (agent.contributorId !== deps.me || agent.machineOwnerId !== deps.me || typeof agent.harnessId !== 'string' || !await deps.live(agent.harnessId)) continue
     const state = await deps.read(row.tabId, agent.id).catch(() => null)
     const project = (Array.isArray(state?.projects) ? state.projects.map(object) : []).find(p => p.leadConversationId === row.ledConversationId)
-    const repo = repositorySlug(object(project?.repository).repositoryUrl)
+    const repo = projectRepositorySlug(project)
     if (repo && identifier(project?.id) && !found.has(repo)) {
       found.set(repo, { repo, pm: String(agent.displayName ?? agent.name ?? 'PM'), tabId: row.tabId, pmAgentId: agent.id, projectId: project.id })
     }
