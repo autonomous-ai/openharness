@@ -10,9 +10,9 @@
 ## The short version
 
 1. **Several runs at once, each sized to the whole machine, fail.** An eighth of the CLI's unit suite takes 79 to
-   115 s alone and passes (6 runs of 6). Started four at once, each with the suite's own 8 workers, each took 204 to
-   230 s and all 12 failed, in three sets; two at once, 98 and 151 s, and all 4 failed. Most failed files were a hook
-   or a case past its deadline. *(measured)*
+   115 s alone with the suite's own 8 workers, and every run alone passed (6 of 6). Started four at once, each with 8
+   workers, each took 204 to 230 s and all 12 failed, in three sets; two at once, 98 and 151 s, and all 4 failed. Most
+   failed files were a hook or a case past its deadline. *(measured)*
 2. **Given half its share of the cores, every run passed.** Four at once with 2 workers each, and two at once with 4
    each: 20 runs of 20 passed, 10 sized by Vitest's own variable before the change and 10 by the share a Swarm now
    gives. With a whole share each (four runs of 4 workers: 16 on 16 threads), 2 of 4 failed. *(measured)*
@@ -75,7 +75,7 @@
   shared one checkout.
 - **The person's own work** is a probe beside each set: every second, one fixed piece of single-thread work (SHA-256
   over 64 MiB) at normal priority, timed. Beside nothing it takes 113 ms (one burst in ten: 115 to 117 ms).
-- **Which setting a tool obeys** was read in its code and documentation, then counted: the most worker processes a
+- **Which setting a tool obeys** was read in its code, then counted: the most worker processes a
   run's own Vitest process had at once, sampled every 0.1 s, over 11 spec files (`src/superTabs/assign` and
   `src/superTabs/inCore`).
 - **After the change** (section 8) the runs name the same 159 files instead of `--shard=1/8`: the change adds a spec
@@ -123,7 +123,7 @@ person's own session starts, so they are sized as before. *(measured)*
 - **Four at once take 1.8 to 2.9 times as long as one, and every run fails.** Two at once fail too.
 - **What fails is deadlines.** Over every run sized to the machine two or four at once, with or without `nice`, the
   background policy or longer hooks (30 runs, 28 failed, 83 failed files): 45 were a hook past its 10 s (the golden
-  files `dshLaunchShapes`, `otherRuntime` and once `otherTranscripts`, whose setup loads much of the core's code
+  files `dshLaunchShapes`, `otherRuntime` and once `otherTranscripts`, whose setup imports much of the daemon's code
   afresh); 22 a hook or a case past Vitest's deadline (10 s, 30 s); 16 an assertion that failed under load
   (`complete: false` where `true` was due, a path not yet written). Every one of those files passed in every run alone
   and in every run at half a share. *(measured)*
