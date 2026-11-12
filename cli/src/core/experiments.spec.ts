@@ -191,12 +191,12 @@ describe('the account\'s agent experiments, kept for this computer', () => {
     vi.useFakeTimers()
     const hachiOn = vi.fn()
     let listener: ((notice: BackendNotice) => void) | null = null
-    const sync = createAgentSettingsSync({ dataDir, backend: async () => answers.shift()!('GET'), session: () => session, messagesChanged: () => {},
+    const sync = createAgentSettingsSync({ dataDir, backend: async () => answers.shift()!('GET', undefined), session: () => session, messagesChanged: () => {},
       hachiOn, onNotice: (l) => { listener = l; return () => {} } })
     answer(account({}))
     sync.start()
     await vi.advanceTimersByTimeAsync(0)
-    for (const features of [{ hachi: true }, { hachi: true, agent_messages: true }, {}]) {
+    for (const features of [{ hachi: true }, { hachi: true, agent_messages: true }, {}] as Array<Record<string, boolean>>) {
       answer(account(features))
       listener!({ type: 'desk_changed', revision: 0 })
       await vi.advanceTimersByTimeAsync(0)

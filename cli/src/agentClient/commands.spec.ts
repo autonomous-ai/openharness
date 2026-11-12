@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { addressOf, agentOrigin, AGENTS_START_AGENTS_OFF, closeCommand, deleteCommand, DEPTH_REFUSAL, EXIT, GOAL_USAGE, goalCommand, parseDuration, psCommand, refusalNext, replyCommand, resumeCommand, routeCommand, showCommand, spawnCheck, spawnCount, spawnRefusal, SPAWN_LIMITS, step, tellCommand, waitCommand, watchCommand, whoamiCommand, type ClientDeps } from './commands.js'
 import { RefusedError, type Rpc } from '../messages/rpc.js'
-import { AgentClientError, type Daemon, type Where } from './daemon.js'
+import { AgentClientError, type Daemon, type PushedEvent, type Where } from './daemon.js'
 import { Ledger, ledgerPath } from './ledger.js'
 import { agentSettingsPath } from '../lib/agentSettings.js'
 import { LEAD_PROTECTED_DETAIL } from '../lib/closeAgentService.js'
@@ -2319,16 +2319,16 @@ describe('wait and watch on pushed events', () => {
   /** A daemon that pushes the state events of the harnesses a tool names (`agents_watch`, core/toolWatches.ts). */
   class PushingDaemon extends FakeDaemon {
     watched: string[][] = []
-    heard: ((agentId: string) => void) | null = null
+    heard: ((agentId: string, event: PushedEvent) => void) | null = null
     refuse = false
-    async watch(agentIds: string[], heard: (agentId: string) => void): Promise<boolean> {
+    async watch(agentIds: string[], heard: (agentId: string, event: PushedEvent) => void): Promise<boolean> {
       this.requests.push({ type: 'agents_watch', payload: { agentIds } })
       if (this.refuse) return false
       this.watched.push([...agentIds])
       this.heard = heard
       return true
     }
-    push(agentId: string): void { this.heard?.(agentId) }
+    push(agentId: string): void { this.heard?.(agentId, { type: 'agent_activity', payload: { agentId } }) }
   }
   const lists = (d: FakeDaemon) => d.requests.filter((r) => r.type === 'agents_list').length
   const answered = (d: FakeDaemon, id: string) => d.pages.set(`s-${id}`, [{ events: [ev('user_message', { content: 'fix it' }), ev('tool_start'), ev('text_delta', { content: 'Fixed.' }), ev('done')], hasMore: false }])
@@ -3229,8 +3229,8 @@ describe('harness show --work (the result in facts, read on the machine that own
 describe('harness watch --mine (one stream for every harness the caller started, on every machine)', () => {
   class PushingDaemon extends FakeDaemon {
     watched: string[][] = []
-    heard: ((agentId: string) => void) | null = null
-    async watch(agentIds: string[], heard: (agentId: string) => void): Promise<boolean> {
+    heard: ((agentId: string, event: PushedEvent) => void) | null = null
+    async watch(agentIds: string[], heard: (agentId: string, event: PushedEvent) => void): Promise<boolean> {
       this.watched.push([...agentIds])
       this.heard = heard
       return true
