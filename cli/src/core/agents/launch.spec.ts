@@ -141,6 +141,17 @@ describe('relaunch helpers', () => {
     expect(buildLaunchOverrides).toHaveBeenLastCalledWith(deps.launchOverridesDeps, 'claude', expect.objectContaining({ startedBy: 'agent', gridLaunch: grid }), 'a1', expect.any(Function), undefined)
   })
 
+  it("a relaunch from another source keeps the row's --local folder", async () => {
+    const { deps, helpers } = setup()
+    const row = session({ engine: 'openclaw', openclawLocal: '/runs/one' })
+    await helpers.relaunchOverrides(row, { gridLaunch: null } as never)
+    expect(buildLaunchOverrides).toHaveBeenLastCalledWith(deps.launchOverridesDeps, 'openclaw', expect.objectContaining({ openclawLocal: '/runs/one' }), 'a1', expect.any(Function), undefined)
+    await helpers.relaunchOverrides(row, { openclawLocal: null } as never)
+    expect(buildLaunchOverrides).toHaveBeenLastCalledWith(deps.launchOverridesDeps, 'openclaw', expect.objectContaining({ openclawLocal: '/runs/one' }), 'a1', expect.any(Function), undefined)
+    await helpers.relaunchOverrides(session({ engine: 'openclaw' }))
+    expect(buildLaunchOverrides).toHaveBeenLastCalledWith(deps.launchOverridesDeps, 'openclaw', expect.objectContaining({ openclawLocal: null }), 'a1', expect.any(Function), undefined)
+  })
+
   it('records the web-search decision a relaunch made, when it made one', () => {
     const { deps, helpers } = setup()
     helpers.refreshGridWebSearch('a1', {} as LaunchOverrides)

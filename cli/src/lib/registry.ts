@@ -238,6 +238,17 @@ export interface RegisteredSession {
    */
   openclawStateDir?: string | null
   /**
+   * OpenClaw only: the `--local` folder this harness runs in (`agent_create`'s `openclawLocal`), an absolute path. Its
+   * `openclawStateDir` is this folder from the start and never moves off it. Kept as written: a folder that is gone is
+   * refused at launch, never dropped here.
+   */
+  openclawLocal?: string
+  /**
+   * The session keys this harness moved off (`/new`), newest first, once each, at most EARLIER_SESSIONS_MAX: a delete
+   * erases what is kept under every one of them. Never on the agent's frame.
+   */
+  earlierSessionIds?: string[]
+  /**
    * The first task its launch carried, for an engine that is handed it by typing rather than in argv (OpenClaw), until
    * it is typed into the pane. Saved with the row, so a daemon restart before the engine is ready still types it; taken
    * off durably before it is typed (`takeFirstTask`), so it is typed at most once. Never on the agent's frame.
@@ -421,6 +432,8 @@ const LOCK_DIR = join(env.ADAPTER_DATA_DIR, 'registry.json.lock')
 const PRE_V2_BACKUP_FILE = join(env.ADAPTER_DATA_DIR, 'registry.pre-v2.json')
 /** Written once this machine's saved agents are cleared of the permission modes Harness forced (`withoutForcedModes`). */
 const OWN_MODES_FILE = join(env.ADAPTER_DATA_DIR, 'registry-own-modes')
+/** Written once this machine's saved Swarm agents with no mode are given Auto-approve (`withSwarmAuto`). */
+const SWARM_AUTO_FILE = join(env.ADAPTER_DATA_DIR, 'registry-swarm-auto')
 const NAME_OVERRIDES = new Map<string, string>()
 
 const PANE_RE = /^%\d+$/
@@ -687,6 +700,31 @@ function withoutForcedModes(rows: Array<Partial<RegisteredSession>>): { rows: Ar
   return { rows: kept, cleared }
 }
 
+/**
+ * A Swarm agent starts in Auto-approve since 2026-11-12 (anh Dee: as a new agent in a regular tab does), and a restart or
+ * restore reapplies the saved mode. One started between task #4215 and then has none, and kept coming back in its owner's own
+ * default, where a PM stood still before each tool and Codex refused every ask to leave its sandbox. So the first load of a
+ * build with this gives each such Claude Code or Codex agent the Swarm started Auto-approve, once (`SWARM_AUTO_FILE`). Only one
+ * the Swarm started (superTabs/inCore/adoption.ts `swarmStarted`): a person's own agent attached to a Swarm also carries a
+ * Swarm role, often with no mode (`harness new` in its own settings, a Codex in Ask), and keeps its own default. Every mode a
+ * person picks for a Swarm-started agent is recorded on its row, so one with none was never theirs. Its pane takes the mode at
+ * its next relaunch (a Restart, or the computer's restart). Review after 2027-01-12.
+ */
+const swarmStarted = (row: Partial<RegisteredSession>) => row.startedBy === 'agent' && !row.parentAgentId
+
+/** [row] in Auto-approve when it is one of those agents, else [row] itself. Also what Open uses for a stopped one, which is
+ *  saved outside this file (lib/stoppedAgents.ts) and so outside the sweep. */
+export function inSwarmAuto<T extends Partial<RegisteredSession>>(row: T): T {
+  if (row?.permissionMode != null || (row.engine !== 'claude' && row.engine !== 'codex') || !parseSwarmSkill(row.swarmSkill)
+    || !swarmStarted(row)) return row
+  return { ...row, permissionMode: 'auto', bypassPermission: true }
+}
+
+function withSwarmAuto(rows: Array<Partial<RegisteredSession>>): { rows: Array<Partial<RegisteredSession>>; given: number } {
+  const kept = rows.map(inSwarmAuto)
+  return { rows: kept, given: kept.filter((row, i) => row !== rows[i]).length }
+}
+
 /** A legacy `tmuxPane` adds a tmux runtime unless it is a listed runtime's own projection (`paneProjection`). */
 function normalizedRuntimes(raw: unknown, legacyTmuxPane?: unknown): TerminalRuntimeRef[] {
   const fromArray = Array.isArray(raw) ? raw.filter(validTerminalRuntime) : []
@@ -741,7 +779,7 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
   // Taken out of the spread and put back only when it is a real moment: the spread would otherwise
   // carry a hand-edited string or a negative number straight into the frame's `toISOString()`.
   // `forkedFrom` is out too, so an invalid one is dropped rather than spread back in as-is.
-  const { identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, admissionHold: _admission, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, launchModel: rawLaunchModel, externalResume: _externalResume, startedBy: rawStartedBy, parentAgentId: rawParentAgentId, swarmSkill: rawSwarmSkill, launchArgs: rawLaunchArgs, browser: rawBrowser, quietTitle: rawQuietTitle, firstTask: rawFirstTask, ...rest } = row
+  const { identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, admissionHold: _admission, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, launchModel: rawLaunchModel, externalResume: _externalResume, startedBy: rawStartedBy, parentAgentId: rawParentAgentId, swarmSkill: rawSwarmSkill, launchArgs: rawLaunchArgs, browser: rawBrowser, quietTitle: rawQuietTitle, firstTask: rawFirstTask, openclawLocal: rawOpenclawLocal, earlierSessionIds: rawEarlierSessionIds, ...rest } = row
   const lastOpenedAt = normalizedOpenedAt(rawOpenedAt)
   // Out of the spread for the same reason: a half-formed record is dropped, never relaunched with.
   const scmLaunch = parseScmLaunchRecord(rawScmLaunch)
@@ -751,10 +789,14 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
   const swarmSkill = parseSwarmSkill(rawSwarmSkill)
   const launchArgs = storedLaunchArgs(rawLaunchArgs)
   const firstTask = storedFirstTask(rawFirstTask)
+  const openclawLocal = storedOpenclawLocal(rawOpenclawLocal)
+  const earlierSessionIds = earlierSessionKeys(rawEarlierSessionIds)
   return {
     ...rest,
     ...(externalResume ? { externalResume } : {}),
     ...(firstTask ? { firstTask } : {}),
+    ...(openclawLocal ? { openclawLocal } : {}),
+    ...(earlierSessionIds ? { earlierSessionIds } : {}),
     ...(scmLaunch ? { scmLaunch } : {}),
     ...(launchModel ? { launchModel } : {}),
     ...(swarmSkill ? { swarmSkill } : {}),
@@ -811,6 +853,24 @@ function storedLaunchArgs(value: unknown): string[] | undefined {
 /** Only a non-empty string is a saved first task; anything else on disk is dropped, never typed into a pane. */
 function storedFirstTask(value: unknown): string | undefined {
   return typeof value === 'string' && value ? value : undefined
+}
+
+/** Only a non-empty string is a saved `--local` folder. */
+function storedOpenclawLocal(value: unknown): string | undefined {
+  return typeof value === 'string' && value ? value : undefined
+}
+
+const EARLIER_SESSIONS_MAX = 32
+
+/**
+ * The session keys a row moved off, with [movedOff] put at the front: newest first, each a non-empty key of at most
+ * 256 characters, once, at most EARLIER_SESSIONS_MAX. Anything else on disk is dropped.
+ */
+function earlierSessionKeys(value: unknown, movedOff?: string | null): string[] | undefined {
+  const keys = [movedOff, ...Array.isArray(value) ? value : []]
+    .filter((key): key is string => typeof key === 'string' && key.length > 0 && key.length <= 256)
+  const kept = [...new Set(keys)].slice(0, EARLIER_SESSIONS_MAX)
+  return kept.length ? kept : undefined
 }
 
 /** Says a first task is on the agent's row, by the agent's short id only: the task is the person's words. */
@@ -1338,14 +1398,21 @@ class Registry {
       const ownModes = !existsSync(OWN_MODES_FILE)
       if (ownModes) {
         const swept = withoutForcedModes(arr)
-        if (swept.cleared) console.log(`[registry] ${swept.cleared} agent(s) start with their owner's own permission settings again`)
+        if (swept.cleared) console.log(`[registry] ${swept.cleared} agent(s) no longer keep a permission mode Harness forced`)
+        arr = swept.rows
+      }
+      // After the forced modes are cleared: a Swarm agent full mode was forced on comes back in Auto-approve too.
+      const swarmAuto = !existsSync(SWARM_AUTO_FILE)
+      if (swarmAuto) {
+        const swept = withSwarmAuto(arr)
+        if (swept.given) console.log(`[registry] ${swept.given} Swarm agent(s) start in Auto-approve`)
         arr = swept.rows
       }
       // The rollback copy is the file as found, retired runtimes and all — not the cleaned rows.
       if (arr.some((row) => row.schemaVersion !== 2)) {
         atomicWriteJson(PRE_V2_BACKUP_FILE, stored, true)
       }
-      let changed = strippedRetired || (ownModes && arr.some((row, i) => row !== parsed[i]))
+      let changed = strippedRetired || ((ownModes || swarmAuto) && arr.some((row, i) => row !== parsed[i]))
       if (rebooted) {
         this.rebooted = true
         console.log(`[registry] machine rebooted since last run — ${arr.length} agent(s) kept with their process identity cleared (stale panes, restored on start)`)
@@ -1461,6 +1528,8 @@ class Registry {
           hermesHome: typeof raw?.hermesHome === 'string' && raw.hermesHome ? raw.hermesHome : null,
           ...(typeof raw?.openclawStateDir === 'string' && raw.openclawStateDir ? { openclawStateDir: raw.openclawStateDir } : {}),
           ...(storedFirstTask(raw.firstTask) ? { firstTask: storedFirstTask(raw.firstTask) } : {}),
+          ...(storedOpenclawLocal(raw.openclawLocal) ? { openclawLocal: storedOpenclawLocal(raw.openclawLocal) } : {}),
+          ...(earlierSessionKeys(raw.earlierSessionIds) ? { earlierSessionIds: earlierSessionKeys(raw.earlierSessionIds) } : {}),
           ...normalizedForkedFrom((raw as { forkedFrom?: unknown }).forkedFrom),
           dsh: normalizedDshId((raw as { dsh?: unknown }).dsh),
           dshRuntime: typeof raw.dshRuntime === 'string' && raw.dshRuntime ? raw.dshRuntime : null,
@@ -1566,12 +1635,16 @@ class Registry {
       }
       if (changed) this.save()
       if (ownModes) atomicWriteJson(OWN_MODES_FILE, Date.now())
+      if (swarmAuto) atomicWriteJson(SWARM_AUTO_FILE, Date.now())
     } catch (error) {
       if (error instanceof SyntaxError) this.quarantine(`is not JSON (${error.message})`)
       else if (existsSync(FILE)) {
         this.writeBlocked = true
         console.error('[registry] registry is unreadable; refusing to overwrite it:', error instanceof Error ? error.message : error)
-      } else atomicWriteJson(OWN_MODES_FILE, Date.now())
+      } else {
+        atomicWriteJson(OWN_MODES_FILE, Date.now())
+        atomicWriteJson(SWARM_AUTO_FILE, Date.now())
+      }
       // A genuinely absent file starts empty. A file that cannot be opened safely (a symlink, another
       // owner, open permissions) is left exactly as it is, and nothing is written over it.
     }
@@ -1811,6 +1884,8 @@ class Registry {
     browser?: boolean
     /** The first task to type once the engine is ready — see RegisteredSession.firstTask. */
     firstTask?: string
+    /** OpenClaw's `--local` folder — see RegisteredSession.openclawLocal. */
+    openclawLocal?: string
   }): RegisteredSession | null {
     if (this.writeBlocked) return null
     const externalResume = input.externalResume === undefined ? undefined : parseExternalResume(input.externalResume)
@@ -1856,6 +1931,8 @@ class Registry {
       ...(input.guest ? { guest: input.guest } : {}),
       ...(input.browser ? { browser: true as const } : {}),
       ...(input.firstTask ? { firstTask: input.firstTask } : {}),
+      // Its store is in that folder from the start: nothing waits for a TUI to be seen holding it.
+      ...(input.openclawLocal ? { openclawLocal: input.openclawLocal, openclawStateDir: input.openclawLocal } : {}),
       transcriptPath: null,
       projectDir: basename(input.cwd ?? '') || agentId,
       cwd: input.cwd ?? null,
@@ -2066,6 +2143,7 @@ class Registry {
     const isNew = !existing || existing.sessionId !== sessionId
     // A rotation: the same process agent and pane swapping the engine session underneath it.
     const rebound = existing && existing.sessionId && existing.sessionId !== sessionId ? existing.sessionId : null
+    const earlierSessionIds = earlierSessionKeys(existing?.earlierSessionIds, rebound)
 
     const evicted: string | null = rebound
     // The same engine session cannot belong to two agents — `claude --resume X` in a second pane. The
@@ -2223,6 +2301,9 @@ class Registry {
       hermesHome: input.hermesHome ?? existing?.hermesHome ?? null,
       // Carried forward too: `/new` rebinds the same TUI, and its store is where it was.
       ...(existing?.openclawStateDir && engine === 'openclaw' ? { openclawStateDir: existing.openclawStateDir } : {}),
+      ...(existing?.openclawLocal && engine === 'openclaw' ? { openclawLocal: existing.openclawLocal } : {}),
+      // And the key it moved off, so a delete still finds what is kept under it.
+      ...(earlierSessionIds ? { earlierSessionIds } : {}),
       // And the task not yet typed: the bind is what lets it be typed, so dropping it here would lose it every time.
       ...(existing?.firstTask ? { firstTask: existing.firstTask } : {}),
       dsh: existing?.dsh ?? null,
@@ -2747,7 +2828,8 @@ class Registry {
   /** Where an OpenClaw session's TUI keeps its state, read off the TUI while it runs: the one it holds now wins. */
   setOpenclawStateDir(agentId: string, stateDir: string): boolean {
     const session = this.agents.get(agentId)
-    if (!session || session.engine !== 'openclaw' || session.openclawStateDir === stateDir) return false
+    // A `--local` row's store is its folder: a TUI seen elsewhere never moves it off.
+    if (!session || session.engine !== 'openclaw' || session.openclawLocal || session.openclawStateDir === stateDir) return false
     session.openclawStateDir = stateDir
     session.touchedAt = Date.now()
     this.save()

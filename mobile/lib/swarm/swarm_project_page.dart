@@ -28,21 +28,15 @@ import 'swarm_terminal_row.dart';
 import 'swarm_thread.dart' show SwarmThreadFocus;
 
 /// Opens [projectId] of Swarm [swarmId] over [context]'s page — in its place
-/// with [replace] — on its chat, with [mention] in the chat's draft: every
-/// way into a project goes through here.
+/// with [replace] — on its chat: every way into a project goes through here.
 void openSwarmProject(
   BuildContext context, {
   required String swarmId,
   required String projectId,
-  String? mention,
   bool replace = false,
 }) {
   final route = phoneRoute(
-    (_) => SwarmProjectPage(
-      swarmId: swarmId,
-      projectId: projectId,
-      mention: mention,
-    ),
+    (_) => SwarmProjectPage(swarmId: swarmId, projectId: projectId),
     listensForItself: true,
   );
   final navigator = Navigator.of(context);
@@ -236,17 +230,12 @@ class SwarmProjectPage extends StatefulWidget {
     super.key,
     required this.swarmId,
     required this.projectId,
-    this.mention,
     this.messageId,
     this.threadId,
     this.threadFocus,
   });
 
   final String swarmId, projectId;
-
-  /// An agent to @mention in the chat's draft as it opens
-  /// ([SwarmConversationPage.mention]).
-  final String? mention;
 
   /// Where its chat opens, as a notice or a link names it: at that message
   /// ([SwarmConversationPage.messageId]), or with that thread open over it
@@ -508,7 +497,6 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
       conversationId: project.leadConversationId,
       header: false,
       findRequests: _findRequests,
-      mention: widget.mention,
       messageId: widget.messageId,
       threadId: widget.threadId,
       threadFocus: widget.threadFocus,

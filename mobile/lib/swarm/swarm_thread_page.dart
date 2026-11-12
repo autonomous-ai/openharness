@@ -775,8 +775,14 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
             child: Text(
               group.archived
                   ? 'This chat is archived.'
+                  : t.chat.agentsOnly
+                  ? swarmAgentsOnlyLine
                   : 'You can read this chat, not post in it.',
-              key: const ValueKey('swarm-thread-read-only'),
+              key: ValueKey(
+                !group.archived && t.chat.agentsOnly
+                    ? 'swarm-thread-agents-only'
+                    : 'swarm-thread-read-only',
+              ),
               style: swarmChatText(13.5, color: AppPalette.textSecondary),
             ),
           ),

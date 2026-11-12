@@ -34,7 +34,7 @@ import { isNameChosen, projectDisplayName, sessionDisplayTitle, type RegisteredS
 import { engineCanFork } from './forkAgent.js'
 import { resumeMode, type ResumeMode } from './resumeCapability.js'
 import type { DshVerdict } from '../dsh/verdict.js'
-import { OPENCLAW_STATES } from '../engines/openclaw/contract.js'
+import { isOpenclawLocalStopped, OPENCLAW_STATES } from '../engines/openclaw/contract.js'
 
 /**
  * The grid block on the wire: where the agent's inference goes, and — when the daemon built the
@@ -268,7 +268,7 @@ export async function agentFrame(
     closeSupported: true,
     launch: s.launch ?? { state: 'ready' },
     ...((s.identityHold || s.interpretationHold || s.admissionHold) ? { identityHold: s.identityHold || s.interpretationHold || s.admissionHold } : {}),
-    ...(s.identityHold && NAMED_STATES.has(s.identityHold) ? { namedState: s.identityHold } : {}),
+    ...(s.identityHold && (NAMED_STATES.has(s.identityHold) || isOpenclawLocalStopped(s.identityHold)) ? { namedState: s.identityHold } : {}),
     createdAt: new Date(s.registeredAt).toISOString(),
     updatedAt: new Date(updatedAt).toISOString(),
     // Null, never omitted, for the reason the module doc gives: a push without the key would erase

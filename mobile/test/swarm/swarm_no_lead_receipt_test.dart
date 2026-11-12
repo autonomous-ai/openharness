@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
@@ -8,22 +6,26 @@ import 'package:harness_mobile/swarm/swarm_conversation.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_message_receipt.dart';
 import 'package:harness_mobile/swarm/swarm_reader.dart';
-import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
 import 'swarm_new_project_fixture.dart';
 
-/// "Not sent · this chat has no Lead" under the person's newest message, as
-/// Desktop says it (`message_receipt.dart`), and Add a Lead where the phone can
-/// start one: a project chat, through `lead.start` as a new project does
-/// (Tony's mobile list, task 29).
+/// The line under the person's newest message before any delivery, as
+/// Desktop says it (`message_receipt.dart`): "Waiting for the Product
+/// Manager" in the PM's own chat while the PM New project asked for starts,
+/// "Not sent · this chat has no Lead" in a chat with none. The phone starts
+/// no Lead from it: Desktop chooses a channel's PM from its owner's agents.
 void main() {
   const commands = '/api/super-tabs/$tab/commands';
   const line = 'Not sent · this chat has no Lead';
 
-  Map<String, dynamic> own(String chat, {bool delivered = false}) => {
+  Map<String, dynamic> own(
+    String chat, {
+    bool delivered = false,
+    Map<String, dynamic>? source,
+  }) => {
     'id': 'm1',
     'conversationId': chat,
     'text': 'Who picks this up?',
@@ -33,6 +35,7 @@ void main() {
       'deliveries': [
         {'id': 'd1', 'agentId': 'agent-lead', 'status': 'delivered'},
       ],
+    'source': ?source,
     'createdAt': DateTime.now().toUtc().toIso8601String(),
   };
 
@@ -45,16 +48,16 @@ void main() {
   }
 
   /// A Swarm whose chat [chat] holds the person's message; the project chat
-  /// has a Lead only when [lead]. [kind] makes [chat] a Buddy chat.
+  /// has a Lead only when [lead]. [kind] makes [chat] a Buddy or an agent's
+  /// chat; [pmChat] the PM's own chat its project waits in.
   ({FakeSwarm swarm, SwarmReader reader}) rig({
     String chat = leadChat,
     bool lead = false,
     bool delivered = false,
     String? kind,
     String role = 'owner',
-    bool machines = true,
-    bool waiting = false,
-    FutureOr<Object?> Function(Map<String, dynamic>? body)? command,
+    bool pmChat = false,
+    Map<String, dynamic>? source,
   }) {
     final fake = FakeSwarm();
     fake.routes['/api/super-tabs/$tab/parts'] = (_) {
@@ -63,12 +66,9 @@ void main() {
           projects: [
             {
               ...swarmProject(project, 'Mobile', repo: harnessRepo),
-              // The server keeps the message for the project's Lead: a
-              // Personal Swarm's chat with none (backend leadStart.ts).
-              if (waiting)
-                'leadWaiting': [
-                  {'id': 'm1', 'at': 1},
-                ],
+              // The PM New project asked for is starting, and its 1:1 chat
+              // waits for it (backend pmChat.ts).
+              if (pmChat) 'pmChat': {'id': chat},
             },
           ],
         ),
@@ -76,12 +76,7 @@ void main() {
           if (chat != leadChat)
             {...groupData(chat, agentIds: const []), 'kind': ?kind},
         ],
-        machines: [
-          if (machines) ...[
-            machine('mac-1', 'Mac Studio'),
-            machine('mac-2', 'MacBook Pro', online: false),
-          ],
-        ],
+        machines: [machine('mac-1', 'Mac Studio')],
       );
       (load['groups'] as List).first['data'] = groupData(
         leadChat,
@@ -95,10 +90,10 @@ void main() {
     };
     fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
     fake.routes['/api/super-tabs/$tab/conversations/$chat/messages'] = (_) => {
-      'messages': [own(chat, delivered: delivered)],
+      'messages': [own(chat, delivered: delivered, source: source)],
       'next': null,
     };
-    fake.routes[commands] = command ?? (_) => {'result': <String, Object>{}};
+    fake.routes[commands] = (_) => {'result': <String, Object>{}};
     final reader = SwarmReader(
       tabId: tab,
       accountId: me,
@@ -141,40 +136,62 @@ void main() {
     return c;
   }
 
-  List<Map<String, dynamic>> starts(FakeSwarm swarm) => [
+  List<String> sent(FakeSwarm swarm) => [
     for (final call in swarm.calls)
-      if (call.method == 'POST' &&
-          call.path == commands &&
-          (call.body!['command'] as Map)['type'] == 'lead.start')
-        call.body!,
+      if (call.method == 'POST' && call.path == commands)
+        (call.body!['command'] as Map)['type'] as String,
   ];
 
-  Finder addLead() => find.byKey(const ValueKey('swarm-receipt-add-lead'));
+  const waiting = 'Waiting for the Product Manager';
 
   group('the line', () {
-    testWidgets('a project chat with no Lead says so, with Add a Lead', (
+    testWidgets('a project chat with no Lead says so, and starts none', (
       tester,
     ) async {
-      await show(tester, rig());
+      final r = rig();
+      await show(tester, r);
       expect(find.text(line), findsOneWidget);
-      expect(find.text('Add a Lead'), findsOneWidget);
+      // Desktop chooses a channel's PM from its owner's agents; nothing is
+      // started from here.
+      expect(find.text('Add a Lead'), findsNothing);
+      expect(find.byType(InkWell), findsNothing);
+      expect(sent(r.swarm), isEmpty);
     });
 
-    // River, 11-04 (task #2633): in a Personal Swarm the server keeps the
-    // message for the Lead the person's computer starts, so it is not "Not
-    // sent"; the phone starts none itself.
-    testWidgets('a message the server keeps for the Lead waits for one', (
+    testWidgets("the PM's own chat waits for the PM while it starts", (
       tester,
     ) async {
-      await show(tester, rig(waiting: true));
-      expect(
-        find.text(
-          'Waiting for a Lead · open Harness on your computer to start one',
-        ),
-        findsOneWidget,
+      await show(
+        tester,
+        rig(chat: 'pm1', kind: 'agent-chat', pmChat: true),
+        chat: 'pm1',
       );
+      expect(find.text(waiting), findsOneWidget);
       expect(find.text(line), findsNothing);
-      expect(find.text('Add a Lead'), findsNothing);
+    });
+
+    testWidgets('a row the server wrote under the person\'s name says nothing '
+        'of waiting', (tester) async {
+      await show(
+        tester,
+        rig(
+          chat: 'pm1',
+          kind: 'agent-chat',
+          pmChat: true,
+          source: {'kind': 'lead-start-failed'},
+        ),
+        chat: 'pm1',
+      );
+      expect(find.text(waiting), findsNothing);
+      expect(find.text(line), findsNothing);
+    });
+
+    testWidgets("none in an agent's own chat: its agent takes the message", (
+      tester,
+    ) async {
+      await show(tester, rig(chat: 'a1', kind: 'agent-chat'), chat: 'a1');
+      expect(find.text(line), findsNothing);
+      expect(find.text(waiting), findsNothing);
     });
 
     testWidgets('none where the chat has its Lead', (tester) async {
@@ -198,137 +215,14 @@ void main() {
       expect(find.text(line), findsNothing);
     });
 
-    testWidgets('a task chat says so, with nothing the phone cannot do', (
-      tester,
-    ) async {
+    testWidgets('a task chat says so', (tester) async {
       await show(tester, rig(chat: 'g1', lead: true), chat: 'g1');
       expect(find.text(line), findsOneWidget);
-      expect(addLead(), findsNothing);
     });
 
-    testWidgets('a viewer reads it, and cannot add one', (tester) async {
-      final r = rig(role: 'viewer');
-      await show(tester, r);
+    testWidgets('a viewer reads it', (tester) async {
+      await show(tester, rig(role: 'viewer'));
       expect(find.text(line), findsOneWidget);
-      await tester.tap(addLead(), warnIfMissed: false);
-      await tester.pumpAndSettle();
-      expect(find.text('Mac Studio'), findsNothing);
-      expect(starts(r.swarm), isEmpty);
-    });
-  });
-
-  group('Add a Lead', () {
-    testWidgets('lists the machines, and one starts the Lead there', (
-      tester,
-    ) async {
-      final r = rig();
-      await show(tester, r);
-      await tester.tap(addLead());
-      await tester.pumpAndSettle();
-      expect(find.text('Mac Studio'), findsOneWidget);
-      expect(find.text('MacBook Pro'), findsOneWidget);
-      // Offline: listed, and not picked; the sheet stays.
-      await tester.tap(find.text('MacBook Pro'));
-      await tester.pumpAndSettle();
-      expect(starts(r.swarm), isEmpty);
-      await tester.tap(find.text('Mac Studio'));
-      await tester.runAsync(pumpEventQueue);
-      await tester.pumpAndSettle();
-      final command = starts(r.swarm).single['command'] as Map;
-      expect(command, {
-        'type': 'lead.start',
-        'projectId': project,
-        'machineId': 'mac-1',
-        'engine': 'claude',
-        'repositoryUrl': harnessRepo,
-      });
-    });
-
-    Future<void> pick(WidgetTester tester) async {
-      await tester.tap(addLead());
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Mac Studio'));
-      await tester.runAsync(pumpEventQueue);
-      await tester.pumpAndSettle();
-    }
-
-    List<String> receipts(FakeSwarm swarm) => [
-      for (final start in starts(swarm)) start['operationId'] as String,
-    ];
-
-    testWidgets('a lost answer, tried again, is the same start', (
-      tester,
-    ) async {
-      var lost = true;
-      final r = rig(
-        command: (_) => lost
-            ? throw const SuperTabFailure(
-                'MACHINE_UNAVAILABLE',
-                'No computer answered.',
-                statusCode: 503,
-              )
-            : {'result': <String, Object>{}},
-      );
-      await show(tester, r);
-      await pick(tester);
-      expect(find.text('No computer answered.'), findsOneWidget);
-      lost = false;
-      await pick(tester);
-      final [first, again] = receipts(r.swarm);
-      expect(again, first);
-      expect(find.text('No computer answered.'), findsNothing);
-    });
-
-    testWidgets('after a refusal, the next try is a new start', (tester) async {
-      final r = rig(
-        command: (_) => throw const SuperTabFailure(
-          'MACHINE_BUSY',
-          'Mac Studio has no room for another agent.',
-          statusCode: 409,
-        ),
-      );
-      await show(tester, r);
-      await pick(tester);
-      await pick(tester);
-      final [first, again] = receipts(r.swarm);
-      expect(again, isNot(first));
-    });
-
-    testWidgets('with no machine, it says so and opens no empty sheet', (
-      tester,
-    ) async {
-      final r = rig(machines: false);
-      await show(tester, r);
-      await tester.tap(addLead());
-      await tester.pumpAndSettle();
-      expect(
-        find.text(
-          'No machine in this Swarm can run a Lead. Add one on Desktop.',
-        ),
-        findsOneWidget,
-      );
-      expect(find.text('Machine'), findsNothing);
-      expect(starts(r.swarm), isEmpty);
-    });
-
-    testWidgets('a refusal says why, in its own words', (tester) async {
-      final r = rig(
-        command: (_) => throw const SuperTabFailure(
-          'LEAD_STARTING',
-          "This project's Product Manager is already starting.",
-          statusCode: 409,
-        ),
-      );
-      await show(tester, r);
-      await tester.tap(addLead());
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Mac Studio'));
-      await tester.runAsync(pumpEventQueue);
-      await tester.pumpAndSettle();
-      expect(
-        find.text("This project's Product Manager is already starting."),
-        findsOneWidget,
-      );
     });
   });
 

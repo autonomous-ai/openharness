@@ -209,6 +209,89 @@ describe('the files most landings touch', () => {
   })
 })
 
+// The allocator's design, package 8, its first step: which files a conflict was likely on, so what is done for the files most
+// landings touch is judged by the conflicts on them, week against week.
+describe('the files the changes told they conflict shared with what landed meanwhile', () => {
+  /** A landed change of the team's for task #[task], when it names one. */
+  const change = (number: number, opened: number, merged: number, task?: number) => landed(number, opened, merged, { body: task ? `Closes #${task}` : 'Tidy.' })
+  const taken = (at: number) => said(at, 'Pip, 14:00: taken by Pip')
+
+  it('counts each file a change told it conflicts shares with what landed from when its task was given to its own landing', async () => {
+    // #1's task was given nine hours ago and taken at eight; #1 opened at five, was told it conflicts at three, and landed an hour
+    // ago. #5, for no task, opened four hours ago and landed two hours ago, told it conflicts too.
+    const closed = [change(1, 5 * HOUR, HOUR, 101), change(2, 9 * HOUR, 6 * HOUR), change(3, 12 * HOUR, 10 * HOUR), change(4, 2 * HOUR, 30 * MINUTE),
+      change(5, 4 * HOUR, 2 * HOUR), change(6, 5 * HOUR, 3 * HOUR), change(7, 3 * HOUR, 90 * MINUTE)]
+    const talk = { 1: [note(3 * HOUR, CONFLICT)], 5: [note(150 * MINUTE, CONFLICT)], 101: [said(9 * HOUR, 'Harness, 14:00: for **Pip**: it can start now.'), taken(8 * HOUR)] }
+    const files = {
+      // Shared with #2, which landed after its task was given and before it opened, and with #5, #6 and #7, which landed before
+      // it. Not with #3, which landed before its task was given, nor with #4, which landed after it.
+      1: ['src/hub.ts', 'src/own1.ts', 'src/late.ts', 'src/early.ts'], 2: ['src/hub.ts', 'src/early.ts'], 3: ['src/own1.ts'], 4: ['src/late.ts'],
+      // For no task: from its opening, so #6 counts and #2 does not.
+      5: ['src/hub.ts', 'src/store.ts'], 6: ['src/store.ts', 'src/hub.ts'],
+      // Told nothing: what it shares counts for nothing.
+      7: ['src/hub.ts', 'src/store.ts'],
+    }
+    const hub = github(talk, files), read = await board(closed, hub)
+    expect(read.waits).toMatchObject({ read: 7, conflict: 2 })
+    expect(read.conflicts).toEqual([['src/hub.ts', 2], ['src/early.ts', 1], ['src/store.ts', 1]])
+    // One more read for each change told it conflicts that names a task: its task's comments, a page.
+    expect(hub.asked.filter(path => path.includes('/issues/101/'))).toEqual(['/repos/acme/app/issues/101/comments?per_page=100'])
+    expect(hub.asked).toHaveLength(7 + 7 + 1)
+    // A task whose giving or taking cannot be told: from the change's opening, so #2 no longer counts.
+    expect((await board(closed, github({ ...talk, 101: [said(9 * HOUR, 'Pip: on it')] }, files))).conflicts).toEqual([['src/hub.ts', 2], ['src/store.ts', 1]])
+    // None told it conflicts: nothing is shared, and nothing more is read.
+    const quiet = github({}, files)
+    expect((await board(closed, quiet)).conflicts).toEqual([])
+    expect(quiet.asked).toHaveLength(7 + 7)
+  })
+
+  // A squashed train closes its riders one after another, seconds apart (githubTrain.ts finish): they landed together, and the
+  // train found no conflict between them (review of #4177).
+  it('counts nothing a change shares with another rider of its own train, closed by that train seconds after it', async () => {
+    const train = { number: 9, title: 'Train: #1 #2', labels: [], author_association: 'MEMBER', created_at: ago(2 * HOUR), closed_at: ago(HOUR), pull_request: { merged_at: ago(HOUR) } }
+    const rider = (number: number, closedAgo: number) => ({ number, title: `Change ${number}`, labels: [{ name: 'builder:pip' }], created_at: ago(5 * HOUR), closed_at: ago(closedAgo),
+      pull_request: { merged_at: null } })
+    const read = await board([train, rider(1, HOUR), rider(2, HOUR - 2000)], github({ 2: [note(3 * HOUR, CONFLICT)] }, { 1: ['src/hub.ts'], 2: ['src/hub.ts', 'src/own.ts'] }))
+    expect(read.waits).toMatchObject({ read: 2, conflict: 1 })
+    expect(read.conflicts).toEqual([])
+  })
+
+  // A train that lands as a merge commit, the train's first way where the repository allows it: GitHub marks each rider merged
+  // by itself a moment later, each with its own time (review of #4177, round 2).
+  it('counts nothing a change shares with another rider of its own merge-commit train, each marked merged a moment apart', async () => {
+    const train = { number: 9, title: 'Train: #1 #2', labels: [], author_association: 'MEMBER', created_at: ago(2 * HOUR), closed_at: ago(HOUR), pull_request: { merged_at: ago(HOUR) } }
+    const rider = (number: number, mergedAgo: number) => ({ number, title: `Change ${number}`, labels: [{ name: 'builder:pip' }], created_at: ago(5 * HOUR),
+      closed_at: ago(mergedAgo), pull_request: { merged_at: ago(mergedAgo) } })
+    const read = await board([train, rider(1, HOUR - 1000), rider(2, HOUR - 3000)], github({ 2: [note(3 * HOUR, CONFLICT)] }, { 1: ['src/hub.ts'], 2: ['src/hub.ts', 'src/own.ts'] }))
+    expect(read.conflicts).toEqual([])
+  })
+
+  it('names three files at most, the most shared first, and none for a change GitHub gave no time of its opening', async () => {
+    const closed = [...[1, 2, 3, 4].map(number => change(number, 5 * HOUR, number * MINUTE)), change(10, 6 * HOUR, 3 * HOUR), { ...change(11, 0, 4 * MINUTE), created_at: null }]
+    const talk = Object.fromEntries([1, 2, 3, 4, 11].map(number => [number, [note(HOUR, CONFLICT)]]))
+    const files = { 1: ['d.ts', 'a.ts', 'b.ts', 'c.ts'], 2: ['a.ts', 'b.ts', 'c.ts'], 3: ['a.ts', 'b.ts'], 4: ['a.ts'], 10: ['a.ts', 'b.ts', 'c.ts', 'd.ts'], 11: ['c.ts', 'e.ts'] }
+    expect((await board(closed, github(talk, files))).conflicts).toEqual([['a.ts', 4], ['b.ts', 3], ['c.ts', 2]])
+  })
+
+  it('is left out when the conflicts or the files were not read, and said with why when a task\'s comments cannot be', async () => {
+    const closed = [change(1, 5 * HOUR, HOUR, 101), change(2, 4 * HOUR, 2 * HOUR)]
+    const talk = { 1: [note(3 * HOUR, CONFLICT)], 101: [taken(8 * HOUR)] }, files = { 1: ['src/hub.ts'], 2: ['src/hub.ts'] }
+    expect((await board(closed, github(talk, files))).conflicts).toEqual([['src/hub.ts', 1]])
+    // A part it is read from not given: nothing more is asked, and that part alone is said.
+    for (const [failing, part] of [[/\/issues\/1\/comments$/, 'waits'], [/\/files$/, 'files']] as const) {
+      const hub = github(talk, files), unread = vi.fn()
+      hub.failing.set(failing, 500)
+      expect((await board(closed, hub, unread)).conflicts).toBeNull()
+      expect(unread.mock.calls.map(([name]) => name)).toEqual([part])
+      expect(hub.asked.some(path => path.includes('/issues/101/'))).toBe(false)
+    }
+    const hub = github(talk, files), unread = vi.fn()
+    hub.failing.set(/\/issues\/101\/comments$/, 500)
+    expect(await board(closed, hub, unread)).toMatchObject({ waits: { conflict: 1 }, hot: { landings: 2 }, conflicts: null })
+    expect(unread.mock.calls).toEqual([['conflicts', 'GitHub answered 500.']])
+  })
+})
+
 describe('a part GitHub does not give', () => {
   /** Twenty that landed in the last hours, each read OK and touching one file. */
   const twenty = Array.from({ length: 20 }, (_, at) => landed(at + 1, 5 * HOUR, (at + 1) * MINUTE))
@@ -217,7 +300,7 @@ describe('a part GitHub does not give', () => {
   it('is left out and said, with why, and no more of it is asked than the six in flight', async () => {
     const hub = github(talk, files), unread = vi.fn()
     hub.failing.set(/\/comments$/, 403)
-    expect(await board(twenty, hub, unread)).toEqual({ waits: null, trains: { landed: 0, closed: {} }, hot: { landings: 20, files: [['src/a.ts', 20]] } })
+    expect(await board(twenty, hub, unread)).toEqual({ waits: null, trains: { landed: 0, closed: {} }, hot: { landings: 20, files: [['src/a.ts', 20]] }, conflicts: null })
     expect(unread.mock.calls).toEqual([['waits', 'this computer\'s gh login cannot read acme/app.']])
     expect(hub.asked.filter(path => path.includes('/comments'))).toHaveLength(6)
     // The files alone: the waits are said all the same.
@@ -266,21 +349,31 @@ describe('a part GitHub does not give', () => {
     // A 200 whose body was cut off on its way: read as an empty list, two changes counted as never read and touching nothing.
     const hub = github(talk, files), unread = vi.fn()
     hub.cut.push(/\/issues\/2\/comments$/, /\/pulls\/3\/files$/)
-    expect(await board(twenty, hub, unread)).toEqual({ waits: null, trains: { landed: 0, closed: {} }, hot: null })
+    expect(await board(twenty, hub, unread)).toEqual({ waits: null, trains: { landed: 0, closed: {} }, hot: null, conflicts: null })
     expect(unread.mock.calls).toEqual([['waits', 'GitHub\'s answer did not arrive whole.'], ['files', 'GitHub\'s answer did not arrive whole.']])
   })
 })
 
 describe('what the day\'s post says of it', () => {
   const waits: NonNullable<Board['waits']> = { read: 12, toVerdict: { minutes: 7.4, of: 9 }, toLanded: { minutes: 34, of: 11 }, behind: 5, conflict: 2 }
-  const quiet: Board = { waits: null, trains: { landed: 0, closed: {} }, hot: null }
+  const quiet: Board = { waits: null, trains: { landed: 0, closed: {} }, hot: null, conflicts: null }
 
   it('says the waits, the rework, the trains and the files, a sentence each', () => {
     expect(boardWords({ waits, trains: { landed: 4, closed: { moved: 2, red: 1 } },
-      hot: { landings: 43, files: [['backend/src/superTabs/commands.ts', 12], ['backend/src/superTabs/store.ts', 9]] } }, false))
+      hot: { landings: 43, files: [['backend/src/superTabs/commands.ts', 12], ['backend/src/superTabs/store.ts', 9]] }, conflicts: [] }, false))
       .toBe('Last 12 landed: 7 min from opened to a first verdict (median of 9), 34 min from the last READ-OK to landing (median of 11); '
         + 'told it was behind: 5; told it conflicts: 2. Trains: 4 landed, 3 closed without landing (base moved 2, checks failed 1). '
         + 'Files touched most, of the last 43 landings: `backend/src/superTabs/commands.ts` 28%, `backend/src/superTabs/store.ts` 21%.')
+  })
+
+  // The allocator's design, package 8: the count of conflicts says the files they were likely on.
+  it('says the files the changes told they conflict shared with what landed meanwhile, as plain text, how many shared each', () => {
+    const of = (conflicts: Board['conflicts']) => boardWords({ ...quiet, waits, conflicts }, false)
+    expect(of([['backend/src/superTabs/commands.ts', 2], ['src/`@x`.ts', 1]])).toBe('Last 12 landed: 7 min from opened to a first verdict (median of 9), 34 min from the last READ-OK '
+      + 'to landing (median of 11); told it was behind: 5; told it conflicts: 2, sharing with what landed meanwhile `backend/src/superTabs/commands.ts` 2 and `src/x.ts` 1.')
+    expect(of([['a.ts', 1]])).toContain('; told it conflicts: 2, sharing with what landed meanwhile `a.ts` 1.')
+    expect(of([['a.ts', 2], ['b.ts', 1], ['c.ts', 1]])).toContain('; told it conflicts: 2, sharing with what landed meanwhile `a.ts` 2, `b.ts` 1 and `c.ts` 1.')
+    for (const none of [[], null]) expect(of(none)).toContain('; told it conflicts: 2.')
   })
 
   it('says a wait in minutes, or in hours from two, how many changes it is the median of, and only the waits that are known', () => {

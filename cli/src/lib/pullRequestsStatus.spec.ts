@@ -4,7 +4,7 @@ import { createPullRequestsStatusReader, ghAccount, PULL_REQUESTS_FRESH_MS, PULL
 
 const url = (n = 1) => `https://github.com/o/r/pull/${n}`
 const view = (over = {}) => ({ title: 'Fix reconnect', state: 'OPEN', isDraft: false, mergedAt: null, closedAt: null,
-  updatedAt: '2026-10-22T07:00:00Z', additions: 32, deletions: 6, reviewDecision: 'APPROVED', mergeStateStatus: 'CLEAN',
+  updatedAt: '2026-10-22T07:00:00Z', additions: 32, deletions: 6, changedFiles: 3, reviewDecision: 'APPROVED', mergeStateStatus: 'CLEAN',
   autoMergeRequest: null, statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }], ...over })
 const runner = (over = {}) => vi.fn<Run>(async () => ({ stdout: JSON.stringify(view(over)) }))
 
@@ -13,11 +13,11 @@ describe('linked pull requests read directly from GitHub', () => {
     const run = runner(), read = createPullRequestsStatusReader(run, () => 0)
     expect(await read([url()])).toEqual({ checkedAt: '1970-01-01T00:00:00.000Z', account: expect.stringMatching(/^[0-9a-f]{16}$/), rows: [{
       url: url(), status: 'found', title: 'Fix reconnect', state: 'Open', mergedAt: '', closedAt: '',
-      updatedAt: '2026-10-22T07:00:00Z', additions: 32, deletions: 6, ci: 'passing',
+      updatedAt: '2026-10-22T07:00:00Z', additions: 32, deletions: 6, changedFiles: 3, ci: 'passing',
       checks: { passed: 1, failed: 0, pending: 0, total: 1 }, reviewDecision: 'APPROVED', mergeStateStatus: 'CLEAN', autoMerge: false,
     }] })
     expect(run).toHaveBeenCalledWith(['pr', 'view', url(), '--json',
-      'title,state,isDraft,mergedAt,closedAt,updatedAt,additions,deletions,statusCheckRollup,reviewDecision,mergeStateStatus,autoMergeRequest'])
+      'title,state,isDraft,mergedAt,closedAt,updatedAt,additions,deletions,changedFiles,statusCheckRollup,reviewDecision,mergeStateStatus,autoMergeRequest'])
   })
 
   it.each([
@@ -35,9 +35,9 @@ describe('linked pull requests read directly from GitHub', () => {
     expect((await createPullRequestsStatusReader(runner({ reviewDecision }))([url()])).rows[0].reviewDecision).toBe(reviewDecision)
   })
   it('preserves auto-merge and sanitizes unexpected values and display text', async () => {
-    const read = createPullRequestsStatusReader(runner({ title: '\u202E' + 'x'.repeat(600), additions: -1, deletions: '2',
+    const read = createPullRequestsStatusReader(runner({ title: '\u202E' + 'x'.repeat(600), additions: -1, deletions: '2', changedFiles: 1.5,
       reviewDecision: 'new', mergeStateStatus: 'new', updatedAt: null, autoMergeRequest: {} }))
-    expect((await read([url()])).rows[0]).toMatchObject({ title: 'x'.repeat(512), additions: 0, deletions: 0,
+    expect((await read([url()])).rows[0]).toMatchObject({ title: 'x'.repeat(512), additions: 0, deletions: 0, changedFiles: 0,
       reviewDecision: '', mergeStateStatus: 'UNKNOWN', updatedAt: '', autoMerge: true })
   })
 

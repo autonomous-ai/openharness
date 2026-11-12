@@ -302,6 +302,25 @@ describe('agent_create, refused before any pane exists', () => {
     expect(vi.mocked(create!).mock.calls[0][0]).toMatchObject({ engine: 'claude', claudeHome: '/homes/claude' })
   })
 
+  it('agent_create takes a --local folder for OpenClaw only, absolute and there', async () => {
+    const { ask, create } = setup()
+    const folder = join(dir, 'run')
+    mkdirSync(folder)
+    writeFileSync(join(dir, 'file'), '')
+    expect(await ask({ engine: 'codex', cwd: '/w', openclawLocal: folder })).toEqual({ error: 'INVALID_LOCAL_FOLDER', detail: '--local is for OpenClaw only.' })
+    expect(await ask({ engine: 'openclaw', cwd: '/w', openclawLocal: '/nowhere' })).toEqual({ error: 'INVALID_LOCAL_FOLDER', detail: '/nowhere is not a folder.' })
+    for (const openclawLocal of ['relative', 7, `${folder}\n`, `/${'x'.repeat(4096)}`, join(dir, 'file')]) {
+      expect(await ask({ engine: 'openclaw', cwd: '/w', openclawLocal })).toMatchObject({ error: 'INVALID_LOCAL_FOLDER' })
+    }
+    // Never dropped onto the shared state folder: a conversation opened as it was takes no folder of its own.
+    expect(await ask({ engine: 'openclaw', cwd: '/w', openclawLocal: folder, resumeSessionId: 'agent:main:harness-1' })).toMatchObject({ error: 'INVALID_SESSION' })
+    expect(create).not.toHaveBeenCalled()
+    await ask({ engine: 'openclaw', cwd: '/w', openclawLocal: folder })
+    expect(vi.mocked(create!).mock.calls.at(-1)![0]).toMatchObject({ engine: 'openclaw', openclawLocal: folder })
+    await ask({ engine: 'openclaw', cwd: '/w', openclawLocal: null })
+    expect(vi.mocked(create!).mock.calls.at(-1)![0]).not.toHaveProperty('openclawLocal')
+  })
+
   it('a harness that is not an id, not installed here, a viewer, or not for this engine', async () => {
     const { ask, create } = setup()
     expect(await ask({ engine: 'claude', cwd: '/w', dsh: 'not an id' })).toStrictEqual({ error: 'INVALID_DSH', detail: 'dsh must be an owner/name id' })
@@ -950,7 +969,7 @@ describe('agent_create with a receipt', () => {
 
   // WIN-DELL and the Mac Studio, 2026-10-26: Swarm Leads in a reused or fresh checkout of the project's repository sat at
   // Claude Code's trust question, and so did the next Lead in a worktree of it, its source never answered.
-  it('trusts a Swarm agent\'s checkout of its remote project in its owner\'s own mode, and no other existing folder', async () => {
+  it('trusts a Swarm agent\'s checkout of its remote project in any mode, and no other existing folder', async () => {
     const { ask, replies } = setup()
     const launch = async (payload: Record<string, unknown>, n: number) => { await ask({ creationId: `${CREATION}-${n}`, ...payload }); await vi.waitFor(() => expect(replies).toHaveLength(n)) }
     const remote = { projectSource: 'remote', repositoryUrl: 'https://github.com/acme/app.git' }

@@ -40,8 +40,10 @@ function liveGitHub(clock: { now: number }, repo = REPO, lag = false) {
   const labelled = new Map<string, number>()
   const issues = new Map<number, Json>(), pulls = new Map<number, Json>(), comments = new Map<number, Json[]>()
   const runs = new Map<string, Json[]>(), mergeable = new Map<number, string>()
-  /** The commits of a pull request that holds more than its own head: one built on another's. */
-  const commits = new Map<number, Json[]>()
+  /** The commits of a pull request that holds more than its own head: one built on another's. And the files each touches. */
+  const commits = new Map<number, Json[]>(), files = new Map<number, string[]>()
+  /** Every read asked. */
+  const asked: string[] = []
   const labels: Json[] = ['status:taken', 'size:s', 'size:m', 'size:l', 'p0', 'p1', 'p2', 'builder:pip', 'builder:juno', 'needs:gpu'].map(name => ({ name }))
   const sent: Array<{ at: number; method: string; path: string; body: Json }> = []
   let ids = 1000
@@ -71,15 +73,16 @@ function liveGitHub(clock: { now: number }, repo = REPO, lag = false) {
     return rows.slice((at - 1) * per, at * per)
   }
   const get: GitHubGet = async (path, etag) => {
+    asked.push(path)
     const url = new URL(`https://api.github.com${path}`), p = url.pathname, since = url.searchParams.get('since') ?? ''
     const n = (i: number) => Number(p.split('/').at(i))
     // An issue's labels as a list shows them: with [lag], none put on in this instant.
     const shown = (row: Json): Json => !lag ? row : { ...row, labels: (row.labels as Json[]).filter(label => labelled.get(`${row.number}:${label.name}`) !== clock.now) }
     // Each label GitHub's `labels` asks for, in any case.
-    const asked = (url.searchParams.get('labels') ?? '').split(',').filter(Boolean).map(name => name.toLowerCase())
+    const wanted = (url.searchParams.get('labels') ?? '').split(',').filter(Boolean).map(name => name.toLowerCase())
     const body = p === at ? { default_branch: 'main' }
       : p === `${at}/issues` ? page([...issues.values()].filter(i => (url.searchParams.get('state') ?? 'open') === 'all' || i.state === (url.searchParams.get('state') ?? 'open'))
-        .filter(i => String(i.updated_at) >= since).map(shown).filter(i => asked.every(name => (i.labels as Json[]).some(label => String(label.name).toLowerCase() === name))), url)
+        .filter(i => String(i.updated_at) >= since).map(shown).filter(i => wanted.every(name => (i.labels as Json[]).some(label => String(label.name).toLowerCase() === name))), url)
       : p === `${at}/pulls` ? page([...pulls.values()].filter(r => r.state === (url.searchParams.get('state') ?? 'open')), url)
       : /\/issues\/\d+\/comments$/.test(p) ? page((comments.get(n(-2)) ?? []).map(records.served).filter(c => String(c.updated_at) >= since), url)
       // One issue, which a pull request is too, by its number.
@@ -89,6 +92,7 @@ function liveGitHub(clock: { now: number }, repo = REPO, lag = false) {
       // merges on its own (the train is githubTrain.spec.ts).
       : /\/compare\/main\.\.\.[0-9a-f]+$/.test(p) ? { behind_by: 0, files: [{ filename: 'app.py', status: 'modified', changes: 1, patch: `@@ -1 +1 @@\n+${p.split('...').at(-1)}` }] }
       : /\/pulls\/\d+\/commits$/.test(p) ? commits.get(n(-2)) ?? [{ sha: (pulls.get(n(-2))?.head as Json | undefined)?.sha }]
+      : /\/pulls\/\d+\/files$/.test(p) ? (files.get(n(-2)) ?? []).map(filename => ({ filename }))
       : p === `${at}/labels` ? page(labels, url)
       : /\/commits\/[0-9a-f]+\/check-runs$/.test(p) ? { check_runs: runs.get(String(p.split('/').at(-2))) ?? [] }
       : /\/commits\/[0-9a-f]+\/status$/.test(p) ? { statuses: [] }
@@ -141,7 +145,7 @@ function liveGitHub(clock: { now: number }, repo = REPO, lag = false) {
     }
     return reply(404)
   }
-  return { get, send, sent, issues, pulls, comments, commits, runs, mergeable, task, pull, say, authors: records.authors }
+  return { get, send, sent, asked, issues, pulls, comments, commits, files, runs, mergeable, task, pull, say, authors: records.authors }
 }
 
 /** A comment as said, its time of day and the head's short form made alike, so the same thing said at another minute is the same. */
@@ -177,7 +181,7 @@ describe('Harness says each thing once on GitHub, over an hour and a restart (gi
 
     const make = () => {
       const deps = { projects: async () => [PROJECT], crew: async () => structuredClone(CREW), get: gh.get, send: gh.send, now: () => clock.now, log: () => {}, records: new VerdictRecords(gh.authors, () => clock.now, () => {}) }
-      return { merger: new GitHubMerge({ ...deps, costs: async () => [] }), assigner: new GitHubAssign({ ...deps, repositories: async () => [REPO], numbers: { pass: async () => {} }, pmRunning: async () => true }) }
+      return { merger: new GitHubMerge({ ...deps, costs: async () => [], hot: () => [] }), assigner: new GitHubAssign({ ...deps, repositories: async () => [REPO], numbers: { pass: async () => {} }, pmRunning: async () => true }) }
     }
     let loops = make()
     for (let pass = 0; pass < PASSES; pass++) {
@@ -261,7 +265,7 @@ describe('Harness says each thing once on GitHub, over an hour and a restart (gi
     gh.pull(24, sha(24)); gh.say(24, `Juno, 04:00, to **Pip**: READ-OK ${sha(24).slice(0, 7)}`); gh.mergeable.set(24, 'dirty')
     const make = () => {
       const deps = { projects: async () => [PROJECT], crew: async () => structuredClone(CREW), get: gh.get, send: gh.send, now: () => clock.now, log: () => {}, records: new VerdictRecords(gh.authors, () => clock.now, () => {}) }
-      return { merger: new GitHubMerge({ ...deps, costs: async () => [] }), assigner: new GitHubAssign({ ...deps, repositories: async () => [REPO], numbers: { pass: async () => {} }, pmRunning: async () => true }) }
+      return { merger: new GitHubMerge({ ...deps, costs: async () => [], hot: () => [] }), assigner: new GitHubAssign({ ...deps, repositories: async () => [REPO], numbers: { pass: async () => {} }, pmRunning: async () => true }) }
     }
     let loops = make()
     // A pass every five minutes for a day, the daemon restarting every six hours, as releases restart it.
@@ -285,6 +289,43 @@ describe('Harness says each thing once on GitHub, over an hour and a restart (gi
       .flatMap(s => s.method === 'POST' && /\/labels$/.test(s.path) && Array.isArray(s.body.labels) ? (s.body.labels as string[]).map(l => `${s.at} ${s.method} ${s.path} ${l}`) : [`${s.at} ${s.method} ${s.path}`]))]
       .map(write => write.slice(write.indexOf(' ') + 1))
     expect(writes, JSON.stringify(writes, null, 1)).toEqual([...new Set(writes)])
+  }, 120_000)
+
+  // The allocator's design, package 8. A day two builders' pull requests on a file most landings touch stand still, each held by a
+  // reader, their builders saying every two hours they are still on them. The newer is told of the older once, across restarts,
+  // and what that costs to read is a few reads for each daemon, not for each pass.
+  it('tells a pull request of another builder\'s older one on a file most landings touch once over a day, and reads little for it', async () => {
+    const clock = { now: START }
+    const gh = liveGitHub(clock)
+    const hot = ['app/hub.py']
+    gh.task(7, ['size:s', 'builder:juno', 'status:taken'])
+    gh.task(8, ['size:s', 'builder:pip', 'status:taken'])
+    gh.pull(25, sha(25), { labels: [{ name: 'builder:juno' }], head: { sha: sha(25), ref: 'juno/7', repo: { full_name: REPO } }, body: 'Closes #7' })
+    gh.say(25, `Pip, 04:00, to **Juno**: HOLD ${sha(25).slice(0, 7)} app/hub.py:3 is off by one.`)
+    gh.pull(26, sha(26), { body: 'Closes #8' }); gh.say(26, `Juno, 04:00, to **Pip**: HOLD ${sha(26).slice(0, 7)} app/hub.py:9 is off by one.`)
+    gh.files.set(25, ['app/hub.py'])
+    gh.files.set(26, ['app/b.py', 'app/hub.py'])
+    const make = () => {
+      const deps = { projects: async () => [PROJECT], crew: async () => structuredClone(CREW), get: gh.get, send: gh.send, now: () => clock.now, log: () => {}, records: new VerdictRecords(gh.authors, () => clock.now, () => {}) }
+      return { merger: new GitHubMerge({ ...deps, costs: async () => [], hot: () => hot }), assigner: new GitHubAssign({ ...deps, repositories: async () => [REPO], numbers: { pass: async () => {} }, pmRunning: async () => true }) }
+    }
+    let loops = make()
+    // A pass every five minutes for a day, the daemon restarting every six hours.
+    for (let pass = 0; pass < 288; pass++) {
+      if (pass % 72 === 71) loops = make()
+      if (pass % 24 === 23) { gh.say(7, 'Juno: still on it.'); gh.say(8, 'Pip: still on it.') }
+      await loops.merger.tick()
+      await loops.assigner.tick()
+      clock.now += 5 * 60_000
+    }
+    const harness = [...gh.comments.values()].flat().map(c => String(c.body)).filter(body => body.startsWith('Harness, '))
+    expect(harness).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*pip\*\*: #25 already touches `app\/hub\.py`, which most changes touch: read it before you change that file again\.$/)])
+    expect(gh.sent.filter(s => s.method !== 'POST' || !s.path.endsWith('/comments'))).toEqual([])
+    // Each one's files once, by the day's first daemon: the four after it find the note said, and read none. And no task of either.
+    const reads = (pattern: RegExp) => gh.asked.filter(path => pattern.test(path)).length
+    expect(reads(/\/pulls\/26\/files/)).toBe(1)
+    expect(reads(/\/pulls\/25\/files/)).toBe(1)
+    expect(reads(/\/issues\/[78]$/)).toBe(0)
   }, 120_000)
 })
 

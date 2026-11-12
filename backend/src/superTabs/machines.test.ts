@@ -108,7 +108,7 @@ function refusal(state: SuperTabState, request: AgentStartRequest, start?: Agent
 const refused = (error: SuperTabError) => error.message.split('Refused: ')[1] ?? ''
 
 describe('a start on a contributed machine', () => {
-  // Swarm v3 (task #4215): every agent starts with its owner's own settings. A CLI from before full mode answers these exact
+  // A start names no mode: the machine starts each Swarm agent in Auto-approve itself. A CLI from before full mode answers these exact
   // words by sending the start again without the field, so CLIs from the last 30 days keep starting agents.
   it.each(['full', 'ask', 'auto', 'readOnly', 'bypass'])('refuses permission mode %s in the words older CLIs retry without it', permissionMode => {
     const f = setup()

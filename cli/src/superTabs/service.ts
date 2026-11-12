@@ -215,21 +215,20 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     crewOf((await held().reads.read(project.tabId, project.pmAgentId)).state, project)
   // Who made each verdict by command, read once for the merger and the assigner alike.
   const records = new VerdictRecords(recordedAuthors(path => backend(core, 'GET', path)), Date.now, line => console.warn(line))
+  // A project's numbers, sent as its PM into the Swarm as the PM reads it (pmNumbers.ts messageOf). They keep the files most of its
+  // landings touch, from its day's scoreboard, which the merger uses too (the allocator's design, package 8).
+  const numbers = new PmNumbers({ file: join(core.dataDir, 'super-tab-numbers.json'),
+    send: numbersSender(async project => (await sources().reads.read(project.tabId, project.pmAgentId)).state, (path, body) => backend(core, 'POST', path, body)) })
   // What a landed change cost its builder is read of the server as the project's PM, for the comment that says it landed
   // (taskTokens.ts).
   const merges = (options.githubMerge ?? ((api, held) => new GitHubMerge({ projects: led(api, held), crew: crewOfProject(held), get: github.get,
-    send: github.send, records, costs: readTaskTokens(path => backend(api, 'GET', path)) })))(core, sources)
+    send: github.send, records, costs: readTaskTokens(path => backend(api, 'GET', path)), hot: project => numbers.hot(project) })))(core, sources)
   // Gives their tasks to their builders (githubAssign.ts), from the crew as the PM reads the Swarm.
-  const assigns = (options.githubAssign ?? ((api, held) => {
-    // A project's numbers, sent as its PM into the Swarm as the PM reads it (pmNumbers.ts messageOf).
-    const numbers = new PmNumbers({ file: join(api.dataDir, 'super-tab-numbers.json'),
-      send: numbersSender(async project => (await held().reads.read(project.tabId, project.pmAgentId)).state, (path, body) => backend(api, 'POST', path, body)) })
-    return new GitHubAssign({ projects: led(api, held), crew: crewOfProject(held),
-      // The Swarm's projects as its PM's person reads it, read by what changed, as every Swarm read is: the PM reads only its own.
-      repositories: async project => swarmRepositories((await held().reads.read(project.tabId)).state),
-      get: github.get, send: github.send, records, numbers,
-      pmRunning: async project => pmRunsHere((await held().feed.current(60_000)).roster, project, id => !!api.agents.byAgent(id)) })
-  }))(core, sources)
+  const assigns = (options.githubAssign ?? ((api, held) => new GitHubAssign({ projects: led(api, held), crew: crewOfProject(held),
+    // The Swarm's projects as its PM's person reads it, read by what changed, as every Swarm read is: the PM reads only its own.
+    repositories: async project => swarmRepositories((await held().reads.read(project.tabId)).state),
+    get: github.get, send: github.send, records, numbers,
+    pmRunning: async project => pmRunsHere((await held().feed.current(60_000)).roster, project, id => !!api.agents.byAgent(id)) })))(core, sources)
   // What this computer's person's agents shipped, read from GitHub with their own gh and told to the leaderboard (shipping.ts).
   const shipping = (options.shipping ?? (api => new ShippingReporter(api)))(core)
   // An agent's answer to the launch line the daemon typed as it made it, in its chat with its person (firstAnswers.ts): as
@@ -399,7 +398,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         // The phone's answers to Claude Code's first-run questions here, asked as it sets this computer up
         // (engines/launchPrep.ts answerFirstRun): its owner's, as the setup is.
         if (payload.action === 'claudeFirstRun') {
-          // Its theme and first-run screens only: an agent runs in its owner's own permission mode (task #4215), so a phone's
+          // Its theme and first-run screens only: no Swarm agent starts in full mode (task #4215), so a phone's
           // `acceptFullMode` from before is read as nothing.
           if (typeof payload.theme !== 'string') return { error: 'INVALID_REQUEST' }
           return answerFirstRun('claude', { theme: payload.theme }) ? { ok: true } : { error: 'FIRST_RUN_UNANSWERED' }

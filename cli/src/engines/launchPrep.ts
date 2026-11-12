@@ -75,7 +75,7 @@ export function firstRunAnswered(engine: AgentEngine, environment?: NodeJS.Proce
 /**
  * The person's answers to `engine`'s first-run screens, given on the phone setting up this computer (owner, 2026-11-06): its
  * `theme`, one of the contract's, and the screens done. Recorded as the engine records its own; a `false` the person set
- * before stays. No permission setting: an agent runs in its owner's own mode (task #4215). Whether it is answered now
+ * before stays. No permission setting: no Swarm agent starts in full mode (task #4215). Whether it is answered now
  * ([firstRunAnswered]).
  */
 export function answerFirstRun(engine: AgentEngine, answers: { theme: string }, environment?: NodeJS.ProcessEnv): boolean {

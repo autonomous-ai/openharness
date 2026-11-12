@@ -22,6 +22,7 @@ import { incompatibleHarnessEngine } from '../../dsh/compatibility.js'
 import type { DshThrough } from './dshThrough.js'
 import * as opencodeLaunch from '../../engines/launchControl.js'
 import { isTerminalEngine, type AgentEngine } from '../../engines/types.js'
+import { OPENCLAW_LOCAL } from '../../engines/openclaw/contract.js'
 import { engineLabel } from '../../lib/agentNames.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
 import { enginePathOverride } from '../../lib/engineBin.js'
@@ -117,6 +118,10 @@ async function swarmFolder(cwd: string): Promise<boolean> {
   return harnessMadeWorktree(cwd, root)
 }
 
+function isFolder(path: string): boolean {
+  try { return statSync(path).isDirectory() } catch { return false }
+}
+
 /** A create held because [engine]'s hooks are not in place (kit/hooksHeldDetail.ts). */
 function hooksHeld(engine: string, waiting: string) {
   return { ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native', detail: hooksHeldDetail(engine, waiting) } as const
@@ -133,6 +138,9 @@ export function createAgentCreator({
     if (!authority.current()) return stale()
     if (input.swarmRole && !swarmLaunch) return { ok: false, error: 'SWARM_SKILL_FAILED', detail: 'The Swarm is off on this computer (HARNESS_SWARM).' }
     let { engine, cwd, bypassPermission, permissionMode, grid, codexHome, claudeHome, dsh, prompt, name, agent, scmLaunchRecord, startedBy, parentAgentId, launchModel, browser } = input
+    const openclawLocal = input.openclawLocal ?? undefined
+    // Checked again here: a saved launch runs later, and a run without its folder never falls back to the shared one.
+    if (openclawLocal && !isFolder(openclawLocal)) return { ok: false, error: 'OPENCLAW_FOLDER_GONE', detail: OPENCLAW_LOCAL.folderGone }
     let createBackend = initialBackend
     if (!createBackend && recoverBackend) {
       createBackend = await recoverBackend()
@@ -156,7 +164,7 @@ export function createAgentCreator({
     // a worktree of a local repository, itself, and sends the folder as a plain cwd. 2026-10-30: a Cmd+S Swarm's PM sat
     // at Claude Code's "do you trust this folder?", which no Swarm view shows; it read Idle and every message to it was
     // withheld. The person chose that repository for the Swarm in this window, so a Claude Code Swarm agent, in whatever mode
-    // its owner's settings give (task #4215), is trusted in a Git checkout directly in the projects root or a worktree Harness
+    // it runs in (task #4215), is trusted in a Git checkout directly in the projects root or a worktree Harness
     // made, read from disk.
     // Never from a relayed request, which could name any repository here. Codex's trust also sets defaults for the
     // person's own sessions in that folder, so it stays theirs to give.
@@ -180,6 +188,8 @@ export function createAgentCreator({
     // which nobody is waiting on, still holds.
     if (inspected && !inspected.ok) return inspected.refusal ? { ok: false, error: inspected.refusal, detail: inspected.detail } : inspected
     const native = inspected?.ok ? inspected.launch : undefined
+    // Only a launch prepared for this folder starts a local run: any other would run on the shared state folder.
+    if (openclawLocal && native?.openclawLocal !== openclawLocal) return { ok: false, error: 'OPENCLAW_LOCAL_UNPREPARED', detail: OPENCLAW_LOCAL.unprepared }
     if (engine === 'codex' && native) codexHome = nativeHookLocations(native.environment).CODEX_HOME
     const current = () => authority.current() && (!native || native.current())
     if (!current()) return stale()
@@ -386,7 +396,7 @@ export function createAgentCreator({
     // as every relaunch reads them again (`buildLaunchOverrides`).
     const machineMcp = machineMcpLaunchArgs(engine, cwd)
     // The agent's private temporary folder: its TMPDIR, and, for a Swarm agent of an engine that takes one (Claude Code), its one
-    // added working directory, so its owner's own settings ask nothing for its mktemp files (lib/agentTmp.ts, task #4395).
+    // added working directory, so its mode's checks ask nothing for its mktemp files (lib/agentTmp.ts, task #4395).
     const tmp = agentTmpLaunch(engine, swarmSkill)
     const extraArgs = joinedInstructions(engine, [...tmp.args, ...(gridLaunch?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, native ? native.opencodeMajor : opencode ? await opencode.opencodeMajorVersion() : null) : []), ...machineMcp, ...(swarmLaunch && swarmSkill ? swarmLaunch.args(engine) : []), ...told])
     // The first prompt is a launch option only — never part of `extraArgs`, which the registry row
@@ -453,6 +463,7 @@ export function createAgentCreator({
       parentAgentId: parentAgentId ?? null,
       ...(browser ? { browser: true } : {}),
       ...(firstTask ? { firstTask } : {}),
+      ...(openclawLocal ? { openclawLocal } : {}),
     })
     if (!result.ok) return { ok: false, error: result.error, detail: result.detail }
     const { spawned, pending } = result
