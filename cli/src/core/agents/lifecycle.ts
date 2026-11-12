@@ -6,7 +6,7 @@
  */
 import type { clearDeleted as clearDeletedFn, markDeleted as markDeletedFn } from '../../lib/deletedSessions.js'
 import { LEAD_PROTECTED_DETAIL } from '../../lib/closeAgentService.js'
-import { PurgeAgentService } from '../../lib/purgeAgentService.js'
+import { PurgeAgentService, type PurgeDeps } from '../../lib/purgeAgentService.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
 import { createResumeAgentService, type ResumeAgentServiceDeps } from '../../lib/resumeAgentService.js'
 import { moveHeldLine } from '../../lib/hostMove/moveAgent.js'
@@ -46,6 +46,9 @@ export interface LifecycleDeps {
   /** Where a purged conversation's lines and its search entries are dropped. */
   mirror: { deleteHistory(sessionId: string): void }
   sessionSearch: { deleteHistory(sessionId: string): void } | null
+  /** A purge's other records of the harness (purgeAgentService.ts `eraseRecords`): its told lines in the agent ledger and
+   *  the requests of the creates that made it. Rejecting refuses the purge. */
+  eraseRecords: NonNullable<PurgeDeps['eraseRecords']>
   /** To every connected window. */
   send: (frame: { type: string; payload: Record<string, unknown> }) => void
   pinnedControls: ResumeAgentServiceDeps['pinnedControls']
@@ -80,7 +83,7 @@ export class LeadProtectedError extends Error {
 
 export function createAgentLifecycle({
   registry, stoppedAgents, restartJobs, createBackend, noBackendCode, backendFor, agentReconciler, forgetSession, markDeleted, clearDeleted, stopNative, settlePane, cancelExternal,
-  sessionCheckpoints, mirror, sessionSearch, send, pinnedControls, retainExitedSession, announceSession,
+  sessionCheckpoints, mirror, sessionSearch, eraseRecords, send, pinnedControls, retainExitedSession, announceSession,
   relaunchOverrides, prepareSessionResume, stopBackgroundJob, refreshGridWebSearch, adoptSwarmSkill, attachDsh, attachBrowser, attachSession, relaunchMarks, stopped, purged, atFolderTrust, atEmptyComposer, moveHeld,
   leadProtected,
 }: LifecycleDeps) {
@@ -111,9 +114,12 @@ export function createAgentLifecycle({
     ...(leadProtected ? { leadProtected: (id: string) => leadProtected(id) } : {}),
     atFolderTrust,
     atEmptyComposer,
+    eraseRecords,
     deleted: s => {
-      if (s.sessionId) { mirror.deleteHistory(s.sessionId); sessionSearch?.deleteHistory(s.sessionId) }
-      registry.deleteSavedNames([s.agentId, s.sessionId].filter(Boolean))
+      // Every conversation the harness had: a run that moved on (`/new`) leaves nothing under its earlier keys.
+      const keys = [s.sessionId, ...(s.earlierSessionIds ?? [])].filter(Boolean)
+      for (const key of keys) { mirror.deleteHistory(key); sessionSearch?.deleteHistory(key) }
+      registry.deleteSavedNames([s.agentId, ...keys])
       send({ type: 'agent_deleted', payload: { agentId: s.agentId, retained: false } })
       purged?.(s.agentId)
     },

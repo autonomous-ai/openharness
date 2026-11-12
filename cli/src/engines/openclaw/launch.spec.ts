@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { buildEngineCommandArgv, buildEngineLaunchArgv, engineLaunchEnv, supportsFirstPrompt, supportsLaunchResume, typedFirstPrompt } from '../../lib/engineLaunch.js'
+import type { NativeLaunch } from '../nativeLaunch.js'
 import { OPENCLAW_SCREEN_HOLDS, OPENCLAW_STATES, openclawRuntimeState, readOpenclawScreen } from './contract.js'
 
 /**
@@ -50,6 +51,26 @@ describe('OpenClaw launch', () => {
       expect(buildEngineCommandArgv('openclaw', { agentId: AGENT, resumeSessionId: key, bypassPermission: true }))
         .toEqual(['openclaw', 'tui', key])
     }
+  })
+
+  const local = (folder: string): NativeLaunch => ({ opencodeMajor: null, environment: {}, proofs: [], current: () => true,
+    prepareHooks: async () => true, permission: async () => 'supported', openclawLocal: folder })
+  it('a local run starts with --local and names its session with --session, new or reopened', () => {
+    const native = local('/run/skill-1')
+    expect(buildEngineCommandArgv('openclaw', { agentId: AGENT, native })).toEqual(['openclaw', 'tui', '--local', '--session', `harness-${AGENT}`])
+    expect(buildEngineCommandArgv('openclaw', { agentId: AGENT, native, resumeSessionId: `agent:main:harness-${AGENT}` }))
+      .toEqual(['openclaw', 'tui', '--local', '--session', `agent:main:harness-${AGENT}`])
+    expect(buildEngineCommandArgv('openclaw', { agentId: AGENT, native, firstPrompt: 'Fix the parser' }))
+      .toEqual(['openclaw', 'tui', '--local', '--session', `harness-${AGENT}`])
+  })
+  it('a local pane gets its folder over the daemon\'s', () => {
+    const daemon = { OPENCLAW_STATE_DIR: '/gw/state', OPENCLAW_HOME: '/gw' }
+    for (const platform of ['darwin', 'linux'] as const) {
+      expect(engineLaunchEnv('openclaw', { token: 't', openclawLocal: '/run/skill-1' }, platform, daemon))
+        .toEqual({ OPENCLAW_STATE_DIR: '/run/skill-1', OPENCLAW_HOME: '/gw' })
+    }
+    expect(engineLaunchEnv('openclaw', { token: 't', openclawLocal: '/run/skill-1' }, 'win32', daemon))
+      .toMatchObject({ OPENCLAW_STATE_DIR: '/run/skill-1', HARNESS_NATIVE_LAUNCH_TOKEN: 't' })
   })
 
   it('no Gateway gives the named state', () => {

@@ -6,6 +6,8 @@ import { existsSync, lstatSync, realpathSync, unlinkSync } from 'node:fs'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { env } from '../config/env.js'
 import { hermesDbPath } from '../engines/hermes/contract.js'
+import { OPENCLAW_STORE_KEPT } from '../engines/openclaw/contract.js'
+import { AgentCreationReceiptError } from './agentCreationReceipt.js'
 import type { RegisteredSession } from './registry.js'
 import { engineKeepsTranscriptFile, transcriptEvidence } from '../engines/transcriptBindings.js'
 import { nativeFileKey } from '../engines/kit/nativePaths.js'
@@ -20,14 +22,20 @@ import { LEAD_PROTECTED_DETAIL, unusedChat } from './closeAgentService.js'
 import { inspectWorkspace, inspectWorktree, removeReviewedWorktree, type WorktreeReview } from './worktreeDeletion.js'
 
 const exec = promisify(execFile)
-const identity = (s: RegisteredSession) => JSON.stringify([s.agentId, s.engine, s.sessionId,
-  s.registeredAt, s.boundAt, s.cwd, s.codexHome, s.hermesHome, s.transcriptPath, s.processIdentity, s.runtimes])
+/** [withProcess] false for a harness reviewed before its engine's process was known: the one it gains is the engine
+ *  its launch started, not a replacement (stopAgentService.ts `starting`). */
+const identity = (s: RegisteredSession, withProcess = true) => JSON.stringify([s.agentId, s.engine, s.sessionId,
+  s.registeredAt, s.boundAt, s.cwd, s.codexHome, s.hermesHome, s.transcriptPath, withProcess ? s.processIdentity : undefined, s.runtimes])
+/** A launch under way whose engine cannot be stopped yet (its conversation unreadable for its first seconds). */
+const STILL_STARTING = 'This harness is still starting. Try again in a moment.'
 const conversation = (s: RegisteredSession) => JSON.stringify([s.engine, s.codexHome, s.hermesHome, s.sessionId])
 const fail = (message: string): never => { throw new Error(message) }
 type File = { path: string; dev: bigint; ino: bigint; bytes: number }
 type History = { file?: File; missingFile?: string; database?: string; databaseFile?: File; statements?: string[];
   bytes: number | null; verify?: (openedFileKey?: string) => void;
-  prepareWorkspaceRemoval?: NativeHistoryProof['prepareWorkspaceRemoval'] }
+  prepareWorkspaceRemoval?: NativeHistoryProof['prepareWorkspaceRemoval']
+  /** An engine's own store Harness does not erase, and why: the delete still goes ahead and says so. */
+  kept?: { what: 'engine-store'; reason: string } }
 const lit = (value: string) => "'" + value.replace(/'/g, "''") + "'"
 
 function file(path: string): File {
@@ -38,8 +46,14 @@ function file(path: string): File {
     bytes: Number.isFinite(Number(info.blocks)) ? Number(info.blocks) * 512 : Number(info.size) }
 }
 
+/** The checkpoints of every conversation the harness had: its current session key and each it moved off (`/new`). */
+const checkpointsOf = (s: RegisteredSession, checkpoints: SessionCheckpointStore): string[] =>
+  [s.sessionId, ...(s.earlierSessionIds ?? [])].flatMap(sessionId => checkpoints.deletionFiles({ ...s, sessionId }))
+
 /** Known native history layouts only. A shared database is never removed or vacuumed. */
 export async function inspectNativeHistory(s: RegisteredSession): Promise<History> {
+  // OpenClaw's store is its own: Harness neither reads nor writes it, and the person deletes its session with OpenClaw.
+  if (s.engine === 'openclaw') return { bytes: 0, kept: { what: 'engine-store', reason: OPENCLAW_STORE_KEPT } }
   if (!s.sessionId || s.engine === 'terminal') return { bytes: 0 }
   if (engineKeepsTranscriptFile(s.engine)) {
     const path = s.transcriptPath
@@ -179,7 +193,7 @@ export async function sessionDataBytes(s: RegisteredSession, checkpoints: Sessio
   try {
     const history = await inspectNativeHistory(s)
     if (history.bytes == null) return null
-    return history.bytes + checkpoints.deletionFiles(s).reduce((n, path) => n + file(path).bytes, 0)
+    return history.bytes + checkpointsOf(s, checkpoints).reduce((n, path) => n + file(path).bytes, 0)
   } catch { return null }
 }
 
@@ -196,6 +210,9 @@ export interface PurgeDeps {
   stop(id: string, options: StopAgentOptions): Promise<void>
   restarting(id: string): boolean
   deleted(session: RegisteredSession): void
+  /** Erases what else Harness keeps of the harness (its told lines, its creation requests), after its conversation and
+   *  before [deleted]. Rejecting refuses the delete and keeps the archive, so the delete can be asked again. */
+  eraseRecords?(session: RegisteredSession): Promise<void>
   /** A fresh read of the pane says the engine is waiting at its folder-trust question (Codex's "Do you trust the contents of this directory?"). */
   atFolderTrust?(session: RegisteredSession): Promise<boolean>
   /** A fresh read of the pane says nothing is running, nothing is asked and the composer is empty (`teamHold` null, not busy). */
@@ -307,7 +324,7 @@ export class PurgeAgentService {
   private current(request: Pick<PurgeRequest, 'agentId' | 'sessionId' | 'createdAt'>, deletingHistory = true): RegisteredSession {
     const s = this.deps.live(request.agentId) ?? this.deps.stopped.get(request.agentId)
     if (!s || (s.sessionId || null) !== request.sessionId || s.registeredAt !== request.createdAt) return fail('This harness changed. Refresh and review deletion again.')
-    if (s.dsh === 'autonomous/harness-monitor' || s.launch?.state === 'starting') return fail('This harness cannot be deleted from this monitor.')
+    if (s.dsh === 'autonomous/harness-monitor') return fail('This harness cannot be deleted from this monitor.')
     if (this.deps.restarting(s.agentId)) return fail('Wait for the current harness operation to finish, then try again.')
     if (deletingHistory && s.sessionId && this.deps.sessions().some(other => other.agentId !== s.agentId && other.sessionId === s.sessionId)) {
       return fail('Another harness uses this conversation. Its shared history cannot be deleted here.')
@@ -333,7 +350,7 @@ export class PurgeAgentService {
         try {
           this.current(request)
           history = await (this.deps.inspect ?? inspectNativeHistory)(current)
-          checkpointFiles = this.deps.checkpoints.deletionFiles(current).map(file)
+          checkpointFiles = checkpointsOf(current, this.deps.checkpoints).map(file)
         } catch (error) {
           if (!request.includeWorktree) throw error
           history = null
@@ -344,7 +361,7 @@ export class PurgeAgentService {
           try { worktree = await inspectWorktree(current, this.deps.sessions()) }
           catch (error) { worktreeReason = error instanceof Error ? error.message : 'The worktree could not be verified.' }
         }
-        if (identity(this.current(request, !request.includeWorktree)) !== signature) return fail('The harness changed while checking its data. Try again.')
+        if (identity(this.current(request, !request.includeWorktree), !!current.processIdentity) !== signature) return fail('The harness changed while checking its data. Try again.')
         const sessionBytes = history?.bytes == null ? null : history.bytes + checkpointFiles.reduce((n, f) => n + f.bytes, 0)
         const paths = history ? [history.file?.path ?? history.missingFile ?? history.database, ...checkpointFiles.map(f => f.path)].filter(Boolean) : []
         const reviewId = randomUUID()
@@ -359,7 +376,8 @@ export class PurgeAgentService {
           } } : {}) }
       }
       const review = this.reviews.get(request.reviewId ?? '')
-      if (!review || review.signature !== identity(current)) return fail('The deletion review expired or changed. Review this harness again.')
+      const withProcess = !!review?.session.processIdentity
+      if (!review || review.signature !== identity(current, withProcess)) return fail('The deletion review expired or changed. Review this harness again.')
       reviewedId = request.reviewId
       worktreeDeleted = review.worktreeDeleted === true
       if (!sessionData && !worktreeData) return fail('Select session data, worktree data, or both.')
@@ -377,8 +395,14 @@ export class PurgeAgentService {
         if (this.deps.live(request.agentId)) {
           await this.deps.stop(request.agentId, { current: () => {
             const live = this.deps.live(request.agentId)
-            return !!live && identity(live) === review.signature
-          }, ...await this.unstartedChat(this.deps.live(request.agentId)) })
+            return !!live && identity(live, withProcess) === review.signature
+          }, ...await this.unstartedChat(this.deps.live(request.agentId)) }).catch((error: unknown) => {
+            // A launch still under way is stopped as a close stops it; one whose engine cannot be read yet is not.
+            if (review.session.launch?.state === 'starting' && this.deps.live(request.agentId)
+              // AgentStopError by its code: the monitor's process imports this module, not the stop service.
+              && (error instanceof IdentityReadUnavailable || (error as { code?: unknown } | null)?.code === 'STOP_UNCONFIRMED')) fail(STILL_STARTING)
+            throw error
+          })
         }
         if (this.deps.live(request.agentId)) return fail('The harness did not stop. No session data was deleted.')
         stopped = true
@@ -391,7 +415,7 @@ export class PurgeAgentService {
         const reservation = this.deps.stopped.beginResume(request.agentId)
         if (!reservation) return fail('Another operation is using this saved harness. Nothing was deleted.')
         try {
-          const files = sessionData ? this.deps.checkpoints.deletionFiles(saved).map(file) : []
+          const files = sessionData ? checkpointsOf(saved, this.deps.checkpoints).map(file) : []
           if (sessionData) review.history!.verify?.()
           if (worktreeData && !worktreeDeleted) {
             const removedWorkspace = sessionData ? review.history!.prepareWorkspaceRemoval?.(review.worktree!) : undefined
@@ -410,12 +434,18 @@ export class PurgeAgentService {
               if (current.dev !== target.dev || current.ino !== target.ino) return fail('Saved session data changed. Some data may already have been deleted; refresh to check.')
               unlinkSync(target.path); freedBytes += current.bytes
             }
+            await this.deps.eraseRecords?.(saved).catch((error: unknown) => {
+              // A receipt's error is its code; the person reads what was not erased, and what to do.
+              if (!(error instanceof AgentCreationReceiptError)) throw error
+              fail(`Harness could not erase this harness's saved launch request.${error.detail ? ` ${error.detail}` : ''} Try deleting it again.`)
+            })
             this.deps.deleted(saved)
             this.deps.stopped.remove(request.agentId)
             sessionDeleted = true
           }
           return { deleted: true, sessionDeleted, worktreeDeleted, freedBytes,
-            sharedStore: sessionData && !!review.history?.database, workspaceKept: !worktreeDeleted, historyKept: !sessionData, branchKept: true }
+            sharedStore: sessionData && !!review.history?.database, workspaceKept: !worktreeDeleted, historyKept: !sessionData, branchKept: true,
+            ...(sessionDeleted && review.history?.kept ? { kept: [review.history.kept] } : {}) }
         } finally { this.deps.stopped.finishResume(request.agentId, reservation) }
       } finally { this.jobs.delete(request.agentId); this.worktreeJobs.delete(request.agentId) }
     } catch (error) {

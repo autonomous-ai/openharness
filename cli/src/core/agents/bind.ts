@@ -10,7 +10,7 @@ import { stat } from 'node:fs/promises'
 import { transcriptOf, processSessionOf } from '../../engines/identities.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import { cursorDataDir } from '../../engines/cursor/contract.js'
-import { OPENCLAW_SCREEN_HOLDS, OPENCLAW_STATES, readOpenclawScreen } from '../../engines/openclaw/contract.js'
+import { isOpenclawLocalStopped, openclawLocalStopped, OPENCLAW_SCREEN_HOLDS, OPENCLAW_STATES, readOpenclawScreen, type OpenclawScreen } from '../../engines/openclaw/contract.js'
 import { continuationOf } from '../../engines/sessionFiles.js'
 import { sessionStoreOf } from '../../engines/sessionStoreContracts.js'
 import type { TurnRecaps } from '../turns/recaps.js'
@@ -37,6 +37,18 @@ const REPAIR_EAGER_ATTEMPTS = 24   // ≈2 min at the 5s sweep
 
 /** What an OpenClaw agent says while its pane shows a screen its TUI cannot work for Harness on. */
 const OPENCLAW_HOLDS = new Set<string>(Object.values(OPENCLAW_SCREEN_HOLDS))
+
+/**
+ * The hold a pane's screen gives its agent. A stopped local run keeps the reason it was seen with once OpenClaw's later
+ * footer no longer says it. The Gateway holds never apply to a local run, which has no Gateway.
+ */
+function openclawScreenHold(screen: OpenclawScreen, agent: RegisteredSession): string | undefined {
+  if (screen.state === 'local-stopped') {
+    if (screen.stopped !== null) return openclawLocalStopped(screen.stopped)
+    return isOpenclawLocalStopped(agent.identityHold) ? agent.identityHold : openclawLocalStopped(null)
+  }
+  return screen.state && !agent.openclawLocal ? OPENCLAW_SCREEN_HOLDS[screen.state] : undefined
+}
 
 /** Birth time of a transcript in ms, or 0 when it cannot be read (treated as "not newer than the agent").
  *  A filesystem that keeps no birth time reports 0 for it: the change time, then the write time, stand in. */
@@ -342,12 +354,13 @@ export function createBinding({
       // Told on every pass, the ones that say a state too: a pass that reads the Gateway gone is what lets the stream
       // close a turn its restart left `running`.
       const streamed = !!agent.sessionId && openclawPaneRead(agent.sessionId, { ready: screen.state === 'ready', gatewayLost: screen.gatewayLost, running: screen.running }, captured.value)
-      const held = screen.state ? OPENCLAW_SCREEN_HOLDS[screen.state] : undefined
-      const ours = !agent.identityHold || OPENCLAW_HOLDS.has(agent.identityHold)
+      const held = openclawScreenHold(screen, agent)
+      const ours = !agent.identityHold || OPENCLAW_HOLDS.has(agent.identityHold) || isOpenclawLocalStopped(agent.identityHold)
       if (held) {
         // A hold another reason set (the store unreadable, an identity read that failed) is that reason's to clear.
         if (ours && registry.setIdentityHold(agent.agentId, held)) {
-          console.log(`[discovery] ${sid(agent.agentId)} openclaw · ${held}`)
+          // A stop's reason is OpenClaw's output, which may carry anything: the log names the hold only.
+          console.log(`[discovery] ${sid(agent.agentId)} openclaw · ${isOpenclawLocalStopped(held) ? "OpenClaw's local run stopped" : held}`)
           announceSession(agent)
         }
         return
@@ -369,8 +382,9 @@ export function createBinding({
       // binds it again and attaches its stream there. Before the handover: a task is typed only into a session read.
       // A row that kept no folder, on this daemon's first read of its TUI, has its stream on the store these same open
       // files name (lib/openclawStore.ts): the folder is only recorded, the session kept.
+      // A local row's folder is its `--local` folder from the start, never one read off its TUI.
       const readBefore = openclawFolderReads.get(agent.agentId)
-      if (agent.sessionId && screen.key === agent.sessionId && readBefore !== tuiProcess(observed.processIdentity)) {
+      if (!agent.openclawLocal && agent.sessionId && screen.key === agent.sessionId && readBefore !== tuiProcess(observed.processIdentity)) {
         const streamMayDiffer = !!agent.openclawStateDir || readBefore !== undefined
         const stateDir = await readOpenclawStateDir(agent.agentId, observed.processIdentity)
         if (!current()) return
@@ -403,6 +417,7 @@ export function createBinding({
       followRegistered(bound.entry, bound)
       console.log(`[discovery] ${moved ? `${sid(agent.agentId)} openclaw session moved ${sid(agent.sessionId)} → ` : 'bound openclaw session '}${sid(key)} via ${observed.primaryRuntimeKey}`)
       // Where its store is once this TUI is gone (a `--profile` TUI's is not the default): read while it runs.
+      if (bound.entry.openclawLocal) return
       const stateDir = await readOpenclawStateDir(bound.entry.agentId, observed.processIdentity)
       if (stateDir) registry.setOpenclawStateDir(bound.entry.agentId, stateDir)
       return

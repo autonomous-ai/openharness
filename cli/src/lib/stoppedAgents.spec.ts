@@ -216,6 +216,19 @@ describe('stopped harness persistence', () => {
     expect(statSync(join(directory, 'stopped-agents', `${saved.agentId}.json`)).mode & 0o777).toBe(0o600)
   })
 
+  // A launch that failed for a named reason started nothing: its archive is where `harness ps --all` and `show` read why.
+  it('keeps a failed launch and its reason, and saves any other launch as ready', async () => {
+    const { saved, store } = await fixture()
+    const failed = { state: 'failed', error: 'OPENCLAW_FOLDER_GONE', detail: "This run's OpenClaw folder is gone." } as const
+    store.save({ ...saved, launch: failed })
+    expect(store.get(saved.agentId)!.launch).toEqual(failed)
+    store.save({ ...saved, launch: { state: 'held', service: 'models', detail: 'Waiting for models.' } })
+    expect(store.get(saved.agentId)!.launch).toEqual({ state: 'ready' })
+    // Not confirmed is not failed: its engine may have run, and a stopped harness has no terminal to check.
+    store.save({ ...saved, launch: { state: 'failed', error: 'RESUME_UNCONFIRMED', detail: 'Check the terminal.' } })
+    expect(store.get(saved.agentId)!.launch).toEqual({ state: 'ready' })
+  })
+
   it('patches one field of an archive without touching its name or activity time', async () => {
     const { saved, store } = await fixture()
     store.save({ ...saved, defaultName: 'harness Desktop' })
@@ -267,6 +280,14 @@ describe('stopped harness persistence', () => {
     const resumed = registry.resumePendingAgent(archived, [{ backend: 'tmux', paneId: '%77' }])!
     expect(resumed.lastOpenedAt).toBe(opened)
     expect(registry.byAgent(saved.agentId)?.lastOpenedAt).toBe(opened)
+  })
+
+  it('the archive keeps a local row\'s folder and its earlier session keys', async () => {
+    const { registry, StoppedAgentStore, store } = await fixture()
+    const local = registry.openPendingAgent({ engine: 'openclaw', runtimes: [{ backend: 'tmux', paneId: '%11' }], cwd: '/tmp/work', openclawLocal: '/run/skill-1' })!
+    store.save({ ...local, sessionId: 'agent:main:tui-2', earlierSessionIds: ['agent:main:harness-1'], active: false })
+    expect(new StoppedAgentStore(join(directory, 'stopped-agents')).get(local.agentId)).toMatchObject({
+      openclawLocal: '/run/skill-1', openclawStateDir: '/run/skill-1', earlierSessionIds: ['agent:main:harness-1'] })
   })
 
   it('T1 keeps a fork origin with its parent session through save, get and list', async () => {

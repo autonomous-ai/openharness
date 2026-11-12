@@ -36,6 +36,10 @@ describe('agentFrame', () => {
     expect(await agentFrame(waiting, context)).not.toHaveProperty('namedState')
     expect(await agentFrame(session(null), context)).not.toHaveProperty('namedState')
   })
+  it('a stopped local run is a named state', async () => {
+    const held = { ...session(null), engine: 'openclaw' as const, identityHold: "OpenClaw's local run stopped: boom" }
+    expect(await agentFrame(held, { selectedModel: null, terminalAvailable: true })).toMatchObject({ namedState: "OpenClaw's local run stopped: boom" })
+  })
   // Null is a real answer: a push without the key would leave a window showing a wait that ended.
   it('says what a message to it waits for, read as the frame is built, and null when nothing', async () => {
     expect((await agentFrame(session(null), { selectedModel: null, terminalAvailable: true })).waitingFor).toBeNull()

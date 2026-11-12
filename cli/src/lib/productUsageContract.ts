@@ -155,6 +155,9 @@ export const LAUNCH_ERROR_CODES = [
   // The engine itself: preparing it (engines/nativeLaunch.ts) and its start (core/agents/newPane.ts).
   'engine_cannot_run', 'engine_install_failed', 'engine_did_not_start', 'engine_not_installed', 'start_timeout',
   'engine_launch_refused',
+  // A local OpenClaw's own folder: refused as no folder, gone, not prepared, or held by another harness
+  // (core/agents/launches.ts, create.ts, newPane.ts, lib/launchOverrides.ts).
+  'invalid_local_folder', 'openclaw_folder_gone', 'openclaw_local_unprepared', 'openclaw_folder_in_use',
   // A Codex launch the owner's subscription relay could not sign in. The relay is gone (#4137) and nothing sends it; kept
   // because the contract is published and only extended.
   'owner_relay_unavailable',
@@ -169,7 +172,7 @@ export const LAUNCH_ERROR_CODES = [
   'missing_agent_id', 'delete_in_progress', 'agent_busy', 'agent_not_found', 'agent_changed', 'resume_failed', 'resume_unavailable',
   'resume_preparation_failed', 'grid_credential_required', 'permission_change_requires_stop', 'identity_unavailable',
   'restart_failed', 'restart_unsupported_backend', 'retarget_unsupported_backend', 'fork_on_grid_unsupported',
-  'no_active_process', 'opencode_sqlite_missing', 'unavailable', 'missing_name', 'missing_update',
+  'fork_unsupported', 'no_active_process', 'opencode_sqlite_missing', 'unavailable', 'missing_name', 'missing_update',
   'invalid_close_request', 'invalid_delete_request', 'close_failed', 'delete_failed',
   // A Stop (`agent_delete`) the machine could not confirm, or whose harness changed while it saved
   // (lib/stopAgentService.ts): 3 of the phone's 4 stops on 2026-10-19 were refused as `other`, the kind it falls under.
