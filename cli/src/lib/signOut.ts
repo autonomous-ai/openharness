@@ -145,12 +145,25 @@ const REMOVALS_KEPT = 20
 /** The most of one removal's line kept, in bytes: a process's command line can be any length. */
 const REMOVAL_LINE_MAX = 2_048
 
+/** [line] cut on a whole character to at most [max] bytes, its ellipsis counted. */
+function cutTo(line: string, max: number): string {
+  const ellipsis = '…', room = max - Buffer.byteLength(ellipsis)
+  let kept = '', bytes = 0
+  for (const character of line) {
+    const size = Buffer.byteLength(character)
+    if (bytes + size > room) break
+    kept += character
+    bytes += size
+  }
+  return kept + ellipsis
+}
+
 /** Written beside the file and renamed over it, so a crash or a second removal at once never leaves it half written (the review
  *  of #4221); its person's alone, whatever mode a file there had before. */
 function keepRemoval(line: string): void {
   const file = join(env.ADAPTER_DATA_DIR, REMOVALS_FILE), temporary = `${file}.${process.pid}.tmp`
   try {
-    const kept = Buffer.byteLength(line) > REMOVAL_LINE_MAX ? Buffer.from(line).subarray(0, REMOVAL_LINE_MAX - 3).toString('utf8') + '…' : line
+    const kept = Buffer.byteLength(line) > REMOVAL_LINE_MAX ? cutTo(line, REMOVAL_LINE_MAX) : line
     const before = existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean) : []
     writeFileSync(temporary, [...before.slice(-(REMOVALS_KEPT - 1)), kept].join('\n') + '\n', { mode: 0o600 })
     chmodSync(temporary, 0o600)

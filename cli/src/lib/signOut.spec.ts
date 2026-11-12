@@ -104,6 +104,12 @@ describe('the removals kept apart from harness.log', () => {
     const lines = readFileSync(kept, 'utf8').trimEnd().split('\n')
     expect(lines[0]).toBe('an earlier removal')
     expect(Buffer.byteLength(lines[1]!)).toBeLessThanOrEqual(2_048)
+    // Cut on a character, never inside one: a command of four-byte characters keeps whole ones, and stays within 2 KB.
+    removeSignIn('logout', 'terminal', () => [{ pid: 2, command: '\u{1F98A}'.repeat(2_000) }])
+    const cut = readFileSync(kept, 'utf8').trimEnd().split('\n').at(-1)!
+    expect(Buffer.byteLength(cut)).toBeLessThanOrEqual(2_048)
+    expect(cut).not.toContain('\uFFFD')
+    expect(cut.endsWith('…')).toBe(true)
     expect(statSync(kept).mode & 0o777).toBe(0o600)
     // Written beside it and renamed over it: no half-written file, and nothing left beside it.
     expect(readdirSync(env.ADAPTER_DATA_DIR).filter(name => name.startsWith(`${REMOVALS_FILE}.`))).toEqual([])
