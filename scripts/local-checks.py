@@ -63,6 +63,8 @@ CHECKS = {
 }
 CLI_SHARED = ("cli/package.json", "cli/package-lock.json", "cli/vitest.config.ts", "cli/vitest.setup.ts",
               "cli/vitest.tmpdir.ts", "cli/src/__fixtures__/vitestRun.ts", "cli/tsconfig*.json", "cli/.node-version", "cli/.nvmrc")
+# The most pull requests Harness's train carries (cli/src/superTabs/githubTrain.ts TRAIN_MAX).
+TRAIN_MAX = 20
 FENCE = re.compile(r"^```harness-local-checks\s*\n(.*?)^```[ \t]*$", re.MULTILINE | re.DOTALL)
 
 
@@ -84,63 +86,84 @@ def planned_checks(plan):
     return required
 
 
+def planned_heads(plan):
+    """The checks a receipt must cover at each head it may name: the pull request's own, or on Harness's train only each
+    member's, with the checks that member's own merge needs (ci-plan.py train_members). A train's head is a merge commit
+    nobody ran anything on (train #4115 on 2026-11-11: no cli-core receipt could name it, so no CLI change could land)."""
+    required = planned_checks(plan)
+    members = plan.get("train_members", [])
+    if members == []:
+        return {plan["head"]: required}
+    if (not isinstance(members, list) or len(members) > TRAIN_MAX
+            or not all(isinstance(member, dict) and isinstance(member.get("head"), str)
+                       and isinstance(member.get("local_checks"), list)
+                       and member["local_checks"] == sorted(set(member["local_checks"]) & set(CHECKS))
+                       for member in members)):
+        raise ValueError("CI plan has incomplete local check coverage")
+    heads = {member["head"]: member["local_checks"] for member in members}
+    if len(heads) != len(members) or not set(required) <= {name for names in heads.values() for name in names}:
+        raise ValueError("CI plan has incomplete local check coverage")
+    return heads
+
+
 def missing(required):
     # Only known names/commands are printed, never arbitrary PR content.
     return ValueError("Missing or invalid local check receipts: " + ", ".join(required)
                       + ". Add the exact-head harness-local-checks JSON receipt before PR validation; use --list for commands.")
 
 
-def validate_receipts(required, receipts, head):
-    if not required:
+def validate_receipts(heads, receipts):
+    """The receipts for every check each of [heads] ({head: [check]}) needs at that head, in that order."""
+    wanted = [(head, name) for head, names in heads.items() for name in names]
+    if not wanted:
         return []
-    if not isinstance(head, str) or not re.fullmatch(r"[0-9a-f]{40}", head):
+    if not all(isinstance(head, str) and re.fullmatch(r"[0-9a-f]{40}", head) for head in heads):
         raise ValueError("invalid local check head")
-    if not isinstance(receipts, list) or len(receipts) > 32:
+    one = len(heads) == 1
+    required = sorted({name if one else f"{name} at {head[:7]}" for head, name in wanted})
+    if not isinstance(receipts, list) or len(receipts) > 32 * len(heads):
         raise missing(required)
     found = {}
     for item in receipts:
-        if not isinstance(item, dict) or not isinstance(item.get("check"), str):
+        if not isinstance(item, dict) or not isinstance(item.get("check"), str) or not isinstance(item.get("head"), str):
             raise missing(required)
-        name = item["check"]
-        if name not in CHECKS or name in found:
+        name, head = item["check"], item["head"]
+        if name not in CHECKS or head not in heads or (head, name) in found:
             raise missing(required)
         contract = CHECKS[name]
         command = item.get("command")
         command_ok = isinstance(command, str) and re.fullmatch(
             re.escape(contract["command"]) + contract.get("resources", MAX_WORKERS), command)
-        if (item.get("head") != head or item.get("status") != "passed"
+        if (item.get("status") != "passed"
                 or type(item.get("passed")) is not int or item["passed"] <= 0
                 or not command_ok or item.get("cwd") != contract["cwd"]
                 or item.get("platform") not in ("macos", "linux", "windows")
                 or (contract["platform"] and item["platform"] != contract["platform"])):
             raise missing(required)
-        found[name] = {key: item[key] for key in ("check", "command", "cwd", "head", "status", "passed", "platform")}
-    absent = sorted(set(required) - set(found))
+        found[head, name] = {key: item[key] for key in ("check", "command", "cwd", "head", "status", "passed", "platform")}
+    absent = [name if one else f"{name} at {head[:7]}" for head, name in wanted if (head, name) not in found]
     if absent:
         raise missing(absent)
-    return [found[name] for name in required]
+    return [found[key] for key in wanted]
 
 
 def check(plan, event):
-    required = planned_checks(plan)
+    heads = planned_heads(plan)
     if plan.get("event") != "pull_request":
         return []
     pr = event.get("pull_request", {})
     if pr.get("head", {}).get("sha") != plan.get("head"):
         raise ValueError("local check event differs from planned head")
-    if plan.get("draft") is True or not required:
+    if plan.get("draft") is True:
         return []
     body = pr.get("body") or ""
-    if not isinstance(body, str) or len(body) > 65536:
-        raise missing(required)
-    blocks = FENCE.findall(body)
-    if len(blocks) != 1:
-        raise missing(required)
+    # Anything but one fence of JSON in a bounded body is no receipt: validate_receipts names what is missing.
+    blocks = FENCE.findall(body) if isinstance(body, str) and len(body) <= 65536 else []
     try:
-        receipts = json.loads(blocks[0])
+        receipts = json.loads(blocks[0]) if len(blocks) == 1 else None
     except (ValueError, RecursionError):
-        raise missing(required) from None
-    return validate_receipts(required, receipts, plan["head"])
+        receipts = None
+    return validate_receipts(heads, receipts)
 
 
 def main():
