@@ -639,6 +639,7 @@ class _Gallery extends StatelessWidget {
                         ('Quinn', false, false, true, 'on #12'),
                         ('Kai', false, true, false, 'free'),
                         ('Wren', false, false, false, 'offline'),
+                        ('Finn', false, false, false, 'paused'),
                         ('Moss', false, false, false, 'starting'),
                         ('Ash', false, false, false, 'working'),
                         ('Juno', false, false, false, 'needs you'),

@@ -1201,6 +1201,29 @@ class ConversationServer {
         }
         revision++;
         agent['displayName'] = (command['name'] as String).trim();
+      } else if (command['type'] == 'agent.pause') {
+        // As the backend's: its person, its machine's owner or the Swarm's owner pauses or resumes it, for every reader.
+        final agent = (state['agents'] as List)
+            .cast<Map<String, dynamic>>()
+            .where((a) => a['id'] == command['agentId'])
+            .firstOrNull;
+        final who = reader ?? 'owner';
+        if (agent == null ||
+            (agent['contributorId'] != who &&
+                agent['machineOwnerId'] != who &&
+                state['ownerId'] != who)) {
+          throw const SuperTabFailure(
+            'FORBIDDEN',
+            'Only the person who runs this agent, its machine\'s owner or the Swarm\'s owner can pause it.',
+            statusCode: 403,
+          );
+        }
+        revision++;
+        if (command['paused'] == true) {
+          agent['pausedAt'] ??= '2026-11-12T01:00:00Z';
+        } else {
+          agent.remove('pausedAt');
+        }
       } else if (command['type'] == 'project.pm') {
         // As the backend's (project.pm): the project's owner makes one of their own agents its PM; the one before stays an
         // agent. The answer names the PM's own chat.
