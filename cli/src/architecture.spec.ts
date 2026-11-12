@@ -99,8 +99,9 @@ const IN_PROCESS_ONLY = 'services/inline.ts'
  * them, so a process with the Swarm off loads none of its code; a static import of the same file is walked.
  */
 const SWARM_DOORS: Readonly<Record<string, readonly string[]>> = {
-  // Its side of the core's process, and of the services that act on it when they run there.
-  'core/main.ts': ['superTabs/inCore.ts', 'superTabs/inServices.ts'],
+  // Its side of the core's process, of the services that act on it when they run there, and its own service when that
+  // runs there too (`HARNESSD_SERVICES=none`).
+  'core/main.ts': ['superTabs/inCore.ts', 'superTabs/inServices.ts', 'superTabs/inCoreService.ts'],
   // Its side of the services that act on it, in their own processes, and its own service's process, which the master
   // starts only while it is on (harnessd/services.ts `servicesOn`).
   'serviceProcess.ts': ['superTabs/inServices.ts', 'services/superTabsProcess.ts'],
@@ -348,10 +349,31 @@ describe('the daemon\'s shape', () => {
       .map(({ file, from }) => `${file} imports ${from}`)
     expect(wrong, 'Declare what the core needs of the Swarm in core/api.ts, and hand its code in from superTabs/inCore.ts.').toEqual([])
     const main = importsFor('core/main.ts', readFileSync(join(SRC, 'core', 'main.ts'), 'utf8')).filter(({ from }) => /(^|\/)superTabs\//.test(from))
-    expect(main).toEqual([{ from: '../superTabs/inCore.js', dynamic: true }, { from: '../superTabs/inServices.js', dynamic: true }])
+    expect(main).toEqual([{ from: '../superTabs/inCore.js', dynamic: true }, { from: '../superTabs/inServices.js', dynamic: true },
+      { from: '../superTabs/inCoreService.js', dynamic: true }])
     expect(followed('core/main.ts', 'superTabs/inCore.ts', true)).toBe(false)
     expect(followed('core/main.ts', 'superTabs/inCore.ts', false)).toBe(true)
     expect(followed('services/models.ts', 'superTabs/inServices.ts', true)).toBe(true)
+  }, WALK_TIMEOUT_MS)
+
+  // The audit of 2026-11-12 (docs/design/2026-11-12-core-audit.md): the door re-exported the service's own start, for a
+  // core that runs it in its own process, so every core with the Swarm on, the default, loaded the whole service: 118
+  // files and 28,739 lines it never ran, edge files among them (the transcript normalizers, the handoff, the Codex
+  // profiles), in the process that must never go down. The service's start now has a door of its own, taken only when
+  // it runs in the core's process, and what the first door hands the core is listed here, file by file.
+  it('with the Swarm on, the core\'s process loads the Swarm\'s side of it and none of its service', () => {
+    const core = closureOf('core/main.ts')
+    const door = [...closureOf('superTabs/inCore.ts').keys()].filter((file) => !core.has(file)).sort()
+    expect(door, 'What the Swarm runs in the core\'s process is its side of the core alone. Its service runs in its own process: reach it through a port in core/api.ts. A file every Swarm session needs in the core is added here, with the review that says why.').toEqual([
+      'lib/agentInstructions.ts', 'lib/superTabAttachmentProxy.ts', 'lib/swarmEngineArgs.ts', 'lib/swarmGitHub.ts', 'lib/swarmSkills.ts',
+      'superTabs/cleanupCloses.ts', 'superTabs/inCore.ts', 'superTabs/inCore/adoption.ts', 'superTabs/inCore/agents.ts',
+      'superTabs/inCore/attention.ts', 'superTabs/inCore/cards.ts', 'superTabs/inCore/deliveries.ts', 'superTabs/inCore/devices.ts',
+      'superTabs/inCore/launch.ts', 'superTabs/inCore/role.ts', 'superTabs/inCore/terminal.ts', 'superTabs/leadSwitch.ts',
+      'superTabs/readContract.ts', 'superTabs/retention.ts', 'superTabs/wire.ts',
+    ])
+    // None of it is an edge file but the Swarm's own side, and the service is reached only through its own door.
+    expect(door.filter((file) => !/^superTabs\//.test(file) && EDGE.some((pattern) => pattern.test(file)))).toEqual([])
+    expect(closureOf('superTabs/inCoreService.ts').has('services/superTabs.ts')).toBe(true)
   }, WALK_TIMEOUT_MS)
 
   // The review of #1765: with the Swarm off, every core still loaded its skills through the registry, and with every

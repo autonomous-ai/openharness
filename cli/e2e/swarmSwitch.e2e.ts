@@ -17,6 +17,13 @@ import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 const MACHINE = 'b9'.repeat(16)
 /** The Swarm's code, as a process started from the sources loads it: its folder, its libraries and its service. */
 const SWARM_CODE = /\/src\/(superTabs\/|lib\/swarm|services\/superTabs(Process)?\.ts$)/
+/** The Swarm's service itself: its start, its host and its commands, which only the process that runs it loads. */
+const SERVICE_FILES = ['services/superTabs.ts', 'superTabs/host.ts', 'superTabs/service.ts']
+const serviceFiles = (urls: string[]): string[] =>
+  [...new Set(urls.map((url) => url.slice(url.indexOf('/src/') + 5)).filter((file) => SERVICE_FILES.includes(file)))].sort()
+/** The core's process among those recorded: the one that took the Swarm's door. Started from the sources, the master
+ *  loads core/main.ts too (cli.ts imports it for `__run`), so that file does not tell them apart. */
+const coreOf = (processes: string[][]): string[] => processes.find((urls) => urls.some((url) => url.includes('/src/superTabs/inCore.ts')))!
 /** Every module each daemon process loaded (harness/loadedModules.mjs), by process: started from the sources, so each
  *  file is the source it is (the shipped build's files are held to the same in src/leanEntry.spec.ts). */
 function loadedModules(dir: string): Map<string, string[]> {
@@ -125,9 +132,28 @@ describe('the Swarm switch', () => {
     expect(await close(client, agent)).toMatchObject({ error: 'LEAD_PROTECTED' })
     expect(d.log()).not.toContain('[services] superTabs is turned off on this computer')
     // The recording sees the Swarm's code where it runs: its side of the core, and its own process.
-    const loaded = [...loadedModules(modules).values()].flat()
+    const processes = [...loadedModules(modules).values()]
+    const loaded = processes.flat()
     expect(loaded.some((url) => url.includes('/src/superTabs/inCore.ts'))).toBe(true)
     expect(loaded.some((url) => url.includes('/src/services/superTabsProcess.ts'))).toBe(true)
+    // And the service nowhere but its own process: the core's door once handed it the whole service (the audit of
+    // 2026-11-12), which every core with the Swarm on then loaded and never ran.
+    expect(serviceFiles(coreOf(processes))).toEqual([])
+    expect(serviceFiles(processes.find((urls) => urls.some((url) => url.includes('/src/services/superTabsProcess.ts')))!)).toEqual(SERVICE_FILES)
+  }, 240_000)
+
+  // A core that runs the Swarm's service itself (`HARNESSD_SERVICES=none`) takes the service's own door
+  // (superTabs/inCoreService.ts), and answers its requests from its own process.
+  it('on with every service in the core, the core runs the Swarm\'s service through its own door', async () => {
+    const modules = recordIn('swarm-on-inline-modules-')
+    const { d, client } = await fresh({ HARNESS_SWARM: '', HARNESSD_SERVICES: 'none' }, modules)
+    const agent = await create(d, client, 'swarm-on-inline')
+    await turn(client, agent.id, 'the core works with the Swarm\'s service in it')
+    expect(await client.request('super_tabs', { action: 'swarmListed', harnessId: 'probe' }, 60_000)).toMatchObject({ ok: true })
+    expect(swarmStarts(d), 'no process of its own').toBe(0)
+    const core = coreOf([...loadedModules(modules).values()])
+    expect(core.some((url) => url.includes('/src/superTabs/inCoreService.ts'))).toBe(true)
+    expect(serviceFiles(core)).toEqual(SERVICE_FILES)
   }, 240_000)
 
   // Dee, 11-01: a Product Manager's engine is switched from its pane, as any pane's (Change agent). Its machine lets its stop
