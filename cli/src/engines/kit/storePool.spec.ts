@@ -323,7 +323,7 @@ it('shares one deadline across stores and passes the remaining budget to SQLite'
   control.afterQuery = () => { control.now = 2_001 }
   await expect(find()).rejects.toThrow('deadline')
   expect(control.queries).toHaveLength(1)
-  expect(control.queries[0].options).toEqual({ busyTimeoutMs: 250, cliTimeoutMs: 2000, maxBuffer: 40 * 1024 * 1024 })
+  expect(control.queries[0].options).toEqual({ busyTimeoutMs: 250, timeoutMs: 2000, maxBuffer: 40 * 1024 * 1024 })
 })
 
 it('holds a failed final inspection even after a successful SQL query', async () => {
