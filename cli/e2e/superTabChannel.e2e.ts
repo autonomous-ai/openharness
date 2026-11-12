@@ -215,7 +215,7 @@ it('types an @Name mention from another agent into the named agent once: idle, b
   expect(typed).toHaveLength(1)
   // Told where it is and who wrote it, and the command that answers in the channel's thread: Juno's own, naming Pip.
   expect(typed[0]).toMatch(new RegExp(`^In the project chat of Pilot \\(conversation ${CHANNEL}\\)\\.\\n\\n@Pip, to you:\\n@Juno can you review #4\\?\\n\\n`
-    + `Answer: .* super-tab .* --tab '${TAB}' --agent '${juno.memberId}' post '${CHANNEL}' 'your message' UNIQUE_OPERATION_ID --reply-to 'message-idle' --to '${pip.memberId}'$`))
+    + `Answer: .* super-tab .* --tab '${TAB}' post '${CHANNEL}' 'your message' --reply-to 'message-idle' --to '${pip.memberId}'$`))
   expect(idle.claims).toBe(1)
 
   // Busy: typed into the running turn, once, and acknowledged before that turn ends. The turn runs longer than the whole wait, so

@@ -354,6 +354,58 @@ void main() {
     },
   );
 
+  // QA, 2026-11-12: with #4104 and #4076 both in, a pane chosen as PM joins under the name its row shows.
+  testWidgets(
+    'a pane chosen as PM joins under the name its row shows, a Swarm name where two panes share one',
+    (tester) async {
+      final (:f, :c, gh: _) = await open(
+        tester,
+        before: (f) async {
+          f.app.machineStates['m']!.agents = [
+            ...f.app.machineStates['m']!.agents,
+            session(
+              'api3',
+              'Api builder',
+              remote: 'git@github.com:Acme/api.git',
+            ),
+          ];
+          f.app.swarms
+              .firstWhere((s) => s.id == 'one')
+              .panes
+              .add(pane('m', 'api3'));
+        },
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Choose PM'));
+      await tester.pumpAndSettle();
+      String shown(String harness) => tester
+          .widget<Text>(
+            find
+                .descendant(
+                  of: key('choose-pm-${swarmAgentId('m', harness)}'),
+                  matching: find.byType(Text),
+                )
+                .first,
+          )
+          .data!;
+      // One keeps "Api builder"; the other shows the Swarm name it joins under.
+      final names = {'api': shown('api'), 'api3': shown('api3')};
+      expect(names.values.where((n) => n == 'Api builder'), hasLength(1));
+      final other = names.entries.firstWhere((e) => e.value != 'Api builder');
+      await tester.tap(key('choose-pm-${swarmAgentId('m', other.key)}'));
+      await tester.pump();
+      await tester.tap(key('choose-pm-confirm'));
+      for (var i = 0; i < 100; i++) {
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump(const Duration(milliseconds: 50));
+        if (find.byType(AlertDialog).evaluate().isEmpty) break;
+      }
+      final join = f.connection.joins.single['command'] as Map;
+      expect(join, containsPair('harnessId', other.key));
+      expect(join, containsPair('name', other.value));
+      await close(tester, f, c);
+    },
+  );
+
   testWidgets(
     'the tab-named projects an older Desktop made are closed on the server once, and leave the list',
     (tester) async {

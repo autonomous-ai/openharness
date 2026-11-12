@@ -28,7 +28,10 @@ import { isCoordinator } from './agentContext.js'
 import { UPDATE_REQUIRED } from './readContract.js'
 
 type Json = Record<string, unknown>
-const agentCommandOf = (entry: Entry, prefix: string) => `${prefix} --tab ${shellQuote(entry.tabId)} --agent ${shellQuote(entry.agentId)}`
+// Its Swarm by name, as an agent may be in two (a Personal Swarm and a team's); not itself, which its pane says (command.ts callerOf),
+// nor an operation, which `post` makes when none is named: each message an agent is typed carries this (anh Dee, 2026-11-11: "what are
+// those extra verbose things").
+const agentCommandOf = (entry: Entry, prefix: string) => `${prefix} --tab ${shellQuote(entry.tabId)}`
 const readCommand = (entry: Entry, prefix: string, group: string, id: string) =>
   `${agentCommandOf(entry, prefix)} message ${shellQuote(group)} ${shellQuote(id)}`
 // The Pro dial's Swarm face (cards.ts) still takes these two from here; every other file takes them from wire.ts.
@@ -1874,7 +1877,7 @@ export class SuperTabHost {
     // other message right below it.
     const threadAnswer = this.threadAnswers.has(entry.deliveryId)
     const threaded = (identifier(message.thread) && message.thread !== message.id) || threadAnswer
-    const answer = `Answer: ${command} post ${shellQuote(group)} 'your message' UNIQUE_OPERATION_ID ${threaded ? '--reply-to' : '--answers'} ${shellQuote(String(message.id))}${to}`
+    const answer = `Answer: ${command} post ${shellQuote(group)} 'your message' ${threaded ? '--reply-to' : '--answers'} ${shellQuote(String(message.id))}${to}`
     return context + reply + said + `\n\n${answer}`
   }
 

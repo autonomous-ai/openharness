@@ -25,7 +25,7 @@ function harnessIn(frames: PaneFrame[], pane: string, machineId: string): boolea
 
 const ELSEWHERE = 'From a harness, Swarm commands go to this computer\'s own Harness only: leave out --machine and --port, or give this computer\'s own.'
 
-const USAGE = 'harness super-tab [--tab ID] [--agent ID] [--port N --machine ID] status | messages GROUP [--thread ROOT] [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | answer GROUP MESSAGE_ID TEXT|- OPERATION_ID [--to AGENT]... | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | read ok|hold OWNER/REPO#N SHA [TEXT|-] | take OWNER/REPO#N | split OWNER/REPO#N s|m|l TITLE [TEXT|-] | inbox | goal'
+const USAGE = 'harness super-tab [--tab ID] [--agent ID] [--port N --machine ID] status | messages GROUP [--thread ROOT] [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | post GROUP TEXT|- [OPERATION_ID] [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | answer GROUP MESSAGE_ID TEXT|- OPERATION_ID [--to AGENT]... | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | read ok|hold OWNER/REPO#N SHA [TEXT|-] | take OWNER/REPO#N | split OWNER/REPO#N s|m|l TITLE [TEXT|-] | inbox | goal'
 const usageError = () => new Error(USAGE)
 
 /** A message on stdin, for post's TEXT `-`.
@@ -34,7 +34,7 @@ const usageError = () => new Error(USAGE)
  *  arrived as "-". So `-` reads the message from stdin, once, before anything is sent, and an empty or a terminal stdin is
  *  refused: nothing is posted, and nothing waits on a terminal for input that never comes. */
 const HEREDOC = "<<'MSG' (the message on the next lines, then MSG alone on a line)"
-const POST_STDIN = `post GROUP - OPERATION_ID ${HEREDOC}`
+const POST_STDIN = `post GROUP - ${HEREDOC}`
 /** A verdict's words on stdin, as a post's (githubVerdict.ts). */
 const READ_STDIN = `read ok|hold OWNER/REPO#N SHA - ${HEREDOC}`
 /** What a piece is, on stdin, as a post's (githubSplit.ts). */
@@ -142,10 +142,14 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
   else if (action === 'message' && identifier(first) && identifier(second) && positional.length === 3) {
     Object.assign(payload, { conversationId: first, messageId: second })
   }
-  else if (action === 'post' && identifier(first) && typeof second === 'string' && identifier(third)) {
+  else if (action === 'post' && identifier(first) && typeof second === 'string' && (third === undefined || third.startsWith('--') || identifier(third))) {
+    // Its OPERATION_ID may be left out: every message typed to an agent carried the word, and the agent made one up each time
+    // (anh Dee, 2026-11-11: "what are those extra verbose things"). A new one is made for each run: one made from the words would
+    // take a builder's second `free: Pip` within the hour, or the same words to another agent, as the first (code review of #4120).
+    const given = third !== undefined && !third.startsWith('--')
     let replyTo: string | null = null, answers: string | null = null
     const attach: string[] = [], mentions: string[] = [], to: string[] = []
-    for (let i = 4; i < positional.length; i += 2) {
+    for (let i = given ? 4 : 3; i < positional.length; i += 2) {
       const [flag, value] = [positional[i], positional[i + 1]]
       if (flag === '--reply-to' && identifier(value) && replyTo === null && answers === null) replyTo = value
       // The answer right below a message, in the main flow (task #2929); a reply to it goes in its thread.
@@ -158,10 +162,12 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
       else throw usageError()
     }
     // TEXT `-` is the message on stdin; any other TEXT is the message itself, and stdin is never read.
-    const text = withinPostLimit(second === '-' ? postStdin(stdin, terminal) : second, third)
+    const said = second === '-' ? postStdin(stdin, terminal) : second
+    const operationId = given ? third! : `post-${randomUUID()}`
+    const text = withinPostLimit(said, operationId)
     // A screenshot or a log may go without words.
     if (!text.trim() && !attach.length) throw usageError()
-    Object.assign(payload, { action: 'command', operationId: third, ...(attach.length ? { attach } : {}),
+    Object.assign(payload, { action: 'command', operationId, ...(attach.length ? { attach } : {}),
       command: { type: 'message.send', conversationId: first, text, replyTo, ...(answers ? { answers } : {}), recipientIds: to, ...(mentions.length ? { mentions } : {}) } })
   } else if (action === 'answer' && identifier(first) && identifier(second) && typeof third === 'string' && identifier(positional[4])) {
     // The answer to the message [second] (task #3403): the server puts it in that message's thread, or right below it.

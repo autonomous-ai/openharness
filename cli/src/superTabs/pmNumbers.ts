@@ -34,7 +34,7 @@
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { DEEP, labelOf, openPieces, type AwayBuilder, type Crew, type Pick, type Read } from './assign/crew.js'
+import { hasRoom, labelOf, type AwayBuilder, type Crew, type Pick, type Read } from './assign/crew.js'
 import { refusedForGood } from './githubMentions.js'
 import { GOAL_FILE, type Score } from './goal.js'
 import type { LedProject } from './githubMerge.js'
@@ -51,8 +51,10 @@ type Json = Record<string, unknown>
 export const SHORT_AFTER_MS = 15 * 60_000
 /** How often the PM is told while work is short. */
 export const SHORT_EVERY_MS = 60 * 60_000
-/** How many times the PM is told, with nothing landed, closed or opened since, before its person is told instead. */
-export const SHORT_TIMES = 3
+/** How many times the PM is told, with nothing landed, closed or opened since, before its person is told instead: once. Told
+ *  again each hour while nothing moved, the PM spent its person's tokens on the same counts (anh Dee, 2026-11-11: "never spam
+ *  agents because we burn user token"); once, then its person, as an agent's next thing (nextThing.ts NEXT_TIMES). */
+export const SHORT_TIMES = 1
 /** The hour of this computer's day from which the day's numbers are posted, once. */
 export const DAY_HOUR = 9
 const DAY_MS = 24 * 60 * 60_000
@@ -95,28 +97,19 @@ export function landedOf(closed: readonly Json[], team: { has: (label: string) =
 }
 
 /**
- * The counts of a pass: the open [issues], [read] and [crew] as the assigner read them, the tasks whose pull request waits for
- * its readers or its merge ([withReaders]), the builders out of quota ([short]), the tasks given this pass ([picks]), the
- * repository's issues and pull requests closed last ([closed], one page), and the project's [pm]. A builder is free when it
- * would be given a task were one open: its list is not full (DEEP), every task in it waits on its pull request, it has room in
- * its subscription and it was given nothing this pass. One with a full list all in review is given nothing whatever is open,
- * so it is not counted: its PM cannot end that wait by opening tasks (third review). A task that waits on its pieces is not
- * in a list.
+ * The counts of a pass: the open [issues], [read] and [crew] as the assigner read them, the builders out of quota ([short]),
+ * the tasks given this pass ([picks]), the repository's issues and pull requests closed last ([closed], one page), and the
+ * project's [pm]. A builder is free when it would be given a task were one open, by the assigner's own rule (assign/crew.ts
+ * hasRoom: it builds nothing, whatever it has in review, and holds fewer than four open), with room in its subscription and
+ * nothing given this pass. One that holds four, all in review, is given nothing whatever is open, so it is not counted: its
+ * PM cannot end that wait by opening tasks (third review).
  */
-export function numbersOf(input: { now: number; crew: Crew; pm: string; issues: readonly Json[]; read: Read; withReaders: ReadonlySet<number>
+export function numbersOf(input: { now: number; crew: Crew; pm: string; issues: readonly Json[]; read: Read
   short: readonly AwayBuilder[]; picks: readonly Pick[]; closed: readonly Json[] }): Numbers {
   const { now, crew, read, picks } = input
   const tasks = input.issues.filter(issue => !issue.pull_request)
   const given = new Set(picks.map(pick => pick.builder)), out = new Set(input.short.map(away => away.label))
-  const lists = new Map<string, number[]>()
-  // A task its builder took that waits on pieces cut off it holds no place in its list, as the assigner counts it (readProblem).
-  for (const task of tasks) {
-    const labels = labelsOf(task)
-    if (labels.includes('status:taken') && openPieces(task)) continue
-    for (const label of labels) lists.set(label, [...lists.get(label) ?? [], Number(task.number)])
-  }
-  const idle = (label: string) => { const list = lists.get(label) ?? []; return list.length < DEEP && list.every(number => input.withReaders.has(number)) }
-  const free = crew.builders.filter(b => idle(b.label) && !given.has(b.id) && !out.has(b.label)).map(b => ({ id: b.id, name: plainName(b.name) }))
+  const free = crew.builders.filter(b => hasRoom(read, b.id) && !given.has(b.id) && !out.has(b.label)).map(b => ({ id: b.id, name: plainName(b.name) }))
     .sort((a, b) => a.name.localeCompare(b.name))
   // The team's own, as the merger lands only those (assign/crew.ts teamOf): a person's pull request, or an issue anyone
   // opened and closed, is theirs.
@@ -135,7 +128,8 @@ export function numbersOf(input: { now: number; crew: Crew; pm: string; issues: 
   for (const task of done) activity = Math.max(activity, timeOf(task.closed_at))
   const closed = done.filter(task => within(task.closed_at)).length
   const landedBy = [...by].map(([label, count]): [string, number] => [names.get(label)!, count]).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-  return { builders: crew.builders.length, free, open: read.free.size - picks.length,
+  // A free task that waits for what it comes after is open too (assign/crew.ts readProblem): given to nobody yet.
+  return { builders: crew.builders.length, free, open: read.free.size + read.waits - picks.length,
     // No size Harness reads (assign/crew.ts SIZES): one labelled size:xl is given to nobody as surely as one with none.
     unsized: tasks.filter(task => !labelsOf(task).some(label => /^size:[sml]$/.test(label) || label.startsWith('builder:') || label === 'status:taken')).length,
     held: [...read.open.values()].reduce((sum, count) => sum + count, 0) + picks.length,
@@ -153,8 +147,8 @@ const nothing = (names: readonly string[]): string => `${listed(names)} ${names.
 const landedWords = (n: Numbers): string => `${counted(n.landed, 'pull request')}${n.more ? ' or more' : ''} landed`
 
 /** What is open, for [builders] that have nothing: a sized task still open is one Harness did not give them (what their machines
- *  lack, the areas they work on, a label GitHub refused, or a place it keeps on another builder's full list). Said as that and
- *  no more: "cannot go to them" was untrue of the last (fifth review). */
+ *  lack, the areas they work on, a label GitHub refused, or a place the plan keeps for a builder still building). Said as that
+ *  and no more: "cannot go to them" was untrue of the last (fifth review). */
 const noTask = (n: Numbers, builders: number): string => n.open > 0 ? `the ${counted(n.open, 'sized task')} open ${n.open === 1 ? 'was' : 'were'} not given to ${builders === 1 ? 'it' : 'them'}`
   : `no sized task is open${n.unsized ? ` (${counted(n.unsized, 'open issue')} ${n.unsized === 1 ? 'has' : 'have'} no size)` : ''}`
 
@@ -180,7 +174,7 @@ export const shortLine = (names: readonly string[], n: Numbers, at: string, goal
 /** What the PM's person is told, in the PM's chat with them, once the PM was told [SHORT_TIMES] times, nothing moved since,
  *  and [names] still have nothing. Said, not asked: the PM never hears what is posted in its name (the server delivers no agent
  *  its own post), so a question would bring it a "You pick." with nothing to refer to (review of #4081). What it was typed
- *  three times is what it answers from. */
+ *  is what it answers from. */
 export const toldLine = (names: readonly string[], n: Numbers): string => `${nothing(names)}, and ${noTask(n, names.length)}.`
 
 /** A count as a teammate says it: "no task", "1 task", and "at least 94 pull requests" when the closed list read was full, so

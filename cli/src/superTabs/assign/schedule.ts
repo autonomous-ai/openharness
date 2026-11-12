@@ -11,6 +11,8 @@
  * - a subscription's windows are never spent past what is left after its person's reserve; a task that spans a reset spends
  *   each window its share of its minutes, and a window refills at each reset;
  * - a review is never done by its build's model family, nor by its author.
+ *
+ * And it prices what a plan spends of each window ([priceOf]), which the plan's score counts after its time.
  */
 import type { Account, Builder, Choice, Machine, Mode, Plan, Placement, Problem, QuotaWindow, Resources, Task } from './model.js'
 
@@ -18,6 +20,9 @@ import type { Account, Builder, Choice, Machine, Mode, Plan, Placement, Problem,
 export const HORIZON_MINUTES = 30 * 24 * 60
 /** What a task left out costs a plan: more than any plan that places it. */
 const UNPLACED = 1e12
+/** The price of a window exactly on its pace. One just refilled is, and one whose use is not known is priced so: never as
+ *  unused, which would draw every task to it (task #4217: unknown is never read as unused). */
+const EVEN_PRICE = 0.5
 
 interface Span { start: number; end: number }
 interface MachineUse extends Span { needs: Resources }
@@ -47,6 +52,27 @@ export function optionsOf(problem: Problem, task: Task): Array<{ builder: string
   return found.length ? found : why
 }
 
+/**
+ * What a percent of [window] costs a plan at [now], from 0 to 1 (the allocator's package 15). Its room is what is left above
+ * its person's [reserve]. Its need is what the whole allowance for Swarm work (100 less the reserve), spent evenly over the
+ * window's period, would still spend before the reset. The price is need / (need + room): next to nothing where the room
+ * would lapse unused before the reset, a half for a window on its pace, and nearer 1 the further its room has run ahead of
+ * its reset.
+ *
+ * It reads the window and nothing else. The design's first version read the need from the present rate of spend and the
+ * tasks in hand: where three to eight large tasks fill a window, one starting or ending moved that price over its whole
+ * range, and the plans made with it (docs/design/2026-11-11-swarm-allocator/window-price.mts runs the case). This one
+ * moves only as the window is spent and as its reset nears. A window with no known period, or whose reset has passed,
+ * cannot be placed on its pace: it is priced as one on it.
+ */
+export function priceOf(window: QuotaWindow, reserve: number, now: number): number {
+  const until = window.resetsAt - now
+  if (window.every === null || until <= 0) return EVEN_PRICE
+  const room = window.left - reserve
+  const need = (100 - reserve) * until / window.every
+  return room > 0 ? need / (need + room) : 1
+}
+
 /** Minutes [task] takes on [builder] in [mode]: its minutes at the model's speed, at the builder's speed on its part. */
 export function durationOf(task: Task, builder: Builder, mode: Mode): number {
   const context = task.part === undefined ? 1 : builder.context[task.part] ?? 1
@@ -66,6 +92,8 @@ export class Timeline {
   /** Percent spent of each account's window, by account, window name and the window's index from now. */
   private readonly spent = new Map<string, Map<number, number>>()
   readonly placed = new Map<string, Placement & { family: string }>()
+  /** What the placed tasks spend of their subscriptions' windows, in percent, each at its window's price. */
+  priced = 0
   /** The tasks that name each task in their `independentOf`: its reviews, found without walking every placed task. */
   private readonly dependents = new Map<string, string[]>()
 
@@ -119,15 +147,27 @@ export class Timeline {
     if (mode.limit !== undefined) push(this.modelUse, mode.model, span)
     for (const file of task.files) push(this.fileUse, file, { ...span, builder: builderId })
     const account = mode.account ? this.accounts.get(mode.account) : undefined
-    if (account) {
-      for (const window of account.windows) {
-        for (const [index, share] of shares(window, task, mode, span)) {
-          const used = this.spent.get(`${account.id}\n${window.name}`) ?? new Map<number, number>()
-          used.set(index, (used.get(index) ?? 0) + share)
-          this.spent.set(`${account.id}\n${window.name}`, used)
-        }
+    if (account) this.priced += this.spend(account, task, mode, span)
+  }
+
+  /**
+   * Spends [account]'s windows of what [task] takes of them over [span] in [mode], and answers that spend in percent, each
+   * percent at its window's price: the window's own until its reset, a refilled window's after it, and an unknown one's for
+   * a window the subscription does not report.
+   */
+  private spend(account: Account, task: Task, mode: Mode, span: Span): number {
+    let priced = 0
+    for (const window of account.windows) {
+      const key = `${account.id}\n${window.name}`
+      for (const [index, share] of shares(window, task, mode, span)) {
+        let used = this.spent.get(key)
+        if (!used) this.spent.set(key, used = new Map<number, number>())
+        used.set(index, (used.get(index) ?? 0) + share)
+        priced += share * (index === 0 ? priceOf(window, account.reserve, this.problem.now) : EVEN_PRICE)
       }
     }
+    for (const name in task.spend) if (!account.windows.some(w => w.name === name)) priced += EVEN_PRICE * task.spend[name]! * mode.cost / 2
+    return priced
   }
 
   /** The minutes worth trying, earliest first: [from], each end of what holds this machine, model or task's files, and each
@@ -271,12 +311,13 @@ export function schedule(problem: Problem, choice: Choice): Plan {
     }
     waiting = next
   }
-  return score(problem, [...timeline.placed.values()].map(({ family: _family, ...p }) => p), unplaced)
+  return score(problem, [...timeline.placed.values()].map(({ family: _family, ...p }) => p), unplaced, timeline.priced)
 }
 
-/** The plan's score, lower is better: by the problem's objective, then cost, plus what moving queued work and leaving tasks
- *  out costs. */
-export function score(problem: Problem, placements: Placement[], unplaced: Plan['unplaced']): Plan {
+/** The plan's score, lower is better: by the problem's objective, then cost and [priced] (what it spends of subscriptions'
+ *  windows at their prices, a percent at price 1 as a minute of the cheapest model: a task's whole spend is far less than
+ *  a minute of its time), plus what moving queued work and leaving tasks out costs. */
+export function score(problem: Problem, placements: Placement[], unplaced: Plan['unplaced'], priced: number): Plan {
   const tasks = new Map(problem.tasks.map(t => [t.id, t]))
   const builders = new Map(problem.builders.map(b => [b.id, b]))
   let makespan = problem.now, cost = 0, weighted = 0, switched = 0
@@ -288,6 +329,6 @@ export function score(problem: Problem, placements: Placement[], unplaced: Plan[
     if (task.queuedOn && task.queuedOn !== p.builder) switched++
   }
   const main = problem.objective === 'makespan' ? (makespan - problem.now) * 1e6 : weighted * 1e3
-  const total = main + cost + switched * (problem.switchCost ?? 15) * 1e3 + unplaced.length * UNPLACED
-  return { placements, unplaced, score: total, makespan, cost }
+  const total = main + cost + priced + switched * (problem.switchCost ?? 15) * 1e3 + unplaced.length * UNPLACED
+  return { placements, unplaced, score: total, makespan, cost, priced }
 }

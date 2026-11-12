@@ -101,6 +101,37 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     f.next.stop()
   })
 
+  // The allocator's design, package 3: a task that comes after one whose pull request is up is built on that branch, and both
+  // the line that gives it and this one say so.
+  it('types the branch to build its next task on, when the task comes after ones whose pull requests of its are up', async () => {
+    const after = (number: number, title: string, text: string): Json => ({ ...item(number, title), body: text })
+    const f = setup({ items: [item(12, 'Fix the login bug', ['status:taken']), item(30, 'Fix the login bug', [], true), after(14, 'Add the export', 'After #12, and after #9.')] })
+    f.state.pulls[30] = { body: 'Closes #12', head: { sha: HEAD, ref: 'pip/12' } }
+    f.next.start()
+    await f.end()
+    expect(f.told()).toEqual(['Next: acme/app#14 Add the export. It is given to you and nobody has taken it. Build it on the branch of #30 (`pip/12`); '
+      + `its pull request still goes into the default branch: ${TAKE} acme/app#14`])
+    // Nothing more is read for it than its own pull requests, read for its own work already.
+    expect(f.calls.filter(path => path === '/repos/acme/app/pulls/30')).toHaveLength(1)
+    // A draft is no branch to build on yet, nor a pull request for another task: the line is the plain one.
+    for (const [number, pull] of [[31, { draft: true, body: 'Closes #12' }], [32, { body: 'Closes #13' }]] as Array<[number, Json]>) {
+      const g = setup({ items: [item(number, 'A pull request', [], true), after(14, 'Add the export', 'After #12.')] })
+      g.state.pulls[number] = pull
+      g.next.start()
+      await g.end()
+      expect(g.told(), String(number)).toEqual([`Next: acme/app#14 Add the export. It is given to you and nobody has taken it: ${TAKE} acme/app#14`])
+      g.next.stop()
+    }
+    // A pull request GitHub gives no branch for is named by its number alone.
+    const bare = setup({ items: [item(30, 'Fix the login bug', [], true), after(14, 'Add the export', 'After #12.')] })
+    bare.state.pulls[30] = { body: 'Closes #12', head: { sha: HEAD } }
+    bare.next.start()
+    await bare.end()
+    expect(bare.told()).toEqual([`Next: acme/app#14 Add the export. It is given to you and nobody has taken it. Build it on the branch of #30; its pull request still goes into the default branch: ${TAKE} acme/app#14`])
+    bare.next.stop()
+    f.next.stop()
+  })
+
   it('types nothing while it holds a task it took with no pull request yet: its own work comes first', async () => {
     const f = setup({ items: [item(12, 'Fix the login bug', ['status:taken']), item(14, 'Add the export')] })
     f.next.start()
@@ -129,6 +160,27 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     expect(f.tell).toHaveBeenCalledTimes(1)
     await vi.advanceTimersByTimeAsync(IDLE_ASK_MS)
     expect(f.told().at(-1)).toMatch(/^You hold acme\/app#12 \(Sync the settings\) and have done nothing on it for 20 minutes/)
+    f.next.stop()
+  })
+
+  // anh Dee, 2026-11-11: "how do we pause finn while we're fixing bugs rather than finn keep receiving tasks?" Paused, it is typed
+  // nothing at its turn's end nor asked after the task it holds; resumed, its next turn's end types its next thing.
+  it('types a paused agent nothing, at its turn\'s end or idle with its task, and its next thing once it is resumed', async () => {
+    // Watched idle with the task it holds, then paused: nothing asked of it, nothing given back.
+    const f = setup({ items: [item(14, 'Mine', ['status:taken'])] })
+    f.next.start()
+    await f.end()
+    f.state.watched = [{ ...PIP, paused: true }]
+    await vi.advanceTimersByTimeAsync(IDLE_BACK_MS)
+    // Its turn's end while paused types nothing either.
+    f.state.items = [item(12, 'Fix the login bug')]
+    await f.end()
+    expect(f.told()).toEqual([])
+    expect(f.written).toEqual([])
+    f.state.watched = [PIP]
+    f.state.items = [item(12, 'Fix the login bug')]
+    await f.end()
+    expect(f.told()).toEqual([expect.stringMatching(/^Next: acme\/app#12 /)])
     f.next.stop()
   })
 
@@ -224,13 +276,69 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     expect(f.say).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
     expect(f.tell).toHaveBeenCalledTimes(NEXT_TIMES)
-    expect(f.say.mock.calls.map(([, , text]) => text)).toEqual([`Harness told Pip that its acme/app#30 has a HOLD from Juno at ${HEAD.slice(0, 7)} `
-      + 'as its turn ended, and nothing changed by its next. Harness says it no more: tell Pip what to do.'])
+    // Posted as Pip, in its chat with its person: said as Pip says it (anh Dee, 2026-11-11: "we want agents to talk like
+    // human"); "Harness told Pip … tell Pip what to do" under Pip's own name read as no person writes. Said, not asked: Pip never
+    // hears its own post and is typed its next thing at once, so an answer would reach it bare (review of #4102).
+    expect(f.say.mock.calls.map(([, , text]) => text)).toEqual([`When my turn ended, Harness told me that my pull request acme/app#30 has a `
+      + `HOLD from Juno at ${HEAD.slice(0, 7)}, and my next turn changed nothing.`])
     const pushed = 'd2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2'
     f.state.pulls[30] = { head: { sha: pushed } }
     f.state.comments[30] = [said(`Juno, 05:30: HOLD ${pushed.slice(0, 7)}: still the old token.`, '2026-11-11T05:30:00Z')]
     await f.end()
     expect(f.told().at(-1)).toContain(`has a HOLD from Juno at ${pushed.slice(0, 7)}`)
+    f.next.stop()
+  })
+
+  // Each of its pull request's states, as its person reads it (review of #4102: only the HOLD was pinned).
+  it.each([
+    ['checks', { runs: [{ name: 'ci/required', status: 'completed', conclusion: 'failure' }] }, `failed its checks at ${HEAD.slice(0, 7)}`],
+    ['behind', { mergeable_state: 'behind' }, 'is behind main'],
+    ['dirty', { mergeable_state: 'dirty' }, 'conflicts with main'],
+  ] as const)('tells its person what its pull request still is: %s', async (_, state, what) => {
+    const f = setup({ items: [item(30, 'Fix the login bug', [], true)] })
+    if ('runs' in state) f.state.runs[HEAD] = [...state.runs]
+    else { f.state.runs[HEAD] = [{ name: 'ci/required', status: 'completed', conclusion: 'success' }]; f.state.pulls[30] = { mergeable_state: state.mergeable_state } }
+    f.next.start()
+    for (let i = 0; i <= NEXT_TIMES; i++) await f.end()
+    await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
+    expect(f.say.mock.calls.map(([, , text]) => text)).toEqual([`When my turn ended, Harness told me that my pull request acme/app#30 ${what}, `
+      + 'and my next turn changed nothing.'])
+    f.next.stop()
+  })
+
+  // Said before in other words, by the release before this one, its answer lost: the server has it under its id and refuses
+  // it in the new words (OPERATION_REUSED). It is said all the same, and what comes after it is typed (review of #4102).
+  it('takes a line the server already has in other words as said, and types what comes after it', async () => {
+    const f = setup({ items: [item(30, 'Fix the login bug', [], true), item(12, 'Add the export')] })
+    f.state.comments[30] = [said(`Juno, 05:00: HOLD ${HEAD.slice(0, 7)}: src/login.ts:12.`)]
+    f.say.mockRejectedValueOnce(new SuperTabHostError('OPERATION_REUSED', 'That operation id was already used for another command.', 409))
+    f.next.start()
+    for (let i = 0; i <= NEXT_TIMES; i++) await f.end()
+    await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
+    expect(f.say).toHaveBeenCalledTimes(1)
+    // Its own pull request's HOLD is its person's now; its next task is typed after it, at once and not again.
+    expect(f.told().at(-1)).toBe(`Next: acme/app#12 Add the export. It is given to you and nobody has taken it: ${TAKE} acme/app#12`)
+    await f.end()
+    expect(f.say).toHaveBeenCalledTimes(1)
+    f.next.stop()
+  })
+
+  // Any other refusal is no answer: the line is said again at its next turn's end, and nothing after it is typed meanwhile.
+  it('says a line again at the next turn when the server did not take it', async () => {
+    const f = setup({ items: [item(30, 'Fix the login bug', [], true), item(12, 'Add the export')] })
+    f.state.comments[30] = [said(`Juno, 05:00: HOLD ${HEAD.slice(0, 7)}: src/login.ts:12.`)]
+    f.say.mockRejectedValueOnce(new SuperTabHostError('BACKEND_UNAVAILABLE', 'The server did not answer.', 503))
+    f.next.start()
+    for (let i = 0; i <= NEXT_TIMES; i++) await f.end()
+    await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
+    expect(f.say).toHaveBeenCalledTimes(1)
+    expect(f.told().some(line => line.includes('acme/app#12'))).toBe(false)
+    await f.end()
+    await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
+    expect(f.say).toHaveBeenCalledTimes(2)
+    // Under the same id: the server takes it once, and answers one whose answer was lost as taken (OPERATION_REUSED).
+    expect(f.say.mock.calls[1]![1]).toBe(f.say.mock.calls[0]![1])
+    expect(f.told().at(-1)).toContain('acme/app#12')
     f.next.stop()
   })
 
@@ -261,6 +369,8 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     await f.end()
     await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
     expect(f.say).toHaveBeenCalledTimes(1)
+    expect(f.say.mock.calls[0]![2]).toBe(`When my turn ended, Harness asked me to read acme/app#24 at ${HEAD.slice(0, 7)}, and my next turn `
+      + 'changed nothing.')
     const typed = f.told().length
     await vi.advanceTimersByTimeAsync(IDLE_ASK_MS)
     expect(f.told().length).toBeGreaterThan(typed)
@@ -419,7 +529,7 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     expect(f.written.slice(0, 3)).toEqual(['DELETE /repos/acme/app/issues/14/labels/status%3Ataken', 'DELETE /repos/acme/app/issues/14/labels/builder%3Apip',
       'DELETE /repos/acme/app/issues/14/labels/status%3Ataken'])
     expect(f.written[3]).toMatch(/^POST \/repos\/acme\/app\/issues\/14\/comments \{"body":"Harness, \d\d:\d\d: Pip held it with nothing done for an hour, so this task goes to the builder who can start it next\."\}$/)
-    expect(f.say.mock.calls.map(([, , text]) => text)).toEqual(['Pip held acme/app#14 (Add the export) with nothing done on it for an hour, so Harness '
+    expect(f.say.mock.calls.map(([, , text]) => text)).toEqual(['I held acme/app#14 (Add the export) with nothing done on it for an hour, so Harness '
       + 'gave it back for the builder who can start it next.'])
     // Nothing more: the watch ends with it.
     await vi.advanceTimersByTimeAsync(IDLE_BACK_MS)
@@ -496,12 +606,14 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     expect(f.log).toHaveBeenCalledWith('[super-tab] next thing of agent pip: acme/app#14 not given back: GitHub answered 403.')
     expect(f.say).not.toHaveBeenCalled()
     f.refuse.clear()
+    // Its line held back (githubWrites.ts) or refused: given back all the same, and said (code review of #4084).
     let clears = 0
-    f.send.mockImplementation(async (method, path) => ({ status: method === 'DELETE' && path.endsWith('status%3Ataken') && clears++ === 1 ? 500 : 200,
-      etag: null, body: null, resetAt: null }))
+    f.send.mockImplementation(async (method, path) => ({ status: method === 'DELETE' && path.endsWith('status%3Ataken') && clears++ === 1 ? 500
+      : method === 'POST' && path.endsWith('/comments') ? 429 : 200, etag: null, body: null, resetAt: null }))
     await f.end()
     await vi.advanceTimersByTimeAsync(IDLE_BACK_MS)
     expect(f.log).toHaveBeenCalledWith('[super-tab] next thing of agent pip: acme/app#14 kept status:taken: GitHub answered 500.')
+    expect(f.log).toHaveBeenCalledWith('[super-tab] next thing of agent pip: acme/app#14\'s line not written: GitHub answered 429.')
     expect(f.say).toHaveBeenCalledTimes(1)
     await f.end()
     f.state.down = true
@@ -529,7 +641,7 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     expect(f.tell).toHaveBeenCalledTimes(NEXT_TIMES)
     expect(new Set(f.tell.mock.calls.map(([, id]) => id)).size).toBe(NEXT_TIMES)
     expect(f.say.mock.calls.map(([, , text]) => text)).toEqual([
-      'Harness gave Pip acme/app#12 (Fix the login bug) as its next task as its turn ended, and nothing changed by its next. Harness says it no more: tell Pip what to do.'])
+      'When my turn ended, Harness gave me acme/app#12 (Fix the login bug) as my next task, and my next turn changed nothing.'])
     expect(f.say.mock.calls[0]![0]).toBe(PIP)
     f.state.items = [item(15, 'Write the docs')]
     await f.end()
@@ -549,6 +661,59 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     expect(f.tell).toHaveBeenCalledTimes(NEXT_TIMES)
     expect(f.say).toHaveBeenCalledTimes(1)
     again.stop()
+  })
+
+  // What its person was told of was saved and never read back: after each restart (every release) each of it but the last was given
+  // again, under the id it was first given with, which the server answers as given, and the agent's next thing waited behind it.
+  it('keeps what its person was told of over a restart, and types none of it again', async () => {
+    const f = setup({ items: [] })
+    f.state.owed = [{ number: 24, sha: HEAD.slice(0, 7) }, { number: 25, sha: HEAD.slice(0, 7) }]
+    f.next.start()
+    for (let i = 0; i < 2; i++) {
+      await f.end()
+      await f.end()
+      await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
+    }
+    expect(f.say).toHaveBeenCalledTimes(2)
+    f.next.stop()
+    const again = f.make()
+    again.start()
+    await vi.advanceTimersByTimeAsync(START_LOOK_MS)
+    await f.end()
+    await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
+    expect(f.told()).toEqual([expect.stringMatching(/^Read acme\/app#24 at /), expect.stringMatching(/^Read acme\/app#25 at /)])
+    expect(f.say).toHaveBeenCalledTimes(2)
+    again.stop()
+  })
+
+  it('reads from its file the last 20 things its person was told of, the one its row says it told last, and no other value', async () => {
+    const f = setup({ items: [] }), short = HEAD.slice(0, 7)
+    f.state.owed = [{ number: 24, sha: short }, { number: 25, sha: short }]
+    const others = Array.from({ length: 18 }, (_, i) => `acme/app#${100 + i}`)
+    writeFileSync(f.file, JSON.stringify({ pip: { key: 'acme/app#30', times: 1, told: true,
+      done: [`acme/app#25 read ${short}`, ...others, 7, `acme/app#24 read ${short}`] } }))
+    const next = f.make()
+    next.start()
+    await f.end()
+    expect(f.told()).toEqual([expect.stringMatching(/^Read acme\/app#25 at /)])
+    expect(JSON.parse(readFileSync(f.file, 'utf8'))).toEqual({ pip: { key: `acme/app#25 read ${short}`, times: 1, told: false,
+      done: [...others, `acme/app#24 read ${short}`, 'acme/app#30'] } })
+    next.stop()
+  })
+
+  // Code review of #4123: a row saved before its list was read back (v0.6.33, v0.6.34) or kept (older builds) says its last thing
+  // told only as told. Read so, that thing was given again once the next thing took the row.
+  it('keeps the thing a row of its file says it told once the next thing is typed', async () => {
+    const f = setup({ items: [] }), short = HEAD.slice(0, 7)
+    f.state.owed = [{ number: 24, sha: short }, { number: 25, sha: short }]
+    writeFileSync(f.file, JSON.stringify({ pip: { key: `acme/app#24 read ${short}`, times: 1, told: true } }))
+    const next = f.make()
+    next.start()
+    for (let i = 0; i < 3; i++) await f.end()
+    await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
+    expect(f.told()).toEqual([expect.stringMatching(/^Read acme\/app#25 at /)])
+    expect(f.say.mock.calls.map(([, , text]) => text)).toEqual([`When my turn ended, Harness asked me to read acme/app#25 at ${short}, and my next turn changed nothing.`])
+    next.stop()
   })
 
   it('says a failure by its name and types it at the next end; one it could not type is tried again under the same operation', async () => {
@@ -591,8 +756,7 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     for (let i = 0; i <= NEXT_TIMES; i++) await f.end()
     await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
     expect(f.told()[0]).toBe(`Next: acme/app#12. It is given to you and nobody has taken it: ${TAKE} acme/app#12`)
-    expect(f.say.mock.calls[0]![2]).toBe('Harness gave Pip acme/app#12 as its next task as its turn ended, and nothing changed by its next. '
-      + 'Harness says it no more: tell Pip what to do.')
+    expect(f.say.mock.calls[0]![2]).toBe('When my turn ended, Harness gave me acme/app#12 as my next task, and my next turn changed nothing.')
     f.next.stop()
   })
 

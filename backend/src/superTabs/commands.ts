@@ -37,7 +37,7 @@ import { declinedWith, declinedWithout } from './sharing.js'
 import { actorLabel, memberChanges, memberRowText, quotedName } from './memberRows.js'
 import { launchRefusedLine, leadArrived, LEAD_CLAIM_MS, leadEffort, leadJoined, leadOvertaken, leadStartFailed, leadStarting, leadWaits, LEAD_CAPABILITY, placeLead } from './leadStart.js'
 import { defaultAccountOnly, SWITCH_CAPABILITY } from './pmAccount.js'
-import { ACK_ONLY_HINT, isAcknowledgement } from './acknowledgements.js'
+import { ACK_ONLY_HINT, EMOJI_ONLY_HINT, isAcknowledgement, isEmojiOnly } from './acknowledgements.js'
 import { COORDINATOR_NAME } from './roleNames.js'
 import { isWaitingPmChat, pmChatWaits, settlePmChats, waitingPmChat } from './pmChat.js'
 
@@ -200,6 +200,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('agent.remove'), agentId: id, releaseId: id.optional() }).strict(),
   // Rename Harness on the agent's Mac renames the agent for every reader (task #2912); the contributor or machine owner only.
   z.object({ type: z.literal('agent.rename'), agentId: id, name: z.string().max(200) }).strict(),
+  z.object({ type: z.literal('agent.pause'), agentId: id, paused: z.boolean() }).strict(),
   z.object({ type: z.literal('agent.release'), agentId: id, decision: z.enum(['keep', 'stop']) }).strict(),
   githubRelaySchema,
   z.object({ type: z.literal('agent.sessionClosed'), agentId: id, harnessId: id }).strict(),
@@ -2085,6 +2086,17 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     case 'agent.rename':
       renameAgentTo(state, actor, agent(state, command.agentId), command.name)
       break
+    case 'agent.pause': {
+      // Its person and its machine's owner, as for a rename; and the Swarm's owner, who leads the work it would be given.
+      const target = agent(state, command.agentId)
+      if (actor.kind !== 'person' || ![state.ownerId, target.contributorId, target.machineOwnerId].includes(actor.userId)) {
+        fail('FORBIDDEN', 'Only the person who runs this agent, its machine\'s owner or the Swarm\'s owner can pause it.', 403)
+      }
+      // Paused again keeps its first time: its tasks wait from then (the CLI's crew.ts).
+      if (command.paused) target.pausedAt ??= new Date(context.now).toISOString()
+      else delete target.pausedAt
+      break
+    }
     case 'github.relay':
       relayGitHub(state, actor, command, operationId, effects.messages)
       break
@@ -2221,11 +2233,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const ids = [...new Set(command.attachmentIds ?? [])]
       const attachments = ids.map(id => context.attachments?.find(a => a.id === id) ?? fail('ATTACHMENT_UNAVAILABLE', 'Upload this file again before sending it.', 400))
       if (!command.text && !attachments.length) fail('TEXT_REQUIRED', 'Write a message or attach a file.', 400)
-      // An agent's post that says nothing beyond an acknowledgement is refused (task #3391). Never a
-      // person's, a note to itself, a post with a file or a tag, or an agent's talk with its person.
-      if (actor.kind === 'agent' && !command.agentOnly && !attachments.length && !command.mentions?.length
-        && group.kind !== 'agent-chat' && isAcknowledgement(command.text)) {
-        fail('ACK_ONLY', ACK_ONLY_HINT, 400)
+      // An agent's post that says nothing beyond an acknowledgement is refused (task #3391), and one of emoji alone (the
+      // rehearsal of 2026-11-11, acknowledgements.ts). Never a person's, a note to itself, a post with a file or a tag, or an
+      // agent's talk with its person.
+      if (actor.kind === 'agent' && !command.agentOnly && !attachments.length && !command.mentions?.length && group.kind !== 'agent-chat') {
+        if (isAcknowledgement(command.text)) fail('ACK_ONLY', ACK_ONLY_HINT, 400)
+        if (isEmojiOnly(command.text)) fail('ACK_ONLY', EMOJI_ONLY_HINT, 400)
       }
       // A voice message is its clip alone, and its words are its text: what agents, search and older apps read (voiceMessages.ts).
       const voice = attachments.find(a => a.voice)

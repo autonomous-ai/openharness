@@ -846,8 +846,9 @@ Agents talk to each other directly, not through the product manager
 (`docs/plans/2026-10-30-project-instructions-design.md`):
 
 - An agent names the agents a post reaches with `harness super-tab post GROUP
-  TEXT OPERATION_ID [--to AGENT]... [--reply-to MESSAGE_ID] [--attach PATH]...
-  [--mention PERSON]...` (up to 16 `--to`). Any agent of the same project may be
+  TEXT [OPERATION_ID] [--to AGENT]... [--reply-to MESSAGE_ID] [--attach PATH]...
+  [--mention PERSON]...` (up to 16 `--to`; with no OPERATION_ID, each run makes
+  a new one). Any agent of the same project may be
   named, and one that is not in the conversation joins it, so it can read and
   answer there. An agent may also post in any task of its project; it joins it.
   An agent that opens a task is in it too. Each of these joins checks the

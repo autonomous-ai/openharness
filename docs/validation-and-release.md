@@ -5,6 +5,38 @@ The release clock starts at the user's request, not at the tag. The October 2
 baseline investigations, local environment failures, and waiting before publishing.
 Keep a short validation plan and reuse its evidence through merge and release.
 
+## In short
+
+The rules AGENTS.md carried until 2026-11-11; the sections below have the details.
+
+- Time the request through completion: implementation, validation, merge, publication and waiting, each apart.
+- Pick the checks before starting them: affected tests and integration checks, full suites for broad changes, run
+  together within the machine's capacity. No second full local suite after equivalent CI passed.
+- Reuse evidence only for the source and environment it covers (pass the prior receipt with `--reuse`). A squash with
+  the same tree keeps it; conflicts, dependencies or relevant code changes do not.
+- A documented, unchanged failure needs no new baseline. New failures need investigation. Never call an incomplete or
+  failed suite passing, and never skip a required check to save time.
+- PR CI runs the Linux unit checks of changed components, and of each suite that reads a changed file (`PR_READS`); the
+  one required check is `ci/required`. Push work in progress as a draft; mark it ready, then keep the head stable while
+  CI and review run. Review independently of implementation. Base the branch on current `main`.
+- Never start extra runs: no manual CI run beside the automatic one, no pushes to retrigger. Read the failure, fix it,
+  push once. Rerun only a recorded flaky test.
+- Checks PR CI does not run are yours when you touch their area: the CLI coverage gates (`npm run test:core`,
+  `test:harnessd`, `test:resume`, `test:orchestrator`, `test:sharing`, `test:remote-viewers`, `test:portability`,
+  `test:local-models`), serial and PTY specs, and Desktop tests on macOS for macOS code. Record them in the PR.
+- Heavy workflows (OS images, VM tests, CLI end to end) run only by hand, once, when the change needs them; report the
+  run link. The account runs at most 20 jobs at once, 5 on macOS: never several heavy workflows together.
+- In a Swarm project the merge train lands ready pull requests by itself, together on one run. Never push to a
+  `harness-train/` branch; add the `hold` label to keep a PR out.
+- Merge by hand with `make merge-pr ARGS="N --reviewed-head SHA --reviewed-base SHA --merge"`. No `--queue`, no
+  `--run/--scope`. Never replay an uncertain merge; inspect the PR. If `main` moves, integrate it, review the combined
+  change, rerun only newly affected checks, and finish the authorized merge without asking again.
+- Once required checks pass, do the authorized merge or release without another validation cycle, then verify the
+  published versions and checksums. A release failure is a code failure: fix it and cut the next version; never move a
+  published tag.
+- For an authorized Desktop release, start `make release-desktop ARGS="--prepare"` from the final pushed branch beside
+  validation and review; publish only after checks pass. Its `--wait` receipt is the artifact verification.
+
 ## Select the checks once
 
 | Change | Required scope |
@@ -27,19 +59,24 @@ two commands each spawning every CPU is not useful parallelism.
 
 ## PR CI
 
-PR CI is deliberately fast. Each changed component runs only its own Linux suite:
+PR CI is deliberately fast. Each changed component runs its own Linux suite, and a changed file another suite reads
+(`PR_READS` in `scripts/ci-plan.py`, each inside the broader `DEPENDS` that reuse checks) runs that suite too: #4033 changed a CLI file Desktop's
+tests read, ran the CLI's suite only, and turned main's Desktop CI red. The table lists each directory's own check; the
+broad reads on top: `companions` and `pty` import the CLI's code, so a `cli/` change runs them (about a minute each,
+beside the CLI's own suite); the CLI reads `pty/`, `tui/` and `store/`, Desktop reads `store/` and `docs/images/`, and `os-checks` reads
+`term/` and `tui/`:
 
 | Changed directory | PR check | Typical time |
 | --- | --- | --- |
 | `cli/`, `tests/` | `cli-typecheck` and `cli-tests` (default Vitest suite, four shards) | 3–5 min |
-| `desktop/` | `desktop-tests` (VM suite, four Linux shards); a change to a desktop file the phone's tests read (the Swarm models in `scripts/ci-plan.py` `ALSO`, compared by `mobile/test/swarm/desktop_parity_test.dart`) also runs `mobile-checks` | 5–7 min |
+| `desktop/` | `desktop-tests` (VM suite, four Linux shards); a change to a desktop file the phone's tests read (the Swarm models in `scripts/ci-plan.py` `PR_READS`, compared by `mobile/test/swarm/desktop_parity_test.dart`) also runs `mobile-checks` | 5–7 min |
 | `tui/`, `term/` (the TUI builds on it) | `tui-test` (`cargo test`) | a few minutes |
-| `pty/`, `term/`, `tui/vendor/`, the CLI's ptyhost backend (`cli/src/lib/ptyHost/`, `ptyHostBackend*`, `terminalBackend.contract.ts`) | `pty-checks` (`cargo test` for `term` and `pty`, then the ptyhost terminal contract against the built host) | a few minutes |
+| `pty/`, `term/`, `tui/vendor/`, `cli/` (the ptyhost contract imports the CLI's code) | `pty-checks` (`cargo test` for `term` and `pty`, then the ptyhost terminal contract against the built host) | a few minutes |
 | `backend/` | `backend-desk` (the backend unit suite, `npm test` in `backend/`) and `backend-integration` (the Super Tab integration suite, `npm run test:super-tabs`, four shards) | unit about 1–2 min; integration about 5 min |
 | `companions/`, `website/`, `os/`, `provider/`, `mobile/`, `daemons/` | that component's one check | 1–4 min |
 | `devices/` | `firmware-checks` | 1–2 min |
 | `devices/harness-pro/` | also `pro-firmware-build` (ESP-IDF v5.5.4 build of `harness_pro.bin`, which must fit `ota_0`) and `pro-golden` (`test/golden.sh --check` with Liberation Sans, on macOS arm64 where the baseline is recorded: float maths in the code-drawn shapes differs on Linux x86-64) | build ~4 min, golden ~1 min |
-| anything else (docs, workflows, scripts, store) | `process-checks` only | about 1.5 min |
+| anything else (docs, workflows, scripts) | `process-checks` only | about 1.5 min |
 
 `plan` (actionlint and suite selection), `process-checks` and `ci/required` always
 run (after **Update branch**, untouched components reuse their earlier result: see
@@ -65,8 +102,8 @@ A component's result is reused only when all of these hold; otherwise it runs as
   to its exact run and attempt, and reads that run's receipt. A component the run
   itself reused points at the run where it last ran.
 - Nothing that differs between the tested commit and the new head is a component input:
-  its own directory (by the map above) or a file it reads elsewhere (`DEPENDS` in
-  `scripts/ci-plan.py`). `backend/integration/` and `cli/e2e/` (apart from
+  its own directory (by the map above) or a file it may read elsewhere (`DEPENDS` in
+  `scripts/ci-plan.py`: broader than the `PR_READS` that select it, as the scan misses a path joined from parts). `backend/integration/` and `cli/e2e/` (apart from
   `cli/e2e/harness/`) are skipped because the PR jobs never read them. Each Swarm UI
   style allowlist (`scripts/ui-style-allowlist/mobile.json`, `desktop.json`) is an input
   of the component whose job checks it, and a PR that changes one runs that component.

@@ -247,6 +247,7 @@ class _SuperTabViewState extends State<SuperTabView>
         controller.tabId,
         row.machineId,
         row.agent,
+        name: row.name,
       );
       if (!mounted || c != controller) return;
       // The join opened its chat: what holds the middle steps aside for it.
@@ -1722,7 +1723,7 @@ class _SuperTabViewState extends State<SuperTabView>
     onRenameSwarm: widget.onRenameSwarm,
     page: _pageShown,
     onManage: _openManage,
-    onInvite: () => showSuperTabSharing(context, c),
+    onInvite: () => showSuperTabSharing(context, c, title: 'Invite people'),
     onManageMachines: () {
       // Set before Manage opens, so a last page of Devices is not opened here only to be left at once.
       _manageTab = SuperTabManageTab.machines;

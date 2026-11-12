@@ -238,7 +238,7 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('the Swarm v4 journey, on
     expect(typedToKai).toContain('@Pip, to you:\n@Kai can you review #12?')
     const line = typedToKai.split('\n').find(l => l.startsWith('Answer: ')) ?? ''
     const question = (await messages(channel)).find(m => m.text === '@Kai can you review #12?')!
-    expect(line).toContain(`post '${channel}' 'your message' UNIQUE_OPERATION_ID`)
+    expect(line).toContain(`post '${channel}' 'your message' --`)
     expect(line).toMatch(new RegExp(`--(answers|reply-to) '${question.id}' --to '${agents.Pip.id}'$`))
     // The agent's answer is its own post, as that line says: Harness posts an agent's turn only in its 1:1 chat.
     const flag = line.includes('--reply-to') ? '--reply-to' : '--answers'
