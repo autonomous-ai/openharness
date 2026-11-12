@@ -79,6 +79,9 @@ const movedFrom = (home: string, terminal: string, was: string): Promise<string>
   const named = recorded(home, terminal)
   return named !== was ? named : null
 }, 10_000, 50)
+/** Once [line] is in [d]'s log after [from]: the daemon's stdout reaches the test some time after what it reports is done. */
+const logged = (d: IsolatedDaemon, from: number, line: string) =>
+  until(`"${line}" in the log`, () => d.log().slice(from).includes(line) || null, 15_000, 50)
 const saved = (d: IsolatedDaemon, agentId: string): Saved | undefined =>
   (JSON.parse(readFileSync(join(d.dataDir, 'registry.json'), 'utf8')) as Saved[]).find((row) => row.agentId === agentId)
 const row = async (c: LocalClient, agentId: string): Promise<Agent | undefined> =>
@@ -114,7 +117,7 @@ it('binds a Hermes v0.23 from its terminal record, follows /new, and writes no h
   await r.d.start()
   await until('the hook removed', () => readFileSync(r.config, 'utf8') === PERSON || null, 15_000)
   await until('its approvals removed', () => JSON.parse(readFileSync(allowlist, 'utf8')).approvals.length === 0 || null, 15_000)
-  expect(r.d.log().slice(mark)).toContain(`${REMOVED}${r.config}`)
+  await logged(r.d, mark, `${REMOVED}${r.config}`)
 
   const c = await r.connect()
   const cwd = r.folder('p1')
@@ -125,7 +128,7 @@ it('binds a Hermes v0.23 from its terminal record, follows /new, and writes no h
   expect(a.started.terminal).toMatch(/^tty-dev-/)
   expect(recorded(r.home, a.started.terminal!)).toBe(a.started.session)
   await boundTo(c, a.agentId, a.started.session)
-  expect(r.d.log().slice(mark)).toContain('[discovery] bound hermes session ')
+  await logged(r.d, mark, '[discovery] bound hermes session ')
   expect(r.d.log()).not.toMatch(/\[hooks\] \S+ SessionStart/)
   await until('the first message in the conversation', async () =>
     JSON.stringify(await c.request('session_get', { sessionId: a.agentId }, 30_000)).includes('hello') || null, 30_000, 250)
@@ -137,7 +140,7 @@ it('binds a Hermes v0.23 from its terminal record, follows /new, and writes no h
   const second = await movedFrom(r.home, a.started.terminal!, a.started.session)
   await boundTo(c, a.agentId, second)
   await c.waitFor((frame) => frame.type === 'session_reset' && frame.payload?.staleSessionId === a.started.session, 10_000, 'session_reset')
-  expect(r.d.log().slice(mark)).toContain(`switched hermes session ${a.started.session.slice(0, 8)} → ${second.slice(0, 8)}`)
+  await logged(r.d, mark, `switched hermes session ${a.started.session.slice(0, 8)} → ${second.slice(0, 8)}`)
   await until('the message in the new conversation', async () =>
     JSON.stringify(await c.request('session_get', { sessionId: a.agentId }, 30_000)).includes('right after /new') || null, 30_000, 250)
 
@@ -192,8 +195,8 @@ it('binds nothing from a record an earlier process left, binds once by the repai
   mkdirSync(join(r.home, 'terminal-sessions'), { recursive: true })
   writeFileSync(join(r.home, 'terminal-sessions', a.started.terminal!), JSON.stringify({ session_id: earlier, cwd, ts: Date.now() / 1000 - 60 }))
   await boundTo(c, a.agentId, a.started.session)
-  await until('the fallback said', () => r.d.log().slice(mark).includes('hermes keeps no terminal record · its session switches are not followed') || null, 10_000)
-  await until('the earlier record ignored', () => r.d.log().slice(mark).includes('hermes terminal record ignored · older than its process') || null, 10_000)
+  await logged(r.d, mark, 'hermes keeps no terminal record · its session switches are not followed')
+  await logged(r.d, mark, 'hermes terminal record ignored · older than its process')
   expect((await row(c, a.agentId))?.sessionId).toBe(a.started.session)
 })
 
@@ -209,9 +212,9 @@ it('ignores a record that is a symlink, and one of 10 MB, and keeps the session 
   const other = join(r.home, 'terminal-sessions', 'tty-dev-other')
   writeFileSync(other, JSON.stringify({ session_id: `local-${'f'.repeat(64)}`, cwd: '/elsewhere', ts: Date.now() / 1000 }))
   r.tell({ link: other })
-  await until('the symlink ignored', () => r.d.log().slice(mark).includes('hermes terminal record ignored · not a regular file') || null, 15_000)
+  await logged(r.d, mark, 'hermes terminal record ignored · not a regular file')
   r.tell({ pad: 10 * 1024 * 1024 })
-  await until('the oversized record ignored', () => r.d.log().slice(mark).includes('hermes terminal record ignored · oversized') || null, 15_000)
+  await logged(r.d, mark, 'hermes terminal record ignored · oversized')
   expect((await row(c, a.agentId))?.sessionId).toBe(a.started.session)
   // The passes after it go on as before: the next record Hermes writes is followed.
   r.tell({ new: true })
@@ -260,7 +263,7 @@ it('follows a Hermes that only has a HOME of its own, and starts it again withou
   await boundTo(c, a.agentId, a.started.session)
   await until('the home marked on the saved row', () => saved(r.d, a.agentId)?.hermesHomeDerived || null, 15_000)
   expect(saved(r.d, a.agentId)?.hermesHome).toBe(own)
-  await until('the hook gone from its own config', () => r.d.log().slice(mark).includes(`${REMOVED}${ownConfig}`) || null, 15_000)
+  await logged(r.d, mark, `${REMOVED}${ownConfig}`)
   expect(readFileSync(ownConfig, 'utf8')).toBe(PERSON)
 
   // Started again, it is given what its first start was given, never the home Harness worked out.
@@ -300,8 +303,9 @@ describe.runIf(process.platform === 'linux' && unshareWorks())('in a sandbox', (
     await boundTo(c, a.agentId, a.started.session)
     await until('the home marked on the saved row', () => saved(r.d, a.agentId)?.hermesHomeDerived || null, 15_000)
     expect(saved(r.d, a.agentId)?.hermesHome).toBe(own)
-    await until('the hook gone from its own config', () => r.d.log().slice(mark).includes(`${REMOVED}${ownConfig}`) || null, 15_000)
+    await logged(r.d, mark, `${REMOVED}${ownConfig}`)
     expect(readFileSync(ownConfig, 'utf8')).toBe(PERSON)
+    await logged(r.d, mark, 'hermes runs in a sandbox · followed from its terminal record')
     expect(r.d.log().slice(mark).split('hermes runs in a sandbox · followed from its terminal record')).toHaveLength(2)
     r.tell({ new: true })
     const second = await movedFrom(own, a.started.terminal!, a.started.session)
@@ -342,6 +346,7 @@ describe.runIf(process.platform === 'linux' && unshareWorks())('in a sandbox', (
     const hold = 'Hermes runs in a sandbox whose folder Harness cannot see'
     await until('the hold', async () => (await row(c, agentId))?.identityHold === hold || null, 30_000, 250)
     expect((await row(c, agentId))?.sessionId).toBeFalsy()
+    await logged(r.d, mark, `binding held · ${hold}`)
     expect(r.d.log().slice(mark).split(`binding held · ${hold}`)).toHaveLength(2)
     expect(await r.d.capture(pane)).toContain('fake-hermes-ready')
   })
