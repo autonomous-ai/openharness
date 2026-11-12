@@ -2,11 +2,12 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { addressOf, agentOrigin, AGENTS_START_AGENTS_OFF, closeCommand, DEPTH_REFUSAL, EXIT, parseDuration, psCommand, refusalNext, replyCommand, resumeCommand, routeCommand, showCommand, spawnCheck, spawnCount, spawnRefusal, SPAWN_LIMITS, step, tellCommand, waitCommand, watchCommand, whoamiCommand, type ClientDeps } from './commands.js'
+import { addressOf, agentOrigin, AGENTS_START_AGENTS_OFF, closeCommand, deleteCommand, DEPTH_REFUSAL, EXIT, parseDuration, psCommand, refusalNext, replyCommand, resumeCommand, routeCommand, showCommand, spawnCheck, spawnCount, spawnRefusal, SPAWN_LIMITS, step, tellCommand, waitCommand, watchCommand, whoamiCommand, type ClientDeps } from './commands.js'
 import { RefusedError, type Rpc } from '../messages/rpc.js'
 import { AgentClientError, type Daemon, type Where } from './daemon.js'
 import { Ledger, ledgerPath } from './ledger.js'
 import { agentSettingsPath } from '../lib/agentSettings.js'
+import { LEAD_PROTECTED_DETAIL } from '../lib/closeAgentService.js'
 import { setAgentSettingsForTest, signedOutForTest, TEST_ACCOUNT } from '../testing/agentSettings.js'
 import type { Frame } from './model.js'
 
@@ -896,6 +897,79 @@ describe('harness close', () => {
     expect(await closeCommand([], h.deps)).toBe(EXIT.usage)
     expect(await closeCommand(['a', 'b'], h.deps)).toBe(EXIT.usage)
     expect(h.err).toContain('Close one harness at a time.')
+  })
+})
+
+describe('harness delete', () => {
+  const KID = 'kid', CREATED = '2026-10-11T10:00:00Z'
+  const KEPT = "OpenClaw's store is kept: delete its session with OpenClaw."
+  /** A daemon whose purge answers inspect with a review and delete with [deleted]; the person asks unless [over] says. */
+  const setupDelete = (deleted: Record<string, unknown> = { deleted: true }, over: Partial<ClientDeps> = { pane: undefined }) => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead'), frame(KID, { sessionId: 's1', createdAt: CREATED }), frame('old', { status: 'stopped' }),
+      frame('claw', { engine: 'openclaw' }), frame('theirs'), frame('devin-1', { engine: 'devin-cloud', location: 'cloud', tmuxPane: null, project: null })]
+    d.extra.agent_purge = (payload) => payload.mode === 'inspect' ? { reviewId: 'r1' } : deleted
+    const run = async (argv: string[]) => {
+      const h = harness(d, over)
+      return { code: await deleteCommand(argv, h.deps), out: h.out, err: h.err }
+    }
+    const requests = (type: string) => d.requests.filter((r) => r.type === type).map((r) => r.payload)
+    return { d, run, requests }
+  }
+
+  it('deletes a running harness and a closed one: inspect, then delete with its session data and the folder kept', async () => {
+    const { run, requests } = setupDelete()
+    expect(await run([KID])).toMatchObject({ code: EXIT.ok, out: ['kid on studio: deleted. Its conversation and everything Harness kept of it are erased.'] })
+    expect(requests('agent_purge')).toEqual([
+      { agentId: KID, sessionId: 's1', createdAt: Date.parse(CREATED), mode: 'inspect' },
+      { agentId: KID, sessionId: 's1', createdAt: Date.parse(CREATED), mode: 'delete', reviewId: 'r1', choices: { sessionData: true, worktreeData: false } },
+    ])
+    expect((await run(['old'])).code).toBe(EXIT.ok)
+    expect(requests('agent_purge').at(-1)).toMatchObject({ agentId: 'old', sessionId: 's-old', mode: 'delete' })
+  })
+
+  it('says what was kept and why', async () => {
+    const { run } = setupDelete({ deleted: true, kept: [{ what: 'engine-store', reason: KEPT }] })
+    expect((await run(['claw'])).out).toEqual(['claw on studio: deleted. Everything Harness kept of it is erased.', KEPT])
+    expect(JSON.parse((await run(['claw', '--json'])).out[0])).toEqual({ name: 'claw', id: 'claw', deleted: true, kept: [{ what: 'engine-store', reason: KEPT }] })
+    const none = setupDelete()
+    expect(JSON.parse((await none.run([KID, '--json'])).out[0])).toEqual({ name: KID, id: KID, deleted: true, kept: [] })
+  })
+
+  it('refuses an agent a harness it did not start, and its own; the person deletes anything', async () => {
+    const agent = setupDelete({ deleted: true }, {})
+    const theirs = await agent.run(['theirs'])
+    expect(theirs).toMatchObject({ code: EXIT.refused, err: ['You did not start theirs, so you may not delete it. Only the person can.'] })
+    expect(await agent.run(['lead'])).toMatchObject({ code: EXIT.refused, err: ['That is your own harness. The person deletes it.'] })
+    const left = setupDelete({ deleted: true }, { pane: '%gone', where: () => ({ ...where, harnessPane: true }) })
+    expect((await left.run(['theirs'])).code).toBe(EXIT.refused)
+    expect(agent.requests('agent_purge')).toEqual([])
+    expect(left.requests('agent_purge')).toEqual([])
+    const mine = setupDelete({ deleted: true }, {})
+    started(new Ledger(ledgerPath(dir)), 'lead', KID)
+    expect((await mine.run([KID])).code).toBe(EXIT.ok)
+    const person = setupDelete()
+    expect((await person.run(['theirs'])).code).toBe(EXIT.ok)
+  })
+
+  it('says purge\'s own refusals as they are', async () => {
+    const lead = setupDelete()
+    lead.d.extra.agent_purge = () => ({ error: 'LEAD_PROTECTED', detail: LEAD_PROTECTED_DETAIL })
+    expect(await lead.run([KID])).toMatchObject({ code: EXIT.failed, err: [LEAD_PROTECTED_DETAIL] })
+    expect(lead.requests('agent_purge')).toHaveLength(1)
+    const refused = setupDelete({ error: 'DELETE_REFUSED', detail: 'The harness did not stop. No session data was deleted.' })
+    expect(await refused.run([KID])).toMatchObject({ code: EXIT.failed, err: ['The harness did not stop. No session data was deleted.'] })
+    const bare = setupDelete({ error: 'DELETE_FAILED' })
+    expect(await bare.run([KID])).toMatchObject({ code: EXIT.failed, err: ['Could not delete kid.'] })
+  })
+
+  it('works on this computer only, one harness at a time, and never a cloud one', async () => {
+    const { run, requests } = setupDelete()
+    expect(await run(['--machine', 'office', 'kid'])).toMatchObject({ code: EXIT.usage, err: ['harness delete works on this computer only.', expect.stringContaining('Usage: harness delete <name> [--json]')] })
+    expect((await run([])).err[0]).toBe('Name the harness to delete.')
+    expect((await run(['a', 'b'])).err[0]).toBe('Delete one harness at a time.')
+    expect(await run(['devin-1'])).toMatchObject({ code: EXIT.usage, err: ["devin-1 runs in its maker's cloud: delete it there.", expect.any(String)] })
+    expect(requests('agent_purge')).toEqual([])
   })
 })
 
