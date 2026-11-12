@@ -328,6 +328,10 @@ describe('an agent\'s answer to its launch line, in its chat (firstAnswers.ts)',
     const read = setup({ words: ['Ship the docs.'], lastTurn: { userMessage: handoff, assistantText: 'Read the handoff: the docs are half done.' }, row: { agent: PM, lead: true } })
     await read.answers.tick()
     expect(read.post).not.toHaveBeenCalled()
+    // A Regular agent chosen as PM keeps the Regular rules: its transcript's launch line may run on after its name.
+    const regular = setup({ lastTurn: { userMessage: 'You are Arlo.\nA home for the docs.', assistantText: ARLO_ANSWER }, row: { agent: ARLO, lead: true } })
+    await regular.answers.tick()
+    expect(posted(regular.post)).toEqual([['first-answer-arlo', ARLO_ANSWER]])
     // A launch turn that said nothing posts nothing either.
     const silent = setup({ lastTurn: { userMessage: 'You are Arlo.', assistantText: '  ' }, row: { agent: PM, lead: true } })
     await silent.answers.tick()
