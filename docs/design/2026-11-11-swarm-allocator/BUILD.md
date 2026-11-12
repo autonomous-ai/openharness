@@ -238,9 +238,10 @@ people give their own folders.
 The rule to bring anh Dee again: only `node_modules`, `.dart_tool` and `.next`, only where a `.gitignore` rule names the
 folder itself, and the review's other findings closed first.
 
-**Today.** A sweep exists: `cli/src/lib/worktreeSweep.ts`, run by the workspaces service. It removes a worktree
-Harness made when no live or stopped harness works in it, nothing is uncommitted, it was untouched for a week, and no
-commit is only there. On anh Dee's computer 114 such worktrees of this repository still hold 109 GB.
+**Today.** Nothing removes a worktree on a timer: the workspaces service's sweep (`cli/src/lib/worktreeSweep.ts`, a
+worktree Harness made when no live or stopped harness works in it, nothing is uncommitted, it was untouched for a week,
+and no commit is only there) is gone since #4166, as it removed worktrees their person chose to keep. Cleaning up is
+the person's, from the app (#711: #4167, #4168). On anh Dee's computer 114 worktrees of this repository hold 109 GB.
 
 **First: find out why they stay.** For each kept worktree, which condition keeps it: a stopped harness, a week not
 yet gone, something uncommitted or untracked, a commit only there. Count them and their gigabytes. Reading only: run
@@ -380,10 +381,13 @@ in what a person must do. Then build the one he picks.
 
 ### 12. Tokens for a task, and the cost on a landed change
 
-**Built, the server's half** (#4109): `backend/src/superTabs/taskTokens.ts` and its two routes, kept 90 days. The
-daemon's half is built and not in a pull request (branch `swarm-task-tokens`): the landing comment would say the
-builder's model, minutes, tokens and fix rounds, public on a public repository, which waits for anh Dee's word. The
-server's half was released in `v1.4.80_backend`.
+**Built** (#4109, the server's half, released in `v1.4.80_backend`; #4143, the daemon's):
+`backend/src/superTabs/taskTokens.ts` and its two routes, kept 90 days; `cli/src/superTabs/taskTokens.ts`, which counts
+each agent's tokens on its person's own computer, between the boundaries its turns' ends and its commands show, and
+writes a row as a piece of work stops. *The landing comment says its builder, model (as code), minutes, tokens and fix
+rounds on a private repository only (GitHub's `visibility: private`; an internal one is read by its whole enterprise);
+on a public one it says none of them, and the rows stay on the server for the project's members (anh Dee's call, 12
+November). Not built: the window's percent at each boundary (package 15's), and the tokens in the day's post.*
 
 **Why.** No saving can be claimed, and no model or price chosen, without it. Each daemon counts its conversations'
 tokens by model and kind (`cli/src/lib/agentTokenUsage.ts`); nothing ties a count to a task. The server's cost

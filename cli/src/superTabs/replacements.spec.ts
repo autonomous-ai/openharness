@@ -3,7 +3,7 @@ import { handoffIntentHash, type PreparedHandoff } from '../lib/handoffAuthority
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
-import { profileId } from '../lib/claudeProfiles.js'
+import { profileId } from '../lib/claudeHomes.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { defaultCodexHome } from '../lib/codexProfiles.js'
 import { RebindSender, recordReplacement, replacementObservations } from './replacements.js'

@@ -1,10 +1,22 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { execFileSync } from 'child_process'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { KiloReader } from './reader.js'
 import type { LiveEvent } from '../../lib/normalize.js'
+import { sqliteReadAll } from '../../lib/sqliteRead.js'
+
+// The real reads, with a seam to make one of them go unanswered, as a busy store or the read threads' deadline does.
+vi.mock('../../lib/sqliteRead.js', async (real) => {
+  const actual = await real<typeof import('../../lib/sqliteRead.js')>()
+  return { ...actual, sqliteReadAll: vi.fn(actual.sqliteReadAll) }
+})
+
+/** Polls until the store has been read [more] times since [from]: the read that seeds a reader, and a poll after it. */
+async function readsPast(from: number, more = 2): Promise<void> {
+  await vi.waitFor(() => expect(vi.mocked(sqliteReadAll).mock.calls.length).toBeGreaterThanOrEqual(from + more), { timeout: 5_000, interval: 10 })
+}
 
 /**
  * A first message through `harness kilo` produced no turn frames and no recap, every time:
@@ -111,5 +123,24 @@ d('KiloReader attaching mid-turn', () => {
     reader.stop()
 
     expect(seen.filter((e) => e.type === 'turn_started')).toHaveLength(1)
+  })
+
+  // #4065: a first read the store did not answer left no cursor, and the next poll emitted the whole session as new.
+  it('reads the session in full again after a first read the store did not answer, and emits only what is new', async () => {
+    const path = db([userMsg('an old prompt'), finished])
+    vi.mocked(sqliteReadAll).mockResolvedValueOnce({ ok: false, reason: 'transient' })
+    const events: LiveEvent[] = []
+    const reader = new KiloReader({ dbPath: path, sessionId: SESSION, onEvents: (e) => events.push(...e), pollMs: 20 })
+    try {
+      await reader.start()
+      await readsPast(vi.mocked(sqliteReadAll).mock.calls.length)
+      expect(events).toEqual([])
+      execFileSync('sqlite3', [path, `INSERT INTO message VALUES ('msg_9','${SESSION}',2000,'{"role":"user"}');`
+        + `INSERT INTO part VALUES ('prt_9_0','msg_9','${SESSION}',2000,'{"type":"text","text":"a new prompt"}');`])
+      await vi.waitFor(() => expect(events.length).toBeGreaterThan(0), { timeout: 5_000, interval: 10 })
+    } finally {
+      reader.stop()
+    }
+    expect(events).toEqual([{ type: 'turn_started', payload: { userMessage: 'a new prompt' } }])
   })
 })

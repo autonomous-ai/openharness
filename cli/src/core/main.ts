@@ -21,6 +21,10 @@ import { createNativeControls } from './engines/nativeControls.js'
 import { createEngineLinks } from './engines/engineLinks.js'
 import { engineLaunches } from '../engines/launches.js'
 import { masterRunsEngineNativeControl } from '../harnessd/services.js'
+import { masterRunsEngineBackgroundJob } from '../harnessd/services.js'
+import { createBackgroundJobs } from './engines/backgroundJobs.js'
+import { masterRunsEngineProviderMove } from '../harnessd/services.js'
+import { createProviderMoves } from './engines/providerMoves.js'
 import { submissionPolicy } from '../engines/submissionPolicies.js'
 import { createSubmissionTransport } from './engines/submissionTransport.js'
 import { masterRunsEngineSubmission } from '../harnessd/services.js'
@@ -51,7 +55,7 @@ import { enableOffThreadExec } from '../lib/offThreadExec.js'
 import { enableOffThreadSqlite } from '../lib/sqliteThread.js'
 import type { AppSwarms } from '../cable/cableSession.js'
 import type { UnreadNotification } from '../lib/notificationRead.js'
-import { claudeHomeListed } from '../lib/claudeProfiles.js'
+import { claudeHomeListed } from '../lib/claudeHomes.js'
 import { registry, projectDisplayName, validTranscriptPath, type RegisteredSession } from '../lib/registry.js'
 import { engineSessionTitle } from '../lib/sessionTitle.js'
 import { machineNames } from '../lib/machineNames.js'
@@ -737,9 +741,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const submissionHosted = masterRunsEngineSubmission(harnessd, process.ppid)
   const nativeControlHosted = masterRunsEngineNativeControl(harnessd, process.ppid)
   const isolatedNativeControl = (engine: string): boolean => nativeControlHosted && isolatedLive(engine)
+  const backgroundJobHosted = masterRunsEngineBackgroundJob(harnessd, process.ppid)
+  const isolatedBackgroundJob = (engine: string): boolean => backgroundJobHosted && isolatedLive(engine)
+  const providerMoveHosted = masterRunsEngineProviderMove(harnessd, process.ppid)
+  const isolatedProviderMove = (engine: string): boolean => providerMoveHosted && isolatedLive(engine)
   const isolatedSubmission = (engine: string): boolean => submissionHosted && isolatedLive(engine)
   const isolatedRuntime = (engine: string): boolean => runtimeHosted && isolatedLive(engine)
-  const inline = knownServices.some((name) => !outOfProcess.has(name)) || !runtimeHosted || !screenHosted || !modelControlHosted || !questionControlHosted || !submissionHosted || !nativeControlHosted
+  const inline = knownServices.some((name) => !outOfProcess.has(name)) || !runtimeHosted || !screenHosted || !modelControlHosted || !questionControlHosted || !submissionHosted || !nativeControlHosted || !backgroundJobHosted || !providerMoveHosted
     ? await import('../services/inline.js') : null
   // The Swarm's side of the services that act on it, for those of them that run in this process while it is on
   // (superTabs/inServices.ts): off, or with them in their own processes, none of it is loaded here.
@@ -765,6 +773,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     servers: Object.fromEntries(Object.entries(engineLaunches).flatMap(([name, launch]) => 'sharedServer' in launch && launch.sharedServer ? [[name, launch.sharedServer]] : [])),
     handles: isolatedNativeControl, inline: engine => isolatedNativeControl(engine) ? undefined : inline?.nativeControlFor(engine),
     rows: processRows, home: session => sessionCodexHome(session), argv: argvTokens, readFile: path => readFile(path, 'utf8'),
+  })
+  // A `claude --bg` job holding a session is stopped before its resume, in Claude Code's worker (#4146).
+  const backgroundJobs = createBackgroundJobs({
+    call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
+    handles: isolatedBackgroundJob, inline: engine => isolatedBackgroundJob(engine) ? undefined : inline?.backgroundJobFor(engine),
+  })
+  // A retarget between a grid and the own login forks a Codex conversation in Codex's worker (#4145).
+  const providerMoves = createProviderMoves({
+    call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
+    handles: isolatedProviderMove, inline: engine => isolatedProviderMove(engine) ? undefined : inline?.providerMoveFor(engine),
   })
   // Which engine workers are linked now: a close's read refused by a restart waits here for the new link.
   const engineLinks = createEngineLinks()
@@ -1688,6 +1706,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       screenTransport.connected(service)
       submissionTransport.connected(service)
       nativeControls.connected(service)
+      backgroundJobs.connected(service)
+      providerMoves.connected(service)
       engineLinks.connected(service)
       modelControls.connected(service)
       questionControls.connected(service)
@@ -1714,6 +1734,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       screenTransport.disconnected(service)
       submissionTransport.disconnected(service)
       nativeControls.disconnected(service)
+      backgroundJobs.disconnected(service)
+      providerMoves.disconnected(service)
       engineLinks.disconnected(service)
       modelControls.disconnected(service)
       questionControls.disconnected(service)
@@ -2912,6 +2934,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     restartJobs,
     byAgent: (agentId) => registry.byAgent(agentId),
     prepareSessionResume,
+    stopBackgroundJob: backgroundJobs.stop,
     keepAbandonedConversation,
     stopNative: (session, current) => nativeControls.stop(session, current),
   })
@@ -2942,6 +2965,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     refreshGridAssignment: gridAssignments.refresh,
     announceSession,
     opencodeDb: OPENCODE_DB,
+    moveConversation: providerMoves.move,
   })
 
   // Stopping, purging and resuming an agent (core/agents/lifecycle.ts).
@@ -2975,6 +2999,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     announceSession,
     relaunchOverrides,
     prepareSessionResume,
+    stopBackgroundJob: backgroundJobs.stop,
     refreshGridWebSearch,
     attachDsh,
     attachBrowser: agentBrowsers.attached,
@@ -3380,12 +3405,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     if (ports.wifi) wifiCore.started(appVoiceFocus ?? null)
   }
   devicePartsBuilt = true
-
-  // Worktrees Harness made that no live or stopped harness uses and nothing would miss
-  // (services/workspaces.ts): a few minutes after start, once restored agents are back in the
-  // registry, then twice a day. Only the end-to-end harness shortens the first wait.
-  setTimeout(() => ports.workspaces?.sweepUnused(), Number(harnessd.HARNESSD_TEST_SWEEP_AFTER_MS) || 5 * 60_000).unref()
-  setInterval(() => ports.workspaces?.sweepUnused(), 12 * 3600_000).unref()
 
 
   // Every card bound for the Wi-Fi device goes to the devices too: the dial is told what the Wi-Fi device is,

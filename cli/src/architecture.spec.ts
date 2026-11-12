@@ -186,6 +186,13 @@ const EDGE: RegExp[] = [
   // Claude Code's and Codex's hooks are declared data (hookContract.ts) that the kit applies in core: no hook code
   // of theirs is the core's, and none runs in a worker either (docs/design/2026-10-08-engine-hooks.md).
   /^engines\/(claude|codex)\/(hooks|installHooks)\.ts$/,
+  // Claude Code's stop of a `claude --bg` job holding a session it resumes runs in its worker (#4146).
+  /^engines\/(backgroundJobs|claude\/backgroundJob)\.ts$/,
+  // Linking a Claude Code profile and what a reported profile id stands for are models' and usage's: the core checks a
+  // launch's Claude home against the listing alone (lib/claudeHomes.ts, #4147).
+  /^lib\/claudeProfiles\.ts$/,
+  // Codex's fork of a conversation for its new provider, a retarget's, runs in its worker (#4145).
+  /^engines\/(providerMoves|codex\/providerMove)\.ts$/,
   // Their launch specifics are declared data too (launch.ts): Codex's startup probe and retry and its own-login
   // provider are the kit's, in core, and never a worker's (docs/design/2026-10-08-engine-launch.md).
   /^engines\/codex\/ownLoginProvider\.ts$/, /^lib\/codexStartupRetry\.ts$/,
@@ -457,6 +464,12 @@ describe('the daemon\'s shape', () => {
     // Core's adoption reaches none of the two engines' code: Devin's reader, which replays its store with Claude
     // Code's normalizer, is loaded with Devin's code ((o5)).
     expect(theirs('lib/sessionSearch/externals/index.ts')).toEqual([])
+  })
+
+  it('a resume and a pane swap load none of Claude Code\'s background-job stop: its worker runs it (#4146)', () => {
+    for (const entry of ['core/agents/swap.ts', 'lib/resumeAgentService.ts', 'core/agents/lifecycle.ts', 'core/engines/backgroundJobs.ts']) {
+      expect([...closureOf(entry).keys()].filter(file => /^(lib\/claudeBackgroundJob|engines\/claude\/backgroundJob|engines\/backgroundJobs)\.ts$/.test(file)), entry).toEqual([])
+    }
   })
 
   it('building a launch loads the engines\' declared launch contracts alone', () => {
