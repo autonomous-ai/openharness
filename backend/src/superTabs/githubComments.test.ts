@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { PrismaClient } from '@prisma/client'
-import { commentAuthors, commentKey, recordComment, RECORDS_PER_HOUR } from './githubComments.js'
-import { SuperTabError } from './model.js'
+import { commentAuthors, commentKey, recordComment, RECORDS_PER_HOUR, repositoryProject } from './githubComments.js'
+import { SuperTabError, type SuperTabState } from './model.js'
+import type { SwarmProject } from './projects.js'
 
 type Row = { id: string; tabId: string; projectId: string; agentId: string; createdAt: Date }
 /** The collection as Mongo keeps it: a second insert of one id is refused as a duplicate key, as Prisma names it. */
@@ -72,5 +73,35 @@ describe('which agent wrote a GitHub comment', () => {
     const authors = await commentAuthors(db, 'tab', 'ACME/app', ['issue:101', 'review:5', 'issue:9', 'issue:404', 'bogus:1', 'nocolon'])
     expect(Object.fromEntries(authors)).toEqual({ 'issue:101': { agentId: 'juno', projectId: 'web' }, 'review:5': { agentId: 'oak', projectId: 'api' } })
     expect((await commentAuthors(db, 'tab', 'acme/app', ['bogus:1'])).size).toBe(0)
+  })
+})
+
+// Reviews of #4152: a repository has one coordinator in a Swarm, its project that got the repository's address first and has a PM.
+describe('the project of a repository', () => {
+  const project = (id: string, repositoryUrl: string | null, addressedAt?: number): SwarmProject => ({ id, name: id, ownerId: 'dee', leadConversationId: `lead-${id}`,
+    visibility: 'public', members: [], updateMinutes: 5, ...repositoryUrl === undefined ? {} : { repository: { machineId: 'mac', cwd: `/work/${id}`, repositoryUrl,
+      ...addressedAt === undefined ? {} : { addressedAt } } } })
+  const state = (projects: SwarmProject[], led: string[]): SuperTabState => ({ projects, agents: led.map(id => ({ id: `pm-${id}` })),
+    conversations: projects.map(p => ({ id: p.leadConversationId, leadId: led.includes(p.id) ? `pm-${p.id}` : null })) }) as unknown as SuperTabState
+  const APP = 'https://github.com/Acme/App.git'
+
+  it('is the one that got the address first, whatever order the projects were made in', () => {
+    const projects = [project('early', APP, 2_000), project('web', APP, 1_000), project('docs', null)]
+    expect(repositoryProject(state(projects, ['early', 'web', 'docs']), 'acme/app')?.id).toBe('web')
+    expect(repositoryProject(state(projects, ['early', 'web', 'docs']), 'acme/other')).toBeUndefined()
+  })
+
+  it('is one whose address came before its time was kept, first in the order the projects were made', () => {
+    const projects = [project('newer', APP, 1_000), project('old', APP), project('older', APP)]
+    expect(repositoryProject(state(projects, ['newer', 'old', 'older']), 'acme/app')?.id).toBe('old')
+  })
+
+  it('passes over a project with no PM: its lead not there, or no agent of that id', () => {
+    const projects = [project('first', APP, 1_000), project('next', APP, 2_000)]
+    expect(repositoryProject(state(projects, ['next']), 'acme/app')?.id).toBe('next')
+    const gone = state(projects, ['next'])
+    gone.conversations[0]!.leadId = 'pm-left'
+    expect(repositoryProject(gone, 'acme/app')?.id).toBe('next')
+    expect(repositoryProject(state(projects, []), 'acme/app')).toBeUndefined()
   })
 })

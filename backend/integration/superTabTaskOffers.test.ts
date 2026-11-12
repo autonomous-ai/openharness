@@ -75,6 +75,9 @@ async function scene() {
     const invitation = await run({ type: 'invite.create', email: member.email, role: 'collaborator', conversationId: 'lead' })
     await run({ type: 'invite.accept', inviteId: invitation.result.inviteId as string }, member)
   }
+  // The third member's project Early, made before Web with no repository and no PM yet: given Web's repository later, it does not
+  // coordinate it (review of #4152).
+  const early = (await run({ type: 'project.create', name: 'Early', visibility: 'public', brief: '' }, third)).result as { projectId: string; conversationId: string }
   const project = async (name: string, repositoryUrl: string | null, pm: string) => {
     const made = (await run({ type: 'project.create', name, visibility: 'public', brief: '' })).result as { projectId: string; conversationId: string }
     const agentId = String((await run({ type: 'agent.add', conversationId: made.conversationId, machineId: MAC.owner, harnessId: randomUUID(), name: pm,
@@ -99,7 +102,7 @@ async function scene() {
   const moss = String((await run({ type: 'agent.add', conversationId: second.conversationId, machineId: MAC.third, harnessId: randomUUID(), name: 'Moss',
     configuration: config, lead: true, project: { cwd: '/work/Second', repositoryUrl: 'https://github.com/acme/app' } } as Command, third)).result.agentId)
   const t = `${tab}/task-offers`
-  return { tab, web, docs, ada, oak, ash, elm, kit, second, moss,
+  return { tab, web, docs, ada, oak, ash, elm, kit, second, moss, early, run,
     offer: (number: number, agentId: string, as: AuthUser = owner, pm = web.agentId, repository = 'acme/app') =>
       call(as, 'POST', `${t}?asAgentId=${pm}`, { repository, number, agentId }),
     accept: (number: number, agentId: string, as: AuthUser, repository = 'acme/app') => call(as, 'POST', `${t}/accept?asAgentId=${agentId}`, { repository, number }),
@@ -250,6 +253,57 @@ describe('one live offer for a task', () => {
       expect(raced[2 * i + 1], `offer ${number}`).toMatchObject({ status: 200 })
       expect(await s.row(number)).toMatchObject({ agentId: s.ash, acceptedAt: null })
     }
+  })
+})
+
+// Review of #4152, round two: the first project MADE on a repository was its coordinator, but a project with no address can get one
+// later, by its lead's first agent.add or by project.repository: a member's older project given a repository after its owner's
+// became its only coordinator. The coordinator is the project that GOT the repository first, and has a PM.
+describe('the coordinator of a repository', () => {
+  const lead = (t: Scene, as: AuthUser, machineId: string, name: string, repositoryUrl: string | null, conversationId = t.early.conversationId) =>
+    t.run({ type: 'agent.add', conversationId, machineId, harnessId: randomUUID(), name, configuration: config, lead: true,
+      project: { cwd: `/work/${name}`, repositoryUrl } } as Command, as).then(made => String(made.result.agentId))
+
+  it('is not a project made earlier and given the repository later by its lead\'s first agent.add', async () => {
+    const t = await scene()
+    clock.now += 1_000
+    const fern = await lead(t, third, MAC.third, 'Fern', 'https://github.com/Acme/App.git')
+    expect(await t.offer(1, t.ash, third, fern)).toMatchObject({ status: 403, code: 'PM_REQUIRED' })
+    expect(await t.offer(1, t.oak)).toMatchObject({ status: 200, data: { offer: { agentId: t.oak } } })
+    expect(await t.listed(peer, undefined, 'acme/app', [1])).toMatchObject({ status: 200, data: { offers: [expect.objectContaining({ number: 1, agentId: t.oak })] } })
+  })
+
+  it('is not a project made earlier and given the repository later by project.repository', async () => {
+    const t = await scene()
+    const fern = await lead(t, third, MAC.third, 'Fern', null)
+    clock.now += 1_000
+    await t.run({ type: 'project.repository', projectId: t.early.projectId, repositoryUrl: 'https://github.com/Acme/App.git' } as Command, third)
+    expect(await t.offer(2, t.ash, third, fern)).toMatchObject({ status: 403, code: 'PM_REQUIRED' })
+    expect(await t.offer(2, t.oak)).toMatchObject({ status: 200, data: { offer: { agentId: t.oak } } })
+  })
+
+  it('passes to the next project when the first is deleted, and lists the new coordinator\'s offers alone', async () => {
+    const t = await scene()
+    const made = async (name: string) => (await t.run({ type: 'project.create', name, visibility: 'public', brief: '' })).result as { projectId: string; conversationId: string }
+    const first = await made('Solo one'), next = await made('Solo two')
+    const lark = await lead(t, owner, MAC.owner, 'Lark', 'https://github.com/Acme/Solo.git', first.conversationId)
+    const wren = await lead(t, owner, MAC.owner, 'Wren', 'https://github.com/Acme/Solo.git', next.conversationId)
+    expect(await t.offer(1, t.oak, owner, lark, 'acme/solo')).toMatchObject({ status: 200 })
+    expect(await t.offer(2, t.oak, owner, wren, 'acme/solo')).toMatchObject({ status: 403, code: 'PM_REQUIRED' })
+    // The first deleted, its PM with it, the next coordinates.
+    await t.run({ type: 'project.delete', projectId: first.projectId } as Command)
+    expect(await t.offer(2, t.oak, owner, wren, 'acme/solo')).toMatchObject({ status: 200 })
+    // The old coordinator's offer, still live, is its project's and is not listed for the new one's.
+    const listed = await t.listed(owner, wren, 'acme/solo', [1, 2])
+    expect(((listed.data!.offers as Array<{ number: number }>).map(o => o.number))).toEqual([2])
+  })
+
+  it('is the only project whose offers are read: a reader of a later project alone hears what a project that does not exist says', async () => {
+    const t = await scene()
+    await t.offer(4, t.oak)
+    // Moss leads Second, made on Web's repository after it, and reads Second alone.
+    expect(await t.listed(third, t.moss, 'acme/app', [4])).toMatchObject({ status: 404, code: 'NOT_FOUND' })
+    expect(await t.listed(owner, t.web.agentId, 'acme/app', [4])).toMatchObject({ status: 200, data: { offers: [expect.objectContaining({ number: 4 })] } })
   })
 })
 

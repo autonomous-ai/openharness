@@ -280,12 +280,17 @@ describe('projects inside an invite-only swarm', () => {
       lead: true, project: { cwd: '/work/project', repositoryUrl: null } })
     const lead: Actor = { kind: 'agent', agentId: f.state.agents[0]!.id, machineOwnerId: 'host' }
     const worker: Actor = { kind: 'agent', agentId: f.add(p.conversationId, 'worker', false), machineOwnerId: 'host' }
+    const repository = () => projectsOf(f.state).find(item => item.id === p.projectId)!.repository
+    // No address yet: no time kept.
+    expect(repository()).toEqual({ machineId: 'machine', cwd: '/work/project', repositoryUrl: null })
     expect(() => f.run(share(url), peer)).toThrow('Only the project owner or its lead')
     expect(() => f.run(share(url), worker)).toThrow('Only the project owner or its lead')
     f.run(share(url), lead)
-    const repository = () => projectsOf(f.state).find(item => item.id === p.projectId)!.repository
-    expect(repository()).toEqual({ machineId: 'machine', cwd: '/work/project', repositoryUrl: url })
+    // With when it got its address (githubComments.ts repositoryProject); the same address again keeps it.
+    expect(repository()).toEqual({ machineId: 'machine', cwd: '/work/project', repositoryUrl: url, addressedAt: 1000 })
+    repository()!.addressedAt = 500
     f.run(share(url))
+    expect(repository()!.addressedAt).toBe(500)
     expect(() => f.run(share('https://github.com/example/another'))).toThrow('already shares another repository')
     expect(repository()!.repositoryUrl).toBe(url)
   })
@@ -295,7 +300,7 @@ describe('projects inside an invite-only swarm', () => {
     delete f.state.projects
     f.state.project = { machineId: 'machine', cwd: '/old', repositoryUrl: null }
     f.run({ type: 'project.repository', projectId: 'lead', repositoryUrl: url })
-    expect(f.state.project).toEqual({ machineId: 'machine', cwd: '/old', repositoryUrl: url })
+    expect(f.state.project).toEqual({ machineId: 'machine', cwd: '/old', repositoryUrl: url, addressedAt: 1000 })
     expect(projectsOf(f.state)[0]!.repository).toEqual(f.state.project)
   })
 
