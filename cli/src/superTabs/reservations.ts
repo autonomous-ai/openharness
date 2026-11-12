@@ -182,6 +182,9 @@ export class CapacityReservations implements ReservationBook {
         const released = observation?.state === 'failed' || observation?.state === 'cancelled'
           || (!!harnessId && await this.core.agents.stopped?.(harnessId).catch(() => false) === true)
           || (observation?.state === 'created' && await this.core.agents.gone?.(harnessId!).catch(() => false) === true)
+          // Nor is one whose engine left its pane before it was ever seen: its row is a shell now, under the same id
+          // (core/agents/newPane.ts). Its start waited for the Swarm's 3-minute timeout, which counts against its machine.
+          || (!!harnessId && this.core.agents.byAgent(harnessId)?.engine === 'terminal')
         // A missing creation is given back at the start deadline, which a run that confirms it restarts: its start may
         // still be waiting in the backend. One that is pending, unconfirmed or unreadable was dispatched, and the Swarm
         // failed it by the launch deadline if no agent joined (issue #2989). A launched or ended creation keeps its row.
