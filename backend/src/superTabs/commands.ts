@@ -27,7 +27,7 @@ import { deleteMessage, editMessage, type MessageChangeTarget } from './messageE
 import { bindPullRequestCards } from './cards.js'
 import { cancelledTags, cancelReason, switchExpired, unfinishedWork } from './tidy.js'
 import { namedDefault } from './catalog.js'
-import { BUILT_IN_ROLE_DEFAULTS, NO_PROJECT, inChannelOf, isAgentChat, agentProjectId, groupRepositoryUrl, canReadAgent, canReadProject, deletableProject, deleteProject, markConfidential, ownsProject, admitPerson, dismissPeople, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, mutableProjects, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, sameProject, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
+import { addressedRepository, BUILT_IN_ROLE_DEFAULTS, NO_PROJECT, inChannelOf, isAgentChat, agentProjectId, groupRepositoryUrl, canReadAgent, canReadProject, deletableProject, deleteProject, markConfidential, ownsProject, admitPerson, dismissPeople, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, mutableProjects, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, sameProject, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
 import { recordClosing } from './closedAgents.js'
 import { giveAgentChat } from './agentChats.js'
 import { githubRepository } from '../github/repository.js'
@@ -934,6 +934,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (repository.repositoryUrl && repository.repositoryUrl !== command.repositoryUrl) {
         fail('PROJECT_REPOSITORY_SET', 'This project already shares another repository.')
       }
+      // When it got its address is kept, and the same address again keeps its first time (githubComments.ts repositoryProject).
+      if (!repository.repositoryUrl) repository.addressedAt = context.now
       repository.repositoryUrl = command.repositoryUrl
       break
     }
@@ -947,7 +949,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         fail('PROJECT_REPOSITORY_SET', `This project works in ${cloned.fullName}.`, 409)
       }
       mutableProjects(state)
-      projectOf(state, project.id).githubRepository = command.repository
+      const named = projectOf(state, project.id)
+      // When it named it is kept, and the same name again keeps its first time (githubComments.ts repositoryProject).
+      if (named.githubRepository?.toLowerCase() !== command.repository.toLowerCase()) named.githubRepositoryAt = context.now
+      named.githubRepository = command.repository
       break
     }
     case 'project.pm': {
@@ -1208,7 +1213,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       coordinatorOrPerson(state, actor)
       if (actor.kind === 'person') owner(state, actor)
       if (state.project) fail('PROJECT_SET', 'This Super Tab already has a project.')
-      state.project = { machineId: command.machineId, ...command.project }
+      state.project = addressedRepository({ machineId: command.machineId, ...command.project }, context.now)
       // A new Swarm stores its first project, and stored projects are read instead of `state.project` (projectsOf).
       const first = state.projects?.find(p => p.id === 'lead')
       if (first) first.repository ??= { ...state.project }
@@ -1522,10 +1527,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       const project = groupProject(state, group)
       if (state.projects && group.id === project.leadConversationId && command.lead && command.project) {
-        project.repository ??= { machineId: command.machineId, ...command.project }
+        project.repository ??= addressedRepository({ machineId: command.machineId, ...command.project }, context.now)
       }
       if (group.id === 'lead' && command.lead && command.project && !state.project) {
-        state.project = { machineId: command.machineId, ...command.project }
+        state.project = addressedRepository({ machineId: command.machineId, ...command.project }, context.now)
       }
       const grant = context.contribution ?? fail('HOST_REQUIRED', 'This session must be explicitly shared by an authorized contributor.', 403)
       const contributor = person(state, grant.contributorId)

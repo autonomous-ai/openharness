@@ -125,6 +125,13 @@ function calls(tab: string, chat: string, project: string) {
     json('POST', 'POST /api/super-tabs/:tabId/task-tokens', `${t}/task-tokens?asAgentId=${MISSING}`, { repository: 'acme/app', number: 1, kind: 'build',
       tokens: [{ model: 'gpt-5.5', input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }], rounds: 0, startedAt: 1_800_000_000_000, endedAt: 1_800_000_000_000 }),
     json('GET', 'GET /api/super-tabs/:tabId/task-tokens', `${t}/task-tokens?repository=acme/app&numbers=1`),
+    // A task offered to one agent (superTabs/taskOffers.ts): a made-up agent offers, answers and reads nothing, and a reader of no
+    // project of the repository reads nothing.
+    json('POST', 'POST /api/super-tabs/:tabId/task-offers', `${t}/task-offers?asAgentId=${MISSING}`, { repository: 'acme/app', number: 1, agentId: MISSING }),
+    json('POST', 'POST /api/super-tabs/:tabId/task-offers/accept', `${t}/task-offers/accept?asAgentId=${MISSING}`, { repository: 'acme/app', number: 1 }),
+    json('POST', 'POST /api/super-tabs/:tabId/task-offers/decline', `${t}/task-offers/decline?asAgentId=${MISSING}`, { repository: 'acme/app', number: 1, reason: 'memory' }),
+    json('GET', 'GET /api/super-tabs/:tabId/task-offers', `${t}/task-offers?repository=acme/app&numbers=1`),
+    json('GET', 'GET /api/super-tabs/:tabId/task-offers/mine', `${t}/task-offers/mine?asAgentId=${MISSING}`),
     json('GET', 'GET /api/super-tabs/:tabId/machines/:machineId/removal', `${t}/machines/${MISSING}/removal`),
     json('GET', 'GET /api/super-tabs/:tabId/machines/:machineId/removal/v2', `${t}/machines/${MISSING}/removal/v2`),
     multipart('POST /api/super-tabs/:tabId/attachments', `${t}/attachments`, form([field('conversationId', chat), file('notes.txt', 'text/plain', 'hello')])),
