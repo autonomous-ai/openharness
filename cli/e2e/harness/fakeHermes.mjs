@@ -4,7 +4,9 @@
 //   - answers `--version` with the release it is told to be;
 //   - keeps its sessions in `<home>/state.db`, its home being `HERMES_HOME`, else `<HOME>/.hermes`
 //     (`hermes_constants.py`): a session is `local-<sha256 hex>` with `source = 'local'` and `created_source = 'cli'`,
-//     its messages in `messages`, the table `e2e/hermesAdmission.e2e.ts` makes;
+//     its messages in `messages`, the table `e2e/hermesAdmission.e2e.ts` makes; the session its terminal leaves (`/new`,
+//     `/resume`, its exit) is ended, `ended_at` the time in seconds, and one it resumes is opened again
+//     (`hermes_state.py` `end_session`, `reopen_session`);
 //   - writes `<home>/terminal-sessions/<terminal id>` each time its terminal's session is set, through a temporary file
 //     and a rename (`hermes_cli/terminal_breadcrumbs.py`), the terminal named as `get_terminal_id()` names it: the tty
 //     of its stdin, else its tmux pane;
@@ -71,14 +73,13 @@ export function run(options) {
   // Node's warning that node:sqlite is experimental would be drawn in the pane.
   process.removeAllListeners('warning')
   const { DatabaseSync } = process.getBuiltinModule('node:sqlite')
-  // In a pid namespace of its own it is pid 1, which a signal with no handler does not stop.
-  for (const signal of ['SIGTERM', 'SIGHUP', 'SIGINT']) process.on(signal, () => process.exit(0))
 
   const home = process.env.HERMES_HOME?.startsWith('/') ? process.env.HERMES_HOME : join(process.env.HOME, '.hermes')
   mkdirSync(home, { recursive: true })
   const db = new DatabaseSync(join(home, 'state.db'))
   db.exec('PRAGMA busy_timeout = 5000;'
-    + 'CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, source TEXT, created_source TEXT, cwd TEXT, started_at REAL);'
+    + 'CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, source TEXT, created_source TEXT, cwd TEXT, started_at REAL,'
+    + ' ended_at REAL, end_reason TEXT);'
     + 'CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, tool_call_id TEXT,'
     + ' tool_calls TEXT, tool_name TEXT, finish_reason TEXT, reasoning TEXT);')
 
@@ -103,7 +104,15 @@ export function run(options) {
   let session = ''
   const record = (extra = {}) => replaceRecord((path) => writeFileSync(path,
     JSON.stringify({ session_id: session, cwd: process.cwd(), ts: Date.now() / 1000, ...extra })))
+  // The first reason wins: an ended session is not ended again until it is opened again.
+  const end = (reason) => {
+    if (session) db.prepare('UPDATE sessions SET ended_at = ?, end_reason = ? WHERE id = ? AND ended_at IS NULL').run(Date.now() / 1000, reason, session)
+  }
+  const reopen = () => db.prepare('UPDATE sessions SET ended_at = NULL, end_reason = NULL WHERE id = ?').run(session)
+  // In a pid namespace of its own it is pid 1, which a signal with no handler does not stop.
+  for (const signal of ['SIGTERM', 'SIGHUP', 'SIGINT']) process.on(signal, () => { end('cli_close'); process.exit(0) })
   const start = () => {
+    end('new_session')
     session = `local-${createHash('sha256').update(randomBytes(32)).digest('hex')}`
     db.prepare("INSERT INTO sessions (id, source, created_source, cwd, started_at) VALUES (?, 'local', 'cli', ?, ?)")
       .run(session, process.cwd(), Date.now() / 1000)
@@ -113,6 +122,7 @@ export function run(options) {
   const resumed = args.findIndex((arg) => arg === '--resume' || arg === '-r')
   if (resumed >= 0 && args[resumed + 1]) {
     session = args[resumed + 1]
+    reopen()
     record()
   } else start()
   writeFileSync(join(home, 'started.json'), JSON.stringify({ given: process.env.FAKE_GIVEN_HERMES_HOME ?? '', terminal, session }))
@@ -121,7 +131,9 @@ export function run(options) {
   const step = (line) => {
     if (line.new) start()
     if (line.resume) {
+      end('resumed_other')
       session = line.resume
+      reopen()
       record()
     }
     if (typeof line.say === 'string') {

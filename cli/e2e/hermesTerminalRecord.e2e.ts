@@ -162,15 +162,16 @@ it('follows a resumed Hermes through /new without failing it', async () => {
 
   const resumed = await startedAgain(r.home, async () =>
     expect((await c.request('agent_resume', { agentId: a.agentId }, 90_000)).error).toBeUndefined())
-  // Its record names the conversation it was asked to resume, which confirms it.
   expect(resumed.session).toBe(a.started.session)
-  await until('the record to confirm the resumed conversation', () => (saved(r.d, a.agentId)?.lastHookAt ?? 0) > 0 || null, 30_000, 100)
+  // `/new` at once, before a pass reads the record naming the resumed conversation: the record only ever names the new
+  // one, and the resumed one, which `/new` ended, is confirmed from the store before the agent follows (Review Focus 3).
   r.tell({ new: true })
   const next = await movedFrom(r.home, resumed.terminal!, a.started.session)
   await boundTo(c, a.agentId, next)
   const agent = await row(c, a.agentId)
   expect(agent?.launch?.state).not.toBe('failed')
   expect(r.d.log()).not.toContain('RESUME_SESSION_MISMATCH')
+  await until('the resumed conversation confirmed', () => (saved(r.d, a.agentId)?.lastHookAt ?? 0) > 0 || null, 10_000, 100)
 })
 
 it('binds nothing from a record an earlier process left, binds once by the repair, and says switches are not followed', async () => {

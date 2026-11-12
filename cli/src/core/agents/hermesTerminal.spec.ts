@@ -36,6 +36,7 @@ function setup(platform: NodeJS.Platform = 'linux') {
     stamp: vi.fn(async (_home: string, _names: readonly string[]) => '7:60:1000'),
     read: vi.fn(async (_home: string, _names: readonly string[], _sinceMs: number) => RECORD),
     kind: vi.fn(async (_home: string, _sessionId: string): Promise<'own' | 'waiting' | 'other'> => 'own'),
+    endedSince: vi.fn(async (_home: string, _sessionId: string, _sinceMs: number) => false),
     recordSeen: vi.fn((_home: string) => {}),
     now: vi.fn(() => clock),
   }
@@ -134,6 +135,41 @@ describe('following a Hermes from its terminal record', () => {
     expect(deps.kind).not.toHaveBeenCalled()
     expect(await t.follow(agent({ sessionId: S, resumeOnly: true, lastHookAt: 5 }), observed(), pass())).toBe('wait')
     expect(deps.kind).not.toHaveBeenCalled()
+  })
+
+  it('confirms a resumed row a `/new` left before a pass saw its record, then follows the record', async () => {
+    // Resumed on OLD, then `/new` before the pass: the record already names S. Hermes ends the session a terminal leaves
+    // (`end_session`), so OLD ended since this process started was open in it: confirmed first, never failed.
+    const { deps, t } = setup()
+    deps.endedSince.mockResolvedValue(true)
+    const resumed = agent({ sessionId: OLD, resumeOnly: true, lastHookAt: 0 })
+    expect(await t.follow(resumed, observed(), pass())).toEqual({ sessionId: OLD })
+    expect(deps.endedSince).toHaveBeenCalledExactlyOnceWith(HOME, OLD, Date.parse(STARTED) - 5_000)
+    expect(await t.follow({ ...resumed, lastHookAt: 1 }, observed(), pass())).toEqual({ sessionId: S })
+    expect(deps.endedSince).toHaveBeenCalledOnce()
+  })
+
+  it('follows a resumed row onto another session only when its own was never left', async () => {
+    // A resume whose own conversation the process never had open reports another: the registry fails it, as with a hook.
+    const { deps, t } = setup()
+    expect(await t.follow(agent({ sessionId: OLD, resumeOnly: true, lastHookAt: 0 }), observed(), pass())).toEqual({ sessionId: S })
+    expect(deps.endedSince).toHaveBeenCalledOnce()
+    // A bound row that is no resume is not asked.
+    const bound = setup()
+    expect(await bound.t.follow(agent({ sessionId: OLD, lastHookAt: 0 }), observed(), pass())).toEqual({ sessionId: S })
+    expect(bound.deps.endedSince).not.toHaveBeenCalled()
+  })
+
+  it('waits on a resumed row whose store cannot say, or whose pass ended while it was asked', async () => {
+    const { deps, t } = setup()
+    deps.endedSince.mockRejectedValueOnce(new Error('the store is busy'))
+    const resumed = agent({ sessionId: OLD, resumeOnly: true, lastHookAt: 0 })
+    const unreadable = pass()
+    expect(await t.follow(resumed, observed(), unreadable)).toBe('wait')
+    expect(unreadable.hold).not.toHaveBeenCalled()
+    expect(deps.kind).not.toHaveBeenCalled()
+    deps.endedSince.mockResolvedValueOnce(true)
+    expect(await t.follow(resumed, observed(), pass({ current: vi.fn(() => false) }))).toBe('wait')
   })
 
   it('never falls back while a record of this process waits for its row', async () => {

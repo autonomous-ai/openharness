@@ -936,6 +936,8 @@ describe('binding a running process to its session', () => {
       await run.binding.bindObservedAgent(seen)
       await run.binding.bindObservedAgent(seen)
       expect(run.deps.attachSession).toHaveBeenCalledOnce()
+      // Nor is either said to be a switch: a refused one is tried again in the repair's rhythm.
+      expect(said()).toEqual(['[discovery] a1 switched hermes session old → S'])
     })
 
     it('confirms a resumed Hermes without a switch', async () => {

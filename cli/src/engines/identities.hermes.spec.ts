@@ -16,10 +16,10 @@ vi.mock('../lib/processEnv.js', async (real) => ({ ...await real<object>(), read
 const processView = vi.hoisted(() => vi.fn())
 vi.mock('../lib/processMounts.js', async (real) => ({ ...await real<object>(), processView }))
 
-const { probeHermesHome, probeHermesHomeDerived, probeHermesSandbox, hermesSessionKind, hermesTerminalNames, hermesTerminalStamp, readHermesTerminal } = await import('./identities.js')
+const { probeHermesHome, probeHermesHomeDerived, probeHermesSandbox, hermesSessionKind, hermesSessionEndedSince, hermesTerminalNames, hermesTerminalStamp, readHermesTerminal } = await import('./identities.js')
 
 const { DatabaseSync } = process.getBuiltinModule('node:sqlite') as {
-  DatabaseSync: new (path: string) => { exec(sql: string): void; prepare(sql: string): { run(...args: (string | null)[]): void }; close(): void }
+  DatabaseSync: new (path: string) => { exec(sql: string): void; prepare(sql: string): { run(...args: (string | number | null)[]): void }; close(): void }
 }
 
 const identity = { pid: 4242, startMarker: '2026-11-12T10:00:00Z', executable: 'python3' }
@@ -28,9 +28,10 @@ const home = join(root, 'home', '.hermes')
 const broken = join(root, 'broken')
 afterAll(() => rmSync(root, { recursive: true, force: true }))
 
-function insert(id: string, source: string, created: string | null): void {
+function insert(id: string, source: string, created: string | null, ended: string | number | null = null): void {
   const db = new DatabaseSync(join(home, 'state.db'))
-  db.prepare('INSERT INTO sessions VALUES (?, ?, ?, ?, ?)').run(id, source, created, '/work', '1762941600')
+  db.prepare('INSERT INTO sessions (id, source, created_source, cwd, started_at, ended_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(id, source, created, '/work', '1762941600', ended)
   db.close()
 }
 
@@ -40,7 +41,7 @@ beforeEach(() => {
   mkdirSync(home, { recursive: true })
   mkdirSync(broken, { recursive: true })
   const db = new DatabaseSync(join(home, 'state.db'))
-  db.exec('CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL, created_source TEXT, cwd TEXT, started_at REAL)')
+  db.exec('CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL, created_source TEXT, cwd TEXT, started_at REAL, ended_at REAL)')
   db.close()
 })
 
@@ -129,6 +130,27 @@ describe('a session in a Hermes home\'s own store', () => {
     expect(await hermesSessionKind(join(home, 'no-such-home'), '20261112_100009_cccccc')).toBe('waiting')
     writeFileSync(join(broken, 'state.db'), 'not a database')
     await expect(hermesSessionKind(broken, '20261112_100009_cccccc')).rejects.toBeInstanceOf(IdentityReadUnavailable)
+  })
+})
+
+describe('whether a Hermes session was left since a moment', () => {
+  const since = Date.parse('2026-11-12T10:00:00Z')
+  it.each([
+    ['ended at that moment', since / 1000, true],
+    ['ended after it', since / 1000 + 3.5, true],
+    ['ended before it', since / 1000 - 0.5, false],
+    ['still open', null, false],
+    ['ended at a time that is not a number', 'soon', false],
+  ] as const)('reads a session %s', async (_name, ended, left) => {
+    insert('20261112_100000_aaaaaa', 'cli', null, ended)
+    expect(await hermesSessionEndedSince(home, '20261112_100000_aaaaaa', since)).toBe(left)
+  })
+
+  it('has no session that is not there, and refuses to judge a store it cannot read', async () => {
+    expect(await hermesSessionEndedSince(home, '20261112_100009_cccccc', since)).toBe(false)
+    expect(await hermesSessionEndedSince(home, 'not an id', since)).toBe(false)
+    writeFileSync(join(broken, 'state.db'), 'not a database')
+    await expect(hermesSessionEndedSince(broken, '20261112_100009_cccccc', since)).rejects.toBeInstanceOf(IdentityReadUnavailable)
   })
 })
 
