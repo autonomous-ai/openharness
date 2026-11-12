@@ -1,16 +1,11 @@
 /**
  * Workspaces in their own process (`harness __service workspaces`, with `HARNESSD_SERVICES=workspaces`).
  *
- * The same branch naming and worktree sweep as in the core's process (services/workspaces.ts), on a core
- * API built here. It acts only when the core says so (core/workspacesLink.ts):
- * - It names branches when told to, with the live agents the core sends on each terminal-title pass.
- * - It sweeps when the core's timer says, asking the core at that moment for every agent, live and
- *   stopped, and sweeping with exactly that answer.
- *
- * It never sweeps on its own, never with agents it kept from earlier, never when the core cannot answer,
- * and never two sweeps at once (services/workspaces.ts). After a rename it asks the core to send the
- * agent's frame again. The git work (renames, worktree removals, their timeouts) is this process's
- * alone: a hang or a crash in it costs workspaces, and the master starts them again.
+ * The same branch naming as in the core's process (services/workspaces.ts), on a core API built here. It names branches
+ * when the core says so (core/workspacesLink.ts), with the live agents the core sends on each terminal-title pass, and
+ * after a rename asks the core to send the agent's frame again. A `sweep` an older core still sends is ignored: no
+ * worktree is removed on a timer (#4166). The git work (renames, their timeouts) is this process's alone: a hang or a
+ * crash in it costs workspaces, and the master starts them again.
  */
 import type { CoreApi } from '../core/api.js'
 import { ACCOUNT_BACKEND_OFF, CONVERSATIONS_OFF, AGENT_ACTIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, LANE_OFF, resolveAgent, TERMINALS_OFF } from '../core/api.js'
@@ -34,14 +29,12 @@ const isSession = (value: unknown): value is RegisteredSession =>
   !!value && typeof value === 'object' && typeof (value as { agentId?: unknown }).agentId === 'string'
 
 /**
- * The core API workspaces run on in their own process. The live agents are the ones the core last sent.
- * Every agent, live and stopped, is known only while a sweep the core asked for starts; asked at any
- * other time it throws, and a sweep that cannot list the folders in use sweeps nothing. A frame sent
- * again (after a rename) is the core's to send: `renamed` asks it to.
+ * The core API workspaces run on in their own process. The live agents are the ones the core last sent; stopped ones are
+ * never asked for. A frame sent again (after a rename) is the core's to send: `renamed` asks it to.
  */
 export function workspacesCoreApi(
   dataDir: string,
-  view: { live(): RegisteredSession[]; inUse(): RegisteredSession[] | null },
+  view: { live(): RegisteredSession[] },
   renamed: (agentId: string) => void,
 ): CoreApi {
   return {
@@ -50,11 +43,7 @@ export function workspacesCoreApi(
     terminals: TERMINALS_OFF,
     machine: UNASKED.machine,
     agents: {
-      all: () => {
-        const agents = view.inUse()
-        if (!agents) throw new Error('the core has not said which folders are in use')
-        return agents
-      },
+      all: () => { throw new Error('workspaces never list stopped agents') },
       live: () => view.live(),
       displayName: () => '',
       byAgent: (agentId) => view.live().find((session) => session.agentId === agentId),
@@ -93,34 +82,14 @@ export function workspacesCoreApi(
 
 export function runWorkspacesService(options: WorkspacesServiceOptions): ServiceProcess {
   let live: RegisteredSession[] = []
-  /** Every agent the core named for the sweep starting now; null at every other moment. */
-  let inUse: RegisteredSession[] | null = null
   let core: CoreConnection | null = null
-  /** A sweep's question to the core is out: a second request meanwhile is the same sweep. */
-  let asking = false
   const ports = emptyPorts()
   // Lost only with the connection: the frame then shows the new branch when the core's read of the
   // folder expires (lib/agentProject.ts), seconds later.
   const renamed = (agentId: string): void => { void core?.query('branchNamed', { agentId }).catch(() => {}) }
-  ;(options.start ?? startWorkspaces)(workspacesCoreApi(options.dataDir, { live: () => live, inUse: () => inUse }, renamed), ports)
+  ;(options.start ?? startWorkspaces)(workspacesCoreApi(options.dataDir, { live: () => live }, renamed), ports)
   if (!ports.workspaces) throw new Error('workspaces did not start')
   const workspaces = ports.workspaces
-
-  /** The core's timer says it is time: ask it for every agent now, and sweep with exactly that answer. */
-  const sweep = (): void => {
-    const connection = core
-    if (!connection || asking) return
-    asking = true
-    void connection.query('agents').then((answer) => {
-      // Every entry, as the core sent it: one left out would be a folder in use that looks unused. An
-      // answer that is not a list of agents (QUERY_FAILED, when the core could not read them all) is no
-      // sweep at all.
-      const agents = answer.agents
-      if (!Array.isArray(agents) || !agents.every(isSession)) return
-      inUse = agents
-      try { workspaces.sweepUnused() } catch { /* its own failure: the next timer tries again */ } finally { inUse = null }
-    }, () => {}).finally(() => { asking = false })
-  }
 
   const run = options.run ?? runServiceProcess
   const service = run({
@@ -134,7 +103,7 @@ export function runWorkspacesService(options: WorkspacesServiceOptions): Service
       if (payload.kind === 'nameBranches' && Array.isArray(payload.agents)) {
         live = payload.agents.filter(isSession)
         workspaces.nameBranches()
-      } else if (payload.kind === 'sweep') sweep()
+      }
     },
     onConnected: (connection) => { core = connection },
   })

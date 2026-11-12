@@ -130,10 +130,9 @@ master too old to run it starts it beside itself, still in its own process (`src
   and request id the core gives every request (`Asker`). `e2e/serviceProcesses.e2e.ts` proves it: a create
   on a grid model while models is killed answers GRID_UNAVAILABLE, and every agent works on.
 - A service the core only gives commands to needs nothing kept for it while it is down. Workspaces
-  (`src/services/workspacesProcess.ts`, `src/core/workspacesLink.ts`) is told to name branches and
-  when to sweep. A command that destroys something is never held or replayed, and what it must know
-  (the folders in use) is asked for when it starts, never sent ahead where it could go stale.
-  `e2e/workspacesProcess.e2e.ts` proves it.
+  (`src/services/workspacesProcess.ts`, `src/core/workspacesLink.ts`) is told to name branches. A command that
+  destroys something is never held or replayed, and what it must know is asked for when it starts, never sent ahead
+  where it could go stale. `e2e/workspacesProcess.e2e.ts` proves it.
 - A service that is transport rather than requests: the gateway (src/gateway/gatewayProcess.ts,
   src/core/gatewayLink.ts) carries every remote client's traffic, so it tells the core without asking
   (`service_notice`) and carries terminal bytes as binary frames on its link. The core drops what would
