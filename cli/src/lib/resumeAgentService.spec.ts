@@ -17,7 +17,6 @@ import { checkSessionRuntime, resolvePaneEngineProcess } from './paneEngineProce
 import { windowsAfterExit, windowsPaneLaunch } from './windows/engineStart.js'
 import { buildEngineLaunchArgv, dropPermissionFlagIfUnsupported, engineLaunchEnv, refusePermissionFlagIfUnsupported } from './engineLaunch.js'
 import { engineBin, enginePathOverride } from './engineBin.js'
-import { stopConflictingBackgroundJob } from './claudeBackgroundJob.js'
 import { installedDsh } from '../dsh/installed.js'
 import { createLaunchHelpers } from '../core/agents/launch.js'
 import { createLaunchAuthority } from '../core/agents/launchAuthority.js'
@@ -46,7 +45,6 @@ vi.mock('./engineLaunch.js', async importOriginal => ({
   refusePermissionFlagIfUnsupported: vi.fn(async () => null),
 }))
 vi.mock('./engineBin.js', () => ({ enginePathOverride: vi.fn(() => undefined), engineBin: vi.fn((engine: string) => engine) }))
-vi.mock('./claudeBackgroundJob.js', () => ({ stopConflictingBackgroundJob: vi.fn(async () => {}) }))
 vi.mock('./engineInstall.js', async original => ({ ...await original<object>(), engineInstallRecipe: () => ({ command: 'fixture-install' }) }))
 vi.mock('../dsh/installed.js', () => ({ installedDsh: vi.fn() }))
 vi.mock('../engines/transcriptBindings.js', async original => ({ ...await original<object>(), controlTranscriptEvidence: vi.fn() }))
@@ -135,7 +133,7 @@ beforeEach(() => {
     stopJobs: new Map(), pinnedControls: new Set(),
     retainExitedSession: vi.fn((row, alive) => { store.save(row); if (alive) registry.releaseEngine(row.agentId, true); else registry.removeAgent(row.agentId) }),
     announceSession: vi.fn(), relaunchOverrides: vi.fn(async () => ({ ok: true as const, overrides: { env: {}, extraArgs: [], clearEnv: [] } })),
-    prepareSessionResume: vi.fn(), refreshGridWebSearch: vi.fn(), clearDeleted: vi.fn(), attachDsh: vi.fn(),
+    prepareSessionResume: vi.fn(), stopBackgroundJob: vi.fn(async () => {}), refreshGridWebSearch: vi.fn(), clearDeleted: vi.fn(), attachDsh: vi.fn(),
     attachSession: vi.fn(async () => true),
   }
 })
@@ -451,23 +449,23 @@ describe('production resume handler', () => {
   it('stops a live `claude --bg` job on the exact session before building the resume argv', async () => {
     rewrite({ engine: 'claude' })
     expect(await start()).toMatchObject({ ok: true, resumed: true })
-    expect(stopConflictingBackgroundJob).toHaveBeenCalledWith(expect.objectContaining({
+    expect(deps.stopBackgroundJob).toHaveBeenCalledWith('claude', expect.objectContaining({
       bin: engineBin('claude'), sessionId: saved.sessionId,
-    }))
-    const stopOrder = vi.mocked(stopConflictingBackgroundJob).mock.invocationCallOrder[0]
+    }), expect.any(Function))
+    const stopOrder = vi.mocked(deps.stopBackgroundJob!).mock.invocationCallOrder[0]
     const argvOrder = vi.mocked(buildEngineLaunchArgv).mock.invocationCallOrder[0]
     expect(stopOrder).toBeLessThan(argvOrder)
     // What the stop reports reaches the daemon's log under the agent's short id.
     const said = vi.spyOn(console, 'log').mockImplementation(() => {})
     try {
-      vi.mocked(stopConflictingBackgroundJob).mock.calls[0]![0].log!('stopped background job bg-1')
+      vi.mocked(deps.stopBackgroundJob!).mock.calls[0]![2]('stopped background job bg-1')
       expect(said).toHaveBeenCalledWith(`[resume] ${saved.agentId.slice(0, 8)} stopped background job bg-1`)
     } finally { said.mockRestore() }
   })
 
   it('builds nothing when the resume is cancelled while the background job stops', async () => {
     rewrite({ engine: 'claude' })
-    vi.mocked(stopConflictingBackgroundJob).mockImplementationOnce(async () => { deps.restartJobs.cancel(saved.agentId) })
+    vi.mocked(deps.stopBackgroundJob!).mockImplementationOnce(async () => { deps.restartJobs.cancel(saved.agentId) })
     expect(await start()).toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
     expect(buildEngineLaunchArgv).not.toHaveBeenCalled()
     expect(create).not.toHaveBeenCalled()
@@ -476,20 +474,20 @@ describe('production resume handler', () => {
   it('never checks for a background job on a fresh or fork launch (no resumeSessionId)', async () => {
     rewrite({ engine: 'claude', sessionId: '' })
     await start()
-    expect(stopConflictingBackgroundJob).not.toHaveBeenCalled()
+    expect(deps.stopBackgroundJob).not.toHaveBeenCalled()
   })
 
   it('does not check for a background job on a non-Claude engine', async () => {
     expect(saved.engine).toBe('codex')
     await start()
-    expect(stopConflictingBackgroundJob).not.toHaveBeenCalled()
+    expect(deps.stopBackgroundJob).not.toHaveBeenCalled()
   })
 
   it('skips the background-job check for a DSH agent: its pane may run on a different host', async () => {
     rewrite({ engine: 'claude', dsh: { id: 'fixture-dsh', url: 'https://example.test' } as any })
     vi.mocked(installedDsh).mockReturnValue(true as any)
     await start()
-    expect(stopConflictingBackgroundJob).not.toHaveBeenCalled()
+    expect(deps.stopBackgroundJob).not.toHaveBeenCalled()
   })
 
   it('still checks for a background job on a captured-native launch, with that launch\'s own environment', async () => {
@@ -503,9 +501,9 @@ describe('production resume handler', () => {
     vi.mocked(deps.relaunchOverrides).mockResolvedValue({ ok: true,
       overrides: { env: { CLAUDE_CONFIG_DIR: '/native/claude-home' }, extraArgs: [], clearEnv: [], native } })
     await start()
-    expect(stopConflictingBackgroundJob).toHaveBeenCalledWith(expect.objectContaining({
+    expect(deps.stopBackgroundJob).toHaveBeenCalledWith('claude', expect.objectContaining({
       sessionId: saved.sessionId, env: expect.objectContaining({ CLAUDE_CONFIG_DIR: '/native/claude-home' }),
-    }))
+    }), expect.any(Function))
   })
 
   it('marks an engine with no startup hook ready off its own process', async () => {

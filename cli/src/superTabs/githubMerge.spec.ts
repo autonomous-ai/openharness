@@ -43,6 +43,8 @@ function fakeGitHub() {
     // Each pull request here is alone and holds main's tip (`behind_by` 0), so it merges on its own; the train is githubTrain.spec.ts.
     const compared = p.split('...').at(-1)!
     const body = p === '/repos/acme/app' ? { default_branch: 'main', ...repo.visibility ? { private: repo.visibility !== 'public', visibility: repo.visibility } : {} }
+      // This computer's login: the one the team's comments here come from (`comment`).
+      : p === '/user' ? { login: 'deehw' }
       : p === '/repos/acme/app/pulls' && url.searchParams.get('state') === 'closed' ? []
       // A page of the list, as GitHub pages it.
       : p === '/repos/acme/app/pulls' ? repo.pulls.slice((Number(url.searchParams.get('page') ?? 1) - 1) * Number(url.searchParams.get('per_page') ?? 30),
@@ -793,6 +795,39 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
       const f = setup()
       f.github.repo.pulls = [pull(other)]
       await settle(f)
+      expect(f.merges()).toEqual([])
+    }
+  })
+
+  // #3787: on swarm-sandbox, #15 by builder:pip had its READ-OK and green checks and waited for hours, said to nobody: Attach had
+  // given Pip a new name, so the team no longer had a builder:pip. Only a task Harness gave that builder is told of: a shared
+  // repository carries dozens of builder: labels from older teams and tools (lampOS about 55).
+  it('tells the PM, once for each head, of a pull request for a task Harness gave a builder who is no longer on the team', async () => {
+    const f = setup()
+    f.crew.mockResolvedValue({ builders: [{ id: 'amari', name: 'Amari', label: 'builder:amari', machineId: 'mac', engine: 'claude' }], machines: [] })
+    f.github.repo.comments.set(2, [comment('Harness, 09:30: for **Pip**: it can start now.')])
+    await settle(f)
+    expect(f.merges()).toEqual([])
+    expect(f.comments()).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*Juno\*\*: not merged yet at f6edb44: its builder Pip is not on the team: Harness lands only the team's pull requests\. Put Pip back on it, or give #2 to one of its builders\.$/)])
+    f.github.repo.comments.set(4, [...f.github.repo.comments.get(4)!, comment(f.comments()[0]!)])
+    await settle(f)
+    expect(f.comments()).toHaveLength(1)
+    f.github.repo.pulls = [pull({ head: { sha: UNDER } })]
+    f.github.repo.runs.set(UNDER, [{ name: 'test', status: 'completed', conclusion: 'success' }])
+    await settle(f)
+    expect(f.comments()).toHaveLength(2)
+    expect(f.comments()[1]).toContain('not merged yet at b0b0b0b: its builder Pip is not on the team')
+  })
+
+  it('says nothing of a builder: label off the team that Harness here never gave the task to', async () => {
+    for (const given of [[], [comment('Harness, 09:30: for **Pip**: it can start now.', { user: { login: 'someone-else' } })],
+      [comment('Harness, 09:30: for **Pip**: it can start now.'), comment('Harness, 10:30: for **Amari**: it can start now.')],
+      [comment('Harness, 09:30: for **Pip**: it can start now.', { author_association: 'NONE' })]]) {
+      const f = setup()
+      f.crew.mockResolvedValue({ builders: [{ id: 'amari', name: 'Amari', label: 'builder:amari', machineId: 'mac', engine: 'claude' }], machines: [] })
+      f.github.repo.comments.set(2, given)
+      await settle(f)
+      expect(f.comments()).toEqual([])
       expect(f.merges()).toEqual([])
     }
   })

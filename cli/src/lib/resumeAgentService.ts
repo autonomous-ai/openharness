@@ -14,7 +14,7 @@ import { checkPidRuntime } from './deleteAgentFallback.js'
 import { checkSessionRuntime, resolvePaneEngineProcess } from './paneEngineProcess.js'
 import { engineBin, enginePathOverride } from './engineBin.js'
 import { engineInstallRecipe } from './engineInstall.js'
-import { stopConflictingBackgroundJob } from './claudeBackgroundJob.js'
+import type { ClearBackgroundJob } from '../engines/facets/backgroundJob.js'
 import { buildEngineLaunchArgv, dropPermissionFlagIfUnsupported, engineLaunchEnv, permissionModeApproves, permissionModeFlags, refusePermissionFlagIfUnsupported } from './engineLaunch.js'
 import { workspaceMissing } from './workspaceCheck.js'
 import { buildHarnessSessionLabel } from './harnessSessionLabel.js'
@@ -47,6 +47,8 @@ export interface ResumeAgentServiceDeps {
   announceSession(session: RegisteredSession): void
   relaunchOverrides(session: RegisteredSession, source: RegisteredSession, current: () => boolean): Promise<LaunchOverridesResult>
   prepareSessionResume(session: RegisteredSession): void
+  /** Stops a Claude Code background job holding the session before `--resume`, in its worker (core/engines/backgroundJobs.ts). */
+  stopBackgroundJob?: ClearBackgroundJob
   refreshGridWebSearch(agentId: string, overrides: LaunchOverrides): void
   clearDeleted(agentId: string): void
   attachDsh(session: RegisteredSession): void
@@ -74,7 +76,7 @@ function preparationFailed(agent: string, error: unknown) {
 export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
   const { registry, stoppedAgents, createBackend, noBackendCode = 'TMUX_UNAVAILABLE', backendFor, restartJobs, stopJobs, pinnedControls,
     retainExitedSession, announceSession, relaunchOverrides, prepareSessionResume, adoptSwarmSkill,
-    refreshGridWebSearch, clearDeleted, attachDsh, attachBrowser, attachSession, relaunchMarks } = deps
+    refreshGridWebSearch, clearDeleted, attachDsh, attachBrowser, attachSession, relaunchMarks, stopBackgroundJob } = deps
   const resumeConversations = new Set<string>()
   /** Same short form every other `[…]` line in the daemon logs uses. */
   const sid = (id: string) => id.slice(0, 8)
@@ -340,11 +342,10 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
           // The exact environment the pane is about to get (built below as `paneEnv`): `launchEnv`
           // already carries a native launch's own CLAUDE_CONFIG_DIR (launchOverrides.ts merges
           // `native.environment` into it), and `engineLaunchEnv` adds Windows's own-process variables.
-          await stopConflictingBackgroundJob({
+          await stopBackgroundJob?.(saved.engine, {
             bin: engineBin(saved.engine), sessionId: resumeSessionId,
             env: { ...process.env, ...launchEnv, ...engineLaunchEnv(saved.engine, built.overrides.native) },
-            log: message => console.log(`[resume] ${sid(saved.agentId)} ${message}`),
-          })
+          }, line => console.log(`[resume] ${sid(saved.agentId)} ${line}`))
           transcript?.verify()
           if (!current()) return resumeChanged
         }

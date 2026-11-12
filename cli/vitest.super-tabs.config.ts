@@ -28,6 +28,8 @@ const FILES = ['src/superTabs/shortCommand.ts', ...IN_CORE,
   'src/superTabs/githubWrites.ts',
   // Tokens for a task, counted on its builder's own computer, and the cost said on a landed change (Swarm allocator, package 12).
   'src/superTabs/taskTokens.ts',
+  // How an engine left a start's pane, in fixed words, which the start's failure says (the rehearsal's Codex builders, 11-11).
+  'src/superTabs/engineExit.ts',
 ]
 export default defineConfig({
   test: {

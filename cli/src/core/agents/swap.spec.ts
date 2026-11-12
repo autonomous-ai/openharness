@@ -14,11 +14,9 @@ import { setAgentSignaller } from '../../lib/processSignals.js'
 import { createPaneSwap, SWAP_SETTLE_MS, type PaneSwapDeps } from './swap.js'
 import type { NativeLaunch } from '../../engines/nativeLaunch.js'
 import { NATIVE_LAUNCH_MARKER } from '../../lib/nativePaneHold.js'
-import { stopConflictingBackgroundJob } from '../../lib/claudeBackgroundJob.js'
 
 vi.mock('../../lib/deleteAgentFallback.js', async (real) => ({ ...await real<object>(), terminateDeletedAgent: vi.fn(async () => ({ ok: true })) }))
 vi.mock('../../lib/engineLaunch.js', async (real) => ({ ...await real<object>(), buildEngineLaunchArgv: vi.fn(() => ['zsh', '-lc', 'claude']) }))
-vi.mock('../../lib/claudeBackgroundJob.js', () => ({ stopConflictingBackgroundJob: vi.fn(async () => {}) }))
 vi.mock('../../lib/terminalAgentDiscovery.js', async (real) => ({ ...await real<object>(), processRows: vi.fn(async () => null) }))
 vi.mock('../../lib/paneEngineProcess.js', async (real) => ({
   ...await real<object>(),
@@ -32,6 +30,9 @@ vi.mock('../../lib/processTable.js', async (real) => ({
 const runtime = { backend: 'tmux', paneId: '%4' } as never
 const session = (over: Partial<RegisteredSession> = {}): RegisteredSession =>
   ({ agentId: 'a1', sessionId: 's1', engine: 'claude', registeredAt: 100, tmuxPane: '%4', cwd: '/work', ...over }) as RegisteredSession
+
+/** Core's stop of a `claude --bg` job holding the session (core/engines/backgroundJobs.ts), as main.ts hands it in. */
+const stopBackgroundJob = vi.fn(async (_engine: string, _ask: unknown, _log: (line: string) => void) => {})
 
 /** The pane the last `setup` swaps in, on its fake tmux backend (`restartTargetOf`'s answer). */
 let latest: { backend: never; runtime: never }
@@ -49,6 +50,7 @@ function setup(row: RegisteredSession | null = session()) {
     prepareSessionResume: vi.fn(),
     keepAbandonedConversation: vi.fn(),
     stopNative: vi.fn(async () => {}),
+    stopBackgroundJob: stopBackgroundJob,
   }
   return { deps, tmuxBackend, swap: createPaneSwap(deps) }
 }
@@ -71,9 +73,15 @@ describe('the pane-process swap', () => {
     const prepared = setup().swap.paneSwapDeps(session(), place(), { env: { CLAUDE_CONFIG_DIR: '/custom' } })
     expect(prepared.stopConflictingJob).toBeDefined()
     await prepared.stopConflictingJob!()
-    expect(stopConflictingBackgroundJob).toHaveBeenCalledWith(expect.objectContaining({
+    expect(stopBackgroundJob).toHaveBeenCalledWith('claude', expect.objectContaining({
       sessionId: 's1', env: expect.objectContaining({ CLAUDE_CONFIG_DIR: '/custom' }),
-    }))
+    }), expect.any(Function))
+    // What the stop says reaches the daemon's log as a resume's.
+    const said = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      stopBackgroundJob.mock.lastCall![2]('stopped background job bg-1 holding session s1')
+      expect(said).toHaveBeenCalledWith('[resume] stopped background job bg-1 holding session s1')
+    } finally { said.mockRestore() }
   })
   it('skips the background-job check for a non-Claude engine', () => {
     const prepared = setup(session({ engine: 'codex' })).swap.paneSwapDeps(session({ engine: 'codex' }), place())
@@ -94,9 +102,9 @@ describe('the pane-process swap', () => {
     const prepared = setup().swap.paneSwapDeps(session(), place(), { native, env: { CLAUDE_CONFIG_DIR: '/native/claude-home' } })
     expect(prepared.stopConflictingJob).toBeDefined()
     await prepared.stopConflictingJob!()
-    expect(stopConflictingBackgroundJob).toHaveBeenCalledWith(expect.objectContaining({
+    expect(stopBackgroundJob).toHaveBeenCalledWith('claude', expect.objectContaining({
       sessionId: 's1', env: expect.objectContaining({ CLAUDE_CONFIG_DIR: '/native/claude-home' }),
-    }))
+    }), expect.any(Function))
   })
   it('refuses, before anything is stopped, a relaunch Windows would run through cmd.exe; builds no launch script for it', () => {
     vi.mocked(buildEngineLaunchArgv).mockClear()
