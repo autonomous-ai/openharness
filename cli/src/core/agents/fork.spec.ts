@@ -275,6 +275,16 @@ describe('forking an agent', () => {
     expect(createAndRegisterPane).not.toHaveBeenCalled()
   })
 
+  it('a local run is not forked', async () => {
+    const native = vi.fn()
+    const { deps, fork } = setup(source({ engine: 'openclaw', openclawLocal: work }), { native })
+    expect(await fork.prepare({ agentId: 'a1', name: null, prompt: null }, { id: 'fixture', label: 'harness-openclaw-fixture', current: () => true, hold: vi.fn() }))
+      .toEqual({ ok: false, error: 'FORK_UNSUPPORTED', detail: 'This run cannot be forked.' })
+    expect(native).not.toHaveBeenCalled()
+    expect(deps.relaunchOverrides).not.toHaveBeenCalled()
+    expect(createAndRegisterPane).not.toHaveBeenCalled()
+  })
+
   it('refuses what the plan refuses, a harness no longer installed, a launch it refuses, and a pane it cannot make', async () => {
     vi.mocked(planFork).mockReturnValueOnce({ ok: false, error: 'FORK_UNSUPPORTED', detail: 'amp cannot fork' } as never)
     expect(await setup().fork({ agentId: 'a1', name: null, prompt: null })).toEqual({ ok: false, error: 'FORK_UNSUPPORTED', detail: 'amp cannot fork' })

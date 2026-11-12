@@ -1,8 +1,11 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { commandAvailableInInteractiveShell } from '../../lib/engineLaunch.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
 import type { TerminalBackend } from '../../lib/terminalBackend.js'
+import { terminalRouteKey } from '../../lib/terminalRuntime.js'
 import { createPaneWatcher, type PaneWatcherDeps } from './newPane.js'
 
 vi.mock('../../lib/paneEngineProcess.js', async (real) => ({
@@ -12,7 +15,7 @@ vi.mock('../../lib/paneEngineProcess.js', async (real) => ({
 vi.mock('../../lib/engineLaunch.js', async (real) => ({ ...await real<object>(), commandAvailableInInteractiveShell: vi.fn(async () => true) }))
 
 const pending = { agentId: 'a1', sessionId: '', engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%7' }] } as RegisteredSession
-const runtime = { backend: 'tmux', paneId: '%7' }
+const runtime = { backend: 'tmux' as const, paneId: '%7' }
 const spawned = { runtime } as never
 const identity = { pid: 99, startMarker: 'now' }
 // The pane's backend: what the watcher asks about the pane it opened.
@@ -38,6 +41,7 @@ function setup(over: Partial<PaneWatcherDeps> = {}) {
     captureTerminal: vi.fn(async () => 'error: unknown flag --plan'),
     retainExitedSession: vi.fn(),
     terminals: { backendFor: vi.fn(() => backend) },
+    holdRoute: vi.fn(() => vi.fn()),
     ...over,
   }
   return { deps, rows, watch: createPaneWatcher(deps) }
@@ -252,6 +256,182 @@ describe('watching a new pane', () => {
     vi.mocked(deps.announceSession).mockClear()
     await watch('claude', pending, spawned, ['claude'], undefined, 0)
     expect(deps.announceSession).not.toHaveBeenCalled()
+  })
+
+  describe('a local OpenClaw launch', () => {
+    const local = { ...pending, engine: 'openclaw', openclawLocal: '/run/skill-1' } as RegisteredSession
+    // OpenClaw 2026.11.2's TUI on a --local folder: no URL in its title, `local ready | idle` on its status line.
+    const localScreen = readFileSync(join(import.meta.dirname, '../../engines/openclaw/__fixtures__/screen-plain.txt'), 'utf8')
+      .replace('openclaw tui - ws://127.0.0.1:18789 - ', 'openclaw tui - local embedded - ').replace(' connected | idle', ' local ready | idle')
+    const logLines = () => [...vi.mocked(console.log).mock.calls, ...vi.mocked(console.warn).mock.calls].map(([line]) => String(line))
+
+    it('is not ready until its TUI has drawn', async () => {
+      const { deps, rows, watch } = setup()
+      rows.set('a1', local)
+      vi.mocked(resolvePaneEngineProcess).mockResolvedValue(identity as never)
+      vi.mocked(deps.captureTerminal).mockResolvedValueOnce('').mockResolvedValueOnce(null).mockResolvedValueOnce(localScreen)
+      const done = watch('openclaw', local, spawned, ['openclaw'], undefined)
+      await vi.advanceTimersByTimeAsync(50)
+      expect(deps.registry.setLaunch).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(100)
+      await done
+      expect(deps.captureTerminal).toHaveBeenCalledTimes(3)
+      expect(deps.captureTerminal).toHaveBeenCalledWith('a1', 40)
+      expect(deps.registry.setLaunch).toHaveBeenCalledExactlyOnceWith('a1', { state: 'ready' })
+      expect(deps.registry.updateProcessIdentity).toHaveBeenCalledOnce()
+    })
+
+    it('stops looking at a launch superseded while its screen was read', async () => {
+      const { deps, rows, watch } = setup()
+      const entry = { ...local, launch: { state: 'starting', nativeToken: 'original' } } as RegisteredSession
+      rows.set('a1', entry)
+      vi.mocked(resolvePaneEngineProcess).mockResolvedValue(identity as never)
+      vi.mocked(deps.captureTerminal).mockImplementationOnce(async () => {
+        rows.set('a1', { ...entry, launch: { state: 'starting', nativeToken: 'replacement' } } as RegisteredSession)
+        return localScreen
+      })
+      await watch('openclaw', entry, spawned, ['openclaw'], undefined)
+      expect(deps.registry.setLaunch).not.toHaveBeenCalled()
+      expect(deps.registry.updateProcessIdentity).not.toHaveBeenCalled()
+    })
+
+    it("that left on OpenClaw's lock says another OpenClaw is using the folder", async () => {
+      const { deps, rows, watch } = setup()
+      rows.set('a1', local)
+      vi.mocked(resolvePaneEngineProcess).mockResolvedValueOnce(identity as never).mockResolvedValue(null)
+      paneState.mockResolvedValueOnce({ dead: false, engineExit: null } as never).mockResolvedValue({ dead: false, engineExit: 1 } as never)
+      vi.mocked(deps.captureTerminal).mockResolvedValueOnce('')
+        .mockResolvedValueOnce('A Gateway is running for this state directory (pid 7, port 18789). Run without --local to use it.')
+      const done = watch('openclaw', local, spawned, ['openclaw'], undefined)
+      await vi.advanceTimersByTimeAsync(50)
+      await done
+      expect(deps.registry.setLaunch).toHaveBeenCalledExactlyOnceWith('a1', { state: 'failed', error: 'OPENCLAW_FOLDER_IN_USE',
+        detail: 'Another OpenClaw is using this folder. Give each run its own --local folder.' })
+      expect(deps.registry.releaseEngine).not.toHaveBeenCalled()
+      expect(deps.retainExitedSession).not.toHaveBeenCalled()
+      expect(vi.mocked(deps.announceSession).mock.calls.at(-1)![0].launch).toMatchObject({ state: 'failed', error: 'OPENCLAW_FOLDER_IN_USE' })
+      expect(logLines()).toContain('[agent] create failed · openclaw · Another OpenClaw is using this folder. Give each run its own --local folder.')
+      expect(logLines().join('\n')).not.toContain('/run/skill-1')
+      // Failed into a row the registry no longer has: nothing to announce.
+      vi.mocked(deps.registry.setLaunch).mockReturnValueOnce(null)
+      vi.mocked(deps.announceSession).mockClear()
+      vi.mocked(deps.captureTerminal).mockResolvedValueOnce('failed to acquire gateway state ownership')
+      await watch('openclaw', local, spawned, ['openclaw'], undefined)
+      expect(deps.announceSession).not.toHaveBeenCalled()
+    })
+
+    it('that left for any other reason leaves a terminal, as for every engine', async () => {
+      const { deps, rows, watch } = setup()
+      rows.set('a1', local)
+      paneState.mockResolvedValue({ dead: false, engineExit: 1 } as never)
+      vi.mocked(deps.captureTerminal).mockResolvedValueOnce('error: unknown option')
+      await watch('openclaw', local, spawned, ['openclaw'], undefined)
+      // A pane that could not be read says nothing of a lock.
+      vi.mocked(deps.captureTerminal).mockResolvedValueOnce(null)
+      await watch('openclaw', local, spawned, ['openclaw'], undefined)
+      expect(deps.registry.releaseEngine).toHaveBeenCalledTimes(2)
+      expect(deps.registry.releaseEngine).toHaveBeenCalledWith('a1')
+      expect(deps.registry.setLaunch).not.toHaveBeenCalled()
+    })
+
+    /**
+     * The reconciler's side of the race: a pass that finds OpenClaw's process in a pane nobody holds marks its starting
+     * row ready (discovery.ts `onObserved`), which ends this launch's claim on the row; a held pane it leaves alone.
+     */
+    const discovery = () => {
+      const held = new Set<string>()
+      const released = vi.fn((key: string) => { held.delete(key) })
+      const holdRoute = vi.fn((key: string) => {
+        held.add(key)
+        return () => released(key)
+      })
+      const pass = (rows: Map<string, RegisteredSession>) => {
+        if (held.has(terminalRouteKey(runtime))) return
+        rows.set('a1', { ...rows.get('a1')!, processIdentity: identity, launch: { state: 'ready' } } as RegisteredSession)
+      }
+      return { holdRoute, released, pass }
+    }
+    const starting = { ...local, launch: { state: 'starting', nativeToken: 'original' } } as RegisteredSession
+
+    it('keeps discovery off its pane until its TUI has drawn, and finishes its own launch', async () => {
+      const { holdRoute, released, pass } = discovery()
+      const { deps, rows, watch } = setup({ holdRoute })
+      rows.set('a1', starting)
+      vi.mocked(resolvePaneEngineProcess).mockResolvedValue(identity as never)
+      // A pass lands while the watcher waits for the TUI: OpenClaw's process is up, its screen still blank.
+      vi.mocked(deps.captureTerminal).mockImplementationOnce(async () => { pass(rows); return '' }).mockResolvedValueOnce(localScreen)
+      const done = watch('openclaw', starting, spawned, ['openclaw'], undefined)
+      await vi.advanceTimersByTimeAsync(50)
+      await done
+      expect(logLines().find((line) => line.includes('create ready'))).toMatch(/^\[agent\] create ready · openclaw · local · agent a1 · /)
+      expect(releaseHold).toHaveBeenCalledWith(runtime)
+      expect(deps.triggerHint).toHaveBeenCalledWith(runtime, 'openclaw')
+      expect(deps.registry.setLaunch).toHaveBeenCalledExactlyOnceWith('a1', { state: 'ready' })
+      expect(rows.get('a1')).toBe(starting)
+      expect(holdRoute).toHaveBeenCalledExactlyOnceWith(terminalRouteKey(runtime))
+      // The pane is discovery's again before the pass the watcher asks for, which binds it.
+      expect(released.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(deps.triggerHint).mock.invocationCallOrder[0]!)
+    })
+
+    it("that left on OpenClaw's lock while discovery looked still says another OpenClaw is using the folder", async () => {
+      const { holdRoute, released, pass } = discovery()
+      const { deps, rows, watch } = setup({ holdRoute })
+      rows.set('a1', starting)
+      vi.mocked(resolvePaneEngineProcess).mockResolvedValueOnce(identity as never).mockResolvedValue(null)
+      paneState.mockResolvedValueOnce({ dead: false, engineExit: null } as never).mockResolvedValue({ dead: false, engineExit: 1 } as never)
+      vi.mocked(deps.captureTerminal).mockImplementationOnce(async () => { pass(rows); return '' })
+        .mockResolvedValueOnce('failed to acquire gateway state ownership')
+      const done = watch('openclaw', starting, spawned, ['openclaw'], undefined)
+      await vi.advanceTimersByTimeAsync(50)
+      await done
+      expect(deps.registry.setLaunch).toHaveBeenCalledExactlyOnceWith('a1', { state: 'failed', error: 'OPENCLAW_FOLDER_IN_USE',
+        detail: 'Another OpenClaw is using this folder. Give each run its own --local folder.' })
+      expect(deps.registry.releaseEngine).not.toHaveBeenCalled()
+      expect(released).toHaveBeenCalledOnce()
+    })
+
+    // The hold has no timer: a way out that kept it would leave the pane unbound for the daemon's life.
+    it.each(['closed', 'pane gone', 'pane dead', 'no backend', 'capture failed', 'timed out'] as const)(
+      'gives its pane back to discovery however it ends: %s', async (exit) => {
+        const { holdRoute, released, pass } = discovery()
+        const { deps, rows, watch } = setup({ holdRoute,
+          ...exit === 'no backend' ? { terminals: { backendFor: vi.fn(() => undefined) } } : {} })
+        rows.set('a1', starting)
+        if (exit === 'closed') rows.delete('a1')
+        if (exit === 'pane gone') paneState.mockResolvedValue('gone')
+        if (exit === 'pane dead') paneState.mockResolvedValue({ dead: true, engineExit: null } as never)
+        if (exit === 'capture failed') {
+          vi.mocked(resolvePaneEngineProcess).mockResolvedValue(identity as never)
+          vi.mocked(deps.captureTerminal).mockRejectedValue(new Error('tmux timed out'))
+        }
+        const done = watch('openclaw', starting, spawned, ['openclaw'], undefined, exit === 'timed out' ? 100 : undefined)
+        await vi.advanceTimersByTimeAsync(1_000)
+        await done
+        expect(released).toHaveBeenCalledExactlyOnceWith(terminalRouteKey(runtime))
+        // Discovery has the pane again: its next pass marks the run ready.
+        pass(rows)
+        if (exit !== 'closed') expect(rows.get('a1')?.launch).toEqual({ state: 'ready' })
+      })
+
+    it('says local on its ready line, and no folder', async () => {
+      const { deps, rows, watch } = setup()
+      rows.set('a1', local)
+      vi.mocked(resolvePaneEngineProcess).mockResolvedValue(identity as never)
+      vi.mocked(deps.captureTerminal).mockResolvedValueOnce(localScreen)
+      await watch('openclaw', local, spawned, ['openclaw'], undefined)
+      expect(logLines().find((line) => line.includes('create ready'))).toMatch(/^\[agent\] create ready · openclaw · local · agent a1 · \d+ms$/)
+      expect(logLines().join('\n')).not.toContain('/run/skill-1')
+    })
+  })
+
+  it('is ready as soon as its process is seen when the launch has no folder', async () => {
+    const { deps, watch } = setup()
+    vi.mocked(resolvePaneEngineProcess).mockResolvedValueOnce(identity as never)
+    await watch('openclaw', { ...pending, engine: 'openclaw' } as RegisteredSession, spawned, ['openclaw'], undefined)
+    expect(deps.captureTerminal).not.toHaveBeenCalled()
+    expect(deps.holdRoute).not.toHaveBeenCalled()
+    expect(deps.registry.setLaunch).toHaveBeenCalledExactlyOnceWith('a1', { state: 'ready' })
+    expect(vi.mocked(console.log).mock.calls.map(([line]) => String(line)).find((line) => line.includes('create ready'))).toMatch(/^\[agent\] create ready · openclaw · agent a1 · /)
   })
 
   it('reports a pane no configured backend holds, and asks nothing about it', async () => {

@@ -3,6 +3,7 @@ import { terminateDeletedAgent, checkPidRuntime, type TerminateDeps } from './de
 import type { RegisteredSession } from './registry.js'
 import type { RuntimeCheck } from './paneEngineProcess.js'
 import type { ProcessRow } from './processTable.js'
+import type { TreeProcess } from './processTree.js'
 
 const processRows = vi.hoisted(() => vi.fn())
 vi.mock('./processTable.js', async (importOriginal) => ({
@@ -27,6 +28,19 @@ const runtime = (alive: boolean): RuntimeCheck => alive
   ? { state: 'alive' }
   : { state: 'gone', reason: 'process exited' }
 
+/** The engine's checks in turn, the last one from then on. */
+const sequence = (...alive: boolean[]) => {
+  let at = 0
+  return async () => runtime(alive[Math.min(at++, alive.length - 1)]!)
+}
+
+const tree: TreeProcess[] = [
+  { pid: 10, pgid: 4242, startMarker: 'm10' }, // in the engine's own group
+  { pid: 20, pgid: 20, startMarker: 'm20' }, // left the session: leads its own group
+  { pid: 21, pgid: 20, startMarker: 'm21' },
+  { pid: 30, pgid: 77, startMarker: 'm30' }, // in a group led from outside the tree (the pane's shell)
+]
+
 /** Deps whose clock is instant, so the real (multi-second) waits do not slow the suite down. */
 function deps(over: Partial<TerminateDeps> = {}): TerminateDeps & { kills: Array<[number, string]>; logs: string[] } {
   const kills: Array<[number, string]> = []
@@ -43,7 +57,7 @@ function deps(over: Partial<TerminateDeps> = {}): TerminateDeps & { kills: Array
 }
 
 describe('delete-agent process termination', () => {
-  it.each(['initial wait', 'identity read', 'grace read', 'escalation read'] as const)('does not signal after ownership is revoked during %s', async phase => {
+  it.each(['initial wait', 'identity read', 'tree read', 'grace read', 'escalation read'] as const)('does not signal after ownership is revoked during %s', async phase => {
     let current = true, reads = 0
     const d = deps({ current: () => current,
       sleep: async () => { if (phase === 'initial wait') current = false },
@@ -53,9 +67,10 @@ describe('delete-agent process termination', () => {
           || (phase === 'escalation read' && reads === 3)) current = false
         return runtime(true)
       },
+      descendants: async () => { if (phase === 'tree read') current = false; return [] },
     })
     expect(await terminateDeletedAgent(SESSION, d, 0, 250)).toBe('not-ours')
-    expect(d.kills).toEqual(phase === 'initial wait' || phase === 'identity read' ? [] : [[4242, 'SIGTERM']])
+    expect(d.kills).toEqual(['initial wait', 'identity read', 'tree read'].includes(phase) ? [] : [[4242, 'SIGTERM']])
   })
 
   it('does nothing when the engine already left', async () => {
@@ -163,6 +178,55 @@ describe('delete-agent process termination', () => {
     })
     await expect(terminateDeletedAgent(SESSION, d)).resolves.toBe('terminated')
     expect(d.kills).toEqual([[4242, 'SIGTERM']])
+  })
+})
+
+// A tool an engine spawned `detached` (OpenClaw on POSIX) is in neither the engine's group nor its session: only a
+// signal of its own ends it (#4173).
+describe('delete-agent termination of the engine\'s tree', () => {
+  it('SIGTERMs the engine once, each group one of its tree leads, and the rest by pid', async () => {
+    const d = deps({ checkRuntime: sequence(true, false), descendants: async () => tree, survivors: async () => [] })
+    expect(await terminateDeletedAgent(SESSION, d)).toBe('terminated')
+    expect(d.kills).toEqual([[4242, 'SIGTERM'], [-20, 'SIGTERM'], [10, 'SIGTERM'], [30, 'SIGTERM']])
+  })
+
+  it('SIGKILLs what is left of the tree after the grace, by pid', async () => {
+    const left = [[tree[2]!], [tree[2]!], []]
+    const d = deps({ checkRuntime: sequence(true, false), descendants: async () => tree, survivors: async () => left.shift() ?? [] })
+    expect(await terminateDeletedAgent(SESSION, d)).toBe('terminated')
+    expect(d.kills).toContainEqual([21, 'SIGKILL'])
+    expect(d.kills.some(([pid, signal]) => pid < 0 && signal === 'SIGKILL')).toBe(false)
+  })
+
+  // The engine left early, and the rest of the grace is seconds: a process that leaves meanwhile can have its number
+  // handed to another before the SIGKILL.
+  it('reads its tree again before a SIGKILL that follows the rest of the grace', async () => {
+    const left = [[tree[2]!], []]
+    const d = deps({ checkRuntime: sequence(true, false), descendants: async () => tree, survivors: async () => left.shift() ?? [] })
+    expect(await terminateDeletedAgent(SESSION, d)).toBe('terminated')
+    expect(d.kills.filter(([, signal]) => signal === 'SIGKILL')).toEqual([])
+  })
+
+  it('fails the stop when one of the tree outlives its SIGKILL, and says which', async () => {
+    const d = deps({ checkRuntime: sequence(true, false), descendants: async () => tree, survivors: async () => [tree[2]!] })
+    expect(await terminateDeletedAgent(SESSION, d)).toBe('failed')
+    expect(d.logs.join('\n')).toContain('pid 21 is STILL running after SIGKILL')
+  })
+
+  it('stops the engine alone, and says so, when its tree cannot be listed', async () => {
+    const d = deps({ checkRuntime: sequence(true, false), descendants: async () => null })
+    expect(await terminateDeletedAgent(SESSION, d)).toBe('terminated')
+    expect(d.kills).toEqual([[4242, 'SIGTERM']])
+    expect(d.logs.join('\n')).toContain("could not list claude's processes")
+  })
+
+  it('lists the tree once, before the first signal', async () => {
+    const signalledBefore: number[] = []
+    const descendants = vi.fn(async () => { signalledBefore.push(d.kills.length); return tree })
+    const d = deps({ checkRuntime: sequence(true, false), descendants, survivors: async () => [] })
+    await terminateDeletedAgent(SESSION, d)
+    expect(descendants).toHaveBeenCalledOnce()
+    expect(signalledBefore).toEqual([0])
   })
 })
 

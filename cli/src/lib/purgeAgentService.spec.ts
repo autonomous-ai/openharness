@@ -5,6 +5,8 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { registry, type RegisteredSession } from './registry.js'
 import { StoppedAgentStore } from './stoppedAgents.js'
+import { AgentCreationReceiptError } from './agentCreationReceipt.js'
+import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
 import { SessionCheckpointStore } from './sessionCheckpoint.js'
 import { PurgeAgentService, inspectNativeHistory, eraseNativeHistory, sessionDataBytes, type PurgeRequest } from './purgeAgentService.js'
 import { builtinSqlite } from './sqliteBuiltin.js'
@@ -15,6 +17,7 @@ let root: string, session: RegisteredSession, stopped: StoppedAgentStore, checkp
 let service: PurgeAgentService, target: Omit<PurgeRequest, 'mode'>, now: number
 let stop = vi.fn<(id: string, options: StopAgentOptions) => Promise<void>>()
 let deleted = vi.fn<(session: RegisteredSession) => void>()
+let eraseRecords = vi.fn<(session: RegisteredSession) => Promise<void>>()
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'harness-purge-'))
   const codexHome = join(root, 'profile'), cwd = join(root, 'project')
@@ -33,9 +36,9 @@ beforeEach(() => {
     stopped.save(registry.byAgent(id)!)
     registry.removeAgent(id)
   })
-  deleted = vi.fn(); now = 1000
+  deleted = vi.fn(); eraseRecords = vi.fn(async () => {}); now = 1000
   service = new PurgeAgentService({ live: id => registry.byAgent(id), sessions: () => [...registry.list(), ...stopped.list()],
-    stopped, checkpoints, stop, restarting: () => false, deleted, now: () => now })
+    stopped, checkpoints, stop, restarting: () => false, deleted, eraseRecords, now: () => now })
   target = { agentId: session.agentId, sessionId: session.sessionId, createdAt: session.registeredAt }
 })
 afterEach(() => { for (const row of registry.list()) registry.removeAgent(row.agentId); rmSync(root, { recursive: true, force: true }); vi.restoreAllMocks() })
@@ -151,18 +154,82 @@ it('previews without stopping, then deletes only reviewed history and checkpoint
   expect(await remove(plan.reviewId)).toHaveProperty('error')
   expect(stop).toHaveBeenCalledOnce()
 })
+describe('every record of a harness', () => {
+  const KEPT = { what: 'engine-store', reason: "OpenClaw's store is kept: delete its session with OpenClaw." }
+  const deleteOnce = async () => service.request({ ...target, mode: 'delete', reviewId: String((await review()).reviewId),
+    choices: { sessionData: true, worktreeData: false } })
+
+  it('an OpenClaw harness is deleted: what Harness keeps goes, its store is kept and said', async () => {
+    Object.assign(session, { engine: 'openclaw', sessionId: 'agent:main:harness-1', transcriptPath: null, codexHome: null })
+    target.sessionId = session.sessionId
+    expect(await inspectNativeHistory(session)).toEqual({ bytes: 0, kept: KEPT })
+    expect(await deleteOnce()).toMatchObject({ deleted: true, sessionDeleted: true, historyKept: false, kept: [KEPT] })
+    expect(eraseRecords).toHaveBeenCalledWith(expect.objectContaining({ agentId: session.agentId }))
+    expect(deleted).toHaveBeenCalledOnce()
+    expect(eraseRecords.mock.invocationCallOrder[0]).toBeLessThan(deleted.mock.invocationCallOrder[0]!)
+    expect(stopped.get(session.agentId)).toBeNull()
+  })
+
+  it('a harness whose engine\'s history Harness erases keeps nothing', async () => {
+    const result = await deleteOnce()
+    expect(result).toMatchObject({ deleted: true, sessionDeleted: true, historyKept: false })
+    expect(result).not.toHaveProperty('kept')
+    expect(existsSync(session.transcriptPath!)).toBe(false)
+  })
+
+  it('erases the checkpoints saved under every session key the harness had', async () => {
+    session.earlierSessionIds = ['earlier-session']
+    const saved = (s: RegisteredSession) => join(root, `${s.sessionId}.checkpoint`)
+    const files = vi.spyOn(checkpoints, 'deletionFiles').mockImplementation(s => [saved(s)])
+    for (const key of ['selected-session', 'earlier-session']) writeFileSync(join(root, `${key}.checkpoint`), `screen of ${key}`)
+    const plan = await review()
+    expect(plan.sessionPaths).toEqual(expect.arrayContaining(['selected-session', 'earlier-session'].map(key => realpathSync(join(root, `${key}.checkpoint`)))))
+    expect(await service.request({ ...target, mode: 'delete', reviewId: String(plan.reviewId) })).toMatchObject({ deleted: true, sessionDeleted: true })
+    expect(files.mock.calls.map(([s]) => s.sessionId)).toEqual(['selected-session', 'earlier-session', 'selected-session', 'earlier-session'])
+    expect(files.mock.calls.every(([s]) => s.agentId === session.agentId && s.engine === 'codex')).toBe(true)
+    expect(existsSync(join(root, 'selected-session.checkpoint'))).toBe(false)
+    expect(existsSync(join(root, 'earlier-session.checkpoint'))).toBe(false)
+  })
+
+  it('is refused, and says why, when its other records cannot be erased; asked again, it finishes', async () => {
+    eraseRecords.mockRejectedValueOnce(new Error('The agent ledger is busy. Try again.'))
+    const refused = await deleteOnce()
+    expect(refused).toMatchObject({ error: 'DELETE_REFUSED', sessionDeleted: false })
+    expect(String(refused.detail)).toContain('The agent ledger is busy. Try again.')
+    expect(deleted).not.toHaveBeenCalled()
+    expect(stopped.get(session.agentId)).not.toBeNull()
+    expect(await deleteOnce()).toMatchObject({ deleted: true, sessionDeleted: true })
+    expect(eraseRecords).toHaveBeenCalledTimes(2)
+    expect(deleted).toHaveBeenCalledOnce()
+    expect(stopped.get(session.agentId)).toBeNull()
+    expect(stop).toHaveBeenCalledOnce()
+  })
+
+  it('says in plain words a launch request it could not erase, never the receipt\'s code', async () => {
+    eraseRecords.mockRejectedValueOnce(new AgentCreationReceiptError('CREATION_STORAGE_FAILED'))
+    const refused = await deleteOnce()
+    expect(refused).toMatchObject({ error: 'DELETE_REFUSED', sessionDeleted: false })
+    expect(String(refused.detail)).toMatch(/^Harness could not erase this harness's saved launch request\. Try deleting it again\./)
+    expect(String(refused.detail)).not.toContain('CREATION_STORAGE_FAILED')
+    // A folder this account may not use: what its owner does about it, too.
+    eraseRecords.mockRejectedValueOnce(new AgentCreationReceiptError('CREATION_STORAGE_FAILED', 'The creation folder ~/x is not usable by this account (permissions).'))
+    expect(String((await deleteOnce()).detail)).toContain("saved launch request. The creation folder ~/x is not usable by this account (permissions). Try deleting it again.")
+  })
+})
+
 // Security review 2 of #2493: a Swarm Product Manager stopped by its engine's switch, or by a crash, is reopened on its saved
 // conversation; deleting it left nothing to reopen. Its review is read as any other; its deletion is refused before anything.
 it('refuses to delete a Swarm Product Manager\'s saved conversation, live or stopped, deleting and stopping nothing', async () => {
   const leadProtected = vi.fn((id: string) => id === session.agentId)
   const svc = new PurgeAgentService({ live: id => registry.byAgent(id), sessions: () => [...registry.list(), ...stopped.list()],
-    stopped, checkpoints, stop, restarting: () => false, deleted, now: () => now, leadProtected })
+    stopped, checkpoints, stop, restarting: () => false, deleted, eraseRecords, now: () => now, leadProtected })
   const plan = await svc.request({ ...target, mode: 'inspect' })
   expect(plan.reviewId).toEqual(expect.any(String))
   expect(await svc.request({ ...target, mode: 'delete', reviewId: String(plan.reviewId) }))
     .toEqual({ error: 'LEAD_PROTECTED', detail: 'This harness is the Product Manager of a Swarm project. Delete its project first to stop it.' })
   expect(existsSync(session.transcriptPath!)).toBe(true)
   expect(stop).not.toHaveBeenCalled()
+  expect(eraseRecords).not.toHaveBeenCalled()
   expect(deleted).not.toHaveBeenCalled()
 })
 
@@ -207,6 +274,37 @@ it('refuses symlinks, hard links, foreign conversation names and monitor deletio
   expect(await review()).toHaveProperty('error')
   expect(stop).not.toHaveBeenCalled()
 })
+// A lamp's run teardown deletes its harness while an OpenClaw --local run still reads "starting local runtime": the
+// launch is stopped, as a close stops it, and erased; refused only while it cannot be stopped yet, and said so.
+describe('a harness still starting', () => {
+  beforeEach(() => {
+    Object.assign(session, { launch: { state: 'starting' }, sessionId: '', transcriptPath: null, processIdentity: null })
+    target.sessionId = null
+  })
+
+  it('is stopped and erased, its engine found between the review and the delete', async () => {
+    const plan = await review()
+    expect(plan.reviewId).toEqual(expect.any(String))
+    session.processIdentity = { pid: 4242, startMarker: 'Thu Nov 12 10:00:00 2026', executable: 'codex' }
+    expect(await remove(plan.reviewId)).toMatchObject({ deleted: true, sessionDeleted: true })
+    expect(stop).toHaveBeenCalledOnce()
+    expect(eraseRecords).toHaveBeenCalledOnce()
+    expect(deleted).toHaveBeenCalledOnce()
+    expect(stopped.get(session.agentId)).toBeNull()
+  })
+
+  it('that cannot be stopped yet is refused in plain words, nothing deleted', async () => {
+    const plan = await review()
+    stop.mockRejectedValueOnce(new IdentityReadUnavailable('the native control descriptor type is unavailable'))
+    const refused = await remove(plan.reviewId)
+    expect(refused).toMatchObject({ error: 'DELETE_REFUSED', stopped: false, sessionDeleted: false })
+    expect(refused.detail).toBe('This harness is still starting. Try again in a moment.')
+    expect(eraseRecords).not.toHaveBeenCalled()
+    expect(deleted).not.toHaveBeenCalled()
+    expect(registry.byAgent(session.agentId)).toBeDefined()
+  })
+})
+
 it('can explicitly review remaining checkpoints after an interrupted partial deletion', async () => {
   await checkpoints.save(session, { screen: 'keep until confirmed' })
   stopped.save(session); registry.removeAgent(session.agentId)

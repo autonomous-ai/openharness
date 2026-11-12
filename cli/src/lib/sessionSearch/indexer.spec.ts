@@ -1,12 +1,13 @@
-import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { LiveEvent } from '../normalize.js'
-import { SessionSearchIndex, folderWords, type SearchSource } from './indexer.js'
+import { SessionSearchIndex, folderWords, type SearchSource, type SessionSearchIndexOptions } from './indexer.js'
 import { SessionSearchStore } from './store.js'
+import { builtinSqlite } from '../sqliteBuiltin.js'
 
 const dirs: string[] = []
 const cleanups: Array<() => void> = []
@@ -478,5 +479,142 @@ describe('SessionSearchIndex', () => {
     expect(folderWords('/home/me/code/worktrees/autonomous-harness/dapper-otter')).toBe('dapper-otter autonomous-harness')
     expect(folderWords('C:\\work\\app')).toBe('app work')
     expect(folderWords(null)).toBe('')
+  })
+})
+
+describe('SessionSearchIndex forgetting', () => {
+  // a1 has s1 (current) and s0 (before a /new); a2 has s2; two outside conversations e1, e2 (agent id '').
+  const source = (agentId: string, sessionId: string): SearchSource => ({
+    agentId, sessionId, engine: 'claude', transcriptPath: null, header: `${sessionId} work`, changedAt: 1,
+    ...(agentId ? {} : { external: { cwd: '/work', origin: 'terminal', title: sessionId } }),
+  })
+  let path: string
+  let store: SessionSearchStore
+  let index: SessionSearchIndex
+  let sources: SearchSource[]
+  let discover: () => Promise<void>
+  let options: Omit<SessionSearchIndexOptions, 'store'>
+  let logs: string[]
+  const drained = (target: SessionSearchIndex) => vi.waitFor(() => {
+    const state = target as unknown as { discovering: boolean; running: boolean }
+    expect(state.discovering || state.running).toBe(false)
+  })
+  const indexOn = (onStore: SessionSearchStore) => {
+    const made = new SessionSearchIndex({ ...options, store: onStore })
+    cleanups.push(() => { made.stop(); onStore.close() })
+    return made
+  }
+
+  beforeEach(async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'session-search-forget-'))
+    dirs.push(dir)
+    path = join(dir, 'index.db')
+    sources = [source('a1', 's1'), source('a2', 's2'), source('', 'e1'), source('', 'e2')]
+    discover = async () => {}
+    logs = []
+    options = { sources: () => sources, agents: () => ['a1', 'a2'], discover: () => discover(), log: (line) => logs.push(line) }
+    store = SessionSearchStore.open(path)!
+    store.writeSession({ sessionId: 's0', agentId: 'a1', engine: 'claude', path: '', header: 's0 work', size: 0, mtime: 0,
+      resumeOffset: 0, resumeTurn: 0, lastAt: 1, turns: 0 }, 0, [])
+    index = indexOn(store)
+    index.sweep(); await drained(index)
+    expect(store.sessionIds().sort()).toEqual(['e1', 'e2', 's0', 's1', 's2'])
+  })
+
+  it("deleting a harness's conversation removes every session filed under its agent, and no one else's", () => {
+    index.deleteHistory('s1')
+    expect(store.sessionIds().sort()).toEqual(['e1', 'e2', 's2'])
+    index.deleteHistory('e1')
+    expect(store.sessionIds().sort()).toEqual(['e2', 's2'])
+  })
+
+  it('a deleted conversation still on disk is not indexed again, by this index or by a new one on the same store', async () => {
+    // Its source is still listed: OpenClaw's kept store.
+    index.deleteHistory('s1')
+    index.sweep(); await drained(index)
+    expect(store.session('s1')).toBeUndefined()
+    const restarted = indexOn(SessionSearchStore.open(path)!)
+    restarted.sweep(); await drained(restarted)
+    expect(restarted.session('s1')).toBeUndefined()
+  })
+
+  it('the exclusion goes once the conversation is gone from disk, never after a discovery that failed', async () => {
+    index.deleteHistory('s1')
+    sources = sources.filter((listed) => listed.sessionId !== 's1')
+    discover = async () => { throw new Error('scan failed') }
+    index.sweep(); await drained(index)
+    expect(store.excluded().has('s1')).toBe(true)
+    discover = async () => {}
+    index.sweep(); await drained(index)
+    expect(store.excluded().has('s1')).toBe(false)
+  })
+
+  // `harness search` reads the file while the daemon runs: a read open across the delete keeps the checkpoint from
+  // finishing, and the erased words stay in the files until one does.
+  it('a checkpoint a reader held is said, and finished at the next sweep', async () => {
+    store.writeSession({ sessionId: 's9', agentId: 'a1', engine: 'claude', path: '', header: 's9 work', size: 0, mtime: 0,
+      resumeOffset: 0, resumeTurn: 0, lastAt: 1, turns: 1 }, 0, [{ turn: 0, offset: 0, at: null, ask: 'email zanzibarquokka', answer: 'sent', tools: '' }])
+    store.checkpoint()
+    const reader = new (builtinSqlite()!)(path, { readOnly: true })
+    reader.exec('BEGIN')
+    reader.prepare('SELECT count(*) FROM turns').all()
+    index.deleteHistory('s1')
+    expect(logs).toContain('[search] a reader held the index: what a delete erased stays in its files until it lets go')
+    reader.exec('COMMIT')
+    reader.close()
+    index.sweep(); await drained(index)
+    const bytes = Buffer.concat(['', '-wal'].filter((suffix) => existsSync(path + suffix)).map((suffix) => readFileSync(path + suffix)))
+    expect(bytes.includes('zanzibarquokka')).toBe(false)
+  })
+
+  // A search's read lasts milliseconds: the delete's words leave the files a second after it, not at a sweep minutes on.
+  it('a checkpoint a reader held is asked again a second later, a few times at most', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      store.writeSession({ sessionId: 's9', agentId: 'a1', engine: 'claude', path: '', header: 's9 work', size: 0, mtime: 0,
+        resumeOffset: 0, resumeTurn: 0, lastAt: 1, turns: 1 }, 0, [{ turn: 0, offset: 0, at: null, ask: 'email zanzibarquokka', answer: 'sent', tools: '' }])
+      store.checkpoint()
+      const checkpoint = vi.spyOn(store, 'checkpoint')
+      const reader = new (builtinSqlite()!)(path, { readOnly: true })
+      reader.exec('BEGIN')
+      reader.prepare('SELECT count(*) FROM turns').all()
+      index.deleteHistory('s1')
+      vi.advanceTimersByTime(1_000)
+      expect(checkpoint).toHaveBeenCalledTimes(2)
+      reader.exec('COMMIT')
+      reader.close()
+      vi.advanceTimersByTime(2_000)
+      expect(checkpoint).toHaveBeenCalledTimes(3)
+      const bytes = Buffer.concat(['', '-wal'].filter((suffix) => existsSync(path + suffix)).map((suffix) => readFileSync(path + suffix)))
+      expect(bytes.includes('zanzibarquokka')).toBe(false)
+      vi.advanceTimersByTime(60_000)
+      expect(checkpoint).toHaveBeenCalledTimes(3)
+      // One a reader never lets go is asked again a few times, then left to the sweep.
+      const held = new (builtinSqlite()!)(path, { readOnly: true })
+      held.exec('BEGIN')
+      held.prepare('SELECT count(*) FROM turns').all()
+      index.deleteHistory('s2')
+      vi.advanceTimersByTime(10 * 60_000)
+      expect(checkpoint).toHaveBeenCalledTimes(3 + 1 + 5)
+      held.exec('COMMIT')
+      held.close()
+    } finally { vi.useRealTimers() }
+  })
+
+  it('a pass still reading a deleted conversation does not write it back, though a sweep meanwhile found it gone', async () => {
+    let read: ((events: LiveEvent[]) => void) | undefined
+    sources = [...sources, { ...source('a3', 'h1'), readHistory: () => new Promise<LiveEvent[]>((resolve) => { read = resolve }) }]
+    index.sweep()
+    await vi.waitFor(() => expect(read).toBeDefined())
+    index.deleteHistory('h1')
+    sources = sources.filter((listed) => listed.sessionId !== 'h1')
+    index.sweep()
+    await vi.waitFor(() => expect((index as unknown as { discovering: boolean }).discovering).toBe(false))
+    read!([{ type: 'user_message', payload: { content: 'the secret plan' } }])
+    await drained(index)
+    expect(store.session('h1')).toBeUndefined()
+    expect(store.excluded().has('h1')).toBe(true)
+    index.sweep(); await drained(index)
+    expect(store.excluded().has('h1')).toBe(false)
   })
 })

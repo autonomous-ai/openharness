@@ -52,6 +52,8 @@ const NOT_FOR_GUESTS: ReadonlyArray<readonly [string, string]> = [
   ['dsh', 'On a computer shared with you, you can start Claude Code or Codex, not harnesses from the Store.'],
   ['resumeSessionId', 'On a computer shared with you, start a new conversation.'],
   ['agent', 'On a computer shared with you, start Claude Code or Codex itself, not a named agent.'],
+  // Dropped, it would run on the owner's shared OpenClaw folder with nothing said.
+  ['openclawLocal', 'On a computer shared with you, --local is not available.'],
 ]
 
 export function createGuestCreate(deps: GuestCreateDeps) {

@@ -408,9 +408,11 @@ export function supportsNativeFork(engine: AgentEngine): boolean {
 
 /** The executable argv, before the interactive-shell wrapper is applied. */
 export function buildEngineCommandArgv(engine: AgentEngine, opts: LaunchCommandOptions = {}): string[] {
+  // An OpenClaw run on its own folder: `tui --local`, which takes its session by name only (OPENCLAW_LAUNCH).
+  const local = engine === 'openclaw' && !!opts.native?.openclawLocal
   // Windows: the flags its declared startup puts first (Codex's `--no-daemon`), which a launch script probes for elsewhere.
   const argv = [opts.native?.executable?.command ?? engineBin(engine), ...(process.platform === 'win32' ? windowsStartupArgs(engine, opts.native) : []),
-    ...LAUNCH_BASE_ARGS[engine] ?? []]
+    ...LAUNCH_BASE_ARGS[engine] ?? [], ...(local ? OPENCLAW_LAUNCH.local : [])]
   // A fork is a resume that leaves the source alone; the two are exclusive, and the fork wins.
   const fork = opts.forkSessionId ? LAUNCH_FORK_FLAG[engine] : undefined
   const resumeFlag = fork ? fork.lead : opts.resumeSessionId ? LAUNCH_RESUME_FLAG[engine] : undefined
@@ -429,7 +431,7 @@ export function buildEngineCommandArgv(engine: AgentEngine, opts: LaunchCommandO
     if (flags) argv.push(...flags)
   }
   if (!resumeIsSubcommand && resumeFlag && sessionArg) {
-    argv.push(...resumeFlag, sessionArg, ...(fork?.after ?? []))
+    argv.push(...local ? OPENCLAW_LAUNCH.resumeLocal(sessionArg) : [...resumeFlag, sessionArg], ...(fork?.after ?? []))
   }
   const newSession = LAUNCH_NEW_SESSION[engine]
   if (newSession && opts.agentId && !(resumeFlag && sessionArg)) argv.push(...newSession(opts.agentId))
@@ -698,7 +700,7 @@ const LAUNCH_ENVIRONMENT: Readonly<Partial<Record<AgentEngine, readonly string[]
  */
 export function engineLaunchEnv(
   engine: AgentEngine,
-  native?: Pick<NativeLaunch, 'token'>,
+  native?: Pick<NativeLaunch, 'token' | 'openclawLocal'>,
   platform: NodeJS.Platform = process.platform,
   daemon: NodeJS.ProcessEnv = process.env,
 ): Record<string, string> | undefined {
@@ -707,6 +709,8 @@ export function engineLaunchEnv(
     const value = daemon[name]
     if (value) variables[name] = value
   }
+  // A local run's state is its own folder, over the daemon's; its OPENCLAW_HOME stays the daemon's.
+  if (engine === 'openclaw' && native?.openclawLocal) variables.OPENCLAW_STATE_DIR = native.openclawLocal
   if (platform === 'win32') {
     Object.assign(variables, screenVariables(launchContract(engine)))
     // As the prefix wrote it: `${token}`, which a native launch always has (nativeLaunch.ts).
