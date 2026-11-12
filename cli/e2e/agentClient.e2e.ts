@@ -200,6 +200,43 @@ describe('Harness for agents, end to end', () => {
     client.close()
   })
 
+  // `harness wait` follows the harness it waits on by what the daemon pushes when it changes (core/toolWatches.ts), and
+  // looks once a minute while it works, not every 3 s (docs/design/2026-11-12-hachi.md, "push, not poll"). The count is
+  // what the pull request reports as requests per waiting agent per minute.
+  it('an agent\'s wait hears its harness\'s turn end as it is pushed, and asks the daemon nothing every 3 s', async () => {
+    const { d } = await signedIn({ agents_start_agents: true }, { env: { LOG_FRAMES: 'true' } })
+    const client = await LocalClient.connect(d, { machineId: ME.machineId })
+    const made = async (name: string) => {
+      const dir = join(d.projectsDir, name)
+      mkdirSync(dir, { recursive: true })
+      const created = await client.request('agent_create', { engine: 'claude', cwd: dir, bypassPermission: true, name }, 90_000)
+      expect(created.error, JSON.stringify(created)).toBeUndefined()
+      return until(`${name} to bind its conversation`, async () => {
+        const row = ((await client.request<{ agents: Array<Record<string, any>> }>('agents_list', {}, 30_000)).agents).find((a) => a.id === created.agent.id)
+        return row?.sessionId && row.status === 'active' ? row : null
+      }, 60_000, 500)
+    }
+    const lead = await made('lead')
+    const kid = await made('kid')
+    const from = client.frames.length
+    client.send('message', { agentId: kid.id, content: '!slow 30000' })
+    await client.waitFor((f) => f.type === 'turn_started' && f.agentId === kid.id, 60_000, 'kid\'s turn', from)
+    const logFrom = d.log().length
+    const started = Date.now()
+    const waited = await harness(d, String(lead.tmuxPane), ['wait', 'kid', '--timeout', '3m'])
+    const took = Date.now() - started
+    expect(waited.code, waited.out + waited.err).toBe(0)
+    expect(waited.out.trim()).toBe('kid: idle · read it: harness show kid')
+    const asked = d.log().slice(logFrom).split('\n').filter((line) => line.includes('[frame] ← conn:'))
+    const lists = asked.filter((line) => line.includes(' agents_list'))
+    console.log(`[measure] wait on a 30 s turn: ${took} ms, ${asked.length} requests, ${lists.length} agents_list`)
+    // Woken by the turn's end, not by the minute's backstop.
+    expect(took).toBeLessThan(50_000)
+    // The list `wait` opens with, a look as it starts, one when the turn's Working claim lapses at 30 s (lib/turnActivity.ts)
+    // and one when it ends, and one to confirm it stayed idle: not a round every 3 s, eleven or more in that time.
+    expect(lists.length).toBeLessThanOrEqual(6)
+  })
+
   it('a harness another agent started may not start more, is closed with its starter, and is the person\'s once they type into it', async () => {
     // Owner, October 12: "we need to be very careful about when to start a new agent so we don't waste user token and we
     // need to properly clean up after too". The cleanup runs in its own process here, as it does by default (the edge

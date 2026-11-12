@@ -29,11 +29,13 @@ export interface QuestionDeps {
   sessionTurnOpen: (sessionId: string) => boolean
   /** Whether anyone could answer right now: a device watching, a window on this computer, or an app away. */
   someoneCanAnswer: () => boolean
+  /** Whether an agent's `harness wait` or `watch` follows [agentId] by what is pushed it (core/toolWatches.ts). */
+  followedByTool: (agentId: string) => boolean
   deviceInput: Pick<AutonomousDeviceInput, 'setUserAction'>
 }
 
 export function createQuestions({
-  questionControlFor, readQuestion, resolve, terminal, acquireTerminalControl, clients, agentIdFor, sessionTurnOpen, someoneCanAnswer, deviceInput,
+  questionControlFor, readQuestion, resolve, terminal, acquireTerminalControl, clients, agentIdFor, sessionTurnOpen, someoneCanAnswer, followedByTool, deviceInput,
 }: QuestionDeps) {
   const { captureTerminal, submitTerminal, keyTerminal } = terminal
   // AskUserQuestion bridge: mirrors the question to the device's question screen, and keys the device's
@@ -88,7 +90,9 @@ export function createQuestions({
     getSession: (id) => resolve(id),
     capture: captureTerminal,
     readQuestion,
-    hasDevice: () => someoneCanAnswer(),
+    // A tool cannot answer, but the agent waiting on this harness tells the person: with no window, dial or app here
+    // the question was never looked for, and `harness wait` read the screen itself every 3 s to find it.
+    hasDevice: (sessionId) => someoneCanAnswer() || followedByTool(agentIdFor(sessionId)),
     isDriving: (sessionId) => questions.isDriving(sessionId),
     onQuestion: (sessionId, requestId, shaped, detail) => {
       deviceInput.setUserAction(agentIdFor(sessionId), true)
