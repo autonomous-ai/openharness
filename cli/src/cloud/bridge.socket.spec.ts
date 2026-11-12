@@ -9,6 +9,7 @@ import { serveBridgePipe, serveBridgeSocket } from '../lib/connectors/bridge.js'
 import { writePrivate } from '../lib/connectors/store.js'
 import type { LocalSocketServer } from '../lib/localSocket.js'
 import { Store } from '../lib/connectors/store.js'
+import { emptyPorts } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { startConnectors } from '../services/connectors.js'
 import { daemonFetch, fetchOverSocket, socketIsPrivate } from '../lib/localTransport.js'
@@ -197,7 +198,7 @@ describe('the keys that crossed the port', () => {
     await new Promise<void>(ready => free.listen(0, '127.0.0.1', ready))
     const port = (free.address() as AddressInfo).port
     await new Promise(done => free.close(done))
-    startConnectors(fakeCore(), { vault, env, port, offered: async () => ({}), retryMs: 60_000 })
+    startConnectors(fakeCore(), emptyPorts(), { vault, env, port, offered: async () => ({}), retryMs: 60_000 })
     const socket = bridgeRoute(vault)
     await vi.waitFor(async () => expect((await socket.fetch(`${socket.base}/connections`)).status).toBe(200))
     await vi.waitFor(async () => expect((await fetch(`http://127.0.0.1:${port}/nope/connections`)).status).toBe(404))

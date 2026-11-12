@@ -13,7 +13,7 @@ import { realpathSync, statSync } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { BackendSocket } from '../../backendSocket.js'
-import type { ModelsPort, SwarmLaunch } from '../api.js'
+import type { ConnectorsPort, ModelsPort, SwarmLaunch } from '../api.js'
 import { MODEL_MANAGER_ID } from '../../dsh/builtinIds.js'
 import { installedDsh } from '../../dsh/installed.js'
 import { harnessEnvToClear, type DshAccount } from '../../dsh/launch.js'
@@ -35,8 +35,6 @@ import { agentLaunchArgs, joinedInstructions } from '../../lib/agentAttribution.
 import { machineMcpLaunchArgs } from '../../lib/machineMcp.js'
 import { writeGridConfigDir } from '../../lib/gridConfigDir.js'
 import { describeGridLaunch, gridConfigHandOff, gridConflictingEnvToClear, type GridLaunchAnswer, type GridLaunchMachine, type GridLaunchRequest, type GridWebSearchStatus } from '../../lib/gridLaunchWire.js'
-import { syncProfileHome } from '../../lib/connectors/agents.js'
-import { Store as ConnectionsVault } from '../../lib/connectors/store.js'
 import { profileEnvironment } from '../../lib/engineHomes.js'
 import { DEFAULT_HARNESS_PERMISSION, freshHarnessEnvironment } from '../../lib/harnessDefaults.js'
 import { buildHarnessSessionLabel } from '../../lib/harnessSessionLabel.js'
@@ -107,6 +105,9 @@ export interface CreateAgentDeps {
   dshLaunch: Pick<DshThrough, 'materialize' | 'launch'>
   /** The Swarm's part of a start with a Swarm role (superTabs/inCore/launch.ts); absent while the Swarm is off. */
   swarmLaunch?: SwarmLaunch
+  /** A profile home's MCP config written with the connections' entries, by connected services (core/api.ts
+   *  `ConnectorsPort`): bounded, and answered nothing while they are off, failing or slow. Never rejects. */
+  syncProfileHome: ConnectorsPort['syncProfileHome']
 }
 
 /** A Git checkout directly in the projects root (a clone the desktop made there), or a worktree Harness made. */
@@ -124,7 +125,7 @@ function hooksHeld(engine: string, waiting: string) {
 export function createAgentCreator({
   native: inspectNative, publishConfig, createBackend: initialBackend, recoverBackend, noBackendCode = 'TMUX_UNAVAILABLE', registry, externalResume, watchNewPane, announceSession, attachDsh, attachBrowser,
   prepareApiTools, hookPort, hooksDisabled, installOpencodePlugin, gridLaunchMachine, buildGridLaunch, terminalHintMachineName, blocksFolder,
-  gridSetup, privateGridName, dshLaunch, swarmLaunch,
+  gridSetup, privateGridName, dshLaunch, swarmLaunch, syncProfileHome,
 }: CreateAgentDeps) {
   const prepare = async (input: Parameters<CreateAgent>[0], authority: LaunchAuthority, context?: { local: boolean }): Promise<LaunchPreparation<Awaited<ReturnType<CreateAgent>>>> => {
     if (input.resumeSessionId) return { ok: true, dispatch: () => externalResume(input) }
@@ -344,12 +345,10 @@ export function createAgentCreator({
     // fires no hook at all (no SessionStart/UserPromptSubmit/Stop) and never streams a single event.
     // Idempotent, so paying this on every create against an already-set-up profile is free.
     if (!native && codexHome && !hooksDisabled && !await engineHooks.codex.installIn(hookPort, codexHome)) return hooksHeld('codex', 'Waiting to confirm Codex’s hooks in the selected profile.')
-    // An agent on a profile home reads that home's MCP config, not the default's: it gets the connections there too.
+    // An agent on a profile home reads that home's MCP config, not the default's: it gets the connections there too,
+    // before it starts. Written in the edge host; one that does not answer in time leaves the config as it is.
     const profileHome = engine === 'claude' ? claudeHome : engine === 'codex' ? codexHome : null
-    if (profileHome && (engine === 'claude' || engine === 'codex')) {
-      try { syncProfileHome(new ConnectionsVault(), engine, profileHome) }
-      catch (error) { console.warn(`[agent] connections for ${profileHome} · ${error instanceof Error ? error.message : error}`) }
-    }
+    if (profileHome && (engine === 'claude' || engine === 'codex')) await syncProfileHome(engine, profileHome)
     // OpenCode may have upgraded from 1.x to 2.x while this daemon was running. Its new TUI must
     // not discover our old server plugin; the cached version probe changes with the executable.
     // Native installation is eager. A plugin is how this engine tells the daemon its session.

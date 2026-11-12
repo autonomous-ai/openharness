@@ -89,7 +89,8 @@ questions. Everything else is a service ([../services/AGENTS.md](../services/AGE
   no credential, so every route listed there is a route that process could call as the account. `tab_key` and
   `tab_relay` pass one `TabKey` or `TabRelay` method a call to the gateway, which signs and seals and holds the
   sockets; `observers` hands a changed roster to Share (`harness_share_rosters`).
-  `monitorLink.ts`: the monitor's port, asked of its process. `recapsLink.ts`: the recaps in their process,
+  `monitorLink.ts`: the monitor's port, asked of its process. `connectorsLink.ts`: connected services' port, asked of their
+  process to write a profile home's connections as an agent launches there, waited on for a few seconds at most. `recapsLink.ts`: the recaps in their process,
   told each turn's lifecycle and never waited on, and read back from what they last said
   (`turns/recaps.ts` is the core's whole side of them). `storeLink.ts`: what the Store in its
   process tells the core. `agentCleanupLink.ts`: the agent cleanup in its process, told every stop and the person
