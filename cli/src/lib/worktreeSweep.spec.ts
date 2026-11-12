@@ -41,8 +41,8 @@ describe('removing one worktree Harness made, as the Swarm asks', { timeout: 30_
   })
   afterEach(() => rm(root, { recursive: true, force: true }))
 
-  // The Swarm's removal ran git as the repository configures it: the program its config names (`core.fsmonitor`) and its
-  // hooks, which the daemon's other git never runs (lib/gitProject.ts, lib/worktreeDeletion.ts); and with
+  // The Swarm's removal ran git as the repository configures it: the program its config names (`core.fsmonitor`, which
+  // lib/gitProject.ts turns off too) and its hooks (which lib/worktreeDeletion.ts turns off too); and with
   // `status.showUntrackedFiles=no` a worktree holding new work read as clean, and `git worktree remove` removed it, new work and
   // all (review of the allocator's package 6, 12 November).
   it.runIf(process.platform !== 'win32')('runs no fsmonitor program or hook the repository names, and keeps new files whatever status.showUntrackedFiles says', async () => {
