@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { addressOf, agentOrigin, AGENTS_START_AGENTS_OFF, closeCommand, deleteCommand, DEPTH_REFUSAL, EXIT, parseDuration, psCommand, refusalNext, replyCommand, resumeCommand, routeCommand, showCommand, spawnCheck, spawnCount, spawnRefusal, SPAWN_LIMITS, step, tellCommand, waitCommand, watchCommand, whoamiCommand, type ClientDeps } from './commands.js'
+import { addressOf, agentOrigin, AGENTS_START_AGENTS_OFF, closeCommand, deleteCommand, DEPTH_REFUSAL, EXIT, GOAL_USAGE, goalCommand, parseDuration, psCommand, refusalNext, replyCommand, resumeCommand, routeCommand, showCommand, spawnCheck, spawnCount, spawnRefusal, SPAWN_LIMITS, step, tellCommand, waitCommand, watchCommand, whoamiCommand, type ClientDeps } from './commands.js'
 import { RefusedError, type Rpc } from '../messages/rpc.js'
 import { AgentClientError, type Daemon, type Where } from './daemon.js'
 import { Ledger, ledgerPath } from './ledger.js'
@@ -2887,5 +2887,433 @@ describe('harness resume (a program acting for the person reopens a closed harne
     away.deps.machines = async () => [{ machineId: 'm', label: 'studio', current: true }, { machineId: 'm2', label: 'office', current: false }] as never
     expect(await replyCommand(['--machine', 'office', 'weather', '--', 'add dark mode'], away.deps)).toBe(EXIT.refused)
     expect(away.err[0]).toContain('Resume it with harness resume --machine office weather, then reply')
+  })
+})
+
+describe('harness goal (Hachi\'s goals, services/goals.ts)', () => {
+  const goal = (id: string, over: Record<string, unknown> = {}) => ({ id, title: 'flaky login test', harnesses: [], openedAt: NOW, lastStartAt: null, doneAt: null, ...over })
+  /** A daemon whose goals service answers [answers] by type, and records what it was asked. */
+  const goals = (answers: Record<string, (payload: Record<string, unknown>) => Record<string, unknown>>) => {
+    const d = new FakeDaemon()
+    d.frames = [frame('hachi', { engine: 'claude', tmuxPane: '%lead' })]
+    Object.assign(d.extra, answers)
+    return d
+  }
+
+  it('opens a goal in the person\'s words, from Hachi\'s pane, and says how to start its work', async () => {
+    const d = goals({ goal_open: (payload) => ({ goal: goal('3fa2b1c9', { title: payload.title }) }) })
+    const h = harness(d)
+    expect(await goalCommand(['open', 'flaky', 'login', 'test'], h.deps)).toBe(EXIT.ok)
+    expect(d.requests).toEqual([{ type: 'goal_open', payload: { title: 'flaky login test', pane: '%lead' } }])
+    expect(h.out).toEqual(['Goal 3fa2b1c9 opened: flaky login test.\nNext: harness new <agent> --goal 3fa2b1c9 --name <name> <project> -- <task>  (for each piece of its work)'])
+    expect(d.closed).toBe(true)
+    const json = harness(d)
+    expect(await goalCommand(['open', 'flaky login test', '--json'], json.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(json.out[0])).toMatchObject({ goal: { id: '3fa2b1c9', title: 'flaky login test' }, next: [{ run: expect.stringContaining('--goal 3fa2b1c9') }] })
+  })
+
+  it('closes a goal, and is refused (exit 5) one no harness was started for', async () => {
+    let started = false
+    const d = goals({ goal_done: (payload) => started ? { goal: goal(String(payload.id), { doneAt: NOW }) }
+      : { error: 'GOAL_EMPTY', message: 'No harness was started for that goal, so it is not done.' } })
+    const empty = harness(d)
+    expect(await goalCommand(['done', 'g1'], empty.deps)).toBe(EXIT.refused)
+    expect(empty.err).toEqual(['No harness was started for that goal, so it is not done.'])
+    started = true
+    const done = harness(d)
+    expect(await goalCommand(['done', 'g1'], done.deps)).toBe(EXIT.ok)
+    expect(done.out).toEqual(['Goal g1 done: flaky login test.'])
+    expect(d.requests.at(-1)).toEqual({ type: 'goal_done', payload: { id: 'g1', pane: '%lead' } })
+    const json = harness(d)
+    expect(await goalCommand(['done', 'g1', '--json'], json.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(json.out[0])).toMatchObject({ goal: { id: 'g1', doneAt: NOW } })
+  })
+
+  it('lists the goals: open ones and those closed this week, with how many harnesses each has', async () => {
+    const d = goals({ goal_list: () => ({ goals: [goal('g2', { title: 'review api', harnesses: [{ machineId: 'm', creationId: 'c1', agentId: 'a1' }] }),
+      goal('g1', { harnesses: [{}, {}], doneAt: NOW })] }) })
+    const h = harness(d)
+    expect(await goalCommand(['list'], h.deps)).toBe(EXIT.ok)
+    expect(h.out).toEqual(['g2  open  1 harness    review api\ng1  done  2 harnesses  flaky login test'])
+    const json = harness(d)
+    expect(await goalCommand(['list', '--json'], json.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(json.out[0]).goals.map((g: { id: string }) => g.id)).toEqual(['g2', 'g1'])
+    const none = harness(goals({ goal_list: () => ({ goals: [] }) }))
+    expect(await goalCommand(['list'], none.deps)).toBe(EXIT.ok)
+    expect(none.out).toEqual(['No goals.'])
+  })
+
+  it('exits 5 for any caller but Hachi, as every refusal, and 1 for a daemon that keeps no goals', async () => {
+    const d = goals({
+      goal_open: () => ({ error: 'NOT_HACHI', message: 'Only Hachi keeps goals.' }),
+      goal_done: () => ({ error: 'NOT_HACHI', message: 'Only Hachi keeps goals.' }),
+      goal_list: () => ({ error: 'NOT_HACHI', message: 'Only Hachi keeps goals.' }),
+    })
+    for (const argv of [['open', 'x'], ['done', 'g1'], ['list']]) {
+      const h = harness(d, { pane: undefined })
+      expect(await goalCommand([...argv, '--json'], h.deps)).toBe(EXIT.refused)
+      expect(JSON.parse(h.out[0])).toMatchObject({ error: 'NOT_HACHI', code: 'NOT_HACHI', detail: 'Only Hachi keeps goals.' })
+    }
+    // No pane at all is asked as none: the service refuses it.
+    expect(d.requests.every((r) => r.payload.pane === '')).toBe(true)
+    // A daemon from before goals answers with no words of its own.
+    const old = harness(goals({}))
+    expect(await goalCommand(['list'], old.deps)).toBe(EXIT.failed)
+    expect(old.err).toEqual(['Harness did not keep the goal (UNKNOWN).'])
+  })
+
+  it('takes a title to open, one id to close, nothing to list, and no machine', async () => {
+    const d = goals({})
+    for (const [argv, said] of [
+      [['open'], 'Give the goal in the person\'s words: harness goal open <title>'],
+      [['done'], 'Name one goal by its id.'],
+      [['done', 'a', 'b'], 'Name one goal by its id.'],
+      [['list', 'x'], 'harness goal list takes nothing more.'],
+      [['shut', 'g1'], 'Unknown goal command shut.'],
+      [['list', '--machine', 'office'], 'harness goal takes no --machine: Hachi keeps its goals where it runs.'],
+    ] as const) {
+      const h = harness(d)
+      expect(await goalCommand(argv, h.deps)).toBe(EXIT.usage)
+      expect(h.err[0]).toBe(said)
+    }
+    const help = harness(d)
+    expect(await goalCommand([], help.deps)).toBe(EXIT.ok)
+    expect(help.out[0]).toBe(GOAL_USAGE)
+    expect(d.requests).toEqual([])
+  })
+
+  it('gives harness new --goal its check and its record, asked of the caller\'s own daemon', async () => {
+    const d = goals({
+      goal_list: () => ({ goals: [goal('g1'), goal('g2', { doneAt: NOW })] }),
+      goal_add: (payload) => payload.id === 'g1' ? { goal: goal('g1') } : { error: 'GOAL_DONE', message: 'That goal is done.' },
+    })
+    d.frames = [frame('lead', { engine: 'claude' })]
+    const h = harness(d)
+    const origin = (await agentOrigin(h.deps))!
+    await expect(origin.goal!.check('g1')).resolves.toBeUndefined()
+    await expect(origin.goal!.check('g2')).rejects.toMatchObject({ code: 'GOAL_DONE' })
+    await expect(origin.goal!.check('g9')).rejects.toMatchObject({ code: 'UNKNOWN_GOAL', message: 'No goal g9. harness goal list lists them.' })
+    expect(await origin.goal!.add('g1', { machineId: 'm', creationId: 'c1', agentId: 'k1' })).toBeNull()
+    expect(d.requests.at(-1)).toEqual({ type: 'goal_add', payload: { id: 'g1', machineId: 'm', creationId: 'c1', agentId: 'k1', pane: '%lead' } })
+    expect(await origin.goal!.add('g2', { machineId: 'm', creationId: 'c2' })).toBe('It was started, but not recorded under goal g2: That goal is done.')
+    // Hachi's goals are refused to anyone else by the service, through the same check.
+    const other = harness(goals({ goal_list: () => ({ error: 'NOT_HACHI', message: 'Only Hachi keeps goals.' }) }))
+    await expect((await agentOrigin(other.deps))!.goal!.check('g1')).rejects.toMatchObject({ code: 'NOT_HACHI' })
+  })
+})
+
+describe('harness ps --machines (every machine of the account in one read)', () => {
+  const machines = async () => [
+    { machineId: 'm', label: 'studio', status: 'running', current: true },
+    { machineId: 'office-id', label: 'office', status: 'running', current: false },
+    { machineId: 'laptop-id', label: 'laptop', status: 'offline', current: false },
+    { machineId: 'mini-id', label: 'Mac mini', status: 'running', current: false },
+    // Another account's machine shared with this one is not the person's own: never listed.
+    { machineId: 'shared-id', label: 'lab', status: 'running', current: false, sharedBy: 'Ana' },
+  ]
+  /** studio here, office answering, laptop not linked, and the mini answering nothing at all. */
+  const fleet = () => {
+    const d = new FakeDaemon(), office = new FakeDaemon('office-id')
+    d.frames = [frame('lead', { engine: 'claude' }), frame('kid', { activity: { state: 'working' } })]
+    office.frames = [frame('api', { engine: 'claude' })]
+    const opened: string[] = []
+    let late: FakeDaemon | null = null
+    const h = harness(d, { machines, answerMs: 20, open: async (_w, machineId) => {
+      opened.push(machineId ?? 'm')
+      if (!machineId || machineId === 'm') return d
+      if (machineId === 'office-id') return office
+      if (machineId === 'mini-id') {
+        // Opens only after the answer is due: closed once it does, never listed.
+        await new Promise((done) => setTimeout(done, 60))
+        return late = new FakeDaemon('mini-id')
+      }
+      throw new AgentClientError('NO_PEER_LINK', 'not linked')
+    } })
+    started(h.ledger, 'lead', 'kid')
+    started(h.ledger, 'lead', 'api', 'office-id')
+    return { d, office, h, opened, late: () => late }
+  }
+
+  it('asks every machine at once, and lists one that does not answer in time as unreachable, never leaves it out', async () => {
+    const { h, office, opened, late } = fleet()
+    expect(await psCommand(['--machines'], h.deps)).toBe(EXIT.ok)
+    const text = h.out.join('\n')
+    expect(text).toMatch(/^You: Claude Code "lead" \(lead\), inside Harness, on studio\./)
+    expect(text).toContain('studio (this machine):\nNAME')
+    expect(text).toMatch(/kid +Codex +working +you /)
+    expect(text).toMatch(/office:\nNAME[^\n]*\napi +Claude Code +idle +you /)
+    expect(text).toContain('laptop: unreachable. not linked')
+    expect(text).toContain('Mac mini: unreachable. It did not answer in 5 s.')
+    expect(text).not.toContain('lab')
+    expect(opened.sort()).toEqual(['laptop-id', 'm', 'mini-id', 'office-id'])
+    expect(office.closed).toBe(true)
+    await new Promise((done) => setTimeout(done, 80))
+    expect(late()?.closed).toBe(true)
+  })
+
+  it('answers a program in JSON: each machine, whether it answered, and its harnesses', async () => {
+    const { h } = fleet()
+    expect(await psCommand(['--machines', '--json'], h.deps)).toBe(EXIT.ok)
+    const said = JSON.parse(h.out.join('\n'))
+    expect(said.you).toBe('lead')
+    expect(said.machines.map((m: Record<string, unknown>) => [m.machine, m.state])).toEqual([
+      ['studio', 'ok'], ['office', 'ok'], ['laptop', 'unreachable'], ['Mac mini', 'unreachable']])
+    expect(said.machines[1]).toMatchObject({ machineId: 'office-id', current: false, harnesses: [{ name: 'api', machine: 'office', startedBy: 'you', yours: true }] })
+    expect(said.machines[2]).toEqual({ machineId: 'laptop-id', machine: 'laptop', current: false, state: 'unreachable', detail: 'not linked' })
+    expect(said.machines[3]).toMatchObject({ state: 'unreachable', detail: 'It did not answer in 5 s.' })
+  })
+
+  it('closes the line to a machine that opened but did not list in time, so nothing holds the process', async () => {
+    const d = new FakeDaemon(), slow = new FakeDaemon('office-id')
+    d.frames = [frame('lead', { engine: 'claude' })]
+    slow.request = () => new Promise(() => {})
+    const h = harness(d, { machines, answerMs: 20, open: async (_w, machineId) => !machineId || machineId === 'm' ? d : machineId === 'office-id' ? slow : Promise.reject(new Error('no')) })
+    expect(await psCommand(['--machines'], h.deps)).toBe(EXIT.ok)
+    expect(h.out.join('\n')).toContain('office: unreachable. It did not answer in 5 s.')
+    expect(slow.closed).toBe(true)
+  })
+
+  it('takes no --machine and no names beside it', async () => {
+    const { h, d } = fleet()
+    expect(await psCommand(['--machines', '--machine', 'office'], h.deps)).toBe(EXIT.usage)
+    expect(h.err[0]).toBe('--machines lists every machine: leave out --machine.')
+    expect(await psCommand(['--machines', 'kid'], h.deps)).toBe(EXIT.usage)
+    expect(h.err).toContain('harness ps takes no names. To read one: harness show kid')
+    expect(d.requests).toEqual([])
+  })
+
+  it('asks at most 32 other machines; the rest are listed as not asked', async () => {
+    const many = async () => [{ machineId: 'm', label: 'studio', status: 'running', current: true },
+      ...Array.from({ length: 34 }, (_, i) => ({ machineId: `id-${i}`, label: `box-${i}`, status: 'running', current: false }))]
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' })]
+    const asked: string[] = []
+    const h = harness(d, { machines: many, answerMs: 20, open: async (_w, machineId) => {
+      if (!machineId || machineId === 'm') return d
+      asked.push(machineId)
+      const other = new FakeDaemon(machineId)
+      return other
+    } })
+    expect(await psCommand(['--machines', '--json'], h.deps)).toBe(EXIT.ok)
+    const said = JSON.parse(h.out.join('\n')).machines as Array<Record<string, unknown>>
+    expect(asked).toHaveLength(32)
+    expect(said.filter((m) => m.state === 'not_asked').map((m) => m.machine)).toEqual(['box-32', 'box-33'])
+    const text = harness(d, { machines: many, answerMs: 20, open: h.deps.open })
+    expect(await psCommand(['--machines'], text.deps)).toBe(EXIT.ok)
+    expect(text.out.join('\n')).toContain('box-33: not asked; at most 32 machines are asked at once.')
+  })
+})
+
+describe('harness show --work (the result in facts, read on the machine that owns the harness)', () => {
+  const pr = { status: 'found', number: 412, url: 'https://github.com/o/api/pull/412', state: 'Open', title: 'Fix the flaky login test' }
+  const checked = { rows: [{ url: pr.url, status: 'found', changedFiles: 2, additions: 31, deletions: 8, ci: 'passing',
+    checks: { passed: 5, failed: 0, pending: 0, total: 5 } }] }
+  const owning = (answers: Record<string, Handler>) => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' }), frame('api-fix', { project: { cwd: '/work/api', branch: 'fix-login' } })]
+    Object.assign(d.extra, answers)
+    return d
+  }
+
+  it('says its branch, its pull request, the files and lines it changed, and its checks', async () => {
+    const d = owning({ git_pull_request: () => pr, git_pull_requests_status: () => checked })
+    const h = harness(d)
+    started(h.ledger, 'lead', 'api-fix')
+    expect(await showCommand(['api-fix', '--work'], h.deps)).toBe(EXIT.ok)
+    expect(h.out).toEqual([
+      'api-fix on studio: idle · Codex · started by you',
+      'branch: fix-login · PR #412 (Open): 2 files, +31 -8, checks passing (5 of 5)',
+      'https://github.com/o/api/pull/412',
+    ])
+    expect(d.requests.filter((r) => r.type.startsWith('git_'))).toEqual([
+      { type: 'git_pull_request', payload: { agentId: 'api-fix' } },
+      { type: 'git_pull_requests_status', payload: { urls: [pr.url] } },
+    ])
+    // Facts only: no turn is read.
+    expect(d.requests.some((r) => r.type === 'session_get')).toBe(false)
+    const json = harness(d)
+    expect(await showCommand(['api-fix', '--work', '--json'], json.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(json.out.join('\n'))).toEqual({ name: 'api-fix', id: 'api-fix', agent: 'Codex', machine: 'studio', state: 'idle', startedBy: 'you',
+      work: { branch: 'fix-login', pullRequest: { number: 412, url: pr.url, state: 'Open', title: 'Fix the flaky login test',
+        files: 2, additions: 31, deletions: 8, ci: 'passing', checks: { passed: 5, failed: 0, pending: 0, total: 5 } } } })
+  })
+
+  it('says when there is no pull request yet, or its machine could not read one', async () => {
+    for (const [answer, said, pullRequest] of [
+      [{ status: 'none' }, 'branch: fix-login · no pull request', 'none'],
+      [{ status: 'unavailable' }, 'branch: fix-login · its pull request could not be read on its machine', 'unavailable'],
+    ] as const) {
+      const d = owning({ git_pull_request: () => answer })
+      const h = harness(d)
+      expect(await showCommand(['api-fix', '--work'], h.deps)).toBe(EXIT.ok)
+      expect(h.out[1]).toBe(said)
+      const json = harness(d)
+      expect(await showCommand(['api-fix', '--work', '--json'], json.deps)).toBe(EXIT.ok)
+      expect(JSON.parse(json.out.join('\n')).work).toEqual({ branch: 'fix-login', pullRequest })
+    }
+    // A machine whose read fails or never answers is the same as unavailable.
+    const failing = owning({ git_pull_request: () => { throw new AgentClientError('TIMEOUT', 'slow') } })
+    const h = harness(failing)
+    expect(await showCommand(['api-fix', '--work'], h.deps)).toBe(EXIT.ok)
+    expect(h.out[1]).toBe('branch: fix-login · its pull request could not be read on its machine')
+  })
+
+  it('keeps the pull request when its files and checks could not be read (gh signed out there)', async () => {
+    for (const status of [{ rows: [{ url: pr.url, status: 'unavailable', error: 'GH_SIGNED_OUT' }] }, { error: 'OWNER_REQUIRED' }]) {
+      const d = owning({ git_pull_request: () => pr, git_pull_requests_status: () => status })
+      const h = harness(d)
+      expect(await showCommand(['api-fix', '--work'], h.deps)).toBe(EXIT.ok)
+      expect(h.out[1]).toBe('branch: fix-login · PR #412 (Open)')
+      const json = harness(d)
+      expect(await showCommand(['api-fix', '--work', '--json'], json.deps)).toBe(EXIT.ok)
+      expect(JSON.parse(json.out.join('\n')).work.pullRequest).toEqual({ number: 412, url: pr.url, state: 'Open', title: 'Fix the flaky login test' })
+    }
+  })
+
+  it('reads a harness on another machine on that machine, and has no work to read for a cloud harness', async () => {
+    const d = new FakeDaemon(), office = owning({ git_pull_request: () => ({ status: 'none' }) })
+    d.frames = [frame('lead', { engine: 'claude' })]
+    const machines = async () => [{ machineId: 'm', label: 'studio', status: 'running', current: true }, { machineId: 'office-id', label: 'office', status: 'running', current: false }]
+    const h = harness(d, { machines, others: { 'office-id': office } })
+    expect(await showCommand(['--machine', 'office', 'api-fix', '--work'], h.deps)).toBe(EXIT.ok)
+    expect(h.out).toEqual(['api-fix on office: idle · Codex · started by person', 'branch: fix-login · no pull request'])
+    expect(office.requests.some((r) => r.type === 'git_pull_request')).toBe(true)
+    expect(d.requests.some((r) => r.type === 'git_pull_request')).toBe(false)
+    d.frames.push(frame('devin', { engine: 'devin-cloud', location: 'cloud', tmuxPane: null, project: null, cloud: { state: 'idle' } }))
+    const cloud = harness(d)
+    expect(await showCommand(['devin', '--work'], cloud.deps)).toBe(EXIT.usage)
+    expect(cloud.err[0]).toBe('devin runs in its maker\'s cloud: it has no folder here to read. Its links are in harness show devin.')
+  })
+})
+
+describe('harness watch --mine (one stream for every harness the caller started, on every machine)', () => {
+  class PushingDaemon extends FakeDaemon {
+    watched: string[][] = []
+    heard: ((agentId: string) => void) | null = null
+    async watch(agentIds: string[], heard: (agentId: string) => void): Promise<boolean> {
+      this.watched.push([...agentIds])
+      this.heard = heard
+      return true
+    }
+  }
+  const machines = async () => [{ machineId: 'm', label: 'studio', status: 'running', current: true }, { machineId: 'office-id', label: 'office', status: 'running', current: false }]
+  /** lead started kid and api here, rev on office, and old here long since stopped; theirs is someone else's. */
+  const fleet = () => {
+    const d = new PushingDaemon(), office = new FakeDaemon('office-id')
+    d.frames = [frame('lead', { engine: 'claude' }), frame('kid', { activity: { state: 'working' } }), frame('api', { activity: { state: 'working' } }),
+      frame('theirs', { activity: { state: 'working' } }), frame('old', { status: 'stopped' })]
+    office.frames = [frame('rev', { engine: 'claude', activity: { state: 'working' } })]
+    const h = harness(d, { machines, others: { 'office-id': office } })
+    for (const kid of ['kid', 'api', 'old']) started(h.ledger, 'lead', kid)
+    started(h.ledger, 'lead', 'rev', 'office-id')
+    return { d, office, h }
+  }
+  const lines = (out: string[]) => out.map((l) => JSON.parse(l) as Record<string, unknown>)
+
+  it('prints the lines watch prints for each of them, with its machine, until every one has stopped (exit 4)', async () => {
+    const { d, office, h } = fleet()
+    let round = 0
+    h.deps.sleep = async (ms) => {
+      h.advance(ms)
+      round++
+      if (round === 1) { d.frames = d.frames.filter((f) => f.id !== 'kid') }
+      if (round === 2) { office.frames = [] }
+      if (round === 3) { d.frames = d.frames.filter((f) => f.id !== 'api') }
+    }
+    expect(await watchCommand(['--mine', '--json'], h.deps)).toBe(EXIT.stopped)
+    const said = lines(h.out)
+    expect(said.map((l) => `${l.name}@${l.machine} ${l.event}`)).toEqual([
+      'kid@studio working', 'api@studio working', 'rev@office working',
+      'kid@studio stopped', 'rev@office stopped', 'api@studio stopped',
+    ])
+    expect(said.some((l) => l.name === 'theirs' || l.name === 'old')).toBe(false)
+    // This machine's are followed by push; the other machine's are looked at, as watch looks at one there.
+    expect(d.watched).toEqual([['kid', 'api']])
+    expect(office.closed).toBe(true)
+  })
+
+  it('names the machine in a person-readable line too', async () => {
+    const { h } = fleet()
+    expect(await watchCommand(['--mine', '--timeout', '1s'], h.deps)).toBe(EXIT.timeout)
+    expect(h.out).toEqual(['12:00:00Z kid @studio: working', '12:00:00Z api @studio: working', '12:00:00Z rev @office: working'])
+  })
+
+  it('sleeps a minute while every one is followed by push, and looks every interval while one on another machine works', async () => {
+    const { d, office, h } = fleet()
+    const slept: number[] = []
+    h.deps.sleep = async (ms) => { slept.push(ms); h.advance(ms); if (slept.length === 2) office.frames = [] }
+    expect(await watchCommand(['--mine', '--json', '--timeout', '5m'], h.deps)).toBe(EXIT.timeout)
+    expect(slept.slice(0, 3)).toEqual([1_000, 1_000, 60_000])
+    expect(d.watched).toEqual([['kid', 'api']])
+  })
+
+  it('says a machine it cannot reach, and follows the rest', async () => {
+    const { d, h } = fleet()
+    h.deps.open = async (_w, machineId) => {
+      if (!machineId || machineId === 'm') return d
+      throw new AgentClientError('NO_PEER_LINK', 'That machine is not linked to this one.')
+    }
+    expect(await watchCommand(['--mine', '--timeout', '1s'], h.deps)).toBe(EXIT.timeout)
+    expect(h.err).toEqual(['office: not followed. That machine is not linked to this one.'])
+    expect(h.out.map((l) => l.split(' ')[1])).toEqual(['kid', 'api'])
+  })
+
+  it('stops following a machine whose line drops, says so, and follows the rest', async () => {
+    const { office, h } = fleet()
+    let round = 0
+    h.deps.sleep = async (ms) => {
+      h.advance(ms)
+      if (++round === 1) office.request = async () => { throw new AgentClientError('DISCONNECTED', 'The connection to Harness closed.') }
+    }
+    expect(await watchCommand(['--mine', '--timeout', '3s'], h.deps)).toBe(EXIT.timeout)
+    expect(h.err).toEqual(['office: no longer followed. The connection to Harness closed.'])
+  })
+
+  it('stops following a machine whose line drops in the middle of a round, and the rest are still followed (review of #4200)', async () => {
+    // The list answers, then a read for the same round fails: its turn (`session_get`), or its stopped row.
+    for (const after of [
+      (office: FakeDaemon) => { office.frames = [frame('rev', { engine: 'claude', activity: { state: 'working' }, updatedAt: '2026-10-11T11:59:30Z' })] },
+      (office: FakeDaemon) => { office.frames = [] },
+    ]) {
+      const { d, office, h } = fleet()
+      let round = 0
+      h.deps.sleep = async (ms) => {
+        h.advance(ms)
+        round++
+        if (round === 1) {
+          after(office)
+          const real = office.request.bind(office)
+          office.request = async (type, payload = {}) => {
+            if (type === 'agents_list' && !payload.includeStopped) return real(type, payload)
+            throw new AgentClientError('DISCONNECTED', 'The connection to Harness closed.')
+          }
+        }
+        // This machine's go on after it: kid stops, and is still said.
+        if (round === 2) d.frames = d.frames.filter((f) => f.id !== 'kid')
+      }
+      expect(await watchCommand(['--mine', '--json', '--timeout', '5s'], h.deps)).toBe(EXIT.timeout)
+      expect(h.err).toEqual(['office: no longer followed. The connection to Harness closed.'])
+      expect(lines(h.out).map((l) => `${l.name} ${l.event}`)).toEqual(['kid working', 'api working', 'rev working', 'kid stopped'])
+    }
+  })
+
+  it('says so when the caller has none running, and refuses a caller that is no agent (exit 5)', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' })]
+    const none = harness(d)
+    expect(await watchCommand(['--mine'], none.deps)).toBe(EXIT.ok)
+    expect(none.out).toEqual(['You have no harnesses running.'])
+    const person = harness(d, { pane: undefined })
+    expect(await watchCommand(['--mine'], person.deps)).toBe(EXIT.refused)
+    expect(person.err[0]).toBe('harness watch --mine follows the harnesses an agent started: run it in that agent\'s pane.')
+  })
+
+  it('takes no name and no --machine with --mine', async () => {
+    const { h, d } = fleet()
+    expect(await watchCommand(['--mine', 'kid'], h.deps)).toBe(EXIT.usage)
+    expect(h.err[0]).toBe('--mine follows every harness you started: leave out the name.')
+    expect(await watchCommand(['--mine', '--machine', 'office'], h.deps)).toBe(EXIT.usage)
+    expect(h.err).toContain('--mine follows every harness you started, on every machine: leave out --machine.')
+    expect(d.requests).toEqual([])
   })
 })
