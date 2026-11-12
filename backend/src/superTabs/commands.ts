@@ -949,7 +949,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         fail('PROJECT_REPOSITORY_SET', `This project works in ${cloned.fullName}.`, 409)
       }
       mutableProjects(state)
-      projectOf(state, project.id).githubRepository = command.repository
+      const named = projectOf(state, project.id)
+      // When it named it is kept, and the same name again keeps its first time (githubComments.ts repositoryProject).
+      if (named.githubRepository?.toLowerCase() !== command.repository.toLowerCase()) named.githubRepositoryAt = context.now
+      named.githubRepository = command.repository
       break
     }
     case 'project.pm': {

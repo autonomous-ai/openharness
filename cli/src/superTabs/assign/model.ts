@@ -12,7 +12,8 @@
  * builders that persist, files two builders must not change at once.
  */
 
-/** What a machine has for Swarm work: CPU in cores, memory and disk in bytes, after its person's own reserve. */
+/** What a machine has for Swarm work: CPU in cores, memory and disk in bytes, after its person's own reserve. The product's
+ *  plan counts no cores (crew.ts SIZES): the design's model still does (docs/design/2026-11-11-swarm-allocator/experiment.mts). */
 export interface Resources { cpu: number; ram: number; disk: number }
 
 export interface Machine { id: string; capacity: Resources }
@@ -37,8 +38,8 @@ export interface Builder {
   id: string
   machine: string
   modes: Mode[]
-  /** How fast it is on a part, as a factor of its time (0.6: 40% faster): from what its person says it works on and what it
-   *  merged there (context.ts). A part it is not listed for takes 1. */
+  /** How fast it is on a part, as a factor of its time (0.5: twice as fast): from what its person says it works on
+   *  (crew.ts contextOf). A part it is not listed for takes 1. */
   context: Record<string, number>
   /** The minute it is free of work the plan does not move: its task in progress. */
   busyUntil: number

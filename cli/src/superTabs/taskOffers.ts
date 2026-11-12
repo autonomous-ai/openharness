@@ -87,8 +87,15 @@ export async function answerOffer(ask: Ask, tabId: string, agentId: string, task
 const WHY: Record<string, string> = { tools: 'it lacks a tool the task needs', cores: 'not enough free cores', memory: 'not enough free memory',
   disk: 'not enough free disk', quota: 'its subscription\'s window has too little left above what you keep' }
 
+/** The cores a task of each size holds of its machine while it runs, as this check counts them: the plan counts none (assign/crew.ts
+ *  SIZES, package 7), so this is the one guard (docs/design/2026-11-11-swarm-allocator/offers.md). */
+const SIZE_CORES = { s: 1, m: 2, l: 4 }
+
 const labelsOf = (issue: Json): string[] => (Array.isArray(issue.labels) ? issue.labels.map(object) : []).map(label => String(label.name ?? '').toLowerCase())
-const sizeOf = (labels: string[]) => SIZES[(labels.find(label => /^size:[sml]$/.test(label))?.slice(5) ?? 'm') as 's' | 'm' | 'l']
+const sizeOf = (labels: string[]) => {
+  const size = (labels.find(label => /^size:[sml]$/.test(label))?.slice(5) ?? 'm') as 's' | 'm' | 'l'
+  return { ...SIZES[size], cpu: SIZE_CORES[size] }
+}
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
 
 /**

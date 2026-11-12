@@ -397,9 +397,11 @@ removes the container, the volume, the network, the secret and the settings.
 - **(Ken) Why not the screen.** Changing the X screen to the panel's size would give odd sizes (1137x843) and a
   `screen.width` that changes mid-session, two signals bot checks weigh. A window's size changes all the time for
   real people, so `innerWidth` following the panel is ordinary.
-- **The screen** stays the Device setting's size (`screen`, default 1920x1080), as today.
-- **The window.** Chrome's window sits at 0,0 and takes the panel's size in screen pixels, at least 1024x640 and at
-  most the screen. It is not maximized. Its size changes through the tool server's CDP connection
+- **The screen** stays the Device setting's size (`screen`, default 1080x1920, portrait since 2026-11-12:
+  the panel is taller than wide).
+- **The window.** Chrome's window sits at 0,0 and takes the panel's size in screen pixels, at most
+  the screen, with no floor: a person drags a real Chrome narrow too, and Chrome keeps its own minimum (about 500
+  wide), answering the size it set. It is not maximized. Its size changes through the tool server's CDP connection
   (`Browser.getWindowForTarget`, then `Browser.setWindowBounds`), not through the window manager.
 - **The request.** `agent_browser_window {agentId, width, height}` from Desktop, sealed beside `agent_browser_start`,
   allowed for `mayOpenBrowser`, answered only while the browser is ready. The machine clamps the size; it is not
@@ -409,8 +411,8 @@ removes the container, the volume, the network, the secret and the settings.
   300 ms (a drag sends one request, at its end). Closing the panel sends nothing: the window keeps its last size.
 - **Two Desktops.** The last request wins. The other panel shows the same window and scales it to fit.
 - **What the panel shows.** The viewer page clips noVNC to the window's rectangle at 0,0 (`clipViewport`, no viewport
-  drag) at 1:1. When the window is smaller than the panel (the 1024x640 floor, or another Desktop's size), or the panel
-  is larger than the screen, it scales that rectangle to fit, as `scaleViewport` does today. The page learns the
+  drag) at 1:1. When the window is not the panel's size (a panel narrower than Chrome allows, another Desktop's size, or
+  a panel larger than the screen), it scales that rectangle evenly to fit, centred, as `scaleViewport` does today. The page learns the
   window's size from the request's answer.
 - **The agent** is not told: its pages reflow as on any resize. A screenshot is of the page, at its new size.
 - **Failures.** A request that fails (`window_failed`: the CDP call did not answer in 5 s) is logged by name; the panel
@@ -431,7 +433,7 @@ removes the container, the volume, the network, the secret and the settings.
 ```
 Off                                   Running
 ┌──────────────────────────────┐      ┌──────────────────────────────────────┐
-│ Browser          [⚙] [⎘]   ✕ │      │ Browser         ( Stop ) [⚙] [⎘]   ✕ │
+│ Browser          [⚙] [⎘]   ✕ │      │ Browser              [■] [⚙] [⎘]   ✕ │
 │──────────────────────────────│      │──────────────────────────────────────│
 │                              │      │ ┌──────────────────────────────────┐ │
 │   A sandboxed Chrome the     │      │ │ mail.google.com                  │ │
@@ -658,7 +660,7 @@ both engines run without asking.
   - Unchanged but for how tools are called: the stream, the host that cannot be reached, the crash restart, Device,
     the proxy, the delete.
 - **The window** (service spec, fake tool server): `agent_browser_window` refused for a guest, a machine share and a
-  browser that is not ready; the size clamped to 1024x640 and to the screen; a CDP call that does not answer is
+  browser that is not ready; the size the panel's, clamped to the screen; a CDP call that does not answer is
   `window_failed`. Viewer page (`viewer.test.mjs`): clipped at 1:1 to the answered rectangle; scaled when the
   rectangle is smaller than the panel or the panel larger than the screen. Real Podman: a window request changes
   `window.innerWidth` and leaves `screen.width` as the Device setting.

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { readProblem, type Crew, type Read } from './assign/crew.js'
 import type { Score } from './goal.js'
 import type { LedProject } from './githubMerge.js'
-import { dayLine, messageOf, numbersOf, numbersSender, placeOf, plainName, PmNumbers, shortLine, toldLine, type How, type Numbers } from './pmNumbers.js'
+import { dayLine, messageOf, numbersOf, numbersSender, placeOf, plainName, PmNumbers, shortLine, toldLine, type DayBoard, type How, type Numbers } from './pmNumbers.js'
 import { SuperTabHostError } from './wire.js'
 
 type Json = Record<string, unknown>
@@ -21,9 +21,9 @@ const crew = (): Crew => ({
   machines: [], away: [{ name: 'Cy', label: 'builder:cy', why: 'down', since: ago(HOUR) }],
 })
 /** What the assigner read: each builder's open tasks and how many of them it builds (the others wait for their read or their
- *  merge), and the sized tasks nobody holds. */
+ *  merge), none built in the Swarm's other projects, and the sized tasks nobody holds. */
 const read = (lists: Record<string, [open: number, building: number]>, free: string[]): Read => ({ open: new Map(Object.entries(lists).map(([id, [open]]) => [id, open])),
-  building: new Map(Object.entries(lists).map(([id, [, building]]) => [id, building])), free: new Set(free), waits: 0 } as unknown as Read)
+  building: new Map(Object.entries(lists).map(([id, [, building]]) => [id, building])), free: new Set(free), waits: 0, elsewhere: new Map() } as unknown as Read)
 const task = (number: number, labels: string[], more: Json = {}): Json => ({ number, labels: labels.map(name => ({ name })), ...more })
 const free = (...names: string[]) => names.map(name => ({ id: name.toLowerCase(), name }))
 const numbers = (over: Partial<Numbers> = {}): Numbers => ({ builders: 4, free: free('Ada', 'Kai'), open: 0, unsized: 0, held: 3, landed: 12, landedBy: [['Pip', 7], ['Kai', 5]],
@@ -51,7 +51,7 @@ describe('a project\'s counts after an assigner\'s pass', () => {
     // next. One only given, with a sub-issue under it, is in its list as any other. Counted as the assigner reads them.
     const waiting = { sub_issues_summary: { total: 2, completed: 1 } }
     const issues = [task(1, ['builder:pip', 'status:taken'], waiting), task(2, ['builder:kai'], waiting), task(3, ['builder:ada', 'status:taken'], { sub_issues_summary: { total: 2, completed: 2 } })]
-    const cut = counts({ issues, read: readProblem({ now: NOW, issues, closed: [], crew: crew(), withReaders: new Set(), up: new Map() }) })
+    const cut = counts({ issues, read: readProblem({ now: NOW, issues, crew: crew(), withReaders: new Set(), up: new Map() }) })
     expect(cut.free.map(free => free.name)).toEqual(['Bo', 'Pip'])
   })
 
@@ -174,6 +174,17 @@ describe('what Harness says of the counts', () => {
     expect(shortLine(['Ada'], numbers({ unsized: 1 }), '09:05', undefined)).toContain('(1 open issue has no size)')
   })
 
+  // The allocator's design, package 8: a quarter of this repository's landings touch one file, so changes in flight collide there.
+  it('says in one clause the files most changes touch, as plain text, so the PM cuts tasks that split them by feature', () => {
+    expect(shortLine(['Ada'], numbers({ unsized: 2 }), '09:05', undefined, ['backend/src/superTabs/commands.ts', 'src/`@x` [y](http://z).ts']))
+      .toBe('Harness, 09:05: Ada has nothing to do, and no sized task is open (2 open issues have no size). 12 pull requests landed in the last 24 hours. '
+        + 'Open the next tasks as issues, each with its part:, size: and p0-p2 labels, or size the ones that wait; most changes touch '
+        + '`backend/src/superTabs/commands.ts` and `src/x yhttp//z.ts`, so cut tasks that split them by feature. If the work is done, tell your person.')
+    expect(shortLine(['Ada'], numbers(), '09:05', undefined, ['a.ts'])).toContain(' p0-p2 labels; most changes touch `a.ts`, so cut tasks that split it by feature. If the work')
+    expect(shortLine(['Ada'], numbers(), '09:05', undefined, ['a.ts', 'b.ts', 'c.ts'])).toContain('; most changes touch `a.ts`, `b.ts` and `c.ts`, so cut tasks that split them by feature. ')
+    expect(shortLine(['Ada'], numbers(), '09:05', undefined, [])).toBe(shortLine(['Ada'], numbers(), '09:05', undefined))
+  })
+
   it('says how far the goal is by its numbers, how to state one where there is none, and nothing of one it could not read', () => {
     const goal: Score = { total: 60, passed: 41, failed: 3, waiting: 16 }
     expect(shortLine(['Ada', 'Kai'], numbers(), '14:00', goal)).toBe('Harness, 14:00: Ada and Kai have nothing to do, and no sized task is open. 12 pull requests landed in the last 24 hours. '
@@ -266,8 +277,9 @@ describe('the numbers, told as they are due', () => {
     const make = () => new PmNumbers({ send, file, now: () => clock.now, log })
     /** The project's goal, read when a line that says it is sent: one that cannot be read, unless a test gives another. */
     const goal = vi.fn(async (): Promise<Score | null> => { throw new Error('No goal is read in this test.') })
-    /** What the day's scoreboard says, read when the day is posted (scoreboard.ts): nothing, unless a test gives words. */
-    const board = vi.fn(async (): Promise<string> => '')
+    /** What the day's scoreboard says, read when the day is posted (scoreboard.ts): nothing, and no files read, unless a test gives
+     *  others. */
+    const board = vi.fn(async (): Promise<DayBoard> => ({ words: '', hot: null }))
     return { clock, sent, log, failing, tried, ids, file, make, numbers: make(), goal, board }
   }
   /** A pass every minute for [minutes], as the assigner makes them. */
@@ -618,7 +630,7 @@ describe('the numbers, told as they are due', () => {
 
   it('reads the day\'s scoreboard only as the day is posted, once for the day however often the post is tried, and posts without one it cannot read', async () => {
     const t = setup(new Date(2026, 10, 11, 8, 58).getTime()), landed = numbers({ free: [] })
-    t.board.mockResolvedValue('Trains: 4 landed.')
+    t.board.mockResolvedValue({ words: 'Trains: 4 landed.', hot: null })
     await passes(t, 2, landed)
     expect(t.board).not.toHaveBeenCalled()
     await passes(t, 3, landed)
@@ -641,7 +653,7 @@ describe('the numbers, told as they are due', () => {
     expect(t.sent.at(-1)![2]).toBe(dayLine({ ...landed, closed: 10 }, undefined, 'Trains: 4 landed.'))
     // The next day's is read anew.
     t.clock.now = new Date(2026, 10, 14, 9, 0).getTime()
-    t.board.mockResolvedValue('Trains: 5 landed.')
+    t.board.mockResolvedValue({ words: 'Trains: 5 landed.', hot: null })
     await passes(t, 1, landed)
     expect(t.sent.at(-1)![2]).toBe(dayLine(landed, undefined, 'Trains: 5 landed.'))
     // And never posted for another day: a post the server took on no try of its day is the next day's, with that day's scoreboard.
@@ -651,7 +663,7 @@ describe('the numbers, told as they are due', () => {
     expect(t.board).toHaveBeenCalledTimes(4)
     t.clock.now = new Date(2026, 10, 16, 9, 0).getTime()
     t.failing.clear()
-    t.board.mockResolvedValue('Trains: 6 landed.')
+    t.board.mockResolvedValue({ words: 'Trains: 6 landed.', hot: null })
     await passes(t, 1, landed)
     expect(t.board).toHaveBeenCalledTimes(5)
     expect(t.sent.at(-1)![2]).toBe(dayLine(landed, undefined, 'Trains: 6 landed.'))
@@ -673,7 +685,7 @@ describe('the numbers, told as they are due', () => {
     const t = setup(new Date(2026, 10, 11, 9, 0).getTime()), landed = numbers({ free: [] })
     t.failing.set('post', down)
     // That it is being read is written before the read: a daemon that stops in the middle of it finds that on its next start.
-    t.board.mockImplementation(async () => { expect(kept(t).board).toEqual({ day: '2026-11-11' }); return 'Trains: 4 landed.' })
+    t.board.mockImplementation(async () => { expect(kept(t).board).toEqual({ day: '2026-11-11' }); return { words: 'Trains: 4 landed.', hot: null } })
     await passes(t, 1, landed)
     expect(t.board).toHaveBeenCalledOnce()
     expect(kept(t).board).toEqual({ day: '2026-11-11', words: 'Trains: 4 landed.' })
@@ -710,6 +722,73 @@ describe('the numbers, told as they are due', () => {
       expect(v.board).toHaveBeenCalledOnce()
       expect(kept(v)).toMatchObject({ typedAt: 5, board: { day: '2026-11-11', words: '' } })
     }
+  })
+
+  // The allocator's design, package 8. The files most landings touch are known only as the day's scoreboard is read, once a day
+  // for its post: they are kept with the project's record, so the PM and the merger use them with nothing read again,
+  // a restart (every release is one) included.
+  it('keeps the files most landings touch as the day\'s scoreboard named them, over a restart, until a later one reads its own', async () => {
+    const t = setup(new Date(2026, 10, 11, 9, 0).getTime()), landed = numbers({ free: [] }), hot = ['backend/src/superTabs/commands.ts', 'src/store.ts']
+    expect(t.numbers.hot(PROJECT)).toEqual([])
+    t.board.mockResolvedValue({ words: 'Files touched most.', hot })
+    await passes(t, 1, landed)
+    expect(t.numbers.hot(PROJECT)).toEqual(hot)
+    expect(t.make().hot(PROJECT)).toEqual(hot)
+    expect(t.numbers.hot({ ...PROJECT, projectId: 'other' })).toEqual([])
+    // A day whose files GitHub did not give, or whose scoreboard could not be read at all, leaves them; one that names none clears them.
+    for (const next of [async () => ({ words: '', hot: null }), async () => { throw new Error('GitHub did not answer.') }]) {
+      t.clock.now += 24 * HOUR
+      t.board.mockImplementation(next)
+      await passes(t, 1, landed)
+      expect(t.numbers.hot(PROJECT)).toEqual(hot)
+    }
+    t.clock.now += 24 * HOUR
+    t.board.mockResolvedValue({ words: '', hot: [] })
+    await passes(t, 1, landed)
+    expect(t.numbers.hot(PROJECT)).toEqual([])
+    // What a record keeps that is no list of paths is none.
+    for (const kept of ['src/a.ts', [1], null]) {
+      writeFileSync(t.file, JSON.stringify({ app: { typedAt: 0, told: 0, said: false, activity: 0, day: '', hot: kept, hotTold: kept } }))
+      expect(t.make().hot(PROJECT)).toEqual([])
+    }
+  })
+
+  // Said once for each list (anh Dee, 2026-11-11: say each thing once per real change), not each hour work is short.
+  it('tells the PM in one clause the files most changes touch when work runs short, once for each list they make', async () => {
+    const t = setup(), hub = 'backend/src/superTabs/commands.ts', landed = { ...quiet, landed: 1 }
+    let pm = t.numbers
+    /** The [date]th from nine: the day's scoreboard, read as it is posted, names [hot]; the team lands work, and builders wait from
+     *  then, as nobody did overnight. */
+    const day = async (date: number, hot: string[] | null) => {
+      t.clock.now = new Date(2026, 10, date, 8, 59).getTime()
+      await passes(t, 1, busy, pm)
+      t.board.mockResolvedValue({ words: '', hot })
+      await passes(t, 16, { ...landed, activity: t.clock.now }, pm)
+    }
+    const tells = () => t.sent.filter(([how]) => how === 'tell').map(([, , text]) => text)
+    await day(11, [hub, 'src/store.ts'])
+    expect(tells()).toEqual([shortLine(['Ada', 'Kai'], landed, '09:15', undefined, [hub, 'src/store.ts'])])
+    expect(kept(t)).toMatchObject({ hot: [hub, 'src/store.ts'], hotTold: [hub, 'src/store.ts'] })
+    // Over a restart, and the next days with the same files in another order or none read: not said again.
+    pm = t.make()
+    await day(12, ['src/store.ts', hub])
+    await day(13, null)
+    // Another list is said, once; none says nothing; and the list it was told, back again, is not said again.
+    await day(14, [hub])
+    await day(15, [])
+    await day(16, [hub])
+    const plain = shortLine(['Ada', 'Kai'], landed, '09:15', undefined)
+    expect(tells().slice(1)).toEqual([plain, plain, shortLine(['Ada', 'Kai'], landed, '09:15', undefined, [hub]), plain, plain])
+    // A line the server did not take told nothing: the clause goes with the line that is taken.
+    const u = setup()
+    writeFileSync(u.file, JSON.stringify({ app: { typedAt: 0, told: 0, said: false, activity: 0, day: '2026-11-11', hot: [hub] } }))
+    u.failing.set('tell', down)
+    const again = u.make()
+    await passes(u, 16, quiet, again)
+    expect(kept(u).hotTold).toBeUndefined()
+    u.failing.clear()
+    await passes(u, 1, quiet, again)
+    expect(u.sent.map(([, , text]) => text)).toEqual([shortLine(['Ada', 'Kai'], quiet, '14:16', undefined, [hub])])
   })
 
   it('says each failure once among the last two hundred, and a memory it could not write', async () => {

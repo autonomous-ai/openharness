@@ -26,8 +26,14 @@ const FILES = ['src/superTabs/shortCommand.ts', ...IN_CORE,
   'src/superTabs/shipping.ts', 'src/superTabs/shippingRead.ts',
   // Every write to GitHub in its person's name, said once and held under GitHub's limits (anh Dee, 11-11: "never spam github").
   'src/superTabs/githubWrites.ts',
+  // Tokens for a task, counted on its builder's own computer, and the cost said on a landed change (Swarm allocator, package 12).
+  'src/superTabs/taskTokens.ts',
   // How an engine left a start's pane, in fixed words, which the start's failure says (the rehearsal's Codex builders, 11-11).
   'src/superTabs/engineExit.ts',
+  // The unit suite's workers, sized to its Swarm agent's share of the machine's cores (anh Dee, 11-11).
+  'src/testing/suiteWorkers.ts',
+  // A file's path as a line says it, in the numbers, the scoreboard and the merger's notes (the allocator's design, package 8).
+  'src/superTabs/plainPath.ts',
   // A task offered to one agent, and answered by its own computer (the allocator's design, package 16, 11-12).
   'src/superTabs/taskOffers.ts',
 ]

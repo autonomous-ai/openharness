@@ -14,6 +14,8 @@ import 'package:harness_mobile/swarm/swarm_new_project_sheet.dart';
 import 'package:harness_mobile/swarm/swarm_new_repository.dart';
 import 'package:harness_mobile/swarm/swarm_outgoing_files.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
+import 'package:harness_mobile/swarm/swarm_project_page.dart'
+    show SwarmOpenedChat;
 import 'package:harness_mobile/swarm/swarm_reader.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
@@ -503,8 +505,9 @@ void main() {
       );
     });
 
-    test('its files go up to the new project\'s chat, then go with its '
-        'brief', () async {
+    test('its files go up to its Product Manager\'s own chat, which the '
+        'start answers, then go with its brief there: nothing goes to the '
+        'project\'s channel, where only agents post', () async {
       final made = await run(
         SwarmNewProjectSteps.of(reader),
         files: [file('spec.pdf'), file('build.log')],
@@ -512,12 +515,12 @@ void main() {
       expect(uploads.names, ['spec.pdf', 'build.log']);
       expect(
         {for (final u in uploads.asked) u.conversationId},
-        {'project-$made'},
+        {pmChatOf(made)},
       );
       expect({for (final u in uploads.asked) u.tabId}, {tab});
       expect(swarm.commands('message.send').single['command'], {
         'type': 'message.send',
-        'conversationId': 'project-$made',
+        'conversationId': pmChatOf(made),
         'text': 'Ship the phone flow',
         'replyTo': null,
         'recipientIds': <String>[],
@@ -525,7 +528,7 @@ void main() {
       });
       expect(
         [for (final b in swarm.sent) (b['command'] as Map)['type']],
-        ['project.create', 'message.send', 'lead.start', 'project.rename'],
+        ['project.create', 'lead.start', 'message.send', 'project.rename'],
       );
     });
 
@@ -564,7 +567,12 @@ void main() {
       );
       expect(steps.projectId, isNotNull);
       expect(swarm.commands('message.send'), isEmpty);
-      expect(swarm.commands('lead.start'), isEmpty);
+      expect(
+        swarm.commands('lead.start'),
+        hasLength(1),
+        reason: 'its PM starts first, and its chat waits for the request',
+      );
+      expect(steps.briefLeft, isTrue);
       expect([for (final f in steps.sentFiles) f.name], ['a.log', 'b.log']);
 
       uploads.refuse.clear();
@@ -576,6 +584,8 @@ void main() {
         ['id-a.log', 'id-b.log'],
       );
       expect(swarm.commands('project.create'), hasLength(1));
+      expect(swarm.commands('lead.start'), hasLength(1));
+      expect(steps.briefLeft, isFalse);
     });
 
     test('no file starts going up once the sheet has gone, and a Create later '
@@ -676,14 +686,52 @@ void main() {
       expect(sends[0]['operationId'], isNot(sends[1]['operationId']));
     });
 
-    test('creates the project, posts its brief, starts its Product Manager '
-        'on the machine picked, then names it after its repository', () async {
+    // A server before #3951 starts the PM and names no chat of its own: the
+    // brief has nowhere to go but the channel, which refuses it (AGENTS_ONLY).
+    test('a start answered with no PM chat says the server needs an update, '
+        'sends no brief and starts no second PM', () async {
+      swarm.answer = (command) => command['type'] == 'lead.start'
+          ? {
+              'result': {
+                'startId': 's1',
+                'machineId': command['machineId'],
+              },
+            }
+          : null;
+      final steps = SwarmNewProjectSteps.of(reader);
+      await expectLater(
+        run(steps),
+        throwsA(
+          isA<SuperTabFailure>()
+              .having((f) => f.code, 'code', 'UPDATE_REQUIRED')
+              .having(
+                (f) => f.message,
+                'message',
+                'This Swarm’s server needs an update to start a PM.',
+              ),
+        ),
+      );
+      expect(steps.started, isFalse);
+      expect(swarm.commands('message.send'), isEmpty);
+      expect(swarm.commands('project.rename'), isEmpty);
+
+      // Tried again, the same start goes: its replay, never a second PM.
+      await expectLater(run(steps), throwsA(isA<SuperTabFailure>()));
+      final starts = swarm.commands('lead.start');
+      expect(starts, hasLength(2));
+      expect(starts[0]['operationId'], starts[1]['operationId']);
+      expect(swarm.commands('message.send'), isEmpty);
+    });
+
+    test('creates the project, starts its Product Manager on the machine '
+        'picked, posts its brief in the PM\'s own chat, then names it after '
+        'its repository', () async {
       final steps = SwarmNewProjectSteps.of(reader);
       final made = await run(steps);
 
       expect(
         [for (final b in swarm.sent) (b['command'] as Map)['type']],
-        ['project.create', 'message.send', 'lead.start', 'project.rename'],
+        ['project.create', 'lead.start', 'message.send', 'project.rename'],
       );
       final create = swarm.commands('project.create').single;
       expect(create['command'], {
@@ -695,7 +743,7 @@ void main() {
       expect(made, 'p-${create['operationId']}');
       expect(swarm.commands('message.send').single['command'], {
         'type': 'message.send',
-        'conversationId': 'project-$made',
+        'conversationId': pmChatOf(made),
         'text': 'Ship the phone flow',
         'replyTo': null,
         'recipientIds': <String>[],
@@ -741,12 +789,16 @@ void main() {
 
     test('a project deleted before its start lets its steps go: nothing is '
         'started, and the next Create makes a new one', () async {
+      final parts = fake.routes['/api/super-tabs/$tab/parts']!;
+      var made = false;
       swarm.answer = (command) {
-        if (command['type'] == 'message.send') {
-          // Deleted from Desktop meanwhile.
-          swarm.projects.removeWhere((p) => p['name'] == 'New project');
-        }
+        if (command['type'] == 'project.create') made = true;
         return null;
+      };
+      fake.routes['/api/super-tabs/$tab/parts'] = (body) {
+        // Deleted from Desktop meanwhile, before the start reads it again.
+        if (made) swarm.projects.removeWhere((p) => p['name'] == 'New project');
+        return parts(body);
       };
       final steps = SwarmNewProjectSteps.of(reader);
       await expectLater(
@@ -756,9 +808,11 @@ void main() {
         ),
       );
       expect(swarm.commands('lead.start'), isEmpty);
+      expect(swarm.commands('message.send'), isEmpty);
       expect(SwarmNewProjectSteps.heldBy(reader), isNull);
 
       swarm.answer = null;
+      fake.routes['/api/super-tabs/$tab/parts'] = parts;
       await run(SwarmNewProjectSteps.of(reader));
       final creates = swarm.commands('project.create');
       expect(creates, hasLength(2));
@@ -820,7 +874,8 @@ void main() {
       fake.routes['/api/super-tabs/$tab/parts'] = parts;
       var lose = true;
       swarm.answer = (command) {
-        if (command['type'] == 'message.send' && lose) {
+        // Lost before the Swarm made it: the next run makes it.
+        if (command['type'] == 'project.create' && lose) {
           lose = false;
           throw const SuperTabFailure('NETWORK', 'The Swarm didn’t answer.');
         }
@@ -828,14 +883,16 @@ void main() {
       };
       final steps = SwarmNewProjectSteps.of(reader);
       await expectLater(run(steps), throwsA(isA<SuperTabFailure>()));
-      final made = steps.projectId!;
+      expect(steps.projectId, isNull);
 
       final again = run(steps);
       await settle();
       gate.complete();
       await stale;
-      expect(await again, made);
-      expect(swarm.commands('project.create'), hasLength(1));
+      final made = await again;
+      expect(reader.snapshot!.projectById(made), isNotNull);
+      final creates = swarm.commands('project.create');
+      expect({for (final c in creates) c['operationId']}, hasLength(1));
       expect(swarm.commands('lead.start'), hasLength(1));
     });
 
@@ -1095,7 +1152,7 @@ void main() {
         await run(steps);
         expect(
           [for (final b in swarm.sent) (b['command'] as Map)['type']],
-          ['project.create', 'message.send', 'lead.start', 'project.rename'],
+          ['project.create', 'lead.start', 'message.send', 'project.rename'],
         );
       },
     );
@@ -1967,7 +2024,7 @@ void main() {
     });
 
     testWidgets('Create makes the project, starts its Product Manager on the '
-        'machine picked and opens its project screen', (tester) async {
+        'machine picked and opens its PM\'s chat', (tester) async {
       final swarm = NewProjectSwarm();
       await pump(tester, [swarm]);
       await openNewProject(tester);
@@ -1983,7 +2040,8 @@ void main() {
       expect(start['machineId'], 'mac-1');
       expect(start['repositoryUrl'], harnessRepo);
       expect(key('swarm-new-project-sheet'), findsNothing);
-      expectHomeCProject('openharness');
+      expectPmChat(swarm.projects.last['id'] as String);
+      expect(find.text('Product Manager'), findsWidgets);
     });
 
     testWidgets('a refused start keeps the project, in the list, says why, '
@@ -2026,7 +2084,7 @@ void main() {
       await tap(tester, 'swarm-new-project-create');
       expect(swarm.commands('project.create'), hasLength(1));
       expect(swarm.commands('lead.start'), hasLength(2));
-      expectHomeCProject('openharness');
+      expectPmChat(made);
     });
 
     testWidgets('a create whose answer was lost is sent again under its '
@@ -2090,7 +2148,47 @@ void main() {
       final renames = swarm.commands('project.rename');
       expect(renames, hasLength(2));
       expect(renames[0]['operationId'], renames[1]['operationId']);
-      expectHomeCProject('openharness');
+      expectPmChat(swarm.projects.last['id'] as String);
+    });
+
+    testWidgets('a request that fails once its Product Manager started says '
+        'so, and Try again sends it to the PM\'s chat without starting '
+        'another', (tester) async {
+      final swarm = NewProjectSwarm();
+      var fail = true;
+      swarm.answer = (command) {
+        if (command['type'] == 'message.send' && fail) {
+          fail = false;
+          throw const SuperTabFailure('NETWORK', 'The Swarm didn’t answer.');
+        }
+        return null;
+      };
+      await pump(tester, [swarm]);
+      await openNewProject(tester);
+      await tester.enterText(key('swarm-new-project-brief'), 'Ship it');
+      await pickMachine(tester, 'mac-1');
+      await tap(tester, 'swarm-new-project-create');
+
+      expect(
+        find.text(
+          'The project is made and its Product Manager is starting. '
+          'Sending your request didn’t finish: The Swarm didn’t answer.',
+        ),
+        findsOneWidget,
+      );
+      expect(swarm.commands('project.rename'), isEmpty);
+      await tap(tester, 'swarm-new-project-create');
+      expect(swarm.commands('lead.start'), hasLength(1));
+      final sends = swarm.commands('message.send');
+      expect(sends, hasLength(2));
+      expect(sends[0]['operationId'], sends[1]['operationId']);
+      final made = swarm.commands('project.create').single['operationId'];
+      expect(
+        (sends[1]['command'] as Map)['conversationId'],
+        pmChatOf('p-$made'),
+      );
+      expect((sends[1]['command'] as Map)['text'], 'Ship it');
+      expectPmChat(swarm.projects.last['id'] as String);
     });
 
     testWidgets('while a step\'s answer is awaited it stays open: its close, '
@@ -2130,7 +2228,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(key('swarm-new-project-sheet'), findsNothing);
       expect(swarm.commands('project.create'), hasLength(1));
-      expectHomeCProject('openharness');
+      expectPmChat(swarm.projects.last['id'] as String);
     });
 
     testWidgets('closed after a create\'s answer was lost, it opens on its '
@@ -2193,7 +2291,7 @@ void main() {
         'Ship it',
       );
       expect(swarm.commands('lead.start'), hasLength(1));
-      expectHomeCProject('openharness');
+      expectPmChat(swarm.projects.last['id'] as String);
     });
 
     testWidgets('closed after its create was refused, it opens afresh: '
@@ -2262,7 +2360,7 @@ void main() {
       await tap(tester, 'swarm-new-project-create');
       expect(swarm.commands('project.create'), hasLength(2));
       expect(swarm.commands('message.send'), hasLength(2));
-      expectHomeCProject('openharness');
+      expectPmChat(swarm.projects.last['id'] as String);
     });
 
     testWidgets('Start over lets the steps go when nothing runs: the fields '
@@ -2300,7 +2398,7 @@ void main() {
       final creates = swarm.commands('project.create');
       expect(creates, hasLength(2));
       expect(creates[0]['operationId'], isNot(creates[1]['operationId']));
-      expectHomeCProject('openharness');
+      expectPmChat(swarm.projects.last['id'] as String);
     });
 
     testWidgets('Start over after a lost create says a project may be there, '
@@ -2394,9 +2492,9 @@ void main() {
 
       expect(
         [for (final b in swarm.sent) (b['command'] as Map)['type']],
-        ['project.create', 'message.send', 'lead.start', 'project.rename'],
+        ['project.create', 'lead.start', 'message.send', 'project.rename'],
       );
-      expectHomeCProject('openharness');
+      expectPmChat(swarm.projects.last['id'] as String);
     });
 
     testWidgets('on a 320 by 568 phone with the keyboard up and a four-line '
@@ -2798,8 +2896,8 @@ void main() {
         expect(tester.takeException(), isNull);
       });
 
-      testWidgets('+ attaches files under the brief; they go up to the new '
-          'project\'s chat and with its brief', (tester) async {
+      testWidgets('+ attaches files under the brief; they go up to its '
+          'Product Manager\'s chat and with its brief', (tester) async {
         final uploads = FakeUploads();
         final swarm = NewProjectSwarm();
         picks(['spec.pdf']);
@@ -2812,11 +2910,11 @@ void main() {
 
         final made = swarm.commands('project.create').single['operationId'];
         expect(uploads.names, ['spec.pdf']);
-        expect(uploads.asked.single.conversationId, 'project-p-$made');
+        expect(uploads.asked.single.conversationId, pmChatOf('p-$made'));
         final send = swarm.commands('message.send').single['command'] as Map;
         expect(send['text'], '');
         expect(send['attachmentIds'], ['id-spec.pdf']);
-        expectHomeCProject('openharness');
+        expectPmChat(swarm.projects.last['id'] as String);
       });
 
       testWidgets('a pick past ten files says what was left out', (
@@ -2891,11 +2989,12 @@ void main() {
           (swarm.commands('lead.start').single['command'] as Map)['engine'],
           'codex',
         );
-        expectHomeCProject('openharness');
+        expectPmChat(swarm.projects.last['id'] as String);
       });
 
       testWidgets('Start over opens its files again, and the next Create '
-          'sends them to the new project', (tester) async {
+          'sends them to the new project\'s PM; a start refused uploads '
+          'nothing', (tester) async {
         final uploads = FakeUploads();
         final swarm = NewProjectSwarm();
         swarm.answer = (command) => command['type'] == 'lead.start'
@@ -2925,13 +3024,10 @@ void main() {
         await tap(tester, 'swarm-new-project-create');
         final creates = swarm.commands('project.create');
         expect(creates, hasLength(2));
-        expect(uploads.names, ['build.log', 'build.log']);
+        expect(uploads.names, ['build.log']);
         expect(
           [for (final u in uploads.asked) u.conversationId],
-          [
-            'project-p-${creates[0]['operationId']}',
-            'project-p-${creates[1]['operationId']}',
-          ],
+          [pmChatOf('p-${creates[1]['operationId']}')],
         );
       });
 
@@ -3228,8 +3324,10 @@ void main() {
           findsOneWidget,
         );
         expect(key('swarm-new-repo-copy'), findsOneWidget);
+        expect(find.text('Open chat'), findsOneWidget);
         await tap(tester, 'swarm-new-project-open-made');
         expect(find.byType(BottomSheet), findsNothing);
+        expectPmChat(made);
       });
 
       // Heron, from #3201's security reviews: the callback is making it.
@@ -3529,4 +3627,16 @@ void main() {
       }
     });
   });
+}
+
+/// The PM's own chat New project sent [projectId]'s brief to is the screen
+/// that opens, as Desktop's does, not the project's channel.
+void expectPmChat(String projectId) {
+  expect(
+    find.byWidgetPredicate(
+      (w) => w is SwarmOpenedChat && w.conversationId == pmChatOf(projectId),
+    ),
+    findsOneWidget,
+  );
+  expect(find.text('#openharness'), findsNothing, reason: 'no channel');
 }

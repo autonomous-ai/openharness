@@ -1,17 +1,15 @@
 /**
  * Workspaces: everything about the folder an agent works in (docs/design/2026-10-03-harnessd.md,
- * "Workspaces"). Here so far: a worktree branch Harness made up takes its session's name, and the
- * worktrees Harness made that nothing uses are swept.
+ * "Workspaces"). Here so far: a worktree branch Harness made up takes its session's name. Nothing here removes a worktree:
+ * the timer sweep that did (#4166) removed clean, week-idle ones its person had chosen to keep, gitignored files and all.
  *
  * A service on the core boundary (step 13): it reads the core only through `CoreApi`, and the core
  * reaches it only through `ports.workspaces`.
  */
-import { homedir } from 'node:os'
-import { join } from 'node:path'
 import type { CoreApi, CorePorts } from '../core/api.js'
 import { sid } from '../lib/log.js'
 import { sessionDisplayTitle } from '../lib/registry.js'
-import { forgetScmProject, renameScmProject, sweepScmProjects } from '../scm/scmProjects.js'
+import { forgetScmProject, renameScmProject } from '../scm/scmProjects.js'
 
 export function startWorkspaces(core: CoreApi, ports: CorePorts): void {
   // A worktree branch Harness made up at Start takes its session's name once it has one
@@ -32,23 +30,5 @@ export function startWorkspaces(core: CoreApi, ports: CorePorts): void {
       }).catch(() => {})
     }
   }
-  // Worktrees Harness made that no live or stopped harness uses and nothing would miss
-  // (lib/worktreeSweep.ts). The core decides when: a few minutes after start, once restored agents
-  // are back in the registry, then twice a day.
-  //
-  // One sweep at a time: a sweep still going is never joined by a second over the same folders. In the
-  // core's process its timers are hours apart; in this service's own process, a core that restarted
-  // asks again on its own timer while a long sweep from the last core may still be running.
-  let sweeping = false
-  const sweepUnusedWorktrees = () => {
-    if (sweeping) return
-    let inUse: Array<string | null>
-    try { inUse = core.agents.all().map(s => s.cwd) } catch { return }
-    sweeping = true
-    void sweepScmProjects({ root: join(homedir(), 'harnesses'), inUse })
-      .then(removed => { if (removed.length) console.log(`[worktrees] removed ${removed.length} unused worktree(s)`) })
-      .catch(() => {})
-      .finally(() => { sweeping = false })
-  }
-  ports.workspaces = { nameBranches: nameSessionBranches, sweepUnused: sweepUnusedWorktrees }
+  ports.workspaces = { nameBranches: nameSessionBranches }
 }

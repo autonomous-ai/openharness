@@ -28,7 +28,8 @@
 // refused, and the goal paused with no further output), `!compactmid` compacts in the
 // middle of a turn as an automatic compaction does, `!version` answers with the version this
 // process is, `!env <prefix>[,<prefix>…]` with the names of the variables in its environment that start with a
-// prefix (never their values), as an agent that reads its own environment can, `!goal` and `!goal done`
+// prefix (never their values), as an agent that reads its own environment can, `!cores <tag>` with the one value it
+// tells, its share of the machine's cores (`HARNESS_CORES`), `!goal` and `!goal done`
 // (Codex) start and achieve a goal the way Codex 0.160 shows one under its composer, `!browse` (Codex) leaves Codex browsing its transcript in its default fullscreen
 // mode, and `!browse scrollback` in its scrollback mode, `!transcript` (Claude Code) leaves it in its
 // transcript view, as ctrl+o does, `!overlay` (Codex) in its transcript overlay, as ctrl+t does in its
@@ -194,6 +195,8 @@ export async function run(engine, config = {}, { native = false } = {}) {
   // Resume checks for a live background job before opening a pane. This is a
   // CLI query, not an agent launch: keep it out of the launch-argv ledger.
   if (engine === 'claude' && args.length === 2 && args[0] === 'agents' && args[1] === '--json') {
+    // Who asked, by its pid: Claude Code's engine worker, not the core (#4146).
+    if (config.root) appendFileSync(join(config.root, 'background-job-queries'), `${process.ppid}\n`)
     process.stdout.write('[]\n')
     return
   }
@@ -1567,6 +1570,12 @@ export async function run(engine, config = {}, { native = false } = {}) {
       const prefixes = directive[2].split(',').filter(Boolean)
       const names = Object.keys(process.env).filter((name) => prefixes.some((prefix) => name.startsWith(prefix))).sort()
       await finish(`env ${directive[2]}: ${names.join(',') || '(none)'}`)
+      return
+    }
+    // A Swarm agent's share of its machine's cores (superTabs/inCore/launch.ts), the one value an answer tells: a share is a
+    // count, never a secret. The tag tells this answer from earlier ones in the same thread.
+    if (directive?.[1] === 'cores') {
+      await finish(`cores ${directive[2]}: ${process.env.HARNESS_CORES ?? '(none)'}`)
       return
     }
     if (engine === 'codex' && directive?.[1] === 'goal') {

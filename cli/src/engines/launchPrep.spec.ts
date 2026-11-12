@@ -51,7 +51,7 @@ describe('first-run questions answered from the phone', () => {
     vi.mocked(recordAcceptanceIn).mockClear()
     expect(answerFirstRun('claude', { theme: 'light' }, { HOME: '/home/u' })).toBe(true)
     expect(recordSettingIn).toHaveBeenLastCalledWith(join('/home/u', '.claude.json'), 'theme', 'light')
-    // Task #4215: the Buddy runs in its owner's own permission mode; nothing goes into their settings for it.
+    // Task #4215: no permission setting goes into a person's settings for an agent Harness starts.
     expect(recordAcceptanceIn).toHaveBeenCalledExactlyOnceWith(join('/home/u', '.claude.json'), 'hasCompletedOnboarding')
     // A theme the engine has no word for is not written; the rest still is.
     vi.mocked(recordSettingIn).mockClear()

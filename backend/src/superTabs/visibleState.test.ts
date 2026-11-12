@@ -32,6 +32,12 @@ describe('visibleState', () => {
     expect(visibleState(s.state, outsider, NOW).projects!.map(p => p.id)).not.toContain(s.secret)
   })
 
+  // anh Dee, 2026-11-12: a member's apps name another person's Personal Swarm after them, so every reader is told it is one.
+  it.each(readers)('tells %s whether the Swarm is its owner\'s Personal Swarm', (_name, actor) => {
+    expect(visibleState({ ...s.state, personal: true }, actor, NOW).personal).toBe(true)
+    expect(visibleState(s.state, actor, NOW)).not.toHaveProperty('personal')
+  })
+
   it('refuses someone outside the Swarm', () => {
     let refused: unknown
     try { visibleState(s.state, stranger, NOW) } catch (error) { refused = error }

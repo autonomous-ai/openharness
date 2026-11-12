@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
-import { authorOf, checksOf, GitHubMerge, ledProjects, noteOf, pmRunsHere, recordedAuthors, verdictOf, VerdictRecords, verdicts } from './githubMerge.js'
+import { authorOf, checksOf, COST_AGAIN_MS, COST_WAIT_MS, GitHubMerge, ledProjects, noteOf, pmRunsHere, recordedAuthors, verdictOf, VerdictRecords, verdicts, type LedProject } from './githubMerge.js'
+import type { ReadRow } from './taskTokens.js'
 import type { Crew } from './assign/crew.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { commandRecords } from './commandRecords.fake.js'
@@ -24,7 +25,12 @@ function fakeGitHub() {
     runs: new Map<string, Json[]>([[HEAD, [{ name: 'test', status: 'completed', conclusion: 'success' }]]]), statuses: new Map<string, Json[]>(),
     // The tasks, as issues: #2 is the one `pull()` closes. And the status GitHub answers with for a task it does not give.
     issues: new Map<number, Json>([[2, { number: 2, body: 'Say a quote a day.' }]]), refused: new Map<number, number>(),
-    state: 'clean', mergeAnswer: 200, signedOut: false, down: false, status: 0, sendFails: 0 }
+    // The files each pull request touches, by its number, by name or as GitHub lists one renamed: none unless a test gives some.
+    // And how GitHub fails the reads a test names: an answer cut off on its way, a timeout, a rate limit, or a status.
+    files: new Map<number, Array<string | Json>>(), failing: new Map<RegExp, 'cut' | 'timeout' | 'limited' | number>(),
+    state: 'clean', mergeAnswer: 200, signedOut: false, down: false, status: 0, sendFails: 0,
+    // Who GitHub says may see the repository: public unless a test says. An internal one, an enterprise's, is `private` too.
+    visibility: 'public' as 'public' | 'private' | 'internal' | undefined }
   const sent: Array<{ method: string; path: string; body: unknown }> = []
   /** Every read asked, and whether it carried the last answer's ETag. */
   const asked: string[] = []
@@ -33,13 +39,20 @@ function fakeGitHub() {
     if (repo.signedOut) throw Object.assign(new Error('gh is not signed in on this computer: run `gh auth login`.'), { code: 'GH_SIGNED_OUT' })
     if (repo.down) throw Object.assign(new Error('fetch failed'), { code: 'ECONNRESET' })
     if (repo.status) return { status: repo.status, etag: null, body: null, resetAt: null }
+    for (const [pattern, answer] of repo.failing) {
+      if (!pattern.test(path)) continue
+      if (answer === 'timeout') throw Object.assign(new Error('The operation was aborted due to timeout'), { code: 'TimeoutError' })
+      return { status: answer === 'cut' ? 200 : answer === 'limited' ? 403 : answer, etag: null, body: null, resetAt: answer === 'limited' ? Date.parse('2026-11-09T09:00:00Z') : null }
+    }
     const url = new URL(`https://api.github.com${path}`)
     const p = url.pathname
     const refused = repo.refused.get(Number(/\/issues\/(\d+)$/.exec(p)?.[1]))
     if (refused) return { status: refused, etag: null, body: null, resetAt: null }
     // Each pull request here is alone and holds main's tip (`behind_by` 0), so it merges on its own; the train is githubTrain.spec.ts.
     const compared = p.split('...').at(-1)!
-    const body = p === '/repos/acme/app' ? { default_branch: 'main' }
+    const body = p === '/repos/acme/app' ? { default_branch: 'main', ...repo.visibility ? { private: repo.visibility !== 'public', visibility: repo.visibility } : {} }
+      // This computer's login: the one the team's comments here come from (`comment`).
+      : p === '/user' ? { login: 'deehw' }
       : p === '/repos/acme/app/pulls' && url.searchParams.get('state') === 'closed' ? []
       // A page of the list, as GitHub pages it.
       : p === '/repos/acme/app/pulls' ? repo.pulls.slice((Number(url.searchParams.get('page') ?? 1) - 1) * Number(url.searchParams.get('per_page') ?? 30),
@@ -48,6 +61,7 @@ function fakeGitHub() {
       : /\/issues\/\d+$/.test(p) ? repo.issues.get(Number(p.split('/').at(-1))) ?? null
       : /\/pulls\/\d+\/reviews$/.test(p) ? repo.reviews.get(Number(p.split('/').at(-2))) ?? []
       : /\/pulls\/\d+\/commits$/.test(p) ? repo.commits.get(Number(p.split('/').at(-2))) ?? [{ sha: HEAD }]
+      : /\/pulls\/\d+\/files$/.test(p) ? (repo.files.get(Number(p.split('/').at(-2))) ?? []).map(file => typeof file === 'string' ? { filename: file } : file)
       // A head against main, from the commit of main it stands on (FORK unless the test says another); and main's own change
       // between two of its commits.
       : /\/compare\/main\.\.\.[0-9a-f]+$/.test(p) ? repo.compare.has(compared) ? { behind_by: 0, merge_base_commit: { sha: FORK }, ...repo.compare.get(compared) }
@@ -77,11 +91,15 @@ function setup() {
   const crew: Crew = { builders: [{ id: 'pip', name: 'Pip', label: 'builder:pip', machineId: 'mac', engine: 'claude' }], machines: [] }
   const team = vi.fn(async () => crew)
   const clock = { now: Date.parse('2026-11-09T07:31:00Z') }
+  // What the server keeps of what each change cost its builder (taskTokens.ts): nothing, unless a test says.
+  const costs = vi.fn(async (_project: LedProject, _numbers: number[]): Promise<ReadRow[]> => [])
+  /** The files most landings of the project touch, as its day's scoreboard named them: none unless a test gives some. */
+  const hot: string[] = []
   const merger = new GitHubMerge({ projects: async () => [{ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }],
-    crew: team, get: github.get, send: github.send, now: () => clock.now, log, records: new VerdictRecords(github.authors, () => clock.now, log) })
+    crew: team, get: github.get, send: github.send, now: () => clock.now, log, records: new VerdictRecords(github.authors, () => clock.now, log), costs, hot: () => hot })
   const merges = () => github.sent.filter(s => s.method === 'PUT')
   const comments = () => github.sent.filter(s => s.method === 'POST').map(s => String((s.body as Json).body))
-  return { github, merger, log, merges, comments, clock, crew: team }
+  return { github, merger, log, merges, comments, clock, crew: team, costs, hot }
 }
 
 /** Two passes three minutes apart: a head's checks count as passed only once they hold still (githubMerge.ts CHECKS_SETTLE_MS), so
@@ -98,6 +116,125 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     await settle(f)
     expect(f.merges()).toEqual([{ method: 'PUT', path: '/repos/acme/app/pulls/4/merge', body: { merge_method: 'squash', sha: HEAD } }])
     expect(f.comments()).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d: merged\. READ-OK on f6edb44 by Juno, checks green\.$/)])
+  })
+
+  // Swarm allocator, package 12: the comment that says a change landed carries what it cost its builder, from the rows its
+  // builder's own daemon wrote (taskTokens.ts). The same comment: nothing more is written to GitHub.
+  it('says in the comment that it merged what the change cost its builder: its model, minutes, tokens and fix rounds', async () => {
+    const f = setup()
+    f.github.repo.visibility = 'private'
+    const taken = f.clock.now - 39 * 60_000
+    const tokens = [{ model: 'claude-sonnet-5-5', input: 1_200, output: 3_400, cacheRead: 0, cacheWrite: 0 }]
+    f.costs.mockResolvedValue([{ number: 2, kind: 'build', name: 'Pip', tokens, rounds: 0, startedAt: taken, endedAt: taken + 60_000 },
+      { number: 4, kind: 'fix', name: 'Pip', tokens, rounds: 1, startedAt: taken + 120_000, endedAt: taken + 180_000 },
+      { number: 4, kind: 'read', name: 'Juno', tokens, rounds: 1, startedAt: taken, endedAt: taken }])
+    await settle(f)
+    expect(f.comments()).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d: merged\. READ-OK on f6edb44 by Juno, checks green\. Built by pip on `claude-sonnet-5-5`: 42 min, 9k tokens, 1 fix round\.$/)])
+    // Asked once, as the project's PM, for the pull request and the task it closes.
+    expect(f.costs.mock.calls).toEqual([[{ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }, [4, 2]]])
+    expect(f.github.sent.filter(s => s.method === 'POST')).toHaveLength(1)
+  })
+
+  // anh Dee's call, 12 November: on a public repository the builder's model and what the change used of its person's
+  // subscription would be public in that person's name, and an internal one is read by its whole enterprise. Its rows stay on
+  // the server, for the project's members.
+  it('says nothing of what a change cost on a repository GitHub does not say is private, and asks the server nothing for it', async () => {
+    for (const visibility of ['public', 'internal', undefined] as const) {
+      const f = setup()
+      f.github.repo.visibility = visibility
+      f.costs.mockResolvedValue([{ number: 4, kind: 'build', name: 'Pip', rounds: 0, startedAt: f.clock.now, endedAt: f.clock.now,
+        tokens: [{ model: 'claude-sonnet-5-5', input: 9_000, output: 0, cacheRead: 0, cacheWrite: 0 }] }])
+      await settle(f)
+      expect(f.comments(), String(visibility)).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d: merged\. READ-OK on f6edb44 by Juno, checks green\.$/)])
+      expect(f.costs).not.toHaveBeenCalled()
+      // Its privacy is in the read of the repository each pass makes already.
+      expect(f.github.asked.filter(path => path.startsWith('/repos/acme/app ') || path === '/repos/acme/app')).toHaveLength(2)
+    }
+  })
+
+  it('merges and says so as before when the cost cannot be read, says that once, leaves the server alone a quarter of an hour after each miss, and says once when it is read again', async () => {
+    const f = setup()
+    f.github.repo.visibility = 'private'
+    /** The next pull request, alone and ready, merged at [at]: seen a pass before, its checks holding still since. */
+    const mergeNext = async (number: number, at: number) => {
+      f.github.repo.pulls = [pull({ number, head: { ref: `pip/${number + 100}` }, body: '' })]
+      f.github.repo.comments.set(number, [comment('Juno, 14:20, to **Pip**: READ-OK f6edb44')])
+      await f.merger.tick()
+      f.clock.now = at
+      await f.merger.tick()
+    }
+    const unread = () => f.log.mock.calls.map(([line]) => String(line)).filter(line => line.includes('cost'))
+    const MIN = 60_000
+    f.costs.mockRejectedValue(new Error('the server did not answer'))
+    await settle(f)
+    const first = f.clock.now
+    expect(unread()).toEqual(['[super-tab] a landed change\'s cost could not be read: it is not said · COST_UNREAD acme/app'])
+    // Within the quarter it is not asked again. As the quarter ends it is, and misses again: nothing more is said.
+    await mergeNext(5, first + 10 * MIN)
+    expect(f.costs).toHaveBeenCalledTimes(1)
+    await mergeNext(6, first + COST_AGAIN_MS)
+    expect(f.costs).toHaveBeenCalledTimes(2)
+    // The quarter counts again from that miss.
+    await mergeNext(7, first + 2 * COST_AGAIN_MS - 1)
+    expect(f.costs).toHaveBeenCalledTimes(2)
+    expect(unread()).toHaveLength(1)
+    f.costs.mockResolvedValue([])
+    await mergeNext(8, first + 2 * COST_AGAIN_MS + 5 * MIN)
+    expect(f.costs).toHaveBeenCalledTimes(3)
+    expect(unread()).toEqual([expect.stringContaining('COST_UNREAD'), '[super-tab] landed changes\' costs are read again · acme/app'])
+    // Each merged and said so as before; by its branch alone, a pull request names its task too.
+    expect(f.comments()).toHaveLength(5)
+    for (const said of f.comments()) expect(said).toMatch(/merged\. READ-OK on f6edb44 by Juno, checks green\.$/)
+    expect(f.costs.mock.calls.at(-1)![1]).toEqual([8, 108])
+    // Read again, the next miss is said anew.
+    f.costs.mockRejectedValue(new Error('the server did not answer'))
+    await mergeNext(9, f.clock.now + 5 * MIN)
+    expect(unread()).toHaveLength(3)
+  })
+
+  it('asks the server about no more than twenty numbers, however many issues a pull request says it closes', async () => {
+    const f = setup()
+    f.github.repo.visibility = 'private'
+    f.github.repo.pulls = [pull({ body: Array.from({ length: 30 }, (_, i) => `Closes #${100 + i}`).join('\n') })]
+    await settle(f)
+    expect(f.costs.mock.calls[0]![1]).toEqual([4, ...Array.from({ length: 19 }, (_, i) => 100 + i)])
+  })
+
+  // The server refuses a read that asks about any number no issue can have, and a refused read leaves the sentence out of the
+  // repository's comments for a quarter of an hour (review of #4143).
+  it('asks about no number an issue cannot have, whatever a pull request\'s text says it closes, and twenty it can', async () => {
+    const f = setup()
+    f.github.repo.visibility = 'private'
+    const closes = ['Closes #0', 'Closes #12345678901', 'Closes #2147483648', 'Closes #2147483647', ...Array.from({ length: 21 }, (_, i) => `Closes #${100 + i}`)]
+    f.github.repo.pulls = [pull({ body: closes.join('\n') })]
+    await settle(f)
+    expect(f.costs.mock.calls.map(([, numbers]) => numbers)).toEqual([[4, 2_147_483_647, ...Array.from({ length: 18 }, (_, i) => 100 + i)]])
+  })
+
+  it('asks about each number once, though a pull request\'s branch names its own', async () => {
+    const f = setup()
+    f.github.repo.visibility = 'private'
+    f.github.repo.pulls = [pull({ head: { ref: 'pip/4' } })]
+    await settle(f)
+    expect(f.costs.mock.calls.map(([, numbers]) => numbers)).toEqual([[4, 2]])
+  })
+
+  it('does not hold the comment for a server that never answers: past the wait it is posted without the cost', async () => {
+    vi.useFakeTimers()
+    try {
+      const f = setup()
+      f.github.repo.visibility = 'private'
+      f.costs.mockReturnValue(new Promise<ReadRow[]>(() => {}))
+      await f.merger.tick()
+      f.clock.now += 3 * 60_000
+      const pass = f.merger.tick()
+      await vi.advanceTimersByTimeAsync(COST_WAIT_MS - 1)
+      expect(f.merges()).toHaveLength(1)
+      expect(f.comments()).toEqual([])
+      await vi.advanceTimersByTimeAsync(1)
+      await pass
+      expect(f.comments()).toEqual([expect.stringMatching(/merged\. READ-OK on f6edb44 by Juno, checks green\.$/)])
+    } finally { vi.useRealTimers() }
   })
 
   // lampOS merge-when-green.sh: checks count as passed only once they are "the same in two looks 30 s apart, from 3 min on". A
@@ -673,6 +810,39 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     }
   })
 
+  // #3787: on swarm-sandbox, #15 by builder:pip had its READ-OK and green checks and waited for hours, said to nobody: Attach had
+  // given Pip a new name, so the team no longer had a builder:pip. Only a task Harness gave that builder is told of: a shared
+  // repository carries dozens of builder: labels from older teams and tools (lampOS about 55).
+  it('tells the PM, once for each head, of a pull request for a task Harness gave a builder who is no longer on the team', async () => {
+    const f = setup()
+    f.crew.mockResolvedValue({ builders: [{ id: 'amari', name: 'Amari', label: 'builder:amari', machineId: 'mac', engine: 'claude' }], machines: [] })
+    f.github.repo.comments.set(2, [comment('Harness, 09:30: for **Pip**: it can start now.')])
+    await settle(f)
+    expect(f.merges()).toEqual([])
+    expect(f.comments()).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*Juno\*\*: not merged yet at f6edb44: its builder Pip is not on the team: Harness lands only the team's pull requests\. Put Pip back on it, or give #2 to one of its builders\.$/)])
+    f.github.repo.comments.set(4, [...f.github.repo.comments.get(4)!, comment(f.comments()[0]!)])
+    await settle(f)
+    expect(f.comments()).toHaveLength(1)
+    f.github.repo.pulls = [pull({ head: { sha: UNDER } })]
+    f.github.repo.runs.set(UNDER, [{ name: 'test', status: 'completed', conclusion: 'success' }])
+    await settle(f)
+    expect(f.comments()).toHaveLength(2)
+    expect(f.comments()[1]).toContain('not merged yet at b0b0b0b: its builder Pip is not on the team')
+  })
+
+  it('says nothing of a builder: label off the team that Harness here never gave the task to', async () => {
+    for (const given of [[], [comment('Harness, 09:30: for **Pip**: it can start now.', { user: { login: 'someone-else' } })],
+      [comment('Harness, 09:30: for **Pip**: it can start now.'), comment('Harness, 10:30: for **Amari**: it can start now.')],
+      [comment('Harness, 09:30: for **Pip**: it can start now.', { author_association: 'NONE' })]]) {
+      const f = setup()
+      f.crew.mockResolvedValue({ builders: [{ id: 'amari', name: 'Amari', label: 'builder:amari', machineId: 'mac', engine: 'claude' }], machines: [] })
+      f.github.repo.comments.set(2, given)
+      await settle(f)
+      expect(f.comments()).toEqual([])
+      expect(f.merges()).toEqual([])
+    }
+  })
+
   it('merges nothing on a READ-OK of an older head, by its author, by a stranger, or while a HOLD stands', async () => {
     for (const said of [[comment('Juno, 14:20, to **Pip**: READ-OK a1b2c3d')], [comment('Pip, 14:21: READ-OK f6edb44')],
       [comment('READ-OK f6edb44', { author_association: 'NONE', user: { login: 'stranger' } })],
@@ -999,6 +1169,228 @@ describe('a pull request lands after the one its task comes after', () => {
   })
 })
 
+// The allocator's design, package 8: a quarter of this repository's landings touch one file. A pull request that touches a file most
+// landings touch, which an older open one of another builder's touches too, is told so once as it opens, so its builder reads that
+// one before it changes the file again. Nothing waits for it: the train lands changes that do not conflict together, and tells a
+// real conflict to its author.
+describe('a pull request on a file most changes touch is told of another builder\'s older one on it', () => {
+  type Fixture = ReturnType<typeof setup>
+  const HUB = 'backend/src/superTabs/commands.ts'
+  const builder = (name: string) => ({ id: name.toLowerCase(), name, label: `builder:${name.toLowerCase()}`, machineId: 'mac', engine: 'claude' })
+  /** #5, Kai's, for task #12; and #6, Pip's, for task #13, read OK and green. Both touch [HUB]. */
+  function pair(f: Fixture): void {
+    f.hot.push(HUB)
+    f.crew.mockResolvedValue({ builders: [builder('Pip'), builder('Kai')], machines: [] })
+    f.github.repo.pulls = [pull({ number: 5, labels: [{ name: 'builder:kai' }], body: 'Closes #12', head: { sha: UNDER, ref: 'kai/12' } }),
+      pull({ number: 6, body: 'Closes #13', head: { sha: HEAD, ref: 'pip/13' } })]
+    f.github.repo.files.set(5, [HUB, 'src/kai.ts'])
+    f.github.repo.files.set(6, ['src/pip.ts', HUB])
+    f.github.repo.comments = new Map([[6, [comment('Juno, 14:20, to **Pip**: READ-OK f6edb44')]]])
+  }
+  const TOLD = /^Harness, \d\d:\d\d, to \*\*pip\*\*: #5 already touches `backend\/src\/superTabs\/commands\.ts`, which most changes touch: read it before you change that file again\.$/
+  const MERGED = expect.stringContaining(': merged.')
+  const landed = (number: number) => ({ method: 'PUT', path: `/repos/acme/app/pulls/${number}/merge`, body: expect.objectContaining({ merge_method: 'squash' }) })
+  const passes = async (f: Fixture, count: number) => { for (let pass = 0; pass < count; pass++) { f.clock.now += 30_000; await f.merger.tick() } }
+
+  it('tells it once, as it opens, which pull request of another builder already touches which such file, and lands it all the same', async () => {
+    const f = setup()
+    pair(f)
+    // At its first look, before its checks have held still.
+    await f.merger.tick()
+    expect(f.comments()).toEqual([expect.stringMatching(TOLD)])
+    // The other is open still: this one lands when it is ready, as it did before.
+    f.clock.now += 3 * 60_000
+    await f.merger.tick()
+    expect(f.merges()).toEqual([landed(6)])
+    expect(f.comments()).toEqual([expect.stringMatching(TOLD), MERGED])
+  })
+
+  it('tells it no more after a restart, nor for a push, and takes no stranger\'s copy of the note for it', async () => {
+    const f = setup()
+    pair(f)
+    // Words anyone can write: they say nothing of what Harness said.
+    f.github.repo.comments.get(6)!.push(comment('Harness, 14:00, to **pip**: #5 already touches `x`, which most changes touch: read it before you change that file again.',
+      { author_association: 'NONE' }))
+    await f.merger.tick()
+    expect(f.comments()).toEqual([expect.stringMatching(TOLD)])
+    // A restart, with the pull request not read yet: it stays where it is, and what is said of it is all there is to see.
+    const restarted = setup()
+    pair(restarted)
+    restarted.github.repo.comments.set(6, [comment(f.comments()[0]!, { author_association: 'OWNER' })])
+    await settle(restarted)
+    expect(restarted.comments()).toEqual([])
+    restarted.github.repo.pulls[1] = pull({ number: 6, body: 'Closes #13', head: { sha: FIXED, ref: 'pip/13' } })
+    await settle(restarted)
+    expect(restarted.comments()).toEqual([])
+  })
+
+  // The note is found by how it begins: another of Harness's notes on it is none of it.
+  it('tells it all the same when Harness said something else on it before', async () => {
+    const f = setup()
+    pair(f)
+    f.github.repo.comments.get(6)!.push(comment('Harness, 14:00, to **pip**: #6 waits for its checks.', { author_association: 'OWNER' }))
+    await f.merger.tick()
+    expect(f.comments()).toEqual([expect.stringMatching(TOLD)])
+  })
+
+  // GitHub lists a file renamed by its name now, and the one it had: one that moves the file away touches it as much.
+  it('takes a file renamed by the older one, by the name it had, as one it touches', async () => {
+    const f = setup()
+    pair(f)
+    f.github.repo.files.set(5, [{ filename: 'backend/src/superTabs/commands/index.ts', previous_filename: HUB, status: 'renamed' }])
+    await f.merger.tick()
+    expect(f.comments()).toEqual([expect.stringMatching(TOLD)])
+  })
+
+  it('names in one note each older one of other builders, with the file each shares, the oldest first', async () => {
+    const f = setup()
+    pair(f)
+    f.hot.push('src/store.ts')
+    f.crew.mockResolvedValue({ builders: [builder('Pip'), builder('Kai'), builder('Ada')], machines: [] })
+    f.github.repo.pulls.push(pull({ number: 4, labels: [{ name: 'builder:ada' }], body: 'Closes #11', head: { sha: OLD, ref: 'ada/11' } }))
+    f.github.repo.files.set(4, ['src/store.ts'])
+    f.github.repo.files.set(6, ['src/pip.ts', 'src/store.ts', HUB])
+    await f.merger.tick()
+    expect(f.comments()).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*pip\*\*: #4 already touches `src\/store\.ts` and #5 `backend\/src\/superTabs\/commands\.ts`, which most changes touch: read them before you change those files again\.$/)])
+  })
+
+  // As the list is named once a day, and a draft becomes one up: it is told once such an other is first seen.
+  it('tells it of another builder\'s older one once that one is on such a file: after the files are known, or once it is up', async () => {
+    for (const arrange of [(f: Fixture) => { f.hot.splice(0) }, (f: Fixture) => { f.github.repo.pulls[0] = { ...f.github.repo.pulls[0]!, draft: true } }]) {
+      const f = setup()
+      pair(f)
+      f.github.repo.comments.set(6, [])
+      arrange(f)
+      await f.merger.tick()
+      expect(f.comments()).toEqual([])
+      if (!f.hot.length) f.hot.push(HUB)
+      f.github.repo.pulls[0] = { ...f.github.repo.pulls[0]!, draft: false }
+      await passes(f, 2)
+      expect(f.comments()).toEqual([expect.stringMatching(TOLD)])
+    }
+  })
+
+  // A files read GitHub does not give is no reason to stop landing: an answer cut off on its way (a hundred files with their
+  // patches against the 10 s deadline, githubRest.ts), a 500 or a timeout stopped every landing of the repository, and a timeout
+  // every project its PM leads, for as long as that head stood (review of #4177). That head touches nothing, said once.
+  it.each(['cut', 500, 'timeout'] as const)('lands as before and tells nothing when the older one\'s files are not given (%s), said once and read once for the head', async answer => {
+    const f = setup()
+    pair(f)
+    f.github.repo.failing.set(/\/pulls\/5\/files/, answer)
+    await settle(f)
+    expect(f.merges()).toEqual([landed(6)])
+    expect(f.comments()).toEqual([MERGED])
+    // The passes after it ask no more of that head.
+    await passes(f, 4)
+    expect(f.github.asked.filter(path => path.includes('/pulls/5/files'))).toHaveLength(1)
+    expect(f.log.mock.calls.map(([line]) => String(line)).filter(line => line.includes('FILES_UNREAD'))).toEqual([expect.stringMatching(/^\[super-tab\] FILES_UNREAD acme\/app#5: /)])
+    expect(f.log.mock.calls.some(([line]) => String(line).includes('stopped'))).toBe(false)
+  })
+
+  // GitHub saying to stop asking stops the pass, as at every read: nothing is asked of it meanwhile.
+  it('stops the pass as before when GitHub limits the files read', async () => {
+    const f = setup()
+    pair(f)
+    f.github.repo.failing.set(/\/pulls\/5\/files/, 'limited')
+    await settle(f)
+    expect(f.merges()).toEqual([])
+    expect(f.log.mock.calls.some(([line]) => /stopped · RATE_LIMITED/.test(String(line)))).toBe(true)
+  })
+
+  /** Older pull requests of other builders on [files], each on one of them in turn, and Pip's #1500, newest, on all of them. */
+  function many(f: Fixture, names: readonly string[], files: readonly string[]): void {
+    f.hot.push(...files)
+    f.crew.mockResolvedValue({ builders: [builder('Pip'), ...names.map(builder)], machines: [] })
+    f.github.repo.pulls = [...names.map((name, at) => pull({ number: 1000 + at, labels: [{ name: `builder:${name.toLowerCase()}` }], body: `Closes #${2000 + at}`,
+      head: { sha: (at + 1).toString(16).padStart(40, 'd'), ref: `${name.toLowerCase()}/${2000 + at}` } })), pull({ number: 1500, body: 'Closes #13', head: { sha: HEAD, ref: 'pip/13' } })]
+    names.forEach((_, at) => f.github.repo.files.set(1000 + at, [files[at % files.length]!]))
+    f.github.repo.files.set(1500, [...files])
+    f.github.repo.comments = new Map()
+  }
+  /** What is said on #1500: each of the others is told of the ones older than itself, on its own. */
+  const on1500 = (f: Fixture) => f.github.sent.filter(s => s.path.endsWith('/issues/1500/comments')).map(s => String((s.body as Json).body))
+  const NAMES = ['Kai', 'Ada', 'Bo', 'Cy', 'Di', 'Ed', 'Fy', 'Gu', 'Hu', 'Io', 'Jo', 'Lu']
+
+  it('names the oldest three and how many more, once', async () => {
+    const f = setup()
+    many(f, NAMES, [HUB])
+    await passes(f, 3)
+    expect(on1500(f)).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*pip\*\*: #1000 already touches `backend\/src\/superTabs\/commands\.ts`, #1001 `backend\/src\/superTabs\/commands\.ts` and #1002 `backend\/src\/superTabs\/commands\.ts`, which most changes touch, and 9 more do too: read them before you change those files again\.$/)])
+  })
+
+  // A note that named every older one grew past the 500 letters a restart read of it, and was said again at each (review of #4177).
+  it('is not said again after a restart, however long the note it said', async () => {
+    const files = ['one', 'two', 'three'].map(name => `src/${'deep/'.repeat(20)}${name}.ts`)
+    const f = setup()
+    many(f, NAMES.slice(0, 5), files)
+    await passes(f, 3)
+    const said = on1500(f)
+    expect(said).toEqual([expect.stringContaining('#1000 already touches `…')])
+    const restarted = setup()
+    many(restarted, NAMES.slice(0, 5), files)
+    restarted.github.repo.comments.set(1500, [comment(said[0]!, { author_association: 'OWNER' })])
+    await passes(restarted, 3)
+    expect(on1500(restarted)).toEqual([])
+  })
+
+  it.each<[string, (f: Fixture) => void]>([
+    // Its own builder's: it knows its own changes, and builds on them as it was given.
+    ['the older one is its own builder\'s', f => { f.github.repo.pulls[0] = pull({ number: 5, body: 'Closes #12', head: { sha: UNDER, ref: 'pip/12' } }) }],
+    // Two pull requests for one task are one taken over or begun again, not two changes to read.
+    ['the older one is for the same task', f => { f.github.repo.pulls[0] = pull({ number: 5, labels: [{ name: 'builder:kai' }], body: 'Closes #13', head: { sha: UNDER, ref: 'kai/13' } }) }],
+    ['the other is newer', f => { f.github.repo.pulls[0] = pull({ number: 7, draft: true, labels: [{ name: 'builder:kai' }], body: 'Closes #12', head: { sha: UNDER, ref: 'kai/12' } }) }],
+    ['the other goes into another branch', f => { f.github.repo.pulls[0] = pull({ number: 5, base: { ref: 'release' }, labels: [{ name: 'builder:kai' }], body: 'Closes #12', head: { sha: UNDER, ref: 'kai/12' } }) }],
+    // Anything from outside is data: on a public repository anyone opens a pull request that touches the file.
+    ['the other is nobody of the team\'s', f => { f.github.repo.pulls[0] = pull({ number: 5, labels: [], author_association: 'CONTRIBUTOR', body: 'Closes #12', head: { sha: UNDER, ref: 'kai/12', repo: { full_name: 'kai/app' } } }) }],
+    ['they share no file most changes touch', f => { f.github.repo.files.set(5, ['src/kai.ts', 'src/pip.ts']) }],
+    ['no file is one most changes touch', f => { f.hot.splice(0) }],
+    // Not on its way to land: work going on, or a change a person stopped.
+    ['the older one is a draft', f => { f.github.repo.pulls[0] = { ...f.github.repo.pulls[0]!, draft: true } }],
+    ['a person put the older one on hold', f => { f.github.repo.pulls[0] = { ...f.github.repo.pulls[0]!, labels: [{ name: 'builder:kai' }, { name: 'Hold' }] } }],
+  ])('tells nothing, and lands it as before, when %s', async (_case, arrange) => {
+    const f = setup()
+    pair(f)
+    arrange(f)
+    await settle(f)
+    expect(f.merges()).toEqual([landed(6)])
+    expect(f.comments()).toEqual([MERGED])
+  })
+
+  // On the merger's pass, every 30 seconds: a head's files do not change, and a push is a new head.
+  it('reads files once for each head, only while some file is one most changes touch and another builder\'s older one is up, and no task, until it is told', async () => {
+    const files = (f: Fixture) => f.github.asked.filter(path => path.includes('/files'))
+    const PIP = '/repos/acme/app/pulls/6/files?per_page=100', KAI = '/repos/acme/app/pulls/5/files?per_page=100'
+    // Not read yet: it stays open, and is looked at each pass. Its files are read, and the other's only once its own touch such a file.
+    const f = setup()
+    pair(f)
+    f.github.repo.comments.set(6, [])
+    f.github.repo.files.set(6, ['src/pip.ts'])
+    await settle(f)
+    await passes(f, 2)
+    expect(files(f)).toEqual([PIP])
+    // A push is a new head: its files are read once more.
+    f.github.repo.files.set(6, ['src/pip.ts', HUB])
+    f.github.repo.pulls[1] = pull({ number: 6, body: 'Closes #13', head: { sha: 'e'.repeat(40), ref: 'pip/13' } })
+    await passes(f, 2)
+    expect(files(f)).toEqual([PIP, PIP, KAI])
+    expect(f.comments()).toEqual([expect.stringMatching(TOLD)])
+    expect(f.github.asked.some(path => /\/issues\/\d+(?: |$)/.test(path))).toBe(false)
+    // Told, it reads no more, of either one, whatever is pushed.
+    f.github.repo.pulls[0] = pull({ number: 5, labels: [{ name: 'builder:kai' }], body: 'Closes #12', head: { sha: FIXED, ref: 'kai/12' } })
+    await passes(f, 2)
+    expect(files(f)).toHaveLength(3)
+    // None while no file is one most changes touch, or while the only older one is no other builder's on its way to land.
+    for (const arrange of [(g: Fixture) => { g.hot.splice(0) }, (g: Fixture) => { g.github.repo.pulls[0] = { ...g.github.repo.pulls[0]!, draft: true } },
+      (g: Fixture) => { g.github.repo.pulls[0] = pull({ number: 5, body: 'Closes #12', head: { sha: UNDER, ref: 'pip/12' } }) }]) {
+      const g = setup()
+      pair(g)
+      arrange(g)
+      await settle(g)
+      expect(files(g)).toEqual([])
+    }
+  })
+})
+
 describe('the rule\'s parts', () => {
   it('reads each reader\'s last verdict by the name it signs with, or its login unsigned, and TWO READS', () => {
     const { readers, twoReads } = verdicts([comment('Juno, 14:20, to **Pip**: READ-OK f6edb44'), comment('**Faye** (PM): HOLD 1234567 wait'),
@@ -1065,8 +1457,14 @@ describe('the rule\'s parts', () => {
       .toEqual(['ci/required'])
     expect(checksOf([{ id: 1, name: 'ci/required', status: 'completed', conclusion: 'failure' }], { statuses: [{ state: 'failure', context: 'ci/required' }] }).failed)
       .toEqual(['ci/required'])
-    expect(checksOf([{ name: 'lint', status: 'completed', conclusion: 'failure' }], { statuses: [{ state: 'error', context: 'ci/required' }] }))
-      .toEqual({ state: 'failed', failed: ['lint', 'ci/required'], summary: 'ci/required:error|lint:completed:failure' })
+    expect(checksOf([{ name: 'lint', status: 'completed', conclusion: 'failure', app: { slug: 'github-actions' } }], { statuses: [{ state: 'error', context: 'ci/required' }] }))
+      .toEqual({ state: 'failed', failed: ['lint', 'ci/required'], sources: ['app github-actions', 'status ci/required'], summary: 'ci/required:error|lint:completed:failure' })
+    // What made them, which a train's tip must show of its riders' (githubTrain.ts attend): each check run's app, run or skipped,
+    // and each status by its context, never read as an app's. The train's own mark on its tip is none.
+    expect(checksOf([{ name: 'ci/required', status: 'completed', conclusion: 'success', app: { slug: 'github-actions' } },
+      { name: 'desktop-tests (${{ matrix.os }})', status: 'completed', conclusion: 'skipped', app: { slug: 'github-actions' } }, { name: 'scan', status: 'queued', app: { slug: 'codecov' } }],
+    { statuses: [{ state: 'success', context: 'github-actions' }, { state: 'success', context: 'harness/train' }] }).sources)
+      .toEqual(['app github-actions', 'app codecov', 'status github-actions'])
     // What was read, in any order GitHub lists it, as one line: two looks that read the same are the same.
     expect(checksOf([{ name: 'b', status: 'completed', conclusion: 'success' }, { name: 'a', status: 'completed', conclusion: 'success' }], {}).summary)
       .toBe(checksOf([{ name: 'a', status: 'completed', conclusion: 'success' }, { name: 'b', status: 'completed', conclusion: 'success' }], {}).summary)
@@ -1079,6 +1477,20 @@ describe('the rule\'s parts', () => {
     const found = await ledProjects({ me: 'dee', live: id => id === 'h-juno', read, roster: async () => [row({}), row({ id: 'ken', contributorId: 'ken' }),
       row({ id: 'pip' }, { lead: false }), row({ id: 'gone', harnessId: 'h-gone' })] })
     expect(found).toEqual([{ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }])
+  })
+
+  // A Personal Swarm's project made from a pane's folder has no address to clone, only the GitHub repository Desktop named for it
+  // (backend commands.ts project.github): its PM lands there as a cloned project's does.
+  it('merges for a project on the GitHub repository it was given when its folder has no address', async () => {
+    const row = { tabId: 'tab', lead: true, ledConversationId: 'lead', agent: { id: 'juno', harnessId: 'h-juno', name: 'Juno', contributorId: 'dee', machineOwnerId: 'dee' } }
+    const led = (project: Json) => ledProjects({ me: 'dee', live: () => true, roster: async () => [row],
+      read: async () => ({ projects: [{ id: 'pane', leadConversationId: 'lead', ...project }] }) })
+    expect(await led({ repository: { cwd: '/Users/dee/pane', repositoryUrl: null }, githubRepository: 'Acme/Pane' }))
+      .toEqual([{ repo: 'acme/pane', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'pane' }])
+    expect(await led({ githubRepository: 'acme/pane' })).toEqual([expect.objectContaining({ repo: 'acme/pane' })])
+    // The address it is cloned from comes first, and a name that is no owner/name is none.
+    expect(await led({ repository: { repositoryUrl: 'https://github.com/acme/app' }, githubRepository: 'acme/pane' })).toEqual([expect.objectContaining({ repo: 'acme/app' })])
+    expect(await led({ repository: { repositoryUrl: null }, githubRepository: 'acme/pane/extra' })).toEqual([])
   })
 
   it('counts a PM stopped here as leading, as the service asks the core whether it is stopped', async () => {
@@ -1103,7 +1515,7 @@ describe('the merger counts the agent the backend recorded for a verdict', () =>
     const authors = vi.fn(async (_project: { repo: string }, ids: string[]) => Object.fromEntries(ids.filter(id => names[id]).map(id => [id, { name: names[id]! }])))
     const log = vi.fn()
     const merger = new GitHubMerge({ projects: async () => [{ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }],
-      crew: async () => crew, get: github.get, send: github.send, now: () => clock.now, log, records: new VerdictRecords(authors, () => clock.now, log) })
+      crew: async () => crew, get: github.get, send: github.send, now: () => clock.now, log, records: new VerdictRecords(authors, () => clock.now, log), costs: async () => [], hot: () => [] })
     return { github, merger, clock, authors, log, merges: () => github.sent.filter(s => s.method === 'PUT'),
       comments: () => github.sent.filter(s => s.method === 'POST').map(s => String((s.body as Json).body)) }
   }

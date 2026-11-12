@@ -1752,6 +1752,9 @@ model ExperimentalSettings {
   /// A program acting for the person (a lamp's lamp-tasks, not an agent) may give more work to an idle harness of
   /// theirs in a pane (`harness reply`, cli/src/messages/replyLocal.ts, #1628). Off by default.
   programsReply        Boolean @default(false)
+  /// Hachi, the person's own harness that starts and follows their other harnesses (docs/design/2026-11-12-hachi.md).
+  /// Off by default; a row written before it has none and reads off.
+  hachi                Boolean @default(false)
   revision         Int     @default(0)
 
   @@index([userId])

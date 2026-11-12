@@ -1,10 +1,9 @@
 import type { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../../lib/ssoAuth.js'
-import { githubRepository } from '../../github/repository.js'
 import { fail } from '../model.js'
 import { readBy } from '../parts/indexed.js'
 import { partId } from '../parts/write.js'
-import { personReadsProject, type SwarmProject } from '../projects.js'
+import { personReadsProject, projectGitHub, type SwarmProject } from '../projects.js'
 import type { Person } from '../model.js'
 import { machineSwarms } from '../swarmRows.js'
 import { membersOf } from './access.js'
@@ -47,7 +46,7 @@ export class Shipping {
     if (!named.length) return { swarms: [] }
     const [heads, totals, memberships] = await Promise.all([
       this.db.swarmHead.aggregateRaw({ pipeline: [{ $match: { tabId: { $in: named }, key: 'head' } }, { $project: { tabId: 1, 'data.projects.visibility': 1,
-        'data.projects.ownerId': 1, 'data.projects.ownerGeneration': 1, 'data.projects.members.id': 1, 'data.projects.members.generation': 1, 'data.projects.repository.repositoryUrl': 1 } }] }) as unknown as Promise<Raw[]>,
+        'data.projects.ownerId': 1, 'data.projects.ownerGeneration': 1, 'data.projects.members.id': 1, 'data.projects.members.generation': 1, 'data.projects.repository.repositoryUrl': 1, 'data.projects.githubRepository': 1 } }] }) as unknown as Promise<Raw[]>,
       this.db.swarmShipping.aggregateRaw({ pipeline: [{ $match: { tabId: { $in: named }, week: 0, personId: user.sub } }, { $project: { tabId: 1, agentId: 1, settled: 1 } }] }) as unknown as Promise<Raw[]>,
       // The person's membership in each, which says what of an earlier membership is no longer theirs.
       readBy(this.db, 'SwarmMember', 'id', [{ $match: { _id: { $in: named.map(tabId => partId(tabId, user.sub)) }, deleted: false } }, { $project: { tabId: 1, 'data.generation': 1 } }])])
@@ -56,7 +55,8 @@ export class Shipping {
       // Only a project the person reads, as the Swarm decides it (projects.ts personReadsProject): never one they read or owned at an
       // earlier membership (removed and invited back), and none without a member row.
       .filter(project => { const member = membership.get(String(head.tabId)); return !!member && personReadsProject(member, project as unknown as SwarmProject) })
-      .flatMap(project => githubRepository((project.repository as Raw | undefined)?.repositoryUrl as string | undefined)?.fullName ?? []))].sort().slice(0, MAX_REPOSITORIES)]))
+      // In lower case, as GitHub reads a name: a name given in another case than another project's address is one repository, read once.
+      .flatMap(project => projectGitHub(project as unknown as SwarmProject)?.fullName.toLowerCase() ?? []))].sort().slice(0, MAX_REPOSITORIES)]))
     const settled = new Map(totals.map(total => [`${total.tabId}:${total.agentId}`, Number(total.settled ?? 0)]))
     const earliest = current - MAX_RANGE_WEEKS * WEEK_MS
     return { swarms: named.flatMap(tabId => repositories.get(tabId)?.length ? [{ tabId, repositories: repositories.get(tabId)!,

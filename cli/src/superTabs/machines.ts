@@ -26,7 +26,7 @@ import { agentFolderEmpty, removableAgentFolder } from './agentFolder.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
 import { cleanupClosed } from './cleanupCloses.js'
 import { repositoryKey } from './repositoryKey.js'
-import { profileId } from '../lib/claudeProfiles.js'
+import { profileId } from '../lib/claudeHomes.js'
 
 const finite = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v : null
 const list = (v: unknown) => Array.isArray(v) ? v.map(object) : []
@@ -635,7 +635,8 @@ export class ContributedMachines {
           ...((readyEngines || checkouts) && began >= this.readinessRefusedUntil ? { readiness } : {}),
           ...(refusedModels.length ? { refusedModels } : {}),
           ...(Object.keys(toolProbeErrors).length ? { toolProbeErrors } : {}),
-          // Its logical cores, which the PM's Harness plans this machine's work against (assign/crew.ts).
+          // Its logical cores, which a PM's Harness from before 2026-11-12 plans this machine's work against. The plan counts
+          // none now (assign/crew.ts SIZES): they go from this report, with their refusal in sendAlone, on or after 2026-12-12.
           resources: { cpuPercent: finite(resources.cpuPercent), ...(began >= this.coresRefusedUntil ? { cpuCores: availableParallelism() } : {}),
             memoryUsedBytes: finite(resources.memoryUsedBytes), memoryTotalBytes: finite(resources.memoryTotalBytes),
             diskFreeBytes: finite(resources.diskFreeBytes), diskTotalBytes: finite(resources.diskTotalBytes), projectDiskFreeBytes: finite(resources.projectDiskFreeBytes), projectDiskTotalBytes: finite(resources.projectDiskTotalBytes),

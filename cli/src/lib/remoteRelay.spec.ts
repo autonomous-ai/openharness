@@ -808,6 +808,37 @@ describe('RemoteRelayPool keeps background (isolated) clients cheap', () => {
     }
   })
 
+  // A watch lives as long as its connection on the other machine (gateway/harnessWatch.ts). Shelved, the connection would
+  // outlive the tool that asked, and the next background client handed it would be told that harness's changes unasked.
+  it('a background session that asked for a harness_watch is closed when its client detaches, never shelved', async () => {
+    const pool = new RemoteRelayPool(...ctorArgs)
+    const made: Array<{ ws: { close: ReturnType<typeof vi.fn>; terminate: ReturnType<typeof vi.fn> }; lingerTimer: ReturnType<typeof setTimeout> | null }> = []
+    const dialSpy = vi.spyOn(RemoteRelayPool.prototype as unknown as { connect: (machineId: string) => Promise<unknown> }, 'connect')
+      .mockImplementation(async function (this: unknown, machineId: string) {
+        const entry = fakeEntry({ attached: new Set(), sink: null, ws: { send: vi.fn(), close: vi.fn(), terminate: vi.fn() }, viewers: { reset: vi.fn(), close: vi.fn() } })
+        made.push(entry as unknown as typeof made[number])
+        ;(this as { entries: Map<string, unknown> }).entries.set(machineId, entry)
+        return entry
+      })
+    try {
+      const watcher = await pool.acquireIsolated('m1', 'env', select, sink(), vi.fn())
+      await watcher.send({ type: 'agents_list', payload: { requestId: 'r' } }).catch(() => {})
+      await watcher.send({ type: 'harness_watch', payload: { requestId: 'w', agentIds: ['a1'] } }).catch(() => {})
+      watcher.detach()
+      expect(pool.idleIsolatedCount('m1')).toBe(0)
+      expect(made[0].ws.close).toHaveBeenCalledWith(1000, 'watch ended')
+      // The next background client dials its own connection.
+      const next = await pool.acquireIsolated('m1', 'env', select, sink(), vi.fn())
+      expect(dialSpy).toHaveBeenCalledTimes(2)
+      next.detach()
+      expect(pool.idleIsolatedCount('m1')).toBe(1)
+      for (const entry of made) clearTimeout(entry.lingerTimer!)
+      pool.invalidateIsolated('m1')
+    } finally {
+      dialSpy.mockRestore()
+    }
+  })
+
   // WebSocket roadmap Phase 1 item 6. The shelf held 4 per machine, and one more was torn down with no close frame, so
   // the backend logged it as a dropped connection (1006) like any network failure, and nothing counted overflows.
   it('the shelf keeps 8 warm background sessions per machine, and closes one more cleanly saying why', async () => {
@@ -1043,6 +1074,15 @@ describe('RemoteRelayPool and agent browser frames from the relay', () => {
     r.push(r.seal('agent_browser_close', { streamId: 'real', reason: 'agent' }))
     await vi.waitFor(() => expect(r.inbox.some(frame => frame.type === 'agent_browser_close')).toBe(true))
     expect(r.inbox.filter(frame => frame.type.startsWith('agent_browser_'))).toEqual([{ type: 'agent_browser_close', payload: { streamId: 'real', reason: 'agent' } }])
+  })
+
+  // A harness_event wakes the agent that watches (docs/design/2026-11-12-hachi.md): only the machine it watches says one.
+  it('an unsealed harness_event from the relay is refused; one sealed to this session reaches the tool', async () => {
+    const r = await relayed()
+    r.push({ type: 'harness_event', payload: { agentId: 'forged', state: 'needs_person' } })
+    r.push(r.seal('harness_event', { agentId: 'real', state: 'idle' }))
+    await vi.waitFor(() => expect(r.inbox.some(frame => frame.type === 'harness_event')).toBe(true))
+    expect(r.inbox.filter(frame => frame.type === 'harness_event')).toEqual([{ type: 'harness_event', payload: { agentId: 'real', state: 'idle' } }])
   })
 
   it('agent_browser_transport_error sent to this viewing machine reaches the app', async () => {

@@ -1,7 +1,7 @@
 /**
- * The agents' private temporary folders. Each Swarm agent has its own (task #4395): since #4215 an agent starts in its owner's
- * own settings, which can block reads outside the working directories, so its folder is added to Claude Code's working
- * directories as well as given as its TMPDIR, which `mktemp` uses.
+ * The agents' private temporary folders. Each Swarm agent has its own (task #4395): a mode that checks its actions can block
+ * reads outside the working directories, so its folder is added to Claude Code's working directories as well as given as
+ * its TMPDIR, which `mktemp` uses.
  */
 import { createHash } from 'node:crypto'
 import { chmodSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'

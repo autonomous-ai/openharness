@@ -145,6 +145,12 @@ class _BrowserPanelState extends State<BrowserPanel> {
   int _routeLosses = 0;
   bool _settings = false;
 
+  /// Its person pressed Stop, and the machine has not yet said the browser is off: its stream closing and any state
+  /// it says meanwhile are the stop's, never a start. A machine that took the Stop and still says on when [_stopEnds]
+  /// fires is shown as it says.
+  bool _stopping = false;
+  Timer? _stopEnds;
+
   /// A request the machine did not take, in one line.
   String? _refused;
 
@@ -180,6 +186,7 @@ class _BrowserPanelState extends State<BrowserPanel> {
   void dispose() {
     _app.removeListener(_sync);
     _waitEnds?.cancel();
+    _stopEnds?.cancel();
     _end();
     super.dispose();
   }
@@ -192,6 +199,8 @@ class _BrowserPanelState extends State<BrowserPanel> {
     if (browser == null) {
       _failure = null;
       _routeLosses = 0;
+      _stopping = false;
+      _stopEnds?.cancel();
     }
     if (_waiting != null && browser != _waiting) _waiting = null;
     if (_waiting == null) _waitEnds?.cancel();
@@ -201,6 +210,7 @@ class _BrowserPanelState extends State<BrowserPanel> {
         browser?.state == 'ready' &&
         _failure == null &&
         _waiting == null &&
+        !_stopping &&
         !_settings;
     if (wanted && _bridge == null) unawaited(_connect());
     if (!wanted && _bridge != null) _end();
@@ -342,14 +352,15 @@ class _BrowserPanelState extends State<BrowserPanel> {
     _sync();
   }
 
-  /// Sends [request] to the agent's machine, and says so in one line when it was not taken.
-  Future<void> _ask(Future<void> Function() request) async {
+  /// Sends [request] to the agent's machine, and says so in one line when it was not taken: whether it was.
+  Future<bool> _ask(Future<void> Function() request) async {
     setState(() => _refused = null);
     try {
       await request();
+      return true;
     } catch (error) {
       appLog.warn('browser', 'request to ${widget.machineId} failed: $error');
-      if (!mounted) return;
+      if (!mounted) return false;
       setState(
         () => _refused = switch (error) {
           StateError(:final message) => message,
@@ -362,14 +373,37 @@ class _BrowserPanelState extends State<BrowserPanel> {
           _ => 'Browser isn\'t available on $_machineName right now',
         },
       );
+      return false;
     }
   }
 
   void _start() =>
       _ask(() => _app.agentBrowserStart(widget.machineId, widget.agentId));
 
-  void _stop() =>
-      _ask(() => _app.agentBrowserStop(widget.machineId, widget.agentId));
+  Future<void> _stop() async {
+    // An earlier Stop's wait must not end the Stopping this one still waits on the machine for.
+    _stopEnds?.cancel();
+    _stopping = true;
+    _sync();
+    final taken = await _ask(
+      () => _app.agentBrowserStop(widget.machineId, widget.agentId),
+    );
+    // The machine said off already.
+    if (!mounted || !_stopping) return;
+    if (!taken) {
+      // Refused, the browser is as it was.
+      _stopping = false;
+      return _sync();
+    }
+    // Taken, the mark holds until the machine says off, for as long as an open waits for it. CLI 0.6.40 with its
+    // browser in its own process never sent the agent's frame again, and the panel said Stopping for good.
+    _stopEnds = Timer(BrowserStream.openTimeout, () {
+      if (!mounted || !_stopping) return;
+      appLog.warn('browser', 'browser on ${widget.machineId} did not stop');
+      _stopping = false;
+      _sync();
+    });
+  }
 
   Future<void> _install() async {
     final availability = await _app.agentBrowserAvailable(widget.machineId);
@@ -414,11 +448,11 @@ class _BrowserPanelState extends State<BrowserPanel> {
                   ),
                 ),
                 if (_browser != null)
-                  DesktopPill(
+                  // Not a bare square: that is an unticked box in its settings and Maximize in the window's bar.
+                  AppIconButton(
                     key: const ValueKey('swarm-browser-stop'),
-                    label: 'Stop',
-                    compact: true,
-                    quiet: true,
+                    icon: AppIcons.circleStop,
+                    tooltip: 'Stop',
                     onPressed: _stop,
                   ),
                 AppIconButton(
@@ -465,6 +499,9 @@ class _BrowserPanelState extends State<BrowserPanel> {
         },
       );
     }
+    if (_stopping && _browser != null) {
+      return _progressLine('Stopping browser…');
+    }
     if (_failure case final failure?) {
       return _line(
         failure.line,
@@ -498,7 +535,7 @@ class _BrowserPanelState extends State<BrowserPanel> {
                   fit: StackFit.expand,
                   children: [
                     NativeWebViewHost(child: view.build(context)),
-                    if (!_open) _starting(),
+                    if (!_open) _progressLine('Starting browser…'),
                   ],
                 );
               },
@@ -512,7 +549,7 @@ class _BrowserPanelState extends State<BrowserPanel> {
             ),
         ],
       ),
-      _ => _starting(),
+      _ => _progressLine('Starting browser…'),
     };
   }
 
@@ -542,7 +579,8 @@ class _BrowserPanelState extends State<BrowserPanel> {
     };
   }
 
-  Widget _starting() => Center(
+  /// A browser on its way up or down: a small spinner over [line].
+  Widget _progressLine(String line) => Center(
     child: Column(
       mainAxisSize: MainAxisSize.min,
       spacing: DesktopChrome.controlGap,
@@ -551,7 +589,7 @@ class _BrowserPanelState extends State<BrowserPanel> {
           dimension: grid.AppControl.iconSize,
           child: CircularProgressIndicator(strokeWidth: 1.5),
         ),
-        Text('Starting browser…', style: DesktopChrome.control()),
+        Text(line, style: DesktopChrome.control()),
         if (_refused case final refused?) _refusedLine(refused),
       ],
     ),

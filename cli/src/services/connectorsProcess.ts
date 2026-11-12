@@ -4,9 +4,10 @@
  * and the services' network calls are this process's alone. It asks the core one thing, `connector_vault`
  * (core/connectorsQueries.ts): the account's sealed connections, read and written through the core's
  * sign-in and sealed by the gateway, which holds the identity. The core tells it `connectors_changed` and
- * `device_keys_changed` (`service_event` kind `notice`).
+ * `device_keys_changed` (`service_event` kind `notice`), and asks it, as an agent launches on a profile home, to write
+ * that home's entries (`syncProfileHome`, the port's member, sent by the core alone: core/connectorsLink.ts).
  */
-import type { BackendNotice } from '../core/api.js'
+import { emptyPorts, type BackendNotice } from '../core/api.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
 import { processCoreApi } from './processCoreApi.js'
 import { startConnectors } from './connectors.js'
@@ -33,12 +34,23 @@ export function runConnectorsService(options: ConnectorsServiceOptions): Service
   })
   // A refusal or no core reads as the backend unreachable: the next notice or round tries again.
   const vaultPort = vaultPortOf((op, payload = {}) => ask('connector_vault', { ...payload, op }).catch((error: unknown) => ({ error: String(error) })))
+  const ports = emptyPorts()
+  const answers = (options.start ?? startConnectors)(api, ports, { vaultPort })
+  if (!ports.connectors) throw new Error('connected services did not start')
+  const connectors = ports.connectors
   return (options.run ?? runServiceProcess)({
     name: 'connectors',
     socketPath: options.socketPath,
     machineId: options.machineId,
     token: options.token,
-    requests: (options.start ?? startConnectors)(api, { vaultPort }),
+    requests: {
+      ...answers,
+      syncProfileHome: async (payload) => {
+        const { engine, folder } = payload
+        if ((engine !== 'claude' && engine !== 'codex') || typeof folder !== 'string') return { names: [] }
+        return { names: await connectors.syncProfileHome(engine, folder) }
+      },
+    },
     onEvent: (payload) => {
       if (payload.kind !== 'notice' || !payload.notice || typeof payload.notice !== 'object') return
       for (const listener of listeners) listener(payload.notice as BackendNotice)

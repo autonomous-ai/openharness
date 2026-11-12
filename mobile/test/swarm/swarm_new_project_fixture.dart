@@ -21,6 +21,9 @@ int _at(Duration ago) => newProjectNow.subtract(ago).millisecondsSinceEpoch;
 const harnessRepo = 'https://github.com/autonomous-ai/openharness';
 const lampRepo = 'https://github.com/autonomous-ai/lampos';
 
+/// The 1:1 chat `lead.start` answers for [projectId]'s Product Manager.
+String pmChatOf(String projectId) => 'pm-chat-$projectId';
+
 /// A machine of the Swarm as the backend reads it, with its derived values
 /// over it: [contributor]'s, reporting [ago], offering [engines], its Harness
 /// able to start a Product Manager unless not [capable], [slots] agents free,
@@ -131,6 +134,10 @@ class NewProjectSwarm {
   /// [projects], the more recent.
   final activity = <String, int>{};
 
+  /// The projects whose PM was asked to start: each has its PM's own chat,
+  /// waiting for it (backend pmChat.ts).
+  final pmStarting = <String>{};
+
   /// Its reads fail, as a Swarm that does not answer.
   bool unreadable = false;
 
@@ -225,7 +232,18 @@ class NewProjectSwarm {
       ...firstLoad(
         tabId: id,
         head: {
-          ...headData(id: id, name: name, projects: projects),
+          ...headData(
+            id: id,
+            name: name,
+            projects: [
+              for (final p in projects)
+                {
+                  ...p,
+                  if (pmStarting.contains(p['id']))
+                    'pmChat': {'id': pmChatOf(p['id'] as String)},
+                },
+            ],
+          ),
           'paused': paused,
         },
         machines: machines,
@@ -246,6 +264,12 @@ class NewProjectSwarm {
             }),
             'changedAt': activity[p['id']] ?? 1000 - i,
           },
+        // Each starting PM's own chat: only its person reads it.
+        for (final started in pmStarting)
+          part(pmChatOf(started), 1, {
+            ...groupData(pmChatOf(started), title: 'Product Manager'),
+            'kind': 'agent-chat',
+          }),
       ],
     };
   }
@@ -339,8 +363,15 @@ class NewProjectSwarm {
           named['name'] = command['name'];
           return {'result': <String, dynamic>{}};
         case 'lead.start':
+          // The PM's own 1:1 chat opens with the start (backend pmChat.ts),
+          // the same one for a replay.
+          pmStarting.add(command['projectId'] as String);
           return {
-            'result': {'startId': operation, 'machineId': command['machineId']},
+            'result': {
+              'startId': operation,
+              'machineId': command['machineId'],
+              'chatId': pmChatOf(command['projectId'] as String),
+            },
           };
         default:
           return {'result': <String, dynamic>{}};

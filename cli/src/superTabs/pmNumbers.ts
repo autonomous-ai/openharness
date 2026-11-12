@@ -25,9 +25,11 @@
  * more rules cost: a person told of a night nobody watched, a message kept and typed three hours late, a file written every
  * five minutes at rest, a healthy team's person told every few hours, one builder nobody could help silencing the rest, and
  * one task nobody free could take silencing every builder. So
- * what a builder has waited is counted in memory, from this process's own passes, and six things are kept on disk, written as
+ * what a builder has waited is counted in memory, from this process's own passes, and eight things are kept on disk, written as
  * they change: when the PM was last told, how many times since the project last moved (a landing, a task closed, a sized task
- * opened), when that was, whether its person was told, the day last posted, and what a day's scoreboard said until that day's post is taken.
+ * opened), when that was, whether its person was told, the day last posted, what a day's scoreboard said until that day's post is
+ * taken, the files most landings touch as the last scoreboard named them, and the list of them the PM was last told (the
+ * allocator's design, package 8: the PM is told them in one clause when work runs short, once for each list).
  * A message's id is its project, its kind and the tell before it (or
  * its day): the server takes each once, and answers one sent again in other words as taken (OPERATION_REUSED).
  */
@@ -41,6 +43,7 @@ import type { LedProject } from './githubMerge.js'
 import { PAGE, retryIn } from './githubRest.js'
 import { TRAIN_TITLE } from './githubTrain.js'
 import { hhmm } from './githubVerdict.js'
+import { plainPath } from './plainPath.js'
 import { identifier, object, SuperTabHostError } from './wire.js'
 
 type Json = Record<string, unknown>
@@ -81,17 +84,23 @@ export const timeOf = (at: unknown): number => { const time = Date.parse(String(
 /**
  * The team's pull requests among the [closed] that landed, each with its builder's label and when: merged, or closed by a train
  * that landed squashed within [window] of [now], which merged only itself and names what it carried in its title
- * (githubTrain.ts). The team's own, by a label of [team] (assign/crew.ts teamOf): a person's pull request, or anyone's in a
- * shared repository, is theirs. One reading of what landed, for the day's counts and its scoreboard (scoreboard.ts).
+ * (githubTrain.ts). Each of those landed when its train did: the train closes them one by one once it merged, seconds apart,
+ * and timed by its own closing, one rider read as landed after another of the same train (review of #4177). The team's own, by
+ * a label of [team] (assign/crew.ts teamOf): a person's pull request, or anyone's in a shared repository, is theirs. One reading
+ * of what landed, for the day's counts and its scoreboard (scoreboard.ts).
  */
 export function landedOf(closed: readonly Json[], team: { has: (label: string) => boolean }, now: number, window: number): Array<{ pull: Json; label: string; at: number }> {
   const pulls = closed.filter(item => item.pull_request)
-  const recent = (train: Json) => { const merged = timeOf(object(train.pull_request).merged_at); return merged > 0 && now - merged < window }
-  const carried = new Set(pulls.filter(pull => String(pull.title ?? '').startsWith(TRAIN_TITLE) && recent(pull))
-    .flatMap(train => [...String(train.title).matchAll(/#([1-9]\d{0,9})\b/g)].map(found => Number(found[1]))))
+  const merged = (pull: Json): number => timeOf(object(pull.pull_request).merged_at)
+  // Each pull request a recent train's title names, with when that train landed.
+  const carried = new Map(pulls.filter(pull => String(pull.title ?? '').startsWith(TRAIN_TITLE) && merged(pull) > 0 && now - merged(pull) < window)
+    .flatMap(train => [...String(train.title).matchAll(/#([1-9]\d{0,9})\b/g)].map(found => [Number(found[1]), merged(train)] as const)))
   return pulls.flatMap(pull => {
-    const label = labelsOf(pull).find(name => team.has(name))
-    const at = timeOf(object(pull.pull_request).merged_at || (carried.has(Number(pull.number)) ? pull.closed_at : null))
+    const label = labelsOf(pull).find(name => team.has(name)), train = carried.get(Number(pull.number))
+    // A rider counts as landed when its train did: a squashed train closes its riders one by one, and one that lands as a merge
+    // commit marks each merged a moment after, each with its own time. Closed before the train landed, it was not the train
+    // that closed it.
+    const at = train !== undefined && Math.max(merged(pull), timeOf(pull.closed_at)) >= train ? train : merged(pull)
     return label && at ? [{ pull, label, at }] : []
   })
 }
@@ -139,7 +148,7 @@ export function numbersOf(input: { now: number; crew: Crew; pm: string; issues: 
 const labelsOf = (item: Json): string[] => (Array.isArray(item.labels) ? item.labels.map(object) : []).map(label => String(label.name ?? '').toLowerCase())
 const counted = (count: number, what: string): string => `${count} ${what}${count === 1 ? '' : 's'}`
 /** "Pip", "Pip and Kai", "Pip, Kai and Ada", and past [NAMES_MAX] "Pip, Kai, Ada, Bo, Cy and 3 more". */
-function listed(names: readonly string[]): string {
+export function listed(names: readonly string[]): string {
   const shown = names.length > NAMES_MAX ? [...names.slice(0, NAMES_MAX), `${names.length - NAMES_MAX} more`] : [...names]
   return shown.length < 2 ? shown.join('') : `${shown.slice(0, -1).join(', ')} and ${shown.at(-1)}`
 }
@@ -160,11 +169,14 @@ const scored = (goal: Score): string => `${goal.passed} of ${counted(goal.total,
 type Goal = Score | null | undefined
 
 /** What the PM is typed when work is short: the builders with nothing ([names]), what is open, what landed, how far the [goal]
- *  is (or how to state one, with the command that writes its file), and what to do. */
-export const shortLine = (names: readonly string[], n: Numbers, at: string, goal: Goal): string => `Harness, ${at}: ${nothing(names)}, and ${noTask(n, names.length)}`
+ *  is (or how to state one, with the command that writes its file), and what to do; with the files most changes touch ([hot]),
+ *  in one clause, so the tasks it cuts split them by feature and changes in flight stop colliding there (the allocator's design,
+ *  package 8). */
+export const shortLine = (names: readonly string[], n: Numbers, at: string, goal: Goal, hot: readonly string[] = []): string => `Harness, ${at}: ${nothing(names)}, and ${noTask(n, names.length)}`
   + `. ${landedWords(n)} in the last 24 hours.`
   + (goal ? ` The goal (${GOAL_FILE}): ${scored(goal)}.` : goal === null ? ` The project states no goal: \`harness super-tab goal\` in your checkout writes ${GOAL_FILE} and the workflow that checks it.` : '')
-  + ` Open the next tasks as issues, each with its part:, size: and p0-p2 labels${n.unsized ? ', or size the ones that wait' : ''}. `
+  + ` Open the next tasks as issues, each with its part:, size: and p0-p2 labels${n.unsized ? ', or size the ones that wait' : ''}`
+  + `${hot.length ? `; most changes touch ${listed(hot.map(path => `\`${plainPath(path)}\``))}, so cut tasks that split ${hot.length === 1 ? 'it' : 'them'} by feature` : ''}. `
   + 'If the work is done, tell your person.'
 
 // The two lines below are posted under the PM's own name, so they are said as a teammate says them: "Harness, Wed 11 Nov, the
@@ -228,10 +240,19 @@ export const numbersSender = (read: (project: LedProject) => Promise<Json>, post
   async (how: How, project: LedProject, operationId: string, text: string): Promise<unknown> =>
     post(`/api/super-tabs/${project.tabId}/commands`, { operationId, asAgentId: project.pmAgentId, command: messageOf(how, project, await read(project), text) })
 
+/** What the day's scoreboard says for its post (scoreboard.ts boardWords), and the files most landings touch as it named them;
+ *  null when their files were not read. */
+export interface DayBoard { words: string; hot: string[] | null }
+
 /** What is kept of a project on disk: when its PM was last told, how many times since the project last moved, when that
- *  was, whether its person was told, the day its numbers were last posted, and, while a day's post is not yet taken, what
- *  that day's scoreboard said. */
-interface Kept { typedAt: number; told: number; said: boolean; activity: number; day: string; board?: { day: string; words?: string } }
+ *  was, whether its person was told, the day its numbers were last posted, while a day's post is not yet taken what that day's
+ *  scoreboard said, and the files most landings touch as the last scoreboard to read them named them, with the list its PM was
+ *  last told. */
+interface Kept { typedAt: number; told: number; said: boolean; activity: number; day: string; board?: { day: string; words?: string }
+  hot?: string[]; hotTold?: string[] }
+
+/** A list of paths as a record keeps it, or undefined for anything else. */
+const paths = (value: unknown): string[] | undefined => Array.isArray(value) && value.every(path => typeof path === 'string') ? value : undefined
 
 const dayOf = (at: Date): string => `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, '0')}-${String(at.getDate()).padStart(2, '0')}`
 
@@ -256,10 +277,16 @@ export class PmNumbers {
     this.log = deps.log ?? (line => console.warn(line))
   }
 
+  /** The files most landings of [project] touch, as the last scoreboard to read them named them (scoreboard.ts): read once a day
+   *  with its post, and kept with the project's record, so the merger uses them with nothing read again. */
+  hot(project: LedProject): readonly string[] {
+    return (this.memory ??= this.load())[project.projectId]?.hot ?? []
+  }
+
   /** One project's counts after an assigner's pass: its PM told, its person told or its day posted, as each is due, with the
    *  project's goal where a line says it: read by [goal] only as that line is sent, and left out when it cannot be read. The
    *  day's post says the day's scoreboard too, read by [board] in the same way. */
-  async pass(project: LedProject, numbers: Numbers, goal: () => Promise<Score | null>, board: () => Promise<string>): Promise<void> {
+  async pass(project: LedProject, numbers: Numbers, goal: () => Promise<Score | null>, board: () => Promise<DayBoard>): Promise<void> {
     const read = (): Promise<Goal> => goal().catch(error => {
       this.once(`[super-tab] numbers: GOAL_UNREAD ${project.repo}: ${error instanceof Error ? error.message : String(error)}`)
       return undefined
@@ -288,9 +315,12 @@ export class PmNumbers {
         // Refused for good, it is not said again either: the log has it.
         if (await this.send('say', project, after, async () => toldLine(waiting, numbers)) !== 'later') kept.said = true
       } else {
-        const sent = await this.send('tell', project, after, async () => shortLine(waiting, numbers, hhmm(now), await read()))
+        // The files most changes touch, once for each list they make: the same files each hour work is short would be the same
+        // thing said again.
+        const hot = kept.hot ?? [], fresh = JSON.stringify([...hot].sort()) !== JSON.stringify([...kept.hotTold ?? []].sort())
+        const sent = await this.send('tell', project, after, async () => shortLine(waiting, numbers, hhmm(now), await read(), fresh ? hot : []))
         // Taken, it counts; refused for good, the hour passes all the same, and nothing is counted that was not typed.
-        if (sent !== 'later') Object.assign(kept, { typedAt: now, told: kept.told + (sent === 'taken' ? 1 : 0) })
+        if (sent !== 'later') Object.assign(kept, { typedAt: now, told: kept.told + (sent === 'taken' ? 1 : 0) }, fresh && hot.length ? { hotTold: hot } : {})
       }
     }
     const day = dayOf(at)
@@ -314,8 +344,9 @@ export class PmNumbers {
    *  words. That it is being read is written with the project's record before the read: a daemon that restarts meanwhile (a
    *  release restarts every PM's) posts the day without it and does not read again (its review counted 3,000 requests a day
    *  with a server refusing the post and a restart each hour). One that cannot be read is said once, and left out; so is
-   *  one whose read a daemon stopped in the middle of, which its record shows by having no words yet. */
-  private async board(project: LedProject, kept: Kept, day: string, read: () => Promise<string>): Promise<string> {
+   *  one whose read a daemon stopped in the middle of, which its record shows by having no words yet. The files most landings
+   *  touch that it names are kept until a later scoreboard names its own: a day whose files were not read leaves the last ones. */
+  private async board(project: LedProject, kept: Kept, day: string, read: () => Promise<DayBoard>): Promise<string> {
     if (kept.board?.day === day) {
       if (kept.board.words === undefined) {
         this.once(`[super-tab] numbers: SCOREBOARD_UNREAD ${project.repo}: the daemon stopped as it was read`)
@@ -328,10 +359,12 @@ export class PmNumbers {
     delete memory[project.projectId]
     memory[project.projectId] = kept
     this.save(memory)
-    kept.board.words = await read().catch(error => {
+    const board = await read().catch((error): DayBoard => {
       this.once(`[super-tab] numbers: SCOREBOARD_UNREAD ${project.repo}: ${error instanceof Error ? error.message : String(error)}`)
-      return ''
+      return { words: '', hot: null }
     })
+    if (board.hot) kept.hot = board.hot
+    kept.board.words = board.words
     return kept.board.words
   }
 
@@ -381,10 +414,11 @@ export class PmNumbers {
         const row = object(value)
         if (identifier(id) && Number.isSafeInteger(row.typedAt) && Number.isSafeInteger(row.told) && typeof row.said === 'boolean' && Number.isSafeInteger(row.activity)
           && typeof row.day === 'string') {
-          const board = object(row.board)
+          const board = object(row.board), hot = paths(row.hot), hotTold = paths(row.hotTold)
           kept[id] = { typedAt: row.typedAt as number, told: row.told as number, said: row.said, activity: row.activity as number, day: row.day,
             ...typeof board.day === 'string' && (board.words === undefined || typeof board.words === 'string')
-              ? { board: { day: board.day, ...typeof board.words === 'string' ? { words: board.words } : {} } } : {} }
+              ? { board: { day: board.day, ...typeof board.words === 'string' ? { words: board.words } : {} } } : {},
+            ...hot ? { hot } : {}, ...hotTold ? { hotTold } : {} }
         }
       }
     } catch { /* none kept yet, or unreadable: counted from now */ }

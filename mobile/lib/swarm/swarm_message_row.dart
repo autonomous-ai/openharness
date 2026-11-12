@@ -284,7 +284,6 @@ class SwarmMessageRow extends StatelessWidget {
     this.inThread = false,
     this.onAuthor,
     this.thread,
-    this.below,
     this.receipt,
     this.links,
     this.onLongPress,
@@ -357,10 +356,6 @@ class SwarmMessageRow extends StatelessWidget {
   /// Under its text, files and links: the line of the thread it is the root
   /// of.
   final Widget? thread;
-
-  /// Under that: what the person may do with it besides Reply — the
-  /// PM's private line answered in the project chat.
-  final Widget? below;
 
   /// Under all that: where the delivery of the person's newest message stands
   /// (swarm_message_receipt.dart); null for every other message.
@@ -500,7 +495,6 @@ class SwarmMessageRow extends StatelessWidget {
             for (final file in message.attachments) _attachment(context, file),
             ?links,
             ?thread,
-            ?below,
             ?receipt,
             if (actions)
               Padding(

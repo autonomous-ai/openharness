@@ -41,31 +41,6 @@ export interface VaultPort {
 
 type Payload = Record<string, unknown>
 
-/** The account as the core holds it: the backend, signed in, and the gateway's sealing. */
-export interface VaultAccount {
-  backend(method: string, path: string, body?: unknown): Promise<{ status: number, body: Record<string, unknown> }>
-  connectorVault: { seal(plaintext: string): Promise<Record<string, unknown>>, open(envelope: unknown): Promise<{ plaintext: string, complete: boolean } | { stranded: true } | null> }
-}
-
-/** One `connector_vault` op answered with the core's account (core/connectorsQueries.ts, and the
- *  connectors service in the core's process): `read`, `write`, `seal`, `open`. */
-export async function answerVaultOp(account: VaultAccount, payload: Payload): Promise<Payload> {
-  try {
-    switch (payload.op) {
-      case 'read': return { ...await account.backend('GET', '/api/connector-vault') }
-      case 'write': return { ...await account.backend('PUT', '/api/connector-vault', { base: payload.base, envelope: payload.envelope }) }
-      case 'seal': return { envelope: await account.connectorVault.seal(typeof payload.plaintext === 'string' ? payload.plaintext : '') }
-      case 'open': {
-        const opened = await account.connectorVault.open(payload.envelope)
-        return opened === null ? {} : { ...opened }
-      }
-      default: return { error: 'UNKNOWN_OP' }
-    }
-  } catch (error) {
-    return { error: error instanceof Error ? error.message : String(error) }
-  }
-}
-
 /** The port over the core's `connector_vault` query (core/connectorsQueries.ts), asked in line or over
  *  the service's link: `read`, `write`, `seal`, `open`. */
 export function vaultPortOf(call: (op: string, payload?: Payload) => Promise<Payload>): VaultPort {

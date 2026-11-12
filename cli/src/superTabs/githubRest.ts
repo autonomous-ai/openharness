@@ -42,6 +42,12 @@ export class GitHubStop extends Error {
   constructor(readonly code: string, message: string, readonly everywhere: boolean, readonly until: number) { super(message) }
 }
 
+/** The failures after which this login is not to ask again for a while: a rate limit, gh signed out or missing. One answer GitHub
+ *  failed on its own side, or that never came, is none, for a read whose answer only adds to what is said (the scoreboard's
+ *  parts, the files a note names): read on, a day's files were dropped for one 500 on one request (scoreboard.ts, its third
+ *  review), and every landing of a repository waited on one cut off (githubMerge.ts, review of #4177). */
+export const STOP_ASKING: ReadonlySet<string> = new Set(['RATE_LIMITED', 'GH_SIGNED_OUT', 'GH_MISSING'])
+
 /** GitHub's page size: a page shorter than this is the last. */
 export const PAGE = 100
 

@@ -96,6 +96,16 @@ describe('the project of a repository', () => {
     expect(repositoryProject(state(projects, ['newer', 'old', 'older']), 'acme/app')?.id).toBe('old')
   })
 
+  // #4195: a project made from a pane's folder has no clone address, only the GitHub repository its owner or PM names.
+  it('counts a repository a project names from when it named it, and the earlier of its name and its address', () => {
+    const named = (id: string, at: number, repositoryUrl: string | null = null, addressedAt?: number): SwarmProject =>
+      ({ ...project(id, repositoryUrl, addressedAt), githubRepository: 'acme/app', githubRepositoryAt: at })
+    expect(repositoryProject(state([project('web', APP, 1_000), named('late', 2_000)], ['web', 'late']), 'acme/app')?.id).toBe('web')
+    expect(repositoryProject(state([project('web', APP, 1_000), named('early', 500)], ['web', 'early']), 'acme/app')?.id).toBe('early')
+    // Named first, its clone address filled in later: it has had the repository since it named it.
+    expect(repositoryProject(state([project('web', APP, 1_000), named('both', 500, APP, 3_000)], ['web', 'both']), 'acme/app')?.id).toBe('both')
+  })
+
   it('passes over a project with no PM: its lead not there, or no agent of that id', () => {
     const projects = [project('first', APP, 1_000), project('next', APP, 2_000)]
     expect(repositoryProject(state(projects, ['next']), 'acme/app')?.id).toBe('next')

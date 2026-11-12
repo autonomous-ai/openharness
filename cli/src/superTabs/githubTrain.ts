@@ -68,6 +68,9 @@ const BUILT = /\bbuilt to ([0-9a-f]{40})\b/
 /** The commit status the train puts on the tip it built. Anyone who can push can add a status, and GitHub says who made each:
  *  only a tip with this one from this computer's login is a train's. It is no check of the train (githubMerge.ts checksOf). */
 export const TRAIN_MARK = 'harness/train'
+/** How what made a head's checks is written (githubMerge.ts checksOf): an app by its slug, a status by its context. Anyone who
+ *  can push sets a status under any name, so the two are never read as one. */
+export const APP = 'app ', STATUS = 'status '
 /** Pages of a hundred of a tip's statuses read for the mark, the newest first: under more than these it is not found, and the
  *  train is closed and built again. */
 const MARK_PAGES = 10
@@ -79,28 +82,67 @@ const CLOSES_MAX = 100
 /** A ready pull request, as the merger hands it over: `fork` when its branch is in another repository (it rides the train
  *  as any other, and merges on its own only if GitHub does not take its head into the train's branch). */
 export interface TrainPull { number: number; head: string; title: string; body: string; readers: readonly string[]; fork: boolean
-  /** Whether its head had a check of its own. */
-  checked: boolean }
+  /** What made the checks on its head (githubMerge.ts checksOf): each check run's app, each status by its context. */
+  sources: readonly string[] }
 export interface TrainMember { number: number; head: string; readers: string }
 /** One of the repository's trains, open or closed, as its pull request says it. `tip` is empty and `members` none when its body
  *  does not read as one the train wrote. */
 interface Train { number: number; branch: string; head: string; tip: string; members: TrainMember[]; red: boolean; mergedAs: string | null; openedAt: number; opener: string }
 
 /** What the train asks of the merger: a head's checks as the merger reads a pull request's (passed only once they hold still;
- *  `none` when it has no check at all), this computer's GitHub login, its notes to a pull request's author, each said once for a head, and how a comment of Harness's begins ("Harness, 14:20"). */
+ *  `sources`, what made them), this computer's GitHub login, its notes to a pull request's author, each said once for a head, how a comment of Harness's begins ("Harness, 14:20"),
+ *  and what a pull request it landed cost its builder, as the sentence its comment gains (empty when nothing says). */
 export interface TrainHost<T extends TrainPull> {
-  checks(number: number, head: string): Promise<{ state: 'passed' | 'running' | 'failed'; none: boolean }>
+  checks(number: number, head: string): Promise<{ state: 'passed' | 'running' | 'failed'; sources: readonly string[] }>
   login(): Promise<string>
   conflicts(pull: T): Promise<void>
   failedAlone(pull: T, train: number): Promise<void>
+  unreported(pull: T, train: number, sources: readonly string[]): Promise<void>
   stamp(): string
+  cost(number: number): Promise<string>
 }
 
-/** A train's body: the tip it built, then each member at its full head with who read it. A name is cut to what [MEMBER] reads, so
- *  a body the train wrote always reads back. */
-export const trainBody = (base: string, tip: string, members: readonly TrainMember[]): string =>
+/** A train's body: the tip it built, then each member at its full head with who read it, then the members' [receipts] (trainReceipts),
+ *  when any gives one. A name is cut to what [MEMBER] reads, so a body the train wrote always reads back. */
+export const trainBody = (base: string, tip: string, members: readonly TrainMember[], receipts: readonly Json[] = []): string =>
   [`Harness's train into ${base}, built to ${tip}. It lands when its checks pass and each pull request below is still ready at its head. Never push to this branch.`,
-    '', ...members.map(m => `#${m.number} at ${m.head}, READ-OK by ${m.readers.replace(/[^\w -]/g, '').slice(0, 200) || 'a reader'}`)].join('\n')
+    '', ...members.map(m => `#${m.number} at ${m.head}, READ-OK by ${m.readers.replace(/[^\w -]/g, '').slice(0, 200) || 'a reader'}`),
+    ...receipts.length ? ['', '```harness-local-checks', `[${receipts.map(receipt => JSON.stringify(receipt)).join(',\n')}]`, '```'] : []].join('\n')
+
+/** The fence a pull request's body gives its local check receipts in (scripts/local-checks.py FENCE), and what of a receipt that
+ *  program reads: nothing else of a member's body reaches the train's. */
+const RECEIPTS = /^```harness-local-checks\s*\n([\s\S]*?)^```[ \t]*$/gm
+const RECEIPT_KEYS = ['check', 'command', 'cwd', 'head', 'status', 'passed', 'platform'] as const
+/** The most characters of receipts a train's body carries: GitHub takes a body of 65,536 at most and local-checks.py reads no
+ *  longer one, and twenty member lines take up to about 5,000 of them. */
+const RECEIPTS_ROOM = 50_000
+
+/**
+ * The local check receipts each of [pulls] gives for its own head, in their order. CI asks for each local check's receipt at the
+ * head it ran on (scripts/local-checks.py), and a train's head is a merge commit nobody ran one on: train #4115 changed cli-core
+ * and went red on 2026-11-11, and no CLI pull request could land. So a train's body carries its members' receipts, which CI takes
+ * only at the heads the train's merges name. Copied as data and judged there: a body with no one fence of a JSON list gives none,
+ * as its own CI found, and one for another head is left out. What passes RECEIPTS_ROOM is left out too, and the member it was
+ * for is named missing, so its train splits until each fits.
+ */
+export function trainReceipts(pulls: ReadonlyArray<{ head: string; body: string }>): Json[] {
+  const receipts: Json[] = []
+  let room = RECEIPTS_ROOM
+  for (const pull of pulls) {
+    const fences = [...pull.body.matchAll(RECEIPTS)]
+    let given: unknown = null
+    try { given = fences.length === 1 ? JSON.parse(fences[0]![1]!) : null } catch { /* No JSON: no receipt. */ }
+    if (!Array.isArray(given)) continue
+    for (const item of given as unknown[]) {
+      if (!item || typeof item !== 'object' || (item as Json).head !== pull.head) continue
+      const receipt = Object.fromEntries(RECEIPT_KEYS.filter(key => key in item).map(key => [key, (item as Json)[key]]))
+      room -= JSON.stringify(receipt).length + 2
+      if (room < 0) return receipts
+      receipts.push(receipt)
+    }
+  }
+  return receipts
+}
 
 /** The tip and members a train's [body] names, or null when it is not one the train wrote: no tip, no member, more than a
  *  train carries, or one named twice. */
@@ -219,7 +261,7 @@ export class GitHubTrain<T extends TrainPull> {
   }
 
   /** The open [train]: its checks running, it waits; failed, it is closed as red; passed, it lands if every member is still
-   *  ready at its head and what the base gained since changes nothing it tested. */
+   *  ready at its head, what made its riders' checks has reported on it, and what the base gained since changes nothing it tested. */
   private async attend(train: Train, ready: readonly T[], waiting: ReadonlySet<string>): Promise<void> {
     // Its branch is not at the tip its body says the train built: someone pushed to it, or wrote the body.
     if (train.head !== train.tip) return this.close(train, 'other', 'its branch is not at the tip the train built')
@@ -231,10 +273,7 @@ export class GitHubTrain<T extends TrainPull> {
     if (ahead.behind_by !== 0) return this.close(train, 'moved', `${this.base} moved under it`)
     const checks = await this.host.checks(train.number, train.head)
     if (checks.state === 'failed') return this.close(train, 'red', 'its checks failed')
-    // No check of its own where a member had its own: CI has not started on it (Actions can take minutes to make a run), and
-    // none at all would read as passed.
-    const unstarted = checks.none && ready.some(pull => pull.checked && train.members.some(member => member.number === pull.number))
-    if (checks.state === 'running' || unstarted) {
+    if (checks.state === 'running') {
       if (this.deps.now() - train.openedAt > TRAIN_WAIT_MS) await this.close(train, 'late', 'its checks did not finish in 90 min')
       return
     }
@@ -247,6 +286,34 @@ export class GitHubTrain<T extends TrainPull> {
       if (waits && this.deps.now() - train.openedAt < TRAIN_WAIT_MS) return
       // One that only waited, until the train's own time ran out, changed nothing.
       return this.close(train, waits ? 'late' : 'changed', 'a pull request it carries is no longer ready at its head')
+    }
+    // What made checks on its riders' heads and none on its tip: CI has not run there yet (two reviews of 12 November: a CLA
+    // bot's status, there at once while Actions took minutes, read as passed alone, and the train landed). Each app that ran a
+    // rider's checks, not each check's name, which changes from one pull request to the next: GitHub names a job CI skipped by
+    // its template ("desktop-tests (${{ matrix.os }}, ${{ matrix.shard }})") and one it ran by its rows, and a check run by hand
+    // stays on its pull request's head. One that runs only when certain files change starts on the tip with the rest of CI. A
+    // status only when every rider had it: anyone sets one (a person, a bot on a comment or a label), and one some riders lacked
+    // says nothing of what CI runs (review of #4139).
+    const wanted = [...new Set(riders.flatMap(pull => pull.sources))]
+    const unreported = wanted.filter(source => (source.startsWith(APP) || riders.every(pull => pull.sources.includes(source))) && !checks.sources.includes(source))
+    // And nothing at all on the tip while a rider had anything waits too, as it did before: riders with no app, and no status in
+    // common, want nothing by name (review 2 of #4139).
+    if (unreported.length || (!checks.sources.length && wanted.length)) {
+      if (this.deps.now() - train.openedAt <= TRAIN_WAIT_MS) return
+      await this.close(train, 'late', `its checks did not finish in 90 min; nothing came from ${(unreported.length ? unreported : wanted).slice(0, 3).join(', ')}`)
+      // CI ran on the tip when an app that ran its riders' checks came there or, where none of them had an app, a status every
+      // rider had. Not any source at all: in an Actions outage a CLA bot's status still comes on every tip (review 2 of #4139).
+      // Where CI ran, what never came is what no train gets: each rider that had it is told once at its head and sits out of
+      // trains until that changes, or every train would carry it and wait out its time, for good (review of #4139). Where CI did
+      // not, it is down or not running here: the next train waits again, as one whose checks never finish.
+      const apps = riders.some(pull => pull.sources.some(source => source.startsWith(APP)))
+      if (!riders.some(pull => pull.sources.some(source => (apps ? source.startsWith(APP) : riders.every(other => other.sources.includes(source)))
+        && checks.sources.includes(source)))) return
+      for (const pull of riders) {
+        const its = unreported.filter(source => pull.sources.includes(source))
+        if (its.length) await this.host.unreported(pull, train.number, its)
+      }
+      return
     }
     if (!await this.holds(train, String(object(ahead.merge_base_commit).sha ?? ''))) return this.close(train, 'other', 'its branch does not hold what its body names')
     // A merge commit where the repository allows one: each member's own commits reach the base, so GitHub marks each merged
@@ -365,7 +432,7 @@ export class GitHubTrain<T extends TrainPull> {
     // Marked as this login's build before the pull request exists: what is pushed to the branch from here on is not.
     await this.sent('POST', `/statuses/${tip}`, [201], { state: 'success', context: TRAIN_MARK, description: 'Built by Harness from pull requests that were read.' })
     const opened = object((await this.sent('POST', '/pulls', [201], { head: branch, base: this.base, draft: false, title: `${TITLE}${members.map(m => `#${m.number}`).join(' ')}`,
-      body: trainBody(this.base, tip, members.map(m => ({ number: m.number, head: m.head, readers: m.readers.join(' and ') }))) })).body)
+      body: trainBody(this.base, tip, members.map(m => ({ number: m.number, head: m.head, readers: m.readers.join(' and ') })), trainReceipts(members)) })).body)
     const [train] = await this.mine([opened])
     if (!train) throw this.stop('TRAIN_UNREADABLE', `GitHub's answer to opening the train on ${branch} is not one the train reads.`)
     // Opened at another head than the tip built: someone pushed onto the branch between the last merge and here.
@@ -393,7 +460,7 @@ export class GitHubTrain<T extends TrainPull> {
       const comments = await this.deps.reads.current(this.repo, `/repos/${this.repo}/issues/${member.number}/comments?per_page=${PAGE}`, 3)
       if (!comments.some(comment => TEAM.has(comment.author_association) && String(comment.body ?? '').slice(0, 500).includes(said))) {
         await this.sent('POST', `/issues/${member.number}/comments`, [201],
-          { body: `${this.host.stamp()}: ${said}${sha.slice(0, 7)}. READ-OK on ${member.head.slice(0, 7)} by ${member.readers}, checks green.` })
+          { body: `${this.host.stamp()}: ${said}${sha.slice(0, 7)}. READ-OK on ${member.head.slice(0, 7)} by ${member.readers}, checks green.${await this.host.cost(member.number)}` })
       }
       if (!kept) await this.sent('PATCH', `/pulls/${member.number}`, [200], { state: 'closed' })
     }

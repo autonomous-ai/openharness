@@ -419,6 +419,30 @@ def batch_members(root, head, base):
     return members[::-1]
 
 
+# Harness's train (cli/src/superTabs/githubTrain.ts) lands ready pull requests together from a branch under this prefix,
+# one merge commit for each, and its body carries each member's local check receipts (trainReceipts).
+TRAIN_BRANCH = "harness-train/"
+
+
+def train_members(root, head, base):
+    """Each head a train branch merged, in merge order, with the local checks its merge needs: read from the branch's
+    own merges, never from the pull request's text. What a merge adds is its member's to prove, beyond the member's own
+    commits too, so a receipt is asked for every path the train changes."""
+    members, commit = [], head
+    for _ in range(local_checks.TRAIN_MAX + 1):
+        if is_ancestor(root, commit, base):
+            break
+        parents = git(root, "rev-list", "--parents", "-n", "1", commit).split()[1:]
+        if len(parents) != 2:
+            raise ValueError(f"train commit {commit[:12]} merges no pull request")
+        first, second = (sha(value) for value in parents)
+        members.append(dict(head=second, local_checks=local_checks.required_checks(changed_paths(root, first, commit))))
+        commit = first
+    else:
+        raise ValueError(f"train has more than {local_checks.TRAIN_MAX} merges before the base branch")
+    return members[::-1]
+
+
 def reuse_sources(root, head, base):
     """The commits whose passed runs may stand for this head's components, and how they were found: the passed head of
     GitHub's Update branch (its second parent is a main commit), or the member heads a batch branch merged."""
@@ -806,11 +830,13 @@ def make_plan(root, event_name, event, scope="full", source=None, evidence=None)
         git(root, "merge-base", "--is-ancestor", base, head)
     elif event_name not in {"workflow_dispatch", "workflow_call"}:
         raise ValueError("unsupported CI event")
+    members = []
     if base:
         # Treat renames as deletion + addition so both input boundaries apply.
-        changed = subprocess.check_output(["git", "diff", "--no-renames", "--name-only", "-z", base, head], cwd=root, timeout=120)
-        paths = sorted(p.decode() for p in changed.split(b"\0") if p)
+        paths = changed_paths(root, base, head)
         suites, reasons = select(paths)
+        if event_name == "pull_request" and str(event["pull_request"]["head"].get("ref", "")).startswith(TRAIN_BRANCH):
+            members = train_members(root, head, base)
         if event_name == "merge_group":
             suites = set()  # The PR run tested these changes; releases test the rest.
     else:
@@ -825,6 +851,7 @@ def make_plan(root, event_name, event, scope="full", source=None, evidence=None)
                 tree=git(root, "rev-parse", "HEAD^{tree}"), paths=paths, reasons=reasons,
                 suites=sorted(suites), required_jobs=sorted(required), reused=reused, reuse=reuse,
                 local_checks=local_checks.required_checks(paths) if event_name == "pull_request" else [],
+                train_members=members,
                 manual_acceptance="Review still selects relevant native, real-engine, hardware and visual acceptance.")
 
 
@@ -856,12 +883,12 @@ def verify(plan, needs, source):
     for job, result in needs.items():
         if result.get("result") not in {"success", "skipped"}:
             raise ValueError(f"CI job did not complete successfully: {job}")
-    required_local = local_checks.planned_checks(plan)
+    heads = local_checks.planned_heads(plan)
     try:
         receipts = json.loads(needs.get("process-checks", {}).get("outputs", {}).get("local_receipts", "[]"))
     except (ValueError, TypeError):
-        raise local_checks.missing(required_local) from None
-    receipts = local_checks.validate_receipts(required_local, receipts, plan["head"])
+        receipts = None  # No receipt: validate_receipts names what is missing.
+    receipts = local_checks.validate_receipts(heads, receipts)
     return dict(schema=1, kind="ci-required", status="passed", source_sha=plan["head"],
                 source_tree=plan["tree"], event=plan["event"], base=plan["base"],
                 suites=suites, required_jobs=sorted(expected), results={k: v["result"] for k, v in needs.items()},

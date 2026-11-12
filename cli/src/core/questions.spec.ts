@@ -23,6 +23,7 @@ function setup(over: Partial<QuestionDeps> = {}) {
     agentIdFor: (sessionId) => agents.get(sessionId)?.agentId ?? sessionId,
     sessionTurnOpen: (sessionId) => sessionId === 'busy',
     someoneCanAnswer: () => true,
+    followedByTool: () => false,
     deviceInput: { setUserAction: vi.fn() },
     ...over,
   }
@@ -62,10 +63,22 @@ describe('questions', () => {
     const watcher = given(asking.questionWatcher)
     expect((watcher.getSession('a1') as RegisteredSession).sessionId).toBe('s1')
     expect(watcher.capture).toBe(deps.terminal.captureTerminal)
-    expect(watcher.hasDevice()).toBe(true)
+    expect(watcher.hasDevice('s1')).toBe(true)
     const driving = vi.spyOn(asking.questions, 'isDriving').mockReturnValue(true)
     expect(watcher.isDriving('s1')).toBe(true)
     expect(driving).toHaveBeenCalledWith('s1')
+  })
+
+  // An agent's `harness wait` or `watch` follows a harness by what is pushed (core/toolWatches.ts): with no window, dial or
+  // app here, its question was never looked for, and the wait read the screen itself every 3 s to see it.
+  it('looks for a question on the screen of a harness a tool follows, though nobody else is here', () => {
+    const followed = new Set<string>()
+    const { asking } = setup({ someoneCanAnswer: () => false, followedByTool: (agentId) => followed.has(agentId) })
+    const watcher = given(asking.questionWatcher)
+    expect(watcher.hasDevice('s1')).toBe(false)
+    followed.add('a1')
+    expect(watcher.hasDevice('s1')).toBe(true)
+    expect(watcher.hasDevice('s2')).toBe(false)
   })
 
   it('keeps the dial working while an answer is on its way, and returns the answer\'s result', async () => {
