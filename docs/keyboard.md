@@ -16,6 +16,7 @@ The defaults, in the workspace:
 | ⌘R / ⌘D | Split right / down — open the New Pane picker with the requested direction, then choose an existing harness or create one |
 | ⌘N | New Harness — choose an Agent or Harness, Project, and Options, then activate New Harness. Lists filter as you type; Return chooses and Escape returns to the form. Project accepts a folder, a new project name, or a repository. Options include model, permissions, agent profile, branch, and worktree |
 | ⌘B | Boss mode: describe a task, it picks the harness |
+| ⇧⌘H / Alt+Shift+H (Linux, Windows, browser) | Hachi — opens the Hachi tab from anywhere; a second press goes back to the last tab. Only while Settings ▸ Experimental ▸ Hachi is on; unbound when it is off. Command `hachi.open` |
 | ⌘W · ⇧⌘R | Close tab · rename tab |
 | ⇧⌘T | New terminal in the current project |
 | ⇧⌘N | Clone Harness — another harness like the focused pane's (same machine, project, harness, Codex profile, permission mode, named agent) with a fresh conversation. No dialog; fork minus the context |

@@ -78,6 +78,7 @@ and **Browser**. Technical documentation may still call the terminal interface a
 | **Store** | The catalog of reusable harnesses and viewers. | Install a harness from the Store. |
 | **Conversation** | An agent's conversation history, including histories started outside Harness. | Provider usage counts native conversations. |
 | **Recorded run** | A saved demonstration of a harness doing work. | Watch the recorded run in the Store. |
+| **Hachi** | The person's own harness for starting and following their other harnesses: their Claude Code or Codex, in the first tab, behind Settings ▸ Experimental. A proper name: never "the Hachi", never "Hachi agent" in copy. System name: `hachi` (experiment, keymap `hachi.open`, package `autonomous/hachi`). | Ask Hachi to fix the flaky test and have Codex review it. |
 
 The template's roles, on screen and inside the system. These are the defaults of the
 built-in instructions; a project's document may rename or replace them.
@@ -190,6 +191,7 @@ task form.
 | Set up wireless networking | **Connect to Wi-Fi** |
 | Answer a task that waits for you, as a meeting invite | **Accept**, **Decline**; a declined task reads **Declined**. Never Approve or Reject for a task. |
 | Choose whether the tasks you ask for wait for you | **Accept all**, **Ask me** |
+| Open Hachi's tab | **Open Hachi** (palette, ⇧⌘H) |
 
 **Auto-approve** under the Cmd-N box keeps its name: it is what an agent may do
 on the computer, not an answer to a task. Command and field names in code
