@@ -223,7 +223,7 @@ an area the repository already has one for in its own spelling.*
 **Why.** `part:Backend` and an agent's "Works on: backend" do not match; the label's side is compared as written.
 
 **Change.** A `part:` label's value is read through `areaOf` wherever an area is read (`assign/crew.ts`: a task's
-part, a builder's finished parts, `contextOf`'s keys). Words that differ ("backend engine" and "backend") stay two
+part, `contextOf`'s keys). Words that differ ("backend engine" and "backend") stay two
 areas: mapping them is package 13's.
 
 **Proof.** Specs; the gate.
@@ -495,13 +495,13 @@ workflow in server code (the plan's "Not built"): the server referees one record
   there (2 points a doubling) and left other builders idle. `readProblem` counts no closed issues by part, and the line
   that gives a task no longer says "it finished 2 part:api tasks". *Kept*: `FOCUS` and `AWAY` in `assign/crew.ts`, a
   person's "Works on:", a strong pull as before. It is a person steering their agent, which the study could not test (5
-  role files named an area), and at 1.0 it would steer nothing. *The experiment* takes the measured 1.12 between a
+  role files named an area), and at 1.0 it would steer nothing. *The experiment* takes the study's estimate, 1.12, between a
   builder's own area and another, where it assumed two ([its rows under both](README.md#an-areas-measured-speed)): one
   ahead still gains (4% on the light day, 14% on the heavy one), and if a named area is worth no more than a practised
   one, the kept guess costs the rule 6% and 13%.
   Asked: from lampOS's record on GitHub, read only: is a builder faster, or held less, on its later
   tasks in an area than on its first? Method and numbers in `docs/research/`. Then the experiment's assumed twofold
-  speed, and the product's own guess (`FOCUS` and `AWAY` in `assign/crew.ts`: threefold), are replaced by what was
-  found.
+  speed, and the product's own guess (`FOCUS` and `AWAY` in `assign/crew.ts`: threefold), were to be replaced by what
+  was found.
 
 An idea beyond these packages goes to anh Dee as a proposal.

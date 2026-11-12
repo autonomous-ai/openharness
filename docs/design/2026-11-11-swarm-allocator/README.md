@@ -19,8 +19,9 @@ machine"; "agents create worktrees, so disk and storage go out fast."
 2. **The allocator's first job is the four walls**: merging, CPU, end-to-end tests, disk. They are capacity, and no
    choice of who builds what gets past them.
 3. **Fix what the solver is fed and when it commits**: five faults in today's allocator, found in its code.
-4. **Measure before the rest.** What an agent's own area is worth, what a task costs in tokens, and whether a cheaper
-   model lands the same work are not known. The first version assumed them.
+4. **Measure before the rest.** What a task costs in tokens, and whether a cheaper model lands the same work, are not
+   known; what an agent's own area is worth was estimated on 12 November at 1.12 times, within noise. The first version
+   assumed all three.
 5. **After the walls, each with what it needs first**: prices for subscriptions, a model for each task, offers
    accepted on the agent's own computer, Jev, a public record of costs.
 
@@ -29,7 +30,7 @@ machine"; "agents create worktrees, so disk and storage go out fast."
 | It said | What was found |
 |---|---|
 | A twenty-line rule beats today's solver by 10 to 30%, so the search goes | The same solver holding one task ahead of each builder, not two, gets nearly all of that. With a machine's cores as the product plans them, the solver and the rule are level, and the second critique found the search 11 to 25% ahead of its own first plan on heavy days (its own runs: the script has no flag for it). What costs time is the second task ahead: 0 to 6% on light days and 17 to 19% on heavy ones with the cores the product plans (3 to 12% and 21 to 26% at 6) |
-| Matching work to the agent that does it best saves about 40% of the work | That restates the experiment's assumption that an agent is twice as fast in its own area. At 1.5× it is 25%, at 1.2× 13%, at none 0. lampOS's record has since measured 1.12, within noise ([the study](../../research/2026-11-12-area-worth/README.md)) |
+| Matching work to the agent that does it best saves about 40% of the work | That restates the experiment's assumption that an agent is twice as fast in its own area. At 1.5× it is 25%, at 1.2× 13%, at none 0. lampOS's record has since given an estimate of 1.12, within noise ([the study](../../research/2026-11-12-area-worth/README.md)) |
 | A lane starts no more than it lands in its usual hours | That is its own average, used as a ceiling: it can never grow, and it ratchets down. In the critique's simulation it took 113 landings a day to 88, 26 or 6 |
 | Writers in an area go up by one, and halve on a conflict | At lampOS's 7% conflict rate it sits at one writer for 43% of landings, and a project with one area gets two builders |
 | A change with break chance q rides with 1/q − 1 others, so 20 is safe at 2% | Only if a run is all or nothing and breaks are independent. At 1.9% a train of 20 passes 68% of the time; counting changes held mid-run, about 42% |
@@ -187,8 +188,8 @@ with `CORES=8` for the second, and `AWAY=1.2` for both today: they were made whe
 fast in its own area. The solver's rows vary a little with the computer: its search stops on a wall clock.
 
 - **The days.** 12 builders on 6 machines. 80 tasks (a light day) or 160 (more than they can do) arrive over ten
-  hours. A builder takes 1.12 times as long outside its own area as in it (0.672 of a size's minutes against 0.6), as
-  lampOS's record measured ([an area's measured speed](#an-areas-measured-speed)); every other table in this section
+  hours. A builder takes 1.12 times as long outside its own area as in it (0.672 of a size's minutes against 0.6), the
+  study's estimate from lampOS's record ([an area's speed, from the study](#an-areas-speed-from-the-study)); every other table in this section
   assumed twice as long (1.2). With noise, minutes spread as agents' runs do, and three labels in ten are a size off.
 - **It ends at the build.** No reads, checks, holds, landings, models or tokens. And a task starts the minute it is
   given: in the product a builder with nothing waits a pass (up to 60 s) and GitHub's news (20 s) for it, about the
@@ -226,12 +227,12 @@ branch):
 - **Both tables give the solver today's fixed guesses** of a size's minutes and an area's speed. Given the real
   speeds, the rule scores 55, 53, 50, 98 and 91.
 - **First come is far behind either** in these tables, but by how much rested on the assumed twofold speed in an
-  agent's own area: at the measured 1.12 it is 4% behind on a light day and 41% on a heavy one (below).
+  agent's own area: at the study's 1.12 it is 4% behind on a light day and 41% on a heavy one (below).
 
-### An area's measured speed
+### An area's speed, from the study
 
 Until 12 November the script assumed a builder twice as fast in its own area: 0.6 of a size's minutes there, 1.2
-elsewhere. lampOS's record measured 1.12 ([the study](../../research/2026-11-12-area-worth/README.md): an area a
+elsewhere. The study of lampOS's record estimates 1.12 (a fit of opened-to-landed time, within noise; [the study](../../research/2026-11-12-area-worth/README.md): an area a
 builder had landed work in, against one it had not), so its default is now 0.6 and 0.672. The plan still guesses
 threefold (0.5 and 1.5): the product's `FOCUS` and `AWAY` for an area a person names in "Works on:", which stay. The
 noisy days at 8 cores, three seeds, both assumptions run on this computer on 12 November
@@ -241,14 +242,15 @@ solver's rows of both side by side, as they stop on a wall clock):
 | Day | Outside its area | First come | Solver, two ahead | Solver, one ahead | Rule | Solver, two ahead, given the real speeds | Rule, given them |
 |---|---|---|---|---|---|---|---|
 | Light, noise | twice, assumed | 90 | 54 | 51 | 51 | 53 | 53 |
-| Light, noise | 1.12, measured | 52 | 52 | 50 | 51 | 48 | 48 |
+| Light, noise | 1.12, the study's | 52 | 52 | 50 | 51 | 48 | 48 |
 | Heavy, noise | twice, assumed | 293 | 104 | 84 | 86 | 106 | 90 |
-| Heavy, noise | 1.12, measured | 103 | 85 | 73 | 76 | 86 | 67 |
+| Heavy, noise | 1.12, the study's | 103 | 85 | 73 | 76 | 86 | 67 |
 
 - **The rows for twice match the 8-core table above** (the solver one ahead had 86 on the heavy day there: its search
   stops on a wall clock).
 - **One ahead still gains**: 4% on the light day and 14% on the heavy one at 1.12, where it was 6% and 19% at twice.
-- **Most of first come's lag was the assumption.** At 1.12 it takes 4% longer than the solver one ahead on the light day
+- **Most of first come's lag was the assumption.** These rows keep 0.6 inside an area and lower the outside, so the day
+  is lighter too (with 1.2 outside and 1.07 inside, first come is 79% behind on the heavy day, not 41%). At 1.12 it takes 4% longer than the solver one ahead on the light day
   (52 against 50) and 41% on the heavy one (103 against 73), where it took 76% and three and a half times as long.
 - **The threefold guess costs, if a named area is worth what a practised one is.** Given the real speeds, the rule
   scores 48 and 67 where it scores 51 and 76 with the guess: 6% and 13%. At twice the guess cost nothing. That guess is
