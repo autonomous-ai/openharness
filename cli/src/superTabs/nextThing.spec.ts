@@ -632,6 +632,59 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     again.stop()
   })
 
+  // What its person was told of was saved and never read back: after each restart (every release) each of it but the last was given
+  // again, under the id it was first given with, which the server answers as given, and the agent's next thing waited behind it.
+  it('keeps what its person was told of over a restart, and types none of it again', async () => {
+    const f = setup({ items: [] })
+    f.state.owed = [{ number: 24, sha: HEAD.slice(0, 7) }, { number: 25, sha: HEAD.slice(0, 7) }]
+    f.next.start()
+    for (let i = 0; i < 2; i++) {
+      await f.end()
+      await f.end()
+      await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
+    }
+    expect(f.say).toHaveBeenCalledTimes(2)
+    f.next.stop()
+    const again = f.make()
+    again.start()
+    await vi.advanceTimersByTimeAsync(START_LOOK_MS)
+    await f.end()
+    await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
+    expect(f.told()).toEqual([expect.stringMatching(/^Read acme\/app#24 at /), expect.stringMatching(/^Read acme\/app#25 at /)])
+    expect(f.say).toHaveBeenCalledTimes(2)
+    again.stop()
+  })
+
+  it('reads from its file the last 20 things its person was told of, the one its row says it told last, and no other value', async () => {
+    const f = setup({ items: [] }), short = HEAD.slice(0, 7)
+    f.state.owed = [{ number: 24, sha: short }, { number: 25, sha: short }]
+    const others = Array.from({ length: 18 }, (_, i) => `acme/app#${100 + i}`)
+    writeFileSync(f.file, JSON.stringify({ pip: { key: 'acme/app#30', times: 1, told: true,
+      done: [`acme/app#25 read ${short}`, ...others, 7, `acme/app#24 read ${short}`] } }))
+    const next = f.make()
+    next.start()
+    await f.end()
+    expect(f.told()).toEqual([expect.stringMatching(/^Read acme\/app#25 at /)])
+    expect(JSON.parse(readFileSync(f.file, 'utf8'))).toEqual({ pip: { key: `acme/app#25 read ${short}`, times: 1, told: false,
+      done: [...others, `acme/app#24 read ${short}`, 'acme/app#30'] } })
+    next.stop()
+  })
+
+  // Code review of #4123: a row saved before its list was read back (v0.6.33, v0.6.34) or kept (older builds) says its last thing
+  // told only as told. Read so, that thing was given again once the next thing took the row.
+  it('keeps the thing a row of its file says it told once the next thing is typed', async () => {
+    const f = setup({ items: [] }), short = HEAD.slice(0, 7)
+    f.state.owed = [{ number: 24, sha: short }, { number: 25, sha: short }]
+    writeFileSync(f.file, JSON.stringify({ pip: { key: `acme/app#24 read ${short}`, times: 1, told: true } }))
+    const next = f.make()
+    next.start()
+    for (let i = 0; i < 3; i++) await f.end()
+    await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
+    expect(f.told()).toEqual([expect.stringMatching(/^Read acme\/app#25 at /)])
+    expect(f.say.mock.calls.map(([, , text]) => text)).toEqual([`When my turn ended, Harness asked me to read acme/app#25 at ${short}, and my next turn changed nothing.`])
+    next.stop()
+  })
+
   it('says a failure by its name and types it at the next end; one it could not type is tried again under the same operation', async () => {
     const f = setup()
     f.next.start()
