@@ -12,9 +12,14 @@
  *
  * A harness an agent closed with `harness close` has a line too, `Closed`: its `harness wait` then says the harness
  * was closed, by the agent itself, rather than reporting it stopped as a failure. Older readers skip that line as well.
+ *
+ * The file is not only appended to: deleting a harness rewrites it without the `Told` lines naming that harness
+ * (`forgetTold`), whose `probe` keeps the opening words of a `tell`. Every writer, an append and that rewrite alike,
+ * takes one lock, `<file>.lock`: a rewrite in place once lost a line appended during it (the review of #1180).
  */
-import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync } from 'node:fs'
+import { appendFileSync, closeSync, constants, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { lockOwnerAlive, lockStartMarker, processLockIdentity, type LockGeneration } from '../lib/processLiveness.js'
 
 export interface LedgerMember { machineId: string; agentId: string }
 export interface Started {
@@ -62,6 +67,40 @@ export const ledgerPath = (dataDir: string): string => join(dataDir, 'agent-clie
 
 /** The file's size before it becomes the previous one: the two hold about 20,000 starts. */
 export const ROTATE_BYTES = 2 * 1024 * 1024
+
+/** How long a writer waits for another process's writer before it gives up, as the registry's lock does. */
+export const LEDGER_LOCK_WAIT_MS = 2_000
+const LOCK_STEP_MS = 10
+
+export class LedgerBusyError extends Error {
+  constructor() {
+    super('The agent ledger is busy. Try again.')
+    this.name = 'LedgerBusyError'
+  }
+}
+
+const pause = new Int32Array(new SharedArrayBuffer(4))
+
+/** The lock's text, or null once its writer let go. */
+function lockText(lock: string): string | null {
+  try { return readFileSync(lock, 'utf8') } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw error
+  }
+}
+
+/** Removes [lock] when the process it names is gone, and says whether to try for it again at once. A lock that names
+ *  no one (its writer died between making it and writing its pid) has no owner either. */
+function takeOver(lock: string): boolean {
+  const seen = lockText(lock)
+  if (seen === null) return true
+  let owner: (LockGeneration & { pid?: unknown }) | null = null
+  try { owner = JSON.parse(seen) } catch { /* names no one */ }
+  if (lockOwnerAlive(Number(owner?.pid), lockStartMarker(owner))) return false
+  // The check can run `ps`, for milliseconds: a lock let go and taken meanwhile is a live writer's, not this one's.
+  if (lockText(lock) === seen) rmSync(lock, { force: true })
+  return true
+}
 
 const member = (v: unknown): v is LedgerMember => {
   const m = v as Record<string, unknown> | null
@@ -118,7 +157,7 @@ const same = (a: LedgerMember, b: LedgerMember): boolean => a.machineId === b.ma
 
 export class Ledger {
   private cache: { key: string; rows: Started[]; pending: Pending[]; closed: Closed[]; told: Told[] } | null = null
-  constructor(readonly path: string) {}
+  constructor(readonly path: string, private readonly lockWaitMs = LEDGER_LOCK_WAIT_MS) {}
 
   /** Where the older lines went when the file passed its size. */
   get previous(): string { return `${this.path}.1` }
@@ -153,12 +192,71 @@ export class Ledger {
   }
 
   append(row: Started | Pending | Closed | Told): void {
+    this.locked(() => {
+      appendFileSync(this.path, `${JSON.stringify(row)}\n`, { mode: 0o600 })
+      // Past its size the file becomes the previous one, by a rename: a reader sees each line in one file or the other.
+      if (statSync(this.path).size > ROTATE_BYTES) renameSync(this.path, this.previous)
+    })
+  }
+
+  /** Drops the `Told` lines that name [agentId] as told from both files, for a harness being deleted, and returns how
+   *  many went. Every other line stays byte for byte, one this reader cannot parse included. */
+  forgetTold(agentId: string): number {
+    return this.locked(() => {
+      let gone = 0
+      for (const file of [this.previous, this.path]) {
+        let bytes: Buffer
+        try { bytes = readFileSync(file) } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
+          throw error
+        }
+        const kept: Buffer[] = []
+        let dropped = 0
+        for (let start = 0; start < bytes.length;) {
+          const newline = bytes.indexOf(0x0a, start)
+          const end = newline < 0 ? bytes.length : newline + 1
+          const line = bytes.subarray(start, end)
+          if (parseTold(line.toString('utf8'))?.told.agentId === agentId) dropped++
+          else kept.push(line)
+          start = end
+        }
+        if (!dropped) continue
+        // A new file renamed over the old: a reader sees the whole file before or after, and no copy of the words stays.
+        const temp = `${file}.tmp`
+        try {
+          writeFileSync(temp, Buffer.concat(kept), { mode: 0o600 })
+          renameSync(temp, file)
+        } catch (error) {
+          rmSync(temp, { force: true })
+          throw error
+        }
+        gone += dropped
+      }
+      return gone
+    })
+  }
+
+  /** Runs [write] holding `<path>.lock`, made with O_EXCL. A lock whose owner is gone is taken over; a live owner is
+   *  waited for up to [lockWaitMs], then LedgerBusyError with nothing written. */
+  private locked<T>(write: () => T): T {
     mkdirSync(dirname(this.path), { recursive: true })
-    // One short line with O_APPEND: two agents starting harnesses at once never interleave.
-    appendFileSync(this.path, `${JSON.stringify(row)}\n`, { mode: 0o600 })
-    // Past its size the file becomes the previous one, by a rename: a line appended meanwhile lands in one file or the
-    // other, both read. Rewriting the file in place lost a line appended during the rewrite (the review of #1180).
-    try { if (statSync(this.path).size > ROTATE_BYTES) renameSync(this.path, this.previous) } catch { /* rotated by another */ }
+    const lock = `${this.path}.lock`
+    // Known before the lock is made: `ps` can take milliseconds, and a lock that names no one meanwhile is taken over.
+    const mine = JSON.stringify({ pid: process.pid, ...processLockIdentity(process.pid) })
+    const deadline = Date.now() + this.lockWaitMs
+    for (;;) {
+      let fd: number
+      try { fd = openSync(lock, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600) } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+        if (takeOver(lock)) continue
+        if (Date.now() >= deadline) throw new LedgerBusyError()
+        // Blocks this thread without spinning, as the registry's lock does: every writer here is synchronous.
+        Atomics.wait(pause, 0, 0, LOCK_STEP_MS)
+        continue
+      }
+      try { writeFileSync(fd, mine) } finally { closeSync(fd) }
+      try { return write() } finally { rmSync(lock, { force: true }) }
+    }
   }
 
   /** Appends [row] unless [row.child] already has its line: a harness asked for and started later is recorded by
