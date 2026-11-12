@@ -7,7 +7,10 @@ import { OpencodeReader, readOpencodeMessages } from './reader.js'
 import { opencodeV2TurnOpen } from '../launchControl.js'
 import { lastOpencodeTurnText, opencodeMessagesToEvents } from './normalizer.js'
 import type { LiveEvent } from '../../lib/normalize.js'
+import { builtinSqlite, closeSqliteHandles, type DatabaseLike } from '../../lib/sqliteBuiltin.js'
 import { sqliteReadAll } from '../../lib/sqliteRead.js'
+import { enableOffThreadSqlite, resetOffThreadSqlite } from '../../lib/sqliteThread.js'
+import { KIB, MIB, pageReads, withinBudget } from '../../testing/storePages.js'
 
 // The real reads, with a seam to make one of them go unanswered, as a busy store or the read threads' deadline does.
 vi.mock('../../lib/sqliteRead.js', async (real) => {
@@ -447,5 +450,171 @@ d('opencodeV2TurnOpen (OpenCode 2 session_message)', () => {
   it('is unknown for a store it cannot read or an id it will not query', async () => {
     expect(await opencodeV2TurnOpen(join(dir, 'missing.db'), SID)).toBeNull()
     expect(await opencodeV2TurnOpen(db, "x' OR 1=1")).toBeNull()
+  })
+})
+
+// Only the read threads enforce a reply limit, so they are on (#4188: a session over 32 MiB was refused on every poll,
+// so its reader never seeded and its history never loaded). The store is written with the binding, in WAL as
+// OpenCode's own is: the sqlite3 CLI cannot take megabytes on a command line, and in the older journal mode a read in
+// the middle of a large page would fail the writer's commit with `database is locked`, now and then.
+const withBuiltin = builtinSqlite() ? describe : describe.skip
+
+withBuiltin('OpencodeReader pages by bytes', () => {
+  let dir = ''
+  let db = ''
+  let w: DatabaseLike
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'oc-pages-'))
+    db = join(dir, 'opencode.db')
+    w = new (builtinSqlite()!)(db, { readOnly: false })
+    w.exec('PRAGMA journal_mode = WAL')
+    vi.mocked(sqliteReadAll).mockClear()
+    enableOffThreadSqlite()
+  })
+  afterEach(async () => {
+    vi.restoreAllMocks()
+    await resetOffThreadSqlite()
+    closeSqliteHandles()
+    w.close()
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+  })
+
+  const listen = (): { events: LiveEvent[]; reader: OpencodeReader } => {
+    const events: LiveEvent[] = []
+    return { events, reader: new OpencodeReader({ dbPath: db, sessionId: SID, onEvents: (e) => events.push(...e), pollMs: 20 }) }
+  }
+  const tooBig = (error: { mock: { calls: unknown[][] } }): string[] =>
+    error.mock.calls.map((call) => String(call[0])).filter((line) => line.includes('too big'))
+
+  // A 1.x store, whose session_message table is there and empty.
+  describe('OpenCode 1', () => {
+    beforeEach(() => {
+      w.exec('CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, data TEXT);'
+        + 'CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT, time_created INTEGER, data TEXT);'
+        + 'CREATE INDEX part_message_id_id_idx ON part (message_id, id);'
+        + 'CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, type TEXT NOT NULL, seq INTEGER NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);')
+    })
+    /** A message and its parts in one transaction: a poll never sees the message without them. */
+    const put = (mid: string, tc: number, role: string, parts: Array<Record<string, unknown>>): void => {
+      w.exec('BEGIN')
+      w.prepare('INSERT INTO message VALUES (?, ?, ?, ?)').all(mid, SID, tc, JSON.stringify({ role }))
+      parts.forEach((data, p) => w.prepare('INSERT INTO part VALUES (?, ?, ?, ?, ?)').all(`${mid}-p${p}`, mid, SID, tc * 10 + p, JSON.stringify(data)))
+      w.exec('COMMIT')
+    }
+    const id = (n: number): string => `m${String(n).padStart(4, '0')}`
+    /** Turn i: a prompt, and a finished answer of `bytes`. */
+    const turn = (i: number, bytes: number): void => {
+      put(id(2 * i), 2 * i, 'user', [{ type: 'text', text: `q${i}` }])
+      put(id(2 * i + 1), 2 * i + 1, 'assistant', [{ type: 'text', text: 'x'.repeat(bytes) }, { type: 'step-finish', reason: 'stop' }])
+    }
+
+    it('reads a session larger than the row cap whole, a page at a time, and a reader seeds from it', async () => {
+      for (let i = 0; i < 80; i++) turn(i, 500 * KIB) // 39 MiB
+      const messages = await readOpencodeMessages(db, SID)
+      expect(messages.map((m) => m.id)).toEqual(Array.from({ length: 160 }, (_, n) => id(n)))
+      expect(messages[159].parts.map((p) => p.type)).toEqual(['text', 'step-finish'])
+      expect(String(messages[159].parts[0].data.text)).toHaveLength(500 * KIB)
+      const reads = await pageReads(vi.mocked(sqliteReadAll))
+      expect(reads.length).toBeGreaterThan(9)
+      expect(reads.every((read) => read.ok && read.bytes <= read.maxBuffer && withinBudget(read))).toBe(true)
+      expect((await readOpencodeMessages(db, SID, { tc: 157, id: id(157) })).map((m) => m.id)).toEqual([id(158), id(159)])
+      // A reader seeds from it in silence and streams only what comes after. On the base it never seeds.
+      const { events, reader } = listen()
+      try {
+        await reader.start()
+        expect(events).toEqual([])
+        put(id(900), 900, 'user', [{ type: 'text', text: 'a new prompt' }])
+        await vi.waitFor(() => expect(events.length).toBeGreaterThan(0), { timeout: 10_000, interval: 10 })
+      } finally { reader.stop() }
+      expect(events).toEqual([{ type: 'turn_started', payload: { userMessage: 'a new prompt' } }])
+    })
+
+    it('never splits a message from its parts, and reads its data once', async () => {
+      turn(0, 10)
+      put(id(2), 2, 'assistant', [0, 1, 2].map(() => ({ type: 'text', text: 'y'.repeat(2 * MIB) }))) // 6 MiB: over the budget
+      turn(2, 10)
+      const messages = await readOpencodeMessages(db, SID)
+      expect(messages.map((m) => [m.id, m.parts.length])).toEqual([[id(0), 1], [id(1), 2], [id(2), 3], [id(4), 1], [id(5), 2]])
+      const reads = await pageReads(vi.mocked(sqliteReadAll))
+      const own = reads.find((read) => read.rows.some((row) => row.mid === id(2)))!
+      expect(own.units).toBe(1)
+      expect(own.rows.filter((row) => row.mdata !== null)).toHaveLength(1)
+    })
+
+    it('leaves out a message over the row cap, says so once, and reads on', async () => {
+      const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+      turn(0, 10); put(id(2), 2, 'assistant', [{ type: 'text', text: 'z'.repeat(33 * MIB) }]); turn(2, 10)
+      for (let n = 0; n < 2; n++) expect((await readOpencodeMessages(db, SID)).map((m) => m.id)).toEqual([id(0), id(1), id(4), id(5)])
+      // A reader that polls over it does not stick: what comes after still arrives.
+      const { events, reader } = listen()
+      try {
+        await reader.start()
+        put(id(900), 900, 'user', [{ type: 'text', text: 'a new prompt' }])
+        await vi.waitFor(() => expect(JSON.stringify(events)).toContain('a new prompt'), { timeout: 10_000, interval: 10 })
+      } finally { reader.stop() }
+      expect(tooBig(error)).toEqual([`[opencode] ses_test id ${id(2)} unreadable · too big`])
+    })
+
+    // #4065: a seed from the first pages alone would emit the rest as new on the next poll.
+    it('reads nothing when a later page fails, and seeds from the next whole read, replaying nothing', async () => {
+      for (let i = 0; i < 12; i++) turn(i, 500 * KIB) // two pages
+      const actual = await vi.importActual<typeof import('../../lib/sqliteRead.js')>('../../lib/sqliteRead.js')
+      // The v2 read (no rows), the first page, then a second page the store does not answer.
+      const fail = (): void => {
+        vi.mocked(sqliteReadAll).mockImplementationOnce(actual.sqliteReadAll).mockImplementationOnce(actual.sqliteReadAll)
+          .mockResolvedValueOnce({ ok: false, reason: 'transient' })
+      }
+      fail()
+      expect(await readOpencodeMessages(db, SID)).toEqual([])
+      fail()
+      const { events, reader } = listen()
+      try {
+        await reader.start()
+        await readsPast(vi.mocked(sqliteReadAll).mock.calls.length, 3)
+        expect(events).toEqual([])
+        put(id(900), 900, 'user', [{ type: 'text', text: 'a new prompt' }])
+        await vi.waitFor(() => expect(events.length).toBeGreaterThan(0), { timeout: 10_000, interval: 10 })
+      } finally { reader.stop() }
+      expect(events).toEqual([{ type: 'turn_started', payload: { userMessage: 'a new prompt' } }])
+    })
+  })
+
+  // The store has session_message alone.
+  describe('OpenCode 2', () => {
+    beforeEach(() => {
+      w.exec('CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, type TEXT NOT NULL, seq INTEGER NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL)')
+    })
+    // Rows share a time_created in pairs: the seq orders them, and a page may end between the two.
+    const row = (seq: number, type: string, data: Record<string, unknown>): void => {
+      w.prepare('INSERT INTO session_message VALUES (?, ?, ?, ?, ?, ?, ?)').all(`msg_${String(seq).padStart(4, '0')}`, SID, type, seq, seq >> 1, seq >> 1, JSON.stringify(data))
+    }
+    const prompt = (text: string): Record<string, unknown> => ({ text, time: { created: 1 }, files: [], agents: [] })
+    const answer = (bytes: number): Record<string, unknown> => ({ content: [{ type: 'text', text: 'x'.repeat(bytes) }], finish: 'stop', time: { created: 1 } })
+
+    it('reads an OpenCode 2 session larger than the row cap whole, in time_created then seq order', async () => {
+      for (let i = 0; i < 80; i++) {
+        row(3 * i + 1, 'user', prompt(`q${i}`))
+        row(3 * i + 2, 'assistant', answer(500 * KIB)); row(3 * i + 3, 'idle', { outcome: 'succeeded', time: { created: 1 } })
+      }
+      const messages = await readOpencodeMessages(db, SID)
+      expect(messages.map((m) => m.seq)).toEqual(Array.from({ length: 240 }, (_, n) => n + 1))
+      const reads = await pageReads(vi.mocked(sqliteReadAll))
+      expect(reads.length).toBeGreaterThan(9)
+      expect(reads.every((read) => read.ok && read.bytes <= read.maxBuffer && withinBudget(read))).toBe(true)
+      expect((await readOpencodeMessages(db, SID, { tc: 118, id: 'msg_0237', seq: 237 })).map((m) => m.seq)).toEqual([238, 239, 240])
+    })
+
+    it('leaves out an OpenCode 2 row over the row cap, says so once, and reads on', async () => {
+      const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+      row(1, 'user', prompt('q')); row(2, 'assistant', answer(33 * MIB)); row(3, 'user', prompt('next'))
+      for (let n = 0; n < 2; n++) expect((await readOpencodeMessages(db, SID)).map((m) => m.seq)).toEqual([1, 3])
+      const { events, reader } = listen()
+      try {
+        await reader.start()
+        row(4, 'user', prompt('a new prompt'))
+        await vi.waitFor(() => expect(JSON.stringify(events)).toContain('a new prompt'), { timeout: 10_000, interval: 10 })
+      } finally { reader.stop() }
+      expect(tooBig(error)).toEqual(['[opencode] ses_test seq 2 unreadable · too big'])
+    })
   })
 })

@@ -437,8 +437,8 @@ describe('harness_watch: another machine following harnesses here', () => {
     // The watch is no app viewing: the live events stay held, its asking included.
     expect(broadcastTypes(socket)).toEqual([])
     const told = queuedFor(socket, 'home')
-    expect(told.map((frame) => frame.type)).toEqual(['harness_event'])
-    expect(JSON.stringify(told)).not.toContain('a1')
+    // Only the sealed envelope travels: no agent id or state beside it (a substring check failed on random ciphertext).
+    expect(told).toEqual([{ type: 'harness_event', payload: { __e2e: expect.any(Object) } }])
     expect(home.open(told[0])).toEqual({ agentId: 'a1', state: 'working' })
     expect(queuedFor(socket, 'phone')).toEqual([])
     await socket.stop()
