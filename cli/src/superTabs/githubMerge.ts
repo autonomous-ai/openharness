@@ -19,7 +19,8 @@
  *   its own task says it comes after.
  * One that cannot, being behind or in conflict, or whose checks failed, is told so on itself, to its author by name, once for
  * each head, so the GitHub news brings it to its author (githubMentions.ts). One that lands after another is told which, and
- * no more.
+ * no more. One that touches a file most landings touch which an older one of another builder's touches too is told which, once,
+ * as it opens, so its builder reads that one first; it lands as any other (hot files: the allocator's design, package 8).
  *
  * The ready ones land on a train (githubTrain.ts): one branch, one run of the checks on the combined change. Only one that is
  * alone and holds the base's tip, or a fork's whose head GitHub does not take into a train, is merged on its own, squashed, as
@@ -28,9 +29,10 @@
 import { createHash } from 'node:crypto'
 import { dependsOn, labelOf, readerKey, sameKey, tasksOf, teamOf, type Crew } from './assign/crew.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
-import { GitHubReads, GitHubStop, PAGE, retryIn, Waits, waitWords } from './githubRest.js'
+import { GitHubReads, GitHubStop, PAGE, retryIn, STOP_ASKING, Waits, waitWords } from './githubRest.js'
 import { projectRepositorySlug, TEAM } from './githubMentions.js'
 import { APP, GitHubTrain, STATUS, TRAIN_MARK, type TrainPull } from './githubTrain.js'
+import { plainPath } from './plainPath.js'
 import { COST_NUMBERS, costLine, TASK_NUMBER_MAX, type ReadRow } from './taskTokens.js'
 import { identifier, object, within } from './wire.js'
 
@@ -113,6 +115,23 @@ export function noteOf(comment: Json): NoteKind | null {
 /** The most tasks of one pull request whose text is read for what they come after (earlierPull): a pull request is one task's
  *  work, and its text can name any number of them. */
 const TASKS_READ_MAX = 5
+/** How many of the older pull requests on files most landings touch the note names (tellNear); it counts the rest. */
+const NEAR_NAMED = 3
+/** Whether one of the team's [comments] is the note of the older pull requests on files most landings touch (tellNear), by how it
+ *  begins, read whole: one that named every older one grew past what a restart read of it (review of #4177). */
+const nearSaid = (comments: readonly Json[]): boolean =>
+  comments.some(comment => TEAM.has(comment.author_association) && /^Harness, \d\d:\d\d, to \*\*.+?\*\*: #\d+ already touches `/.test(String(comment.body ?? '')))
+/** Whether [pull] is one of the [team]'s: its branch or label names a builder, and GitHub says its author is a member of the
+ *  repository, as every word Harness takes from a comment: anyone can name a fork's branch `pip/2` (review of #4121). */
+function ofTeam(pull: Json, team: ReadonlySet<string>): boolean {
+  const author = authorOf(pull)
+  return author !== null && team.has(labelOf(author)) && TEAM.has(pull.author_association)
+}
+/** An older open pull request of another builder's on a file most landings touch, which a newer one touches too: its number and
+ *  the first such file. */
+interface Near { number: number; file: string }
+/** The most heads whose files are kept, the ones read longest ago going first: a busy repository has a few hundred open. */
+const FILES_KEPT = 1_000
 /** How long after a head is first seen its checks may count as passed, and then only when two looks in a row read them the same:
  *  lampOS's merge-when-green.sh waits for "the same in two looks 30 s apart, from 3 min on". A head just pushed has no checks
  *  yet, which read as all passed, and a job that needs another gets its check only when that one ends. */
@@ -610,6 +629,8 @@ export class GitHubMerge {
   private readonly looked = new Map<string, string>()
   /** What commits change (sameChange). */
   private readonly patches = new Map<string, unknown>()
+  /** The paths each open pull request's head touches (filesOf). */
+  private readonly files = new Map<string, ReadonlySet<string>>()
   private projects: { at: number; list: LedProject[] } | null = null
   /** What GitHub names each project's repository now, as its last pass read it: a renamed one's reads are kept under both. */
   private readonly named = new Map<string, string>()
@@ -628,7 +649,9 @@ export class GitHubMerge {
     records: VerdictRecords
     /** What the server keeps of what a project's issues and pull requests [numbers] cost their builders (taskTokens.ts
      *  readTaskTokens), read as the project's PM. */
-    costs: (project: LedProject, numbers: number[]) => Promise<ReadRow[]> }) {
+    costs: (project: LedProject, numbers: number[]) => Promise<ReadRow[]>
+    /** The files most landings of [project] touch, as its day's scoreboard named them and its numbers keep them (pmNumbers.ts). */
+    hot: (project: LedProject) => readonly string[] }) {
     this.now = deps.now ?? Date.now
     this.log = deps.log ?? (line => console.warn(line))
     this.reads = new GitHubReads(deps.get, this.now)
@@ -716,6 +739,7 @@ export class GitHubMerge {
     })
     // What a merged train carried is closed by it and read no more: to GitHub it now conflicts with the base that holds it.
     const landed = await train.landed()
+    const hot = this.deps.hot(project)
     const ready: Ready[] = []
     // Read, and not ready only for now: a train that carries one keeps its green run (githubTrain.ts attend).
     const waiting = new Set<string>()
@@ -741,6 +765,9 @@ export class GitHubMerge {
       // Only a READ-OK made by command is a read: while the records cannot be read, nothing merges (said once, VerdictRecords).
       const comments = await this.deps.records.named(project, await pullTalk(this.reads, repo, number))
       if (!comments) continue
+      // Another builder's older open changes on files most landings touch which this one touches too: its builder is told of
+      // them, once, as it opens, so it reads them before it changes those files again (the allocator's design, package 8).
+      if (hot.length) await this.tellNear(repo, number, author, comments, () => this.near(repo, pull, listed, team, base, hot, labelOf(author)))
       const people = pullPeople(pull, team)
       const { readers, twoReads } = verdicts(comments, String(pull.body ?? ''), people)
       const holds = [...readers].filter(([, r]) => r.verdict === 'HOLD')
@@ -938,23 +965,88 @@ export class GitHubMerge {
    * other hold both: no order lands both, each is told which it waits for, and the lines are their PM's to change.
    */
   private async earlierPull(repo: string, number: number, pull: Json, open: Json[], team: ReadonlySet<string>): Promise<{ pull: number; task: number; after: number } | null> {
-    // The task each other open pull request of the team's is for, made only once a task says it comes after another. Of the
-    // team's: its branch or label names a builder, and GitHub says its author is a member of the repository, as every word
-    // Harness takes from a comment: anyone can name a fork's branch `pip/2` (review of #4121).
+    // The task each other open pull request of the team's is for (ofTeam), made only once a task says it comes after another.
     let others: Map<number, number> | null = null
-    const ofTeam = (other: Json): boolean => { const author = authorOf(other); return author !== null && team.has(labelOf(author)) && TEAM.has(other.author_association) }
     for (const task of tasksOf(pull).slice(0, TASKS_READ_MAX)) {
       const issue = await this.reads.ifThere(repo, `/repos/${repo}/issues/${task}`)
       if (!issue || issue.pull_request) continue
       for (const after of dependsOn(issue.body)) {
         if (after === task) continue
-        others ??= new Map(open.filter(other => Number(other.number) !== number && ofTeam(other))
+        others ??= new Map(open.filter(other => Number(other.number) !== number && ofTeam(other, team))
           .flatMap(other => tasksOf(other).map(theirs => [theirs, Number(other.number)] as const)))
         const under = others.get(after)
         if (under !== undefined) return { pull: under, task, after }
       }
     }
     return null
+  }
+
+  /**
+   * The older open pull requests of other builders of the team's (ofTeam, not [mine]) into [base] that are on their way to land
+   * (no draft, not on hold) and touch a file most landings touch ([hot]) which [pull] touches too, each with the first such file.
+   * Not its own builder's, which it knows, nor one for a task [pull] is for: two pull requests for one task are one taken over or
+   * begun again. A file is matched by its path as GitHub gives it. Each head's files are read once (filesOf), [pull]'s only
+   * while such an older one is open, and theirs only once [pull] touches such a file. Asked of each pull request each pass until
+   * it is told, so the first such one found is enough to read [pull]'s files: at 200 open, a pass took 46 ms more for it where
+   * none shared a file.
+   */
+  private async near(repo: string, pull: Json, open: Json[], team: ReadonlySet<string>, base: string, hot: readonly string[], mine: string): Promise<Near[]> {
+    const number = Number(pull.number), own = new Set(tasksOf(pull))
+    const onItsWay = (other: Json) => Number.isSafeInteger(other.number) && Number(other.number) < number && object(other.base).ref === base
+      && other.draft !== true && /^[0-9a-f]{40}$/.test(String(object(other.head).sha ?? '')) && !isHeld(other) && ofTeam(other, team)
+      && labelOf(authorOf(other)!) !== mine && !tasksOf(other).some(task => own.has(task))
+    if (!open.some(onItsWay)) return []
+    const touched = await this.filesOf(repo, number, String(object(pull.head).sha))
+    const shared = hot.filter(path => touched.has(path))
+    if (!shared.length) return []
+    const near: Near[] = []
+    for (const other of open.filter(onItsWay)) {
+      const theirs = await this.filesOf(repo, Number(other.number), String(object(other.head).sha))
+      const file = shared.find(path => theirs.has(path))
+      if (file) near.push({ number: Number(other.number), file })
+    }
+    return near
+  }
+
+  /** The paths [number]'s [head] touches (its first hundred files, one renamed by both its names), read once for each head: a
+   *  head's files do not change, and a push is a new head. Asked outright (freshPages): a hundred files with their patches are
+   *  hundreds of kilobytes, which kept under their ETag would push out the reads each pass makes. One GitHub does not give (an
+   *  answer cut off on its way, a 500, a timeout) is taken as none for that head, and said: a note is no reason to stop landing,
+   *  and held for it, every landing of the repository waited while that head stood (review of #4177). GitHub's word to stop
+   *  asking stops the pass, as at every read. */
+  private async filesOf(repo: string, number: number, head: string): Promise<ReadonlySet<string>> {
+    const key = `${repo}#${number}@${head}`
+    const known = this.files.get(key)
+    if (known) return known
+    let files: ReadonlySet<string>
+    try {
+      files = new Set((await this.reads.freshPages(repo, `/repos/${repo}/pulls/${number}/files?per_page=${PAGE}`, 1))
+        .flatMap(file => [String(file.filename ?? ''), String(file.previous_filename ?? '')]).filter(Boolean))
+    } catch (error) {
+      if (!(error instanceof GitHubStop) || STOP_ASKING.has(error.code)) throw error
+      this.log(`[super-tab] FILES_UNREAD ${repo}#${number}: ${error.message}`)
+      files = new Set()
+    }
+    this.files.set(key, files)
+    if (this.files.size > FILES_KEPT) this.files.delete(this.files.keys().next().value!)
+    return files
+  }
+
+  /** Tells [number]'s author once, the first time it touches a file most landings touch that older ones of other builders touch
+   *  too ([near], asked only until it is said), which they are: the oldest [NEAR_NAMED], each with the file, and how many more, so
+   *  its builder reads them before it changes those files again. It promises no order: the train lands changes that do not
+   *  conflict together, and tells a real conflict to its author. Once for the pull request, as a note that named every one could
+   *  not be read back whole: one said before is found among its [comments] after a restart. */
+  private async tellNear(repo: string, number: number, author: string, comments: Json[], near: () => Promise<Near[]>): Promise<void> {
+    if (this.told.has(`${repo}#${number} near`) || nearSaid(comments)) return
+    const oldest = (await near()).sort((a, b) => a.number - b.number)
+    if (!oldest.length) return
+    const named = oldest.slice(0, NEAR_NAMED), more = oldest.length - named.length
+    const each = named.map((other, at) => `#${other.number}${at ? '' : ' already touches'} \`${plainPath(other.file)}\``)
+    await this.comment(repo, number, `${SELF}, ${this.clock()}, to **${author}**: ${each.length === 1 ? each[0] : `${each.slice(0, -1).join(', ')} and ${each.at(-1)}`}`
+      + `, which most changes touch${more ? `, and ${more} more do too` : ''}: read ${oldest.length === 1 ? 'it before you change that file' : 'them before you change those files'} again.`)
+    this.told.add(`${repo}#${number} near`)
+    while (this.told.size > TOLD_MAX) this.told.delete(this.told.values().next().value!)
   }
 
   /** Lets go of [repo]'s heads no longer open, as `<repo>#<number>@<head>`. */

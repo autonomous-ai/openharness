@@ -111,9 +111,9 @@ the daemon checks, or the plan stops counting them.
 - **A train ejects and goes on.** Riders are sorted by risk; one that breaks or is held is dropped and the next train
   is built at once without it. Today that run is lost: whether the rest can land on it is the trains package's
   question. A change that is being changed does not ride.
-- **A hot file has one writer at a time.** Hot is measured: a file more than a tenth of recent landings touch. A second task on it
-  waits, or is built on the first's branch by the same agent. The PM is told the list, and cuts tasks to split those
-  files by feature.
+- **A hot file is named, and split.** Hot is measured: a file more than a tenth of recent landings touch. The PM is told
+  the list, and cuts tasks to split those files by feature; a change that touches one is told, as it opens, of another
+  builder's older one on it. Nothing waits for it: the train lands changes that do not conflict together (package 8).
 - **The cap on changes in flight comes from what the land path can carry** (a train's size, its runs an hour), never
   from what it landed.
 
