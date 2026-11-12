@@ -109,6 +109,26 @@ export const readerKey = (name: string): string => sameKey(name) || name.toLower
 /** The label a builder's tasks carry: builder:pip for Pip, as githubMentions.ts builderLabel. */
 export const labelOf = (name: string): string => `builder:${name.trim().toLowerCase().replace(/\s+/g, '-')}`
 
+/** How a Swarm's label begins: `swarm:autonomous.ai`. Whose task it is lives on the task, not on its builder (anh Dee,
+ *  2026-11-12): builders in different Swarms may share a name, so `builder:lennox` alone names none of them. */
+export const SWARM = 'swarm:'
+
+/**
+ * Which of a repository's issues and pull requests are the Swarm's whose label there is [mark], told from [rows], its issues as
+ * GitHub lists them. Several Swarms may build one repository, and each one's Harness planned, gave, asked about and took back
+ * every sized issue in it: Tony's gave Dee's #4208 to its own builder a minute after it was opened, and #3880, held by 0xken15's
+ * Swarm's Lennox, read as Dee's Swarm's Lennox's (#4212). An issue is the Swarm's when it carries [mark], which Harness puts on
+ * its PM's tasks (githubAssign.ts) and a piece takes from its task (githubSplit.ts). A pull request carries a Swarm's label only
+ * when someone put one on: one that carries none is another Swarm's when it is for an open issue that carries another's (tasksOf).
+ */
+export function ofProject(rows: Json[], mark: string): (row: Json) => boolean {
+  const swarms = (row: Json) => labelsOf(row).map(label => label.toLowerCase()).filter(label => label.startsWith(SWARM))
+  const own = (row: Json) => swarms(row).includes(mark.toLowerCase())
+  const isPull = (row: Json) => !!row.pull_request || !!row.head
+  const others = new Set(rows.filter(row => !isPull(row) && swarms(row).length && !own(row)).map(row => Number(row.number)))
+  return row => !isPull(row) || swarms(row).length ? own(row) : !tasksOf(row).some(task => others.has(task))
+}
+
 /** The labels of a project's team: its builders' (away ones too) and its PM's. Harness asks readers for, and merges, only
  *  the team's own pull requests: a person's, or anyone's in a shared repository, is theirs (openharness has dozens open at a
  *  time, by people and their own agents). */

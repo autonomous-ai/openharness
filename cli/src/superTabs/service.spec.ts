@@ -254,8 +254,10 @@ it('has the assigner read the Swarm as the PM\'s person, and a builder\'s own li
   const asked: string[] = []
   // A small task open in the PM's project: Pip is about to be given it, so its list in the other project is read first.
   const github = { get: vi.fn(async (path: string) => { asked.push(path)
-    return { status: 200, etag: null, resetAt: null, body: path === '/repos/acme/app' ? { default_branch: 'main' }
-      : path === '/repos/acme/app/issues?state=open&per_page=100' ? [{ number: 7, title: 'A task', labels: [{ name: 'size:s' }] }] : [] } }),
+    return { status: 200, etag: null, resetAt: null, body: path === '/repos/acme/app' ? { default_branch: 'main' } : path === '/user' ? { login: 'dee' }
+      // The task carries its Swarm's label, found by the Swarm's id in its description.
+      : path.startsWith('/repos/acme/app/labels') ? [{ name: 'swarm:acme', description: 'Swarm tab' }]
+      : path === '/repos/acme/app/issues?state=open&per_page=100' ? [{ number: 7, title: 'A task', labels: [{ name: 'size:s' }, { name: 'swarm:acme' }] }] : [] } }),
   send: vi.fn(async () => ({ status: 201, etag: null, resetAt: null, body: {} })) }
   const core = fakeCore({ dataDir: mkdtempSync(join(tmpdir(), 'assign-wiring-')), account: { backend: call, identity: vi.fn(async () => ({ accountId: 'me' }) as never) },
     agents: { byAgent: vi.fn(() => ({ agentId: 'pm-native' }) as never) } })

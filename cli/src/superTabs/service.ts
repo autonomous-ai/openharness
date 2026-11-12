@@ -237,6 +237,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   const assigns = (options.githubAssign ?? ((api, held) => new GitHubAssign({ projects: led(api, held), crew: crewOfProject(held),
     // The Swarm's projects as its PM's person reads it, read by what changed, as every Swarm read is: the PM reads only its own.
     repositories: async project => swarmRepositories((await held().reads.read(project.tabId)).state),
+    swarm: async project => String((await held().reads.read(project.tabId, project.pmAgentId)).state.name ?? ''),
     get: github.get, send: github.send, records, numbers,
     say: (project, operationId, text) => sendAsPm('say', project, operationId, text),
     pmRunning: async project => pmRunsHere((await held().feed.current(60_000)).roster, project, id => !!api.agents.byAgent(id)),

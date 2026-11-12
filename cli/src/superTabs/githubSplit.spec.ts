@@ -11,7 +11,7 @@ const HERE = 'https://api.github.com/repos/acme/app'
  *  issues), and what was sent to it. */
 function setup() {
   const task: Json = { id: 3400, number: 34, state: 'open', title: 'Sync the settings', labels: [{ name: 'builder:pip' }, { name: 'status:taken' }, { name: 'size:l' },
-    { name: 'part:sync' }, { name: 'needs:macos' }, { name: 'p1' }], html_url: 'https://github.com/acme/app/issues/34', repository_url: HERE }
+    { name: 'part:sync' }, { name: 'needs:macos' }, { name: 'p1' }, { name: 'swarm:acme' }], html_url: 'https://github.com/acme/app/issues/34', repository_url: HERE }
   const repo = { issues: new Map<number, Json>([[34, task]]), under: new Map<number, number[]>(), comments: new Map<number, Json[]>(), next: 57, comment: 9001,
     down: false as boolean | 'unsaid', fail: null as null | Failure | Failure[],
     /** GitHub takes no label from this login, as from one that may not label: an issue opens without any, and a label put on is not kept. */
@@ -168,7 +168,8 @@ describe('a piece cut off a task, by command', () => {
       // Never its builder's label or its claim: Harness gives the piece to whoever can ship it soonest. Nor its size yet: an
       // issue with none is no task, so one that is never attached is never given out.
       { method: 'POST', path: '/repos/acme/app/issues', body: { title: 'Sync the theme', body: 'Only the theme: read it at start, write it on change.\n\nPart of #34.',
-        labels: ['part:sync', 'needs:macos', 'p1'] } },
+        // And its Swarm's label: a piece is its task's Swarm's, whoever's login cut it (#4212).
+        labels: ['part:sync', 'needs:macos', 'p1', 'swarm:acme'] } },
       { method: 'POST', path: '/repos/acme/app/issues/34/sub_issues', body: { sub_issue_id: 5700 } },
       { method: 'POST', path: '/repos/acme/app/issues/57/labels', body: { labels: ['size:m'] } },
       { method: 'POST', path: '/repos/acme/app/issues/34/comments', body: { body: 'Pip, 14:05: split off #57: Sync the theme' } },
@@ -283,7 +284,7 @@ describe('a piece cut off a task, by command', () => {
       expect(await refusal(t.split())).toEqual(fail.status ? { code: 'GITHUB_REFUSED', message: `GitHub answered ${fail.status} for acme/app#34. ${AGAIN}` }
         : { code: 'GITHUB_UNAVAILABLE', message: `fetch failed. ${AGAIN}` })
       // Open, and with no size: no task for anyone (assign/crew.ts readProblem).
-      expect(t.repo.issues.get(57)).toMatchObject({ state: 'open', labels: [{ name: 'part:sync' }, { name: 'needs:macos' }, { name: 'p1' }] })
+      expect(t.repo.issues.get(57)).toMatchObject({ state: 'open', labels: [{ name: 'part:sync' }, { name: 'needs:macos' }, { name: 'p1' }, { name: 'swarm:acme' }] })
       t.repo.fail = null
       expect(await t.split({ text: 'Other words.' })).toEqual({ url: 'https://github.com/acme/app/issues/57', number: 57, cut: true, sized: true })
       expect(t.calls()).toEqual(['POST /issues', 'POST /issues/34/sub_issues', 'POST /issues/34/sub_issues', 'POST /issues/57/labels', 'POST /issues/34/comments'])
@@ -312,7 +313,7 @@ describe('a piece cut off a task, by command', () => {
       t.repo.fail = { method: 'POST', path: /\/sub_issues$/, status }
       expect(await refusal(t.split())).toEqual({ code: 'GITHUB_REFUSED',
         message: `GitHub answered ${status} for acme/app#34. ${AGAIN} If it answers ${status} again, this login may not attach it: close #57.` })
-      expect(t.repo.issues.get(57)).toMatchObject({ state: 'open', labels: [{ name: 'part:sync' }, { name: 'needs:macos' }, { name: 'p1' }] })
+      expect(t.repo.issues.get(57)).toMatchObject({ state: 'open', labels: [{ name: 'part:sync' }, { name: 'needs:macos' }, { name: 'p1' }, { name: 'swarm:acme' }] })
       t.repo.fail = null
       expect(await t.split()).toMatchObject({ number: 57, cut: true, sized: true })
     }
