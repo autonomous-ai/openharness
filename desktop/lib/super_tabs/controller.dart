@@ -181,6 +181,9 @@ typedef SuperTabKeptFiles = ({
   Map<(String, String), List<HarnessAttachment>> threads,
 });
 
+/// The panes an agent's chat opens beside it from its bar: what the app knows of the agent, its instructions file, its browser.
+const besidePanes = {'info', 'instructions', 'browser'};
+
 class SuperTabController extends ChangeNotifier {
   SuperTabController({
     required this.tabId,
@@ -229,6 +232,14 @@ class SuperTabController extends ChangeNotifier {
         for (final entry in terminals.entries) {
           if (entry.key is String && entry.value is String) {
             _terminals[entry.key as String] = entry.value as String;
+          }
+        }
+      }
+      final panes = initial['panes'];
+      if (panes is Map) {
+        for (final entry in panes.entries) {
+          if (entry.key is String && besidePanes.contains(entry.value)) {
+            _panes[entry.key as String] = entry.value as String;
           }
         }
       }
@@ -859,6 +870,9 @@ class SuperTabController extends ChangeNotifier {
   final _refused = <String, List<_Refused>>{};
   final _drafts = <String, String>{};
   final _terminals = <String, String>{};
+
+  /// Per conversation, the pane open beside an agent's chat: one of [besidePanes].
+  final _panes = <String, String>{};
   final _mentions = <String, Map<String, String>>{};
   final _readAt = <String, int>{};
 
@@ -1247,7 +1261,29 @@ class SuperTabController extends ChangeNotifier {
       return;
     }
     _terminals[conversationId] = '*';
+    // A terminal opened for a chat takes the place of the pane it kept beside it ([besidePane]), however it was asked for:
+    // a Waiting on you notice, Manage or My agents opened it behind a kept Info (the review of #4213).
+    _panes.remove(conversationId);
     _moveView();
+    _saveSoon();
+    _changed();
+  }
+
+  /// Which pane is open beside [conversationId]'s chat: one of [besidePanes], or null. Kept per chat, as its terminal is
+  /// ([terminalAgents]): a person who opens one, goes to another chat and comes back finds it open (anh Dee, 2026-11-12).
+  String? besidePane(String? conversationId) =>
+      conversationId == null ? null : _panes[conversationId];
+
+  /// Opens [pane], one of [besidePanes], beside [conversationId]'s chat, or with null closes the one there.
+  void showBeside(String? conversationId, String? pane) {
+    if (_disposed || conversationId == null || _panes[conversationId] == pane) {
+      return;
+    }
+    if (pane == null) {
+      _panes.remove(conversationId);
+    } else {
+      _panes[conversationId] = pane;
+    }
     _saveSoon();
     _changed();
   }
@@ -1259,7 +1295,13 @@ class SuperTabController extends ChangeNotifier {
             true) {
       return;
     }
+    // A terminal asked for takes the place of the pane its chat kept, even one already open (the second review of #4213).
+    final paneTaken = agentId != null && _panes.remove(conversationId) != null;
     if (_terminals[conversationId] == agentId && !devicesSelected) {
+      if (paneTaken) {
+        _saveSoon();
+        _changed();
+      }
       return;
     }
     _moveView();
@@ -2386,6 +2428,7 @@ class SuperTabController extends ChangeNotifier {
     'offlineMachinesOpen': offlineMachinesOpen,
     'drafts': Map<String, String>.of(_drafts),
     'terminals': Map<String, String>.of(_terminals),
+    'panes': Map<String, String>.of(_panes),
 
     'mentions': {
       for (final entry in _mentions.entries)
@@ -3249,6 +3292,7 @@ class SuperTabController extends ChangeNotifier {
             [
               ..._drafts.keys,
               ..._terminals.keys,
+              ..._panes.keys,
               ..._mentions.keys,
               ..._readAt.keys,
               ..._refused.keys,
@@ -3273,6 +3317,7 @@ class SuperTabController extends ChangeNotifier {
           return true;
         });
         _terminals.removeWhere((id, _) => removed.contains(id));
+        _panes.removeWhere((id, _) => removed.contains(id));
         _mentions.removeWhere((id, _) => removed.contains(id));
         _sent.removeWhere(
           (_, sent) => !allowed.contains(sent['conversationId']),
