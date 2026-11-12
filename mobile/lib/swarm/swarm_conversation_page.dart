@@ -17,12 +17,14 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/swarm_tokens_set_b.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
+import 'package:harness_mobile/shared/widgets/touch_target.dart';
 
 import 'model.dart';
 import 'prompt_alerts.dart';
 import 'swarm_code_block.dart';
 import 'swarm_outbox.dart';
 import 'swarm_post_line.dart';
+import 'swarm_agent_rename.dart';
 import 'swarm_attach.dart';
 import 'swarm_buddy.dart';
 import 'swarm_buddy_chat.dart';
@@ -1335,13 +1337,16 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// The back button, then the chat's name and [subtitle] under it — its
   /// project, or its Swarm, or where its agent runs — or, while the chat is
   /// not known yet ([title] null), placeholders of their size — and [action]
-  /// at its end. [subtitleEnd] follows [subtitle] ([_subtitle]).
+  /// at its end. [subtitleEnd] follows [subtitle] ([_subtitle]). With
+  /// [onRename], a tap on the name renames what it names: an agent's own
+  /// chat's agent, by its person, as on Desktop.
   Widget _header(
     BuildContext context,
     Tty tty, {
     required String? title,
     String? subtitle,
     String? subtitleEnd,
+    VoidCallback? onRename,
     Widget? action,
   }) => Padding(
     key: const ValueKey('swarm-chat-header'),
@@ -1365,21 +1370,25 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                     SkeletonText(style: swarmChatText(13), width: 72),
                   ],
                 )
-              : Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      key: const ValueKey('swarm-title'),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: tty.style(
-                        size: TtySize.title,
-                        weight: FontWeight.w600,
+              : _renames(
+                  onRename,
+                  Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        key: const ValueKey('swarm-title'),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: tty.style(
+                          size: TtySize.title,
+                          weight: FontWeight.w600,
+                        ),
                       ),
-                    ),
-                    if (subtitle != null) _subtitle(subtitle, subtitleEnd),
-                  ],
+                      if (subtitle != null) _subtitle(subtitle, subtitleEnd),
+                    ],
+                  ),
                 ),
         ),
         // The screen's side margin from its edge: the header's own end
@@ -1398,6 +1407,25 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
 
   /// The header's inset at its end.
   static const _headerEnd = AppSpace.s;
+
+  /// [name], the header's title and the line under it, as a finger's target
+  /// that opens [onRename]; as it is without one. Desktop's name says Rename
+  /// on hover; here a screen reader says it.
+  Widget _renames(VoidCallback? onRename, Widget name) => onRename == null
+      ? name
+      : Semantics(
+          button: true,
+          hint: 'Rename',
+          child: GestureDetector(
+            key: const ValueKey('swarm-title-rename'),
+            behavior: HitTestBehavior.opaque,
+            onTap: onRename,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: minTouchTarget),
+              child: name,
+            ),
+          ),
+        );
 
   /// The header and the composer follow [view] — the header [c] too, until
   /// the chat is known; the messages, and what is said under them, follow
@@ -1429,6 +1457,9 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               (machine: _?, :final engine) => engine,
               _ => null,
             },
+            onRename: view.renames
+                ? () => unawaited(showSwarmRenameAgent(context, c.reader, c.id))
+                : null,
             // The person's own Buddy chat: its Notifications, Rename Buddy,
             // Remove Buddy. Any other chat: its Notifications (the desktop's
             // chat menu).
@@ -2590,6 +2621,7 @@ class _ChatView {
     required this.project,
     required this.swarm,
     required this.where,
+    required this.renames,
     required this.canPost,
     required this.archived,
     required this.old,
@@ -2679,6 +2711,7 @@ class _ChatView {
                     ? group.label
                     : snapshot!.agentName(chatAgent.id, fallback: group.label)),
       where: chatAgent == null ? null : swarmAgentWhere(snapshot!, chatAgent),
+      renames: group != null && swarmAgentToRename(reader, group.id) != null,
       project: buddy != null && project != null ? '#$project' : project,
       swarm: swarm,
       canPost: c.canPost,
@@ -2724,6 +2757,10 @@ class _ChatView {
   /// Where an agent's own chat's agent runs, its machine and its engine
   /// ([swarmAgentWhere]); null for any other chat.
   final ({String? machine, String? engine})? where;
+
+  /// The reader may rename the agent of this, its own chat, by tapping its
+  /// name ([swarmAgentToRename]).
+  final bool renames;
   final bool canPost, archived;
 
   /// An older Buddy chat, kept to read ([swarmIsOldBuddyChat]).
@@ -2782,6 +2819,7 @@ class _ChatView {
       other.project == project &&
       other.swarm == swarm &&
       other.where == where &&
+      other.renames == renames &&
       other.canPost == canPost &&
       other.archived == archived &&
       other.old == old &&
@@ -2801,6 +2839,7 @@ class _ChatView {
     project,
     swarm,
     where,
+    renames,
     canPost,
     archived,
     old,
