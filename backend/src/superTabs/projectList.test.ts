@@ -60,6 +60,15 @@ describe('the project list', () => {
     expect(rows.find(r => r.id === lamp)).toEqual({ id: lamp, name: 'lamp', about: null, repositoryName: 'lamp-os', lead: null, waiting: 0 })
   })
 
+  // A Personal Swarm's project made from a pane's folder has no address to clone; Desktop names its GitHub repository (project.github).
+  it('names the repository a project was given on GitHub when its folder has no address', () => {
+    const f = swarm()
+    const pane = f.project('pane')
+    f.state.projects!.find(p => p.id === pane)!.repository = { machineId: 'mac', cwd: '/Users/someone/pane', repositoryUrl: null }
+    f.run({ type: 'project.github', projectId: pane, repository: 'autonomous-ai/pane-app' })
+    expect(projectList(f.read(), peer).projects.find(r => r.id === pane)!.repositoryName).toBe('pane-app')
+  })
+
   // Review of #3552: a Lead goes by the name people see (River), not its internal one (Lead).
   it('names each Lead as people see it', () => {
     const f = swarm()

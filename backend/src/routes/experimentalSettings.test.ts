@@ -17,10 +17,10 @@ import { registerAuthMiddleware } from '../middlewares/authMiddleware.js'
 import { errorHandler } from '../middlewares/errorHandler.js'
 
 type Row = { id: string; userId: string; focusBarCreature: boolean; shareButton: boolean; devicesTab?: boolean
-  agentsStartAgents?: boolean; agentPullRequestLine?: boolean; agentMessages?: boolean; agentMessagesHideSummary?: boolean; agentsTellAgents?: boolean; programsReply?: boolean; revision: number }
-const COLUMNS = ['focusBarCreature', 'shareButton', 'devicesTab', 'agentsStartAgents', 'agentPullRequestLine', 'agentMessages', 'agentMessagesHideSummary', 'agentsTellAgents', 'programsReply'] as const
+  agentsStartAgents?: boolean; agentPullRequestLine?: boolean; agentMessages?: boolean; agentMessagesHideSummary?: boolean; agentsTellAgents?: boolean; programsReply?: boolean; hachi?: boolean; revision: number }
+const COLUMNS = ['focusBarCreature', 'shareButton', 'devicesTab', 'agentsStartAgents', 'agentPullRequestLine', 'agentMessages', 'agentMessagesHideSummary', 'agentsTellAgents', 'programsReply', 'hachi'] as const
 /** Every experiment off, as a new account reads them. */
-const OFF = { focus_bar_creature: false, share_button: false, devices_tab: false, agents_start_agents: false, agent_pull_request_line: false, agent_messages: false, agent_messages_hide_summary: false, agents_tell_agents: false, programs_reply: false }
+const OFF = { focus_bar_creature: false, share_button: false, devices_tab: false, agents_start_agents: false, agent_pull_request_line: false, agent_messages: false, agent_messages_hide_summary: false, agents_tell_agents: false, programs_reply: false, hachi: false }
 describe('account experiments and retained collections', () => {
   let app: FastifyInstance
   let rows: Map<string, Row>
@@ -60,7 +60,7 @@ describe('account experiments and retained collections', () => {
     expect(mocks.prisma.experimentalSettings.findUnique).not.toHaveBeenCalled()
     expect((await read()).json().data).toEqual({ accountId: 'owner', revision: 0, features: OFF, available: {
       focus_bar_creature: true, share_button: true, devices_tab: true, agents_start_agents: true, agent_pull_request_line: true, agent_messages: true, agent_messages_hide_summary: true,
-      agents_tell_agents: true, programs_reply: true } })
+      agents_tell_agents: true, programs_reply: true, hachi: true } })
     expect(rows.size).toBe(0)
     expect((await zoo()).statusCode).toBe(404)
     expect(mocks.prisma.zoo.findUnique).not.toHaveBeenCalled()
@@ -95,6 +95,20 @@ describe('account experiments and retained collections', () => {
     expect((await write('programs_reply', false)).json().data.features.programs_reply).toBe(false)
     expect(rows.get(id)!.agentsTellAgents).toBe(true)
     expect(mocks.deskChanged).toHaveBeenCalledWith('owner', { revision: 0 })
+  })
+  it('keeps Hachi off until the account turns it on, and tells every daemon of the change', async () => {
+    const id = experimentalSettingsId('owner')
+    // A row from before the column: off (docs/design/2026-11-12-hachi.md, Experimental gate).
+    rows.set(id, { id, userId: 'owner', focusBarCreature: false, shareButton: false, devicesTab: false, agentsStartAgents: true, revision: 2 })
+    expect((await read()).json().data.features.hachi).toBe(false)
+    expect((await write('hachi', true)).json().data.features).toEqual({ ...OFF, agents_start_agents: true, hachi: true })
+    expect(rows.get(id)).toMatchObject({ hachi: true, agentsStartAgents: true, revision: 3 })
+    // Each daemon reads the experiments again at a revision-0 desk_changed and keeps hachi in agent-settings.json.
+    expect(mocks.deskChanged).toHaveBeenCalledWith('owner', { revision: 0 })
+    expect(mocks.zooChanged).not.toHaveBeenCalled()
+    expect((await write('hachi', false)).json().data.features.hachi).toBe(false)
+    expect(rows.get(id)).toMatchObject({ hachi: false, agentsStartAgents: true, revision: 4 })
+    expect(mocks.deskChanged).toHaveBeenCalledTimes(2)
   })
   it('shares choices between clients without losing concurrent changes to different switches', async () => {
     expect((await Promise.all([write('focus_bar_creature', true), write('share_button', true)])).map(r => r.statusCode)).toEqual([200, 200])
