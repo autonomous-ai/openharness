@@ -44,15 +44,19 @@ String? swarmEngineName(SuperTabAgent agent) => switch (agent.engine.trim()) {
 };
 
 /// Where [agent] runs, under its chat's name: its machine and its engine,
-/// "Mac Studio · Claude Code", as Desktop's agent bar says it; null when the
+/// "Mac Studio · Claude Code", as Desktop's agent bar says it. Apart, so a
+/// long machine name can be cut while the engine stays whole; null when the
 /// Swarm names neither.
-String? swarmAgentWhere(SuperTabSnapshot snapshot, SuperTabAgent agent) {
-  final machine = snapshot.pool(agent.machineId)?['name'];
-  final where = [
-    if (machine is String && machine.trim().isNotEmpty) machine.trim(),
-    ?swarmEngineName(agent),
-  ];
-  return where.isEmpty ? null : where.join(' · ');
+({String? machine, String? engine})? swarmAgentWhere(
+  SuperTabSnapshot snapshot,
+  SuperTabAgent agent,
+) {
+  final name = snapshot.pool(agent.machineId)?['name'];
+  final machine = name is String && name.trim().isNotEmpty ? name.trim() : null;
+  final engine = swarmEngineName(agent);
+  return machine == null && engine == null
+      ? null
+      : (machine: machine, engine: engine);
 }
 
 /// One row of Your Team: the agent, the chat it opens (null while it has

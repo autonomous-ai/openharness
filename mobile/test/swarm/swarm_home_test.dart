@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
@@ -853,19 +854,26 @@ void main() {
   });
 
   group('Your Team (Swarm v4, as on Desktop)', () {
-    /// One of the person's agents, [name], on the Mac Studio, with its own
-    /// chat `chat-<id>` unless [chat] is false.
-    Map<String, dynamic> mine(String id, String name, {bool chat = true}) => {
+    /// One of the person's agents, [name], on the Mac Studio with [engine],
+    /// with its own chat `chat-<id>` unless [chat] is false.
+    Map<String, dynamic> mine(
+      String id,
+      String name, {
+      bool chat = true,
+      String engine = 'claude',
+    }) => {
       ...agent(id, displayName: name, machineId: 'mac-studio'),
+      'configuration': {'engine': engine},
       if (chat) 'chatId': 'chat-$id',
     };
 
     /// Mobile with [agents], each one's chat read unless its id is in
     /// [unread], and its task g1; someone else's Theo, with a chat of his
-    /// own, besides.
+    /// own, besides. The Mac Studio is named [machine].
     FakeSwarm team(
       List<Map<String, dynamic>> agents, {
       Set<String> unread = const {},
+      String machine = 'Mac Studio',
     }) {
       final fake = backend();
       final all = [
@@ -879,7 +887,7 @@ void main() {
       fake.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad(
         agents: all,
         machines: [
-          {'machineId': 'mac-studio', 'name': 'Mac Studio'},
+          {'machineId': 'mac-studio', 'name': machine},
         ],
         groups: [
           groupData('g1', title: 'Fix login', number: 4),
@@ -911,6 +919,18 @@ void main() {
     }
 
     Finder row(String id) => key('swarm-agent-$tab-$id');
+
+    /// The words in an open chat's header [k], in their order.
+    List<String?> header(WidgetTester tester, String k) => [
+      for (final text in tester.widgetList<Text>(
+        find.descendant(
+          of: find.descendant(of: key('swarm-chat-header'), matching: key(k)),
+          matching: find.byType(Text),
+          matchRoot: true,
+        ),
+      ))
+        text.data,
+    ];
 
     testWidgets("the person's own agents, A to Z, under Your Team over "
         "Projects; another's agent is not in it", (tester) async {
@@ -949,13 +969,67 @@ void main() {
         find.byType(SwarmConversationPage),
       );
       expect((page.swarmId, page.conversationId), (tab, 'chat-a-ada'));
-      Finder header(String k) =>
-          find.descendant(of: key('swarm-chat-header'), matching: key(k));
-      expect(tester.widget<Text>(header('swarm-title')).data, 'Ada');
-      expect(
-        tester.widget<Text>(header('swarm-subtitle')).data,
-        'Mac Studio · Claude Code',
+      expect(header(tester, 'swarm-title'), ['Ada']);
+      expect(header(tester, 'swarm-subtitle'), [
+        'Mac Studio',
+        ' · Claude Code',
+      ]);
+    });
+
+    // A machine's name can be long ("…-MacBook-Pro-19.local"): it is cut,
+    // never the engine after it, whichever engine runs: the longest names
+    // the phone knows, and one it does not.
+    const longMachine = 'Office-MacBook-Pro-2024-Studio-Second-Floor.local';
+    for (final (engine, said) in [
+      ('claude', 'Claude Code'),
+      ('codex', 'Codex'),
+      ('commandcode', 'Command Code'),
+      ('agy', 'Antigravity'),
+      ('gemini', 'Gemini'),
+    ]) {
+      testWidgets('a long machine name is cut, and $said after it stays '
+          'whole', (tester) async {
+        await pump(
+          tester,
+          team([mine('a-ada', 'Ada', engine: engine)], machine: longMachine),
+        );
+        await tester.tap(row('a-ada'));
+        await tester.pumpAndSettle();
+
+        expect(header(tester, 'swarm-subtitle'), [longMachine, ' · $said']);
+        RenderParagraph line(String words) => tester.renderObject(
+          find.descendant(
+            of: key('swarm-chat-header'),
+            matching: find.text(words),
+          ),
+        );
+        expect(line(longMachine).didExceedMaxLines, isTrue);
+        expect(line(' · $said').didExceedMaxLines, isFalse);
+      });
+    }
+
+    testWidgets("an engine's name longer than three quarters of the line is "
+        'cut too, and the line never overflows', (tester) async {
+      const engine = 'a-new-cli-with-a-very-long-name-nobody-shortened';
+      await pump(
+        tester,
+        team([mine('a-ada', 'Ada', engine: engine)], machine: longMachine),
       );
+      await tester.tap(row('a-ada'));
+      await tester.pumpAndSettle();
+
+      // Named as the phone names an engine it does not know.
+      const said = ' · A-new-cli-with-a-very-long-name-nobody-shortened';
+      expect(header(tester, 'swarm-subtitle'), [longMachine, said]);
+      final subtitle = find.descendant(
+        of: key('swarm-chat-header'),
+        matching: key('swarm-subtitle'),
+      );
+      expect(
+        tester.getSize(find.text(said)).width,
+        lessThanOrEqualTo(tester.getSize(subtitle).width * 3 / 4),
+      );
+      expect(tester.takeException(), isNull);
     });
 
     testWidgets("a task's chat keeps its project under its name", (

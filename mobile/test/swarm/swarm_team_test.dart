@@ -124,10 +124,10 @@ void main() {
           {'machineId': 'mac-1', 'name': ' Mac Studio '},
         ],
       );
-      expect(
-        swarmAgentWhere(snapshot, snapshot.agent('a-1')!),
-        'Mac Studio · Claude Code',
-      );
+      expect(swarmAgentWhere(snapshot, snapshot.agent('a-1')!), (
+        machine: 'Mac Studio',
+        engine: 'Claude Code',
+      ));
     });
 
     test('its engine alone on a machine the Swarm does not name', () {
@@ -137,7 +137,25 @@ void main() {
           {'machineId': 'mac-2', 'name': ''},
         ],
       );
-      expect(swarmAgentWhere(snapshot, snapshot.agent('a-1')!), 'Claude Code');
+      expect(swarmAgentWhere(snapshot, snapshot.agent('a-1')!), (
+        machine: null,
+        engine: 'Claude Code',
+      ));
+    });
+
+    test('its machine alone for an agent naming no engine', () {
+      final snapshot = read(
+        agents: [
+          {...agent('a-1', machineId: 'mac-1'), 'configuration': {}},
+        ],
+        machines: [
+          {'machineId': 'mac-1', 'name': 'Mac Studio'},
+        ],
+      );
+      expect(swarmAgentWhere(snapshot, snapshot.agent('a-1')!), (
+        machine: 'Mac Studio',
+        engine: null,
+      ));
     });
 
     test('nothing when it names neither', () {

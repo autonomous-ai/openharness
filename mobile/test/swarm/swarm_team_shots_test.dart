@@ -52,15 +52,25 @@ void main() {
   const web = 'project-2';
   const studyChat = 'chat-a-study';
 
-  /// One of the person's agents, [name], on the Mac Studio, with its chat.
-  Map<String, dynamic> mine(String id, String name, {String? kind}) => {
-    ...agent(id, displayName: name, machineId: 'mac-studio'),
+  /// One of the person's agents, [name], on [machineId] with [engine], with
+  /// its chat.
+  Map<String, dynamic> mine(
+    String id,
+    String name, {
+    String? kind,
+    String machineId = 'mac-studio',
+    String engine = 'claude',
+  }) => {
+    ...agent(id, displayName: name, machineId: machineId),
+    'configuration': {'engine': engine},
     'kind': ?kind,
     'chatId': 'chat-$id',
   };
 
   /// Mobile and Web; the person's Dale (Mobile's Product Manager), Devon,
   /// Nova and Study, Dale and Devon with something new; someone else's Theo.
+  /// Study runs Codex on a machine with a long name, which its chat's header
+  /// cuts before the engine.
   FakeSwarm backend() {
     final fake = FakeSwarm();
     fake.routes['/api/super-tabs/list'] = (_) => {
@@ -74,7 +84,7 @@ void main() {
       mine('a-dale', 'Dale', kind: 'pm'),
       mine('a-devon', 'Devon'),
       mine('a-nova', 'Nova'),
-      mine('a-study', 'Study'),
+      mine('a-study', 'Study', machineId: 'mac-office', engine: 'codex'),
       {
         ...agent('a-theo', displayName: 'Theo'),
         'contributorId': 'person-other',
@@ -91,6 +101,10 @@ void main() {
       agents: agents,
       machines: [
         {'machineId': 'mac-studio', 'name': 'Mac Studio'},
+        {
+          'machineId': 'mac-office',
+          'name': 'Office-MacBook-Pro-2024-Studio-Second-Floor.local',
+        },
       ],
       groups: [
         {
@@ -211,7 +225,7 @@ void main() {
         expect(find.text('Your Team'), findsOneWidget);
         expect(find.text('Theo'), findsNothing);
       } else {
-        expect(find.text('Mac Studio · Claude Code'), findsOneWidget);
+        expect(find.text(' · Codex'), findsOneWidget);
       }
       await tester.runAsync(() async {
         final image =
