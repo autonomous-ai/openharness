@@ -1,6 +1,6 @@
 /** Private and bounded: core asks Claude Code's worker to stop a `claude --bg` job holding the session it resumes (#4146). */
 import type { BackgroundJobStop, BackgroundJobStopped } from '../facets/backgroundJob.js'
-import { record } from './protocol.js'
+import { boundedEnvironment, record } from './protocol.js'
 
 export const BACKGROUND_JOB_VERSION = 1
 export const BACKGROUND_JOB_CAPABILITIES = 'engine_background_job_capabilities'
@@ -22,14 +22,7 @@ export function backgroundJobStop(value: unknown): value is BackgroundJobStop {
   const { bin, sessionId, env } = value
   if (typeof bin !== 'string' || !bin || bin.length > PATH_CHARS || bin.includes('\0')) return false
   if (typeof sessionId !== 'string' || !sessionId || sessionId.length > 200) return false
-  if (!record(env)) return false
-  let bytes = 0
-  for (const [name, text] of Object.entries(env)) {
-    if (typeof text !== 'string') return false
-    bytes += Buffer.byteLength(name) + Buffer.byteLength(text)
-    if (bytes > BACKGROUND_JOB_ENV_BYTES) return false
-  }
-  return true
+  return boundedEnvironment(env, BACKGROUND_JOB_ENV_BYTES)
 }
 
 export function backgroundJobStopped(value: unknown): value is BackgroundJobStopped | null {
