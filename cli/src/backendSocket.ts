@@ -174,6 +174,8 @@ export class BackendSocket {
     codexHome: string | null
     /** A Claude CLAUDE_CONFIG_DIR folder (a profile) to launch this agent against; claude only. Absent for the default account. */
     claudeHome?: string | null
+    /** OpenClaw's own `--local` state folder, an existing absolute path; openclaw only. Absent for a run on the Gateway. */
+    openclawLocal?: string | null
     /** The domain-specific harness to create this agent as (installed here, base engine = `engine`). */
     dsh: string | null
     /** The message the session opens with, already submitted (`FIRST_PROMPT_ARGS` in engineLaunch.ts);

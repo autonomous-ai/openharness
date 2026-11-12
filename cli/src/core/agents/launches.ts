@@ -8,7 +8,7 @@
  * Moved verbatim out of the socket's request switch (docs/design/2026-10-03-harnessd.md), with the
  * receipts the socket used to hold.
  */
-import { readdir, rmdir } from 'node:fs/promises'
+import { readdir, rmdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute } from 'node:path'
 import type { BackendSocket } from '../../backendSocket.js'
@@ -19,7 +19,7 @@ import { homeIsAbsolute } from '../../engines/kit/homeAdoption.js'
 import { folderTrust } from '../../engines/launchPrep.js'
 import type { NativeLaunchResult, NativeLaunchSource } from '../../engines/nativeLaunch.js'
 import * as opencodeLaunch from '../../engines/launchControl.js'
-import { OPENCLAW_KEY } from '../../engines/openclaw/contract.js'
+import { OPENCLAW_KEY, OPENCLAW_LOCAL } from '../../engines/openclaw/contract.js'
 import { ENGINES, isTerminalEngine, type AgentEngine } from '../../engines/types.js'
 import { parseLaunchArgs } from '../../lib/launchArgs.js'
 import { AgentCreationReceiptError, creationFingerprint, validCreationId, type AgentCreationOutcome, type AgentCreationReceipts, type AgentCreationStatus, type CreationAuthority } from '../../lib/agentCreationReceipt.js'
@@ -417,6 +417,18 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       reply({ error: 'INVALID_CLAUDE_HOME', detail: 'claudeHome is not a Claude profile of this machine' })
       return
     }
+    // OpenClaw's own state folder for this run (`harness new --local`). Refused, never dropped as a bad codexHome is: a run
+    // dropped onto the shared state folder would look like it worked.
+    let openclawLocal: string | null = null
+    if (payload.openclawLocal !== undefined && payload.openclawLocal !== null) {
+      const raw = payload.openclawLocal
+      if (engine !== 'openclaw') { reply({ error: 'INVALID_LOCAL_FOLDER', detail: OPENCLAW_LOCAL.notOpenclaw }); return }
+      if (typeof raw !== 'string' || !homeIsAbsolute(raw) || raw.length > 4096 || /[\x00-\x1f\x7f]/.test(raw)
+        || !await stat(raw).then(info => info.isDirectory(), () => false)) {
+        reply({ error: 'INVALID_LOCAL_FOLDER', detail: OPENCLAW_LOCAL.notFolder(String(raw)) }); return
+      }
+      openclawLocal = raw
+    }
     // A DSH is refused, never approximated: an agent created as its plain base engine would look
     // like it worked and have none of the skills the user picked the tile for.
     let dsh: string | null = null
@@ -492,7 +504,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       if (typeof sessionId !== 'string' || !(/^[A-Za-z0-9][A-Za-z0-9._-]{1,127}$/.test(sessionId) || engine === 'openclaw' && OPENCLAW_KEY.test(sessionId))) {
         reply({ error: 'INVALID_SESSION', detail: 'resumeSessionId must be a session id' }); return
       }
-      if (terminal || projectFolder || grid.state === 'ok' || model.state === 'ok' || launchModel.state === 'ok' || dsh || prompt || agent || swarmRole) {
+      if (terminal || projectFolder || grid.state === 'ok' || model.state === 'ok' || launchModel.state === 'ok' || dsh || prompt || agent || swarmRole || openclawLocal) {
         reply({ error: 'INVALID_SESSION', detail: 'a resumed conversation takes no new folder, grid, harness, prompt or agent' }); return
       }
       resumeSessionId = sessionId
@@ -535,6 +547,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       takeOver,
       // Only when set: a person's create keeps the fingerprint its receipt was recorded with before the field.
       ...(claudeHome ? { claudeHome } : {}),
+      ...(openclawLocal ? { openclawLocal } : {}),
       ...(payload.startedBy === 'agent' ? { startedBy: 'agent' as const } : {}),
       ...(launchModel.state === 'ok' ? { launchModel: launchModel.launchModel } : {}),
       ...(parentAgentId ? { parentAgentId } : {}),
