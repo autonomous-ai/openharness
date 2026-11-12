@@ -203,8 +203,8 @@ at 6 (the script's default):
 | Heavy, no noise | 320 | 123 | 91 | 85 |
 | Heavy, noise | 313 | 119 | 94 | 89 |
 
-At 8 cores, which the product plans with when a machine reports none (the review's run of 11 November, on this
-branch):
+At 8 cores, where nothing is held back, as in the product's plan since package 7, which counts no cores (the review's
+run of 11 November, on this branch):
 
 | Day | First come | Solver, two ahead (until package 2) | Solver, one ahead (since package 2) | Rule, decided when free |
 |---|---|---|---|---|
@@ -218,8 +218,9 @@ branch):
   to 26% at 6. "One ahead" is a list one deep: a task is given only to a builder with nothing. It is the product's rule
   since package 2: the script's `solver1` runs the product's own picks, and its `solver` keeps the picks of before.
 - **The rule's last 4 to 7% at 6 cores is not real.** With 6 cores two large tasks cannot share a machine, and the
-  table holds the solver's builder to that. The product plans with a machine's cores (8 when unreported) and checks
-  none when a task is taken. At 8 cores the one-ahead solver and the rule are level. The second critique found the
+  table holds the solver's builder to that. The product's plan counted a machine's cores (8 when unreported) and
+  checked none when a task was taken; since package 7 it counts none. At 8 cores the one-ahead solver and the rule are
+  level. The second critique found the
   same over more seeds, and the search 11 to 25% ahead of its own first plan on heavy days.
 - **Both tables give the solver today's fixed guesses** of a size's minutes and an area's speed. Given the real
   speeds, the rule scores 55, 53, 50, 98 and 91.
