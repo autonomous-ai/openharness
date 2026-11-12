@@ -3103,3 +3103,85 @@ describe('harness ps --machines (every machine of the account in one read)', () 
     expect(text.out.join('\n')).toContain('box-33: not asked; at most 32 machines are asked at once.')
   })
 })
+
+describe('harness show --work (the result in facts, read on the machine that owns the harness)', () => {
+  const pr = { status: 'found', number: 412, url: 'https://github.com/o/api/pull/412', state: 'Open', title: 'Fix the flaky login test' }
+  const checked = { rows: [{ url: pr.url, status: 'found', changedFiles: 2, additions: 31, deletions: 8, ci: 'passing',
+    checks: { passed: 5, failed: 0, pending: 0, total: 5 } }] }
+  const owning = (answers: Record<string, Handler>) => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' }), frame('api-fix', { project: { cwd: '/work/api', branch: 'fix-login' } })]
+    Object.assign(d.extra, answers)
+    return d
+  }
+
+  it('says its branch, its pull request, the files and lines it changed, and its checks', async () => {
+    const d = owning({ git_pull_request: () => pr, git_pull_requests_status: () => checked })
+    const h = harness(d)
+    started(h.ledger, 'lead', 'api-fix')
+    expect(await showCommand(['api-fix', '--work'], h.deps)).toBe(EXIT.ok)
+    expect(h.out).toEqual([
+      'api-fix on studio: idle · Codex · started by you',
+      'branch: fix-login · PR #412 (Open): 2 files, +31 -8, checks passing (5 of 5)',
+      'https://github.com/o/api/pull/412',
+    ])
+    expect(d.requests.filter((r) => r.type.startsWith('git_'))).toEqual([
+      { type: 'git_pull_request', payload: { agentId: 'api-fix' } },
+      { type: 'git_pull_requests_status', payload: { urls: [pr.url] } },
+    ])
+    // Facts only: no turn is read.
+    expect(d.requests.some((r) => r.type === 'session_get')).toBe(false)
+    const json = harness(d)
+    expect(await showCommand(['api-fix', '--work', '--json'], json.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(json.out.join('\n'))).toEqual({ name: 'api-fix', id: 'api-fix', agent: 'Codex', machine: 'studio', state: 'idle', startedBy: 'you',
+      work: { branch: 'fix-login', pullRequest: { number: 412, url: pr.url, state: 'Open', title: 'Fix the flaky login test',
+        files: 2, additions: 31, deletions: 8, ci: 'passing', checks: { passed: 5, failed: 0, pending: 0, total: 5 } } } })
+  })
+
+  it('says when there is no pull request yet, or its machine could not read one', async () => {
+    for (const [answer, said, pullRequest] of [
+      [{ status: 'none' }, 'branch: fix-login · no pull request', 'none'],
+      [{ status: 'unavailable' }, 'branch: fix-login · its pull request could not be read on its machine', 'unavailable'],
+    ] as const) {
+      const d = owning({ git_pull_request: () => answer })
+      const h = harness(d)
+      expect(await showCommand(['api-fix', '--work'], h.deps)).toBe(EXIT.ok)
+      expect(h.out[1]).toBe(said)
+      const json = harness(d)
+      expect(await showCommand(['api-fix', '--work', '--json'], json.deps)).toBe(EXIT.ok)
+      expect(JSON.parse(json.out.join('\n')).work).toEqual({ branch: 'fix-login', pullRequest })
+    }
+    // A machine whose read fails or never answers is the same as unavailable.
+    const failing = owning({ git_pull_request: () => { throw new AgentClientError('TIMEOUT', 'slow') } })
+    const h = harness(failing)
+    expect(await showCommand(['api-fix', '--work'], h.deps)).toBe(EXIT.ok)
+    expect(h.out[1]).toBe('branch: fix-login · its pull request could not be read on its machine')
+  })
+
+  it('keeps the pull request when its files and checks could not be read (gh signed out there)', async () => {
+    for (const status of [{ rows: [{ url: pr.url, status: 'unavailable', error: 'GH_SIGNED_OUT' }] }, { error: 'OWNER_REQUIRED' }]) {
+      const d = owning({ git_pull_request: () => pr, git_pull_requests_status: () => status })
+      const h = harness(d)
+      expect(await showCommand(['api-fix', '--work'], h.deps)).toBe(EXIT.ok)
+      expect(h.out[1]).toBe('branch: fix-login · PR #412 (Open)')
+      const json = harness(d)
+      expect(await showCommand(['api-fix', '--work', '--json'], json.deps)).toBe(EXIT.ok)
+      expect(JSON.parse(json.out.join('\n')).work.pullRequest).toEqual({ number: 412, url: pr.url, state: 'Open', title: 'Fix the flaky login test' })
+    }
+  })
+
+  it('reads a harness on another machine on that machine, and has no work to read for a cloud harness', async () => {
+    const d = new FakeDaemon(), office = owning({ git_pull_request: () => ({ status: 'none' }) })
+    d.frames = [frame('lead', { engine: 'claude' })]
+    const machines = async () => [{ machineId: 'm', label: 'studio', status: 'running', current: true }, { machineId: 'office-id', label: 'office', status: 'running', current: false }]
+    const h = harness(d, { machines, others: { 'office-id': office } })
+    expect(await showCommand(['--machine', 'office', 'api-fix', '--work'], h.deps)).toBe(EXIT.ok)
+    expect(h.out).toEqual(['api-fix on office: idle · Codex · started by person', 'branch: fix-login · no pull request'])
+    expect(office.requests.some((r) => r.type === 'git_pull_request')).toBe(true)
+    expect(d.requests.some((r) => r.type === 'git_pull_request')).toBe(false)
+    d.frames.push(frame('devin', { engine: 'devin-cloud', location: 'cloud', tmuxPane: null, project: null, cloud: { state: 'idle' } }))
+    const cloud = harness(d)
+    expect(await showCommand(['devin', '--work'], cloud.deps)).toBe(EXIT.usage)
+    expect(cloud.err[0]).toBe('devin runs in its maker\'s cloud: it has no folder here to read. Its links are in harness show devin.')
+  })
+})

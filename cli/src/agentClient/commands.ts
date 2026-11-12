@@ -65,9 +65,11 @@ The harnesses on a machine: name, agent, state, who started it, when it was last
 --machines lists every machine of yours at once: each is asked for 5 s, and one that does not answer is listed as
 unreachable.
 ${ON_MACHINE}`
-export const SHOW_USAGE = `Usage: harness show [--machine <name>] <name> [--chars N] [--json]
+export const SHOW_USAGE = `Usage: harness show [--machine <name>] <name> [--chars N] [--work] [--json]
 
 A harness's state and its last turn: what it was asked and what it answered (the first N characters, 4000 by default).
+--work says its work instead, as facts read on its machine: its branch, its pull request, the files and lines it
+changed, and its checks.
 ${ON_MACHINE}`
 export const REPLY_USAGE = `Usage: harness reply [--machine <name>] <name> [--json] -- <words…>
 
@@ -808,7 +810,7 @@ export function whoamiCommand(argv: readonly string[], deps: ClientDeps = {}): P
 
 export function showCommand(argv: readonly string[], deps: ClientDeps = {}): Promise<number> {
   return run(SHOW_USAGE, deps, wantsJson, argv, async (s) => {
-    const { names, flags, machine } = words(argv, { '--chars': 'value', '--json': 'flag' })
+    const { names, flags, machine } = words(argv, { '--chars': 'value', '--json': 'flag', '--work': 'flag' })
     if (names.length !== 1) throw new UsageError(names.length ? 'Name one harness.' : 'Name the harness to show.')
     const chars = flags.has('--chars') ? Number(flags.get('--chars')) : DEFAULT_CHARS
     if (!Number.isInteger(chars) || chars < 1) throw new UsageError('--chars takes a whole number.')
@@ -817,13 +819,24 @@ export function showCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
     let t: Target | null = null
     try {
       t = await target(s, o, names[0], away)
+      if (flags.has('--work') && t.frame.location === 'cloud') {
+        const name = t.frame.name ?? t.frame.id.slice(0, 8)
+        throw new UsageError(`${name} runs in its maker's cloud: it has no folder here to read. Its links are in ${step(s.env, 'show', onAway(name, away))}.`)
+      }
       const listed = stateOf(t.frame)
       // A cloud harness has no screen: its state is the cloud service's.
       const screen = listed === 'stopped' || listed === 'offline' || t.frame.location === 'cloud' ? null : await inspect(t)
       const state: State = screen === 'draft' ? 'idle' : screen ?? listed
-      const turn = await readLastTurn(t)
       const parent = o.ledger.parentOf({ machineId: t.machineId, agentId: t.frame.id })
       const startedBy = t.yours ? 'you' : parent ? parent.by.name : 'person'
+      if (flags.has('--work')) {
+        const work = await workOf(t)
+        const head = { name: t.frame.name, id: t.frame.id, agent: engineName(t.frame.engine ?? ''), machine: t.machine, state, startedBy }
+        if (flags.has('--json')) s.out(JSON.stringify({ ...head, work }, null, 1))
+        else for (const line of [`${head.name} on ${head.machine}: ${stateSaid(state)} · ${head.agent} · started by ${startedBy}`, ...workLines(work)]) s.out(line)
+        return EXIT.ok
+      }
+      const turn = await readLastTurn(t)
       const answer = turn?.answer ?? ''
       // A name the verbs take: an unnamed harness is called by its session title, a sentence, so by its id's start.
       const at = onAway(addressOf({ machineId: '', agentId: t.frame.id, name: t.frame.name ?? '', engine: '' }), away)
@@ -867,6 +880,45 @@ export function showCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
       return EXIT.ok
     } finally { if (t?.remote) t.daemon.close(); o.daemon.close() }
   })
+}
+
+/** A harness's work as `show --work` says it: its branch, and its pull request with what it changed and its checks, or
+ *  `none` (there is none yet) or `unavailable` (its machine could not read one). */
+interface Work {
+  branch: string | null
+  pullRequest: 'none' | 'unavailable' | {
+    number: number; url: string; state: string; title?: string
+    files?: number; additions?: number; deletions?: number; ci?: string; checks?: { passed: number; failed: number; pending: number; total: number }
+  }
+}
+
+/**
+ * [t]'s work, read on the machine that owns it with the requests its windows' pull request label asks
+ * (services/projects.ts `git_pull_request`, then `git_pull_requests_status` for what it changed and its checks): never
+ * git or gh run here on another machine's folder. Each is bounded; a read that fails says so rather than failing.
+ */
+async function workOf(t: Target): Promise<Work> {
+  const branch = t.frame.project?.branch ?? null
+  const found: Record<string, unknown> = await t.daemon.request('git_pull_request', { agentId: t.frame.id }, 15_000).catch(() => ({ status: 'unavailable' }))
+  if (found.status !== 'found' || typeof found.url !== 'string') return { branch, pullRequest: found.status === 'none' ? 'none' : 'unavailable' }
+  const status = await t.daemon.request('git_pull_requests_status', { urls: [found.url] }, 15_000).catch(() => ({}) as Record<string, unknown>)
+  const row = (Array.isArray(status.rows) ? status.rows[0] : null) as Record<string, unknown> | null
+  return { branch, pullRequest: {
+    number: Number(found.number), url: found.url, state: String(found.state), ...(typeof found.title === 'string' ? { title: found.title } : {}),
+    ...(row?.status === 'found' ? { files: Number(row.changedFiles), additions: Number(row.additions), deletions: Number(row.deletions),
+      ci: String(row.ci), checks: row.checks as { passed: number; failed: number; pending: number; total: number } } : {}),
+  } }
+}
+
+/** `show --work` as a line, then the pull request's address. */
+function workLines(work: Work): string[] {
+  const branch = `branch: ${work.branch ?? '-'}`
+  const pr = work.pullRequest
+  if (pr === 'none') return [`${branch} · no pull request`]
+  if (pr === 'unavailable') return [`${branch} · its pull request could not be read on its machine`]
+  const changed = pr.files === undefined ? '' : `: ${pr.files} file${pr.files === 1 ? '' : 's'}, +${pr.additions} -${pr.deletions}, checks ${pr.ci}`
+    + (pr.checks?.total ? ` (${pr.checks.passed} of ${pr.checks.total})` : '')
+  return [`${branch} · PR #${pr.number} (${pr.state})${changed}`, pr.url]
 }
 
 /** How much of the words a `Told` line keeps to know the turn they asked (ledger.ts `Told`). */
