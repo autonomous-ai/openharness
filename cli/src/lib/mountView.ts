@@ -1,7 +1,8 @@
 import { posix } from 'node:path'
 
-/** A mount from `/proc/<pid>/mountinfo`: its filesystem (`major:minor`), the folder of it mounted, and where. */
-export interface Mount { device: string; root: string; point: string }
+/** A mount from `/proc/<pid>/mountinfo`: its ID and its parent's, its filesystem (`major:minor`), the folder of it
+ *  mounted, and where. */
+export interface Mount { id: string; parent: string; device: string; root: string; point: string }
 
 // The kernel writes a space, tab, newline or backslash in a path as a three-digit octal escape.
 const unescaped = (field: string): string => field.replace(/\\([0-7]{3})/gu, (_, octal: string) => String.fromCharCode(Number.parseInt(octal, 8)))
@@ -12,7 +13,7 @@ export function parseMountinfo(text: string): Mount[] {
   for (const line of text.split('\n')) {
     const fields = line.split(' ')
     if (fields.indexOf('-', 6) < 0) continue
-    mounts.push({ device: fields[2], root: unescaped(fields[3]), point: unescaped(fields[4]) })
+    mounts.push({ id: fields[0], parent: fields[1], device: fields[2], root: unescaped(fields[3]), point: unescaped(fields[4]) })
   }
   return mounts
 }
@@ -20,15 +21,25 @@ export function parseMountinfo(text: string): Mount[] {
 const parts = (path: string): string[] => path.split('/').filter((part) => part !== '' && part !== '.')
 const within = (ancestor: readonly string[], path: readonly string[]): boolean => ancestor.length <= path.length && ancestor.every((part, i) => part === path[i])
 
-// The mount a path is on: the deepest point over it, and at one point the last mounted, which covers those before it.
+// The mount a path is on, found as the kernel walks it (proc(5), mountinfo's parent ID): from the root mount, into the
+// first mount met on the way down, and at one point into the last mounted, which covers those before it. The deepest
+// mount point over a path is not enough: a mount on a folder that a later mount over its parent covers is never met.
 function holder(path: readonly string[], mounts: readonly Mount[]): Mount | undefined {
-  let found: Mount | undefined
-  let depth = -1
-  for (const mount of mounts) {
-    const point = parts(mount.point)
-    if (point.length >= depth && within(point, path)) { found = mount; depth = point.length }
+  const ids = new Set(mounts.map(mount => mount.id))
+  let at = mounts.find(mount => parts(mount.point).length === 0 && (mount.parent === mount.id || !ids.has(mount.parent)))
+  // Each step goes one mount down: more steps than mounts is a list whose parents loop.
+  for (let steps = 0; at && steps < mounts.length; steps++) {
+    let next: Mount | undefined
+    let depth = Infinity
+    for (const mount of mounts) {
+      if (mount === at || mount.parent !== at.id) continue
+      const point = parts(mount.point)
+      if (point.length <= depth && within(point, path)) { next = mount; depth = point.length }
+    }
+    if (!next) return at
+    at = next
   }
-  return found
+  return undefined
 }
 
 /**

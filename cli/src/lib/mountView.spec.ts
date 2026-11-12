@@ -34,13 +34,17 @@ it('has no answer from a mount list with no root', () => {
   expect(hostPath('/home/agent/.hermes', parseMountinfo('91 90 8:17 /agents/a1 /home/agent rw - ext4 /dev/sdb1 rw\n'), ours)).toBeNull()
   const loop = parseMountinfo('25 26 8:1 / / rw - ext4 /dev/sda1 rw\n26 25 8:1 / / rw - ext4 /dev/sda1 rw\n')
   expect(hostPath('/data', loop, loop)).toBeNull()
+  // Parents that loop below the root end the walk with no answer.
+  const below = parseMountinfo('25 1 8:1 / / rw - ext4 /dev/sda1 rw\n26 25 8:1 / /a rw - ext4 /dev/sda1 rw\n'
+    + '27 26 8:1 / /a rw - ext4 /dev/sda1 rw\n26 27 8:1 / /a rw - ext4 /dev/sda1 rw\n')
+  expect(hostPath('/a', below, below)).toBeNull()
 })
 it('takes the mount on top, the deepest root, and escaped names', () => {
-  const stacked = [...remapped, ...parseMountinfo('94 90 0:72 / /work rw - tmpfs tmpfs rw\n')]
+  const stacked = [...remapped, ...parseMountinfo('94 92 0:72 / /work rw - tmpfs tmpfs rw\n')]
   expect(hostPath('/work/src', stacked, ours)).toBeNull()
   const twice = [...ours, ...parseMountinfo('42 25 8:17 /agents /srv/agents rw - ext4 /dev/sdb1 rw\n')]
   expect(hostPath('/home/agent/.hermes', remapped, twice)).toBe('/srv/agents/a1/.hermes')
-  expect(parseMountinfo('50 25 8:33 /my\\040disk /mnt/my\\040disk rw - ext4 /dev/sdc1 rw\n')).toEqual([{ device: '8:33', root: '/my disk', point: '/mnt/my disk' }])
+  expect(parseMountinfo('50 25 8:33 /my\\040disk /mnt/my\\040disk rw - ext4 /dev/sdc1 rw\n')).toEqual([{ id: '50', parent: '25', device: '8:33', root: '/my disk', point: '/mnt/my disk' }])
   expect(parseMountinfo('garbage\n\n')).toEqual([])
 })
 it('refuses a path that is not absolute or climbs', () => {
