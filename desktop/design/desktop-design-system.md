@@ -1300,6 +1300,20 @@ Settings stays in the application menu; this menu ends with Show Harness and Qui
 Pane-resize guidance is app navigation: use the shared popover surface, system
 type and wrapping keyboard hints. It must not look like terminal output.
 
+## Hachi
+
+Hachi ([design](../../docs/design/2026-11-12-hachi.md)) adds no surface of its
+own: a tab, a hint, a pane state and two lines, all from the elements above.
+Off (Settings ▸ Experimental ▸ Hachi), none of them is drawn and ⇧⌘H is not bound.
+
+| Element | Where | Rule |
+|---|---|---|
+| Hachi's tab | `DesktopWorkspaceTab(fixed: true)`, `SwarmTabButton.fixed`; gallery `hachi-tab` | Always first, before ⌘1, named Hachi. No ×, at rest or hovered, so its name never moves; its menu has no Rename Tab… or Close Tab; ⌘W, middle-click, double-click and drag do nothing. Its held hint is ⇧⌘H (Alt+Shift+H on Linux, Windows and the browser), and the next tab is ⌘1. Activity and the unread dot are any tab's. |
+| Welcome hint | `WorkspaceWelcome(hachi:)` | `⇧⌘H Ask Hachi`, after the other hints, while the switch is on. |
+| Asleep home | the pane's status, `Asleep` | `Hachi is on studio, which is asleep.` with the offline icon, as any offline harness. Nothing to click: no second Hachi is made here. |
+| Goal done | the agent banner, sound and system notice | Title `Hachi: flaky login test is done`, then `Finished`. One per goal, none for the pane in view, at most one in two minutes, under Settings ▸ Notifications' three switches. |
+| Off | the pane's one-line snackbar | `Hachi is off. Its 2 harnesses keep running.` (`Its harness keeps running.`, or `Hachi is off.` alone), once, with nothing to click. |
+
 ## Interaction and review
 
 Every clickable element has a hand cursor, every editor a text cursor.
