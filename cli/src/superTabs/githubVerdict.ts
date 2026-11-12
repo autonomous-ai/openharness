@@ -16,6 +16,7 @@
 import { REPLY_TEXT_MAX } from './agentReplies.js'
 import { isWriter, writersOf } from './githubMerge.js'
 import type { GitHubGet, GitHubReply, GitHubSend } from './githubRest.js'
+import { unsigned } from './signature.js'
 import { object, SuperTabHostError } from './wire.js'
 
 export interface Verdict { repository: string; number: number; verdict: 'READ-OK' | 'HOLD'; sha: string; text: string }
@@ -86,7 +87,9 @@ export async function postVerdict(deps: VerdictDeps, reader: { name: string; rep
   if (isWriter(writersOf(pull), reader.name)) throw new SuperTabHostError('OWN_PULL_REQUEST', `${at} is your own pull request. Another agent reads it.`, 403)
 
   const now = (deps.now ?? Date.now)()
-  const words = asked.text.trim()
+  // Its words without its own name at their start: the line signs them, and an agent told to open each GitHub comment with its
+  // name signed them again ("Cy, 13:00: READ-OK …" then "Cy: Matches #29.", the rehearsal, 2026-11-11).
+  const words = unsigned(asked.text.trim(), [reader.name]).trim()
   const line = (time: string) => `${reader.name.trim()}, ${time}: ${asked.verdict} ${head}`
   const body = `${line(hhmm(now))}${words ? `\n\n${words}` : ''}`
   // The same verdict in the same words on the same head, as the newest thing this reader said of the head in the last hour,

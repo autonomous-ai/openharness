@@ -3918,6 +3918,48 @@ describe('lead.switch', () => {
   })
 })
 
+// anh Dee, 2026-11-11: "how do we pause finn while we're fixing bugs rather than finn keep receiving tasks?" A paused agent keeps
+// its session; the CLI gives it no task and types it no nudge while it is paused.
+describe('agent.pause', () => {
+  const pause = (agentId: string, paused: boolean): Command => ({ type: 'agent.pause', agentId, paused })
+  const pausedFor = (f: ReturnType<typeof fixture>, reader: Actor, agentId: string) => visibleState(f.state, reader).agents.find(a => a.id === agentId)!.pausedAt
+  const peerContributorAgent = (f: ReturnType<typeof fixture>) => { f.invite(); return f.add('mine', 'peer') }
+
+  it('lets its person pause and resume it, and every reader sees which', () => {
+    const f = fixture(), agentId = peerContributorAgent(f)
+    f.run(pause(agentId, true), peer)
+    const since = pausedFor(f, owner, agentId)
+    expect(since).toEqual(expect.stringMatching(/^\d{4}-\d\d-\d\dT/))
+    expect(pausedFor(f, peer, agentId)).toBe(since)
+    // Paused again, it keeps the time it was first paused.
+    f.run(pause(agentId, true), peer)
+    expect(pausedFor(f, owner, agentId)).toBe(since)
+    f.run(pause(agentId, false), peer)
+    expect(pausedFor(f, owner, agentId)).toBeUndefined()
+    expect(f.state.agents.find(a => a.id === agentId)).not.toHaveProperty('pausedAt')
+  })
+
+  it('lets the Swarm\'s owner and the machine\'s owner pause it', () => {
+    const f = fixture(), agentId = peerContributorAgent(f)
+    f.run(pause(agentId, true), owner)
+    expect(pausedFor(f, peer, agentId)).toBeDefined()
+    f.state.people.push({ id: 'host-owner', email: 'host-owner@example.com', role: 'collaborator', generation: 'g' } as never)
+    f.run(pause(agentId, false), { kind: 'person', userId: 'host-owner', email: 'host-owner@example.com' })
+    expect(pausedFor(f, peer, agentId)).toBeUndefined()
+  })
+
+  it('refuses a teammate who is none of them, and any agent, writing nothing', () => {
+    const f = fixture(), agentId = f.add('mine'), other = f.add('other')
+    f.invite()
+    const before = JSON.stringify(f.state)
+    for (const actor of [peer, { kind: 'agent', agentId: other, machineOwnerId: 'host-owner' }, { kind: 'agent', agentId, machineOwnerId: 'host-owner' }] as Actor[]) {
+      expect(() => f.run(pause(agentId, true), actor), JSON.stringify(actor)).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+    }
+    expect(JSON.stringify(f.state)).toBe(before)
+    expect(commandSchema.safeParse({ type: 'agent.pause', agentId, paused: 'yes' }).success).toBe(false)
+  })
+})
+
 describe('agent.rename (renaming a harness renames its agent, task #2912)', () => {
   const rename = (agentId: string, name: string): Command => ({ type: 'agent.rename', agentId, name })
   const shownTo = (f: ReturnType<typeof fixture>, reader: Actor, agentId: string) =>
