@@ -147,7 +147,7 @@ describe('what each builder starts next (nextPicks)', () => {
     expect(new Set(picks.map(p => p.builder)).size).toBe(2)
     // Only a free task is given: a plan that has a held one first for a builder with room gives that builder the free one.
     const placed = (task: string, start: number) => ({ task, builder: 'pip', mode: 0, start, end: start + 90 })
-    expect(nextPicks({ placements: [placed('#8', 0), placed('#3', 90)], unplaced: [], score: 0, makespan: 180, cost: 0 }, read)).toEqual([{ task: '#3', builder: 'pip', start: 90 }])
+    expect(nextPicks({ placements: [placed('#8', 0), placed('#3', 90)], unplaced: [], score: 0, makespan: 180, cost: 0, priced: 0 }, read)).toEqual([{ task: '#3', builder: 'pip', start: 90 }])
   })
 
   it('says when the builder can start it and what it finished in its part', () => {
