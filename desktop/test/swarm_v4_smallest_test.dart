@@ -70,15 +70,15 @@ void main() {
         expect(key('swarm-instructions-button'), findsOneWidget);
         expect(key('swarm-terminal-button'), findsOneWidget);
         await captureWindow(tester, shots, 'smallest-chat-$mode');
-        // The left pane is still beside the chat at 880 wide; Pip's row deletes it.
+        // The left pane is still beside the chat at 880 wide; Pip's row removes it.
         expect(key('super-agent-pip'), findsOneWidget);
         await tester.tap(key('super-agent-pip'), buttons: kSecondaryButton);
         await tester.pumpAndSettle();
-        await tester.tap(find.text('Delete'));
+        await tester.tap(find.text('Remove'));
         await tester.pumpAndSettle();
-        expect(find.text('Delete Pip?'), findsOneWidget);
+        expect(find.text('Remove Pip?'), findsOneWidget);
         expect(tester.takeException(), isNull);
-        await captureWindow(tester, shots, 'smallest-delete-$mode');
+        await captureWindow(tester, shots, 'smallest-remove-$mode');
       },
     );
   }

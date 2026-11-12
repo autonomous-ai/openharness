@@ -103,15 +103,24 @@ stays (#4591, #4598, #4604 among them). The Lead gives each an owner.
 
 **Who builds which task is code (Swarm v4, anh Dee 2026-11-09):** `cli/src/superTabs/githubAssign.ts` reads the PM's
 labels (`part:`, `needs:`, `size:`, `p0`-`p2`, "after #N"), the project's builders and their machines' memory, disk and
-quota, plans with the solver (`cli/src/superTabs/assign/`) and labels `builder:<name>` with why, keeping every list two deep.
-The PM's line "Give a task to the builder who owns its part, is free and has what it needs; keep every builder's list two
-deep" is gone from `PM_BASICS`; the PM still sizes and labels, which is judgment.
+quota, plans with the solver (`cli/src/superTabs/assign/`) and labels `builder:<name>` with why. A builder is given a task
+only when it has none to build and fewer than four open (`assign/crew.ts` `hasRoom`; every list was kept two deep until
+2026-11-11, [the allocator's design](design/2026-11-11-swarm-allocator/BUILD.md), package 2). The PM's line "Give a task to
+the builder who owns its part, is free and has what it needs; keep every builder's list two deep" is gone from `PM_BASICS`;
+the PM still sizes and labels, which is judgment. `PM_BASICS` says in one clause when a builder gets its next task ("one task
+to build at a time, the next once its pull request is up to be read, and four open at most"): what code does, said so the PM
+gives none by hand to a builder that looks idle. It asks nothing of the PM that code could check.
 
 **A builder cuts pieces off its own task by code (anh Dee, 2026-11-11: "Split what you hold"):** `harness super-tab split`
 (`cli/src/superTabs/githubSplit.ts`) opens a sized sub-issue of a task its builder took, and the assigner gives it out as any
 task. The command is named where it is needed, in the answer to `take`, not in every agent's basics. `PM_BASICS` gained one
 clause, "a builder may cut a piece off a task it holds, a sized sub-issue that Harness gives out as any task: leave it open":
 judgment the PM keeps, as code cannot tell a piece the PM would rather not have from one it closes by mistake.
+
+**The PM answers its person in a few lines (anh Dee, 2026-11-11: "it should be like a human conversation"):** one line at
+the end of `PM_BASICS`, "Answer your person in a few lines, as a teammate would on Slack; the detail goes on the issues". The
+rehearsal's PM answered a two-feature ask with a table and a report that were already on the issues. A prompt line for good:
+what to leave out of an answer is the PM's judgment, which no program can check.
 
 **The PM announces each hand-off in the project's channel (anh Dee, 2026-11-09)** so people can read the team talk: one line in
 `PM_BASICS`, "@Pip #12 is yours", once per hand-off, the rest of the task's record staying on its issue. It is a prompt line only

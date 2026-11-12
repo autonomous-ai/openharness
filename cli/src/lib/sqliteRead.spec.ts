@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { builtinSqlite, closeSqliteHandles, overrideBuiltinSqlite } from './sqliteBuiltin.js'
 import { idleWalStore, inlineSqlParams, sqliteReadAll } from './sqliteRead.js'
+import { enableOffThreadSqlite, resetOffThreadSqlite } from './sqliteThread.js'
 
 const hasCli = (() => {
   try { execFileSync('sqlite3', ['-version'], { stdio: 'ignore' }); return true } catch { return false }
@@ -58,9 +59,13 @@ withCli('sqliteReadAll', () => {
     rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
   })
 
-  const paths: Array<['builtin' | 'cli', () => void]> = [
-    ['cli', () => overrideBuiltinSqlite(null)],
-    ...(hasBuiltin ? [['builtin', () => overrideBuiltinSqlite(undefined)] as ['builtin', () => void]] : []),
+  // The core reads on its read threads (sqliteThread.ts): the same answers, from the same reader source.
+  const paths: Array<['builtin' | 'cli', string, () => void]> = [
+    ['cli', 'the CLI', () => overrideBuiltinSqlite(null)],
+    ...(hasBuiltin ? [
+      ['builtin', 'the binding', () => overrideBuiltinSqlite(undefined)],
+      ['builtin', 'the core\'s read threads', () => { overrideBuiltinSqlite(undefined); enableOffThreadSqlite() }],
+    ] as Array<['builtin', string, () => void]> : []),
   ]
   const withBuiltin = hasBuiltin ? it : it.skip
 
@@ -73,9 +78,10 @@ withCli('sqliteReadAll', () => {
     }
   })
 
-  for (const [via, select] of paths) {
-    describe(`via ${via}`, () => {
+  for (const [via, name, select] of paths) {
+    describe(`via ${name}`, () => {
       beforeEach(select)
+      afterEach(() => resetOffThreadSqlite())
 
       it('binds parameters in order and returns rows as plain objects', async () => {
         const result = await sqliteReadAll(db,
@@ -216,7 +222,7 @@ withCli('sqliteReadAll', () => {
     process.env.PATH = shim
     try {
       const started = Date.now()
-      const result = await sqliteReadAll(db, 'SELECT 1;', [], { cliTimeoutMs: 300 })
+      const result = await sqliteReadAll(db, 'SELECT 1;', [], { timeoutMs: 300 })
       expect(result).toMatchObject({ ok: false, reason: 'transient' })
       expect(Date.now() - started).toBeLessThan(5_000)
     } finally {

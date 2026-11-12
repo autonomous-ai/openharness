@@ -2706,6 +2706,20 @@ class SuperTabController extends ChangeNotifier {
         : operationError ?? 'Another change is on its way. Try again.';
   }
 
+  /// Pauses the agent [agentId], or resumes it (backend `agent.pause`): Harness gives a paused agent no task and types it
+  /// nothing, and its session runs on (anh Dee, 2026-11-11: "right click you see pause"). Its person, its machine's owner and
+  /// the Swarm's owner may. Null once the server took it; otherwise why it did not.
+  Future<String?> pauseAgent(String agentId, {required bool paused}) async {
+    final done = await command({
+      'type': 'agent.pause',
+      'agentId': agentId,
+      'paused': paused,
+    });
+    return done != null
+        ? null
+        : operationError ?? 'Another change is on its way. Try again.';
+  }
+
   /// Whether [group] is out of the app: there is no private channel to the
   /// PM (Ken, 10-29), so no private chat but a person's chat with their own
   /// agent is listed or opened.

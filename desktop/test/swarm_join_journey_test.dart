@@ -94,7 +94,11 @@ void main() {
             builder: (context) => Column(
               children: [
                 TextButton(
-                  onPressed: () => showSuperTabSharing(context, owner),
+                  onPressed: () => showSuperTabSharing(
+                    context,
+                    owner,
+                    title: 'Manage people',
+                  ),
                   child: const Text('Share'),
                 ),
                 // The link as the app reads it from a click (SwarmJoinLink.parse), in the join dialog.

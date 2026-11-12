@@ -1546,7 +1546,11 @@ class SwarmSearchController extends ChangeNotifier {
                 swarm.id == targetId &&
                 !swarm.isUtility &&
                 !swarm.isOrchestrator &&
-                swarm.panes.length < AppNotifier.maxPanes,
+                // A Swarm's pickers (Attach, Add agent) bring an agent into
+                // its team, so a full tab limits them no more than [capacity]
+                // does; the Swarm says so if it cannot show a terminal.
+                (harnessContext != null ||
+                    swarm.panes.length < AppNotifier.maxPanes),
           )) &&
       (split == null || app.isPaneSplitCurrent(split!));
 
@@ -1628,8 +1632,11 @@ class SwarmSearchController extends ChangeNotifier {
       ? 'Go to'
       : action(row);
 
-  String get unavailableMessage =>
-      split != null && !app.isPaneSplitCurrent(split!)
+  String get unavailableMessage => !adding && selected != null
+      ? selected!.isGroup && selected!.members.length > AppNotifier.maxPanes
+            ? 'Open up to ${AppNotifier.maxPanes} harnesses at once'
+            : 'No room to open this ${selected!.isSwarm || selected!.isGroup ? 'group' : 'harness'}'
+      : split != null && !app.isPaneSplitCurrent(split!)
       ? 'The layout changed. Split the pane again.'
       : selected != null && alreadyHere(selected!)
       ? 'This harness is already open here.'
@@ -1639,7 +1646,9 @@ class SwarmSearchController extends ChangeNotifier {
             selected!.members.isNotEmpty &&
             !_hasMissing(selected!)
       ? 'Everything in it is already open here.'
-      : 'No room for another harness.';
+      // Adding lists only harnesses (and the create row) and a Swarm's pickers
+      // need no room, so what is left is a tab with no room for another pane.
+      : 'This tab is full. Open a new tab to add more.';
 
   void _refresh({bool force = false}) {
     if (isAgentMode) {

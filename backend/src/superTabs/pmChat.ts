@@ -9,6 +9,7 @@ import { fail, stableId, type Agent, type AgentStart, type CommandEffects, type 
 import { isAgentChat, projectsOf, type SwarmProject } from './projects.js'
 import { publicReason } from './startFailure.js'
 import { COORDINATOR_NAME } from './roleNames.js'
+import { agentDisplayName } from './agentNames.js'
 
 /** At most this many of its person's messages wait in a PM's chat for that PM. */
 export const MAX_PM_CHAT_WAITING = 20
@@ -107,7 +108,9 @@ export function settlePmChats(before: SuperTabState, state: SuperTabState, opera
       continue
     }
     chat.agentIds.push(pm.id)
-    chat.title = pm.displayName ?? pm.name
+    // By the name it is about to be given (agentNames.ts): this runs before agents are named, and a new PM's chat was titled
+    // "Product Manager" in its person's notifications (review of #4095).
+    chat.title = agentDisplayName(state.agents, pm.id) ?? pm.name
     pm.chatId = chat.id
     late.push(...waiting.map(messageId => ({ messageId, conversationId: chat.id, agentId: pm.id, lead: true as const,
       author: { kind: 'person' as const, id: own!.id, generation: own!.generation } })))

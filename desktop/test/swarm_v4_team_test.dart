@@ -142,7 +142,7 @@ void main() {
   });
 
   testWidgets(
-    'an agent far down is deleted from its row, and the list stays whole',
+    'an agent far down is removed from its row, and the list stays whole',
     (tester) async {
       final c = await openSwarmV4(tester, forty(), machines: computers);
       await more(tester);
@@ -154,9 +154,9 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(key('super-agent-wes'), buttons: kSecondaryButton);
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Delete'));
+      await tester.tap(find.text('Remove'));
       await tester.pumpAndSettle();
-      await tester.tap(key('delete-agent-confirm'));
+      await tester.tap(key('remove-agent-confirm'));
       await tester.pumpAndSettle();
       expect(key('super-agent-wes'), findsNothing);
       expect(tester.takeException(), isNull);

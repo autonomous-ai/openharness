@@ -218,10 +218,12 @@ void main() {
         final name = chat['name'] as String;
         // An automatic name gives way to one of the Swarm's, as + New agent's.
         expect(agentNames, contains(name));
+        // Its session named, so a second try from anywhere finds the same chat (backend agent.new `harnessId`).
         expect(chat, {
           'type': 'agent.new',
           'kind': 'regular',
           'machineId': 'm',
+          'harnessId': 'h1',
           'engine': 'claude',
           'name': name,
           'local': true,

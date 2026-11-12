@@ -69,7 +69,8 @@ class SwarmSharingServer extends ConversationServer {
       return result;
     }
     final command = body?['command'] as Map?;
-    if (command?['type'] == 'invite.create') {
+    // A refused command writes nothing, as the backend's.
+    if (command?['type'] == 'invite.create' && refuse == null) {
       (state['invitations'] as List).add({
         'id': 'invitation',
         'email': command!['email'],

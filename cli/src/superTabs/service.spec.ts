@@ -125,6 +125,20 @@ describe('restart role lookup through the service', () => {
   })
 })
 
+// anh Dee, 2026-11-11, of the rehearsal's channel: "not like how humans talk on slack". An agent signed its posts as it signs
+// its GitHub comments; the channel shows who wrote a post, and when, beside it.
+it('sends an agent\'s post without its own name and time at its start', async () => {
+  const t = setup()
+  Object.assign(t.agent, { name: 'Product Manager', displayName: 'Ray' })
+  const post = (text: string) => ({ type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [] })
+  for (const [text, sent] of [['Ray, 16:25: @Cy #20 is yours.', '@Cy #20 is yours.'], ['Product Manager, 16:25: done.', 'done.'],
+    ['Ray, can you read #12?', 'Ray, can you read #12?']] as const) {
+    t.call.mockClear()
+    expect(await t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: 'op', command: post(text) }, owner)).toMatchObject({ ok: true })
+    expect(t.call).toHaveBeenLastCalledWith('POST', '/api/super-tabs/tab/commands', { operationId: 'op', asAgentId: t.agentId, command: post(sent) })
+  }
+})
+
 describe('a post sent to an older backend', () => {
   const send = (t: ReturnType<typeof setup>, command: Record<string, unknown>) => t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: 'task-op', command }, owner)
   // A backend from before answers below (task #2929) refuses the field: the answer goes as a reply, which still settles it.

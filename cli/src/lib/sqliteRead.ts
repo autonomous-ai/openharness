@@ -9,7 +9,8 @@
  *     query that hung the `sqlite3` CLI for good on one machine (an opencode session with a ~7.5 MB
  *     row) finishes here in tens of milliseconds. The binding is SYNCHRONOUS — it blocks the event
  *     loop for the length of the query — so the busy timeout is kept short: a contended read returns
- *     `transient` and the caller polls again next tick, exactly as a locked CLI read did before.
+ *     `transient` and the caller polls again next tick, exactly as a locked CLI read did before. The core
+ *     runs it on its read threads instead (`sqliteThread.ts`, #1906), never on its own.
  *  2. The `sqlite3` CLI — for a daemon on a Node without the binding (`engines.node >= 20`). Same
  *     invocation the readers always used, plus a hard timeout: a CLI that never answers used to hold
  *     the caller (and, at boot, the whole daemon) forever.
@@ -21,9 +22,11 @@
  */
 
 import { execFile } from 'node:child_process'
-import { closeSync, existsSync, openSync, readSync } from 'node:fs'
 import { promisify } from 'node:util'
-import { builtinSqlite, readBuiltin } from './sqliteBuiltin.js'
+import { builtinSqlite, idleWalStore, readBuiltin } from './sqliteBuiltin.js'
+import { offThreadSqliteActive, readOffThread } from './sqliteThread.js'
+
+export { idleWalStore }
 
 const execFileAsync = promisify(execFile)
 
@@ -31,11 +34,11 @@ export type SqliteRow = Record<string, unknown>
 export type SqliteParam = string | number | null
 
 export interface SqliteReadOptions {
-  /** How long the built-in binding may wait on a lock. Short on purpose: it blocks the event loop. */
+  /** How long the built-in binding may wait on a lock. Short on purpose: on the caller's thread it blocks the event loop. */
   busyTimeoutMs?: number
-  /** Hard bound on the CLI fallback process. */
-  cliTimeoutMs?: number
-  /** stdout cap for the CLI fallback. */
+  /** Hard bound on a read off the caller's thread: the CLI fallback's process, or the core's read thread's answer. */
+  timeoutMs?: number
+  /** Cap on the rows a read off the caller's thread returns: the CLI's stdout, or the read thread's reply. */
   maxBuffer?: number
 }
 
@@ -48,30 +51,8 @@ export type SqliteReadResult =
 export const SQLITE_BACKED_ENGINES = ['opencode', 'kilo', 'hermes', 'devin', 'openclaw'] as const
 
 const DEFAULT_BUSY_TIMEOUT_MS = 250
-const DEFAULT_CLI_TIMEOUT_MS = 5_000
+const DEFAULT_TIMEOUT_MS = 5_000
 const DEFAULT_MAX_BUFFER = 32 * 1024 * 1024
-
-/**
- * A WAL store its engine is not using right now: its header says WAL (file format versions 2) and no
- * `-wal` file is beside it. Opening one read-only would CREATE `-wal` and `-shm` in the engine's
- * folder — and a handle held open keeps the engine from tidying them away when it next closes the
- * store. Opened immutable it creates nothing, and nothing can be changing it: a writer would have
- * made the `-wal` first. A store in the older journal mode is never opened immutable, since a writer
- * may be changing it in place; it gets the ordinary locked read.
- */
-export function idleWalStore(dbPath: string): boolean {
-  if (existsSync(`${dbPath}-wal`)) return false
-  let fd: number | null = null
-  try {
-    fd = openSync(dbPath, 'r')
-    const header = Buffer.alloc(20)
-    return readSync(fd, header, 0, 20, 0) === 20 && header[18] === 2 && header[19] === 2
-  } catch {
-    return false
-  } finally {
-    if (fd !== null) closeSync(fd)
-  }
-}
 
 // ---- CLI fallback -------------------------------------------------------------------------------
 
@@ -155,14 +136,19 @@ export async function sqliteReadAll(
   options: SqliteReadOptions = {},
 ): Promise<SqliteReadResult> {
   const Database = builtinSqlite()
-  if (Database) {
-    return readBuiltin(Database, dbPath, sql, params, options.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS)
+  const busyTimeoutMs = options.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS
+  // The core reads on its read threads (#1906): a whole Devin session on a 36 GB store held its thread past the
+  // master's heartbeats, and the master killed it again and again.
+  if (Database && offThreadSqliteActive()) {
+    return readOffThread(dbPath, sql, params, busyTimeoutMs,
+      options.timeoutMs ?? DEFAULT_TIMEOUT_MS, options.maxBuffer ?? DEFAULT_MAX_BUFFER)
   }
+  if (Database) return readBuiltin(Database, dbPath, sql, params, busyTimeoutMs)
   return readCli(
     dbPath,
     sql,
     params,
-    options.cliTimeoutMs ?? DEFAULT_CLI_TIMEOUT_MS,
+    options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     options.maxBuffer ?? DEFAULT_MAX_BUFFER,
   )
 }

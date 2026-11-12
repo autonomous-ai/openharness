@@ -213,6 +213,16 @@ describe('forking an agent', () => {
     expect(vi.mocked(createAndRegisterPane).mock.calls[0]![0].claudeHome).toBe('/profiles/work')
   })
 
+  // A fork launches with its source's flags (relaunchOverrides): its row records them, so its effort is read as launched
+  // and a restart of the fork launches with them again (review of #4090).
+  it('records the model and effort its source was launched with on the fork\'s row', async () => {
+    expect(await setup(source({ launchModel: { model: 'opus', effort: 'xhigh' } })).fork({ agentId: 'a1', name: null, prompt: null })).toMatchObject({ ok: true })
+    expect(vi.mocked(createAndRegisterPane).mock.calls[0]![0].launchModel).toEqual({ model: 'opus', effort: 'xhigh' })
+    vi.mocked(createAndRegisterPane).mockClear()
+    expect(await setup(source()).fork({ agentId: 'a1', name: null, prompt: null })).toMatchObject({ ok: true })
+    expect(vi.mocked(createAndRegisterPane).mock.calls[0]![0]).not.toHaveProperty('launchModel')
+  })
+
   it('does not open instruction files or install API notes while its harness waits for the Store', async () => {
     vi.mocked(installedDsh).mockReturnValueOnce({ manifest: { name: 'Fixture' } } as never)
     launchDsh.mockResolvedValueOnce({ ok: false, error: 'DSH_UNAVAILABLE', detail: 'Waiting for the Store.', unavailable: 'store' })
