@@ -451,6 +451,14 @@ describe('sweeping unused worktrees', { timeout: 30_000 }, () => {
         await utimes(join(tree, 'src', 'test.log'), recent, recent)
       }],
       ['an install wrote one build folder', (tree, recent) => utimes(join(tree, 'node_modules'), recent, recent)],
+      // Review of package 6, round 3: git listed a folder it does not track yet as one entry, by the folder's own time.
+      ['a file deep in a folder git does not track yet was written', async (tree, recent) => {
+        await put(tree, 'newwork/a/b/old.ts')
+        await writeFile(join(tree, 'newwork', 'a', 'b', 'new.ts'), 'new work')
+        await utimes(join(tree, 'newwork', 'a', 'b', 'new.ts'), recent, recent)
+      }],
+      // Nobody can say when a file that is gone went: it counts as now.
+      ['a tracked file was deleted', (tree) => rm(join(tree, 'src', 'app.ts'))],
     ])('frees nothing in a worktree used within the week: %s', async (_what, use) => {
       const tree = await add('used', 'harness/used')
       await put(tree, 'node_modules/pkg/index.js', 'web/.next/cache/page')
@@ -485,8 +493,8 @@ describe('sweeping unused worktrees', { timeout: 30_000 }, () => {
     })
 
     // Review of package 6, 11-12: git lists a folder whole when everything in it is ignored, by whatever rule. Here no rule
-    // names `deploy/build`, `gen/.next` or `lib/node_modules`, only the files in them: they are someone's, and they stay.
-    it('frees only a folder a rule names itself, never one whose files are each ignored by a rule of their own', async () => {
+    // matches `deploy/build`, `gen/.next` or `lib/node_modules`, only the files in them: they are someone's, and they stay.
+    it('frees only a folder a rule matches itself, never one whose files are each ignored by a rule of their own', async () => {
       await writeFile(join(repo, '.gitignore'), '/node_modules/\n*.log\n.env\n.env.*\n*.pem\n*.sqlite\n/web/.next/\n')
       await git(repo, 'commit', '--quiet', '-am', 'only these')
       const tree = await add('contents', 'harness/contents')
@@ -497,7 +505,7 @@ describe('sweeping unused worktrees', { timeout: 30_000 }, () => {
       for (const kept of theirs) expect(await exists(join(tree, kept)), kept).toBe(true)
     })
 
-    it('frees a folder a rule names inside one no rule names, and leaves the outer one', async () => {
+    it('frees a folder a rule matches inside one no rule matches, and leaves the outer one', async () => {
       const tree = await add('inside', 'harness/inside')
       await put(tree, 'gen/.next/run.log', 'gen/.next/web/node_modules/pkg/index.js', 'node_modules/pkg/index.js')
       expect(await sweep({ inUse: [tree] })).toEqual({ ...nothing, freed: under(tree, 'gen/.next/web/node_modules', 'node_modules') })
@@ -566,6 +574,60 @@ describe('sweeping unused worktrees', { timeout: 30_000 }, () => {
       expect(await exists(join(elsewhere, 'node_modules', 'kept', 'index.js'))).toBe(true)
     })
 
+    // Review of package 6, round 3: a folder reached through a link that points inside the worktree was removed where the link
+    // points, here a node_modules holding a tracked file and a change nobody committed.
+    it('never removes through a folder that became a link to another folder of the worktree after git listed it', async () => {
+      await mkdir(join(repo, 'src', 'node_modules'), { recursive: true })
+      await writeFile(join(repo, 'src', 'node_modules', 'fixture.js'), 'committed\n')
+      await git(repo, 'add', '-f', 'src/node_modules/fixture.js')
+      await git(repo, 'commit', '--quiet', '-m', 'a tracked fixture in a node_modules')
+      const tree = await add('inside', 'harness/inside')
+      await put(tree, 'vendor/node_modules/pkg/index.js')
+      await writeFile(join(tree, 'src', 'node_modules', 'fixture.js'), 'committed\nmy change, not committed\n')
+      const changed = new Date(Date.now() - 30 * DAY)
+      await utimes(join(tree, 'src', 'node_modules', 'fixture.js'), changed, changed)
+      const folder = join(tree, 'vendor', 'node_modules')
+      looked.at = async (file) => {
+        if (file !== folder) return
+        looked.at = null
+        await rm(join(tree, 'vendor'), { recursive: true })
+        await symlink(join(tree, 'src'), join(tree, 'vendor'), 'junction')
+      }
+      try {
+        expect(await sweep({ inUse: [tree] })).toEqual(nothing)
+      } finally { looked.at = null }
+      expect(await readFile(join(tree, 'src', 'node_modules', 'fixture.js'), 'utf8')).toBe('committed\nmy change, not committed\n')
+    })
+
+    // The same review: Git for Windows takes only a symbolic link for a link, so it walks a junction as a folder and lists
+    // `web/node_modules/` through `web -> packages/web`. Elsewhere git lists a link as one entry, and this holds as it is.
+    it('never frees build output through a junction to another folder of the worktree', async () => {
+      await mkdir(join(repo, 'packages', 'web', 'node_modules'), { recursive: true })
+      await writeFile(join(repo, 'packages', 'web', 'node_modules', 'fixture.js'), 'committed\n')
+      await git(repo, 'add', '-f', 'packages/web/node_modules/fixture.js')
+      await git(repo, 'commit', '--quiet', '-m', 'a tracked fixture in a package\'s node_modules')
+      const tree = await add('junction-inside', 'harness/junction-inside')
+      await writeFile(join(tree, 'packages', 'web', 'node_modules', 'fixture.js'), 'committed\nmy change, not committed\n')
+      await put(tree, 'packages/web/node_modules/pkg/index.js')
+      await symlink(join(tree, 'packages', 'web'), join(tree, 'web'), 'junction')
+      expect((await sweep({ inUse: [tree] })).freed).toEqual([])
+      expect(await readFile(join(tree, 'packages', 'web', 'node_modules', 'fixture.js'), 'utf8')).toBe('committed\nmy change, not committed\n')
+    })
+
+    // Review of package 6, round 3: with core.ignorecase=false on a disk that ignores case, git reads `lib/node_modules/` on
+    // the disk as no folder of its index, whose file it spells `lib/Node_Modules/`, and lists it as ignored whole.
+    it.runIf(caseInsensitive)('keeps a build folder holding a file the index spells in other letters', async () => {
+      const tree = await add('spelled-index', 'harness/spelled-index')
+      await git(repo, 'config', 'core.ignorecase', 'false')
+      await put(tree, 'lib/node_modules/fixture.js')
+      await git(tree, 'add', '-f', 'lib/Node_Modules/fixture.js')
+      await git(tree, 'commit', '--quiet', '-m', 'a fixture, its folder spelled in other letters')
+      await writeFile(join(tree, 'lib', 'node_modules', 'fixture.js'), 'committed\nmy change, not committed\n')
+      expect(await git(tree, 'status', '--porcelain', '--ignored=matching')).toContain('!! lib/node_modules/')
+      expect((await sweep({ inUse: [tree] })).freed).toEqual([])
+      expect(await readFile(join(tree, 'lib', 'node_modules', 'fixture.js'), 'utf8')).toBe('committed\nmy change, not committed\n')
+    })
+
     it('never removes a build folder that became a link after git listed it, though it points inside the worktree', async () => {
       const tree = await add('relinked', 'harness/relinked')
       await put(tree, 'node_modules/pkg/index.js')
@@ -580,6 +642,23 @@ describe('sweeping unused worktrees', { timeout: 30_000 }, () => {
         expect(await sweep({ inUse: [tree] })).toEqual(nothing)
       } finally { looked.at = null }
       expect(await readFile(join(tree, 'src', 'app.ts'), 'utf8')).toBe('source')
+    })
+
+    // Review of package 6, round 3: a harness that starts while a big folder goes would install into it as it is emptied.
+    it('stops removing a folder within a few hundred entries once a harness starts there, and says so', async () => {
+      const tree = await add('started', 'harness/started')
+      await put(tree, 'web/.next/cache/page')
+      for (let at = 0; at < 20; at++) {
+        await mkdir(join(tree, 'node_modules', `pkg-${at}`), { recursive: true })
+        for (let file = 0; file < 100; file++) await writeFile(join(tree, 'node_modules', `pkg-${at}`, `file-${file}.js`), '')
+      }
+      const order = await readdir(join(tree, 'node_modules'))
+      // The harness starts once the first package went.
+      const busy = () => existsSync(join(tree, 'node_modules', order[0]!)) ? [] : [tree]
+      const swept = await sweep({ inUse: [tree], busy })
+      expect(swept).toEqual({ ...nothing, freed: [], failed: ['BUILD_OUTPUT_STOPPED'] })
+      expect((await readdir(join(tree, 'node_modules'))).length, 'what is left of node_modules').toBeGreaterThan(10)
+      expect(await exists(join(tree, 'web', '.next', 'cache', 'page')), 'nothing more is removed').toBe(true)
     })
 
     it.runIf(permissions)('leaves a build folder whole when a folder in it could not be emptied', async () => {
