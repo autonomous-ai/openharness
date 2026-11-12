@@ -490,9 +490,10 @@ class ProjectSidebar extends StatelessWidget {
   /// every one to reach a project).
   static const teamShown = 8;
 
-  /// Your Team's rows: every one when at most one more than [teamShown] would show, or once the reader opened them all;
-  /// else the [teamShown] that matter most (something new first, then on a task, then the rest; a pane not in the Swarm
-  /// yet last), each where it stands in the list, plus the open one, and "N more". Only the rows shown are built.
+  /// Your Team's rows, one list from A to Z, a pane not in the Swarm yet among its agents by the name it joins under (so it
+  /// keeps its place as it joins): every one when at most one more than [teamShown] would show, or once the reader opened
+  /// them all; else the [teamShown] that matter most (something new first, then on a task, then the rest), each where it
+  /// stands in the list, plus the open one, and "N more". Only the rows shown are built.
   List<Widget> _teamRows(SuperTabSnapshot snapshot, _SidebarReading reading) {
     final agents = reading.myAgents;
     final count = agents.length + reading.panes.length;
@@ -501,7 +502,30 @@ class ProjectSidebar extends StatelessWidget {
     Widget build(int i) => i < agents.length
         ? _agentRow(snapshot, agents[i].$1, agents[i].$2)
         : _paneRow(reading.panes[i - agents.length]);
-    final all = [for (var i = 0; i < count; i++) i];
+    // Both lists come from A to Z (superTabMyAgents, personalAgents): merged once, so a pane keeps its place as it joins.
+    final all = <int>[];
+    if (reading.panes.isEmpty) {
+      for (var i = 0; i < count; i++) {
+        all.add(i);
+      }
+    } else {
+      final agentNames = [
+        for (final (agent, _) in agents)
+          (agent.displayName ?? agent.name).toLowerCase(),
+      ];
+      final paneNames = [
+        for (final pane in reading.panes) pane.name.toLowerCase(),
+      ];
+      var a = 0, p = 0;
+      while (a < agents.length || p < paneNames.length) {
+        if (p == paneNames.length ||
+            (a < agents.length && agentNames[a].compareTo(paneNames[p]) <= 0)) {
+          all.add(a++);
+        } else {
+          all.add(agents.length + p++);
+        }
+      }
+    }
     if (count <= teamShown + 1) return [for (final i in all) build(i)];
     if (controller.agentsAllShown) {
       return [
@@ -510,18 +534,19 @@ class ProjectSidebar extends StatelessWidget {
       ];
     }
     int rank(int i) {
-      if (i >= agents.length) return 3;
+      if (i >= agents.length) return 2;
       final (agent, chat) = agents[i];
       if (unread(chat)) return 0;
       return agentStates?.taskOf(agent) != null ? 1 : 2;
     }
 
+    // Positions in the list, by what matters most, each rank in list order.
     final ranks = [for (final i in all) rank(i)];
-    final order = [...all]
-      ..sort((a, b) {
-        final byRank = ranks[a].compareTo(ranks[b]);
-        return byRank != 0 ? byRank : a.compareTo(b);
-      });
+    final order = [
+      for (var r = 0; r <= 2; r++)
+        for (var at = 0; at < all.length; at++)
+          if (ranks[at] == r) all[at],
+    ];
     final shown = {
       ...order.take(teamShown),
       for (var i = 0; i < agents.length; i++)

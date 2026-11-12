@@ -192,11 +192,13 @@ Future<void> showChoosePm(
                                     .firstOrNull
                                 case final pane?) {
                               try {
+                                // Under the name its row shows, as a click on the row joins it.
                                 final chat = await swarmAttachAgent(
                                   app!,
                                   c.tabId,
                                   pane.machineId,
                                   pane.agent,
+                                  name: pane.name,
                                 );
                                 agentId =
                                     c.snapshot
