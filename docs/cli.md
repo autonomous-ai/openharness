@@ -161,6 +161,27 @@ auto|ask|plan|full`, `--name`, `--new [name]` and `--json` are the rest. There i
 harness on another of your machines: `harness new claude --machine office --name check -- …`, then
 `harness wait --machine office check` and `harness show --machine office check`.
 
+`harness ps --machines` lists every machine of your account's own at once (never one shared with it), each under its
+name: every machine is asked together, each for 5 s, and one that does not answer is listed as `unreachable` with why,
+never left out. At most 32 other machines are asked; the rest are listed as `not_asked`. `--json` answers
+`{"machines": [{"machineId", "machine", "current", "state": "ok" | "unreachable" | "not_asked", "detail"?,
+"harnesses"?}]}`, each harness a row as `ps` gives it.
+
+`harness show <name> --work` says a harness's work as facts instead of its last turn: its branch, its pull request
+(number, state, title, address), the files and lines it changed and its checks. They are read on the machine that owns
+the harness with the requests its pull request label already asks (`git_pull_request`, then `git_pull_requests_status`),
+never by running git or gh here on another machine's folder. No pull request yet is `"pullRequest": "none"`; one its
+machine could not read is `"unavailable"`; a pull request whose files and checks could not be read (gh signed out
+there) is shown without them.
+
+`harness goal open <title>`, `harness goal done <id>` and `harness goal list` are Hachi's
+([design](design/2026-11-12-hachi.md), "Goals"): a goal in the person's own words (at most 80 characters), the
+harnesses started for it with `harness new … --goal <id>`, and its close, the one signal that it finished. The goals
+service (`services/goals.ts`, in the edge host) answers the Hachi harness alone, read from the pane the request comes
+from: any other caller exits 5 (`NOT_HACHI`), and so does `done` for a goal no harness was started for
+(`GOAL_EMPTY`); done twice is done once. They are kept in `<data>/hachi/goals.json`, mode 0600, never synced: at most
+50 open, a closed one pruned after 7 days.
+
 A cloud agent starts the same way: `harness new devin-cloud --machine office --repo acme/api -- <task>`.
 `--repo` takes `owner/name` or a GitHub address; Cursor Cloud needs one, Devin Cloud works without.
 `--acu-limit <n>` caps Devin Cloud's spend (5 when left out). `show` and `wait` read it from the cloud: its
@@ -243,6 +264,12 @@ link each time) and on a daemon too old to push. It reads with the requests `wai
 `agents_list` a look, the screen for a harness here that the daemon does not already say is working, and the last
 transcript page only when the harness changed. Nothing reports failing tests
 during a turn yet, so there is no event for them.
+
+`harness watch --mine` is one stream of those lines for every harness the caller started that is running, on every
+machine, as Hachi follows what it started inside a turn: each line also names its `machine` (`kid @office` in text).
+This machine's are followed by push and another machine's are looked at every 3 s, as for one harness; a machine that
+cannot be reached, or whose line drops, is said once on stderr and the rest are followed. It ends once every one has
+stopped (exit 4). Only an agent has harnesses of its own: anyone else is refused (exit 5).
 
 `harness whoami` says, for an agent, where it is and what it may do before it acts (`--json` gives the same as
 `context`); the top of an agent's `harness ps` begins with it, and `harness mcp` puts it in its instructions:
