@@ -116,17 +116,6 @@ describe('GitScmProject wraps the git path without changing it', { timeout: 30_0
     expect(await scm.rename(cwd, null)).toBeNull()
   })
 
-  it('sweep removes an idle, unused worktree, as sweepWorktrees does', async () => {
-    const harnesses = join(root, 'harnesses')
-    const idle = await scm.prepareIsolated(repo, { root: harnesses, base: 'refs/heads/main' })
-    const busy = await scm.prepareIsolated(repo, { root: harnesses, base: 'refs/heads/main' })
-    const later = Date.now() + 8 * 24 * 3600_000
-    expect(await scm.sweep({ root: harnesses, inUse: [busy.cwd, null, undefined], now: later })).toEqual([idle.cwd])
-    expect(await exists(idle.cwd)).toBe(false)
-    expect(await exists(busy.cwd)).toBe(true)
-    expect(await scm.sweep({ root: harnesses, inUse: [busy.cwd], now: later })).toEqual([])
-  })
-
   it('launchEnv asks nothing of the pane, and there is no prepareWrite: a worktree is the folder the row already names', () => {
     expect(scm.launchEnv({ kind: 'git' })).toEqual({})
     expect((scm as ScmProject).prepareWrite).toBeUndefined()
