@@ -122,6 +122,12 @@ Saves the harness's screen and stops it. Its conversation is kept: the person ca
 It is refused while the harness is working, unless --now. An agent may close only harnesses it started:
 closing another's exits 5.
 ${ON_MACHINE}`
+export const DELETE_USAGE = `Usage: harness delete <name> [--json]
+
+Stops the harness and erases its conversation and everything Harness keeps of it: its saved screen, recaps, search
+rows and task records. Its folder is kept. An engine's own store Harness cannot erase is kept, and the output says so.
+A closed harness can be deleted too. An agent may delete only harnesses it started: deleting another's exits 5.
+This computer only.`
 export const WHOAMI_USAGE = `Usage: harness whoami [--json]
 
 Who you are to Harness: which agent, on which machine, inside Harness or not; whether you may start harnesses now
@@ -1445,6 +1451,53 @@ export function closeCommand(argv: readonly string[], deps: ClientDeps = {}): Pr
       s.out(flags.has('--json')
         ? JSON.stringify({ name, id: t.frame.id, closed: true, ...(kept ? {} : { conversationKept: false }), effect, next: [], ...(open === null ? {} : { open }) })
         : [`${name} on ${t.machine}: closed. ${effect}`, open === null ? null : `Next: nothing; you have ${open} open of ${SPAWN_LIMITS.livePerHarness}.`].filter(Boolean).join('\n'))
+      return EXIT.ok
+    } finally { if (t?.remote) t.daemon.close(); o.daemon.close() }
+  })
+}
+
+// ── delete ─────────────────────────────────────────────────────────────────────────────────────────
+
+/** What an engine's own store kept, and why: the person deletes it with that engine. */
+type Kept = { what: string; reason: string }
+
+/** The deletion Harness already has (`agent_purge`, lib/purgeAgentService.ts), reviewed and then done, from a
+ *  terminal: the conversation and everything Harness kept of it, never the folder. This machine's daemon only: the
+ *  purge answers its owner alone. */
+export function deleteCommand(argv: readonly string[], deps: ClientDeps = {}): Promise<number> {
+  return run(DELETE_USAGE, deps, wantsJson, argv, async (s) => {
+    const { names, flags, machine } = words(argv, { '--json': 'flag' })
+    if (names.length !== 1) throw new UsageError(names.length ? 'Delete one harness at a time.' : 'Name the harness to delete.')
+    if (machine !== null) throw new UsageError('harness delete works on this computer only.')
+    // Stopped ones too: a closed harness's conversation is still there to delete.
+    const o = await opened(s, true)
+    let t: Target | null = null
+    try {
+      t = await target(s, o, names[0])
+      const name = t.frame.name ?? t.frame.id.slice(0, 8)
+      if (t.frame.location === 'cloud') throw new UsageError(`${name} runs in its maker's cloud: delete it there.`)
+      if (o.orphan) throw new AgentClientError('NOT_YOURS', ORPHAN, 'ORPHAN')
+      if (o.caller && o.caller.agentId === t.frame.id && t.machineId === o.where.machineId) {
+        throw new AgentClientError('NOT_YOURS', 'That is your own harness. The person deletes it.')
+      }
+      if (o.caller && !t.yours) throw new AgentClientError('NOT_YOURS', `You did not start ${name}, so you may not delete it. Only the person can.`)
+      const which = { agentId: t.frame.id, sessionId: t.frame.sessionId ?? null, createdAt: Date.parse(t.frame.createdAt ?? '') }
+      const failed = (reply: Record<string, unknown>) => {
+        if (reply.error) throw new AgentClientError(String(reply.error), typeof reply.detail === 'string' && reply.detail ? reply.detail : `Could not delete ${name}.`)
+      }
+      const review = await t.daemon.request('agent_purge', { ...which, mode: 'inspect' }, 60_000)
+      failed(review)
+      const reply = await t.daemon.request('agent_purge', {
+        ...which, mode: 'delete', reviewId: review.reviewId, choices: { sessionData: true, worktreeData: false },
+      }, 120_000)
+      failed(reply)
+      const kept = Array.isArray(reply.kept) ? reply.kept as Kept[] : []
+      if (flags.has('--json')) s.out(JSON.stringify({ name, id: t.frame.id, deleted: true, kept }))
+      else {
+        s.out(kept.length ? `${name} on ${t.machine}: deleted. Everything Harness kept of it is erased.`
+          : `${name} on ${t.machine}: deleted. Its conversation and everything Harness kept of it are erased.`)
+        for (const k of kept) s.out(k.reason)
+      }
       return EXIT.ok
     } finally { if (t?.remote) t.daemon.close(); o.daemon.close() }
   })
