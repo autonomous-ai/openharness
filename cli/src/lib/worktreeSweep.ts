@@ -16,12 +16,12 @@ import { upgradeOlderRuntimeIgnore } from './harnessRuntimeIgnore.js'
 const exec = promisify(execFile)
 
 /**
- * git as itself: none of the repository settings a parent process left in the environment, and none of the repository's own
- * that would run a program or hide work from the checks here. `core.fsmonitor` names a program git runs on a status, which
- * the daemon's other git never lets it (lib/gitProject.ts); a hook runs as a branch goes; and with
- * `status.showUntrackedFiles=no` a worktree holding new work read as clean, to `git status` and to `git worktree remove`,
- * which asks git the same, so it was removed, new work and all (review of the allocator's package 6, 12 November). A `-c`
- * reaches the git that git itself starts.
+ * git as itself: none of the repository settings a parent process left in the environment, and not the three repository
+ * settings below that ran a program or hid new files from the checks here (a filter driver its config names still runs on a
+ * status). `core.fsmonitor` names a program git runs on a status, which lib/gitProject.ts turns off too; a hook runs as a
+ * branch goes, which lib/worktreeDeletion.ts turns off too; and with `status.showUntrackedFiles=no` a worktree holding new
+ * files read as clean, to `git status` and to `git worktree remove`, which asks git the same, so it was removed, new files
+ * and all (review of the allocator's package 6, 12 November). A `-c` reaches the git that git itself starts.
  */
 export async function git(cwd: string, args: string[]): Promise<string> {
   const env = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' }

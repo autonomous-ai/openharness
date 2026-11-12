@@ -45,7 +45,7 @@ describe('removing one worktree Harness made, as the Swarm asks', { timeout: 30_
   // hooks, which the daemon's other git never runs (lib/gitProject.ts, lib/worktreeDeletion.ts); and with
   // `status.showUntrackedFiles=no` a worktree holding new work read as clean, and `git worktree remove` removed it, new work and
   // all (review of the allocator's package 6, 12 November).
-  it.runIf(process.platform !== 'win32')('runs no program the repository names, and keeps new work whatever its config says to show', async () => {
+  it.runIf(process.platform !== 'win32')('runs no fsmonitor program or hook the repository names, and keeps new files whatever status.showUntrackedFiles says', async () => {
     const clean = await add('clean', 'harness/clean')
     const fresh = await add('fresh', 'harness/fresh')
     await writeFile(join(fresh, 'new-work.md'), 'not added yet')
