@@ -256,16 +256,21 @@ export class GitHubTrain<T extends TrainPull> {
     // stays on its pull request's head. One that runs only when certain files change starts on the tip with the rest of CI. A
     // status only when every rider had it: anyone sets one (a person, a bot on a comment or a label), and one some riders lacked
     // says nothing of what CI runs (review of #4139).
-    const unreported = [...new Set(riders.flatMap(pull => pull.sources))]
-      .filter(source => (source.startsWith(APP) || riders.every(pull => pull.sources.includes(source))) && !checks.sources.includes(source))
-    if (unreported.length) {
+    const wanted = [...new Set(riders.flatMap(pull => pull.sources))]
+    const unreported = wanted.filter(source => (source.startsWith(APP) || riders.every(pull => pull.sources.includes(source))) && !checks.sources.includes(source))
+    // And nothing at all on the tip while a rider had anything waits too, as it did before: riders with no app, and no status in
+    // common, want nothing by name (review 2 of #4139).
+    if (unreported.length || (!checks.sources.length && wanted.length)) {
       if (this.deps.now() - train.openedAt <= TRAIN_WAIT_MS) return
-      await this.close(train, 'late', `its checks did not finish in 90 min; nothing came from ${unreported.slice(0, 3).join(', ')}`)
-      // Where none of its riders' apps came, CI is down or not running here: the next train waits again, as one whose checks
-      // never finish. Where one did, CI ran and these never came, as no train gets them: each rider that had one is told once at
-      // its head and sits out of trains until that changes, or every train would carry it and wait out its time, for good
-      // (review of #4139).
-      if (!riders.some(pull => pull.sources.some(source => source.startsWith(APP) && checks.sources.includes(source)))) return
+      await this.close(train, 'late', `its checks did not finish in 90 min; nothing came from ${(unreported.length ? unreported : wanted).slice(0, 3).join(', ')}`)
+      // CI ran on the tip when an app that ran its riders' checks came there or, where none of them had an app, a status every
+      // rider had. Not any source at all: in an Actions outage a CLA bot's status still comes on every tip (review 2 of #4139).
+      // Where CI ran, what never came is what no train gets: each rider that had it is told once at its head and sits out of
+      // trains until that changes, or every train would carry it and wait out its time, for good (review of #4139). Where CI did
+      // not, it is down or not running here: the next train waits again, as one whose checks never finish.
+      const apps = riders.some(pull => pull.sources.some(source => source.startsWith(APP)))
+      if (!riders.some(pull => pull.sources.some(source => (apps ? source.startsWith(APP) : riders.every(other => other.sources.includes(source)))
+        && checks.sources.includes(source)))) return
       for (const pull of riders) {
         const its = unreported.filter(source => pull.sources.includes(source))
         if (its.length) await this.host.unreported(pull, train.number, its)

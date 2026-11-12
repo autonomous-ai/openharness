@@ -988,8 +988,11 @@ describe('a train waits for its own checks, then lands or is closed', () => {
 // held still, and the train landed a combined change CI had never run.
 describe('a train lands only once CI has reported on its tip', () => {
   const CI = [{ name: 'ci/required', status: 'completed', conclusion: 'success', app: ACTIONS }]
-  const status = (f: ReturnType<typeof setup>, head: string, context: string) =>
-    f.state.statuses.set(head, [...f.state.statuses.get(head) ?? [], { context, state: 'success' }])
+  /** A green status of [context] on [head], once, as a tool sets it. */
+  const status = (f: ReturnType<typeof setup>, head: string, context: string) => {
+    const now = f.state.statuses.get(head) ?? []
+    if (!now.some(each => each.context === context)) f.state.statuses.set(head, [...now, { context, state: 'success' }])
+  }
   /** Pip's pull requests, each green on its own head with the check runs [runs] gives it, carried on a train on whose tip Actions
    *  has made no run yet. Its tip. */
   const ride = async (f: ReturnType<typeof setup>, runs: Record<number, Json[]>): Promise<string> => {
@@ -1076,12 +1079,13 @@ describe('a train lands only once CI has reported on its tip', () => {
 
   // Review of #4139. Every train carries every ready pull request, so one whose head had what no train gets held every train out
   // of time, for good: over a day of passes 16 trains, none landed, 126 writes and 16 runs of CI, and nobody told.
-  const day = async (f: ReturnType<typeof setup>) => {
-    // Passes 30 seconds apart, CI green on each train's tip once it is built, the daemon restarting at noon.
+  /** Passes 30 seconds apart for a day, the daemon restarting at noon. [tip] puts on an open train's tip what CI and other tools
+   *  have made there [at] that time of the day: CI green, as soon as it is built, unless a test says otherwise. */
+  const day = async (f: ReturnType<typeof setup>, tip: (head: string, at: number) => void = head => f.state.runs.set(head, CI)) => {
     for (let pass = 0; pass < 2_880; pass++) {
       if (pass === 1_440) f.restart()
       const open = f.train()
-      if (open) f.state.runs.set(open.head.sha, CI)
+      if (open) tip(open.head.sha, pass * 30_000)
       await f.tick()
     }
   }
@@ -1126,6 +1130,111 @@ describe('a train lands only once CI has reported on its tip', () => {
     await f.settle()
     expect(f.writes(built)).toEqual(['PATCH /pulls/900', `DELETE /git/refs/heads/${branch}`])
     expect(f.trains()[0]).toMatchObject({ state: 'closed', title: 'Train, rider changed: #4 #5' })
+  })
+
+  // Review 2 of #4139. As on main, a tip with nothing at all waits where a rider had anything, though its riders had nothing in
+  // common to wait for: #5's one check is a status #4 does not have.
+  it('waits while its tip has nothing at all where a rider had a check, though its riders had none in common', async () => {
+    const f = setup()
+    for (const number of [4, 5]) f.state.runs.set(f.add(number).head.sha, [])
+    status(f, f.state.pulls.get(5)!.head.sha, 'ci/external')
+    await f.settle()
+    f.state.runs.set(f.train().head.sha, [])
+    for (let pass = 0; pass < 10; pass++) await f.tick(10 * 60_000)
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual([])
+    expect(f.trains()[0]).toMatchObject({ state: 'closed', title: 'Train, out of time: #4 #5' })
+    expect(f.logged()).toContainEqual('[super-tab] train acme/app#900 closed: its checks did not finish in 90 min; nothing came from status ci/external')
+    // Nothing came at all: no sign CI ran, so nobody is told.
+    expect([...f.said(4), ...f.said(5)]).toEqual([])
+    await f.tick()
+    const tip = f.train().head.sha
+    f.state.runs.set(tip, [])
+    status(f, tip, 'ci/external')
+    await f.settle()
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual(['PUT /pulls/901/merge'])
+  })
+
+  // Review 2 of #4139. In an Actions outage the CLA bot still posts on every tip: no sign CI ran, so nobody is set aside.
+  it('lands every rider after an Actions outage, with a CLA status on every rider and every tip, and tells nobody', async () => {
+    const f = setup()
+    for (const number of [4, 5, 6]) {
+      const head = f.add(number).head.sha
+      f.state.runs.set(head, CI)
+      status(f, head, 'license/cla')
+    }
+    // Actions makes no run for the day's first three hours.
+    await day(f, (head, at) => { f.state.runs.set(head, at < 3 * 3_600_000 ? [] : CI); status(f, head, 'license/cla') })
+    expect(merged(f)).toEqual([4, 5, 6])
+    expect([4, 5, 6].flatMap(number => f.said(number)).filter(said => said.includes('not merged yet'))).toEqual([])
+    expect(f.trains().map(train => train.title)).toEqual(['Train, out of time: #4 #5 #6', 'Train: #4 #5 #6'])
+    expect(f.state.sent).toHaveLength(19)
+  }, 60_000)
+
+  // Review 2 of #4139. CI that reports by status, and a CLA bot that posts on every rider and never on a train. No rider had an
+  // app, so CI's status on the tip is the sign CI ran: each rider is told once, and no train waits out its time again.
+  it('tells each rider once and builds no more, where CI reports by status and every rider had one no train gets', async () => {
+    const f = setup()
+    const heads = [4, 5, 6].map(number => {
+      const head = f.add(number).head.sha
+      f.state.runs.set(head, [])
+      status(f, head, 'ci/external')
+      status(f, head, 'license/cla')
+      return head
+    })
+    await day(f, head => { f.state.runs.set(head, []); status(f, head, 'ci/external') })
+    expect(merged(f)).toEqual([])
+    expect(f.trains()).toHaveLength(1)
+    for (const [at, number] of [4, 5, 6].entries()) {
+      expect(f.said(number)).toEqual([expect.stringContaining(`not merged yet at ${heads[at]!.slice(0, 7)}: its train never got status license/cla, which this head has`)])
+    }
+    // The train, closed out of time, and one note to each rider.
+    expect(f.state.sent).toHaveLength(11)
+  }, 60_000)
+
+  // Review 2 of #4139. The note is all that keeps a rider out of trains: one GitHub did not take is not taken as said, and is said
+  // again when the next train waits out its time on that rider.
+  it('says its note again when GitHub did not take it, and the rider sits out once GitHub has', async () => {
+    const f = setup()
+    for (const number of [4, 5, 6]) f.state.runs.set(f.add(number).head.sha, CI)
+    f.state.runs.set(f.state.pulls.get(5)!.head.sha, [...CI, { name: 'fork', status: 'completed', conclusion: 'success', app: { slug: 'fork-checker' } }])
+    let refused = 0
+    f.state.answer = (method, path) => method === 'POST' && path === '/issues/5/comments' && refused++ === 0 ? { status: 403 } : undefined
+    await day(f)
+    expect(merged(f)).toEqual([4, 6])
+    expect(f.carried()).toEqual([[4, 5, 6], [4, 5, 6], [4, 6]])
+    expect(f.said(5)).toHaveLength(1)
+    expect(f.state.sent).toHaveLength(27)
+  }, 60_000)
+
+  // Any other note is said each time it applies (here at each train built), so one GitHub refused is not tried again.
+  it('tries a refused note of another kind no more: a member\'s conflict is said once for its head, taken or not', async () => {
+    const f = setup()
+    f.add(4); const b = f.add(5); f.add(6)
+    f.state.conflicts.add(b.head.sha)
+    f.state.answer = (method, path) => method === 'POST' && path === '/issues/5/comments' ? { status: 403 } : undefined
+    await f.settle()
+    await f.ends(PASSED)
+    await f.tick()
+    expect(f.writes().filter(write => write === 'POST /issues/5/comments')).toHaveLength(1)
+  })
+
+  // Review 2 of #4139. Where no rider had an app, only a status every rider had is a sign CI ran: one some riders had (a bot's,
+  // on a label) can come on a tip whether CI runs or not.
+  it('tells nobody where no rider had an app and only a status some riders had came on its tip', async () => {
+    const f = setup()
+    for (const number of [4, 5]) {
+      const head = f.add(number).head.sha
+      f.state.runs.set(head, [])
+      status(f, head, 'ci/external')
+    }
+    status(f, f.state.pulls.get(4)!.head.sha, 'qa/approved')
+    await f.settle()
+    const tip = f.train().head.sha
+    f.state.runs.set(tip, [])
+    status(f, tip, 'qa/approved')
+    for (let pass = 0; pass < 10; pass++) await f.tick(10 * 60_000)
+    expect(f.trains()[0]).toMatchObject({ state: 'closed', title: 'Train, out of time: #4 #5' })
+    expect([...f.said(4), ...f.said(5)]).toEqual([])
   })
 })
 

@@ -927,7 +927,11 @@ export class GitHubMerge {
     const key = `${repo}#${number} ${kind} ${head}`
     if (this.told.has(key)) return
     if (!this.said(comments, head, kind)) {
-      await this.comment(repo, number, `${SELF}, ${this.clock()}${author ? `, to **${author}**` : ''}: ${noteStart(head, NOTES[kind])}${rest}`)
+      const taken = await this.comment(repo, number, `${SELF}, ${this.clock()}${author ? `, to **${author}**` : ''}: ${noteStart(head, NOTES[kind])}${rest}`)
+      // The note that sits a pull request out of trains is all that keeps it out (mergeReady): one GitHub did not take is not taken
+      // as said, and is said again when a train next waits out its time on that pull request, every 90 minutes at most (review 2
+      // of #4139). Any other note is said each pass it applies, so a refused one is not tried again.
+      if (!taken && kind === 'unreported') return
     }
     // Once GitHub has answered: a comment that never reached it (the pass failed, and is tried again) is not told.
     this.told.add(key)
@@ -940,9 +944,11 @@ export class GitHubMerge {
     return comments.some(c => TEAM.has(c.author_association) && starts.some(start => String(c.body ?? '').slice(0, 500).includes(start)))
   }
 
-  private async comment(repo: string, number: number, body: string): Promise<void> {
+  /** Posts [body] on [number]; whether GitHub took it. */
+  private async comment(repo: string, number: number, body: string): Promise<boolean> {
     const reply = await this.deps.send('POST', `/repos/${repo}/issues/${number}/comments`, { body })
     if (reply.status !== 201) this.note('COMMENT_FAILED', `${repo}#${number}: GitHub answered ${reply.status}`)
+    return reply.status === 201
   }
 
   private clock(): string {
