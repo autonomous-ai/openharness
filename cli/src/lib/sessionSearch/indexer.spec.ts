@@ -1,4 +1,4 @@
-import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { LiveEvent } from '../normalize.js'
 import { SessionSearchIndex, folderWords, type SearchSource, type SessionSearchIndexOptions } from './indexer.js'
 import { SessionSearchStore } from './store.js'
+import { builtinSqlite } from '../sqliteBuiltin.js'
 
 const dirs: string[] = []
 const cleanups: Array<() => void> = []
@@ -493,6 +494,7 @@ describe('SessionSearchIndex forgetting', () => {
   let sources: SearchSource[]
   let discover: () => Promise<void>
   let options: Omit<SessionSearchIndexOptions, 'store'>
+  let logs: string[]
   const drained = (target: SessionSearchIndex) => vi.waitFor(() => {
     const state = target as unknown as { discovering: boolean; running: boolean }
     expect(state.discovering || state.running).toBe(false)
@@ -509,7 +511,8 @@ describe('SessionSearchIndex forgetting', () => {
     path = join(dir, 'index.db')
     sources = [source('a1', 's1'), source('a2', 's2'), source('', 'e1'), source('', 'e2')]
     discover = async () => {}
-    options = { sources: () => sources, agents: () => ['a1', 'a2'], discover: () => discover() }
+    logs = []
+    options = { sources: () => sources, agents: () => ['a1', 'a2'], discover: () => discover(), log: (line) => logs.push(line) }
     store = SessionSearchStore.open(path)!
     store.writeSession({ sessionId: 's0', agentId: 'a1', engine: 'claude', path: '', header: 's0 work', size: 0, mtime: 0,
       resumeOffset: 0, resumeTurn: 0, lastAt: 1, turns: 0 }, 0, [])
@@ -544,6 +547,24 @@ describe('SessionSearchIndex forgetting', () => {
     discover = async () => {}
     index.sweep(); await drained(index)
     expect(store.excluded().has('s1')).toBe(false)
+  })
+
+  // `harness search` reads the file while the daemon runs: a read open across the delete keeps the checkpoint from
+  // finishing, and the erased words stay in the files until one does.
+  it('a checkpoint a reader held is said, and finished at the next sweep', async () => {
+    store.writeSession({ sessionId: 's9', agentId: 'a1', engine: 'claude', path: '', header: 's9 work', size: 0, mtime: 0,
+      resumeOffset: 0, resumeTurn: 0, lastAt: 1, turns: 1 }, 0, [{ turn: 0, offset: 0, at: null, ask: 'email zanzibarquokka', answer: 'sent', tools: '' }])
+    store.checkpoint()
+    const reader = new (builtinSqlite()!)(path, { readOnly: true })
+    reader.exec('BEGIN')
+    reader.prepare('SELECT count(*) FROM turns').all()
+    index.deleteHistory('s1')
+    expect(logs).toContain('[search] a reader held the index: what a delete erased stays in its files until the next sweep')
+    reader.exec('COMMIT')
+    reader.close()
+    index.sweep(); await drained(index)
+    const bytes = Buffer.concat(['', '-wal'].filter((suffix) => existsSync(path + suffix)).map((suffix) => readFileSync(path + suffix)))
+    expect(bytes.includes('zanzibarquokka')).toBe(false)
   })
 
   it('a pass still reading a deleted conversation does not write it back, though a sweep meanwhile found it gone', async () => {
