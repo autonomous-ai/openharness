@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { MARK_CLOSE, MARK_OPEN, SessionSearchStore, makeSnippet, queryTerms, wordFamily, type IndexedSession } from './store.js'
 import type { IndexedTurn } from './turns.js'
@@ -350,8 +350,23 @@ describe('SessionSearchStore forgetting', () => {
     store.checkpoint()
     store.removeSession('gone')
     store.checkpoint()
-    const bytes = Buffer.concat(['', '-wal'].filter((suffix) => existsSync(path + suffix)).map((suffix) => readFileSync(path + suffix)))
+    const bytes = Buffer.concat(['', '-wal', '-shm'].filter((suffix) => existsSync(path + suffix)).map((suffix) => readFileSync(path + suffix)))
     for (const word of ['zanzibarquokka', 'quokkazanzibar', 'dentist']) expect(bytes.includes(word), word).toBe(false)
+  })
+
+  it('merges the index at a checkpoint only after a delete removed something: a merge rewrites the whole index', () => {
+    const { store } = onDisk()
+    const exec = vi.spyOn((store as unknown as { db: { exec(sql: string): void } }).db, 'exec')
+    const merges = () => exec.mock.calls.filter(([sql]) => sql.includes("'optimize'")).length
+    store.writeSession(session('s', 'S', NOW, 'a1'), 0, [turn(0, 'alpha')])
+    store.checkpoint()
+    store.removeSession('never-indexed')
+    store.checkpoint()
+    expect(merges()).toBe(0)
+    store.removeSession('s')
+    store.checkpoint()
+    store.checkpoint()
+    expect(merges()).toBe(1)
   })
 
   it("lists an agent's sessions by its id, and none for a conversation Harness did not start", () => {
