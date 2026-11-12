@@ -17,7 +17,7 @@ import { sqliteReadAll } from '../../lib/sqliteRead.js'
 
 export const HERMES_PROCESSES_MAX_BYTES = 1 << 20
 export const HERMES_PROCESSES_MAX_ENTRIES = 1_024
-export const HERMES_ANCESTORS_MAX = 32
+const HERMES_ANCESTORS_MAX = 32
 
 /**
  * The session and the ones it was compressed from: Hermes carries a compressed conversation on under a new id whose
