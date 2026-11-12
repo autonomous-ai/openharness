@@ -64,6 +64,13 @@ function ownVerdict(line: string): { verdict: 'READ-OK' | 'HOLD'; sha: string } 
   return null
 }
 
+/** A comment's first line with words: where its verdict is read. */
+const firstLine = (comment: Json): string => String(comment.body ?? '').split('\n').find(line => line.trim()) ?? ''
+
+/** The verdict a comment of the team's gives as its own (ownVerdict), or null: for what counts verdicts by their time and not
+ *  by their reader, the day's scoreboard (scoreboard.ts). */
+export const verdictOf = (comment: Json): 'READ-OK' | 'HOLD' | null => TEAM.has(comment.author_association) ? ownVerdict(firstLine(comment))?.verdict ?? null : null
+
 /** A pull request's comments and its reviews' bodies, as one list in time order. A review's body reads exactly as a comment's
  *  (lampOS #5212: El posted its reads as reviews, and four pull requests each counted one read short), its state (APPROVED,
  *  CHANGES_REQUESTED, ...) is never a read, and a review with no words, not submitted or dismissed counts for nothing
@@ -88,6 +95,12 @@ const NOTES = { unsigned: 'the READ-OK from ', held: 'the HOLD from ', checks: '
   blocked: 'GitHub\'s rules for ', stacked: 'it carries open ', red: 'its train failed: ' } as const
 type NoteKind = keyof typeof NOTES
 const noteStart = (head: string, kind: NoteKind): string => `not merged yet at ${head.slice(0, 7)}: ${NOTES[kind]}`
+/** Which of these notes a comment of the team's is, on whatever head, or null: the day's scoreboard counts the pull requests
+ *  told they were behind or in conflict (scoreboard.ts). Read where `said` reads one: in its first 500 characters. */
+export function noteOf(comment: Json): NoteKind | null {
+  const rest = TEAM.has(comment.author_association) ? /not merged yet at [0-9a-f]{7}: (.*)/s.exec(String(comment.body ?? '').slice(0, 500))?.[1] : undefined
+  return rest === undefined ? null : (Object.keys(NOTES) as NoteKind[]).find(kind => rest.startsWith(NOTES[kind])) ?? null
+}
 /** How long after a head is first seen its checks may count as passed, and then only when two looks in a row read them the same:
  *  lampOS's merge-when-green.sh waits for "the same in two looks 30 s apart, from 3 min on". A head just pushed has no checks
  *  yet, which read as all passed, and a job that needs another gets its check only when that one ends. */
@@ -106,6 +119,9 @@ const RECORD_AGAIN_MS = 10 * 60_000
 interface Ready extends TrainPull { author: string; comments: Json[] }
 /** The label a person puts on a pull request to keep Harness from landing it (AGENTS.md). */
 const HOLD_LABEL = 'hold'
+/** Whether a person put [pull] on hold: the label in any case, as GitHub keeps one label whatever its case. The merger merges
+ *  none, the assigner asks no reader for one, and its builder is typed nothing of it (nextThing.ts). */
+export const isHeld = (pull: Json): boolean => (Array.isArray(pull.labels) ? pull.labels.map(object) : []).some(label => String(label.name).toLowerCase() === HOLD_LABEL)
 
 /** A project whose PM runs on this computer as its person: the merger merges its repository's pull requests, and the
  *  assigner gives its tasks (githubAssign.ts). Its Swarm, its PM and the project, to read its crew as the PM. */
@@ -117,6 +133,13 @@ export const recordedAuthors = (ask: (path: string) => Promise<unknown>) => asyn
   const answer = object(await ask(`/api/super-tabs/${project.tabId}/github-comments?repository=${encodeURIComponent(project.repo)}`
     + `&ids=${ids.map(encodeURIComponent).join(',')}&asAgentId=${project.pmAgentId}`))
   return Object.fromEntries(Object.entries(object(answer.authors)).map(([id, author]) => [id, { name: String(object(author).name ?? '') }]))
+}
+
+/** Whether [project]'s PM runs on this computer: the session of its roster row's agent is registered here ([running], by its
+ *  harness id). A project is led here while its PM is stopped too (ledProjects). */
+export function pmRunsHere(roster: Json[], project: LedProject, running: (harnessId: string) => boolean): boolean {
+  const agent = roster.map(row => object(row.agent)).find(agent => agent.id === project.pmAgentId)
+  return typeof agent?.harnessId === 'string' && running(agent.harnessId)
 }
 
 /** The projects whose PM is one of this computer's person's agents running here, from the host's roster and the PM's read. */
@@ -160,7 +183,7 @@ export function verdicts(comments: Json[], body: string, people: PullPeople):
   const team = new Set([...people.team].map(label => sameKey(label.replace(/^builder:/i, ''))))
   for (const comment of comments) {
     if (!TEAM.has(comment.author_association)) continue
-    const first = String(comment.body ?? '').split('\n').find(line => line.trim()) ?? ''
+    const first = firstLine(comment)
     if (/\bTWO READS\b/.test(first)) twoReads = true
     const found = ownVerdict(first)
     if (!found) continue
@@ -244,7 +267,7 @@ export class VerdictRecords {
     // A comment changed since it was written is not the words its record was made for (the command never edits): typed by hand.
     const asWritten = (comment: Json) => comment.updated_at === undefined || comment.updated_at === comment.created_at
     const given = comments.filter(comment => Number.isSafeInteger(comment.id) && comment.review !== true && asWritten(comment)
-      && ownVerdict(String(comment.body ?? '').split('\n').find(line => line.trim()) ?? ''))
+      && ownVerdict(firstLine(comment)))
     const unknown = given.filter(comment => this.now() - (this.recorded.get(key(comment))?.at ?? -Infinity) >= RECORD_AGAIN_MS)
     for (let from = 0; from < unknown.length && this.now() >= (this.down.get(project.repo)?.againAt ?? 0); from += AUTHORS_PAGE) {
       const page = unknown.slice(from, from + AUTHORS_PAGE)
@@ -489,6 +512,8 @@ export const authorOf = (pull: Json): string | null => writersOf(pull)[0] ?? nul
 export function checksOf(runs: Json[], status: Json): { state: 'passed' | 'running' | 'failed'; failed: string[]; summary: string } {
   const failed: string[] = [], seen: string[] = []
   let running = false
+  // GitHub lists each check's latest run (check-runs' filter=latest): two of one name are two checks, two workflows' jobs, and
+  // either failing fails the head (code review of #4060).
   for (const run of runs) {
     seen.push(`${String(run.name ?? '')}:${String(run.status ?? '')}:${String(run.conclusion ?? '')}`)
     if (run.status !== 'completed') { running = true; continue }
@@ -501,7 +526,48 @@ export function checksOf(runs: Json[], status: Json): { state: 'passed' | 'runni
     if (each.state === 'pending') running = true
     else if (each.state !== 'success') failed.push(String(each.context ?? 'a status'))
   }
-  return { state: failed.length ? 'failed' : running ? 'running' : 'passed', failed, summary: seen.sort().join('|') }
+  // Each named once: a workflow's check run and the status it sets share a name (#4055: "ci/required, process-checks, ci/required").
+  return { state: failed.length ? 'failed' : running ? 'running' : 'passed', failed: [...new Set(failed)], summary: seen.sort().join('|') }
+}
+
+/** [head]'s checks as [reads] has them: its check runs and its combined status (checksOf). */
+export async function headChecks(reads: GitHubReads, repo: string, head: string): Promise<ReturnType<typeof checksOf>> {
+  const runs = object(await reads.one(repo, `/repos/${repo}/commits/${head}/check-runs?per_page=${PAGE}`)).check_runs
+  return checksOf(Array.isArray(runs) ? runs.map(object) : [], await reads.one(repo, `/repos/${repo}/commits/${head}/status`))
+}
+
+/** How long a head found failing its checks is taken as failing without reading them again, and the most heads kept so. */
+const FAILING_KEPT_MS = 10 * 60_000, FAILING_MAX = 500
+
+/** The heads found failing their checks (headChecks), each taken as failing for [FAILING_KEPT_MS] without reading them again: only
+ *  a check run again changes one, and each pass, or each turn's end, would read it again meanwhile. */
+export class FailingHeads {
+  private readonly at = new Map<string, number>()
+  private readonly said = new Set<string>()
+
+  constructor(private readonly reads: GitHubReads, private readonly now: () => number, private readonly log: (line: string) => void) {}
+
+  /** Whether [head]'s checks failed. Checks this login cannot read hold nothing back, as before Harness read them to ask for a read
+   *  or type one: the merger reads them again before it merges. A stop for every repository (GitHub limiting this computer, its gh
+   *  signed out, GitHub down) stops the pass that asked, as any read's. */
+  async failing(repo: string, head: string): Promise<boolean> {
+    const key = `${repo}@${head}`, at = this.at.get(key)
+    if (at !== undefined && this.now() - at < FAILING_KEPT_MS) return true
+    let failed: boolean
+    try {
+      failed = (await headChecks(this.reads, repo, head)).state === 'failed'
+    } catch (error) {
+      if (!(error instanceof GitHubStop) || error.everywhere) throw error
+      const line = `[super-tab] CHECKS_UNREAD ${repo}: ${error.code}`
+      if (!this.said.has(line)) { this.said.add(line); this.log(line) }
+      return false
+    }
+    this.at.delete(key)
+    if (failed) this.at.set(key, this.now())
+    // The one found longest ago goes first.
+    if (this.at.size > FAILING_MAX) this.at.delete(this.at.keys().next().value!)
+    return failed
+  }
 }
 
 export class GitHubMerge {
@@ -520,6 +586,8 @@ export class GitHubMerge {
   /** What commits change (sameChange). */
   private readonly patches = new Map<string, unknown>()
   private projects: { at: number; list: LedProject[] } | null = null
+  /** What GitHub names each project's repository now, as its last pass read it: a renamed one's reads are kept under both. */
+  private readonly named = new Map<string, string>()
   private offUntil = 0
   private logged = ''
   private readonly now: () => number
@@ -564,6 +632,9 @@ export class GitHubMerge {
         if (this.waits.held(project.repo, this.now())) { held = true; continue }
         try { await this.mergeReady(project); this.waits.ok(project.repo) } catch (error) {
           this.reads.forget(project.repo)
+          // And what the train read under the name GitHub has for it now, for a repository renamed since its project was made.
+          const now = this.named.get(project.repo)
+          if (now) this.reads.forget(now)
           if (error instanceof GitHubStop && error.everywhere) throw error
           held = true
           // This repository waits, 30 seconds and doubling to 15 minutes (longer if GitHub says so).
@@ -583,7 +654,11 @@ export class GitHubMerge {
 
   private async mergeReady(project: LedProject): Promise<void> {
     const { repo } = project
-    const base = String((await this.reads.one(repo, `/repos/${repo}`)).default_branch ?? '')
+    // GitHub answers a repository renamed since its project was made under its new name: a pull request's own branch is in
+    // that one, and compared with the project's name every one read as a fork and no train as one (code review of #4056).
+    const about = await this.reads.one(repo, `/repos/${repo}`)
+    const base = String(about.default_branch ?? ''), current = String(about.full_name ?? repo).toLowerCase()
+    this.named.set(repo, current)
     // Every open pull request, drafts too, for what one may carry of another's (carriedPull); the ones that may merge.
     const listed = await this.reads.current(repo, openPullsPath(repo), PULL_PAGES)
     const pulls = listed.filter(pull => pull.draft !== true && object(pull.base).ref === base)
@@ -593,7 +668,7 @@ export class GitHubMerge {
     const open = new Set<string>()
     const conflicts = (pull: { number: number; head: string; author: string; comments: Json[] }) =>
       this.tellOnce(repo, pull.number, pull.head, pull.author, 'dirty', `${base}: rebase it on ${base} and push.`, pull.comments)
-    const train = new GitHubTrain<Ready>({ reads: this.reads, send: this.deps.send, now: this.now, log: this.log }, repo, base, listed, {
+    const train = new GitHubTrain<Ready>({ reads: this.reads, send: this.deps.send, now: this.now, log: this.log }, current, base, listed, {
       checks: (number, head) => this.checks(repo, this.see(open, `${repo}#${number}@${head}`), head),
       login: () => this.login(repo),
       conflicts,
@@ -612,7 +687,7 @@ export class GitHubMerge {
       const author = authorOf(pull)
       // The team's own pull requests only (assign/crew.ts teamOf): a person's merges as that person's repository does it.
       if (author === null || !team.has(labelOf(author))) continue
-      if ((Array.isArray(pull.labels) ? pull.labels : []).some(label => object(label).name === HOLD_LABEL)) continue
+      if (isHeld(pull)) continue
       // Seen from now, whatever it waits for: a read that comes minutes after a push finds the head long settled.
       const at = this.see(open, `${repo}#${number}@${head}`)
       // Only a READ-OK made by command is a read: while the records cannot be read, nothing merges (said once, VerdictRecords).
@@ -668,7 +743,7 @@ export class GitHubMerge {
       // GitHub lists a red train only among the hundred pull requests closed last (githubTrain.ts landed).
       if (this.said(comments, head, 'red')) continue
       ready.push({ number, head, title: String(pull.title ?? ''), body: String(pull.body ?? ''), readers: [...reads.values()].map(r => r.name),
-        fork: String(object(object(pull.head).repo).full_name ?? '').toLowerCase() !== repo.toLowerCase(), checked: !checks.none, author, comments })
+        fork: String(object(object(pull.head).repo).full_name ?? '').toLowerCase() !== current, checked: !checks.none, author, comments })
     }
     for (const pull of await train.carry(ready, waiting)) {
       // A fork GitHub took neither into a train nor on its own: tried again with the merger's waits, not every pass (each
@@ -683,8 +758,10 @@ export class GitHubMerge {
   /** Merges one pull request on its own, squashed at its head, as every ready one was before the train. */
   private async mergeAlone(repo: string, pull: Ready): Promise<boolean> {
     const merged = await this.deps.send('PUT', `/repos/${repo}/pulls/${pull.number}/merge`, { merge_method: 'squash', sha: pull.head })
-    // Merged, its head moved (409) or refused by GitHub (405): the repository is read again next pass.
+    // Merged, its head moved (409) or refused by GitHub (405): the repository is read again next pass, by either name.
     this.reads.forget(repo)
+    const now = this.named.get(repo)
+    if (now && now !== repo) this.reads.forget(now)
     if (merged.status !== 200) { this.note('MERGE_REFUSED', `${repo}#${pull.number}: GitHub answered ${merged.status}`); return false }
     const by = pull.readers.join(' and ')
     await this.comment(repo, pull.number, `${SELF}, ${this.clock()}: merged. READ-OK on ${pull.head.slice(0, 7)} by ${by}, checks green.`)
@@ -712,8 +789,7 @@ export class GitHubMerge {
   /** The checks of [head], seen as [at] (checksOf): passed only once they hold still (CHECKS_SETTLE_MS), and running until then.
    *  A pull request's and a train's alike. */
   private async checks(repo: string, at: string, head: string): Promise<{ state: 'passed' | 'running' | 'failed'; failed: string[]; none: boolean }> {
-    const runs = object(await this.reads.one(repo, `/repos/${repo}/commits/${head}/check-runs?per_page=${PAGE}`)).check_runs
-    const checks = checksOf(Array.isArray(runs) ? runs.map(object) : [], await this.reads.one(repo, `/repos/${repo}/commits/${head}/status`))
+    const checks = await headChecks(this.reads, repo, head)
     // No check and no status at all: a repository with no CI, or CI that has not started on this head.
     const none = checks.summary === ''
     if (checks.state !== 'passed') return { ...checks, none }

@@ -44,6 +44,37 @@ export class GitHubStop extends Error {
 
 /** GitHub's page size: a page shorter than this is the last. */
 export const PAGE = 100
+
+/** How long what GitHub names a repository now is kept, and how long that it did not say: a rename is rare, and every take,
+ *  read and cut asks; one that GitHub does not answer is not asked again at each. */
+export const NAME_KEPT_MS = 60 * 60_000, NAME_UNSAID_MS = 10 * 60_000
+
+/** The most repository names kept, the ones asked longest ago going first: any name a command is given is asked. */
+const NAMES_MAX = 200
+
+/** What GitHub names a repository now, lower case, asked with [get]: for one renamed since its project was made, GitHub answers
+ *  its old name with its new one. The name asked when GitHub does not say (it cannot be read now, or is not there), which is
+ *  logged once and asked again after [NAME_UNSAID_MS]; a name it says is kept [NAME_KEPT_MS]. A name being asked is asked once,
+ *  however many commands want it at that moment. */
+export function currentNames(get: GitHubGet, now: () => number = Date.now, log: (line: string) => void = line => console.warn(line)): (slug: string) => Promise<string> {
+  const known = new Map<string, { name: Promise<string>; at: number; said: boolean }>()
+  const ask = async (slug: string, before: boolean | undefined): Promise<{ name: string; said: boolean }> => {
+    const read = await get(`/repos/${slug}`, null).catch((error: unknown) => error instanceof Error ? error : new Error(String(error)))
+    const name = !(read instanceof Error) && read.status === 200 && typeof object(read.body).full_name === 'string' ? String(object(read.body).full_name).toLowerCase() : null
+    if (!name && before !== false) log(`[super-tab] GitHub did not say what ${slug} is called now: ${read instanceof Error ? read.message : `it answered ${read.status}`}`)
+    return { name: name ?? slug, said: !!name }
+  }
+  return slug => {
+    const kept = known.get(slug)
+    if (kept && now() - kept.at < (kept.said ? NAME_KEPT_MS : NAME_UNSAID_MS)) return kept.name
+    const entry = { name: Promise.resolve(slug), at: now(), said: true }
+    entry.name = ask(slug, kept?.said).then(answer => { entry.said = answer.said; entry.at = now(); return answer.name })
+    known.delete(slug)
+    known.set(slug, entry)
+    if (known.size > NAMES_MAX) known.delete(known.keys().next().value!)
+    return entry.name
+  }
+}
 const MAX_KEPT = 500
 /** How long to wait before asking again: gh missing or signed out, a repository this login cannot read, a rate limit. */
 const OFF_RETRY_MS = 5 * 60_000, UNREADABLE_RETRY_MS = 10 * 60_000, LIMIT_MAX_MS = 15 * 60_000
@@ -122,6 +153,12 @@ export class GitHubReads {
     return this.read(repo, path, false, false, true)
   }
 
+  /** Up to [maxPages] pages of a list as it is now, asked outright and not kept (fresh): the comments and files of closed pull
+   *  requests, read once a day (scoreboard.ts), which kept under their ETags would push out the ones every pass asks with. */
+  async freshPages(repo: string, path: string, maxPages: number): Promise<Json[]> {
+    return this.pages(repo, path, maxPages, false, true)
+  }
+
   /** A file of [repo]'s default branch as text, its last answer again on a 304. Null when it is not there: a missing file
    *  is an answer here, never a repository this login cannot read, and it is not asked again for [MISSING_MS]. */
   async file(repo: string, path: string): Promise<string | null> {
@@ -143,10 +180,10 @@ export class GitHubReads {
     for (const url of [...this.missing.keys()]) if (url.startsWith(`/repos/${repo}/`)) this.missing.delete(url)
   }
 
-  private async pages(repo: string, path: string, maxPages: number, keep: boolean): Promise<Json[]> {
+  private async pages(repo: string, path: string, maxPages: number, keep: boolean, once = false): Promise<Json[]> {
     const rows: Json[] = []
     for (let page = 1; page <= maxPages; page++) {
-      const body = await this.read(repo, page === 1 ? path : `${path}&page=${page}`, keep)
+      const body = await this.read(repo, page === 1 ? path : `${path}&page=${page}`, keep, false, once)
       if (body === null) return rows
       if (!Array.isArray(body)) throw new GitHubStop('GH_FAILED', 'GitHub answered something unreadable.', false, this.now())
       rows.push(...body.map(object))
@@ -172,6 +209,10 @@ export class GitHubReads {
     if (reply.status === 404 || reply.status === 403) throw new GitHubStop('UNREADABLE', `this computer's gh login cannot read ${repo}.`, false, this.now() + UNREADABLE_RETRY_MS)
     // GitHub failing on its own side stops every repository; any other answer is about this one (it still goes when it next can).
     if (reply.status !== 200) throw new GitHubStop('GH_FAILED', `GitHub answered ${reply.status}.`, reply.status >= 500, this.now())
+    // A 200 with no body is an answer cut off on its way (a list of a hundred files with their patches is 600 KB against the
+    // 10 s deadline). Read as empty, it counted as nothing with nothing said; kept under its ETag, a list of two issues read
+    // as none for three passes, until the list next changed (reviews of scoreboard.ts).
+    if (reply.body === null) throw new GitHubStop('GH_FAILED', 'GitHub\'s answer did not arrive whole.', false, this.now())
     if (reply.etag && !once) {
       this.kept.delete(url)
       this.kept.set(url, { etag: reply.etag, body: keep ? reply.body : null })

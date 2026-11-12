@@ -15,7 +15,7 @@ import 'package:harness/e2ee/envelope.dart';
 /// `ENCRYPTED_DOWN_TYPES` plus the harness-only extensions declared beside it. Both halves are read.
 void main() {
   String cli(String path) {
-    final file = File('../cli/src/$path');
+    final file = File(path);
     if (!file.existsSync()) {
       throw StateError(
         '${file.path} missing — run from desktop/ in the monorepo',
@@ -53,13 +53,13 @@ void main() {
 
   late Set<String> core, machineRequests, unwrapped;
   setUpAll(() {
-    core = namesIn(cli('lib/e2ee/core.ts'), 'ENCRYPTED_DOWN_TYPES');
-    final frames = cli('lib/e2ee/applicationFrames.ts');
-    final relay = cli('lib/relayFrames.ts');
+    core = namesIn(cli('../cli/src/lib/e2ee/core.ts'), 'ENCRYPTED_DOWN_TYPES');
+    final frames = cli('../cli/src/lib/e2ee/applicationFrames.ts');
+    final relay = cli('../cli/src/lib/relayFrames.ts');
     // `MACHINE_REQUESTS` also spreads ⌘K's route commands in; those are read where they are declared.
     machineRequests = {
       ...namesIn(frames, 'MACHINE_REQUESTS'),
-      ...namesIn(cli('lib/shellProtocol.ts'), 'SHELL_REQUESTS'),
+      ...namesIn(cli('../cli/src/lib/shellProtocol.ts'), 'SHELL_REQUESTS'),
       ...namesIn(relay, 'ROUTE_COMMAND_TYPES'),
     };
     unwrapped = {
@@ -68,12 +68,12 @@ void main() {
       ...namesIn(frames, 'FLEET_REQUESTS'),
       ...namesIn(relay, 'PAIR_REQUESTS'),
       plateRequest(relay),
-      ...namesIn(cli('sharing/protocol.ts'), 'SHARE_REQUEST_TYPES'),
+      ...namesIn(cli('../cli/src/sharing/protocol.ts'), 'SHARE_REQUEST_TYPES'),
       ...namesIn(
-        cli('messages/wire.ts'),
+        cli('../cli/src/messages/wire.ts'),
         'AGENT_MESSAGES_REQUEST_TYPES',
       ),
-      ...namesIn(cli('lib/viewerFrames.ts'), 'VIEWER_DOWN_TYPES'),
+      ...namesIn(cli('../cli/src/lib/viewerFrames.ts'), 'VIEWER_DOWN_TYPES'),
       ...namesIn(frames, 'AGENT_BROWSER_DOWN_TYPES'),
     };
   });
@@ -90,7 +90,7 @@ void main() {
   test('the rule read is the one the machine applies', () {
     // A new set joined to encryptDownFrame would go unread above: fail until
     // it is added there too.
-    final rule = cli('lib/e2ee/applicationFrames.ts');
+    final rule = cli('../cli/src/lib/e2ee/applicationFrames.ts');
     final from = rule.indexOf('export const encryptDownFrame');
     final body = rule.substring(from, rule.indexOf('\nexport ', from + 1));
     final named = RegExp(r'\b([A-Z][A-Z_]+)\b')

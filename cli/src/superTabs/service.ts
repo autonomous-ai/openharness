@@ -1,3 +1,4 @@
+import { unsigned } from './signature.js'
 import { readCapabilities } from './capacity.js'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
@@ -18,14 +19,15 @@ import { cardId, SwarmCards, type CardChat } from './cards.js'
 import { GitHubTokenRefresher, githubToken } from './github.js'
 import { FirstAnswers } from './firstAnswers.js'
 import { NextThing } from './nextThing.js'
-import { GitHubMentions, repositorySlug, watchedAgents } from './githubMentions.js'
+import { GitHubMentions, repositorySlug, watchedAgents, type WatchedAgent } from './githubMentions.js'
 import { ShippingReporter } from './shipping.js'
-import { GitHubStop, githubRest, type GitHubGet, type GitHubSend } from './githubRest.js'
+import { currentNames, GitHubStop, githubRest, type GitHubGet, type GitHubSend } from './githubRest.js'
+import { gatedWrites } from './githubWrites.js'
 import { claimAsked, takeTask } from './githubClaim.js'
 import { Cuts, sameCut, splitAsked, splitTask } from './githubSplit.js'
 import { postVerdict, verdictAsked } from './githubVerdict.js'
 import { GitHubAssign } from './githubAssign.js'
-import { GitHubMerge, ledProjects, recordedAuthors, VerdictRecords, type LedProject } from './githubMerge.js'
+import { GitHubMerge, ledProjects, pmRunsHere, recordedAuthors, VerdictRecords, type LedProject } from './githubMerge.js'
 import { numbersSender, PmNumbers } from './pmNumbers.js'
 import { crewOf, labelOf } from './assign/crew.js'
 
@@ -165,7 +167,10 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   }
   // GitHub as this computer's own gh login, for the news to its person's v4 agents and the merges of their PM's projects:
   // read and merged while the host runs (no host, no Swarm agents here to read or merge for).
-  const github = (options.github ?? githubRest)()
+  // Every write passes the gate: nothing of Harness's said twice in a day, and none past its hourly limits (githubWrites.ts).
+  const github = gatedWrites((options.github ?? githubRest)())
+  // What GitHub names a project's repository now: a take, a read or a cut may name it either way (githubVerdict.ts ProjectRepositories).
+  const currentName = currentNames(github.get)
   // The verdicts, claims and cuts being made by command now, by agent and what was asked: as many as there are commands running.
   const commands = new Map<string, Promise<unknown>>()
   // Each agent's cuts here, one after another and no more than an hour holds (githubSplit.ts Cuts).
@@ -179,14 +184,19 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     return login
   }).catch(error => { githubLogin = null; throw error })
   // GitHub for this computer's person's v4 agents (githubMentions.ts).
+  // As the agent, to itself only, in its chat with its person: as the host tells a skill notice (host.ts tellSkill).
+  const tellAgent = (api: CoreApi) => (agent: WatchedAgent, operationId: string, text: string) => backend(api, 'POST', `/api/super-tabs/${agent.tabId}/commands`,
+    { operationId, asAgentId: agent.agentId, command: { type: 'message.send', conversationId: agent.chat, replyTo: null, recipientIds: [agent.agentId], text, agentOnly: true } })
+  // In its chat, for its person to read and not typed to it: as the host posts an agent's first answer (firstAnswers.ts).
+  const sayToPerson = (api: CoreApi) => (agent: WatchedAgent, operationId: string, text: string) => backend(api, 'POST', `/api/super-tabs/${agent.tabId}/commands`,
+    { operationId, asAgentId: agent.agentId, command: { type: 'message.send', conversationId: agent.chat, replyTo: null, recipientIds: [], text } })
   const mentions = (options.githubMentions ?? ((api, held) => new GitHubMentions({
     watched: async () => watchedAgents({ me: (await api.account.identity().catch(() => null))?.accountId ?? null, live: id => !!api.agents.byAgent(id),
       roster: async () => (await held().feed.current(60_000)).roster, read: async (tabId, agentId) => (await held().reads.read(tabId, agentId)).state }),
     get: github.get,
     relay: (tabId, operationId, command) => backend(api, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId, command }),
-    // As the agent, to itself only, in its chat with its person: as the host tells a skill notice (host.ts tellSkill).
-    tell: (agent, operationId, text) => backend(api, 'POST', `/api/super-tabs/${agent.tabId}/commands`, { operationId, asAgentId: agent.agentId,
-      command: { type: 'message.send', conversationId: agent.chat, replyTo: null, recipientIds: [agent.agentId], text, agentOnly: true } }),
+    tell: tellAgent(api),
+    say: sayToPerson(api),
     file: join(api.dataDir, 'super-tab-github-news.json'),
   })))(core, sources)
   // The projects whose PM is this person's agent here, running or stopped, which the merger and the assigner work for. The
@@ -208,7 +218,8 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     // A project's numbers, sent as its PM into the Swarm as the PM reads it (pmNumbers.ts messageOf).
     const numbers = new PmNumbers({ file: join(api.dataDir, 'super-tab-numbers.json'),
       send: numbersSender(async project => (await held().reads.read(project.tabId, project.pmAgentId)).state, (path, body) => backend(api, 'POST', path, body)) })
-    return new GitHubAssign({ projects: led(api, held), crew: crewOfProject(held), get: github.get, send: github.send, records, numbers })
+    return new GitHubAssign({ projects: led(api, held), crew: crewOfProject(held), get: github.get, send: github.send, records, numbers,
+      pmRunning: async project => pmRunsHere((await held().feed.current(60_000)).roster, project, id => !!api.agents.byAgent(id)) })
   }))(core, sources)
   // What this computer's person's agents shipped, read from GitHub with their own gh and told to the leaderboard (shipping.ts).
   const shipping = (options.shipping ?? (api => new ShippingReporter(api)))(core)
@@ -241,11 +252,8 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     owed: (agent, repo) => mentions.owed(agent.agentId, repo),
     working: async id => { const now = (await api.agents.activity([id]))[id]; return now === 'working' ? true : now === 'idle' ? false : null },
     get: github.get, send: github.send,
-    tell: (agent, operationId, text) => backend(api, 'POST', `/api/super-tabs/${agent.tabId}/commands`, { operationId, asAgentId: agent.agentId,
-      command: { type: 'message.send', conversationId: agent.chat, replyTo: null, recipientIds: [agent.agentId], text, agentOnly: true } }),
-    // In its chat, for its person to read and not typed to it: as the host posts an agent's first answer (firstAnswers.ts).
-    say: (agent, operationId, text) => backend(api, 'POST', `/api/super-tabs/${agent.tabId}/commands`, { operationId, asAgentId: agent.agentId,
-      command: { type: 'message.send', conversationId: agent.chat, replyTo: null, recipientIds: [], text } }),
+    tell: tellAgent(api),
+    say: sayToPerson(api),
     file: join(api.dataDir, 'super-tab-next-things.json'),
     // Verdicts read as the merger reads them (githubMerge.ts verdicts): every agent of a person posts as that person's login, so a
     // signature names its reader only when it names one of the team, and only a READ-OK the backend recorded is a read.
@@ -481,17 +489,31 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
               : claim ? 'A task is taken with its person\'s own GitHub login, on that person\'s computer.'
               : 'A task is cut with its person\'s own GitHub login, on that person\'s computer.' }
           }
-          const repositories = new Set(list((await swarm()).state.projects).map(project => repositorySlug(object(project.repository).repositoryUrl)).filter(slug => slug !== null))
+          const slugs = list((await swarm()).state.projects).map(project => repositorySlug(object(project.repository).repositoryUrl)).filter(slug => slug !== null)
           const name = [agent.displayName, agent.name].find((given): given is string => typeof given === 'string' && !!given.trim()) ?? ''
+          // Each project's repository by its project's name and by what GitHub names it now, for one renamed since
+          // (githubVerdict.ts ProjectRepositories), and a name asked that is neither by what GitHub names it now (renamed twice).
+          // A project's own name is never another's; GitHub's answers are kept, so a command refused once it runs (a cut past its
+          // limit) asks GitHub again for none of them.
+          const asked = (verdict ?? claim ?? piece!).repository.toLowerCase()
+          const currents = await Promise.all(slugs.map(slug => currentName(slug)))
+          const repositories = new Map<string, { project: string; github: string }>(slugs.map((slug, i) => [slug, { project: slug, github: currents[i]! }]))
+          slugs.forEach((slug, i) => { if (!repositories.has(currents[i]!)) repositories.set(currents[i]!, { project: slug, github: currents[i]! }) })
+          if (!repositories.has(asked)) {
+            const now = await currentName(asked)
+            const found = [...repositories.values()].find(repository => repository.github === now)
+            if (found) repositories.set(asked, found)
+          }
+          const builder = { name, repositories }, resolved = repositories.get(asked)?.github ?? asked
           const record = async (repository: string, commentId: string) => { await backend(core, 'POST', `${path}/github-comments?${identity}`, { repository, kind: 'issue', commentId }) }
           // The CLI gives up after 30 seconds and says "Try again" while this works on: the same command from the same agent
-          // joins the one still running, or both would find no comment yet and each post its own.
+          // joins the one still running, or both would find no comment yet and each post its own. By either name of its repository.
           // A cut is the same cut whatever its words or size: sent again with other words, it joins the one that runs.
-          const same = JSON.stringify([agentId, verdict ?? claim ?? sameCut(piece!)])
+          const same = JSON.stringify([agentId, verdict ? { ...verdict, repository: resolved } : claim ? { ...claim, repository: resolved } : sameCut({ ...piece!, repository: resolved })])
           const deps = { get: github.get, send: github.send, login: loginOf, record }
-          const made = commands.get(same) ?? (verdict ? postVerdict(deps, { name, repositories }, verdict)
-            : claim ? takeTask(deps, { name, repositories }, claim)
-            : cuts.run(agentId, () => splitTask(deps, { name, repositories }, piece!)))
+          const made = commands.get(same) ?? (verdict ? postVerdict(deps, builder, verdict)
+            : claim ? takeTask(deps, builder, claim)
+            : cuts.run(agentId, () => splitTask(deps, builder, piece!)))
             .finally(() => commands.delete(same))
           commands.set(same, made)
           return { ok: true, value: await made }
@@ -536,7 +558,11 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         }
         if (payload.action === 'command' && identifier(payload.operationId) && payload.command && typeof payload.command === 'object' && !Array.isArray(payload.command)) {
           if (!AGENT_COMMANDS.has(String(object(payload.command).type))) return { error: 'INVALID_REQUEST' }
-          const command = await mentionCommand(object(payload.command), async () => (await swarm()).state)
+          const tagged = await mentionCommand(object(payload.command), async () => (await swarm()).state)
+          // A post it sends by command, as the channel and its person's chat show it: who wrote it, and when, are beside it
+          // (signature.ts).
+          const command = tagged.type === 'message.send' && typeof tagged.text === 'string'
+            ? { ...tagged, text: unsigned(tagged.text, [agent.displayName as string | undefined, agent.name as string | undefined]) } : tagged
           const send = (command: Record<string, unknown>) => backend(core, 'POST', `${path}/commands`,
             { operationId: payload.operationId, command, asAgentId: agentId })
           try { return { ok: true, operationId: payload.operationId, value: await send(command) } } catch (error) {

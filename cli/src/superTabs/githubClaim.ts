@@ -14,17 +14,13 @@
  * what is missing, and posts and records only what is not there. The comment is recorded with the backend as the calling
  * agent's (backend superTabs/githubComments.ts).
  */
-import { labelOf, openPieces } from './assign/crew.js'
+import { CLAIM_LIMIT, labelOf, openPieces } from './assign/crew.js'
 import type { GitHubReply } from './githubRest.js'
-import { hhmm, recordOwn, type VerdictDeps } from './githubVerdict.js'
+import { hhmm, projectRepository, recordOwn, type ProjectRepositories, type VerdictDeps } from './githubVerdict.js'
 import { object, SuperTabHostError } from './wire.js'
 
 export interface Claim { repository: string; number: number }
 
-/** The most tasks one builder holds at once, as lampOS set it (four, with sub-agents): past it, work sits on a busy builder
- *  while others have none. What it holds is read, then added to: takes of several tasks at the same moment can pass it by a
- *  few, as GitHub's list is a little behind its writes. */
-export const CLAIM_LIMIT = 4
 const TAKEN = 'status:taken', PAGE = 100
 /** How many pages of taken tasks are read for the limit. A builder's own fit in one; three bound the read for a name with
  *  a comma, whose tasks are found among everyone's (below). */
@@ -48,15 +44,15 @@ export const labelsOf = (labels: unknown): string[] => (Array.isArray(labels) ? 
 /**
  * Takes [asked] for [builder]: marks it `status:taken`, says so in a comment under the builder's name, and records the
  * comment as the builder's. Refused, with nothing changed: a repository that is no project of the builder's, an issue that is
- * closed, a pull request or cannot be read, one not given to this builder, and a claim past CLAIM_LIMIT. `taken` is whether
- * this command changed anything: a task taken in full already is not taken again. `split` is how a task too big is cut.
+ * closed, a pull request or cannot be read, one not given to this builder, and a claim past CLAIM_LIMIT (assign/crew.ts). What
+ * the builder holds is read, then added to: takes of several tasks at the same moment can pass the limit by a few, as GitHub's
+ * list is a little behind its writes. `taken` is whether this command changed anything: a task taken in full already is not
+ * taken again. `split` is how a task too big is cut.
  */
-export async function takeTask(deps: VerdictDeps, builder: { name: string; repositories: ReadonlySet<string> }, asked: Claim): Promise<{ url: string; taken: boolean; split: string }> {
-  const repository = asked.repository.toLowerCase(), at = `${repository}#${asked.number}`, name = builder.name.trim()
+export async function takeTask(deps: VerdictDeps, builder: { name: string; repositories: ProjectRepositories }, asked: Claim): Promise<{ url: string; taken: boolean; split: string }> {
+  const name = builder.name.trim()
   if (!name) throw new SuperTabHostError('AGENT_UNNAMED', 'This agent has no name to take a task under.', 409)
-  if (!builder.repositories.has(repository)) {
-    throw new SuperTabHostError('REPOSITORY_NOT_PROJECT', `${asked.repository} is not the repository of a project you are in.`, 422)
-  }
+  const project = projectRepository(builder.repositories, asked.repository), repository = project.github, at = `${repository}#${asked.number}`
   // Once the label is on, a failure says so and that the same command finishes the claim: "nothing was changed" would be false.
   let labelled = false
   const github = async (call: () => Promise<GitHubReply>): Promise<GitHubReply> => {
@@ -76,7 +72,7 @@ export async function takeTask(deps: VerdictDeps, builder: { name: string; repos
   const issue = object(read.body), labels = labelsOf(issue.labels), mine = labelOf(name)
   // GitHub answers for a moved issue where it is now, which may be no project of the builder's.
   if (typeof issue.repository_url === 'string' && !issue.repository_url.toLowerCase().endsWith(`/repos/${repository}`)) {
-    throw new SuperTabHostError('TASK_NOT_FOUND', `${at} was moved to another repository.`, 404)
+    throw new SuperTabHostError('TASK_NOT_FOUND', `${at} is now in another repository: moved, or renamed while GitHub did not say its new name (try again in a few minutes).`, 404)
   }
   if (issue.pull_request) throw new SuperTabHostError('NOT_A_TASK', `${at} is a pull request. A task is an issue.`, 409)
   if (issue.state !== 'open') throw new SuperTabHostError('TASK_CLOSED', `${at} is closed.`, 409)
@@ -149,5 +145,5 @@ export async function takeTask(deps: VerdictDeps, builder: { name: string; repos
     comment = object(made.body)
     changed = true
   }
-  return { url: await recordOwn(deps.record, repository, comment, 'Taken'), taken: changed, split: splitHint(at) }
+  return { url: await recordOwn(deps.record, project.project, comment, 'Taken'), taken: changed, split: splitHint(at) }
 }

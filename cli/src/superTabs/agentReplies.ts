@@ -23,6 +23,7 @@
 import type { CoreApi, TurnDelivery, TurnEnd } from '../core/api.js'
 import { promptHash } from '../lib/promptIdentity.js'
 import { cut } from './deliveryContext.js'
+import { unsigned } from './signature.js'
 import { backend, identifier, object, SuperTabHostError } from './wire.js'
 
 /** What the backend takes in one message (`message.send`'s text, 32,000 characters). */
@@ -230,7 +231,9 @@ export class AgentReplies {
     }
     if (!answer) return this.log(`No reply posted for delivery ${id} of agent ${owed.agentId}: its turn ended without an answer.`)
     if (this.stopped) return this.log(`Dropped the reply to delivery ${id} of agent ${owed.agentId}: the host stopped.`)
-    await this.attempt(id, owed, answer.length > REPLY_TEXT_MAX ? cut(answer, REPLY_TEXT_MAX - 1) : answer, 0)
+    // Its person's chat shows who wrote it, and when, beside it, as the channel does.
+    const said = unsigned(answer, [owed.name])
+    await this.attempt(id, owed, said.length > REPLY_TEXT_MAX ? cut(said, REPLY_TEXT_MAX - 1) : said, 0)
   }
 
   /** A post of [text] in the chat [owed] was owed in, as the agent would have made it itself (`harness super-tab post --answers`,

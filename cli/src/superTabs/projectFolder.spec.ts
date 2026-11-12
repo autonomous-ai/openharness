@@ -38,6 +38,18 @@ describe('per-project checkouts on a contributed swarm machine', () => {
     await f.run()
     expect(f.prepare).not.toHaveBeenCalled()
   })
+  // A Product Manager the Swarm starts here (backend leadStart.ts placeLead) is recorded as the project's folder on this machine: this
+  // machine, and its own Swarm folder for the project. That folder is a clone Harness makes, not its owner's checkout. Taken for the
+  // owner's, it was never cloned, and the PM's worktree was asked of an empty folder (the rehearsal, 2026-11-11).
+  it('clones the project into its Swarm folder here though the project names that folder as its own', async () => {
+    const f = fixture()
+    f.repository.machineId = f.core.daemon.machineId()
+    f.repository.cwd = f.start.request.cwd
+    await f.run()
+    expect(f.prepare).toHaveBeenCalledExactlyOnceWith({
+      source: 'remote', repositoryUrl: 'https://github.com/example/project.git', name: 'project-a',
+    }, { root: f.root })
+  })
   // Task #4698: a Member starts in its person's own chat, which is in no project's list, and names the project it sets up.
   it('finds a Member\'s project by the project its start names, and only one this machine was told of', async () => {
     const f = fixture()

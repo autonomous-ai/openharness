@@ -205,6 +205,8 @@ export function createAgentForker({
         ? nativeHookLocations(built.overrides.native.environment).CODEX_HOME : source.codexHome ?? null,
       // Its account, as its source's restart keeps it: on the row, or a restart of the fork runs on the default account.
       claudeHome: source.claudeHome ?? null,
+      // The flags it launched with (relaunchOverrides), so its effort is read as launched and its restart passes them again.
+      ...(source.launchModel ? { launchModel: source.launchModel } : {}),
       dshRuntime: source.dsh ? label : null,
       dsh: source.dsh ?? null,
       agent: source.agent ?? null,

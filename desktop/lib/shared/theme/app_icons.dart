@@ -218,6 +218,9 @@ abstract final class AppIcons {
   static const unplug = LucideIcons.unplug400;
   static const user = LucideIcons.user400;
   static const users = LucideIcons.users400;
+
+  /// Invite people, under a Swarm's name in its left pane.
+  static const userPlus = LucideIcons.userPlus400;
   static const waypoints = LucideIcons.waypoints400;
   static const wrapText = LucideIcons.wrapText400;
 }

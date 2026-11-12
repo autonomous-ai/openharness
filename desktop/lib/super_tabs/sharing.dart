@@ -13,21 +13,28 @@ import 'dialog_scope.dart';
 import 'join_link.dart';
 import 'model.dart';
 
+/// The Swarm's people, titled as the button that opened it says (PSQA, 2026-11-12: Invite people opened "Share Swarm").
 Future<void> showSuperTabSharing(
   BuildContext context,
-  SuperTabController controller,
-) => showAppDialog<void>(
+  SuperTabController controller, {
+  required String title,
+}) => showAppDialog<void>(
   context: context,
   builder: (_) => SuperTabDialogScope(
     controller: controller,
     requireWrite: false,
-    child: SwarmSharingDialog(controller: controller),
+    child: SwarmSharingDialog(controller: controller, title: title),
   ),
 );
 
 class SwarmSharingDialog extends StatefulWidget {
-  const SwarmSharingDialog({super.key, required this.controller});
+  const SwarmSharingDialog({
+    super.key,
+    required this.controller,
+    required this.title,
+  });
   final SuperTabController controller;
+  final String title;
 
   @override
   State<SwarmSharingDialog> createState() => _SwarmSharingDialogState();
@@ -539,7 +546,7 @@ class _SwarmSharingDialogState extends State<SwarmSharingDialog> {
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: c,
     builder: (context, _) => SuperTabDetailDialog(
-      title: 'Share Swarm',
+      title: widget.title,
       body: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -709,7 +716,15 @@ class _SwarmSharingDialogState extends State<SwarmSharingDialog> {
           if (c.operationError != null)
             Padding(
               padding: const EdgeInsets.only(top: 8),
-              child: Text(c.operationError!, style: DesktopChrome.metadata()),
+              // A Swarm with no project yet, as a new Personal one is, takes no email invitation (backend NO_PROJECT): said
+              // with where to make one.
+              child: Text(
+                c.operationErrorCode == 'NO_PROJECT'
+                    ? 'Create a project before inviting people: + beside Projects.'
+                    : c.operationError!,
+                key: const Key('swarm-sharing-error'),
+                style: DesktopChrome.metadata(),
+              ),
             ),
           if (c.hasPendingAction)
             Align(

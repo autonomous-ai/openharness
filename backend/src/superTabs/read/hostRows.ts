@@ -4,9 +4,10 @@
  * replaced by `lastChangedAt` and the Leads conversation id added to agent rows.
  */
 import type { AuthUser } from '../../lib/ssoAuth.js'
-import { activeWork, agent, isLeads, SuperTabError, type Agent, type SuperTabState } from '../model.js'
+import { activeWork, agent, isLeads, SuperTabError, type Agent, type Assignment, type SuperTabState } from '../model.js'
 import { hostLocalGrid, machineContribution, machineLimitReached, type MachineCleanup } from '../machines.js'
-import { agentProjectId, canWatchAgent, confidentialSets, isConfidential, groupProject, ledProject, projectsOf, startProject, watchClosed, type ConfidentialSets } from '../projects.js'
+import { agentProjectIdFrom, canWatchAgent, confidentialSets, isConfidential, groupProject, ledProjectFrom, placedIn, projectsOf, startProject, watchClosed, worksIn,
+  type AgentPlaces, type ConfidentialSets } from '../projects.js'
 import type { HostAgentRow, HostPool, HostRosterRow, HostTabRows } from './contract.js'
 import { hostEtag } from './hostEtag.js'
 
@@ -30,13 +31,48 @@ export async function hostTab(tabId: string, state: SuperTabState, machineId: st
   return { ...rows, etag: hostEtag(rows) }
 }
 
+/** What a roster row reads of the conversations about one agent, read for all of a machine's agents in one pass (whereabouts). */
+interface Whereabouts extends AgentPlaces {
+  /** In a conversation not archived. */
+  active: boolean
+  /** Its active work waiting on a person, on this machine. */
+  waiting: Assignment | undefined
+  /** The conversations it leads (ledProject). */
+  led: Set<string>
+}
+
+/** [agents]' whereabouts, from one pass over the Swarm's conversations, by the same tests the per-agent reads make (projects.ts
+ *  worksIn, placedIn): each row once read them in several passes of its own, and each observer's check another, so a read cost
+ *  about (its agents) x (the Swarm's conversations) x (its people) (PSW-B review, 2026-11-11). */
+function whereabouts(state: SuperTabState, agents: Agent[], machineId: string): Map<string, Whereabouts> {
+  const found = new Map(agents.map(a => [a.id, { active: false, waiting: undefined, work: undefined, group: undefined, led: new Set<string>() } as Whereabouts]))
+  for (const c of state.conversations) {
+    const worker = c.assignment ? found.get(c.assignment.agentId) : undefined
+    if (worker && worksIn(c, c.assignment!.agentId)) {
+      worker.work ??= c
+      if (!worker.waiting && c.assignment!.execution.machineId === machineId && ['needs_human', 'blocked'].includes(c.assignment!.status)) worker.waiting = c.assignment!
+    }
+    const leader = c.leadId ? found.get(c.leadId) : undefined
+    if (leader) leader.led.add(c.id)
+    for (const id of c.agentIds) {
+      const member = found.get(id)
+      if (!member) continue
+      if (!c.archived) member.active = true
+      if (placedIn(c, id)) member.group ??= c
+    }
+  }
+  return found
+}
+
 async function roster(tabId: string, state: SuperTabState, machineId: string, user: AuthUser, lastChangedAt: number | null, lookups: HostLookups): Promise<HostRosterRow[]> {
   const rows: HostRosterRow[] = []
   // Once per read: each row asks it for each person (task #4504). The state is this read's own, so nothing changes it meanwhile.
   const sets = confidentialSets(state)
-  for (const target of state.agents.filter(a => a.machineId === machineId && a.machineOwnerId === user.sub)) {
+  const here = state.agents.filter(a => a.machineId === machineId && a.machineOwnerId === user.sub)
+  const where = whereabouts(state, here, machineId)
+  for (const target of here) {
     try { agent(state, target.id); await lookups.agentGrant(target) } catch (error) { if (error instanceof SuperTabError) continue; throw error }
-    rows.push(agentRow(tabId, state, machineId, user, lastChangedAt, lookups, target, sets))
+    rows.push(agentRow(tabId, state, machineId, user, lastChangedAt, lookups, target, sets, where.get(target.id)!))
   }
   for (const { agentId: id, harnessId } of (state.closingSessions ?? []).filter(c => c.machineId === machineId && c.machineOwnerId === user.sub)) {
     rows.push({ tabId, agent: { id, harnessId, machineId }, closeSession: true, active: false })
@@ -47,15 +83,17 @@ async function roster(tabId: string, state: SuperTabState, machineId: string, us
 }
 
 function agentRow(tabId: string, state: SuperTabState, machineId: string, user: AuthUser, lastChangedAt: number | null, lookups: HostLookups, target: Agent,
-  sets: ConfidentialSets): HostAgentRow {
+  sets: ConfidentialSets, where: Whereabouts): HostAgentRow {
+  const { active, waiting } = where
+  // Read here, for a row that passed its checks, as agentProjectId and ledProject read them.
+  const projectId = agentProjectIdFrom(state, target, { work: target.regular ? where.work : undefined, group: target.regular || target.projectId ? undefined : where.group })
+  const led = ledProjectFrom(state, where.led)
   const closed = lookups.confidential.has(target.id)
-  const waiting = state.conversations.find(c => activeWork(c) && c.assignment!.agentId === target.id &&
-    c.assignment!.execution.machineId === machineId && ['needs_human', 'blocked'].includes(c.assignment!.status))?.assignment
-  const home = projectsOf(state).find(p => p.id === agentProjectId(state, target))
+  const confidential = isConfidential(state, target, closed, sets)
   return {
     tabId, tabName: state.name, lastChangedAt, paused: state.paused,
     // `active` lets the host release members that are only in archived groups to automatic cleanup.
-    active: state.conversations.some(c => !c.archived && c.agentIds.includes(target.id)),
+    active,
     attention: waiting ? { assignmentId: waiting.id, status: waiting.status, result: waiting.result?.slice(0, 500) ?? null } : null,
     // No task resumes after a usage limit since Swarm v4 (work.resume is retired, 2026-11-10): an older host still reads the
     // field (cli superTabs/limitResume.ts, gone from the CLI since #3864), so it stays, always empty, until 2026-12-09.
@@ -67,25 +105,25 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
     // a machine its person took out of the Swarm (removedMachines): an older host adds it back on this word alone (cli host.ts); a person
     // who wants it back adds it.
     joinSwarm: state.ownerId === user.sub && target.contributorId === user.sub
-      && state.conversations.some(c => !c.archived && c.agentIds.includes(target.id))
+      && active
       && !state.machines?.some(m => m.machineId === machineId) && !state.removedMachines?.some(r => r.machineId === machineId)
       && !machineLimitReached(state, user.sub),
     skillMode: 'default',
-    lead: !!ledProject(state, target.id),
+    lead: !!led,
     // Swarm v4 restarts no PM on the server's word (timeChecks.ts): an older host still reads the field, so it stays, always empty.
     owed: null,
     // Removed (model.ts leadsRemoved); an older CLI still reads the field, so it stays, always empty.
     leadsConversationId: null,
     // The conversation it leads: the chat its host rebuilds its start prompt from when it switches it (cli leadSwitchRequest.ts).
     // A field of its own: an older host reads leadsConversationId as "only this conversation's deliveries" (cli host.ts).
-    ledConversationId: ledProject(state, target.id)?.leadConversationId ?? null,
-    stopRequested: target.workDecision === 'stop' && !state.conversations.some(c => activeWork(c) && c.assignment?.agentId === target.id),
-    observers: lookups.people.filter(p => p.id !== user.sub && canWatchAgent(state, { kind: 'person', userId: p.id, email: p.email }, target, closed, sets))
+    ledConversationId: led?.leadConversationId ?? null,
+    stopRequested: target.workDecision === 'stop' && !where.work,
+    observers: lookups.people.filter(p => p.id !== user.sub && canWatchAgent(state, { kind: 'person', userId: p.id, email: p.email }, target, closed, sets, projectId))
       .map(p => ({ email: p.email, userId: p.id })),
     // The host refuses every share of a confidential session, ordinary ones too, and remembers it (cli observers.ts).
-    confidential: isConfidential(state, target, closed, sets),
+    confidential,
     // But for this Swarm's current Lead: its listed observers watch it while this row is in force (Ken, 2026-10-28).
-    membersWatch: isConfidential(state, target, closed, sets) && !watchClosed(state, target, closed, sets),
+    membersWatch: confidential && !watchClosed(state, target, closed, sets),
   }
 }
 

@@ -84,7 +84,7 @@ function setup() {
     return answer(404)
   }
   const record = vi.fn(async (_repository: string, _commentId: string) => {})
-  const pip = { name: 'Pip', repositories: new Set(['acme/app']) }
+  const pip = { name: 'Pip', repositories: new Map([['acme/app', { project: 'acme/app', github: 'acme/app' }]]) }
   const split = (over: Partial<{ number: number; size: 's' | 'm' | 'l'; title: string; text: string; repository: string }> = {}, agent = pip) =>
     splitTask({ get, send, record, login: async () => 'Pips-Person', now: () => NOW }, agent,
       { repository: 'acme/app', number: 34, size: 'm', title: 'Sync the theme', text: 'Only the theme: read it at start, write it on change.', ...over })
@@ -204,7 +204,7 @@ describe('a piece cut off a task, by command', () => {
     expect(await refusal(t.split({}, { ...t.pip, name: ' ' }))).toEqual({ code: 'AGENT_UNNAMED', message: 'This agent has no name to cut a task under.' })
     expect(await refusal(t.split({ number: 99 }))).toEqual({ code: 'TASK_NOT_FOUND', message: 'acme/app#99 is not an issue this computer\'s GitHub login can read.' })
     t.repo.issues.set(34, { ...t.task, repository_url: 'https://api.github.com/repos/acme/elsewhere' })
-    expect(await refusal(t.split())).toEqual({ code: 'TASK_NOT_FOUND', message: 'acme/app#34 was moved to another repository.' })
+    expect(await refusal(t.split())).toEqual({ code: 'TASK_NOT_FOUND', message: 'acme/app#34 is now in another repository: moved, or renamed while GitHub did not say its new name (try again in a few minutes).' })
     t.repo.issues.set(34, { ...t.task, pull_request: {} })
     expect(await refusal(t.split())).toEqual({ code: 'NOT_A_TASK', message: 'acme/app#34 is a pull request. A task is an issue.' })
     t.repo.issues.set(34, { ...t.task, state: 'closed' })

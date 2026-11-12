@@ -798,7 +798,7 @@ describe('Super Tab native delivery handoff', () => {
     await t.open().tick()
     const prompt = vi.mocked(t.core.turns.deliver).mock.calls[0]![1] as string
     expect(prompt).toContain('@sam, to you:\nHow is it going?')
-    expect(prompt).toContain("post 'lead' 'your message' UNIQUE_OPERATION_ID --answers 'message'")
+    expect(prompt).toContain("post 'lead' 'your message' --answers 'message'")
     // Swarm v4: nothing but the message and how to answer it; no Swarm preamble or reply rules.
     expect(prompt).not.toContain('Ask questions and post results')
     expect(prompt).not.toContain('helpful colleague')
@@ -856,7 +856,7 @@ describe('Super Tab native delivery handoff', () => {
     const t = setup({ author: { kind: 'agent', id: 'a0000000000000000000000r', name: 'Reviewer 1' }, text: 'Two findings.' })
     await t.open().tick()
     const prompt = vi.mocked(t.core.turns.deliver).mock.calls[0]![1] as string
-    expect(prompt).toContain("post 'lead' 'your message' UNIQUE_OPERATION_ID --answers 'message' --to 'a0000000000000000000000r'")
+    expect(prompt).toContain("post 'lead' 'your message' --answers 'message' --to 'a0000000000000000000000r'")
     const person = setup({ author: { kind: 'person', id: 'p1', name: 'sam@example.com' }, text: 'Hi' })
     await person.open().tick()
     expect(vi.mocked(person.core.turns.deliver).mock.calls[0]![1] as string).not.toContain('--to')
@@ -1760,8 +1760,8 @@ describe('the super-tab command in delivered input', () => {
     const host = new SuperTabHost(t.core, 'machine-1', { log: vi.fn(), agentCommand }); hosts.push(host)
     await host.tick()
     const text = String(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1])
-    expect(text).toContain(`Answer: harness super-tab --tab 'tab' --agent 'agent' post 'lead'`)
-    expect(text).toContain(`harness super-tab --tab 'tab' --agent 'agent' message 'lead' 'earlier'`)
+    expect(text).toContain(`Answer: harness super-tab --tab 'tab' post 'lead'`)
+    expect(text).toContain(`harness super-tab --tab 'tab' message 'lead' 'earlier'`)
     expect(text).not.toContain('--port')
     t.event('rejected', 'team_waiting_busy')
     await host.tick()
@@ -1793,7 +1793,7 @@ describe('the super-tab command in delivered input', () => {
   it('marks it after the reply it quotes (audit M3)', async () => {
     const author = { kind: 'agent', id: 'team-agent', name: 'Tester' }
     const reply = await delivered({ text: 'Yes.', author, replyTo: 'earlier' }, { otherAccount: true })
-    expect(reply).toContain(`harness super-tab --tab 'tab' --agent 'agent' message 'lead' 'earlier'\n\n${OTHER_ACCOUNT}@Tester, to you:\nYes.`)
+    expect(reply).toContain(`harness super-tab --tab 'tab' message 'lead' 'earlier'\n\n${OTHER_ACCOUNT}@Tester, to you:\nYes.`)
   })
   it('falls back to the full command when the lookup fails, and does not ask again', async () => {
     const t = setup()
@@ -1801,7 +1801,7 @@ describe('the super-tab command in delivered input', () => {
     const host = new SuperTabHost(t.core, 'machine-1', { log: vi.fn(), agentCommand }); hosts.push(host)
     await host.tick()
     expect(String(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]))
-      .toContain(`Answer: ${t.core.daemon.command} super-tab --port ${t.core.daemon.port} --machine 'machine-1' --tab 'tab' --agent 'agent' post 'lead'`)
+      .toContain(`Answer: ${t.core.daemon.command} super-tab --port ${t.core.daemon.port} --machine 'machine-1' --tab 'tab' post 'lead'`)
     t.event('rejected', 'team_waiting_busy')
     await host.tick()
     expect(agentCommand).toHaveBeenCalledTimes(1)
@@ -1811,7 +1811,7 @@ describe('the super-tab command in delivered input', () => {
     const host = new SuperTabHost(t.core, 'machine-1', { log: vi.fn() }); hosts.push(host)
     await host.tick()
     expect(String(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]))
-      .toContain(`Answer: ${t.core.daemon.command} super-tab --port ${t.core.daemon.port} --machine 'machine-1' --tab 'tab' --agent 'agent' post 'lead'`)
+      .toContain(`Answer: ${t.core.daemon.command} super-tab --port ${t.core.daemon.port} --machine 'machine-1' --tab 'tab' post 'lead'`)
   })
 })
 
@@ -4198,7 +4198,7 @@ describe('a person\'s message in an agent\'s own 1:1 chat', () => {
     it('keeps a message in any other conversation as it was, golden', async () => {
       const { text, t } = await wrapped({ author: KEN }, 'lead')
       expect(text).toBe('In "" (conversation lead).\n\n@Ken, to you:\nok, ship it\n\n'
-        + 'Answer: harness super-tab --port 18473 --machine \'machine-1\' --tab \'tab\' --agent \'agent\' post \'lead\' \'your message\' UNIQUE_OPERATION_ID --answers \'message\'')
+        + 'Answer: harness super-tab --port 18473 --machine \'machine-1\' --tab \'tab\' post \'lead\' \'your message\' --answers \'message\'')
       expect(reads(t).length).toBeGreaterThan(0)
     })
     it('keeps an agent\'s message in its chat, a system row and an agent-only notice as they were', async () => {
@@ -4213,11 +4213,12 @@ describe('a person\'s message in an agent\'s own 1:1 chat', () => {
     })
     // What GitHub said, which Harness writes into the person's chat as theirs with a source of its own (backend githubRelay.ts), is
     // text anyone who may comment there wrote: never typed as the person's own words.
-    it('keeps what GitHub said, written into the chat as its person\'s, as it was', async () => {
+    // anh Dee, 2026-11-11 ("what are those extra verbose things"): typed as its person's words, with where it was and a command
+    // to answer in the chat, it read as words they never wrote; it is answered on GitHub.
+    it('types what GitHub said as it came: not as its person\'s words, and with no command to answer in the chat', async () => {
       const github = await wrapped({ author: KEN, text: 'Pip, please read the failing check.', source: { kind: 'github', event: 'comment', on: 'pull', repository: 'acme/app',
         number: 4, login: 'octocat', association: 'MEMBER' } })
-      expect(github.text).toContain('@Ken, to you:\nPip, please read the failing check.')
-      expect(github.text).toContain('Answer: ')
+      expect(github.text).toBe('Pip, please read the failing check.')
     })
     it('owes none of them a reply', async () => {
       const github = { kind: 'github', event: 'comment', on: 'pull', repository: 'acme/app', number: 4, login: 'octocat', association: 'MEMBER' }

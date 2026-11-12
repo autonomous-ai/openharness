@@ -1,6 +1,6 @@
 /**
  * The agents' private temporary folders. Each Swarm agent has its own (task #4395): since #4215 an agent starts in its owner's
- * own settings, which can block reads outside the working directories, so its folder is added to the engine's working
+ * own settings, which can block reads outside the working directories, so its folder is added to Claude Code's working
  * directories as well as given as its TMPDIR, which `mktemp` uses.
  */
 import { createHash } from 'node:crypto'
@@ -131,10 +131,13 @@ function sweepWhenDue(folder: string, deps: AgentTmpDeps): void {
 }
 
 /** How an engine is told of one more working directory, joined to its flag: Claude Code's `--add-dir` takes several values and
- *  would otherwise swallow what follows it. An engine not here gets the folder as its TMPDIR alone. */
+ *  would otherwise swallow what follows it. An engine not here gets the folder as its TMPDIR alone. Codex among them: its
+ *  `--add-dir` is a writable root, and codex-cli 0.164 quits (exit 1) when its sandbox is read-only, as it is in an untrusted
+ *  folder or read-only mode. A Swarm agent's own folder is left untrusted for Codex (superTabs/agentFolder.ts; why in
+ *  core/agents/create.ts), so a Codex builder the Swarm started there never started (the rehearsal, 2026-11-11). Codex reads
+ *  outside its folder by default, and its workspace-write makes $TMPDIR writable by itself. */
 const ADDED_FOLDER: Partial<Record<AgentEngine, (folder: string) => string[]>> = {
   claude: folder => [`--add-dir=${folder}`],
-  codex: folder => [`--add-dir=${folder}`],
 }
 
 /** The private folder of the Swarm agent whose creation key is [key], made and closed, by its real path, or null when it cannot
@@ -158,7 +161,7 @@ export function agentTmpOf(key: string, deps: AgentTmpDeps = realDeps): string |
 
 /**
  * What gives an agent its private folder: the variables, and the arguments that add the folder to the engine's working
- * directories, or none. A Swarm agent gets its own folder, both; nobody else gets one. A folder that cannot be
+ * directories where it takes them (Claude Code), or none. A Swarm agent gets its own folder; nobody else gets one. A folder that cannot be
  * made private does not stop the agent: it starts on the system's folder, and the daemon's log says why.
  */
 export function agentTmpLaunch(engine: AgentEngine, skill: SwarmSkill | undefined,

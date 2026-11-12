@@ -32,14 +32,16 @@ const relay = (chat: string, agentId: string, extra: Record<string, unknown> = {
   association: 'MEMBER', text: 'Juno, 14:20, to **Pip**: READ-OK f6edb44', ...extra }) as Command
 
 describe('GitHub relayed into an agent\'s chat (githubRelay.ts)', () => {
-  it('writes a member\'s comment as the person\'s row from GitHub, to their agent alone, and people read it', () => {
+  // anh Dee, 2026-11-11, of their chat with an agent full of these: "so terrible. it should be like a human conversation", and
+  // "why? what for?". The row is how GitHub's words reach the agent's session; it is its agent's alone to read.
+  it('writes a member\'s comment as the person\'s row from GitHub, to their agent alone, which only the agent reads', () => {
     const f = swarm()
     const pip = f.newAgent(owner, 'Pip')
     const row = f.run(relay(pip.chat, pip.agentId)).messages.at(-1)!
     expect(row).toMatchObject({ conversationId: pip.chat, author: { kind: 'person', id: 'owner' }, recipients: [pip.agentId],
       source: { kind: 'github', event: 'comment', on: 'pull', repository: 'acme/app', number: 4, login: 'deehw', association: 'MEMBER' } })
     expect(row.text).toBe('On GitHub, deehw wrote on pull request acme/app#4:\nJuno, 14:20, to **Pip**: READ-OK f6edb44\nhttps://github.com/acme/app/pull/4#issuecomment-1')
-    expect(agentOnly(row.source, row.recipients)).toBe(false)
+    expect(agentOnly(row.source, row.recipients)).toBe(true)
   })
 
   it('says a newly labelled issue is a task for the agent, and names a review\'s verdict and a line comment\'s file', () => {
