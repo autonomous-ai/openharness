@@ -2125,6 +2125,182 @@ describe('harness watch', () => {
   })
 })
 
+describe('wait and watch on pushed events', () => {
+  /** A daemon that pushes the state events of the harnesses a tool names (`agents_watch`, core/toolWatches.ts). */
+  class PushingDaemon extends FakeDaemon {
+    watched: string[][] = []
+    heard: ((agentId: string) => void) | null = null
+    refuse = false
+    async watch(agentIds: string[], heard: (agentId: string) => void): Promise<boolean> {
+      this.requests.push({ type: 'agents_watch', payload: { agentIds } })
+      if (this.refuse) return false
+      this.watched.push([...agentIds])
+      this.heard = heard
+      return true
+    }
+    push(agentId: string): void { this.heard?.(agentId) }
+  }
+  const lists = (d: FakeDaemon) => d.requests.filter((r) => r.type === 'agents_list').length
+  const answered = (d: FakeDaemon, id: string) => d.pages.set(`s-${id}`, [{ events: [ev('user_message', { content: 'fix it' }), ev('tool_start'), ev('text_delta', { content: 'Fixed.' }), ev('done')], hasMore: false }])
+  /** A sleep the test drives: a short one (a look to confirm) passes at once; a long one (the backstop) runs the next
+   *  of [then], which pushes, and passes only when [then] has nothing left. */
+  const driven = (h: { advance: (ms: number) => void }, slept: number[], then: Array<() => void>) => (ms: number) => {
+    slept.push(ms)
+    const next = ms > 1_000 ? then.shift() : undefined
+    if (!next) { h.advance(ms); return Promise.resolve() }
+    setImmediate(next)
+    return new Promise<void>(() => {})
+  }
+
+  it('wait asks nothing while the daemon says the harness works, and looks again when a change is pushed', async () => {
+    const d = new PushingDaemon()
+    d.frames = [frame('kid', { activity: { state: 'working' } })]
+    answered(d, 'kid')
+    const slept: number[] = []
+    const h = harness(d)
+    h.deps.sleep = driven(h, slept, [() => { d.frames = [frame('kid')]; d.push('kid') }])
+    expect(await waitCommand(['kid'], h.deps)).toBe(EXIT.ok)
+    expect(h.out).toEqual(['kid: idle · read it: harness show kid'])
+    expect(d.watched).toEqual([['kid']])
+    // Woken by the push, then one look to confirm it stayed idle (#1180): no round at all while it worked.
+    expect(slept).toEqual([60_000, 1_000])
+  })
+
+  it('wait is not woken by a harness it did not name', async () => {
+    const d = new PushingDaemon()
+    d.frames = [frame('kid', { activity: { state: 'working' } })]
+    answered(d, 'kid')
+    const h = harness(d)
+    h.deps.sleep = (ms) => {
+      if (ms <= 1_000) { h.advance(ms); return Promise.resolve() }
+      setImmediate(() => {
+        d.push('other')
+        setImmediate(() => setImmediate(() => { d.frames = [frame('kid')]; d.push('kid') }))
+      })
+      return new Promise<void>(() => {})
+    }
+    expect(await waitCommand(['kid'], h.deps)).toBe(EXIT.ok)
+    // The list `opened` reads, the working look, then the idle look and the one confirming it: none for `other`.
+    expect(lists(d)).toBe(4)
+  })
+
+  it('wait takes a change pushed while it looked, and looks again at once', async () => {
+    const d = new PushingDaemon()
+    d.frames = [frame('kid', { activity: { state: 'working' } })]
+    answered(d, 'kid')
+    let looks = 0
+    d.extra.agents_list = () => {
+      const agents = d.frames
+      // The turn ends as the wait's first look is answered: the push lands before it sleeps.
+      if (++looks === 2) { d.frames = [frame('kid')]; d.push('kid') }
+      return { agents }
+    }
+    const slept: number[] = []
+    const h = harness(d)
+    h.deps.sleep = driven(h, slept, [])
+    expect(await waitCommand(['kid'], h.deps)).toBe(EXIT.ok)
+    expect(slept).toEqual([1_000])
+  })
+
+  it('wait waits on a push for a harness its screen says works, once its Working claim lapsed (a long quiet step)', async () => {
+    const d = new PushingDaemon()
+    // The daemon's activity is unknown 30 s into a step that writes nothing (lib/turnActivity.ts); the screen still works.
+    d.frames = [frame('kid', { activity: { state: 'unknown' } })]
+    d.screens.set('kid', ['working', 'idle'])
+    answered(d, 'kid')
+    const slept: number[] = []
+    const h = harness(d)
+    h.deps.sleep = driven(h, slept, [() => { d.frames = [frame('kid')]; d.push('kid') }])
+    expect(await waitCommand(['kid'], h.deps)).toBe(EXIT.ok)
+    expect(slept).toEqual([60_000, 1_000])
+  })
+
+  it('wait looks every interval at a draft in its box: the person typing is pushed by nothing', async () => {
+    const d = new PushingDaemon()
+    d.frames = [frame('kid')]
+    d.screens.set('kid', ['draft'])
+    const h = harness(d)
+    const slept: number[] = []
+    h.deps.sleep = async (ms) => { slept.push(ms); h.advance(ms) }
+    expect(await waitCommand(['kid', '--timeout', '3s'], h.deps)).toBe(EXIT.timeout)
+    expect(slept).toEqual([1_000, 1_000, 1_000])
+  })
+
+  it('wait still looks every interval while it follows a cloud harness, which has no push', async () => {
+    const d = new PushingDaemon()
+    d.frames = [frame('kid', { activity: { state: 'working' } }), frame('devin', { engine: 'devin-cloud', location: 'cloud', tmuxPane: null, activity: { state: 'working' }, cloud: { state: 'working' } })]
+    const h = harness(d)
+    const slept: number[] = []
+    h.deps.sleep = async (ms) => { slept.push(ms); h.advance(ms) }
+    expect(await waitCommand(['kid,devin', '--timeout', '5s'], h.deps)).toBe(EXIT.timeout)
+    expect(d.watched).toEqual([['kid']])
+    expect(slept).toEqual([1_000, 1_000, 1_000, 1_000, 1_000])
+  })
+
+  it('wait looks every interval when the daemon is too old to push to tools, or its watch failed', async () => {
+    const old = new PushingDaemon()
+    old.refuse = true
+    const failed = new PushingDaemon()
+    failed.watch = async () => { throw new AgentClientError('TIMEOUT', 'slow') }
+    for (const d of [old, failed]) {
+      d.frames = [frame('kid', { activity: { state: 'working' } })]
+      const h = harness(d)
+      const slept: number[] = []
+      h.deps.sleep = async (ms) => { slept.push(ms); h.advance(ms) }
+      expect(await waitCommand(['kid', '--timeout', '3s'], h.deps)).toBe(EXIT.timeout)
+      expect(slept).toEqual([1_000, 1_000, 1_000])
+    }
+  })
+
+  it('wait asks about once a minute, not twenty times, while a harness here works (requests per waiting agent per minute)', async () => {
+    const perMinute = async (d: FakeDaemon) => {
+      d.frames = [frame('kid', { activity: { state: 'working' } })]
+      const h = harness(d, { intervalMs: 3_000 })
+      expect(await waitCommand(['kid', '--timeout', '10m'], h.deps)).toBe(EXIT.timeout)
+      return d.requests.length / 10
+    }
+    // Before: one `agents_list` every 3 s. After: the watch, then one look a minute (the backstop) and one a change.
+    expect(await perMinute(new FakeDaemon())).toBe(20.2)
+    expect(await perMinute(new PushingDaemon())).toBe(1.3)
+  })
+
+  it('watch prints each change as it is pushed, and asks nothing between them', async () => {
+    const d = new PushingDaemon()
+    d.frames = [frame('kid', { activity: { state: 'working' } })]
+    answered(d, 'kid')
+    const slept: number[] = []
+    const h = harness(d)
+    h.deps.sleep = driven(h, slept, [
+      // A permission on its screen: the turn's Working claim lapsed (lib/turnActivity.ts), which is pushed.
+      () => { d.frames = [frame('kid', { activity: { state: 'unknown' } })]; d.screens.set('kid', ['needs_input']); d.push('kid') },
+      // Answered, it works again, then its turn ends.
+      () => { d.frames = [frame('kid', { activity: { state: 'working' } })]; d.push('kid') },
+      () => { d.frames = [frame('kid')]; d.screens.set('kid', ['idle']); d.push('kid') },
+    ])
+    expect(await watchCommand(['kid', '--json', '--timeout', '30m'], h.deps)).toBe(EXIT.timeout)
+    expect(h.out.map((l) => JSON.parse(l).event)).toEqual(['working', 'needs_person', 'working', 'done'])
+    expect(d.watched).toEqual([['kid']])
+    // A push for each change, one look to confirm the idle one, then nothing but the backstop, a minute at a time.
+    expect(slept.slice(0, 4)).toEqual([60_000, 60_000, 60_000, 1_000])
+    expect(slept.slice(4, -1).every((ms) => ms === 60_000)).toBe(true)
+  })
+
+  it('watch looks every interval at a cloud harness, or on a daemon too old to push', async () => {
+    const cloudFrame = frame('devin', { engine: 'devin-cloud', location: 'cloud', tmuxPane: null, activity: { state: 'working' }, cloud: { state: 'working' } })
+    const old = new PushingDaemon()
+    old.refuse = true
+    for (const [d, f] of [[new PushingDaemon(), cloudFrame], [old, frame('kid', { activity: { state: 'working' } })]] as const) {
+      d.frames = [f]
+      const h = harness(d)
+      const slept: number[] = []
+      h.deps.sleep = async (ms) => { slept.push(ms); h.advance(ms) }
+      expect(await watchCommand([f.name!, '--timeout', '3s'], h.deps)).toBe(EXIT.timeout)
+      expect(d.watched).toEqual([])
+      expect(slept).toEqual([1_000, 1_000, 1_000])
+    }
+  })
+})
+
 describe('a Swarm session\'s tell and reply (the v3 Buddy is gone)', () => {
   const asked = () => {
     const calls: Array<[string, Record<string, unknown>]> = []
