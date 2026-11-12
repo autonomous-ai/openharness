@@ -153,7 +153,7 @@ void main() {
         ];
       await show(tester, computer, open: false);
       expect(find.text(empty), findsOneWidget);
-      expect(find.text('From its folder'), findsOneWidget);
+      expect(find.text('This project'), findsOneWidget);
       // Each by name and size, its text a click away.
       expect(find.text('AGENTS.md'), findsOneWidget);
       expect(find.text('320 lines'), findsOneWidget);
@@ -701,6 +701,86 @@ void main() {
     );
   });
 
+  // anh Dee, 2026-11-12: "what's the best experience here for all these files so users can have control and edit the exact
+  // place they want". Three sections, narrowest first: the agent (its own file, and for a PM the role Harness gives it), the
+  // project's files, and Harness's. Its own file wins where they differ.
+  group('three sections, narrowest first', () {
+    const swarm = 'You are a Swarm agent shipping one project.\n- Your tasks are GitHub issues.';
+    const pm = 'You are your project\'s PM. Only you open issues.';
+
+    testWidgets(
+      'a PM: its own file, its role from Harness folded under it, the project\'s files, then Harness\'s basics without the PM\'s',
+      (tester) async {
+        final computer = SwarmV4Computer(files: {'h/Devon': 'Be brief.'})
+          ..shared = [file('AGENTS.md', 'Ship small.')]
+          ..basics = '$swarm\n$pm'
+          ..basicsSwarm = swarm
+          ..basicsPm = pm;
+        await show(tester, computer, name: 'Devon', open: false);
+        Text text(String k) => tester.widget<Text>(key(k));
+        expect(text('swarm-precedence').data, 'Yours first; it wins where they differ.');
+        expect(text('swarm-own-heading').data, 'Devon');
+        expect(text('swarm-pm-name').data, 'As this project\'s PM, Harness tells it:');
+        expect(text('swarm-shared-heading').data, 'This project');
+        expect(text('swarm-shared-note').data, 'Shared with your team; changed by pull request.');
+        expect(text('swarm-harness-heading').data, 'Harness');
+        expect(text('swarm-harness-name-0').data, 'Swarm basics');
+        expect(text('swarm-harness-size-0').data, '2 lines');
+        final order = [
+          'swarm-precedence',
+          'swarm-own-heading',
+          'swarm-instructions-text',
+          'swarm-pm-name',
+          'swarm-shared-heading',
+          'swarm-harness-heading',
+          'swarm-engine-own',
+        ].map((k) => top(tester, key(k))).toList();
+        expect(order, [...order]..sort());
+        // Folded until clicked, read only, with where to change it.
+        expect(key('swarm-pm-text'), findsNothing);
+        await tester.ensureVisible(key('swarm-pm-row'));
+        await tester.tap(key('swarm-pm-row'));
+        await tester.pumpAndSettle();
+        expect(tester.widget<SelectableText>(key('swarm-pm-text')).data, pm);
+        expect(text('swarm-pm-note').data, 'To change it, write it in agents/Devon.md.');
+        // Swarm basics alone: the PM's part is not said twice.
+        await tester.ensureVisible(key('swarm-harness-row-0'));
+        await tester.tap(key('swarm-harness-row-0'));
+        await tester.pumpAndSettle();
+        expect(tester.widget<SelectableText>(key('swarm-harness-text-0')).data, swarm);
+        // Only its own file has Edit, and it still saves agents/Devon.md.
+        expect(key('swarm-instructions-edit'), findsOneWidget);
+        await tester.tap(key('swarm-instructions-edit'));
+        await tester.pumpAndSettle();
+        await tester.enterText(key('swarm-instructions-field'), 'Be brief. No tables.');
+        await tester.pump();
+        await tester.tap(key('swarm-instructions-save'));
+        await tester.pumpAndSettle();
+        expect(computer.files['h/Devon'], 'Be brief. No tables.');
+      },
+    );
+
+    testWidgets('a builder: no role row, and Harness\'s basics as its computer gives them', (tester) async {
+      final computer = SwarmV4Computer(files: {'h/Kiri': 'Run the tests first.'})
+        ..basics = swarm
+        ..basicsSwarm = swarm;
+      await show(tester, computer, name: 'Kiri', open: false);
+      expect(tester.widget<Text>(key('swarm-own-heading')).data, 'Kiri');
+      expect(key('swarm-pm-row'), findsNothing);
+      expect(tester.widget<Text>(key('swarm-harness-name-0')).data, 'Swarm basics');
+    });
+
+    testWidgets('a computer from before the split: its joined text under Swarm basics, no role row', (tester) async {
+      final computer = SwarmV4Computer(files: {'h/Devon': 'Be brief.'})..basics = '$swarm\n$pm';
+      await show(tester, computer, name: 'Devon', open: false);
+      expect(key('swarm-pm-row'), findsNothing);
+      await tester.ensureVisible(key('swarm-harness-row-0'));
+      await tester.tap(key('swarm-harness-row-0'));
+      await tester.pumpAndSettle();
+      expect(tester.widget<SelectableText>(key('swarm-harness-text-0')).data, '$swarm\n$pm');
+    });
+  });
+
   // What goes into the agent (anh Dee, 2026-11-11: "show users what goes into the agent. and what they can edit"): beside its
   // own file, which alone has Edit, what Harness adds at every start and its person's own CLAUDE.md on its computer, each read
   // only and folded, and a last line for its engine's own instructions, which nobody sees here.
@@ -749,7 +829,7 @@ void main() {
         ]);
         // Each under its own heading, after the agent's own file and its folder's.
         Text text(String k) => tester.widget<Text>(key(k));
-        expect(text('swarm-harness-heading').data, 'From Harness');
+        expect(text('swarm-harness-heading').data, 'Harness');
         expect(text('swarm-personal-heading').data, 'From Mac Studio');
         expect(text('swarm-harness-name-0').data, 'Swarm basics');
         expect(text('swarm-harness-size-0').data, '2 lines');

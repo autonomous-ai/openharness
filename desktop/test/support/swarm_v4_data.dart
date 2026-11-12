@@ -549,6 +549,10 @@ class SwarmV4Computer {
   /// computer that says none: one from before it answers `INVALID_REQUEST`.
   String? basics;
 
+  /// The same, as a computer from this release says it apart (`swarm`, and `pm` for a project's PM) beside the joined text.
+  /// Null [basicsSwarm] is a computer that says only the joined text.
+  String? basicsSwarm, basicsPm;
+
   /// A code to refuse every request with (`UNSUPPORTED`, `OFFLINE`, ...) until it is null again.
   String? refuse;
 
@@ -585,7 +589,12 @@ class SwarmV4Computer {
       }
       return basics == null
           ? {'error': 'INVALID_REQUEST'}
-          : {'ok': true, 'text': basics};
+          : {
+              'ok': true,
+              'text': basics,
+              'swarm': ?basicsSwarm,
+              'pm': ?basicsPm,
+            };
     }
     requests.add((machineId, type, payload));
     final around = {

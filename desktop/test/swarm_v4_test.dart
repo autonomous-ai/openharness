@@ -1061,7 +1061,7 @@ void main() {
       expect(find.text('agents/first builder.md'), findsOneWidget);
       // Nothing of its own, and it says so: the folder's files below are the project's, not its own (anh Dee, 2026-11-10).
       expect(find.textContaining('Empty for now'), findsOneWidget);
-      expect(find.text('From its folder'), findsOneWidget);
+      expect(find.text('This project'), findsOneWidget);
       expect(find.text('AGENTS.md'), findsOneWidget);
       expect(find.text('2 lines'), findsOneWidget);
       // Folded: a click on each opens it.

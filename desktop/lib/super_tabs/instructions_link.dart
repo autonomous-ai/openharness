@@ -180,6 +180,9 @@ typedef SwarmAskMachine = Future<Map<String, dynamic>> Function(
 /// anh Dee 2026-11-09: the file stays where the agent keeps it, in nobody's repository unless the agent commits it). It
 /// travels over the encrypted link between this account's own computers, the one terminals use, so nothing goes through
 /// GitHub or the server. The computer is the truth; this only asks it.
+/// What Harness adds to an agent's instructions at every start: every Swarm agent's basics, and a project PM's own.
+typedef SwarmBasics = ({String swarm, String? pm});
+
 class SwarmInstructionsLink {
   const SwarmInstructionsLink(this._ask, {this.gate});
 
@@ -204,18 +207,22 @@ class SwarmInstructionsLink {
     );
   }
 
-  /// What Harness adds to [agent]'s instructions at every start, the Swarm's basics for its part, as its computer gives them
-  /// (its Swarm service's `basics`), or null when that computer says none: no part, an older computer, or no answer. Never an
-  /// error: the rest of what instructs the agent shows without it.
-  Future<String?> basics(SuperTabAgent agent) async {
+  /// What Harness adds to [agent]'s instructions at every start, as its computer gives them (its Swarm service's `basics`), or
+  /// null when that computer says none: no part, an older computer, or no answer. Never an error: the rest of what instructs
+  /// the agent shows without it. Every Swarm agent's basics and a PM's own apart (`swarm`, `pm`, since 2026-11-12), or from a
+  /// computer from before them the two joined, as [SwarmBasics.swarm] with no [SwarmBasics.pm].
+  Future<SwarmBasics?> basics(SuperTabAgent agent) async {
     try {
       if (gate?.call(agent.machineId) != null) return null;
       final answer = await _ask(agent.machineId, 'super_tabs', {
         'action': 'basics',
         'harnessId': agent.harnessId,
       });
-      final text = answer['text'];
-      return text is String && text.trim().isNotEmpty ? text : null;
+      final text = answer['text'], swarm = answer['swarm'], pm = answer['pm'];
+      if (swarm is String && swarm.trim().isNotEmpty) {
+        return (swarm: swarm, pm: pm is String && pm.trim().isNotEmpty ? pm : null);
+      }
+      return text is String && text.trim().isNotEmpty ? (swarm: text, pm: null) : null;
     } on WsRequestFailure {
       return null;
     } on WsRequestTimeout {

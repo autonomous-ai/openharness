@@ -237,6 +237,8 @@ Future<List<SuperTabController>> _show(
           {'name': 'CLAUDE.local.md', 'why': 'link'},
         ]
         ..basics = 'You are a Swarm agent on a team shipping one project.\n- Your tasks are GitHub issues labelled builder:<your name>.'
+        ..basicsSwarm = 'You are a Swarm agent on a team shipping one project.'
+        ..basicsPm = '- Your tasks are GitHub issues labelled builder:<your name>.'
         ..personal = [
           {
             'name': 'CLAUDE.md',
@@ -1082,7 +1084,7 @@ class _Gallery extends StatelessWidget {
           ]),
           section(
             'instructions',
-            'Instructions: the agent\'s own file, then what else goes into it, read only and folded: its folder\'s, Harness\'s, its person\'s own, and its engine\'s',
+            'Instructions, narrowest first: the agent (its own file, its PM role folded), this project\'s files, Harness\'s, its person\'s own, and its engine\'s',
             [
               SizedBox(
                 width: 380,
