@@ -11,6 +11,7 @@ import { join } from 'node:path'
 import type { CoreApi, CorePorts } from '../core/api.js'
 import { sid } from '../lib/log.js'
 import { sessionDisplayTitle } from '../lib/registry.js'
+import { WORKTREE_IDLE_MS } from '../lib/worktreeSweep.js'
 import { forgetScmProject, renameScmProject, sweepScmProjects } from '../scm/scmProjects.js'
 
 export function startWorkspaces(core: CoreApi, ports: CorePorts): void {
@@ -33,7 +34,7 @@ export function startWorkspaces(core: CoreApi, ports: CorePorts): void {
     }
   }
   // Worktrees Harness made that no live or stopped harness uses and nothing would miss; and, in an idle one
-  // that stays with no live harness in it, what an install or a build makes again
+  // that stays where no harness works, what an install or a build makes again
   // (lib/worktreeSweep.ts). The core decides when: a few minutes after start, once restored agents
   // are back in the registry, then twice a day.
   //
@@ -43,21 +44,36 @@ export function startWorkspaces(core: CoreApi, ports: CorePorts): void {
   let sweeping = false
   const sweepUnusedWorktrees = () => {
     if (sweeping) return
-    let inUse: Array<string | null>, live: Array<string | null>
+    let inUse: Array<string | null>, working: Array<string | null>
     try {
-      inUse = core.agents.all().map(s => s.cwd)
-      live = core.agents.live().map(s => s.cwd)
+      const now = Date.now(), all = core.agents.all()
+      inUse = all.map(s => s.cwd)
+      // A harness works where it runs, and where it stopped within the week (review of package 6, 11-12): what it did
+      // since its last commit is in the folder alone, and it may be resumed there. A stopped record is written when it
+      // stops; one with no time counts as recent.
+      working = [...core.agents.live(), ...all.filter(s => !(now - s.touchedAt >= WORKTREE_IDLE_MS))].map(s => s.cwd)
     } catch { return }
     sweeping = true
-    void sweepScmProjects({ root: join(homedir(), 'harnesses'), inUse, live })
-      .then(({ removed, freed, stuck }) => {
-        // Counts only: a path names a person's folder.
+    // Asked again as the sweep goes: it can take minutes, and a harness may start meanwhile. In the workspaces' own process
+    // the live agents are those the core sent with its last terminal-title pass, every few seconds.
+    const busy = () => [...working, ...core.agents.live().map(s => s.cwd)]
+    void sweepScmProjects({ root: join(homedir(), 'harnesses'), inUse, busy })
+      .then(({ removed, freed, failed, left }) => {
+        // Counts and fixed codes only: a path names a person's folder.
         if (removed.length) console.log(`[worktrees] removed ${removed.length} unused worktree(s)`)
         if (freed.length) console.log(`[worktrees] freed ${freed.length} build folder(s) in idle worktrees`)
-        if (stuck.length) console.warn(`[worktrees] BUILD_OUTPUT_STUCK: ${stuck.length} build folder(s) could not be removed whole`)
+        if (failed.length) console.warn(`[worktrees] left as they were: ${byCode(failed)}`)
+        if (left) console.log(`[worktrees] stopped at its limit: ${left} worktree(s) wait for the next sweep`)
       })
-      .catch(() => {})
+      .catch(() => { console.warn('[worktrees] SWEEP_FAILED') })
       .finally(() => { sweeping = false })
   }
   ports.workspaces = { nameBranches: nameSessionBranches, sweepUnused: sweepUnusedWorktrees }
+}
+
+/** Each code once, with how many times it came: `BUILD_OUTPUT_STUCK:EBUSY 2, WORKTREE_NOT_REMOVED 1`. */
+function byCode(codes: string[]): string {
+  const counts = new Map<string, number>()
+  for (const code of codes) counts.set(code, (counts.get(code) ?? 0) + 1)
+  return [...counts].map(([code, count]) => `${code} ${count}`).join(', ')
 }

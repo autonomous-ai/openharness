@@ -17,7 +17,8 @@
  *   only with that answer. So the folders in use are read when the sweep begins, as in the core's
  *   process, never from a list that waited in a buffer while the process was stopped. A core that
  *   cannot list them (an unreadable stopped agent) answers QUERY_FAILED, and nothing is swept. The
- *   answer names the live ones too: the sweep frees build output only where no harness is running.
+ *   answer names the live ones too: the sweep frees no build output where a harness runs. As it goes
+ *   it reads the live agents again, from the terminal-title passes.
  *
  * After it renames a branch, the process asks the core to send the agent's frame again
  * (`branchNamed`): the core forgets what it read of the folder, and the frame shows the new name now

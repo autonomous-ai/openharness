@@ -121,10 +121,10 @@ describe('GitScmProject wraps the git path without changing it', { timeout: 30_0
     const idle = await scm.prepareIsolated(repo, { root: harnesses, base: 'refs/heads/main' })
     const busy = await scm.prepareIsolated(repo, { root: harnesses, base: 'refs/heads/main' })
     const later = Date.now() + 8 * 24 * 3600_000
-    expect(await scm.sweep({ root: harnesses, inUse: [busy.cwd, null, undefined], live: [], now: later })).toEqual({ removed: [idle.cwd], freed: [], stuck: [] })
+    expect(await scm.sweep({ root: harnesses, inUse: [busy.cwd, null, undefined], busy: () => [], now: later })).toEqual({ removed: [idle.cwd], freed: [], failed: [], left: 0 })
     expect(await exists(idle.cwd)).toBe(false)
     expect(await exists(busy.cwd)).toBe(true)
-    expect(await scm.sweep({ root: harnesses, inUse: [busy.cwd], live: [], now: later })).toEqual({ removed: [], freed: [], stuck: [] })
+    expect(await scm.sweep({ root: harnesses, inUse: [busy.cwd], busy: () => [], now: later })).toEqual({ removed: [], freed: [], failed: [], left: 0 })
   })
 
   it('launchEnv asks nothing of the pane, and there is no prepareWrite: a worktree is the folder the row already names', () => {

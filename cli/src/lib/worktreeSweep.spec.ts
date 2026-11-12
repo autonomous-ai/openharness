@@ -1,7 +1,8 @@
 import { execFile } from 'node:child_process'
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
+import { constants, existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { chmod, mkdir, mkdtemp, open, readdir, readFile, realpath, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join, posix, win32 } from 'node:path'
+import { basename, dirname, join, posix, sep, win32 } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildOutputIn, sweepOne, sweepWorktrees, WorktreeKept } from './worktreeSweep.js'
@@ -9,20 +10,34 @@ import { buildOutputIn, sweepOne, sweepWorktrees, WorktreeKept } from './worktre
 const exec = promisify(execFile)
 /** Folders the sweep's own check reads as writable whatever their mode. */
 const writable = vi.hoisted(() => ({ folders: new Set<string>() }))
+/** A step a test takes when the sweep first looks at a path: the folder changes between git's listing and the removal. */
+const looked = vi.hoisted(() => ({ at: null as null | ((file: string) => Promise<void>) }))
 vi.mock('node:fs/promises', async importOriginal => {
   const fs = await importOriginal<typeof import('node:fs/promises')>()
-  return { ...fs, access: (file: string, mode?: number) => writable.folders.has(file) ? Promise.resolve() : fs.access(file, mode) }
+  return {
+    ...fs,
+    access: (file: string, mode?: number) => writable.folders.has(file) ? Promise.resolve() : fs.access(file, mode),
+    lstat: async (file: string, options?: object) => { await looked.at?.(String(file)); return fs.lstat(file, options as never) },
+  }
 })
+/** Whether this disk reads a name in other letters as the same folder: a Mac's and Windows's do, Linux's does not. */
+const caseInsensitive = (() => {
+  const probe = mkdtempSync(join(tmpdir(), 'case-probe-'))
+  try { return existsSync(join(dirname(probe), basename(probe).toUpperCase())) } finally { rmSync(probe, { recursive: true }) }
+})()
+const nothing = { removed: [], freed: [], failed: [], left: 0 }
+type Over = { root?: string; inUse?: Array<string | null>; busy?: () => string[]; now?: number; limit?: { freed: number; ms: number } }
+
 // Real Git, several worktrees a test: slower than the default 5s under a full, parallel run.
 describe('sweeping unused worktrees', { timeout: 30_000 }, () => {
   let root: string, repo: string, home: string
   const gitWith = async (env: NodeJS.ProcessEnv, cwd: string, ...args: string[]) => (await exec('git', ['-C', cwd,
-    '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', ...args], { env })).stdout.trim()
+    '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null',
+    '-c', 'core.fsmonitor=false', ...args], { env })).stdout.trim()
   const git = (cwd: string, ...args: string[]) => gitWith(process.env, cwd, ...args)
   const later = () => Date.now() + 8 * 24 * 3600_000
   /** A sweep a week from now, of worktrees no harness is in unless the test names one. */
-  const sweep = (over: { inUse?: Array<string | null>; live?: string[]; now?: number } = {}) =>
-    sweepWorktrees({ root: join(root, 'harnesses'), inUse: [], live: [], now: later(), ...over })
+  const sweep = (over: Over = {}) => sweepWorktrees({ root: join(root, 'harnesses'), inUse: [], busy: () => [], now: later(), ...over })
   const add = async (name: string, branch: string, from = 'main') => {
     const path = join(home, 'app', name)
     await git(repo, 'worktree', 'add', '--quiet', '-b', branch, path, from)
@@ -44,7 +59,7 @@ describe('sweeping unused worktrees', { timeout: 30_000 }, () => {
 
   it('removes a clean, idle, unused worktree and the harness branch that has nothing of its own', async () => {
     const path = await add('brave-otter', 'harness/brave-otter')
-    expect(await sweep()).toEqual({ removed: [path], freed: [], stuck: [] })
+    expect(await sweep()).toEqual({ ...nothing, removed: [path] })
     expect(await exists(path)).toBe(false)
     expect(await exists(join(home, 'app')), 'the repository folder goes with its last worktree').toBe(false)
     expect(await exists(home), 'the worktrees folder stays').toBe(true)
@@ -163,11 +178,11 @@ describe('sweeping unused worktrees', { timeout: 30_000 }, () => {
     return folder
   }
 
-  it.runIf(permissions)('keeps, untouched and still a worktree, one holding a folder git could not empty', async () => {
+  it.runIf(permissions)('keeps, untouched and still a worktree, one holding a folder git could not empty, and says why', async () => {
     const path = await add('read-only', 'harness/read-only')
     const folder = await withReadOnlyFolder(path)
     try {
-      expect((await sweep()).removed).toEqual([])
+      expect(await sweep()).toEqual({ ...nothing, failed: ['WORKTREE_UNWRITABLE'] })
       expect(await exists(join(path, 'file')), 'nothing in it was deleted').toBe(true)
       expect(await git(path, 'status', '--porcelain')).toBe('')
       expect(await git(path, 'rev-parse', '--git-dir')).toContain('/.git/worktrees/')
@@ -175,7 +190,7 @@ describe('sweeping unused worktrees', { timeout: 30_000 }, () => {
     } finally { await chmod(folder, 0o755) }
   })
 
-  it.runIf(permissions)('puts the record back when git began removing the worktree and could not finish', async () => {
+  it.runIf(permissions)('puts the record back when git began removing the worktree and could not finish, and says so', async () => {
     const path = await add('half-removed', 'harness/half-removed')
     // A folder that turns read-only while the worktree is removed: the check above reads it as writable.
     await withHarnessFolder(path, '/*\n')
@@ -185,7 +200,8 @@ describe('sweeping unused worktrees', { timeout: 30_000 }, () => {
     await chmod(folder, 0o555)
     writable.folders.add(folder)
     try {
-      await expect(sweepOne(path, later(), 0)).rejects.toEqual(new WorktreeKept('WORKTREE_NOT_REMOVED'))
+      // Review of package 6, 11-12: the weekly sweep said nothing of it.
+      expect(await sweep()).toEqual({ ...nothing, failed: ['WORKTREE_NOT_REMOVED'] })
       expect(await git(path, 'rev-parse', '--abbrev-ref', 'HEAD'), 'git still works in what is left').toBe('harness/half-removed')
       expect(await git(path, 'rev-parse', '--git-dir')).toContain('/.git/worktrees/')
       expect(await branches()).toContain('harness/half-removed')
@@ -249,8 +265,43 @@ describe('sweeping unused worktrees', { timeout: 30_000 }, () => {
   it('leaves a worktree alone that came into use while it was being checked', async () => {
     const path = await add('opened', 'harness/opened')
     expect(await sweepOne(path, later(), 0, () => false)).toBe(false)
+    expect(await sweepOne(path, later(), 0, async () => false)).toBe(false)
     expect(await git(path, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('harness/opened')
     expect(await exists(join(path, 'file'))).toBe(true)
+  })
+
+  // Review of package 6, 11-12: a worktree whose repository is gone was passed over in silence, twice a day for good.
+  it('says by its code a worktree git cannot read, and goes on to the next', async () => {
+    const broken = await add('broken', 'harness/broken')
+    const next = await add('next', 'harness/next')
+    await writeFile(join(broken, '.git'), `gitdir: ${join(root, 'gone', '.git', 'worktrees', 'broken')}\n`)
+    expect(await sweep()).toEqual({ ...nothing, removed: [next], failed: ['WORKTREE_CHECK_FAILED'] })
+    expect(await exists(join(broken, 'file'))).toBe(true)
+  })
+
+  // Review of package 6, 11-12: the sweep's git ran the program a repository's config names (core.fsmonitor), and its
+  // hooks, which the daemon's other git never does (lib/gitProject.ts, lib/worktreeDeletion.ts). And a repository that tells
+  // git to show no untracked files had a worktree with new work read as clean, which `git worktree remove` then removed too.
+  it.runIf(process.platform !== 'win32')('runs no program the repository names, and sees untracked work whatever it says', async () => {
+    await writeFile(join(repo, '.gitignore'), 'node_modules/\n')
+    await git(repo, 'add', '.')
+    await git(repo, 'commit', '--quiet', '-m', 'what this project ignores')
+    const stopped = await add('stopped', 'harness/stopped')
+    const clean = await add('clean', 'harness/clean')
+    const fresh = await add('fresh', 'harness/fresh')
+    await mkdir(join(stopped, 'node_modules'))
+    await writeFile(join(stopped, 'node_modules', 'index.js'), 'built')
+    await writeFile(join(fresh, 'new-work.md'), 'not added yet')
+    const ran = join(root, 'ran'), program = join(root, 'program'), hook = join(repo, '.git', 'hooks', 'reference-transaction')
+    for (const file of [program, hook]) {
+      await writeFile(file, `#!/bin/sh\necho "$0" >> "${ran}"\nexit 1\n`)
+      await chmod(file, 0o755)
+    }
+    await git(repo, 'config', 'core.fsmonitor', program)
+    await git(repo, 'config', 'status.showUntrackedFiles', 'no')
+    expect(await sweep({ inUse: [stopped] })).toEqual({ ...nothing, removed: [clean], freed: [join(stopped, 'node_modules')] })
+    expect(await readFile(ran, 'utf8').catch(() => ''), 'a program the repository names').toBe('')
+    expect(await readFile(join(fresh, 'new-work.md'), 'utf8')).toBe('not added yet')
   })
 
   // The allocator's package 6, 11-11. One Mac held 29 worktrees Harness made, 21.6 GB. A stopped harness kept 22 of them and
@@ -269,19 +320,25 @@ describe('sweeping unused worktrees', { timeout: 30_000 }, () => {
     const gitDirOf = (tree: string) => git(tree, 'rev-parse', '--absolute-git-dir')
     beforeEach(async () => {
       await writeFile(join(repo, '.gitignore'), 'node_modules/\n.dart_tool/\nbuild/\n/web/.next/\ndist/\n.env\n.harness/\n*.log\n')
+      await mkdir(join(repo, 'src'))
+      await writeFile(join(repo, 'src', 'app.ts'), 'source')
       await git(repo, 'add', '.')
       await git(repo, 'commit', '--quiet', '-m', 'what this project ignores')
     })
 
-    it('frees node_modules, .dart_tool, build and .next where a stopped harness is, and keeps the checkout and all else', async () => {
+    it('frees node_modules, .dart_tool and .next where a stopped harness is, and keeps the checkout, build and all else', async () => {
       const tree = await add('stopped', 'harness/stopped')
       await put(tree, 'node_modules/pkg/index.js', 'app/.dart_tool/package_config.json', 'app/build/app.bin', 'web/.next/cache/page',
         '.env', '.harness/evidence/run.txt', 'dist/bundle.js', 'notes.md')
       await writeFile(join(tree, 'file'), 'not committed')
       const swept = await sweep({ inUse: [tree] })
-      for (const gone of under(tree, 'node_modules', 'app/.dart_tool', 'app/build', 'web/.next')) expect(await exists(gone), gone).toBe(false)
-      expect(swept).toEqual({ removed: [], freed: under(tree, 'app/.dart_tool', 'app/build', 'node_modules', 'web/.next'), stuck: [] })
-      for (const kept of under(tree, '.env', '.harness/evidence/run.txt', 'dist/bundle.js', 'notes.md')) expect(await exists(kept), kept).toBe(true)
+      expect(swept).toEqual({ ...nothing, freed: under(tree, 'app/.dart_tool', 'node_modules', 'web/.next') })
+      for (const gone of swept.freed) expect(await exists(gone), gone).toBe(false)
+      // Review of package 6, 11-12: `build` is a name people give their own folders. This repository's firmware ignores
+      // `build/` and keeps a pet's hand-drawn frames in a folder of that name.
+      for (const kept of under(tree, 'app/build/app.bin', '.env', '.harness/evidence/run.txt', 'dist/bundle.js', 'notes.md')) {
+        expect(await exists(kept), kept).toBe(true)
+      }
       expect(await readFile(join(tree, 'file'), 'utf8')).toBe('not committed')
       expect(await git(tree, 'status', '--porcelain')).toBe('M file\n?? notes.md')
       expect(await branches()).toContain('harness/stopped')
@@ -293,7 +350,7 @@ describe('sweeping unused worktrees', { timeout: 30_000 }, () => {
       await writeFile(join(tree, 'file'), 'only here')
       await git(tree, 'commit', '--quiet', '-am', 'only here')
       await put(tree, 'node_modules/pkg/index.js')
-      expect(await sweep()).toEqual({ removed: [], freed: under(tree, 'node_modules'), stuck: [] })
+      expect(await sweep()).toEqual({ ...nothing, freed: under(tree, 'node_modules') })
       expect(await git(tree, 'log', '-1', '--format=%s')).toBe('only here')
     })
 
@@ -303,7 +360,7 @@ describe('sweeping unused worktrees', { timeout: 30_000 }, () => {
       await put(top, 'node_modules/pkg/index.js')
       await put(inside, 'cli/node_modules/pkg/index.js')
       const cwds = [top, join(inside, 'cli')]
-      expect(await sweep({ inUse: cwds, live: cwds })).toEqual({ removed: [], freed: [], stuck: [] })
+      expect(await sweep({ inUse: cwds, busy: () => cwds })).toEqual(nothing)
       expect(await exists(join(top, 'node_modules', 'pkg', 'index.js'))).toBe(true)
       expect(await exists(join(inside, 'cli', 'node_modules', 'pkg', 'index.js'))).toBe(true)
     })
@@ -313,8 +370,55 @@ describe('sweeping unused worktrees', { timeout: 30_000 }, () => {
       const running = await add('calm-river-2', 'harness/calm-river-2')
       await put(stopped, 'node_modules/pkg/index.js')
       await put(running, 'node_modules/pkg/index.js')
-      expect(await sweep({ inUse: [stopped, running], live: [running] })).toEqual({ removed: [], freed: under(stopped, 'node_modules'), stuck: [] })
+      expect(await sweep({ inUse: [stopped, running], busy: () => [running] })).toEqual({ ...nothing, freed: under(stopped, 'node_modules') })
       expect(await exists(join(running, 'node_modules', 'pkg', 'index.js'))).toBe(true)
+    })
+
+    // Review of package 6, 11-12: a harness in a folder spelled another way read as no harness there, so a clean worktree
+    // went whole, and the build output of one with work in it was freed under the running harness.
+    const spellings: Array<[string, (tree: string) => Promise<string>]> = [
+      ['as the disk names it', tree => realpath(tree)],
+      ['through a link to it', async (tree) => { const link = join(root, 'link-to-tree'); await symlink(tree, link, 'junction'); return link }],
+      ['through a link to a folder above it', async (tree) => {
+        const link = join(root, 'link-to-harnesses')
+        await symlink(join(root, 'harnesses'), link, 'junction')
+        return join(link, 'worktrees', 'app', basename(tree))
+      }],
+      ...caseInsensitive ? [['in other letters', async (tree: string) => tree.replace(`${sep}worktrees${sep}`, `${sep}WorkTrees${sep}`)] as [string, (tree: string) => Promise<string>]] : [],
+    ]
+    it.each(spellings)('touches nothing where a harness runs in a folder spelled %s', async (_how, spell) => {
+      const tree = await add('spelled', 'harness/spelled')
+      await put(tree, 'node_modules/pkg/index.js')
+      const cwd = await spell(tree)
+      expect(await sweep({ inUse: [cwd], busy: () => [cwd] })).toEqual(nothing)
+      expect(await exists(join(tree, 'node_modules', 'pkg', 'index.js'))).toBe(true)
+    })
+
+    it('touches nothing where a harness runs when it reaches the worktrees through a link', async () => {
+      const tree = await add('linked-root', 'harness/linked-root')
+      await put(tree, 'node_modules/pkg/index.js')
+      const link = join(root, 'home-link')
+      await symlink(join(root, 'harnesses'), link, 'junction')
+      const cwd = await realpath(tree)
+      expect(await sweep({ root: link, inUse: [cwd], busy: () => [cwd] })).toEqual(nothing)
+      expect(await exists(join(tree, 'node_modules', 'pkg', 'index.js'))).toBe(true)
+    })
+
+    // Review of package 6, 11-12: the sweep takes minutes now, and it read the harnesses once, at its start.
+    it('acts on no worktree a harness starts in while the sweep runs', async () => {
+      const first = await add('first', 'harness/first')
+      const second = await add('second', 'harness/second')
+      await put(first, 'node_modules/pkg/index.js')
+      await put(second, 'node_modules/pkg/index.js')
+      // Made last, so the longest unused go first and git would remove this one after the sweep acted on another.
+      const clean = await add('clean', 'harness/clean')
+      const trees = [first, second, clean]
+      const acted = (tree: string) => tree === clean ? !existsSync(clean) : !existsSync(join(tree, 'node_modules'))
+      // Once the sweep has acted on one of them, a harness starts in each of the others.
+      const busy = () => trees.some(acted) ? trees.filter(tree => !acted(tree)) : []
+      const swept = await sweep({ inUse: [first, second], busy })
+      expect(swept.removed.length + swept.freed.length).toBe(1)
+      expect(trees.filter(acted)).toHaveLength(1)
     })
 
     // A worktree of a bare repository is not one Harness made: the sweep never removes it, and frees nothing in it.
@@ -323,31 +427,37 @@ describe('sweeping unused worktrees', { timeout: 30_000 }, () => {
       await git(root, 'clone', '--quiet', '--bare', repo, bare)
       await git(bare, 'worktree', 'add', '--quiet', '-b', 'harness/of-bare', tree, 'main')
       await put(tree, 'node_modules/pkg/index.js')
-      expect(await sweep()).toEqual({ removed: [], freed: [], stuck: [] })
+      expect(await sweep()).toEqual(nothing)
       expect(await exists(join(tree, 'node_modules', 'pkg', 'index.js'))).toBe(true)
     })
 
+    // Review of package 6, 11-12: "used" read git's own writes alone. A person or an agent at work there writes files.
     it.each<[string, (tree: string, recent: Date) => Promise<unknown>]>([
       ['something was made at its top', (tree, recent) => utimes(tree, recent, recent)],
       ['its index was written', async (tree, recent) => utimes(join(await gitDirOf(tree), 'index'), recent, recent)],
       ['its HEAD was written', async (tree, recent) => utimes(join(await gitDirOf(tree), 'HEAD'), recent, recent)],
       // `git reset --soft` and a ref moved by hand write neither HEAD nor the index: only the reflog says HEAD moved.
       ['its HEAD moved', (tree, recent) => gitAt(recent, tree, 'commit', '--quiet', '--allow-empty', '-m', 'yesterday')],
+      ['a tracked file in a folder was edited and not staged', async (tree, recent) => {
+        await writeFile(join(tree, 'src', 'app.ts'), 'edited')
+        await utimes(join(tree, 'src', 'app.ts'), recent, recent)
+      }],
+      ['a new file was made in a folder', async (tree, recent) => {
+        await writeFile(join(tree, 'src', 'new.ts'), 'new')
+        await utimes(join(tree, 'src', 'new.ts'), recent, recent)
+      }],
+      ['a test run wrote a log git ignores', async (tree, recent) => {
+        await writeFile(join(tree, 'src', 'test.log'), 'ran')
+        await utimes(join(tree, 'src', 'test.log'), recent, recent)
+      }],
+      ['an install wrote one build folder', (tree, recent) => utimes(join(tree, 'node_modules'), recent, recent)],
     ])('frees nothing in a worktree used within the week: %s', async (_what, use) => {
       const tree = await add('used', 'harness/used')
-      await put(tree, 'node_modules/pkg/index.js')
+      await put(tree, 'node_modules/pkg/index.js', 'web/.next/cache/page')
       await use(tree, new Date(later() - DAY))
-      expect(await sweep({ inUse: [tree] })).toEqual({ removed: [], freed: [], stuck: [] })
+      expect(await sweep({ inUse: [tree] })).toEqual(nothing)
       expect(await exists(join(tree, 'node_modules', 'pkg', 'index.js'))).toBe(true)
-    })
-
-    it('keeps a build folder written within the week, and frees the others beside it', async () => {
-      const tree = await add('installed', 'harness/installed')
-      await put(tree, 'node_modules/pkg/index.js', 'app/build/app.bin')
-      const recent = new Date(later() - DAY)
-      await utimes(join(tree, 'node_modules'), recent, recent)
-      expect(await sweep({ inUse: [tree] })).toEqual({ removed: [], freed: under(tree, 'app/build'), stuck: [] })
-      expect(await exists(join(tree, 'node_modules', 'pkg', 'index.js'))).toBe(true)
+      expect(await exists(join(tree, 'web', '.next', 'cache', 'page'))).toBe(true)
     })
 
     /** A worktree where every time the sweep reads is a month old, as when nobody has worked there since. */
@@ -365,30 +475,111 @@ describe('sweeping unused worktrees', { timeout: 30_000 }, () => {
     it('frees build output though git gc wrote the reflog again today', async () => {
       const tree = await monthOld('collected', 'node_modules/pkg/index.js')
       await git(repo, 'gc', '--quiet')
-      expect(await sweep({ inUse: [tree], now: Date.now() })).toEqual({ removed: [], freed: under(tree, 'node_modules'), stuck: [] })
+      expect(await sweep({ inUse: [tree], now: Date.now() })).toEqual({ ...nothing, freed: under(tree, 'node_modules') })
     })
 
-    it('keeps a folder with a tracked file in it, one git does not ignore, a link, and one holding a checkout of its own', async () => {
+    it('frees nothing while the clock reads earlier than the worktree was last written', async () => {
+      const tree = await monthOld('clock-behind', 'node_modules/pkg/index.js')
+      expect(await sweep({ inUse: [tree], now: Date.now() - 365 * DAY })).toEqual(nothing)
+      expect(await exists(join(tree, 'node_modules', 'pkg', 'index.js'))).toBe(true)
+    })
+
+    // Review of package 6, 11-12: git lists a folder whole when everything in it is ignored, by whatever rule. Here no rule
+    // names `deploy/build`, `gen/.next` or `lib/node_modules`, only the files in them: they are someone's, and they stay.
+    it('frees only a folder a rule names itself, never one whose files are each ignored by a rule of their own', async () => {
+      await writeFile(join(repo, '.gitignore'), '/node_modules/\n*.log\n.env\n.env.*\n*.pem\n*.sqlite\n/web/.next/\n')
+      await git(repo, 'commit', '--quiet', '-am', 'only these')
+      const tree = await add('contents', 'harness/contents')
+      const theirs = ['deploy/build/.env', 'deploy/build/prod.pem', 'data/build/customers.sqlite', 'gen/.next/run.log', 'lib/node_modules/.env.local']
+      await put(tree, ...theirs, 'node_modules/pkg/index.js')
+      expect(await git(tree, 'check-ignore', '-q', '--', 'gen/.next').then(() => 'ignored', () => 'not ignored')).toBe('not ignored')
+      expect(await sweep({ inUse: [tree] })).toEqual({ ...nothing, freed: under(tree, 'node_modules') })
+      for (const kept of theirs) expect(await exists(join(tree, kept)), kept).toBe(true)
+    })
+
+    it('frees a folder a rule names inside one no rule names, and leaves the outer one', async () => {
+      const tree = await add('inside', 'harness/inside')
+      await put(tree, 'gen/.next/run.log', 'gen/.next/web/node_modules/pkg/index.js', 'node_modules/pkg/index.js')
+      expect(await sweep({ inUse: [tree] })).toEqual({ ...nothing, freed: under(tree, 'gen/.next/web/node_modules', 'node_modules') })
+      expect(await exists(join(tree, 'gen', '.next', 'run.log'))).toBe(true)
+    })
+
+    // Review of package 6, 11-12: a bare repository has no `.git` of its own; HEAD, objects and refs side by side are one.
+    it('keeps a folder with a tracked file in it, a link, and one holding a repository or a checkout of its own', async () => {
       const tree = await add('guarded', 'harness/guarded')
       const outside = join(root, 'shared-modules')
       await put(outside, 'pkg/index.js')
-      await put(tree, 'tracked/build/kept.txt', 'tracked/build/out.o', 'docs/.next/draft.md', 'cloned/build/dep/src.c', 'plain/node_modules/pkg/index.js')
-      await git(tree, 'add', '-f', 'tracked/build/kept.txt')
+      await put(tree, 'tracked/node_modules/kept.txt', 'tracked/node_modules/out.o', 'cloned/node_modules/dep/src.c',
+        'bare/node_modules/mirror/readme', 'plain/node_modules/pkg/index.js')
+      await git(tree, 'add', '-f', 'tracked/node_modules/kept.txt')
       await git(tree, 'commit', '--quiet', '-m', 'a file kept in a build folder')
       await mkdir(join(tree, 'linked'))
-      await symlink(outside, join(tree, 'linked', 'node_modules'))
-      await git(join(tree, 'cloned', 'build', 'dep'), 'init', '--quiet')
-      expect(await sweep({ inUse: [tree] })).toEqual({ removed: [], freed: under(tree, 'plain/node_modules'), stuck: [] })
-      for (const kept of [...under(tree, 'tracked/build/kept.txt', 'tracked/build/out.o', 'docs/.next/draft.md', 'cloned/build/dep/src.c', 'linked/node_modules'), join(outside, 'pkg', 'index.js')]) {
+      await symlink(outside, join(tree, 'linked', 'node_modules'), 'junction')
+      await git(join(tree, 'cloned', 'node_modules', 'dep'), 'init', '--quiet')
+      await git(join(tree, 'bare', 'node_modules', 'mirror'), 'init', '--quiet', '--bare', 'app.git')
+      await git(repo, 'worktree', 'add', '--quiet', '-b', 'inner', join(tree, 'inner', '.dart_tool', 'checkout'), 'main')
+      expect(await sweep({ inUse: [tree] })).toEqual({ ...nothing, freed: under(tree, 'plain/node_modules') })
+      for (const kept of [...under(tree, 'tracked/node_modules/kept.txt', 'tracked/node_modules/out.o', 'cloned/node_modules/dep/src.c',
+        'bare/node_modules/mirror/app.git/HEAD', 'inner/.dart_tool/checkout/file', 'linked/node_modules'), join(outside, 'pkg', 'index.js')]) {
         expect(await exists(kept), kept).toBe(true)
       }
     })
 
-    // Git names a folder that only holds ignored files, and then what is in it: once the folder went, those are gone too.
-    it('frees a build folder once when git lists what is in it as well, and goes on to the next', async () => {
-      const tree = await add('listed-twice', 'harness/listed-twice')
-      await put(tree, 'gen/.next/run.log', 'gen/.next/web/node_modules/pkg/index.js', 'node_modules/pkg/index.js')
-      expect(await sweep({ inUse: [tree] })).toEqual({ removed: [], freed: under(tree, 'gen/.next', 'node_modules'), stuck: [] })
+    // `npm link` puts a link to someone's own checkout in node_modules: a link on a Mac or Linux, a junction on Windows.
+    it('removes a link in a build folder, never what it points to', async () => {
+      const tree = await add('npm-link', 'harness/npm-link')
+      const theirs = join(root, 'their-package')
+      await put(theirs, 'index.js', 'src/lib.ts')
+      await put(tree, 'node_modules/pkg/index.js')
+      await symlink(theirs, join(tree, 'node_modules', 'their-package'), 'junction')
+      expect(await sweep({ inUse: [tree] })).toEqual({ ...nothing, freed: under(tree, 'node_modules') })
+      expect(await exists(join(theirs, 'src', 'lib.ts'))).toBe(true)
+    })
+
+    // Review of package 6, 11-12: Git for Windows may walk into a junction as a folder, and then `vendor\node_modules` would
+    // be removed where the junction points, outside the worktree.
+    it('never frees build output it reaches through a link or a junction', async () => {
+      const tree = await add('junction', 'harness/junction')
+      const shared = join(root, 'shared')
+      await put(shared, 'node_modules/kept/index.js', 'src/lib.ts')
+      await symlink(shared, join(tree, 'vendor'), 'junction')
+      await put(tree, 'node_modules/pkg/index.js')
+      expect(await sweep({ inUse: [tree] })).toEqual({ ...nothing, freed: under(tree, 'node_modules') })
+      expect(await exists(join(shared, 'node_modules', 'kept', 'index.js'))).toBe(true)
+    })
+
+    it('never removes through a folder that became a link after git listed it', async () => {
+      const tree = await add('swapped', 'harness/swapped')
+      const elsewhere = join(root, 'elsewhere')
+      await put(elsewhere, 'node_modules/kept/index.js')
+      await put(tree, 'vendor/node_modules/pkg/index.js')
+      const folder = join(tree, 'vendor', 'node_modules')
+      looked.at = async (file) => {
+        if (file !== folder) return
+        looked.at = null
+        await rm(join(tree, 'vendor'), { recursive: true })
+        await symlink(elsewhere, join(tree, 'vendor'), 'junction')
+      }
+      try {
+        expect(await sweep({ inUse: [tree] })).toEqual(nothing)
+      } finally { looked.at = null }
+      expect(await exists(join(elsewhere, 'node_modules', 'kept', 'index.js'))).toBe(true)
+    })
+
+    it('never removes a build folder that became a link after git listed it, though it points inside the worktree', async () => {
+      const tree = await add('relinked', 'harness/relinked')
+      await put(tree, 'node_modules/pkg/index.js')
+      const folder = join(tree, 'node_modules')
+      looked.at = async (file) => {
+        if (file !== folder) return
+        looked.at = null
+        await rm(folder, { recursive: true })
+        await symlink(join(tree, 'src'), folder, 'junction')
+      }
+      try {
+        expect(await sweep({ inUse: [tree] })).toEqual(nothing)
+      } finally { looked.at = null }
+      expect(await readFile(join(tree, 'src', 'app.ts'), 'utf8')).toBe('source')
     })
 
     it.runIf(permissions)('leaves a build folder whole when a folder in it could not be emptied', async () => {
@@ -397,41 +588,84 @@ describe('sweeping unused worktrees', { timeout: 30_000 }, () => {
       const folder = join(tree, 'node_modules', 'z', 'held')
       await chmod(folder, 0o555)
       try {
-        expect(await sweep({ inUse: [tree] })).toEqual({ removed: [], freed: [], stuck: [] })
+        expect(await sweep({ inUse: [tree] })).toEqual(nothing)
         expect(await exists(join(tree, 'node_modules', 'a', 'index.js')), 'nothing in it was deleted').toBe(true)
       } finally { await chmod(folder, 0o755) }
     })
 
-    it.runIf(permissions)('says which build folder it began to remove and could not finish, and frees the rest', async () => {
+    // Review of package 6, 11-12: Node's own recursive removal went on deleting after it had failed, and held every path it had
+    // not reached in memory. One entry at a time stops where it cannot go on.
+    it.runIf(permissions)('stops at the first entry it cannot remove, says so by its code, and frees the other folders', async () => {
       const tree = await add('late', 'harness/late')
-      await put(tree, 'node_modules/late/held', 'web/.next/cache/page')
-      // A folder that turns read-only while it is removed: the check before reads it as writable.
-      const folder = join(tree, 'node_modules', 'late')
-      await chmod(folder, 0o555)
-      writable.folders.add(folder)
+      await put(tree, ...Array.from({ length: 12 }, (_, at) => `node_modules/pkg-${at}/index.js`), 'web/.next/cache/page')
+      // Removed in the order the disk lists them. The middle one turns read-only while it is removed: the check before reads
+      // it as writable.
+      const order = await readdir(join(tree, 'node_modules'))
+      const held = join(tree, 'node_modules', order[6]!)
+      await chmod(held, 0o555)
+      writable.folders.add(held)
       try {
-        expect(await sweep({ inUse: [tree] })).toEqual({ removed: [], freed: under(tree, 'web/.next'), stuck: under(tree, 'node_modules') })
-        expect(await exists(join(folder, 'held'))).toBe(true)
-      } finally { writable.folders.clear(); await chmod(folder, 0o755) }
+        expect(await sweep({ inUse: [tree] })).toEqual({ ...nothing, freed: under(tree, 'web/.next'), failed: ['BUILD_OUTPUT_STUCK:EACCES'] })
+        expect(await exists(join(held, 'index.js'))).toBe(true)
+        for (const after of order.slice(7)) expect(await exists(join(tree, 'node_modules', after, 'index.js')), `${after} is never reached`).toBe(true)
+      } finally { writable.folders.clear(); await chmod(held, 0o755) }
+    })
+
+    // Review of package 6, 11-12: on Windows nothing says beforehand that a file is held open; the removal stops at it.
+    it.runIf(process.platform === 'win32')('says a build folder it could not finish when a file in it is held open, and frees the rest', async () => {
+      const tree = await add('open', 'harness/open')
+      await put(tree, 'node_modules/held/addon.node', 'web/.next/cache/page')
+      // Held as a running program holds its own file, shared with nobody: UV_FS_O_EXLOCK (libuv's include/uv/win.h).
+      const handle = await open(join(tree, 'node_modules', 'held', 'addon.node'), constants.O_RDONLY | 0x10000000)
+      try {
+        const swept = await sweep({ inUse: [tree] })
+        expect(swept.freed).toEqual(under(tree, 'web/.next'))
+        expect(swept.failed).toEqual([expect.stringMatching(/^BUILD_OUTPUT_STUCK/)])
+        expect(await exists(join(tree, 'node_modules', 'held', 'addon.node'))).toBe(true)
+      } finally { await handle.close() }
+    })
+
+    // Review of package 6, 11-12: one sweep had no bound; 60 idle worktrees cost 4.8 to 5.7 s of reads.
+    it('frees build output in so many worktrees a sweep, the longest unused first; the rest wait for the next sweep', async () => {
+      // The longest unused of all, with nothing to free: it does not count.
+      const empty = await monthOld('empty')
+      await monthOld('one', 'node_modules/pkg/index.js')
+      await monthOld('two', 'node_modules/pkg/index.js')
+      // The one the disk lists first was used more lately: the order the sweep finds them in is not the order it frees them in.
+      const [newer, older] = (await readdir(join(home, 'app'))).filter(name => name !== 'empty').map(name => join(home, 'app', name)) as [string, string]
+      for (const [tree, days] of [[newer, 10], [older, 20]] as const) await utimes(tree, new Date(Date.now() - days * DAY), new Date(Date.now() - days * DAY))
+      const inUse = [empty, newer, older], limit = { freed: 1, ms: 600_000 }
+      expect(await sweep({ inUse, limit })).toEqual({ ...nothing, freed: under(older, 'node_modules'), left: 1 })
+      expect((await sweep({ inUse, limit })).freed).toEqual(under(newer, 'node_modules'))
+    })
+
+    it('begins no new worktree once a sweep has run its time, and always does one', async () => {
+      const first = await monthOld('first', 'node_modules/pkg/index.js')
+      const second = await monthOld('second', 'node_modules/pkg/index.js')
+      const swept = await sweep({ inUse: [first, second], limit: { freed: 10, ms: 0 } })
+      expect(swept.freed).toHaveLength(1)
+      expect(swept.left).toBe(1)
     })
 
     // Git writes its paths with a slash on every platform; the folder is the platform's own. No Windows computer runs this
-    // suite, so its paths are checked here.
+    // suite by itself, so its paths are checked here too.
     it('finds build output in git\'s listing on Windows as on a Mac or Linux', () => {
-      const listing = ['cli/node_modules/', 'desktop/.dart_tool/', 'desktop/build/', 'web/.next/', '.env', 'dist/', '.harness/', 'cli/node_modules', 'gen/build/out.o', 'my build/', ''].join('\0')
+      const listing = ['!! cli/node_modules/', '!! desktop/.dart_tool/', '!! desktop/build/', '!! web/.next/', '!! .env', '!! dist/',
+        '?? notes/node_modules/', '!! cli/node_modules', '!! gen/out.log', '!! my build/', ' M src/app.ts',
+        // A rename is followed by the path it came from, which is no entry of its own.
+        'R  moved/app.ts', '!! looks/like/node_modules/', ''].join('\0')
       expect(buildOutputIn('C:\\h\\worktrees\\app\\calm-river', listing, win32.join)).toEqual([
         'C:\\h\\worktrees\\app\\calm-river\\cli\\node_modules', 'C:\\h\\worktrees\\app\\calm-river\\desktop\\.dart_tool',
-        'C:\\h\\worktrees\\app\\calm-river\\desktop\\build', 'C:\\h\\worktrees\\app\\calm-river\\web\\.next',
+        'C:\\h\\worktrees\\app\\calm-river\\web\\.next',
       ])
       expect(buildOutputIn('/h/worktrees/app/calm-river', listing, posix.join)).toEqual([
-        '/h/worktrees/app/calm-river/cli/node_modules', '/h/worktrees/app/calm-river/desktop/.dart_tool',
-        '/h/worktrees/app/calm-river/desktop/build', '/h/worktrees/app/calm-river/web/.next',
+        '/h/worktrees/app/calm-river/cli/node_modules', '/h/worktrees/app/calm-river/desktop/.dart_tool', '/h/worktrees/app/calm-river/web/.next',
       ])
     })
   })
 
   it('ignores a missing worktrees folder and checkouts that are not worktrees', async () => {
-    expect(await sweepWorktrees({ root: join(root, 'nothing'), inUse: [], live: [] })).toEqual({ removed: [], freed: [], stuck: [] })
+    expect(await sweep({ root: join(root, 'nothing') })).toEqual(nothing)
     await mkdir(join(home, 'app', 'plain'), { recursive: true })
     await git(repo, 'clone', '--quiet', repo, join(home, 'clone'))
     expect((await sweep()).removed).toEqual([])

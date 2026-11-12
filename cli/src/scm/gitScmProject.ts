@@ -49,7 +49,7 @@ export class GitScmProject implements ScmProject {
     return nameBranchAfterSession(cwd, title)
   }
 
-  sweep(input: { root: string; inUse: Iterable<string | null | undefined>; live: Iterable<string | null | undefined>; now?: number; idleMs?: number }): Promise<Swept> {
+  sweep(input: { root: string; inUse: Iterable<string | null | undefined>; busy: () => Iterable<string | null | undefined>; now?: number; idleMs?: number }): Promise<Swept> {
     return sweepWorktrees(input)
   }
 

@@ -59,22 +59,24 @@ export async function renameScmProject(cwd: string, title: string | null, scms: 
   return null
 }
 
-/** Every SCM sweeps its own idle workspaces under `root`; what went, in SCM order. `inUse` and `live`
- *  are read once here, because an iterable handed to two implementations would be empty for the second. */
+/** Every SCM sweeps its own idle workspaces under `root`; what went, in SCM order. `inUse` is read once here, because an
+ *  iterable handed to two implementations would be empty for the second; `busy` is each implementation's to ask, as often
+ *  as it acts. */
 export async function sweepScmProjects(input: {
   root: string
   inUse: Iterable<string | null | undefined>
-  live: Iterable<string | null | undefined>
+  busy: () => Iterable<string | null | undefined>
   now?: number
   idleMs?: number
 }, scms: readonly ScmProject[] = scmProjects): Promise<Swept> {
-  const inUse = [...input.inUse], live = [...input.live]
-  const swept: Swept = { removed: [], freed: [], stuck: [] }
+  const inUse = [...input.inUse]
+  const swept: Swept = { removed: [], freed: [], failed: [], left: 0 }
   for (const scm of scms) {
-    const one = await scm.sweep({ ...input, inUse, live })
+    const one = await scm.sweep({ ...input, inUse })
     swept.removed.push(...one.removed)
     swept.freed.push(...one.freed)
-    swept.stuck.push(...one.stuck)
+    swept.failed.push(...one.failed)
+    swept.left += one.left
   }
   return swept
 }

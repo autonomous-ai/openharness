@@ -9,41 +9,51 @@
  * later. A core that restarts leaves the process running.
  */
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 
 /** Git as the test runs it: the daemon's throwaway home, never this machine's configuration. */
+const gitEnv = (d: IsolatedDaemon) => ({ ...process.env, HOME: d.env.HOME, GIT_CONFIG_NOSYSTEM: '1' })
 const git = (d: IsolatedDaemon, cwd: string, ...args: string[]): string =>
-  execFileSync('git', ['-C', cwd, ...args], { env: { ...process.env, HOME: d.env.HOME, GIT_CONFIG_NOSYSTEM: '1' }, encoding: 'utf8' }).trim()
+  execFileSync('git', ['-C', cwd, ...args], { env: gitEnv(d), encoding: 'utf8' }).trim()
+/** Eight days ago: past the sweep's week. */
+const lastWeek = () => new Date(Date.now() - 8 * 24 * 3600_000)
 
-/** A repository with one commit, in the daemon's projects folder. */
+/** A repository with one commit, in the daemon's projects folder; it ignores node_modules. */
 function repository(d: IsolatedDaemon): string {
   const dir = join(d.projectsDir, 'repo')
   mkdirSync(dir, { recursive: true })
   git(d, dir, 'init', '-q', '-b', 'main')
   writeFileSync(join(dir, 'README.md'), 'a repository\n')
-  git(d, dir, 'add', 'README.md')
+  writeFileSync(join(dir, '.gitignore'), 'node_modules/\n')
+  git(d, dir, 'add', 'README.md', '.gitignore')
   git(d, dir, '-c', 'user.name=e2e', '-c', 'user.email=e2e@example.invalid', 'commit', '-q', '-m', 'start')
   return dir
 }
 /** A worktree where Harness keeps them (`~/harnesses/worktrees/<repo>/<name>`), on its own branch;
- *  `placeholder` marks the branch as the made-up name Harness gives one at Start. */
+ *  `placeholder` marks the branch as the made-up name Harness gives one at Start. Git stamps its reflog eight days ago:
+ *  freeing build output reads when HEAD last moved from that line, not from the time the file was written. */
 function worktree(d: IsolatedDaemon, repo: string, name: string, placeholder = false): string {
   const path = join(d.env.HOME!, 'harnesses', 'worktrees', 'repo', name)
-  git(d, repo, 'worktree', 'add', '-q', '-b', name, path)
+  execFileSync('git', ['-C', repo, 'worktree', 'add', '-q', '-b', name, path], { env: { ...gitEnv(d), GIT_COMMITTER_DATE: lastWeek().toISOString() } })
   if (placeholder) git(d, repo, 'config', `branch.${name}.harness`, 'placeholder')
   return path
 }
-/** Nothing in it changed for eight days: past the sweep's week. */
-function idle(d: IsolatedDaemon, path: string): void {
+/** Nothing in it changed for eight days: past the sweep's week. [also]: files in it to age with it. */
+function idle(d: IsolatedDaemon, path: string, ...also: string[]): void {
   const gitDir = git(d, path, 'rev-parse', '--absolute-git-dir')
-  const then = new Date(Date.now() - 8 * 24 * 3600_000)
-  for (const file of [path, join(gitDir, 'HEAD'), join(gitDir, 'index'), join(gitDir, 'logs', 'HEAD')]) {
+  const then = lastWeek()
+  for (const file of [...also.map((name) => join(path, name)), path, join(gitDir, 'HEAD'), join(gitDir, 'index'), join(gitDir, 'logs', 'HEAD')]) {
     if (existsSync(file)) utimesSync(file, then, then)
   }
+}
+/** What an install leaves in a worktree. */
+function installed(path: string): void {
+  mkdirSync(join(path, 'node_modules', 'pkg'), { recursive: true })
+  writeFileSync(join(path, 'node_modules', 'pkg', 'index.js'), 'module.exports = 1\n')
 }
 
 /** The workspaces process the master runs now, the edge host: the last one it said it started. Read from
@@ -213,23 +223,40 @@ describe('workspaces in their own process', () => {
     client.close()
   })
 
-  it('the sweep runs in the workspaces process when the core says: it removes a week-idle worktree nothing uses, and keeps one an agent works in', async () => {
-    let unused = ''
-    let used = ''
-    const d = await fresh({ HARNESSD_TEST_SWEEP_AFTER_MS: '20000' }, (d) => {
+  it('the sweep runs in the workspaces process when the core says: it removes a week-idle worktree nothing uses, keeps one an agent works in, and frees build output only where no harness works', async () => {
+    let unused = '', used = '', paused = '', left = ''
+    const d = await fresh({ HARNESSD_TEST_SWEEP_AFTER_MS: '60000' }, (d) => {
       const repo = repository(d)
       unused = worktree(d, repo, 'old-idea')
       used = worktree(d, repo, 'still-going')
+      paused = worktree(d, repo, 'paused')
+      left = worktree(d, repo, 'left-behind')
+      for (const tree of [used, paused, left]) installed(tree)
+      // Work nobody committed keeps the worktree; its build output is what goes.
+      writeFileSync(join(left, 'notes.md'), 'not committed\n')
+      idle(d, unused)
+      idle(d, left, 'node_modules', 'notes.md')
     })
     const client = await LocalClient.connect(d)
     const agent = await create(d, client, used)
-    // Both idle for a week: only the agent working in one keeps it.
-    idle(d, unused)
-    idle(d, used)
-    await until('the sweep to remove the unused worktree', () => d.log().includes('[worktrees] removed 1 unused worktree(s)') || null, 60_000, 250)
+    const stopping = await create(d, client, paused)
+    // A conversation that has begun, as one a person stops: an agent closed before its first turn has nothing to keep.
+    await turn(client, stopping.id, 'some work, then stop')
+    expect(await client.request('agent_close', { agentId: stopping.id, sessionId: stopping.sessionId, createdAt: stopping.createdAt, mode: 'now' }, 60_000))
+      .toMatchObject({ closed: true })
+    await until('the paused agent to be kept as stopped', async () => (await row(client, stopping.id))?.status === 'stopped' || null, 45_000, 500)
+    // Idle for a week, both: only the harness working in one, and the one stopped in the other today, keep them as they are.
+    idle(d, used, 'node_modules')
+    idle(d, paused, 'node_modules')
+    await until('the sweep to remove the unused worktree and free the build output nobody works with',
+      () => d.log().includes('[worktrees] removed 1 unused worktree(s)') && d.log().includes('[worktrees] freed 1 build folder(s) in idle worktrees') || null, 120_000, 250)
     expect(existsSync(unused)).toBe(false)
-    expect(existsSync(used)).toBe(true)
+    expect(existsSync(join(left, 'node_modules'))).toBe(false)
+    expect(readFileSync(join(left, 'notes.md'), 'utf8')).toBe('not committed\n')
+    expect(existsSync(join(used, 'node_modules', 'pkg', 'index.js'))).toBe(true)
+    expect(existsSync(join(paused, 'node_modules', 'pkg', 'index.js'))).toBe(true)
     expect(d.log().split('[worktrees] removed').length - 1).toBe(1)
+    expect(d.log()).not.toContain('[worktrees] left as they were')
     await turn(client, agent.id, 'my worktree is still here')
     expect(d.coresStarted()).toBe(1)
     client.close()
