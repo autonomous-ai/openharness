@@ -208,8 +208,8 @@ class _SuperTabViewState extends State<SuperTabView>
 
   /// Opens the chat of an agent chosen in My agents in the middle: the Board closes and the chat takes its place.
   void _openAgentChat(String id) {
-    c.leaveDevices();
     _leaveFor(id);
+    c.leaveDevices();
     setState(() {
       _page = null;
       _showManage = false;
@@ -987,7 +987,7 @@ class _SuperTabViewState extends State<SuperTabView>
     for (var i = at + step; i >= 0 && i < order.length; i += step) {
       final group = snapshot.conversation(order[i]);
       if (group == null || !c.unreadShown(group)) continue;
-      _leaveFor(group.id);
+      _revealChat(group.id);
       setState(() {
         _page = null;
         _showManage = false;
@@ -1757,7 +1757,7 @@ class _SuperTabViewState extends State<SuperTabView>
       _page = null;
       _showManage = false;
     });
-    if (request.kind == 'chat') _openConversation(request.id);
+    if (request.kind == 'chat') _openConversation(request.id, reveal: true);
   }
 
   /// Shows [page] in the main pane, as its sidebar row does.
@@ -1857,10 +1857,19 @@ class _SuperTabViewState extends State<SuperTabView>
 
   /// Opens chat [conversationId] from a row of a page; false when it is
   /// gone or the reader's access is.
-  bool _openConversation(String conversationId, {bool leave = true}) {
+  /// [reveal]: a jump to what is in it ([_revealChat]); [leave] false: a step back or forward, which closes nothing.
+  bool _openConversation(
+    String conversationId, {
+    bool leave = true,
+    bool reveal = false,
+  }) {
     final group = c.snapshot?.conversation(conversationId);
     if (c.accessRevoked || group == null) return false;
-    if (leave) _leaveFor(conversationId);
+    if (reveal) {
+      _revealChat(conversationId);
+    } else if (leave) {
+      _leaveFor(conversationId);
+    }
     _closeSidebar();
     setState(() {
       _page = null;
@@ -1930,7 +1939,7 @@ class _SuperTabViewState extends State<SuperTabView>
       );
       return;
     }
-    _leaveFor(id);
+    _revealChat(id);
     _closeSidebar();
     c.select(id);
     // A thread reply opens its thread; one shown only there has no row in the
@@ -2785,11 +2794,28 @@ class _SuperTabViewState extends State<SuperTabView>
     }
   }
 
-  /// Leaving for chat [target]: a terminal stays with the chat it was opened beside, and shows again when its person comes back
-  /// (anh Dee, 2026-11-12: "i open the terminal side by side and i go to another chat and come back and the terminal is
-  /// closed"). Only a move within the chat on screen closes it, so what it moves to is not under a terminal.
+  /// Whether this window puts a chat's terminal, and a pane, beside the chat rather than in its place, as the last frame laid
+  /// them out (SuperTabPaneLayout.terminalBesideFrom, twoPanesFrom).
+  bool _terminalFitsBeside = true, _paneFitsBeside = true;
+
+  /// The person is in the chat on screen: no page, Manage or Devices holds the pane.
+  bool get _inChatOnScreen =>
+      !_notificationsVisible && !_manageVisible && !_devicesVisible;
+
+  /// Going to chat [target] by its row: a terminal stays with the chat it was opened beside, and shows again when its person
+  /// comes back (anh Dee, 2026-11-12: "i open the terminal side by side and i go to another chat and come back and the terminal
+  /// is closed"). Only the row of the chat the person is in, whose terminal covers it, closes it, so the chat shows. Coming back
+  /// from Manage, a page or My agents is a return, not a move within the chat (the second review of #4213).
   void _leaveFor(String? target) {
-    if (target == c.selectedId) widget.onCloseTerminal?.call();
+    if (target == c.selectedId && _inChatOnScreen && !_terminalFitsBeside)
+      widget.onCloseTerminal?.call();
+  }
+
+  /// A jump to a message in chat [target] (a link, the next unread, a notice): the chat shows, so what was kept beside it in
+  /// its place in a narrow window (its terminal, a pane) closes; beside the chat, it stays (the second review of #4213).
+  void _revealChat(String target) {
+    if (!_terminalFitsBeside) c.selectTerminal(target, null);
+    if (!_paneFitsBeside) c.showBeside(target, null);
   }
 
   /// Keep each pane's state (what is typed in the instructions, what the tasks read and where they are scrolled) as a window
@@ -4988,6 +5014,12 @@ class _SuperTabViewState extends State<SuperTabView>
       final wide =
           constraints.maxWidth >= scale.scale(SuperTabPaneLayout.twoPanesFrom);
       final threadDrawer = thread != null && !wide;
+      // Read by the moves between chats, which run between frames.
+      _paneFitsBeside = wide;
+      _terminalFitsBeside =
+          wide &&
+          constraints.maxWidth >=
+              scale.scale(SuperTabPaneLayout.terminalBesideFrom);
       // A terminal on screen keeps its chat beside it, in the right pane, as
       // a thread sits; a thread takes that side, and a narrow window shows
       // one at a time (Huy, 11-04, #2792). A v4 terminal needs about 480 of

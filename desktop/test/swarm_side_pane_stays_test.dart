@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/message_link.dart';
 import 'package:harness/super_tabs/places.dart';
 import 'package:harness/super_tabs/view.dart';
 
+import 'support/super_tab_fixture.dart' show ConversationServer;
 import 'support/swarm_v4_data.dart';
 
 /// An agent's chat keeps what is open beside it (anh Dee, 2026-11-12: "i open the terminal side by side and i go to another
@@ -15,18 +17,27 @@ void main() {
   Finder key(String k) => find.byKey(ValueKey(k));
 
   late SuperTabController controller;
+  late ConversationServer server;
 
-  Future<void> show(WidgetTester tester) async {
-    await tester.binding.setSurfaceSize(const Size(1600, 1000));
+  /// lampOS's Swarm at [size], the first builder's chat open, or as the saved view [saved] left it.
+  Future<void> show(
+    WidgetTester tester, {
+    Size size = const Size(1600, 1000),
+    Map<String, dynamic>? saved,
+    ConversationServer? swarm,
+  }) async {
+    await tester.binding.setSurfaceSize(size);
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final server = swarmV4Server();
+    server = swarm ?? swarmV4Server();
     controller = server.controller(
       account: 'owner',
-      initial: {
-        'tabId': 'tab',
-        'accountId': 'owner',
-        'selectedId': 'agent-chat-first builder',
-      },
+      initial:
+          saved ??
+          {
+            'tabId': 'tab',
+            'accountId': 'owner',
+            'selectedId': 'agent-chat-first builder',
+          },
     );
     addTearDown(controller.dispose);
     await tester.runAsync(controller.refresh);
@@ -178,7 +189,142 @@ void main() {
     },
   );
 
-  test('keeps what is open beside each chat with the rest of its saved view, and only the panes it knows', () {
+  // The second review of #4213: Manage and a page never change the chat on screen, so coming back by the chat's own row read as
+  // a move within it and closed its terminal; pressing the row of the chat on screen closed it too.
+  testWidgets(
+    'the terminal is there again on coming back from Manage, a page or My agents, and when its own row is pressed',
+    (tester) async {
+      final swarm = swarmV4Server()
+        ..shippingAnswer = (_) => {
+          'week': 1793577600000,
+          'people': [
+            {
+              'personId': 'owner',
+              'displayName': 'Dee',
+              'agentsShipping': 2,
+              'level': 2,
+              'points': 2.4,
+              'rank': 1,
+            },
+          ],
+          'failures': <dynamic>[],
+        };
+      await show(tester, swarm: swarm);
+      await tap(tester, key('swarm-terminal-button'));
+      expect(find.text('Terminal fixture'), findsOneWidget);
+
+      await tap(tester, key('super-agent-first builder'));
+      expect(
+        find.text('Terminal fixture'),
+        findsOneWidget,
+        reason: 'its own row',
+      );
+
+      await tap(tester, key('super-manage'));
+      expect(find.text('Terminal fixture'), findsNothing);
+      await tap(tester, key('super-agent-first builder'));
+      expect(
+        find.text('Terminal fixture'),
+        findsOneWidget,
+        reason: 'back from Manage',
+      );
+
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 50)),
+      );
+      await settle(tester);
+      if (key('super-human-owner').evaluate().isEmpty)
+        await tap(tester, key('project-sidebar-humans'));
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 50)),
+      );
+      await settle(tester);
+      await tap(tester, key('super-human-owner'));
+      expect(find.text('Terminal fixture'), findsNothing);
+      await tap(tester, key('super-agent-first builder'));
+      expect(
+        find.text('Terminal fixture'),
+        findsOneWidget,
+        reason: 'back from a page',
+      );
+    },
+  );
+
+  // The second review of #4213: under 1260 the terminal, and under 1080 a pane, takes the chat's place, and a jump to a message
+  // landed under it. A jump shows the chat.
+  testWidgets(
+    'a jump to a message in a narrow window shows the chat, not what it kept in its place',
+    (tester) async {
+      await show(tester, size: const Size(1100, 900));
+      String firstBuilderLast() =>
+          (server.messages.lastWhere(
+                (m) => m['conversationId'] == 'agent-chat-first builder',
+              )['id'])
+              as String;
+      final message = firstBuilderLast();
+      await tap(tester, key('swarm-terminal-button'));
+      expect(find.text('Terminal fixture'), findsOneWidget);
+      await tap(tester, key('super-agent-second'));
+      controller.openMessageLink(
+        SwarmMessageLink(
+          tabId: controller.tabId,
+          conversationId: 'agent-chat-first builder',
+          messageId: message,
+        ),
+      );
+      await settle(tester);
+      expect(controller.selectedId, 'agent-chat-first builder');
+      expect(find.text('Terminal fixture'), findsNothing);
+      expect(find.textContaining('Six tasks are up'), findsWidgets);
+
+      // A pane in the chat's place, under 1080.
+      await show(tester, size: const Size(1000, 900));
+      await tap(tester, key('swarm-info-button'));
+      await tap(tester, key('super-agent-second'));
+      controller.openMessageLink(
+        SwarmMessageLink(
+          tabId: controller.tabId,
+          conversationId: 'agent-chat-first builder',
+          messageId: firstBuilderLast(),
+        ),
+      );
+      await settle(tester);
+      expect(key('swarm-agent-info'), findsNothing);
+      expect(find.textContaining('Six tasks are up'), findsWidgets);
+
+      // Beside the chat, a jump leaves what is kept.
+      await show(tester);
+      await tap(tester, key('swarm-terminal-button'));
+      await tap(tester, key('super-agent-second'));
+      controller.openMessageLink(
+        SwarmMessageLink(
+          tabId: controller.tabId,
+          conversationId: 'agent-chat-first builder',
+          messageId: firstBuilderLast(),
+        ),
+      );
+      await settle(tester);
+      expect(find.text('Terminal fixture'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'what was open beside a chat shows again after a restart, from the saved view',
+    (tester) async {
+      await show(tester);
+      await tap(tester, key('swarm-info-button'));
+      await tap(tester, key('super-agent-second'));
+      await tap(tester, key('swarm-terminal-button'));
+      final saved = Map<String, dynamic>.of(controller.savedForTest);
+      await show(tester, saved: saved);
+      expect(controller.selectedId, 'agent-chat-second');
+      expect(find.text('Terminal fixture'), findsOneWidget);
+      await tap(tester, key('super-agent-first builder'));
+      expect(key('swarm-agent-info'), findsOneWidget);
+    },
+  );
+
+  test('keeps what is open beside each chat with the rest of its saved view, and only the panes it knows', () async {
     final server = swarmV4Server();
     final saved = server.controller(
       account: 'owner',
@@ -193,6 +339,7 @@ void main() {
       },
     );
     addTearDown(saved.dispose);
+    await saved.refresh();
     expect(saved.besidePane('agent-chat-second'), 'info');
     expect(saved.besidePane('agent-chat-first builder'), isNull);
     saved.showBeside('agent-chat-first builder', 'instructions');
@@ -201,6 +348,11 @@ void main() {
       'agent-chat-first builder': 'instructions',
     });
     saved.showBeside('agent-chat-second', null);
+    // A terminal asked for again, already open, still takes the place of a pane kept since (the second review of #4213).
+    saved.selectTerminal('agent-chat-second', 'second');
+    saved.showBeside('agent-chat-second', 'info');
+    saved.selectTerminal('agent-chat-second', 'second');
+    expect(saved.besidePane('agent-chat-second'), isNull);
     expect(saved.besidePane('agent-chat-second'), isNull);
     expect(saved.besidePane(null), isNull);
   });

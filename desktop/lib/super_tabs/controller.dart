@@ -1295,7 +1295,13 @@ class SuperTabController extends ChangeNotifier {
             true) {
       return;
     }
+    // A terminal asked for takes the place of the pane its chat kept, even one already open (the second review of #4213).
+    final paneTaken = agentId != null && _panes.remove(conversationId) != null;
     if (_terminals[conversationId] == agentId && !devicesSelected) {
+      if (paneTaken) {
+        _saveSoon();
+        _changed();
+      }
       return;
     }
     _moveView();
@@ -1303,7 +1309,6 @@ class SuperTabController extends ChangeNotifier {
       _terminals.remove(conversationId);
     } else {
       _terminals[conversationId] = agentId;
-      _panes.remove(conversationId);
     }
     _saveSoon();
     _changed();
