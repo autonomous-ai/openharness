@@ -156,7 +156,7 @@ export function createAgentCreator({
     // a worktree of a local repository, itself, and sends the folder as a plain cwd. 2026-10-30: a Cmd+S Swarm's PM sat
     // at Claude Code's "do you trust this folder?", which no Swarm view shows; it read Idle and every message to it was
     // withheld. The person chose that repository for the Swarm in this window, so a Claude Code Swarm agent, in whatever mode
-    // its owner's settings give (task #4215), is trusted in a Git checkout directly in the projects root or a worktree Harness
+    // it runs in (task #4215), is trusted in a Git checkout directly in the projects root or a worktree Harness
     // made, read from disk.
     // Never from a relayed request, which could name any repository here. Codex's trust also sets defaults for the
     // person's own sessions in that folder, so it stays theirs to give.
@@ -386,7 +386,7 @@ export function createAgentCreator({
     // as every relaunch reads them again (`buildLaunchOverrides`).
     const machineMcp = machineMcpLaunchArgs(engine, cwd)
     // The agent's private temporary folder: its TMPDIR, and, for a Swarm agent of an engine that takes one (Claude Code), its one
-    // added working directory, so its owner's own settings ask nothing for its mktemp files (lib/agentTmp.ts, task #4395).
+    // added working directory, so its mode's checks ask nothing for its mktemp files (lib/agentTmp.ts, task #4395).
     const tmp = agentTmpLaunch(engine, swarmSkill)
     const extraArgs = joinedInstructions(engine, [...tmp.args, ...(gridLaunch?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, native ? native.opencodeMajor : opencode ? await opencode.opencodeMajorVersion() : null) : []), ...machineMcp, ...(swarmLaunch && swarmSkill ? swarmLaunch.args(engine) : []), ...told])
     // The first prompt is a launch option only — never part of `extraArgs`, which the registry row
