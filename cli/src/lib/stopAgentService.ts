@@ -12,6 +12,7 @@ import type { TerminalRuntimeRef } from './terminalTypes.js'
 import { terminalRouteKey } from './terminalRuntime.js'
 import { checkPidRuntime, terminateDeletedAgent } from './deleteAgentFallback.js'
 import { signalAgentProcess } from './processSignals.js'
+import { engineDescendants, treeSurvivors } from './processTree.js'
 
 export interface StopAgentServiceDeps {
   settlePane?: (agentId: string) => Promise<void>
@@ -39,6 +40,8 @@ export interface StopAgentServiceDeps {
   stopNative(session: RegisteredSession, current: () => boolean, confirmUnusedConversation?: (session: RegisteredSession) => Promise<boolean>): Promise<void>
   /** The pause between reads of a guest's process while it leaves (tests pass one that returns at once). */
   wait?(ms: number): Promise<void>
+  /** Reads the engine's descendants, which the stop ends with it (processTree.ts); the real two by default. */
+  processTree?: { descendants: typeof engineDescendants; survivors: typeof treeSurvivors }
 }
 /** How long a guest's engine has to leave once its pane closed, read every GUEST_EXIT_STEP_MS. */
 const GUEST_EXIT_WAIT_MS = 5_000
@@ -82,6 +85,7 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
   const { registry, stoppedAgents, restartJobs, stopJobs, backendFor, agentReconciler,
     forgetSession, markDeleted, clearDeleted, stopNative } = deps
   const wait = deps.wait ?? (ms => new Promise<void>(resolve => { const timer = setTimeout(resolve, ms); timer.unref?.() }))
+  const processTree = deps.processTree ?? { descendants: engineDescendants, survivors: treeSurvivors }
   /** A guest's engine, its pane closed, has left: read from the process table, which shows every user's processes. An
    *  unreadable table is not proof that it left. The process is the row's latest: one still starting gains it while its
    *  screen is saved, and an older copy without one would read as gone at once. */
@@ -188,6 +192,9 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
             },
             sleep: ms => new Promise(resolve => { const timer = setTimeout(resolve, ms); timer.unref?.() }),
             log: message => console.log(message),
+            // A tool spawned detached is in neither the engine's group nor the pane's: only its own signal ends it.
+            descendants: () => processTree.descendants(s.processIdentity!),
+            survivors: processTree.survivors,
           }, 0)).catch(() => 'failed' as const)
         // The process helper catches signal failures. Preserve native evidence holds
         // so a queued Close retries instead of becoming a permanently failed plan.

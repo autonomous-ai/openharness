@@ -160,6 +160,30 @@ export function hermesGatewayProcess(row: Pick<ProcessRow, 'args' | 'nativeArgv'
 }
 
 /**
+ * Codex's shared app server (`codex app-server --managed-daemon`, engines/codex/launch.ts `sharedServer`): a Codex
+ * client without `--no-daemon` starts one per CODEX_HOME if none runs, so it sits under that client's pane while it
+ * runs every session of that home. Read from argv: Codex's entrypoint, its `-c` settings, then the subcommand.
+ */
+export function codexSharedServerProcess(row: Pick<ProcessRow, 'args' | 'nativeArgv'>): boolean {
+  const next = argvPrefix(row.args, row.nativeArgv)
+  const entrypoint = programName(processEntrypoint(row.args, next))
+  if (entrypoint !== 'codex' && entrypoint !== 'codex.js') return false
+  let token = next()
+  while (token === '-c' || token === '--config') {
+    next()
+    token = next()
+  }
+  if (token !== 'app-server') return false
+  // Its own options only, a few at most: nothing after them is read.
+  for (let seen = 0; seen < 8; seen++) {
+    token = next()
+    if (token === undefined) return false
+    if (token === '--managed-daemon') return true
+  }
+  return false
+}
+
+/**
  * The Hermes gateways running under [engine]'s process: what a build before `hermesGatewayProcess` recorded as that
  * pane's Hermes (the gateway matched as `hermes_cli`). A row holding one is that same engine's agent, recorded wrongly,
  * not another program in its pane: without this, the first discovery after an upgrade replaced it and forgot its
@@ -394,8 +418,9 @@ async function readProcessRows(): Promise<ProcessRow[] | null> {
  * Linux: each row's start ticks, the part of its identity a clock step cannot move (see
  * `ProcessIdentity.startTicks`). One small /proc read per row, like the mangled-row repair above.
  */
-export function withStartTicks(rows: ProcessRow[], ticksOf: (pid: number) => number | null = processStartTicks): ProcessRow[] {
-  if (process.platform !== 'linux') return rows
+export function withStartTicks(rows: ProcessRow[], ticksOf: (pid: number) => number | null = processStartTicks,
+  platform: NodeJS.Platform = process.platform): ProcessRow[] {
+  if (platform !== 'linux') return rows
   return rows.map((row) => {
     const startTicks = ticksOf(row.pid)
     return startTicks === null ? row : { ...row, startTicks }

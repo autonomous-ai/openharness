@@ -214,7 +214,7 @@ class SelectionTests(unittest.TestCase):
         self.assertTrue(planner.reads("desktop", "cli/src/lib/tmuxBackend.ts"))
         self.assertNotIn("desktop", planner.select(["cli/src/lib/tmuxBackend.ts"])[0])
         # The folders the other suites narrowed for selection stay whole for reuse.
-        for suite, path in (("cli", "desktop/test/a.json"), ("daemons", "cli/src/a.ts"), ("firmware", "cli/src/a.ts"),
+        for suite, path in (("cli", "desktop/test/a.json"), ("daemons", "companions/src/companion/a.ts"), ("firmware", "cli/src/a.ts"),
                             ("mobile", "desktop/lib/a.dart"), ("os", "cli/src/a.ts"), ("website", "backend/src/a.ts")):
             with self.subTest(suite=suite, path=path):
                 self.assertTrue(planner.reads(suite, path))
