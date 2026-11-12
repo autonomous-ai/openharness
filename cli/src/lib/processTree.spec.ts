@@ -17,7 +17,8 @@ import { processIdentityOf } from './terminalRuntime.js'
 
 const ENGINE = { pid: 500, executable: 'claude', startMarker: 'Thu Nov 12 10:00:01 2026' }
 /** `ps -axo pid=,ppid=,pgid=,lstart=,args=`: the pane's shell, the engine, a tool in the engine's group, a grandchild
- *  that left its session, Hermes' gateway with a hook it runs, and another program in the same pane. */
+ *  that left its session, Hermes' gateway with a hook it runs, Codex's shared app server (bare and run by node) with a
+ *  command it runs, and another program in the same pane. */
 const PS = [
   '    1     0     1 Mon Nov  9 08:00:00 2026 /sbin/launchd',
   '  499     1   499 Thu Nov 12 10:00:00 2026 -zsh',
@@ -26,6 +27,9 @@ const PS = [
   '  502   501   502 Thu Nov 12 10:00:03 2026 sleep 600',
   '  503   500   503 Thu Nov 12 10:00:04 2026 python3 -m hermes_cli.main gateway run --quiet --idle-exit',
   '  504   503   503 Thu Nov 12 10:00:05 2026 /bin/sh -c hook',
+  '  505   500   505 Thu Nov 12 10:00:05 2026 /opt/homebrew/bin/codex app-server --managed-daemon',
+  '  506   505   505 Thu Nov 12 10:00:05 2026 /bin/zsh -lc make',
+  '  507   500   507 Thu Nov 12 10:00:05 2026 node /opt/codex/bin/codex.js -c model="o4" app-server --managed-daemon',
   '  600   499   600 Thu Nov 12 10:00:06 2026 vim notes.md',
   '',
 ].join('\n')
@@ -42,7 +46,8 @@ describe('an engine\'s process tree', () => {
     expect(treeTargets(tree)).toEqual({ groups: [20], pids: [10, 30] })
   })
 
-  it('walks down from the engine in one read, and leaves out a Hermes gateway and what it started', async () => {
+  // Each serves every session of its engine from under whichever pane started it: another harness's work runs there.
+  it('walks down from the engine in one read, and leaves out a Hermes gateway, a Codex shared server and what they run', async () => {
     let reads = 0
     const found = await engineDescendants(ENGINE, 'darwin', async () => { reads++; return PS })
     expect(found!.map((p) => p.pid)).toEqual([501, 502])
