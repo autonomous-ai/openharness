@@ -1648,19 +1648,22 @@ async function watchMine(s: Setup, json: boolean, chars: number, timeoutMs: numb
     const active = new Set(followers)
     for (;;) {
       const listed = new Map<Daemon, Promise<Frame[] | null>>()
-      for (const f of [...active]) {
+      /** A line to another machine that dropped, whatever it was asked (its list, a turn, a stopped row): its harnesses
+       *  are no longer followed and the rest are, so one flaky relay line does not end Hachi's wait on every harness. */
+      const dropped = (f: (typeof followers)[number], error: unknown): null => {
         const { daemon, remote, machine } = f.target
-        if (!listed.has(daemon)) {
-          listed.set(daemon, listOrNull(daemon).catch((error) => {
-            // A line to another machine that dropped: its harnesses are no longer followed, and the rest are.
-            if (!remote || !(error instanceof AgentClientError)) throw error
-            s.err(`${machine}: no longer followed. ${error.message}`)
-            for (const gone of active) if (gone.target.daemon === daemon) active.delete(gone)
-            return null
-          }))
-        }
+        if (!remote || !(error instanceof AgentClientError)) throw error
+        if (![...active].some((one) => one.target.daemon === daemon)) return null
+        s.err(`${machine}: no longer followed. ${error.message}`)
+        for (const gone of active) if (gone.target.daemon === daemon) active.delete(gone)
+        return null
+      }
+      for (const f of [...active]) {
+        if (!active.has(f)) continue
+        const { daemon } = f.target
+        if (!listed.has(daemon)) listed.set(daemon, listOrNull(daemon).catch((error) => dropped(f, error)))
         const live = await listed.get(daemon)!
-        if (live && await f.round(live) === 'stopped') active.delete(f)
+        if (live && await f.round(live).catch((error) => dropped(f, error)) === 'stopped') active.delete(f)
       }
       if (!active.size) return EXIT.stopped
       if (s.now() >= deadline) return EXIT.timeout

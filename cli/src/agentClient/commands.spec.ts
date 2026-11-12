@@ -3269,6 +3269,34 @@ describe('harness watch --mine (one stream for every harness the caller started,
     expect(h.err).toEqual(['office: no longer followed. The connection to Harness closed.'])
   })
 
+  it('stops following a machine whose line drops in the middle of a round, and the rest are still followed (review of #4200)', async () => {
+    // The list answers, then a read for the same round fails: its turn (`session_get`), or its stopped row.
+    for (const after of [
+      (office: FakeDaemon) => { office.frames = [frame('rev', { engine: 'claude', activity: { state: 'working' }, updatedAt: '2026-10-11T11:59:30Z' })] },
+      (office: FakeDaemon) => { office.frames = [] },
+    ]) {
+      const { d, office, h } = fleet()
+      let round = 0
+      h.deps.sleep = async (ms) => {
+        h.advance(ms)
+        round++
+        if (round === 1) {
+          after(office)
+          const real = office.request.bind(office)
+          office.request = async (type, payload = {}) => {
+            if (type === 'agents_list' && !payload.includeStopped) return real(type, payload)
+            throw new AgentClientError('DISCONNECTED', 'The connection to Harness closed.')
+          }
+        }
+        // This machine's go on after it: kid stops, and is still said.
+        if (round === 2) d.frames = d.frames.filter((f) => f.id !== 'kid')
+      }
+      expect(await watchCommand(['--mine', '--json', '--timeout', '5s'], h.deps)).toBe(EXIT.timeout)
+      expect(h.err).toEqual(['office: no longer followed. The connection to Harness closed.'])
+      expect(lines(h.out).map((l) => `${l.name} ${l.event}`)).toEqual(['kid working', 'api working', 'rev working', 'kid stopped'])
+    }
+  })
+
   it('says so when the caller has none running, and refuses a caller that is no agent (exit 5)', async () => {
     const d = new FakeDaemon()
     d.frames = [frame('lead', { engine: 'claude' })]
