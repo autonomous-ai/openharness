@@ -121,13 +121,15 @@ describe('the offers made to this computer\'s agents, answered here (OfferAnswer
   function setup(options: { file?: string } = {}) {
     const state = { watched: [PIP, JUNO], offers: new Map<string, TaskOffer[]>(), tasks: new Map<number, Json | null>([[14, task(['size:m'], { title: 'Add the export' })]]),
       labelled: new Map<string, Json[]>(), machine: MACHINE, windows: UNKNOWN as Windows, sessions: new Map([['h-pip', { cwd: '/work/app', engine: 'claude' }]]),
-      cores: 8, refusal: null as Error | null, mineDown: new Set<string>(), answerDown: 0, answerTimes: true }
+      cores: 8, refusal: null as Error | null, mineDown: new Set<string>(), answerDown: 0, answerTimes: true, slowMs: 0 }
     state.offers.set('pip', [{ repository: 'acme/app', number: 14, agentId: 'pip', state: 'offered', offeredAt: 1, expiresAt: 120_001 }])
     const asked: Array<[string, string, unknown]> = []
     const ask = vi.fn(async (method: 'GET' | 'POST', path: string, body?: unknown) => {
       asked.push([method, path, body])
       if (state.refusal) throw state.refusal
       const mine = /\/mine\?asAgentId=(\w+)$/.exec(path)
+      // One slow read, as a server under load answers one.
+      if (mine && state.slowMs) { const slow = state.slowMs; state.slowMs = 0; await new Promise(resolve => setTimeout(resolve, slow)) }
       if (mine && state.mineDown.has(mine[1]!)) throw new SuperTabHostError('BACKEND_UNAVAILABLE', 'No answer.', 503)
       if (mine) return { offers: state.offers.get(mine[1]!) ?? [], serverTime: 60_000 }
       if (state.answerDown > 0) { state.answerDown--; throw new SuperTabHostError('BACKEND_UNAVAILABLE', 'No answer.', 503) }
@@ -239,6 +241,35 @@ describe('the offers made to this computer\'s agents, answered here (OfferAnswer
     f.answers.stop()
   })
 
+  // Review of #4153, round two: the gap was measured from when a pass began, so pushes heard while a slow pass ran each made one
+  // more pass (16 reads where 7 were due).
+  it('keeps the gap between a Swarm\'s reads however slow a read is', async () => {
+    const f = setup()
+    f.state.watched = [PIP]
+    f.state.slowMs = 50_000
+    f.answers.start()
+    for (let second = 0; second < 120; second += 5) {
+      f.notice('tab')
+      await vi.advanceTimersByTimeAsync(5_000)
+    }
+    // A push at once (its read the slow one, fifty seconds), then one every twenty seconds: 20 (read when the slow one ends),
+    // 40, 60, 80 and 100, and one more as the pushes end.
+    expect(f.reads()).toBe(7)
+    f.answers.stop()
+  })
+
+  it('reads nothing for a pass still waiting when it is stopped', async () => {
+    const f = setup()
+    f.state.watched = [PIP]
+    f.state.slowMs = 10_000
+    f.answers.start()
+    await vi.advanceTimersByTimeAsync(1_000)
+    void f.answers.answer('tab')
+    f.answers.stop()
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(f.reads()).toBe(1)
+  })
+
   // Review of #4153: this computer's agents were read on every pass: a busy Swarm's pushes read them three times a minute.
   it('reads this computer\'s agents at most once a minute, however many pushes come', async () => {
     const f = setup()
@@ -311,6 +342,23 @@ describe('the offers made to this computer\'s agents, answered here (OfferAnswer
     f.state.tasks.set(17, task(['size:m']))
     await odd.answer('tab')
     expect(f.say).toHaveBeenCalledTimes(3)
+  })
+
+  // Review of #4153, round two: its agents read a minute ago, an agent that joined a project since was offered one of its tasks and
+  // declined it as gone.
+  it('reads its agents again before it declines an offer of a repository it did not know of', async () => {
+    const f = setup()
+    await f.answers.answer('tab')
+    f.state.watched = [{ ...PIP, repos: ['acme/app', 'other/thing'] }, JUNO]
+    f.state.offers.set('pip', [{ ...f.offer(1, 2), repository: 'other/thing' }])
+    await f.answers.answer('tab')
+    expect(f.answered().at(-1)).toEqual(['accept?asAgentId=pip', { repository: 'other/thing', number: 1 }])
+    expect(f.watched).toHaveBeenCalledTimes(2)
+    // Read again and gone from them, it declines it.
+    f.state.watched = [JUNO]
+    f.state.offers.set('pip', [{ ...f.offer(2, 3), repository: 'acme/other' }])
+    await f.answers.answer('tab')
+    expect(f.answered().at(-1)).toEqual(['decline?asAgentId=pip', { repository: 'acme/other', number: 2, reason: 'gone' }])
   })
 
   it('probes the tools a task needs on this machine, and declines one it lacks', async () => {

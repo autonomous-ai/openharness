@@ -226,10 +226,11 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     send: github.send, records })))(core, sources)
   // Gives their tasks to their builders (githubAssign.ts), from the crew as the PM reads the Swarm.
   const assigns = (options.githubAssign ?? ((api, held) => {
-    // A project's numbers, sent as its PM into the Swarm as the PM reads it (pmNumbers.ts messageOf).
-    const numbers = new PmNumbers({ file: join(api.dataDir, 'super-tab-numbers.json'),
-      send: numbersSender(async project => (await held().reads.read(project.tabId, project.pmAgentId)).state, (path, body) => backend(api, 'POST', path, body)) })
+    // A project's numbers, and what its PM says of its offers, sent as its PM into the Swarm as the PM reads it (pmNumbers.ts messageOf).
+    const send = numbersSender(async project => (await held().reads.read(project.tabId, project.pmAgentId)).state, (path, body) => backend(api, 'POST', path, body))
+    const numbers = new PmNumbers({ file: join(api.dataDir, 'super-tab-numbers.json'), send })
     return new GitHubAssign({ projects: led(api, held), crew: crewOfProject(held), get: github.get, send: github.send, records, numbers,
+      say: (project, operationId, text) => send('say', project, operationId, text),
       pmRunning: async project => pmRunsHere((await held().feed.current(60_000)).roster, project, id => !!api.agents.byAgent(id)),
       offers: { offer: (project, number, agentId) => offerTask(ask, project.tabId, project.pmAgentId, { repository: project.repo, number, agentId }),
         listed: (project, numbers) => projectOffers(ask, project.tabId, project.pmAgentId, project.repo, numbers) } })

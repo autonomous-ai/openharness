@@ -109,7 +109,10 @@ const crew = (): Crew => ({
  *  that does not answer. */
 function fakeServer(clock: { now: number }) {
   const records = new Map<number, { agentId: string; offeredAt: number; expiresAt: number; acceptedAt?: number; declined?: string }>()
-  const state = { missing: false, down: false, offered: [] as Array<[number, string]>, asked: [] as number[][] }
+  const state = { missing: false, down: false, offered: [] as Array<[number, string]>, asked: [] as number[][],
+    /** Another project's PM coordinates the repository (backend githubComments.ts repositoryProject): this one's reads are a
+     *  project that does not exist, and [unreadable] false its offers alone are refused. */
+    elsewhere: false, unreadable: true }
   const refuse = () => {
     if (state.missing) throw new SuperTabHostError('BACKEND_UNAVAILABLE', 'Route not found', 404)
     if (state.down) throw new SuperTabHostError('BACKEND_UNAVAILABLE', 'No answer.', 503)
@@ -119,6 +122,7 @@ function fakeServer(clock: { now: number }) {
   const offers = {
     offer: vi.fn(async (_project: LedProject, number: number, agentId: string) => {
       refuse()
+      if (state.elsewhere) throw new SuperTabHostError('PM_REQUIRED', 'Only the Product Manager of the first project made on that repository offers its tasks.', 403)
       const held = records.get(number)
       if (held && held.expiresAt > clock.now && held.agentId !== agentId) throw new SuperTabHostError('OFFER_LIVE', 'This task is offered to another agent.', 409)
       if (!held || held.expiresAt <= clock.now) records.set(number, { agentId, offeredAt: clock.now, expiresAt: clock.now + 2 * 60_000 })
@@ -126,6 +130,7 @@ function fakeServer(clock: { now: number }) {
     }),
     listed: vi.fn(async (_project: LedProject, numbers: readonly number[]): Promise<TaskOffer[]> => {
       refuse()
+      if (state.elsewhere && state.unreadable) throw new SuperTabHostError('NOT_FOUND', 'This project is unavailable.', 404)
       state.asked.push([...numbers])
       return [...records].filter(([number, r]) => numbers.includes(number) && r.expiresAt > clock.now - 10 * 60_000).map(([number, r]) => ({ repository: 'acme/app', number, agentId: r.agentId,
         state: stateOf(r), offeredAt: r.offeredAt, expiresAt: r.expiresAt, ...r.acceptedAt ? { acceptedAt: r.acceptedAt } : {}, ...r.declined ? { declined: r.declined } : {} }))
@@ -146,12 +151,14 @@ function setup(open: Json[], options: { closed?: Json[]; crew?: Crew
   const clock = { now: Date.parse('2026-11-09T07:31:00Z') }
   const pm = { running: true, unreadable: false }
   const server = fakeServer(clock)
+  /** What the PM says to its person in its chat, by the operation it is said under. */
+  const say = vi.fn(async (_project: LedProject, _operationId: string, _text: string) => ({}))
   const make = () => new GitHubAssign({ projects: async () => [PROJECT], crew: async () => options.crew ?? crew(), get: github.get, send: github.send, pmRunning: async () => { if (pm.unreadable) throw new Error('The backend did not answer.'); return pm.running },
-    now: () => clock.now, log, records: new VerdictRecords(github.authors, () => clock.now, log), numbers: options.numbers ?? { pass: numbers }, offers: server.offers })
+    now: () => clock.now, log, records: new VerdictRecords(github.authors, () => clock.now, log), numbers: options.numbers ?? { pass: numbers }, offers: server.offers, say })
   const assigner = make()
   const labelled = () => github.sent.filter(s => /\/issues\/\d+\/labels$/.test(s.path)).map(s => [Number(s.path.split('/').at(-2)), (s.body.labels as string[])[0]])
   const said = () => github.sent.filter(s => s.path.endsWith('/comments')).map(s => [Number(s.path.split('/').at(-2)), String(s.body.body)])
-  return { github, assigner, make, log, labelled, said, clock, numbers, pm, server }
+  return { github, assigner, make, log, labelled, said, clock, numbers, pm, server, say }
 }
 
 describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () => {
@@ -475,6 +482,48 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       expect(g.log.mock.calls.filter(([line]) => String(line).includes('OFFER_FAILED'))).toEqual([['[super-tab] Task assignment: OFFER_FAILED acme/app#1: OFFER_LIVE']])
       await g.assigner.tick()
       expect(g.server.state.offered.length + g.labelled().length).toBe(1)
+    })
+
+    // Review of #4153: a task held by an offer to an agent outside the crew was taken out of what the plan reads, so a task that
+    // comes after it was planned as if it were closed, and given before it.
+    it('keeps a task another agent\'s offer holds open for a task that comes after it', async () => {
+      const f = setup([issue(1, ['size:s']), issue(2, ['size:s'], { body: 'After #1.' })], { crew: offering() })
+      f.server.records.set(1, { agentId: 'someone', offeredAt: f.clock.now, expiresAt: f.clock.now + 120_000 })
+      await f.assigner.tick()
+      expect([f.server.state.offered, f.labelled()]).toEqual([[], []])
+    })
+
+    // Review of #4153: a later project's PM on the same repository offered every pass and was refused, with no end, and its person
+    // heard only that there was nothing to do.
+    it('offers nothing for ten minutes once another project\'s PM gives the repository\'s tasks, and says so once to its person', async () => {
+      const f = setup([issue(1, ['size:s'])], { crew: offering(true) })
+      f.server.state.elsewhere = true
+      for (let minute = 0; minute < 60; minute++) {
+        await f.assigner.tick()
+        f.clock.now += 60_000
+      }
+      // A read each ten minutes, no offer, nothing by label (another PM gives these tasks), and one line to its person, under an
+      // operation the server takes once, so a restart says it no more.
+      expect(f.server.offers.listed).toHaveBeenCalledTimes(6)
+      expect([f.server.offers.offer.mock.calls, f.labelled()]).toEqual([[], []])
+      expect(f.say.mock.calls).toEqual([[PROJECT, expect.stringMatching(/^offers-elsewhere-[0-9a-f]{40}$/),
+        'Another project\'s PM gives acme/app\'s tasks in this Swarm, so I give none of them.']])
+      expect(f.make()).toBeDefined()
+      // Readable, its offers alone refused: the same.
+      const g = setup([issue(1, ['size:s'])], { crew: offering() })
+      Object.assign(g.server.state, { elsewhere: true, unreadable: false })
+      for (let minute = 0; minute < 11; minute++) {
+        await g.assigner.tick()
+        g.clock.now += 60_000
+      }
+      expect(g.server.offers.offer).toHaveBeenCalledTimes(2)
+      expect(g.say).toHaveBeenCalledOnce()
+      // Its person told already, a line it could not say is logged and the pass goes on.
+      const h = setup([issue(1, ['size:s'])], { crew: offering() })
+      h.server.state.elsewhere = true
+      h.say.mockRejectedValueOnce(new SuperTabHostError('BACKEND_UNAVAILABLE', 'No answer.', 503))
+      await h.assigner.tick()
+      expect(h.log).toHaveBeenCalledWith('[super-tab] Task assignment: ELSEWHERE_UNSAID acme/app: BACKEND_UNAVAILABLE')
     })
 
     it('gives nothing by label in a pass that could not read its offers', async () => {

@@ -382,10 +382,12 @@ Built, in two pull requests, the server's first:
   (`githubClaim.ts`); an accepted offer as the agent's next thing, typed once for its task (`nextThing.ts`);
   `taskOffers` among the machine's capabilities (`machines.ts`); and the PM's side (`assign/crew.ts` `crewOf`,
   `githubAssign.ts`): it offers where the builder's own computer answers offers, reads the offers of the tasks it
-  plans once a pass, reads a live offer's task as its agent's, leaves out of the plan a task held for an agent not of
-  its crew or refused as another's, gives nothing by label in a pass that could not read its offers, rests a builder
-  that declined or let one lapse until it takes one, and gives by label to a builder on a CLI from before, until 14
-  December 2026.
+  plans once a pass, reads a live offer's task as its agent's, reads a task held for an agent not of its crew or refused
+  as another's as held by nobody of the crew (given to nobody, and still open for a task that comes after it), gives
+  nothing by label in a pass that could not read its offers, rests a builder that declined or let one lapse until it
+  takes one, and gives by label to a builder on a CLI from before, until 14 December 2026. A PM the server tells that
+  another project's PM gives its repository's tasks (`PM_REQUIRED`, or its read answered as a project that does not
+  exist) offers none and gives none by label for 10 minutes at a time, and its person is told so once.
 
 Not done, and owed before the daemon's half is called proven:
 

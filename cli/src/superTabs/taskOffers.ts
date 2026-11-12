@@ -143,6 +143,8 @@ export class OfferAnswers {
   /** The failure last said of each thing that failed (the agents' read, an agent's offers, an offer), until it passes or changes. */
   private readonly failed = new Map<string, string>()
   private offUntil = 0
+  /** Stopped: a pass asked for before the stop reads nothing once it comes. */
+  private stopped = false
   private readonly now: () => number
   private readonly log: (line: string) => void
 
@@ -175,6 +177,7 @@ export class OfferAnswers {
 
   start(): void {
     if (this.stopNotices) return
+    this.stopped = false
     this.stopNotices = this.deps.onNotice(notice => {
       if (notice.type === 'swarm_host_changed' && typeof notice.tabId === 'string') this.soon(notice.tabId)
     })
@@ -184,6 +187,7 @@ export class OfferAnswers {
   }
 
   stop(): void {
+    this.stopped = true
     this.stopNotices?.()
     this.stopNotices = null
     if (this.quiet) clearInterval(this.quiet)
@@ -196,8 +200,11 @@ export class OfferAnswers {
   private soon(tabId: string): void {
     const swarm = this.swarm(tabId)
     if (swarm.timer) return
+    // The gap is measured from when the read is asked for, not from when its pass begins: pushes heard while a slow pass ran each
+    // made one more pass (review of #4153: 16 reads where 7 were due).
     swarm.timer = setTimeout(() => {
       swarm.timer = null
+      swarm.at = this.now()
       void this.answer(tabId)
     }, Math.max(0, swarm.at + ANSWER_GAP_MS - this.now()))
     swarm.timer.unref()
@@ -217,13 +224,14 @@ export class OfferAnswers {
   }
 
   private async pass(tabId: string | null): Promise<void> {
-    if (this.now() < this.offUntil) return
+    if (this.stopped || this.now() < this.offUntil) return
     const agents = await this.agentsHere()
     if (!agents) return
     const now = this.now()
     const due = (tab: string) => { const swarm = this.swarm(tab); return !swarm.timer && now - swarm.at >= ANSWER_GAP_MS }
     const tabs = new Set(agents.map(agent => agent.tabId).filter(tab => tabId === null ? due(tab) : tab === tabId))
-    for (const tab of tabs) this.swarm(tab).at = now
+    // The minute's read keeps its own gap; a push's was kept as it was asked for (soon).
+    if (tabId === null) for (const tab of tabs) this.swarm(tab).at = now
     for (const agent of agents.filter(a => tabs.has(a.tabId))) {
       let offers: TaskOffer[]
       try { offers = (await agentOffers(this.deps.ask, agent.tabId, agent.agentId)).offers } catch (error) {
@@ -241,6 +249,12 @@ export class OfferAnswers {
         } catch (error) { this.failure(key, error) }
       }
     }
+  }
+
+  /** This computer's agents read now, which the next passes take as they are. */
+  private async agentsAgain(): Promise<WatchedAgent[]> {
+    this.agents = { at: this.now(), list: await this.deps.watched() }
+    return this.agents.list
   }
 
   /** This computer's agents, read again once [AGENTS_MS] old; null while they cannot be read. */
@@ -297,7 +311,10 @@ export class OfferAnswers {
    *  is gone. */
   private async check(agent: WatchedAgent, offer: TaskOffer, agents: WatchedAgent[], task: string): Promise<{ reason: string | null; cpu: number }> {
     const repo = offer.repository.toLowerCase()
-    const issue = agent.repos.includes(repo) ? await this.reads.ifThere(repo, `/repos/${repo}/issues/${offer.number}`) : null
+    // Its agents are read once a minute: one that joined a project since has its repository read again before its offer is
+    // declined as gone (review of #4153).
+    const projects = agent.repos.includes(repo) ? agent.repos : (await this.agentsAgain()).find(again => again.agentId === agent.agentId)?.repos ?? []
+    const issue = projects.includes(repo) ? await this.reads.ifThere(repo, `/repos/${repo}/issues/${offer.number}`) : null
     if (!issue) return { reason: 'gone', cpu: 0 }
     const session = this.deps.session(agent.harnessId)
     const labels = labelsOf(issue), needs = labels.filter(label => label.startsWith('needs:')).map(label => label.slice('needs:'.length))

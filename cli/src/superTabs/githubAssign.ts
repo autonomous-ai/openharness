@@ -23,6 +23,7 @@ import { boardOf, boardWords } from './scoreboard.js'
 import { named } from './agentReplies.js'
 import { NO_ROUTE_MS, noSuchRoute, type TaskOffer } from './taskOffers.js'
 import { SuperTabHostError } from './wire.js'
+import { createHash } from 'node:crypto'
 
 type Json = Record<string, unknown>
 
@@ -104,6 +105,10 @@ export class GitHubAssign {
   /** Whether this pass's read of its project's offers failed: it gives nothing by label then, as a live offer it cannot see may
    *  hold the task (review of #4153). */
   private unseen = false
+  /** Until when another project's PM is taken to give each repository's tasks, by `tabId|repo`, and whether its PM's person was
+   *  told so (review of #4153: a later project's PM was refused every pass, with no end, its person told only of nothing to do). */
+  private readonly coordinated = new Map<string, number>()
+  private readonly toldElsewhere = new Set<string>()
   /** Each builder resting from offers (REST_MS), by agent id; and the ended offers already counted, by `repo#N@offeredAt`. */
   private readonly rests = new Map<string, { until: number; ms: number }>()
   private readonly ended = new Set<string>()
@@ -128,7 +133,9 @@ export class GitHubAssign {
     numbers: { pass: (project: LedProject, numbers: Numbers, goal: () => Promise<Score | null>, board: () => Promise<string>) => Promise<void> }
     /** The Swarm's server, as [project]'s PM: an offer of a task to an agent, and the project's offers (taskOffers.ts). */
     offers: { offer: (project: LedProject, number: number, agentId: string) => Promise<void>
-      listed: (project: LedProject, numbers: readonly number[]) => Promise<TaskOffer[]> } }) {
+      listed: (project: LedProject, numbers: readonly number[]) => Promise<TaskOffer[]> }
+    /** Says [text] to [project]'s PM's person, as the PM, in its chat with them, under [operationId] (pmNumbers.ts messageOf). */
+    say: (project: LedProject, operationId: string, text: string) => Promise<unknown> }) {
     this.now = deps.now ?? Date.now
     this.log = deps.log ?? (line => console.warn(line))
     this.reads = new GitHubReads(deps.get, this.now)
@@ -657,12 +664,15 @@ export class GitHubAssign {
    */
   private async offersOf(project: LedProject, crew: Crew, issues: Json[]): Promise<TaskOffer[] | null> {
     if (!crew.builders.some(builder => builder.offers) || this.now() < this.offersFrom) return []
+    if (this.now() < (this.coordinated.get(`${project.tabId}|${project.repo}`) ?? 0)) return null
     const answering = new Set(crew.builders.filter(builder => builder.offers).map(builder => builder.label))
     const planned = issues.filter(issue => !issue.pull_request && Number.isSafeInteger(issue.number) && labelNames(issue).some(name => /^size:[sml]$/.test(name))
       && labelNames(issue).filter(name => name.startsWith('builder:')).every(name => answering.has(name))).map(issue => Number(issue.number))
     if (!planned.length) return []
     let offers: TaskOffer[]
     try { offers = await this.deps.offers.listed(project, planned) } catch (error) {
+      // A project that does not exist to its PM, as the server says to the PM of any project but its repository's coordinator's.
+      if (error instanceof SuperTabHostError && error.code === 'NOT_FOUND') { await this.coordinatedElsewhere(project); return null }
       this.noOffers(error, project.repo)
       return noSuchRoute(error) ? [] : null
     }
@@ -704,8 +714,12 @@ export class GitHubAssign {
     return issues.flatMap(issue => {
       const number = Number(issue.number), holder = holders.get(number)
       if (labelNames(issue).some(name => name.startsWith('builder:'))) return [issue]
-      if ((holder !== undefined && !labels.has(holder)) || this.elsewhere.has(`${repo}#${number}`)) return []
-      return [holder === undefined ? issue : { ...issue, labels: [...labelNames(issue).map(name => ({ name })), { name: labels.get(holder)! }] }]
+      // Held for an agent not of this crew, or refused as another's: read as held by a label that names no builder of the crew, so
+      // it is no free task and is still open for one that comes after it (review of #4153: left out, "after #N" was planned as if
+      // #N were closed). A space is in no builder's label (assign/crew.ts labelOf).
+      const elsewhere = (holder !== undefined && !labels.has(holder)) || this.elsewhere.has(`${repo}#${number}`)
+      const label = elsewhere ? HELD_ELSEWHERE : holder === undefined ? undefined : labels.get(holder)!
+      return [label === undefined ? issue : { ...issue, labels: [...labelNames(issue).map(name => ({ name })), { name: label }] }]
     })
   }
 
@@ -724,6 +738,21 @@ export class GitHubAssign {
     this.once(`[super-tab] Task assignment: NO_OFFERS: this Swarm's server takes no offers, so tasks are given by label`)
   }
 
+  /** The server said another project's PM gives [project]'s repository's tasks (backend githubComments.ts repositoryProject: the
+   *  project that got its address first, with a PM): this PM offers none of them, and gives none by label, for [NO_ROUTE_MS] at
+   *  a time, and its person is told so once, under an operation the server takes once, so a restart says it no more. */
+  private async coordinatedElsewhere(project: LedProject): Promise<void> {
+    const key = `${project.tabId}|${project.repo}`
+    this.coordinated.set(key, this.now() + NO_ROUTE_MS)
+    this.once(`[super-tab] Task assignment: ELSEWHERE ${project.repo}: another project's PM gives its tasks`)
+    if (this.toldElsewhere.has(key)) return
+    const operationId = `offers-elsewhere-${createHash('sha256').update(`${key}|${project.pmAgentId}`).digest('hex').slice(0, 40)}`
+    try {
+      await this.deps.say(project, operationId, `Another project's PM gives ${project.repo}'s tasks in this Swarm, so I give none of them.`)
+      this.toldElsewhere.add(key)
+    } catch (error) { this.once(`[super-tab] Task assignment: ELSEWHERE_UNSAID ${project.repo}: ${named(error)}`) }
+  }
+
   /** Gives the task to its builder, as Harness, in its PM's person's name: offered, to a builder whose own computer answers
    *  offers, which takes it itself once it has room, with nothing on GitHub until then; else labelled for it, with one line on it
    *  saying why. Whether it was given. */
@@ -732,6 +761,7 @@ export class GitHubAssign {
     const number = Number(pick.task.slice(1))
     if (!builder || !Number.isSafeInteger(number)) return false
     const { name, label } = builder
+    if (this.now() < (this.coordinated.get(`${project.tabId}|${project.repo}`) ?? 0)) return false
     if (builder.offers && this.now() >= this.offersFrom) {
       try {
         await this.deps.offers.offer(project, number, builder.id)
@@ -739,6 +769,7 @@ export class GitHubAssign {
         this.log(`[super-tab] offered ${project.repo}#${number} to ${name} (${reasonOf(pick, read)})`)
         return true
       } catch (error) {
+        if (error instanceof SuperTabHostError && error.code === 'PM_REQUIRED') { await this.coordinatedElsewhere(project); return false }
         this.noOffers(error, `${project.repo}#${number}`)
         if (error instanceof SuperTabHostError && error.code === 'OFFER_LIVE') this.elsewhere.set(`${project.repo}#${number}`, this.now())
         if (!noSuchRoute(error)) return false
@@ -786,6 +817,9 @@ export class GitHubAssign {
   }
 }
 
+/** The label a task held by an offer to an agent outside the crew is read with: it names no builder (a builder's label has no
+ *  space), so the plan gives the task to nobody and counts it open. */
+const HELD_ELSEWHERE = 'builder:held elsewhere'
 /** How many PMs are told per pass why a task cannot start: a backlog of them is said over a few passes. */
 const BLOCKED_PER_PASS = 5
 /** What its PM is told of a task whose "after #N" lines lead back to itself. */
