@@ -1933,6 +1933,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     agentIdFor,
     turnActivity,
     isSubagentSession,
+    quietTurnOpen: recaps.quietTurnOpen,
     clients: backend,
     search: sessionSearch,
     turnStartedAt,

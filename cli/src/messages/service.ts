@@ -44,6 +44,8 @@ import { Mailbox, type MailboxAgent } from './mailbox.js'
 import { type DeliveryStatus, LIMITS, LONG_TEXT, longAdvice, type Message, MessageError, messageId, note, parseMessage, type Recipient, rendered, type TabNote, type Teammate } from './model.js'
 import { TOLD_TAB, tellRefusal, toldText } from './tell.js'
 import { PERSON_AGENT_ID, REPLIED_TAB, replyRefusal } from './replyLocal.js'
+import { HACHI_ID } from '../dsh/builtinIds.js'
+import { wakeItems, wakeLine } from '../lib/hachiWake.js'
 import { messagesRpc, RefusedError, type Rpc } from './rpc.js'
 import { RequestStore } from './requestStore.js'
 import { cleanName, type Roster } from './roster.js'
@@ -141,6 +143,10 @@ export const WHO_WAIT_MS = 4_000
 /** How long `harness send` alone waits for the tasks before it gives the roster without them. */
 export const TASKS_WAIT_MS = 4_000
 /** What `harness send` says while this computer has Agent Messages off: where the person turns them on again. */
+/** The tab id Hachi's wakes are kept under (`wake`). No desk tab has it: ids there are the backend's. */
+export const HACHI_TAB = 'hachi'
+/** Why a wake not typed yet is dropped. */
+export const HACHI_OFF_REASON = 'Hachi was turned off'
 export const MESSAGES_OFF_TEXT = `Agent Messages are off. ${askThePersonFirst('agent-messages', 'work on without messaging your teammates.')}`
 
 /** How long the windows' `shared_tabs_changed` waits for more of the same change. */
@@ -279,7 +285,11 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
       // a pane number tmux gives out again is another's. A Claude Code sub-agent says so itself (`agent_id`).
       return { pane: inboxPane(session), session: session.sessionId ?? '', available: session.active && core.agents.terminalAvailable(agentId) }
     },
-    deliver: (agentId, text, deliveryId) => { core.turns.deliver(agentId, text, deliveryId); options.changed?.() },
+    // Hachi's wake is the daemon's, not the person's: the turn it starts makes no notice (core/api.ts `quiet`).
+    deliver: (agentId, text, deliveryId, message) => {
+      core.turns.deliver(agentId, text, deliveryId, ...(message.tabId === HACHI_TAB ? [{ quiet: true } as const] : []))
+      options.changed?.()
+    },
     refused: (delivery) => { const v = verdict(delivery); return v && 'refused' in v ? v.refused : null },
     held: (delivery) => { const v = verdict(delivery); return v && 'held' in v ? v.held : null },
     forbidden: (delivery) => forbidden(delivery),
@@ -290,8 +300,9 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
       // More work from its starter: no tab, so no roster note, which would invite it to message its teammates.
       if (message.tabId === TOLD_TAB) return toldText(message)
 
-      // The person's words, as they would type them: no header, as `harness reply` to a cloud harness sends them.
-      if (message.tabId === REPLIED_TAB) return message.text
+      // The person's words, as they would type them: no header, as `harness reply` to a cloud harness sends them. And
+      // Hachi's wake, a line built by code (lib/hachiWake.ts).
+      if (message.tabId === REPLIED_TAB || message.tabId === HACHI_TAB) return message.text
       const roster = rosterOf(delivery.agentId)
       const text = rendered(message, account?.accountId)
       return roster && store.state.noted[delivery.agentId] !== roster.signature ? `${roster.text}\n\n${text}` : text
@@ -338,6 +349,8 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
 
     // A program's reply for the person: the switch is looked at again at each look, as a tell's is.
     if (entry.message.tabId === REPLIED_TAB) return replyOn() ? null : { refused: 'programs-reply was turned off' }
+    // Hachi's wake: none is typed once Hachi is off (docs/design/2026-11-12-hachi.md, "Turned off while Hachi runs").
+    if (entry.message.tabId === HACHI_TAB) return hachiOn() ? null : { refused: HACHI_OFF_REASON }
     if (!directory.current() && directory.on()) return null
     const key = `${delivery.messageId} ${delivery.agentId}`
     const recipient = { machineId: self(), agentId: delivery.agentId }
@@ -723,6 +736,34 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
       from: { machineId: self(), agentId: PERSON_AGENT_ID, name: 'the person', engine: '', machine },
     }
     repliedAt.push(now())
+    store.record(message)
+    store.status({ messageId: message.id, machineId: self(), agentId, state: 'queued', at: now() })
+    mailbox.accept(message, agentId)
+    mailbox.resume()
+    saveQuietly()
+    const status = store.entry(message.id)?.statuses.find((s) => s.machineId === self() && s.agentId === agentId)
+    return { id: message.id, state: status?.state ?? 'queued', ...(status?.reason ? { reason: status.reason } : {}) }
+  }
+
+  /**
+   * Hachi's wake (docs/design/2026-11-12-hachi.md): a harness Hachi started needs the person, is done or stopped, and
+   * Hachi, idle between turns, is told by one line in its mailbox, which types it only into an empty composer, never
+   * over the person's draft, a dialog or a running turn, and never twice. The line is built here, from names and states
+   * only (lib/hachiWake.ts): whatever else the request holds never reaches it. Asked on this machine only, for the Hachi
+   * harness here, while the account has Hachi on; kept under the pseudo-tab `hachi`, as a tell's are under `told`.
+   */
+  function wakeHachi(payload: Record<string, unknown>): Record<string, unknown> {
+    if (!hachiOn()) throw new MessageError('HACHI_OFF', 'Hachi is off for this account.')
+    const agentId = typeof payload.agentId === 'string' ? payload.agentId : ''
+    const session = localAgent(agentId)
+    if (session?.dsh !== HACHI_ID) throw new MessageError('NOT_HACHI', 'Only the Hachi harness here is woken.')
+    const text = wakeLine(wakeItems(payload.items))
+    if (!text) throw new MessageError('USAGE', 'Name a harness, its machine, and a state that wakes Hachi.')
+    const message: Message = {
+      id: messageId(), tabId: HACHI_TAB, text, at: now(),
+      to: [{ machineId: self(), agentId, name: core.agents.displayName(session) || agentId.slice(0, 8) }],
+      from: { machineId: self(), agentId: PERSON_AGENT_ID, name: 'Harness', engine: '', machine: machineName(self()) },
+    }
     store.record(message)
     store.status({ messageId: message.id, machineId: self(), agentId, state: 'queued', at: now() })
     mailbox.accept(message, agentId)
@@ -1683,9 +1724,9 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
         if (!asker.owner) throw new MessageError('OWNER_REQUIRED', 'Agent Messages answer only the owner.')
         // A pane is only this machine's to name; a hand-over, its status and its names are another machine's
         // daemon's to ask, over the relay, never a process here's.
-        const fromHere = ['send'].includes(String(payload.action))
-        if (['send', 'deliver', 'status', 'who', 'started', 'handed', 'tab_pub', 'tab_pin', 'tab_pin_changed', 'tab_keychange'].includes(String(payload.action)) && asker.local !== fromHere) {
-          throw new MessageError(fromHere ? 'LOCAL_ONLY' : 'REMOTE_ONLY', fromHere ? 'harness send runs in a pane on this machine.' : 'Only another of your machines hands messages over.')
+        const fromHere = ['send', 'wake'].includes(String(payload.action))
+        if (['send', 'wake', 'deliver', 'status', 'who', 'started', 'handed', 'tab_pub', 'tab_pin', 'tab_pin_changed', 'tab_keychange'].includes(String(payload.action)) && asker.local !== fromHere) {
+          throw new MessageError(fromHere ? 'LOCAL_ONLY' : 'REMOTE_ONLY', fromHere ? 'That is asked on this machine only.' : 'Only another of your machines hands messages over.')
         }
         // The person's own windows, here or over the relay, manage shared tabs; another of the owner's machines asks
         // only `share_add` and `share_remove`, for a harness of this one, marked `forwarded` (sharedTabs.ts `addHarness`,
@@ -1702,6 +1743,8 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
           case 'tell': return tell(payload, asker.local)
           // A program acting for the person, here or on another of the owner's machines (replyLocal.ts).
           case 'reply_local': return replyLocal(payload)
+          // The daemon's wake for Hachi (services/hachi.ts): a line built here from names and states.
+          case 'wake': return wakeHachi(payload)
           case 'history': return history(payload)
           // The windows' sidebar: every harness of a desk tab, shared or not, with its state and one line on what it does.
           case 'tab_activity': return tabActivity(String(payload.tabId))
