@@ -100,11 +100,47 @@ export interface TrainHost<T extends TrainPull> {
   stamp(): string
 }
 
-/** A train's body: the tip it built, then each member at its full head with who read it. A name is cut to what [MEMBER] reads, so
- *  a body the train wrote always reads back. */
-export const trainBody = (base: string, tip: string, members: readonly TrainMember[]): string =>
+/** A train's body: the tip it built, then each member at its full head with who read it, then the members' [receipts] (trainReceipts),
+ *  when any gives one. A name is cut to what [MEMBER] reads, so a body the train wrote always reads back. */
+export const trainBody = (base: string, tip: string, members: readonly TrainMember[], receipts: readonly Json[] = []): string =>
   [`Harness's train into ${base}, built to ${tip}. It lands when its checks pass and each pull request below is still ready at its head. Never push to this branch.`,
-    '', ...members.map(m => `#${m.number} at ${m.head}, READ-OK by ${m.readers.replace(/[^\w -]/g, '').slice(0, 200) || 'a reader'}`)].join('\n')
+    '', ...members.map(m => `#${m.number} at ${m.head}, READ-OK by ${m.readers.replace(/[^\w -]/g, '').slice(0, 200) || 'a reader'}`),
+    ...receipts.length ? ['', '```harness-local-checks', `[${receipts.map(receipt => JSON.stringify(receipt)).join(',\n')}]`, '```'] : []].join('\n')
+
+/** The fence a pull request's body gives its local check receipts in (scripts/local-checks.py FENCE), and what of a receipt that
+ *  program reads: nothing else of a member's body reaches the train's. */
+const RECEIPTS = /^```harness-local-checks\s*\n([\s\S]*?)^```[ \t]*$/gm
+const RECEIPT_KEYS = ['check', 'command', 'cwd', 'head', 'status', 'passed', 'platform'] as const
+/** The most characters of receipts a train's body carries: GitHub takes a body of 65,536 at most and local-checks.py reads no
+ *  longer one, and twenty member lines take up to about 5,000 of them. */
+const RECEIPTS_ROOM = 50_000
+
+/**
+ * The local check receipts each of [pulls] gives for its own head, in their order. CI asks for each local check's receipt at the
+ * head it ran on (scripts/local-checks.py), and a train's head is a merge commit nobody ran one on: train #4115 changed cli-core
+ * and went red on 2026-11-11, and no CLI pull request could land. So a train's body carries its members' receipts, which CI takes
+ * only at the heads the train's merges name. Copied as data and judged there: a body with no one fence of a JSON list gives none,
+ * as its own CI found, and one for another head is left out. What passes RECEIPTS_ROOM is left out too, and the member it was
+ * for is named missing, so its train splits until each fits.
+ */
+export function trainReceipts(pulls: ReadonlyArray<{ head: string; body: string }>): Json[] {
+  const receipts: Json[] = []
+  let room = RECEIPTS_ROOM
+  for (const pull of pulls) {
+    const fences = [...pull.body.matchAll(RECEIPTS)]
+    let given: unknown = null
+    try { given = fences.length === 1 ? JSON.parse(fences[0]![1]!) : null } catch { /* No JSON: no receipt. */ }
+    if (!Array.isArray(given)) continue
+    for (const item of given as unknown[]) {
+      if (!item || typeof item !== 'object' || (item as Json).head !== pull.head) continue
+      const receipt = Object.fromEntries(RECEIPT_KEYS.filter(key => key in item).map(key => [key, (item as Json)[key]]))
+      room -= JSON.stringify(receipt).length + 2
+      if (room < 0) return receipts
+      receipts.push(receipt)
+    }
+  }
+  return receipts
+}
 
 /** The tip and members a train's [body] names, or null when it is not one the train wrote: no tip, no member, more than a
  *  train carries, or one named twice. */
@@ -394,7 +430,7 @@ export class GitHubTrain<T extends TrainPull> {
     // Marked as this login's build before the pull request exists: what is pushed to the branch from here on is not.
     await this.sent('POST', `/statuses/${tip}`, [201], { state: 'success', context: TRAIN_MARK, description: 'Built by Harness from pull requests that were read.' })
     const opened = object((await this.sent('POST', '/pulls', [201], { head: branch, base: this.base, draft: false, title: `${TITLE}${members.map(m => `#${m.number}`).join(' ')}`,
-      body: trainBody(this.base, tip, members.map(m => ({ number: m.number, head: m.head, readers: m.readers.join(' and ') }))) })).body)
+      body: trainBody(this.base, tip, members.map(m => ({ number: m.number, head: m.head, readers: m.readers.join(' and ') })), trainReceipts(members)) })).body)
     const [train] = await this.mine([opened])
     if (!train) throw this.stop('TRAIN_UNREADABLE', `GitHub's answer to opening the train on ${branch} is not one the train reads.`)
     // Opened at another head than the tip built: someone pushed onto the branch between the last merge and here.
