@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { builtOn, contextOf, crewOf, CORES, learnedMinutes, openPieces, outOfQuota, startedAt, takenTasks, QUEUED_AWAY_MS, readerFor, takeBacks, TAKEN_AWAY_MS, CLAIM_LIMIT, dependsOn, hasRoom, heldTasks, labelOf, machineHas, MEMORY_SHARE, nextPicks, readProblem, reasonOf, RESERVE, SIZES, worksOnOf, type Crew } from './crew.js'
+import { builtOn, contextOf, crewOf, learnedMinutes, openPieces, outOfQuota, startedAt, takenTasks, QUEUED_AWAY_MS, readerFor, takeBacks, TAKEN_AWAY_MS, CLAIM_LIMIT, dependsOn, hasRoom, heldTasks, labelOf, machineHas, MEMORY_SHARE, nextPicks, readProblem, reasonOf, RESERVE, SIZES, worksOnOf, type Crew } from './crew.js'
 import { solve } from './search.js'
 
 type Json = Record<string, unknown>
@@ -29,7 +29,7 @@ describe('a team\'s tasks as GitHub and the Swarm say them (readProblem)', () =>
     ], withReaders: new Set(), up: new Map() })
     expect(read.problem.tasks.map(t => t.id)).toEqual(['#1', '#2', '#5'])
     const [first, second, fifth] = read.problem.tasks
-    expect(first).toMatchObject({ minutes: SIZES.s.minutes, needs: { cpu: SIZES.s.cpu, ram: SIZES.s.ram, disk: SIZES.s.disk }, part: 'api', weight: 8,
+    expect(first).toMatchObject({ minutes: SIZES.s.minutes, needs: { cpu: 0, ram: SIZES.s.ram, disk: SIZES.s.disk }, part: 'api', weight: 8,
       spend: { five_hour: SIZES.s.spend, seven_day: SIZES.s.spend / 5 }, notBuilders: [] })
     // Only a machine that reports Xcode builds what needs it.
     expect(second).toMatchObject({ minutes: SIZES.l.minutes, weight: 1, notBuilders: ['atlas'], notWhy: 'its builder\'s machine lacks one of: xcode' })
@@ -89,19 +89,26 @@ describe('a team\'s tasks as GitHub and the Swarm say them (readProblem)', () =>
     expect(given.problem.tasks.map(t => [t.id, t.pinned ?? null, t.notBuilders])).toEqual([['#1', null, ['pip']], ['#2', 'pip', []]])
   })
 
-  it('plans a machine by the cores it reports, and one from an older daemon as CORES', () => {
+  // The plan held a task back for its machine's cores by a guess (a large task took four of them), which nothing checked when
+  // the task was taken, and which did not keep a machine working: four runs at once, the most the guess let 16 cores take,
+  // all failed (docs/research/2026-11-11-agents-share-cpu.md). A machine's cores are shared where its agents start
+  // (inCore/launch.ts), and the plan counts none.
+  it('holds no task back for its machine\'s cores, whatever cores the machine reports', () => {
     const team = crew()
-    team.machines = [machine('mac', { resources: { memoryTotalBytes: 32 * GiB, projectDiskFreeBytes: 200 * GiB, cpuCores: 4 } }),
-      machine('box', { resources: { memoryTotalBytes: 16 * GiB, projectDiskFreeBytes: 40 * GiB, cpuCores: 0 } })]
-    const { problem } = readProblem({ now: NOW, crew: team, issues: [issue(1, ['size:s'])], withReaders: new Set(), up: new Map() })
-    expect(problem.machines.map(m => [m.id, m.capacity.cpu])).toEqual([['mac', 4], ['box', CORES]])
+    team.machines = [machine('mac', { tools: { xcode: true }, resources: { memoryTotalBytes: 32 * GiB, projectDiskFreeBytes: 200 * GiB, cpuCores: 4 } }), team.machines[1]!]
+    const read = readProblem({ now: NOW, crew: team, issues: [issue(1, ['size:l', 'needs:xcode']), issue(2, ['size:l', 'needs:xcode'])],
+      withReaders: new Set(), up: new Map() })
+    // Pip and Juno, on the one Mac with Xcode, each start a large task now.
+    const { plan } = solve(read.problem, { seed: 1, budgetMs: 2_000 })
+    expect(plan.placements.map(placed => [placed.builder, placed.start]).sort()).toEqual([['juno', 0], ['pip', 0]])
+    expect(read.problem.machines.map(m => m.capacity.cpu)).toEqual([0, 0])
   })
 
   it('reads each machine\'s room and each subscription\'s windows, its person\'s reserve kept', () => {
     const { problem } = readProblem({ now: NOW, crew: crew(), issues: [issue(1, ['size:s'])], withReaders: new Set(), up: new Map() })
     expect(problem.machines).toEqual([
-      { id: 'mac', capacity: { cpu: CORES, ram: 32 * GiB * MEMORY_SHARE, disk: 190 * GiB } },
-      { id: 'box', capacity: { cpu: CORES, ram: 16 * GiB * MEMORY_SHARE, disk: 30 * GiB } },
+      { id: 'mac', capacity: { cpu: 0, ram: 32 * GiB * MEMORY_SHARE, disk: 190 * GiB } },
+      { id: 'box', capacity: { cpu: 0, ram: 16 * GiB * MEMORY_SHARE, disk: 30 * GiB } },
     ])
     expect(problem.accounts).toEqual([
       { id: 'mac:claude', reserve: RESERVE, windows: [{ name: 'five_hour', left: 70, resetsAt: 120, every: 300 },

@@ -2,7 +2,9 @@
 
 Status: built. The solver (`cli/src/superTabs/assign/search.ts`, `schedule.ts`) and the assigner that feeds it and applies
 its plan (`assign/crew.ts`, `githubAssign.ts`) run in the Harness of the person whose agent is the project's PM. Moving
-work, learned task times and CPU cores are built; learned memory, disk and spend are next (below).
+work and learned task times are built; learned memory, disk and spend are next (below). The plan counts no CPU cores
+since 12 November: each agent a Swarm starts gets its share of its machine's cores instead
+([the allocator's design](2026-11-11-swarm-allocator/BUILD.md), package 7).
 
 anh Dee, 2026-11-09: "this is a classic optimization problem. N tasks. M machines with cpu ssd token. how do we best
 assign them." "The bottleneck is a combination of cpu disk token etc." Assignment is the core of a Swarm: the right task
@@ -107,11 +109,12 @@ Every minute, in the PM's person's Harness, for each project its PM leads from t
   a Buddy, one stopping, one whose machine is down, or another private project's. What a builder finished in a part makes
   it no quicker there in the plan: lampOS's record showed no such gain ([the study](../research/2026-11-12-area-worth/README.md);
   until 12 November each task it finished there took 15% off, to 40%).
-- **Machines** give Swarm work 75% of their memory and their project disk less 10 GB, and their cores as their daemon
-  reports them (`cpuCores`, since 0.5.86; a backend before it refuses the field by name, and the daemon leaves it out for
-  ten minutes); a machine whose daemon reports none is planned as 8 cores. **Subscriptions** are each machine's engine windows as it reported them, a 20% reserve kept for its person.
-- **Sizes** until estimates are learned: s 30 minutes, 1 core, 2 GB, 1 GB, 3% of a 5-hour window; m 90, 2, 4 GB, 2 GB, 10%;
-  l 240, 4, 8 GB, 4 GB, 25%; a weekly window spends a fifth of that.
+- **Machines** give Swarm work 75% of their memory and their project disk less 10 GB. Their cores are not planned: a
+  daemon still reports them (`cpuCores`, since 0.5.86) for a PM's Harness from before 12 November, until 2026-12-12, and
+  the plan holds no task back for them. Each agent the Swarm starts on a machine gets its share of its cores
+  (`HARNESS_CORES`, [the study](../research/2026-11-11-agents-share-cpu.md)). **Subscriptions** are each machine's engine windows as it reported them, a 20% reserve kept for its person.
+- **Sizes** until estimates are learned: s 30 minutes, 2 GB, 1 GB, 3% of a 5-hour window; m 90, 4 GB, 2 GB, 10%; l 240,
+  8 GB, 4 GB, 25%; a weekly window spends a fifth of that. Until 12 November a size held 1, 2 or 4 cores too.
 - **The plan** is the solver's, from the last plan (so it changes only where it gains), in a second at most. A builder
   with no task to build and fewer than four open gets the free task it starts next, one at a time (until it held two, before
   11 November: [the allocator's design](2026-11-11-swarm-allocator/BUILD.md), package 2). A task is one its builder builds

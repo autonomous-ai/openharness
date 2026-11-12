@@ -17,7 +17,7 @@ import { parseProjectFolder, prepareProjectFolder, ProjectFolderError, Repositor
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createLaunchRequests, type CreateAgent, type ForkAgent, type LaunchRequestDeps, type RestartAgent, type ResumeAgent } from './launches.js'
 import * as pendingLaunches from './pendingLaunches.js'
-import { SWARM_LAUNCH } from '../../superTabs/inCore/launch.js'
+import { swarmLaunch } from '../../superTabs/inCore/launch.js'
 
 /**
  * The requests that start an agent's process, answered by the core: every refusal before a pane exists,
@@ -97,7 +97,7 @@ function setup(over: Partial<LaunchRequestDeps> = {}, launches: { create?: Creat
     createAgent: () => create, forkAgent: () => fork, resumeAgent: () => resume, restartAgent: () => restart,
     byAgent: (id) => known.get(id), toProject: vi.fn(async (s: RegisteredSession) => frameOf(s)),
     modelTarget: resolveNewAgentModel,
-    swarmLaunch: SWARM_LAUNCH,
+    swarmLaunch: swarmLaunch(() => []),
     stoppedAgent: () => undefined,
     ...over,
   }
