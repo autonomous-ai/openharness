@@ -1,16 +1,12 @@
-import { homedir } from 'node:os'
-import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { emptyPorts, type WorkspacesPort } from '../core/api.js'
 import { forgetAgentProject } from '../lib/agentProject.js'
 import { nameBranchAfterSession } from '../lib/branchNaming.js'
 import type { RegisteredSession } from '../lib/registry.js'
-import { sweepWorktrees } from '../lib/worktreeSweep.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { startWorkspaces } from './workspaces.js'
 
-// Nothing here may touch a real folder or a real repository: the sweep and the rename are fakes.
-vi.mock('../lib/worktreeSweep.js', () => ({ sweepWorktrees: vi.fn(async () => []) }))
+// Nothing here may touch a real folder or a real repository: the rename is a fake.
 vi.mock('../lib/branchNaming.js', () => ({ nameBranchAfterSession: vi.fn(async () => null) }))
 vi.mock('../lib/agentProject.js', () => ({ forgetAgentProject: vi.fn() }))
 vi.mock('../lib/registry.js', async (real) => ({
@@ -71,56 +67,11 @@ describe('the workspaces service', () => {
     })
   })
 
-  describe('sweeping unused worktrees', () => {
-    it('keeps every folder a live or stopped harness uses, and says how many it removed', async () => {
-      vi.mocked(sweepWorktrees).mockResolvedValueOnce(['/h/old-1', '/h/old-2'] as never)
-      const { port } = setup([agent({ cwd: '/h/live' })], [agent({ cwd: '/h/live' }), agent({ agentId: 'stopped', cwd: null as never })])
-      port.sweepUnused()
-      await settle()
-      expect(sweepWorktrees).toHaveBeenCalledWith({ root: join(homedir(), 'harnesses'), inUse: ['/h/live', null] })
-      expect(console.log).toHaveBeenCalledWith('[worktrees] removed 2 unused worktree(s)')
-    })
-
-    it('says nothing when it removed nothing, and nothing when the sweep fails', async () => {
-      const { port } = setup()
-      port.sweepUnused()
-      await settle()
-      vi.mocked(sweepWorktrees).mockRejectedValueOnce(new Error('EACCES'))
-      port.sweepUnused()
-      await settle()
-      expect(sweepWorktrees).toHaveBeenCalledTimes(2)
-      expect(console.log).not.toHaveBeenCalled()
-    })
-
-    it('never runs a second sweep beside one still going, and sweeps again once it is done', async () => {
-      let finish: (removed: string[]) => void = () => {}
-      vi.mocked(sweepWorktrees).mockImplementationOnce(() => new Promise((done) => { finish = done }))
-      const { core, port } = setup([agent({ cwd: '/h/live' })])
-      port.sweepUnused()
-      port.sweepUnused()
-      expect(sweepWorktrees).toHaveBeenCalledTimes(1)
-      // Not even asked what is in use: the sweep going on already knows.
-      expect(core.agents.all).toHaveBeenCalledTimes(1)
-      finish([])
-      await settle()
-      port.sweepUnused()
-      expect(sweepWorktrees).toHaveBeenCalledTimes(2)
-    })
-
-    it('sweeps again after a sweep that failed', async () => {
-      vi.mocked(sweepWorktrees).mockRejectedValueOnce(new Error('EACCES'))
-      const { port } = setup()
-      port.sweepUnused()
-      await settle()
-      port.sweepUnused()
-      expect(sweepWorktrees).toHaveBeenCalledTimes(2)
-    })
-
-    it('does not sweep at all when it cannot list what is in use', () => {
-      const { core, port } = setup()
-      vi.mocked(core.agents.all).mockImplementationOnce(() => { throw new Error('registry not loaded') })
-      port.sweepUnused()
-      expect(sweepWorktrees).not.toHaveBeenCalled()
-    })
+  // #4166: it swept clean, week-idle worktrees twice a day when the core said, the ones their person chose to keep too.
+  it('removes no worktree: its one call names branches', () => {
+    const { core, port } = setup([agent({ cwd: '/h/live' })])
+    expect(Object.keys(port)).toEqual(['nameBranches'])
+    expect(core.agents.all).not.toHaveBeenCalled()
   })
+
 })
