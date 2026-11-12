@@ -626,34 +626,60 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
   })
 
   // #4125: the watch lived in memory only. After a restart (every release) its clock started over under a new operation: a builder
-  // asked at 20 minutes was asked again 20 minutes after the restart, and its task went back that much later.
-  it('keeps the idle watch over a restart: asked once, and its task given back at the hour its idleness began', async () => {
+  // asked at 20 minutes was asked again 20 minutes after the restart. Review of #4129: going on with the hour gave a task back from a
+  // builder that worked on it in answer to the ask, in a turn that ended while Harness was down and was never heard, "with nothing
+  // done on it for an hour", on GitHub and to its person. So a task asked about before a restart goes back after an hour this run saw.
+  it('keeps the idle watch over a restart: asked once, and its task given back after an hour idle the new run saw', async () => {
     const f = setup({ items: [item(14, 'Add the export', ['status:taken'])] })
     f.next.start()
     await f.end()
     await vi.advanceTimersByTimeAsync(IDLE_ASK_MS)
     expect(f.told()).toEqual([expect.stringMatching(/^You hold acme\/app#14 \(Add the export\) and have done nothing/)])
-    // Harness restarts 10 minutes after the ask; its look as it starts goes on with the watch.
-    await vi.advanceTimersByTimeAsync(10 * 60_000)
+    // It works on it in answer, in a turn that ends while Harness restarts, 35 minutes on: never heard.
+    f.state.working = true
+    await vi.advanceTimersByTimeAsync(35 * 60_000)
     f.next.stop()
+    f.state.working = false
     const again = f.make()
     again.start()
     await vi.advanceTimersByTimeAsync(START_LOOK_MS)
-    await vi.advanceTimersByTimeAsync(IDLE_BACK_MS - IDLE_ASK_MS - 10 * 60_000 - START_LOOK_MS - 1)
+    await vi.advanceTimersByTimeAsync(IDLE_BACK_MS - 1)
     expect(f.told()).toHaveLength(1)
     expect(f.say).not.toHaveBeenCalled()
+    expect(f.written).toEqual([])
     await vi.advanceTimersByTimeAsync(1)
     expect(f.say.mock.calls.map(([, , text]) => text)).toEqual([expect.stringMatching(/^I held acme\/app#14 \(Add the export\) with nothing done on it for an hour/)])
+    expect(f.told()).toHaveLength(1)
     // Given back: nothing of the watch is left to go on with, nor the row kept for it alone.
     expect(JSON.parse(readFileSync(f.file, 'utf8'))).toEqual({})
     again.stop()
+  })
+
+  // Review of #4129: a look that found it holding no task left the watch kept, and once it held that task again, a restart went on
+  // with the watch at its old start and asked at once.
+  it('drops a kept watch once a look finds it typed something else, or holding nothing', async () => {
+    const watch = { terminal: 'h-pip', task: 'acme/app#14', since: Date.now() }
+    const f = setup({ items: [item(14, 'Add the export')] })
+    writeFileSync(f.file, JSON.stringify({ pip: { key: 'acme/app#14', times: 0, told: false, idle: watch } }))
+    f.next.start()
+    await vi.advanceTimersByTimeAsync(START_LOOK_MS)
+    expect(f.told()).toEqual([expect.stringMatching(/^Next: acme\/app#14 /)])
+    expect(JSON.parse(readFileSync(f.file, 'utf8'))).toEqual({ pip: { key: 'acme/app#14', times: 1, told: false } })
+    f.next.stop()
+    const g = setup({ items: [] })
+    writeFileSync(g.file, JSON.stringify({ pip: { key: '', times: 0, told: false, idle: watch } }))
+    g.next.start()
+    await vi.advanceTimersByTimeAsync(START_LOOK_MS)
+    expect(JSON.parse(readFileSync(g.file, 'utf8'))).toEqual({})
+    g.next.stop()
   })
 
   // Review of #4129: a turn of its that ended while the 20-minute look awaited GitHub or the ask dropped the watch, and the look
   // went on to ask, or re-armed the watch with its old start, which the turn's end's look then went on with: the task went back
   // 40 minutes on, "with nothing done on it for an hour", though the agent had just worked.
   it('neither asks nor re-arms a watch a turn of its ended while it was looked at, and starts the next at that turn\'s end', async () => {
-    for (const slow of ['read', 'ask'] as const) {
+    // The turn's end's own look comes after the slow answer, or (an ask slower than the settle) before it.
+    for (const slow of ['read', 'ask', 'ask past its look'] as const) {
       const f = setup({ items: [item(14, 'Add the export', ['status:taken'])] })
       f.next.start()
       await f.end()
@@ -663,9 +689,10 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
       else f.tell.mockImplementationOnce(async () => { await answered; return {} })
       await vi.advanceTimersByTimeAsync(IDLE_ASK_MS)
       for (const listener of f.listeners) listener({ agentId: 'h-pip', sessionId: 's-pip', aborted: false, prompt: 'p', turnId: 99 })
+      if (slow === 'ask past its look') await vi.advanceTimersByTimeAsync(NEXT_SETTLE_MS)
       f.state.hold = null
       answer()
-      await vi.advanceTimersByTimeAsync(NEXT_SETTLE_MS)
+      await vi.advanceTimersByTimeAsync(slow === 'ask past its look' ? 0 : NEXT_SETTLE_MS)
       expect(f.told()).toHaveLength(slow === 'read' ? 0 : 1)
       expect(JSON.parse(readFileSync(f.file, 'utf8')).pip.idle).toEqual({ terminal: 'h-pip', task: 'acme/app#14', since: Date.now() })
       // Its next watch starts at that turn's end: asked 20 minutes on, and nothing given back at the old hour.
@@ -714,7 +741,7 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     // Stopped as it typed the ask, before it saved that it had: its file says only when the watch began. The server answers the
     // same operation with the same words as given, so the builder hears it once.
     const saved = JSON.parse(readFileSync(f.file, 'utf8'))
-    delete saved.pip.idle.asked
+    delete saved.pip.idle.back
     writeFileSync(f.file, JSON.stringify(saved))
     const again = f.make()
     again.start()
@@ -742,7 +769,7 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     // A watch of another task, or of another terminal, kept from an hour before: nothing is given back, and it is asked at 20 minutes.
     for (const idle of [{ terminal: 'h-pip', task: 'acme/app#13' }, { terminal: 'h-old', task: 'acme/app#14' }]) {
       const g = setup({ items: [item(14, 'Add the export', ['status:taken'])] })
-      writeFileSync(g.file, JSON.stringify({ pip: { key: '', times: 0, told: false, idle: { ...idle, since: Date.now() - IDLE_BACK_MS, asked: Date.now() - IDLE_ASK_MS } } }))
+      writeFileSync(g.file, JSON.stringify({ pip: { key: '', times: 0, told: false, idle: { ...idle, since: Date.now() - IDLE_BACK_MS, back: Date.now() } } }))
       g.next.start()
       await vi.advanceTimersByTimeAsync(START_LOOK_MS + IDLE_ASK_MS - 1)
       expect(g.tell).not.toHaveBeenCalled()
@@ -804,9 +831,9 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
   it('reads from its file an idle watch of a terminal, a task and its times, and no other value', async () => {
     const since = Date.now() - IDLE_BACK_MS
     // A time ahead of now (a clock set back, or a bad file) is no watch either: past a timer's reach, it fired at once.
-    for (const idle of [{ terminal: 'h pip', task: 'acme/app#14', since }, { terminal: 'h-pip', task: 14, since }, { terminal: 'h-pip', task: 'acme/app#14', since: 'then' },
-      { terminal: 'h-pip', task: 'acme/app#14', since, asked: 'soon' }, 'h-pip', { terminal: 'h-pip', task: 'acme/app#14', since: Date.now() + 30 * 86_400_000 },
-      { terminal: 'h-pip', task: 'acme/app#14', since, asked: Date.now() + 86_400_000 }, { terminal: 'h-pip', task: 'acme/app#14', since, asked: since - 1 }]) {
+    for (const idle of [{ terminal: 7, task: 'acme/app#14', since }, { terminal: 'h-pip', task: 14, since }, { terminal: 'h-pip', task: 'acme/app#14', since: 'then' },
+      { terminal: 'h-pip', task: 'acme/app#14', since, back: 'soon' }, 'h-pip', { terminal: 'h-pip', task: 'acme/app#14', since: Date.now() + 30 * 86_400_000 },
+      { terminal: 'h-pip', task: 'acme/app#14', since, back: Date.now() + 2 * IDLE_BACK_MS }, { terminal: 'h-pip', task: 'acme/app#14', since, back: since - 1 }]) {
       const f = setup({ items: [item(14, 'Add the export', ['status:taken'])] })
       writeFileSync(f.file, JSON.stringify({ pip: { key: 'acme/app#12', times: 1, told: false, idle } }))
       f.next.start()

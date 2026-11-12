@@ -72,14 +72,15 @@ function heldTask(items: Record<string, unknown>[]): Record<string, unknown> | n
   return open.length > named.filter(tasks => !tasks.length).length ? open[0]! : null
 }
 
-/** The watch a row of the file keeps, or none for a value no watch here could have saved. A time ahead of [now] (a clock set back,
- *  or a bad file) held an ask or a give-back off by that much, or past a timer's reach, which fires at once (review of #4129). */
+/** The watch a row of the file keeps, or none for a value no watch here could have saved. A start ahead of [now], or a give-back
+ *  further off than an hour (a clock set back, or a bad file), held an ask or a give-back off by that much, or past a timer's reach,
+ *  which fires at once (review of #4129). */
 function keptIdle(value: unknown, now: number): Idle | undefined {
-  const { terminal, task, since, asked } = object(value)
-  const time = (at: unknown, from: number): at is number => Number.isSafeInteger(at) && (at as number) >= from && (at as number) <= now
-  if (!identifier(terminal) || typeof task !== 'string' || !time(since, 0)) return undefined
-  if (asked === undefined) return { terminal, task, since }
-  return time(asked, since) ? { terminal, task, since, asked } : undefined
+  const { terminal, task, since, back } = object(value)
+  const time = (at: unknown, from: number, to: number): at is number => Number.isSafeInteger(at) && (at as number) >= from && (at as number) <= to
+  if (typeof terminal !== 'string' || typeof task !== 'string' || !time(since, 0, now)) return undefined
+  if (back === undefined) return { terminal, task, since }
+  return time(back, since, now + IDLE_BACK_MS) ? { terminal, task, since, back } : undefined
 }
 
 /** A task by its key and its title, as an agent and its person are told of it: `acme/app#14 (Add the export)`. */
@@ -90,11 +91,12 @@ function titled(repo: string, task: Record<string, unknown>): string {
 
 /** What an agent was typed last ([key], how many times, whether its person was told), and the things its person was told of
  *  ([done], the last [DONE_KEPT]): each waits for them, and what comes after it is typed. And the task it sits idle holding
- *  ([idle]), so a restart (every release) neither asks it again nor gives the task back later (#4125). A row kept for that alone
- *  has typed nothing yet: its key is empty. */
+ *  ([idle]), so a restart (every release) does not ask it again (#4125). A row kept for that alone has typed nothing yet: its key
+ *  is empty. */
 interface Kept { key: string; times: number; told: boolean; done?: string[]; idle?: Idle }
-/** A watch on an agent idle with a task it took: in which terminal, which task (`acme/app#14`), since when, and when it was asked. */
-interface Idle { terminal: string; task: string; since: number; asked?: number }
+/** A watch on an agent idle with a task it took: in which terminal, which task (`acme/app#14`), since when, and once it was asked,
+ *  when the task goes back ([back]). */
+interface Idle { terminal: string; task: string; since: number; back?: number }
 const DONE_KEPT = 20
 
 export class NextThing {
@@ -267,14 +269,20 @@ export class NextThing {
     for await (const thing of this.waiting(agent)) {
       if ('held' in thing) {
         // The watch its file keeps of this task in this terminal goes on: no turn of its ended since, or that end dropped it. Started
-        // over, a restart (every release) asked it again 20 minutes on, under a new operation, and gave the task back that late (#4125).
+        // over, a restart (every release) asked it again 20 minutes on, under a new operation (#4125).
         const idle = (this.memory ??= this.load())[agent.agentId]?.idle
         const kept = idle?.terminal === agent.harnessId && idle.task === `${thing.repo}#${thing.held.number}` ? idle : undefined
-        return this.watch(agent, thing.repo, thing.held, kept?.since ?? Date.now(), kept?.asked)
+        // Asked, it is not asked again, but its task goes back only after an hour idle seen from now. Only the look as Harness starts
+        // finds a watch asked (a turn's end drops it first), and a turn that ended while nothing heard it was never heard: a builder
+        // that worked on it then lost it "with nothing done on it for an hour", said on GitHub and to its person (review of #4129).
+        const back = kept?.back === undefined ? undefined : Date.now() + IDLE_BACK_MS
+        return this.watch(agent, thing.repo, thing.held, kept?.since ?? Date.now(), back)
       }
       // One its person has waits for them: the next is typed, or the task it holds watched.
-      if (await this.give(agent, thing.key, thing.typed, thing.did)) return
+      if (await this.give(agent, thing.key, thing.typed, thing.did)) return this.keepIdle(agent, null)
     }
+    // It holds no task now: a watch kept would go on, at its old start, once it held this one again (review of #4129).
+    this.keepIdle(agent, null)
   }
 
   /** What waits for [agent], in lampOS's order, read a thing at a time, so its next thing reads no further than itself. */
@@ -354,20 +362,19 @@ export class NextThing {
     return null
   }
 
-  /** Looks again at [agent], idle since [since] with [task] of its own in hand: at [IDLE_ASK_MS] it is asked once, and
-   *  [IDLE_BACK_MS] - [IDLE_ASK_MS] after it was [asked], its person is told and the task goes back for another builder. Any turn of
-   *  its ends this. Kept in its file, for the look as Harness starts again to go on with. */
-  private watch(agent: WatchedAgent, repo: string, task: Record<string, unknown>, since: number, asked?: number): void {
+  /** Looks again at [agent], idle since [since] with [task] of its own in hand: at [IDLE_ASK_MS] it is asked once, and once asked,
+   *  at [back] its person is told and the task goes back for another builder. Any turn of its ends this. Kept in its file, for the
+   *  look as Harness starts again to go on with. */
+  private watch(agent: WatchedAgent, repo: string, task: Record<string, unknown>, since: number, back?: number): void {
     this.unwatch(agent.harnessId)
-    const at = asked === undefined ? since + IDLE_ASK_MS : asked + IDLE_BACK_MS - IDLE_ASK_MS
     // A time gone by while Harness was down comes at once, at 0: Node 24 warns of a negative delay (TimeoutNegativeWarning).
     const timer = setTimeout(() => {
       this.idle.delete(agent.harnessId)
-      void this.idleWith(agent, repo, Number(task.number), String(task.title ?? '').trim(), since, asked)
-    }, Math.max(0, at - Date.now()))
+      void this.idleWith(agent, repo, Number(task.number), String(task.title ?? '').trim(), since, back)
+    }, Math.max(0, (back ?? since + IDLE_ASK_MS) - Date.now()))
     timer.unref()
     this.idle.set(agent.harnessId, { timer, agent, repo, task })
-    this.keepIdle(agent, { terminal: agent.harnessId, task: `${repo}#${task.number}`, since, ...asked === undefined ? {} : { asked } })
+    this.keepIdle(agent, { terminal: agent.harnessId, task: `${repo}#${task.number}`, since, ...back === undefined ? {} : { back } })
   }
 
   private unwatch(harnessId: string): void {
@@ -399,7 +406,7 @@ export class NextThing {
     if (ids.length) this.save(memory)
   }
 
-  private async idleWith(agent: WatchedAgent, repo: string, number: number, title: string, since: number, asked?: number): Promise<void> {
+  private async idleWith(agent: WatchedAgent, repo: string, number: number, title: string, since: number, back?: number): Promise<void> {
     const key = `${repo}#${number}`, what = titled(repo, { number, title }), name = agent.names[0]!
     // Whether this watch is the one its file keeps: a turn of its that ends while this awaits drops it, and its end's look starts the
     // next. Asked or re-armed after, it went on with the old start: the task went back 40 minutes on (review of #4129).
@@ -414,12 +421,12 @@ export class NextThing {
       const items = await this.reads.current(repo, `/repos/${repo}/issues?state=open&labels=${encodeURIComponent(agent.label)}&per_page=100`, 1)
       if (Number(heldTask(items)?.number) !== number) return this.keepIdle(agent, null)
       if (!ours()) return
-      if (asked === undefined) {
+      if (back === undefined) {
         // Under the operation of the watch's start: one asked again after a restart that came before this was kept reaches it once,
         // and one the server has in a release's other words was asked.
         await this.once('tell', agent, this.operation(agent, key, `idle ${since}`), `You hold ${what} and have done nothing on it for 20 minutes: `
           + `go on with it, or say on it what holds it: gh issue view ${number} --repo ${repo}`)
-        if (ours()) this.watch(agent, repo, { number, title }, since, Date.now())
+        if (ours()) this.watch(agent, repo, { number, title }, since, Date.now() + IDLE_BACK_MS - IDLE_ASK_MS)
         return
       }
       const given = await giveBack(this.deps.send, repo, number, agent.label, true)
