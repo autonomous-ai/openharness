@@ -591,6 +591,109 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     f.next.stop()
   })
 
+  // #4125: the watch lived in memory only. After a restart (every release) its clock started over under a new operation: a builder
+  // asked at 20 minutes was asked again 20 minutes after the restart, and its task went back that much later.
+  it('keeps the idle watch over a restart: asked once, and its task given back at the hour its idleness began', async () => {
+    const f = setup({ items: [item(14, 'Add the export', ['status:taken'])] })
+    f.next.start()
+    await f.end()
+    await vi.advanceTimersByTimeAsync(IDLE_ASK_MS)
+    expect(f.told()).toEqual([expect.stringMatching(/^You hold acme\/app#14 \(Add the export\) and have done nothing/)])
+    // Harness restarts 10 minutes after the ask; its look as it starts goes on with the watch.
+    await vi.advanceTimersByTimeAsync(10 * 60_000)
+    f.next.stop()
+    const again = f.make()
+    again.start()
+    await vi.advanceTimersByTimeAsync(START_LOOK_MS)
+    await vi.advanceTimersByTimeAsync(IDLE_BACK_MS - IDLE_ASK_MS - 10 * 60_000 - START_LOOK_MS - 1)
+    expect(f.told()).toHaveLength(1)
+    expect(f.say).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(f.say.mock.calls.map(([, , text]) => text)).toEqual([expect.stringMatching(/^I held acme\/app#14 \(Add the export\) with nothing done on it for an hour/)])
+    // Given back: nothing of the watch is left to go on with.
+    expect(JSON.parse(readFileSync(f.file, 'utf8')).pip.idle).toBeUndefined()
+    again.stop()
+  })
+
+  it('asks again, under the operation it asked under, a watch its file kept from before the ask was saved', async () => {
+    const f = setup({ items: [item(14, 'Add the export', ['status:taken'])] })
+    f.next.start()
+    await f.end()
+    await vi.advanceTimersByTimeAsync(IDLE_ASK_MS)
+    const [, first, text] = f.tell.mock.calls[0]!
+    f.next.stop()
+    // Stopped as it typed the ask, before it saved that it had: its file says only when the watch began. The server answers the
+    // same operation with the same words as given, so the builder hears it once.
+    const saved = JSON.parse(readFileSync(f.file, 'utf8'))
+    delete saved.pip.idle.asked
+    writeFileSync(f.file, JSON.stringify(saved))
+    const again = f.make()
+    again.start()
+    // Its 20 minutes are long over: asked as the look finds it.
+    await vi.advanceTimersByTimeAsync(START_LOOK_MS + 1)
+    expect(f.tell.mock.calls.slice(1)).toEqual([[PIP, first, text]])
+    again.stop()
+  })
+
+  it('starts a kept watch over at a turn\'s end, for another task or terminal, and drops it while paused or once the task moved on', async () => {
+    // A turn of its that ends once Harness is up again: its 20 minutes start at that end.
+    const f = setup({ items: [item(14, 'Add the export', ['status:taken'])] })
+    f.next.start()
+    await f.end()
+    await vi.advanceTimersByTimeAsync(15 * 60_000)
+    f.next.stop()
+    const again = f.make()
+    again.start()
+    await f.end()
+    await vi.advanceTimersByTimeAsync(IDLE_ASK_MS - 1)
+    expect(f.tell).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(f.told()).toEqual([expect.stringMatching(/^You hold acme\/app#14 /)])
+    again.stop()
+    // A watch of another task, or of another terminal, kept from an hour before: nothing is given back, and it is asked at 20 minutes.
+    for (const idle of [{ terminal: 'h-pip', task: 'acme/app#13' }, { terminal: 'h-old', task: 'acme/app#14' }]) {
+      const g = setup({ items: [item(14, 'Add the export', ['status:taken'])] })
+      writeFileSync(g.file, JSON.stringify({ pip: { key: '', times: 0, told: false, idle: { ...idle, since: Date.now() - IDLE_BACK_MS, asked: Date.now() - IDLE_ASK_MS } } }))
+      g.next.start()
+      await vi.advanceTimersByTimeAsync(START_LOOK_MS + IDLE_ASK_MS - 1)
+      expect(g.tell).not.toHaveBeenCalled()
+      expect(g.written).toEqual([])
+      await vi.advanceTimersByTimeAsync(1)
+      expect(g.told()).toEqual([expect.stringMatching(/^You hold acme\/app#14 /)])
+      g.next.stop()
+    }
+    // Paused when it was looked at again, or its task moved on: what was kept of the watch goes.
+    for (const change of ['paused', 'moved'] as const) {
+      const h = setup({ items: [item(14, 'Add the export', ['status:taken'])] })
+      h.next.start()
+      await h.end()
+      expect(JSON.parse(readFileSync(h.file, 'utf8')).pip.idle).toMatchObject({ terminal: 'h-pip', task: 'acme/app#14' })
+      if (change === 'paused') h.state.watched = [{ ...PIP, paused: true }]
+      else h.state.items = [item(14, 'Add the export')]
+      await vi.advanceTimersByTimeAsync(IDLE_ASK_MS)
+      expect(JSON.parse(readFileSync(h.file, 'utf8')).pip.idle).toBeUndefined()
+      expect(h.tell).not.toHaveBeenCalled()
+      h.next.stop()
+    }
+  })
+
+  it('reads from its file an idle watch of a terminal, a task and its times, and no other value', async () => {
+    const since = Date.now() - IDLE_BACK_MS
+    for (const idle of [{ terminal: 'h pip', task: 'acme/app#14', since }, { terminal: 'h-pip', task: 14, since }, { terminal: 'h-pip', task: 'acme/app#14', since: 'then' },
+      { terminal: 'h-pip', task: 'acme/app#14', since, asked: 'soon' }, 'h-pip']) {
+      const f = setup({ items: [item(14, 'Add the export', ['status:taken'])] })
+      writeFileSync(f.file, JSON.stringify({ pip: { key: 'acme/app#12', times: 1, told: false, idle } }))
+      f.next.start()
+      await vi.advanceTimersByTimeAsync(START_LOOK_MS)
+      // Read as no watch: one starts now, and nothing is asked or given back yet.
+      expect(f.tell).not.toHaveBeenCalled()
+      expect(f.written).toEqual([])
+      expect(JSON.parse(readFileSync(f.file, 'utf8')).pip).toEqual({ key: 'acme/app#12', times: 1, told: false,
+        idle: { terminal: 'h-pip', task: 'acme/app#14', since: Date.now() } })
+      f.next.stop()
+    }
+  })
+
   it('waits for its turns to settle: two ends close together are one look', async () => {
     const f = setup()
     f.next.start()

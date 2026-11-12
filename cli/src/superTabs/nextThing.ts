@@ -15,7 +15,7 @@
  * (status:taken) with no pull request of its yet, which is its own work to go on with: nothing is typed. Then the oldest task
  * given to it and not taken. What it is typed ends with the command that answers it, as every ask Harness types does. The same
  * thing typed three times with no change (a push changes a pull request's head) goes to its person instead, once, and is not
- * typed a fourth time; the counts outlive a restart.
+ * typed a fourth time; the counts outlive a restart, and so does the watch on a task it sits idle holding.
  */
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
@@ -78,8 +78,12 @@ function titled(repo: string, task: Record<string, unknown>): string {
 }
 
 /** What an agent was typed last ([key], how many times, whether its person was told), and the things its person was told of
- *  ([done], the last [DONE_KEPT]): each waits for them, and what comes after it is typed. */
-interface Kept { key: string; times: number; told: boolean; done?: string[] }
+ *  ([done], the last [DONE_KEPT]): each waits for them, and what comes after it is typed. And the task it sits idle holding
+ *  ([idle]), so a restart (every release) neither asks it again nor gives the task back later (#4125). A row kept for that alone
+ *  has typed nothing yet: its key is empty. */
+interface Kept { key: string; times: number; told: boolean; done?: string[]; idle?: Idle }
+/** A watch on an agent idle with a task it took: in which terminal, which task (`acme/app#14`), since when, and when it was asked. */
+interface Idle { terminal: string; task: string; since: number; asked?: number }
 const DONE_KEPT = 20
 
 export class NextThing {
@@ -161,12 +165,13 @@ export class NextThing {
   private ended(end: TurnEnd): void {
     this.heard?.add(end.agentId)
     if (end.compacted) this.compacted.set(end.agentId, `${end.sessionId}:${end.turnId}`)
-    // A turn of its, its person's or its own, is no idle time. One its person stopped starts its idle time over, as the look its
-    // other turns get is not made: they are at its terminal.
+    // A turn of its, its person's or its own, is no idle time, and what its file keeps of the watch goes with it. One its person
+    // stopped starts its idle time over, as the look its other turns get is not made: they are at its terminal.
     const watched = this.idle.get(end.agentId)
     this.unwatch(end.agentId)
+    this.forgetIdle(end.agentId)
     if (end.aborted) {
-      if (watched) this.watch(watched.agent, watched.repo, watched.task, Date.now(), false)
+      if (watched) this.watch(watched.agent, watched.repo, watched.task, Date.now())
       return
     }
     this.endedAt.set(end.agentId, Date.now())
@@ -244,7 +249,13 @@ export class NextThing {
   /** Its next thing: the first that waits, typed; or the task it holds, watched while it sits idle with it. */
   private async next(agent: WatchedAgent): Promise<void> {
     for await (const thing of this.waiting(agent)) {
-      if ('held' in thing) return this.watch(agent, thing.repo, thing.held, Date.now(), false)
+      if ('held' in thing) {
+        // The watch its file keeps of this task in this terminal goes on: no turn of its ended since, or that end dropped it. Started
+        // over, a restart (every release) asked it again 20 minutes on, under a new operation, and gave the task back that late (#4125).
+        const idle = (this.memory ??= this.load())[agent.agentId]?.idle
+        const kept = idle?.terminal === agent.harnessId && idle.task === `${thing.repo}#${thing.held.number}` ? idle : undefined
+        return this.watch(agent, thing.repo, thing.held, kept?.since ?? Date.now(), kept?.asked)
+      }
       // One its person has waits for them: the next is typed, or the task it holds watched.
       if (await this.give(agent, thing.key, thing.typed, thing.did)) return
     }
@@ -320,16 +331,20 @@ export class NextThing {
     return null
   }
 
-  /** Looks again at [agent], idle since [since] with [task] of its own in hand: at [IDLE_ASK_MS] it is asked once, and at
-   *  [IDLE_BACK_MS] (once [asked]) its person is told and the task goes back for another builder. Any turn of its ends this. */
-  private watch(agent: WatchedAgent, repo: string, task: Record<string, unknown>, since: number, asked: boolean): void {
+  /** Looks again at [agent], idle since [since] with [task] of its own in hand: at [IDLE_ASK_MS] it is asked once, and
+   *  [IDLE_BACK_MS] - [IDLE_ASK_MS] after it was [asked], its person is told and the task goes back for another builder. Any turn of
+   *  its ends this. Kept in its file, for the look as Harness starts again to go on with. */
+  private watch(agent: WatchedAgent, repo: string, task: Record<string, unknown>, since: number, asked?: number): void {
     this.unwatch(agent.harnessId)
+    const at = asked === undefined ? since + IDLE_ASK_MS : asked + IDLE_BACK_MS - IDLE_ASK_MS
+    // A time gone by while Harness was down comes at once: Node runs a timer set in the past next.
     const timer = setTimeout(() => {
       this.idle.delete(agent.harnessId)
       void this.idleWith(agent, repo, Number(task.number), String(task.title ?? '').trim(), since, asked)
-    }, asked ? IDLE_BACK_MS - IDLE_ASK_MS : IDLE_ASK_MS)
+    }, at - Date.now())
     timer.unref()
     this.idle.set(agent.harnessId, { timer, agent, repo, task })
+    this.keepIdle(agent, { terminal: agent.harnessId, task: `${repo}#${task.number}`, since, ...asked === undefined ? {} : { asked } })
   }
 
   private unwatch(harnessId: string): void {
@@ -337,23 +352,44 @@ export class NextThing {
     this.idle.delete(harnessId)
   }
 
-  private async idleWith(agent: WatchedAgent, repo: string, number: number, title: string, since: number, asked: boolean): Promise<void> {
+  /** Keeps [idle] in [agent]'s row of its file as the watch on it, or drops the watch (null). */
+  private keepIdle(agent: WatchedAgent, idle: Idle | null): void {
+    const memory = this.memory ??= this.load()
+    const kept: Kept = { ...memory[agent.agentId] ?? { key: '', times: 0, told: false } }
+    delete kept.idle
+    delete memory[agent.agentId]
+    memory[agent.agentId] = idle ? { ...kept, idle } : kept
+    this.save(memory)
+  }
+
+  /** Drops what its file keeps of a watch on terminal [harnessId]: a turn of its ended. */
+  private forgetIdle(harnessId: string): void {
+    const memory = this.memory ??= this.load()
+    const kept = Object.values(memory).filter(row => row.idle?.terminal === harnessId)
+    for (const row of kept) delete row.idle
+    if (kept.length) this.save(memory)
+  }
+
+  private async idleWith(agent: WatchedAgent, repo: string, number: number, title: string, since: number, asked?: number): Promise<void> {
     const key = `${repo}#${number}`, what = titled(repo, { number, title }), name = agent.names[0]!
     try {
       // Working, or nobody can say: its turn's end looks again.
       if (await this.deps.working(agent.harnessId) !== false) return
       // Paused since it was watched: nothing is asked of it, and its task goes to others as the assigner's take-back says (crew.ts).
-      if ((await this.deps.watched()).find(watched => watched.harnessId === agent.harnessId)?.paused) return
+      // Its time paused is no idle time, so the watch kept goes too.
+      if ((await this.deps.watched()).find(watched => watched.harnessId === agent.harnessId)?.paused) return this.keepIdle(agent, null)
       // Still its own, taken, with no pull request of its yet.
       const items = await this.reads.current(repo, `/repos/${repo}/issues?state=open&labels=${encodeURIComponent(agent.label)}&per_page=100`, 1)
-      if (Number(heldTask(items)?.number) !== number) return
-      if (!asked) {
+      if (Number(heldTask(items)?.number) !== number) return this.keepIdle(agent, null)
+      if (asked === undefined) {
+        // Under the operation of the watch's start: one asked again after a restart that came before this was kept reaches it once.
         await this.deps.tell(agent, this.operation(agent, key, `idle ${since}`), `You hold ${what} and have done nothing on it for 20 minutes: `
           + `go on with it, or say on it what holds it: gh issue view ${number} --repo ${repo}`)
-        return this.watch(agent, repo, { number, title }, since, true)
+        return this.watch(agent, repo, { number, title }, since, Date.now())
       }
       const given = await giveBack(this.deps.send, repo, number, agent.label, true)
       if ('refused' in given) return this.log(`[super-tab] next thing of agent ${agent.agentId}: ${key} not given back: GitHub answered ${given.refused}.`)
+      this.keepIdle(agent, null)
       if (given.takenKept !== null) this.log(`[super-tab] next thing of agent ${agent.agentId}: ${key} kept status:taken: GitHub answered ${given.takenKept}.`)
       const said = await this.deps.send('POST', `/repos/${repo}/issues/${number}/comments`, { body: backLine(`${name} held it with nothing done for an hour`, hhmm(Date.now())) })
       // Given back all the same: the labels say so. Its line held or refused is said here (githubWrites.ts holds a line said too often).
@@ -455,7 +491,12 @@ export class NextThing {
           // under the id it was first given with, which the server answers as given: nothing reached the agent, and it slept.
           const listed = Array.isArray(row.done) ? row.done.filter((key): key is string => typeof key === 'string') : []
           const done = (row.told && !listed.includes(row.key) ? [...listed, row.key] : listed).slice(-DONE_KEPT)
-          kept[id] = { key: row.key, times: row.times as number, told: row.told, ...done.length ? { done } : {} }
+          const watch = object(row.idle)
+          const idle = identifier(watch.terminal) && typeof watch.task === 'string' && Number.isSafeInteger(watch.since)
+            && (watch.asked === undefined || Number.isSafeInteger(watch.asked))
+            ? { terminal: watch.terminal, task: watch.task, since: watch.since as number, ...watch.asked === undefined ? {} : { asked: watch.asked as number } }
+            : undefined
+          kept[id] = { key: row.key, times: row.times as number, told: row.told, ...done.length ? { done } : {}, ...idle ? { idle } : {} }
         }
       }
     } catch { /* none kept yet, or unreadable: counted from now */ }
