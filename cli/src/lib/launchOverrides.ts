@@ -1,3 +1,4 @@
+import { statSync } from 'node:fs'
 import type { SwarmSkill } from './savedSkill.js'
 /**
  * What a pane has to be launched WITH, beyond the engine's own argv, for the engine to come back
@@ -44,6 +45,7 @@ import type { CreationAuthority } from './agentCreationReceipt.js'
 import type { publishGridConfigDir } from './publishedGridConfig.js'
 import { nativeHookLocations } from '../engines/kit/nativeLocations.js'
 import { hooksHeldDetail } from '../engines/kit/hooksHeldDetail.js'
+import { OPENCLAW_LOCAL } from '../engines/openclaw/contract.js'
 
 export interface LaunchOverrides {
   native?: NativeLaunch
@@ -135,6 +137,8 @@ export const SWARM_OFF = { ok: false, error: 'SWARM_SKILL_FAILED', detail: 'The 
 export interface LaunchSource extends NativeLaunchSource {
   gridLaunch?: GridLaunchOverride | null
   codexHome?: string | null
+  /** OpenClaw's `--local` folder (the registry row's `openclawLocal`): every relaunch runs on it, or does not run. */
+  openclawLocal?: string | null
   /**
    * The engine's OWN model to come back to, when this relaunch is a move off a grid.
    *
@@ -243,6 +247,9 @@ export async function prepareLaunchOverrides(
   const changed = { ok: false, error: 'AGENT_CHANGED', detail: 'The harness changed or stopped during launch preparation.' } as const
   if (!current()) return changed
   if (source.swarmSkill && !deps.swarm) return SWARM_OFF
+  // Harness never makes the folder again, nor falls back to the shared one: a run whose folder is gone stops here, with no
+  // service asked and no hold to wait on, since waiting brings no folder back.
+  if (source.openclawLocal && !isFolder(source.openclawLocal)) return { ok: false, error: 'OPENCLAW_FOLDER_GONE', detail: OPENCLAW_LOCAL.folderGone }
   const swarm = deps.swarm
   const owner = current
   source = structuredClone(source)
@@ -250,6 +257,10 @@ export async function prepareLaunchOverrides(
   if (!current()) return changed
   if (inspected && !inspected.ok) return inspected
   const native = inspected?.ok ? inspected.launch : undefined
+  // Only a launch prepared for this folder sets its state and `--local`; any other would run on the shared state folder.
+  if (source.openclawLocal && native?.openclawLocal !== source.openclawLocal) {
+    return { ok: false, error: 'OPENCLAW_LOCAL_UNPREPARED', detail: OPENCLAW_LOCAL.unprepared }
+  }
   if (engine === 'codex' && native) source.codexHome = nativeHookLocations(native.environment).CODEX_HOME
   current = () => owner() && native?.current() !== false
   if (!current()) return changed
@@ -349,6 +360,14 @@ export async function prepareLaunchOverrides(
     const launchEnv = { ...tmp.env, ...overrides.env, ...native?.environment }
     return { ok: true, overrides: { ...overrides, ...(native ? { native } : {}), env: launchEnv, clearEnv: [...overrides.clearEnv, ...harnessEnvToClear(overrides.env)] } }
   } }
+}
+
+function isFolder(path: string): boolean {
+  try {
+    return statSync(path).isDirectory()
+  } catch {
+    return false
+  }
 }
 
 async function prepareBaseLaunchOverrides(
