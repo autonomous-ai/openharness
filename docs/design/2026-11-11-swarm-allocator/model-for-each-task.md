@@ -1,8 +1,10 @@
 # Swarm: a model for each task
 
-Status: **designed, 12 November. No code.** This is package 14 of [what to build](BUILD.md). Its code waits for two
-words from anh Dee: a yes to [the one screen change](model-choice-mockup.html), and a yes to
-[the tiers experiment](tiers-experiment.md), which spends his subscription.
+Status: **designed, 12 November. No code.** This is package 14 of [what to build](BUILD.md). The design and
+[the mockup of the one screen change](model-choice-mockup.html) are kept on anh Dee's word of 12 November ("just take
+care of it all"). The code waits for package 12's daemon half: the rule weighs nothing until a class has 20 finished
+tasks on a model, from real rows. [The tiers experiment](tiers-experiment.md) is not run now: only 17 of its 50 tasks
+may qualify, none is sized, and it would take about 3¼ weeks of his subscription, a fifth of each window kept for him.
 
 [The design](README.md) found its first version wrong here twice. "Harness picks the model for each task": an agent
 is one session with one model, `/model` typed in its pane changes its person's default, and model routing was built
@@ -94,30 +96,43 @@ model pill reads Auto. [The mockup](model-choice-mockup.html) draws both.
  +----------------------------------+
 ```
 
-- **Off until picked.** The form remembers it as it remembers its other choices: from the last launch.
+- **Off until picked.** A choice, though code standard 1 ships an optimization on, because agents start as their
+  lab's plain CLI with its default settings, the model spends its person's own subscription, and [BUILD.md](BUILD.md)
+  package 14 asks for a choice where an agent is added.
+- **Kept to the Swarm's form.** The form remembers its choices from the last launch, and ⌘N shares that memory
+  (`agentPreference.successfulLaunch`) but has no Auto. So the code keeps Auto to the Swarm's form: ⌘N never opens on
+  it.
 - **Claude Code only**, until Codex passes its trial ([below](#what-the-engines-allow)). Never for a model served on
   a grid.
 - **Only where a session is started for each task**: the row shows when the chosen computer's daemon says it can.
-- **Off again** when its person picks a model for the agent themselves, in the pane's own model picker (⌘:). From
-  then on the model is theirs.
+- **Off again** when its person picks a model for the agent themselves, in the pane's own model picker, which opens
+  from the model button in the pane's header. From then on the model is theirs.
 - **Nothing else on screen changes.** The agent's card shows the model its session runs, as today.
 - An attached agent keeps its model. A PM is not offered Auto: New project chooses its model.
 
-The label is defined in the [Naming System](../../naming-system.md), and the row is added to the Desktop design
-system with its Flutter test, in the pull request that ships it.
+**Auto** is a working word. It sits beside **Auto-approve**, which keeps its name, and the two read as one control.
+The word is chosen with the [Naming System](../../naming-system.md), and the row is added to the Desktop design system
+with its Flutter test, in the pull request that ships it.
 
 ## The choice
 
 ### What it reads
 
 - **A class** is a task's `part:` and `size:` labels together, as [BUILD.md](BUILD.md) package 9 has it.
-- **The record** of a class, for each model, from package 12's rows:
+- **The record** of a class, for each model, from package 12's rows as this package extends them:
   - **finished**: the tasks that ended on that model. A task ends on a model when its change lands, or when it
     leaves that model by a step up. A task given back, taken back or closed for another reason is not counted: it
     says nothing clear about the model.
   - **clean**: of those, the ones whose change landed with no HOLD on any head that model pushed.
   - **tokens**: what those tasks spent, in the four kinds a daemon counts (`cli/src/lib/agentTokenUsage.ts`):
     uncached input, output, cache read, cache write.
+- **Package 12's rows have no class and no outcome today.** A row (#4109: `backend/src/superTabs/taskTokens.ts`,
+  `SuperTabTaskTokens`) is one agent's work of one kind (build, fix or read) on one issue or pull request: its number,
+  its tokens by model, its rounds, and when the work began and last ended. Each boundary rewrites it with the totals
+  so far, and its one read is by the Swarm, the repository and the numbers. So this package extends the row, backend
+  first: the class, and for each model the outcome (landed clean, landed held, stepped up), both written by the
+  builder's daemon with the totals; the time of the row's last write, which the server sets; and a read of a class's
+  newest 200 rows, with its index.
 - **A step up counts twice**: once against the model it left (finished, not clean) and once for the model that took
   it (finished, and clean if it then landed with no further hold). So the dearer model's record fills with the tasks
   the cheaper one failed, and its share is, if anything, too low. The rule then errs toward the cheaper model, and
@@ -188,10 +203,11 @@ The rule, in words:
    model, as an agent not on Auto does.
 
 With today's table that is: Claude Code starts small and medium tasks on `sonnet` at high effort and large ones on
-`opus` at high; Codex starts every size on `gpt-6.1-sol` at high. Two cautions. Reading a size as the table's
-difficulty is this design's own step: the table was made for a PM's "low, medium, high". And its rows are the
-owners' standing decisions of 30 October and 2 November (`catalog.ts`), not findings: the experiment's result takes
-their place before any code uses them.
+`opus` at high; Codex, once its trial passes, starts every size on `gpt-6.1-sol` at high. Two cautions. Reading a
+size as the table's difficulty is this design's own step: the table was made for a PM's "low, medium, high". And its
+rows are the owners' standing decisions of 30 October and 2 November (`catalog.ts`), not findings. They stay the
+first table until the experiment runs. Its result then takes their place, leaning cheap where fifty tasks show no
+gap, as decided on 12 November: a wrong cheap start is caught by the step up, a wrong dear one is not.
 
 It ran, as written, on the examples below (12 November, outside the repository): no product code lands with this
 design.
@@ -243,8 +259,8 @@ Sonnet 5.5, $13.90 on Opus 5.5 and $31.75 on Fable 5.1), because nothing has cou
 
 Three more, in short. A large task: `opus`, the table's tier, and Harness tries nothing cheaper on it; but if agents
 whose person chose `sonnet` have landed 20 of 22 large tasks there clean against Opus's 30 of 33, it is `sonnet`. A
-class where only `sonnet` has a record, at 9 of 20: still `sonnet`, the slowness named above. Codex, any size, no
-record: `gpt-6.1-sol` high.
+class where only `sonnet` has a record, at 9 of 20: still `sonnet`, the slowness named above. Codex, once its trial
+passes, any size, no record: `gpt-6.1-sol` high.
 
 ## A session for each task
 
@@ -266,8 +282,8 @@ record: `gpt-6.1-sol` high.
    daemon reopens that task's session with `claude --resume <id> --model <the same> --effort <the same>`
    (`resumeArgs`; a session's registry row keeps its launch model today) and types the fix's line. One session of an
    agent works at a time: a fix waits for the live session's turn to end, as it does today.
-7. The change lands. The task's row is written (package 12), its session is forgotten, and its worktree goes by
-   package 6's rule.
+7. The change lands. The task's row is written with its model's outcome (package 12's row, as this package extends
+   it), its session is forgotten, and its worktree goes by package 6's rule.
 
 Its person's own message is typed into the session that is live, as today.
 
@@ -314,7 +330,8 @@ agent.
 
 What it does:
 
-- It ends the session at its turn's end and writes the task's row for the model it leaves: finished, stepped up.
+- It ends the session at its turn's end and writes the task's row with the outcome for the model it leaves: stepped
+  up.
 - It starts a new session one tier up, in the same worktree, on the same branch and pull request.
 - The first message names the task, the branch, which evidence fired, and where to read it: the pull request. It
   quotes no reader's words. What another account's agent wrote stays data the session reads on GitHub.
@@ -342,25 +359,29 @@ The top model is the last tier of an engine in the table: `opus` for Claude Code
 
 ## Data and design
 
-- **Growth.** On the server, one yes or no for an agent, gone with the agent. This package adds no rows: it reads
-  package 12's, which expire. On a daemon, one small record for each open task of an agent on Auto (its session,
-  its tier, its failed rounds): at most four an agent (`CLAIM_LIMIT`), removed when the change lands or the task
-  leaves the agent.
-- **Concurrency.** One daemon decides for its own agent's task. No write is shared. A row is written once, by the
-  task's own builder's daemon, under the task's id, so a second write is the same write.
-- **Read cost.** The class's newest rows, at most 200, when a task of that class starts or a step is weighed; after
-  the first read, only rows newer than the last one held. The table and the price list once a day: they change only
-  with a backend release.
+- **Growth.** On the server, one yes or no for an agent, gone with the agent. No new rows: package 12's row gains the
+  class (two labels), an outcome for each of its models (at most 16) and the time of its last write, and its
+  collection one index. Its rows go 90 days after their first write, and with their Swarm. On a daemon, one small
+  record for each open task of an agent on Auto (its session, its tier, its failed rounds): at most four an agent
+  (`CLAIM_LIMIT`), removed when the change lands or the task leaves the agent.
+- **Concurrency.** One daemon decides for its own agent's task. No write is shared: a row's id holds its agent
+  (`taskTokensKey`), so only that agent's daemon writes it, and a write locks that one row. Each boundary rewrites the
+  row with the totals so far, and the class and the outcomes go with them: the same write twice changes nothing, and
+  a later one replaces the one before.
+- **Read cost.** A class's newest 200 rows that have an outcome, when a task of that class starts or a step is
+  weighed; after the first read, only rows the server wrote since the newest one held, by the time it sets on each
+  write. The table and the price list once a day: they change only with a backend release.
 - **Scale.** At ten times today, a thousand agents starting ten tasks a day is about seven reads a minute, each by
-  an index on the project, the class and the time, each bounded. The metric that warns first is that read's p95
-  against the 100 ms limit.
-- **Compatibility.** The backend ships first: the yes or no on an agent, and the read of rows by class. A Desktop of
-  the last 30 days never sends the field, so its agents keep their person's model. A daemon from before does not
-  say it can start a session for each task, so the row is not shown for its computer. `routing-policy` is read as
-  it is served; a new row in it (Fable) is added, never a changed shape.
-- **Migration and rollback.** No migration: an agent without the field is as today. Rolled back, the daemon ignores
-  the field again; open task sessions go on as ordinary sessions on the model they have; nothing stored is
-  rewritten.
+  the new index on the Swarm, the repository, the class and the time of the last write, each bounded. The metric that
+  warns first is that read's p95 against the 100 ms limit.
+- **Compatibility.** The backend ships first: the yes or no on an agent, the row's new fields and the read by class.
+  Package 12's write and read are only extended: a daemon that sends no class writes the row it writes today, which
+  is in no class's record. A Desktop of the last 30 days never sends the field, so its agents keep their person's
+  model. A daemon from before does not say it can start a session for each task, so the row is not shown for its
+  computer. `routing-policy` is read as it is served; a new row in it (Fable) is added, never a changed shape.
+- **Migration and rollback.** No migration: an agent without the field, and a row without a class, are as today.
+  Rolled back, the daemon ignores the field again; open task sessions go on as ordinary sessions on the model they
+  have; the rows keep their new fields until they expire, and nothing stored is rewritten.
 - **Audience.** The choice is its person's alone: the server takes it only from the person who adds the agent, as
   it takes the add. The rows are seen by the project's members (package 12). A row is its builder's daemon's word
   about its own task. A false one can move a class's choice within the rule; it can start nothing on another
@@ -442,13 +463,19 @@ started and reopened, sessions that could not be reopened.
 - Effort. It is the table row's.
 - Any screen but the one row.
 
-## When he says yes
+## When the rows exist
 
-1. The experiment, and the table it gives: which tier a small and a medium task start on, and whether Fable gets a
-   row.
-2. Codex's trial.
-3. The server's part, first: the yes or no on an agent.
-4. The daemon's part: a session for each task for Claude Code, `modelFor`, the step up. Specs with the six examples
+The code starts when package 12's daemon half writes real rows: until then no class has twenty finished tasks on a
+model, and the rule weighs nothing.
+
+1. Codex's trial.
+2. The server's part, first: package 12's row extended (the class, each model's outcome, the time of its last write),
+   the read by class with its index, and the yes or no on an agent.
+3. The daemon's part: a session for each task for Claude Code, `modelFor`, the step up. Specs with the six examples
    as their first cases, and each deciding line broken once to see its spec fail.
-5. The row in Desktop, with its Flutter test, the design doc and the gallery in the same pull request.
-6. Proof: a week of our own Swarm with tokens for a landed change by model, and holds by model.
+4. The row in the Swarm's form, its word chosen with the Naming System, with its Flutter test, the design doc and the
+   gallery in the same pull request.
+5. Proof: a week of our own Swarm with tokens for a landed change by model, and holds by model.
+
+The experiment is not a step of this list. It runs when fifty tasks qualify, on anh Dee's word, and the table it
+gives (which tier a small and a medium task start on, and whether Fable gets a row) then takes today's place.

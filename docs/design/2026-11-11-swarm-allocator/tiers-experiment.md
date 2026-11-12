@@ -1,9 +1,11 @@
 # Swarm: the tiers experiment, its plan and its cost
 
-Status: **a plan, 12 November. Nothing has run.** It runs only on anh Dee's word: it spends his subscription. It is
-the first step of package 14 ([a model for each task](model-for-each-task.md)), and it is how [the design](README.md)
-says one of its unknowns is found: "Does a cheaper model land the same work? Fifty closed tasks run again on three
-tiers, the project's tests the judge."
+Status: **a plan, 12 November. Not run now.** The plan is kept on anh Dee's word of 12 November ("just take care of
+it all"), and the run waits: only 17 of its fifty tasks may qualify, none is sized, and it would take about 3¼ weeks
+of his subscription, a fifth of each window kept for him. It runs when fifty qualify, on his word: it spends his
+subscription. It gives package 14 ([a model for each task](model-for-each-task.md)) its first table, and package 14's
+code does not wait for it. It is how [the design](README.md) says one of its unknowns is found: "Does a cheaper model
+land the same work? Fifty closed tasks run again on three tiers, the project's tests the judge."
 
 ## In short
 
@@ -11,8 +13,8 @@ tiers, the project's tests the judge."
    its own landed change brought.
 2. **It can show a tier that is far behind**: a gap of 20 points, three or four times in five. **It cannot show
    five points**, the margin the choice rule turns on: that takes about 500 tasks. The live record does that work.
-3. **By the allocator's own table of sizes it costs 13 five-hour windows** and 2.6 weekly windows: about three
-   weeks of his subscription, with a fifth kept for him. That table is a guess. The first 15 runs measure it.
+3. **By the allocator's own table of sizes it costs 13 five-hour windows** and 2.6 weekly windows: about 3¼ weeks of
+   his subscription, a fifth of each window kept for him. That table is a guess. The first 15 runs measure it.
 4. **The fifty do not exist today**: 17 tasks may qualify. Making the list spends nothing of his.
 
 ## What it gives
@@ -171,15 +173,16 @@ one figure for any model, "until finished tasks teach better".
 | **And the cheapest tier again** | **200** | **13** | **260%** | **200** |
 | With a fifth of every window kept for him | 200 | 16.25 | 3.25 weeks | 200 |
 
-- **The weekly window is what binds**: about three and a quarter weeks, with his fifth kept (`RESERVE`). While it
-  runs it takes the room his Swarm's agents on that subscription would use.
+- **The weekly window is what binds**: about 3¼ weeks, with his fifth kept (`RESERVE`). While it runs it takes the
+  room his Swarm's agents on that subscription would use.
 - **Hours.** 200 agent hours is about 67 hours of running at three runs at once, spread over those weeks.
 - **It can be up to twice this.** A run is cut at twice its size's minutes.
 - **The table is blind to the model.** If a window charges as the price list does (1 : 2 : 5) and the table's
   figure is Opus's, 200 runs cost 14.6 windows, not 13. If the figure is Sonnet's, 29. Nobody knows. Claude Code
   also reports limits of their own for Opus and Fable.
 - **So the first 15 runs measure it**: three small and two medium tasks on the three tiers, 0.9 of a window by the
-  table. The rest is costed again from what those spent. Past the cap in the line below, it stops and he is told.
+  table. The rest is costed again from what those spent. Past the cap [it would run under](#when-fifty-qualify), it
+  stops and he is told.
 - **The list, the checks and the set-up spend nothing of his.**
 
 Two smaller cuts, if he wants less:
@@ -189,27 +192,31 @@ Two smaller cuts, if he wants less:
 | Small tasks only, fifty | 200 | 6 | 1.5 | Nothing about medium tasks, where most tokens go |
 | Thirty tasks: 15 small, 15 medium | 120 | 7.8 | 2 | A gap of 20 points two times in five; 30 points, three in four |
 
-## What he would decide
+## What each outcome decides
 
 A gap "shows" when its split passes the paired test: six to none, eight to one, ten to two.
 
-| What the runs show | What it means | He decides |
+| What the runs show | What it means | Then |
 |---|---|---|
-| No tier behind another, and little noise | As far as fifty can tell, Sonnet lands our small and medium tasks | Build package 14. Both sizes start on `sonnet`. The saving is what the token counts say; list prices alone say half of Opus |
-| Sonnet level on small, behind on medium | The design as drawn | Build it: small starts on `sonnet`, medium on `opus` |
-| Sonnet behind on both | The cheap tier is not for our work | Both sizes start on `opus`. Package 14 then saves nothing on them: set its code aside, or build only the step up. The saving must come from smaller tasks and fewer fix rounds |
+| No tier behind another, and little noise | As far as fifty can tell, Sonnet lands our small and medium tasks | Both sizes start on `sonnet`. The saving is what the token counts say; list prices alone say half of Opus |
+| Sonnet level on small, behind on medium | The design as drawn | Small starts on `sonnet`, medium on `opus` |
+| Sonnet behind on both | The cheap tier is not for our work | Both sizes start on `opus`. Package 14 then saves nothing on them: set its choice aside, or keep only the step up. The saving must come from smaller tasks and fewer fix rounds |
 | Fable ahead of Opus | The dearest model lands more here | Fable gets a row and is the top tier: the last step up, and the reader of risky changes |
 | Fable level with Opus, or behind | The top tier is Opus | No Fable row. A step up ends at `opus` |
 | Every tier fails most tasks (the best under one in three) | The judge or the task texts are at fault, not the models | Nothing about models. Fix the list, or learn that our tasks cannot be built from their text alone |
 | Sonnet differs from itself on ten or more of fifty | One run for a task is noise | No gap under that is believed. A second run of every tier is another 6.5 windows: his call |
 | A cheaper tier lands as much and spends as many dollars of tokens | A cheaper price is not a cheaper task | No cheaper start on that size |
 
-Where the runs show no gap, the table leans cheap: a size starts on the cheapest tier not shown behind. A wrong
-cheap start is mended by the step up and by the record; a wrong dear start by neither. Fifty tasks cannot tell a
-10-point gap, so which way to lean is his to turn.
+Where the runs show no gap, the table leans cheap, as decided on 12 November: a size starts on the cheapest tier not
+shown behind. A wrong cheap start is caught by the step up and mended by the record; a wrong dear one by neither.
+Fifty tasks cannot tell a 10-point gap, so this is a lean, not a finding.
 
-## The one line
+## When fifty qualify
+
+Not now (12 November): only 17 of the fifty may qualify, none is sized, and the run would take about 3¼ weeks of his
+subscription. Until it runs, today's table is the first table, and it leans cheap already: small and medium tasks
+start on the cheapest tier, `sonnet`. When fifty qualify, it is put to anh Dee in one line:
 
 **Run the tiers experiment on your Claude subscription, yes or no: 200 runs, spending at most 13 five-hour windows'
-worth and never more than four-fifths of any one window, over about three weeks, starting when fifty tasks qualify,
-and stopping to tell you if its first 15 runs show it will cost more?**
+worth and never more than four-fifths of any one window, over about 3¼ weeks, and stopping to tell you if its first
+15 runs show it will cost more?**
