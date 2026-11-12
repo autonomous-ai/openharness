@@ -21,6 +21,10 @@ import 'swarm_state_test.dart' show MemoryStore, createApp;
 /// The backend as a person's computers meet it: their Swarm list, each Swarm's reads, and one Personal Swarm per account
 /// whichever computer asks first (backend superTabs/store.ts `create`).
 class _Backend {
+  _Backend({this.marks = true});
+
+  /// False as a backend before 2026-11-12 answers: no Swarm is marked a Personal one to its members.
+  final bool marks;
   final servers = <String, ConversationServer>{};
   final names = <String, String>{};
   final creates = <Map<String, dynamic>>[];
@@ -28,18 +32,21 @@ class _Backend {
   bool failCreate = false;
   Completer<void>? holdCreate;
 
-  /// Swarm [id], [owner]'s, with [guests] invited there; a person's name is the one they set ([names]).
+  /// Swarm [id], [owner]'s, with [guests] invited there; a person's name is the one they set ([names]). The reader's own
+  /// Personal Swarm ([personal]), or another person's ([personalSwarm]), is marked one in its head.
   void add(
     String id,
     String name, {
     String owner = 'owner',
     List<String> guests = const [],
     Map<String, String> people = const {},
+    bool personalSwarm = false,
   }) {
     servers[id] = ConversationServer()
       ..state['id'] = id
       ..state['name'] = name
       ..state['ownerId'] = owner
+      ..state['personal'] = marks && (personalSwarm || id == personal)
       ..state['people'] = [
         for (final person in [owner, ...guests])
           {
@@ -66,8 +73,9 @@ class _Backend {
               'id': id,
               'name': name,
               'ownerId': servers[id]!.state['ownerId'],
-              // As the backend's list: only on the reader's own Personal Swarm.
+              // As the backend's list: `personal` only on the reader's own Personal Swarm, `personalSwarm` on every one.
               if (id == personal) 'personal': true,
+              if (servers[id]!.state['personal'] == true) 'personalSwarm': true,
             },
         ],
         'next': null,
@@ -310,6 +318,8 @@ void main() {
     const own = 'kimpersonal0123456789abc';
     const dees = 'deepersonal0123456789abc';
     const pilot = '0123456789abcdef01234567';
+    // A team Swarm Dee named Personal: not a Personal Swarm, so it keeps its name.
+    const team = 'deeteam0123456789abcdef0';
     final backend = _Backend()..personal = own;
     backend
       ..add(own, 'Personal', owner: 'kim')
@@ -319,10 +329,13 @@ void main() {
         owner: 'dee',
         guests: ['kim'],
         people: {'dee': 'Dee'},
+        personalSwarm: true,
       )
-      ..add(pilot, 'Pilot', owner: 'dee', guests: ['kim']);
+      ..add(pilot, 'Pilot', owner: 'dee', guests: ['kim'])
+      ..add(team, 'Personal', owner: 'dee', guests: ['kim']);
     final app = _computer(backend, entered: true, account: 'kim');
     await app.superTabs.setTabVisible(pilot, false);
+    await app.superTabs.setTabVisible(team, false);
     await app.superTabs.refreshTabs();
     app.selectSwarm(app.swarms.firstWhere((s) => s.superTabId == dees).id);
     await mount(tester, app);
@@ -337,6 +350,7 @@ void main() {
     expect(_menuRow('personal', 'Personal'), findsOneWidget);
     expect(_menuRow(dees, "Dee's Swarm"), findsOneWidget);
     expect(_menuRow(pilot, 'Pilot'), findsOneWidget);
+    expect(_menuRow(team, 'Personal'), findsOneWidget);
 
     // Pilot in this tab: Dee's goes to Recent Swarms, named the same.
     await tester.tap(find.byKey(const ValueKey('swarm-switch-$pilot')));
@@ -350,6 +364,10 @@ void main() {
     );
     expect(
       find.descendant(of: _row(_personalRow), matching: find.text('Personal')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: _row(team), matching: find.text('Personal')),
       findsOneWidget,
     );
 
@@ -396,6 +414,30 @@ void main() {
     expect(_menuRow('personal', 'Personal'), findsOneWidget);
     expect(_menuRow(pilot, 'Pilot'), findsOneWidget);
     expect(find.byKey(const ValueKey('swarm-switch-$dees')), findsNothing);
+    expect(find.textContaining("'s Swarm"), findsNothing);
+    await _end(tester, app);
+  });
+
+  testWidgets('against a backend that marks no Personal Swarm to its guests, '
+      'another person\'s keeps its own name', (tester) async {
+    const own = 'kimpersonal0123456789abc';
+    const dees = 'deepersonal0123456789abc';
+    final backend = _Backend(marks: false)..personal = own;
+    backend
+      ..add(own, 'Personal', owner: 'kim')
+      ..add(
+        dees,
+        'Personal',
+        owner: 'dee',
+        guests: ['kim'],
+        people: {'dee': 'Dee'},
+      );
+    final app = _computer(backend, entered: true, account: 'kim');
+    await app.superTabs.refreshTabs();
+    app.selectSwarm(app.swarms.firstWhere((s) => s.superTabId == dees).id);
+    await mount(tester, app);
+    await _settle(tester);
+    expect(_inPane('Personal'), findsOneWidget);
     expect(find.textContaining("'s Swarm"), findsNothing);
     await _end(tester, app);
   });

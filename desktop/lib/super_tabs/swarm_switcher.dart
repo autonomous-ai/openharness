@@ -17,6 +17,8 @@ import 'swarm_name.dart';
 /// person belongs to and New Swarm. Picking one shows it in the same tab
 /// ([AppNotifier.showSuperTabIn]); nothing else about tabs changes.
 
+const kPersonalSwarmName = 'Personal';
+
 /// The request id Personal is created with. The server derives a new Swarm's
 /// id from the signed-in account and this id (backend superTabs/store.ts
 /// `create`), so each person has one Personal Swarm, made once whichever

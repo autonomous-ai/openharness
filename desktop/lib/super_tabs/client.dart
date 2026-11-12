@@ -521,6 +521,13 @@ class SuperTabClient {
   String? ownerOf(String id) => _loaded[id]?.snapshot?.ownerId ?? _owners[id];
   Map<String, String> _owners = const {};
 
+  /// Whether Swarm [id] is its owner's Personal Swarm, whoever's (backend store.ts `list` `personalSwarm`, and every
+  /// member's read since 2026-11-12). False from an older backend.
+  bool isPersonalSwarm(String id) =>
+      (_loaded[id]?.snapshot ?? _closedSnapshots[id])?.personal == true ||
+      _personalSwarms.contains(id);
+  Set<String> _personalSwarms = const {};
+
   /// Person [userId] as this Desktop last read them: in Swarm [id] first, else in another Swarm open here, or closed here
   /// and still the account's. Null when no such read has them.
   SuperTabPerson? personOf(String id, String userId) {
@@ -567,6 +574,7 @@ class SuperTabClient {
     _visibility.clear();
     _owners = const {};
     _listedPersonal = null;
+    _personalSwarms = const {};
     _listed = const {};
     _listAnswers = 0;
     _listAsked.clear();
@@ -663,6 +671,7 @@ class SuperTabClient {
         final tabs = <String, SuperTabListing>{};
         final owners = <String, String>{};
         String? personal;
+        final personalSwarms = <String>{};
         final cursors = <String>{};
         String? after;
         do {
@@ -680,6 +689,7 @@ class SuperTabClient {
             tabs[id] = (id: id, name: row['name'] as String);
             if (row['ownerId'] case final String owner) owners[id] = owner;
             if (row['personal'] == true) personal = id;
+            if (row['personalSwarm'] == true) personalSwarms.add(id);
           }
           after = page['next'] as String?;
           if (after != null && !cursors.add(after)) {
@@ -689,6 +699,7 @@ class SuperTabClient {
         discoveryError = null;
         _owners = owners;
         _listedPersonal = personal;
+        _personalSwarms = personalSwarms;
         _listed = tabs.keys.toSet();
         _listAnswers++;
         final hidden = Set<String>.unmodifiable({..._hidden, ..._creating});
