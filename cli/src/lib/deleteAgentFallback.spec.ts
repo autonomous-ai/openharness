@@ -198,6 +198,15 @@ describe('delete-agent termination of the engine\'s tree', () => {
     expect(d.kills.some(([pid, signal]) => pid < 0 && signal === 'SIGKILL')).toBe(false)
   })
 
+  // The engine left early, and the rest of the grace is seconds: a process that leaves meanwhile can have its number
+  // handed to another before the SIGKILL.
+  it('reads its tree again before a SIGKILL that follows the rest of the grace', async () => {
+    const left = [[tree[2]!], []]
+    const d = deps({ checkRuntime: sequence(true, false), descendants: async () => tree, survivors: async () => left.shift() ?? [] })
+    expect(await terminateDeletedAgent(SESSION, d)).toBe('terminated')
+    expect(d.kills.filter(([, signal]) => signal === 'SIGKILL')).toEqual([])
+  })
+
   it('fails the stop when one of the tree outlives its SIGKILL, and says which', async () => {
     const d = deps({ checkRuntime: sequence(true, false), descendants: async () => tree, survivors: async () => [tree[2]!] })
     expect(await terminateDeletedAgent(SESSION, d)).toBe('failed')
