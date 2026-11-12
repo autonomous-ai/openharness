@@ -3185,3 +3185,107 @@ describe('harness show --work (the result in facts, read on the machine that own
     expect(cloud.err[0]).toBe('devin runs in its maker\'s cloud: it has no folder here to read. Its links are in harness show devin.')
   })
 })
+
+describe('harness watch --mine (one stream for every harness the caller started, on every machine)', () => {
+  class PushingDaemon extends FakeDaemon {
+    watched: string[][] = []
+    heard: ((agentId: string) => void) | null = null
+    async watch(agentIds: string[], heard: (agentId: string) => void): Promise<boolean> {
+      this.watched.push([...agentIds])
+      this.heard = heard
+      return true
+    }
+  }
+  const machines = async () => [{ machineId: 'm', label: 'studio', status: 'running', current: true }, { machineId: 'office-id', label: 'office', status: 'running', current: false }]
+  /** lead started kid and api here, rev on office, and old here long since stopped; theirs is someone else's. */
+  const fleet = () => {
+    const d = new PushingDaemon(), office = new FakeDaemon('office-id')
+    d.frames = [frame('lead', { engine: 'claude' }), frame('kid', { activity: { state: 'working' } }), frame('api', { activity: { state: 'working' } }),
+      frame('theirs', { activity: { state: 'working' } }), frame('old', { status: 'stopped' })]
+    office.frames = [frame('rev', { engine: 'claude', activity: { state: 'working' } })]
+    const h = harness(d, { machines, others: { 'office-id': office } })
+    for (const kid of ['kid', 'api', 'old']) started(h.ledger, 'lead', kid)
+    started(h.ledger, 'lead', 'rev', 'office-id')
+    return { d, office, h }
+  }
+  const lines = (out: string[]) => out.map((l) => JSON.parse(l) as Record<string, unknown>)
+
+  it('prints the lines watch prints for each of them, with its machine, until every one has stopped (exit 4)', async () => {
+    const { d, office, h } = fleet()
+    let round = 0
+    h.deps.sleep = async (ms) => {
+      h.advance(ms)
+      round++
+      if (round === 1) { d.frames = d.frames.filter((f) => f.id !== 'kid') }
+      if (round === 2) { office.frames = [] }
+      if (round === 3) { d.frames = d.frames.filter((f) => f.id !== 'api') }
+    }
+    expect(await watchCommand(['--mine', '--json'], h.deps)).toBe(EXIT.stopped)
+    const said = lines(h.out)
+    expect(said.map((l) => `${l.name}@${l.machine} ${l.event}`)).toEqual([
+      'kid@studio working', 'api@studio working', 'rev@office working',
+      'kid@studio stopped', 'rev@office stopped', 'api@studio stopped',
+    ])
+    expect(said.some((l) => l.name === 'theirs' || l.name === 'old')).toBe(false)
+    // This machine's are followed by push; the other machine's are looked at, as watch looks at one there.
+    expect(d.watched).toEqual([['kid', 'api']])
+    expect(office.closed).toBe(true)
+  })
+
+  it('names the machine in a person-readable line too', async () => {
+    const { h } = fleet()
+    expect(await watchCommand(['--mine', '--timeout', '1s'], h.deps)).toBe(EXIT.timeout)
+    expect(h.out).toEqual(['12:00:00Z kid @studio: working', '12:00:00Z api @studio: working', '12:00:00Z rev @office: working'])
+  })
+
+  it('sleeps a minute while every one is followed by push, and looks every interval while one on another machine works', async () => {
+    const { d, office, h } = fleet()
+    const slept: number[] = []
+    h.deps.sleep = async (ms) => { slept.push(ms); h.advance(ms); if (slept.length === 2) office.frames = [] }
+    expect(await watchCommand(['--mine', '--json', '--timeout', '5m'], h.deps)).toBe(EXIT.timeout)
+    expect(slept.slice(0, 3)).toEqual([1_000, 1_000, 60_000])
+    expect(d.watched).toEqual([['kid', 'api']])
+  })
+
+  it('says a machine it cannot reach, and follows the rest', async () => {
+    const { d, h } = fleet()
+    h.deps.open = async (_w, machineId) => {
+      if (!machineId || machineId === 'm') return d
+      throw new AgentClientError('NO_PEER_LINK', 'That machine is not linked to this one.')
+    }
+    expect(await watchCommand(['--mine', '--timeout', '1s'], h.deps)).toBe(EXIT.timeout)
+    expect(h.err).toEqual(['office: not followed. That machine is not linked to this one.'])
+    expect(h.out.map((l) => l.split(' ')[1])).toEqual(['kid', 'api'])
+  })
+
+  it('stops following a machine whose line drops, says so, and follows the rest', async () => {
+    const { office, h } = fleet()
+    let round = 0
+    h.deps.sleep = async (ms) => {
+      h.advance(ms)
+      if (++round === 1) office.request = async () => { throw new AgentClientError('DISCONNECTED', 'The connection to Harness closed.') }
+    }
+    expect(await watchCommand(['--mine', '--timeout', '3s'], h.deps)).toBe(EXIT.timeout)
+    expect(h.err).toEqual(['office: no longer followed. The connection to Harness closed.'])
+  })
+
+  it('says so when the caller has none running, and refuses a caller that is no agent (exit 5)', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' })]
+    const none = harness(d)
+    expect(await watchCommand(['--mine'], none.deps)).toBe(EXIT.ok)
+    expect(none.out).toEqual(['You have no harnesses running.'])
+    const person = harness(d, { pane: undefined })
+    expect(await watchCommand(['--mine'], person.deps)).toBe(EXIT.refused)
+    expect(person.err[0]).toBe('harness watch --mine follows the harnesses an agent started: run it in that agent\'s pane.')
+  })
+
+  it('takes no name and no --machine with --mine', async () => {
+    const { h, d } = fleet()
+    expect(await watchCommand(['--mine', 'kid'], h.deps)).toBe(EXIT.usage)
+    expect(h.err[0]).toBe('--mine follows every harness you started: leave out the name.')
+    expect(await watchCommand(['--mine', '--machine', 'office'], h.deps)).toBe(EXIT.usage)
+    expect(h.err).toContain('--mine follows every harness you started, on every machine: leave out --machine.')
+    expect(d.requests).toEqual([])
+  })
+})

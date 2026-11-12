@@ -113,7 +113,7 @@ Exit status: 0 idle or closed by you, 3 one needs the person (a question or a pe
 124 timed out.
 --timeout takes 90s, 30m, 2h; 0 waits as long as it takes.
 ${ON_MACHINE}`
-export const WATCH_USAGE = `Usage: harness watch [--machine <name>] <name> [--chars N] [--timeout 30m] [--json]
+export const WATCH_USAGE = `Usage: harness watch [--machine <name>] <name> | --mine [--chars N] [--timeout 30m] [--json]
 
 Follows one harness and prints a line each time it changes: started, working, needs_person (its last words),
 done (its answer), idle (nothing asked of it), failed, stopped (with its last answer). With --json each line is one
@@ -121,8 +121,9 @@ JSON object, for a program to read. The first line is how it stands now; the sam
 It hears each change of a harness here as Harness pushes it, as wait does, and looks every 3 s at a cloud harness
 or a harness on another machine. A cloud harness's state is its maker's: Devin Cloud says needs_person both when it
 asks and when it has only finished, so read the words and cloud.providerStatus.
-Exit status: 4 once it stops or is gone, 124 when --timeout passes. --timeout takes 90s, 30m, 2h; 0, the default,
-follows it as long as it lives.
+--mine follows every harness you started, on every machine, in one stream: each line names its harness and machine.
+Exit status: 4 once it stops or is gone (with --mine, once every one has), 124 when --timeout passes. --timeout takes
+90s, 30m, 2h; 0, the default, follows as long as they live.
 ${ON_MACHINE}`
 export const CLOSE_USAGE = `Usage: harness close [--machine <name>] <name> [--now] [--json]
 
@@ -1216,33 +1217,35 @@ const CLOCK_SLACK_MS = 60_000
 type Settled = 'idle' | 'needs-input' | 'stopped' | 'gone' | 'closed' | 'timeout' | 'failed'
 
 /**
- * The harnesses `wait` or `watch` follows on [daemon] by what it pushes when one changes (`agents_watch`,
- * core/toolWatches.ts), and a sleep a push cuts short. A daemon too old to push to tools says no once, and is not asked
- * again: the verb then looks every interval, as it always did.
+ * The harnesses `wait` or `watch` follows by what each daemon pushes when one changes (`agents_watch`,
+ * core/toolWatches.ts), and a sleep a push from any of them cuts short. A daemon too old to push to tools says no once,
+ * and is not asked again: the verb then looks every interval, as it always did. So does a line to another machine,
+ * which pushes nothing to a tool.
  */
-function pushedBy(s: Setup, daemon: Daemon) {
-  let followed = ''
-  let ids = new Set<string>()
-  let on = false, refused = false, changed = false
+function pushedBy(s: Setup) {
+  const lines = new Map<Daemon, { followed: string; ids: Set<string>; on: boolean; refused: boolean }>()
+  let changed = false
   let wake: (() => void) | null = null
-  const heard = (agentId: string): void => {
-    if (!ids.has(agentId)) return
-    changed = true
-    wake?.()
-  }
   return {
-    /** Follows [agentIds] (every harness here the verb waits on): true while the daemon pushes their changes. */
-    async follow(agentIds: string[]): Promise<boolean> {
+    /** Follows [agentIds] on [daemon] (every harness there the verb waits on): true while it pushes their changes. */
+    async follow(daemon: Daemon, agentIds: string[]): Promise<boolean> {
+      let line = lines.get(daemon)
+      if (!line) lines.set(daemon, line = { followed: '', ids: new Set(), on: false, refused: false })
       const key = [...new Set(agentIds)].sort().join('\u0000')
-      if (refused || !daemon.watch || key === followed) return on
-      followed = key
-      ids = new Set(agentIds)
-      on = await daemon.watch([...ids], heard).catch((error) => {
+      if (line.refused || !daemon.watch || key === line.followed) return line.on
+      const followed = line
+      followed.followed = key
+      followed.ids = new Set(agentIds)
+      followed.on = await daemon.watch([...followed.ids], (agentId) => {
+        if (!followed.ids.has(agentId)) return
+        changed = true
+        wake?.()
+      }).catch((error) => {
         if (error instanceof AgentClientError) return false
         throw error
       })
-      refused = !on
-      return on
+      followed.refused = !followed.on
+      return followed.on
     },
     /** [ms], or less when a harness followed changed meanwhile: at once when it changed during the last look. */
     async sleep(ms: number): Promise<void> {
@@ -1321,7 +1324,7 @@ export function waitCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
       }
       const deadline = timeoutMs > 0 ? s.now() + timeoutMs : Infinity
       const settled = new Map<Target, Settled>()
-      const push = pushedBy(s, o.daemon)
+      const push = pushedBy(s)
       /** Looked at last as working by the daemon's word: its next change, whatever it is, is pushed. */
       const pushedNext = new Set<Target>()
       const sawWorking = new Set<Target>()
@@ -1387,7 +1390,7 @@ export function waitCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
         }
         // Before the looks, so a change during them is kept. Pushed: the harnesses here in a pane. A cloud harness's maker
         // pushes nothing, and another machine's harnesses are not pushed here.
-        const pushing = await push.follow(targets.filter((t) => !t.remote && t.frame.location !== 'cloud').map((t) => t.frame.id))
+        const pushing = await push.follow(o.daemon, targets.filter((t) => !t.remote && t.frame.location !== 'cloud').map((t) => t.frame.id))
         // One list per connection a round: every harness on this machine shares one; each named on another has its own.
         const lists = new Map<Daemon, Promise<Frame[]>>()
         for (const t of targets) {
@@ -1475,6 +1478,86 @@ const EVENT_STATES: Record<WatchEvent, State> = {
   started: 'starting', working: 'working', needs_person: 'needs-input', done: 'idle', idle: 'idle', failed: 'failed', stopped: 'stopped',
 }
 
+type LastTurn = Awaited<ReturnType<typeof readLastTurn>>
+
+/** A machine's live harnesses, or null for a round its machine was too slow to answer: looked at again next round. */
+const listOrNull = (daemon: Daemon): Promise<Frame[] | null> => list(daemon, false).catch((error) => {
+  if (error instanceof AgentClientError && error.code === 'TIMEOUT') return null
+  throw error
+})
+
+/**
+ * One harness `watch` follows, by `wait`'s looks (the maker's state for a cloud harness; the daemon's activity, then the
+ * screen, then two idle looks on one turn for one here): [say] is told each change once.
+ */
+function follower(s: Setup, o: Opened, h: Target, say: (event: WatchEvent, turn: LastTurn) => void) {
+  /** The last line said, as its event and the turn it spoke of: a line is said only when this changes. */
+  let printed: string | null = null
+  let sawWorking = false
+  let idle: { turn: string; looks: number } | null = null
+  /** The turn read for the frame last seen changed (its `updatedAt`): read again only when that moves. */
+  let turnFor: { updatedAt: string; turn: LastTurn } | null = null
+  const turnNow = async () => {
+    const updatedAt = h.frame.updatedAt ?? ''
+    if (!turnFor || turnFor.updatedAt !== updatedAt || !updatedAt) turnFor = { updatedAt, turn: await readLastTurn(h, 1) }
+    return turnFor.turn
+  }
+  const keyOf = (turn: LastTurn): string => (turn ? `${turn.ask}\u0000${turn.tools}\u0000${turn.answer.length}` : '')
+  /** The last look told the harness's state for certain, so its next change is pushed: working, its question, its
+   *  answer. A draft in its box is looked at again in an interval: the person typing is pushed by nothing. */
+  let pushedNext = false
+  /** This round's event: null while it can't be told yet (an idle look not yet confirmed, a state unknown). */
+  const look = async (live: Frame[]): Promise<WatchEvent | null> => {
+    pushedNext = false
+    const frame = live.find((f) => f.id === h.frame.id)
+    if (!frame) {
+      const stopped = (await list(h.daemon, true)).find((f) => f.id === h.frame.id)
+      if (stopped) h.frame = stopped
+      return 'stopped'
+    }
+    h.frame = frame
+    if (frame.status === 'stopped') return 'stopped'
+    if (frame.location === 'cloud') return CLOUD_EVENTS[stateOf(frame)] ?? null
+    const screen = frame.activity?.state === 'working' ? 'working' : await inspect(h)
+    if (screen === 'working' || screen === 'draft') { sawWorking = true; idle = null; pushedNext = screen === 'working'; return 'working' }
+    if (screen === 'needs-input') { idle = null; pushedNext = true; return 'needs_person' }
+    if (screen === null && stateOf(frame) !== 'idle') { idle = null; return null }
+    // Idle on two looks in a row with the same last turn, as `wait` decides it (#1180).
+    const turn = await turnNow()
+    if (toldPending(o, h, turn, s.now())) { idle = null; return 'working' }
+    const key = keyOf(turn)
+    const looks = idle && idle.turn === key ? idle.looks + 1 : 1
+    idle = { turn: key, looks }
+    if (looks < 2) return null
+    pushedNext = true
+    if (sawWorking || turn?.answered) return 'done'
+    const age = frame.createdAt ? s.now() - Date.parse(frame.createdAt) : Infinity
+    if (age > STARTING_MS && looks >= QUIET_LOOKS) return 'idle'
+    pushedNext = false
+    return null
+  }
+  return {
+    target: h,
+    pushedNext: (): boolean => pushedNext,
+    /** One look at it in [live], its machine's live harnesses now: the event, said when it is news. */
+    async round(live: Frame[]): Promise<WatchEvent | null> {
+      const event = await look(live).catch((error) => {
+        // A round that timed out (its machine slow for a moment) is looked at again next round, as `wait` does.
+        if (error instanceof AgentClientError && error.code === 'TIMEOUT') return null
+        throw error
+      })
+      if (!event) return null
+      const turn = event !== 'started' && event !== 'idle' ? await turnNow() : null
+      const key = `${event}\u0000${event === 'working' ? turn?.ask ?? '' : keyOf(turn)}`
+      if (key !== printed) {
+        printed = key
+        say(event, turn)
+      }
+      return event
+    },
+  }
+}
+
 /**
  * Follows one harness by `wait`'s looks (the maker's state for a cloud harness; the daemon's activity, then the screen,
  * then two idle looks on one turn for one here) and prints each change once: what a program driving something from a
@@ -1483,12 +1566,16 @@ const EVENT_STATES: Record<WatchEvent, State> = {
  */
 export function watchCommand(argv: readonly string[], deps: ClientDeps = {}): Promise<number> {
   return run(WATCH_USAGE, deps, wantsJson, argv, async (s) => {
-    const { names, flags, machine } = words(argv, { '--chars': 'value', '--timeout': 'value', '--json': 'flag' })
-    if (names.length !== 1) throw new UsageError(names.length ? 'Watch one harness.' : 'Name the harness to watch.')
+    const { names, flags, machine } = words(argv, { '--chars': 'value', '--timeout': 'value', '--json': 'flag', '--mine': 'flag' })
+    const mine = flags.has('--mine')
+    if (mine && names.length) throw new UsageError('--mine follows every harness you started: leave out the name.')
+    if (mine && machine !== null) throw new UsageError('--mine follows every harness you started, on every machine: leave out --machine.')
+    if (!mine && names.length !== 1) throw new UsageError(names.length ? 'Watch one harness.' : 'Name the harness to watch.')
     const chars = flags.has('--chars') ? Number(flags.get('--chars')) : DEFAULT_CHARS
     if (!Number.isInteger(chars) || chars < 1) throw new UsageError('--chars takes a whole number.')
     const timeoutMs = flags.has('--timeout') ? parseDuration(String(flags.get('--timeout'))) : 0
     const json = flags.has('--json')
+    if (mine) return watchMine(s, json, chars, timeoutMs)
     const away = await machineOf(s, s.where(), machine)
     const o = await opened(s)
     let t: Target | null = null
@@ -1496,74 +1583,95 @@ export function watchCommand(argv: readonly string[], deps: ClientDeps = {}): Pr
       t = await target(s, o, names[0], away)
       const h = t
       const deadline = timeoutMs > 0 ? s.now() + timeoutMs : Infinity
-      /** The last line printed, as its event and the turn it spoke of: a line is printed only when this changes. */
-      let printed: string | null = null
-      let sawWorking = false
-      let idle: { turn: string; looks: number } | null = null
-      /** The turn read for the frame last seen changed (its `updatedAt`): read again only when that moves. */
-      let turnFor: { updatedAt: string; turn: Awaited<ReturnType<typeof readLastTurn>> } | null = null
-      const turnNow = async () => {
-        const updatedAt = h.frame.updatedAt ?? ''
-        if (!turnFor || turnFor.updatedAt !== updatedAt || !updatedAt) turnFor = { updatedAt, turn: await readLastTurn(h, 1) }
-        return turnFor.turn
-      }
-      const keyOf = (turn: Awaited<ReturnType<typeof readLastTurn>>): string => (turn ? `${turn.ask}\u0000${turn.tools}\u0000${turn.answer.length}` : '')
-      const push = pushedBy(s, o.daemon)
-      const pushing = !h.remote && h.frame.location !== 'cloud' && await push.follow([h.frame.id])
-      /** The last look told the harness's state for certain, so its next change is pushed: working, its question, its
-       *  answer. A draft in its box is looked at again in an interval: the person typing is pushed by nothing. */
-      let pushedNext = false
-      /** This round's event: null while it can't be told yet (an idle look not yet confirmed, a state unknown). */
-      const look = async (): Promise<WatchEvent | null> => {
-        pushedNext = false
-        const frame = (await list(h.daemon, false)).find((f) => f.id === h.frame.id)
-        if (!frame) {
-          const stopped = (await list(h.daemon, true)).find((f) => f.id === h.frame.id)
-          if (stopped) h.frame = stopped
-          return 'stopped'
-        }
-        h.frame = frame
-        if (frame.status === 'stopped') return 'stopped'
-        if (frame.location === 'cloud') return CLOUD_EVENTS[stateOf(frame)] ?? null
-        const screen = frame.activity?.state === 'working' ? 'working' : await inspect(h)
-        if (screen === 'working' || screen === 'draft') { sawWorking = true; idle = null; pushedNext = screen === 'working'; return 'working' }
-        if (screen === 'needs-input') { idle = null; pushedNext = true; return 'needs_person' }
-        if (screen === null && stateOf(frame) !== 'idle') { idle = null; return null }
-        // Idle on two looks in a row with the same last turn, as `wait` decides it (#1180).
-        const turn = await turnNow()
-        if (toldPending(o, h, turn, s.now())) { idle = null; return 'working' }
-        const key = keyOf(turn)
-        const looks = idle && idle.turn === key ? idle.looks + 1 : 1
-        idle = { turn: key, looks }
-        if (looks < 2) return null
-        pushedNext = true
-        if (sawWorking || turn?.answered) return 'done'
-        const age = frame.createdAt ? s.now() - Date.parse(frame.createdAt) : Infinity
-        if (age > STARTING_MS && looks >= QUIET_LOOKS) return 'idle'
-        pushedNext = false
-        return null
-      }
+      const push = pushedBy(s)
+      const pushing = !h.remote && h.frame.location !== 'cloud' && await push.follow(o.daemon, [h.frame.id])
+      const f = follower(s, o, h, (event, turn) => printWatch(s, json, chars, h, event, turn))
       for (;;) {
-        const event = await look().catch((error) => {
-          // A round that timed out (its machine slow for a moment) is looked at again next round, as `wait` does.
-          if (error instanceof AgentClientError && error.code === 'TIMEOUT') return null
-          throw error
-        })
-        if (event) {
-          const said = event !== 'started' && event !== 'idle'
-          const turn = said ? await turnNow() : null
-          const key = `${event}\u0000${event === 'working' ? turn?.ask ?? '' : keyOf(turn)}`
-          if (key !== printed) {
-            printed = key
-            printWatch(s, json, chars, h, event, turn)
-          }
-          if (event === 'stopped') return EXIT.stopped
-        }
+        const live = await listOrNull(h.daemon)
+        const event = live && await f.round(live)
+        if (event === 'stopped') return EXIT.stopped
         if (s.now() >= deadline) return EXIT.timeout
-        await push.sleep(Math.min(pushing && pushedNext ? PUSHED_BACKSTOP_MS : s.intervalMs, Math.max(0, deadline - s.now())))
+        await push.sleep(Math.min(pushing && live && f.pushedNext() ? PUSHED_BACKSTOP_MS : s.intervalMs, Math.max(0, deadline - s.now())))
       }
     } finally { if (t?.remote) t.daemon.close(); o.daemon.close() }
   })
+}
+
+/**
+ * `watch --mine`: one stream of `watch`'s lines for every harness the caller started that is running, on every machine,
+ * as they change; what Hachi runs inside a turn while it waits on several at once (docs/design/2026-11-12-hachi.md).
+ * Each machine is listed once a round. This machine's are followed by push, as `watch` follows one here; another
+ * machine's are looked at every interval, as `watch --machine` looks at one there. A machine that cannot be reached is
+ * said once and left out; the rest are followed. It ends once every one has stopped.
+ */
+async function watchMine(s: Setup, json: boolean, chars: number, timeoutMs: number): Promise<number> {
+  const o = await opened(s)
+  const lines: Daemon[] = []
+  try {
+    const caller = o.caller
+    if (!caller) throw new AgentClientError('NOT_YOURS', 'harness watch --mine follows the harnesses an agent started: run it in that agent\'s pane.')
+    const byMachine = new Map<string, string[]>()
+    for (const row of o.ledger.childrenOf(caller)) {
+      if (s.now() - row.at > STOPPED_WITHIN_MS) continue
+      const ids = byMachine.get(row.child.machineId) ?? []
+      if (!ids.includes(row.child.agentId)) byMachine.set(row.child.machineId, [...ids, row.child.agentId])
+    }
+    // Names for the other machines, asked only when there are any.
+    const away = [...byMachine.keys()].some((id) => id !== o.where.machineId) ? await s.machines().catch((): NewMachine[] => []) : []
+    const labelOf = (machineId: string): string => machineId === o.where.machineId ? o.machine : away.find((m) => m.machineId === machineId)?.label ?? machineId.slice(0, 8)
+    const followers: Array<ReturnType<typeof follower>> = []
+    for (const [machineId, ids] of byMachine) {
+      const here = machineId === o.where.machineId
+      let daemon: Daemon = o.daemon, live: Frame[] = o.frames
+      if (!here) {
+        try {
+          lines.push(daemon = await s.open(o.where, machineId))
+          live = await list(daemon, false)
+        } catch (error) {
+          if (!(error instanceof AgentClientError)) throw error
+          s.err(`${labelOf(machineId)}: not followed. ${error.message}`)
+          continue
+        }
+      }
+      for (const frame of ids.map((id) => named(live).find((f) => f.id === id && f.status !== 'stopped')).filter((f): f is Frame & { name: string } => !!f)) {
+        const t: Target = { daemon, frame, machineId, machine: labelOf(machineId), yours: true, remote: !here }
+        followers.push(follower(s, o, t, (event, turn) => printWatch(s, json, chars, t, event, turn, t.machine)))
+      }
+    }
+    if (!followers.length) {
+      if (!json) s.out('You have no harnesses running.')
+      return EXIT.ok
+    }
+    const push = pushedBy(s)
+    const pushing = await push.follow(o.daemon, followers.filter((f) => !f.target.remote && f.target.frame.location !== 'cloud').map((f) => f.target.frame.id))
+    const deadline = timeoutMs > 0 ? s.now() + timeoutMs : Infinity
+    const active = new Set(followers)
+    for (;;) {
+      const listed = new Map<Daemon, Promise<Frame[] | null>>()
+      for (const f of [...active]) {
+        const { daemon, remote, machine } = f.target
+        if (!listed.has(daemon)) {
+          listed.set(daemon, listOrNull(daemon).catch((error) => {
+            // A line to another machine that dropped: its harnesses are no longer followed, and the rest are.
+            if (!remote || !(error instanceof AgentClientError)) throw error
+            s.err(`${machine}: no longer followed. ${error.message}`)
+            for (const gone of active) if (gone.target.daemon === daemon) active.delete(gone)
+            return null
+          }))
+        }
+        const live = await listed.get(daemon)!
+        if (live && await f.round(live) === 'stopped') active.delete(f)
+      }
+      if (!active.size) return EXIT.stopped
+      if (s.now() >= deadline) return EXIT.timeout
+      // Quiet while every one left is here, followed by push, and its next change is pushed.
+      const quiet = pushing && [...active].every((f) => !f.target.remote && f.target.frame.location !== 'cloud' && f.pushedNext())
+      await push.sleep(Math.min(quiet ? PUSHED_BACKSTOP_MS : s.intervalMs, Math.max(0, deadline - s.now())))
+    }
+  } finally {
+    for (const line of lines) line.close()
+    o.daemon.close()
+  }
 }
 
 /** The line `harness new` puts before an agent's task, saying who started it (`startHeader`): not the person's words. */
@@ -1572,7 +1680,7 @@ const withoutStartHeader = (ask: string): string => ask.replace(START_HEADER, ''
 
 /** One `watch` line: a JSON object with `--json`, else the time, the harness, the event and its words. */
 function printWatch(s: Setup, json: boolean, chars: number, t: Target, event: WatchEvent,
-  turn: { ask: string | null; answer: string; tools: number } | null): void {
+  turn: { ask: string | null; answer: string; tools: number } | null, machine?: string): void {
   const text = turn?.answer ?? ''
   const words: Record<string, unknown> = event === 'working' ? { ask: turn?.ask ? withoutStartHeader(turn.ask) : null }
     : event === 'needs_person' ? { question: clip(text, chars), truncated: text.length > chars }
@@ -1583,14 +1691,14 @@ function printWatch(s: Setup, json: boolean, chars: number, t: Target, event: Wa
   const cloud = cloudMeta(t.frame)
   const at = new Date(s.now()).toISOString()
   const line = {
-    event, at, name: t.frame.name ?? t.frame.id.slice(0, 8), id: t.frame.id, agent: engineName(t.frame.engine ?? ''),
+    event, at, name: t.frame.name ?? t.frame.id.slice(0, 8), id: t.frame.id, ...(machine ? { machine } : {}), agent: engineName(t.frame.engine ?? ''),
     state: t.frame.location === 'cloud' && event !== 'stopped' ? stateOf(t.frame) : EVENT_STATES[event], ...words,
     ...(cloud ? { cloud } : {}), ...(t.frame.cloud?.links?.length ? { links: t.frame.cloud.links } : {}),
   }
   if (json) { s.out(JSON.stringify(line)); return }
   const said = typeof words.question === 'string' ? words.question : typeof words.summary === 'string' ? words.summary
     : typeof words.ask === 'string' ? `asked: ${clip(words.ask, 200)}` : ''
-  s.out(`${at.slice(11, 19)}Z ${line.name}: ${event.replace('_', ' ')}${said ? `: ${said}` : ''}`)
+  s.out(`${at.slice(11, 19)}Z ${line.name}${machine ? ` @${machine}` : ''}: ${event.replace('_', ' ')}${said ? `: ${said}` : ''}`)
 }
 
 // ── close ──────────────────────────────────────────────────────────────────────────────────────────
