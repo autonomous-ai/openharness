@@ -1,9 +1,10 @@
-/** Stop the exact discovered engine process while leaving the user's tmux pane and shell alive. */
+/** Stop the exact discovered engine process, and every process it started, while leaving the user's tmux pane and shell alive. */
 
 import type { RegisteredSession } from './registry.js'
 import { type RuntimeCheck } from './paneEngineProcess.js'
 import { processRows } from './processTable.js'
 import { type AgentSignal } from './processSignals.js'
+import { treeTargets, type TreeProcess } from './processTree.js'
 import { sameProcessIdentity } from './terminalRuntime.js'
 
 /** Delete has already removed the UI entry; signal the saved process immediately. */
@@ -53,10 +54,14 @@ export interface TerminateDeps {
   kill: (pid: number, signal: AgentSignal) => void
   sleep: (ms: number) => Promise<void>
   log: (message: string) => void
+  /** The engine's descendants, listed once before any signal (processTree.ts); null when they cannot be listed. */
+  descendants?: () => Promise<TreeProcess[] | null>
+  /** Which of [tree] still run as the same process; null when that cannot be read. */
+  survivors?: (tree: readonly TreeProcess[]) => Promise<TreeProcess[] | null>
 }
 
 /**
- * Validate the saved PID/start marker, then stop the engine if it is still there. Never throws.
+ * Validate the saved PID/start marker, then stop the engine if it is still there, and its tree with it. Never throws.
  *
  * Failures are logged loudly on purpose: by the time this runs the UI already says the agent is gone, so
  * a silently-swallowed EPERM would leave a running engine that nothing on screen accounts for.
@@ -87,44 +92,82 @@ export async function terminateDeletedAgent(
   const pid = session.processIdentity?.pid
   if (!pid) return 'not-ours'
 
-  const signal = (sig: AgentSignal): boolean => {
+  // A table that cannot be read is said, and its processes left alone: it proves neither that one left nor which
+  // process holds a number now.
+  const listed = async (read: () => Promise<TreeProcess[] | null>): Promise<TreeProcess[]> => {
+    const found = await read().catch(() => null)
+    if (!found) deps.log(`[delete] could not list ${session.engine}'s processes`)
+    return found ?? []
+  }
+  const { descendants, survivors: survivorsOf } = deps
+  const left = async (members: readonly TreeProcess[]): Promise<TreeProcess[]> =>
+    members.length && survivorsOf ? listed(() => survivorsOf(members)) : []
+  // Listed before the first signal: once the engine dies its children re-parent away, out of reach.
+  const tree = descendants ? await listed(descendants) : []
+  if (deps.current?.() === false) return 'not-ours'
+
+  const signal = (target: number, sig: AgentSignal): boolean => {
     if (deps.current?.() === false) return false
-    try { deps.kill(pid, sig); return true } catch (err) {
+    try { deps.kill(target, sig); return true } catch (err) {
       const code = (err as NodeJS.ErrnoException)?.code
       // ESRCH = it exited between the check and the signal. Anything else (EPERM…) is a real failure to
       // enforce the delete, and the person who pressed delete has already been told it worked.
       if (code !== 'ESRCH') {
-        deps.log(`[delete] could not ${sig} ${session.engine} pid ${pid}: ${err instanceof Error ? err.message : String(err)}`)
+        deps.log(`[delete] could not ${sig} ${session.engine} pid ${target}: ${err instanceof Error ? err.message : String(err)}`)
       }
       return false
     }
   }
 
-  deps.log(`[delete] ${session.engine} did not exit on request — SIGTERM pid ${pid}`)
-  if (!signal('SIGTERM')) return (await check()).state === 'gone' ? 'gone' : 'failed'
-
-  for (let waited = 0; waited < killGraceMs; waited += POLL_MS) {
+  /** The engine outlived its grace. */
+  const escalate = async (): Promise<TerminateOutcome> => {
+    // Revalidate at the escalation boundary. A process-table timeout or PID replacement after SIGTERM is
+    // not permission to send SIGKILL to the saved number.
+    const beforeKill = await check()
+    if (deps.current?.() === false) return 'not-ours'
+    if (beforeKill.state === 'gone') return 'terminated'
+    if (beforeKill.state === 'unknown') {
+      deps.log(`[delete] could not revalidate ${session.engine} before SIGKILL: ${beforeKill.reason}`)
+      return 'failed'
+    }
+    deps.log(`[delete] ${session.engine} ignored SIGTERM — SIGKILL pid ${pid}`)
+    if (!signal(pid, 'SIGKILL')) return (await check()).state === 'gone' ? 'gone' : 'failed'
     await deps.sleep(POLL_MS)
+    if ((await check()).state !== 'gone') {
+      deps.log(`[delete] ${session.engine} pid ${pid} is STILL running after SIGKILL`)
+      return 'failed'
+    }
+    return 'killed'
+  }
+
+  deps.log(`[delete] ${session.engine} did not exit on request — SIGTERM pid ${pid}`)
+  const engineSignalled = signal(pid, 'SIGTERM')
+  // The engine's own group is never signalled whole (the pane's shell may lead it): its members in the tree go by pid.
+  const { groups, pids } = treeTargets(tree)
+  for (const group of groups) signal(-group, 'SIGTERM')
+  for (const member of pids) signal(member, 'SIGTERM')
+  if (!engineSignalled) return (await check()).state === 'gone' ? 'gone' : 'failed'
+
+  let waited = 0
+  let engineGone = false
+  while (!engineGone && waited < killGraceMs) {
+    await deps.sleep(POLL_MS)
+    waited += POLL_MS
     const current = await check()
     if (deps.current?.() === false) return 'not-ours'
-    if (current.state === 'gone') return 'terminated'
+    engineGone = current.state === 'gone'
   }
+  const survivors = await left(tree)
+  if (engineGone && !survivors.length) return 'terminated'
+  // What outlived the engine has the rest of the grace, counted from the SIGTERM, as the engine had.
+  if (engineGone) await deps.sleep(Math.max(0, killGraceMs - waited))
+  // By pid, each checked by its start: a group's leader may have left and its number gone to another process.
+  for (const member of survivors) signal(member.pid, 'SIGKILL')
 
-  // Revalidate at the escalation boundary. A process-table timeout or PID replacement after SIGTERM is
-  // not permission to send SIGKILL to the saved number.
-  const beforeKill = await check()
-  if (deps.current?.() === false) return 'not-ours'
-  if (beforeKill.state === 'gone') return 'terminated'
-  if (beforeKill.state === 'unknown') {
-    deps.log(`[delete] could not revalidate ${session.engine} before SIGKILL: ${beforeKill.reason}`)
-    return 'failed'
-  }
-  deps.log(`[delete] ${session.engine} ignored SIGTERM — SIGKILL pid ${pid}`)
-  if (!signal('SIGKILL')) return (await check()).state === 'gone' ? 'gone' : 'failed'
+  const outcome = engineGone ? 'terminated' : await escalate()
+  if (!survivors.length || outcome === 'not-ours' || outcome === 'failed') return outcome
   await deps.sleep(POLL_MS)
-  if ((await check()).state !== 'gone') {
-    deps.log(`[delete] ${session.engine} pid ${pid} is STILL running after SIGKILL`)
-    return 'failed'
-  }
-  return 'killed'
+  const still = await left(survivors)
+  for (const member of still) deps.log(`[delete] ${session.engine} pid ${member.pid} is STILL running after SIGKILL`)
+  return still.length ? 'failed' : outcome
 }
