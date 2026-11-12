@@ -352,7 +352,7 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
               grid.AppDesktop.controlGap,
             ),
             child: Text(
-              'Yours first; it wins where they differ.',
+              "Yours first; it wins where they differ, except Harness's safety rules.",
               key: const ValueKey('swarm-precedence'),
               style: DesktopChrome.metadata(),
             ),

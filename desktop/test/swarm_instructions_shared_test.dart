@@ -718,7 +718,7 @@ void main() {
           ..basicsPm = pm;
         await show(tester, computer, name: 'Devon', open: false);
         Text text(String k) => tester.widget<Text>(key(k));
-        expect(text('swarm-precedence').data, 'Yours first; it wins where they differ.');
+        expect(text('swarm-precedence').data, "Yours first; it wins where they differ, except Harness's safety rules.");
         expect(text('swarm-own-heading').data, 'Devon');
         expect(text('swarm-pm-name').data, 'As this project\'s PM, Harness tells it:');
         expect(text('swarm-shared-heading').data, 'This project');
