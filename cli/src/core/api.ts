@@ -1253,6 +1253,22 @@ export const MONITOR_OFF: MonitorPort = {
   storage: async () => new Map(),
 }
 
+/** The core's call into connected services (services/connectors.ts), as an agent launches on a profile home (a Claude
+ *  profile or Codex profile other than the default): that agent reads that home's MCP config, not the default's, so the
+ *  connections' entries are written there first (lib/connectors/agents.ts `syncProfileHome`). The edge host does it, so
+ *  the core loads neither the connections nor Codex's profile discovery, and never waits on the vault's lock in line. */
+export interface ConnectorsPort {
+  /** The connections written into [folder]'s config: none for a default home, or a folder that is no profile here. */
+  syncProfileHome(engine: 'claude' | 'codex', folder: string): Promise<string[]>
+}
+
+/** What the core gets when connected services fail or are off: nothing written, the entries the profile's config
+ *  already holds kept as they are, and the launch goes on. */
+export const CONNECTORS_FALLBACKS: PortFallbacks<ConnectorsPort> = { syncProfileHome: later([]) }
+
+/** What the core calls while `ports.connectors` is null (connected services are off): its fallbacks' answer. */
+export const CONNECTORS_OFF: ConnectorsPort = { syncProfileHome: async () => [] }
+
 /** The core's call into workspaces: name made-up worktree branches after their sessions, on each terminal-title pass. No
  *  worktree is removed on a timer (#4166, #711): the daemon swept clean, week-idle ones twice a day, including those their
  *  person chose to keep and the gitignored files in them. */
@@ -2010,6 +2026,7 @@ export interface CorePorts {
   devices: DevicesPort | null
   wifi: WifiPort | null
   monitor: MonitorPort | null
+  connectors: ConnectorsPort | null
   orchestrator: OrchestratorPort | null
   sharing: SharingPort | null
   recaps: RecapsPort | null
@@ -2021,7 +2038,7 @@ export interface CorePorts {
 }
 
 export function emptyPorts(): CorePorts {
-  return { usage: null, store: null, search: null, viewers: null, models: null, workspaces: null, messages: null, devices: null, wifi: null, monitor: null, orchestrator: null, sharing: null, recaps: null, agentCleanup: null, cloud: null, superTabs: null, sharedMachines: null, agentBrowser: null }
+  return { usage: null, store: null, search: null, viewers: null, models: null, workspaces: null, messages: null, devices: null, wifi: null, monitor: null, connectors: null, orchestrator: null, sharing: null, recaps: null, agentCleanup: null, cloud: null, superTabs: null, sharedMachines: null, agentBrowser: null }
 }
 
 export interface CoreApiDeps {
