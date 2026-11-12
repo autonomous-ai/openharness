@@ -25,7 +25,7 @@ function harnessIn(frames: PaneFrame[], pane: string, machineId: string): boolea
 
 const ELSEWHERE = 'From a harness, Swarm commands go to this computer\'s own Harness only: leave out --machine and --port, or give this computer\'s own.'
 
-const USAGE = 'harness super-tab [--tab ID] [--agent ID] [--port N --machine ID] status | messages GROUP [--thread ROOT] [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | post GROUP TEXT|- [OPERATION_ID] [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | answer GROUP MESSAGE_ID TEXT|- OPERATION_ID [--to AGENT]... | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | read ok|hold OWNER/REPO#N SHA [TEXT|-] | take OWNER/REPO#N | split OWNER/REPO#N s|m|l TITLE [TEXT|-] | inbox | goal'
+const USAGE = 'harness super-tab [--tab ID] [--agent ID] [--port N --machine ID] status | messages GROUP [--thread ROOT] [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | post GROUP TEXT|- [OPERATION_ID] [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | answer GROUP MESSAGE_ID TEXT|- OPERATION_ID [--to AGENT]... | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | read ok|hold OWNER/REPO#N SHA [TEXT|-] | take OWNER/REPO#N | split OWNER/REPO#N s|m|l TITLE [TEXT|-] | inbox | goal [write]'
 const usageError = () => new Error(USAGE)
 
 /** A message on stdin, for post's TEXT `-`.
@@ -224,7 +224,11 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
     const asked = splitAsked({ repository: first?.slice(0, first.lastIndexOf('#')), number: Number(/#([1-9][0-9]{0,8})$/.exec(first ?? '')?.[1]), size: second, title: third, text })
     if (!asked) throw usageError()
     Object.assign(payload, { ...asked })
-  } else if ((action !== 'status' && action !== 'inbox' && action !== 'goal') || positional.length !== 1) {
+  } else if (action === 'goal' && (positional.length === 1 || (positional.length === 2 && first === 'write'))) {
+    // Shown with `goal` alone; its files written only with `goal write` (goalStarter.ts): a new PM ran `goal` "to see what it
+    // did", found two files it had not meant to write, and deleted them (anh Dee's Lou, 2026-11-12).
+    payload.write = positional.length === 2
+  } else if ((action !== 'status' && action !== 'inbox') || positional.length !== 1) {
     throw usageError()
   }
   return { where: target, payload }
@@ -248,8 +252,8 @@ export async function superTabCommand(argv: readonly string[], deps: {
   where?: () => Where; open?: typeof openDaemon; print?: (text: string) => void; pane?: string; probe?: PaneProbe; fetch?: typeof fetch; env?: NodeJS.ProcessEnv
   platform?: NodeJS.Platform; stdin?: () => string | Promise<string>; terminal?: () => boolean
   readProcesses?: () => Promise<ProcessRow[] | null>
-  /** Writes a project's goal file and its workflow into the checkout the command runs in (goalStarter.ts). */
-  goal?: () => Promise<{ ok: boolean; said: string }>
+  /** Shows the goal of the checkout the command runs in, or with [write] writes its goal file and workflow there (goalStarter.ts). */
+  goal?: (write: boolean) => Promise<{ ok: boolean; said: string }>
 } = {}): Promise<number> {
   let daemon: Daemon | null = null
   let operationId: unknown
@@ -265,10 +269,14 @@ export async function superTabCommand(argv: readonly string[], deps: {
     const local = (deps.where ?? (() => whereFor(pane)))()
     const request = await parse(argv, local, deps.stdin ?? (() => readStdin(process.stdin)), deps.terminal)
     operationId = request.payload.operationId
-    // The goal file and its workflow are written here, into the caller's own checkout: nothing of it is the daemon's to do.
+    // The goal is read from, and its files written into, the caller's own checkout: nothing of it is the daemon's to do.
     if (request.payload.action === 'goal') {
       // Loaded for this action alone: it brings git's helpers, which no other Swarm command needs.
-      const written = await (deps.goal ?? (async () => (await import('./goalStarter.js')).startGoal(process.cwd())))()
+      const write = request.payload.write === true
+      const written = await (deps.goal ?? (async (writes: boolean) => {
+        const goal = await import('./goalStarter.js')
+        return writes ? goal.startGoal(process.cwd()) : goal.showGoal(process.cwd())
+      }))(write)
       print(written.said)
       return written.ok ? 0 : 1
     }

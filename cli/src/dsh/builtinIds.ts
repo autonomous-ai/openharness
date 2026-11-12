@@ -13,6 +13,9 @@ export const HARNESS_MONITOR_ID = 'autonomous/harness-monitor'
 export const HARNESS_MONITOR_BUILTIN_SOURCE = 'builtin:harness-monitor'
 export const MEMORIES_ID = 'autonomous/memories'
 export const MEMORIES_BUILTIN_SOURCE = 'builtin:memories'
+/** Hachi, the person's own harness that starts and follows their others (docs/design/2026-11-12-hachi.md): the one
+ *  caller `harness goal` answers (services/goals.ts). */
+export const HACHI_ID = 'autonomous/hachi'
 
 /** Built-ins opened through their own product entry points, absent from the public picker. */
 export function isHiddenBuiltin(record: { source?: string | null }): boolean {
