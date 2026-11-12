@@ -3,11 +3,14 @@
  *
  * The same branch naming as in the core's process (services/workspaces.ts), on a core API built here. It names branches
  * when the core says so (core/workspacesLink.ts), with the live agents the core sends on each terminal-title pass, and
- * after a rename asks the core to send the agent's frame again. A `sweep` an older core still sends is ignored: no
- * worktree is removed on a timer (#4166). The git work (renames, their timeouts) is this process's alone: a hang or a
- * crash in it costs workspaces, and the master starts them again.
+ * after a rename asks the core to send the agent's frame again. It answers the apps' leftover worktrees
+ * (`worktrees_list`, `worktrees_clean`), asking the core for every agent, live and stopped, as each request arrives and
+ * answering with exactly that, never with agents it kept from earlier, and acting on none when the core cannot say. A
+ * `sweep` an older core still sends is ignored: no worktree is removed on a timer (#4166). The git work (renames, the
+ * clean's moves and prunes, their timeouts) is this process's alone: a hang or a crash in it costs workspaces, and the
+ * master starts them again.
  */
-import type { CoreApi } from '../core/api.js'
+import type { CoreApi, ServiceRequest, ServiceRequests } from '../core/api.js'
 import { ACCOUNT_BACKEND_OFF, CONVERSATIONS_OFF, AGENT_ACTIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, LANE_OFF, resolveAgent, TERMINALS_OFF } from '../core/api.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
@@ -29,12 +32,13 @@ const isSession = (value: unknown): value is RegisteredSession =>
   !!value && typeof value === 'object' && typeof (value as { agentId?: unknown }).agentId === 'string'
 
 /**
- * The core API workspaces run on in their own process. The live agents are the ones the core last sent; stopped ones are
- * never asked for. A frame sent again (after a rename) is the core's to send: `renamed` asks it to.
+ * The core API workspaces run on in their own process. The live agents are the ones the core last sent. Every agent, live
+ * and stopped, is known only while a request the apps sent starts; asked at any other time it throws. A frame sent again
+ * (after a rename) is the core's to send: `renamed` asks it to.
  */
 export function workspacesCoreApi(
   dataDir: string,
-  view: { live(): RegisteredSession[] },
+  view: { live(): RegisteredSession[]; inUse(): RegisteredSession[] | null },
   renamed: (agentId: string) => void,
 ): CoreApi {
   return {
@@ -43,7 +47,11 @@ export function workspacesCoreApi(
     terminals: TERMINALS_OFF,
     machine: UNASKED.machine,
     agents: {
-      all: () => { throw new Error('workspaces never list stopped agents') },
+      all: () => {
+        const agents = view.inUse()
+        if (!agents) throw new Error('the core has not said which folders are in use')
+        return agents
+      },
       live: () => view.live(),
       displayName: () => '',
       byAgent: (agentId) => view.live().find((session) => session.agentId === agentId),
@@ -82,14 +90,29 @@ export function workspacesCoreApi(
 
 export function runWorkspacesService(options: WorkspacesServiceOptions): ServiceProcess {
   let live: RegisteredSession[] = []
+  // Every agent, live and stopped, while an app's request starts (`withAgents`); null at any other time.
+  let inUse: RegisteredSession[] | null = null
   let core: CoreConnection | null = null
   const ports = emptyPorts()
   // Lost only with the connection: the frame then shows the new branch when the core's read of the
   // folder expires (lib/agentProject.ts), seconds later.
   const renamed = (agentId: string): void => { void core?.query('branchNamed', { agentId }).catch(() => {}) }
-  ;(options.start ?? startWorkspaces)(workspacesCoreApi(options.dataDir, { live: () => live }, renamed), ports)
+  const answers = (options.start ?? startWorkspaces)(workspacesCoreApi(options.dataDir, { live: () => live, inUse: () => inUse }, renamed), ports)
   if (!ports.workspaces) throw new Error('workspaces did not start')
   const workspaces = ports.workspaces
+
+  /**
+   * An app's request, answered with every agent, live then stopped, as the core lists them as it arrives: the handler reads
+   * them before anything else. Every entry, as the core sent it: one left out would be a folder in use that looks unused.
+   * No core, or an answer that is not a list of agents (QUERY_FAILED), is no answer at all.
+   */
+  const withAgents = (answer: ServiceRequest): ServiceRequest => async (payload, asker, closed) => {
+    const agents = core ? (await core.query('agents').catch((): Record<string, unknown> => ({}))).agents : undefined
+    if (!Array.isArray(agents) || !agents.every(isSession)) return { error: 'WORKTREES_UNAVAILABLE' }
+    inUse = agents
+    try { return answer(payload, asker, closed) } finally { inUse = null }
+  }
+  const requests: ServiceRequests = Object.fromEntries(Object.entries(answers).map(([type, answer]) => [type, withAgents(answer)]))
 
   const run = options.run ?? runServiceProcess
   const service = run({
@@ -97,8 +120,7 @@ export function runWorkspacesService(options: WorkspacesServiceOptions): Service
     socketPath: options.socketPath,
     machineId: options.machineId,
     token: options.token,
-    // The apps ask workspaces nothing yet: only the core tells it what to do.
-    requests: {},
+    requests,
     onEvent: (payload) => {
       if (payload.kind === 'nameBranches' && Array.isArray(payload.agents)) {
         live = payload.agents.filter(isSession)

@@ -5,10 +5,12 @@
  * process and shown on the agent's frame by the core. Whatever happens to the process costs workspaces alone. Stopped,
  * hung, killed or crashing on every start, the core never restarts, agents keep working, and frames keep their branch
  * names, which the core reads itself. A core that restarts leaves the process running. Nothing removes a worktree on a
- * timer (#4166).
+ * timer (#4166): the person's list of leftover worktrees and their clean are answered there, with the folders in use
+ * asked of the core as each request arrives.
  */
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
@@ -191,5 +193,43 @@ describe('workspaces in their own process', () => {
     expect(workspacesPid(d)).toBe(workspaces)
     expect(restarts(d)).toBe(0)
     client.close()
+  })
+
+  it('lists the leftover worktrees for the person, and a clean checks each again: one an agent works in and one gone stay as they are', async () => {
+    let repo = ''
+    let unused = ''
+    let used = ''
+    // Linux's trash is the home's (lib/trash.ts), here a folder of this test's own. A Mac's is the person's own Trash,
+    // which no test moves anything to: there the clean is shown refusing only.
+    const data = mkdtempSync(join(tmpdir(), 'trash-'))
+    try {
+      const d = await fresh({ XDG_DATA_HOME: data }, (d) => {
+        repo = repository(d)
+        unused = worktree(d, repo, 'old-idea')
+        used = worktree(d, repo, 'still-going')
+      })
+      const client = await LocalClient.connect(d)
+      const agent = await create(d, client, used)
+      expect(await client.request('worktrees_list', {}, 60_000)).toMatchObject({
+        worktrees: [{ path: unused, repository: expect.stringMatching(/[\\/]repo$/), branch: 'old-idea', uncommitted: false, sizeComplete: true }],
+        more: false,
+      })
+      const gone = join(d.env.HOME!, 'harnesses', 'worktrees', 'repo', 'gone')
+      expect(await client.request('worktrees_clean', { paths: [used, gone] }, 60_000))
+        .toMatchObject({ results: [{ path: used, state: 'in_use' }, { path: gone, state: 'not_found' }] })
+      expect(existsSync(join(used, 'README.md'))).toBe(true)
+      expect(d.log()).toContain('[worktrees] 0 of 2 moved to the Trash · kept: in_use, not_found')
+      if (process.platform === 'linux') {
+        expect(await client.request('worktrees_clean', { paths: [unused] }, 60_000)).toMatchObject({ results: [{ path: unused, state: 'trashed', pruned: true }] })
+        expect(existsSync(join(data, 'Trash', 'files', 'old-idea', 'README.md'))).toBe(true)
+        expect(git(d, repo, 'worktree', 'list', '--porcelain')).not.toContain('old-idea')
+        expect(git(d, repo, 'branch', '--list', 'old-idea')).toContain('old-idea')
+      }
+      await turn(client, agent.id, 'my worktree is still here')
+      expect(d.coresStarted()).toBe(1)
+      client.close()
+    } finally {
+      rmSync(data, { recursive: true, force: true })
+    }
   })
 })

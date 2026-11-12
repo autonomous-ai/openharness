@@ -33,12 +33,16 @@ describe('workspaces in their own process, as the core tells them', () => {
   })
 
   // #4166: the daemon swept clean, week-idle worktrees twice a day, the ones their person chose to keep too. The core
-  // neither asks the process to sweep nor lists every folder in use for one.
-  it('never tells the process to sweep, and lists no folders for one', () => {
-    const { link, port, core } = setup()
+  // never asks the process to sweep.
+  it('never tells the process to sweep', () => {
+    const { port, core } = setup()
     expect(Object.keys(port)).toEqual(['nameBranches'])
-    expect(link.answer('agents', {})).toEqual({ error: 'UNKNOWN_QUERY' })
     expect(core.agents.all).not.toHaveBeenCalled()
+  })
+
+  it('answers every agent, live then stopped, when an app\'s list or clean of the leftover worktrees starts', () => {
+    const { link, live, stopped } = setup()
+    expect(link.answer('agents', {})).toEqual({ agents: [...live, stopped] })
   })
 
   it('sends a renamed agent\'s frame again, read fresh', () => {
