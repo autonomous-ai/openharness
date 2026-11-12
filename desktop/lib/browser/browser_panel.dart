@@ -414,11 +414,11 @@ class _BrowserPanelState extends State<BrowserPanel> {
                   ),
                 ),
                 if (_browser != null)
-                  DesktopPill(
+                  // Not a bare square: that is an unticked box in its settings and Maximize in the window's bar.
+                  AppIconButton(
                     key: const ValueKey('swarm-browser-stop'),
-                    label: 'Stop',
-                    compact: true,
-                    quiet: true,
+                    icon: AppIcons.circleStop,
+                    tooltip: 'Stop',
                     onPressed: _stop,
                   ),
                 AppIconButton(
