@@ -4,7 +4,7 @@
 # `device_failed`, which it does not restart.
 set -uo pipefail
 
-SCREEN="${SCREEN:-1920x1080}"
+SCREEN="${SCREEN:-1080x1920}"
 ACCEPT_LANG="${ACCEPT_LANG:-en-US}"
 PRIMARY_LANG="${ACCEPT_LANG%%,*}"
 PROFILE=/var/lib/harness-browser-profile

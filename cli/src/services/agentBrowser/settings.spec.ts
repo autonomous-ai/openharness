@@ -9,12 +9,13 @@ const withProxy: BrowserSettings = {
 }
 
 describe('agent browser settings', () => {
-  it("defaults follow the machine's zone and language", () => {
+  // Portrait by default: the Desktop's Browser panel sits beside the chat and is taller than wide.
+  it("defaults follow the machine's zone and language, on a portrait screen", () => {
     expect(defaultSettings(host)).toEqual({
       proxy: null,
       timeZone: null,
       languages: 'vi-VN',
-      screen: '1920x1080',
+      screen: '1080x1920',
       humanInput: true,
       humanSpeed: 'normal',
       device: null,
@@ -27,6 +28,10 @@ describe('agent browser settings', () => {
     const raw = { ...withProxy, proxy: { ...withProxy.proxy } }
     expect(parseSettings(raw, current)).toEqual(withProxy)
     expect(() => parseSettings({ ...raw, screen: '800x600' }, current)).toThrow(/screen/)
+    // Rotated monitors beside the landscape ones.
+    for (const screen of ['1080x1920', '1200x1920', '1050x1680', '1920x1080', '1366x768']) {
+      expect(parseSettings({ ...raw, screen }, current).screen).toBe(screen)
+    }
     for (const port of [0, 65536, 80.5, '80']) {
       expect(() => parseSettings({ ...raw, proxy: { ...raw.proxy, port } }, current)).toThrow(/proxy\.port/)
     }
@@ -106,15 +111,20 @@ describe('agent browser settings', () => {
     expect(humanMode({ ...withProxy, humanSpeed: 'fast' })).toBe('fast')
   })
 
-  // Chrome's window takes the panel's size, held to what a person's window could be on that screen (spec: The window
-  // fits the panel).
-  it('clampWindow rounds, holds 1024x640 and the screen, and is null for anything but two positive numbers', () => {
+  // Chrome's window takes the panel's size, held to the screen (spec: The window fits the panel). No floor: Chrome
+  // keeps its own minimum and answers the size it set.
+  it('clampWindow rounds, holds the screen, and is null for anything but two sizes of at least one pixel', () => {
     expect(clampWindow(1137.4, 843.6, '1920x1080')).toEqual({ width: 1137, height: 844 })
-    expect(clampWindow(600, 300, '1920x1080')).toEqual({ width: 1024, height: 640 })
+    // The Browser panel beside a chat gets a window of exactly its size, a narrow one too.
+    expect(clampWindow(780, 935, '1080x1920')).toEqual({ width: 780, height: 935 })
+    expect(clampWindow(400, 900, '1080x1920')).toEqual({ width: 400, height: 900 })
+    expect(clampWindow(600, 300, '1920x1080')).toEqual({ width: 600, height: 300 })
+    expect(clampWindow(1500, 2500, '1080x1920')).toEqual({ width: 1080, height: 1920 })
     expect(clampWindow(2560, 1440, '1920x1080')).toEqual({ width: 1920, height: 1080 })
     expect(clampWindow(1500, 900, '1366x768')).toEqual({ width: 1366, height: 768 })
     expect(clampWindow(1920, 1080, '1920x1080')).toEqual({ width: 1920, height: 1080 })
-    for (const [width, height] of [[0, 800], [1200, -1], ['1200', 800], [1200, null], [undefined, 800], [Number.NaN, 800], [1200, Number.POSITIVE_INFINITY]]) {
+    expect(clampWindow(10, 5000, '1080x1920')).toEqual({ width: 10, height: 1920 })
+    for (const [width, height] of [[0, 800], [0.4, 800], [Number.MIN_VALUE, 800], [1200, -1], ['1200', 800], [1200, null], [undefined, 800], [Number.NaN, 800], [1200, Number.POSITIVE_INFINITY]]) {
       expect(clampWindow(width, height, '1920x1080'), `${String(width)}x${String(height)}`).toBeNull()
     }
   })
