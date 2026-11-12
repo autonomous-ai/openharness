@@ -511,7 +511,10 @@ void main() {
     expect(find.text('A sandboxed Chrome the agent drives'), findsOneWidget);
   });
 
-  testWidgets('Stop is in the header in every state but off', (tester) async {
+  testWidgets('Stop is an icon in the header in every state but off', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
     for (final browser in [
       const AgentBrowser(state: 'setup', step: 'installing'),
       const AgentBrowser(state: 'starting'),
@@ -522,19 +525,35 @@ void main() {
       app.asked.clear();
       await show(tester, browser);
       expect(key('swarm-browser-stop'), findsOneWidget, reason: browser.state);
-      expect(find.text('Stop'), findsOneWidget);
+      // An icon as the gear is, named by its tooltip to a screen reader too, with no word in the header.
+      expect(find.byTooltip('Stop'), findsOneWidget);
+      expect(
+        tester.getSemantics(
+          find.descendant(
+            of: key('swarm-browser-stop'),
+            matching: find.byType(IconButton),
+          ),
+        ),
+        containsSemantics(tooltip: 'Stop', isButton: true),
+      );
+      expect(find.text('Stop'), findsNothing);
+      expect(
+        tester.getSize(key('swarm-browser-stop')),
+        tester.getSize(key('swarm-browser-settings')),
+      );
       // Before the gear.
       expect(
         tester.getRect(key('swarm-browser-stop')).right,
         lessThanOrEqualTo(tester.getRect(key('swarm-browser-settings')).left),
       );
-      await tester.tap(key('swarm-browser-stop'));
+      await tester.tap(find.byTooltip('Stop'));
       await tester.pump();
       expect(app.asked, ['stop a1'], reason: browser.state);
       await tester.pumpWidget(const SizedBox());
     }
     await show(tester, null);
     expect(key('swarm-browser-stop'), findsNothing);
+    semantics.dispose();
   });
 
   testWidgets('the panel closes from its ×', (tester) async {

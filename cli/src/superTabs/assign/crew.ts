@@ -38,7 +38,9 @@ export const DISK_KEPT = 10 * GiB
  *  builder while others have none. A claim is refused past it (githubClaim.ts), and Harness gives a builder nothing at it. */
 export const CLAIM_LIMIT = 4
 /** A builder's time in an area its person says it works on: half, so it gets those tasks first, and another builder takes
- *  one only when it is well behind (anh Dee, 2026-11-09: "do you assign agents to their area of expertise?"). */
+ *  one only when it is well behind (anh Dee, 2026-11-09: "do you assign agents to their area of expertise?"). It stays
+ *  strong though lampOS's record found an area a builder only worked in worth nothing measurable: it is a person steering
+ *  their agent, which that record could not test (5 role files named an area: docs/research/2026-11-12-area-worth). */
 export const FOCUS = 0.5
 /** And in an area it does not work on, once its person named some: it takes other work only when its own has none. */
 const AWAY = 1.5
@@ -81,8 +83,6 @@ export interface Read {
   /** How many free tasks are not planned for what they come after: open all the same, which the PM's numbers count
    *  (pmNumbers.ts). Left out of them, its PM was told no sized task was open while one waited (review of #4121). */
   waits: number
-  /** Each builder's finished tasks by part, from the closed issues its label was on. */
-  done: Map<string, Map<string, number>>
   /** The builders by id, for their names and labels. */
   builders: Map<string, CrewBuilder>
 }
@@ -216,7 +216,7 @@ function everyOf(name: string): number | null {
  * none of its time in the plan. A free task that says it comes after an open one waits for that one's pull request ([up]:
  * the team's pull requests that are up, by the task each is for), and is then its builder's alone.
  */
-export function readProblem(input: { now: number; issues: Json[]; closed: Json[]; crew: Crew; withReaders: ReadonlySet<number>
+export function readProblem(input: { now: number; issues: Json[]; crew: Crew; withReaders: ReadonlySet<number>
   up: ReadonlyMap<number, readonly Up[]>; minutes?: Partial<Record<'s' | 'm' | 'l', number>> }): Read {
   const { now, crew, withReaders } = input
   const byLabel = new Map(crew.builders.map(b => [b.label, b]))
@@ -246,16 +246,6 @@ export function readProblem(input: { now: number; issues: Json[]; closed: Json[]
   /** The free tasks not planned as what they come after has no pull request up, each with those it names. */
   const waiting = new Map<string, string[]>()
   let waits = 0
-  const done = new Map<string, Map<string, number>>()
-  for (const issue of input.closed) {
-    if (issue.pull_request) continue
-    const labels = labelsOf(issue), part = partOf(labels)
-    const builder = labels.map(label => byLabel.get(label)).find(Boolean)
-    if (!builder || !part) continue
-    const parts = done.get(builder.id) ?? new Map<string, number>()
-    parts.set(part, (parts.get(part) ?? 0) + 1)
-    done.set(builder.id, parts)
-  }
   const tasks: Task[] = []
   const issues = input.issues.filter(issue => !issue.pull_request && Number.isSafeInteger(issue.number))
   const openNumbers = new Set(issues.map(issue => Number(issue.number)))
@@ -324,12 +314,12 @@ export function readProblem(input: { now: number; issues: Json[]; closed: Json[]
   const leadsTo = (from: string, to: string, seen: Set<string>): boolean =>
     (waiting.get(from) ?? []).some(next => next === to || (!seen.has(next) && seen.add(next) && leadsTo(next, to, seen)))
   const looped = [...waiting.keys()].filter(id => leadsTo(id, id, new Set()))
-  const parts = new Set([...tasks.map(task => task.part).filter((part): part is string => !!part), ...[...done.values()].flatMap(m => [...m.keys()])])
+  const parts = new Set(tasks.map(task => task.part).filter((part): part is string => !!part))
   const builders: Builder[] = crew.builders.map(b => ({
     id: b.id, machine: b.machineId, busyUntil: busy.get(b.id) ?? 0,
     modes: [{ model: b.model || b.engine, family: b.engine === 'codex' ? 'openai' : 'anthropic', speed: 1, cost: 2,
       quality: { default: 1 }, account: `${b.machineId}:${b.engine}` }],
-    context: contextOf([...parts], done.get(b.id), b.worksOn),
+    context: contextOf([...parts], b.worksOn),
   }))
   const problemMachines: Machine[] = [...new Set(crew.builders.map(b => b.machineId))].map(id => {
     const resources = object(machines.get(id)?.observation?.resources)
@@ -339,7 +329,7 @@ export function readProblem(input: { now: number; issues: Json[]; closed: Json[]
     // No cores, as no task holds any (SIZES).
     return { id, capacity: { cpu: 0, ram: memory, disk: Math.max(0, free - DISK_KEPT) } }
   })
-  return { problem: { now: 0, machines: problemMachines, accounts, builders, tasks, objective: 'weighted', switchCost: 30 }, open, building, free, bases, looped, waits, done,
+  return { problem: { now: 0, machines: problemMachines, accounts, builders, tasks, objective: 'weighted', switchCost: 30 }, open, building, free, bases, looped, waits,
     builders: new Map(crew.builders.map(b => [b.id, b])) }
 }
 
@@ -408,18 +398,15 @@ export function takeBacks(issues: Json[], away: AwayBuilder[], now: number): Tak
 }
 
 /**
- * How fast a builder is in each part, as a factor of its time: each task it finished there makes the next 15% quicker,
- * to 40% at most; an area its person says it works on halves it ([FOCUS]); once its person named some, any other area
- * takes it half as long again ([AWAY]).
+ * How fast a builder is in each part, as a factor of its time: an area its person says it works on halves it ([FOCUS]); once
+ * its person named some, any other area takes it half as long again ([AWAY]). The tasks it finished in a part count for
+ * nothing. Until 12 November each took 15% off its next there, to 40%, which kept a part's tasks on the builder that did
+ * them before and left others idle; in lampOS's record that gained no speed (0.83, 0.93 and 0.90 of the time after 1, 2 and
+ * 3 or more landed, each interval holding 1) and drew more holds (2 points a doubling: docs/research/2026-11-12-area-worth).
  */
-export function contextOf(parts: string[], done: Map<string, number> | undefined, worksOn: string[] | null | undefined): Record<string, number> {
-  const context: Record<string, number> = {}
-  for (const part of parts) {
-    const learned = Math.max(0.6, 1 - 0.15 * (done?.get(part) ?? 0))
-    const factor = !worksOn?.length ? learned : worksOn.includes(part) ? Math.min(learned, FOCUS) : learned * AWAY
-    if (factor !== 1) context[part] = Math.round(factor * 1000) / 1000
-  }
-  return context
+export function contextOf(parts: string[], worksOn: string[] | null | undefined): Record<string, number> {
+  if (!worksOn?.length) return {}
+  return Object.fromEntries(parts.map(part => [part, worksOn.includes(part) ? FOCUS : AWAY]))
 }
 
 /** The reset a subscription waits for, in minutes, when it has less room than a small task until a reset more than
@@ -531,15 +518,12 @@ export function nextPicks(plan: Plan, read: Read): Pick[] {
   return picks
 }
 
-/** Why a builder got a task, in a few words: when it starts it, and what it has done in its part. */
+/** Why a builder got a task, in a few words: when it starts it, and the task's area when its person says it works on it. */
 export function reasonOf(pick: Pick, read: Read): string {
   const task = read.problem.tasks.find(t => t.id === pick.task)
   const when = pick.start <= 0 ? 'it can start now' : `it can start in ${pick.start < 90 ? `${pick.start} min` : `${Math.round(pick.start / 60)} h`}`
   const part = task?.part
-  const count = part ? read.done.get(pick.builder)?.get(part) ?? 0 : 0
-  const focus = part && read.builders.get(pick.builder)?.worksOn?.includes(part)
-  return [when, focus ? `it works on ${part}` : '', count ? `it finished ${count} part:${part} ${count === 1 ? 'task' : 'tasks'}` : '']
-    .filter(Boolean).join(', ').replace(/, ([^,]*)$/, ', and $1')
+  return part && read.builders.get(pick.builder)?.worksOn?.includes(part) ? `${when}, and it works on ${part}` : when
 }
 
 /**

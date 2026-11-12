@@ -45,6 +45,15 @@ export async function readHermesMessages(
   sessionId: string,
   afterId?: number | null,
 ): Promise<HmMessage[]> {
+  return await loadHermesMessages(dbPath, sessionId, afterId) ?? []
+}
+
+/** As [readHermesMessages], but null when the store did not answer (locked, mid-write, past its deadline). */
+async function loadHermesMessages(
+  dbPath: string,
+  sessionId: string,
+  afterId?: number | null,
+): Promise<HmMessage[] | null> {
   if (!HERMES_HISTORY_ID_RE.test(sessionId)) return []
   const bounded = Number.isFinite(afterId as number) && (afterId as number) > 0
   const sql = `SELECT ${COLUMNS} FROM messages WHERE session_id = ?${bounded ? ' AND id > ?' : ''} ORDER BY id;`
@@ -53,7 +62,7 @@ export async function readHermesMessages(
   const result = await sqliteReadAll(dbPath, sql, params, { maxBuffer: MAX_BUFFER })
   if (!result.ok) {
     if (result.reason === 'missing') throw new HermesSqliteMissing()
-    return [] // db locked / mid-write — retry next tick
+    return null // db locked / mid-write — retry next tick
   }
 
   return result.rows.map((row) => ({
@@ -101,6 +110,8 @@ export class HermesReader {
   private timer: NodeJS.Timeout | null = null
   private polling = false
   private cursor = 0
+  /** Whether the session's rows were read once and seeded; until then nothing is emitted (#4065). */
+  private hydrated = false
   private state: HermesTurnState = newHermesTurnState()
 
   constructor(private readonly deps: HermesReaderDeps) {}
@@ -111,8 +122,7 @@ export class HermesReader {
   /** Hydrate silently (no replay), then start polling. */
   async start(): Promise<void> {
     try {
-      const all = await readHermesMessages(this.deps.dbPath, this.deps.sessionId)
-      this.hydrate(all)
+      await this.seed()
     } catch (err) {
       if (err instanceof HermesSqliteMissing) { this.deps.onFatal?.(err); return }
     }
@@ -121,6 +131,17 @@ export class HermesReader {
 
   stop(): void {
     if (this.timer) { clearInterval(this.timer); this.timer = null }
+  }
+
+  /**
+   * Read the whole session and seed from it. A store that does not answer leaves the reader unseeded, and the next tick
+   * reads in full again: with the cursor still at 0, an incremental read would emit the whole history as new (#4065).
+   */
+  private async seed(): Promise<void> {
+    const all = await loadHermesMessages(this.deps.dbPath, this.deps.sessionId)
+    if (!all) return
+    this.hydrated = true
+    this.hydrate(all)
   }
 
   /** Seed state from existing rows without emitting, so only NEW activity streams after attach. */
@@ -141,6 +162,7 @@ export class HermesReader {
     if (this.polling) return
     this.polling = true
     try {
+      if (!this.hydrated) { await this.seed(); return }
       const batch = await readHermesMessages(this.deps.dbPath, this.deps.sessionId, this.cursor)
       if (batch.length === 0) return
       const events: LiveEvent[] = []

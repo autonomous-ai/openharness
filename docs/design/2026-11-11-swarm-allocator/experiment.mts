@@ -1,7 +1,12 @@
 // The first experiment of the allocator's redesign (README.md beside this file). One claim: does the planned search
 // (the product's solver, run each minute, lists two deep as the allocator kept them until BUILD.md's package 2) finish work
 // sooner than a rule that decides only when a builder is free? A model, not a measurement: its numbers are only as good as
-// the assumptions in `world` below.
+// the assumptions in `world` below. One is the study's estimate: a builder takes 1.12 times as long outside its own area as
+// in it, as lampOS's record has it for an area it had landed nothing in against one it had (a fit of opened-to-landed time,
+// within noise, applied here to build minutes; 0.85 to 1.49 times:
+// docs/research/2026-11-12-area-worth). Until 12 November this assumed twice as long. The solver's "fixed" plan still
+// guesses half the time in a builder's area and half as long again elsewhere, the product's guess for an area a person
+// names (FOCUS and AWAY in assign/crew.ts), which the study could not test.
 //
 // Run from cli/:  npx tsx ../docs/design/2026-11-11-swarm-allocator/experiment.mts
 //   SEEDS=1,2,3            the days' seeds
@@ -9,8 +14,9 @@
 //   CASES=0.7:0.3:80,...   noise (sigma of a lognormal) : share of labels a size off : tasks in the day
 //   ONLY=fifo,priced0      the policies to run; the solver's rows take minutes, the others seconds
 //   CORES=8                a machine's cores (6 by default)
-//   AWAY=1.2               a task's minutes outside a builder's area, as a factor on its size, where inside it is 0.6: 1.2
-//                          is twice as long, 0.9 one and a half times, 0.72 a fifth more, 0.6 no more
+//   AWAY=1.2               a task's minutes outside a builder's area, as a factor on its size, where inside it is 0.6: 0.672,
+//                          the default, is 1.12 times as long, the study's estimate; 1.2 twice, as assumed until 12 November; 0.9 one
+//                          and a half times; 0.6 no more
 //   SUBS=6                 subscriptions the builders share evenly (6: one a machine, as the product reads them), each with a
 //                          5-hour window; without it nobody's work spends anything, as in the README's tables
 //   SPEND=0.4              the spend of a size, as a factor on the table's: at 1 a large task is 25% of a window, so three fill
@@ -61,7 +67,7 @@ const PARTS = ['api', 'desktop', 'cli', 'docs'], MIX: Record<Size, number> = { s
 // none since (docs/research/2026-11-11-agents-share-cpu.md), which is CORES=8 here: two builders a machine hold 8 at most, so
 // nothing is held back. At 6 two large tasks cannot share a machine.
 const CPU: Record<Size, number> = { s: 1, m: 2, l: 4 }
-const CORES = Number(process.env.CORES ?? 6), TRUE_HOME = 0.6, TRUE_AWAY = Number(process.env.AWAY ?? 1.2)
+const CORES = Number(process.env.CORES ?? 6), TRUE_HOME = 0.6, TRUE_AWAY = Number(process.env.AWAY ?? 0.672)
 const SUBS = Number(process.env.SUBS ?? 0), SPEND = Number(process.env.SPEND ?? 1), EVERY = 300, TOLD_FOR = 60
 const GATE = process.env.GATE === '1', HAND = process.env.HAND === '1', TOLD = process.env.TOLD === '1'
 
@@ -173,7 +179,7 @@ function run(seed: number, sigma: number, mislabel: number, n: number, policy: P
         for (const t of open) { const was = planned.get(t.id), is = places.get(t.id); if (was && is) { compared++; if (was !== is) moved++ } }
         planned = places
         const held = new Map(builders.map(b => [b.id, (b.current ? 1 : 0) + b.queue.length]))
-        const read = { problem, open: held, building: held, free: new Set(open.map(t => t.id)), done: new Map(),
+        const read = { problem, open: held, building: held, free: new Set(open.map(t => t.id)),
           builders: new Map(builders.map(b => [b.id, { id: b.id, name: b.id, label: b.id, machineId: b.machine, engine: 'claude' }])) }
         for (const p of deep === 1 ? nextPicks(solved.plan, read as never) : twoDeep(solved.plan, read.free, held)) { const t = byId.get(p.task)!, b = builders.find(x => x.id === p.builder)!; t.builder = b.id; t.given = now; b.queue.push(t) }
       }

@@ -54,6 +54,9 @@ describe('an engine whose starts fail on a machine', () => {
     'Codex sign-in failed.',
     'Codex is installed but cannot run: it exited with status 1',
     'The agent was created and has since stopped. Create a new start request to continue.',
+    // The same start, told how its engine left its pane (cli superTabs/start.ts, engineExit.ts).
+    'Codex exited at launch with status 2: it did not accept an option Harness started it with. Create a new start request to continue.',
+    'Claude Code exited at launch with status 1. Create a new start request to continue.',
   ])('counts the engine’s own failure: %s', error => {
     const pool = machine(), state = stateWith(pool)
     expect(noteStartFailed(state, start({}, error), NOW)).toBeNull()

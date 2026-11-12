@@ -23,7 +23,7 @@ const crew = (): Crew => ({
 
 describe('a team\'s tasks as GitHub and the Swarm say them (readProblem)', () => {
   it('makes a task of each issue the PM sized that nobody holds, with its size, part, priority and what it needs', () => {
-    const read = readProblem({ now: NOW, crew: crew(), closed: [], issues: [
+    const read = readProblem({ now: NOW, crew: crew(), issues: [
       issue(1, ['size:s', 'part:api', 'p0']), issue(2, ['size:l', 'needs:xcode']), issue(3, ['part:api']),
       issue(4, ['size:m'], { pull_request: {} }), issue(5, ['size:m'], { body: 'Depends on #99.' }),
     ], withReaders: new Set(), up: new Map() })
@@ -39,7 +39,7 @@ describe('a team\'s tasks as GitHub and the Swarm say them (readProblem)', () =>
   })
 
   it('queues what a builder holds on it, keeps it busy for half the one it took, and leaves another team\'s alone', () => {
-    const read = readProblem({ now: NOW, crew: crew(), closed: [], issues: [
+    const read = readProblem({ now: NOW, crew: crew(), issues: [
       issue(1, ['size:l', 'builder:pip', 'status:taken']), issue(2, ['size:m', 'builder:pip']), issue(3, ['builder:juno']),
       issue(4, ['size:s', 'builder:someone-else']), issue(5, ['size:s']),
     ], withReaders: new Set(), up: new Map() })
@@ -55,7 +55,7 @@ describe('a team\'s tasks as GitHub and the Swarm say them (readProblem)', () =>
     const issues = [issue(1, ['size:l', 'builder:pip', 'status:taken']), issue(2, ['size:m', 'builder:pip', 'status:taken']), issue(3, ['size:m', 'builder:pip']),
       issue(4, ['size:s', 'builder:juno']), issue(5, ['size:s', 'builder:juno', 'status:taken']), issue(6, ['size:s'])]
     // The pull requests of #1 and #4 wait for their readers: #4's builder opened one without taking the task.
-    const read = readProblem({ now: NOW, crew: crew(), closed: [], issues, withReaders: new Set([1, 4]), up: new Map() })
+    const read = readProblem({ now: NOW, crew: crew(), issues, withReaders: new Set([1, 4]), up: new Map() })
     expect(Object.fromEntries(read.open)).toEqual({ pip: 3, juno: 2, atlas: 0 })
     expect(Object.fromEntries(read.building)).toEqual({ pip: 2, juno: 1, atlas: 0 })
     // Pip is busy with the middle task it took, not the large one in review; the one in review is not queued on Juno either.
@@ -77,15 +77,15 @@ describe('a team\'s tasks as GitHub and the Swarm say them (readProblem)', () =>
     const team: Crew = { ...crew(), builders: [{ ...crew().builders[0]!, worksOn: ['api'] }, crew().builders[1]!] }
     // Pip's four are all up for their read; #1 is of the area it works on, where it is three times as quick as Juno.
     const issues = [...[11, 12, 13, 14].map(n => issue(n, ['size:m', 'builder:pip', 'status:taken'])), issue(1, ['size:s', 'part:api'])]
-    const read = readProblem({ now: NOW, crew: team, closed: [], issues, withReaders: new Set([11, 12, 13, 14]), up: new Map() })
+    const read = readProblem({ now: NOW, crew: team, issues, withReaders: new Set([11, 12, 13, 14]), up: new Map() })
     expect(read.problem.tasks.map(t => [t.id, t.notBuilders])).toEqual([['#1', ['pip']]])
     expect(nextPicks(solve(read.problem, { seed: 1, budgetMs: 2_000 }).plan, read)).toEqual([{ task: '#1', builder: 'juno', start: 0 }])
     // With three, Pip has room, and the plan gives it the task of its own area.
-    const room = readProblem({ now: NOW, crew: team, closed: [], issues: issues.slice(1), withReaders: new Set([12, 13, 14]), up: new Map() })
+    const room = readProblem({ now: NOW, crew: team, issues: issues.slice(1), withReaders: new Set([12, 13, 14]), up: new Map() })
     expect(room.problem.tasks.map(t => [t.id, t.notBuilders])).toEqual([['#1', []]])
     expect(nextPicks(solve(room.problem, { seed: 1, budgetMs: 2_000 }).plan, room)).toEqual([{ task: '#1', builder: 'pip', start: 0 }])
     // A task its PM gave Pip by hand past its four is Pip's still: only the free ones go elsewhere.
-    const given = readProblem({ now: NOW, crew: team, closed: [], issues: [...issues, issue(2, ['size:s', 'builder:pip'])], withReaders: new Set([11, 12, 13, 14]), up: new Map() })
+    const given = readProblem({ now: NOW, crew: team, issues: [...issues, issue(2, ['size:s', 'builder:pip'])], withReaders: new Set([11, 12, 13, 14]), up: new Map() })
     expect(given.problem.tasks.map(t => [t.id, t.pinned ?? null, t.notBuilders])).toEqual([['#1', null, ['pip']], ['#2', 'pip', []]])
   })
 
@@ -96,7 +96,7 @@ describe('a team\'s tasks as GitHub and the Swarm say them (readProblem)', () =>
   it('holds no task back for its machine\'s cores, whatever cores the machine reports', () => {
     const team = crew()
     team.machines = [machine('mac', { tools: { xcode: true }, resources: { memoryTotalBytes: 32 * GiB, projectDiskFreeBytes: 200 * GiB, cpuCores: 4 } }), team.machines[1]!]
-    const read = readProblem({ now: NOW, crew: team, closed: [], issues: [issue(1, ['size:l', 'needs:xcode']), issue(2, ['size:l', 'needs:xcode'])],
+    const read = readProblem({ now: NOW, crew: team, issues: [issue(1, ['size:l', 'needs:xcode']), issue(2, ['size:l', 'needs:xcode'])],
       withReaders: new Set(), up: new Map() })
     // Pip and Juno, on the one Mac with Xcode, each start a large task now.
     const { plan } = solve(read.problem, { seed: 1, budgetMs: 2_000 })
@@ -105,7 +105,7 @@ describe('a team\'s tasks as GitHub and the Swarm say them (readProblem)', () =>
   })
 
   it('reads each machine\'s room and each subscription\'s windows, its person\'s reserve kept', () => {
-    const { problem } = readProblem({ now: NOW, crew: crew(), closed: [], issues: [issue(1, ['size:s'])], withReaders: new Set(), up: new Map() })
+    const { problem } = readProblem({ now: NOW, crew: crew(), issues: [issue(1, ['size:s'])], withReaders: new Set(), up: new Map() })
     expect(problem.machines).toEqual([
       { id: 'mac', capacity: { cpu: 0, ram: 32 * GiB * MEMORY_SHARE, disk: 190 * GiB } },
       { id: 'box', capacity: { cpu: 0, ram: 16 * GiB * MEMORY_SHARE, disk: 30 * GiB } },
@@ -117,15 +117,6 @@ describe('a team\'s tasks as GitHub and the Swarm say them (readProblem)', () =>
       { id: 'box:codex', reserve: RESERVE, windows: [] },
     ])
   })
-
-  it('makes a builder quicker in a part where it finished tasks', () => {
-    const closed = [issue(10, ['builder:pip', 'part:api']), issue(11, ['builder:pip', 'part:api']), issue(12, ['builder:juno', 'part:ui']),
-      issue(13, ['builder:pip', 'part:api'], { pull_request: {} })]
-    const read = readProblem({ now: NOW, crew: crew(), closed, issues: [issue(1, ['size:s', 'part:api'])], withReaders: new Set(), up: new Map() })
-    expect(read.problem.builders.find(b => b.id === 'pip')!.context).toEqual({ api: 0.7 })
-    expect(read.problem.builders.find(b => b.id === 'juno')!.context).toEqual({ ui: 0.85 })
-    expect(read.done.get('pip')?.get('api')).toBe(2)
-  })
 })
 
 describe('what each builder starts next (nextPicks)', () => {
@@ -134,7 +125,7 @@ describe('what each builder starts next (nextPicks)', () => {
     const issues = [issue(1, ['size:m', 'p0']), issue(2, ['size:m', 'p1']), issue(3, ['size:m']), issue(10, ['size:m', 'builder:pip', 'status:taken']),
       issue(11, ['size:m', 'builder:juno', 'status:taken']), issue(12, ['size:m', 'builder:juno', 'status:taken']),
       ...[13, 14, 15, 16].map(n => issue(n, ['size:m', 'builder:atlas', 'status:taken']))]
-    const read = readProblem({ now: NOW, crew: crew(), closed: [], issues, withReaders: new Set([11, 12, 13, 14, 15, 16]), up: new Map() })
+    const read = readProblem({ now: NOW, crew: crew(), issues, withReaders: new Set([11, 12, 13, 14, 15, 16]), up: new Map() })
     expect(['pip', 'juno', 'atlas'].map(builder => hasRoom(read, builder))).toEqual([false, true, false])
     const { plan } = solve(read.problem, { seed: 1, budgetMs: 2_000 })
     // One task, the p0, to the one builder with room, to start now: the plan's later tasks wait for the pass that finds room.
@@ -147,7 +138,7 @@ describe('what each builder starts next (nextPicks)', () => {
   it('gives each builder with room one task a pass, never one a builder already holds', () => {
     const issues = [issue(1, ['size:m', 'p0']), issue(2, ['size:m', 'p1']), issue(3, ['size:m']), issue(4, ['size:m']), issue(5, ['size:m']),
       issue(6, ['size:m']), issue(7, ['size:m']), issue(8, ['size:m', 'builder:atlas'])]
-    const read = readProblem({ now: NOW, crew: crew(), closed: [], issues, withReaders: new Set(), up: new Map() })
+    const read = readProblem({ now: NOW, crew: crew(), issues, withReaders: new Set(), up: new Map() })
     const picks = nextPicks(solve(read.problem, { seed: 1, budgetMs: 2_000 }).plan, read)
     // Atlas has #8 to build; Pip and Juno get the p0 and the p1, to start at once, and the five others wait.
     expect(picks.map(p => [p.task, p.builder, p.start]).sort()).toEqual([['#1', expect.stringMatching(/^(pip|juno)$/), 0], ['#2', expect.stringMatching(/^(pip|juno)$/), 0]])
@@ -157,10 +148,9 @@ describe('what each builder starts next (nextPicks)', () => {
     expect(nextPicks({ placements: [placed('#8', 0), placed('#3', 90)], unplaced: [], score: 0, makespan: 180, cost: 0, priced: 0 }, read)).toEqual([{ task: '#3', builder: 'pip', start: 90 }])
   })
 
-  it('says when the builder can start it and what it finished in its part', () => {
-    const closed = [issue(10, ['builder:pip', 'part:api'])]
-    const read = readProblem({ now: NOW, crew: crew(), closed, issues: [issue(1, ['size:s', 'part:api'])], withReaders: new Set(), up: new Map() })
-    expect(reasonOf({ task: '#1', builder: 'pip', start: 0 }, read)).toBe('it can start now, and it finished 1 part:api task')
+  it('says when the builder can start it', () => {
+    const read = readProblem({ now: NOW, crew: crew(), issues: [issue(1, ['size:s', 'part:api'])], withReaders: new Set(), up: new Map() })
+    expect(reasonOf({ task: '#1', builder: 'pip', start: 0 }, read)).toBe('it can start now')
     expect(reasonOf({ task: '#1', builder: 'juno', start: 45 }, read)).toBe('it can start in 45 min')
     expect(reasonOf({ task: '#1', builder: 'juno', start: 150 }, read)).toBe('it can start in 3 h')
   })
@@ -176,7 +166,7 @@ describe('a task that comes after another', () => {
 
   it('is not planned while what it comes after has no pull request up: free, given, taken or with a draft', () => {
     for (const first of [issue(1, ['size:s']), issue(1, ['size:s', 'builder:pip']), issue(1, ['size:s', 'builder:pip', 'status:taken'])]) {
-      const read = readProblem({ now: NOW, crew: crew(), closed: [], issues: [first, after(2, 'Do it after #1.'), issue(3, ['size:s'])], withReaders: new Set(), up: new Map() })
+      const read = readProblem({ now: NOW, crew: crew(), issues: [first, after(2, 'Do it after #1.'), issue(3, ['size:s'])], withReaders: new Set(), up: new Map() })
       expect(read.problem.tasks.map(t => t.id).filter(id => id !== '#1')).toEqual(['#3'])
       expect(read.free.has('#2')).toBe(false)
       // Open all the same, which its PM's numbers say (review of #4121: it was told none was open).
@@ -189,7 +179,7 @@ describe('a task that comes after another', () => {
 
   it('goes only to the builder whose pull request for what it comes after is up, built on that branch', () => {
     const issues = [issue(1, ['size:m', 'builder:juno', 'status:taken']), after(2, 'Blocked by #1.', ['p0']), issue(3, ['size:s'])]
-    const read = readProblem({ now: NOW, crew: crew(), closed: [], issues, withReaders: new Set([1]), up: new Map([up(1, 30, 'juno')]) })
+    const read = readProblem({ now: NOW, crew: crew(), issues, withReaders: new Set([1]), up: new Map([up(1, 30, 'juno')]) })
     expect(read.problem.tasks.map(t => [t.id, t.pinned ?? null, t.deps])).toEqual([['#2', 'juno', []], ['#3', null, []]])
     expect([...read.free]).toEqual(['#2', '#3'])
     expect(Object.fromEntries(read.bases)).toEqual({ '#2': [{ pull: 30, branch: 'juno/1' }] })
@@ -199,13 +189,13 @@ describe('a task that comes after another', () => {
     expect(picks.find(pick => pick.task === '#2')).toEqual({ task: '#2', builder: 'juno', start: 0 })
     expect(picks.find(pick => pick.task === '#3')!.builder).not.toBe('juno')
     // A reader's HOLD stands on that pull request: its builder has it to fix first, and is given the next once it is up again.
-    const held = readProblem({ now: NOW, crew: crew(), closed: [], issues, withReaders: new Set(), up: new Map([up(1, 30, 'juno')]) })
+    const held = readProblem({ now: NOW, crew: crew(), issues, withReaders: new Set(), up: new Map([up(1, 30, 'juno')]) })
     expect(nextPicks(solve(held.problem, { seed: 1, budgetMs: 2_000 }).plan, held).some(pick => pick.task === '#2')).toBe(false)
   })
 
   it('waits until they land when its builder is away, out of quota, holds four or lacks what it needs, or two it comes after are with different builders', () => {
     const planned = (issues: Json[], ups: Array<ReturnType<typeof up>>, team = crew(), inReview: number[] = [1]) =>
-      readProblem({ now: NOW, crew: team, closed: [], issues, withReaders: new Set(inReview), up: new Map(ups) }).problem.tasks.map(t => t.id)
+      readProblem({ now: NOW, crew: team, issues, withReaders: new Set(inReview), up: new Map(ups) }).problem.tasks.map(t => t.id)
     const first = issue(1, ['size:m', 'builder:pip', 'status:taken'])
     // Its builder is one its person is stopping, or whose machine is down: no builder of the crew now.
     expect(planned([first, after(2, 'after #1')], [up(1, 30)], { ...crew(), builders: crew().builders.slice(1), away: [{ name: 'Pip', label: 'builder:pip', why: 'stopping' }] })).toEqual([])
@@ -222,14 +212,14 @@ describe('a task that comes after another', () => {
     expect(planned(two, [up(1, 30), up(4, 31, 'juno')], crew(), [1, 4])).toEqual([])
     expect(planned(two, [up(1, 30)], crew(), [1])).toEqual([])
     // Each is open all the same, and counted so.
-    expect(readProblem({ now: NOW, crew: crew(), closed: [], issues: two, withReaders: new Set([1, 4]), up: new Map([up(1, 30), up(4, 31, 'juno')]) }).waits).toBe(1)
+    expect(readProblem({ now: NOW, crew: crew(), issues: two, withReaders: new Set([1, 4]), up: new Map([up(1, 30), up(4, 31, 'juno')]) }).waits).toBe(1)
     // Both with one builder: it is that builder's, built on both branches.
-    const both = readProblem({ now: NOW, crew: crew(), closed: [], issues: [first, issue(4, ['size:m', 'builder:pip', 'status:taken']), after(2, 'after #1, after #4')],
+    const both = readProblem({ now: NOW, crew: crew(), issues: [first, issue(4, ['size:m', 'builder:pip', 'status:taken']), after(2, 'after #1, after #4')],
       withReaders: new Set([1, 4]), up: new Map([up(1, 30), up(4, 31)]) })
     expect(both.problem.tasks.map(t => [t.id, t.pinned])).toEqual([['#2', 'pip']])
     expect(both.bases.get('#2')).toEqual([{ pull: 30, branch: 'pip/1' }, { pull: 31, branch: 'pip/4' }])
     // One pull request for both: its branch is named once.
-    const one = readProblem({ now: NOW, crew: crew(), closed: [], issues: [first, issue(4, ['size:m', 'builder:pip', 'status:taken']), after(2, 'after #1, after #4')],
+    const one = readProblem({ now: NOW, crew: crew(), issues: [first, issue(4, ['size:m', 'builder:pip', 'status:taken']), after(2, 'after #1, after #4')],
       withReaders: new Set([1, 4]), up: new Map([up(1, 30), [4, [{ pull: 30, branch: 'pip/1', label: 'builder:pip' }]]]) })
     expect(one.bases.get('#2')).toEqual([{ pull: 30, branch: 'pip/1' }])
   })
@@ -239,14 +229,14 @@ describe('a task that comes after another', () => {
     const issues = [after(2, 'after #9 and after #40'), issue(40, ['builder:pip'], { pull_request: {} }),
       // Given by its PM while #5 has no pull request: it is its builder's, planned after #5 as before.
       after(3, 'after #5', ['builder:juno']), issue(5, ['size:s'])]
-    const read = readProblem({ now: NOW, crew: crew(), closed: [], issues, withReaders: new Set(), up: new Map() })
+    const read = readProblem({ now: NOW, crew: crew(), issues, withReaders: new Set(), up: new Map() })
     expect(read.problem.tasks.map(t => [t.id, t.pinned ?? null, t.deps])).toEqual([['#2', null, []], ['#3', 'juno', ['#5']], ['#5', null, []]])
     expect(read.bases.size).toBe(0)
   })
 
   it('names the tasks whose "after" lines wait on each other, which nothing ends, and not one that only waits on them', () => {
     const issues = [after(1, 'after #2'), after(2, 'after #3'), after(3, 'after #1'), after(4, 'after #1'), after(5, 'after #5'), after(6, 'after #7'), issue(7, ['size:s'])]
-    const read = readProblem({ now: NOW, crew: crew(), closed: [], issues, withReaders: new Set(), up: new Map() })
+    const read = readProblem({ now: NOW, crew: crew(), issues, withReaders: new Set(), up: new Map() })
     expect(read.looped).toEqual(['#1', '#2', '#3', '#5'])
     expect(read.problem.tasks.map(t => t.id)).toEqual(['#7'])
   })
@@ -305,27 +295,25 @@ describe('what an agent works on (worksOnOf, contextOf)', () => {
     expect(worksOnOf(null)).toBeNull()
   })
 
-  it('halves a builder\'s time in its areas and makes the others half as long again, learned speed kept', () => {
-    expect(contextOf(['mobile', 'api', 'ui'], new Map([['api', 2]]), ['mobile'])).toEqual({ mobile: 0.5, api: 1.05, ui: 1.5 })
-    expect(contextOf(['mobile', 'api'], new Map([['api', 2]]), [])).toEqual({ api: 0.7 })
-    expect(contextOf(['mobile'], undefined, null)).toEqual({})
+  it('halves a builder\'s time in its areas and makes the others half as long again, once its person named some', () => {
+    expect(contextOf(['mobile', 'api', 'ui'], ['mobile'])).toEqual({ mobile: 0.5, api: 1.5, ui: 1.5 })
+    expect(contextOf(['mobile', 'api'], [])).toEqual({})
+    expect(contextOf(['mobile'], null)).toEqual({})
   })
 
   // The allocator's design, package 5: `part:Backend` was no area of an agent that "Works on: backend", as the label's side was
   // compared as written.
-  it('reads a part: label\'s value as an area, however it is spelled: the area an agent works on, and the one it finished tasks in', () => {
+  it('reads a part: label\'s value as an area, however it is spelled, and as the area an agent works on', () => {
     const team: Crew = { ...crew(), builders: [{ ...crew().builders[0]!, worksOn: worksOnOf('Works on: backend, Mobile app') }, crew().builders[1]!] }
-    const closed = [issue(10, ['builder:juno', 'part:Backend']), issue(11, ['builder:juno', 'part:BACKEND']), issue(12, ['builder:juno', 'part:backend engine'])]
-    const read = readProblem({ now: NOW, crew: team, closed, withReaders: new Set(), up: new Map(),
+    const read = readProblem({ now: NOW, crew: team, withReaders: new Set(), up: new Map(),
       issues: [issue(1, ['size:s', 'part:Backend']), issue(2, ['size:s', 'part:Mobile App']), issue(3, ['size:s', 'part:Backend Engine']), issue(4, ['size:s'])] })
+    // Words that differ stay two areas.
     expect(read.problem.tasks.map(t => t.part)).toEqual(['backend', 'mobile-app', 'backend-engine', undefined])
-    // Juno's two finished backend tasks are one area's, whatever their labels' case. Words that differ stay two areas.
-    expect(Object.fromEntries(read.done.get('juno')!)).toEqual({ backend: 2, 'backend-engine': 1 })
-    expect(read.problem.builders.find(b => b.id === 'juno')!.context).toEqual({ backend: 0.7, 'backend-engine': 0.85 })
-    // Pip is quick in the two areas its person named, and slow in the third.
+    // Pip is quick in the two areas its person named, and slow in the third; Juno, which named none, is as quick in each.
     expect(read.problem.builders.find(b => b.id === 'pip')!.context).toEqual({ backend: 0.5, 'mobile-app': 0.5, 'backend-engine': 1.5 })
+    expect(read.problem.builders.find(b => b.id === 'juno')!.context).toEqual({})
     expect(reasonOf({ task: '#2', builder: 'pip', start: 0 }, read)).toBe('it can start now, and it works on mobile-app')
-    expect(reasonOf({ task: '#1', builder: 'juno', start: 0 }, read)).toBe('it can start now, and it finished 2 part:backend tasks')
+    expect(reasonOf({ task: '#1', builder: 'juno', start: 0 }, read)).toBe('it can start now')
   })
 
   it('gives a builder the tasks of its area first; another takes one only when the first is far behind', () => {
@@ -333,7 +321,7 @@ describe('what an agent works on (worksOnOf, contextOf)', () => {
       { id: 'pip', name: 'Pip', label: 'builder:pip', machineId: 'mac', engine: 'claude', worksOn },
       { id: 'juno', name: 'Juno', label: 'builder:juno', machineId: 'mac', engine: 'claude' }] })
     const issues = [issue(1, ['size:s', 'part:mobile']), issue(2, ['size:s', 'part:mobile']), issue(3, ['size:s', 'part:mobile']), issue(4, ['size:s', 'part:api'])]
-    const read = readProblem({ now: NOW, crew: team(['mobile']), closed: [], issues, withReaders: new Set(), up: new Map() })
+    const read = readProblem({ now: NOW, crew: team(['mobile']), issues, withReaders: new Set(), up: new Map() })
     const picks = nextPicks(solve(read.problem, { seed: 1, budgetMs: 2_000 }).plan, read)
     const of = (builder: string) => picks.filter(p => p.builder === builder).map(p => p.task).sort()
     // Pip takes the first mobile task and Juno the API task; the other mobile tasks wait for Pip, who will still finish them
@@ -342,7 +330,7 @@ describe('what an agent works on (worksOnOf, contextOf)', () => {
     expect(of('juno')).toEqual(['#4'])
     expect(reasonOf(picks.find(p => p.task === '#1')!, read)).toBe('it can start now, and it works on mobile')
     // Said nothing: the work is shared by who is free, the oldest tasks first.
-    const plain = readProblem({ now: NOW, crew: team(null), closed: [], issues, withReaders: new Set(), up: new Map() })
+    const plain = readProblem({ now: NOW, crew: team(null), issues, withReaders: new Set(), up: new Map() })
     const shared = nextPicks(solve(plain.problem, { seed: 1, budgetMs: 2_000 }).plan, plain)
     expect(shared.map(p => [p.task, p.start]).sort()).toEqual([['#1', 0], ['#2', 0]])
     expect(shared.map(p => p.builder).sort()).toEqual(['juno', 'pip'])
@@ -404,7 +392,7 @@ describe('a builder out of quota (outOfQuota)', () => {
   const withQuota = (usedPercent: number, minutes: number): Crew => ({ builders: crew().builders.slice(0, 1), machines: [machine('mac', {
     quotas: [{ engine: 'claude', known: true, windows: [{ name: 'five_hour', usedPercent, resetsAt: new Date(NOW + minutes * 60_000).toISOString() }] }] })] })
   it('is one whose subscription has less room than a small task until a reset more than two hours off', () => {
-    const away = (used: number, minutes: number) => outOfQuota(readProblem({ now: NOW, crew: withQuota(used, minutes), closed: [], issues: [], withReaders: new Set(), up: new Map() }))
+    const away = (used: number, minutes: number) => outOfQuota(readProblem({ now: NOW, crew: withQuota(used, minutes), issues: [], withReaders: new Set(), up: new Map() }))
     expect(away(85, 180)).toEqual([{ name: 'Pip', label: 'builder:pip', why: 'quota', until: 180 }])
     expect(away(85, 60)).toEqual([])
     expect(away(50, 180)).toEqual([])
@@ -446,23 +434,23 @@ describe('a task that waits on pieces cut off it (openPieces)', () => {
   // Taken back from a builder that stopped, it was given out whole, to be built beside its own pieces (third review).
   it('is given to nobody while it has no builder, and is a task again once its pieces are closed', () => {
     const waits = issue(1, ['size:l'], { sub_issues_summary: { total: 2, completed: 1 } })
-    expect([...readProblem({ now: NOW, crew: crew(), closed: [], issues: [waits, issue(2, ['size:s'])], withReaders: new Set(), up: new Map() }).free]).toEqual(['#2'])
-    expect([...readProblem({ now: NOW, crew: crew(), closed: [], issues: [{ ...waits, sub_issues_summary: { total: 2, completed: 2 } }], withReaders: new Set(), up: new Map() }).free]).toEqual(['#1'])
+    expect([...readProblem({ now: NOW, crew: crew(), issues: [waits, issue(2, ['size:s'])], withReaders: new Set(), up: new Map() }).free]).toEqual(['#2'])
+    expect([...readProblem({ now: NOW, crew: crew(), issues: [{ ...waits, sub_issues_summary: { total: 2, completed: 2 } }], withReaders: new Set(), up: new Map() }).free]).toEqual(['#1'])
   })
   // The second review of the split: a builder with two tasks waiting on pieces was given nothing more, and a team's one
   // builder could never be given the pieces its own tasks waited on.
   it('holds no place in its builder\'s list and none of its time while it waits, and both again once its pieces are done', () => {
     const waiting = { sub_issues_summary: { total: 2, completed: 1 } }
     const issues = [issue(1, ['size:l', 'builder:pip', 'status:taken'], waiting), issue(2, ['size:l', 'builder:pip', 'status:taken'], waiting), issue(3, ['size:s'])]
-    const read = readProblem({ now: NOW, crew: crew(), closed: [], issues, withReaders: new Set(), up: new Map() })
+    const read = readProblem({ now: NOW, crew: crew(), issues, withReaders: new Set(), up: new Map() })
     expect(read.open.get('pip')).toBe(0)
     expect(read.problem.builders.find(b => b.id === 'pip')!.busyUntil).toBe(0)
     expect([...read.free]).toEqual(['#3'])
-    const done = readProblem({ now: NOW, crew: crew(), closed: [], issues: issues.map(each => ({ ...each, sub_issues_summary: { total: 2, completed: 2 } })), withReaders: new Set(), up: new Map() })
+    const done = readProblem({ now: NOW, crew: crew(), issues: issues.map(each => ({ ...each, sub_issues_summary: { total: 2, completed: 2 } })), withReaders: new Set(), up: new Map() })
     expect(done.open.get('pip')).toBe(2)
     expect(done.problem.builders.find(b => b.id === 'pip')!.busyUntil).toBe(240)
     // One only given to it, with a sub-issue of its PM's under it, is in its list as any other: only a taken task waits.
-    expect(readProblem({ now: NOW, crew: crew(), closed: [], issues: [issue(1, ['size:l', 'builder:pip'], waiting)], withReaders: new Set(), up: new Map() }).open.get('pip')).toBe(1)
+    expect(readProblem({ now: NOW, crew: crew(), issues: [issue(1, ['size:l', 'builder:pip'], waiting)], withReaders: new Set(), up: new Map() }).open.get('pip')).toBe(1)
   })
 })
 

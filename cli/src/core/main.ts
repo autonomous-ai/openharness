@@ -21,6 +21,8 @@ import { createNativeControls } from './engines/nativeControls.js'
 import { createEngineLinks } from './engines/engineLinks.js'
 import { engineLaunches } from '../engines/launches.js'
 import { masterRunsEngineNativeControl } from '../harnessd/services.js'
+import { masterRunsEngineBackgroundJob } from '../harnessd/services.js'
+import { createBackgroundJobs } from './engines/backgroundJobs.js'
 import { submissionPolicy } from '../engines/submissionPolicies.js'
 import { createSubmissionTransport } from './engines/submissionTransport.js'
 import { masterRunsEngineSubmission } from '../harnessd/services.js'
@@ -739,9 +741,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const submissionHosted = masterRunsEngineSubmission(harnessd, process.ppid)
   const nativeControlHosted = masterRunsEngineNativeControl(harnessd, process.ppid)
   const isolatedNativeControl = (engine: string): boolean => nativeControlHosted && isolatedLive(engine)
+  const backgroundJobHosted = masterRunsEngineBackgroundJob(harnessd, process.ppid)
+  const isolatedBackgroundJob = (engine: string): boolean => backgroundJobHosted && isolatedLive(engine)
   const isolatedSubmission = (engine: string): boolean => submissionHosted && isolatedLive(engine)
   const isolatedRuntime = (engine: string): boolean => runtimeHosted && isolatedLive(engine)
-  const inline = knownServices.some((name) => !outOfProcess.has(name)) || !runtimeHosted || !screenHosted || !modelControlHosted || !questionControlHosted || !submissionHosted || !nativeControlHosted
+  const inline = knownServices.some((name) => !outOfProcess.has(name)) || !runtimeHosted || !screenHosted || !modelControlHosted || !questionControlHosted || !submissionHosted || !nativeControlHosted || !backgroundJobHosted
     ? await import('../services/inline.js') : null
   // The Swarm's side of the services that act on it, for those of them that run in this process while it is on
   // (superTabs/inServices.ts): off, or with them in their own processes, none of it is loaded here.
@@ -767,6 +771,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     servers: Object.fromEntries(Object.entries(engineLaunches).flatMap(([name, launch]) => 'sharedServer' in launch && launch.sharedServer ? [[name, launch.sharedServer]] : [])),
     handles: isolatedNativeControl, inline: engine => isolatedNativeControl(engine) ? undefined : inline?.nativeControlFor(engine),
     rows: processRows, home: session => sessionCodexHome(session), argv: argvTokens, readFile: path => readFile(path, 'utf8'),
+  })
+  // A `claude --bg` job holding a session is stopped before its resume, in Claude Code's worker (#4146).
+  const backgroundJobs = createBackgroundJobs({
+    call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
+    handles: isolatedBackgroundJob, inline: engine => isolatedBackgroundJob(engine) ? undefined : inline?.backgroundJobFor(engine),
   })
   // Which engine workers are linked now: a close's read refused by a restart waits here for the new link.
   const engineLinks = createEngineLinks()
@@ -1690,6 +1699,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       screenTransport.connected(service)
       submissionTransport.connected(service)
       nativeControls.connected(service)
+      backgroundJobs.connected(service)
       engineLinks.connected(service)
       modelControls.connected(service)
       questionControls.connected(service)
@@ -1716,6 +1726,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       screenTransport.disconnected(service)
       submissionTransport.disconnected(service)
       nativeControls.disconnected(service)
+      backgroundJobs.disconnected(service)
       engineLinks.disconnected(service)
       modelControls.disconnected(service)
       questionControls.disconnected(service)
@@ -2914,6 +2925,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     restartJobs,
     byAgent: (agentId) => registry.byAgent(agentId),
     prepareSessionResume,
+    stopBackgroundJob: backgroundJobs.stop,
     keepAbandonedConversation,
     stopNative: (session, current) => nativeControls.stop(session, current),
   })
@@ -2977,6 +2989,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     announceSession,
     relaunchOverrides,
     prepareSessionResume,
+    stopBackgroundJob: backgroundJobs.stop,
     refreshGridWebSearch,
     attachDsh,
     attachBrowser: agentBrowsers.attached,
