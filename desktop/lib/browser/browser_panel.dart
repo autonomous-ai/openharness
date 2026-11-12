@@ -381,6 +381,8 @@ class _BrowserPanelState extends State<BrowserPanel> {
       _ask(() => _app.agentBrowserStart(widget.machineId, widget.agentId));
 
   Future<void> _stop() async {
+    // An earlier Stop's wait must not end the Stopping this one still waits on the machine for.
+    _stopEnds?.cancel();
     _stopping = true;
     _sync();
     final taken = await _ask(
@@ -395,7 +397,6 @@ class _BrowserPanelState extends State<BrowserPanel> {
     }
     // Taken, the mark holds until the machine says off, for as long as an open waits for it. CLI 0.6.40 with its
     // browser in its own process never sent the agent's frame again, and the panel said Stopping for good.
-    _stopEnds?.cancel();
     _stopEnds = Timer(BrowserStream.openTimeout, () {
       if (!mounted || !_stopping) return;
       appLog.warn('browser', 'browser on ${widget.machineId} did not stop');
