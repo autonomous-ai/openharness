@@ -1342,6 +1342,33 @@ model SuperTabTaskTokens {
   @@index([createdAt], map: "task_tokens_expiry")
 }
 
+/// A task offered to one agent (superTabs/taskOffers.ts, docs/design/2026-11-11-swarm-allocator/offers.md): the referee of who may
+/// take it, since a GitHub label cannot be set "only if unset". The id is "<tabId>|<repository lowercased>|<issue number>": one
+/// document for a task, so one offer of it at a time; a later offer of the same task takes its place once it ended. Live while
+/// the server's clock is before expiresAt. Ids, times and one word, no text. Removed a day after expiresAt by a TTL index, and
+/// with its Swarm (purge.ts).
+model SuperTabTaskOffer {
+  id         String    @id @map("_id")
+  tabId      String
+  projectId  String
+  repository String
+  number     Int
+  agentId    String
+  offeredAt  DateTime
+  expiresAt  DateTime
+  /// Always written, null until its agent's daemon answers: a filter on null matches no document that lacks the field.
+  acceptedAt DateTime?
+  declinedAt DateTime?
+  declined   String?
+
+  /// An agent's live offers (taskOffers.ts agentOffers); and a Swarm's records, removed with it (purge.ts). A project's read asks
+  /// for its tasks by their ids (taskOffers.ts projectOffers).
+  @@index([tabId, agentId, expiresAt])
+  /// A record goes a day after expiresAt (taskOffers.ts ensureOfferExpiry). Declared so db push keeps the index; the schema step
+  /// makes it, with its expiry, before the push.
+  @@index([expiresAt], map: "task_offer_expiry")
+}
+
 model SuperTabDelivery {
   id                    String   @id @map("_id")
   tabId                 String

@@ -147,7 +147,9 @@ export class StoppedAgentStore {
     const snapshot = {
       ...session,
       active: false,
-      launch: { state: 'ready' },
+      // A failed launch started nothing, and its reason is what the person reads of it once it is stopped; any other
+      // launch is over, and a resume starts a new one. An unconfirmed resume is not a failure: its engine may have run.
+      launch: session.launch?.state === 'failed' && session.launch.error !== 'RESUME_UNCONFIRMED' ? session.launch : { state: 'ready' },
       defaultName: projectDisplayName(session),
       touchedAt: Date.now(),
     }

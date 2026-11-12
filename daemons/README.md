@@ -27,8 +27,8 @@ clients and the server build against.
 | `tools/bake.mjs` | Bakes every plate a client shows, daemons' and eggs', and the colour rules every client follows (`plateColor`, `eggColor`, `individualColor`). |
 | `plates.json` | Generated (by `generate.mjs`, through `bake.mjs`). Every species plate frame, as text, and every egg frame with its material rows. Baked again only when a model, the shader, the egg kinds or what `rules.plate` says about frames changes; a bake takes minutes. |
 | `desktop/lib/daemons/plates.g.dart`, `mobile/lib/daemons/plates.g.dart` | Generated. `plates.json` as a Dart raw string. |
-| `cli/src/pair/roster.g.ts` | Generated. Ids, line templates, lore, first words and family: the pair brain's voice and the pair harness's persona ([BRAIN.md](BRAIN.md)); and `awayMinutes`, how long an absence makes a finished turn an away turn. |
-| `cli/src/pair/plates/*.g.ts` | Generated. The shader, every plate species' model and the reference renderer, copied as they are (type checks off), with `PLATE_MODELS`, `PLATE_ROSTER` and `PLATE_SOURCE`: harnessd draws each individual with them (see "Individual art"). |
+| `companions/src/companion/roster.g.ts` | Generated. Ids, line templates, lore, first words and family: the pair brain's voice and the pair harness's persona ([BRAIN.md](BRAIN.md)); and `awayMinutes`, how long an absence makes a finished turn an away turn. |
+| `companions/src/companion/plates/*.g.ts` | Generated. The shader, every plate species' model and the reference renderer, copied as they are (type checks off), with `PLATE_MODELS`, `PLATE_ROSTER` and `PLATE_SOURCE`: harnessd draws each individual with them (see "Individual art"). |
 
 `hn` (the Rust terminal client) reads `roster.json` and `plates.json` with `include_str!` and tests against `frames.json`.
 
@@ -683,7 +683,7 @@ blink, unlike any other daemon's); a fidgety one steps its work frames at half `
 markings and the odd eye do not show there. Centre it on `baseWidth` of `individualDaemon`.
 
 **Individual art.** An individual's plates are drawn on the person's machine by harnessd, with the
-same shader and models (`generate.mjs` copies them into `cli/src/pair/plates`): `bakeModel(
+same shader and models (`generate.mjs` copies them into `companions/src/companion/plates`): `bakeModel(
 PLATE_MODELS[id].model, PLATE_ROSTER.rules, { traits: rollTraits(PLATE_ROSTER, id, seed), mats: true
 })` has the shape of a species plate, `[size][version][mood]`, each frame `{ rows, mats }`: `m` a
 marking, `a` the extra, `e` the odd eye, `.` the body. harnessd caches them per individual (species,

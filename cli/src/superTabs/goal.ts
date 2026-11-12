@@ -8,7 +8,7 @@
  *
  * So a project lists its milestones in `agents/GOAL.md`, a table of two columns: what must be true, and the command that
  * checks it, in backticks. The repository's own CI runs each command on its main branch as a check named `goal: <milestone>`
- * (the workflow `harness super-tab goal` writes does, goalStarter.ts); Harness runs nothing. Here the file is read from the
+ * (the workflow `harness super-tab goal write` writes does, goalStarter.ts); Harness runs nothing. Here the file is read from the
  * default branch, and the checks from the newest of that branch's last landings on which every milestone's check has ended: a
  * milestone passes when its check concluded success there, fails when it concluded any other way that is a verdict (a failure, or cancelled as one that ran past its limit is), and waits
  * otherwise. The
@@ -17,7 +17,8 @@
  * line: a train that lands as a merge commit brings its members' commits with it, which were never pushed to the branch and
  * carry no check of it (its second review). A project with no file, or no row, has no goal.
  *
- * Only counts leave here. A milestone's words are the repository's text, and none of them is typed to an agent.
+ * Only counts leave here. A milestone's words are the repository's text, and none of them is typed to an agent by Harness: an
+ * agent reads its own checkout's (`harness super-tab goal`, goalStarter.ts showGoal), as reading the file would give it.
  */
 import type { GitHubReads } from './githubRest.js'
 import { PAGE } from './githubRest.js'

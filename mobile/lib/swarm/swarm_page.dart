@@ -27,6 +27,7 @@ import 'swarm_home_view_sheet.dart';
 import 'swarm_session.dart';
 import 'swarm_start.dart';
 import 'swarm_style.dart';
+import 'swarm_team.dart';
 import 'swarm_unread.dart';
 import 'swarm_you_page.dart' show SwarmYouButton;
 
@@ -120,6 +121,16 @@ class _SwarmPageState extends State<SwarmPage> {
   /// The Swarms, by id, whose projects quiet for a day are listed under
   /// Other projects.
   final _quietOpen = <String>{};
+
+  /// The Swarms, by id, whose Your Team shows every row, past "N more".
+  final _teamOpen = <String>{};
+
+  /// An agent's own chat with the person, from its row in Your Team.
+  void _openChat(BuildContext context, String swarmId, String chatId) =>
+      unawaited(
+        Navigator.of(context)
+            .push(swarmChatRoute(swarmId: swarmId, conversationId: chatId)),
+      );
 
   /// Refresh, from Sort and filter, reads the Swarms, as a pull on Home does;
   /// with no computer answering, after looking for the computers, whatever
@@ -452,6 +463,9 @@ class _SwarmPageState extends State<SwarmPage> {
     final home = session.home;
     final filter = home.filter;
     final sections = <(SwarmListing, SwarmHomeLists)>[];
+    // Each Swarm's Your Team under Home's filter, with the read it is from.
+    final teams = <String, (SwarmReader, List<SwarmTeamMember>)>{};
+    var anyTeam = false;
     final reading = <String>{};
     final failed = <String, String>{};
     final asking = <String>{};
@@ -473,6 +487,20 @@ class _SwarmPageState extends State<SwarmPage> {
               ),
           ];
           any = any || projects.isNotEmpty;
+          final team = swarmTeam(reader);
+          anyTeam = anyTeam || team.isNotEmpty;
+          teams[swarm.id] = (
+            reader,
+            switch (filter) {
+              SwarmHomeFilter.all => team,
+              SwarmHomeFilter.unread => [
+                for (final member in team)
+                  if (member.unread) member,
+              ],
+              // Tags are a project's: an agent's chat has none to list.
+              SwarmHomeFilter.mentions => const [],
+            },
+          );
           sections.add((
             swarm,
             swarmHomeFiltered(
@@ -497,6 +525,7 @@ class _SwarmPageState extends State<SwarmPage> {
         lists.pinned.isNotEmpty ||
         lists.recent.isNotEmpty ||
         lists.quiet.isNotEmpty;
+    bool teamAny(String swarmId) => teams[swarmId]?.$2.isNotEmpty ?? false;
     // Mentions come from their own read: until it answers, none listed says
     // nothing. A failed one is not none, and says so even over the mentions
     // another Swarm has listed.
@@ -509,10 +538,12 @@ class _SwarmPageState extends State<SwarmPage> {
     // so, and offers them all.
     final nothingListed =
         filter != SwarmHomeFilter.all &&
-        any &&
+        (any || anyTeam) &&
         reading.isEmpty &&
         !mentionsComing &&
-        !sections.any((section) => listsAny(section.$2));
+        !sections.any(
+          (section) => listsAny(section.$2) || teamAny(section.$1.id),
+        );
     Widget row(SwarmHomeProject project) => SwarmHomeProjectRow(
       key: ValueKey('swarm-project-${project.swarmId}-${project.project.id}'),
       project: project,
@@ -520,7 +551,8 @@ class _SwarmPageState extends State<SwarmPage> {
       onTap: () => _openProject(context, project.swarmId, project.project.id),
       onLongPress: () => unawaited(_pin(context, session, project)),
     );
-    final empty = !any && reading.isEmpty && failed.isEmpty;
+    // Your Team listed, Home is not empty: its projects come later.
+    final empty = !any && !anyTeam && reading.isEmpty && failed.isEmpty;
     // Filtered with some listed: what is left out is said, never silent.
     final filterOn =
         filter != SwarmHomeFilter.all && !nothingListed && !mentionsFailed
@@ -559,7 +591,7 @@ class _SwarmPageState extends State<SwarmPage> {
     ];
     final listedBy = {for (final (swarm, lists) in sections) swarm.id: lists};
     bool shows(SwarmListing swarm) => switch (listedBy[swarm.id]) {
-      final lists? => listsAny(lists),
+      final lists? => listsAny(lists) || teamAny(swarm.id),
       null => false,
     };
     bool drawn(SwarmListing swarm) =>
@@ -580,33 +612,85 @@ class _SwarmPageState extends State<SwarmPage> {
         const SizedBox(height: AppSpace.s),
       ...body,
     ];
-    List<Widget> listed(SwarmListing swarm, SwarmHomeLists lists) {
-      final open = _quietOpen.contains(swarm.id);
-      return section(swarm, [
+    // Your Team over the projects, each under its heading, as Desktop's left
+    // pane has them (Swarm v4): the agents the person brought, each opening
+    // its own chat with them. With no agents, the projects have no heading.
+    List<Widget> team(SwarmListing swarm, {required bool projects}) {
+      final (reader, team) = teams[swarm.id]!;
+      final snapshot = reader.snapshot!;
+      final open = _teamOpen.contains(swarm.id);
+      final rows = swarmTeamRows(team, open: open);
+      String key(String name) => several ? '$name-${swarm.id}' : name;
+      return [
+        SwarmCaption(
+          'Your Team',
+          key: ValueKey(key('swarm-team')),
+          // Under its Swarm's name, or first on the screen: less room above.
+          first: several || (first && notices.isEmpty && swarm == firstDrawn),
+        ),
         SwarmGroup(
           children: [
-            for (final p in lists.pinned) row(p),
-            for (final p in lists.recent) row(p),
-            if (lists.quiet.isNotEmpty) ...[
-              SwarmOtherProjectsRow(
-                key: ValueKey(
-                  several
-                      ? 'swarm-other-projects-${swarm.id}'
-                      : 'swarm-other-projects',
+            for (final i in rows.shown)
+              if (team[i] case (:final agent, :final chat, :final unread))
+                SwarmTeamRow(
+                  key: ValueKey('swarm-agent-${swarm.id}-${agent.id}'),
+                  agent: agent,
+                  name: snapshot.agentName(agent.id, fallback: agent.name),
+                  pm: swarmAgentIsPm(snapshot, agent),
+                  unread: unread,
+                  onTap: chat == null
+                      ? null
+                      : () => _openChat(context, swarm.id, chat.id),
                 ),
-                count: lists.quiet.length,
+            if (team.length > swarmTeamShown + 1)
+              SwarmTeamFoldRow(
+                key: ValueKey(key('swarm-team-more')),
+                hidden: rows.hidden,
                 open: open,
+                unread: rows.hiddenUnread,
                 onTap: () => setState(
                   () => open
-                      ? _quietOpen.remove(swarm.id)
-                      : _quietOpen.add(swarm.id),
+                      ? _teamOpen.remove(swarm.id)
+                      : _teamOpen.add(swarm.id),
                 ),
               ),
-              if (open)
-                for (final p in lists.quiet) row(p),
-            ],
           ],
         ),
+        if (projects)
+          SwarmCaption('Projects', key: ValueKey(key('swarm-projects'))),
+      ];
+    }
+
+    List<Widget> listed(SwarmListing swarm, SwarmHomeLists lists) {
+      final open = _quietOpen.contains(swarm.id);
+      final projects = listsAny(lists);
+      return section(swarm, [
+        if (teamAny(swarm.id)) ...team(swarm, projects: projects),
+        if (projects)
+          SwarmGroup(
+            children: [
+              for (final p in lists.pinned) row(p),
+              for (final p in lists.recent) row(p),
+              if (lists.quiet.isNotEmpty) ...[
+                SwarmOtherProjectsRow(
+                  key: ValueKey(
+                    several
+                        ? 'swarm-other-projects-${swarm.id}'
+                        : 'swarm-other-projects',
+                  ),
+                  count: lists.quiet.length,
+                  open: open,
+                  onTap: () => setState(
+                    () => open
+                        ? _quietOpen.remove(swarm.id)
+                        : _quietOpen.add(swarm.id),
+                  ),
+                ),
+                if (open)
+                  for (final p in lists.quiet) row(p),
+              ],
+            ],
+          ),
       ]);
     }
 

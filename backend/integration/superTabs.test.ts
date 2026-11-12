@@ -1399,7 +1399,8 @@ describe('Super Tabs on a real Mongo replica set', () => {
     await run(tab, { type: 'tab.project', machineId: 'test-host', project: { cwd: '/work/app', repositoryUrl: null } })
     const url = 'https://github.com/example/app'
     await run(tab, { type: 'project.repository', projectId: 'lead', repositoryUrl: url })
-    const repository = { machineId: 'test-host', cwd: '/work/app', repositoryUrl: url }
+    // With when it got its address: the project that got a repository first coordinates it (githubComments.ts repositoryProject).
+    const repository = { machineId: 'test-host', cwd: '/work/app', repositoryUrl: url, addressedAt: expect.any(Number) }
     expect((await store.read(owner, tab)).state.projects!.map(p => p.repository)).toEqual([repository])
     const invitation = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
     await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)

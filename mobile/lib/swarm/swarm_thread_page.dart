@@ -810,6 +810,7 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
     final query = t.mentionQuery;
     final taggable =
         snapshot != null &&
+        t.chat.offersTagButton &&
         (t.mentionablePeople.isNotEmpty || t.mentionable.isNotEmpty);
     return Padding(
       key: const ValueKey('swarm-thread-box'),

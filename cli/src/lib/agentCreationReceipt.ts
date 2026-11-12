@@ -344,6 +344,36 @@ export class AgentCreationReceipts {
     }
   }
 
+  /** A deleted harness gives up the request (task text, folder) of every intent that made it. The receipt stays, its
+   * checksum over the scrubbed form, so a retried create still answers its outcome and never launches again. */
+  async scrubCreated(agentId: string): Promise<number> {
+    try { secureStateDirectory(this.directory, false) }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0
+      throw storageFailure(this.directory, error)
+    }
+    let scrubbed = 0
+    for await (const entry of await opendir(this.directory)) {
+      if (!entry.isFile() || !entry.name.endsWith('.json')) continue
+      const id = entry.name.slice(0, -5)
+      if (!validCreationId(id)) continue
+      let receipt: IntentReceipt
+      try {
+        const read = this.read(id)
+        if (read?.version !== 2 || 'cancelled' in read || read.request.scrubbed === true) continue
+        const status = this.intentStatus(id, read, false)
+        if (status.state !== 'created' || status.agentId !== agentId) continue
+        receipt = read
+      } catch { continue /* Unreadable evidence is skipped, as a scan for pending intents skips it. */ }
+      const request = { scrubbed: true }
+      const { fingerprint, held } = receipt
+      try { this.write(id, { version: 2, fingerprint, request, held, checksum: creationFingerprint({ fingerprint, request, held }) }, false) }
+      catch (error) { throw storageFailure(this.directory, error) }
+      scrubbed++
+    }
+    return scrubbed
+  }
+
   private intentFile(id: string, part: 'claim' | 'result'): string { return `${this.file(id)}.${part}` }
 
   private readIntentPart<T>(file: string): T | null {
@@ -529,7 +559,7 @@ export class AgentCreationReceipts {
     }
   }
 
-  private write(id: string, receipt: Receipt, exclusive: boolean): void {
+  private write(id: string, receipt: Receipt | IntentReceipt, exclusive: boolean): void {
     if (exclusive) this.ensureDirectory()
     else secureStateDirectory(this.directory, false)
     const file = this.file(id)

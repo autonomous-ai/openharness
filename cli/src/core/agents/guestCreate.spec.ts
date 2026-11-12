@@ -70,6 +70,9 @@ describe('a guest\'s New Harness', () => {
     for (const [key, value] of [['dsh', 'acme/blender'], ['resumeSessionId', 'abc-123'], ['agent', 'reviewer']] as const) {
       expect(await create({ engine: 'claude', [key]: value }, 'kim@acme.io'), key).toEqual({ ok: false, error: 'GUEST_UNSUPPORTED', detail: expect.any(String) })
     }
+    // An OpenClaw `--local` folder is the owner's to give: dropped, the run would go on the shared Gateway unsaid.
+    expect(await create({ engine: 'openclaw', openclawLocal: '/run/skill-1' }, 'kim@acme.io'))
+      .toEqual({ ok: false, error: 'GUEST_UNSUPPORTED', detail: 'On a computer shared with you, --local is not available.' })
     expect(deps.launch).not.toHaveBeenCalled()
     // Empty is absent.
     said()

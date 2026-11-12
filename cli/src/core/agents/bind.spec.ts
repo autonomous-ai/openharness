@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { transcriptOf, processSessionOf } from '../../engines/identities.js'
 import { loadEngine } from '../../engines/inProcess.js'
+import { OPENCLAW_STATES } from '../../engines/openclaw/contract.js'
 import { OpenclawLive } from '../../engines/openclaw/live.js'
 import { continuationOf } from '../../engines/sessionFiles.js'
 import { env } from '../../config/env.js'
@@ -1479,6 +1480,94 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       await stopped.binding.bindObservedAgent(tui())
       expect(stopped.deps.registry.setOpenclawStateDir).not.toHaveBeenCalled()
       expect(stopped.deps.forgetSession).not.toHaveBeenCalled()
+    })
+  })
+
+  // `openclaw tui --local`: its runtime in the TUI, on the folder Harness was given, with no Gateway and no URL.
+  describe('a local run', () => {
+    const FOLDER = '/run/skill-1'
+    const local = (status: string) => screen('screen-plain')
+      .replace('openclaw tui - ws://127.0.0.1:18789 - ', 'openclaw tui - local embedded - ').replace(' connected | idle', ` ${status}`)
+    /** A local row bound to `agent:main:plain`, its pane showing `shown()`. */
+    const running = (shown: () => string, row: Partial<RegisteredSession> = {}) => {
+      const run = setup({ capturePane: vi.fn(async () => shown()), openclawPaneRead: vi.fn(() => true), openclawStateDir: vi.fn(async () => '/h/.openclaw') })
+      const entry = pane({ sessionId: 'agent:main:plain', openclawLocal: FOLDER, openclawStateDir: FOLDER, active: true, ...row } as Partial<RegisteredSession>)
+      run.byAgent.set('a1', entry)
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(entry)
+      return run
+    }
+    const logged = () => vi.mocked(console.log).mock.calls.flat().map(String)
+
+    it('a local run\'s first task is typed once its pane reads local ready', async () => {
+      const run = running(() => local('local ready | idle'), { firstTask: 'Fix the parser' })
+      vi.mocked(run.deps.registry.takeFirstTask).mockReturnValue('Fix the parser')
+      await run.binding.bindObservedAgent(tui())
+      await vi.waitFor(() => expect(run.deps.submitAgent).toHaveBeenCalled())
+      expect(vi.mocked(run.deps.submitAgent).mock.calls).toEqual([['a1', 'Fix the parser']])
+    })
+
+    it('a local run that stopped says so with its reason, keeps it under the later footer, and logs no reason', async () => {
+      let shown = local('local runtime stopped: boom | idle')
+      const run = running(() => shown)
+      await run.binding.bindObservedAgent(tui())
+      expect(run.deps.registry.byAgent('a1')!.identityHold).toBe("OpenClaw's local run stopped: boom")
+      expect(run.deps.announceSession).toHaveBeenCalledOnce()
+      shown = local('local stopped | idle')
+      await run.binding.bindObservedAgent(tui())
+      expect(run.deps.registry.byAgent('a1')!.identityHold).toBe("OpenClaw's local run stopped: boom")
+      expect(run.deps.announceSession).toHaveBeenCalledOnce()
+      expect(logged()).toEqual(["[discovery] a1 openclaw · OpenClaw's local run stopped"])
+      // Held, not closed: the caller or the person closes it.
+      expect(run.deps.registry.byAgent('a1')).toMatchObject({ active: true })
+      expect(run.deps.forgetSession).not.toHaveBeenCalled()
+    })
+
+    it('a stopped local run first seen under its later footer says it stopped, with no reason', async () => {
+      const run = running(() => local('local stopped | idle'))
+      await run.binding.bindObservedAgent(tui())
+      expect(run.deps.registry.byAgent('a1')!.identityHold).toBe("OpenClaw's local run stopped.")
+      // A Gateway hold the pane said before is the pass's own: the stop replaces it.
+      const held = running(() => local('local stopped | idle'), { identityHold: OPENCLAW_STATES.noGateway })
+      await held.binding.bindObservedAgent(tui())
+      expect(held.deps.registry.byAgent('a1')!.identityHold).toBe("OpenClaw's local run stopped.")
+    })
+
+    it('the hold goes when the pane reads local ready again', async () => {
+      let shown = local('local runtime stopped | idle')
+      const run = running(() => shown)
+      await run.binding.bindObservedAgent(tui())
+      expect(run.deps.registry.byAgent('a1')!.identityHold).toBe("OpenClaw's local run stopped.")
+      shown = local('local ready | idle')
+      await run.binding.bindObservedAgent(tui())
+      expect(run.deps.registry.byAgent('a1')).not.toHaveProperty('identityHold')
+      expect(run.deps.announceSession).toHaveBeenCalledTimes(2)
+      expect(console.log).toHaveBeenCalledWith('[discovery] a1 openclaw · working again')
+    })
+
+    it('the Gateway states never hold a local row', async () => {
+      for (const name of ['screen-no-gateway', 'screen-no-token', 'screen-remote']) {
+        const run = running(() => screen(name))
+        await run.binding.bindObservedAgent(tui())
+        expect(run.deps.registry.byAgent('a1'), name).not.toHaveProperty('identityHold')
+        expect(run.deps.announceSession, name).not.toHaveBeenCalled()
+      }
+    })
+
+    it('a local row\'s folder is never read off its TUI nor replaced', async () => {
+      let shown = local('local ready | idle')
+      const run = running(() => shown, { sessionId: '' })
+      const bound = pane({ sessionId: 'agent:main:plain', openclawLocal: FOLDER, openclawStateDir: FOLDER } as Partial<RegisteredSession>)
+      vi.mocked(run.deps.registry.register).mockReturnValue({ entry: bound, ...meta({ isNew: true }) } as never)
+      await run.binding.bindObservedAgent(tui())
+      expect(vi.mocked(run.deps.registry.register).mock.calls[0][0]).toMatchObject({ sessionId: 'agent:main:plain', source: 'openclaw-footer' })
+      // A pass under a new TUI process, the row bound.
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(bound)
+      shown = local('local ready | idle')
+      await run.binding.bindObservedAgent(tui({ processIdentity: { pid: 7715, startMarker: '2026-11-10T09:00:00Z', executable: 'openclaw' } }))
+      expect(run.deps.openclawStateDir).not.toHaveBeenCalled()
+      expect(run.deps.registry.setOpenclawStateDir).not.toHaveBeenCalled()
+      expect(run.deps.forgetSession).not.toHaveBeenCalled()
+      expect(bound.openclawStateDir).toBe(FOLDER)
     })
   })
 })

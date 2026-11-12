@@ -51,6 +51,7 @@ import 'swarm_message_actions.dart';
 import 'swarm_read_marks.dart';
 import 'swarm_session.dart';
 import 'swarm_style.dart';
+import 'swarm_team.dart' show swarmAgentWhere;
 import 'swarm_thread.dart';
 import 'swarm_thread_line.dart';
 import 'swarm_thread_page.dart';
@@ -1290,6 +1291,37 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
 
   static const _notOpen = 'This chat is not open to you.';
 
+  /// A header's line under its title, on one line. With an [end], "start ·
+  /// end": a long start is cut first and the end stays whole, so an agent's
+  /// engine still shows after a long machine name. An end longer than three
+  /// quarters of the line is cut too, leaving the start a quarter, and the
+  /// line never overflows.
+  Widget _subtitle(String start, String? end) {
+    // As wide as what it draws: a cut start ends at its "…", with no gap
+    // before the end.
+    Text line(String text, {Key? key}) => Text(
+      text,
+      key: key,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      textWidthBasis: TextWidthBasis.longestLine,
+      style: swarmChatText(13, color: AppPalette.textSecondary),
+    );
+    if (end == null) return line(start, key: const ValueKey('swarm-subtitle'));
+    return LayoutBuilder(
+      key: const ValueKey('swarm-subtitle'),
+      builder: (context, box) => Row(
+        children: [
+          Flexible(child: line(start)),
+          ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: box.maxWidth * 3 / 4),
+            child: line(' · $end'),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// What the chat says in place of its messages.
   Widget _said(String text, {Key? key}) => Padding(
     padding: const EdgeInsets.all(Tty.origin),
@@ -1301,13 +1333,15 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   );
 
   /// The back button, then the chat's name and [subtitle] under it — its
-  /// project, or its Swarm — or, while the chat is not known yet ([title]
-  /// null), placeholders of their size — and [action] at its end.
+  /// project, or its Swarm, or where its agent runs — or, while the chat is
+  /// not known yet ([title] null), placeholders of their size — and [action]
+  /// at its end. [subtitleEnd] follows [subtitle] ([_subtitle]).
   Widget _header(
     BuildContext context,
     Tty tty, {
     required String? title,
     String? subtitle,
+    String? subtitleEnd,
     Widget? action,
   }) => Padding(
     key: const ValueKey('swarm-chat-header'),
@@ -1344,17 +1378,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                         weight: FontWeight.w600,
                       ),
                     ),
-                    if (subtitle != null)
-                      Text(
-                        subtitle,
-                        key: const ValueKey('swarm-subtitle'),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: swarmChatText(
-                          13,
-                          color: AppPalette.textSecondary,
-                        ),
-                      ),
+                    if (subtitle != null) _subtitle(subtitle, subtitleEnd),
                   ],
                 ),
         ),
@@ -1397,7 +1421,14 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
             title: view.known || c.state == SwarmChatState.lost
                 ? view.title
                 : null,
-            subtitle: view.project ?? view.swarm,
+            subtitle: switch (view.where) {
+              null => view.project ?? view.swarm,
+              (:final machine, :final engine) => machine ?? engine,
+            },
+            subtitleEnd: switch (view.where) {
+              (machine: _?, :final engine) => engine,
+              _ => null,
+            },
             // The person's own Buddy chat: its Notifications, Rename Buddy,
             // Remove Buddy. Any other chat: its Notifications (the desktop's
             // chat menu).
@@ -2322,6 +2353,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     final taggable =
         !buddy &&
         snapshot != null &&
+        c.offersTagButton &&
         (c.mentionablePeople.isNotEmpty || c.mentionable.isNotEmpty);
     return Padding(
       padding: SwarmComposer.padding,
@@ -2557,6 +2589,7 @@ class _ChatView {
     required this.title,
     required this.project,
     required this.swarm,
+    required this.where,
     required this.canPost,
     required this.archived,
     required this.old,
@@ -2600,6 +2633,12 @@ class _ChatView {
         .where((p) => p.id == group?.projectId)
         .firstOrNull
         ?.name;
+    // An agent's own chat with the person: the agent by its name, and where
+    // it runs under it, as Desktop's agent bar says them (Swarm v4).
+    final chatAgent =
+        group != null && group.isAgentChat && group.agentIds.isNotEmpty
+        ? snapshot?.agent(group.agentIds.first)
+        : null;
     // The person's one Buddy chat for the Swarm is in no project: its
     // Swarm's name stands under it instead, the Swarm the Buddy tab switches
     // between (Tony, 11-03).
@@ -2635,7 +2674,11 @@ class _ChatView {
           ? 'Chat'
           : old
           ? 'Old chat'
-          : buddy ?? group.label,
+          : buddy ??
+                (chatAgent == null
+                    ? group.label
+                    : snapshot!.agentName(chatAgent.id, fallback: group.label)),
+      where: chatAgent == null ? null : swarmAgentWhere(snapshot!, chatAgent),
       project: buddy != null && project != null ? '#$project' : project,
       swarm: swarm,
       canPost: c.canPost,
@@ -2677,6 +2720,10 @@ class _ChatView {
   /// The Swarm's name, under the person's one Buddy chat for it; null for any
   /// other chat.
   final String? swarm;
+
+  /// Where an agent's own chat's agent runs, its machine and its engine
+  /// ([swarmAgentWhere]); null for any other chat.
+  final ({String? machine, String? engine})? where;
   final bool canPost, archived;
 
   /// An older Buddy chat, kept to read ([swarmIsOldBuddyChat]).
@@ -2734,6 +2781,7 @@ class _ChatView {
       other.title == title &&
       other.project == project &&
       other.swarm == swarm &&
+      other.where == where &&
       other.canPost == canPost &&
       other.archived == archived &&
       other.old == old &&
@@ -2752,6 +2800,7 @@ class _ChatView {
     title,
     project,
     swarm,
+    where,
     canPost,
     archived,
     old,

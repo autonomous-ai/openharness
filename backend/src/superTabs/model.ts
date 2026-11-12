@@ -426,7 +426,7 @@ export interface SuperTabState {
   version: 1
   id: string
   name: string
-  project?: { machineId: string; cwd: string; repositoryUrl: string | null }
+  project?: import('./projects.js').ProjectRepository
   projects?: SwarmProject[]
   /** The removed Leads conversation of an older Swarm, still stored (leadsRemoved); no read sends it. */
   leadsConversationId?: string

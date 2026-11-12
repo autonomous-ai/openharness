@@ -8,6 +8,7 @@ import { ensurePartExpiry } from '../../superTabs/sweeps.js'
 import { ensureOperationExpiry } from '../../superTabs/operations.js'
 import { ensureCommentExpiry } from '../../superTabs/githubComments.js'
 import { ensureTaskTokensExpiry } from '../../superTabs/taskTokens.js'
+import { ensureOfferExpiry } from '../../superTabs/taskOffers.js'
 import { ensurePushDeviceExpiry } from '../../push/devices.js'
 import { ensureSchema, type SchemaTarget } from './migrate.js'
 
@@ -23,6 +24,7 @@ export async function releaseSchema(db: PrismaClient = prisma, target: SchemaTar
   await ensureOperationExpiry(db)
   await ensureCommentExpiry(db)
   await ensureTaskTokensExpiry(db)
+  await ensureOfferExpiry(db)
   await ensurePushDeviceExpiry(db)
   await ensureSchema(target)
   await ensureProductUsageExpiry(db)

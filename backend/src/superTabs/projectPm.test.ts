@@ -98,6 +98,20 @@ describe('project.github', () => {
     expect(() => set('someone/else', peer)).toThrow(expect.objectContaining({ code: 'PROJECT_OWNER_REQUIRED' }))
   })
 
+  // Reviews of #4152: of a Swarm's projects on one repository, the one that got it first offers its tasks (githubComments.ts
+  // repositoryProject), named or cloned.
+  it('keeps when the project named its repository, and the same name again keeps its first time', () => {
+    const f = fixture()
+    const set = (repository: string, now: number) => f.run({ type: 'project.github', projectId: f.project.projectId, repository }, owner, { now })
+    const named = () => f.state.projects!.find(p => p.id === f.project.projectId)!
+    set('autonomous-ai/openharness', 2_000)
+    expect(named().githubRepositoryAt).toBe(2_000)
+    set('Autonomous-AI/OpenHarness', 3_000)
+    expect(named()).toMatchObject({ githubRepository: 'Autonomous-AI/OpenHarness', githubRepositoryAt: 2_000 })
+    set('autonomous-ai/harness.docs', 4_000)
+    expect(named().githubRepositoryAt).toBe(4_000)
+  })
+
   it('takes only a GitHub owner/name', () => {
     const valid = (repository: string) => commandSchema.safeParse({ type: 'project.github', projectId: 'p', repository }).success
     expect(['a/b', 'Owner-1/repo_name.x', `${'o'.repeat(39)}/${'r'.repeat(100)}`].map(valid)).toEqual([true, true, true])

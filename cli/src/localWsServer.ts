@@ -26,6 +26,8 @@ const DAEMON_PLATE = 'daemon_plate'
 
 export const LOCAL_WS_PATH = '/api/local-ws'
 export const LOCAL_WS_PROTOCOL_VERSION = 1
+/** What a tool (`harness new`) may ask of this daemon that an older one would silently ignore. */
+const LOCAL_TOOL_FEATURES = ['openclaw-local'] as const
 
 const LOCAL_IDLE_DEADLINE_MS = 40_000
 // The `ws` library enforces this on EVERY message on this socket, JSON or binary — so it has to
@@ -486,6 +488,8 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
             localProtocolVersion: LOCAL_WS_PROTOCOL_VERSION,
             terminalProtocolVersion: TERMINAL_BINARY_VERSION,
             e2ee: false,
+            // A tool's frame only: the window's handshake parser is shared with the relay path (below).
+            ...(tool ? { features: [...LOCAL_TOOL_FEATURES] } : {}),
           },
         })
         // Right after, not inside `connected`: the window's handshake parser is shared with the

@@ -32,6 +32,8 @@ const FILES = ['src/superTabs/shortCommand.ts', ...IN_CORE,
   'src/superTabs/engineExit.ts',
   // The unit suite's workers, sized to its Swarm agent's share of the machine's cores (anh Dee, 11-11).
   'src/testing/suiteWorkers.ts',
+  // A file's path as a line says it, in the numbers, the scoreboard and the merger's notes (the allocator's design, package 8).
+  'src/superTabs/plainPath.ts',
 ]
 export default defineConfig({
   test: {

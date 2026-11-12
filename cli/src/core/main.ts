@@ -196,7 +196,7 @@ import { createEngineHooks, installEngineHooks, installOpencodePluginBeforeSpawn
 import { createCursorDiscovery } from './engines/cursorDiscovery.js'
 import { createCursorTaskHooks, loadPendingCursorTasks } from './engines/cursorTasks.js'
 import { databaseHistory, hermesDb } from './transcripts/databaseHistory.js'
-import { CLOUD_FALLBACKS, CLOUD_REQUESTS, type CloudCore, CONNECTORS_FALLBACKS, CONNECTORS_OFF, CONNECTORS_REQUESTS, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARED_MACHINES_REQUESTS, MEMORY_REQUESTS, ROUTER_REQUESTS, createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, MACHINE_ADDON_REQUESTS, HANDOFF_REQUESTS, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, OS_DEVICE_REQUESTS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_FALLBACKS, STORE_OFF, STORE_REQUESTS, MESSAGES_FALLBACKS, MESSAGES_REQUESTS, TURN_DELIVERERS, TURN_END_HEARERS, USAGE_FALLBACKS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WIFI_FALLBACKS, WINDOW_NAMES_REQUESTS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type RouteAnswer, type WindowFocus } from './api.js'
+import { CLOUD_FALLBACKS, CLOUD_REQUESTS, type CloudCore, CONNECTORS_FALLBACKS, CONNECTORS_OFF, CONNECTORS_REQUESTS, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARED_MACHINES_REQUESTS, MEMORY_REQUESTS, ROUTER_REQUESTS, createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, MACHINE_ADDON_REQUESTS, HANDOFF_REQUESTS, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, OS_DEVICE_REQUESTS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_FALLBACKS, STORE_OFF, STORE_REQUESTS, MESSAGES_FALLBACKS, MESSAGES_REQUESTS, GOALS_REQUESTS, TURN_DELIVERERS, TURN_END_HEARERS, USAGE_FALLBACKS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WIFI_FALLBACKS, WINDOW_NAMES_REQUESTS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type RouteAnswer, type WindowFocus } from './api.js'
 import { createServiceHost, testFaults } from './serviceHost.js'
 import { SUPER_TAB_REQUESTS, SUPER_TAB_FALLBACKS } from './api.js'
 import { startStalls } from './stall.js'
@@ -258,6 +258,7 @@ import { type ActivityFrame } from '../lib/turnActivity.js'
 import { cursorDataDir } from '../engines/cursor/contract.js'
 import { TranscriptPager } from '../lib/transcriptPages.js'
 import { AgentCreationReceipts } from '../lib/agentCreationReceipt.js'
+import { Ledger, ledgerPath } from '../agentClient/ledger.js'
 import { agentFrame, lastActivityAt, type AgentFrame } from '../lib/agentFrame.js'
 import { transcriptActivityAt } from '../lib/transcriptActivity.js'
 import { forgetAgentProject } from '../lib/agentProject.js'
@@ -1574,7 +1575,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The requests each service that can run in its own process answers, as core/api.ts declares them.
   const requestsOf: Record<string, readonly string[]> = {
     search: SEARCH_REQUESTS, store: STORE_REQUESTS, usage: USAGE_REQUESTS, monitor: MONITOR_REQUESTS, projects: PROJECTS_REQUESTS, models: MODELS_REQUESTS, handoff: HANDOFF_REQUESTS, connectors: CONNECTORS_REQUESTS, sharedMachines: SHARED_MACHINES_REQUESTS,
-    devices: DEVICES_REQUESTS, windowNames: WINDOW_NAMES_REQUESTS, shell: SHELL_REQUESTS, messages: MESSAGES_REQUESTS, osDevice: OS_DEVICE_REQUESTS, machineAddons: MACHINE_ADDON_REQUESTS,
+    devices: DEVICES_REQUESTS, windowNames: WINDOW_NAMES_REQUESTS, goals: GOALS_REQUESTS, shell: SHELL_REQUESTS, messages: MESSAGES_REQUESTS, osDevice: OS_DEVICE_REQUESTS, machineAddons: MACHINE_ADDON_REQUESTS,
     agentBrowser: AGENT_BROWSER_REQUESTS,
     ...Object.fromEntries(Object.entries(EXPERIMENTS).map(([name, experiment]) => [name, experiment.requests])),
   }
@@ -1827,6 +1828,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // in this process, or in the edge host.
   if (!outOfProcess.has('projects')) serviceHost.serve('projects', inline!.startProjects, coreApi, PROJECTS_REQUESTS)
   if (!outOfProcess.has('windowNames')) serviceHost.serve('windowNames', inline!.startWindowNames, coreApi, WINDOW_NAMES_REQUESTS)
+  // Hachi's goals (services/goals.ts): here, or in the edge host.
+  if (!outOfProcess.has('goals')) serviceHost.serve('goals', inline!.startGoals, coreApi, GOALS_REQUESTS)
   if (!outOfProcess.has('memory')) serviceHost.serve('memory', inline!.startMemory, coreApi, MEMORY_REQUESTS)
   if (!outOfProcess.has('router')) serviceHost.serve('router', inline!.startRouter, coreApi, ROUTER_REQUESTS)
   if (!swarm) serviceHost.leaveOff('superTabs', SUPER_TAB_REQUESTS)
@@ -2867,6 +2870,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     captureTerminal,
     retainExitedSession,
     terminals,
+    holdRoute: (key) => agentReconciler.holdRoute(key, null),
   })
 
   // Opening a conversation Harness did not start, and taking it over from a terminal (core/agents/adopt.ts).
@@ -2975,6 +2979,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     moveConversation: providerMoves.move,
   })
 
+  // The receipts of creates asked with a creationId: the launches write them, a purge scrubs a deleted harness's request.
+  const receipts = new AgentCreationReceipts(join(env.ADAPTER_DATA_DIR, 'agent-creations'))
   // Stopping, purging and resuming an agent (core/agents/lifecycle.ts).
   const lifecycle = createAgentLifecycle({
     adoptSwarmSkill,
@@ -3000,6 +3006,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     sessionCheckpoints,
     mirror,
     sessionSearch,
+    // A purge erases the harness's told lines and the requests that made it; either failing refuses the purge.
+    eraseRecords: async (s) => {
+      new Ledger(ledgerPath(env.ADAPTER_DATA_DIR)).forgetTold(s.agentId)
+      await receipts.scrubCreated(s.agentId)
+    },
     send: (frame) => backend.send(frame),
     pinnedControls,
     retainExitedSession,
@@ -3178,7 +3189,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const launches = createLaunchRequests({
     ...(swarmLaunch ? { swarmLaunch } : {}),
     claudeHomeListed: (home) => claudeHomeListed(home, machineIdNow()),
-    receipts: new AgentCreationReceipts(join(env.ADAPTER_DATA_DIR, 'agent-creations')),
+    receipts,
     createAgent: () => backend.onCreateAgent, forkAgent: () => backend.onForkAgent,
     prepareCreate: creator.prepare, prepareEngine: prepareNativeLaunch,
     resumeAgent: () => lifecycle.resumeAgent, restartAgent: () => restartAgent,
