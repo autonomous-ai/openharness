@@ -374,7 +374,8 @@ export class GitHubAssign {
    * Puts [mark], its Swarm's label, on the open tasks of [listed] its PM opened that carry no Swarm's yet, and gives the list
    * with them labelled: the PM opens its tasks with its person's GitHub login, which Harness runs with, and says nothing of its
    * Swarm (the label is Harness's to add, never the PM's). An issue any other login opened is the Swarm's once someone puts its
-   * label on. At most [STAMPS_PER_PASS] a pass; one GitHub refuses is said once, is no task this pass, and is tried again.
+   * label on. At most [STAMPS_PER_PASS] writes a pass, and one GitHub refuses is said once and written again next pass: each such
+   * task is read as labelled meanwhile.
    */
   private async stamp(repo: string, listed: Json[], mark: string): Promise<Json[]> {
     const me = (await this.login(repo)).toLowerCase()
@@ -386,13 +387,16 @@ export class GitHubAssign {
     for (const issue of listed) {
       const key = `${repo}#${issue.number}`
       if (issue.pull_request || labelled(issue) || String((issue.user as Json | undefined)?.login ?? '').toLowerCase() !== me) { out.push(issue); continue }
-      if (!this.stamped.has(key)) {
-        if (stamps >= STAMPS_PER_PASS) { out.push(issue); continue }
+      // Only the write waits for a later pass, or for GitHub to take it: the task is the Swarm's now. Left out of the list, one a
+      // builder holds dropped out of the plan, and its builder looked idle and was given another (Kiri's read of #4218).
+      if (!this.stamped.has(key) && stamps < STAMPS_PER_PASS) {
         stamps++
         const put = await this.deps.send('POST', `/repos/${repo}/issues/${issue.number}/labels`, { labels: [mark] })
-        if (put.status !== 200) { this.once(`[super-tab] Task assignment: SWARM_LABEL_REFUSED ${repo}#${issue.number}: GitHub answered ${put.status}`); out.push(issue); continue }
-        this.stamped.add(key)
-        this.log(`[super-tab] labelled ${repo}#${issue.number} ${mark}`)
+        if (put.status !== 200) this.once(`[super-tab] Task assignment: SWARM_LABEL_REFUSED ${repo}#${issue.number}: GitHub answered ${put.status}`)
+        else {
+          this.stamped.add(key)
+          this.log(`[super-tab] labelled ${repo}#${issue.number} ${mark}`)
+        }
       }
       out.push({ ...issue, labels: [...(Array.isArray(issue.labels) ? issue.labels : []), { name: mark }] })
     }

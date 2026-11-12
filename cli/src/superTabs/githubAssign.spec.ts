@@ -219,6 +219,23 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     expect(wrote(sent)).toEqual([[2, KEN], [30, '**Kai**: please read this pull request, '], [2, expect.stringMatching(/^builder:(kai|lennox)$/)], [2, expect.stringContaining('it can start now')]])
     expect(f.github.state.asked.filter(path => /\/issues\/8\/comments/.test(path))).toHaveLength(1)
   })
+  // Kiri's read of #4218: past the pass's limit a task was returned without the label, so it dropped out of the plan, and the
+  // builder that held it looked idle and was given another.
+  it('reads every task its PM opened as its Swarm\'s while their labels are written thirty a pass, so a builder that holds one is given no other', async () => {
+    const unlabelled = (number: number, labels: string[]): Json => ({ number, labels: labels.map(name => ({ name })), user: { login: LOGIN } })
+    const f = setup([...Array.from({ length: 30 }, (_, n) => unlabelled(n + 1, ['size:s'])), unlabelled(31, ['size:m', 'builder:pip', 'status:taken'])],
+      { crew: { builders: [crew().builders[0]!], machines: crew().machines } })
+    await f.assigner.tick()
+    expect(f.labelled()).toEqual(Array.from({ length: 30 }, (_, n) => [n + 1, MARK]))
+    await f.assigner.tick()
+    expect(f.labelled().slice(30)).toEqual([[31, MARK]])
+    // One GitHub refuses the label for is the Swarm's all the same, said once, and its label is written again next pass.
+    const g = setup([unlabelled(1, ['size:m', 'builder:pip', 'status:taken']), issue(2, ['size:s'])], { crew: { builders: [crew().builders[0]!], machines: crew().machines } })
+    g.github.state.labelAnswer = 403
+    await g.assigner.tick(); await g.assigner.tick()
+    expect(g.labelled()).toEqual([[1, MARK], [1, MARK]])
+    expect(g.log.mock.calls.filter(([line]) => String(line).includes('SWARM_LABEL_REFUSED acme/app#1: GitHub answered 403'))).toHaveLength(1)
+  })
   it('finds its Swarm\'s label by the id in its description, makes it once, and says one GitHub refuses', async () => {
     const made = (f: ReturnType<typeof setup>) => f.github.sent.filter(s => s.path === '/repos/acme/app/labels').map(s => s.body)
     // None yet: made with the Swarm's name, and its id in the description.
