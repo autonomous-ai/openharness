@@ -528,6 +528,27 @@ describe('Browsers', () => {
     expect(r.containers.start).toHaveBeenCalledTimes(3)
   })
 
+  // Review, 2026-11-12: an exit heard again while Podman was asked about it (the event, and the look at what runs after
+  // the stream reconnected) armed a second restart. The first one's timer was lost, so a stop did not clear it, and it
+  // started the browser after the stop.
+  it('one exit heard twice while it is looked at restarts the browser once, and a stop after it leaves it off', async () => {
+    const r = rig()
+    await r.browsers.start('a1')
+    const code = deferred<number | null>()
+    r.containers.exitCode.mockImplementationOnce(() => code.promise)
+    r.crash('a1', 0)
+    await settle()
+    r.browsers.exited('a1')
+    code.resolve(0)
+    await settle()
+    expect(r.logged.filter(line => line.includes('starting it again'))).toEqual(['agent browser a1: the browser exited (0); starting it again in 1 s'])
+    await r.browsers.stop('a1')
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(r.containers.start).toHaveBeenCalledOnce()
+    expect(r.running.has('a1')).toBe(false)
+    expect(shown(r, 'a1')).toBe('none')
+  })
+
   it('a stop while the start looks for the ready marker leaves the browser off, never ready', async () => {
     const r = rig()
     const ready = deferred<boolean>()
