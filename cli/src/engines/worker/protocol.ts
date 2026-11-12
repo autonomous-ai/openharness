@@ -28,6 +28,22 @@ export function readerEngine(name: string): name is ReaderEngine { return Object
 export function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
+/** A launch's environment as it crosses a worker link: names to strings, at most [maxBytes] in all. */
+export function boundedEnvironment(value: unknown, maxBytes: number): value is Record<string, string> {
+  if (!record(value)) return false
+  let bytes = 0
+  for (const [name, text] of Object.entries(value)) {
+    if (typeof text !== 'string') return false
+    bytes += Buffer.byteLength(name) + Buffer.byteLength(text)
+    if (bytes > maxBytes) return false
+  }
+  return true
+}
+
+/** A launch's environment as core holds it, with the names it unsets left out: what a worker link carries. */
+export const setEnvironment = (env: NodeJS.ProcessEnv): Record<string, string> =>
+  Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
+
 const optionalString = (value: unknown): boolean => value === undefined || typeof value === 'string'
 const optionalNumber = (value: unknown): boolean => value === undefined || (typeof value === 'number' && Number.isFinite(value))
 

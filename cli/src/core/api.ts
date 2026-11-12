@@ -1253,15 +1253,15 @@ export const MONITOR_OFF: MonitorPort = {
   storage: async () => new Map(),
 }
 
-/** The core's calls into workspaces: name made-up worktree branches after their sessions, on each
- *  terminal-title pass, and sweep the worktrees nothing uses, when the core says it is time. */
+/** The core's call into workspaces: name made-up worktree branches after their sessions, on each terminal-title pass. No
+ *  worktree is removed on a timer (#4166, #711): the daemon swept clean, week-idle ones twice a day, including those their
+ *  person chose to keep and the gitignored files in them. */
 export interface WorkspacesPort {
   nameBranches(): void
-  sweepUnused(): void
 }
 
-/** What the core gets when workspaces fails: branches keep their names and nothing is swept. */
-export const WORKSPACES_FALLBACKS: PortFallbacks<WorkspacesPort> = { nameBranches: undefined, sweepUnused: undefined }
+/** What the core gets when workspaces fails: branches keep their names. */
+export const WORKSPACES_FALLBACKS: PortFallbacks<WorkspacesPort> = { nameBranches: undefined }
 
 /** The core's calls into Agent Messages: whether one of its typed deliveries (a `team:` id) may still be written,
  *  asked in line as it is written (core/input.ts); and that the core's copy of the account's switch changed

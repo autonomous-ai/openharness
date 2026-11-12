@@ -238,9 +238,10 @@ people give their own folders.
 The rule to bring anh Dee again: only `node_modules`, `.dart_tool` and `.next`, only where a `.gitignore` rule names the
 folder itself, and the review's other findings closed first.
 
-**Today.** A sweep exists: `cli/src/lib/worktreeSweep.ts`, run by the workspaces service. It removes a worktree
-Harness made when no live or stopped harness works in it, nothing is uncommitted, it was untouched for a week, and no
-commit is only there. On anh Dee's computer 114 such worktrees of this repository still hold 109 GB.
+**Today.** Nothing removes a worktree on a timer: the workspaces service's sweep (`cli/src/lib/worktreeSweep.ts`, a
+worktree Harness made when no live or stopped harness works in it, nothing is uncommitted, it was untouched for a week,
+and no commit is only there) is gone since #4166, as it removed worktrees their person chose to keep. Cleaning up is
+the person's, from the app (#711: #4167, #4168). On anh Dee's computer 114 worktrees of this repository hold 109 GB.
 
 **First: find out why they stay.** For each kept worktree, which condition keeps it: a stopped harness, a week not
 yet gone, something uncommitted or untracked, a commit only there. Count them and their gigabytes. Reading only: run
