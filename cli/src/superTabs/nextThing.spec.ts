@@ -33,7 +33,7 @@ function setup(options: { items?: Json[]; working?: boolean | null; watched?: Wa
     owed: [] as Array<{ number: number; sha: string }>,
     // The team's builder labels, and who the backend recorded as each verdict comment's writer, by its id.
     team: new Set<string>(), recorded: {} as Record<number, string>, recordsDown: false,
-    // While set, every read waits on it: GitHub slow to answer.
+    // Set, the next read waits on it: GitHub slow to answer that one.
     hold: null as Promise<void> | null }
   const pullOf = (number: number): Json => ({ number, state: 'open', draft: false, body: '', user: { login: 'dee' },
     head: { sha: HEAD, ref: `pip/${number}` }, base: { ref: 'main' }, mergeable_state: 'clean', ...state.pulls[number] })
@@ -42,7 +42,9 @@ function setup(options: { items?: Json[]; working?: boolean | null; watched?: Wa
   const calls: string[] = []
   const get: GitHubGet = async path => {
     calls.push(path)
-    if (state.hold) await state.hold
+    const held = state.hold
+    state.hold = null
+    if (held) await held
     if (state.down) throw new SuperTabHostError('GITHUB_UNAVAILABLE', 'No answer.', 503)
     const ok = (body: unknown) => ({ status: 200, etag: null, body, resetAt: null })
     const url = new URL(`https://api.github.com${path}`)
@@ -169,12 +171,14 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
   // anh Dee, 2026-11-11: "how do we pause finn while we're fixing bugs rather than finn keep receiving tasks?" Paused, it is typed
   // nothing at its turn's end nor asked after the task it holds; resumed, its next turn's end types its next thing.
   it('types a paused agent nothing, at its turn\'s end or idle with its task, and its next thing once it is resumed', async () => {
-    // Watched idle with the task it holds, then paused: nothing asked of it, nothing given back.
+    // Watched idle with the task it holds, then paused: nothing asked of it, nothing given back, and GitHub not read for it.
     const f = setup({ items: [item(14, 'Mine', ['status:taken'])] })
     f.next.start()
     await f.end()
     f.state.watched = [{ ...PIP, paused: true }]
+    const reads = f.calls.length
     await vi.advanceTimersByTimeAsync(IDLE_BACK_MS)
+    expect(f.calls).toHaveLength(reads)
     // Its turn's end while paused types nothing either.
     f.state.items = [item(12, 'Fix the login bug')]
     await f.end()
@@ -650,7 +654,10 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     await vi.advanceTimersByTimeAsync(1)
     expect(f.say.mock.calls.map(([, , text]) => text)).toEqual([expect.stringMatching(/^I held acme\/app#14 \(Add the export\) with nothing done on it for an hour/)])
     expect(f.told()).toHaveLength(1)
-    // Given back: nothing of the watch is left to go on with, nor the row kept for it alone.
+    // Given back: nothing of the watch is left to go on with, nor the row kept for it alone, and a stop of its person's after
+    // starts no watch on a task gone back.
+    expect(JSON.parse(readFileSync(f.file, 'utf8'))).toEqual({})
+    await f.end({ aborted: true })
     expect(JSON.parse(readFileSync(f.file, 'utf8'))).toEqual({})
     again.stop()
   })
@@ -701,6 +708,53 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
       expect(f.told().filter(text => text.startsWith('You hold'))).toHaveLength(slow === 'read' ? 1 : 2)
       f.next.stop()
     }
+  })
+
+  // Review of #4129: a look slow to read GitHub, past a turn of its in which it opened the pull request for #14 and took #15, dropped
+  // the watch that turn's end's look kept on #15, which was then never asked about. And a stop of its person's then found no watch
+  // to start over, as its timer had fired, and #14 was never asked about again.
+  it('keeps the next watch a turn\'s end made while a slow look read, and starts one at a stop of its person\'s then', async () => {
+    for (const end of ['took the next', 'stopped'] as const) {
+      const f = setup({ items: [item(14, 'Add the export', ['status:taken'])] })
+      f.next.start()
+      await f.end()
+      let answer!: () => void
+      f.state.hold = new Promise<void>(resolve => { answer = resolve })
+      await vi.advanceTimersByTimeAsync(IDLE_ASK_MS)
+      if (end === 'took the next') {
+        f.state.items = [item(14, 'Add the export', ['status:taken']), { ...item(31, 'Add the export', [], true), body: 'Closes #14' },
+          item(15, 'Write the docs', ['status:taken'])]
+        await f.end()
+      } else await f.end({ aborted: true })
+      const next = JSON.parse(readFileSync(f.file, 'utf8')).pip.idle
+      expect(next).toEqual({ terminal: 'h-pip', task: end === 'stopped' ? 'acme/app#14' : 'acme/app#15', since: Date.now() - (end === 'stopped' ? NEXT_SETTLE_MS : 0) })
+      answer()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(JSON.parse(readFileSync(f.file, 'utf8')).pip.idle).toEqual(next)
+      await vi.advanceTimersByTimeAsync(IDLE_ASK_MS)
+      expect(f.told()).toEqual([expect.stringMatching(end === 'stopped' ? /^You hold acme\/app#14 / : /^You hold acme\/app#15 /)])
+      f.next.stop()
+    }
+  })
+
+  it('keeps the next watch a turn\'s end made while its task was given back', async () => {
+    const f = setup({ items: [item(14, 'Add the export', ['status:taken'])] })
+    f.next.start()
+    await f.end()
+    await vi.advanceTimersByTimeAsync(IDLE_ASK_MS)
+    let answer!: () => void
+    const answered = new Promise<void>(resolve => { answer = resolve })
+    f.send.mockImplementationOnce(async () => { await answered; return { status: 200, etag: null, body: null, resetAt: null } })
+    await vi.advanceTimersByTimeAsync(IDLE_BACK_MS - IDLE_ASK_MS)
+    // In a turn that ends while GitHub is slow to take the give-back, it takes #15.
+    f.state.items = [item(14, 'Add the export', ['status:taken']), item(15, 'Write the docs', ['status:taken']), { ...item(31, 'Export', [], true), body: 'Closes #14' }]
+    await f.end()
+    answer()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(JSON.parse(readFileSync(f.file, 'utf8')).pip.idle).toMatchObject({ task: 'acme/app#15' })
+    await vi.advanceTimersByTimeAsync(IDLE_ASK_MS)
+    expect(f.told().at(-1)).toMatch(/^You hold acme\/app#15 /)
+    f.next.stop()
   })
 
   // Review of #4129: an ask asked again after a restart, which the server has under its operation in other words (a release that

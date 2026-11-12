@@ -367,13 +367,15 @@ export class NextThing {
    *  look as Harness starts again to go on with. */
   private watch(agent: WatchedAgent, repo: string, task: Record<string, unknown>, since: number, back?: number): void {
     this.unwatch(agent.harnessId)
-    // A time gone by while Harness was down comes at once, at 0: Node 24 warns of a negative delay (TimeoutNegativeWarning).
-    const timer = setTimeout(() => {
-      this.idle.delete(agent.harnessId)
+    // Kept while its look reads, so a stop of its person's then starts the next watch as one before it does: dropped, the stop found
+    // none, and the task was never asked about again (review of #4129). A time gone by while Harness was down comes at once, at 0:
+    // Node 24 warns of a negative delay (TimeoutNegativeWarning).
+    const watched = { agent, repo, task, timer: setTimeout(() => {
       void this.idleWith(agent, repo, Number(task.number), String(task.title ?? '').trim(), since, back)
-    }, Math.max(0, (back ?? since + IDLE_ASK_MS) - Date.now()))
-    timer.unref()
-    this.idle.set(agent.harnessId, { timer, agent, repo, task })
+        .finally(() => { if (this.idle.get(agent.harnessId) === watched) this.idle.delete(agent.harnessId) })
+    }, Math.max(0, (back ?? since + IDLE_ASK_MS) - Date.now())) }
+    watched.timer.unref()
+    this.idle.set(agent.harnessId, watched)
     this.keepIdle(agent, { terminal: agent.harnessId, task: `${repo}#${task.number}`, since, ...back === undefined ? {} : { back } })
   }
 
@@ -414,13 +416,13 @@ export class NextThing {
     try {
       // Working, or nobody can say: its turn's end looks again.
       if (await this.deps.working(agent.harnessId) !== false) return
-      // Paused since it was watched: nothing is asked of it, and its task goes to others as the assigner's take-back says (crew.ts).
-      // Its time paused is no idle time, so the watch kept goes too.
-      if ((await this.deps.watched()).find(watched => watched.harnessId === agent.harnessId)?.paused) return this.keepIdle(agent, null)
-      // Still its own, taken, with no pull request of its yet.
-      const items = await this.reads.current(repo, `/repos/${repo}/issues?state=open&labels=${encodeURIComponent(agent.label)}&per_page=100`, 1)
-      if (Number(heldTask(items)?.number) !== number) return this.keepIdle(agent, null)
+      const paused = (await this.deps.watched()).find(watched => watched.harnessId === agent.harnessId)?.paused
+      const items = paused ? [] : await this.reads.current(repo, `/repos/${repo}/issues?state=open&labels=${encodeURIComponent(agent.label)}&per_page=100`, 1)
+      // Dropped while this read (a turn of its ended): what it did now would undo the next watch, its end's look's (review of #4129).
       if (!ours()) return
+      // Paused since it was watched, whose time paused is no idle time, or the task not its own, taken, with no pull request of its yet:
+      // the watch goes. Paused, nothing is asked of it, and its task goes to others as the assigner's take-back says (crew.ts).
+      if (paused || Number(heldTask(items)?.number) !== number) return this.keepIdle(agent, null)
       if (back === undefined) {
         // Under the operation of the watch's start: one asked again after a restart that came before this was kept reaches it once,
         // and one the server has in a release's other words was asked.
@@ -429,9 +431,10 @@ export class NextThing {
         if (ours()) this.watch(agent, repo, { number, title }, since, Date.now() + IDLE_BACK_MS - IDLE_ASK_MS)
         return
       }
+      // The watch goes before the task does: a turn of its that ends while it goes back keeps the watch its end's look makes.
+      this.keepIdle(agent, null)
       const given = await giveBack(this.deps.send, repo, number, agent.label, true)
       if ('refused' in given) return this.log(`[super-tab] next thing of agent ${agent.agentId}: ${key} not given back: GitHub answered ${given.refused}.`)
-      this.keepIdle(agent, null)
       if (given.takenKept !== null) this.log(`[super-tab] next thing of agent ${agent.agentId}: ${key} kept status:taken: GitHub answered ${given.takenKept}.`)
       const said = await this.deps.send('POST', `/repos/${repo}/issues/${number}/comments`, { body: backLine(`${name} held it with nothing done for an hour`, hhmm(Date.now())) })
       // Given back all the same: the labels say so. Its line held or refused is said here (githubWrites.ts holds a line said too often).
