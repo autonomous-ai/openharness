@@ -1,5 +1,5 @@
 /**
- * `harness delete` on the real daemon (docs/superpowers/specs/2026-11-12-skill-run-isolation-design.md): a run's
+ * `harness delete` on the real daemon (docs/plans/2026-11-12-skill-run-isolation-design.md): a run's
  * words, saved while it ran, are gone from the daemon's data folder once the person deletes it, closed or running.
  * Signed out, from a terminal, with the fake Claude Code (harness/fakeEngine.mjs), on a daemon, data folder and tmux
  * server of its own.
