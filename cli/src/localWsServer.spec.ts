@@ -127,6 +127,22 @@ describe('local CLI WebSocket', () => {
     }
   })
 
+  it('tells a tool what this daemon can do, and a window nothing new', async () => {
+    for (const tool of [true, false]) {
+      const ws = new WebSocket(await start(new FakeBackend()))
+      await onceOpen(ws)
+      const connected = onceMessage(ws)
+      ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1, ...(tool ? { tool } : {}) } }))
+      const frame = await connected
+      expect(frame.type).toBe('connected')
+      if (tool) expect(frame.payload).toMatchObject({ features: ['openclaw-local'] })
+      else expect(frame.payload).not.toHaveProperty('features')
+      ws.close()
+      await local!.close()
+      local = null
+    }
+  })
+
   it('keeps notification identities on the local read and snapshot paths', async () => {
     const backend = new FakeBackend(), seen = vi.fn(), unread = vi.fn()
     const ws = new WebSocket(await start(backend, { onAgentSeen: seen, onAppUnread: unread }))
