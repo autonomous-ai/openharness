@@ -145,6 +145,10 @@ class _BrowserPanelState extends State<BrowserPanel> {
   int _routeLosses = 0;
   bool _settings = false;
 
+  /// Its person pressed Stop, and the machine has not yet said the browser is off: its stream closing and any state
+  /// it says meanwhile are the stop's, never a start.
+  bool _stopping = false;
+
   /// A request the machine did not take, in one line.
   String? _refused;
 
@@ -192,6 +196,7 @@ class _BrowserPanelState extends State<BrowserPanel> {
     if (browser == null) {
       _failure = null;
       _routeLosses = 0;
+      _stopping = false;
     }
     if (_waiting != null && browser != _waiting) _waiting = null;
     if (_waiting == null) _waitEnds?.cancel();
@@ -201,6 +206,7 @@ class _BrowserPanelState extends State<BrowserPanel> {
         browser?.state == 'ready' &&
         _failure == null &&
         _waiting == null &&
+        !_stopping &&
         !_settings;
     if (wanted && _bridge == null) unawaited(_connect());
     if (!wanted && _bridge != null) _end();
@@ -368,8 +374,15 @@ class _BrowserPanelState extends State<BrowserPanel> {
   void _start() =>
       _ask(() => _app.agentBrowserStart(widget.machineId, widget.agentId));
 
-  void _stop() =>
-      _ask(() => _app.agentBrowserStop(widget.machineId, widget.agentId));
+  Future<void> _stop() async {
+    _stopping = true;
+    _sync();
+    await _ask(() => _app.agentBrowserStop(widget.machineId, widget.agentId));
+    // Taken, the mark holds until the machine says off; refused, the browser is as it was.
+    if (!mounted || _refused == null) return;
+    _stopping = false;
+    _sync();
+  }
 
   Future<void> _install() async {
     final availability = await _app.agentBrowserAvailable(widget.machineId);
@@ -465,6 +478,9 @@ class _BrowserPanelState extends State<BrowserPanel> {
         },
       );
     }
+    if (_stopping && _browser != null) {
+      return _progressLine('Stopping browser…');
+    }
     if (_failure case final failure?) {
       return _line(
         failure.line,
@@ -498,7 +514,7 @@ class _BrowserPanelState extends State<BrowserPanel> {
                   fit: StackFit.expand,
                   children: [
                     NativeWebViewHost(child: view.build(context)),
-                    if (!_open) _starting(),
+                    if (!_open) _progressLine('Starting browser…'),
                   ],
                 );
               },
@@ -512,7 +528,7 @@ class _BrowserPanelState extends State<BrowserPanel> {
             ),
         ],
       ),
-      _ => _starting(),
+      _ => _progressLine('Starting browser…'),
     };
   }
 
@@ -542,7 +558,8 @@ class _BrowserPanelState extends State<BrowserPanel> {
     };
   }
 
-  Widget _starting() => Center(
+  /// A browser on its way up or down: a small spinner over [line].
+  Widget _progressLine(String line) => Center(
     child: Column(
       mainAxisSize: MainAxisSize.min,
       spacing: DesktopChrome.controlGap,
@@ -551,7 +568,7 @@ class _BrowserPanelState extends State<BrowserPanel> {
           dimension: grid.AppControl.iconSize,
           child: CircularProgressIndicator(strokeWidth: 1.5),
         ),
-        Text('Starting browser…', style: DesktopChrome.control()),
+        Text(line, style: DesktopChrome.control()),
         if (_refused case final refused?) _refusedLine(refused),
       ],
     ),

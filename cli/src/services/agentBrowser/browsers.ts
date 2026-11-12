@@ -363,6 +363,8 @@ export class Browsers {
         if (tries > 0) await sleep(READY_EVERY_MS)
         if (!current() || (await this.exitSeen(agentId))) return
         if (await this.deps.containers.ready(profile)) {
+          // A stop while Podman answered: the browser is off, and its queued removal follows.
+          if (!current()) return
           const restart = this.restarts.get(agentId)
           if (restart) restart.readyAt = this.now()
           this.set(agentId, { state: 'ready' })
@@ -414,10 +416,16 @@ export class Browsers {
     return this.deps.host.timeZone
   }
 
-  /** True when an exit was heard and Podman confirms the container stopped; then it is handled here. */
+  /**
+   * True when an exit was heard and Podman confirms the container stopped; then it is handled here. An exit a stop, a
+   * delete or a move came during is theirs: restarted, it started the browser again after the stop removed it, with
+   * `starting` shown on the panel the person had just pressed Stop on (CLI 0.6.40, 2026-11-12).
+   */
   private async exitSeen(agentId: string): Promise<boolean> {
     if (!this.died.delete(agentId)) return false
+    const generation = this.generation(agentId)
     const code = await this.deps.containers.exitCode(agentId)
+    if (this.generation(agentId) !== generation) return true
     if (code === null) return false
     if (code === EXIT_PROFILE_UNWRITABLE) this.fail(agentId, 'profile_unwritable')
     else if (code === EXIT_PROXY_FAILED) this.fail(agentId, 'proxy_failed')

@@ -596,7 +596,10 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   installed`, `Starting Podman…`, `Building browser`, `Starting browser`, each
   after a mark as Import's steps have: ticked when done, a small spinner on the
   current one, an empty circle (and the line muted) for those to come.
-  Starting, the spinner over `Starting browser…`. Otherwise one centred line in
+  Starting, the spinner over `Starting browser…`. From the person's Stop
+  until the computer says the browser is off, the same spinner over
+  `Stopping browser…`, never the starting line; a Stop the computer did not
+  take goes back to what the browser shows. Otherwise one centred line in
   13 with at most one blue button under it: the failed states' words (`Podman
   is not running` and Retry, `Browser isn't set up` and Install on that
   computer, `Set up Browser on Ken Mac first` from another, `Browser data
@@ -609,7 +612,7 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   from an older Harness, `Browser doesn't run on Windows yet`, `Only its owner
   can open this browser`, any other `Browser isn't available on Mac Studio
   right now`. The gallery draws the button plain, open and running, and the
-  panel off, running and failed.
+  panel off, running, failed and stopping.
 - **Browser settings** (`BrowserSettingsPage`, `browser/browser_settings_page.dart`).
   Inside the agent's Browser panel, read from and saved to the agent's
   computer only. `‹ Browser settings` (a compact quiet `DesktopPill` with a
