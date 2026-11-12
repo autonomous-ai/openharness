@@ -1,0 +1,77 @@
+/**
+ * A harness on another of the person's machines, followed by push (docs/design/2026-11-12-hachi.md, "Across machines"):
+ * two real daemons on one account, A linked to B, signed in to a fake backend that counts apps and offers the viewer gate
+ * as the real one does (backend lib/hub.ts), and that hears a tool's relay as a background relay, never an app
+ * (`relayIsolation`, backend lib/registry.ts). Nobody views B. A tool on A asks B for `harness_watch` over that relay; B
+ * answers with what each harness is doing, then seals each change of state to that one connection as a `harness_event`,
+ * while it keeps every live event, transcript text included, off the relay.
+ */
+import { mkdirSync } from 'node:fs'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
+import { LocalClient, type Frame } from './harness/client.js'
+import { until } from './harness/daemon.js'
+import { startFleet, type Fleet } from './harness/fleet.js'
+
+const harnessEvents = (client: LocalClient, agentId: string, since: number) => (state: string) =>
+  client.waitFor((frame: Frame) => frame.type === 'harness_event' && frame.payload?.agentId === agentId && frame.payload?.state === state,
+    45_000, `harness_event ${state}`, since)
+
+describe('harness_watch across machines', () => {
+  let fleet: Fleet | undefined
+  afterEach(async () => { await fleet?.close(); fleet = undefined })
+
+  it('B tells a tool on A what its harness does, sealed to that one connection, and keeps its transcript off the relay', async () => {
+    fleet = await startFleet()
+    const { a, b, backend } = fleet
+    backend.uiGate = true
+    onTestFailed(() => { console.log(`---- B's log\n${b.daemon.log().split('\n').slice(-150).join('\n')}`) })
+    await until('both machines connected to the backend', () => backend.nodeUp(a.machineId) && backend.nodeUp(b.machineId), 30_000)
+
+    // A harness on B, started by B's own window: the only app on B, and it is local, so the backend counts none.
+    const onB = await LocalClient.connect(b.daemon, { machineId: b.machineId })
+    const cwd = join(b.daemon.projectsDir, 'on-b')
+    mkdirSync(cwd, { recursive: true })
+    const created = await onB.request('agent_create', { engine: 'claude', cwd, bypassPermission: true }, 60_000)
+    expect(created.error, JSON.stringify(created)).toBeUndefined()
+    const agentId: string = created.agent.id
+    await until('the harness to bind its conversation', async () => {
+      const listed = await onB.request<{ agents: Array<Record<string, any>> }>('agents_list', {}, 30_000)
+      return listed.agents.find((agent) => agent.id === agentId)?.sessionId || null
+    }, 45_000, 500)
+
+    // A tool on A follows it, as `harness wait --machine` would: A's daemon relays it to B as a background relay.
+    const tool = await LocalClient.connect(a.daemon, { tool: true, machineId: b.machineId })
+    const watched = await tool.request('harness_watch', { agentIds: [agentId] }, 30_000)
+    expect(watched.error, JSON.stringify(watched)).toBeUndefined()
+    expect(watched).toMatchObject({ leaseMs: 300_000, renewMs: 240_000, agents: [{ agentId, state: 'idle' }] })
+    const [relay] = backend.webConnections(b.machineId)
+    expect(relay).toBeDefined()
+
+    const since = Date.now()
+    const told = harnessEvents(tool, agentId, since)
+    onB.send('message', { agentId, content: 'harness watch across machines' })
+    await told('working')
+    await told('idle')
+
+    // What reached A's relay from B: its replies and its harness_events, nothing broadcast, so no transcript text.
+    const received = (backend.webReceived.get(relay) ?? []).map((frame) => String(frame.type))
+    expect(received.filter((type) => type !== 'harness_event' && !type.endsWith('_result') && !type.startsWith('e2e_'))).toEqual([])
+    expect(received).toContain('harness_event')
+
+    // A second tool is told nothing of the first one's harness: each lease is its connection's own.
+    const other = await LocalClient.connect(a.daemon, { tool: true, machineId: b.machineId })
+    expect(await other.request('agents_list', {}, 30_000)).toHaveProperty('agents')
+    const otherRelay = backend.webConnections(b.machineId).find((connId) => connId !== relay)!
+    const again = Date.now()
+    onB.send('message', { agentId, content: 'once more' })
+    await harnessEvents(tool, agentId, again)('working')
+    await harnessEvents(tool, agentId, again)('idle')
+    expect((backend.webReceived.get(otherRelay) ?? []).map((frame) => frame.type)).not.toContain('harness_event')
+
+    // Too many harnesses in one watch is refused by name.
+    const tooMany = await other.request('harness_watch', { agentIds: Array.from({ length: 9 }, (_, i) => `agent-${i}`) }, 30_000)
+    expect(tooMany.error).toBe('TOO_MANY')
+    for (const client of [tool, other, onB]) client.close()
+  }, 240_000)
+})

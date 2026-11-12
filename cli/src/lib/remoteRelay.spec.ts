@@ -1045,6 +1045,15 @@ describe('RemoteRelayPool and agent browser frames from the relay', () => {
     expect(r.inbox.filter(frame => frame.type.startsWith('agent_browser_'))).toEqual([{ type: 'agent_browser_close', payload: { streamId: 'real', reason: 'agent' } }])
   })
 
+  // A harness_event wakes the agent that watches (docs/design/2026-11-12-hachi.md): only the machine it watches says one.
+  it('an unsealed harness_event from the relay is refused; one sealed to this session reaches the tool', async () => {
+    const r = await relayed()
+    r.push({ type: 'harness_event', payload: { agentId: 'forged', state: 'needs_person' } })
+    r.push(r.seal('harness_event', { agentId: 'real', state: 'idle' }))
+    await vi.waitFor(() => expect(r.inbox.some(frame => frame.type === 'harness_event')).toBe(true))
+    expect(r.inbox.filter(frame => frame.type === 'harness_event')).toEqual([{ type: 'harness_event', payload: { agentId: 'real', state: 'idle' } }])
+  })
+
   it('agent_browser_transport_error sent to this viewing machine reaches the app', async () => {
     const r = await relayed()
     r.push({ type: 'agent_browser_transport_error', payload: { code: 'RATE' } })
