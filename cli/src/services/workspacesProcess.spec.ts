@@ -18,12 +18,7 @@ describe('workspaces in their own process', () => {
   const setup = (over: Partial<Parameters<typeof runWorkspacesService>[0]> = {}) => {
     let api: CoreApi | null = null
     let options: ServiceProcessOptions | null = null
-    /** What `all()` answered when the service swept, each time. */
-    const swept: RegisteredSession[][] = []
-    const port = {
-      nameBranches: vi.fn(),
-      sweepUnused: vi.fn(() => { swept.push(api!.agents.all()) }),
-    } satisfies WorkspacesPort
+    const port = { nameBranches: vi.fn() } satisfies WorkspacesPort
     const service = { stop: vi.fn() }
     const handle = runWorkspacesService({
       dataDir: '/data', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't',
@@ -31,11 +26,11 @@ describe('workspaces in their own process', () => {
       start: (core: CoreApi, ports: CorePorts) => { api = core; ports.workspaces = port },
       ...over,
     })
-    return { api: api!, options: options!, port, service, handle, swept }
+    return { api: api!, options: options!, port, service, handle }
   }
-  /** A core that answers `agents` with `answer`, and records the rest. */
-  const connection = (answer: () => Promise<Record<string, unknown>> = async () => ({ agents: [agent()] })) => {
-    const query = vi.fn((name: string, _payload?: Record<string, unknown>) => (name === 'agents' ? answer() : Promise.resolve({ synced: true })))
+  /** A core that answers every question, and records them. */
+  const connection = () => {
+    const query = vi.fn(async (_name: string, _payload?: Record<string, unknown>) => ({ synced: true }))
     return { core: { query } satisfies CoreConnection, query }
   }
 
@@ -69,66 +64,16 @@ describe('workspaces in their own process', () => {
     await flush()
   })
 
-  it('sweeps when the core says, with every agent the core names at that moment, and knows them only then', async () => {
-    const { api, options, port, swept } = setup()
-    const everyone = [agent('a1'), agent('old', { active: false, cwd: null as never })]
-    const core = connection(async () => ({ agents: everyone, requestId: 'r1' }))
-    options.onConnected!(core.core)
-    expect(() => api.agents.all()).toThrow('the core has not said which folders are in use')
-    options.onEvent!({ kind: 'sweep' })
-    await flush()
-    expect(core.query).toHaveBeenCalledWith('agents')
-    expect(port.sweepUnused).toHaveBeenCalledOnce()
-    // Exactly as the core sent them, the one with no folder too.
-    expect(swept).toEqual([everyone])
-    expect(() => api.agents.all()).toThrow()
-  })
-
-  it('does not sweep when the core cannot name every agent, or names something that is not one', async () => {
+  // #4166: a sweep the core asked for removed clean, week-idle worktrees, the ones their person chose to keep too. One an
+  // older core still sends is ignored, and nothing asks the core which folders are in use.
+  it('ignores a sweep an older core still sends', async () => {
     const { options, port } = setup()
-    options.onConnected!(connection(async () => ({ error: 'QUERY_FAILED' })).core)
+    const { core, query } = connection()
+    options.onConnected!(core)
     options.onEvent!({ kind: 'sweep' })
     await flush()
-    options.onConnected!(connection(async () => ({ agents: [agent('a1'), null] })).core)
-    options.onEvent!({ kind: 'sweep' })
-    await flush()
-    options.onConnected!(connection(async () => { throw new Error('the core went away') }).core)
-    options.onEvent!({ kind: 'sweep' })
-    await flush()
-    expect(port.sweepUnused).not.toHaveBeenCalled()
-  })
-
-  it('asks once for a sweep however often it is told meanwhile, and again for the next', async () => {
-    const { options, port } = setup()
-    let answer: (value: Record<string, unknown>) => void = () => {}
-    const core = connection(() => new Promise((done) => { answer = done }))
-    options.onConnected!(core.core)
-    options.onEvent!({ kind: 'sweep' })
-    options.onEvent!({ kind: 'sweep' })
-    expect(core.query).toHaveBeenCalledOnce()
-    answer({ agents: [agent()] })
-    await flush()
-    expect(port.sweepUnused).toHaveBeenCalledOnce()
-    options.onEvent!({ kind: 'sweep' })
-    expect(core.query).toHaveBeenCalledTimes(2)
-  })
-
-  it('cannot sweep before it is connected: only the core it reaches can say what is in use', () => {
-    const { options, port } = setup()
-    options.onEvent!({ kind: 'sweep' })
-    expect(port.sweepUnused).not.toHaveBeenCalled()
-  })
-
-  it('survives a sweep that fails, and forgets the agents it was given for it', async () => {
-    const { api, options, port } = setup()
-    port.sweepUnused.mockImplementationOnce(() => { throw new Error('boom') })
-    options.onConnected!(connection().core)
-    options.onEvent!({ kind: 'sweep' })
-    await flush()
-    expect(() => api.agents.all()).toThrow()
-    options.onEvent!({ kind: 'sweep' })
-    await flush()
-    expect(port.sweepUnused).toHaveBeenCalledTimes(2)
+    expect(query).not.toHaveBeenCalled()
+    expect(port.nameBranches).not.toHaveBeenCalled()
   })
 
   it('stops its connection when stopped', () => {
@@ -143,13 +88,10 @@ describe('workspaces in their own process', () => {
 
   it('runs on a core API of the agents the core sent, answering what workspaces never ask as nothing', async () => {
     const renamed = vi.fn()
-    let everyone: RegisteredSession[] | null = null
-    const api = workspacesCoreApi('/data', { live: () => [agent('a1')], inUse: () => everyone }, renamed)
+    const api = workspacesCoreApi('/data', { live: () => [agent('a1')] }, renamed)
     expect(api.dataDir).toBe('/data')
     expect(api.agents.live()).toEqual([agent('a1')])
-    expect(() => api.agents.all()).toThrow()
-    everyone = [agent('a1'), agent('old')]
-    expect(api.agents.all()).toEqual(everyone)
+    expect(() => api.agents.all()).toThrow('workspaces never list stopped agents')
     expect(api.agents.byAgent('a1')).toEqual(agent('a1'))
     expect(api.agents.byAgent('old')).toBeUndefined()
     expect(api.agents.resolve('a1')).toEqual(agent('a1'))

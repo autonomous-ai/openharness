@@ -3406,12 +3406,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   }
   devicePartsBuilt = true
 
-  // Worktrees Harness made that no live or stopped harness uses and nothing would miss
-  // (services/workspaces.ts): a few minutes after start, once restored agents are back in the
-  // registry, then twice a day. Only the end-to-end harness shortens the first wait.
-  setTimeout(() => ports.workspaces?.sweepUnused(), Number(harnessd.HARNESSD_TEST_SWEEP_AFTER_MS) || 5 * 60_000).unref()
-  setInterval(() => ports.workspaces?.sweepUnused(), 12 * 3600_000).unref()
-
 
   // Every card bound for the Wi-Fi device goes to the devices too: the dial is told what the Wi-Fi device is,
   // in the same order, so the two device surfaces cannot drift. Teeing beats emitting again at each call
