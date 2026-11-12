@@ -172,8 +172,8 @@ export const TOOLS: Tool[] = [
   },
   {
     name: 'harness_close',
-    description: 'Close a harness you started, once it is done. Its conversation is kept: the person can resume it. Refused while it works, unless now is true.',
-    inputSchema: schema({ name: { type: 'string' }, now: { type: 'boolean', description: 'Close it even while it works.' } }, ['name']),
+    description: 'Close a harness you started, once it is done. Its conversation is kept: the person can resume it. Refused while it works or still runs background commands, unless now is true.',
+    inputSchema: schema({ name: { type: 'string' }, now: { type: 'boolean', description: 'Close it even while it works or runs background commands.' } }, ['name']),
     // Not destructive: the conversation is kept and the person can resume it, and Harness itself lets an agent close only
     // what it started. Said so, Codex closes without asking even where the server was added by hand (`codex mcp add`),
     // not only through the plugin's manifest: a close that waits on approval in `codex exec` left the harness running
