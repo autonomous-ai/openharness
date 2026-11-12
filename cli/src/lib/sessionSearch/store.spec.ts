@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -328,6 +328,56 @@ describe('SessionSearchStore', () => {
     second.writeSession(session('s', 'S', NOW), 0, [turn(0, 'rebuilt conversation')])
     expect(second.search('alpha', { now: NOW })).toEqual([])
     expect(second.search('rebuilt', { now: NOW })).toHaveLength(1)
+  })
+})
+
+describe('SessionSearchStore forgetting', () => {
+  function onDisk(): { store: SessionSearchStore; path: string } {
+    const dir = mkdtempSync(join(tmpdir(), 'session-search-'))
+    dirs.push(dir)
+    const path = join(dir, 'index.db')
+    return { store: open(path), path }
+  }
+  function shut(store: SessionSearchStore): void {
+    store.close()
+    stores.splice(stores.indexOf(store), 1)
+  }
+
+  it('erased turns leave none of their words in the database files', () => {
+    const { store, path } = onDisk()
+    for (let i = 0; i < 50; i++) store.writeSession(session(`s${i}`, 'Filler', NOW, 'a-other'), 0, [turn(0, `filler ask ${i}`, `filler answer ${i}`)])
+    store.writeSession(session('gone', 'Errand', NOW, 'a1'), 0, [turn(0, 'email zanzibarquokka about the dentist', 'sent to quokkazanzibar')])
+    store.checkpoint()
+    store.removeSession('gone')
+    store.checkpoint()
+    const bytes = Buffer.concat(['', '-wal'].filter((suffix) => existsSync(path + suffix)).map((suffix) => readFileSync(path + suffix)))
+    for (const word of ['zanzibarquokka', 'quokkazanzibar', 'dentist']) expect(bytes.includes(word), word).toBe(false)
+  })
+
+  it("lists an agent's sessions by its id, and none for a conversation Harness did not start", () => {
+    const store = open()
+    store.writeSession(session('s1', 'One', NOW, 'a1'), 0, [])
+    store.writeSession(session('s2', 'Two', NOW, 'a1'), 0, [])
+    store.writeSession(session('s3', 'Three', NOW, 'a2'), 0, [])
+    store.writeSession(session('e1', 'Outside', NOW, ''), 0, [])
+    expect(store.sessionsOf('a1').sort()).toEqual(['s1', 's2'])
+    expect(store.sessionsOf('')).toEqual([])
+  })
+
+  it('keeps what is excluded across a reopen and a rebuild of the index', () => {
+    const { store, path } = onDisk()
+    store.writeSession(session('s', 'S', NOW), 0, [turn(0, 'alpha')])
+    store.exclude('agent:main:harness-1')
+    shut(store)
+    const reopened = open(path)
+    expect(reopened.excluded()).toEqual(new Set(['agent:main:harness-1']))
+    ;(reopened as unknown as { db: { exec(sql: string): void } }).db.exec("UPDATE meta SET value = '10' WHERE key = 'schema'")
+    shut(reopened)
+    const rebuilt = open(path)
+    expect(rebuilt.counts()).toEqual({ sessions: 0, turns: 0 })
+    expect(rebuilt.excluded()).toEqual(new Set(['agent:main:harness-1']))
+    rebuilt.include('agent:main:harness-1')
+    expect(rebuilt.excluded()).toEqual(new Set())
   })
 })
 
