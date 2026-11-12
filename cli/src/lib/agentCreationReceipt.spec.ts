@@ -514,3 +514,58 @@ describe('who created a launch', () => {
     expect(() => receipts.run(id, fingerprint, vi.fn(), guest)).toThrow('CREATION_CONFLICT')
   })
 })
+
+// Deleting a harness erases its words: the receipt that made it keeps its outcome, so a retried create still does
+// not launch, but gives up the request it stored (task text, folder).
+describe('scrubbing the receipt of a deleted harness', () => {
+  const held = { service: 'native', detail: 'Waiting for the engine installation.' }
+  const request = { kind: 'native-create-v1', input: { engine: 'openclaw', prompt: 'email zanzibarquokka', openclawLocal: '/run/skill-1' } }
+  const createdBy = (agentId: string) => async () => async () => ({ state: 'created' as const, agentId })
+
+  it('scrubs the request of the receipt that made a harness, keeps the receipt, and a retried create still does not launch', async () => {
+    const { directory, receipts } = fixture()
+    await receipts.runIntent(id, fingerprint, request, held, createdBy('a1'))
+    expect(await receipts.scrubCreated('a1')).toBe(1)
+    const saved = readFileSync(join(directory, `${id}.json`), 'utf8')
+    expect(saved).not.toContain('zanzibarquokka')
+    expect(saved).not.toContain('/run/skill-1')
+    expect(JSON.parse(saved).request).toEqual({ scrubbed: true })
+    const reopened = new AgentCreationReceipts(directory)
+    expect(reopened.status(id)).toEqual({ state: 'created', agentId: 'a1' })
+    const again = vi.fn()
+    expect(await reopened.runIntent(id, fingerprint, request, held, again)).toEqual({ state: 'created', agentId: 'a1' })
+    expect(again).not.toHaveBeenCalled()
+    expect(await reopened.scrubCreated('a1')).toBe(0)
+  })
+
+  it('leaves another harness\'s receipt, a create that made none, and a legacy receipt as they are', async () => {
+    const { directory, receipts } = fixture()
+    await receipts.runIntent(`${id}-other`, fingerprint, request, held, createdBy('a2'))
+    await receipts.runIntent(`${id}-pending`, fingerprint, request, held, async () => null)
+    await receipts.runIntent(`${id}-failed`, fingerprint, request, held, async () => async () => ({ state: 'failed' as const, error: 'ENGINE_FAILED' }))
+    await receipts.run(`${id}-legacy`, fingerprint, async () => ({ state: 'created', agentId: 'a1' }))
+    const files = () => Object.fromEntries(fs.readdirSync(directory).sort().map(name => [name, readFileSync(join(directory, name), 'utf8')]))
+    const before = files()
+    expect(await receipts.scrubCreated('a1')).toBe(0)
+    expect(files()).toEqual(before)
+  })
+
+  it('skips a receipt it cannot read and finds none in a folder not made yet', async () => {
+    const { directory, receipts } = fixture()
+    expect(await receipts.scrubCreated('a1')).toBe(0)
+    await receipts.runIntent(id, fingerprint, request, held, createdBy('a1'))
+    writeFileSync(join(directory, `${id}-damaged.json`), '{not json', { mode: 0o600 })
+    writeFileSync(join(directory, 'not-a-creation-id.json'), '{}', { mode: 0o600 })
+    expect(await receipts.scrubCreated('a1')).toBe(1)
+  })
+
+  it('a receipt that cannot be rewritten fails the scrub', async () => {
+    const { directory, receipts } = fixture()
+    await receipts.runIntent(id, fingerprint, request, held, createdBy('a1'))
+    const before = readFileSync(join(directory, `${id}.json`), 'utf8')
+    vi.mocked(fs.fsyncSync).mockImplementationOnce(() => { throw new Error('disk disconnected') })
+    await expect(receipts.scrubCreated('a1')).rejects.toMatchObject({ code: 'CREATION_STORAGE_FAILED' })
+    expect(readFileSync(join(directory, `${id}.json`), 'utf8')).toBe(before)
+    expect(fs.readdirSync(directory).filter(name => name.endsWith('.tmp'))).toEqual([])
+  })
+})
