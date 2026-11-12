@@ -97,7 +97,9 @@ One pair for every store and the checkpoint: page budget `B` = 4 MiB, row cap `R
 ### OpenClaw (`cli/src/engines/openclaw/reader.ts`)
 
 - `rowsSql` (the live and active-branch pages) becomes a byte-bounded page; `readPage`'s `full` is "cut by count or
-  by bytes". `readActive`, `readOpenclawSince` and the live tail's one-page-per-poll keep their loops.
+  by bytes". `readActive` and `readOpenclawSince` keep their loops. A live tail's poll reads pages until it has `N`
+  rows or is caught up, handing each page's events on as it is read, so it holds one page and reads as many rows a
+  poll as before; the key's status is said only once caught up.
 - A row over `R` comes back with no payload; `decode` logs it once through `unreadable()` (`too big`, its seq, no
   content) and the cursor moves past it, as for a hidden row.
 - `IDS_SQL` (every event id of an earlier window, one row each, no limit today) pages by `seq` too, with a reply limit
@@ -180,6 +182,10 @@ Ken's go covered the spec, the plan and the build; these are the main session's 
 - A page's running size stops at the cut rather than a `sum() OVER` of all `N` candidates: OpenClaw stores a row's
   size after its payload, so sizing one reads all of it, and sizing 500 a page took a whole-history read of 600
   compressed 1 MiB rows from 0.95 s to 4.5 s (0.99 s stopped at the cut).
+- OpenClaw's live tail reads pages until it has 500 rows or is caught up, not one page a poll: a new window after a
+  rewind or fork is read live from its start, and at one 4 MiB page a second a 300 MiB window takes about 100 s to
+  show anything new, where 500 rows a poll takes about 6 s. A page that fails keeps what was handed on and the
+  cursor where the last good page left it.
 
 ## Constraints from the builder check
 

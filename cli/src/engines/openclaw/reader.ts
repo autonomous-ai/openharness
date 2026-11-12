@@ -8,8 +8,8 @@
  * handle: in the core, on its read threads (lib/sqliteThread.ts), never on its own thread (#4066). A poll that finds
  * the store's files as the last read left them reads nothing, so a bound idle pane costs a stat a second. There is no
  * `sqlite3` CLI fallback: the CLI's `-json` output mangles the compressed blobs. Rows are read a page at a time, the
- * page bounded by bytes as well as rows (lib/sqlitePage.ts, #4188), so a long backlog drains over a few polls and a
- * row over the row cap is stepped past, said once.
+ * page bounded by bytes as well as rows (lib/sqlitePage.ts, #4188), so a read holds one page, a poll reads up to 500
+ * rows, a long backlog drains over a few polls, and a row over the row cap is stepped past, said once.
  *
  * What the recorded fixtures (`__fixtures__/`, OpenClaw 2026.11.2) taught it:
  *  - Rewind makes a new window and copies every old row into it, ids and all. A new window is read from its start
@@ -30,7 +30,7 @@ import { statSync } from 'node:fs'
 import * as zlib from 'node:zlib'
 import { sid } from '../../lib/log.js'
 import { builtinSqlite } from '../../lib/sqliteBuiltin.js'
-import { readStorePage, readStorePages, utf8Bytes, type StorePage } from '../../lib/sqlitePage.js'
+import { PAGE_ROWS, readStorePage, readStorePages, utf8Bytes, type StorePage } from '../../lib/sqlitePage.js'
 import { sqliteReadAll, type SqliteParam, type SqliteRow } from '../../lib/sqliteRead.js'
 import { OPENCLAW_COLUMNS } from './contract.js'
 
@@ -122,7 +122,7 @@ function storeStamp(db: string): string | null {
 const zstd = zlib as typeof zlib & { zstdDecompressSync?: (data: Uint8Array, options?: { maxOutputLength?: number }) => Buffer }
 
 interface KeyNode { windowId: string; status: string | null; generation: string | null }
-interface Page { events: OpenclawEvent[]; lastSeq: number | null; full: boolean }
+interface Page { events: OpenclawEvent[]; lastSeq: number | null; full: boolean; rows: number }
 
 /** Before any read. No sqlite3 CLI fallback: its -json output mangles the compressed blobs. */
 function ensureReadable(): void {
@@ -245,7 +245,7 @@ async function readPage(db: string, key: string, windowId: string, afterSeq: num
     const record = decode(key, windowId, row)
     if (record) events.push({ windowId, seq: Number(row.seq), record })
   }
-  return { events, lastSeq: page.last ? Number(page.last[0]) : null, full: page.full }
+  return { events, lastSeq: page.last ? Number(page.last[0]) : null, full: page.full, rows: page.rows.length }
 }
 
 /** A window's header and active branch, every page of it. */
@@ -488,21 +488,22 @@ export class OpenclawReader {
         }
         this.hydrated = true
       }
-      let page: { events: OpenclawEvent[]; full: boolean }
+      let caughtUp: boolean
       if (!this.cursor || node.windowId !== this.cursor.windowId) {
         this.cursor = { windowId: node.windowId, seq: -1 }
         this.generation = node.generation
-        page = await this.readLive()
+        caughtUp = await this.readLive()
       } else if (node.generation !== this.generation) {
-        page = { events: await this.hydrate(node), full: false }
+        const events = await this.hydrate(node)
+        if (!this.stopped && events.length) this.deps.onEvents(events)
+        caughtUp = true
       } else {
-        page = await this.readLive()
+        caughtUp = await this.readLive()
       }
-      settled = !page.full
+      settled = caughtUp
       if (this.stopped) return
-      if (page.events.length) this.deps.onEvents(page.events)
       // A backlog still being read may hold the row that ends the run: the status speaks once it is read.
-      if (!page.full) this.deps.onStatus?.(node.status)
+      if (caughtUp) this.deps.onStatus?.(node.status)
     } catch (error) {
       settled = false
       if (!this.stopped) await this.failed(error)
@@ -512,11 +513,24 @@ export class OpenclawReader {
     }
   }
 
-  private async readLive(): Promise<{ events: OpenclawEvent[]; full: boolean }> {
+  /**
+   * Pages from the cursor, each handed on as it is read, until the poll has read PAGE_ROWS rows or caught up; true
+   * once caught up. A new window after a rewind or fork is read from its start, and at one 4 MiB page a poll a
+   * 300 MiB window took about 100 s to show anything new (500 rows a poll: about 6 s). A page that fails leaves what
+   * was handed on, and the cursor where the last good page left it.
+   */
+  private async readLive(): Promise<boolean> {
     const cursor = this.cursor!
-    const page = await readPage(this.deps.db, this.deps.key, cursor.windowId, cursor.seq, LIVE)
-    if (page.lastSeq !== null) cursor.seq = page.lastSeq
-    return { events: page.events.filter((event) => this.remember(event)), full: page.full }
+    for (let rows = 0; rows < PAGE_ROWS;) {
+      const page = await readPage(this.deps.db, this.deps.key, cursor.windowId, cursor.seq, LIVE)
+      if (this.stopped) return false
+      if (page.lastSeq !== null) cursor.seq = page.lastSeq
+      const events = page.events.filter((event) => this.remember(event))
+      if (events.length) this.deps.onEvents(events)
+      if (!page.full) return true
+      rows += page.rows
+    }
+    return false
   }
 
   /** A transient failure is said once, until a read succeeds; the others are said to the stream. */

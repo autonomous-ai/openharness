@@ -24,7 +24,8 @@ export function replyBytes(rows: readonly SqliteRow[]): number {
 export interface PageSeen { sql: string; maxBuffer: number; ok: boolean; rows: SqliteRow[]; units: number; bytes: number }
 
 /** The page reads a spied `sqliteReadAll` made, in order: the calls whose SQL begins `WITH RECURSIVE candidate AS (`.
- *  `rows` is `[]` and `ok` false for one that was not answered; `units` is how many different `page_n` its rows carry. */
+ *  `rows` is `[]` and `ok` false for one that was not answered; `units` is how many different `page_n` its rows
+ *  carry. */
 export async function pageReads(spy: { mock: { calls: unknown[][]; results: Array<{ value: unknown }> } }): Promise<PageSeen[]> {
   const reads: PageSeen[] = []
   for (const [at, [, sql, , options]] of spy.mock.calls.entries()) {
