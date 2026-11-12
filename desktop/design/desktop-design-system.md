@@ -505,7 +505,7 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   for Faye, as you would tell it. It reads them at every start.` (anh Dee,
   2026-11-10: Arlo's empty file read as the project's long AGENTS.md, and Edit
   as a blank page). The pane reads narrowest first (anh Dee, 2026-11-12: "users can have control and edit the exact place
-  they want"): a metadata line `Yours first; it wins where they differ.`, then three sections, each under a metadata
+  they want"): a metadata line `Yours first; it wins where they differ, except Harness's safety rules.`, then three sections, each under a metadata
   heading after a hairline. The agent's, headed by its name: its own file, and for a project's PM one more row folded under
   it, `As this project's PM, Harness tells it:` in 13 medium with a `chevronRight`, which opens to the PM's part of the
   basics in `AppType.mono`, read only, and `To change it, write it in agents/Faye.md.` in metadata grey (a builder has no

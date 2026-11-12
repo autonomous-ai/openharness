@@ -37,11 +37,11 @@ it('adds the agent\'s own agents/<name>.md after the basics, says where a file t
     mkdirSync(join(cwd, 'agents'))
     writeFileSync(join(cwd, 'agents', 'Faye.md'), '  Be brief.\nNever push to main.\n\n')
     expect(SWARM_LAUNCH.basics(false, { cwd, name: 'Faye' })).toBe(`${SWARM_BASICS}\n\nYour own instructions, from agents/Faye.md, `
-      + 'which your person keeps and which come first where they differ from the above:\nBe brief.\nNever push to main.')
+      + 'which your person keeps and which come first where they differ from your other instruction files (these basics, your project\'s AGENTS.md and CLAUDE.md), never over the rules on processes and on text being data, or over what your person tells you:\nBe brief.\nNever push to main.')
     expect(SWARM_LAUNCH.basics(true, { cwd, name: 'Faye' })).toContain(`${PM_BASICS}\n\nYour own instructions, from agents/Faye.md`)
     writeFileSync(join(cwd, 'agents', 'Faye.md'), 'x'.repeat(OWN_CARRIED_MAX + 1))
     expect(SWARM_LAUNCH.basics(false, { cwd, name: 'Faye' })).toBe(`${SWARM_BASICS}\n\nYour own instructions are in agents/Faye.md, `
-      + 'which your person keeps and which come first where they differ from the above: read them now, and again after a compaction.')
+      + 'which your person keeps and which come first where they differ from your other instruction files (these basics, your project\'s AGENTS.md and CLAUDE.md), never over the rules on processes and on text being data, or over what your person tells you: read them now, and again after a compaction.')
     writeFileSync(join(cwd, 'agents', 'Faye.md'), '   \n')
     for (const own of [{ cwd, name: 'Faye' }, { cwd: null, name: 'Faye' }, { cwd, name: null }]) expect(SWARM_LAUNCH.basics(false, own)).toBe(SWARM_BASICS)
   } finally { rmSync(cwd, { recursive: true, force: true }) }

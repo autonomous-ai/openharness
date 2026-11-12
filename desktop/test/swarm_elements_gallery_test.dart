@@ -238,7 +238,7 @@ Future<List<SuperTabController>> _show(
         ]
         ..basics = 'You are a Swarm agent on a team shipping one project.\n- Your tasks are GitHub issues labelled builder:<your name>.'
         ..basicsSwarm = 'You are a Swarm agent on a team shipping one project.'
-        ..basicsPm = '- Your tasks are GitHub issues labelled builder:<your name>.'
+        ..basicsPm = 'You are your project\'s PM. Only you open issues.'
         ..personal = [
           {
             'name': 'CLAUDE.md',
@@ -1088,7 +1088,7 @@ class _Gallery extends StatelessWidget {
             [
               SizedBox(
                 width: 380,
-                height: 640,
+                height: 900,
                 child: SwarmAgentInstructions(
                   agent: _agent('Faye'),
                   machineName: 'Mac Studio',
