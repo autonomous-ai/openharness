@@ -1,5 +1,6 @@
 /** Native hook installation is eager. Optional transcript and screen readers own no hook files. */
 import { existsSync } from 'node:fs'
+import { lstat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { hookPreparationRoutes, runHookPreparation, type HookPreparationProof } from './kit/nativeHookFiles.js'
 import { nativeHookLocations, type NativeHookOptions } from './kit/nativeLocations.js'
@@ -100,7 +101,19 @@ function sayOnce(stream: 'log' | 'warn', template: string, file: string, reason 
  * release left, Harness's approvals and the pane names it listed. It never throws.
  */
 async function removeHermesHooks(homes: readonly string[]): Promise<void> {
-  for (const { file, removed, failed, kept } of await removeNativeYamlHooks(HERMES_HOOK_SETTINGS, homes)) {
+  const editable: string[] = []
+  for (const home of homes) {
+    // A sandbox controls its home: a link there would aim this edit at another file, the host's own Hermes config among
+    // them, whose Hermes may still need the hook. Such a home is left as it is.
+    let link: string | undefined
+    for (const name of [HERMES_HOOK_SETTINGS.homes.file, HERMES_HOOK_SETTINGS.allowlist]) {
+      const file = join(home, name)
+      if (await lstat(file).then(info => info.isSymbolicLink(), () => false)) { link = file; break }
+    }
+    if (link) sayOnce('warn', HERMES_HOOKS_SAID.kept, link, 'the file is a symbolic link')
+    else editable.push(home)
+  }
+  for (const { file, removed, failed, kept } of await removeNativeYamlHooks(HERMES_HOOK_SETTINGS, editable)) {
     if (removed > 0) sayOnce('log', HERMES_HOOKS_SAID.removed, file)
     const reason = failed ?? kept
     if (reason) sayOnce('warn', HERMES_HOOKS_SAID.kept, file, reason)
