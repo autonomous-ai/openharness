@@ -272,7 +272,7 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
           confirmed: proof => confirmed.push(proof) }
         const home = engine === 'codex' ? homes.CODEX_HOME : engine === 'claude' ? homes.CLAUDE_HOME : homes.HERMES_HOME
         const installed = port === 0 ? true : engine === 'claude' || engine === 'codex' ? await engineHooks[engine].installIn(port, home, options)
-          : engine === 'hermes' ? await hooks.installHermesHooks(port, home, options)
+          : engine === 'hermes' ? await hooks.installHermesHooks(port, home, { ...options, executable })
           : engine === 'opencode' ? await hooks.installOpencodePlugin(port, { ...executable, major: opencodeMajor! }, options)
           : await installers[engine]?.(port, options) ?? true
         if (!installed || !executable.current() || !owner() || [...dependencies, ...confirmed].some(proof => !proof.current())) return false
