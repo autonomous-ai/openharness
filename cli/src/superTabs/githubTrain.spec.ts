@@ -91,6 +91,8 @@ function fakeRepo(now: () => number) {
       // A page of the list, the most recently updated first, as GitHub pages it.
       : p === '/pulls' ? [...state.pulls.values()].filter(pull => pull.state === url.searchParams.get('state')).sort((a, b) => b.updated - a.updated).slice((page - 1) * per, page * per)
       : /^\/issues\/\d+\/comments$/.test(p) ? (state.comments.get(number) ?? []).map(records.served)
+      // A task a pull request names, with no words of its own; or, by a pull request's number, that pull request.
+      : /^\/issues\/\d+$/.test(p) ? { number, body: '', ...state.pulls.has(number) ? { pull_request: {} } : {} }
       : /^\/pulls\/\d+\/reviews$/.test(p) ? []
       // A commit's statuses, the newest first, a page at a time; and the last of each context, as GitHub's combined status gives them.
       : /^\/commits\/[0-9a-f]+\/statuses$/.test(p) ? [...state.statuses.get(p.split('/')[2]!) ?? []].reverse().slice((page - 1) * per, page * per)

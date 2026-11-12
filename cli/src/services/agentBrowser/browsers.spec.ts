@@ -646,6 +646,20 @@ describe('Browsers', () => {
     expect(r.browsers.settings('a8')).toEqual(defaultSettings(host))
   })
 
+  // The default became portrait (2026-11-12). A first start saves the defaults it ran with, so a browser that ever ran
+  // keeps its landscape screen, and its container and profile stay as they are; only a first start takes portrait.
+  it('a first start saves the portrait default; a browser an earlier default started keeps its screen', async () => {
+    const before = { ...defaultSettings(host), screen: '1920x1080' as const }
+    writeFileSync(path, JSON.stringify({ browsers: { a1: before }, deleting: [], setup: null }))
+    const r = rig()
+    await r.browsers.start('a1')
+    expect(r.containers.start.mock.calls[0]![3]).toEqual(before)
+    await r.browsers.start('a2')
+    expect(r.containers.start.mock.calls[1]![3].screen).toBe('1080x1920')
+    expect(r.state.read().browsers.a2!.screen).toBe('1080x1920')
+    expect(r.state.read().browsers.a1).toEqual(before)
+  })
+
   it("auto time zone uses the proxy's exit zone, and the machine's when the lookup fails", async () => {
     const r = rig()
     const zoneOf = async (agentId: string, settings: BrowserSettings) => {

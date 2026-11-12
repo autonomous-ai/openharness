@@ -384,6 +384,23 @@ it('keeps host capacity separate from account authority and closes it on disconn
   service.port.stop(); expect(stop).toHaveBeenCalledTimes(3)
 })
 
+// The rehearsal's Codex builders (2026-11-11): a start whose agent ended is told how its engine left (engineExit.ts), read on this
+// machine, which keeps its pane, in fixed words; one still running is read nothing.
+it('tells a start how its engine left, once its agent ended', async () => {
+  const text = "error: unexpected argument '--add-dir' found\n\nharness: codex exited (2). This pane is a shell now — run codex again, or stop the pane.\n% "
+  const screen = vi.fn(async () => ({ ok: true as const, text, hold: null }))
+  const core = fakeCore({ superTabs: { screen } as never, agents: { all: vi.fn(() => [{ agentId: 'shell', engine: 'terminal', previousAgentId: 'native' }] as never) } })
+  let released = false
+  const observe = vi.fn(async () => ({ ok: true, reservationId: 'native-creation-id', harnessId: 'native', released }))
+  const service = superTabService(core, { reservations: vi.fn(() => ({ reserve: vi.fn(), observe, giveBack: vi.fn(), ended: vi.fn(), creationOf: vi.fn(() => null), stop: vi.fn() })) })
+  const ask = () => service.requests.super_tabs({ action: 'observeCapacity', creationId: 'native-creation-id' }, visitor)
+  expect(await ask()).toEqual({ ok: true, reservationId: 'native-creation-id', harnessId: 'native', released: false })
+  expect(screen).not.toHaveBeenCalled()
+  released = true
+  expect(await ask()).toEqual({ ok: true, reservationId: 'native-creation-id', harnessId: 'native', released: true,
+    engineExit: { status: 2, option: true } })
+})
+
 // Issue #2989: a start the Swarm failed gives its reservation back at once. Only this machine's own host, which read that
 // verdict from the Swarm, may say so: a relayed caller with machine access could otherwise free memory still starting.
 it('ends a failed start\'s reservation only for a caller on this machine', async () => {

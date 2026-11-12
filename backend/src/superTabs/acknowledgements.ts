@@ -32,3 +32,17 @@ export function isAcknowledgement(text: string): boolean {
 
 /** The refusal's words: the guard and the next step. */
 export const ACK_ONLY_HINT = 'This post only acknowledges: nothing needs to be said. Post only substance: a plan, a question, a finding, a verdict or a result.'
+
+/**
+ * Whether the text is emoji alone, with no word, number or question mark beside them. Since reactions went (#3892,
+ * 2026-11-10) an agent posts its 👍 instead, and an agent's post under another agent's message starts that agent's turn: in the
+ * rehearsal of 2026-11-11 the PM's 👍 under each builder's "stopping" woke the builder again. An emoji may also have meant yes or
+ * no, so its refusal asks for that in words.
+ */
+export function isEmojiOnly(text: string): boolean {
+  const rest = text.replace(/[\p{Extended_Pictographic}‍️]/gu, '')
+  return /\p{Extended_Pictographic}/u.test(text) && !/[\p{L}\p{N}?]/u.test(rest)
+}
+
+/** The refusal of emoji alone: what an emoji answered or asked goes in words, and an emoji that only acknowledged goes unsaid. */
+export const EMOJI_ONLY_HINT = 'An emoji alone tells an agent nothing. If it answers or asks something, say that in words; if not, post nothing.'
