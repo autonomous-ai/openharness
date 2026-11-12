@@ -37,7 +37,7 @@ import { declinedWith, declinedWithout } from './sharing.js'
 import { actorLabel, memberChanges, memberRowText, quotedName } from './memberRows.js'
 import { launchRefusedLine, leadArrived, LEAD_CLAIM_MS, leadEffort, leadJoined, leadOvertaken, leadStartFailed, leadStarting, leadWaits, LEAD_CAPABILITY, placeLead } from './leadStart.js'
 import { defaultAccountOnly, SWITCH_CAPABILITY } from './pmAccount.js'
-import { ACK_ONLY_HINT, isAcknowledgement } from './acknowledgements.js'
+import { ACK_ONLY_HINT, EMOJI_ONLY_HINT, isAcknowledgement, isEmojiOnly } from './acknowledgements.js'
 import { COORDINATOR_NAME } from './roleNames.js'
 import { isWaitingPmChat, pmChatWaits, settlePmChats, waitingPmChat } from './pmChat.js'
 
@@ -2233,11 +2233,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const ids = [...new Set(command.attachmentIds ?? [])]
       const attachments = ids.map(id => context.attachments?.find(a => a.id === id) ?? fail('ATTACHMENT_UNAVAILABLE', 'Upload this file again before sending it.', 400))
       if (!command.text && !attachments.length) fail('TEXT_REQUIRED', 'Write a message or attach a file.', 400)
-      // An agent's post that says nothing beyond an acknowledgement is refused (task #3391). Never a
-      // person's, a note to itself, a post with a file or a tag, or an agent's talk with its person.
-      if (actor.kind === 'agent' && !command.agentOnly && !attachments.length && !command.mentions?.length
-        && group.kind !== 'agent-chat' && isAcknowledgement(command.text)) {
-        fail('ACK_ONLY', ACK_ONLY_HINT, 400)
+      // An agent's post that says nothing beyond an acknowledgement is refused (task #3391), and one of emoji alone (the
+      // rehearsal of 2026-11-11, acknowledgements.ts). Never a person's, a note to itself, a post with a file or a tag, or an
+      // agent's talk with its person.
+      if (actor.kind === 'agent' && !command.agentOnly && !attachments.length && !command.mentions?.length && group.kind !== 'agent-chat') {
+        if (isAcknowledgement(command.text)) fail('ACK_ONLY', ACK_ONLY_HINT, 400)
+        if (isEmojiOnly(command.text)) fail('ACK_ONLY', EMOJI_ONLY_HINT, 400)
       }
       // A voice message is its clip alone, and its words are its text: what agents, search and older apps read (voiceMessages.ts).
       const voice = attachments.find(a => a.voice)
