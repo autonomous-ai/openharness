@@ -291,7 +291,7 @@ restart is a baseline, not a return.
   proposal. Another machine: an answer only (`REMOTE_ANSWERS_ONLY`). Proposals stay in `daemon_state.asks` for
   ten minutes, at most five (`TOO_MANY_PROPOSALS`); a key runs one as `key`. Read tools answer with secrets
   redacted. `talk` is refused here (`UI_ONLY`): the person talks from a window. `harness pair <verb> [--json]`
-  (pair/client.ts; a pairing code is never a verb) and `harness pair mcp`, a stdio MCP server named `harnessd`
+  (`companion/client.ts`; a pairing code is never a verb) and `harness pair mcp`, a stdio MCP server named `harnessd`
   (`companion/mcp.ts`: JSON-RPC 2.0 lines, `initialize`, `tools/list`, `tools/call`, `ping`; no SDK dependency)
   speak it as tool clients.
 - **The pair harness** (`companion/pairHarness.ts`, P4): the built-in `autonomous/pair`, generated on the machine
@@ -331,7 +331,7 @@ restart is a baseline, not a return.
 ## Learning (L1, L2) as built
 
 Notice, propose, teach, revert (L1); borrow, check, export (L2); person-only approval. The full design is
-[LEARNING.md](LEARNING.md). Everything is in `memory/lessons/` and `application/lessons/`, runs in every
+[LEARNING.md](LEARNING.md). Everything is in `memory/lessons/`, `application/lessons/` and `shared/`, runs in every
 harnessd for its own harnesses, and — except usage tracking and the `lessons` verbs — only while pairing is on.
 
 - **Notice** (`signals.ts`, no model): from the same session events the sensor reads — never replays,
