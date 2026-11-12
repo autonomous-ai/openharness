@@ -901,5 +901,11 @@ describe('background commands', () => {
     expect(await svc.request({ ...request('idle'), background: 'refuse' })).toEqual({ error: 'AGENT_CHANGED' })
     expect(deps.stop).not.toHaveBeenCalled()
   })
+
+  // The cleanup preview leaves a changing harness out of the batch it reviews by this answer (core/agents/close.ts).
+  it('an inspect of a harness replaced while the count was read says it changed', async () => {
+    const { svc } = withCount(async () => { row.sessionId = 'another'; return 2 })
+    expect(await svc.request(request('inspect'))).toEqual({ error: 'AGENT_CHANGED' })
+  })
 })
 
