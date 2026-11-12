@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { registry, type RegisteredSession } from './registry.js'
 import { StoppedAgentStore } from './stoppedAgents.js'
+import { AgentCreationReceiptError } from './agentCreationReceipt.js'
 import { SessionCheckpointStore } from './sessionCheckpoint.js'
 import { PurgeAgentService, inspectNativeHistory, eraseNativeHistory, sessionDataBytes, type PurgeRequest } from './purgeAgentService.js'
 import { builtinSqlite } from './sqliteBuiltin.js'
@@ -201,6 +202,17 @@ describe('every record of a harness', () => {
     expect(deleted).toHaveBeenCalledOnce()
     expect(stopped.get(session.agentId)).toBeNull()
     expect(stop).toHaveBeenCalledOnce()
+  })
+
+  it('says in plain words a launch request it could not erase, never the receipt\'s code', async () => {
+    eraseRecords.mockRejectedValueOnce(new AgentCreationReceiptError('CREATION_STORAGE_FAILED'))
+    const refused = await deleteOnce()
+    expect(refused).toMatchObject({ error: 'DELETE_REFUSED', sessionDeleted: false })
+    expect(String(refused.detail)).toMatch(/^Harness could not erase this harness's saved launch request\. Try deleting it again\./)
+    expect(String(refused.detail)).not.toContain('CREATION_STORAGE_FAILED')
+    // A folder this account may not use: what its owner does about it, too.
+    eraseRecords.mockRejectedValueOnce(new AgentCreationReceiptError('CREATION_STORAGE_FAILED', 'The creation folder ~/x is not usable by this account (permissions).'))
+    expect(String((await deleteOnce()).detail)).toContain("saved launch request. The creation folder ~/x is not usable by this account (permissions). Try deleting it again.")
   })
 })
 
