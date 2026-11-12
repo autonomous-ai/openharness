@@ -464,6 +464,7 @@ describe('the agent browser service', () => {
     const { password: _password, ...withoutPassword } = proxy
     expect(await requests.agent_browser_settings_save!({ agentId: 'a1', settings: { ...settings, proxy: withoutPassword } }, OTHER_DESKTOP))
       .toMatchObject({ proxy: { passwordSet: true } })
+    // Desktop reads this detail to tell the person to update Harness for a screen the machine does not know.
     expect(await requests.agent_browser_settings_save!({ agentId: 'a1', settings: { ...settings, screen: '800x600' } }, OTHER_DESKTOP))
       .toEqual({ error: 'INVALID_SETTINGS', detail: 'invalid browser setting: screen' })
   })

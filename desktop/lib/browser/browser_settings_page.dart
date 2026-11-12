@@ -118,7 +118,8 @@ class _BrowserSettingsPageState extends State<BrowserSettingsPage> {
       appLog.warn('browser', 'settings request failed: $code');
       _failure = code == 'NOT_OWNER'
           ? 'Only its owner can open this browser'
-          // A screen is one of this build's or the machine's own, so a refused one is newer than the machine (portrait).
+          // A screen is one of this build's or the machine's own, so a refused one is newer than the machine. No version
+          // or capability names it: CLIs 0.6.10-0.6.12, the only ones without portrait, refuse with exactly this detail.
           : save &&
                 failure is WsRequestFailure &&
                 failure.detail == 'invalid browser setting: screen'

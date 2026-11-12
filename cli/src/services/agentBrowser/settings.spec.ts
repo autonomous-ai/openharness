@@ -127,6 +127,10 @@ describe('agent browser settings', () => {
     // A tall panel on a portrait screen: the width rises to 1024 and the height with it.
     expect(clampWindow(900, 1400, '1080x1920')).toEqual({ width: 1024, height: 1593 })
     expect(clampWindow(1400, 2400, '1080x1920')).toEqual({ width: 1080, height: 1920 })
+    // A shape too extreme for the screen keeps the floor and the cap, never a side past either.
+    expect(clampWindow(10, 5000, '1080x1920')).toEqual({ width: 1024, height: 1920 })
+    expect(clampWindow(5000, 10, '1080x1920')).toEqual({ width: 1080, height: 640 })
+    expect(clampWindow(Number.MIN_VALUE, 800, '1080x1920')).toEqual({ width: 1080, height: 1920 })
     for (const [width, height] of [[0, 800], [1200, -1], ['1200', 800], [1200, null], [undefined, 800], [Number.NaN, 800], [1200, Number.POSITIVE_INFINITY]]) {
       expect(clampWindow(width, height, '1920x1080'), `${String(width)}x${String(height)}`).toBeNull()
     }
