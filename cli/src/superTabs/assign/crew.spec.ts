@@ -89,6 +89,51 @@ describe('a team\'s tasks as GitHub and the Swarm say them (readProblem)', () =>
     expect(given.problem.tasks.map(t => [t.id, t.pinned ?? null, t.notBuilders])).toEqual([['#1', null, ['pip']], ['#2', 'pip', []]])
   })
 
+  // The allocator's design, package 11 (docs/design/2026-11-11-swarm-allocator/one-view.md): every regular agent builds for every
+  // public project of its Swarm, and each project was planned blind to the others, so one agent held a task building in each.
+  it('counts a builder\'s tasks in the Swarm\'s other repositories: one it builds there leaves no room here, one in review there a place among its four', () => {
+    // Another project's repository as GitHub lists it: Pip took #5 there; Juno's #6 has its pull request up there; Atlas was
+    // given #8 there and has not taken it.
+    const web = [issue(5, ['size:l', 'builder:pip', 'status:taken']), issue(6, ['size:m', 'builder:juno', 'status:taken']),
+      issue(7, ['builder:juno'], { pull_request: {}, draft: false, body: 'Closes #6' }), issue(8, ['size:s', 'builder:atlas'])]
+    const read = readProblem({ now: NOW, crew: crew(), closed: [], issues: [issue(1, ['size:s'])], withReaders: new Set(), elsewhere: [web] })
+    expect(['pip', 'juno', 'atlas'].map(builder => hasRoom(read, builder))).toEqual([false, true, false])
+    // Its lists here stay this project's own, as the day's post counts them in hand; what it holds there is apart.
+    expect(Object.fromEntries(read.open)).toEqual({ pip: 0, juno: 0, atlas: 0 })
+    expect(Object.fromEntries(read.elsewhere)).toEqual({ pip: { open: 1, building: 1 }, juno: { open: 1, building: 0 }, atlas: { open: 1, building: 1 } })
+    // Busy there as it would be here: for half the large task Pip took, the whole small one Atlas was given; Juno's in review, none.
+    expect(read.problem.builders.map(b => [b.id, b.busyUntil])).toEqual([['pip', SIZES.l.minutes / 2], ['juno', 0], ['atlas', SIZES.s.minutes]])
+    expect(nextPicks(solve(read.problem, { seed: 1, budgetMs: 2_000 }).plan, read)).toEqual([{ task: '#1', builder: 'juno', start: 0 }])
+  })
+
+  it('counts a task there as in review only by a pull request of the team that GitHub says is not a draft and that names it', () => {
+    const taken = issue(5, ['size:s', 'builder:pip', 'status:taken'])
+    const pull = (extra: Json) => issue(9, ['builder:pip'], { pull_request: {}, draft: false, body: 'Closes #5', ...extra })
+    const there = (...listed: Json[]) => readProblem({ now: NOW, crew: crew(), closed: [], issues: [], withReaders: new Set(), elsewhere: [listed] }).elsewhere.get('pip')
+    expect(there(taken, pull({}))).toEqual({ open: 1, building: 0 })
+    // A draft, one GitHub said nothing of, a stranger's, one that names another task: Pip's to build still.
+    for (const extra of [{ draft: true }, { draft: undefined }, { labels: [] }, { body: 'Closes #4' }]) {
+      expect(there(taken, pull(extra)), JSON.stringify(extra)).toEqual({ open: 1, building: 1 })
+    }
+    // An issue that names it is no pull request: both are Pip's to build.
+    expect(there(taken, pull({ pull_request: undefined }))).toEqual({ open: 2, building: 2 })
+    // One that waits on pieces cut off it holds no place there, as here.
+    expect(there({ ...taken, sub_issues_summary: { total: 2, completed: 1 } })).toBeUndefined()
+  })
+
+  it('plans no free task on a builder that holds four across the Swarm\'s projects', () => {
+    // Pip has two in review here and two in review in another project's repository, under one pull request.
+    const issues = [issue(11, ['size:m', 'builder:pip', 'status:taken']), issue(12, ['size:m', 'builder:pip', 'status:taken']), issue(1, ['size:s'])]
+    const web = [issue(3, ['size:m', 'builder:pip', 'status:taken']), issue(4, ['size:m', 'builder:pip', 'status:taken']),
+      issue(13, ['builder:pip'], { pull_request: {}, draft: false, body: 'Closes #3 and fixes #4' })]
+    const read = readProblem({ now: NOW, crew: crew(), closed: [], issues, withReaders: new Set([11, 12]), elsewhere: [web] })
+    expect(read.problem.tasks.map(t => [t.id, t.notBuilders])).toEqual([['#1', ['pip']]])
+    expect(hasRoom(read, 'pip')).toBe(false)
+    // With one of the four landed there, it has room again.
+    const three = readProblem({ now: NOW, crew: crew(), closed: [], issues, withReaders: new Set([11, 12]), elsewhere: [web.slice(1)] })
+    expect([three.problem.tasks[0]!.notBuilders, hasRoom(three, 'pip')]).toEqual([[], true])
+  })
+
   it('plans a machine by the cores it reports, and one from an older daemon as CORES', () => {
     const team = crew()
     team.machines = [machine('mac', { resources: { memoryTotalBytes: 32 * GiB, projectDiskFreeBytes: 200 * GiB, cpuCores: 4 } }),

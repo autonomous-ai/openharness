@@ -105,7 +105,8 @@ Every minute, in the PM's person's Harness, for each project its PM leads from t
   with no task to build and fewer than four open gets the free task it starts next, one at a time (until it held two, before
   11 November: [the allocator's design](2026-11-11-swarm-allocator/BUILD.md), package 2). A task is one its builder builds
   while given or taken with no pull request yet, with a draft, or with one a reader's HOLD stands on; one whose pull request
-  waits for its readers or its merge is not. It is given as `builder:<name>` on the issue and one comment, "Harness, 15:40: for
+  waits for its readers or its merge is not. What it holds in the Swarm's other projects' repositories counts too, read from
+  their open lists ([package 11](2026-11-11-swarm-allocator/one-view.md)). It is given as `builder:<name>` on the issue and one comment, "Harness, 15:40: for
   **Pip**: it can start now, and it finished 3 part:api tasks." GitHub news then brings each its task.
 - **Failures** are said once: a label GitHub refused (tried again next pass), a task no builder can do and why, gh signed
   out or rate limited (as the merger: `githubRest.ts`). A sized task nobody can start for a reason its PM can act on is

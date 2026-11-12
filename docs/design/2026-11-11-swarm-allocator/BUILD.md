@@ -130,7 +130,7 @@ opening tasks). `DEEP` goes, from every reader of a list: `readProblem`, `nextPi
 `githubAssign.ts`, `openWaiting` and `readerFor`, and `pmNumbers.ts`. `experiment.mts` calls `nextPicks` with a depth
 and builds its own read: it is this package's proof, and is kept running. `PM_BASICS` says what is true, and its
 entry in `docs/prompt-rules-audit.md` follows. Until package 11 this is for each project: a builder of two public
-projects holds one task building in each.
+projects holds one task building in each. *Since package 11, one across them.*
 
 **First.** The test that shows the fault: a builder with two tasks whose pull requests wait for a read, and a free
 sized task. Today nothing is given. If that test passes on `main`, the fault is not there: stop and say so.
@@ -314,6 +314,13 @@ code.
 **Proof.** A suite of this repository that CI does not run, split over two computers: wall time against one.
 
 ### 11. One view of an agent across a Swarm's projects
+
+**Built** (#NNNN): option (a), [the options and why](one-view.md): `githubAssign.ts` reads each of the Swarm's other
+projects' repositories' open list (`elsewhere`, `swarmRepositories`), and `assign/crew.ts` counts what a builder holds
+there in its room (`readProblem`'s `elsewhere`, `hasRoom`). *anh Dee was not there to pick; under his "take care of it
+all" the session that built it chose (a). A task there is in review when an open pull request of the team that GitHub
+says is not a draft names it: its verdicts there are not read, so a reader's HOLD there counts as in review. The claim's
+limit (`githubClaim.ts`) still counts one repository: it reads none of these counts.*
 
 **Why.** Every regular agent builds for every public project of its Swarm, and each project plans on its own PM's
 person's computer, without seeing the others.

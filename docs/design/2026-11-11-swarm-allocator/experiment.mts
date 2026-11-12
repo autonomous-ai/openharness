@@ -171,7 +171,7 @@ function run(seed: number, sigma: number, mislabel: number, n: number, policy: P
         for (const t of open) { const was = planned.get(t.id), is = places.get(t.id); if (was && is) { compared++; if (was !== is) moved++ } }
         planned = places
         const held = new Map(builders.map(b => [b.id, (b.current ? 1 : 0) + b.queue.length]))
-        const read = { problem, open: held, building: held, free: new Set(open.map(t => t.id)), done: new Map(),
+        const read = { problem, open: held, building: held, elsewhere: new Map(), free: new Set(open.map(t => t.id)), done: new Map(),
           builders: new Map(builders.map(b => [b.id, { id: b.id, name: b.id, label: b.id, machineId: b.machine, engine: 'claude' }])) }
         for (const p of deep === 1 ? nextPicks(solved.plan, read as never) : twoDeep(solved.plan, read.free, held)) { const t = byId.get(p.task)!, b = builders.find(x => x.id === p.builder)!; t.builder = b.id; t.given = now; b.queue.push(t) }
       }

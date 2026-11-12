@@ -13,7 +13,7 @@ import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import type { Crew } from './assign/crew.js'
 import { GitHubAssign } from './githubAssign.js'
-import { GitHubMerge, VerdictRecords } from './githubMerge.js'
+import { GitHubMerge, VerdictRecords, type LedProject } from './githubMerge.js'
 import { commandRecords } from './commandRecords.fake.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 
@@ -32,7 +32,8 @@ const CREW: Crew = {
 const sha = (n: number, v = 0) => createHash('sha1').update(`head-${n}-${v}`).digest('hex')
 
 /** One repository as GitHub's REST API answers it, with ETags, where what Harness writes is there to read next pass. */
-function liveGitHub(clock: { now: number }) {
+function liveGitHub(clock: { now: number }, repo = REPO) {
+  const at = `/repos/${repo}`
   const iso = () => new Date(clock.now).toISOString()
   const issues = new Map<number, Json>(), pulls = new Map<number, Json>(), comments = new Map<number, Json[]>()
   const runs = new Map<string, Json[]>(), mergeable = new Map<number, string>()
@@ -49,7 +50,7 @@ function liveGitHub(clock: { now: number }) {
     issues.set(number, { number, title: `Task ${number}`, state: 'open', labels: names.map(name => ({ name })), user: { login: OPENER },
       author_association: 'MEMBER', created_at: updatedAt, updated_at: updatedAt })
   const pull = (number: number, head: string, extra: Json = {}) => {
-    const row = { number, draft: false, state: 'open', base: { ref: 'main' }, head: { sha: head, ref: `pip/${number}`, repo: { full_name: REPO } }, labels: [{ name: 'builder:pip' }],
+    const row = { number, draft: false, state: 'open', base: { ref: 'main' }, head: { sha: head, ref: `pip/${number}`, repo: { full_name: repo } }, labels: [{ name: 'builder:pip' }],
       user: { login: OPENER }, body: '', updated_at: iso(), ...extra }
     pulls.set(number, row)
     issues.set(number, { ...row, title: `PR ${number}`, pull_request: {}, author_association: 'MEMBER' })
@@ -67,38 +68,41 @@ function liveGitHub(clock: { now: number }) {
   const get: GitHubGet = async (path, etag) => {
     const url = new URL(`https://api.github.com${path}`), p = url.pathname, since = url.searchParams.get('since') ?? ''
     const n = (i: number) => Number(p.split('/').at(i))
-    const body = p === `/repos/${REPO}` ? { default_branch: 'main' }
-      : p === `/repos/${REPO}/issues` ? page([...issues.values()].filter(i => (url.searchParams.get('state') ?? 'open') === 'all' || i.state === (url.searchParams.get('state') ?? 'open'))
+    const body = p === at ? { default_branch: 'main' }
+      : p === `${at}/issues` ? page([...issues.values()].filter(i => (url.searchParams.get('state') ?? 'open') === 'all' || i.state === (url.searchParams.get('state') ?? 'open'))
         .filter(i => String(i.updated_at) >= since), url)
-      : p === `/repos/${REPO}/pulls` ? page([...pulls.values()].filter(r => r.state === (url.searchParams.get('state') ?? 'open')), url)
+      : p === `${at}/pulls` ? page([...pulls.values()].filter(r => r.state === (url.searchParams.get('state') ?? 'open')), url)
       : /\/issues\/\d+\/comments$/.test(p) ? page((comments.get(n(-2)) ?? []).map(records.served).filter(c => String(c.updated_at) >= since), url)
       : /\/pulls\/\d+\/reviews$/.test(p) ? []
       // Each head its own change, so a push is something new to read; and each holds main's tip, so the one that is ready alone
       // merges on its own (the train is githubTrain.spec.ts).
       : /\/compare\/main\.\.\.[0-9a-f]+$/.test(p) ? { behind_by: 0, files: [{ filename: 'app.py', status: 'modified', changes: 1, patch: `@@ -1 +1 @@\n+${p.split('...').at(-1)}` }] }
       : /\/pulls\/\d+\/commits$/.test(p) ? [{ sha: (pulls.get(n(-2))?.head as Json | undefined)?.sha }]
-      : p === `/repos/${REPO}/labels` ? page(labels, url)
+      : p === `${at}/labels` ? page(labels, url)
       : /\/commits\/[0-9a-f]+\/check-runs$/.test(p) ? { check_runs: runs.get(String(p.split('/').at(-2))) ?? [] }
       : /\/commits\/[0-9a-f]+\/status$/.test(p) ? { statuses: [] }
       : /\/pulls\/\d+$/.test(p) ? { mergeable_state: mergeable.get(n(-1)) ?? 'unknown' }
       : null
     if (body === null) return { status: 404, etag: null, body: null, resetAt: null }
     const tag = `"${createHash('sha1').update(JSON.stringify(body)).digest('hex')}"`
-    return etag === tag ? { status: 304, etag: tag, body: null, resetAt: null } : { status: 200, etag: tag, body, resetAt: null }
+    // A copy, as an answer over the wire is: what is written after it was read does not show in it.
+    return etag === tag ? { status: 304, etag: tag, body: null, resetAt: null } : { status: 200, etag: tag, body: structuredClone(body), resetAt: null }
   }
   const send: GitHubSend = async (method, path, body) => {
     sent.push({ at: clock.now, method, path, body: (body ?? {}) as Json })
     const reply = (status: number) => ({ status, etag: null, body: {}, resetAt: null })
-    const said = /^\/repos\/acme\/app\/issues\/(\d+)\/comments$/.exec(path)
+    // The path within the repository: another's is none of this one's.
+    const within = path.startsWith(`${at}/`) ? path.slice(at.length) : ''
+    const said = /^\/issues\/(\d+)\/comments$/.exec(within)
     if (method === 'POST' && said) { say(Number(said[1]), String((body as Json).body)); return reply(201) }
-    const tagged = /^\/repos\/acme\/app\/issues\/(\d+)\/labels$/.exec(path)
+    const tagged = /^\/issues\/(\d+)\/labels$/.exec(within)
     if (method === 'POST' && tagged) {
       const number = Number(tagged[1]), row = issues.get(number)!
       for (const name of (body as Json).labels as string[]) if (!(row.labels as Json[]).some(l => l.name === name)) row.labels = [...row.labels as Json[], { name }]
       touch(number)
       return reply(200)
     }
-    const untagged = /^\/repos\/acme\/app\/issues\/(\d+)\/labels\/(.+)$/.exec(path)
+    const untagged = /^\/issues\/(\d+)\/labels\/(.+)$/.exec(within)
     if (method === 'DELETE' && untagged) {
       const number = Number(untagged[1]), name = decodeURIComponent(untagged[2]!), row = issues.get(number)!
       if (!(row.labels as Json[]).some(l => l.name === name)) return reply(404)
@@ -106,12 +110,12 @@ function liveGitHub(clock: { now: number }) {
       touch(number)
       return reply(200)
     }
-    if (method === 'POST' && path === `/repos/${REPO}/labels`) {
+    if (method === 'POST' && within === '/labels') {
       if (labels.some(l => l.name === (body as Json).name)) return reply(422)
       labels.push({ name: (body as Json).name })
       return reply(201)
     }
-    const merged = /^\/repos\/acme\/app\/pulls\/(\d+)\/merge$/.exec(path)
+    const merged = /^\/pulls\/(\d+)\/merge$/.exec(within)
     if (method === 'PUT' && merged) {
       const number = Number(merged[1]), row = pulls.get(number)
       if (!row || row.state !== 'open' || (row.head as Json).sha !== (body as Json).sha) return reply(409)
@@ -151,7 +155,7 @@ describe('Harness says each thing once on GitHub, over an hour and a restart (gi
 
     const make = () => {
       const deps = { projects: async () => [PROJECT], crew: async () => structuredClone(CREW), get: gh.get, send: gh.send, now: () => clock.now, log: () => {}, records: new VerdictRecords(gh.authors, () => clock.now, () => {}) }
-      return { merger: new GitHubMerge(deps), assigner: new GitHubAssign({ ...deps, numbers: { pass: async () => {} }, pmRunning: async () => true }) }
+      return { merger: new GitHubMerge(deps), assigner: new GitHubAssign({ ...deps, repositories: async () => [REPO], numbers: { pass: async () => {} }, pmRunning: async () => true }) }
     }
     let loops = make()
     for (let pass = 0; pass < PASSES; pass++) {
@@ -221,7 +225,7 @@ describe('Harness says each thing once on GitHub, over an hour and a restart (gi
     gh.pull(24, sha(24)); gh.say(24, `Juno, 04:00, to **Pip**: READ-OK ${sha(24).slice(0, 7)}`); gh.mergeable.set(24, 'dirty')
     const make = () => {
       const deps = { projects: async () => [PROJECT], crew: async () => structuredClone(CREW), get: gh.get, send: gh.send, now: () => clock.now, log: () => {}, records: new VerdictRecords(gh.authors, () => clock.now, () => {}) }
-      return { merger: new GitHubMerge(deps), assigner: new GitHubAssign({ ...deps, numbers: { pass: async () => {} }, pmRunning: async () => true }) }
+      return { merger: new GitHubMerge(deps), assigner: new GitHubAssign({ ...deps, repositories: async () => [REPO], numbers: { pass: async () => {} }, pmRunning: async () => true }) }
     }
     let loops = make()
     // A pass every five minutes for a day, the daemon restarting every six hours, as releases restart it.
@@ -246,4 +250,85 @@ describe('Harness says each thing once on GitHub, over an hour and a restart (gi
       .map(write => write.slice(write.indexOf(' ') + 1))
     expect(writes, JSON.stringify(writes, null, 1)).toEqual([...new Set(writes)])
   }, 120_000)
+})
+
+// The allocator's design, package 11 (docs/design/2026-11-11-swarm-allocator/one-view.md, option (a)): every regular agent builds
+// for every public project of its Swarm, and each project is planned by its own PM's person's daemon over its own repository.
+// Neither plan saw the other's repository, so Pip was given a task building by each at once.
+describe('one task building across a Swarm\'s two public projects (githubAssign.ts, assign/crew.ts)', () => {
+  const WEB = 'acme/web', MINUTE = 60_000, MINUTES = 40
+  const PROJECTS: LedProject[] = [PROJECT, { repo: WEB, pm: 'Rex', tabId: 'tab', pmAgentId: 'rex', projectId: 'web' }]
+
+  /** The Swarm's two repositories, each live, behind one GitHub. */
+  function swarmGitHub(clock: { now: number }) {
+    const repos = new Map([REPO, WEB].map(repo => [repo, liveGitHub(clock, repo)]))
+    const of = (path: string) => repos.get(path.split('/').slice(2, 4).join('/'))!
+    const get: GitHubGet = (path, etag) => of(path).get(path, etag)
+    const send: GitHubSend = (method, path, body) => of(path).send(method, path, body)
+    for (const live of repos.values()) for (const number of [1, 2, 3]) live.task(number, ['size:s'])
+    return { repos, get, send, authors: (project: LedProject, ids: string[]) => repos.get(project.repo)!.authors(project, ids) }
+  }
+  type Swarm = ReturnType<typeof swarmGitHub>
+
+  /** A PM's person's daemon planning [projects] (each PM leads one), reading GitHub through [get]. */
+  const daemon = (gh: Swarm, clock: { now: number }, projects: LedProject[], get: GitHubGet = gh.get) => new GitHubAssign({ projects: async () => projects,
+    crew: async () => structuredClone(CREW), repositories: async () => [REPO, WEB], get, send: gh.send, now: () => clock.now, log: () => {},
+    records: new VerdictRecords(gh.authors, () => clock.now, () => {}), numbers: { pass: async () => {} }, pmRunning: async () => true })
+
+  /** What [name] builds across the Swarm's repositories now, as package 2 counts it: its open tasks with no pull request up for
+   *  their read, one that GitHub says is not a draft and that closes it. */
+  const building = (gh: Swarm, name: string): string[] => [...gh.repos].flatMap(([repo, live]) => {
+    const open = [...live.issues.values()].filter(item => item.state === 'open')
+    const up = new Set(open.filter(item => item.pull_request && item.draft === false).flatMap(item => [...String(item.body).matchAll(/Closes #(\d+)/g)].map(m => Number(m[1]))))
+    return open.filter(item => !item.pull_request && (item.labels as Json[]).some(label => label.name === `builder:${name}`) && !up.has(Number(item.number)))
+      .map(item => `${repo}#${item.number}`)
+  })
+
+  /** A pass of each daemon a minute, and what the builders do between: each takes what it is given, opens its pull request
+   *  ("Closes #N", its label, not a draft) two minutes after taking the task, and that lands two minutes on. Each minute a builder
+   *  built more than one task, said. */
+  async function run(gh: Swarm, clock: { now: number }, daemons: GitHubAssign[]): Promise<string[]> {
+    const over: string[] = [], since = new Map<string, number>()
+    for (let minute = 0; minute < MINUTES; minute++) {
+      for (const each of daemons) await each.tick()
+      for (const name of ['pip', 'juno']) if (building(gh, name).length > 1) over.push(`${name} at minute ${minute}: ${building(gh, name).join(', ')}`)
+      const iso = new Date(clock.now).toISOString()
+      for (const [repo, live] of gh.repos) {
+        for (const task of [...live.issues.values()].filter(item => item.state === 'open' && !item.pull_request)) {
+          const names = (task.labels as Json[]).map(label => String(label.name)), builder = names.find(name => name.startsWith('builder:'))?.slice('builder:'.length)
+          const key = `${repo}#${task.number}`, number = 100 + Number(task.number), pull = live.pulls.get(number)
+          if (!builder) continue
+          if (!names.includes('status:taken')) {
+            Object.assign(task, { labels: [...task.labels as Json[], { name: 'status:taken' }], updated_at: iso })
+            since.set(key, clock.now)
+          } else if (clock.now - since.get(key)! < 2 * MINUTE) continue
+          else if (!pull) {
+            live.pull(number, sha(number), { labels: [{ name: `builder:${builder}` }], body: `Closes #${task.number}`, head: { sha: sha(number), ref: `${builder}/${task.number}`, repo: { full_name: repo } } })
+            since.set(key, clock.now)
+          } else for (const done of [pull, live.issues.get(number)!, task]) Object.assign(done, { state: 'closed', closed_at: iso, updated_at: iso })
+        }
+      }
+      clock.now += MINUTE
+    }
+    return over
+  }
+
+  it('gives a builder one task building across both, each project planned on its own PM\'s computer, and all the work goes', async () => {
+    const clock = { now: START }, gh = swarmGitHub(clock)
+    expect(await run(gh, clock, PROJECTS.map(project => daemon(gh, clock, [project])))).toEqual([])
+    // Every task of both was given once, and landed.
+    for (const [repo, live] of gh.repos) {
+      for (const number of [1, 2, 3]) {
+        expect((live.comments.get(number) ?? []).filter(c => /^Harness, \d\d:\d\d: for \*\*/.test(String(c.body))), `${repo}#${number}`).toHaveLength(1)
+        expect(live.issues.get(number)!.state, `${repo}#${number}`).toBe('closed')
+      }
+    }
+  }, 60_000)
+
+  it('reads each repository\'s open list once a pass when one computer leads both projects, and gives one task building all the same', async () => {
+    const clock = { now: START }, gh = swarmGitHub(clock), asked: string[] = []
+    expect(await run(gh, clock, [daemon(gh, clock, PROJECTS, (path, etag) => { asked.push(path); return gh.get(path, etag) })])).toEqual([])
+    for (const repo of [REPO, WEB]) expect(asked.filter(path => path === `/repos/${repo}/issues?state=open&per_page=100`), repo).toHaveLength(MINUTES)
+    expect([...gh.repos.values()].flatMap(live => [1, 2, 3].map(number => live.issues.get(number)!.state))).toEqual(Array(6).fill('closed'))
+  }, 60_000)
 })
