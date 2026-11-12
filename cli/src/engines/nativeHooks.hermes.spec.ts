@@ -4,7 +4,7 @@
  * spec runs a real `hermes` or reads the person's `~/.hermes`: the version is the suite's mock, set per case, and the
  * home is a throwaway folder.
  */
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -99,6 +99,32 @@ it.skipIf(process.getuid?.() === 0)('says once that it could not remove a hook, 
   vi.mocked(hermesKeepsRecord).mockResolvedValue(true); writeFileSync(config, WITH_BLOCK); chmodSync(home, 0o555)
   expect(await installHermesHooks(18473)).toBe(true); expect(await installHermesHooks(18473)).toBe(true)
   expect(warns.filter((line) => line.startsWith("[hooks] could not remove Harness's Hermes hooks from "))).toHaveLength(1)
+})
+
+it('leaves a home whose config or approvals list is a link, and says so once', async () => {
+  // A sandbox controls its home: a link there would aim the edit at another file, the host's own Hermes config among
+  // them, whose Hermes may still need the hook.
+  const host = join(root, 'host')
+  mkdirSync(host)
+  writeFileSync(join(host, 'config.yaml'), WITH_BLOCK)
+  symlinkSync(join(host, 'config.yaml'), config)
+  vi.mocked(hermesKeepsRecord).mockResolvedValue(true)
+  expect(await installHermesHooks(18473)).toBe(true)
+  expect(await installHermesHooks(18473)).toBe(true)
+  expect(readFileSync(join(host, 'config.yaml'), 'utf8')).toBe(WITH_BLOCK)
+  expect(lstatSync(config).isSymbolicLink()).toBe(true)
+  expect(warns).toEqual([`[hooks] could not remove Harness's Hermes hooks from ${config} · the file is a symbolic link`])
+
+  // The approvals list beside a config of its own: the home is left as it is, and a record seen there changes nothing.
+  rmSync(config); writeFileSync(config, PERSON)
+  vi.mocked(hermesKeepsRecord).mockResolvedValue(false); await installHermesHooks(18473) // older: installed, as today
+  const installed = readFileSync(config, 'utf8'), approvals = readFileSync(allowlist, 'utf8')
+  renameSync(allowlist, join(host, 'shell-hooks-allowlist.json')); symlinkSync(join(host, 'shell-hooks-allowlist.json'), allowlist)
+  warns.length = 0
+  await hermesRecordSeen(home)
+  expect(readFileSync(config, 'utf8')).toBe(installed)
+  expect(readFileSync(join(host, 'shell-hooks-allowlist.json'), 'utf8')).toBe(approvals)
+  expect(warns).toEqual([`[hooks] could not remove Harness's Hermes hooks from ${allowlist} · the file is a symbolic link`])
 })
 
 it('removes the hooks of a home the first time a record is seen there', async () => {
