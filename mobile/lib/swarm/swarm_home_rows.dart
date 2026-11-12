@@ -10,8 +10,10 @@ import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
 
+import 'model.dart';
 import 'swarm_home_list.dart';
 import 'swarm_inbox.dart';
+import 'swarm_message_row.dart' show SwarmChatAvatar;
 import 'swarm_row.dart';
 import 'swarm_style.dart';
 
@@ -238,11 +240,166 @@ class SwarmOtherProjectsRow extends StatelessWidget {
   }
 }
 
+/// One agent of Your Team on Home, on one line as a project's (Desktop's
+/// left pane, Swarm v4): its face and its name, bold and bright while its
+/// chat with the person has something new, with the project row's dot. A tap
+/// opens that chat; an agent with none yet is not a button ([onTap] null).
+class SwarmTeamRow extends StatelessWidget {
+  const SwarmTeamRow({
+    super.key,
+    required this.agent,
+    required this.name,
+    required this.pm,
+    required this.unread,
+    required this.onTap,
+  });
+
+  final SuperTabAgent agent;
+  final String name;
+
+  /// A Product Manager, whose face wears the PM's colour as in its chat.
+  final bool pm;
+  final bool unread;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    return _Tap(
+      onTap: onTap,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(
+          minHeight: SwarmHomeProjectRow.height,
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppSpace.l,
+            vertical: AppSpace.xs,
+          ),
+          child: Row(
+            children: [
+              SwarmChatAvatar(
+                name: name,
+                id: agent.id,
+                agent: true,
+                pm: pm,
+                picture: agent.avatar,
+                diameter: 24,
+              ),
+              const SizedBox(width: AppSpace.s),
+              Expanded(
+                child: Semantics(
+                  label: unread ? 'Unread messages' : null,
+                  child: Text(
+                    name,
+                    key: const ValueKey('swarm-agent-name'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppType.label(
+                      color: unread
+                          ? AppPalette.textPrimary
+                          : AppPalette.textSecondary,
+                      height: 1.3,
+                      fontWeight: unread ? AppFont.semibold : null,
+                    ),
+                  ),
+                ),
+              ),
+              if (unread) ...[
+                const SizedBox(width: 12),
+                SizedBox.square(
+                  key: const ValueKey('swarm-agent-unread'),
+                  dimension: AppSpace.s,
+                  child: DecoratedBox(
+                    decoration: ShapeDecoration(
+                      color: AppPalette.textPrimary,
+                      shape: const CircleBorder(),
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Under Your Team's first rows: "N more", which opens every row, and once
+/// they are open "Show fewer" (Desktop's `SuperTabFoldRow`). Bold while a row
+/// it folds has something new ([unread]).
+class SwarmTeamFoldRow extends StatelessWidget {
+  const SwarmTeamFoldRow({
+    super.key,
+    this.hidden = 0,
+    required this.open,
+    this.unread = false,
+    required this.onTap,
+  });
+
+  /// How many rows it folds; none once [open].
+  final int hidden;
+  final bool open;
+  final bool unread;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    return Semantics(
+      expanded: open,
+      child: _Tap(
+        onTap: onTap,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(
+            minHeight: SwarmHomeProjectRow.height,
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpace.l,
+              vertical: AppSpace.xs,
+            ),
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 24,
+                  child: Icon(
+                    open
+                        ? LucideIcons.chevronUp300
+                        : LucideIcons.chevronDown300,
+                    size: 18,
+                    color: AppPalette.textFaint,
+                  ),
+                ),
+                const SizedBox(width: AppSpace.s),
+                Expanded(
+                  child: Text(
+                    open ? 'Show fewer' : '$hidden more',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppType.label(
+                      color: unread
+                          ? AppPalette.textPrimary
+                          : AppPalette.textSecondary,
+                      fontWeight: unread ? AppFont.semibold : null,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// A row's ink on a tap, with a click a thumb can feel.
 class _Tap extends StatelessWidget {
   const _Tap({required this.onTap, this.onLongPress, required this.child});
 
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
   final VoidCallback? onLongPress;
   final Widget child;
 

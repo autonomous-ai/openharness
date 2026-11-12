@@ -584,6 +584,12 @@ class SwarmConversation extends ChangeNotifier
     return [for (final agentId in group.agentIds) ?snapshot.agent(agentId)];
   }
 
+  /// Whether the composer has its @ button: not in an agent's own chat with
+  /// its person, where every message goes to its one agent and nobody else
+  /// reads it. A typed @ there still offers that agent, as on Desktop, which
+  /// has no @ button.
+  bool get offersTagButton => !(conversation?.isAgentChat ?? false);
+
   /// The people a post can tag, as Desktop offers them: those who read this
   /// conversation, never the reader. In a Buddy chat only its owner reads it.
   /// The backend checks each tag again.
@@ -595,6 +601,10 @@ class SwarmConversation extends ChangeNotifier
     }
     final project = snapshot.projectFor(group.id);
     bool reads(SuperTabPerson person) => switch (group) {
+      // A person's chat with an agent of theirs: they and the agent alone
+      // read it (backend projects.ts readsAgentChat), with or without an
+      // audience sent, so nobody else is offered (Desktop's composer_tags).
+      _ when group.isAgentChat => false,
       SuperTabConversation(:final audience?) => audience.contains(person.id),
       _ when group.buddyOwnerId != null => person.id == group.buddyOwnerId,
       _ =>
