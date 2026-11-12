@@ -410,6 +410,13 @@ by hand.
 
 ### 14. A model for each task
 
+**Designed** (#4113): [the design](model-for-each-task.md), [the tiers experiment's plan and cost](tiers-experiment.md)
+and [the mockup of the one screen change](model-choice-mockup.html), kept on anh Dee's word of 12 November ("just take
+care of it all"). The code waits for package 12's daemon half: the rule weighs nothing until a class has 20 finished
+tasks on a model, from real rows. The experiment is not run now: only 17 of its 50 tasks may qualify, none is sized,
+and it would take about 3¼ weeks of his subscription, a fifth of each window kept for him. It runs when 50 qualify, on
+his word.
+
 **Read first.** What v3's routing was and why it went: eight designs, removed in #3908. And
 `cli/src/engines/claude/launch.ts`: `--model` and `--effort` are for the session (Codex's launch has neither);
 `/model` typed in a pane becomes its person's default, so Harness types it only when a person changes a running
