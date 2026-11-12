@@ -175,6 +175,13 @@ it.each(['claude', 'codex', 'hermes'] as const)('prepares the captured %s profil
   expect(await prepared.launch.prepareHooks(19473, () => true)).toBe(false)
   expect(await prepared.launch.prepareHooks(19473, () => false)).toBe(false)
 })
+it('hands a Hermes launch\'s hooks the executable it runs, whose version decides them', async () => {
+  const prepared = await inspectNativeLaunch('hermes')
+  if (!prepared.ok) throw new Error('fixture was held')
+  expect(await prepared.launch.prepareHooks(19473, () => true)).toBe(true)
+  expect(hooks.installHermesHooks).toHaveBeenCalledWith(19473, '/fixture/hermes', expect.objectContaining({
+    environment: expect.objectContaining({ HERMES_HOME: '/fixture/hermes' }), executable: expect.objectContaining({ command: '/fixture/engine' }) }))
+})
 it('does not treat a longer flag as support for the selected permission mode', async () => {
   fixture.help = '--auto-update'
   const prepared = await inspectNativeLaunch('opencode')
