@@ -51,8 +51,10 @@ type Json = Record<string, unknown>
 export const SHORT_AFTER_MS = 15 * 60_000
 /** How often the PM is told while work is short. */
 export const SHORT_EVERY_MS = 60 * 60_000
-/** How many times the PM is told, with nothing landed, closed or opened since, before its person is told instead. */
-export const SHORT_TIMES = 3
+/** How many times the PM is told, with nothing landed, closed or opened since, before its person is told instead: once. Told
+ *  again each hour while nothing moved, the PM spent its person's tokens on the same counts (anh Dee, 2026-11-11: "never spam
+ *  agents because we burn user token"); once, then its person, as an agent's next thing (nextThing.ts NEXT_TIMES). */
+export const SHORT_TIMES = 1
 /** The hour of this computer's day from which the day's numbers are posted, once. */
 export const DAY_HOUR = 9
 const DAY_MS = 24 * 60 * 60_000
@@ -126,7 +128,8 @@ export function numbersOf(input: { now: number; crew: Crew; pm: string; issues: 
   for (const task of done) activity = Math.max(activity, timeOf(task.closed_at))
   const closed = done.filter(task => within(task.closed_at)).length
   const landedBy = [...by].map(([label, count]): [string, number] => [names.get(label)!, count]).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-  return { builders: crew.builders.length, free, open: read.free.size - picks.length,
+  // A free task that waits for what it comes after is open too (assign/crew.ts readProblem): given to nobody yet.
+  return { builders: crew.builders.length, free, open: read.free.size + read.waits - picks.length,
     // No size Harness reads (assign/crew.ts SIZES): one labelled size:xl is given to nobody as surely as one with none.
     unsized: tasks.filter(task => !labelsOf(task).some(label => /^size:[sml]$/.test(label) || label.startsWith('builder:') || label === 'status:taken')).length,
     held: [...read.open.values()].reduce((sum, count) => sum + count, 0) + picks.length,
@@ -171,7 +174,7 @@ export const shortLine = (names: readonly string[], n: Numbers, at: string, goal
 /** What the PM's person is told, in the PM's chat with them, once the PM was told [SHORT_TIMES] times, nothing moved since,
  *  and [names] still have nothing. Said, not asked: the PM never hears what is posted in its name (the server delivers no agent
  *  its own post), so a question would bring it a "You pick." with nothing to refer to (review of #4081). What it was typed
- *  three times is what it answers from. */
+ *  is what it answers from. */
 export const toldLine = (names: readonly string[], n: Numbers): string => `${nothing(names)}, and ${noTask(n, names.length)}.`
 
 /** A count as a teammate says it: "no task", "1 task", and "at least 94 pull requests" when the closed list read was full, so

@@ -26,14 +26,17 @@ function setup() {
   // The live agents' start times (registeredAt) and their measured memory, by harness id.
   const live = new Map<string, number>(), measured = new Map<string, number>()
   const clock = { now: Date.UTC(2026, 9, 28, 4) }
-  vi.mocked(core.agents.byAgent).mockImplementation(key => live.has(key) ? { agentId: key, registeredAt: live.get(key)! } as never : undefined)
+  // A harness whose engine left its pane before it was ever seen is a shell now, under the same id (core/agents/newPane.ts).
+  const shells = new Set<string>()
+  vi.mocked(core.agents.byAgent).mockImplementation(key => live.has(key)
+    ? { agentId: key, registeredAt: live.get(key)!, engine: shells.has(key) ? 'terminal' : 'claude' } as never : undefined)
   const deps = { resources: vi.fn(async () => resources),
     disk: vi.fn(async (cwd: string) => ({ freeBytes: 100, volume: cwd === '/second-volume' ? 'second' : 'first', path: cwd })),
     sqlite: () => builtinSqlite() as never, now: () => clock.now, agentMemory: vi.fn(async () => new Map(measured)), log: vi.fn() }
   const open = () => { const book = new CapacityReservations(core, 'machine-1', deps); books.push(book); return book }
   /** The start reserved as `n` launched as harness `agent-n` at this moment. */
   const launch = (n: number) => { native.set(id(n), { creationId: id(n), state: 'created', agentId: `agent-${n}` }); live.set(`agent-${n}`, clock.now) }
-  return { directory, file: join(directory, 'super-tabs/capacity.sqlite'), core, native, stopped, gone, resources, deps, open, live, measured, clock, launch }
+  return { directory, file: join(directory, 'super-tabs/capacity.sqlite'), core, native, stopped, gone, shells, resources, deps, open, live, measured, clock, launch }
 }
 const GiB = 1024 ** 3, MINUTE = 60_000
 const free = (f: ReturnType<typeof setup>, bytes: number) => { f.resources.memoryTotalBytes = 32 * GiB; f.resources.memoryUsedBytes = 32 * GiB - Math.round(bytes) }
@@ -149,6 +152,17 @@ it('retains a learned harness identity after its native window disappears and re
   f.stopped.add('native')
   expect(await restarted.reserve(input(2))).toMatchObject({ ok: true })
   expect(await restarted.observe(id(1))).toMatchObject({ harnessId: 'native', released: true })
+})
+
+// An engine that left its pane before it was ever seen leaves its row a shell under the same id, neither stopped nor gone
+// (core/agents/newPane.ts): its start waited for the Swarm's 3-minute timeout, which counts against its machine, not its engine.
+it('releases a launched harness whose engine left its pane, a shell now', async () => {
+  const f = setup(), book = f.open()
+  await book.reserve(input())
+  f.launch(1)
+  expect(await book.observe(id(1))).toMatchObject({ harnessId: 'agent-1', released: false })
+  f.shells.add('agent-1')
+  expect(await book.observe(id(1))).toMatchObject({ harnessId: 'agent-1', released: true })
 })
 
 // The review of #1635: the backend's closeSession row names only the harness, so the host finds the Swarm's own start of

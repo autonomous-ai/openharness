@@ -11,6 +11,7 @@ import { backend, identifier, object, SuperTabHostError, within } from './wire.j
 import { isCoordinator, isStep } from './agentContext.js'
 import { swarmBasics, wireRole } from '../lib/swarmSkills.js'
 import { CapacityReservations, type ReservationBook } from './reservations.js'
+import { engineExit } from './engineExit.js'
 import { ContributionPreparations, ownerRequest, prepareContribution } from './contribution.js'
 import { ClaudeSignIns } from './claudeSignIn.js'
 import { answerFirstRun } from '../engines/launchPrep.js'
@@ -321,7 +322,13 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         // Machine access also authorizes native creation. These actions expose
         // only that host's admission/receipt, never its account or private roster.
         if (payload.action === 'reserveCapacity') return await reservations().reserve(payload, closed)
-        if (payload.action === 'observeCapacity') return await reservations().observe(payload.creationId, closed)
+        // A receipt whose agent ended says how its engine left the pane this machine kept, in fixed words (engineExit.ts): its
+        // status, and whether it refused an option. None of the pane's words leave this machine.
+        if (payload.action === 'observeCapacity') {
+          const observed = await reservations().observe(payload.creationId, closed)
+          const exit = observed.released === true && identifier(observed.harnessId) ? await engineExit(core, observed.harnessId) : null
+          return exit ? { ...observed, engineExit: exit } : observed
+        }
         if (payload.action === 'returnCapacity') return await reservations().giveBack(payload.creationId, closed)
         // Only this machine's own host, which read the Swarm's verdict for its start (machines.ts): a relayed caller could
         // otherwise free memory a start still holds (issue #2989).

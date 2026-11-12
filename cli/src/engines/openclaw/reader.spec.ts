@@ -9,6 +9,7 @@ import * as zlib from 'node:zlib'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { sid } from '../../lib/log.js'
 import { builtinSqlite, closeSqliteHandles, overrideBuiltinSqlite, type DatabaseConstructor, type DatabaseLike } from '../../lib/sqliteBuiltin.js'
+import { enableOffThreadSqlite, resetOffThreadSqlite } from '../../lib/sqliteThread.js'
 import { OpenclawReader, readOpenclawHistory, readOpenclawSince, type OpenclawEvent, type OpenclawReaderDeps } from './reader.js'
 
 vi.mock('node:zlib', async (importOriginal) => {
@@ -163,7 +164,36 @@ describe('readOpenclawHistory', () => {
   })
 })
 
+// #4066: its reads called the binding on the caller's thread, so in the core a slow store held the core's own thread
+// past the master's heartbeats (#1906). They go through sqliteReadAll, which the core runs on its read threads.
+it('reads on the core\'s read threads: the caller\'s loop turns while it reads', async () => {
+  const { path } = store('rewind')
+  enableOffThreadSqlite()
+  try {
+    let turned = false
+    setImmediate(() => { turned = true })
+    const history = await readOpenclawHistory(path, 'agent:main:rewind')
+    expect(history.length).toBeGreaterThan(0)
+    expect(turned).toBe(true)
+  } finally {
+    await resetOffThreadSqlite()
+  }
+})
+
 describe('OpenclawReader', () => {
+  // #4066: a poll yields between its reads, so its pane can stop it in the middle of one.
+  it('tells its pane nothing once it is stopped in the middle of a read', async () => {
+    const { path } = store('rewind')
+    const onHydrated = vi.fn(), onEvents = vi.fn(), onStatus = vi.fn()
+    const reader = new OpenclawReader({ db: path, key: 'agent:main:rewind', onHydrated, onEvents, onStatus, pollMs: 60_000 })
+    const started = reader.start()
+    reader.stop()
+    await started
+    expect(onHydrated).not.toHaveBeenCalled()
+    expect(onEvents).not.toHaveBeenCalled()
+    expect(onStatus).not.toHaveBeenCalled()
+  })
+
   it('follows the key to the new window after reset', async () => {
     // `/reset` appends a reset event to the same window (the fixture), so the stream simply continues there.
     const { path, db } = store('reset')

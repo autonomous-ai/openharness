@@ -5,12 +5,11 @@
  * big and urgent it is (part:, needs:, size:, p0-p2); this reads those with the project's builders and what their machines
  * last reported, plans with the solver (assign/search.ts), and gives each builder with nothing to build what it starts next
  * (one task at a time, four open at most: assign/crew.ts hasRoom): `builder:<name>` on the issue and one line saying why.
- * What its builders hold in the Swarm's other projects' repositories counts too (the allocator's design, package 11).
  * GitHub news (githubMentions.ts) then brings the task to its
  * builder. It runs where the merger runs: in the Harness of the person whose agent is the project's PM, running or stopped there, with their gh.
  * A task its PM or a person gave by hand is never moved.
  */
-import { areaOf, ASKED, hasRoom, heldTasks, labelOf, machineHas, nextPicks, openPieces, outOfQuota, teamOf, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readerKey, readProblem, reasonOf, startedAt, takeBacks, takenTasks, tasksOf, worksOnOf, type AwayBuilder, type Crew, type Pick, type Read } from './assign/crew.js'
+import { addElsewhere, areaOf, ASKED, builtOn, dependsOn, hasRoom, heldTasks, labelOf, machineHas, nextPicks, openPieces, outOfQuota, teamOf, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readerKey, readProblem, reasonOf, startedAt, takeBacks, takenTasks, tasksOf, worksOnOf, type AwayBuilder, type Crew, type CrewBuilder, type Pick, type Read, type Up } from './assign/crew.js'
 import type { Choice } from './assign/model.js'
 import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
@@ -49,9 +48,9 @@ const FLOW_LABELS: ReadonlyArray<{ name: string; color: string; description: str
 const WAIT_TAKE_MS = 10 * 60_000
 /** Pages of a hundred open issues and pull requests read each pass: a list that fills them is said (TOO_MANY_OPEN). */
 const ISSUE_PAGES = 10
-/** The most of the Swarm's other projects whose repositories are read each pass for what this project's builders hold there:
- *  a Swarm has a handful today, and a server allows it a hundred. Past these, its builders count as holding nothing in the rest,
- *  which is said once (OTHER_PROJECTS). */
+/** The most of the Swarm's other projects whose repositories are read each pass for what this project's builders build there:
+ *  a Swarm has a handful today, and the server allows it a hundred. Past these, its builders count as building nothing in the
+ *  rest, which is said once (OTHER_PROJECTS). */
 const OTHER_PROJECTS = 10
 /** How long a reader asked for a head has to read it before another reader is asked too, or, with no other, it again; and
  *  how many asks one reader gets for one head. Thirty minutes (Swarm plan, step 1, item 1: "No verdict in 30 minutes: another is
@@ -91,9 +90,6 @@ export class GitHubAssign {
   private readonly quiet = new Map<string, { since: number; askedAt: number }>()
   /** Each finished task's size and the minutes its work took, by repository and issue; null when it cannot be told. */
   private readonly took = new Map<string, { size: string; minutes: number } | null>()
-  /** Each repository's open issues and pull requests as this pass read them: one whose project is led here too is read once a
-   *  pass, for its own plan and for what its builders hold as the others count it. */
-  private readonly lists = new Map<string, Promise<Json[]>>()
   /** How long each of the Swarm's other repositories that could not be read is left alone. */
   private readonly unreadOthers = new Waits()
   private projects: { at: number; list: LedProject[] } | null = null
@@ -105,7 +101,7 @@ export class GitHubAssign {
   private readonly failing: FailingHeads
   constructor(private readonly deps: { projects: () => Promise<LedProject[]>; crew: (project: LedProject) => Promise<Crew>
     /** The repositories of [project]'s Swarm's projects, as its PM's person reads the Swarm (swarmRepositories): its builders
-     *  may hold tasks in each of them. The PM's own read shows only its own project. */
+     *  may build in each. The PM's own read shows only its own project. */
     repositories: (project: LedProject) => Promise<string[]>
     get: GitHubGet; send: GitHubSend; now?: () => number; log?: (line: string) => void; intervalMs?: number
     /** Who made each verdict by command, the merger's own (githubMerge.ts VerdictRecords): only such a READ-OK is a read. */
@@ -144,7 +140,6 @@ export class GitHubAssign {
   private async pass(): Promise<void> {
     if (!this.projects || this.now() - this.projects.at >= ASSIGN_INTERVAL_MS) this.projects = { at: this.now(), list: await this.deps.projects() }
     if (!this.projects.list.length || this.now() < this.offUntil) return
-    this.lists.clear()
     try {
       for (const project of this.projects.list) {
         if ((this.unreadable.get(project.repo) ?? 0) > this.now()) continue
@@ -165,14 +160,23 @@ export class GitHubAssign {
 
   private async assign(project: LedProject): Promise<void> {
     const { repo } = project
-    const listed = await this.openOf(repo)
-    // A task given here and closed since is forgotten, as are the memories of other things said or done on one.
+    const listed = await this.reads.current(repo, `/repos/${repo}/issues?state=open&per_page=${PAGE}`, ISSUE_PAGES)
+    // GitHub's list of issues counts the pull requests too: lampOS had 155 issues and 104 pull requests open (2026-11-10), 259 of
+    // the 300 three pages held. Past the last page the oldest tasks would drop out of the plan, so a list that fills it is said.
+    if (listed.length >= ISSUE_PAGES * PAGE) this.once(`[super-tab] Task assignment: TOO_MANY_OPEN ${repo}: the newest ${listed.length} open issues and pull requests are planned`)
+    // A task given and not yet shown labelled (GitHub's lists can lag) is read with its label, so it counts in its builder's
+    // list and is never given twice; once shown, or closed, it is forgotten.
     const open = new Set(listed.map(issue => `${repo}#${issue.number}`))
     for (const key of [...this.given.keys()]) if (key.startsWith(`${repo}#`) && !open.has(key)) this.given.delete(key)
     for (const key of [...this.backs]) if (key.startsWith(`${repo}#`) && !open.has(key.slice(0, key.indexOf(':back:')))) this.backs.delete(key)
     for (const key of [...this.blocked]) if (key.startsWith(`${repo}#`) && !open.has(key.slice(0, key.indexOf(':blocked:')))) this.blocked.delete(key)
     for (const key of [...this.pieces, ...this.waited.keys()]) if (key.startsWith(`${repo}#`) && !open.has(key)) { this.pieces.delete(key); this.waited.delete(key) }
-    const issues = this.shown(repo, listed)
+    const issues = listed.map(issue => {
+      const key = `${repo}#${issue.number}`, label = this.given.get(key)
+      if (!label) return issue
+      if (labelNames(issue).some(name => name.startsWith('builder:'))) { this.given.delete(key); return issue }
+      return { ...issue, labels: [...(Array.isArray(issue.labels) ? issue.labels : []), { name: label }] }
+    })
     const crew = await this.deps.crew(project)
     // What each builder works on in this project: the Works on line of its instructions file here (agents/<Name>.md).
     for (const builder of crew.builders) builder.worksOn = worksOnOf(await this.reads.file(repo, `agents/${builder.name}.md`))
@@ -185,9 +189,12 @@ export class GitHubAssign {
     // The tasks whose pull request waits for its readers or its merge, readers asked as needed (with no builder here, its
     // PM): their builders have done their part, so none is called quiet, and one whose builder went away is kept, as its
     // pull request merges without it. Another builder would do it again.
-    const withReaders = await this.askReaders(project, issues, pulls, crew)
-    // Read after them: such a task is not one its builder builds, and takes none of its time in the plan.
-    const read = readProblem({ now: this.now(), issues, closed, crew, withReaders, minutes, elsewhere: await this.elsewhere(project, crew) })
+    const { withReaders, up } = await this.askReaders(project, issues, pulls, crew)
+    // Read after them: such a task is not one its builder builds, and takes none of its time in the plan; and a task that
+    // comes after another waits for that one's pull request to be up.
+    const read = readProblem({ now: this.now(), issues, crew, withReaders, up, minutes })
+    // And what the builders with room here build in the Swarm's other projects: the only ones for whom it decides anything.
+    addElsewhere(read, await this.elsewhere(project, crew.builders.filter(builder => hasRoom(read, builder.id))))
     // One whose machine is down keeps its tasks while nobody else can take them: they would only come back to it, labels and
     // comments twice over. One its person is stopping gives them back all the same, for whoever joins.
     await this.takeBack(repo, issues, (crew.away ?? []).filter(away => (away.why !== 'down' && away.why !== 'paused') || crew.builders.length > 0), undefined, withReaders)
@@ -201,57 +208,46 @@ export class GitHubAssign {
         (part, why) => this.once(`[super-tab] Task assignment: SCOREBOARD_UNREAD ${repo}: its ${part}: ${why}`)), numbers.more))
   }
 
-  /** [repo]'s open issues and pull requests as GitHub lists them now, read once a pass ([lists]) with each page's ETag. GitHub's
-   *  list of issues counts the pull requests too: lampOS had 155 issues and 104 pull requests open (2026-11-10), 259 of the 300
-   *  three pages held. Past the last page the oldest would drop out of the plan and the counts, so a list that fills it is said. */
-  private openOf(repo: string): Promise<Json[]> {
-    let listed = this.lists.get(repo)
-    if (!listed) {
-      listed = this.reads.current(repo, `/repos/${repo}/issues?state=open&per_page=${PAGE}`, ISSUE_PAGES).then(rows => {
-        if (rows.length >= ISSUE_PAGES * PAGE) this.once(`[super-tab] Task assignment: TOO_MANY_OPEN ${repo}: the newest ${rows.length} open issues and pull requests are read, and no older one`)
-        return rows
-      })
-      this.lists.set(repo, listed)
-    }
-    return listed
-  }
-
-  /** [listed] of [repo] with the label of each task given here that GitHub's lists do not show yet (they can lag), so it counts in
-   *  its builder's list, here and in the other projects led here, and is never given twice. Once shown it is forgotten. */
-  private shown(repo: string, listed: Json[]): Json[] {
-    return listed.map(issue => {
-      const key = `${repo}#${issue.number}`, label = this.given.get(key)
-      if (!label) return issue
-      if (labelNames(issue).some(name => name.startsWith('builder:'))) { this.given.delete(key); return issue }
-      return { ...issue, labels: [...(Array.isArray(issue.labels) ? issue.labels : []), { name: label }] }
-    })
-  }
-
   /**
-   * The open issues and pull requests of the Swarm's other projects' repositories, where [project]'s builders may hold tasks too:
-   * every regular agent builds for every public project of its Swarm (assign/crew.ts crewOf), and each project is planned on its
-   * own PM's person's computer, so each gave the same agent a task building (the allocator's design, package 11, option (a):
-   * docs/design/2026-11-11-swarm-allocator/one-view.md). Each list is read as its own allocator reads it, a 304 while nothing
-   * there changed, and not again in a pass that read it; at most [OTHER_PROJECTS] of them. One this login cannot read, or that
-   * GitHub refused, is left out, so its builders count as holding nothing there: said once, and asked again only after a wait
+   * What [builders] (those with room here) have open in the Swarm's other projects' repositories, one list a repository: every
+   * regular agent builds for every public project of its Swarm (assign/crew.ts crewOf), and each project is planned on its own
+   * PM's person's computer, so each gave the same agent a task building (the allocator's design, package 11, option (a):
+   * docs/design/2026-11-11-swarm-allocator/one-view.md). Each builder's own list there is read, as githubClaim.ts reads one
+   * (labels=builder:<name>), with its ETag: a 304, free of the login's limit, while nothing of that builder's there changed. A
+   * whole list answered 200 each pass in a busy repository, newest first (review of #4144). A task given here that GitHub's
+   * list does not show yet is in it too. At most [OTHER_PROJECTS] repositories. The Swarm, or a repository, that cannot be read
+   * is left out, said once: its builders count as building nothing there. A repository is then asked again only after a wait
    * that grows (Waits). GitHub failing on its own side, or limiting this login, stops the pass, as for the project's own.
    */
-  private async elsewhere(project: LedProject, crew: Crew): Promise<Json[][]> {
-    if (!crew.builders.length) return []
-    const others = (await this.deps.repositories(project)).filter(repo => repo !== project.repo)
+  private async elsewhere(project: LedProject, builders: CrewBuilder[]): Promise<Json[][]> {
+    if (!builders.length) return []
+    const swarm = await this.deps.repositories(project).catch((error: unknown) => {
+      this.once(`[super-tab] Task assignment: SWARM_UNREAD ${project.repo}: ${error instanceof Error ? error.message : String(error)} Its builders count as building nothing in the Swarm's other projects.`)
+      return []
+    })
+    const others = swarm.filter(repo => repo !== project.repo)
     if (others.length > OTHER_PROJECTS) {
-      this.once(`[super-tab] Task assignment: OTHER_PROJECTS ${project.repo}: of the Swarm's ${others.length} other projects, the first ${OTHER_PROJECTS} are read for what its builders hold`)
+      this.once(`[super-tab] Task assignment: OTHER_PROJECTS ${project.repo}: of the Swarm's ${others.length} other projects, the first ${OTHER_PROJECTS} are read for what its builders build`)
     }
     const lists: Json[][] = []
     for (const other of others.slice(0, OTHER_PROJECTS)) {
       if (this.unreadOthers.held(other, this.now())) continue
       try {
-        lists.push(this.shown(other, await this.openOf(other)))
+        // A task given there from here (its project led here too), which GitHub's lists can lag behind: what they show of it,
+        // once they do, takes its place.
+        const listed = new Map<number, Json>([...this.given].filter(([key]) => key.startsWith(`${other}#`))
+          .map(([key, label]) => [Number(key.slice(other.length + 1)), { number: Number(key.slice(other.length + 1)), labels: [{ name: label }] }]))
+        for (const builder of builders) {
+          for (const item of await this.reads.current(other, `/repos/${other}/issues?state=open&labels=${encodeURIComponent(builder.label)}&per_page=${PAGE}`, 1)) {
+            listed.set(Number(item.number), item)
+          }
+        }
+        lists.push([...listed.values()])
         this.unreadOthers.ok(other)
       } catch (error) {
         if (!(error instanceof GitHubStop) || error.everywhere) throw error
         this.unreadOthers.miss(other, this.now(), error.until - this.now())
-        this.once(`[super-tab] Task assignment: ${error.code} ${other}: ${error.message} ${project.repo}'s builders count as holding nothing there.`)
+        this.once(`[super-tab] Task assignment: ${error.code} ${other}: ${error.message} ${project.repo}'s builders count as building nothing there.`)
       }
     }
     return lists
@@ -267,7 +263,7 @@ export class GitHubAssign {
     if (short.length < read.problem.builders.length) await this.takeBack(repo, issues, short, undefined, withReaders)
     await this.sayPiecesDone(repo, issues, crew)
     await this.askQuiet(repo, issues, pulls, crew, withReaders)
-    await this.sayWaiting(project, issues)
+    await this.sayWaiting(project, issues, read.looped)
     await this.openWaiting(repo, issues, crew, read, short)
     if (!read.free.size) return { short, picks: [] }
     // Nobody is given a task while every builder has one to build, or holds four: no plan, so a backlog costs no CPU each
@@ -344,9 +340,11 @@ export class GitHubAssign {
    * its own): a READ-OK on its head from someone other than its author, two for TWO READS. A reader asked and not yet
    * answered is still reading. A verdict on an older head no longer counts, and a HOLD on one still blocks the merge
    * (githubMerge.ts), so its reader is asked to read the new head, once. Nothing while a HOLD stands on the head itself: its
-   * author fixes first. Each ask is one comment naming the reader, which GitHub news brings it (githubMentions.ts).
+   * author fixes first. Each ask is one comment naming the reader, which GitHub news brings it (githubMentions.ts). What it
+   * read of them is returned: the tasks whose pull request waits for its readers or its merge, and the team's pull requests
+   * that are up, by the task each is for, which a task that comes after one is built on (assign/crew.ts readProblem).
    */
-  private async askReaders(project: LedProject, issues: Json[], open: Json[], crew: Crew): Promise<Set<number>> {
+  private async askReaders(project: LedProject, issues: Json[], open: Json[], crew: Crew): Promise<{ withReaders: Set<number>; up: Map<number, Up[]> }> {
     const { repo } = project
     const team = teamOf(crew, project.pm)
     // What each builder holds, for the reader with the least (readerFor).
@@ -356,6 +354,7 @@ export class GitHubAssign {
     const pmHears = () => pmRuns ??= this.deps.pmRunning(project).catch(() => false)
     // The tasks whose pull request waits for its readers or its merge, not for its builder (askQuiet).
     const withReaders = new Set<number>()
+    const up = new Map<number, Up[]>()
     const base = String((await this.reads.one(repo, `/repos/${repo}`)).default_branch ?? '')
     const openPulls = new Set(open.map(pull => `${repo}#${pull.number}`))
     for (const key of [...this.asks]) if (key.startsWith(`${repo}#`) && !openPulls.has(key.slice(0, key.indexOf('@')))) this.asks.delete(key)
@@ -365,6 +364,10 @@ export class GitHubAssign {
       if (!Number.isSafeInteger(number) || !/^[0-9a-f]{40}$/.test(head)) continue
       const author = authorOf(pull)
       if (author === null || !team.has(labelOf(author))) continue
+      // Up for its tasks whatever follows: one on hold or with failed checks still has the code a later task is built on. Only
+      // one GitHub says is by a member of the repository: anyone can name a fork's branch `pip/1` and say it closes #1, which
+      // read as Pip's gave Pip the next task on an outsider's branch (review of #4121).
+      if (TEAM.has(pull.author_association)) for (const task of tasksOf(pull)) up.set(task, [...up.get(task) ?? [], { pull: number, branch: String((pull.head as Json).ref ?? ''), label: labelOf(author) }])
       // One on hold waits for a person to lift it: nobody is asked to read it meanwhile, and its task waits with it, not its
       // builder (askQuiet asks nothing of it, and it is not taken back).
       if (isHeld(pull)) { for (const task of tasksOf(pull)) withReaders.add(task); continue }
@@ -477,7 +480,7 @@ export class GitHubAssign {
         await askNow(reader.name, 'please read this pull request')
       }
     }
-    return withReaders
+    return { withReaders, up }
   }
 
   /** Learns how long finished tasks took: for a few closed sized issues a pass not measured yet, from its builder's
@@ -583,20 +586,23 @@ export class GitHubAssign {
    * room for it (assign/crew.ts hasRoom) and could take it, goes back with one line of why, and the next plan gives it to the
    * builder who can start it soonest (Swarm plan, step 1, item 6: "Nobody waits on it"). A builder whose turn does not end, or
    * that is on a fix or a read, takes its task late, while others sit with nothing. One its PM or a person gave stands: Harness
-   * gave it when its own word "for **Name**" is on it.
+   * gave it when its own word "for **Name**" is on it. So does one that comes after a task still open: it can go to that
+   * task's builder alone (readProblem), so taken back it would help nobody with nothing.
    * Once a task and builder in a daemon's life, so a plan or a person that gives it back to that builder is not undone.
    */
   private async openWaiting(repo: string, issues: Json[], crew: Crew, read: Read, short: AwayBuilder[]): Promise<void> {
     const idle = crew.builders.filter(b => hasRoom(read, b.id) && !short.some(away => away.label === b.label))
     if (!idle.length) return
     const now = this.now()
+    const open = new Set(issues.filter(issue => !issue.pull_request).map(issue => Number(issue.number)))
     // One task back for each builder with nothing, the oldest first: on the sandbox (2026-11-11) one free builder took two back,
     // and the next plan had two to give it.
     for (const issue of [...issues].sort((a, b) => Number(a.number) - Number(b.number))) {
       if (!idle.length) return
       const labels = labelNames(issue)
       const builder = crew.builders.find(b => labels.includes(b.label))
-      if (issue.pull_request || !builder || labels.includes('status:taken') || this.backs.has(`${repo}#${issue.number}:back:${builder.label}`)) continue
+      if (issue.pull_request || !builder || labels.includes('status:taken') || this.backs.has(`${repo}#${issue.number}:back:${builder.label}`)
+        || dependsOn(issue.body).some(number => open.has(number))) continue
       const task = read.problem.tasks.find(t => t.id === `#${issue.number}`)
       const taker = idle.find(b => b !== builder && !task?.notBuilders.includes(b.id))
       if (!task || !taker) continue
@@ -640,9 +646,10 @@ export class GitHubAssign {
     return true
   }
 
-  /** Tells the PM, once on the task, of a sized task nobody holds whose pieces are still open: it is given to nobody until
-   *  they are closed (assign/crew.ts readProblem), which a piece nobody builds would make for ever. */
-  private async sayWaiting(project: LedProject, issues: Json[]): Promise<void> {
+  /** Tells the PM, once on the task, of a sized task nobody holds that is given to nobody for a reason that may last for ever
+   *  (assign/crew.ts readProblem): its pieces are still open, which a piece nobody builds would make for ever; or it is one of
+   *  the [looped], whose "after #N" lines wait on each other. */
+  private async sayWaiting(project: LedProject, issues: Json[], looped: readonly string[]): Promise<void> {
     let told = 0
     for (const issue of issues) {
       const labels = labelNames(issue)
@@ -650,6 +657,7 @@ export class GitHubAssign {
         || !labels.some(label => /^size:[sml]$/.test(label))) continue
       if (told < BLOCKED_PER_PASS && await this.sayBlocked(project, Number(issue.number), 'pieces cut off it are still open')) told++
     }
+    for (const task of looped) if (told < BLOCKED_PER_PASS && await this.sayBlocked(project, Number(task.slice(1)), LOOPED)) told++
   }
 
   /** One ask of a reader, once per pull request, head and reader: a comment naming it, with the command that makes its
@@ -676,8 +684,10 @@ export class GitHubAssign {
       return false
     }
     this.given.set(`${project.repo}#${number}`, label)
+    // One that comes after tasks whose pull requests are up says which branches it is built on.
+    const bases = read.bases.get(pick.task)
     const said = await this.deps.send('POST', `/repos/${project.repo}/issues/${number}/comments`,
-      { body: `${SELF}, ${this.clock()}: for **${name}**: ${reasonOf(pick, read)}.` })
+      { body: `${SELF}, ${this.clock()}: for **${name}**: ${reasonOf(pick, read)}.${bases ? ` ${builtOn(bases)}.` : ''}` })
     // Given all the same: its label is on, and its builder's turn's end types it (nextThing.ts). Its line held or refused is said here.
     if (said.status >= 300) this.once(`[super-tab] Task assignment: LINE_REFUSED ${project.repo}#${number}: GitHub answered ${said.status}`)
     this.log(`[super-tab] gave ${project.repo}#${number} to ${name} (${reasonOf(pick, read)})`)
@@ -708,6 +718,8 @@ export class GitHubAssign {
 
 /** How many PMs are told per pass why a task cannot start: a backlog of them is said over a few passes. */
 const BLOCKED_PER_PASS = 5
+/** What its PM is told of a task whose "after #N" lines lead back to itself. */
+const LOOPED = 'its "after #N" lines wait on each other'
 
 /**
  * Why nobody can start a sized task, said so its PM can act on it, or null for a wait that passes (a builder busy, quota
@@ -716,7 +728,7 @@ const BLOCKED_PER_PASS = 5
  * its task waiting for ever, which only the PM's person can change.
  */
 export function blockedWhy(issue: Json | undefined, why: string, crew: Crew, read: Read, task: string): string | null {
-  if (why === 'its dependencies wait on each other') return 'its "after #N" lines wait on each other'
+  if (why === 'its dependencies wait on each other') return LOOPED
   const needs = issue ? labelNames(issue).filter(name => name.startsWith('needs:')).map(name => name.slice('needs:'.length)) : []
   const machines = crew.machines.filter(machine => crew.builders.some(builder => builder.machineId === machine.machineId))
   if (needs.length && !machines.some(machine => needs.every(need => machineHas(machine.observation, need)))) {

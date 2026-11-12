@@ -4,7 +4,8 @@
  * OpenClaw keeps every conversation in its agent database (`openclaw-agent.sqlite`, schema 27), written by the
  * Gateway. A key (`agent:<id>:<key>`) points at its current window (`session_nodes.current_session_id`), and a
  * window's rows are `transcript_events`, keyed `(session_id, seq)`, each as JSON text or zstd-compressed JSON. This
- * reader polls every second, as `OpencodeReader` does, on the cached read-only `node:sqlite` handle. A poll that finds
+ * reader polls every second, as `OpencodeReader` does, through `sqliteReadAll` on the cached read-only `node:sqlite`
+ * handle: in the core, on its read threads (lib/sqliteThread.ts), never on its own thread (#4066). A poll that finds
  * the store's files as the last read left them reads nothing, so a bound idle pane costs a stat a second. There is no
  * `sqlite3` CLI fallback: the CLI's `-json` output mangles the compressed blobs.
  *
@@ -26,8 +27,8 @@
 import { statSync } from 'node:fs'
 import * as zlib from 'node:zlib'
 import { sid } from '../../lib/log.js'
-import { builtinSqlite, readBuiltin } from '../../lib/sqliteBuiltin.js'
-import type { SqliteParam, SqliteRow } from '../../lib/sqliteRead.js'
+import { builtinSqlite } from '../../lib/sqliteBuiltin.js'
+import { sqliteReadAll, type SqliteParam, type SqliteRow } from '../../lib/sqliteRead.js'
 import { OPENCLAW_COLUMNS } from './contract.js'
 
 /** One transcript row: the window it was read from, its place there and the event OpenClaw wrote. */
@@ -49,12 +50,14 @@ const POLL_MS = 1_000
 const QUIET_READ_MS = 10_000
 /** Rows per read: a long backlog drains over a few polls instead of in one blocking read. */
 const PAGE = 500
-/** The binding is synchronous and blocks the event loop while it waits on a lock: kept short, as in sqliteRead. */
+/** How long a read waits on a lock: kept short, as in sqliteRead, for a read on the caller's thread. */
 const BUSY_TIMEOUT_MS = 250
 /** Windows followed back through `previous_session_id`, and the guard against a cycle. */
 const MAX_WINDOWS = 64
 /** The store's own bound on a row (`event_utf8_bytes`), so a corrupt frame cannot inflate without limit. */
 const MAX_EVENT_BYTES = 4 * 1024 * 1024
+/** A page's rows at the store's own bound: a page within it is never refused, so a reader is never stuck on one. */
+const MAX_PAGE_BYTES = PAGE * MAX_EVENT_BYTES
 /** Unreadable rows remembered so each is logged once; forgotten past this many. */
 const MAX_LOGGED = 1_000
 /**
@@ -106,12 +109,12 @@ const zstd = zlib as typeof zlib & { zstdDecompressSync?: (data: Uint8Array, opt
 interface KeyNode { windowId: string; status: string | null; generation: string | null }
 interface Page { events: OpenclawEvent[]; lastSeq: number | null; full: boolean }
 
-function query(db: string, sql: string, params: SqliteParam[]): SqliteRow[] {
-  const Database = builtinSqlite()
-  if (!Database || typeof zstd.zstdDecompressSync !== 'function') {
+async function query(db: string, sql: string, params: SqliteParam[]): Promise<SqliteRow[]> {
+  // No sqlite3 CLI fallback: its -json output mangles the compressed blobs.
+  if (!builtinSqlite() || typeof zstd.zstdDecompressSync !== 'function') {
     throw new OpenclawReadError('missing', 'this Node has no node:sqlite or zstd')
   }
-  const result = readBuiltin(Database, db, sql, params, BUSY_TIMEOUT_MS)
+  const result = await sqliteReadAll(db, sql, params, { busyTimeoutMs: BUSY_TIMEOUT_MS, maxBuffer: MAX_PAGE_BYTES })
   if (result.ok) return result.rows
   // A read that failed may be a store whose columns changed under it: check them again on the next read.
   checked.delete(db)
@@ -126,31 +129,31 @@ function errorCode(error: unknown): string {
 
 const checked = new Map<string, string[]>()
 /** Every column the reader reads is there, checked once per store. The schema version is logged, never refused. */
-function ensureSupported(db: string): void {
+async function ensureSupported(db: string): Promise<void> {
   let missing = checked.get(db)
   if (!missing) {
     missing = []
     for (const [table, columns] of Object.entries(OPENCLAW_COLUMNS)) {
-      const have = new Set(query(db, COLUMNS_SQL, [table]).map((row) => String(row.name)))
+      const have = new Set((await query(db, COLUMNS_SQL, [table])).map((row) => String(row.name)))
       for (const column of columns) if (!have.has(column)) missing.push(`${table}.${column}`)
     }
     checked.set(db, missing)
-    console.error(`[openclaw] agent schema ${schemaVersion(db)}${missing.length ? ` · unsupported, missing ${missing.join(', ')}` : ''}`)
+    console.error(`[openclaw] agent schema ${await schemaVersion(db)}${missing.length ? ` · unsupported, missing ${missing.join(', ')}` : ''}`)
   }
   if (missing.length) throw new OpenclawReadError('unsupported', `missing ${missing.join(', ')}`)
 }
 
-function schemaVersion(db: string): string {
+async function schemaVersion(db: string): Promise<string> {
   try {
-    const row = query(db, SCHEMA_SQL, [])[0]
+    const row = (await query(db, SCHEMA_SQL, []))[0]
     return row ? `${String(row.version)} (OpenClaw ${String(row.app ?? 'unknown')})` : 'unknown'
   } catch {
     return 'unknown'
   }
 }
 
-function readNode(db: string, key: string): KeyNode | null {
-  const row = query(db, NODE_SQL, [key])[0]
+async function readNode(db: string, key: string): Promise<KeyNode | null> {
+  const row = (await query(db, NODE_SQL, [key]))[0]
   if (!row || typeof row.window_id !== 'string') return null
   return {
     windowId: row.window_id,
@@ -159,8 +162,8 @@ function readNode(db: string, key: string): KeyNode | null {
   }
 }
 
-function lastSeq(db: string, windowId: string): number {
-  const seq = query(db, LAST_SEQ_SQL, [windowId])[0]?.seq
+async function lastSeq(db: string, windowId: string): Promise<number> {
+  const seq = (await query(db, LAST_SEQ_SQL, [windowId]))[0]?.seq
   return typeof seq === 'number' ? seq : -1
 }
 
@@ -198,8 +201,8 @@ function decode(key: string, windowId: string, row: SqliteRow): Record<string, u
   return hiddenRecord(record) ? null : record
 }
 
-function readPage(db: string, key: string, windowId: string, afterSeq: number, sql: string): Page {
-  const rows = query(db, sql, [windowId, afterSeq])
+async function readPage(db: string, key: string, windowId: string, afterSeq: number, sql: string): Promise<Page> {
+  const rows = await query(db, sql, [windowId, afterSeq])
   const events: OpenclawEvent[] = []
   for (const row of rows) {
     const record = decode(key, windowId, row)
@@ -209,11 +212,11 @@ function readPage(db: string, key: string, windowId: string, afterSeq: number, s
 }
 
 /** A window's header and active branch, every page of it. */
-function readActive(db: string, key: string, windowId: string): OpenclawEvent[] {
+async function readActive(db: string, key: string, windowId: string): Promise<OpenclawEvent[]> {
   const events: OpenclawEvent[] = []
   let after = -1
   for (;;) {
-    const page = readPage(db, key, windowId, after, ACTIVE_SQL)
+    const page = await readPage(db, key, windowId, after, ACTIVE_SQL)
     events.push(...page.events)
     if (!page.full || page.lastSeq === null) return events
     after = page.lastSeq
@@ -221,10 +224,10 @@ function readActive(db: string, key: string, windowId: string): OpenclawEvent[] 
 }
 
 /** The key's window and the ones before it, newest first. */
-function windowChain(db: string, windowId: string): string[] {
+async function windowChain(db: string, windowId: string): Promise<string[]> {
   const chain = [windowId]
   while (chain.length < MAX_WINDOWS) {
-    const previous = query(db, PREVIOUS_SQL, [chain[chain.length - 1]])[0]?.previous
+    const previous = (await query(db, PREVIOUS_SQL, [chain[chain.length - 1]]))[0]?.previous
     if (typeof previous !== 'string' || chain.includes(previous)) break
     chain.push(previous)
   }
@@ -236,17 +239,17 @@ function windowChain(db: string, windowId: string): string[] {
  * fork) owns them: an earlier window contributes only events no later window holds, so a row a rewind left off
  * the branch never comes back through the window it was copied from.
  */
-function history(db: string, key: string, node: KeyNode): OpenclawEvent[] {
-  const chain = windowChain(db, node.windowId)
+async function history(db: string, key: string, node: KeyNode): Promise<OpenclawEvent[]> {
+  const chain = await windowChain(db, node.windowId)
   const later = new Set<string>()
   const parts: OpenclawEvent[][] = []
   for (const [index, windowId] of chain.entries()) {
-    parts.unshift(readActive(db, key, windowId).filter((event) => {
+    parts.unshift((await readActive(db, key, windowId)).filter((event) => {
       const id = event.record.id
       return typeof id !== 'string' || !later.has(id)
     }))
     if (index < chain.length - 1) {
-      for (const row of query(db, IDS_SQL, [windowId])) if (typeof row.id === 'string') later.add(row.id)
+      for (const row of await query(db, IDS_SQL, [windowId])) if (typeof row.id === 'string') later.add(row.id)
     }
   }
   return parts.flat()
@@ -261,28 +264,28 @@ export interface OpenclawCursor { windowId: string; seq: number; generation: str
  * conversation again, `whole`, and the count starts over. Hidden rows are left out. Null when the key is not there.
  */
 export async function readOpenclawSince(db: string, key: string, after: OpenclawCursor | null): Promise<{ events: OpenclawEvent[]; cursor: OpenclawCursor; whole: boolean } | null> {
-  ensureSupported(db)
-  const node = readNode(db, key)
+  await ensureSupported(db)
+  const node = await readNode(db, key)
   if (!node) return null
   if (after?.windowId === node.windowId && after.generation === node.generation) {
     const events: OpenclawEvent[] = []
     let seq = after.seq
     for (;;) {
-      const page = readPage(db, key, node.windowId, seq, LIVE_SQL)
+      const page = await readPage(db, key, node.windowId, seq, LIVE_SQL)
       events.push(...page.events)
       if (page.lastSeq !== null) seq = page.lastSeq
       if (!page.full) return { events, cursor: { windowId: node.windowId, seq, generation: node.generation }, whole: false }
     }
   }
   // The last seq first: a row written while the history is read is then counted on the next read, never twice.
-  const seq = lastSeq(db, node.windowId)
-  return { events: history(db, key, node), cursor: { windowId: node.windowId, seq, generation: node.generation }, whole: true }
+  const seq = await lastSeq(db, node.windowId)
+  return { events: await history(db, key, node), cursor: { windowId: node.windowId, seq, generation: node.generation }, whole: true }
 }
 
 /** The key's conversation as OpenClaw holds it now: the active branch, across the window chain. */
 export async function readOpenclawHistory(db: string, key: string): Promise<OpenclawEvent[]> {
-  ensureSupported(db)
-  const node = readNode(db, key)
+  await ensureSupported(db)
+  const node = await readNode(db, key)
   return node ? history(db, key, node) : []
 }
 
@@ -363,9 +366,9 @@ export class OpenclawReader {
     if (this.timer) { clearInterval(this.timer); this.timer = null }
   }
 
-  private node(): KeyNode | null {
-    ensureSupported(this.deps.db)
-    const node = readNode(this.deps.db, this.deps.key)
+  private async node(): Promise<KeyNode | null> {
+    await ensureSupported(this.deps.db)
+    const node = await readNode(this.deps.db, this.deps.key)
     if (!node && this.said !== 'absent') {
       this.said = 'absent'
       console.error(`[openclaw] ${sid(this.deps.key)} is not in its agent database yet`)
@@ -374,10 +377,10 @@ export class OpenclawReader {
   }
 
   /** Reads the active branch again, and returns the events it holds that were not emitted yet. */
-  private hydrate(node: KeyNode): OpenclawEvent[] {
+  private async hydrate(node: KeyNode): Promise<OpenclawEvent[]> {
     // The last seq first: a row written while the history is read is then read again, and dropped by its id.
-    const seq = lastSeq(this.deps.db, node.windowId)
-    const fresh = history(this.deps.db, this.deps.key, node).filter((event) => this.remember(event))
+    const seq = await lastSeq(this.deps.db, node.windowId)
+    const fresh = (await history(this.deps.db, this.deps.key, node)).filter((event) => this.remember(event))
     this.cursor = { windowId: node.windowId, seq }
     this.generation = node.generation
     return fresh
@@ -404,12 +407,14 @@ export class OpenclawReader {
     try {
       let recovered = false
       if (this.unsupported !== null) {
-        if (schemaCookie(this.deps.db) === this.unsupported) { settled = true; return }
+        if (await schemaCookie(this.deps.db) === this.unsupported) { settled = true; return }
         checked.delete(this.deps.db)
         this.unsupported = null
         recovered = true
       }
-      const node = this.node()
+      const node = await this.node()
+      // Its reads yield (#4066): a reader stopped meanwhile tells its pane nothing more.
+      if (this.stopped) return
       this.keyFound = node !== null
       if (recovered) {
         console.error(`[openclaw] ${sid(this.deps.key)} store readable again`)
@@ -419,10 +424,10 @@ export class OpenclawReader {
       if (!node) {
         if (!this.hydrated) this.born = true
         if (!this.borrowed) {
-          const row = query(this.deps.db, NEWEST_HEADER_SQL, [])[0]
+          const row = (await query(this.deps.db, NEWEST_HEADER_SQL, []))[0]
           this.borrowed = true
           const header = row ? decode(this.deps.key, String(row.window_id), row) : null
-          if (header) this.deps.onAgentHeader?.(header)
+          if (header && !this.stopped) this.deps.onAgentHeader?.(header)
         }
         return
       }
@@ -432,7 +437,9 @@ export class OpenclawReader {
         // Attached to a key that already had rows, whether this is the first read or the first good one after a
         // failed one (locked, being replaced): they are history, never live.
         if (!this.born) {
-          this.deps.onHydrated(this.hydrate(node), node.status)
+          const hydrated = await this.hydrate(node)
+          if (this.stopped) return
+          this.deps.onHydrated(hydrated, node.status)
           this.deps.onStatus?.(node.status)
           return
         }
@@ -441,41 +448,42 @@ export class OpenclawReader {
       if (!this.cursor || node.windowId !== this.cursor.windowId) {
         this.cursor = { windowId: node.windowId, seq: -1 }
         this.generation = node.generation
-        page = this.readLive()
+        page = await this.readLive()
       } else if (node.generation !== this.generation) {
-        page = { events: this.hydrate(node), full: false }
+        page = { events: await this.hydrate(node), full: false }
       } else {
-        page = this.readLive()
+        page = await this.readLive()
       }
       settled = !page.full
+      if (this.stopped) return
       if (page.events.length) this.deps.onEvents(page.events)
       // A backlog still being read may hold the row that ends the run: the status speaks once it is read.
       if (!page.full) this.deps.onStatus?.(node.status)
     } catch (error) {
       settled = false
-      this.failed(error)
+      if (!this.stopped) await this.failed(error)
     } finally {
       if (settled) this.settled = stamp
       this.polling = false
     }
   }
 
-  private readLive(): { events: OpenclawEvent[]; full: boolean } {
+  private async readLive(): Promise<{ events: OpenclawEvent[]; full: boolean }> {
     const cursor = this.cursor!
-    const page = readPage(this.deps.db, this.deps.key, cursor.windowId, cursor.seq, LIVE_SQL)
+    const page = await readPage(this.deps.db, this.deps.key, cursor.windowId, cursor.seq, LIVE_SQL)
     if (page.lastSeq !== null) cursor.seq = page.lastSeq
     return { events: page.events.filter((event) => this.remember(event)), full: page.full }
   }
 
   /** A transient failure is said once, until a read succeeds; the others are said to the stream. */
-  private failed(error: unknown): void {
+  private async failed(error: unknown): Promise<void> {
     if (error instanceof OpenclawReadError && error.reason === 'missing') {
       this.stop()
       this.deps.onFatal?.('missing')
       return
     }
     if (error instanceof OpenclawReadError && error.reason === 'unsupported') {
-      this.unsupported = schemaCookieOr(this.deps.db, -1)
+      this.unsupported = await schemaCookieOr(this.deps.db, -1)
       this.deps.onFatal?.('unsupported')
       return
     }
@@ -486,10 +494,10 @@ export class OpenclawReader {
   }
 }
 
-function schemaCookie(db: string): number {
-  return Number(query(db, COOKIE_SQL, [])[0]?.cookie ?? -1)
+async function schemaCookie(db: string): Promise<number> {
+  return Number((await query(db, COOKIE_SQL, []))[0]?.cookie ?? -1)
 }
 
-function schemaCookieOr(db: string, fallback: number): number {
-  try { return schemaCookie(db) } catch { return fallback }
+async function schemaCookieOr(db: string, fallback: number): Promise<number> {
+  try { return await schemaCookie(db) } catch { return fallback }
 }

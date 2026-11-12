@@ -228,6 +228,32 @@ it('starts the next things with the host and stops them with the service', async
   service.port.disconnected()
   expect(nextThings.stop).toHaveBeenCalledOnce()
 })
+// The allocator's design, package 11: a project's PM reads its own project alone, so the Swarm's other projects, where its
+// builders may build too, are read as its PM's person reads the Swarm (review of #4144: no spec ran that line).
+it('has the assigner read the Swarm as the PM\'s person, and a builder\'s own list in another project\'s repository', async () => {
+  const agent = (id: string, more: Record<string, unknown>) => ({ id, machineId: 'machine-1', harnessId: `${id}-native`, contributorId: 'me', machineOwnerId: 'me',
+    configuration: { engine: 'claude' }, ...more })
+  const pm = agent('pm', { displayName: 'Faye' }), pip = agent('pip', { displayName: 'Pip', regular: true })
+  const project = (id: string) => ({ id, name: id, leadConversationId: `lead-${id}`, visibility: 'public', repository: { repositoryUrl: `https://github.com/acme/${id}` } })
+  // As the backend answers: the PM reads its own project, and its person every public one.
+  const swarm = (asPm: boolean) => ({ agents: [pm, pip], projects: asPm ? [project('app')] : [project('app'), project('web')],
+    conversations: [{ id: 'lead-app', leadId: 'pm', agentIds: ['pm'] }] })
+  const call = vi.fn<CoreApi['account']['backend']>(async (_method, path) => ({ status: 200, body: { success: true, data: path.includes('/hosts/')
+    ? hostForm([{ tabId: 'tab', agent: pm, lead: true, ledConversationId: 'lead-app' }], { tabs: ['tab'] }) : swarmReply(path, swarm(path.includes('asAgentId=pm'))) } }))
+  const asked: string[] = []
+  const github = { get: vi.fn(async (path: string) => { asked.push(path)
+    return { status: 200, etag: null, resetAt: null, body: path === '/repos/acme/app' ? { default_branch: 'main' } : [] } }),
+  send: vi.fn(async () => ({ status: 201, etag: null, resetAt: null, body: {} })) }
+  const core = fakeCore({ dataDir: mkdtempSync(join(tmpdir(), 'assign-wiring-')), account: { backend: call, identity: vi.fn(async () => ({ accountId: 'me' }) as never) },
+    agents: { byAgent: vi.fn(() => ({ agentId: 'pm-native' }) as never) } })
+  const idle = () => ({ start: vi.fn(), stop: vi.fn() })
+  const service = superTabService(core, { host: () => ({ machineId: 'machine-1', start: vi.fn(), stop: vi.fn() }) as unknown as SuperTabHost, github: () => github,
+    githubMentions: () => ({ ...idle(), owed: vi.fn(() => []) }), githubMerge: idle, shipping: idle, firstAnswers: idle, nextThings: () => ({ ...idle(), inbox: vi.fn() }) })
+  expect(await service.requests.super_tabs({ action: 'wake' }, owner)).toEqual({ ok: true })
+  await vi.waitFor(() => expect(asked).toContain('/repos/acme/web/issues?state=open&labels=builder%3Apip&per_page=100'), { timeout: 10_000 })
+  expect(call.mock.calls.map(([, path]) => path)).toContain('/api/super-tabs/tab/parts')
+  service.port.stop()
+})
 // Swarm plan, step 1, item 2: what waits for the agent that asks, as its turns' ends type it (nextThing.ts inbox).
 it('lists what waits for the agent in its own pane, and says a GitHub failure by its code', async () => {
   const inbox = vi.fn(async (_harnessId: string) => ['Next: acme/app#12 Fix the login bug. …'])
@@ -382,6 +408,23 @@ it('keeps host capacity separate from account authority and closes it on disconn
   expect(stop).toHaveBeenCalledTimes(2)
   expect(factory).toHaveBeenLastCalledWith(core, 'changed-machine')
   service.port.stop(); expect(stop).toHaveBeenCalledTimes(3)
+})
+
+// The rehearsal's Codex builders (2026-11-11): a start whose agent ended is told how its engine left (engineExit.ts), read on this
+// machine, which keeps its pane, in fixed words; one still running is read nothing.
+it('tells a start how its engine left, once its agent ended', async () => {
+  const text = "error: unexpected argument '--add-dir' found\n\nharness: codex exited (2). This pane is a shell now — run codex again, or stop the pane.\n% "
+  const screen = vi.fn(async () => ({ ok: true as const, text, hold: null }))
+  const core = fakeCore({ superTabs: { screen } as never, agents: { all: vi.fn(() => [{ agentId: 'shell', engine: 'terminal', previousAgentId: 'native' }] as never) } })
+  let released = false
+  const observe = vi.fn(async () => ({ ok: true, reservationId: 'native-creation-id', harnessId: 'native', released }))
+  const service = superTabService(core, { reservations: vi.fn(() => ({ reserve: vi.fn(), observe, giveBack: vi.fn(), ended: vi.fn(), creationOf: vi.fn(() => null), stop: vi.fn() })) })
+  const ask = () => service.requests.super_tabs({ action: 'observeCapacity', creationId: 'native-creation-id' }, visitor)
+  expect(await ask()).toEqual({ ok: true, reservationId: 'native-creation-id', harnessId: 'native', released: false })
+  expect(screen).not.toHaveBeenCalled()
+  released = true
+  expect(await ask()).toEqual({ ok: true, reservationId: 'native-creation-id', harnessId: 'native', released: true,
+    engineExit: { status: 2, option: true } })
 })
 
 // Issue #2989: a start the Swarm failed gives its reservation back at once. Only this machine's own host, which read that
