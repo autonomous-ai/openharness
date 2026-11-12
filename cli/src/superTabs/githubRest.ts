@@ -116,8 +116,8 @@ export class Waits {
   /** A pass ran through: its stops start again. */
   ran(): void { this.stops = 0 }
 }
-/** How long a file found missing is not asked for again: an agent's instructions file is written rarely, and a 404 is not
- *  free against GitHub's limit as a 304 is. */
+/** How long what was found missing is not asked for again: an agent's instructions file is written rarely, a number that
+ *  is no issue's stays none, and a 404 is not free against GitHub's limit as a 304 is. */
 const MISSING_MS = 5 * 60_000
 
 /**
@@ -162,7 +162,14 @@ export class GitHubReads {
   /** A file of [repo]'s default branch as text, its last answer again on a 304. Null when it is not there: a missing file
    *  is an answer here, never a repository this login cannot read, and it is not asked again for [MISSING_MS]. */
   async file(repo: string, path: string): Promise<string | null> {
-    const url = `/repos/${repo}/contents/${path.split('/').map(encodeURIComponent).join('/')}`
+    const body = await this.ifThere(repo, `/repos/${repo}/contents/${path.split('/').map(encodeURIComponent).join('/')}`)
+    return typeof body?.content === 'string' && body.encoding === 'base64' ? Buffer.from(body.content, 'base64').toString('utf8') : null
+  }
+
+  /** One object as it is now, its last answer again on a 304, or null when GitHub says it is not there: a file, or an issue
+   *  by a number a pull request names (githubMerge.ts earlierPull). Not there is an answer, never a repository this login
+   *  cannot read, and it is not asked for again for [MISSING_MS]. */
+  async ifThere(repo: string, url: string): Promise<Json | null> {
     if ((this.missing.get(url) ?? 0) > this.now()) return null
     const body = object(await this.read(repo, url, true, true))
     if (body.missing === true) {
@@ -171,7 +178,7 @@ export class GitHubReads {
       return null
     }
     this.missing.delete(url)
-    return typeof body.content === 'string' && body.encoding === 'base64' ? Buffer.from(body.content, 'base64').toString('utf8') : null
+    return body
   }
 
   /** Forgets [repo]'s answers: what was read but not acted on is read again, never answered by a 304. */
@@ -192,9 +199,10 @@ export class GitHubReads {
     return rows
   }
 
-  /** The body of [url], its kept body on a 304 when [keep], or null on a 304 otherwise. With [fileMissing] a 404 answers
-   *  `{ missing: true }`: a file that is not there. [once]: asked with no ETag, and nothing of the answer kept. */
-  private async read(repo: string, url: string, keep: boolean, fileMissing = false, once = false): Promise<unknown> {
+  /** The body of [url], its kept body on a 304 when [keep], or null on a 304 otherwise. With [mayBeMissing] a 404, or the
+   *  410 GitHub gives for an issue that was deleted, answers `{ missing: true }`: what was asked for is not there. [once]:
+   *  asked with no ETag, and nothing of the answer kept. */
+  private async read(repo: string, url: string, keep: boolean, mayBeMissing = false, once = false): Promise<unknown> {
     const last = once ? undefined : this.kept.get(url)
     const reply = await this.get(url, last?.etag ?? null).catch(error => {
       const code = typeof error?.code === 'string' ? error.code : 'GH_FAILED'
@@ -205,7 +213,7 @@ export class GitHubReads {
     if (reply.status === 304) return keep ? last?.body ?? null : null
     if (reply.resetAt !== null) throw new GitHubStop('RATE_LIMITED', 'GitHub is limiting this computer\'s requests.', true, Math.min(reply.resetAt, this.now() + LIMIT_MAX_MS))
     if (reply.status === 401) throw new GitHubStop('GH_SIGNED_OUT', 'GitHub refused this computer\'s gh login: run gh auth login.', true, this.now() + OFF_RETRY_MS)
-    if (reply.status === 404 && fileMissing) return { missing: true }
+    if ((reply.status === 404 || reply.status === 410) && mayBeMissing) return { missing: true }
     if (reply.status === 404 || reply.status === 403) throw new GitHubStop('UNREADABLE', `this computer's gh login cannot read ${repo}.`, false, this.now() + UNREADABLE_RETRY_MS)
     // GitHub failing on its own side stops every repository; any other answer is about this one (it still goes when it next can).
     if (reply.status !== 200) throw new GitHubStop('GH_FAILED', `GitHub answered ${reply.status}.`, reply.status >= 500, this.now())
