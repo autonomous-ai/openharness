@@ -93,8 +93,13 @@ describe('dismissing Claude Code\'s feedback popups for a Swarm agent', () => {
     ['a draft without its footer', DRAFT.replace(/│ 1 to review.*\n/, '')],
     ['a turn-off question that reads otherwise', TURN_OFF.replace('Esc to keep', 'Esc to turn off')],
     ['a survey without Dismiss', SURVEY.replace('0: Dismiss', '0: Good')],
+    // Esc would interrupt its turn (Lennox's read of #4232).
+    ['the compacting popup as text on the screen of an agent at work', ['⏺ Bash(gh issue view 4224)', ...COMPACT_EARLIER.split('\n').map(line => `     ${line}`),
+      '', '✻ Thinking… (esc to interrupt)', '', '────────────────────────────────────────────────────────────────────────────────', '❯ ',
+      '────────────────────────────────────────────────────────────────────────────────'].join('\n')],
+    ['the compacting popup with its footer above its title', COMPACT_EARLIER.split('\n').reverse().join('\n')],
     ['the compacting popup without "esc not now"', COMPACT_EARLIER.replace('esc not now', 'esc to keep auto')],
-    ['the compacting popup and a survey at once', `${COMPACT_EARLIER}\n${SURVEY}`],
+    ['a survey and the compacting popup at once', `${SURVEY}\n${COMPACT_EARLIER}`],
     ['two popups at once', `${DRAFT}\n${SURVEY}`],
     ['the draft twice', `${DRAFT}\n${DRAFT}`],
   ])('sends nothing for %s', (_name, capture) => {
