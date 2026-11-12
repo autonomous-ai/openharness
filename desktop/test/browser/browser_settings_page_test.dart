@@ -5,6 +5,7 @@ import 'package:harness/browser/browser_settings.dart';
 import 'package:harness/browser/browser_settings_page.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/ws/ws_conn.dart';
 
 /// The agent's machine, as Browser settings asks it: what it keeps, every save and every proxy test.
 class _App extends AppNotifier {
@@ -31,6 +32,9 @@ class _App extends AppNotifier {
     'device': null,
   };
   final saves = <Map<String, Object?>>[];
+
+  /// What the machine answers a save with instead of the settings, when set.
+  Object? refusal;
   final tests = <Map<String, Object?>>[];
   ProxyTestResult answer = const ProxyTestResult(
     ok: true,
@@ -51,6 +55,7 @@ class _App extends AppNotifier {
     Map<String, Object?> settings,
   ) async {
     saves.add(settings);
+    if (refusal case final refusal?) throw refusal;
     final proxy = settings['proxy'] as Map?;
     stored = {
       ...settings,
@@ -252,6 +257,33 @@ void main() {
     await open(tester);
     expect(find.text('1080 × 1920'), findsOneWidget);
     expect(find.text('1920 × 1080'), findsNothing);
+  });
+
+  testWidgets('a machine too old for a portrait screen says to update '
+      'Harness there', (tester) async {
+    // What a CLI from before portrait screens answers one.
+    app.refusal = const WsRequestFailure(
+      responseType: 'agent_browser_settings_save_result',
+      code: 'INVALID_SETTINGS',
+      detail: 'invalid browser setting: screen',
+    );
+    await open(tester);
+    await tester.tap(_key('screen'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('1080 × 1920'));
+    await tester.pumpAndSettle();
+    await tap(tester, 'save');
+    expect(find.text('Update Harness on m for this screen'), findsOneWidget);
+  });
+
+  testWidgets('a screen this build does not offer stays when another setting '
+      'is saved', (tester) async {
+    app.stored = {...app.stored, 'screen': '2560x1440'};
+    await open(tester);
+    expect(find.text('2560 × 1440'), findsOneWidget);
+    await type(tester, 'languages', 'en-US');
+    await tap(tester, 'save');
+    expect(app.saves.single['screen'], '2560x1440');
   });
 
   testWidgets('Human input off disables the speed choice', (tester) async {
