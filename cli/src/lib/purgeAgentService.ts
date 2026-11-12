@@ -7,6 +7,7 @@ import { basename, dirname, join, resolve, sep } from 'node:path'
 import { env } from '../config/env.js'
 import { hermesDbPath } from '../engines/hermes/contract.js'
 import { OPENCLAW_STORE_KEPT } from '../engines/openclaw/contract.js'
+import { AgentCreationReceiptError } from './agentCreationReceipt.js'
 import type { RegisteredSession } from './registry.js'
 import { engineKeepsTranscriptFile, transcriptEvidence } from '../engines/transcriptBindings.js'
 import { nativeFileKey } from '../engines/kit/nativePaths.js'
@@ -422,7 +423,11 @@ export class PurgeAgentService {
               if (current.dev !== target.dev || current.ino !== target.ino) return fail('Saved session data changed. Some data may already have been deleted; refresh to check.')
               unlinkSync(target.path); freedBytes += current.bytes
             }
-            await this.deps.eraseRecords?.(saved)
+            await this.deps.eraseRecords?.(saved).catch((error: unknown) => {
+              // A receipt's error is its code; the person reads what was not erased, and what to do.
+              if (!(error instanceof AgentCreationReceiptError)) throw error
+              fail(`Harness could not erase this harness's saved launch request.${error.detail ? ` ${error.detail}` : ''} Try deleting it again.`)
+            })
             this.deps.deleted(saved)
             this.deps.stopped.remove(request.agentId)
             sessionDeleted = true
