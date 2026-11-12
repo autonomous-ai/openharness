@@ -482,6 +482,20 @@ withBuiltin('pages by bytes', () => {
     expect(reads.every((read) => read.ok && read.bytes <= read.maxBuffer && withinBudget(read))).toBe(true)
   })
 
+  it('sizes a compressed row at most as decode inflates it, whatever event_utf8_bytes says', async () => {
+    const { path, db } = wal('plain')
+    const windowId = windowOf(db, KEY)
+    // A copy of the compressed assistant row (seq 6), and both claiming 2^62 bytes: past the store's CHECK, which an
+    // edited store need not hold. Two such sizes overflowed the page's running sum, and the page failed on every read.
+    db.exec(`PRAGMA ignore_check_constraints = ON;
+      INSERT INTO transcript_events (session_id, seq, event_json, created_at, event_zstd, event_utf8_bytes, navigation_json, navigation_type, navigation_custom_type, message_role)
+        SELECT session_id, 8, event_json, created_at, event_zstd, event_utf8_bytes, navigation_json, navigation_type, navigation_custom_type, message_role
+        FROM transcript_events WHERE session_id = '${windowId}' AND seq = 6;
+      INSERT INTO session_transcript_active_events (session_id, active_position, event_seq) VALUES ('${windowId}', 1008, 8);
+      UPDATE transcript_events SET event_utf8_bytes = 4611686018427387904 WHERE session_id = '${windowId}' AND seq IN (6, 8);`)
+    expect(seqs(await readOpenclawHistory(path, KEY))).toEqual([0, 1, 2, 3, 6, 8])
+  })
+
   it('a store without event_utf8_bytes is unsupported', async () => {
     const { path, db } = wal('plain')
     db.exec('ALTER TABLE transcript_events RENAME COLUMN event_utf8_bytes TO event_utf8_bytes_renamed')
