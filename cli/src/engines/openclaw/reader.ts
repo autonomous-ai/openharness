@@ -7,7 +7,9 @@
  * reader polls every second, as `OpencodeReader` does, through `sqliteReadAll` on the cached read-only `node:sqlite`
  * handle: in the core, on its read threads (lib/sqliteThread.ts), never on its own thread (#4066). A poll that finds
  * the store's files as the last read left them reads nothing, so a bound idle pane costs a stat a second. There is no
- * `sqlite3` CLI fallback: the CLI's `-json` output mangles the compressed blobs.
+ * `sqlite3` CLI fallback: the CLI's `-json` output mangles the compressed blobs. Rows are read a page at a time, the
+ * page bounded by bytes as well as rows (lib/sqlitePage.ts, #4188), so a long backlog drains over a few polls and a
+ * row over the row cap is stepped past, said once.
  *
  * What the recorded fixtures (`__fixtures__/`, OpenClaw 2026.11.2) taught it:
  *  - Rewind makes a new window and copies every old row into it, ids and all. A new window is read from its start
@@ -28,6 +30,7 @@ import { statSync } from 'node:fs'
 import * as zlib from 'node:zlib'
 import { sid } from '../../lib/log.js'
 import { builtinSqlite } from '../../lib/sqliteBuiltin.js'
+import { readStorePage, readStorePages, utf8Bytes, type StorePage } from '../../lib/sqlitePage.js'
 import { sqliteReadAll, type SqliteParam, type SqliteRow } from '../../lib/sqliteRead.js'
 import { OPENCLAW_COLUMNS } from './contract.js'
 
@@ -48,16 +51,15 @@ class OpenclawReadError extends Error {
 const POLL_MS = 1_000
 /** A store whose files did not change is read this often all the same: a write a file's stamp could miss is late, never lost. */
 const QUIET_READ_MS = 10_000
-/** Rows per read: a long backlog drains over a few polls instead of in one blocking read. */
-const PAGE = 500
 /** How long a read waits on a lock: kept short, as in sqliteRead, for a read on the caller's thread. */
 const BUSY_TIMEOUT_MS = 250
 /** Windows followed back through `previous_session_id`, and the guard against a cycle. */
 const MAX_WINDOWS = 64
-/** The store's own bound on a row (`event_utf8_bytes`), so a corrupt frame cannot inflate without limit. */
+/**
+ * The store's bound on a compressed row (its CHECK on `event_utf8_bytes`), so a corrupt frame cannot inflate without
+ * limit. It bounds no plain row: OpenClaw writes an event over 4 MiB as plain `event_json`, with no bound at all.
+ */
 const MAX_EVENT_BYTES = 4 * 1024 * 1024
-/** A page's rows at the store's own bound: a page within it is never refused, so a reader is never stuck on one. */
-const MAX_PAGE_BYTES = PAGE * MAX_EVENT_BYTES
 /** Unreadable rows remembered so each is logged once; forgotten past this many. */
 const MAX_LOGGED = 1_000
 /**
@@ -68,23 +70,33 @@ const MAX_EMITTED = 100_000
 
 /** Rows the model sees but a person never does (recorded in every scenario's fixture). */
 const HIDDEN = ['openclaw.system-prompt', 'openclaw.runtime-context', 'openclaw.cache-ttl', 'openclaw:bootstrap-context:full']
-const HIDDEN_SQL = `coalesce(navigation_custom_type, CASE WHEN json_valid(navigation_json) THEN json_extract(navigation_json, '$.navigation.customType') END) IN (${HIDDEN.map((type) => `'${type}'`).join(', ')})`
+const HIDDEN_SQL = `coalesce(t.navigation_custom_type, CASE WHEN json_valid(t.navigation_json) THEN json_extract(t.navigation_json, '$.navigation.customType') END) IN (${HIDDEN.map((type) => `'${type}'`).join(', ')})`
 /** A page of a window's rows; a hidden one comes back without its payload, so only the cursor moves past it. */
-const rowsSql = (where: string): string =>
-  'SELECT seq, hidden, CASE WHEN hidden THEN NULL ELSE event_json END AS event_json, CASE WHEN hidden THEN NULL ELSE event_zstd END AS event_zstd ' +
-  `FROM (SELECT seq, event_json, event_zstd, ${HIDDEN_SQL} AS hidden FROM transcript_events e WHERE ${where} ORDER BY seq LIMIT ${PAGE})`
-const LIVE_SQL = rowsSql('e.session_id = ? AND e.seq > ?')
+const eventsPage = (where: string, params: SqliteParam[]): StorePage => ({
+  table: 'transcript_events', where, params, key: [{ as: 'seq', sql: 't.seq' }],
+  columns: [{ as: 'hidden', sql: HIDDEN_SQL },
+    { as: 'event_json', sql: `CASE WHEN ${HIDDEN_SQL} THEN NULL ELSE t.event_json END` },
+    { as: 'event_zstd', sql: `CASE WHEN ${HIDDEN_SQL} THEN NULL ELSE t.event_zstd END` }],
+  // A plain row weighs its text. A compressed one weighs what it inflates to, never less than its blob: the store's
+  // CHECK bounds both at 4 MiB, and nothing ties event_utf8_bytes to a plain row's length.
+  size: `CASE WHEN ${HIDDEN_SQL} THEN 0 ELSE coalesce(${utf8Bytes('t.event_json')}, max(coalesce(t.event_utf8_bytes, 0), length(t.event_zstd))) END`,
+})
+const LIVE = 't.session_id = ?'
 /** The window's header (seq 0) and its active branch, in order: an ancestor is always written before its child. */
-const ACTIVE_SQL = rowsSql('e.session_id = ? AND e.seq > ? AND (e.seq = 0 OR EXISTS (SELECT 1 FROM session_transcript_active_events a WHERE a.session_id = e.session_id AND a.event_seq = e.seq))')
+const ACTIVE = 't.session_id = ? AND (t.seq = 0 OR EXISTS (SELECT 1 FROM session_transcript_active_events a WHERE a.session_id = t.session_id AND a.event_seq = t.seq))'
+/** Every event id of a window, for the windows before it to leave out. */
+const idsPage = (windowId: string): StorePage => ({
+  table: 'transcript_events', where: 't.session_id = ?', params: [windowId], key: [{ as: 'seq', sql: 't.seq' }],
+  columns: [{ as: 'id', sql: "CASE WHEN json_valid(t.event_json) THEN json_extract(t.event_json, '$.id') WHEN json_valid(t.navigation_json) THEN json_extract(t.navigation_json, '$.navigation.id') END" }],
+  // An id is part of one of these two texts: their length bounds it without parsing either twice.
+  size: `coalesce(${utf8Bytes('t.event_json')}, 0) + coalesce(${utf8Bytes('t.navigation_json')}, 0)`,
+})
 const NODE_SQL = 'SELECT n.current_session_id AS window_id, n.status AS status, w.generation AS generation FROM session_nodes n ' +
   'LEFT JOIN transcript_rewrite_watermarks w ON w.session_id = n.current_session_id WHERE n.session_key = ?'
-/** The header (seq 0) of the agent's most recently updated window, by `idx_agent_session_windows_updated_at`. */
-const NEWEST_HEADER_SQL = 'SELECT w.session_id AS window_id, e.seq AS seq, 0 AS hidden, e.event_json AS event_json, e.event_zstd AS event_zstd FROM session_windows w ' +
-  'JOIN transcript_events e ON e.session_id = w.session_id AND e.seq = 0 ORDER BY w.updated_at DESC LIMIT 1'
+/** The agent's most recently updated window that has a header (seq 0), by `idx_agent_session_windows_updated_at`. */
+const NEWEST_WINDOW_SQL = 'SELECT w.session_id AS window_id FROM session_windows w JOIN transcript_events e ON e.session_id = w.session_id AND e.seq = 0 ORDER BY w.updated_at DESC LIMIT 1'
 const PREVIOUS_SQL = 'SELECT previous_session_id AS previous FROM session_windows WHERE session_id = ?'
 const LAST_SEQ_SQL = 'SELECT max(seq) AS seq FROM transcript_events WHERE session_id = ?'
-const IDS_SQL = "SELECT CASE WHEN json_valid(event_json) THEN json_extract(event_json, '$.id') " +
-  "WHEN json_valid(navigation_json) THEN json_extract(navigation_json, '$.navigation.id') END AS id FROM transcript_events WHERE session_id = ?"
 const COLUMNS_SQL = 'SELECT name FROM pragma_table_info(?)'
 const SCHEMA_SQL = "SELECT schema_version AS version, app_version AS app FROM schema_meta WHERE role = 'agent'"
 /** SQLite's own schema cookie: it changes with any change to the store's tables, an OpenClaw upgrade's migration too. */
@@ -109,16 +121,36 @@ const zstd = zlib as typeof zlib & { zstdDecompressSync?: (data: Uint8Array, opt
 interface KeyNode { windowId: string; status: string | null; generation: string | null }
 interface Page { events: OpenclawEvent[]; lastSeq: number | null; full: boolean }
 
-async function query(db: string, sql: string, params: SqliteParam[]): Promise<SqliteRow[]> {
-  // No sqlite3 CLI fallback: its -json output mangles the compressed blobs.
+/** Before any read. No sqlite3 CLI fallback: its -json output mangles the compressed blobs. */
+function ensureReadable(): void {
   if (!builtinSqlite() || typeof zstd.zstdDecompressSync !== 'function') {
     throw new OpenclawReadError('missing', 'this Node has no node:sqlite or zstd')
   }
-  const result = await sqliteReadAll(db, sql, params, { busyTimeoutMs: BUSY_TIMEOUT_MS, maxBuffer: MAX_PAGE_BYTES })
-  if (result.ok) return result.rows
+}
+
+function unanswered(db: string, error: unknown): never {
   // A read that failed may be a store whose columns changed under it: check them again on the next read.
   checked.delete(db)
-  throw new OpenclawReadError('transient', errorCode(result.error))
+  throw new OpenclawReadError('transient', errorCode(error))
+}
+
+/** A read of ids and numbers, which sqliteReadAll's own reply limit holds. */
+async function query(db: string, sql: string, params: SqliteParam[]): Promise<SqliteRow[]> {
+  ensureReadable()
+  const result = await sqliteReadAll(db, sql, params, { busyTimeoutMs: BUSY_TIMEOUT_MS })
+  return result.ok ? result.rows : unanswered(db, result.error)
+}
+
+async function storePage(db: string, page: StorePage, after: SqliteParam[] | null) {
+  ensureReadable()
+  const read = await readStorePage(db, page, after)
+  return read.ok ? read : unanswered(db, read.error)
+}
+
+async function storePages(db: string, page: StorePage): Promise<SqliteRow[]> {
+  ensureReadable()
+  const read = await readStorePages(db, page)
+  return read.ok ? read.rows : unanswered(db, read.error)
 }
 
 /** A short name for an error, never its message: a JSON parse error quotes the row's text. */
@@ -186,6 +218,8 @@ function hiddenRecord(record: Record<string, unknown>): boolean {
 /** The row's event, or null when it is hidden or cannot be read (logged once, and the stream goes on). */
 function decode(key: string, windowId: string, row: SqliteRow): Record<string, unknown> | null {
   const seq = Number(row.seq)
+  // Over the row cap, the page returned its seq alone.
+  if (row.page_big) { unreadable(key, windowId, seq, 'too big'); return null }
   if (row.hidden) return null
   let record: unknown
   try {
@@ -201,14 +235,14 @@ function decode(key: string, windowId: string, row: SqliteRow): Record<string, u
   return hiddenRecord(record) ? null : record
 }
 
-async function readPage(db: string, key: string, windowId: string, afterSeq: number, sql: string): Promise<Page> {
-  const rows = await query(db, sql, [windowId, afterSeq])
+async function readPage(db: string, key: string, windowId: string, afterSeq: number, where: string): Promise<Page> {
+  const page = await storePage(db, eventsPage(where, [windowId]), [afterSeq])
   const events: OpenclawEvent[] = []
-  for (const row of rows) {
+  for (const row of page.rows) {
     const record = decode(key, windowId, row)
     if (record) events.push({ windowId, seq: Number(row.seq), record })
   }
-  return { events, lastSeq: rows.length ? Number(rows[rows.length - 1].seq) : null, full: rows.length === PAGE }
+  return { events, lastSeq: page.last ? Number(page.last[0]) : null, full: page.full }
 }
 
 /** A window's header and active branch, every page of it. */
@@ -216,7 +250,7 @@ async function readActive(db: string, key: string, windowId: string): Promise<Op
   const events: OpenclawEvent[] = []
   let after = -1
   for (;;) {
-    const page = await readPage(db, key, windowId, after, ACTIVE_SQL)
+    const page = await readPage(db, key, windowId, after, ACTIVE)
     events.push(...page.events)
     if (!page.full || page.lastSeq === null) return events
     after = page.lastSeq
@@ -249,7 +283,7 @@ async function history(db: string, key: string, node: KeyNode): Promise<Openclaw
       return typeof id !== 'string' || !later.has(id)
     }))
     if (index < chain.length - 1) {
-      for (const row of await query(db, IDS_SQL, [windowId])) if (typeof row.id === 'string') later.add(row.id)
+      for (const row of await storePages(db, idsPage(windowId))) if (typeof row.id === 'string') later.add(row.id)
     }
   }
   return parts.flat()
@@ -271,7 +305,7 @@ export async function readOpenclawSince(db: string, key: string, after: Openclaw
     const events: OpenclawEvent[] = []
     let seq = after.seq
     for (;;) {
-      const page = await readPage(db, key, node.windowId, seq, LIVE_SQL)
+      const page = await readPage(db, key, node.windowId, seq, LIVE)
       events.push(...page.events)
       if (page.lastSeq !== null) seq = page.lastSeq
       if (!page.full) return { events, cursor: { windowId: node.windowId, seq, generation: node.generation }, whole: false }
@@ -424,9 +458,13 @@ export class OpenclawReader {
       if (!node) {
         if (!this.hydrated) this.born = true
         if (!this.borrowed) {
-          const row = (await query(this.deps.db, NEWEST_HEADER_SQL, []))[0]
+          const newest = (await query(this.deps.db, NEWEST_WINDOW_SQL, []))[0]?.window_id
+          // Through `decode`, as any row: a header over the row cap is said once and not borrowed.
+          const row = typeof newest === 'string'
+            ? (await storePage(this.deps.db, eventsPage('t.session_id = ? AND t.seq = 0', [newest]), null)).rows[0]
+            : undefined
           this.borrowed = true
-          const header = row ? decode(this.deps.key, String(row.window_id), row) : null
+          const header = row ? decode(this.deps.key, String(newest), row) : null
           if (header && !this.stopped) this.deps.onAgentHeader?.(header)
         }
         return
@@ -470,7 +508,7 @@ export class OpenclawReader {
 
   private async readLive(): Promise<{ events: OpenclawEvent[]; full: boolean }> {
     const cursor = this.cursor!
-    const page = await readPage(this.deps.db, this.deps.key, cursor.windowId, cursor.seq, LIVE_SQL)
+    const page = await readPage(this.deps.db, this.deps.key, cursor.windowId, cursor.seq, LIVE)
     if (page.lastSeq !== null) cursor.seq = page.lastSeq
     return { events: page.events.filter((event) => this.remember(event)), full: page.full }
   }
