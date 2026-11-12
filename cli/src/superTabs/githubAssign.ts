@@ -9,7 +9,7 @@
  * builder. It runs where the merger runs: in the Harness of the person whose agent is the project's PM, running or stopped there, with their gh.
  * A task its PM or a person gave by hand is never moved.
  */
-import { addElsewhere, areaOf, ASKED, builtOn, dependsOn, hasRoom, heldTasks, labelOf, machineHas, nextPicks, openPieces, outOfQuota, teamOf, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readerKey, readProblem, reasonOf, startedAt, takeBacks, takenTasks, tasksOf, worksOnOf, type AwayBuilder, type Crew, type CrewBuilder, type Pick, type Read, type Up } from './assign/crew.js'
+import { addElsewhere, areaOf, ASKED, buildingIn, builtOn, dependsOn, hasRoom, heldTasks, labelOf, machineHas, nextPicks, openPieces, outOfQuota, teamOf, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readerKey, readProblem, reasonOf, startedAt, takeBacks, takenTasks, tasksOf, worksOnOf, type AwayBuilder, type Crew, type CrewBuilder, type Pick, type Read, type Up } from './assign/crew.js'
 import type { Choice } from './assign/model.js'
 import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
@@ -52,6 +52,8 @@ const ISSUE_PAGES = 10
  *  a Swarm has a handful today, and the server allows it a hundred. Past these, its builders count as building nothing in the
  *  rest, which is said once (OTHER_PROJECTS). */
 const OTHER_PROJECTS = 10
+/** Pages of a repository's newest open items a builder whose label has a comma is looked for among (listOf), as a claim does. */
+const COMMA_PAGES = 3
 /** How long a reader asked for a head has to read it before another reader is asked too, or, with no other, it again; and
  *  how many asks one reader gets for one head. Thirty minutes (Swarm plan, step 1, item 1: "No verdict in 30 minutes: another is
  *  asked"; lampOS's first verdict came at 6 minutes at the median and 37 at p90): two hours until 11-11, and v4's sandbox #27
@@ -92,6 +94,13 @@ export class GitHubAssign {
   private readonly took = new Map<string, { size: string; minutes: number } | null>()
   /** How long each of the Swarm's other repositories that could not be read is left alone. */
   private readonly unreadOthers = new Waits()
+  /** What each builder was found building in the Swarm's other projects as a pass of a project was about to give it a task, by
+   *  `<project's repository> <label>`: how many tasks, and until when the plan counts it busy with them. Forgotten then, or when
+   *  it is no builder of that project's any more. */
+  private readonly away = new Map<string, { tasks: number; until: number }>()
+  /** Each builder's own list in a repository as this pass read it, by `<repository> <label>`: one computer leading several of a
+   *  Swarm's projects reads each once a pass. */
+  private readonly fresh = new Map<string, Promise<Json[]>>()
   private projects: { at: number; list: LedProject[] } | null = null
   private offUntil = 0
   private logged = ''
@@ -140,6 +149,7 @@ export class GitHubAssign {
   private async pass(): Promise<void> {
     if (!this.projects || this.now() - this.projects.at >= ASSIGN_INTERVAL_MS) this.projects = { at: this.now(), list: await this.deps.projects() }
     if (!this.projects.list.length || this.now() < this.offUntil) return
+    this.fresh.clear()
     try {
       for (const project of this.projects.list) {
         if ((this.unreadable.get(project.repo) ?? 0) > this.now()) continue
@@ -193,12 +203,19 @@ export class GitHubAssign {
     // Read after them: such a task is not one its builder builds, and takes none of its time in the plan; and a task that
     // comes after another waits for that one's pull request to be up.
     const read = readProblem({ now: this.now(), issues, crew, withReaders, up, minutes })
-    // And what the builders with room here build in the Swarm's other projects: the only ones for whom it decides anything.
-    addElsewhere(read, await this.elsewhere(project, crew.builders.filter(builder => hasRoom(read, builder.id))))
+    // What a builder was found building in the Swarm's other projects as a task was about to be given to it, while the plan
+    // counts it busy there: it has no room here, and the task goes to another (buildsElsewhere).
+    for (const [key, away] of this.away) {
+      if (!key.startsWith(`${repo} `)) continue
+      const builder = crew.builders.find(b => key === `${repo} ${b.label}`)
+      if (!builder || away.until <= this.now()) this.away.delete(key)
+      else addElsewhere(read, builder.id, { tasks: away.tasks, minutes: Math.ceil((away.until - this.now()) / 60_000) })
+    }
+    const elsewhere = this.buildsElsewhere(project, read)
     // One whose machine is down keeps its tasks while nobody else can take them: they would only come back to it, labels and
     // comments twice over. One its person is stopping gives them back all the same, for whoever joins.
     await this.takeBack(repo, issues, (crew.away ?? []).filter(away => (away.why !== 'down' && away.why !== 'paused') || crew.builders.length > 0), undefined, withReaders)
-    const { short, picks } = await this.plan(project, issues, pulls, crew, read, withReaders)
+    const { short, picks } = await this.plan(project, issues, pulls, crew, read, withReaders, elsewhere)
     // What this pass read, counted: who has nothing after it, what is open, what landed.
     const numbers = numbersOf({ now: this.now(), crew, pm: project.pm, issues, read, short, picks, closed })
     await this.deps.numbers.pass(project, numbers,
@@ -209,53 +226,71 @@ export class GitHubAssign {
   }
 
   /**
-   * What [builders] (those with room here) have open in the Swarm's other projects' repositories, one list a repository: every
-   * regular agent builds for every public project of its Swarm (assign/crew.ts crewOf), and each project is planned on its own
-   * PM's person's computer, so each gave the same agent a task building (the allocator's design, package 11, option (a):
-   * docs/design/2026-11-11-swarm-allocator/one-view.md). Each builder's own list there is read, as githubClaim.ts reads one
-   * (labels=builder:<name>), with its ETag: a 304, free of the login's limit, while nothing of that builder's there changed. A
-   * whole list answered 200 each pass in a busy repository, newest first (review of #4144). A task given here that GitHub's
-   * list does not show yet is in it too. At most [OTHER_PROJECTS] repositories. The Swarm, or a repository, that cannot be read
-   * is left out, said once: its builders count as building nothing there. A repository is then asked again only after a wait
-   * that grows (Waits). GitHub failing on its own side, or limiting this login, stops the pass, as for the project's own.
+   * Whether a builder builds a task in the Swarm's other projects' repositories now, for [project]'s pass: asked only just before
+   * a task is given to it, or taken back for it. Every regular agent builds for every public project of its Swarm (assign/crew.ts
+   * crewOf), and each project is planned on its own PM's person's computer, so each gave the same agent a task building (the
+   * allocator's design, package 11, option (a): docs/design/2026-11-11-swarm-allocator/one-view.md). Read for every builder with
+   * room each pass instead, a Swarm of twelve builders and ten other projects asked GitHub 120 times a pass in its person's name
+   * (review of #4144). Its own list in each (listOf), with a task given there from here that GitHub's lists do not show yet. One
+   * found building there counts as having no room here, and as busy, for as long as the plan counts it busy with that work
+   * (buildingIn: fifteen minutes at the least), and is not read again before; the task is planned again next pass. At most
+   * [OTHER_PROJECTS] repositories. The Swarm, or a repository, that cannot be read is said once, and its builders count as
+   * building nothing there; a repository is asked again only after a wait that grows (Waits). GitHub failing on its own side, or
+   * limiting this login, stops the pass, as for the project's own.
    */
-  private async elsewhere(project: LedProject, builders: CrewBuilder[]): Promise<Json[][]> {
-    if (!builders.length) return []
-    const swarm = await this.deps.repositories(project).catch((error: unknown) => {
-      this.once(`[super-tab] Task assignment: SWARM_UNREAD ${project.repo}: ${error instanceof Error ? error.message : String(error)} Its builders count as building nothing in the Swarm's other projects.`)
-      return []
-    })
-    const others = swarm.filter(repo => repo !== project.repo)
-    if (others.length > OTHER_PROJECTS) {
-      this.once(`[super-tab] Task assignment: OTHER_PROJECTS ${project.repo}: of the Swarm's ${others.length} other projects, the first ${OTHER_PROJECTS} are read for what its builders build`)
-    }
-    const lists: Json[][] = []
-    for (const other of others.slice(0, OTHER_PROJECTS)) {
-      if (this.unreadOthers.held(other, this.now())) continue
-      try {
-        // A task given there from here (its project led here too), which GitHub's lists can lag behind: what they show of it,
-        // once they do, takes its place.
-        const listed = new Map<number, Json>([...this.given].filter(([key]) => key.startsWith(`${other}#`))
-          .map(([key, label]) => [Number(key.slice(other.length + 1)), { number: Number(key.slice(other.length + 1)), labels: [{ name: label }] }]))
-        for (const builder of builders) {
-          for (const item of await this.reads.current(other, `/repos/${other}/issues?state=open&labels=${encodeURIComponent(builder.label)}&per_page=${PAGE}`, 1)) {
-            listed.set(Number(item.number), item)
-          }
-        }
-        lists.push([...listed.values()])
-        this.unreadOthers.ok(other)
-      } catch (error) {
-        if (!(error instanceof GitHubStop) || error.everywhere) throw error
-        this.unreadOthers.miss(other, this.now(), error.until - this.now())
-        this.once(`[super-tab] Task assignment: ${error.code} ${other}: ${error.message} ${project.repo}'s builders count as building nothing there.`)
+  private buildsElsewhere(project: LedProject, read: Read): (builder: CrewBuilder) => Promise<boolean> {
+    let swarm: Promise<string[]> | undefined
+    return async builder => {
+      swarm ??= this.deps.repositories(project).catch((error: unknown) => {
+        this.once(`[super-tab] Task assignment: SWARM_UNREAD ${project.repo}: ${error instanceof Error ? error.message : String(error)} Its builders count as building nothing in the Swarm's other projects.`)
+        return []
+      })
+      const others = (await swarm).filter(repo => repo !== project.repo)
+      if (others.length > OTHER_PROJECTS) {
+        this.once(`[super-tab] Task assignment: OTHER_PROJECTS ${project.repo}: of the Swarm's ${others.length} other projects, the first ${OTHER_PROJECTS} are read for what its builders build`)
       }
+      const lists: Json[][] = []
+      for (const other of others.slice(0, OTHER_PROJECTS)) {
+        if (this.unreadOthers.held(other, this.now())) continue
+        try {
+          const listed = await this.listOf(other, builder)
+          // Given there from here (its project led here too): GitHub's lists can lag behind the label.
+          const given = [...this.given].filter(([key, label]) => key.startsWith(`${other}#`) && label === builder.label).map(([key]) => Number(key.slice(other.length + 1)))
+          lists.push([...listed, ...given.filter(number => !listed.some(item => Number(item.number) === number)).map(number => ({ number, labels: [{ name: builder.label }] }))])
+          this.unreadOthers.ok(other)
+        } catch (error) {
+          if (!(error instanceof GitHubStop) || error.everywhere) throw error
+          this.unreadOthers.miss(other, this.now(), error.until - this.now())
+          this.once(`[super-tab] Task assignment: ${error.code} ${other}: ${error.message} ${project.repo}'s builders count as building nothing there.`)
+        }
+      }
+      const found = buildingIn(lists, builder)
+      if (!found.tasks) return false
+      this.away.set(`${project.repo} ${builder.label}`, { tasks: found.tasks, until: this.now() + found.minutes * 60_000 })
+      addElsewhere(read, builder.id, found)
+      return true
     }
-    return lists
+  }
+
+  /** [builder]'s own open list in [repo] as GitHub has it now, with its ETag, read once a pass ([fresh]): the issues and pull
+   *  requests that carry its label (`labels=`, as githubClaim.ts reads a builder's own). GitHub reads a comma there as "and", so a
+   *  label with one is looked for among the repository's newest open items, as a claim does (githubClaim.ts HELD_PAGES). */
+  private listOf(repo: string, builder: CrewBuilder): Promise<Json[]> {
+    const key = `${repo} ${builder.label}`
+    let listed = this.fresh.get(key)
+    if (!listed) {
+      const comma = builder.label.includes(',')
+      listed = this.reads.current(repo, `/repos/${repo}/issues?state=open${comma ? '' : `&labels=${encodeURIComponent(builder.label)}`}&per_page=${PAGE}`, comma ? COMMA_PAGES : 1)
+        .then(items => items.filter(item => labelNames(item).includes(builder.label)))
+      this.fresh.set(key, listed)
+    }
+    return listed
   }
 
   /** Gives the free tasks to the builders who can start them soonest, after taking back what waits on a builder that cannot
    *  work; the builders out of quota, and the tasks it gave. */
-  private async plan(project: LedProject, issues: Json[], pulls: Json[], crew: Crew, read: Read, withReaders: ReadonlySet<number>): Promise<{ short: AwayBuilder[]; picks: Pick[] }> {
+  private async plan(project: LedProject, issues: Json[], pulls: Json[], crew: Crew, read: Read, withReaders: ReadonlySet<number>,
+    elsewhere: (builder: CrewBuilder) => Promise<boolean>): Promise<{ short: AwayBuilder[]; picks: Pick[] }> {
     const { repo } = project
     if (!read.problem.builders.length) return { short: [], picks: [] }
     // Only while another builder has room: a team's one builder would be given its task straight back.
@@ -264,7 +299,7 @@ export class GitHubAssign {
     await this.sayPiecesDone(repo, issues, crew)
     await this.askQuiet(repo, issues, pulls, crew, withReaders)
     await this.sayWaiting(project, issues, read.looped)
-    await this.openWaiting(repo, issues, crew, read, short)
+    await this.openWaiting(repo, issues, crew, read, short, elsewhere)
     if (!read.free.size) return { short, picks: [] }
     // Nobody is given a task while every builder has one to build, or holds four: no plan, so a backlog costs no CPU each
     // minute (the daemon at rest keeps under 1% of a core).
@@ -274,7 +309,8 @@ export class GitHubAssign {
       ...(this.last.has(repo) ? { start: this.last.get(repo) } : {}) })
     this.last.set(repo, solved.choice)
     const picks: Pick[] = []
-    for (const pick of nextPicks(solved.plan, read)) if (await this.give(project, read, pick)) picks.push(pick)
+    // Each read just before its label is written: two PMs' plans race for one builder only within that round trip.
+    for (const pick of nextPicks(solved.plan, read)) if (!await elsewhere(read.builders.get(pick.builder)!) && await this.give(project, read, pick)) picks.push(pick)
     let told = 0
     for (const { task, why } of solved.plan.unplaced) {
       if (!read.free.has(task)) continue
@@ -590,7 +626,7 @@ export class GitHubAssign {
    * task's builder alone (readProblem), so taken back it would help nobody with nothing.
    * Once a task and builder in a daemon's life, so a plan or a person that gives it back to that builder is not undone.
    */
-  private async openWaiting(repo: string, issues: Json[], crew: Crew, read: Read, short: AwayBuilder[]): Promise<void> {
+  private async openWaiting(repo: string, issues: Json[], crew: Crew, read: Read, short: AwayBuilder[], elsewhere: (builder: CrewBuilder) => Promise<boolean>): Promise<void> {
     const idle = crew.builders.filter(b => hasRoom(read, b.id) && !short.some(away => away.label === b.label))
     if (!idle.length) return
     const now = this.now()
@@ -611,6 +647,8 @@ export class GitHubAssign {
         .map(c => Date.parse(String(c.created_at ?? ''))).filter(Number.isFinite))
       if (!gave || now - gave < WAIT_TAKE_MS) continue
       idle.splice(idle.indexOf(taker), 1)
+      // The builder it would go to may build in another project: read as just before a give, it then has no room here.
+      if (await elsewhere(taker)) continue
       await this.takeBack(repo, [issue], [{ name: builder.name, label: builder.label, why: 'stopping' }],
         `${builder.name} has not started it in ${Math.round((now - gave) / 60_000)} minutes, and ${taker.name} has nothing to do`)
     }

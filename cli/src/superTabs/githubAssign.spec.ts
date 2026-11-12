@@ -368,38 +368,45 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     /** A builder's own open list in another repository, as read: its issues and pull requests that carry its label. */
     const listOf = (repo: string, label: string) => `/repos/${repo}/issues?state=open&labels=${encodeURIComponent(label)}&per_page=100`
     const asked = (f: ReturnType<typeof setup>, repo: string, label = 'builder:pip') => f.github.state.asked.filter(path => path === listOf(repo, label)).length
-    const taken = (n: number) => issue(n, ['size:m', 'builder:pip', 'status:taken'])
+    const answered = (f: ReturnType<typeof setup>, repo: string, label = 'builder:pip') => f.github.state.replies.filter(([path]) => path === listOf(repo, label)).map(([, status]) => status)
+    const taken = (n: number, size = 'm') => issue(n, [`size:${size}`, 'builder:pip', 'status:taken'])
     const pullFor = (n: number, extra: Json = {}): Json => issue(100 + n, ['builder:pip'], { pull_request: {}, draft: false, body: `Closes #${n}`, ...extra })
+    const minutes = async (f: ReturnType<typeof setup>, count: number) => { for (let minute = 0; minute < count; minute++) { f.clock.now += 60_000; await f.assigner.tick() } }
 
-    it('gives nothing to a builder with a task to build in another project, and the free task here once that task\'s pull request is up', async () => {
-      const f = setup([issue(16, ['size:s'])], { crew: alone, repositories: SWARM })
-      f.github.state.elsewhere.set('acme/web', [taken(3), issue(9, ['size:s', 'builder:juno'])])
+    // Review of #4144: read for every builder with room each pass, a Swarm of twelve builders and ten other projects asked GitHub
+    // 120 times a pass in its person's name. A builder's lists elsewhere are read only as a task is about to be given to it.
+    it('reads a builder\'s lists elsewhere only as it is about to be given a task, and gives the task to another while it builds there', async () => {
+      const f = setup([issue(16, ['size:s', 'part:api'])], { repositories: SWARM })
+      // Pip works on the task's area, so the plan gives it to Pip first; Pip builds a task in the other project.
+      f.github.state.files.set('agents/Pip.md', 'Works on: api')
+      f.github.state.elsewhere.set('acme/web', [taken(3)])
       await f.assigner.tick()
-      expect(f.labelled()).toEqual([])
-      // Nor is it counted here as waiting for a task: it has one.
-      expect(f.numbers.mock.calls.at(-1)![1]).toMatchObject({ free: [], open: 1, held: 0 })
-      // Its own list there is read once a pass with its ETag: unchanged, a 304, which GitHub does not count against the login.
-      await f.assigner.tick()
-      expect(f.github.state.replies.filter(([path]) => path === listOf('acme/web', 'builder:pip')).map(([, status]) => status)).toEqual([200, 304])
-      // Its pull request there is up, not a draft: the task here is given that pass.
-      f.github.state.elsewhere.set('acme/web', [taken(3), pullFor(3)])
-      await f.assigner.tick()
-      expect(f.labelled()).toEqual([[16, 'builder:pip']])
+      expect([f.labelled(), asked(f, 'acme/web'), asked(f, 'acme/web', 'builder:juno')]).toEqual([[], 1, 0])
+      // The next pass Pip counts as building there, and is not read again: the task goes to Juno, read just before it is given.
+      await minutes(f, 1)
+      expect([f.labelled(), asked(f, 'acme/web'), asked(f, 'acme/web', 'builder:juno')]).toEqual([[[16, 'builder:juno']], 1, 1])
+      // Nothing to give, nothing read; nor for a team with no builder, which reads not even the Swarm.
+      const swarm = vi.fn(SWARM)
+      const g = setup([], { repositories: swarm })
+      await g.assigner.tick()
+      const h = setup([issue(16, ['size:s'])], { crew: { builders: [], machines: [] }, repositories: swarm })
+      await h.assigner.tick()
+      expect([swarm.mock.calls.length, [...g.github.state.asked, ...h.github.state.asked].filter(path => path.startsWith('/repos/acme/web/')).length]).toEqual([0, 0])
     })
 
-    it('reads only the builders with room here, for whom alone it decides anything, and nothing for a team with none', async () => {
-      // Juno builds a task here: what it builds elsewhere changes nothing here, so its lists there are not read.
-      const f = setup([issue(1, ['size:m', 'builder:juno', 'status:taken']), issue(16, ['size:s'])], { repositories: SWARM })
-      f.github.state.elsewhere.set('acme/web', [])
+    it('reads a builder found building elsewhere again only once the plan counts that task done, with its ETag, and gives it the task once that task\'s pull request is up', async () => {
+      const f = setup([issue(16, ['size:s'])], { crew: alone, repositories: SWARM })
+      f.github.state.elsewhere.set('acme/web', [taken(3)])
       await f.assigner.tick()
-      expect([asked(f, 'acme/web', 'builder:pip'), asked(f, 'acme/web', 'builder:juno')]).toEqual([1, 0])
-      // A team with no builder, or none with room, reads neither the Swarm nor another repository.
-      for (const team of [{ builders: [], machines: [] }, alone]) {
-        const swarm = vi.fn(SWARM)
-        const g = setup([issue(2, ['size:s', 'builder:pip'])], { crew: team, repositories: swarm })
-        await g.assigner.tick()
-        expect([swarm.mock.calls.length, g.github.state.asked.filter(path => path.startsWith('/repos/acme/web/')).length]).toEqual([0, 0])
-      }
+      // A middle task it took counts for half its time: forty-five minutes in which it is not read, given nothing, nor counted as waiting.
+      await minutes(f, 44)
+      expect([f.labelled(), answered(f, 'acme/web'), f.numbers.mock.calls.at(-1)![1].free]).toEqual([[], [200], []])
+      await minutes(f, 1)
+      expect(answered(f, 'acme/web')).toEqual([200, 304])
+      // Its pull request goes up there: the next read finds it with nothing to build there, and it is given the task.
+      f.github.state.elsewhere.set('acme/web', [taken(3), pullFor(3)])
+      await minutes(f, 45)
+      expect([answered(f, 'acme/web'), f.labelled()]).toEqual([[200, 304, 200], [[16, 'builder:pip']]])
     })
 
     // A project whose merger is off keeps its builders' pull requests waiting for ever: counted against a builder's four everywhere,
@@ -412,6 +419,31 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       expect(f.labelled()).toEqual([[16, 'builder:pip']])
     })
 
+    // GitHub reads a comma in `labels` as "and", so a builder whose name has one had an empty list there for ever.
+    it('reads a builder whose label has a comma among the repository\'s newest open items, as a claim looks for one', async () => {
+      const comma: Crew = { builders: [{ id: 'pj', name: 'Pip, Jr', label: 'builder:pip,-jr', machineId: 'mac', engine: 'claude' }], machines: crew().machines }
+      const f = setup([issue(16, ['size:s'])], { crew: comma, repositories: SWARM })
+      f.github.state.elsewhere.set('acme/web', [issue(2, ['size:s', 'builder:pip']), issue(3, ['size:m', 'builder:pip,-jr', 'status:taken'])])
+      await f.assigner.tick()
+      expect([f.labelled(), f.github.state.asked.filter(path => path.startsWith('/repos/acme/web/issues?'))]).toEqual([[], ['/repos/acme/web/issues?state=open&per_page=100']])
+    })
+
+    it('takes back no task for a builder that has nothing here but builds in another project', async () => {
+      const at = new Date(Date.parse('2026-11-09T07:31:00Z') - 11 * 60_000).toISOString()
+      // Juno was given #5 eleven minutes ago and has not taken it; Pip has nothing here, and builds a task in the other project.
+      const f = setup([issue(5, ['size:s', 'builder:juno'])], { repositories: SWARM })
+      f.github.state.comments.set(5, [{ body: 'Harness, 07:20: for **Juno**: it can start now.', author_association: 'MEMBER', created_at: at }])
+      f.github.state.elsewhere.set('acme/web', [taken(3)])
+      await f.assigner.tick()
+      expect([f.github.sent.filter(s => s.method === 'DELETE'), asked(f, 'acme/web')]).toEqual([[], 1])
+      // With nothing there, it goes back for Pip, as before.
+      const g = setup([issue(5, ['size:s', 'builder:juno'])], { repositories: SWARM })
+      g.github.state.comments.set(5, [{ body: 'Harness, 07:20: for **Juno**: it can start now.', author_association: 'MEMBER', created_at: at }])
+      g.github.state.elsewhere.set('acme/web', [])
+      await g.assigner.tick()
+      expect(g.github.sent.filter(s => s.method === 'DELETE').map(s => s.path)).toEqual(['/repos/acme/app/issues/5/labels/builder%3Ajuno', '/repos/acme/app/issues/5/labels/status%3Ataken'])
+    })
+
     it('counts a builder as building nothing in a repository this login cannot read, says so once, and asks it again only after a wait', async () => {
       const f = setup([issue(16, ['size:s'])], { crew: alone, repositories: async () => ['acme/app', 'acme/secret'] })
       f.github.state.elsewhere.set('acme/secret', null)
@@ -419,13 +451,15 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       expect(f.labelled()).toEqual([[16, 'builder:pip']])
       const said = (g: ReturnType<typeof setup>) => g.log.mock.calls.filter(([line]) => String(line).includes('acme/secret'))
       expect(said(f)).toEqual([['[super-tab] Task assignment: UNREADABLE acme/secret: this computer\'s gh login cannot read acme/secret. acme/app\'s builders count as building nothing there.']])
-      // With nothing to give here Pip keeps its room: asked again ten minutes on, not each pass, and not said again; left alone
-      // longer each time, to a quarter of an hour; once read again, a new failure waits ten minutes, not the longest.
-      const g = setup([], { crew: alone, repositories: async () => ['acme/app', 'acme/secret'] })
+      // GitHub refusing the label keeps the task free, so each pass is about to give it to Pip again: asked again ten minutes on,
+      // not each pass, and not said again; left alone longer each time, to a quarter of an hour; once read again, a new failure
+      // waits ten minutes, not the longest.
+      const g = setup([issue(16, ['size:s'])], { crew: alone, repositories: async () => ['acme/app', 'acme/secret'] })
+      g.github.state.labelAnswer = 403
       g.github.state.elsewhere.set('acme/secret', null)
-      const asks = async (minutes: number) => {
+      const asks = async (count: number) => {
         const before = asked(g, 'acme/secret')
-        for (let minute = 0; minute < minutes; minute++) { await g.assigner.tick(); g.clock.now += 60_000 }
+        for (let minute = 0; minute < count; minute++) { await g.assigner.tick(); g.clock.now += 60_000 }
         return asked(g, 'acme/secret') - before
       }
       expect(await asks(11)).toBe(2)
@@ -451,7 +485,9 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       const f = setup([issue(16, ['size:s'])], { crew: alone, repositories: unread })
       await f.assigner.tick()
       expect(f.labelled()).toEqual([[16, 'builder:pip']])
-      const g = setup([], { crew: alone, repositories: unread })
+      // GitHub refusing the label keeps the task free: each pass is about to give it again, and the Swarm is asked each time.
+      const g = setup([issue(16, ['size:s'])], { crew: alone, repositories: unread })
+      g.github.state.labelAnswer = 403
       await g.assigner.tick()
       await g.assigner.tick()
       expect(g.log.mock.calls.filter(([line]) => String(line).includes('SWARM_UNREAD')))
@@ -473,7 +509,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       expect(f.log.mock.calls.filter(([line]) => String(line).includes('OTHER_PROJECTS')))
         .toEqual([['[super-tab] Task assignment: OTHER_PROJECTS acme/app: of the Swarm\'s 12 other projects, the first 10 are read for what its builders build']])
       // Ten are all read, and nothing is said.
-      const g = setup([], { crew: alone, repositories: async () => ['acme/app', ...others.slice(0, 10)] })
+      const g = setup([issue(16, ['size:s'])], { crew: alone, repositories: async () => ['acme/app', ...others.slice(0, 10)] })
       for (const repo of others) g.github.state.elsewhere.set(repo, [])
       await g.assigner.tick()
       expect([others.filter(repo => asked(g, repo)).length, g.log.mock.calls.some(([line]) => String(line).includes('OTHER_PROJECTS'))]).toEqual([10, false])

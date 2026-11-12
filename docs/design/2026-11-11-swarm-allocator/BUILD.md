@@ -357,14 +357,16 @@ statuses only.
 
 ### 11. One view of an agent across a Swarm's projects
 
-**Built** (#4144): option (a), [the options and why](one-view.md): `githubAssign.ts` reads, for each builder with room
-in a project, its own list in each of the Swarm's other projects' repositories (`elsewhere`, `swarmRepositories`), and
-`assign/crew.ts` counts what it builds there against its room (`addElsewhere`, `hasRoom`). *anh Dee was not there to
-pick; under his "take care of it all" the session that built it chose (a). Only building counts across projects: four
-open stays each project's own, as a project whose merger is off would otherwise cap its builders everywhere (review of
-#4144). A task there is in review when an open pull request of the team that GitHub says is not a draft names it: its
-verdicts there are not read, so a reader's HOLD there counts as in review. The claim's limit (`githubClaim.ts`) still
-counts one repository: it reads none of these counts.*
+**Built** (#4144): option (a), [the options and why](one-view.md): just before `githubAssign.ts` gives a builder a task,
+it reads that builder's own list in each of the Swarm's other projects' repositories (`buildsElsewhere`,
+`swarmRepositories`), and `assign/crew.ts` counts what it builds there against its room (`buildingIn`, `addElsewhere`,
+`hasRoom`). *anh Dee was not there to pick; under his "take care of it all" the session that built it chose (a). Only
+building counts across projects: four open stays each project's own, as a project whose merger is off would otherwise cap
+its builders everywhere (review of #4144). A builder found building elsewhere is given nothing there for as long as the
+plan counts it busy with that work, and is not read again before. A task there is in review when an open pull request of
+its builder that GitHub says is not a draft names it: its verdicts there are not read, so a reader's HOLD there counts as
+in review. Two PMs' plans can still give one builder a task each when both are about to within one round trip. The
+claim's limit (`githubClaim.ts`) still counts one repository: it reads none of these counts.*
 
 **Why.** Every regular agent builds for every public project of its Swarm, and each project plans on its own PM's
 person's computer, without seeing the others.

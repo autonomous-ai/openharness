@@ -291,13 +291,14 @@ describe('Harness says each thing once on GitHub, over an hour and a restart (gi
 // The allocator's design, package 11 (docs/design/2026-11-11-swarm-allocator/one-view.md, option (a)): every regular agent builds
 // for every public project of its Swarm, and each project is planned by its own PM's person's daemon over its own repository.
 // Neither plan saw the other's repository, so Pip was given a task building by each at once.
-describe('one task building across a Swarm\'s two public projects (githubAssign.ts, assign/crew.ts)', () => {
-  const WEB = 'acme/web', MINUTE = 60_000, MINUTES = 40
-  const PROJECTS: LedProject[] = [PROJECT, { repo: WEB, pm: 'Rex', tabId: 'tab', pmAgentId: 'rex', projectId: 'web' }]
+describe('one task building across a Swarm\'s public projects (githubAssign.ts, assign/crew.ts)', () => {
+  const WEB = 'acme/web', DOCS = 'acme/docs', MINUTE = 60_000, MINUTES = 120
+  const PROJECTS: LedProject[] = [PROJECT, { repo: WEB, pm: 'Rex', tabId: 'tab', pmAgentId: 'rex', projectId: 'web' },
+    { repo: DOCS, pm: 'Ivy', tabId: 'tab', pmAgentId: 'ivy', projectId: 'docs' }]
 
-  /** The Swarm's two repositories, each live, behind one GitHub, each with three small tasks. */
-  function swarmGitHub(clock: { now: number }, lag = false) {
-    const repos = new Map([REPO, WEB].map(repo => [repo, liveGitHub(clock, repo, lag)]))
+  /** The Swarm's repositories, each live, behind one GitHub, each with three small tasks. */
+  function swarmGitHub(clock: { now: number }, names: string[], lag = false) {
+    const repos = new Map(names.map(repo => [repo, liveGitHub(clock, repo, lag)]))
     const of = (path: string) => repos.get(path.split('/').slice(2, 4).join('/'))!
     const get: GitHubGet = (path, etag) => of(path).get(path, etag)
     const send: GitHubSend = (method, path, body) => of(path).send(method, path, body)
@@ -308,7 +309,7 @@ describe('one task building across a Swarm\'s two public projects (githubAssign.
 
   /** A PM's person's daemon planning [projects], reading GitHub through [get]. */
   const daemon = (gh: Swarm, clock: { now: number }, projects: LedProject[], get: GitHubGet = gh.get) => new GitHubAssign({ projects: async () => projects,
-    crew: async () => structuredClone(CREW), repositories: async () => [REPO, WEB], get, send: gh.send, now: () => clock.now, log: () => {},
+    crew: async () => structuredClone(CREW), repositories: async () => [...gh.repos.keys()], get, send: gh.send, now: () => clock.now, log: () => {},
     records: new VerdictRecords(gh.authors, () => clock.now, () => {}), numbers: { pass: async () => {} }, pmRunning: async () => true })
 
   /** What [name] builds across the Swarm's repositories now, as package 2 counts it: its open tasks with no pull request up for
@@ -320,13 +321,14 @@ describe('one task building across a Swarm\'s two public projects (githubAssign.
       .map(item => `${repo}#${item.number}`)
   })
 
-  /** A pass of each daemon a minute, and what the builders do between: each takes what it is given, opens its pull request
-   *  ("Closes #N", its label, not a draft) two minutes after taking the task, and that lands two minutes on. Each minute a builder
-   *  built more than one task, said. */
-  async function run(gh: Swarm, clock: { now: number }, daemons: GitHubAssign[]): Promise<string[]> {
+  /** A pass of each daemon a minute, one after another or [together], as two computers' passes can fall, and what the builders do
+   *  between: each takes what it is given, opens its pull request ("Closes #N", its label, not a draft) two minutes after taking
+   *  the task, and that lands two minutes on. Each minute a builder built more than one task, said. */
+  async function run(gh: Swarm, clock: { now: number }, daemons: GitHubAssign[], together = false): Promise<string[]> {
     const over: string[] = [], since = new Map<string, number>()
     for (let minute = 0; minute < MINUTES; minute++) {
-      for (const each of daemons) await each.tick()
+      if (together) await Promise.all(daemons.map(each => each.tick()))
+      else for (const each of daemons) await each.tick()
       for (const name of ['pip', 'juno']) if (building(gh, name).length > 1) over.push(`${name} at minute ${minute}: ${building(gh, name).join(', ')}`)
       const iso = new Date(clock.now).toISOString()
       for (const [repo, live] of gh.repos) {
@@ -348,20 +350,41 @@ describe('one task building across a Swarm\'s two public projects (githubAssign.
     }
     return over
   }
-  /** Each task of both, given once and landed. */
-  const allLanded = (gh: Swarm) => [...gh.repos].flatMap(([repo, live]) => [1, 2, 3].map(number =>
+  /** Each task of every repository, with how many times Harness gave it and whether it landed. */
+  const landed = (gh: Swarm) => [...gh.repos].flatMap(([repo, live]) => [1, 2, 3].map(number =>
     `${repo}#${number} ${(live.comments.get(number) ?? []).filter(c => /^Harness, \d\d:\d\d: for \*\*/.test(String(c.body))).length} ${live.issues.get(number)!.state}`))
+  const allLanded = (repos: string[]) => repos.flatMap(repo => [1, 2, 3].map(number => `${repo}#${number} 1 closed`))
 
   it('gives a builder one task building across both, each project planned on its own PM\'s computer, and all the work goes', async () => {
-    const clock = { now: START }, gh = swarmGitHub(clock)
-    expect(await run(gh, clock, PROJECTS.map(project => daemon(gh, clock, [project])))).toEqual([])
-    expect(allLanded(gh)).toEqual([REPO, WEB].flatMap(repo => [1, 2, 3].map(number => `${repo}#${number} 1 closed`)))
+    const clock = { now: START }, gh = swarmGitHub(clock, [REPO, WEB])
+    expect(await run(gh, clock, PROJECTS.slice(0, 2).map(project => daemon(gh, clock, [project])))).toEqual([])
+    expect(landed(gh)).toEqual(allLanded([REPO, WEB]))
+  }, 60_000)
+
+  // The review of #4144 ran the two PMs' passes at once, and the race came every time: each read Pip as free before the other's
+  // label was on. Each now reads a builder's lists just before it writes the label, so two passes race only when both are
+  // about to give the same builder a task within one round trip of GitHub: as two passes started at the same instant are, here.
+  // Then the builder holds one task from each, given in that same minute, and no pass after gives it another.
+  it('with both PMs\' passes at once, gives a builder two tasks only when both are about to give it one in the same minute', async () => {
+    const clock = { now: START }, gh = swarmGitHub(clock, [REPO, WEB])
+    const over = await run(gh, clock, PROJECTS.slice(0, 2).map(project => daemon(gh, clock, [project])), true)
+    // When each of the two it held was given: the minute of Harness's line giving it.
+    const givenAt = (task: string) => {
+      const [repo, number] = task.split('#') as [string, string]
+      return (gh.repos.get(repo)!.comments.get(Number(number)) ?? []).map(c => /^Harness, (\d\d:\d\d): for \*\*/.exec(String(c.body))?.[1]).find(Boolean)
+    }
+    expect(over.length, 'the passes at once raced').toBeGreaterThan(0)
+    for (const line of over) {
+      const held = line.slice(line.indexOf(': ') + 2).split(', ')
+      expect([held.length, new Set(held.map(task => task.split('#')[0])).size, new Set(held.map(givenAt)).size], line).toEqual([2, 2, 1])
+    }
+    expect(landed(gh)).toEqual(allLanded([REPO, WEB]))
   }, 60_000)
 
   it('gives one task building across both when one computer leads both, though GitHub\'s lists lag behind the labels it puts on', async () => {
-    const clock = { now: START }, gh = swarmGitHub(clock, true), asked: string[] = []
-    expect(await run(gh, clock, [daemon(gh, clock, PROJECTS, (path, etag) => { asked.push(path); return gh.get(path, etag) })])).toEqual([])
-    expect(allLanded(gh)).toEqual([REPO, WEB].flatMap(repo => [1, 2, 3].map(number => `${repo}#${number} 1 closed`)))
+    const clock = { now: START }, gh = swarmGitHub(clock, [REPO, WEB], true), asked: string[] = []
+    expect(await run(gh, clock, [daemon(gh, clock, PROJECTS.slice(0, 2), (path, etag) => { asked.push(path); return gh.get(path, etag) })])).toEqual([])
+    expect(landed(gh)).toEqual(allLanded([REPO, WEB]))
     // Each repository's whole list is read by its own project's pass alone; the other reads it by a builder's label.
     for (const repo of [REPO, WEB]) {
       const lists = asked.filter(path => path.startsWith(`/repos/${repo}/issues?state=open&`))
@@ -369,5 +392,14 @@ describe('one task building across a Swarm\'s two public projects (githubAssign.
       expect(lists.filter(path => path.includes('&labels=builder%3A')).length, repo).toBeGreaterThan(0)
       expect(lists.every(path => path === `/repos/${repo}/issues?state=open&per_page=100` || /&labels=builder%3A(pip|juno)&per_page=100$/.test(path)), repo).toBe(true)
     }
+  }, 60_000)
+
+  it('reads a builder\'s list in a repository once a pass, however many of the projects one computer leads are about to give it a task', async () => {
+    const clock = { now: START }, gh = swarmGitHub(clock, [REPO, WEB, DOCS]), asked: string[] = []
+    expect(await run(gh, clock, [daemon(gh, clock, PROJECTS, (path, etag) => { asked.push(`${clock.now} ${path}`); return gh.get(path, etag) })])).toEqual([])
+    expect(landed(gh)).toEqual(allLanded([REPO, WEB, DOCS]))
+    const labelled = asked.filter(read => read.includes('&labels=builder%3A'))
+    expect(labelled.length).toBeGreaterThan(0)
+    expect(labelled).toEqual([...new Set(labelled)])
   }, 60_000)
 })
