@@ -16,19 +16,22 @@ export const MEMORIES_BUILTIN_SOURCE = 'builtin:memories'
 /** Hachi, the person's own harness that starts and follows their others (docs/design/2026-11-12-hachi.md): the one
  *  caller `harness goal` answers (services/goals.ts). */
 export const HACHI_ID = 'autonomous/hachi'
+export const HACHI_BUILTIN_SOURCE = 'builtin:hachi'
 
 /** Built-ins opened through their own product entry points, absent from the public picker. */
 export function isHiddenBuiltin(record: { source?: string | null }): boolean {
-  return record.source === 'builtin:pair' || record.source === DEVICES_BUILTIN_SOURCE
+  return record.source === 'builtin:pair' || record.source === DEVICES_BUILTIN_SOURCE || record.source === HACHI_BUILTIN_SOURCE
 }
 
 /** The harnesses a release bundles, under the names its build gives their files (./bundledFiles.ts), and what the
- *  installed index records of each once the Store has put it in place (./builtins.ts `installBuiltin`). */
+ *  installed index records of each once the Store has put it in place (./builtins.ts `installBuiltin`). Hachi is put in
+ *  place only while the account's `hachi` switch is on here (./builtins.ts `ensureBundledCoreHarnesses`). */
 export const BUNDLED_HARNESSES = [
   { name: 'models', id: MODEL_MANAGER_ID, source: MODEL_MANAGER_BUILTIN_SOURCE, what: 'Model Manager' },
   { name: 'devices', id: DEVICES_HARNESS_ID, source: DEVICES_BUILTIN_SOURCE, what: 'Devices' },
   { name: 'monitor', id: HARNESS_MONITOR_ID, source: HARNESS_MONITOR_BUILTIN_SOURCE, what: 'Harness Monitor' },
   { name: 'memories', id: MEMORIES_ID, source: MEMORIES_BUILTIN_SOURCE, what: 'Memories' },
+  { name: 'hachi', id: HACHI_ID, source: HACHI_BUILTIN_SOURCE, what: 'Hachi' },
 ] as const
 
 declare const __BUILTIN_REVISIONS__: string | undefined

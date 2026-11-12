@@ -16,6 +16,8 @@
  * - **Never the person's.** Neither touches a harness the person typed or pasted into from a window or the phone: it is
  *   theirs from then on, and kept so in `<data>/agent-cleanup.json` across restarts. A harness the person started is
  *   never one this may close: the core refuses (`CoreApi.agents.closeStarted`).
+ * - **Never what Hachi started.** However the Hachi harness closes, what it started is handed to the person instead of
+ *   closed, and is never closed for sitting idle after (services/hachiHandOver.ts).
  * - **Keep shared members.** Super Tab membership also protects a harness from both forms of cleanup, even when its
  *   terminal is hidden or its host is offline. Only a confirmed roster removal releases that protection. The Swarm hands
  *   that membership in while it is on (`retained`); off (`HARNESS_SWARM`), its saved roster is not read and such a
@@ -26,9 +28,12 @@
  */
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { Ledger, ledgerPath } from '../agentClient/ledger.js'
 import type { AgentCleanupPort, CoreApi, CorePorts } from '../core/api.js'
 import type { AgentCloseResult } from '../lib/closeAgentService.js'
 import type { RegisteredSession } from '../lib/registry.js'
+import { createMessagesRpc } from '../messages/rpc.js'
+import { createHachiHandOver } from './hachiHandOver.js'
 
 /** How long a harness another agent started may sit idle after its last answer before it is closed. */
 export const IDLE_CLOSE_MS = 30 * 60_000
@@ -63,6 +68,9 @@ export interface AgentCleanupDeps {
    *  the Swarm then refuses it new work, as it does not one stopped for Change agent (review of #2953). False when it
    *  could not record it. Absent while the Swarm is off. */
   closed?: (dataDir: string, agentId: string) => boolean
+  /** Asks another of the owner's machines' messages service (messages/service.ts), as `harness tell` does: a hand-over
+   *  of what Hachi started there. By default over this daemon's own socket. */
+  tell?: (machineId: string, payload: Record<string, unknown>) => Promise<unknown>
 }
 
 const NONE_RETAINED: ReadonlySet<string> = new Set()
@@ -101,6 +109,14 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
   const seen = new Map<string, number>()
   /** The starters whose harnesses are being closed: two stops of one harness tell this twice. */
   const cascading = new Set<string>()
+  const rpc = deps.tell ? null : createMessagesRpc()
+  const hachi = createHachiHandOver({
+    ledger: new Ledger(ledgerPath(core.dataDir)),
+    self: () => core.daemon.machineId(),
+    tell: deps.tell ?? ((machineId, payload) => rpc!({ port: core.daemon.port, dataDir: core.dataDir, machineId }, payload)),
+    now, log,
+    count: (metric) => core.count?.(metric),
+  })
   let looking = false
   let stopped = false
 
@@ -143,8 +159,11 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
       const live = core.agents.live()
       // Its starter is back (resumed while this notice was held, or between tries): its harnesses are its again.
       if (live.some((s) => s.agentId === parentId)) return
+      // The Hachi harness: what it started is the person's now, never closed with it.
+      await hachi.over(parentId)
       const retained = retainedHarnesses(core.dataDir)
-      const orphans = live.filter((s) => s.parentAgentId === parentId && s.startedBy === 'agent' && !joined.has(s.agentId) && !retained.has(s.agentId))
+      const orphans = live.filter((s) => s.parentAgentId === parentId && s.startedBy === 'agent' && !joined.has(s.agentId) && !retained.has(s.agentId)
+        && !hachi.handed(s.agentId))
       const left: Array<[RegisteredSession, AgentCloseResult]> = []
       // One at a time: each close saves a screen and stops a process, and a starter may have several.
       for (const s of orphans) {
@@ -174,9 +193,13 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
       const runs = new Set(live.map(incarnation))
       for (const run of seen.keys()) if (!runs.has(run)) seen.delete(run)
       for (const s of live) if (!seen.has(incarnation(s))) seen.set(incarnation(s), now())
+      // A Hachi harness gone without a stop hands what it started to the person, as a stopped one does.
+      const handing = hachi.look(live)
+      if (handing) await handing
       for (const s of live) {
         if (stopped) return
-        if (s.startedBy !== 'agent' || joined.has(s.agentId) || retained.has(s.agentId) || (askAgainAt.get(s.agentId) ?? 0) > now()) continue
+        if (s.startedBy !== 'agent' || joined.has(s.agentId) || retained.has(s.agentId) || (askAgainAt.get(s.agentId) ?? 0) > now()
+          || hachi.handed(s.agentId)) continue
         // Not before this run of it has been here that long; then by when its conversation last moved, its last answer
         // or later. Not known (an engine that keeps no dated transcript), it is left alone.
         const since = seen.get(incarnation(s))!

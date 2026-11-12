@@ -9,6 +9,7 @@ import 'package:harness_mobile/shared/theme/app_icon_size.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
 
+import 'swarm_agent_rename.dart';
 import 'swarm_chat_manage.dart';
 import 'swarm_chat_notify.dart';
 import 'swarm_buddy.dart' show swarmIsOldBuddyChat;
@@ -102,12 +103,20 @@ Future<void> showSwarmNotifySheet(
 
   reader.addListener(moved);
   try {
+    final snapshot = reader.snapshot;
+    final agent = snapshot == null || snapshot.isProjectLead(chatId)
+        ? null
+        : snapshot.agents.where((a) => a.chatId == chatId).firstOrNull;
     await showPhoneSheet(
       context,
-      // An old Buddy chat's stored title is only the Buddy's default name.
+      // An old Buddy chat's stored title is only the Buddy's default name; an
+      // agent's own chat keeps the name its agent had when it was made, so
+      // its agent's name now, as its header says it.
       title: swarmIsOldBuddyChat(reader, chatId)
           ? 'Old chat'
-          : reader.snapshot?.conversation(chatId)?.title ?? '',
+          : agent != null
+          ? snapshot!.agentName(agent.id, fallback: agent.name)
+          : snapshot?.conversation(chatId)?.title ?? '',
       onShown: (route) {
         sheet = route;
         onShown?.call(route);
@@ -126,7 +135,8 @@ Future<void> showSwarmNotifySheet(
 
 /// At the end of a chat's header: ⋮, whose sheet holds Find in chat where
 /// the chat's page offers it ([onFind]), Rename and Archive where the person may
-/// ([swarmChatManage]) and the chat's Notifications
+/// ([swarmChatManage]; in an agent's own chat, Rename of its agent,
+/// [swarmAgentToRename]) and the chat's Notifications
 /// ([swarmNotifySection]), as the desktop's chat menu does for every chat a
 /// person reads, a viewer's too. Nothing while the chat is not
 /// known. The sheet goes once the chat can no longer be read — access lost,
@@ -200,13 +210,23 @@ class _SwarmChatMenuButtonState extends State<SwarmChatMenuButton> {
     widget.reader,
     widget.chatId,
     onShown: (route) => _sheet = route,
-    // Rename and Archive where the desktop's chat menu has them.
+    // Rename and Archive where the desktop's chat menu has them; in an
+    // agent's own chat, Rename renames the agent, whose name its header
+    // shows (Desktop's, audit finding 16 of #4436).
     actions: () => [
       if (widget.onFind case final find?)
         PhoneSheetAction(
           icon: LucideIcons.search300,
           label: 'Find in chat',
           onTap: find,
+        ),
+      if (swarmAgentToRename(widget.reader, widget.chatId) != null)
+        PhoneSheetAction(
+          icon: LucideIcons.pencil300,
+          label: 'Rename',
+          onTap: () => unawaited(
+            showSwarmRenameAgent(context, widget.reader, widget.chatId),
+          ),
         ),
       ...swarmChatManageActions(context, widget.reader, widget.chatId),
     ],

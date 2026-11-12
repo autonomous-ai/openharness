@@ -5,7 +5,7 @@
  * gets nothing else of this computer's, and of these only names and states: never what a harness wrote, its
  * question's words included, which a tool reads with `harness show` when it needs them.
  */
-type Frame = { type?: unknown; agentId?: unknown; payload?: unknown }
+type Frame = { type?: unknown; agentId?: unknown; payload?: unknown; subagent?: unknown }
 
 /** The events a watch is told: a harness's activity changing, its turn ending, a question opening or closing, and the
  *  harness going. `turn_heartbeat` is how the daemon says a harness works (core/turns/heartbeats.ts), and is told as
@@ -31,7 +31,7 @@ export function createToolWatches(deps: ToolWatchesDeps) {
   const watches = new Map<string, Map<string, Told>>()
 
   /** The frame [watch] is told of [frame] about [agentId], or null when it is nothing new. */
-  const toldOf = (type: string, agentId: string, payload: Record<string, unknown>, told: Told): Record<string, unknown> | null => {
+  const toldOf = (type: string, agentId: string, payload: Record<string, unknown>, told: Told, quiet: boolean): Record<string, unknown> | null => {
     if (type === 'commander_question' || type === 'commander_question_close') {
       // Every question has its id (core/questions.ts, core/agents/cloud.ts, the Swarm's attention).
       const requestId = payload.requestId
@@ -48,7 +48,9 @@ export function createToolWatches(deps: ToolWatchesDeps) {
     const activity = payload.activity as { state?: unknown } | undefined
     const state = typeof activity?.state === 'string' ? activity.state : type === 'turn_ended' ? 'idle' : null
     // Every turn's end is told, though the state is idle as before: the turn after a short one may not have beaten once.
-    if (type === 'turn_ended') { told.state = state!; return { type, agentId, payload: { agentId, state } } }
+    // A turn end no one asked for (core/turns/funnel.ts `subagent`: a specialist's, or one Hachi's wake started) says so:
+    // Hachi counts its person's turns apart from its wakes' (docs/design/2026-11-12-hachi.md, Measures).
+    if (type === 'turn_ended') { told.state = state!; return { type, agentId, payload: { agentId, state, ...(quiet ? { subagent: true } : {}) } } }
     if (!state || told.state === state) return null
     told.state = state
     return { type: 'agent_activity', agentId, payload: { agentId, state } }
@@ -83,7 +85,7 @@ export function createToolWatches(deps: ToolWatchesDeps) {
       if (!agentId) return
       for (const [connId, named] of watches) {
         const told = named.get(agentId)
-        const sent = told && toldOf(frame.type, agentId, payload, told)
+        const sent = told && toldOf(frame.type, agentId, payload, told, frame.subagent === true)
         if (sent && !deps.sendTo(connId, sent)) watches.delete(connId)
       }
     },
