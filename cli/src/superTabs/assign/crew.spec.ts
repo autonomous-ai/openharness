@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { builtOn, contextOf, crewOf, CORES, learnedMinutes, openPieces, outOfQuota, startedAt, takenTasks, QUEUED_AWAY_MS, readerFor, takeBacks, TAKEN_AWAY_MS, CLAIM_LIMIT, dependsOn, hasRoom, heldTasks, labelOf, machineHas, MEMORY_SHARE, nextPicks, readProblem, reasonOf, RESERVE, SIZES, worksOnOf, type Crew } from './crew.js'
+import { addElsewhere, buildingIn, builtOn, contextOf, crewOf, learnedMinutes, openPieces, outOfQuota, startedAt, takenTasks, QUEUED_AWAY_MS, readerFor, takeBacks, TAKEN_AWAY_MS, CLAIM_LIMIT, dependsOn, hasRoom, heldTasks, labelOf, machineHas, MEMORY_SHARE, nextPicks, readProblem, reasonOf, RESERVE, SIZES, worksOnOf, type Crew, type CrewBuilder } from './crew.js'
 import { solve } from './search.js'
 
 type Json = Record<string, unknown>
@@ -29,7 +29,7 @@ describe('a team\'s tasks as GitHub and the Swarm say them (readProblem)', () =>
     ], withReaders: new Set(), up: new Map() })
     expect(read.problem.tasks.map(t => t.id)).toEqual(['#1', '#2', '#5'])
     const [first, second, fifth] = read.problem.tasks
-    expect(first).toMatchObject({ minutes: SIZES.s.minutes, needs: { cpu: SIZES.s.cpu, ram: SIZES.s.ram, disk: SIZES.s.disk }, part: 'api', weight: 8,
+    expect(first).toMatchObject({ minutes: SIZES.s.minutes, needs: { cpu: 0, ram: SIZES.s.ram, disk: SIZES.s.disk }, part: 'api', weight: 8,
       spend: { five_hour: SIZES.s.spend, seven_day: SIZES.s.spend / 5 }, notBuilders: [] })
     // Only a machine that reports Xcode builds what needs it.
     expect(second).toMatchObject({ minutes: SIZES.l.minutes, weight: 1, notBuilders: ['atlas'], notWhy: 'its builder\'s machine lacks one of: xcode' })
@@ -89,19 +89,76 @@ describe('a team\'s tasks as GitHub and the Swarm say them (readProblem)', () =>
     expect(given.problem.tasks.map(t => [t.id, t.pinned ?? null, t.notBuilders])).toEqual([['#1', null, ['pip']], ['#2', 'pip', []]])
   })
 
-  it('plans a machine by the cores it reports, and one from an older daemon as CORES', () => {
+  // The allocator's design, package 11 (docs/design/2026-11-11-swarm-allocator/one-view.md): every regular agent builds for every
+  // public project of its Swarm, and each project was planned blind to the others, so one agent held a task building in each.
+  it('counts what a builder builds in the Swarm\'s other repositories from its own lists there, and busy for it in the plan', () => {
+    const [pip, juno, atlas] = crew().builders as [CrewBuilder, CrewBuilder, CrewBuilder]
+    // Each builder's own list in another project's repository: Pip took #5 there; Juno's #6 has its pull request up there;
+    // Atlas was given #8 there and has not taken it.
+    expect(buildingIn([[issue(5, ['size:l', 'builder:pip', 'status:taken'])]], pip)).toEqual({ tasks: 1, minutes: SIZES.l.minutes / 2 })
+    expect(buildingIn([[issue(6, ['size:m', 'builder:juno', 'status:taken']), issue(7, ['builder:juno'], { pull_request: {}, draft: false, body: 'Closes #6' })]], juno))
+      .toEqual({ tasks: 0, minutes: 0 })
+    expect(buildingIn([[issue(8, ['size:s', 'builder:atlas'])], [issue(9, ['size:m', 'builder:atlas', 'status:taken'])]], atlas))
+      .toEqual({ tasks: 2, minutes: SIZES.s.minutes + SIZES.m.minutes / 2 })
+    // Counted against its room here, and as its busy time in the plan; its lists here stay this project's own.
+    const read = readProblem({ now: NOW, crew: crew(), issues: [issue(1, ['size:s'])], withReaders: new Set(), up: new Map() })
+    addElsewhere(read, 'pip', { tasks: 1, minutes: 120 })
+    addElsewhere(read, 'atlas', { tasks: 2, minutes: 75 })
+    expect(['pip', 'juno', 'atlas'].map(builder => hasRoom(read, builder))).toEqual([false, true, false])
+    expect([Object.fromEntries(read.elsewhere), Object.fromEntries(read.open)]).toEqual([{ pip: 1, atlas: 2 }, { pip: 0, juno: 0, atlas: 0 }])
+    expect(read.problem.builders.map(b => [b.id, b.busyUntil])).toEqual([['pip', 120], ['juno', 0], ['atlas', 75]])
+    expect(nextPicks(solve(read.problem, { seed: 1, budgetMs: 2_000 }).plan, read)).toEqual([{ task: '#1', builder: 'juno', start: 0 }])
+  })
+
+  it('counts a task there as in review only by a pull request of its builder that GitHub says is not a draft and that names it', () => {
+    const pip = crew().builders[0]!
+    const taken = issue(5, ['size:s', 'builder:pip', 'status:taken'])
+    const pull = (extra: Json) => issue(9, ['builder:pip'], { pull_request: {}, draft: false, body: 'Closes #5', ...extra })
+    const there = (...listed: Json[]) => buildingIn([listed], pip).tasks
+    expect(there(taken, pull({}))).toBe(0)
+    // A draft, one GitHub said nothing of, another's, one that names another task: Pip's to build still.
+    for (const extra of [{ draft: true }, { draft: undefined }, { labels: [{ name: 'builder:juno' }] }, { body: 'Closes #4' }]) expect(there(taken, pull(extra)), JSON.stringify(extra)).toBe(1)
+    // An issue that names it is no pull request: both are Pip's to build.
+    expect(there(taken, pull({ pull_request: undefined }))).toBe(2)
+    // One that waits on pieces cut off it is others' to build, as here; another builder's task is not Pip's.
+    expect(there({ ...taken, sub_issues_summary: { total: 2, completed: 1 } }, issue(6, ['size:s', 'builder:juno']))).toBe(0)
+    // A size Harness does not read is none: such a task is not planned here, and one there keeps its builder busy as a middle one.
+    const xl = readProblem({ now: NOW, crew: crew(), issues: [issue(2, ['size:xl'])], withReaders: new Set(), up: new Map() })
+    expect([xl.problem.tasks, buildingIn([[issue(5, ['size:xl', 'builder:pip'])]], pip)]).toEqual([[], { tasks: 1, minutes: SIZES.m.minutes }])
+  })
+
+  // A project whose merger is off keeps its builders' pull requests waiting: counted against a builder's four everywhere, they
+  // would have capped it in every other project (review of #4144). Its four open are each project's own, as before.
+  it('counts no task that waits for its read in another project against a builder\'s four here', () => {
+    const issues = [issue(11, ['size:m', 'builder:pip', 'status:taken']), issue(12, ['size:m', 'builder:pip', 'status:taken']),
+      issue(13, ['size:m', 'builder:pip', 'status:taken']), issue(1, ['size:s'])]
+    const web = [issue(3, ['size:m', 'builder:pip', 'status:taken']), issue(4, ['size:m', 'builder:pip', 'status:taken']),
+      issue(23, ['builder:pip'], { pull_request: {}, draft: false, body: 'Closes #3 and fixes #4' })]
+    const read = readProblem({ now: NOW, crew: crew(), issues, withReaders: new Set([11, 12, 13]), up: new Map() })
+    addElsewhere(read, 'pip', buildingIn([web], crew().builders[0]!))
+    expect([read.problem.tasks.map(t => [t.id, t.notBuilders]), hasRoom(read, 'pip')]).toEqual([[['#1', []]], true])
+  })
+
+  // The plan held a task back for its machine's cores by a guess (a large task took four of them), which nothing checked when
+  // the task was taken, and which did not keep a machine working: four runs at once, the most the guess let 16 cores take,
+  // all failed (docs/research/2026-11-11-agents-share-cpu.md). A machine's cores are shared where its agents start
+  // (inCore/launch.ts), and the plan counts none.
+  it('holds no task back for its machine\'s cores, whatever cores the machine reports', () => {
     const team = crew()
-    team.machines = [machine('mac', { resources: { memoryTotalBytes: 32 * GiB, projectDiskFreeBytes: 200 * GiB, cpuCores: 4 } }),
-      machine('box', { resources: { memoryTotalBytes: 16 * GiB, projectDiskFreeBytes: 40 * GiB, cpuCores: 0 } })]
-    const { problem } = readProblem({ now: NOW, crew: team, issues: [issue(1, ['size:s'])], withReaders: new Set(), up: new Map() })
-    expect(problem.machines.map(m => [m.id, m.capacity.cpu])).toEqual([['mac', 4], ['box', CORES]])
+    team.machines = [machine('mac', { tools: { xcode: true }, resources: { memoryTotalBytes: 32 * GiB, projectDiskFreeBytes: 200 * GiB, cpuCores: 4 } }), team.machines[1]!]
+    const read = readProblem({ now: NOW, crew: team, issues: [issue(1, ['size:l', 'needs:xcode']), issue(2, ['size:l', 'needs:xcode'])],
+      withReaders: new Set(), up: new Map() })
+    // Pip and Juno, on the one Mac with Xcode, each start a large task now.
+    const { plan } = solve(read.problem, { seed: 1, budgetMs: 2_000 })
+    expect(plan.placements.map(placed => [placed.builder, placed.start]).sort()).toEqual([['juno', 0], ['pip', 0]])
+    expect(read.problem.machines.map(m => m.capacity.cpu)).toEqual([0, 0])
   })
 
   it('reads each machine\'s room and each subscription\'s windows, its person\'s reserve kept', () => {
     const { problem } = readProblem({ now: NOW, crew: crew(), issues: [issue(1, ['size:s'])], withReaders: new Set(), up: new Map() })
     expect(problem.machines).toEqual([
-      { id: 'mac', capacity: { cpu: CORES, ram: 32 * GiB * MEMORY_SHARE, disk: 190 * GiB } },
-      { id: 'box', capacity: { cpu: CORES, ram: 16 * GiB * MEMORY_SHARE, disk: 30 * GiB } },
+      { id: 'mac', capacity: { cpu: 0, ram: 32 * GiB * MEMORY_SHARE, disk: 190 * GiB } },
+      { id: 'box', capacity: { cpu: 0, ram: 16 * GiB * MEMORY_SHARE, disk: 30 * GiB } },
     ])
     expect(problem.accounts).toEqual([
       { id: 'mac:claude', reserve: RESERVE, windows: [{ name: 'five_hour', left: 70, resetsAt: 120, every: 300 },

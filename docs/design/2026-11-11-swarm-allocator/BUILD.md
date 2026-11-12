@@ -130,7 +130,7 @@ opening tasks). `DEEP` goes, from every reader of a list: `readProblem`, `nextPi
 `githubAssign.ts`, `openWaiting` and `readerFor`, and `pmNumbers.ts`. `experiment.mts` calls `nextPicks` with a depth
 and builds its own read: it is this package's proof, and is kept running. `PM_BASICS` says what is true, and its
 entry in `docs/prompt-rules-audit.md` follows. Until package 11 this is for each project: a builder of two public
-projects holds one task building in each.
+projects holds one task building in each. *Since package 11, one across them.*
 
 **First.** The test that shows the fault: a builder with two tasks whose pull requests wait for a read, and a free
 sized task. Today nothing is given. If that test passes on `main`, the fault is not there: stop and say so.
@@ -265,11 +265,17 @@ and each that lets it go.
 
 ### 7. CPU
 
-**Built, not in a pull request yet** (branch `cli-swarm-cpu-share`). Each agent a Swarm starts gets its share of its computer's cores
-(`HARNESS_CORES`), and the CLI's unit suite takes half of it; the plan stops counting cores (the mismatch). Measured on
-one Mac of 16 threads: an eighth of the CLI's unit suite started two or four at once, each sized to the machine, failed
-on deadlines every time; sized to half its share, none did. Owed: the write-up in `docs/research/`, a review, and the
-core checks (`npm run test:core`).
+**Built** (#4150): the share, `swarmLaunch` in `cli/src/superTabs/inCore/launch.ts`, given as `HARNESS_CORES` at a
+Swarm agent's first launch (`core/agents/create.ts`) and every relaunch (`lib/launchOverrides.ts`); this repository's
+CLI suite takes half of it, never more than the machine has (`cli/src/testing/suiteWorkers.ts`). The plan counts no
+cores (`assign/crew.ts` `SIZES`): the smaller way to settle the mismatch, as a check when a task is taken needs
+package 16's offer. The study:
+[docs/research/2026-11-11-agents-share-cpu.md](../../research/2026-11-11-agents-share-cpu.md). *Measured on one Mac of
+16 threads: four runs at once of an eighth of the CLI's unit suite, each sized to the machine, failed 12 of 12; at half
+a share 16 of 16 passed, taking 1.5 to 2.7 times as long. Not built: a lower priority (`nice -n 10` did not stop four
+at once failing; macOS's background policy kept the person's own work quick and the runs failing) and the system's
+controls on Linux and Windows (not tried). Agents started at the same moment count each other; each share is said in
+the daemon's log, in counts. An agent keeps the share it was started with until it is relaunched.*
 
 **Today.** Nothing limits what an agent's tools take. Each test runner sizes its workers to the whole machine (the
 CLI's suite to half its cores, Desktop's to at most 12), whatever else runs there. And the plan keeps a machine
@@ -357,6 +363,18 @@ statuses only.
 **Proof.** A suite of this repository that CI does not run, split over two computers: wall time against one.
 
 ### 11. One view of an agent across a Swarm's projects
+
+**Built** (#4144): option (a), [the options and why](one-view.md): just before `githubAssign.ts` gives a builder a task,
+it reads that builder's own list in each of the Swarm's other projects' repositories (`buildsElsewhere`,
+`swarmRepositories`), and `assign/crew.ts` counts what it builds there against its room (`buildingIn`, `addElsewhere`,
+`hasRoom`). *anh Dee was not there to pick; under his "take care of it all" the session that built it chose (a). Only
+building counts across projects: four open stays each project's own, as a project whose merger is off would otherwise
+cap its builders everywhere (review of #4144). A builder found building elsewhere is busy in the plan for as long as the
+plan counts that work, and is given nothing here until it is read again, fifteen minutes on at the latest. A task there
+is in review when an open pull request of its builder that GitHub says is not a draft names it: its verdicts there are
+not read, so a reader's HOLD there counts as in review. Its lists in the other repositories are read at once, and two
+PMs' plans can still give one builder a task each when both are about to within that one round trip. The claim's limit
+(`githubClaim.ts`) still counts one repository: it reads none of these counts.*
 
 **Why.** Every regular agent builds for every public project of its Swarm, and each project plans on its own PM's
 person's computer, without seeing the others.

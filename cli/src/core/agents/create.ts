@@ -380,6 +380,8 @@ export function createAgentCreator({
     // Its own words: the Swarm's skill code (and its refusal's text) stays out of the core's bundle (src/leanEntry.spec.ts).
     if (input.swarmRole && !swarmSkill) return { ok: false, error: 'SWARM_SKILL_FAILED', detail: 'This launch names no Swarm role this Harness knows.' }
     const swarmInstructions = swarmLaunch && swarmSkill ? swarmLaunch.basics(swarmSkill.role === 'coordinator', { cwd, name: name ?? null }) : undefined
+    // A Swarm agent's share of this machine's cores, in its environment (superTabs/inCore/launch.ts): never a person's own session's.
+    const swarmCores = swarmLaunch && swarmSkill ? swarmLaunch.cores(swarmSkill.key) : undefined
     const told = agentLaunchArgs(engine, startedBy, { cwd, profile: codexHome, environment: native?.environment, ...(swarmInstructions ? { swarmInstructions } : {}) })
     // The person's machine MCP servers (lib/machineMcp.ts, #1872), beside the grid's and their own: read at each launch,
     // as every relaunch reads them again (`buildLaunchOverrides`).
@@ -430,8 +432,8 @@ export function createAgentCreator({
       // Windows: the workspace to start in and the shell the pane becomes after the engine (lib/windows/engineStart.ts).
       paneLaunch: windowsPaneLaunch(engine, { ...launchOptions, held: isWindowsHeldPane(argv) }),
       // Windows: the variables the argv's `/usr/bin/env` prefix carries elsewhere, last (engineLaunchEnv).
-      // The private temporary folder first, so the launch's own variables win over it (lib/agentTmp.ts).
-      env: mergedLaunchEnv(mergedLaunchEnv(tmp.env, freshHarnessEnvironment(engine, mergedLaunchEnv(mergedLaunchEnv(gridLaunch?.env ?? (codexHome ? profileEnvironment(engine, codexHome) : undefined), dshEnv),
+      // The private temporary folder first, so the launch's own variables win over it (lib/agentTmp.ts), with a Swarm agent's cores.
+      env: mergedLaunchEnv(mergedLaunchEnv({ ...tmp.env, ...swarmCores }, freshHarnessEnvironment(engine, mergedLaunchEnv(mergedLaunchEnv(gridLaunch?.env ?? (codexHome ? profileEnvironment(engine, codexHome) : undefined), dshEnv),
         mergedLaunchEnv(scmLaunchEnv(scmLaunchRecord), native?.environment)), !!grid,
         permissionMode ?? (bypassPermission ? DEFAULT_HARNESS_PERMISSION : 'ask'))), engineLaunchEnv(engine, native)),
       grid: grid ? { baseUrl: grid.baseUrl, model: grid.model ?? null } : null,

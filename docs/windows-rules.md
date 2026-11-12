@@ -138,11 +138,23 @@ everywhere), [Process Creation Flags](https://learn.microsoft.com/en-us/windows/
   deleted (`scrollsTabsByMouse` in `desktop/lib/widgets/workspace_tab_scroller.dart`).
 - **A window that nobody asked for is rule 1.** A prompt nobody can answer in a hidden pane is its sibling: answer the exact screen
   safely or fail the start with a reason (`cli/src/superTabs/startScreen.ts`).
+- **Windows scales by 125%, 150% and 175%; a Mac by 200%.** A line drawn in logical pixels can then end inside a device
+  pixel, and two neighbours that each cover part of it let what is behind show through. In the terminal this put a
+  dark stripe between OpenCode's panel rows every 20 device pixels, and a gap in its `┃` bar at every row (measured
+  2026-11-12 on a PC at 125%). The terminal grid sits on whole device pixels (`wholeDevicePixels` in
+  `desktop/third_party/xterm/lib/src/ui/painter.dart`), and box drawing is drawn from cell edge to cell edge
+  (`box_glyphs.dart`), as native terminals do. Tests: `desktop/test/terminal_row_seam_test.dart`,
+  `terminal_box_glyph_test.dart`, at every scale.
 
 ## 5. Testing on Windows
 
 - Test in the person's session (session 1) and in the signed build. Windows behaves differently in session 0 and for an
   unsigned file.
+- Smart App Control blocks a local `flutter build windows` (Bad Image on `flutter_windows.dll`). To show a Dart-only
+  change before a release, copy the installed signed version folder and replace only `data\app.so` and
+  `data\flutter_assets` with a release build made by the same Flutter version (`FLUTTER_VERSION` in
+  `.github/workflows/release-desktop.yml`) from a commit with the same native code and plugins. `app.so` is not a
+  program Windows checks.
 - `SendKeys` Ctrl+Shift chords do not reach the app. That is the test's fault. Send real key events (`keybd_event`).
 - Claude Code on Windows takes a pasted image on Alt+V, not Ctrl+V.
 - Check the machine chip says This Computer before you start anything: a new Harness can default to another machine.
