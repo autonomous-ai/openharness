@@ -12,7 +12,8 @@
  * builders that persist, files two builders must not change at once.
  */
 
-/** What a machine has for Swarm work: CPU in cores, memory and disk in bytes, after its person's own reserve. */
+/** What a machine has for Swarm work: CPU in cores, memory and disk in bytes, after its person's own reserve. The product's
+ *  plan counts no cores (crew.ts SIZES): the design's model still does (docs/design/2026-11-11-swarm-allocator/experiment.mts). */
 export interface Resources { cpu: number; ram: number; disk: number }
 
 export interface Machine { id: string; capacity: Resources }

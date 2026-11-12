@@ -4,6 +4,7 @@ import 'package:flutter/painting.dart';
 import 'package:quiver/collection.dart';
 
 import 'package:xterm/src/ui/block_glyphs.dart';
+import 'package:xterm/src/ui/box_glyphs.dart';
 import 'package:xterm/src/ui/line_picture_cache.dart';
 import 'package:xterm/src/ui/palette_builder.dart';
 import 'package:xterm/src/ui/paragraph_cache.dart';
@@ -19,6 +20,28 @@ import 'package:xterm/xterm.dart';
 String terminalGlyphText(int charCode) => charCode == 0x23FA
     ? String.fromCharCode(0x25CF)
     : String.fromCharCode(charCode);
+
+/// [logical] as a whole number of device pixels at [devicePixelRatio], at
+/// least one: the height of a terminal row.
+///
+/// The terminal grid sits on whole device pixels, as native terminals lay it
+/// out (xterm.js, Windows Terminal): the row height is a whole number of them
+/// and the first row starts on one (`RenderTerminal`), so every row edge falls
+/// on a pixel. Laid out in logical pixels instead, at 125%, 150% or 175%
+/// display scaling an edge fell inside a pixel; the rows above and below each
+/// covered part of it, and the terminal's background showed through as a dark
+/// stripe between rows of one colour, the panels a program such as OpenCode
+/// paints.
+double wholeDevicePixels(double logical, double devicePixelRatio) {
+  final ratio = devicePixelRatio > 0 ? devicePixelRatio : 1.0;
+  return math.max(1, (logical * ratio).roundToDouble()) / ratio;
+}
+
+/// [logical] moved to the nearest device pixel boundary at [devicePixelRatio].
+double snapToDevicePixel(double logical, double devicePixelRatio) {
+  final ratio = devicePixelRatio > 0 ? devicePixelRatio : 1.0;
+  return (logical * ratio).roundToDouble() / ratio;
+}
 
 /// A private-use code point the bundled Symbols Nerd Font Mono 3.5.1 has an
 /// icon for. Unicode assigns them no width; the grid counts each as one cell.
@@ -278,10 +301,18 @@ class TerminalPainter {
   /// hairline where one would not.
   double get devicePixelRatio => _devicePixelRatio;
   double _devicePixelRatio = 1.0;
+
+  /// Also sets the row height, a whole number of device pixels (see
+  /// [wholeDevicePixels]), so a new ratio can change how many rows fit.
   set devicePixelRatio(double value) {
     if (value == _devicePixelRatio) return;
     _devicePixelRatio = value;
+    _cellSize = _measureCharSize();
+    _fittedSymbolFontSize = null;
+    _paragraphCache.clear();
     _lineCache.clear();
+    _runParagraphs.clear();
+    _runAligned.clear();
   }
 
   Size _measureCharSize() {
@@ -299,7 +330,7 @@ class TerminalPainter {
 
     final result = Size(
       paragraph.maxIntrinsicWidth / test.length,
-      paragraph.height,
+      wholeDevicePixels(paragraph.height, _devicePixelRatio),
     );
 
     paragraph.dispose();
@@ -410,9 +441,15 @@ class TerminalPainter {
   }
 
   /// The part of [offset] that is not a whole number of device pixels.
+  ///
+  /// Rows sit on device pixels (see [wholeDevicePixels]), but their offsets are
+  /// sums such as 7 × 16.8 that can land a rounding error short of the pixel. A
+  /// value that close is that pixel, not one almost a whole pixel further on.
   Offset _devicePixelPhase(Offset offset) {
     double part(double logical) {
       final device = logical * _devicePixelRatio;
+      final nearest = device.roundToDouble();
+      if ((device - nearest).abs() < 1e-6) return 0;
       return (device - device.floorToDouble()) / _devicePixelRatio;
     }
 
@@ -653,6 +690,12 @@ class TerminalPainter {
       return;
     }
 
+    final box = BoxGlyph.lookup(charCode);
+    if (box != null) {
+      paintBoxGlyph(canvas, offset, cellData, box);
+      return;
+    }
+
     if (_symbolFace(charCode)) {
       final outline = powerlineSeparatorPath(
         charCode,
@@ -875,6 +918,45 @@ class TerminalPainter {
   /// Paints a Block Elements character (U+2580–U+259F) as filled rectangles
   /// covering the whole cell instead of the font's glyph. See [BlockGlyph] for
   /// why; the colour rules match the text path above.
+  /// Paints a Box Drawing character (U+2500–U+257F) from cell edge to cell
+  /// edge instead of the font's glyph. See [BoxGlyph] for why; the colour
+  /// rules match [paintBlockGlyph].
+  void paintBoxGlyph(
+    Canvas canvas,
+    Offset offset,
+    CellData cellData,
+    BoxGlyph box,
+  ) {
+    final cellFlags = cellData.flags;
+    var color = cellFlags & CellFlags.inverse == 0
+        ? resolveForegroundColor(cellData.foreground)
+        : resolveBackgroundColor(cellData.background);
+    if (cellFlags & CellFlags.faint != 0) {
+      color = color.withValues(alpha: color.a * 0.5);
+    }
+
+    final cell = offset & _cellSize;
+    // Straight strokes tile like blocks: whole device pixels, no anti-aliasing.
+    final fill = Paint()
+      ..color = color
+      ..isAntiAlias = false;
+    for (final rect in box.rects(cell, _devicePixelRatio)) {
+      canvas.drawRect(rect, fill);
+    }
+    final stroke = box.stroke(cell, _devicePixelRatio);
+    if (stroke != null) {
+      final (path, width) = stroke;
+      canvas.drawPath(
+        path,
+        Paint()
+          ..color = color
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = width
+          ..strokeCap = StrokeCap.butt,
+      );
+    }
+  }
+
   void paintBlockGlyph(
     Canvas canvas,
     Offset offset,

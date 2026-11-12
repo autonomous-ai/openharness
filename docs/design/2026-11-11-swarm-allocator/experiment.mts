@@ -63,8 +63,10 @@ type Info = 'fixed' | 'learned' | 'oracle'
 type Policy = 'solver' | 'solver1' | 'dispatch' | 'fifo' | 'priced0' | 'priced4' | 'queue'
 
 const PARTS = ['api', 'desktop', 'cli', 'docs'], MIX: Record<Size, number> = { s: 0.5, m: 0.35, l: 0.15 }
-// CORES=8 lets two large tasks share a machine, as the product does: it plans with a machine's cores (8 when unreported) but
-// checks none when a task is taken, so at 6 this model holds the solver's builder to a rule the product does not enforce.
+// The cores a size holds of its machine here: what the product's plan counted until 2026-11-12 (crew.ts SIZES). It counts
+// none since (docs/research/2026-11-11-agents-share-cpu.md), which is CORES=8 here: two builders a machine hold 8 at most, so
+// nothing is held back. At 6 two large tasks cannot share a machine.
+const CPU: Record<Size, number> = { s: 1, m: 2, l: 4 }
 const CORES = Number(process.env.CORES ?? 6), TRUE_HOME = 0.6, TRUE_AWAY = Number(process.env.AWAY ?? 0.672)
 const SUBS = Number(process.env.SUBS ?? 0), SPEND = Number(process.env.SPEND ?? 1), EVERY = 300, TOLD_FOR = 60
 const GATE = process.env.GATE === '1', HAND = process.env.HAND === '1', TOLD = process.env.TOLD === '1'
@@ -128,8 +130,8 @@ function run(seed: number, sigma: number, mislabel: number, n: number, policy: P
   const expected = (t: Task, b: Builder) => info === 'oracle' ? truly(t, b) : minutes(t) * factor(t, b)
   const done = (t: Task, now: number) => t.end !== undefined && t.end <= now
   const eligible = (t: Task, now: number) => t.arrive <= now && !t.builder && t.deps.every(d => done(byId.get(d)!, now))
-  const used = (machine: string) => builders.filter(b => b.machine === machine && b.current).reduce((sum, b) => sum + SIZES[b.current!.label].cpu, 0)
-  const fits = (t: Task, b: Builder) => used(b.machine) + SIZES[t.label].cpu <= CORES
+  const used = (machine: string) => builders.filter(b => b.machine === machine && b.current).reduce((sum, b) => sum + CPU[b.current!.label], 0)
+  const fits = (t: Task, b: Builder) => used(b.machine) + CPU[t.label] <= CORES
   // What a task spends of a window: in truth, and as the plan counts it (the table, by its label).
   const spends = (t: Task) => SIZES[t.truth].spend * SPEND * t.noise, counted = (t: Task) => SIZES[t.label].spend * SPEND
   const told = (s: Sub, now: number) => TOLD || now - s.reply <= TOLD_FOR
@@ -159,7 +161,7 @@ function run(seed: number, sigma: number, mislabel: number, n: number, policy: P
         backs.add(`${t.id}:${b.id}`); b.queue.splice(b.queue.indexOf(t), 1); delete t.builder; delete t.given; open.push(t)
       }
       if (open.length && builders.some(b => (b.current ? 1 : 0) + b.queue.length < deep)) {
-        const plan = (t: Task, pinned?: string): PlanTask => ({ id: t.id, minutes: Math.ceil(minutes(t)), needs: { cpu: SIZES[t.label].cpu, ram: 0, disk: 0 },
+        const plan = (t: Task, pinned?: string): PlanTask => ({ id: t.id, minutes: Math.ceil(minutes(t)), needs: { cpu: CPU[t.label], ram: 0, disk: 0 },
           spend: subs.length ? { five_hour: counted(t) } : {}, floor: 0, kind: 'build',
           part: t.part, weight: t.w, ready: 0, deps: [], independentOf: [], notBuilders: [], files: [], ...(pinned ? { pinned, queuedOn: pinned } : {}) })
         const problem: Problem = { now: 0, objective: 'weighted', switchCost: 30,

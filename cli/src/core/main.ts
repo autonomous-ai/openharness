@@ -723,6 +723,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The Swarm switch (harnessd/services.ts `HARNESS_SWARM`, on unless set off): its code in this process comes from one
   // entry, loaded only while it is on (superTabs/inCore.ts), and its service is left off with it.
   const swarm = swarmOn(harnessd) ? await import('../superTabs/inCore.js') : null
+  // The Swarm's part of a launch (superTabs/inCore/launch.ts), which shares this machine's cores among the Swarm's sessions here.
+  const swarmLaunch = swarm?.swarmLaunch(() => registry.list())
   const knownServices = servicesOn(harnessd, KNOWN_SERVICES)
   const outOfProcess = servicesTheMasterRuns(harnessd, knownServices)
   // The viewers' process (the viewers and the Store) runs once something needs it (core/viewersWake.ts).
@@ -2539,7 +2541,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   const launchOverridesDeps: LaunchOverridesDeps = {
     // A Swarm session's skill and GitHub App on every relaunch; off, such a session is not relaunched.
-    ...(swarm ? { swarm: swarm.SWARM_LAUNCH } : {}),
+    ...(swarmLaunch ? { swarm: swarmLaunch } : {}),
     publishConfig: publishGridConfigDir,
     machine: gridLaunchMachine,
     native: prepareNativeLaunch,
@@ -2880,7 +2882,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   // Creating an agent (core/agents/create.ts).
   const creator = createAgentCreator({
-    ...(swarm ? { swarmLaunch: swarm.SWARM_LAUNCH } : {}),
+    ...(swarmLaunch ? { swarmLaunch } : {}),
     publishConfig: publishGridConfigDir,
     native: prepareNativeLaunch,
     dshLaunch,
@@ -3169,7 +3171,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The requests that start an agent's process, and the receipts of those asked with a creationId
   // (core/agents/launches.ts). The orchestrator and the cable create and fork through the socket's slots.
   const launches = createLaunchRequests({
-    ...(swarm ? { swarmLaunch: swarm.SWARM_LAUNCH } : {}),
+    ...(swarmLaunch ? { swarmLaunch } : {}),
     claudeHomeListed: (home) => claudeHomeListed(home, machineIdNow()),
     receipts: new AgentCreationReceipts(join(env.ADAPTER_DATA_DIR, 'agent-creations')),
     createAgent: () => backend.onCreateAgent, forkAgent: () => backend.onForkAgent,

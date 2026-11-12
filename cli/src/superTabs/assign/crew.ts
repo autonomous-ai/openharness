@@ -11,21 +11,25 @@ const object = (value: unknown): Json => value && typeof value === 'object' && !
 const GiB = 1024 ** 3
 
 /**
- * What a task of each size takes until finished tasks teach better (the design's Next 2): minutes of work, what it holds of
- * its machine while it runs, and the percent of a 5-hour window it spends. A weekly window is spent a fifth as fast.
+ * What a task of each size takes until finished tasks teach better (the design's Next 2): minutes of work, the memory and
+ * disk it holds of its machine while it runs, and the percent of a 5-hour window it spends. A weekly window is spent a fifth
+ * as fast.
+ *
+ * No cores. A size held 1, 2 or 4 of its machine's, a guess nothing checked when a task was taken, and one that did not keep a
+ * machine working: four agents' test runs at once, the most it let 16 cores take, all failed, each sized to the whole machine
+ * whatever its task's size (docs/research/2026-11-11-agents-share-cpu.md). A machine's cores are shared where its agents
+ * start (inCore/launch.ts), and the plan holds no task back for them.
  */
-export const SIZES: Record<'s' | 'm' | 'l', { minutes: number; cpu: number; ram: number; disk: number; spend: number }> = {
-  s: { minutes: 30, cpu: 1, ram: 2 * GiB, disk: 1 * GiB, spend: 3 },
-  m: { minutes: 90, cpu: 2, ram: 4 * GiB, disk: 2 * GiB, spend: 10 },
-  l: { minutes: 240, cpu: 4, ram: 8 * GiB, disk: 4 * GiB, spend: 25 },
+export const SIZES: Record<'s' | 'm' | 'l', { minutes: number; ram: number; disk: number; spend: number }> = {
+  s: { minutes: 30, ram: 2 * GiB, disk: 1 * GiB, spend: 3 },
+  m: { minutes: 90, ram: 4 * GiB, disk: 2 * GiB, spend: 10 },
+  l: { minutes: 240, ram: 8 * GiB, disk: 4 * GiB, spend: 25 },
 }
 /** A priority's weight in the plan: a p0 waiting a minute counts as a p2 waiting four. */
 export const WEIGHTS: Record<string, number> = { p0: 8, p1: 4, p2: 2 }
 /** The percent of each window its person keeps for their own work: Swarm work never spends it (docs/product.md, "Your
  *  computers": an agent runs on its own person's computers, under their own login). */
 export const RESERVE = 20
-/** Cores a machine is planned with when its daemon reports none (one before 0.5.86): two large tasks at once. */
-export const CORES = 8
 /** Of a machine's memory, what Swarm work may hold: its person keeps the rest. */
 export const MEMORY_SHARE = 0.75
 /** Disk its person keeps free whatever the Swarm does. */
@@ -299,7 +303,7 @@ export function readProblem(input: { now: number; issues: Json[]; crew: Crew; wi
     if (on) bases.set(id, [...new Map(under.flat().map(({ pull, branch }) => [pull, { pull, branch }])).values()])
     const priority = labels.find(label => label in WEIGHTS)
     tasks.push({
-      id, minutes: shape.minutes, needs: { cpu: shape.cpu, ram: shape.ram, disk: shape.disk },
+      id, minutes: shape.minutes, needs: { cpu: 0, ram: shape.ram, disk: shape.disk },
       spend: Object.fromEntries([...windowNames].map(name => [name, everyOf(name) === 300 ? shape.spend : shape.spend / 5])),
       floor: 0, kind: 'build', part: partOf(labels), weight: priority ? WEIGHTS[priority]! : 1, ready: 0,
       deps: dependsOn(issue.body).filter(n => openNumbers.has(n)).map(n => `#${n}`),
@@ -328,9 +332,8 @@ export function readProblem(input: { now: number; issues: Json[]; crew: Crew; wi
     const memory = typeof resources.memoryTotalBytes === 'number' ? resources.memoryTotalBytes * MEMORY_SHARE : 16 * GiB
     const free = typeof resources.projectDiskFreeBytes === 'number' ? resources.projectDiskFreeBytes
       : typeof resources.diskFreeBytes === 'number' ? resources.diskFreeBytes : 60 * GiB
-    // Its cores as it reports them (a daemon since 0.5.86); an older one is planned as CORES.
-    const cores = typeof resources.cpuCores === 'number' && Number.isSafeInteger(resources.cpuCores) && resources.cpuCores > 0 ? resources.cpuCores : CORES
-    return { id, capacity: { cpu: cores, ram: memory, disk: Math.max(0, free - DISK_KEPT) } }
+    // No cores, as no task holds any (SIZES).
+    return { id, capacity: { cpu: 0, ram: memory, disk: Math.max(0, free - DISK_KEPT) } }
   })
   return { problem: { now: 0, machines: problemMachines, accounts, builders, tasks, objective: 'weighted', switchCost: 30 }, open, building, elsewhere: new Map(), free, bases, looped, waits,
     builders: new Map(crew.builders.map(b => [b.id, b])) }

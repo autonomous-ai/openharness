@@ -1323,9 +1323,9 @@ export type SwarmAgents = Required<Pick<CoreApi['agents'], 'closeSwarm' | 'keepL
 
 type SwarmSkill = NonNullable<RegisteredSession['swarmSkill']>
 /** The Swarm's part of an agent's start (superTabs/inCore/launch.ts), handed to the launches while the Swarm is on: the
- *  roles a start may ask for, the team's basics the engine starts with, and the Harness GitHub App's git and gh at the
- *  relaunch of a session started with it before the App's removal (null where it has none; lib/swarmGitHub.ts, until
- *  2026-12-10). */
+ *  roles a start may ask for, the team's basics the engine starts with, its share of this machine's cores, and the Harness
+ *  GitHub App's git and gh at the relaunch of a session started with it before the App's removal (null where it has none;
+ *  lib/swarmGitHub.ts, until 2026-12-10). */
 export interface SwarmLaunch {
   role(value: unknown): value is SwarmSkill['role']
   /** The team's basics in the engine's own instructions at a launch and every relaunch, the PM's part for its project's
@@ -1335,6 +1335,9 @@ export interface SwarmLaunch {
   github(key: string): { env: Record<string, string>; clearEnv: string[] } | null
   /** The engine's arguments for a session the Swarm starts, never for a person's own (lib/swarmEngineArgs.ts). */
   args(engine: string): string[]
+  /** The variables a session the Swarm starts gets at its launch and every relaunch, never a person's own: its share of this
+   *  machine's cores (HARNESS_CORES), for its tools to size themselves by. [key] is the session's creation key. */
+  cores(key: string): Record<string, string>
 }
 
 /** Give an agent its person attached (Desktop's Attach, started outside the Swarm) its Swarm role at its first restart or

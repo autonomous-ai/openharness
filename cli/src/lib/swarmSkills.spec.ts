@@ -7,7 +7,7 @@ import { buildLaunchOverrides } from './launchOverrides.js'
 import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
 
 /** The Swarm's relaunch preparation, as the core hands it in while the Swarm is on (lib/launchOverrides.ts `swarm`). */
-const SWARM = { basics: (lead: boolean) => swarmBasics(lead).text, github: () => null, args: () => [] }
+const SWARM = { basics: (lead: boolean) => swarmBasics(lead).text, github: () => null, args: () => [], cores: () => ({}) }
 
 const roots: string[] = []
 const fixture = () => { const root = mkdtempSync(join(tmpdir(), 'swarm-skills-')); roots.push(root); return root }
