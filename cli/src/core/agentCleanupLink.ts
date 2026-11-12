@@ -14,7 +14,6 @@
  */
 import { answerAgentQuery } from './agentQueries.js'
 import type { AgentCleanupPort, CoreApi } from './api.js'
-import { daemonAddress } from './experimentQueries.js'
 import type { ServiceFrame } from './serviceLinks.js'
 
 type Payload = Record<string, unknown>
@@ -34,9 +33,6 @@ export function createAgentCleanupLink(core: Pick<CoreApi, 'agents' | 'usage' | 
   }
 
   const answer = async (query: string, payload: Payload): Promise<Payload> => {
-    // How this daemon is reached: what Hachi started on another machine is handed to the person through it
-    // (services/hachiHandOver.ts).
-    if (query === 'daemon') return daemonAddress(core)
     if (query !== 'closeStarted' && query !== 'lastActivity') return answerAgentQuery(core, query, payload)
     const agentId = typeof payload.agentId === 'string' ? payload.agentId : ''
     if (!agentId) return { error: 'INVALID_REQUEST' }

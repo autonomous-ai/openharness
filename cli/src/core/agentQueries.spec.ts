@@ -35,6 +35,10 @@ describe('what a service in its own process may ask the core of the agents', () 
     expect(await answerAgentQuery(core, 'agentUsage', { target })).toMatchObject({ value: { totalTokens: 4 } })
   })
 
+  it('says how this daemon is reached, for a service that asks it or another machine as a tool does', () => {
+    expect(answerAgentQuery(fakeCore(), 'daemon')).toEqual({ command: 'harness', port: 18473, machineId: 'machine-1', autonomousEnv: 'prod' })
+  })
+
   it('hands on one of Hachi\'s daemon counters, and refuses any other name', () => {
     const count = vi.fn()
     const core = fakeCore({ count })

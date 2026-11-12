@@ -1830,6 +1830,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   if (!outOfProcess.has('windowNames')) serviceHost.serve('windowNames', inline!.startWindowNames, coreApi, WINDOW_NAMES_REQUESTS)
   // Hachi's goals (services/goals.ts): here, or in the edge host.
   if (!outOfProcess.has('goals')) serviceHost.serve('goals', inline!.startGoals, coreApi, GOALS_REQUESTS)
+  // Hachi's wakes and its off path (services/hachi.ts): here, or in the edge host. The apps ask it nothing.
+  if (!outOfProcess.has('hachi')) serviceHost.serve('hachi', inline!.startHachiInCore, coreApi, [])
   if (!outOfProcess.has('memory')) serviceHost.serve('memory', inline!.startMemory, coreApi, MEMORY_REQUESTS)
   if (!outOfProcess.has('router')) serviceHost.serve('router', inline!.startRouter, coreApi, ROUTER_REQUESTS)
   if (!swarm) serviceHost.leaveOff('superTabs', SUPER_TAB_REQUESTS)
