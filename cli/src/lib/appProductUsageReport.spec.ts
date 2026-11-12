@@ -124,7 +124,7 @@ it('forwards Import agent outcomes in vocabulary 7 (task #2379)', () => {
 })
 
 it('forwards an opened agent Browser from a Desktop in vocabulary 9, and only the name', () => {
-  expect(APP_USAGE_VOCABULARY).toBe(9)
+  expect(APP_USAGE_VOCABULARY).toBeGreaterThanOrEqual(9)
   const report = { ...native, counters: { ...native.counters, agent_browser_opened: 3 } }
   expect(appProductUsageReport(report)).toBe(report)
   // Only a Desktop report with its context files it, and never the daemon's own agent browser counts.
@@ -133,6 +133,19 @@ it('forwards an opened agent Browser from a Desktop in vocabulary 9, and only th
   // An older vocabulary's names are forwarded as before.
   const older = { ...native, counters: { ui_desktop_agent_import_ok: 1, ui_desktop_add_phone_paired_menu: 1 } }
   expect(appProductUsageReport(older)).toBe(older)
+})
+
+it('forwards the window\'s Hachi counters from a Desktop in vocabulary 10, and never the daemon\'s', () => {
+  expect(APP_USAGE_VOCABULARY).toBe(10)
+  const window = ['ui_desktop_hachi_switch_on', 'ui_desktop_hachi_switch_off', 'ui_desktop_hachi_open_shortcut',
+    'ui_desktop_hachi_open_tab', 'ui_desktop_hachi_open_palette', 'ui_desktop_hachi_open_welcome', 'hachi_notice_goal_done',
+    'hachi_open_failed_home_asleep', 'hachi_open_failed_create_failed']
+  const report = { ...native, counters: Object.fromEntries(window.map(name => [name, 1])) }
+  expect(appProductUsageReport(report)).toBe(report)
+  expect(appProductUsageReport({ ...old, counters: { ui_desktop_hachi_open_tab: 1 } })).toBeUndefined()
+  for (const daemon of ['hachi_goal_done', 'hachi_turns_wake', 'launch_hachi_started_claude', 'hachi_mailbox_failed']) {
+    expect(appProductUsageReport({ ...native, counters: { [daemon]: 1 } })).toBeUndefined()
+  }
 })
 
 it('forwards Team account removal outcomes in vocabulary 8 (2026-11-10)', () => {
