@@ -870,6 +870,17 @@ function storedHermesHomeDerived(row: { hermesHome?: unknown; hermesHomeDerived?
   return row.hermesHomeDerived === true && typeof row.hermesHome === 'string' && row.hermesHome ? { hermesHomeDerived: true } : {}
 }
 
+/**
+ * [row] with [from]'s Hermes home, by the rule `register` keeps: the mark goes with the home it was set with, kept from
+ * either row while the home is the same, never left beside another home (RegisteredSession.hermesHomeDerived). A home
+ * copied without its mark would be exported on a resume, the daemon's path of it inside a remapped sandbox.
+ */
+export function withHermesHome<T extends RegisteredSession>(row: T, from: Pick<RegisteredSession, 'hermesHome' | 'hermesHomeDerived'>): T {
+  const { hermesHomeDerived: _mark, ...rest } = row
+  const derived = !!from.hermesHome && (from.hermesHomeDerived || from.hermesHome === row.hermesHome && row.hermesHomeDerived)
+  return { ...rest, hermesHome: from.hermesHome, ...(derived ? { hermesHomeDerived: true as const } : {}) } as T
+}
+
 /** Only a non-empty string is a saved `--local` folder. */
 function storedOpenclawLocal(value: unknown): string | undefined {
   return typeof value === 'string' && value ? value : undefined
