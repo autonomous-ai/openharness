@@ -250,14 +250,20 @@ describe('the core API services stand on', () => {
     const mine = { ...row('mine'), registeredAt: 0 }
     const deps = coreDeps()
     const byAgent = vi.fn((agentId: string) => (agentId === 'kid' ? started : agentId === 'mine' ? mine : undefined))
-    const closeAgent = vi.fn(async () => ({ closed: true as const }))
+    const closeAgent = vi.fn<NonNullable<CoreApiDeps['closeAgent']>>(async () => ({ closed: true }))
     const activityAt = vi.fn(async () => 1_234)
     const core = createCoreApi({ ...deps, registry: { ...deps.registry, byAgent } as unknown as CoreApiDeps['registry'], closeAgent, activityAt })
     expect(await core.agents.closeStarted!('kid', 'idle')).toEqual({ closed: true })
-    expect(closeAgent).toHaveBeenCalledWith({ agentId: 'kid', sessionId: 's-kid', createdAt: '2026-10-12T08:00:00.000Z', mode: 'idle' })
+    // An idle close refuses one that still runs background commands; past the cleanup's ceiling it closes it and
+    // counts them. A close now carries no rule for them.
+    expect(closeAgent).toHaveBeenCalledWith({ agentId: 'kid', sessionId: 's-kid', createdAt: '2026-10-12T08:00:00.000Z', mode: 'idle', background: 'refuse' })
     expect(await core.agents.closeStarted!('mine', 'now')).toEqual({ error: 'NOT_AGENT_STARTED' })
     expect(await core.agents.closeStarted!('gone', 'now')).toEqual({ error: 'AGENT_CHANGED' })
     expect(closeAgent).toHaveBeenCalledTimes(1)
+    await core.agents.closeStarted!('kid', 'idle', true)
+    expect(closeAgent).toHaveBeenLastCalledWith(expect.objectContaining({ mode: 'idle', background: 'count' }))
+    await core.agents.closeStarted!('kid', 'now', true)
+    expect(closeAgent.mock.calls.at(-1)![0]).toEqual({ agentId: 'kid', sessionId: 's-kid', createdAt: '2026-10-12T08:00:00.000Z', mode: 'now' })
     expect(await core.agents.lastActivity!('kid')).toBe(1_234)
     expect(activityAt).toHaveBeenCalledWith(started)
     expect(await core.agents.lastActivity!('gone')).toBeNull()

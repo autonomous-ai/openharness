@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import type { AgentCloseResult } from '../lib/closeAgentService.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { createAgentCleanupLink } from './agentCleanupLink.js'
@@ -10,7 +11,7 @@ function setup() {
   const mine = row('mine')
   const sessions = [kid, mine]
   const resolve = vi.fn((id: string) => sessions.find((s) => s.agentId === id || s.sessionId === id))
-  const closeStarted = vi.fn(async () => ({ closed: true as const }))
+  const closeStarted = vi.fn(async (..._args: unknown[]): Promise<AgentCloseResult> => ({ closed: true }))
   const lastActivity = vi.fn(async () => 42)
   const core = fakeCore({ agents: { resolve, closeStarted, lastActivity, live: vi.fn(() => sessions) } })
   const notify = vi.fn(() => true)
@@ -42,11 +43,18 @@ describe('the agent cleanup in its own process, as the core sees it', () => {
     expect(await link.answer('closeStarted', { agentId: 'kid', mode: 'now' })).toEqual({ closed: true })
     expect(await link.answer('closeStarted', { agentId: 'kid', mode: 'idle' })).toEqual({ closed: true })
     expect(closeStarted.mock.calls).toEqual([['kid', 'now'], ['kid', 'idle']])
+    // Past the cleanup's ceiling only when it says so in those words.
+    expect(await link.answer('closeStarted', { agentId: 'kid', mode: 'idle', pastCeiling: true })).toEqual({ closed: true })
+    expect(await link.answer('closeStarted', { agentId: 'kid', mode: 'idle', pastCeiling: 'yes' })).toEqual({ closed: true })
+    expect(closeStarted.mock.calls.slice(-2)).toEqual([['kid', 'idle', true], ['kid', 'idle']])
     // Asked wrongly, nothing is closed.
     expect(await link.answer('closeStarted', { agentId: 'kid', mode: 'inspect' })).toEqual({ error: 'INVALID_REQUEST' })
     expect(await link.answer('closeStarted', { mode: 'now' })).toEqual({ error: 'INVALID_REQUEST' })
     expect(await link.answer('lastActivity', { agentId: 7 })).toEqual({ error: 'INVALID_REQUEST' })
-    expect(closeStarted).toHaveBeenCalledTimes(2)
+    expect(closeStarted).toHaveBeenCalledTimes(4)
+    // A refusal's count of background commands is answered whole.
+    closeStarted.mockResolvedValueOnce({ error: 'SESSION_NOT_IDLE', backgroundCommands: 2 })
+    expect(await link.answer('closeStarted', { agentId: 'kid', mode: 'idle' })).toEqual({ error: 'SESSION_NOT_IDLE', backgroundCommands: 2 })
     // The live agents, as any light service asks for them.
     expect(await link.answer('live', {})).toEqual({ agents: [row('kid', { startedBy: 'agent' }), row('mine')] })
   })
