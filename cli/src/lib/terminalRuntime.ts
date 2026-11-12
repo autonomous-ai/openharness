@@ -67,7 +67,10 @@ export function terminalPlacementKey(runtime: TerminalRuntimeRef): string {
   return terminalRouteKey(runtime)
 }
 
-function startTicks(identity: ProcessIdentity): number | undefined {
+/** What says which process a number is: its pid and when it started. */
+type ProcessStart = Pick<ProcessIdentity, 'pid' | 'startMarker' | 'startTicks'>
+
+function startTicks(identity: ProcessStart): number | undefined {
   return Number.isSafeInteger(identity.startTicks) && identity.startTicks! >= 0 ? identity.startTicks : undefined
 }
 
@@ -83,7 +86,7 @@ export function processIdentityKey(engine: string, identity: ProcessIdentity): s
  * `ProcessIdentity.startTicks`); otherwise the `ps` marker, as before them — which is also how a row
  * saved before them is matched once, and then saved with them.
  */
-export function sameProcessIdentity(a: ProcessIdentity | undefined | null, b: ProcessIdentity | undefined | null): boolean {
+export function sameProcessIdentity(a: ProcessStart | undefined | null, b: ProcessStart | undefined | null): boolean {
   if (!a || !b || a.pid !== b.pid) return false
   const ticksA = startTicks(a)
   const ticksB = startTicks(b)

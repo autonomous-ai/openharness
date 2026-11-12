@@ -37,6 +37,7 @@ import type { AgentEngine } from '../../engines/types.js'
 import { nativeHookLocations } from '../../engines/kit/nativeLocations.js'
 import { hooksHeldDetail } from '../../engines/kit/hooksHeldDetail.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
+import { OPENCLAW_LOCAL } from '../../engines/openclaw/contract.js'
 
 type ForkAgent = NonNullable<BackendSocket['onForkAgent']>
 
@@ -88,6 +89,8 @@ export function createAgentForker({
     if (source.gridLaunch || source.grid) {
       return { ok: false, error: 'FORK_ON_GRID_UNSUPPORTED', detail: `${sourceName} runs on a grid; forking a grid agent is not supported.` }
     }
+    // A fork would be a second OpenClaw on the source's `--local` folder, which OpenClaw's lock refuses while the source runs.
+    if (source.openclawLocal) return { ok: false, error: 'FORK_UNSUPPORTED', detail: OPENCLAW_LOCAL.noFork }
     if (source.sessionId && mirror.isBusy(source.sessionId)) {
       return { ok: false, error: 'AGENT_BUSY', detail: `${sourceName} is in the middle of a turn. Wait for it to finish, then fork.` }
     }

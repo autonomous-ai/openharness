@@ -1094,3 +1094,50 @@ describe('CommanderMirror decides each finished turn\'s tier once, for every scr
     expect(summaries()).toEqual([expect.objectContaining({ tier: 'silent' })])
   })
 })
+
+describe('the log holds none of a turn\'s words', () => {
+  // The daemon's log outlives `harness delete` (the log file is launchd's StandardOutPath): a task, a sub-agent's
+  // task, an answer or a recap printed there is a person's words kept after they deleted the harness (standard 7).
+  let dir = ''
+  let lines: string[] = []
+  beforeEach(() => {
+    vi.useFakeTimers()
+    dir = mkdtempSync(join(tmpdir(), 'adapter-commander-log-'))
+    lines = []
+    for (const level of ['log', 'error', 'warn'] as const) vi.spyOn(console, level).mockImplementation((...args: unknown[]) => { lines.push(args.map(String).join(' ')) })
+  })
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); rmSync(dir, { recursive: true, force: true }) })
+  const said = () => lines.join('\n')
+
+  it('a turn with no answer, a recapped turn and a turn caught up after it ended unseen', async () => {
+    const opts = { send: () => {}, sendWeb: () => {}, hasDevice: () => true, dataDir: dir, summarize: async () => 'Recap zebrafinch\n\nBody zebrafinch' }
+    const mirror = new CommanderMirror(opts)
+    mirror.ingest([{ type: 'turn_started', payload: { userMessage: 'email zanzibarquokka' } }, { type: 'turn_ended', payload: {} }] as LiveEvent[], 'quiet')
+    mirror.ingest([
+      { type: 'turn_started', payload: { userMessage: 'book the quetzalpangolin vet' } },
+      { type: 'text_delta', payload: { content: 'Booked quetzalpangolin.' } },
+      { type: 'turn_ended', payload: {} },
+    ] as LiveEvent[], 'told')
+    new CommanderMirror({ ...opts, summarize: async () => 'Recap ocelotmoth\n\nBody',
+      readLastTurn: async () => ({ userMessage: 'ask', assistantText: 'answer' }) }).catchUp('unseen')
+    await vi.runAllTimersAsync()
+    expect(said()).toContain('summarizing')
+    expect(said()).toContain('caught up')
+    expect(['zanzibarquokka', 'quetzalpangolin', 'zebrafinch', 'ocelotmoth'].filter((word) => said().includes(word))).toEqual([])
+  })
+
+  it('a sub-agent that starts, finishes, and one given up on', async () => {
+    const mirror = new CommanderMirror({ send: () => {}, sendWeb: () => {}, hasDevice: () => true, dataDir: dir,
+      summarize: async () => 'Recap\n\nBody' })
+    mirror.ingest([
+      { type: 'turn_started', payload: { userMessage: 'delegate' } },
+      { type: 'tool_start', payload: { id: 'a1', tool: 'Agent', input: { description: 'audit capybaraledger' } } },
+      { type: 'tool_start', payload: { id: 'a2', tool: 'Task', input: { description: 'chase narwhalinvoice' } } },
+      { type: 'subagent_finished', payload: { id: 'a1', status: 'completed' } },
+      { type: 'turn_ended', payload: {} },
+    ] as LiveEvent[], 'held')
+    await vi.advanceTimersByTimeAsync(11 * 60_000)
+    expect(said()).toContain('RELEASED by timeout')
+    expect(['capybaraledger', 'narwhalinvoice'].filter((word) => said().includes(word))).toEqual([])
+  })
+})

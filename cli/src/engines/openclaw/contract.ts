@@ -41,23 +41,34 @@ export const OPENCLAW_RULE = /^\s*─{8,}\s*$/
 
 /**
  * The status line, the last line above the footer: `connected | idle`, `gateway reconnected | idle`, `connected |
- * aborted`, `⠏ running • 6s | connected`, `gateway disconnected: <error> | idle`.
+ * aborted`, `⠏ running • 6s | connected`, `gateway disconnected: <error> | idle`. A `--local` run says `starting local
+ * runtime`, `local ready | idle`, `⠏ running • 6s | local ready`, `local runtime stopped[: <reason>] | idle` for 5 s,
+ * then `local stopped | idle`.
  */
 const STATUS = {
-  ready: /^(?:gateway )?(?:connected|reconnected) \| (?:idle|aborted|error)$/,
-  busy: /^\S{1,2} (?:running|streaming|connecting)\b/,
+  ready: /^(?:(?:gateway )?(?:connected|reconnected) \| (?:idle|aborted|error)|local ready(?: \| (?:idle|aborted|error))?)$/,
+  /** `starting local runtime` is the local TUI's `connecting`. */
+  busy: /^(?:\S{1,2} (?:running|streaming|connecting)\b|starting local runtime\b)/,
   /** A run in progress; `connecting` is the TUI still reaching its Gateway, before any run. */
   running: /^\S{1,2} (?:running|streaming)\b/,
+  localStopped: /^local stopped\b/,
   noGateway: /^gateway disconnected\b/,
   /** The connection dropped or just came back: `gateway disconnected: …` (5 s), `disconnected` after it, `gateway
    * reconnected` (4 s; `setConnectionStatus` in OpenClaw's tui). */
   gatewayLost: /^(?:gateway )?(?:disconnected|reconnected)\b/,
 }
 
+/** The local runtime's stop and its reason, as OpenClaw prints it: the line's wrapped continuations joined. */
+const LOCAL_RUNTIME_STOPPED = /^local runtime stopped(?:: (.*?))?(?: \| idle)?$/
+/** How far above the footer the stop line is looked for: a long reason wraps the status line onto the lines under it. */
+const STOPPED_LINES = 4
+const REASON_MAX = 200
+const CONTROL = /[\u0000-\u001f\u007f-\u009f]/g
+
 /** What `openclaw tui` prints as it exits when the config has no Gateway token (`screen-no-token.txt`). */
 const NO_TOKEN = /^Missing gateway auth token\./
 
-export type OpenclawPaneState = 'ready' | 'busy' | 'no-gateway' | 'no-token' | 'remote'
+export type OpenclawPaneState = 'ready' | 'busy' | 'no-gateway' | 'no-token' | 'remote' | 'local-stopped'
 
 /** What an OpenClaw pane's screen says. */
 export interface OpenclawScreen {
@@ -76,9 +87,14 @@ export interface OpenclawScreen {
   gatewayLost: boolean
   /** The status line says a run is in progress: `running` or `streaming`, not `connecting`. */
   running: boolean
+  /**
+   * The reason on a `local runtime stopped` status line, `''` when it gives none. Null on every other screen, the
+   * `local stopped` one after it included: that one no longer says why.
+   */
+  stopped: string | null
 }
 
-const NOTHING: OpenclawScreen = { key: null, url: null, state: null, footer: null, gatewayLost: false, running: false }
+const NOTHING: OpenclawScreen = { key: null, url: null, state: null, footer: null, gatewayLost: false, running: false, stopped: null }
 
 /** Lines as drawn: escapes removed, trailing blanks dropped. */
 export function openclawScreenLines(capture: string): string[] {
@@ -114,6 +130,20 @@ function readTitle(lines: readonly string[], start: number): RegExpExecArray | n
 }
 
 /**
+ * The reason a local runtime stopped with, read off the non-blank lines above the footer (`above`, the status line
+ * last): its stop line joined with the lines it wrapped onto. Null when there is none, or when the status line is
+ * another of the TUI's own, so a stop line the model wrote above it in the chat is not taken for one.
+ */
+function readStopped(above: readonly string[]): string | null {
+  const said = above.at(-1) ?? ''
+  if ([STATUS.ready, STATUS.busy, STATUS.gatewayLost, STATUS.localStopped].some((status) => status.test(said))) return null
+  const at = lastIndex(above, (line) => line.startsWith('local runtime stopped'))
+  const stopped = at >= 0 ? LOCAL_RUNTIME_STOPPED.exec(above.slice(at).join(' ')) : null
+  if (!stopped) return null
+  return (stopped[1] ?? '').replace(CONTROL, '').trim().slice(0, REASON_MAX)
+}
+
+/**
  * Reads an OpenClaw pane's screen (OpenClaw 2026.11.2, `__fixtures__/screen-*.txt`). The one reading of it: the binding
  * takes the key and the named states from it, the runtime profile the model and tokens, discovery whether the pane is
  * the TUI at all (every `openclaw` command renames its process `openclaw`, `onboard` and `logs` too).
@@ -132,12 +162,14 @@ export function readOpenclawScreen(capture: string): OpenclawScreen {
   const shown = FOOTER.exec(footer)
   // A title on screen that cannot be read whole agrees with no footer.
   const agrees = titled < 0 || (!!title && !!shown && title[1] === shown[1] && title[2] === shown[2])
-  const status = lastIndex(lines.slice(0, start), (line) => !!line.trim())
-  const said = status >= 0 ? lines[status].trim() : ''
+  const above = lines.slice(0, start).map((line) => line.trim()).filter((line) => line).slice(-STOPPED_LINES)
+  const said = above.at(-1) ?? ''
+  const stopped = readStopped(above)
   const state: OpenclawPaneState | null = remote ? 'remote'
-    : STATUS.noGateway.test(said) ? 'no-gateway'
-      : STATUS.busy.test(said) ? 'busy'
-        : STATUS.ready.test(said) ? 'ready' : null
+    : stopped !== null || STATUS.localStopped.test(said) ? 'local-stopped'
+      : STATUS.noGateway.test(said) ? 'no-gateway'
+        : STATUS.busy.test(said) ? 'busy'
+          : STATUS.ready.test(said) ? 'ready' : null
   return {
     key: shown && agrees ? `agent:${shown[1]}:${shown[2]}` : null,
     url,
@@ -145,6 +177,7 @@ export function readOpenclawScreen(capture: string): OpenclawScreen {
     footer,
     gatewayLost: STATUS.gatewayLost.test(said),
     running: STATUS.running.test(said),
+    stopped,
   }
 }
 
@@ -164,6 +197,12 @@ export const OPENCLAW_LAUNCH = {
   firstPrompt: 'typed',
   /** The daemon's variables a TUI starts with, so it opens the state folder Harness reads. */
   environment: ['OPENCLAW_STATE_DIR', 'OPENCLAW_HOME'],
+  /** A run on its own state folder: OpenClaw's runtime and tools in the TUI's process, no Gateway. */
+  local: ['--local'],
+  /** `tui --local` refuses a positional target, so a local run resumes its key by name. */
+  resumeLocal: (key: string): string[] => ['--session', key],
+  /** Variables that would point a local run at files outside its folder; cleared so the folder holds all of it. */
+  localClear: ['OPENCLAW_CONFIG_PATH', 'OPENCLAW_AGENT_DIR', 'OPENCLAW_OAUTH_DIR', 'OPENCLAW_WORKSPACE_DIR'],
 } as const
 
 /** What a person reads when OpenClaw cannot work for Harness, each with what to do about it. */
@@ -178,6 +217,40 @@ export const OPENCLAW_STATES = {
   /** A run is in progress and Harness's state folder holds no session for it: the Gateway writes to another folder. */
   noSessions: "Harness cannot find this OpenClaw's sessions. Start Harness with the Gateway's OPENCLAW_STATE_DIR, then restart this agent.",
 } as const
+
+/** What a person reads when a `--local` run cannot start or go on. Refusals and errors, not holds. */
+export const OPENCLAW_LOCAL = {
+  notOpenclaw: '--local is for OpenClaw only.',
+  notFolder: (folder: string): string => `${folder} is not a folder.`,
+  folderInUse: 'Another OpenClaw is using this folder. Give each run its own --local folder.',
+  folderGone: "This run's OpenClaw folder is gone.",
+  noFork: 'This run cannot be forked.',
+  unprepared: 'This Harness could not prepare the --local folder. Nothing was started.',
+} as const
+
+/** What a delete says of a run whose sessions OpenClaw keeps in its own store, which Harness does not erase. */
+export const OPENCLAW_STORE_KEPT = "OpenClaw's store is kept: delete its session with OpenClaw."
+
+const LOCAL_STOPPED = "OpenClaw's local run stopped"
+
+/** The hold a stopped local run shows, with OpenClaw's reason when it gave one. */
+export function openclawLocalStopped(reason: string | null): string {
+  return reason ? `${LOCAL_STOPPED}: ${reason}` : `${LOCAL_STOPPED}.`
+}
+
+export function isOpenclawLocalStopped(hold: string | null | undefined): boolean {
+  return !!hold?.startsWith(LOCAL_STOPPED)
+}
+
+/**
+ * What a local TUI prints, before it draws anything, when another process holds its folder: a Gateway, or another
+ * local TUI.
+ */
+const FOLDER_IN_USE = /^\s*A Gateway is running for this state directory|failed to acquire gateway state ownership/m
+
+export function openclawFolderInUse(capture: string): boolean {
+  return FOLDER_IN_USE.test(stripAnsi(capture))
+}
 
 /** The screens a TUI cannot work for Harness on, and what the agent says while one is up (cleared once it is gone). */
 export const OPENCLAW_SCREEN_HOLDS: Partial<Record<OpenclawPaneState, string>> = {
