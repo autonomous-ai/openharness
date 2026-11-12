@@ -410,7 +410,8 @@ No core change, no new service.
   end (the review caught `wait` returning at once after a `send`). A harness with nothing asked of it two minutes
   after it started is done. Idle with `backgroundCommands` above 0 is not done: its idle looks start over, and it is
   looked at every 3 s, as their end is pushed by nothing; a timeout meanwhile says the count. Cost per round here: a
-  live list 10 ms, an inspect 29 to 48 ms, a transcript page 7 ms.
+  live list 10 ms, an inspect 29 to 48 ms, a transcript page 7 ms. An idle Claude Code harness's inspect also reads
+  the process table once for its count: about 45 ms more (median of 20, M2 Max with 711 processes, 2026-11-12).
 - **`close`**: `agent_close`, `idle` mode (or `now`). An agent closes only what it started; the person anything. In
   `idle` mode it inspects first and refuses on the client, sending no close, while `backgroundCommands` is above 0: the
   daemon's `idle` close keeps its rule for the windows' Close.
