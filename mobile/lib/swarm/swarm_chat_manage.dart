@@ -16,11 +16,12 @@ import 'swarm_style.dart';
 
 /// What the reader may do to chat [chatId] from its ⋮, as the desktop's chat
 /// menu offers it (`view.dart` `_options`): Rename and Archive in an ordinary
-/// project chat, for someone who may write; never in a project's own chat
-/// or a Buddy chat. Archive waits while the chat's task still runs; an
-/// archived chat offers Reopen alone, since the server changes nothing else
-/// of one (`ARCHIVED`). Null when there is nothing to offer, or the chat can
-/// no longer be read.
+/// project chat, for someone who may write; never in a project's own chat,
+/// a Buddy chat or an agent's own chat, whose Rename renames its agent
+/// (swarm_agent_rename.dart). Archive waits while the chat's task still
+/// runs; an archived chat offers Reopen alone, since the server changes
+/// nothing else of one (`ARCHIVED`). Null when there is nothing to offer, or
+/// the chat can no longer be read.
 ({bool archived, bool archiveOn})? swarmChatManage(
   SwarmReader reader,
   String chatId,
@@ -31,6 +32,7 @@ import 'swarm_style.dart';
   if (chat == null ||
       snapshot.isProjectLead(chatId) ||
       chat.isBuddyChat ||
+      chat.isAgentChat ||
       reader.buddies.chatOwners.containsKey(chatId) ||
       !swarmCanWrite(reader)) {
     return null;
