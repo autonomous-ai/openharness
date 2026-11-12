@@ -18,7 +18,7 @@ const ARLO_ANSWER = 'I\'m Arlo, the PM for the openharness Swarm. Tell me what y
 const ARLO = { id: 'arlo', harnessId: 'h-arlo', name: 'Claude Code', displayName: 'Arlo', regular: true, contributorId: 'dee', machineOwnerId: 'dee' }
 
 /** This computer's person's agent Arlo, running here, in a Swarm that gives it a chat with its person. */
-function setup(options: { working?: boolean | null; lastTurn?: Turn | null; row?: Json; words?: string[]; file?: string; intervalMs?: number } = {}) {
+function setup(options: { working?: boolean | null; lastTurn?: Turn | null; row?: Json; words?: string[]; file?: string; intervalMs?: number; signIn?: () => string | null } = {}) {
   const state = { working: options.working ?? false as boolean | null, lastTurn: options.lastTurn === undefined
     ? { userMessage: 'You are Arlo.', assistantText: ARLO_ANSWER } as Turn | null : options.lastTurn, live: true,
   rows: [{ tabId: 'tab', agent: ARLO, ...options.row }] as Json[], me: 'dee' as string | null }
@@ -44,7 +44,7 @@ function setup(options: { working?: boolean | null; lastTurn?: Turn | null; row?
   const onEnd = vi.fn((listener: (end: TurnEnd) => void) => { listeners.add(listener); return () => { listeners.delete(listener) } })
   const make = () => new FirstAnswers({ me: async () => state.me, live: () => state.live, roster: async () => state.rows, read, onEnd, answerOf,
     words, working: async () => state.working, lastTurn: async () => state.lastTurn, post, file, now: () => clock.now, log,
-    intervalMs: options.intervalMs ?? 60 * 60_000 })
+    intervalMs: options.intervalMs ?? 60 * 60_000, ...(options.signIn ? { signIn: options.signIn } : {}) })
   return { state, clock, post, log, read, words, answerOf, onEnd, listeners, end, file, make, answers: make() }
 }
 const posted = (post: ReturnType<typeof setup>['post']) => post.mock.calls.map(([, id, text]) => [id, text])
@@ -443,6 +443,29 @@ describe('an agent\'s answer to its launch line, in its chat (firstAnswers.ts)',
     h.read.mockImplementation(async () => { passes++; return { conversations: [] } })
     for (let pass = 0; pass < 3; pass++) { await h.answers.tick(); h.clock.now += 5_000 }
     expect(passes).toBe(3)
+  })
+
+  // The fourth review of #4221: after ten minutes refused, a sign-in and a turn end still waited the backoff out, up to 5
+  // minutes, where main posted within 5 s. Another sign-in on disk clears the wait, and a heard turn end starts a pass.
+  it('posts a first answer within one pass of a sign-in after a long refusal, and when a turn ends', async () => {
+    for (const how of ['sign-in', 'turn end'] as const) {
+      const signIn = { key: 'epoch-1' }
+      const h = setup({ signIn: () => signIn.key }), answers = h.answers
+      const read = h.read.getMockImplementation()!
+      h.read.mockImplementation(() => { throw new SuperTabHostError('UNAUTHORIZED', 'No.', 401) })
+      for (let second = 0; second < 600; second += 5) { await answers.tick(); h.clock.now += 5_000 }
+      h.read.mockImplementation(read)
+      if (how === 'sign-in') {
+        signIn.key = 'epoch-2'
+        await answers.tick()
+      } else {
+        answers.start()
+        h.end('You are Arlo.', ARLO_ANSWER)
+        await answers.tick()
+        answers.stop()
+      }
+      await vi.waitFor(() => expect(posted(h.post), how).toEqual([['first-answer-arlo', ARLO_ANSWER]]))
+    }
   })
 
   it('reads a launch line as Desktop writes it, and nothing that only begins like one', () => {

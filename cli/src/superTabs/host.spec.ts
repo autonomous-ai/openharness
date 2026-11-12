@@ -354,6 +354,26 @@ describe('the host tick on the host form', () => {
       expect(lines(t).slice(0, 2)).toEqual([OUT, BACK])
     })
 
+    // The fourth review of #4221: an agent's list refused with a 401 was logged as a list failure and backed off, so a delivery
+    // pushed just after a short sign-out waited out that backoff. It is read as signed out, and its wait goes with the sign-in.
+    it('reads a refused agent list as signed out, and reads it again within a second of the sign-in, no backoff left', async () => {
+      const t = setup()
+      const host = t.open({ signIn: () => 'epoch-1' })
+      const working = vi.mocked(t.call).getMockImplementation()!
+      // The server reads the roster but refuses the agent's list, and the session when asked.
+      vi.mocked(t.call).mockImplementation(async (method, path, body) => path.includes('/deliveries') || path === '/api/auth/me'
+        ? { status: 401, body: { success: false, error: { code: 'UNAUTHORIZED', message: 'No.' } } } : working(method, path, body))
+      // A minute refused: as a list failure, its backoff would have grown to 30 s.
+      await run(t, host, 60)
+      expect(lines(t)).toEqual([OUT])
+      vi.mocked(t.call).mockImplementation(working)
+      vi.mocked(t.call).mockClear()
+      t.wait(5 * 60_000)
+      await run(t, host, 1)
+      expect(lines(t)).toEqual([OUT, BACK])
+      expect(asked(t)).toContain('/api/super-tabs/tab/agents/agent/deliveries')
+    })
+
     // The review of #4221: an engine signed in while the account was signed out lost the reset of its cached reading.
     it('still forgets the engine readings when an engine signs in, and reports nothing to the server', async () => {
       const t = setup()

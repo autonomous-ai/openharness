@@ -28,7 +28,8 @@ import { promptHash } from '../lib/promptIdentity.js'
 import { bounded, named, READ_WAIT_MS, REPLY_TEXT_MAX } from './agentReplies.js'
 import { cut } from './deliveryContext.js'
 import { permanentRefusal } from './retries.js'
-import { identifier, object, SuperTabHostError } from './wire.js'
+import { identifier, object, signedOut, SuperTabHostError } from './wire.js'
+import { signInOnDisk } from './signIn.js'
 
 type Json = Record<string, unknown>
 
@@ -85,9 +86,12 @@ export class FirstAnswers {
   private running: Promise<void> | null = null
   /** The failure last said, until a pass goes through. */
   private failing: string | null = null
-  /** Signed out or refused: how long it waits between passes, and until when. */
+  /** Signed out or refused: how long it waits between passes, until when, and the sign-in on disk then; and a turn end heard
+   *  meanwhile, which starts one pass whatever the wait (the fourth review of #4221: after a sign-in it waited up to 5 minutes). */
   private quietWait = 0
   private quietUntil = 0
+  private quietSignIn: string | null = null
+  private endHeard = false
   private memory: Memory | null = null
   private stopEnds: (() => void) | null = null
   /** The first turn ends heard of each terminal, by its id. */
@@ -120,6 +124,8 @@ export class FirstAnswers {
     now?: () => number
     log?: (line: string) => void
     intervalMs?: number
+    /** Which sign-in is on this computer's disk (signIn.ts): another than the one refused clears the wait. */
+    signIn?: () => string | null
   }) {
     this.now = deps.now ?? Date.now
     this.log = deps.log ?? (line => console.warn(line))
@@ -147,11 +153,18 @@ export class FirstAnswers {
    *  Signed out or refused by the server, it waits longer between passes each time, at most [QUIET_MAX_MS] (the third review of
    *  #4221), and goes back to every pass once one goes through. */
   tick(): Promise<void> {
-    if (!this.running && this.now() < this.quietUntil) return Promise.resolve()
+    if (!this.running && this.now() < this.quietUntil && !this.endHeard) {
+      // Another sign-in on disk than the one refused: the wait is over.
+      const signIn = (this.deps.signIn ?? signInOnDisk)()
+      if (signIn === null || signIn === this.quietSignIn) return Promise.resolve()
+      this.quietUntil = 0
+    }
+    this.endHeard = false
     this.running ??= this.pass().then(() => { this.failing = null; this.quietWait = 0; this.quietUntil = 0 }, error => {
-      if (error instanceof SuperTabHostError && (error.code === 'NOT_SIGNED_IN' || error.status === 401)) {
+      if (signedOut(error)) {
         this.quietWait = this.quietWait ? Math.min(this.quietWait * 2, QUIET_MAX_MS) : FIRST_ANSWER_INTERVAL_MS
         this.quietUntil = this.now() + this.quietWait
+        this.quietSignIn = (this.deps.signIn ?? signInOnDisk)()
       }
       const name = named(error)
       if (name === this.failing) return
@@ -167,6 +180,7 @@ export class FirstAnswers {
     this.heard.delete(end.agentId)
     this.heard.set(end.agentId, [...ends, end].slice(0, ENDS_KEPT))
     if (this.heard.size > TERMINALS_HEARD) this.heard.delete(this.heard.keys().next().value!)
+    this.endHeard = true
     void this.tick()
   }
 

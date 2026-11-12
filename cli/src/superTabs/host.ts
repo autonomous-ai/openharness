@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto'
 import { OBSERVER_VALID_MS, publishObservers } from './observers.js'
 import { ContributedMachines, uncommittedIn, type MachineDeps } from './machines.js'
 import { SwarmGrids } from './swarmGrids.js'
@@ -14,6 +13,7 @@ import { promptHash } from '../lib/promptIdentity.js'
 import { shellQuote } from '../orchestrator/prompts.js'
 import { agentCommandPrefix, fullCommandPrefix } from './shortCommand.js'
 import { readAuthSession } from '../lib/authSession.js'
+import { signInOnDisk } from './signIn.js'
 import { computerId } from '../lib/daemonState.js'
 import { noticeReason, WithheldDeliveries } from './withheld.js'
 import { attentionOf } from './attention.js'
@@ -38,7 +38,7 @@ const readCommand = (entry: Entry, prefix: string, group: string, id: string) =>
 // The Pro dial's Swarm face (cards.ts) still takes these two from here; every other file takes them from wire.ts.
 export { backend, SuperTabHostError } from './wire.js'
 import { leadSwitchOf, SWITCH_ADOPT_MS, switchWithin, type LeadSwitch } from './leadSwitch.js'
-import { backend, ENDED_WORK, identifier, object, SuperTabHostError, within } from './wire.js'
+import { backend, ENDED_WORK, identifier, object, signedOut, SuperTabHostError, within } from './wire.js'
 import { parseSwarmSkill, swarmBasics, swarmBasicsSince, wireRole, type SwarmSkillGrant } from '../lib/swarmSkills.js'
 import { authorName } from './personName.js'
 import { adoptReplies, AgentReplies, type Owed } from './agentReplies.js'
@@ -180,14 +180,6 @@ const UPDATE_BACKOFF_MS = 60_000
  *  [SIGNED_OUT_MAX_MS]. */
 const SIGNED_OUT_FIRST_MS = 5_000
 const SIGNED_OUT_MAX_MS = 5 * 60_000
-
-/** Which sign-in is on disk: its epoch, minted when a person signs in and kept through every refresh, or for a session from before
- *  epochs a short hash of its refresh token, which no line or field keeps. Null with none. */
-function signInOnDisk(): string | null {
-  const session = readAuthSession()
-  if (!session) return null
-  return session.signInEpoch ?? createHash('sha256').update(session.refreshToken ?? session.accessToken).digest('hex').slice(0, 16)
-}
 /** How old the host form may be for the stop check, which runs every 5 s beside the one-second tick that reads it. */
 const STOPS_FRESH_MS = 5_000
 /** Refusals no retry can change while this host runs: this person has all the machines they may add to the Swarm, or this
@@ -700,6 +692,8 @@ export class SuperTabHost {
     if (this.signedOut !== out || this.stopped) return
     this.signedOutLast = { wait: out.wait, at: this.now() }
     this.signedOut = null
+    // What waited on a list or a claim while signed out is read at once, not after its backoff.
+    this.deliveryRetries.clear()
     this.log('Signed in again: this Swarm goes on.')
     if (out.terminal) void this.terminal.waiting()
     void this.tick()
@@ -708,7 +702,7 @@ export class SuperTabHost {
    *  being signed out is said once, after which the host waits for a sign-in (waitsForSignIn). */
   private failed(error: unknown): void {
     // Signed out here (the gateway's NOT_SIGNED_IN), or by the server (a 401, such as its UNAUTHORIZED).
-    if (error instanceof SuperTabHostError && (error.code === 'NOT_SIGNED_IN' || error.status === 401)) {
+    if (signedOut(error)) {
       if (this.signedOut) return
       const last = this.signedOutLast, now = this.now()
       const wait = last && now - last.at < SIGNED_OUT_MAX_MS ? Math.min(last.wait * 2, SIGNED_OUT_MAX_MS) : SIGNED_OUT_FIRST_MS
@@ -1223,7 +1217,9 @@ export class SuperTabHost {
       } catch (error) {
         // Authority checks and network failures both withhold input. A later fresh read may grant it again.
         const message = error instanceof Error ? error.message : String(error)
-        if (listRead || !due) { if (error !== claimError) this.log(message) }
+        // Signed out (the fourth review of #4221): said once and waited out as the host's pass is, never backed off per list.
+        if (signedOut(error)) this.failed(error)
+        else if (listRead || !due) { if (error !== claimError) this.log(message) }
         else {
           // 2026-10-28: a Lead's list failed for 45 minutes while this log said only the backend's words, with no agent.
           const retry = this.retryLater(listKey), code = error instanceof SuperTabHostError ? ` (${error.code})` : ''
