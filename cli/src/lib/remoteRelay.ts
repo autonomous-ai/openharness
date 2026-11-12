@@ -433,12 +433,21 @@ export class RemoteRelayPool {
         ? { ...frame, payload: { ...framePayload(frame), relayIsolation: true } } : frame),
     }, onClosed)
     let detached = false
+    // A watch on the other machine lives as long as this connection (gateway/harnessWatch.ts): shelved, it would outlive
+    // the client that asked, and the next background client handed it would be told that harness's changes unasked
+    // (review of #4197). So a session that asked for one closes with its client, and the other machine ends the watch.
+    let watched = false
     return {
       ...session,
+      send: (frame) => {
+        if (frame.type === 'harness_watch') watched = true
+        return session.send(frame)
+      },
       detach: () => {
         if (detached) return
         detached = true
         session.detach() // the pool's own linger starts here
+        if (watched) { pool.invalidate(machineId, { code: 1000, reason: 'watch ended' }); return }
         const idle = this.idleIsolated.get(machineId) ?? []
         if (idle.length >= ISOLATED_IDLE_MAX) { pool.invalidate(machineId, { code: 1000, reason: 'shelf full' }); return }
         idle.push(pool)

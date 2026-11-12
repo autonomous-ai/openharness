@@ -99,6 +99,9 @@ export function createHarnessWatches(deps: HarnessWatchDeps) {
 
     /** A frame the core sends its remote clients: what it changes of a harness, told to every watch naming it. */
     observe(frame: Frame): void {
+      // History read again (an attach, a resume, a rewritten transcript) says what happened, not what happens: the core
+      // marks it so that a replay never makes a harness working (core/turns/funnel.ts, core/transcripts/ingest.ts).
+      if (frame.replay === true) return
       const type = frame.type
       const payload = (frame.payload ?? {}) as Frame
       if (type === 'agent_synced') {
