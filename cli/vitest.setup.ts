@@ -74,3 +74,15 @@ vi.mock('./src/lib/agentTmp.js', async (importOriginal) => {
     agentTmpRoot: vi.fn((deps?: Parameters<typeof real.agentTmpRoot>[0]) => deps ? real.agentTmpRoot(deps) : null),
   }
 })
+
+// The computer running these may have a Hermes of its own, and no spec may run it: whether a Hermes keeps a terminal
+// record is its `hermes --version`. Asked with no deps, this answers as an older Hermes would, so every hook spec and
+// golden stays as it was; a spec that passes its own deps tests the real thing.
+vi.mock('./src/engines/hermesRecord.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./src/engines/hermesRecord.js')>()
+  return {
+    ...real,
+    hermesKeepsRecord: vi.fn((executable?: Parameters<typeof real.hermesKeepsRecord>[0], environment?: Parameters<typeof real.hermesKeepsRecord>[1],
+      deps?: Parameters<typeof real.hermesKeepsRecord>[2]) => deps ? real.hermesKeepsRecord(executable, environment, deps) : Promise.resolve(false)),
+  }
+})

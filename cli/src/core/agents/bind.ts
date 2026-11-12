@@ -10,6 +10,7 @@ import { stat } from 'node:fs/promises'
 import { transcriptOf, processSessionOf } from '../../engines/identities.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import { cursorDataDir } from '../../engines/cursor/contract.js'
+import { HERMES_SANDBOX_HOLD } from '../../engines/hermes/contract.js'
 import { isOpenclawLocalStopped, openclawLocalStopped, OPENCLAW_SCREEN_HOLDS, OPENCLAW_STATES, readOpenclawScreen, type OpenclawScreen } from '../../engines/openclaw/contract.js'
 import { continuationOf } from '../../engines/sessionFiles.js'
 import { sessionStoreOf } from '../../engines/sessionStoreContracts.js'
@@ -24,10 +25,11 @@ import type { SessionInputController } from '../../lib/sessionInput.js'
 import { findLiveSession, findResumedTranscript } from '../../lib/sessionRepair.js'
 import type { StoppedAgentStore } from '../../lib/stoppedAgents.js'
 import { conversationKey, type ConversationOwners } from './conversationOwners.js'
+import type { createHermesTerminal } from './hermesTerminal.js'
 import type { DiscoveredTerminalAgent } from '../../lib/terminalAgentDiscovery.js'
 
 /** Between session-binding attempts for a process whose engine store is not resolvable yet. */
-const REPAIR_RETRY_MS = 60_000
+export const REPAIR_RETRY_MS = 60_000
 /** A NEW process is waiting for a session that is about to appear. Muse makes
  *  this concrete — its session is only claimable once the user has typed, because a file with no turn in
  *  it cannot be told apart from the ones muse opens for itself. Backing off a full minute there costs the
@@ -98,11 +100,13 @@ export interface BindDeps {
   openclawPaneDue: (sessionId: string) => boolean
   /** The state folder an OpenClaw TUI holds open, or null when its open files cannot be read (lib/openclawStore.ts). */
   openclawStateDir: (pid: number) => Promise<string | null>
+  /** What a Hermes's record of its own terminal says (hermesTerminal.ts). Absent, a Hermes is bound by its hooks and the repair. */
+  hermesTerminal?: ReturnType<typeof createHermesTerminal>
 }
 
 export function createBinding({
   registry, mirror, forgetSession, clients, attachSession, announceSession, stoppedAgents, syncRecapPool,
-  input, submitAgent, deviceInput, homes, owners, capturePane, openclawPaneRead, openclawPaneDue, openclawStateDir,
+  input, submitAgent, deviceInput, homes, owners, capturePane, openclawPaneRead, openclawPaneDue, openclawStateDir, hermesTerminal,
 }: BindDeps) {
   /**
    * Forks whose engine session has not reported in yet, agentId → the SOURCE's sessionId. A fork's tile
@@ -422,6 +426,48 @@ export function createBinding({
       if (stateDir) registry.setOpenclawStateDir(bound.entry.agentId, stateDir)
       return
     }
+    // Hermes v0.21.6+ writes down which session its terminal is on, in its own home (hermesTerminal.ts): it is bound and
+    // followed from that, with no hook, in a sandbox or out of one. A Hermes that keeps no record goes on to the repair.
+    let followed: { sessionId: string; hermesHome?: string } | undefined
+    if (observed.engine === 'hermes' && hermesTerminal) {
+      // Nothing a sandbox names is readable when its home or folder has no path here: held, never bound by a guess.
+      if (observed.sandbox === 'unseen') {
+        if (registry.setIdentityHold(agent.agentId, HERMES_SANDBOX_HOLD)) {
+          console.log(`[discovery] ${sid(agent.agentId)} binding held · ${HERMES_SANDBOX_HOLD}`)
+          announceSession(agent)
+        }
+        return
+      }
+      if (agent.identityHold === HERMES_SANDBOX_HOLD) {
+        registry.setIdentityHold(agent.agentId, undefined)
+        announceSession(agent)
+        return
+      }
+      const answer = await hermesTerminal.follow(agent, { ...observed, sandboxed: !!observed.sandbox }, { current, mayClaim, hold })
+      if (answer === 'wait' || !current()) return
+      if (answer !== 'none' && agent.sessionId) {
+        // `/new`, `/resume`, a branch and a compression split all rewrite the record: the rotation the Copilot switch
+        // takes, so the reader, the recaps and the apps see a session change as they saw one from a hook.
+        const was = agent.sessionId
+        const rotated = commit({
+          engine: 'hermes',
+          sessionId: answer.sessionId,
+          cwd: observed.cwd,
+          source: 'hermes-terminal',
+          runtimes: observed.runtimes,
+          primaryRuntimeKey: observed.primaryRuntimeKey,
+          processIdentity: observed.processIdentity,
+          hookEvent: 'HermesTerminal',
+        })
+        // A new session is a switch, said once the registry took it: one it refuses (a resume that reopened another
+        // conversation) is tried again in the repair's rhythm, and is no switch; a resumed one confirmed is none either.
+        if (!rotated?.isNew) return
+        console.log(`[discovery] ${sid(agent.agentId)} switched hermes session ${sid(was)} → ${sid(answer.sessionId)}`)
+        followRegistered(rotated.entry, rotated)
+        return
+      }
+      if (answer !== 'none') followed = answer
+    }
     if (agent.sessionId) {
       if (observed.engine === 'copilot') {
         const process = await read(() => processSessionOf('copilot', homes.copilot, observed.processIdentity.pid))
@@ -486,11 +532,12 @@ export function createBinding({
       return
     }
 
-    let sessionId = observed.resumeSessionId
+    let sessionId = followed?.sessionId ?? observed.resumeSessionId
     let transcriptPath: string | undefined
-    let hermesHome: string | undefined
-    let source = 'terminal-resume'
-    if (sessionId) {
+    let hermesHome = followed?.hermesHome
+    let source = followed ? 'hermes-terminal' : 'terminal-resume'
+    // A session a terminal record names is a row of its store: there is no transcript to look up.
+    if (sessionId && !followed) {
       if (!mayClaim(sessionId)) return
       const located = await read(async () => observed.engine === 'cursor' || observed.engine === 'grok' || observed.engine === 'agy' || observed.engine === 'copilot'
         ? await ownTranscript(observed.engine, sessionId!, observed.cwd) ?? undefined
@@ -503,7 +550,7 @@ export function createBinding({
       // machine does not have is not a session — the hook that follows the user's next prompt will say.
       if ((observed.engine === 'cursor' || observed.engine === 'grok' || observed.engine === 'claude' || observed.engine === 'codex')
         && !transcriptPath) return
-    } else {
+    } else if (!sessionId) {
       const attempts = repairAttempts.get(agent.agentId) ?? 0
       const lastAttempt = lastRepairAttempt.get(agent.agentId) ?? 0
       if (attempts >= REPAIR_EAGER_ATTEMPTS && Date.now() - lastAttempt < REPAIR_RETRY_MS) return
@@ -513,7 +560,8 @@ export function createBinding({
       if (!Number.isFinite(startedAtMs)) return
       // agy cannot be found by directory — its repair reads the presence lock the process holds open.
       //
-      const located = await read(() => findLiveSession(observed.engine, observed.cwd, startedAtMs, {
+      // A sandboxed Hermes wrote its folder as it names it; the row keeps the daemon's path of it.
+      const located = await read(() => findLiveSession(observed.engine, typeof observed.sandbox === 'object' ? observed.sandbox.cwd : observed.cwd, startedAtMs, {
         bornOnly: true,
         ...(agent.forkedFrom?.sessionId ? { excludedSessionId: agent.forkedFrom.sessionId } : {}),
         pid: observed.processIdentity.pid,
@@ -539,12 +587,14 @@ export function createBinding({
       sessionId,
       transcriptPath,
       ...(hermesHome ? { hermesHome } : {}),
+      // A home Harness worked out, from the process's HOME or a sandbox's path of it: a relaunch must not export it.
+      ...(hermesHome && followed && observed.hermesHomeDerived ? { hermesHomeDerived: true as const } : {}),
       cwd: observed.cwd,
       source,
       runtimes: observed.runtimes,
       primaryRuntimeKey: observed.primaryRuntimeKey,
       processIdentity: observed.processIdentity,
-      hookEvent: source === 'terminal-resume' ? 'TerminalResumeDiscovery' : 'ProcessRepair',
+      hookEvent: source === 'terminal-resume' ? 'TerminalResumeDiscovery' : followed ? 'HermesTerminal' : 'ProcessRepair',
     })
     if (!result || !result.isNew) return
     if (previousOwner && previousOwner.agentId !== result.entry.agentId) {
@@ -556,6 +606,8 @@ export function createBinding({
     repairAttempts.delete(agent.agentId)
     followRegistered(result.entry, result)
     console.log(`[discovery] bound ${observed.engine} session ${sid(result.entry.sessionId)} via ${observed.primaryRuntimeKey}`)
+    // The repair binds a Hermes only when no record named its session: nothing follows its switches then (said once).
+    if (source === 'process-repair' && observed.engine === 'hermes') hermesTerminal?.fellBack(agent.agentId)
   }
   return {
     pendingForkInherit, handleRegistered, bindObservedAgent,

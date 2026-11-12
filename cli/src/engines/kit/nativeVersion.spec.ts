@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
-import { majorVersion, nativeVersionProbe } from './nativeVersion.js'
+import { majorVersion, nativeVersionProbe, parseRelease, probedVersion, releaseAtLeast, type Release } from './nativeVersion.js'
 
 const roots: string[] = []
 const rule = { output: /(\d+)\.\d+\.\d+/, args: ['--version'], timeoutMs: 2_000 }
@@ -79,6 +79,35 @@ it('returns a confirmed answer while a newer probe of the unchanged file is stil
     expect(await older).toBe(2)
   } finally { second('2.0.18'); await newer }
   expect(memo.get('same-file')).toBe(2)
+})
+
+const hermesRule = { output: /Hermes Agent v(\d+)\.(\d+)\.(\d+)/, args: ['--version'], timeoutMs: 5_000 }
+it('reads a release and compares it', () => {
+  expect(parseRelease(hermesRule, 'Hermes Agent v0.21.6 (2026.9.24)')).toEqual([0, 21, 6])
+  expect(parseRelease(hermesRule, 'Hermes Agent vunknown')).toBeNull()
+  expect(releaseAtLeast([0, 21, 6], [0, 21, 6])).toBe(true)
+  expect(releaseAtLeast([0, 21, 5], [0, 21, 6])).toBe(false)
+  expect(releaseAtLeast([0, 20, 99], [0, 21, 6])).toBe(false)
+  expect(releaseAtLeast([1, 0, 0], [0, 21, 6])).toBe(true)
+})
+
+it('asks an installed file once, and keeps that it could not be read', async () => {
+  const memo = new Map<string, Release | null>(); let reads = 0
+  const probe = { identity: () => 'file-a', read: async () => { reads++; return 'Hermes Agent v0.23.1 (2026.11.11)' } }
+  expect(await probedVersion(output => parseRelease(hermesRule, output), probe, memo)).toEqual([0, 23, 1])
+  expect(await probedVersion(output => parseRelease(hermesRule, output), probe, memo)).toEqual([0, 23, 1])
+  expect(reads).toBe(1)
+  const broken = { identity: () => 'file-b', read: async () => { reads++; throw new Error('timeout') } }
+  expect(await probedVersion(output => parseRelease(hermesRule, output), broken, memo)).toBeNull()
+  expect(await probedVersion(output => parseRelease(hermesRule, output), broken, memo)).toBeNull()
+  expect(reads).toBe(2)
+})
+
+it('does not keep the release of a file replaced while it was asked', async () => {
+  const memo = new Map<string, Release | null>(); let identity = 'before'
+  const probe = { identity: () => identity, read: async () => { identity = 'after'; return 'Hermes Agent v0.23.1' } }
+  expect(await probedVersion(output => parseRelease(hermesRule, output), probe, memo)).toBeNull()
+  expect(memo.size).toBe(0)
 })
 
 it('keeps the production resolver asynchronous when only the interactive shell can find OpenCode', async () => {

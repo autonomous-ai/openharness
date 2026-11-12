@@ -92,6 +92,25 @@ describe('forgetting a session', () => {
     expect(deps.registry.removeAgent).toHaveBeenCalledWith(live.agentId)
   })
 
+  it('archives a captured Hermes home with its own mark, never the live row\'s', () => {
+    const { deps, forgetSession } = setup()
+    const live = deps.registry.resolve('a1')!
+    Object.assign(live, { engine: 'hermes', hermesHome: '/sandbox/agent/.hermes', hermesHomeDerived: true })
+    const { hermesHomeDerived: _mark, ...unmarked } = live
+    forgetSession(live.agentId, { captured: { ...unmarked, hermesHome: '/home/u/.hermes/profiles/work' } })
+    const archived = vi.mocked(deps.stoppedAgents.save).mock.calls[0]![0]
+    expect(archived.hermesHome).toBe('/home/u/.hermes/profiles/work')
+    expect(archived.hermesHomeDerived).toBeUndefined()
+
+    // The same home keeps the live row's mark.
+    const same = setup()
+    const marked = same.deps.registry.resolve('a1')!
+    Object.assign(marked, { engine: 'hermes', hermesHome: '/sandbox/agent/.hermes', hermesHomeDerived: true })
+    const { hermesHomeDerived: _kept, ...captured } = marked
+    same.forgetSession(marked.agentId, { captured })
+    expect(vi.mocked(same.deps.stoppedAgents.save).mock.calls[0]![0]).toMatchObject({ hermesHome: '/sandbox/agent/.hermes', hermesHomeDerived: true })
+  })
+
   it.each(['agent', 'engine', 'registered', 'conversation', 'process', 'executable', 'missing process'] as const)(
     'refuses a captured conversation after the %s identity changes', changed => {
       const { deps, forgetSession } = setup()

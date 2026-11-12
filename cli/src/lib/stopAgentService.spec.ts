@@ -50,6 +50,16 @@ it('saves history before removing the runtime, joins concurrent stops, and clear
   expect(registry.byAgent(original)).toBeUndefined(); expect(deps.stopJobs.size).toBe(0)
   expect(stoppedAgents.beginResume(original)).not.toBeNull(); expect(deps.agentReconciler.suppress).toHaveBeenCalledWith(row)
 })
+it('saves a captured Hermes home with its own mark, never the live row\'s', async () => {
+  Object.assign(row, { engine: 'hermes', hermesHome: '/sandbox/agent/.hermes', hermesHomeDerived: true,
+    processIdentity: { pid: 77, executable: 'hermes', startMarker: 'fixture' } })
+  vi.mocked(captureResumeIdentity).mockImplementation(async ({ hermesHomeDerived: _mark, ...session }) => ({ ...session,
+    hermesHome: '/home/u/.hermes/profiles/work', source: 'stop-repair' }))
+  await createStopAgentService(deps)(row.agentId)
+  const saved = stoppedAgents.get(row.agentId)
+  expect(saved?.hermesHome).toBe('/home/u/.hermes/profiles/work')
+  expect(saved?.hermesHomeDerived).toBeUndefined()
+})
 it('missing identities are harmless and never allocate or signal anything', async () => {
   await createStopAgentService(deps)('missing'); expect(deps.forgetSession).not.toHaveBeenCalled(); expect(terminateDeletedAgent).not.toHaveBeenCalled()
 })

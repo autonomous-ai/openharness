@@ -232,6 +232,13 @@ export interface RegisteredSession {
    */
   hermesHome?: string | null
   /**
+   * Only beside `hermesHome`: that path is Harness's own for the home (worked out from the process's `HOME`, or
+   * translated from a sandbox's view), not the value of the process's `HERMES_HOME`. A relaunch exports no
+   * `HERMES_HOME` for it, since the relaunched process works out the same home, in its own view. Stored, not kept in
+   * memory, so an agent resumed after the daemon that saw its process has gone still is not handed the daemon's path.
+   */
+  hermesHomeDerived?: true
+  /**
    * OpenClaw only: the state folder its TUI held open when the session was bound (lib/openclawStore.ts). A `--profile`
    * or `--dev` TUI keeps its store outside the default folder, and once the TUI has exited this is where its history,
    * usage and checkpoint are read from.
@@ -397,6 +404,8 @@ export interface RegisterInput {
    *  Found by the hook gate (`awaitHermesKind`), which has to look the session up anyway, and by the
    *  hook script itself when the daemon was down. Fill-only — see RegisteredSession.hermesHome. */
   hermesHome?: string
+  /** `hermesHome` is one Harness worked out — see RegisteredSession.hermesHomeDerived. */
+  hermesHomeDerived?: true
 }
 
 /** Display name for a session's "project" tab/tile. A user rename (persisted override) is
@@ -779,7 +788,7 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
   // Taken out of the spread and put back only when it is a real moment: the spread would otherwise
   // carry a hand-edited string or a negative number straight into the frame's `toISOString()`.
   // `forkedFrom` is out too, so an invalid one is dropped rather than spread back in as-is.
-  const { identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, admissionHold: _admission, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, launchModel: rawLaunchModel, externalResume: _externalResume, startedBy: rawStartedBy, parentAgentId: rawParentAgentId, swarmSkill: rawSwarmSkill, launchArgs: rawLaunchArgs, browser: rawBrowser, quietTitle: rawQuietTitle, firstTask: rawFirstTask, openclawLocal: rawOpenclawLocal, earlierSessionIds: rawEarlierSessionIds, ...rest } = row
+  const { identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, admissionHold: _admission, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, launchModel: rawLaunchModel, externalResume: _externalResume, startedBy: rawStartedBy, parentAgentId: rawParentAgentId, swarmSkill: rawSwarmSkill, launchArgs: rawLaunchArgs, browser: rawBrowser, quietTitle: rawQuietTitle, firstTask: rawFirstTask, openclawLocal: rawOpenclawLocal, earlierSessionIds: rawEarlierSessionIds, hermesHomeDerived: _hermesHomeDerived, ...rest } = row
   const lastOpenedAt = normalizedOpenedAt(rawOpenedAt)
   // Out of the spread for the same reason: a half-formed record is dropped, never relaunched with.
   const scmLaunch = parseScmLaunchRecord(rawScmLaunch)
@@ -797,6 +806,7 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
     ...(firstTask ? { firstTask } : {}),
     ...(openclawLocal ? { openclawLocal } : {}),
     ...(earlierSessionIds ? { earlierSessionIds } : {}),
+    ...storedHermesHomeDerived(row),
     ...(scmLaunch ? { scmLaunch } : {}),
     ...(launchModel ? { launchModel } : {}),
     ...(swarmSkill ? { swarmSkill } : {}),
@@ -853,6 +863,22 @@ function storedLaunchArgs(value: unknown): string[] | undefined {
 /** Only a non-empty string is a saved first task; anything else on disk is dropped, never typed into a pane. */
 function storedFirstTask(value: unknown): string | undefined {
   return typeof value === 'string' && value ? value : undefined
+}
+
+/** The mark is kept only as `true` beside a home: anything else on disk is dropped, and the home is exported as before. */
+function storedHermesHomeDerived(row: { hermesHome?: unknown; hermesHomeDerived?: unknown }): { hermesHomeDerived: true } | Record<string, never> {
+  return row.hermesHomeDerived === true && typeof row.hermesHome === 'string' && row.hermesHome ? { hermesHomeDerived: true } : {}
+}
+
+/**
+ * [row] with [from]'s Hermes home, by the rule `register` keeps: the mark goes with the home it was set with, kept from
+ * either row while the home is the same, never left beside another home (RegisteredSession.hermesHomeDerived). A home
+ * copied without its mark would be exported on a resume, the daemon's path of it inside a remapped sandbox.
+ */
+export function withHermesHome<T extends RegisteredSession>(row: T, from: Pick<RegisteredSession, 'hermesHome' | 'hermesHomeDerived'>): T {
+  const { hermesHomeDerived: _mark, ...rest } = row
+  const derived = !!from.hermesHome && (from.hermesHomeDerived || from.hermesHome === row.hermesHome && row.hermesHomeDerived)
+  return { ...rest, hermesHome: from.hermesHome, ...(derived ? { hermesHomeDerived: true as const } : {}) } as T
 }
 
 /** Only a non-empty string is a saved `--local` folder. */
@@ -1526,6 +1552,7 @@ class Registry {
           codexHome: typeof rawCodexHome === 'string' && rawCodexHome ? rawCodexHome : null,
           claudeHome: typeof raw?.claudeHome === 'string' && raw.claudeHome ? raw.claudeHome : null,
           hermesHome: typeof raw?.hermesHome === 'string' && raw.hermesHome ? raw.hermesHome : null,
+          ...storedHermesHomeDerived(raw),
           ...(typeof raw?.openclawStateDir === 'string' && raw.openclawStateDir ? { openclawStateDir: raw.openclawStateDir } : {}),
           ...(storedFirstTask(raw.firstTask) ? { firstTask: storedFirstTask(raw.firstTask) } : {}),
           ...(storedOpenclawLocal(raw.openclawLocal) ? { openclawLocal: storedOpenclawLocal(raw.openclawLocal) } : {}),
@@ -2237,6 +2264,11 @@ class Registry {
         : project.cwdOf(effectiveTranscriptPath) ?? input.cwd)
       : baseCwd
     const retainEvidence = sameSession && existing.engine === engine && existing.transcriptPath === effectiveTranscriptPath
+    const hermesHome = input.hermesHome ?? existing?.hermesHome ?? null
+    // The mark goes with the home it was set with: kept while the row keeps that home, taken with a home the input
+    // brings marked, never carried onto another home (which a relaunch would then fail to export).
+    const hermesHomeDerived = !!hermesHome && (!!input.hermesHome && input.hermesHomeDerived
+      || hermesHome === existing?.hermesHome && existing.hermesHomeDerived)
     const entry: RegisteredSession = {
       schemaVersion: 2,
       active: existing && isTerminalEngine(existing.engine) ? true : existing?.active ?? true,
@@ -2298,7 +2330,8 @@ class Registry {
       // The home the gate looked this session up in, or whatever the row already knew. Carried
       // forward like every field here: a bind REBUILDS the row, and a home dropped at the first hook
       // would send the mirror back to the default store (openharness#191).
-      hermesHome: input.hermesHome ?? existing?.hermesHome ?? null,
+      hermesHome,
+      ...(hermesHomeDerived ? { hermesHomeDerived: true as const } : {}),
       // Carried forward too: `/new` rebinds the same TUI, and its store is where it was.
       ...(existing?.openclawStateDir && engine === 'openclaw' ? { openclawStateDir: existing.openclawStateDir } : {}),
       ...(existing?.openclawLocal && engine === 'openclaw' ? { openclawLocal: existing.openclawLocal } : {}),
@@ -2815,11 +2848,15 @@ class Registry {
 
   /** Fill in the Hermes home a row did not know — found by looking for its session in each store, or
    *  read off the live process. Never overwrites: like `setCodexHome`, a session does not move between
-   *  homes, and a later probe that could not read the process must not take the answer away. */
-  setHermesHome(agentId: string, hermesHome: string): boolean {
+   *  homes, and a later probe that could not read the process must not take the answer away. `derived`: the home is
+   *  one Harness worked out (RegisteredSession.hermesHomeDerived); a row that has this same home without the mark (an
+   *  older daemon saved over it) takes the mark alone. */
+  setHermesHome(agentId: string, hermesHome: string, derived = false): boolean {
     const session = this.agents.get(agentId)
-    if (!session || session.engine !== 'hermes' || session.hermesHome) return false
+    if (!session || session.engine !== 'hermes') return false
+    if (session.hermesHome && !(derived && session.hermesHome === hermesHome && !session.hermesHomeDerived)) return false
     session.hermesHome = hermesHome
+    if (derived) session.hermesHomeDerived = true
     session.touchedAt = Date.now()
     this.save()
     return true
