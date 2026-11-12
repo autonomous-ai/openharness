@@ -131,12 +131,13 @@ describe('Hachi\'s wakes, from what its harnesses push', () => {
     const t = setup(live)
     await t.look()
     // Started after the service: working until heard otherwise. Here, it answered before its watch was asked.
-    live.push(row('quick'))
-    new Ledger(ledgerPath(dir)).append({ at: NOW + 1_000, depth: 1, by: { machineId: SELF, agentId: 'hachi', name: 'Hachi', engine: 'claude', hachi: true }, child: { machineId: SELF, agentId: 'quick', name: 'quick' } })
+    live.push(row('quick'), row('went'))
+    for (const agentId of ['quick', 'went']) new Ledger(ledgerPath(dir)).append({ at: NOW + 1_000, depth: 1, by: { machineId: SELF, agentId: 'hachi', name: 'Hachi', engine: 'claude', hachi: true }, child: { machineId: SELF, agentId, name: agentId } })
     new Ledger(ledgerPath(dir)).append({ at: NOW + 1_000, depth: 1, by: { machineId: SELF, agentId: 'hachi', name: 'Hachi', engine: 'claude', hachi: true }, child: { machineId: 'machine-2', agentId: 'far', name: 'far' } })
     const original = Line.prototype.request
     Line.prototype.request = async function (type, payload) {
-      if (type === 'agents_list') { this.requests.push([type, payload!]); return { agents: [{ id: 'quick', status: 'active', activity: { state: 'idle' } }, { id: 'other', status: 'stopped' }] } }
+      // `went` closed before it was followed: a list of the live ones leaves it out.
+      if (type === 'agents_list') { this.requests.push([type, payload!]); return { agents: [{ id: 'quick', status: 'active', activity: { state: 'idle' } }, { id: 'other', status: 'active' }] } }
       return original.call(this, type, payload)
     }
     const away = async function (this: Line, ids: string[], heard: (agentId: string, event: PushedEvent) => void) {
@@ -149,7 +150,7 @@ describe('Hachi\'s wakes, from what its harnesses push', () => {
     await t.advance(WAKE_COALESCE_MS)
     const self = t.lineFor(SELF, 'hachi')
     expect(self.requests.find(([type]) => type === 'agent_messages')![1].items).toEqual([
-      { name: 'quick', machine: 'studio', state: 'done' }, { name: 'far', machine: 'Mac mini', state: 'done' }])
+      { name: 'quick', machine: 'studio', state: 'done' }, { name: 'went', machine: 'studio', state: 'stopped' }, { name: 'far', machine: 'Mac mini', state: 'done' }])
     // Asked once, as it was first followed; not at every look.
     await t.look()
     expect(t.lines.flatMap((l) => l.requests).filter(([type]) => type === 'agents_list')).toHaveLength(1)

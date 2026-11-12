@@ -174,12 +174,13 @@ export function startHachi(core: CoreApi, given: Partial<HachiDeps> = {}): { sto
   }
   let names = machineNames(core.dataDir)
 
-  /** This machine's harnesses [ids], as its list says them now, heard as pushed events would say them. */
+  /** This machine's harnesses [ids], as its list of live ones says them now, heard as pushed events would say them: one
+   *  the list leaves out is gone. */
   const snapshot = async (line: Daemon, ids: string[], heard: (agentId: string, event: PushedEvent) => void): Promise<void> => {
-    const answer = await line.request('agents_list', {})
-    for (const frame of (answer.agents ?? []) as Array<{ id: string; status?: string; activity?: { state?: string } | null }>) {
-      if (!ids.includes(frame.id)) continue
-      heard(frame.id, frame.status === 'stopped' ? { type: 'agent_deleted', payload: {} } : { type: 'agent_activity', payload: { state: frame.activity?.state } })
+    const listed = ((await line.request('agents_list', {})).agents ?? []) as Array<{ id: string; activity?: { state?: string } | null }>
+    for (const id of ids) {
+      const frame = listed.find((each) => each.id === id)
+      heard(id, frame ? { type: 'agent_activity', payload: { state: frame.activity?.state } } : { type: 'agent_deleted', payload: {} })
     }
   }
 
