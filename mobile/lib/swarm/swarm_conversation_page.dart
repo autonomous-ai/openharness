@@ -2353,6 +2353,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     final taggable =
         !buddy &&
         snapshot != null &&
+        c.offersTagButton &&
         (c.mentionablePeople.isNotEmpty || c.mentionable.isNotEmpty);
     return Padding(
       padding: SwarmComposer.padding,
