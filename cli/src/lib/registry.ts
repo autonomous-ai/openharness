@@ -693,13 +693,19 @@ function withoutForcedModes(rows: Array<Partial<RegisteredSession>>): { rows: Ar
  * A Swarm agent starts in Auto-approve since 2026-11-12 (anh Dee: as a new agent in a regular tab does), and a restart or
  * restore reapplies the saved mode. One started between task #4215 and then has none, and kept coming back in its owner's own
  * default, where a PM stood still before each tool and Codex refused every ask to leave its sandbox. So the first load of a
- * build with this gives each such Claude Code or Codex Swarm agent Auto-approve, once (`SWARM_AUTO_FILE`). Every mode a
- * person picks is recorded on the row, so a row with none was never theirs; one they pick later is kept. Review after 2027-01-12.
+ * build with this gives each such Claude Code or Codex agent the Swarm started Auto-approve, once (`SWARM_AUTO_FILE`). Only one
+ * the Swarm started (superTabs/inCore/adoption.ts `swarmStarted`): a person's own agent attached to a Swarm also carries a
+ * Swarm role, often with no mode (`harness new` in its own settings, a Codex in Ask), and keeps its own default. Every mode a
+ * person picks for a Swarm-started agent is recorded on its row, so one with none was never theirs. Its pane takes the mode at
+ * its next relaunch (a Restart, or the computer's restart). Review after 2027-01-12.
  */
+const swarmStarted = (row: Partial<RegisteredSession>) => row.startedBy === 'agent' && !row.parentAgentId
+
 function withSwarmAuto(rows: Array<Partial<RegisteredSession>>): { rows: Array<Partial<RegisteredSession>>; given: number } {
   let given = 0
   const kept = rows.map((row) => {
-    if (row?.permissionMode !== undefined || (row.engine !== 'claude' && row.engine !== 'codex') || !parseSwarmSkill(row.swarmSkill)) return row
+    if (row?.permissionMode !== undefined || (row.engine !== 'claude' && row.engine !== 'codex') || !parseSwarmSkill(row.swarmSkill)
+      || !swarmStarted(row)) return row
     given++
     return { ...row, permissionMode: 'auto', bypassPermission: true }
   })

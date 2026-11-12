@@ -716,11 +716,14 @@ describe('registry remote display names', () => {
       tmuxPane: pane, runtimes: [{ backend: 'tmux', paneId: pane }], primaryRuntimeKey: `tmux\u0000${pane}`, ...fields })
     const lead = { role: 'lead', key: 'swarm-lead' }, dev = { role: 'dev', key: 'swarm-dev' }
     const saved = [
-      at('pm', '%61', { swarmSkill: lead, bypassPermission: false }),
-      at('codex-builder', '%62', { engine: 'codex', swarmSkill: dev }),
-      at('swarm-ask', '%63', { swarmSkill: dev, permissionMode: 'ask', bypassPermission: false }),
+      at('pm', '%61', { swarmSkill: lead, startedBy: 'agent', bypassPermission: false }),
+      at('codex-builder', '%62', { engine: 'codex', swarmSkill: dev, startedBy: 'agent' }),
+      at('swarm-ask', '%63', { swarmSkill: dev, startedBy: 'agent', permissionMode: 'ask', bypassPermission: false }),
       at('own', '%64', { bypassPermission: false }),
-      at('opencode-swarm', '%65', { engine: 'opencode', swarmSkill: dev }),
+      at('opencode-swarm', '%65', { engine: 'opencode', swarmSkill: dev, startedBy: 'agent' }),
+      // A person's own agents attached to a Swarm (superTabs/inCore/adoption.ts): one they started, one another harness did.
+      at('attached', '%66', { engine: 'codex', swarmSkill: dev }),
+      at('attached-child', '%67', { swarmSkill: dev, startedBy: 'agent', parentAgentId: 'parent' }),
     ]
     writeFileSync(join(dataDir, 'registry.json'), JSON.stringify(saved), { mode: 0o600 })
     // As a machine upgrading from a build before this sweep, which already ran the forced-mode one.
@@ -732,7 +735,7 @@ describe('registry remote display names', () => {
     const modeOf = (registered: typeof reloaded, id: string) => [registered.byAgent(id)?.permissionMode, registered.byAgent(id)?.bypassPermission]
     for (const id of ['pm', 'codex-builder']) expect(modeOf(reloaded, id), id).toEqual(['auto', true])
     expect(reloaded.byAgent('swarm-ask')?.permissionMode).toBe('ask')
-    for (const id of ['own', 'opencode-swarm']) expect(reloaded.byAgent(id)?.permissionMode, id).toBeUndefined()
+    for (const id of ['own', 'opencode-swarm', 'attached', 'attached-child']) expect(reloaded.byAgent(id)?.permissionMode, id).toBeUndefined()
     const persisted = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8')) as Array<Record<string, unknown>>
     expect(persisted.find(entry => entry.agentId === 'pm')).toMatchObject({ permissionMode: 'auto', bypassPermission: true })
     expect(existsSync(join(dataDir, 'registry-swarm-auto'))).toBe(true)
@@ -746,6 +749,34 @@ describe('registry remote display names', () => {
     const { registry: later } = await loadRegistryModule()
     later.load()
     expect(later.byAgent('pm')?.permissionMode).toBeUndefined()
+  })
+
+  // A machine upgrading from before task #4215 runs both sweeps on one load: full mode Harness forced is cleared first, then
+  // the Swarm agent is given Auto-approve, and a person's own full mode is kept.
+  it('runs both sweeps on one load: a forced full mode becomes Auto-approve, a person\'s own full mode stays', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    registry.openProcessAgent({ agentId: 'template', engine: 'claude', tmuxPane: '%70', processIdentity: processIdentity(970) })
+    const [row] = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))
+    const at = (agentId: string, pane: string, fields: Record<string, unknown>) => ({ ...row, agentId, sessionId: '', processIdentity: null,
+      tmuxPane: pane, runtimes: [{ backend: 'tmux', paneId: pane }], primaryRuntimeKey: `tmux\u0000${pane}`, ...fields })
+    writeFileSync(join(dataDir, 'registry.json'), JSON.stringify([
+      at('swarm-full', '%71', { swarmSkill: { role: 'lead', key: 'swarm-lead' }, startedBy: 'agent', permissionMode: 'full', bypassPermission: true }),
+      at('own-full', '%72', { permissionMode: 'full', bypassPermission: true }),
+    ]), { mode: 0o600 })
+    for (const marker of ['registry-own-modes', 'registry-swarm-auto']) rmSync(join(dataDir, marker), { force: true })
+    const { registry: reloaded } = await loadRegistryModule()
+    reloaded.load()
+    expect([reloaded.byAgent('swarm-full')?.permissionMode, reloaded.byAgent('swarm-full')?.bypassPermission]).toEqual(['auto', true])
+    expect([reloaded.byAgent('own-full')?.permissionMode, reloaded.byAgent('own-full')?.bypassPermission]).toEqual(['full', true])
+  })
+
+  it('marks both sweeps done on a machine with no saved agents yet, so a later load changes nothing', async () => {
+    rmSync(join(dataDir, 'registry.json'), { force: true })
+    for (const marker of ['registry-own-modes', 'registry-swarm-auto']) rmSync(join(dataDir, marker), { force: true })
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    for (const marker of ['registry-own-modes', 'registry-swarm-auto']) expect(existsSync(join(dataDir, marker)), marker).toBe(true)
   })
 
   it('repairs a Codex parent registry entry overwritten with a child rollout', async () => {
