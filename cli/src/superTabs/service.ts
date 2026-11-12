@@ -211,16 +211,15 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     crewOf((await held().reads.read(project.tabId, project.pmAgentId)).state, project)
   // Who made each verdict by command, read once for the merger and the assigner alike.
   const records = new VerdictRecords(recordedAuthors(path => backend(core, 'GET', path)), Date.now, line => console.warn(line))
+  // A project's numbers, sent as its PM into the Swarm as the PM reads it (pmNumbers.ts messageOf). They keep the files most of its
+  // landings touch, from its day's scoreboard, which the merger uses too (the allocator's design, package 8).
+  const numbers = new PmNumbers({ file: join(core.dataDir, 'super-tab-numbers.json'),
+    send: numbersSender(async project => (await sources().reads.read(project.tabId, project.pmAgentId)).state, (path, body) => backend(core, 'POST', path, body)) })
   const merges = (options.githubMerge ?? ((api, held) => new GitHubMerge({ projects: led(api, held), crew: crewOfProject(held), get: github.get,
-    send: github.send, records })))(core, sources)
+    send: github.send, records, hot: project => numbers.hot(project) })))(core, sources)
   // Gives their tasks to their builders (githubAssign.ts), from the crew as the PM reads the Swarm.
-  const assigns = (options.githubAssign ?? ((api, held) => {
-    // A project's numbers, sent as its PM into the Swarm as the PM reads it (pmNumbers.ts messageOf).
-    const numbers = new PmNumbers({ file: join(api.dataDir, 'super-tab-numbers.json'),
-      send: numbersSender(async project => (await held().reads.read(project.tabId, project.pmAgentId)).state, (path, body) => backend(api, 'POST', path, body)) })
-    return new GitHubAssign({ projects: led(api, held), crew: crewOfProject(held), get: github.get, send: github.send, records, numbers,
-      pmRunning: async project => pmRunsHere((await held().feed.current(60_000)).roster, project, id => !!api.agents.byAgent(id)) })
-  }))(core, sources)
+  const assigns = (options.githubAssign ?? ((api, held) => new GitHubAssign({ projects: led(api, held), crew: crewOfProject(held), get: github.get, send: github.send,
+    records, numbers, pmRunning: async project => pmRunsHere((await held().feed.current(60_000)).roster, project, id => !!api.agents.byAgent(id)) })))(core, sources)
   // What this computer's person's agents shipped, read from GitHub with their own gh and told to the leaderboard (shipping.ts).
   const shipping = (options.shipping ?? (api => new ShippingReporter(api)))(core)
   // An agent's answer to the launch line the daemon typed as it made it, in its chat with its person (firstAnswers.ts): as

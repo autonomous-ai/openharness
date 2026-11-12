@@ -180,7 +180,7 @@ function setup(project = 'acme/app') {
   // Pip builds; Juno is the PM, and reads.
   const crew: Crew = { builders: [{ id: 'pip', name: 'Pip', label: 'builder:pip', machineId: 'mac', engine: 'claude' }], machines: [] }
   const start = () => new GitHubMerge({ projects: async () => [{ repo: project, pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }],
-    crew: async () => crew, get: repo.get, send: repo.send, now: () => clock.now, log, records: new VerdictRecords(repo.authors, () => clock.now, log) })
+    crew: async () => crew, get: repo.get, send: repo.send, now: () => clock.now, log, records: new VerdictRecords(repo.authors, () => clock.now, log), hot: () => [] })
   const f = {
     state, log, clock, merger: start(), mark: repo.mark,
     /** A daemon restart: a new merger, which remembers nothing. */

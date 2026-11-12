@@ -6,20 +6,23 @@
  *
  * Read from GitHub alone, with no record of its own: the trains from the closed list the assigner's pass has read already, by
  * the title each was closed with (githubTrain.ts trainEnd); the waits and the rework from the comments of the team's pull
- * requests that landed in the day; the files from the files of the ones that landed in the week. Read only as the day's post is
- * made, once a day (pmNumbers.ts keeps what it said with the project's record), the newest [CHANGES_MAX] of each, none of it
- * kept in memory: 100 requests on most days and 200 at the very most, in the PM's person's own name. lampOS had two accounts
+ * requests that landed in the day; the files from the files of the ones that landed in the week; and which files a conflict was
+ * likely on (the allocator's design, package 8: what it does for the files most landings touch is judged by them) from those
+ * files and, for each change told it conflicts, its task's comments, which say when its work began. Read only as the day's post
+ * is made, once a day (pmNumbers.ts keeps what it said with the project's record), the newest [CHANGES_MAX] of each, none of it
+ * kept in memory: 100 requests on most days and 250 at the very most, in the PM's person's own name. lampOS had two accounts
  * banned for volume, so nothing here is read every minute. A part GitHub does not give is left out and said ([unread]).
  *
  * It says what it read and no more (its first review): the closed list is one page, which on a busy repository is hours and
  * not a day, so the words count the landings read ("Last 12 landed", "of the last 49 landings") and never name a window they
  * may not have covered; the trains say "at least" when that page was full of the day's.
  */
+import { startedAt, tasksOf } from './assign/crew.js'
 import { noteOf, verdictOf } from './githubMerge.js'
 import { TEAM } from './githubMentions.js'
 import { GitHubStop, PAGE, type GitHubReads } from './githubRest.js'
 import { trainEnd, type TrainEnd } from './githubTrain.js'
-import { landedOf, timeOf } from './pmNumbers.js'
+import { landedOf, listed, plainPath, timeOf } from './pmNumbers.js'
 import { object } from './wire.js'
 
 type Json = Record<string, unknown>
@@ -41,8 +44,6 @@ const HOT_ONE_IN = 10, HOT_LANDINGS = 3, HOT_MAX = 3
  *  GitHub failed on its own side, or that never came, is none: read on, the files were dropped for the day by one 500 on one
  *  request for comments (its third review). */
 const STOPS: ReadonlySet<string> = new Set(['RATE_LIMITED', 'GH_SIGNED_OUT', 'GH_MISSING'])
-/** The most letters of a file's path a line says: its end, where its name is. */
-const PATH_MAX = 100
 
 /** A wait in minutes, as the median over the changes that show it, and how many those were. */
 interface Wait { minutes: number; of: number }
@@ -57,6 +58,9 @@ export interface Board {
   /** The week's landed changes whose files were read (the newest), and the files most of them touched, the most first, each with
    *  how many touched it: by its path as GitHub gives it. Null when GitHub did not give their files. */
   hot: { landings: number; files: Array<[path: string, landings: number]> } | null
+  /** The files the day's changes told they conflict shared with what landed while they were built, the most shared first, each with
+   *  how many of those changes shared it. Null when GitHub did not give what they are read from. */
+  conflicts: Array<[path: string, changes: number]> | null
 }
 
 /** The middle of [values], half way between the middle two of an even count, with how many they are; null of none. */
@@ -93,20 +97,23 @@ function trainsOf(closed: readonly Json[], now: number): Board['trains'] {
  * of that part is asked, and the others are read all the same, unless GitHub said to stop asking ([STOPS]).
  */
 export async function boardOf(reads: GitHubReads, repo: string, input: { now: number; closed: readonly Json[]; team: ReadonlySet<string> },
-  unread: (part: 'waits' | 'files', why: string) => void): Promise<Board> {
+  unread: (part: 'waits' | 'files' | 'conflicts', why: string) => void): Promise<Board> {
   const { now, closed, team } = input
   /** The team's pull requests that landed within [window], the last landed first. */
   const landed = (window: number) => landedOf(closed, team, now, window).filter(change => Number.isSafeInteger(change.pull.number) && now - change.at < window)
     .sort((a, b) => b.at - a.at)
   // What GitHub said when it told this login to stop asking: nothing more is asked after it.
   let stopped: string | null = null
-  const part = <T>(name: 'waits' | 'files', read: () => Promise<T>): Promise<T | null> => (stopped === null ? read() : Promise.reject(new Error(stopped))).catch(error => {
+  const part = <T>(name: 'waits' | 'files' | 'conflicts', read: () => Promise<T>): Promise<T | null> => (stopped === null ? read() : Promise.reject(new Error(stopped))).catch(error => {
     const why = error instanceof Error ? error.message : String(error)
     if (error instanceof GitHubStop && STOPS.has(error.code)) stopped = why
     unread(name, why)
     return null
   })
+  // The day's are the newest of the week's: every change read for its waits is read for its files too.
   const day = landed(DAY_MS).slice(0, CHANGES_MAX), week = landed(WEEK_MS).slice(0, CHANGES_MAX)
+  /** The day's changes told they conflict, as their comments say. */
+  let conflicting: typeof day = []
   const waits = await part('waits', async () => {
     const read = await each(day, async ({ pull, at }) => {
       const comments = await reads.freshPages(repo, `/repos/${repo}/issues/${Number(pull.number)}/comments?per_page=${PAGE}`, COMMENT_PAGES)
@@ -121,32 +128,47 @@ export async function boardOf(reads: GitHubReads, repo: string, input: { now: nu
         behind: notes.has('behind'), conflict: notes.has('dirty') }
     })
     const wait = (which: 'toVerdict' | 'toLanded') => median(read.flatMap(change => change[which] === null ? [] : [change[which]]))
+    conflicting = day.filter((_, at) => read[at]!.conflict)
     return { read: read.length, toVerdict: wait('toVerdict'), toLanded: wait('toLanded'),
-      behind: read.filter(change => change.behind).length, conflict: read.filter(change => change.conflict).length }
+      behind: read.filter(change => change.behind).length, conflict: conflicting.length }
   })
+  /** The paths each of the week's landings touched, by its pull request's number. */
+  const touches = new Map<number, Set<string>>()
   const hot = await part('files', async () => {
     const touched = new Map<string, number>()
     // One page of each: a change of over a hundred files is counted by its first hundred.
-    for (const files of await each(week, ({ pull }) => reads.freshPages(repo, `/repos/${repo}/pulls/${Number(pull.number)}/files?per_page=${PAGE}`, 1))) {
-      for (const path of new Set(files.map(file => String(file.filename ?? '')).filter(Boolean))) touched.set(path, (touched.get(path) ?? 0) + 1)
+    for (const [at, files] of (await each(week, ({ pull }) => reads.freshPages(repo, `/repos/${repo}/pulls/${Number(pull.number)}/files?per_page=${PAGE}`, 1))).entries()) {
+      const paths = new Set(files.map(file => String(file.filename ?? '')).filter(Boolean))
+      touches.set(Number(week[at]!.pull.number), paths)
+      for (const path of paths) touched.set(path, (touched.get(path) ?? 0) + 1)
     }
     const files = [...touched].filter(([, landings]) => landings >= HOT_LANDINGS && landings * HOT_ONE_IN > week.length)
       .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, HOT_MAX)
     return { landings: week.length, files }
   })
-  return { waits, trains: trainsOf(closed, now), hot }
+  const conflicts = waits && hot ? await part('conflicts', async () => {
+    // Its work began as its task was given or taken (assign/crew.ts startedAt), and its branch was made from the base then: what
+    // landed from then to its own landing is what it may have conflicted with. A change for no task, or whose task says
+    // neither, is counted from its opening, which misses what landed while it was built.
+    const began = await each(conflicting, async ({ pull }) => {
+      const task = tasksOf(pull)[0]
+      return (task === undefined ? null : startedAt(await reads.freshPages(repo, `/repos/${repo}/issues/${task}/comments?per_page=${PAGE}`, 1))) ?? timeOf(pull.created_at)
+    })
+    const shared = new Map<string, number>()
+    for (const [at, { pull, at: landedAt }] of conflicting.entries()) {
+      // GitHub gave no time of its opening: nothing says what landed while it was built.
+      if (!began[at]) continue
+      // Not what landed with it: the train that landed both found no conflict between them.
+      const meanwhile = new Set(week.filter(other => other.at > began[at]! && other.at < landedAt).flatMap(other => [...touches.get(Number(other.pull.number))!]))
+      for (const path of touches.get(Number(pull.number))!) if (meanwhile.has(path)) shared.set(path, (shared.get(path) ?? 0) + 1)
+    }
+    return [...shared].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, HOT_MAX)
+  }) : null
+  return { waits, trains: trainsOf(closed, now), hot, conflicts }
 }
 
 /** A wait as a line says it: in minutes, and in hours from two. */
 const span = (minutes: number): string => minutes < 120 ? `${Math.round(minutes)} min` : `${Math.round(minutes / 6) / 10} h`
-
-/** A file's path as a line says it: its letters, digits, spaces and `. _ / + -`, the last [PATH_MAX] of them. A path is the
- *  text of whoever landed the file, and the line is posted where an @ tags, a link is followed and a backtick ends its code
- *  span (pmNumbers.ts plainName, for a name). */
-function plainPath(path: string): string {
-  const letters = [...path.replace(/[^\p{L}\p{M}\p{N} ._/+-]/gu, '')]
-  return letters.length > PATH_MAX ? `…${letters.slice(1 - PATH_MAX).join('')}` : letters.join('')
-}
 
 /** Why trains closed without landing, as a line says each, in the order two of one count are said. */
 const ENDED: ReadonlyArray<[TrainEnd, string]> = [['red', 'checks failed'], ['moved', 'base moved'], ['changed', 'rider changed'], ['late', 'out of time'], ['other', 'other']]
@@ -154,18 +176,20 @@ const ENDED: ReadonlyArray<[TrainEnd, string]> = [['red', 'checks failed'], ['mo
 /**
  * What the day's post says of a [board], a sentence for each part that has something to say, or nothing: "Last 12 landed:
  * 7 min from opened to a first verdict (median of 9), 34 min from the last READ-OK to landing (median of 11); told it was
- * behind: 5; told it conflicts: 2. Trains: 4 landed, 3 closed without landing (base moved 2, checks failed 1). Files touched
- * most, of the last 43 landings: `backend/src/superTabs/commands.ts` 28%." A wait counts from the pull request's opening, a
- * draft's time with it, and says how many changes it is the median of. [more]: the closed list read was full of the day's, so
- * there may be more trains than it held.
+ * behind: 5; told it conflicts: 2, sharing with what landed meanwhile `backend/src/superTabs/commands.ts` 2. Trains: 4 landed,
+ * 3 closed without landing (base moved 2, checks failed 1). Files touched most, of the last 43 landings:
+ * `backend/src/superTabs/commands.ts` 28%." A wait counts from the pull request's opening, a draft's time with it, and says how
+ * many changes it is the median of. [more]: the closed list read was full of the day's, so there may be more trains than it held.
  */
 export function boardWords(board: Board, more: boolean): string {
   const { waits, trains, hot } = board, said: string[] = []
   if (waits?.read) {
     const known = [...waits.toVerdict ? [`${span(waits.toVerdict.minutes)} from opened to a first verdict (median of ${waits.toVerdict.of})`] : [],
       ...waits.toLanded ? [`${span(waits.toLanded.minutes)} from the last READ-OK to landing (median of ${waits.toLanded.of})`] : []]
+    // Which files they shared with what landed while they were built: which ones a conflict was likely on, said as that.
+    const on = board.conflicts?.length ? `, sharing with what landed meanwhile ${listed(board.conflicts.map(([path, changes]) => `\`${plainPath(path)}\` ${changes}`))}` : ''
     // None told is said too: a count gone to none is what a change to the merger is judged by.
-    const told = waits.behind || waits.conflict ? `told it was behind: ${waits.behind}; told it conflicts: ${waits.conflict}` : 'none was told it was behind or in conflict'
+    const told = waits.behind || waits.conflict ? `told it was behind: ${waits.behind}; told it conflicts: ${waits.conflict}${on}` : 'none was told it was behind or in conflict'
     said.push(`Last ${waits.read} landed: ${known.length ? `${known.join(', ')}; ` : ''}${told}.`)
   }
   const closed = ENDED.map(([end, words]): [string, number] => [words, trains.closed[end] ?? 0]).filter(([, count]) => count).sort((a, b) => b[1] - a[1])

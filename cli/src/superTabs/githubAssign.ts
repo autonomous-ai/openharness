@@ -17,7 +17,7 @@ import { GitHubReads, GitHubStop, PAGE } from './githubRest.js'
 import { authorOf, FailingHeads, isHeld, isWriter, openPullsPath, PULL_PAGES, pullPeople, pullTalk, RECORD_SETTLE_MS, sameChange, verdicts, type LedProject, type VerdictRecords } from './githubMerge.js'
 import { TEAM } from './githubMentions.js'
 import { goalOf, type Score } from './goal.js'
-import { numbersOf, type Numbers } from './pmNumbers.js'
+import { numbersOf, type DayBoard, type Numbers } from './pmNumbers.js'
 import { boardOf, boardWords } from './scoreboard.js'
 
 type Json = Record<string, unknown>
@@ -101,8 +101,8 @@ export class GitHubAssign {
      *  PM asked while stopped never hears it (the swarm-sandbox, 2026-11-10: Juno, its PM and only reader). */
     pmRunning: (project: LedProject) => Promise<boolean>
     /** Takes what a pass counted of a project, for its PM and its people, and how to read its goal and what its day's
-     *  scoreboard says when a line says them (pmNumbers.ts PmNumbers). */
-    numbers: { pass: (project: LedProject, numbers: Numbers, goal: () => Promise<Score | null>, board: () => Promise<string>) => Promise<void> } }) {
+     *  scoreboard says when a line says them, with the files most landings touch, which it keeps (pmNumbers.ts PmNumbers). */
+    numbers: { pass: (project: LedProject, numbers: Numbers, goal: () => Promise<Score | null>, board: () => Promise<DayBoard>) => Promise<void> } }) {
     this.now = deps.now ?? Date.now
     this.log = deps.log ?? (line => console.warn(line))
     this.reads = new GitHubReads(deps.get, this.now)
@@ -192,9 +192,13 @@ export class GitHubAssign {
     const numbers = numbersOf({ now: this.now(), crew, pm: project.pm, issues, read, short, picks, closed })
     await this.deps.numbers.pass(project, numbers,
       async () => goalOf(this.reads, repo, String((await this.reads.one(repo, `/repos/${repo}`)).default_branch ?? '')),
-      // The day's scoreboard, read only as the day is posted: the comments and files of what landed (scoreboard.ts).
-      async () => boardWords(await boardOf(this.reads, repo, { now: this.now(), closed, team: teamOf(crew, project.pm) },
-        (part, why) => this.once(`[super-tab] Task assignment: SCOREBOARD_UNREAD ${repo}: its ${part}: ${why}`)), numbers.more))
+      // The day's scoreboard, read only as the day is posted: the comments and files of what landed (scoreboard.ts), and the
+      // files most landings touch, which the numbers keep for the merger (the allocator's design, package 8).
+      async () => {
+        const board = await boardOf(this.reads, repo, { now: this.now(), closed, team: teamOf(crew, project.pm) },
+          (part, why) => this.once(`[super-tab] Task assignment: SCOREBOARD_UNREAD ${repo}: its ${part}: ${why}`))
+        return { words: boardWords(board, numbers.more), hot: board.hot && board.hot.files.map(([path]) => path) }
+      })
   }
 
   /** Gives the free tasks to the builders who can start them soonest, after taking back what waits on a builder that cannot

@@ -10,7 +10,7 @@ import { VerdictRecords, type LedProject } from './githubMerge.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { commandRecords } from './commandRecords.fake.js'
 import type { Score } from './goal.js'
-import { PmNumbers, type Numbers } from './pmNumbers.js'
+import { PmNumbers, type DayBoard, type Numbers } from './pmNumbers.js'
 
 type Json = Record<string, unknown>
 const GiB = 1024 ** 3
@@ -103,11 +103,11 @@ const crew = (): Crew => ({
 })
 
 function setup(open: Json[], options: { closed?: Json[]; crew?: Crew
-  numbers?: { pass: (project: LedProject, numbers: Numbers, goal: () => Promise<Score | null>, board: () => Promise<string>) => Promise<void> } } = {}) {
+  numbers?: { pass: (project: LedProject, numbers: Numbers, goal: () => Promise<Score | null>, board: () => Promise<DayBoard>) => Promise<void> } } = {}) {
   const github = fakeGitHub(open, options.closed)
   const log = vi.fn()
   /** What each pass counted (pmNumbers.ts). */
-  const numbers = vi.fn(async (_project: LedProject, _numbers: Numbers, _goal: () => Promise<Score | null>, _board: () => Promise<string>) => {})
+  const numbers = vi.fn(async (_project: LedProject, _numbers: Numbers, _goal: () => Promise<Score | null>, _board: () => Promise<DayBoard>) => {})
   const clock = { now: Date.parse('2026-11-09T07:31:00Z') }
   const pm = { running: true, unreadable: false }
   const make = () => new GitHubAssign({ projects: async () => [PROJECT], crew: async () => options.crew ?? crew(), get: github.get, send: github.send, pmRunning: async () => { if (pm.unreadable) throw new Error('The backend did not answer.'); return pm.running },
@@ -154,22 +154,24 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     expect(f.github.state.asked.some(path => path.includes('/files') || /\/issues\/\d+\/comments/.test(path))).toBe(false)
     const waited = 'Last 3 landed: 20 min from opened to a first verdict (median of 3), 70 min from the last READ-OK to landing (median of 3); '
       + 'none was told it was behind or in conflict. Trains: 0 landed, 1 closed without landing (base moved 1).'
-    expect(await f.numbers.mock.calls[0]![3]()).toBe(`${waited} Files touched most, of the last 3 landings: \`src/hub.ts\` 100%.`)
+    // With the files most landings touch, which the numbers keep for the merger and the assigner (the allocator's design, package 8).
+    expect(await f.numbers.mock.calls[0]![3]()).toEqual({ words: `${waited} Files touched most, of the last 3 landings: \`src/hub.ts\` 100%.`, hot: ['src/hub.ts'] })
     expect(f.github.state.asked.filter(path => path.includes('/files') || /\/issues\/\d+\/comments/.test(path))).toHaveLength(6)
     // The PM's own landed pull requests are the team's too.
     const g = setup([], { closed: [{ ...landed(9), labels: [{ name: 'builder:faye' }] }] })
     g.github.state.comments.set(9, [{ body: 'Juno, 15:00: READ-OK f6edb44', author_association: 'MEMBER', created_at: at(100) }])
     await g.assigner.tick()
-    expect(await g.numbers.mock.calls[0]![3]()).toBe('Last 1 landed: 20 min from opened to a first verdict (median of 1), 70 min from the last READ-OK to landing (median of 1); '
-      + 'none was told it was behind or in conflict.')
+    expect(await g.numbers.mock.calls[0]![3]()).toEqual({ words: 'Last 1 landed: 20 min from opened to a first verdict (median of 1), 70 min from the last READ-OK to landing (median of 1); '
+      + 'none was told it was behind or in conflict.', hot: [] })
     // The closed list it read was full of the day's: there may be more trains than it held, and the words say so.
     const h = setup([], { closed: [train('Train: #9', at(60)), ...Array.from({ length: 99 }, (_, n) => ({ number: 100 + n, closed_at: at(60), updated_at: at(60), labels: [] }))] })
     await h.assigner.tick()
     expect(h.numbers.mock.calls[0]![1]).toMatchObject({ more: true })
-    expect(await h.numbers.mock.calls[0]![3]()).toBe('Trains, at least: 1 landed.')
-    // A part GitHub does not give is left out, and said once in the log however often the day is posted.
+    expect(await h.numbers.mock.calls[0]![3]()).toEqual({ words: 'Trains, at least: 1 landed.', hot: [] })
+    // A part GitHub does not give is left out, and said once in the log however often the day is posted. Files not read name none:
+    // the numbers keep the ones they had.
     f.github.state.failing = /\/files$/
-    expect(await f.numbers.mock.calls[0]![3]()).toBe(waited)
+    expect(await f.numbers.mock.calls[0]![3]()).toEqual({ words: waited, hot: null })
     await f.numbers.mock.calls[0]![3]()
     expect(f.log.mock.calls.filter(([line]) => String(line).includes('SCOREBOARD_UNREAD'))).toEqual([['[super-tab] Task assignment: SCOREBOARD_UNREAD acme/app: its files: GitHub answered 500.']])
   })
