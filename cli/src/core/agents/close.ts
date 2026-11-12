@@ -41,6 +41,8 @@ export interface ClosingDeps {
   leadSwitching?: (agentId: string, changeId: string) => boolean
   /** A Lead's switch's close ended, as core/main.ts hands it in; absent, nothing is told. */
   leadSwitchEnded?: (agentId: string, changeId: string, stopped: boolean) => void
+  /** How many background commands an idle agent still runs, as core/main.ts hands it in; absent, none is read. */
+  backgroundCommands?: CloseAgentServiceDeps['backgroundCommands']
 }
 
 /** How long a close waits for an engine worker that restarted under its read, before reading once more. */
@@ -49,6 +51,7 @@ export const CLOSE_READ_RECONNECT_MS = 10_000
 export function createAgentClosing({
   readScreen, registry, cleanupTabs, watcher, captureTerminal, sessionTurnState, openQuestions, terminals, sessionCheckpoints,
   stopAgent, announceSession, engineReady, stoppedAgents, nativeRecoveryReady = () => true, leadProtected, leadSwitching, leadSwitchEnded,
+  backgroundCommands,
 }: ClosingDeps) {
   const ready = (s: RegisteredSession): boolean =>
     !s.identityHold && !s.admissionHold && !s.interpretationHold && nativeRecoveryReady(s)
@@ -107,6 +110,7 @@ export function createAgentClosing({
     leadProtected,
     leadSwitching,
     leadSwitchEnded,
+    backgroundCommands,
     // Not live, not being resumed, and kept as stopped with the conversation the close names: it was closed. A record
     // that cannot be read says nothing, and the close is answered as changed, as before.
     closedAlready: request => {
