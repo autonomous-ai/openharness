@@ -485,7 +485,7 @@ export class SuperTabHost {
   /** Signed out on this computer: when it next asks the server, how long it waits, the sign-in on disk at the last look, whether
    *  it is asking now, whether it should ask at once (another sign-in came, or the server pushed work), and whether a push already
    *  asked in this wait. */
-  private signedOut: { next: number; wait: number; signIn: string | null; asking: boolean; now: boolean; pushed: boolean } | null = null
+  private signedOut: { next: number; wait: number; signIn: string | null; asking: boolean; now: boolean; pushed: boolean; terminal: boolean } | null = null
   /** How long it last waited, and when it went on: back within [SIGNED_OUT_MAX_MS], it waits twice as long (the second review of
    *  #4221: the server took the session, a Swarm read still answered 401, and it went in and out every 5 s). */
   private signedOutLast: { wait: number; at: number } | null = null
@@ -645,7 +645,13 @@ export class SuperTabHost {
       if (this.sources.feed.readsNow) void this.tick()
       return
     }
-    if (notice.type === '__terminal_waiting') { void this.terminal.waiting(); return }
+    if (notice.type === '__terminal_waiting') {
+      // Signed out, the request waits, kept for once the server takes the session (the third review of #4221: picked up anyway,
+      // a POST and a line each time the server said it again); the push only asks whether it is signed in again.
+      if (this.signedOut) { this.signedOut.terminal = true; void this.tick(); return }
+      void this.terminal.waiting()
+      return
+    }
     if (notice.type === '__deliveries_lease') { this.pushUntil = this.now() + PUSH_LEASE_MS; this.leaseSaid = false; return }
     if (notice.type !== 'super_tab_deliveries') return
     this.pushUntil = this.now() + PUSH_LEASE_MS
@@ -695,6 +701,7 @@ export class SuperTabHost {
     this.signedOutLast = { wait: out.wait, at: this.now() }
     this.signedOut = null
     this.log('Signed in again: this Swarm goes on.')
+    if (out.terminal) void this.terminal.waiting()
     void this.tick()
   }
   /** Logged, except that an update-required answer is said once and then waits a minute, rather than every second, and that
@@ -705,7 +712,7 @@ export class SuperTabHost {
       if (this.signedOut) return
       const last = this.signedOutLast, now = this.now()
       const wait = last && now - last.at < SIGNED_OUT_MAX_MS ? Math.min(last.wait * 2, SIGNED_OUT_MAX_MS) : SIGNED_OUT_FIRST_MS
-      this.signedOut = { next: now + wait, wait, signIn: this.signIn(), asking: false, now: false, pushed: false }
+      this.signedOut = { next: now + wait, wait, signIn: this.signIn(), asking: false, now: false, pushed: false, terminal: false }
       this.log('Not signed in on this computer: this Swarm waits for a sign-in (harness login).')
       return
     }

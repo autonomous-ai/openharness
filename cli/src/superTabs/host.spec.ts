@@ -305,14 +305,53 @@ describe('the host tick on the host form', () => {
     // The second review of #4221: the server took the session but a Swarm read still answered 401, so the host went in and out of
     // waiting every 5 s. Each time it comes back within a few minutes, it waits twice as long as the last.
     it('waits longer each time it comes back and is refused again', async () => {
-      const t = setup()
+      const t = setup(), at: number[] = []
       const host = t.open({ signIn: () => 'epoch-1' })
-      vi.mocked(t.call).mockImplementation(async (_method, path) => path === '/api/auth/me'
-        ? { status: 200, body: { success: true, data: { user: { id: 'u', email: 'u@example.com' } } } }
-        : { status: 401, body: { success: false, error: { code: 'UNAUTHORIZED', message: 'No.' } } })
-      await run(t, host, 120)
-      // In at 0, asked at 5, 15, 35 and 75 s: five asks at most in two minutes, where the 5 s floor made twenty-four.
-      expect(asked(t).filter(path => path === '/api/auth/me').length).toBeLessThanOrEqual(5)
+      let second = 0
+      vi.mocked(t.call).mockImplementation(async (_method, path) => {
+        if (path !== '/api/auth/me') return { status: 401, body: { success: false, error: { code: 'UNAUTHORIZED', message: 'No.' } } }
+        at.push(second)
+        return { status: 200, body: { success: true, data: { user: { id: 'u', email: 'u@example.com' } } } }
+      })
+      for (; second < 120; second++) {
+        await host.tick(); await host.reconcileStops(); await host.reconcileReceipts()
+        for (let i = 0; i < 5; i++) await Promise.resolve()
+        t.wait(1_000)
+      }
+      // In at 0; asked at 5, 15, 35 and 75 s, each gap twice the last, where the 5 s floor asked every 5 s.
+      expect(at).toEqual([5, 15, 35, 75])
+      expect(lines(t)).toEqual([OUT, BACK, OUT, BACK, OUT, BACK, OUT, BACK, OUT])
+    })
+
+    // The third review of #4221: a Lead's terminal request pushed while signed out was picked up anyway, a POST and a line each
+    // time the server said it again. It waits, and is picked up once the server takes the session.
+    it('picks up no terminal request while signed out, and picks it up once signed in again', async () => {
+      const t = setup()
+      Object.assign(t.core, { superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), input: vi.fn(),
+        screen: vi.fn(async () => ({ ok: true as const, text: '> ', hold: null })) } })
+      const pickups = () => asked(t).filter(path => path === '/api/super-tabs/hosts/machine-1/terminal').length
+      const host = t.open({ signIn: () => 'epoch-1' })
+      const roster = vi.mocked(t.call).getMockImplementation()!
+      const working: typeof roster = async (method, path, body) => path === '/api/super-tabs/hosts/machine-1/terminal'
+        ? { status: 200, body: { success: true, data: [] } } : roster(method, path, body)
+      vi.mocked(t.call).mockImplementation(working)
+      await host.tick()
+      vi.mocked(t.call).mockImplementation(refused(401, 'UNAUTHORIZED'))
+      await host.tick()
+      vi.mocked(t.call).mockClear()
+      for (let second = 0; second < 30; second++) {
+        t.push({ type: '__terminal_waiting', tabId: 'tab', agentId: 'agent' } as BackendNotice)
+        for (let i = 0; i < 5; i++) await Promise.resolve()
+        await host.tick()
+        t.wait(1_000)
+      }
+      expect(pickups()).toBe(0)
+      expect(lines(t)).toEqual([OUT])
+      vi.mocked(t.call).mockImplementation(working)
+      t.wait(5 * 60_000)
+      await host.tick()
+      await vi.waitFor(() => expect(pickups()).toBe(1))
+      expect(lines(t).slice(0, 2)).toEqual([OUT, BACK])
     })
 
     // The review of #4221: an engine signed in while the account was signed out lost the reset of its cached reading.

@@ -12,6 +12,8 @@ import { execFileSync } from 'child_process'
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readlinkSync, renameSync, rmSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
 import { env } from '../config/env.js'
+import { redactArgv } from './agentCreateDiagnosis.js'
+import { redactSecretsInText } from './logBundle.js'
 import { clearAuthSession } from './authSession.js'
 
 /** What the desktop app's Sign out button passes to `harness logout`: a person asked, in the app. */
@@ -145,6 +147,12 @@ const REMOVALS_KEPT = 20
 /** The most of one removal's line kept, in bytes: a process's command line can be any length. */
 const REMOVAL_LINE_MAX = 2_048
 
+/** A removal's line as the file keeps it: through the redaction of logs and of command lines, cut to [REMOVAL_LINE_MAX] bytes. */
+function keptLine(line: string): string {
+  const said = redactArgv(redactSecretsInText(line))
+  return Buffer.byteLength(said) > REMOVAL_LINE_MAX ? cutTo(said, REMOVAL_LINE_MAX) : said
+}
+
 /** [line] cut on a whole character to at most [max] bytes, its ellipsis counted. */
 function cutTo(line: string, max: number): string {
   const ellipsis = '…', room = max - Buffer.byteLength(ellipsis)
@@ -163,9 +171,11 @@ function cutTo(line: string, max: number): string {
 function keepRemoval(line: string): void {
   const file = join(env.ADAPTER_DATA_DIR, REMOVALS_FILE), temporary = `${file}.${process.pid}.tmp`
   try {
-    const kept = Buffer.byteLength(line) > REMOVAL_LINE_MAX ? cutTo(line, REMOVAL_LINE_MAX) : line
     const before = existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean) : []
-    writeFileSync(temporary, [...before.slice(-(REMOVALS_KEPT - 1)), kept].join('\n') + '\n', { mode: 0o600 })
+    // Every line kept, those from before too: no secret a command line carried, and at most [REMOVAL_LINE_MAX] bytes (the third
+    // review of #4221: the file keeps command lines with no age limit).
+    const kept = [...before.slice(-(REMOVALS_KEPT - 1)), line].map(keptLine)
+    writeFileSync(temporary, kept.join('\n') + '\n', { mode: 0o600 })
     chmodSync(temporary, 0o600)
     renameSync(temporary, file)
   } catch {

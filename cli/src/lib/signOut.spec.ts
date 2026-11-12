@@ -115,6 +115,18 @@ describe('the removals kept apart from harness.log', () => {
     expect(readdirSync(env.ADAPTER_DATA_DIR).filter(name => name.startsWith(`${REMOVALS_FILE}.`))).toEqual([])
   })
 
+  // The third review of #4221: the file keeps process command lines with no age limit, so what a command line carried stays.
+  it('keeps no secret a command line carried, in the new line or the ones kept before', () => {
+    const kept = join(env.ADAPTER_DATA_DIR, REMOVALS_FILE)
+    rmSync(kept, { force: true })
+    writeFileSync(kept, `an earlier removal · pid=4 (node cli.js --api-key=sk-live1234567890abcdef) · ${'y'.repeat(5_000)}\n`)
+    removeSignIn('logout', 'terminal', () => [{ pid: 2, command: 'curl -H "Authorization: Bearer abcdefghijklmnop" --token 0123456789abcdef0123456789abcdef' }])
+    const text = readFileSync(kept, 'utf8')
+    for (const secret of ['sk-live1234567890abcdef', 'abcdefghijklmnop', '0123456789abcdef0123456789abcdef']) expect(text).not.toContain(secret)
+    expect(text).toContain('<redacted>')
+    for (const line of text.trimEnd().split('\n')) expect(Buffer.byteLength(line)).toBeLessThanOrEqual(2_048)
+  })
+
   it('still removes the sign-in when the kept file cannot be written', () => {
     const kept = join(env.ADAPTER_DATA_DIR, REMOVALS_FILE)
     rmSync(kept, { recursive: true, force: true })

@@ -411,17 +411,38 @@ describe('an agent\'s answer to its launch line, in its chat (firstAnswers.ts)',
   it('says a failure once while it lasts, and again once a pass has gone through or another failure comes', async () => {
     const h = setup()
     h.read.mockImplementation(() => { throw new SuperTabHostError('NOT_SIGNED_IN', 'No.', 401) })
-    for (let pass = 0; pass < 12; pass++) await h.answers.tick()
+    // Each pass past the wait a signed-out pass leaves (the test below).
+    const later = () => { h.clock.now += 5 * 60_000 }
+    for (let pass = 0; pass < 12; pass++) { await h.answers.tick(); later() }
     expect(h.log.mock.calls.map(([line]) => line)).toEqual(['[super-tab] first answers: NOT_SIGNED_IN.'])
     h.read.mockImplementationOnce(() => { throw new SuperTabHostError('TIMEOUT', 'No.', 503) })
-    await h.answers.tick()
+    await h.answers.tick(); later()
     expect(h.log).toHaveBeenLastCalledWith('[super-tab] first answers: TIMEOUT.')
     h.state.rows = []
-    await h.answers.tick()
+    await h.answers.tick(); later()
     h.state.rows = [{ tabId: 'tab', agent: ARLO }]
     await h.answers.tick()
     expect(h.log.mock.calls.map(([line]) => line)).toEqual(['[super-tab] first answers: NOT_SIGNED_IN.',
       '[super-tab] first answers: TIMEOUT.', '[super-tab] first answers: NOT_SIGNED_IN.'])
+  })
+
+  // The third review of #4221: signed out, or refused by the server, first answers still asked every 5 s. It waits longer each
+  // time, at most 5 minutes, and asks every pass again once one goes through.
+  it('waits longer between passes while signed out or refused, and goes back to every pass once one goes through', async () => {
+    const h = setup()
+    let passes = 0
+    h.read.mockImplementation(() => { passes++; throw new SuperTabHostError('UNAUTHORIZED', 'No.', 401) })
+    for (let second = 0; second < 600; second += 5) { await h.answers.tick(); h.clock.now += 5_000 }
+    // Passes at 0, 5, 15, 35, 75, 155 and 315 s: seven in ten minutes, where every 5 s made 120.
+    expect(passes).toBe(7)
+    expect(h.log).toHaveBeenCalledTimes(1)
+    h.read.mockImplementation(async () => ({ conversations: [] }))
+    h.clock.now += 5 * 60_000
+    await h.answers.tick()
+    passes = 0
+    h.read.mockImplementation(async () => { passes++; return { conversations: [] } })
+    for (let pass = 0; pass < 3; pass++) { await h.answers.tick(); h.clock.now += 5_000 }
+    expect(passes).toBe(3)
   })
 
   it('reads a launch line as Desktop writes it, and nothing that only begins like one', () => {

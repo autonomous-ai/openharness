@@ -34,6 +34,8 @@ type Json = Record<string, unknown>
 
 /** How often the agents still to be looked at are looked at. */
 export const FIRST_ANSWER_INTERVAL_MS = 5_000
+/** The longest wait between passes while signed out or refused by the server. */
+const QUIET_MAX_MS = 5 * 60_000
 /** How long an agent may show no ended turn before it is let go. */
 export const FIRST_ANSWER_GIVE_UP_MS = 60 * 60_000
 /** The most agents the file remembers as looked at; the oldest go first. */
@@ -83,6 +85,9 @@ export class FirstAnswers {
   private running: Promise<void> | null = null
   /** The failure last said, until a pass goes through. */
   private failing: string | null = null
+  /** Signed out or refused: how long it waits between passes, and until when. */
+  private quietWait = 0
+  private quietUntil = 0
   private memory: Memory | null = null
   private stopEnds: (() => void) | null = null
   /** The first turn ends heard of each terminal, by its id. */
@@ -138,9 +143,16 @@ export class FirstAnswers {
   }
 
   /** One pass; one still running is not started twice. A failure is said once while it lasts (anh Dee's Mac, 2026-11-12: signed
-   *  out, each pass logged it every 5 s until harness.log reached its cap), and again once a pass goes through or another comes. */
+   *  out, each pass logged it every 5 s until harness.log reached its cap), and again once a pass goes through or another comes.
+   *  Signed out or refused by the server, it waits longer between passes each time, at most [QUIET_MAX_MS] (the third review of
+   *  #4221), and goes back to every pass once one goes through. */
   tick(): Promise<void> {
-    this.running ??= this.pass().then(() => { this.failing = null }, error => {
+    if (!this.running && this.now() < this.quietUntil) return Promise.resolve()
+    this.running ??= this.pass().then(() => { this.failing = null; this.quietWait = 0; this.quietUntil = 0 }, error => {
+      if (error instanceof SuperTabHostError && (error.code === 'NOT_SIGNED_IN' || error.status === 401)) {
+        this.quietWait = this.quietWait ? Math.min(this.quietWait * 2, QUIET_MAX_MS) : FIRST_ANSWER_INTERVAL_MS
+        this.quietUntil = this.now() + this.quietWait
+      }
       const name = named(error)
       if (name === this.failing) return
       this.failing = name
