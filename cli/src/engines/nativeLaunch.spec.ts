@@ -377,6 +377,13 @@ it('an explicit claudeHome is adopted as a known home, so its transcripts bind',
   expect(confirmHome).toHaveBeenCalledWith('claude', '/fixture/profile')
 })
 
+it('exports a Hermes home the process named, and never one Harness worked out', async () => {
+  const named = await inspectNativeLaunch('hermes', { hermesHome: '/data/profiles/work' })
+  expect(named.ok && named.launch.environment.HERMES_HOME).toBe('/data/profiles/work')
+  const derived = await inspectNativeLaunch('hermes', { hermesHome: '/data/agents/a1/.hermes', hermesHomeDerived: true })
+  expect(derived.ok && derived.launch.environment.HERMES_HOME).toBe('/fixture/hermes')   // the launch shell's own, untouched
+})
+
 describe('a local OpenClaw launch', () => {
   const AGENT = 'aaaaaaaa-1111-4222-8333-000000000001'
   const LOCAL_CLEAR = ['OPENCLAW_CONFIG_PATH', 'OPENCLAW_AGENT_DIR', 'OPENCLAW_OAUTH_DIR', 'OPENCLAW_WORKSPACE_DIR']
