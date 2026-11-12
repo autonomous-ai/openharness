@@ -419,6 +419,28 @@ withBuiltin('pages by bytes', () => {
     expect(reads.every((read) => read.ok && read.bytes <= read.maxBuffer && withinBudget(read))).toBe(true)
   })
 
+  // #4065: a hydrate is several pages now, and one failing on a later page left the reader marked hydrated with no
+  // cursor, so the next poll read the window live from its start and replayed the whole conversation.
+  it('a hydrate whose later page fails hydrates again on the next poll, never replaying the history live', async () => {
+    const { path, db } = wal('plain')
+    append(db, windowOf(db, KEY), upTo(8, 37).map((seq) => ({ seq, json: message(`big-${seq}`, 500 * KIB) })))
+    const actual = await vi.importActual<typeof import('../../lib/sqliteRead.js')>('../../lib/sqliteRead.js')
+    let pages = 0
+    vi.mocked(sqliteReadAll).mockImplementation(async (...args) =>
+      args[1].startsWith('WITH sized AS (') && ++pages === 2 ? { ok: false, reason: 'transient' } : actual.sqliteReadAll(...args))
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const { reader: tail, deps, events } = reader(path, KEY)
+    try {
+      await tail.start()
+      await vi.waitFor(() => expect(deps.onHydrated).toHaveBeenCalledTimes(1), { timeout: 10_000 })
+    } finally {
+      tail.stop()
+      vi.mocked(sqliteReadAll).mockImplementation(actual.sqliteReadAll)
+    }
+    expect(seqs(deps.onHydrated.mock.calls[0][0])).toEqual([0, 1, 2, 3, 6, ...upTo(8, 37)])
+    expect(events).toEqual([])
+  })
+
   it('the live tail drains a backlog over its polls, a page at a time', async () => {
     const { path, db } = wal('plain')
     const { reader: tail, events } = reader(path, KEY)
