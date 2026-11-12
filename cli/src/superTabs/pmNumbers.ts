@@ -128,7 +128,8 @@ export function numbersOf(input: { now: number; crew: Crew; pm: string; issues: 
   for (const task of done) activity = Math.max(activity, timeOf(task.closed_at))
   const closed = done.filter(task => within(task.closed_at)).length
   const landedBy = [...by].map(([label, count]): [string, number] => [names.get(label)!, count]).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-  return { builders: crew.builders.length, free, open: read.free.size - picks.length,
+  // A free task that waits for what it comes after is open too (assign/crew.ts readProblem): given to nobody yet.
+  return { builders: crew.builders.length, free, open: read.free.size + read.waits - picks.length,
     // No size Harness reads (assign/crew.ts SIZES): one labelled size:xl is given to nobody as surely as one with none.
     unsized: tasks.filter(task => !labelsOf(task).some(label => /^size:[sml]$/.test(label) || label.startsWith('builder:') || label === 'status:taken')).length,
     held: [...read.open.values()].reduce((sum, count) => sum + count, 0) + picks.length,
