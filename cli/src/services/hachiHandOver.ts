@@ -72,7 +72,6 @@ export function createHachiHandOver(deps: HachiHandOverDeps) {
   const look = (live: readonly RegisteredSession[]): Promise<void> | null => {
     const self = deps.self()
     const starters = new Set(deps.ledger.all().filter((row) => row.by.hachi && row.by.machineId === self).map((row) => row.by.agentId))
-    for (const id of goneSince.keys()) if (!starters.has(id)) goneSince.delete(id)
     const due: string[] = []
     for (const agentId of starters) {
       if (live.some((s) => s.agentId === agentId && s.active) || !hachiChildren({ machineId: self, agentId }).length) { goneSince.delete(agentId); continue }

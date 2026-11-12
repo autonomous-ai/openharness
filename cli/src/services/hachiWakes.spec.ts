@@ -145,3 +145,21 @@ describe('Hachi\'s wakes', () => {
     expect(off.sent).toEqual([])
   })
 })
+
+describe('Hachi\'s wakes, the edges', () => {
+  it('times no answer for a question it found already open, says a harness gone and then stopped once, and what a send threw', async () => {
+    const t = setup({ send: async () => { throw 'no line' } })
+    const api = child('api'), rev = child('rev')
+    t.wakes.heard(api, 'needs_person')
+    t.wakes.heard(api, 'working')
+    expect(t.count.mock.calls.filter(([m]) => String(m).startsWith('hachi_needs_person_answer_'))).toEqual([])
+    // Answered with a no that ends its turn: done.
+    t.wakes.heard(api, 'needs_person')
+    t.wakes.heard(api, 'idle')
+    t.wakes.heard(rev, 'working')
+    t.wakes.heard(rev, 'gone')
+    t.wakes.heard(rev, 'stopped')
+    await t.advance(WAKE_COALESCE_MS)
+    expect(t.log).toHaveBeenCalledWith('[hachi] the wake was not delivered: no line')
+  })
+})

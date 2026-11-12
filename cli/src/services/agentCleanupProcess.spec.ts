@@ -79,7 +79,7 @@ describe('the agent cleanup in its own process', () => {
     const query = vi.fn(async (name: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> =>
       (name === 'lastActivity' ? { at: payload.agentId === 'k1' ? 1_000 : null } : { closed: true }))
     const ask = (name: string, payload: Record<string, unknown>) => query(name, payload)
-    const api = agentCleanupCoreApi(dir, () => [kid('k1')], ask)
+    const api = agentCleanupCoreApi(dir, () => [kid('k1')], ask, () => null)
     expect(await api.agents.lastActivity!('k1')).toBe(1_000)
     expect(await api.agents.lastActivity!('k2')).toBeNull()
     expect(await api.agents.closeStarted!('k1', 'now')).toEqual({ closed: true })
@@ -88,7 +88,7 @@ describe('the agent cleanup in its own process', () => {
     // What Hachi started handed to the person is counted by the core (core/agentQueries.ts `count`).
     api.count!('hachi_handed_to_person')
     expect(query).toHaveBeenLastCalledWith('count', { metric: 'hachi_handed_to_person' })
-    const gone = agentCleanupCoreApi(dir, () => [], async () => { throw new Error('the core went away') })
+    const gone = agentCleanupCoreApi(dir, () => [], async () => { throw new Error('the core went away') }, () => null)
     expect(await gone.agents.lastActivity!('k1')).toBeNull()
     expect(await gone.agents.closeStarted!('k1', 'idle')).toEqual({ error: 'SERVICE_UNAVAILABLE' })
   })

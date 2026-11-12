@@ -51,6 +51,8 @@ export interface HachiDeps {
 /** A line and what it follows: the ids it named, and when another machine's lease is due again. */
 interface Following { line: Daemon; ids: string; renewAt: number }
 
+const said = (error: unknown): string => (error instanceof Error ? error.message : String(error))
+
 /** What a pushed event says a harness is doing, from the closed list; null for what changes nothing. */
 function stateOf(event: PushedEvent): HeardState | null {
   const state = event.payload.state
@@ -112,10 +114,9 @@ export function startHachi(core: CoreApi, given: Partial<HachiDeps> = {}): { sto
       const c = children.get(child.key)
       return !!c && !!hachi && ledger.closedBy({ machineId: core.daemon.machineId(), agentId: hachi.agentId }, c) !== null
     },
+    // Hachi's own line, open while Hachi runs here; gone meanwhile, the line is not delivered (hachiWakes.ts counts it).
     send: async (items) => {
-      const self = following.get('self')
-      if (!self || !hachi) return false
-      const reply = await self.line.request('agent_messages', { action: 'wake', agentId: hachi.agentId, items })
+      const reply = await following.get('self')!.line.request('agent_messages', { action: 'wake', agentId: hachi!.agentId, items })
       if (reply.error) deps.log(`[hachi] the wake was not taken: ${String(reply.error)}`)
       return !reply.error
     },
@@ -140,7 +141,6 @@ export function startHachi(core: CoreApi, given: Partial<HachiDeps> = {}): { sto
   /** Follows [ids] over the line [key], to [machineId]: asked again when they changed, a lease when it is due, and a
    *  watch here at every look, which also finds a line that dropped. */
   const follow = async (key: string, machineId: string, ids: string[], heard: (agentId: string, event: PushedEvent) => void): Promise<void> => {
-    if (!ids.length) { unfollow(key); return }
     const named = ids.join(',')
     let current = following.get(key)
     const away = machineId !== core.daemon.machineId()
@@ -160,7 +160,7 @@ export function startHachi(core: CoreApi, given: Partial<HachiDeps> = {}): { sto
       current.ids = named
       current.renewAt = deps.now() + RENEW_MS
     } catch (error) {
-      deps.log(`[hachi] could not follow ${ids.length} harness${ids.length === 1 ? '' : 'es'} on ${names(machineId, core.daemon.machineId())}: ${error instanceof Error ? error.message : String(error)}`)
+      deps.log(`[hachi] could not follow what Hachi started on ${names(machineId, core.daemon.machineId())}: ${said(error)}. Asked again at the next look.`)
       unfollow(key)
     }
   }
@@ -176,12 +176,12 @@ export function startHachi(core: CoreApi, given: Partial<HachiDeps> = {}): { sto
     let line: Daemon | null = null
     try {
       line = await deps.open(core.daemon.machineId())
-      const reply = await line.request('agent_close', { agentId: running.agentId, sessionId: running.sessionId ?? '',
+      const reply = await line.request('agent_close', { agentId: running.agentId, sessionId: running.sessionId,
         createdAt: new Date(running.registeredAt).toISOString(), mode: 'now' })
       if (reply.error) throw new Error(String(reply.error))
       deps.log('[hachi] Hachi is off: closed Hachi, its conversation kept.')
     } catch (error) {
-      deps.log(`[hachi] Hachi is off, but Hachi could not be closed: ${error instanceof Error ? error.message : String(error)}`)
+      deps.log(`[hachi] Hachi is off, but Hachi could not be closed: ${said(error)}`)
     } finally { line?.close() }
   }
 
@@ -191,7 +191,8 @@ export function startHachi(core: CoreApi, given: Partial<HachiDeps> = {}): { sto
     on = readAgentSettings(core.dataDir).hachi
     if (!on) { if (was) await off(); else teardown(); return }
     hachi = core.agents.live().find((s) => s.dsh === HACHI_ID && s.active) ?? null
-    if (!hachi) { teardown(); return }
+    // No Hachi runs here (closed, its process gone): nothing to follow, and nothing waits to wake it.
+    if (!hachi) { wakes.stop(); teardown(); return }
     names = machineNames(core.dataDir)
     const self = core.daemon.machineId()
     const rows = ledger.childrenOf({ machineId: self, agentId: hachi.agentId }).filter((r) => deps.now() - r.at <= FOLLOWED_WITHIN_MS)
@@ -226,7 +227,7 @@ export function startHachi(core: CoreApi, given: Partial<HachiDeps> = {}): { sto
     looking = (async () => {
       do {
         again = false
-        try { await look() } catch (error) { deps.log(`[hachi] a look failed: ${error instanceof Error ? error.message : String(error)}`) }
+        try { await look() } catch (error) { deps.log(`[hachi] a look failed: ${said(error)}`) }
       } while (again && !stopped)
     })().finally(() => { looking = null })
   }

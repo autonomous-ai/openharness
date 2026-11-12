@@ -294,6 +294,14 @@ describe('handing what Hachi started to the person, however Hachi closes', () =>
     expect(t.closeStarted.mock.calls).toEqual([['lead-kid', 'now']])
   })
 
+  it('asks another machine over this daemon\'s own socket by default, and says it when no daemon answers', async () => {
+    startedByHachi('far', 'machine-2')
+    const t = setup([], {})
+    t.cleanup.port.closed('hachi')
+    await vi.waitFor(() => expect(t.log).toHaveBeenCalledWith(expect.stringMatching(/^\[hachi\] could not hand far to the person on its machine yet: .*Asked again at the next look\.$/)))
+    t.cleanup.port.stop()
+  })
+
   it('hands them over once Hachi has been gone a while without a stop (its process died, a reboot), never at a blip', async () => {
     const sessions = [row('hachi', { active: true, dsh: 'autonomous/hachi' }), hachiKid('api')]
     startedByHachi('api')
