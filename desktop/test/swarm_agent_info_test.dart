@@ -30,6 +30,7 @@ void main() {
     bool online = true,
     String folder = '/Users/dee/lampOS',
     String? workspace,
+    String? effort,
   }) {
     final app = createApp(connected: true);
     addTearDown(app.dispose);
@@ -50,6 +51,7 @@ void main() {
           name: 'first builder',
           engine: 'claude',
           modelName: 'Opus 5.5',
+          modelEffort: effort,
           workspace: workspace,
           project: AgentProject(name: 'lampOS', cwd: folder),
           terminalAvailable: true,
@@ -59,7 +61,8 @@ void main() {
     return app;
   }
 
-  /// lampOS's Swarm at [size] with [chat] open, its person named Dee; [project] renames the project.
+  /// lampOS's Swarm at [size] with [chat] open, its person named Dee; [project] renames the project, and [configuration]
+  /// is added to the open chat's agent's Swarm configuration.
   Future<void> show(
     WidgetTester tester,
     Size size, {
@@ -67,6 +70,7 @@ void main() {
     AppNotifier? app,
     SwarmGitHub? github,
     String? project,
+    Map<String, dynamic> configuration = const {},
   }) async {
     terminalOpen = false;
     await tester.binding.setSurfaceSize(size);
@@ -75,6 +79,13 @@ void main() {
     (server.state['people'] as List).cast<Map<String, dynamic>>().firstWhere(
       (p) => p['id'] == 'owner',
     )['name'] = 'Dee';
+    final agent = (server.state['agents'] as List)
+        .cast<Map<String, dynamic>>()
+        .firstWhere((a) => a['chatId'] == chat);
+    agent['configuration'] = {
+      ...agent['configuration'] as Map,
+      ...configuration,
+    };
     if (project != null) {
       (server.state['projects'] as List)
               .cast<Map<String, dynamic>>()
@@ -164,6 +175,50 @@ void main() {
     expect(key('swarm-agent-info'), findsOneWidget);
     await tap(tester, key('swarm-info-close'));
     expect(key('swarm-agent-info'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  // anh Dee, 2026-11-12 (#4208): the model alone did not say how hard the agent thinks.
+  testWidgets('Info shows the effort beside the model: as its computer observed it, else as the Swarm configured it, '
+      'and the model alone when neither says', (tester) async {
+    await show(tester, const Size(1440, 900), app: app(effort: 'xhigh'));
+    await tap(tester, key('swarm-info-button'));
+    expectRow('model', 'Opus 5.5 · XHigh');
+    // The computer's reading first, as the model's is.
+    await show(
+      tester,
+      const Size(1440, 900),
+      app: app(effort: 'xhigh'),
+      configuration: {'effort': 'high'},
+    );
+    await tap(tester, key('swarm-info-button'));
+    expectRow('model', 'Opus 5.5 · XHigh');
+    await show(
+      tester,
+      const Size(1440, 900),
+      app: app(),
+      configuration: {'effort': 'high'},
+    );
+    await tap(tester, key('swarm-info-button'));
+    expectRow('model', 'Opus 5.5 · High');
+    // No view of the computer: the model and its effort as the Swarm configured them.
+    await show(
+      tester,
+      const Size(1440, 900),
+      chat: 'agent-chat-third',
+      configuration: {'model': 'claude-opus-5-5', 'effort': 'xhigh'},
+    );
+    await tap(tester, key('swarm-info-button'));
+    expectRow('model', 'Opus 5.5 · XHigh');
+    // Nothing says it: no effort is guessed.
+    await show(
+      tester,
+      const Size(1440, 900),
+      chat: 'agent-chat-third',
+      configuration: {'model': 'claude-opus-5-5', 'effort': '  '},
+    );
+    await tap(tester, key('swarm-info-button'));
+    expectRow('model', 'Opus 5.5');
     expect(tester.takeException(), isNull);
   });
 

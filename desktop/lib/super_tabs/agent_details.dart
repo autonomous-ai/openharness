@@ -52,6 +52,12 @@ class SuperTabAgentInfo {
         final String id => modelDisplayName(id),
         null => null,
       };
+
+  /// How hard the model thinks, as the engine says it ("xhigh"), in the order [model] is read: the native agent's
+  /// reading, then the configuration. Absent when neither says: no default is guessed.
+  String? get effort =>
+      _known(native?.modelEffort) ??
+      _known(agent.configuration['effort'] as String?);
   String? get engine =>
       _known(agent.engine) == null ? null : engineIdentity(agent.engine).label;
 

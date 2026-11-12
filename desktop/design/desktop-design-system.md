@@ -549,7 +549,9 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   12-point grey label in an 88-point column and its value in 13 points:
   `Owner` (its person), `Project` (`lampos · PM` or `· Builder`, one line per
   project), `Computer` (`Mac Studio · online`), `Engine` (`Claude Code`, else
-  the app's name for it, `OpenCode`), `Model` (`Opus 5.5`), `State` in the
+  the app's name for it, `OpenCode`), `Model` (`Opus 5.5 · XHigh`, its effort
+  as its computer or else the Swarm says it, and the model alone when neither
+  does), `State` in the
   words its line and the roster use (`Working`, `Idle`, `Needs input`,
   `Limited until 14:00`, `Offline`), `Task` (`#5759` and its title: the issues
   of its projects' boards that are taken and labelled for it, read with the
