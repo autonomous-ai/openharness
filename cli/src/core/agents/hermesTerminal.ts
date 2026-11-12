@@ -12,6 +12,7 @@ import { START_SLACK_MS } from '../../lib/sessionRepair.js'
 import type { DiscoveredTerminalAgent } from '../../lib/terminalAgentDiscovery.js'
 import { terminalRouteKey } from '../../lib/terminalRuntime.js'
 import type { TerminalPaneInfo, TerminalRuntimeRef } from '../../lib/terminalTypes.js'
+import { REPAIR_RETRY_MS } from './bind.js'
 
 /** Agents remembered; past it, those the registry no longer has are dropped, or all (one more read and line each). */
 const MAX_AGENTS = 256
@@ -32,6 +33,7 @@ export interface HermesTerminalDeps {
   storeStamp: (home: string) => Promise<string>
   /** Told each time an agent's process is first seen keeping a record in a home. */
   recordSeen: (home: string) => void
+  now: () => number
 }
 export type HermesObserved = Pick<DiscoveredTerminalAgent, 'processIdentity' | 'runtimes' | 'primaryRuntimeKey' | 'hermesHome'> & { sandboxed: boolean }
 export interface HermesPass { current: () => boolean; mayClaim: (sessionId: string) => boolean; hold: (error: unknown) => void }
@@ -40,9 +42,9 @@ export type HermesFollow = 'none' | 'wait' | { sessionId: string; hermesHome?: s
 
 /**
  * What the record at a stamp said: the answer it settled on, or the session it names while that is decided, with the
- * store as it was when it last had no row for it or could not be read.
+ * store as it was when it last had no row for it or could not be read, and for a read that failed, when to ask anyway.
  */
-type Known = { stamp: string; settled: HermesFollow } | { stamp: string; sessionId: string; asked?: string }
+type Known = { stamp: string; settled: HermesFollow } | { stamp: string; sessionId: string; asked?: { store: string; until?: number } }
 
 /** What is kept of one process of an agent's. */
 interface Run {
@@ -127,9 +129,15 @@ export function createHermesTerminal(deps: HermesTerminalDeps) {
     if (!pass.mayClaim(sessionId)) return 'wait'
     // Hermes writes a CLI session's row on its first turn (run_agent.py `_ensure_db_session`), however long after the
     // record names it. A store that had no row, or could not be read, is asked again on the first pass after it changed:
-    // a first message after any idle binds within a pass, where the repair's minute made it wait up to one.
+    // a first message after any idle binds within a pass, where the repair's minute made it wait up to one. A read can
+    // also fail on the daemon's side (its read threads busy past the deadline) with nothing written since: that one is
+    // asked again in the repair's minute too.
     const store = await deps.storeStamp(home)
-    if (known.asked === store) return 'wait'
+    if (known.asked?.store === store && (known.asked.until === undefined || deps.now() < known.asked.until)) return 'wait'
+    const failed = (): 'wait' => {
+      known.asked = { store, until: deps.now() + REPAIR_RETRY_MS }
+      return 'wait'
+    }
     // A resume not yet confirmed is failed by any other session (registry.ts RESUME_SESSION_MISMATCH), and a `/new` typed
     // before a pass read the record leaves it naming only the new one. Hermes ends the session a terminal leaves: the
     // resumed one ended since this process started was open in it, and is confirmed first; the next pass follows.
@@ -138,8 +146,7 @@ export function createHermesTerminal(deps: HermesTerminalDeps) {
       try {
         left = await deps.endedSince(home, agent.sessionId, startedAtMs - START_SLACK_MS)
       } catch {
-        known.asked = store
-        return 'wait'
+        return failed()
       }
       if (!pass.current()) return 'wait'
       if (left) return { sessionId: agent.sessionId }
@@ -150,14 +157,13 @@ export function createHermesTerminal(deps: HermesTerminalDeps) {
     } catch (error) {
       // A bound agent keeps the session it is on; an unbound one is held, as the repair's unreadable store holds it.
       if (!agent.sessionId) pass.hold(error)
-      known.asked = store
-      return 'wait'
+      return failed()
     }
     if (!pass.current()) return 'wait'
     // A fresh record never falls back: the repair could only bind a session this terminal is not on. Waiting for the
     // row is how every new session starts, so nothing is said of it.
     if (kind === 'waiting') {
-      known.asked = store
+      known.asked = { store }
       return 'wait'
     }
     if (kind === 'other') {

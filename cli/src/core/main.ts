@@ -2049,6 +2049,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       endedSince: hermesSessionEndedSince,
       storeStamp: hermesStoreStamp,
       recordSeen: (home) => { void hermesRecordSeen(home) },
+      now: Date.now,
     }),
   })
   binding.whileChanging((agentId) => restorePanes.busy(agentId))

@@ -206,7 +206,8 @@ Logged once per agent, with no paths, content or session text:
    `hermes --version` per installed executable, cached; one `paneInfo` per Hermes process. Hermes writes a CLI
    session's row on its first turn, so a record waiting for its store row costs one `lstat` each of `<home>/state.db-wal`
    and `<home>/state.db` (mtime, size) per pass, and the store is asked again on the first pass after either changed,
-   with no cap: nothing while neither changed. A store that cannot be read is asked again the same way.
+   with no cap: nothing while neither changed. A store that cannot be read is asked again the same way, or a minute on
+   (the repair's rhythm), since a read can fail on the daemon's side with nothing written to the store.
 4. **Scale (10x).** 10x Hermes agents is 10x one `stat` per 5 s pass. The metric that warns first is the bind pass's
    duration, already logged when slow.
 5. **Compatibility.** No wire or API change. A previous release ignores `hermesHomeDerived` and exports the home on a
