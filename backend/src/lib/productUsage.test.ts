@@ -115,6 +115,25 @@ it('names launch refusals and agent-started launches', () => {
     'launch_refused_code_session_in_harness', 'launch_refused_code_invalid_request']) expect(metrics.has(m), m).toBe(true)
 })
 
+it('names Hachi\'s counters, as its design lists them, before any client sends one', () => {
+  // docs/design/2026-11-12-hachi.md, Measures: an older backend keeps a report without a counter it does not know, so
+  // the backend names them first. Counts only: no goal text, harness, machine, project or id.
+  const metrics = new Set<string>(PRODUCT_USAGE_METRICS)
+  expect(metrics.size).toBe(PRODUCT_USAGE_METRICS.length)
+  const hachi = [
+    'ui_desktop_hachi_switch_on', 'ui_desktop_hachi_switch_off', 'hachi_person_turn_days',
+    'ui_desktop_hachi_open_shortcut', 'ui_desktop_hachi_open_tab', 'ui_desktop_hachi_open_palette', 'ui_desktop_hachi_open_welcome',
+    ...['started', 'created', 'failed', 'refused'].flatMap(outcome => ['claude', 'codex', 'other'].map(engine => `launch_hachi_${outcome}_${engine}`)),
+    'hachi_goal_opened', 'hachi_goal_done', 'hachi_goal_left', 'hachi_closed_started', 'hachi_handed_to_person',
+    'hachi_turns_person', 'hachi_turns_wake', 'hachi_wake_needs_person', 'hachi_wake_done', 'hachi_wake_stopped',
+    'hachi_wake_dropped_limit', 'hachi_wake_dropped_off',
+    'hachi_notice_goal_done', 'hachi_needs_person_answer_under_1m', 'hachi_needs_person_answer_1m_to_15m', 'hachi_needs_person_answer_over_15m',
+    'hachi_open_failed_home_asleep', 'hachi_open_failed_create_failed', 'hachi_mailbox_failed',
+  ]
+  for (const m of hachi) expect(metrics.has(m), m).toBe(true)
+  expect(PRODUCT_USAGE_METRICS.filter(m => m.includes('hachi')).sort()).toEqual([...hachi].sort())
+})
+
 it('names the browser-from-chat counters', () => {
   const metrics = new Set<string>(PRODUCT_USAGE_METRICS)
   expect(metrics.size).toBe(PRODUCT_USAGE_METRICS.length)

@@ -4,8 +4,9 @@
  * cards and Buddy screens on a pseudo-terminal, and a window on the local socket. The cards travel the production path,
  * read by the Super Tab service, checked on their way into the core and handed to the devices process, which once lost
  * the Buddy's session id there and left a tap on its notification opening a terminal tab. What the window is told is
- * checked: the Buddy chat for the Buddy side and the Buddy's tap, the Lead chat for the PM side, a tile for any other agent,
- * and the Buddy's session id never on the cable.
+ * checked: the Buddy chat for a picked project and for the Buddy's tap, nothing for a swipe to a side (the dial shows its
+ * Buddy only since task #3908, and has no PM side), a tile for any other agent, and the Buddy's session id never on the
+ * cable.
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -30,7 +31,7 @@ afterEach(async () => {
   await backend?.close(); backend = undefined
 })
 
-it('opens the Buddy chat for the Buddy side and the Buddy\'s tap, the Lead chat for the PM side, and a tile for any other agent', async () => {
+it('opens the Buddy chat for a picked project and the Buddy\'s tap, nothing for a swipe to a side, and a tile for any other agent', async () => {
   const relay = await FakeBackend.start(); backend = relay; relay.addMachine(ME); relay.me = PERSON
   const device = await FakeDial.open({ capabilities: ROUND }); dial = device
   const d = await IsolatedDaemon.create({ env: {
@@ -96,21 +97,17 @@ it('opens the Buddy chat for the Buddy side and the Buddy\'s tap, the Lead chat 
   expect(cards.id).toBe(TAB)
 
   const told = (since: number) => window.frames.slice(since).filter((f) => f.type === 'dial_super_tab' || f.type === 'dial_open')
-  // The dial picks the project, swipes to the Buddy side, and back to the PM.
+  // The dial picks the project: the reader's Buddy chat there, the only face the dial shows.
   let since = window.frames.length
   device.send({ t: 'supertab.select', tab: TAB, lead: 'lead1' })
   await window.waitFor((f) => f.type === 'dial_super_tab', 15_000, 'the pick', since)
-  since = window.frames.length
-  device.send({ t: 'supertab.side', tab: TAB, side: 'buddy' })
-  await window.waitFor((f) => f.type === 'dial_super_tab', 15_000, 'the Buddy side', since)
   expect(told(since).map((f) => f.payload)).toEqual([{ superTabId: TAB, projectId: 'web', chat: 'buddy' }])
+
+  // A swipe to either side opens nothing (task #3908). Then a tap on the Buddy's notification: its chat in the Swarm tab,
+  // and no tile. The cable takes the dial's frames in order, so the tap's is the only thing the window is told.
   since = window.frames.length
   device.send({ t: 'supertab.side', tab: TAB, side: 'pm' })
-  await window.waitFor((f) => f.type === 'dial_super_tab', 15_000, 'the PM side', since)
-  expect(told(since).map((f) => f.payload)).toEqual([{ superTabId: TAB, projectId: 'web', chat: 'pm' }])
-
-  // A tap on the Buddy's notification: its chat in the Swarm tab, and no tile.
-  since = window.frames.length
+  device.send({ t: 'supertab.side', tab: TAB, side: 'buddy' })
   device.send({ t: 'agent.open', agentId: buddyHarness })
   await window.waitFor((f) => f.type === 'dial_super_tab' || f.type === 'dial_open', 15_000, 'the Buddy\'s tap', since)
   await new Promise((resolve) => setTimeout(resolve, 500))
