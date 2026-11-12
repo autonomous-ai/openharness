@@ -116,7 +116,7 @@ export async function readStorePool(
       const budget = remaining()
       verify(store.files)
       const result = await sqliteReadAll(store.path, sql, params, {
-        busyTimeoutMs: Math.min(250, budget), cliTimeoutMs: budget, maxBuffer,
+        busyTimeoutMs: Math.min(250, budget), timeoutMs: budget, maxBuffer,
       })
       if (!result.ok) unavailable('a native store query is unavailable')
       verify(store.files)
