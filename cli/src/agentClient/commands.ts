@@ -32,7 +32,7 @@ import { messagesRpc, type Rpc } from '../messages/rpc.js'
 import { PERSON_AGENT_ID, REPLY_OFF_TEXT } from '../messages/replyLocal.js'
 import { TELL_OFF_TEXT } from '../messages/tell.js'
 import { sendPane } from '../messages/command.js'
-import { asSaid, callerOf, clip, cloudMeta, cloudTurn, forAgent, isAgent, lastTurn, matching, outsideCaller, rowsOf, stateOf, STOPPED_WITHIN_MS, type Caller, type CloudMeta, type Frame, type HistoryEvent, type Row, type State } from './model.js'
+import { asSaid, callerOf, clip, cloudMeta, cloudTurn, failureOf, forAgent, isAgent, lastTurn, matching, outsideCaller, rowsOf, stateOf, STOPPED_WITHIN_MS, type Caller, type CloudMeta, type Failure, type Frame, type HistoryEvent, type Row, type State } from './model.js'
 
 export interface ClientDeps {
   pane?: string | undefined
@@ -124,6 +124,12 @@ Saves the harness's screen and stops it. Its conversation is kept: the person ca
 It is refused while the harness is working, unless --now. An agent may close only harnesses it started:
 closing another's exits 5.
 ${ON_MACHINE}`
+export const DELETE_USAGE = `Usage: harness delete <name> [--json]
+
+Stops the harness and erases its conversation and everything Harness keeps of it: its saved screen, recaps, search
+rows and task records. Its folder is kept. An engine's own store Harness cannot erase is kept, and the output says so.
+A closed harness can be deleted too. An agent may delete only harnesses it started: deleting another's exits 5.
+This computer only.`
 export const WHOAMI_USAGE = `Usage: harness whoami [--json]
 
 Who you are to Harness: which agent, on which machine, inside Harness or not; whether you may start harnesses now
@@ -562,6 +568,9 @@ const wantsJson = (argv: readonly string[]): boolean => argv.includes('--json')
 
 // ── ps ─────────────────────────────────────────────────────────────────────────────────────────────
 
+/** A failed launch as `ps` and `show` say it: its words, or its code when it has none. */
+const failedLine = (failure: Failure): string => `failed: ${failure.detail ?? failure.error}`
+
 export function formatRows(rows: Row[], now: number, on = 'this machine'): string {
   if (!rows.length) return `No harnesses on ${on}.`
   const width = Math.min(32, Math.max(4, ...rows.map((r) => r.name.length)))
@@ -569,7 +578,8 @@ export function formatRows(rows: Row[], now: number, on = 'this machine'): strin
   const lines = rows.map((r) => {
     const name = clip(r.name, width).padEnd(width)
     const line = `${name}  ${clip(r.agent, 11).padEnd(11)}  ${r.state.padEnd(11)}  ${clip(r.self ? `${r.startedBy} (you)` : r.startedBy, 12).padEnd(12)}  ${ago(r.lastActive, now).padEnd(6)}  ${tilde(r.folder)}${r.branch ? ` (${r.branch})` : ''}`
-    const about = r.about ?? (r.asks?.length ? `asked: ${r.asks[0]}` : '')
+    // Why it started nothing comes first: what it was about never ran.
+    const about = r.failure ? failedLine(r.failure) : r.about ?? (r.asks?.length ? `asked: ${r.asks[0]}` : '')
     return about ? `${line}\n${' '.repeat(2)}${clip(about.replace(/\s+/g, ' '), 200)}` : line
   })
   return [head, ...lines].join('\n')
@@ -749,12 +759,14 @@ export function showCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
         // `close` and `tell` take no cloud harness.
         : showNext(s.env, state, t.yours && t.frame.location !== 'cloud', at, tellsHere(o, s.pane))
       const cloud = cloudMeta(t.frame)
+      const failure = failureOf(t.frame)
       const result = {
         name: t.frame.name, id: t.frame.id, agent: engineName(t.frame.engine ?? ''), machine: t.machine, state, startedBy,
         folder: t.frame.project?.cwd ?? null, branch: t.frame.project?.branch ?? null,
         ask: turn?.ask ?? null, answer: clip(answer, chars), truncated: answer.length > chars, tools: turn?.tools ?? 0, next,
         ...(state === 'needs-input' ? { needsPerson: true } : {}),
         ...(cloud ? { cloud } : {}),
+        ...(failure ? { failure } : {}),
         ...(t.frame.cloud?.links?.length ? { links: t.frame.cloud.links } : {}),
         ...(pendingTell ? { told: { at: new Date(pendingTell.at).toISOString(), taken: false } } : {}),
       }
@@ -762,6 +774,7 @@ export function showCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
       else {
         s.out(`${result.name} on ${result.machine}: ${stateSaid(state)} · ${result.agent} · started by ${startedBy}`)
         s.out(`folder: ${tilde(result.folder)}${result.branch ? ` (${result.branch})` : ''}`)
+        if (failure) s.out(failedLine(failure))
         if (!turn) s.out('No turn yet.')
         else {
           s.out(`asked: ${clip(result.ask ?? '', 600)}`)
@@ -1525,6 +1538,56 @@ export function closeCommand(argv: readonly string[], deps: ClientDeps = {}): Pr
   })
 }
 
+// ── delete ─────────────────────────────────────────────────────────────────────────────────────────
+
+/** What an engine's own store kept, and why: the person deletes it with that engine. */
+type Kept = { what: string; reason: string }
+
+/** The deletion Harness already has (`agent_purge`, lib/purgeAgentService.ts), reviewed and then done, from a
+ *  terminal: the conversation and everything Harness kept of it, never the folder. This machine's daemon only: the
+ *  purge answers its owner alone. */
+export function deleteCommand(argv: readonly string[], deps: ClientDeps = {}): Promise<number> {
+  return run(DELETE_USAGE, deps, wantsJson, argv, async (s) => {
+    const { names, flags, machine } = words(argv, { '--json': 'flag' })
+    if (names.length !== 1) throw new UsageError(names.length ? 'Delete one harness at a time.' : 'Name the harness to delete.')
+    if (machine !== null) throw new UsageError('harness delete works on this computer only.')
+    // Stopped ones too: a closed harness's conversation is still there to delete.
+    const o = await opened(s, true)
+    let t: Target | null = null
+    try {
+      t = await target(s, o, names[0])
+      const name = t.frame.name ?? t.frame.id.slice(0, 8)
+      if (t.frame.location === 'cloud') throw new UsageError(`${name} runs in its maker's cloud: delete it there.`)
+      // An agent's harness on another machine is found by its record: its purge is that machine's owner's to ask.
+      if (t.remote) throw new UsageError(`${name} runs on another machine: harness delete works on this computer only.`)
+      if (o.orphan) throw new AgentClientError('NOT_YOURS', ORPHAN, 'ORPHAN')
+      if (o.caller && o.caller.agentId === t.frame.id && t.machineId === o.where.machineId) {
+        throw new AgentClientError('NOT_YOURS', 'That is your own harness. The person deletes it.')
+      }
+      if (o.caller && !t.yours) throw new AgentClientError('NOT_YOURS', `You did not start ${name}, so you may not delete it. Only the person can.`)
+      // A harness with no conversation yet lists '' and purge reads it as none (null): '' was "changed" for good.
+      const which = { agentId: t.frame.id, sessionId: t.frame.sessionId || null, createdAt: Date.parse(t.frame.createdAt ?? '') }
+      const failed = (reply: Record<string, unknown>) => {
+        if (reply.error) throw new AgentClientError(String(reply.error), typeof reply.detail === 'string' && reply.detail ? reply.detail : `Could not delete ${name}.`)
+      }
+      const review = await t.daemon.request('agent_purge', { ...which, mode: 'inspect' }, 60_000)
+      failed(review)
+      const reply = await t.daemon.request('agent_purge', {
+        ...which, mode: 'delete', reviewId: review.reviewId, choices: { sessionData: true, worktreeData: false },
+      }, 120_000)
+      failed(reply)
+      const kept = Array.isArray(reply.kept) ? reply.kept as Kept[] : []
+      if (flags.has('--json')) s.out(JSON.stringify({ name, id: t.frame.id, deleted: true, kept }))
+      else {
+        s.out(kept.length ? `${name} on ${t.machine}: deleted. Everything Harness kept of it is erased.`
+          : `${name} on ${t.machine}: deleted. Its conversation and everything Harness kept of it are erased.`)
+        for (const k of kept) s.out(k.reason)
+      }
+      return EXIT.ok
+    } finally { if (t?.remote) t.daemon.close(); o.daemon.close() }
+  })
+}
+
 // ── new, run by an agent ───────────────────────────────────────────────────────────────────────────
 
 /**
@@ -1693,9 +1756,16 @@ export async function agentOrigin(deps: ClientDeps = {}, record: Rpc = messagesR
         note: `"${called}" is already running: you started it ${when}. Wait for it with ${step(s.env, 'wait', called)} `
           + `or read it with ${step(s.env, 'show', called)}. Do not start it again; to start a new one by that name, close it first (${step(s.env, 'close', called)}).` }
     },
+    // Both records follow the create: a failure to keep one is said, never a refusal, whose "try again" would start
+    // a second harness.
     pending: (machineId, creation) => {
-      o.ledger.append({ at: s.now(), by: { machineId: caller.machineId, agentId: caller.agentId, name: caller.name, engine: caller.engine },
-        creation: { machineId, ...creation }, depth: o.ledger.depthOf(caller) + 1 })
+      try {
+        o.ledger.append({ at: s.now(), by: { machineId: caller.machineId, agentId: caller.agentId, name: caller.name, engine: caller.engine },
+          creation: { machineId, ...creation }, depth: o.ledger.depthOf(caller) + 1 })
+        return null
+      } catch {
+        return `Harness could not record that you asked for ${creation.name || 'the harness'}: it may still start. Do not start it again.`
+      }
     },
     prompt: (text, machineId) => {
       // Said once, at the top: the task is from an agent, not the person (a teammate's tmux paste read as the
@@ -1729,7 +1799,9 @@ export async function agentOrigin(deps: ClientDeps = {}, record: Rpc = messagesR
         child: { machineId, agentId: id, name, ...(creationId ? { creationId } : {}) },
         depth: o.ledger.depthOf(caller) + 1,
       }
-      o.ledger.record(row)
+      try { o.ledger.record(row) } catch {
+        return `${name || 'The harness'} is starting, but Harness could not record that you started it. Do not start it again.`
+      }
       if (machineId === o.where.machineId) return null
       // The other machine keeps the line too: there the new harness's limits and depth start from it. Without it a
       // harness started on another machine was one the person started there, and a chain hopping between machines had

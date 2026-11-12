@@ -258,6 +258,7 @@ import { type ActivityFrame } from '../lib/turnActivity.js'
 import { cursorDataDir } from '../engines/cursor/contract.js'
 import { TranscriptPager } from '../lib/transcriptPages.js'
 import { AgentCreationReceipts } from '../lib/agentCreationReceipt.js'
+import { Ledger, ledgerPath } from '../agentClient/ledger.js'
 import { agentFrame, lastActivityAt, type AgentFrame } from '../lib/agentFrame.js'
 import { transcriptActivityAt } from '../lib/transcriptActivity.js'
 import { forgetAgentProject } from '../lib/agentProject.js'
@@ -2867,6 +2868,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     captureTerminal,
     retainExitedSession,
     terminals,
+    holdRoute: (key) => agentReconciler.holdRoute(key, null),
   })
 
   // Opening a conversation Harness did not start, and taking it over from a terminal (core/agents/adopt.ts).
@@ -2975,6 +2977,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     moveConversation: providerMoves.move,
   })
 
+  // The receipts of creates asked with a creationId: the launches write them, a purge scrubs a deleted harness's request.
+  const receipts = new AgentCreationReceipts(join(env.ADAPTER_DATA_DIR, 'agent-creations'))
   // Stopping, purging and resuming an agent (core/agents/lifecycle.ts).
   const lifecycle = createAgentLifecycle({
     adoptSwarmSkill,
@@ -3000,6 +3004,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     sessionCheckpoints,
     mirror,
     sessionSearch,
+    // A purge erases the harness's told lines and the requests that made it; either failing refuses the purge.
+    eraseRecords: async (s) => {
+      new Ledger(ledgerPath(env.ADAPTER_DATA_DIR)).forgetTold(s.agentId)
+      await receipts.scrubCreated(s.agentId)
+    },
     send: (frame) => backend.send(frame),
     pinnedControls,
     retainExitedSession,
@@ -3178,7 +3187,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const launches = createLaunchRequests({
     ...(swarmLaunch ? { swarmLaunch } : {}),
     claudeHomeListed: (home) => claudeHomeListed(home, machineIdNow()),
-    receipts: new AgentCreationReceipts(join(env.ADAPTER_DATA_DIR, 'agent-creations')),
+    receipts,
     createAgent: () => backend.onCreateAgent, forkAgent: () => backend.onForkAgent,
     prepareCreate: creator.prepare, prepareEngine: prepareNativeLaunch,
     resumeAgent: () => lifecycle.resumeAgent, restartAgent: () => restartAgent,

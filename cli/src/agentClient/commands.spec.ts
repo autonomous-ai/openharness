@@ -1,12 +1,13 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { addressOf, agentOrigin, AGENTS_START_AGENTS_OFF, closeCommand, DEPTH_REFUSAL, EXIT, parseDuration, psCommand, refusalNext, replyCommand, resumeCommand, routeCommand, showCommand, spawnCheck, spawnCount, spawnRefusal, SPAWN_LIMITS, step, tellCommand, waitCommand, watchCommand, whoamiCommand, type ClientDeps } from './commands.js'
+import { addressOf, agentOrigin, AGENTS_START_AGENTS_OFF, closeCommand, deleteCommand, DEPTH_REFUSAL, EXIT, parseDuration, psCommand, refusalNext, replyCommand, resumeCommand, routeCommand, showCommand, spawnCheck, spawnCount, spawnRefusal, SPAWN_LIMITS, step, tellCommand, waitCommand, watchCommand, whoamiCommand, type ClientDeps } from './commands.js'
 import { RefusedError, type Rpc } from '../messages/rpc.js'
 import { AgentClientError, type Daemon, type Where } from './daemon.js'
 import { Ledger, ledgerPath } from './ledger.js'
 import { agentSettingsPath } from '../lib/agentSettings.js'
+import { LEAD_PROTECTED_DETAIL } from '../lib/closeAgentService.js'
 import { setAgentSettingsForTest, signedOutForTest, TEST_ACCOUNT } from '../testing/agentSettings.js'
 import type { Frame } from './model.js'
 
@@ -202,6 +203,29 @@ describe('harness ps', () => {
     expect(person.out.join('\n')).toMatch(/^NAME +AGENT/)
   })
 
+  // A launch that failed for a named reason started nothing: what the person reads says why, live or stopped.
+  it('says why a harness never started, before what it is about, live or stopped', async () => {
+    const d = new FakeDaemon()
+    const inUse = { state: 'failed', error: 'OPENCLAW_FOLDER_IN_USE', detail: 'Another OpenClaw is using this folder. Give each run its own --local folder.' } as const
+    d.frames = [frame('taken', { launch: inUse }), frame('gone', { status: 'stopped', launch: { state: 'failed', error: 'OPENCLAW_FOLDER_GONE' } }), frame('fine', { launch: { state: 'ready' } }),
+      // Not confirmed is not failed: its engine may be running (the desk says "Not confirmed").
+      frame('unsure', { launch: { state: 'failed', error: 'RESUME_UNCONFIRMED', detail: 'Check the terminal.' } })]
+    const h = harness(d, { pane: undefined })
+    expect(await psCommand(['--all'], h.deps)).toBe(EXIT.ok)
+    const out = h.out.join('\n')
+    expect(out).toMatch(/^taken .*\n  failed: Another OpenClaw is using this folder\. Give each run its own --local folder\.$/m)
+    expect(out).toMatch(/^gone .*\n  failed: OPENCLAW_FOLDER_GONE$/m)
+    expect(out).toMatch(/^fine .*\n  fine recap$/m)
+    expect(out).toMatch(/^unsure .*\n  unsure recap$/m)
+    const json = harness(d, { pane: undefined })
+    expect(await psCommand(['--all', '--json'], json.deps)).toBe(EXIT.ok)
+    const rows = JSON.parse(json.out[0]).harnesses as Array<{ name: string; failure?: unknown }>
+    expect(rows.find((r) => r.name === 'taken')!.failure).toEqual({ error: 'OPENCLAW_FOLDER_IN_USE', detail: inUse.detail })
+    expect(rows.find((r) => r.name === 'gone')!.failure).toEqual({ error: 'OPENCLAW_FOLDER_GONE', detail: null })
+    expect(rows.find((r) => r.name === 'fine')!.failure).toBeUndefined()
+    expect(rows.find((r) => r.name === 'unsure')!.failure).toBeUndefined()
+  })
+
   it('prints JSON for programs, and asks for stopped ones with --all', async () => {
     const d = new FakeDaemon()
     d.frames = [frame('lead'), frame('old', { status: 'stopped' })]
@@ -370,6 +394,21 @@ describe('harness show', () => {
     const parsed = JSON.parse(json.out[0])
     expect(parsed.state).toBe('needs-input')
     expect(parsed.next).toEqual([{ tell: 'tell the person; only they answer it (a question or a permission).' }])
+  })
+
+  it('says why a harness never started', async () => {
+    const d = new FakeDaemon()
+    const gone = { state: 'failed', error: 'OPENCLAW_FOLDER_GONE', detail: "This run's OpenClaw folder is gone." } as const
+    d.frames = [frame('gone', { sessionId: '', status: 'stopped', launch: gone }), frame('fine', { sessionId: '' })]
+    const h = harness(d, { pane: undefined })
+    expect(await showCommand(['gone'], h.deps)).toBe(EXIT.ok)
+    expect(h.out).toEqual(['gone on studio: stopped · Codex · started by person', 'folder: /work/gone (main)', "failed: This run's OpenClaw folder is gone.", 'No turn yet.'])
+    const json = harness(d, { pane: undefined })
+    expect(await showCommand(['gone', '--json'], json.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(json.out[0]).failure).toEqual({ error: 'OPENCLAW_FOLDER_GONE', detail: gone.detail })
+    const fine = harness(d, { pane: undefined })
+    expect(await showCommand(['fine', '--json'], fine.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(fine.out[0]).failure).toBeUndefined()
   })
 
   it('says when there is no turn yet, or no transcript to read', async () => {
@@ -899,6 +938,98 @@ describe('harness close', () => {
   })
 })
 
+describe('harness delete', () => {
+  const KID = 'kid', CREATED = '2026-10-11T10:00:00Z'
+  const KEPT = "OpenClaw's store is kept: delete its session with OpenClaw."
+  /** A daemon whose purge answers inspect with a review and delete with [deleted]; the person asks unless [over] says. */
+  const setupDelete = (deleted: Record<string, unknown> = { deleted: true }, over: Partial<ClientDeps> = { pane: undefined }) => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead'), frame(KID, { sessionId: 's1', createdAt: CREATED }), frame('old', { status: 'stopped' }),
+      frame('claw', { engine: 'openclaw' }), frame('theirs'), frame('devin-1', { engine: 'devin-cloud', location: 'cloud', tmuxPane: null, project: null })]
+    d.extra.agent_purge = (payload) => payload.mode === 'inspect' ? { reviewId: 'r1' } : deleted
+    const run = async (argv: string[]) => {
+      const h = harness(d, over)
+      return { code: await deleteCommand(argv, h.deps), out: h.out, err: h.err }
+    }
+    const requests = (type: string) => d.requests.filter((r) => r.type === type).map((r) => r.payload)
+    return { d, run, requests }
+  }
+
+  it('deletes a running harness and a closed one: inspect, then delete with its session data and the folder kept', async () => {
+    const { run, requests } = setupDelete()
+    expect(await run([KID])).toMatchObject({ code: EXIT.ok, out: ['kid on studio: deleted. Its conversation and everything Harness kept of it are erased.'] })
+    expect(requests('agent_purge')).toEqual([
+      { agentId: KID, sessionId: 's1', createdAt: Date.parse(CREATED), mode: 'inspect' },
+      { agentId: KID, sessionId: 's1', createdAt: Date.parse(CREATED), mode: 'delete', reviewId: 'r1', choices: { sessionData: true, worktreeData: false } },
+    ])
+    expect((await run(['old'])).code).toBe(EXIT.ok)
+    expect(requests('agent_purge').at(-1)).toMatchObject({ agentId: 'old', sessionId: 's-old', mode: 'delete' })
+  })
+
+  it('asks for a harness with no conversation yet (still starting) by none, as purge reads its row', async () => {
+    const { d, run, requests } = setupDelete()
+    d.frames.push(frame('fresh', { sessionId: '', status: 'starting' }))
+    expect((await run(['fresh'])).code).toBe(EXIT.ok)
+    expect(requests('agent_purge').map((r) => r.sessionId)).toEqual([null, null])
+  })
+
+  it('says what was kept and why', async () => {
+    const { run } = setupDelete({ deleted: true, kept: [{ what: 'engine-store', reason: KEPT }] })
+    expect((await run(['claw'])).out).toEqual(['claw on studio: deleted. Everything Harness kept of it is erased.', KEPT])
+    expect(JSON.parse((await run(['claw', '--json'])).out[0])).toEqual({ name: 'claw', id: 'claw', deleted: true, kept: [{ what: 'engine-store', reason: KEPT }] })
+    const none = setupDelete()
+    expect(JSON.parse((await none.run([KID, '--json'])).out[0])).toEqual({ name: KID, id: KID, deleted: true, kept: [] })
+  })
+
+  it('refuses an agent a harness it did not start, and its own; the person deletes anything', async () => {
+    const agent = setupDelete({ deleted: true }, {})
+    const theirs = await agent.run(['theirs'])
+    expect(theirs).toMatchObject({ code: EXIT.refused, err: ['You did not start theirs, so you may not delete it. Only the person can.'] })
+    expect(await agent.run(['lead'])).toMatchObject({ code: EXIT.refused, err: ['That is your own harness. The person deletes it.'] })
+    const left = setupDelete({ deleted: true }, { pane: '%gone', where: () => ({ ...where, harnessPane: true }) })
+    expect((await left.run(['theirs'])).code).toBe(EXIT.refused)
+    expect(agent.requests('agent_purge')).toEqual([])
+    expect(left.requests('agent_purge')).toEqual([])
+    const mine = setupDelete({ deleted: true }, {})
+    started(new Ledger(ledgerPath(dir)), 'lead', KID)
+    expect((await mine.run([KID])).code).toBe(EXIT.ok)
+    const person = setupDelete()
+    expect((await person.run(['theirs'])).code).toBe(EXIT.ok)
+  })
+
+  it('says purge\'s own refusals as they are', async () => {
+    const lead = setupDelete()
+    lead.d.extra.agent_purge = () => ({ error: 'LEAD_PROTECTED', detail: LEAD_PROTECTED_DETAIL })
+    expect(await lead.run([KID])).toMatchObject({ code: EXIT.failed, err: [LEAD_PROTECTED_DETAIL] })
+    expect(lead.requests('agent_purge')).toHaveLength(1)
+    const refused = setupDelete({ error: 'DELETE_REFUSED', detail: 'The harness did not stop. No session data was deleted.' })
+    expect(await refused.run([KID])).toMatchObject({ code: EXIT.failed, err: ['The harness did not stop. No session data was deleted.'] })
+    const bare = setupDelete({ error: 'DELETE_FAILED' })
+    expect(await bare.run([KID])).toMatchObject({ code: EXIT.failed, err: ['Could not delete kid.'] })
+  })
+
+  it('works on this computer only, one harness at a time, and never a cloud one', async () => {
+    const { run, requests } = setupDelete()
+    expect(await run(['--machine', 'office', 'kid'])).toMatchObject({ code: EXIT.usage, err: ['harness delete works on this computer only.', expect.stringContaining('Usage: harness delete <name> [--json]')] })
+    expect((await run([])).err[0]).toBe('Name the harness to delete.')
+    expect((await run(['a', 'b'])).err[0]).toBe('Delete one harness at a time.')
+    expect(await run(['devin-1'])).toMatchObject({ code: EXIT.usage, err: ["devin-1 runs in its maker's cloud: delete it there.", expect.any(String)] })
+    expect(requests('agent_purge')).toEqual([])
+  })
+
+  it('never reaches another machine through a harness the agent started there', async () => {
+    const { d } = setupDelete({ deleted: true }, {})
+    const mini = new FakeDaemon()
+    mini.frames = [frame('far')]
+    started(new Ledger(ledgerPath(dir)), 'lead', 'far', 'mini')
+    const h = harness(d, { others: { mini } })
+    expect(await deleteCommand(['far'], h.deps)).toBe(EXIT.usage)
+    expect(h.err[0]).toBe('far runs on another machine: harness delete works on this computer only.')
+    expect([...d.requests, ...mini.requests].filter((r) => r.type === 'agent_purge')).toEqual([])
+    expect(mini.closed).toBe(true)
+  })
+})
+
 describe('harness new, run by an agent', () => {
   it('is nothing outside a harness pane or in a person\'s terminal; refuses when it cannot tell who is calling', async () => {
     const d = new FakeDaemon()
@@ -1388,6 +1519,25 @@ describe('an agent asking again for a harness it already has', () => {
     await origin.created('m', { id: 'k5', name: 'cx' }, 'c5')
     expect(h.ledger.pendingOf({ machineId: 'm', agentId: 'lead' }, NOW)).toEqual([])
     expect(h.ledger.parentOf({ machineId: 'm', agentId: 'k5' })?.child).toEqual({ machineId: 'm', agentId: 'k5', name: 'cx', creationId: 'c5' })
+  })
+
+  // The create is already sent by then: a refusal ("try again") would start a second harness.
+  it('a harness asked for or started while the ledger is busy is said, never refused', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' })]
+    const h = harness(d, { ledger: (data) => new Ledger(ledgerPath(data), 20) })
+    const origin = (await agentOrigin(h.deps))!
+    // Another writer, alive, holds the ledger's lock past the wait.
+    mkdirSync(join(dir, 'agent-client'), { recursive: true })
+    writeFileSync(`${ledgerPath(dir)}.lock`, JSON.stringify({ pid: process.ppid, startMarker: '' }))
+    expect(origin.pending!('m', { creationId: 'c6', name: 'cx', engine: 'codex' }))
+      .toBe('Harness could not record that you asked for cx: it may still start. Do not start it again.')
+    expect(await origin.created('m', { id: 'k6', name: 'cx' }, 'c6'))
+      .toBe('cx is starting, but Harness could not record that you started it. Do not start it again.')
+    expect(await origin.created('m', { id: 'k7' }, 'c7'))
+      .toBe('The harness is starting, but Harness could not record that you started it. Do not start it again.')
+    rmSync(`${ledgerPath(dir)}.lock`)
+    expect(origin.pending!('m', { creationId: 'c8', name: 'cy', engine: 'codex' })).toBeNull()
   })
 })
 
