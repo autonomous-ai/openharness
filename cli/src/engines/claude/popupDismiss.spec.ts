@@ -45,6 +45,20 @@ const AUTO_DEFAULT = [
   '     No, keep bypass permissions',
 ].join('\n')
 
+// Lennox's pane on Mac 3, 2026-11-12, right after it opened #4218: the popup covered its prompt, so nothing reached it until a
+// person pressed a key (#4224).
+const COMPACT_EARLIER = [
+  'We recommend compacting earlier',
+  '',
+  '  Each message re-sends the whole conversation, …',
+  '  Want to autocompact at 400k tokens instead? Your model doesn\'t change. Switch back any time with /autocompact.',
+  '',
+  '  ❯ Autocompact at ‹ 400k › tokens',
+  '    Keep auto (1m tokens)',
+  '',
+  '  ↑/↓ choose · ←/→ change size · enter confirm · esc not now',
+].join('\n')
+
 describe('dismissing Claude Code\'s feedback popups for a Swarm agent', () => {
   it('dismisses a drafted bug report with 0, which sends nothing', () => {
     expect(popupDismissKeys(DRAFT)).toEqual(['0'])
@@ -65,6 +79,12 @@ describe('dismissing Claude Code\'s feedback popups for a Swarm agent', () => {
     expect(popupDismissKeys(AUTO_DEFAULT.replace('keep bypass permissions', 'keep default permissions'))).toEqual(['Down', 'Enter'])
   })
 
+  // Enter would take the highlighted "Autocompact at 400k tokens" and change the person's setting.
+  it('closes "We recommend compacting earlier" with Esc, not now, whichever row is chosen', () => {
+    expect(popupDismissKeys(COMPACT_EARLIER)).toEqual(['Escape'])
+    expect(popupDismissKeys(COMPACT_EARLIER.replace('  ❯ Autocompact', '    Autocompact').replace('    Keep auto', '  ❯ Keep auto'))).toEqual(['Escape'])
+  })
+
   it.each([
     ['an idle prompt', '────\n❯ \n────'],
     ['the auto mode question with no No under its Yes', AUTO_DEFAULT.replace('     No, keep bypass permissions', '')],
@@ -73,6 +93,8 @@ describe('dismissing Claude Code\'s feedback popups for a Swarm agent', () => {
     ['a draft without its footer', DRAFT.replace(/│ 1 to review.*\n/, '')],
     ['a turn-off question that reads otherwise', TURN_OFF.replace('Esc to keep', 'Esc to turn off')],
     ['a survey without Dismiss', SURVEY.replace('0: Dismiss', '0: Good')],
+    ['the compacting popup without "esc not now"', COMPACT_EARLIER.replace('esc not now', 'esc to keep auto')],
+    ['the compacting popup and a survey at once', `${COMPACT_EARLIER}\n${SURVEY}`],
     ['two popups at once', `${DRAFT}\n${SURVEY}`],
     ['the draft twice', `${DRAFT}\n${DRAFT}`],
   ])('sends nothing for %s', (_name, capture) => {
