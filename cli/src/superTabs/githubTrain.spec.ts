@@ -8,9 +8,11 @@ import type { GitHubGet, GitHubReply, GitHubSend } from './githubRest.js'
 
 type Json = Record<string, unknown>
 const sha = (seed: string): string => createHash('sha1').update(seed).digest('hex')
-const PASSED = [{ name: 'test', status: 'completed', conclusion: 'success' }]
-const FAILED = [{ name: 'test', status: 'completed', conclusion: 'failure' }]
-const RUNNING = [{ name: 'test', status: 'in_progress', conclusion: null }]
+/** A head's check runs as GitHub lists them, each with the app that ran it. */
+const ACTIONS = { slug: 'github-actions' }
+const PASSED = [{ name: 'test', status: 'completed', conclusion: 'success', app: ACTIONS }]
+const FAILED = [{ name: 'test', status: 'completed', conclusion: 'failure', app: ACTIONS }]
+const RUNNING = [{ name: 'test', status: 'in_progress', conclusion: null, app: ACTIONS }]
 const REPO = '/repos/acme/app'
 
 interface FakePull { number: number; state: 'open' | 'closed'; draft: boolean; title: string; body: string; created_at: string; updated: number; merged_at: string | null
@@ -597,6 +599,20 @@ describe('a train waits for its own checks, then lands or is closed', () => {
     expect(f.carried()).toEqual([[4, 5, 6], [4, 6]])
   })
 
+  // A rider is fixed by its head: read again and green at a new one, it is still not what the train carries and tested.
+  it('lands nothing of a member read again at a new head since: the train is closed and built with that head', async () => {
+    const f = setup()
+    f.add(4); f.add(5)
+    await f.settle()
+    const built = f.state.sent.length
+    const pushed = f.push(5)
+    await f.ends(PASSED)
+    expect(f.writes(built)).toEqual(['PATCH /pulls/900', `DELETE /git/refs/heads/${f.trains()[0]!.head.ref}`])
+    expect(f.trains()[0]).toMatchObject({ state: 'closed', title: 'Train, rider changed: #4 #5', merged_at: null })
+    await f.tick()
+    expect(f.train().body).toContain(`#5 at ${pushed}`)
+  })
+
   // A member that only waits is still read and still at its head: its own check runs again, or GitHub has not yet said whether
   // it merges (it works that out anew each time main moves). After a daemon restart every member's checks wait three minutes to
   // hold still, as the train's own do, and whichever is looked at first decided whether a green run was thrown away.
@@ -766,7 +782,7 @@ describe('a train waits for its own checks, then lands or is closed', () => {
     await f.settle()
     await f.tick(90 * 60_000)
     expect(f.trains()[0]).toMatchObject({ state: 'closed', merged_at: null, title: 'Train, out of time: #4 #5' })
-    expect(f.logged()).toContainEqual('[super-tab] train acme/app#900 closed: its checks did not finish in 90 min')
+    expect(f.logged()).toContainEqual('[super-tab] train acme/app#900 closed: its checks did not finish in 90 min; nothing came from app github-actions')
   })
 
   it('takes for its train only a pull request this computer\'s login opened', async () => {
@@ -962,6 +978,98 @@ describe('a train waits for its own checks, then lands or is closed', () => {
     expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual(['PUT /pulls/900/merge'])
     await f.settle()
     expect(f.trains()).toHaveLength(1)
+  })
+})
+
+// Two reviews of 12 November. Another tool's status is on a train's tip at once (a CLA bot's, one set by hand), while Actions can
+// take minutes to make a run. The train waited only for a tip with no check at all, so that status alone read as passed once it
+// held still, and the train landed a combined change CI had never run.
+describe('a train lands only once CI has reported on its tip', () => {
+  const CI = [{ name: 'ci/required', status: 'completed', conclusion: 'success', app: ACTIONS }]
+  const status = (f: ReturnType<typeof setup>, head: string, context: string) =>
+    f.state.statuses.set(head, [...f.state.statuses.get(head) ?? [], { context, state: 'success' }])
+  /** Pip's pull requests, each green on its own head with the check runs [runs] gives it, carried on a train on whose tip Actions
+   *  has made no run yet. Its tip. */
+  const ride = async (f: ReturnType<typeof setup>, runs: Record<number, Json[]>): Promise<string> => {
+    for (const [number, list] of Object.entries(runs)) f.state.runs.set(f.add(Number(number)).head.sha, list)
+    await f.settle()
+    const tip = f.train().head.sha
+    f.state.runs.set(tip, [])
+    return tip
+  }
+
+  it.each<[string, string[], Json[]]>([
+    ['a CLA bot\'s status', ['license/cla'], []],
+    ['a status set by hand, named as the riders\' check', ['ci/required'], []],
+    ['a status set by hand, named as the app that ran the riders\' checks', ['github-actions'], []],
+    ['another app\'s check run', [], [{ name: 'license/cla', status: 'completed', conclusion: 'success', app: { slug: 'cla-checker' } }]],
+  ])('does not land on %s alone, held still past the settle time, and lands once ci/required passed on it', async (_case, contexts, runs) => {
+    const f = setup()
+    const tip = await ride(f, { 4: CI, 5: CI })
+    for (const context of contexts) status(f, tip, context)
+    f.state.runs.set(tip, runs)
+    for (let look = 0; look < 4; look++) await f.settle()
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual([])
+    expect(f.train().state).toBe('open')
+    await f.ends([...runs, ...CI])
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual(['PUT /pulls/900/merge'])
+  })
+
+  it('closes it out of time when CI never reports on its tip, says so once, and builds the next', async () => {
+    const f = setup()
+    status(f, await ride(f, { 4: CI, 5: CI }), 'license/cla')
+    const built = f.state.sent.length, branch = f.train().head.ref
+    // Nothing is written, nor logged, while it waits.
+    for (let pass = 0; pass < 8; pass++) await f.tick(10 * 60_000)
+    expect(f.writes(built)).toEqual([])
+    expect(f.logged().filter(line => line.includes('#900'))).toEqual([expect.stringContaining('train acme/app#900 built on')])
+    await f.tick(15 * 60_000)
+    expect(f.writes(built)).toEqual(['PATCH /pulls/900', `DELETE /git/refs/heads/${branch}`])
+    expect(f.trains()[0]).toMatchObject({ state: 'closed', merged_at: null, title: 'Train, out of time: #4 #5' })
+    await f.tick()
+    expect(f.logged().filter(line => line.includes('#900 closed')))
+      .toEqual(['[super-tab] train acme/app#900 closed: its checks did not finish in 90 min; nothing came from app github-actions'])
+    expect(f.carried()).toEqual([[4, 5], [4, 5]])
+  })
+
+  // A check that runs only when certain files change: CI made no run on #4 (no workflow reads what it changed) and ran on #5.
+  it('waits for the app that ran checks on one rider only', async () => {
+    const f = setup()
+    status(f, await ride(f, { 4: [], 5: CI }), 'license/cla')
+    for (let look = 0; look < 4; look++) await f.settle()
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual([])
+    await f.ends(CI)
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual(['PUT /pulls/900/merge'])
+  })
+
+  // Measured on this repository, 12 November. A job CI skipped is named by its template ("desktop-tests (${{ matrix.os }},
+  // ${{ matrix.shard }})" on #4111) and one it ran by its rows ("desktop-tests (ubuntu-22.04, 1)" on #4089). And a check run by
+  // hand rides on its pull request's head: 71 of the newest 100 manual runs were on branches, 19 of them CLI end to end, and a
+  // train never runs one. Waited for by its name, such a check held every train its rider rode until it ran out of time.
+  it.each<[string, Json]>([
+    ['run by hand', { name: 'e2e (macOS, full disk)', status: 'completed', conclusion: 'success', app: ACTIONS }],
+    ['skipped and named by its template', { name: 'desktop-tests (${{ matrix.os }}, ${{ matrix.shard }})', status: 'completed', conclusion: 'skipped', app: ACTIONS }],
+  ])('lands on what CI ran on its tip, without a check one rider had %s', async (_case, check) => {
+    const f = setup()
+    await ride(f, { 4: CI, 5: [...CI, check] })
+    await f.ends(CI)
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual(['PUT /pulls/900/merge'])
+  })
+
+  // A status has no app: what reports by status (a CLA bot, a CI that does) is told apart by its context.
+  it('waits for each status its riders had, by its context', async () => {
+    const f = setup()
+    for (const number of [4, 5]) {
+      const head = f.add(number).head.sha
+      f.state.runs.set(head, CI)
+      status(f, head, 'license/cla')
+    }
+    await f.settle()
+    await f.ends(CI)
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual([])
+    status(f, f.train().head.sha, 'license/cla')
+    await f.settle()
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual(['PUT /pulls/900/merge'])
   })
 })
 

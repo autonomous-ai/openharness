@@ -79,17 +79,17 @@ const CLOSES_MAX = 100
 /** A ready pull request, as the merger hands it over: `fork` when its branch is in another repository (it rides the train
  *  as any other, and merges on its own only if GitHub does not take its head into the train's branch). */
 export interface TrainPull { number: number; head: string; title: string; body: string; readers: readonly string[]; fork: boolean
-  /** Whether its head had a check of its own. */
-  checked: boolean }
+  /** What made the checks on its head (githubMerge.ts checksOf): each check run's app, each status by its context. */
+  sources: readonly string[] }
 export interface TrainMember { number: number; head: string; readers: string }
 /** One of the repository's trains, open or closed, as its pull request says it. `tip` is empty and `members` none when its body
  *  does not read as one the train wrote. */
 interface Train { number: number; branch: string; head: string; tip: string; members: TrainMember[]; red: boolean; mergedAs: string | null; openedAt: number; opener: string }
 
 /** What the train asks of the merger: a head's checks as the merger reads a pull request's (passed only once they hold still;
- *  `none` when it has no check at all), this computer's GitHub login, its notes to a pull request's author, each said once for a head, and how a comment of Harness's begins ("Harness, 14:20"). */
+ *  `sources`, what made them), this computer's GitHub login, its notes to a pull request's author, each said once for a head, and how a comment of Harness's begins ("Harness, 14:20"). */
 export interface TrainHost<T extends TrainPull> {
-  checks(number: number, head: string): Promise<{ state: 'passed' | 'running' | 'failed'; none: boolean }>
+  checks(number: number, head: string): Promise<{ state: 'passed' | 'running' | 'failed'; sources: readonly string[] }>
   login(): Promise<string>
   conflicts(pull: T): Promise<void>
   failedAlone(pull: T, train: number): Promise<void>
@@ -231,15 +231,22 @@ export class GitHubTrain<T extends TrainPull> {
     if (ahead.behind_by !== 0) return this.close(train, 'moved', `${this.base} moved under it`)
     const checks = await this.host.checks(train.number, train.head)
     if (checks.state === 'failed') return this.close(train, 'red', 'its checks failed')
-    // No check of its own where a member had its own: CI has not started on it (Actions can take minutes to make a run), and
-    // none at all would read as passed.
-    const unstarted = checks.none && ready.some(pull => pull.checked && train.members.some(member => member.number === pull.number))
-    if (checks.state === 'running' || unstarted) {
-      if (this.deps.now() - train.openedAt > TRAIN_WAIT_MS) await this.close(train, 'late', 'its checks did not finish in 90 min')
+    // Each member as it rides: ready at the head the train carries it at.
+    const riders = train.members.map(member => ready.find(pull => pull.number === member.number && pull.head === member.head))
+    // What made checks on a rider's own head and has made none on the tip: CI has not run there yet. Actions can take minutes to
+    // make a run, and another tool's status (a CLA bot's, one set by hand) is there at once: alone, it read as passed and the
+    // train landed (two reviews of 12 November). By app, not by a check's name, which is not the same from one pull request to
+    // the next: GitHub names a job CI skipped by its template ("desktop-tests (${{ matrix.os }}, ${{ matrix.shard }})") and one
+    // it ran by its rows, and a check run by hand stays on its pull request's head. A check that runs only when certain files
+    // change starts on the tip with the rest of CI, from the same event, and the train waits while any check runs.
+    const unreported = [...new Set(riders.flatMap(pull => pull?.sources ?? []))].filter(source => !checks.sources.includes(source))
+    if (checks.state === 'running' || unreported.length) {
+      if (this.deps.now() - train.openedAt > TRAIN_WAIT_MS) {
+        await this.close(train, 'late', `its checks did not finish in 90 min${unreported.length ? `; nothing came from ${unreported.slice(0, 3).join(', ')}` : ''}`)
+      }
       return
     }
     // Read again right before landing: a HOLD since, a new head or a closed one, and the train is built again without it.
-    const riders = train.members.map(member => ready.find(pull => pull.number === member.number && pull.head === member.head))
     if (!riders.every(pull => pull !== undefined)) {
       // One that only waits at its head (its own check runs again, GitHub has not yet said whether it merges, a daemon just
       // started has not seen its checks hold still) keeps the train's green run, for as long as a train may wait.

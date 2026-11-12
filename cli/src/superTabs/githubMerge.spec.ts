@@ -856,8 +856,14 @@ describe('the rule\'s parts', () => {
       .toEqual(['ci/required'])
     expect(checksOf([{ id: 1, name: 'ci/required', status: 'completed', conclusion: 'failure' }], { statuses: [{ state: 'failure', context: 'ci/required' }] }).failed)
       .toEqual(['ci/required'])
-    expect(checksOf([{ name: 'lint', status: 'completed', conclusion: 'failure' }], { statuses: [{ state: 'error', context: 'ci/required' }] }))
-      .toEqual({ state: 'failed', failed: ['lint', 'ci/required'], summary: 'ci/required:error|lint:completed:failure' })
+    expect(checksOf([{ name: 'lint', status: 'completed', conclusion: 'failure', app: { slug: 'github-actions' } }], { statuses: [{ state: 'error', context: 'ci/required' }] }))
+      .toEqual({ state: 'failed', failed: ['lint', 'ci/required'], sources: ['app github-actions', 'status ci/required'], summary: 'ci/required:error|lint:completed:failure' })
+    // What made them, which a train's tip must show of its riders' (githubTrain.ts attend): each check run's app, run or skipped,
+    // and each status by its context, never read as an app's. The train's own mark on its tip is none.
+    expect(checksOf([{ name: 'ci/required', status: 'completed', conclusion: 'success', app: { slug: 'github-actions' } },
+      { name: 'desktop-tests (${{ matrix.os }})', status: 'completed', conclusion: 'skipped', app: { slug: 'github-actions' } }, { name: 'scan', status: 'queued', app: { slug: 'codecov' } }],
+    { statuses: [{ state: 'success', context: 'github-actions' }, { state: 'success', context: 'harness/train' }] }).sources)
+      .toEqual(['app github-actions', 'app codecov', 'status github-actions'])
     // What was read, in any order GitHub lists it, as one line: two looks that read the same are the same.
     expect(checksOf([{ name: 'b', status: 'completed', conclusion: 'success' }, { name: 'a', status: 'completed', conclusion: 'success' }], {}).summary)
       .toBe(checksOf([{ name: 'a', status: 'completed', conclusion: 'success' }, { name: 'b', status: 'completed', conclusion: 'success' }], {}).summary)

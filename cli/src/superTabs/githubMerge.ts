@@ -507,15 +507,17 @@ export const pullPeople = (pull: Json, team: ReadonlySet<string>): PullPeople =>
 /** The pull request's author by name: its builder label, else its branch's first part (`pip/12`). */
 export const authorOf = (pull: Json): string | null => writersOf(pull)[0] ?? null
 
-/** Whether every check on a head passed (none at all passes), is still running, or failed with which names, and what was read,
- *  in one line, to tell two looks apart. */
-export function checksOf(runs: Json[], status: Json): { state: 'passed' | 'running' | 'failed'; failed: string[]; summary: string } {
-  const failed: string[] = [], seen: string[] = []
+/** Whether every check on a head passed (none at all passes), is still running, or failed with which names; what made them
+ *  (`sources`: each check run's app, each status by its context), which a train's tip must show of its riders' (githubTrain.ts
+ *  attend); and what was read, in one line, to tell two looks apart. */
+export function checksOf(runs: Json[], status: Json): { state: 'passed' | 'running' | 'failed'; failed: string[]; sources: string[]; summary: string } {
+  const failed: string[] = [], seen: string[] = [], sources = new Set<string>()
   let running = false
   // GitHub lists each check's latest run (check-runs' filter=latest): two of one name are two checks, two workflows' jobs, and
   // either failing fails the head (code review of #4060).
   for (const run of runs) {
     seen.push(`${String(run.name ?? '')}:${String(run.status ?? '')}:${String(run.conclusion ?? '')}`)
+    sources.add(`app ${String(object(run.app).slug ?? '')}`)
     if (run.status !== 'completed') { running = true; continue }
     if (!['success', 'neutral', 'skipped'].includes(String(run.conclusion))) failed.push(String(run.name ?? 'a check'))
   }
@@ -523,11 +525,13 @@ export function checksOf(runs: Json[], status: Json): { state: 'passed' | 'runni
     // The train's own mark on the tip it built is no check of it: counted, a train whose CI had not started read as passed.
     if (each.context === TRAIN_MARK) continue
     seen.push(`${String(each.context ?? '')}:${String(each.state ?? '')}`)
+    // A status has no app, and anyone who can push sets one under any context: one named as an app is still no check of that app.
+    sources.add(`status ${String(each.context ?? '')}`)
     if (each.state === 'pending') running = true
     else if (each.state !== 'success') failed.push(String(each.context ?? 'a status'))
   }
   // Each named once: a workflow's check run and the status it sets share a name (#4055: "ci/required, process-checks, ci/required").
-  return { state: failed.length ? 'failed' : running ? 'running' : 'passed', failed: [...new Set(failed)], summary: seen.sort().join('|') }
+  return { state: failed.length ? 'failed' : running ? 'running' : 'passed', failed: [...new Set(failed)], sources: [...sources], summary: seen.sort().join('|') }
 }
 
 /** [head]'s checks as [reads] has them: its check runs and its combined status (checksOf). */
@@ -743,7 +747,7 @@ export class GitHubMerge {
       // GitHub lists a red train only among the hundred pull requests closed last (githubTrain.ts landed).
       if (this.said(comments, head, 'red')) continue
       ready.push({ number, head, title: String(pull.title ?? ''), body: String(pull.body ?? ''), readers: [...reads.values()].map(r => r.name),
-        fork: String(object(object(pull.head).repo).full_name ?? '').toLowerCase() !== current, checked: !checks.none, author, comments })
+        fork: String(object(object(pull.head).repo).full_name ?? '').toLowerCase() !== current, sources: checks.sources, author, comments })
     }
     for (const pull of await train.carry(ready, waiting)) {
       // A fork GitHub took neither into a train nor on its own: tried again with the merger's waits, not every pass (each
@@ -788,15 +792,13 @@ export class GitHubMerge {
 
   /** The checks of [head], seen as [at] (checksOf): passed only once they hold still (CHECKS_SETTLE_MS), and running until then.
    *  A pull request's and a train's alike. */
-  private async checks(repo: string, at: string, head: string): Promise<{ state: 'passed' | 'running' | 'failed'; failed: string[]; none: boolean }> {
+  private async checks(repo: string, at: string, head: string): Promise<ReturnType<typeof checksOf>> {
     const checks = await headChecks(this.reads, repo, head)
-    // No check and no status at all: a repository with no CI, or CI that has not started on this head.
-    const none = checks.summary === ''
-    if (checks.state !== 'passed') return { ...checks, none }
+    if (checks.state !== 'passed') return checks
     // Passed, or none yet.
     const before = this.looked.get(at)
     this.looked.set(at, checks.summary)
-    return this.now() - this.seenAt.get(at)! < CHECKS_SETTLE_MS || before !== checks.summary ? { state: 'running', failed: [], none } : { ...checks, none }
+    return this.now() - this.seenAt.get(at)! < CHECKS_SETTLE_MS || before !== checks.summary ? { ...checks, state: 'running' } : checks
   }
 
   /** Another open pull request (a draft too) whose head is among [number]'s commits, or null: merging [number] would merge that one's
