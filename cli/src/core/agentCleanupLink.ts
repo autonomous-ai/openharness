@@ -18,7 +18,7 @@ import type { ServiceFrame } from './serviceLinks.js'
 
 type Payload = Record<string, unknown>
 
-export function createAgentCleanupLink(core: Pick<CoreApi, 'agents' | 'usage' | 'daemon' | 'count'>, notify: (frame: ServiceFrame, opts?: { untilDelivered?: boolean }) => boolean) {
+export function createAgentCleanupLink(core: Pick<CoreApi, 'agents' | 'usage' | 'count'>, notify: (frame: ServiceFrame, opts?: { untilDelivered?: boolean }) => boolean) {
   /** The harnesses the process was told the person joined: it keeps them itself (services/agentCleanup.ts). */
   const told = new Set<string>()
   const port: AgentCleanupPort = {
