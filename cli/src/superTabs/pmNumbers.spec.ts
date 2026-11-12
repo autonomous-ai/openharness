@@ -274,16 +274,16 @@ describe('the numbers, told as they are due', () => {
   /** What was said in the log, but that the goal of these tests is not read (their goal is none that can be). */
   const notes = (t: ReturnType<typeof setup>) => t.log.mock.calls.map(([line]) => String(line)).filter(line => !line.includes('GOAL_UNREAD'))
 
-  it('tells the PM once a builder has had nothing for a quarter of an hour, then once an hour', async () => {
-    const t = setup()
+  it('tells the PM once a builder has had nothing for a quarter of an hour, then once an hour while the project moves', async () => {
+    const t = setup(), moved = { ...quiet, activity: NOW + 30 * MINUTE }
     await passes(t, 15, quiet)
     expect(t.sent).toEqual([])
     await passes(t, 1, quiet)
     expect(t.sent).toEqual([['tell', expect.stringMatching(/^numbers-[0-9a-f]{40}$/), shortLine(['Ada', 'Kai'], quiet, '14:15', undefined)]])
-    await passes(t, 59, quiet)
+    await passes(t, 59, moved)
     expect(t.sent).toHaveLength(1)
-    await passes(t, 1, quiet)
-    expect(t.sent.map(([how, , text]) => [how, text])).toEqual([['tell', shortLine(['Ada', 'Kai'], quiet, '14:15', undefined)], ['tell', shortLine(['Ada', 'Kai'], quiet, '15:15', undefined)]])
+    await passes(t, 1, moved)
+    expect(t.sent.map(([how, , text]) => [how, text])).toEqual([['tell', shortLine(['Ada', 'Kai'], quiet, '14:15', undefined)], ['tell', shortLine(['Ada', 'Kai'], moved, '15:15', undefined)]])
     expect(t.sent[1]![1]).not.toBe(t.sent[0]![1])
   })
 
@@ -330,37 +330,38 @@ describe('the numbers, told as they are due', () => {
     await passes(t, 10, busy)
     await passes(t, 30, { ...quiet, free: free('Bo') })
     expect(t.sent).toHaveLength(1)
-    await passes(t, 20, { ...quiet, free: free('Bo'), unsized: 1 })
+    // Something landed meanwhile: the PM is told again at the hour, and not before.
+    await passes(t, 20, { ...quiet, free: free('Bo'), unsized: 1, activity: NOW + 30 * MINUTE })
     expect(t.sent.map(([, , text]) => text)[1]).toBe(shortLine(['Bo'], { ...quiet, unsized: 1 }, '15:15', undefined))
   })
 
-  it('tells the PM\'s person in the PM\'s place once it was told three times and nothing landed, and then nobody until something does', async () => {
+  // anh Dee, 2026-11-11: "never spam agents because we burn user token": told once, then its person.
+  it('tells the PM\'s person in the PM\'s place once it was told and nothing landed, and then nobody until something does', async () => {
     const t = setup()
-    // Who waits changes between the hours, and builders come and go: nothing landed or closed, so it is the fourth time.
-    await passes(t, 76, quiet)
-    await passes(t, 60, { ...quiet, free: free('Ada', 'Bo', 'Kai') })
-    await passes(t, 59, { ...quiet, free: free('Kai') })
-    expect(hows(t)).toEqual(['tell', 'tell', 'tell'])
+    // Who waits changes over the hour, and builders come and go: nothing landed or closed, so the second time is its person's.
+    await passes(t, 16, quiet)
+    await passes(t, 59, { ...quiet, free: free('Ada', 'Bo', 'Kai') })
+    expect(hows(t)).toEqual(['tell'])
     await passes(t, 1, { ...quiet, free: free('Kai') })
-    expect(t.sent[3]).toEqual(['say', expect.stringMatching(/^numbers-[0-9a-f]{40}$/), toldLine(['Kai'], quiet)])
-    expect(kept(t)).toMatchObject({ told: 3, said: true })
+    expect(t.sent[1]).toEqual(['say', expect.stringMatching(/^numbers-[0-9a-f]{40}$/), toldLine(['Kai'], quiet)])
+    expect(kept(t)).toMatchObject({ told: 1, said: true })
     // Silent from then on: over a restart, with every builder at work for a while, and with others waiting.
     await passes(t, 3 * 60, quiet, t.make())
     await passes(t, 30, busy)
     await passes(t, 3 * 60, { ...quiet, free: free('Ada', 'Bo') })
     // And when its last landing is no longer among what GitHub lists as closed last: that is no new one.
     await passes(t, 61, { ...quiet, free: free('Ada', 'Bo'), activity: 0 })
-    expect(t.sent).toHaveLength(4)
+    expect(t.sent).toHaveLength(2)
     // The team lands a pull request, or the PM opens a task Harness does not give them: the project moves again, and its PM is
     // told of who waits, from the first time.
     const landed = { ...quiet, free: free('Ada', 'Bo'), activity: t.clock.now }
     await passes(t, 1, landed)
     expect(t.sent.at(-1)![2]).toBe(shortLine(['Ada', 'Bo'], landed, hhmm(t.clock.now - MINUTE), undefined))
     expect(kept(t)).toMatchObject({ told: 1, said: false, activity: landed.activity })
-    // Three hours on with nothing more landed, its person is told again, as a line of its own.
-    await passes(t, 3 * 60, landed)
-    expect(hows(t).slice(4)).toEqual(['tell', 'tell', 'tell', 'say'])
-    expect(t.sent.at(-1)![1]).not.toBe(t.sent[3]![1])
+    // An hour on with nothing more landed, its person is told again, as a line of its own.
+    await passes(t, 60, landed)
+    expect(hows(t).slice(2)).toEqual(['tell', 'say'])
+    expect(t.sent.at(-1)![1]).not.toBe(t.sent[1]![1])
   })
 
   it('goes on telling the PM each hour while the team lands work between', async () => {
@@ -382,9 +383,9 @@ describe('the numbers, told as they are due', () => {
     const u = setup()
     u.goal.mockResolvedValue(goal)
     await passes(u, 3 * 60 + 20, { ...quiet, landed: 1 })
-    expect(u.sent.map(([how]) => how)).toEqual(['post', 'tell', 'tell', 'tell', 'say'])
+    expect(u.sent.map(([how]) => how)).toEqual(['post', 'tell', 'say'])
     expect(u.sent[0]![2]).toBe(dayLine({ ...quiet, landed: 1 }, goal, ''))
-    expect(u.goal).toHaveBeenCalledTimes(4)
+    expect(u.goal).toHaveBeenCalledTimes(2)
     // While a line waits to be tried again the goal is not read: every minute for hours, with its PM stopped (first review).
     const v = setup()
     v.goal.mockResolvedValue(goal)
@@ -395,10 +396,10 @@ describe('the numbers, told as they are due', () => {
     // A goal GitHub would not give is said once in the log, and the line goes without it; a project with none is told how.
     const w = setup()
     await passes(w, 76, quiet)
-    expect(w.sent.map(([, , text]) => text)).toEqual([shortLine(['Ada', 'Kai'], quiet, '14:15', undefined), shortLine(['Ada', 'Kai'], quiet, '15:15', undefined)])
+    expect(w.sent.map(([, , text]) => text)).toEqual([shortLine(['Ada', 'Kai'], quiet, '14:15', undefined), toldLine(['Ada', 'Kai'], quiet)])
     expect(w.log.mock.calls).toEqual([['[super-tab] numbers: GOAL_UNREAD acme/app: No goal is read in this test.']])
     w.goal.mockRejectedValue('no words')
-    await passes(w, 60, quiet)
+    await passes(w, 60, { ...quiet, activity: w.clock.now })
     expect(w.log).toHaveBeenLastCalledWith('[super-tab] numbers: GOAL_UNREAD acme/app: no words')
     const x = setup()
     x.goal.mockResolvedValue(null)
@@ -408,30 +409,32 @@ describe('the numbers, told as they are due', () => {
 
   it('says only what is so now after hours nobody watched, and counts what it told before them', async () => {
     const t = setup()
-    await passes(t, 76, quiet)
-    expect(hows(t)).toEqual(['tell', 'tell'])
-    // The computer slept seventeen hours: on waking the PM is told who has nothing now, the third time.
+    await passes(t, 16, quiet)
+    expect(hows(t)).toEqual(['tell'])
+    // The computer slept seventeen hours: on waking, its person is told who has nothing now, the PM having been told once.
     t.clock.now += 17 * HOUR
     await passes(t, 1, quiet)
-    expect(t.sent.at(-1)).toEqual(['tell', expect.any(String), shortLine(['Ada', 'Kai'], quiet, hhmm(t.clock.now - MINUTE), undefined)])
-    expect(kept(t).told).toBe(3)
+    expect(t.sent.at(-1)).toEqual(['say', expect.any(String), toldLine(['Ada', 'Kai'], quiet)])
+    expect(kept(t)).toMatchObject({ told: 1, said: true })
     // A clock set back does not wait the hour, or a builder's own wait, from a moment still to come.
-    t.clock.now -= 30 * HOUR
-    await passes(t, 15, quiet)
-    expect(t.sent).toHaveLength(3)
-    await passes(t, 1, quiet)
-    expect(hows(t)).toEqual(['tell', 'tell', 'tell', 'say'])
+    const u = setup()
+    await passes(u, 16, quiet)
+    u.clock.now -= 30 * HOUR
+    await passes(u, 15, quiet)
+    expect(u.sent).toHaveLength(1)
+    await passes(u, 1, quiet)
+    expect(hows(u)).toEqual(['tell', 'say'])
   })
 
   it('keeps what it told over a restart, counts a builder\'s wait from its own passes, and writes only as something changes', async () => {
     const t = setup()
-    await passes(t, 76, quiet)
-    expect(hows(t)).toEqual(['tell', 'tell'])
+    await passes(t, 16, quiet)
+    expect(hows(t)).toEqual(['tell'])
     const again = t.make()
     await passes(t, 59, quiet, again)
-    expect(t.sent).toHaveLength(2)
+    expect(t.sent).toHaveLength(1)
     await passes(t, 62, quiet, again)
-    expect(hows(t)).toEqual(['tell', 'tell', 'tell', 'say'])
+    expect(hows(t)).toEqual(['tell', 'say'])
     // At rest, with builders waiting or with none, and over another restart, nothing is written.
     const written = statSync(t.file).mtimeMs, text = readFileSync(t.file, 'utf8')
     await passes(t, 30, quiet, again)
@@ -467,7 +470,7 @@ describe('the numbers, told as they are due', () => {
     await passes(t, 55, landed)
     expect(hows(t)).toEqual(['post', 'tell'])
     await passes(t, 1, landed)
-    expect(hows(t)).toEqual(['post', 'tell', 'tell'])
+    expect(hows(t)).toEqual(['post', 'tell', 'say'])
     // Taken once, a kind's next failure waits from the start again: 30 s, not the minutes the last one had reached.
     const x = setup(new Date(2026, 10, 11, 9, 0).getTime()), posting = numbers({ free: [] })
     x.failing.set('post', down)
@@ -481,13 +484,13 @@ describe('the numbers, told as they are due', () => {
     expect(x.tried).toHaveLength(5 + 1 + 3)
     // The line to its person, not taken, is said when the server takes it.
     const w = setup()
-    await passes(w, 136, quiet)
+    await passes(w, 16, quiet)
     w.failing.set('say', down)
     await passes(w, 61, quiet)
-    expect(hows(w)).toEqual(['tell', 'tell', 'tell'])
+    expect(hows(w)).toEqual(['tell'])
     w.failing.clear()
     await passes(w, 3, quiet)
-    expect(hows(w)).toEqual(['tell', 'tell', 'tell', 'say'])
+    expect(hows(w)).toEqual(['tell', 'say'])
     // A PM with no chat, and a failure with no words, are tried the same way.
     for (const failure of [new Error('Juno has no chat with its person.'), 'no words']) {
       const u = setup()
@@ -512,13 +515,13 @@ describe('the numbers, told as they are due', () => {
     expect(notes(t)).toHaveLength(1)
     // The line to its person the same: tried again past the hour's edge, it is one operation.
     const w = setup()
-    await passes(w, 136, quiet)
+    await passes(w, 16, quiet)
     w.failing.set('say', down)
     await passes(w, 61, quiet)
     w.failing.clear()
     await passes(w, 3, quiet)
-    expect(w.tried.slice(3)).toEqual(['say', 'say', 'say'])
-    expect(new Set(w.ids.slice(3)).size).toBe(1)
+    expect(w.tried.slice(1)).toEqual(['say', 'say', 'say'])
+    expect(new Set(w.ids.slice(1)).size).toBe(1)
     // Refused for what it says, it is not typed and not counted: the hour passes, and its person is never told the PM was
     // told what it was not.
     const u = setup()
@@ -529,10 +532,10 @@ describe('the numbers, told as they are due', () => {
     expect(notes(u)).toEqual(['[super-tab] numbers: REFUSED acme/app: The request was blocked.'])
     // A line to its person the server refuses for good is not said again each hour.
     const v = setup()
-    await passes(v, 136, quiet)
+    await passes(v, 16, quiet)
     v.failing.set('say', new SuperTabHostError('REQUEST_BLOCKED', 'The request was blocked.', 403))
     await passes(v, 5 * 60, quiet)
-    expect(v.tried).toEqual(['tell', 'tell', 'tell', 'say'])
+    expect(v.tried).toEqual(['tell', 'say'])
   })
 
   it('gives each message an id of its project, its kind and the tell before it, or its day', async () => {
@@ -550,12 +553,13 @@ describe('the numbers, told as they are due', () => {
     expect(first.sent[1]![1]).not.toBe(first.sent[0]![1])
     expect(first.sent[0]![1]).not.toBe(elsewhere.sent[0]![1])
     // A later tell, tried again in the next clock hour, is the same operation: its id is the tell before it, not the hour.
-    const edge = setup(NOW + 40 * MINUTE)
+    // The project moves meanwhile, so the next is a tell again, not its person's line.
+    const edge = setup(NOW + 40 * MINUTE), moving = { ...quiet, activity: NOW + HOUR }
     await passes(edge, 16, quiet)
     edge.failing.set('tell', down)
-    await passes(edge, 61, quiet)
+    await passes(edge, 61, moving)
     edge.failing.clear()
-    await passes(edge, 20, quiet)
+    await passes(edge, 20, moving)
     expect(edge.ids.slice(1).every(id => id === edge.ids[1])).toBe(true)
     expect(new Set(edge.ids).size).toBe(2)
     expect(new Date(edge.clock.now).getHours()).toBeGreaterThan(new Date(NOW + 100 * MINUTE).getHours())
@@ -567,8 +571,8 @@ describe('the numbers, told as they are due', () => {
     // A tell, the line to its person and the day's post never share one.
     const all = setup()
     await passes(all, 3 * 60 + 20, { ...quiet, landed: 1 })
-    expect(hows(all)).toEqual(['post', 'tell', 'tell', 'tell', 'say'])
-    expect(new Set(all.sent.map(([, id]) => id)).size).toBe(5)
+    expect(hows(all)).toEqual(['post', 'tell', 'say'])
+    expect(new Set(all.sent.map(([, id]) => id)).size).toBe(3)
   })
 
   it('posts the day\'s numbers once, from nine, and none for a day with nothing to say', async () => {
