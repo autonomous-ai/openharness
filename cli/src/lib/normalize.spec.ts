@@ -70,6 +70,10 @@ describe('folding a transcript that ends mid-turn', () => {
       stop_reason: 'end_turn' } })
     for (const line of [userPrompt('another'), thinking('end_turn'), redacted]) lineToEvents(line, alone)
     expect(alone.turnOpen).toBe(true)
+    // A /goal pass that ended so is continued in the same open turn: marked as one, so its Stop hook leaves it to the transcript.
+    const goal = JSON.stringify({ type: 'attachment', attachment: { type: 'goal_status', met: false, condition: 'tests pass', reason: 'not yet' } })
+    expect(lineToEvents(goal, alone)).toEqual([])
+    expect(alone.continued).toBe(true)
   })
 
   it('keeps the turn open while a tool call is unresolved', () => {

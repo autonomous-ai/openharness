@@ -868,7 +868,9 @@ export function lineToEvents(rawLine: string, state: TurnState): LiveEvent[] {
   // A Stop hook that blocked: the pass's end_turn closed the turn Claude Code works on in. Open it again.
   const continued = stopHookContinuation(raw)
   if (continued !== null) {
-    if (state.turnOpen) return []
+    // Still open when its pass ended on thinking alone, which closes nothing: it is a continued turn all the same, for the Stop
+    // hook of the pass before it to leave to the transcript (core/turns/turnHooks.ts).
+    if (state.turnOpen) { state.continued = true; return [] }
     state.turnOpen = true
     state.opened = (state.opened ?? 0) + 1
     state.pendingTools.clear()
