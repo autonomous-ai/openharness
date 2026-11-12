@@ -452,6 +452,28 @@ describe('tokens for a task, counted on its builder\'s own computer (taskTokens.
       pulls: { 'acme/app': { 30: { head: 'bbb', draft: false }, 31: { head: 'new', draft: false } } } })
   })
 
+  // One terminal can be an agent of two Swarms (service.ts SWARM_AMBIGUOUS): its looks are its first Swarm's agent, its verdicts
+  // by command its second's. Moving back into a terminal it used, an entry starts from that terminal's last count: from none,
+  // the second verdict's tokens were never written (review of #4143).
+  it('counts each verdict of a terminal that is an agent of two Swarms, as the terminal\'s entry goes back and forth', async () => {
+    const f = setup()
+    const A = { tabId: 'T1', agentId: 'a', harnessId: 'h1' }, B = { tabId: 'T2', agentId: 'b', harnessId: 'h1' }
+    f.state.counts.h1 = of(0)
+    const use = (n: number) => { f.state.counts.h1 = of((f.state.counts.h1?.[SONNET]?.input ?? 0) + n) }
+    await f.ledger.looked(A, [hand(14)])
+    use(1_000); f.state.now += MIN; await f.ledger.ended('h1')
+    await f.ledger.looked(A, [hand(14)])
+    use(300); f.state.now += MIN
+    await f.ledger.read(B, 'other/repo', 50)
+    use(200); await f.ledger.ended('h1')
+    await f.ledger.looked(A, [hand(14)])
+    use(700); f.state.now += MIN; await f.ledger.ended('h1')
+    await f.ledger.looked(A, [hand(14)])
+    use(400); f.state.now += MIN
+    await f.ledger.read(B, 'other/repo', 51)
+    expect(f.rows()).toContain(`T2/b other/repo#51 read ${SONNET}:400 rounds=1`)
+  })
+
   it('reads nothing it cannot trust from its file: an agent or a row that is not one is counted from now', async () => {
     const f = setup()
     const row = { repository: 'acme/app', number: 30, kind: 'build', tokens: tokens(700), rounds: 0, startedAt: T0, endedAt: T0 }

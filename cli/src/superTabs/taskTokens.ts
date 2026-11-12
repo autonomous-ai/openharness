@@ -300,7 +300,9 @@ export class TaskTokens {
     if (here && theirs(here)) return here
     if (here) memory[`${here.tabId}/${here.agentId}`] = here
     const moved = Object.keys(memory).find(id => theirs(memory[id]!))
-    const kept: Kept = moved ? { ...memory[moved]!, from: null }
+    // Moved into a terminal it used before, it counts from that terminal's last count; into a new one (Change agent), from its
+    // first reading.
+    const kept: Kept = moved ? { ...memory[moved]!, from: here?.from ?? null }
       : { tabId: agent.tabId, agentId: agent.agentId, at: this.now(), from: here?.from ?? null, carried: {}, began: null, pulls: {}, rows: {} }
     if (moved) delete memory[moved]
     memory[agent.harnessId] = kept
