@@ -53,7 +53,10 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
   var _shared = SwarmSharedInstructions.none;
 
   /// What Harness adds to its instructions at every start, as its computer last said; null when it says none.
-  String? _harness;
+  SwarmBasics? _harness;
+
+  /// Whether a PM's role from Harness is opened to its text: folded, as the other files are.
+  bool _roleOpen = false;
 
   /// Why the file could not be read, in words.
   String? _readError;
@@ -96,6 +99,7 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
       _file = null;
       _shared = SwarmSharedInstructions.none;
       _harness = null;
+      _roleOpen = false;
       _readError = null;
       _editing = false;
       _saving = false;
@@ -322,8 +326,10 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
     );
   }
 
-  /// The agent's own file, then what else instructs it in its folder, one after the other. While the own file is typed, it
-  /// has the pane to itself.
+  /// What instructs the agent, narrowest first (anh Dee, 2026-11-12: "users can have control and edit the exact place they
+  /// want"): the agent itself, its own file and, for a project's PM, the role Harness gives it; the project's files; and
+  /// Harness's. Its own file is the one place to change, and wins where they differ, as its launch tells it. While it is typed,
+  /// it has the pane to itself.
   Widget _body() {
     if (widget.link == null) {
       return _note('Open it on ${widget.machineName}.');
@@ -332,55 +338,81 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
     if (_editing) return _editor();
     if (file == null && error == null) return const SizedBox.shrink();
     final own = (file?.text ?? '').trim().isNotEmpty;
+    final harness = _harness;
     final blocks = <Widget>[
-      if (error != null)
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            // Where the headings below start.
+            padding: const EdgeInsets.fromLTRB(
+              grid.AppDesktop.panelPadding,
+              grid.AppDesktop.panelPadding,
+              grid.AppDesktop.panelPadding,
+              grid.AppDesktop.controlGap,
+            ),
+            child: Text(
+              'Yours first; it wins where they differ.',
+              key: const ValueKey('swarm-precedence'),
+              style: DesktopChrome.metadata(),
+            ),
+          ),
+          _heading(widget.name, 'swarm-own-heading'),
+          if (error != null) ...[
             _note(error, key: 'swarm-instructions-error'),
             Padding(
               // The glyph sits 8 points inside its 32-point target: it starts where the note's words do.
               padding: const EdgeInsets.symmetric(
                 horizontal: SwarmLayout.barSide - 8,
               ),
-              child: AppIconButton(
-                key: const ValueKey('swarm-instructions-retry'),
-                icon: AppIcons.refreshCw,
-                tooltip: 'Try again',
-                spinning: _asking,
-                onPressed: _read,
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: AppIconButton(
+                  key: const ValueKey('swarm-instructions-retry'),
+                  icon: AppIcons.refreshCw,
+                  tooltip: 'Try again',
+                  spinning: _asking,
+                  onPressed: _read,
+                ),
               ),
             ),
-          ],
-        )
-      else if (own)
-        Padding(
-          padding: const EdgeInsets.all(grid.AppDesktop.panelPadding),
-          child: SelectableText(
-            file!.text!,
-            key: const ValueKey('swarm-instructions-text'),
-            // At the terminal's size, as the panes beside it (anh Dee, 2026-11-10).
-            style: grid.AppType.mono(color: DesktopChrome.foreground)
-                .copyWith(fontSize: SwarmType.sizeOf(context)),
-          ),
-        )
-      else
-        _note(
-          'Empty for now. Tell ${widget.name} how you want it to work, and it '
-          'writes it down here.',
-          key: 'swarm-instructions-empty',
-        ),
+          ] else if (own)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                grid.AppDesktop.panelPadding,
+                0,
+                grid.AppDesktop.panelPadding,
+                grid.AppDesktop.panelPadding,
+              ),
+              child: SelectableText(
+                file!.text!,
+                key: const ValueKey('swarm-instructions-text'),
+                // At the terminal's size, as the panes beside it (anh Dee, 2026-11-10).
+                style: grid.AppType.mono(color: DesktopChrome.foreground)
+                    .copyWith(fontSize: SwarmType.sizeOf(context)),
+              ),
+            )
+          else
+            _note(
+              'Empty for now. Tell ${widget.name} how you want it to work, and it '
+              'writes it down here.',
+              key: 'swarm-instructions-empty',
+            ),
+          if (harness?.pm case final pm?) _role(pm),
+        ],
+      ),
       if (shared.files.isNotEmpty || shared.skipped.isNotEmpty)
         _group(
-          'From its folder',
+          'This project',
           'swarm-shared',
           shared.files,
           skipped: shared.skipped,
           skippedKey: 'swarm-skipped',
+          note: 'Shared with your team; changed by pull request.',
         ),
-      if (_harness case final harness?)
-        _group('From Harness', 'swarm-harness', [
-          SwarmSharedFile(name: 'Swarm basics', text: harness),
+      if (harness != null)
+        _group('Harness', 'swarm-harness', [
+          SwarmSharedFile(name: 'Swarm basics', text: harness.swarm),
         ]),
       if (shared.personal.isNotEmpty || shared.personalSkipped.isNotEmpty)
         _group(
@@ -422,6 +454,86 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
     );
   }
 
+  /// A section's heading, in metadata grey, as each group's.
+  Widget _heading(String text, String key) => Padding(
+    padding: const EdgeInsets.fromLTRB(
+      grid.AppDesktop.panelPadding,
+      grid.AppDesktop.controlGap,
+      grid.AppDesktop.panelPadding,
+      grid.AppDesktop.controlGap,
+    ),
+    child: Text(text, key: ValueKey(key), style: DesktopChrome.metadata()),
+  );
+
+  /// A PM's role as Harness gives it, under its own file (anh Dee, 2026-11-12: "PM basics.. shouldn't that be part of devon?"):
+  /// folded to one row, read only, and where to change it. A builder has none.
+  Widget _role(String pm) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      InkWell(
+        key: const ValueKey('swarm-pm-row'),
+        onTap: () => setState(() => _roleOpen = !_roleOpen),
+        child: Semantics(
+          button: true,
+          expanded: _roleOpen,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: grid.AppDesktop.panelPadding,
+              vertical: grid.AppDesktop.controlGap,
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'As this project\'s PM, Harness tells it:',
+                    key: const ValueKey('swarm-pm-name'),
+                    style: DesktopChrome.control(medium: true),
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Icon(
+                  _roleOpen ? AppIcons.chevronDown : AppIcons.chevronRight,
+                  size: 14,
+                  color: DesktopChrome.muted,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+      if (_roleOpen) ...[
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            grid.AppDesktop.panelPadding,
+            0,
+            grid.AppDesktop.panelPadding,
+            grid.AppDesktop.controlGap,
+          ),
+          child: SelectableText(
+            pm,
+            key: const ValueKey('swarm-pm-text'),
+            // At the terminal's size, as the panes beside it (anh Dee, 2026-11-10).
+            style: grid.AppType.mono(color: DesktopChrome.foreground)
+                .copyWith(fontSize: SwarmType.sizeOf(context)),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            grid.AppDesktop.panelPadding,
+            0,
+            grid.AppDesktop.panelPadding,
+            grid.AppDesktop.controlGap,
+          ),
+          child: Text(
+            'To change it, write it in agents/${widget.name}.md.',
+            key: const ValueKey('swarm-pm-note'),
+            style: DesktopChrome.metadata(),
+          ),
+        ),
+      ],
+    ],
+  );
+
   /// What the agent's engine is told by its maker first, which nobody sees or changes here (anh Dee, 2026-11-11: an empty
   /// file read as if the agent had no instructions at all).
   String? get _engineOwn => switch (widget.agent.engine.trim()) {
@@ -441,6 +553,7 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
     List<SwarmSharedFile> files, {
     List<SwarmSkippedFile> skipped = const [],
     String? skippedKey,
+    String? note,
   }) => Padding(
     padding: const EdgeInsets.symmetric(vertical: grid.AppDesktop.controlGap),
     child: Column(
@@ -459,6 +572,20 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
             style: DesktopChrome.metadata(),
           ),
         ),
+        if (note != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              grid.AppDesktop.panelPadding,
+              0,
+              grid.AppDesktop.panelPadding,
+              grid.AppDesktop.controlGap,
+            ),
+            child: Text(
+              note,
+              key: ValueKey('$key-note'),
+              style: DesktopChrome.metadata(),
+            ),
+          ),
         for (final (i, one) in files.indexed) _sharedFile(key, i, one),
         for (final (i, skip) in skipped.indexed)
           Padding(
