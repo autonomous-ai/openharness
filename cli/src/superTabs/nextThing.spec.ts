@@ -6,6 +6,8 @@ import type { TurnEnd } from '../core/api.js'
 import type { WatchedAgent } from './githubMentions.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { IDLE_ASK_MS, IDLE_BACK_MS, INBOX_MAX, NEXT_SETTLE_MS, NEXT_TIMES, NextThing, START_LOOK_MS, TELL_SETTLE_MS } from './nextThing.js'
+import { TAKE_MARGIN_MS, type TaskOffer } from './taskOffers.js'
+import { hhmm } from './githubVerdict.js'
 import type { Hand } from './taskTokens.js'
 import { SuperTabHostError } from './wire.js'
 
@@ -14,7 +16,7 @@ const root = mkdtempSync(join(tmpdir(), 'super-tab-next-thing-'))
 afterAll(() => rmSync(root, { recursive: true, force: true }))
 let files = 0
 
-const PIP: WatchedAgent = { tabId: 'tab', agentId: 'pip', harnessId: 'h-pip', chat: 'chat-pip', names: ['Pip'], label: 'builder:pip', repos: ['acme/app'] }
+const PIP: WatchedAgent = { tabId: 'tab', agentId: 'pip', harnessId: 'h-pip', chat: 'chat-pip', names: ['Pip'], label: 'builder:pip', repos: ['acme/app'], active: ['acme/app'] }
 const TAKE = 'harness super-tab take'
 const HEAD = 'b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0'
 /** A reader's comment on a pull request, as a teammate's verdict reads on GitHub. */
@@ -34,6 +36,8 @@ function setup(options: { items?: Json[]; working?: boolean | null; watched?: Wa
     owed: [] as Array<{ number: number; sha: string }>,
     // The team's builder labels, and who the backend recorded as each verdict comment's writer, by its id.
     team: new Set<string>(), recorded: {} as Record<number, string>, recordsDown: false,
+    // Its live offers on the Swarm's server (taskOffers.ts), with the server's time, and each task as GitHub has it by number.
+    offers: { offers: [] as TaskOffer[], serverTime: 0 }, offersDown: false, issues: {} as Record<number, Json>,
     // Set, the next read waits on it: GitHub slow to answer that one.
     hold: null as Promise<void> | null }
   const pullOf = (number: number): Json => ({ number, state: 'open', draft: false, body: '', user: { login: 'dee' },
@@ -50,6 +54,8 @@ function setup(options: { items?: Json[]; working?: boolean | null; watched?: Wa
     const ok = (body: unknown) => ({ status: 200, etag: null, body, resetAt: null })
     const url = new URL(`https://api.github.com${path}`)
     if (url.pathname === '/repos/acme/app/issues') return ok(state.items)
+    const one = /^\/repos\/acme\/app\/issues\/(\d+)$/.exec(url.pathname)
+    if (one) return ok(state.issues[Number(one[1])])
     const pull = /^\/repos\/acme\/app\/pulls\/(\d+)$/.exec(url.pathname)
     if (pull) return ok(pullOf(Number(pull[1])))
     const talk = /^\/repos\/acme\/app\/issues\/(\d+)\/comments$/.exec(url.pathname)
@@ -78,10 +84,11 @@ function setup(options: { items?: Json[]; working?: boolean | null; watched?: Wa
   const team = vi.fn(async (_agent: WatchedAgent) => state.team)
   const named = vi.fn(async (_agent: WatchedAgent, _repo: string, comments: Json[]) => state.recordsDown ? null
     : comments.map(c => state.recorded[Number(c.id)] ? { ...c, recorded: state.recorded[Number(c.id)] } : c))
+  const offers = vi.fn(async (_agent: WatchedAgent) => { if (state.offersDown) throw new SuperTabHostError('BACKEND_UNAVAILABLE', 'No answer.', 503); return state.offers })
   // What each look found the agent with, as the tokens of its tasks are counted by (taskTokens.ts).
   const looked = vi.fn((_agent: WatchedAgent, _hands: Hand[]) => {})
   const make = () => new NextThing({ onEnd, watched: async () => state.watched, owed, working: async () => state.working, get, send, tell, say, file, log,
-    team, named, looked })
+    team, named, offers, looked })
   let turns = 0
   /** A turn of [harnessId] ending, then the settle after it. */
   const end = async (extra: Partial<TurnEnd> = {}) => {
@@ -90,7 +97,7 @@ function setup(options: { items?: Json[]; working?: boolean | null; watched?: Wa
     await vi.advanceTimersByTimeAsync(NEXT_SETTLE_MS)
   }
   const told = () => tell.mock.calls.map(([, , text]) => text)
-  return { state, listeners, onEnd, calls, tell, say, log, file, owed, send, written, refuse, make, end, told, team, named, looked, next: make() }
+  return { state, listeners, onEnd, calls, tell, say, log, file, owed, send, written, refuse, make, end, told, team, named, offers, looked, next: make() }
 }
 
 describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => {
@@ -138,6 +145,70 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     expect(bare.told()).toEqual([`Next: acme/app#14 Add the export. It is given to you and nobody has taken it. Build it on the branch of #30; its pull request still goes into the default branch: ${TAKE} acme/app#14`])
     bare.next.stop()
     f.next.stop()
+  })
+
+  // The allocator's design, package 16: a task its computer accepted on an offer is held for it a few minutes only (taskOffers.ts),
+  // and carries no label until it takes it.
+  it('types a task its computer accepted on an offer before one given by label, with when the offer ends, and at once while idle', async () => {
+    const f = setup({ items: [item(12, 'Fix the login bug')] })
+    const accepted = (number: number, extra: Partial<TaskOffer> = {}): TaskOffer => ({ repository: 'acme/app', number, agentId: 'pip', state: 'accepted',
+      offeredAt: 1_000, acceptedAt: 2_000, expiresAt: 602_000, ...extra })
+    f.state.offers = { offers: [accepted(16), accepted(14), accepted(13, { state: 'offered' }), accepted(17, { repository: 'acme/other' }),
+      accepted(11, { expiresAt: 302_000 + TAKE_MARGIN_MS - 1 })], serverTime: 302_000 }
+    f.state.issues[14] = { number: 14, state: 'open', title: 'Add the export', labels: [{ name: 'size:s' }] }
+    // Offered and not accepted yet: its computer has not said it has room. And one whose hold ends before a take could land.
+    f.state.issues[13] = { number: 13, state: 'open', title: 'Not yet', labels: [] }
+    f.state.issues[11] = { number: 11, state: 'open', title: 'Too late', labels: [] }
+    // Taken since (its label is on): nothing to take.
+    f.state.issues[16] = { number: 16, state: 'open', title: 'Taken', labels: [{ name: 'builder:pip' }] }
+    f.next.start()
+    f.next.offered('h-pip')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(f.told()).toEqual([`Next: acme/app#14 Add the export. It is offered to you until ${hhmm(Date.now() + 300_000 - TAKE_MARGIN_MS)}: ${TAKE} acme/app#14`])
+    expect(f.offers).toHaveBeenCalledOnce()
+    // Taken, closed or gone to another since, the next given by label comes.
+    f.state.issues[14] = { ...f.state.issues[14], state: 'closed' }
+    await f.end()
+    expect(f.told()[1]).toBe(`Next: acme/app#12 Fix the login bug. It is given to you and nobody has taken it: ${TAKE} acme/app#12`)
+    f.next.stop()
+  })
+
+  // Review of #4153: an agent that accepts and never takes is offered its task again and again, and was typed it each time.
+  it('types an offered task once however often it is offered again, then tells its person once, and no more', async () => {
+    const f = setup({ items: [] })
+    const accepted = (offeredAt: number): TaskOffer => ({ repository: 'acme/app', number: 14, agentId: 'pip', state: 'accepted', offeredAt, expiresAt: 600_000, acceptedAt: offeredAt })
+    f.state.issues[14] = { number: 14, state: 'open', title: 'Add the export', labels: [] }
+    f.state.offers = { offers: [accepted(1_000)], serverTime: 1_000 }
+    f.next.start()
+    await f.end()
+    f.state.offers = { offers: [accepted(200_000)], serverTime: 200_000 }
+    await f.end()
+    await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
+    f.state.offers = { offers: [accepted(400_000)], serverTime: 400_000 }
+    await f.end()
+    await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
+    expect(f.told()).toHaveLength(1)
+    expect(f.say.mock.calls.map(call => call[2])).toEqual(['When my turn ended, Harness offered me acme/app#14 (Add the export) as my next task, and my next turn changed nothing.'])
+    f.next.stop()
+  })
+
+  it('types a task given by label when the server cannot say what is offered, and names an offered task with no title by its number', async () => {
+    const f = setup({ items: [item(12, 'Fix the login bug')] })
+    f.state.offersDown = true
+    f.next.start()
+    await f.end()
+    expect(f.told()).toEqual([`Next: acme/app#12 Fix the login bug. It is given to you and nobody has taken it: ${TAKE} acme/app#12`])
+    const g = setup({ items: [] })
+    g.state.offers = { offers: [{ repository: 'acme/app', number: 14, agentId: 'pip', state: 'accepted', offeredAt: 1, expiresAt: 600_001 }], serverTime: 1 }
+    g.state.issues[14] = { number: 14, state: 'open', labels: [] }
+    g.next.start()
+    await g.end()
+    expect(g.told()).toEqual([`Next: acme/app#14. It is offered to you until ${hhmm(Date.now() + 600_000 - TAKE_MARGIN_MS)}: ${TAKE} acme/app#14`])
+    for (let i = 0; i < NEXT_TIMES; i++) await g.end()
+    await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
+    expect(g.say.mock.calls[0]![2]).toBe('When my turn ended, Harness offered me acme/app#14 as my next task, and my next turn changed nothing.')
+    f.next.stop()
+    g.next.stop()
   })
 
   it('types nothing while it holds a task it took with no pull request yet: its own work comes first', async () => {
@@ -1030,7 +1101,7 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     const watched = f.state.watched
     const next = new NextThing({ onEnd: f.onEnd, watched: async () => { await slow; return watched }, owed: () => [], working: async () => false, send: f.send,
       get: async () => ({ status: 200, etag: null, body: f.state.items, resetAt: null }), tell: f.tell, say: f.say, file: f.file, team: f.team, named: f.named, log: f.log,
-      looked: f.looked })
+      offers: f.offers, looked: f.looked })
     next.start()
     await f.end()
     await f.end()
@@ -1054,7 +1125,8 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const f = setup()
     const next = new NextThing({ onEnd: f.onEnd, watched: async () => { throw new Error('offline') }, owed: () => [], working: async () => false, send: f.send,
-      get: async () => ({ status: 200, etag: null, body: [], resetAt: null }), tell: f.tell, say: f.say, file: f.file, team: f.team, named: f.named, looked: f.looked })
+      get: async () => ({ status: 200, etag: null, body: [], resetAt: null }), tell: f.tell, say: f.say, file: f.file, team: f.team, named: f.named, offers: f.offers,
+      looked: f.looked })
     next.start()
     await f.end()
     expect(warn).toHaveBeenCalledWith('[super-tab] next thing of agent h-pip: Error.')
@@ -1120,7 +1192,7 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     expect(stopped.tell).not.toHaveBeenCalled()
     const failing = new NextThing({ onEnd: f.onEnd, watched: async () => { throw new Error('offline') }, owed: () => [], working: async () => false,
       send: f.send, get: async () => ({ status: 200, etag: null, body: [], resetAt: null }), tell: f.tell, say: f.say, file: f.file, team: f.team, named: f.named, log: f.log,
-      looked: f.looked })
+      offers: f.offers, looked: f.looked })
     failing.start()
     await vi.advanceTimersByTimeAsync(START_LOOK_MS)
     expect(f.log).toHaveBeenCalledWith('[super-tab] next things as Harness started: Error.')
@@ -1165,7 +1237,7 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     const f = setup({ watched: [both], items: [item(12, 'Fix the login bug', ['status:taken'])] })
     const calls: string[] = []
     const next = new NextThing({ onEnd: f.onEnd, watched: async () => [both], owed: () => [], working: async () => false, send: f.send, tell: f.tell, say: f.say, file: f.file,
-      team: f.team, named: f.named, log: f.log, looked: f.looked,
+      team: f.team, named: f.named, log: f.log, offers: f.offers, looked: f.looked,
       get: async path => { calls.push(path); return { status: 200, etag: null, body: path.startsWith('/repos/acme/docs/') ? [] : f.state.items, resetAt: null } } })
     next.start()
     await f.end()

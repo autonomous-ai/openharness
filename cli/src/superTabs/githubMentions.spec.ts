@@ -14,7 +14,7 @@ let files = 0
 
 const START = Date.parse('2026-11-09T12:00:00Z')
 const at = (seconds: number) => new Date(START + seconds * 1000).toISOString()
-const PIP: WatchedAgent = { tabId: 'tab', agentId: 'pip', harnessId: 'h-pip', chat: 'chat-pip', names: ['Pip'], label: 'builder:pip', repos: ['acme/app'] }
+const PIP: WatchedAgent = { tabId: 'tab', agentId: 'pip', harnessId: 'h-pip', chat: 'chat-pip', names: ['Pip'], label: 'builder:pip', repos: ['acme/app'], active: ['acme/app'] }
 
 /** A repository on GitHub as its REST API answers, with ETags: an unchanged answer to the same request is a 304. */
 function fakeGitHub() {
@@ -737,10 +737,18 @@ describe('whom it reads for (watchedAgents)', () => {
     const watched = await watchedAgents({ me: 'dee', live: id => id !== 'h-gone', read,
       roster: async () => [row({}), row({ id: 'ken', contributorId: 'ken' }), row({ id: 'old', regular: false }), row({ id: 'gone', harnessId: 'h-gone' }),
         row({ id: 'stopping' }, { stopRequested: true }), row({ id: 'theirs', machineOwnerId: 'ken' })] })
-    expect(watched).toEqual([{ tabId: 'tab', agentId: 'pip', harnessId: 'h-pip', chat: 'chat-pip', names: ['Pip'], label: 'builder:pip', repos: ['acme/app'] }])
+    expect(watched).toEqual([{ tabId: 'tab', agentId: 'pip', harnessId: 'h-pip', chat: 'chat-pip', names: ['Pip'], label: 'builder:pip', repos: ['acme/app'],
+      active: ['acme/app'] }])
     // A paused one is still watched, so nothing said of its own pull requests is lost, and marked so: it is typed nothing.
     const paused = await watchedAgents({ me: 'dee', live: () => true, read, roster: async () => [row({ pausedAt: '2026-11-12T01:00:00Z' })] })
     expect(paused.map(agent => agent.paused)).toEqual([true])
+    // An archived project's repository is watched still, and is not one a plan reads for what its builders build elsewhere; one an
+    // archived and a live project share is.
+    const archived = await watchedAgents({ me: 'dee', live: () => true, roster: async () => [row({})], read: async () => ({
+      conversations: [{ id: 'chat-pip', kind: 'agent-chat', agentIds: ['pip'] }],
+      projects: [{ repository: { repositoryUrl: 'https://github.com/acme/app.git' } }, { archived: true, repository: { repositoryUrl: 'https://github.com/acme/old.git' } },
+        { archived: true, repository: { repositoryUrl: 'https://github.com/acme/app.git' } }] }) })
+    expect(archived.map(agent => [agent.repos, agent.active])).toEqual([[['acme/app', 'acme/old'], ['acme/app']]])
   })
 
   // The assigner and Desktop name an agent by the name people see; a stored name can be its engine's ("Claude Code").

@@ -320,12 +320,12 @@ describe('contributed machine executor', () => {
     await f.machine.tick()
     expect((f.start.mock.calls as unknown[][]).map(call => call[0])).toEqual([{ tabId: 'tab', startId: 'lead-start' }])
   })
-  it('says in its reading that it starts Product Managers and Regular agents, to a backend that asks, and to no other', async () => {
+  it('says in its reading that it starts Product Managers and Regular agents and answers offers of tasks, to a backend that asks, and to no other', async () => {
     const f = fixture()
     Object.assign(f.pool, { capabilitiesWanted: true })
     await f.machine.tick()
     const posted = (g: typeof f) => g.backend.mock.calls.filter(c => c[1] === 'POST').map(c => c[3] as Record<string, unknown>)
-    expect(posted(f)[0]).toMatchObject({ capabilities: ['leadStart', 'regularAgent', 'leadSwitch', 'turnInbox'] })
+    expect(posted(f)[0]).toMatchObject({ capabilities: ['leadStart', 'regularAgent', 'leadSwitch', 'turnInbox', 'taskOffers'] })
     // A backend from before them does not ask, and would refuse the field.
     const older = fixture()
     await older.machine.tick()
