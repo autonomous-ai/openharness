@@ -1,7 +1,8 @@
 /**
  * The eager Hermes doors: the home a process uses, by Hermes's own rule, and its terminal record and store, read
  * through the kit with Hermes's declared rules. A sandboxed Hermes with only a `HOME` of its own keeps its store under
- * that `HOME`, not under the daemon's default.
+ * that `HOME`, not under the daemon's default; one in another mount namespace names its home and folder in its own
+ * view, and Harness reads them at the daemon's path of them.
  */
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -12,8 +13,10 @@ import { IdentityReadUnavailable } from './kit/identityScan.js'
 
 const readProcessEnv = vi.hoisted(() => vi.fn())
 vi.mock('../lib/processEnv.js', async (real) => ({ ...await real<object>(), readProcessEnv }))
+const processView = vi.hoisted(() => vi.fn())
+vi.mock('../lib/processMounts.js', async (real) => ({ ...await real<object>(), processView }))
 
-const { probeHermesHome, hermesSessionKind, hermesTerminalNames, hermesTerminalStamp, readHermesTerminal } = await import('./identities.js')
+const { probeHermesHome, probeHermesHomeDerived, probeHermesSandbox, hermesSessionKind, hermesTerminalNames, hermesTerminalStamp, readHermesTerminal } = await import('./identities.js')
 
 const { DatabaseSync } = process.getBuiltinModule('node:sqlite') as {
   DatabaseSync: new (path: string) => { exec(sql: string): void; prepare(sql: string): { run(...args: (string | null)[]): void }; close(): void }
@@ -32,6 +35,7 @@ function insert(id: string, source: string, created: string | null): void {
 }
 
 beforeEach(() => {
+  processView.mockReset().mockResolvedValue({ state: 'same' })
   rmSync(home, { recursive: true, force: true })
   mkdirSync(home, { recursive: true })
   mkdirSync(broken, { recursive: true })
@@ -57,6 +61,53 @@ describe('the home a Hermes process uses', () => {
   it('keeps a profile the process named', async () => {
     readProcessEnv.mockResolvedValue({ HOME: '/h', HERMES_HOME: '/h/.hermes/profiles/work' })
     expect(await probeHermesHome(identity, 'hermes')).toBe('/h/.hermes/profiles/work')
+  })
+})
+
+describe('a Hermes in a sandbox', () => {
+  it('translates a sandboxed Hermes\'s home to the daemon\'s view', async () => {
+    readProcessEnv.mockResolvedValue({ HOME: '/home/agent' })
+    processView.mockResolvedValue({ state: 'sandbox', cwd: '/work', toHost: (p: string) => p.replace('/home/agent', '/data/agents/a1').replace(/^\/work/, '/data/work/p1') })
+    expect(await probeHermesHome(identity, 'hermes')).toBe('/data/agents/a1/.hermes')
+    expect(await probeHermesSandbox(identity, 'hermes')).toEqual({ cwd: '/work', hostCwd: '/data/work/p1' })
+  })
+
+  it('cannot see a sandbox whose home or folder has no path here, or whose home it cannot tell', async () => {
+    readProcessEnv.mockResolvedValue({ HOME: '/home/agent' })
+    processView.mockResolvedValue({ state: 'sandbox', cwd: '/work', toHost: () => null })
+    expect(await probeHermesHome(identity, 'hermes')).toBeUndefined()
+    expect(await probeHermesSandbox(identity, 'hermes')).toBe('unseen')
+    processView.mockResolvedValue({ state: 'sandbox', cwd: '/work', toHost: (p: string) => p.startsWith('/work') ? p : null })
+    expect(await probeHermesSandbox(identity, 'hermes')).toBe('unseen')
+    processView.mockResolvedValue({ state: 'sandbox', cwd: '/work', toHost: (p: string) => p.startsWith('/work') ? null : p })
+    expect(await probeHermesSandbox(identity, 'hermes')).toBe('unseen')
+    processView.mockResolvedValue({ state: 'sandbox', cwd: null, toHost: (p: string) => p })
+    expect(await probeHermesSandbox(identity, 'hermes')).toBe('unseen')
+    processView.mockResolvedValue({ state: 'sandbox', cwd: '/work', toHost: (p: string) => p })
+    readProcessEnv.mockResolvedValue(null); expect(await probeHermesSandbox(identity, 'hermes')).toBe('unseen')
+    readProcessEnv.mockResolvedValue({ HERMES_HOME: 'relative' }); expect(await probeHermesSandbox(identity, 'hermes')).toBe('unseen')
+  })
+
+  it('is no sandbox in the daemon\'s namespace, when it cannot tell, or for another engine', async () => {
+    readProcessEnv.mockResolvedValue({ HOME: '/home/agent' })
+    for (const state of ['same', 'unreadable'] as const) {
+      processView.mockResolvedValue({ state })
+      expect(await probeHermesSandbox(identity, 'hermes')).toBeUndefined()
+    }
+    expect(await probeHermesSandbox(identity, 'claude')).toBeUndefined()
+    expect(processView).toHaveBeenCalledTimes(2)
+  })
+
+  it('marks a home it worked out, and not one the process named by the path Harness reads it at', async () => {
+    processView.mockResolvedValue({ state: 'same' })
+    readProcessEnv.mockResolvedValue({ HOME: '/sandbox/agent' }); expect(await probeHermesHomeDerived(identity, 'hermes')).toBe(true)
+    readProcessEnv.mockResolvedValue({ HOME: '/h', HERMES_HOME: '/data/p/profiles/work' }); expect(await probeHermesHomeDerived(identity, 'hermes')).toBe(false)
+    processView.mockResolvedValue({ state: 'sandbox', cwd: '/work', toHost: (p: string) => p })
+    expect(await probeHermesHomeDerived(identity, 'hermes')).toBe(false) // the same path on both sides
+    processView.mockResolvedValue({ state: 'sandbox', cwd: '/work', toHost: (p: string) => p.replace('/data/p', '/host/p') })
+    expect(await probeHermesHomeDerived(identity, 'hermes')).toBe(true) // the row holds the daemon's path, not what it set
+    readProcessEnv.mockResolvedValue(null); expect(await probeHermesHomeDerived(identity, 'hermes')).toBe(false)
+    expect(await probeHermesHomeDerived(identity, 'claude')).toBe(false)
   })
 })
 
