@@ -350,6 +350,7 @@ export class SessionSearchStore {
     db.exec('PRAGMA busy_timeout = 1000')
     const store = new SessionSearchStore(db)
     store.migrate()
+    store.forgetForGood()
     if (fresh) {
       // What people said to their agents: this user's eyes only, like the transcripts themselves.
       for (const suffix of ['', '-wal', '-shm']) {
@@ -411,6 +412,19 @@ export class SessionSearchStore {
       END;
     `)
     this.db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema', ?)").run(SCHEMA_VERSION)
+  }
+
+  /**
+   * A deleted harness's words leave the files (with `checkpoint`), and its conversation stays out of
+   * the index while its engine still keeps it (OpenClaw's store). The pragma zeroes what a delete frees;
+   * FTS5's own `secure-delete` option was not used: it made every write about 14x slower (Node 24.22,
+   * SQLite 3.53.4). Additive and run at every open, outside `migrate`, so no schema version changes and
+   * a rebuild keeps what is excluded.
+   */
+  private forgetForGood(): void {
+    this.db.exec('PRAGMA secure_delete = ON')
+    this.db.exec('CREATE TABLE IF NOT EXISTS excluded (session_id TEXT PRIMARY KEY)')
+    this.db.exec('CREATE INDEX IF NOT EXISTS sessions_by_agent ON sessions (agent_id)')
   }
 
   private statement(sql: string): Statement {
@@ -526,6 +540,43 @@ export class SessionSearchStore {
     return this.statement('SELECT session_id FROM sessions').all().map((row) => row.session_id as string)
   }
 
+  /** Every session filed under a Harness agent; none for '', which every outside conversation shares. */
+  sessionsOf(agentId: string): string[] {
+    if (!agentId) return []
+    return this.statement('SELECT session_id FROM sessions WHERE agent_id = ?').all(agentId).map((row) => row.session_id as string)
+  }
+
+  /** Keeps a deleted conversation out of the index, across restarts, while its engine still has it. */
+  exclude(sessionId: string): void {
+    this.statement('INSERT OR IGNORE INTO excluded (session_id) VALUES (?)').run(sessionId)
+  }
+
+  include(sessionId: string): void {
+    this.statement('DELETE FROM excluded WHERE session_id = ?').run(sessionId)
+  }
+
+  excluded(): Set<string> {
+    return new Set(this.statement('SELECT session_id FROM excluded').all().map((row) => row.session_id as string))
+  }
+
+  /** Whether a delete removed rows since the last `checkpoint`. */
+  private erased = false
+
+  /**
+   * After a delete, merges the FTS index into one segment: FTS5 keeps a deleted row's entries until its
+   * own merges reach them, and the merge frees their pages for the pragma to zero. Only after a delete
+   * that removed rows, since a merge rewrites the whole index (4.2 s on a 725 MB one) and a purge deletes
+   * once per session key. Then moves the WAL into the database and empties it, so the pages that held
+   * the words leave the WAL file too.
+   */
+  checkpoint(): void {
+    if (this.erased) {
+      this.db.exec("INSERT INTO turns_fts (turns_fts) VALUES ('optimize')")
+      this.erased = false
+    }
+    this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
+  }
+
   /**
    * Replaces the session's turns from `fromTurn` on with `turns` and records where the next pass
    * starts, in one transaction: a reader never sees a half-written session.
@@ -552,10 +603,12 @@ export class SessionSearchStore {
   removeSession(sessionId: string): void {
     this.meta = null
     this.windowSessions = null
-    this.transaction(() => {
-      this.statement('DELETE FROM turns WHERE session_id = ?').run(sessionId)
+    const removed = this.transaction(() => {
+      const turns = this.statement('DELETE FROM turns WHERE session_id = ?').run(sessionId) as { changes: number | bigint }
       this.statement('DELETE FROM sessions WHERE session_id = ?').run(sessionId)
+      return Number(turns.changes) > 0
     })
+    if (removed) this.erased = true
   }
 
   counts(): { sessions: number; turns: number } {
