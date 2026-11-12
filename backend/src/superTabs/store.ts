@@ -2446,7 +2446,7 @@ export class SuperTabStore {
   }
 
   /** Offers task [number] of [repository] to agent [agentId] (taskOffers.ts), as the Product Manager [asAgentId]: only the PM of the
-   *  repository's project (repositoryProject: the first made on it), from its own person's computer (asOwnAgent: the coordinator is
+   *  repository's project (repositoryProject: the one with a PM that got the repository first), from its own person's computer (asOwnAgent: the coordinator is
    *  the PM's person's daemon), and only to an agent that reads that project, is not the PM itself and runs on its own person's
    *  computer, as the Swarm is now (not the read cache). One that does not read it and one that does not exist are refused in the
    *  same words. The offered agent's computer is then told its Swarm changed, as a host is of any change that concerns it, so its
@@ -2457,7 +2457,7 @@ export class SuperTabStore {
       await this.asOwnAgent(tx, user, state, asAgentId)
       const project = ledProject(state, asAgentId)
       if (!project || project.id !== repositoryProject(state, task.repository)?.id) {
-        fail('PM_REQUIRED', 'Only the Product Manager of the first project made on that repository offers its tasks.', 403)
+        fail('PM_REQUIRED', 'Only the Product Manager of the project that got this repository first offers its tasks.', 403)
       }
       const target = state.agents.find(a => a.id === task.agentId)
       if (!target || target.id === asAgentId || !canReadProject(state, { kind: 'agent', agentId: target.id, machineOwnerId: target.machineOwnerId }, project)) {
