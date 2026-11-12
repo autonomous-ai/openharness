@@ -928,6 +928,13 @@ describe('harness delete', () => {
     expect(requests('agent_purge').at(-1)).toMatchObject({ agentId: 'old', sessionId: 's-old', mode: 'delete' })
   })
 
+  it('asks for a harness with no conversation yet (still starting) by none, as purge reads its row', async () => {
+    const { d, run, requests } = setupDelete()
+    d.frames.push(frame('fresh', { sessionId: '', status: 'starting' }))
+    expect((await run(['fresh'])).code).toBe(EXIT.ok)
+    expect(requests('agent_purge').map((r) => r.sessionId)).toEqual([null, null])
+  })
+
   it('says what was kept and why', async () => {
     const { run } = setupDelete({ deleted: true, kept: [{ what: 'engine-store', reason: KEPT }] })
     expect((await run(['claw'])).out).toEqual(['claw on studio: deleted. Everything Harness kept of it is erased.', KEPT])
