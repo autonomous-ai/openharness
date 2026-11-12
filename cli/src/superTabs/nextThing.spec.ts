@@ -165,6 +165,25 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     f.next.stop()
   })
 
+  // Review of #4153: an agent that accepts and never takes is offered its task again and again, and was typed it each time.
+  it('types an offered task once however often it is offered again, then tells its person once, and no more', async () => {
+    const f = setup({ items: [] })
+    const accepted = (offeredAt: number): TaskOffer => ({ repository: 'acme/app', number: 14, agentId: 'pip', state: 'accepted', offeredAt, expiresAt: 600_000, acceptedAt: offeredAt })
+    f.state.issues[14] = { number: 14, state: 'open', title: 'Add the export', labels: [] }
+    f.state.offers = { offers: [accepted(1_000)], serverTime: 1_000 }
+    f.next.start()
+    await f.end()
+    f.state.offers = { offers: [accepted(200_000)], serverTime: 200_000 }
+    await f.end()
+    await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
+    f.state.offers = { offers: [accepted(400_000)], serverTime: 400_000 }
+    await f.end()
+    await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
+    expect(f.told()).toHaveLength(1)
+    expect(f.say.mock.calls.map(call => call[2])).toEqual(['When my turn ended, Harness offered me acme/app#14 (Add the export) as my next task, and my next turn changed nothing.'])
+    f.next.stop()
+  })
+
   it('types a task given by label when the server cannot say what is offered, and names an offered task with no title by its number', async () => {
     const f = setup({ items: [item(12, 'Fix the login bug')] })
     f.state.offersDown = true

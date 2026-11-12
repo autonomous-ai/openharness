@@ -232,7 +232,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     return new GitHubAssign({ projects: led(api, held), crew: crewOfProject(held), get: github.get, send: github.send, records, numbers,
       pmRunning: async project => pmRunsHere((await held().feed.current(60_000)).roster, project, id => !!api.agents.byAgent(id)),
       offers: { offer: (project, number, agentId) => offerTask(ask, project.tabId, project.pmAgentId, { repository: project.repo, number, agentId }),
-        listed: project => projectOffers(ask, project.tabId, project.pmAgentId, project.repo) } })
+        listed: (project, numbers) => projectOffers(ask, project.tabId, project.pmAgentId, project.repo, numbers) } })
   }))(core, sources)
   // What this computer's person's agents shipped, read from GitHub with their own gh and told to the leaderboard (shipping.ts).
   const shipping = (options.shipping ?? (api => new ShippingReporter(api)))(core)
@@ -286,6 +286,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     },
     cores: availableParallelism, onNotice: listener => api.account.onNotice(listener), say: sayToPerson(api),
     accepted: agent => nextThings.offered(agent.harnessId),
+    file: join(api.dataDir, 'super-tab-offers-told.json'),
   })))(core, sources)
   const wake = () => {
     const machine = core.daemon.machineId()

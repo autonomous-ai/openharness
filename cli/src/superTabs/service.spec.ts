@@ -1089,9 +1089,14 @@ describe('a verdict by command', () => {
     expect(await take()).toMatchObject({ ok: true, value: { taken: true } })
     expect(t.call).toHaveBeenCalledWith('GET', `/api/super-tabs/tab/task-offers/mine?asAgentId=${t.agentId}`, undefined)
     expect(t.sent[0]).toEqual({ path: '/repos/acme/app/issues/34/labels', body: { labels: ['builder:juno', 'status:taken'] } })
-    // Its hold nearly over, or a server without offers: not given, and nothing written.
+    // Its hold nearly over, an accepted offer of another task or another repository, or a server without offers: not given, and
+    // nothing written (review of #4153: neither match was tried).
     t.sent.length = 0
     offers.offers[0]!.expiresAt = 100_000 + 119_999
+    expect(await take()).toMatchObject({ error: 'TASK_NOT_GIVEN' })
+    offers.offers[0] = { ...offers.offers[0]!, number: 35, expiresAt: 400_000 }
+    expect(await take()).toMatchObject({ error: 'TASK_NOT_GIVEN' })
+    offers.offers[0] = { ...offers.offers[0]!, number: 34, repository: 'acme/other' }
     expect(await take()).toMatchObject({ error: 'TASK_NOT_GIVEN' })
     routes = false
     expect(await take()).toMatchObject({ error: 'TASK_NOT_GIVEN' })

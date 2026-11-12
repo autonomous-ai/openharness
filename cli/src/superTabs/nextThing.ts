@@ -305,7 +305,9 @@ export class NextThing {
         // Taken already (its label is on), or closed or given to another since: nothing to take.
         if (task.state !== 'open' || labelNames(task).some(name => name.startsWith('builder:'))) continue
         const key = `${repo}#${offer.number}`, title = String(task.title ?? '').trim()
-        yield { key: `${key} offer ${offer.offeredAt}`, typed: `Next: ${title ? `${key} ${title}` : key}. It is offered to you until ${hhmm(Date.now() + offer.expiresAt - TAKE_MARGIN_MS - serverTime)}: `
+        // Keyed by its task, not its offer: an agent that accepts and never takes is offered the task again and again, and was
+        // typed it each time (review of #4153). Typed once, then told to its person once.
+        yield { key: `${key} offer`, typed: `Next: ${title ? `${key} ${title}` : key}. It is offered to you until ${hhmm(Date.now() + offer.expiresAt - TAKE_MARGIN_MS - serverTime)}: `
           + `harness super-tab take ${key}`, did: `offered me ${titled(repo, { number: offer.number, title })} as my next task` }
       }
       const next = tasks.filter(task => !labelNames(task).includes('status:taken')).sort((a, b) => Number(a.number) - Number(b.number))[0]

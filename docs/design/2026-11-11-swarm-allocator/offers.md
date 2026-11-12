@@ -146,7 +146,7 @@ On the agent's own computer, for an offer to one of its person's own agents runn
 |---|---|
 | The task is of a project of the agent's, open, an issue, and carries no other builder's label and no `status:taken` but its own (one read of GitHub) | `gone` |
 | The machine has each tool its `needs:` labels name, its system and a GPU as asked (the tools probed here, as a start probes them) | `tools` |
-| The cores of the task's size (1, 2, 4) beside those of the tasks this computer's other agents build (taken, no pull request of theirs yet) fit its logical cores | `cores` |
+| The cores of the task's size (1, 2, 4) beside those of the tasks this computer's other agents build (taken, no pull request of theirs yet) and of those it accepted whose hold has not ended, each counted once, fit its logical cores. The plan counts no cores (package 7), so this is the one guard | `cores` |
 | Free memory holds the task's size (s 2 GB, m 4 GB, l 8 GB), and memory pressure is not critical | `memory` |
 | The project's disk, less the 10 GB its person keeps, holds it (1, 2, 4 GB) | `disk` |
 | Each known window of the agent's subscription has room for it above its person's 20% (3, 10, 25% of a 5-hour window; a fifth of that of a weekly one) | `quota` |
@@ -159,8 +159,9 @@ accepted, as the plan gives to such a builder today. The windows' percentages ar
 (`usage_read`) and never leave it.
 
 A decline says one word. No number, no path, no account. Its person is told once in the agent's chat, per reason,
-until it accepts again ("I was offered acme/app#14, and this computer has no room for it: not enough free memory").
-A task gone is not said.
+until it accepts again, and a restart says it again no more: what was told is kept in a file
+(`super-tab-offers-told.json`). ("I was offered acme/app#14, and this computer has no room for it: not enough free
+memory".) A task gone is not said.
 
 Then `take`:
 
@@ -188,9 +189,9 @@ rests for it.
 
 | Stuck case | Writes to GitHub a day | Writes to the server a day |
 |---|---|---|
-| A task every one of M builders declines for one reason | 0. Each builder's person is told once in its chat, for each reason | At most 16 offers and 16 declines a builder (10, 20, 40, 80 minutes, then every 2 hours) |
-| A builder whose daemon never answers | 0 | At most 16 offers |
-| An agent that accepts and never takes | 0 from offers. Its own idle watch types the task three times, then tells its person (`nextThing.ts`, unchanged) | At most 16 offers and 16 accepts |
+| A task every one of M builders declines for one reason | 0. Each builder's person is told once in its chat, for each reason | 15 offers and 15 declines a builder (rests of 10, 20, 40, 80 minutes, then every 2 hours), counted from the rests |
+| A builder whose daemon never answers | 0 | 15 offers, counted the same way |
+| An agent that accepts and never takes | 0. It is typed the task once and its person told once (`nextThing.ts`, a line keyed by its task) | 14 offers and 14 accepts, measured in a day's spec (0, 20, 50, 100 and 190 minutes, then every 130). Its review found 72: an accept ended the rest. Only a take ends one now |
 | Today, a task given by label that nobody takes | 4 for each builder it is moved to (label, comment, take back, comment) | 0 |
 
 ## Compatibility
@@ -270,11 +271,13 @@ Dates:
    offers nothing.
 9. **Failure.** A refusal has a code and words. An offer nobody answers lapses, and the PM's daemon logs it once with
    the builder's rest. One accepted and not taken lapses, and its agent was typed it once and its person told once
-   (`nextThing.ts`). A decline for a want of room is told once to its agent's person, for each reason. A server
+   (`nextThing.ts`). A decline for a want of room is told once to its agent's person, for each reason, across restarts.
+   One agent's or one offer's failure is said once and passes over it alone. A server
    without the routes is said once in each daemon's log and worked around. A PM at its hourly limit is told `429`,
    said once in its log, and tries next pass.
-10. **Platforms.** The server: Linux. The daemon's half: macOS, Linux and Windows alike; it starts no process and
-    opens no window. No screen changes.
+10. **Platforms.** The server: Linux. The daemon's half: macOS, Linux and Windows alike. It starts no process of its own:
+    the tool probe a start already makes, and the account reader (`usage_read`), which may start Codex's own reader as
+    the machine's report does. It opens no window. No screen changes.
 
 ## The three attacks
 
@@ -365,12 +368,16 @@ Built, in two pull requests, the server's first:
 
 - **The server's half** (`backend/src/superTabs/taskOffers.ts`): the record, its five routes, the push.
 - **The daemon's half**: the client and the agent's side (`cli/src/superTabs/taskOffers.ts`: the checks above,
-  answered as the server pushes that the agent's Swarm changed, at most once in 20 seconds for a Swarm, and once as the
-  daemon starts); `take` on an accepted offer (`githubClaim.ts`); an accepted offer as the agent's next thing
-  (`nextThing.ts`); `taskOffers` among the machine's capabilities (`machines.ts`); and the PM's side (`assign/crew.ts`
-  `crewOf`, `githubAssign.ts`): it offers where the builder's own computer answers offers, reads the project's offers
-  once a pass, reads a live offer's task as its agent's, rests a builder that declined or let one lapse, and gives by
-  label to a builder on a CLI from before, until 14 December 2026.
+  answered as the server pushes that the agent's Swarm changed, at most once in 20 seconds for a Swarm, once as the
+  daemon starts, and once a minute for a Swarm no push named; its agents read once a minute; an offer remembered once
+  the server took its answer; one agent's or one offer's failure passing over it alone); `take` on an accepted offer
+  (`githubClaim.ts`); an accepted offer as the agent's next thing, typed once for its task (`nextThing.ts`);
+  `taskOffers` among the machine's capabilities (`machines.ts`); and the PM's side (`assign/crew.ts` `crewOf`,
+  `githubAssign.ts`): it offers where the builder's own computer answers offers, reads the offers of the tasks it
+  plans once a pass, reads a live offer's task as its agent's, leaves out of the plan a task held for an agent not of
+  its crew or refused as another's, gives nothing by label in a pass that could not read its offers, rests a builder
+  that declined or let one lapse until it takes one, and gives by label to a builder on a CLI from before, until 14
+  December 2026.
 
 Not done, and owed before the daemon's half is called proven:
 
@@ -383,9 +390,7 @@ Not done, and owed before the daemon's half is called proven:
    daemon is given nothing and its PM is told once. Then the quota percentages leave the machine's report, with
    package 15's price.
 
-Also not built, on purpose: nothing in Desktop shows an offer; no once-a-minute read of an agent's offers beside the
-push (a lost push lets an offer lapse, and its builder rests ten minutes); a task everyone declined is not said on
-GitHub.
+Also not built, on purpose: nothing in Desktop shows an offer; a task everyone declined is not said on GitHub.
 
 A doubt for whoever builds it: the read marks (`readMarks.ts` `raise`, `lowerReadMark`) and three claims in
 `store.ts` rest on the same Prisma `updateMany` with a filter that this package found to be a read then a write. That

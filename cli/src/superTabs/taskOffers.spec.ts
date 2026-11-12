@@ -1,8 +1,17 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { WatchedAgent } from './githubMentions.js'
 import type { GitHubGet } from './githubRest.js'
-import { agentOffers, ANSWER_GAP_MS, answerOffer, NO_ROUTE_MS, noRoom, noSuchRoute, OfferAnswers, offerTask, projectOffers, type TaskOffer, type Windows } from './taskOffers.js'
+import { agentOffers, AGENTS_MS, ANSWER_GAP_MS, ANSWER_QUIET_MS, answerOffer, NO_ROUTE_MS, noRoom, noSuchRoute, OFFER_NUMBERS_MAX, OfferAnswers, offerTask, projectOffers,
+  type TaskOffer, type Windows } from './taskOffers.js'
 import { SuperTabHostError } from './wire.js'
+
+const root = mkdtempSync(join(tmpdir(), 'super-tab-offers-'))
+afterAll(() => rmSync(root, { recursive: true, force: true }))
+let files = 0
 
 type Json = Record<string, unknown>
 const GiB = 1024 ** 3
@@ -17,20 +26,26 @@ const room = (labels: string[], over: Partial<Parameters<typeof noRoom>[0]> = {}
   noRoom({ issue: task(labels), label: 'builder:pip', machine: MACHINE, cores: 8, held: 0, windows: UNKNOWN, ...over })
 
 describe('the server\'s offers, as a daemon asks for them', () => {
-  it('offers, lists, reads its own and answers by the routes, and reads an answer with no list as none', async () => {
+  it('offers, lists the tasks asked a hundred at a time, reads its own and answers by the routes, and reads an answer with no list as none', async () => {
     const asked: Array<[string, string, unknown]> = []
     const ask = vi.fn(async (method: 'GET' | 'POST', path: string, body?: unknown) => {
       asked.push([method, path, body])
-      return path.includes('/mine') ? { offers: [{ number: 14, state: 'offered' }], serverTime: 5 } : path.includes('repository=') ? { offers: 'none' } : {}
+      return path.includes('/mine') ? { offers: [{ number: 14, state: 'offered' }], serverTime: 5 }
+        : path.includes('numbers=1,') ? { offers: [{ number: 1, state: 'offered' }] } : path.includes('repository=') ? { offers: 'none' }
+        : { offer: { number: 14, state: 'accepted', expiresAt: 605 }, serverTime: 5 }
     })
     await offerTask(ask, 'tab', 'faye', { repository: 'acme/app', number: 14, agentId: 'pip' })
-    expect(await projectOffers(ask, 'tab', 'faye', 'acme/app')).toEqual([])
+    const numbers = Array.from({ length: OFFER_NUMBERS_MAX + 1 }, (_, i) => i + 1)
+    expect(await projectOffers(ask, 'tab', 'faye', 'acme/app', numbers)).toEqual([{ number: 1, state: 'offered' }])
+    expect(await projectOffers(ask, 'tab', 'faye', 'acme/app', [])).toEqual([])
     expect(await agentOffers(ask, 'tab', 'pip')).toEqual({ offers: [{ number: 14, state: 'offered' }], serverTime: 5 })
-    await answerOffer(ask, 'tab', 'pip', { repository: 'acme/app', number: 14, state: 'offered' } as unknown as TaskOffer, null)
+    expect(await answerOffer(ask, 'tab', 'pip', { repository: 'acme/app', number: 14, state: 'offered' } as unknown as TaskOffer, null))
+      .toEqual({ offer: { number: 14, state: 'accepted', expiresAt: 605 }, serverTime: 5 })
     await answerOffer(ask, 'tab', 'pip', { repository: 'acme/app', number: 14 }, 'memory')
     expect(asked).toEqual([
       ['POST', '/api/super-tabs/tab/task-offers?asAgentId=faye', { repository: 'acme/app', number: 14, agentId: 'pip' }],
-      ['GET', '/api/super-tabs/tab/task-offers?repository=acme%2Fapp&asAgentId=faye', undefined],
+      ['GET', `/api/super-tabs/tab/task-offers?repository=acme%2Fapp&numbers=${numbers.slice(0, OFFER_NUMBERS_MAX).join(',')}&asAgentId=faye`, undefined],
+      ['GET', `/api/super-tabs/tab/task-offers?repository=acme%2Fapp&numbers=${OFFER_NUMBERS_MAX + 1}&asAgentId=faye`, undefined],
       ['GET', '/api/super-tabs/tab/task-offers/mine?asAgentId=pip', undefined],
       ['POST', '/api/super-tabs/tab/task-offers/accept?asAgentId=pip', { repository: 'acme/app', number: 14 }],
       ['POST', '/api/super-tabs/tab/task-offers/decline?asAgentId=pip', { repository: 'acme/app', number: 14, reason: 'memory' }],
@@ -97,22 +112,27 @@ describe('whether this computer has room for a task (noRoom)', () => {
   })
 })
 
+
 describe('the offers made to this computer\'s agents, answered here (OfferAnswers)', () => {
   beforeEach(() => { vi.useFakeTimers() })
   afterEach(() => { vi.useRealTimers() })
 
   /** Pip and Juno running here; the server keeps each agent's live offers, GitHub its tasks and each agent's labelled items. */
-  function setup() {
+  function setup(options: { file?: string } = {}) {
     const state = { watched: [PIP, JUNO], offers: new Map<string, TaskOffer[]>(), tasks: new Map<number, Json | null>([[14, task(['size:m'], { title: 'Add the export' })]]),
       labelled: new Map<string, Json[]>(), machine: MACHINE, windows: UNKNOWN as Windows, sessions: new Map([['h-pip', { cwd: '/work/app', engine: 'claude' }]]),
-      refusal: null as Error | null }
+      cores: 8, refusal: null as Error | null, mineDown: new Set<string>(), answerDown: 0, answerTimes: true }
     state.offers.set('pip', [{ repository: 'acme/app', number: 14, agentId: 'pip', state: 'offered', offeredAt: 1, expiresAt: 120_001 }])
     const asked: Array<[string, string, unknown]> = []
     const ask = vi.fn(async (method: 'GET' | 'POST', path: string, body?: unknown) => {
       asked.push([method, path, body])
       if (state.refusal) throw state.refusal
       const mine = /\/mine\?asAgentId=(\w+)$/.exec(path)
-      return mine ? { offers: state.offers.get(mine[1]!) ?? [], serverTime: 60_000 } : {}
+      if (mine && state.mineDown.has(mine[1]!)) throw new SuperTabHostError('BACKEND_UNAVAILABLE', 'No answer.', 503)
+      if (mine) return { offers: state.offers.get(mine[1]!) ?? [], serverTime: 60_000 }
+      if (state.answerDown > 0) { state.answerDown--; throw new SuperTabHostError('BACKEND_UNAVAILABLE', 'No answer.', 503) }
+      // The server holds an accepted task ten minutes, and says so by its own clock.
+      return state.answerTimes ? { offer: { ...body as Json, expiresAt: 660_000 }, serverTime: 60_000 } : {}
     })
     const get: GitHubGet = async path => {
       const url = new URL(`https://api.github.com${path}`)
@@ -126,16 +146,21 @@ describe('the offers made to this computer\'s agents, answered here (OfferAnswer
       return { status: 200, etag: null, body: state.labelled.get(url.searchParams.get('labels')!) ?? [], resetAt: null }
     }
     const listeners = new Set<(notice: { type: string; tabId?: string }) => void>()
+    const watched = vi.fn(async () => state.watched)
     const machine = vi.fn(async (_cwd: string | null, _tools: string[]) => state.machine)
     const windows = vi.fn(async (_engine: string) => state.windows)
     const say = vi.fn(async (_agent: WatchedAgent, _operationId: string, _text: string) => ({}))
     const accepted = vi.fn((_agent: WatchedAgent) => {})
     const log = vi.fn()
-    const answers = new OfferAnswers({ watched: async () => state.watched, ask, get, session: harnessId => state.sessions.get(harnessId) ?? null, machine, windows,
-      cores: () => 8, onNotice: listener => { listeners.add(listener); return () => { listeners.delete(listener) } }, say, accepted, log, now: () => Date.now() })
+    const file = options.file ?? join(root, `told-${files++}.json`)
+    const make = () => new OfferAnswers({ watched, ask, get, session: harnessId => state.sessions.get(harnessId) ?? null, machine, windows,
+      cores: () => state.cores, onNotice: listener => { listeners.add(listener); return () => { listeners.delete(listener) } }, say, accepted, log, file,
+      now: () => Date.now() })
     const answered = () => asked.filter(([method]) => method === 'POST').map(([, path, body]) => [path.replace('/api/super-tabs/tab/task-offers/', ''), body])
+    const reads = () => asked.filter(([, path]) => path.includes('/mine')).length
     const notice = (tabId?: string, type = 'swarm_host_changed') => { for (const listener of listeners) listener({ type, ...tabId ? { tabId } : {} }) }
-    return { state, asked, ask, answers, answered, listeners, notice, machine, windows, say, accepted, log }
+    const offer = (number: number, offeredAt: number, agentId = 'pip'): TaskOffer => ({ repository: 'acme/app', number, agentId, state: 'offered', offeredAt, expiresAt: offeredAt + 120_000 })
+    return { state, asked, ask, answers: make(), make, answered, reads, listeners, notice, watched, machine, windows, say, accepted, log, file, offer }
   }
 
   it('checks an offer against this machine and the agent\'s window, and accepts it once, as it starts and as a push says', async () => {
@@ -150,8 +175,10 @@ describe('the offers made to this computer\'s agents, answered here (OfferAnswer
     expect(f.log).toHaveBeenCalledWith('[super-tab] Pip accepted acme/app#14')
     expect(f.listeners.size).toBe(1)
     // The same offer read again, while the server still lists it as offered, is not answered twice.
+    await vi.advanceTimersByTimeAsync(ANSWER_GAP_MS)
     f.notice('tab')
     await vi.advanceTimersByTimeAsync(0)
+    expect(f.reads()).toBe(4)
     expect(f.answered()).toHaveLength(1)
     // One accepted already, and another Swarm's push, read nothing to answer.
     f.state.offers.set('pip', [{ repository: 'acme/app', number: 14, agentId: 'pip', state: 'accepted', offeredAt: 2, expiresAt: 900_000 }])
@@ -166,55 +193,124 @@ describe('the offers made to this computer\'s agents, answered here (OfferAnswer
     const f = setup()
     f.answers.start()
     await vi.advanceTimersByTimeAsync(0)
-    const reads = () => f.asked.filter(([, path]) => path.includes('/mine')).length
-    expect(reads()).toBe(2)
-    f.notice('tab')
-    await vi.advanceTimersByTimeAsync(0)
-    expect(reads()).toBe(4)
+    expect(f.reads()).toBe(2)
     f.notice('tab')
     f.notice('tab')
     f.notice()
     f.notice('tab', 'super_tab_deliveries')
     await vi.advanceTimersByTimeAsync(ANSWER_GAP_MS - 1)
-    expect(reads()).toBe(4)
+    expect(f.reads()).toBe(2)
     await vi.advanceTimersByTimeAsync(1)
-    expect(reads()).toBe(6)
+    expect(f.reads()).toBe(4)
     // Any other notice, with no read waiting, reads nothing.
     await vi.advanceTimersByTimeAsync(ANSWER_GAP_MS)
     f.notice('tab', 'super_tab_deliveries')
     await vi.advanceTimersByTimeAsync(0)
-    expect(reads()).toBe(6)
-    // Stopped, a push waiting for its gap reads nothing, and no push is heard.
+    expect(f.reads()).toBe(4)
+    // Stopped, a push waiting for its gap reads nothing, and no push is heard; stopped again, or never started, nothing happens.
     f.notice('tab')
     f.answers.stop()
     f.notice('tab')
-    await vi.advanceTimersByTimeAsync(ANSWER_GAP_MS)
-    expect(reads()).toBe(6)
+    await vi.advanceTimersByTimeAsync(ANSWER_QUIET_MS)
+    expect(f.reads()).toBe(4)
     expect(f.listeners.size).toBe(0)
+    f.answers.stop()
+    setup().answers.stop()
+  })
+
+  // Review of #4153: answers were read only on a push, and the server gives an offer two minutes for an answer on the strength of
+  // a read once a minute besides.
+  it('reads once a minute a Swarm no push named, and not one a push read a moment ago', async () => {
+    const f = setup()
+    f.answers.start()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(f.reads()).toBe(2)
+    await vi.advanceTimersByTimeAsync(ANSWER_QUIET_MS)
+    expect(f.reads()).toBe(4)
+    // A push read it ten seconds before the minute: that minute reads nothing, the next does.
+    await vi.advanceTimersByTimeAsync(ANSWER_QUIET_MS - 10_000)
+    f.notice('tab')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(f.reads()).toBe(6)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(f.reads()).toBe(6)
+    await vi.advanceTimersByTimeAsync(ANSWER_QUIET_MS)
+    expect(f.reads()).toBe(8)
+    f.answers.stop()
+  })
+
+  // Review of #4153: this computer's agents were read on every pass: a busy Swarm's pushes read them three times a minute.
+  it('reads this computer\'s agents at most once a minute, however many pushes come', async () => {
+    const f = setup()
+    f.answers.start()
+    for (let second = 0; second < 3_600; second += 5) {
+      f.notice('tab')
+      await vi.advanceTimersByTimeAsync(5_000)
+    }
+    // An hour of a push every five seconds: a pass every twenty seconds, the agents read once a minute at most. Read every pass, they
+    // were read 182 times (measured on the first version).
+    expect(f.reads()).toBe(2 * 181)
+    expect(f.watched.mock.calls.length).toBeLessThanOrEqual(61)
+    f.answers.stop()
   })
 
   it('declines with its reason, and tells its person once for each reason until it accepts again', async () => {
     const f = setup()
     f.state.machine = { ...MACHINE, resources: { ...MACHINE.resources as Json, memoryUsedBytes: 62 * GiB } }
-    const offer = (number: number, offeredAt: number): TaskOffer => ({ repository: 'acme/app', number, agentId: 'pip', state: 'offered', offeredAt, expiresAt: offeredAt + 120_000 })
     for (const number of [15, 16, 17, 18]) f.state.tasks.set(number, task(['size:m']))
-    f.state.offers.set('pip', [offer(14, 1), offer(15, 2)])
-    f.state.offers.set('juno', [{ ...offer(18, 5), agentId: 'juno' }])
+    f.state.offers.set('pip', [f.offer(14, 1), f.offer(15, 2)])
+    f.state.offers.set('juno', [f.offer(18, 5, 'juno')])
     await f.answers.answer('tab')
     expect(f.answered()).toEqual([['decline?asAgentId=pip', { repository: 'acme/app', number: 14, reason: 'memory' }],
       ['decline?asAgentId=pip', { repository: 'acme/app', number: 15, reason: 'memory' }], ['decline?asAgentId=juno', { repository: 'acme/app', number: 18, reason: 'memory' }]])
-    expect(f.say.mock.calls).toEqual([[PIP, 'offer-pip|acme/app#14@1', 'I was offered acme/app#14, and this computer has no room for it: not enough free memory.'],
-      [JUNO, 'offer-juno|acme/app#18@5', 'I was offered acme/app#18, and this computer has no room for it: not enough free memory.']])
+    // Under an id the server takes (review of #4153: the key itself was refused, and the line never said): the key's hash.
+    const id = (key: string) => `offer-${createHash('sha256').update(key).digest('hex').slice(0, 40)}`
+    expect(f.say.mock.calls).toEqual([[PIP, id('pip|acme/app#14@1'), 'I was offered acme/app#14, and this computer has no room for it: not enough free memory.'],
+      [JUNO, id('juno|acme/app#18@5'), 'I was offered acme/app#18, and this computer has no room for it: not enough free memory.']])
+    for (const [, operationId] of f.say.mock.calls) expect(operationId).toMatch(/^[A-Za-z0-9_-]{1,160}$/)
     expect(f.log).toHaveBeenCalledWith('[super-tab] Pip declined acme/app#14: memory')
     // It accepts one, and the next it declines for memory is told again.
     f.state.machine = MACHINE
-    f.state.offers.set('pip', [offer(16, 3)])
+    f.state.offers.set('pip', [f.offer(16, 3)])
     await f.answers.answer('tab')
     f.state.machine = { ...MACHINE, resources: { ...MACHINE.resources as Json, memoryUsedBytes: 62 * GiB } }
-    f.state.offers.set('pip', [offer(17, 4)])
+    f.state.offers.set('pip', [f.offer(17, 4)])
     await f.answers.answer('tab')
     expect(f.say.mock.calls.filter(call => call[0] === PIP).map(call => call[2])).toEqual(['I was offered acme/app#14, and this computer has no room for it: not enough free memory.',
       'I was offered acme/app#17, and this computer has no room for it: not enough free memory.'])
+  })
+
+  // Review of #4153: what each person was told lived in memory alone, so a restart (every release) said each again.
+  it('keeps what each person was told across a restart, and says it again only after an accept', async () => {
+    const f = setup()
+    f.state.machine = { ...MACHINE, resources: { ...MACHINE.resources as Json, memoryUsedBytes: 62 * GiB } }
+    f.state.tasks.set(15, task(['size:m']))
+    await f.answers.answer('tab')
+    expect(f.say).toHaveBeenCalledOnce()
+    const again = f.make()
+    f.state.offers.set('pip', [f.offer(15, 2)])
+    await again.answer('tab')
+    expect(f.answered()).toHaveLength(2)
+    expect(f.say).toHaveBeenCalledOnce()
+    // A file that is not what this keeps reads as nothing told; one that cannot be written is said, and the line still goes.
+    writeFileSync(f.file, 'not json')
+    const unread = f.make()
+    f.state.offers.set('pip', [f.offer(16, 3)])
+    f.state.tasks.set(16, task(['size:m']))
+    await unread.answer('tab')
+    expect(f.say).toHaveBeenCalledTimes(2)
+    const g = setup({ file: join(root, 'not-a-folder', 'told.json') })
+    writeFileSync(join(root, 'not-a-folder'), 'a file where its folder would be')
+    g.state.machine = f.state.machine
+    await g.answers.answer('tab')
+    expect(g.say).toHaveBeenCalledOnce()
+    expect(g.log).toHaveBeenCalledWith(expect.stringMatching(/^\[super-tab\] Task offers: what each person was told could not be kept: /))
+    writeFileSync(f.file, JSON.stringify({ told: 'none' }))
+    const odd = f.make()
+    f.state.offers.set('pip', [f.offer(17, 4)])
+    f.state.tasks.set(17, task(['size:m']))
+    await odd.answer('tab')
+    expect(f.say).toHaveBeenCalledTimes(3)
   })
 
   it('probes the tools a task needs on this machine, and declines one it lacks', async () => {
@@ -229,9 +325,7 @@ describe('the offers made to this computer\'s agents, answered here (OfferAnswer
   it('declines a task gone, closed, of no project of its or not there, and tells its person nothing of it', async () => {
     const f = setup()
     f.state.tasks.set(14, task(['builder:juno']))
-    f.state.offers.set('pip', [{ repository: 'acme/app', number: 14, agentId: 'pip', state: 'offered', offeredAt: 1, expiresAt: 120_001 },
-      { repository: 'acme/app', number: 99, agentId: 'pip', state: 'offered', offeredAt: 2, expiresAt: 120_002 },
-      { repository: 'other/thing', number: 1, agentId: 'pip', state: 'offered', offeredAt: 3, expiresAt: 120_003 }])
+    f.state.offers.set('pip', [f.offer(14, 1), f.offer(99, 2), { ...f.offer(1, 3), repository: 'other/thing' }])
     await f.answers.answer('tab')
     expect(f.answered().map(([, body]) => body)).toEqual([{ repository: 'acme/app', number: 14, reason: 'gone' }, { repository: 'acme/app', number: 99, reason: 'gone' },
       { repository: 'other/thing', number: 1, reason: 'gone' }])
@@ -248,9 +342,54 @@ describe('the offers made to this computer\'s agents, answered here (OfferAnswer
     await f.answers.answer('tab')
     expect(f.answered()).toEqual([['accept?asAgentId=pip', { repository: 'acme/app', number: 14 }]])
     f.state.labelled.set('builder:juno', [item(20, ['builder:juno', 'status:taken', 'size:l']), item(21, ['builder:juno', 'status:taken', 'size:s'])])
-    f.state.offers.set('pip', [{ repository: 'acme/app', number: 14, agentId: 'pip', state: 'offered', offeredAt: 2, expiresAt: 120_002 }])
+    f.state.offers.set('pip', [f.offer(31, 2)])
+    f.state.tasks.set(31, task(['size:s']))
     await f.answers.answer('tab')
-    expect(f.answered()[1]).toEqual(['decline?asAgentId=pip', { repository: 'acme/app', number: 14, reason: 'cores' }])
+    // Juno's 5 and Pip's 4 accepted a moment ago, beside a small one: 10 of 8.
+    expect(f.answered()[1]).toEqual(['decline?asAgentId=pip', { repository: 'acme/app', number: 31, reason: 'cores' }])
+  })
+
+  // Review of #4153: two agents here could both accept work their cores could not hold together, as only taken tasks counted.
+  it('counts the cores of what this computer accepted until its hold ends, and a task taken and accepted once', async () => {
+    const f = setup()
+    f.state.cores = 6
+    for (const [number, size] of [[14, 'l'], [15, 'm'], [16, 's'], [17, 's']] as const) f.state.tasks.set(number, task([`size:${size}`]))
+    await f.answers.answer('tab')
+    f.state.offers.set('pip', [])
+    f.state.offers.set('juno', [f.offer(15, 2, 'juno')])
+    await f.answers.answer('tab')
+    f.state.offers.set('juno', [f.offer(16, 3, 'juno')])
+    await f.answers.answer('tab')
+    expect(f.answered().map(([path, body]) => [path, (body as Json).number, (body as Json).reason])).toEqual([['accept?asAgentId=pip', 14, undefined],
+      ['accept?asAgentId=juno', 15, undefined], ['decline?asAgentId=juno', 16, 'cores']])
+    // Pip took #14: counted once, as taken and as accepted, so a small one fits seven cores (4 + 2 + 1).
+    f.state.cores = 7
+    f.state.labelled.set('builder:pip', [{ number: 14, labels: [{ name: 'builder:pip' }, { name: 'status:taken' }, { name: 'size:l' }] }])
+    f.state.offers.set('juno', [f.offer(17, 4, 'juno')])
+    await f.answers.answer('tab')
+    expect(f.answered().at(-1)).toEqual(['accept?asAgentId=juno', { repository: 'acme/app', number: 17 }])
+    // Once the holds end, the cores are free again.
+    await vi.advanceTimersByTimeAsync(10 * 60_000)
+    f.state.labelled.clear()
+    f.state.cores = 4
+    f.state.tasks.set(18, task(['size:l']))
+    f.state.offers.set('juno', [f.offer(18, 5, 'juno')])
+    await f.answers.answer('tab')
+    expect(f.answered().at(-1)).toEqual(['accept?asAgentId=juno', { repository: 'acme/app', number: 18 }])
+    // An answer that does not say its hold counts the server's ten minutes.
+    const g = setup()
+    g.state.cores = 4
+    g.state.answerTimes = false
+    g.state.tasks.set(14, task(['size:l']))
+    g.state.tasks.set(15, task(['size:s']))
+    await g.answers.answer('tab')
+    g.state.offers.set('pip', [])
+    g.state.offers.set('juno', [g.offer(15, 2, 'juno')])
+    await g.answers.answer('tab')
+    await vi.advanceTimersByTimeAsync(10 * 60_000)
+    g.state.offers.set('juno', [g.offer(15, 3, 'juno')])
+    await g.answers.answer('tab')
+    expect(g.answered().map(([path]) => path)).toEqual(['accept?asAgentId=pip', 'decline?asAgentId=juno', 'accept?asAgentId=juno'])
   })
 
   it('reads an agent with no session here as one whose window is unknown, and its machine without its folder', async () => {
@@ -261,6 +400,27 @@ describe('the offers made to this computer\'s agents, answered here (OfferAnswer
     expect(f.machine).toHaveBeenCalledWith(null, [])
     expect(f.windows).not.toHaveBeenCalled()
     expect(f.answered()).toEqual([['accept?asAgentId=pip', { repository: 'acme/app', number: 14 }]])
+  })
+
+  // Review of #4153: one failure ended the pass for every agent after it, and an offer marked answered before its answer was
+  // taken was never answered again.
+  it('passes over one agent\'s failure and one offer\'s alone, and makes again an answer the server did not take', async () => {
+    const f = setup()
+    f.state.mineDown.add('pip')
+    f.state.offers.set('juno', [f.offer(15, 2, 'juno'), f.offer(16, 3, 'juno')])
+    f.state.tasks.set(15, task(['size:s']))
+    f.state.tasks.set(16, task(['size:s']))
+    f.state.answerDown = 1
+    await f.answers.answer('tab')
+    expect(f.answered().map(([path, body]) => [path, (body as Json).number])).toEqual([['accept?asAgentId=juno', 15], ['accept?asAgentId=juno', 16]])
+    expect(f.log.mock.calls.filter(([line]) => String(line).startsWith('[super-tab] Task offers:'))).toEqual([['[super-tab] Task offers: BACKEND_UNAVAILABLE'],
+      ['[super-tab] Task offers: BACKEND_UNAVAILABLE']])
+    f.state.mineDown.clear()
+    await vi.advanceTimersByTimeAsync(ANSWER_GAP_MS)
+    await f.answers.answer('tab')
+    expect(f.answered().map(([path, body]) => [path, (body as Json).number])).toEqual([['accept?asAgentId=juno', 15], ['accept?asAgentId=juno', 16],
+      ['accept?asAgentId=pip', 14], ['accept?asAgentId=juno', 15]])
+    expect(f.log.mock.calls.filter(([line]) => String(line).startsWith('[super-tab] Task offers:'))).toHaveLength(2)
   })
 
   it('asks a server without the routes again after ten minutes, and says each failure once until it passes', async () => {
@@ -274,12 +434,24 @@ describe('the offers made to this computer\'s agents, answered here (OfferAnswer
     f.state.refusal = new SuperTabHostError('BACKEND_UNAVAILABLE', 'No answer.', 503)
     await f.answers.answer('tab')
     await f.answers.answer('tab')
-    expect(f.log.mock.calls.slice(1)).toEqual([['[super-tab] Task offers: BACKEND_UNAVAILABLE']])
+    expect(f.log.mock.calls.slice(1)).toEqual([['[super-tab] Task offers: BACKEND_UNAVAILABLE'], ['[super-tab] Task offers: BACKEND_UNAVAILABLE']])
     f.state.refusal = null
     await f.answers.answer('tab')
     f.state.refusal = new SuperTabHostError('BACKEND_UNAVAILABLE', 'No answer.', 503)
     await f.answers.answer('tab')
-    expect(f.log.mock.calls.slice(1).filter(([line]) => line.startsWith('[super-tab] Task offers:'))).toEqual([['[super-tab] Task offers: BACKEND_UNAVAILABLE'], ['[super-tab] Task offers: BACKEND_UNAVAILABLE']])
+    expect(f.log.mock.calls.slice(1).filter(([line]) => line.startsWith('[super-tab] Task offers:'))).toHaveLength(4)
+    // Its agents unread: said once, and the pass reads nothing.
+    const g = setup()
+    g.watched.mockRejectedValue(new Error('offline'))
+    await g.answers.answer('tab')
+    await vi.advanceTimersByTimeAsync(AGENTS_MS)
+    await g.answers.answer('tab')
+    expect(g.log.mock.calls).toEqual([['[super-tab] Task offers: Error']])
+    expect(g.asked).toEqual([])
+    g.watched.mockResolvedValue([PIP])
+    await vi.advanceTimersByTimeAsync(AGENTS_MS)
+    await g.answers.answer('tab')
+    expect(g.answered()).toHaveLength(1)
   })
 
   it('remembers the last five hundred offers it answered, the oldest forgotten first', async () => {
@@ -289,14 +461,21 @@ describe('the offers made to this computer\'s agents, answered here (OfferAnswer
     expect(f.answered()).toHaveLength(501)
     // The first one answered is no longer remembered: read again, it is answered again; the last is not.
     f.state.offers.set('pip', [f.state.offers.get('pip')![0]!, f.state.offers.get('pip')![500]!])
+    await vi.advanceTimersByTimeAsync(ANSWER_GAP_MS)
     await f.answers.answer('tab')
     expect(f.answered()).toHaveLength(502)
+    // Five hundred and one offers that fail are said, and the oldest forgotten.
+    const g = setup()
+    g.state.answerDown = 501
+    g.state.offers.set('pip', Array.from({ length: 501 }, (_, i) => ({ repository: 'acme/app', number: 14, agentId: 'pip', state: 'offered' as const, offeredAt: i, expiresAt: i + 120_000 })))
+    await g.answers.answer('tab')
+    expect(g.log.mock.calls.filter(([line]) => String(line).startsWith('[super-tab] Task offers:'))).toHaveLength(501)
   })
 
   it('says its failures in the daemon\'s log when it is given no log of its own', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const answers = new OfferAnswers({ watched: async () => { throw new Error('offline') }, ask: vi.fn(), get: vi.fn(), session: () => null, machine: vi.fn(),
-      windows: vi.fn(), cores: () => 8, onNotice: () => () => {}, say: vi.fn(), accepted: vi.fn() })
+      windows: vi.fn(), cores: () => 8, onNotice: () => () => {}, say: vi.fn(), accepted: vi.fn(), file: join(root, 'never.json') })
     await answers.answer(null)
     expect(warn).toHaveBeenCalledWith('[super-tab] Task offers: Error')
     warn.mockRestore()

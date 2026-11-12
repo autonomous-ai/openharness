@@ -109,7 +109,7 @@ const crew = (): Crew => ({
  *  that does not answer. */
 function fakeServer(clock: { now: number }) {
   const records = new Map<number, { agentId: string; offeredAt: number; expiresAt: number; acceptedAt?: number; declined?: string }>()
-  const state = { missing: false, down: false, offered: [] as Array<[number, string]> }
+  const state = { missing: false, down: false, offered: [] as Array<[number, string]>, asked: [] as number[][] }
   const refuse = () => {
     if (state.missing) throw new SuperTabHostError('BACKEND_UNAVAILABLE', 'Route not found', 404)
     if (state.down) throw new SuperTabHostError('BACKEND_UNAVAILABLE', 'No answer.', 503)
@@ -124,9 +124,10 @@ function fakeServer(clock: { now: number }) {
       if (!held || held.expiresAt <= clock.now) records.set(number, { agentId, offeredAt: clock.now, expiresAt: clock.now + 2 * 60_000 })
       state.offered.push([number, agentId])
     }),
-    listed: vi.fn(async (_project: LedProject): Promise<TaskOffer[]> => {
+    listed: vi.fn(async (_project: LedProject, numbers: readonly number[]): Promise<TaskOffer[]> => {
       refuse()
-      return [...records].filter(([, r]) => r.expiresAt > clock.now - 10 * 60_000).map(([number, r]) => ({ repository: 'acme/app', number, agentId: r.agentId,
+      state.asked.push([...numbers])
+      return [...records].filter(([number, r]) => numbers.includes(number) && r.expiresAt > clock.now - 10 * 60_000).map(([number, r]) => ({ repository: 'acme/app', number, agentId: r.agentId,
         state: stateOf(r), offeredAt: r.offeredAt, expiresAt: r.expiresAt, ...r.acceptedAt ? { acceptedAt: r.acceptedAt } : {}, ...r.declined ? { declined: r.declined } : {} }))
     }),
   }
@@ -340,7 +341,19 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       expect([f.server.state.offered[0]![1], f.labelled()[0]![1]]).toEqual(['pip', 'builder:juno'])
     })
 
-    it('rests a builder that declined or let an offer lapse, ten minutes doubling to two hours, and ends the rest when it accepts', async () => {
+    // Review of #4152: the project's offers are read by the tasks its PM plans, a hundred a read, not by a cap of two hundred.
+    it('asks the server about the sized tasks it plans, free or held by a builder that answers offers, and no other', async () => {
+      const f = setup([issue(1, ['size:s']), issue(2, ['size:m', 'builder:pip', 'status:taken']), issue(3, ['size:s', 'builder:juno']), issue(4, []),
+        issue(5, ['size:l'], { pull_request: {} })], { crew: offering(true) })
+      await f.assigner.tick()
+      expect(f.server.state.asked).toEqual([[1, 2]])
+      // Nothing it plans: nothing is asked.
+      const g = setup([issue(4, [])], { crew: offering() })
+      await g.assigner.tick()
+      expect(g.server.offers.listed).not.toHaveBeenCalled()
+    })
+
+    it('rests a builder that declined or let an offer lapse, ten minutes doubling to two hours, and ends the rest when it took one', async () => {
       const f = setup([issue(1, ['size:s'])], { crew: offering() })
       const offers = () => f.server.state.offered.length
       await f.assigner.tick()
@@ -368,12 +381,34 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
         f.clock.now += minutes * 60_000
         await f.assigner.tick()
       }
-      // Accepted, its rest is over: the next lapse rests it ten minutes again.
+      // Accepted and taken, its rest is over: the next lapse rests it ten minutes again.
       f.server.accept(1)
+      f.github.state.open[0] = issue(1, ['size:s', 'builder:pip', 'status:taken'])
       await f.assigner.tick()
       f.clock.now += 10 * 60_000
       await f.assigner.tick()
+      expect(f.log.mock.calls.filter(([line]) => String(line).includes('offered nothing'))).toHaveLength(6)
+      f.github.state.open[0] = issue(1, ['size:s'])
+      f.server.records.delete(1)
+      await f.assigner.tick()
+      f.clock.now += 2 * 60_000
+      await f.assigner.tick()
       expect(f.log).toHaveBeenLastCalledWith('[super-tab] Pip let the offer of acme/app#1 lapse: offered nothing for 10 min')
+    })
+
+    // Review of #4153: an accept ended the rest, so an agent that accepted every offer and took none was offered its task every
+    // twenty minutes, about 72 times a day.
+    it('offers a builder that accepts and never takes its task a bounded number of times a day', async () => {
+      const f = setup([issue(1, ['size:s'])], { crew: offering() })
+      for (let minute = 0; minute < 24 * 60; minute++) {
+        await f.assigner.tick()
+        // Its computer accepts every offer at once, and its agent never takes it.
+        if (f.server.records.get(1) && !f.server.records.get(1)!.acceptedAt && f.server.records.get(1)!.expiresAt > f.clock.now) f.server.accept(1)
+        f.clock.now += 60_000
+      }
+      // 0, 20, 50, 100 and 190 minutes, then every 130: fourteen in the day.
+      expect(f.server.state.offered).toHaveLength(14)
+      expect([f.labelled(), f.said()]).toEqual([[], []])
     })
 
     it('rests nobody for an offer taken: the server never hears of a take, and its offer lapses with the task its builder\'s', async () => {
@@ -413,15 +448,44 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       expect(f.numbers.mock.calls[0]![1]).toMatchObject({ free: [], open: 1 })
     })
 
-    it('leaves a task another agent\'s offer holds, and says it once', async () => {
-      const f = setup([issue(1, ['size:s'])], { crew: offering() })
+    // Review of #4153: a live offer the PM did not see (its read failed, after a restart; or another agent's it is refused on)
+    // opened the label path for the same task to a builder on a CLI from before.
+    it('leaves out of the plan a task another agent\'s offer holds, and gives it nobody by label meanwhile', async () => {
+      // The task needs docker, which only Juno's computer (from before offers) has: given it, it would go to Juno by label.
+      const docker: Crew = { ...offering(true), machines: [offering().machines[0]!, { machineId: 'old', observation: { tools: { docker: true },
+        resources: { memoryTotalBytes: 64 * GiB, projectDiskFreeBytes: 500 * GiB } } }] }
+      const f = setup([issue(1, ['size:s', 'needs:docker'])], { crew: docker })
       f.server.records.set(1, { agentId: 'someone', offeredAt: f.clock.now, expiresAt: f.clock.now + 120_000 })
       await f.assigner.tick()
       f.clock.now += 1_000
       await f.assigner.tick()
-      expect(f.server.state.offered).toEqual([])
-      expect(f.log.mock.calls.filter(([line]) => String(line).includes('OFFER_FAILED'))).toEqual([['[super-tab] Task assignment: OFFER_FAILED acme/app#1: OFFER_LIVE']])
+      expect([f.server.state.offered, f.labelled()]).toEqual([[], []])
+      // Once that offer ends, Juno is given it.
+      f.clock.now += 120_000
+      await f.assigner.tick()
+      expect(f.labelled()).toEqual([[1, 'builder:juno']])
+      // Refused on one it did not see (made after its read): out of the plan for as long as an offer can hold it.
+      const g = setup([issue(1, ['size:s'])], { crew: offering(true) })
+      g.server.offers.offer.mockRejectedValueOnce(new SuperTabHostError('OFFER_LIVE', 'This task is offered to another agent.', 409))
+      for (let minute = 0; minute < 12; minute++) {
+        await g.assigner.tick()
+        g.clock.now += 60_000
+      }
+      expect(g.labelled()).toEqual([])
+      expect(g.log.mock.calls.filter(([line]) => String(line).includes('OFFER_FAILED'))).toEqual([['[super-tab] Task assignment: OFFER_FAILED acme/app#1: OFFER_LIVE']])
+      await g.assigner.tick()
+      expect(g.server.state.offered.length + g.labelled().length).toBe(1)
+    })
+
+    it('gives nothing by label in a pass that could not read its offers', async () => {
+      const f = setup([issue(1, ['size:s']), issue(2, ['size:s'])], { crew: offering(true) })
+      f.server.state.down = true
+      await f.assigner.tick()
       expect(f.labelled()).toEqual([])
+      expect(f.log).toHaveBeenCalledWith('[super-tab] Task assignment: OFFER_FAILED acme/app: BACKEND_UNAVAILABLE')
+      f.server.state.down = false
+      await f.assigner.tick()
+      expect(f.labelled()).toEqual([[expect.any(Number), 'builder:juno']])
     })
 
     it('gives by label while the server has no offers, and asks it again ten minutes on', async () => {
