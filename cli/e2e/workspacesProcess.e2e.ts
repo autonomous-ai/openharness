@@ -16,11 +16,8 @@ import { LocalClient, type Frame } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 
 /** Git as the test runs it: the daemon's throwaway home, never this machine's configuration. */
-const gitEnv = (d: IsolatedDaemon) => ({ ...process.env, HOME: d.env.HOME, GIT_CONFIG_NOSYSTEM: '1' })
 const git = (d: IsolatedDaemon, cwd: string, ...args: string[]): string =>
-  execFileSync('git', ['-C', cwd, ...args], { env: gitEnv(d), encoding: 'utf8' }).trim()
-/** Eight days ago: past the sweep's week. */
-const lastWeek = () => new Date(Date.now() - 8 * 24 * 3600_000)
+  execFileSync('git', ['-C', cwd, ...args], { env: { ...process.env, HOME: d.env.HOME, GIT_CONFIG_NOSYSTEM: '1' }, encoding: 'utf8' }).trim()
 
 /** A repository with one commit, in the daemon's projects folder. */
 function repository(d: IsolatedDaemon): string {
@@ -33,19 +30,18 @@ function repository(d: IsolatedDaemon): string {
   return dir
 }
 /** A worktree where Harness keeps them (`~/harnesses/worktrees/<repo>/<name>`), on its own branch;
- *  `placeholder` marks the branch as the made-up name Harness gives one at Start. Git stamps its reflog eight days
- *  ago: the sweep reads when HEAD last moved from that line, not from the time the file was written. */
+ *  `placeholder` marks the branch as the made-up name Harness gives one at Start. */
 function worktree(d: IsolatedDaemon, repo: string, name: string, placeholder = false): string {
   const path = join(d.env.HOME!, 'harnesses', 'worktrees', 'repo', name)
-  execFileSync('git', ['-C', repo, 'worktree', 'add', '-q', '-b', name, path], { env: { ...gitEnv(d), GIT_COMMITTER_DATE: lastWeek().toISOString() } })
+  git(d, repo, 'worktree', 'add', '-q', '-b', name, path)
   if (placeholder) git(d, repo, 'config', `branch.${name}.harness`, 'placeholder')
   return path
 }
 /** Nothing in it changed for eight days: past the sweep's week. */
 function idle(d: IsolatedDaemon, path: string): void {
   const gitDir = git(d, path, 'rev-parse', '--absolute-git-dir')
-  const then = lastWeek()
-  for (const file of [path, join(gitDir, 'HEAD'), join(gitDir, 'index')]) {
+  const then = new Date(Date.now() - 8 * 24 * 3600_000)
+  for (const file of [path, join(gitDir, 'HEAD'), join(gitDir, 'index'), join(gitDir, 'logs', 'HEAD')]) {
     if (existsSync(file)) utimesSync(file, then, then)
   }
 }

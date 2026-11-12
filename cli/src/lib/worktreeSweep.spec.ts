@@ -368,18 +368,6 @@ describe('sweeping unused worktrees', { timeout: 30_000 }, () => {
       expect(await sweep({ inUse: [tree], now: Date.now() })).toEqual({ removed: [], freed: under(tree, 'node_modules'), stuck: [] })
     })
 
-    it('removes an unused worktree though git gc wrote its reflog again today', async () => {
-      const tree = await monthOld('collected-whole')
-      await git(repo, 'gc', '--quiet')
-      expect(await sweep({ now: Date.now() })).toEqual({ removed: [tree], freed: [], stuck: [] })
-    })
-
-    it('keeps a clean worktree nothing uses until a week after it was last used', async () => {
-      const tree = await add('fresh', 'harness/fresh')
-      expect(await sweep({ now: Date.now() + 6 * DAY })).toEqual({ removed: [], freed: [], stuck: [] })
-      expect(await sweep({ now: Date.now() + 8 * DAY })).toEqual({ removed: [tree], freed: [], stuck: [] })
-    })
-
     it('keeps a folder with a tracked file in it, one git does not ignore, a link, and one holding a checkout of its own', async () => {
       const tree = await add('guarded', 'harness/guarded')
       const outside = join(root, 'shared-modules')

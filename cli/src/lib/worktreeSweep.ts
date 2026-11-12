@@ -210,7 +210,11 @@ export async function sweepOne(path: string, now: number, idleMs: number, unused
   if (!dirs) return false
   const { gitDir, common } = dirs
   const main = dirname(common)
-  if (now - await lastUsed(path, gitDir) < idleMs) return false
+  const touched = await Promise.all(
+    [path, join(gitDir, 'HEAD'), join(gitDir, 'index'), join(gitDir, 'logs', 'HEAD')]
+      .map(file => stat(file).then(info => info.mtimeMs, () => 0)),
+  )
+  if (now - Math.max(...touched) < idleMs) return false
   // An older Harness's own ignore file, untracked, kept every worktree (#2266): upgraded first, only when git does not track it.
   if (await git(path, ['ls-files', '--', '.harness/.gitignore']).catch(() => null) === '') upgradeOlderRuntimeIgnore(path)
   if (await git(path, ['status', '--porcelain']) !== '') return false
