@@ -48,6 +48,30 @@ describe('folding a transcript that ends mid-turn', () => {
     expect(events.map((event) => event.type)).toEqual(['turn_started', 'text_delta', 'turn_ended'])
   })
 
+  // Claude Code writes each block of a message as a line of its own, each with the message's stop reason (2.1.322: every one of
+  // 86 thinking lines with `end_turn` in a transcript was followed by its message's text, also `end_turn`). Closed on the
+  // thinking, the turn ended before its answer was read: a Swarm PM's chat reply (Devon, 2026-11-12) had the narration from
+  // before its last tool and not its final paragraph.
+  it('ends a turn on its final message\'s text, not on the thinking line before it that carries the same stop reason', () => {
+    const state = newTurnState()
+    const thinking = (stop: string | null) => JSON.stringify({ type: 'assistant', message: { id: 'msg-9', role: 'assistant',
+      content: [{ type: 'thinking', thinking: 'What to say' }], stop_reason: stop } })
+    const final = JSON.stringify({ type: 'assistant', message: { id: 'msg-9', role: 'assistant',
+      content: [{ type: 'text', text: 'I opened #4208.' }], stop_reason: 'end_turn' } })
+    const events = [userPrompt('a question'), thinking('end_turn'), final].flatMap(line => lineToEvents(line, state))
+    const types = events.map(event => event.type)
+    expect(types.filter(type => type === 'turn_ended')).toHaveLength(1)
+    expect(types.at(-1)).toBe('turn_ended')
+    expect(types.indexOf('text_delta')).toBeLessThan(types.indexOf('turn_ended'))
+    expect(state.turnOpen).toBe(false)
+    // A turn whose last line is thinking alone stays open: the Stop hook closes it (core/turns/turnHooks.ts).
+    const alone = newTurnState()
+    const redacted = JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'redacted_thinking', data: 'x' }],
+      stop_reason: 'end_turn' } })
+    for (const line of [userPrompt('another'), thinking('end_turn'), redacted]) lineToEvents(line, alone)
+    expect(alone.turnOpen).toBe(true)
+  })
+
   it('keeps the turn open while a tool call is unresolved', () => {
     // A turn parked in a tool has no terminal stop reason either, and it is just as live.
     const state = newTurnState()

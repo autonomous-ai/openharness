@@ -18,7 +18,8 @@ import { harnessWebTool } from '../../lib/harnessWebTools.js'
 import type { SubagentSummary, SessionEvent, LiveEvent, LastTurnText } from '../kit/events.js'
 
 interface RawContentBlock {
-  type: 'text' | 'tool_use' | 'tool_result' | 'thinking' | 'image'
+  // `redacted_thinking`: thinking the API returns encrypted, which Claude Code writes as a block of its own.
+  type: 'text' | 'tool_use' | 'tool_result' | 'thinking' | 'redacted_thinking' | 'image'
   text?: string
   thinking?: string
   id?: string
@@ -926,7 +927,13 @@ export function lineToEvents(rawLine: string, state: TurnState): LiveEvent[] {
   }
 
   const stop = msg.stopReason
-  if (state.turnOpen && stop && TERMINAL_STOP_REASONS.has(stop) && state.pendingTools.size === 0) {
+  // Claude Code writes each block of a message as a line of its own, each with the message's stop reason (2.1.322): a turn's last
+  // message is often its thinking and then its text, both `end_turn`. Closed on the thinking, the turn ended before its answer was
+  // read, and a Swarm chat reply was the narration from before the last tool (Devon, 2026-11-12). A line of thinking alone closes
+  // nothing: the text after it does, or the Stop hook when none comes (core/turns/turnHooks.ts).
+  const thinkingOnly = msg.message.content.length > 0
+    && msg.message.content.every(block => block.type === 'thinking' || block.type === 'redacted_thinking')
+  if (state.turnOpen && stop && TERMINAL_STOP_REASONS.has(stop) && state.pendingTools.size === 0 && !thinkingOnly) {
     state.turnOpen = false
     events.push({ type: 'turn_ended', payload: {} })
   }
