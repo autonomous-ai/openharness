@@ -74,6 +74,10 @@ export interface Read {
   /** Of those, the ones it builds: still its own work to do. Given or taken with no pull request yet, with a draft, or with
    *  one a reader's HOLD stands on; not one whose pull request waits for its readers or its merge. */
   building: Map<string, number>
+  /** How many tasks each builder builds in the Swarm's other projects' repositories, as read before a task was given to it
+   *  ([addElsewhere]); one not read is not in it. Each project is planned on its own PM's person's computer, and each gave the
+   *  same agent a task building (the allocator's design, package 11). */
+  elsewhere: Map<string, number>
   /** The tasks no builder holds, which this may give. */
   free: Set<string>
   /** The pull requests each free task is built on, by task: one that comes after tasks whose pull requests are up. */
@@ -129,6 +133,8 @@ const valueOf = (labels: string[], prefix: string): string | undefined =>
 /** The area a task's `part:` label names ([areaOf]), however the label spells it: `part:Backend` is the backend an agent
  *  "Works on". Compared as written, it was no area of that agent's (the allocator's design, package 5). */
 const partOf = (labels: string[]): string | undefined => { const part = valueOf(labels, 'part:'); return part === undefined ? part : areaOf(part) }
+/** The size a task's `size:` label gives it, of those Harness reads. */
+const sizeOf = (labels: string[]): 's' | 'm' | 'l' | undefined => { const size = valueOf(labels, 'size:'); return size === 's' || size === 'm' || size === 'l' ? size : undefined }
 
 /** A pull request a task is built on: its number and its branch. */
 export interface Base { pull: number; branch: string }
@@ -176,13 +182,14 @@ export function heldTasks(issues: Json[], builders: CrewBuilder[]): Map<string, 
 }
 
 /**
- * Whether Harness gives a builder a task now: it builds none, and holds fewer than [CLAIM_LIMIT] open (the allocator's design,
- * package 2). Two deep, a second task was given ahead of the one in hand, which in the design's model cost up to a fifth of a
- * heavy day; and a change waiting for its read filled its builder's list, so a builder with two in review was given nothing.
- * The plan's picks, its gate, the tasks that go back for a builder with nothing, and the PM's numbers all ask it here.
+ * Whether Harness gives a builder a task now: it builds none, here or in the Swarm's other projects (package 11), and holds
+ * fewer than [CLAIM_LIMIT] open here (the allocator's design, package 2). Two deep, a second task was given ahead of the one in
+ * hand, which in the design's model cost up to a fifth of a heavy day; and a change waiting for its read filled its builder's
+ * list, so a builder with two in review was given nothing. The plan's picks, its gate, the tasks that go back for a builder
+ * with nothing, and the PM's numbers all ask it here.
  */
-export const hasRoom = (read: { open: Map<string, number>; building: Map<string, number> }, builder: string): boolean =>
-  read.building.get(builder) === 0 && read.open.get(builder)! < CLAIM_LIMIT
+export const hasRoom = (read: { open: Map<string, number>; building: Map<string, number>; elsewhere: Map<string, number> }, builder: string): boolean =>
+  read.building.get(builder)! + (read.elsewhere.get(builder) ?? 0) === 0 && read.open.get(builder)! < CLAIM_LIMIT
 
 /** Whether a machine has what a `needs:` label asks: a tool it reports, its system, or a GPU. */
 export function machineHas(observation: Json | undefined, need: string): boolean {
@@ -264,8 +271,7 @@ export function readProblem(input: { now: number; issues: Json[]; crew: Crew; wi
     // Nobody's, with pieces cut off it still open (its builder was stopped, or gave it back): others build those, and given
     // out whole it would be built beside them. It is planned once they are closed (third review of the split).
     if (!holder && openPieces(issue)) continue
-    const sized = valueOf(labels, 'size:')
-    const size = sized === 's' || sized === 'm' || sized === 'l' ? sized : undefined
+    const size = sizeOf(labels)
     // Not sized: the PM has not made it a task yet. One a builder holds counts as a middle one.
     if (!size && !holder) continue
     // The time this project's finished tasks of the size took, once there are enough of them (learnedMinutes).
@@ -329,8 +335,38 @@ export function readProblem(input: { now: number; issues: Json[]; crew: Crew; wi
     // No cores, as no task holds any (SIZES).
     return { id, capacity: { cpu: 0, ram: memory, disk: Math.max(0, free - DISK_KEPT) } }
   })
-  return { problem: { now: 0, machines: problemMachines, accounts, builders, tasks, objective: 'weighted', switchCost: 30 }, open, building, free, bases, looped, waits,
+  return { problem: { now: 0, machines: problemMachines, accounts, builders, tasks, objective: 'weighted', switchCost: 30 }, open, building, elsewhere: new Map(), free, bases, looped, waits,
     builders: new Map(crew.builders.map(b => [b.id, b])) }
+}
+
+/**
+ * What [builder] builds in the Swarm's other projects' repositories, from [lists]: its own open issues and pull requests in each
+ * (its label on them), as GitHub lists them there. A task there is building as package 2 counts it here, but for what that list
+ * alone can show: no open pull request of its that GitHub says is not a draft names it ("Closes #N"). Its verdicts there are not
+ * read, so a reader's HOLD there counts as in review, as failed checks do here. With the minutes those tasks keep it busy, as
+ * they would here: half a task's size once taken, its whole size while only given. What waits there for its read or its merge
+ * counts for nothing: a builder's four open are each project's own, as a project whose merger is off would otherwise cap its
+ * builders in every other (review of #4144).
+ */
+export function buildingIn(lists: Json[][], builder: CrewBuilder): { tasks: number; minutes: number } {
+  let tasks = 0, minutes = 0
+  for (const listed of lists) {
+    const up = new Set(listed.filter(item => item.pull_request && item.draft === false && labelsOf(item).includes(builder.label)).flatMap(tasksOf))
+    const items = new Map(listed.map(item => [Number(item.number), item]))
+    for (const number of heldTasks(listed, [builder]).get(builder.id)!.filter(task => !up.has(task))) {
+      const labels = labelsOf(items.get(number)!)
+      tasks++
+      minutes += Math.ceil(SIZES[sizeOf(labels) ?? 'm'].minutes / (labels.includes('status:taken') ? 2 : 1))
+    }
+  }
+  return { tasks, minutes }
+}
+
+/** Counts in [read] what [builder] builds elsewhere ([found], buildingIn): against its room here ([hasRoom]), and as its busy
+ *  time in the plan (the allocator's design, package 11). */
+export function addElsewhere(read: Read, builder: string, found: { tasks: number; minutes: number }): void {
+  read.elsewhere.set(builder, found.tasks)
+  read.problem.builders.find(b => b.id === builder)!.busyUntil += found.minutes
 }
 
 /**

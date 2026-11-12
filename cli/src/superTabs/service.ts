@@ -27,7 +27,7 @@ import { gatedWrites } from './githubWrites.js'
 import { claimAsked, takeTask } from './githubClaim.js'
 import { Cuts, sameCut, splitAsked, splitTask } from './githubSplit.js'
 import { postVerdict, verdictAsked } from './githubVerdict.js'
-import { GitHubAssign } from './githubAssign.js'
+import { GitHubAssign, swarmRepositories } from './githubAssign.js'
 import { GitHubMerge, ledProjects, pmRunsHere, recordedAuthors, VerdictRecords, type LedProject } from './githubMerge.js'
 import { numbersSender, PmNumbers } from './pmNumbers.js'
 import { readTaskTokens, TaskTokens } from './taskTokens.js'
@@ -224,8 +224,11 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   const merges = (options.githubMerge ?? ((api, held) => new GitHubMerge({ projects: led(api, held), crew: crewOfProject(held), get: github.get,
     send: github.send, records, costs: readTaskTokens(path => backend(api, 'GET', path)), hot: project => numbers.hot(project) })))(core, sources)
   // Gives their tasks to their builders (githubAssign.ts), from the crew as the PM reads the Swarm.
-  const assigns = (options.githubAssign ?? ((api, held) => new GitHubAssign({ projects: led(api, held), crew: crewOfProject(held), get: github.get, send: github.send,
-    records, numbers, pmRunning: async project => pmRunsHere((await held().feed.current(60_000)).roster, project, id => !!api.agents.byAgent(id)) })))(core, sources)
+  const assigns = (options.githubAssign ?? ((api, held) => new GitHubAssign({ projects: led(api, held), crew: crewOfProject(held),
+    // The Swarm's projects as its PM's person reads it, read by what changed, as every Swarm read is: the PM reads only its own.
+    repositories: async project => swarmRepositories((await held().reads.read(project.tabId)).state),
+    get: github.get, send: github.send, records, numbers,
+    pmRunning: async project => pmRunsHere((await held().feed.current(60_000)).roster, project, id => !!api.agents.byAgent(id)) })))(core, sources)
   // What this computer's person's agents shipped, read from GitHub with their own gh and told to the leaderboard (shipping.ts).
   const shipping = (options.shipping ?? (api => new ShippingReporter(api)))(core)
   // An agent's answer to the launch line the daemon typed as it made it, in its chat with its person (firstAnswers.ts): as

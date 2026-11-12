@@ -97,8 +97,10 @@ export function landedOf(closed: readonly Json[], team: { has: (label: string) =
     .flatMap(train => [...String(train.title).matchAll(/#([1-9]\d{0,9})\b/g)].map(found => [Number(found[1]), merged(train)] as const)))
   return pulls.flatMap(pull => {
     const label = labelsOf(pull).find(name => team.has(name)), train = carried.get(Number(pull.number))
-    // Closed before the train landed, it was not the train that closed it.
-    const at = merged(pull) || (train !== undefined && timeOf(pull.closed_at) >= train ? train : 0)
+    // A rider counts as landed when its train did: a squashed train closes its riders one by one, and one that lands as a merge
+    // commit marks each merged a moment after, each with its own time. Closed before the train landed, it was not the train
+    // that closed it.
+    const at = train !== undefined && Math.max(merged(pull), timeOf(pull.closed_at)) >= train ? train : merged(pull)
     return label && at ? [{ pull, label, at }] : []
   })
 }

@@ -120,7 +120,7 @@ const NEAR_NAMED = 3
 /** Whether one of the team's [comments] is the note of the older pull requests on files most landings touch (tellNear), by how it
  *  begins, read whole: one that named every older one grew past what a restart read of it (review of #4177). */
 const nearSaid = (comments: readonly Json[]): boolean =>
-  comments.some(comment => TEAM.has(comment.author_association) && /^Harness, \d\d:\d\d, to \*\*[^*]+\*\*: #\d+ already touches `/.test(String(comment.body ?? '')))
+  comments.some(comment => TEAM.has(comment.author_association) && /^Harness, \d\d:\d\d, to \*\*.+?\*\*: #\d+ already touches `/.test(String(comment.body ?? '')))
 /** Whether [pull] is one of the [team]'s: its branch or label names a builder, and GitHub says its author is a member of the
  *  repository, as every word Harness takes from a comment: anyone can name a fork's branch `pip/2` (review of #4121). */
 function ofTeam(pull: Json, team: ReadonlySet<string>): boolean {

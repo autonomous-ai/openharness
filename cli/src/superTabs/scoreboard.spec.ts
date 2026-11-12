@@ -256,6 +256,16 @@ describe('the files the changes told they conflict shared with what landed meanw
     expect(read.conflicts).toEqual([])
   })
 
+  // A train that lands as a merge commit, the train's first way where the repository allows it: GitHub marks each rider merged
+  // by itself a moment later, each with its own time (review of #4177, round 2).
+  it('counts nothing a change shares with another rider of its own merge-commit train, each marked merged a moment apart', async () => {
+    const train = { number: 9, title: 'Train: #1 #2', labels: [], author_association: 'MEMBER', created_at: ago(2 * HOUR), closed_at: ago(HOUR), pull_request: { merged_at: ago(HOUR) } }
+    const rider = (number: number, mergedAgo: number) => ({ number, title: `Change ${number}`, labels: [{ name: 'builder:pip' }], created_at: ago(5 * HOUR),
+      closed_at: ago(mergedAgo), pull_request: { merged_at: ago(mergedAgo) } })
+    const read = await board([train, rider(1, HOUR - 1000), rider(2, HOUR - 3000)], github({ 2: [note(3 * HOUR, CONFLICT)] }, { 1: ['src/hub.ts'], 2: ['src/hub.ts', 'src/own.ts'] }))
+    expect(read.conflicts).toEqual([])
+  })
+
   it('names three files at most, the most shared first, and none for a change GitHub gave no time of its opening', async () => {
     const closed = [...[1, 2, 3, 4].map(number => change(number, 5 * HOUR, number * MINUTE)), change(10, 6 * HOUR, 3 * HOUR), { ...change(11, 0, 4 * MINUTE), created_at: null }]
     const talk = Object.fromEntries([1, 2, 3, 4, 11].map(number => [number, [note(HOUR, CONFLICT)]]))
