@@ -26,6 +26,10 @@ export const GOAL_TITLE_MAX = 80
 /** Harnesses one goal records: five times what Hachi may run at once (agentClient/commands.ts `SPAWN_LIMITS`). */
 export const GOAL_HARNESSES_MAX = 40
 export const GOAL_KEPT_MS = 7 * 24 * 60 * 60_000
+/** How long a goal may stay open after its last harness started before it counts as left (`hachi_goal_left`). The
+ *  design counts from its last harness going idle; the goals know only when each was started, and a harness Hachi
+ *  starts goes idle within its work, so a day after the last start is a day after the work it was given. */
+export const GOAL_LEFT_MS = 24 * 60 * 60_000
 
 export const goalsPath = (dataDir: string): string => join(dataDir, 'hachi', 'goals.json')
 
@@ -39,6 +43,8 @@ export interface Goal {
   /** When the last harness was recorded under it. */
   lastStartAt: number | null
   doneAt: number | null
+  /** Counted once as left: still open a day after its last harness started (`GOAL_LEFT_MS`). */
+  left?: true
 }
 
 const NOT_HACHI = { error: 'NOT_HACHI', message: 'Only Hachi keeps goals. Do the work, and say what is done in your answer.' }
@@ -95,8 +101,17 @@ export function startGoals(core: CoreApi, deps: { now?: () => number } = {}): Se
     (payload: Record<string, unknown>, asker: Asker): Record<string, unknown> => {
       if (!hachi(payload, asker)) return NOT_HACHI
       const { goals, pruned } = read()
+      leftBehind(goals)
       return run(payload, goals, pruned)
     }
+  /** Counts each goal left open a day after its last start, once (Measures: does work Hachi starts finish?). Looked at
+   *  as Hachi asks: it asks after every restart (`harness goal list`), and nothing else needs a timer for it. */
+  const leftBehind = (goals: Goal[]): void => {
+    const left = goals.filter((g) => g.doneAt === null && !g.left && now() - (g.lastStartAt ?? g.openedAt) >= GOAL_LEFT_MS)
+    if (!left.length) return
+    for (const goal of left) { goal.left = true; core.count?.('hachi_goal_left') }
+    write(goals)
+  }
 
   /** The open goal [id] names, or the refusal. */
   const openGoal = (goals: Goal[], id: unknown): { goal: Goal } | { refusal: Record<string, unknown> } => {
@@ -115,7 +130,9 @@ export function startGoals(core: CoreApi, deps: { now?: () => number } = {}): Se
       let id: string
       do id = randomBytes(4).toString('hex'); while (goals.some((g) => g.id === id))
       const goal: Goal = { id, title, harnesses: [], openedAt: now(), lastStartAt: null, doneAt: null }
-      return write([...goals, goal]) ? { goal } : NOT_SAVED
+      if (!write([...goals, goal])) return NOT_SAVED
+      core.count?.('hachi_goal_opened')
+      return { goal }
     }),
 
     goal_add: asked((payload, goals) => {
@@ -142,7 +159,10 @@ export function startGoals(core: CoreApi, deps: { now?: () => number } = {}): Se
       if (goal.doneAt !== null) return { goal }
       if (!goal.harnesses.length) return { error: 'GOAL_EMPTY', message: 'No harness was started for that goal, so it is not done. Start its work with harness new --goal <id>.' }
       goal.doneAt = now()
-      return write(goals) ? { goal } : NOT_SAVED
+      if (!write(goals)) return NOT_SAVED
+      // The signal a program can check that a goal finished: counted here, never from what Hachi writes.
+      core.count?.('hachi_goal_done')
+      return { goal }
     }),
 
     goal_list: asked((_payload, goals, pruned) => {

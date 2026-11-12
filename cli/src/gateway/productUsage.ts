@@ -10,7 +10,7 @@ import { engineAccount } from '../lib/engineAccount.js'
 import { loginShellEnvironment } from '../lib/loginShellEnv.js'
 import { launchEngine, type ProductUsageLaunchSignal } from '../lib/productUsageSignals.js'
 import { LAUNCH_ERROR_CODES, PRODUCT_USAGE_ACTIONS, PRODUCT_USAGE_AUTOMATIC_ACTIONS, PRODUCT_USAGE_DAYS,
-  PRODUCT_USAGE_MAX_COUNT, PRODUCT_USAGE_METRICS, PRODUCT_USAGE_USER_OPENED_ACTIONS,
+  PRODUCT_USAGE_HACHI_LAUNCH_ENGINES, PRODUCT_USAGE_MAX_COUNT, PRODUCT_USAGE_METRICS, PRODUCT_USAGE_USER_OPENED_ACTIONS,
   type LaunchErrorCode, type ProductUsageChoice, type ProductUsageMetric, type ProductUsageReport } from '../lib/productUsageContract.js'
 
 const DAY = 86_400_000
@@ -55,6 +55,12 @@ const isTuiMetric = (metric: string): boolean => metric.startsWith('ui_tui_') ||
 const isNodeMetric = (metric: string): boolean => metric.startsWith('health_cli_node_')
 const key = (now: number) => new Date(now).toISOString().slice(0, 10)
 const week = (now: number) => { const d = new Date(now); return key(now - ((d.getUTCDay() + 6) % 7) * DAY) }
+type HachiLaunchEngine = typeof PRODUCT_USAGE_HACHI_LAUNCH_ENGINES[number]
+/** Hachi's launch twins name fewer engines than the launch counters do: any other is `other`. */
+const hachiEngine = (engine: unknown): HachiLaunchEngine => {
+  const name = launchEngine(engine)
+  return (PRODUCT_USAGE_HACHI_LAUNCH_ENGINES as readonly string[]).includes(name) ? name as HachiLaunchEngine : 'other'
+}
 type Counters = Partial<Record<ProductUsageMetric, number>>
 interface State {
   dayContexts: Record<string, ProductUsageContext>
@@ -62,6 +68,8 @@ interface State {
   healthDay: string | null
   revision: number
   activeDay: string | null
+  /** The last day the person typed a turn to Hachi (`hachi_person_turn_days`, counted once a day). */
+  hachiPersonDay: string | null
   workDay: string | null
   workWeek: string | null
   workMonth: string | null
@@ -78,7 +86,7 @@ interface State {
   days: Record<string, Counters>
   pending: ProductUsageReport | null
 }
-const fresh = (revision: number): State => ({ dayContexts: {}, health: cleanHealthState(null, Date.now()), healthDay: null, revision, activeDay: null, workDay: null, workWeek: null,
+const fresh = (revision: number): State => ({ dayContexts: {}, health: cleanHealthState(null, Date.now()), healthDay: null, revision, activeDay: null, hachiPersonDay: null, workDay: null, workWeek: null,
   workMonth: null, measurementDay: null, featureDays: {}, featuresUsed: [],
   workedBefore: false, respondedBefore: false, launchedBefore: false, firstLaunchAt: null,
   launchWorked: false, launchResponded: false, workDays: [], days: {}, pending: null })
@@ -130,7 +138,8 @@ export function createProductUsage(deps: ProductUsageDeps) {
   let choiceKnown = false, tuiHeld: ProductUsageMetric[] = [], tuiRefusedDay: string | null = null
   const tuiRefused = (): boolean => tuiRefusedDay === key(now())
   const running = new Map<string, { started: number; response: boolean; error: boolean; waited: boolean }>()
-  const launches = new Map<string, { started: number; done: boolean; waits: Set<string>; agent: boolean }>()
+  /** `hachi`: the engine of a launch Hachi started, for its `launch_hachi_*` twins; null for any other. */
+  const launches = new Map<string, { started: number; done: boolean; waits: Set<string>; agent: boolean; hachi: HachiLaunchEngine | null }>()
   /** The agents of created launches still starting, by agent id (RAM only), with when each was created. */
   const starting = new Map<string, number>()
   const forget = (): void => { running.clear(); launches.clear(); starting.clear() }
@@ -142,7 +151,7 @@ export function createProductUsage(deps: ProductUsageDeps) {
       state = fresh(saved.revision)
       state.health = cleanHealthState(saved.health, now())
       state.healthDay = typeof saved.healthDay === 'string' && validDay(saved.healthDay) ? saved.healthDay : null
-      for (const field of ['activeDay', 'workDay', 'workWeek', 'measurementDay'] as const) {
+      for (const field of ['activeDay', 'hachiPersonDay', 'workDay', 'workWeek', 'measurementDay'] as const) {
         if (typeof saved[field] === 'string' && validDay(saved[field]!)) state[field] = saved[field]
       }
       if (typeof saved.workMonth === 'string' && /^\d{4}-\d{2}$/.test(saved.workMonth)) state.workMonth = saved.workMonth
@@ -191,7 +200,7 @@ export function createProductUsage(deps: ProductUsageDeps) {
   function snapshot(): string {
     state.health = health.snapshot()
     clearTimeout(persistTimer); persistTimer = undefined
-    for (const field of ['activeDay', 'workDay', 'workWeek', 'measurementDay'] as const) if (state[field] && !validDay(state[field]!)) state[field] = null
+    for (const field of ['activeDay', 'hachiPersonDay', 'workDay', 'workWeek', 'measurementDay'] as const) if (state[field] && !validDay(state[field]!)) state[field] = null
     for (const day of Object.keys(state.days)) if (!validDay(day)) delete state.days[day]
     for (const day of Object.keys(state.dayContexts)) if (!state.days[day]) delete state.dayContexts[day]
     for (const action of REACHES) if (!validDay(state.featureDays[action] ?? '')) delete state.featureDays[action]
@@ -453,6 +462,11 @@ export function createProductUsage(deps: ProductUsageDeps) {
       }
       if (!enabled) return
       add(metric)
+      // The days a person typed to Hachi are what says whether those who turn it on keep using it
+      // (docs/design/2026-11-12-hachi.md, Measures); derived here, where the day is kept, as the feature days are.
+      if (metric === 'hachi_turns_person' && state.hachiPersonDay !== key(now())) {
+        state.hachiPersonDay = key(now()); add('hachi_person_turn_days')
+      }
       const action = requestActions.get(metric)
       if (action && state.featureDays[action] !== key(now())) {
         add(`${action}_installation_days`)
@@ -480,8 +494,11 @@ export function createProductUsage(deps: ProductUsageDeps) {
           launches.delete(oldest)
         }
         const agent = signal.agentStarted === true
-        launches.set(signal.id, { started: now(), done: false, waits: new Set(), agent }); add('launch_started')
+        // Hachi's launches are counted again, by engine, so its share of all launches reads off its twins.
+        const hachi = agent && signal.hachiStarted === true ? hachiEngine(signal.engine) : null
+        launches.set(signal.id, { started: now(), done: false, waits: new Set(), agent, hachi }); add('launch_started')
         if (agent) add('launch_agent_started')
+        if (hachi) add(`launch_hachi_started_${hachi}`)
         return
       }
       const launch = launches.get(signal.id)
@@ -497,6 +514,7 @@ export function createProductUsage(deps: ProductUsageDeps) {
       // Agents' and Swarms' launches, counted again: since Oct 21 there are many more of them, and they moved a rate
       // people read as a person's. A person's own are the total less these.
       if (launch.agent && ['created', 'failed', 'refused'].includes(signal.phase)) add(`launch_agent_${signal.phase}` as ProductUsageMetric)
+      if (launch.hachi && ['created', 'failed', 'refused'].includes(signal.phase)) add(`launch_hachi_${signal.phase}_${launch.hachi}` as ProductUsageMetric)
       if (signal.phase === 'refused') add(`launch_refused_code_${listed(signal.code)}`)
       if (signal.phase === 'failed') {
         const kind = ['setup', 'auth', 'unavailable', 'invalid'].includes(signal.failure ?? '') ? signal.failure! : 'other'

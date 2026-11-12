@@ -47,6 +47,9 @@ export interface FunnelDeps {
   agentIdFor: (sessionId: string) => string
   turnActivity: Pick<TurnActivity, 'observe' | 'snapshot'>
   isSubagentSession: (sessionId: string) => boolean
+  /** Whether the turn open in a session was started by a quiet delivery (core/turns/recaps.ts `quietTurnOpen`): a line
+   *  the daemon typed for the agent alone, as Hachi's wake is. Absent, none is. */
+  quietTurnOpen?: (sessionId: string) => boolean
   clients: Pick<FunnelClients, 'send'>
   search: { touch(sessionId: string): void } | null | undefined
   turnStartedAt: Map<string, number>
@@ -116,7 +119,7 @@ export function outsideConsumers(options: {
 export function funnelFor({
   bySession, tokenUsage, agentIdFor, turnActivity, isSubagentSession, clients, search, turnStartedAt, prompts, input,
   deviceInput, submission, device, startHeartbeat, questionWatcher, mirror, outside = outsideConsumers(), working, shortTurns, ends,
-  quietTitles,
+  quietTitles, quietTurnOpen,
 }: FunnelDeps) {
   return (sessionId: string, events: Events, opts?: EmitOptions): void => {
     if (!events.length || !bySession(sessionId)?.active) return
@@ -151,6 +154,10 @@ export function funnelFor({
       if (event.type === 'turn_ended') {
         if (opts?.resumed || opts?.replay) frame.replay = true
         if (isSubagentSession(sessionId)) frame.subagent = true
+        // A turn the daemon started with a line of its own (a quiet delivery, as Hachi's wake is) is no one's news either:
+        // the person did not ask for it, so the window makes no unread mark or done notice of it
+        // (docs/design/2026-11-12-hachi.md, "Hachi's own turns"). Read before the recaps hear this batch, which ends the mark.
+        else if (!replay && quietTurnOpen?.(sessionId)) frame.subagent = true
       }
       clients.send(withoutOutputTail(frame))
       if (event.type === 'turn_started' || event.type === 'turn_ended') search?.touch(sessionId)

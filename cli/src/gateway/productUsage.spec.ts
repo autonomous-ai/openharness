@@ -334,6 +334,58 @@ it('counts the Store or a model list as used only when a person opened it, once 
   expect(totals()).not.toHaveProperty('store_list_installation_days')
 })
 
+it('counts a day the person typed to Hachi once, again the next day, across a restart', async () => {
+  await usage.sync()
+  usage.counter('hachi_turns_person'); usage.counter('hachi_turns_person')
+  await usage.stop(); usage = createProductUsage({ file, now: () => now, request }); await usage.sync()
+  usage.counter('hachi_turns_person'); usage.counter('hachi_turns_wake')
+  await usage.sync()
+  expect(totals()).toMatchObject({ hachi_turns_person: 3, hachi_turns_wake: 1, hachi_person_turn_days: 1 })
+  now += 86400000; await usage.stop(); usage = createProductUsage({ file, now: () => now, request }); await usage.sync()
+  usage.counter('hachi_turns_wake'); await usage.sync()
+  expect(totals().hachi_person_turn_days).toBe(1)
+  usage.counter('hachi_turns_person'); usage.counter('hachi_turns_person'); await usage.sync()
+  expect(totals()).toMatchObject({ hachi_turns_person: 5, hachi_person_turn_days: 2 })
+})
+
+it('loads a state file from before Hachi, and a day of Hachi\'s that is no day, as none', async () => {
+  await usage.sync(); usage.counter('create_requests'); await usage.stop()
+  const saved = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+  expect(saved.hachiPersonDay).toBeNull()
+  delete saved.hachiPersonDay
+  writeFileSync(file, JSON.stringify(saved))
+  usage = createProductUsage({ file, now: () => now, request }); await usage.sync()
+  usage.counter('hachi_turns_person'); await usage.stop()
+  writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, 'utf8')), hachiPersonDay: 'PRIVATE_CANARY' }))
+  usage = createProductUsage({ file, now: () => now, request }); await usage.sync()
+  usage.counter('hachi_turns_person'); await usage.sync()
+  expect(totals()).toMatchObject({ create_requests: 1, hachi_turns_person: 2, hachi_person_turn_days: 2 })
+  expect(readFileSync(file, 'utf8')).not.toContain('PRIVATE_CANARY')
+})
+
+it('counts Hachi\'s launches again by engine, beside every agent\'s, and never another agent\'s or a person\'s', async () => {
+  await usage.sync()
+  const start = (id: string, engine: 'claude' | 'codex' | 'opencode' | 'other', hachi: boolean) =>
+    usage.launch({ id, phase: 'start', engine, agentStarted: true, ...(hachi ? { hachiStarted: true as const } : {}) })
+  start('fixture-hachi-claude-created', 'claude', true); usage.launch({ id: 'fixture-hachi-claude-created', phase: 'created' })
+  start('fixture-hachi-codex-failed', 'codex', true)
+  usage.launch({ id: 'fixture-hachi-codex-failed', phase: 'failed', failure: 'other', code: 'internal' })
+  start('fixture-hachi-opencode-refused', 'opencode', true)
+  for (let poll = 0; poll < 2; poll++) usage.launch({ id: 'fixture-hachi-opencode-refused', phase: 'refused', code: 'session_in_harness' })
+  start('fixture-hachi-codex-cancelled', 'codex', true); usage.launch({ id: 'fixture-hachi-codex-cancelled', phase: 'cancelled' })
+  start('fixture-agent-claude-created', 'claude', false); usage.launch({ id: 'fixture-agent-claude-created', phase: 'created' })
+  // Hachi's word without an agent's is no Hachi launch: a person's create cannot say Hachi started it.
+  usage.launch({ id: 'fixture-person-claude-created', phase: 'start', engine: 'claude', hachiStarted: true })
+  usage.launch({ id: 'fixture-person-claude-created', phase: 'created' })
+  await flush()
+  const t = totals()
+  expect(t).toMatchObject({ launch_started: 6, launch_agent_started: 5, launch_created: 3, launch_agent_created: 2,
+    launch_hachi_started_claude: 1, launch_hachi_started_codex: 2, launch_hachi_started_other: 1,
+    launch_hachi_created_claude: 1, launch_hachi_failed_codex: 1, launch_hachi_refused_other: 1 })
+  const hachi = Object.entries(t).filter(([name]) => name.startsWith('launch_hachi_'))
+  expect(hachi.reduce((n, [, v]) => n + v, 0)).toBe(7)
+})
+
 it('tracks a durable launch through polls without persisting its receipt or counting polls as attempts', async () => {
   await usage.sync()
   const id = 'PRIVATE_CREATION_CANARY'

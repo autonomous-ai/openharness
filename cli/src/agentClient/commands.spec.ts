@@ -4,12 +4,13 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { addressOf, agentOrigin, AGENTS_START_AGENTS_OFF, closeCommand, deleteCommand, DEPTH_REFUSAL, EXIT, GOAL_USAGE, goalCommand, parseDuration, psCommand, refusalNext, replyCommand, resumeCommand, routeCommand, showCommand, spawnCheck, spawnCount, spawnRefusal, SPAWN_LIMITS, step, tellCommand, waitCommand, watchCommand, whoamiCommand, type ClientDeps } from './commands.js'
 import { RefusedError, type Rpc } from '../messages/rpc.js'
-import { AgentClientError, type Daemon, type Where } from './daemon.js'
+import { AgentClientError, type Daemon, type PushedEvent, type Where } from './daemon.js'
 import { Ledger, ledgerPath } from './ledger.js'
 import { agentSettingsPath } from '../lib/agentSettings.js'
 import { LEAD_PROTECTED_DETAIL } from '../lib/closeAgentService.js'
 import { setAgentSettingsForTest, signedOutForTest, TEST_ACCOUNT } from '../testing/agentSettings.js'
 import type { Frame } from './model.js'
+import { HACHI_ID } from '../dsh/builtinIds.js'
 
 const NOW = Date.parse('2026-10-11T12:00:00Z')
 
@@ -1078,6 +1079,28 @@ describe('harness new, run by an agent', () => {
     await expect((await agentOrigin(harness(d).deps))!.check()).rejects.toThrow(AGENTS_START_AGENTS_OFF)
   })
 
+  it('lets the Hachi harness start harnesses while the account has Hachi on, and no other agent; records the start as Hachi\'s', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('hachi', { engine: 'claude', dsh: HACHI_ID }), frame('lead', { engine: 'claude' })]
+    setAgentSettingsForTest(dir, { agentsStartAgents: false, hachi: true })
+    const hachi = (await agentOrigin(harness(d, { pane: '%hachi' }).deps))!
+    await expect(hachi.check()).resolves.toBeUndefined()
+    expect(hachi.hachi).toBe(true)
+    // Its starts say so in the ledger: the machine a harness runs on reads it for `harness tell` and the hand-over.
+    hachi.pending!('m', { creationId: 'c1', name: 'api-fix', engine: 'codex' })
+    await hachi.created('m', { id: 'kid', name: 'api-fix' }, 'c1')
+    const ledger = new Ledger(ledgerPath(dir))
+    expect(ledger.parentOf({ machineId: 'm', agentId: 'kid' })?.by).toEqual({ machineId: 'm', agentId: 'hachi', name: 'hachi', engine: 'claude', hachi: true })
+    expect(ledger.pendingOf({ machineId: 'm', agentId: 'hachi' }, NOW)).toEqual([])
+    // Turning Hachi on is the person's yes to Hachi alone: any other agent still needs agents-start-agents.
+    const lead = (await agentOrigin(harness(d).deps))!
+    await expect(lead.check()).rejects.toMatchObject({ code: 'TURNED_OFF' })
+    expect(lead).not.toHaveProperty('hachi')
+    // Hachi off: Hachi is an agent like any other.
+    setAgentSettingsForTest(dir, { agentsStartAgents: false, hachi: false })
+    await expect((await agentOrigin(harness(d, { pane: '%hachi' }).deps))!.check()).rejects.toMatchObject({ code: 'TURNED_OFF' })
+  })
+
   it('names its own harness as the one that started the new one; an agent outside Harness names none', async () => {
     const d = new FakeDaemon()
     d.frames = [frame('lead', { engine: 'claude' })]
@@ -2013,6 +2036,23 @@ describe('harness tell', () => {
       at: NOW, by: { machineId: 'm', agentId: 'lead' }, told: { machineId: 'm', agentId: 'kid' }, probe: 'Now add tests.' })
   })
 
+  it('lets the Hachi harness tell what it started while the account has Hachi on, and no other agent', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('hachi', { engine: 'claude', dsh: HACHI_ID }), frame('lead', { engine: 'claude' }), frame('kid'), frame('other')]
+    const r = told()
+    started(new Ledger(ledgerPath(dir)), 'hachi', 'kid')
+    started(new Ledger(ledgerPath(dir)), 'lead', 'other')
+    setAgentSettingsForTest(dir, { agentsTellAgents: false, hachi: true })
+    expect(await tellCommand(['kid', '--', 'Add a test.'], harness(d, { record: r.record, pane: '%hachi' }).deps)).toBe(EXIT.ok)
+    expect(r.calls).toEqual([['m', { action: 'tell', pane: '%hachi', machine: 'studio', agentId: 'kid', text: 'Add a test.' }]])
+    const lead = harness(d, { record: r.record })
+    expect(await tellCommand(['other', '--', 'x'], lead.deps)).toBe(EXIT.refused)
+    expect(lead.err.join('\n')).toContain('agents-tell-agents')
+    setAgentSettingsForTest(dir, { agentsTellAgents: false, hachi: false })
+    expect(await tellCommand(['kid', '--', 'x'], harness(d, { record: r.record, pane: '%hachi' }).deps)).toBe(EXIT.refused)
+    expect(r.calls).toHaveLength(1)
+  })
+
   it('on another machine, says who tells it: that machine checks its own record', async () => {
     const d = new FakeDaemon(), far = new FakeDaemon('m2')
     d.frames = [frame('lead', { engine: 'claude' })]
@@ -2279,16 +2319,16 @@ describe('wait and watch on pushed events', () => {
   /** A daemon that pushes the state events of the harnesses a tool names (`agents_watch`, core/toolWatches.ts). */
   class PushingDaemon extends FakeDaemon {
     watched: string[][] = []
-    heard: ((agentId: string) => void) | null = null
+    heard: ((agentId: string, event: PushedEvent) => void) | null = null
     refuse = false
-    async watch(agentIds: string[], heard: (agentId: string) => void): Promise<boolean> {
+    async watch(agentIds: string[], heard: (agentId: string, event: PushedEvent) => void): Promise<boolean> {
       this.requests.push({ type: 'agents_watch', payload: { agentIds } })
       if (this.refuse) return false
       this.watched.push([...agentIds])
       this.heard = heard
       return true
     }
-    push(agentId: string): void { this.heard?.(agentId) }
+    push(agentId: string): void { this.heard?.(agentId, { type: 'agent_activity', payload: { agentId } }) }
   }
   const lists = (d: FakeDaemon) => d.requests.filter((r) => r.type === 'agents_list').length
   const answered = (d: FakeDaemon, id: string) => d.pages.set(`s-${id}`, [{ events: [ev('user_message', { content: 'fix it' }), ev('tool_start'), ev('text_delta', { content: 'Fixed.' }), ev('done')], hasMore: false }])
@@ -3189,8 +3229,8 @@ describe('harness show --work (the result in facts, read on the machine that own
 describe('harness watch --mine (one stream for every harness the caller started, on every machine)', () => {
   class PushingDaemon extends FakeDaemon {
     watched: string[][] = []
-    heard: ((agentId: string) => void) | null = null
-    async watch(agentIds: string[], heard: (agentId: string) => void): Promise<boolean> {
+    heard: ((agentId: string, event: PushedEvent) => void) | null = null
+    async watch(agentIds: string[], heard: (agentId: string, event: PushedEvent) => void): Promise<boolean> {
       this.watched.push([...agentIds])
       this.heard = heard
       return true
