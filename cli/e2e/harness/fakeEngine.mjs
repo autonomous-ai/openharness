@@ -194,6 +194,8 @@ export async function run(engine, config = {}, { native = false } = {}) {
   // Resume checks for a live background job before opening a pane. This is a
   // CLI query, not an agent launch: keep it out of the launch-argv ledger.
   if (engine === 'claude' && args.length === 2 && args[0] === 'agents' && args[1] === '--json') {
+    // Who asked, by its pid: Claude Code's engine worker, not the core (#4146).
+    if (config.root) appendFileSync(join(config.root, 'background-job-queries'), `${process.ppid}\n`)
     process.stdout.write('[]\n')
     return
   }
