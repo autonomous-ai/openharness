@@ -36,8 +36,6 @@ import 'swarm_face.dart';
 import 'swarm_file_picker.dart';
 import 'swarm_outgoing_files.dart';
 import 'swarm_inbox.dart';
-import 'swarm_lead_start.dart';
-import 'swarm_lead_start_card.dart';
 import 'swarm_reader.dart';
 import 'swarm_link_previews.dart';
 import 'swarm_message_edit.dart';
@@ -46,6 +44,7 @@ import 'swarm_message_receipt.dart';
 import 'swarm_message_row.dart';
 import 'swarm_need_rows.dart';
 import 'swarm_paste.dart';
+import 'swarm_pm_choose.dart';
 import 'swarm_person_sheet.dart';
 import 'swarm_project_page.dart';
 import 'swarm_message_actions.dart';
@@ -1904,25 +1903,21 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
         return const SwarmChatSkeleton();
       }
       if (view.decisions.isEmpty) {
-        // A Personal project with no Lead offers to start one, as Desktop's
-        // empty chat does (task #2941).
-        if (SwarmScope.computersOf(context)
-            case final SwarmLeadComputers computers
-            when swarmWantsLeadStart(c.reader, c.id)) {
-          return Align(
+        // A project's empty channel with no PM tells its owner so, as
+        // Desktop's does.
+        if (swarmOffersPm(c)) {
+          return const Align(
             alignment: Alignment.topCenter,
             child: Padding(
-              padding: const EdgeInsets.all(AppSpace.screenInset),
-              child: SwarmLeadStartCard(
-                reader: c.reader,
-                computers: computers,
-                chatId: c.id,
-              ),
+              padding: EdgeInsets.all(AppSpace.screenInset),
+              child: SwarmPmChoose(),
             ),
           );
         }
+        // An empty page under the project's name read as broken (Dee,
+        // 11-09): its channel says why, in Desktop's words.
         return _said(
-          'No messages yet.',
+          c.agentsOnly ? swarmEmptyChannel : 'No messages yet.',
           key: const ValueKey('swarm-chat-empty'),
         );
       }

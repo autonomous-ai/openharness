@@ -714,6 +714,9 @@ class SwarmNewProjectSteps with ChangeNotifier {
   /// made with.
   String? get projectId => _projectId;
 
+  /// The PM's own 1:1 chat, once its start answered: where the project opens.
+  String? get chatId => _chatId;
+
   /// Its creation was asked for: Swarm, brief, files and visibility stay as
   /// sent.
   bool get sent => _create != null || _projectId != null;
@@ -1256,8 +1259,9 @@ class SwarmNewProjectSteps with ChangeNotifier {
       failure.statusCode != 429;
 }
 
-/// A project New project made: the Swarm, and the project.
-typedef SwarmNewProject = ({String swarmId, String projectId});
+/// A project New project made: the Swarm, the project, and its PM's own 1:1
+/// chat, which opens as Desktop's does.
+typedef SwarmNewProject = ({String swarmId, String projectId, String chatId});
 
 /// New project, from Swarm Home: which Swarm (only when there are several,
 /// and only those of [swarmIds] the person may write in; it opens on
@@ -2098,7 +2102,7 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
         if (_madeUnreachable case final made?)
           SwarmButton(
             key: const ValueKey('swarm-new-project-open-made'),
-            label: 'Open the project',
+            label: 'Open chat',
             style: SwarmButtonStyle.fill,
             wide: true,
             onPressed: () {
@@ -2649,11 +2653,17 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
         now: widget.now,
       );
       if (!mounted || !_live(swarmId, reader)) return;
+      // A run that returns had its start answered with the chat.
+      final made = (
+        swarmId: swarmId,
+        projectId: projectId,
+        chatId: steps.chatId!,
+      );
       // Made, but Harness can't reach it yet (F7): the Product Manager was
       // started all the same, and the sheet says what its owner does.
       if (steps.unreachable && newRepository != null) {
         setState(() {
-          _madeUnreachable = (swarmId: swarmId, projectId: projectId);
+          _madeUnreachable = made;
           _unreachableLine = swarmRepositoryUnreachable(
             newRepository.owner,
             newRepository.name,
@@ -2662,7 +2672,7 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
         return;
       }
       _closing = true;
-      Navigator.of(context).pop((swarmId: swarmId, projectId: projectId));
+      Navigator.of(context).pop(made);
     } on SwarmRepositoryWaiting {
       // Out in GitHub: its outcome comes back in the Swarm state.
     } on SwarmRepositoryFailure catch (failure) {

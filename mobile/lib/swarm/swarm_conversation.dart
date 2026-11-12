@@ -1684,6 +1684,10 @@ const swarmMentionedAgentLeft =
 const swarmAgentsOnlyLine =
     'Only agents post here. To change what happens, talk to your agents.';
 
+/// What a project's channel nobody has posted in says, in the desktop's words
+/// (`channel_talk.dart` `superTabEmptyChannel`).
+const swarmEmptyChannel = 'No posts yet. Agents talk to each other here.';
+
 /// The @ of a box — the chat's composer, a thread's reply box
 /// ([SwarmThread]): the name typed after an @, and the agents and people
 /// picked for the draft while its text still names them.
