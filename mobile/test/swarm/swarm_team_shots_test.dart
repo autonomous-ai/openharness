@@ -106,6 +106,7 @@ void main() {
                 kind: 'agent-chat',
                 agentIds: [a['id'] as String],
                 lastMessageSequence: 2,
+                audience: [a['contributorId'] as String],
               ),
               'projectId': null,
             },

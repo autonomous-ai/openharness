@@ -885,8 +885,8 @@ void main() {
           groupData('g1', title: 'Fix login', number: 4),
           for (final a in all)
             if (a['chatId'] case final String chat)
-              // An agent's own chat is in no project (backend
-              // projects.ts isAgentChat).
+              // An agent's own chat is in no project, and only its person
+              // reads it (backend agentChats.ts giveAgentsChats).
               {
                 ...groupData(
                   chat,
@@ -894,6 +894,7 @@ void main() {
                   kind: 'agent-chat',
                   agentIds: [a['id'] as String],
                   lastMessageSequence: 3,
+                  audience: [a['contributorId'] as String],
                 ),
                 'projectId': null,
               },
