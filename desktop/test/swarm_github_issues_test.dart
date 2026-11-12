@@ -238,6 +238,11 @@ void main() {
       'First builder',
       'READ-OK f6edb44\nmore',
     ));
+    // A name before a bare comma or a bracket is still a name to the merger, and not a form an agent writes.
+    final loose = SwarmSignature.read('Juno, READ-OK f6edb44')!;
+    expect((loose.name, loose.written), ('Juno', false));
+    expect(SwarmSignature.read('Juno (reader) READ-OK f6edb44')?.name, 'Juno');
+    expect(SwarmSignature.read('Devon: mine')?.written, isTrue);
     // The words alone: whose name it is, is its caller's to say.
     expect(read('Note: both rows are in the sheet.')?.$1, 'Note');
     expect(read('no signature here'), isNull);
@@ -254,6 +259,15 @@ void main() {
     expect(signed('devon: lower case')?.name, 'Devon');
     expect(signed('first-builder, 09:40: as its label')?.name, 'First builder');
     expect(signed('Harness, 17:15: for Devon')?.name, 'Harness');
+    expect(signed('**Devon** (PM): as a PM signs')?.text, 'as a PM signs');
+    expect(
+      signed('Devon, 09:3x GMT+7, taken by Devon.')?.text,
+      'taken by Devon.',
+    );
+    // A person addressing an agent is not that agent (Lennox's read of #4227).
+    expect(signed('Devon, can you look at this before it lands?'), isNull);
+    expect(signed('devon, please rebase'), isNull);
+    expect(signed('Devon (see above) I disagree with this.'), isNull);
     expect(signed('Note: both rows are in the sheet.'), isNull);
     expect(signed('Lennox: another Swarm\'s'), isNull);
     expect(signed('Devon: an outsider\'s', fromTeam: false), isNull);

@@ -101,7 +101,7 @@ enum SwarmTalk { comment, review, line, merged }
 /// pull request's chats name their posts by it, and a pull request's reads are counted by it ([SwarmPull.standingOf]), as
 /// the merger reads one (cli superTabs/githubMerge.ts).
 class SwarmSignature {
-  const SwarmSignature(this.name, this.text);
+  const SwarmSignature(this.name, this.text, {required this.written});
 
   /// The name it is signed with, as written.
   final String name;
@@ -109,26 +109,44 @@ class SwarmSignature {
   /// The post after its signature.
   final String text;
 
+  /// It is in a form agents and Harness write: "Name:", "Name (role):", or "Name, 16:52[, to X]" then a colon or a comma.
+  /// A name before a bare comma or a bracket ("Devon, can you look at this?", "Devon (see above) I disagree.") is how a
+  /// person addresses an agent: the merger still reads it as a name for a verdict, and a chat never shows it as the
+  /// agent's own words.
+  final bool written;
+
   /// Harness's own name on what it posts.
   static const harness = 'Harness';
 
   /// The repository's people, as GitHub names them: only their logins post for the Swarm's agents.
   static const team = {'OWNER', 'MEMBER', 'COLLABORATOR'};
 
-  /// One or two plain words, then what Harness adds (a role in brackets, the time, who it is to), then a colon or a comma.
-  static final _pattern = RegExp(
-    r'^\W*([A-Za-z][\w-]*(?: [A-Za-z][\w-]*)?)\**\s*'
-    r'(?:(?:\([^)\n]*\)\s*)?(?:,\s*\d{1,2}:[\dx]{2}(?: [A-Z]{2,4}(?:[+-]\d{1,2})?)?)?'
-    r'(?:,\s*to\s+\**[^:*\n]+\**)?\s*[:,]|\([^)\n]*\))\s*',
+  /// A name: one or two plain words, as the merger reads one.
+  static const _name = r'^\W*([A-Za-z][\w-]*(?: [A-Za-z][\w-]*)?)\**\s*';
+
+  /// A name, then a role in brackets if any, then a colon, or the time (and who it is to) and a colon or a comma.
+  static final _written = RegExp(
+    '$_name'
+    r'(?:\([^)\n]*\)\s*)?'
+    r'(?::|,\s*\d{1,2}:[\dx]{2}(?: [A-Z]{2,4}(?:[+-]\d{1,2})?)?(?:,\s*to\s+\**[^:*\n]+\**)?\s*[:,])\s*',
   );
+
+  /// A name, then a comma, a colon or a bracket: the merger's rule for who a verdict is from.
+  static final _named = RegExp('$_name[,:(]');
 
   /// The signature [body] opens with, by its words alone: whether its name is anyone's is the caller's to say. Null when
   /// it opens with none.
   static SwarmSignature? read(String body) {
-    final text = body.trimLeft(), match = _pattern.firstMatch(text);
+    final text = body.trimLeft();
+    final written = _written.firstMatch(text);
+    final match = written ?? _named.firstMatch(text);
     return match == null
         ? null
-        : SwarmSignature(match.group(1)!, text.substring(match.end));
+        : SwarmSignature(
+            match.group(1)!,
+            text.substring(match.end),
+            written: written != null,
+          );
   }
 }
 
@@ -165,14 +183,15 @@ class SwarmIssueComment {
   final int? line;
 
   /// Its signature, named as the Swarm names that agent: only on a post from one of the repository's people, and only
-  /// the name of one of [agents], the Swarm's, or Harness. "Note: …" and an outsider's "Devon: …" are no signature.
+  /// the name of one of [agents], the Swarm's, or Harness. "Note: …", an outsider's "Devon: …" and a person's "Devon, can
+  /// you look?" are no signature.
   SwarmSignature? signedAmong(Iterable<String> agents) {
     final signature = fromTeam ? SwarmSignature.read(body) : null;
-    if (signature == null) return null;
+    if (signature == null || !signature.written) return null;
     final key = swarmSameKey(signature.name);
     for (final agent in [...agents, SwarmSignature.harness]) {
       if (swarmSameKey(agent) == key) {
-        return SwarmSignature(agent, signature.text);
+        return SwarmSignature(agent, signature.text, written: true);
       }
     }
     return null;
