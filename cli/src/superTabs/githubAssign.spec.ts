@@ -547,6 +547,14 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
         .toEqual(['acme/app', 'acme/web'])
       expect(swarmRepositories({})).toEqual([])
     })
+
+    // A Personal Swarm's project made from a pane's folder has no address to clone, only the GitHub repository Desktop named for it
+    // (backend commands.ts project.github): what its builders build counts as a cloned project's does.
+    it('reads the GitHub repository a project was given when its folder has no address', () => {
+      expect(swarmRepositories({ projects: [{ repository: { repositoryUrl: null }, githubRepository: 'Acme/Pane' }, { githubRepository: 'acme/web' },
+        { repository: { repositoryUrl: 'https://github.com/acme/app' }, githubRepository: 'acme/app' }, { githubRepository: 'acme/old', archived: true }] }))
+        .toEqual(['acme/pane', 'acme/web', 'acme/app'])
+    })
   })
 
   // The allocator's design, package 3: a task that says "after #B" was given as soon as #B was taken, before #B had any code; and

@@ -41,6 +41,28 @@ describe('removing one worktree Harness made, as the Swarm asks', { timeout: 30_
   })
   afterEach(() => rm(root, { recursive: true, force: true }))
 
+  // The Swarm's removal ran git as the repository configures it: the program its config names (`core.fsmonitor`, which
+  // lib/gitProject.ts turns off too) and its hooks (which lib/worktreeDeletion.ts turns off too); and with
+  // `status.showUntrackedFiles=no` a worktree holding new work read as clean, and `git worktree remove` removed it, new work and
+  // all (review of the allocator's package 6, 12 November).
+  it.runIf(process.platform !== 'win32')('runs no fsmonitor program or hook the repository names, and keeps new files whatever status.showUntrackedFiles says', async () => {
+    const clean = await add('clean', 'harness/clean')
+    const fresh = await add('fresh', 'harness/fresh')
+    await writeFile(join(fresh, 'new-work.md'), 'not added yet')
+    const ran = join(root, 'ran'), program = join(root, 'program'), hook = join(repo, '.git', 'hooks', 'reference-transaction')
+    for (const file of [program, hook]) {
+      await writeFile(file, `#!/bin/sh\necho "$0" >> "${ran}"\nexit 1\n`)
+      await chmod(file, 0o755)
+    }
+    await git(repo, 'config', 'core.fsmonitor', program)
+    await git(repo, 'config', 'status.showUntrackedFiles', 'no')
+    expect(await removes(fresh), 'a worktree holding new work').toBe(false)
+    expect(await readFile(join(fresh, 'new-work.md'), 'utf8')).toBe('not added yet')
+    expect(await removes(clean)).toBe(true)
+    expect(await branches()).toEqual(['harness/fresh', 'main'])
+    expect(await readFile(ran, 'utf8').catch(() => ''), 'a program or hook the repository names').toBe('')
+  })
+
   it('removes a clean, idle, unused worktree and the harness branch that has nothing of its own', async () => {
     const path = await add('brave-otter', 'harness/brave-otter')
     expect(await removes(path)).toBe(true)
