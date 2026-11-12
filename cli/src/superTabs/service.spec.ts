@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { mkdtempSync, readdirSync, readFileSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -227,6 +227,17 @@ it('starts the next things with the host and stops them with the service', async
   expect(nextThings.start).toHaveBeenCalledOnce()
   service.port.disconnected()
   expect(nextThings.stop).toHaveBeenCalledOnce()
+})
+// Swarm allocator, package 12: what each agent's conversation uses on each task is counted while the host runs (taskTokens.ts).
+it('starts the count of tasks\' tokens with the host and stops it with the service', async () => {
+  const taskTokens = { start: vi.fn(), stop: vi.fn(), looked: vi.fn(), read: vi.fn(), took: vi.fn() }
+  const service = superTabService(fakeCore({ account: { backend: vi.fn() } }), { host: () => ({ machineId: 'machine-1', start: vi.fn(), stop: vi.fn() }) as unknown as SuperTabHost,
+    shipping: () => ({ start: vi.fn(), stop: vi.fn() }), firstAnswers: () => ({ start: vi.fn(), stop: vi.fn() }), taskTokens: () => taskTokens })
+  expect(taskTokens.start).not.toHaveBeenCalled()
+  expect(await service.requests.super_tabs({ action: 'wake' }, owner)).toEqual({ ok: true })
+  expect(taskTokens.start).toHaveBeenCalledOnce()
+  service.port.disconnected()
+  expect(taskTokens.stop).toHaveBeenCalledOnce()
 })
 // Swarm plan, step 1, item 2: what waits for the agent that asks, as its turns' ends type it (nextThing.ts inbox).
 it('lists what waits for the agent in its own pane, and says a GitHub failure by its code', async () => {
@@ -1009,28 +1020,112 @@ describe('a task\'s steps in messages', () => {
 // A reader's verdict is made by command in its own pane (githubVerdict.ts): the daemon posts it and tells the backend whose it is.
 describe('a verdict by command', () => {
   const HEAD = 'f6edb44c0ffee0000000000000000000000000ab'
-  function verdictSetup(given: Record<string, unknown> = {}) {
+  /** [counted]: the real count of tasks' tokens, on a data folder and a core's reading of the agent's conversation, in place of a stand-in. */
+  function verdictSetup(given: Record<string, unknown> = {}, counted?: { dataDir: string; usage: NonNullable<CoreApi['usage']> }) {
     const agentId = createHash('sha256').update(JSON.stringify(['machine-1', 'native'])).digest('hex').slice(0, 24)
     const agent = { id: agentId, machineId: 'machine-1', harnessId: 'native', displayName: 'Juno', contributorId: 'me', machineOwnerId: 'me', ...given }
     const state = { agents: [agent], projects: [{ id: 'app', repository: { repositoryUrl: 'https://github.com/Acme/App.git' } }] }
     const call = vi.fn<CoreApi['account']['backend']>(async (_method, path) => ({ status: 200, body: { success: true,
       data: path.includes('/github-comments') ? { recorded: true } : swarmData(agent, path, state) } }))
-    const core = fakeCore({ account: { backend: call, identity: vi.fn(async () => ({ accountId: 'me' }) as never) }, agents: { byAgent: vi.fn(() => ({ agentId: 'native' }) as never) } })
+    const core = fakeCore({ account: { backend: call, identity: vi.fn(async () => ({ accountId: 'me' }) as never) }, agents: { byAgent: vi.fn(() => ({ agentId: 'native' }) as never) },
+      ...counted ? { dataDir: counted.dataDir } : {} })
+    if (counted) core.usage = counted.usage
     const sent: Array<{ path: string; body: unknown }> = []
     const github = { get: vi.fn(async (path: string): Promise<{ status: number; etag: null; resetAt: null; body: unknown }> => ({ status: 200, etag: null, resetAt: null,
       body: path === '/user' ? { login: 'reader-login' } : path.includes('/comments') ? [] : { state: 'open', head: { sha: HEAD, ref: 'pip/12' }, labels: [{ name: 'builder:pip' }] } })),
       send: vi.fn(async (_method: string, path: string, body?: unknown): Promise<{ status: number; etag: null; resetAt: null; body: unknown }> => { sent.push({ path, body })
         return { status: 201, etag: null, resetAt: null, body: { id: 9001, html_url: 'https://github.com/acme/app/pull/27#issuecomment-9001' } } }) }
-    const service = superTabService(core, { host: () => ({ machineId: 'machine-1', start: vi.fn(), stop: vi.fn() }) as unknown as SuperTabHost, github: () => github })
+    // The count of tasks' tokens (taskTokens.ts), told each verdict and each claim made by command.
+    const taskTokens = { start: vi.fn(), stop: vi.fn(), looked: vi.fn(), read: vi.fn(async () => {}), took: vi.fn(async () => {}) }
+    const service = superTabService(core, { host: () => ({ machineId: 'machine-1', start: vi.fn(), stop: vi.fn() }) as unknown as SuperTabHost, github: () => github,
+      ...counted ? {} : { taskTokens: () => taskTokens } })
     const read = (extra: Record<string, unknown> = {}) => service.requests.super_tabs({ action: 'read', tabId: 'tab', harnessId: 'native', repository: 'acme/app', number: 27,
       verdict: 'READ-OK', sha: 'f6edb44', text: 'Ran the tests.', ...extra }, owner)
-    return { service, call, sent, github, agentId, read }
+    return { service, call, sent, github, agentId, read, taskTokens }
   }
   it('posts it under the calling agent\'s name on its project\'s repository, and records the comment as that agent\'s', async () => {
     const t = verdictSetup()
     expect(await t.read()).toEqual({ ok: true, value: { url: 'https://github.com/acme/app/pull/27#issuecomment-9001', head: HEAD, posted: true } })
     expect(t.sent).toEqual([{ path: '/repos/acme/app/issues/27/comments', body: { body: expect.stringMatching(new RegExp(`^Juno, \\d\\d:\\d\\d: READ-OK ${HEAD}\\n\\nRan the tests\\.$`)) } }])
     expect(t.call).toHaveBeenCalledWith('POST', `/api/super-tabs/tab/github-comments?asAgentId=${t.agentId}`, { repository: 'acme/app', kind: 'issue', commentId: '9001' })
+    t.service.port.stop()
+  })
+  // Swarm allocator, package 12: a verdict made by command is a boundary of its reader's work, and a claim the start of its
+  // builder's (taskTokens.ts). Told once for each one made, never for a command that only finished or found an earlier one.
+  it('tells the count of tasks\' tokens of a verdict it posted, by the repository as its project names it, and of none it did not post', async () => {
+    const t = verdictSetup()
+    await t.read({ repository: 'Acme/App' })
+    expect(t.taskTokens.read.mock.calls).toEqual([[{ tabId: 'tab', agentId: t.agentId, harnessId: 'native' }, 'acme/app', 27]])
+    expect(t.taskTokens.took).not.toHaveBeenCalled()
+    // The same command again finds its own comment of a minute ago: nothing was read anew.
+    const own = { id: 9001, html_url: 'https://github.com/acme/app/pull/27#issuecomment-9001', user: { login: 'reader-login' }, body: `Juno, 14:20: READ-OK ${HEAD}\n\nRan the tests.` }
+    t.github.get.mockImplementation(async (path: string) => ({ status: 200, etag: null, resetAt: null,
+      body: path === '/user' ? { login: 'reader-login' } : path.includes('/comments') ? [own] : { state: 'open', head: { sha: HEAD, ref: 'pip/12' }, labels: [{ name: 'builder:pip' }] } }))
+    expect(await t.read()).toMatchObject({ ok: true, value: { posted: false } })
+    expect(await t.read({ repository: 'other/thing' })).toMatchObject({ error: 'REPOSITORY_NOT_PROJECT' })
+    expect(t.taskTokens.read).toHaveBeenCalledTimes(1)
+    t.service.port.stop()
+  })
+  // The server takes a row for the repository its project names: GitHub's newer name for it would be no project's.
+  it('tells it of a verdict by the name its project has for the repository, though the command names it as GitHub does since a rename', async () => {
+    const t = verdictSetup()
+    t.github.get.mockImplementation(async (path: string) => ({ status: 200, etag: null, resetAt: null,
+      body: path === '/user' ? { login: 'reader-login' } : path === '/repos/acme/app' ? { full_name: 'Acme/App2' } : path.includes('/comments') ? []
+        : { state: 'open', head: { sha: HEAD, ref: 'pip/12' }, labels: [{ name: 'builder:pip' }] } }))
+    expect(await t.read({ repository: 'acme/app2' })).toMatchObject({ ok: true, value: { posted: true } })
+    expect(t.sent.map(sent => sent.path)).toEqual(['/repos/acme/app2/issues/27/comments'])
+    expect(t.taskTokens.read.mock.calls).toEqual([[{ tabId: 'tab', agentId: t.agentId, harnessId: 'native' }, 'acme/app', 27]])
+    t.service.port.stop()
+  })
+  it('counts what a reader\'s conversation used between two verdicts, from the core\'s reading of it, and writes it to the server as that agent', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'super-tab-service-tokens-'))
+    try {
+      let used = 1_000
+      const usage = vi.fn(async () => ({ totalTokens: used, updatedAt: '2026-11-11T09:00:00.000Z', models: { 'claude-sonnet-5-5': { input: used, output: 0, cacheRead: 0, cacheWrite: 0 } } }))
+      const t = verdictSetup({}, { dataDir, usage })
+      // Its first verdict is its first mark; what it used from there to its next is that read.
+      await t.read()
+      await vi.waitFor(() => expect(usage).toHaveBeenCalledWith({ agentId: 'native' }))
+      used = 1_700
+      await t.read({ number: 28 })
+      await vi.waitFor(() => expect(t.call).toHaveBeenCalledWith('POST', `/api/super-tabs/tab/task-tokens?asAgentId=${t.agentId}`, expect.objectContaining({ repository: 'acme/app', number: 28,
+        kind: 'read', rounds: 1, tokens: [{ model: 'claude-sonnet-5-5', input: 700, output: 0, cacheRead: 0, cacheWrite: 0 }] })))
+      expect(t.call.mock.calls.filter(([, path]) => path.includes('/task-tokens'))).toHaveLength(1)
+      expect(Object.keys(JSON.parse(readFileSync(join(dataDir, 'super-tab-task-tokens.json'), 'utf8')))).toEqual(['native'])
+      // A reading with no count by model is no count: that verdict makes no mark, and the next read is counted from the one before it.
+      usage.mockResolvedValueOnce({ totalTokens: 9_000, updatedAt: '2026-11-11T09:00:00.000Z' } as never)
+      await t.read({ number: 29 })
+      used = 2_000
+      await t.read({ number: 30 })
+      await vi.waitFor(() => expect(t.call).toHaveBeenCalledWith('POST', `/api/super-tabs/tab/task-tokens?asAgentId=${t.agentId}`, expect.objectContaining({ number: 30,
+        tokens: [{ model: 'claude-sonnet-5-5', input: 300, output: 0, cacheRead: 0, cacheWrite: 0 }] })))
+      expect(t.call.mock.calls.filter(([, path]) => path.includes('/task-tokens'))).toHaveLength(2)
+      t.service.port.stop()
+    } finally { rmSync(dataDir, { recursive: true, force: true }) }
+  })
+  it('tells it of a verdict once when the same command arrives twice while the first still runs', async () => {
+    const t = verdictSetup()
+    expect(await Promise.all([t.read(), t.read()])).toEqual([expect.objectContaining({ ok: true }), expect.objectContaining({ ok: true })])
+    expect(t.sent).toHaveLength(1)
+    expect(t.taskTokens.read).toHaveBeenCalledTimes(1)
+    t.service.port.stop()
+  })
+  it('tells it of a task its agent took, and not of one it had taken already', async () => {
+    const t = verdictSetup()
+    const labels = [{ name: 'builder:juno' }]
+    t.github.get.mockImplementation(async (path: string) => ({ status: 200, etag: null, resetAt: null,
+      body: path === '/user' ? { login: 'reader-login' } : /\/issues\/34$/.test(path) ? { number: 34, state: 'open', labels, comments: 1, html_url: 'https://github.com/acme/app/issues/34' }
+        : path.includes('/comments') ? [{ id: 9001, html_url: 'https://github.com/acme/app/issues/34#issuecomment-9001', user: { login: 'reader-login' }, body: 'Juno, 14:20: taken by Juno' }] : [] }))
+    t.github.send.mockImplementation(async (_method: string, path: string, body?: unknown) => { t.sent.push({ path, body })
+      return path.endsWith('/labels') ? { status: 200, etag: null, resetAt: null, body: [...labels, { name: 'status:taken' }] }
+        : { status: 201, etag: null, resetAt: null, body: { id: 9001, html_url: 'https://github.com/acme/app/issues/34#issuecomment-9001' } } })
+    const take = () => t.service.requests.super_tabs({ action: 'take', tabId: 'tab', harnessId: 'native', repository: 'acme/app', number: 34 }, owner)
+    expect(await take()).toMatchObject({ ok: true, value: { taken: true } })
+    expect(t.taskTokens.took.mock.calls).toEqual([[{ tabId: 'tab', agentId: t.agentId, harnessId: 'native' }]])
+    labels.push({ name: 'status:taken' })
+    expect(await take()).toMatchObject({ ok: true, value: { taken: false } })
+    expect(t.taskTokens.took).toHaveBeenCalledTimes(1)
+    expect(t.taskTokens.read).not.toHaveBeenCalled()
     t.service.port.stop()
   })
   it('refuses a request that is no verdict, a repository of no project of the agent\'s, and another computer\'s caller, and posts nothing', async () => {

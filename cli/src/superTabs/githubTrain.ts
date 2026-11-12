@@ -87,13 +87,15 @@ export interface TrainMember { number: number; head: string; readers: string }
 interface Train { number: number; branch: string; head: string; tip: string; members: TrainMember[]; red: boolean; mergedAs: string | null; openedAt: number; opener: string }
 
 /** What the train asks of the merger: a head's checks as the merger reads a pull request's (passed only once they hold still;
- *  `none` when it has no check at all), this computer's GitHub login, its notes to a pull request's author, each said once for a head, and how a comment of Harness's begins ("Harness, 14:20"). */
+ *  `none` when it has no check at all), this computer's GitHub login, its notes to a pull request's author, each said once for a head, how a comment of Harness's begins ("Harness, 14:20"),
+ *  and what a pull request it landed cost its builder, as the sentence its comment gains (empty when nothing says). */
 export interface TrainHost<T extends TrainPull> {
   checks(number: number, head: string): Promise<{ state: 'passed' | 'running' | 'failed'; none: boolean }>
   login(): Promise<string>
   conflicts(pull: T): Promise<void>
   failedAlone(pull: T, train: number): Promise<void>
   stamp(): string
+  cost(number: number): Promise<string>
 }
 
 /** A train's body: the tip it built, then each member at its full head with who read it, then the members' [receipts] (trainReceipts),
@@ -429,7 +431,7 @@ export class GitHubTrain<T extends TrainPull> {
       const comments = await this.deps.reads.current(this.repo, `/repos/${this.repo}/issues/${member.number}/comments?per_page=${PAGE}`, 3)
       if (!comments.some(comment => TEAM.has(comment.author_association) && String(comment.body ?? '').slice(0, 500).includes(said))) {
         await this.sent('POST', `/issues/${member.number}/comments`, [201],
-          { body: `${this.host.stamp()}: ${said}${sha.slice(0, 7)}. READ-OK on ${member.head.slice(0, 7)} by ${member.readers}, checks green.` })
+          { body: `${this.host.stamp()}: ${said}${sha.slice(0, 7)}. READ-OK on ${member.head.slice(0, 7)} by ${member.readers}, checks green.${await this.host.cost(member.number)}` })
       }
       if (!kept) await this.sent('PATCH', `/pulls/${member.number}`, [200], { state: 'closed' })
     }

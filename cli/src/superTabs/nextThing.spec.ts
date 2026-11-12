@@ -6,6 +6,7 @@ import type { TurnEnd } from '../core/api.js'
 import type { WatchedAgent } from './githubMentions.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { IDLE_ASK_MS, IDLE_BACK_MS, INBOX_MAX, NEXT_SETTLE_MS, NEXT_TIMES, NextThing, START_LOOK_MS, TELL_SETTLE_MS } from './nextThing.js'
+import type { Hand } from './taskTokens.js'
 import { SuperTabHostError } from './wire.js'
 
 type Json = Record<string, unknown>
@@ -77,8 +78,10 @@ function setup(options: { items?: Json[]; working?: boolean | null; watched?: Wa
   const team = vi.fn(async (_agent: WatchedAgent) => state.team)
   const named = vi.fn(async (_agent: WatchedAgent, _repo: string, comments: Json[]) => state.recordsDown ? null
     : comments.map(c => state.recorded[Number(c.id)] ? { ...c, recorded: state.recorded[Number(c.id)] } : c))
+  // What each look found the agent with, as the tokens of its tasks are counted by (taskTokens.ts).
+  const looked = vi.fn((_agent: WatchedAgent, _hands: Hand[]) => {})
   const make = () => new NextThing({ onEnd, watched: async () => state.watched, owed, working: async () => state.working, get, send, tell, say, file, log,
-    team, named })
+    team, named, looked })
   let turns = 0
   /** A turn of [harnessId] ending, then the settle after it. */
   const end = async (extra: Partial<TurnEnd> = {}) => {
@@ -87,7 +90,7 @@ function setup(options: { items?: Json[]; working?: boolean | null; watched?: Wa
     await vi.advanceTimersByTimeAsync(NEXT_SETTLE_MS)
   }
   const told = () => tell.mock.calls.map(([, , text]) => text)
-  return { state, listeners, onEnd, calls, tell, say, log, file, owed, send, written, refuse, make, end, told, team, named, next: make() }
+  return { state, listeners, onEnd, calls, tell, say, log, file, owed, send, written, refuse, make, end, told, team, named, looked, next: make() }
 }
 
 describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => {
@@ -1026,7 +1029,8 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     const slow = new Promise<void>(resolve => { answer = resolve })
     const watched = f.state.watched
     const next = new NextThing({ onEnd: f.onEnd, watched: async () => { await slow; return watched }, owed: () => [], working: async () => false, send: f.send,
-      get: async () => ({ status: 200, etag: null, body: f.state.items, resetAt: null }), tell: f.tell, say: f.say, file: f.file, team: f.team, named: f.named, log: f.log })
+      get: async () => ({ status: 200, etag: null, body: f.state.items, resetAt: null }), tell: f.tell, say: f.say, file: f.file, team: f.team, named: f.named, log: f.log,
+      looked: f.looked })
     next.start()
     await f.end()
     await f.end()
@@ -1050,7 +1054,7 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const f = setup()
     const next = new NextThing({ onEnd: f.onEnd, watched: async () => { throw new Error('offline') }, owed: () => [], working: async () => false, send: f.send,
-      get: async () => ({ status: 200, etag: null, body: [], resetAt: null }), tell: f.tell, say: f.say, file: f.file, team: f.team, named: f.named })
+      get: async () => ({ status: 200, etag: null, body: [], resetAt: null }), tell: f.tell, say: f.say, file: f.file, team: f.team, named: f.named, looked: f.looked })
     next.start()
     await f.end()
     expect(warn).toHaveBeenCalledWith('[super-tab] next thing of agent h-pip: Error.')
@@ -1115,11 +1119,58 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     await vi.advanceTimersByTimeAsync(START_LOOK_MS)
     expect(stopped.tell).not.toHaveBeenCalled()
     const failing = new NextThing({ onEnd: f.onEnd, watched: async () => { throw new Error('offline') }, owed: () => [], working: async () => false,
-      send: f.send, get: async () => ({ status: 200, etag: null, body: [], resetAt: null }), tell: f.tell, say: f.say, file: f.file, team: f.team, named: f.named, log: f.log })
+      send: f.send, get: async () => ({ status: 200, etag: null, body: [], resetAt: null }), tell: f.tell, say: f.say, file: f.file, team: f.team, named: f.named, log: f.log,
+      looked: f.looked })
     failing.start()
     await vi.advanceTimersByTimeAsync(START_LOOK_MS)
     expect(f.log).toHaveBeenCalledWith('[super-tab] next things as Harness started: Error.')
     failing.stop()
+  })
+
+  // Swarm allocator, package 12: a task's boundaries are known where its builder runs. Each look says what it found the agent
+  // with, from what it read of GitHub anyway, and its tokens are counted by that (taskTokens.ts).
+  it('says what each look found the agent with: the task it holds, its open pull requests, and the head of each one it read', async () => {
+    const f = setup({ items: [item(12, 'Fix the login bug', ['status:taken']), item(14, 'Add the export')] })
+    f.next.start()
+    await f.end()
+    expect(f.looked.mock.calls).toEqual([[PIP, [{ repo: 'acme/app', held: 12, pulls: [], heads: [] }]]])
+    // Its pull request opened, then a draft beside it: each is listed, with the head read and whether it is a draft.
+    f.state.items = [item(12, 'Fix the login bug', ['status:taken']), item(14, 'Add the export'), { ...item(30, 'Fix the login bug', [], true), body: 'Closes #12' },
+      item(31, 'Try another way', [], true)]
+    f.state.pulls[31] = { draft: true, head: { sha: 'c'.repeat(40), ref: 'pip/31' } }
+    await f.end()
+    expect(f.looked.mock.calls.at(-1)).toEqual([PIP, [{ repo: 'acme/app', held: null, pulls: [30, 31],
+      heads: [{ number: 30, head: HEAD, draft: false }, { number: 31, head: 'c'.repeat(40), draft: true }] }]])
+    // A look that stops at the first thing it types read no further: the heads it did not read are not said. One GitHub gives no head is not either.
+    f.state.pulls[30] = { mergeable_state: 'behind' }
+    f.state.pulls[31] = { head: {} }
+    await f.end()
+    expect(f.looked.mock.calls.at(-1)).toEqual([PIP, [{ repo: 'acme/app', held: null, pulls: [30, 31], heads: [{ number: 30, head: HEAD, draft: false }] }]])
+    f.state.pulls[30] = {}
+    await f.end()
+    expect(f.looked.mock.calls.at(-1)).toEqual([PIP, [{ repo: 'acme/app', held: null, pulls: [30, 31], heads: [{ number: 30, head: HEAD, draft: false }] }]])
+    // A look GitHub did not answer says what it read, which is nothing; the list for its own pane says nothing at all.
+    f.state.down = true
+    await f.end()
+    expect(f.looked.mock.calls.at(-1)).toEqual([PIP, []])
+    f.state.down = false
+    const looks = f.looked.mock.calls.length
+    await f.next.inbox('h-pip')
+    expect(f.looked).toHaveBeenCalledTimes(looks)
+    f.next.stop()
+  })
+
+  it('says each repository it read of an agent in two projects, and none after the one that had something for it', async () => {
+    const both = { ...PIP, repos: ['acme/docs', 'acme/app'] }
+    const f = setup({ watched: [both], items: [item(12, 'Fix the login bug', ['status:taken'])] })
+    const calls: string[] = []
+    const next = new NextThing({ onEnd: f.onEnd, watched: async () => [both], owed: () => [], working: async () => false, send: f.send, tell: f.tell, say: f.say, file: f.file,
+      team: f.team, named: f.named, log: f.log, looked: f.looked,
+      get: async path => { calls.push(path); return { status: 200, etag: null, body: path.startsWith('/repos/acme/docs/') ? [] : f.state.items, resetAt: null } } })
+    next.start()
+    await f.end()
+    expect(f.looked.mock.calls).toEqual([[both, [{ repo: 'acme/docs', held: null, pulls: [], heads: [] }, { repo: 'acme/app', held: 12, pulls: [], heads: [] }]]])
+    next.stop()
   })
 
   it('hears turn ends once however often it is started, and none once stopped', async () => {
