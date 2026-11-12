@@ -9,7 +9,7 @@
  * sign-in. Every removal is written to harness.log with the command and the processes above it.
  */
 import { execFileSync } from 'child_process'
-import { appendFileSync, existsSync, mkdirSync, readlinkSync } from 'fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readlinkSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
 import { env } from '../config/env.js'
 import { clearAuthSession } from './authSession.js'
@@ -125,11 +125,28 @@ function stamp(at: Date): string {
  * cannot be written does not keep the person signed in.
  */
 export function removeSignIn(reason: string, asked: SignOutAsked, chain: () => readonly Asker[] = ancestorsOnce()): void {
+  let line: string | null = null
   try {
     const self = { pid: process.pid, command: process.argv.join(' ') }
+    line = removalLine({ reason, asked, self, ancestors: chain() })
     // `harness reset` has just emptied the folder the log lives in.
     mkdirSync(env.ADAPTER_DATA_DIR, { recursive: true })
-    appendFileSync(join(env.ADAPTER_DATA_DIR, 'harness.log'), removalLine({ reason, asked, self, ancestors: chain() }) + '\n')
+    appendFileSync(join(env.ADAPTER_DATA_DIR, 'harness.log'), line + '\n')
   } catch { /* the log is a record, not a gate */ }
+  if (line) keepRemoval(line)
   clearAuthSession()
+}
+
+/** The file in the data folder that keeps the last [REMOVALS_KEPT] removals' lines apart from harness.log, which trims its oldest
+ *  lines at its cap: anh Dee's Mac, 2026-11-12, lost its line to a flood of "Not signed in" lines, and nobody could tell what had
+ *  signed the person out. Never trimmed but by this. */
+export const REMOVALS_FILE = 'sign-in-removals.log'
+const REMOVALS_KEPT = 20
+
+function keepRemoval(line: string): void {
+  const file = join(env.ADAPTER_DATA_DIR, REMOVALS_FILE)
+  try {
+    const before = existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean) : []
+    writeFileSync(file, [...before.slice(-(REMOVALS_KEPT - 1)), line].join('\n') + '\n', { mode: 0o600 })
+  } catch { /* a record, not a gate, as harness.log's line is */ }
 }

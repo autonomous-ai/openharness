@@ -1,5 +1,9 @@
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { join } from 'path'
 import { describe, expect, it, vi } from 'vitest'
-import { isDesktopApp, removalLine, SIGN_OUT_BUTTON_FLAG, signOutAsked, type Asker } from './signOut.js'
+import { env } from '../config/env.js'
+import { AUTH_SESSION_FILE } from './authSession.js'
+import { isDesktopApp, REMOVALS_FILE, removalLine, removeSignIn, SIGN_OUT_BUTTON_FLAG, signOutAsked, type Asker } from './signOut.js'
 
 // 10-27: a desktop test ran the real `harness logout` and signed the whole Mac out. Only a person asks.
 describe('who asked for the sign-in to go', () => {
@@ -70,3 +74,35 @@ describe("harness.log's line for a removal", () => {
   })
 })
 
+
+// anh Dee's Mac, 2026-11-12: the session went at 04:58, and a flood of "Not signed in" lines filled harness.log to its cap, whose
+// trim took this line with it: nobody could tell what had signed the person out. Each removal is kept apart too, never trimmed.
+describe('the removals kept apart from harness.log', () => {
+  it('keeps each removal\'s line in a file of its own, the last 20 of them', () => {
+    const kept = join(env.ADAPTER_DATA_DIR, REMOVALS_FILE)
+    rmSync(kept, { force: true })
+    const chain = () => [{ pid: 2, command: '-zsh' }]
+    removeSignIn('logout', 'terminal', chain)
+    const first = readFileSync(kept, 'utf8').trimEnd().split('\n')
+    expect(first).toHaveLength(1)
+    expect(first[0]).toMatch(/\[auth\] sign-in removed · reason=logout · asked=terminal · pid=\d+ \(.*\) · parent=2 \(-zsh\)$/)
+    expect(readFileSync(join(env.ADAPTER_DATA_DIR, 'harness.log'), 'utf8')).toContain(first[0])
+    for (let n = 0; n < 25; n++) removeSignIn(`reset-${n}`, 'desktop app', chain)
+    const lines = readFileSync(kept, 'utf8').trimEnd().split('\n')
+    expect(lines).toHaveLength(20)
+    expect(lines[0]).toContain('reason=reset-5 ')
+    expect(lines[19]).toContain('reason=reset-24 ')
+  })
+
+  it('still removes the sign-in when the kept file cannot be written', () => {
+    const kept = join(env.ADAPTER_DATA_DIR, REMOVALS_FILE)
+    rmSync(kept, { recursive: true, force: true })
+    // A folder where the file goes: it can be neither read nor written, and the sign-in goes all the same.
+    mkdirSync(kept, { recursive: true })
+    mkdirSync(join(AUTH_SESSION_FILE, '..'), { recursive: true })
+    writeFileSync(AUTH_SESSION_FILE, '{}')
+    expect(() => removeSignIn('logout', 'terminal', () => [])).not.toThrow()
+    expect(existsSync(AUTH_SESSION_FILE)).toBe(false)
+    rmSync(kept, { recursive: true, force: true })
+  })
+})

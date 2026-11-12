@@ -406,6 +406,24 @@ describe('an agent\'s answer to its launch line, in its chat (firstAnswers.ts)',
     expect(h.log).toHaveBeenCalledWith('[super-tab] first answers: TIMEOUT.')
   })
 
+  // anh Dee's Mac, 2026-11-12: signed out, each pass every 5 s logged "first answers: NOT_SIGNED_IN." into harness.log, which then
+  // reached its cap and trimmed away the record of what had signed the person out.
+  it('says a failure once while it lasts, and again once a pass has gone through or another failure comes', async () => {
+    const h = setup()
+    h.read.mockImplementation(() => { throw new SuperTabHostError('NOT_SIGNED_IN', 'No.', 401) })
+    for (let pass = 0; pass < 12; pass++) await h.answers.tick()
+    expect(h.log.mock.calls.map(([line]) => line)).toEqual(['[super-tab] first answers: NOT_SIGNED_IN.'])
+    h.read.mockImplementationOnce(() => { throw new SuperTabHostError('TIMEOUT', 'No.', 503) })
+    await h.answers.tick()
+    expect(h.log).toHaveBeenLastCalledWith('[super-tab] first answers: TIMEOUT.')
+    h.state.rows = []
+    await h.answers.tick()
+    h.state.rows = [{ tabId: 'tab', agent: ARLO }]
+    await h.answers.tick()
+    expect(h.log.mock.calls.map(([line]) => line)).toEqual(['[super-tab] first answers: NOT_SIGNED_IN.',
+      '[super-tab] first answers: TIMEOUT.', '[super-tab] first answers: NOT_SIGNED_IN.'])
+  })
+
   it('reads a launch line as Desktop writes it, and nothing that only begins like one', () => {
     expect(launchLine('You are Pip.', ['Pip'])).toBe(true)
     expect(launchLine('You are Pip.\n\nTidy the docs.', ['Pip'])).toBe(true)

@@ -81,6 +81,8 @@ const refusedForGood = (error: unknown): boolean => permanentRefusal(error)
 export class FirstAnswers {
   private timer: NodeJS.Timeout | null = null
   private running: Promise<void> | null = null
+  /** The failure last said, until a pass goes through. */
+  private failing: string | null = null
   private memory: Memory | null = null
   private stopEnds: (() => void) | null = null
   /** The first turn ends heard of each terminal, by its id. */
@@ -135,10 +137,15 @@ export class FirstAnswers {
     this.launches.clear()
   }
 
-  /** One pass; one still running is not started twice. */
+  /** One pass; one still running is not started twice. A failure is said once while it lasts (anh Dee's Mac, 2026-11-12: signed
+   *  out, each pass logged it every 5 s until harness.log reached its cap), and again once a pass goes through or another comes. */
   tick(): Promise<void> {
-    this.running ??= this.pass().catch(error => this.log(`[super-tab] first answers: ${named(error)}.`))
-      .finally(() => { this.running = null })
+    this.running ??= this.pass().then(() => { this.failing = null }, error => {
+      const name = named(error)
+      if (name === this.failing) return
+      this.failing = name
+      this.log(`[super-tab] first answers: ${name}.`)
+    }).finally(() => { this.running = null })
     return this.running
   }
 

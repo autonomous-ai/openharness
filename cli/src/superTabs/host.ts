@@ -169,6 +169,12 @@ const SKILL_RETRY_MS = 60_000
 const JOIN_RETRY_MAX_MS = 30 * 60_000
 /** A server that no longer serves this client's reads (HTTP 426): said once, then asked again a minute later (design 5.1). */
 const UPDATE_BACKOFF_MS = 60_000
+/** Signed out, a pass looks again whether a sign-in came back after this, then after twice as long each time, at most
+ *  [SIGNED_OUT_MAX_MS]: a sign-in restarts the daemon (core/api.ts account.signedIn), so this is only for a session that went
+ *  without one. Each second, the host said "Not signed in" twice and filled harness.log to its cap, whose trim erased the record
+ *  of what had signed the person out (anh Dee's Mac, 2026-11-12). */
+const SIGNED_OUT_FIRST_MS = 5_000
+const SIGNED_OUT_MAX_MS = 5 * 60_000
 /** How old the host form may be for the stop check, which runs every 5 s beside the one-second tick that reads it. */
 const STOPS_FRESH_MS = 5_000
 /** Refusals no retry can change while this host runs: this person has all the machines they may add to the Swarm, or this
@@ -462,6 +468,8 @@ export class SuperTabHost {
   /** Until when the host waits after an update-required answer, and whether it has said so. */
   private updateUntil = 0
   private updateSaid = false
+  /** Signed out on this computer: when a pass may next look whether it is signed in again, and how long it waited. */
+  private signedOut: { next: number; wait: number } | null = null
   /** A Lead's reads of and typing into this machine's agents' terminals, and the stuck and usage-limit alerts. */
   private readonly terminal: TerminalHost
 
@@ -573,6 +581,7 @@ export class SuperTabHost {
   }
   /** An engine was just signed in on this machine: its reading says so now (machines.ts engineSignedIn). */
   engineSignedIn(): void {
+    if (this.signedOut) return
     this.contributed().engineSignedIn()
     this.pollMachines()
   }
@@ -582,7 +591,8 @@ export class SuperTabHost {
       { ...this.machineDeps, sources: this.sources, progress: ids => this.terminal.progressOf(ids) })
   }
   private pollMachines() {
-    void this.contributed().tick().catch(error => this.log(error instanceof Error ? error.message : String(error)))
+    if (this.signedOut) return
+    void this.contributed().tick().catch(error => this.failed(error))
     // Beside the pass, never behind it: a slow pass still keeps the machine's reading fresh (machines.ts beat).
     this.contributed().beat()
     this.grids ??= new SwarmGrids(this.core, this.machineId)
@@ -590,7 +600,10 @@ export class SuperTabHost {
   }
   tick(): Promise<void> {
     if (this.stopped || this.now() < this.updateUntil) return Promise.resolve()
-    return this.running ??= this.poll().catch(error => this.failed(error)).finally(() => {
+    if (this.running) return this.running
+    // Signed out, a pass runs only when it is time to look whether a sign-in came back.
+    if (this.waitsForSignIn()) return Promise.resolve()
+    return this.running = this.poll().then(() => this.signedInAgain(), error => this.failed(error)).finally(() => {
       this.running = null
       // Work the server announced during that poll is read now, not at the next second.
       if (!this.stopped && (this.pushAll || this.pushes.size)) void this.tick()
@@ -622,8 +635,30 @@ export class SuperTabHost {
     const id = delivery.id as string, entry = this.journal.entries[id]
     return !!entry && entry.stage === 'uncertain' && delivery.status === 'uncertain' && delivery.receipt === entry.receipt
   }
-  /** Logged, except that an update-required answer is said once and then waits a minute, rather than every second. */
+  /** Signed out: true until a pass may look again whether it is signed in, which this one then does. */
+  private waitsForSignIn(): boolean {
+    const out = this.signedOut
+    if (!out) return false
+    if (this.now() < out.next) return true
+    out.wait = Math.min(out.wait * 2, SIGNED_OUT_MAX_MS)
+    out.next = this.now() + out.wait
+    return false
+  }
+  /** A pass went through: signed out until now, it says once that the Swarm goes on. */
+  private signedInAgain(): void {
+    if (!this.signedOut) return
+    this.signedOut = null
+    this.log('Signed in again: this Swarm goes on.')
+  }
+  /** Logged, except that an update-required answer is said once and then waits a minute, rather than every second, and that
+   *  being signed out is said once, after which the host waits for a sign-in (waitsForSignIn). */
   private failed(error: unknown): void {
+    if (error instanceof SuperTabHostError && error.code === 'NOT_SIGNED_IN') {
+      if (this.signedOut) return
+      this.signedOut = { next: this.now() + SIGNED_OUT_FIRST_MS, wait: SIGNED_OUT_FIRST_MS }
+      this.log('Not signed in on this computer: this Swarm waits for a sign-in (harness login).')
+      return
+    }
     if (error instanceof SuperTabHostError && error.code === UPDATE_REQUIRED) {
       this.updateUntil = this.now() + UPDATE_BACKOFF_MS
       if (this.updateSaid) return
@@ -635,7 +670,7 @@ export class SuperTabHost {
   /** A saved native stop, never a timeout or missing live snapshot, releases
    * ownership. This also runs for contributions withdrawn while working. */
   reconcileStops(): Promise<void> {
-    if (this.stopped || !this.core.agents.stopped || this.now() < Math.max(this.nextStopsAt, this.updateUntil)) return Promise.resolve()
+    if (this.stopped || this.signedOut || !this.core.agents.stopped || this.now() < Math.max(this.nextStopsAt, this.updateUntil)) return Promise.resolve()
     return this.stopsRunning ??= this.checkStops().catch(error => this.failed(error))
       .finally(() => { this.stopsRunning = null; this.nextStopsAt = this.now() + 5_000 })
   }
@@ -788,10 +823,8 @@ export class SuperTabHost {
   /** Retire local intent only after an authoritative terminal delivery state.
    * This runs independently so a slow receipt lookup cannot stall live leases. */
   reconcileReceipts(): Promise<void> {
-    if (this.stopped || this.now() < this.nextReceiptsAt) return Promise.resolve()
-    return this.receiptsRunning ??= this.checkReceipts().catch(error => {
-      this.log(error instanceof Error ? error.message : String(error))
-    }).finally(() => { this.receiptsRunning = null; this.nextReceiptsAt = this.now() + 5_000 })
+    if (this.stopped || this.signedOut || this.now() < this.nextReceiptsAt) return Promise.resolve()
+    return this.receiptsRunning ??= this.checkReceipts().catch(error => this.failed(error)).finally(() => { this.receiptsRunning = null; this.nextReceiptsAt = this.now() + 5_000 })
   }
   private async checkReceipts(): Promise<void> {
     const now = this.now()

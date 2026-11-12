@@ -208,6 +208,26 @@ describe('the host tick on the host form', () => {
     expect(vi.mocked(t.call).mock.calls.filter(([, path]) => path.includes('/hosts/'))).toHaveLength(2)
     expect(t.log).toHaveBeenCalledTimes(1)
   })
+  // anh Dee's Mac, 2026-11-12: signed out, the host logged "Not signed in. Run `harness login`." twice a second until harness.log
+  // reached its cap, and its trim erased the record of what had signed the person out (lib/signOut.ts).
+  it('says once that this computer is signed out, asks next to nothing while it is, and says once that it goes on', async () => {
+    const t = setup(), host = t.open()
+    const working = vi.mocked(t.call).getMockImplementation()!
+    vi.mocked(t.call).mockImplementation(async () => ({ status: 401, body: { success: false, error: { code: 'NOT_SIGNED_IN', message: 'Not signed in. Run `harness login`.' } } }))
+    for (let second = 0; second < 60; second++) {
+      await host.tick(); await host.reconcileStops(); await host.reconcileReceipts(); host.engineSignedIn()
+      await Promise.resolve()
+      t.wait(1_000)
+    }
+    expect(t.log.mock.calls.map(([line]) => line)).toEqual(['Not signed in on this computer: this Swarm waits for a sign-in (harness login).'])
+    // The first pass, then a look after 5, 10 and 20 seconds: four requests in a minute where there were 120 and more.
+    expect(vi.mocked(t.call).mock.calls.length).toBeLessThanOrEqual(4)
+    vi.mocked(t.call).mockImplementation(working)
+    t.wait(5 * 60_000)
+    await host.tick()
+    expect(t.log).toHaveBeenLastCalledWith('Signed in again: this Swarm goes on.')
+    expect(t.log).toHaveBeenCalledTimes(2)
+  })
   // Diego 10-29: a host form whose body timed out after the headers read as '200 OK, {}', so the host paused this machine's
   // Swarm work for a minute behind 'Update Harness'. Through the gateway's real backend helper, it is a timeout that is logged and retried.
   it('logs a feed read that times out after the headers as unreachable and reads again the next second', async () => {
