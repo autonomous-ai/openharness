@@ -25,7 +25,6 @@ const observed = (over: Partial<HermesObserved> = {}): HermesObserved => ({
 })
 const pass = (over: Partial<HermesPass> = {}) => ({ current: vi.fn(() => true), mayClaim: vi.fn((_sessionId: string) => true), hold: vi.fn((_error: unknown) => {}), ...over })
 
-let clock = 0
 function setup(platform: NodeJS.Platform = 'linux') {
   const deps = {
     platform,
@@ -39,14 +38,12 @@ function setup(platform: NodeJS.Platform = 'linux') {
     endedSince: vi.fn(async (_home: string, _sessionId: string, _sinceMs: number) => false),
     storeStamp: vi.fn(async (_home: string) => 'store'),
     recordSeen: vi.fn((_home: string) => {}),
-    now: vi.fn(() => clock),
   }
   return { deps, t: createHermesTerminal(deps) }
 }
 
 let log: MockInstance<typeof console.log>
 beforeEach(() => {
-  clock = 0
   log = vi.spyOn(console, 'log').mockImplementation(() => {})
 })
 afterEach(() => vi.restoreAllMocks())
@@ -192,7 +189,7 @@ describe('following a Hermes from its terminal record', () => {
     expect(await t.follow(agent(), observed(), pass())).toBe('wait')
     expect(deps.storeStamp).toHaveBeenCalledWith(HOME)
     // Idle five minutes, past the repair's two eager ones: no store query while the store is unchanged.
-    for (let passes = 0; passes < 60; passes++, clock += 5_000) expect(await t.follow(agent(), observed(), pass())).toBe('wait')
+    for (let passes = 0; passes < 60; passes++) expect(await t.follow(agent(), observed(), pass())).toBe('wait')
     expect(deps.kind).toHaveBeenCalledOnce()
     expect(deps.storeStamp).toHaveBeenCalledTimes(61)
     // The first message writes the row, and the store's -wal with it: bound on the next pass.
@@ -216,7 +213,6 @@ describe('following a Hermes from its terminal record', () => {
     deps.kind.mockRejectedValue(new Error('the store is busy'))
     const first = pass(), again = pass()
     expect(await t.follow(agent(), observed(), first)).toBe('wait')
-    clock += 120_000
     expect(await t.follow(agent(), observed(), again)).toBe('wait')
     expect(deps.kind).toHaveBeenCalledOnce()
     expect(first.hold).toHaveBeenCalledOnce()
@@ -230,7 +226,6 @@ describe('following a Hermes from its terminal record', () => {
     resumed.deps.endedSince.mockRejectedValue(new Error('the store is busy'))
     const row = agent({ sessionId: OLD, resumeOnly: true, lastHookAt: 0 })
     expect(await resumed.t.follow(row, observed(), pass())).toBe('wait')
-    clock += 120_000
     expect(await resumed.t.follow(row, observed(), pass())).toBe('wait')
     expect(resumed.deps.endedSince).toHaveBeenCalledOnce()
     resumed.deps.storeStamp.mockResolvedValue('readable again')

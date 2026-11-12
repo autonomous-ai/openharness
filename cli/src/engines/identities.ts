@@ -1,5 +1,5 @@
 /** Eager location facts for session control. Optional engine interpretation is never consulted. */
-import { realpath } from 'node:fs/promises'
+import { lstat, realpath } from 'node:fs/promises'
 import { CURSOR_TRANSCRIPT } from './cursor/contract.js'
 import { GROK_TRANSCRIPT } from './grok/contract.js'
 import { AGY_PROCESS_SESSION, AGY_TRANSCRIPT } from './agy/contract.js'
@@ -109,6 +109,16 @@ export async function hermesSessionKind(home: string, sessionId: string): Promis
   if (source === null) return 'waiting'
   if (typeof source === 'object') throw new IdentityReadUnavailable('the Hermes session source is unavailable')
   return isInteractiveSource(HERMES_SOURCE, source) ? 'own' : 'other'
+}
+
+/**
+ * What a home's store is now, so a session it did not have is asked about again only once it changed: one `lstat` each
+ * of its -wal, which a running Hermes writes, and of the store, which a checkpoint writes.
+ */
+export async function hermesStoreStamp(home: string): Promise<string> {
+  const store = hermesDbPath(home)
+  const stamps = await Promise.all([`${store}-wal`, store].map(file => lstat(file).then(info => `${info.mtimeMs}:${info.size}`, () => '-')))
+  return stamps.join('|')
 }
 
 /**

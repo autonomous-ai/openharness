@@ -203,8 +203,10 @@ Logged once per agent, with no paths, content or session text:
 3. **Read cost.** Per Hermes agent per pass: one `stat` of a file under 4 KB; on change, one read of at most 4 KB and
    one indexed point read of the session's row (`id = ?`) in the store the reader already polls every second. The
    mount helper reads two `mountinfo` files (a few KB) once per process, cached by process identity. One
-   `hermes --version` per installed executable, cached; one `paneInfo` per Hermes process; a record waiting for its
-   store row is asked of the store on 24 passes, then once a minute (the repair's cadence).
+   `hermes --version` per installed executable, cached; one `paneInfo` per Hermes process. Hermes writes a CLI
+   session's row on its first turn, so a record waiting for its store row costs one `lstat` each of `<home>/state.db-wal`
+   and `<home>/state.db` (mtime, size) per pass, and the store is asked again on the first pass after either changed,
+   with no cap: nothing while neither changed. A store that cannot be read is asked again the same way.
 4. **Scale (10x).** 10x Hermes agents is 10x one `stat` per 5 s pass. The metric that warns first is the bind pass's
    duration, already logged when slow.
 5. **Compatibility.** No wire or API change. A previous release ignores `hermesHomeDerived` and exports the home on a
@@ -223,10 +225,11 @@ Logged once per agent, with no paths, content or session text:
    sandbox on Harness's behalf and no credential enters it. A sandbox cannot make Harness bind another agent's session:
    the record is read only from the agent's own home and only under its own pane's terminal ids, its session must be
    in that same home's store and interactive, and a session another live agent holds is not taken.
-9. **Failure.** Record missing: the fallback, logged once. Record malformed, oversized, a symlink, stale or naming an
-   unknown session: ignored, logged once with the reason; the agent keeps its current session. Store unreadable: the
-   existing hold. Path untranslatable: the §2 hold, logged once; the pane works. An old hook still in a config Harness
-   cannot write (read-only mount): Hermes's own warning stays until the device removes it; Harness logs once that it
+9. **Failure.** Record missing: the fallback, logged once. Record malformed, oversized, a symlink, stale or naming a
+   session that is not a pane's own: ignored, logged once with the reason; the agent keeps its current session. A
+   session not in the store yet: waited for, unlogged (Design 3). Store unreadable: the existing hold. Path
+   untranslatable: the §2 hold, logged once; the pane works. An old hook still in a config Harness cannot write
+   (read-only mount): Hermes's own warning stays until the device removes it; Harness logs once that it
    could not remove it.
 10. **Platforms.** Linux: everything, including the mount translation and the sandbox log. macOS: §1, §3, §4 and §5
     without mount namespaces. macOS and Linux keep hooks for an older, unknown or TUI Hermes. Windows: §1 (its

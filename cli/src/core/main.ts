@@ -170,7 +170,7 @@ import { createRelaunchMarks, transcriptSize } from './transcripts/relaunch.js'
 import { createForgetSession } from './agents/forget.js'
 import { createBinding } from './agents/bind.js'
 import { createHermesTerminal } from './agents/hermesTerminal.js'
-import { hermesSessionEndedSince, hermesSessionKind, hermesTerminalNames, hermesTerminalStamp, readHermesTerminal } from '../engines/identities.js'
+import { hermesSessionEndedSince, hermesSessionKind, hermesStoreStamp, hermesTerminalNames, hermesTerminalStamp, readHermesTerminal } from '../engines/identities.js'
 import { hermesRecordSeen } from '../engines/nativeHooks.js'
 import { createDiscoveryHandlers } from './agents/discovery.js'
 import { createLaunchHelpers, gridLaunchThrough } from './agents/launch.js'
@@ -2047,8 +2047,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       read: readHermesTerminal,
       kind: hermesSessionKind,
       endedSince: hermesSessionEndedSince,
+      storeStamp: hermesStoreStamp,
       recordSeen: (home) => { void hermesRecordSeen(home) },
-      now: Date.now,
     }),
   })
   binding.whileChanging((agentId) => restorePanes.busy(agentId))
