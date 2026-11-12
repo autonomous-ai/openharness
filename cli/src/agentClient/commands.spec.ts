@@ -203,6 +203,25 @@ describe('harness ps', () => {
     expect(person.out.join('\n')).toMatch(/^NAME +AGENT/)
   })
 
+  // A launch that failed for a named reason started nothing: what the person reads says why, live or stopped.
+  it('says why a harness never started, before what it is about, live or stopped', async () => {
+    const d = new FakeDaemon()
+    const inUse = { state: 'failed', error: 'OPENCLAW_FOLDER_IN_USE', detail: 'Another OpenClaw is using this folder. Give each run its own --local folder.' }
+    d.frames = [frame('taken', { launch: inUse }), frame('gone', { status: 'stopped', launch: { state: 'failed', error: 'OPENCLAW_FOLDER_GONE' } }), frame('fine', { launch: { state: 'ready' } })]
+    const h = harness(d, { pane: undefined })
+    expect(await psCommand(['--all'], h.deps)).toBe(EXIT.ok)
+    const out = h.out.join('\n')
+    expect(out).toMatch(/^taken .*\n  failed: Another OpenClaw is using this folder\. Give each run its own --local folder\.$/m)
+    expect(out).toMatch(/^gone .*\n  failed: OPENCLAW_FOLDER_GONE$/m)
+    expect(out).toMatch(/^fine .*\n  fine recap$/m)
+    const json = harness(d, { pane: undefined })
+    expect(await psCommand(['--all', '--json'], json.deps)).toBe(EXIT.ok)
+    const rows = JSON.parse(json.out[0]).harnesses as Array<{ name: string; failure?: unknown }>
+    expect(rows.find((r) => r.name === 'taken')!.failure).toEqual({ error: 'OPENCLAW_FOLDER_IN_USE', detail: inUse.detail })
+    expect(rows.find((r) => r.name === 'gone')!.failure).toEqual({ error: 'OPENCLAW_FOLDER_GONE', detail: null })
+    expect(rows.find((r) => r.name === 'fine')!.failure).toBeUndefined()
+  })
+
   it('prints JSON for programs, and asks for stopped ones with --all', async () => {
     const d = new FakeDaemon()
     d.frames = [frame('lead'), frame('old', { status: 'stopped' })]
@@ -371,6 +390,21 @@ describe('harness show', () => {
     const parsed = JSON.parse(json.out[0])
     expect(parsed.state).toBe('needs-input')
     expect(parsed.next).toEqual([{ tell: 'tell the person; only they answer it (a question or a permission).' }])
+  })
+
+  it('says why a harness never started', async () => {
+    const d = new FakeDaemon()
+    const gone = { state: 'failed', error: 'OPENCLAW_FOLDER_GONE', detail: "This run's OpenClaw folder is gone." }
+    d.frames = [frame('gone', { sessionId: '', status: 'stopped', launch: gone }), frame('fine', { sessionId: '' })]
+    const h = harness(d, { pane: undefined })
+    expect(await showCommand(['gone'], h.deps)).toBe(EXIT.ok)
+    expect(h.out).toEqual(['gone on studio: stopped · Codex · started by person', 'folder: /work/gone (main)', "failed: This run's OpenClaw folder is gone.", 'No turn yet.'])
+    const json = harness(d, { pane: undefined })
+    expect(await showCommand(['gone', '--json'], json.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(json.out[0]).failure).toEqual({ error: 'OPENCLAW_FOLDER_GONE', detail: gone.detail })
+    const fine = harness(d, { pane: undefined })
+    expect(await showCommand(['fine', '--json'], fine.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(fine.out[0]).failure).toBeUndefined()
   })
 
   it('says when there is no turn yet, or no transcript to read', async () => {
