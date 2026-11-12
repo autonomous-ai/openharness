@@ -15,11 +15,19 @@ import { upgradeOlderRuntimeIgnore } from './harnessRuntimeIgnore.js'
 
 const exec = promisify(execFile)
 
-/** git as itself: none of the repository settings a parent process left in the environment. */
+/**
+ * git as itself: none of the repository settings a parent process left in the environment, and none of the repository's own
+ * that would run a program or hide work from the checks here. `core.fsmonitor` names a program git runs on a status, which
+ * the daemon's other git never lets it (lib/gitProject.ts); a hook runs as a branch goes; and with
+ * `status.showUntrackedFiles=no` a worktree holding new work read as clean, to `git status` and to `git worktree remove`,
+ * which asks git the same, so it was removed, new work and all (review of the allocator's package 6, 12 November). A `-c`
+ * reaches the git that git itself starts.
+ */
 export async function git(cwd: string, args: string[]): Promise<string> {
   const env = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' }
   for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE']) delete (env as NodeJS.ProcessEnv)[key]
-  return (await exec('git', ['-C', cwd, ...args], { timeout: 30_000, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024, env }))
+  const guarded = ['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'status.showUntrackedFiles=normal']
+  return (await exec('git', [...guarded, '-C', cwd, ...args], { timeout: 30_000, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024, env }))
     .stdout.replace(/\r?\n$/, '')
 }
 
