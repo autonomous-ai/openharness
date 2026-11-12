@@ -394,8 +394,9 @@ async function readProcessRows(): Promise<ProcessRow[] | null> {
  * Linux: each row's start ticks, the part of its identity a clock step cannot move (see
  * `ProcessIdentity.startTicks`). One small /proc read per row, like the mangled-row repair above.
  */
-export function withStartTicks(rows: ProcessRow[], ticksOf: (pid: number) => number | null = processStartTicks): ProcessRow[] {
-  if (process.platform !== 'linux') return rows
+export function withStartTicks(rows: ProcessRow[], ticksOf: (pid: number) => number | null = processStartTicks,
+  platform: NodeJS.Platform = process.platform): ProcessRow[] {
+  if (platform !== 'linux') return rows
   return rows.map((row) => {
     const startTicks = ticksOf(row.pid)
     return startTicks === null ? row : { ...row, startTicks }

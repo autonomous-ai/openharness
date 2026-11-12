@@ -7,7 +7,8 @@
 import { execFile } from 'node:child_process'
 import { psEnv } from './childLocale.js'
 import { patientExec } from './patientExec.js'
-import { hermesGatewayProcess, liveProcessRows, parseProcessRow, type ProcessRow } from './processTable.js'
+import { processStartTicks } from './processLiveness.js'
+import { hermesGatewayProcess, liveProcessRows, parseProcessRow, withStartTicks, type ProcessRow } from './processTable.js'
 import { sameProcessIdentity } from './terminalRuntime.js'
 import type { ProcessIdentity } from './terminalTypes.js'
 
@@ -19,7 +20,11 @@ export interface TreeProcess {
   /** Its process group: a group one of the tree leads is signalled whole. */
   pgid: number
   startMarker: string
+  /** Linux: when it started, in ticks since boot, which a clock step does not move (`ProcessIdentity.startTicks`). */
+  startTicks?: number
 }
+
+type TicksOf = (pid: number) => number | null
 
 // A held event loop must not turn the timeout into an empty table (patientExec.ts).
 const run = patientExec(execFile)
@@ -32,12 +37,13 @@ function readTable(): Promise<string | null> {
 }
 
 /**
- * The running processes, parsed by the table's own parser so their start markers compare with a saved engine's.
+ * The running processes, parsed by the table's own parser so their starts compare with a saved engine's: on Linux by
+ * their start ticks, as `processRows` reads them, since a device that steps its clock after boot moves every `lstart`.
  * `pgid` stands where it reads the command name. Null for a table with nobody in it: `ps` lists itself at the least.
  */
-function runningRows(table: string | null): ProcessRow[] | null {
+function runningRows(table: string | null, platform: NodeJS.Platform, ticksOf: TicksOf): ProcessRow[] | null {
   const rows = (table ?? '').split('\n').flatMap((line) => parseProcessRow(line) ?? [])
-  return rows.length ? liveProcessRows(rows) : null
+  return rows.length ? withStartTicks(liveProcessRows(rows), ticksOf, platform) : null
 }
 
 /**
@@ -48,11 +54,12 @@ export async function engineDescendants(
   engine: ProcessIdentity,
   platform: NodeJS.Platform = process.platform,
   read: () => Promise<string | null> = readTable,
+  ticksOf: TicksOf = processStartTicks,
 ): Promise<TreeProcess[] | null> {
   // Windows has no detached tree to chase: the pty host's kill ends the pane's whole process group (a Job object), and
   // a hidden run is ended with its tree.
   if (platform === 'win32') return []
-  const rows = runningRows(await read())
+  const rows = runningRows(await read(), platform, ticksOf)
   if (!rows) return null
   const root = rows.find((row) => sameProcessIdentity(row, engine))
   if (!root) return []
@@ -69,7 +76,8 @@ export async function engineDescendants(
     // Hermes' gateway serves every Hermes session from under whichever pane started it: neither it nor what it runs is
     // this engine's to stop.
     if (hermesGatewayProcess(row)) continue
-    tree.push({ pid: row.pid, pgid: Number(row.executable), startMarker: row.startMarker })
+    tree.push({ pid: row.pid, pgid: Number(row.executable), startMarker: row.startMarker,
+      ...(row.startTicks !== undefined ? { startTicks: row.startTicks } : {}) })
     for (const child of children.get(row.pid) ?? []) queue.push(child)
   }
   return tree
@@ -89,9 +97,11 @@ export function treeTargets(tree: readonly TreeProcess[]): { groups: number[]; p
 export async function treeSurvivors(
   tree: readonly TreeProcess[],
   read: () => Promise<string | null> = readTable,
+  platform: NodeJS.Platform = process.platform,
+  ticksOf: TicksOf = processStartTicks,
 ): Promise<TreeProcess[] | null> {
-  const rows = runningRows(await read())
+  const rows = runningRows(await read(), platform, ticksOf)
   if (!rows) return null
-  const started = new Map(rows.map((row) => [row.pid, row.startMarker]))
-  return tree.filter((member) => started.get(member.pid) === member.startMarker)
+  const running = new Map(rows.map((row) => [row.pid, row]))
+  return tree.filter((member) => sameProcessIdentity(running.get(member.pid), member))
 }
