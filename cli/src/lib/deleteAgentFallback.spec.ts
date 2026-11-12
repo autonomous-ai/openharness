@@ -191,7 +191,7 @@ describe('delete-agent termination of the engine\'s tree', () => {
   })
 
   it('SIGKILLs what is left of the tree after the grace, by pid', async () => {
-    const left = [[tree[2]!], []]
+    const left = [[tree[2]!], [tree[2]!], []]
     const d = deps({ checkRuntime: sequence(true, false), descendants: async () => tree, survivors: async () => left.shift() ?? [] })
     expect(await terminateDeletedAgent(SESSION, d)).toBe('terminated')
     expect(d.kills).toContainEqual([21, 'SIGKILL'])

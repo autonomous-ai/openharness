@@ -157,11 +157,15 @@ export async function terminateDeletedAgent(
     if (deps.current?.() === false) return 'not-ours'
     engineGone = current.state === 'gone'
   }
-  const survivors = await left(tree)
+  let survivors = await left(tree)
+  if (engineGone && survivors.length) {
+    // What outlived the engine has the rest of the grace, counted from the SIGTERM, as the engine had; then it is read
+    // again, since one that left meanwhile may have had its number handed to another process.
+    await deps.sleep(Math.max(0, killGraceMs - waited))
+    survivors = await left(survivors)
+  }
   if (engineGone && !survivors.length) return 'terminated'
-  // What outlived the engine has the rest of the grace, counted from the SIGTERM, as the engine had.
-  if (engineGone) await deps.sleep(Math.max(0, killGraceMs - waited))
-  // By pid, each checked by its start: a group's leader may have left and its number gone to another process.
+  // By pid, each just checked by its start: a group's leader may have left and its number gone to another process.
   for (const member of survivors) signal(member.pid, 'SIGKILL')
 
   const outcome = engineGone ? 'terminated' : await escalate()
