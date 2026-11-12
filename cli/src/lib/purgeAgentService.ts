@@ -6,6 +6,7 @@ import { existsSync, lstatSync, realpathSync, unlinkSync } from 'node:fs'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { env } from '../config/env.js'
 import { hermesDbPath } from '../engines/hermes/contract.js'
+import { OPENCLAW_STORE_KEPT } from '../engines/openclaw/contract.js'
 import type { RegisteredSession } from './registry.js'
 import { engineKeepsTranscriptFile, transcriptEvidence } from '../engines/transcriptBindings.js'
 import { nativeFileKey } from '../engines/kit/nativePaths.js'
@@ -27,7 +28,9 @@ const fail = (message: string): never => { throw new Error(message) }
 type File = { path: string; dev: bigint; ino: bigint; bytes: number }
 type History = { file?: File; missingFile?: string; database?: string; databaseFile?: File; statements?: string[];
   bytes: number | null; verify?: (openedFileKey?: string) => void;
-  prepareWorkspaceRemoval?: NativeHistoryProof['prepareWorkspaceRemoval'] }
+  prepareWorkspaceRemoval?: NativeHistoryProof['prepareWorkspaceRemoval']
+  /** An engine's own store Harness does not erase, and why: the delete still goes ahead and says so. */
+  kept?: { what: 'engine-store'; reason: string } }
 const lit = (value: string) => "'" + value.replace(/'/g, "''") + "'"
 
 function file(path: string): File {
@@ -38,8 +41,14 @@ function file(path: string): File {
     bytes: Number.isFinite(Number(info.blocks)) ? Number(info.blocks) * 512 : Number(info.size) }
 }
 
+/** The checkpoints of every conversation the harness had: its current session key and each it moved off (`/new`). */
+const checkpointsOf = (s: RegisteredSession, checkpoints: SessionCheckpointStore): string[] =>
+  [s.sessionId, ...(s.earlierSessionIds ?? [])].flatMap(sessionId => checkpoints.deletionFiles({ ...s, sessionId }))
+
 /** Known native history layouts only. A shared database is never removed or vacuumed. */
 export async function inspectNativeHistory(s: RegisteredSession): Promise<History> {
+  // OpenClaw's store is its own: Harness neither reads nor writes it, and the person deletes its session with OpenClaw.
+  if (s.engine === 'openclaw') return { bytes: 0, kept: { what: 'engine-store', reason: OPENCLAW_STORE_KEPT } }
   if (!s.sessionId || s.engine === 'terminal') return { bytes: 0 }
   if (engineKeepsTranscriptFile(s.engine)) {
     const path = s.transcriptPath
@@ -179,7 +188,7 @@ export async function sessionDataBytes(s: RegisteredSession, checkpoints: Sessio
   try {
     const history = await inspectNativeHistory(s)
     if (history.bytes == null) return null
-    return history.bytes + checkpoints.deletionFiles(s).reduce((n, path) => n + file(path).bytes, 0)
+    return history.bytes + checkpointsOf(s, checkpoints).reduce((n, path) => n + file(path).bytes, 0)
   } catch { return null }
 }
 
@@ -196,6 +205,9 @@ export interface PurgeDeps {
   stop(id: string, options: StopAgentOptions): Promise<void>
   restarting(id: string): boolean
   deleted(session: RegisteredSession): void
+  /** Erases what else Harness keeps of the harness (its told lines, its creation requests), after its conversation and
+   *  before [deleted]. Rejecting refuses the delete and keeps the archive, so the delete can be asked again. */
+  eraseRecords?(session: RegisteredSession): Promise<void>
   /** A fresh read of the pane says the engine is waiting at its folder-trust question (Codex's "Do you trust the contents of this directory?"). */
   atFolderTrust?(session: RegisteredSession): Promise<boolean>
   /** A fresh read of the pane says nothing is running, nothing is asked and the composer is empty (`teamHold` null, not busy). */
@@ -333,7 +345,7 @@ export class PurgeAgentService {
         try {
           this.current(request)
           history = await (this.deps.inspect ?? inspectNativeHistory)(current)
-          checkpointFiles = this.deps.checkpoints.deletionFiles(current).map(file)
+          checkpointFiles = checkpointsOf(current, this.deps.checkpoints).map(file)
         } catch (error) {
           if (!request.includeWorktree) throw error
           history = null
@@ -391,7 +403,7 @@ export class PurgeAgentService {
         const reservation = this.deps.stopped.beginResume(request.agentId)
         if (!reservation) return fail('Another operation is using this saved harness. Nothing was deleted.')
         try {
-          const files = sessionData ? this.deps.checkpoints.deletionFiles(saved).map(file) : []
+          const files = sessionData ? checkpointsOf(saved, this.deps.checkpoints).map(file) : []
           if (sessionData) review.history!.verify?.()
           if (worktreeData && !worktreeDeleted) {
             const removedWorkspace = sessionData ? review.history!.prepareWorkspaceRemoval?.(review.worktree!) : undefined
@@ -410,12 +422,14 @@ export class PurgeAgentService {
               if (current.dev !== target.dev || current.ino !== target.ino) return fail('Saved session data changed. Some data may already have been deleted; refresh to check.')
               unlinkSync(target.path); freedBytes += current.bytes
             }
+            await this.deps.eraseRecords?.(saved)
             this.deps.deleted(saved)
             this.deps.stopped.remove(request.agentId)
             sessionDeleted = true
           }
           return { deleted: true, sessionDeleted, worktreeDeleted, freedBytes,
-            sharedStore: sessionData && !!review.history?.database, workspaceKept: !worktreeDeleted, historyKept: !sessionData, branchKept: true }
+            sharedStore: sessionData && !!review.history?.database, workspaceKept: !worktreeDeleted, historyKept: !sessionData, branchKept: true,
+            ...(sessionDeleted && review.history?.kept ? { kept: [review.history.kept] } : {}) }
         } finally { this.deps.stopped.finishResume(request.agentId, reservation) }
       } finally { this.jobs.delete(request.agentId); this.worktreeJobs.delete(request.agentId) }
     } catch (error) {
