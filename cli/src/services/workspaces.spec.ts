@@ -103,6 +103,19 @@ describe('the workspaces service', () => {
       expect(listLeftoverWorktrees).toHaveBeenCalledWith({ root, inUse: ['/h/live', null] })
     })
 
+    // Where a start makes its worktrees (lib/projectFolder.ts projectsRoot): ~/projects on a Harness OS device. A root of
+    // its own here listed none there and answered not_found for each, while the leftovers stayed on the disk.
+    it('looks where starts make worktrees: ~/projects on Harness OS', async () => {
+      vi.stubEnv('HARNESS_OS', '1')
+      try {
+        const { requests } = setup()
+        await requests.worktrees_list({}, OWNER)
+        expect(listLeftoverWorktrees).toHaveBeenCalledWith({ root: join(homedir(), 'projects'), inUse: [] })
+        await requests.worktrees_clean({ paths: [join(homedir(), 'projects', 'worktrees', 'app', 'old')] }, OWNER)
+        expect(cleanWorktrees).toHaveBeenCalledWith(expect.objectContaining({ root: join(homedir(), 'projects') }))
+      } finally { vi.unstubAllEnvs() }
+    })
+
     it('moves the chosen ones to the system\'s Trash, and says what became of each', async () => {
       const results = [{ path: '/h/w/app/a', state: 'trashed', pruned: true }, { path: '/h/w/app/b', state: 'in_use' }, { path: '/h/w/app/c', state: 'failed', reason: 'TRASH_DECLINED' }]
       vi.mocked(cleanWorktrees).mockResolvedValueOnce(results as never)

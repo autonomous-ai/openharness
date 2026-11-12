@@ -8,11 +8,10 @@
  * A service on the core boundary (step 13): it reads the core only through `CoreApi`, and the core
  * reaches it only through `ports.workspaces`.
  */
-import { homedir } from 'node:os'
-import { join } from 'node:path'
 import type { CoreApi, CorePorts, ServiceRequest, ServiceRequests } from '../core/api.js'
 import { cleanWorktrees, listLeftoverWorktrees } from '../lib/leftoverWorktrees.js'
 import { sid } from '../lib/log.js'
+import { projectsRoot } from '../lib/projectFolder.js'
 import { sessionDisplayTitle } from '../lib/registry.js'
 import { systemTrash } from '../lib/trash.js'
 import { forgetScmProject, renameScmProject } from '../scm/scmProjects.js'
@@ -47,7 +46,8 @@ export function startWorkspaces(core: CoreApi, ports: CorePorts): ServiceRequest
   // The person's own choice, never a timer's: the owner lists what is left and picks what goes to the Trash. Each request
   // reads every agent, live and stopped, before anything else, while it is answered: in the edge host the core is asked
   // for them as the request arrives, and they are known only then (services/workspacesProcess.ts).
-  const root = join(homedir(), 'harnesses')
+  // Where a start makes its worktrees: ~/harnesses, or ~/projects on a Harness OS device.
+  const root = projectsRoot()
   const owned = (answer: (payload: Record<string, unknown>, inUse: Array<string | null>) => Promise<Record<string, unknown>>): ServiceRequest =>
     (payload, asker) => {
       if (!asker.owner) return { error: 'OWNER_REQUIRED' }

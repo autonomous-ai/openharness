@@ -742,8 +742,9 @@ export const HANDOFF_REQUESTS = ['agent_handoff_prepare', 'agent_handoff_complet
 export const CONNECTORS_REQUESTS = ['connectors'] as const
 /**
  * Leftover worktrees, in the edge host (services/workspaces.ts, lib/leftoverWorktrees.ts), for the owner only and only
- * when asked: `worktrees_list` answers `{ worktrees, more }`, the worktrees under ~/harnesses/worktrees no live or stopped
- * harness uses (each its path, repository, branch, sizeBytes, sizeComplete, lastChangeMs and uncommitted); and
+ * when asked: `worktrees_list` answers `{ worktrees, more }`, the worktrees in the projects root's worktrees folder
+ * (lib/projectFolder.ts `projectsRoot`: ~/harnesses, ~/projects on Harness OS) no live or stopped harness uses (each its
+ * path, repository, branch, sizeBytes, sizeComplete, lastChangeMs and uncommitted); and
  * `worktrees_clean` takes `{ paths }`, moves each that is still one of them to the system's Trash, and answers
  * `{ results }`, per path `trashed` (with `pruned`), `in_use`, `not_found` or `failed` (with a `reason`).
  */
