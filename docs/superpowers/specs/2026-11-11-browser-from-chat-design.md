@@ -400,7 +400,8 @@ removes the container, the volume, the network, the secret and the settings.
 - **The screen** stays the Device setting's size (`screen`, default 1080x1920, portrait since 2026-11-12:
   the panel is taller than wide).
 - **The window.** Chrome's window sits at 0,0 and takes the panel's size in screen pixels, at least 1024x640 and at
-  most the screen. It is not maximized. Its size changes through the tool server's CDP connection
+  most the screen. A panel under 1024x640 grows by one factor on both sides, so the window keeps the panel's shape
+  and fills it once scaled; only the screen's cap changes the shape. It is not maximized. Its size changes through the tool server's CDP connection
   (`Browser.getWindowForTarget`, then `Browser.setWindowBounds`), not through the window manager.
 - **The request.** `agent_browser_window {agentId, width, height}` from Desktop, sealed beside `agent_browser_start`,
   allowed for `mayOpenBrowser`, answered only while the browser is ready. The machine clamps the size; it is not
@@ -410,8 +411,8 @@ removes the container, the volume, the network, the secret and the settings.
   300 ms (a drag sends one request, at its end). Closing the panel sends nothing: the window keeps its last size.
 - **Two Desktops.** The last request wins. The other panel shows the same window and scales it to fit.
 - **What the panel shows.** The viewer page clips noVNC to the window's rectangle at 0,0 (`clipViewport`, no viewport
-  drag) at 1:1. When the window is smaller than the panel (the 1024x640 floor, or another Desktop's size), or the panel
-  is larger than the screen, it scales that rectangle to fit, as `scaleViewport` does today. The page learns the
+  drag) at 1:1. When the window is not the panel's size (a panel under the 1024x640 floor, another Desktop's size, or
+  a panel larger than the screen), it scales that rectangle evenly to fit, centred, as `scaleViewport` does today. The page learns the
   window's size from the request's answer.
 - **The agent** is not told: its pages reflow as on any resize. A screenshot is of the page, at its new size.
 - **Failures.** A request that fails (`window_failed`: the CDP call did not answer in 5 s) is logged by name; the panel

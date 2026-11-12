@@ -155,13 +155,16 @@ const MIN_WINDOW = { width: 1024, height: 640 }
 const isSize = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0
 
 /** The size Chrome's window takes for the panel's (spec: The window fits the panel): whole numbers, at least
- *  1024x640, at most `screen` ("1080x1920"); null for anything that is not two positive numbers. Every screen in
- *  SCREENS is at least 1024 wide, portrait ones too, so a window always has a desktop's width. */
+ *  1024x640, at most `screen` ("1080x1920"); null for anything that is not two positive numbers. A panel under
+ *  1024x640 grows by one factor on both sides, so the window keeps the panel's shape and the viewer, scaling it down
+ *  evenly, fills the panel; only the screen's cap can change the shape. Every screen in SCREENS is at least 1024 wide,
+ *  portrait ones too, so a window always has a desktop's width. */
 export function clampWindow(width: unknown, height: unknown, screen: string): { width: number; height: number } | null {
   if (!isSize(width) || !isSize(height)) return null
   const [maxWidth, maxHeight] = screen.split('x').map(Number) as [number, number]
+  const grow = Math.max(1, MIN_WINDOW.width / width, MIN_WINDOW.height / height)
   return {
-    width: Math.min(maxWidth, Math.max(MIN_WINDOW.width, Math.round(width))),
-    height: Math.min(maxHeight, Math.max(MIN_WINDOW.height, Math.round(height))),
+    width: Math.round(Math.min(maxWidth, width * grow)),
+    height: Math.round(Math.min(maxHeight, height * grow)),
   }
 }

@@ -590,8 +590,9 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   agent does. It shows Chrome's window at 1:1, and the window follows the
   panel: the panel asks the computer for its size when the screen opens and
   300 ms after the panel last changed size (at least 1024x640, at most the
-  Device setting's screen). Only a window that cannot fit, or one the computer
-  could not size, is scaled to fit. While it sets up, four lines in 13, `Podman
+  Device setting's screen; a smaller panel's window grows in the panel's
+  shape, so scaled it still fills the panel). Only a window that is not the
+  panel's size, or one the computer could not size, is scaled to fit. While it sets up, four lines in 13, `Podman
   installed`, `Starting Podman…`, `Building browser`, `Starting browser`, each
   after a mark as Import's steps have: ticked when done, a small spinner on the
   current one, an empty circle (and the line muted) for those to come.
