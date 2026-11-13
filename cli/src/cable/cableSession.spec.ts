@@ -1974,6 +1974,34 @@ describe('cable session', () => {
     expect(hachi[0].pcm.equals(speech)).toBe(true)
   })
 
+  it('logs one line per voice turn: agent, command, language, rate, level and transcript length, never the words', async () => {
+    const lines: string[] = []
+    let answer = 'fix the login screen'
+    const host = makeHost({ log: (line) => lines.push(line), transcribe: async () => answer })
+    const { session, port } = await connect(host)
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await settle()
+      const loud = Buffer.alloc(3200)
+      for (let i = 0; i < loud.length / 2; i++) loud.writeInt16LE(i % 2 ? -1000 : 1000, i * 2)
+      port.say({ t: 'voice.begin', agentId: 'a2', cmd: 'goal', lang: 'vi', sr: 16000, uploadId: 'loud' })
+      port.pcm(loud)
+      port.say({ t: 'voice.end', uploadId: 'loud' })
+      await vi.waitFor(() => expect(host.sendTurn).toHaveBeenCalled())
+      expect(lines).toContain('cable: voice turn agent=a2 cmd=goal lang=vi sr=16000 peak=1000 rms=1000 transcript=20')
+
+      // The failure Diego saw: silence in, nothing out. The line is what tells the two apart on his dial.
+      answer = ''
+      port.say({ t: 'voice.begin', lang: 'en', sr: 16000, uploadId: 'quiet' })
+      port.pcm(Buffer.alloc(3200))
+      port.say({ t: 'voice.end', uploadId: 'quiet' })
+      await vi.waitFor(() => expect(port.sent).toContainEqual(expect.objectContaining({ t: 'voice.error', uploadId: 'quiet' })))
+      expect(lines).toContain('cable: voice turn agent=none cmd=none lang=en sr=16000 peak=0 rms=0 transcript=0')
+      expect(lines.filter((l) => l.startsWith('cable: voice turn '))).toHaveLength(2)
+      expect(lines.join('\n')).not.toContain('login')
+    } finally { await session.stop() }
+  })
+
   it('says so rather than guessing when transcription fails', async () => {
     const host = makeHost({
       transcribe: async () => {
