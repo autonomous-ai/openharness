@@ -2554,9 +2554,11 @@ static void render_settings(ht_scene_t *f)
         const char *label = settings_item(s.offset + row, &action);
         if (!label) break;
         if (action == A_NAP) label = s.nap ? "Wake" : "Nap";
+        // An agent without V lives in another app: the dial cannot stop its turn or change its model there.
         bool enabled = action == A_INBOX || action == A_NAP ||
             (s.connected && ((action != A_STOP && action != A_MODELS && action != A_SELECT_BEGIN && action != A_LATEST) ||
-                (active() && (action != A_STOP || active()->busy) && (action != A_LATEST || !visit.pending))));
+                (active() && (action != A_STOP || active()->busy) && (action != A_LATEST || !visit.pending) &&
+                 ((action != A_STOP && action != A_MODELS) || !(active()->caps_off & CABLE_CAP_V)))));
         int y = TAB_TOP + row * TAB_ROW_HEIGHT, hit = s.hit_count++;
         s.hits[hit] = (hit_t){{LIST_HIT_X, y, LIST_HIT_W, TAB_ROW_HEIGHT}, action, 0, enabled};
         // Inter, centred in the row it is tapped in
@@ -3303,7 +3305,8 @@ static void dispatch(action_t a)
             COPY(a.id, s.stop_agent);
             queue(a);
             view(HOME);
-        } else if (s.connected && find(s.stop_agent) >= 0 && s.agents[find(s.stop_agent)].busy) {
+        } else if (s.connected && find(s.stop_agent) >= 0 && s.agents[find(s.stop_agent)].busy &&
+                   agent_allows(s.stop_agent, CABLE_CAP_V)) {   // its caps may have lost V since Stop opened
             COPY(a.id, s.stop_agent);
             queue(a);
             view(AGENT);
