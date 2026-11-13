@@ -336,6 +336,17 @@ describe('ObservedSource codex and open sessions', () => {
     expect(looks()).toBe(1)
   })
 
+  it('a session the scan found takes its host from its hook', async () => {
+    const { src, open, owners, externals, ev } = setup()
+    open.set('s1', 'terminal')
+    owners.set('s1', { pid: 100, engine: 'claude' })
+    externals.set('s1', { cwd: '/work/proj', transcriptPath: '/t/s1.jsonl' })
+    await src.scanOpen()
+    expect(src.list()[0].host).toBe('terminal')
+    src.ingest(ev('turn-start', { hostHints: { ORCA_AGENT_SESSION_ID: 'x' } }))
+    expect(src.list()[0]).toMatchObject({ host: 'orca', state: 'working' })
+  })
+
   it('scanOpen leaves a session a hook already knows', async () => {
     const { src, open, owners, ev } = setup()
     src.ingest(ev('turn-start'))
