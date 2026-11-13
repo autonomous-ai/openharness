@@ -361,47 +361,23 @@ class LocalRunRuleTests(unittest.TestCase):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name)
-        (self.root / "cli").mkdir()
-        (self.root / "cli/package.json").write_text(json.dumps(dict(scripts={
-            "test:core": "vitest run --config vitest.core.config.ts",
-            "test:orchestrator": "vitest run src/orchestrator --maxWorkers=1 --coverage",
-            "test:terminal-contract": "vitest run a.spec.ts --maxWorkers=1 --passWithNoTests"})))
 
     def test_the_platform_is_the_running_os(self):
         for name, expected in (("darwin", "macos"), ("linux", "linux"), ("win32", "windows"), ("freebsd14", None)):
             with mock.patch.object(checks.sys, "platform", name):
                 self.assertEqual(checks.host_platform(), expected)
 
-    def test_run_adds_only_the_caps_validation_accepts(self):
+    # Every Vitest suite sizes its own workers to half the cores its run may use: the machine's, or its Swarm agent's
+    # share (cli/src/testing/suiteWorkers.ts). A --maxWorkers from here would override that share.
+    def test_run_adds_only_the_desktop_budget(self):
         with mock.patch.object(checks.os, "cpu_count", return_value=8):
-            self.assertEqual(checks.run_command(self.root, "cli-core"), "npm run test:core -- --maxWorkers=4")
-            # No such script in the fixture: capped, and the command then fails by itself.
-            self.assertEqual(checks.run_command(self.root, "cli-harnessd"), "npm run test:harnessd -- --maxWorkers=4")
-            for name in ("cli-serial", "cli-shell"):                 # npx vitest … --maxWorkers=1, as they are
-                self.assertEqual(checks.run_command(self.root, name), checks.CHECKS[name]["command"])
-            self.assertEqual(checks.run_command(self.root, "desktop-macos"), 'make desktop-test ARGS="--timeout 3600"')
-        for cpus, workers in ((1, 1), (None, 1), (3, 1), (400, 99)):
-            with mock.patch.object(checks.os, "cpu_count", return_value=cpus):
-                self.assertEqual(checks.run_command(self.root, "cli-core"), f"npm run test:core -- --maxWorkers={workers}")
-
-    # Vitest refuses --maxWorkers twice, and cli/package.json sets it inside test:orchestrator and test:terminal-contract.
-    def test_a_script_that_already_sets_max_workers_gets_no_cap_and_a_plain_receipt(self):
-        package = self.root / "cli/package.json"
-        with mock.patch.object(checks.os, "cpu_count", return_value=8):
-            for name, command in (("cli-orchestrator", "npm run test:orchestrator"),
-                                  ("cli-pty", "npm run test:terminal-contract")):
-                self.assertEqual(checks.run_command(self.root, name), command)
-                r = receipt(name, command=command, cwd="cli", platform="macos")
-                self.assertEqual(checks.validate_receipts({"a" * 40: [name]}, [r]), [r])
-            # A package.json that cannot be read is no reason to drop the cap, and never a traceback.
-            for text in ("not json", "[]", '{"scripts": []}', '{"scripts": {"test:orchestrator": 1}}', None):
-                package.write_text(text) if text is not None else package.unlink()
-                self.assertEqual(checks.run_command(self.root, "cli-orchestrator"),
-                                 "npm run test:orchestrator -- --maxWorkers=4")
+            for name, contract in checks.CHECKS.items():
+                budget = ' ARGS="--timeout 3600"' if name == "desktop-macos" else ""
+                self.assertEqual(checks.run_command(name), contract["command"] + budget)
 
     def test_every_command_run_makes_a_receipt_validation_accepts(self):
         for name, contract in checks.CHECKS.items():
-            r = receipt(name, command=checks.run_command(self.root, name), cwd=contract["cwd"],
+            r = receipt(name, command=checks.run_command(name), cwd=contract["cwd"],
                         platform=contract["platform"] or "linux")
             self.assertEqual(checks.validate_receipts({"a" * 40: [name]}, [r]), [r])
 
@@ -539,7 +515,7 @@ class LocalRunTests(GitFixture, unittest.TestCase):
     def test_a_command_validation_would_refuse_never_becomes_a_fence(self):
         self.change("a")
         out = io.StringIO()
-        narrowed = lambda root, name: checks.CHECKS[name]["command"] + " -t one"
+        narrowed = lambda name: checks.CHECKS[name]["command"] + " -t one"
         with mock.patch.dict(checks.CHECKS, {"fake-a": fake("pass 3")}, clear=True), \
                 mock.patch.object(checks, "run_command", narrowed), self.assertRaisesRegex(ValueError, "receipts: fake-a"):
             checks.run(self.root, self.base, out, io.StringIO())
