@@ -2,7 +2,7 @@
  * The Windows guests' own tree, by name (docs/superpowers/specs/2026-11-05-windows-guests-design.md): where the setup
  * task's requests, answers, records and scripts are, each guest host's home, and the format the tree is in.
  *
- * The root is **not** under `C:\\ProgramData\\Harness`: that folder is readable by Users for the Team account, and every
+ * The root is **not** under `C:\ProgramData\Harness`: that folder is readable by Users for the Team account, and every
  * guest is in Users (lib/windows/guestRequests.ts says why at length).
  *
  * In a file of their own: the core needs three of these names, for a guest's create and its terminal host, and loaded
