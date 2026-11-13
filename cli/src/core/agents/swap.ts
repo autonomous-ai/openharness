@@ -17,7 +17,7 @@ import type { RegisteredSession } from '../../lib/registry.js'
 import { AgentRestartCoordinator, type RelaunchArgvOptions, type RestartAgentDeps } from '../../lib/restartAgent.js'
 import { processRows } from '../../lib/terminalAgentDiscovery.js'
 import type { RestartTarget } from '../../lib/terminalBackend.js'
-import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
+import { ENGINE_SETTLE_MS, resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
 import { bypassPermissionActive } from '../../lib/processTable.js'
 import { sameProcessIdentity } from '../../lib/terminalRuntime.js'
 import { signalAgentProcess } from '../../lib/processSignals.js'
@@ -35,9 +35,6 @@ export interface PaneSwapDeps {
   /** Stops a Claude Code background job holding the session before it is resumed, in its worker (core/engines/backgroundJobs.ts). */
   stopBackgroundJob?: ClearBackgroundJob
 }
-
-/** How long a relaunched engine must stay running before a restart counts it as come up (`waitForProcess`). */
-export const SWAP_SETTLE_MS = 500
 
 export function createPaneSwap({ byAgent, prepareSessionResume, keepAbandonedConversation, stopNative, stopBackgroundJob, restartJobs = new AgentRestartCoordinator() }: PaneSwapDeps) {
   /**
@@ -156,8 +153,8 @@ export function createPaneSwap({ byAgent, prepareSessionResume, keepAbandonedCon
             // Up means still up a moment later: a launch the engine refuses (`codex resume` after an update
             // dropped it) runs for an instant, and seen then, the restart said "resumed" and never fell back
             // to a fresh start (e2e/updates.e2e.ts on Linux, whose faster start put it in the first look).
-            await new Promise((resolve) => setTimeout(resolve, SWAP_SETTLE_MS))
-            waited += SWAP_SETTLE_MS
+            await new Promise((resolve) => setTimeout(resolve, ENGINE_SETTLE_MS))
+            waited += ENGINE_SETTLE_MS
             const still = await resolvePaneEngineProcess(backend, runtime, session.engine)
             if (sameProcessIdentity(still, found)) return found
           }

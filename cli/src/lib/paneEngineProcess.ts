@@ -59,6 +59,13 @@ export async function resolvePaneEngineProcess(
 }
 
 /**
+ * How long an engine must stay the pane's engine before a launch counts it as come up: a launch the engine
+ * refuses (`codex resume` after an update dropped it) runs for an instant. One rule for a restart
+ * (`core/agents/swap.ts` `waitForProcess`) and a resume (`resumeStoppedAgent.ts` `waitForResumedAgent`).
+ */
+export const ENGINE_SETTLE_MS = 500
+
+/**
  * The same check, but three-valued and with a reason — the reaper needs both.
  *
  * `unknown` exists because a failed probe is not evidence of death. The reaper already refuses to evict
