@@ -85,6 +85,26 @@ describe('engine recognition on Windows', () => {
     expect(selectEngineProcess(opencodeFromPowerShell, 6896, 'opencode')?.pid).toBe(1972)
   })
 
+  // Windows never re-parents a process and reuses pids: the pid of the root's dead parent can go to a process the
+  // root started, and the walk down the pane had no end (#4268).
+  it.each([
+    ['its child', 10336],
+    ['the engine below', 1972],
+  ])('finds the engine below a pane root whose parent pid names %s, as below any other root', (_name, rootParent) => {
+    const [powershell, cmd, engine] = opencodeFromPowerShell
+    // One visit reads the row's command line 3 times. A walk with no end is synchronous: it would hold the runner's
+    // own timeout too, so the row ends it.
+    let reads = 0
+    const root = Object.defineProperty({ ...powershell, parentPid: rootParent }, 'args', {
+      enumerable: true,
+      get: () => {
+        if (++reads > 10_000) throw new Error(`pid ${powershell.pid} was read ${reads} times: the walk does not end`)
+        return powershell.args
+      },
+    })
+    expect(selectEngineProcess([root, cmd, engine], powershell.pid, 'opencode')?.pid).toBe(1972)
+  })
+
   it('never takes the command processor, PowerShell or conhost for an engine', () => {
     const shells = [codex[0], codex[4], opencode[0], opencodeFromPowerShell[0], opencodeFromPowerShell[1]]
     for (const shell of shells) {
