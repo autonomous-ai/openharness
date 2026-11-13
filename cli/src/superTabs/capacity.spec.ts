@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest'
-import { admission, quotaOf, quotaUnknownReason, readCapabilities, START_REQUIREMENTS, USED_UP_WINDOW } from './capacity.js'
+import { admission, probedEngines, quotaOf, quotaUnknownReason, readCapabilities, START_REQUIREMENTS, USED_UP_WINDOW } from './capacity.js'
 const requirements = { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: ['/dev/test'], quotaRequired: false }
 it('uses the destination filesystem and reports missing tools/devices without executing commands', async () => {
   const deps = { resources: vi.fn(async () => ({ cpuPercent: 25, memoryTotalBytes: 1000, memoryUsedBytes: 300 })),
@@ -41,6 +41,19 @@ it('keeps unknown quota distinct from unused quota and honors all limiting windo
   expect(result.unknown).toContain(USED_UP_WINDOW)
   expect(admission({}, { installed: true, signedIn: false }, quotaOf({}, 'codex', false), requirements).reasons).not.toContain('The selected agent engine is not signed in on this machine.')
   expect(admission({}, {}, quotaOf({}, 'claude', false), { ...requirements, quotaRequired: true }).reasons).toContain('The requested subscription allowance could not be verified.')
+})
+// The probe is the edge host's since the audit of 2026-11-12: asked as that process goes, the core answers for it.
+it('reads a probe that was not answered as not checked, never as no engine installed', () => {
+  expect(probedEngines({ engines: [{ engine: 'claude', installed: true }, 'odd', null] })).toEqual([{ engine: 'claude', installed: true }, {}, {}])
+  expect(probedEngines({ engines: [] })).toEqual([])
+  for (const unanswered of [{ error: 'SERVICE_UNAVAILABLE', service: 'engineProbe', retryable: true }, { error: 'ENGINE_PROBE_FAILED' }, { engines: 'claude' }, {}, null, undefined, 'no']) {
+    expect(probedEngines(unanswered)).toBeNull()
+  }
+  const quota = quotaOf({}, 'claude', false), none = { ...requirements, tools: [], devices: [] }
+  const capacity = { resources: { cpuPercent: 10, memoryTotalBytes: 1000, memoryUsedBytes: 100, projectDiskFreeBytes: 500 } }
+  expect(admission(capacity, null, quota, none)).toMatchObject({ allowed: false, reasons: ['The selected agent engine could not be verified on this machine.'] })
+  expect(admission(capacity, {}, quota, none)).toMatchObject({ allowed: false, reasons: ['The selected agent engine is not installed on this machine.'] })
+  expect(admission(capacity, { installed: true }, quota, none)).toMatchObject({ allowed: true, reasons: [] })
 })
 it('distinguishes a missing tool from a failed probe and keeps the failure detail', async () => {
   const deps = { resources: vi.fn(async () => ({ cpuPercent: 10, memoryTotalBytes: 1000, memoryUsedBytes: 100 })),

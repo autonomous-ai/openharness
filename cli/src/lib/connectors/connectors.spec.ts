@@ -647,8 +647,14 @@ describe('the page', () => {
     expect(status).toMatchObject({ engines: { claude: false, codex: true }, connections: { gmail: { codex: 'installed' } } })
     const post = (path: string, body: unknown) => fetch(viaPage.origin + path, { method: 'POST', headers, body: JSON.stringify(body) })
     expect(await (await post('/api/connect_via', { connector: 'google_drive', via: 'codex' })).json()).toEqual({ url: 'https://chatgpt.com/#settings/Connectors' })
-    expect(await (await post('/api/disconnect_via', { connector: 'gmail', via: 'codex' })).json()).toEqual({ url: 'https://chatgpt.com/#settings/Connectors' })
-    expect(asked).toEqual(['plugin list --json --marketplace openai-curated-remote', 'plugin add google-drive@openai-curated-remote', 'plugin remove gmail@openai-curated-remote'])
+    // Removed here, and nothing to open.
+    expect(await (await post('/api/disconnect_via', { connector: 'gmail', via: 'codex' })).json()).toEqual({})
+    const list = 'plugin list --json --marketplace openai-curated-remote'
+    expect(asked).toEqual([list, 'plugin add google-drive@openai-curated-remote', list, 'plugin remove gmail@openai-curated-remote'])
+    // One of Microsoft 365's plugins, named: that one alone.
+    asked.length = 0
+    await post('/api/connect_via', { connector: 'microsoft_365', via: 'codex', plugin: 'sharepoint@openai-curated-remote' })
+    expect(asked).toEqual(['plugin add sharepoint@openai-curated-remote', list])
     const refused = await post('/api/connect_via', { connector: 'gmail', via: 'claude' })
     expect(refused.status).toBe(400)
     expect(await refused.json()).toEqual({ error: 'Claude Code is not installed on this computer.' })

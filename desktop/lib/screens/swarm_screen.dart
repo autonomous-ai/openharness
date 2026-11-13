@@ -104,6 +104,8 @@ import '../usage/models_menu_controller.dart';
 import '../state/swarm_catalog.dart';
 import '../state/swarm_navigation.dart';
 import '../state/swarm_search.dart';
+import '../state/desk_sync.dart' show hachiTabId;
+import '../state/hachi.dart';
 import '../state/swarm.dart';
 import '../state/workspace_status.dart';
 import '../state/workspace_pull_request.dart';
@@ -551,7 +553,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   Widget _welcome() => WorkspaceWelcome(
     key: ValueKey('welcome:${app.activeSwarmId}:${app.activeSwarm.isSuperTab}'),
-    onCommand: _runShortcut,
+    onCommand: (id) => id == 'hachi.open'
+        ? unawaited(_openHachi(HachiOpening.welcome))
+        : _runShortcut(id),
+    hachi: app.hachi.on,
     swarmDraft: app.activeSwarm.isSuperTab,
     composerBuilder: newHarnessOpensInBox
         ? (recent) => _newHarnessEmbedded && _newHarness != null
@@ -822,6 +827,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _face.voiceLine.addListener(_voiceChanged);
     _daemonsPreview?.addListener(_syncDaemon);
     _experimentalFeatures.addListener(_experimentalFeaturesChanged);
+    _syncHachi();
     settingsPageOnTop.addListener(_titlebarCoverChanged);
     app.agentPulse.addListener(_face.pulse);
     _face.dialogOpen = () =>
@@ -1018,6 +1024,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     settingsPageOnTop.removeListener(_titlebarCoverChanged);
     _slotTimer?.cancel();
     if (_daemonCommandsOn) daemonCommandsActive.value = false;
+    if (_hachiCommandsOn) hachiCommandsActive.value = false;
     unawaited(_zooPushes?.cancel());
     for (final subscription in _brainSubscriptions) {
       unawaited(subscription.cancel());
@@ -1118,17 +1125,19 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   AppKeymap? _sentKeymap;
   int? _sentKeymapVersion;
-  bool? _sentDaemonCommands;
+  bool? _sentDaemonCommands, _sentHachiCommands;
   void _syncKeymap() {
     if (!_menuHost ||
         (_sentKeymap == _keymap &&
             _sentKeymapVersion == _keymap.version &&
-            _sentDaemonCommands == daemonCommandsActive.value)) {
+            _sentDaemonCommands == daemonCommandsActive.value &&
+            _sentHachiCommands == hachiCommandsActive.value)) {
       return;
     }
     _sentKeymap = _keymap;
     _sentKeymapVersion = _keymap.version;
     _sentDaemonCommands = daemonCommandsActive.value;
+    _sentHachiCommands = hachiCommandsActive.value;
     unawaited(_menuBus.send('keymapState', nativeKeymapSnapshot(_keymap)));
   }
 
@@ -2295,10 +2304,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
             'id': swarm.id,
             'name': swarm.name,
             'label': _tabLabel(names[swarm.id], shareMenus[swarm.id]!),
-            'shortcutHint': _keymap.hint(
-              'swarm.select_${app.profileSwarms.indexOf(swarm) + 1}',
-            ),
+            'shortcutHint': _tabShortcut(swarm),
             'kind': swarm.kind,
+            if (swarm.isHachi) 'fixed': true,
             if (swarm.isSuperTab) 'quiet': true,
             if (swarm.superTabId != null &&
                 app.superTabs.peek(swarm.superTabId!)?.canWrite == true)
@@ -2333,7 +2341,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
             // (role, Move Here). Absent for an unshared tab, and for every
             // tab while the shares cannot be read.
             'shared': ?shareMenus[swarm.id]!.native,
-            if (shareMenus[swarm.id]!.invite) 'canInvitePeople': true,
+            if (shareMenus[swarm.id]!.invite && !swarm.isHachi)
+              'canInvitePeople': true,
           },
       ],
       // File's Show Agent Messages, for the active tab.
@@ -2713,7 +2722,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       case 'showHistory':
         await _showHistory();
       case 'select':
-        if (args['id'] is String) app.selectSwarm(args['id']);
+        if (args['id'] is String) _selectTab(args['id']);
       case 'close':
         // Return native keyboard ownership after this frame, including while
         // a close confirmation or remote stream cleanup is still pending.
@@ -3120,35 +3129,37 @@ class _SwarmScreenState extends State<SwarmScreen> {
     return true;
   }
 
-  Future<void> _rename(String id) => _dialog(() async {
-    final swarm = app.swarms.where((s) => s.id == id).firstOrNull;
-    if (swarm == null) return;
-    final name = await showSwarmRenameDialog(
-      context,
-      // A Swarm's own name, which the rename replaces for everyone, not the name it is shown by here.
-      swarm.isSuperTab && swarm.superTabId != null
-          ? swarm.name
-          : workspaceTabNames(app)[id] ?? swarm.name,
-      keymap: _keymap,
-      // A Swarm is renamed for everyone in it, not as this window's tab.
-      swarm: swarm.superTabId != null,
-    );
-    if (name == null) return;
-    if (swarm.superTabId case final tabId?) {
-      final controller = await app.superTabs.open(tabId);
-      final result = await controller.command({
-        'type': 'tab.rename',
-        'name': name,
-      });
-      if (result == null && mounted) {
-        _showPaneActionHint(
-          controller.operationError ?? 'Could not rename the Swarm.',
-        );
-      }
-    } else {
-      app.renameSwarm(id, name);
-    }
-  });
+  Future<void> _rename(String id) => id == hachiTabId
+      ? Future.value()
+      : _dialog(() async {
+          final swarm = app.swarms.where((s) => s.id == id).firstOrNull;
+          if (swarm == null) return;
+          final name = await showSwarmRenameDialog(
+            context,
+            // A Swarm's own name, which the rename replaces for everyone, not the name it is shown by here.
+            swarm.isSuperTab && swarm.superTabId != null
+                ? swarm.name
+                : workspaceTabNames(app)[id] ?? swarm.name,
+            keymap: _keymap,
+            // A Swarm is renamed for everyone in it, not as this window's tab.
+            swarm: swarm.superTabId != null,
+          );
+          if (name == null) return;
+          if (swarm.superTabId case final tabId?) {
+            final controller = await app.superTabs.open(tabId);
+            final result = await controller.command({
+              'type': 'tab.rename',
+              'name': name,
+            });
+            if (result == null && mounted) {
+              _showPaneActionHint(
+                controller.operationError ?? 'Could not rename the Swarm.',
+              );
+            }
+          } else {
+            app.renameSwarm(id, name);
+          }
+        });
 
   Future<void> _pauseSuperTab(String swarmId) async {
     final id = app.swarms.where((s) => s.id == swarmId).firstOrNull?.superTabId;
@@ -4833,7 +4844,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
       }
       if (_canExecuteCommand(command)) {
         _navigation.rememberCommand(command);
-        _commands[command]?.call();
+        if (command == 'hachi.open') {
+          unawaited(_openHachi(HachiOpening.palette));
+        } else {
+          _commands[command]?.call();
+        }
       }
       return;
     }
@@ -4945,7 +4960,38 @@ class _SwarmScreenState extends State<SwarmScreen> {
   bool _sendDaemonFrame(String type, Map<String, dynamic> payload) =>
       !_zoo.isPreview && _zoo.loaded && app.sendDaemonFrame(type, payload);
 
+  /// Hachi's command exists while its switch is on: off, ⇧⌘H reaches the pane as it did before.
+  bool _hachiCommandsOn = false;
+  void _syncHachi() {
+    final on = app.hachi.on;
+    if (_hachiCommandsOn == on) return;
+    _hachiCommandsOn = on;
+    hachiCommandsActive.value = on;
+    _syncKeymap();
+    _search?.refreshCommands();
+  }
+
+  Future<void> _openHachi(HachiOpening via) async {
+    final error = await app.hachi.openFrom(via);
+    if (error != null && mounted) _showPaneActionHint(error);
+  }
+
+  /// A tab's key: ⇧⌘H for Hachi's, ⌘1…⌘9 for the rest in order.
+  String? _tabShortcut(Swarm swarm) => swarm.isHachi
+      ? _keymap.hint('hachi.open')
+      : _keymap.hint('swarm.select_${app.numberedSwarms.indexOf(swarm) + 1}');
+
+  /// A tab clicked: Hachi's opens Hachi, as ⇧⌘H does (resumed, or said asleep).
+  void _selectTab(String id) {
+    if (id == hachiTabId) {
+      unawaited(_openHachi(HachiOpening.tab));
+    } else {
+      app.selectSwarm(id);
+    }
+  }
+
   void _experimentalFeaturesChanged() {
+    _syncHachi();
     setState(() {});
     if (_menuHost) _syncNative();
     final choice = _creatureChoice;
@@ -7965,6 +8011,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       ),
     ),
     'app.store': _openStore,
+    'hachi.open': () => unawaited(_openHachi(HachiOpening.shortcut)),
     'app.daemon': _openCompanions,
     'app.daemon_talk': _talkToDaemon,
     'agent.add': _addAgent,
@@ -8105,9 +8152,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
       final number = int.tryParse(id.substring('swarm.select_'.length));
       return number != null &&
           number >= 1 &&
-          number <= app.profileSwarms.length;
+          number <= app.numberedSwarms.length;
     }
     if (id == 'swarm.new' || id == 'super_tab.new') return true;
+    // Hachi's tab is closed and named by its switch alone.
+    if ((id == 'swarm.close' || id == 'swarm.rename') &&
+        app.activeSwarm.isHachi) {
+      return false;
+    }
     if (id == 'swarm.reopen') return app.canReopenLastClosed;
     if (id == 'swarm.next' || id == 'swarm.previous') {
       return app.profileSwarms.length > 1;
@@ -8123,11 +8175,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
     }
     if (id == 'pane.split_right') {
       return !app.activeSwarm.isUtility &&
+          !app.activeSwarm.isHachi &&
           !app.activeSwarm.isOrchestrator &&
           app.preparePaneSplit(PaneResizeAxis.x) != null;
     }
     if (id == 'pane.split_down') {
       return !app.activeSwarm.isUtility &&
+          !app.activeSwarm.isHachi &&
           !app.activeSwarm.isOrchestrator &&
           app.preparePaneSplit(PaneResizeAxis.y) != null;
     }
@@ -9386,9 +9440,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                         DesktopWorkspaceTab.naturalWidth(
                                           context,
                                           labels[index],
-                                          shortcutHint: _keymap.hint(
-                                            'swarm.select_${index + 1}',
-                                          ),
+                                          shortcutHint: _tabShortcut(swarm),
                                           hasActivity: activity != null,
                                           sharedCount: shares[index].count,
                                         ) >
@@ -9406,10 +9458,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                   return DesktopWorkspaceTab(
                                     id: swarm.id,
                                     showShortcuts: _tabShortcutHints,
-                                    shortcutHint: _keymap.hint(
-                                      'swarm.select_${index + 1}',
-                                    ),
-                                    onRename: () => _rename(swarm.id),
+                                    shortcutHint: _tabShortcut(swarm),
+                                    onRename: swarm.isHachi
+                                        ? null
+                                        : () => _rename(swarm.id),
+                                    fixed: swarm.isHachi,
                                     onPauseNewWork:
                                         menus &&
                                             swarm.superTabId != null &&
@@ -9435,7 +9488,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                         tabWaitingLabel(app, swarm) ??
                                         activity?.label,
                                     sharedCount: share.count,
-                                    onInvitePeople: menus && share.invite
+                                    onInvitePeople:
+                                        menus && share.invite && !swarm.isHachi
                                         ? () =>
                                               unawaited(_invitePeople(swarm.id))
                                         : null,
@@ -9459,9 +9513,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                         ? () => unawaited(_leaveTab(swarm.id))
                                         : null,
                                     onSelect: _shortcutsEnabled
-                                        ? () => app.selectSwarm(swarm.id)
+                                        ? () => _selectTab(swarm.id)
                                         : null,
-                                    onClose: _shortcutsEnabled
+                                    // Hachi's tab has no ×: only its switch closes it.
+                                    onClose: _shortcutsEnabled && !swarm.isHachi
                                         ? () => unawaited(
                                             app.requestCloseSwarm(swarm.id),
                                           )

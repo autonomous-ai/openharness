@@ -19,7 +19,7 @@ class HarnessCommand {
     this.context = KeymapContext.workspace,
     this.repeatable = false,
     this.hidden = false,
-    this.daemon = false,
+    this.gate,
   });
   final String id, label;
   final ShortcutGroup group;
@@ -76,9 +76,23 @@ class HarnessCommand {
   /// Review commands still use the shared keymap, but stay out of normal help.
   final bool hidden;
 
-  /// One of the daemon's (daemons/README.md): it exists only while this
-  /// window has daemons ([daemonCommandsActive]).
-  final bool daemon;
+  /// What it exists only while: null for always.
+  final CommandGate? gate;
+}
+
+/// The switches a command can exist behind. Off, a gated command is not bound at all: its keys reach
+/// the pane as they did before it existed, and it is in no list, no help and no native keymap.
+enum CommandGate {
+  /// The daemon's (daemons/README.md), while this window has daemons ([daemonCommandsActive]).
+  daemons,
+
+  /// Hachi's (docs/design/2026-11-12-hachi.md), while the account's switch is on ([hachiCommandsActive]).
+  hachi;
+
+  ValueNotifier<bool> get active => switch (this) {
+    daemons => daemonCommandsActive,
+    hachi => hachiCommandsActive,
+  };
 }
 
 /// Whether the daemon's commands exist in this window: only while daemons are
@@ -86,6 +100,10 @@ class HarnessCommand {
 /// their keys (⌘⌥T) reach the pane as they did before daemons existed, and
 /// they are in no list, no help and no native keymap. The workspace sets it.
 final daemonCommandsActive = ValueNotifier<bool>(false);
+
+/// Whether Hachi's commands exist in this window: only while the account's `hachi` switch is on. The
+/// workspace sets it.
+final hachiCommandsActive = ValueNotifier<bool>(false);
 
 /// What a person looking for Agent Messages may type, older names included.
 const _agentMessagesKeywords = [
@@ -114,7 +132,7 @@ const _sharedTabKeywords = [
 
 /// Whether [id] is a command this window has now.
 bool harnessCommandActive(String id) =>
-    harnessCommandById[id]?.daemon != true || daemonCommandsActive.value;
+    harnessCommandById[id]?.gate?.active.value ?? true;
 
 final _workspaceKeysByPlatform =
     <TargetPlatform, Map<ShortcutAction, List<String>>>{};
@@ -685,7 +703,7 @@ final harnessCommands = <HarnessCommand>[
     ShortcutGroup.actions,
     keywords: ['hatch', 'egg', 'zoo', 'pair', 'nap', 'buddy', 'companion'],
     nativeAction: 'daemon',
-    daemon: true,
+    gate: CommandGate.daemons,
   ),
   // ⌘⌥Space is macOS's Finder search; ⌘⌥ plus y, n, s or g answers the
   // daemon's line. T for talk.
@@ -695,7 +713,16 @@ final harnessCommands = <HarnessCommand>[
     ShortcutGroup.actions,
     extraKeys: ['cmd+alt+t'],
     keywords: ['ask', 'pair', 'daemon', 'chat', 'autonomy', 'lessons'],
-    daemon: true,
+    gate: CommandGate.daemons,
+  ),
+  // H for Hachi. Off, ⇧⌘H is not bound, so a person's own binding on it still works.
+  const HarnessCommand(
+    'hachi.open',
+    'Open Hachi',
+    ShortcutGroup.actions,
+    extraKeys: ['cmd+shift+h'],
+    keywords: ['hachi', 'goal', 'chief of staff', 'ask'],
+    gate: CommandGate.hachi,
   ),
   const HarnessCommand(
     'app.settings',

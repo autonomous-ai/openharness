@@ -156,6 +156,21 @@ describe('discovery', () => {
       }
     })
 
+    it('tells the registry a home Harness worked out, and marks a row that has that home without the mark', async () => {
+      const observed = seen({ engine: 'hermes', args: 'hermes', hermesHome: '/data/agents/a1/.hermes', hermesHomeDerived: true } as Partial<DiscoveredTerminalAgent>)
+      for (const current of [row({ engine: 'hermes' }), row({ engine: 'hermes', hermesHome: '/data/agents/a1/.hermes' } as Partial<RegisteredSession>)]) {
+        const run = setup()
+        await run.handlers.onObserved(observed, current)
+        expect(vi.mocked(run.deps.registry.setHermesHome).mock.calls).toEqual([['a1', '/data/agents/a1/.hermes', true]])
+      }
+      for (const current of [row({ engine: 'hermes', hermesHome: '/data/agents/a1/.hermes', hermesHomeDerived: true } as Partial<RegisteredSession>),
+        row({ engine: 'hermes', hermesHome: '/data/agents/b2/.hermes' } as Partial<RegisteredSession>)]) {
+        const run = setup()
+        await run.handlers.onObserved(observed, current)
+        expect(run.deps.registry.setHermesHome).not.toHaveBeenCalled()
+      }
+    })
+
     it('learns the permission mode from the command line when the row has none', async () => {
       const run = setup()
       await run.handlers.onObserved(seen({ engine: 'codex', args: 'codex --dangerously-bypass-approvals-and-sandbox' } as Partial<DiscoveredTerminalAgent>), row({ engine: 'codex' } as Partial<RegisteredSession>))

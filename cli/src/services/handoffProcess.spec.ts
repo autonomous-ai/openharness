@@ -168,8 +168,8 @@ describe('the handoff in the edge host', () => {
       const handed = await prepare({ agentId: 'opencode-1', changeId: 'a'.repeat(32), targetEngine: 'claude' }, asker) as { file: string | null }
       expect(binding.loads).toBe(1)
       expect(binding.reads).toEqual([
-        { path: database, sql: expect.stringContaining('FROM session_message m'), params: ['ses_handoff1'] },
-        { path: database, sql: expect.stringContaining('FROM message m'), params: ['ses_handoff1'] },
+        { path: database, sql: expect.stringMatching(/\bFROM session_message\b/), params: ['ses_handoff1'] },
+        { path: database, sql: expect.stringMatching(/\bFROM message\b/), params: ['ses_handoff1'] },
       ])
       expect(publicationErrors).toEqual([])
       expect(handed).toMatchObject({ file: expect.any(String) })
@@ -177,7 +177,7 @@ describe('the handoff in the edge host', () => {
       // An OpenCode 2 conversation is handed over from session_message alone.
       binding.reads.length = 0
       const handed2 = await prepare({ agentId: 'opencode-2', changeId: 'b'.repeat(32), targetEngine: 'claude' }, asker) as { file: string | null }
-      expect(binding.reads).toEqual([{ path: database, sql: expect.stringContaining('FROM session_message m'), params: ['ses_handoff2'] }])
+      expect(binding.reads).toEqual([{ path: database, sql: expect.stringMatching(/\bFROM session_message\b/), params: ['ses_handoff2'] }])
       expect(publicationErrors).toEqual([])
       expect(readFileSync(join(ws, handed2.file!), 'utf8')).toContain('add a search box')
     } finally { rmSync(ws, { recursive: true, force: true }) }

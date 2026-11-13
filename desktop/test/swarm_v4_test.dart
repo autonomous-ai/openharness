@@ -560,6 +560,8 @@ void main() {
     await tester.tap(key('swarm-instructions-close'));
     await tester.pumpAndSettle();
     expect(find.text('agents/second.md'), findsNothing);
+    // Opening a pane beside a chat is saved with the chat's view 200 ms later (controller.dart showBeside).
+    await tester.pump(const Duration(milliseconds: 300));
   });
 
   testWidgets(
@@ -1061,7 +1063,7 @@ void main() {
       expect(find.text('agents/first builder.md'), findsOneWidget);
       // Nothing of its own, and it says so: the folder's files below are the project's, not its own (anh Dee, 2026-11-10).
       expect(find.textContaining('Empty for now'), findsOneWidget);
-      expect(find.text('From its folder'), findsOneWidget);
+      expect(find.text('This project'), findsOneWidget);
       expect(find.text('AGENTS.md'), findsOneWidget);
       expect(find.text('2 lines'), findsOneWidget);
       // Folded: a click on each opens it.
@@ -1103,6 +1105,8 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('agents/first builder.md'), findsNothing);
       expect(tester.takeException(), isNull);
+      // Opening a pane beside a chat is saved with the chat's view 200 ms later (controller.dart showBeside).
+      await tester.pump(const Duration(milliseconds: 300));
     },
   );
 

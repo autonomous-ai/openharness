@@ -18,6 +18,7 @@ let service: PurgeAgentService, target: Omit<PurgeRequest, 'mode'>, now: number
 let stop = vi.fn<(id: string, options: StopAgentOptions) => Promise<void>>()
 let deleted = vi.fn<(session: RegisteredSession) => void>()
 let eraseRecords = vi.fn<(session: RegisteredSession) => Promise<void>>()
+let eraseFirst = vi.fn<(session: RegisteredSession) => Promise<void>>()
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'harness-purge-'))
   const codexHome = join(root, 'profile'), cwd = join(root, 'project')
@@ -36,9 +37,9 @@ beforeEach(() => {
     stopped.save(registry.byAgent(id)!)
     registry.removeAgent(id)
   })
-  deleted = vi.fn(); eraseRecords = vi.fn(async () => {}); now = 1000
+  deleted = vi.fn(); eraseRecords = vi.fn(async () => {}); eraseFirst = vi.fn(async () => {}); now = 1000
   service = new PurgeAgentService({ live: id => registry.byAgent(id), sessions: () => [...registry.list(), ...stopped.list()],
-    stopped, checkpoints, stop, restarting: () => false, deleted, eraseRecords, now: () => now })
+    stopped, checkpoints, stop, restarting: () => false, deleted, eraseRecords, eraseFirst, now: () => now })
   target = { agentId: session.agentId, sessionId: session.sessionId, createdAt: session.registeredAt }
 })
 afterEach(() => { for (const row of registry.list()) registry.removeAgent(row.agentId); rmSync(root, { recursive: true, force: true }); vi.restoreAllMocks() })
@@ -189,6 +190,26 @@ describe('every record of a harness', () => {
     expect(files.mock.calls.every(([s]) => s.agentId === session.agentId && s.engine === 'codex')).toBe(true)
     expect(existsSync(join(root, 'selected-session.checkpoint'))).toBe(false)
     expect(existsSync(join(root, 'earlier-session.checkpoint'))).toBe(false)
+  })
+
+  // What another process keeps of the harness (its told lines, the agent cleanup's) is erased before anything here:
+  // that process may be down, and a refusal after the conversation had gone left a harness that would not delete.
+  it('erases what another process keeps first, and refused there deletes nothing; asked again, it finishes', async () => {
+    eraseFirst.mockRejectedValueOnce(new Error('Harness could not erase what this harness was told, so nothing was deleted.'))
+    const refused = await deleteOnce()
+    expect(refused).toMatchObject({ error: 'DELETE_REFUSED', sessionDeleted: false, worktreeDeleted: false, stopped: true })
+    expect(String(refused.detail)).toBe('Harness could not erase what this harness was told, so nothing was deleted. The harness is stopped; refresh before trying again.')
+    // The conversation is still there, and so is everything else of it.
+    expect(existsSync(session.transcriptPath!)).toBe(true)
+    expect(eraseRecords).not.toHaveBeenCalled()
+    expect(deleted).not.toHaveBeenCalled()
+    expect(stopped.get(session.agentId)).not.toBeNull()
+    expect(await deleteOnce()).toMatchObject({ deleted: true, sessionDeleted: true })
+    expect(eraseFirst).toHaveBeenCalledTimes(2)
+    expect(eraseFirst).toHaveBeenLastCalledWith(expect.objectContaining({ agentId: session.agentId }))
+    expect(existsSync(session.transcriptPath!)).toBe(false)
+    expect(eraseFirst.mock.invocationCallOrder[1]).toBeLessThan(eraseRecords.mock.invocationCallOrder[0]!)
+    expect(deleted).toHaveBeenCalledOnce()
   })
 
   it('is refused, and says why, when its other records cannot be erased; asked again, it finishes', async () => {

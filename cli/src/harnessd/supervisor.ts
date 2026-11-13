@@ -65,10 +65,10 @@ export interface SupervisorDeps {
    * since it started. Left out, such an exit is the update failing, as it was before.
    */
   bundle?(): string | null
-  /** Start the process that runs [service] on demand (./services.ts `ServiceSupervisor.want`): the core asked for it. */
+  /** Start the process that runs [service] on demand (./serviceSupervisor.ts `ServiceSupervisor.want`): the core asked for it. */
   want?(service: string): void
   /**
-   * The core bound speaking an older protocol than this master (./services.ts `ServiceSupervisor.unasked`): it
+   * The core bound speaking an older protocol than this master (./serviceSupervisor.ts `ServiceSupervisor.unasked`): it
    * never asks for a process that became on demand after its protocol, and expects it to run, as it did.
    */
   unasked?(protocol: number): void

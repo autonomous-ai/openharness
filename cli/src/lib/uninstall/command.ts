@@ -24,7 +24,7 @@
  * it, then what it leaves or what to do.
  */
 import { posix, win32 } from 'node:path'
-import type { HookFileRemoval } from '../../engines/kit/hookRemoval.js'
+import type { HookFileRemoval } from '../../engines/kit/hookRemovalOutcome.js'
 import type { SpawnLockOwner, SpawnLockPurpose } from '../daemonSpawnLock.js'
 import type { AgentsStopped } from './agents.js'
 import type { PtyHostEnd } from './ptyHosts.js'

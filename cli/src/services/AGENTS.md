@@ -30,7 +30,10 @@ let several people build features at once without touching the core or each othe
    off or failing: `undefined` for nothing, a value, or `FAIL` to answer that one request
    `SERVICE_UNAVAILABLE`. The core only ever calls the port, never the service. Most features need no
    port: only the apps call them.
-4. **Start it in `src/core/main.ts` through the host, never directly:**
+4. **Give it a process of its own** ([Running in its own process](#running-in-its-own-process)): every
+   service runs outside the core's, the edge host for a light one. For the debugging switch
+   (`HARNESSD_SERVICES=none`) and for Harness OS, which runs the core with no master, it also starts in
+   `src/core/main.ts`, through the host, never directly:
    `serviceHost.serve('<name>', start<Name>, coreApi, <NAME>_REQUESTS)` for a service with no port, or
    `serviceHost.start('<name>', start<Name>, coreApi, <NAME>_FALLBACKS, <NAME>_REQUESTS)` for one with a
    port. The host leaves a service off when its start throws, guards every call and request, and
@@ -46,15 +49,17 @@ let several people build features at once without touching the core or each othe
 
 ## Running in its own process
 
-A service that can crash natively, hang or leak should run in a process of its own, where it costs only
-that process. A process per risk, not per feature (`SERVICE_HOSTS` in `src/harnessd/services.ts`):
+Every service runs in a process of its own, never in the core's: the core stays small and secure, in the
+code and at run time ([Protect the core](../../AGENTS.md#protect-the-core)). One that can crash natively,
+hang or leak costs only its process. A process per risk, not per feature (`SERVICE_HOSTS` in
+`src/harnessd/services.ts`), so a light pure-JS service joins the edge host:
 
 | Process | Services | Why its own | Started |
 |---|---|---|---|
 | `engine-claude`, `engine-codex` | history, live parsers, runtime profiles, screens, submission readings, model control, question navigation and Codex's app-server connection (`src/engines/worker/`) | engine behavior outside core; snapshots and revocable model- and question-control grants | on demand |
 | `search` | search | native `node:sqlite`, the index's memory | always |
 | `viewers` | viewers, store | the viewer servers, the remote viewer streams and rendered surfaces, minutes-long installs | on demand |
-| `edge` | workspaces, usage, monitor, projects, handoff, recaps, windowNames, shell, connectors, sharedMachines, agentCleanup, messages, osDevice, goals | light pure-JS services: isolated from the core, not from each other | always |
+| `edge` | workspaces, usage, monitor, projects, handoff, recaps, windowNames, shell, connectors, sharedMachines, agentCleanup, messages, osDevice, goals, hachi, engineProbe | light pure-JS services: isolated from the core, not from each other | always |
 | `gateway` | gateway | network, crypto and pure-JS WebRTC: the attack surface | on demand |
 | `models` | models | grid's installs, downloads and commands | on demand |
 | `devices` | devices, wifi | the dials' serial ports, the fleet's lane, the voice router's worker, the Wi-Fi device | on demand |
@@ -63,6 +68,7 @@ that process. A process per risk, not per feature (`SERVICE_HOSTS` in `src/harne
 | `memory` | memory | an experiment: Memories across machines | on demand |
 | `router` | router | an experiment: where ⌘B sends a task, decided by Jev | on demand |
 | `cloud` | cloud | an experiment: cloud agents (Fo, Devin Cloud, Cursor Cloud), harnesses on their makers' servers | on demand |
+| `superTabs` | superTabs | the Swarm: its host, its GitHub loops and its calls to the backend | on demand, only while the Swarm is on |
 | `agentBrowser` | agentBrowser | Podman's calls and event stream, image builds, Podman's setup (`agentBrowserProcess.ts`, `core/agentBrowserLink.ts`) | on demand |
 
 A fault in one of the edge host's services can cost the others in it, never the core. Every service in
@@ -102,8 +108,9 @@ master too old to run it starts it beside itself, still in its own process (`src
   with the master's token, reconnecting after core restarts. `<host>.crash` and `<host>.leak`, or a
   service's own, crash or leak the whole process: it is one process.
 - `src/core/serviceLinks.ts` is the core's side: it routes those requests to the process, answers
-  `SERVICE_UNAVAILABLE` while it is down, and holds what the service must not miss. The Store's requests
-  (`waitsThroughRestart`) wait for its process to come back instead, bounded as a first start's wait is.
+  `SERVICE_UNAVAILABLE` while it is down, and holds what the service must not miss. The Store's requests and
+  the engine probe's (`waitsThroughRestart`) wait for their process to come back instead, bounded as a first
+  start's wait is. One already in flight as the process goes is answered `SERVICE_UNAVAILABLE` all the same.
 - `src/services/searchProcess.ts` is the example to copy. `e2e/serviceProcesses.e2e.ts` is the proof
   to copy: killed, hung (SIGSTOP), leaking, crashing on every start.
 - A port the core calls asynchronously, answered when it is read, can be a request to the process: the
@@ -197,7 +204,10 @@ master too old to run it starts it beside itself, still in its own process (`src
   `e2e/recapsCompat.e2e.ts` that the dial and the windows hear the same cards and recaps as before.
   The agent cleanup (`src/services/agentCleanupProcess.ts`, `src/core/agentCleanupLink.ts`) is told the same way
   (a harness stopped, the person typing into one another agent started), and acts on the core only through what the
-  core lets it: `closeStarted` closes a harness another agent started and refuses any other.
+  core lets it: `closeStarted` closes a harness another agent started and refuses any other. One thing the core asks
+  it and waits for, ten seconds at most: to erase what a harness being deleted was told (`forgetTold`, the agent
+  ledger's lines, which this service reads and locks and the core never does). It is asked before anything of the
+  harness is deleted, and a delete it does not answer is refused with nothing deleted.
 
 ## On demand
 
@@ -259,7 +269,12 @@ To add one:
    also reads the backend as the account (`core.account.backend`) and has its welcomes signed by the gateway
    (`core.account.observerKey`), so it holds no credential, and watches terminals read-only
    (`core.terminals.watch`, `services/watchLink.ts`).
-2. Its entry in `EXPERIMENTS` (`src/core/api.ts`): its requests and its saved state.
+2. Its entry in `EXPERIMENTS` (`src/core/api.ts`): its requests and its saved state. And its backend routes in
+   `EXPERIMENT_BACKEND_ROUTES` beside it, each a method and a whole path, `[]` when it calls none: the core signs a
+   call of its process on those and no other, and answers any other `ROUTE_NOT_DECLARED`, said in the core's log.
+   (The Swarm's is its own API whole, because an app's asks go through its service.) A new backend call is a line
+   there in the same pull request; `src/core/experimentQueries.spec.ts` fails on a path, or a method, written in
+   the experiment's code that is not declared.
 3. Its process in `SERVICE_HOSTS` (`src/harnessd/services.ts`) with `onDemand: true`, and its runner in
    `SERVICE_RUNNERS` (`src/serviceProcess.ts`).
 4. Its start for the core's own process, in `services/inline.ts`, and one line in `core/main.ts` that starts

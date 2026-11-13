@@ -12,7 +12,7 @@
  */
 
 import type { LiveEvent } from '../../lib/normalize.js'
-import { sqliteReadAll } from '../../lib/sqliteRead.js'
+import { oversizeRow, readStorePages, type StorePage } from '../../lib/sqlitePage.js'
 import { HERMES_HISTORY_ID_RE, HERMES_SOURCE } from './contract.js'
 import { isInteractiveSource, storeSessionSource } from '../kit/storeSource.js'
 import {
@@ -23,10 +23,6 @@ import {
 // Every id a Hermes store keeps a conversation under, declared (contract.ts): homes are found by it too.
 export { HERMES_HISTORY_ID_RE } from './contract.js'
 const POLL_MS = 1_000
-const MAX_BUFFER = 32 * 1024 * 1024
-
-const COLUMNS =
-  'id, role, coalesce(content, \'\') AS content, tool_call_id, tool_calls, tool_name, finish_reason, reasoning'
 
 export class HermesSqliteMissing extends Error {
   constructor() { super('no SQLite reader (node:sqlite absent and no sqlite3 CLI on PATH) — Hermes sessions cannot be mirrored') }
@@ -56,16 +52,24 @@ async function loadHermesMessages(
 ): Promise<HmMessage[] | null> {
   if (!HERMES_HISTORY_ID_RE.test(sessionId)) return []
   const bounded = Number.isFinite(afterId as number) && (afterId as number) > 0
-  const sql = `SELECT ${COLUMNS} FROM messages WHERE session_id = ?${bounded ? ' AND id > ?' : ''} ORDER BY id;`
-  const params = bounded ? [sessionId, Math.trunc(afterId as number)] : [sessionId]
-
-  const result = await sqliteReadAll(dbPath, sql, params, { maxBuffer: MAX_BUFFER })
+  // #4188: one query for a whole session was refused for its size on every poll past 32 MiB, so it is read in pages
+  // bounded by bytes. The columns are bare so a row is sized without reading its payload.
+  const page: StorePage = {
+    table: 'messages', where: 't.session_id = ?', params: [sessionId], key: [{ as: 'id', sql: 't.id' }],
+    columns: ['role', 'content', 'tool_call_id', 'tool_calls', 'tool_name', 'finish_reason', 'reasoning']
+      .map((name) => ({ as: name, sql: `t.${name}` })),
+  }
+  const result = await readStorePages(dbPath, page, bounded ? [Math.trunc(afterId as number)] : null)
   if (!result.ok) {
     if (result.reason === 'missing') throw new HermesSqliteMissing()
     return null // db locked / mid-write — retry next tick
   }
 
-  return result.rows.map((row) => ({
+  return result.rows.filter((row) => {
+    if (!Number(row.page_big)) return true
+    oversizeRow('hermes', sessionId, `id ${row.id}`)
+    return false
+  }).map((row) => ({
     id: Number(row.id) || 0,
     role: typeof row.role === 'string' ? row.role : '',
     content: typeof row.content === 'string' ? row.content : '',

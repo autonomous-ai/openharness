@@ -8,8 +8,8 @@
  */
 import { readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { runGuestCommand, type GuestRunner } from '../guestAccounts.js'
-import { guestHostHome } from './guestRequests.js'
+import { runGuestCommand, type GuestRunner } from '../guestRunner.js'
+import { guestHostHome } from './guestTree.js'
 import { PtyHostBackend } from '../ptyHostBackend.js'
 import { discoveredHostDead, reachPtyHost, readInstanceDiscovery, type HostLiveness } from '../ptyHost/launch.js'
 import type { PtyHostDiscovery } from '../ptyHost/client.js'

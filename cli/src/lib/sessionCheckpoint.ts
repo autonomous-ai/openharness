@@ -9,7 +9,8 @@ import { controlTranscriptEvidence } from '../engines/transcriptBindings.js'
 import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
 import { nativeFileKey } from '../engines/kit/nativePaths.js'
 import { readPrivateStateFile, secureStateDirectory } from './secureState.js'
-import { sqliteReadAll } from './sqliteRead.js'
+import { readStorePages, utf8Bytes, type PageColumn } from './sqlitePage.js'
+import { sqliteReadAll, type SqliteRow } from './sqliteRead.js'
 import { hermesDbPath } from '../engines/hermes/contract.js'
 import { OPENCLAW_COLUMNS } from '../engines/openclaw/contract.js'
 import { openclawSessionDb } from './openclawStore.js'
@@ -19,35 +20,62 @@ export class SessionCheckpointError extends Error {
   readonly code = 'HISTORY_NOT_SAVED'
 }
 
+/** A column of the paged table `t`, by its name. */
+const column = (name: string): PageColumn => ({ as: name, sql: `t."${name.replace(/"/g, '""')}"` })
+
+/** How a conversation table is read: every column, or these, with their size. */
+type Paged = true | { columns: PageColumn[]; size: string }
+
+/**
+ * A conversation table's rows of this session, read in pages bounded by bytes (#4188): read whole against the 32 MiB
+ * reply limit, a longer conversation could not be checkpointed, so its session could not be closed. A page follows the
+ * table's primary key (its rowid when it declares none), so a row added between pages is still read. Each row holds
+ * exactly the selected columns, in their order. Null when a page is not answered or a row is over the row cap: a
+ * checkpoint holds every row or none.
+ */
+async function pagedRows(database: string, table: string, where: string, sessionId: string, paged: Paged): Promise<SqliteRow[] | null> {
+  const declared = await sqliteReadAll(database, 'SELECT name, pk FROM pragma_table_xinfo(?) WHERE hidden <> 1 ORDER BY cid', [table])
+  if (!declared.ok || !declared.rows.length) return null
+  const pk = declared.rows.filter((row) => Number(row.pk) > 0).sort((a, b) => Number(a.pk) - Number(b.pk)).map((row) => String(row.name))
+  const selected = paged === true ? declared.rows.map((row) => column(String(row.name))) : paged.columns
+  const read = await readStorePages(database, { table, where, params: [sessionId],
+    key: pk.length ? pk.map(column) : [{ as: 'rowid', sql: 't.rowid' }],
+    columns: selected.filter((c) => !pk.includes(c.as)), ...(paged !== true && { size: paged.size }) })
+  if (!read.ok || read.rows.some((row) => Number(row.page_big))) return null
+  return read.rows.map((row) => Object.fromEntries(selected.map((c) => [c.as, row[c.as]])))
+}
+
 /** Native SQLite files can have live WAL writers. Export this conversation's rows through a
  * read-only connection; never copy an incomplete .db or replace an engine's shared store. */
 async function databaseHistory(s: RegisteredSession): Promise<Record<string, unknown>> {
   let database: string
-  /** Table, filter, and the columns when not all of them. */
-  let selections: [string, string, string?][]
+  /** Table and filter; a conversation table is paged, the others hold one row. */
+  let selections: [string, string, Paged?][]
   switch (s.engine) {
     case 'opencode': case 'kilo':
       database = s.engine === 'opencode' ? join(env.OPENCODE_DATA_DIR, 'opencode.db') : join(env.KILO_DATA_DIR, 'kilo.db')
-      selections = [['session', 'id = ?'], ['message', 'session_id = ?'],
-        ['part', 'message_id IN (SELECT id FROM message WHERE session_id = ?)']]
+      selections = [['session', 'id = ?'], ['message', 'session_id = ?', true],
+        ['part', 'message_id IN (SELECT id FROM message WHERE session_id = ?)', true]]
       break
     case 'hermes':
       database = hermesDbPath(s.hermesHome ?? env.HERMES_HOME)
-      selections = [['sessions', 'id = ?'], ['messages', 'session_id = ?']]
+      selections = [['sessions', 'id = ?'], ['messages', 'session_id = ?', true]]
       break
     case 'devin':
       database = join(env.DEVIN_HOME, 'sessions.db')
-      selections = [['sessions', 'id = ?'], ['message_nodes', 'session_id = ?']]
+      selections = [['sessions', 'id = ?'], ['message_nodes', 'session_id = ?', true]]
       break
     case 'openclaw': {
       const found = await openclawSessionDb(s.sessionId, { pid: s.processIdentity?.pid ?? 0, stateDir: s.openclawStateDir })
       if (!found) throw new SessionCheckpointError('Could not read the saved conversation. The session has not been closed.')
       database = found
       // Every window the key has had, with each row as the reader reads it. A compressed row is kept as hex: JSON has
-      // no bytes.
-      const events = OPENCLAW_COLUMNS.transcript_events.map((column) => column === 'event_zstd' ? 'hex(event_zstd) AS event_zstd_hex' : column).join(', ')
+      // no bytes. It is sized as twice its blob: sizing the hex itself would read every blob.
+      const events = OPENCLAW_COLUMNS.transcript_events
+      const columns = events.map((name) => name === 'event_zstd' ? { as: 'event_zstd_hex', sql: 'hex(t.event_zstd)' } : column(name))
+      const size = events.map((name) => name === 'event_zstd' ? '2 * coalesce(length(t.event_zstd), 0)' : `coalesce(${utf8Bytes(column(name).sql)}, 0)`).join(' + ')
       selections = [['session_nodes', 'session_key = ?'], ['session_windows', 'session_key = ?'],
-        ['transcript_events', 'session_id IN (SELECT session_id FROM session_windows WHERE session_key = ?)', events]]
+        ['transcript_events', 'session_id IN (SELECT session_id FROM session_windows WHERE session_key = ?)', { columns, size }]]
       break
     }
     default: throw new SessionCheckpointError('This engine has no supported history checkpoint yet. The session is still open.')
@@ -59,15 +87,16 @@ async function databaseHistory(s: RegisteredSession): Promise<Record<string, unk
     const v2 = await sqliteReadAll(database, "SELECT name FROM sqlite_master WHERE type='table' AND name='session_v2';")
     const held = v2.ok && v2.rows.length ? await sqliteReadAll(database, 'SELECT id FROM session_v2 WHERE id = ?;', [s.sessionId]) : null
     if (!v2.ok || (held && !held.ok)) throw new SessionCheckpointError('Could not read the saved conversation. The session has not been closed.')
-    if (held?.rows.length) selections = [['session_v2', 'id = ?'], ['session_message', 'session_id = ?']]
+    if (held?.rows.length) selections = [['session_v2', 'id = ?'], ['session_message', 'session_id = ?', true]]
   }
   const tables: Record<string, unknown[]> = {}
-  for (const [table, where, columns = '*'] of selections) {
-    const result = await sqliteReadAll(database, `SELECT ${columns} FROM ${table} WHERE ${where};`, [s.sessionId])
-    if (!result.ok || (table === selections[0][0] && result.rows.length !== 1)) {
+  for (const [table, where, paged] of selections) {
+    const rows = paged ? await pagedRows(database, table, where, s.sessionId, paged)
+      : await sqliteReadAll(database, `SELECT * FROM ${table} WHERE ${where};`, [s.sessionId]).then((read) => read.ok ? read.rows : null)
+    if (!rows || (table === selections[0][0] && rows.length !== 1)) {
       throw new SessionCheckpointError('Could not read the saved conversation. The session has not been closed.')
     }
-    tables[table] = result.rows
+    tables[table] = rows
   }
   return { database, tables }
 }

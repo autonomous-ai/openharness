@@ -32,6 +32,12 @@ export function readDaemonRecord(dataDir: string, configuredPort: number, platfo
   }
 }
 
+/** The TCP port the daemon of [dataDir] bound: its record's, or the configured one when there is no record. The
+ *  configured port still names the private socket. */
+export function savedDaemonPort(dataDir: string, configuredPort: number): number {
+  return readDaemonRecord(dataDir, configuredPort)?.port ?? configuredPort
+}
+
 /**
  * The port whose record holds the daemon on [port]. [port] may be the one the daemon was given rather than the one it was
  * configured with (`daemonPort` hands that to every command), when another account holds the configured one, as a Harness
@@ -49,6 +55,7 @@ export function configuredPortOf(dataDir: string, port: number, platform: NodeJS
   return port
 }
 
+/** [pipe]: on Windows, the daemon's pipe and the core's pid, which a client cannot derive. */
 export function writeDaemonRecord(dataDir: string, configuredPort: number, port: number, pipe?: DaemonPipeRecord): void {
   mkdirSync(dataDir, { recursive: true, mode: 0o700 })
   const target = daemonRecordPath(dataDir, configuredPort)

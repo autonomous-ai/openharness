@@ -8,6 +8,10 @@
  * it is said once a harness, and only for a harness another agent started, so the person's typing costs two map
  * lookups and never a frame to another process.
  *
+ * One thing the core asks and waits for, for a bounded time: that what a harness being deleted was told is erased
+ * (`forgetTold`). The agent ledger is the process's to read and lock, never the core's, and a delete whose erase is
+ * not answered is refused.
+ *
  * The process asks the core what only the core knows: the live agents (`live`), when one's conversation last moved
  * (`lastActivity`), and to close one (`closeStarted`), which the core does for a harness another agent started and
  * refuses for any other (core/api.ts `closeStarted`). Whatever the process asks, it closes nothing else.
@@ -18,7 +22,14 @@ import type { ServiceFrame } from './serviceLinks.js'
 
 type Payload = Record<string, unknown>
 
-export function createAgentCleanupLink(core: Pick<CoreApi, 'agents' | 'usage'>, notify: (frame: ServiceFrame, opts?: { untilDelivered?: boolean }) => boolean) {
+/** How long a delete waits for the cleanup to erase what a harness was told: its wait for the ledger's lock is a
+ *  quarter of a second (services/agentCleanup.ts `FORGET_LOCK_WAIT_MS`), the rewrite of two files of 2 MiB at most
+ *  comes after, and the edge host may be busy with another service's work. */
+export const FORGET_TOLD_MS = 10_000
+
+/** [call]: ask the cleanup's process for an answer (core/serviceLinks.ts `call`, for `agentCleanup`): never rejects. */
+export function createAgentCleanupLink(core: Pick<CoreApi, 'agents' | 'usage' | 'count' | 'clients'>, notify: (frame: ServiceFrame, opts?: { untilDelivered?: boolean }) => boolean,
+  call: (type: string, payload: Payload, waitMs: number) => Promise<Payload>) {
   /** The harnesses the process was told the person joined: it keeps them itself (services/agentCleanup.ts). */
   const told = new Set<string>()
   const port: AgentCleanupPort = {
@@ -29,6 +40,9 @@ export function createAgentCleanupLink(core: Pick<CoreApi, 'agents' | 'usage'>, 
       told.add(session.agentId)
       notify({ type: 'service_event', payload: { kind: 'typed', agentId: session.agentId } }, { untilDelivered: true })
     },
+    // Anything but its word that it erased them (the process down or slow, the ledger's lock held, a file it could
+    // not write) is not erased, and the delete is refused.
+    forgetTold: async (agentId) => (await call('forgetTold', { agentId }, FORGET_TOLD_MS)).ok === true,
     stop: () => {},
   }
 
@@ -39,7 +53,9 @@ export function createAgentCleanupLink(core: Pick<CoreApi, 'agents' | 'usage'>, 
     if (query === 'lastActivity') return { at: await (core.agents.lastActivity?.(agentId) ?? null) }
     const mode = payload.mode === 'idle' || payload.mode === 'now' ? payload.mode : null
     if (!mode) return { error: 'INVALID_REQUEST' }
-    return { ...await (core.agents.closeStarted?.(agentId, mode) ?? { error: 'UNSUPPORTED' }) }
+    // Past the ceiling only when the process says so in those words: anything else keeps the refusal.
+    const closing = payload.pastCeiling === true ? core.agents.closeStarted?.(agentId, mode, true) : core.agents.closeStarted?.(agentId, mode)
+    return { ...await (closing ?? { error: 'UNSUPPORTED' }) }
   }
 
   return { port, answer }

@@ -7,8 +7,9 @@
  * step (the engine is on the guest's PATH in its host's pane), so nothing in this path installs it from the owner's.
  */
 import { readdirSync } from 'node:fs'
-import { isGuestUser, type GuestAccount, type SharedFolder } from '../guestAccounts.js'
-import { WINDOWS_GUEST_HOSTS } from './guestRequests.js'
+import { type GuestAccount, type SharedFolder } from '../guestAccounts.js'
+import { isGuestUser } from '../guestUser.js'
+import { WINDOWS_GUEST_HOSTS } from './guestTree.js'
 import { createGuestSetupClient, type GuestSetupClient } from './guestSetupClient.js'
 
 export interface WindowsGuestAccountsDeps {

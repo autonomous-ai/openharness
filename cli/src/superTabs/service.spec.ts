@@ -3,7 +3,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { swarmBasics } from '../lib/swarmSkills.js'
+import { PM_BASICS, SWARM_BASICS, swarmBasics } from '../lib/swarmSkills.js'
 import { describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
 import type { CoreApi } from '../core/api.js'
@@ -68,8 +68,12 @@ describe('restart role lookup through the service', () => {
       ? hostForm([{ tabId: 'tab', agent: lead }, { tabId: 'tab', agent: builder }])
       : swarmReply(path, { agents: [lead, builder], conversations: [{ leadId: 'lead', agentIds: ['builder'] }] }) } }))
     const service = superTabService(fakeCore({ account: { backend: call } }))
-    expect(await service.requests.super_tabs({ action: 'basics', harnessId: 'lead-native' }, owner)).toEqual({ ok: true, text: swarmBasics(true).text })
-    expect(await service.requests.super_tabs({ action: 'basics', harnessId: 'builder-native' }, owner)).toEqual({ ok: true, text: swarmBasics(false).text })
+    // The joined text for an older Desktop, and every agent's and the PM's apart for Desktop to show the PM's under the PM
+    // (anh Dee, 2026-11-12: "PM basics.. shouldn't that be part of devon?").
+    expect(await service.requests.super_tabs({ action: 'basics', harnessId: 'lead-native' }, owner))
+      .toEqual({ ok: true, text: swarmBasics(true).text, swarm: SWARM_BASICS, pm: PM_BASICS })
+    expect(await service.requests.super_tabs({ action: 'basics', harnessId: 'builder-native' }, owner))
+      .toEqual({ ok: true, text: swarmBasics(false).text, swarm: SWARM_BASICS })
     expect(swarmBasics(true).text).not.toBe(swarmBasics(false).text)
     expect(await service.requests.super_tabs({ action: 'basics', harnessId: 'personal' }, owner)).toEqual({ ok: true })
     expect(await service.requests.super_tabs({ action: 'basics', harnessId: 'lead-native' }, visitor)).toMatchObject({ error: 'OWNER_REQUIRED' })
@@ -219,7 +223,7 @@ it('starts the first answers with the host and stops them with the service', asy
 })
 // Swarm plan, step 1, item 1: an agent's next thing, typed as its turn ends (nextThing.ts), with the host.
 it('starts the next things with the host and stops them with the service', async () => {
-  const nextThings = { start: vi.fn(), stop: vi.fn(), inbox: vi.fn() }
+  const nextThings = { start: vi.fn(), stop: vi.fn(), inbox: vi.fn(), offered: vi.fn() }
   const service = superTabService(fakeCore({ account: { backend: vi.fn() } }), { host: () => ({ machineId: 'machine-1', start: vi.fn(), stop: vi.fn() }) as unknown as SuperTabHost,
     shipping: () => ({ start: vi.fn(), stop: vi.fn() }), firstAnswers: () => ({ start: vi.fn(), stop: vi.fn() }), nextThings: () => nextThings })
   expect(nextThings.start).not.toHaveBeenCalled()
@@ -227,6 +231,17 @@ it('starts the next things with the host and stops them with the service', async
   expect(nextThings.start).toHaveBeenCalledOnce()
   service.port.disconnected()
   expect(nextThings.stop).toHaveBeenCalledOnce()
+})
+// The allocator's design, package 16: the offers made to this computer's person's agents, answered here (taskOffers.ts), with the host.
+it('starts the offer answers with the host and stops them with the service', async () => {
+  const offerAnswers = { start: vi.fn(), stop: vi.fn() }
+  const service = superTabService(fakeCore({ account: { backend: vi.fn() } }), { host: () => ({ machineId: 'machine-1', start: vi.fn(), stop: vi.fn() }) as unknown as SuperTabHost,
+    shipping: () => ({ start: vi.fn(), stop: vi.fn() }), firstAnswers: () => ({ start: vi.fn(), stop: vi.fn() }), offerAnswers: () => offerAnswers })
+  expect(offerAnswers.start).not.toHaveBeenCalled()
+  expect(await service.requests.super_tabs({ action: 'wake' }, owner)).toEqual({ ok: true })
+  expect(offerAnswers.start).toHaveBeenCalledOnce()
+  service.port.disconnected()
+  expect(offerAnswers.stop).toHaveBeenCalledOnce()
 })
 // The allocator's design, package 11: a project's PM reads its own project alone, so the Swarm's other projects, where its
 // builders may build too, are read as its PM's person reads the Swarm (review of #4144: no spec ran that line).
@@ -250,8 +265,8 @@ it('has the assigner read the Swarm as the PM\'s person, and a builder\'s own li
     agents: { byAgent: vi.fn(() => ({ agentId: 'pm-native' }) as never) } })
   const idle = () => ({ start: vi.fn(), stop: vi.fn() })
   const service = superTabService(core, { host: () => ({ machineId: 'machine-1', start: vi.fn(), stop: vi.fn() }) as unknown as SuperTabHost, github: () => github,
-    githubMentions: () => ({ ...idle(), owed: vi.fn(() => []) }), githubMerge: idle, shipping: idle, firstAnswers: idle, nextThings: () => ({ ...idle(), inbox: vi.fn() }),
-    taskTokens: () => ({ ...idle(), looked: vi.fn(), read: vi.fn(), took: vi.fn() }) })
+    githubMentions: () => ({ ...idle(), owed: vi.fn(() => []) }), githubMerge: idle, shipping: idle, firstAnswers: idle, nextThings: () => ({ ...idle(), inbox: vi.fn(), offered: vi.fn() }),
+    taskTokens: () => ({ ...idle(), looked: vi.fn(), read: vi.fn(), took: vi.fn() }), offerAnswers: idle })
   expect(await service.requests.super_tabs({ action: 'wake' }, owner)).toEqual({ ok: true })
   await vi.waitFor(() => expect(asked).toContain('/repos/acme/web/issues?state=open&labels=builder%3Apip&per_page=100'), { timeout: 10_000 })
   expect(call.mock.calls.map(([, path]) => path)).toContain('/api/super-tabs/tab/parts')
@@ -271,7 +286,7 @@ it('starts the count of tasks\' tokens with the host and stops it with the servi
 // Swarm plan, step 1, item 2: what waits for the agent that asks, as its turns' ends type it (nextThing.ts inbox).
 it('lists what waits for the agent in its own pane, and says a GitHub failure by its code', async () => {
   const inbox = vi.fn(async (_harnessId: string) => ['Next: acme/app#12 Fix the login bug. …'])
-  const t = setup({ nextThings: () => ({ start: vi.fn(), stop: vi.fn(), inbox }) })
+  const t = setup({ nextThings: () => ({ start: vi.fn(), stop: vi.fn(), inbox, offered: vi.fn() }) })
   expect(await t.ask({ action: 'inbox', harnessId: 'native' }, owner)).toEqual({ ok: true, value: { waiting: ['Next: acme/app#12 Fix the login bug. …'] } })
   expect(inbox).toHaveBeenCalledWith('native')
   inbox.mockRejectedValueOnce(new GitHubStop('RATE_LIMITED', 'GitHub asks to wait until 14:05.', true, 0))
@@ -1206,6 +1221,61 @@ describe('a verdict by command', () => {
     expect(t.sent[1]!.body).toEqual({ body: expect.stringMatching(/^Juno, \d\d:\d\d: taken by Juno$/) })
     expect(t.call).toHaveBeenCalledWith('POST', `/api/super-tabs/tab/github-comments?asAgentId=${t.agentId}`, { repository: 'acme/app', kind: 'issue', commentId: '9001' })
     expect(await t.service.requests.super_tabs({ action: 'take', tabId: 'tab', harnessId: 'native', repository: 'acme/app', number: 0 }, owner)).toEqual({ error: 'INVALID_REQUEST' })
+    t.service.port.stop()
+  })
+  // The allocator's design, package 16: a task offered to the agent, which its computer accepted, is taken on the server's word.
+  it('takes a task offered to it on its accepted offer, by how long the server says the offer holds it', async () => {
+    const t = verdictSetup()
+    const offers = { offers: [{ repository: 'acme/app', number: 34, agentId: t.agentId, state: 'accepted', offeredAt: 1, expiresAt: 400_000 }], serverTime: 100_000 }
+    let routes = true
+    const answer = t.call.getMockImplementation()!
+    t.call.mockImplementation(async (method, path, body) => path.includes('/task-offers') ? (routes
+      ? { status: 200, body: { success: true, data: path.includes('/mine') ? offers : {} } }
+      : { status: 404, body: { message: 'Route not found', statusCode: 404 } }) : answer(method, path, body))
+    t.github.get.mockImplementation(async (path: string) => ({ status: 200, etag: null, resetAt: null,
+      body: /\/issues\/34$/.test(path) ? { number: 34, state: 'open', labels: [{ name: 'size:s' }], html_url: 'https://github.com/acme/app/issues/34' } : [] }))
+    t.github.send.mockImplementation(async (_method: string, path: string, body?: unknown) => { t.sent.push({ path, body })
+      return path.endsWith('/labels') ? { status: 200, etag: null, resetAt: null, body: [{ name: 'size:s' }, { name: 'builder:juno' }, { name: 'status:taken' }] }
+        : { status: 201, etag: null, resetAt: null, body: { id: 9001, html_url: 'https://github.com/acme/app/issues/34#issuecomment-9001' } } })
+    const take = () => t.service.requests.super_tabs({ action: 'take', tabId: 'tab', harnessId: 'native', repository: 'acme/app', number: 34 }, owner)
+    expect(await take()).toMatchObject({ ok: true, value: { taken: true } })
+    expect(t.call).toHaveBeenCalledWith('GET', `/api/super-tabs/tab/task-offers/mine?asAgentId=${t.agentId}`, undefined)
+    expect(t.sent[0]).toEqual({ path: '/repos/acme/app/issues/34/labels', body: { labels: ['builder:juno', 'status:taken'] } })
+    // Its hold nearly over, an accepted offer of another task or another repository, or a server without offers: not given, and
+    // nothing written (review of #4153: neither match was tried).
+    t.sent.length = 0
+    offers.offers[0]!.expiresAt = 100_000 + 119_999
+    expect(await take()).toMatchObject({ error: 'TASK_NOT_GIVEN' })
+    offers.offers[0] = { ...offers.offers[0]!, number: 35, expiresAt: 400_000 }
+    expect(await take()).toMatchObject({ error: 'TASK_NOT_GIVEN' })
+    offers.offers[0] = { ...offers.offers[0]!, number: 34, repository: 'acme/other' }
+    expect(await take()).toMatchObject({ error: 'TASK_NOT_GIVEN' })
+    routes = false
+    expect(await take()).toMatchObject({ error: 'TASK_NOT_GIVEN' })
+    expect(t.sent).toEqual([])
+    // Another failure of the server is said as the server said it.
+    t.call.mockImplementation(async (method, path, body) => path.includes('/task-offers') ? { status: 503, body: { error: { code: 'BACKEND_UNAVAILABLE', message: 'No answer.' } } } : answer(method, path, body))
+    expect(await take()).toMatchObject({ error: 'BACKEND_UNAVAILABLE' })
+    t.service.port.stop()
+  })
+  it('declines the offer of a task it cannot take after all, and takes on when the decline cannot be made', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const t = verdictSetup()
+    const answer = t.call.getMockImplementation()!
+    const declines: unknown[] = []
+    t.call.mockImplementation(async (method, path, body) => {
+      if (path.includes('/decline')) { declines.push(body); return { status: 409, body: { error: { code: 'OFFER_NOT_LIVE', message: 'Not offered now.' } } } }
+      return path.includes('/mine') ? { status: 200, body: { success: true, data: { offers: [{ repository: 'acme/app', number: 34, agentId: t.agentId, state: 'accepted', offeredAt: 1, expiresAt: 900_000 }], serverTime: 1 } } }
+        : answer(method, path, body)
+    })
+    t.github.get.mockImplementation(async (path: string) => ({ status: 200, etag: null, resetAt: null,
+      body: /\/issues\/34$/.test(path) ? { number: 34, state: 'open', labels: [] } : [] }))
+    t.github.send.mockImplementation(async (_method: string, path: string, body?: unknown) => { t.sent.push({ path, body })
+      return { status: 200, etag: null, resetAt: null, body: [{ name: 'builder:atlas' }, { name: 'builder:juno' }, { name: 'status:taken' }] } })
+    expect(await t.service.requests.super_tabs({ action: 'take', tabId: 'tab', harnessId: 'native', repository: 'acme/app', number: 34 }, owner)).toMatchObject({ error: 'TASK_NOT_YOURS' })
+    expect(declines).toEqual([{ repository: 'acme/app', number: 34, reason: 'gone' }])
+    expect(warn).toHaveBeenCalledWith('[super-tab] Task offers: acme/app#34 not declined: OFFER_NOT_LIVE')
+    warn.mockRestore()
     t.service.port.stop()
   })
   // A builder cuts a piece off a task it holds (githubSplit.ts, anh Dee 2026-11-11: "Split what you hold").

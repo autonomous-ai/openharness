@@ -229,6 +229,22 @@ describe('contributed machine executor', () => {
     expect(body).toMatchObject({ quotas: [{ engine: 'claude' }] })
     expect(f.request).toHaveBeenCalledWith('engines_probe', { engines: ['claude', 'codex'] }, 20_000)
   })
+  // The probe is the edge host's (the audit of 2026-11-12): not answered, it said this machine had no engine.
+  it.each([
+    ['its service was down', async () => ({ error: 'SERVICE_UNAVAILABLE', service: 'engineProbe', retryable: true })],
+    ['it was not answered in time', async () => { throw new Error('timed out') }],
+  ])('leaves a legacy contribution\'s reading out when its engines could not be checked (%s), and reads again at the next pass', async (_why, answer) => {
+    const f = fixture()
+    f.pool.machine.engines = ['opencode']
+    const usage = f.request.getMockImplementation()!
+    f.request.mockImplementation(async type => type === 'engines_probe' ? answer() : usage(type))
+    await f.machine.tick()
+    expect(f.backend.mock.calls.filter(c => c[1] === 'POST')).toEqual([])
+    f.request.mockImplementation(async type => type === 'engines_probe' ? { engines: [{ engine: 'claude', installed: true }] } : usage(type))
+    f.advance()
+    await f.machine.tick()
+    expect(f.backend.mock.calls.find(c => c[1] === 'POST')![3]).toMatchObject({ quotas: [{ engine: 'claude' }] })
+  })
   const signedOut = { providers: [{ provider: 'codex', account: null, outcome: 'signedOut' }] }
   it('reports an engine run on an API key as metered: known, with no windows', async () => {
     const f = fixture({ OPENAI_API_KEY: 'sk-or-private' })
@@ -320,12 +336,12 @@ describe('contributed machine executor', () => {
     await f.machine.tick()
     expect((f.start.mock.calls as unknown[][]).map(call => call[0])).toEqual([{ tabId: 'tab', startId: 'lead-start' }])
   })
-  it('says in its reading that it starts Product Managers and Regular agents, to a backend that asks, and to no other', async () => {
+  it('says in its reading that it starts Product Managers and Regular agents and answers offers of tasks, to a backend that asks, and to no other', async () => {
     const f = fixture()
     Object.assign(f.pool, { capabilitiesWanted: true })
     await f.machine.tick()
     const posted = (g: typeof f) => g.backend.mock.calls.filter(c => c[1] === 'POST').map(c => c[3] as Record<string, unknown>)
-    expect(posted(f)[0]).toMatchObject({ capabilities: ['leadStart', 'regularAgent', 'leadSwitch', 'turnInbox'] })
+    expect(posted(f)[0]).toMatchObject({ capabilities: ['leadStart', 'regularAgent', 'leadSwitch', 'turnInbox', 'taskOffers'] })
     // A backend from before them does not ask, and would refuse the field.
     const older = fixture()
     await older.machine.tick()

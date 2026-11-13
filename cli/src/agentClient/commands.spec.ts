@@ -4,12 +4,13 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { addressOf, agentOrigin, AGENTS_START_AGENTS_OFF, closeCommand, deleteCommand, DEPTH_REFUSAL, EXIT, GOAL_USAGE, goalCommand, parseDuration, psCommand, refusalNext, replyCommand, resumeCommand, routeCommand, showCommand, spawnCheck, spawnCount, spawnRefusal, SPAWN_LIMITS, step, tellCommand, waitCommand, watchCommand, whoamiCommand, type ClientDeps } from './commands.js'
 import { RefusedError, type Rpc } from '../messages/rpc.js'
-import { AgentClientError, type Daemon, type Where } from './daemon.js'
+import { AgentClientError, type Daemon, type PushedEvent, type Where } from './daemon.js'
 import { Ledger, ledgerPath } from './ledger.js'
 import { agentSettingsPath } from '../lib/agentSettings.js'
 import { LEAD_PROTECTED_DETAIL } from '../lib/closeAgentService.js'
 import { setAgentSettingsForTest, signedOutForTest, TEST_ACCOUNT } from '../testing/agentSettings.js'
 import type { Frame } from './model.js'
+import { HACHI_ID } from '../dsh/builtinIds.js'
 
 const NOW = Date.parse('2026-10-11T12:00:00Z')
 
@@ -98,6 +99,16 @@ const started = (ledger: Ledger, by: string, child: string, childMachine = 'm', 
 })
 
 const ev = (type: string, payload: Record<string, unknown> = {}) => ({ type, payload })
+
+/** Each inspect answers idle with the next of [counts], the last staying; `undefined`: a daemon from before the field. */
+const counting = (d: FakeDaemon, counts: unknown[]) => {
+  d.extra.agent_close = (payload) => {
+    if (payload.mode !== 'inspect') return { closed: true }
+    const n = counts.length > 1 ? counts.shift() : counts[0]
+    return n === undefined ? { activity: 'idle' } : { activity: 'idle', backgroundCommands: n }
+  }
+}
+const answeredTurn = (d: FakeDaemon, id: string) => d.pages.set(`s-${id}`, [{ events: [ev('user_message', { content: 'fix it' }), ev('tool_start'), ev('text_delta', { content: 'Fixed.' }), ev('done')], hasMore: false }])
 
 describe('harness ps', () => {
   it('lists the harnesses here: who you are, state, who started each, and what each is about', async () => {
@@ -368,6 +379,47 @@ describe('harness show', () => {
     expect(lines.at(-1)).toBe('Next: harness close kid  (once you have what you need)')
   })
 
+  it('says how many background commands an idle harness still runs, and offers wait, never close, while any does', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead'), frame('kid')]
+    answeredTurn(d, 'kid')
+    counting(d, [2])
+    const h = harness(d)
+    started(h.ledger, 'lead', 'kid')
+    expect(await showCommand(['kid'], h.deps)).toBe(EXIT.ok)
+    expect(h.out.slice(-2)).toEqual(['2 background commands running', 'Next: harness wait kid  (until its background commands end)'])
+    expect(h.out.join('\n')).not.toContain('harness close')
+    const json = harness(d)
+    expect(await showCommand(['kid', '--json'], json.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(json.out[0])).toMatchObject({ state: 'idle', backgroundCommands: 2, next: [{ run: 'harness wait kid', when: 'until its background commands end' }] })
+    counting(d, [1])
+    const one = harness(d)
+    expect(await showCommand(['kid'], one.deps)).toBe(EXIT.ok)
+    expect(one.out.at(-2)).toBe('1 background command running')
+    // Whoever started it: the person is told to wait too.
+    counting(d, [2])
+    const person = harness(d, { pane: undefined })
+    expect(await showCommand(['kid'], person.deps)).toBe(EXIT.ok)
+    expect(person.out.at(-1)).toBe('Next: harness wait kid  (until its background commands end)')
+    // None, a daemon from before the field, or a field that is no whole number: as before.
+    for (const [count, read] of [[0, 0], [undefined, null], ['2', null], [-1, null], [1.5, null]] as const) {
+      counting(d, [count])
+      const text = harness(d)
+      expect(await showCommand(['kid'], text.deps)).toBe(EXIT.ok)
+      expect(text.out.join('\n')).not.toContain('background command')
+      expect(text.out.at(-1)).toBe('Next: harness close kid  (once you have what you need)')
+      const asJson = harness(d)
+      expect(await showCommand(['kid', '--json'], asJson.deps)).toBe(EXIT.ok)
+      expect(JSON.parse(asJson.out[0]).backgroundCommands).toBe(read)
+    }
+    // Working: no count at all.
+    delete d.extra.agent_close
+    d.screens.set('kid', ['working'])
+    const working = harness(d)
+    expect(await showCommand(['kid', '--json'], working.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(working.out[0])).not.toHaveProperty('backgroundCommands')
+  })
+
   it('names wait for a working harness, and never close for one the caller did not start', async () => {
     const d = new FakeDaemon()
     d.frames = [frame('lead', { engine: 'claude' }), frame('busy', { activity: { state: 'working' } }), frame('theirs')]
@@ -507,6 +559,34 @@ describe('harness wait', () => {
     expect(h.out).toEqual(['kid: idle · read it: harness show kid'])
     expect(inspects(d)).toBe(4)
     expect(d.requests.filter((r) => r.type === 'agent_close').every((r) => r.payload.mode === 'inspect')).toBe(true)
+  })
+
+  it('holds while an idle harness still runs background commands, and says how many when it times out', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('kid')]
+    answeredTurn(d, 'kid')
+    counting(d, [1, 1, 1, 0, 0])
+    const h = harness(d)
+    expect(await waitCommand(['kid'], h.deps)).toBe(EXIT.ok)
+    // Three looks held, then two idle looks.
+    expect(inspects(d)).toBe(5)
+    expect(h.out).toEqual(['kid: idle · read it: harness show kid'])
+    counting(d, [2])
+    const text = harness(d)
+    expect(await waitCommand(['kid', '--timeout', '3s'], text.deps)).toBe(EXIT.timeout)
+    expect(text.out).toEqual(['kid: timeout · 2 background commands running; wait again or read it: harness show kid'])
+    const json = harness(d)
+    expect(await waitCommand(['kid', '--timeout', '3s', '--json'], json.deps)).toBe(EXIT.timeout)
+    expect(JSON.parse(json.out.join('\n')).harnesses[0]).toMatchObject({ state: 'timeout', backgroundCommands: 2, next: [{ run: 'harness wait kid', when: 'to keep waiting' }] })
+    // A timeout while it works says so, with no count.
+    delete d.extra.agent_close
+    d.screens.set('kid', ['working'])
+    const working = harness(d)
+    expect(await waitCommand(['kid', '--timeout', '3s'], working.deps)).toBe(EXIT.timeout)
+    expect(working.out).toEqual(['kid: timeout · still working; wait again or read it: harness show kid'])
+    const workingJson = harness(d)
+    expect(await waitCommand(['kid', '--timeout', '3s', '--json'], workingJson.deps)).toBe(EXIT.timeout)
+    expect(JSON.parse(workingJson.out.join('\n')).harnesses[0]).not.toHaveProperty('backgroundCommands')
   })
 
   it('reads no screen while the daemon says it is working', async () => {
@@ -881,7 +961,8 @@ describe('harness close', () => {
       { error: 'SESSION_NOT_IDLE', activity: 'working' }, { error: 'SESSION_NOT_IDLE', activity: 'needs_input' },
       { error: 'AGENT_CHANGED' }, { error: 'CLOSE_FAILED', detail: 'disk full' }, { error: 'CLOSE_FAILED' },
     ]
-    d.extra.agent_close = () => replies.shift()!
+    // It looks first: the screen reads idle with nothing running, and the close answers each refusal.
+    d.extra.agent_close = (p) => (p.mode === 'inspect' ? { activity: 'idle' } : replies.shift()!)
     const h = harness(d, { pane: undefined })
     for (let i = 0; i < 5; i++) expect(await closeCommand(['k'], h.deps)).toBe(EXIT.failed)
     expect(h.err).toEqual([
@@ -928,6 +1009,67 @@ describe('harness close', () => {
     const unwritable = harness(d, { ledger: (data) => Object.assign(new Ledger(ledgerPath(data)), { append: () => { throw new Error('read-only') } }) })
     expect(await closeCommand(['kid'], unwritable.deps)).toBe(EXIT.ok)
     expect(unwritable.out).toEqual(['kid on studio: closed. Its conversation is kept; the person can resume it.\nNext: nothing; you have 0 open of 8.'])
+  })
+
+  it('refuses one that still runs background commands, and sends no close', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead'), frame('kid')]
+    counting(d, [2])
+    const h = harness(d)
+    started(h.ledger, 'lead', 'kid')
+    const modes = () => d.requests.filter((r) => r.type === 'agent_close').map((r) => r.payload.mode)
+    expect(await closeCommand(['kid'], h.deps)).toBe(EXIT.failed)
+    expect(h.err).toEqual(['kid: 2 background commands running; --now closes anyway'])
+    expect(modes()).toEqual(['inspect'])
+    const json = harness(d)
+    expect(await closeCommand(['kid', '--json'], json.deps)).toBe(EXIT.failed)
+    expect(JSON.parse(json.out[0])).toEqual({ error: 'WORKING', detail: 'kid: 2 background commands running; --now closes anyway' })
+    const mcp = harness(d, { env: { HARNESS_VIA_MCP: '1' } })
+    expect(await closeCommand(['kid'], mcp.deps)).toBe(EXIT.failed)
+    expect(mcp.err).toEqual(['kid: 2 background commands running; now: true closes anyway'])
+    // --now does not look.
+    d.requests = []
+    expect(await closeCommand(['kid', '--now'], harness(d).deps)).toBe(EXIT.ok)
+    expect(modes()).toEqual(['now'])
+  })
+
+  it('closes as before when none runs, when the daemon cannot say, and when it is not idle', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead'), frame('kid')]
+    const modes = () => d.requests.filter((r) => r.type === 'agent_close').map((r) => r.payload.mode)
+    started(harness(d).ledger, 'lead', 'kid')
+    const closes = async () => {
+      d.requests = []
+      const h = harness(d)
+      const code = await closeCommand(['kid'], h.deps)
+      return { code, out: h.out, err: h.err }
+    }
+    for (const count of [0, undefined]) {
+      counting(d, [count])
+      expect(await closes()).toEqual({ code: EXIT.ok, out: ['kid on studio: closed. Its conversation is kept; the person can resume it.\nNext: nothing; you have 0 open of 8.'], err: [] })
+      expect(modes()).toEqual(['inspect', 'idle'])
+    }
+    d.extra.agent_close = (p) => (p.mode === 'inspect' ? { activity: 'working' } : { error: 'SESSION_NOT_IDLE', activity: 'working' })
+    expect(await closes()).toEqual({ code: EXIT.failed, out: [], err: ['kid is working. Wait for it (harness wait kid), or close it anyway with --now.'] })
+    expect(modes()).toEqual(['inspect', 'idle'])
+    // An inspect that fails: the close is still sent.
+    d.extra.agent_close = (p) => { if (p.mode === 'inspect') throw new Error('gone'); return { closed: true } }
+    expect((await closes()).code).toBe(EXIT.ok)
+    expect(modes()).toEqual(['inspect', 'idle'])
+  })
+
+  it('looks at a harness on another machine through that machine', async () => {
+    const d = new FakeDaemon(), office = new FakeDaemon('office-id')
+    office.frames = [frame('kid')]
+    const machines = async () => [{ machineId: 'm', label: 'studio', status: 'online', current: true }, { machineId: 'office-id', label: 'office', status: 'online', current: false }]
+    const h = harness(d, { pane: undefined, machines, others: { 'office-id': office } })
+    counting(office, [2])
+    expect(await closeCommand(['--machine', 'office', 'kid'], h.deps)).toBe(EXIT.failed)
+    expect(h.err).toEqual(['kid: 2 background commands running; --now closes anyway'])
+    counting(office, [0])
+    expect(await closeCommand(['--machine', 'office', 'kid'], h.deps)).toBe(EXIT.ok)
+    expect(office.requests.filter((r) => r.type === 'agent_close').map((r) => r.payload.mode)).toEqual(['inspect', 'inspect', 'idle'])
+    expect(d.requests.some((r) => r.type === 'agent_close')).toBe(false)
   })
 
   it('closes one harness at a time, by name', async () => {
@@ -1076,6 +1218,28 @@ describe('harness new, run by an agent', () => {
     setAgentSettingsForTest(dir, { agentsStartAgents: true })
     signedOutForTest()
     await expect((await agentOrigin(harness(d).deps))!.check()).rejects.toThrow(AGENTS_START_AGENTS_OFF)
+  })
+
+  it('lets the Hachi harness start harnesses while the account has Hachi on, and no other agent; records the start as Hachi\'s', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('hachi', { engine: 'claude', dsh: HACHI_ID }), frame('lead', { engine: 'claude' })]
+    setAgentSettingsForTest(dir, { agentsStartAgents: false, hachi: true })
+    const hachi = (await agentOrigin(harness(d, { pane: '%hachi' }).deps))!
+    await expect(hachi.check()).resolves.toBeUndefined()
+    expect(hachi.hachi).toBe(true)
+    // Its starts say so in the ledger: the machine a harness runs on reads it for `harness tell` and the hand-over.
+    hachi.pending!('m', { creationId: 'c1', name: 'api-fix', engine: 'codex' })
+    await hachi.created('m', { id: 'kid', name: 'api-fix' }, 'c1')
+    const ledger = new Ledger(ledgerPath(dir))
+    expect(ledger.parentOf({ machineId: 'm', agentId: 'kid' })?.by).toEqual({ machineId: 'm', agentId: 'hachi', name: 'hachi', engine: 'claude', hachi: true })
+    expect(ledger.pendingOf({ machineId: 'm', agentId: 'hachi' }, NOW)).toEqual([])
+    // Turning Hachi on is the person's yes to Hachi alone: any other agent still needs agents-start-agents.
+    const lead = (await agentOrigin(harness(d).deps))!
+    await expect(lead.check()).rejects.toMatchObject({ code: 'TURNED_OFF' })
+    expect(lead).not.toHaveProperty('hachi')
+    // Hachi off: Hachi is an agent like any other.
+    setAgentSettingsForTest(dir, { agentsStartAgents: false, hachi: false })
+    await expect((await agentOrigin(harness(d, { pane: '%hachi' }).deps))!.check()).rejects.toMatchObject({ code: 'TURNED_OFF' })
   })
 
   it('names its own harness as the one that started the new one; an agent outside Harness names none', async () => {
@@ -2013,6 +2177,23 @@ describe('harness tell', () => {
       at: NOW, by: { machineId: 'm', agentId: 'lead' }, told: { machineId: 'm', agentId: 'kid' }, probe: 'Now add tests.' })
   })
 
+  it('lets the Hachi harness tell what it started while the account has Hachi on, and no other agent', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('hachi', { engine: 'claude', dsh: HACHI_ID }), frame('lead', { engine: 'claude' }), frame('kid'), frame('other')]
+    const r = told()
+    started(new Ledger(ledgerPath(dir)), 'hachi', 'kid')
+    started(new Ledger(ledgerPath(dir)), 'lead', 'other')
+    setAgentSettingsForTest(dir, { agentsTellAgents: false, hachi: true })
+    expect(await tellCommand(['kid', '--', 'Add a test.'], harness(d, { record: r.record, pane: '%hachi' }).deps)).toBe(EXIT.ok)
+    expect(r.calls).toEqual([['m', { action: 'tell', pane: '%hachi', machine: 'studio', agentId: 'kid', text: 'Add a test.' }]])
+    const lead = harness(d, { record: r.record })
+    expect(await tellCommand(['other', '--', 'x'], lead.deps)).toBe(EXIT.refused)
+    expect(lead.err.join('\n')).toContain('agents-tell-agents')
+    setAgentSettingsForTest(dir, { agentsTellAgents: false, hachi: false })
+    expect(await tellCommand(['kid', '--', 'x'], harness(d, { record: r.record, pane: '%hachi' }).deps)).toBe(EXIT.refused)
+    expect(r.calls).toHaveLength(1)
+  })
+
   it('on another machine, says who tells it: that machine checks its own record', async () => {
     const d = new FakeDaemon(), far = new FakeDaemon('m2')
     d.frames = [frame('lead', { engine: 'claude' })]
@@ -2279,16 +2460,16 @@ describe('wait and watch on pushed events', () => {
   /** A daemon that pushes the state events of the harnesses a tool names (`agents_watch`, core/toolWatches.ts). */
   class PushingDaemon extends FakeDaemon {
     watched: string[][] = []
-    heard: ((agentId: string) => void) | null = null
+    heard: ((agentId: string, event: PushedEvent) => void) | null = null
     refuse = false
-    async watch(agentIds: string[], heard: (agentId: string) => void): Promise<boolean> {
+    async watch(agentIds: string[], heard: (agentId: string, event: PushedEvent) => void): Promise<boolean> {
       this.requests.push({ type: 'agents_watch', payload: { agentIds } })
       if (this.refuse) return false
       this.watched.push([...agentIds])
       this.heard = heard
       return true
     }
-    push(agentId: string): void { this.heard?.(agentId) }
+    push(agentId: string): void { this.heard?.(agentId, { type: 'agent_activity', payload: { agentId } }) }
   }
   const lists = (d: FakeDaemon) => d.requests.filter((r) => r.type === 'agents_list').length
   const answered = (d: FakeDaemon, id: string) => d.pages.set(`s-${id}`, [{ events: [ev('user_message', { content: 'fix it' }), ev('tool_start'), ev('text_delta', { content: 'Fixed.' }), ev('done')], hasMore: false }])
@@ -2433,6 +2614,39 @@ describe('wait and watch on pushed events', () => {
     // A push for each change, one look to confirm the idle one, then nothing but the backstop, a minute at a time.
     expect(slept.slice(0, 4)).toEqual([60_000, 60_000, 60_000, 1_000])
     expect(slept.slice(4, -1).every((ms) => ms === 60_000)).toBe(true)
+  })
+
+  it('watch says background while commands run, again when their number changes, and done once none does', async () => {
+    const d = new PushingDaemon()
+    d.frames = [frame('kid')]
+    answered(d, 'kid')
+    counting(d, [2, 2, 1, 1, 0, 0])
+    const h = harness(d)
+    const slept: number[] = []
+    h.deps.sleep = async (ms) => { slept.push(ms); h.advance(ms) }
+    expect(await watchCommand(['kid', '--json', '--timeout', '8s'], h.deps)).toBe(EXIT.timeout)
+    const said = h.out.map((l) => JSON.parse(l))
+    expect(said.map((l) => [l.event, l.state, l.backgroundCommands])).toEqual([['background', 'idle', 2], ['background', 'idle', 1], ['done', 'idle', 0]])
+    expect(said[0].summary).toBeUndefined()
+    expect(said[2].summary).toBe('Fixed.')
+    // Their end is pushed by nothing: a look every interval until it is done, then the backstop (cut by the timeout).
+    expect(slept).toEqual([1_000, 1_000, 1_000, 1_000, 1_000, 3_000])
+  })
+
+  it('watch says the count in words, and done as before for a daemon from before the field', async () => {
+    const d = new PushingDaemon()
+    d.frames = [frame('kid')]
+    answered(d, 'kid')
+    counting(d, [2])
+    const text = harness(d)
+    expect(await watchCommand(['kid', '--timeout', '2s'], text.deps)).toBe(EXIT.timeout)
+    expect(text.out).toEqual(['12:00:00Z kid: background: 2 background commands running'])
+    counting(d, [undefined])
+    const old = harness(d)
+    expect(await watchCommand(['kid', '--json', '--timeout', '2s'], old.deps)).toBe(EXIT.timeout)
+    const said = old.out.map((l) => JSON.parse(l))
+    expect(said.map((l) => l.event)).toEqual(['done'])
+    expect(said[0].backgroundCommands).toBeNull()
   })
 
   it('watch looks every interval at a cloud harness, or on a daemon too old to push', async () => {
@@ -3189,8 +3403,8 @@ describe('harness show --work (the result in facts, read on the machine that own
 describe('harness watch --mine (one stream for every harness the caller started, on every machine)', () => {
   class PushingDaemon extends FakeDaemon {
     watched: string[][] = []
-    heard: ((agentId: string) => void) | null = null
-    async watch(agentIds: string[], heard: (agentId: string) => void): Promise<boolean> {
+    heard: ((agentId: string, event: PushedEvent) => void) | null = null
+    async watch(agentIds: string[], heard: (agentId: string, event: PushedEvent) => void): Promise<boolean> {
       this.watched.push([...agentIds])
       this.heard = heard
       return true

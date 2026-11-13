@@ -140,6 +140,23 @@ describe('Swarm permission mode', () => {
       : request(type, payload, ms))
     expect(await inspectCapacity(await f.open() as never, f.start.request)).toMatchObject({ allowed: true, engine: { installed: true, signedIn: false } })
   })
+  // The probe is the edge host's (the audit of 2026-11-12). Asked as that process goes it is not answered, and the start
+  // said "not installed" of an engine that was there.
+  it.each([
+    ['its service was down', async () => ({ error: 'SERVICE_UNAVAILABLE', service: 'engineProbe', retryable: true })],
+    ['it was not answered in time', async () => { throw new Error('timed out') }],
+  ])('refuses a start whose engine could not be checked (%s) as not verified, never as not installed', async (_why, answer) => {
+    const f = fixture(), request = f.request.getMockImplementation()!
+    f.request.mockImplementation(async (type, payload, ms) => type === 'engines_probe' ? answer() : request(type, payload, ms))
+    const inspected = await inspectCapacity(await f.open() as never, f.start.request)
+    expect(inspected).toMatchObject({ allowed: false, engine: null })
+    expect(inspected.reasons).toEqual(['The selected agent engine could not be verified on this machine.'])
+  })
+  it('still says an engine the probe named as missing is not installed', async () => {
+    const f = fixture(), request = f.request.getMockImplementation()!
+    f.request.mockImplementation(async (type, payload, ms) => type === 'engines_probe' ? { engines: [{ engine: 'codex', installed: true }] } : request(type, payload, ms))
+    expect((await inspectCapacity(await f.open() as never, f.start.request)).reasons).toEqual(['The selected agent engine is not installed on this machine.'])
+  })
   // Each agent starts in Auto-approve, as a new agent in a regular tab does (anh Dee, 2026-11-12). In its owner's own default,
   // Codex refused every ask to leave its sandbox, and the rehearsal's Codex builder could do nothing (2026-11-11). A mode an
   // older backend still relays is the PM's, not the person's, so it is not used: never full mode (task #4215).

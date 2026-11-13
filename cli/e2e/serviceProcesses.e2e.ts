@@ -9,12 +9,13 @@
  * (or parks it, when it keeps crashing), every service in it connected again.
  */
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
+import { Ledger, ledgerPath } from '../src/agentClient/ledger.js'
 import { fakeJwt, installFakeGrid } from '../src/lib/__fixtures__/fakeGrid.js'
 
 type Engine = 'claude' | 'codex'
@@ -253,6 +254,68 @@ describe('the edge host: several services in one process of their own', () => {
     await until('every edge service to connect again', () => edgeConnections(d) >= 2 || null, 30_000, 200)
     await until('the edge host to answer again', () => edgeAnswers(client).then((ok) => ok || null), 30_000, 500)
     expect(edgePids(d).some((pid) => !before.includes(pid))).toBe(true)
+    expect(d.coresStarted()).toBe(1)
+    client.close()
+  })
+
+  // The probe of this machine's engines left the core's process for this one (the audit of 2026-11-12): a full
+  // probe starts up to sixteen login shells.
+  it('names the engines here, and a probe asked while it is down waits for it to be back', async () => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const connected = () => d.log().split('[services] engineProbe connected').length - 1
+    await until('the engine probe to connect to the core', () => connected() >= 1 || null, 30_000, 200)
+    const installed = async () => {
+      const answer = await client.request('engines_probe', { engines: ['claude', 'codex'] }, 60_000)
+      expect(answer.error, JSON.stringify(answer)).toBeUndefined()
+      return answer.engines.map((entry: Record<string, any>) => [entry.engine, entry.installed])
+    }
+    expect(await installed()).toEqual([['claude', true], ['codex', true]])
+    // A Swarm told nothing would take it for no engine here (superTabs/start.ts): asked while the host is gone,
+    // the answer waits for the one the master starts.
+    const before = edgePids(d)
+    expect(before).toHaveLength(1)
+    for (const pid of before) process.kill(pid, 'SIGKILL')
+    await until('the core to see the edge host gone', async () => (await client.request('fs_list_dir', {}, 30_000)).error === 'SERVICE_UNAVAILABLE' || null, 30_000, 50)
+    expect(await installed()).toEqual([['claude', true], ['codex', true]])
+    expect(connected()).toBe(2)
+    expect(edgePids(d).some((pid) => !before.includes(pid))).toBe(true)
+    expect(d.coresStarted()).toBe(1)
+    client.close()
+  })
+
+  // A delete erases the opening words of what the harness was told (`harness tell`), kept in the agent ledger. The
+  // agent cleanup does it here (the audit of 2026-11-12): the core never reads that file, nor waits on its lock.
+  it('a delete erases what the harness was told through the agent cleanup, and is refused with nothing deleted while it cannot', async () => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, 'claude', 'delete-told')
+    await turn(client, agent.id, 'a turn to delete')
+    await until('every edge service to connect', () => edgeConnections(d) >= 1 && d.log().includes('[services] agentCleanup connected') || null, 30_000, 200)
+    const ledger = new Ledger(ledgerPath(d.dataDir))
+    const told = (agentId: string, probe: string) => ledger.append({ at: Date.now(), by: { machineId: 'm', agentId: 'lead' }, told: { machineId: 'm', agentId }, probe })
+    told(agent.id, 'the words of a tell')
+    told('another', 'what another harness was told')
+    const target = { agentId: agent.id, sessionId: agent.sessionId, createdAt: Date.parse(agent.createdAt) }
+    const remove = async () => {
+      const review = await client.request('agent_purge', { ...target, mode: 'inspect' }, 60_000)
+      return client.request('agent_purge', { ...target, mode: 'delete', reviewId: review.reviewId }, 90_000)
+    }
+    // Held still: the core waits its ten seconds for the erase, asked before anything is deleted, and refuses the
+    // delete in words the person can act on. The conversation is still there.
+    const held = edgePids(d)
+    expect(held).toHaveLength(1)
+    for (const pid of held) process.kill(pid, 'SIGSTOP')
+    const refused = await remove()
+    expect(refused, JSON.stringify(refused)).toMatchObject({ error: 'DELETE_REFUSED', sessionDeleted: false,
+      detail: 'Harness could not erase what this harness was told, so nothing was deleted. The harness is stopped; refresh before trying again.' })
+    expect((await row(client, agent.id))?.sessionId).toBe(agent.sessionId)
+    for (const pid of held) { try { process.kill(pid, 'SIGCONT') } catch { /* the master's watch had killed it already */ } }
+    // Asked again once the cleanup answers: erased, with every other line kept, and the harness is gone.
+    await until('the delete to go through', async () => (await remove()).deleted === true || null, 90_000, 1_000)
+    const kept = readFileSync(ledgerPath(d.dataDir), 'utf8')
+    expect(kept).not.toContain('the words of a tell')
+    expect(kept).toContain('what another harness was told')
     expect(d.coresStarted()).toBe(1)
     client.close()
   })

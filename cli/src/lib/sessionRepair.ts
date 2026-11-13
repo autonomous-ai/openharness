@@ -51,7 +51,7 @@ import { NativePaths } from '../engines/kit/nativePaths.js'
  * the new agent came up wearing the dead session's id (measured — `/exit`, relaunch, and repair re-bound
  * `6899ff76`). Whatever is picked here must belong to the process running NOW.
  */
-const START_SLACK_MS = 5_000
+export const START_SLACK_MS = 5_000
 /** Directories to walk per engine root. Deep enough for codex's <year>/<month>/<day> layout. */
 const MAX_DEPTH = 4
 const MAX_FILES = 400

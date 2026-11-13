@@ -43,6 +43,7 @@ import '../companions/coding_memory_connection.dart';
 import 'first_arrival.dart';
 import 'harness_monitor_controller.dart';
 import 'essential_harness_controller.dart';
+import 'hachi.dart';
 import 'agent_handoff_file.dart';
 import 'agent_switch_handoff.dart';
 import '../agent_messages/agent_messages.dart';
@@ -579,7 +580,7 @@ class MachineState {
   // Which engines this machine actually has, as this machine answered it. Kept
   // on MachineState rather than globally because that is the whole point: two
   // machines on one account hold different engines, and the Docker rig holds
-  // exactly one. See `engines_probe` in the CLI's backendSocket.
+  // exactly one. See `engines_probe` in the CLI (cli/src/services/engineProbe.ts).
   final MachineEngines engines = MachineEngines();
   // Which domain-specific harnesses this machine has or could install, as it
   // answered `dsh_list`. Per machine for the same reason `engines` is: an
@@ -1621,12 +1622,24 @@ class AppNotifier extends ChangeNotifier {
     );
   }
 
-  late final experimentalFeatures = ExperimentalFeaturesStore(
-    pollInterval: kUnderTest
-        ? Duration.zero
-        : ExperimentalFeaturesStore.safetyNet,
-    seen: inSight,
-  );
+  late final experimentalFeatures =
+      ExperimentalFeaturesStore(
+          pollInterval: kUnderTest
+              ? Duration.zero
+              : ExperimentalFeaturesStore.safetyNet,
+          seen: inSight,
+        )
+        ..onTurned = _experimentTurned
+        // Off, Hachi's tab goes as the switch does, in every window.
+        ..addListener(() => hachi.settle());
+
+  void _experimentTurned(ExperimentalFeature feature, bool on) {
+    if (feature != ExperimentalFeature.hachi) return;
+    productMeasurement.hachiCounted(
+      on ? HachiMeasure.switchOn : HachiMeasure.switchOff,
+    );
+  }
+
   final ExperimentalSettingsTransport? experimentalSettingsTransport;
   ApiClient? _experimentApi;
   ExperimentalSettingsTransport? _apiExperimentTransport;
@@ -3156,6 +3169,20 @@ class AppNotifier extends ChangeNotifier {
     selectSwarm(swarm.id);
   }
 
+  /// Hachi's tab, first in the row and empty, selected ([HachiController]).
+  void openHachiTab() {
+    if (!swarms.any((swarm) => swarm.isHachi)) {
+      swarms.insert(
+        0,
+        Swarm(id: hachiTabId, name: hachiEssential.name, nameIsCustom: true),
+      );
+    }
+    selectSwarm(hachiTabId);
+  }
+
+  /// Hachi's tab gone, as its switch went off: its harness is the daemon's to stop.
+  Future<void> closeHachiTab() => closeSwarm(hachiTabId, remember: false);
+
   /// The Harness Store takes over the tab it was opened from — the New Tab
   /// whose start page carries the card — exactly as the first agent takes
   /// over a New Tab. One store tab per window, like one New Tab: when it is
@@ -3809,10 +3836,14 @@ class AppNotifier extends ChangeNotifier {
   /// Command-number follows the current visual tab order, retaining each tab's
   /// focused pane. A missing position is a no-op, never a pane selection.
   void selectSwarmByIndex(int index) {
-    final view = profileSwarms;
+    final view = numberedSwarms;
     if (index < 0 || index >= view.length) return;
     selectSwarm(view[index].id);
   }
+
+  /// The tabs ⌘1…⌘9 reach, in order: every tab this profile shows but Hachi's, which stands before ⌘1.
+  List<Swarm> get numberedSwarms =>
+      profileSwarms.where((swarm) => !swarm.isHachi).toList();
 
   void stepSwarm(int delta) {
     final view = profileSwarms;
@@ -3842,7 +3873,7 @@ class AppNotifier extends ChangeNotifier {
     final clean = name.trim();
     if (clean.isEmpty) return;
     final swarm = swarms.where((s) => s.id == id).firstOrNull;
-    if (swarm == null) return;
+    if (swarm == null || swarm.isHachi) return;
     swarm.name = clean.length > 80 ? clean.substring(0, 80) : clean;
     swarm.nameIsCustom = true;
     _persistLayout();
@@ -3852,9 +3883,11 @@ class AppNotifier extends ChangeNotifier {
   void reorderSwarm(String id, int destination) {
     final view = List<Swarm>.of(profileSwarms);
     final from = view.indexWhere((swarm) => swarm.id == id);
-    if (from < 0) return;
+    if (from < 0 || view[from].isHachi) return;
     final moved = view.removeAt(from);
-    view.insert(destination.clamp(0, view.length), moved);
+    // Nothing goes before Hachi's tab.
+    final first = view.isNotEmpty && view.first.isHachi ? 1 : 0;
+    view.insert(destination.clamp(first, view.length), moved);
     if (view.length == swarms.length) {
       swarms
         ..clear()
@@ -3871,7 +3904,12 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> closeSwarm(String id, {bool persist = true}) async {
+  /// [remember] false closes it out of Recently Closed: Hachi's tab, which only the switch closes.
+  Future<void> closeSwarm(
+    String id, {
+    bool persist = true,
+    bool remember = true,
+  }) async {
     if (cancelSwarmDraft(id)) return;
     final index = swarms.indexWhere((s) => s.id == id);
     if (index < 0) return;
@@ -3901,23 +3939,25 @@ class AppNotifier extends ChangeNotifier {
     if (removed.superTabId != null && !_disposed) {
       _superTabClosures.add(historyId);
     }
-    _rememberClosed(
-      ClosedSwarm(
-        removed,
-        historyId: historyId,
-        index: index,
-        replacement: replacement,
-        engine: removed.panes.length == 1
-            ? stateOf(removed.panes.single.machineId)?.agents
-                      .where(
-                        (agent) => agent.id == removed.panes.single.agentId,
-                      )
-                      .firstOrNull
-                      ?.identityEngine ??
-                  removed.panes.single.session?.engineId
-            : null,
-      ),
-    );
+    if (remember) {
+      _rememberClosed(
+        ClosedSwarm(
+          removed,
+          historyId: historyId,
+          index: index,
+          replacement: replacement,
+          engine: removed.panes.length == 1
+              ? stateOf(removed.panes.single.machineId)?.agents
+                        .where(
+                          (agent) => agent.id == removed.panes.single.agentId,
+                        )
+                        .firstOrNull
+                        ?.identityEngine ??
+                    removed.panes.single.session?.engineId
+              : null,
+        ),
+      );
+    }
     if (_activeSwarmId == id) {
       // The next full-list tab may belong to another computer. Land on the
       // next tab this profile still shows. With none left the profile shows
@@ -3959,7 +3999,8 @@ class AppNotifier extends ChangeNotifier {
   /// views; ordinary tabs stop a session only when its last view closes.
   Future<void> requestCloseSwarm(String id) {
     final tab = swarms.where((s) => s.id == id).firstOrNull;
-    if (tab == null) return Future.value();
+    // Hachi's tab has no ×, and ⌘W there does nothing: only its switch closes it.
+    if (tab == null || tab.isHachi) return Future.value();
     final captured = tab.panes.toList();
     return _afterCloseGuards(
       captured,
@@ -3996,6 +4037,7 @@ class AppNotifier extends ChangeNotifier {
   Future<void> requestClosePane(int paneId) {
     final tab = activeSwarm;
     if (tab.isSuperTab && tab.superTabId != null) return Future.value();
+    if (tab.isHachi) return Future.value();
     final pane = tab.panes.where((p) => p.id == paneId).firstOrNull;
     if (pane == null) return Future.value();
     if (tab.isCompanions || tab.isDevices) return requestCloseSwarm(tab.id);
@@ -12815,6 +12857,7 @@ class AppNotifier extends ChangeNotifier {
   /// Model Manager keeps the original package ID for installed workspaces.
   static const gridHarness = 'autonomous/autonomous-grid';
   late final harnessMonitor = HarnessMonitorController(this);
+  late final hachi = HachiController(this);
   late final _essentials = <String, EssentialHarnessController>{
     harnessMonitorId: harnessMonitor,
   };
@@ -14742,11 +14785,13 @@ class AppNotifier extends ChangeNotifier {
     }
   };
 
+  /// [title] names the notice when it is not the agent's own news (Hachi's finished goal).
   void _raiseAlert(
     MachineState machine,
     String agentId,
     AlertKind kind, {
     String? message,
+    String? title,
   }) {
     // Nothing at all for the agent on screen in front of you. A sound, a banner
     // and a count are three ways of saying "look over here", and all three are
@@ -14778,9 +14823,11 @@ class AppNotifier extends ChangeNotifier {
       agentId: agentId,
       // The agent's own name, and its id only when it has none — a banner
       // naming a uuid tells nobody which pane to look at.
-      title: (agent?.name.trim().isNotEmpty ?? false)
-          ? agent!.name.trim()
-          : agentId,
+      title:
+          title ??
+          ((agent?.name.trim().isNotEmpty ?? false)
+              ? agent!.name.trim()
+              : agentId),
       kind: kind,
       at: DateTime.now(),
     );
@@ -21532,6 +21579,9 @@ class AppNotifier extends ChangeNotifier {
     for (final (index, swarm) in localOnly) {
       ordered.insert(index.clamp(0, ordered.length), swarm);
     }
+    // Hachi's tab stands first, wherever a computer that did not know it put it.
+    final hachiAt = ordered.indexWhere((swarm) => swarm.isHachi);
+    if (hachiAt > 0) ordered.insert(0, ordered.removeAt(hachiAt));
     final placed = <String>{};
     final duplicates = <String>[];
     swarms.clear();
@@ -21593,6 +21643,7 @@ class AppNotifier extends ChangeNotifier {
     _announceAppFocus();
     notifyListeners();
     _placeSharedPanesSoon();
+    hachi.settle();
   }
 
   void _ensureProfileFocus() {
@@ -22957,6 +23008,16 @@ class AppNotifier extends ChangeNotifier {
             );
             unawaited(_syncPendingDevices());
           }
+        }
+        break;
+      case 'hachi_goal_done':
+        // `harness goal done` on Hachi's home: the one thing Hachi notifies, never for the pane in view.
+        final hachiId = payload['agentId'];
+        if (hachiId is! String || _isBeingWatched(machineId, hachiId)) {
+          break;
+        }
+        if (hachi.goalDone(payload) case final title?) {
+          _raiseAlert(machine, hachiId, AlertKind.done, title: title);
         }
         break;
       case 'desk_changed':

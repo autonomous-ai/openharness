@@ -9,6 +9,7 @@
  */
 import { existsSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import { BUNDLED_HARNESSES } from './builtinIds.js'
 import { isViewerPackage, readDshManifest, type DshManifest } from './manifest.js'
 import { skillDirsIn } from './materialize.js'
 
@@ -92,6 +93,9 @@ export function checkDsh(path: string): CheckResult {
       // A skills root that setup populates (upstream skills fetched at install, not vendored — the
       // shape a project without a licence to copy forces) is absent on a plain checkout by design.
       if (manifest.toolchain?.setup) add('warn', `agent.skills ${root} is not in the checkout; toolchain.setup must create it, or the agent gets no skills`)
+      // A package the release bundles is put together by its build: Hachi's skill is the harness plugin's one copy,
+      // which the build adds (scripts/lib/modelManagerBundle.mjs `readHachiBundle`), and the build fails without it.
+      else if (BUNDLED_HARNESSES.some((harness) => harness.id === manifest.id)) add('warn', `agent.skills ${root} is not in the checkout; the release build adds it`)
       else add('fail', `agent.skills ${root} is not a directory`)
       continue
     }

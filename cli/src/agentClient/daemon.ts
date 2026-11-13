@@ -13,7 +13,8 @@ import { readAuthSession } from '../lib/authSession.js'
 import { localWsTarget } from '../lib/localTransport.js'
 import { daemonPipe, type LocalDaemonOptions } from '../lib/windows/daemonPipe.js'
 import { pipeWebSocket } from '../lib/windows/pipeClient.js'
-import { computerId, daemonUnreachableText } from '../lib/daemonState.js'
+import { computerId } from '../lib/daemonState.js'
+import { daemonUnreachableText } from '../lib/unreachable.js'
 import { paneOwner, sendPane } from '../messages/command.js'
 
 export class AgentClientError extends Error {
@@ -39,12 +40,21 @@ export interface Daemon {
    * state event is about. False from a daemon too old to push to tools, or one that refused the watch; the caller then
    * looks for itself. A line a test makes may have none.
    */
-  watch?(agentIds: string[], heard: (agentId: string) => void): Promise<boolean>
+  watch?(agentIds: string[], heard: (agentId: string, event: PushedEvent) => void): Promise<boolean>
+  /**
+   * Follows [agentIds] on the machine this line reaches by what it pushes (`harness_watch`, gateway/harnessWatch.ts):
+   * names and states only, [heard] told each `harness_event`. The answer: the lease and what each is doing now, or the
+   * refusal by name. A lease lasts five minutes; asking again renews it. A line a test makes may have none.
+   */
+  harnessWatch?(agentIds: string[], heard: (agentId: string, event: PushedEvent) => void): Promise<Record<string, unknown>>
   close(): void
 }
 
-/** What the daemon pushes a watch (core/toolWatches.ts). */
-const PUSHED = new Set(['agent_activity', 'turn_ended', 'commander_question', 'commander_question_close', 'agent_deleted'])
+/** What the daemon pushes a watch (core/toolWatches.ts), and another machine a harness watch (gateway/harnessWatch.ts). */
+const PUSHED = new Set(['agent_activity', 'turn_ended', 'commander_question', 'commander_question_close', 'agent_deleted', 'harness_event'])
+
+/** A pushed event as a listener hears it: its type and payload. */
+export interface PushedEvent { type: string; payload: Record<string, unknown> }
 
 /** The least of a WebSocket this needs, so a test can hand in a fake. */
 export interface ClientSocket {
@@ -89,7 +99,7 @@ export async function openDaemon(where: Where, machineId: string = where.machine
   return new Promise((resolveOpen, rejectOpen) => {
     const waiting = new Map<string, { done: (payload: Record<string, unknown>) => void; fail: (error: Error) => void; timer: NodeJS.Timeout }>()
     let ready = false, closed = false
-    let heard: ((agentId: string) => void) | null = null
+    let heard: ((agentId: string, event: PushedEvent) => void) | null = null
     const failAll = (error: AgentClientError): void => {
       closed = true
       for (const entry of waiting.values()) { clearTimeout(entry.timer); entry.fail(error) }
@@ -142,6 +152,10 @@ export async function openDaemon(where: Where, machineId: string = where.machine
             heard = null
             return false
           },
+          harnessWatch: async (agentIds, listener) => {
+            heard = listener
+            return await request('harness_watch', { agentIds })
+          },
         })
         return
       }
@@ -150,7 +164,7 @@ export async function openDaemon(where: Where, machineId: string = where.machine
       if (!entry) {
         // A question's own requestId is the daemon's, never one of ours.
         const agentId = frame.agentId ?? frame.payload?.agentId
-        if (heard && PUSHED.has(frame.type ?? '') && typeof agentId === 'string' && agentId) heard(agentId)
+        if (heard && PUSHED.has(frame.type ?? '') && typeof agentId === 'string' && agentId) heard(agentId, { type: frame.type!, payload: frame.payload ?? {} })
         return
       }
       waiting.delete(requestId as string)

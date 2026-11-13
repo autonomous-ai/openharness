@@ -29,6 +29,7 @@ import '../shared/theme/appearance_prefs_store.dart';
 import '../shortcuts/app_shortcuts.dart' hide TerminalKey;
 import '../state/account_devices.dart' show registerRefusalSentence;
 import '../state/app_state.dart';
+import '../state/hachi.dart';
 import '../state/harness_sessions.dart' show heldLaunchDetail;
 import '../state/pane_preset.dart';
 import '../state/pane_arrangement.dart';
@@ -1836,6 +1837,11 @@ class _PaneContent extends StatelessWidget {
         machine != null &&
         (machine.nodeOnline == false ||
             (machine.isLocalMachine && !machine.usesLocalTransport));
+    // Hachi's home, asleep: said where it lives (docs/design/2026-11-12-hachi.md).
+    final hachiAsleep =
+        machine != null &&
+        identical(notifier.hachi.home, pane) &&
+        identical(notifier.hachi.asleepHome, machine);
     // On its way back rather than gone: worded where the host labels pane
     // states (the web), and not typed into until it is back.
     final dialing =
@@ -1930,6 +1936,12 @@ class _PaneContent extends StatelessWidget {
               ? () => showDeviceListReview(context, notifier)
               : null,
           banner: review,
+        );
+      } else if (hachiAsleep) {
+        notice = terminalNotice(
+          label: 'Asleep',
+          icon: AppIcons.cloudOff,
+          detail: HachiController.asleepLine(machine.machine.displayName),
         );
       } else if (offline) {
         notice = terminalNotice(
@@ -2155,6 +2167,14 @@ class _PaneContent extends StatelessWidget {
         busy: waiting || retrying,
         actionLabel: waiting ? null : 'Retry',
         onAction: waiting ? null : notifier.retryMachines,
+      );
+    }
+    if (hachiAsleep) {
+      return _PaneStatus(
+        activity: activityMark,
+        title: hachiEssential.name,
+        icon: AppIcons.cloudOff,
+        message: HachiController.asleepLine(machine.machine.displayName),
       );
     }
     if (needsLink) {

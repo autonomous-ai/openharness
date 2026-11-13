@@ -16,6 +16,29 @@ it('grants typed deliveries only in its connected service namespace and refuses 
   expect(await processCoreApi('/data', 'worker').turns.leaseDeliveries('worker', {})).toBe(false)
 })
 
+it('asks the core to count Hachi\'s counters, never waiting on it nor throwing when it cannot', async () => {
+  const ask = vi.fn(async (): Promise<Record<string, unknown>> => ({ ok: true }))
+  const api = processCoreApi('/data', 'messages', { ask })
+  api.count!('hachi_wake_done')
+  expect(ask).toHaveBeenCalledWith('count', { metric: 'hachi_wake_done' })
+  ask.mockRejectedValueOnce(new Error('Disconnected'))
+  expect(() => api.count!('hachi_turns_wake')).not.toThrow()
+  await Promise.resolve()
+  expect(() => processCoreApi('/data', 'messages').count!('hachi_turns_wake')).not.toThrow()
+})
+
+it('asks the core to tell the windows a goal Hachi closed, never waiting on it nor throwing when it cannot', async () => {
+  const ask = vi.fn(async (): Promise<Record<string, unknown>> => ({ ok: true }))
+  const api = processCoreApi('/data', 'goals', { ask })
+  const done = { agentId: 'hachi', goalId: 'g1', title: 'flaky login test' }
+  api.clients.hachiGoalDone!(done)
+  expect(ask).toHaveBeenCalledWith('hachi_goal_done', done)
+  ask.mockRejectedValueOnce(new Error('Disconnected'))
+  expect(() => api.clients.hachiGoalDone!(done)).not.toThrow()
+  await Promise.resolve()
+  expect(() => processCoreApi('/data', 'goals').clients.hachiGoalDone!(done)).not.toThrow()
+})
+
 it('asks the core what holds a delivery from its pane, and hears nothing from a core that cannot say', async () => {
   const ask = vi.fn(async (): Promise<Record<string, unknown>> => ({ hold: 'team_waiting_draft' }))
   const api = processCoreApi('/data', 'superTabs', { ask })
@@ -145,8 +168,8 @@ describe('the core API a light service runs on in its own process', () => {
     await expect(withSummaries.agents.summaries(['a1'])).resolves.toEqual({})
     expect(api.account.signedIn()).toBe(false)
     expect(api.account.environment()).toBe('')
-    await expect(api.account.machines()).resolves.toEqual({ status: 503, body: { error: 'SERVICE_UNAVAILABLE' } })
-    // What the devices' process starts from before it asks the core for the list.
+    // What the devices' process starts from before it asks the core for the list, and all any other process has.
+    await expect(api.account.machines()).resolves.toEqual({ status: 503, body: {} })
     await expect(UNASKED.account.machines()).resolves.toEqual({ status: 503, body: {} })
     api.clients.sendLocal({ type: 'dial_focus', payload: {} })
     expect(api.clients.sendToWindow('w1', { type: 'dial_form', payload: {} })).toBe(false)
@@ -191,15 +214,17 @@ describe('the core API a light service runs on in its own process', () => {
     expect(listeners).toHaveLength(1)
   })
 
-  it('lists the account\'s machines the way it reads the backend, and no more than that read may ask', async () => {
-    const ask = vi.fn(async (_query: string, _payload: Record<string, unknown>): Promise<Record<string, unknown>> => ({ status: 200, body: { data: { machines: [{ machineId: 'm1', name: 'remote-1' }] } } }))
+  it('reads the backend through the core, and says a refusal as the core said it', async () => {
+    const ask = vi.fn(async (_query: string, _payload: Record<string, unknown>): Promise<Record<string, unknown>> => ({ status: 200, body: { data: { tabs: [] } } }))
     const api = processCoreApi('/data', 'superTabs', { ask })
-    expect(await api.account.machines()).toEqual({ status: 200, body: { data: { machines: [{ machineId: 'm1', name: 'remote-1' }] } } })
+    expect(await api.account.backend('GET', '/api/super-tabs/list')).toEqual({ status: 200, body: { data: { tabs: [] } } })
     expect(ask).toHaveBeenCalledOnce()
-    expect(ask).toHaveBeenCalledWith('backend', { method: 'GET', path: '/api/machines' })
-    // A service the core does not answer for (it is not an experiment) gets the core's refusal, not a list.
+    expect(ask).toHaveBeenCalledWith('backend', { method: 'GET', path: '/api/super-tabs/list' })
+    // A route its service has not declared, and a service the core does not answer for (it is not an experiment).
+    ask.mockResolvedValueOnce({ error: 'ROUTE_NOT_DECLARED' })
+    expect(await api.account.backend('GET', '/api/machines')).toEqual({ status: 502, body: { error: 'ROUTE_NOT_DECLARED' } })
     ask.mockResolvedValueOnce({ error: 'NOT_AN_EXPERIMENT' })
-    expect(await processCoreApi('/data', 'store', { ask }).account.machines()).toEqual({ status: 502, body: { error: 'NOT_AN_EXPERIMENT' } })
+    expect(await processCoreApi('/data', 'store', { ask }).account.backend('GET', '/api/super-tabs/list')).toEqual({ status: 502, body: { error: 'NOT_AN_EXPERIMENT' } })
   })
 
   it('gives the cloud agents their doors only with a core to ask, and never waits on or throws from them', async () => {

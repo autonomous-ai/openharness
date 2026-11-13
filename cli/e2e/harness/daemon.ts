@@ -83,6 +83,8 @@ export interface DaemonOptions {
   foreground?: boolean
   /** Start with these arguments to node instead (a launcher the test provides), in the daemon's environment. */
   launch?: string[]
+  /** Run the daemon on this Node instead of the test's own: a managed Node under the runtime folder. */
+  node?: string
   /** Run this bundle (an installed `cli.js`) instead of the checkout's source. */
   scriptPath?: string
   /** Keep the daemon's data folder here instead of under the throwaway root (a test volume). The fake
@@ -376,7 +378,7 @@ export class IsolatedDaemon {
     const script = bundle ? [bundle] : ['--import', 'tsx', 'src/cli.ts']
     // A process group of its own, which the core and the services join: one signal reaches all of them, whether or
     // not the master is still there, and the worker's reaper (reaper.ts) ends it should the worker go without closing it.
-    const child = spawn(process.execPath, this.options.launch ?? [...heap, ...script, ...entry], {
+    const child = spawn(this.options.node ?? process.execPath, this.options.launch ?? [...heap, ...script, ...entry], {
       cwd: CLI_ROOT, env: this.env, stdio: ['ignore', 'pipe', 'pipe'], ...ownProcessGroup(),
     })
     this.child = child

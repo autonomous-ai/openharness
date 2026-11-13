@@ -855,6 +855,11 @@ describe('E2eeManager guests', () => {
     expect(h.mgr.wrapUp(close)).toEqual(close)
     expect(h.mgr.wrapFor('g', close)).toEqual(close)
     expect(h.mgr.wrapUp({ payload: {} })).toEqual({ payload: {} })
+    // A goal Hachi closed (`hachi_goal_done`, services/goals.ts) carries the person's own words: sealed for the group.
+    const done = { agentId: 'hachi', goalId: 'g1', title: 'flaky login test' }
+    const goal = h.mgr.wrapUp({ type: 'hachi_goal_done', payload: done })
+    expect(JSON.stringify(goal.payload)).not.toContain('flaky')
+    expect(C.unwrapPayload(owner.session!.groupKey, (goal.payload as Wrapped).__e2e, 'hachi_goal_done', undefined)).toEqual(done)
 
     // Sharing with lee ends: the key turns over, and the guest that stays is still handed a throwaway one.
     h.mgr.untrustPeer(C.b64e(other.identity.pub))

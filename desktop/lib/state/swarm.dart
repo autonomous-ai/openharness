@@ -1,6 +1,7 @@
 import 'dart:ui' show Size;
 
 import '../core/models.dart' show Agent, isAutomaticHarnessName, kUntitledPane;
+import 'desk_sync.dart' show hachiTabId;
 import 'pane_preset.dart';
 import 'pane_arrangement.dart';
 import 'terminal_pane.dart';
@@ -38,6 +39,9 @@ class Swarm {
       panes.isEmpty &&
       presets.isEmpty;
   bool get isSuperTab => kind == 'superTab';
+
+  /// Hachi's tab: first in the row, with no ×, not renamed, moved, split or shared.
+  bool get isHachi => id == hachiTabId;
   String? superTabId;
   bool get isStore => kind == 'store';
   bool get isCompanions => kind == 'companions';

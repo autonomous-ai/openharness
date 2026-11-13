@@ -16,7 +16,7 @@
  */
 
 import type { LiveEvent } from '../../lib/normalize.js'
-import { sqliteReadAll } from '../../lib/sqliteRead.js'
+import { oversizeRow, readStorePages, type StorePage } from '../../lib/sqlitePage.js'
 import {
   MAX_OUTPUT, MAX_THINKING, OC_V2_TURN_TYPES, clip, object, str, ocMessageFromV2,
   opencodeToolName, toolOutputText, toolSummary, userMessageText,
@@ -26,7 +26,6 @@ import {
 
 const ID_RE = /^[A-Za-z0-9_]+$/
 const POLL_MS = 1_000
-const MAX_BUFFER = 32 * 1024 * 1024
 
 function parseJson(text: unknown): Record<string, unknown> {
   if (typeof text !== 'string') return object(text) ?? {}
@@ -45,6 +44,8 @@ function cursorOf(msg: OcMessage): Cursor {
  * session has rows there, else from the legacy `message`/`part` tables. Either way the result is the v1 shape.
  * `after` restricts to messages strictly after that boundary (for incremental polling); a cursor with a `seq`
  * belongs to a v2 session and one without to a v1 session, so it picks the table it continues in.
+ * Read a page at a time, bounded by bytes (lib/sqlitePage.ts): one read of a session past 32 MiB was refused on every
+ * poll, so its reader never seeded and its history never loaded (#4188).
  * Read-only, with a short busy timeout, so it never contends with opencode's writer.
  * Throws `OpencodeSqliteMissing` when this machine has no way to read SQLite at all.
  */
@@ -78,20 +79,12 @@ async function loadOpencodeMessages(
  */
 async function readV2Messages(dbPath: string, sessionId: string, afterSeq: number, afterTimeCreated?: number): Promise<OcMessage[] | null> {
   const types = OC_V2_TURN_TYPES.map((type) => `'${type}'`).join(', ')
-  let sql: string
-  let params: (string | number)[]
-  if (afterTimeCreated !== undefined) {
-    sql =
-      'SELECT m.id AS mid, m.type AS mtype, m.seq AS mseq, m.time_created AS mtc, m.data AS mdata ' +
-      `FROM session_message m WHERE m.session_id = ? AND (m.time_created > ? OR (m.time_created = ? AND m.seq > ?)) AND m.type IN (${types}) ORDER BY m.time_created ASC, m.seq ASC;`
-    params = [sessionId, afterTimeCreated, afterTimeCreated, afterSeq]
-  } else {
-    sql =
-      'SELECT m.id AS mid, m.type AS mtype, m.seq AS mseq, m.time_created AS mtc, m.data AS mdata ' +
-      `FROM session_message m WHERE m.session_id = ? AND m.type IN (${types}) ORDER BY m.time_created ASC, m.seq ASC;`
-    params = [sessionId]
+  const page: StorePage = {
+    table: 'session_message', where: `t.session_id = ? AND t.type IN (${types})`, params: [sessionId],
+    key: [{ as: 'mtc', sql: 't.time_created' }, { as: 'mseq', sql: 't.seq' }],
+    columns: [{ as: 'mid', sql: 't.id' }, { as: 'mtype', sql: 't.type' }, { as: 'mdata', sql: 't.data' }],
   }
-  const result = await sqliteReadAll(dbPath, sql, params, { maxBuffer: MAX_BUFFER })
+  const result = await readStorePages(dbPath, page, afterTimeCreated !== undefined ? [afterTimeCreated, afterSeq] : null)
   if (!result.ok) {
     if (result.reason === 'missing') throw new OpencodeSqliteMissing()
     // A store with no `session_message` table (OpenCode 1) reads from the legacy tables; anything else is retried.
@@ -99,6 +92,8 @@ async function readV2Messages(dbPath: string, sessionId: string, afterSeq: numbe
   }
   const messages: OcMessage[] = []
   for (const row of result.rows) {
+    // A row past the row cap comes back without its data: left out, said once, and the read goes on past it.
+    if (Number(row.page_big)) { oversizeRow('opencode', sessionId, `seq ${row.mseq}`); continue }
     const message = ocMessageFromV2({
       id: str(row.mid), type: str(row.mtype), seq: Number(row.mseq) || 0, timeCreated: Number(row.mtc) || 0, data: parseJson(row.mdata),
     })
@@ -110,30 +105,29 @@ async function readV2Messages(dbPath: string, sessionId: string, afterSeq: numbe
 /** The legacy `message`/`part` tables: OpenCode 1's conversation. */
 async function readLegacyMessages(dbPath: string, sessionId: string, after: Cursor | null): Promise<OcMessage[] | null> {
   const bounded = !!after && ID_RE.test(after.id) && Number.isFinite(after.tc)
-  const cond = bounded
-    ? 'AND (m.time_created > ? OR (m.time_created = ? AND m.id > ?)) '
-    : ''
-  const sql =
-    'SELECT m.id AS mid, m.time_created AS mtc, m.data AS mdata, p.id AS pid, p.data AS pdata ' +
-    'FROM message m LEFT JOIN part p ON p.message_id = m.id ' +
-    `WHERE m.session_id = ? ${cond}` +
-    'ORDER BY m.time_created, m.id, p.time_created, p.id;'
-  const params = bounded
-    ? [sessionId, Math.trunc(after!.tc), Math.trunc(after!.tc), after!.id]
-    : [sessionId]
-
-  const result = await sqliteReadAll(dbPath, sql, params, { maxBuffer: MAX_BUFFER })
+  // A page's unit is a message with all of its parts, so a message is never split across pages. Its own row comes
+  // first and carries its data, once; its part rows follow in their order and carry the part alone.
+  const page: StorePage = {
+    table: 'message', where: 't.session_id = ?', params: [sessionId],
+    key: [{ as: 'mtc', sql: 't.time_created' }, { as: 'mid', sql: 't.id' }], columns: [{ as: 'mdata', sql: 't.data' }],
+    parts: {
+      table: 'part', on: 'p.message_id = t.id', order: ['ptc', 'pid'],
+      columns: [{ as: 'ptc', sql: 'p.time_created' }, { as: 'pid', sql: 'p.id' }, { as: 'pdata', sql: 'p.data' }],
+    },
+  }
+  const result = await readStorePages(dbPath, page, bounded ? [Math.trunc(after!.tc), after!.id] : null)
   if (!result.ok) {
     if (result.reason === 'missing') throw new OpencodeSqliteMissing()
     return null // db locked / transient — retry next tick
   }
-  const rows = result.rows
 
   const byId = new Map<string, OcMessage>()
   const order: string[] = []
-  for (const row of rows) {
+  for (const row of result.rows) {
     const mid = str(row.mid)
     if (!mid) continue
+    // A message past the row cap comes back as its own row alone, without data: left out, said once, read past.
+    if (Number(row.page_big)) { oversizeRow('opencode', sessionId, `id ${mid}`); continue }
     let msg = byId.get(mid)
     if (!msg) {
       const mdata = parseJson(row.mdata)

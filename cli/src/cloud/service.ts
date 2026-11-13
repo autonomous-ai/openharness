@@ -14,7 +14,9 @@ import { randomBytes } from 'node:crypto'
 import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { CloudCore, CloudPort, CloudResult, ServiceRequests } from '../core/api.js'
-import { CLOUD_AGENT_IDS, CLOUD_AGENTS, SAID_MAX, cloudAgentFrame, cloudRequestRefusal, isCloudAgent, repositoryOf, type CloudAgentId, type CloudHarness } from '../lib/cloudAgents.js'
+import { CLOUD_AGENT_IDS, CLOUD_AGENTS, SAID_MAX, cloudAgentFrame, cloudRequestRefusal, isCloudAgent, repositoryOf, type CloudAgentId, type CloudCard, type CloudHarness } from '../lib/cloudAgents.js'
+import { deriveTurnSummary } from '../lib/deviceRecap.js'
+import { splitSummary } from '../lib/recapReads.js'
 import { connectionFor, connectionsBridge, type Bridge } from './bridge.js'
 import { cursorAdapter } from './cursor.js'
 import { devinAdapter } from './devin.js'
@@ -34,9 +36,21 @@ interface Entry {
   heard: boolean
   /** The New Harness that made it (`creationId`): a retry of the same one gets this harness, never a second. */
   creationId?: string
+  /** Its last words as the dial's card reads them, and the words they were worked out from: never saved. */
+  card?: { said: string; lines: CloudCard | null }
 }
 
 export interface TranscriptMessage { id: string; from: 'agent' | 'person'; text: string; at: string }
+
+/** A cloud agent's words as the dial's card reads them (lib/deviceRecap.ts): a headline and the text under it, or null
+ *  when they hold nothing to show. Worked out here, not in the core: the words are a maker's agent's, and their markdown
+ *  is read in the process that faces it (the audit of 2026-11-12). */
+export function cloudCard(said: string): CloudCard | null {
+  const summary = deriveTurnSummary(said)
+  if (!summary) return null
+  const { recap, body } = splitSummary(summary)
+  return { recap, text: body }
+}
 
 export interface CloudServiceOptions {
   dataDir: string
@@ -122,12 +136,25 @@ export function startCloudService(options: CloudServiceOptions) {
     mkdirSync(dir, { recursive: true, mode: 0o700 })
     appendFileSync(transcriptFile(entry.harness.agentId), `${JSON.stringify(message)}\n`, { mode: 0o600 })
     entry.harness.messages += 1
-    if (message.from === 'agent') entry.harness.said = message.text.slice(0, SAID_MAX)
+    if (message.from === 'agent') {
+      entry.harness.said = message.text.slice(0, SAID_MAX)
+      // Its card is worked out as the words arrive, not as the list is published: a question reaches the core before
+      // its harness's new state does (`apply`, then `touched`), and the list must follow it with nothing in between.
+      cardOf(entry)
+    }
+  }
+
+  /** What it said last as the dial's card reads it, worked out again only when it says something new. */
+  const cardOf = (entry: Entry): CloudCard | null => {
+    const said = entry.harness.said
+    if (!said) return null
+    if (entry.card?.said !== said) entry.card = { said, lines: cloudCard(said) }
+    return entry.card.lines
   }
 
   const publish = (): void => {
     if (stopped) return
-    options.core.publish([...entries.values()].map((entry) => ({ ...entry.harness, links: [...entry.harness.links] })))
+    options.core.publish([...entries.values()].map((entry) => ({ ...entry.harness, links: [...entry.harness.links], card: cardOf(entry) })))
   }
   const touched = (entry: Entry): void => {
     entry.harness.updatedAt = new Date(now()).toISOString()

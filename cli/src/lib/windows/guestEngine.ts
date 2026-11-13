@@ -12,7 +12,7 @@
 import { ENGINE_WINDOWS_INSTALL } from '../engineInstall.js'
 import type { TerminalBackend } from '../terminalBackend.js'
 import type { TerminalRuntimeRef } from '../terminalTypes.js'
-import { WINDOWS_GUEST_ROOT } from './guestRequests.js'
+import { WINDOWS_GUEST_ROOT } from './guestTree.js'
 
 /** The Node runtime the setup task copies for guests, beside the signed pty (`guestScript.ts`). */
 export function guestNodeDir(setupVersion: number): string {

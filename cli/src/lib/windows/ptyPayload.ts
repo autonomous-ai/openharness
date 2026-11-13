@@ -31,7 +31,7 @@ const CANARY_TIMEOUT_MS = 5_000
 /**
  * The serve canary's work (`serveCanary`): its start and discovery file, the hello, one pane's create and exit, and the
  * shutdown. With its cleanup (`SERVE_CANARY_CLEANUP_MS`) at most 20 s, under the updater's 30 s heartbeat timeout
- * (harnessd/services.ts), though the canary is asynchronous and the heartbeat goes on beside it.
+ * (harnessd/serviceSupervisor.ts), though the canary is asynchronous and the heartbeat goes on beside it.
  */
 export const SERVE_CANARY_TIMEOUT_MS = 10_000
 /** Cleanup, step 1: how long the host gets to end itself on `shutdown`, so it closes its consoles as it exits. */

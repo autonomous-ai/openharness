@@ -15,7 +15,7 @@
  */
 
 import type { LiveEvent } from '../../lib/normalize.js'
-import { sqliteReadAll } from '../../lib/sqliteRead.js'
+import { oversizeRow, readStorePages } from '../../lib/sqlitePage.js'
 import {
   MAX_OUTPUT, MAX_THINKING, clip, object, str,
   kiloToolName, toolOutputText, toolResultText, toolSummary, userMessageText,
@@ -25,7 +25,6 @@ import {
 
 const ID_RE = /^[A-Za-z0-9_]+$/
 const POLL_MS = 1_000
-const MAX_BUFFER = 32 * 1024 * 1024
 
 function parseJson(text: unknown): Record<string, unknown> {
   if (typeof text !== 'string') return object(text) ?? {}
@@ -56,19 +55,14 @@ async function loadKiloMessages(
 ): Promise<KiloMessage[] | null> {
   if (!ID_RE.test(sessionId)) return []
   const bounded = !!after && ID_RE.test(after.id) && Number.isFinite(after.tc)
-  const cond = bounded
-    ? 'AND (m.time_created > ? OR (m.time_created = ? AND m.id > ?)) '
-    : ''
-  const sql =
-    'SELECT m.id AS mid, m.time_created AS mtc, m.data AS mdata, p.id AS pid, p.data AS pdata ' +
-    'FROM message m LEFT JOIN part p ON p.message_id = m.id ' +
-    `WHERE m.session_id = ? ${cond}` +
-    'ORDER BY m.time_created, m.id, p.time_created, p.id;'
-  const params = bounded
-    ? [sessionId, Math.trunc(after!.tc), Math.trunc(after!.tc), after!.id]
-    : [sessionId]
-
-  const result = await sqliteReadAll(dbPath, sql, params, { maxBuffer: MAX_BUFFER })
+  // #4188: one query for the whole session was refused past 32 MiB on every poll, and the session never seeded. A
+  // page holds whole messages, each with its parts: a message's own row, then its part rows.
+  const result = await readStorePages(dbPath, {
+    table: 'message', where: 't.session_id = ?', params: [sessionId],
+    key: [{ as: 'mtc', sql: 't.time_created' }, { as: 'mid', sql: 't.id' }], columns: [{ as: 'mdata', sql: 't.data' }],
+    parts: { table: 'part', on: 'p.message_id = t.id', order: ['ptc', 'pid'],
+      columns: [{ as: 'ptc', sql: 'p.time_created' }, { as: 'pid', sql: 'p.id' }, { as: 'pdata', sql: 'p.data' }] },
+  }, bounded ? [Math.trunc(after!.tc), after!.id] : null)
   if (!result.ok) {
     if (result.reason === 'missing') throw new KiloSqliteMissing()
     return null // db locked / transient — retry next tick
@@ -80,6 +74,7 @@ async function loadKiloMessages(
   for (const row of rows) {
     const mid = str(row.mid)
     if (!mid) continue
+    if (Number(row.page_big)) { oversizeRow('kilo', sessionId, `id ${mid}`); continue }
     let msg = byId.get(mid)
     if (!msg) {
       const mdata = parseJson(row.mdata)

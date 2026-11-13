@@ -10,7 +10,7 @@
  */
 
 import type { LiveEvent } from '../normalize.js'
-import { redactSecretsInText } from '../logBundle.js'
+import { redactSecretsInText } from '../redactSecrets.js'
 
 export interface IndexedTurn {
   /** Position in the session, counting from 0. */

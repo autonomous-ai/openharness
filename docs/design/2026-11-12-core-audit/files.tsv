@@ -1,0 +1,557 @@
+file	lines	class	verdict	destination	lines_that_leave	risk	job	security	why
+agentClient/ledger.ts	363	FEATURE	MOVE	edge (agentCleanup)	363	L	S	SYNC-SLOW,SPAWN:ps	Loaded for one purge call (core/main.ts:3019). Its lock blocks the loop up to 2 s (ledger.ts:292) and runs a sync ps (lib/processLiveness.ts:39).
+backendSocket.ts	1498	PLUMBING	THIN	edge (engines_probe)	100	M	M	UNTRUSTED,SPAWN:login-shell	Hub and dispatch stay. engines_probe starts login shells (1210-1254); retarget rules sit in the switch (1287-1359, to core/agents/retarget.ts); usage counters (1041-1050).
+config/env.ts	443	PLUMBING	THIN	delete	90	L	S	FS-WIDE	Schema stays. The ~/.machine adoption (29-118) runs rmSync and renames at import in every process; in since 2026-08-06, no end date.
+config/envFields.ts	66	PLUMBING	KEEP	-	0	L	S	-	Small env parsers that replaced zod, which cost each process 15-19 MiB (envFields.ts:4-6).
+config/loadEnv.ts	13	PLUMBING	KEEP	-	0	L	S	-	Reads only an explicit HARNESS_ENV_FILE, never a project's .env (loadEnv.ts:4-7).
+config/terminalConfig.ts	47	PLATFORM	KEEP	-	0	L	S	-	Which terminal backend each platform uses: ptyhost on Windows, tmux elsewhere (terminalConfig.ts:4-6).
+config/testIsolation.ts	21	DEAD	KEEP	-	0	L	S	-	Test-only guard; env.ts:1 imports it first so no spec touches the real ~/.harness. Inert outside Vitest.
+core/accountQueries.ts	44	LINK	KEEP	-	0	L	S	SECRET	Hands the account's access token and lane sealing to the gateway and devices (gatewayLink.ts:533, devicesLink.ts:141-142).
+core/agentBrowserLink.ts	168	LINK	THIN	agentBrowser	20	L	S	-	Link stays. It keeps an argv the service sends, which the core then spawns as given (52-54, 117-123); goes with the stream.
+core/agentCleanupLink.ts	49	LINK	KEEP	-	0	L	S	-	Tells the cleanup each stop and each harness typed into; lets it close only agent-started harnesses (36-44).
+core/agentQueries.ts	41	LINK	KEEP	-	0	L	S	-	Generic agent queries for services without a link; also Hachi's counter and goal notice (21-30).
+core/agents/adopt.ts	82	SESSION	KEEP	-	0	-	-	UNTRUSTED	Decides whether a conversation Harness did not start may be opened; search only observes (adopt.ts:1, externalResume.ts:84).
+core/agents/bind.ts	566	SESSION	THIN	engine worker (others, new)	125	M	M	UNTRUSTED,FS-WIDE	Binding is core. OpenClaw footer binding (bind.ts:342-423) and Copilot's process session (426-460) are engine logic.
+core/agents/close.ts	178	SESSION	KEEP	-	0	-	-	-	Close service and cleanup preview; Swarm Lead protection is an optional hook from main.ts (close.ts:38-43).
+core/agents/cloud.ts	241	LINK	THIN	cloud	150	L	M	UNTRUSTED	Core side of cloud agents. Dial cards and frames (cloud.ts:52-90,147-176) could be made by the cloud service; the rest behind a door.
+core/agents/conversationOwners.ts	106	SESSION	KEEP	-	0	-	-	-	One owner per conversation, stopped harnesses included (conversationOwners.ts:1-17).
+core/agents/create.ts	496	SESSION	THIN	superTabs	40	L	S	SECRET,FS-WIDE	Launch composer. Swarm folder trust (create.ts:114-119,163-172) and Model Manager grid setup (256-262) are feature policy written inline.
+core/agents/discovery.ts	340	SESSION	KEEP	-	0	-	-	UNTRUSTED	What reconciler scans mean for the registry; DSH and browser arrive as hooks (discovery.ts:34-39).
+core/agents/dshThrough.ts	33	LINK	KEEP	-	0	-	-	-	Store port calls for a launch, with the unavailable fallback (dshThrough.ts:13-21).
+core/agents/events.ts	74	SESSION	KEEP	-	0	-	-	-	Agent frames and renames told to the apps and the dial (events.ts:36-70).
+core/agents/externalInspect.ts	28	LINK	KEEP	-	0	-	-	UNTRUSTED	Bounded asks of the search service: four at once, 5 s each (externalInspect.ts:14,23).
+core/agents/externalOwner.ts	52	SESSION	KEEP	-	0	-	-	-	Signals an outside terminal's process group before a take-over, checked again at each signal (externalOwner.ts:33-42). Core-only by design.
+core/agents/externalPreflight.ts	47	SESSION	KEEP	-	0	-	-	FS-WIDE	Checks a resumable launch before an outside terminal is asked to quit (externalPreflight.ts:17-44).
+core/agents/externalResume.ts	228	SESSION	KEEP	-	0	-	-	UNTRUSTED	Durable adoption of an outside conversation: held pane, intent on the row, owner stop (externalResume.ts:65-149).
+core/agents/forget.ts	134	SESSION	KEEP	-	0	-	-	-	Releases a session binding or removes an agent from every per-session store (forget.ts:1-6).
+core/agents/fork.ts	246	SESSION	KEEP	-	0	-	-	-	agent_fork: a new pane with the source's conversation; grid and Store parts come through ports (fork.ts:62-65).
+core/agents/gridAssignments.ts	94	LINK	KEEP	-	0	-	-	SECRET	Asks models which grid each process is on after discovery; never delays binding (gridAssignments.ts:1,56). Reads the process environment (85).
+core/agents/guestCreate.ts	165	FEATURE	THIN	edge	120	M	M	SECRET	Guest New Harness for shared machines. Guest rules and the Windows engine install (guestCreate.ts:51-127) are the service's; the pane open stays.
+core/agents/heldLaunches.ts	182	SESSION	KEEP	-	0	-	-	-	Agents held until the service their launch needs is ready (heldLaunches.ts:1-15).
+core/agents/hostMove.ts	188	PLATFORM	KEEP	-	0	-	-	-	Moves agents off a drained pty host; built only when one drains (main.ts:3106). Could load behind a door.
+core/agents/launch.ts	143	SESSION	KEEP	-	0	-	-	SYNC-SLOW,FS-WIDE	Relaunch helpers. prepareSessionResume runs the synchronous rollout repair in line (launch.ts:132).
+core/agents/launchAuthority.ts	24	SESSION	KEEP	-	0	-	-	-	Fences a launch to one binding and lifecycle revision (launchAuthority.ts:17-21).
+core/agents/launchEnv.ts	9	SESSION	KEEP	-	0	-	-	-	Merges grid, profile and DSH environment for a pane (launchEnv.ts:2-8).
+core/agents/launches.ts	733	SESSION	THIN	edge	55	M	M	NET-OUT,SPAWN:git,FS-WIDE	Launch requests and receipts. Project folder preparation runs git clone in the core (launches.ts:121-138); Swarm checkout trust is inline (143-165).
+core/agents/lifecycle.ts	321	SESSION	KEEP	-	0	-	-	-	Stop, purge, resume. The agent browser part (lifecycle.ts:174-243) is its link: a row flag and port calls.
+core/agents/list.ts	160	SESSION	KEEP	-	0	-	-	-	agents_list. Device row trimming (list.ts:19-63) and the monitor merge (124-153) are small feature parts.
+core/agents/newPane.ts	187	SESSION	KEEP	-	0	-	-	UNTRUSTED	Watches a new pane until its engine is up or fails (newPane.ts:1-6).
+core/agents/paneOperations.ts	20	SESSION	KEEP	-	0	-	-	-	One pane operation per agent at a time (paneOperations.ts:2-18).
+core/agents/pendingLaunches.ts	152	SESSION	KEEP	-	0	-	-	-	Retries durable creation intents after readiness; never replays a claimed effect (pendingLaunches.ts:6-7).
+core/agents/quietTitles.ts	62	SESSION	KEEP	-	0	-	-	-	Keeps a title made from a quiet delivery off the agent (quietTitles.ts:1-15). Only the agent browser sends quiet lines.
+core/agents/restart.ts	274	SESSION	KEEP	-	0	-	-	-	agent_restart in the same pane (restart.ts:1-4).
+core/agents/restoreLaunch.ts	90	SESSION	KEEP	-	0	-	-	-	Builds a restore's launch; the Swarm role lookup is an optional hook (restoreLaunch.ts:21-23,40).
+core/agents/retarget.ts	377	SESSION	THIN	engine worker (others, new)	55	M	M	SPAWN:sqlite3,FS-WIDE	agent_retarget's pane swap is core. OpenCode's store rewrite checks and call (retarget.ts:181-201,265-297) are engine logic.
+core/agents/swap.ts	201	SESSION	KEEP	-	0	-	-	-	Kills and respawns an engine in its pane, for restart and retarget (swap.ts:1-5).
+core/agents/update.ts	121	SESSION	KEEP	-	0	-	-	-	agent_update: rename, model move, opened (update.ts:1-5).
+core/api.ts	2264	PLUMBING	THIN	superTabs, services	200	L	S	-	Contract stays. About 200 lines no core file imports: Swarm card types (1329-1468), service-only *_OFF defaults (489-644, 1668), resolveAgent (662), unused MESSAGES_QUERIES (899).
+core/browserStreams.ts	319	FEATURE	MOVE	agentBrowser	319	L	M	SPAWN:podman,UNTRUSTED	Agent browser's VNC stream: the core spawns the service's argv per viewer (118) and paces up to 2 MB/s on its own loop (31-37).
+core/cardText.ts	45	LINK	KEEP	-	0	L	S	-	Rewrites engine errors for device cards; the funnel and input call it, and cards go straight to the gateway (cardText.ts:9-10).
+core/cloudLink.ts	36	LINK	KEEP	-	0	L	S	-	Five asks of the cloud agents' process, each with a refusal fallback (cloudLink.ts:21-35).
+core/connectorsLink.ts	32	LINK	KEEP	-	0	L	S	-	One ask per launch; note a launch waits on the edge host up to 5 s (connectorsLink.ts:19, 24).
+core/connectorsQueries.ts	23	LINK	KEEP	-	0	L	S	SECRET	Relays the connector vault between the connectors service, the backend and the gateway; plaintext passes through the core (gatewayLink.ts:347-357).
+core/conversationQueries.ts	67	LINK	KEEP	-	0	L	S	-	The handoff's read-only conversation queries, each shape-checked (45-64).
+core/daemonStopRoute.ts	55	PLUMBING	KEEP	-	0	L	S	-	harness stop on Windows, where there is no signal; trusted pipe only (hookServer.ts:1305-1308).
+core/deliveries.ts	194	SESSION	KEEP	-	0	L	S	-	One path for turns a service writes into a pane, with leases and bounded holds (deliveries.ts:19-27, 142-146).
+core/deviceInput.ts	344	SESSION	UNSURE	core/input (one delivery path)	250	H	L	-	Pane writer lock stays (110-119). The rest is a second delivery queue only the Wi-Fi device uses (wifiAgents.ts:97).
+core/devicesLink.ts	194	LINK	KEEP	-	0	L	S	SECRET	The devices' port, queries and notices; answers access_token and lane for them (141-142).
+core/devicesWake.ts	158	LINK	KEEP	-	0	L	S	FS-WIDE	Decides when the devices start. Lists /dev every 2 s for as long as no dial is plugged in (26, 123-128).
+core/engines/admissionOrder.ts	49	SESSION	KEEP	-	0	-	-	-	Orders pending hook admissions by native delivery time (admissionOrder.ts:8-12).
+core/engines/backgroundJobs.ts	49	LINK	KEEP	-	0	-	-	-	Core side of stopping a claude --bg job in Claude Code's worker (backgroundJobs.ts:1-5).
+core/engines/controlTransport.ts	75	LINK	KEEP	-	0	-	-	UNTRUSTED	Bounded, fenced control calls to an engine worker (controlTransport.ts:5-9,28).
+core/engines/cursorDiscovery.ts	12	ENGINE	KEEP	-	0	-	-	FS-WIDE	Cursor transcript location poll from declared data; session control (cursorDiscovery.ts:1,8-10).
+core/engines/cursorTasks.ts	101	ENGINE	MOVE	engine worker (others, new)	101	M	M	UNTRUSTED	Cursor-only Task hooks, built from lazily loaded Cursor code (cursorTasks.ts:35,92,99).
+core/engines/engineLinks.ts	31	LINK	KEEP	-	0	-	-	-	Whether each engine worker is linked, with a bounded wait (engineLinks.ts:8-26).
+core/engines/homeAdoptions.ts	90	ENGINE	KEEP	-	0	-	-	FS-WIDE	Core-owned retries for adopting moved engine homes and their hook installs (homeAdoptions.ts:11-26).
+core/engines/hooks.ts	337	SESSION	THIN	new service: engineSetup	90	H	L	FS-WIDE,SPAWN:ps	Hook-to-agent resolution is core. The 13-engine installer pass and OpenCode plugin install (hooks.ts:246-336) are install work.
+core/engines/liveSessions.ts	317	LINK	KEEP	-	0	-	-	UNTRUSTED	Core side of worker live parsing: tails, holds, cursors, epochs (liveSessions.ts:54).
+core/engines/liveTransport.ts	99	LINK	KEEP	-	0	-	-	UNTRUSTED	Live protocol calls only; parsers run in workers (liveTransport.ts:1).
+core/engines/liveWatcher.ts	58	LINK	KEEP	-	0	-	-	FS-WIDE	Watches transcript file names with chokidar and asks workers to read (liveWatcher.ts:5-20).
+core/engines/modelControls.ts	117	LINK	KEEP	-	0	-	-	UNTRUSTED	Revocable grants for a worker's model switch; core writes the keys (modelControls.ts:14-26).
+core/engines/nativeControls.ts	238	LINK	KEEP	-	0	-	-	FS-WIDE,UNTRUSTED	Core side of Codex's shared app-server stop: ownership decisions and single-use grants (nativeControls.ts:1-7,96-113).
+core/engines/pendingAdmission.ts	165	SESSION	KEEP	-	0	-	-	-	Core owns pending hook admission; a late lookup cannot replace a newer binding (pendingAdmission.ts:1).
+core/engines/providerMoves.ts	37	LINK	KEEP	-	0	-	-	SECRET	Core side of Codex's provider move in its worker; the launch environment crosses the link (providerMoves.ts:23-24).
+core/engines/questionControls.ts	96	LINK	KEEP	-	0	-	-	UNTRUSTED	Revocable grants for a worker's question keys; core types them (questionControls.ts:11-26).
+core/engines/readers.ts	73	LINK	KEEP	-	0	-	-	UNTRUSTED	Bounded history and last-turn calls to the workers (readers.ts:1,18-26).
+core/engines/runtimeProfiles.ts	125	LINK	KEEP	-	0	-	-	UNTRUSTED	Routes profile interpretation to workers; accepted state stays in core (runtimeProfiles.ts:1).
+core/engines/runtimeSessions.ts	291	LINK	KEEP	-	0	-	-	UNTRUSTED	Core-owned profile snapshots and transactions; vendor interpretation runs in the worker (runtimeSessions.ts:1).
+core/engines/runtimeTransport.ts	58	LINK	KEEP	-	0	-	-	UNTRUSTED	Runtime port: snapshots, one deadline, generation fencing (runtimeTransport.ts:1).
+core/engines/screenTransport.ts	24	LINK	KEEP	-	0	-	-	UNTRUSTED	Screen port over the snapshot transport (screenTransport.ts:10-19).
+core/engines/screens.ts	38	LINK	KEEP	-	0	-	-	UNTRUSTED	Screen reads fenced to the session binding; other engines' screens are read in process (screens.ts:20-27).
+core/engines/sessionBinding.ts	24	SESSION	KEEP	-	0	-	-	-	Scalar identity of a binding, for fencing replies (sessionBinding.ts:3-7).
+core/engines/snapshotTransport.ts	89	LINK	KEEP	-	0	-	-	UNTRUSTED	Stateless worker readings: FIFO admission, one deadline, generation fencing (snapshotTransport.ts:1-5).
+core/engines/submissionTransport.ts	27	LINK	KEEP	-	0	-	-	UNTRUSTED	Submission port over the snapshot transport (submissionTransport.ts:8-22).
+core/engines/submissions.ts	42	LINK	KEEP	-	0	-	-	UNTRUSTED	Submission evidence fenced to the binding; core keeps every verdict (submissions.ts:1-5).
+core/experimentQueries.ts	260	LINK	KEEP	-	0	L	S	-	Gate for experiments' asks. Its backend query lets any experiment call any /api/ path as the account (171-175): no allowlist.
+core/experiments.ts	243	LINK	THIN	edge	150	L	S	-	Wake and notices stay. createAgentSettingsSync (52-200) is a feature: 5-minute timer, backend reads, sole writer of agent-settings.json.
+core/gatewayLink.ts	643	LINK	THIN	gateway	150	M	M	SECRET,UNTRUSTED	Port, notices, status stay. Window relay to other machines (367-404) and lane, tab key, vault pass-throughs (229-264, 583-642) only relay.
+core/gatewayWake.ts	28	LINK	KEEP	-	0	L	S	-	Asks for the gateway at start when signed in or anything is paired (gatewayWake.ts:15-19).
+core/guestPolicy.ts	92	PLUMBING	KEEP	-	0	L	S	-	Default-deny list of what a guest may ask, checked once per frame (backendSocket.ts:1076-1083).
+core/handoffDependencies.ts	21	LINK	THIN	edge (handoff)	10	M	M	-	Wires the handoff publisher to core discovery; shrinks when publication leaves (handoffDependencies.ts:7-19).
+core/handoffPublication.ts	138	FEATURE	THIN	edge (handoff)	100	M	M	SYNC-SLOW,FS-WIDE	Change agent's file transaction runs in the core: sync fsyncs and project writes (lib/handoffPublication.ts:26-39). Keep only the registry check (52-60).
+core/input.ts	408	SESSION	KEEP	-	0	L	S	-	Everything the core writes into a pane; reads the screen before the paste and before Enter (101-140).
+core/main.ts	3589	PLUMBING	THIN	devices, gateway, edge, master	320	M	L	SPAWN:node,SECRET,NET-OUT,NET-IN,FS-WIDE	Wiring plus about 1,200 lines of logic. About 320 leave with features (desk state 2400-2483, device and account routes 2239-2337); the rest suits core modules.
+core/messagesLink.ts	143	LINK	KEEP	-	0	L	S	-	Holds Agent Messages to an allowlist of backend routes (73-78) and window frames (79-86).
+core/modelsLink.ts	209	LINK	KEEP	-	0	L	S	SECRET	Keeps grid glances for frames and keystrokes. Hands models an access token (190); takes launch env, args and files from it (75-89).
+core/modelsWake.ts	31	LINK	KEEP	-	0	L	S	-	Asks for models at start when grid is in use here (modelsWake.ts:17-22).
+core/monitorLink.ts	36	LINK	KEEP	-	0	L	S	-	Two asks of the monitor, with empty fallbacks (monitorLink.ts:24-33).
+core/orchestratorLink.ts	55	LINK	KEEP	-	0	L	S	-	Keeps each agent's role as last reported; sends only Directors' four frame kinds (20, 35).
+core/questions.ts	192	SESSION	KEEP	-	0	L	S	-	An agent's question shown and answered from any client; holds the pane for the answer (questions.ts:43-51).
+core/recapsLink.ts	113	LINK	KEEP	-	0	L	S	-	Tells the recaps each turn's lifecycle, never waits; drops past 4 MiB buffered (26, 68-76).
+core/rfbShaper.ts	207	FEATURE	MOVE	agentBrowser	207	L	M	UNTRUSTED	Parses a viewer's VNC client bytes inside the core (48-66, 117-147); only browserStreams.ts:22 uses it.
+core/serviceHost.ts	295	PLUMBING	UNSURE	delete with services/inline.ts	190	L	S	-	start, serve and guard (122-233) run only when services run in the core: Harness OS (HARNESS_NO_MASTER=1), HARNESSD_SERVICES=none, an old master. Owner's call.
+core/serviceLinks.ts	382	PLUMBING	KEEP	-	0	L	S	SECRET	The services' end in the core: constant-time token check (177-182), routing, deadlines, bounded holds (110, 127).
+core/sharedMachinesLink.ts	36	LINK	KEEP	-	0	L	S	-	A guest's launch argv and env come from the edge host, checked as strings only (22-25), then run in a pane.
+core/sharedMachinesQueries.ts	18	LINK	KEEP	-	0	L	S	-	Answers only the shared-machines service's backend and trust ops (sharedMachinesQueries.ts:15).
+core/sharingLink.ts	26	LINK	KEEP	-	0	L	S	-	Two tells to Share: an observer's frame and the relay going down (sharingLink.ts:20-21).
+core/shellQueries.ts	17	LINK	KEEP	-	0	L	S	-	Only the shell service may ask to open a literal-argv terminal (shellQueries.ts:6-9).
+core/stall.ts	117	DEAD	MOVE	test-only dynamic import	117	L	S	-	Test-only event-loop hold (stall.ts:1-7), loaded by every shipped core (main.ts:203, 3577).
+core/stopDeadline.ts	38	PLUMBING	KEEP	-	0	L	S	-	Bounds a stop at 2.5 s for a core with no master (stopDeadline.ts:10, 29-35).
+core/stopReasons.ts	6	PLUMBING	KEEP	-	0	L	S	-	The two stops that keep the daemon stopped: revoked and busy.
+core/storeLink.ts	84	LINK	KEEP	-	0	L	S	-	Takes the Store's launch env and args, shape-checked (36-42); hears install status and installed-changed.
+core/terminalWatch.ts	120	LINK	KEEP	-	0	L	S	-	Read-only terminal streams for Share's observers; built at the first viewer (58-59); input refused.
+core/terminals/browser.ts	127	FEATURE	MOVE	gateway	127	L	S	NET-OUT,UNTRUSTED	Phone sign-in relay: replays a phone's redirect as an HTTP GET to a loopback port (browser.ts:83-98, main.ts:1258).
+core/terminals/control.ts	144	SESSION	KEEP	-	0	-	-	-	Control lease for reading and typing into a pane (control.ts:1-6).
+core/terminals/open.ts	40	LINK	KEEP	-	0	-	-	-	Narrow pane open for the shell service (open.ts:1,23-30).
+core/terminals/requests.ts	48	SESSION	KEEP	-	0	-	-	-	terminal_info and theme_set (requests.ts:1-5).
+core/terminals/sessions.ts	47	LINK	KEEP	-	0	-	-	-	Terminal identity and exit evidence for the shell service's port (sessions.ts:1,15).
+core/toolWatches.ts	96	SESSION	KEEP	-	0	L	S	-	Pushes harness state to harness wait and watch; ids and states only, capped at 64 watches (13-20).
+core/transcripts/attach.ts	797	SESSION	THIN	engine worker (others, new)	190	H	L	UNTRUSTED,FS-WIDE	Attach is core. Fourteen engines' normalizers and SQLite readers are built and run in the core (attach.ts:415-599).
+core/transcripts/databaseHistory.ts	25	ENGINE	MOVE	engine worker (others, new)	25	M	M	UNTRUSTED	Database engines' whole history through lazily loaded readers (databaseHistory.ts:16,24).
+core/transcripts/history.ts	318	SESSION	THIN	engine worker (others, new)	150	M	M	UNTRUSTED,SPAWN:amp,NET-OUT	session_get. Other engines' pages are built in the core (history.ts:114-125,193-214); Amp history runs amp threads export (55-63).
+core/transcripts/ingest.ts	184	SESSION	THIN	engine worker (others, new)	60	H	L	UNTRUSTED	The line funnel is core. Nine engines' normalizers parse each line in the core (ingest.ts:75-134).
+core/transcripts/lastTurn.ts	72	SESSION	THIN	engine worker (others, new)	30	M	M	UNTRUSTED	Last-turn text; fourteen engines read through in-process code (lastTurn.ts:44-66).
+core/transcripts/normalizers.ts	145	SESSION	THIN	engine worker (others, new)	90	M	M	-	One table of session parser state; the fourteen per-engine maps go once those engines hand back LiveState (normalizers.ts:28-43).
+core/transcripts/readIdentity.ts	18	SESSION	KEEP	-	0	-	-	-	Identity strings that fence transcript and pane reads (readIdentity.ts:5-14).
+core/transcripts/readerLoads.ts	51	ENGINE	MOVE	engine worker (others, new)	51	M	M	-	Bounds the wait for other engines' lazily loaded code at attach (readerLoads.ts:3-18).
+core/transcripts/relaunch.ts	72	SESSION	KEEP	-	0	-	-	-	Marks where an engine's writing is live again after a relaunch (relaunch.ts:1-14).
+core/transcripts/sideReads.ts	27	SESSION	KEEP	-	0	-	-	-	Guards side readers so a throw never costs a line its events (sideReads.ts:1-9).
+core/transcripts/turnReplacement.ts	120	SESSION	KEEP	-	0	-	-	-	Replays a cancellation at its file boundary while interpretation is replaced (turnReplacement.ts:9-11).
+core/turns/activity.ts	71	SESSION	KEEP	-	0	-	-	-	Whether an open turn is really working, from the runtime (activity.ts:2-6).
+core/turns/agyBackstop.ts	72	ENGINE	MOVE	engine worker (others, new)	72	M	M	UNTRUSTED	agy only: closes a turn whose final Stop never came, by polling its pane (agyBackstop.ts:1-12,56).
+core/turns/cancel.ts	94	SESSION	KEEP	-	0	-	-	-	Cancels a turn everywhere it is tracked (cancel.ts:1-5).
+core/turns/ends.ts	166	LINK	KEEP	-	0	-	-	-	Tells services each live turn's end and keeps the last answers for them (ends.ts:1-12).
+core/turns/funnel.ts	261	SESSION	KEEP	-	0	-	-	-	The one fan-out of live events, in exact order (funnel.ts:1-9).
+core/turns/heartbeats.ts	68	SESSION	KEEP	-	0	-	-	-	Checks open turns every 5 s and tells the app (heartbeats.ts:1-5,29).
+core/turns/recaps.ts	202	LINK	KEEP	-	0	-	-	-	Core's whole side of the recaps service: notices and cached reads (recaps.ts:1-11).
+core/turns/shortTurnGuard.ts	77	SESSION	KEEP	-	0	-	-	-	Holds automatic input from an agent looping on short turns (shortTurnGuard.ts:1-10).
+core/turns/summaries.ts	51	LINK	KEEP	-	0	-	-	-	One-line agent summaries for Agent Messages' activity query (summaries.ts:5-9).
+core/turns/turnHooks.ts	284	SESSION	THIN	engine worker (others, new)	150	M	M	-	Hook turn handling is core. Stop rules for Cursor, Command Code, Devin, Copilot, agy and Grok are inline (turnHooks.ts:133-280).
+core/updateHandoff.ts	180	PLUMBING	THIN	delete (no-master handover)	70	L	S	SPAWN:node	Update teardown stays. handOver, probeStagedMaster, handOverOnceReleased (103-179) serve only a core a pre-master release started; no end date.
+core/updaterBeside.ts	75	PLUMBING	UNSURE	delete	75	L	S	SPAWN:node	Compat for a master from before 2026-10-07 that could not re-execute (1-9); spawns the updater; no end date written.
+core/usageLink.ts	117	LINK	KEEP	-	0	L	S	-	Caches each agent's usage reading; at most 4 reads at once, refreshed off the control path (36, 82).
+core/viewerStreams.ts	50	LINK	KEEP	-	0	L	S	-	Forwards a client's viewer frames to the viewers; refuses at once while they are down (40-47).
+core/viewersLink.ts	213	LINK	KEEP	-	0	L	S	-	Keeps each agent's viewer context for frames; holds stream frames, bounded at 4 MiB (59, 121-134).
+core/viewersWake.ts	118	LINK	KEEP	-	0	L	S	-	Asks for the viewers and the Store; reads the installed index at start to see if a bundled harness is pending (60-73).
+core/wifi.ts	266	LINK	THIN	devices (wifi)	110	M	M	UNTRUSTED	Feed filters stay (159-179). Session, hello and held-request relaying (90-131, 185-211) exists because the gateway cannot reach the wifi service.
+core/wifiAgents.ts	121	LINK	KEEP	-	0	L	S	-	The Wi-Fi device's doors: fixed safe launch args (59-72), prompts through the pane lock (95-98).
+core/wifiLink.ts	136	LINK	KEEP	-	0	L	S	-	The wifi service's port, queries and notices by name; unknown ones refused (122-131).
+core/workspacesLink.ts	55	LINK	KEEP	-	0	L	S	-	Sends the whole live agent list to the edge host every 5 s (30-32; main.ts:1132, 2829): push, not poll.
+dsh/adapters.ts	67	ENGINE	KEEP	-	0	L	S	-	Which instruction files each engine reads; launch and scm use it (scmProjects.ts:14, lib/apiInstructions.ts:6).
+dsh/builtinIds.ts	54	LINK	KEEP	-	0	L	S	-	Ids of the bundled harnesses, split out so no process loads their files (builtinIds.ts:1-6).
+dsh/compatibility.ts	29	FEATURE	MOVE	viewers (Store)	29	M	M	-	Which engines can run a harness; the Store can answer it with the launch (core/agents/create.ts:21).
+dsh/id.ts	10	PLUMBING	KEEP	-	0	L	S	-	The id pattern alone, so the registry need not load zod (id.ts:4-8).
+dsh/installed.ts	168	FEATURE	MOVE	viewers (Store)	168	M	M	UNTRUSTED	Core reads the installed index and each harness.json synchronously, 2 s cache, on the frame path (127-142).
+dsh/launch.ts	53	LINK	THIN	viewers (Store)	23	L	S	-	Core uses only harnessEnvToClear (19-22; core/agents/create.ts:19). dshLaunch (35-53) builds from the manifest and is the Store's.
+dsh/launchWire.ts	37	LINK	KEEP	-	0	L	S	-	Shape of the Store's launch answer and its refusal (core/agents/dshThrough.ts:3).
+dsh/manifest.ts	200	FEATURE	MOVE	viewers (Store)	200	M	M	UNTRUSTED	zod schema for third-party harness.json, parsed in the core (9-10, 15); zod costs about 8 MiB (id.ts:5-8).
+dsh/probe.ts	26	SESSION	KEEP	-	0	L	S	-	Reads HARNESS_DSH off a live process in discovery. Imports the id from manifest.ts (11), which loads zod; id.ts has it.
+engines/agy/contract.ts	49	ENGINE	KEEP	-	0	-	-	-	Declared data: transcript location, process session, hook settings (agy/contract.ts:13-27).
+engines/amp/contract.ts	252	ENGINE	THIN	new service: engineSetup	230	H	L	-	Mostly Amp plugin source text for the installer (amp/contract.ts:15-251); only the answer walk is read on the question path.
+engines/claude/backgroundCommands.ts	29	ENGINE	MOVE	engine worker	29	L	S	-	Claude Code logic, not data: counts its Bash-tool shells in the process table (backgroundCommands.ts:20-28). New with #4194.
+engines/claude/discoveryContract.ts	27	ENGINE	KEEP	-	0	-	-	-	Declared data the discovery pass reads in line (engines/discoveries.ts:10,17).
+engines/claude/hookContract.ts	57	ENGINE	KEEP	-	0	-	-	-	Declared hook data applied on the hook path (engines/hooks.ts:2,13).
+engines/claude/launch.ts	96	ENGINE	KEEP	-	0	-	-	-	Declared launch data: argv, trust, status line (engines/launches.ts:3,17).
+engines/claude/sessionStore.ts	69	ENGINE	KEEP	-	0	-	-	-	Declared session store read by the registry, binding and repair (sessionStoreContracts.ts:6,11).
+engines/claude/submissionPolicy.ts	15	ENGINE	KEEP	-	0	-	-	-	Declared submission timing read on the input path (submissionPolicies.ts:2,10).
+engines/codex/discoveryContract.ts	24	ENGINE	KEEP	-	0	-	-	-	Declared data the discovery pass reads in line (engines/discoveries.ts:11,17).
+engines/codex/hookContract.ts	79	ENGINE	KEEP	-	0	-	-	-	Declared hook data applied on the hook path (engines/hooks.ts:3,13).
+engines/codex/launch.ts	158	ENGINE	KEEP	-	0	-	-	-	Declared launch data: argv, startup probe, resume repair rules (engines/launches.ts:4,17; codex/launch.ts:79).
+engines/codex/sessionStore.ts	65	ENGINE	KEEP	-	0	-	-	-	Declared session store read by the registry, binding and repair (sessionStoreContracts.ts:7,11).
+engines/codex/submissionPolicy.ts	16	ENGINE	KEEP	-	0	-	-	-	Declared submission timing read on the input path (submissionPolicies.ts:3,10).
+engines/commandcode/contract.ts	64	ENGINE	KEEP	-	0	-	-	-	Declared data: transcript path and hook settings; brings @sindresorhus/slugify into the core (commandcode/contract.ts:8).
+engines/copilot/contract.ts	54	ENGINE	KEEP	-	0	-	-	-	Declared data: transcript, process session, hook settings (copilot/contract.ts:13-34).
+engines/cursor/contract.ts	52	ENGINE	KEEP	-	0	-	-	-	Declared data: transcript location, homes, hook settings (cursor/contract.ts:10-30).
+engines/devin/contract.ts	26	ENGINE	KEEP	-	0	-	-	-	Declared hook settings (devin/contract.ts:5).
+engines/discoveries.ts	87	ENGINE	KEEP	-	0	-	-	SECRET	Composes discovery contracts with kit mechanics, in line on every pass (discoveries.ts:1-5). Reads a process's environment (57).
+engines/facets/hooks.ts	186	ENGINE	KEEP	-	0	-	-	-	Hook contract types and the agent command verbs the installer allows (facets/hooks.ts:97-107).
+engines/facets/modelControl.ts	46	ENGINE	KEEP	-	0	-	-	-	The model-control error class shared by core and workers (facets/modelControl.ts:8).
+engines/grok/contract.ts	34	ENGINE	KEEP	-	0	-	-	-	Declared data: transcript location and hook settings (grok/contract.ts:6-12).
+engines/hermes/contract.ts	129	ENGINE	KEEP	-	0	-	-	-	Declared data: store paths, admission SQL, hook settings (hermes/contract.ts:10-103).
+engines/hooks.ts	47	ENGINE	KEEP	-	0	-	-	-	Composes Claude Code's and Codex's hook contracts: admit, transcript, Stop, install (engines/hooks.ts:8-41).
+engines/identities.ts	33	ENGINE	KEEP	-	0	-	-	SECRET	Eager location facts for binding from declared data (identities.ts:1,18-28). Reads a process's environment.
+engines/inProcess.ts	129	ENGINE	MOVE	engine worker (others, new)	129	M	L	UNTRUSTED	Loads fourteen engines' code into the core on first use: 107 files, 16,055 lines (inProcess.ts:26-49).
+engines/kilo/contract.ts	87	ENGINE	THIN	new service: engineSetup	65	H	L	-	Kilo plugin source text for the installer (kilo/contract.ts:15-86); the answer walk stays.
+engines/kit/attribution.ts	103	FEATURE	UNSURE	edge	103	M	M	FS-WIDE	Pull-request line argv for a harness another agent started, built in every launch (attribution.ts:1-6). Settle: may a launch ask a service for argv?
+engines/kit/continuation.ts	100	ENGINE	KEEP	-	0	-	-	FS-WIDE,UNTRUSTED	Finds a conversation continued in another file, on every reconciler pass (continuation.ts:1-5).
+engines/kit/controlIdentity.ts	52	ENGINE	KEEP	-	0	-	-	UNTRUSTED	Reads an opening record for eager session control (controlIdentity.ts:1,19).
+engines/kit/downloadMarker.ts	75	ENGINE	MOVE	new service: engineSetup	75	H	L	SPAWN:ps,FS-WIDE	Checks Desktop's engine download marker before a launch installs (downloadMarker.ts:36,70).
+engines/kit/exactTranscript.ts	189	ENGINE	KEEP	-	0	-	-	FS-WIDE	Bounded lookup of a transcript by exact resume id (exactTranscript.ts:1,27).
+engines/kit/folderTrust.ts	210	ENGINE	THIN	new service: engineSetup	180	H	L	FS-WIDE,SYNC-SLOW	The trust decision is core's; the synchronous rewrite of ~/.claude.json and config.toml (folderTrust.ts:69-74,97-117) is a file write.
+engines/kit/homeAdoption.ts	359	ENGINE	KEEP	-	0	-	-	FS-WIDE	Durable catalog of engine homes the person moved; binding needs it (homeAdoption.ts:1,294).
+engines/kit/homeCatalog.ts	119	ENGINE	KEEP	-	0	-	-	FS-WIDE	Reads the saved home catalog as control evidence (homeCatalog.ts:1,77).
+engines/kit/hookHeld.ts	18	ENGINE	MOVE	new service: engineSetup	18	H	L	-	Error classes thrown by the hook file writers (hookHeld.ts:5-16).
+engines/kit/hookRemoval.ts	188	DEAD	MOVE	cli (harness uninstall)	188	L	S	FS-WIDE	harness uninstall code; the core loads it only for failure() and a type (nativeHookYaml.ts:8).
+engines/kit/hookReview.ts	253	ENGINE	MOVE	new service: engineSetup	253	H	L	FS-WIDE,UNTRUSTED	Records Harness's hooks as reviewed in Codex's config.toml (hookReview.ts:1-15,238).
+engines/kit/hookRules.ts	64	ENGINE	KEEP	-	0	-	-	FS-WIDE,UNTRUSTED	Hook admission and transcript correction, synchronous on the hook path, read bounded at 128 KiB (hookRules.ts:1-11).
+engines/kit/hookSettings.ts	267	ENGINE	MOVE	new service: engineSetup	267	H	L	FS-WIDE,UNTRUSTED	The installer of Claude Code's and Codex's hook settings into their homes (hookSettings.ts:1-6,41).
+engines/kit/hooksHeldDetail.ts	12	ENGINE	KEEP	-	0	-	-	-	The sentence a launch held for hooks says (hooksHeldDetail.ts:8-11).
+engines/kit/identityScan.ts	202	ENGINE	KEEP	-	0	-	-	FS-WIDE	Bounded identity reads and the IdentityReadUnavailable error that 28 core files use (identityScan.ts:5-8).
+engines/kit/inheritedMcp.ts	66	ENGINE	MOVE	new service: engineSetup	66	H	L	FS-WIDE	Writes the default MCP answer into an empty folder Harness made (inheritedMcp.ts:1-8,42).
+engines/kit/launchArgs.ts	93	ENGINE	KEEP	-	0	-	-	FS-WIDE	Argv templates from the launch contract; a launch is session control (launchArgs.ts:1-5).
+engines/kit/launchExecutable.ts	241	ENGINE	MOVE	new service: engineSetup	241	H	L	SPAWN:shell,FS-WIDE	Resolves the engine executable; runs the person's login shell from the core to read locations (launchExecutable.ts:55-95).
+engines/kit/launchScreen.ts	56	ENGINE	KEEP	-	0	-	-	-	Declared screen argv and variables for a launch (launchScreen.ts:1-5).
+engines/kit/launchStartup.ts	216	ENGINE	KEEP	-	0	-	-	-	Writes the engine's startup probe and retry into the pane script (launchStartup.ts:1-10).
+engines/kit/messagesHook.ts	137	FEATURE	MOVE	new service: engineSetup	137	H	L	FS-WIDE	Agent Messages' hook script source and its install into engine settings (messagesHook.ts:1-9,32,129).
+engines/kit/nativeDescriptors.ts	128	ENGINE	KEEP	-	0	-	-	SPAWN:lsof	Which files an engine process holds open, for binding (nativeDescriptors.ts:1,93-99).
+engines/kit/nativeEvidence.ts	92	ENGINE	KEEP	-	0	-	-	SPAWN:ps,SPAWN:lsof	One budget for a native lookup; runs ps or lsof (nativeEvidence.ts:1,42-47).
+engines/kit/nativeFiles.ts	174	ENGINE	KEEP	-	0	-	-	FS-WIDE	Fresh synchronous file evidence for eager binding (nativeFiles.ts:1,16).
+engines/kit/nativeHeader.ts	101	ENGINE	KEEP	-	0	-	-	FS-WIDE,UNTRUSTED	A transcript's first record, fenced after ownership reads (nativeHeader.ts:1,59).
+engines/kit/nativeHookFiles.ts	460	ENGINE	MOVE	new service: engineSetup	460	H	L	FS-WIDE	Verified, staged writes of hook files in engine homes (nativeHookFiles.ts:1-2,385).
+engines/kit/nativeHookHomes.ts	18	ENGINE	MOVE	new service: engineSetup	18	H	L	FS-WIDE	Lists profile homes that need hooks (nativeHookHomes.ts:6).
+engines/kit/nativeHookSettings.ts	102	ENGINE	MOVE	new service: engineSetup	102	H	L	FS-WIDE,UNTRUSTED	Installs JSON hook settings for six engines (nativeHookSettings.ts:1,34).
+engines/kit/nativeHookYaml.ts	464	ENGINE	MOVE	new service: engineSetup	464	H	L	FS-WIDE,UNTRUSTED	Edits Hermes's YAML config with the yaml parser, up to 1 MiB (nativeHookYaml.ts:10-11,243); lines 268-378 are uninstall only.
+engines/kit/nativeInstall.ts	361	ENGINE	MOVE	new service: engineSetup	361	H	L	SPAWN:node,NET-OUT,FS-WIDE	Engine installer: spawns a detached node child that runs the install recipe (nativeInstall.ts:89-141,357).
+engines/kit/nativeLaunchGuard.ts	26	ENGINE	KEEP	-	0	-	-	-	Pane-side check of the prepared executable and hook files before exec (nativeLaunchGuard.ts:1-11).
+engines/kit/nativeLocations.ts	67	ENGINE	KEEP	-	0	-	-	-	Launch location variables, never vendor credentials (nativeLocations.ts:5-12).
+engines/kit/nativePaths.ts	222	ENGINE	KEEP	-	0	-	-	FS-WIDE	Canonical path evidence for native lookups (nativePaths.ts:1,44).
+engines/kit/nativePlugin.ts	85	ENGINE	MOVE	new service: engineSetup	85	H	L	FS-WIDE	Writes an engine's plugin file from declared source text (nativePlugin.ts:1,47).
+engines/kit/nativeSessionModel.ts	328	ENGINE	MOVE	engine worker (others, new)	328	M	M	SPAWN:sqlite3,SPAWN:opencode,FS-WIDE	OpenCode model switch: writes its store through sqlite3 or its CLI API (nativeSessionModel.ts:2-4,96,143).
+engines/kit/nativeVersion.ts	89	ENGINE	MOVE	new service: engineSetup	89	H	L	SPAWN:engine	Runs an engine binary for its version (nativeVersion.ts:28,56).
+engines/kit/notifyHooks.ts	336	ENGINE	THIN	new service: engineSetup	200	H	L	-	The notify.mjs command builder stays with whoever names the command; the installers' JSON merge and ownership checks (notifyHooks.ts:217-323) leave.
+engines/kit/pane.ts	441	ENGINE	MOVE	engine worker (others, new)	441	M	M	UNTRUSTED	Pane parsers. The core needs only stripAnsi (openclaw/contract.ts:7, lib/runtimeControl.ts:5) and the terminal's reading.
+engines/kit/pluginFetch.ts	35	ENGINE	MOVE	new service: engineSetup	35	H	L	-	Plugin source text for the post to the daemon (pluginFetch.ts:9).
+engines/kit/processFacts.ts	37	ENGINE	KEEP	-	0	-	-	-	Facts read off a live process on every discovery pass (processFacts.ts:1-5).
+engines/kit/processRecordEvidence.ts	39	ENGINE	KEEP	-	0	-	-	FS-WIDE	Final PID-record proof after ownership checks (processRecordEvidence.ts:1,9).
+engines/kit/projectFolder.ts	86	ENGINE	KEEP	-	0	-	-	FS-WIDE,UNTRUSTED	Which folder a transcript belongs to; the registry's cwd depends on it (projectFolder.ts:1-9).
+engines/kit/questionPane.ts	408	ENGINE	THIN	engine worker (others, new)	370	M	M	UNTRUSTED	Dialog parsers. The question path needs only walkKeys and isApprovalDialog (lib/questionController.ts:9).
+engines/kit/resumeRepair.ts	255	ENGINE	MOVE	engine worker	255	M	M	SYNC-SLOW,FS-WIDE,UNTRUSTED	Synchronous scan of a whole Codex rollout on the core's event loop at every resume; twice plus fsync when repairing (resumeRepair.ts:146-147,219,235-241).
+engines/kit/runtime.ts	131	ENGINE	KEEP	-	0	-	-	-	Shared runtime value mechanics for core snapshots and workers (runtime.ts:1,5-10).
+engines/kit/screen.ts	59	ENGINE	THIN	engine worker (others, new)	40	M	M	UNTRUSTED	teamHold and the unreadable screen stay; assembleScreen and terminalScreen (screen.ts:10-17,56-58) are interpretation.
+engines/kit/sessionIdentity.ts	100	ENGINE	KEEP	-	0	-	-	FS-WIDE,UNTRUSTED	Small identity records for session control (sessionIdentity.ts:1,43-63).
+engines/kit/sessionLocation.ts	238	ENGINE	KEEP	-	0	-	-	SPAWN:lsof,FS-WIDE	Filesystem evidence for binding from each engine's declared layout (sessionLocation.ts:1,62,134,198).
+engines/kit/sessionRecords.ts	117	ENGINE	KEEP	-	0	-	-	FS-WIDE,UNTRUSTED	Session file lookup and first record, as the registry loads and on the hook path (sessionRecords.ts:1-5).
+engines/kit/statusLine.ts	135	FEATURE	UNSURE	router	135	M	M	FS-WIDE	Harness's status line for the router's quota reports, built into every Claude Code launch (statusLine.ts:1-5,87). Settle: argv from a service?
+engines/kit/stopHook.ts	62	ENGINE	KEEP	-	0	-	-	-	What Stop means for an engine whose Stop closes turns: turn mechanics (stopHook.ts:1-5).
+engines/kit/storePool.ts	150	ENGINE	KEEP	-	0	-	-	FS-WIDE,UNTRUSTED	Evidence from every declared native store, for hook admission and repair (storePool.ts:1,41).
+engines/kit/storeSource.ts	105	ENGINE	KEEP	-	0	-	-	FS-WIDE,UNTRUSTED	Whether a hook's session is the pane's own, read from the engine's store (storeSource.ts:1-7).
+engines/kit/submission.ts	36	ENGINE	MOVE	engine worker (others, new)	36	M	M	UNTRUSTED	Composer reading for the engines not yet behind a facet (submission.ts:1-4, lib/sessionInput.ts).
+engines/kit/transcriptDiscovery.ts	107	ENGINE	KEEP	-	0	-	-	FS-WIDE	Polls for a known session's transcript; binding needs it (transcriptDiscovery.ts:3-7).
+engines/kit/transcriptFold.ts	63	ENGINE	KEEP	-	0	-	-	-	Folds an existing transcript at attach and says history or live (transcriptFold.ts:3-11).
+engines/kit/windowsFiles.ts	63	PLATFORM	THIN	new service: engineSetup	40	H	L	-	Windows rename and flush rules for the hook writers (windowsFiles.ts:34-58); hostPlatform stays for the home catalog.
+engines/kit/windowsInstall.ts	184	PLATFORM	MOVE	new service: engineSetup	184	H	L	SPAWN:node,NET-OUT,FS-WIDE	Windows engine installer: one hidden installer per engine (windowsInstall.ts:1-5,138).
+engines/kit/zstdFrames.ts	65	ENGINE	MOVE	engine worker	65	M	M	UNTRUSTED	zstd frame check for cold Codex rollouts (zstdFrames.ts:1-4, resumeTranscript.ts:18).
+engines/launchControl.ts	51	ENGINE	MOVE	engine worker (others, new)	51	M	M	SPAWN:opencode,SPAWN:sqlite3	OpenCode's version probe, v2 turn read and session-model write, for launches and retarget (launchControl.ts:11-47).
+engines/launchPrep.ts	117	ENGINE	THIN	engine worker	45	M	M	FS-WIDE,SYNC-SLOW	Trust and resume repair composed for launches. First-run answers (launchPrep.ts:59-89) are unused by core; the repair call goes with resumeRepair.
+engines/launches.ts	130	ENGINE	KEEP	-	0	-	-	FS-WIDE	Launch argv composed from declared contracts, in line (launches.ts:12-17).
+engines/muse/contract.ts	11	ENGINE	KEEP	-	0	-	-	-	Declared run identity rule (muse/contract.ts:4).
+engines/nativeHooks.ts	150	ENGINE	MOVE	new service: engineSetup	150	H	L	FS-WIDE	Eleven engines' hook and plugin installers, composed (nativeHooks.ts:27-69).
+engines/nativeLaunch.ts	342	ENGINE	MOVE	new service: engineSetup	342	H	L	SPAWN:engine,FS-WIDE	Launch preflight: runs the engine's --help and --version from the core and prepares its hooks (nativeLaunch.ts:76-113,164-321).
+engines/openclaw/contract.ts	313	ENGINE	THIN	engine worker (others, new)	90	M	M	UNTRUSTED	Mostly data. readOpenclawScreen parses the pane in the core for binding (openclaw/contract.ts:99-183).
+engines/opencode/contract.ts	211	ENGINE	THIN	new service: engineSetup	150	H	L	-	Two OpenCode plugin source texts for the installer (opencode/contract.ts:57-203); version and model rules stay.
+engines/pi/contract.ts	99	ENGINE	THIN	new service: engineSetup	70	H	L	-	Pi extension source text for the installer (pi/contract.ts:23-98); identity rules stay.
+engines/prepareNativeLaunch.ts	64	ENGINE	MOVE	new service: engineSetup	64	H	L	-	Ties engine install to launch inspection (prepareNativeLaunch.ts:7-14).
+engines/repairIdentities.ts	11	ENGINE	KEEP	-	0	-	-	FS-WIDE	Muse and Pi identity reads from declared rules (repairIdentities.ts:7-10).
+engines/resumeTranscript.ts	130	ENGINE	MOVE	engine worker	130	M	M	FS-WIDE,UNTRUSTED	Decompresses a cold Codex rollout on Open, in the core (resumeTranscript.ts:1-4,35).
+engines/sessionFiles.ts	48	ENGINE	KEEP	-	0	-	-	FS-WIDE	Session file reads from declared stores, for the registry (sessionFiles.ts:1-5).
+engines/sessionStoreContracts.ts	23	ENGINE	KEEP	-	0	-	-	-	The two declared session stores, data only (sessionStoreContracts.ts:11).
+engines/sessionStores.ts	10	ENGINE	KEEP	-	0	-	-	-	Re-exports session file readers for main.ts (sessionStores.ts:8-9).
+engines/submissionPolicies.ts	15	ENGINE	KEEP	-	0	-	-	-	Declared submission timing table (submissionPolicies.ts:10).
+engines/transcriptBindings.ts	205	ENGINE	KEEP	-	0	-	-	FS-WIDE	Transcript authority shared by binding, Stop and resume preflight (transcriptBindings.ts:1,17-37).
+engines/types.ts	51	ENGINE	KEEP	-	0	-	-	-	The engine list and the terminal check (types.ts:11-39).
+engines/worker/backgroundJobProtocol.ts	32	LINK	KEEP	-	0	-	-	UNTRUSTED	Wire and reply checks for the background-job stop (backgroundJobProtocol.ts:1).
+engines/worker/controlWire.ts	10	LINK	KEEP	-	0	-	-	UNTRUSTED	Common bounds for private control messages (controlWire.ts:1-5).
+engines/worker/liveProtocol.ts	141	LINK	KEEP	-	0	-	-	UNTRUSTED	Pull-driven live transcript protocol and its reply checks (liveProtocol.ts:1).
+engines/worker/modelControlHost.ts	25	LINK	KEEP	-	0	-	-	-	Model-control host shim shared by the worker and the inline path (modelControlHost.ts:6-7).
+engines/worker/modelControlProtocol.ts	96	LINK	KEEP	-	0	-	-	UNTRUSTED	Model-control messages; every terminal effect needs a core grant (modelControlProtocol.ts:1).
+engines/worker/nativeControlHost.ts	16	LINK	KEEP	-	0	-	-	-	Native stop host shim and the unconfirmed-stop sentence (nativeControlHost.ts:4-8).
+engines/worker/nativeControlProtocol.ts	62	LINK	KEEP	-	0	-	-	UNTRUSTED	Wire and reply checks for Codex's shared-server control (nativeControlProtocol.ts:10-13).
+engines/worker/protocol.ts	89	LINK	KEEP	-	0	-	-	UNTRUSTED	Reader wire: the engine-to-worker table, bounds and event checks (protocol.ts:5-27,56-88). Only Claude Code and Codex are listed.
+engines/worker/providerMoveProtocol.ts	37	LINK	KEEP	-	0	-	-	UNTRUSTED	Wire and reply checks for Codex's provider move (providerMoveProtocol.ts:1).
+engines/worker/questionControlHost.ts	12	LINK	KEEP	-	0	-	-	-	Question-control host shim shared by the worker and the inline path (questionControlHost.ts:4).
+engines/worker/questionControlProtocol.ts	42	LINK	KEEP	-	0	-	-	UNTRUSTED	Question-control messages and bounds (questionControlProtocol.ts:6-12).
+engines/worker/runtimeProtocol.ts	122	LINK	KEEP	-	0	-	-	UNTRUSTED	Runtime-profile reads; no registry or terminal capability crosses (runtimeProtocol.ts:1).
+engines/worker/screenProtocol.ts	56	LINK	KEEP	-	0	-	-	UNTRUSTED	Stateless screen reads; a worker gets text, never a terminal handle (screenProtocol.ts:1).
+engines/worker/submissionProtocol.ts	39	LINK	KEEP	-	0	-	-	UNTRUSTED	Stateless submission readings; text only (submissionProtocol.ts:1).
+harnessd/baseNode.ts	6	PLUMBING	KEEP	-	0	L	S	-	Six lines: the managed node behind a name link; its own file so the core loads only this.
+harnessd/coreLink.ts	173	PLUMBING	KEEP	-	0	L	S	-	The core's half of the master channel: bound, ready, heartbeat, want, update (126-171).
+harnessd/platform.ts	902	FEATURE	MOVE	master	902	L	S	FS-WIDE	launchd, systemd and Task Scheduler code, loaded so the core can rewrite one Node path (lib/nodeReferences.ts:14, 39; main.ts:2379).
+harnessd/protocol.ts	143	PLUMBING	KEEP	-	0	L	S	-	The master and core's messages and exit codes; only grows (protocol.ts:9-12).
+harnessd/services.ts	601	PLUMBING	THIN	master	340	L	S	-	Core needs the host table and env readers (375-449, 483-600). The supervisor classes (19-358) are the master's and pull supervisor.ts (16).
+harnessd/supervisor.ts	702	DEAD	MOVE	master	702	L	S	-	The master's supervisor. The core loads it for one 3-line function, describeExit (services.ts:16, 221; supervisor.ts:217), and never calls it.
+harnessd/swarmSwitch.ts	15	PLUMBING	KEEP	-	0	L	S	-	Reads HARNESS_SWARM; no imports, so any process reads it without the master's code.
+hookServer.ts	1424	PLUMBING	THIN	gateway, devices, edge	470	M	M	NET-IN,UNTRUSTED,SECRET	Hook routes and auth stay. Feature routes (578-592, 994-1361) and their handler types (132-221) only forward; Hermes store reads (390-457) are engine code.
+lib/activitySummary.ts	33	LINK	KEEP	-	0	-	-	-	Core side of Agent Messages activity: first prompt line kept per agent (core/turns/funnel.ts:166), cleaned summary (core/turns/summaries.ts:28).
+lib/agentAttribution.ts	62	LINK	KEEP	-	0	-	-	-	Launch argv telling a harness it may start agents (core/agents/create.ts). PR-line remnants are dead: AGENT_ATTRIBUTION_LINE is spec-only.
+lib/agentCreateDiagnosis.ts	160	SESSION	KEEP	-	0	-	-	-	Explains a create whose engine never started, from pane facts (core/agents/newPane.ts); redacts argv.
+lib/agentCreationReceipt.ts	582	SESSION	KEEP	-	0	-	-	-	Durable create receipts: a retried create never launches twice. Never deleted; every one is re-read each minute (pendingLaunches.ts:118).
+lib/agentEvent.ts	28	SESSION	KEEP	-	0	-	-	-	Adds agent identity to turn events (core/turns/funnel.ts, heartbeats.ts).
+lib/agentFrame.ts	327	SESSION	KEEP	-	0	-	-	-	The one agent wire shape. Calls git readers per frame (agentFrame.ts:250,257); they become a reported cache if agentProject leaves.
+lib/agentNames.ts	219	SESSION	THIN	edge	120	L	S	-	Engine labels and automatic names stay. Branch and worktree name makers (lines 76-200) follow project preparation to workspaces.
+lib/agentProject.ts	310	FEATURE	MOVE	edge	310	M	M	SPAWN:git,FS-WIDE	Runs git in each agent folder for the frame project (agentFrame.ts:250), 4 at once, 15 s cache. Design allowed a reported cache.
+lib/agentSessionEnv.ts	33	PLUMBING	KEEP	-	0	-	-	-	Drops an agent session variables and tokens from the daemon and tmux environment (core/main.ts, tmuxBackend.ts).
+lib/agentSettings.ts	135	LINK	THIN	cli (client)	35	L	S	UNTRUSTED	Local copy of the account agent experiments, read at each launch. Question texts (lines 61-87) are the agent client only.
+lib/agentTmp.ts	184	FEATURE	MOVE	superTabs (in-core door); sweep to edge	184	L	S	-	Swarm agents private TMPDIR and a daily sweep of old files, run at every launch (core/agents/create.ts:400). Nobody else gets one.
+lib/agentUsageWire.ts	82	LINK	KEEP	-	0	-	-	-	Validates and copies the usage service readings so no ledger enters core memory (core/usageLink.ts).
+lib/apiConnectionMetadata.ts	54	FEATURE	MOVE	models	54	L	S	SECRET	Core parses the saved-API store, keys included, at every launch only to learn if any exists (core/main.ts:585-589). A reported flag suffices.
+lib/apiInstructions.ts	33	LINK	KEEP	-	0	-	-	FS-WIDE	Appends a Saved APIs block to the launch folder instruction file (create.ts:426). Comment says Harness-made workspaces only; code does not check.
+lib/appProductUsageReport.ts	81	FEATURE	MOVE	gateway	81	L	S	-	Validates the Desktop usage report in the hook server before proxying it (hookServer.ts:1194). The gateway owns the report.
+lib/attachTracker.ts	123	SESSION	KEEP	-	0	-	-	-	One attach per session, four at once, slow ones named (core/transcripts/attach.ts:703).
+lib/attachTranscript.ts	289	SESSION	KEEP	-	0	-	-	UNTRUSTED,FS-WIDE	Reads a transcript from its end with bounded memory (core/transcripts/attach.ts:348). Engine workers use its locator too.
+lib/authSession.ts	474	PLUMBING	THIN	gateway	180	M	M	NET-OUT,SECRET	Account tokens in ~/.harness/auth. The refresh (authSession.ts:357) is the core only call to another host; design open decision 3.
+lib/backgroundCommands.ts	48	SESSION	KEEP	-	0	-	-	-	Counts an engine background commands for a close inspect (core/main.ts); reads the process table.
+lib/binaryOnPath.ts	59	PLATFORM	KEEP	-	0	-	-	-	Finds a command on PATH without spawning; used by launch, discovery and the tmux lookup.
+lib/bootId.ts	73	PLATFORM	KEEP	-	0	-	-	SPAWN:sysctl,SYNC-SLOW	Tells a reboot at registry load (registry.ts:1364). One synchronous sysctl, 2 s limit, at start (bootId.ts:40).
+lib/branchNaming.ts	59	FEATURE	MOVE	edge	59	L	S	SPAWN:git,FS-WIDE	Renames a placeholder branch; runs only in the workspaces process. Core loads it through scm/gitScmProject.ts:12.
+lib/browserShim.ts	61	LINK	KEEP	-	0	-	-	-	Writes the BROWSER script every pane gets, for the phone sign-in relay (core/main.ts:1264, engineLaunch.ts).
+lib/captureResumeIdentity.ts	94	SESSION	KEEP	-	0	-	-	FS-WIDE	Reads the conversation id before a stop kills the engine (stopAgentService.ts).
+lib/cardUpdate.ts	25	LINK	KEEP	-	0	-	-	-	Strips device-only card fields before frames go to clients and the relay (backendSocket.ts, core/turns/funnel.ts).
+lib/cellAdvance.ts	55	SESSION	KEEP	-	0	-	-	-	Character width table for the history re-wrap (historyRewrap.ts).
+lib/childLocale.ts	70	PLATFORM	KEEP	-	0	-	-	-	UTF-8 locale and a fixed ps locale for every child the daemon starts.
+lib/claudeHomes.ts	155	ENGINE	KEEP	-	0	-	-	FS-WIDE	Checks a requested Claude home is a listed profile before hooks are written there (core/main.ts:3200). Lists home folders synchronously.
+lib/closeAgentService.ts	459	SESSION	KEEP	-	0	-	-	-	User Close as a durable lifecycle operation (core/agents/close.ts).
+lib/cloudAgents.ts	231	LINK	KEEP	-	0	-	-	UNTRUSTED	Shape and validation of what the cloud service publishes; core lists cloud agents beside terminal ones (core/agents/cloud.ts:14).
+lib/computerIdentity.ts	88	PLUMBING	KEEP	-	0	-	-	-	This computer id, minted once (config/env.ts, daemonState.ts).
+lib/connectors/vaultOps.ts	33	LINK	KEEP	-	0	-	-	SECRET	Answers the connectors service vault ops with the core account; vault plaintext passes through the core to the gateway (vaultOps.ts:22-25).
+lib/controlPlane.ts	72	PLUMBING	THIN	cli (client)	66	L	S	NET-OUT,SECRET	Core uses only backendHttpBase (core/main.ts:840). requestJson and controlPlaneAuth are CLI backend calls, loaded and never run.
+lib/conversationIdentity.ts	16	SESSION	KEEP	-	0	-	-	-	One key per conversation across Codex profiles (core/agents/conversationOwners.ts, stoppedAgents.ts).
+lib/createAgentPane.ts	199	SESSION	KEEP	-	0	-	-	-	Opens a pane and claims it in the registry, retrying a stale-route collision (core/agents/create.ts, fork.ts).
+lib/creationObservation.ts	18	LINK	KEEP	-	0	-	-	-	A creation receipt as an experiment may see it, without request or credentials (core/experimentQueries.ts).
+lib/cwdRepair.ts	98	DEAD	UNSURE	-	98	L	S	FS-WIDE	One-time repair of rows written before 2026-09-22, still run at every start (core/main.ts:2600). Settle: oldest build still updating.
+lib/daemonCommand.ts	15	PLUMBING	KEEP	-	0	-	-	-	How a pane shell runs this daemon CLI (core/main.ts:1264).
+lib/daemonEndpoint.ts	123	PLUMBING	THIN	cli (client)	100	L	S	-	Core uses only saveDaemonPort and savedDaemonPort (core/main.ts:2340). Status and call clients (lines 21-123) are the CLI.
+lib/daemonLaunch.ts	147	PLUMBING	THIN	cli (client)	105	L	S	-	Core uses removePidFileIf and onError (core/main.ts:366,3504). The bind and ready waits are for harness start.
+lib/daemonRecord.ts	63	PLUMBING	KEEP	-	0	-	-	-	The record of the port and pipe the core bound.
+lib/daemonSafeMode.ts	132	PLUMBING	KEEP	-	0	-	-	-	Safe-mode decisions and marker when start-up throws (core/main.ts).
+lib/daemonState.ts	112	PLUMBING	KEEP	-	0	-	-	-	Pid file, log path, port and computer id shared with the CLI. hasSavedAuthSession (line 68) is unused.
+lib/deleteAgentFallback.ts	178	SESSION	KEEP	-	0	-	-	-	Stops the exact engine process and its tree with a pid-reuse guard (stopAgentService.ts, core/agents/swap.ts).
+lib/deletedSessions.ts	48	SESSION	KEEP	-	0	-	-	-	15 s tombstones so a dying engine hook cannot re-register a deleted agent (core/agents/bind.ts, hookServer.ts).
+lib/deviceManagementHttp.ts	199	FEATURE	MOVE	devices	199	L	M	-	Routes and validates /api/autonomous-device/* in the core (core/main.ts:2250), then calls gateway and Wi-Fi ports. A generic route adapter replaces it.
+lib/deviceRecap.ts	157	FEATURE	MOVE	cloud	157	L	S	-	The dial recap text. Core loads it for one call, a cloud agent last words (core/agents/cloud.ts:37).
+lib/dialogEnd.ts	84	ENGINE	KEEP	-	0	-	-	-	Where an earlier dialog ends on a pane, for every engine question reader (engines/kit/questionPane.ts).
+lib/engineAccount.ts	144	FEATURE	MOVE	edge	144	L	S	SPAWN:claude,SPAWN:codex,SECRET,FS-WIDE	Asks claude and codex whether they are signed in, for the New dialog (engineProbe.ts). Reads the saved-API store (engineAccount.ts:125).
+lib/engineBin.ts	504	ENGINE	THIN	engine worker	80	L	S	SPAWN:shell,SYNC-SLOW,FS-WIDE	Engine commands and executable ownership for discovery stay. cursorRuntimeBin, opencodeBin, installedEngineBin serve services only. Sync login shell at line 116.
+lib/engineExitOption.ts	10	ENGINE	KEEP	-	0	-	-	-	Name of the pane option holding an engine exit status.
+lib/engineHomes.ts	401	ENGINE	KEEP	-	0	-	-	FS-WIDE	Claude Code and Codex homes the person moved: adoption and session roots (core/engines/hooks.ts, registry.ts). Five exports are spec-only.
+lib/engineInstall.ts	227	ENGINE	KEEP	-	0	-	-	-	Each engine install recipe, declared data the launch applies. INSTALLABLE_ENGINES (line 224) is unused.
+lib/engineLaunch.ts	1716	ENGINE	KEEP	-	0	-	-	SPAWN:shell,FS-WIDE	Builds every engine launch argv and pane script; restart and restore need it with services down. Probes spawn the login shell (1458,1493,1582).
+lib/engineProbe.ts	153	FEATURE	MOVE	edge	153	L	S	SPAWN:shell	engines_probe starts up to 16 interactive login shells from the core thread, 4 at once, for the New dialog (backendSocket.ts:1227).
+lib/externalOwnerControl.ts	83	SESSION	THIN	-	55	L	S	SPAWN:ps	Core uses verifiedForegroundJob only (core/agents/externalOwner.ts:36). stopSessionOwner, writeTty and foregroundJob (55 lines) have no caller but specs: delete.
+lib/externalProcessGeneration.ts	11	SESSION	KEEP	-	0	-	-	-	The process incarnation an adoption is checked against before any signal (core/agents/externalOwner.ts).
+lib/externalResume.ts	63	SESSION	KEEP	-	0	-	-	-	A pending adoption durable intent on the registry row (core/agents/externalResume.ts, registry.ts).
+lib/externalSessionWire.ts	89	LINK	KEEP	-	0	-	-	UNTRUSTED	Validates the search service bounded observations of an outside conversation; core alone reserves and signals (core/agents/adopt.ts).
+lib/failureReason.ts	16	ENGINE	KEEP	-	0	-	-	-	One line saying why an installer or native launch failed (engines/kit/nativeInstall.ts).
+lib/firstTurnReplay.ts	42	SESSION	KEEP	-	0	-	-	-	Whether a new transcript is the first turn to replay live (core/agents/bind.ts).
+lib/footerTimer.ts	9	SESSION	KEEP	-	0	-	-	-	Reads the pane footer timer in seconds (core/main.ts).
+lib/forkAgent.ts	118	SESSION	KEEP	-	0	-	-	-	Plans a fork: native, handoff prompt, or refused (core/agents/fork.ts).
+lib/gatewayRuntime.ts	123	ENGINE	THIN	devices	10	L	S	SECRET	Core needs only kind (terminalAgentDiscovery.ts:285). The OpenRouter key read from a pane environment is cached here unused (gatewayRuntime.ts:100,120).
+lib/gatewayWire.ts	73	LINK	KEEP	-	0	-	-	-	Binary framing between the core and the gateway process (core/gatewayLink.ts).
+lib/gitProject.ts	594	FEATURE	THIN	edge	450	M	L	NET-OUT,SPAWN:git,FS-WIDE	Worktree add up to 10 min, fetch and branch reads run as the core children (gitProject.ts:253,488). Core keeps checkout test, turn lock, worktree mark.
+lib/githubRepository.ts	108	FEATURE	THIN	edge	45	L	S	-	Parsing a pasted repository stays for request validation. Clone attempts and alias identity follow the clone to workspaces.
+lib/goalCommand.ts	68	ENGINE	KEEP	-	0	-	-	-	Adapts /goal and /loop per engine on every message (core/input.ts). adaptGoalCommand is spec-only.
+lib/gridAnnotation.ts	65	LINK	KEEP	-	0	-	-	-	Reads the models service last glance for a frame or keystroke, from memory (core/modelsLink.ts).
+lib/gridAssignmentWire.ts	87	LINK	KEEP	-	0	-	-	-	Launch evidence the core hands models to classify; no keys cross (core/agents/gridAssignments.ts).
+lib/gridBinary.ts	150	LINK	KEEP	-	0	-	-	-	Which grid binary a pane runs; reads files, never spawns (engineLaunch.ts).
+lib/gridConfigDir.ts	101	LINK	KEEP	-	0	-	-	-	Per-agent grid config folder with a 30-day prune. A second writer beside publishedGridConfig.ts (core/agents/create.ts:316-318).
+lib/gridFleetProtocol.ts	9	LINK	KEEP	-	0	-	-	-	Two constants of the Model Manager handshake (backendSocket.ts, core/api.ts).
+lib/gridLaunchWire.ts	489	LINK	KEEP	-	0	-	-	SECRET,UNTRUSTED	Core declared data for a grid launch; building it is the models service. Holds the grid key kept on the registry row (gridLaunchWire.ts:38).
+lib/guestAccounts.ts	240	FEATURE	THIN	edge	150	L	S	SPAWN:sudo,FS-WIDE	Core needs isGuestUser (core/sharedMachinesLink.ts:9). createGuestAccounts and the sudo helper calls are the shared machines service.
+lib/guestPaneCommand.ts	79	FEATURE	MOVE	edge	79	L	S	-	Loaded for one constant, GUEST_LAUNCH_ENGINES (core/guestPolicy.ts:13). The pane command is built in the edge host.
+lib/hachiMetrics.ts	16	FEATURE	MOVE	gateway	16	L	S	-	Allowlist of Hachi counters a service may count (core/agentQueries.ts:18). The gateway can check names itself.
+lib/handoffAuthority.ts	85	LINK	KEEP	-	0	-	-	-	Shared handoff types, session fingerprint and 5 s deadline (core/handoffPublication.ts, core/serviceLinks.ts).
+lib/handoffDiscovery.ts	161	LINK	KEEP	-	0	-	-	FS-WIDE	Finds an unbound agent session for Change agent and wires the conversation facts the edge asks for (core/handoffDependencies.ts).
+lib/handoffFiles.ts	45	LINK	UNSURE	edge	45	M	M	FS-WIDE	Bounded descriptor reads for the handoff commit. Leaves with the publication if that leaves.
+lib/handoffGit.ts	32	LINK	UNSURE	edge	32	M	M	FS-WIDE	Finds .git/info/exclude without spawning git, for the handoff commit. Leaves with the publication.
+lib/handoffPublication.ts	324	LINK	UNSURE	edge	324	M	M	FS-WIDE,SYNC-SLOW,UNTRUSTED	Core writes handoff files into the project, with fsyncs and receipts up to 20 MiB re-read (handoffPublication.ts:14,151). Moved in on purpose, #1145.
+lib/handoffValidation.ts	40	LINK	UNSURE	edge	40	M	M	UNTRUSTED	Validates the edge prepared handoff, up to 8 MiB of transcript, before any write. Leaves with the publication.
+lib/harnessDefaults.ts	73	ENGINE	KEEP	-	0	-	-	-	Default permission and OpenCode launch environment for a fresh harness (core/agents/create.ts).
+lib/harnessMonitor.ts	23	LINK	KEEP	-	0	-	-	-	Done or failed per agent from live turn frames, for the monitor part of agents_list (backendSocket.ts:633).
+lib/harnessSessionLabel.ts	132	PLATFORM	KEEP	-	0	-	-	-	tmux session names and the pane owner tag that tell this daemon panes from another.
+lib/harnessdEnv.ts	54	PLUMBING	KEEP	-	0	-	-	SECRET	Takes HARNESSD_* (the service token among them) out of the environment panes inherit (core/main.ts).
+lib/historyRewrap.ts	378	SESSION	KEEP	-	0	-	-	-	Re-wraps up to 2,000 history lines by word for each keyframe, on the core thread (tmuxStream.ts:1016). Terminal stream work.
+lib/hookAuth.ts	100	PLUMBING	KEEP	-	0	-	-	SECRET	The hook credential and hook token files and their constant-time check (hookServer.ts).
+lib/hookRoutes.ts	34	PLUMBING	KEEP	-	0	-	-	-	Records which daemon owns a pane tag so hooks reach the right one (core/main.ts).
+lib/hostMove/gate.ts	118	PLATFORM	KEEP	-	0	-	-	-	Holds an agent input in order while it changes pty host (core/main.ts:1887). Built on every platform; used where hosts drain.
+lib/hostMove/moveAgent.ts	385	PLATFORM	KEEP	-	0	-	-	-	Moves an idle agent to the new pty host after an update, falling back to the old pane. Runs only where hosts drain (Windows).
+lib/hostMove/mover.ts	191	PLATFORM	KEEP	-	0	-	-	-	Picks which idle agent moves, after each reconcile (core/main.ts:3130).
+lib/hostMove/quiet.ts	54	PLATFORM	KEEP	-	0	-	-	-	Idle-and-untouched clock per agent for the mover (core/main.ts:519).
+lib/hostMove/seed.ts	35	PLATFORM	KEEP	-	0	-	-	-	Cuts a pane scrollback to seed the new pane, under 4 MiB.
+lib/hostTheme.ts	63	PLATFORM	KEEP	-	0	-	-	-	The app pane colours for tmux window-style, kept across restarts (core/terminals/requests.ts).
+lib/installedCopy.ts	21	PLUMBING	KEEP	-	0	-	-	-	Whether this script is the installed CLI the updater replaces (core/main.ts).
+lib/keepAbandonedConversation.ts	50	SESSION	KEEP	-	0	-	-	-	Keeps a conversation the daemon left on relaunch as a stopped harness (core/main.ts).
+lib/launchArgs.ts	114	ENGINE	KEEP	-	0	-	-	-	Checks an owner extra launch flags per engine; never through a shell (core/agents/launches.ts).
+lib/launchFlags.ts	10	SESSION	KEEP	-	0	-	-	-	The model and effort flags a session was launched with (core/engines/runtimeSessions.ts).
+lib/launchModel.ts	81	ENGINE	KEEP	-	0	-	-	-	Parses and applies a new agent model and effort flags (core/agents/launches.ts).
+lib/launchOverrides.ts	477	SESSION	KEEP	-	0	-	-	-	What every relaunch repeats: grid, profile, MCP, instructions (core/agents/launch.ts, retarget.ts).
+lib/launchers.ts	154	PLUMBING	MOVE	master	154	L	S	FS-WIDE	Repoints the harness launcher at a Node; reached only through nodeReferences.ts. Its hn and uninstall helpers are the CLI.
+lib/localCredential.ts	60	PLUMBING	KEEP	-	0	-	-	SECRET	The local API credential check for loopback TCP (hookServer.ts, localWsServer.ts).
+lib/localJsonLimit.ts	19	PLUMBING	KEEP	-	0	-	-	-	512 KiB limit for one local JSON frame (localWsServer.ts).
+lib/localSocket.ts	443	PLUMBING	KEEP	-	0	-	-	NET-IN,SECRET	The daemon Unix socket and Windows pipe: listen, trust, and the data-folder claim (hookServer.ts, core/main.ts).
+lib/localTransport.ts	211	PLUMBING	MOVE	cli (client)	211	L	S	-	A client way to reach the daemon. Loaded only through daemonEndpoint.ts:4; the core never calls it.
+lib/log.ts	163	PLUMBING	KEEP	-	0	-	-	-	Timestamped console, log size cap, id and frame formatters.
+lib/logBundle.ts	164	FEATURE	THIN	cli (client)	156	L	S	-	The harness logs export zip. Core loads it, and zipWriter.ts, for redactSecretsInText alone (core/input.ts:18, gitProject.ts:7).
+lib/loginShellEnv.ts	127	PLATFORM	KEEP	-	0	-	-	SPAWN:shell,SECRET	Captures the login shell environment once, async (core/main.ts). The whole map, exported keys included, stays cached (loginShellEnv.ts:89).
+lib/loopbackGet.ts	24	FEATURE	MOVE	gateway	24	L	M	NET-OUT,UNTRUSTED	Core GETs a local port with a redirect a phone sent (core/main.ts:1258); port and path pinned in core/terminals/browser.ts:90. Loopback only.
+lib/loopbackRequest.ts	29	PLUMBING	KEEP	-	0	-	-	-	Host and Origin checks for loopback requests (hookServer.ts, localWsServer.ts).
+lib/machineListReply.ts	23	LINK	KEEP	-	0	-	-	-	Wire shape of a machine list for the gateway fallback (core/gatewayLink.ts).
+lib/machineMcp.ts	190	LINK	KEEP	-	0	-	-	-	Reads this machine MCP servers file at every launch and adds argv (core/agents/create.ts:397). An entry runs a command in each agent.
+lib/machineNames.ts	90	SESSION	KEEP	-	0	-	-	-	Names the machine has had, so a pane title that is one is not an agent name (registry.ts).
+lib/messageHolds.ts	78	SESSION	KEEP	-	0	-	-	-	Why a message waits or is withheld, and the words said (core/input.ts, sessionInput.ts).
+lib/nativeConversation.ts	128	SESSION	KEEP	-	0	-	-	FS-WIDE	Which conversation a process holds open, from kernel evidence (sessionRepair.ts).
+lib/nativeHistoryEvidence.ts	97	SESSION	KEEP	-	0	-	-	FS-WIDE	Identity proof before a conversation file is deleted (purgeAgentService.ts).
+lib/nativePaneHold.ts	40	PLATFORM	KEEP	-	0	-	-	-	The held-pane marker a native launch replaces only itself with (engineLaunch.ts, tmuxBackend.ts).
+lib/nativeProcessControl.ts	260	PLATFORM	KEEP	-	0	-	-	SPAWN:process-images	Bounded kernel evidence for control: process rows and descriptors (processEvidence.ts).
+lib/nativeProcessImages.ts	236	PLATFORM	KEEP	-	0	-	-	SPAWN:process-images	Writes and runs the bundled macOS helper that names process images (processTable.ts).
+lib/newAgentModel.ts	26	LINK	KEEP	-	0	-	-	-	Parses a picked model and grid; models resolves where it goes (core/agents/launches.ts).
+lib/nodeMigration.ts	59	PLUMBING	KEEP	-	0	-	-	-	Why the daemon Node stays below 24, for /api/status; cleared at start (core/main.ts:2380).
+lib/nodeReferences.ts	44	PLUMBING	MOVE	master	44	L	S	FS-WIDE	Repoints launcher and launchd or systemd unit once per start (core/main.ts:2379). Alone pulls harnessd/platform.ts (902 lines) into the core.
+lib/nodeRuntime.ts	57	PLUMBING	KEEP	-	0	-	-	-	The managed Node path baked into hook commands and launches.
+lib/nodeStatus.ts	43	PLUMBING	KEEP	-	0	-	-	-	The daemon Node as /api/status reports it (core/main.ts:2141).
+lib/notificationRead.ts	14	LINK	KEEP	-	0	-	-	-	Read token of one dial notification (localWsServer.ts).
+lib/offThreadExec.ts	218	PLATFORM	KEEP	-	0	-	-	-	Spawns the core short probes from a worker thread so keystrokes do not wait (core/main.ts:506).
+lib/openFiles.ts	41	PLATFORM	KEEP	-	0	-	-	-	Shell prelude raising a pane open-files limit (engineLaunch.ts).
+lib/openTabProtection.ts	59	LINK	KEEP	-	0	-	-	-	The cleanup guard: never close an agent whose tab is open; reads the desk (core/main.ts:1235).
+lib/openclawStore.ts	91	ENGINE	KEEP	-	0	-	-	FS-WIDE	Where an OpenClaw session database is, from its TUI open files (core/main.ts, sessionCheckpoint.ts).
+lib/osClipboard.ts	121	PLATFORM	KEEP	-	0	-	-	SPAWN:osascript	Writes a pasted image to the host clipboard for the engine to read (terminalStreamManager.ts).
+lib/ownerCommands.ts	37	FEATURE	MOVE	devices	37	L	S	UNTRUSTED	Cmd-K route_task and route_send as a BackendSocket slot (backendSocket.ts:252,1087), against rule 2. The fleet router owns them.
+lib/paneEngineProcess.ts	115	SESSION	KEEP	-	0	-	-	-	Which process in a pane is the engine, and whether a miss is proof (core/agents/newPane.ts, swap.ts).
+lib/pasteDropFiles.ts	104	SESSION	KEEP	-	0	-	-	-	Where pasted and dropped files land, pruned after a day (terminalStreamManager.ts).
+lib/pasteOnScreen.ts	36	ENGINE	KEEP	-	0	-	-	-	Waits for Codex on Windows to show a paste before Enter (core/input.ts).
+lib/pasteText.ts	30	SESSION	KEEP	-	0	-	-	UNTRUSTED	Makes control characters in a pasted message visible so none acts as a keystroke (tmux.ts).
+lib/pathContainment.ts	53	PLUMBING	KEEP	-	0	-	-	-	Real-path containment check for file-reading requests (gitProject.ts, nodeStatus.ts).
+lib/patientExec.ts	115	PLATFORM	KEEP	-	0	-	-	-	execFile whose timeout a held event loop cannot fool; every ps and tmux probe uses it.
+lib/peerAccount.ts	358	PLUMBING	THIN	edge	75	L	S	SPAWN:lsof,UNTRUSTED	Whether a loopback caller is this OS account (hookServer.ts, localWsServer.ts). portHolderIsThisAccount (line 109) is the connectors bridge alone.
+lib/piSessionHome.ts	33	DEAD	UNSURE	-	33	L	S	FS-WIDE	Brings home Pi sessions written before 2026-10-14 (core/agents/launch.ts:126). Its source folders are pruned after 30 idle days.
+lib/processEnv.ts	124	PLATFORM	KEEP	-	0	-	-	SPAWN:ps,SECRET	Reads an engine process environment for gateway, grid and profile probes. Caches whole environments, secrets included, up to 256 (processEnv.ts:121).
+lib/processEvidence.ts	152	PLATFORM	KEEP	-	0	-	-	SPAWN:ps	Complete process topology for native conversation control (captureResumeIdentity.ts).
+lib/processLiveness.ts	75	PLATFORM	KEEP	-	0	-	-	SPAWN:ps,SYNC-SLOW	Lock owner liveness. On macOS a synchronous ps (line 39) runs on every changed registry save (registry.ts:512).
+lib/processProof.ts	74	PLATFORM	KEEP	-	0	-	-	-	Proves a recorded process dead before its pipe name is dialled (ptyHost/launch.ts).
+lib/processSignals.ts	14	PLATFORM	KEEP	-	0	-	-	-	One seam for signalling an agent process (stopAgentService.ts).
+lib/processTable.ts	997	ENGINE	KEEP	-	0	-	-	SPAWN:ps,SPAWN:lsof,UNTRUSTED	ps rows, each engine process signature, launch arguments: how discovery decides which agents exist. Reads every account processes.
+lib/processTree.ts	108	PLATFORM	KEEP	-	0	-	-	SPAWN:ps	An engine descendants so a stop ends them all (stopAgentService.ts).
+lib/productHealthContract.ts	98	FEATURE	MOVE	gateway	98	L	M	-	Fixed health vocabulary of the usage report. In core only for the mapping and the app report check.
+lib/productUsageContract.ts	309	FEATURE	MOVE	gateway	309	L	M	-	The backend usage vocabulary. Core loads it for three allowlists (core/agentBrowserLink.ts:34, hookServer.ts:1253, hachiMetrics.ts).
+lib/productUsageSignals.ts	295	LINK	THIN	gateway	235	L	M	-	Maps each request outcome to counter names in the socket (backendSocket.ts:1041-1050). Core could send one raw outcome; names belong to the gateway.
+lib/projectFolder.ts	403	FEATURE	THIN	edge	300	M	L	NET-OUT,SPAWN:git,FS-WIDE	A create clones a repository or adds a worktree inside the core (core/agents/launches.ts:123, projectFolder.ts:320). Parsing and a new empty folder stay.
+lib/promptIdentity.ts	12	LINK	KEEP	-	0	-	-	-	Hash naming a turn by its prompt, shared with the Swarm host (core/turns/ends.ts).
+lib/ptyHost/client.ts	391	PLATFORM	KEEP	-	0	-	-	SECRET,UNTRUSTED	The core control and stream connections to harness-pty over a local socket or pipe; both sides prove the token (client.ts:106,133).
+lib/ptyHost/drain.ts	220	PLATFORM	KEEP	-	0	-	-	-	One backend per host build; older hosts drain and are shut down (core/main.ts:632-687).
+lib/ptyHost/instance.ts	45	PLATFORM	KEEP	-	0	-	-	-	Host instance names and the HARNESS_PANE pattern (hookServer.ts, registry.ts).
+lib/ptyHost/launch.ts	580	PLATFORM	THIN	master	40	L	S	SPAWN:harness-pty,SYNC-SLOW	Finds, reaches and, when none answers, starts harness-pty detached (launch.ts:453). Deleting old version folders (line 552) is an install chore.
+lib/ptyHost/protocol.ts	330	PLATFORM	KEEP	-	0	-	-	-	TypeScript mirror of the host wire protocol and frame reader.
+lib/ptyHost/stream.ts	587	PLATFORM	KEEP	-	0	-	-	-	One terminal stream per pane on the host; builds keyframes with the tmux stream code.
+lib/ptyHostBackend.ts	944	PLATFORM	KEEP	-	0	-	-	-	The ptyhost terminal backend, op for op like tmux; the Windows default. Loaded but unused on macOS and Linux.
+lib/publishedGridConfig.ts	171	LINK	KEEP	-	0	-	-	-	Immutable grid config publication for a native launch (core/main.ts:2560).
+lib/purgeAgentService.ts	465	SESSION	THIN	engine worker	135	H	L	SPAWN:sqlite3,FS-WIDE,UNTRUSTED	Permanent delete. Per-engine store inspect and erase (54-190) run sqlite DELETEs on engines' databases from the core; stop, reservation and row removal stay.
+lib/questionController.ts	834	SESSION	THIN	engine worker	135	M	M	UNTRUSTED	Answer matching and the lease stay. Leave: legacy key steps (46-59, 395-430), dialog signature rules (776-827). shapeQuestions (29) is test-only: delete.
+lib/recapReads.ts	82	LINK	KEEP	-	0	L	-	-	Reads what the recaps service last reported (core/turns/recaps.ts, core/agents/cloud.ts). Pure.
+lib/registry.ts	3476	PLUMBING	KEEP	-	0	H	-	SECRET,SYNC-SLOW,SPAWN:ps,UNTRUSTED	The session store. Each locked save runs a sync ps on macOS (512, processLiveness.ts:39); lock waits 2 s (491-499). Rows hold grid keys (145-153).
+lib/relayFrames.ts	95	PLUMBING	KEEP	-	0	L	-	-	Frame tables the socket's gate reads: backend-only types, gateway requests, retired pair refusals (backendSocket.ts:49).
+lib/removePath.ts	35	PLATFORM	KEEP	-	0	L	-	-	removeLink for the grid config folder on launch (lib/gridConfigDir.ts).
+lib/restartAgent.ts	229	SESSION	KEEP	-	0	H	-	-	Restart in the same pane: kill, respawn, verify, fall back (core/agents/restart.ts, retarget.ts, swap.ts).
+lib/restoreAgents.ts	907	SESSION	KEEP	-	0	H	-	SECRET	Brings agents back after a reboot; a grid row relaunches with its saved credential (23-28).
+lib/restoreTerminals.ts	102	SESSION	KEEP	-	0	H	-	-	Restore's pane operations, per backend (core/main.ts).
+lib/resumeAgentService.ts	455	SESSION	KEEP	-	0	H	-	-	Resume of a stopped agent: reservation, pane, launch, confirmation (core/agents/lifecycle.ts:11).
+lib/resumeCapability.ts	41	SESSION	KEEP	-	0	L	-	-	What each engine can resume. Pure.
+lib/resumeStoppedAgent.ts	152	SESSION	KEEP	-	0	H	-	-	Resume ordering and identity checks.
+lib/retainExitedSession.ts	77	SESSION	KEEP	-	0	H	-	-	Archives an engine that exited by itself and keeps its shell.
+lib/runtimeActivity.ts	38	SESSION	KEEP	-	0	M	-	-	Working or idle from Codex's server or the pane footer (core/turns/activity.ts).
+lib/runtimeControl.ts	675	ENGINE	THIN	engine worker	510	M	L	UNTRUSTED	Model switch. Six engines' pane drivers run in the core (52-111, 229-663); Claude Code and Codex already use worker grants (133, 170). setProfile (125-221) stays.
+lib/runtimeProfileState.ts	487	SESSION	THIN	engine worker	70	M	M	UNTRUSTED	Core's store of each session's accepted model and control state: stays. Leave: other engines' inline readers (86-114) and targets (456-485).
+lib/runtimeProfileWire.ts	33	SESSION	KEEP	-	0	L	-	-	Profile id parser. Pure.
+lib/savedSkill.ts	44	LINK	KEEP	-	0	L	-	-	The Swarm skill a row keeps, as data, so the registry loads no Swarm code.
+lib/secureState.ts	192	PLUMBING	KEEP	-	0	H	-	-	Owner and mode checks for every private state file.
+lib/sessionCheckpoint.ts	284	SESSION	THIN	engine worker	90	M	M	FS-WIDE,UNTRUSTED	Close's backup. The store engines' export (23-101) reads a whole conversation into core memory, then one JSON.stringify (229-231).
+lib/sessionGitContext.ts	146	FEATURE	MOVE	edge (workspaces)	146	M	M	SPAWN:git,FS-WIDE	Display-only git context built for every agent frame (agentFrame.ts:251-257), up to 8 git lookups. The design allows a reported cache (core-boundary-next.md:322).
+lib/sessionGitHistory.ts	157	FEATURE	MOVE	edge (workspaces)	157	M	M	-	Branch and pull request history per conversation, read and written on the frame path (agentFrame.ts:252-254).
+lib/sessionInput.ts	1322	SESSION	KEEP	-	0	H	-	-	Messages into panes. Holds 13 engines' verify windows (19-63, 954-978) and a Swarm delivery-prefix check (229): data for contracts, not a move.
+lib/sessionRepair.ts	791	SESSION	KEEP	-	0	H	-	FS-WIDE,UNTRUSTED	Finds the session a discovered process runs; reads every engine's store and /proc (188). Binding cannot wait on a worker.
+lib/sessionSearch/externals/types.ts	153	LINK	THIN	search	145	L	S	-	Types only: no runtime cost. Core needs the EXTERNAL_ENGINES constant (lib/externalSessionWire.ts:3).
+lib/sessionSync.ts	41	SESSION	KEEP	-	0	M	-	-	Publishes an agent's frame to apps and devices (core/agents/events.ts).
+lib/sessionTitle.ts	168	ENGINE	THIN	engine worker	75	L	S	SYNC-SLOW,FS-WIDE,UNTRUSTED	Reads Codex's session_index.jsonl whole and sync on each change (86), and omp's file head (133): engine reads. namingTitle stays for the registry.
+lib/sessionWorkWire.ts	8	LINK	KEEP	-	0	L	-	-	Two validators shared with usage and git history.
+lib/setUpWithin.ts	20	LINK	KEEP	-	0	L	-	-	Bounded wait on models' grid set-up (core/agents/create.ts).
+lib/sgrCarry.ts	109	PLATFORM	KEEP	-	0	M	-	-	SGR state carried across tmux capture rows (tmuxStream.ts).
+lib/sharedMachinesPort.ts	161	LINK	THIN	edge (shared machines)	112	L	S	UNTRUSTED	Core needs answerSharedMachinesOp (23-48). The port reader (49-160) loads for the inline path only (core/main.ts:227, 1851).
+lib/shellProtocol.ts	14	LINK	KEEP	-	0	L	-	-	Shell request names and the argv check both sides run.
+lib/shellQuote.ts	5	PLATFORM	KEEP	-	0	L	-	-	POSIX single-quoting for launch scripts.
+lib/sleepAware.ts	60	PLUMBING	KEEP	-	0	M	-	-	Tells a machine that slept from a peer that went silent.
+lib/slimForRelay.ts	88	LINK	KEEP	-	0	L	-	-	Cuts transcript events for remote apps before they cross to the gateway (backendSocket.ts:659).
+lib/spreadNotice.ts	21	LINK	KEEP	-	0	L	-	-	Spreads one notice to the windows over a random delay (backendSocket.ts:262).
+lib/sqliteAvailability.ts	45	ENGINE	KEEP	-	0	L	-	-	Startup advisory for the five store-backed engines.
+lib/sqliteBuiltin.ts	183	ENGINE	KEEP	-	0	H	-	FS-WIDE,UNTRUSTED	node:sqlite binding, eager for hook admission (1). A native crash here costs every session.
+lib/sqlitePage.ts	183	ENGINE	MOVE	engine worker	183	M	M	FS-WIDE	Byte-bounded pages of a store table. Only the checkpoint's store export uses it (sessionCheckpoint.ts:12): leaves with that export.
+lib/sqliteRead.ts	155	ENGINE	KEEP	-	0	H	-	SPAWN:sqlite3,FS-WIDE,UNTRUSTED	Read path for store engines: the binding on read threads, else the sqlite3 CLI. Leaves only with those engines' workers.
+lib/sqliteThread.ts	189	ENGINE	KEEP	-	0	H	-	FS-WIDE	Two SQLite read threads inside the core's process (#1906).
+lib/sshHosts.ts	87	FEATURE	MOVE	edge (workspaces)	87	M	M	SPAWN:ssh,FS-WIDE	GitHub SSH aliases for clones and the frame's project remote (projectFolder.ts:9, agentProject.ts:8). Leaves with those two.
+lib/stopAgentService.ts	256	SESSION	KEEP	-	0	H	-	-	Stop: save the row, then end the process tree and the pane.
+lib/stoppedAgents.ts	278	SESSION	KEEP	-	0	H	-	SECRET,SYNC-SLOW	Archive of stopped agents. list() is a sync readdir plus an lstat per record (58-108): grows with history. Archives keep the grid key (147).
+lib/storeProxy.ts	48	FEATURE	MOVE	viewers (Store)	48	L	S	-	/api/store/* rules on the hook server, forwarded to the backend (hookServer.ts:1334, core/main.ts:2337).
+lib/subagentTranscript.ts	10	ENGINE	KEEP	-	0	L	-	-	Claude subagent transcript path test.
+lib/submitTiming.ts	26	SESSION	KEEP	-	0	M	-	-	Paste-to-Enter timing shared by both terminal backends.
+lib/subscriptionModel.ts	96	ENGINE	KEEP	-	0	M	-	-	Per-engine model flag for a relaunch off a grid (lib/launchOverrides.ts). Launch must work with services down.
+lib/tabKeyWire.ts	98	LINK	KEEP	-	0	L	-	UNTRUSTED	Core relays shared-tab key calls between Agent Messages and the gateway (messagesLink.ts, gatewayLink.ts). Holds no key.
+lib/tabRelayWire.ts	64	LINK	KEEP	-	0	L	-	UNTRUSTED	The same relay hop for shared-tab frames.
+lib/terminalAgentDiscovery.ts	311	SESSION	KEEP	-	0	H	-	SECRET,SPAWN:ps	Which engine owns each pane. Reads each agent process's whole environment (290) for grid, home and DSH markers.
+lib/terminalAgentReconciler.ts	478	SESSION	KEEP	-	0	H	-	-	The 5 s discovery pass and its deadline.
+lib/terminalBackend.ts	196	SESSION	KEEP	-	0	H	-	-	The terminal backend interface.
+lib/terminalBackendCoordinator.ts	396	SESSION	KEEP	-	0	H	-	-	Routes reads, writes and leases to each pane's backend.
+lib/terminalBackendRecovery.ts	35	SESSION	KEEP	-	0	M	-	-	Retries a backend that was missing at boot.
+lib/terminalBinary.ts	292	PLUMBING	THIN	gateway	70	L	S	UNTRUSTED	Local framing stays. The sealed envelope and hop framing (205-223, 256-291) are called by the gateway only.
+lib/terminalEnvironment.ts	11	PLATFORM	KEEP	-	0	L	-	-	Scrubs TMUX variables from one-shot children.
+lib/terminalHandoff.ts	47	FEATURE	MOVE	edge	47	L	S	-	`harness remote` tile handoff: a request case in the socket (backendSocket.ts:1189) and a pane lookup (core/main.ts:1901).
+lib/terminalKeys.ts	39	PLATFORM	KEEP	-	0	L	-	-	Key name table for both backends.
+lib/terminalRuntime.ts	118	SESSION	KEEP	-	0	H	-	-	Route and process identity keys; 45 importers.
+lib/terminalStreamManager.ts	1843	SESSION	THIN	new service: paste (edge host)	240	M	M	UNTRUSTED	Streams stay. Leave: image and file paste uploads (1003-1234): core buffers up to 20 MB from a remote client, writes files, starts clipboard tools.
+lib/terminalTitle.ts	13	PLATFORM	KEEP	-	0	L	-	-	Rejects a kitty graphics query as a pane title.
+lib/terminalTypes.ts	331	SESSION	KEEP	-	0	H	-	-	Terminal types and action results.
+lib/tmux.ts	558	PLATFORM	THIN	delete	59	L	S	SPAWN:tmux,SPAWN:ps	tmux reads and input stay. resolvePaneRootProcess (201) has no caller; tmuxPaneProcessTree (219) only a dev script (scripts/resume-native-e2e.ts).
+lib/tmuxAgentDiscovery.ts	160	PLATFORM	KEEP	-	0	H	-	SPAWN:tmux	Lists this daemon's tmux panes in one bounded read.
+lib/tmuxBackend.ts	697	PLATFORM	KEEP	-	0	H	-	SPAWN:tmux,SECRET	tmux as a terminal backend. Launch env, keys included, goes to tmux on stdin so nothing shows in ps (142-165).
+lib/tmuxCapture.ts	103	PLATFORM	KEEP	-	0	H	-	SPAWN:tmux	Batched capture-pane.
+lib/tmuxControlGate.ts	95	PLATFORM	KEEP	-	0	H	-	-	Keeps attaches apart from notifications on tmux before 3.7.
+lib/tmuxOnPath.ts	213	PLATFORM	THIN	delete	19	L	S	SPAWN:shell,SPAWN:tmux	Finds tmux through the login shell: stays. requireTmuxAvailable (46) is test-only.
+lib/tmuxStream.ts	1195	PLATFORM	THIN	delete	43	L	S	SPAWN:tmux	tmux control stream, every keystroke and byte: stays. decodeTmuxControlData (196) and normalizeTmuxCaptureLines (272) are test-only.
+lib/tmuxVersion.ts	156	PLATFORM	KEEP	-	0	M	-	SPAWN:tmux	tmux feature table by version.
+lib/transcriptActivity.ts	114	SESSION	KEEP	-	0	M	-	FS-WIDE,UNTRUSTED	Last conversation activity from a transcript's tail (2 MB cap).
+lib/transcriptBoundary.ts	42	SESSION	KEEP	-	0	M	-	FS-WIDE	Binds a control action to a byte boundary (1 KiB sync read).
+lib/transcriptControls.ts	35	SESSION	KEEP	-	0	M	-	-	Replays recorded turn closes at their offsets.
+lib/transcriptPages.ts	467	SESSION	THIN	engine worker	205	L	S	FS-WIDE	Core needs lineCount (LineIndex 114-237). Paging (240-466) serves only the inline compatibility path (core/transcripts/history.ts:35, 173); workers hold their own pager.
+lib/transcriptTail.ts	263	SESSION	KEEP	-	0	H	-	FS-WIDE	Bounded tail and record walks. One record may be 256 MiB (11), a whole read 64 MiB (193), in the core's heap.
+lib/turnActivity.ts	100	SESSION	KEEP	-	0	H	-	-	The Working lease.
+lib/typedInput.ts	55	LINK	KEEP	-	0	L	-	-	Tells typing from terminal reports on each input frame, for agent cleanup and grid prewarm (terminalStreamManager.ts:858).
+lib/unreachable.ts	81	PLUMBING	THIN	cli	55	L	S	-	CLI texts for a shell that cannot reach the daemon. Core needs pidIn and NOT_RUNNING only (daemonState.ts, localTransport.ts).
+lib/userShell.ts	24	PLATFORM	KEEP	-	0	L	-	-	The person's shell.
+lib/viewerFrames.ts	14	LINK	KEEP	-	0	L	-	-	Viewer frame types the core routes.
+lib/windowSurfaces.ts	41	LINK	KEEP	-	0	L	-	-	Window counts for the gateway; the core calls countWindows only (backendSocket.ts:793).
+lib/windows/claudeCodeGitBash.ts	37	ENGINE	KEEP	-	0	L	-	FS-WIDE	Finds the Git Bash that Claude Code's status line runs in.
+lib/windows/cliVersions.ts	180	FEATURE	MOVE	updater	180	L	S	-	The updater's version folders: write, switch, retire. Core loads it for one regex, VERSION_FOLDER (lib/installedCopy.ts:11).
+lib/windows/daemonPipe.ts	42	PLUMBING	KEEP	-	0	M	-	SECRET	Finds the daemon's pipe and token for a data folder.
+lib/windows/dataFolderClaim.ts	181	PLUMBING	KEEP	-	0	M	-	NET-IN,SECRET	One core per data folder on Windows: a fixed-name local pipe that proves the daemon token (79, 109).
+lib/windows/engineStart.ts	195	PLATFORM	KEEP	-	0	H	-	-	How an engine starts in a Windows pane.
+lib/windows/guestEngine.ts	136	FEATURE	MOVE	edge (shared machines)	136	M	M	SPAWN:npm	Installs a guest's engine with npm in a pane; a guest's create awaits it for up to 20 min (guestEngine.ts:124, core/agents/guestCreate.ts:120).
+lib/windows/guestHostBackend.ts	95	PLATFORM	KEEP	-	0	M	-	SPAWN:schtasks,FS-WIDE,SECRET	A guest's own pane host as a terminal backend; starts its task with schtasks (71). Only guest sessions need it.
+lib/windows/guestRequests.ts	229	FEATURE	THIN	edge (shared machines)	200	L	S	-	The SYSTEM set-up task's protocol. Core needs three constants: guestHostHome, WINDOWS_GUEST_SETUP_VERSION, WINDOWS_GUEST_ROOT (core/agents/guestCreate.ts:22).
+lib/windows/guestShare.ts	260	FEATURE	MOVE	edge (shared machines)	260	L	S	-	Guest folder checks and ACLs, loaded only through guestRequests.ts:13. Its ACL plan (158-260) is test-only.
+lib/windows/hermesLaunch.ts	123	ENGINE	KEEP	-	0	M	-	FS-WIDE	Starts Hermes past its unsigned launcher on Windows; writes a boot file beside the install.
+lib/windows/installLayout.ts	121	PLATFORM	THIN	updater	110	L	S	-	Install pointers for the installer, master and updater. Core needs the STABLE_NOTIFY string (engines/kit/notifyHooks.ts:9).
+lib/windows/launch.ts	177	PLATFORM	KEEP	-	0	H	-	FS-WIDE,UNTRUSTED	Engine argv for a Windows pane; reads npm shims so cmd.exe parses no argument.
+lib/windows/noWindow.ts	13	PLATFORM	KEEP	-	0	L	-	-	Spawn options that never flash a window.
+lib/windows/pipeAuth.ts	244	PLUMBING	KEEP	-	0	H	-	SECRET	The daemon pipe's credential: makes the token (219) and checks each request's HMAC (94). For every local client and service.
+lib/windows/pipeClient.ts	93	PLUMBING	KEEP	-	0	M	-	SECRET	One authenticated request to the daemon's pipe (42, 83). Local pipe only.
+lib/windows/powershell.ts	61	PLATFORM	KEEP	-	0	L	-	SPAWN:powershell	PowerShell runner; the core uses the async one (lib/peerAccount.ts).
+lib/windows/processTable.ts	102	PLATFORM	KEEP	-	0	H	-	SPAWN:harness-pty	The Windows process table, from the pty host.
+lib/windows/shell.ts	17	PLATFORM	KEEP	-	0	L	-	-	Default shell for a Windows pane.
+lib/windows/sid.ts	9	FEATURE	MOVE	edge (shared machines)	9	L	S	-	SID check, reached only through guestShare.ts:15.
+lib/windows/storeAppAlias.ts	22	PLATFORM	KEEP	-	0	L	-	-	Refuses a Store app alias as an engine.
+lib/windows/treeKill.ts	125	PLATFORM	KEEP	-	0	H	-	-	Ends a process tree on Windows, for stop and restart.
+lib/workspaceCheck.ts	24	SESSION	KEEP	-	0	L	-	-	Refuses a relaunch whose folder is gone.
+lib/worktreeDeletion.ts	127	FEATURE	MOVE	edge (workspaces)	127	M	M	SPAWN:git,SPAWN:du,FS-WIDE,UNTRUSTED	Worktree review and removal with git and du; only purge calls it (purgeAgentService.ts:22). A review is plain data, so it can cross a link.
+lib/wsLiveness.ts	145	PLUMBING	KEEP	-	0	M	-	-	Silence deadline for the local sockets.
+lib/zipWriter.ts	109	FEATURE	MOVE	cli (harness logs export)	109	L	S	-	ZIP writer for the log bundle. Loaded because logBundle.ts:3 imports it and the core wants redactSecretsInText (core/input.ts:18).
+localWsServer.ts	930	PLUMBING	THIN	devices, gateway	430	M	M	NET-IN,UNTRUSTED,SECRET	Socket, auth, terminal frames stay. Desk frames (232-289, 576-690), route and voice (691-765), relay to other machines (445-539, 850-861) are features'.
+scm/gitScmProject.ts	60	FEATURE	MOVE	edge (workspaces)	60	M	L	SPAWN:git,FS-WIDE	Git wrapper: describe spawns git for an agent's frame (42-45; lib/agentProject.ts:91); prepareIsolated makes worktrees.
+scm/scmProjects.ts	89	FEATURE	THIN	edge (workspaces)	60	M	L	-	describeScmProject is frame decoration (41-50; lib/agentFrame.ts:23). Launch env and instruction-write hooks (61-84) stay.
+scm/types.ts	103	SESSION	KEEP	-	0	L	S	-	The registry parses a row's scmLaunch record with it (lib/registry.ts:51).
+version.ts	27	PLUMBING	KEEP	-	0	L	S	-	The build's version, injected at build time.
+watcher/watcher.ts	462	SESSION	KEEP	-	0	L	S	UNTRUSTED,FS-WIDE	Tails only transcripts the registry admitted; reads 8 MiB at a time, 32 MiB history cap (60-64).

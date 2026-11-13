@@ -208,6 +208,239 @@ describe('the host tick on the host form', () => {
     expect(vi.mocked(t.call).mock.calls.filter(([, path]) => path.includes('/hosts/'))).toHaveLength(2)
     expect(t.log).toHaveBeenCalledTimes(1)
   })
+  // anh Dee's Mac, 2026-11-12: signed out, the host logged "Not signed in. Run `harness login`." twice a second until harness.log
+  // reached its cap, and its trim erased the record of what had signed the person out (lib/signOut.ts).
+  describe('signed out', () => {
+    const OUT = 'Not signed in on this computer: this Swarm waits for a sign-in (harness login).'
+    const BACK = 'Signed in again: this Swarm goes on.'
+    const refused = (status: number, code: string) => async () => ({ status, body: { success: false, error: { code, message: 'No.' } } })
+    const lines = (t: ReturnType<typeof setup>) => t.log.mock.calls.map(([line]) => line)
+    const asked = (t: ReturnType<typeof setup>) => vi.mocked(t.call).mock.calls.map(([, path]) => path)
+    /** [seconds] of the daemon's one-second tick, as host.start's interval runs it. */
+    const run = async (t: ReturnType<typeof setup>, host: ReturnType<ReturnType<typeof setup>['open']>, seconds: number) => {
+      for (let second = 0; second < seconds; second++) {
+        await host.tick(); await host.reconcileStops(); await host.reconcileReceipts(); host.engineSignedIn()
+        for (let i = 0; i < 5; i++) await Promise.resolve()
+        t.wait(1_000)
+      }
+    }
+
+    it('says so once, asks the server nothing while no session is on disk, and goes on within a second of a sign-in', async () => {
+      const t = setup(), session = { key: null as string | null }
+      const host = t.open({ signIn: () => session.key })
+      const working = vi.mocked(t.call).getMockImplementation()!
+      vi.mocked(t.call).mockImplementation(refused(401, 'NOT_SIGNED_IN'))
+      await run(t, host, 60)
+      expect(lines(t)).toEqual([OUT])
+      // The pass that found it, and nothing after: 62 requests and 120 lines a minute before.
+      expect(asked(t)).toHaveLength(1)
+      vi.mocked(t.call).mockImplementation(working)
+      session.key = 'epoch-1'
+      await run(t, host, 2)
+      expect(lines(t)).toEqual([OUT, BACK])
+      expect(asked(t)).toContain('/api/auth/me')
+      // The pass runs as soon as the server has said so.
+      expect(asked(t).slice(asked(t).indexOf('/api/auth/me') + 1).some(path => path.includes('/hosts/'))).toBe(true)
+    })
+
+    // The review of #4221: a pass that resolved from cached rows read as signed in again, while every request still failed.
+    it('says it goes on only once the server has answered, and waits longer each time a session on disk is refused', async () => {
+      const t = setup()
+      const host = t.open({ signIn: () => 'epoch-1' })
+      const working = vi.mocked(t.call).getMockImplementation()!
+      vi.mocked(t.call).mockImplementation(refused(401, 'UNAUTHORIZED'))
+      await run(t, host, 60)
+      expect(lines(t)).toEqual([OUT])
+      // The pass, then a look at 5, 15 and 35 s: a server that refuses the session is asked less and less often.
+      expect(asked(t).filter(path => path === '/api/auth/me')).toHaveLength(3)
+      vi.mocked(t.call).mockImplementation(working)
+      await run(t, host, 60)
+      expect(lines(t)).toEqual([OUT, BACK])
+    })
+
+    it('looks at once when the server pushes work while it waits, and reads that agent\'s list once it goes on', async () => {
+      const t = setup()
+      const host = t.open({ signIn: () => 'epoch-1' })
+      const working = vi.mocked(t.call).getMockImplementation()!
+      vi.mocked(t.call).mockImplementation(refused(401, 'NOT_SIGNED_IN'))
+      await run(t, host, 2)
+      vi.mocked(t.call).mockImplementation(working)
+      vi.mocked(t.call).mockClear()
+      t.push({ type: 'super_tab_deliveries', tabId: 'tab', agentId: 'agent' } as BackendNotice)
+      for (let i = 0; i < 10; i++) await Promise.resolve()
+      await host.tick()
+      expect(asked(t)[0]).toBe('/api/auth/me')
+      expect(asked(t)).toContain('/api/super-tabs/tab/agents/agent/deliveries')
+      expect(lines(t)).toEqual([OUT, BACK])
+    })
+
+    // The second review of #4221: five pushes a second while the server refused the session asked it 300 times a minute.
+    it('asks the server about a refused session at most once for each wait, however often it pushes', async () => {
+      const t = setup()
+      const host = t.open({ signIn: () => 'epoch-1' })
+      vi.mocked(t.call).mockImplementation(refused(401, 'UNAUTHORIZED'))
+      for (let second = 0; second < 60; second++) {
+        await host.tick()
+        for (let push = 0; push < 5; push++) { t.push({ type: 'super_tab_deliveries' } as BackendNotice); for (let i = 0; i < 5; i++) await Promise.resolve() }
+        t.wait(1_000)
+      }
+      expect(asked(t).filter(path => path === '/api/auth/me').length).toBeLessThanOrEqual(8)
+      expect(lines(t)).toEqual([OUT])
+    })
+
+    // The second review of #4221: a new sign-in after a refused session waited the backoff out, up to 5 minutes, as only whether a
+    // session was on disk was looked at, not which.
+    it('asks at once when a new sign-in replaces a refused session', async () => {
+      const t = setup(), session = { key: 'epoch-1' }
+      const host = t.open({ signIn: () => session.key })
+      const working = vi.mocked(t.call).getMockImplementation()!
+      vi.mocked(t.call).mockImplementation(refused(401, 'UNAUTHORIZED'))
+      await run(t, host, 40)
+      vi.mocked(t.call).mockImplementation(working)
+      session.key = 'epoch-2'
+      await run(t, host, 2)
+      expect(lines(t)).toEqual([OUT, BACK])
+    })
+
+    // The second review of #4221: the server took the session but a Swarm read still answered 401, so the host went in and out of
+    // waiting every 5 s. Each time it comes back within a few minutes, it waits twice as long as the last.
+    it('waits longer each time it comes back and is refused again', async () => {
+      const t = setup(), at: number[] = []
+      const host = t.open({ signIn: () => 'epoch-1' })
+      let second = 0
+      vi.mocked(t.call).mockImplementation(async (_method, path) => {
+        if (path !== '/api/auth/me') return { status: 401, body: { success: false, error: { code: 'UNAUTHORIZED', message: 'No.' } } }
+        at.push(second)
+        return { status: 200, body: { success: true, data: { user: { id: 'u', email: 'u@example.com' } } } }
+      })
+      for (; second < 120; second++) {
+        await host.tick(); await host.reconcileStops(); await host.reconcileReceipts()
+        for (let i = 0; i < 5; i++) await Promise.resolve()
+        t.wait(1_000)
+      }
+      // In at 0; asked at 5, 15, 35 and 75 s, each gap twice the last, where the 5 s floor asked every 5 s.
+      expect(at).toEqual([5, 15, 35, 75])
+      expect(lines(t)).toEqual([OUT, BACK, OUT, BACK, OUT, BACK, OUT, BACK, OUT])
+    })
+
+    // The third review of #4221: a Lead's terminal request pushed while signed out was picked up anyway, a POST and a line each
+    // time the server said it again. It waits, and is picked up once the server takes the session.
+    it('picks up no terminal request while signed out, and picks it up once signed in again', async () => {
+      const t = setup()
+      Object.assign(t.core, { superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), input: vi.fn(),
+        screen: vi.fn(async () => ({ ok: true as const, text: '> ', hold: null })) } })
+      const pickups = () => asked(t).filter(path => path === '/api/super-tabs/hosts/machine-1/terminal').length
+      const host = t.open({ signIn: () => 'epoch-1' })
+      const roster = vi.mocked(t.call).getMockImplementation()!
+      const working: typeof roster = async (method, path, body) => path === '/api/super-tabs/hosts/machine-1/terminal'
+        ? { status: 200, body: { success: true, data: [] } } : roster(method, path, body)
+      vi.mocked(t.call).mockImplementation(working)
+      await host.tick()
+      vi.mocked(t.call).mockImplementation(refused(401, 'UNAUTHORIZED'))
+      await host.tick()
+      vi.mocked(t.call).mockClear()
+      for (let second = 0; second < 30; second++) {
+        t.push({ type: '__terminal_waiting', tabId: 'tab', agentId: 'agent' } as BackendNotice)
+        for (let i = 0; i < 5; i++) await Promise.resolve()
+        await host.tick()
+        t.wait(1_000)
+      }
+      expect(pickups()).toBe(0)
+      expect(lines(t)).toEqual([OUT])
+      vi.mocked(t.call).mockImplementation(working)
+      t.wait(5 * 60_000)
+      await host.tick()
+      await vi.waitFor(() => expect(pickups()).toBe(1))
+      expect(lines(t).slice(0, 2)).toEqual([OUT, BACK])
+    })
+
+    // The fourth review of #4221: an agent's list refused with a 401 was logged as a list failure and backed off, so a delivery
+    // pushed just after a short sign-out waited out that backoff. It is read as signed out, and its wait goes with the sign-in.
+    it('reads a refused agent list as signed out, and reads it again within a second of the sign-in, no backoff left', async () => {
+      const t = setup()
+      const host = t.open({ signIn: () => 'epoch-1' })
+      const working = vi.mocked(t.call).getMockImplementation()!
+      // The server reads the roster but refuses the agent's list, and the session when asked.
+      vi.mocked(t.call).mockImplementation(async (method, path, body) => path.includes('/deliveries') || path === '/api/auth/me'
+        ? { status: 401, body: { success: false, error: { code: 'UNAUTHORIZED', message: 'No.' } } } : working(method, path, body))
+      // A minute refused: as a list failure, its backoff would have grown to 30 s.
+      await run(t, host, 60)
+      expect(lines(t)).toEqual([OUT])
+      vi.mocked(t.call).mockImplementation(working)
+      vi.mocked(t.call).mockClear()
+      t.wait(5 * 60_000)
+      await run(t, host, 1)
+      expect(lines(t)).toEqual([OUT, BACK])
+      expect(asked(t)).toContain('/api/super-tabs/tab/agents/agent/deliveries')
+    })
+
+    // The fifth review of #4221 (its test): the pass that found the sign-out had spent the server's push for an idle agent, so
+    // after the sign-in its list was never read and the message never reached it. A sign-in reads every running agent's list.
+    it('reads, after the sign-in, the list a push asked for in the pass that found the sign-out', async () => {
+      const t = setup()
+      const host = t.open({ signIn: () => 'epoch-1' })
+      const working = vi.mocked(t.call).getMockImplementation()!
+      const lists = () => vi.mocked(t.call).mock.calls.filter(([m, path]) => m === 'GET' && path.includes('/deliveries')).length
+      t.idle()
+      t.push({ type: '__deliveries_lease' } as BackendNotice)
+      await host.tick()
+      for (let i = 0; i < 3; i++) { t.push({ type: '__deliveries_lease' } as BackendNotice); t.wait(1_000); await host.tick() }
+      // The session goes: the roster still answers, the agent's list and the session are refused.
+      vi.mocked(t.call).mockImplementation(async (method, path, body) => path.includes('/deliveries') || path === '/api/auth/me'
+        ? { status: 401, body: { success: false, error: { code: 'UNAUTHORIZED', message: 'No.' } } } : working(method, path, body))
+      t.send()
+      t.push({ type: 'super_tab_deliveries', tabId: 'tab', agentId: 'agent' } as BackendNotice)
+      for (let i = 0; i < 10; i++) await Promise.resolve()
+      await host.tick()
+      vi.mocked(t.call).mockImplementation(working)
+      const atSignIn = lists()
+      for (let second = 0; second < 20; second++) {
+        t.push({ type: '__deliveries_lease' } as BackendNotice)
+        for (let i = 0; i < 5; i++) await Promise.resolve()
+        await host.tick(); await host.reconcileStops(); await host.reconcileReceipts()
+        for (let i = 0; i < 5; i++) await Promise.resolve()
+        t.wait(1_000)
+      }
+      expect(lists()).toBeGreaterThan(atSignIn)
+    })
+
+    // The fifth review of #4221: a server that did not answer was read as a refusal, and the wait grew to 5 minutes; a new sign-in
+    // after a long refusal kept that long wait for its next ask.
+    it('asks again every 5 s when the server does not answer, and starts again at 5 s for a new sign-in', async () => {
+      const t = setup(), session = { key: 'epoch-1' }
+      const host = t.open({ signIn: () => session.key })
+      const asks = () => asked(t).filter(path => path === '/api/auth/me').length
+      vi.mocked(t.call).mockImplementation(refused(401, 'UNAUTHORIZED'))
+      await host.tick()
+      vi.mocked(t.call).mockImplementation(refused(503, 'BACKEND_UNAVAILABLE'))
+      await run(t, host, 60)
+      // Every 5 s from the first look at 5 s: twelve in a minute, never a growing wait.
+      expect(asks()).toBeGreaterThanOrEqual(11)
+      vi.mocked(t.call).mockImplementation(refused(401, 'UNAUTHORIZED'))
+      await run(t, host, 600)
+      const longWait = asks()
+      session.key = 'epoch-2'
+      await run(t, host, 20)
+      // At once, then after 10 s: the new sign-in's wait starts again from 5 s, not from the last refusal's 5 minutes.
+      expect(asks() - longWait).toBe(2)
+      expect(lines(t)).toEqual([OUT])
+    })
+
+    // The review of #4221: an engine signed in while the account was signed out lost the reset of its cached reading.
+    it('still forgets the engine readings when an engine signs in, and reports nothing to the server', async () => {
+      const t = setup()
+      const host = t.open({ signIn: () => null })
+      vi.mocked(t.call).mockImplementation(refused(401, 'NOT_SIGNED_IN'))
+      await host.tick()
+      const reset = vi.spyOn(ContributedMachines.prototype, 'engineSignedIn')
+      vi.mocked(t.call).mockClear()
+      host.engineSignedIn()
+      expect(reset).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(t.call)).not.toHaveBeenCalled()
+      reset.mockRestore()
+    })
+  })
+
   // Diego 10-29: a host form whose body timed out after the headers read as '200 OK, {}', so the host paused this machine's
   // Swarm work for a minute behind 'Update Harness'. Through the gateway's real backend helper, it is a timeout that is logged and retried.
   it('logs a feed read that times out after the headers as unreachable and reads again the next second', async () => {

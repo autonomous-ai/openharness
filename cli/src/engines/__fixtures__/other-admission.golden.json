@@ -156,21 +156,21 @@
    "a relative path",
    {
     "engine": "hermes",
-    "hermesHome": null
+    "hermesHome": "undefined"
    }
   ],
   [
    "a path with a control character",
    {
     "engine": "hermes",
-    "hermesHome": null
+    "hermesHome": "undefined"
    }
   ],
   [
    "none",
    {
     "engine": "hermes",
-    "hermesHome": null
+    "hermesHome": "undefined"
    }
   ],
   [

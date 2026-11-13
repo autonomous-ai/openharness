@@ -34,6 +34,7 @@ import { SwarmReads } from '../superTabs/read/service.js'
 import { NOTIFY_LEVELS } from '../superTabs/chatSettings.js'
 import { COMMENT_KINDS, MAX_COMMENT_IDS } from '../superTabs/githubComments.js'
 import { MAX_TASK_MODELS, MAX_TASK_NUMBERS, TASK_KINDS } from '../superTabs/taskTokens.js'
+import { OFFER_NUMBERS_MAX } from '../superTabs/taskOffers.js'
 import { HostReads } from '../superTabs/read/host.js'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { markNothingNew } from '../lib/routeLatency.js'
@@ -57,7 +58,10 @@ const tabParams = z.object({ tabId: id })
 const agentQuery = z.object({ asAgentId: id.optional() }).strict()
 // A GitHub comment an agent posted (superTabs/githubComments.ts): `owner/name`, and GitHub's numeric id.
 const repository = z.string().max(200).regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/)
-const commentRecordQuery = z.object({ asAgentId: id }).strict()
+// An issue or pull request of a repository, by its number.
+const issueNumber = z.number().int().positive().max(2_147_483_647)
+// A call an agent's own host makes for it: it names the agent it speaks as.
+const actingAgentQuery = z.object({ asAgentId: id }).strict()
 const commentRecordBody = z.object({ repository, kind: z.enum(COMMENT_KINDS), commentId: z.string().regex(/^[1-9]\d{0,19}$/) }).strict()
 const commentAuthorsQuery = z.object({ repository, asAgentId: id.optional(),
   ids: z.string().max(4000).transform(ids => ids.split(',')).pipe(z.array(z.string().regex(/^[a-z-]+:[1-9]\d{0,19}$/)).min(1).max(MAX_COMMENT_IDS)) }).strict()
@@ -66,13 +70,20 @@ const commentAuthorsQuery = z.object({ repository, asAgentId: id.optional(),
 const tokenCount = z.number().int().nonnegative().safe()
 const instant = z.number().int().positive().max(4_102_444_800_000)
 const modelTokens = z.object({ model: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,119}$/), input: tokenCount, output: tokenCount, cacheRead: tokenCount, cacheWrite: tokenCount }).strict()
-const taskTokensQuery = z.object({ asAgentId: id }).strict()
-const taskTokensBody = z.object({ repository, number: z.number().int().min(1).max(2_147_483_647), kind: z.enum(TASK_KINDS),
+const taskTokensBody = z.object({ repository, number: issueNumber, kind: z.enum(TASK_KINDS),
   tokens: z.array(modelTokens).min(1).max(MAX_TASK_MODELS).refine(models => new Set(models.map(m => m.model)).size === models.length, 'Name each model once.'),
   rounds: z.number().int().min(0).max(100_000), startedAt: instant, endedAt: instant }).strict()
   .refine(row => row.endedAt >= row.startedAt, 'A task ends after it starts.')
 const taskTokensReadQuery = z.object({ repository, asAgentId: id.optional(),
   numbers: z.string().max(400).transform(numbers => numbers.split(',')).pipe(z.array(z.string().regex(/^[1-9]\d{0,9}$/).transform(Number)).min(1).max(MAX_TASK_NUMBERS)) }).strict()
+// A task offered to one agent (superTabs/taskOffers.ts): a GitHub issue of a project's repository, and for a decline why, in one
+// lower-case word (no number, path or account: it is read by the project's members).
+const offerBody = z.object({ repository, number: issueNumber, agentId: id }).strict()
+const offerAnswerBody = z.object({ repository, number: issueNumber }).strict()
+const offerDeclineBody = offerAnswerBody.extend({ reason: z.string().regex(/^[a-z]{1,20}$/) }).strict()
+// Its PM asks for the tasks it plans, a hundred at a time.
+const offersQuery = z.object({ repository, asAgentId: id.optional(),
+  numbers: z.string().max(1_100).transform(numbers => numbers.split(',')).pipe(z.array(z.string().regex(/^[1-9]\d{0,9}$/).transform(Number)).min(1).max(OFFER_NUMBERS_MAX)) }).strict()
 const uploadParams = z.object({ tabId: id, uploadId: id })
 const voiceParams = z.object({ tabId: id, attachmentId: id })
 const voiceQuery = agentQuery.extend({ lang: z.string().max(16).optional() })
@@ -353,20 +364,37 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     }))
   // Which agent wrote a GitHub comment (superTabs/githubComments.ts): its daemon records each one it posted; the merger and news
   // read them by id, and fall back to the signature for a comment nothing recorded.
-  app.post<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof commentRecordQuery>; Body: z.infer<typeof commentRecordBody> }>('/api/super-tabs/:tabId/github-comments',
-    { preHandler: [validateParams(tabParams), validateQuery(commentRecordQuery), validateBody(commentRecordBody)] },
+  app.post<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof actingAgentQuery>; Body: z.infer<typeof commentRecordBody> }>('/api/super-tabs/:tabId/github-comments',
+    { preHandler: [validateParams(tabParams), validateQuery(actingAgentQuery), validateBody(commentRecordBody)] },
     (req, reply) => respond(reply, () => store.recordGithubComment(req.user!, req.params.tabId, req.query.asAgentId, req.body)))
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof commentAuthorsQuery> }>('/api/super-tabs/:tabId/github-comments',
     { preHandler: [validateParams(tabParams), validateQuery(commentAuthorsQuery)] },
     (req, reply) => respond(reply, () => store.githubCommentAuthors(req.user!, req.params.tabId, req.query.repository, req.query.ids, req.query.asAgentId)))
   // What an agent's conversation used on a task (superTabs/taskTokens.ts): its own daemon writes the totals when a piece of work
   // stops, and the daemon that lands a change reads its builder's, for the comment it posts.
-  app.post<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof taskTokensQuery>; Body: z.infer<typeof taskTokensBody> }>('/api/super-tabs/:tabId/task-tokens',
-    { preHandler: [validateParams(tabParams), validateQuery(taskTokensQuery), validateBody(taskTokensBody)] },
+  app.post<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof actingAgentQuery>; Body: z.infer<typeof taskTokensBody> }>('/api/super-tabs/:tabId/task-tokens',
+    { preHandler: [validateParams(tabParams), validateQuery(actingAgentQuery), validateBody(taskTokensBody)] },
     (req, reply) => respond(reply, () => store.recordTaskTokens(req.user!, req.params.tabId, req.query.asAgentId, req.body)))
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof taskTokensReadQuery> }>('/api/super-tabs/:tabId/task-tokens',
     { preHandler: [validateParams(tabParams), validateQuery(taskTokensReadQuery)] },
     (req, reply) => respond(reply, () => store.taskTokens(req.user!, req.params.tabId, req.query.repository, req.query.numbers, req.query.asAgentId)))
+  // A task offered to one agent (superTabs/taskOffers.ts, docs/design/2026-11-11-swarm-allocator/offers.md): its project's PM offers
+  // it, the offered agent's own person's daemon accepts or declines it and reads its own, and the project's members read them.
+  app.post<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof actingAgentQuery>; Body: z.infer<typeof offerBody> }>('/api/super-tabs/:tabId/task-offers',
+    { preHandler: [validateParams(tabParams), validateQuery(actingAgentQuery), validateBody(offerBody)] },
+    (req, reply) => respond(reply, () => store.offerTask(req.user!, req.params.tabId, req.query.asAgentId, req.body)))
+  app.post<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof actingAgentQuery>; Body: z.infer<typeof offerAnswerBody> }>('/api/super-tabs/:tabId/task-offers/accept',
+    { preHandler: [validateParams(tabParams), validateQuery(actingAgentQuery), validateBody(offerAnswerBody)] },
+    (req, reply) => respond(reply, () => store.acceptTaskOffer(req.user!, req.params.tabId, req.query.asAgentId, req.body)))
+  app.post<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof actingAgentQuery>; Body: z.infer<typeof offerDeclineBody> }>('/api/super-tabs/:tabId/task-offers/decline',
+    { preHandler: [validateParams(tabParams), validateQuery(actingAgentQuery), validateBody(offerDeclineBody)] },
+    (req, reply) => respond(reply, () => store.declineTaskOffer(req.user!, req.params.tabId, req.query.asAgentId, req.body)))
+  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof actingAgentQuery> }>('/api/super-tabs/:tabId/task-offers/mine',
+    { preHandler: [validateParams(tabParams), validateQuery(actingAgentQuery)] },
+    (req, reply) => respond(reply, () => store.agentTaskOffers(req.user!, req.params.tabId, req.query.asAgentId)))
+  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof offersQuery> }>('/api/super-tabs/:tabId/task-offers',
+    { preHandler: [validateParams(tabParams), validateQuery(offersQuery)] },
+    (req, reply) => respond(reply, () => store.projectTaskOffers(req.user!, req.params.tabId, req.query.repository, req.query.numbers, req.query.asAgentId)))
   // The CI load a CLI's route read (retired with it, above NO_APP): who may read the project hears what a server without the app
   // said; anyone else is refused as before.
   app.get<{ Params: z.infer<typeof projectParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/projects/:projectId/ci-load',

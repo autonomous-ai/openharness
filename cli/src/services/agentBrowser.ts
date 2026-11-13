@@ -33,7 +33,7 @@ import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { availableParallelism, totalmem } from 'node:os'
 import { join, resolve } from 'node:path'
-import { AGENT_BROWSER_REQUESTS, mayOpenBrowser, type Asker, type BrowserSwitch, type CoreApi, type CorePorts, type ServiceRequests } from '../core/api.js'
+import { AGENT_BROWSER_REQUESTS, AGENT_BROWSER_VNC_PIPE, mayOpenBrowser, type Asker, type BrowserSwitch, type CoreApi, type CorePorts, type ServiceRequests } from '../core/api.js'
 import { browserTools } from '../lib/browserToolsAsset.js'
 import type { ProductUsageMetric } from '../lib/productUsageContract.js'
 import type { RegisteredSession } from '../lib/registry.js'
@@ -60,8 +60,6 @@ const LOCAL_ONLY = { error: 'LOCAL_ONLY' }
 const INVALID_REQUEST = { error: 'INVALID_REQUEST' }
 /** Setup's own failures whose Retry installs Podman again (agentBrowser/setup.ts); no start fails with them. */
 const SETUP_INSTALL_FAILURES = new Set(['podman_install_failed', 'podman_manual'])
-// Xvnc listens on 5900 inside the container only (no published port): a viewer's bytes reach it through an exec.
-const VNC_PIPE = ['socat', 'STDIO', 'TCP:127.0.0.1:5900']
 // The tool server in the image (cli/assets/browser/browser-tools.mjs), one JSON-RPC message per line on its stdio.
 const TOOL_SERVER = ['node', '/opt/harness-browser/browser-tools.mjs']
 /** Answered by name on Windows, so Desktop says Browser does not run there rather than "update Harness" (spec § Desktop),
@@ -273,8 +271,9 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
       // A ready browser has an entry, so a profile; one whose state file cannot be read now has no stream to open.
       let profile: string
       try { profile = browsers.profile(agentId)! } catch { return { error: 'NOT_READY' } }
-      // Ready means Podman was found: it started this container.
-      return { argv: podman.argv(containers.execArgs(profile, VNC_PIPE)) }
+      // Ready means Podman was found: it started this container. Xvnc listens on 5900 inside the container only (no
+      // published port), so a viewer's bytes reach it through this exec, the one command the core starts (core/api.ts).
+      return { argv: podman.argv(containers.execArgs(profile, [...AGENT_BROWSER_VNC_PIPE])) }
     },
     onCloseViewers: listener => { viewerListeners.push(listener) },
     stop() {

@@ -14,7 +14,7 @@ import * as esbuild from 'esbuild'
 import { createHash } from 'node:crypto'
 import { appendFileSync, readFileSync, copyFileSync, rmSync, writeFileSync } from 'fs'
 import { readDshRegistry } from './scripts/lib/dshRegistry.mjs'
-import { readBuiltinBundle, readHarnessMonitorBundle, readMemoriesBundle, readModelManagerBundle } from './scripts/lib/modelManagerBundle.mjs'
+import { readBuiltinBundle, readHachiBundle, readHarnessMonitorBundle, readMemoriesBundle, readModelManagerBundle } from './scripts/lib/modelManagerBundle.mjs'
 import { readProcessImageBundle } from './scripts/lib/processImageBundle.mjs'
 import { leanBlock } from './scripts/lib/leanBlock.mjs'
 import { asciiOnly } from './scripts/lib/asciiOnly.mjs'
@@ -25,12 +25,13 @@ const modelManagerBundle = JSON.stringify(readModelManagerBundle(fileURLToPath(n
 const devicesBundle = JSON.stringify(readBuiltinBundle(fileURLToPath(new URL('../store/agents/devices', import.meta.url)), ['harness.json', 'AGENTS.md', 'LICENSE', 'template']))
 const harnessMonitorBundle = JSON.stringify(readHarnessMonitorBundle(fileURLToPath(new URL('../store/agents/harness-monitor', import.meta.url))))
 const memoriesBundle = JSON.stringify(readMemoriesBundle(fileURLToPath(new URL('../store/agents/memories', import.meta.url))))
+const hachiBundle = JSON.stringify(readHachiBundle(fileURLToPath(new URL('../store/agents/hachi', import.meta.url))))
 // What src/dsh/builtins.ts records in the installed index as each bundled harness's revision once it is in place: the
 // sha256 of its files' JSON, as it reads them back (src/dsh/bundledFiles.ts). The core checks the index against these
 // as it starts, without loading the files, and starts the Store's process only when one is not in place
 // (src/core/viewersWake.ts). A harness whose files are missing is never put in place, so it has none.
 const builtinRevisions = JSON.stringify(Object.fromEntries(
-  [['models', modelManagerBundle], ['devices', devicesBundle], ['monitor', harnessMonitorBundle], ['memories', memoriesBundle]]
+  [['models', modelManagerBundle], ['devices', devicesBundle], ['monitor', harnessMonitorBundle], ['memories', memoriesBundle], ['hachi', hachiBundle]]
     .filter(([, bundle]) => JSON.parse(bundle)['harness.json'])
     .map(([name, bundle]) => [name, createHash('sha256').update(JSON.stringify(JSON.parse(bundle))).digest('hex')]),
 ))
@@ -65,6 +66,7 @@ const options = {
     __DEVICES_BUNDLE__: JSON.stringify(devicesBundle),
     __HARNESS_MONITOR_BUNDLE__: JSON.stringify(harnessMonitorBundle),
     __MEMORIES_BUNDLE__: JSON.stringify(memoriesBundle),
+    __HACHI_BUNDLE__: JSON.stringify(hachiBundle),
     // The guest helper and its sudoers drop-in (src/lib/guestHelperAssets.ts): the installed CLI is cli.js alone.
     __GUEST_HELPER__: JSON.stringify(readFileSync('assets/guest-helper/guest-helper.sh', 'utf8')),
     __GUEST_SUDOERS__: JSON.stringify(readFileSync('assets/guest-helper/sudoers', 'utf8')),

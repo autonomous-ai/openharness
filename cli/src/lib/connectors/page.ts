@@ -148,9 +148,9 @@ export class PageServer {
         await disconnect(this.vault, code, this.env)
         this.reply(response, 200, { connector: code, state: 'not_connected' })
       } else if (path === '/api/connect_via') {
-        this.reply(response, 200, await connectVia(data.connector, data.via, this.engines))
+        this.reply(response, 200, await connectVia(data.connector, data.via, this.engines, data.plugin))
       } else if (path === '/api/disconnect_via') {
-        this.reply(response, 200, await disconnectVia(data.connector, data.via, this.engines))
+        this.reply(response, 200, await disconnectVia(data.connector, data.via, this.engines, data.plugin))
       } else this.reply(response, 404, { error: 'Not found.' })
     } catch (error) {
       this.reply(response, error instanceof ConnectorError ? 400 : 503, { error: error instanceof ConnectorError ? error.message : 'Connection unavailable. Try again.' })

@@ -12,7 +12,7 @@ import { AGENT_SETTING_NAMES, askThePersonFirst, PERSON_SAID_YES, type AgentSett
 import { localCredentialHeaders } from '../lib/localCredential.js'
 import { daemonFetch } from '../lib/localTransport.js'
 import { env } from '../config/env.js'
-import { daemonUnreachableText } from '../lib/daemonState.js'
+import { daemonUnreachableText } from '../lib/unreachable.js'
 import { outsideCaller } from './model.js'
 
 /** A refusal, as the agent verbs exit (commands.ts `EXIT.refused`): not a failure to retry. */

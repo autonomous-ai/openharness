@@ -181,7 +181,8 @@ describe('Harness says each thing once on GitHub, over an hour and a restart (gi
 
     const make = () => {
       const deps = { projects: async () => [PROJECT], crew: async () => structuredClone(CREW), get: gh.get, send: gh.send, now: () => clock.now, log: () => {}, records: new VerdictRecords(gh.authors, () => clock.now, () => {}) }
-      return { merger: new GitHubMerge({ ...deps, costs: async () => [], hot: () => [] }), assigner: new GitHubAssign({ ...deps, repositories: async () => [REPO], numbers: { pass: async () => {} }, pmRunning: async () => true }) }
+      return { merger: new GitHubMerge({ ...deps, costs: async () => [], hot: () => [] }), assigner: new GitHubAssign({ ...deps, repositories: async () => [REPO], numbers: { pass: async () => {} }, pmRunning: async () => true,
+        offers: { offer: async () => {}, listed: async () => [] }, say: async () => {} }) }
     }
     let loops = make()
     for (let pass = 0; pass < PASSES; pass++) {
@@ -265,7 +266,8 @@ describe('Harness says each thing once on GitHub, over an hour and a restart (gi
     gh.pull(24, sha(24)); gh.say(24, `Juno, 04:00, to **Pip**: READ-OK ${sha(24).slice(0, 7)}`); gh.mergeable.set(24, 'dirty')
     const make = () => {
       const deps = { projects: async () => [PROJECT], crew: async () => structuredClone(CREW), get: gh.get, send: gh.send, now: () => clock.now, log: () => {}, records: new VerdictRecords(gh.authors, () => clock.now, () => {}) }
-      return { merger: new GitHubMerge({ ...deps, costs: async () => [], hot: () => [] }), assigner: new GitHubAssign({ ...deps, repositories: async () => [REPO], numbers: { pass: async () => {} }, pmRunning: async () => true }) }
+      return { merger: new GitHubMerge({ ...deps, costs: async () => [], hot: () => [] }), assigner: new GitHubAssign({ ...deps, repositories: async () => [REPO], numbers: { pass: async () => {} }, pmRunning: async () => true,
+        offers: { offer: async () => {}, listed: async () => [] }, say: async () => {} }) }
     }
     let loops = make()
     // A pass every five minutes for a day, the daemon restarting every six hours, as releases restart it.
@@ -307,7 +309,8 @@ describe('Harness says each thing once on GitHub, over an hour and a restart (gi
     gh.files.set(26, ['app/b.py', 'app/hub.py'])
     const make = () => {
       const deps = { projects: async () => [PROJECT], crew: async () => structuredClone(CREW), get: gh.get, send: gh.send, now: () => clock.now, log: () => {}, records: new VerdictRecords(gh.authors, () => clock.now, () => {}) }
-      return { merger: new GitHubMerge({ ...deps, costs: async () => [], hot: () => hot }), assigner: new GitHubAssign({ ...deps, repositories: async () => [REPO], numbers: { pass: async () => {} }, pmRunning: async () => true }) }
+      return { merger: new GitHubMerge({ ...deps, costs: async () => [], hot: () => hot }), assigner: new GitHubAssign({ ...deps, repositories: async () => [REPO], numbers: { pass: async () => {} }, pmRunning: async () => true,
+        offers: { offer: async () => {}, listed: async () => [] }, say: async () => {} }) }
     }
     let loops = make()
     // A pass every five minutes for a day, the daemon restarting every six hours.
@@ -351,7 +354,8 @@ describe('one task building across a Swarm\'s public projects (githubAssign.ts, 
   /** A PM's person's daemon planning [projects], reading GitHub through [get]. */
   const daemon = (gh: Swarm, clock: { now: number }, projects: LedProject[], get: GitHubGet = gh.get) => new GitHubAssign({ projects: async () => projects,
     crew: async () => structuredClone(CREW), repositories: async () => [...gh.repos.keys()], get, send: gh.send, now: () => clock.now, log: () => {},
-    records: new VerdictRecords(gh.authors, () => clock.now, () => {}), numbers: { pass: async () => {} }, pmRunning: async () => true })
+    records: new VerdictRecords(gh.authors, () => clock.now, () => {}), numbers: { pass: async () => {} }, pmRunning: async () => true,
+    offers: { offer: async () => {}, listed: async () => [] }, say: async () => {} })
 
   /** What [name] builds across the Swarm's repositories now, as package 2 counts it: its open tasks with no pull request up for
    *  their read, one that GitHub says is not a draft and that closes it. */

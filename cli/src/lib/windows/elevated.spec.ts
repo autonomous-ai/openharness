@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { GuestRunner } from '../guestAccounts.js'
+import type { GuestRunner } from '../guestRunner.js'
 import { windowsAdminRunner } from './elevated.js'
 
 const cleanup: string[] = []

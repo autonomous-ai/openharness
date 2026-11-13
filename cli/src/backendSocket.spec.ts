@@ -46,7 +46,6 @@ import { LocalModels } from './lib/localModels.js'
 import { STRICT_DOWN_TYPES, encryptDownFrame, encryptDownFrameFor, encryptRpcResult } from './lib/e2ee/applicationFrames.js'
 import { CloseAgentService } from './lib/closeAgentService.js'
 import { env } from './config/env.js'
-import { supportsFirstPrompt } from './lib/engineLaunch.js'
 
 describe('safe session close RPC', () => {
   it('seals cleanup previews and passes the open-tab condition to Close', async () => {
@@ -1851,6 +1850,8 @@ describe('BackendSocket outbound queue', () => {
     await socket.stop()
   })
 
+  // The probe is a service's (services/engineProbe.ts), and a request routed to a service is never waited on in line:
+  // kept awaited in the socket's own switch, it once made a Create click sit behind a sweep of login shells.
   it('does not let a slow engines_probe block agent_create on the same connection', async () => {
     const socket = relaySocket('token')
     bindLaunchRequests(socket)
@@ -1860,7 +1861,11 @@ describe('BackendSocket outbound queue', () => {
       sendBinary: () => true,
     })
     let finishProbe!: () => void
-    socket.engineProbeProvider = () => new Promise((resolve) => { finishProbe = () => resolve([]) })
+    socket.serviceRouter = (type, _payload, _asker, reply) => {
+      if (type !== 'engines_probe') return false
+      finishProbe = () => reply({ engines: [] })
+      return true
+    }
     const pending: RegisteredSession = {
       schemaVersion: 2, active: true, launch: { state: 'starting' },
       agentId: 'pending-1', sessionId: '', boundAt: null, engine: 'claude',
@@ -1883,31 +1888,8 @@ describe('BackendSocket outbound queue', () => {
     })))
     expect(frames.some((frame) => frame.type === 'engines_probe_result')).toBe(false)
     finishProbe()
-    await vi.waitFor(() => expect(frames.some((frame) => frame.type === 'engines_probe_result')).toBe(true))
+    await vi.waitFor(() => expect(frames).toContainEqual({ type: 'engines_probe_result', payload: { requestId: 'probe-1', engines: [] } }))
     await socket.unregisterLocalClient('local:create')
-    await socket.stop()
-  })
-
-  it('answers engines_probe with whether this machine can start each engine with a first prompt (#1788)', async () => {
-    const socket = relaySocket('token')
-    const frames: Array<Record<string, unknown>> = []
-    socket.registerLocalClient('local:probe', {
-      sendFrame: (frame) => { frames.push(frame); return true },
-      sendBinary: () => true,
-    })
-    socket.engineProbeProvider = async () => [
-      { engine: 'claude', installed: true, command: 'claude', installable: true, signedIn: true },
-      { engine: 'cursor', installed: false, command: 'cursor-agent', installable: true },
-    ] as never
-    socket.handleLocalFrame('local:probe', { type: 'engines_probe', payload: { requestId: 'probe-fp' } })
-    await vi.waitFor(() => expect(frames.some((frame) => frame.type === 'engines_probe_result')).toBe(true))
-    const reply = frames.find((frame) => frame.type === 'engines_probe_result')!.payload as {
-      engines: Array<{ engine: string; firstPrompt: boolean }>
-    }
-    const firstPrompt = Object.fromEntries(reply.engines.map((entry) => [entry.engine, entry.firstPrompt]))
-    expect(firstPrompt).toEqual({ claude: supportsFirstPrompt('claude'), cursor: supportsFirstPrompt('cursor') })
-    expect(firstPrompt.claude).toBe(true)
-    await socket.unregisterLocalClient('local:probe')
     await socket.stop()
   })
 
@@ -2098,13 +2080,16 @@ describe('BackendSocket outbound queue', () => {
     socket.onCreateAgent = vi.fn(async () => ({ ok: false as const, error: 'SPAWN_FAILED' }))
     socket.registerLocalClient('local:started-by', { sendFrame: () => true, sendBinary: () => true })
     try {
-      const agentId = randomUUID(), personId = randomUUID()
+      const agentId = randomUUID(), personId = randomUUID(), hachiId = randomUUID()
       socket.handleLocalFrame('local:started-by', { type: 'agent_create', payload: { requestId: 'agent', creationId: agentId, engine: 'codex',
         cwd: '/tmp/work', startedBy: 'agent', parentAgentId: 'parent-agent' } })
       socket.handleLocalFrame('local:started-by', { type: 'agent_create', payload: { requestId: 'person', creationId: personId, engine: 'codex', cwd: '/tmp/work' } })
-      await vi.waitFor(() => expect(signals.filter(signal => signal.phase === 'start')).toHaveLength(2))
+      socket.handleLocalFrame('local:started-by', { type: 'agent_create', payload: { requestId: 'hachi', creationId: hachiId, engine: 'claude',
+        cwd: '/tmp/work', startedBy: 'agent', startedByHachi: true } })
+      await vi.waitFor(() => expect(signals.filter(signal => signal.phase === 'start')).toHaveLength(3))
       expect(signals).toContainEqual({ id: agentId, phase: 'start', engine: 'codex', agentStarted: true })
       expect(signals).toContainEqual({ id: personId, phase: 'start', engine: 'codex' })
+      expect(signals).toContainEqual({ id: hachiId, phase: 'start', engine: 'claude', agentStarted: true, hachiStarted: true })
     } finally {
       await socket.unregisterLocalClient('local:started-by')
       await socket.stop()

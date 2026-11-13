@@ -1,5 +1,5 @@
 import { unsigned } from './signature.js'
-import { readCapabilities } from './capacity.js'
+import { quotaOf, readCapabilities } from './capacity.js'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
@@ -9,7 +9,7 @@ import { HostFeed } from './hostFeed.js'
 import { SwarmReads, type SwarmRead } from './swarmReads.js'
 import { backend, identifier, object, SuperTabHostError, within } from './wire.js'
 import { isCoordinator, isStep } from './agentContext.js'
-import { swarmBasics, wireRole } from '../lib/swarmSkills.js'
+import { PM_BASICS, SWARM_BASICS, swarmBasics, wireRole } from '../lib/swarmSkills.js'
 import { CapacityReservations, type ReservationBook } from './reservations.js'
 import { engineExit } from './engineExit.js'
 import { ContributionPreparations, ownerRequest, prepareContribution } from './contribution.js'
@@ -32,6 +32,9 @@ import { GitHubMerge, ledProjects, pmRunsHere, recordedAuthors, VerdictRecords, 
 import { numbersSender, PmNumbers } from './pmNumbers.js'
 import { readTaskTokens, TaskTokens } from './taskTokens.js'
 import { crewOf, labelOf } from './assign/crew.js'
+import { agentOffers, answerOffer, noSuchRoute, OfferAnswers, offerTask, projectOffers, type Ask } from './taskOffers.js'
+import { named as codeOf } from './agentReplies.js'
+import { openDaemon } from '../agentClient/daemon.js'
 
 import { peopleNamed } from './personName.js'
 
@@ -134,7 +137,9 @@ export interface SuperTabServiceOptions {
   /** What posts an agent's answer to its launch line in its chat (superTabs/firstAnswers.ts), for a spec. */
   firstAnswers?: (core: CoreApi, sources: () => SwarmSources) => Pick<FirstAnswers, 'start' | 'stop'>
   /** What types an agent its next thing as its turn ends (superTabs/nextThing.ts), for a spec. */
-  nextThings?: (core: CoreApi, sources: () => SwarmSources) => Pick<NextThing, 'start' | 'stop' | 'inbox'>
+  nextThings?: (core: CoreApi, sources: () => SwarmSources) => Pick<NextThing, 'start' | 'stop' | 'inbox' | 'offered'>
+  /** What answers the offers made to this computer's person's agents (superTabs/taskOffers.ts), for a spec. */
+  offerAnswers?: (core: CoreApi, sources: () => SwarmSources) => Pick<OfferAnswers, 'start' | 'stop'>
   /** What counts the tokens each agent's conversation uses on each task (superTabs/taskTokens.ts), for a spec. */
   taskTokens?: (core: CoreApi) => Pick<TaskTokens, 'start' | 'stop' | 'looked' | 'read' | 'took'>
 }
@@ -194,9 +199,13 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   // In its chat, for its person to read and not typed to it: as the host posts an agent's first answer (firstAnswers.ts).
   const sayToPerson = (api: CoreApi) => (agent: WatchedAgent, operationId: string, text: string) => backend(api, 'POST', `/api/super-tabs/${agent.tabId}/commands`,
     { operationId, asAgentId: agent.agentId, command: { type: 'message.send', conversationId: agent.chat, replyTo: null, recipientIds: [], text } })
+  // The Swarm's server as this computer, for the offers of tasks (taskOffers.ts).
+  const ask: Ask = (method, path, body) => backend(core, method, path, body)
+  // This computer's person's v4 agents running here (githubMentions.ts).
+  const watched = (api: CoreApi, held: () => SwarmSources) => async () => watchedAgents({ me: (await api.account.identity().catch(() => null))?.accountId ?? null,
+    live: id => !!api.agents.byAgent(id), roster: async () => (await held().feed.current(60_000)).roster, read: async (tabId, agentId) => (await held().reads.read(tabId, agentId)).state })
   const mentions = (options.githubMentions ?? ((api, held) => new GitHubMentions({
-    watched: async () => watchedAgents({ me: (await api.account.identity().catch(() => null))?.accountId ?? null, live: id => !!api.agents.byAgent(id),
-      roster: async () => (await held().feed.current(60_000)).roster, read: async (tabId, agentId) => (await held().reads.read(tabId, agentId)).state }),
+    watched: watched(api, held),
     get: github.get,
     relay: (tabId, operationId, command) => backend(api, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId, command }),
     tell: tellAgent(api),
@@ -215,10 +224,11 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     crewOf((await held().reads.read(project.tabId, project.pmAgentId)).state, project)
   // Who made each verdict by command, read once for the merger and the assigner alike.
   const records = new VerdictRecords(recordedAuthors(path => backend(core, 'GET', path)), Date.now, line => console.warn(line))
-  // A project's numbers, sent as its PM into the Swarm as the PM reads it (pmNumbers.ts messageOf). They keep the files most of its
-  // landings touch, from its day's scoreboard, which the merger uses too (the allocator's design, package 8).
-  const numbers = new PmNumbers({ file: join(core.dataDir, 'super-tab-numbers.json'),
-    send: numbersSender(async project => (await sources().reads.read(project.tabId, project.pmAgentId)).state, (path, body) => backend(core, 'POST', path, body)) })
+  // A project's numbers, and what its PM says of its offers, sent as its PM into the Swarm as the PM reads it (pmNumbers.ts
+  // messageOf). They keep the files most of its landings touch, from its day's scoreboard, which the merger uses too (the
+  // allocator's design, package 8).
+  const sendAsPm = numbersSender(async project => (await sources().reads.read(project.tabId, project.pmAgentId)).state, (path, body) => backend(core, 'POST', path, body))
+  const numbers = new PmNumbers({ file: join(core.dataDir, 'super-tab-numbers.json'), send: sendAsPm })
   // What a landed change cost its builder is read of the server as the project's PM, for the comment that says it landed
   // (taskTokens.ts).
   const merges = (options.githubMerge ?? ((api, held) => new GitHubMerge({ projects: led(api, held), crew: crewOfProject(held), get: github.get,
@@ -228,7 +238,10 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     // The Swarm's projects as its PM's person reads it, read by what changed, as every Swarm read is: the PM reads only its own.
     repositories: async project => swarmRepositories((await held().reads.read(project.tabId)).state),
     get: github.get, send: github.send, records, numbers,
-    pmRunning: async project => pmRunsHere((await held().feed.current(60_000)).roster, project, id => !!api.agents.byAgent(id)) })))(core, sources)
+    say: (project, operationId, text) => sendAsPm('say', project, operationId, text),
+    pmRunning: async project => pmRunsHere((await held().feed.current(60_000)).roster, project, id => !!api.agents.byAgent(id)),
+    offers: { offer: (project, number, agentId) => offerTask(ask, project.tabId, project.pmAgentId, { repository: project.repo, number, agentId }),
+      listed: (project, numbers) => projectOffers(ask, project.tabId, project.pmAgentId, project.repo, numbers) } })))(core, sources)
   // What this computer's person's agents shipped, read from GitHub with their own gh and told to the leaderboard (shipping.ts).
   const shipping = (options.shipping ?? (api => new ShippingReporter(api)))(core)
   // An agent's answer to the launch line the daemon typed as it made it, in its chat with its person (firstAnswers.ts): as
@@ -266,8 +279,8 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   // the same three times.
   const nextThings = (options.nextThings ?? ((api, held) => new NextThing({
     onEnd: listener => api.turns.onEnd(listener),
-    watched: async () => watchedAgents({ me: (await api.account.identity().catch(() => null))?.accountId ?? null, live: id => !!api.agents.byAgent(id),
-      roster: async () => (await held().feed.current(60_000)).roster, read: async (tabId, agentId) => (await held().reads.read(tabId, agentId)).state }),
+    watched: watched(api, held),
+    offers: agent => agentOffers(ask, agent.tabId, agent.agentId),
     // The asks to read GitHub news keeps for each agent as it hands on what GitHub says (githubMentions.ts).
     owed: (agent, repo) => mentions.owed(agent.agentId, repo),
     working: async id => { const now = (await api.agents.activity([id]))[id]; return now === 'working' ? true : now === 'idle' ? false : null },
@@ -283,6 +296,20 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     // What each look found the agent with says which task its turns' tokens were for.
     looked: (agent, hands) => { void taskTokens.looked(agent, hands) },
   })))(core, sources)
+  // The offers made to this computer's person's agents, checked against this machine and the agent's subscription here and
+  // answered (taskOffers.ts): the subscription's percentages are read here and never leave this computer.
+  const offerAnswers = (options.offerAnswers ?? ((api, held) => new OfferAnswers({
+    watched: watched(api, held), ask, get: github.get,
+    session: harnessId => { const session = api.agents.byAgent(harnessId); return session ? { cwd: session.cwd, engine: session.engine } : null },
+    machine: async (cwd, tools) => readCapabilities({ cwd: cwd ?? api.dataDir, tools }),
+    windows: async engine => {
+      const local = await openDaemon({ dataDir: api.dataDir, port: api.daemon.port, machineId: api.daemon.machineId() })
+      try { return quotaOf(object(await local.request('usage_read', {}, 20_000)), engine, false) } finally { local.close() }
+    },
+    onNotice: listener => api.account.onNotice(listener), say: sayToPerson(api),
+    accepted: agent => nextThings.offered(agent.harnessId),
+    file: join(api.dataDir, 'super-tab-offers-told.json'),
+  })))(core, sources)
   const wake = () => {
     const machine = core.daemon.machineId()
     if (host?.machineId !== machine) { host?.stop(); host = null }
@@ -296,6 +323,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     firstAnswers.start()
     taskTokens.start()
     nextThings.start()
+    offerAnswers.start()
     return host
   }
   // The Swarm cards for a Harness Pro (superTabs/cards.ts), read while a device that shows them is attached and told to the core.
@@ -314,7 +342,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   const tokens = (options.githubTokens ?? (api => new GitHubTokenRefresher(api, sources)))(core)
   // The server's word that one of this machine's Swarms changed, heard while no host runs (Amon, #3215).
   let hostWake: (() => void) | null = null
-  const disconnect = () => { hostWake?.(); hostWake = null; preparations.clear(); claudeSignIns.stop(); host?.stop(); host = null; mentions.stop(); merges.stop(); assigns.stop(); shipping.stop(); firstAnswers.stop(); nextThings.stop(); taskTokens.stop(); held = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null; tokens.stop() }
+  const disconnect = () => { hostWake?.(); hostWake = null; preparations.clear(); claudeSignIns.stop(); host?.stop(); host = null; mentions.stop(); merges.stop(); assigns.stop(); shipping.stop(); firstAnswers.stop(); nextThings.stop(); taskTokens.stop(); offerAnswers.stop(); held = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null; tokens.stop() }
   const port = {
     connected: () => {
       tokens.start()
@@ -371,10 +399,13 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         // What Harness adds to an agent's instructions at every start, for its person to read in Desktop's Instructions beside the
         // rest (anh Dee, 2026-11-11: "show users what goes into the agent"): the Swarm's basics for its role, as this release gives
         // them (lib/swarmSkills.ts). Its own agents/<name>.md, which comes after them, is read apart. No role, or an unreadable
-        // roster, answers no `text`.
+        // roster, answers no `text`. Every agent's basics and a PM's own apart too (`swarm`, `pm`), so Desktop shows the PM's under
+        // the PM (anh Dee, 2026-11-12); `text` stays for a Desktop from before.
         if (payload.action === 'basics') {
           const grant = await port.swarmRole(String(payload.harnessId ?? ''))
-          return grant ? { ok: true, text: swarmBasics(grant.role === 'coordinator').text } : { ok: true }
+          if (!grant) return { ok: true }
+          const lead = grant.role === 'coordinator'
+          return { ok: true, text: swarmBasics(lead).text, swarm: SWARM_BASICS, ...lead ? { pm: PM_BASICS } : {} }
         }
         // Import agent (Desktop): whether any Swarm lists this harness here. An unreadable roster answers no `listed`, on which
         // Desktop refuses rather than share.
@@ -540,9 +571,21 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           // A cut is the same cut whatever its words or size: sent again with other words, it joins the one that runs.
           const same = JSON.stringify([agentId, verdict ? { ...verdict, repository: resolved } : claim ? { ...claim, repository: resolved } : sameCut({ ...piece!, repository: resolved })])
           const deps = { get: github.get, send: github.send, login: loginOf, record }
+          // What the server holds of this agent's offers, for a task not given by label (taskOffers.ts): a server without the routes
+          // holds none.
+          const offers = {
+            left: async (repository: string, number: number) => {
+              const mine = await agentOffers(ask, String(payload.tabId), agentId).catch(error => { if (noSuchRoute(error)) return null; throw error })
+              const offer = mine?.offers.find(o => o.state === 'accepted' && o.repository === repository.toLowerCase() && o.number === number)
+              return offer ? offer.expiresAt - mine!.serverTime : null
+            },
+            decline: async (repository: string, number: number, reason: string) => {
+              await answerOffer(ask, String(payload.tabId), agentId, { repository, number }, reason).catch(error => console.warn(`[super-tab] Task offers: ${repository}#${number} not declined: ${codeOf(error)}`))
+            },
+          }
           const running = commands.get(same)
           const made = running ?? (verdict ? postVerdict(deps, builder, verdict)
-            : claim ? takeTask(deps, builder, claim)
+            : claim ? takeTask(deps, builder, claim, offers)
             : cuts.run(agentId, () => splitTask(deps, builder, piece!)))
             .finally(() => commands.delete(same))
           commands.set(same, made)

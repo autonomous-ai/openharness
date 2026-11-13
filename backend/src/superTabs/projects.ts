@@ -43,10 +43,13 @@ export interface SwarmProject {
   /** The status card at the top of the project chat (Dee, 2026-10-31): the coordinator's last project.report text, which
    *  replaces the one before and posts nothing. Read exactly by those who read the project chat (model.ts visibleState). */
   status?: ProjectStatus | null
-  repository?: { machineId: string; cwd: string; repositoryUrl: string | null }
+  repository?: ProjectRepository
   /** Its GitHub repository as `owner/name`, set by its owner's client or its coordinator (commands.ts project.github): its Tasks
    *  board on every computer. Absent until set. */
   githubRepository?: string
+  /** When it was named (epoch ms), as `repository.addressedAt` is for its clone address. Absent on a name set before this was
+   *  kept (2026-11-12). */
+  githubRepositoryAt?: number
   /** Its Product Manager started by the Swarm on one of its machines, or waiting for one (leadStart.ts). */
   lead?: import('./leadStart.js').LeadPlacement
   /** A Personal Swarm project chat with no Lead: its person's messages sent there, delivered to its Lead once it joins
@@ -97,6 +100,15 @@ export type GitHubSeen = typeof GITHUB_SEEN[number]
 export interface ProjectStatus { text: string; at: string; by: string }
 export const PROJECT_STATUS_MAX = 2_000
 
+
+/** Where a project works: its folder on a machine, and the address its folder is cloned from, once it has one. `addressedAt`:
+ *  when it got that address (epoch ms), as the project that got a repository first, by its address or its name
+ *  (githubRepositoryAt), coordinates it (githubComments.ts repositoryProject). Absent on an address set before this was kept (2026-11-12), and on none yet. */
+export interface ProjectRepository { machineId: string; cwd: string; repositoryUrl: string | null; addressedAt?: number }
+
+/** [repository] as it is first written at [now], with when it got its address if it has one. */
+export const addressedRepository = (repository: ProjectRepository, now: number): ProjectRepository =>
+  repository.repositoryUrl ? { ...repository, addressedAt: now } : repository
 
 /** Existing tabs are one project; their conversation IDs and messages stay intact. */
 export function projectsOf(state: SuperTabState): SwarmProject[] {

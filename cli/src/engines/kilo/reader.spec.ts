@@ -1,11 +1,14 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { execFileSync } from 'child_process'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { KiloReader } from './reader.js'
+import { KiloReader, readKiloMessages } from './reader.js'
 import type { LiveEvent } from '../../lib/normalize.js'
+import { builtinSqlite, closeSqliteHandles, type DatabaseLike } from '../../lib/sqliteBuiltin.js'
 import { sqliteReadAll } from '../../lib/sqliteRead.js'
+import { enableOffThreadSqlite, resetOffThreadSqlite } from '../../lib/sqliteThread.js'
+import { KIB, MIB, pageReads, withinBudget } from '../../testing/storePages.js'
 
 // The real reads, with a seam to make one of them go unanswered, as a busy store or the read threads' deadline does.
 vi.mock('../../lib/sqliteRead.js', async (real) => {
@@ -141,6 +144,113 @@ d('KiloReader attaching mid-turn', () => {
     } finally {
       reader.stop()
     }
+    expect(events).toEqual([{ type: 'turn_started', payload: { userMessage: 'a new prompt' } }])
+  })
+})
+
+// #4188: a session past 32 MiB was read in one query, refused for its size on every poll, and never seeded. Only the
+// read threads enforce a reply limit, so they are on; the store is built with the binding, as the sqlite3 CLI cannot
+// take megabytes on a command line.
+const withBuiltin = builtinSqlite() ? describe : describe.skip
+
+withBuiltin('KiloReader pages by bytes', () => {
+  let dir = ''
+  let path = ''
+  let w: DatabaseLike
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'kilo-pages-'))
+    path = join(dir, 'kilo.db')
+    w = new (builtinSqlite()!)(path, { readOnly: false })
+    // As kilo's store is: in the older journal mode a reader in the middle of a large page would fail the writer's
+    // next commit with `database is locked`, now and then.
+    w.exec('PRAGMA journal_mode = WAL')
+    w.exec('CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, data TEXT);'
+      + 'CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT, time_created INTEGER, data TEXT);'
+      + 'CREATE INDEX part_message_id_id_idx ON part (message_id, id);')
+    vi.mocked(sqliteReadAll).mockClear()
+    enableOffThreadSqlite()
+  })
+  afterEach(async () => {
+    vi.restoreAllMocks()
+    await resetOffThreadSqlite()
+    closeSqliteHandles()
+    w.close()
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+  })
+
+  /** A message and its parts in one transaction: a poll never sees the message without them. */
+  const put = (mid: string, tc: number, role: string, parts: Array<Record<string, unknown>>): void => {
+    w.exec('BEGIN')
+    w.prepare('INSERT INTO message VALUES (?, ?, ?, ?)').all(mid, SESSION, tc, JSON.stringify({ role }))
+    parts.forEach((data, p) => w.prepare('INSERT INTO part VALUES (?, ?, ?, ?, ?)').all(`${mid}-p${p}`, mid, SESSION, tc * 10 + p, JSON.stringify(data)))
+    w.exec('COMMIT')
+  }
+  const id = (n: number): string => `msg_${String(n).padStart(4, '0')}`
+  const turn = (i: number, bytes: number): void => {
+    put(id(2 * i), 2 * i, 'user', [{ type: 'text', text: `q${i}` }])
+    put(id(2 * i + 1), 2 * i + 1, 'assistant', [{ type: 'text', text: 'x'.repeat(bytes) }, { type: 'step-finish', reason: 'stop' }])
+  }
+  const listen = (): { events: LiveEvent[]; reader: KiloReader } => {
+    const events: LiveEvent[] = []
+    return { events, reader: new KiloReader({ dbPath: path, sessionId: SESSION, onEvents: (e) => events.push(...e), pollMs: 20 }) }
+  }
+
+  it('reads a session larger than the row cap whole, a page at a time, no message split, and a reader seeds from it', async () => {
+    for (let i = 0; i < 80; i++) turn(i, 500 * KIB) // 39 MiB
+    // 6 MiB: over the budget. Its turn finished, or the reader would rightly open it on attach.
+    put(id(160), 160, 'assistant', [...[0, 1, 2].map(() => ({ type: 'text', text: 'y'.repeat(2 * MIB) })), { type: 'step-finish', reason: 'stop' }])
+    const messages = await readKiloMessages(path, SESSION)
+    expect(messages.map((m) => m.id)).toEqual(Array.from({ length: 161 }, (_, n) => id(n)))
+    expect(messages[159].parts.map((p) => p.type)).toEqual(['text', 'step-finish'])
+    expect(messages[160].parts).toHaveLength(4)
+    const reads = await pageReads(vi.mocked(sqliteReadAll))
+    expect(reads.length).toBeGreaterThan(9)
+    expect(reads.every((read) => read.ok && read.bytes <= read.maxBuffer && withinBudget(read))).toBe(true)
+    const own = reads.find((read) => read.rows.some((row) => row.mid === id(160)))!
+    expect([own.units, own.rows.filter((row) => row.mdata !== null).length]).toEqual([1, 1])
+    expect((await readKiloMessages(path, SESSION, { tc: 158, id: id(158) })).map((m) => m.id)).toEqual([id(159), id(160)])
+    // A reader seeds from it in silence and streams only what comes after. On the base it never seeds.
+    const { events, reader } = listen()
+    try {
+      await reader.start()
+      expect(events).toEqual([])
+      put(id(900), 900, 'user', [{ type: 'text', text: 'a new prompt' }])
+      await vi.waitFor(() => expect(events.length).toBeGreaterThan(0), { timeout: 10_000, interval: 10 })
+    } finally { reader.stop() }
+    expect(events).toEqual([{ type: 'turn_started', payload: { userMessage: 'a new prompt' } }])
+  })
+
+  it('leaves out a message over the row cap, says so once, and reads on', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    turn(0, 10); put(id(2), 2, 'assistant', [{ type: 'text', text: 'z'.repeat(33 * MIB) }]); turn(2, 10)
+    for (let n = 0; n < 2; n++) expect((await readKiloMessages(path, SESSION)).map((m) => m.id)).toEqual([id(0), id(1), id(4), id(5)])
+    // A reader that polls over it does not stick: what comes after still arrives.
+    const { events, reader } = listen()
+    try {
+      await reader.start()
+      put(id(900), 900, 'user', [{ type: 'text', text: 'a new prompt' }])
+      await vi.waitFor(() => expect(JSON.stringify(events)).toContain('a new prompt'), { timeout: 10_000, interval: 10 })
+    } finally { reader.stop() }
+    expect(error.mock.calls.map((call) => String(call[0])).filter((line) => line.includes('too big')))
+      .toEqual([`[kilo] ses_test id ${id(2)} unreadable · too big`])
+  })
+
+  // #4065: a seed from the first page alone would emit the rest as new on the next poll.
+  it('reads nothing when a later page fails, and seeds from the next whole read, replaying nothing', async () => {
+    for (let i = 0; i < 12; i++) turn(i, 500 * KIB) // two pages
+    const actual = await vi.importActual<typeof import('../../lib/sqliteRead.js')>('../../lib/sqliteRead.js')
+    const fail = (): void => { vi.mocked(sqliteReadAll).mockImplementationOnce(actual.sqliteReadAll).mockResolvedValueOnce({ ok: false, reason: 'transient' }) }
+    fail()
+    expect(await readKiloMessages(path, SESSION)).toEqual([])
+    fail()
+    const { events, reader } = listen()
+    try {
+      await reader.start()
+      await readsPast(vi.mocked(sqliteReadAll).mock.calls.length, 3)
+      expect(events).toEqual([])
+      put(id(900), 900, 'user', [{ type: 'text', text: 'a new prompt' }])
+      await vi.waitFor(() => expect(events.length).toBeGreaterThan(0), { timeout: 10_000, interval: 10 })
+    } finally { reader.stop() }
     expect(events).toEqual([{ type: 'turn_started', payload: { userMessage: 'a new prompt' } }])
   })
 })

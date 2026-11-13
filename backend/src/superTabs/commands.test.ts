@@ -942,11 +942,17 @@ it('assigns stable workgroup numbers through old snapshots, rename, archive and 
   const third = f.group()
   expect(f.state.conversations.map(c => [c.id, c.number])).toEqual([['lead', undefined], [first, 1], [second, 2], [third, 3]])
 })
+it('records a tab\'s project from before projects with when it got its address', () => {
+  const f = fixture(), project = { cwd: '/repo', repositoryUrl: 'https://github.com/example/project' }
+  f.run({ type: 'tab.project', machineId: 'host', project })
+  expect(f.state.project).toEqual({ machineId: 'host', ...project, addressedAt: 1000 })
+})
 it('records the lead project once and accepts only Claude Code and Codex contributions', () => {
   const f = fixture(), project = { cwd: '/repo', repositoryUrl: 'https://github.com/example/project' }
   f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'lead', name: 'Lead', configuration: config, lead: true, project }, owner,
     { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })
-  expect(f.state.project).toEqual({ machineId: 'host', ...project })
+  // With when it got its address: the project that got a repository first coordinates it (githubComments.ts repositoryProject).
+  expect(f.state.project).toEqual({ machineId: 'host', ...project, addressedAt: 1000 })
   expect(() => f.run({ type: 'tab.project', machineId: 'host', project })).toThrow('already has a project')
   const command = commandSchema.parse({ type: 'machine.contribute', machineId: 'host', name: 'Workstation', cwd: '/repo', engines: ['claude', 'codex'], maxAgents: 4 })
   f.run(command, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })

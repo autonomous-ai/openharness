@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
+import type { AgentCloseResult } from '../lib/closeAgentService.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { createAgentCleanupLink } from './agentCleanupLink.js'
+import { createAgentCleanupLink, FORGET_TOLD_MS } from './agentCleanupLink.js'
 
 const row = (agentId: string, over: Partial<RegisteredSession> = {}) => ({ agentId, sessionId: `s-${agentId}`, ...over }) as RegisteredSession
 
@@ -10,11 +11,12 @@ function setup() {
   const mine = row('mine')
   const sessions = [kid, mine]
   const resolve = vi.fn((id: string) => sessions.find((s) => s.agentId === id || s.sessionId === id))
-  const closeStarted = vi.fn(async () => ({ closed: true as const }))
+  const closeStarted = vi.fn(async (..._args: unknown[]): Promise<AgentCloseResult> => ({ closed: true }))
   const lastActivity = vi.fn(async () => 42)
   const core = fakeCore({ agents: { resolve, closeStarted, lastActivity, live: vi.fn(() => sessions) } })
   const notify = vi.fn(() => true)
-  return { link: createAgentCleanupLink(core, notify), notify, closeStarted, lastActivity, core }
+  const call = vi.fn(async (_type: string, _payload: Record<string, unknown>, _waitMs: number): Promise<Record<string, unknown>> => ({ ok: true }))
+  return { link: createAgentCleanupLink(core, notify, call), notify, call, closeStarted, lastActivity, core }
 }
 
 describe('the agent cleanup in its own process, as the core sees it', () => {
@@ -42,17 +44,41 @@ describe('the agent cleanup in its own process, as the core sees it', () => {
     expect(await link.answer('closeStarted', { agentId: 'kid', mode: 'now' })).toEqual({ closed: true })
     expect(await link.answer('closeStarted', { agentId: 'kid', mode: 'idle' })).toEqual({ closed: true })
     expect(closeStarted.mock.calls).toEqual([['kid', 'now'], ['kid', 'idle']])
+    // Past the cleanup's ceiling only when it says so in those words.
+    expect(await link.answer('closeStarted', { agentId: 'kid', mode: 'idle', pastCeiling: true })).toEqual({ closed: true })
+    expect(await link.answer('closeStarted', { agentId: 'kid', mode: 'idle', pastCeiling: 'yes' })).toEqual({ closed: true })
+    expect(closeStarted.mock.calls.slice(-2)).toEqual([['kid', 'idle', true], ['kid', 'idle']])
     // Asked wrongly, nothing is closed.
     expect(await link.answer('closeStarted', { agentId: 'kid', mode: 'inspect' })).toEqual({ error: 'INVALID_REQUEST' })
     expect(await link.answer('closeStarted', { mode: 'now' })).toEqual({ error: 'INVALID_REQUEST' })
     expect(await link.answer('lastActivity', { agentId: 7 })).toEqual({ error: 'INVALID_REQUEST' })
-    expect(closeStarted).toHaveBeenCalledTimes(2)
+    expect(closeStarted).toHaveBeenCalledTimes(4)
+    // A refusal's count of background commands is answered whole.
+    closeStarted.mockResolvedValueOnce({ error: 'SESSION_NOT_IDLE', backgroundCommands: 2 })
+    expect(await link.answer('closeStarted', { agentId: 'kid', mode: 'idle' })).toEqual({ error: 'SESSION_NOT_IDLE', backgroundCommands: 2 })
     // The live agents, as any light service asks for them.
     expect(await link.answer('live', {})).toEqual({ agents: [row('kid', { startedBy: 'agent' }), row('mine')] })
   })
 
+  // The agent ledger is the cleanup's to read and lock (the audit of 2026-11-12): the core asks, and waits ten seconds.
+  it('asks it to erase what a harness being deleted was told, and takes only its word that it did', async () => {
+    const { link, call, notify } = setup()
+    expect(await link.port.forgetTold('kid')).toBe(true)
+    // Under its port member's name, as every call the core makes of a service is: a test's fault names it either way.
+    expect(call).toHaveBeenCalledWith('forgetTold', { agentId: 'kid' }, FORGET_TOLD_MS)
+    expect(FORGET_TOLD_MS).toBe(10_000)
+    // Down, slow, the ledger's lock held, a file it could not write, an answer from a build that knows no such
+    // request: not erased.
+    for (const answer of [{ error: 'SERVICE_UNAVAILABLE', service: 'agentCleanup', retryable: true }, { error: 'SERVICE_FAILED' }, { ok: false }, { ok: 'yes' }, {}]) {
+      call.mockResolvedValueOnce(answer)
+      expect(await link.port.forgetTold('kid')).toBe(false)
+    }
+    // Asked, never told and left: a notice held for a process that is down would erase nothing a delete can wait for.
+    expect(notify).not.toHaveBeenCalled()
+  })
+
   it('closes nothing, and knows no time, in a core that cannot', async () => {
-    const link = createAgentCleanupLink(fakeCore(), () => true)
+    const link = createAgentCleanupLink(fakeCore(), () => true, async () => ({}))
     expect(await link.answer('closeStarted', { agentId: 'kid', mode: 'now' })).toEqual({ error: 'UNSUPPORTED' })
     expect(await link.answer('lastActivity', { agentId: 'kid' })).toEqual({ at: null })
   })

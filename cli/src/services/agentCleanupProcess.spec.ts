@@ -21,7 +21,7 @@ describe('the agent cleanup in its own process', () => {
   const setup = () => {
     let options: ServiceProcessOptions | null = null
     let api: CoreApi | null = null
-    const port = { closed: vi.fn(), typed: vi.fn(), stop: vi.fn() }
+    const port = { closed: vi.fn(), typed: vi.fn(), forgetTold: vi.fn(async () => true), stop: vi.fn() }
     let refresh: (() => Promise<void>) | undefined
     const stop = vi.fn()
     const service = runAgentCleanupService({
@@ -34,7 +34,9 @@ describe('the agent cleanup in its own process', () => {
 
   it('hears from the core which harness was closed and which the person typed into, and nothing else', () => {
     const { options, port } = setup()
-    expect(options).toMatchObject({ name: 'agentCleanup', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't', requests: {} })
+    expect(options).toMatchObject({ name: 'agentCleanup', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't' })
+    // The apps ask it nothing: its one request is the core's own (core/agentCleanupLink.ts), which no client's is routed to.
+    expect(Object.keys(options.requests)).toEqual(['forgetTold'])
     options.onEvent!({ kind: 'closed', agentId: 'lead' })
     options.onEvent!({ kind: 'typed', agentId: 'kid' })
     options.onEvent!({ kind: 'typed', agentId: '' })
@@ -42,6 +44,20 @@ describe('the agent cleanup in its own process', () => {
     options.onEvent!({ kind: 'other', agentId: 'x' })
     expect(port.closed.mock.calls).toEqual([['lead']])
     expect(port.typed.mock.calls).toEqual([['kid']])
+  })
+
+  it('erases what a harness being deleted was told when the core asks, and says so only once it is erased', async () => {
+    const { options, port } = setup()
+    const ask = (payload: Record<string, unknown>) => options.requests.forgetTold!(payload, { local: true, owner: true })
+    expect(await ask({ agentId: 'kid' })).toEqual({ ok: true })
+    expect(port.forgetTold).toHaveBeenCalledWith('kid')
+    port.forgetTold.mockResolvedValueOnce(false)
+    expect(await ask({ agentId: 'kid' })).toEqual({ ok: false })
+    // Asked wrongly, nothing is erased.
+    expect(await ask({})).toEqual({ error: 'INVALID_REQUEST' })
+    expect(await ask({ agentId: '' })).toEqual({ error: 'INVALID_REQUEST' })
+    expect(await ask({ agentId: 7 })).toEqual({ error: 'INVALID_REQUEST' })
+    expect(port.forgetTold).toHaveBeenCalledTimes(2)
   })
 
   it('reads the live agents from the core before it acts, and none when the core cannot say', async () => {
@@ -53,7 +69,7 @@ describe('the agent cleanup in its own process', () => {
     const query = vi.fn(async (_query: string, _payload?: Record<string, unknown>) => answer)
     options.onConnected!({ query } satisfies CoreConnection)
     await refresh()
-    expect(query).toHaveBeenLastCalledWith('live', {})
+    expect(query).toHaveBeenCalledWith('live', {})
     expect(api.agents.live().map((s) => s.agentId)).toEqual(['k1'])
     answer = { error: 'UNKNOWN_QUERY' }
     await refresh()
@@ -63,17 +79,37 @@ describe('the agent cleanup in its own process', () => {
     expect(api.agents.live()).toEqual([])
   })
 
+  it('learns from the core how its daemon is reached, once, for what it asks of other machines', async () => {
+    const { options, api, refresh } = setup()
+    const query = vi.fn(async (name: string): Promise<Record<string, unknown>> => name === 'daemon'
+      ? { command: 'harness', port: 18473, machineId: 'machine-1', autonomousEnv: 'prod' } : { agents: [] })
+    options.onConnected!({ query } satisfies CoreConnection)
+    await refresh()
+    await refresh()
+    expect(api.daemon.port).toBe(18473)
+    expect(api.daemon.machineId()).toBe('machine-1')
+    expect(query.mock.calls.filter(([name]) => name === 'daemon')).toHaveLength(1)
+  })
+
   it('asks the core when a harness last moved and to close it, and takes no answer as none and not closed', async () => {
     const query = vi.fn(async (name: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> =>
       (name === 'lastActivity' ? { at: payload.agentId === 'k1' ? 1_000 : null } : { closed: true }))
     const ask = (name: string, payload: Record<string, unknown>) => query(name, payload)
-    const api = agentCleanupCoreApi(dir, () => [kid('k1')], ask)
+    const api = agentCleanupCoreApi(dir, () => [kid('k1')], ask, () => null)
     expect(await api.agents.lastActivity!('k1')).toBe(1_000)
     expect(await api.agents.lastActivity!('k2')).toBeNull()
     expect(await api.agents.closeStarted!('k1', 'now')).toEqual({ closed: true })
     expect(query).toHaveBeenLastCalledWith('closeStarted', { agentId: 'k1', mode: 'now' })
+    // Past the ceiling is said only when it is.
+    await api.agents.closeStarted!('k1', 'idle', true)
+    expect(query).toHaveBeenLastCalledWith('closeStarted', { agentId: 'k1', mode: 'idle', pastCeiling: true })
+    await api.agents.closeStarted!('k1', 'idle')
+    expect(query).toHaveBeenLastCalledWith('closeStarted', { agentId: 'k1', mode: 'idle' })
     expect(api.agents.byAgent('k1')?.agentId).toBe('k1')
-    const gone = agentCleanupCoreApi(dir, () => [], async () => { throw new Error('the core went away') })
+    // What Hachi started handed to the person is counted by the core (core/agentQueries.ts `count`).
+    api.count!('hachi_handed_to_person')
+    expect(query).toHaveBeenLastCalledWith('count', { metric: 'hachi_handed_to_person' })
+    const gone = agentCleanupCoreApi(dir, () => [], async () => { throw new Error('the core went away') }, () => null)
     expect(await gone.agents.lastActivity!('k1')).toBeNull()
     expect(await gone.agents.closeStarted!('k1', 'idle')).toEqual({ error: 'SERVICE_UNAVAILABLE' })
   })
@@ -81,7 +117,7 @@ describe('the agent cleanup in its own process', () => {
   // HARNESS_SWARM: the Super Tab members it keeps come from the Swarm's side, which its process loads only while it is on.
   it('keeps the members the Swarm hands it while it is on, and none without it', () => {
     const given: Array<Parameters<typeof createAgentCleanup>[1]> = []
-    const create = (_core: CoreApi, deps?: Parameters<typeof createAgentCleanup>[1]) => { given.push(deps); return { port: { closed: vi.fn(), typed: vi.fn(), stop: vi.fn() }, look: vi.fn(), closeStartedBy: vi.fn() } }
+    const create = (_core: CoreApi, deps?: Parameters<typeof createAgentCleanup>[1]) => { given.push(deps); return { port: { closed: vi.fn(), typed: vi.fn(), forgetTold: vi.fn(async () => true), stop: vi.fn() }, look: vi.fn(), closeStartedBy: vi.fn() } }
     const retainedHarnesses = vi.fn(() => new Set(['member'])), recordCleanupClose = vi.fn()
     const base = { dataDir: dir, socketPath: '/s', machineId: 'm', token: 't', run: () => ({ stop: vi.fn() }), create }
     runAgentCleanupService({ ...base, swarm: { retainedHarnesses, recordCleanupClose } })
@@ -112,7 +148,7 @@ describe('the agent cleanup in its own process', () => {
       const log = vi.spyOn(console, 'log').mockImplementation(() => {})
       options.onEvent!({ kind: 'closed', agentId: 'lead' })
       await vi.advanceTimersByTimeAsync(0)
-      expect(query.mock.calls).toEqual([['live', {}], ['closeStarted', { agentId: 'k1', mode: 'now' }]])
+      expect(query.mock.calls).toEqual([['live', {}], ['daemon', {}], ['closeStarted', { agentId: 'k1', mode: 'now' }]])
       expect(log).toHaveBeenCalledWith(expect.stringMatching(/^\[agent-cleanup\] closed a harness \(k1\): the harness that started it was closed/))
       service.stop()
     } finally { vi.useRealTimers() }

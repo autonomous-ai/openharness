@@ -31,6 +31,7 @@ import type { GridAccess } from '../lib/gridAttach.js'
 import type { createHarnessResourcesReader } from '../lib/harnessResources.js'
 import type { createHarnessStorageReader } from '../lib/harnessTelemetry.js'
 import type { AgentGridTarget, GridAnnotation } from '../lib/gridAnnotation.js'
+import { HACHI_ID } from '../dsh/builtinIds.js'
 import { GRID_FLEET_MAX_TIMEOUT_MS } from '../lib/gridFleetProtocol.js'
 import type { GridLaunchAnswer, GridLaunchOverride, GridLaunchRequest } from '../lib/gridLaunchWire.js'
 import type { NewAgentModel } from '../lib/newAgentModel.js'
@@ -124,6 +125,11 @@ export interface UsagePort {
 }
 export const USAGE_FALLBACKS: PortFallbacks<UsagePort> = { read: later(FAIL), stop: undefined }
 
+/** What `hachi_goal_done` tells the windows: Hachi's harness (the pane in view gets no notice), the goal and its title. */
+export interface HachiGoalDone { agentId: string; goalId: string; title: string }
+/** The longest title a goal keeps (services/goals.ts `GOAL_TITLE_MAX`), and so the longest a notice carries. */
+export const HACHI_GOAL_TITLE_MAX = 80
+
 export interface CoreApi {
   /** Last aggregate observation, never a transcript read. Optional for services that do not ask. */
   usage?: (target: AgentUsageTarget) => Promise<AgentTokenUsage | null>
@@ -201,9 +207,12 @@ export interface CoreApi {
     summaries(agentIds: string[]): Promise<Record<string, string>>
     /** Close a harness another agent started (`startedBy: agent`) as `agent_close` closes one: its screen saved, its
      *  process stopped, its conversation kept. `idle` refuses one that works, waits for the person or holds a draft
-     *  (`SESSION_NOT_IDLE`); `now` does not. Any other harness is refused (`NOT_AGENT_STARTED`): the agent cleanup
-     *  (services/agentCleanup.ts) closes those, and nothing else. Absent where the core does not let a service close. */
-    closeStarted?(agentId: string, mode: 'idle' | 'now'): Promise<AgentCloseResult>
+     *  (`SESSION_NOT_IDLE`), and one that still runs background commands (with `backgroundCommands`) until
+     *  [pastCeiling], when it is closed whatever runs and the count comes with it; `now` does not. Any other harness is
+     *  refused (`NOT_AGENT_STARTED`): the agent cleanup (services/agentCleanup.ts) closes those, and nothing else. Only
+     *  the cleanup reaches this (from its own process through core/agentCleanupLink.ts), so no client can name the
+     *  ceiling. Absent where the core does not let a service close. */
+    closeStarted?(agentId: string, mode: 'idle' | 'now', pastCeiling?: boolean): Promise<AgentCloseResult>
     /** Close only the recorded native identity started for a Swarm. Missing live sessions are already gone. */
     closeSwarm?(request: { agentId: string; creationId?: string; sessionId?: string; createdAt?: string; expiresAt?: number }): Promise<AgentCloseResult>
     /** Reopen a Swarm Lead whose session is gone, on its own conversation, as a resume does: nothing is typed into it
@@ -380,6 +389,11 @@ export interface CoreApi {
     turnCard(frame: TurnCardFrame): void
     /** A turn's recap for the apps (`turn_summary`, or `turn_summary_pending` while one is being cut). */
     turnSummary(frame: TurnSummaryFrame): void
+    /** A goal the live Hachi harness closed (`harness goal done`, services/goals.ts): one `hachi_goal_done` for every
+     *  window of the account, here and on its other computers, which shows its one notice (docs/design/2026-11-12-hachi.md,
+     *  "How it tells the person"). Sealed for the relay: the title is the person's words (lib/e2ee/manager.ts). Only the
+     *  live Hachi's, decided by the core (`createCoreApi`). Absent where the core offers a service none. */
+    hachiGoalDone?(notice: HachiGoalDone): void
   }
   /** How an agent's shell reaches this daemon: the command that runs this harness's CLI, the port the daemon
    *  serves and the machine it serves as. An experiment writes them into the prompts of the agents it runs
@@ -736,6 +750,8 @@ export const PROJECTS_REQUESTS = ['git_pull_request', 'git_pull_requests_status'
   'agent_instructions_read', 'agent_instructions_write'] as const
 /** A window's name for its repo and its work, by a small model in the background (services/windowNames.ts). */
 export const WINDOW_NAMES_REQUESTS = ['window_name'] as const
+/** Which engines this machine has, asked before a create (services/engineProbe.ts). */
+export const ENGINE_PROBE_REQUESTS = ['engines_probe'] as const
 /** Hachi's goals (`harness goal`, services/goals.ts), in the edge host: asked by the Hachi harness alone. */
 export const GOALS_REQUESTS = ['goal_open', 'goal_add', 'goal_done', 'goal_list'] as const
 /** Change agent's handoff file, prepared in the edge host (services/handoff.ts). */
@@ -897,8 +913,13 @@ export const CLOUD_REQUESTS = ['cloud_transcript', 'cloud_send', 'cloud_agents']
 export const MESSAGES_QUERIES = ['writable', 'shown', 'daemon', 'account', 'backend', 'windows', 'tab_key', 'tab_relay', 'observers', 'activity'] as const
 /** Each id as the backend makes it: a shared tab's (24 hex), a desk tab's, an invitation's (a UUID) and an account's. */
 const SHARED_TAB = '[a-f0-9]{24}', DESK_TAB = '[A-Za-z0-9_-]{1,64}', USER = '[A-Za-z0-9_-]{1,128}'
-const INVITE = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
-const route = (method: string, path: string) => ({ method, path: new RegExp(`^/api/agent-messages${path}$`) })
+/** A UUID as `randomUUID` and the backend write one: an invitation's id, a share's and a link's. */
+const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+/** A backend route a service in its own process may call through the core's sign-in: one method and a whole path. */
+export interface BackendRoute { method: string; path: RegExp }
+const routeAllowed = (routes: readonly BackendRoute[], method: unknown, path: unknown): boolean =>
+  typeof method === 'string' && typeof path === 'string' && routes.some((r) => r.method === method && r.path.test(path))
+const route = (method: string, path: string): BackendRoute => ({ method, path: new RegExp(`^/api/agent-messages${path}$`) })
 /**
  * The backend routes Agent Messages in its process may call through the core's sign-in (`backend`), by method and
  * whole path, and no others (backend/src/routes/agentMessages.ts). Its process holds no credential: the core signs
@@ -907,14 +928,14 @@ const route = (method: string, path: string) => ({ method, path: new RegExp(`^/a
  * route. Shared tabs' were refused by the one GET this allowed before, which left every share action failing in the
  * edge host, where Agent Messages runs.
  */
-export const MESSAGES_BACKEND_ROUTES: ReadonlyArray<{ method: string; path: RegExp }> = [
+export const MESSAGES_BACKEND_ROUTES: readonly BackendRoute[] = [
   route('GET', ''),
   route('GET', '/shares'),
   route('PUT', `/shares/${DESK_TAB}/roster`),
   route('POST', `/shares/${SHARED_TAB}/invites`),
   route('GET', '/invites'),
-  route('DELETE', `/invites/${INVITE}`),
-  route('POST', `/invites/${INVITE}/accept`),
+  route('DELETE', `/invites/${UUID}`),
+  route('POST', `/invites/${UUID}/accept`),
   route('DELETE', `/shares/${SHARED_TAB}/members/${USER}`),
   route('DELETE', `/shares/${SHARED_TAB}`),
   route('POST', `/shares/${SHARED_TAB}/move`),
@@ -923,8 +944,7 @@ export const MESSAGES_BACKEND_ROUTES: ReadonlyArray<{ method: string; path: RegE
   route('PATCH', `/tabs/${DESK_TAB}`),
 ]
 /** Whether Agent Messages in its process may make this backend call (`MESSAGES_BACKEND_ROUTES`). */
-export const messagesBackendAllowed = (method: unknown, path: unknown): boolean =>
-  typeof method === 'string' && typeof path === 'string' && MESSAGES_BACKEND_ROUTES.some((r) => r.method === method && r.path.test(path))
+export const messagesBackendAllowed = (method: unknown, path: unknown): boolean => routeAllowed(MESSAGES_BACKEND_ROUTES, method, path)
 export const MESSAGES_WINDOW_FRAME = 'messages_changed'
 /** Shared tabs changed on this computer (a roster, an invitation, an alert, a notice, a waiting request or the
  *  untrusted list): the windows read `shares` again. Only a revision: what changed is read, never pushed. */
@@ -944,8 +964,8 @@ export const MESSAGES_WINDOW_FRAMES: readonly string[] = [MESSAGES_WINDOW_FRAME,
  *
  * Adding one: its service (`start<Name>(core, ports)`, returning its requests' handlers) and its process's
  * runner (`SERVICE_RUNNERS`, src/serviceProcess.ts); its process (`SERVICE_HOSTS`, `onDemand: true`); its
- * entry here; and its start for the core's own process (services/inline.ts `EXPERIMENT_STARTS`). Removing
- * one is deleting those.
+ * entry here; the backend routes it may call (`EXPERIMENT_BACKEND_ROUTES`, `[]` for none); and its start for the
+ * core's own process (services/inline.ts `EXPERIMENT_STARTS`). Removing one is deleting those.
  */
 export const EXPERIMENTS: Readonly<Record<string, { requests: readonly string[]; state: readonly string[] }>> = {
   orchestrator: { requests: ORCHESTRATOR_REQUESTS, state: ['orchestrator/*.json'] },
@@ -963,6 +983,46 @@ export const EXPERIMENTS: Readonly<Record<string, { requests: readonly string[];
   // for one, an answer or a message to one wakes it too (its port's calls, core/agents/cloud.ts).
   cloud: { requests: CLOUD_REQUESTS, state: ['cloud/harnesses.json'] },
 }
+
+/** The Swarm's own API: `/api/super-tabs` and whole segments under it, of the characters the Swarm makes an id of
+ *  (superTabs/wire.ts `identifier`), with a printable query that names no fragment. */
+const SWARM_API = /^\/api\/super-tabs(?:\/[A-Za-z0-9_-]+)*(?:\?[!-"$-~]*)?$/
+const each = (methods: readonly string[], path: RegExp): BackendRoute[] => methods.map((method) => ({ method, path }))
+/**
+ * The backend routes each experiment in its process may call through the core's sign-in (`backend`,
+ * core/experimentQueries.ts), and no others. Its process holds no credential: the core signs each call, so a route left
+ * open here is a route any code in that process could call as the account. Until the audit of 2026-11-12 every path
+ * under `/api/` was signed for all six, so the Swarm's process, which reads GitHub text and other accounts' messages,
+ * could have read the account's device keys or the vault of its connected services.
+ * - The Swarm: its own API, by GET and POST. All of it, not a list of its routes: an app's own asks go through its
+ *   service (superTabs/service.ts `backend`, held there to this same shape), so what its process may ask is what the
+ *   app may. And whether the server takes the sign-in again (superTabs/host.ts).
+ * - Share: a grant's and a link's publication and removal, each by its id (sharing/owner.ts).
+ * - The router: Jev's hosted decision (lib/jev/jevClient.ts).
+ * - The orchestrator, Memories and cloud agents call none.
+ * A path under the Swarm's API is whole segments: none empty, no `.` or `%`, so none climbs out of it (`..`) or hides a
+ * separator. A new experiment declares its routes here, if only `[]` (core/experimentQueries.spec.ts).
+ */
+export const EXPERIMENT_BACKEND_ROUTES: Readonly<Record<string, readonly BackendRoute[]>> = {
+  superTabs: [
+    ...each(['GET', 'POST'], SWARM_API),
+    { method: 'GET', path: /^\/api\/auth\/me$/ },
+    // The account's machines, which a Swarm process of a build before 0.5.84 read for its route context (#3626). No
+    // build since asks it. Kept for one that meets this core while its update is under way; it can go on 2026-12-13.
+    { method: 'GET', path: /^\/api\/machines$/ },
+  ],
+  sharing: [
+    ...each(['PUT', 'DELETE'], new RegExp(`^/api/harness-shares/${UUID}$`)),
+    ...each(['PUT', 'DELETE'], new RegExp(`^/api/harness-links/${UUID}$`)),
+  ],
+  router: [{ method: 'POST', path: /^\/api\/route\/jev$/ }],
+  orchestrator: [],
+  memory: [],
+  cloud: [],
+}
+/** Whether [service], an experiment in its process, may make this backend call (`EXPERIMENT_BACKEND_ROUTES`). */
+export const experimentBackendAllowed = (service: string, method: unknown, path: unknown): boolean =>
+  routeAllowed(EXPERIMENT_BACKEND_ROUTES[service] ?? [], method, path)
 
 /** The services that may write turns into agents from a process of their own (core/deliveries.ts): the experiments,
  *  Agent Messages, which left them for the edge host and still types a message into an idle agent, and the agent
@@ -1090,7 +1150,8 @@ export const RECAPS_FALLBACKS: PortFallbacks<RecapsPort> = { lifecycle: undefine
 
 /**
  * The core's calls into the agent cleanup (services/agentCleanup.ts): what happens to the harnesses agents start.
- * Notices: the core never waits for them, and one the cleanup misses leaves a harness open, as before it.
+ * `closed` and `typed` are notices: the core never waits for them, and one the cleanup misses leaves a harness open,
+ * as before it.
  */
 export interface AgentCleanupPort {
   /** A harness was closed or stopped (`agent_close`, Stop Harness, a purge): the harnesses it started close too. */
@@ -1098,10 +1159,52 @@ export interface AgentCleanupPort {
   /** The person typed or pasted into a harness, from a window or the phone (an agent id or a session id): one another
    *  agent started is the person's from then on. */
   typed(id: string): void
+  /** A harness is being deleted: the agent ledger's lines that keep the opening words of what it was told
+   *  (`harness tell`) are erased. The one answer a delete waits for here, and for a bounded time: false when they were
+   *  not erased, which refuses the delete. The ledger is the agent clients' file, read and locked by the cleanup and
+   *  never by the core, whose loop its lock could hold for two seconds (the audit of 2026-11-12). */
+  forgetTold(agentId: string): Promise<boolean>
   stop(): void
 }
-/** What the core gets when the cleanup fails: nothing told, and every harness left open, as before it. */
-export const AGENT_CLEANUP_FALLBACKS: PortFallbacks<AgentCleanupPort> = { closed: undefined, typed: undefined, stop: undefined }
+/** What the core gets when the cleanup fails: nothing told, every harness left open, as before it, and no delete of a
+ *  harness whose told lines it could not erase. */
+export const AGENT_CLEANUP_FALLBACKS: PortFallbacks<AgentCleanupPort> = { closed: undefined, typed: undefined, forgetTold: later(false), stop: undefined }
+
+/** A browser's container is named this and its profile (services/agentBrowser/containers.ts `NAME`, which a file under a
+ *  service's folder keeps for itself; services/agentBrowser.spec.ts holds the command it builds to this one). */
+const AGENT_BROWSER_CONTAINER = 'harness-browser-'
+/** What a viewer's bytes are piped through inside a browser's container: to Xvnc, which listens on the container's own
+ *  loopback and publishes no port (services/agentBrowser.ts). */
+export const AGENT_BROWSER_VNC_PIPE: readonly string[] = ['socat', 'STDIO', 'TCP:127.0.0.1:5900']
+/** Podman by its whole path, as the login shell answers for it on a Mac or Linux (the agent browser does not run on
+ *  Windows); a connection's name; a profile, an agent's id or a UUID, of the characters Podman takes in a name. */
+const BROWSER_PODMAN = /^\/(?:[^\0-\x1f]*\/)?podman$/
+const BROWSER_CONNECTION = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/
+const BROWSER_PROFILE = /^[A-Za-z0-9_.-]{1,200}$/
+/**
+ * The one command the core starts for the agent browser, a viewer's pipe into a ready browser (core/browserStreams.ts):
+ * Podman by its whole path, on a named connection or the person's default, `exec -i` into a container named as the
+ * agent browser names its own, and the pipe to its screen, with nothing before, between or after. Null for any other
+ * command line. Until the audit of 2026-11-12 the core started whatever argv the agent browser's process gave it, so
+ * a name that process took from Podman's output, its state file or a page's doing could have become a command, or a
+ * flag of Podman's, in the process that types into every terminal.
+ *
+ * What is still that process's to say: which file is Podman (the one its login shell found, which the core does not
+ * look for itself), and which of its containers is an agent's (a browser moves with its pane, so its profile is not
+ * its agent's id). Both end when the stream leaves the core (docs/design/2026-11-12-core-audit.md, part 2).
+ */
+export function agentBrowserStreamCommand(value: unknown): string[] | null {
+  if (!Array.isArray(value) || !value.every((part) => typeof part === 'string')) return null
+  const [file = '', ...rest] = value as string[]
+  const named = rest[0] === '--connection'
+  const exec = named ? rest.slice(2) : rest
+  const container = exec[2] ?? ''
+  return BROWSER_PODMAN.test(file) && (!named || BROWSER_CONNECTION.test(rest[1] ?? ''))
+    && exec.length === 3 + AGENT_BROWSER_VNC_PIPE.length && exec[0] === 'exec' && exec[1] === '-i'
+    && container.startsWith(AGENT_BROWSER_CONTAINER) && BROWSER_PROFILE.test(container.slice(AGENT_BROWSER_CONTAINER.length))
+    && AGENT_BROWSER_VNC_PIPE.every((part, index) => exec[3 + index] === part)
+    ? value as string[] : null
+}
 
 /**
  * The core's calls into the agent browser (services/agentBrowser.ts): what happens to an agent whose Browser is on, and
@@ -1120,7 +1223,8 @@ export interface AgentBrowserPort {
   moved(from: string, to: RegisteredSession, on: boolean): void
   frameContext(agentId: string): AgentBrowserFrame | undefined
   /** How the core reaches a ready browser's screen for a viewer (core/browserStreams.ts): Podman's path, then
-   *  `exec -i harness-browser-<profile> socat STDIO TCP:127.0.0.1:5900`. Read in line, as `frameContext` is. */
+   *  `exec -i harness-browser-<profile> socat STDIO TCP:127.0.0.1:5900`, which is all the core starts
+   *  (`agentBrowserStreamCommand`). Read in line, as `frameContext` is. */
   streamCommand(agentId: string): { argv: string[] } | { error: 'NO_BROWSER' | 'NOT_READY' }
   /** [listener] hears an agent whose browser stops or goes: its viewers' streams end with it. */
   onCloseViewers(listener: (agentId: string) => void): void
@@ -2142,6 +2246,8 @@ export interface CoreApiDeps {
   turnSummary: CoreApi['clients']['turnSummary']
   /** Where a service's product counters go (`count`); absent, nowhere. */
   count?: CoreApi['count']
+  /** Every window of the account, here and away, told a goal Hachi closed (`clients.hachiGoalDone`); absent, none is. */
+  hachiGoalDone?: (notice: HachiGoalDone) => void
   log?: (line: string) => void
 }
 
@@ -2151,7 +2257,7 @@ export function createCoreApi({
   runtimeProfile, setRuntime, fork, create, creationStatus, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, viewerFrame, machine, activityText, activitySnapshot, activity, summaries,
   closeAgent, activityAt, resumeAgent, swarmAgents, setBrowser, moveBrowser, panePid,
   signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, cloud, superTabs, superTabRequest, cloudRows, lastTurn, turnCard, turnSummary,
-  count, log = (line) => console.warn(line),
+  count, hachiGoalDone, log = (line) => console.warn(line),
 }: CoreApiDeps): CoreApi {
   // The devices reach the windows through these alone, and only with their own frames: a devices process
   // speaks to the core as a service, and what it may put in front of a person is decided here, not there.
@@ -2160,6 +2266,15 @@ export function createCoreApi({
   const refused = (type: unknown): void => log(`[services] the devices sent a window ${String(type).slice(0, 40)}, which is not theirs to send`)
   // The recaps reach the devices and the apps through their own two doors, and only with their own frames.
   const refusedRecap = (type: unknown): void => log(`[services] the recaps sent ${String(type).slice(0, 40)}, which is not theirs to send`)
+  // A goals process speaks to the core as a service: a goal's notice goes to every window of the account only for the
+  // live Hachi harness here, and only with its three fields, whatever the process sends.
+  const goalText = (v: unknown, max: number): v is string => typeof v === 'string' && v.length > 0 && v.length <= max
+  const goalDone = hachiGoalDone && ((notice: HachiGoalDone): void => {
+    const { agentId, goalId, title } = notice ?? {}
+    if (typeof agentId === 'string' && registry.byAgent(agentId)?.dsh === HACHI_ID && goalText(goalId, 128) && goalText(title, HACHI_GOAL_TITLE_MAX)) {
+      hachiGoalDone({ agentId, goalId, title })
+    } else log('[services] the goals sent a goal done that is not the live Hachi\'s')
+  })
   return {
     dataDir,
     terminals,
@@ -2192,12 +2307,13 @@ export function createCoreApi({
       ...swarmAgents?.({ byAgent: id => registry.byAgent(id), stoppedIds: () => stoppedAgents.ids(), closeAgent, resumeAgent, creationStatus }),
       // Decided here, not in the service: whatever the cleanup asks, from its process or this one, the core closes only
       // a harness another agent started, the conversation it reviewed (`agent_close`'s identity), and keeps it.
-      closeStarted: async (agentId, mode) => {
+      closeStarted: async (agentId, mode, pastCeiling) => {
         const session = registry.byAgent(agentId)
         if (!session) return { error: 'AGENT_CHANGED' }
         if (session.startedBy !== 'agent') return { error: 'NOT_AGENT_STARTED' }
         if (!closeAgent) return { error: 'UNSUPPORTED' }
-        return closeAgent({ agentId, sessionId: session.sessionId, createdAt: new Date(session.registeredAt).toISOString(), mode })
+        const background = mode === 'idle' ? { background: pastCeiling === true ? 'count' as const : 'refuse' as const } : {}
+        return closeAgent({ agentId, sessionId: session.sessionId, createdAt: new Date(session.registeredAt).toISOString(), mode, ...background })
       },
       lastActivity: async (agentId) => {
         const session = registry.byAgent(agentId)
@@ -2238,6 +2354,7 @@ export function createCoreApi({
       },
       turnCard: (frame) => { if (TURN_CARD_TYPES.has(frame?.type)) turnCard(frame); else refusedRecap(frame?.type) },
       turnSummary: (frame) => { if (TURN_SUMMARY_TYPES.has(frame?.type)) turnSummary(frame); else refusedRecap(frame?.type) },
+      ...(goalDone ? { hachiGoalDone: goalDone } : {}),
     },
     daemon,
     wifi,

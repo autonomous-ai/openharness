@@ -11,7 +11,8 @@ import { isAbsolute, resolve, sep } from 'node:path'
 import type { GuestLaunch, GuestLaunchInput } from '../core/api.js'
 import { GuestHelperError, guestUserFor, type GuestAccounts, type SharedFolder } from '../lib/guestAccounts.js'
 import type { GuestHelperState } from '../lib/guestHelperInstall.js'
-import { GUEST_LAUNCH_ENGINES, guestPaneCommand, type GuestLaunchEngine } from '../lib/guestPaneCommand.js'
+import { GUEST_LAUNCH_ENGINES, type GuestLaunchEngine } from '../lib/guestEngines.js'
+import { guestPaneCommand } from '../lib/guestPaneCommand.js'
 
 export interface GuestLaunchesDeps {
   /** The guests' accounts; only what a launch and a share change read (lib/guestAccounts.ts, or the

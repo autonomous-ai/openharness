@@ -1,9 +1,11 @@
+import { REMOVALS_FILE } from './signOut.js'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { inflateRawSync } from 'node:zlib'
 import { describe, expect, it } from 'vitest'
-import { buildLogBundle, bundleFileName, redactSecretsInText } from './logBundle.js'
+import { buildLogBundle, bundleFileName } from './logBundle.js'
+import { redactSecretsInText } from './redactSecrets.js'
 import { crc32, writeZip } from './zipWriter.js'
 
 /** Enough of a ZIP reader to check what writeZip produced: walks the local headers. */
@@ -43,6 +45,19 @@ describe('zipWriter', () => {
 })
 
 describe('buildLogBundle', () => {
+  // The fourth review of #4221: the removals kept apart from harness.log (signOut.ts) are what to read when a person was signed
+  // out without knowing why, and the bundle a person sends left them out.
+  it('takes the sign-in removals kept apart, whole and redacted', () => {
+    const root = mkdtempSync(join(tmpdir(), 'bundle-'))
+    const logs = join(root, 'logs'), data = join(root, 'data')
+    mkdirSync(logs); mkdirSync(data)
+    writeFileSync(join(data, REMOVALS_FILE), '2026-11-12 04:58:09.000 [auth] sign-in removed · reason=logout · pid=2 (x token=abcdefgh12345)\n')
+    const { zip, included } = buildLogBundle({ logsDir: logs, dataDir: data, now: new Date(2026, 10, 12), version: '0.6.50', redact: redactSecretsInText })
+    const files = readZip(zip)
+    expect(files.get(REMOVALS_FILE)?.toString()).toBe('2026-11-12 04:58:09.000 [auth] sign-in removed · reason=logout · pid=2 (x token=<redacted>\n')
+    expect(included).toContain(REMOVALS_FILE)
+  })
+
   it('takes the last week of dated logs, the daemon log tail, and redacts', () => {
     const root = mkdtempSync(join(tmpdir(), 'bundle-'))
     const logs = join(root, 'logs'), data = join(root, 'data')

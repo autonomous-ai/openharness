@@ -34,6 +34,10 @@ export const RESERVE = 20
 export const MEMORY_SHARE = 0.75
 /** Disk its person keeps free whatever the Swarm does. */
 export const DISK_KEPT = 10 * GiB
+/** The most of the Swarm's other projects whose repositories are read for what a builder builds there, by a plan each pass
+ *  (githubAssign.ts) and by its own computer as it answers an offer (taskOffers.ts busy): a Swarm has a handful today, and the
+ *  server allows it a hundred. Past these, it counts as building nothing in the rest, which is said once (OTHER_PROJECTS). */
+export const OTHER_PROJECTS = 10
 /** The most tasks one builder holds open at once, as lampOS set it (four, with sub-agents): past it, work sits on a busy
  *  builder while others have none. A claim is refused past it (githubClaim.ts), and Harness gives a builder nothing at it. */
 export const CLAIM_LIMIT = 4
@@ -46,9 +50,12 @@ export const FOCUS = 0.5
 const AWAY = 1.5
 
 /** One of the project's agents that builds, as the PM's read of the Swarm names it, with the areas its instructions say it
- *  works on in this project ([worksOnOf]; empty for anything, absent when unread or unsaid). */
+ *  works on in this project ([worksOnOf]; empty for anything, absent when unread or unsaid), and whether its own computer
+ *  answers offers ([SPEAKS_OFFERS]): it is offered its tasks (githubAssign.ts give). */
 export interface CrewBuilder { id: string; name: string; label: string; machineId: string; engine: string; model?: string | null
-  worksOn?: string[] | null }
+  worksOn?: string[] | null; offers?: boolean }
+/** The word a machine's report says it answers offers by (machines.ts CAPABILITIES; superTabs/taskOffers.ts). */
+export const SPEAKS_OFFERS = 'taskOffers'
 /** A machine a builder runs on, with its last report (backend machines.ts machineObservationSchema). */
 export interface CrewMachine { machineId: string; name?: string; observation?: Json }
 /** A builder of the team that cannot work now: its person is stopping it, its machine has been down since [since], or its
@@ -170,7 +177,7 @@ const waitsOnPieces = (issue: Json, labels: string[]): boolean => labels.include
  * choice (readerFor) and a problem's lists (readProblem) count by it: readers are asked before the problem is read, as the
  * problem needs to know which tasks are in review.
  */
-export function heldTasks(issues: Json[], builders: CrewBuilder[]): Map<string, number[]> {
+export function heldTasks(issues: Json[], builders: Array<{ id: string; label: string }>): Map<string, number[]> {
   const byLabel = new Map(builders.map(b => [b.label, b]))
   const held = new Map<string, number[]>(builders.map(b => [b.id, []]))
   for (const issue of issues) {
@@ -348,7 +355,7 @@ export function readProblem(input: { now: number; issues: Json[]; crew: Crew; wi
  * counts for nothing: a builder's four open are each project's own, as a project whose merger is off would otherwise cap its
  * builders in every other (review of #4144).
  */
-export function buildingIn(lists: Json[][], builder: CrewBuilder): { tasks: number; minutes: number } {
+export function buildingIn(lists: Json[][], builder: { id: string; label: string }): { tasks: number; minutes: number } {
   let tasks = 0, minutes = 0
   for (const listed of lists) {
     const up = new Set(listed.filter(item => item.pull_request && item.draft === false && labelsOf(item).includes(builder.label)).flatMap(tasksOf))
@@ -372,7 +379,9 @@ export function addElsewhere(read: Read, builder: string, found: { tasks: number
 /**
  * The team that builds a project, from its PM's read of the Swarm: its person's and their teammates' agents that may work
  * in it (a private project's own only), never the PM itself, one stopping or one whose machine is down, each with
- * the machine it runs on. Swarm v4 agents run Claude Code or Codex.
+ * the machine it runs on. Swarm v4 agents run Claude Code or Codex. One answers offers where its machine's report says it does
+ * and it runs there under its own person's login: only such a computer may answer for it (backend store.ts asOwnAgent), and
+ * the owner of a lent computer never does.
  */
 export function crewOf(state: Json, project: { pmAgentId: string; projectId: string }): Crew {
   const agents = Array.isArray(state.agents) ? state.agents.map(object) : []
@@ -388,15 +397,17 @@ export function crewOf(state: Json, project: { pmAgentId: string; projectId: str
       : a.downSince ? { name, label: labelOf(name), why: 'down' as const, since: String(a.downSince) }
       : { name, label: labelOf(name), why: 'paused' as const, since: String(a.pausedAt) }
   })
+  const machines = (Array.isArray(state.machines) ? state.machines.map(object) : []).filter(m => typeof m.machineId === 'string')
+    .map(m => ({ machineId: String(m.machineId), name: typeof m.name === 'string' ? m.name : undefined, observation: object(m.observation) }))
+  const answers = new Set(machines.filter(m => Array.isArray(m.observation.capabilities) && m.observation.capabilities.includes(SPEAKS_OFFERS)).map(m => m.machineId))
   const builders = team.filter(a => a.workDecision !== 'stop' && !a.downSince && typeof a.pausedAt !== 'string')
     .map(a => {
       const name = String(a.displayName ?? a.name ?? a.id)
       const model = object(a.configuration).model
       return { id: String(a.id), name, label: labelOf(name), machineId: String(a.machineId), engine: String(object(a.configuration).engine),
-        model: typeof model === 'string' ? model : null }
+        model: typeof model === 'string' ? model : null,
+        ...answers.has(String(a.machineId)) && typeof a.contributorId === 'string' && a.contributorId === a.machineOwnerId ? { offers: true } : {} }
     })
-  const machines = (Array.isArray(state.machines) ? state.machines.map(object) : []).filter(m => typeof m.machineId === 'string')
-    .map(m => ({ machineId: String(m.machineId), name: typeof m.name === 'string' ? m.name : undefined, observation: object(m.observation) }))
   return { builders, machines, away }
 }
 

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -109,5 +110,18 @@ withBuiltin('SQLite reads off the core\'s thread', () => {
   it('reads a store that is not there as transient, and binds parameters as the thread does', async () => {
     expect(await sqliteReadAll(join(dir, 'absent.db'), 'SELECT 1')).toMatchObject({ ok: false, reason: 'transient' })
     expect(await sqliteReadAll(db, 'SELECT data FROM message WHERE id = ?', ['m2'])).toEqual({ ok: true, rows: [{ data: 'two' }], via: 'builtin' })
+  })
+
+  // A sandboxed agent's store may be a FIFO: a thread that opened it would wait for a writer for good, and two such
+  // reads would hold both threads, and every store's read behind them.
+  it.runIf(process.platform !== 'win32')('answers a FIFO store at once and keeps its threads free', async () => {
+    const fifo = join(dir, 'fifo.db')
+    execFileSync('mkfifo', [fifo])
+    for (const sql of ['SELECT 1 AS one', 'SELECT 2 AS two']) {
+      const read = await sqliteReadAll(fifo, sql, [], { timeoutMs: 2_000 })
+      expect(read).toMatchObject({ ok: false, reason: 'transient' })
+      expect((read as { error: Error }).error.message).toMatch(/not a regular file/)
+    }
+    expect(await sqliteReadAll(db, 'SELECT data FROM message WHERE id = ?', ['m1'])).toEqual({ ok: true, rows: [{ data: 'one' }], via: 'builtin' })
   })
 })

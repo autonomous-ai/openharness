@@ -161,6 +161,18 @@ describe('one-field machine preparation', () => {
     f.deps.firstRun.mockReturnValue(true)
     expect(await f.run()).not.toHaveProperty('firstRun')
   })
+  // The probe is a service's since the audit of 2026-11-12: asked as its process goes, the core answers for it.
+  it('installs nothing on a probe that was not answered: no answer is not "none installed"', async () => {
+    for (const unanswered of [{ error: 'SERVICE_UNAVAILABLE', service: 'engineProbe', retryable: true }, { error: 'ENGINE_PROBE_FAILED' }]) {
+      const f = fixture()
+      const install = vi.fn(async () => {})
+      f.request.mockResolvedValueOnce(unanswered as never)
+      await expect(prepareContribution(f.core, { tabId: 'tab', installEngine: 'claude' }, { ...f.deps, install } as never))
+        .rejects.toThrow('This machine could not check its engines. Try again.')
+      expect(install).not.toHaveBeenCalled()
+      expect(f.close).toHaveBeenCalledOnce()
+    }
+  })
   it('still refuses when the install left no engine behind', async () => {
     const f = fixture()
     f.request.mockResolvedValue({ engines: [] })

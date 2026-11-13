@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { PassThrough } from 'node:stream'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { emptyPorts, type AgentBrowserPort, type Asker, type BrowserSwitch, type CoreApi, type CorePorts, type ServiceRequests, type TurnDelivery } from '../core/api.js'
+import { agentBrowserStreamCommand, emptyPorts, type AgentBrowserPort, type Asker, type BrowserSwitch, type CoreApi, type CorePorts, type ServiceRequests, type TurnDelivery } from '../core/api.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { browserAssetsHash } from './agentBrowser/assets.js'
@@ -275,6 +275,8 @@ describe('the agent browser service', () => {
     port.attached(session('a1'))
     await ready(port, 'a1')
     expect(port.streamCommand('a1')).toEqual({ argv: [fake.path, 'exec', '-i', 'harness-browser-a1', 'socat', 'STDIO', 'TCP:127.0.0.1:5900'] })
+    // And the core starts it: its one command for the agent browser (core/api.ts).
+    expect(agentBrowserStreamCommand((port.streamCommand('a1') as { argv: string[] }).argv)).not.toBeNull()
     fake.reply('info --format json', { stdout: JSON.stringify({ version: { Version: '4.3.0' }, host: { memTotal: 8 * GiB } }) })
     const old = start(fakeCore({ dataDir: mkdtempSync(join(dataDir, 'old-')) }))
     old.port.attached(session('a2'))
@@ -560,6 +562,10 @@ describe('the agent browser service', () => {
     port.attached(session('a1'))
     await ready(port, 'a1')
     expect(await requests.agent_browser_state!({ pane: '%7' }, LOCAL)).toEqual({ agentId: 'a1', state: 'ready', podman: fake.path, connection: 'harness', human: 'normal' })
+    // And the exec into it, on that connection, is the one command the core starts (core/api.ts).
+    const command = port.streamCommand('a1') as { argv: string[] }
+    expect(command.argv).toEqual([fake.path, '--connection', 'harness', 'exec', '-i', 'harness-browser-a1', 'socat', 'STDIO', 'TCP:127.0.0.1:5900'])
+    expect(agentBrowserStreamCommand(command.argv)).toEqual(command.argv)
   })
 
   it('a failed browser\'s state names its failure', async () => {

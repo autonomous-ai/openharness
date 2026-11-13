@@ -318,6 +318,17 @@ describe('the crew a project\'s PM reads (crewOf)', () => {
       away: [{ name: 'leaving', label: 'builder:leaving', why: 'stopping' }, { name: 'asleep', label: 'builder:asleep', why: 'down', since: '2026-11-09T10:00:00Z' }],
     })
   })
+
+  // The allocator's design, package 16: an agent is offered its tasks where its own computer answers offers, which only the computer
+  // that runs it under its own person's login may (backend store.ts asOwnAgent).
+  it('says which builders\' own computers answer offers: a machine that says so, running the builder under its own person\'s login', () => {
+    const agent = (id: string, machineId: string, extra: Json = {}) => ({ id, regular: true, name: id, machineId, configuration: { engine: 'claude' },
+      contributorId: 'dee', machineOwnerId: 'dee', ...extra })
+    const state = { agents: [agent('pip', 'new'), agent('juno', 'old'), agent('lent', 'new', { machineOwnerId: 'lender' }), agent('unsaid', 'new', { contributorId: undefined })],
+      machines: [{ machineId: 'new', observation: { capabilities: ['leadStart', 'taskOffers'] } }, { machineId: 'old', observation: { capabilities: ['leadStart'] } }] }
+    expect(crewOf(state, { pmAgentId: 'pm', projectId: 'app' }).builders.map(b => [b.id, b.offers ?? false]))
+      .toEqual([['pip', true], ['juno', false], ['lent', false], ['unsaid', false]])
+  })
 })
 
 describe('labels, needs and dependencies', () => {

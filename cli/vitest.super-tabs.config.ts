@@ -34,6 +34,8 @@ const FILES = ['src/superTabs/shortCommand.ts', ...IN_CORE,
   'src/testing/suiteWorkers.ts',
   // A file's path as a line says it, in the numbers, the scoreboard and the merger's notes (the allocator's design, package 8).
   'src/superTabs/plainPath.ts',
+  // A task offered to one agent, and answered by its own computer (the allocator's design, package 16, 11-12).
+  'src/superTabs/taskOffers.ts',
 ]
 export default defineConfig({
   test: {

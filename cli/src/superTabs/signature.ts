@@ -10,6 +10,9 @@
  * bold or italics closed before its colon or after, perhaps with a role's word or two in brackets ("Ray (PM)"), then a colon, or
  * a comma, a time (with "pm" or a zone such as "UTC") and a colon. "Ray, can you read #12?" opens with its name and is no
  * signature; nor are "vale: 3 errors", a linter's report, and "Ray, 9:00 call: agenda" (review of #4074).
+ *
+ * After the mentions a post opens with too, which stay: "@Devon Lennox: Flutter 3.47.2 is now on Mac 3" (anh Dee, 2026-11-12:
+ * "why does lenox put 'Lenox:' there. it's awkward").
  */
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
@@ -17,8 +20,34 @@ const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
  *  post that opens "Claude Code: ..." is about the engine. */
 const ENGINE = /^(?:claude(?: code)?|codex|opencode|pi)$/i
 
-/** [text] without a signature of any of [names] at its start; as it is when it has none, or nothing after it. */
+/** The mentions a post opens with ("@Devon @Cy "), each a word of its own. */
+const MENTIONS = /^\s*(?:@[^\s@]+\s+)+/
+
+/** Text that opens with a block (a list, heading, quote, table, code, divider or link definition), which the mentions before it
+ *  leave on a line of their own, so that it still renders. The server's rule for tags and a post (backend superTabs/mentions.ts
+ *  withTags), and Desktop's (super_tabs/message_text.dart withTags): kept the same in all three. */
+const OPENS_BLOCK = new RegExp('^(?: {4}|\\t| {0,3}(?:[-*+](?:[ \\t\\n]|$)|#{1,6}(?:[ \\t\\n]|$)|>'
+  + '|\\d{1,9}[.)](?:[ \\t\\n]|$)|```|~~~|\\||\\[[^\\]\\n]+\\]:'
+  + '|(?:(?:\\*[ \\t]*){3,}|(?:-[ \\t]*){3,}|(?:_[ \\t]*){3,})(?:\\n|$)))')
+
+/** [text] without a signature of any of [names] at its start, or after the mentions it opens with; as it is when it has none,
+ *  or nothing after it. */
 export function unsigned(text: string, names: ReadonlyArray<string | null | undefined>): string {
+  const mentions = MENTIONS.exec(text)
+  if (mentions) {
+    const off = signedOff(text.slice(mentions[0].length), names)
+    if (off === null) return text
+    const tags = mentions[0].trim().split(/\s+/).join(' ')
+    // Only what began on a line of its own can be a block: a marker on the signature's line was inline text.
+    return off.ownLine && OPENS_BLOCK.test(off.said) ? `${tags}\n\n${off.said}` : `${tags} ${off.said}`
+  }
+  // From its first word: the server trims a post's ends (backend commands.ts), so an indent kept here would reach nobody.
+  return signedOff(text, names)?.said.trimStart() ?? text
+}
+
+/** What [text] says after a signature of any of [names] at its very start, and whether that began on a line of its own; null
+ *  when it has no signature or nothing after it. */
+function signedOff(text: string, names: ReadonlyArray<string | null | undefined>): { said: string; ownLine: boolean } | null {
   for (const raw of names) {
     const name = raw?.trim()
     if (!name || ENGINE.test(name)) continue
@@ -34,9 +63,11 @@ export function unsigned(text: string, names: ReadonlyArray<string | null | unde
       if (!text.startsWith(markup, end)) continue
       end += markup.length
     }
-    // From its first word: the server trims a post's ends (backend commands.ts), so an indent kept here would reach nobody.
-    const said = text.slice(end).trimStart()
-    if (said) return said
+    // The rest of the signature's own line, and the blank lines after it, go; the indent of the first line after them stays, as
+    // it may open a code block after mentions (the second review of #4210). Spaces on the signature's line are no indent.
+    const rest = text.slice(end).replace(/^[ \t]*/, '')
+    const said = rest.replace(/^(?:\r?\n[ \t]*(?=\r?\n))*\r?\n/, '')
+    if (said.trim()) return { said, ownLine: said !== rest }
   }
-  return text
+  return null
 }

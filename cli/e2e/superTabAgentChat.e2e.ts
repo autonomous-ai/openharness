@@ -274,6 +274,16 @@ it.each(['claude', 'codex'] as const)('answers two messages of the same words ea
   expect(posts).toHaveLength(2)
 }, 300_000)
 
+// A turn that narrates, runs a tool and thinks before its answer: Claude Code writes the answer's thinking and text as two lines, both
+// `end_turn`. The turn ended on the thinking, and the reply was the narration from before the tool (Devon, 2026-11-12).
+it('posts the answer a Claude Code turn wrote after its tools and its thinking, not the narration before them', async () => {
+  const { posts, ask } = await begin('claude')
+  const said = '!narrate gh issue create'
+  ask('one', said)
+  await until('the answer', () => posts.length >= 1 || null, 90_000, 100)
+  expect(posts.map(post => post.command.text)).toEqual([`answer 1: ${said}`])
+}, 300_000)
+
 // Codex says what it is about to do in messages of their own, its commentary, ahead of its answer; its transcript reader leaves them out
 // of what a turn said, and so does the reply: the answer alone.
 it('posts the answer of a Codex turn without what it said on the way', async () => {

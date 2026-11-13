@@ -147,15 +147,14 @@ describe('the core\'s start-up order (core/main.ts)', () => {
     expect(source).toContain('installedHooks?.close()')
   })
 
-  it('points the installed copy\'s launcher and service at the Node the core runs on, and settles the Node record', () => {
-    // Not current-node, which can name a Node no probation judged (lib/nodeReferences.ts); and a core on Node 24 has
-    // nothing left holding it back (lib/nodeMigration.ts `settleNodeMigration`).
+  it('settles the installed copy\'s Node record, and leaves the launcher and the service to the master', () => {
+    // A core on Node 24 has nothing left holding it back (lib/nodeMigration.ts `settleNodeMigration`). Pointing the
+    // launcher and the service definition at the Node it runs on is the master's, once this core is up
+    // (masterProcess.ts `coreUp`, lib/nodeReferences.ts): the core loaded the platform's launchd, systemd and Task
+    // Scheduler code for it, 1,100 lines it ran once a start (the audit of 2026-11-12).
     const source = code(SOURCE)
-    const from = source.indexOf('if (isInstalledCopy(SCRIPT_PATH, env.ADAPTER_CLI_DIR)) {')
-    expect(from, 'core/main.ts still follows the Node for the installed copy only').toBeGreaterThan(-1)
-    const block = source.slice(from, source.indexOf('\n  }', from))
-    expect(block).toMatch(/refreshNodeReferences\(\(line\) =>/)
-    expect(block).toContain('settleNodeMigration(env.ADAPTER_CLI_DIR)')
+    expect(source).toContain('if (isInstalledCopy(SCRIPT_PATH, env.ADAPTER_CLI_DIR)) settleNodeMigration(env.ADAPTER_CLI_DIR)')
+    expect(source).not.toContain('refreshNodeReferences')
   })
 
   it('keeps the prologue itself incapable of throwing', () => {

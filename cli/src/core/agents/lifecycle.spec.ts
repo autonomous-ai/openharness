@@ -4,7 +4,7 @@ import type { RegisteredSession } from '../../lib/registry.js'
 import { createResumeAgentService } from '../../lib/resumeAgentService.js'
 import { AgentStopError, createStopAgentService } from '../../lib/stopAgentService.js'
 import { createRetainExitedSession } from '../../lib/retainExitedSession.js'
-import { createAgentBrowserLifecycle, createAgentLifecycle, createPurgeRequest, createStopRequest, LeadProtectedError, type LifecycleDeps } from './lifecycle.js'
+import { createAgentBrowserLifecycle, createAgentLifecycle, createPurgeRequest, createStopRequest, LeadProtectedError, TOLD_NOT_ERASED, type LifecycleDeps } from './lifecycle.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 import { moveHeldLine } from '../../lib/hostMove/moveAgent.js'
@@ -54,7 +54,8 @@ function setup(over: Partial<LifecycleDeps> = {}) {
     refreshGridWebSearch: vi.fn(),
     attachDsh: vi.fn(),
     attachSession: vi.fn(async () => true),
-    eraseRecords: vi.fn(async () => {}),
+    forgetTold: vi.fn(async () => true),
+    scrubCreated: vi.fn(async () => 0),
     ...over,
   }
   const lifecycle = createAgentLifecycle(deps)
@@ -148,7 +149,6 @@ describe('stopping, purging and resuming an agent', () => {
       expect(purge.stopped).toBe(deps.stoppedAgents)
       expect(purge.checkpoints).toBe(deps.sessionCheckpoints)
       expect(purge.stop).toBe(lifecycle.stopAgent)
-      expect(purge.eraseRecords).toBe(deps.eraseRecords)
       expect(purge.leadProtected).toBeUndefined()
     })
 
@@ -200,9 +200,37 @@ describe('stopping, purging and resuming an agent', () => {
       expect(vi.mocked(deps.mirror.deleteHistory).mock.calls).toEqual([['k2'], ['k1']])
       expect(vi.mocked(deps.sessionSearch!.deleteHistory).mock.calls).toEqual([['k2'], ['k1']])
       expect(deps.registry.deleteSavedNames).toHaveBeenCalledWith(['a1', 'k2', 'k1'])
-      expect(deps.eraseRecords).toHaveBeenCalledWith(closed)
+      // What it was told goes first, before anything of it is deleted here; the requests that made it after its
+      // conversation; and only then is it gone for the windows.
+      expect(deps.forgetTold).toHaveBeenCalledExactlyOnceWith('a1')
+      expect(deps.scrubCreated).toHaveBeenCalledExactlyOnceWith('a1')
       expect(deps.send).toHaveBeenCalledWith({ type: 'agent_deleted', payload: { agentId: 'a1', retained: false } })
-      expect(vi.mocked(deps.eraseRecords).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(deps.send).mock.invocationCallOrder[0]!)
+      expect(vi.mocked(deps.forgetTold).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(deps.mirror.deleteHistory).mock.invocationCallOrder[0]!)
+      expect(vi.mocked(deps.forgetTold).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(deps.scrubCreated).mock.invocationCallOrder[0]!)
+      expect(vi.mocked(deps.scrubCreated).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(deps.send).mock.invocationCallOrder[0]!)
+    })
+
+    // The agent cleanup erases them, in the edge host (the audit of 2026-11-12): its lock held, or its process down.
+    // Asked first: refused after the conversation had gone, the harness was left with none and would not delete.
+    it('refuses a purge whose told lines were not erased before anything is deleted, in words the person can act on', async () => {
+      const closed = row({ engine: 'openclaw', sessionId: 'k2', registeredAt: 7 })
+      const { deps, lifecycle } = setup({
+        registry: { byAgent: vi.fn(() => undefined), list: vi.fn(() => []), deleteSavedNames: vi.fn() } as unknown as LifecycleDeps['registry'],
+        stoppedAgents: { list: vi.fn(() => [closed]), get: vi.fn((id: string) => (id === 'a1' ? closed : undefined)),
+          beginResume: vi.fn(() => 'held'), finishResume: vi.fn(), remove: vi.fn() } as unknown as LifecycleDeps['stoppedAgents'],
+        sessionCheckpoints: { deletionFiles: vi.fn(() => []) } as never,
+        forgetTold: vi.fn(async () => false),
+      })
+      const target = { agentId: 'a1', sessionId: 'k2', createdAt: 7 }
+      const { reviewId } = await lifecycle.purgeAgentService.request({ ...target, mode: 'inspect' })
+      expect(await lifecycle.purgeAgentService.request({ ...target, mode: 'delete', reviewId: String(reviewId) }))
+        .toMatchObject({ error: 'DELETE_REFUSED', detail: expect.stringContaining(TOLD_NOT_ERASED) })
+      expect(TOLD_NOT_ERASED).toBe('Harness could not erase what this harness was told, so nothing was deleted.')
+      expect(deps.scrubCreated).not.toHaveBeenCalled()
+      expect(deps.mirror.deleteHistory).not.toHaveBeenCalled()
+      expect(deps.sessionSearch!.deleteHistory).not.toHaveBeenCalled()
+      expect(deps.stoppedAgents.remove).not.toHaveBeenCalled()
+      expect(deps.send).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'agent_deleted' }))
     })
 
     it('with no session yet, or no search index, forgets only what there is', () => {

@@ -136,6 +136,28 @@ void main() {
     },
   );
 
+  testWidgets('Hachi is a switch in Experimental, off, and unavailable on a '
+      'server that predates it', (tester) async {
+    final hachi = ExperimentalFeature.hachi;
+    final server = AccountSettings('a');
+    final store = await open(server);
+    await tester.pumpWidget(
+      MaterialApp(home: Scaffold(body: ExperimentalSection(store: store))),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Hachi'), findsOneWidget);
+    expect(find.textContaining('starts and follows harnesses'), findsOneWidget);
+    final toggle = find.byKey(const ValueKey('experimental-hachi'));
+    expect(tester.widget<Switch>(toggle).value, isFalse);
+    expect(store.isAvailable(hachi), isTrue);
+    server.features.remove(hachi.id);
+    server.revision++;
+    await store.refresh();
+    expect(store.enabled(hachi), isFalse);
+    expect(store.isAvailable(hachi), isFalse);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   test('a pending save is not presented as saved, and a failed save can be retried', () async {
     final server = AccountSettings('a');
     final store = await open(server);
