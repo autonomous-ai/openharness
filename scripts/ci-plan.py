@@ -200,7 +200,7 @@ NOT_READ = {"cli": ("cli/e2e/",)}
 # A folder covers only paths named from the repository root: a relative read ("../../cli/x.ts") is always a read.
 NOT_READS = {
     # A pull request's files in the merger's tests: named, never opened (CLI Swarm v4 security, 2026-11-10).
-    "cli/src/superTabs/githubMerge.spec.ts": ("test data: a pull request's file paths", {"docs/"}),
+    "cli/src/superTabs/githubMerge.spec.ts": ("test data: a pull request's file paths", {"backend/src/superTabs/", "docs/"}),
     **{source: ("test data: owned-code paths and model names", {"desktop/lib/", "desktop/lib/super_tabs/",
                                                                 "desktop/lib/super_tabs/roster.dart"})
        for source in ("backend/src/superTabs/commands.test.ts", "backend/integration/superTabs.test.ts")},
@@ -241,6 +241,8 @@ NOT_READS = {
     "cli/src/lib/runtimeProfile.spec.ts": ("test data: a model name", {"provider/"}),
     "cli/src/lib/transcriptReader.spec.ts": ("test data: a tool result's text", {"devices/"}),
     "cli/src/superTabs/githubTrain.spec.ts": ("test data: a pull request's changed files", {"docs/"}),
+    "cli/src/superTabs/plainPath.spec.ts": ("test data: a path to make plain", {"docs/"}),
+    "cli/src/superTabs/pmNumbers.spec.ts": ("test data: a hot file's name", {"backend/src/superTabs/"}),
     "cli/src/superTabs/scoreboard.spec.ts": ("test data: the files landings touched most", {"backend/", "docs/"}),
     "companions/src/application/modelProfile.spec.ts": ("test data: a model name", {"provider/"}),
     "companions/src/memory/lessons/signals.spec.ts": ("test data: a test id", {"tests/"}),
