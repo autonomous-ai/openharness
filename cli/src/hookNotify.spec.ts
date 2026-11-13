@@ -2199,7 +2199,9 @@ describe('hook notify posts over the daemon\'s pipe on Windows (W1)', () => {
 describe('hook notify: a session outside a pane', () => {
   /** The environment names the hook may send as host hints, and nothing else (spec: The hook). */
   const HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'KITTY_WINDOW_ID',
-    'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID', 'ORCA_APP_VERSION']
+    'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID']
+  /** The hint names unset, so the environment this test runs in sends none of its own. */
+  const noHints = Object.fromEntries(HINTS.map((name) => [name, '']))
   const folder = (prefix: string): string => {
     const dir = mkdtempSync(join(tmpdir(), prefix))
     tmpDirs.push(dir)
@@ -2337,11 +2339,17 @@ describe('hook notify: a session outside a pane', () => {
       input: { hook_event_name: 'UserPromptSubmit', session_id: 'sess-1', cwd: '/w', prompt: 'prompt-secret' },
     })
     expect(requests.map((request) => request.url)).toEqual(['/api/hook/observed'])
-    const hints = requests[0].body.hostHints as Record<string, string>
-    // Nine names, and the core takes eight keys (core/observedHook.ts): a hint fewer, never the whole event.
-    expect(Object.keys(hints)).toHaveLength(8)
-    for (const [name, value] of Object.entries(hints)) expect(allowed[name]).toBe(value)
+    // Eight names, as many as the core takes (core/observedHook.ts): every one is sent.
+    expect(requests[0].body.hostHints).toEqual(allowed)
     expect(JSON.stringify(requests[0].body)).not.toMatch(/PAIRING|SPAWN|ORCA_OTHER|secret/)
+  })
+
+  // Which Orca build it is says nothing about where the session runs.
+  it('never sends ORCA_APP_VERSION', async () => {
+    const { port, requests } = await collect()
+    await runHook({ port, env: { ...noHints, ORCA_APP_VERSION: '1.4.256' }, input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
+    expect(requests).toHaveLength(1)
+    expect(requests[0].body.hostHints).toEqual({})
   })
 
   it('a hint value of 200 chars is cut to 64', async () => {
