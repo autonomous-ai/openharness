@@ -910,6 +910,12 @@ add a kind there, not at the call site.
   `^U` because a ⌘ chord never reaches xterm's input handler at all. The composer answers all four
   line-editing chords too: it writes ⌥⏎'s newline itself, binds `^W`/`^U`, and lets Flutter's own
   macOS text-editing shortcuts serve ⌥⌫ and ⌘⌫.
+  ⚠️ A ⌘V POSTED by another app (Wispr Flow, SuperWhisper, Raycast, text expanders) carries
+  Command on the key event alone, with no Command press first, so Flutter's keyboard reports
+  Command up and drops it (flutter/flutter#184571). `MainFlutterWindow.swift` spots that shape
+  (`isInjectedPaste`, tested in `RunnerTests`) and reports `paste` over `harness/app_menu`;
+  `shortcuts/shortcut_paste.dart` runs the focused terminal's own paste, or the field's
+  `PasteTextIntent`. A ⌘V typed on the keyboard never takes this path.
 - The app has no flash UI: the dial is flashed with `harness flash`. `SerialPortLease` sees that
   flash's lease file and pauses daemon supervision so `harness start` cannot steal the port mid-write.
 - `lib/update/desktop_updater.dart` self-updates from the GCS manifest (sha256-verified, strictly
