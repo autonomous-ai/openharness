@@ -72,10 +72,11 @@ CLI_SHARED = ("cli/package.json", "cli/package-lock.json", "cli/vitest.config.ts
 # The most pull requests Harness's train carries (cli/src/superTabs/githubTrain.ts TRAIN_MAX).
 TRAIN_MAX = 20
 FENCE = re.compile(r"^```harness-local-checks\s*\n(.*?)^```[ \t]*$", re.MULTILINE | re.DOTALL)
-# --run gives each check an hour, and a check it stops STOP_SECONDS to end after its Ctrl+C before it is killed.
-# Vitest prints its coverage table after its summary (about 30 KB for test:core), so the tail kept for the count is
-# far longer than that report.
-RUN_SECONDS = 3600
+# --run gives each check 65 minutes: the Desktop suite's own hour (run_command), which starts later, and five minutes
+# to stop Flutter and write its receipt naming what it never reached. A check it stops gets STOP_SECONDS to end after
+# its Ctrl+C before it is killed. Vitest prints its coverage table after its summary (about 30 KB for test:core), so
+# the tail kept for the count is far longer than that report.
+RUN_SECONDS = 3900
 STOP_SECONDS = 10
 TAIL_BYTES = 1 << 20
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -244,7 +245,8 @@ def attempt(command, cwd, err):
                     process.wait(STOP_SECONDS)
                 except subprocess.TimeoutExpired:
                     pass
-                os.killpg(process.pid, signal.SIGKILL)
+                finally:  # a second Ctrl+C or SIGTERM during the grace still ends in the kill
+                    os.killpg(process.pid, signal.SIGKILL)
         except (OSError, subprocess.TimeoutExpired):
             pass  # every member left already: macOS refuses a group that is only the unreaped shell
 

@@ -9,8 +9,9 @@ to make receipts.
 
 **Architecture:** A local-only mode in the same script, beside the validation path CI calls, which does not change.
 Three pure rules (the running platform, the command with its cap, the passed count) and one `run()` that carries the
-order: clean tree, paths from git, required checks, platform, each `CHECKS` command through the shell in its own
-process group with a one-hour limit, source unchanged, then the fence, printed only after `validate_receipts` takes it.
+order: clean tree, paths from git, required checks, platform, each `CHECKS` command through the shell in its own process
+group with a 65-minute limit (above the Desktop suite's own hour), source unchanged, then the fence, printed only after
+`validate_receipts` takes it.
 
 **Tech Stack:** Python 3 standard library (`argparse`, `subprocess`, `threading`, `json`, `re`), `unittest`, git. No
 new dependency.

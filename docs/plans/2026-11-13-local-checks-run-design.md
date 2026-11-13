@@ -49,11 +49,12 @@ Direction approved by Ken on 2026-11-13.
 9. **On failure** exits 1 and prints on stderr one line per failed check: its name and why (exit code, no count,
    timeout). No fence is printed, not even a partial one.
 
-Each check runs with a one-hour limit; on timeout the check fails as `timed out`. A check runs in a process group of
-its own, which the terminal's signals never reach, so `--run` stops it at its limit and whenever `--run` itself is
-stopped (Ctrl+C, SIGTERM, a closed terminal's SIGHUP): Ctrl+C to the group first, as a terminal would send it, so the
-check stops what it started in a session of its own (`test-desktop.py`'s Flutter run), then a kill 10 s later. Windows
-has no Ctrl+C for another group, so there the tree is killed at once.
+Each check runs with a 65-minute limit, above the Desktop suite's own hour so that budget ends it first with its
+receipt; on timeout the check fails as `timed out`. A check runs in a process group of its own, which the terminal's
+signals never reach, so `--run` stops it at its limit and whenever `--run` itself is stopped (Ctrl+C, SIGTERM, a closed
+terminal's SIGHUP): Ctrl+C to the group first, as a terminal would send it, so the check stops what it started in a
+session of its own (`test-desktop.py`'s Flutter run), then a kill 10 s later, or at once on a second Ctrl+C or SIGTERM.
+Windows has no Ctrl+C for another group, so there the tree is killed at once.
 `--run` takes no paths: they always come from git, so the receipts match what CI computes.
 
 Decided in the main session after the builder check (not by Ken): the Desktop budget in step 5, and `--no-renames` in
