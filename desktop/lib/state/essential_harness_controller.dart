@@ -14,6 +14,7 @@ class EssentialHarness {
     required this.name,
     required this.folderLabel,
     this.firstTask,
+    this.builtinEngine,
   });
 
   final String id;
@@ -25,6 +26,11 @@ class EssentialHarness {
   /// What the harness is asked when it is created, so it is useful at once. Null to wait for the
   /// person.
   final String? firstTask;
+
+  /// For a built-in the daemon puts in place itself (Hachi), the engine its package names. Such a
+  /// harness is left out of `dsh_list` and is not in the Store's catalog, so it is never probed for or
+  /// installed: it is created directly. Null for a harness the Store installs.
+  final String? builtinEngine;
 }
 
 const harnessMonitorEssential = EssentialHarness(
@@ -144,13 +150,16 @@ class EssentialHarnessController {
     Agent? existing() => owner.agents.where((a) => a.dsh == id).firstOrNull;
     try {
       var agent = existing();
+      final builtin = essential.builtinEngine;
       if (agent == null) {
-        await app.probeDsh(machineId);
-        if (!_current(owner)) return null;
-        if (owner.dsh[id]?.installed != true) {
-          final error = await app.installDsh(machineId, id);
+        if (builtin == null) {
+          await app.probeDsh(machineId);
           if (!_current(owner)) return null;
-          if (error != null) return error;
+          if (owner.dsh[id]?.installed != true) {
+            final error = await app.installDsh(machineId, id);
+            if (!_current(owner)) return null;
+            if (error != null) return error;
+          }
         }
         agent = existing();
         if (agent == null) {
@@ -172,6 +181,7 @@ class EssentialHarnessController {
           final listed = owner.dsh[id]?.engine ?? '';
           final engine =
               app.agentPreference.engineFor(id) ??
+              builtin ??
               (listed.isNotEmpty ? listed : defaultHarnessEngine);
           final error = await app.createAgent(
             machineId,
@@ -186,6 +196,13 @@ class EssentialHarnessController {
             attempt: _creation,
           );
           if (!_current(owner)) return null;
+          // The daemon puts a built-in in place when its switch goes on, a moment after the click
+          // that turned it on can reach here.
+          if (error != null &&
+              builtin != null &&
+              _creation!.refusal == 'INVALID_DSH') {
+            return '$name is still being set up. Try again in a moment.';
+          }
           if (error != null) return error;
           agent = existing();
           if (agent != null) created(owner, agent);
