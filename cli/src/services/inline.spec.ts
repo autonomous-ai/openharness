@@ -15,6 +15,7 @@ import { startAgentCleanup } from './agentCleanup.js'
 import { startMemory } from './memory.js'
 import { startConnectors } from './connectors.js'
 import { startDevices } from './devices.js'
+import { startEngineProbe } from './engineProbe.js'
 import { startHandoff } from './handoff.js'
 import * as inline from './inline.js'
 import { startModels } from './models.js'
@@ -44,6 +45,6 @@ describe('the services the core runs in its own process only when they do not ru
   // The Swarm's own start is the Swarm's entry's (superTabs/inCore.ts), loaded only while it is on: a core running every
   // service in its process with the Swarm off loads none of it.
   it('are their own starts, unchanged: the same services either way', () => {
-    expect({ ...inline }).toEqual({ engineTranscriptFor, liveFor, runtimeFor, screenFor, submissionFor, nativeControlFor, backgroundJobFor, providerMoveFor, modelControlFor, questionControlFor, startAgentBrowser, startAgentCleanup, startCloud, startConnectors, startDevices, startGoals, startHachiInCore, startHandoff, startGateway, startMemory, startModels, startMonitor, startOrchestrator, startOsDevice, startMachineAddons, startProjects, startRecaps, startRouter, startSearch, startSharedMachines, startSharing, startShell, startStoreInCore, startMessagesInCore, startUsageInCore, startViewers, startWifi, startWindowNames, startWorkspaces })
+    expect({ ...inline }).toEqual({ engineTranscriptFor, liveFor, runtimeFor, screenFor, submissionFor, nativeControlFor, backgroundJobFor, providerMoveFor, modelControlFor, questionControlFor, startAgentBrowser, startAgentCleanup, startCloud, startConnectors, startDevices, startEngineProbe, startGoals, startHachiInCore, startHandoff, startGateway, startMemory, startModels, startMonitor, startOrchestrator, startOsDevice, startMachineAddons, startProjects, startRecaps, startRouter, startSearch, startSharedMachines, startSharing, startShell, startStoreInCore, startMessagesInCore, startUsageInCore, startViewers, startWifi, startWindowNames, startWorkspaces })
   })
 })
