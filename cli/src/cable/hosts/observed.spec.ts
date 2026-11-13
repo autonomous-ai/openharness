@@ -165,8 +165,16 @@ describe('ObservedSource removal', () => {
     expect(src.list()).toHaveLength(0)
   })
 
+  it('a session-end for a session it never knew lists nothing', () => {
+    const { src, changes, ev } = setup()
+    src.ingest(ev('session-end'))
+    expect(src.list()).toEqual([])
+    expect(changes).not.toHaveBeenCalled()
+  })
+
   it('a resume after session-end keeps the session', async () => {
     const { src, clock, ev } = setup()
+    src.ingest(ev('session-start'))
     src.ingest(ev('session-end'))
     clock.t += 5_000
     src.ingest(ev('session-start'))
