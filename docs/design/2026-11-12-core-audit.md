@@ -173,7 +173,8 @@ Left since, with the core's process as `src/architecture.coreFiles.txt` lists it
 | The probe of which engines this machine has: the edge host answers it and starts its login shells (13 November) | 550 | 95,029 |
 | The agent ledger, loaded for one erase in a delete: the agent cleanup erases what a harness was told, asked before anything is deleted. And the dial's recap of a cloud agent's last words, markdown a maker's agent wrote: its service works the card out and the core shows what it is handed (13 November) | 548 | 94,575 |
 | The agent browser's stream: the exec into a browser's container for each viewer, the reading of the viewer's VNC bytes, the credit and the pacing run in the agent browser's process. The core keeps a forwarder that holds each stream to the connection that opened it, bounds what it passes on by itself (an unanswered open, unread bytes), and sends the service's screen frames on unread, which costs it no more per byte than reading the pipe did (13 November) | 547 | 94,319 |
-| The sign-in's renewal, the core's last call to another host: the gateway renews it, and the core asks it for a token. A test lists what in the core's process can open a connection, each to this computer (13 November) | 547 | 94,183 |
+| The sign-in's renewal, the core's last call to another host: the gateway renews it, and the core asks it for a token. A test lists what in the core's process can open a connection, each to this computer (13 November) | 547 | 94,321 |
+| The Swarm's chat-file upload, the last call to another host with the Swarm on: the core keeps the file in its private uploads folder and the gateway sends it. The connection test reads every file of the core's process, the Swarm's door too. The core no longer loads the backend's address (`lib/backendHttpBase.ts`) at all (13 November) | 546 | 94,344 |
 
 ### 1. Code the core loads for one helper (low risk, about a day each)
 
@@ -282,10 +283,10 @@ today that the rule says it should not, most serious first:
     that holds the core's event loop has to run in the core's process, and each does nothing unless
     `HARNESSD_TEST_FAULTS` names it, which only whoever starts the daemon sets.
 
-What already holds: the core calls no other host, since the gateway renews the sign-in (13 November, decision 4,
-`lib/authRefresh.ts`; `src/architecture.spec.ts` lists what in the core's process can open a connection, each to this
-computer), but for one: with the Swarm on, its door uploads a chat file to the backend itself
-(`lib/superTabAttachmentProxy.ts`), which goes to the gateway next. The E2EE keys are the gateway's; both local doors refuse another OS user and a web page (the private socket's mode,
+What already holds: the core calls no other host, with the Swarm on or off (13 November): the gateway renews the
+sign-in (decision 4, `lib/authRefresh.ts`) and sends a Swarm chat file to the backend (`gateway/upload.ts`), and
+`src/architecture.spec.ts` reads every file of the core's process and lists what can open a connection, each on this
+computer. The E2EE keys are the gateway's; both local doors refuse another OS user and a web page (the private socket's mode,
 the local credential, the Host and Origin check, `lib/loopbackRequest.ts:22-29`); a service's process connects
 with the master's token.
 

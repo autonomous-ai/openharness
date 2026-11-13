@@ -8,6 +8,25 @@
  * `kind`. Terminal bytes travel as binary frames, framed here: a byte saying whose they are, the id of the
  * connection or window they belong to, and the terminal's own local framing (lib/terminalBinary.ts).
  */
+import { join } from 'node:path'
+
+/** Where the core keeps a file the gateway is to send to the backend (a Swarm chat file,
+ *  lib/superTabAttachmentProxy.ts): in the daemon's own data folder, made this account's alone. The gateway sends
+ *  only a file there (gateway/upload.ts). */
+export const uploadsFolder = (dataDir: string): string => join(dataDir, 'uploads')
+/** The longest the gateway's send of one such file may take, from the moment it is asked, its wait for a token
+ *  included: 11 MB at about 100 kbit/s. Whoever waits on it waits a little longer, so it always hears the answer. */
+export const UPLOAD_TOTAL_MS = 15 * 60_000
+/** No bytes moving for this long ends an upload, coming in or going out: a slow uplink keeps going, a stalled one does
+ *  not hold it. */
+export const UPLOAD_IDLE_MS = 30_000
+/** The route a Swarm chat file is posted to, on this computer and on the backend alike (hookServer.ts,
+ *  gateway/upload.ts), and the agent an agent's own `post --attach` names with `?asAgentId=`. */
+export const ATTACHMENT_ROUTE = /^\/api\/super-tabs\/[A-Za-z0-9_-]{1,160}\/attachments$/
+export const ATTACHMENT_AGENT = /^[A-Za-z0-9_-]{1,160}$/
+/** What a chat file is sent as. */
+export const MULTIPART_TYPE = /^multipart\/form-data;\s*boundary=/i
+
 /** Whose bytes a binary frame carries. */
 export const enum GatewayBinary {
   /** A remote client's terminal, in the local framing (lib/terminalBinary.ts `encodeTerminalLocal`): to it
@@ -44,6 +63,7 @@ export function decodeGatewayBinary(raw: Uint8Array): { kind: GatewayBinary; id:
 export const GATEWAY_CALLS = {
   accessToken: 'gateway_access_token',
   backend: 'gateway_backend',
+  backendUpload: 'gateway_backend_upload',
   machines: 'gateway_machines',
   mintGridName: 'gateway_mint_grid_name',
   status: 'gateway_status',

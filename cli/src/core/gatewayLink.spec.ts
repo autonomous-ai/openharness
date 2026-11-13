@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { clearAuthSession, RENEWAL_WAIT_MS, writeAuthSession } from '../lib/authSession.js'
-import { decodeGatewayBinary, encodeGatewayBinary, GatewayBinary, GATEWAY_CALLS } from '../lib/gatewayWire.js'
+import { decodeGatewayBinary, encodeGatewayBinary, GatewayBinary, GATEWAY_CALLS, UPLOAD_TOTAL_MS } from '../lib/gatewayWire.js'
 import { RelayConnectError } from '../lib/relayFrames.js'
 import { decodeTerminalLocal, encodeTerminalLocal, TerminalBinaryKind, type TerminalBinaryClear } from '../lib/terminalBinary.js'
 import { TAB_KEY_OFF, type GatewayEvents, type LaneSeal, type TabKey, type TabRelay } from './api.js'
-import { createGatewayLink, GATEWAY_BUFFER_LIMIT, GATEWAY_USAGE_BUFFER_LIMIT, LANE_WAIT_MS, laneOf, OWED_MAX, tabKeyOf, tabRelayOf, PAIR_WAIT_MS, TAB_RELAY_WAIT_MS, WINDOW_GATEWAY_GONE } from './gatewayLink.js'
+import { createGatewayLink, GATEWAY_BUFFER_LIMIT, uploadAnswerOf, GATEWAY_USAGE_BUFFER_LIMIT, LANE_WAIT_MS, laneOf, OWED_MAX, tabKeyOf, tabRelayOf, PAIR_WAIT_MS, TAB_RELAY_WAIT_MS, WINDOW_GATEWAY_GONE } from './gatewayLink.js'
 import { ON_DEMAND_START_MS } from './serviceLinks.js'
 
 const STREAM = '00000000-0000-4000-8000-000000000001'
@@ -662,6 +662,29 @@ describe('the gateway in its own process, as the core sees it', () => {
       expect(call).toHaveBeenLastCalledWith(GATEWAY_CALLS.accessToken, { force: true, failedToken: 'on-disk' }, RENEWAL_WAIT_MS)
       expect(call).toHaveBeenCalledTimes(2)
     })
+  })
+
+  // A Swarm chat file the core kept: the gateway sends it, and the core calls no other host (the core audit of 2026-11-12).
+  it('has the gateway send a kept file, for as long as an upload may take, and reads its answer to its shape', async () => {
+    const answers: Array<Record<string, unknown>> = [
+      { status: 201, body: '{"ok":true}', contentType: 'application/json' },
+      { error: 'NOT_SIGNED_IN' },
+      { error: 'SERVICE_UNAVAILABLE' },
+      { status: '201', body: '{}', contentType: 'application/json' },
+    ]
+    const { link, call } = setup({ call: async () => answers.shift()! })
+    const kept = { file: '/data/uploads/f1', path: '/api/super-tabs/t1/attachments', contentType: 'multipart/form-data; boundary=b' }
+    expect(await link.ops.backendUpload(kept)).toEqual({ status: 201, body: '{"ok":true}', contentType: 'application/json' })
+    expect(call).toHaveBeenLastCalledWith(GATEWAY_CALLS.backendUpload, kept, UPLOAD_TOTAL_MS + 30_000)
+    expect(await link.ops.backendUpload(kept)).toEqual({ error: 'NOT_SIGNED_IN' })
+    // No gateway, or an answer of no shape: the gateway is said as itself, never as a backend not reached, and logged.
+    expect(await link.ops.backendUpload(kept)).toEqual({ error: 'GATEWAY_UNAVAILABLE' })
+    expect(await link.ops.backendUpload(kept)).toEqual({ error: 'GATEWAY_UNAVAILABLE' })
+    const log = vi.fn()
+    expect(uploadAnswerOf({ error: 7 }, log)).toEqual({ error: 'GATEWAY_UNAVAILABLE' })
+    expect(log.mock.calls[0]![0]).toContain("no upload's answer")
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try { expect(uploadAnswerOf({ error: 'SERVICE_FAILED' })).toEqual({ error: 'GATEWAY_UNAVAILABLE' }) } finally { warn.mockRestore() }
   })
 
   it('answers the gateway no token: it renews the sign-in itself', async () => {

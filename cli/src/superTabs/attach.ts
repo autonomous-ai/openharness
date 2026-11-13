@@ -4,7 +4,7 @@ import { stat } from 'node:fs/promises'
 import { basename, extname } from 'node:path'
 import { localCredentialHeaders } from '../lib/localCredential.js'
 import { daemonFetch } from '../lib/localTransport.js'
-import { ATTACHMENT_TOTAL_MS } from '../lib/superTabAttachmentProxy.js'
+import { UPLOAD_TOTAL_MS } from '../lib/gatewayWire.js'
 import { object } from './wire.js'
 import { MAX_ATTACHMENT_BYTES, MAX_FORM_ATTACHMENT_BYTES } from './attachments.js'
 
@@ -16,7 +16,9 @@ const TYPES: Record<string, string> = {
 }
 export const mimeOf = (path: string) => TYPES[extname(path).toLowerCase()] ?? 'application/octet-stream'
 /** A little past the daemon's own ceiling, so the daemon's answer, not this one, says why a slow upload ended. */
-const UPLOAD_MS = ATTACHMENT_TOTAL_MS + 30_000
+// The daemon takes the file in first (a moment, on this computer), then waits on its gateway for up to
+// UPLOAD_TOTAL_MS and a half minute more: this waits longer still, so the daemon's answer says why a slow one ended.
+const UPLOAD_MS = UPLOAD_TOTAL_MS + 90_000
 
 /** The id the backend gives the message `message.send` writes for this agent and operation (backend `stableId`). */
 export const messageIdOf = (tabId: string, agentId: string, operationId: string) =>
@@ -37,9 +39,9 @@ async function answered(response: Response, name: string): Promise<Record<string
   return object(body.data)
 }
 
-/** One file of `post --attach` up to 10 MB, multipart to this computer's daemon, which streams it on to the backend with the
- * account's token (lib/superTabAttachmentProxy.ts). Its own deadline, not a service answer's half minute: on a slow uplink
- * 10 MB takes longer, and the daemon ends it once no bytes move. */
+/** One file of `post --attach` up to 10 MB, multipart to this computer's daemon, which keeps it and has its gateway send it
+ * on to the backend with the account's token (lib/superTabAttachmentProxy.ts, gateway/upload.ts). Its own deadline, not a
+ * service answer's half minute: on a slow uplink 10 MB takes longer, and the daemon ends it once no bytes move. */
 async function uploadForm(file: { path: string; size: number }, target: UploadTarget, agentId: string, fetcher: typeof fetch): Promise<string> {
   const form = new FormData()
   form.append('conversationId', target.conversationId)
