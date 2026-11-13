@@ -15,13 +15,16 @@ describe('cloud agents', () => {
   })
 
   it('keep nothing of a reported harness they cannot read', () => {
-    expect(cloudHarnessIn(harness)).toEqual({ ...harness, said: null, card: null })
+    expect(cloudHarnessIn(harness)).toEqual({ ...harness, said: null })
     // Its last words, kept to what the dial's longest card can use.
     expect(cloudHarnessIn({ ...harness, said: `  ${'a'.repeat(5_000)}` })!.said).toHaveLength(4_000)
     // Those words as a card reads them, as its service worked them out: both lines, each bounded, or no card.
     expect(cloudHarnessIn({ ...harness, card: { recap: ' Opened #42. ', text: 'Opened #42, and more.', extra: 1 } })!.card).toEqual({ recap: 'Opened #42.', text: 'Opened #42, and more.' })
     expect(cloudHarnessIn({ ...harness, card: { recap: 'r'.repeat(3_000), text: 't'.repeat(3_000) } })!.card).toEqual({ recap: 'r'.repeat(2_000), text: 't'.repeat(2_000) })
     for (const bad of [{ recap: 'only a headline' }, { recap: 'x', text: ' ' }, { recap: 5, text: 'x' }, ['a', 'b'], 'Opened #42.', 7]) expect(cloudHarnessIn({ ...harness, card: bad })!.card).toBeNull()
+    // No card named at all is a service from before cards: kept apart from one that says there is none.
+    expect(cloudHarnessIn(harness)).not.toHaveProperty('card')
+    expect(cloudHarnessIn({ ...harness, card: null })!.card).toBeNull()
     expect(cloudFrameHasNoWords()).toBe(true)
     for (const bad of [null, 'x', { ...harness, agentId: 'a1' }, { ...harness, agent: 'claude' }, { ...harness, state: 'odd' }, { ...harness, createdAt: 'never' }]) expect(cloudHarnessIn(bad)).toBeNull()
     expect(cloudHarnessIn({ ...harness, name: '', activity: 5, repository: '', links: [{ label: 'x', url: 'http://no' }, { url: 'https://a' }, null], messages: -1 }))
@@ -29,8 +32,8 @@ describe('cloud agents', () => {
     expect(cloudHarnessIn({ ...harness, links: 'x', messages: 1.5 })).toMatchObject({ links: [], messages: 0 })
     // An older harness has no maker status. A bad one is dropped or cut down, and the harness still stands.
     expect(cloudHarnessIn(harness)).not.toHaveProperty('providerStatus')
-    expect(cloudHarnessIn({ ...harness, providerStatus: 'nope' })).toEqual({ ...harness, said: null, card: null })
-    expect(cloudHarnessIn({ ...harness, providerStatus: ['suspended'] })).toEqual({ ...harness, said: null, card: null })
+    expect(cloudHarnessIn({ ...harness, providerStatus: 'nope' })).toEqual({ ...harness, said: null })
+    expect(cloudHarnessIn({ ...harness, providerStatus: ['suspended'] })).toEqual({ ...harness, said: null })
     expect(cloudHarnessIn({ ...harness, providerStatus: { status: ` ${'s'.repeat(400)}`, detail: 3 } })!.providerStatus)
       .toEqual({ status: 's'.repeat(200), detail: null })
     expect(cloudHarnessIn({ ...harness, providerStatus: { status: 'suspended', detail: null } })!.providerStatus)

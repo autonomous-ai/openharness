@@ -136,7 +136,12 @@ export function startCloudService(options: CloudServiceOptions) {
     mkdirSync(dir, { recursive: true, mode: 0o700 })
     appendFileSync(transcriptFile(entry.harness.agentId), `${JSON.stringify(message)}\n`, { mode: 0o600 })
     entry.harness.messages += 1
-    if (message.from === 'agent') entry.harness.said = message.text.slice(0, SAID_MAX)
+    if (message.from === 'agent') {
+      entry.harness.said = message.text.slice(0, SAID_MAX)
+      // Its card is worked out as the words arrive, not as the list is published: a question reaches the core before
+      // its harness's new state does (`apply`, then `touched`), and the list must follow it with nothing in between.
+      cardOf(entry)
+    }
   }
 
   /** What it said last as the dial's card reads it, worked out again only when it says something new. */

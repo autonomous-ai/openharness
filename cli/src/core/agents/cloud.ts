@@ -42,7 +42,8 @@ const HEADLINE_MAX = 180, TEXT_MAX = 250
  */
 const recapOf = (harness: CloudHarness): { recap: string; text: string } | null => {
   if (!harness.said) return null
-  if (harness.card) return harness.card
+  // Null is the service's word that these words hold nothing to show.
+  if (harness.card !== undefined) return harness.card
   // Kept trimmed, and never empty (lib/cloudAgents.ts `cloudHarnessIn`).
   const line = harness.said.replace(/\s+/g, ' ')
   return { recap: line.slice(0, HEADLINE_MAX), text: line.slice(0, TEXT_MAX) }

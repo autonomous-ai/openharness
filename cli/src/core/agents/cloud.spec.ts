@@ -134,8 +134,10 @@ describe('agents a service owns', () => {
   it('shows the words of a service from before 2026-11-13, which sends no card, as they are: one line, cut, no markdown read', () => {
     const { cloud, clients } = setup()
     const said = `## Booked\n\nBooked for **9:30**. ${'More. '.repeat(60)}`
+    // No card named at all: a row as that service sends it.
+    const { card: _none, ...older } = harness({ state: 'idle', said, messages: 2 })
     cloud.doors.publish([harness({ state: 'working' })])
-    cloud.doors.publish([harness({ state: 'idle', said, card: null, messages: 2 })])
+    cloud.doors.publish([older])
     const card = clients.sendCommander.mock.calls.map(([frame]) => frame.payload).at(-1)
     const line = said.replace(/\s+/g, ' ').trim()
     expect(card).toMatchObject({ kind: 'summary', recap: line.slice(0, 180), text: line.slice(0, 250) })
@@ -145,6 +147,15 @@ describe('agents a service owns', () => {
     const { cloud: quiet } = setup()
     quiet.doors.publish([{ ...harness({ state: 'idle' }), said: ' \n ' }])
     expect(quiet.recent('cloud_1')).toEqual([])
+  })
+
+  it('shows nothing for words its service says hold nothing to show, as before: done, and no card of the raw words', () => {
+    const { cloud, clients } = setup()
+    cloud.doors.publish([harness({ state: 'working' })])
+    cloud.doors.publish([harness({ state: 'idle', said: '**  **', messages: 2 })])
+    expect(clients.sendCommander.mock.calls.map(([frame]) => frame.payload).at(-1)).toEqual({ kind: 'done', text: 'done' })
+    expect(cloud.recent('cloud_1')).toEqual([])
+    expect(cloud.said('cloud_1')).toBe('**  **')
   })
 
   it('shows its questions where questions show, and closes them', () => {
