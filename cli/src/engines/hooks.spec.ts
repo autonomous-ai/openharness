@@ -38,7 +38,7 @@ it('installs Claude hooks into the requested home through its facet', async () =
     const file = join(home, 'settings.json')
     const first = readFileSync(file, 'utf8')
     const settings = JSON.parse(first)
-    expect(Object.keys(settings.hooks)).toEqual(['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'Stop', 'StopFailure', 'PostToolUse'])
+    expect(Object.keys(settings.hooks)).toEqual(['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'Stop', 'StopFailure', 'Notification', 'PostToolUse'])
     const command = settings.hooks.Stop[0].hooks[0].command as string
     expect(command).toContain('--port 19473')
     expect(command).toContain(fileURLToPath(new URL('../../hook/notify.mjs', import.meta.url)))
