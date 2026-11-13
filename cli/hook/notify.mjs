@@ -490,13 +490,14 @@ function postObserved(port, body) {
  * session, 2026-11-13), and they must never leave this process.
  */
 const HOST_HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'KITTY_WINDOW_ID',
-  'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID', 'ORCA_APP_VERSION']
+  'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID']
 
 function hostHints() {
   const hints = {}
   for (const name of HOST_HINTS) {
-    // The core refuses a whole event with more than 8 hints or one over 64 characters (core/observedHook.ts).
-    if (process.env[name] && Object.keys(hints).length < 8) hints[name] = process.env[name].slice(0, 64)
+    // The core refuses a whole event with more than 8 hints (as many as this list) or one over 64 characters
+    // (core/observedHook.ts).
+    if (process.env[name]) hints[name] = process.env[name].slice(0, 64)
   }
   return hints
 }

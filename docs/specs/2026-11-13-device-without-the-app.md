@@ -57,7 +57,7 @@ devices process, cli/src/cable/hosts/
   from each engine's hook names where the existing code already maps them.
 - `hostHints`: values of a fixed allowlist of environment variables, each cut to 64 characters: `TERM_PROGRAM`,
   `__CFBundleIdentifier`, `HERDR_PANE_ID`, `REX_BLOCK`, `ZELLIJ`, `KITTY_WINDOW_ID`, `WEZTERM_PANE`,
-  `ORCA_AGENT_SESSION_ID`, `ORCA_APP_VERSION`. Nothing else from the environment, and never by prefix: Orca also sets
+  `ORCA_AGENT_SESSION_ID`. Nothing else from the environment, and never by prefix: Orca also sets
   `ORCA_PAIRING_CODE` and `ORCA_AGENT_SESSION_SPAWN_TOKEN` in the same environment (read on an Orca 1.4.256 session,
   2026-11-13), which must never leave the hook. cmux's variables join with its adapter in a later wave.
 - The engine-specific guards (Cursor background agents, Codex subagents, Devin's Claude duplicate) still run first:
