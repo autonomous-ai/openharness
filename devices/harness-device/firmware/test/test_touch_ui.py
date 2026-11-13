@@ -3422,6 +3422,16 @@ int main(int argc, char **argv) {
     assert(switches==1 && s.view==AGENT && !strcmp(active()->id,"b"));
     scene_take(); assert(result_visible() && !pane_memory("b",false)->dismissed);
     portrait(dir,"caps-notice-no-focus");
+    // Controls: Stop current turn and Model are off for an agent without V, and a Stop already open stops nothing
+    for (int voice = 1; voice >= 0; voice--) {
+        reset(); s.agents[0].busy = true;
+        ui_project_set_host_caps("a","orca",CABLE_CAP_S|CABLE_CAP_A|(voice ? CABLE_CAP_V : 0));
+        view(SETTINGS); scene_take();
+        assert(action_enabled(A_STOP) == voice && action_enabled(A_MODELS) == voice && action_enabled(A_INBOX));
+        if (!voice) portrait(dir,"caps-controls-no-voice");
+        COPY(s.stop_agent,"a"); view(STOP); dispatch((action_t){.kind=A_STOP_YES});
+        assert(!strcmp(stopped_agent, voice ? "a" : ""));
+    }
     // Hold opens one destination immediately; every direction of the opening contact is consumed.
     const int hold_ends[][2]={{233,220},{330,220},{130,220},{233,130},{233,320}};
     for(unsigned i=0;i<sizeof hold_ends/sizeof hold_ends[0];i++) {
@@ -4352,6 +4362,8 @@ int main(int argc, char **argv) {
             ui_project_emit("b", "sess", "summary", "Hero and pricing are in.", "Hero and pricing are in.");
             ui_notify_task_done("b", "Landing page", "MacBook", "Hero and pricing are in."); ui_notif_open();
             dispatch((action_t){.kind = A_NOTICE, .id = "b"}); scene_take(); DESIGN("notice-no-focus");
+            DESIGN_HOME(); s.agents[0].busy = true; ui_project_set_host_caps("a", "orca", CABLE_CAP_S);
+            view(SETTINGS); scene_take(); DESIGN("controls-no-voice");
             #undef DESIGN_HOME
             #undef DESIGN
         }
