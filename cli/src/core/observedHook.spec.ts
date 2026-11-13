@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createObservedHook, parseObservedHook } from './observedHook.js'
 
 const full = {
@@ -45,6 +45,30 @@ describe('parseObservedHook', () => {
 })
 
 describe('createObservedHook', () => {
+  afterEach(() => { vi.useRealTimers() })
+
+  it('logs refused and dropped counts once a minute', () => {
+    vi.useFakeTimers()
+    const log = vi.fn()
+    let devices = true
+    const hook = createObservedHook({ forward: () => devices, now: () => 0, log })
+    hook.onObserved({ nope: 1 })
+    hook.onObserved({ ...full, sessionId: 'secret-session', cwd: '/secret/path' })
+    // The 21st within a second is over the rate.
+    for (let i = 0; i < 21; i += 1) hook.onObserved(full)
+    devices = false
+    hook.onObserved({ ...full, sessionId: 's2' })
+    expect(log).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(60_000)
+    expect(log.mock.calls).toEqual([['[devices] paneless hook events in the last minute: 1 refused, 2 dropped']])
+    vi.advanceTimersByTime(120_000)
+    expect(log).toHaveBeenCalledTimes(1)
+    hook.onObserved({ nope: 1 })
+    vi.advanceTimersByTime(60_000)
+    expect(log.mock.calls[1]).toEqual(['[devices] paneless hook events in the last minute: 1 refused, 0 dropped'])
+    expect(JSON.stringify(log.mock.calls)).not.toMatch(/secret|s1|s2/)
+  })
+
   it('forwards a valid event and answers ok', () => {
     const forward = vi.fn(() => true)
     expect(createObservedHook({ forward, now: () => 7 }).onObserved(full)).toBe('ok')
