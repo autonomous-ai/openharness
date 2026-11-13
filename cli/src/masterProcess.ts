@@ -24,6 +24,7 @@ import { acquireSpawnLock, tryAcquireSpawnLockSync } from './lib/daemonSpawnLock
 import { DAEMON_LOG_FILE, HARNESSD_STATUS_FILE, PID_FILE } from './lib/daemonState.js'
 import { isInstalledCopy } from './lib/installedCopy.js'
 import { unixSocketPath } from './lib/localSocket.js'
+import { refreshNodeReferences } from './lib/nodeReferences.js'
 import { MINIMUM_NODE_MAJOR, managedNodePath, nodeMajorOf } from './lib/nodeRuntime.js'
 import { currentCli, harnessLaunchPath } from './lib/windows/installLayout.js'
 import { launchDetached } from './lib/windows/launcher.js'
@@ -279,6 +280,12 @@ export function startMaster(
       ?? (ptyRoot === null ? null : ptyUnjudged(ptyRoot, { cliPending: pendingVersion(env.ADAPTER_CLI_DIR) !== null, log: masterLog, lock })),
     // The updater runs for the installed copy alone (lib/installedCopy.ts), beside the core, never in it.
     updater: !env.ADAPTER_UPDATE_DISABLE && isInstalledCopy(start.scriptPath, env.ADAPTER_CLI_DIR),
+    // The launcher and the service definition name the Node they were written with: once a core is up, they follow the
+    // Node it runs on, which is this master's, and which an update may have moved (lib/nodeReferences.ts). The
+    // installed copy only: a checkout's master never changes the real installation. The core did this itself until the
+    // audit of 2026-11-12, and loaded the platform's launchd, systemd and Task Scheduler code to do it, which this
+    // process already holds.
+    ...(isInstalledCopy(start.scriptPath, env.ADAPTER_CLI_DIR) ? { coreUp: () => { refreshNodeReferences((line) => masterLog(`[node-runtime] ${line.trim()}`)) } } : {}),
     // A master that ends cleanly gives up its claim on its lean bundle, so the next one to start can
     // clear the folder; one that dies leaves a claim whose pid is gone, which counts for nothing.
     exit: (code) => {

@@ -283,7 +283,6 @@ engines/worker/screenProtocol.ts
 engines/worker/submissionProtocol.ts
 harnessd/baseNode.ts
 harnessd/coreLink.ts
-harnessd/platform.ts
 harnessd/protocol.ts
 harnessd/services.ts
 harnessd/swarmSwitch.ts
@@ -388,7 +387,6 @@ lib/launchArgs.ts
 lib/launchFlags.ts
 lib/launchModel.ts
 lib/launchOverrides.ts
-lib/launchers.ts
 lib/localCredential.ts
 lib/localJsonLimit.ts
 lib/localSocket.ts
@@ -408,7 +406,6 @@ lib/nativeProcessControl.ts
 lib/nativeProcessImages.ts
 lib/newAgentModel.ts
 lib/nodeMigration.ts
-lib/nodeReferences.ts
 lib/nodeRuntime.ts
 lib/nodeStatus.ts
 lib/notificationRead.ts

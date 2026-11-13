@@ -15,6 +15,8 @@ const runMaster = vi.hoisted(() => vi.fn((_config: Record<string, unknown>) => '
 vi.mock('./harnessd/master.js', async (real) => ({ ...await real<object>(), runMaster }))
 const leanBundle = vi.hoisted(() => ({ read: vi.fn((_bundle: Buffer): LeanBundle | null => null) }))
 vi.mock('./harnessd/leanBundle.js', async (real) => ({ ...await real<object>(), readLeanBundle: (bundle: Buffer) => leanBundle.read(bundle) }))
+const nodeReferences = vi.hoisted(() => ({ refresh: vi.fn((_log: (line: string) => void) => ({ launcher: false, service: false })) }))
+vi.mock('./lib/nodeReferences.js', async (real) => ({ ...await real<object>(), refreshNodeReferences: (log: (line: string) => void) => nodeReferences.refresh(log) }))
 const spawnLock = vi.hoisted(() => ({
   acquire: vi.fn(async (..._args: unknown[]): Promise<() => void> => () => {}),
   sync: vi.fn((..._args: unknown[]): (() => void) | null => () => {}),
@@ -509,9 +511,21 @@ describe('starting the master', () => {
     expect(String(config.reexecMarkerFile)).toMatch(/harnessd-reexec\.json$/)
     // Not the installed copy: no updater. The installed one runs it.
     expect(config.updater).toBe(false)
+    // And follows no Node: a checkout's master never changes the real installation's launcher or service.
+    expect(config.coreUp).toBeUndefined()
     runMaster.mockClear()
     startMaster({ scriptPath: join(env.ADAPTER_CLI_DIR, 'cli.js') })
     expect((runMaster.mock.calls[0][0] as { updater: boolean }).updater).toBe(true)
+    // The installed copy's master points the launcher and the service definition at the Node its core came up on
+    // (lib/nodeReferences.ts), each time one does: the core did, and loaded the platform's code for it.
+    nodeReferences.refresh.mockClear()
+    ;(runMaster.mock.calls[0][0] as { coreUp(): void }).coreUp()
+    ;(runMaster.mock.calls[0][0] as { coreUp(): void }).coreUp()
+    expect(nodeReferences.refresh).toHaveBeenCalledTimes(2)
+    const said = vi.spyOn(console, 'log').mockImplementation(() => {})
+    ;(nodeReferences.refresh.mock.calls[0]![0] as (line: string) => void)('  ✓ repointed /bin/harness at /runtime/node')
+    expect(said.mock.calls[0]![0]).toMatch(/ \[node-runtime\] ✓ repointed \/bin\/harness at \/runtime\/node$/)
+    said.mockRestore()
     expect(LEAN_DIR).toMatch(/[\\/]lean$/)
     expect(LEAN_OFF_FILE).toMatch(/[\\/]lean-off$/)
   })

@@ -57,6 +57,9 @@ export interface MasterConfig {
    *  onto the build put back on it, and starts everything after on it. */
   restoreUpdate(): string | null | void
   confirmUpdate(): void
+  /** A core is up, each time one is: what the master's entry does then (../masterProcess.ts points the launcher and
+   *  the service definition at the Node the core runs on). One that throws is said, and stops nothing. */
+  coreUp?(): void
   env?: NodeJS.ProcessEnv
   /** Defaults to `process.exit`. */
   exit?: (code: number) => void
@@ -504,11 +507,13 @@ export function runMaster(config: MasterConfig): Supervisor {
       if (reexec) reexec.settled(end)
       else end(false)
     },
-    ...(reexec && markerFile ? {
-      reexec: reexec.reexec,
-      // The re-executed master has brought a core up: its marker has served.
-      coreUp: () => removeMarker(markerFile),
-    } : {}),
+    ...(reexec && markerFile ? { reexec: reexec.reexec } : {}),
+    // A core is up. A re-executed master's marker has served. And the master's entry hears it (`MasterConfig.coreUp`),
+    // which is never a reason for the master to stop.
+    coreUp: () => {
+      if (reexec && markerFile) removeMarker(markerFile)
+      try { config.coreUp?.() } catch (error) { log(`[harnessd] what the master does after its core came up failed: ${(error as Error).message}`) }
+    },
   }, options, { version: config.version, resume, unjudgedUpdate: unjudged })
   for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) onSignal(signal, () => stopAll(signal))
   if (!tookOver) {

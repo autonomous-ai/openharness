@@ -364,6 +364,8 @@ describe('runMaster', { timeout: 60_000 }, () => {
     const signals = new Map<string, () => void>()
     const exits: number[] = []
     const updates: string[] = []
+    const ups: string[] = []
+    const logged = vi.spyOn(console, 'log').mockImplementation(() => {})
     const supervisor = runMaster({
       nodePath: process.execPath,
       execArgv: [],
@@ -371,6 +373,9 @@ describe('runMaster', { timeout: 60_000 }, () => {
       pidFile,
       restoreUpdate: () => { updates.push('restore') },
       confirmUpdate: () => updates.push('confirm'),
+      // The entry hears each core that comes up (../masterProcess.ts follows the Node it runs on). One that throws
+      // is said, and is no reason for the master to stop.
+      coreUp: () => { ups.push('up'); if (ups.length === 1) throw new Error('the launcher is read-only') },
       env: { ...process.env, HARNESSD_SERVICES: 'none', HARNESSD_INITIAL_BACKOFF_MS: '10' },
       exit: (code) => exits.push(code),
       onSignal: (signal, listener) => signals.set(signal, listener),
@@ -379,7 +384,11 @@ describe('runMaster', { timeout: 60_000 }, () => {
     await until('the pid file', () => existsSync(pidFile))
     expect(readFileSync(pidFile, 'utf8')).toBe(`${process.pid}\n`)
     await until('a restart', () => existsSync(runs) && readFileSync(runs, 'utf8') === '0\n1\n')
-    await until('the restarted core to bind', () => supervisor.status().state === 'running')
+    await until('the restarted core to bind', () => supervisor.status().state === 'running' && ups.length === 2)
+    expect(ups).toEqual(['up', 'up'])
+    expect(logged.mock.calls.map(([line]) => String(line)).filter((line) => line.includes('after its core came up'))).toEqual([
+      expect.stringMatching(/\[harnessd\] what the master does after its core came up failed: the launcher is read-only$/)])
+    logged.mockRestore()
     signals.get('SIGTERM')!()
     await until('the master to finish', () => exits.length > 0)
     expect(exits).toEqual([0])
