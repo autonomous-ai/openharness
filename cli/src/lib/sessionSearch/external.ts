@@ -9,7 +9,7 @@
  * the machine's processes, and one way to stop a terminal's process.
  */
 
-import { harnessTtys as readHarnessTtys, processAlive, processTtys, processView, scanMemo } from './externals/support.js'
+import { harnessTtys as readHarnessTtys, processAlive, processTtys, processView, scanMemo, type ScanMemo } from './externals/support.js'
 import type { ExternalEngine, ExternalProvider, ExternalSession, OwnerClaim, ProcessView } from './externals/types.js'
 import { externalReadFailed } from './evidence.js'
 
@@ -78,6 +78,43 @@ export class ExternalSessions {
 }
 
 /**
+ * A few sessions' rows, each looked for in its own engine's store alone: the dial's look at the sessions open now, each
+ * minute (cable/hosts/observed.ts). A store with none of them open is never read (a database among them), and each
+ * engine keeps a memo of its own, so a later look reads only the files that changed.
+ */
+export class SessionRows {
+  private readonly memos = new Map<ExternalEngine, ScanMemo>()
+
+  constructor(private readonly opts: ExternalSessionsOptions) {}
+
+  /** The rows found of [wanted], sessions by id with the engine that has each open. */
+  async find(wanted: ReadonlyMap<string, ExternalEngine>): Promise<Map<string, ExternalSession>> {
+    const found = new Map<string, ExternalSession>()
+    for (const engine of new Set(wanted.values())) {
+      const provider = this.opts.providers.find((candidate) => candidate.engine === engine)
+      if (!provider) continue
+      const memo = this.memos.get(engine) ?? scanMemo({ excluded: this.opts.excluded ?? [] })
+      this.memos.set(engine, memo)
+      let rows: ExternalSession[]
+      try {
+        rows = await provider.scan(memo.context())
+      } catch (error) {
+        externalReadFailed(error, 'session store')
+        this.opts.log?.(`[search] ${engine} sessions not read: ${error instanceof Error ? error.message : error}`)
+        continue
+      }
+      memo.prune()
+      const { byId } = externalSessionCatalog(rows)
+      for (const [sessionId, of] of wanted) {
+        const row = byId.get(sessionId)
+        if (of === engine && row) found.set(sessionId, row)
+      }
+    }
+    return found
+  }
+}
+
+/**
  * Where an open session is: a terminal, which Harness can take it over from; an app, which it cannot;
  * one of Harness's own panes, whose agent the daemon is still binding; or `maybe` a terminal, whose
  * process was started on it and may have moved on since (`OwnerClaim.fromArgs`).
@@ -140,6 +177,11 @@ export class OpenSessions {
   /** An answer at most `maxAgeMs` old. */
   async fresh(): Promise<ReadonlyMap<string, OpenIn>> {
     return (await this.current()).open
+  }
+
+  /** Who has each session open, from an answer at most `maxAgeMs` old. */
+  async owners(): Promise<ReadonlyMap<string, SessionOwner>> {
+    return (await this.current()).owners
   }
 
   /** The process that has [sessionId] open, looked at now rather than taken from a recent answer. */

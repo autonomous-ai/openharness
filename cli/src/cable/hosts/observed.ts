@@ -2,9 +2,9 @@ import { createHash } from 'node:crypto'
 import { basename } from 'node:path'
 // Types only: the devices process must not load core code.
 import type { ObservedHookEvent } from '../../core/observedHook.js'
-import type { OpenSessions } from '../../lib/sessionSearch/external.js'
+import type { OpenSessions, SessionRows } from '../../lib/sessionSearch/external.js'
 import { within } from '../../lib/sessionSearch/externals/support.js'
-import type { RunningProcess } from '../../lib/sessionSearch/externals/types.js'
+import type { ExternalEngine, RunningProcess } from '../../lib/sessionSearch/externals/types.js'
 import { detectHost } from './hostDetect.js'
 import type { Caps, HostAgent, HostAgentState, HostSource } from './types.js'
 
@@ -33,11 +33,8 @@ export interface ObservedDeps {
   processes(): Promise<readonly Pick<RunningProcess, 'pid' | 'generation'>[]>
   /** Whether a pid is running, for a session whose process has no generation to read (Windows has no `ps` here). */
   alive(pid: number): boolean
-  openSessions: Pick<OpenSessions, 'fresh' | 'working' | 'owner'>
-  externalSessions: {
-    scan(): Promise<unknown>
-    get(id: string): { cwd?: string; transcriptPath?: string | null } | undefined
-  }
+  openSessions: Pick<OpenSessions, 'owners' | 'working'>
+  sessionRows: Pick<SessionRows, 'find'>
   lastAnswer(engine: string, path: string): Promise<string | undefined>
   /** Folders whose sessions are Harness's own (its data folder), as the external sessions are given them: never observed. */
   excluded: readonly string[]
@@ -56,6 +53,7 @@ export class ObservedSource implements HostSource {
   readonly id = 'observed'
   private readonly entries = new Map<string, Entry>()
   private readonly listeners = new Set<() => void>()
+  private scanning: Promise<void> | null = null
 
   constructor(private readonly deps: ObservedDeps) {}
 
@@ -184,27 +182,30 @@ export class ObservedSource implements HostSource {
     this.emit()
   }
 
-  /** Adds the sessions found open in a terminal or app, as idle, until their next hook event. */
-  async scanOpen(): Promise<void> {
-    try {
-      await this.deps.externalSessions.scan()
-    } catch (error) {
-      this.deps.log(`[observed] scan failed: ${error instanceof Error ? error.message : error}`)
+  /** Adds the sessions found open in a terminal or app, as idle, until their next hook event. One look at a time. */
+  scanOpen(): Promise<void> {
+    this.scanning ??= this.scanOnce().finally(() => { this.scanning = null })
+    return this.scanning
+  }
+
+  private async scanOnce(): Promise<void> {
+    // One fresh look at the machine's processes for every session, each of its reads under a timeout
+    // (externals/support.ts): the cached answer is empty before the first look, so the scan a dial's attach runs would
+    // find nothing until the next one, 60 s later. Then the rows of only the sessions it found, from their own stores.
+    const owners = await this.deps.openSessions.owners()
+    const open = new Map<string, ExternalEngine>()
+    for (const [sessionId, owner] of owners) {
+      if (!owner.harness && !this.entries.has(observedAgentId(owner.engine, sessionId))) open.set(sessionId, owner.engine)
     }
+    if (!open.size) return
+    const rows = await this.deps.sessionRows.find(open)
     let changed = false
     const now = this.deps.now()
-    // A fresh look, each of its process reads under a timeout (externals/support.ts): the cached answer is empty
-    // before the first look, so the scan a dial's attach runs would find nothing until the next one, 60 s later.
-    for (const [sessionId, openIn] of await this.deps.openSessions.fresh()) {
-      if (openIn === 'harness') continue
-      const owner = await this.deps.openSessions.owner(sessionId)
-      if (!owner) continue
-      const engine = owner.engine
+    for (const [sessionId, engine] of open) {
+      // A hook may have told of it while its row was read.
       if (this.entries.has(observedAgentId(engine, sessionId))) continue
-      const ext = this.deps.externalSessions.get(sessionId)
-      const entry = this.entry(engine, sessionId, now, {
-        cwd: ext?.cwd, transcriptPath: ext?.transcriptPath, pid: owner.pid,
-      })
+      const row = rows.get(sessionId)
+      const entry = this.entry(engine, sessionId, now, { cwd: row?.cwd, transcriptPath: row?.transcriptPath, pid: owners.get(sessionId)!.pid })
       if (entry) changed = true
     }
     if (changed) this.emit()

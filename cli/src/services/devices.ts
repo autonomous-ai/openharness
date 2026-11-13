@@ -40,7 +40,7 @@ import { MachineListCache } from '../device/machineList.js'
 import { claudeProjectsRoots, codexHomeRoots } from '../lib/engineHomes.js'
 import { harnessDevicesRequest } from '../lib/harnessDevices.js'
 import { truncateUtf8 } from '../lib/deviceRecentTrim.js'
-import { ExternalSessions, OpenSessions } from '../lib/sessionSearch/external.js'
+import { OpenSessions, SessionRows } from '../lib/sessionSearch/external.js'
 import { externalProviders } from '../lib/sessionSearch/externals/index.js'
 import { listProcesses, processAlive } from '../lib/sessionSearch/externals/support.js'
 import { setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter } from '../lib/voiceRouter.js'
@@ -115,7 +115,7 @@ function observedSource(dataDir: string, log: (line: string) => void): ObservedS
     processes: listProcesses,
     alive: processAlive,
     openSessions: new OpenSessions({ providers, log }),
-    externalSessions: new ExternalSessions({ providers, excluded: [dataDir], log }),
+    sessionRows: new SessionRows({ providers, excluded: [dataDir], log }),
     excluded: [dataDir],
     // Asked for Claude Code's and Codex's alone (observed.ts), and read only inside their own folders: a hook can name any path.
     lastAnswer: (engine, path) => readLastAnswer(engine as 'claude' | 'codex', path, {

@@ -141,14 +141,15 @@ vi.mock('../lib/sessionSearch/external.js', async (real) => ({
   ...await real<typeof import('../lib/sessionSearch/external.js')>(),
   OpenSessions: class {
     constructor(options: Record<string, unknown>) { readers.open = options }
-    async fresh() { return readers.known }
-    async owner(id: string) { return readers.owners.get(id) ?? null }
+    async owners() {
+      readers.scans++
+      return new Map([...readers.known.keys()].flatMap((id) => readers.owners.has(id) ? [[id, readers.owners.get(id)!] as const] : []))
+    }
     async working(id: string) { return readers.working.get(id) ?? null }
   },
-  ExternalSessions: class {
+  SessionRows: class {
     constructor(options: Record<string, unknown>) { readers.external = options }
-    async scan() { readers.scans++; return [] }
-    get() { return undefined }
+    async find() { return new Map() }
   },
 }))
 vi.mock('../lib/sessionSearch/externals/support.js', async (real) => ({

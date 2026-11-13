@@ -14,7 +14,7 @@ function setup(over: Partial<ObservedDeps> = {}) {
   const working = new Map<string, boolean | null>()
   const externals = new Map<string, { cwd?: string; transcriptPath?: string | null }>()
   const answers = new Map<string, string>()
-  // Each look at the machine's processes, as OpenSessions takes one: owner() looks anew, fresh() and owners() take one.
+  // Each look at the machine's processes, as OpenSessions takes one.
   let looks = 0
   let held: Promise<void> | undefined
   const look = async (): Promise<void> => { looks++; await held }
@@ -27,9 +27,7 @@ function setup(over: Partial<ObservedDeps> = {}) {
     openSessions: {
       // The cached answer is empty before the first look, as it is when a dial attaches; only a fresh look sees.
       known: () => new Map(),
-      fresh: async () => { await look(); return open },
       working: async (id: string) => (working.has(id) ? working.get(id)! : false),
-      owner: async (id: string) => { await look(); return (owners.get(id) as never) ?? null },
       owners: async () => {
         await look()
         return new Map([...open].flatMap(([id, openIn]) => {
@@ -38,8 +36,7 @@ function setup(over: Partial<ObservedDeps> = {}) {
         }))
       },
     } as unknown as ObservedDeps['openSessions'],
-    externalSessions: { scan: async () => { await look(); return [] }, get: (id) => externals.get(id) },
-    sessionRows: { find },
+    sessionRows: { find } as unknown as ObservedDeps['sessionRows'],
     lastAnswer: async (_engine, path) => answers.get(path),
     excluded: ['/data/harness'],
     log: () => {},
