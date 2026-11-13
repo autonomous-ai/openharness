@@ -706,10 +706,14 @@ export class DaemonCableHost implements CableHost {
 
   /**
    * Name, engine and machine of an agent this daemon has ever listed — for a `summary` or `question`
-   * about one the dial no longer holds. See the router's describe.
+   * about one the dial no longer holds. See the router's describe. An agent outside Harness is only in the
+   * registry, never in the router, and it runs on this computer.
    */
   describe(agentId: string): { name: string; engine: string; machine: string } | undefined {
-    return this.viaFleet((r) => r.describe(agentId))
+    const known = this.viaFleet((r) => r.describe(agentId))
+    if (known) return known
+    const agent = this.registry?.agents().find((a) => a.id === agentId)
+    return agent && { name: agent.name, engine: agent.engine, machine: this.wiring.machineName() }
   }
 
   async activityText(agentId: string): Promise<string | null> {
