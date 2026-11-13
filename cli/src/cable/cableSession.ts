@@ -2677,11 +2677,10 @@ export class CableSession {
     // once when `app_swarms` named the new tab over the old panes and again when `app_panes` arrived.
     const key = `${tab ? 'window' : view ?? ''}|${CableSession.agentsKey(agents)}`
     if (!force && key === this.lastAgentsKey) return
-    // Into, out of or within the machine list, pushes stay a second apart: a window opening and closing quickly
-    // would otherwise swap whole lists down the cable on every flip. The tick sends what was held. Forced pushes
-    // (an attach, a refresh) and a window's own changes go at once, as before: a new ring must beat its focus.
-    const machine = view === 'machine' || this.lastAgentsKey.startsWith('machine|')
-    if (!force && machine && performance.now() - this.agentsPushedAt < AGENTS_PUSH_GAP_MS) return
+    // The machine list goes at most once a second after the last push: a window opening and closing quickly would
+    // otherwise swap whole lists down the cable on every flip. The tick sends what was held. Forced pushes (an attach, a
+    // refresh) and a window's lists go at once, as before, its opening too: a new ring must beat its focus.
+    if (!force && view === 'machine' && performance.now() - this.agentsPushedAt < AGENTS_PUSH_GAP_MS) return
     this.lastAgentsKey = key
     this.agentsPushedAt = performance.now()
     // Every push, and only pushes. The dial showing a different number from the daemon is a question this
