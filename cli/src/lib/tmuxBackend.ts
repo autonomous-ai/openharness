@@ -581,7 +581,7 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
       const found = await lookupPaneEngineProcess(this, runtime, expected.engine)
       if (!found.ok) {
         // The process the agent was bound to still runs in the pane under another name while its engine loads
-        // (a wrapper that `exec`s), and a message sent then was refused as sent to a stopped agent (#4259).
+        // (a wrapper that `exec`s): a message sent then would be refused as sent to a stopped agent (#4259).
         if (processAmong(expected.processIdentity, found.paneProcesses)) return { state: 'alive' }
         return { state: found.unknown ? 'unknown' : 'gone', reason: found.reason }
       }
