@@ -20,6 +20,7 @@ import type { GridAssignmentProcess, GridAssignmentAnswer } from '../lib/gridAss
  */
 import type { RecentTurn } from '../cable/cableHost.js'
 import type { ReviewedAnswer } from '../cable/questionInbox.js'
+import type { ObservedHookEvent } from './observedHook.js'
 import type { AgentEngine } from '../engines/types.js'
 import type { AppSwarms } from '../cable/cableSession.js'
 import type { UnreadNotification } from '../lib/notificationRead.js'
@@ -1662,6 +1663,9 @@ export interface DevicesPort {
   engines(engines: string[]): void
   /** Whether a device watches through the backend: the voice router keeps its worker warm meanwhile. */
   commanders(connected: boolean): void
+  /** A session outside any pane, from its engine's hook (core/observedHook.ts), checked and bounded: the devices
+   *  keep it for the dial. False when nobody kept it, and the core then drops it. */
+  observed(event: ObservedHookEvent): boolean
   /** Let go of the serial ports and the lane, for a restart or a shutdown. */
   stop(): Promise<void>
 }
@@ -1677,7 +1681,7 @@ export const DEVICES_FALLBACKS: PortFallbacks<DevicesPort> = {
   settings: undefined, windowFocus: undefined, windowReply: undefined, voiceReply: undefined, windowGone: undefined,
   routeTask: later({ agentId: '', machineId: '', name: '', confidence: 0, reason: DEVICES_UNAVAILABLE, candidates: [], weighed: 0, machines: 0, via: '' }),
   routeSend: later({ ok: false, machine: '', reason: DEVICES_UNAVAILABLE }),
-  stepFocus: later('no_agents'), scroll: undefined, engines: undefined, commanders: undefined, stop: later(undefined),
+  stepFocus: later('no_agents'), scroll: undefined, engines: undefined, commanders: undefined, observed: false, stop: later(undefined),
 }
 
 /*

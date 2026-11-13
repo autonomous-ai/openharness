@@ -489,6 +489,8 @@ describe('the core API services stand on', () => {
       expect(DEVICES_FALLBACKS[member], member).toBeUndefined()
     }
     expect(readFallback(DEVICES_FALLBACKS.stop)).toEqual({ deferred: true, value: undefined })
+    // A paneless session's hook event is dropped: nobody heard it.
+    expect(DEVICES_FALLBACKS.observed).toBe(false)
     expect(FAIL).toBeTypeOf('symbol')
   })
 

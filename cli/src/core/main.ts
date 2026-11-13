@@ -232,6 +232,7 @@ import { daemonCommand } from '../lib/daemonCommand.js'
 import { KNOWN_SERVICES, masterRunsEngineRuntime, masterRunsLiveEngines, servicesOn, servicesTheMasterRuns, swarmOn } from '../harnessd/services.js'
 import { askForMessages, createMessagesLink } from './messagesLink.js'
 import { createDevicesLink } from './devicesLink.js'
+import { createObservedHook } from './observedHook.js'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE, PROBE_COMMAND } from '../harnessd/protocol.js'
 import { localSocketListenPath, localSocketPath, refuseServedDataFolder, servedFolderDeps, type LocalSocketServer } from '../lib/localSocket.js'
 import { ensureDaemonToken } from '../lib/windows/pipeAuth.js'
@@ -2304,6 +2305,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onToolStart: turnHooks.onToolStart,
     onTurnStop: turnHooks.onTurnStop,
     onPromptHook: turnHooks.onPromptHook,
+    // A session outside any pane (core/observedHook.ts): checked here, kept by the devices for the dial, dropped
+    // while they are not running.
+    onObserved: createObservedHook({ now: Date.now, forward: (event) => ports.devices?.observed(event) ?? false }).onObserved,
     stopHookDelayMs: Number(harnessd.HARNESSD_TEST_STOP_HOOK_DELAY_MS) || 0,
     // `harness pair`, `unpair`, `remote-password`, `link connect`, `group` and `devices`: the keys are the
     // gateway's, and so are these answers (gateway/start.ts).

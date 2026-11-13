@@ -60,6 +60,15 @@ describe('what the core tells the devices', () => {
     expect(sent.every((frame) => frame.type === 'service_event')).toBe(true)
   })
 
+  it('hands on a paneless session\'s hook event, and says when their process was not there to hear it', () => {
+    const event = { engine: 'claude' as const, sessionId: 's1', event: 'turn-stop' as const, callerPid: 7, hostHints: {}, at: 1 }
+    const { sent, port } = link()
+    expect(port.observed(event)).toBe(true)
+    expect(sent.map((frame) => frame.payload)).toEqual([{ kind: 'observed', event }])
+    const closed = createDevicesLink({ core: fakeCore(), notify: () => false, call: vi.fn(), state: () => STATE })
+    expect(closed.port.observed(event)).toBe(false)
+  })
+
   it('tells devices started in the core\'s own process the same, as calls on their port', () => {
     const { devices, sent } = link()
     const started = { desk: vi.fn(), swarms: vi.fn(), unread: vi.fn(), windowFocus: vi.fn(), engines: vi.fn(), commanders: vi.fn() }

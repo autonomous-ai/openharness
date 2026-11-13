@@ -629,6 +629,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // The voice router warms a worker on an engine the machine runs, while a device is watching.
     engines: (engines) => setVoiceRouterSessions(engines.map((engine) => ({ engine }))),
     commanders: (connected) => setVoiceRouterDeviceConnected(connected),
+    // A session outside any pane (core/observedHook.ts): kept by no source yet, so the core drops it. The dial's
+    // list of them comes with the observed source (DWA 7, OPENHARNES-26).
+    observed: () => false,
     // The serial ports first: a port left held makes esptool fail in a way that reads like dead hardware.
     stop: async () => {
       for (const agentId of [...replies.keys()]) endReplies(agentId, false)   // no timer may fire into a stopped cable

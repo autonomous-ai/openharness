@@ -1353,6 +1353,8 @@ describe('⌘K, the Wi-Fi device\'s borrowed walk, the voice router and stopping
     port.commanders(true)
     expect(seen.voice.sessions).toHaveBeenCalledWith([{ engine: 'claude' }, { engine: 'codex' }])
     expect(seen.voice.connected).toHaveBeenCalledWith(true)
+    // No source keeps a paneless session's event yet: the core is told so, and drops it.
+    expect(port.observed({ engine: 'claude', sessionId: 's1', event: 'turn-stop', callerPid: 7, hostHints: {}, at: 1 })).toBe(false)
     await port.stop()
     expect(calls('stop')).toHaveLength(1)
     expect(seen.voice.shutdown).toHaveBeenCalled()

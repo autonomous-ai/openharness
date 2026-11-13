@@ -324,6 +324,59 @@ describe('process-owned hook server', () => {
     expect(handler).not.toHaveBeenCalled()
   })
 
+  // A session outside any pane (core/observedHook.ts): no binding to verify, so the hook's token and the
+  // handler's checks are all there is between a local process and the devices.
+  it.each([
+    ['ok', 200, { ok: true }],
+    ['dropped', 200, { dropped: true }],
+    ['invalid', 400, { error: 'invalid hook body' }],
+  ] as const)('/api/hook/observed hands the body to onObserved and answers %s with %i', async (outcome, status, reply) => {
+    const onObserved = vi.fn(() => outcome)
+    const resolveHookAgent = vi.fn(async () => null)
+    const { base, headers } = await start({ onObserved, resolveHookAgent })
+    const body = { engine: 'claude', sessionId: 'paneless', event: 'turn-stop', callerPid: 4242, hostHints: {} }
+    const response = await fetch(`${base}/api/hook/observed`, { method: 'POST', headers, body: JSON.stringify(body) })
+    expect(response.status).toBe(status)
+    expect(await response.json()).toEqual(reply)
+    expect(onObserved).toHaveBeenCalledWith(body)
+    // Nothing about a pane or a process is looked up: the route keeps no session.
+    expect(resolveHookAgent).not.toHaveBeenCalled()
+  })
+
+  it('/api/hook/observed answers 400 to a 4097-byte body and to one that is not JSON', async () => {
+    const onObserved = vi.fn(() => 'ok' as const)
+    const { base, headers } = await start({ onObserved })
+    const padded = (bytes: number) => {
+      const shell = JSON.stringify({ engine: 'claude', sessionId: 's', event: 'turn-stop', callerPid: 1, cwd: '' })
+      return JSON.stringify({ engine: 'claude', sessionId: 's', event: 'turn-stop', callerPid: 1, cwd: 'c'.repeat(bytes - shell.length) })
+    }
+    expect(Buffer.byteLength(padded(4097))).toBe(4097)
+    expect((await fetch(`${base}/api/hook/observed`, { method: 'POST', headers, body: padded(4097) })).status).toBe(400)
+    expect((await fetch(`${base}/api/hook/observed`, { method: 'POST', headers, body: '{"engine":' })).status).toBe(400)
+    expect(onObserved).not.toHaveBeenCalled()
+    // 4096 bytes is within the bound.
+    expect((await fetch(`${base}/api/hook/observed`, { method: 'POST', headers, body: padded(4096) })).status).toBe(200)
+    expect(onObserved).toHaveBeenCalledOnce()
+  })
+
+  it('/api/hook/observed answers 401 without the hook token', async () => {
+    const onObserved = vi.fn(() => 'ok' as const)
+    const { base } = await start({ onObserved })
+    const response = await fetch(`${base}/api/hook/observed`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ engine: 'claude', sessionId: 's', event: 'turn-stop', callerPid: 1 }),
+    })
+    expect(response.status).toBe(401)
+    expect(onObserved).not.toHaveBeenCalled()
+  })
+
+  it('/api/hook/observed drops the event when no handler is wired', async () => {
+    const { base, headers } = await start()
+    const response = await fetch(`${base}/api/hook/observed`, { method: 'POST', headers, body: JSON.stringify({ engine: 'claude' }) })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ dropped: true })
+  })
+
   it('hands a Stop on with when its engine ran it, and holds it as long as a test asks', async () => {
     const onTurnStop = vi.fn()
     const agent = { engine: 'claude', sessionId: 'real-session', agentId: 'agent-1', runtimes: [], processIdentity: null } as unknown as RegisteredSession
