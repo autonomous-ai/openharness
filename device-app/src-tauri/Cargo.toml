@@ -8,6 +8,10 @@ edition = "2024"
 name = "harness_device"
 path = "src/lib.rs"
 
+[[bin]]
+name = "harness-device"
+path = "src/main.rs"
+
 [dependencies]
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 serde = { version = "1", features = ["derive"] }
@@ -28,7 +32,8 @@ objc2-service-management = { version = "0.3", default-features = false, features
 sysinfo = "0.40"
 
 [build-dependencies]
-tauri-build = "2"
+# As `cargo tauri build` writes it back: any other form, and every build rewrites this line.
+tauri-build = { version = "2", features = [] }
 
 [dev-dependencies]
 tempfile = "3"
