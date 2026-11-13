@@ -240,8 +240,9 @@ today that the rule says it should not, most serious first:
    a paste of up to 20 MB from a remote client (`lib/terminalStreamManager.ts:1003-1234`), a third-party
    `harness.json` (`dsh/manifest.ts`). And what agents write: fourteen engines' transcripts and SQLite stores
    (`core/transcripts/attach.ts:415-599`), with `node:sqlite` on threads inside the core.
-4. **The core's loop can be held.** A synchronous `ps` on every registry save on a Mac (`lib/registry.ts:512`; 3.3 ms
-   measured, for a start time that never changes, and the lock can sleep the loop for 2 s); a Codex resume that
+4. **The core's loop can be held.** A registry save: its lock can sleep the loop for 2 s, and its three fsyncs took
+   about 60 ms of a save measured on a Mac (a synchronous `ps` on every save, for a start time that never changes,
+   is gone since 13 November: read once); a Codex resume that
    reads its whole rollout; the ledger's lock (2 s); a login shell and `harness-pty version`, up to 5 s each
    (`lib/engineBin.ts:116`, `lib/ptyHost/launch.ts:227`); fsync bursts for the handoff; `~/.claude.json` rewritten
    synchronously (`engines/kit/folderTrust.ts:101-115`). And work that grows with history: create receipts are
