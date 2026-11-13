@@ -22,6 +22,7 @@ function setup(over: Partial<ObservedDeps> = {}) {
     } as ObservedDeps['openSessions'],
     externalSessions: { scan: async () => [], get: (id) => externals.get(id) },
     lastAnswer: async (_engine, path) => answers.get(path),
+    excluded: ['/data/harness'],
     log: () => {},
     ...over,
   }
@@ -267,6 +268,40 @@ describe('ObservedSource codex and open sessions', () => {
     await src.scanOpen()
     expect(src.list()).toHaveLength(1)
     expect(src.list()[0].state).toBe('working')
+  })
+})
+
+describe('ObservedSource and Harness\'s own sessions', () => {
+  // The voice router's Claude Code runs in the data folder, outside a pane: Harness's own, never an agent outside it.
+  const scratch = '/data/harness/voice-route-scratch'
+
+  it('a hook event from a session in the data folder lists nothing', () => {
+    const { src, changes, ev } = setup()
+    src.ingest(ev('session-start', { cwd: scratch }))
+    src.ingest(ev('turn-start', { cwd: scratch }))
+    expect(src.list()).toEqual([])
+    expect(changes).not.toHaveBeenCalled()
+  })
+
+  it('the open scan lists no session in the data folder', async () => {
+    const { src, open, owners, externals } = setup()
+    open.set('v', 'app')
+    owners.set('v', { pid: 21, engine: 'claude' })
+    externals.set('v', { cwd: scratch })
+    await src.scanOpen()
+    expect(src.list()).toEqual([])
+  })
+
+  it('a session the scan listed without its folder goes once its hook names the data folder', async () => {
+    const { src, open, owners, changes, ev } = setup()
+    open.set('s1', 'app')
+    owners.set('s1', { pid: 100, engine: 'claude' })
+    await src.scanOpen()
+    expect(src.list()).toHaveLength(1)
+    changes.mockClear()
+    src.ingest(ev('turn-start', { cwd: scratch }))
+    expect(src.list()).toEqual([])
+    expect(changes).toHaveBeenCalledTimes(1)
   })
 })
 
