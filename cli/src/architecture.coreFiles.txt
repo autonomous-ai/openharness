@@ -360,7 +360,7 @@ lib/gridConfigDir.ts
 lib/gridFleetProtocol.ts
 lib/gridLaunchWire.ts
 lib/guestAccounts.ts
-lib/guestPaneCommand.ts
+lib/guestEngines.ts
 lib/hachiMetrics.ts
 lib/handoffAuthority.ts
 lib/handoffDiscovery.ts
@@ -527,16 +527,14 @@ lib/userShell.ts
 lib/viewerFrames.ts
 lib/windowSurfaces.ts
 lib/windows/claudeCodeGitBash.ts
-lib/windows/cliVersions.ts
 lib/windows/daemonPipe.ts
 lib/windows/dataFolderClaim.ts
 lib/windows/engineStart.ts
 lib/windows/guestEngine.ts
 lib/windows/guestHostBackend.ts
-lib/windows/guestRequests.ts
-lib/windows/guestShare.ts
+lib/windows/guestTree.ts
 lib/windows/hermesLaunch.ts
-lib/windows/installLayout.ts
+lib/windows/installNames.ts
 lib/windows/launch.ts
 lib/windows/noWindow.ts
 lib/windows/pipeAuth.ts
@@ -544,7 +542,6 @@ lib/windows/pipeClient.ts
 lib/windows/powershell.ts
 lib/windows/processTable.ts
 lib/windows/shell.ts
-lib/windows/sid.ts
 lib/windows/storeAppAlias.ts
 lib/windows/treeKill.ts
 lib/workspaceCheck.ts

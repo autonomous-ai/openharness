@@ -8,7 +8,7 @@
  */
 import { readdirSync } from 'node:fs'
 import { isGuestUser, type GuestAccount, type SharedFolder } from '../guestAccounts.js'
-import { WINDOWS_GUEST_HOSTS } from './guestRequests.js'
+import { WINDOWS_GUEST_HOSTS } from './guestTree.js'
 import { createGuestSetupClient, type GuestSetupClient } from './guestSetupClient.js'
 
 export interface WindowsGuestAccountsDeps {
