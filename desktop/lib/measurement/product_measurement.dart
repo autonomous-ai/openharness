@@ -132,8 +132,6 @@ enum SignInEndReason {
   final String wire;
 }
 
-/// Where Add Phone was opened from, counted each time it opens
-/// (`ui_desktop_add_phone_<wire>`): which way in, nothing else.
 /// Hachi's counters a window sends (docs/design/2026-11-12-hachi.md, Measures): the switch, the ways
 /// in, the one notice it sends and the opens that failed. Names only, never a goal, harness or machine.
 enum HachiMeasure {
@@ -154,6 +152,8 @@ enum HachiMeasure {
   static const vocabulary = 10;
 }
 
+/// Where Add Phone was opened from, counted each time it opens
+/// (`ui_desktop_add_phone_<wire>`): which way in, nothing else.
 enum AddPhoneOpening {
   /// The Add Phone card's own button ([ProductFlow.phoneOffer]).
   offer('offer'),
