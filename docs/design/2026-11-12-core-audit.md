@@ -171,7 +171,7 @@ Left since, with the core's process as `src/architecture.coreFiles.txt` lists it
 | `harness uninstall`'s hook removers, loaded for how one outcome is said (13 November) | 551 | 95,590 |
 | The guests' accounts, loaded for a user-name check and a small runner; and a function nothing called (13 November) | 552 | 95,372 |
 | The probe of which engines this machine has: the edge host answers it and starts its login shells (13 November) | 550 | 95,029 |
-| The agent ledger, loaded for one erase in a delete: the agent cleanup erases what a harness was told, asked before anything is deleted. And the dial's recap of a cloud agent's last words, markdown a maker's agent wrote: its service works the card out and the core shows what it is handed (13 November) | 548 | 94,573 |
+| The agent ledger, loaded for one erase in a delete: the agent cleanup erases what a harness was told, asked before anything is deleted. And the dial's recap of a cloud agent's last words, markdown a maker's agent wrote: its service works the card out and the core shows what it is handed (13 November) | 548 | 94,575 |
 
 ### 1. Code the core loads for one helper (low risk, about a day each)
 
