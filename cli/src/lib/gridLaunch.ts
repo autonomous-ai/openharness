@@ -46,6 +46,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { AgentEngine } from '../engines/types.js'
 import { isOpencodeV2 } from '../engines/opencode/contract.js'
+import { CODEX_GRID_CATALOG_FILE, codexGridModelCatalog } from './codexGridModel.js'
 import {
   anthropicBaseUrl, API_NETWORK_PREFIX, GRID_KEY_VAR, GRID_ROUTER_MODEL, isApiLaunch, relayBaseUrl,
   type GridEngineLaunch, type GridLaunchAnswer, type GridLaunchMachine, type GridLaunchOverride, type GridLaunchRequest,
@@ -367,6 +368,18 @@ const GRID_ENGINE_CONTRACTS: Partial<Record<AgentEngine, GridEngineContract>> = 
           ]
           : []),
       ],
+      // The model's card, with tool search on, so the person's MCP servers and ChatGPT apps are found
+      // when needed instead of sent on every turn (see `codexGridModel.ts`). Only for a grid model:
+      // the relay is what runs the search for the engine, and a saved API's provider has no relay.
+      ...(override.model && !isApiLaunch(override)
+        ? {
+          configDir: {
+            cliConfigKey: 'model_catalog_json',
+            pointAt: CODEX_GRID_CATALOG_FILE,
+            files: [{ name: CODEX_GRID_CATALOG_FILE, content: codexGridModelCatalog(override.model, override.contextWindow) }],
+          },
+        }
+        : {}),
       webSearch: webSearchWhenWired(override),
     }),
   },

@@ -70,6 +70,8 @@ const options = {
     // The guest helper and its sudoers drop-in (src/lib/guestHelperAssets.ts): the installed CLI is cli.js alone.
     __GUEST_HELPER__: JSON.stringify(readFileSync('assets/guest-helper/guest-helper.sh', 'utf8')),
     __GUEST_SUDOERS__: JSON.stringify(readFileSync('assets/guest-helper/sudoers', 'utf8')),
+    // The instructions in the model card Codex is given for a grid model (src/lib/codexGridModel.ts).
+    __CODEX_GRID_INSTRUCTIONS__: JSON.stringify(readFileSync('assets/codex/grid-model-instructions.md', 'utf8')),
     // The agent browser's image files (src/services/agentBrowser/assets.ts) and its tool list (src/lib/browserToolsAsset.ts).
     __BROWSER_CONTAINERFILE__: JSON.stringify(readFileSync('assets/browser/Containerfile', 'utf8')),
     __BROWSER_ENTRYPOINT__: JSON.stringify(readFileSync('assets/browser/entrypoint.sh', 'utf8')),
