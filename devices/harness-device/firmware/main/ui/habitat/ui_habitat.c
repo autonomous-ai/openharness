@@ -508,12 +508,14 @@ static void activity_text(char *dst, size_t cap, const char *src)
 }
 
 // The short name a person knows an app by, kept short for the face. Harness is there for its own agents in the
-// machine view; an unknown or missing host reads as "Terminal".
+// machine view; an unknown or missing host reads as "Terminal". The daemon's NAMES (cli/src/cable/hosts/hostDetect.ts)
+// less its "Terminal" rows; test_touch_ui.py keeps the two the same.
 static const char *host_name(const char *host)
 {
     static const char *const table[][2] = {
-        {"orca", "Orca"}, {"herdr", "herdr"}, {"ghostty", "Ghostty"}, {"iterm", "iTerm2"},
-        {"vscode", "VS Code"}, {"cursor", "Cursor"}, {"warp", "Warp"}, {"harness", "Harness"},
+        {"orca", "Orca"}, {"herdr", "herdr"}, {"rex", "Rex"}, {"zellij", "Zellij"}, {"kitty", "kitty"},
+        {"wezterm", "WezTerm"}, {"ghostty", "Ghostty"}, {"iterm", "iTerm2"}, {"vscode", "VS Code"},
+        {"cursor", "Cursor"}, {"warp", "Warp"}, {"harness", "Harness"},
     };
     for (unsigned i = 0; host && i < sizeof(table) / sizeof(table[0]); i++)
         if (!strcmp(host, table[i][0])) return table[i][1];
