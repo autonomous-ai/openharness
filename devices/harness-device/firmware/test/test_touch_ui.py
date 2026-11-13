@@ -17,6 +17,13 @@ def function(name):
         body = body.replace('{', "{\n    if (label[0] == '[') assert(ht_can_display(label, UI_FONT, w, 1));", 1)
     return body + '\n'
 
+# The dial names a host as the daemon does (cli/src/cable/hosts/hostDetect.ts), so a host the daemon learns to tell
+# never reads "See it in Terminal" here. Ids the daemon names "Terminal" need no row: that is the dial's fallback.
+host_detect = (here / '../../../../cli/src/cable/hosts/hostDetect.ts').read_text()
+daemon_hosts = dict(re.findall(r"^\s+'?([\w-]+)'?: '([^']+)',$", host_detect.split('const NAMES', 1)[1].split('}', 1)[0], re.M))
+dial_hosts = dict(re.findall(r'\{"([\w-]+)", "([^"]+)"\}', function('host_name')))
+assert daemon_hosts and dial_hosts == {k: v for k, v in daemon_hosts.items() if v != 'Terminal'}, (dial_hosts, daemon_hosts)
+
 code = r'''
 #include "runtime.h"
 #include "../../cable_features.h"
@@ -3362,7 +3369,13 @@ int main(int argc, char **argv) {
     // the name is short, and an unknown or missing host is a terminal
     reset(); fake_ms = 1000; ui_project_set_host_caps("a","iterm",CABLE_CAP_S); scene_take();
     tap(1000,233,220); assert(!starts && scene_says("See it in iTerm2"));
-    reset(); fake_ms = 1000; ui_project_set_host_caps("a","kitty",CABLE_CAP_S); scene_take();
+    { static const char *const named[][2] = {{"kitty","See it in kitty"},{"wezterm","See it in WezTerm"},
+                                             {"zellij","See it in Zellij"},{"rex","See it in Rex"}};
+      for (unsigned i = 0; i < sizeof named / sizeof named[0]; i++) {
+          reset(); fake_ms = 1000; ui_project_set_host_caps("a",named[i][0],CABLE_CAP_S); scene_take();
+          tap(1000,233,220); assert(!starts && scene_says(named[i][1]));
+      } }
+    reset(); fake_ms = 1000; ui_project_set_host_caps("a","xterm",CABLE_CAP_S); scene_take();
     tap(1000,233,220); assert(!starts && scene_says("See it in Terminal"));
     reset(); fake_ms = 1000; ui_project_set_host_caps("a","",CABLE_CAP_S); scene_take();
     tap(1000,233,220); assert(!starts && scene_says("See it in Terminal"));
