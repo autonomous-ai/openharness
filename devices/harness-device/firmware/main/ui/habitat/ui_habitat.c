@@ -1658,8 +1658,8 @@ static void render_swarm_face(ht_scene_t *f)
         f_.notice_ms = bell ? s.notice_ms : 0;
     }
     if (thread) face_thread(f, l, buddy, recap, wait, bell && l->buddies);
-    else ht_character_face(f, &character, &f_, ACCENT, recap);
-    s.pet_next_ms = !thread ? ht_focus_pet_next_ms(&f_, recap) : 0;
+    else { ht_focus_set_voice(true); ht_character_face(f, &character, &f_, ACCENT, recap); }   // a Swarm always hears
+    s.pet_next_ms = !thread ?ht_focus_pet_next_ms(&f_, recap) : 0;
     ht_rect_t bubble = {0};
     bool told = bell && !thread && ht_focus_alert_shown(&f_, recap, &bubble);
     int bell_y = l->buddies ? 346 : 400;   // clear of the pair
@@ -1815,6 +1815,8 @@ static void render_home(ht_scene_t *f)
         s.notice_ms = (clock - ht_focus_alert_pop_ms(&f_)) | 1;
         f_.notice_ms = bell ? s.notice_ms : 0;
     }
+    // A tap on an agent without V only says where it lives, so its resting face must not invite talking.
+    ht_focus_set_voice(!a || !(a->caps_off & CABLE_CAP_V));
     ht_character_face(f, &character, &f_, ACCENT, recap);
     s.pet_next_ms = ht_focus_pet_next_ms(&f_, recap);
     // The working face says it with the pet's bell bubble; the other faces keep the pill at 400.
