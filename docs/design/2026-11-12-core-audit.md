@@ -188,7 +188,7 @@ this platform uses leaves them out. Low risk on a Mac and Linux, medium on a Win
 
 | What | Lines | Where to | Risk |
 | --- | ---: | --- | --- |
-| **The agent browser's stream.** The core starts a command line the service gives it for each viewer, paces up to 2 MB/s on its own loop and reads the viewer's VNC bytes (`core/browserStreams.ts`, `core/rfbShaper.ts`) | 526 | agentBrowser; the core keeps a forwarder, as for the viewers (`core/viewerStreams.ts`, 50 lines) | low |
+| **The agent browser's stream.** The core starts the exec into the browser's container for each viewer, paces up to 2 MB/s on its own loop and reads the viewer's VNC bytes (`core/browserStreams.ts`, `core/rfbShaper.ts`) | 526 | agentBrowser; the core keeps a forwarder, as for the viewers (`core/viewerStreams.ts`, 50 lines) | low |
 | **Feature routes in the two doors.** Pairing and keys, the account, desk and Store proxies, device and Wi-Fi routes, usage reports, voice, the relay to other machines (`hookServer.ts` 470, `localWsServer.ts` 430, `core/main.ts` about 320, `lib/deviceManagementHttp.ts` 199, `lib/storeProxy.ts` 48) | 1,470 | gateway, devices, edge, through one adapter that turns a route into a service request | medium |
 | **Git.** A create clones a repository or adds a worktree inside the core; every agent frame runs git for its project and branch (`lib/gitProject.ts`, `agentProject.ts`, `projectFolder.ts`, `sessionGitHistory.ts`, `sessionGitContext.ts`, `worktreeDeletion.ts`, `sshHosts.ts`, `scm/`) | 1,900 | edge (workspaces): a create asks for its folder, a frame reads a reported cache | medium |
 | **The product usage vocabulary** and the mapping of each request's outcome to counter names (`lib/productUsageContract.ts`, `productUsageSignals.ts`, `productHealthContract.ts`, `appProductUsageReport.ts`) | 723 | gateway: the core sends one raw outcome | low |
@@ -223,9 +223,12 @@ this platform uses leaves them out. Low risk on a Mac and Linux, medium on a Win
 The core is the most trusted process: whoever runs code in it can type into every agent's terminal. What it does
 today that the rule says it should not, most serious first:
 
-1. **The core runs a command line a service hands it.** The agent browser's process gives the core an argv, and
-   the core starts it for each viewer (`core/agentBrowserLink.ts:52`, `core/browserStreams.ts:118`). Fix: the stream
-   leaves for the agent browser's process (part 2).
+1. **The core ran a command line a service handed it.** The agent browser's process gave the core an argv, and the
+   core started it for each viewer (`core/agentBrowserLink.ts`, `core/browserStreams.ts`). Narrowed on 13 November:
+   the core starts one command for the agent browser and no other, Podman's exec into a browser's container and the
+   pipe to its screen (`core/api.ts` `agentBrowserStreamCommand`), checked where the process names it and again where
+   it is started. Still that process's to say: which file is Podman, and which of its containers is an agent's. Both
+   end, with the stream itself, when it leaves the core (part 2).
 2. **An experiment's process can call any backend route as the account.** `core/experimentQueries.ts:171-175` signs
    any `/api/` path for the orchestrator, Share, Memories, the router, the Swarm and cloud agents. Agent Messages
    has a list of the routes it may call (`MESSAGES_BACKEND_ROUTES`); these have none. Fix: a list beside each

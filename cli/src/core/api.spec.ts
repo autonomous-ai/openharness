@@ -1,10 +1,44 @@
 import { describe, expect, it, vi } from 'vitest'
 import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
-import { AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS, mayOpenBrowser, CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, emptyPorts, LANE_OFF, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, TURN_DELIVERERS, TURN_END_HEARERS, WIFI_FALLBACKS, WIFI_OFF, type CoreApiDeps, type SwarmAgentDeps } from './api.js'
+import { AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS, AGENT_BROWSER_VNC_PIPE, agentBrowserStreamCommand, mayOpenBrowser, CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, emptyPorts, LANE_OFF, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, TURN_DELIVERERS, TURN_END_HEARERS, WIFI_FALLBACKS, WIFI_OFF, type CoreApiDeps, type SwarmAgentDeps } from './api.js'
 import { FAIL, readFallback } from './serviceHost.js'
 import { HACHI_ID } from '../dsh/builtinIds.js'
 
 const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/work/app' }) as RegisteredSession
+
+describe('the one command the core starts for the agent browser', () => {
+  const exec = ['exec', '-i', 'harness-browser-a1', 'socat', 'STDIO', 'TCP:127.0.0.1:5900']
+  it('is Podman\'s exec into a browser\'s container and the pipe to its screen, on any connection', () => {
+    for (const argv of [
+      ['/opt/podman/bin/podman', ...exec], ['/opt/homebrew/bin/podman', '--connection', 'harness', ...exec],
+      ['/nix/store/abc-podman-5.2.1/bin/podman', '--connection', 'podman-machine-default', ...exec],
+      // As a login shell answers for a PATH that holds `..`, and a profile with every character Podman takes in a name.
+      ['/Users/x/tools/../bin/podman', ...exec], ['/usr/bin/podman', 'exec', '-i', 'harness-browser-0b0e1c2d-3f4a-4b5c-8d6e-7f8091a2b3c4', ...AGENT_BROWSER_VNC_PIPE],
+      ['/usr/bin/podman', 'exec', '-i', 'harness-browser-agent_1.2-x', ...AGENT_BROWSER_VNC_PIPE],
+    ]) expect(agentBrowserStreamCommand(argv), argv.join(' ')).toEqual(argv)
+  })
+
+  it('is no other command line', () => {
+    const podman = '/opt/podman/bin/podman'
+    for (const argv of [
+      // Another program, or Podman not named by its whole path.
+      ['/bin/sh', '-c', 'true'], ['/opt/podman/bin/sh', ...exec], ['podman', ...exec], ['./podman', ...exec], ['/tmp/podman/../../bin/sh', ...exec],
+      ['/opt/podman/bin/podman\n', ...exec], ['/opt/podman/bin/notpodman', ...exec], ['/opt/podman/bin/podman.sh', ...exec], [],
+      // Windows, where the agent browser does not run.
+      ['C:\\Program Files\\RedHat\\Podman\\podman.exe', ...exec], ['C:/tools/podman', ...exec],
+      // Podman doing something else, or on something that is not a connection's name.
+      [podman, 'run', '--rm', 'evil'], [podman, 'exec', '-i', 'harness-browser-a1', 'sh', '-c', 'true'], [podman, 'exec', '-it', ...exec.slice(2)],
+      [podman, '--url', 'tcp://evil.example:1', ...exec], [podman, '--connection', '--url=tcp://evil.example', ...exec], [podman, '--connection', ...exec],
+      [podman, '--connection', 'harness', '--root', '/tmp/x', ...exec], [podman, '--privileged', ...exec],
+      // Another container, another pipe, or anything after it.
+      [podman, 'exec', '-i', 'someone-elses', ...AGENT_BROWSER_VNC_PIPE], [podman, 'exec', '-i', 'harness-browser-', ...AGENT_BROWSER_VNC_PIPE],
+      [podman, 'exec', '-i', 'harness-browser-a1;id', ...AGENT_BROWSER_VNC_PIPE], [podman, 'exec', '-i', 'harness-browser-a1', 'socat', 'STDIO', 'TCP:10.0.0.1:22'],
+      [podman, ...exec, 'EXEC:sh'], [podman, ...exec.slice(0, -1)],
+      // Not a command line.
+      [podman, ...exec.slice(0, 5), 7], 'podman exec', null, undefined, { 0: podman },
+    ]) expect(agentBrowserStreamCommand(argv), JSON.stringify(argv)).toBeNull()
+  })
+})
 
 describe('the core API services stand on', () => {
   it('allows a bounded batch of GitHub reads to finish outside the core', () => {

@@ -25,8 +25,9 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { AgentBrowserFrame } from '../lib/agentFrame.js'
 import { PRODUCT_USAGE_AGENT_BROWSER_METRICS, type ProductUsageMetric } from '../lib/productUsageContract.js'
-import type { AgentBrowserPort, CoreApi } from './api.js'
+import { agentBrowserStreamCommand, type AgentBrowserPort, type CoreApi } from './api.js'
 import type { ServiceFrame } from './serviceLinks.js'
+import { sid } from '../lib/log.js'
 
 type Payload = Record<string, unknown>
 
@@ -48,11 +49,6 @@ function pidsOf(value: unknown): number[] | null {
   return Array.isArray(value) && value.every(pid => Number.isSafeInteger(pid) && pid > 0) ? value as number[] : null
 }
 
-/** A command line the process gave, or null for anything else: the core starts it as it is. */
-function argvOf(value: unknown): string[] | null {
-  return Array.isArray(value) && value.length > 0 && value.every(part => typeof part === 'string' && part) ? value as string[] : null
-}
-
 export function createAgentBrowserLink(deps: {
   core: Pick<CoreApi, 'agents' | 'count'>
   notify: (frame: ServiceFrame, opts?: { untilDelivered?: boolean }) => boolean
@@ -66,6 +62,7 @@ export function createAgentBrowserLink(deps: {
   const commands = new Map<string, string[]>()
   const viewerListeners: Array<(agentId: string) => void> = []
   let up = false
+  let refusalSaid = false
   const event = (payload: Payload, opts?: { untilDelivered?: boolean }) => { notify({ type: 'service_event', payload }, opts) }
   // A stop or a purge ends the browser's viewers here and now, whether or not the process is there to hear it, and
   // sends the agent's frame without its browser: what the process says of it from now on is not kept, and a panel
@@ -114,7 +111,14 @@ export function createAgentBrowserLink(deps: {
     if (query === 'browser_state') {
       const agentId = typeof payload.agentId === 'string' ? payload.agentId : ''
       const state = payload.state === undefined ? undefined : browserState(payload.state)
-      const command = payload.command === undefined ? undefined : argvOf(payload.command)
+      // The exec into its ready browser and no other command line: the core starts it for a viewer (core/api.ts). Another
+      // is the process's fault, and is said: its state is not taken with it, so the browser would only look stuck.
+      const command = payload.command === undefined ? undefined : agentBrowserStreamCommand(payload.command)
+      if (command === null && !refusalSaid) {
+        // Once for each time the process connects: a process that names one again and again fills no log.
+        refusalSaid = true
+        console.warn(`[agent-browser] refused a stream command that is not the exec into a browser's container (agent ${sid(agentId)})`)
+      }
       if (!agentId || state === null || command === null) return INVALID
       if (!attached.has(agentId)) return { ok: true }
       if (state) states.set(agentId, state)
@@ -155,6 +159,7 @@ export function createAgentBrowserLink(deps: {
     answer,
     connected: () => {
       up = true
+      refusalSaid = false
       for (const session of core.agents.live()) if (session.browser) event({ kind: 'attached', session })
     },
     disconnected: () => { up = false },
