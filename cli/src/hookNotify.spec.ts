@@ -2368,6 +2368,35 @@ describe('hook notify: a session outside a pane', () => {
     expect(requests[0].body.transcriptPath).toBe('/t.jsonl')
   })
 
+  // The core refuses the whole event for a hint with a control character (core/observedHook.ts): the hint goes.
+  it('leaves out a hint value with a control character, and still posts the event', async () => {
+    const { port, requests } = await collect()
+    await runHook({ port, env: { ...noHints, TERM_PROGRAM: 'ghost\u0007ty', ZELLIJ: '0' }, input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
+    expect(requests).toHaveLength(1)
+    expect(requests[0].body.hostHints).toEqual({ ZELLIJ: '0' })
+  })
+
+  // The core reads 4096 bytes of a body at most (hookServer.ts): the transcript's path goes first, then the folder.
+  it('leaves out transcriptPath when the body is over 4096 bytes, and keeps cwd', async () => {
+    const { port, requests } = await collect()
+    const long = `/${'日'.repeat(1000)}`
+    await runHook({ port, env: noHints, input: { hook_event_name: 'Stop', session_id: 'sess-1', cwd: long, transcript_path: long } })
+    expect(requests).toHaveLength(1)
+    expect(requests[0].body).not.toHaveProperty('transcriptPath')
+    expect(requests[0].body.cwd).toBe(long)
+  })
+
+  it('leaves out cwd too when the body is still over 4096 bytes', async () => {
+    const { port, requests } = await collect()
+    const long = `/${'日'.repeat(1000)}`
+    const wide = Object.fromEntries(HINTS.map((name) => [name, '日'.repeat(64)]))
+    await runHook({ port, env: wide, input: { hook_event_name: 'Stop', session_id: 'sess-1', cwd: long, transcript_path: long } })
+    expect(requests).toHaveLength(1)
+    expect(requests[0].body).not.toHaveProperty('transcriptPath')
+    expect(requests[0].body).not.toHaveProperty('cwd')
+    expect(requests[0].body.hostHints).toEqual(wide)
+  })
+
   it('the hook exits within 300 ms when the daemon never answers', async () => {
     const urls: string[] = []
     let arrived: (at: number) => void = () => {}
