@@ -12,7 +12,9 @@ describe('the one command the core starts for the agent browser', () => {
     for (const argv of [
       ['/opt/podman/bin/podman', ...exec], ['/opt/homebrew/bin/podman', '--connection', 'harness', ...exec],
       ['/nix/store/abc-podman-5.2.1/bin/podman', '--connection', 'podman-machine-default', ...exec],
-      ['C:\\Program Files\\RedHat\\Podman\\podman.exe', ...exec], ['/usr/bin/podman', 'exec', '-i', 'harness-browser-0b0e1c2d-3f4a-4b5c-8d6e-7f8091a2b3c4', ...AGENT_BROWSER_VNC_PIPE],
+      // As a login shell answers for a PATH that holds `..`, and a profile with every character Podman takes in a name.
+      ['/Users/x/tools/../bin/podman', ...exec], ['/usr/bin/podman', 'exec', '-i', 'harness-browser-0b0e1c2d-3f4a-4b5c-8d6e-7f8091a2b3c4', ...AGENT_BROWSER_VNC_PIPE],
+      ['/usr/bin/podman', 'exec', '-i', 'harness-browser-agent_1.2-x', ...AGENT_BROWSER_VNC_PIPE],
     ]) expect(agentBrowserStreamCommand(argv), argv.join(' ')).toEqual(argv)
   })
 
@@ -21,7 +23,9 @@ describe('the one command the core starts for the agent browser', () => {
     for (const argv of [
       // Another program, or Podman not named by its whole path.
       ['/bin/sh', '-c', 'true'], ['/opt/podman/bin/sh', ...exec], ['podman', ...exec], ['./podman', ...exec], ['/tmp/podman/../../bin/sh', ...exec],
-      ['/opt/podman/bin/podman\n', ...exec], ['/opt/podman/bin/notpodman', ...exec], [],
+      ['/opt/podman/bin/podman\n', ...exec], ['/opt/podman/bin/notpodman', ...exec], ['/opt/podman/bin/podman.sh', ...exec], [],
+      // Windows, where the agent browser does not run.
+      ['C:\\Program Files\\RedHat\\Podman\\podman.exe', ...exec], ['C:/tools/podman', ...exec],
       // Podman doing something else, or on something that is not a connection's name.
       [podman, 'run', '--rm', 'evil'], [podman, 'exec', '-i', 'harness-browser-a1', 'sh', '-c', 'true'], [podman, 'exec', '-it', ...exec.slice(2)],
       [podman, '--url', 'tcp://evil.example:1', ...exec], [podman, '--connection', '--url=tcp://evil.example', ...exec], [podman, '--connection', ...exec],

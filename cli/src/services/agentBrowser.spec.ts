@@ -562,6 +562,10 @@ describe('the agent browser service', () => {
     port.attached(session('a1'))
     await ready(port, 'a1')
     expect(await requests.agent_browser_state!({ pane: '%7' }, LOCAL)).toEqual({ agentId: 'a1', state: 'ready', podman: fake.path, connection: 'harness', human: 'normal' })
+    // And the exec into it, on that connection, is the one command the core starts (core/api.ts).
+    const command = port.streamCommand('a1') as { argv: string[] }
+    expect(command.argv).toEqual([fake.path, '--connection', 'harness', 'exec', '-i', 'harness-browser-a1', 'socat', 'STDIO', 'TCP:127.0.0.1:5900'])
+    expect(agentBrowserStreamCommand(command.argv)).toEqual(command.argv)
   })
 
   it('a failed browser\'s state names its failure', async () => {

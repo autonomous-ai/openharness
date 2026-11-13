@@ -116,8 +116,14 @@ describe('opening a browser stream', () => {
   // The audit of 2026-11-12 (Security 1): the core started whatever command line the agent browser's process gave it.
   it('open starts nothing but the exec into a browser\'s container, whatever the port names', () => {
     const h = harness()
+    const warned = vi.spyOn(console, 'warn').mockImplementation(() => {})
     for (const agentId of ['shell', 'flags']) expect(h.open('local:w', agentId), agentId).toBe('NOT_READY')
     expect(h.spawn).not.toHaveBeenCalled()
+    expect(warned.mock.calls).toEqual([
+      ['[agent-browser] refused a stream command that is not the exec into a browser\'s container (agent shell)'],
+      ['[agent-browser] refused a stream command that is not the exec into a browser\'s container (agent flags)'],
+    ])
+    warned.mockRestore()
   })
 
   it('open spawns the port\'s argv with ownProcessGroup', () => {

@@ -218,10 +218,11 @@ The core is the most trusted process: whoever runs code in it can type into ever
 today that the rule says it should not, most serious first:
 
 1. **The core ran a command line a service handed it.** The agent browser's process gave the core an argv, and the
-   core started it for each viewer (`core/agentBrowserLink.ts`, `core/browserStreams.ts`). Fixed on 13 November: the
-   core starts one command for the agent browser and no other, Podman's exec into that browser's container and the
+   core started it for each viewer (`core/agentBrowserLink.ts`, `core/browserStreams.ts`). Narrowed on 13 November:
+   the core starts one command for the agent browser and no other, Podman's exec into a browser's container and the
    pipe to its screen (`core/api.ts` `agentBrowserStreamCommand`), checked where the process names it and again where
-   it is started. The stream itself still runs in the core (part 2).
+   it is started. Still that process's to say: which file is Podman, and which of its containers is an agent's. Both
+   end, with the stream itself, when it leaves the core (part 2).
 2. **An experiment's process can call any backend route as the account.** `core/experimentQueries.ts:171-175` signs
    any `/api/` path for the orchestrator, Share, Memories, the router, the Swarm and cloud agents. Agent Messages
    has a list of the routes it may call (`MESSAGES_BACKEND_ROUTES`); these have none. Fix: a list beside each
