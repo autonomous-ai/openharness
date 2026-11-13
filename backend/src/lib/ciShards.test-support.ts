@@ -1,4 +1,4 @@
-// CI shards of the Super Tab integration suite (backend/vitest.super-tabs.ci.config.ts, task #2459): files are spread over
+// CI shards of the backend integration suite (backend/vitest.integration.ci.config.ts, task #2459): files are spread over
 // the four runners by their recorded durations (backend/integration/ci-durations.json), longest first onto the least-loaded
 // shard, as the CLI's vitest.ci.config.ts does (the backend may not import CLI code). Hints never select tests: the
 // config's complete discovery list is the only source of files, a new file gets the default cost, and a stale hint for a

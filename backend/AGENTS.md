@@ -12,18 +12,17 @@ waiting on a permission, quietly, for five days.
 
 1. **Every collection names what removes it**, in its model's comment in `prisma/schema.prisma`: a TTL index, a sweep,
    a delete on write, or "kept forever" and why. A new model without that line is not done. Check the size of a row
-   too: `SuperTabRouteDecision` doubled when the route started listing every engine on every machine. Keep what a reader
+   too: a route decision row doubled when it started listing every engine on every machine. Keep what a reader
    reads.
 2. **Receipt and log rows get a TTL index.** Declare it in Prisma with `map:` so `db push` keeps it, and make it with
    its expiry through `ensureIndex` (`src/lib/db/indexes.ts`). Production's app user may not run `collMod` (10-29), so a
    TTL index new to a collection that already exists is made *before* the push (`src/lib/db/schemaRelease.ts`,
-   `superTabs/operations.ts`). A push would build it without its expiry, and `collMod` would then be refused.
+   `push/devices.ts`). A push would build it without its expiry, and `collMod` would then be refused.
    `integration/schemaRelease.test.ts` lists every expiry index and checks this.
 3. **One index per query, checked with explain.** Each new or changed query gets an integration test that reads its plan:
    `IXSCAN` on the index meant for it, and documents examined close to documents returned
    (`integration/plans.test-support.ts`, `integration/workerIndexPlans.test.ts`). Prisma sends `in` and some filters as
-   `$expr`, which no index bounds. Use a plain `aggregateRaw` `$match` for those (`superTabs/deliverySettle.ts
-   openDeliveries`).
+   `$expr`, which no index bounds. Use a plain `aggregateRaw` `$match` for those.
 4. **A maintenance job that cannot run says so, loudly and every time it tries.** Log an error with what it waits on and
    what happens if nobody acts (`lib/productUsageReceiptSweep.ts`: every hour, with the date the receipts expire by
    themselves). A single warning at start is missed. A job that can never finish stops itself once its work is gone.

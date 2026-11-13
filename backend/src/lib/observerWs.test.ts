@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 const m = vi.hoisted(() => ({
-  auth: vi.fn(), grant: vi.fn(), up: vi.fn(), changed: vi.fn(), swarm: vi.fn(), down: vi.fn(), live: vi.fn(),
+  auth: vi.fn(), grant: vi.fn(), up: vi.fn(), changed: vi.fn(), down: vi.fn(), live: vi.fn(),
   upgrade: vi.fn(), link: vi.fn(), profile: vi.fn(), info: vi.fn(),
 }))
 vi.mock('../utils/logger.js', () => ({ logger: { info: m.info, warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }))
@@ -9,13 +9,13 @@ vi.mock('./ssoAuth.js', () => ({ authenticateAccessToken: m.auth }))
 vi.mock('./prisma.js', () => ({ prisma: { user: { findUnique: m.profile } } }))
 vi.mock('../routes/harnessLinks.js', () => ({ recipientLink: m.link }))
 vi.mock('../routes/harnessShares.js', () => ({ recipientShare: m.grant }))
-vi.mock('./bus.js', () => ({ publishDown: m.down, subscribeUp: m.up, subscribeShareChanged: m.changed, subscribeSwarmAccessChanged: m.swarm }))
+vi.mock('./bus.js', () => ({ publishDown: m.down, subscribeUp: m.up, subscribeShareChanged: m.changed }))
 vi.mock('./hub.js', () => ({ trackSocketLiveness: m.live }))
 vi.mock('./wsServer.js', () => ({ WS_LIMITS: { web: 1 }, createWss: () => ({ handleUpgrade: m.upgrade }) }))
 import { attachObserver, handleObserverUpgrade } from './observerWs.js'
 const user = { sub: 'ken', email: ' Ken@Example.com ', autonomousEnv: 'prod' as const, role: 'user' }
-// As recipientShare and recipientLink return them: an invitation ends and may belong to a Swarm; a link does neither.
-const share = { id: '11111111-1111-4111-8111-111111111111', machineId: 'm', agentId: 'a', ownerId: 'owner', superTabId: null, expiresAt: new Date(Date.UTC(2099, 0)) }
+// As recipientShare and recipientLink return them: an invitation ends; a link does not.
+const share = { id: '11111111-1111-4111-8111-111111111111', machineId: 'm', agentId: 'a', ownerId: 'owner', expiresAt: new Date(Date.UTC(2099, 0)) }
 const link = { id: share.id, machineId: 'm', agentId: 'a', ownerId: 'owner', visibility: 'public' }
 class Socket extends EventEmitter {
   readyState = 1; bufferedAmount = 0
@@ -127,33 +127,6 @@ describe('isolated observer WebSocket boundary', () => {
     const checks = m.grant.mock.calls.length
     await vi.advanceTimersByTimeAsync(10_000)
     expect(m.grant.mock.calls.length).toBe(checks)
-  })
-  it('re-checks a Swarm’s share at once when who may watch in that Swarm changes', async () => {
-    let swarmChanged!: () => void
-    const disposeSwarm = vi.fn()
-    m.swarm.mockImplementation(async (_tabId, callback) => { swarmChanged = callback; return disposeSwarm })
-    await attach()
-    expect(m.swarm).not.toHaveBeenCalled()
-    ws = new Socket(); m.grant.mockResolvedValue({ ...share, superTabId: 'tab-1' })
-    await attachObserver(ws as never, user, { ...share, superTabId: 'tab-1' } as never)
-    expect(m.swarm).toHaveBeenCalledWith('tab-1', expect.any(Function))
-    // The share moved to another Swarm: its changes are the ones heard from now on.
-    m.grant.mockResolvedValue({ ...share, superTabId: 'tab-2' }); changed(); await flush()
-    expect(m.swarm).toHaveBeenLastCalledWith('tab-2', expect.any(Function))
-    expect(disposeSwarm).toHaveBeenCalledTimes(1)
-    m.grant.mockResolvedValue(null); swarmChanged(); await flush()
-    expect(ws.close).toHaveBeenCalledWith(4403, expect.any(String))
-    expect(disposeSwarm).toHaveBeenCalledTimes(2)
-    // A share taken out of its Swarm stops listening to it.
-    ws = new Socket(); m.grant.mockResolvedValue(share)
-    await attachObserver(ws as never, user, { ...share, superTabId: 'tab-1' } as never)
-    expect(disposeSwarm).toHaveBeenCalledTimes(3)
-    // A socket that closes while subscribing keeps no subscription.
-    ws = new Socket(); let subscribed!: () => void
-    m.swarm.mockImplementationOnce(() => new Promise(resolve => { subscribed = () => resolve(disposeSwarm) }))
-    const pending = attachObserver(ws as never, user, { ...share, superTabId: 'tab-1' } as never); await flush()
-    ws.close(); subscribed(); await pending
-    expect(disposeSwarm).toHaveBeenCalledTimes(4)
   })
   it('database and owner outages are recoverable; admission rechecks race-safe authority', async () => {
     m.grant.mockResolvedValue(null); await attach()

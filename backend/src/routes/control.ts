@@ -21,7 +21,7 @@ import { deskRoutes } from './desk.js'
 import { connectorRoutes } from './connectors.js'
 import { connectorVaultRoutes } from './connectorVault.js'
 import { agentMessagesRoutes } from './agentMessages.js'
-import { superTabRoutes } from './superTabs.js'
+import { goneRoutes } from './gone.js'
 import { zooRoutes } from './zoo.js'
 import { experimentalSettingsRoutes } from './experimentalSettings.js'
 import { deviceAuthRoutes } from './deviceAuth.js'
@@ -73,7 +73,7 @@ export async function registerControlRoutes(app: FastifyInstance, opts: {
   await app.register(connectorRoutes)     // sign-in to GitHub, Slack, Google… for local agents (lib/connectorGateway.ts)
   await app.register(connectorVaultRoutes) // those connections sealed for the account's computers, which keep them in step
   await app.register(agentMessagesRoutes)   // which tabs' harnesses may message each other (lib/agentMessages.ts)
-  await app.register(superTabRoutes)
+  await app.register(goneRoutes)          // what Harness took out (Swarms): a plain 410 for the clients still asking
   await app.register(experimentalSettingsRoutes, { daemons: opts.daemons })
   // Availability is separate from opt-in: every account starts off, and its collection is retained.
   await app.register(zooRoutes, { daemons: opts.daemons, requireAccountOptIn: true })

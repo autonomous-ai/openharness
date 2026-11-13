@@ -1,7 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { Prisma, type PrismaClient } from '@prisma/client'
 import { z } from 'zod'
-import { SuperTabStore } from '../superTabs/store.js'
 import { prisma, machineAlive } from '../lib/prisma.js'
 import { getAgentPresenceMany, publishDeviceMachineListChanged, publishShareChanged } from '../lib/bus.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
@@ -11,8 +10,8 @@ import type { AuthUser } from '../lib/ssoAuth.js'
 import { logger } from '../utils/logger.js'
 
 const params = z.object({ id: z.string().uuid() })
+// Strict: an older daemon's share for a Swarm names its `superTabId`, and is refused with a 400, which that daemon takes as final.
 const body = z.object({
-  superTabId: z.string().regex(/^[a-f0-9]{24}$/).nullable().optional(),
   machineId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/),
   agentId: z.string().min(1).max(160),
   recipientEmail: z.string().trim().toLowerCase().email().max(254),
@@ -35,7 +34,7 @@ const body = z.object({
  * Best effort — the invitation is already persisted, and an address with no account has nobody to tell.
  */
 /** How often at most a recipient's apps are told their shares changed (task #3925): told at once, then once more after a burst.
- *  A Swarm's agent restarts made a share per new agent for each member, and each told every app of theirs to read its shares
+ *  Agent restarts once made a share per new agent for each member, and each told every app of theirs to read its shares
  *  again: harness-shares became the backend's top database cost (Ken's scan, 11-06 16:20 VN). */
 export const SHARES_TOLD_MS = 10_000
 
@@ -79,12 +78,12 @@ export async function recipientShare(id: string, user: AuthUser, db: PrismaClien
     id, recipientEmail: user.email.trim().toLowerCase(), autonomousEnv: user.autonomousEnv,
     revokedAt: null, expiresAt: { gt: new Date() },
   } })
-  if (!share) return null
+  // A share an older daemon made for a Swarm opens nothing: Swarms are gone (lib/db/swarmDataRemoval.ts removes them).
+  if (!share || share.superTabId) return null
   const machine = await db.machine.findFirst({ where: {
     machineId: share.machineId, userId: share.ownerId, autonomousEnv: user.autonomousEnv, ...machineAlive,
   } })
   if (!machine || !machineBillingAllowsDataPlane(machine)) return null
-  if (!await new SuperTabStore(db).mayOpenShare(user, share)) return null
   return share
 }
 
@@ -95,8 +94,7 @@ export async function harnessShareRoutes(app: FastifyInstance): Promise<void> {
       recipientEmail: req.user!.email.trim().toLowerCase(), autonomousEnv: req.user!.autonomousEnv,
       revokedAt: null, expiresAt: { gt: new Date() },
     }, orderBy: { createdAt: 'asc' }, take: 1000 })
-    // All at once: share by share, each loaded its whole Swarm again (prod 2026-10-28, p95 13.4 s).
-    const visible = await new SuperTabStore(prisma).openableShares(req.user!, shares)
+    const visible = shares.filter(share => !share.superTabId)
     // Most people have no share: an empty list would scan all machines (`$or: []`, prod 2026-11-04).
     const machines = visible.length ? await prisma.machine.findMany({ where: {
       machineId: { in: [...new Set(visible.map(s => s.machineId))] },
@@ -136,7 +134,7 @@ export async function harnessShareRoutes(app: FastifyInstance): Promise<void> {
         || existing.agentId !== input.agentId || existing.recipientEmail !== input.recipientEmail)) {
         return sendError(reply, 'This invitation cannot be changed.', 'FORBIDDEN', 403)
       }
-      const data = { ...input, superTabId: input.superTabId ?? null, expiresAt: new Date(input.expiresAt), revokedAt: null,
+      const data = { ...input, expiresAt: new Date(input.expiresAt), revokedAt: null,
         ownerId: req.user!.sub, autonomousEnv: req.user!.autonomousEnv }
       try {
         await prisma.harnessShare.upsert({ where: { id: req.params.id },
@@ -154,7 +152,7 @@ export async function harnessShareRoutes(app: FastifyInstance): Promise<void> {
       // renewed every few seconds (diego@'s 0.4.55 dev build, 2026-10-26) poked every member's every app to re-read
       // its machines and shares three times a second, with the backend pinned at its CPU limit.
       if (!existing || existing.revokedAt != null || existing.name !== data.name || existing.engine !== data.engine
-        || (existing.superTabId ?? null) !== data.superTabId || existing.ownerPublicKey !== data.ownerPublicKey) {
+        || existing.ownerPublicKey !== data.ownerPublicKey) {
         await publishShareChanged(req.params.id)
         await tellRecipient(req.params.id, tellShareList)
       }

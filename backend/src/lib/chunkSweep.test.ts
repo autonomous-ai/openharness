@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { removeChunk, startChunkSweep } from './chunkSweep.js'
 
 const RANGE = { updatedAt: { $lt: { $date: '2026-05-08T00:00:00.000Z' } } }
-const CHUNK = { collection: 'SuperTabReadMark', filter: RANGE, sort: { updatedAt: 1 as const }, hint: 'read_mark_expiry', chunk: 3 }
+const CHUNK = { collection: 'product_usage_receipts', filter: RANGE, sort: { updatedAt: 1 as const }, hint: 'read_mark_expiry', chunk: 3 }
 
 /** A database whose find answers [found] ids, and whose delete removes as many as it is given; it records every command. */
 function database(found: string[], deleteAnswer?: (ids: string[]) => unknown) {
@@ -20,14 +20,14 @@ describe('removeChunk', () => {
   it('reads one bounded chunk of ids by the index it names, the whole chunk in one batch', async () => {
     const { db, commands } = database(['a', 'b', 'c'])
     await removeChunk(db, CHUNK)
-    expect(commands[0]).toEqual({ find: 'SuperTabReadMark', filter: RANGE, projection: { _id: 1 }, sort: { updatedAt: 1 }, hint: 'read_mark_expiry',
+    expect(commands[0]).toEqual({ find: 'product_usage_receipts', filter: RANGE, projection: { _id: 1 }, sort: { updatedAt: 1 }, hint: 'read_mark_expiry',
       limit: 3, batchSize: 3, singleBatch: true })
   })
 
   it('removes exactly those ids by _id, their range checked again so one moved since the read stays', async () => {
     const { db, commands } = database(['a', 'b', 'c'], () => ({ n: 2 }))
     await expect(removeChunk(db, CHUNK)).resolves.toBe(2)
-    expect(commands[1]).toEqual({ delete: 'SuperTabReadMark', deletes: [{ q: { _id: { $in: ['a', 'b', 'c'] }, ...RANGE }, limit: 0, hint: { _id: 1 } }] })
+    expect(commands[1]).toEqual({ delete: 'product_usage_receipts', deletes: [{ q: { _id: { $in: ['a', 'b', 'c'] }, ...RANGE }, limit: 0, hint: { _id: 1 } }] })
   })
 
   it('sends no delete when nothing is past the range', async () => {
@@ -38,7 +38,7 @@ describe('removeChunk', () => {
 
   it('fails when the database refuses a removal', async () => {
     const { db } = database(['a'], () => ({ n: 0, writeErrors: [{ code: 2 }] }))
-    await expect(removeChunk(db, CHUNK)).rejects.toThrow('The database refused some removals from SuperTabReadMark')
+    await expect(removeChunk(db, CHUNK)).rejects.toThrow('The database refused some removals from product_usage_receipts')
   })
 })
 
