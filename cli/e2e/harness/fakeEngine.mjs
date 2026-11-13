@@ -65,6 +65,9 @@
 // Run `fg` to bring Claude Code back."; Codex 0.160: "`ctrl-z` is reserved for suspending the terminal
 // on Unix"): it gives the terminal back and stops its whole process group with SIGTSTP. Continued from
 // that stop it takes the terminal again; continued from any stop it repaints, and nothing more.
+// It notes that stop, and the continue that ends it, in `suspends` under the test's root, each with its
+// pid: the proof a test has of a Ctrl+Z, as Codex prints nothing and bash 5.3 keeps its "Stopped" notice
+// for a prompt an agent's pane never reaches (#1612, suspend.e2e.ts).
 //
 // Codex runs as npm installs it: a Node wrapper, the command the pane starts, with the engine as its
 // child in the same process group and terminal (`codexWrapper`).
@@ -1701,18 +1704,26 @@ export async function run(engine, config = {}, { native = false } = {}) {
     pastes.clear()
     return text
   }
+  const noteSuspend = (what) => {
+    if (!config.root) return
+    try { appendFileSync(join(config.root, 'suspends'), `${what} ${process.pid}\n`) } catch { /* a note, never a failure */ }
+  }
   // Ctrl+Z, as the real CLIs do it: give the terminal back, and stop the whole process group (the
   // npm Codex's wrapper with it) once the terminal is restored; in raw mode the terminal sends no
   // SIGTSTP of its own. Raw mode comes back only from this stop: Claude Code arms a one-time SIGCONT
   // handler here, Codex takes the terminal again when its stop returns.
+  // Both are noted for the test: `stopped` before the SIGTSTP, as nothing runs between it and the
+  // continue, and `continued` from this stop's own handler alone, which only a `fg` reaches.
   const suspend = () => {
     process.stdout.write('\x1b[?2004l')
     if (engine === 'claude') process.stdout.write('\r\nClaude Code has been suspended. Run `fg` to bring Claude Code back.\r\n')
     process.stdin.setRawMode?.(false)
     process.once('SIGCONT', () => {
+      noteSuspend('continued')
       process.stdin.setRawMode?.(true)
       process.stdout.write('\x1b[?2004h')
     })
+    noteSuspend('stopped')
     process.kill(0, 'SIGTSTP')
   }
   // Continued, whoever stopped it, the renderer repaints, and that is all: after a stop from outside
