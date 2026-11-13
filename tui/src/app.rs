@@ -5977,10 +5977,7 @@ impl App {
             // restarts it, and a shell asked for meanwhile went to hn's own local shells
             // (`shell_machine`) — OpenCode then ran where no phone or desktop could see it.
             let daemon_ready = self.link(&self.fleet.local_id).is_some() && !self.daemon_down;
-            // Set up from a phone with Swarm on: no welcome, and so no OpenCode of its own; the Swarm's Buddy is its
-            // first work. Its first use is over as with work of its own.
-            let for_swarm = self.os_first_use && !self.os_live && crate::os_welcome::set_up_for_swarm();
-            if (self.os_live || self.os_first_use) && !for_swarm && self.tabs.len() == 1 && self.tabs[0].root.is_none() {
+            if (self.os_live || self.os_first_use) && self.tabs.len() == 1 && self.tabs[0].root.is_none() {
                 if !daemon_ready { return }
                 self.shell_asked = true;
                 // The welcome reply may arrive after another terminal is requested.
@@ -5989,7 +5986,7 @@ impl App {
                 crate::input::new_shell_from(self, None, Placement::Fill(tab), None, Some("/usr/bin/hn-os welcome".into()));
             } else if (self.os_live || self.os_first_use) && crate::os_welcome::welcome_waits_on_wifi(self) {
                 // Asked again every tick until the Wi-Fi form gives the tab back.
-            } else if self.os_first_use && !self.os_live && !own_work && !for_swarm {
+            } else if self.os_first_use && !self.os_live && !own_work {
                 // Only other computers' tabs on the desk: the welcome still comes, in a tab of its own.
                 if !daemon_ready { return }
                 self.shell_asked = true;
@@ -6000,7 +5997,7 @@ impl App {
                 // after setting this computer up — so it opens on that instead of a welcome with
                 // an OpenCode of its own. Its first use is over all the same: the welcome is what
                 // marks that (onboarding.py), and without the mark every boot is a first one.
-                if self.os_first_use && !self.os_live && (own_work || for_swarm) {
+                if self.os_first_use && !self.os_live && own_work {
                     self.os_first_use = false;
                     // Not from a test: it would mark the developer's own home.
                     if let Some(home) = std::env::var_os("HOME").filter(|_| !cfg!(test)) {
