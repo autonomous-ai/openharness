@@ -7,6 +7,13 @@
  * it, and an agent's pane has no prompt to type `fg` into; the launch script now continues the engine
  * itself (engineLaunch.ts, STOP_PROOF_FUNCTIONS).
  *
+ * The Ctrl+Z is proved by the fake engine's own note (fakeEngine.mjs `suspend`): `stopped` before it stops
+ * its process group, `continued` when a SIGCONT brings it back from that stop, and only the launch script's
+ * `fg` sends that SIGCONT, as tmux continues the pane's own process alone. Not by the shell's "Stopped"
+ * notice: bash 5.3 holds it back until its next prompt, which an agent's pane never reaches, and Codex
+ * prints nothing of its own, so Codex under bash 5.3 timed out here on the Linux runner while its engine
+ * had stopped and been continued (#1612).
+ *
  * So the agent stays: the same conversation in the same engine process, working once it is back, with
  * nothing restarted. And its real exit still ends it the usual way: the pane, marked with the engine's
  * status, is a shell. So does a death by SIGINT or SIGQUIT, which zsh took for an interrupt of the whole
@@ -78,6 +85,11 @@ async function lineMode(d: IsolatedDaemon, pane: string): Promise<boolean> {
 const processState = (pid: number): string => {
   try { return execFileSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' }).trim() } catch { return '' }
 }
+/** What the fake engine noted of its Ctrl+Z (fakeEngine.mjs `suspend`), a line each: `stopped <pid>` before
+ *  it stops its process group, `continued <pid>` once a SIGCONT has brought it back from that stop. */
+const suspends = (d: IsolatedDaemon): string[] => {
+  try { return readFileSync(join(d.root, 'suspends'), 'utf8').split('\n').filter(Boolean) } catch { return [] }
+}
 
 describe('an engine that is stopped, or killed', () => {
   let daemon: IsolatedDaemon | undefined
@@ -116,14 +128,22 @@ describe('an engine that is stopped, or killed', () => {
         expect(d.coresStarted(), how).toBe(1)
       }
 
-      // Ctrl+Z, typed into the pane. The engine gives the terminal back and stops itself; Claude Code
-      // says so, and the shell reports the stopped job. Read from everything the pane writes from here on,
-      // not its screen: the engine repaints its composer over those lines the moment it is back.
+      // Ctrl+Z, typed into the pane. The engine gives the terminal back and stops itself, and the launch
+      // script continues it within milliseconds: too short a stop to catch in the process table, and the
+      // shell's notice of it is no proof (bash 5.3 holds it back, #1612). The engine's own note is: it
+      // stopped, then was continued, and it is this pane's engine, for Codex the one below npm's wrapper,
+      // which reads the key. The comparison throws until it holds, so a timeout says what was noted.
+      const self = await until(`the ${engine} engine itself`, () => enginePid(d, root, engine, engine === 'codex'), 10_000, 200)
+      // Claude Code says it is suspended. Read from everything the pane writes from here on, not its
+      // screen: the engine repaints its composer over that line the moment it is back.
       const written = join(d.root, `pane-${engine}.out`)
       await d.tmux.run('pipe-pane', '-t', pane, '-o', `cat >> '${written}'`)
       const output = () => { try { return readFileSync(written, 'utf8') } catch { return '' } }
       await d.tmux.run('send-keys', '-t', pane, 'C-z')
-      await until('the engine to suspend itself', () => /suspended|stopped/i.test(output()) || null, 15_000, 100)
+      await until('the engine to stop itself and the launch script to continue it', () => {
+        expect(suspends(d)).toEqual([`stopped ${self}`, `continued ${self}`])
+        return true
+      }, 15_000, 100)
       if (engine === 'claude') await until('Claude Code to say so', () => output().includes('Claude Code has been suspended') || null, 5_000, 100)
       await back('Ctrl+Z')
 
