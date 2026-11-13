@@ -966,6 +966,43 @@ export const EXPERIMENTS: Readonly<Record<string, { requests: readonly string[];
   cloud: { requests: CLOUD_REQUESTS, state: ['cloud/harnesses.json'] },
 }
 
+/** A share's and a link's id (`randomUUID`, sharing/grants.ts, sharing/collaboration.ts). */
+const SHARE_ID = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
+/**
+ * The backend routes each experiment in its process may call through the core's sign-in (`backend`,
+ * core/experimentQueries.ts), by method and whole path, and no others. Its process holds no credential: the core signs
+ * each call, so a route left open here is a route any code in that process could call as the account. Until the audit
+ * of 2026-11-12 every path under `/api/` was signed for all six, so the Swarm's process, which reads GitHub text and
+ * other accounts' messages, could have read the account's device keys or the vault of its connected services.
+ * - The Swarm: its own API, all of it, by GET and POST: what its service calls and what an app asks through it, which it
+ *   holds to the same shape (superTabs/service.ts `backend`). And whether the server takes the sign-in again
+ *   (superTabs/host.ts).
+ * - Share: a grant's and a link's publication and removal (sharing/owner.ts).
+ * - The router: Jev's hosted decision (lib/jev/jevClient.ts).
+ * - The orchestrator, Memories and cloud agents call none.
+ * A path is whole segments, each as the Swarm makes an id (superTabs/wire.ts `identifier`): none empty, no `.` or `%`,
+ * so none climbs out of its API (`..`) or hides a separator; a query, where one is used, is printable and names no
+ * fragment. A new experiment declares its routes here, if only `[]` (core/experimentQueries.spec.ts).
+ */
+export const EXPERIMENT_BACKEND_ROUTES: Readonly<Record<string, ReadonlyArray<{ methods: readonly string[]; path: RegExp }>>> = {
+  superTabs: [
+    { methods: ['GET', 'POST'], path: /^\/api\/super-tabs(?:\/[A-Za-z0-9_-]{1,160})*(?:\?[!-"$-~]*)?$/ },
+    { methods: ['GET'], path: /^\/api\/auth\/me$/ },
+  ],
+  sharing: [
+    { methods: ['PUT', 'DELETE'], path: new RegExp(`^/api/harness-shares/${SHARE_ID}$`) },
+    { methods: ['PUT', 'DELETE'], path: new RegExp(`^/api/harness-links/${SHARE_ID}$`) },
+  ],
+  router: [{ methods: ['POST'], path: /^\/api\/route\/jev$/ }],
+  orchestrator: [],
+  memory: [],
+  cloud: [],
+}
+/** Whether [service], an experiment in its process, may make this backend call (`EXPERIMENT_BACKEND_ROUTES`). */
+export const experimentBackendAllowed = (service: string, method: unknown, path: unknown): boolean =>
+  typeof method === 'string' && typeof path === 'string'
+  && (EXPERIMENT_BACKEND_ROUTES[service] ?? []).some((route) => route.methods.includes(method) && route.path.test(path))
+
 /** The services that may write turns into agents from a process of their own (core/deliveries.ts): the experiments,
  *  Agent Messages, which left them for the edge host and still types a message into an idle agent, and the agent
  *  browser, which types its two lines into an agent when its person starts and stops its browser. No other process

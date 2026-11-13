@@ -17,8 +17,8 @@
  * - `stop_turn`: stop an agent's turn;
  * - `windows`: a change notice for every window on this computer (`orchestrator_changed`);
  * - `daemon`: how an agent's shell reaches this daemon, for the prompts the experiment writes;
- * - `backend`: a read or write of the account's backend under `/api/`, signed in by the core, which holds the
- *   sign-in (Share's links);
+ * - `backend`: a read or write of the account's backend, signed in by the core, which holds the sign-in: only on the
+ *   routes its service declared (core/api.ts `EXPERIMENT_BACKEND_ROUTES`: the Swarm's own API, Share's links, Jev's decision);
  * - `observer_key`: this machine's public key, or its signature on a welcome to one observer of one share, by
  *   the gateway, which holds the identity (Share's owner);
  * - `observer_send`: a frame Share sealed for one of its observers, to the relay through the gateway;
@@ -41,14 +41,13 @@
  * answered by its own link, for what it uses alone (core/messagesLink.ts).
  */
 import type { BackendSocket } from '../backendSocket.js'
-import type { AgentCreateRequest, CoreApi } from './api.js'
+import { experimentBackendAllowed, type AgentCreateRequest, type CoreApi } from './api.js'
 import { creationObservation } from '../lib/creationObservation.js'
 
 type Payload = Record<string, unknown>
 type Core = Pick<CoreApi, 'agents' | 'turns' | 'clients' | 'daemon' | 'account' | 'cloud' | 'superTabs' | 'transcripts'>
 
 const QUERIES: ReadonlySet<string> = new Set(['shown', 'activity', 'last_turn', 'turn_answer', 'close_swarm', 'keep_lead_alive', 'close_member', 'stopped', 'gone', 'creation_status', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account', 'cloud_publish', 'cloud_ask', 'cloud_unask', 'super_tab_attention', 'super_tab_cards', 'super_tab_card_recap', 'super_tab_observers', 'super_tab_screen', 'super_tab_input', 'super_tab_input_if_screen'])
-const METHODS: ReadonlySet<string> = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 
 /** The live agents as the apps are shown them (`shown`): each with its name, whether its terminal is there and
@@ -168,10 +167,12 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
       core.clients.windows({ type: text(frame.type), payload: frame.payload as Payload })
       return {}
     }
+    // Only the routes its service declared, by method and whole path (core/api.ts `EXPERIMENT_BACKEND_ROUTES`): the core
+    // signs the call, so any other would be this account's to whatever code runs in that process.
     case 'backend': {
-      const method = text(payload.method), path = text(payload.path)
-      if (!METHODS.has(method) || !path.startsWith('/api/')) return { error: 'INVALID_REQUEST' }
-      return { ...await core.account.backend(method, path, payload.body) }
+      const { method, path } = payload
+      if (!experimentBackendAllowed(service, method, path)) return { error: 'ROUTE_NOT_DECLARED' }
+      return { ...await core.account.backend(method as string, path as string, payload.body) }
     }
     case 'observer_key':
       try {
