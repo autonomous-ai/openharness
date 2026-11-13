@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:harness/shared/theme/app_icons.dart';
@@ -85,25 +84,12 @@ class AppMenuItem extends StatefulWidget {
     this.detail,
     this.leading,
     this.trailing,
-    this.state,
-    this.stateFailed = false,
     this.focusNode,
     this.metrics = AppMenuRowMetrics.compact,
     this.textStyle,
     this.leadingSlot,
     this.autofocus = false,
-    this.closesMenu = true,
-    this.highlighted = false,
   });
-
-  /// Inside an [AppDropdown], close the whole dropdown — through any
-  /// [AppSubmenuItem] above it — before [onPressed] runs. Off for the row that
-  /// opens a submenu, which stays open.
-  final bool closesMenu;
-
-  /// Draw the row as if the pointer were on it: a submenu row while its submenu
-  /// is open and the pointer has moved into it.
-  final bool highlighted;
 
   /// Take focus as the panel opens — the current choice in a picker, so the
   /// arrow keys start from it.
@@ -134,15 +120,6 @@ class AppMenuItem extends StatefulWidget {
   /// meeting it for the first time, and there is nowhere else in a menu row to
   /// put the sentence.
   final Widget? trailing;
-
-  /// A word of state at the row's far end, for a list whose rows each stand somewhere: `fails`, `not run`.
-  ///
-  /// Caption size and faint, or the error ink when [stateFailed]. The row draws it itself, where a [trailing] widget
-  /// keeps its own colours: red on the active row's blue cannot be read, so there it takes the row's detail ink.
-  final String? state;
-
-  /// Whether [state] says something failed.
-  final bool stateFailed;
   final FocusNode? focusNode;
 
   /// A quiet SECOND LINE under the label, for a row whose label alone does not
@@ -215,9 +192,6 @@ class AppMenuItem extends StatefulWidget {
       if (row.note case final note?) {
         text += 8 + line(note, AppType.body());
       }
-      if (row.state case final state?) {
-        text += 8 + line(state, AppType.caption());
-      }
       widest = math.max(widest, text);
     }
     final metrics = list.first.metrics;
@@ -244,7 +218,7 @@ class _AppMenuItemState extends State<AppMenuItem> {
 
   VoidCallback? get _onTap {
     final action = widget.onPressed;
-    if (action == null || !widget.closesMenu) return action;
+    if (action == null) return action;
     final root = _AppMenuRoot.maybeOf(context);
     if (root == null) return action;
     return () {
@@ -265,7 +239,7 @@ class _AppMenuItemState extends State<AppMenuItem> {
     AppTheme.watch(context);
     final error = Theme.of(context).colorScheme.error;
     final enabled = widget.onPressed != null;
-    final active = enabled && (_hovered || _focused || widget.highlighted);
+    final active = enabled && (_hovered || _focused);
     final tint = active
         ? AppDesktop.onSelection
         : !enabled
@@ -407,21 +381,6 @@ class _AppMenuItemState extends State<AppMenuItem> {
                   const SizedBox(width: 8),
                   widget.trailing!,
                 ],
-                if (widget.state case final state?) ...[
-                  const SizedBox(width: 8),
-                  Text(
-                    state,
-                    maxLines: 1,
-                    style: AppType.caption(
-                      color: active
-                          ? AppDesktop.selectionDetail
-                          : widget.stateFailed
-                          ? error
-                          : AppPalette.textFaint,
-                      height: 1.35,
-                    ),
-                  ),
-                ],
                 if (widget.selected) ...[
                   const SizedBox(width: 12),
                   Icon(
@@ -516,8 +475,7 @@ class AppMenuSearchField extends StatelessWidget {
 /// marks missed each other.
 ///
 /// Past [searchAfter] rows the panel opens on a search field, matching a row's
-/// label, detail, note and state word. Headings and dividers step aside during
-/// a search.
+/// label, detail and note. Headings and dividers step aside during a search.
 ///
 /// [AppMenuItem] rows close the whole dropdown before they act. Anything else
 /// among [children] (a heading, an [AppMenuDivider]) is drawn as it is.
@@ -528,8 +486,6 @@ class AppDropdown extends StatefulWidget {
     this.controller,
     this.width = defaultWidth,
     this.maxHeight = 480,
-    this.style,
-    this.alignment,
     this.alignmentOffset = const Offset(0, AppControl.menuGap),
     this.childFocusNode,
     this.consumeOutsideTap = true,
@@ -557,12 +513,9 @@ class AppDropdown extends StatefulWidget {
   /// panel with a [header], a search, or anything but rows and dividers among
   /// [children] is this wide.
   final double width;
-  final double maxHeight;
 
-  /// The panel's style before placement; [AppMenu.style] at [maxHeight] when
-  /// null.
-  final MenuStyle? style;
-  final AlignmentGeometry? alignment;
+  /// The panel's tallest: it is [AppMenu.style] at this height.
+  final double maxHeight;
   final Offset alignmentOffset;
   final FocusNode? childFocusNode;
   final bool consumeOutsideTap;
@@ -660,15 +613,11 @@ class _AppDropdownState extends State<AppDropdown> {
   /// the menu can take focus there and hear Escape. A click opens a menu without
   /// moving focus into it, and the menu's own Escape only hears the key from
   /// inside the menu. A caller that brings its own [AppDropdown.childFocusNode]
-  /// has this already, and a submenu does not move focus at all.
+  /// has this already.
   final _anchor = FocusNode(
     debugLabel: 'Dropdown control',
     skipTraversal: true,
   );
-
-  /// Whether this dropdown sits in another one's panel: a submenu, which opens
-  /// on a pointer's passing and leaves focus where it is.
-  var _nested = false;
 
   /// Where focus was when the menu opened, given back when a pick or a click
   /// away closes it, so typing goes on where it was.
@@ -681,7 +630,6 @@ class _AppDropdownState extends State<AppDropdown> {
   var _escapeDown = false;
   final _searchFocus = FocusNode(debugLabel: 'Dropdown search');
   final _searchText = TextEditingController();
-  final _pointer = _AppMenuPointer();
   String _query = '';
 
   MenuController get _controller =>
@@ -689,7 +637,6 @@ class _AppDropdownState extends State<AppDropdown> {
 
   @override
   void dispose() {
-    _pointer.dispose();
     _anchor.dispose();
     _searchFocus.dispose();
     _searchText.dispose();
@@ -720,8 +667,7 @@ class _AppDropdownState extends State<AppDropdown> {
   bool _matches(AppMenuItem row, String needle) =>
       row.label.toLowerCase().contains(needle) ||
       (row.detail?.toLowerCase().contains(needle) ?? false) ||
-      (row.note?.toLowerCase().contains(needle) ?? false) ||
-      (row.state?.toLowerCase().contains(needle) ?? false);
+      (row.note?.toLowerCase().contains(needle) ?? false);
 
   List<AppMenuItem> get _rows => [
     for (final child in widget.children) ?_rowIn(child),
@@ -811,7 +757,7 @@ class _AppDropdownState extends State<AppDropdown> {
           .where((row) => row.onPressed != null && _matches(row, needle))
           .firstOrNull;
       if (first != null) {
-        _rootOf(context).close();
+        _controller.close();
         first.onPressed!();
       }
       return KeyEventResult.handled;
@@ -823,14 +769,9 @@ class _AppDropdownState extends State<AppDropdown> {
     return KeyEventResult.ignored;
   }
 
-  MenuController _rootOf(BuildContext context) =>
-      _AppMenuRoot.maybeOf(context) ?? _controller;
-
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
-    final root = _rootOf(context);
-    _nested = _AppMenuRoot.maybeOf(context) != null;
     final needle = _query.toLowerCase();
     final searching = _searching;
     final glyphs = _rows.any((row) => row.icon != null || row.leading != null);
@@ -841,19 +782,16 @@ class _AppDropdownState extends State<AppDropdown> {
               if (_rowIn(child) case final row? when _matches(row, needle))
                 child,
           ];
-    final base = widget.style ?? AppMenu.style(maxHeight: widget.maxHeight);
     final width = _panelWidth(context);
     return MenuAnchor(
       controller: _controller,
       childFocusNode: widget.childFocusNode,
       consumeOutsideTap: widget.consumeOutsideTap,
       alignmentOffset: widget.alignmentOffset,
-      style: widget.alignment == null
-          ? base
-          : base.copyWith(alignment: widget.alignment),
+      style: AppMenu.style(maxHeight: widget.maxHeight),
       onOpen: () {
         _escaped = false;
-        if (widget.childFocusNode == null && !_nested) _takeFocus();
+        if (widget.childFocusNode == null) _takeFocus();
         if (_searching) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (mounted && _controller.isOpen) _searchFocus.requestFocus();
@@ -897,22 +835,13 @@ class _AppDropdownState extends State<AppDropdown> {
               ),
             ),
           ),
-        for (final (index, child) in shown.indexed)
+        for (final child in shown)
           SizedBox(
             width: width,
-            // The pointer arriving on a row tells the submenu row beside it to
-            // let go ([AppSubmenuItem]).
-            child: MouseRegion(
-              onEnter: (_) => _pointer.enter(index),
-              child: _AppMenuRow(
-                index: index,
-                pointer: _pointer,
-                child: _AppMenuRoot(
-                  controller: root,
-                  glyphs: glyphs,
-                  child: child,
-                ),
-              ),
+            child: _AppMenuRoot(
+              controller: _controller,
+              glyphs: glyphs,
+              child: child,
             ),
           ),
       ],
@@ -932,196 +861,7 @@ class _AppDropdownState extends State<AppDropdown> {
   }
 }
 
-/// An [AppMenuItem] that opens its own [AppDropdown] beside its panel.
-///
-/// The app's one submenu. Pointing at the row opens it, a click toggles it. It
-/// is placed from the row's measured edge, [gap] clear of the panel, with its
-/// first row level with this one; [MenuAnchor] flips it when the window has no
-/// room.
-class AppSubmenuItem extends StatefulWidget {
-  const AppSubmenuItem({
-    super.key,
-    this.itemKey,
-    required this.label,
-    required this.menuChildren,
-    this.controller,
-    this.icon,
-    this.trailing,
-    this.leadingSlot,
-    this.focusNode,
-    this.style,
-    this.width = AppDropdown.defaultWidth,
-    this.onOpen,
-    this.onClose,
-  });
-
-  /// The row's own key, for a caller that finds or taps the row itself.
-  final Key? itemKey;
-  final String label;
-  final List<Widget> menuChildren;
-
-  /// The row's focus, for a caller that moves the keys to it.
-  final FocusNode? focusNode;
-
-  /// Supplied when the caller coordinates several submenus (closes the others
-  /// in [onOpen]); otherwise the item keeps its own.
-  final MenuController? controller;
-  final IconData? icon;
-  final Widget? trailing;
-  final bool? leadingSlot;
-
-  /// The submenu panel's style before placement; [AppMenu.style] by default.
-  final MenuStyle? style;
-  final double width;
-  final VoidCallback? onOpen;
-  final VoidCallback? onClose;
-
-  /// The air between the two panels' rims.
-  static const double gap = 2;
-
-  @override
-  State<AppSubmenuItem> createState() => _AppSubmenuItemState();
-}
-
-class _AppSubmenuItemState extends State<AppSubmenuItem> {
-  /// How long a sibling row may hold the pointer before the submenu lets go:
-  /// the time a hand needs to cut a corner on its way into the submenu, as
-  /// macOS and Slack allow.
-  static const _grace = Duration(milliseconds: 120);
-
-  MenuController? _own;
-  bool _open = false;
-  Timer? _letGo;
-  _AppMenuRow? _row;
-
-  MenuController get _controller =>
-      widget.controller ?? (_own ??= MenuController());
-
-  /// A cancelled [Timer] stays in the field: clear it, or the `??=` below
-  /// would never start another.
-  void _keepOpen() {
-    _letGo?.cancel();
-    _letGo = null;
-  }
-
-  void _openMenu() {
-    _keepOpen();
-    if (!_controller.isOpen) _controller.open();
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final row = _AppMenuRow.maybeOf(context);
-    if (row?.pointer == _row?.pointer) {
-      _row = row;
-      return;
-    }
-    _row?.pointer.removeListener(_pointerMoved);
-    row?.pointer.addListener(_pointerMoved);
-    _row = row;
-  }
-
-  @override
-  void dispose() {
-    _keepOpen();
-    _row?.pointer.removeListener(_pointerMoved);
-    super.dispose();
-  }
-
-  /// The pointer arrived on a row of the panel. On this row it stays; on
-  /// another, the submenu closes unless the pointer reaches it first.
-  void _pointerMoved() {
-    final row = _row;
-    if (row == null) return;
-    if (row.pointer.row == row.index) {
-      _keepOpen();
-      return;
-    }
-    if (!_controller.isOpen) return;
-    _letGo ??= Timer(_grace, () {
-      _letGo = null;
-      if (mounted && _controller.isOpen) _controller.close();
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AppDropdown(
-      controller: _controller,
-      style: widget.style,
-      width: widget.width,
-      consumeOutsideTap: false,
-      alignment: AlignmentDirectional.topEnd,
-      alignmentOffset: Offset(AppSubmenuItem.gap, -AppMenu.panelPadding.top),
-      onOpen: () {
-        setState(() => _open = true);
-        widget.onOpen?.call();
-      },
-      onClose: () {
-        _keepOpen();
-        if (mounted) setState(() => _open = false);
-        widget.onClose?.call();
-      },
-      children: [
-        // Reaching the submenu ends the grace.
-        // Rows only: AppDropdown sizes its panel from a list of rows and
-        // dividers it can see through, and a divider is not a place to rest.
-        for (final child in widget.menuChildren)
-          child is AppMenuDivider
-              ? child
-              : MouseRegion(onEnter: (_) => _keepOpen(), child: child),
-      ],
-      child: MouseRegion(
-        onHover: (_) => _openMenu(),
-        child: AppMenuItem(
-          key: widget.itemKey,
-          focusNode: widget.focusNode,
-          icon: widget.icon,
-          label: widget.label,
-          trailing: widget.trailing,
-          leadingSlot: widget.leadingSlot,
-          highlighted: _open,
-          closesMenu: false,
-          onPressed: () =>
-              _controller.isOpen ? _controller.close() : _controller.open(),
-        ),
-      ),
-    );
-  }
-}
-
-/// Which row of a panel the pointer last arrived on.
-class _AppMenuPointer extends ChangeNotifier {
-  int? row;
-
-  void enter(int index) {
-    row = index;
-    notifyListeners();
-  }
-}
-
-/// A row's place in its panel, handed down so a submenu row can tell when the
-/// pointer is on a sibling.
-class _AppMenuRow extends InheritedWidget {
-  const _AppMenuRow({
-    required this.index,
-    required this.pointer,
-    required super.child,
-  });
-
-  final int index;
-  final _AppMenuPointer pointer;
-
-  static _AppMenuRow? maybeOf(BuildContext context) =>
-      context.dependOnInheritedWidgetOfExactType<_AppMenuRow>();
-
-  @override
-  bool updateShouldNotify(_AppMenuRow old) =>
-      index != old.index || pointer != old.pointer;
-}
-
-/// The top menu of an [AppDropdown] chain, handed down to its rows.
+/// The [AppDropdown] a row is in, handed down to its rows.
 class _AppMenuRoot extends InheritedWidget {
   const _AppMenuRoot({
     required this.controller,

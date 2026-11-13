@@ -1,6 +1,4 @@
 import '../notify/alert_sounds.dart';
-import '../super_tabs/my_agents.dart';
-import '../super_tabs/swarm_name.dart';
 import 'app_state.dart';
 import 'harness_activity.dart';
 import 'harness_sessions.dart';
@@ -193,40 +191,4 @@ void clearStatusMenuNotifications(AppNotifier app, List receipts) {
       readToken: receipt['readToken'] as String?,
     );
   }
-}
-
-/// The menu bar's Swarm section: in each open Swarm tab, the reader's agents that ask them, each one's 1:1 chat with
-/// something new for them by its read marks ([superTabAgentsAsking]), under the agent's name as Your Team shows it, with
-/// its newest unread words there when they are held. None from a Swarm it lost, none signed out. Choosing one opens
-/// that chat there (`SuperTabController.openNotice`).
-List<Map<String, Object?>> statusMenuSwarmEntries(AppNotifier app) {
-  if (app.currentUser == null) return [];
-  final needs = nativeActivityPayload(HarnessActivity.needsInput);
-  final rows = <Map<String, Object?>>[];
-  for (final id in {for (final tab in app.swarms) ?tab.superTabId}) {
-    final controller = app.superTabs.peek(id);
-    final snapshot = controller?.snapshot;
-    if (controller == null || snapshot == null) continue;
-    for (final (agent, chat) in superTabAgentsAsking(controller)) {
-      // Only words not read yet: an older message held here is not what asks.
-      final read = controller.readMark(chat.id);
-      final said = controller
-          .messages(chat.id)
-          .where((m) => m.fromAgent && m.inMainStream && m.sequence > read)
-          .lastOrNull;
-      rows.add({
-        'swarmTabId': id,
-        'kind': 'chat',
-        'id': chat.id,
-        'title': snapshot.agentName(agent.id, fallback: agent.name),
-        'message': statusMenuMessage(said?.text ?? ''),
-        'unread': true,
-        'activity': needs,
-        'tabName': swarmShownName(app, id, snapshot.name),
-        'detail': '',
-        'receivedAt': said?.createdAt?.millisecondsSinceEpoch,
-      });
-    }
-  }
-  return rows;
 }

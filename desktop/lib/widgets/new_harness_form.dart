@@ -20,16 +20,12 @@ import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../state/new_harness.dart';
 import '../state/device_form.dart';
-import '../state/lead_placement.dart';
-import '../super_tabs/identity.dart' show SuperTabAvatar;
-import '../super_tabs/project_visibility.dart';
 import 'box_chrome.dart' show kTerminalCornerRadius, terminalPaneBorder;
 import 'dsh_install_panel.dart' show describeInstallFailure;
 import 'desktop_chrome.dart';
 import 'finger_target.dart';
 import 'new_harness_attachments.dart';
 import 'new_harness_paste.dart';
-import 'new_repository_dialog.dart';
 import 'engine_identity.dart';
 
 /// Desktop composer and legacy terminal launch form sharing the same draft.
@@ -89,11 +85,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   final _taskFocus = FocusNode(debugLabel: 'New harness task');
   final _headerMachineMenu = MenuController();
   final _headerMachineFocus = FocusNode(debugLabel: 'New harness computer');
-  final _leadRowFocus = <String, FocusNode>{};
   final _headerMachineAnchor = GlobalKey();
   bool get _desktopStartEnabled =>
       !box.busy &&
-      box.leadBlocked == null &&
       !box.linkingProfile &&
       box.requiredChoice == null &&
       !box.taskTooLong;
@@ -157,14 +151,12 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     super.initState();
     _observedField = box.field;
     box.addListener(_onBox);
-    box.onNewRepository = _openNewRepository;
     widget.devicePort?.attach(_deviceSnapshot, _deviceAction);
     // The pane colours can change under an open dialog; it wears them too.
     terminalThemeStore.addListener(_onBox);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       box.useDesktopChoices(widget.desktop);
-      _startOnLastMachine();
       if (box.checking) _row = _Row.start;
       _syncField();
       // Restoring the successful agent can replace an unfocusable Terminal
@@ -202,25 +194,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     });
   }
 
-  /// New Repository's prompt (task #3374), from Choose repo.
-  Future<void> _openNewRepository() async {
-    final integration = box.integration;
-    final check = integration?.checkRepositoryOwner;
-    if (integration == null || check == null) return;
-    final ask = await showNewRepositoryDialog(
-      context,
-      owners: integration.newRepositoryOwners ?? const [],
-      check: check,
-      initial: box.project.newRepository,
-    );
-    if (!mounted || ask == null) return;
-    box.chooseNewRepository(ask);
-  }
-
   @override
   void dispose() {
     _heldFollow?.cancel();
-    if (box.onNewRepository == _openNewRepository) box.onNewRepository = null;
     widget.devicePort?.detach();
     box.removeListener(_onBox);
     terminalThemeStore.removeListener(_onBox);
@@ -229,9 +205,6 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     _taskText.dispose();
     _taskFocus.dispose();
     _headerMachineFocus.dispose();
-    for (final node in _leadRowFocus.values) {
-      node.dispose();
-    }
     _dialogScope.dispose();
     for (final node in _desktopFocus.values) {
       node.dispose();
@@ -422,8 +395,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     _Row.advanced => box.advancedOpen ? '[-]' : '[+]',
     _Row.project => box.launchProjectLabel,
     _Row.agent => box.launchAgentLabel,
-    // The Product Manager's own model, never one guessed from other agents.
-    _Row.model => box.placesLead ? box.leadModelLabel : box.modelLabel,
+    _Row.model => box.modelLabel,
     _Row.branch => box.branchRowLabel,
     _Row.worktree => box.worktree ? '[x]' : '[ ]',
     _Row.approvals => box.modeLabel,
@@ -813,7 +785,6 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     NewHarnessController.browseId,
     NewHarnessController.newProjectId,
     NewHarnessController.repositoryId,
-    NewHarnessController.newRepositoryId,
     NewHarnessController.existingProjectId,
     NewHarnessController.changeMachineId,
     NewHarnessController.linkProfileId,
@@ -861,12 +832,6 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     }
     if (option.id == NewHarnessController.browseId) {
       unawaited(_browse());
-      return;
-    }
-    if (option.id == NewHarnessController.newRepositoryId) {
-      box.focusField(NewHarnessField.launch);
-      if (widget.desktop) _closeDesktopChooser();
-      unawaited(_openNewRepository());
       return;
     }
     _chooseFolderMachine(option.id);
@@ -939,33 +904,6 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   /// ([NewHarnessController.useExistingFolder]).
   Future<void> _start({bool existingFolder = false}) async {
     if (box.busy) return;
-    bool? resendAttachments;
-    if (box.needsAttachmentReview) {
-      resendAttachments = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Check file delivery'),
-          content: const Text(
-            'The files and first message may already have reached the harness. Open it from Recent harnesses to check. Before sending again, clear any unfinished text in its terminal.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Already sent'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Send again'),
-            ),
-          ],
-        ),
-      );
-      if (!mounted || resendAttachments == null) return;
-    }
     _restoreChoiceFocus = false;
     if (box.requiredChoice case final choice?) {
       box.focusField(choice.field);
@@ -977,8 +915,8 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     }
     _checkingLaunch = box.checking;
     final outcome = existingFolder
-        ? await box.useExistingFolder(resendAttachments: resendAttachments)
-        : await box.create(resendAttachments: resendAttachments);
+        ? await box.useExistingFolder()
+        : await box.create();
     if (!mounted) return;
     switch (outcome) {
       case NewHarnessOutcome.created:
@@ -1716,7 +1654,6 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                                     _desktopTaskEditor(),
                                     const SizedBox(height: 6),
                                     _desktopSettings(),
-                                    if (box.placesLead) _desktopLeadBlocked(),
                                     if (box.requiredChoice
                                         case final required?) ...[
                                       const SizedBox(height: 14),
@@ -1740,35 +1677,6 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                                                     ?.message)) ...[
                                       const SizedBox(height: 12),
                                       _status(),
-                                    ],
-                                    if (box.repositoryWaiting) ...[
-                                      const SizedBox(height: 4),
-                                      TextButton(
-                                        key: const ValueKey(
-                                          'new-harness-check-repository',
-                                        ),
-                                        onPressed: () => box
-                                            .integration
-                                            ?.checkRepositoryAgain
-                                            ?.call(),
-                                        child: const Text('Check again'),
-                                      ),
-                                    ] else if (box.newRepositoryNote
-                                        case final note?
-                                        when !choosing &&
-                                            box.error == null &&
-                                            box.status == null) ...[
-                                      const SizedBox(height: 12),
-                                      Text(
-                                        note,
-                                        key: const ValueKey(
-                                          'new-harness-new-repository-note',
-                                        ),
-                                        style: DesktopChrome.text(
-                                          size: 12,
-                                          color: DesktopChrome.muted,
-                                        ),
-                                      ),
                                     ],
                                     if (box.taskTooLong ||
                                         !box.takesTask &&
@@ -1872,7 +1780,6 @@ class NewHarnessFormState extends State<NewHarnessForm> {
         .where((p) => p.isNotEmpty)
         .lastOrNull;
     // A guest starts in its workspace or a folder the owner shares (NewHarnessController.asGuest).
-    if (box.project.newRepository case final ask?) return '${ask.slug} · new';
     // Not its generated name (claude-2026-11-07-13-54): Start creates it.
     if (box.project.generated != null) return 'New folder';
     return box.asGuest
@@ -1928,31 +1835,6 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                   textSize: 13,
                   surfaceColor: DesktopChrome.surface,
                   onPressed: null,
-                ),
-              )
-            else if (box.placesLead)
-              _desktopField(
-                order: 2,
-                finger: phone,
-                anchor: _headerMachineAnchor,
-                child: _desktopLeadMachineAnchor(
-                  child: DesktopPill(
-                    key: const ValueKey('new-harness-field-machine'),
-                    focusNode: _headerMachineFocus,
-                    label: _leadChipLabel,
-                    semanticLabel: 'Computer, $_leadChipLabel',
-                    icon: AppIcons.monitor,
-                    menu: true,
-                    capsule: true,
-                    tooltip: 'Choose computer',
-                    textSize: 13,
-                    surfaceColor: DesktopChrome.surface,
-                    onPressed: box.locked
-                        ? null
-                        : () => _headerMachineMenu.isOpen
-                              ? _headerMachineMenu.close()
-                              : _headerMachineMenu.open(),
-                  ),
                 ),
               )
             else
@@ -2081,7 +1963,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     if (attachments == null) {
       return Align(
         alignment: Alignment.centerRight,
-        child: _desktopLaunchActions(includeChoices: true),
+        child: _desktopLaunchActions(),
       );
     }
     return LayoutBuilder(
@@ -2120,163 +2002,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                 constraints.maxWidth - grid.AppControl.height - 6 - 12,
               ),
             ),
-            child: _desktopLaunchActions(includeChoices: true),
+            child: _desktopLaunchActions(),
           ),
         ],
-      ),
-    );
-  }
-
-  /// New Project's machine chip: where the Product Manager runs, or Choose
-  /// machine until the person has one it can run on.
-  String get _leadChipLabel => box.leadMachine?.name ?? 'Choose machine';
-
-  /// New Project opens on the person's last-used machine, as New Harness
-  /// does, when it can run the Product Manager; else nothing is chosen for
-  /// them and the chip asks (Lead's ruling, 10-29: the Swarm picks nothing).
-  void _startOnLastMachine() {
-    final machines = box.integration?.leadMachines;
-    if (machines == null || box.leadPicked || box.locked) return;
-    if (machines.any((m) => m.id == box.machineId && m.startable)) {
-      box.chooseLeadMachine(box.machineId);
-    }
-  }
-
-  /// A machine's one status word in the menu, or null when it can take the
-  /// Product Manager: no explanation lines (Dee, 10-29).
-  String? _leadStatusWord(LeadMachine machine) => machine.startable
-      ? null
-      : !machine.online
-      ? 'offline'
-      : machine.unavailable == kLeadSwarmPaused ||
-            machine.unavailable == 'Paused in this Swarm'
-      ? 'paused'
-      : machine.unavailable == null &&
-            machine.leadEngines.isNotEmpty &&
-            (machine.freeAgents ?? 1) <= 0
-      ? 'busy'
-      : 'unavailable';
-
-  /// Under the settings, only while it blocks New Project: one line saying
-  /// why. Choosing a machine is the chip's to ask.
-  Widget _desktopLeadBlocked() {
-    final why = box.leadBlocked;
-    if (why == null || why == kLeadChooseMachine) {
-      return const SizedBox.shrink();
-    }
-    return Padding(
-      padding: const EdgeInsets.only(top: 8, left: 4),
-      child: Text(
-        why,
-        key: const ValueKey('new-harness-lead-blocked'),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: DesktopChrome.text(size: 12, color: DesktopChrome.muted),
-      ),
-    );
-  }
-
-  /// New Project's machine menu: your machines, then team machines, each its
-  /// own name (a team machine wears its owner's avatar) and one status word
-  /// when it cannot take the Product Manager now.
-  Widget _desktopLeadMachineAnchor({required Widget child}) {
-    final machines = box.integration?.leadMachines ?? const <LeadMachine>[];
-    final yours = [
-      for (final m in machines)
-        if (m.own) m,
-    ];
-    final team = [
-      for (final m in machines)
-        if (!m.own) m,
-    ];
-    Widget heading(String text) => Padding(
-      // At the rows' label column: AppMenuItem's 6 gutter + 10 padding.
-      padding: const EdgeInsets.fromLTRB(16, 6, 16, 4),
-      child: Semantics(
-        header: true,
-        child: Text(
-          text,
-          style: DesktopChrome.text(
-            size: 12,
-            medium: true,
-            color: DesktopChrome.muted,
-          ),
-        ),
-      ),
-    );
-    return AppDropdown(
-      controller: _headerMachineMenu,
-      childFocusNode: _headerMachineFocus,
-      width: _machineMenuWidth,
-      onOpen: () => setState(() {}),
-      onClose: () {
-        if (!mounted) return;
-        setState(() {});
-        _focusEditor();
-      },
-      children: [
-        if (yours.isNotEmpty) heading('Your machines'),
-        for (final machine in yours) _desktopLeadMachineRow(machine),
-        if (team.isNotEmpty) heading('Team machines'),
-        for (final machine in team) _desktopLeadMachineRow(machine),
-      ],
-      child: child,
-    );
-  }
-
-  Widget _desktopLeadMachineRow(LeadMachine machine) {
-    final chosen = machine.id == box.leadMachine?.id;
-    final enabled = machine.startable && !box.locked;
-    final status = _leadStatusWord(machine);
-    final choose = enabled ? () => box.chooseLeadMachine(machine.id) : null;
-    final focus = _leadRowFocus.putIfAbsent(
-      machine.id,
-      () => FocusNode(debugLabel: 'New harness computer row'),
-    );
-    return KeyedSubtree(
-      key: ValueKey('new-harness-lead-machine-${machine.id}'),
-      // The press and focus actions stay on the semantics node (review of
-      // #2237), and assistive technology hears the full reason where the row
-      // shows one word.
-      child: Semantics(
-        enabled: enabled,
-        selected: chosen,
-        focusable: enabled,
-        onFocus: enabled ? focus.requestFocus : null,
-        onTap: choose,
-        label: machine.startable
-            ? machine.name
-            : '${machine.name}, ${leadMachineDetail(machine, box.cloudRepository)}',
-        excludeSemantics: true,
-        child: AppMenuItem(
-          focusNode: focus,
-          autofocus: chosen,
-          selected: chosen,
-          leading: machine.owner == null
-              ? null
-              : Opacity(
-                  opacity: enabled ? 1 : .55,
-                  child: SuperTabAvatar.person(machine.owner!, size: 16),
-                ),
-          icon: box.app.stateOf(machine.id)?.isLocalMachine == true
-              ? AppIcons.laptop
-              : AppIcons.monitor,
-          label: machine.name,
-          // Enlarged text shortens the word rather than the row overflowing.
-          trailing: status == null
-              ? null
-              : ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 90),
-                  child: Text(
-                    status,
-                    maxLines: 1,
-                    softWrap: false,
-                    overflow: TextOverflow.ellipsis,
-                    style: grid.AppType.caption(height: 1.35),
-                  ),
-                ),
-          onPressed: choose,
-        ),
       ),
     );
   }
@@ -2409,7 +2137,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
               anchor: _desktopAnchors[_Row.approvals]!,
               child: _desktopChoiceButton(_Row.approvals, AppIcons.shieldCheck),
             ),
-          if (box.usesProfile && !box.leadThroughSwarm)
+          if (box.usesProfile)
             _desktopField(
               order: 7,
               anchor: _desktopAnchors[_Row.profile]!,
@@ -2421,8 +2149,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
         key: const ValueKey('new-harness-git-settings'),
         mainAxisSize: MainAxisSize.min,
         children: [
-          // A Product Manager always gets its own worktree.
-          if (box.canUseWorktree && !box.placesLead)
+          if (box.canUseWorktree)
             _desktopField(
               order: 8,
               anchor: _desktopAnchors[_Row.worktree]!,
@@ -2448,7 +2175,6 @@ class NewHarnessFormState extends State<NewHarnessForm> {
               ),
             ),
           if (!box.isCloud &&
-              !box.leadThroughSwarm &&
               (box.choosesBranch || box.checkingGit || box.gitError != null))
             _desktopField(
               order: 9,
@@ -2547,37 +2273,6 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     child: const Text('Cancel request'),
   );
 
-  Widget _discardPendingButton() => TextButton(
-    key: const ValueKey('discard-pending-request'),
-    onPressed: box.busy ? null : () => unawaited(_discardPending()),
-    child: const Text('Discard request'),
-  );
-
-  Future<void> _discardPending() async {
-    final question = await box.discardPending();
-    if (question != null && mounted) {
-      final sure = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          content: Text(question),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Keep request'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Discard anyway'),
-            ),
-          ],
-        ),
-      );
-      if (sure != true || !mounted) return;
-      await box.discardPending(anyway: true);
-    }
-    if (mounted && box.discarded) widget.onClose();
-  }
-
   /// Offered beside the refusal of a typed project name whose folder is
   /// already there: starts in that folder, only once pressed.
   Widget _useExistingFolderButton() => TextButton(
@@ -2586,38 +2281,16 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     child: const Text('Use the existing folder'),
   );
 
-  /// [includeChoices]: the project's visibility, which the box under the task
-  /// shows and the starting view does not.
-  Widget _desktopLaunchActions({bool includeChoices = false}) => Wrap(
+  Widget _desktopLaunchActions() => Wrap(
     spacing: 8,
     runSpacing: 8,
     alignment: WrapAlignment.end,
     crossAxisAlignment: WrapCrossAlignment.center,
     children: [
       if (box.canCancelPending) _cancelPendingButton(),
-      if (box.canDiscardPending) _discardPendingButton(),
       if (box.existingFolder != null) _useExistingFolderButton(),
-      if (includeChoices && box.integration?.projectVisibility != null)
-        _desktopProjectVisibility(9.95),
       _desktopStartButton(),
     ],
-  );
-
-  Widget _desktopProjectVisibility(double order) => FocusTraversalOrder(
-    order: NumericFocusOrder(order),
-    child: ProjectVisibility(
-      key: const ValueKey('new-harness-project-visibility'),
-      value: box.integration!.projectVisibility!,
-      disabledReason: box.integration!.projectVisibilityLocked
-          ? 'Project creation has started. Visibility is fixed for this request.'
-          : box.locked
-          ? 'Finish the current request before changing visibility.'
-          : null,
-      onChanged: box.locked || box.integration!.projectVisibilityLocked
-          ? null
-          : (value) =>
-                setState(() => box.integration!.projectVisibility = value),
-    ),
   );
 
   Widget _desktopStartButton() => ListenableBuilder(
@@ -3056,10 +2729,6 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     if (option.id == NewHarnessController.newProjectId) {
       return AppIcons.plus;
     }
-    // The design's ✦: made on GitHub, not found on a machine.
-    if (option.id == NewHarnessController.newRepositoryId) {
-      return AppIcons.sparkles;
-    }
     if (option.id == NewHarnessController.browseId ||
         option.id == NewHarnessController.existingProjectId) {
       return AppIcons.folderOpen;
@@ -3403,7 +3072,6 @@ class NewHarnessFormState extends State<NewHarnessForm> {
               ),
             _buildButton(),
             if (box.canCancelPending) _cancelPendingButton(),
-            if (box.canDiscardPending) _discardPendingButton(),
             if (box.existingFolder != null) _useExistingFolderButton(),
             if (!_picking && box.requiredChoice != null) ...[
               SizedBox(height: _rowHeight),

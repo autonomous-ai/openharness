@@ -6,7 +6,6 @@ import '../../shared/widgets/section_scaffold.dart';
 import '../../shared/widgets/setting_row.dart';
 import '../../state/app_state.dart';
 import '../../widgets/account_profile_sheet.dart';
-import 'saved_super_tabs_row.dart';
 
 class AccountSection extends StatelessWidget {
   const AccountSection({super.key, required this.notifier});
@@ -97,25 +96,7 @@ class AccountSection extends StatelessWidget {
             : kIsWeb
             ? 'Your Harness sign-in in this browser.'
             : 'Your Harness sign-in on this computer.',
-        child: SingleChildScrollView(
-          // Only the browser's reading says it keeps Super Tabs. Desktop's, with
-          // another account's forgotten at sign-in, leaves its page as it was.
-          child:
-              notifier.superTabs.reading.drawsSaved &&
-                  !notifier.superTabs.reading.confirmsSaved
-              ? Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    account,
-                    const SizedBox(height: 12),
-                    SavedSuperTabsRow(
-                      superTabs: notifier.superTabs,
-                      copies: notifier.browserCopies,
-                    ),
-                  ],
-                )
-              : account,
-        ),
+        child: SingleChildScrollView(child: account),
       );
     },
   );

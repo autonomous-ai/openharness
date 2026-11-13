@@ -306,7 +306,7 @@ void main() {
       ]);
       await tester.pumpAndSettle();
       // Back with none connected, the page shows nothing but its header's
-      // Add device (design doc, Swarm elements rule 7).
+      // Add device (design doc, Type and language rule 7).
       expect(find.text('No devices connected'), findsNothing);
       expect(find.text('Add device'), findsOneWidget);
       expect(find.textContaining('Computer offline'), findsNothing);
@@ -501,7 +501,7 @@ void main() {
       expect(find.byKey(ValueKey('device-card-$key')), findsNothing);
       expect(find.byType(DeviceSettingsPanel), findsNothing);
       // Back with none connected, the page shows nothing but its header's
-      // Add device (design doc, Swarm elements rule 7).
+      // Add device (design doc, Type and language rule 7).
       expect(find.text('No devices connected'), findsNothing);
       expect(find.text('Add device'), findsOneWidget);
       expect(sent, hasLength(1));

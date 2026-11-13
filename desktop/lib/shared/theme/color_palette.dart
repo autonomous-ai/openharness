@@ -133,14 +133,8 @@ enum HarnessPalette {
     tabBar: Color(0xfff4f4f4),
     search: Color(0xffededed),
     accent: Color(0xff1264a3),
-    // The one dark surface in a light theme: the Swarm sidebar, with white
-    // ink and a blue selected row.
+    // The one dark surface in a light theme, shown in its card.
     sidebar: Color(0xff3f0e40),
-    sidebarInk: Color(0xffffffff),
-    sidebarMuted: Color(0xffcfc3cf),
-    sidebarHover: Color(0xff350d36),
-    sidebarSelected: Color(0xff0b4c8c),
-    sidebarOnSelected: Color(0xffffffff),
   ),
   night(
     'Night',
@@ -212,11 +206,6 @@ enum HarnessPalette {
     this.faint,
     this.errorInk,
     this._sidebar,
-    this.sidebarInk,
-    this.sidebarMuted,
-    this._sidebarHover,
-    this._sidebarSelected,
-    this._sidebarOnSelected,
   });
 
   final String label, description;
@@ -233,23 +222,13 @@ enum HarnessPalette {
   /// palette's grounds.
   final Color? errorInk;
 
-  final Color? _sidebar, _sidebarHover, _sidebarSelected, _sidebarOnSelected;
+  final Color? _sidebar;
 
-  /// The Swarm sidebar's ground: the workspace color unless the palette gives
-  /// the sidebar one of its own.
+  /// A sidebar's ground: the workspace color unless the palette gives
+  /// the sidebar one of its own. Only the palette's card in Appearance draws
+  /// it: the Swarm's left pane, the one sidebar that wore it, went on
+  /// 2026-11-14.
   Color get sidebar => _sidebar ?? workspace;
-
-  /// Ink for a sidebar that is darker than the theme around it (Plum). Null
-  /// means the sidebar uses the page's ink.
-  final Color? sidebarInk, sidebarMuted;
-
-  /// Whether the Swarm sidebar wears its own ink rather than the page's.
-  bool get hasSidebarInk => sidebarInk != null;
-
-  Color get sidebarHover => _sidebarHover ?? hover;
-  Color get sidebarSelected => _sidebarSelected ?? hover;
-  Color get sidebarOnSelected =>
-      _sidebarOnSelected ?? sidebarInk ?? text ?? foreground;
   bool get isDark => brightness == Brightness.dark;
 
   static HarnessPalette fromId(String? id) => byId(id) ?? graphite;

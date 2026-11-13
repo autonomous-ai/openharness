@@ -17,9 +17,7 @@ Iterable<KeymapContext> contextsReachedFrom(KeymapContext context) =>
         KeymapContext.picker,
         KeymapContext.project,
       ],
-      KeymapContext.terminal ||
-      KeymapContext.project ||
-      KeymapContext.swarmChat => [context],
+      KeymapContext.terminal || KeymapContext.project => [context],
     };
 
 /// A key the app already gives to something else.

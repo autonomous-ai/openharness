@@ -99,12 +99,6 @@ These are content or identities, not a second action-icon library:
   including the monochrome preference. Do not substitute SF Symbols or add
   status pills to a different Harness surface. A notification mark describes its
   unread receipt; a tab/pane mark describes current activity.
-- A rank is its numeral. The #1 crown and badges are content artwork beside
-  it, never a replacement for it, and the crown means only that: a Lead wears
-  the gold Lead ring instead; see
-  [Team and celebration](desktop-design-system.md#team-and-celebration). A
-  trend is `AppIcons.arrowUp` or `arrowDown` with its number; see
-  [Numbers and rankings](desktop-design-system.md#numbers-and-rankings).
 - QR codes, companion artwork, explanatory diagrams, wallpaper, terminal
   output and user-selected status/Powerline artwork are content. Keep their
   function and authorship; do not round QR modules or replace terminal glyphs.
@@ -144,12 +138,12 @@ changed symbols in their real screens too: dense grids, menus, long labels,
 hover/focus/disabled states, Increase Contrast and text scaling. A contact
 sheet does not replace interaction checks.
 
-Swarm elements (agent faces, the Lead ring, person avatars, the task card and
-the row) have their own gallery against checked-in images;
-it runs in every suite, and an intended change regenerates its images:
+The [elements gallery](desktop-design-system.md#elements-gallery) holds its
+elements against checked-in images; it runs in every suite, and an intended
+change regenerates its images:
 
 ```sh
-flutter test --no-pub --update-goldens test/swarm_elements_gallery_test.dart
+flutter test --no-pub --update-goldens test/elements_gallery_test.dart
 ```
 
 ## Audit record — 2026-09-30

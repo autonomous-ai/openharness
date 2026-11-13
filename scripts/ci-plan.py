@@ -76,7 +76,7 @@ DEPENDS = {
     "backend": ("cli/src/lib/productHealthContract.ts", "cli/src/lib/productUsageContract.ts",
                 "cli/src/lib/superTabAttachmentProxy.ts", "cli/src/superTabs/attachments.ts", "cli/src/superTabs/command.ts",
                 "daemons/frames.json",
-                "desktop/lib/measurement/", "desktop/lib/super_tabs/attachment_upload.dart", "mobile/lib/measurement/",
+                "desktop/lib/measurement/", "mobile/lib/measurement/",
                 "mobile/integration_test/push_e2e/reply_push.apns", "mobile/lib/swarm/swarm_outgoing_files.dart",
                 "provider/reference-provider/", "tests/fixtures/"),
     # CLAUDE.md: agentInstructions.spec.ts expects '../../../CLAUDE.md' in a temporary project, and a relative path always
@@ -121,7 +121,7 @@ PR_READS = {
     "backend": ("cli/src/lib/productHealthContract.ts", "cli/src/lib/productUsageContract.ts",
                 "cli/src/lib/superTabAttachmentProxy.ts", "cli/src/superTabs/attachments.ts", "cli/src/superTabs/command.ts",
                 "daemons/frames.json",
-                "desktop/lib/measurement/", "desktop/lib/super_tabs/attachment_upload.dart", "mobile/lib/measurement/",
+                "desktop/lib/measurement/", "mobile/lib/measurement/",
                 "mobile/integration_test/push_e2e/reply_push.apns", "mobile/lib/swarm/swarm_outgoing_files.dart",
                 "provider/reference-provider/", "tests/fixtures/"),
     # CLAUDE.md: agentInstructions.spec.ts expects '../../../CLAUDE.md' in a temporary project, and a relative path always
@@ -153,9 +153,9 @@ PR_READS = {
                 "cli/src/lib/__fixtures__/github-repository-vectors.json", "cli/src/lib/e2ee/applicationFrames.ts",
                 "cli/src/lib/e2ee/core.ts", "cli/src/lib/engineInstall.ts", "cli/src/lib/engineLaunch.ts",
                 "cli/src/lib/relayFrames.ts", "cli/src/lib/shellProtocol.ts", "cli/src/lib/viewerFrames.ts",
-                # The Windows pipe's shared proof vectors; the goal file's rows (desktop/test/swarm_goal_test.dart).
+                # The Windows pipe's shared proof vectors.
                 "cli/src/lib/windows/__fixtures__/pipe-auth-vectors.json", "cli/src/messages/wire.ts",
-                "cli/src/sharing/protocol.ts", "cli/src/superTabs/__fixtures__/goal-rows.json", "daemons/frames.json", "docs/images/",
+                "cli/src/sharing/protocol.ts", "daemons/frames.json", "docs/images/",
                 "daemons/plates.json",
                 "daemons/roster.json", "daemons/tools/illustrated/appearance.py", "daemons/tools/illustrated/daemon_art.py",
                 "daemons/tools/illustrated/generate.py", "mobile/lib/e2ee/relay_session_crypto.dart",
@@ -173,9 +173,7 @@ PR_READS = {
                "cli/src/lib/productUsageSignals.ts", "cli/src/lib/relayFrames.ts", "cli/src/lib/shellProtocol.ts",
                "cli/src/lib/viewerFrames.ts", "cli/src/messages/wire.ts", "cli/src/sharing/protocol.ts",
                "daemons/banner.json", "daemons/frames.json", "daemons/plates.json", "daemons/roster.json",
-               *(f"desktop/lib/{path}" for path in (
-                   "super_tabs/model.dart", "super_tabs/controller.dart", "super_tabs/parts.dart", "super_tabs/profile_model.dart",
-                   "widgets/engine_identity.dart", "screens/swarm_screen.dart")),
+               *(f"desktop/lib/{path}" for path in ("widgets/engine_identity.dart", "screens/swarm_screen.dart")),
                "docs/performance/"),
     # pty-checks also runs the CLI's ptyhost contract, which imports CLI code.
     # os-checks reads the CLI's dial ids (cli/src/cable/serial.ts), its version and the TUI it packages;
@@ -201,8 +199,7 @@ NOT_READ = {"cli": ("cli/e2e/",)}
 NOT_READS = {
     # A pull request's files in the merger's tests: named, never opened (CLI Swarm v4 security, 2026-11-10).
     "cli/src/superTabs/githubMerge.spec.ts": ("test data: a pull request's file paths", {"backend/src/superTabs/", "docs/"}),
-    **{source: ("test data: owned-code paths and model names", {"desktop/lib/", "desktop/lib/super_tabs/",
-                                                                "desktop/lib/super_tabs/roster.dart"})
+    **{source: ("test data: owned-code paths and model names", {"desktop/lib/"})
        for source in ("backend/src/superTabs/commands.test.ts", "backend/integration/superTabs.test.ts")},
     # Task #4511: a task's owned or changed paths, a PR's files, a lane's folders; none is opened.
     **{source: ("test data: owned, changed and PR file paths", {"cli/", "companions/", "desktop/", "devices/", "docs/", "mobile/",
@@ -254,9 +251,6 @@ NOT_READS = {
                                                   "checkout holds, each declared in ci.SOURCE_INPUTS", {"mobile/"}),
     "desktop/test/community_publish_test.dart": ("test data: a file in a temporary folder", {"docs/"}),
     "desktop/test/runtime_model_name_test.dart": ("test data: a model name", {"provider/"}),
-    "desktop/test/swarm_instructions_shared_test.dart": ("test data: a project's instruction file names",
-                                                         {"AGENTS.md", "CLAUDE.md"}),
-    "desktop/test/super_tab_read_fixtures/first_load.json": ("test data: a task's owned paths", {"docs/design/"}),
     "mobile/lib/demo/sample_scripts.dart": ("demo transcript text", {"tests/"}),
     "os/tests/build-update-fixture.py": ("the CLI bundle a hand-run build copies from its work folder", {"cli/"}),
     "tui/src/runtime_model.rs": ("test data: a model name", {"provider/"}),

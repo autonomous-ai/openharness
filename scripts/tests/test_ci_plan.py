@@ -26,23 +26,20 @@ class SelectionTests(unittest.TestCase):
         self.assertNotIn("backend", planner.NOT_READ)
 
     def test_a_desktop_file_the_phone_tests_read_runs_mobile_checks(self):
-        # mobile/test/swarm/desktop_parity_test.dart compares the phone's Swarm models with these; a desktop-only PR that
-        # changed one passed its own CI and failed two batches later (River, 2026-11-03).
-        for path in ["desktop/lib/super_tabs/model.dart", "desktop/lib/super_tabs/controller.dart",
-                     "desktop/lib/super_tabs/parts.dart", "desktop/lib/widgets/engine_identity.dart",
-                     "desktop/test/support/real_fonts.dart"]:
+        # The phone's tests compare these with its own; a desktop-only PR that changed one passed its own CI and failed
+        # two batches later (River, 2026-11-03).
+        for path in ["desktop/lib/widgets/engine_identity.dart", "desktop/test/support/real_fonts.dart"]:
             with self.subTest(path=path):
                 self.assertEqual(planner.select([path])[0], {"desktop", "mobile"})
-        self.assertEqual(planner.select(["desktop/lib/super_tabs/view.dart"])[0], {"desktop"})
+        self.assertEqual(planner.select(["desktop/lib/widgets/pane_grid.dart"])[0], {"desktop"})
 
     def test_a_desktop_change_on_main_keeps_backends_result_only_when_backend_reads_none_of_it(self):
-        # Task #4511: no backend test reads the Swarm view's files since #3013 (11-04); declaring them reran backend
-        # after every Update branch that brought a Buddy change.
-        for path in ["desktop/lib/super_tabs/thread_panel.dart", "desktop/lib/super_tabs/view.dart"]:
+        # Task #4511: a backend test reads only the desktop files it declares; declaring more reran backend after every
+        # Update branch that brought a desktop change.
+        for path in ["desktop/lib/widgets/pane_grid.dart", "desktop/lib/screens/swarm_screen.dart"]:
             with self.subTest(path=path):
                 self.assertFalse(planner.reads("backend", path))
-        for path in ["desktop/lib/super_tabs/attachment_upload.dart", "desktop/lib/measurement/setup_transport.dart",
-                     "mobile/integration_test/push_e2e/reply_push.apns"]:
+        for path in ["desktop/lib/measurement/setup_transport.dart", "mobile/integration_test/push_e2e/reply_push.apns"]:
             with self.subTest(path=path):
                 self.assertTrue(planner.reads("backend", path))
         for path in ["backend/src/lib/deviceAckCore.ts"]:
@@ -59,7 +56,6 @@ class SelectionTests(unittest.TestCase):
         for test in tests:
             text = test.read_text()
             named |= {"desktop/" + m for m in re.findall(r"'(?:\.\./)+desktop/([\w/.-]+\.dart)'", text)}
-        self.assertIn("desktop/lib/super_tabs/model.dart", named)
         for path in sorted(named):
             with self.subTest(path=path):
                 self.assertTrue((root / path).exists(), path)
@@ -126,11 +122,6 @@ class SelectionTests(unittest.TestCase):
         self.assertIn("desktop", planner.select(["cli/src/lib/windows/__fixtures__/pipe-auth-vectors.json"])[0])
         self.assertNotIn("desktop", planner.select(["cli/src/lib/windows/pipeAuth.ts"])[0])
 
-    def test_the_goal_rows_also_select_the_desktop_suite(self):
-        # desktop/test/swarm_goal_test.dart reads them from cli/: a changed row runs both readers.
-        self.assertIn("desktop", planner.select(["cli/src/superTabs/__fixtures__/goal-rows.json"])[0])
-        self.assertNotIn("desktop", planner.select(["cli/src/superTabs/goal.ts"])[0])
-
     def test_the_desktop_runner_and_its_durations_select_the_desktop_suite(self):
         # Task #3458: the runner splits the Desktop shards by the durations file; a change to either runs those shards,
         # so a bad split cannot merge on process checks alone.
@@ -177,7 +168,7 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(planner.select(["cli/src/lib/engineLaunch.ts"])[0], {"cli", "companions", "desktop", "mobile", "pty"})
         self.assertEqual(planner.select(["cli/src/lib/tmuxBackend.ts"])[0], {"cli", "companions", "pty"})
         # A desktop file only the desktop reads runs the desktop alone; one the phone's tests read runs both.
-        self.assertEqual(planner.select(["desktop/lib/super_tabs/view.dart"])[0], {"desktop"})
+        self.assertEqual(planner.select(["desktop/lib/widgets/pane_grid.dart"])[0], {"desktop"})
         self.assertEqual(planner.select(["desktop/lib/widgets/engine_identity.dart"])[0], {"desktop", "mobile"})
         # Desktop's and the CLI's tests read the Store's agents and branding, which no component owns.
         self.assertEqual(planner.select(["store/agents/blender/store.json"])[0], {"cli", "desktop"})

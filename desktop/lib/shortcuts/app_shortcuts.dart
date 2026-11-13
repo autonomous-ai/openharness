@@ -7,7 +7,7 @@ import 'keymap.dart';
 import 'keymap_keyboard.dart';
 
 /// Harness uses Command as a direct prefix for frequent workspace actions.
-/// T opens a tab, N creates a harness. S creates a Swarm, M machines, I models,
+/// T opens a tab, N creates a harness. M machines, I models,
 /// O projects, P harnesses, and Shift-P commands.
 /// Shift-L chooses a layout. H/J/K/L and arrows focus panes; B routes a task.
 /// The same definitions feed live keys, help and search.
@@ -579,8 +579,8 @@ const windowsCommandKeys = <String, List<String>>{
   'app.onboarding_review': ['alt+shift+o'],
   // Ctrl+Shift+H is Focus Pane Left (⌘H): the shifted twin takes Alt+Shift.
   'hachi.open': ['alt+shift+h'],
-  // ⌘⌃S collapses to Ctrl+Shift+S, which is New Swarm (⌘S), and Alt+Shift+S
-  // is Share (⇧⌘S). Store stays in the palette and menu.
+  // ⌘⌃S would collapse to Ctrl+Shift+S, and Alt+Shift+S is Share (⇧⌘S).
+  // Store stays in the palette and menu.
   'app.store': [],
   // Ctrl+Shift+R renames the selected machine in the picker.
   'picker.refresh': ['ctrl+r'],

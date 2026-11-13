@@ -142,7 +142,7 @@ void main() {
       app.localInventory = {'models': [], 'busy': false};
       await tester.tap(find.text('Try again'));
       await tester.pump();
-      // Read, and none: an empty list shows nothing (design doc, Swarm elements rule 7).
+      // Read, and none: an empty list shows nothing (design doc, Type and language rule 7).
       expect(find.text('Finding shared models…'), findsNothing);
       expect(
         find.text('Connect this computer to see its models.'),
@@ -452,7 +452,7 @@ void main() {
     expect(find.text('Downloading · 42%').hitTestable(), findsNothing);
     await tester.tap(find.text('Subscriptions 0'));
     await tester.pump();
-    // An empty list shows nothing (design doc, Swarm elements rule 7).
+    // An empty list shows nothing (design doc, Type and language rule 7).
     expect(find.text('No subscriptions'), findsNothing);
     expect(find.text('Downloading · 42%'), findsNothing);
     await tester.tap(find.text('Local 5'));

@@ -104,6 +104,20 @@ void main() {
     expect(config.bindings.single.command, 'pane.focus_left');
   });
 
+  // The Swarm went on 2026-11-14: a keybindings file that still binds its
+  // commands, or a key in its chat, keeps the rest of its shortcuts.
+  test('bindings of the removed Swarm preserve other shortcuts', () {
+    final config = KeymapConfig.parse('''{"bindings":[
+      {"keys":"cmd+s","command":"super_tab.new"},
+      {"keys":"alt+shift+down","command":"swarm.next_unread","when":"swarmChat"},
+      {"keys":"alt+shift+up","command":"swarm.previous_unread","when":"swarmChat"},
+      {"keys":"cmd+f","command":"swarm.find_in_chat","when":"swarmChat"},
+      {"keys":"cmd+ctrl+j","command":"pane.focus_left","when":"swarmChat"},
+      {"keys":"cmd+ctrl+h","command":"pane.focus_left"}
+    ]}''', commands: commands);
+    expect(config.bindings.single.command, 'pane.focus_left');
+  });
+
   test('dotfile accepts comments, aliases and trailing commas', () {
     final config = KeymapConfig.parse('''
       // Keep the defaults and add my preferred movement key.

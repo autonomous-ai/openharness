@@ -19,22 +19,6 @@ import 'keymap_host_test.dart' show key;
 import 'support/real_fonts.dart';
 
 void main() {
-  testWidgets('Swarm chat shortcut explains its focus scope', (tester) async {
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: grid.buildAppTheme(brightness: Brightness.dark),
-        home: const Scaffold(body: ShortcutsBrowser()),
-      ),
-    );
-    await tester.enterText(
-      find.byKey(const ValueKey('shortcuts-search')),
-      'Find in chat',
-    );
-    await tester.pumpAndSettle();
-    expect(find.widgetWithText(TextButton, 'Find in chat'), findsOneWidget);
-    expect(find.text('In a Swarm tab, outside a terminal'), findsOneWidget);
-  }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
-
   testWidgets(
     'Windows New Tab lists the everywhere key before its marked alias',
     (tester) async {

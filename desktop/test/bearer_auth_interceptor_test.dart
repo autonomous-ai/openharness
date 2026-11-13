@@ -144,7 +144,7 @@ void main() {
         'not retried with B\'s token', () async {
       seen.whileOut = () => switching.signInAs('renewed');
       await expectLater(
-        signed.post('/api/super-tabs/tab/commands'),
+        signed.post('/api/desk/ops'),
         throwsA(
           isA<DioException>().having(
             (e) => e.error,
@@ -161,7 +161,7 @@ void main() {
       () async {
         switching.duringRefresh = () => switching.signInAs('renewed');
         await expectLater(
-          signed.post('/api/super-tabs/tab/commands'),
+          signed.post('/api/desk/ops'),
           throwsA(
             isA<DioException>().having(
               (e) => e.error,

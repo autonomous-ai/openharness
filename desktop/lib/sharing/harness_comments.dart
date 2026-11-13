@@ -4,7 +4,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
-import '../super_tabs/visible_tick.dart';
+import '../widgets/visible_tick.dart';
 import '../widgets/desktop_chrome.dart';
 import '../ws/ws_conn.dart';
 import '../widgets/laid_out_list.dart';

@@ -7,13 +7,10 @@ import 'package:harness/core/models.dart';
 import 'package:harness/devices/devices_harness_controller.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/pane_arrangement.dart';
-import 'package:harness/state/swarm.dart';
-import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 import 'experimental_features_test.dart' show AccountSettings;
 import 'support/model_manager.dart';
-import 'support/super_tab_fixture.dart';
 import 'swarm_state_test.dart' show MemoryStore;
 
 void main() {
@@ -40,20 +37,6 @@ void main() {
     devices.dispose();
     app.dispose();
   });
-
-  Future<({Swarm tab, SuperTabController controller})> embeddedDevices() async {
-    const id = '0123456789abcdef01234567';
-    connection.server.state['id'] = id;
-    final tab = Swarm(id: 'embedded', name: 'Team', kind: 'superTab')
-      ..superTabId = id;
-    app.swarms.add(tab);
-    app.selectSwarm(tab.id);
-    final controller = await app.superTabs.open(id);
-    await controller.refresh();
-    controller.selectDevices();
-    app.prepareSuperTabDevices(tab.id);
-    return (tab: tab, controller: controller);
-  }
 
   test(
     'missing bundle keeps chat at 30 percent and recovers in the same tab',
@@ -229,64 +212,6 @@ void main() {
       );
     },
   );
-
-  test('embedded Devices ignores a launch already pending for standalone '
-      'Devices without retargeting its receipt', () async {
-    connection.holdCreation = Completer<void>();
-    final previousTab = app.activeSwarm;
-    final first = devices.open();
-    await Future<void>.delayed(Duration.zero);
-    expect(connection.creations, hasLength(1));
-    final next = await embeddedDevices();
-    var finished = false;
-    final second = devices
-        .open(swarmId: next.tab.id)
-        .then((_) => finished = true);
-    await Future<void>.delayed(Duration.zero);
-    expect(finished, isTrue);
-    connection.holdCreation!.complete();
-    await Future.wait([first, second]);
-
-    expect(devices.error, isNull);
-    expect(connection.creations, hasLength(1));
-    expect(app.attachments, [
-      (account: 'a', workspace: previousTab.id, agent: 'manager'),
-    ]);
-    expect(previousTab.panes.last.agentId, 'manager');
-    expect(next.tab.panes, hasLength(1));
-    expect(next.tab.panes.single.isDevices, isTrue);
-    expect(next.tab.panes.single.ownerAgentId, isNull);
-    expect(app.activeSwarm, same(next.tab));
-  });
-
-  for (final existingConversation in [false, true]) {
-    test('embedded Devices never probes, starts or reuses a conversation '
-        '(existing standalone conversation: $existingConversation)', () async {
-      final standalone = app.activeSwarm;
-      if (existingConversation) await devices.open();
-      final next = await embeddedDevices();
-      connection.requests.clear();
-      final before = app.attachments.toList();
-      await devices.open(swarmId: next.tab.id);
-      expect(connection.requests, isEmpty);
-      expect(connection.creations, hasLength(existingConversation ? 1 : 0));
-      expect(app.resumes, 0);
-      expect(app.attachments, before);
-      expect(next.tab.panes, hasLength(1));
-      expect(next.tab.panes.single.isDevices, isTrue);
-      expect(next.tab.panes.single.ownerAgentId, isNull);
-      await app.showDevicesTerminal('m', 'manager', swarmId: next.tab.id);
-      expect(next.tab.panes, hasLength(1));
-      expect(next.tab.panes.single.agentId, isNull);
-      expect(next.tab.panes.single.ownerAgentId, isNull);
-      expect(standalone.panes, hasLength(2));
-      expect(
-        standalone.panes.last.agentId,
-        existingConversation ? 'manager' : null,
-      );
-      expect(app.activeSwarm, same(next.tab));
-    });
-  }
 }
 
 class _DevicesTestApp extends ModelManagerTestApp {
@@ -316,7 +241,6 @@ class _DevicesConnection extends ModelManagerConnection {
   String? refusal;
   bool uniqueAgentIds = false;
   final requests = <String>[];
-  final server = ConversationServer();
 
   @override
   Future<Map<String, dynamic>> request(
@@ -331,16 +255,6 @@ class _DevicesConnection extends ModelManagerConnection {
         code: refusal!,
         detail: 'autonomous/devices is not installed on this machine',
       );
-    }
-    if (type == 'super_tabs') {
-      return {
-        'ok': true,
-        'value': await server.request(
-          payload['method'] as String,
-          payload['path'] as String,
-          body: payload['body'] as Map<String, dynamic>?,
-        ),
-      };
     }
     final reply = await super.request(type, payload: payload, timeout: timeout);
     if (uniqueAgentIds && reply['agent'] is Map) {

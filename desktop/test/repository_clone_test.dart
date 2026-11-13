@@ -100,7 +100,8 @@ void main() {
     expect(await draft.readAsString(), 'keep this');
   });
 
-  test('knows one repository however git spells it', () {
+  test('knows one repository however git spells it', () async {
+    Future<String?> noAlias(String host) async => null;
     for (final address in [
       'https://github.com/owner/project.git',
       'https://github.com/owner/project/',
@@ -111,13 +112,17 @@ void main() {
       'git://github.com/owner/project.git',
     ]) {
       expect(
-        repositoryIdentity(address),
+        await resolvedRepositoryIdentity(address, noAlias),
         'github.com/owner/project',
         reason: address,
       );
     }
     for (final address in ['/srv/git/project.git', 'file:///srv/project', '']) {
-      expect(repositoryIdentity(address), isNull, reason: address);
+      expect(
+        await resolvedRepositoryIdentity(address, noAlias),
+        isNull,
+        reason: address,
+      );
     }
   });
 

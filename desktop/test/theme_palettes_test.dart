@@ -39,7 +39,6 @@ void main() {
     expect(HarnessPalette.plum.background, const Color(0xffffffff));
     expect(HarnessPalette.plum.text, const Color(0xff1d1c1d));
     expect(HarnessPalette.plum.sidebar, const Color(0xff3f0e40));
-    expect(HarnessPalette.plum.sidebarInk, const Color(0xffffffff));
 
     expect(HarnessPalette.night.brightness, Brightness.dark);
     expect(HarnessPalette.night.background, const Color(0xff1a1d21));
@@ -109,21 +108,6 @@ void main() {
         greaterThanOrEqualTo(4.5),
         reason: '${palette.name} accent on the chat',
       );
-      // The Swarm sidebar's own ink, where the palette has one.
-      final sidebar = palette.sidebar;
-      final ink = palette.sidebarInk ?? palette.text!;
-      final muted = palette.sidebarMuted ?? palette.muted!;
-      for (final ground in [sidebar, palette.sidebarHover]) {
-        expect(contrast(ink, ground), greaterThanOrEqualTo(4.5));
-        expect(contrast(muted, ground), greaterThanOrEqualTo(4.5));
-      }
-      for (final ink in [palette.sidebarOnSelected, muted]) {
-        expect(
-          contrast(ink, palette.sidebarSelected),
-          greaterThanOrEqualTo(4.5),
-          reason: '${palette.name} selected sidebar row',
-        );
-      }
     }
   });
 
@@ -133,7 +117,6 @@ void main() {
         expect(grid.AppPalette.textPrimary, palette.text, reason: palette.name);
         expect(grid.AppPalette.textSecondary, palette.muted);
         expect(grid.AppPalette.textFaint, palette.faint);
-        expect(grid.AppPalette.swarmSidebar, palette.sidebar);
         expect(grid.AppPalette.windowBg, palette.background);
       });
     }
@@ -142,11 +125,9 @@ void main() {
       expect(grid.AppPalette.textPrimary, const Color(0xFF1A1A18));
       expect(grid.AppPalette.textSecondary, const Color(0xFF62615B));
       expect(grid.AppPalette.textFaint, const Color(0xFF7A7973));
-      expect(grid.AppPalette.swarmSidebar, HarnessPalette.paper.workspace);
     });
     wearing(HarnessPalette.graphite, () {
       expect(grid.AppPalette.textPrimary, const Color(0xFFF5F5F5));
-      expect(grid.AppPalette.swarmSidebar, HarnessPalette.graphite.workspace);
     });
   });
 }

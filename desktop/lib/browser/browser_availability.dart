@@ -33,7 +33,7 @@ class BrowserAvailability {
   }
 }
 
-/// Browser is offered where [offersBrowser] asks for it (a Swarm agent's header), never on the web build or on
+/// Browser is offered where [offersBrowser] asks for it, never on the web build or on
 /// Windows, which v1 does not cover.
 bool browserOffered({
   required bool web,

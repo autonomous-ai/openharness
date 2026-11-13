@@ -72,8 +72,8 @@ enum ExperimentalFeature {
   const ExperimentalFeature(this.id, this.label, this.description);
   final String id, label, description;
 
-  /// Super Tab owns coordination. Keep the old wire values readable for existing
-  /// clients and sessions, without asking people to assemble the feature here.
+  /// Only these are offered in Settings. The old wire values stay readable for
+  /// existing clients and sessions.
   bool get visibleInSettings =>
       this == focusBarCreature || this == shareButton || this == hachi;
 

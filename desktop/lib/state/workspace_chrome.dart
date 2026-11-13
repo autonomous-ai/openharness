@@ -1,7 +1,5 @@
 import 'package:flutter/widgets.dart';
 
-import '../super_tabs/reading.dart';
-
 /// The workspace's command table as a host composition sees it: the same ids
 /// and callbacks keys, native menus and the command box already run.
 class WorkspaceCommands {
@@ -71,8 +69,6 @@ class WorkspaceChrome {
     this.menuOnEveryTab = false,
     this.labelsPaneStatus = false,
     this.compactPaneHeader = false,
-    this.superTabRecovers = false,
-    this.superTabReading = SuperTabReading.desktop,
     this.subscriptionsNeedComputer = false,
   });
 
@@ -152,16 +148,6 @@ class WorkspaceChrome {
   /// True draws a denser pane header below [compactBelow]: the harness name
   /// first, agent and model behind one control. Audit finding S2.
   final bool compactPaneHeader;
-
-  /// True gives a Swarm tab's states a way forward: a first read that failed
-  /// is the error and Retry in place of the conversation (no "Loading" beside
-  /// it), and "Create a project to get started." carries New project. Audit
-  /// findings S12, P5.
-  final bool superTabRecovers;
-
-  /// How the Swarm tabs keep themselves current. The default is Desktop's: a
-  /// full read every 3 s, on screen or not. #180's report, fixes 1, 2a and 3.
-  final SuperTabReading superTabReading;
 
   /// True leaves Subscriptions out of the compact footer while the account
   /// has no computer, once the machine list has said so: there is no agent
