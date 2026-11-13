@@ -515,10 +515,21 @@ function removeRegistryLockOwnedBy(token: string): void {
   } catch { /* another owner or an unsafe artifact must not be removed */ }
 }
 
+/**
+ * This process's own start, as a lock's owner file names it. Read once: it never changes while the process lives, and
+ * on a Mac reading it runs `ps` synchronously, which every save paid on the core's loop (3.3 ms each, the audit of
+ * 2026-11-12). One that could not be read (`ps` failed) is asked for again at the next save.
+ */
+let ownLockIdentity: ReturnType<typeof processLockIdentity> | null = null
+function lockIdentity(): ReturnType<typeof processLockIdentity> {
+  if (!ownLockIdentity?.generationMarker) ownLockIdentity = processLockIdentity(process.pid)
+  return ownLockIdentity
+}
+
 function withRegistryFileLock<T>(apply: () => T): T {
   secureStateDirectory(env.ADAPTER_DATA_DIR)
   const uid = typeof process.getuid === 'function' ? process.getuid() : null
-  const processIdentity = processLockIdentity(process.pid)
+  const processIdentity = lockIdentity()
   const deadline = Date.now() + LOCK_BUDGET_MS
   for (;;) {
     const token = randomUUID()
