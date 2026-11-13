@@ -286,7 +286,6 @@ harnessd/coreLink.ts
 harnessd/platform.ts
 harnessd/protocol.ts
 harnessd/services.ts
-harnessd/supervisor.ts
 harnessd/swarmSwitch.ts
 hookServer.ts
 lib/activitySummary.ts
