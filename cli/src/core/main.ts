@@ -1072,9 +1072,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // a harness another agent started. Read when it closes one, never now: the close service is built further down.
     closeAgent: (request) => backendRef?.closeAgentService?.request(request) ?? Promise.resolve({ error: 'UNSUPPORTED' }),
     activityAt: (session) => transcriptActivityAt(session.transcriptPath, session.engine),
-    // The Super Tab host keeps its Leads alive and closes the sessions its backend ends (superTabs/host.ts). Read when it
-    // asks, never now: the lifecycle is built further down, and one asked before then is refused, and asked again later.
-    resumeAgent: async (agentId) => lifecycle.resumeAgent(agentId),
     // The person's Start and Stop of an agent's browser, which the agent browser asks of the core; and its flag, moved
     // with its pane once the agent browser moved its entry.
     setBrowser: agentBrowsers.set,
@@ -1084,9 +1081,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       const runtime = primaryRuntime(session)
       return terminals.backendFor(runtime)?.paneInfo(runtime).then(info => info?.pid ?? null) ?? Promise.resolve(null)
     },
-    // What it may close and reopen is decided in this process, on what its host retains (superTabs/inCore/agents.ts).
-    ...(swarm ? { swarmAgents: (agentDeps) => swarm.createSwarmAgents({ ...agentDeps,
-      members: { leads: () => swarm.retainedLeads(env.ADAPTER_DATA_DIR), harnesses: () => swarm.retainedHarnesses(env.ADAPTER_DATA_DIR) } }) } : {}),
     dsh: (session) => backendRef?.dshFrameProvider?.(session) ?? null,
     windows: (frame) => backendRef?.sendLocal(frame),
     daemon: { command: daemonCommand(), port: env.PORT, machineId: () => backendRef?.machineId ?? '', autonomousEnv: session?.autonomousEnv ?? env.AUTONOMOUS_ENV },
@@ -3064,8 +3058,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // Purged: its browser and its login go too.
     purged: (agentId) => ports.agentBrowser?.deleted(agentId),
     moveHeld: (agentId) => moveHeld.has(agentId),
-    // The Lead of an active Swarm project is never stopped (owner, 2026-10-23); its host keeps the list (superTabs/retention.ts).
-    ...(swarm ? { leadProtected: (agentId: string, leadSwitch?: string) => swarm.mayBeLead(env.ADAPTER_DATA_DIR, agentId, leadSwitch) } : {}),
   })
   const stopJobs = lifecycle.stopJobs
   launchCancelled = id => stopJobs.has(id)
@@ -3092,11 +3084,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     engineReady: (engine, ms) => engineLinks.ready(engine, ms),
     stoppedAgents,
     backgroundCommands: (s) => backgroundCommands(s),
-    ...(swarm ? {
-      leadProtected: (agentId: string, changeId?: string) => swarm.leadCloseProtected(env.ADAPTER_DATA_DIR, agentId, changeId),
-      leadSwitching: (agentId: string, changeId: string) => swarm.leadSwitching(env.ADAPTER_DATA_DIR, agentId, changeId),
-      leadSwitchEnded: (agentId: string, changeId: string, stopped: boolean) => swarm.leadSwitchEnded(env.ADAPTER_DATA_DIR, agentId, changeId, stopped),
-    } : {}),
   })
   backend.closeAgentService = closing.closeAgentService
   backend.closeAgentService.start()

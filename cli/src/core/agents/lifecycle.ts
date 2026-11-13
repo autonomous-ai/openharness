@@ -5,7 +5,6 @@
  * Moved verbatim out of `runForeground` (the core boundary, step 11: docs/design/2026-10-03-harnessd.md).
  */
 import type { clearDeleted as clearDeletedFn, markDeleted as markDeletedFn } from '../../lib/deletedSessions.js'
-import { LEAD_PROTECTED_DETAIL } from '../../lib/closeAgentService.js'
 import { PurgeAgentService, type PurgeDeps } from '../../lib/purgeAgentService.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
 import { createResumeAgentService, type ResumeAgentServiceDeps } from '../../lib/resumeAgentService.js'
@@ -75,14 +74,6 @@ export interface LifecycleDeps {
   purged?: (agentId: string) => void
   /** An agent a move a dead daemon left may still run beside (main.ts `moveHeld`): no engine of it starts this start. */
   moveHeld?: (agentId: string) => boolean
-  /** Whether the agent is a Lead the core must never stop, as core/main.ts hands it in; absent, none is. */
-  leadProtected?: (agentId: string, leadSwitch?: string) => boolean
-}
-
-/** The owner, 2026-10-23: the Lead of an active project is never stopped, in any case; deleting its project closes it. */
-export class LeadProtectedError extends Error {
-  readonly code = 'LEAD_PROTECTED'
-  constructor() { super(LEAD_PROTECTED_DETAIL) }
 }
 
 /** What a delete says when the harness's told lines could not be erased: asked first, so nothing of it has gone. The
@@ -93,7 +84,6 @@ export function createAgentLifecycle({
   registry, stoppedAgents, restartJobs, createBackend, noBackendCode, backendFor, agentReconciler, forgetSession, markDeleted, clearDeleted, stopNative, settlePane, cancelExternal,
   sessionCheckpoints, mirror, sessionSearch, forgetTold, scrubCreated, send, pinnedControls, retainExitedSession, announceSession,
   relaunchOverrides, prepareSessionResume, stopBackgroundJob, refreshGridWebSearch, adoptSwarmSkill, attachDsh, attachBrowser, attachSession, relaunchMarks, stopped, purged, atFolderTrust, atEmptyComposer, moveHeld,
-  leadProtected,
 }: LifecycleDeps) {
   /**
    * Stop Harness (`agent_delete`) archives its conversation and launch settings, removes the live
@@ -112,14 +102,12 @@ export function createAgentLifecycle({
    */
   const stopAgent: typeof stop = (target, options) => {
     const agentId = registry.resolve(target)?.agentId ?? target
-    if (leadProtected?.(agentId, options?.leadSwitch)) return Promise.reject(new LeadProtectedError())
     return stop(target, options).then(() => { stopped?.(agentId) })
   }
   const purgeAgentService = new PurgeAgentService({
     live: id => registry.byAgent(id), sessions: () => [...registry.list(), ...stoppedAgents.list()],
     stopped: stoppedAgents, checkpoints: sessionCheckpoints, stop: stopAgent,
     restarting: id => restartJobs.busy(id) || stopJobs.has(id),
-    ...(leadProtected ? { leadProtected: (id: string) => leadProtected(id) } : {}),
     atFolderTrust,
     atEmptyComposer,
     // The person reads what was not erased; the cleanup's log has why (services/agentCleanup.ts).
@@ -278,7 +266,7 @@ export function createStopRequest({ byAgent, stop }: {
     try { await stop(target) }
     catch (error) {
       if (error instanceof IdentityReadUnavailable) return { error: error.code, detail: error.message, held: true, retryable: true }
-      if (!(error instanceof AgentStopError) && !(error instanceof LeadProtectedError)) throw error
+      if (!(error instanceof AgentStopError)) throw error
       return { error: error.code, detail: error.message }
     }
     return { deleted: true }

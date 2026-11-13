@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import type { CoreApi, ServiceRequests, SuperTabsPort } from '../core/api.js'
 import { swarmListedFor, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions, type SwarmSources } from './host.js'
+import { withOwnAgents } from './ownAgents.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads, type SwarmRead } from './swarmReads.js'
 import { backend, identifier, object, SuperTabHostError, within } from './wire.js'
@@ -313,7 +314,8 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   const wake = () => {
     const machine = core.daemon.machineId()
     if (host?.machineId !== machine) { host?.stop(); host = null }
-    host ??= (options.host ?? ((api, id, given) => new SuperTabHost(api, id, given)))(core, machine,
+    // Its closes and reopens of its own agents are its own (superTabs/ownAgents.ts), beside what the core offers every service.
+    host ??= (options.host ?? ((api, id, given) => new SuperTabHost(withOwnAgents(api), id, given)))(core, machine,
       { startReceipt: harnessId => reservations().creationOf(harnessId), sources: sources() })
     host.start()
     mentions.start()

@@ -6,6 +6,7 @@ import { availableParallelism, homedir } from 'node:os'
 import { lstat, readdir, readFile, realpath, rm, stat } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { CoreApi } from '../core/api.js'
+import type { SwarmCore } from './ownAgents.js'
 import { openDaemon } from '../agentClient/daemon.js'
 import { codingRefusal } from '../lib/codingModel.js'
 import { ownProcessGroup } from '../lib/windows/noWindow.js'
@@ -367,7 +368,7 @@ export class ContributedMachines {
   }
   private readonly deps: MachineDeps
   private readonly sources: SwarmSources
-  constructor(private readonly core: CoreApi, private readonly machineId: string, deps: Partial<MachineDeps> = {}) {
+  constructor(private readonly core: SwarmCore, private readonly machineId: string, deps: Partial<MachineDeps> = {}) {
     this.deps = { ...MACHINE_DEPS, ...deps }
     this.sources = deps.sources ?? { feed: new HostFeed(core, machineId, { now: this.deps.now, backend: this.deps.backend }),
       reads: new SwarmReads(core, { backend: this.deps.backend }) }
@@ -980,7 +981,7 @@ export class ContributedMachines {
    * the backend says it failed (its machine did not start it within 3 minutes, say) and joined no agent, the agent this
    * host created for it is stopped. Nothing else would: the host no longer sees the start, and the agent is no member of
    * the Swarm. Mac Auto's Harness Team account kept ten such Codex panes idle on 2026-10-29. Only the agent this start's
-   * own creation receipt names is closed (core closeMember), never one that joined; a status the backend cannot give now
+   * own creation receipt names is closed (its own closeMember, superTabs/ownAgents.ts), never one that joined; a status the backend cannot give now
    * is asked again on later passes, a few times.
    */
   private async abandoned(startId: string, launch: Unconfirmed): Promise<void> {
@@ -1238,10 +1239,10 @@ export class ContributedMachines {
     if (addedAgain(await read())) return
     const targets = [...worktrees, ...swarmCloneRoots(this.core.dataDir, tabId)]
     const inside = (cwd: string | null) => !!cwd && targets.some(t => within(t, cwd))
-    // The Swarm's own close (core/api.ts closeMember), which the core answers in its process and in the Swarm's own
-    // (services/processCoreApi.ts). Diego 10-29: closeStarted is the agent cleanup's alone, so under harnessd the Swarm's
-    // process had none, closed nothing and kept every folder. The core closes only a member its host retains or one this
-    // start's receipt names; any other agent-started session here stays open, and its folder with it.
+    // The Swarm's own close (superTabs/ownAgents.ts), through the core's `agent_close` as any client's. Diego 10-29:
+    // closeStarted is the agent cleanup's alone, so under harnessd the Swarm's process had none, closed nothing and kept
+    // every folder. It closes only a member its host retains or one this start's receipt names; any other agent-started
+    // session here stays open, and its folder with it.
     // Why each close failed, by the folder it ran in: review of #2070, a removal that never confirmed said nothing of why.
     const refused = new Map<string, string>()
     for (const agent of this.core.agents.live()) {

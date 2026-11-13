@@ -213,16 +213,6 @@ export interface CoreApi {
      *  the cleanup reaches this (from its own process through core/agentCleanupLink.ts), so no client can name the
      *  ceiling. Absent where the core does not let a service close. */
     closeStarted?(agentId: string, mode: 'idle' | 'now', pastCeiling?: boolean): Promise<AgentCloseResult>
-    /** Close only the recorded native identity started for a Swarm. Missing live sessions are already gone. */
-    closeSwarm?(request: { agentId: string; creationId?: string; sessionId?: string; createdAt?: string; expiresAt?: number }): Promise<AgentCloseResult>
-    /** Reopen a Swarm Lead whose session is gone, on its own conversation, as a resume does: nothing is typed into it
-     *  (superTabs/host.ts keeps Leads alive). Only an agent stopped here that this machine's Super Tab host keeps as the
-     *  Lead of an active project (superTabs/retention.ts); a live one is answered ok. */
-    keepLeadAlive?(agentId: string): Promise<{ ok: true } | { ok: false; error: string; detail?: string }>
-    /** Close, now and keeping its conversation, a Super Tab member whose session the backend ends (its project deleted,
-     *  the agent removed). Only a harness this machine's Super Tab host retains as a member, or one whose exact native
-     *  creation receipt [creationId] (the Swarm's start) names it; a gone one is closed. */
-    closeMember?(agentId: string, creationId?: string): Promise<AgentCloseResult>
     /** When a live agent's conversation last moved, epoch ms: the latest dated work in its transcript
      *  (lib/transcriptActivity.ts), what the apps' `updatedAt` is when there is one. Null for none live, and for an
      *  engine that keeps no dated transcript: a hook's time or the bind's is not when it last answered. Absent where
@@ -1466,16 +1456,6 @@ export interface SuperTabAttention {
   text: string
 }
 
-/** What the core hands the Swarm's own close and reopen (superTabs/inCore/agents.ts): the live registry, the stopped
- *  records, and the core's close, resume and creation receipts. */
-export interface SwarmAgentDeps {
-  byAgent(agentId: string): RegisteredSession | undefined
-  stoppedIds(): string[]
-  closeAgent?: (request: AgentCloseRequest) => Promise<AgentCloseResult>
-  resumeAgent?: (agentId: string) => Promise<{ ok: true } | { ok: false; error: string; detail?: string }>
-  creationStatus?: (creationId: string) => Promise<CreationObservation | null>
-}
-export type SwarmAgents = Required<Pick<CoreApi['agents'], 'closeSwarm' | 'keepLeadAlive' | 'closeMember'>>
 
 type SwarmSkill = NonNullable<RegisteredSession['swarmSkill']>
 /** The Swarm's part of an agent's start (superTabs/inCore/launch.ts), handed to the launches while the Swarm is on: the
@@ -2250,11 +2230,6 @@ export interface CoreApiDeps {
   panePid?: (session: RegisteredSession) => Promise<number | null>
   /** When an agent's conversation last moved (lib/transcriptActivity.ts), for `lastActivity`. */
   activityAt?: (session: RegisteredSession) => Promise<number | null>
-  /** A resume of a stopped agent (core/agents/lifecycle.ts `resumeAgent`), for `keepLeadAlive`. */
-  resumeAgent?: (agentId: string) => Promise<{ ok: true } | { ok: false; error: string; detail?: string }>
-  /** The Swarm's `closeSwarm`, `keepLeadAlive` and `closeMember` (superTabs/inCore/agents.ts), built on what the core
-   *  reads its agents by; absent while the Swarm is off, and then the core offers none of them. */
-  swarmAgents?: (deps: SwarmAgentDeps) => SwarmAgents
   signedIn: CoreApi['account']['signedIn']
   environment: CoreApi['account']['environment']
   machines: CoreApi['account']['machines']
@@ -2294,7 +2269,7 @@ export function createCoreApi({
   dataDir, registry, stoppedAgents, databaseHistory, syncSession, runtimeModels, viewerChanged,
   gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, observerKey, tabKey, tabRelay, connectorVault, observer, privateGridName, machineName, backend, onNotice,
   runtimeProfile, setRuntime, fork, create, creationStatus, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, viewerFrame, browserFrame, browserBytes, machine, activityText, activitySnapshot, activity, summaries,
-  closeAgent, activityAt, resumeAgent, swarmAgents, setBrowser, moveBrowser, panePid,
+  closeAgent, activityAt, setBrowser, moveBrowser, panePid,
   signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, cloud, superTabs, panes, relay, superTabRequest, cloudRows, lastTurn, turnCard, turnSummary,
   count, hachiGoalDone, log = (line) => console.warn(line),
 }: CoreApiDeps): CoreApi {
@@ -2342,8 +2317,6 @@ export function createCoreApi({
       activitySnapshot,
       activity: activity ?? (async () => ({})),
       summaries: summaries ?? (async () => ({})),
-      // The Swarm's own close and reopen (superTabs/inCore/agents.ts), handed in while it is on.
-      ...swarmAgents?.({ byAgent: id => registry.byAgent(id), stoppedIds: () => stoppedAgents.ids(), closeAgent, resumeAgent, creationStatus }),
       // Decided here, not in the service: whatever the cleanup asks, from its process or this one, the core closes only
       // a harness another agent started, the conversation it reviewed (`agent_close`'s identity), and keeps it.
       closeStarted: async (agentId, mode, pastCeiling) => {

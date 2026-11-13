@@ -1,16 +1,17 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { noteSwarmBasics, PM_BASICS, SWARM_BASICS } from '../lib/swarmSkills.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { BackendNotice, CoreApi, TurnDelivery, TurnEnd } from '../core/api.js'
 import { promptHash } from '../lib/promptIdentity.js'
-import { fakeCore } from '../testing/fakeCore.js'
+import { fakeSwarmCore as fakeCore } from '../testing/fakeSwarmCore.js'
+import type { SwarmCore } from './ownAgents.js'
 import type { attachedFiles as attachedFilesType } from './attachments.js'
 import { backend, writeJournal, removeStaleJournalTemps, swarmListedFor, swarmRoleFor, hostJournalFile, RESTART_SETTLE_MS, SuperTabHost, type SuperTabHostOptions } from './host.js'
 import { ADDED_MAX } from './deliveryContext.js'
-import { SWITCH_ADOPT_MS, SWITCH_HOLD_MS } from './leadSwitch.js'
+import { leadSwitchOf, SWITCH_ADOPT_MS, SWITCH_ARM_MS, SWITCH_HOLD_MS } from './leadSwitch.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
@@ -2624,7 +2625,7 @@ function releaseFixture(nativeKind = 'swarm', result: Record<string, unknown> = 
   const close = vi.fn(async () => result), lease = vi.fn(), remove = vi.fn(), sent = vi.fn()
   t.core.agents.byAgent = vi.fn(() => native as never)
   t.core.agents.creationStatus = lookup
-  t.core.agents.closeSwarm = close as NonNullable<CoreApi['agents']['closeSwarm']>
+  t.core.agents.closeSwarm = close as NonNullable<SwarmCore['agents']['closeSwarm']>
   t.core.account.backend = async (method, path, body) => {
     const command = (body as any)?.command
     if (command?.type === 'agent.stopLease') { lease(); return { status: 200, body: { data: { result: { durationMs: 120_000 } } } } }
@@ -3483,6 +3484,60 @@ describe('keeping a Swarm Lead alive', () => {
     await poll(1)
     expect(t.keepLeadAlive).toHaveBeenCalledWith('harness')
     expect(t.closeMember).not.toHaveBeenCalled()
+  })
+
+  /** The receipt its owner's prepare of switch [changeId] leaves (core/handoffPublication.ts), written [at] by the host's clock. */
+  const prepared = (t: ReturnType<typeof lifeFixture>, at: number, changeId = 'c'.repeat(32)) => {
+    const folder = join(t.dir, 'handoff-receipts')
+    mkdirSync(folder, { recursive: true, mode: 0o700 })
+    const file = join(folder, `${createHash('sha256').update(changeId).digest('hex')}.json`)
+    writeFileSync(file, JSON.stringify({ version: 1, committed: true, prepared: { request: { agentId: 'harness', changeId, targetEngine: 'codex' } } }), { mode: 0o600 })
+    utimesSync(file, at / 1000, at / 1000)
+  }
+
+  // anh Dee, 2026-11-13: an experiment never touches the core. The core let only that one stop of a Product Manager through,
+  // and recorded it, until then; its host sees the switch for itself now, from the receipt its owner's prepare left.
+  it('finds the switch its owner prepared as it finds the Lead stopped, records it, and holds the reopen to its limit', async () => {
+    const t = lifeFixture([leadRow()])
+    prepared(t, 0)
+    await t.poll(30_000)
+    expect(t.keepLeadAlive).not.toHaveBeenCalled()
+    expect(leadSwitchOf(t.dir, 'harness')).toEqual({ version: 1, agentId: 'harness', changeId: 'c'.repeat(32), targetEngine: 'codex', at: 30_000 })
+    await t.poll(SWITCH_HOLD_MS)
+    expect(t.keepLeadAlive).not.toHaveBeenCalled()
+    await t.poll(1)
+    expect(t.keepLeadAlive).toHaveBeenCalledWith('harness')
+  })
+
+  // Read once for each stop: a Lead that crashed is reopened at once, and a switch prepared after it was found stopped, or
+  // long before, holds nothing. Seen live again and stopped again, it is read again.
+  it('reads its receipts once for each stop, and takes no switch prepared long before or after it was found stopped', async () => {
+    const t = lifeFixture([leadRow()])
+    prepared(t, 0)
+    await t.poll(SWITCH_ARM_MS + 1)
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(1)
+    prepared(t, SWITCH_ARM_MS + 2, 'd'.repeat(32))
+    await t.poll(5_000)
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(2)
+    expect(leadSwitchOf(t.dir, 'harness')).toBeNull()
+    t.live(true)
+    await t.poll(1_000)
+    t.live(false)
+    prepared(t, SWITCH_ARM_MS + 6_002, 'e'.repeat(32))
+    await t.poll(1_000)
+    expect(leadSwitchOf(t.dir, 'harness')?.changeId).toBe('e'.repeat(32))
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(2)
+  })
+
+  it('reopens a Lead whose switch it could not record, as any that stopped', async () => {
+    const t = lifeFixture([leadRow()])
+    prepared(t, 0)
+    // A record's folder that is no private one cannot be written to.
+    mkdirSync(join(t.dir, 'super-tabs', 'lead-switch'), { recursive: true, mode: 0o700 })
+    chmodSync(join(t.dir, 'super-tabs', 'lead-switch'), 0o777)
+    await t.poll(1_000)
+    expect(t.log).toHaveBeenCalledWith(expect.stringContaining('Could not record the switch of the Product Manager harness'))
+    expect(t.keepLeadAlive).toHaveBeenCalledWith('harness')
   })
 
   // Security review 2 of #2493: a new session the Swarm did not take in must not run unlinked beside the reopened one.

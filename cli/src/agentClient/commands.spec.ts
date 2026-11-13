@@ -7,7 +7,6 @@ import { RefusedError, type Rpc } from '../messages/rpc.js'
 import { AgentClientError, type Daemon, type PushedEvent, type Where } from './daemon.js'
 import { Ledger, ledgerPath } from './ledger.js'
 import { agentSettingsPath } from '../lib/agentSettings.js'
-import { LEAD_PROTECTED_DETAIL } from '../lib/closeAgentService.js'
 import { setAgentSettingsForTest, signedOutForTest, TEST_ACCOUNT } from '../testing/agentSettings.js'
 import type { Frame } from './model.js'
 import { HACHI_ID } from '../dsh/builtinIds.js'
@@ -1141,8 +1140,8 @@ describe('harness delete', () => {
 
   it('says purge\'s own refusals as they are', async () => {
     const lead = setupDelete()
-    lead.d.extra.agent_purge = () => ({ error: 'LEAD_PROTECTED', detail: LEAD_PROTECTED_DETAIL })
-    expect(await lead.run([KID])).toMatchObject({ code: EXIT.failed, err: [LEAD_PROTECTED_DETAIL] })
+    lead.d.extra.agent_purge = () => ({ error: 'DELETE_IN_PROGRESS', detail: 'This harness is already being deleted.' })
+    expect(await lead.run([KID])).toMatchObject({ code: EXIT.failed, err: ['This harness is already being deleted.'] })
     expect(lead.requests('agent_purge')).toHaveLength(1)
     const refused = setupDelete({ error: 'DELETE_REFUSED', detail: 'The harness did not stop. No session data was deleted.' })
     expect(await refused.run([KID])).toMatchObject({ code: EXIT.failed, err: ['The harness did not stop. No session data was deleted.'] })

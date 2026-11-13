@@ -2,11 +2,13 @@
  * The Swarm switch on the real daemon (harnessd/services.ts `HARNESS_SWARM`; Dee, v1's last item: the daemon core stays
  * small and reliable, and the Swarm is a subsystem that can be switched off). Off, the master never starts the Swarm's
  * process and the core loads none of its code (superTabs/inCore.ts), even on a computer that has the Swarm's saved state:
- * agents start, run and close exactly as without the Swarm, a Lead the Swarm keeps is no longer protected, a start that
- * asks for a Swarm role is refused, and the Swarm's requests are answered unavailable. On, the default, nothing changes:
- * the saved state wakes its process, its requests are answered, and its Lead is never closed.
+ * agents start, run and close exactly as without the Swarm, a start that asks for a Swarm role is refused, and the
+ * Swarm's requests are answered unavailable. On, the default, the saved state wakes its process and its requests are
+ * answered. On or off, the core closes, stops and deletes an agent the Swarm keeps as its Lead as any agent: the Swarm is
+ * an experiment, which never touches the core (anh Dee, 2026-11-13), and it keeps its Product Managers alive itself, from
+ * its own process (superTabs/host.ts keepAlive).
  */
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -50,7 +52,7 @@ async function turn(client: LocalClient, agentId: string, content: string): Prom
   await ended
 }
 /** What the Swarm's host keeps on a computer that contributed to one: its host file, which wakes the service at a start,
- *  and its retention naming `lead` as an active project's Lead, which the core never closes while the Swarm is on. */
+ *  and its retention naming `lead` as an active project's Lead. */
 function swarmState(d: IsolatedDaemon, lead?: string): void {
   mkdirSync(join(d.dataDir, 'super-tabs'), { recursive: true, mode: 0o700 })
   writeFileSync(join(d.dataDir, 'super-tabs', `host-${MACHINE}.json`), JSON.stringify({ version: 1, machineId: MACHINE }), { mode: 0o600 })
@@ -120,7 +122,7 @@ describe('the Swarm switch', () => {
     expect(loaded.filter((url) => SWARM_CODE.test(url))).toEqual([])
   }, 240_000)
 
-  it('on by default, nothing changes: its saved state wakes its process, its requests are answered, its Lead is never closed', async () => {
+  it('on by default, its saved state wakes its process and its requests are answered, and its Lead closes as any agent', async () => {
     // Empty reads as unset, whatever the run was started with (`HARNESS_SWARM=off npm run test:e2e`).
     const modules = recordIn('swarm-on-modules-')
     const { d, client } = await fresh({ HARNESS_SWARM: '' }, modules)
@@ -129,7 +131,7 @@ describe('the Swarm switch', () => {
     await until('the Swarm\'s process, woken by its saved state', () => swarmStarts(d) > 0 || null, 60_000, 200)
     expect(await client.request('super_tabs', { action: 'swarmListed', harnessId: 'probe' }, 60_000)).toMatchObject({ ok: true })
     swarmState(d, agent.id)
-    expect(await close(client, agent)).toMatchObject({ error: 'LEAD_PROTECTED' })
+    expect(await close(client, agent)).toMatchObject({ closed: true })
     expect(d.log()).not.toContain('[services] superTabs is turned off on this computer')
     // The recording sees the Swarm's code where it runs: its side of the core, and its own process.
     const processes = [...loadedModules(modules).values()]
@@ -158,42 +160,29 @@ describe('the Swarm switch', () => {
     expect(serviceFiles(coreOf([...loadedModules(modules).values()]))).toEqual(SERVICE_FILES)
   }, 240_000)
 
-  // Dee, 11-01: a Product Manager's engine is switched from its pane, as any pane's (Change agent). Its machine lets its stop
-  // through only as that switch, which its owner prepared moments before; every other close, and a second switch while it
-  // runs, is refused, and the switch is kept on disk so its host holds off reopening it (superTabs/leadSwitch.ts).
-  it('on, a Lead stops only for the engine switch its owner prepared, once, and its switch is kept for its host', async () => {
+  // anh Dee, 2026-11-13: an experiment never touches the core. Until then the core let a Product Manager stop only for the
+  // engine switch its owner prepared, once, refused every other close, Stop Harness and delete of it, and recorded the switch
+  // for its host. Now each is what it is for any agent, and the Swarm sees the switch itself (superTabs/leadSwitch.ts).
+  it('on, the core closes and deletes an agent the Swarm keeps as its Lead as any agent, and records nothing of it', async () => {
     const { d, client } = await fresh({ HARNESS_SWARM: '' })
-    const agent = await create(d, client, 'swarm-lead-switch')
-    await turn(client, agent.id, 'a Product Manager plans the work')
+    const lead = await create(d, client, 'swarm-lead-switch')
+    await turn(client, lead.id, 'a Product Manager plans the work')
     await until('the Swarm\'s process, woken by its saved state', () => swarmStarts(d) > 0 || null, 60_000, 200)
-    swarmState(d, agent.id)
-    const CHANGE = '0123456789abcdef0123456789abcdef', OTHER = 'fedcba9876543210fedcba9876543210'
-    const named = (changeId: string) => client.request('agent_close', { agentId: agent.id, sessionId: agent.sessionId, createdAt: agent.createdAt,
-      mode: 'now', changeId }, 60_000)
-    const refused = { error: 'LEAD_PROTECTED', detail: 'This harness is the Product Manager of a Swarm project. Delete its project first to stop it.' }
-    // Not a switch, or one nobody prepared: refused as before.
-    expect(await close(client, agent)).toMatchObject(refused)
-    expect(await named(CHANGE)).toMatchObject(refused)
-    const prepared = await client.request('agent_handoff_prepare', { agentId: agent.id, changeId: CHANGE, targetEngine: 'codex' }, 30_000)
+    swarmState(d, lead.id)
+    const CHANGE = '0123456789abcdef0123456789abcdef'
+    const prepared = await client.request('agent_handoff_prepare', { agentId: lead.id, changeId: CHANGE, targetEngine: 'codex' }, 30_000)
     expect(prepared.error, JSON.stringify(prepared)).toBeUndefined()
-    // Prepared, but a plain close or another switch's close still is not it.
-    expect(await close(client, agent)).toMatchObject(refused)
-    expect(await named(OTHER)).toMatchObject(refused)
-    expect((await row(client, agent.id))?.status).toBe('active')
-    expect(await named(CHANGE)).toMatchObject({ closed: true })
-    await until('the switch to stop the Product Manager', async () => ((await row(client, agent.id))?.status ?? 'stopped') !== 'active' || null, 60_000, 500)
-    // A second switch while this one runs is refused.
-    expect(await named(OTHER)).toMatchObject({ error: 'LEAD_SWITCHING' })
-    expect(readdirSync(join(d.dataDir, 'super-tabs', 'lead-switch'))).toHaveLength(1)
-    // Security reviews 1 and 2 of #2493: nothing else gets through in the moments after, whoever asks. Stop Harness and the
-    // deletion of its saved conversation, which its host reopens, are refused with today's words. A script's close of it is
-    // answered as for any session closed already, and changes nothing: its saved conversation stays for its host to reopen.
-    expect(await client.request('agent_delete', { agentId: agent.id }, 60_000)).toMatchObject(refused)
-    const createdAt = Date.parse(agent.createdAt)
-    const review = await client.request('agent_purge', { agentId: agent.id, sessionId: agent.sessionId, createdAt, mode: 'inspect' }, 60_000)
-    expect(await client.request('agent_purge', { agentId: agent.id, sessionId: agent.sessionId, createdAt, mode: 'delete', reviewId: review.reviewId }, 60_000))
-      .toMatchObject(refused)
-    expect(await close(client, agent)).toMatchObject({ closed: true })
-    expect(await row(client, agent.id)).toMatchObject({ sessionId: agent.sessionId, status: expect.not.stringMatching(/^active$/) })
+    // Change agent's close, naming its switch: a close as any other.
+    expect(await client.request('agent_close', { agentId: lead.id, sessionId: lead.sessionId, createdAt: lead.createdAt, mode: 'now', changeId: CHANGE }, 60_000))
+      .toMatchObject({ closed: true })
+    await until('the close to stop the Product Manager', async () => ((await row(client, lead.id))?.status ?? 'stopped') !== 'active' || null, 60_000, 500)
+    // The core kept no record of the switch, which the Swarm's host now keeps itself.
+    expect(existsSync(join(d.dataDir, 'super-tabs', 'lead-switch'))).toBe(false)
+    // The delete of its saved conversation, refused for a Lead until then, is what it is for any agent.
+    const createdAt = Date.parse(lead.createdAt)
+    const review = await client.request('agent_purge', { agentId: lead.id, sessionId: lead.sessionId, createdAt, mode: 'inspect' }, 60_000)
+    expect(review.reviewId, JSON.stringify(review)).toEqual(expect.any(String))
+    const deleted = await client.request('agent_purge', { agentId: lead.id, sessionId: lead.sessionId, createdAt, mode: 'delete', reviewId: review.reviewId }, 90_000)
+    expect(deleted, JSON.stringify(deleted)).toMatchObject({ deleted: true })
   }, 240_000)
 })

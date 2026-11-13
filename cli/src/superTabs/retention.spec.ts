@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, unlinkSync, utimesSync, wr
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
-import { ASSIGNED_GRACE_MS, mayBeLead, RETENTION_LAPSE_MS, retainContributions, retainedHarnesses, retainedLeads, retentionFile } from './retention.js'
+import { ASSIGNED_GRACE_MS, RETENTION_LAPSE_MS, retainContributions, retainedHarnesses, retainedLeads, retentionFile } from './retention.js'
 
 const roots: string[] = []
 const root = () => { const dir = mkdtempSync(join(tmpdir(), 'super-retention-')); roots.push(dir); return dir }
@@ -37,7 +37,6 @@ it('keeps no session in no open group, whatever owner its row names', () => {
     buddyOf: { personId: 'diego', generation: 'g1' } }, buddySleepManaged: true }], now)
   expect([...retainedHarnesses(dir, now)]).toEqual([])
   expect([...retainedLeads(dir)]).toEqual([])
-  expect(mayBeLead(dir, 'owned')).toBe(false)
 })
 
 it('lets a new machine identity replace the old entry, and lapses a roster nobody confirms', () => {
@@ -87,21 +86,6 @@ it('reopens no Lead from an unreadable file', () => {
   retainContributions(dir, 'machine', [row('lead', { lead: true })])
   writeFileSync(retentionFile(dir), '{')
   expect([...retainedLeads(dir)]).toEqual([])
-})
-
-// The review of #1635: a file from before Leads were kept, or one that cannot be read, must not let a stop through to a
-// Lead. Until a roster says which members are Leads, each member may be one; a file nobody can read protects them all.
-it('treats a stop as possibly of a Lead until a valid roster says otherwise', () => {
-  const dir = root(), file = retentionFile(dir)
-  expect(mayBeLead(dir, 'anyone')).toBe(false)
-  retainContributions(dir, 'machine', [row('lead', { lead: true }), row('worker')])
-  expect([mayBeLead(dir, 'lead'), mayBeLead(dir, 'worker'), mayBeLead(dir, 'personal')]).toEqual([true, false, false])
-  writeFileSync(file, JSON.stringify({ version: 2, machineId: 'machine', harnesses: ['old-member'] }))
-  expect([mayBeLead(dir, 'old-member'), mayBeLead(dir, 'personal')]).toEqual([true, false])
-  writeFileSync(file, '{')
-  expect([mayBeLead(dir, 'old-member'), mayBeLead(dir, 'personal')]).toEqual([true, true])
-  retainContributions(dir, 'machine', [row('worker')])
-  expect([mayBeLead(dir, 'old-member'), mayBeLead(dir, 'worker')]).toEqual([false, false])
 })
 
 // A session the backend ends is closed by the host, and only one it already kept as a member: the retention is that proof,

@@ -419,19 +419,13 @@ describe('what an experiment in its own process may ask of the core', () => {
   })
 })
 
-it('exposes identity-bound close only to the Swarm service and validates its native identity', async () => {
-  const closeSwarm = vi.fn(async () => ({ closed: true as const })), core = fakeCore({ agents: { closeSwarm } })
-  const allowed = new Set(['superTabs', 'orchestrator'])
-  const payload = { expiresAt: Date.now() + 120_000, agentId: 'worker', creationId: 'super-original-creation', sessionId: 'native', createdAt: '2026-10-22T00:00:00.000Z' }
-  expect(await answerExperimentQuery(core, allowed, 'superTabs', 'close_swarm', payload)).toEqual({ closed: true })
-  expect(closeSwarm).toHaveBeenCalledWith(payload)
-  expect(await answerExperimentQuery(core, allowed, 'superTabs', 'close_swarm', { agentId: 'gone' })).toEqual({ closed: true })
-  expect(closeSwarm).toHaveBeenLastCalledWith({ agentId: 'gone' })
-  expect(await answerExperimentQuery(core, allowed, 'orchestrator', 'close_swarm', payload)).toEqual({ error: 'NOT_SUPER_TABS' })
-  for (const invalid of [{ ...payload, agentId: '' }, { ...payload, sessionId: 1 }, { ...payload, createdAt: 'bad' }, { ...payload, creationId: 'bad' }, { ...payload, creationId: 4 }, { ...payload, createdAt: 4 }, { ...payload, expiresAt: 'later' }, { ...payload, expiresAt: Infinity }]) {
-    expect(await answerExperimentQuery(core, allowed, 'superTabs', 'close_swarm', invalid)).toEqual({ error: 'INVALID_REQUEST' })
+// anh Dee, 2026-11-13: an experiment never touches the core. The Swarm's closes and reopens of its own agents were answered
+// here; its process does them itself now (superTabs/ownAgents.ts), and an older one's asks are no query of the core's.
+it('answers no component\'s own close or reopen of its agents', async () => {
+  const allowed = new Set(['superTabs'])
+  for (const query of ['close_swarm', 'keep_lead_alive', 'close_member']) {
+    expect(await answerExperimentQuery(fakeCore(), allowed, 'superTabs', query, { agentId: 'lead' })).toBeNull()
   }
-  expect(await answerExperimentQuery(fakeCore(), allowed, 'superTabs', 'close_swarm', payload)).toEqual({ error: 'UNSUPPORTED' })
 })
 
 it('asks the core about the agents it is given, keeping only the first 64 ids that are strings, to the Swarm service alone', async () => {
@@ -492,27 +486,6 @@ it('gives the Swarm service the answer of the turn an end names, as the core has
   expect(await answerExperimentQuery(core, allowed, 'orchestrator', 'turn_answer', ask)).toEqual({ error: 'NOT_SUPER_TABS' })
   expect(await answerExperimentQuery(core, allowed, 'gateway', 'turn_answer', ask)).toEqual({ error: 'NOT_AN_EXPERIMENT' })
   expect(answerOf).not.toHaveBeenCalled()
-})
-
-it('lets only the Swarm service reopen a Lead or close a member, by a valid agent id', async () => {
-  const keepLeadAlive = vi.fn(async () => ({ ok: true as const })), closeMember = vi.fn(async () => ({ closed: true as const }))
-  const core = fakeCore({ agents: { keepLeadAlive, closeMember } })
-  const allowed = new Set(['superTabs', 'orchestrator'])
-  expect(await answerExperimentQuery(core, allowed, 'superTabs', 'keep_lead_alive', { agentId: 'lead' })).toEqual({ ok: true })
-  expect(keepLeadAlive).toHaveBeenCalledWith('lead')
-  expect(await answerExperimentQuery(core, allowed, 'superTabs', 'close_member', { agentId: 'worker' })).toEqual({ closed: true })
-  expect(closeMember).toHaveBeenCalledWith('worker', undefined)
-  expect(await answerExperimentQuery(core, allowed, 'superTabs', 'close_member', { agentId: 'worker', creationId: 'super-0123456789abcdef' })).toEqual({ closed: true })
-  expect(closeMember).toHaveBeenLastCalledWith('worker', 'super-0123456789abcdef')
-  for (const creationId of ['short', 4]) expect(await answerExperimentQuery(core, allowed, 'superTabs', 'close_member', { agentId: 'worker', creationId })).toEqual({ error: 'INVALID_REQUEST' })
-  for (const query of ['keep_lead_alive', 'close_member']) {
-    expect(await answerExperimentQuery(core, allowed, 'orchestrator', query, { agentId: 'lead' })).toEqual({ error: 'NOT_SUPER_TABS' })
-    for (const agentId of ['', '../x', 4]) expect(await answerExperimentQuery(core, allowed, 'superTabs', query, { agentId })).toEqual({ error: 'INVALID_REQUEST' })
-  }
-  expect(await answerExperimentQuery(fakeCore(), allowed, 'superTabs', 'keep_lead_alive', { agentId: 'lead' })).toEqual({ ok: false, error: 'UNSUPPORTED' })
-  expect(await answerExperimentQuery(fakeCore(), allowed, 'superTabs', 'close_member', { agentId: 'worker' })).toEqual({ error: 'UNSUPPORTED' })
-  expect(keepLeadAlive).toHaveBeenCalledTimes(1)
-  expect(closeMember).toHaveBeenCalledTimes(2)
 })
 
 describe('what the add-ons of a device that is this machine ask of the core', () => {

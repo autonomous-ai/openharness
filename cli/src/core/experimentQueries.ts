@@ -7,8 +7,6 @@
  *   and what its frame says about its harness (its viewer);
  * - `create`: create an agent, as the window's `agent_create` does;
  * - `creation_status`: read the exact native receipt without exposing its launch request;
- * - `keep_lead_alive`, `close_member`: for the Super Tab service alone, reopen a stopped Swarm Lead and close a member
- *   whose session its backend ended, each only as core/api.ts allows;
  * - `last_turn`: a session's last turn as its engine recorded it, for the Super Tab service alone: after a restart that cut a message
  *   off in the middle of typing, whether its agent took it (superTabs/host.ts hadBeforeRestart), and what a Swarm process of 0.5.82
  *   asks at a turn's end;
@@ -43,7 +41,7 @@ import { creationObservation } from '../lib/creationObservation.js'
 type Payload = Record<string, unknown>
 type Core = Pick<CoreApi, 'agents' | 'turns' | 'clients' | 'daemon' | 'account' | 'cloud' | 'superTabs' | 'panes' | 'transcripts'>
 
-const QUERIES: ReadonlySet<string> = new Set(['shown', 'activity', 'last_turn', 'turn_answer', 'close_swarm', 'keep_lead_alive', 'close_member', 'stopped', 'gone', 'creation_status', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account', 'cloud_publish', 'cloud_ask', 'cloud_unask', 'super_tab_observers', 'pane_screen', 'pane_input', 'pane_input_if_screen'])
+const QUERIES: ReadonlySet<string> = new Set(['shown', 'activity', 'last_turn', 'turn_answer', 'stopped', 'gone', 'creation_status', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account', 'cloud_publish', 'cloud_ask', 'cloud_unask', 'super_tab_observers', 'pane_screen', 'pane_input', 'pane_input_if_screen'])
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 
 /** The pane queries' names before 2026-11-13, which a Swarm process from an older build still sends while it runs beside a
@@ -129,29 +127,6 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
   switch (query) {
     case 'shown':
       return shownAgents(core)
-    case 'close_swarm': {
-      if (service !== 'superTabs') return { error: 'NOT_SUPER_TABS' }
-      const { agentId, creationId, sessionId, createdAt, expiresAt } = payload
-      if (!/^[A-Za-z0-9_-]{1,160}$/.test(text(agentId)) ||
-          creationId !== undefined && (typeof creationId !== 'string' || !/^[A-Za-z0-9_-]{16,96}$/.test(creationId)) ||
-          sessionId !== undefined && typeof sessionId !== 'string' ||
-          createdAt !== undefined && (typeof createdAt !== 'string' || !Number.isFinite(Date.parse(createdAt))) ||
-          expiresAt !== undefined && (typeof expiresAt !== 'number' || !Number.isFinite(expiresAt))) return { error: 'INVALID_REQUEST' }
-      return { ...await (core.agents.closeSwarm?.({ agentId: agentId as string,
-        ...(typeof creationId === 'string' ? { creationId } : {}), ...(typeof sessionId === 'string' ? { sessionId } : {}),
-        ...(typeof createdAt === 'string' ? { createdAt } : {}), ...(typeof expiresAt === 'number' ? { expiresAt } : {}) }) ?? { error: 'UNSUPPORTED' }) }
-    }
-    // The Super Tab host keeps its Leads alive and closes the sessions its backend ends; the core decides which (core/api.ts).
-    case 'keep_lead_alive':
-    case 'close_member': {
-      if (service !== 'superTabs') return { error: 'NOT_SUPER_TABS' }
-      const { agentId, creationId } = payload
-      if (typeof agentId !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(agentId)
-        || creationId !== undefined && (typeof creationId !== 'string' || !/^[A-Za-z0-9_-]{16,96}$/.test(creationId))) return { error: 'INVALID_REQUEST' }
-      return query === 'keep_lead_alive'
-        ? { ...await (core.agents.keepLeadAlive?.(agentId) ?? { ok: false, error: 'UNSUPPORTED' }) }
-        : { ...await (core.agents.closeMember?.(agentId, creationId as string | undefined) ?? { error: 'UNSUPPORTED' }) }
-    }
     // Whether its agents are in a turn (superTabs/host.ts).
     case 'activity': {
       if (service !== 'superTabs') return { error: 'NOT_SUPER_TABS' }

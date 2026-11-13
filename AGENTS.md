@@ -32,7 +32,10 @@ The core is the one process every agent depends on (`cli/src/core/`). Protect it
 - **Small.** It owns sessions only: agents, terminals, transcripts, turns, input, questions.
 - **Everything else is a component in a process of its own:** the relay, the Swarm, devices, models, search, viewers,
   every new feature. The same at run time: the core runs without any of them, and loads none of their code but
-  through a door its test lists file by file.
+  through a door its test lists file by file, which the audit empties.
+- **An experiment never touches the core.** The Swarm is one, built as if it will be shut down: it works through what
+  the core offers every client, from its own process, and the core grows no rule, list or record for it (anh Dee,
+  2026-11-13).
 - **Secure.** It is the most trusted process, so it meets the outside least: what someone else can shape is checked in
   a component before it reaches the core.
 

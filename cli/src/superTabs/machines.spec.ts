@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
-import { fakeCore } from '../testing/fakeCore.js'
+import { fakeSwarmCore as fakeCore } from '../testing/fakeSwarmCore.js'
 import { apisOn, ContributedMachines, createQuietGit, liveOn, localModelsStamp, offered, READINGS_RETRY_MS, refusedOn, servedOn, sharedWith, swarmUnconfirmedFile, swarmWorktreesFile } from './machines.js'
 import { SuperTabHostError } from './host.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
@@ -16,6 +16,8 @@ import { recordCleanupClose } from './cleanupCloses.js'
 import { SwarmReads } from './swarmReads.js'
 import { object } from './wire.js'
 import { processCoreApi } from '../services/processCoreApi.js'
+import { withOwnAgents } from './ownAgents.js'
+import { retainContributions } from './retention.js'
 
 function fixture(env: NodeJS.ProcessEnv = {}) {
   let now = 1000, stamp = 's0'
@@ -2449,19 +2451,26 @@ describe('removed machine cleanup', () => {
     const cloned = join(m.data, 'swarm-projects', 'tab', 'project')
     const starts = [...m.starts, { id: 'cloned', creationId: 'super-cloned-0123456789', harnessId: 'h-cloned', request: { machineId: 'host', worktree: false, cwd: cloned } }]
     m.backend.mockImplementation(async (_core, method, path) => method === 'GET' && path.startsWith('/api/super-tabs/tab/') ? swarmReply(path, { starts }) : { parts: [] })
-    let live = [session('h-recorded', m.recorded, 'agent'), session('h-cloned', cloned, 'agent')]
-    const asked: [string, Record<string, unknown>][] = []
-    const ask = vi.fn(async (query: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
-      asked.push([query, payload])
-      if (query === 'creation_status') return { observation: { creationId: payload.creationId, state: 'created', agentId: 'h-cloned' } }
-      if (query !== 'close_member') return { error: 'UNKNOWN_QUERY' }
+    let live = [{ ...session('h-recorded', m.recorded, 'agent'), sessionId: 's-recorded', registeredAt: 1000 },
+      { ...session('h-cloned', cloned, 'agent'), sessionId: 's-cloned', registeredAt: 2000 }]
+    // Its host kept the recorded one as a member; the cloned one, its start receipt proves the Swarm's own.
+    retainContributions(m.data, 'host', [{ tabId: 'tab', agent: { harnessId: 'h-recorded', machineId: 'host' } }])
+    const ask = vi.fn(async (query: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> =>
+      query === 'creation_status' ? { observation: { creationId: payload.creationId, state: 'created', agentId: 'h-cloned' } } : { error: 'UNKNOWN_QUERY' })
+    // The Swarm closes its own agents as any client does, through the core's `agent_close` (superTabs/ownAgents.ts).
+    const closes: Record<string, unknown>[] = []
+    const open = vi.fn(async () => ({ machineId: 'host', close: () => {}, request: async (type: string, payload: Record<string, unknown> = {}) => {
+      if (type !== 'agent_close') return { error: 'UNKNOWN' }
+      closes.push(payload)
       live = live.filter(s => s.agentId !== payload.agentId)
       return { closed: true }
-    })
-    const core = processCoreApi(m.data, 'superTabs', { live: () => live, ask })
+    } }))
+    const core = withOwnAgents(processCoreApi(m.data, 'superTabs', { live: () => live, ask }), open)
     await new ContributedMachines(core, 'host', { backend: m.backend, log: m.log, now: () => 0 } as never).clean('tab', 'removal')
-    expect(asked.filter(([query]) => query === 'close_member').map(([, payload]) => payload).sort((a, b) => String(a.agentId).localeCompare(String(b.agentId))))
-      .toEqual([{ agentId: 'h-cloned', creationId: 'super-cloned-0123456789' }, { agentId: 'h-recorded' }])
+    expect(closes.sort((a, b) => String(a.agentId).localeCompare(String(b.agentId)))).toEqual([
+      { agentId: 'h-cloned', sessionId: 's-cloned', createdAt: new Date(2000).toISOString(), mode: 'now' },
+      { agentId: 'h-recorded', sessionId: 's-recorded', createdAt: new Date(1000).toISOString(), mode: 'now' }])
+    expect(ask).toHaveBeenCalledWith('creation_status', { creationId: 'super-cloned-0123456789' })
     for (const gone of [join(m.data, 'swarm-projects', 'tab'), m.recorded]) expect(existsSync(gone), gone).toBe(false)
     expect(m.acks()).toHaveLength(1)
     expect(records(m)).toEqual(['other-tab'])

@@ -22,8 +22,10 @@ small and secure, in the code and at run time, and everything else is a componen
 (anh Dee, 2026-11-12). Each of those components is an experiment, tested every day, that can be switched off or
 deleted at any time, the Swarm among them: "small tiny core that is super stable and solid and a lot of components
 around it" (anh Dee, 2026-11-13). So nothing in the core depends on one, and deleting one changes nothing in the core.
-What still breaks these rules, and the order it is fixed in, is in [the audit](../docs/design/2026-11-12-core-audit.md):
-that list only shrinks.
+An experiment never touches the core: "experimental feature should never touch core. it should be in its own sub
+component and process when we turn on", and the Swarm is built "with the assumption that 99.99% of the swarm feature
+will be shut down" (anh Dee, 2026-11-13). What still breaks these rules, and the order it is fixed in, is in
+[the audit](../docs/design/2026-11-12-core-audit.md): that list only shrinks.
 
 1. **The core is a process, not a folder.** Everything `src/core/main.ts` imports runs in it, wherever the file
    lives: `core/`, `lib/`, `engines/`, a component's door. `src/architecture.spec.ts` walks those imports.
@@ -46,6 +48,13 @@ that list only shrinks.
 6. **Adding to the core's process is a decision.** Every file it loads is a line of
    `src/architecture.coreFiles.txt`, and the test fails on one more. A pull request that adds a line says why
    every session needs the file; one that takes a file out deletes its line.
+7. **The core grows nothing for a component.** A component works through what the core offers every client
+   and service: the local API the apps use (a component's process may open it as this computer's owner's tool,
+   `agentClient/daemon.ts`) and `CoreApi`. Where that is not enough, the component does it in its own process,
+   or does without. No rule, list, record or mechanism goes into the core for one component, not even a generic
+   one only it would use: build it as if the component will be deleted, and nothing in the core is left to take
+   out. The Swarm's Product Managers were the first case: the core refused to stop one until 2026-11-13; now a
+   Product Manager closes as any agent, and the Swarm reopens it from its own process (`superTabs/ownAgents.ts`).
 
 ### The processes
 

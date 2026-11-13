@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
-import { AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS, mayOpenBrowser, CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, emptyPorts, LANE_OFF, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, TURN_DELIVERERS, TURN_END_HEARERS, WIFI_FALLBACKS, WIFI_OFF, type CoreApiDeps, type SwarmAgentDeps } from './api.js'
+import { AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS, mayOpenBrowser, CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, emptyPorts, LANE_OFF, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, TURN_DELIVERERS, TURN_END_HEARERS, WIFI_FALLBACKS, WIFI_OFF, type CoreApiDeps } from './api.js'
 import { FAIL, readFallback } from './serviceHost.js'
 import { HACHI_ID } from '../dsh/builtinIds.js'
 
@@ -10,20 +10,11 @@ describe('the core API services stand on', () => {
   it('allows a bounded batch of GitHub reads to finish outside the core', () => {
     expect(LONG_ANSWERS.projects).toEqual({ git_pull_requests_status: 120_000 })
   })
-  // The Swarm decides which of its agents it may close or reopen (superTabs/inCore/agents.ts); the core hands it what it
-  // reads them by, and has none of those members while the Swarm is off.
-  it('offers the Swarm\'s agent members only when handed them, built on the core\'s own registry, receipts, close and resume', async () => {
-    const deps = coreDeps(), closeAgent = vi.fn(async () => ({ closed: true as const })), resumeAgent = vi.fn(async () => ({ ok: true as const }))
-    const creationStatus = vi.fn(async () => null)
-    const off = createCoreApi(deps).agents
-    expect([off.closeSwarm, off.keepLeadAlive, off.closeMember]).toEqual([undefined, undefined, undefined])
-    const swarm = { closeSwarm: vi.fn(async () => ({ closed: true as const })), keepLeadAlive: vi.fn(async () => ({ ok: true as const })), closeMember: vi.fn(async () => ({ closed: true as const })) }
-    let given: SwarmAgentDeps | null = null
-    const on = createCoreApi({ ...deps, closeAgent, resumeAgent, creationStatus, swarmAgents: (agentDeps) => { given = agentDeps; return swarm } }).agents
-    expect([on.closeSwarm, on.keepLeadAlive, on.closeMember]).toEqual([swarm.closeSwarm, swarm.keepLeadAlive, swarm.closeMember])
-    expect(given!.byAgent('live')).toEqual(row('live'))
-    expect(given!.stoppedIds()).toEqual(['stopped'])
-    expect([given!.closeAgent, given!.resumeAgent, given!.creationStatus]).toEqual([closeAgent, resumeAgent, creationStatus])
+  // anh Dee, 2026-11-13: an experiment never touches the core. The Swarm's closes and reopens of its own agents are its own
+  // now (superTabs/ownAgents.ts), through the requests any client sends: the core's API has none of them.
+  it('offers no component its own closes or reopens of its agents', () => {
+    const agents = createCoreApi(coreDeps()).agents as Record<string, unknown>
+    expect([agents.closeSwarm, agents.keepLeadAlive, agents.closeMember]).toEqual([undefined, undefined, undefined])
   })
 
   it('carries the existing native creation-status provider without inventing one for an older core', async () => {

@@ -4,14 +4,14 @@
  *
  * Membership only in archived groups is not in use, and a roster nobody confirms
  * for a week (signed out, unlinked machine) lapses, except a project's Lead, which
- * is never stopped. A paused tab still counts: pause blocks new work, while
+ * its host keeps alive (superTabs/host.ts keepAlive). A paused tab still counts: pause blocks new work, while
  * discussion and running assignments continue. */
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { identifier, object } from './wire.js'
 
-/** `leads`: the Leads of active projects here, which never lapse (owner, 2026-10-23: the Lead of an active project is never
- *  stopped in any case). Absent in a file from before Leads were kept.
+/** `leads`: the Leads of active projects here, which never lapse (owner, 2026-10-23: the Lead of an active project is kept
+ *  alive in any case). Absent in a file from before Leads were kept.
  *  `assigned`: when the host first received each assignment its harnesses hold, epoch ms. Such a harness is in `harnesses`
  *  while it holds it and for ASSIGNED_GRACE_MS after it came, whatever its groups (task #2744). Absent in older files. */
 interface Retention { version: 2; machineId: string; harnesses: string[]; leads?: string[]; assigned?: Record<string, number> }
@@ -45,18 +45,6 @@ export function retainedHarnesses(dataDir: string, now = Date.now()): Set<string
 /** The Leads here, which a valid roster lets the core reopen. */
 export function retainedLeads(dataDir: string): Set<string> {
   try { return new Set(read(retentionFile(dataDir)).leads ?? []) } catch { return new Set() }
-}
-
-/** Whether a stop may reach a Lead, for the core's guard, which fails closed (the review of #1635): with no file this
- *  machine never had a roster, so no Lead; one from before Leads were kept names no Lead apart, so each member may be one;
- *  one that cannot be read may name anyone, until the host's next roster rewrites it. */
-export function mayBeLead(dataDir: string, agentId: string): boolean {
-  const file = retentionFile(dataDir)
-  if (!existsSync(file)) return false
-  try {
-    const kept = read(file)
-    return (kept.leads ?? kept.harnesses).includes(agentId)
-  } catch { return true }
 }
 
 /** [assignments]: the host form's assignment rows for this machine, which hold their harnesses (task #2744: Tern's last group

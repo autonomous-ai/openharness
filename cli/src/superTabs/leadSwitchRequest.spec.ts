@@ -11,6 +11,7 @@ import { readFixture } from './fixtures/read/index.js'
 vi.mock('../engines/kit/launchExecutable.js', async original => ({ ...await original<object>(),
   launchEnvironment: async () => Object.fromEntries(['HOME', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME'].filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]])) }))
 import type { EngineStatusRun } from '../lib/engineAccount.js'
+import { leadSwitchOf } from './leadSwitch.js'
 import { LeadSwitchRequests, profileSignedIn, switchChangeId, type SwitchRow } from './leadSwitchRequest.js'
 
 afterEach(() => { vi.unstubAllEnvs() })
@@ -29,7 +30,7 @@ function writeRecord(dataDir: string, changeId: string, at: number) {
 }
 
 function setup(options: { claim?: boolean; refuse?: string; live?: boolean; resultStale?: boolean; old?: Record<string, unknown>; signedIn?: boolean;
-  claimGate?: Promise<void>; claimFails?: boolean; createTimesOut?: boolean; createHeld?: boolean; noRecord?: boolean } = {}) {
+  claimGate?: Promise<void>; claimFails?: boolean; createTimesOut?: boolean; createHeld?: boolean } = {}) {
   const clock = { now: NOW }
   const dataDir = mkdtempSync(join(tmpdir(), 'lead-switch-'))
   const calls: Array<[string, Record<string, unknown>]> = []
@@ -54,8 +55,6 @@ function setup(options: { claim?: boolean; refuse?: string; live?: boolean; resu
     }
     if (type === 'agent_close') {
       live = false
-      // What the real close does once its stop went through (leadSwitch.ts leadSwitchEnded): the hold starts.
-      if (!options.noRecord) writeRecord(dataDir, String(payload.changeId), clock.now)
       return { closed: true }
     }
     if (type === 'agent_create' && options.createTimesOut) throw new Error('timed out')
@@ -84,6 +83,9 @@ describe('a PM host carrying out a switch the Swarm asked for', () => {
     expect(t.calls[2][1]).not.toHaveProperty('claudeHome')
     expect(String(t.calls[2][1].prompt)).toContain(`.harness/handoff/h1-${changeId}.md`)
     expect(t.calls[3][1]).toEqual({ agentId: 'h1', replacementId: 'h2', changeId, targetEngine: 'claude' })
+    // anh Dee, 2026-11-13: an experiment never touches the core, which recorded the switch until then. The host records it
+    // itself once its close went through, so it holds off reopening the old session (leadSwitch.ts).
+    expect(leadSwitchOf(t.dataDir, 'h1')).toEqual({ version: 1, agentId: 'h1', changeId, targetEngine: 'claude', at: NOW })
   })
 
   // The PM's row still holds the GitHub App flag and the skill mode it was saved with (PM above): the replacement reads them

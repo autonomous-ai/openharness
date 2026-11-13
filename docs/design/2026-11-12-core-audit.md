@@ -40,6 +40,10 @@ The core is the one process every agent depends on, and the most trusted: it typ
    checked in the component that faces it. The core runs no command a component hands it and lends its sign-in
    only on routes a component declared.
 4. **The core is a process, not a folder.** What counts is what `core/main.ts` imports, wherever the file lives.
+5. **An experiment never touches the core** (anh Dee, 2026-11-13: "experimental feature should never touch core. it
+   should be in its own sub component and process when we turn on"). The Swarm is one, built "with the assumption that
+   99.99% of the swarm feature will be shut down". It works through what the core offers every client, from its own
+   process; the core grows no rule, list, record or mechanism for it, not even a generic one only it would use.
 
 The first two are the October design's rule 1 ("No feature runs in the process that owns sessions"). What is new
 is that they are measured at run time, that security is part of them, and that they are in the rules files, not
@@ -225,26 +229,34 @@ this platform uses leaves them out. Low risk on a Mac and Linux, medium on a Win
 
 anh Dee, 2026-11-13: "swarm is an experimental feature. we could turn it off / kill the feature at any time. the
 philosophy: small tiny core that is super stable and solid and a lot of components around it". With the Swarm on, its
-door (`superTabs/inCore.ts`) loaded 20 files, about 2,100 lines, into the core's process; 15 and about 1,560 once the
-first lines below left (13 November). Each leaves by one of two ways,
-so the core keeps no Swarm code at all, and deleting the Swarm changes nothing in it:
+door (`superTabs/inCore.ts`) loaded 20 files, about 2,100 lines, into the core's process; 13 and about 1,350 once the
+first lines below left (13 November).
 
-- **Through a relay.** What the Swarm's service and the devices tell each other goes through a small generic relay in
-  the core: a listed sender, receiver and kind, each bounded in size, checked by the receiver. The core carries it unread.
-- **As data the Swarm hands the core.** What the core decides in line about an agent (a start's additions, whether its
-  turns are quiet on the devices, whether it may be closed) becomes a fact the Swarm's service gives the core ahead of
-  time, kept with the agent's row, so a relaunch while the service is down still has it. The core's code is generic:
-  "an agent a component marked protected is not closed", never "a Lead".
+The first four lines (orders 1, 3, 4, 5) left the door by turning what the core did for the Swarm into something
+generic in the core: a list of the services that type into a working agent (`WHILE_BUSY_DELIVERERS`), pane access for
+the services the core lists (`core/terminals/panes.ts`), and a relay between services (`core/relays.ts`). The owner's
+next direction rules that out (rule 5 above: "why do we move that into core? that's a swarm feature. it should be in
+swarm"), so each line from order 7 on leaves the other way, and those three come back out too:
 
-| What (lines) | What the core asks of it | Where it goes | Order |
+- **The Swarm does it in its own process, through what the core offers every client.** Its process may open the
+  core's local API as this computer's owner's tool (`agentClient/daemon.ts`), as `harness` commands do, and asks for
+  what Desktop asks for. Where that is not enough, the Swarm goes without. The core keeps nothing of it, and deleting
+  the Swarm changes nothing in the core.
+
+| What (lines) | What the core did for the Swarm | Where it goes | Order |
 | --- | --- | --- | ---: |
-| `inCore/devices.ts` (9) | whether a finished turn is quiet on the devices | a row flag the Swarm sets at its start | 2 |
-| `inCore/launch.ts` (79), `lib/swarmSkills.ts` (110), `lib/swarmEngineArgs.ts` (15), `lib/agentInstructions.ts` (408) | a start's roles, the team's basics, the agent's own instructions, its engine flags, its share of the cores | a start's additions (instructions text, flags, variables) the Swarm's service hands the core with the start and refreshes; kept in the row for a relaunch | 6 |
-| `inCore/agents.ts` (56), `retention.ts` (103), `leadSwitch.ts` (152) | which agents the Swarm may close or reopen; that a Lead is never closed, but in its engine switch | protected agents the Swarm's service names, kept on disk by the core, and the one switch's receipt check as a port | 7 |
-| `inCore/adoption.ts` (90), `inCore/role.ts` (13) | an attached agent's role at its restart | the Swarm's service tells the core the role when it knows it; kept in the row | 8 |
+| `inCore/agents.ts` (56), `leadSwitch.ts` (152) | which agents the Swarm may close or reopen; that a Lead is never stopped, closed or deleted, but in its engine switch, which the core let through once and recorded | done (13 November): the core has no Lead rule. A Product Manager closes as any agent and the Swarm reopens it (`superTabs/ownAgents.ts`, through `agent_close` and `agent_resume`); the Swarm sees a switch from its owner's handoff receipt and records it itself (`superTabs/leadSwitch.ts`) | 7 |
+| `inCore/devices.ts` (9) | whether a finished turn is quiet on the devices | the devices decide, or the flag goes | 2 |
+| `inCore/launch.ts` (79), `lib/swarmSkills.ts` (110), `lib/swarmEngineArgs.ts` (15), `lib/agentInstructions.ts` (408), `agent_create`'s `swarmRole`, the row's `swarmSkill` | a start's roles, the team's basics, the agent's own instructions, its engine flags, its share of the cores | the Swarm starts its agents as Desktop does and tells them their role itself | 6 |
+| `inCore/adoption.ts` (90), `inCore/role.ts` (13), `retention.ts` (103) | an attached agent's role at its restart | goes with order 6 | 8 |
 | `lib/swarmGitHub.ts` (192) | the Harness GitHub App's git and gh for old sessions | deleted on or after 2026-12-10, as it says | 9 |
-| `lib/superTabAttachmentProxy.ts` (159) | a chat file posted to this computer | already sent by the gateway (13 November); the intake stays with the local door until the doors' routes move (part 2) | |
+| `lib/superTabAttachmentProxy.ts` (159) | a chat file posted to this computer | the Swarm's own intake, in its own process | 10 |
+| `core/relays.ts`, `core/terminals/panes.ts`, `WHILE_BUSY_DELIVERERS`, `PANE_TYPERS`, `TURN_DELIVERERS`' and `TURN_END_HEARERS`' Swarm entries, the Swarm's queries in `core/experimentQueries.ts` and its port in `core/api.ts` | the generic pieces orders 1 to 5 added, which only the Swarm uses, and what the core answers the Swarm alone | each goes, the Swarm doing it through the local API or going without | 11 |
 | `readContract.ts` (89), `wire.ts` (50) | helpers of the files above | go with them | |
+
+With the Swarm off, 70 files of the core's process still name it, in 608 lines (327 of them code): its port, queries and
+lists in `core/api.ts`, `core/main.ts` and `core/experimentQueries.ts`, `swarmRole` and `swarmSkill` in the launch and
+the registry, and the switch's checks in the local server (`localWsServer.ts`). Orders 6, 8, 10 and 11 take them out.
 
 Each line is one pull request, tested with the Swarm's own end-to-end files (`superTabs*.e2e.ts`, `swarm*.e2e.ts`).
 
@@ -255,14 +267,14 @@ Swarm's side of the services (`superTabs/inServices.ts`) (13 November).
 Left: `inCore/deliveries.ts`, whether a chat message types while the agent works (order 3). The input queue
 (`lib/sessionInput.ts`) also named the Swarm's delivery ids itself, outside the door. Now the core keeps one list of the
 services whose typed turns go into a working agent's own input (`WHILE_BUSY_DELIVERERS`, `core/api.ts`, beside the list
-of those that may deliver at all), and the input asks it by the maker each delivery's id names. Deleting the Swarm
-takes its name off that list and changes no code (13 November).
+of those that may deliver at all), and the input asks it by the maker each delivery's id names (13 November). Order 11
+takes the list out.
 
 Left: `inCore/terminal.ts`, a member's screen for its Lead and keys into it (order 5). It is now the core's own
 `core/terminals/panes.ts`: an agent's pane read as plain text and typed into under its write lock, for the services the
-core lists (`PANE_TYPERS`, `core/api.ts`). It was the Swarm's only by name, so the core gains it: one more file in the
-core with the Swarm off (547 files, 94,487 lines), and the same count with it on (564), as the door loses it. The
-queries a service's process sends are `pane_screen`, `pane_input` and `pane_input_if_screen` (13 November).
+core lists (`PANE_TYPERS`, `core/api.ts`). One more file in the core with the Swarm off (547 files, 94,487 lines), and
+the same count with it on (564), as the door loses it. The queries a service's process sends are `pane_screen`,
+`pane_input` and `pane_input_if_screen` (13 November). Order 11 takes it out.
 
 Left: `inCore/cards.ts` and `inCore/attention.ts`, the Swarm's cards and its members' waits on the dials (order 4). The
 core checked them, read other people's words in them (a Lead's notices) and kept which cards the devices wanted. Now the
@@ -270,7 +282,17 @@ Swarm's service hands them to the devices through `core/relays.ts`, a generic re
 receiver (`RELAYS`, `core/api.ts`), the core passes it on unread and bounded, says a sticky kind's last word again to a
 receiver that connects, and tells each side when the other comes or goes. The devices check them and keep an engine's
 question ahead of a Swarm wait (`cable/swarmCardsIn.ts`, `cable/swarmWaits.ts`). The core's process with the Swarm on:
-564 -> 563 files, 96,382 -> 96,211 lines; off, it gains the relay (547 -> 548, 94,487 -> 94,647) (13 November).
+564 -> 563 files, 96,382 -> 96,222 lines; off, it gains the relay (547 -> 548, 94,487 -> 94,658) (13 November). Order 11
+takes the relay out.
+
+Left: `inCore/agents.ts` and `leadSwitch.ts`, the Swarm's agents and its Product Managers (order 7). The core refused to
+stop, close or delete a Lead, but by the one stop of an engine switch its owner prepared, and decided which agents the
+Swarm could close or reopen. It keeps none of that now. A Product Manager closes, stops and deletes as any agent; the
+Swarm's host reopens one that stopped, and does its own closes and reopens through the core's `agent_close` and
+`agent_resume`, checked first against its own retention and the core's creation receipts (`superTabs/ownAgents.ts`). It
+sees an engine switch itself: a Product Manager it finds stopped within two minutes of its owner preparing a switch
+(this machine's handoff receipt) is switching, and its reopen is held (`superTabs/leadSwitch.ts`). The core's process
+with the Swarm on: 563 -> 561 files, 96,222 -> 95,875 lines; off, 548 files, 94,658 -> 94,523 lines (13 November).
 
 ### 4. Modes where everything runs in the core
 

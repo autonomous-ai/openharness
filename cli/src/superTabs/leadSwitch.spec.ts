@@ -1,163 +1,111 @@
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { handoffHash } from '../lib/handoffAuthority.js'
-import { leadCloseProtected, leadSwitchEnded, leadSwitching, leadSwitchOf, mayBeLead, resetLeadSwitchPassesForTest, SWITCH_ARM_MS,
-  SWITCH_HOLD_MS, switchWithin } from './leadSwitch.js'
-import { retainContributions } from './retention.js'
+import { leadSwitchOf, leadSwitching, preparedSwitch, recordLeadSwitch, SWITCH_ARM_MS, SWITCH_HOLD_MS, switchWithin } from './leadSwitch.js'
 
 const roots: string[] = []
 const LEAD = 'lead-harness', WORKER = 'worker-harness'
 const CHANGE = 'a'.repeat(32), OTHER = 'b'.repeat(32)
-afterEach(() => {
-  resetLeadSwitchPassesForTest()
-  for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true })
-})
+afterEach(() => { for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true }) })
+const machine = () => { const dir = mkdtempSync(join(tmpdir(), 'lead-switch-')); roots.push(dir); return dir }
 
-/** A data folder whose host keeps [LEAD] as a Product Manager and [WORKER] as a member. */
-function machine(now = Date.now()) {
-  const dir = mkdtempSync(join(tmpdir(), 'lead-switch-')); roots.push(dir)
-  retainContributions(dir, 'machine', [
-    { tabId: 'tab', lead: true, agent: { harnessId: LEAD, machineId: 'machine' } },
-    { tabId: 'tab', agent: { harnessId: WORKER, machineId: 'machine' } }], now)
-  return dir
-}
-
-/** The receipt `agent_handoff_prepare` leaves for its owner's switch (lib/handoffPublication.ts), written [at]. */
+/** The receipt `agent_handoff_prepare` leaves for its owner's switch (core/handoffPublication.ts), written [at]. */
 function prepared(dir: string, agentId: string, changeId: string, at = Date.now(), receipt: Record<string, unknown> = {}) {
-  const folder = join(dir, 'handoff-receipts'); mkdirSync(folder, { recursive: true })
+  const folder = join(dir, 'handoff-receipts'); mkdirSync(folder, { recursive: true, mode: 0o700 })
   const file = join(folder, `${handoffHash(JSON.stringify([agentId, changeId]))}.json`)
-  writeFileSync(file, JSON.stringify({ version: 1, committed: true, prepared: { request: { agentId, changeId, targetEngine: 'codex' } }, ...receipt }))
+  writeFileSync(file, JSON.stringify({ version: 1, committed: true, prepared: { request: { agentId, changeId, targetEngine: 'codex' } }, ...receipt }), { mode: 0o600 })
   utimesSync(file, at / 1000, at / 1000)
+  return file
 }
+const row = (at: number, changeId = CHANGE) => ({ version: 1 as const, agentId: LEAD, changeId, targetEngine: 'codex', at })
 
-it('refuses a plain close or stop of a Product Manager, and one naming a switch nobody prepared, as before', () => {
+// anh Dee, 2026-11-13: an experiment never touches the core. The core let a Product Manager's switch through and recorded
+// it until then; the Swarm sees it for itself now, from the receipt its owner's prepare leaves.
+it('finds the switch its owner prepared moments before, to the engine its receipt names, and no other', () => {
   const dir = machine(), now = Date.now()
-  expect(leadCloseProtected(dir, LEAD, undefined, now)).toBe(true)
-  expect(leadCloseProtected(dir, LEAD, CHANGE, now)).toBe(true)
-  prepared(dir, LEAD, 'not-a-change-id', now)
-  expect(leadCloseProtected(dir, LEAD, 'not-a-change-id', now)).toBe(true)
-  // Stop Harness, a delete or a purge carries no switch; a stop naming one that was never let through is refused too.
-  expect(mayBeLead(dir, LEAD)).toBe(true)
-  expect(mayBeLead(dir, LEAD, CHANGE)).toBe(true)
-  // A member that is no Product Manager closes and stops as ever.
-  expect(leadCloseProtected(dir, WORKER, undefined, now)).toBe(false)
-  expect(mayBeLead(dir, WORKER)).toBe(false)
+  expect(preparedSwitch(dir, LEAD, now)).toBeNull()
+  prepared(dir, WORKER, OTHER, now)
+  expect(preparedSwitch(dir, LEAD, now)).toBeNull()
+  // A receipt gone since its folder was read is none.
+  symlinkSync(join(dir, 'nowhere'), join(dir, 'handoff-receipts', `${'f'.repeat(64)}.json`))
+  prepared(dir, LEAD, CHANGE, now - 1_000)
+  expect(preparedSwitch(dir, LEAD, now)).toEqual({ changeId: CHANGE, targetEngine: 'codex' })
+  expect(preparedSwitch(dir, WORKER, now)).toEqual({ changeId: OTHER, targetEngine: 'codex' })
 })
 
-it('refuses a switch whose handoff is another agent\'s, another switch\'s, uncommitted, unreadable or too old', () => {
+it('takes no switch from a receipt that is uncommitted, another agent\'s, unreadable, too old or far ahead', () => {
   const dir = machine(), now = Date.now()
-  prepared(dir, WORKER, CHANGE, now)
-  expect(leadCloseProtected(dir, LEAD, CHANGE, now)).toBe(true)
-  prepared(dir, LEAD, OTHER, now)
-  expect(leadCloseProtected(dir, LEAD, CHANGE, now)).toBe(true)
   prepared(dir, LEAD, CHANGE, now, { committed: false })
-  expect(leadCloseProtected(dir, LEAD, CHANGE, now)).toBe(true)
+  expect(preparedSwitch(dir, LEAD, now)).toBeNull()
   prepared(dir, LEAD, CHANGE, now, { prepared: { request: { agentId: WORKER, changeId: CHANGE, targetEngine: 'codex' } } })
-  expect(leadCloseProtected(dir, LEAD, CHANGE, now)).toBe(true)
-  writeFileSync(join(dir, 'handoff-receipts', `${handoffHash(JSON.stringify([LEAD, CHANGE]))}.json`), '{')
-  expect(leadCloseProtected(dir, LEAD, CHANGE, now)).toBe(true)
+  expect(preparedSwitch(dir, LEAD, now)).toBeNull()
+  prepared(dir, LEAD, CHANGE, now, { prepared: { request: { agentId: LEAD, changeId: 'not-a-change', targetEngine: 'codex' } } })
+  expect(preparedSwitch(dir, LEAD, now)).toBeNull()
+  writeFileSync(prepared(dir, LEAD, CHANGE, now), '{')
+  expect(preparedSwitch(dir, LEAD, now)).toBeNull()
   prepared(dir, LEAD, CHANGE, now - SWITCH_ARM_MS - 1)
-  expect(leadCloseProtected(dir, LEAD, CHANGE, now)).toBe(true)
-  expect(mayBeLead(dir, LEAD, CHANGE)).toBe(true)
-  expect(leadSwitchOf(dir, LEAD)).toBeNull()
+  expect(preparedSwitch(dir, LEAD, now)).toBeNull()
+  prepared(dir, LEAD, CHANGE, now + 2 * 60_000)
+  expect(preparedSwitch(dir, LEAD, now)).toBeNull()
+  // A folder another account could write, which could have planted it, holds no switch either.
+  const open = machine()
+  prepared(open, LEAD, CHANGE, now)
+  expect(preparedSwitch(open, LEAD, now)).not.toBeNull()
+  chmodSync(join(open, 'handoff-receipts'), 0o777)
+  expect(preparedSwitch(open, LEAD, now)).toBeNull()
 })
 
-// Security reviews 1 and 2 of #2493: the pass goes from the switch's close to the one stop it starts, and to nothing else.
-it('lets only the one stop its owner\'s switch starts through, once, and records the switch once that stop went through', () => {
+it('records a switch once, privately, holds it from its stop to its limit, and lets ended ones go after a day', () => {
   const dir = machine(), now = Date.now()
-  prepared(dir, LEAD, CHANGE, now)
-  expect(leadCloseProtected(dir, LEAD, CHANGE, now)).toBe(false)
-  // Nothing is recorded, and no hold starts, before the stop went through.
   expect(leadSwitchOf(dir, LEAD)).toBeNull()
-  // Stop Harness, a delete or a script's close right after carries no switch, or another: refused.
-  expect(mayBeLead(dir, LEAD)).toBe(true)
-  expect(mayBeLead(dir, LEAD, OTHER)).toBe(true)
-  expect(leadCloseProtected(dir, LEAD, undefined, now)).toBe(true)
-  // The switch's own stop passes, once.
-  expect(mayBeLead(dir, LEAD, CHANGE)).toBe(false)
-  expect(mayBeLead(dir, LEAD, CHANGE)).toBe(true)
-  leadSwitchEnded(dir, LEAD, CHANGE, true, now + 1_000)
-  expect(leadSwitchOf(dir, LEAD)).toEqual({ version: 1, agentId: LEAD, changeId: CHANGE, targetEngine: 'codex', at: now + 1_000 })
-  // The same switch is never let through again, nor its end recorded twice.
-  expect(leadCloseProtected(dir, LEAD, CHANGE, now + 2_000)).toBe(true)
-  leadSwitchEnded(dir, LEAD, CHANGE, true, now + 5_000)
-  expect(leadSwitchOf(dir, LEAD)?.at).toBe(now + 1_000)
-  // Held from its stop to the limit.
-  expect(switchWithin(leadSwitchOf(dir, LEAD), now + 1_000 + SWITCH_HOLD_MS)).toBe(true)
-  expect(switchWithin(leadSwitchOf(dir, LEAD), now + 1_000 + SWITCH_HOLD_MS + 1)).toBe(false)
-  const records = readdirSync(join(dir, 'super-tabs', 'lead-switch'))
-  expect(records).toHaveLength(1)
-  expect(statSync(join(dir, 'super-tabs', 'lead-switch', records[0])).mode & 0o777).toBe(0o600)
+  recordLeadSwitch(dir, row(now))
+  expect(leadSwitchOf(dir, LEAD)).toEqual(row(now))
+  // The same switch found again, by the host after its own close or after a restart, keeps the time it was first found.
+  recordLeadSwitch(dir, row(now + 5_000))
+  expect(leadSwitchOf(dir, LEAD)?.at).toBe(now)
+  expect(switchWithin(leadSwitchOf(dir, LEAD), now + SWITCH_HOLD_MS)).toBe(true)
+  expect(switchWithin(leadSwitchOf(dir, LEAD), now + SWITCH_HOLD_MS + 1)).toBe(false)
+  const folder = join(dir, 'super-tabs', 'lead-switch'), [file] = readdirSync(folder)
+  expect(statSync(join(folder, file!)).mode & 0o777).toBe(0o600)
+  // A day on, another Product Manager's switch takes the old record with it.
+  utimesSync(join(folder, file!), (now - 25 * 60 * 60_000) / 1000, (now - 25 * 60 * 60_000) / 1000)
+  recordLeadSwitch(dir, { ...row(now), agentId: WORKER })
+  expect(leadSwitchOf(dir, LEAD)).toBeNull()
+  expect(leadSwitchOf(dir, WORKER)?.agentId).toBe(WORKER)
 })
 
-it('leaves nothing open after a close that failed: no pass, no record, and another switch may start at once', () => {
+it('starts no second switch while one is awaited, and takes a new one after its limit', () => {
   const dir = machine(), now = Date.now()
-  prepared(dir, LEAD, CHANGE, now)
-  expect(leadCloseProtected(dir, LEAD, CHANGE, now)).toBe(false)
-  // The save failed before the stop: the close ends unstopped.
-  leadSwitchEnded(dir, LEAD, CHANGE, false, now + 1_000)
-  expect(mayBeLead(dir, LEAD, CHANGE)).toBe(true)
-  expect(leadSwitchOf(dir, LEAD)).toBeNull()
-  // Its repeat is not let through; a new switch is, at once.
-  expect(leadCloseProtected(dir, LEAD, CHANGE, now + 2_000)).toBe(true)
-  prepared(dir, LEAD, OTHER, now + 2_000)
-  expect(leadSwitching(dir, LEAD, OTHER, now + 2_000)).toBe(false)
-  expect(leadCloseProtected(dir, LEAD, OTHER, now + 2_000)).toBe(false)
-  // An end for a switch never let through records nothing.
-  leadSwitchEnded(dir, WORKER, CHANGE, true, now)
-  expect(leadSwitchOf(dir, WORKER)).toBeNull()
-})
-
-it('refuses a second switch while one runs, from its close to its time limit, and takes a new one after', () => {
-  const dir = machine(), now = Date.now()
-  prepared(dir, LEAD, CHANGE, now)
-  prepared(dir, LEAD, OTHER, now)
-  expect(leadCloseProtected(dir, LEAD, CHANGE, now)).toBe(false)
-  // Its close under way.
-  expect(leadSwitching(dir, LEAD, OTHER, now)).toBe(true)
-  expect(leadSwitching(dir, LEAD, CHANGE, now)).toBe(false)
-  expect(leadCloseProtected(dir, LEAD, OTHER, now)).toBe(true)
-  expect(mayBeLead(dir, LEAD, CHANGE)).toBe(false)
-  leadSwitchEnded(dir, LEAD, CHANGE, true, now)
-  // Its new session awaited.
+  expect(leadSwitching(dir, LEAD, OTHER, now)).toBe(false)
+  recordLeadSwitch(dir, row(now))
   expect(leadSwitching(dir, LEAD, OTHER, now + 1_000)).toBe(true)
-  expect(leadCloseProtected(dir, LEAD, OTHER, now + 1_000)).toBe(true)
-  // Ended by its time limit: a new switch is let through.
-  const later = now + SWITCH_HOLD_MS + 1
-  prepared(dir, LEAD, OTHER, later)
-  expect(leadSwitching(dir, LEAD, OTHER, later)).toBe(false)
-  expect(leadCloseProtected(dir, LEAD, OTHER, later)).toBe(false)
-})
-
-it('across a restart, keeps the hold of a switch that stopped, and refuses the stop of one that had not', () => {
-  const dir = machine(), now = Date.now()
-  prepared(dir, LEAD, CHANGE, now)
-  expect(leadCloseProtected(dir, LEAD, CHANGE, now)).toBe(false)
-  // The daemon restarts between the close's pass and its stop: the stop is refused, and nothing was recorded.
-  resetLeadSwitchPassesForTest()
-  expect(mayBeLead(dir, LEAD, CHANGE)).toBe(true)
-  expect(leadSwitchOf(dir, LEAD)).toBeNull()
-  // A switch that stopped keeps its record and limit across one.
-  expect(leadCloseProtected(dir, LEAD, CHANGE, now)).toBe(false)
-  expect(mayBeLead(dir, LEAD, CHANGE)).toBe(false)
-  leadSwitchEnded(dir, LEAD, CHANGE, true, now)
-  resetLeadSwitchPassesForTest()
-  expect(switchWithin(leadSwitchOf(dir, LEAD), now + 1)).toBe(true)
-  expect(mayBeLead(dir, LEAD)).toBe(true)
+  expect(leadSwitching(dir, LEAD, CHANGE, now + 1_000)).toBe(false)
+  expect(leadSwitching(dir, LEAD, OTHER, now + SWITCH_HOLD_MS + 1)).toBe(false)
 })
 
 it('reads no switch from an unreadable record, and holds none from a clock far ahead', () => {
   const dir = machine(), now = Date.now()
-  prepared(dir, LEAD, CHANGE, now)
-  expect(leadCloseProtected(dir, LEAD, CHANGE, now)).toBe(false)
-  expect(mayBeLead(dir, LEAD, CHANGE)).toBe(false)
-  leadSwitchEnded(dir, LEAD, CHANGE, true, now)
+  recordLeadSwitch(dir, row(now))
   expect(switchWithin(leadSwitchOf(dir, LEAD), now - 2 * 60_000)).toBe(false)
   const folder = join(dir, 'super-tabs', 'lead-switch')
-  writeFileSync(join(folder, readdirSync(folder)[0]), '{')
+  writeFileSync(join(folder, readdirSync(folder)[0]!), '{')
+  expect(leadSwitchOf(dir, LEAD)).toBeNull()
+  writeFileSync(join(folder, readdirSync(folder)[0]!), JSON.stringify({ ...row(now), changeId: 'short' }))
   expect(leadSwitchOf(dir, LEAD)).toBeNull()
   expect(switchWithin(null, now)).toBe(false)
 })
 
+it('throws on a record it cannot write, leaving nothing half written, and passes over what is no record', () => {
+  const dir = machine(), now = Date.now()
+  recordLeadSwitch(dir, row(now))
+  const folder = join(dir, 'super-tabs', 'lead-switch')
+  // What else the folder holds: a stray file, and a record gone since the folder was read.
+  writeFileSync(join(folder, 'notes.txt'), 'x')
+  symlinkSync(join(dir, 'nowhere'), join(folder, `${'e'.repeat(64)}.json`))
+  const [record] = readdirSync(folder).filter(name => name !== 'notes.txt' && !name.startsWith('e'))
+  rmSync(join(folder, record!)); mkdirSync(join(folder, record!)); writeFileSync(join(folder, record!, 'inside'), 'x')
+  expect(() => recordLeadSwitch(dir, row(now, OTHER))).toThrow()
+  expect(readdirSync(folder).filter(name => name.endsWith('.next'))).toEqual([])
+})

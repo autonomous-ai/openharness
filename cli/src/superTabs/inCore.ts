@@ -3,9 +3,10 @@
  * is on (core/main.ts, `HARNESS_SWARM` in harnessd/services.ts). Off, none of this is loaded and the core runs as it
  * does without the Swarm; src/architecture.spec.ts checks that the core reaches the Swarm's code by no other way.
  *
- * What it hands the core is typed by core/api.ts, the core's contract: the close and reopen of its agents (`SwarmAgents`), a
- * start's Swarm role (`SwarmLaunch`), an attached agent's role at its restart (`AdoptSwarmSkill`), the Leads that are never
- * stopped, and its chat files, which the gateway sends to the backend. What a
+ * What it hands the core is typed by core/api.ts, the core's contract: a start's Swarm role (`SwarmLaunch`), an attached
+ * agent's role at its restart (`AdoptSwarmSkill`) and which agents may have one, and its chat files, which the gateway
+ * sends to the backend. Its agents' closes and reopens, and its Product Managers kept alive, are its own, in its own
+ * process, through the requests any client of the core sends (superTabs/ownAgents.ts). What a
  * service running in the core's process needs of the Swarm is not here: superTabs/inServices.ts.
  *
  * Its side of the core and nothing else: the Super Tab service runs in a process of its own, and a core that runs it
@@ -16,9 +17,6 @@
 export { swarmRoleThrough } from './inCore/role.js'
 export { quietOnDevices } from './inCore/devices.js'
 export { createSwarmSkillAdoption } from './inCore/adoption.js'
-export { createSwarmAgents } from './inCore/agents.js'
 export { swarmLaunch } from './inCore/launch.js'
-export { retainedHarnesses, retainedLeads } from './retention.js'
-// A Product Manager switched from its pane (Change agent) is the one stop of a Lead its close guard and stop guard let through.
-export { leadCloseProtected, leadSwitchEnded, leadSwitching, mayBeLead } from './leadSwitch.js'
+export { retainedHarnesses } from './retention.js'
 export { forwardAttachmentUpload } from '../lib/superTabAttachmentProxy.js'

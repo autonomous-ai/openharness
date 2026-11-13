@@ -37,7 +37,8 @@ const readCommand = (entry: Entry, prefix: string, group: string, id: string) =>
   `${agentCommandOf(entry, prefix)} message ${shellQuote(group)} ${shellQuote(id)}`
 // The Pro dial's Swarm face (cards.ts) still takes these two from here; every other file takes them from wire.ts.
 export { backend, SuperTabHostError } from './wire.js'
-import { leadSwitchOf, SWITCH_ADOPT_MS, switchWithin, type LeadSwitch } from './leadSwitch.js'
+import { leadSwitchOf, preparedSwitch, recordLeadSwitch, SWITCH_ADOPT_MS, switchWithin, type LeadSwitch } from './leadSwitch.js'
+import type { SwarmCore } from './ownAgents.js'
 import { backend, ENDED_WORK, identifier, object, signedOut, SuperTabHostError, within } from './wire.js'
 import { parseSwarmSkill, swarmBasics, swarmBasicsSince, wireRole, type SwarmSkillGrant } from '../lib/swarmSkills.js'
 import { authorName } from './personName.js'
@@ -273,8 +274,10 @@ const END_RETRY_MAX_MS = 10 * 60_000
  *  Swarm, a stop request read before it changed (the next read names the new one), work not yet finished. */
 const RELEASE_RETRY_STATUSES = [401, 408, 429]
 const RELEASE_RETRY_CODES = ['SWARM_BUSY', 'STALE_RELEASE', 'WORK_ACTIVE']
-/** The core's close refusals no retry for the same runtime changes; any other (unavailable, an expired lease, data not
- *  deleted yet) is tried again. NOT_SWARM_STARTED and AGENT_CHANGED are refused for good where they are answered. */
+/** The close refusals no retry for the same runtime changes (superTabs/ownAgents.ts); any other (unavailable, an expired
+ *  lease, data not deleted yet) is tried again. NOT_SWARM_STARTED and AGENT_CHANGED are refused for good where they are
+ *  answered. LEAD_PROTECTED is a core's before 2026-11-13, which refused to stop a Product Manager; it goes on or after
+ *  2026-12-13. */
 const RELEASE_FINAL_CLOSES = ['UNSUPPORTED', 'LEAD_PROTECTED']
 /** A launch receipt that can never come to name this harness's start. */
 const RELEASE_FINAL_RECEIPTS = ['missing', 'failed', 'cancelled']
@@ -466,7 +469,8 @@ export class SuperTabHost {
   private skillsRunning: Promise<void> | null = null
   private missing = new Map<string, number>()
   /** Per protected harness here: its reopen, failures, retry time and last logged reason. */
-  private readonly keepAlives = new Map<string, { running: boolean; failures: number; retryAt: number; reason?: string }>()
+  /** `looked`: its handoff receipts were read for a switch since it was last seen live, so each stop reads them once. */
+  private readonly keepAlives = new Map<string, { running: boolean; failures: number; retryAt: number; reason?: string; looked?: boolean }>()
   /** Per session the backend ends: a close or acknowledgement in progress, how far it got, and when the next try may run. */
   private readonly endings = new Map<string, { running: boolean; closed: boolean; acked: boolean; failures: number; retryAt: number }>()
   /** The machine's host form and Swarm reads: the tick, stops, releases and skill notices read Swarms only through them. */
@@ -484,7 +488,7 @@ export class SuperTabHost {
   /** A Lead's reads of and typing into this machine's agents' terminals, and the stuck and usage-limit alerts. */
   private readonly terminal: TerminalHost
 
-  constructor(private readonly core: CoreApi, readonly machineId: string, options: SuperTabHostOptions = {}) {
+  constructor(private readonly core: SwarmCore, readonly machineId: string, options: SuperTabHostOptions = {}) {
     if (!identifier(machineId)) throw new SuperTabHostError('MACHINE_UNAVAILABLE', 'This machine is not signed in.')
     this.file = hostJournalFile(core.dataDir, machineId)
     this.observers = options.observers ?? publishObservers
@@ -1283,11 +1287,25 @@ export class SuperTabHost {
     this.keepAlives.set(harnessId, state)
     if (state.running) return
     const now = this.now()
-    // Its owner switched its engine from its pane (leadSwitch.ts), stopping it once the stop went through.
-    const switched = leadSwitchOf(this.core.dataDir, harnessId)
-    const held: boolean = switchWithin(switched, now)
-    if (this.core.agents.byAgent(harnessId)) {
-      state.failures = 0; state.retryAt = 0; delete state.reason
+    // Its owner switched its engine from its pane (leadSwitch.ts): found stopped moments after its owner prepared that.
+    let found = leadSwitchOf(this.core.dataDir, harnessId)
+    const live = !!this.core.agents.byAgent(harnessId)
+    if (!live && !state.looked) {
+      state.looked = true
+      const prepared = switchWithin(found, now, SWITCH_ADOPT_MS) ? null : preparedSwitch(this.core.dataDir, harnessId, now)
+      if (prepared) {
+        try {
+          recordLeadSwitch(this.core.dataDir, { version: 1, agentId: harnessId, ...prepared, at: now })
+          found = leadSwitchOf(this.core.dataDir, harnessId)
+        } catch (error) {
+          // Unrecorded, it is reopened as any Product Manager that stopped: never none.
+          this.log(`Could not record the switch of the Product Manager ${harnessId.slice(0, 8)}: ${error instanceof Error ? error.name : 'unknown'}`)
+        }
+      }
+    }
+    const switched = found, held: boolean = switchWithin(switched, now)
+    if (live) {
+      state.failures = 0; state.retryAt = 0; state.looked = false; delete state.reason
       // Reopened here after its switch's hold: a new session of that switch that runs now is unlinked beside it, and is
       // closed (security review 2 of #2493).
       if (switched && !held && switchWithin(switched, now, LATE_REPLACEMENT_MS)) {

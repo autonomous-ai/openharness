@@ -1,8 +1,8 @@
 /**
  * A PM's host carrying out the switch the Swarm asked for (docs/superpowers/specs/2026-11-02-pm-switch-engine-account-design.md,
  * section 7). It does what Desktop's Change agent does for its owner, over this machine's own daemon socket (which answers as
- * the machine owner), so #2493's guards (leadSwitch.ts) apply unchanged: prepare the handoff, close with the change id, create
- * the new session with that id as its creation id, complete the handoff. Success is the PM rebinding to the new session.
+ * the machine owner): prepare the handoff, close the old session, record the switch (leadSwitch.ts), create the new session
+ * with the change id as its creation id, complete the handoff. Success is the PM rebinding to the new session.
  */
 import { createHash } from 'node:crypto'
 import { lstatSync, readFileSync } from 'node:fs'
@@ -19,7 +19,7 @@ import { oneShotParentEnv } from '../lib/loginShellEnv.js'
 import { permissionModeApproves, permissionModeFlags } from '../lib/engineLaunch.js'
 import { parseSwarmSkill, wireRole } from '../lib/swarmSkills.js'
 
-import { leadSwitchOf, leadSwitching, SWITCH_ADOPT_MS, switchWithin } from './leadSwitch.js'
+import { leadSwitchOf, leadSwitching, recordLeadSwitch, SWITCH_ADOPT_MS, switchWithin } from './leadSwitch.js'
 import { LAUNCH_MODEL_REFUSALS, startNote } from './start.js'
 import { backend, identifier, object } from './wire.js'
 
@@ -110,7 +110,7 @@ export class LeadSwitchRequests {
     if (!request || !identifier(request.id) || this.done.has(request.id)) return
     const switchId = request.id, now = this.deps.now()
     if (now < (this.claimRetryAt.get(switchId) ?? 0)) return
-    // A switch of this PM that #2493 recorded (leadSwitch.ts) is under way, or was before this host restarted: followed, never
+    // A switch of this PM that was recorded (leadSwitch.ts) is under way, or was before this host restarted: followed, never
     // started again. It ends by the rebind, by the old PM's return past its hold, or by the Swarm's lease.
     // Only this request's own record: an earlier switch's, inside its window, must not answer a new request without trying it.
     const changeId = switchChangeId(switchId), recorded = leadSwitchOf(this.core.dataDir, agent.harnessId)
@@ -172,9 +172,11 @@ export class LeadSwitchRequests {
           switchId: run.switchId, handoffChangeId: changeId, note })
         return undefined
       }
+      // The change id is for a core before 2026-11-13, which let a Product Manager's stop through only as its switch.
       const closed = await daemon.request('agent_close', { agentId, sessionId: old.sessionId ?? '', createdAt: new Date(old.registeredAt).toISOString(), mode: 'now', changeId }, 60_000)
       if (closed.error || closed.closed !== true) return { ok: false, error: NO_STOP }
       run.closed = true
+      this.recorded(run, engine)
       // What superTabs/start.ts sends when it first starts a Lead: its start prompt first, then the handoff.
       const startPrompt = startNote(old.defaultName)
       // A PM that has no name to give has its handoff alone: no line of it starts with a space.
@@ -216,10 +218,12 @@ export class LeadSwitchRequests {
         try {
           const daemon = await this.deps.open({ dataDir: this.core.dataDir, port: this.core.daemon.port, machineId: this.machineId })
           try {
+            // The change id is for a core before 2026-11-13, which let a Product Manager's stop through only as its switch.
             const closed = await daemon.request('agent_close', { agentId: run.harnessId, sessionId: old.sessionId ?? '', createdAt: new Date(old.registeredAt).toISOString(), mode: 'now', changeId: run.changeId }, 60_000)
             if (closed.error || closed.closed !== true) { run.retryAt = now + RETRY_MS; return }
           } finally { daemon.close() }
         } catch { run.retryAt = now + RETRY_MS; return }
+        this.recorded(run, String(agent.switchRequest?.engine ?? ''))
       }
       run.closed = true
       run.outcome = { ok: true }
@@ -240,6 +244,17 @@ export class LeadSwitchRequests {
       }
     }
     if (run.outcome) await this.report(tabId, agent.id, run)
+  }
+
+  /** Its close went through: the switch is recorded, so the host holds off reopening the old session (leadSwitch.ts). */
+  private recorded(run: Run, engine: string): void {
+    try {
+      recordLeadSwitch(this.core.dataDir, { version: 1, agentId: run.harnessId, changeId: run.changeId,
+        targetEngine: identifier(engine) ? engine : 'unknown', at: this.deps.now() })
+    } catch (error) {
+      // Unrecorded, the host reads the switch from this machine's handoff receipt as it finds the old session stopped.
+      this.deps.log(`Could not record an engine switch: ${error instanceof Error ? error.name : typeof error}`)
+    }
   }
 
   private async report(tabId: string, agentId: string, run: Run): Promise<void> {
