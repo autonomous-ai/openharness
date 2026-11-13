@@ -25,16 +25,10 @@
 import { spawn } from 'child_process'
 import { mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
-import { homedir } from 'os'
 import { env } from '../config/env.js'
+import { FLASHER_DIR } from './flasherDir.js'
 import { completeFlash } from './flashRecovery.js'
 
-/**
- * The script caches its own downloads (esptool, firmware) under `~/.harness/flasher` via
- * `HARNESS_FLASHER_CACHE`. Keeping our copy of the script in the same directory is deliberate: one
- * place holds everything the flasher owns, so "delete this folder" is a complete reset.
- */
-const CACHE_DIR = process.env.HARNESS_FLASHER_CACHE || join(homedir(), '.harness', 'flasher')
 const FETCH_TIMEOUT_MS = 20_000
 
 export interface FlasherScript {
@@ -117,7 +111,7 @@ function realRun(script: FlasherScript) {
 
 function defaultsFor(platform: NodeJS.Platform): { deps: FlashDeps; cached: string } {
   const script = flasherScript(platform)
-  const cached = join(CACHE_DIR, script.name)
+  const cached = join(FLASHER_DIR, script.name)
   return {
     cached,
     deps: {

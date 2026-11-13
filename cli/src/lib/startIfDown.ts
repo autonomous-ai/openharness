@@ -6,9 +6,17 @@
  * stopped it since this computer started, which a person meant to last. The logon task's start (`--at-logon`) forgets
  * such a stop first, as launchd loads an agent booted out at the next login: with Fast Startup a Shut down keeps the
  * uptime the boot time is read from, and a stop outlived the next power-on (final review R1b-2).
+ *
+ * It also does nothing while `harness flash` holds the dial's serial port (a daemon started under it takes the port
+ * mid-write) or `harness uninstall` is at work (a daemon holds the files being removed), whichever supervisor runs it:
+ * this scheduled task or the Harness Device app.
  */
-import { rmSync, statSync } from 'node:fs'
+import { readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { PID_FILE, isAlive, readPid } from './daemonState.js'
+import { FLASHER_DIR } from './flasherDir.js'
+import { UNINSTALL_MARKER } from './uninstall/removal.js'
 import {
   describeSpawnLockOwner, readSpawnLockOwner, releaseAbandonedSpawnLock, spawnLockOwnerReused, type SpawnLockOwner,
 } from './daemonSpawnLock.js'
@@ -30,11 +38,17 @@ export interface IfDownDeps {
   stoppedThisBoot(): boolean
   /** Forget a `harness stop`: the logon task's start does. */
   forgetStop(): void
+  /** Whether `harness flash` holds the dial's serial port. */
+  flashing(): boolean
+  /** Whether `harness uninstall` is at work. */
+  uninstalling(): boolean
 }
 
 export async function startIfDown(deps: IfDownDeps, options: { atLogon?: boolean } = {}): Promise<IfDown> {
   if (options.atLogon) deps.forgetStop()
   else if (deps.stoppedThisBoot()) return { start: false, why: '`harness stop` stopped it since this computer started; `harness start` starts it again' }
+  if (deps.flashing()) return { start: false, why: "`harness flash` holds the dial's port" }
+  if (deps.uninstalling()) return { start: false, why: '`harness uninstall` is at work' }
   const pid = deps.readPid()
   if (pid !== null && await deps.masterRuns(pid)) return { start: false, why: `it runs (pid ${pid})` }
   let owner: SpawnLockOwner | null
@@ -87,6 +101,38 @@ export interface IfDownIo {
   releaseAbandoned(owner: SpawnLockOwner, row: { pid: number; startMarker: string }): boolean
   stoppedThisBoot(): boolean
   forgetStop(): void
+  flashing(): boolean
+  uninstalling(): boolean
+}
+
+/**
+ * A marker that `harness flash` or `harness uninstall` writes while at work: its text is the Unix time it was written,
+ * in seconds. It counts for ten minutes and never from the future, so one left by a run killed half way stops counting
+ * on its own. Anything unreadable does not count: failing closed would keep the daemon down on any filesystem hiccup
+ * (as desktop/lib/core/serial_port_lease.dart and uninstall_marker.dart).
+ */
+export function freshMarker(file: string, nowMs: number = Date.now()): boolean {
+  try {
+    const text = readFileSync(file, 'utf8').trim()
+    if (!/^\d+$/.test(text)) return false
+    const ageMs = nowMs - Number(text) * 1000
+    return ageMs >= 0 && ageMs < 600_000
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Whether a flash holds the port: a fresh `flashing` in the flasher's folder, or a fresh `flashing.<32 hex>`, which a
+ * PowerShell flash given a run id writes so that a forced stop retires exactly its own.
+ */
+export function flashHolds(dir: string, nowMs: number = Date.now()): boolean {
+  if (freshMarker(join(dir, 'flashing'), nowMs)) return true
+  try {
+    return readdirSync(dir).some((name) => /^flashing\.[0-9a-f]{32}$/.test(name) && freshMarker(join(dir, name), nowMs))
+  } catch {
+    return false
+  }
 }
 
 function defaultIfDownIo(): IfDownIo {
@@ -101,6 +147,9 @@ function defaultIfDownIo(): IfDownIo {
     releaseAbandoned: (owner, row) => releaseAbandonedSpawnLock(owner, row),
     stoppedThisBoot: () => taskStoppedThisBoot(),
     forgetStop: () => clearTaskStopped(),
+    flashing: () => flashHolds(FLASHER_DIR),
+    // lib/uninstall/deps.ts writes it in the product root, which no setting moves.
+    uninstalling: () => freshMarker(join(homedir(), '.harness', UNINSTALL_MARKER)),
   }
 }
 
@@ -143,5 +192,7 @@ export function processIfDownDeps(
     },
     stoppedThisBoot: () => windows && io.stoppedThisBoot(),
     forgetStop: () => { if (windows) io.forgetStop() },
+    flashing: () => io.flashing(),
+    uninstalling: () => io.uninstalling(),
   }
 }
