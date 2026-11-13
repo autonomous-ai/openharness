@@ -17,27 +17,23 @@ Mac-only checks read and found **correct, no work**: menu-bar notices (Windows k
 | # | Open item | Evidence | Task |
 |---|---|---|---|
 | 1 | CLI 0.5.40 with production's terminal host 0.4.31 never run; `hn` in a real console never run | manifests; last session's PC ran 9.9.9 | 1 |
-| 2 | Not walked on Windows: Git project and worktree, commit and push through the GitHub App, Import, Share, plain terminal, rename, `harness remote`, `team model`, device flows | PR #3032 | 2 |
-| 3 | Agents stuck at their engine's own hidden screen | #3063 handles Codex's trust screen; "Hooks need review" is not in it | 3 |
-| 4 | Cursor, Devin, Grok, Antigravity have no hooks on Windows; Hermes's are unconfirmed | `win32Runner` absent; `hooksNotOnWindows` | 4 |
-| 5 | Seven PowerShell installers never run end to end; `programs` paths read, not measured | `ENGINE_WINDOWS_INSTALL` | 4 |
-| 6 | Windows panes lack the grid `PATH` and `GRID_NO_UPDATE_CHECK`, and Harness's Node at the end of `PATH` | `gridPanePrelude` runs in the POSIX script only; `engineStart.ts` "Not done" | 5 |
-| 7 | Pane blank for 15-50 s during an engine's first start | Copilot and Kilo on the PC | 6 |
-| 8 | Stopping panes dropped tabs from 5 to 3; New Harness defaulted to another machine | seen on the PC, not investigated | 6 |
-| 9 | Desktop release fails on one connection reset | `scripts/verify-desktop-release.py`, 1.3.65 | 7 |
-| 10 | `feat/windows-app-menu` and `-dropdowns` unmerged (7 commits), overlapping #2947 | `git rev-list`; the owner's dirty checkout holds related files | 8 |
-| 11 | New Swarm hidden from Search commands | memory, 10-29; `keymap_commands.dart:773` suggests fixed | 8 |
-| 12 | Arm not rerun since the serial spec fix | PR #3032 | 9 |
-| 13 | Native `hn` gate failures never compared with `main` | PR #3032 | 9 |
-| 14 | `hn` shell integration is Unix only | `shell_picker.rs` | 10 |
-| 15 | Add machine to a Team is heavy | owner, unanswered | 11 |
-| 16 | Guests on Windows are design only | guests spec | 12 |
-| 17 | Teammate routing to `<host> · Team` needs a second person | memory | named as open |
+| 2 | Not walked on Windows: Git project and worktree, Share, plain terminal, rename, `harness remote`, device flows | PR #3032 | 2 |
+| 3 | Cursor, Devin, Grok, Antigravity have no hooks on Windows; Hermes's are unconfirmed | `win32Runner` absent; `hooksNotOnWindows` | 4 |
+| 4 | Seven PowerShell installers never run end to end; `programs` paths read, not measured | `ENGINE_WINDOWS_INSTALL` | 4 |
+| 5 | Windows panes lack the grid `PATH` and `GRID_NO_UPDATE_CHECK`, and Harness's Node at the end of `PATH` | `gridPanePrelude` runs in the POSIX script only; `engineStart.ts` "Not done" | 5 |
+| 6 | Pane blank for 15-50 s during an engine's first start | Copilot and Kilo on the PC | 6 |
+| 7 | Stopping panes dropped tabs from 5 to 3; New Harness defaulted to another machine | seen on the PC, not investigated | 6 |
+| 8 | Desktop release fails on one connection reset | `scripts/verify-desktop-release.py`, 1.3.65 | 7 |
+| 9 | `feat/windows-app-menu` and `-dropdowns` unmerged (7 commits), overlapping #2947 | `git rev-list`; the owner's dirty checkout holds related files | 8 |
+| 10 | Arm not rerun since the serial spec fix | PR #3032 | 9 |
+| 11 | Native `hn` gate failures never compared with `main` | PR #3032 | 9 |
+| 12 | `hn` shell integration is Unix only | `shell_picker.rs` | 10 |
+| 13 | Guests on Windows are design only | guests spec | 12 |
 
 ## Global Constraints
 
 - Root cause, no stopgaps; every bug fix has a test that failed first.
-- Windows checks run on the signed build on DESKTOP-0TFH0OJ, in the Personal Swarm only. Send nothing into shared Swarms.
+- Windows checks run on the signed build on DESKTOP-0TFH0OJ.
 - Ask before every commit and push. Edit code with the Edit tool. Run long suites once, saved to a file.
 - Never print secrets. The PC's `.codex\config.toml` holds a plain key: read its keys by name, never the file.
 - Do not run a vendor's installer from a script of ours: only through the product. Never approve another program's hooks on the person's behalf.
@@ -71,28 +67,9 @@ Mac-only checks read and found **correct, no work**: menu-bar notices (Windows k
 Each row is a Mac flow run as a person would, on the signed build:
 
 - [ ] **Step 1: Git project.** Open a real repository in New Harness, with and without a worktree. Expected: branch shown, worktree created under `harnesses\worktrees`, deleted with the harness.
-- [ ] **Step 2: Swarm with the GitHub App.** In a throwaway repository the owner names, a Personal Swarm task commits, pushes and opens a pull request, which appears in Pull requests. Expected: authored as the App or the owner as on a Mac; `gh` missing gives its banner.
-- [ ] **Step 3: The rest.** Import an agent; Share a harness and open the link; plain terminal; rename a harness and see its Swarm agent renamed (#2912); `harness remote`; `team model`; Threads, Mentions and Decisions in the sidebar (#3057); themes when #3059 lands.
-- [ ] **Step 4: Devices.** Add device with no device attached says so in words; with hardware only if the owner plugs it in, else named as unverified.
-- [ ] **Step 5:** Fix each failure at its cause, test first. Commit per fix.
-
-### Task 3: A hidden engine screen does not end a Swarm start
-
-Blocked on #3063 merging; build on its `startScreen.ts` and `openRestrictedKeys` pattern, not beside them.
-
-**Files:**
-- Modify: `cli/src/engines/codex/screen.ts`, `cli/src/superTabs/startScreen.ts`
-- Test: `cli/src/engines/codex/hooksReview.spec.ts`; fixture `cli/src/superTabs/fixtures/screens/codex-0163-hooks-review.txt`, captured from the PC
-
-**Interfaces:**
-- Produces: `hooksReviewSkipKeys(capture: string): string[] | null`
-
-- [ ] **Step 1: Failing test.** The exact screen gives the keys for "Continue without trusting"; a capture with any line changed, a selection on another row, or text typed in it gives `null`; "Trust all" is never returned.
-- [ ] **Step 2:** Run it, watch it fail.
-- [ ] **Step 3:** Implement. Only for a Swarm start's own pane, before it has a session, never a pane a person opened. Read the screen again before sending.
-- [ ] **Step 4:** Any other screen still blocking at the start's deadline fails it at once with the screen's first line, through #3063's path, so the Lead tells the person what it asks.
-- [ ] **Step 5:** On the PC, with Orca's hooks present, a Lead starts a Codex engineer. Expected: it joins in seconds; `harness show` proves Harness's hooks fired; Orca's did not run; `config.toml` gained no trust for Orca.
-- [ ] **Step 6:** Commit.
+- [ ] **Step 2: The rest.** Share a harness and open the link; plain terminal; rename a harness; `harness remote`; themes when #3059 lands.
+- [ ] **Step 3: Devices.** Add device with no device attached says so in words; with hardware only if the owner plugs it in, else named as unverified.
+- [ ] **Step 4:** Fix each failure at its cause, test first. Commit per fix.
 
 ### Task 4: Every engine installs and reports on Windows
 
@@ -134,11 +111,10 @@ Blocked on #3063 merging; build on its `startScreen.ts` and `openRestrictedKeys`
 - [ ] **Step 1: Failing test.** A download reset twice then served passes; served with a wrong sha256 fails at once with no retry; reset on every try fails naming the file.
 - [ ] **Step 2:** Implement three tries with backoff, for connection errors and 5xx only. Run. Commit.
 
-### Task 8: The Windows menu branch and Search commands
+### Task 8: The Windows menu branch
 
 - [ ] **Step 1:** Compare `origin/feat/windows-app-menu-dropdowns` with `main`, commit by commit. List what #2947 already carries and what is left.
 - [ ] **Step 2:** Move only what is left to this branch, keeping its author. Triage against `desktop/test/windows_app_menu_test.dart` on `main`. Ask the owner before dropping anything of theirs.
-- [ ] **Step 3:** Confirm New Swarm in Search commands on the PC. If absent, failing test in the keymap tests, then fix. Commit.
 
 ### Task 9: Runs nobody has compared
 
@@ -151,11 +127,6 @@ Blocked on #3063 merging; build on its `startScreen.ts` and `openRestrictedKeys`
 
 - [ ] **Step 1:** Spike: a PowerShell profile fragment that carries the cwd and command marks to `hn` over the owner-only pipe in `tui/src/sock.rs`, in place of FIFOs. Write what it can and cannot do in the plan's ledger before more code.
 - [ ] **Step 2:** Failing tests for the fragment's text and for the marks parsed; implement; run on the PC. Commit, or name it as dropped with the reason.
-
-### Task 11: Adding a machine to a Team (design first)
-
-- [ ] **Step 1:** Draw the current steps and a one-click flow with one status per machine, as a local HTML file in `~/Downloads`. The owner chooses before any code.
-- [ ] **Step 2:** Plan the chosen flow as its own document.
 
 ### Task 12: Guests on Windows (security review first)
 

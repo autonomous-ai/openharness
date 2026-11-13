@@ -1,7 +1,6 @@
 # Windows: the Owner's Local Credential Never Reaches Whoever Holds the Daemon's Port — Implementation Plan
 
-> **How this is worked:** by this project's Engineer, task by task, test first (the failing test committed before its
-> code), as the project's instructions say. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **How this is worked:** task by task, test first (the failing test committed before its code). Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Close audit W1 (`docs/security/2026-11-02-team-account-windows.md`): on Windows no client sends the daemon's local
 credential over loopback TCP, and the daemon counts it over TCP only from a process of its own account.

@@ -1,7 +1,6 @@
 # Windows: the Store Packages Reach the Daemon over Its Proven Pipe, Never Its Port — Implementation Plan
 
-> **How this is worked:** by this project's Engineer, task by task, test first (the failing test committed before its
-> code), as the project's instructions say. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **How this is worked:** task by task, test first (the failing test committed before its code). Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Close audit W1 for the Store packages (`docs/security/2026-11-02-team-account-windows.md`): on Windows the machine
 monitor, harness monitor, memories, autonomous grid and `store/tools` never send the owner's local credential to the daemon's
@@ -26,7 +25,6 @@ protocol.
 - The token never travels: only `<nonce>.<HMAC-SHA256(token, 0x01‖nonce)>`, the nonce starting with the pipe's id; the answer must
   carry `HMAC-SHA256(token, 0x00‖nonce)`.
 - `localDaemon.mjs` stays one file with no imports but Node's, byte-identical in every package and `store/tools`.
-- Swarm code stays out of `cli/src/core`.
 - Two independent security reviews before merge (Reed, Quinn 2), and a real Windows workflow run on the final head.
 
 ## Design
@@ -120,4 +118,4 @@ No workflow file changes: this project's GitHub App may not push them, and the W
   harness monitor and memories `listAgents`, and the grid's `harnessExecute`, over the pipe: it prints each result and exits 1 on any
   failure; `check-install.ps1` runs it last. The vitest spec runs `store/tools/windows-pipe.test.mjs` on Windows on a real pipe.
 - [ ] **Step 2:** README's "Daemon checks" and the report's W1 row and Fixed list name the Store packages.
-- [ ] **Step 3: Commit,** then ask the PM to start the Windows workflow on the final head.
+- [ ] **Step 3: Commit,** then start the Windows workflow once on the final head.

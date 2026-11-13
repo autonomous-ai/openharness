@@ -64,7 +64,6 @@ Paths are relative to `devices/harness-device/firmware/` unless they start with 
     call it at boot. It may be a lost call rather than dead code, so it stays and Diego decides.
   - Removing `espressif/esp_websocket_client`, the Wi-Fi/TLS/HTTP `BOARD_REQUIRES`, and the `sdkconfig`
     values. They change the component set; this needs a size and boot test on a dial, so it is a follow-up.
-- The thread and PM|Buddy code (a separate proposal, task #3928).
 - Splitting large files.
 - The host side (`cli/`, `desktop/`).
 - Rewriting `RELEASE.md` and `prototype/habitat/*.md` beyond the lines that name deleted files.

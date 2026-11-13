@@ -4,8 +4,8 @@ Task #2443, requested by 0xken15@gmail.com. 2026-11-03.
 
 ## Why
 
-On 2026-11-03 six Desktop test steps (#2418, #2424, #2425, #2428, #2430, #2419) had no Tester. A Team account has no
-display. A person's own account can build a branch, but that build is the installed app in all but location:
+On 2026-11-03 six Desktop test steps (#2418, #2424, #2425, #2428, #2430, #2419) had no Tester. A person's own account
+can build a branch, but that build is the installed app in all but location:
 
 - it has the installed app's bundle id (`ai.autonomous.harness`, `desktop/macos/Runner/Configs/AppInfo.xcconfig`);
 - it talks to the Mac's one daemon on port 18473 (`desktop/lib/core/config.dart`);
@@ -55,8 +55,8 @@ The test home is a `mktemp -d` folder. Its path, the port and the pids `start` s
 
 The test flavor signs in as a test account, never as the person whose Mac it is.
 
-- **Which account.** A dedicated Harness account for testing (one for the project), whose Swarm is the throwaway Swarm
-  Testers use. *Open: the PM names or creates it (recommended), or picks another option; see the question on the task.*
+- **Which account.** A dedicated Harness account for testing (one for the project). *Open: which account; see the
+  question on the task.*
 - **Where it is kept.** In `~/.harness-test/auth`, outside `~/.harness`, set as `HARNESS_AUTH_DIR`. One sign-in per Mac
   is reused by every run. The CLI's own `session.lock` keeps two runs from refreshing it at once.
 - **How.** The first `start` runs `harness login --code` in the test home. The code is approved in a browser where the
@@ -103,12 +103,6 @@ signs in again through `stop` and `start`, never through the copy's button.
   definition, and a fake `launchctl` and `security` on PATH that record every call, it runs the PR's real CLI in the test
   environment through start, sign-in status, sign-out and stop. It then checks that the fake real home's files are
   byte for byte unchanged, that launchctl was never called, and that no Keychain call named the person's item.
-
-## Team-written work
-
-Unchanged. The backend refuses to start an agent in a person's account on a task a Team agent worked on
-(`TEAM_WRITTEN_WORK`, `backend/src/superTabs/teamWritten.ts`), so a Tester in a person's account never gets such a
-branch. The test flavor adds no way around that, and changes nothing in it.
 
 ## Checked against PRODUCT.md and ENGINEERING.md
 

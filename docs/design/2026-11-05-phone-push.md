@@ -1,8 +1,7 @@
 # Phone push notifications: the phone's side, and the contract the backend builds to
 
 Status: the server part merged first (#3071) with its own routes and payload, and the phone now
-follows it. Where this contract and the merged server differ, the server wins: the gaps are listed
-in [docs/plans/2026-11-05-phone-push-backend-plan.md](../plans/2026-11-05-phone-push-backend-plan.md#merged-server-11-05-what-differs-from-this-plan).
+follows it. Where this contract and the merged server differ, the server wins.
 
 Phase 1 only: the push carries ids and the same short copy the app's own notices use, never what was
 asked or said. Phase 2 (a payload sealed to the phone's device key, opened by a Notification Service
@@ -22,8 +21,7 @@ Extension) is not part of this.
   request still reaches nothing. On Android nothing is drawn after a sign-out in any case.
 - A push that lands while Harness is in front is not shown: the app is up and posts its own notices,
   which know what the person is looking at.
-- A tapped push opens what the same local notice opens: the Swarm conversation (at the message and
-  thread, or the decision), or the agent.
+- A tapped push opens what the same local notice opens: the agent.
 
 ## API (backend)
 
@@ -63,32 +61,27 @@ Every value is a string, beside the platform's own fields:
 
 | `kind` | Keys | Opens |
 | --- | --- | --- |
-| `swarm` | `swarm`, `conversation`, and `message` (with `thread` when the message is only in a thread) or `decision`; `key` | the conversation, at the message or the decision |
 | `agent_question`, `agent_done` | `machine`, `agent` | that agent |
 
-`key` is the need's key, as `SwarmNeed.key` makes it (`mobile/lib/swarm/swarm_inbox.dart`):
-`decision:<id>`, `mention:<id>`, or `work:<swarm>:<conversation>:<assignment>:<status>`.
-
-The copy is the app's own notices' (`swarmNotice` in `mobile/lib/swarm/swarm_notices.dart`). For
-example, title `Ann asks you`, subtitle the project's name, body `Open Harness to answer.` Who asks
-and where, never what. Send no `badge`: the app sets the count itself.
+The copy is the app's own notices'. Who asks and where, never what. Send no `badge`: the app sets
+the count itself.
 
 ### iOS (APNs)
 
 ```json
 {
   "aps": {
-    "alert": { "title": "Ann asks you", "subtitle": "Website", "body": "Open Harness to answer." },
+    "alert": { "title": "…", "subtitle": "…", "body": "…" },
     "sound": "default",
-    "thread-id": "swarm-needs-you"
+    "thread-id": "agent-question"
   },
-  "kind": "swarm", "swarm": "…", "conversation": "…", "decision": "…", "key": "decision:…"
+  "kind": "agent_question", "machine": "…", "agent": "…"
 }
 ```
 
 - Headers: `apns-push-type: alert`, `apns-topic: ai.autonomous.harness.ios`, `apns-priority: 10`, and
   `apns-collapse-id` set to the notice id (below).
-- `thread-id`: `swarm-needs-you`, `agent-question` or `agent-done`, the app's own threads.
+- `thread-id`: `agent-question` or `agent-done`, the app's own threads.
 - A token goes to its own gateway: `sandbox` to `api.sandbox.push.apple.com`, `production` to
   `api.push.apple.com`. The team has one APNs key per gateway, each limited to its own, so the
   sender signs a token's push with the key of that token's `environment`. Both keys are the
@@ -103,9 +96,8 @@ that kind, so one switch in Settings silences both.
 ```json
 { "message": {
   "token": "…",
-  "data": { "kind": "swarm", "title": "Ann asks you", "subtitle": "Website",
-            "body": "Open Harness to answer.", "swarm": "…", "conversation": "…",
-            "decision": "…", "key": "decision:…" },
+  "data": { "kind": "agent_question", "title": "…", "subtitle": "…", "body": "…",
+            "machine": "…", "agent": "…" },
   "android": { "priority": "HIGH", "ttl": "86400s" } } }
 ```
 
@@ -127,16 +119,13 @@ hash = 0x811c9dc5
 for each UTF-16 code unit u: hash = ((hash XOR u) * 0x01000193) AND 0x7fffffff
 ```
 
-- Text: `swarm\n` + `key` for a Swarm need; `<machine>\n<agent>` for an agent.
+- Text: `<machine>\n<agent>` for an agent.
 - iOS: `apns-collapse-id` is the id in decimal. Android: the phone computes it from the data.
 
 Test vectors, pinned in `mobile/test/notify/local_system_notices_test.dart`:
 
 | Text | Id |
 | --- | --- |
-| `swarm\nmention:m1` | 1161357565 |
-| `swarm\ndecision:d1` | 15921470 |
-| `swarm\nwork:s1:c1:a1:needs_human` | 701122187 |
 | `machine-1\nagent-7` | 1081005959 |
 
 ## Design
@@ -163,8 +152,7 @@ Test vectors, pinned in `mobile/test/notify/local_system_notices_test.dart`:
 - **Migration and rollback.** A new collection, no migration. Rollback removes the routes and the
   collection; the phone treats the missing route as above.
 - **Audience.** The server binds each token to the caller's account, and `DELETE` removes only the
-  caller's own rows. A push names ids only. Opening one shows only what the account may read, since
-  Swarm reads check access as before.
+  caller's own rows. A push names ids only. Opening one shows only what the account may read.
 - **Identity.** The signed-in person's account, from their own sign-in, never a machine owner's.
 - **Failure.** The phone logs each failed register or delete under `push`, with the HTTP status,
   never the token. The backend logs each provider refusal with its reason.
@@ -172,19 +160,18 @@ Test vectors, pinned in `mobile/test/notify/local_system_notices_test.dart`:
   - iOS 15+: the `aps-environment` entitlement, with an App Store export signed as `production`.
   - Android 7+ (API 24): `firebase-messaging` with its values in `res/values/firebase.xml`, with no
     google-services plugin.
-  - Android 8+: the app prepares `swarm-needs-you` (high importance) and `swarm-quiet` (low importance,
-    no sound or vibration) once per launch. Permission checks wait for that shared preparation before
-    push registration. A failed attempt or a 10-second timeout is logged; local notices still work.
-    A channel not made yet puts the server's push on FCM's own "Misc" channel instead, outside the
-    Swarm switches in Settings. The OS keeps the person's settings for existing channels.
+  - Android 8+: the app prepares its notification channels once per launch. Permission checks wait
+    for that shared preparation before push registration. A failed attempt or a 10-second timeout is
+    logged; local notices still work. A channel not made yet puts the server's push on FCM's own
+    "Misc" channel instead, outside the app's switches in Settings. The OS keeps the person's settings
+    for existing channels.
 
 ## Not in this change
 
 - **Backend:**
   - token store and routes;
   - the APNs and FCM senders and their keys;
-  - the triggers (Swarm needs; agent questions and finished turns asked for by the CLI when no app is
-    connected).
+  - the triggers (agent questions and finished turns asked for by the CLI when no app is connected).
 - **CLI:** asking the backend to push an agent's question or finished turn.
 - **Measures:** the push measures need names in the backend's product-usage vocabulary first.
 - **Phase 2:** the sealed payload and the Notification Service Extension.

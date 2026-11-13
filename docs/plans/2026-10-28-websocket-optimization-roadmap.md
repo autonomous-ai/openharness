@@ -9,8 +9,8 @@ measured.
 
 ## Why
 
-Clients and daemons open many short-lived sockets to the backend, and the Swarm keeps the backend busy
-with HTTP polls that have no push. The question was whether to fold every data lane into one
+Clients and daemons open many short-lived sockets to the backend, and HTTP polls with no push keep it
+busy. The question was whether to fold every data lane into one
 WebSocket. The answer is yes, eventually, but most of the cost today comes from churn bugs and
 polling, which are cheaper to fix first. Phases are ordered by priority: each one is worth doing even
 if the later ones never ship.
@@ -23,8 +23,7 @@ if the later ones never ship.
   rejected with `NOT_YOUR_MACHINE`, then every socket closes.
 - `/api/adapter-ws`: 227 reconnects (5/min); 5 machines reconnected more than 5 times.
 - Hub heartbeat timeouts: 152 tracked, 148 web.
-- Backend CPU after v1.3.58: about 1.5 cores, steady. Most of the remaining busy time is polling:
-  host `/changes` 14.6%, Swarm `/changes` 10.9%, deliveries about 19%, messages 7.4%.
+- Backend CPU after v1.3.58: about 1.5 cores, steady. Most of the remaining busy time is polling.
 - What the logs cannot tell today: which client opened a socket (daemon relay, desktop, web, mobile,
   group sync), close codes, or how long a socket lived.
 
@@ -120,35 +119,18 @@ Done when:
 - no selects of deleted machines;
 - adapter reconnects are explained by close codes.
 
-## Phase 2 — Push instead of poll for the Swarm (high priority, largest CPU win)
+## Phase 2 — Fewer polls (high priority)
 
-1. **Host feed.** Today the host feed polls about every second (`cli/src/superTabs/host.ts:324`,
-   `hostFeed.ts:54-60`), even with no pools.
-   - Push `swarm_host_changed{tabId, lastChangedAt}` down `adapter-ws`, following
-     `backend/src/lib/swarmDeliveryPushes.ts`, so the host reads only when told.
-   - Keep a 60 s safety net.
-   - Do not run the loop at all on a machine with no Swarm pools.
-2. **Client Swarm reads.** These are:
-   - Swarm state: 3 s on desktop, 15 s on web.
-   - Discovery: 15 s.
-   - Invites: 15 s.
-   - Native pane renew: 20 s.
-
-   Push `swarm_changed{tabId, lastChangedAt, parts}` over the socket the client already has. Forward
-   the existing `swarm-stamp` Redis broadcast (`bus.ts:325-344`) instead of adding a new source.
-3. **Cheap "nothing changed" reads.** `/changes`, deliveries and messages answer an unchanged cursor
-   before loading any state (304 or empty).
-4. **Retire timers that already have a push**, keeping one long safety net each:
+1. **Retire timers that already have a push**, keeping one long safety net each:
    - CLI: Agent Messages 15 s, machine list 60 s.
    - Desktop: experimental settings 30 s.
    - Offline machine with a pending agent: full `/api/machines` every 5 s.
-5. **Deliver account pushes once.** A daemon with N relay sockets hears each account push N+1 times
+2. **Deliver account pushes once.** A daemon with N relay sockets hears each account push N+1 times
    (`webAccountPushes.ts:15`). Send account pushes only on adapter-ws to daemons, and only once per
    app on web/mobile.
 
 Done when:
 - polling routes are under 20% of backend busy time (from ~60%);
-- host `/changes` requests drop at least 10×;
 - Mongo query/s and CPU fall with the same user activity.
 
 ## Phase 3 — Fewer sockets per daemon within today's protocol (medium priority)
@@ -157,7 +139,7 @@ Done when:
    to 4 isolated E2EE sessions per machine (`remoteRelay.ts:330-356`). The isolation exists only so
    pollers do not see each other's frames, and request IDs give the same guarantee.
 2. **Visibility gating everywhere.**
-   - Harness Monitor (3–15 s), the Swarm machines panel (15 s), usage (60 s) and agent sync (60 s)
+   - Harness Monitor (3–15 s), usage (60 s) and agent sync (60 s)
      stop when the window or tab is hidden or closed.
    - On return, read once, then go live again.
 3. **Observer fan-out.** Each observer subscribes to the machine's whole `up:{machineId}` stream and
@@ -175,7 +157,7 @@ One socket per client for every data lane.
 - **Base it on `device-ws`,** which already runs N machines on one socket with one E2EE session per
   machine (`deviceWs.ts:400-431`, `cli/src/gateway/lane.ts`).
 - **Lanes:**
-  - control and push (account events, Swarm changes)
+  - control and push (account events)
   - one lane per machine session (`machineId` plus a session ID, so background readers can still be
     separate when needed)
   - one lane per share (observer)
@@ -207,7 +189,7 @@ and connects/min tracks app starts and network changes, not activity.
 
 Consider carrying `adapter-ws` and `device-ws` as lanes of the same account socket, so a daemon holds
 exactly one backend socket. This is a small win after Phase 4. The adapter's billing, ownership
-claims, supersede (4000) and team-machine (4009) rules need their own lane-level equivalents.
+claims and supersede (4000) rules need their own lane-level equivalents.
 
 ## Not in scope
 
@@ -221,7 +203,7 @@ claims, supersede (4000) and team-machine (4009) rules need their own lane-level
 |---|---|---|---|
 | 0 Attribute | Highest | 1–2 days | None |
 | 1 Churn bugs | High | 3–5 days, independent PRs | Low |
-| 2 Swarm push | High | 1–2 weeks | Medium: missed pushes need the safety net |
+| 2 Fewer polls | High | — | Low: each timer keeps a long safety net |
 | 3 Fewer sockets | Medium | 1 week | Low–medium |
 | 4 Account socket | Lower | 3–5 weeks | High: protocol, both sides, rollout |
 | 5 Machine side | Lowest | 1–2 weeks after 4 | Medium |

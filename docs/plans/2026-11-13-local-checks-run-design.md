@@ -29,9 +29,8 @@ Direction approved by Ken on 2026-11-13.
 5. **Runs each required check, in name order,** with its exact `CHECKS` command, through the shell, in its `cwd`
    relative to the repository root. Only `make desktop-test` gets a cap, one validation already accepts:
    `ARGS="--timeout 3600"`, the budget the docs give for a slower Mac; workers stay host-sized. Vitest checks run as
-   `CHECKS` has them: every Vitest suite already sizes its workers to half the cores its run may use, the machine's or
-   its Swarm agent's share (`cli/src/testing/suiteWorkers.ts`), and a `--maxWorkers` from `--run` would override that
-   share. Checks run one at a time.
+   `CHECKS` has them: every Vitest suite already sizes its workers to half the cores its run may use, the machine's
+   (`cli/src/testing/suiteWorkers.ts`), and a `--maxWorkers` from `--run` would override that size. Checks run one at a time.
    The receipt's `command` is the exact command run, so it passes `validate_receipts`. The check's output streams to stderr as it runs, so stdout carries
    only the fence. Every check runs even after one fails, so one round shows every failure.
 6. **Reads the passed count** from the output:

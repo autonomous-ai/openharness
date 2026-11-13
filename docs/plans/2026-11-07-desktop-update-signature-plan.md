@@ -1,7 +1,6 @@
 # Desktop Update Signature Implementation Plan
 
-> Task #4435. Written by the writing-plans skill as this project's Engineer works: one Engineer implements it task by
-> task, test first, and the pull request's review is the one independent review.
+> Task #4435. Written by the writing-plans skill: implemented task by task, test first, and the pull request's review is the one independent review.
 
 **Goal:** The Desktop updater installs a build only when the same publisher that signed the running app signed it, so a
 wrong manifest (right sha256, wrong build) is refused on macOS and Windows.

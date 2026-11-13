@@ -1,7 +1,6 @@
 # Relay: no dial for a machine the list shows offline — Implementation Plan
 
-> Written by the writing-plans skill as this project's instructions use it: the Engineer implements it task by task,
-> each failing test committed before its code. No execution handoff.
+> Written by the writing-plans skill: implemented task by task, each failing test committed before its code. No execution handoff.
 
 **Goal:** The CLI relay never opens a backend socket for a machine the account's machine list shows offline; it
 dials again once the list shows it online. A machine refused as offline with no list to go by is asked again after
@@ -28,7 +27,7 @@ pools share the window pool's record, as they share its refusals.
 - Measure refused opens per hour before and after from the backend logs (aggregates only): the `ws counters` line
   and the relay's `web-ws disconnected` lines with `client=relay`, same weekday hours.
 - PR body first line: "Requested by 0xken15@gmail.com through Harness."
-- Ships with the next CLI release, through the PM's batch.
+- Ships with the next CLI release.
 
 ## Design
 

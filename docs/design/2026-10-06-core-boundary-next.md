@@ -1,7 +1,7 @@
 # The core boundary, next
 
-> **Audit, 2026-11-12.** Five weeks on, the core's closure is 98,437 lines in 556 files, and 129,161 with the Swarm
-> on: the edge list below held, and the growth came in files it does not name. What grew, what leaves next and the
+> **Audit, 2026-11-12.** Five weeks on, the core's closure is 98,437 lines in 556 files: the edge list below held,
+> and the growth came in files it does not name. What grew, what leaves next and the
 > rule restated: [2026-11-12-core-audit.md](2026-11-12-core-audit.md).
 >
 > **Status, 2026-10-07.** Steps 1 to 11 have landed, and so have moves the plan did not list: the recaps,

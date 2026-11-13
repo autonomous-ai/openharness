@@ -48,9 +48,9 @@ The owner chose to build on Agent Messages rather than add a "Teams" experiment 
 switch, no team object apart from the tab, no new verb and no new service: a tab nobody was invited to behaves
 exactly as today.
 
-It is also not Swarm again. Swarm (tab channels, `harness team` with roles) was removed on October 11, 2026:
-`ask` was the only verb, questions expired and lost messages, the introduction was 20 lines with a 64-character
-key, and Harness imposed a process the agents worked around. Here messages stay Agent Messages, tasks and lasting
+It does not bring back the tab channels and `harness team` roles removed on October 11, 2026: `ask` was the only
+verb, questions expired and lost messages, the introduction was 20 lines with a 64-character key, and Harness
+imposed a process the agents worked around. Here messages stay Agent Messages, tasks and lasting
 discussion live on GitHub, which agents and people already know, and the leader is a label plus one sentence in
 the tab's note. Harness enforces only who may be in the tab and who may type into which harness.
 
@@ -65,7 +65,7 @@ Added to [docs/naming-system.md](../../naming-system.md) when they ship:
 | **Member** | An account invited to the tab. It may add any number of its harnesses, up to the tab's limit. |
 | **Leader** | Optional: one of the tab owner's harnesses, marked to lead. At most one; the owner may change it. |
 
-Copy says "invite people to this tab", "leader", "member". Not "team", "worker" or "swarm".
+Copy says "invite people to this tab", "leader", "member". Not "team" or "worker".
 
 ## What the person sees
 

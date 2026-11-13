@@ -119,7 +119,7 @@ daemon's own request fields.
   session data chosen and the worktree kept, stopping the harness first when it runs, and works on a closed (archived)
   harness too. No prompt: the command is the confirmation, as for `close`. Output lists what was erased and what was
   kept with its reason (`OpenClaw's store is kept: delete its session with OpenClaw.`). Errors are purge's own
-  (Lead-protected, in progress, changed). There is no MCP tool for it. Called from inside an agent's pane, it deletes
+  (in progress, changed). There is no MCP tool for it. Called from inside an agent's pane, it deletes
   only a harness that agent started, as `close` allows (my call); the device's script is not an agent.
 - **OpenClaw.** Purge of an OpenClaw harness erases everything Harness keeps and keeps OpenClaw's store, reporting it
   in a new response field (`kept: [{ what: 'engine-store', reason }]`; `historyKept` keeps its meaning, "session data
@@ -163,7 +163,7 @@ daemon's own request fields.
   Linux).
 - `harness delete`: a running harness and a closed one are erased (checkpoint files, archive, recaps, search rows,
   `Told` ledger lines, receipt task text, recaps and search rows under an earlier session key); a concurrent ledger
-  append during the rewrite is not lost; a retried create of a scrubbed receipt does not launch; an OpenClaw harness erases Harness's records and reports the kept store; a Lead is refused.
+  append during the rewrite is not lost; a retried create of a scrubbed receipt does not launch; an OpenClaw harness erases Harness's records and reports the kept store.
 - Search: after delete, the erased text is absent from the database files (secure delete); after a daemon restart a
   kept OpenClaw conversation is not indexed again.
 - End to end on this Mac with OpenClaw 2026.11.2 (isolated daemon, a scratch folder seeded by copying only a model

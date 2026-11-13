@@ -47,7 +47,7 @@ gone the daemon is down, and the client says so. Nothing falls back to the port.
 
 ## Left open
 
-- Rotating the old bridge key and moving cloud agents' bridge calls off the port belong to this task too (Lead, 11-02), and build on
+- Rotating the old bridge key and moving cloud agents' bridge calls off the port belong to this task too (11-02), and build on
   #2558 once it merges: a second pull request with its own plan.
 
 - Windows clients still send the credential to the port; moving them needs a proof-checked pipe client: its own task.

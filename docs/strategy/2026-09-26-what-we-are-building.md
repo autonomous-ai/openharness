@@ -133,7 +133,7 @@ from the desk.
 
 ### 3. Orchestration
 
-Agents that run agents: swarms, the roundtable, and the Store's domain harnesses working together.
+Agents that run agents: the roundtable and the Store's domain harnesses working together.
 The person moves from operator (answering each agent) to manager (setting goals, reviewing results
 and steering). The inbox becomes a review queue.
 
