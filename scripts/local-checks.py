@@ -1,19 +1,25 @@
 #!/usr/bin/env python3
 """Require bounded, exact-head local validation attestations in a PR body.
 
-Before pushing the tested commit or marking Ready, add one harness-local-checks
-JSON fence to the PR body. Each entry names check, command, cwd, head, status
-(passed), passed (positive test count), and platform (macos, linux or windows).
-Commands are data: this program never runs them. --list PATH... prints the
-required checks and their commands before a PR validation run.
+Before pushing the tested commit or marking Ready, run --run from a clean tree
+and paste its output, one harness-local-checks JSON fence, into the PR body.
+Each entry names check, command, cwd, head, status (passed), passed (positive
+test count), and platform (macos, linux or windows). Validation treats commands
+as data and never runs them; --run runs only the CHECKS commands the branch's
+paths need, locally, and prints the fence. --list PATH... prints the required
+checks and their commands.
 """
 import argparse
+import codecs
 from fnmatch import fnmatchcase
 import json
 import os
 from pathlib import Path
 import re
+import signal
+import subprocess
 import sys
+import threading
 
 
 def cli_gate(name, *paths):
@@ -66,6 +72,14 @@ CLI_SHARED = ("cli/package.json", "cli/package-lock.json", "cli/vitest.config.ts
 # The most pull requests Harness's train carries (cli/src/superTabs/githubTrain.ts TRAIN_MAX).
 TRAIN_MAX = 20
 FENCE = re.compile(r"^```harness-local-checks\s*\n(.*?)^```[ \t]*$", re.MULTILINE | re.DOTALL)
+# --run gives each check 65 minutes: the Desktop suite's own hour (run_command), which starts later, and five minutes
+# to stop Flutter and write its receipt naming what it never reached. A check it stops gets STOP_SECONDS to end after
+# its Ctrl+C before it is killed. Vitest prints its coverage table after its summary (about 30 KB for test:core), so
+# the tail kept for the count is far longer than that report.
+RUN_SECONDS = 3900
+STOP_SECONDS = 10
+TAIL_BYTES = 1 << 20
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def required_checks(paths):
@@ -109,7 +123,8 @@ def planned_heads(plan):
 def missing(required):
     # Only known names/commands are printed, never arbitrary PR content.
     return ValueError("Missing or invalid local check receipts: " + ", ".join(required)
-                      + ". Add the exact-head harness-local-checks JSON receipt before PR validation; use --list for commands.")
+                      + ". Run python3 scripts/local-checks.py --run on the tested commit and paste its output"
+                      + " into the PR body.")
 
 
 def validate_receipts(heads, receipts):
@@ -166,14 +181,180 @@ def check(plan, event):
     return validate_receipts(heads, receipts)
 
 
+def host_platform():
+    return {"darwin": "macos", "linux": "linux", "win32": "windows"}.get(sys.platform)
+
+
+def run_command(name):
+    """The command --run runs for CHECKS[name]: its own, and for the Desktop suite the budget the docs give a slower
+    Mac. Vitest suites size their own workers to their Swarm agent's share of the cores (cli/src/testing/suiteWorkers.ts),
+    which a --maxWorkers would override."""
+    command = CHECKS[name]["command"]
+    return command + ' ARGS="--timeout 3600"' if "resources" in CHECKS[name] else command
+
+
+def passed_count(name, output):
+    """The passed tests in a check's output, 0 when it names none."""
+    output = ANSI.sub("", output)
+    if "resources" in CHECKS[name]:  # the Desktop suite names the receipt.json that holds its count
+        paths = re.findall(r"^(?:passed|passed_after_startup_retry): (.+receipt\.json)\s*$", output, re.MULTILINE)
+        try:
+            passed = json.loads(Path(paths[-1]).read_text(encoding="utf-8"))["coverage"]["passed"]
+        except (IndexError, OSError, ValueError, KeyError, TypeError):
+            return 0
+        return passed if type(passed) is int and passed > 0 else 0
+    # The last summary: a test may print a line like it before Vitest's own.
+    counts = re.findall(r"^\s*Tests\s+(?:\d+ failed \| )?(\d+) passed", output, re.MULTILINE)
+    return int(counts[-1]) if counts else 0
+
+
+def git(root, *args):
+    """git's output in root, or None when it fails or times out; git's own messages are never printed."""
+    try:
+        result = subprocess.run(["git", *args], cwd=root, stdin=subprocess.DEVNULL, capture_output=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return result.stdout.decode(errors="replace") if result.returncode == 0 else None
+
+
+def refuse(err, reason):
+    err.write(f"Local checks not run: {reason}.\n")
+    return 1
+
+
+def attempt(command, cwd, err):
+    """Runs one command through the shell in its own process group, its output streamed to err: its exit code, or
+    None when it ran past RUN_SECONDS, and the last TAIL_BYTES of its output."""
+    group = (dict(creationflags=subprocess.CREATE_NEW_PROCESS_GROUP) if os.name == "nt"
+             else dict(start_new_session=True))
+    process = subprocess.Popen(command, shell=True, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                               stderr=subprocess.STDOUT, **group)
+    expired = threading.Event()
+
+    def stop():
+        # The whole group: a child the shell started holds the pipe, and reading waits for every holder. Ctrl+C first,
+        # as a terminal would send it, so the check stops what it started in a session of its own (test-desktop.py's
+        # Flutter run); then a kill for whatever is left. Windows has no Ctrl+C for another group: the tree goes at once.
+        try:
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)], stdin=subprocess.DEVNULL,
+                               capture_output=True, timeout=60)
+            else:
+                os.killpg(process.pid, signal.SIGINT)
+                try:
+                    process.wait(STOP_SECONDS)
+                except subprocess.TimeoutExpired:
+                    pass
+                finally:  # a second Ctrl+C or SIGTERM during the grace still ends in the kill
+                    os.killpg(process.pid, signal.SIGKILL)
+        except (OSError, subprocess.TimeoutExpired):
+            pass  # every member left already: macOS refuses a group that is only the unreaped shell
+
+    def expire():
+        expired.set()
+        stop()
+
+    timer = threading.Timer(RUN_SECONDS, expire)
+    timer.start()
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    tail = bytearray()
+    with process.stdout:
+        try:
+            for chunk in iter(lambda: process.stdout.read1(1 << 16), b""):
+                err.write(decoder.decode(chunk))
+                tail += chunk
+                del tail[:-TAIL_BYTES]
+        except BaseException:
+            # --run itself is stopping: Ctrl+C, or a SIGTERM main() turns into an exit. The terminal's signals never
+            # reach the check's group, so it is stopped here, and so is the timer, which Python would wait out first.
+            timer.cancel()
+            timer.join()
+            stop()
+            process.wait()
+            raise
+    timer.cancel()
+    timer.join()  # a stop under way ends before the shell is reaped here
+    code = process.wait()
+    return None if expired.is_set() else code, tail.decode(errors="replace")
+
+
+def run(root, base, out, err):
+    """--run for the repository at root: runs the checks its paths since base need and writes their fence to out, or
+    writes why not to err. The exit code."""
+    # --untracked-files=normal: a config that hides untracked files must not hide a check's litter.
+    status = git(root, "status", "--porcelain", "--untracked-files=normal")
+    if status:
+        return refuse(err, "the tree has uncommitted changes")
+    head = git(root, "rev-parse", "HEAD") if status == "" else None
+    if head is None:
+        return refuse(err, "this is not a git repository")
+    head = head.strip()
+    # A base that starts with "-" would reach git as an option.
+    diff = None if base.startswith("-") else git(root, "diff", "--no-renames", "--name-only", "-z",
+                                                 f"{base}...HEAD", "--")
+    if diff is None:
+        return refuse(err, "git cannot compare the base with HEAD; fetch it or pass --base REF")
+    names = required_checks([path for path in diff.split("\0") if path])
+    if not names:
+        err.write("No local check is required.\n")
+        return 0
+    host = host_platform()
+    if host is None:
+        return refuse(err, "this is not macOS, Linux or Windows")
+    elsewhere = [name for name in names if CHECKS[name]["platform"] not in (None, host)]
+    for name in elsewhere:
+        refuse(err, f"{name} needs {CHECKS[name]['platform']}; this is {host}")
+    if elsewhere:
+        return 1
+    failures, receipts = [], []
+    for name in names:
+        command, cwd = run_command(name), CHECKS[name]["cwd"]
+        code, output = attempt(command, root / cwd, err)
+        passed = passed_count(name, output)
+        if code is None:
+            failures.append(f"{name} failed: timed out\n")
+        elif code:
+            failures.append(f"{name} failed: exit {code}\n")
+        elif not passed:
+            failures.append(f"{name} failed: no passed count\n")
+        else:
+            receipts.append(dict(check=name, command=command, cwd=cwd, head=head, status="passed", passed=passed,
+                                 platform=host))
+    moved = ((git(root, "rev-parse", "HEAD") or "").strip() != head
+             or git(root, "status", "--porcelain", "--untracked-files=normal") != "")
+    err.writelines(failures)
+    if moved:
+        err.write("Local checks void: HEAD or the tree changed during the run.\n")
+    if failures or moved:
+        return 1
+    receipts = validate_receipts({head: names}, receipts)
+    out.write("```harness-local-checks\n" + json.dumps(receipts, indent=2) + "\n```\n")
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--list", nargs="+", metavar="PATH")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--list", nargs="+", metavar="PATH")
+    mode.add_argument("--run", action="store_true")
+    parser.add_argument("--base", default="origin/main", metavar="REF")
     args = parser.parse_args()
     if args.list:
         print(json.dumps({name: {k: v for k, v in CHECKS[name].items() if k != "paths"}
                           for name in required_checks(args.list)}, indent=2))
         return
+    if args.run:
+        # A Windows text stdout writes "\n" as "\r\n", and CI's FENCE takes no "\r" before the closing line.
+        sys.stdout.reconfigure(newline="\n")
+        # A SIGTERM, or a closed terminal's SIGHUP, ends --run as an exit, as Ctrl+C does as KeyboardInterrupt, so the
+        # check under way is stopped with it (attempt) instead of running on alone.
+        for name in ("SIGTERM", "SIGHUP"):
+            if hasattr(signal, name):
+                signal.signal(getattr(signal, name), lambda signum, frame: sys.exit(128 + signum))
+        top = git(".", "rev-parse", "--show-toplevel")
+        if top is None:
+            sys.exit(refuse(sys.stderr, "this is not a git repository"))
+        sys.exit(run(Path(top.strip()), args.base, sys.stdout, sys.stderr))
     plan = json.loads(os.environ["CI_PLAN"])
     if plan.get("head") != os.environ["CI_SOURCE_SHA"] or plan.get("event") != os.environ["GITHUB_EVENT_NAME"]:
         raise ValueError("local check source differs from CI plan")
