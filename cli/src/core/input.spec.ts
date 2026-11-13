@@ -15,7 +15,9 @@ import { createShortTurnGuard } from './turns/shortTurnGuard.js'
 import { createScreens } from './engines/screens.js'
 import { screenFor } from '../engines/screens.js'
 import { readerEngine } from '../engines/worker/protocol.js'
-import { typesWhileBusy } from '../superTabs/inCore/deliveries.js'
+
+/** The Swarm's chat, as the core's deliveries say its maker types it while the agent works (core/deliveries.ts). */
+const typesWhileBusy = (deliveryId: string): boolean => deliveryId.startsWith('team:service:superTabs:')
 
 const ok: TerminalActionResult = { state: 'succeeded', dispatch: 'executed' }
 const fixture = (name: string) => readFileSync(new URL(`../lib/__fixtures__/${name}`, import.meta.url), 'utf8')

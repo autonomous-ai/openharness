@@ -1032,6 +1032,11 @@ export const TURN_DELIVERERS: readonly string[] = [...Object.keys(EXPERIMENTS), 
  *  agent's answer into its person's chat when the turn that answers them ends. No other asks, so none is sent every end. */
 export const TURN_END_HEARERS: readonly string[] = ['superTabs']
 
+/** The services whose typed turns go into the engine's own input queue while the agent works, where its engine takes that
+ *  (Claude Code and Codex): the Swarm's chat, which its person expects in the pane at once (core/deliveries.ts
+ *  `typesWhileBusy`). Every other typed delivery, Agent Messages' among them, waits for the agent to be idle. */
+export const WHILE_BUSY_DELIVERERS: readonly string[] = ['superTabs']
+
 /** The core's calls into Share: an observer's frame as the relay handed it over, the relay gone (every observer
  *  with it), and stopping it. */
 export interface SharingPort {

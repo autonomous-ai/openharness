@@ -76,7 +76,8 @@ The core stays small and secure, in the code and at run time: read
   `deviceInput.ts`: the pane writer lock every write takes, and a device's queued turns behind it.
   `cardText.ts`: an engine's error, rewritten for a device's card.
 - `deliveries.ts`: delivered turns, the Wi-Fi device's, Agent Messages' and the orchestrator's: text written into an
-  agent under a delivery id of its maker's, and what became of it, told back to that maker in its process.
+  agent under a delivery id of its maker's, and what became of it, told back to that maker in its process. The maker
+  its id names says whether it is typed into an agent that is working (`WHILE_BUSY_DELIVERERS`: the Swarm's chat).
 - `updateHandoff.ts`: the core handing over to a build the updater staged (exit 75, when the master asks),
   and a core with no master handing itself to one. `updaterBeside.ts`: the updater started beside a core whose
   master is too old to run it, still in its own process.
