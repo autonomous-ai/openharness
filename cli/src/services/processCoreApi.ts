@@ -217,15 +217,16 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
           ? { accountId: answer.accountId, email: answer.email } : null
       },
       onNotice: (listener) => view.onNotice?.(listener) ?? (() => {}),
+      // The account's machines are not an experiment's to read: none declares `/api/machines` (core/api.ts
+      // `EXPERIMENT_BACKEND_ROUTES`), and the devices' process asks the core for the list by its own link.
       ...UNASKED.account,
-      // The account's machine list is the one read of `/api/machines` the core's `backend` answer gives an experiment
-      // already, so a service that is not asked for it gets the same refusal for it as for any other path. The Super
-      // Tab service's route context needs it: in its own process it saw none (the 2026-10-19 manual run).
-      machines: () => backend('GET', '/api/machines'),
     },
     clients: {
       viewerChanged: () => {}, viewerFrame: () => false, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {},
       windows: (frame) => { void ask?.('windows', { frame }).catch(() => {}) },
+      // A goal Hachi closed, for every window of the account (core/agentQueries.ts `hachi_goal_done`). One the core
+      // cannot take now is lost, as a count is: the goal is closed and kept, and its notice is a courtesy.
+      hachiGoalDone: (notice) => { void ask?.('hachi_goal_done', { ...notice }).catch(() => {}) },
       // Handed to the core in order; whether the relay took it is the core's to know, and a lost observer's
       // close follows.
       observer: (connId, type, payload) => {
@@ -242,6 +243,9 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
       get autonomousEnv() { return daemon().autonomousEnv },
     },
     wifi: UNASKED.wifi,
+    // Hachi's daemon counters, handed to the core (core/agentQueries.ts `count`), which refuses any other name. A count
+    // the core cannot take now is lost: counters are measures, never state.
+    count: (metric) => { void ask?.('count', { metric }).catch(() => {}) },
     // The cloud agents' doors (core/experimentQueries.ts): told to the core in order, never waited on. A core
     // that is not connected hears it all again when it is (services/cloudProcess.ts `republish`). A question's
     // id travels as `questionId`: `requestId` is the query's own, which the link writes over.

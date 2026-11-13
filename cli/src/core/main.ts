@@ -61,10 +61,9 @@ import { engineSessionTitle } from '../lib/sessionTitle.js'
 import { machineNames } from '../lib/machineNames.js'
 import { engineHooks as engineHookFacets } from '../engines/hooks.js'
 import type { LiveFor } from '../engines/facets/live.js'
-import { DAEMON_LOG_FILE, PID_FILE, daemonPort, isAlive, readPid, LEGACY_LOG_FILE, MACHINE_NAME_FILE, tildify, computerId, thisDeviceLabel } from '../lib/daemonState.js'
+import { DAEMON_LOG_FILE, PID_FILE, daemonPort, isAlive, readPid, removePidFileIf, onError, LEGACY_LOG_FILE, MACHINE_NAME_FILE, tildify, computerId, thisDeviceLabel } from '../lib/daemonState.js'
 import { clearSafeModeMarker, safeModeDisposition, safeModeStatusBody, SafeModeRequest, writeSafeModeMarker } from '../lib/daemonSafeMode.js'
 import { awakeTimeout } from '../lib/sleepAware.js'
-import { removePidFileIf, onError } from '../lib/daemonLaunch.js'
 import { harnessdEnv, holdHarnessdEnv } from '../lib/harnessdEnv.js'
 import { dropAgentSessionEnv } from '../lib/agentSessionEnv.js'
 import { AUTH_DIR, AuthSessionManager, ensureSignInEpoch, markSignedOut, readAuthSession, signInOf, type AuthSession } from '../lib/authSession.js'
@@ -140,6 +139,7 @@ import { createTerminalRequests } from './terminals/requests.js'
 import { createBrowser } from './terminals/browser.js'
 import { loopbackAnswer } from '../lib/loopbackGet.js'
 import { writeBrowserShim } from '../lib/browserShim.js'
+import { backgroundCommands } from '../lib/backgroundCommands.js'
 import { createAgentEvents } from './agents/events.js'
 import { createSessionNormalizers } from './transcripts/normalizers.js'
 import { createInput } from './input.js'
@@ -169,6 +169,9 @@ import { createHistory } from './transcripts/history.js'
 import { createRelaunchMarks, transcriptSize } from './transcripts/relaunch.js'
 import { createForgetSession } from './agents/forget.js'
 import { createBinding } from './agents/bind.js'
+import { createHermesTerminal } from './agents/hermesTerminal.js'
+import { hermesSessionEndedSince, hermesSessionKind, hermesStoreStamp, hermesTerminalNames, hermesTerminalStamp, readHermesTerminal } from '../engines/identities.js'
+import { hermesRecordSeen } from '../engines/nativeHooks.js'
 import { createDiscoveryHandlers } from './agents/discovery.js'
 import { createLaunchHelpers, gridLaunchThrough } from './agents/launch.js'
 import { createLaunchAuthority } from './agents/launchAuthority.js'
@@ -220,7 +223,7 @@ import { createDeliveries } from './deliveries.js'
 import { createTerminalWatch } from './terminalWatch.js'
 import { createSharingLink } from './sharingLink.js'
 import { createAgentSettingsSync, createExperimentHooks, wakeExperiments } from './experiments.js'
-import { answerExperimentQuery, answerMachineAddonsQuery, createForExperiment, creationForExperiment } from './experimentQueries.js'
+import { answerExperimentQuery, answerDaemonQuery, createForExperiment, creationForExperiment } from './experimentQueries.js'
 import { answerConnectorsQuery } from './connectorsQueries.js'
 import { answerSharedMachinesQuery } from './sharedMachinesQueries.js'
 import { inlineSharedMachinesPort } from '../lib/sharedMachinesPort.js'
@@ -233,7 +236,7 @@ import { CORE_EXIT_STOP, CORE_EXIT_UPDATE, PROBE_COMMAND } from '../harnessd/pro
 import { localSocketListenPath, localSocketPath, refuseServedDataFolder, servedFolderDeps, type LocalSocketServer } from '../lib/localSocket.js'
 import { ensureDaemonToken } from '../lib/windows/pipeAuth.js'
 import { claimDataFolder } from '../lib/windows/dataFolderClaim.js'
-import { saveDaemonPort } from '../lib/daemonEndpoint.js'
+import { writeDaemonRecord } from '../lib/daemonRecord.js'
 import { publishHookRoute } from '../lib/hookRoutes.js'
 import { BackendSocket, isLocalClientId } from '../backendSocket.js'
 import { createGatewayLink, laneOf, tabKeyOf, tabRelayOf } from './gatewayLink.js'
@@ -270,7 +273,7 @@ import { createRuntimeProfiles } from './engines/runtimeProfiles.js'
 import { createRuntimeTransport } from './engines/runtimeTransport.js'
 import { RuntimeProfileController } from '../lib/runtimeControl.js'
 import { installTimestampedConsole, sid, prepareLogFile, trimLogFile, LOG_CHECK_INTERVAL_MS } from '../lib/log.js'
-import { backendHttpBase } from '../lib/controlPlane.js'
+import { backendHttpBase } from '../lib/backendHttpBase.js'
 
 // Daemon stdout/stderr. Capped at LOG_MAX_BYTES — see prepareLogFile/trimLogFile in lib/log.ts.
 const LOG_FILE = DAEMON_LOG_FILE
@@ -757,6 +760,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // (superTabs/inServices.ts): off, or with them in their own processes, none of it is loaded here.
   const swarmServices = swarm && ['sharing', 'handoff', 'models'].some((name) => !outOfProcess.has(name))
     ? await import('../superTabs/inServices.js') : null
+  // The Swarm's own service runs in a process of its own. Its code is loaded here only when it runs here instead: with every
+  // service in the core, a list without it, or no master (Harness OS). Loaded now, with the other doors: awaited in the
+  // wiring below, it let the services already started run before the core was whole (src/architecture.spec.ts).
+  const swarmService = swarm && !outOfProcess.has('superTabs') ? await import('../services/superTabs.js') : null
   let serviceLinksRef: ServiceLinks | null = null
   const runtimeTransport = createRuntimeTransport({
     call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
@@ -1034,6 +1041,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     sendToWindow: (connId, frame) => localWsServerRef?.sendToWindow(connId, frame) ?? false,
     hasWindow: () => backendRef?.hasLocalClient() ?? false,
     devicesChanged: (payload) => backendRef?.send({ type: 'harness_devices_changed', payload }),
+    // A goal Hachi closed: every window here and the owner's apps away, sealed for them (createCoreApi checks it).
+    hachiGoalDone: (notice) => backendRef?.send({ type: 'hachi_goal_done', payload: { ...notice } }),
     wifi: wifiCore.api,
     dialWatching: (watching) => {
       const attached = watching && !dialWatching
@@ -1684,7 +1693,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       ?? (service === 'messages' ? await messagesLink.answer(query, payload) : null)
       ?? await answerConnectorsQuery(coreApi, service, query, payload)
       ?? await answerSharedMachinesQuery(sharedMachinesAccount, service, query, payload)
-      ?? answerMachineAddonsQuery(coreApi, service, query)
+      ?? answerDaemonQuery(coreApi, service, query)
       ?? await answerExperimentQuery(coreApi, experiments, service, query, payload)
       ?? await terminalWatch.answer(service, query, payload)
       ?? (service === 'orchestrator' ? orchestratorLink.answer(query, payload) : null)
@@ -1830,10 +1839,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   if (!outOfProcess.has('windowNames')) serviceHost.serve('windowNames', inline!.startWindowNames, coreApi, WINDOW_NAMES_REQUESTS)
   // Hachi's goals (services/goals.ts): here, or in the edge host.
   if (!outOfProcess.has('goals')) serviceHost.serve('goals', inline!.startGoals, coreApi, GOALS_REQUESTS)
+  // Hachi's wakes and its off path (services/hachi.ts): here, or in the edge host. The apps ask it nothing.
+  if (!outOfProcess.has('hachi')) serviceHost.serve('hachi', inline!.startHachiInCore, coreApi, [])
   if (!outOfProcess.has('memory')) serviceHost.serve('memory', inline!.startMemory, coreApi, MEMORY_REQUESTS)
   if (!outOfProcess.has('router')) serviceHost.serve('router', inline!.startRouter, coreApi, ROUTER_REQUESTS)
   if (!swarm) serviceHost.leaveOff('superTabs', SUPER_TAB_REQUESTS)
-  else if (!outOfProcess.has('superTabs')) serviceHost.start('superTabs', swarm.startSuperTabs, coreApi, SUPER_TAB_FALLBACKS, SUPER_TAB_REQUESTS)
+  else if (swarmService) serviceHost.start('superTabs', swarmService.startSuperTabs, coreApi, SUPER_TAB_FALLBACKS, SUPER_TAB_REQUESTS)
   if (!outOfProcess.has('handoff')) serviceHost.serve('handoff', (core) => inline!.startHandoff(core, undefined, undefined, swarmServices?.recordReplacement), coreApi, HANDOFF_REQUESTS)
   // Connected services' MCP bridge and the Connectors screen (services/connectors.ts): here, or in the edge host
   // (services/connectorsProcess.ts), asked through its port (core/connectorsLink.ts) for a profile home's entries.
@@ -1933,6 +1944,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     agentIdFor,
     turnActivity,
     isSubagentSession,
+    quietTurnOpen: recaps.quietTurnOpen,
     clients: backend,
     search: sessionSearch,
     turnStartedAt,
@@ -2036,6 +2048,20 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
     openclawPaneDue: (sessionId) => normalizers.openclawReaders.get(sessionId)?.paneDue() ?? true,
     openclawStateDir: (pid) => openclawStateDir(pid),
+    hermesTerminal: createHermesTerminal({
+      platform: process.platform,
+      defaultHome: env.HERMES_HOME,
+      registry,
+      paneInfo: (runtime) => terminals.backendFor(runtime)?.paneInfo(runtime) ?? Promise.resolve(null),
+      names: hermesTerminalNames,
+      stamp: hermesTerminalStamp,
+      read: readHermesTerminal,
+      kind: hermesSessionKind,
+      endedSince: hermesSessionEndedSince,
+      storeStamp: hermesStoreStamp,
+      recordSeen: (home) => { void hermesRecordSeen(home) },
+      now: Date.now,
+    }),
   })
   binding.whileChanging((agentId) => restorePanes.busy(agentId))
   const pendingForkInherit = binding.pendingForkInherit
@@ -2223,7 +2249,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const agentSettings = createAgentSettingsSync({ dataDir: env.ADAPTER_DATA_DIR, backend: proxyBackend, session: readAuthSession,
     // Agent Messages is told when its switch changes, wherever it runs: off, it reads it again only when told or its
     // file changes (messages/service.ts).
-    onNotice: (listener) => experimentHooks.onNotice(listener), messagesChanged: () => ports.messages?.settingsChanged() })
+    onNotice: (listener) => experimentHooks.onNotice(listener), messagesChanged: () => ports.messages?.settingsChanged(),
+    // Hachi's package is put in place by the Store (dsh/builtins.ts), whose process may not be running yet.
+    hachiOn: () => viewersWake.ask('store', 'Hachi to put in place') })
   // Windows: the daemon's pipe takes only requests that prove this token (lib/windows/pipeAuth.ts). It is made on
   // the first start and kept in the data folder, in the profile.
   const pipeToken = process.platform === 'win32' ? ensureDaemonToken(env.ADAPTER_DATA_DIR) : null
@@ -2329,7 +2357,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onStore: (method, path, body) => proxyBackend(method, path, body),
   }, { socketPath: localSocketListenPath(env.ADAPTER_DATA_DIR, env.PORT), pipeToken, allowPortFallback: true })
   // On Windows the record also names the pipe and this core's pid: both are new on each start, so clients read them here.
-  try { saveDaemonPort(env.ADAPTER_DATA_DIR, env.PORT, hookPort, pipeToken && localSocket ? { pipe: localSocket.path, pid: process.pid } : undefined) } catch (error) {
+  try { writeDaemonRecord(env.ADAPTER_DATA_DIR, env.PORT, hookPort, pipeToken && localSocket ? { pipe: localSocket.path, pid: process.pid } : undefined) } catch (error) {
     await localSocket?.close()
     hookServer.close()
     throw error
@@ -3056,6 +3084,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     announceSession,
     engineReady: (engine, ms) => engineLinks.ready(engine, ms),
     stoppedAgents,
+    backgroundCommands: (s) => backgroundCommands(s),
     ...(swarm ? {
       leadProtected: (agentId: string, changeId?: string) => swarm.leadCloseProtected(env.ADAPTER_DATA_DIR, agentId, changeId),
       leadSwitching: (agentId: string, changeId: string) => swarm.leadSwitching(env.ADAPTER_DATA_DIR, agentId, changeId),

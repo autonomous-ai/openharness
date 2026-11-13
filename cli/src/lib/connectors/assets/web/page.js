@@ -14,7 +14,10 @@ const pending = new Map();  // connector -> flow id
 let engines = {};
 let via = {};
 let scopes = {};
-const CODEX_ACCOUNTS = "https://chatgpt.com/#settings/Connectors";
+// The services Codex splits (Microsoft 365): each plugin with its name and state, offered on its own.
+let parts = {};
+// Each service's own page in each engine's account (claude.ai's connector, the Codex plugin's on ChatGPT).
+let pages = {};
 const ENGINES = [["claude", "Claude", "Only Claude Code on the same Claude account"], ["codex", "Codex", "Only Codex on the same ChatGPT account"]];
 const working = new Set();  // "connector:engine" while it is being connected or removed
 // The services this computer may offer through Claude Code or Codex. Until it has said (checkingVia), their card waits
@@ -64,8 +67,7 @@ function waysCard(item) {
   const chips = [];
   for (const [engine, name] of ENGINES) {
     const state = engines[engine] ? (via[item.connector] || {})[engine] : undefined;
-    if (state === "connected") chips.push(["✓ " + name, ""]);
-    else if (state === "installed") chips.push(["✓ " + name + " · accounts in ChatGPT", ""]);
+    if (state === "connected" || state === "installed") chips.push(["✓ " + name, ""]);
     else if (state === "reconnect") chips.push([name + " · Reconnect", " warn"]);
   }
   if (item.state === "connected") chips.push(["✓ Harness", ""]);
@@ -119,6 +121,17 @@ function card(item) {
   box.append(node("p", about, "about"));
   return box;
 }
+// A bare icon, not a button: the service's own page in an engine's account, in a tab of its own.
+function openLink(url) {
+  const link = node("a", "", "way-open");
+  link.href = url;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.title = "Open";
+  link.setAttribute("aria-label", "Open");
+  link.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M19 19H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>';
+  return link;
+}
 function button(text, action, className, label) {
   const element = node("button", text, className);
   element.type = "button";
@@ -161,6 +174,8 @@ async function loadElsewhere() {
   engines = result.engines || {};
   via = result.connections || {};
   scopes = result.scopes || {};
+  parts = result.parts || {};
+  pages = result.pages || {};
   // Services only an engine connects (Microsoft 365): a card of their own, where this computer has an engine for them.
   items = items.filter((item) => !item.viaOnly);
   for (const service of result.services || []) {
@@ -185,29 +200,50 @@ function renderWays() {
   $("#ways-title").textContent = "Connect " + item.name;
   const rows = $("#ways-rows");
   rows.replaceChildren();
-  const row = (key, title, what, who, state, onConnect, onRemove, blocked) => {
-    const line = node("div", "", "way");
+  // [page]: the service's own page in that engine's account, offered once it is in. [icon]: a part of an
+  // engine's way (one of Codex's plugins), drawn under its engine with its own icon.
+  const row = (key, title, what, who, state, onConnect, onRemove, blocked, page, icon) => {
+    const line = node("div", "", icon ? "way part" : "way");
     line.dataset.way = key;
+    if (icon) {
+      const mark = node("img", "", "part-icon");
+      mark.src = "/icons/" + encodeURIComponent(icon);
+      mark.alt = "";
+      line.append(mark);
+    }
     const text = node("div", "", "way-text");
     const name = node("strong", title);
     const status = {connected: "✓ Connected", installed: "✓ Installed", reconnect: "Needs sign-in again"}[state];
     if (status) name.append(node("span", status, "way-state" + (state === "reconnect" ? " warn" : "")));
-    text.append(name, node("span", what), node("span", who, "hint"));
+    if (page && (state === "connected" || state === "installed")) name.append(openLink(page));
+    text.append(name);
+    if (what) text.append(node("span", what));
+    if (who) text.append(node("span", who, "hint"));
     line.append(text);
     if (working.has(item.connector + ":" + key) || (key === "harness" && pending.has(item.connector))) line.append(node("span", "Working…", "hint"));
     else if (blocked) line.append(node("span", blocked, "hint"));
-    else if (state && state !== "not_connected" && state !== "reconnect") {
-      // Codex's plugin is in: its accounts (more than one, if wanted) are ChatGPT's, added or chosen there.
-      if (key === "codex") line.append(button("Accounts", () => window.open(CODEX_ACCOUNTS, "_blank", "noopener")));
-      line.append(button("Remove", onRemove));
-    }
+    else if (state && state !== "not_connected" && state !== "reconnect") line.append(button("Remove", onRemove, "danger"));
     else line.append(button(state === "reconnect" ? "Reconnect" : "Connect", onConnect, "primary"));
     rows.append(line);
   };
   for (const [engine, title, who] of ENGINES) {
     if (!engines[engine]) continue;
+    // ChatGPT connects each of a split service's plugins on its own: the engine, then each plugin under it.
+    if (engine === "codex" && parts[item.connector]) {
+      const head = node("div", "", "way way-head");
+      const text = node("div", "", "way-text");
+      text.append(node("strong", title), node("span", who, "hint"));
+      head.append(text);
+      rows.append(head);
+      for (const part of parts[item.connector]) {
+        row(engine + ":" + part.plugin, part.name, "", "", part.state,
+          () => connectVia(item, engine, part), () => disconnectVia(item, engine, part), "", part.page, part.icon);
+      }
+      continue;
+    }
     row(engine, title, scope[engine] || "", who, (via[item.connector] || {})[engine] || "not_connected",
-      () => connectVia(item, engine), () => disconnectVia(item, engine));
+      () => connectVia(item, engine), () => disconnectVia(item, engine), "",
+      (pages[item.connector] || {})[engine]);
   }
   // Not for a service only an engine connects.
   if (item.viaOnly || !("harness" in scope) && Object.keys(scope).length) return;
@@ -215,45 +251,57 @@ function renderWays() {
     () => {$("#ways-dialog").close(); connect(item);}, () => {$("#ways-dialog").close(); confirmDisconnect(item);},
     item.state === "not_connected" ? item.reason : "");
 }
-async function connectVia(item, engine) {
+// [part]: one of a split service's Codex plugins, connected on its own.
+async function connectVia(item, engine, part) {
   say("");
   const tab = blankTab();
-  working.add(item.connector + ":" + engine);
+  const key = item.connector + ":" + engine + (part ? ":" + part.plugin : "");
+  const name = part ? part.name : item.name;
+  working.add(key);
   renderWays();
   try {
-    const result = await request("/api/connect_via", {connector: item.connector, via: engine});
+    const result = await request("/api/connect_via", {connector: item.connector, via: engine, ...(part ? {plugin: part.plugin} : {})});
     if (tab) tab.location.href = result.url;
     else say("Allow pop-ups for this page, or open " + result.url);
     say(engine === "codex"
-      ? "Codex has the " + item.name + " plugin. Connect " + item.name + " in ChatGPT; Codex asks for Google sign-in the first time it uses it."
-      : "Connect " + item.name + " on claude.ai. Claude Code on this computer gets it in a moment.");
+      ? "Codex has the " + name + " plugin. Connect " + name + " in ChatGPT; Codex asks for sign-in the first time it uses it."
+      : "Connect " + name + " on claude.ai. Claude Code on this computer gets it in a moment.");
   } catch (e) {
     if (tab) tab.close();
-    say(item.name + ": " + e.message);
+    say(name + ": " + e.message);
   }
-  working.delete(item.connector + ":" + engine);
+  working.delete(key);
   await loadElsewhere().catch(() => {});
   // Back from the browser: the card shows it as soon as the engine does.
-  for (let i = 0; i < 36 && ((via[item.connector] || {})[engine] || "not_connected") === "not_connected"; i++) {
+  const state = () => part
+    ? ((parts[item.connector] || []).find((p) => p.plugin === part.plugin) || {}).state
+    : (via[item.connector] || {})[engine];
+  for (let i = 0; i < 36 && (state() || "not_connected") === "not_connected"; i++) {
     await new Promise((done) => setTimeout(done, 10000));
     await loadElsewhere().catch(() => {});
   }
 }
-async function disconnectVia(item, engine) {
-  const tab = blankTab();
-  working.add(item.connector + ":" + engine);
+// Codex's plugin, or one [part] of a split service, removed on this computer: that is all Remove is, and no
+// page opens (one nobody asked for, on every Remove, was in the way). Claude's connector is claude.ai's,
+// which nothing here can take out (`claude mcp remove` knows only the computer's own): its page opens there.
+async function disconnectVia(item, engine, part) {
+  if (engine === "claude") {
+    const page = (pages[item.connector] || {}).claude;
+    if (page) window.open(page, "_blank", "noopener");
+    say("Disconnect " + item.name + " on claude.ai.");
+    return;
+  }
+  const key = item.connector + ":" + engine + (part ? ":" + part.plugin : "");
+  const name = part ? part.name : item.name;
+  working.add(key);
   renderWays();
   try {
-    const result = await request("/api/disconnect_via", {connector: item.connector, via: engine});
-    if (tab) tab.location.href = result.url;
-    say(engine === "codex"
-      ? "Codex stopped using " + item.name + ". To end its access to your Google account, disconnect it in ChatGPT too."
-      : "Disconnect " + item.name + " on claude.ai: Claude Code follows your claude.ai account.");
+    await request("/api/disconnect_via", {connector: item.connector, via: engine, ...(part ? {plugin: part.plugin} : {})});
+    say("Codex stopped using " + name + ".");
   } catch (e) {
-    if (tab) tab.close();
-    say(item.name + ": " + e.message);
+    say(name + ": " + e.message);
   }
-  working.delete(item.connector + ":" + engine);
+  working.delete(key);
   await loadElsewhere().catch(() => {});
 }
 $("#ways-done").addEventListener("click", () => {$("#ways-dialog").close(); waysItem = null;});

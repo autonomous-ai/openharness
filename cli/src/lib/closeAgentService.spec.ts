@@ -833,3 +833,79 @@ it('waits on a real timer when no sleep is given', async () => {
   expect(Date.now() - start).toBe(1_000)
 })
 
+describe('background commands', () => {
+  const withCount = (count: () => Promise<number | null>) => {
+    const backgroundCommands = vi.fn(count)
+    return { backgroundCommands, svc: new CloseAgentService({ ...deps, backgroundCommands }) }
+  }
+
+  it('an inspect of an idle harness says how many it runs, and of any other says nothing', async () => {
+    const { svc, backgroundCommands } = withCount(async () => 2)
+    expect(await svc.request(request('inspect'))).toEqual({ activity: 'idle', backgroundCommands: 2 })
+    vi.mocked(deps.activity).mockResolvedValue('working')
+    expect(await svc.request(request('inspect'))).toEqual({ activity: 'working' })
+    expect(backgroundCommands).toHaveBeenCalledTimes(1)
+    // No reader (a build without one), no field; a reader that fails is unknown.
+    expect(await service.request(request('inspect'))).toEqual({ activity: 'working' })
+    vi.mocked(deps.activity).mockResolvedValue('idle')
+    expect(await service.request(request('inspect'))).toEqual({ activity: 'idle' })
+    expect(await withCount(async () => { throw new Error('ps') }).svc.request(request('inspect'))).toEqual({ activity: 'idle', backgroundCommands: null })
+  })
+
+  it('the cleanup\'s idle close is refused while any runs, with the count, and nothing is stopped', async () => {
+    const { svc } = withCount(async () => 2)
+    expect(await svc.request({ ...request('idle'), background: 'refuse' })).toEqual({ error: 'SESSION_NOT_IDLE', activity: 'idle', backgroundCommands: 2 })
+    expect(deps.stop).not.toHaveBeenCalled()
+    expect(registry.byAgent(row.agentId)).toBe(row)
+  })
+
+  it.each([0, null, 'throws'] as const)('none running, or not known (%s), never blocks it', async (count) => {
+    const { svc } = withCount(async () => { if (count === 'throws') throw new Error('ps'); return count })
+    expect(await svc.request({ ...request('idle'), background: 'refuse' })).toEqual({ closed: true })
+  })
+
+  it('past the ceiling it closes whatever runs, and says how many', async () => {
+    expect(await withCount(async () => 2).svc.request({ ...request('idle'), background: 'count' })).toEqual({ closed: true, backgroundCommands: 2 })
+  })
+
+  it('every other close never reads the count: a window\'s idle, a close now, a close after the task', async () => {
+    const { svc, backgroundCommands } = withCount(async () => 5)
+    // Kept registered, so each close below finds the same harness.
+    vi.mocked(deps.stop).mockImplementation(async () => {})
+    expect(await svc.request(request('idle'))).toEqual({ closed: true })
+    expect(await svc.request(request('now'))).toEqual({ closed: true })
+    expect(await svc.request({ ...request('now'), background: 'refuse' })).toEqual({ closed: true })
+    // The deferred close a tick carries out, after two observations of sustained idle.
+    expect(await svc.request(request('after_task'))).toEqual({ deferred: true })
+    await svc.tick()
+    time += 5_000
+    await svc.tick()
+    expect(deps.stop).toHaveBeenCalledTimes(4)
+    expect(backgroundCommands).not.toHaveBeenCalled()
+    svc.dispose()
+  })
+
+  it('a window\'s idle close asked while the cleanup\'s reads the count is answered for itself', async () => {
+    let release!: (n: number) => void
+    const { svc } = withCount(() => new Promise<number>((done) => { release = done }))
+    const cleanup = svc.request({ ...request('idle'), background: 'refuse' })
+    const window = svc.request(request('idle'))
+    await vi.waitFor(() => expect(release).toBeDefined())
+    release(2)
+    expect(await cleanup).toEqual({ error: 'SESSION_NOT_IDLE', activity: 'idle', backgroundCommands: 2 })
+    expect(await window).toEqual({ closed: true })
+  })
+
+  it('a harness replaced while the count was read is not closed', async () => {
+    const { svc } = withCount(async () => { row.sessionId = 'another'; return 0 })
+    expect(await svc.request({ ...request('idle'), background: 'refuse' })).toEqual({ error: 'AGENT_CHANGED' })
+    expect(deps.stop).not.toHaveBeenCalled()
+  })
+
+  // The cleanup preview leaves a changing harness out of the batch it reviews by this answer (core/agents/close.ts).
+  it('an inspect of a harness replaced while the count was read says it changed', async () => {
+    const { svc } = withCount(async () => { row.sessionId = 'another'; return 2 })
+    expect(await svc.request(request('inspect'))).toEqual({ error: 'AGENT_CHANGED' })
+  })
+})
+

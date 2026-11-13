@@ -305,8 +305,8 @@ export const OPENCLAW_COLUMNS: Record<string, readonly string[]> = {
     'label', 'display_name'],
   session_windows: ['session_id', 'session_key', 'previous_session_id', 'reason', 'session_scope', 'status',
     'chat_type', 'model_provider', 'model', 'transcript_updated_at'],
-  transcript_events: ['session_id', 'seq', 'event_json', 'event_zstd', 'created_at', 'navigation_json',
-    'navigation_type', 'navigation_custom_type', 'message_role'],
+  transcript_events: ['session_id', 'seq', 'event_json', 'event_zstd', 'event_utf8_bytes', 'created_at',
+    'navigation_json', 'navigation_type', 'navigation_custom_type', 'message_role'],
   transcript_rewrite_watermarks: ['session_id', 'generation'],
   session_transcript_active_events: ['session_id', 'active_position', 'event_seq'],
 }

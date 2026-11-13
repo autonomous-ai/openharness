@@ -1,8 +1,13 @@
+import { readdirSync, readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import ts from 'typescript'
 import { describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { processCoreApi } from '../services/processCoreApi.js'
-import { answerExperimentQuery, answerMachineAddonsQuery, createForExperiment, creationForExperiment } from './experimentQueries.js'
+import { EXPERIMENTS, EXPERIMENT_BACKEND_ROUTES, experimentBackendAllowed } from './api.js'
+import { answerExperimentQuery, answerDaemonQuery, createForExperiment, creationForExperiment, createRouteRefusals } from './experimentQueries.js'
 
 const agent = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/w' }) as RegisteredSession
 const experiments = new Set(['orchestrator'])
@@ -202,16 +207,158 @@ describe('what an experiment in its own process may ask of the core', () => {
     expect(await answerExperimentQuery(core, experiments, 'orchestrator', 'daemon', {})).toEqual({ command: `'node' 'cli.js'`, port: 18473, machineId: 'machine-7', autonomousEnv: 'staging' })
   })
 
-  it('reads and writes the account\'s backend under /api/, signed in by the core, and nothing else', async () => {
-    const backend = vi.fn(async () => ({ status: 200, body: { success: true, data: { tabs: [] } } }))
+  // The audit of 2026-11-12 (docs/design/2026-11-12-core-audit.md, Security 2): every `/api/` path was signed for all six
+  // experiments, so the Swarm's process, which reads GitHub text and other accounts' messages, could call any route of the
+  // account's backend as the account: its device keys, its connected services' vault, its machines.
+  it('signs an experiment\'s backend call only on a route its service declared, by method and whole path', async () => {
+    const backend = vi.fn(async () => ({ status: 200, body: { success: true } }))
     const core = fakeCore({ account: { backend } })
-    expect(await answerExperimentQuery(core, experiments, 'orchestrator', 'backend', { method: 'PATCH', path: '/api/agent-messages/tabs/t1', body: { enabled: true } }))
-      .toEqual({ status: 200, body: { success: true, data: { tabs: [] } } })
-    expect(backend).toHaveBeenCalledWith('PATCH', '/api/agent-messages/tabs/t1', { enabled: true })
-    for (const bad of [{ method: 'TRACE', path: '/api/x' }, { method: 'GET', path: '/auth/token' }, { method: 'GET' }]) {
-      expect(await answerExperimentQuery(core, experiments, 'orchestrator', 'backend', bad)).toEqual({ error: 'INVALID_REQUEST' })
+    const all = new Set(Object.keys(EXPERIMENTS))
+    const said: string[] = []
+    const refusals = createRouteRefusals((line) => said.push(line))
+    const ask = (service: string, method: unknown, path: unknown) => answerExperimentQuery(core, all, service, 'backend', { method, path, body: { a: 1 } }, refusals)
+    const share = '0b0e1c2d-3f4a-4b5c-8d6e-7f8091a2b3c4'
+    const declared: Array<[string, string, string]> = [
+      // The Swarm: its own API, by GET and POST, and whether the server takes the sign-in again (superTabs/host.ts).
+      ['superTabs', 'GET', '/api/super-tabs'], ['superTabs', 'GET', '/api/super-tabs/list?after=abc'], ['superTabs', 'GET', '/api/super-tabs/grids'],
+      ['superTabs', 'POST', '/api/super-tabs/6730a1b2c3d4e5f601234567/commands'], ['superTabs', 'POST', '/api/super-tabs/hosts/machine-1/starts/t1/s1'],
+      ['superTabs', 'GET', '/api/super-tabs/t1/conversations/c1/messages?asAgentId=a1&before=12&beforeId=m1&thread=th1'],
+      ['superTabs', 'GET', '/api/super-tabs/t1/conversations/c1/messages/m1/attachments/f1?asAgentId=a1'],
+      ['superTabs', 'GET', '/api/super-tabs/t1/github-comments?repository=owner%2Frepo&ids=1,2&asAgentId=pm'],
+      ['superTabs', 'GET', '/api/super-tabs/hosts/machine-1/changes?cursor=2026-11-13T01:02:03.000Z:42'], ['superTabs', 'GET', '/api/auth/me'],
+      // What a Swarm process of a build before 0.5.84 still reads, until 2026-12-13 (core/api.ts).
+      ['superTabs', 'GET', '/api/machines'],
+      // Share: a grant's and a link's publication and removal. The router: Jev's hosted decision.
+      ['sharing', 'PUT', `/api/harness-shares/${share}`], ['sharing', 'DELETE', `/api/harness-shares/${share}`],
+      ['sharing', 'PUT', `/api/harness-links/${share}`], ['sharing', 'DELETE', `/api/harness-links/${share}`],
+      ['router', 'POST', '/api/route/jev'],
+    ]
+    for (const [service, method, path] of declared) {
+      expect(await ask(service, method, path), `${service} ${method} ${path}`).toEqual({ status: 200, body: { success: true } })
+      expect(backend).toHaveBeenLastCalledWith(method, path, { a: 1 })
     }
-    expect(backend).toHaveBeenCalledOnce()
+    const refused: Array<[string, unknown, unknown]> = [
+      // Another part of the account's backend, whoever asks.
+      ['superTabs', 'GET', '/api/device-keys'], ['superTabs', 'GET', '/api/connector-vault'], ['superTabs', 'DELETE', '/api/machines/m1'],
+      ['superTabs', 'PUT', '/api/machines/m1/share'], ['superTabs', 'GET', '/api/machines?all=1'], ['sharing', 'GET', '/api/machines'],
+      ['sharing', 'GET', '/api/auth/me'], ['router', 'POST', '/api/route/agents'],
+      ['orchestrator', 'PATCH', '/api/agent-messages/tabs/t1'], ['memory', 'GET', '/api/auth/me'], ['cloud', 'POST', '/api/super-tabs/t1/commands'],
+      // A method its service never uses there.
+      ['superTabs', 'DELETE', '/api/super-tabs/t1'], ['superTabs', 'PUT', '/api/super-tabs/t1/commands'], ['superTabs', 'POST', '/api/auth/me'],
+      ['sharing', 'GET', `/api/harness-shares/${share}`], ['sharing', 'POST', `/api/harness-links/${share}`], ['router', 'GET', '/api/route/jev'],
+      // A path that climbs out of its API, or is not whole segments of it.
+      ['superTabs', 'GET', '/api/super-tabs/../device-keys'], ['superTabs', 'GET', '/api/super-tabs/t1/../../device-keys'],
+      ['superTabs', 'GET', '/api/super-tabs/%2e%2e/device-keys'], ['superTabs', 'GET', '/api/super-tabs/t1%2F..%2F..%2Fdevice-keys'],
+      ['superTabs', 'GET', '/api/super-tabs/a.b'], ['superTabs', 'GET', '/api/super-tabs//list'], ['superTabs', 'GET', '/api/super-tabs/'],
+      ['superTabs', 'GET', '/api/super-tabsx'], ['superTabs', 'GET', '/api/super-tabs/list#x'], ['superTabs', 'GET', '/api/super-tabs/list?a=b c'],
+      ['superTabs', 'GET', '/api/super-tabs/list?a=b#c'], ['superTabs', 'GET', '/api/super-tabs/list\n'], ['superTabs', 'GET', '/api/super-tabs\\..\\device-keys'],
+      ['superTabs', 'GET', 'https://evil.example/api/super-tabs/list'],
+      ['superTabs', 'GET', '/api/auth/me?x=1'], ['superTabs', 'GET', '/api/auth/me/x'],
+      ['sharing', 'PUT', '/api/harness-shares/not-a-share'], ['sharing', 'PUT', `/api/harness-shares/${share}/x`], ['sharing', 'PUT', `/api/harness-shares/${share}?x=1`],
+      ['sharing', 'PUT', '/api/harness-shares/../super-tabs'], ['router', 'POST', '/api/route/jev/x'], ['router', 'POST', '/api/route/jev?x=1'],
+      // Not a call at all.
+      ['superTabs', 'TRACE', '/api/super-tabs/list'], ['superTabs', 'GET', undefined], ['superTabs', undefined, '/api/super-tabs/list'], ['superTabs', 'GET', 7],
+    ]
+    backend.mockClear()
+    for (const [service, method, path] of refused) expect(await ask(service, method, path), `${service} ${String(method)} ${String(path)}`).toEqual({ error: 'ROUTE_NOT_DECLARED' })
+    expect(backend).not.toHaveBeenCalled()
+    // Each is said in the core's log: its process hears only that the call failed.
+    expect(said[0]).toBe('[services] superTabs asked for a backend route which it has not declared, and was refused: GET /api/device-keys (core/api.ts)')
+    // A call that sends no body is made with none. And with no refusals handed in, the core's own are used.
+    await answerExperimentQuery(core, all, 'superTabs', 'backend', { method: 'POST', path: '/api/super-tabs/hosts/machine-1/terminal' })
+    expect(backend).toHaveBeenLastCalledWith('POST', '/api/super-tabs/hosts/machine-1/terminal', undefined)
+  })
+
+  it('says a refused route once for each service, method and shape, without its query, and stops at a bound for each service', () => {
+    const lines: string[] = []
+    const refuse = createRouteRefusals((line) => lines.push(line))
+    const never = () => false
+    expect(refuse('superTabs', 'GET', '/api/device-keys?since=1&self=m1', never)).toEqual({ error: 'ROUTE_NOT_DECLARED' })
+    expect(refuse('superTabs', 'GET', '/api/device-keys?since=2', never)).toEqual({ error: 'ROUTE_NOT_DECLARED' })
+    expect(lines).toEqual(['[services] superTabs asked for a backend route which it has not declared, and was refused: GET /api/device-keys (core/api.ts)'])
+    // An id in a path is not a new route: a loop over a tab's deliveries is one line, not one for each.
+    for (const id of ['d1', 'd2', '6730a1b2c3d4e5f601234567']) refuse('superTabs', 'DELETE', `/api/super-tabs/t1/agents/a1/deliveries/${id}`, never)
+    expect(lines.slice(1)).toEqual(['[services] superTabs asked for a backend route which it has not declared, and was refused: DELETE /api/super-tabs/:id/agents/:id/deliveries/:id (core/api.ts)'])
+    // A declared path refused for its query says so: the path is not what to look for.
+    refuse('superTabs', 'GET', '/api/super-tabs/list?after=a b', (method, path) => method === 'GET' && path === '/api/super-tabs/list')
+    expect(lines[2]).toBe('[services] superTabs asked for a backend route with a query that holds a space, a # or a character that is not printable, and was refused: GET /api/super-tabs/list (core/api.ts)')
+    // What is not text, or not printable, is said as it can be, and never at length.
+    refuse('superTabs', undefined, 7, never)
+    refuse('superTabs', 'GET', `/api/x\n[services] forged line\u0007 ${'y'.repeat(400)}`, never)
+    expect(lines[3]).toBe('[services] superTabs asked for a backend route which it has not declared, and was refused: undefine :id (core/api.ts)')
+    expect(lines[4]).toMatch(/refused: GET \/api\/x\?\[services\] forged line\? y+ \(core\/api\.ts\)$/)
+    expect(lines[4]!.length).toBeLessThan(300)
+    // A process that asks for route after route fills no log: sixteen of a service's are said, then that it stops.
+    for (let i = 0; i < 200; i++) refuse('superTabs', 'GET', `/api/other/${'abcdefghijklmnopqrstuvwxyz'[i % 26]}${'abcdefghijklmnopqrstuvwxyz'[Math.floor(i / 26)]}`, never)
+    expect(lines).toHaveLength(17)
+    expect(lines[16]).toBe('[services] superTabs: further refused backend routes are not said')
+    // Another service's are still said.
+    refuse('sharing', 'GET', '/api/device-keys', never)
+    expect(lines[17]).toBe('[services] sharing asked for a backend route which it has not declared, and was refused: GET /api/device-keys (core/api.ts)')
+  })
+
+  it('has every experiment declare its backend routes, if only that it calls none', () => {
+    expect(Object.keys(EXPERIMENT_BACKEND_ROUTES).sort()).toEqual(Object.keys(EXPERIMENTS).sort())
+    for (const service of ['orchestrator', 'memory', 'cloud']) expect(EXPERIMENT_BACKEND_ROUTES[service]).toEqual([])
+    expect(experimentBackendAllowed('messages', 'GET', '/api/agent-messages')).toBe(false)
+  })
+
+  // A route a service starts to call and does not declare fails here, not in a person's Swarm: every backend path written
+  // in an experiment's own code is one its service may call, by the method written beside it when one is. What a path is
+  // built with stands in as `x`, or as a share's id.
+  it('holds every backend path written in an experiment\'s code to the routes its service declared', () => {
+    const SRC = join(dirname(fileURLToPath(import.meta.url)), '..')
+    // Named with `/` on every platform: the lists below are matched as written.
+    const sources = (dir: string): string[] => readdirSync(join(SRC, dir), { withFileTypes: true }).flatMap((entry) => entry.isDirectory()
+      ? sources(`${dir}/${entry.name}`) : /\.ts$/.test(entry.name) && !/\.(spec|test|e2e)\.ts$/.test(entry.name) ? [`${dir}/${entry.name}`] : [])
+    const OWN: Record<string, string[]> = {
+      superTabs: [...sources('superTabs'), ...sources('lib').filter((file) => /^lib\/swarm[^/]*\.ts$/.test(file)), 'services/superTabs.ts', 'services/superTabsProcess.ts'],
+      sharing: [...sources('sharing'), 'services/sharing.ts'],
+      router: ['services/router.ts', ...sources('lib/jev')],
+      orchestrator: [...sources('orchestrator'), 'services/orchestrator.ts'],
+      memory: ['services/memory.ts'],
+      cloud: [...sources('cloud'), 'services/cloud.ts'],
+    }
+    // Written there and not a call through the core's sign-in, each with what it is.
+    const NOT_A_CALL: Record<string, string> = {
+      'superTabs/machines.ts /api/': 'the check a saved start\'s path passes before it is read again: the core holds it to the Swarm\'s API',
+    }
+    const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
+    /** The method written beside a path, when it is: `backend(core, 'POST', path)`, `publish(revoked ? 'DELETE' : 'PUT', path)`. */
+    const methodsBeside = (node: ts.Node): string[] => {
+      const call = node.parent
+      const before = ts.isCallExpression(call) ? call.arguments[call.arguments.indexOf(node as ts.Expression) - 1] : undefined
+      const named = (part: ts.Node | undefined): string[] => part && ts.isStringLiteralLike(part) && METHODS.includes(part.text) ? [part.text] : []
+      return before && ts.isConditionalExpression(before) ? [...named(before.whenTrue), ...named(before.whenFalse)] : named(before)
+    }
+    const written: string[] = [], wrong: string[] = []
+    for (const [service, files] of Object.entries(OWN)) {
+      for (const file of files) {
+        const source = ts.createSourceFile(file, readFileSync(join(SRC, ...file.split('/')), 'utf8'), ts.ScriptTarget.Latest, true)
+        const visit = (node: ts.Node): void => {
+          const built = (id: string): string | null => ts.isStringLiteralLike(node) ? node.text
+            : ts.isTemplateExpression(node) ? node.head.text + node.templateSpans.map((span) => `${id}${span.literal.text}`).join('') : null
+          const path = built('x')
+          if (path?.startsWith('/api/')) {
+            const methods = methodsBeside(node)
+            written.push(`${file} ${methods.join('|')}${methods.length ? ' ' : ''}${path}`)
+            const routes = EXPERIMENT_BACKEND_ROUTES[service]!
+            const declared = (method: string | null) => ['x', '0b0e1c2d-3f4a-4b5c-8d6e-7f8091a2b3c4'].some((id) => routes.some((route) => (method === null || route.method === method) && route.path.test(built(id)!)))
+            const allowed = methods.length ? methods.every(declared) : declared(null)
+            if (!allowed && !NOT_A_CALL[`${file} ${path}`]) wrong.push(`${service}: ${file} ${methods.join('|')} ${path}`)
+          }
+          ts.forEachChild(node, visit)
+        }
+        visit(source)
+      }
+    }
+    expect(wrong, 'Declare the route in EXPERIMENT_BACKEND_ROUTES (core/api.ts), in the pull request that says why the service calls it.').toEqual([])
+    for (const exception of Object.keys(NOT_A_CALL)) expect(written, `${exception} is no longer written: remove it`).toContain(exception)
+    // It finds what it checks, with the method where one is written: the Swarm's commands, Share's grants, the router's one call.
+    expect(written).toContain('superTabs/host.ts POST /api/super-tabs/x/stopped')
+    expect(written).toContain('sharing/owner.ts DELETE|PUT /api/harness-shares/x')
+    expect(written).toContain('lib/jev/jevClient.ts /api/route/jev')
+    expect(written.filter((path) => /^superTabs\/.* (GET|POST) \/api\/super-tabs\//.test(path)).length).toBeGreaterThan(20)
   })
 
   it('has Share\'s welcomes signed by the key the gateway holds, and says why it could not', async () => {
@@ -373,11 +520,16 @@ it('lets only the Swarm service reopen a Lead or close a member, by a valid agen
 describe('what the add-ons of a device that is this machine ask of the core', () => {
   it('is told this daemon\'s address, though not an experiment, and nothing else of the experiments\' doors', async () => {
     const core = fakeCore({ daemon: { machineId: () => 'm_account' } as never })
-    expect(answerMachineAddonsQuery(core, 'machineAddons', 'daemon')).toEqual({ command: 'harness', port: 18473, machineId: 'm_account', autonomousEnv: 'prod' })
+    expect(answerDaemonQuery(core, 'machineAddons', 'daemon')).toEqual({ command: 'harness', port: 18473, machineId: 'm_account', autonomousEnv: 'prod' })
     // The experiments' check alone would refuse it: the reason the core asks this first (core/main.ts).
     expect(await answerExperimentQuery(core, experiments, 'machineAddons', 'daemon', {})).toEqual({ error: 'NOT_AN_EXPERIMENT' })
-    expect(answerMachineAddonsQuery(core, 'machineAddons', 'shown')).toBeNull()
-    expect(answerMachineAddonsQuery(core, 'wifi', 'daemon')).toBeNull()
+    expect(answerDaemonQuery(core, 'machineAddons', 'shown')).toBeNull()
+    expect(answerDaemonQuery(core, 'wifi', 'daemon')).toBeNull()
+  })
+
+  it('is told to Hachi\'s service and the agent cleanup, which reach this daemon and the owner\'s other machines as a tool does', () => {
+    const core = fakeCore({ daemon: { machineId: () => 'm_account' } as never })
+    for (const service of ['hachi', 'agentCleanup']) expect(answerDaemonQuery(core, service, 'daemon')).toMatchObject({ port: 18473, machineId: 'm_account' })
   })
 })
 

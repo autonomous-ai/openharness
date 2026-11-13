@@ -99,8 +99,9 @@ const IN_PROCESS_ONLY = 'services/inline.ts'
  * them, so a process with the Swarm off loads none of its code; a static import of the same file is walked.
  */
 const SWARM_DOORS: Readonly<Record<string, readonly string[]>> = {
-  // Its side of the core's process, and of the services that act on it when they run there.
-  'core/main.ts': ['superTabs/inCore.ts', 'superTabs/inServices.ts'],
+  // Its side of the core's process, of the services that act on it when they run there, and its own service when that
+  // runs there too (`HARNESSD_SERVICES=none`, or no master).
+  'core/main.ts': ['superTabs/inCore.ts', 'superTabs/inServices.ts', 'services/superTabs.ts'],
   // Its side of the services that act on it, in their own processes, and its own service's process, which the master
   // starts only while it is on (harnessd/services.ts `servicesOn`).
   'serviceProcess.ts': ['superTabs/inServices.ts', 'services/superTabsProcess.ts'],
@@ -116,6 +117,13 @@ const isSwarmCode = (file: string): boolean => /^superTabs\//.test(file) || /^li
  * (docs/design/2026-10-08-other-engines-out-of-core.md). An `import()` of their code anywhere else is followed.
  */
 const LAZY_LOADERS = new Set(['engines/inProcess.ts'])
+
+/**
+ * Every file the core's process loads, one a line and in order: the walk from `core/main.ts` with every door shut.
+ * The folders the core must not load are named below (`EDGE`); this list holds the rest, the files no rule names,
+ * where the core grew 38% in five weeks unseen (docs/design/2026-11-12-core-audit.md).
+ */
+const CORE_FILES = 'architecture.coreFiles.txt'
 
 /**
  * The code a process started on `entry` runs: every file its imports reach, as each file's lines
@@ -347,12 +355,49 @@ describe('the daemon\'s shape', () => {
     const wrong = importsIn('core').filter(({ from }) => /(^|\/)superTabs\//.test(from) || /(^|\/)lib\/swarm/.test(from))
       .map(({ file, from }) => `${file} imports ${from}`)
     expect(wrong, 'Declare what the core needs of the Swarm in core/api.ts, and hand its code in from superTabs/inCore.ts.').toEqual([])
-    const main = importsFor('core/main.ts', readFileSync(join(SRC, 'core', 'main.ts'), 'utf8')).filter(({ from }) => /(^|\/)superTabs\//.test(from))
-    expect(main).toEqual([{ from: '../superTabs/inCore.js', dynamic: true }, { from: '../superTabs/inServices.js', dynamic: true }])
+    const main = importsFor('core/main.ts', readFileSync(join(SRC, 'core', 'main.ts'), 'utf8')).filter(({ from }) => /(^|\/)superTabs(\/|\.js$)/.test(from))
+    expect(main).toEqual([{ from: '../superTabs/inCore.js', dynamic: true }, { from: '../superTabs/inServices.js', dynamic: true },
+      { from: '../services/superTabs.js', dynamic: true }])
     expect(followed('core/main.ts', 'superTabs/inCore.ts', true)).toBe(false)
     expect(followed('core/main.ts', 'superTabs/inCore.ts', false)).toBe(true)
     expect(followed('services/models.ts', 'superTabs/inServices.ts', true)).toBe(true)
   }, WALK_TIMEOUT_MS)
+
+  // The audit of 2026-11-12 (docs/design/2026-11-12-core-audit.md): the door re-exported the service's own start, for a
+  // core that runs it in its own process, so every core with the Swarm on, the default, loaded the whole service: 118
+  // files and 28,739 lines it never ran, edge files among them (the transcript normalizers, the handoff, the Codex
+  // profiles), in the process that must never go down. A core that runs the service itself now loads it by an import of
+  // its own (core/main.ts), and what the door hands every core is listed here, file by file.
+  it('with the Swarm on, the core\'s process loads the Swarm\'s side of it and none of its service', () => {
+    const core = closureOf('core/main.ts')
+    const door = [...closureOf('superTabs/inCore.ts').keys()].filter((file) => !core.has(file)).sort()
+    expect(door, 'What the Swarm runs in the core\'s process is its side of the core alone. Its service runs in its own process: reach it through a port in core/api.ts. A file every Swarm session needs in the core is added here, with the review that says why.').toEqual([
+      'lib/agentInstructions.ts', 'lib/superTabAttachmentProxy.ts', 'lib/swarmEngineArgs.ts', 'lib/swarmGitHub.ts', 'lib/swarmSkills.ts',
+      'superTabs/cleanupCloses.ts', 'superTabs/inCore.ts', 'superTabs/inCore/adoption.ts', 'superTabs/inCore/agents.ts',
+      'superTabs/inCore/attention.ts', 'superTabs/inCore/cards.ts', 'superTabs/inCore/deliveries.ts', 'superTabs/inCore/devices.ts',
+      'superTabs/inCore/launch.ts', 'superTabs/inCore/role.ts', 'superTabs/inCore/terminal.ts', 'superTabs/leadSwitch.ts',
+      'superTabs/readContract.ts', 'superTabs/retention.ts', 'superTabs/wire.ts',
+    ])
+    // None of it is an edge file but the Swarm's own side.
+    expect(door.filter((file) => !/^superTabs\//.test(file) && EDGE.some((pattern) => pattern.test(file)))).toEqual([])
+  }, WALK_TIMEOUT_MS)
+
+  // The review of #4241: the first cut of that fix imported the service with an `await` at the line that starts it, in
+  // the middle of the wiring. The wiring ran in one go until then, and its closures count on it ("declared further down:
+  // read when …, never now"): a wait there gives the services already started a turn of the loop before the core is whole.
+  it('once a service is started, the core\'s wiring runs to the hook server without a wait', () => {
+    const source = ts.createSourceFile('main.ts', readFileSync(join(SRC, 'core', 'main.ts'), 'utf8'), ts.ScriptTarget.Latest, true)
+    const run = source.statements.find((statement): statement is ts.FunctionDeclaration => ts.isFunctionDeclaration(statement) && statement.name?.text === 'runForeground')!
+    // A statement that waits itself: an `await` in it that is not inside a function of its own.
+    const waits = (node: ts.Node): boolean => ts.isAwaitExpression(node) || (!ts.isFunctionLike(node) && ts.forEachChild(node, waits) === true)
+    const statements = [...run.body!.statements]
+    const started = statements.findIndex((statement) => /\bserviceHost\.(serve|start)\(/.test(statement.getText(source)))
+    const hooks = statements.findIndex((statement) => statement.getText(source).includes('await startHookServer('))
+    expect(started).toBeGreaterThan(0)
+    expect(hooks).toBeGreaterThan(started)
+    expect(statements.slice(started, hooks).filter(waits).map((statement) => statement.getText(source).split('\n')[0]),
+      'Load what the wiring needs before it starts, beside the doors (`swarmService` in core/main.ts).').toEqual([])
+  })
 
   // The review of #1765: with the Swarm off, every core still loaded its skills through the registry, and with every
   // service in the core's process (`HARNESSD_SERVICES=none`) its retention, observers and grid code, and the agent cleanup
@@ -587,6 +632,21 @@ describe('the daemon\'s shape', () => {
     const edge = [...closure.keys()].filter((file) => EDGE.some((pattern) => pattern.test(file))).sort()
     expect(edge.filter((file) => !CORE_MAY_REACH[file]), 'The core reaches a service only through its link and manifest (core/api.ts), never its code: import it from the service, not the core.').toEqual([])
     expect(Object.keys(CORE_MAY_REACH).filter((file) => !closure.has(file)), 'No longer loaded by the core: remove it from CORE_MAY_REACH').toEqual([])
+  }, WALK_TIMEOUT_MS)
+
+  // The audit of 2026-11-12: from 7 October the core's process went from 71,244 lines in 332 files to 98,437 in 556,
+  // and no test said so, because the growth was in files no rule named: in two days 14 of 79 changes to the CLI added
+  // to it, one of them 363 lines for a single call. A line count would stop fixes and comments too (the caps of
+  // October did), so the files are listed instead: one that joins the core's process is a line added in a pull
+  // request, where a reviewer sees it and asks why every session needs it, and one that leaves is a line deleted.
+  it('the core\'s process loads the files listed and no other: one more is a line a reviewer sees', () => {
+    const loaded = [...closureOf('core/main.ts').keys()].sort()
+    const listed = readFileSync(join(SRC, CORE_FILES), 'utf8').split('\n').filter((line) => line !== '' && !line.startsWith('#'))
+    // Named with a file that imports it: the import to cut is often one helper's, which drags the rest in.
+    const importer = (file: string): string | undefined => loaded.find((from) => parsedFile(join(SRC, from)).imports.includes(join(SRC, file)))
+    expect(loaded.filter((file) => !listed.includes(file)).map((file) => `${file}, imported by ${importer(file)}`), `The core's process would load a file it does not load today. The core stays small (cli/AGENTS.md, Protect the core): code a session can run without belongs to a component in a process of its own. If every session needs the file, add its line to src/${CORE_FILES}, in order, and say why in the pull request.`).toEqual([])
+    expect(listed.filter((file) => !loaded.includes(file)), `The core's process no longer loads these: delete their lines from src/${CORE_FILES}.`).toEqual([])
+    expect(listed, `Keep src/${CORE_FILES} in order, each file once: lines kept in order merge without conflicts.`).toEqual([...new Set(listed)].sort())
   }, WALK_TIMEOUT_MS)
 
   it('finds what it checks: imports of every kind, in every folder', () => {

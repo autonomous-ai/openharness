@@ -9,7 +9,7 @@ import { probeGatewayRuntime } from './gatewayRuntime.js'
 import { gridAssignmentEvidence, type GridAssignment, type GridAssignmentProcess } from './gridAssignmentWire.js'
 import { readProcessEnv } from './processEnv.js'
 import { probeProfileHome } from '../engines/discoveries.js'
-import { probeHermesHome } from '../engines/identities.js'
+import { probeHermesHome, probeHermesHomeDerived, probeHermesSandbox } from '../engines/identities.js'
 import { probeDsh } from '../dsh/probe.js'
 import type { TerminalBackend } from './terminalBackend.js'
 import {
@@ -69,13 +69,25 @@ export interface DiscoveredTerminalAgent {
    */
   codexHome?: string | null
   /**
-   * Hermes only: the home the process runs under (`hermes -p <name>` → `~/.hermes/profiles/<name>`),
-   * when it is not this machine's default and the engine exports `HERMES_HOME`. Same three answers as
-   * `codexHome`. The registry also finds this by looking the session up in each store
-   * (`engines/hermes/home.ts`), which is the answer that needs no cooperation from the engine — this
-   * is the free one, from a read the discovery pass makes anyway.
+   * Hermes only: the home the process runs under (`hermes -p <name>` → `~/.hermes/profiles/<name>`, or
+   * one under a `HOME` of its own), at the daemon's path of it, when it is not this machine's default.
+   * Same three answers as `codexHome`. The registry also finds this by looking the session up in each
+   * store (`engines/hermes/home.ts`), which is the answer that needs no cooperation from the engine —
+   * this is the free one, from a read the discovery pass makes anyway.
    */
   hermesHome?: string | null
+  /**
+   * Hermes only: `hermesHome` is one Harness worked out (from the process's `HOME`, or the daemon's path of
+   * a home a sandbox named), not the value of its own `HERMES_HOME`. A relaunch does not export it
+   * (registry.ts RegisteredSession.hermesHomeDerived).
+   */
+  hermesHomeDerived?: true
+  /**
+   * Hermes only, a process in another mount namespace (a sandbox, Linux): its folder as it names it, the one
+   * Hermes writes, for comparisons with what Hermes wrote; `cwd` is then the daemon's path of that folder.
+   * 'unseen': its home or folder has no path in the daemon's view, and `cwd` stays the pane's.
+   */
+  sandbox?: { cwd: string } | 'unseen'
   /**
    * The domain-specific harness this process was launched as, read off its `HARNESS_DSH`. null = a
    * plain engine; undefined = the probe could not read the process, and the registry keeps what it
@@ -295,6 +307,15 @@ export async function probeTerminalAgents(
     agent.codexHome = await probeProfileHome(agent.processIdentity, agent.engine)
     // Hermes's declared profile is read eagerly from the same verified process environment.
     agent.hermesHome = await probeHermesHome(agent.processIdentity, agent.engine)
+    if (agent.hermesHome && await probeHermesHomeDerived(agent.processIdentity, agent.engine)) agent.hermesHomeDerived = true
+    // A sandboxed Hermes names its folder in its own view: the row gets the daemon's path of it, which outlives the
+    // sandbox, and the agent keeps the one Hermes writes, to compare with what Hermes wrote.
+    const sandbox = await probeHermesSandbox(agent.processIdentity, agent.engine)
+    if (sandbox === 'unseen') agent.sandbox = sandbox
+    else if (sandbox) {
+      agent.sandbox = { cwd: sandbox.cwd }
+      agent.cwd = sandbox.hostCwd
+    }
     // And the DSH it was created as — same read, so a pane the daemon did not create is labelled too.
     agent.dsh = await probeDsh(agent.processIdentity)
     if (agent.engine === 'hermes') {

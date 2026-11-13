@@ -18,7 +18,7 @@ import type { ServiceFrame } from './serviceLinks.js'
 
 type Payload = Record<string, unknown>
 
-export function createAgentCleanupLink(core: Pick<CoreApi, 'agents' | 'usage'>, notify: (frame: ServiceFrame, opts?: { untilDelivered?: boolean }) => boolean) {
+export function createAgentCleanupLink(core: Pick<CoreApi, 'agents' | 'usage' | 'count' | 'clients'>, notify: (frame: ServiceFrame, opts?: { untilDelivered?: boolean }) => boolean) {
   /** The harnesses the process was told the person joined: it keeps them itself (services/agentCleanup.ts). */
   const told = new Set<string>()
   const port: AgentCleanupPort = {
@@ -39,7 +39,9 @@ export function createAgentCleanupLink(core: Pick<CoreApi, 'agents' | 'usage'>, 
     if (query === 'lastActivity') return { at: await (core.agents.lastActivity?.(agentId) ?? null) }
     const mode = payload.mode === 'idle' || payload.mode === 'now' ? payload.mode : null
     if (!mode) return { error: 'INVALID_REQUEST' }
-    return { ...await (core.agents.closeStarted?.(agentId, mode) ?? { error: 'UNSUPPORTED' }) }
+    // Past the ceiling only when the process says so in those words: anything else keeps the refusal.
+    const closing = payload.pastCeiling === true ? core.agents.closeStarted?.(agentId, mode, true) : core.agents.closeStarted?.(agentId, mode)
+    return { ...await (closing ?? { error: 'UNSUPPORTED' }) }
   }
 
   return { port, answer }

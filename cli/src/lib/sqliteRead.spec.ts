@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { execFileSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync, spawn } from 'node:child_process'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { builtinSqlite, closeSqliteHandles, overrideBuiltinSqlite } from './sqliteBuiltin.js'
+import { builtinSqlite, closeSqliteHandles, overrideBuiltinSqlite, readBuiltin, type DatabaseConstructor } from './sqliteBuiltin.js'
 import { idleWalStore, inlineSqlParams, sqliteReadAll } from './sqliteRead.js'
 import { enableOffThreadSqlite, resetOffThreadSqlite } from './sqliteThread.js'
 
@@ -196,6 +196,33 @@ withCli('sqliteReadAll', () => {
     writeFileSync(join(dir, 'short.db'), 'tiny')
     expect(idleWalStore(join(dir, 'short.db'))).toBe(false)
   })
+
+  // A store in a folder a sandboxed agent controls may be anything: a FIFO's open waits for a writer, on the core's
+  // read thread or its own, for good. What is not a regular file is never opened as a store.
+  it('never opens a store that is not a regular file', () => {
+    const opened: string[] = []
+    const Recording = class { constructor(path: string | URL) { opened.push(String(path)) } } as unknown as DatabaseConstructor
+    mkdirSync(join(dir, 'folder.db'))
+    expect(readBuiltin(Recording, join(dir, 'folder.db'), 'SELECT 1;', [], 0)).toMatchObject({ ok: false, reason: 'transient' })
+    expect(opened).toEqual([])
+  })
+
+  it.runIf(process.platform !== 'win32')('tells a FIFO is no idle store without waiting for a writer', async () => {
+    const fifo = join(dir, 'fifo.db')
+    execFileSync('mkfifo', [fifo])
+    // In a process of its own: a read that waits would hold this one for good.
+    const child = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e',
+      `const { idleWalStore } = await import(${JSON.stringify(new URL('./sqliteRead.ts', import.meta.url).href)}); console.log(idleWalStore(process.argv[1]))`, fifo],
+    { stdio: ['ignore', 'pipe', 'ignore'] })
+    let out = ''
+    child.stdout.on('data', (chunk: Buffer) => { out += chunk.toString() })
+    const answered = await new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => { child.kill('SIGKILL'); resolve(false) }, 10_000)
+      child.on('exit', () => { clearTimeout(timer); resolve(true) })
+    })
+    expect(answered).toBe(true)
+    expect(out.trim()).toBe('false')
+  }, 15_000)
 
   it('reports missing when neither reader exists', async () => {
     overrideBuiltinSqlite(null)

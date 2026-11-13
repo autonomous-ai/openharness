@@ -11,7 +11,7 @@ vendor's own hooks or plugin to learn when a turn starts and ends. Your credenti
 | Cursor | `cursor-agent` | `~/.cursor/hooks.json` + transcript | `--resume` | `--force` | — |
 | OpenCode | `opencode` | plugin + SQLite | `--session` | `--auto` | yes |
 | Pi | `pi` | extension + transcript | `--session` | — | yes |
-| Hermes | `hermes` | hooks + SQLite | `--resume` | — | yes |
+| Hermes | `hermes` | its terminal record (v0.21.6+) or hooks, + SQLite | `--resume` | — | yes |
 | Command Code | `cmd` | hooks + transcript | `--resume` | — | — |
 | Devin | `devin` | hooks + SQLite | — | — | — |
 | Muse Code | `muse` | transcript | `resume` | — | — |

@@ -216,8 +216,13 @@ export function createDiscoveryHandlers({
     // Fill-only — a profile the row already knows is never re-derived.
     if (observed.codexHome && !current.codexHome) registry.setCodexHome(current.agentId, observed.codexHome)
     // …and a Hermes home the same way, when the process names one. A row that learns it here never
-    // has to look its session up store by store (openharness#191).
-    if (observed.hermesHome && !current.hermesHome) registry.setHermesHome(current.agentId, observed.hermesHome)
+    // has to look its session up store by store (openharness#191). A home Harness worked out is marked, so a
+    // relaunch does not export it; a row that has it unmarked (an older daemon saved over the mark) is marked again.
+    if (observed.hermesHome && (!current.hermesHome || (observed.hermesHomeDerived && !current.hermesHomeDerived
+      && current.hermesHome === observed.hermesHome))) {
+      if (observed.hermesHomeDerived) registry.setHermesHome(current.agentId, observed.hermesHome, true)
+      else registry.setHermesHome(current.agentId, observed.hermesHome)
+    }
     // And the DSH: a row minted by discovery (or written before the field existed) learns it from
     // the process's own `HARNESS_DSH`, and gets its viewer and verdict watch from here on.
     if (observed.dsh && !current.dsh) registry.setDsh(current.agentId, observed.dsh)

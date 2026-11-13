@@ -481,7 +481,10 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   `Chat` pill (`SwarmBackToChat`: a compact quiet pill with a left chevron,
   one word, in the gallery) leads back to the chat, its composer ready to
   type; it closes only what is in the chat's place, so a pane beside stays.
-  The bar's own icon, or the pane's ×, closes it as well. A pane comes before
+  The bar's own icon, or the pane's ×, closes it as well. What is open beside
+  an agent's chat (its terminal, Info, Instructions or Browser) is kept per
+  chat, with the rest of the chat's saved view: going to another chat and back
+  finds it as it was, until the bar's icon or the pane's × closes it. A pane comes before
   a terminal in the chat's place, as it does in the right pane. A task's
   thread opens as a drawer over the chat below 1080, as before. What is typed
   in Instructions, and what Tasks and a task have read and where they are
@@ -501,8 +504,13 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   writes it down here.`, and its field, typed into, starts on the hint `Rules
   for Faye, as you would tell it. It reads them at every start.` (anh Dee,
   2026-11-10: Arlo's empty file read as the project's long AGENTS.md, and Edit
-  as a blank page). Under the agent's own file, after a hairline and the
-  metadata heading `From its folder`, read only, is what else instructs it in
+  as a blank page). The pane reads narrowest first (anh Dee, 2026-11-12: "users can have control and edit the exact place
+  they want"): a metadata line `Yours first; it wins where they differ, except Harness's safety rules.`, then three sections, each under a metadata
+  heading after a hairline. The agent's, headed by its name: its own file, and for a project's PM one more row folded under
+  it, `As this project's PM, Harness tells it:` in 13 medium with a `chevronRight`, which opens to the PM's part of the
+  basics in `AppType.mono`, read only, and `To change it, write it in agents/Faye.md.` in metadata grey (a builder has no
+  such row). Then `This project`, with `Shared with your team; changed by pull request.` in metadata grey under it, read
+  only, is what else instructs it in
   its folder (anh Dee, 2026-11-10: Faye's, in lampOS): the project's
   `AGENTS.md` and `CLAUDE.md`, as that computer sends them, each folded to a
   row of its name in 13 medium (its path when it sends one) and its size in
@@ -515,8 +523,9 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   `CLAUDE.md isn't text.`, `../AGENTS.md isn't shown: too much text.`), in its group. An older computer sends
   none: the agent's own file alone. After the folder, each under its own metadata heading after a hairline,
   read only and folded the same way, is the rest of what goes into the agent (anh Dee, 2026-11-11: "show
-  users what goes into the agent. and what they can edit"): `From Harness`, one row `Swarm basics`, the
-  text Harness starts it with for its part, which its computer's Swarm service gives (`basics`); and `From
+  users what goes into the agent. and what they can edit"): `Harness`, one row `Swarm basics`, the
+  text every Swarm agent starts with, which its computer's Swarm service gives (`basics`: `swarm`, and `pm` for a PM; a
+  computer from before 2026-11-12 gives them joined, shown whole as `Swarm basics` with no role row); and `From
   Mac 3`, its person's own file there that its engine reads for every session (`~/.claude/CLAUDE.md`,
   Codex's `~/.codex/AGENTS.md`, named by its path). Last, after a hairline, one metadata line for what the
   engine's maker tells it first, which nobody sees or changes here: `And Claude Code's own instructions,
@@ -1290,6 +1299,20 @@ native menu selection and system colors; no inner cards or decorative borders.
 Settings stays in the application menu; this menu ends with Show Harness and Quit.
 Pane-resize guidance is app navigation: use the shared popover surface, system
 type and wrapping keyboard hints. It must not look like terminal output.
+
+## Hachi
+
+Hachi ([design](../../docs/design/2026-11-12-hachi.md)) adds no surface of its
+own: a tab, a hint, a pane state and two lines, all from the elements above.
+Off (Settings ▸ Experimental ▸ Hachi), none of them is drawn and ⇧⌘H is not bound.
+
+| Element | Where | Rule |
+|---|---|---|
+| Hachi's tab | `DesktopWorkspaceTab(fixed: true)`, `SwarmTabButton.fixed`; gallery `hachi-tab` | Always first, before ⌘1, named Hachi. No ×, at rest or hovered, so its name never moves; its menu has no Rename Tab… or Close Tab; ⌘W, middle-click, double-click and drag do nothing. Its held hint is ⇧⌘H (Alt+Shift+H on Linux, Windows and the browser), and the next tab is ⌘1. Activity and the unread dot are any tab's. |
+| Welcome hint | `WorkspaceWelcome(hachi:)` | `⇧⌘H Ask Hachi`, after the other hints, while the switch is on. |
+| Asleep home | the pane's status, `Asleep` | `Hachi is on studio, which is asleep.` with the offline icon, as any offline harness. Nothing to click: no second Hachi is made here. |
+| Goal done | the agent banner, sound and system notice | Title `Hachi: flaky login test is done`, then `Finished`. One per goal, none for the pane in view, at most one in two minutes, under Settings ▸ Notifications' three switches. |
+| Off | the pane's one-line snackbar | `Hachi is off. Its 2 harnesses keep running.` (`Its harness keeps running.`, or `Hachi is off.` alone), once, with nothing to click. |
 
 ## Interaction and review
 

@@ -1,9 +1,44 @@
 import { describe, expect, it, vi } from 'vitest'
 import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
-import { AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS, mayOpenBrowser, CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, emptyPorts, LANE_OFF, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, TURN_DELIVERERS, TURN_END_HEARERS, WIFI_FALLBACKS, WIFI_OFF, type CoreApiDeps, type SwarmAgentDeps } from './api.js'
+import { AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS, AGENT_BROWSER_VNC_PIPE, agentBrowserStreamCommand, mayOpenBrowser, CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, emptyPorts, LANE_OFF, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, TURN_DELIVERERS, TURN_END_HEARERS, WIFI_FALLBACKS, WIFI_OFF, type CoreApiDeps, type SwarmAgentDeps } from './api.js'
 import { FAIL, readFallback } from './serviceHost.js'
+import { HACHI_ID } from '../dsh/builtinIds.js'
 
 const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/work/app' }) as RegisteredSession
+
+describe('the one command the core starts for the agent browser', () => {
+  const exec = ['exec', '-i', 'harness-browser-a1', 'socat', 'STDIO', 'TCP:127.0.0.1:5900']
+  it('is Podman\'s exec into a browser\'s container and the pipe to its screen, on any connection', () => {
+    for (const argv of [
+      ['/opt/podman/bin/podman', ...exec], ['/opt/homebrew/bin/podman', '--connection', 'harness', ...exec],
+      ['/nix/store/abc-podman-5.2.1/bin/podman', '--connection', 'podman-machine-default', ...exec],
+      // As a login shell answers for a PATH that holds `..`, and a profile with every character Podman takes in a name.
+      ['/Users/x/tools/../bin/podman', ...exec], ['/usr/bin/podman', 'exec', '-i', 'harness-browser-0b0e1c2d-3f4a-4b5c-8d6e-7f8091a2b3c4', ...AGENT_BROWSER_VNC_PIPE],
+      ['/usr/bin/podman', 'exec', '-i', 'harness-browser-agent_1.2-x', ...AGENT_BROWSER_VNC_PIPE],
+    ]) expect(agentBrowserStreamCommand(argv), argv.join(' ')).toEqual(argv)
+  })
+
+  it('is no other command line', () => {
+    const podman = '/opt/podman/bin/podman'
+    for (const argv of [
+      // Another program, or Podman not named by its whole path.
+      ['/bin/sh', '-c', 'true'], ['/opt/podman/bin/sh', ...exec], ['podman', ...exec], ['./podman', ...exec], ['/tmp/podman/../../bin/sh', ...exec],
+      ['/opt/podman/bin/podman\n', ...exec], ['/opt/podman/bin/notpodman', ...exec], ['/opt/podman/bin/podman.sh', ...exec], [],
+      // Windows, where the agent browser does not run.
+      ['C:\\Program Files\\RedHat\\Podman\\podman.exe', ...exec], ['C:/tools/podman', ...exec],
+      // Podman doing something else, or on something that is not a connection's name.
+      [podman, 'run', '--rm', 'evil'], [podman, 'exec', '-i', 'harness-browser-a1', 'sh', '-c', 'true'], [podman, 'exec', '-it', ...exec.slice(2)],
+      [podman, '--url', 'tcp://evil.example:1', ...exec], [podman, '--connection', '--url=tcp://evil.example', ...exec], [podman, '--connection', ...exec],
+      [podman, '--connection', 'harness', '--root', '/tmp/x', ...exec], [podman, '--privileged', ...exec],
+      // Another container, another pipe, or anything after it.
+      [podman, 'exec', '-i', 'someone-elses', ...AGENT_BROWSER_VNC_PIPE], [podman, 'exec', '-i', 'harness-browser-', ...AGENT_BROWSER_VNC_PIPE],
+      [podman, 'exec', '-i', 'harness-browser-a1;id', ...AGENT_BROWSER_VNC_PIPE], [podman, 'exec', '-i', 'harness-browser-a1', 'socat', 'STDIO', 'TCP:10.0.0.1:22'],
+      [podman, ...exec, 'EXEC:sh'], [podman, ...exec.slice(0, -1)],
+      // Not a command line.
+      [podman, ...exec.slice(0, 5), 7], 'podman exec', null, undefined, { 0: podman },
+    ]) expect(agentBrowserStreamCommand(argv), JSON.stringify(argv)).toBeNull()
+  })
+})
 
 describe('the core API services stand on', () => {
   it('allows a bounded batch of GitHub reads to finish outside the core', () => {
@@ -249,14 +284,20 @@ describe('the core API services stand on', () => {
     const mine = { ...row('mine'), registeredAt: 0 }
     const deps = coreDeps()
     const byAgent = vi.fn((agentId: string) => (agentId === 'kid' ? started : agentId === 'mine' ? mine : undefined))
-    const closeAgent = vi.fn(async () => ({ closed: true as const }))
+    const closeAgent = vi.fn<NonNullable<CoreApiDeps['closeAgent']>>(async () => ({ closed: true }))
     const activityAt = vi.fn(async () => 1_234)
     const core = createCoreApi({ ...deps, registry: { ...deps.registry, byAgent } as unknown as CoreApiDeps['registry'], closeAgent, activityAt })
     expect(await core.agents.closeStarted!('kid', 'idle')).toEqual({ closed: true })
-    expect(closeAgent).toHaveBeenCalledWith({ agentId: 'kid', sessionId: 's-kid', createdAt: '2026-10-12T08:00:00.000Z', mode: 'idle' })
+    // An idle close refuses one that still runs background commands; past the cleanup's ceiling it closes it and
+    // counts them. A close now carries no rule for them.
+    expect(closeAgent).toHaveBeenCalledWith({ agentId: 'kid', sessionId: 's-kid', createdAt: '2026-10-12T08:00:00.000Z', mode: 'idle', background: 'refuse' })
     expect(await core.agents.closeStarted!('mine', 'now')).toEqual({ error: 'NOT_AGENT_STARTED' })
     expect(await core.agents.closeStarted!('gone', 'now')).toEqual({ error: 'AGENT_CHANGED' })
     expect(closeAgent).toHaveBeenCalledTimes(1)
+    await core.agents.closeStarted!('kid', 'idle', true)
+    expect(closeAgent).toHaveBeenLastCalledWith(expect.objectContaining({ mode: 'idle', background: 'count' }))
+    await core.agents.closeStarted!('kid', 'now', true)
+    expect(closeAgent.mock.calls.at(-1)![0]).toEqual({ agentId: 'kid', sessionId: 's-kid', createdAt: '2026-10-12T08:00:00.000Z', mode: 'now' })
     expect(await core.agents.lastActivity!('kid')).toBe(1_234)
     expect(activityAt).toHaveBeenCalledWith(started)
     expect(await core.agents.lastActivity!('gone')).toBeNull()
@@ -413,6 +454,27 @@ describe('the core API services stand on', () => {
     createCoreApi({ ...deps, log: undefined }).clients.sendLocal({ type: 'nothing' } as unknown as Parameters<typeof core.clients.sendLocal>[0])
     expect(warn).toHaveBeenCalledWith('[services] the devices sent a window nothing, which is not theirs to send')
     warn.mockRestore()
+  })
+
+  // Hachi 5a (OPENHARNES-15): `harness goal done` on Hachi's home tells every window of the account, here and away.
+  it('lets the goals tell the windows a goal of the live Hachi harness closed, and nothing else', () => {
+    const deps = coreDeps()
+    expect(createCoreApi(deps).clients.hachiGoalDone).toBeUndefined()
+    const hachi = { ...row('hachi'), dsh: HACHI_ID }
+    const registry = { ...deps.registry, byAgent: vi.fn((id: string) => (id === 'hachi' ? hachi : id === 'live' ? row('live') : undefined)) } as unknown as CoreApiDeps['registry']
+    const hachiGoalDone = vi.fn()
+    const core = createCoreApi({ ...deps, registry, hachiGoalDone })
+    const told = { agentId: 'hachi', goalId: 'g1', title: 'flaky login test' }
+    core.clients.hachiGoalDone!({ ...told, extra: 'dropped' } as typeof told)
+    expect(hachiGoalDone.mock.calls).toEqual([[told]])
+    // A goals process speaks as a service: whose goal it is, and its shape, are decided here.
+    for (const notice of [
+      { ...told, agentId: 'live' }, { ...told, agentId: 'gone' }, { ...told, goalId: '' }, { ...told, goalId: 7 },
+      { ...told, title: '' }, { ...told, title: 'x'.repeat(81) }, null,
+    ]) core.clients.hachiGoalDone!(notice as typeof told)
+    expect(hachiGoalDone).toHaveBeenCalledTimes(1)
+    expect(deps.log).toHaveBeenCalledWith('[services] the goals sent a goal done that is not the live Hachi\'s')
+    expect(deps.log).toHaveBeenCalledTimes(7)
   })
 
   it('answers ⌘K, when the devices fail, with no agent picked and nothing sent, saying why', async () => {

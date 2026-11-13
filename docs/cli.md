@@ -245,8 +245,9 @@ activity, then the screen, then two idle looks on one turn for one here. The fir
 | `started` | installing or starting | |
 | `working` | it works (a draft in its box counts) | `ask`: the last thing it was told |
 | `needs_person` | a question or a permission; for a cloud harness, its maker's own state | `question`: its last words, to `--chars` (4000) |
-| `done` | idle after a turn | `summary`: its last answer, to `--chars`; `truncated`; `tools` |
-| `idle` | idle with nothing asked of it, past its start | |
+| `background` | idle after a turn, with background commands it started still running | `backgroundCommands`: how many; a new line each time the number changes |
+| `done` | idle after a turn, once none runs | `summary`: its last answer, to `--chars`; `truncated`; `tools`; `backgroundCommands` |
+| `idle` | idle with nothing asked of it, past its start | `backgroundCommands` |
 | `failed` | the cloud says it failed | `summary`, `links` |
 | `stopped` | stopped or gone | `summary`: its last answer, when it has one |
 
@@ -271,6 +272,21 @@ This machine's are followed by push and another machine's are looked at every 3 
 cannot be reached, or whose line drops, is said once on stderr and the rest are followed. It ends once every one has
 stopped (exit 4). Only an agent has harnesses of its own: anyone else is refused (exit 5).
 
+**Background commands.** A harness reads idle as soon as its turn ends, even when the turn left a command running in
+the background (a build, a test suite, a dev server). Its engine tells it when such a command ends, and it usually
+starts a turn to read it, so it is not done yet. When a harness here reads idle, `inspect` also answers how many it
+still runs, read only then: `backgroundCommands`, a number, or `null` when Harness cannot know (never `0` then). `null`
+blocks nothing and is read as before. `show` says `N background commands running` above its `Next:` and offers `wait`
+instead of `close`; its JSON carries `backgroundCommands` whenever it reads idle. `wait` does not return on such a
+harness until none runs; a timeout meanwhile says the count (`<name>: timeout · 2 background commands running; …`, and
+`backgroundCommands` in JSON). `watch` says `background` instead of `done`, and `done` once none runs; `done` and
+`idle` carry the count (`0` or `null`). `close` without `--now` looks first and refuses such a harness (`<name>: 2
+background commands running; --now closes anyway`, exit 1) without closing it; `--now` closes it, and the commands with
+it. What is counted: Hermes's own list of the background processes it runs, on every platform; Claude Code's Bash tool
+commands, on macOS and Linux. Every other engine, a cloud harness and Claude Code on Windows are not known (`null`,
+shown as nothing). Never counted: MCP servers, language servers and an engine's other helpers, and a command that left
+its engine (`nohup … &` whose shell exits, `setsid`, a double fork).
+
 `harness whoami` says, for an agent, where it is and what it may do before it acts (`--json` gives the same as
 `context`); the top of an agent's `harness ps` begins with it, and `harness mcp` puts it in its instructions:
 
@@ -291,9 +307,10 @@ The person sees it in Harness, beside you.
 Next: harness wait <name>  (until it has answered; then read it: harness show <name>)
 ```
 
-`show` names `close` for an idle harness of the agent's own, `wait` for a working one, and the person for one that
-needs the person; `close` says how many of the agent's own are still open; an agent's `ps` ends with its idle one to
-read, its busy ones to wait for, or a start, and shows its own first and at most 15 rows (`--all` shows every one).
+`show` names `close` for an idle harness of the agent's own, `wait` for a working one or one still running background
+commands, and the person for one that needs the person; `close` says how many of the agent's own are still open; an
+agent's `ps` ends with its idle one to read, its busy ones to wait for, or a start, and shows its own first and at
+most 15 rows (`--all` shows every one).
 A harness waiting on a question or a permission is shown as `needs the person` (JSON keeps `needs-input` and adds
 `needsPerson: true`). A refusal (`SPAWN_LIMIT`, `TURNED_OFF`, `NOT_YOURS`) exits 5, with `code`, `reason` and
 `next` in its JSON. `harness help agents` prints the commands, states, exit codes and rules on one screen, and

@@ -187,6 +187,24 @@ describe('the account\'s agent experiments, kept for this computer', () => {
     expect(t.backend).toHaveBeenCalledTimes(3)
   })
 
+  it('asks for the Store when Hachi is turned on, so its package is in place for the first ⇧⌘H; not when it stays on or goes off', async () => {
+    vi.useFakeTimers()
+    const hachiOn = vi.fn()
+    let listener: ((notice: BackendNotice) => void) | null = null
+    const sync = createAgentSettingsSync({ dataDir, backend: async () => answers.shift()!('GET', undefined), session: () => session, messagesChanged: () => {},
+      hachiOn, onNotice: (l) => { listener = l; return () => {} } })
+    answer(account({}))
+    sync.start()
+    await vi.advanceTimersByTimeAsync(0)
+    for (const features of [{ hachi: true }, { hachi: true, agent_messages: true }, {}] as Array<Record<string, boolean>>) {
+      answer(account(features))
+      listener!({ type: 'desk_changed', revision: 0 })
+      await vi.advanceTimersByTimeAsync(0)
+    }
+    expect(hachiOn).toHaveBeenCalledOnce()
+    sync.stop()
+  })
+
   // Spec 2026-11-02-poll-cost Part 4.5: every desk operation (a tab moved, renamed, opened) made every daemon read the
   // experiments again (prod 2026-11-02: 127 a minute). A change to them publishes revision 0 (backend
   // routes/experimentalSettings.ts); a desk operation publishes the desk's own revision.

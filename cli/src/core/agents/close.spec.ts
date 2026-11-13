@@ -60,6 +60,12 @@ describe('closing agents no window shows', () => {
     expect(close.leadSwitchEnded).toBe(leadSwitchEnded)
   })
 
+  it('hands the close service the count of background commands it was given, or none', () => {
+    const backgroundCommands = vi.fn(async () => 1)
+    expect(setup({ backgroundCommands }).close.backgroundCommands).toBe(backgroundCommands)
+    expect(setup().close.backgroundCommands).toBeUndefined()
+  })
+
   it('reads from its pane whether it waits at a question its engine asks before any conversation', async () => {
     const at = (screen: string) => setup({ captureTerminal: vi.fn(async () => screen) }).close.atStartupQuestion!(row({ sessionId: '' }))
     expect(await at(TAKEOVER.CLAUDE_MCP_SERVER_PROMPT)).toBe(true)
@@ -298,6 +304,14 @@ describe('agent_close', () => {
       ask({ request }, { ...target, mode: 'now', changeId })
       expect(request).toHaveBeenLastCalledWith({ ...target, mode: 'now' })
     }
+  })
+
+  // A client cannot name the cleanup's rule: only CoreApi.agents.closeStarted sets it.
+  it('never passes on a background rule a client names', () => {
+    const request = vi.fn(async () => ({ closed: true as const }))
+    const { close } = createCloseRequests({ cleanupPreview: async () => ({}), closeAgentService: () => ({ request }) as never })
+    close({ agentId: 'a1', sessionId: 's1', createdAt: '2026-10-12T08:00:00.000Z', mode: 'idle', background: 'count', pastCeiling: true }, vi.fn())
+    expect(request).toHaveBeenCalledWith({ agentId: 'a1', sessionId: 's1', createdAt: '2026-10-12T08:00:00.000Z', mode: 'idle' })
   })
 
   it('refuses a request it cannot read, and says when the close failed or there is no service to ask', async () => {

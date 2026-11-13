@@ -134,19 +134,35 @@ List<Widget> webTabMenuRows(
         ),
     ],
     paneMenuHeader('Tabs'),
-    for (final (index, tab) in app.swarms.indexed)
-      closable(
-        key: 'web-tab:${tab.id}',
-        choice: WebSelectTab(tab.id),
-        closeTooltip: 'Close tab',
-        closeChoice: WebCloseTab(tab.id),
-        content: PaneMenuRow(
-          selected: tab.id == app.activeSwarmId,
-          title: '${index + 1}:${names[tab.id] ?? tab.name}',
-          status:
-              tabWaitingLabel(app, tab) ?? _statusLabel(tabActivity(app, tab)),
+    for (final tab in app.swarms)
+      // Hachi's tab has no close and no number: ⌘1 is the tab after it.
+      if (tab.isHachi)
+        row(
+          'web-tab:${tab.id}',
+          WebSelectTab(tab.id),
+          PaneMenuRow(
+            selected: tab.id == app.activeSwarmId,
+            title: tab.name,
+            status:
+                tabWaitingLabel(app, tab) ??
+                _statusLabel(tabActivity(app, tab)),
+          ),
+        )
+      else
+        closable(
+          key: 'web-tab:${tab.id}',
+          choice: WebSelectTab(tab.id),
+          closeTooltip: 'Close tab',
+          closeChoice: WebCloseTab(tab.id),
+          content: PaneMenuRow(
+            selected: tab.id == app.activeSwarmId,
+            title:
+                '${app.numberedSwarms.indexOf(tab) + 1}:${names[tab.id] ?? tab.name}',
+            status:
+                tabWaitingLabel(app, tab) ??
+                _statusLabel(tabActivity(app, tab)),
+          ),
         ),
-      ),
     // This tab's sharing with other accounts (1c) and its Agent Messages, as
     // the desktop tab menu offers them: everything a native menu has is
     // clickable here. Move Here is never offered in a browser (no "here").

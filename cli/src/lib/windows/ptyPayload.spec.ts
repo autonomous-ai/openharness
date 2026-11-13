@@ -204,7 +204,7 @@ describe('the serve canary', () => {
     await vi.advanceTimersByTimeAsync(SERVE_CANARY_BOUND_MS)
     await assertion
     expect(leftovers()).toEqual([])
-    // Cleanup included, under the updater's 30 s heartbeat timeout (harnessd/services.ts).
+    // Cleanup included, under the updater's 30 s heartbeat timeout (harnessd/serviceSupervisor.ts).
     expect(SERVE_CANARY_BOUND_MS).toBeLessThanOrEqual(20_000)
   })
 })

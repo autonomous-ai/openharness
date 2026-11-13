@@ -13,7 +13,7 @@ import type { TurnRecaps } from '../turns/recaps.js'
 import type { ShortTurnGuard } from '../turns/shortTurnGuard.js'
 import { sid } from '../../lib/log.js'
 import { sameProcessIdentity } from '../../lib/terminalRuntime.js'
-import type { RegisteredSession, registry } from '../../lib/registry.js'
+import { withHermesHome, type RegisteredSession, type registry } from '../../lib/registry.js'
 import type { RuntimeProfileManager } from '../../lib/runtimeProfile.js'
 import type { SessionInputController } from '../../lib/sessionInput.js'
 import type { StoppedAgentStore } from '../../lib/stoppedAgents.js'
@@ -91,8 +91,8 @@ export function createForgetSession({
       }
       // Stop may prove a parent path while the live row still names an overwritten child.
       // Preserve that capture through this last archive, including intervening hook saves.
-      stoppedAgents.save(captured ? { ...doomed, sessionId: captured.sessionId, transcriptPath: captured.transcriptPath,
-        hermesHome: captured.hermesHome, boundAt: captured.boundAt, source: captured.source } : doomed)
+      stoppedAgents.save(captured ? withHermesHome({ ...doomed, sessionId: captured.sessionId, transcriptPath: captured.transcriptPath,
+        boundAt: captured.boundAt, source: captured.source }, captured) : doomed)
     }
     if (opts.keepAgent) registry.unbindSession(sessionId)
     else if (doomed) registry.removeAgent(doomed.agentId)

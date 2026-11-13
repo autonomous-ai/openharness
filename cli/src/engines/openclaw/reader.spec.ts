@@ -9,7 +9,10 @@ import * as zlib from 'node:zlib'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { sid } from '../../lib/log.js'
 import { builtinSqlite, closeSqliteHandles, overrideBuiltinSqlite, type DatabaseConstructor, type DatabaseLike } from '../../lib/sqliteBuiltin.js'
+import { PAGE_BYTES } from '../../lib/sqlitePage.js'
+import { sqliteReadAll } from '../../lib/sqliteRead.js'
 import { enableOffThreadSqlite, resetOffThreadSqlite } from '../../lib/sqliteThread.js'
+import { KIB, MIB, pageReads, withinBudget } from '../../testing/storePages.js'
 import { OpenclawReader, readOpenclawHistory, readOpenclawSince, type OpenclawEvent, type OpenclawReaderDeps } from './reader.js'
 
 vi.mock('node:zlib', async (importOriginal) => {
@@ -17,6 +20,11 @@ vi.mock('node:zlib', async (importOriginal) => {
   return { ...real, zstdDecompressSync: vi.fn(real.zstdDecompressSync) }
 })
 const decompress = (zlib as unknown as { zstdDecompressSync: ReturnType<typeof vi.fn> }).zstdDecompressSync
+// The real reads, seen: a paging case counts its pages and weighs their replies.
+vi.mock('../../lib/sqliteRead.js', async (real) => {
+  const actual = await real<typeof import('../../lib/sqliteRead.js')>()
+  return { ...actual, sqliteReadAll: vi.fn(actual.sqliteReadAll) }
+})
 
 const FIXTURES = join(import.meta.dirname, '__fixtures__')
 const fixture = (name: string): string => readFileSync(join(FIXTURES, `${name}.sql`), 'utf8')
@@ -27,7 +35,7 @@ beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'openclaw-reader-')) })
 afterEach(() => {
   closeSqliteHandles()
   for (const db of open.splice(0)) db.close()
-  rmSync(dir, { recursive: true, force: true })
+  rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
   vi.restoreAllMocks()
   vi.useRealTimers()
   overrideBuiltinSqlite(undefined)
@@ -368,5 +376,201 @@ describe('OpenclawReader', () => {
     await vi.advanceTimersByTimeAsync(1_000)
     expect(seqs(events)).toEqual([6])
     tail.stop()
+  })
+})
+
+// #4188: a page was 500 rows whatever they weighed, under a reply limit of 500 times 4 MiB, and a plain event over
+// 4 MiB has no bound in the store. Only the read threads enforce a reply limit, so they are on.
+const withBuiltin = builtinSqlite() ? describe : describe.skip
+withBuiltin('pages by bytes', () => {
+  beforeEach(() => {
+    vi.mocked(sqliteReadAll).mockClear()
+    enableOffThreadSqlite()
+  })
+  afterEach(async () => {
+    await resetOffThreadSqlite()
+    closeSqliteHandles()
+  })
+
+  const message = (id: string, bytes: number): string => JSON.stringify({ type: 'message', id, message: { role: 'user', content: 'x'.repeat(bytes) } })
+  /** Plain rows on a window's active branch; `said` is what the row claims in event_utf8_bytes. */
+  function append(db: DatabaseLike, windowId: string, rows: Array<{ seq: number; json: string; said?: number | null }>): void {
+    for (const { seq, json, said = null } of rows) {
+      db.prepare('INSERT INTO transcript_events (session_id, seq, event_json, created_at, event_utf8_bytes) VALUES (?, ?, ?, 1, ?)').all(windowId, seq, json, said)
+      db.prepare('INSERT INTO session_transcript_active_events (session_id, active_position, event_seq) VALUES (?, ?, ?)').all(windowId, 1000 + seq, seq)
+    }
+  }
+  const KEY = 'agent:main:plain'
+  const upTo = (first: number, last: number): number[] => Array.from({ length: last - first + 1 }, (_, i) => first + i)
+  /** A fixture store in WAL, as OpenClaw's own is: a read never holds up the test's writer. */
+  const wal = (scenario: string): { path: string; db: DatabaseLike } => { const made = store(scenario); made.db.exec('PRAGMA journal_mode = WAL'); return made }
+
+  it('reads a window of several page budgets whole and in order, a page at a time', async () => {
+    const { path, db } = wal('plain')
+    append(db, windowOf(db, KEY), upTo(8, 37).map((seq) => ({ seq, json: message(`big-${seq}`, 500 * KIB) })))
+    expect(seqs(await readOpenclawHistory(path, KEY))).toEqual([0, 1, 2, 3, 6, ...upTo(8, 37)])
+    const whole = await readOpenclawSince(path, KEY, null)
+    expect(seqs(whole!.events)).toEqual([0, 1, 2, 3, 6, ...upTo(8, 37)])
+    const after = await readOpenclawSince(path, KEY, { ...whole!.cursor, seq: 20 })
+    expect(after).toMatchObject({ whole: false, cursor: { seq: 37 } })
+    expect(seqs(after!.events)).toEqual(upTo(21, 37))
+    const reads = await pageReads(vi.mocked(sqliteReadAll))
+    expect(reads.length).toBeGreaterThan(6)
+    expect(reads.every((read) => read.ok && read.bytes <= read.maxBuffer && withinBudget(read))).toBe(true)
+  })
+
+  // #4065: a hydrate is several pages now, and one failing on a later page left the reader marked hydrated with no
+  // cursor, so the next poll read the window live from its start and replayed the whole conversation.
+  it('a hydrate whose later page fails hydrates again on the next poll, never replaying the history live', async () => {
+    const { path, db } = wal('plain')
+    append(db, windowOf(db, KEY), upTo(8, 37).map((seq) => ({ seq, json: message(`big-${seq}`, 500 * KIB) })))
+    const actual = await vi.importActual<typeof import('../../lib/sqliteRead.js')>('../../lib/sqliteRead.js')
+    let pages = 0
+    vi.mocked(sqliteReadAll).mockImplementation(async (...args) =>
+      args[1].startsWith('WITH RECURSIVE candidate AS (') && ++pages === 2 ? { ok: false, reason: 'transient' } : actual.sqliteReadAll(...args))
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const { reader: tail, deps, events } = reader(path, KEY)
+    try {
+      await tail.start()
+      await vi.waitFor(() => expect(deps.onHydrated).toHaveBeenCalledTimes(1), { timeout: 10_000 })
+    } finally {
+      tail.stop()
+      vi.mocked(sqliteReadAll).mockImplementation(actual.sqliteReadAll)
+    }
+    expect(seqs(deps.onHydrated.mock.calls[0][0])).toEqual([0, 1, 2, 3, 6, ...upTo(8, 37)])
+    expect(events).toEqual([])
+  })
+
+  // A new window after a rewind or fork is read live from its start: at one 4 MiB page a poll, a 300 MiB window took
+  // about 100 s to show anything new, where 500 rows a poll took about 6 s. On this thread, so fake timers count polls.
+  it('a poll reads pages until it has 500 rows or is caught up, handing each page on as it is read', async () => {
+    await resetOffThreadSqlite()
+    vi.useFakeTimers()
+    const { path, db } = wal('plain')
+    const windowId = windowOf(db, KEY)
+    const { reader: tail, deps } = reader(path, KEY, { pollMs: 1_000 })
+    await tail.start()
+    deps.onStatus.mockClear()
+    const batches = (): number[][] => deps.onEvents.mock.calls.map(([batch]) => seqs(batch))
+    // Twelve rows of 1 MiB: four pages of three, in one poll.
+    append(db, windowId, upTo(8, 19).map((seq) => ({ seq, json: message(`big-${seq}`, MIB) })))
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(batches()).toEqual([[8, 9, 10], [11, 12, 13], [14, 15, 16], [17, 18, 19]])
+    expect(deps.onStatus).toHaveBeenCalledOnce()
+    // 1,200 small rows: 500 a poll, and the status only once the last is read.
+    deps.onEvents.mockClear(); deps.onStatus.mockClear()
+    db.exec('BEGIN'); append(db, windowId, upTo(20, 1219).map((seq) => ({ seq, json: message(`small-${seq}`, 10) }))); db.exec('COMMIT')
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(batches().map((batch) => batch.length)).toEqual([500])
+    expect(deps.onStatus).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(batches().map((batch) => batch.length)).toEqual([500, 500, 200])
+    expect(deps.onStatus).toHaveBeenCalledOnce()
+    tail.stop()
+  })
+
+  it('a poll whose later page fails keeps what it handed on, and the next goes on from there', async () => {
+    await resetOffThreadSqlite()
+    vi.useFakeTimers()
+    const { path, db } = wal('plain')
+    const { reader: tail, deps, events } = reader(path, KEY, { pollMs: 1_000 })
+    await tail.start()
+    deps.onStatus.mockClear()
+    append(db, windowOf(db, KEY), upTo(8, 19).map((seq) => ({ seq, json: message(`big-${seq}`, MIB) })))
+    const actual = await vi.importActual<typeof import('../../lib/sqliteRead.js')>('../../lib/sqliteRead.js')
+    let pages = 0
+    vi.mocked(sqliteReadAll).mockImplementation(async (...args) =>
+      args[1].startsWith('WITH RECURSIVE candidate AS (') && ++pages === 2 ? { ok: false, reason: 'transient' } : actual.sqliteReadAll(...args))
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(seqs(events)).toEqual([8, 9, 10])
+      expect(deps.onStatus).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1_000)
+    } finally {
+      tail.stop()
+      vi.mocked(sqliteReadAll).mockImplementation(actual.sqliteReadAll)
+    }
+    expect(seqs(events)).toEqual(upTo(8, 19))
+    expect(deps.onStatus).toHaveBeenCalledOnce()
+  })
+
+  it('steps past a row over the row cap, says so once, and reads on', async () => {
+    const { path, db } = wal('plain')
+    const windowId = windowOf(db, KEY)
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const { reader: tail, events } = reader(path, KEY)
+    await tail.start()
+    append(db, windowId, [{ seq: 8, json: message('before', 10) }, { seq: 9, json: message('huge', 33 * MIB) }, { seq: 10, json: message('after', 10) }])
+    await vi.waitFor(() => expect(seqs(events)).toEqual([8, 10]), { timeout: 10_000 })
+    append(db, windowId, [{ seq: 11, json: message('later', 10) }])
+    await vi.waitFor(() => expect(seqs(events)).toEqual([8, 10, 11]), { timeout: 10_000 })
+    tail.stop()
+    expect(seqs(await readOpenclawHistory(path, KEY))).toEqual([0, 1, 2, 3, 6, 8, 10, 11])
+    expect(seqs((await readOpenclawSince(path, KEY, null))!.events)).toEqual([0, 1, 2, 3, 6, 8, 10, 11])
+    expect(error.mock.calls.map((call) => String(call[0])).filter((line) => line.includes('unreadable')))
+      .toEqual([`[openclaw] ${sid(KEY)} seq 9 unreadable · too big`])
+  })
+
+  it('reads a row over the page budget alone, and sizes a plain row by its text whatever event_utf8_bytes says', async () => {
+    const { path, db } = wal('plain')
+    append(db, windowOf(db, KEY), [{ seq: 8, json: message('six', 6 * MIB) },
+      ...upTo(9, 16).map((seq) => ({ seq, json: message(`lie-${seq}`, MIB), said: 1 })),
+      { seq: 17, json: message('small', 10), said: 2_000_000_000 }])
+    expect(seqs(await readOpenclawHistory(path, KEY))).toEqual([0, 1, 2, 3, 6, ...upTo(8, 17)])
+    const reads = await pageReads(vi.mocked(sqliteReadAll))
+    expect(reads.some((read) => read.rows.length === 1 && read.bytes > PAGE_BYTES)).toBe(true)
+    expect(reads.every((read) => read.ok && read.bytes <= read.maxBuffer && withinBudget(read))).toBe(true)
+  })
+
+  it('sizes a compressed row at most as decode inflates it, whatever event_utf8_bytes says', async () => {
+    const { path, db } = wal('plain')
+    const windowId = windowOf(db, KEY)
+    // A copy of the compressed assistant row (seq 6), and both claiming 2^62 bytes: past the store's CHECK, which an
+    // edited store need not hold. Two such sizes overflowed the page's running sum, and the page failed on every read.
+    db.exec(`PRAGMA ignore_check_constraints = ON;
+      INSERT INTO transcript_events (session_id, seq, event_json, created_at, event_zstd, event_utf8_bytes, navigation_json, navigation_type, navigation_custom_type, message_role)
+        SELECT session_id, 8, event_json, created_at, event_zstd, event_utf8_bytes, navigation_json, navigation_type, navigation_custom_type, message_role
+        FROM transcript_events WHERE session_id = '${windowId}' AND seq = 6;
+      INSERT INTO session_transcript_active_events (session_id, active_position, event_seq) VALUES ('${windowId}', 1008, 8);
+      UPDATE transcript_events SET event_utf8_bytes = 4611686018427387904 WHERE session_id = '${windowId}' AND seq IN (6, 8);`)
+    expect(seqs(await readOpenclawHistory(path, KEY))).toEqual([0, 1, 2, 3, 6, 8])
+  })
+
+  it('a store without event_utf8_bytes is unsupported', async () => {
+    const { path, db } = wal('plain')
+    db.exec('ALTER TABLE transcript_events RENAME COLUMN event_utf8_bytes TO event_utf8_bytes_renamed')
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    await expect(readOpenclawSince(path, KEY, null)).rejects.toMatchObject({ reason: 'unsupported' })
+    expect(error.mock.calls.map((call) => String(call[0]))).toContainEqual(expect.stringContaining('transcript_events.event_utf8_bytes'))
+  })
+
+  it('borrows the newest window\'s header for a key with no rows yet, but never one over the row cap', async () => {
+    const { path, db } = wal('plain')
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const borrowed = vi.fn()
+    const first = reader(path, 'agent:main:nobody', { onAgentHeader: borrowed })
+    await first.reader.start(); first.reader.stop()
+    expect(borrowed).toHaveBeenCalledWith(expect.objectContaining({ type: 'session', cwd: '/root/.openclaw/workspace' }))
+    db.prepare('UPDATE transcript_events SET event_json = ? WHERE seq = 0').all(JSON.stringify({ type: 'session', cwd: 'x'.repeat(33 * MIB) }))
+    const none = vi.fn()
+    const second = reader(path, 'agent:main:nobody', { onAgentHeader: none })
+    await second.reader.start(); second.reader.stop()
+    expect(none).not.toHaveBeenCalled()
+  })
+
+  it('reads a later window\'s ids a page at a time, so its copies never come back from the window before it', async () => {
+    const { path, db } = wal('rewind')
+    const later = windowOf(db, 'agent:main:rewind')
+    const earlier = String(one(db, `SELECT previous_session_id AS id FROM session_windows WHERE session_id = '${later}'`).id)
+    const row = db.prepare('INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, ?, ?, 1)')
+    // 600 rows off the later window's branch, then the copy: its id is past the first 500.
+    for (let i = 0; i < 600; i++) row.all(later, 100 + i, message(`filler-${i}`, 10))
+    row.all(later, 700, message('copied', 10))
+    append(db, earlier, [{ seq: 900, json: message('copied', 10) }])
+    expect(ids(await readOpenclawHistory(path, 'agent:main:rewind'))).not.toContain('copied')
+    const idReads = (await pageReads(vi.mocked(sqliteReadAll))).filter((read) => read.sql.includes("'$.navigation.id'"))
+    expect(idReads).toHaveLength(2)
+    expect(idReads[0].rows).toHaveLength(500)
   })
 })

@@ -13,6 +13,7 @@ import { promptHash } from '../lib/promptIdentity.js'
 import { shellQuote } from '../orchestrator/prompts.js'
 import { agentCommandPrefix, fullCommandPrefix } from './shortCommand.js'
 import { readAuthSession } from '../lib/authSession.js'
+import { signInOnDisk } from './signIn.js'
 import { computerId } from '../lib/daemonState.js'
 import { noticeReason, WithheldDeliveries } from './withheld.js'
 import { attentionOf } from './attention.js'
@@ -37,7 +38,7 @@ const readCommand = (entry: Entry, prefix: string, group: string, id: string) =>
 // The Pro dial's Swarm face (cards.ts) still takes these two from here; every other file takes them from wire.ts.
 export { backend, SuperTabHostError } from './wire.js'
 import { leadSwitchOf, SWITCH_ADOPT_MS, switchWithin, type LeadSwitch } from './leadSwitch.js'
-import { backend, ENDED_WORK, identifier, object, SuperTabHostError, within } from './wire.js'
+import { backend, ENDED_WORK, identifier, object, signedOut, SuperTabHostError, within } from './wire.js'
 import { parseSwarmSkill, swarmBasics, swarmBasicsSince, wireRole, type SwarmSkillGrant } from '../lib/swarmSkills.js'
 import { authorName } from './personName.js'
 import { adoptReplies, AgentReplies, type Owed } from './agentReplies.js'
@@ -137,6 +138,8 @@ interface HostAgent { tabId: string; agent: { id: string; harnessId: string; mac
   switchLanded?: { id?: unknown; candidateAgentId?: unknown } }; lead?: unknown }
 export interface SuperTabHostOptions {
   now?: () => number
+  /** Which sign-in is on this computer's disk, or null with none: looked at each second while signed out (no request). */
+  signIn?: () => string | null
   write?: (file: string, journal: Journal) => void
   log?: (message: string) => void
   observers?: typeof publishObservers
@@ -169,6 +172,14 @@ const SKILL_RETRY_MS = 60_000
 const JOIN_RETRY_MAX_MS = 30 * 60_000
 /** A server that no longer serves this client's reads (HTTP 426): said once, then asked again a minute later (design 5.1). */
 const UPDATE_BACKOFF_MS = 60_000
+/** Signed out, the host says so once and waits (anh Dee's Mac, 2026-11-12: it said "Not signed in" twice a second, filled
+ *  harness.log to its cap, and the trim erased the record of what had signed the person out). With no session on disk it asks the
+ *  server nothing: the file is looked at each second, no request and no line, and a session that comes is asked about at once
+ *  (Desktop signs in with `harness login --force`, which restarts no daemon whose identity stays the same: the review of #4221).
+ *  A session on disk the server refuses is asked about again after this, then after twice as long each time, at most
+ *  [SIGNED_OUT_MAX_MS]. */
+const SIGNED_OUT_FIRST_MS = 5_000
+const SIGNED_OUT_MAX_MS = 5 * 60_000
 /** How old the host form may be for the stop check, which runs every 5 s beside the one-second tick that reads it. */
 const STOPS_FRESH_MS = 5_000
 /** Refusals no retry can change while this host runs: this person has all the machines they may add to the Swarm, or this
@@ -343,6 +354,7 @@ export class SuperTabHost {
   private readonly started: number
   private readonly write: (file: string, journal: Journal) => void
   private readonly log: (message: string) => void
+  private readonly signIn: () => string | null
   private retentionError: string | null = null
   private readonly observers: typeof publishObservers
   /** Whether a session still runs on this machine: a confidential session's mark stays until it closes (observers.ts). */
@@ -462,6 +474,13 @@ export class SuperTabHost {
   /** Until when the host waits after an update-required answer, and whether it has said so. */
   private updateUntil = 0
   private updateSaid = false
+  /** Signed out on this computer: when it next asks the server, how long it waits, the sign-in on disk at the last look, whether
+   *  it is asking now, whether it should ask at once (another sign-in came, or the server pushed work), and whether a push already
+   *  asked in this wait. */
+  private signedOut: { next: number; wait: number; signIn: string | null; asking: boolean; now: boolean; pushed: boolean; terminal: boolean } | null = null
+  /** How long it last waited, and when it went on: back within [SIGNED_OUT_MAX_MS], it waits twice as long (the second review of
+   *  #4221: the server took the session, a Swarm read still answered 401, and it went in and out every 5 s). */
+  private signedOutLast: { wait: number; at: number } | null = null
   /** A Lead's reads of and typing into this machine's agents' terminals, and the stuck and usage-limit alerts. */
   private readonly terminal: TerminalHost
 
@@ -480,6 +499,7 @@ export class SuperTabHost {
     this.started = this.now()
     this.write = options.write ?? writeJournal
     this.log = options.log ?? (message => console.warn(`[super-tabs] ${message}`))
+    this.signIn = options.signIn ?? signInOnDisk
     // Its pickups follow this host's delivery push lease: the server that pushes deliveries also says when a request waits.
     this.terminal = new TerminalHost(core, machineId, { now: this.now, log: this.log, pushes: () => this.now() < this.pushUntil })
     this.rebinds = new RebindSender((path, body) => backend(this.core, 'POST', path, body), this.now)
@@ -582,7 +602,8 @@ export class SuperTabHost {
       { ...this.machineDeps, sources: this.sources, progress: ids => this.terminal.progressOf(ids) })
   }
   private pollMachines() {
-    void this.contributed().tick().catch(error => this.log(error instanceof Error ? error.message : String(error)))
+    if (this.signedOut) return
+    void this.contributed().tick().catch(error => this.failed(error))
     // Beside the pass, never behind it: a slow pass still keeps the machine's reading fresh (machines.ts beat).
     this.contributed().beat()
     this.grids ??= new SwarmGrids(this.core, this.machineId)
@@ -590,7 +611,10 @@ export class SuperTabHost {
   }
   tick(): Promise<void> {
     if (this.stopped || this.now() < this.updateUntil) return Promise.resolve()
-    return this.running ??= this.poll().catch(error => this.failed(error)).finally(() => {
+    if (this.running) return this.running
+    // Signed out, a pass runs only when it is time to look whether a sign-in came back.
+    if (this.waitsForSignIn()) return Promise.resolve()
+    return this.running = this.poll().catch(error => this.failed(error)).finally(() => {
       this.running = null
       // Work the server announced during that poll is read now, not at the next second.
       if (!this.stopped && (this.pushAll || this.pushes.size)) void this.tick()
@@ -601,13 +625,25 @@ export class SuperTabHost {
    *  Or that a Lead's terminal request waits for this machine: picked up now. */
   private pushed(notice: BackendNotice): void {
     if (this.stopped) return
+    // Work pushed while signed out: asked at once whether it is signed in again, once in each wait (the second review of #4221:
+    // five pushes a second asked the server 300 times a minute).
+    if (this.signedOut && !this.signedOut.pushed) {
+      this.signedOut.pushed = true
+      this.signedOut.now = true
+    }
     if (notice.type === 'swarm_host_changed') {
       this.sources.feed.heard(notice)
       // A pass reads every busy agent's list again: started only when the feed reads now, else the next tick reads it.
       if (this.sources.feed.readsNow) void this.tick()
       return
     }
-    if (notice.type === '__terminal_waiting') { void this.terminal.waiting(); return }
+    if (notice.type === '__terminal_waiting') {
+      // Signed out, the request waits, kept for once the server takes the session (the third review of #4221: picked up anyway,
+      // a POST and a line each time the server said it again); the push only asks whether it is signed in again.
+      if (this.signedOut) { this.signedOut.terminal = true; void this.tick(); return }
+      void this.terminal.waiting()
+      return
+    }
     if (notice.type === '__deliveries_lease') { this.pushUntil = this.now() + PUSH_LEASE_MS; this.leaseSaid = false; return }
     if (notice.type !== 'super_tab_deliveries') return
     this.pushUntil = this.now() + PUSH_LEASE_MS
@@ -622,8 +658,62 @@ export class SuperTabHost {
     const id = delivery.id as string, entry = this.journal.entries[id]
     return !!entry && entry.stage === 'uncertain' && delivery.status === 'uncertain' && delivery.receipt === entry.receipt
   }
-  /** Logged, except that an update-required answer is said once and then waits a minute, rather than every second. */
+  /** Signed out: true, no pass runs. A session on disk is asked about when it comes, when the server pushes, or when its wait is
+   *  over; with none, nothing is asked. */
+  private waitsForSignIn(): boolean {
+    const out = this.signedOut
+    if (!out) return false
+    // Another sign-in than the one refused: asked at once (the second review of #4221).
+    const signIn = this.signIn()
+    // Another sign-in, or the session written again: asked at once, its wait from 5 s again (the fifth review of #4221).
+    if (signIn !== null && signIn !== out.signIn) { out.now = true; out.wait = SIGNED_OUT_FIRST_MS }
+    out.signIn = signIn
+    if (signIn === null || out.asking) return true
+    // A wait that ran out starts another, in which one push may ask again.
+    if (this.now() >= out.next) out.pushed = false
+    else if (!out.now) return true
+    void this.askSignedIn(out)
+    return true
+  }
+  /** Whether the server takes this computer's session again: only its answer says so, never a pass that read cached rows (the
+   *  review of #4221). Taken, the host says once that the Swarm goes on and runs its pass now. */
+  private async askSignedIn(out: NonNullable<SuperTabHost['signedOut']>): Promise<void> {
+    out.asking = true
+    const asked = out.signIn
+    try {
+      await backend(this.core, 'GET', '/api/auth/me')
+    } catch (error) {
+      out.asking = false
+      // Refused: a wait twice as long. Not answered (a timeout, a 503): asked again after 5 s, as nothing was refused (the fifth
+      // review of #4221). Another sign-in that came meanwhile still asks at once.
+      out.now = out.signIn !== asked
+      if (signedOut(error)) out.wait = Math.min(out.wait * 2, SIGNED_OUT_MAX_MS)
+      out.next = this.now() + (signedOut(error) ? out.wait : SIGNED_OUT_FIRST_MS)
+      return
+    }
+    if (this.signedOut !== out || this.stopped) return
+    this.signedOutLast = { wait: out.wait, at: this.now() }
+    this.signedOut = null
+    // What waited on a list or a claim while signed out is read at once, not after its backoff; and every running agent's list
+    // is read, as the pass that found the sign-out may have spent a push for one (the fifth review of #4221: a message lost).
+    this.deliveryRetries.clear()
+    this.pushAll = true
+    this.log('Signed in again: this Swarm goes on.')
+    if (out.terminal) void this.terminal.waiting()
+    void this.tick()
+  }
+  /** Logged, except that an update-required answer is said once and then waits a minute, rather than every second, and that
+   *  being signed out is said once, after which the host waits for a sign-in (waitsForSignIn). */
   private failed(error: unknown): void {
+    // Signed out here (the gateway's NOT_SIGNED_IN), or by the server (a 401, such as its UNAUTHORIZED).
+    if (signedOut(error)) {
+      if (this.signedOut) return
+      const last = this.signedOutLast, now = this.now()
+      const wait = last && now - last.at < SIGNED_OUT_MAX_MS ? Math.min(last.wait * 2, SIGNED_OUT_MAX_MS) : SIGNED_OUT_FIRST_MS
+      this.signedOut = { next: now + wait, wait, signIn: this.signIn(), asking: false, now: false, pushed: false, terminal: false }
+      this.log('Not signed in on this computer: this Swarm waits for a sign-in (harness login).')
+      return
+    }
     if (error instanceof SuperTabHostError && error.code === UPDATE_REQUIRED) {
       this.updateUntil = this.now() + UPDATE_BACKOFF_MS
       if (this.updateSaid) return
@@ -635,7 +725,7 @@ export class SuperTabHost {
   /** A saved native stop, never a timeout or missing live snapshot, releases
    * ownership. This also runs for contributions withdrawn while working. */
   reconcileStops(): Promise<void> {
-    if (this.stopped || !this.core.agents.stopped || this.now() < Math.max(this.nextStopsAt, this.updateUntil)) return Promise.resolve()
+    if (this.stopped || this.signedOut || !this.core.agents.stopped || this.now() < Math.max(this.nextStopsAt, this.updateUntil)) return Promise.resolve()
     return this.stopsRunning ??= this.checkStops().catch(error => this.failed(error))
       .finally(() => { this.stopsRunning = null; this.nextStopsAt = this.now() + 5_000 })
   }
@@ -788,10 +878,8 @@ export class SuperTabHost {
   /** Retire local intent only after an authoritative terminal delivery state.
    * This runs independently so a slow receipt lookup cannot stall live leases. */
   reconcileReceipts(): Promise<void> {
-    if (this.stopped || this.now() < this.nextReceiptsAt) return Promise.resolve()
-    return this.receiptsRunning ??= this.checkReceipts().catch(error => {
-      this.log(error instanceof Error ? error.message : String(error))
-    }).finally(() => { this.receiptsRunning = null; this.nextReceiptsAt = this.now() + 5_000 })
+    if (this.stopped || this.signedOut || this.now() < this.nextReceiptsAt) return Promise.resolve()
+    return this.receiptsRunning ??= this.checkReceipts().catch(error => this.failed(error)).finally(() => { this.receiptsRunning = null; this.nextReceiptsAt = this.now() + 5_000 })
   }
   private async checkReceipts(): Promise<void> {
     const now = this.now()
@@ -1133,7 +1221,9 @@ export class SuperTabHost {
       } catch (error) {
         // Authority checks and network failures both withhold input. A later fresh read may grant it again.
         const message = error instanceof Error ? error.message : String(error)
-        if (listRead || !due) { if (error !== claimError) this.log(message) }
+        // Signed out (the fourth review of #4221): said once and waited out as the host's pass is, never backed off per list.
+        if (signedOut(error)) this.failed(error)
+        else if (listRead || !due) { if (error !== claimError) this.log(message) }
         else {
           // 2026-10-28: a Lead's list failed for 45 minutes while this log said only the backend's words, with no agent.
           const retry = this.retryLater(listKey), code = error instanceof SuperTabHostError ? ` (${error.code})` : ''

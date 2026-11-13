@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync, statSync, openSync, readSync, closeSync } from 'node:fs'
 import { basename, join } from 'node:path'
+import { REMOVALS_FILE } from './signOut.js'
 import { writeZip, type ZipEntry } from './zipWriter.js'
 
 /**
@@ -10,6 +11,7 @@ import { writeZip, type ZipEntry } from './zipWriter.js'
  *   dial-YYYYMMDD.log                    the dial's console + the daemon's cable events (dialLog.ts),
  *                                        and usb-<serial>/dial-YYYYMMDD.log, one folder per device
  *   harness.log (tail)                   the daemon's console — the last few MB, which is where today is
+ *   sign-in-removals.log                 the last 20 sign-in removals, kept apart from harness.log (signOut.ts)
  *   README.txt                           when, which version, what was included
  *
  * Shared by `harness logs export` and the desktop app's Settings ▸ Debug button, so the two produce
@@ -120,6 +122,13 @@ export function buildLogBundle(opts: LogBundleOptions): { zip: Buffer; included:
     included.push(`harness.log (last ${Math.round(tail.length / 1024)} KB)`)
   } catch { /* no daemon log */ }
 
+  // Kept apart because harness.log's trim can take its line (anh Dee's Mac, 2026-11-12): small and whole.
+  const removals = join(opts.dataDir, REMOVALS_FILE)
+  try {
+    entries.push({ name: REMOVALS_FILE, data: Buffer.from(opts.redact(readFileSync(removals, 'utf8'))), mtime: statSync(removals).mtime })
+    included.push(REMOVALS_FILE)
+  } catch { /* no removal yet */ }
+
   const readme = [
     `Harness log bundle`,
     `exported: ${now.toISOString()}`,
@@ -139,13 +148,4 @@ export function buildLogBundle(opts: LogBundleOptions): { zip: Buffer; included:
   entries.unshift({ name: 'README.txt', data: Buffer.from(readme + '\n'), mtime: now })
 
   return { zip: writeZip(entries), included }
-}
-
-/** The same denylist the desktop app's `redactSecretsInText` applies — keep the two in step. */
-export function redactSecretsInText(input: string): string {
-  return input
-    .replace(/(Bearer\s+)[A-Za-z0-9._-]{8,}/gi, '$1<redacted>')
-    .replace(/\bsk-[A-Za-z0-9_-]{8,}/g, 'sk-<redacted>')
-    .replace(/(["']?\b\w*(?:token|secret|password|passphrase|credential|api[_-]?key)\w*\b["']?\s*[:=]\s*["']?)([^\s"',}]{6,})/gi, '$1<redacted>')
-    .replace(/([?&][^=\s&]*(?:token|key|secret|sig|signature)[^=\s&]*=)[^\s&]+/gi, '$1<redacted>')
 }

@@ -25,6 +25,8 @@ import { type AgentEngine, isTerminalEngine } from './types.js'
 export interface NativeLaunchSource extends PermissionLaunchChoice {
   codexHome?: string | null
   hermesHome?: string | null
+  /** `hermesHome` is one Harness worked out, never exported (registry.ts RegisteredSession.hermesHomeDerived). */
+  hermesHomeDerived?: true
   claudeHome?: string | null
   /** An OpenClaw run's own `--local` state folder, an absolute path; ignored by every other engine. */
   openclawLocal?: string | null
@@ -173,7 +175,7 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
   const selected: Record<string, string> = Object.fromEntries(Object.entries(captured.environment).filter((entry): entry is [string, string] => entry[1] !== undefined))
   if (source.codexHome) selected.CODEX_HOME = source.codexHome
   if (source.claudeHome) selected.CLAUDE_CONFIG_DIR = source.claudeHome
-  if (source.hermesHome) selected.HERMES_HOME = source.hermesHome
+  if (source.hermesHome && !source.hermesHomeDerived) selected.HERMES_HOME = source.hermesHome
   const openclawLocal = engine === 'openclaw' && source.openclawLocal ? source.openclawLocal : undefined
   if (openclawLocal) selected.OPENCLAW_STATE_DIR = openclawLocal
   // Windows: a network or device path is no engine home. A creation is refused with the sentence naming the setting.
@@ -270,7 +272,7 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
           confirmed: proof => confirmed.push(proof) }
         const home = engine === 'codex' ? homes.CODEX_HOME : engine === 'claude' ? homes.CLAUDE_HOME : homes.HERMES_HOME
         const installed = port === 0 ? true : engine === 'claude' || engine === 'codex' ? await engineHooks[engine].installIn(port, home, options)
-          : engine === 'hermes' ? await hooks.installHermesHooks(port, home, options)
+          : engine === 'hermes' ? await hooks.installHermesHooks(port, home, { ...options, executable })
           : engine === 'opencode' ? await hooks.installOpencodePlugin(port, { ...executable, major: opencodeMajor! }, options)
           : await installers[engine]?.(port, options) ?? true
         if (!installed || !executable.current() || !owner() || [...dependencies, ...confirmed].some(proof => !proof.current())) return false

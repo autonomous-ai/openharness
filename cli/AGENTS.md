@@ -10,10 +10,37 @@ for new contributors is [../docs/design/2026-10-04-harnessd-before-after.md](../
 ```
 MASTER   src/harnessd/     supervises: starts, watches, restarts. No feature code, no network.
 CORE     src/core/         owns sessions: agents, terminals, transcripts, turns, input, questions.
-                           Must never go down. Grows only for what every session needs.
-SERVICES src/services/     everything else: search, viewers, models, workspaces, … and new features.
-                           Reaches the core only through core/api.ts; can fail without the core.
+                           Small and secure. Must never go down. Grows only for what every session needs.
+SERVICES src/services/     everything else, each in a process of its own: search, viewers, models, the Swarm, …
+                           and new features. Reaches the core only through core/api.ts; can fail without the core.
 ```
+
+### Protect the core
+
+The core is the one process every agent depends on, and the most trusted: it types into every terminal. It stays
+small and secure, in the code and at run time, and everything else is a component in a process of its own
+(anh Dee, 2026-11-12). What still breaks these rules, and the order it is fixed in, is in
+[the audit](../docs/design/2026-11-12-core-audit.md): that list only shrinks.
+
+1. **The core is a process, not a folder.** Everything `src/core/main.ts` imports runs in it, wherever the file
+   lives: `core/`, `lib/`, `engines/`, a component's door. `src/architecture.spec.ts` walks those imports.
+2. **Every other component runs in a process of its own,** from its first pull request (`SERVICE_HOSTS`): a light
+   one in the edge host, a risky one alone. A service inside the core's process (`HARNESSD_SERVICES=none`) is for
+   debugging, never where a feature lives. The one exception is Harness OS, which runs the core with no master
+   and every service inside it (`HARNESS_NO_MASTER=1`), until its decision in the audit: that path stays tested.
+3. **The core loads no component's code.** What it needs of one is typed in `src/core/api.ts`. Code a component
+   must run inside the core comes through a door of its own, loaded only while the component is on, which
+   `src/architecture.spec.ts` holds to its files.
+4. **The core meets the outside least.** It listens only on this computer, and its one call to another host is
+   the sign-in's refresh. Whatever someone other than this computer's owner can shape (a relay or backend frame,
+   another account's message, GitHub text, a web page, a device, a third-party harness) is parsed and checked in
+   the component that faces it, and reaches the core as typed, bounded data.
+5. **The core lends its authority narrowly.** It runs no command line a component hands it, and signs a backend
+   call for a component only on a route that component declared (`MESSAGES_BACKEND_ROUTES`,
+   `EXPERIMENT_BACKEND_ROUTES`).
+6. **Adding to the core's process is a decision.** Every file it loads is a line of
+   `src/architecture.coreFiles.txt`, and the test fails on one more. A pull request that adds a line says why
+   every session needs the file; one that takes a file out deletes its line.
 
 ### The processes
 
@@ -28,12 +55,13 @@ they show as `harnessd`, `harnessd-core` and `harnessd-<process>` (`src/harnessd
 | engine-claude, engine-codex | history, last-turn readers, live transcript parsers, runtime profiles/catalogs, screen interpretation, submission verification readings, model control, question navigation, and (Codex) the shared app-server connection | on demand: an attach or read for that engine |
 | search | session search | always |
 | viewers | the harness viewers, their remote streams and rendered surfaces, and the Store | on demand: a harness here (an agent with a DSH at start, or attached since), a Store or viewers request (the list, an install, a harness's create or restore, a client's viewer stream or rendered frame), or at start when the release's own harnesses are to be put in place or an earlier process left viewer servers running |
-| edge | the shell service, workspaces, usage, the monitor, the project readers, the change-agent handoff, the recaps, the agent cleanup, Agent Messages (which runs no timer while it is off or the computer is signed out), shared machines (sharing this machine with other accounts, and pinning the machines shared with this one), Hachi's goals (`harness goal`) | always |
+| edge | the shell service, workspaces, usage, the monitor, the project readers, the change-agent handoff, the recaps, the agent cleanup, Agent Messages (which runs no timer while it is off or the computer is signed out), shared machines (sharing this machine with other accounts, and pinning the machines shared with this one), Hachi's goals (`harness goal`), Hachi's wakes and its off path (which hold no line and ask nothing while Hachi is off) | always |
 | gateway | the relay and its E2EE (`src/gateway/`) | on demand: as the core starts when signed in or anything is paired here, or when something needs it (a pairing, a window's E2EE request, a key command, the Wi-Fi device) |
 | models | grid, local models, the Model Manager | on demand: once grid is in use here (a managed grid, saved grid pictures, local models), or on a models request |
 | updater | checks, downloads and stages a new build (`src/services/updaterProcess.ts`) | by the master, for the installed copy only |
 | devices | the dials, the window bridges, the fleet, the voice router, the Wi-Fi device; on Windows the dial's port through `harness-serial.exe` (`cable/windowsSerial.ts`) | on demand: once there is a device; on Windows, starts unconditionally with the core when inline, or is requested once at startup by `core/devicesWake.ts` when out of process and cable support is enabled |
 | orchestrator, sharing, memory, router, cloud (cloud agents) | the experiments | on demand: on a request, or saved state at start |
+| superTabs | the Swarm's service: its host and its GitHub loops (`src/superTabs/`, `src/services/superTabs.ts`) | on demand, and only while the Swarm is on (`HARNESS_SWARM`): on a request, or a Swarm host's saved state at start |
 | agentBrowser | the agent browser: Podman, its setup, one container per agent whose Browser is on (`src/services/agentBrowser.ts`) | on demand: an agent whose Browser is on, a request, or its state file at start |
 
 `HARNESSD_SERVICES` names a subset to run in their own processes, by service or by process.
@@ -64,7 +92,7 @@ sessions to the owner's other machines, the Share relay for a harness shared wit
 
 | You are adding | Put it in | Not in |
 |---|---|---|
-| A new feature (anything a session can run without) | a new service, `src/services/<name>.ts` | the core, `core/main.ts`, `backendSocket.ts` |
+| A new feature (anything a session can run without) | a new service, `src/services/<name>.ts`, in a process of its own | the core, `core/main.ts`, `backendSocket.ts`, or a `lib/` file the core imports |
 | A request the apps send to a feature | the service's start returns its handler ([src/services/AGENTS.md](src/services/AGENTS.md)) | a case in `backendSocket.ts`, a slot on `BackendSocket` |
 | Behaviour of agents, terminals, transcripts, turns, input or questions | the module under `src/core/` that owns it | `core/main.ts` |
 | Support for an engine (Claude Code, Codex, …) | `src/engines/<engine>/` | the core |
@@ -77,12 +105,13 @@ sessions to the owner's other machines, the Share relay for a harness shared wit
    a handler there is one call into a module or service. Review changes for that responsibility.
    `src/architecture.spec.ts` enforces import boundaries and walks the imports from `src/core/main.ts`:
    no file from an edge folder (a service, the dial, the relay, …) but those it lists, each with the
-   reason and the step that ends it. New exceptions need a separate architecture review; remove an
+   reason and the step that ends it, and no file at all but those in `src/architecture.coreFiles.txt`.
+   New exceptions need a separate architecture review; remove an
    exception as soon as it is no longer reached. Source line counts are informational, never a merge
    gate or a proxy for runtime cost
    ([../docs/design/2026-10-06-core-boundary-next.md](../docs/design/2026-10-06-core-boundary-next.md)).
-2. **A feature is a service.** It runs against `CoreApi` and is reached through a port in `CorePorts`,
-   both in `src/core/api.ts`. A service never imports core modules, the registry, `cli.ts` or
+2. **A feature is a service, in a process of its own.** It runs against `CoreApi` and is reached through a port
+   in `CorePorts`, both in `src/core/api.ts`. A service never imports core modules, the registry, `cli.ts` or
    `backendSocket.ts` (`src/architecture.spec.ts` checks it). See [src/services/AGENTS.md](src/services/AGENTS.md).
 3. **The core does not wait on a service and does not crash with one.** Services start through
    `serviceHost.start()`; every port declares fallbacks beside it in `core/api.ts`.

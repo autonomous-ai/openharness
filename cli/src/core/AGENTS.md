@@ -1,14 +1,20 @@
 # The core
 
 The part of the daemon that must never go down: agents, terminals, transcripts, turns, input and
-questions. Everything else is a service ([../services/AGENTS.md](../services/AGENTS.md)).
+questions. Everything else is a service in a process of its own ([../services/AGENTS.md](../services/AGENTS.md)).
+The core stays small and secure, in the code and at run time: read
+[Protect the core](../../AGENTS.md#protect-the-core) before adding anything here.
 
 ## Rules for a core module
 
 1. **One factory per module, explicit dependencies:** `createX(deps)` returns the module's functions.
    Dependencies are passed in, never imported as live state, so the module is tested without a daemon.
 2. **Only what every session needs.** A feature a session can run without belongs in a service. Ask
-   before growing the core; the answer is usually a service and, at most, a new `CoreApi` member.
+   before growing the core; the answer is usually a service and, at most, a new `CoreApi` member. The
+   same for what a core module imports: a file in `lib/` or `engines/` that the core imports runs in the
+   core's process, all of it, for the one helper asked of it. Import from small modules. Every file the
+   core's process loads is listed in `../architecture.coreFiles.txt`; a new one fails the test until its
+   line is added, in a pull request that says why every session needs it.
 3. **Never import a service, `cli.ts` or `backendSocket.ts`,** except types
    (`import type { BackendSocket }`). The core calls services only through `CorePorts`, and every call
    has a fallback (`api.ts`). `src/architecture.spec.ts` checks it.
@@ -22,13 +28,21 @@ questions. Everything else is a service ([../services/AGENTS.md](../services/AGE
    imports anything of `../superTabs/` or `../lib/swarm*`, not even types. What the core needs of it is typed in
    `api.ts` (`SuperTabsCore`, `SuperTabsPort`, `SwarmAgents`, `SwarmLaunch`, `AdoptSwarmSkill`) and handed in by
    `main.ts` from `../superTabs/inCore.ts`; the services that act on it get their side from `../superTabs/inServices.ts`
-   (`serviceProcess.ts`, or `main.ts` when they run here). Both are imported dynamically and only while it is on.
+   (`serviceProcess.ts`, or `main.ts` when they run here). Its own service runs in its own process, and a core that
+   runs it instead loads it by an import of its own in `main.ts`, beside the doors and before the wiring: the first
+   door holds no service code, and `src/architecture.spec.ts` lists, file by file, what it loads beyond the core.
+   All are imported dynamically and only while it is on.
    Every such dependency is optional, and absent is exactly the daemon without the Swarm. `src/architecture.spec.ts`
    holds every import of its code to those doors and walks each process's imports; `src/leanEntry.spec.ts` checks the
    shipped build, and `e2e/swarmSwitch.e2e.ts` what each process loads.
 7. **Evidence must be newer than the state it contradicts.** A scan, probe or read that began before
    a change must not be used to undo that change (see `terminalAgentReconciler.ts` `probedAs`,
    `routeTouched`, and `transcripts/relaunch.ts`). Most of the races found end to end were this.
+8. **The core meets the outside least.** It is the most trusted process: it types into every terminal. A core
+   module opens no connection to another host, runs no command line a service handed it, signs no backend call
+   a service did not declare, and parses nothing that someone other than this computer's owner can shape (a
+   relay or backend frame, another account's message, a web page, a device, a third-party file). That is a
+   service's work, in its own process; the core takes its typed, bounded result.
 
 ## Where things are
 

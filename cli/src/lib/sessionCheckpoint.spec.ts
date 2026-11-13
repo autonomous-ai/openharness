@@ -241,20 +241,25 @@ it('does not hide a corrupt manifest by discarding the last known checkpoint', a
 it.each(['opencode', 'kilo', 'hermes', 'devin'] as const)('exports %s through read-only SQLite, keeping the shared database intact', async engine => {
   row.engine = engine
   row.transcriptPath = null
-  const sql = vi.mocked(sqliteReadAll).mockReset().mockResolvedValue({ ok: true, via: 'builtin', rows: [{ id: 'conversation', message: 'Stored in WAL' }] })
+  const sql = vi.mocked(sqliteReadAll).mockReset().mockImplementation(async (_db, query) => ({ ok: true, via: 'builtin', rows:
+    query.includes('pragma_table_xinfo') ? [{ name: 'id', pk: 1 }, { name: 'message', pk: 0 }]
+      : query.startsWith('WITH RECURSIVE candidate AS (') ? [{ page_n: 1, page_more: 0, page_big: 0, id: 'conversation', message: 'Stored in WAL' }]
+        : [{ id: 'conversation', message: 'Stored in WAL' }] }))
   await store.save(row)
-  const saved = await manifest()
-  expect(await readFile(join(directory, saved.file), 'utf8')).toContain('Stored in WAL')
-  // OpenCode first looks for its v2 tables (holding this session, here); every read is a SELECT of this conversation.
+  const saved = JSON.parse(await readFile(join(directory, (await manifest()).file), 'utf8'))
+  expect(JSON.stringify(saved)).toContain('Stored in WAL')
+  expect(JSON.stringify(saved)).not.toContain('page_')
+  // OpenCode first looks for its v2 tables (holding this session, here).
   const probes = engine === 'opencode' ? sql.mock.calls.splice(0, 2) : []
   expect(probes.map(([, query, params]) => [query, params ?? []])).toEqual(engine === 'opencode' ? [
     ["SELECT name FROM sqlite_master WHERE type='table' AND name='session_v2';", []],
     ['SELECT id FROM session_v2 WHERE id = ?;', ['conversation']],
   ] : [])
-  for (const [, query, params] of sql.mock.calls) {
-    expect(query).toMatch(/^SELECT \* FROM /)
-    expect(params).toEqual(['conversation'])
-  }
+  // Then the one-row table by SELECT *, each conversation table by its columns, then its pages (#4188); every read but
+  // the columns' is of this conversation. Kilo reads `message` and `part`.
+  const calls = sql.mock.calls.map(([, query, params]) => [query.split(' ').slice(0, 3).join(' '), params])
+  const paged = [['SELECT name, pk', [expect.any(String)]], ['WITH RECURSIVE candidate', ['conversation']]]
+  expect(calls).toEqual([['SELECT * FROM', ['conversation']], ...paged, ...(engine === 'kilo' ? paged : [])])
 })
 it('treats a locked or missing database as a save failure, never an empty successful backup', async () => {
   row.engine = 'hermes'

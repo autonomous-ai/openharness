@@ -80,11 +80,15 @@ const handles = new Map()
 // engine from tidying them away when it next closes the store. Opened immutable it creates nothing, and nothing can be
 // changing it: a writer would have made the -wal first. A store in the older journal mode is never opened immutable,
 // since a writer may be changing it in place; it gets the ordinary locked read.
+//
+// A store a sandboxed agent's folder holds may be a FIFO, whose plain open waits for a writer for good: it is opened
+// without waiting, and only a regular file is read.
 function idleWalStore(dbPath) {
   if (fs.existsSync(dbPath + '-wal')) return false
   let fd = null
   try {
-    fd = fs.openSync(dbPath, 'r')
+    fd = fs.openSync(dbPath, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0))
+    if (!fs.fstatSync(fd).isFile()) return false
     const header = Buffer.alloc(20)
     return fs.readSync(fd, header, 0, 20, 0) === 20 && header[18] === 2 && header[19] === 2
   } catch {
@@ -102,7 +106,10 @@ function drop(dbPath) {
 // checked by inode: an engine that rebuilds its store (a reinstall, a rm and restart) leaves a handle on the OLD file,
 // which would keep answering from a database nobody writes to any more: a poller that never sees another row.
 function open(dbPath, busyTimeoutMs) {
-  const { dev, ino, size, mtimeMs, ctimeMs } = fs.statSync(dbPath)
+  const info = fs.statSync(dbPath)
+  // SQLite's own open waits for a writer on a FIFO, and nothing but a regular file is a store.
+  if (!info.isFile()) throw new Error('the store is not a regular file')
+  const { dev, ino, size, mtimeMs, ctimeMs } = info
   const stamp = size + ':' + mtimeMs + ':' + ctimeMs
   // An idle store is read immutable; once its engine opens it again (a -wal appears), it is read live.
   const immutable = idleWalStore(dbPath)

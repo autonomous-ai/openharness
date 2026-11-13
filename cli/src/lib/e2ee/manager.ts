@@ -31,9 +31,10 @@ type Frame = Record<string, unknown>
  * waiting on it. Kept here rather than in core.ts, as `wrapCommander` keeps it for the devices: core.ts is
  * hashed and pinned, while every reader opens by the envelope (any `payload.__e2e`: the phone's and the
  * desktop's relay_session_crypto.dart `unwrapIncoming`), so none of them changes. Its close carries only a
- * request id, and goes as the devices are sent it: in the clear.
+ * request id, and goes as the devices are sent it: in the clear. `hachi_goal_done` (services/goals.ts) carries a goal's
+ * title, the person's own words.
  */
-const SEALED_FOR_WEB: ReadonlySet<string> = new Set(['commander_question'])
+const SEALED_FOR_WEB: ReadonlySet<string> = new Set(['commander_question', 'hachi_goal_done'])
 const sealsForWeb = (type: string | undefined): type is string => !!type && (C.isEncryptedUpType(type) || SEALED_FOR_WEB.has(type))
 
 export type PairResult =

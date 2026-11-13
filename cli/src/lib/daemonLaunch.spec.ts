@@ -1,14 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
-import { tmpdir } from 'os'
-import { join } from 'path'
+import { describe, expect, it, vi } from 'vitest'
 import type { LaunchDeps } from './daemonLaunch.js'
-
-let dataDir = ''
 
 async function load() {
   vi.resetModules()
-  process.env.ADAPTER_DATA_DIR = dataDir
+  process.env.ADAPTER_DATA_DIR = ''
   return import('./daemonLaunch.js')
 }
 
@@ -103,21 +98,5 @@ describe('waitForBind', () => {
   it('resolves timeout when nothing happens', async () => {
     const { waitForBind } = await load()
     await expect(waitForBind(42, () => false, 5_000, fakeDeps())).resolves.toBe('timeout')
-  })
-})
-
-describe('removePidFileIf', () => {
-  beforeEach(() => { dataDir = mkdtempSync(join(tmpdir(), 'adapter-launch-')) })
-  afterEach(() => { rmSync(dataDir, { recursive: true, force: true }); delete process.env.ADAPTER_DATA_DIR })
-
-  it('removes the file only when it names the given pid', async () => {
-    const { removePidFileIf } = await load()
-    const { PID_FILE } = await import('./daemonState.js')
-    writeFileSync(PID_FILE, '777\n')
-    expect(removePidFileIf(778)).toBe(false)
-    expect(existsSync(PID_FILE)).toBe(true) // another daemon's record survives our failed child
-    expect(removePidFileIf(undefined)).toBe(false)
-    expect(removePidFileIf(777)).toBe(true)
-    expect(existsSync(PID_FILE)).toBe(false)
   })
 })

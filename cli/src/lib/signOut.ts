@@ -9,9 +9,11 @@
  * sign-in. Every removal is written to harness.log with the command and the processes above it.
  */
 import { execFileSync } from 'child_process'
-import { appendFileSync, existsSync, mkdirSync, readlinkSync } from 'fs'
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readlinkSync, renameSync, rmSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
 import { env } from '../config/env.js'
+import { redactArgv } from './agentCreateDiagnosis.js'
+import { redactSecretsInText } from './redactSecrets.js'
 import { clearAuthSession } from './authSession.js'
 
 /** What the desktop app's Sign out button passes to `harness logout`: a person asked, in the app. */
@@ -125,11 +127,60 @@ function stamp(at: Date): string {
  * cannot be written does not keep the person signed in.
  */
 export function removeSignIn(reason: string, asked: SignOutAsked, chain: () => readonly Asker[] = ancestorsOnce()): void {
+  let line: string | null = null
   try {
     const self = { pid: process.pid, command: process.argv.join(' ') }
+    line = removalLine({ reason, asked, self, ancestors: chain() })
     // `harness reset` has just emptied the folder the log lives in.
     mkdirSync(env.ADAPTER_DATA_DIR, { recursive: true })
-    appendFileSync(join(env.ADAPTER_DATA_DIR, 'harness.log'), removalLine({ reason, asked, self, ancestors: chain() }) + '\n')
+    // Redacted and cut as the kept file has it (AGENTS.md standard 7: no secret reaches a log).
+    appendFileSync(join(env.ADAPTER_DATA_DIR, 'harness.log'), keptLine(line) + '\n')
   } catch { /* the log is a record, not a gate */ }
+  if (line) keepRemoval(line)
   clearAuthSession()
+}
+
+/** The file in the data folder that keeps the last [REMOVALS_KEPT] removals' lines apart from harness.log, which trims its oldest
+ *  lines at its cap: anh Dee's Mac, 2026-11-12, lost its line to a flood of "Not signed in" lines, and nobody could tell what had
+ *  signed the person out. Never trimmed but by this. */
+export const REMOVALS_FILE = 'sign-in-removals.log'
+const REMOVALS_KEPT = 20
+/** The most of one removal's line kept, in bytes: a process's command line can be any length. */
+const REMOVAL_LINE_MAX = 2_048
+
+/** A removal's line as the file keeps it: through the redaction of logs and of command lines, cut to [REMOVAL_LINE_MAX] bytes. */
+function keptLine(line: string): string {
+  const said = redactArgv(redactSecretsInText(line))
+  return Buffer.byteLength(said) > REMOVAL_LINE_MAX ? cutTo(said, REMOVAL_LINE_MAX) : said
+}
+
+/** [line] cut on a whole character to at most [max] bytes, its ellipsis counted. */
+function cutTo(line: string, max: number): string {
+  const ellipsis = '…', room = max - Buffer.byteLength(ellipsis)
+  let kept = '', bytes = 0
+  for (const character of line) {
+    const size = Buffer.byteLength(character)
+    if (bytes + size > room) break
+    kept += character
+    bytes += size
+  }
+  return kept + ellipsis
+}
+
+/** Written beside the file and renamed over it, so a crash or a second removal at once never leaves it half written (the review
+ *  of #4221); its person's alone, whatever mode a file there had before. */
+function keepRemoval(line: string): void {
+  const file = join(env.ADAPTER_DATA_DIR, REMOVALS_FILE), temporary = `${file}.${process.pid}.tmp`
+  try {
+    const before = existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean) : []
+    // Every line kept, those from before too: no secret a command line carried, and at most [REMOVAL_LINE_MAX] bytes (the third
+    // review of #4221: the file keeps command lines with no age limit).
+    const kept = [...before.slice(-(REMOVALS_KEPT - 1)), line].map(keptLine)
+    writeFileSync(temporary, kept.join('\n') + '\n', { mode: 0o600 })
+    chmodSync(temporary, 0o600)
+    renameSync(temporary, file)
+  } catch {
+    // A record, not a gate, as harness.log's line is.
+    try { rmSync(temporary, { force: true }) } catch { /* nothing was left */ }
+  }
 }

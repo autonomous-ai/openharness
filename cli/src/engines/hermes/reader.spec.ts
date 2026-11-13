@@ -5,7 +5,10 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { HermesReader, readHermesMessages } from './reader.js'
 import type { LiveEvent } from '../../lib/normalize.js'
+import { builtinSqlite, closeSqliteHandles, type DatabaseLike } from '../../lib/sqliteBuiltin.js'
 import { sqliteReadAll } from '../../lib/sqliteRead.js'
+import { enableOffThreadSqlite, resetOffThreadSqlite } from '../../lib/sqliteThread.js'
+import { KIB, MIB, pageReads, withinBudget } from '../../testing/storePages.js'
 
 // The real reads, with a seam to make one of them go unanswered, as a busy store or the read threads' deadline does.
 vi.mock('../../lib/sqliteRead.js', async (real) => {
@@ -139,5 +142,111 @@ d('HermesReader (sqlite3 CLI)', () => {
       reader.stop()
     }
     expect(events).toEqual([{ type: 'turn_started', payload: { userMessage: 'a new prompt' } }])
+  })
+})
+
+// #4188: a session past 32 MiB was read in one query, refused for its size on every poll: it never seeded and its
+// history never loaded. Only the read threads enforce a reply limit, so they are on. The store is built with the
+// binding: the sqlite3 CLI cannot take megabytes on a command line.
+const withBuiltin = builtinSqlite() ? describe : describe.skip
+
+withBuiltin('HermesReader pages by bytes', () => {
+  let dir = ''
+  let db = ''
+  let w: DatabaseLike
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hermes-pages-'))
+    db = join(dir, 'state.db')
+    w = new (builtinSqlite()!)(db, { readOnly: false })
+    // As Hermes' store is: in the older journal mode a reader in the middle of a large page would fail the writer's
+    // next commit with `database is locked`, now and then.
+    w.exec('PRAGMA journal_mode = WAL')
+    w.exec('CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, tool_call_id TEXT,'
+      + ' tool_calls TEXT, tool_name TEXT, finish_reason TEXT, reasoning TEXT, timestamp REAL)')
+    vi.mocked(sqliteReadAll).mockClear()
+    enableOffThreadSqlite()
+  })
+  afterEach(async () => {
+    vi.restoreAllMocks()
+    await resetOffThreadSqlite()
+    closeSqliteHandles()
+    w.close()
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+  })
+
+  const put = (id: number, role: string, content: string | null, finish: string | null = null): void => {
+    w.prepare('INSERT INTO messages (id, session_id, role, content, finish_reason, timestamp) VALUES (?, ?, ?, ?, ?, ?)').all(id, SID, role, content, finish, id)
+  }
+  /** Turn i: prompt 2i + 1, and a finished answer of `bytes`, 2i + 2. */
+  const turn = (i: number, bytes: number): void => { put(2 * i + 1, 'user', `q${i}`); put(2 * i + 2, 'assistant', 'x'.repeat(bytes), 'stop') }
+  const listen = (): { events: LiveEvent[]; reader: HermesReader } => {
+    const events: LiveEvent[] = []
+    return { events, reader: new HermesReader({ dbPath: db, sessionId: SID, onEvents: (e) => events.push(...e), pollMs: 20 }) }
+  }
+
+  it('reads a session larger than the row cap whole, a page at a time, and a reader seeds from it', async () => {
+    for (let i = 0; i < 80; i++) turn(i, 500 * KIB) // 39 MiB
+    const rows = await readHermesMessages(db, SID)
+    expect(rows.map((row) => row.id)).toEqual(Array.from({ length: 160 }, (_, n) => n + 1))
+    expect(rows[159]).toMatchObject({ role: 'assistant', finishReason: 'stop' })
+    expect(rows[159].content).toHaveLength(500 * KIB)
+    const reads = await pageReads(vi.mocked(sqliteReadAll))
+    expect(reads.length).toBeGreaterThan(9)
+    expect(reads.every((read) => read.ok && read.bytes <= read.maxBuffer && withinBudget(read))).toBe(true)
+    expect((await readHermesMessages(db, SID, 157)).map((row) => row.id)).toEqual([158, 159, 160])
+    // A reader seeds from it in silence and streams only what comes after. On the base it never seeds.
+    const { events, reader } = listen()
+    try {
+      await reader.start()
+      expect([events, reader.turnOpen]).toEqual([[], false])
+      put(900, 'user', 'a new prompt')
+      await vi.waitFor(() => expect(events.length).toBeGreaterThan(0), { timeout: 10_000, interval: 10 })
+    } finally { reader.stop() }
+    expect(JSON.stringify(events)).toContain('a new prompt')
+    expect(JSON.stringify(events)).not.toContain('q0')
+  })
+
+  // A tool call's row has no content: a NULL size must count 0, or one such row would be a page.
+  it('pages rows with no content by count', async () => {
+    for (let n = 1; n <= 600; n++) put(n, 'assistant', null)
+    const rows = await readHermesMessages(db, SID)
+    expect(rows).toHaveLength(600)
+    expect(rows.every((row) => row.content === '')).toBe(true)
+    expect((await pageReads(vi.mocked(sqliteReadAll))).map((read) => read.rows.length)).toEqual([500, 100])
+  })
+
+  it('leaves out a row over the row cap, says so once, and reads on', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    put(1, 'user', 'q'); put(2, 'assistant', 'z'.repeat(33 * MIB), 'stop'); put(3, 'user', 'next')
+    for (let n = 0; n < 2; n++) expect((await readHermesMessages(db, SID)).map((row) => row.id)).toEqual([1, 3])
+    // A reader whose cursor stays before it does not stick: what comes after still arrives.
+    const { events, reader } = listen()
+    try {
+      await reader.start()
+      put(900, 'user', 'a new prompt')
+      await vi.waitFor(() => expect(JSON.stringify(events)).toContain('a new prompt'), { timeout: 10_000, interval: 10 })
+    } finally { reader.stop() }
+    expect(error.mock.calls.map((call) => String(call[0])).filter((line) => line.includes('too big')))
+      .toEqual(['[hermes] 20260727 id 2 unreadable · too big'])
+  })
+
+  // #4065: a seed from the first page alone would emit the rest as new on the next poll.
+  it('reads nothing when a later page fails, and seeds from the next whole read, replaying nothing', async () => {
+    for (let i = 0; i < 12; i++) turn(i, 500 * KIB) // two pages
+    const actual = await vi.importActual<typeof import('../../lib/sqliteRead.js')>('../../lib/sqliteRead.js')
+    const fail = (): void => { vi.mocked(sqliteReadAll).mockImplementationOnce(actual.sqliteReadAll).mockResolvedValueOnce({ ok: false, reason: 'transient' }) }
+    fail()
+    expect(await readHermesMessages(db, SID)).toEqual([])
+    fail()
+    const { events, reader } = listen()
+    try {
+      await reader.start()
+      await readsPast(vi.mocked(sqliteReadAll).mock.calls.length, 3)
+      expect(events).toEqual([])
+      put(900, 'user', 'a new prompt')
+      await vi.waitFor(() => expect(events.length).toBeGreaterThan(0), { timeout: 10_000, interval: 10 })
+    } finally { reader.stop() }
+    expect(JSON.stringify(events)).toContain('a new prompt')
+    expect(JSON.stringify(events)).not.toContain('q0')
   })
 })

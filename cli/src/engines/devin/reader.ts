@@ -17,7 +17,7 @@
 
 import type { LiveEvent, TurnState } from '../../lib/normalize.js'
 import { newTurnState } from '../../lib/normalize.js'
-import { sqliteReadAll } from '../../lib/sqliteRead.js'
+import { oversizeRow, readStorePages, utf8Bytes, type PageColumn } from '../../lib/sqlitePage.js'
 import { devinMessageToEvents, type DvMessage } from './normalizer.js'
 import { DevinErrorTail } from './errorLog.js'
 
@@ -26,19 +26,20 @@ import { DevinErrorTail } from './errorLog.js'
 const SESSION_ID_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const MAX_SESSION_ID_LEN = 64
 const POLL_MS = 1_000
-const MAX_BUFFER = 32 * 1024 * 1024
 
-const COLUMNS = [
-  'row_id',
-  "json_extract(chat_message, '$.message_id') AS message_id",
-  "json_extract(chat_message, '$.role') AS role",
-  "coalesce(json_extract(chat_message, '$.content'), '') AS content",
-  "json_extract(chat_message, '$.thinking.thinking') AS thinking",
-  "json_extract(chat_message, '$.tool_calls') AS tool_calls",
-  "json_extract(chat_message, '$.tool_call_id') AS tool_call_id",
-  "json_extract(chat_message, '$.metadata.finish_reason') AS finish_reason",
-  "json_extract(chat_message, '$.metadata.created_at') AS created_at",
-].join(', ')
+// The role is read off the rows a page keeps, not in its scope: there it would parse every row the page sizes. A
+// system row, or one with no role, comes back with every column NULL and is dropped with the rows that have no id.
+const shown = (sql: string): string => `CASE WHEN json_extract(t.chat_message, '$.role') <> 'system' THEN ${sql} END`
+const COLUMNS: PageColumn[] = [
+  { as: 'message_id', sql: "json_extract(t.chat_message, '$.message_id')" },
+  { as: 'role', sql: "json_extract(t.chat_message, '$.role')" },
+  { as: 'content', sql: "coalesce(json_extract(t.chat_message, '$.content'), '')" },
+  { as: 'thinking', sql: "json_extract(t.chat_message, '$.thinking.thinking')" },
+  { as: 'tool_calls', sql: "json_extract(t.chat_message, '$.tool_calls')" },
+  { as: 'tool_call_id', sql: "json_extract(t.chat_message, '$.tool_call_id')" },
+  { as: 'finish_reason', sql: "json_extract(t.chat_message, '$.metadata.finish_reason')" },
+  { as: 'created_at', sql: "json_extract(t.chat_message, '$.metadata.created_at')" },
+].map((column) => ({ as: column.as, sql: shown(column.sql) }))
 
 export class DevinSqliteMissing extends Error {
   constructor() { super('no SQLite reader (node:sqlite absent and no sqlite3 CLI on PATH) — Devin sessions cannot be mirrored') }
@@ -73,11 +74,12 @@ async function loadDevinMessages(
 ): Promise<DvMessage[] | null> {
   if (!isDevinSessionId(sessionId)) return []
   const bounded = Number.isFinite(afterRowId as number) && (afterRowId as number) > 0
-  const sql = `SELECT ${COLUMNS} FROM message_nodes WHERE session_id = ?${bounded ? ' AND row_id > ?' : ''}`
-    + " AND json_extract(chat_message, '$.role') <> 'system' ORDER BY row_id;"
-  const params = bounded ? [sessionId, Math.trunc(afterRowId as number)] : [sessionId]
-
-  const result = await sqliteReadAll(dbPath, sql, params, { maxBuffer: MAX_BUFFER })
+  // #4188: one read of a whole session against 32 MiB was refused on every poll once the session outgrew it. A row
+  // is sized by its whole chat_message: the columns are disjoint parts of it.
+  const result = await readStorePages(dbPath, {
+    table: 'message_nodes', where: 't.session_id = ?', params: [sessionId],
+    key: [{ as: 'row_id', sql: 't.row_id' }], columns: COLUMNS, size: utf8Bytes('t.chat_message'),
+  }, bounded ? [Math.trunc(afterRowId as number)] : null)
   if (!result.ok) {
     if (result.reason === 'missing') throw new DevinSqliteMissing()
     return null // db locked / mid-write — retry next tick
@@ -87,6 +89,7 @@ async function loadDevinMessages(
   const seen = new Set<string>()
   const out: DvMessage[] = []
   for (const row of rows) {
+    if (Number(row.page_big)) { oversizeRow('devin', sessionId, `id ${row.row_id}`); continue }
     const messageId = str(row.message_id)
     if (!messageId || seen.has(messageId)) continue
     seen.add(messageId)
