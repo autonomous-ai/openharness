@@ -199,7 +199,7 @@ import { createEngineHooks, installEngineHooks, installOpencodePluginBeforeSpawn
 import { createCursorDiscovery } from './engines/cursorDiscovery.js'
 import { createCursorTaskHooks, loadPendingCursorTasks } from './engines/cursorTasks.js'
 import { databaseHistory, hermesDb } from './transcripts/databaseHistory.js'
-import { CLOUD_FALLBACKS, CLOUD_REQUESTS, type CloudCore, CONNECTORS_FALLBACKS, CONNECTORS_OFF, CONNECTORS_REQUESTS, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARED_MACHINES_REQUESTS, MEMORY_REQUESTS, ROUTER_REQUESTS, createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, MACHINE_ADDON_REQUESTS, HANDOFF_REQUESTS, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, OS_DEVICE_REQUESTS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_FALLBACKS, STORE_OFF, STORE_REQUESTS, MESSAGES_FALLBACKS, MESSAGES_REQUESTS, GOALS_REQUESTS, TURN_DELIVERERS, TURN_END_HEARERS, USAGE_FALLBACKS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WIFI_FALLBACKS, WINDOW_NAMES_REQUESTS, ENGINE_PROBE_REQUESTS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type RouteAnswer, type WindowFocus } from './api.js'
+import { CLOUD_FALLBACKS, CLOUD_REQUESTS, type CloudCore, CONNECTORS_FALLBACKS, CONNECTORS_OFF, CONNECTORS_REQUESTS, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARED_MACHINES_REQUESTS, MEMORY_REQUESTS, ROUTER_REQUESTS, createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, MACHINE_ADDON_REQUESTS, HANDOFF_REQUESTS, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, OS_DEVICE_REQUESTS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_FALLBACKS, STORE_OFF, STORE_REQUESTS, MESSAGES_FALLBACKS, MESSAGES_REQUESTS, GOALS_REQUESTS, TURN_DELIVERERS, TURN_END_HEARERS, USAGE_FALLBACKS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WIFI_FALLBACKS, WINDOW_NAMES_REQUESTS, ENGINE_PROBE_REQUESTS, WORKSPACES_FALLBACKS, WORKSPACES_REQUESTS, type GatewayAccount, type GatewayOps, type GatewayStatus, type RouteAnswer, type WindowFocus } from './api.js'
 import { createServiceHost, testFaults } from './serviceHost.js'
 import { SUPER_TAB_REQUESTS, SUPER_TAB_FALLBACKS } from './api.js'
 import { startStalls } from './stall.js'
@@ -1582,6 +1582,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The requests each service that can run in its own process answers, as core/api.ts declares them.
   const requestsOf: Record<string, readonly string[]> = {
     search: SEARCH_REQUESTS, store: STORE_REQUESTS, usage: USAGE_REQUESTS, monitor: MONITOR_REQUESTS, projects: PROJECTS_REQUESTS, models: MODELS_REQUESTS, handoff: HANDOFF_REQUESTS, connectors: CONNECTORS_REQUESTS, sharedMachines: SHARED_MACHINES_REQUESTS,
+    workspaces: WORKSPACES_REQUESTS,
     devices: DEVICES_REQUESTS, windowNames: WINDOW_NAMES_REQUESTS, engineProbe: ENGINE_PROBE_REQUESTS, goals: GOALS_REQUESTS, shell: SHELL_REQUESTS, messages: MESSAGES_REQUESTS, osDevice: OS_DEVICE_REQUESTS, machineAddons: MACHINE_ADDON_REQUESTS,
     agentBrowser: AGENT_BROWSER_REQUESTS,
     ...Object.fromEntries(Object.entries(EXPERIMENTS).map(([name, experiment]) => [name, experiment.requests])),
@@ -1788,9 +1789,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The DSH viewers: in this process, or in its own (services/viewersProcess.ts), told of each agent.
   if (outOfProcess.has('viewers')) ports.viewers = viewersLink.port
   else serviceHost.start('viewers', inline!.startViewers, coreApi, VIEWERS_FALLBACKS)
-  // Workspaces: in this process, or in the edge host (services/workspacesProcess.ts), told what to do and when.
+  // Workspaces: in this process, or in the edge host (services/workspacesProcess.ts), told what to do and when, and
+  // asked by the apps for the leftover worktrees.
   if (outOfProcess.has('workspaces')) ports.workspaces = workspacesLink.port
-  else serviceHost.start('workspaces', inline!.startWorkspaces, coreApi, WORKSPACES_FALLBACKS)
+  else serviceHost.start('workspaces', inline!.startWorkspaces, coreApi, WORKSPACES_FALLBACKS, WORKSPACES_REQUESTS)
   // The orchestrator, an experiment (services/orchestrator.ts): in this process, or in its own once it is on,
   // as the core sees it there (core/orchestratorLink.ts). It reads its Directors' turns from the frames sent.
   if (outOfProcess.has('orchestrator')) ports.orchestrator = orchestratorLink.port

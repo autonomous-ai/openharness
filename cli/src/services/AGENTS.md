@@ -139,7 +139,8 @@ master too old to run it starts it beside itself, still in its own process (`src
 - A service the core only gives commands to needs nothing kept for it while it is down. Workspaces
   (`src/services/workspacesProcess.ts`, `src/core/workspacesLink.ts`) is told to name branches. A command that
   destroys something is never held or replayed, and what it must know is asked for when it starts, never sent ahead
-  where it could go stale. `e2e/workspacesProcess.e2e.ts` proves it.
+  where it could go stale: the apps' `worktrees_list` and `worktrees_clean` ask the core for the folders in use as each
+  request arrives. `e2e/workspacesProcess.e2e.ts` proves it.
 - A service that is transport rather than requests: the gateway (src/gateway/gatewayProcess.ts,
   src/core/gatewayLink.ts) carries every remote client's traffic, so it tells the core without asking
   (`service_notice`) and carries terminal bytes as binary frames on its link. The core drops what would

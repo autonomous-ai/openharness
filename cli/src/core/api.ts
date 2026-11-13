@@ -758,6 +758,15 @@ export const GOALS_REQUESTS = ['goal_open', 'goal_add', 'goal_done', 'goal_list'
 export const HANDOFF_REQUESTS = ['agent_handoff_prepare', 'agent_handoff_complete'] as const
 /** Connected services for every local agent, and their MCP bridge, in the edge host (services/connectors.ts). */
 export const CONNECTORS_REQUESTS = ['connectors'] as const
+/**
+ * Leftover worktrees, in the edge host (services/workspaces.ts, lib/leftoverWorktrees.ts), for the owner only and only
+ * when asked: `worktrees_list` answers `{ worktrees, more }`, the worktrees in the projects root's worktrees folder
+ * (lib/projectFolder.ts `projectsRoot`: ~/harnesses, ~/projects on Harness OS) no live or stopped harness uses (each its
+ * path, repository, branch, sizeBytes, sizeComplete, lastChangeMs and uncommitted); and
+ * `worktrees_clean` takes `{ paths }`, moves each that is still one of them to the system's Trash, and answers
+ * `{ results }`, per path `trashed` (with `pruned`), `in_use`, `not_found` or `failed` (with a `reason`).
+ */
+export const WORKSPACES_REQUESTS = ['worktrees_list', 'worktrees_clean'] as const
 /** Sharing this machine with other accounts, and adding machines shared with this one, in the edge host
  *  (services/sharedMachines.ts). */
 export const SHARED_MACHINES_REQUESTS = ['shared_machines', 'guest_folders'] as const
@@ -852,6 +861,9 @@ export const LONG_ANSWERS: Readonly<Record<string, Readonly<Record<string, numbe
     launchTarget: 3 * MINUTE, privateGridName: 2 * MINUTE, lists: 2 * MINUTE,
   },
   store: { dsh_install: 30 * MINUTE, dsh_update: 30 * MINUTE, dshMaterialize: 6 * MINUTE },
+  // A list walks every leftover worktree for its size, a minute at most (lib/leftoverWorktrees.ts WALK_MS), and asks git
+  // of each. A clean moves up to 50 to the Trash one at a time: a rename each, or a few seconds of PowerShell on Windows.
+  workspaces: { worktrees_list: 2 * MINUTE, worktrees_clean: 5 * MINUTE },
   // A cloud agent's maker answers on its own time: Fo's reply waits 40 s, and a busy Fo is retried for half a
   // minute more. A wait shorter than that said "not running" of words that were then sent anyway.
   cloud: { create: 3 * MINUTE, deliver: 3 * MINUTE, answer: 3 * MINUTE, stopHarness: 2 * MINUTE, cloud_send: 3 * MINUTE },
