@@ -12,7 +12,7 @@ import { join } from 'path'
 import { env } from '../config/env.js'
 import { hasAuthSession } from './authSession.js'
 import { readOrMintComputerId } from './computerIdentity.js'
-import { savedDaemonPort } from './daemonEndpoint.js'
+import { savedDaemonPort } from './daemonRecord.js'
 import { pidIn, unreachableText } from './unreachable.js'
 
 export const PID_FILE = join(env.ADAPTER_DATA_DIR, 'adapter.pid')

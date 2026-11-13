@@ -11,7 +11,8 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { WebSocket } from 'ws'
 import { attachLocalWsServer, type LocalWsBackend, type LocalWsServer } from '../../localWsServer.js'
-import { localDaemonCall, localDaemonStatus, saveDaemonPort } from '../daemonEndpoint.js'
+import { localDaemonCall, localDaemonStatus } from '../daemonEndpoint.js'
+import { writeDaemonRecord } from '../daemonRecord.js'
 import { hookCredentialPath, readHookCredential } from '../hookAuth.js'
 import { listenLocalSocket } from '../localSocket.js'
 import { daemonPipe } from './daemonPipe.js'
@@ -42,7 +43,7 @@ describe.skipIf(!WINDOWS)('the daemon pipe on Windows', () => {
     await new Promise<void>((resolve) => tcp.listen(0, '127.0.0.1', resolve))
     const local: LocalWsServer = attachLocalWsServer(tcp, { machineId: 'machine-1', backend, localSocketServer: pipe.server })
     cleanup.push(pipe.close, () => new Promise<void>((resolve) => tcp.close(() => resolve())), local.close)
-    saveDaemonPort(dir, 19418, 24567, { pipe: pipePath, pid: process.pid })
+    writeDaemonRecord(dir, 19418, 24567, { pipe: pipePath, pid: process.pid })
 
     // The real liveness: this pid, and the process table when harness-pty is there (HARNESS_PTY_BIN in the workflow).
     const target = await daemonPipe(dir, 19418)

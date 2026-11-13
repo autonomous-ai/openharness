@@ -237,7 +237,7 @@ import { CORE_EXIT_STOP, CORE_EXIT_UPDATE, PROBE_COMMAND } from '../harnessd/pro
 import { localSocketListenPath, localSocketPath, refuseServedDataFolder, servedFolderDeps, type LocalSocketServer } from '../lib/localSocket.js'
 import { ensureDaemonToken } from '../lib/windows/pipeAuth.js'
 import { claimDataFolder } from '../lib/windows/dataFolderClaim.js'
-import { saveDaemonPort } from '../lib/daemonEndpoint.js'
+import { writeDaemonRecord } from '../lib/daemonRecord.js'
 import { publishHookRoute } from '../lib/hookRoutes.js'
 import { BackendSocket, isLocalClientId } from '../backendSocket.js'
 import { createGatewayLink, laneOf, tabKeyOf, tabRelayOf } from './gatewayLink.js'
@@ -2355,7 +2355,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onStore: (method, path, body) => proxyBackend(method, path, body),
   }, { socketPath: localSocketListenPath(env.ADAPTER_DATA_DIR, env.PORT), pipeToken, allowPortFallback: true })
   // On Windows the record also names the pipe and this core's pid: both are new on each start, so clients read them here.
-  try { saveDaemonPort(env.ADAPTER_DATA_DIR, env.PORT, hookPort, pipeToken && localSocket ? { pipe: localSocket.path, pid: process.pid } : undefined) } catch (error) {
+  try { writeDaemonRecord(env.ADAPTER_DATA_DIR, env.PORT, hookPort, pipeToken && localSocket ? { pipe: localSocket.path, pid: process.pid } : undefined) } catch (error) {
     await localSocket?.close()
     hookServer.close()
     throw error
