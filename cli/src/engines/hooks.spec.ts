@@ -39,6 +39,8 @@ it('installs Claude hooks into the requested home through its facet', async () =
     const first = readFileSync(file, 'utf8')
     const settings = JSON.parse(first)
     expect(Object.keys(settings.hooks)).toEqual(['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'Stop', 'StopFailure', 'Notification', 'PostToolUse'])
+    // Only the notices that wait for the person run the hook (hook/notify.mjs NEEDS_INPUT), not the idle one after each turn.
+    expect(settings.hooks.Notification[0].matcher).toBe('permission_prompt|elicitation_dialog|elicitation_url_dialog|quota_auto_resume_stale')
     const command = settings.hooks.Stop[0].hooks[0].command as string
     expect(command).toContain('--port 19473')
     expect(command).toContain(fileURLToPath(new URL('../../hook/notify.mjs', import.meta.url)))
