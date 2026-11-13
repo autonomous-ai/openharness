@@ -2268,7 +2268,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // the first start and kept in the data folder, in the profile.
   const pipeToken = process.platform === 'win32' ? ensureDaemonToken(env.ADAPTER_DATA_DIR) : null
   const observedHook = createObservedHook({
-    now: Date.now,
+    // Monotonic: the rate limit measures intervals, which a wall clock set back would stretch.
+    now: () => performance.now(),
     forward: (observed) => { const devices = ports.devices; if (!devices) return false; devices.observed(observed); return true },
   })
   const { server: hookServer, port: hookPort, localSocket } = await startHookServer(daemonPort(), {

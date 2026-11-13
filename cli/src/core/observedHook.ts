@@ -77,7 +77,8 @@ export function createObservedHook(deps: ObservedHookDeps) {
       bucket = { tokens: EVENTS_PER_SECOND, at: now }
       buckets.set(key, bucket)
     }
-    bucket.tokens = Math.min(EVENTS_PER_SECOND, bucket.tokens + (now - bucket.at) * EVENTS_PER_SECOND / 1000)
+    // A clock that stepped back refills nothing, rather than owe the bucket the time it went back.
+    bucket.tokens = Math.min(EVENTS_PER_SECOND, bucket.tokens + Math.max(0, now - bucket.at) * EVENTS_PER_SECOND / 1000)
     bucket.at = now
     if (bucket.tokens < 1) return false
     bucket.tokens -= 1
