@@ -32,23 +32,30 @@
  *   (`core.superTabs`, superTabs/inCore/cards.ts), for the Super Tab service alone;
  * - `super_tab_observers`: members may watch an agent here, so Share must run (`core.superTabs`), for the Super Tab
  *   service alone;
- * - `super_tab_screen`, `super_tab_input`, `super_tab_input_if_screen`: a member's terminal read as plain text and typed into for its Lead,
- *   and keys typed there only while its screen is still the one the Service read
- *   (`core.superTabs`, superTabs/inCore/terminal.ts), for the Super Tab service alone.
+ * - `pane_screen`, `pane_input`, `pane_input_if_screen`: an agent's pane read as plain text and typed into, and keys typed
+ *   there only while its screen is still the one the service read (`core.panes`, core/terminals/panes.ts), for the
+ *   services `PANE_TYPERS` names alone (the Swarm's: a member's terminal for its Lead).
  * The core answers them only for the experiments (core/api.ts `EXPERIMENTS`): creating an agent or
  * telling the windows something is no other process's to ask. The process's side is
  * services/processCoreApi.ts. Agent Messages, an experiment until 2026-10-12, asks a few of the same and is
  * answered by its own link, for what it uses alone (core/messagesLink.ts).
  */
 import type { BackendSocket } from '../backendSocket.js'
-import { experimentBackendAllowed, type AgentCreateRequest, type CoreApi } from './api.js'
+import { experimentBackendAllowed, PANE_TYPERS, type AgentCreateRequest, type CoreApi } from './api.js'
 import { creationObservation } from '../lib/creationObservation.js'
 
 type Payload = Record<string, unknown>
-type Core = Pick<CoreApi, 'agents' | 'turns' | 'clients' | 'daemon' | 'account' | 'cloud' | 'superTabs' | 'transcripts'>
+type Core = Pick<CoreApi, 'agents' | 'turns' | 'clients' | 'daemon' | 'account' | 'cloud' | 'superTabs' | 'panes' | 'transcripts'>
 
-const QUERIES: ReadonlySet<string> = new Set(['shown', 'activity', 'last_turn', 'turn_answer', 'close_swarm', 'keep_lead_alive', 'close_member', 'stopped', 'gone', 'creation_status', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account', 'cloud_publish', 'cloud_ask', 'cloud_unask', 'super_tab_attention', 'super_tab_cards', 'super_tab_card_recap', 'super_tab_observers', 'super_tab_screen', 'super_tab_input', 'super_tab_input_if_screen'])
+const QUERIES: ReadonlySet<string> = new Set(['shown', 'activity', 'last_turn', 'turn_answer', 'close_swarm', 'keep_lead_alive', 'close_member', 'stopped', 'gone', 'creation_status', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account', 'cloud_publish', 'cloud_ask', 'cloud_unask', 'super_tab_attention', 'super_tab_cards', 'super_tab_card_recap', 'super_tab_observers', 'pane_screen', 'pane_input', 'pane_input_if_screen'])
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
+
+/** The pane queries' names before 2026-11-13, which a Swarm process from an older build still sends while it runs beside a
+ *  newer core (a master without process.execve keeps its services running: e2e/messagesSkew.e2e.ts). Answered as the new
+ *  ones, under the same check. They go on or after 2026-12-13. */
+const PANE_QUERIES_BEFORE: Readonly<Record<string, string>> = {
+  super_tab_screen: 'pane_screen', super_tab_input: 'pane_input', super_tab_input_if_screen: 'pane_input_if_screen',
+}
 
 /** The live agents as the apps are shown them (`shown`): each with its name, whether its terminal is there and
  *  what its frame says about its harness. */
@@ -114,6 +121,7 @@ export const routeRefused = createRouteRefusals()
 /** The answer to an experiment's query, or null when it is not one of these. */
 export async function answerExperimentQuery(core: Core, experiments: ReadonlySet<string>, service: string, query: string, payload: Payload,
   refused: ReturnType<typeof createRouteRefusals> = routeRefused): Promise<Payload | null> {
+  if (Object.hasOwn(PANE_QUERIES_BEFORE, query)) query = PANE_QUERIES_BEFORE[query]!
   if (!QUERIES.has(query)) return null
   // `account` is also what models asks for the account's grid name, of its own link (core/modelsLink.ts): only
   // Share's and the Swarm's are answered here. Seen 2026-10-18: since #1376 models got NOT_AN_EXPERIMENT back instead, so
@@ -239,17 +247,17 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
       if (service !== 'superTabs' || !core.superTabs) return { error: 'NOT_SUPER_TABS' }
       core.superTabs.shareObservers()
       return {}
-    case 'super_tab_screen':
-    case 'super_tab_input':
-    case 'super_tab_input_if_screen': {
-      if (service !== 'superTabs' || !core.superTabs) return { error: 'NOT_SUPER_TABS' }
+    case 'pane_screen':
+    case 'pane_input':
+    case 'pane_input_if_screen': {
+      if (!PANE_TYPERS.includes(service) || !core.panes) return { error: 'NOT_A_PANE_TYPER' }
       const { agentId, scrollback = 0, text: typed = '', keys = [], screen } = payload
       if (!/^[A-Za-z0-9_-]{1,160}$/.test(text(agentId)) || typeof scrollback !== 'number' || typeof typed !== 'string'
         || !Array.isArray(keys) || !keys.every(key => typeof key === 'string')
-        || (query === 'super_tab_input_if_screen' && (typeof screen !== 'string' || !keys.length))) return { ok: false, error: 'INVALID_REQUEST' }
-      return { ...query === 'super_tab_screen' ? await core.superTabs.screen(agentId as string, scrollback)
-        : query === 'super_tab_input_if_screen' ? await core.superTabs.inputIfScreen(agentId as string, keys as string[], screen as string)
-        : await core.superTabs.input(agentId as string, typed, keys as string[]) }
+        || (query === 'pane_input_if_screen' && (typeof screen !== 'string' || !keys.length))) return { ok: false, error: 'INVALID_REQUEST' }
+      return { ...query === 'pane_screen' ? await core.panes.screen(agentId as string, scrollback)
+        : query === 'pane_input_if_screen' ? await core.panes.inputIfScreen(agentId as string, keys as string[], screen as string)
+        : await core.panes.input(agentId as string, typed, keys as string[]) }
     }
     case 'account': {
       const known = await core.account.identity()

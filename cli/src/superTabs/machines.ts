@@ -735,7 +735,7 @@ export class ContributedMachines {
               // the start now rather than at the backend's 3 minutes (startScreen.ts, task #3009). Its agent goes as any failed
               // start's does, through [abandoned], which [remember] above keeps it for.
               if (result.error === 'START_PENDING' && result.state !== 'pending' && identifier(result.harnessId)) {
-                const settled = await settleHiddenScreen(this.core.superTabs, result.harnessId, object(start.request), this.hiddenScreens.get(start.id),
+                const settled = await settleHiddenScreen(this.core.panes, result.harnessId, object(start.request), this.hiddenScreens.get(start.id),
                   async error => { await scoped({ action: 'command', operationId: `hidden-screen-${start.id}`, command: { type: 'agent.startFailed', startId: start.id, error } }) },
                   line => this.log(line))
                 if (settled.screen !== undefined) this.hiddenScreens.set(start.id, settled.screen)

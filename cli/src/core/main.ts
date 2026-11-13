@@ -136,6 +136,7 @@ import { SHELL_REQUESTS } from '../lib/shellProtocol.js'
 import { answerShellQuery } from './shellQueries.js'
 import { createTerminalControl } from './terminals/control.js'
 import { createTerminalRequests } from './terminals/requests.js'
+import { createPanes } from './terminals/panes.js'
 import { createBrowser } from './terminals/browser.js'
 import { loopbackAnswer } from '../lib/loopbackGet.js'
 import { writeBrowserShim } from '../lib/browserShim.js'
@@ -921,22 +922,23 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     const asker = { local: true, owner: true }
     if (!(serviceLinksRef?.route('super_tabs', payload, asker, resolve) || serviceHost.route('super_tabs', payload, asker, resolve))) resolve({ error: 'SERVICE_UNAVAILABLE' })
   })
+  // An agent's pane read plain and typed into under its write lock, for the services that may (core/terminals/panes.ts):
+  // the Swarm's, for a member's terminal and its Lead. The inputs it types through are built below.
+  const panes = createPanes({
+    resolve: (agentId) => registry.byAgent(agentId),
+    capture: (session, options) => terminals.capture(session, options),
+    read: (session, capture) => screens.read(session, capture),
+    type: typeTerminal,
+    key: keyTerminal,
+    locked: (agentId, write) => deviceInput.legacyWrite(agentId, write),
+  })
   // The Swarm's doors in this process, while it is on (superTabs/inCore/): its members here waiting on a person, on the
-  // devices alone, read only once the questions exist below (the service starts after them); a member's terminal for its
-  // Lead, read plain and typed under the pane's write lock, built below after the inputs; and the Swarms' cards and Leads'
-  // recaps for the Harness Pro, on the devices alone, kept whole and shown again to a dial that attaches.
+  // devices alone, read only once the questions exist below (the service starts after them); and the Swarms' cards and
+  // Leads' recaps for the Harness Pro, on the devices alone, kept whole and shown again to a dial that attaches.
   const swarmDoors = swarm && {
     waits: swarm.createSuperTabAttention({
       send: (frame) => ports.devices?.card(frame),
       asking: (agentId) => [...openQuestions.values()].some((asked) => asked.agentId === agentId),
-    }),
-    terminal: swarm.createSuperTabTerminal({
-      resolve: (agentId) => registry.byAgent(agentId),
-      capture: (session, options) => terminals.capture(session, options),
-      read: (session, capture) => screens.read(session, capture),
-      type: typeTerminal,
-      key: keyTerminal,
-      locked: (agentId, write) => deviceInput.legacyWrite(agentId, write),
     }),
     cards: swarm.createSuperTabCards({
       swarmCards: (items) => ports.devices?.swarmCards(items),
@@ -951,13 +953,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const turnPrompts = new Map<string, string>()
   const coreApi = createCoreApi({
     cloud: cloudDoors,
+    // Offered to the services in this process only while one that may use it runs (core/api.ts PANE_TYPERS: the Swarm's),
+    // as it was while it was the Swarm's door: a service in its own process is checked as it asks (core/experimentQueries.ts).
+    ...(swarm ? { panes } : {}),
     ...(swarmDoors ? {
       superTabs: { attention: (items) => swarmDoors.waits.attention(items), cards: (items) => swarmDoors.cards.cards(items), cardRecap: (recap) => swarmDoors.cards.recap(recap),
         // In the core's own process Share was started with it; out of it, the master starts Share's process.
-        shareObservers: () => { if (outOfProcess.has('sharing')) coreLink.want('sharing') },
-        screen: (agentId, scrollback) => swarmDoors.terminal.screen(agentId, scrollback),
-        input: (agentId, text, keys) => swarmDoors.terminal.input(agentId, text, keys),
-        inputIfScreen: (agentId, keys, screen) => swarmDoors.terminal.inputIfScreen(agentId, keys, screen) },
+        shareObservers: () => { if (outOfProcess.has('sharing')) coreLink.want('sharing') } },
       // The devices' `cardsWanted`, `cardRecap` and `cardOpen`, and no other action of the Super Tab service (superTabs/inCore/cards.ts `ask`).
       superTabRequest: (payload) => swarmDoors.cards.ask(payload),
     } : {}),

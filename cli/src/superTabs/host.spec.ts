@@ -327,8 +327,8 @@ describe('the host tick on the host form', () => {
     // time the server said it again. It waits, and is picked up once the server takes the session.
     it('picks up no terminal request while signed out, and picks it up once signed in again', async () => {
       const t = setup()
-      Object.assign(t.core, { superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), input: vi.fn(),
-        screen: vi.fn(async () => ({ ok: true as const, text: '> ', hold: null })) } })
+      Object.assign(t.core, { superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn() },
+        panes: { input: vi.fn(), inputIfScreen: vi.fn(), screen: vi.fn(async () => ({ ok: true as const, text: '> ', hold: null })) } })
       const pickups = () => asked(t).filter(path => path === '/api/super-tabs/hosts/machine-1/terminal').length
       const host = t.open({ signIn: () => 'epoch-1' })
       const roster = vi.mocked(t.call).getMockImplementation()!
@@ -2319,7 +2319,7 @@ describe('Super Tab waits for the Harness Pro', () => {
       if (offline) throw new Error('Host offline')
       return { status: 200, body: { success: true, data: path.includes('/hosts/') ? hostForm(rows, { tabs: ['tab'] }) : [] } }
     })
-    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn(), inputIfScreen: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn() }
     const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
       agents: { creationStatus: vi.fn(async creationId => ({ creationId, state: 'created' as const, agentId: 'harness' })), byAgent: vi.fn(() => ({ agentId: 'harness' }) as never), terminalAvailable: vi.fn(() => true) } })
     const open = () => { const host = new SuperTabHost(core, 'machine-1', { log: vi.fn() }); hosts.push(host); return host }
@@ -2356,7 +2356,7 @@ describe('Super Tab waits for the Harness Pro', () => {
       agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' } }]
     const call: CoreApi['account']['backend'] = vi.fn(async (_method, path) => ({ status: 200, body: { success: true, data: path.includes('/hosts/') ? hostForm(rows, { tabs: ['tab'] }) : [] } }))
     let here = true, clock = 0
-    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn(), inputIfScreen: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn() }
     const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
       agents: { byAgent: vi.fn(() => (here ? { agentId: 'harness' } : undefined) as never), terminalAvailable: vi.fn(() => true) } })
     const host = new SuperTabHost(core, 'machine-1', { log: vi.fn(), now: () => clock }); hosts.push(host)
@@ -2970,8 +2970,8 @@ it('rechecks authoritative native absence before retrying a lost acknowledgement
 describe('a Lead\'s terminal requests', () => {
   it('asks for its agents\' terminal requests with each roster read, and answers a screen read as the agent', async () => {
     const t = setup()
-    Object.assign(t.core, { superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), input: vi.fn(),
-      screen: vi.fn(async () => ({ ok: true as const, text: 'Allow? 1. Yes', hold: null })) } })
+    Object.assign(t.core, { superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn() },
+      panes: { input: vi.fn(), inputIfScreen: vi.fn(), screen: vi.fn(async () => ({ ok: true as const, text: 'Allow? 1. Yes', hold: null })) } })
     const roster = vi.mocked(t.call).getMockImplementation()!
     vi.mocked(t.call).mockImplementation(async (method, path, body) => path === '/api/super-tabs/hosts/machine-1/terminal'
       ? { status: 200, body: { success: true, data: [{ tabId: 'tab', agentId: 'agent', harnessId: 'harness', request: { id: 'r1', kind: 'screen' } }] } }
@@ -2985,8 +2985,8 @@ describe('a Lead\'s terminal requests', () => {
   // the request waits; asked for on a timer only without it, every 3 s.
   it('picks one up at once when the server says one waits, and asks only when told while the server pushes', async () => {
     const t = setup()
-    Object.assign(t.core, { superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), input: vi.fn(),
-      screen: vi.fn(async () => ({ ok: true as const, text: '> ', hold: null })) } })
+    Object.assign(t.core, { superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn() },
+      panes: { input: vi.fn(), inputIfScreen: vi.fn(), screen: vi.fn(async () => ({ ok: true as const, text: '> ', hold: null })) } })
     const pickups = () => vi.mocked(t.call).mock.calls.filter(([, path]) => path === '/api/super-tabs/hosts/machine-1/terminal').length
     const host = t.open()
     t.idle()
@@ -3006,20 +3006,20 @@ describe('a Lead\'s terminal requests', () => {
 describe('a task lost to a usage limit', () => {
   it('is never resumed from a roster row, even one an older backend sends', async () => {
     const t = setup()
-    Object.assign(t.core, { superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(),
-      input: vi.fn(async () => ({ ok: true as const })), screen: vi.fn(async () => ({ ok: true as const, text: '❯ ', hold: null })) } })
+    Object.assign(t.core, { superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn() },
+      panes: { input: vi.fn(async () => ({ ok: true as const })), screen: vi.fn(async () => ({ ok: true as const, text: '❯ ', hold: null })), inputIfScreen: vi.fn() } })
     Object.assign(t.row, { resume: { conversationId: 'group', assignmentId: 'work', lostAt: 3, at: new Date(0).toISOString() } })
     await t.open().tick()
     expect(vi.mocked(t.call).mock.calls.filter(([, , body]) => JSON.stringify(body ?? null).includes('work.resume'))).toEqual([])
-    expect(t.core.superTabs!.input).not.toHaveBeenCalled()
+    expect(t.core.panes!.input).not.toHaveBeenCalled()
   })
 })
 
 describe('the progress a host reports', () => {
   it('sends with its machine\'s reading when each agent\'s screen last changed', async () => {
     const t = setup()
-    Object.assign(t.core, { superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), input: vi.fn(),
-      screen: vi.fn(async () => ({ ok: true as const, text: '✻ Editing host.ts…\n❯ ', hold: null })) } })
+    Object.assign(t.core, { superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn() },
+      panes: { input: vi.fn(), inputIfScreen: vi.fn(), screen: vi.fn(async () => ({ ok: true as const, text: '✻ Editing host.ts…\n❯ ', hold: null })) } })
     const pool = { tabId: 'tab', machine: { machineId: 'machine-1', generation: 'grant', cwd: '/repo', engines: ['claude'] }, harnessIds: ['harness'], starts: [] }
     const roster = vi.mocked(t.call).getMockImplementation()!
     vi.mocked(t.call).mockImplementation(async (method, path, body) => path.includes('/hosts/machine-1/changes')
@@ -3069,7 +3069,7 @@ describe('the members a host lets watch its agents', () => {
       if (path.includes('/hosts/') && answer === null) await new Promise<void>(resolve => { answer = resolve })
       return { status: 200, body: { success: true, data: path.includes('/hosts/') ? hostForm(rows, { tabs: ['tab'] }) : [] } }
     })
-    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn(), inputIfScreen: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn() }
     const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
       agents: { byAgent: vi.fn(() => ({ agentId: 'harness' }) as never), terminalAvailable: vi.fn(() => true) } })
     const host = new SuperTabHost(core, 'machine-1', { log: vi.fn(), now: () => clock }); hosts.push(host)
@@ -3114,7 +3114,7 @@ describe('the members a host lets watch its agents', () => {
     let rows: unknown[] = [lead(true)], clock = 0
     const call: CoreApi['account']['backend'] = vi.fn(async (_method, path) =>
       ({ status: 200, body: { success: true, data: path.includes('/hosts/') ? hostForm(rows, { tabs: ['tab'] }) : [] } }))
-    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn(), inputIfScreen: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn() }
     const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
       agents: { byAgent: vi.fn(() => ({ agentId: 'harness' }) as never), terminalAvailable: vi.fn(() => true) } })
     const source = observerSource(dir, () => 'machine-1', () => clock)
@@ -4185,8 +4185,8 @@ describe('Swarm changes the server pushes', () => {
 describe('requests per idle agent and machine per minute while the server pushes (task #2800)', () => {
   async function measure(lead: boolean) {
     const t = setup()
-    Object.assign(t.core, { superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), input: vi.fn(),
-      screen: vi.fn(async () => ({ ok: true as const, text: '> ', hold: null })) } })
+    Object.assign(t.core, { superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn() },
+      panes: { input: vi.fn(), inputIfScreen: vi.fn(), screen: vi.fn(async () => ({ ok: true as const, text: '> ', hold: null })) } })
     t.row.lead = lead
     const host = t.open()
     t.idle()

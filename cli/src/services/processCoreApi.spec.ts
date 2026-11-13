@@ -259,22 +259,22 @@ describe('the core API a light service runs on in its own process', () => {
     expect(ask).toHaveBeenCalledWith('super_tab_observers', {})
   })
 
-  it('asks the core to read and type a member\'s terminal, and answers plainly when the core cannot be asked', async () => {
+  it('asks the core to read and type an agent\'s pane, and answers plainly when the core cannot be asked', async () => {
     const ask = vi.fn(async (query: string, _payload: Record<string, unknown>): Promise<Record<string, unknown>> =>
-      query === 'super_tab_screen' ? { ok: true, text: 'Allow?', hold: 'permission_open' } : { ok: true })
-    const doors = processCoreApi('/data', 'superTabs', { ask }).superTabs!
+      query === 'pane_screen' ? { ok: true, text: 'Allow?', hold: 'permission_open' } : { ok: true })
+    const doors = processCoreApi('/data', 'superTabs', { ask }).panes!
     expect(await doors.screen('h1', 20)).toEqual({ ok: true, text: 'Allow?', hold: 'permission_open' })
-    expect(ask).toHaveBeenLastCalledWith('super_tab_screen', { agentId: 'h1', scrollback: 20 })
+    expect(ask).toHaveBeenLastCalledWith('pane_screen', { agentId: 'h1', scrollback: 20 })
     expect(await doors.input('h1', 'yes', ['Enter'])).toEqual({ ok: true })
-    expect(ask).toHaveBeenLastCalledWith('super_tab_input', { agentId: 'h1', text: 'yes', keys: ['Enter'] })
+    expect(ask).toHaveBeenLastCalledWith('pane_input', { agentId: 'h1', text: 'yes', keys: ['Enter'] })
     expect(await doors.inputIfScreen('h1', ['Escape'], 'Update available')).toEqual({ ok: true })
-    expect(ask).toHaveBeenLastCalledWith('super_tab_input_if_screen', { agentId: 'h1', keys: ['Escape'], screen: 'Update available' })
+    expect(ask).toHaveBeenLastCalledWith('pane_input_if_screen', { agentId: 'h1', keys: ['Escape'], screen: 'Update available' })
     ask.mockRejectedValue(new Error('gone'))
     expect(await doors.inputIfScreen('h1', ['Escape'], 'x')).toEqual({ ok: false, error: 'This machine\'s daemon could not be asked. Try again in a moment.' })
     expect(await doors.screen('h1', 0)).toEqual({ ok: false, error: 'This machine\'s daemon could not be asked. Try again in a moment.' })
     expect(await doors.input('h1', 'x', [])).toEqual({ ok: false, error: 'This machine\'s daemon could not be asked. Try again in a moment.' })
-    ask.mockResolvedValue({ error: 'NOT_SUPER_TABS' })
-    expect(await doors.input('h1', 'x', [])).toEqual({ ok: false, error: 'NOT_SUPER_TABS' })
+    ask.mockResolvedValue({ error: 'NOT_A_PANE_TYPER' })
+    expect(await doors.input('h1', 'x', [])).toEqual({ ok: false, error: 'NOT_A_PANE_TYPER' })
     ask.mockResolvedValue({})
     expect(await doors.screen('h1', 0)).toEqual({ ok: false, error: 'The terminal could not be reached.' })
   })

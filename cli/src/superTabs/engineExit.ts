@@ -38,12 +38,12 @@ export function exitOn(screen: string): { status: number; option: boolean } | nu
 
 /** How [harnessId]'s engine left its pane on this machine, from the pane the core kept; null while it runs, when its pane went
  *  with it, or when the pane says nothing of it. */
-export async function engineExit(core: Pick<CoreApi, 'agents' | 'superTabs'>, harnessId: string, now: number = Date.now()): Promise<EngineExit | null> {
+export async function engineExit(core: Pick<CoreApi, 'agents' | 'panes'>, harnessId: string, now: number = Date.now()): Promise<EngineExit | null> {
   const own = core.agents.byAgent(harnessId)
   const pane = own?.engine === 'terminal' ? own
     : core.agents.all().find(row => row.previousAgentId === harnessId && row.engine === 'terminal')
-  if (!pane || !core.superTabs) return null
-  const read = await core.superTabs.screen(pane.agentId, SCROLLBACK).catch((error: Error) => ({ ok: false as const, error: error.message }))
+  if (!pane || !core.panes) return null
+  const read = await core.panes.screen(pane.agentId, SCROLLBACK).catch((error: Error) => ({ ok: false as const, error: error.message }))
   if (!read.ok) {
     // Its start still fails, saying only that its agent stopped.
     console.warn(`[super-tabs] could not read how ${harnessId.slice(0, 8)}'s engine left its pane · ${read.error}`)

@@ -50,7 +50,7 @@ describe('the Super Tab service\'s door', () => {
   })
 
   it('is the Super Tab service\'s alone, and hands its members\' waits to the core whole', async () => {
-    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn(), inputIfScreen: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn() }
     const core = fakeCore({ superTabs })
     const both = new Set(['orchestrator', 'superTabs'])
     const item = { agentId: 'a1', requestId: 'supertab:x:blocked', superTab: 'Pilot', attention: 'stuck', text: 'Stuck: no key' }
@@ -63,7 +63,7 @@ describe('the Super Tab service\'s door', () => {
   })
 
   it('hands it the Swarm cards and a Lead\'s recap the same way, to the Super Tab service alone', async () => {
-    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn(), inputIfScreen: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn() }
     const core = fakeCore({ superTabs })
     const both = new Set(['orchestrator', 'superTabs'])
     const recap = { tabId: 't1', leadId: 'l1', text: 'Shipped', at: 1, none: false }
@@ -80,35 +80,53 @@ describe('the Super Tab service\'s door', () => {
   })
 
   it('asks for Share when a Swarm host here has members to show its agents to', async () => {
-    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn(), inputIfScreen: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn() }
     expect(await answerExperimentQuery(fakeCore({ superTabs }), new Set(['superTabs']), 'superTabs', 'super_tab_observers', {})).toEqual({})
     expect(superTabs.shareObservers).toHaveBeenCalledOnce()
   })
-  it('reads and types a member\'s terminal for the Super Tab service alone, refusing what is not well formed', async () => {
-    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(),
-      screen: vi.fn(async () => ({ ok: true as const, text: 'Allow?', hold: null })), input: vi.fn(async () => ({ ok: true as const })), inputIfScreen: vi.fn(async () => ({ ok: true as const })) }
-    const core = fakeCore({ superTabs }), both = new Set(['orchestrator', 'superTabs'])
-    expect(await answerExperimentQuery(core, both, 'superTabs', 'super_tab_screen', { agentId: 'h1', scrollback: 40 })).toEqual({ ok: true, text: 'Allow?', hold: null })
-    expect(superTabs.screen).toHaveBeenLastCalledWith('h1', 40)
-    await answerExperimentQuery(core, both, 'superTabs', 'super_tab_screen', { agentId: 'h1' })
-    expect(superTabs.screen).toHaveBeenLastCalledWith('h1', 0)
+  // A Swarm process from an older build runs beside a newer core until it restarts (a master without process.execve keeps it),
+  // and asks by the names the queries had before 2026-11-13: answered the same, under the same check.
+  it('answers the pane queries by their old names too, for a Swarm process from an older build', async () => {
+    const panes = { screen: vi.fn(async () => ({ ok: true as const, text: 'Allow?', hold: null })), input: vi.fn(async () => ({ ok: true as const })),
+      inputIfScreen: vi.fn(async () => ({ ok: true as const })) }
+    const core = fakeCore({ panes }), both = new Set(['orchestrator', 'superTabs'])
+    expect(await answerExperimentQuery(core, both, 'superTabs', 'super_tab_screen', { agentId: 'h1', scrollback: 5 })).toEqual({ ok: true, text: 'Allow?', hold: null })
+    expect(panes.screen).toHaveBeenLastCalledWith('h1', 5)
     expect(await answerExperimentQuery(core, both, 'superTabs', 'super_tab_input', { agentId: 'h1', text: 'yes', keys: ['Enter'] })).toEqual({ ok: true })
-    expect(superTabs.input).toHaveBeenLastCalledWith('h1', 'yes', ['Enter'])
-    await answerExperimentQuery(core, both, 'superTabs', 'super_tab_input', { agentId: 'h1', keys: ['1'] })
-    expect(superTabs.input).toHaveBeenLastCalledWith('h1', '', ['1'])
-    for (const [query, payload] of [['super_tab_screen', { agentId: 'bad id' }], ['super_tab_screen', { agentId: 'h1', scrollback: 'x' }],
-      ['super_tab_input', { agentId: 'h1', text: 7 }], ['super_tab_input', { agentId: 'h1', keys: [1] }], ['super_tab_input', { agentId: 'h1', keys: 'Enter' }]] as const) {
+    expect(panes.input).toHaveBeenLastCalledWith('h1', 'yes', ['Enter'])
+    expect(await answerExperimentQuery(core, both, 'superTabs', 'super_tab_input_if_screen', { agentId: 'h1', keys: ['Escape'], screen: 'x' })).toEqual({ ok: true })
+    expect(panes.inputIfScreen).toHaveBeenLastCalledWith('h1', ['Escape'], 'x')
+    expect(await answerExperimentQuery(core, both, 'orchestrator', 'super_tab_input', { agentId: 'h1', text: 'yes' })).toEqual({ error: 'NOT_A_PANE_TYPER' })
+    // A name that is no query of anyone's, the object's own included, is not one here either.
+    expect(await answerExperimentQuery(core, both, 'superTabs', 'toString', {})).toBeNull()
+  })
+
+  // Typing into a pane is the core's most trusted act: only a service the core lists may ask (core/api.ts PANE_TYPERS).
+  it('reads and types an agent\'s pane for the services the core lists alone, refusing what is not well formed', async () => {
+    const panes = { screen: vi.fn(async () => ({ ok: true as const, text: 'Allow?', hold: null })), input: vi.fn(async () => ({ ok: true as const })),
+      inputIfScreen: vi.fn(async () => ({ ok: true as const })) }
+    const core = fakeCore({ panes }), both = new Set(['orchestrator', 'superTabs'])
+    expect(await answerExperimentQuery(core, both, 'superTabs', 'pane_screen', { agentId: 'h1', scrollback: 40 })).toEqual({ ok: true, text: 'Allow?', hold: null })
+    expect(panes.screen).toHaveBeenLastCalledWith('h1', 40)
+    await answerExperimentQuery(core, both, 'superTabs', 'pane_screen', { agentId: 'h1' })
+    expect(panes.screen).toHaveBeenLastCalledWith('h1', 0)
+    expect(await answerExperimentQuery(core, both, 'superTabs', 'pane_input', { agentId: 'h1', text: 'yes', keys: ['Enter'] })).toEqual({ ok: true })
+    expect(panes.input).toHaveBeenLastCalledWith('h1', 'yes', ['Enter'])
+    await answerExperimentQuery(core, both, 'superTabs', 'pane_input', { agentId: 'h1', keys: ['1'] })
+    expect(panes.input).toHaveBeenLastCalledWith('h1', '', ['1'])
+    for (const [query, payload] of [['pane_screen', { agentId: 'bad id' }], ['pane_screen', { agentId: 'h1', scrollback: 'x' }],
+      ['pane_input', { agentId: 'h1', text: 7 }], ['pane_input', { agentId: 'h1', keys: [1] }], ['pane_input', { agentId: 'h1', keys: 'Enter' }]] as const) {
       expect(await answerExperimentQuery(core, both, 'superTabs', query, payload)).toEqual({ ok: false, error: 'INVALID_REQUEST' })
     }
-    expect(await answerExperimentQuery(core, both, 'superTabs', 'super_tab_input_if_screen', { agentId: 'h1', keys: ['Escape'], screen: 'Update available' })).toEqual({ ok: true })
-    expect(superTabs.inputIfScreen).toHaveBeenLastCalledWith('h1', ['Escape'], 'Update available')
+    expect(await answerExperimentQuery(core, both, 'superTabs', 'pane_input_if_screen', { agentId: 'h1', keys: ['Escape'], screen: 'Update available' })).toEqual({ ok: true })
+    expect(panes.inputIfScreen).toHaveBeenLastCalledWith('h1', ['Escape'], 'Update available')
     for (const payload of [{ agentId: 'bad id', keys: ['Escape'], screen: 'x' }, { agentId: 'h1', keys: ['Escape'] }, { agentId: 'h1', keys: ['Escape'], screen: 7 },
       { agentId: 'h1', keys: [], screen: 'x' }, { agentId: 'h1', screen: 'x' }]) {
-      expect(await answerExperimentQuery(core, both, 'superTabs', 'super_tab_input_if_screen', payload)).toEqual({ ok: false, error: 'INVALID_REQUEST' })
+      expect(await answerExperimentQuery(core, both, 'superTabs', 'pane_input_if_screen', payload)).toEqual({ ok: false, error: 'INVALID_REQUEST' })
     }
-    for (const query of ['super_tab_screen', 'super_tab_input', 'super_tab_input_if_screen']) {
-      expect(await answerExperimentQuery(core, both, 'orchestrator', query, { agentId: 'h1' })).toEqual({ error: 'NOT_SUPER_TABS' })
-      expect(await answerExperimentQuery(fakeCore(), both, 'superTabs', query, { agentId: 'h1' })).toEqual({ error: 'NOT_SUPER_TABS' })
+    for (const query of ['pane_screen', 'pane_input', 'pane_input_if_screen']) {
+      expect(await answerExperimentQuery(core, both, 'orchestrator', query, { agentId: 'h1' })).toEqual({ error: 'NOT_A_PANE_TYPER' })
+      expect(await answerExperimentQuery(fakeCore(), both, 'superTabs', query, { agentId: 'h1' })).toEqual({ error: 'NOT_A_PANE_TYPER' })
     }
   })
 })

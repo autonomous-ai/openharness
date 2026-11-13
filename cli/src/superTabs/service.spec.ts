@@ -444,7 +444,7 @@ it('keeps host capacity separate from account authority and closes it on disconn
 it('tells a start how its engine left, once its agent ended', async () => {
   const text = "error: unexpected argument '--add-dir' found\n\nharness: codex exited (2). This pane is a shell now — run codex again, or stop the pane.\n% "
   const screen = vi.fn(async () => ({ ok: true as const, text, hold: null }))
-  const core = fakeCore({ superTabs: { screen } as never, agents: { all: vi.fn(() => [{ agentId: 'shell', engine: 'terminal', previousAgentId: 'native' }] as never) } })
+  const core = fakeCore({ panes: { screen } as never, agents: { all: vi.fn(() => [{ agentId: 'shell', engine: 'terminal', previousAgentId: 'native' }] as never) } })
   let released = false
   const observe = vi.fn(async () => ({ ok: true, reservationId: 'native-creation-id', harnessId: 'native', released }))
   const service = superTabService(core, { reservations: vi.fn(() => ({ reserve: vi.fn(), observe, giveBack: vi.fn(), ended: vi.fn(), creationOf: vi.fn(() => null), stop: vi.fn() })) })
@@ -631,7 +631,7 @@ describe('post --attach steps', () => {
 describe('the Swarm cards the devices ask for', () => {
   function withCards() {
     const cards = { want: vi.fn(), open: vi.fn(), side: vi.fn(), threadLeave: vi.fn((..._a: unknown[]): { tabId: string; conversationId: string } | null => null), say: vi.fn(async (): Promise<SaidOnCard> => ({ said: true })), worker: vi.fn((machineId: string, harnessId: string) => machineId === 'm2' && harnessId === 'h-r1'), recap: vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'Shipped', at: 5, none: false })), onCards: undefined as unknown, onRecap: undefined as unknown }
-    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn(), inputIfScreen: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn() }
     const core = fakeCore({ superTabs })
     const make = vi.fn(() => cards as never)
     const service = superTabService(core, { cards: make })

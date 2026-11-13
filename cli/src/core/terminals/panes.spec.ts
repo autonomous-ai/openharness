@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { ScreenReading } from '../../engines/facets/screen.js'
-import { AutonomousDeviceInput } from '../../core/deviceInput.js'
+import { AutonomousDeviceInput } from '../deviceInput.js'
 import { inlineSubmission } from '../../testing/inlineSubmission.js'
-import { createSuperTabTerminal } from './terminal.js'
+import { createPanes } from './panes.js'
 
 const session = { agentId: 'h1', engine: 'claude' } as RegisteredSession
 const reading = (messageHold: ScreenReading['messageHold']) => ({ messageHold } as ScreenReading)
@@ -18,7 +18,7 @@ function setup(over: { captured?: string | null; reading?: ScreenReading | null;
     key: vi.fn(async (_id: string, key: string) => { writes.push(`key:${key}`); return over.keyed?.(key) ?? true }),
     locked: <T>(id: string, write: () => Promise<T>) => { lockedFor.push(id); return write() },
   }
-  return { deps, writes, lockedFor, terminal: createSuperTabTerminal(deps) }
+  return { deps, writes, lockedFor, terminal: createPanes(deps) }
 }
 
 describe('a Lead reading and typing into a Swarm member\'s terminal', () => {
@@ -71,7 +71,7 @@ describe('typing keys only while the screen is still the one that was read', () 
     let screen = first, release = () => {}
     const writes: string[] = []
     const held = new Promise<void>(resolve => { release = resolve })
-    const terminal = createSuperTabTerminal({
+    const terminal = createPanes({
       resolve: id => id === 'h1' ? session : undefined,
       capture: async () => ({ state: 'succeeded' as const, value: screen }),
       read: async () => null,
@@ -132,7 +132,7 @@ describe('the Lead\'s typed input and the host\'s conditional keys on one pane, 
       capture: async () => '› ', submission: inlineSubmission, acquireControl: () => () => {}, legacySubmit: vi.fn(), legacyCancel: () => false,
       onDelivery: vi.fn(), onInputStatus: vi.fn(),
     })
-    const terminal = createSuperTabTerminal({
+    const terminal = createPanes({
       resolve: id => id === 'h1' ? session : undefined,
       capture: async () => ({ state: 'succeeded' as const, value: screen }),
       read: async () => null,
@@ -168,7 +168,7 @@ describe('the Lead\'s typed input and the host\'s conditional keys on one pane, 
 
   it('goes on with the next writer after one whose write threw, and after the agent has gone while it waited', async () => {
     let thrown = false, there = true
-    const terminal = createSuperTabTerminal({
+    const terminal = createPanes({
       resolve: id => id === 'h1' && there ? session : undefined,
       capture: async () => ({ state: 'succeeded' as const, value: UPDATE }),
       read: async () => null, type: async () => true,

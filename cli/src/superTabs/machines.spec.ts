@@ -2814,7 +2814,7 @@ describe('a launched start whose engine stops on a screen', () => {
     f.start.mockResolvedValue(result as never)
     const screen = vi.fn(async (_agentId: string, _scrollback: number) => ({ ok: true as const, text, hold }))
     const inputIfScreen = vi.fn(async (_agentId: string, _keys: string[], _screen: string) => ({ ok: true as const }))
-    ;(f.core as { superTabs?: unknown }).superTabs = { screen, inputIfScreen }
+    ;(f.core as { panes?: unknown }).panes = { screen, inputIfScreen }
     const failures = () => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).endsWith('/starts/tab/start'))
       .map(c => (c[3] as { command: { type: string; error?: string } }).command).filter(command => command.type === 'agent.startFailed')
     return { f, screen, inputIfScreen, failures }

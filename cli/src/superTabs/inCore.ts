@@ -4,7 +4,7 @@
  * does without the Swarm; src/architecture.spec.ts checks that the core reaches the Swarm's code by no other way.
  *
  * What it hands the core is typed by core/api.ts, the core's contract: the Super Tab members' waits and cards on the
- * devices (`SuperTabsCore`), a member's terminal for its Lead, the close and reopen of its agents (`SwarmAgents`), a
+ * devices (`SuperTabsCore`), the close and reopen of its agents (`SwarmAgents`), a
  * start's Swarm role (`SwarmLaunch`), an attached agent's role at its restart (`AdoptSwarmSkill`), the Leads that are never
  * stopped, and its chat files, which the gateway sends to the backend. What a
  * service running in the core's process needs of the Swarm is not here: superTabs/inServices.ts.
@@ -16,7 +16,6 @@
  */
 export { createSuperTabAttention } from './inCore/attention.js'
 export { createSuperTabCards } from './inCore/cards.js'
-export { createSuperTabTerminal } from './inCore/terminal.js'
 export { swarmRoleThrough } from './inCore/role.js'
 export { quietOnDevices } from './inCore/devices.js'
 export { createSwarmSkillAdoption } from './inCore/adoption.js'

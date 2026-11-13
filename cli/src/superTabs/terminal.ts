@@ -2,14 +2,14 @@
  * The host's side of a Lead reading and typing into a worker's terminal (spec/2026-10-23-lead-sees-agent-terminal.md).
  * Workers got stuck on what only their terminal showed (a permission prompt, a usage-limit screen, a model picker) and
  * only a person at that machine could see and clear it. The backend relays the Lead's request to the host of the agent's
- * machine; the host reads or types with the core's own capture and input (superTabs/inCore/terminal.ts) and answers as that
+ * machine; the host reads or types with the core's own capture and input (core/terminals/panes.ts) and answers as that
  * agent. It also tells the Lead, once per episode, when a worker has sat on a prompt for 3 minutes or its screen shows
  * a usage limit. The same reads tell the machine report when each agent's screen last changed: the backend renews the
  * agent's lease on its task from that (docs: swarm-never-stops, v1 liveness).
  */
 import { CommandRetries, permanentRefusal } from './retries.js'
 import { createHash } from 'node:crypto'
-import type { CoreApi, SuperTabScreen } from '../core/api.js'
+import type { CoreApi, PaneScreen } from '../core/api.js'
 import { openRestrictedKeys, updateDismissKeys } from '../engines/codex/screen.js'
 import { popupDismissKeys } from '../engines/claude/screen.js'
 import type { MessageHold } from '../engines/facets/screen.js'
@@ -33,7 +33,7 @@ const SKIP_TRIES = 3
 const MAX_SCREEN_BYTES = 64 * 1024
 /** What the screen reader says a prompt or a question is waiting on; a popup or a hidden prompt is not one. */
 export const WAITING: ReadonlySet<MessageHold> = new Set(['permission_open', 'question_open', 'menu_open', 'trust_open', 'update_prompt_open', 'model_prompt_open', 'sign_in_open'])
-/** The spec's named keys, in any case: the name the Lead's request carries, and the terminal's own (superTabs/inCore/terminal.ts).
+/** The spec's named keys, in any case: the name the Lead's request carries, and the terminal's own (core/terminals/panes.ts).
  *  Ctrl-D and the like are left out: one closes an engine. */
 const KEYS: Record<string, [string, string]> = { enter: ['Enter', 'Enter'], esc: ['Esc', 'Escape'], escape: ['Esc', 'Escape'], tab: ['Tab', 'Tab'],
   up: ['Up', 'Up'], down: ['Down', 'Down'], left: ['Left', 'Left'], right: ['Right', 'Right'], 'ctrl-c': ['Ctrl-C', 'C-c'],
@@ -283,7 +283,7 @@ export class TerminalHost {
 
   private async screen(agent: Own, request: Json): Promise<Json> {
     const scrollback = typeof request.scrollback === 'number' ? request.scrollback : 0
-    const read = await this.core.superTabs!.screen(agent.harnessId, scrollback)
+    const read = await this.core.panes!.screen(agent.harnessId, scrollback)
     // The backend keeps a reason to 500 characters.
     return read.ok ? { ok: true, text: capScreen(read.text) } : { ok: false, error: read.error.slice(0, 500) }
   }
@@ -295,7 +295,7 @@ export class TerminalHost {
     // The text is typed literally, so a newline or an escape in it would act as a key the Lead never named (the backend
     // refuses them too).
     if (/[\x00-\x1f\x7f]/.test(text)) return { ok: false, error: 'Send Enter and other keys as named keys, not in the text.' }
-    return { ...await this.core.superTabs!.input(agent.harnessId, text, keys) }
+    return { ...await this.core.panes!.input(agent.harnessId, text, keys) }
   }
 
   private async command(agent: Own, operationId: string, command: Json): Promise<void> {
@@ -317,7 +317,7 @@ export class TerminalHost {
       const state = this.watched.get(key) ?? { prompt: null, limit: null, model: null }
       this.watched.set(key, state)
       // A screen that could not be read says nothing either way.
-      const read = await this.core.superTabs!.screen(agent.harnessId, 0).catch(() => null)
+      const read = await this.core.panes!.screen(agent.harnessId, 0).catch(() => null)
       if (!read?.ok) continue
       state.skips = await this.dismissScreen(agent, read, state.skips ?? 0)
       const now = this.now()
@@ -339,7 +339,7 @@ export class TerminalHost {
   /** Safe choices on an unattended Swarm pane: skip an update or feedback popup, or open Codex restricted.
    *  The core rechecks the exact screen under its input lock, so another writer clearing it receives no stray key.
    *  After [SKIP_TRIES] the existing prompt alert takes over; the mailbox resumes once the screen is gone. */
-  private async dismissScreen(agent: Own, read: Extract<SuperTabScreen, { ok: true }>, tries: number): Promise<number> {
+  private async dismissScreen(agent: Own, read: Extract<PaneScreen, { ok: true }>, tries: number): Promise<number> {
     // Resumes already have a session identity, so startScreen cannot settle their folder-access prompt (#3904).
     // Only the exact restricted choice is safe; never answer a trust grant or another engine's screen.
     const restricted = read.hold === 'trust_open' && this.core.agents.byAgent(agent.harnessId)?.engine === 'codex'
@@ -347,7 +347,7 @@ export class TerminalHost {
     const keys = restricted ?? (read.hold === 'update_prompt_open' ? updateDismissKeys(read.text) : popupDismissKeys(read.text))
     if (!keys) return 0
     if (tries >= SKIP_TRIES) return tries
-    const dismissed = await this.core.superTabs!.inputIfScreen(agent.harnessId, keys, read.text).catch(error => ({ ok: false as const, error: String(error) }))
+    const dismissed = await this.core.panes!.inputIfScreen(agent.harnessId, keys, read.text).catch(error => ({ ok: false as const, error: String(error) }))
     if (!dismissed.ok) this.log(`could not dismiss a screen for ${agent.agentId}: ${dismissed.error}`)
     else if (restricted) this.log(`Opened Codex restricted for ${agent.agentId}; no folder trust granted`)
     return tries + 1
