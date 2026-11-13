@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ObservedHookEvent } from '../../core/observedHook.js'
+import { STOP_HOOK_GRACE_MS } from '../../core/turns/turnHooks.js'
 import { observedAgentId, ObservedSource, type ObservedDeps } from './observed.js'
 
 function setup(over: Partial<ObservedDeps> = {}) {
@@ -54,7 +55,13 @@ function setup(over: Partial<ObservedDeps> = {}) {
   }
 }
 
+/** Past the wait before a turn's answer is read. */
+const graced = (): Promise<unknown> => vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+
 describe('ObservedSource states', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
   it('drives each event to the spec table and resets since on turn-start', () => {
     const { src, clock, ev } = setup()
     src.ingest(ev('session-start'))
@@ -116,20 +123,39 @@ describe('ObservedSource states', () => {
     answers.set('/t/s.jsonl', 'Fixed the bug.')
     src.ingest(ev('turn-stop', { transcriptPath: '/t/s.jsonl' }))
     expect(src.list()[0]).toMatchObject({ state: 'done', unseenDone: true })
-    await vi.waitFor(() => expect(src.list()[0].lastAnswer).toBe('Fixed the bug.'))
+    await graced()
+    expect(src.list()[0].lastAnswer).toBe('Fixed the bug.')
+  })
+
+  it("reads the last answer once the core's Stop grace is over: Claude's transcript can lag its Stop hook", async () => {
+    const lastAnswer = vi.fn(async () => 'Fixed it.')
+    const { src, ev } = setup({ lastAnswer })
+    src.ingest(ev('turn-stop', { transcriptPath: '/t/s.jsonl' }))
+    await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS - 1)
+    expect(lastAnswer).not.toHaveBeenCalled()
+    // A next turn ending within the grace is read once, after its own.
+    src.ingest(ev('turn-start'))
+    src.ingest(ev('turn-stop'))
+    await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS - 1)
+    expect(lastAnswer).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(lastAnswer).toHaveBeenCalledTimes(1)
+    expect(src.list()[0].lastAnswer).toBe('Fixed it.')
   })
 
   it('cuts a long answer to the card on a whole character', async () => {
     const { src, answers, ev } = setup()
     answers.set('/t/s.jsonl', `${'a'.repeat(298)}😀${'b'.repeat(10)}`)
     src.ingest(ev('turn-stop', { transcriptPath: '/t/s.jsonl' }))
-    await vi.waitFor(() => expect(src.list()[0].lastAnswer).toBe(`${'a'.repeat(298)}😀…`))
+    await graced()
+    expect(src.list()[0].lastAnswer).toBe(`${'a'.repeat(298)}😀…`)
   })
 
-  it('does not read a transcript for other engines', () => {
+  it('does not read a transcript for other engines', async () => {
     const lastAnswer = vi.fn(async () => 'x')
     const { src, ev } = setup({ lastAnswer })
     src.ingest(ev('turn-stop', { engine: 'cursor', transcriptPath: '/t/s.jsonl' }))
+    await graced()
     expect(lastAnswer).not.toHaveBeenCalled()
     expect(src.list()[0].state).toBe('done')
   })
@@ -141,20 +167,23 @@ describe('ObservedSource states', () => {
     src.onChange(() => { const a = src.list()[0].lastAnswer; if (a !== told.at(-1)) told.push(a) })
     answers.set('/t/s.jsonl', 'Done.')
     src.ingest(ev('turn-stop', { transcriptPath: '/t/s.jsonl' }))
-    await vi.waitFor(() => expect(src.list()[0].lastAnswer).toBe('Done.'))
+    await graced()
+    expect(src.list()[0].lastAnswer).toBe('Done.')
     src.ingest(ev('turn-start'))
     expect(src.list()[0].lastAnswer).toBeUndefined()
     src.ingest(ev('turn-stop'))
-    await vi.waitFor(() => expect(told).toEqual(['Done.', undefined, 'Done.']))
+    await graced()
+    expect(told).toEqual(['Done.', undefined, 'Done.'])
   })
 
   it('a late answer does not land on a newer turn', async () => {
     let release: (v: string) => void = () => {}
     const { src, ev } = setup({ lastAnswer: () => new Promise((r) => { release = r }) })
     src.ingest(ev('turn-stop', { transcriptPath: '/t/s.jsonl' }))
+    await graced()
     src.ingest(ev('turn-start'))
     release('old')
-    await new Promise((r) => setTimeout(r, 0))
+    await vi.advanceTimersByTimeAsync(0)
     expect(src.list()[0].lastAnswer).toBeUndefined()
   })
 })
