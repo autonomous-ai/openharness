@@ -20,9 +20,8 @@ void main() {
     Brightness brightness, {
     bool large = true,
     bool sample = false,
-    bool swarm = false,
   }) async {
-    final page = SettingsPage(notifier: app, large: large, swarm: swarm);
+    final page = SettingsPage(notifier: app, large: large);
     await tester.pumpWidget(
       phoneApp(
         sample ? SampleMode(session: FakeSample(app), child: page) : page,
@@ -53,24 +52,6 @@ void main() {
         await pumpSettings(tester, app, scale, brightness);
       });
     });
-
-    testWidgets('signed in with a $label name, opened from Swarm', (
-      tester,
-    ) async {
-      await expectNoLayoutErrors(tester, (scale, brightness) async {
-        final app = edgeApp(machineName: longMachine);
-        addTearDown(app.dispose);
-        app.currentUser = CurrentUserProfile(id: 'u', name: name, email: email);
-        await pumpSettings(
-          tester,
-          app,
-          scale,
-          brightness,
-          large: false,
-          swarm: true,
-        );
-      });
-    });
   }
 
   testWidgets('pushed from a terminal, with no machines', (tester) async {
@@ -86,39 +67,6 @@ void main() {
       final app = edgeApp();
       addTearDown(app.dispose);
       await pumpSettings(tester, app, scale, brightness, sample: true);
-    });
-  });
-
-  // Swarm's look with no computer, and Leave the sample in the first
-  // card beside Usage: both are rows the signed-in cases above never draw there.
-  testWidgets('opened from Swarm, with no machines', (tester) async {
-    await expectNoLayoutErrors(tester, (scale, brightness) async {
-      final app = edgeApp(noMachines: true);
-      addTearDown(app.dispose);
-      await pumpSettings(
-        tester,
-        app,
-        scale,
-        brightness,
-        large: false,
-        swarm: true,
-      );
-    });
-  });
-
-  testWidgets('opened from Swarm, inside the sample', (tester) async {
-    await expectNoLayoutErrors(tester, (scale, brightness) async {
-      final app = edgeApp();
-      addTearDown(app.dispose);
-      await pumpSettings(
-        tester,
-        app,
-        scale,
-        brightness,
-        large: false,
-        sample: true,
-        swarm: true,
-      );
     });
   });
 }

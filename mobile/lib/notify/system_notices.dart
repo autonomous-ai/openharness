@@ -1,5 +1,4 @@
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import 'package:harness_mobile/core/last_opened_agent.dart';
@@ -19,51 +18,6 @@ typedef AgentNoticeMessage = ({
   String body,
   bool quiet,
 });
-
-/// Where a Swarm notice leads: the Swarm, and the conversation it is about;
-/// for a message only in a thread, that thread's root ([threadId]), since the
-/// chat alone does not show it.
-typedef SwarmNoticeTarget = ({
-  String swarmId,
-  String conversationId,
-  String? messageId,
-  String? decisionId,
-  String? threadId,
-});
-
-/// One notice about what a Swarm asks of the person. [key] names the
-/// notification it shows in, so the same need posted twice replaces itself,
-/// and so does the server's push for it (task #3248: a thread's replies share
-/// one); [subtitle] says where it is. [quiet] replaces what that notification
-/// showed with no sound, no vibration and no banner.
-typedef SwarmNoticeMessage = ({
-  String key,
-  String title,
-  String subtitle,
-  String body,
-  SwarmNoticeTarget target,
-  bool quiet,
-});
-
-/// The notification centre's Swarm notices: decisions asked of the person,
-/// Lead tags, work waiting on them.
-///
-/// Not on [SystemNotices], whose stand-ins would all have to answer it:
-/// [LocalSystemNotices] and [SilentSystemNotices] carry both.
-abstract interface class SwarmNotices {
-  Future<void> showSwarm(SwarmNoticeMessage message);
-
-  /// Takes the notice [key] names back down: its need was met somewhere else.
-  Future<void> cancelSwarm(String key);
-
-  /// Shows [count] on the app icon: what the Swarms ask of the person, the
-  /// drawer's waiting count. Zero takes it off.
-  Future<void> setSwarmBadge(int count);
-
-  /// The Swarm notice tapped last — what the shell opens. Reset to null by
-  /// whoever acts on it.
-  ValueNotifier<SwarmNoticeTarget?> get openedSwarm;
-}
 
 /// The OS notification centre, as far as the phone uses it.
 ///
@@ -95,15 +49,12 @@ abstract interface class SystemNotices {
 }
 
 /// Nothing leaves the process. What a test notifier is given.
-class SilentSystemNotices implements SystemNotices, SwarmNotices {
+class SilentSystemNotices implements SystemNotices {
   @override
   final opened = ValueNotifier<AgentRef?>(null);
 
   @override
   final openedDevice = ValueNotifier<String?>(null);
-
-  @override
-  final openedSwarm = ValueNotifier<SwarmNoticeTarget?>(null);
 
   @override
   Future<bool?> requestPermission() async => null;
@@ -116,15 +67,6 @@ class SilentSystemNotices implements SystemNotices, SwarmNotices {
 
   @override
   Future<void> showAccountNotice({required String key, required String title, required String body}) async {}
-
-  @override
-  Future<void> showSwarm(SwarmNoticeMessage message) async {}
-
-  @override
-  Future<void> cancelSwarm(String key) async {}
-
-  @override
-  Future<void> setSwarmBadge(int count) async {}
 }
 
 /// Whether the OS lets this app post notices right now — Settings ▸ Notifications reads it. Null
@@ -150,42 +92,16 @@ const noticesWhen =
 /// is `machine\nagent`, so the two never read as each other.
 const _devicePayload = 'device:';
 
-/// What a Swarm notice's payload starts with: `swarm:<swarm>/<conversation>`, each part
-/// URI-encoded, with no newline — so it never reads as an agent's or a device's.
-const _swarmPayload = 'swarm:';
-
-/// The Android channel, iOS thread and iOS category of Swarm notices.
-const _swarmChannel = 'swarm-needs-you';
-
-/// The Android channel of a quiet push (task #3248; backend `push/sender.ts` SWARM_QUIET_CHANNEL): on
-/// Android the channel, not the push, decides whether it sounds, so this one never does.
-const _swarmQuietChannel = 'swarm-quiet';
-
-/// How Android names the Swarm channel, here and when a notice makes it.
-const _swarmChannelName = 'Swarm needs you';
-const _swarmChannelDescription =
-    'A Swarm asks you to decide, tags you, or has work waiting on you.';
-
-/// Android draws an FCM push under its tag with this id (the server tags it with the notice's key), so a
-/// Swarm notice posted under the same tag and id replaces the push, and the other way round.
-const _androidPushId = 0;
-
-bool get _android => defaultTargetPlatform == TargetPlatform.android;
-
-/// `harness/app_badge` — the app icon's count (Swift: `AppBadgeChannel` in `ios/Runner/AppDelegate.swift`).
-const _appBadge = MethodChannel('harness/app_badge');
-
 /// The real centre, through flutter_local_notifications.
 ///
 /// Started lazily on first use, so a launch that never needs it — and every
 /// test — pays nothing for it.
-class LocalSystemNotices implements SystemNotices, SwarmNotices {
+class LocalSystemNotices implements SystemNotices {
   LocalSystemNotices([FlutterLocalNotificationsPlugin? plugin])
     : _plugin = plugin ?? FlutterLocalNotificationsPlugin();
 
   final FlutterLocalNotificationsPlugin _plugin;
   Future<void>? _ready;
-  Future<void>? _pushReady;
 
   @override
   final opened = ValueNotifier<AgentRef?>(null);
@@ -193,50 +109,9 @@ class LocalSystemNotices implements SystemNotices, SwarmNotices {
   @override
   final openedDevice = ValueNotifier<String?>(null);
 
-  @override
-  final openedSwarm = ValueNotifier<SwarmNoticeTarget?>(null);
-
   /// Told when the person has just allowed notices ([requestPermission]): the moment pushes can
   /// start reaching them (`notify/push_tokens.dart`).
   void Function()? onAllowed;
-
-  /// Android: makes the channels pushes are drawn on, before one can arrive (task #3248). Without
-  /// them a push that came before the app's first Swarm notice landed on FCM's default channel, and
-  /// a quiet one would sound. Needs no start of the centre; nothing on iOS, whose pushes have no
-  /// channel. Shared with notification initialization, so permission checks wait for both channels
-  /// even when eager startup is still preparing them. A failed attempt is logged once per launch.
-  Future<void> preparePush() => _pushReady ??= _makePushChannels()
-      .timeout(const Duration(seconds: 10))
-      .catchError((Object error) {
-        appLog.warn('notify', 'push channels not made', error: error);
-      });
-
-  Future<void> _makePushChannels() async {
-    if (!_android) return;
-    final android = _plugin
-        .resolvePlatformSpecificImplementation<
-          AndroidFlutterLocalNotificationsPlugin
-        >();
-    await android?.createNotificationChannel(
-      const AndroidNotificationChannel(
-        _swarmChannel,
-        _swarmChannelName,
-        description: _swarmChannelDescription,
-        importance: Importance.high,
-      ),
-    );
-    await android?.createNotificationChannel(
-      const AndroidNotificationChannel(
-        _swarmQuietChannel,
-        'Swarm, quiet updates',
-        description:
-            'A newer reply in a thread you have not read yet: it replaces the notice already there.',
-        importance: Importance.low,
-        playSound: false,
-        enableVibration: false,
-      ),
-    );
-  }
 
   /// One Android channel per kind, so a person can silence finished turns and
   /// still hear questions — the two are not equally urgent. Also the iOS
@@ -273,22 +148,10 @@ class LocalSystemNotices implements SystemNotices, SwarmNotices {
           requestAlertPermission: false,
           requestBadgePermission: false,
           requestSoundPermission: false,
-          // A Swarm notice on a phone that hides previews still says who asks
-          // and where.
-          notificationCategories: [
-            DarwinNotificationCategory(
-              _swarmChannel,
-              options: {
-                DarwinNotificationCategoryOption.hiddenPreviewShowTitle,
-                DarwinNotificationCategoryOption.hiddenPreviewShowSubtitle,
-              },
-            ),
-          ],
         ),
       ),
       onDidReceiveNotificationResponse: (response) => _open(response.payload),
     );
-    await preparePush();
     // A notice tapped while the app was not running at all launches it; the
     // tap reaches no callback then, only this.
     final launch = await _plugin.getNotificationAppLaunchDetails();
@@ -298,10 +161,6 @@ class LocalSystemNotices implements SystemNotices, SwarmNotices {
   }
 
   void _open(String? payload) {
-    if (decodeSwarmPayload(payload) case final target?) {
-      openedSwarm.value = target;
-      return;
-    }
     // A device notice carries `device:<key>` — no newline, so it never reads as an agent's payload.
     if (payload != null && payload.startsWith(_devicePayload)) {
       openedDevice.value = payload.substring(_devicePayload.length);
@@ -422,78 +281,6 @@ class LocalSystemNotices implements SystemNotices, SwarmNotices {
     }
   }
 
-  /// Where a Swarm notice is in the notification centre: the notification the server's push for the
-  /// same thing uses (task #3248). Android: its key as the tag, with FCM's id. iOS: [swarmNoticeIdFor],
-  /// which the push carries in decimal as its `apns-collapse-id`.
-  ({int id, String? tag}) _swarmPlace(String key) => _android
-      ? (id: _androidPushId, tag: key)
-      : (id: swarmNoticeIdFor(key), tag: null);
-
-  @override
-  Future<void> showSwarm(SwarmNoticeMessage message) async {
-    final place = _swarmPlace(message.key);
-    final quiet = message.quiet;
-    try {
-      await _init();
-      await _plugin.show(
-        id: place.id,
-        title: message.title,
-        body: message.body,
-        payload: encodeSwarmPayload(message.target),
-        notificationDetails: NotificationDetails(
-          android: AndroidNotificationDetails(
-            _swarmChannel,
-            _swarmChannelName,
-            channelDescription: _swarmChannelDescription,
-            importance: Importance.high,
-            priority: Priority.high,
-            subText: message.subtitle,
-            // Hidden on a secure lock screen set to hide private content.
-            visibility: NotificationVisibility.private,
-            tag: place.tag,
-            // A quiet one replaces what its notification showed, without a sound, a vibration or a
-            // heads-up, as a quiet agent notice does.
-            silent: quiet,
-          ),
-          iOS: DarwinNotificationDetails(
-            subtitle: message.subtitle,
-            threadIdentifier: _swarmChannel,
-            categoryIdentifier: _swarmChannel,
-            presentSound: quiet ? false : null,
-            presentBanner: quiet ? false : null,
-            interruptionLevel: quiet ? InterruptionLevel.passive : null,
-          ),
-        ),
-      );
-    } catch (error) {
-      appLog.warn('notify', 'swarm notice failed', error: error);
-    }
-  }
-
-  /// Also takes down the push shown in the same notification.
-  @override
-  Future<void> cancelSwarm(String key) async {
-    final place = _swarmPlace(key);
-    try {
-      await _init();
-      await _plugin.cancel(id: place.id, tag: place.tag);
-    } catch (error) {
-      appLog.warn('notify', 'swarm cancel failed', error: error);
-    }
-  }
-
-  /// iOS only: Android has no count of its own on the icon — launchers draw a dot from the
-  /// notices posted.
-  @override
-  Future<void> setSwarmBadge(int count) async {
-    if (defaultTargetPlatform != TargetPlatform.iOS) return;
-    try {
-      await _appBadge.invokeMethod<void>('set', count);
-    } catch (error) {
-      appLog.warn('notify', 'swarm badge failed', error: error);
-    }
-  }
-
   @override
   Future<void> cancel(AgentRef agent) async {
     try {
@@ -528,60 +315,6 @@ int accountNoticeIdFor(String key) {
   return hash;
 }
 
-/// A stable, positive id per Swarm notice — the same FNV-1a, over its own key, so it never lands
-/// on an agent's or an account's.
-@visibleForTesting
-int swarmNoticeIdFor(String key) {
-  var hash = 0x811c9dc5;
-  for (final unit in 'swarm\n$key'.codeUnits) {
-    hash = ((hash ^ unit) * 0x01000193) & 0x7fffffff;
-  }
-  return hash;
-}
-
-@visibleForTesting
-String encodeSwarmPayload(SwarmNoticeTarget target) =>
-    '$_swarmPayload${Uri.encodeComponent(target.swarmId)}'
-    '/${Uri.encodeComponent(target.conversationId)}'
-    '${target.messageId != null
-        ? '/message/${Uri.encodeComponent(target.messageId!)}'
-              '${target.threadId != null ? '/thread/${Uri.encodeComponent(target.threadId!)}' : ''}'
-        : target.decisionId != null
-        ? '/decision/${Uri.encodeComponent(target.decisionId!)}'
-        : ''}';
-
-@visibleForTesting
-SwarmNoticeTarget? decodeSwarmPayload(String? payload) {
-  if (payload == null || !payload.startsWith(_swarmPayload)) return null;
-  final parts = payload.substring(_swarmPayload.length).split('/');
-  if ((parts.length != 2 && parts.length != 4 && parts.length != 6) ||
-      parts.any((p) => p.isEmpty)) {
-    return null;
-  }
-  if (parts.length >= 4 && !const ['message', 'decision'].contains(parts[2])) {
-    return null;
-  }
-  // A message in a thread names its root after it (encodeSwarmPayload).
-  if (parts.length == 6 && (parts[2] != 'message' || parts[4] != 'thread')) {
-    return null;
-  }
-  try {
-    return (
-      swarmId: Uri.decodeComponent(parts[0]),
-      conversationId: Uri.decodeComponent(parts[1]),
-      messageId: parts.length >= 4 && parts[2] == 'message'
-          ? Uri.decodeComponent(parts[3])
-          : null,
-      decisionId: parts.length == 4 && parts[2] == 'decision'
-          ? Uri.decodeComponent(parts[3])
-          : null,
-      threadId: parts.length == 6 ? Uri.decodeComponent(parts[5]) : null,
-    );
-  } on ArgumentError {
-    return null;
-  }
-}
-
 @visibleForTesting
 String encodeAgentPayload(AgentRef agent) =>
     '${agent.machineId}\n${agent.agentId}';
@@ -592,15 +325,4 @@ AgentRef? decodeAgentPayload(String? payload) {
   if (parts == null || parts.length != 2) return null;
   if (parts[0].isEmpty || parts[1].isEmpty) return null;
   return (machineId: parts[0], agentId: parts[1]);
-}
-
-/// A tapped push (`notify/push_channel.dart`) opens the chat its `link` names: the app's own
-/// `swarm:` payload, which the server puts beside the notice's `key` (`backend/src/push/notices.ts`).
-/// Anything else (no link, an agent's or a device's payload) only opened the app.
-void openPushed(Map<String, String> data, SystemNotices notices) {
-  if (notices case final SwarmNotices swarm) {
-    if (decodeSwarmPayload(data['link']) case final target?) {
-      swarm.openedSwarm.value = target;
-    }
-  }
 }

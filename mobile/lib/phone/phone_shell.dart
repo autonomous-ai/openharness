@@ -5,40 +5,20 @@ import 'package:flutter/material.dart';
 
 import 'package:harness_mobile/state/app_state.dart';
 
-import '../demo/sample_mode.dart' show SampleMode;
 import '../notify/system_notices.dart';
 import '../p2p/phone_terminal_p2p.dart';
-import '../swarm/swarm_attachment_store.dart';
-import '../swarm/swarm_computers.dart';
-import '../swarm/swarm_home_root.dart';
-import '../swarm/swarm_message_link.dart';
-import '../swarm/swarm_page.dart';
-import '../swarm/swarm_project_page.dart' show swarmChatRoute;
-import '../swarm/swarm_thread.dart' show SwarmThreadFocus;
-import '../swarm/swarm_you_page.dart';
-import '../swarm/swarm_session.dart';
-import '../swarm/swarm_team.dart' show swarmAgentChat;
 import 'agent_home.dart';
 import 'approve_sign_in.dart';
 import 'browser_handoff.dart';
 import 'devices_page.dart';
 import 'exit_app.dart';
 import 'new_device_banner.dart';
-import 'phone_navigation.dart';
 import 'phone_shell_scope.dart';
-import 'phone_status.dart';
-import 'resume_agent.dart';
-import 'settings_page.dart' show openPhoneSettings;
-import 'voice_recorder.dart';
-import 'voice_input_scope.dart';
 import 'welcome/connect_code.dart';
 
 /// The signed-in phone app: one page stack, rooted in [AgentHome] — the terminal the phone opens
 /// on and stays on. Machines and Settings are pages pushed onto it, from the terminal's menu and
 /// from Find.
-///
-/// While Settings ▸ Experimental ▸ Swarm is on, the root is Swarm Home instead, with Harness (the
-/// same [AgentHome]) one tap away in its drawer ([SwarmHomeRoot], [SwarmHomeChoice]).
 ///
 /// ⚠️ **One stack, no tabs.** There were three — Agents, Machines, Settings — each with its own
 /// navigator under a bottom bar. The bar was hidden once the terminal became the home screen, and
@@ -64,31 +44,6 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   /// The nested navigator's own — see the note at the `HeroControllerScope` below.
   final _heroController = HeroController();
 
-  /// Swarm, while Settings ▸ Experimental ▸ Swarm is on: one session for the signed-in account,
-  /// read while the app is in front, for every page under this shell ([SwarmScope]).
-  late final SwarmHost _swarm;
-
-  /// The app's computers as Swarm's start screens read them; they hear only a computer coming,
-  /// going or changing state.
-  late final _swarmComputers = AppSwarmComputers(widget.notifier);
-
-  /// Keeps Swarm's picture files to the signed-in account: emptied on sign-out, Swarm off, another
-  /// account and a Swarm's removal.
-  late final SwarmAttachmentKeeper _swarmFiles;
-
-  /// What the stack's root shows: Swarm Home while Swarm is on, until the person goes to Harness.
-  late final _home = SwarmHomeChoice(_swarm.features);
-
-  /// The centre's Swarm notices: the app's own centre carries them; a stand-in that does not
-  /// (a test's) gets a silent one.
-  late final SwarmLinkChannel _links;
-
-  late final SwarmNotices _swarmNotices =
-      switch (widget.notifier.agentNotices.system) {
-        final SwarmNotices notices => notices,
-        _ => SilentSystemNotices(),
-      };
-
   @override
   void initState() {
     super.initState();
@@ -105,41 +60,16 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
     final notices = widget.notifier.agentNotices.system;
     notices.opened.addListener(_openNoticedAgent);
     notices.openedDevice.addListener(_openNoticedDevice);
-    final state = WidgetsBinding.instance.lifecycleState;
-    _swarm = SwarmHost(
-      accountId: () => widget.notifier.swarmAccountId,
-      accountReading: () => widget.notifier.accountReading,
-      account: widget.notifier,
-      request: widget.notifier.swarmRequest,
-      upload: widget.notifier.swarmUpload,
-      notices: _swarmNotices,
-      // Swarm Home's start screens: which computers the account has, and
-      // whether any is online.
-      computers: _swarmComputers,
-      // A chat's mic records voice messages with the terminal's recorder. Not
-      // in sample mode, which has no account to send them with.
-      voice: VoiceInputScope.maybeOf(context) == null
-          ? MicVoiceRecorder.new
-          : null,
-    )..foreground = _swarmFront = state == null || _inFront(state);
-    _swarmFiles = SwarmAttachmentKeeper(_swarm);
-    _swarmNotices.openedSwarm.addListener(_openNoticedSwarm);
-    // A message link (Desktop's Copy link to message): one that launched the
-    // app or came before sign-in waits on the native side until now.
-    _links = SwarmLinkChannel(_openLinkedMessage)..listen();
     // Install tap callbacks and read the launch payload even when no new notice
     // arrives. Checking permission does not ask for it.
     unawaited(noticesEnabled(notices));
     // A tap that launched the app is read before this shell exists, so its value is already set and
     // no listener will ever fire for it: take it once the navigator is up.
-    if (notices.opened.value != null ||
-        notices.openedDevice.value != null ||
-        _swarmNotices.openedSwarm.value != null) {
+    if (notices.opened.value != null || notices.openedDevice.value != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         _openNoticedAgent();
         _openNoticedDevice();
-        _openNoticedSwarm();
       });
     }
     // A computer's sign-in QR read before this phone was signed in: the sign-in was the way to
@@ -165,12 +95,6 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
     widget.notifier.agentNotices.system.openedDevice.removeListener(
       _openNoticedDevice,
     );
-    _swarmNotices.openedSwarm.removeListener(_openNoticedSwarm);
-    _links.close();
-    _home.dispose();
-    _swarmFiles.dispose();
-    _swarm.dispose();
-    _swarmComputers.dispose();
     _linkedMachineId.dispose();
     _openAgentRequest.dispose();
     _heroController.dispose();
@@ -210,9 +134,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   /// connecting at this point and [AgentHome] is already watching for exactly that — it holds
   /// whatever is on screen while the machine dials, then opens the first agent it reports.
   void _followLinkedMachine(String machineId) {
-    ++_navigationRequest;
     _linkedMachineId.value = machineId;
-    _home.showHarness();
   }
 
   /// An agent somebody picked — from search, the new-agent form, the attention list — for
@@ -227,20 +149,11 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   /// person had finished with. The stack is emptied back to its root instead and the root terminal
   /// switches agent, so there is never anything to go back to.
   void _openAgentAtHome(String machineId, String agentId) {
-    ++_navigationRequest;
     _navigator.currentState?.popUntil((route) => route.isFirst);
     // Reset first, so picking the agent already requested last time still notifies.
     _openAgentRequest.value = null;
     _openAgentRequest.value = (machineId: machineId, agentId: agentId);
-    _home.showHarness();
     setState(() => _canPop = false);
-  }
-
-  /// Swarm Home, from the terminal's Swarm mark or Find: back to the root.
-  void _showSwarm() {
-    ++_navigationRequest;
-    _navigator.currentState?.popUntil((route) => route.isFirst);
-    _home.showSwarm();
   }
 
   /// The computer whose sign-in QR (`harness login --qr`) the welcome screen read before this phone
@@ -271,53 +184,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
     final agent = opened.value;
     if (agent == null) return;
     opened.value = null;
-    if (_swarm.session case final session?) {
-      unawaited(_openSwarmAgent(session, agent.machineId, agent.agentId));
-    } else {
-      _openAgentAtHome(agent.machineId, agent.agentId);
-    }
-  }
-
-  // Shared by notification reads, explicit root changes and route transitions.
-  int _navigationRequest = 0;
-
-  /// With Swarm on: the agent's own chat with its person, as its Your Team
-  /// row opens it (Swarm v4, Desktop's `superTabAgentChat`), never a task's
-  /// chat or its project's channel. One in no Swarm, or whose chat this phone
-  /// does not list, opens its terminal, as with Swarm off.
-  Future<void> _openSwarmAgent(
-    SwarmSession session,
-    String machineId,
-    String harnessId,
-  ) async {
-    final request = ++_navigationRequest;
-    // Join the cold-start read; a background tap must see the agent's chat.
-    await session.inbox.refresh();
-    if (!mounted ||
-        _swarm.session != session ||
-        request != _navigationRequest) {
-      return;
-    }
-    for (final swarm in session.inbox.swarms) {
-      final snapshot = session.inbox.reader(swarm.id)?.snapshot;
-      if (snapshot == null) continue;
-      for (final agent in snapshot.agents) {
-        if (agent.machineId != machineId || agent.harnessId != harnessId) {
-          continue;
-        }
-        if (swarmAgentChat(snapshot, agent) case final chat?) {
-          _showNoticedChat((
-            swarmId: swarm.id,
-            conversationId: chat.id,
-            messageId: null,
-            decisionId: null,
-            threadId: null,
-          ));
-          return;
-        }
-      }
-    }
-    _openAgentAtHome(machineId, harnessId);
+    _openAgentAtHome(agent.machineId, agent.agentId);
   }
 
   /// A tapped "new device" notice: that device's page. One this phone has just been told of opens as
@@ -330,86 +197,6 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
     opened.value = null;
     unawaited(_showDevice(pub));
   }
-
-  /// A tapped Swarm notice: Swarm Home, and over it the conversation the notice was about — back
-  /// from it is the rest of what Swarm asks of the person.
-  void _openNoticedSwarm() {
-    final opened = _swarmNotices.openedSwarm;
-    final target = opened.value;
-    if (target == null || _navigator.currentState == null) return;
-    opened.value = null;
-    // Swarm off cancels its notices. A stale tap must not open a disabled UI.
-    if (_swarm.session == null) return;
-    _showNoticedChat(target);
-  }
-
-  /// A message link: Swarm Home, and over it the chat at that message. The
-  /// chat says "not open" for one the person cannot read, as for a notice.
-  void _openLinkedMessage(SwarmMessageLink link) {
-    if (!mounted) return;
-    if (_navigator.currentState == null) {
-      WidgetsBinding.instance.addPostFrameCallback(
-        (_) => _openLinkedMessage(link),
-      );
-      WidgetsBinding.instance.ensureVisualUpdate();
-      return;
-    }
-    if (_swarm.session == null) {
-      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-        const SnackBar(
-          content: Text('Turn on Swarm in Settings to open this link.'),
-        ),
-      );
-      return;
-    }
-    _showNoticedChat((
-      swarmId: link.tabId,
-      conversationId: link.conversationId,
-      messageId: link.messageId,
-      decisionId: null,
-      threadId: null,
-    ));
-  }
-
-  void _showNoticedChat(SwarmNoticeTarget target) {
-    ++_navigationRequest;
-    final navigator = _navigator.currentState;
-    if (navigator == null) return;
-    navigator.popUntil((route) => route.isFirst);
-    _home.showSwarm();
-    // A project's own chat opens as its project, on Swarm Home C's tabs.
-    unawaited(
-      navigator.push(
-        swarmChatRoute(
-          swarmId: target.swarmId,
-          conversationId: target.conversationId,
-          // A message only in its thread: the chat at the thread's root, the
-          // thread open over it at that message, as Activity opens a reply.
-          messageId: target.threadId ?? target.messageId,
-          threadId: target.threadId,
-          threadFocus: target.threadId != null && target.messageId != null
-              ? SwarmThreadFocus.message(target.messageId!)
-              : null,
-        ),
-      ),
-    );
-  }
-
-  /// In front of the person: resumed, or only covered for a moment (the app switcher, a call).
-  /// Whether Swarm was last told the app is in front ([didChangeAppLifecycleState]).
-  bool _swarmFront = true;
-
-  /// Back in front: what pushes showed while the app was away is told already
-  /// (task #2905), so the reads that start now post none of it again.
-  Future<void> _swarmToFront() async {
-    final shown = await widget.notifier.pushesShown();
-    if (!mounted || !_swarmFront) return;
-    _swarm.toldElsewhere(shown);
-    _swarm.foreground = true;
-  }
-
-  static bool _inFront(AppLifecycleState state) =>
-      state == AppLifecycleState.resumed || state == AppLifecycleState.inactive;
 
   Future<void> _showDevice(String key) async {
     final navigator = _navigator.currentState;
@@ -437,14 +224,6 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   /// who was looking straight at it, with a network that would have answered at once.
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // Swarm is read only in front of the person.
-    if (!_inFront(state)) {
-      _swarmFront = false;
-      _swarm.foreground = false;
-    } else if (!_swarmFront) {
-      _swarmFront = true;
-      unawaited(_swarmToFront());
-    }
     if (state == AppLifecycleState.inactive) {
       // The app switcher coming up is `inactive`, and a swipe there can end the app without it
       // ever reaching `paused` — so the machine cache is written here as well. See
@@ -511,16 +290,10 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   /// with a route under it pops that route instead. `pop`, not `maybePop`: this shell's own
   /// [PopScope] is what refuses the pop, and asking the route again would land straight back here.
   Future<void> _back() async {
-    ++_navigationRequest;
     final handled = await _navigator.currentState?.maybePop() ?? false;
     if (!mounted) return;
     _syncCanPop();
     if (handled) return;
-    // Harness, reached from Swarm Home's drawer: back is Swarm Home, the app's Home.
-    if (_home.harnessOverSwarm) {
-      _home.showSwarm();
-      return;
-    }
     if (!confirmsExitOnBack) return;
     final route = ModalRoute.of(context);
     if (route != null && !route.isFirst) {
@@ -532,7 +305,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   }
 
   /// The pages on the stack that count on being rebuilt from here — see [_LeansOnShell].
-  late final _leaning = _LeansOnShell(() => ++_navigationRequest);
+  late final _leaning = _LeansOnShell();
 
   /// The page stack, made once and handed through every rebuild of the shell untouched, so that
   /// nothing on the stack is rebuilt from here unless a page there needs it ([build]).
@@ -540,48 +313,31 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   /// ⚠️ **Not made afresh in [build], and it used to be.** The shell rebuilds itself whenever a
   /// push or pop changes whether it can go back ([_syncCanPop]) — that is, on every push, during
   /// the push's own animation. A fresh stack each time told every route on it that the world had
-  /// changed, so opening a project or a chat built Swarm Home again under the page sliding in.
+  /// changed, so opening a page built the home screen again under the page sliding in.
   late final Widget _stack = _pages();
 
   /// The page stack. A fresh widget each call — what makes the [Navigator] tell every route on it
   /// that the world may have changed (`Route.changedExternalState`), and so rebuild every page.
-  // Under [SwarmScope], so every page on the stack can reach the account's Swarm.
-  Widget _pages() => SwarmScope(
-    notifier: _swarm,
-    child: HeroControllerScope(
-      controller: _heroController,
-      child: Navigator(
-        key: _navigator,
-        // ⚠️ The controller goes in the SCOPE ONLY, never also in `observers`.
-        // `NavigatorState._updateEffectiveObservers` appends the scope's controller
-        // to `widget.observers` itself, so listing it here registers it twice and
-        // trips "A HeroController can not be shared by multiple Navigators" — which
-        // reads like a sharing bug and is really a double-subscription by one
-        // navigator.
-        observers: [_leaning],
-        // ⚠️ **The same kind of route as every page pushed over it ([phoneRoute]).** The root was
-        // a `MaterialPageRoute` under Cupertino pages, and the two hand their transition to each
-        // other: each push and pop changed the shape of the tree around the root's page, so
-        // Swarm Home was taken out and put back — and built again — as a project or chat slid in.
-        onGenerateRoute: (_) => CupertinoPageRoute<void>(
-          builder: (_) => SwarmHomeRoot(
-            choice: _home,
-            harness: AgentHome(
-              notifier: widget.notifier,
-              openMachineId: _linkedMachineId,
-              openAgent: _openAgentRequest,
-            ),
-            swarm: (_) => SwarmYouScope(
-              onSettings: (context) =>
-                  openPhoneSettings(context, widget.notifier, swarm: true),
-              // You's Notifications, not in the sample, as Settings leaves
-              // it out there: its notices go nowhere.
-              notices: SampleMode.ofNotifier(widget.notifier) == null
-                  ? widget.notifier.agentNotices.system
-                  : null,
-              child: const SwarmPage(),
-            ),
-          ),
+  Widget _pages() => HeroControllerScope(
+    controller: _heroController,
+    child: Navigator(
+      key: _navigator,
+      // ⚠️ The controller goes in the SCOPE ONLY, never also in `observers`.
+      // `NavigatorState._updateEffectiveObservers` appends the scope's controller
+      // to `widget.observers` itself, so listing it here registers it twice and
+      // trips "A HeroController can not be shared by multiple Navigators" — which
+      // reads like a sharing bug and is really a double-subscription by one
+      // navigator.
+      observers: [_leaning],
+      // ⚠️ **The same kind of route as every page pushed over it ([phoneRoute]).** The root was
+      // a `MaterialPageRoute` under Cupertino pages, and the two hand their transition to each
+      // other: each push and pop changed the shape of the tree around the root's page, so the
+      // home screen was taken out and put back — and built again — as a page slid in.
+      onGenerateRoute: (_) => CupertinoPageRoute<void>(
+        builder: (_) => AgentHome(
+          notifier: widget.notifier,
+          openMachineId: _linkedMachineId,
+          openAgent: _openAgentRequest,
         ),
       ),
     ),
@@ -592,27 +348,13 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
     return PhoneShellScope(
       onMachineLinked: _followLinkedMachine,
       onOpenAgent: _openAgentAtHome,
-      onShowSwarm: _showSwarm,
-      home: _home,
-      canOpenMachine: (machineId) =>
-          phoneMachineOpensTerminals(widget.notifier.machineStates[machineId]),
-      agentStopped: (machineId, agentId) =>
-          phoneAgentStopped(widget.notifier, machineId, agentId),
-      onResumeAgent: (machineId, agentId) =>
-          phoneResumeAgent(widget.notifier, machineId, agentId),
-      // Rebuilt when the root switches, so back from Harness can reach Swarm Home.
-      child: ListenableBuilder(
-        listenable: _home,
-        builder: (context, child) => PopScope<Object?>(
-          // False while the stack has somewhere to go back to, so the gesture reaches [_handleBack]
-          // instead of leaving the app. True at its root: the press then belongs to the system —
-          // except on Android, where the root asks before the app is left ([confirmExitApp]), so
-          // every press is the shell's — and except at Harness over Swarm Home, which back leaves
-          // for Swarm Home.
-          canPop: !confirmsExitOnBack && !_canPop && !_home.harnessOverSwarm,
-          onPopInvokedWithResult: _handleBack,
-          child: child!,
-        ),
+      child: PopScope<Object?>(
+        // False while the stack has somewhere to go back to, so the gesture reaches [_handleBack]
+        // instead of leaving the app. True at its root: the press then belongs to the system —
+        // except on Android, where the root asks before the app is left ([confirmExitApp]), so
+        // every press is the shell's.
+        canPop: !confirmsExitOnBack && !_canPop,
+        onPopInvokedWithResult: _handleBack,
         child: NotificationListener<NavigationNotification>(
           onNotification: _onNavigation,
           child: Scaffold(
@@ -630,10 +372,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
             // burst. The home screen listens to the notifier for itself ([AgentHome]), so at the
             // root the stack is handed through untouched. A page PUSHED over it may not listen —
             // it may read the notifier in `build` and count on being rebuilt — so while one is up
-            // the stack is rebuilt on every tick exactly as before, unless it was pushed as one
-            // that listens for itself (Swarm's project and chat pages, [phoneRoute]). Opening a
-            // project or a chat then rebuilds nothing under it: on Tony's iPhone 14 those pushes
-            // were the slowest frames of the app (20–42 ms of layout and paint, 2026-10-27).
+            // the stack is rebuilt on every tick exactly as before.
             body: ListenableBuilder(
               listenable: widget.notifier,
               child: _stack,
@@ -675,18 +414,12 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   }
 }
 
-/// The pages pushed over the stack's root that may read the app in `build` without listening to
-/// it, and so count on the shell rebuilding the stack on every tick: every pushed page but those
-/// that listen for themselves ([phoneRouteListensForItself]). The root listens for itself.
+/// The pages pushed over the stack's root, which may read the app in `build` without listening to
+/// it, and so count on the shell rebuilding the stack on every tick. The root listens for itself.
 ///
 /// Told by the [Navigator] of every route that comes and goes. Read by the shell on each tick; it
 /// rebuilds nothing by itself.
 class _LeansOnShell extends NavigatorObserver {
-  _LeansOnShell(this.onNavigation);
-
-  /// A newer route wins over notification navigation still waiting on a read.
-  final VoidCallback onNavigation;
-
   final _pushed = <Route<Object?>>{};
 
   /// A page that needs the stack rebuilt from above is on it.
@@ -694,31 +427,26 @@ class _LeansOnShell extends NavigatorObserver {
 
   void _add(Route<Object?>? route) {
     if (route == null || route.isFirst) return;
-    if (phoneRouteListensForItself(route)) return;
     _pushed.add(route);
   }
 
   @override
   void didPush(Route<Object?> route, Route<Object?>? previousRoute) {
-    onNavigation();
     _add(route);
   }
 
   @override
   void didPop(Route<Object?> route, Route<Object?>? previousRoute) {
-    onNavigation();
     _pushed.remove(route);
   }
 
   @override
   void didRemove(Route<Object?> route, Route<Object?>? previousRoute) {
-    onNavigation();
     _pushed.remove(route);
   }
 
   @override
   void didReplace({Route<Object?>? newRoute, Route<Object?>? oldRoute}) {
-    onNavigation();
     _pushed.remove(oldRoute);
     _add(newRoute);
   }

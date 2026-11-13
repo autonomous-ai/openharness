@@ -247,10 +247,10 @@ class _ComputerGithubPageState extends State<ComputerGithubPage> {
                       say(
                         _state?['missing'] == true
                             ? 'Sign $_name in to GitHub so its agents can clone private repositories, '
-                                  'push and open pull requests — with a Swarm too. The GitHub CLI is '
+                                  'push and open pull requests. The GitHub CLI is '
                                   'not on it: signing in installs it first.'
                             : 'Sign $_name in to GitHub so its agents can clone private repositories, '
-                                  'push and open pull requests — with a Swarm too.',
+                                  'push and open pull requests.',
                       ),
                       if (failed != null) ...[
                         const SizedBox(height: 8),

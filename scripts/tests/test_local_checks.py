@@ -400,7 +400,7 @@ class LocalRunRuleTests(unittest.TestCase):
             with mock.patch.object(checks.sys, "platform", name):
                 self.assertEqual(checks.host_platform(), expected)
 
-    # Every Vitest suite sizes its own workers to half the cores its run may use: the machine's, or its Swarm agent's
+    # Every Vitest suite sizes its own workers to half the cores its run may use: the machine's, or its agent's
     # share (cli/src/testing/suiteWorkers.ts). A --maxWorkers from here would override that share.
     def test_run_adds_only_the_desktop_budget(self):
         with mock.patch.object(checks.os, "cpu_count", return_value=8):
