@@ -24,7 +24,7 @@ function devicesPort() {
     card: record('card'), desk: record('desk'), swarms: record('swarms'), swarmCards: record('swarmCards'), swarmCardRecap: record('swarmCardRecap'), unread: record('unread'), appFocus: record('appFocus'),
     seen: record('seen'), settings: record('settings'), windowFocus: record('windowFocus'), windowReply: record('windowReply'),
     voiceReply: record('voiceReply'), windowGone: record('windowGone'), scroll: record('scroll'), engines: record('engines'),
-    commanders: record('commanders'),
+    commanders: record('commanders'), observed: vi.fn(() => false),
     routeTask: vi.fn(async (text: string) => ({ agentId: 'a1', machineId: 'm1', name: 'api', confidence: 1, reason: text, candidates: [], weighed: 1, machines: 1, via: 'model' })),
     routeSend: vi.fn(async () => ({ ok: true as const })),
     stepFocus: vi.fn(async (): Promise<{ machineId: string; agentId: string } | 'no_agents'> => ({ machineId: 'm1', agentId: 'a2' })),

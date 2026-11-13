@@ -60,7 +60,8 @@ const isFrame = (value: unknown): value is { type: string; payload: Record<strin
 export function createDevicesLink(deps: DevicesLinkDeps) {
   const { core } = deps
   const log = deps.log ?? ((line: string) => console.warn(line))
-  const event = (kind: string, payload: Record<string, unknown> = {}): void => { deps.notify({ type: 'service_event', payload: { ...payload, kind } }) }
+  /** A notice for the devices; false when their process is not connected to hear it. */
+  const event = (kind: string, payload: Record<string, unknown> = {}): boolean => deps.notify({ type: 'service_event', payload: { ...payload, kind } })
   /** An answer from the devices, or the port's fallback when there was none (down, slow, or failed). */
   const answered = <T>(answer: Record<string, unknown>, member: keyof typeof DEVICES_FALLBACKS, read: (answer: Record<string, unknown>) => T): T =>
     typeof answer.error === 'string' ? fallback<T>(member) : read(answer)
@@ -88,6 +89,7 @@ export function createDevicesLink(deps: DevicesLinkDeps) {
     scroll: (phase, dy, velocity) => event('scroll', { phase, dy, velocity }),
     engines: (engines) => event('engines', { engines }),
     commanders: (connected) => event('commanders', { connected }),
+    observed: (observed) => event('observed', { event: observed }),
     // Their own process: the master stops it, and a core that restarts leaves it running with the dial.
     stop: async () => {},
   }

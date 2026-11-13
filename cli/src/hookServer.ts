@@ -119,6 +119,9 @@ export interface HookServerHandlers {
     toolName: string
     input: unknown
   }) => void
+  /** A hook event from a session outside any pane (core/observedHook.ts): checked and handed to the devices, or
+   *  dropped. Never bound to an agent, so nothing about a pane or a process is looked up for it. */
+  onObserved?: (body: unknown) => 'ok' | 'invalid' | 'dropped'
   onTurnStop?: (body: {
     sessionId: string
     status?: string
@@ -988,6 +991,18 @@ export function startHookServer(
           else handlers.onTurnStop?.(stop)
         }
         json(200, { ok: true })
+        return
+      }
+
+      if (req.method === 'POST' && url === '/api/hook/observed') {
+        if (!hookOk) { json(401, { error: 'UNAUTHORIZED' }); return }
+        // 4 KB: the hook sends a few short fields and eight hints of 64 characters at most. readBody gives an
+        // oversized body back empty, which is no JSON.
+        let body: unknown
+        try { body = JSON.parse(await readBody(req, 4096)) } catch { json(400, { error: 'bad json' }); return }
+        const outcome = handlers.onObserved?.(body) ?? 'dropped'
+        if (outcome === 'invalid') json(400, { error: 'invalid hook body' })
+        else json(200, outcome === 'ok' ? { ok: true } : { dropped: true })
         return
       }
 
