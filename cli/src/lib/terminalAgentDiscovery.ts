@@ -57,8 +57,12 @@ export interface DiscoveredTerminalAgent {
    * Backend-agnostic for the same reason `gateway` is: it is a fact about the process, not the pane.
    */
   grid?: GridAssignment | null
-  /** Processes under this one that an older build recorded as this pane's engine (Hermes' shared gateway,
-   *  processTable.ts `hermesGatewaysUnder`): a row holding one of them is this agent, not one it replaces. */
+  /**
+   * Processes a row may hold in this one's place: its ancestors inside its pane, root included, nearest first (a
+   * wrapper Harness bound that `exec`ed into another name and started this engine below it, #4259), then the
+   * processes under it an older build recorded as this pane's engine (Hermes' shared gateway, processTable.ts
+   * `hermesGatewaysUnder`). A row holding one of them is this agent, re-recorded to this process, not one it replaces.
+   */
   formerProcesses?: ProcessIdentity[]
   /** Sanitized launch markers; classified after the binding pass, never awaited by it. */
   gridProcess?: GridAssignmentProcess
@@ -106,12 +110,18 @@ export interface TerminalAgentProbe {
   targets: TerminalTargetProbe[]
   agents: DiscoveredTerminalAgent[]
   ambiguousPlacements: Set<string>
+  /** Every process in each pane's tree in this snapshot, by `terminalPlacementKey`; none when no table was read. */
+  paneProcesses?: ReadonlyMap<string, readonly ProcessIdentity[]>
 }
 
 interface RootOwner {
   agent: Omit<DiscoveredTerminalAgent, 'runtimes' | 'primaryRuntimeKey'> | null
   depth: number
   ambiguous: boolean
+  /** Each row the walk visited, in walk order, whatever the pane holds. */
+  processes: ProcessRow[]
+  /** The chosen engine's parents inside the pane, nearest first, the root last; none without an agent. */
+  ancestors: ProcessIdentity[]
 }
 
 function childrenByParent(rows: readonly ProcessRow[]): Map<number, ProcessRow[]> {
@@ -153,11 +163,13 @@ function rootOwner(
 ): RootOwner {
   const queue: Array<{ pid: number; depth: number }> = [{ pid: root.rootPid, depth: 0 }]
   const matches: Array<{ row: ProcessRow; engine: AgentEngine; depth: number; score: number }> = []
+  const processes: ProcessRow[] = []
   let unresolvedAliasDepth = Number.POSITIVE_INFINITY
 
   while (queue.length) {
     const current = queue.shift()!
     const row = byPid.get(current.pid)
+    if (row) processes.push(row)
     if (row && !excluded.has(row.pid)) {
       for (const engine of PROCESS_ENGINES) {
         const score = engineProcessMatchScore(row, engine, ownership)
@@ -175,19 +187,29 @@ function rootOwner(
     for (const child of children.get(current.pid) ?? []) queue.push({ pid: child.pid, depth: current.depth + 1 })
   }
 
-  if (!matches.length) return { agent: null, depth: Number.POSITIVE_INFINITY, ambiguous: Number.isFinite(unresolvedAliasDepth) }
+  if (!matches.length) {
+    return { agent: null, depth: Number.POSITIVE_INFINITY, ambiguous: Number.isFinite(unresolvedAliasDepth), processes, ancestors: [] }
+  }
   const shallowest = Math.min(...matches.map((match) => match.depth))
-  if (unresolvedAliasDepth <= shallowest) return { agent: null, depth: shallowest, ambiguous: true }
+  if (unresolvedAliasDepth <= shallowest) return { agent: null, depth: shallowest, ambiguous: true, processes, ancestors: [] }
   const atDepth = matches.filter((match) => match.depth === shallowest)
   const strongest = Math.max(...atDepth.map((match) => match.score))
   const finalists = atDepth.filter((match) => match.score === strongest)
   const unique = new Map(finalists.map((match) => [`${match.row.pid}:${match.engine}`, match]))
-  if (unique.size !== 1) return { agent: null, depth: shallowest, ambiguous: true }
+  if (unique.size !== 1) return { agent: null, depth: shallowest, ambiguous: true, processes, ancestors: [] }
 
   const [{ row, engine }] = [...unique.values()]
+  // The engine is `shallowest` steps below the root, so that many parents end at the root; a parent the table lacks
+  // (it exited between reads) ends the chain there.
+  const ancestors: ProcessIdentity[] = []
+  for (let parent = byPid.get(row.parentPid); parent && ancestors.length < shallowest; parent = byPid.get(parent.parentPid)) {
+    ancestors.push(processIdentityOf(parent))
+  }
   return {
     depth: shallowest,
     ambiguous: false,
+    processes,
+    ancestors,
     agent: {
       engine,
       cwd: root.cwd,
@@ -211,7 +233,7 @@ export function discoverTerminalAgentsFromSnapshot(
   backendOrder: readonly string[],
   hints: ReadonlyMap<string, AgentEngine> = new Map(),
   ownership?: AgentCommandOwnershipSnapshot,
-): { agents: DiscoveredTerminalAgent[]; ambiguousPlacements: Set<string> } {
+): { agents: DiscoveredTerminalAgent[]; ambiguousPlacements: Set<string>; paneProcesses: Map<string, ProcessIdentity[]> } {
   // Every pane belongs to this same snapshot. Build the process indexes once per scan, rather
   // than copying the whole machine's process table for every persistent pane. Keep them local:
   // the next scan must see exits, execs and PID reuse without retaining stale process identities.
@@ -220,15 +242,17 @@ export function discoverTerminalAgentsFromSnapshot(
   const excluded = daemonDescendants(children, daemonPid, new Set(roots.map((root) => root.rootPid)))
   const grouped = new Map<string, {
     agent: Omit<DiscoveredTerminalAgent, 'runtimes' | 'primaryRuntimeKey'>
-    observations: Array<{ runtime: TerminalRuntimeRef; depth: number; cwd: string }>
+    observations: Array<{ runtime: TerminalRuntimeRef; depth: number; cwd: string; ancestors: ProcessIdentity[] }>
   }>()
   const ambiguousPlacements = new Set<string>()
+  const paneProcesses = new Map<string, ProcessIdentity[]>()
 
   for (const root of roots) {
     // Which engine owns each command on PATH, read only once a pane is there to own: walking PATH for every
     // engine was most of an idle core's CPU, every pass, with no pane at all (#3880).
     ownership ??= agentCommandOwnershipSnapshot()
     const owner = rootOwner(root, byPid, children, excluded, ownership, hints.get(terminalRouteKey(root.runtime)))
+    paneProcesses.set(terminalPlacementKey(root.runtime), owner.processes)
     if (owner.ambiguous) {
       ambiguousPlacements.add(terminalPlacementKey(root.runtime))
       continue
@@ -236,13 +260,18 @@ export function discoverTerminalAgentsFromSnapshot(
     if (!owner.agent) continue
     const key = processIdentityKey(owner.agent.engine, owner.agent.processIdentity)
     const group = grouped.get(key) ?? { agent: owner.agent, observations: [] }
-    group.observations.push({ runtime: root.runtime, depth: owner.depth, cwd: root.cwd })
+    group.observations.push({ runtime: root.runtime, depth: owner.depth, cwd: root.cwd, ancestors: owner.ancestors })
     grouped.set(key, group)
   }
 
   const agents = [...grouped.values()].map(({ agent, observations }): DiscoveredTerminalAgent => {
-    const byPlacement = new Map<string, { runtime: TerminalRuntimeRef; depth: number; cwd: string }>()
+    const byPlacement = new Map<string, (typeof observations)[number]>()
     for (const observation of observations) byPlacement.set(terminalPlacementKey(observation.runtime), observation)
+    // Every pane that sees this engine sees the same parent chain, each to its own root: the union is the longest.
+    const former = new Map<number, ProcessIdentity>()
+    for (const observation of observations) {
+      for (const ancestor of observation.ancestors) if (!former.has(ancestor.pid)) former.set(ancestor.pid, ancestor)
+    }
     const ordered = [...byPlacement.values()].sort((a, b) => {
       if (a.depth !== b.depth) return a.depth - b.depth
       const ar = runtimeRank(a.runtime, backendOrder)
@@ -255,9 +284,10 @@ export function discoverTerminalAgentsFromSnapshot(
       cwd: ordered[0].cwd,
       runtimes: ordered.map((observation) => observation.runtime),
       primaryRuntimeKey: terminalRouteKey(ordered[0].runtime),
+      ...(former.size ? { formerProcesses: [...former.values()] } : {}),
     }
   })
-  return { agents, ambiguousPlacements }
+  return { agents, ambiguousPlacements, paneProcesses }
 }
 
 /** Whether the last pass saw a pane: the next one then reads the process table beside the panes. */
@@ -319,8 +349,8 @@ export async function probeTerminalAgents(
     // And the DSH it was created as — same read, so a pane the daemon did not create is labelled too.
     agent.dsh = await probeDsh(agent.processIdentity)
     if (agent.engine === 'hermes') {
-      const former = hermesGatewaysUnder(enrichedRows, agent.processIdentity)
-      if (former.length) agent.formerProcesses = former
+      const gateways = hermesGatewaysUnder(enrichedRows, agent.processIdentity)
+      if (gateways.length) agent.formerProcesses = [...agent.formerProcesses ?? [], ...gateways]
     }
   }))
   return { processTableAvailable: true, targets, ...discovered }
