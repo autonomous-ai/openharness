@@ -25,7 +25,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { AgentBrowserFrame } from '../lib/agentFrame.js'
 import { PRODUCT_USAGE_AGENT_BROWSER_METRICS, type ProductUsageMetric } from '../lib/productUsageContract.js'
-import type { AgentBrowserPort, CoreApi } from './api.js'
+import { agentBrowserStreamCommand, type AgentBrowserPort, type CoreApi } from './api.js'
 import type { ServiceFrame } from './serviceLinks.js'
 
 type Payload = Record<string, unknown>
@@ -46,11 +46,6 @@ function browserState(value: unknown): AgentBrowserFrame | null {
 /** A command's parents' pids, as `harness browser` sends them; null for anything else. */
 function pidsOf(value: unknown): number[] | null {
   return Array.isArray(value) && value.every(pid => Number.isSafeInteger(pid) && pid > 0) ? value as number[] : null
-}
-
-/** A command line the process gave, or null for anything else: the core starts it as it is. */
-function argvOf(value: unknown): string[] | null {
-  return Array.isArray(value) && value.length > 0 && value.every(part => typeof part === 'string' && part) ? value as string[] : null
 }
 
 export function createAgentBrowserLink(deps: {
@@ -114,7 +109,8 @@ export function createAgentBrowserLink(deps: {
     if (query === 'browser_state') {
       const agentId = typeof payload.agentId === 'string' ? payload.agentId : ''
       const state = payload.state === undefined ? undefined : browserState(payload.state)
-      const command = payload.command === undefined ? undefined : argvOf(payload.command)
+      // The exec into its ready browser and no other command line: the core starts it for a viewer (core/api.ts).
+      const command = payload.command === undefined ? undefined : agentBrowserStreamCommand(payload.command)
       if (!agentId || state === null || command === null) return INVALID
       if (!attached.has(agentId)) return { ok: true }
       if (state) states.set(agentId, state)

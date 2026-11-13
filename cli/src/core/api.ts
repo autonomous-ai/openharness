@@ -1105,6 +1105,37 @@ export interface AgentCleanupPort {
 /** What the core gets when the cleanup fails: nothing told, and every harness left open, as before it. */
 export const AGENT_CLEANUP_FALLBACKS: PortFallbacks<AgentCleanupPort> = { closed: undefined, typed: undefined, stop: undefined }
 
+/** A browser's container is named this and its profile (services/agentBrowser/containers.ts `NAME`, which a file under a
+ *  service's folder keeps for itself; services/agentBrowser.spec.ts holds the command it builds to this one). */
+const AGENT_BROWSER_CONTAINER = 'harness-browser-'
+/** What a viewer's bytes are piped through inside a browser's container: to Xvnc, which listens on the container's own
+ *  loopback and publishes no port (services/agentBrowser.ts). */
+export const AGENT_BROWSER_VNC_PIPE: readonly string[] = ['socat', 'STDIO', 'TCP:127.0.0.1:5900']
+/** Podman by its whole path, on a Mac, Linux or Windows; a connection's name; a profile, which is an agent's id or a UUID. */
+const BROWSER_PODMAN = /^(?:\/|[A-Za-z]:[\\/])(?:[^\0-\x1f]*[\\/])?podman(?:\.[A-Za-z0-9]{1,4})?$/
+const BROWSER_CONNECTION = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/
+const BROWSER_PROFILE = /^[A-Za-z0-9_-]{1,160}$/
+/**
+ * The one command the core starts for the agent browser, a viewer's pipe into a ready browser (core/browserStreams.ts):
+ * Podman by its whole path, on a named connection or the person's default, `exec -i` into a container this build names,
+ * and the pipe to its screen, with nothing before, between or after. Null for any other command line: the core starts
+ * none a component hands it (cli/AGENTS.md, Protect the core). Until the audit of 2026-11-12 it started whatever argv
+ * the agent browser's process gave it, so a path or a name that process took from Podman's output, its state file or a
+ * page's doing could have become a command in the process that types into every terminal.
+ */
+export function agentBrowserStreamCommand(value: unknown): string[] | null {
+  if (!Array.isArray(value) || !value.every((part) => typeof part === 'string')) return null
+  const [file = '', ...rest] = value as string[]
+  const named = rest[0] === '--connection'
+  const exec = named ? rest.slice(2) : rest
+  const container = exec[2] ?? ''
+  return BROWSER_PODMAN.test(file) && !file.split(/[\\/]/).includes('..') && (!named || BROWSER_CONNECTION.test(rest[1] ?? ''))
+    && exec.length === 3 + AGENT_BROWSER_VNC_PIPE.length && exec[0] === 'exec' && exec[1] === '-i'
+    && container.startsWith(AGENT_BROWSER_CONTAINER) && BROWSER_PROFILE.test(container.slice(AGENT_BROWSER_CONTAINER.length))
+    && AGENT_BROWSER_VNC_PIPE.every((part, index) => exec[3 + index] === part)
+    ? value as string[] : null
+}
+
 /**
  * The core's calls into the agent browser (services/agentBrowser.ts): what happens to an agent whose Browser is on, and
  * its browser's state for the agent's frame, which the core reads in line (from what the service last said, when it
@@ -1122,7 +1153,8 @@ export interface AgentBrowserPort {
   moved(from: string, to: RegisteredSession, on: boolean): void
   frameContext(agentId: string): AgentBrowserFrame | undefined
   /** How the core reaches a ready browser's screen for a viewer (core/browserStreams.ts): Podman's path, then
-   *  `exec -i harness-browser-<profile> socat STDIO TCP:127.0.0.1:5900`. Read in line, as `frameContext` is. */
+   *  `exec -i harness-browser-<profile> socat STDIO TCP:127.0.0.1:5900`, which is all the core starts
+   *  (`agentBrowserStreamCommand`). Read in line, as `frameContext` is. */
   streamCommand(agentId: string): { argv: string[] } | { error: 'NO_BROWSER' | 'NOT_READY' }
   /** [listener] hears an agent whose browser stops or goes: its viewers' streams end with it. */
   onCloseViewers(listener: (agentId: string) => void): void

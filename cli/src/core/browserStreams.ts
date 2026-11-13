@@ -18,7 +18,7 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { mayOpenBrowser, type AgentBrowserPort, type Asker, type BrowserRoute } from './api.js'
+import { agentBrowserStreamCommand, mayOpenBrowser, type AgentBrowserPort, type Asker, type BrowserRoute } from './api.js'
 import { RfbShaper, type StreamProfile } from './rfbShaper.js'
 import { oneShotParentEnv } from '../lib/loginShellEnv.js'
 import { sid } from '../lib/log.js'
@@ -111,8 +111,12 @@ export class BrowserStreamManager {
     const agentId = typeof payload.agentId === 'string' ? payload.agentId : ''
     const command = agentId ? this.deps.command(agentId) : { error: 'NO_BROWSER' as const }
     if ('error' in command) return refuse(command.error)
+    // The exec into that browser's container and no other command line, wherever the port's answer came from: the core
+    // starts none a component hands it (core/api.ts `agentBrowserStreamCommand`).
+    const argv = agentBrowserStreamCommand(command.argv)
+    if (!argv) return refuse('NOT_READY')
     if ([...this.streams.values()].filter(stream => stream.agentId === agentId).length >= BROWSER_VIEWERS_MAX) return refuse('VIEWER_LIMIT')
-    const [file, ...args] = command.argv
+    const [file, ...args] = argv as [string, ...string[]]
     // The daemon was started by launchd or systemd: the login shell's environment is what the person's own `podman`
     // sees (its machine connections), as every other Podman call has (services/agentBrowser/podman.ts).
     const child = spawn(file, args, { env: oneShotParentEnv(), stdio: 'pipe', ...ownProcessGroup() })

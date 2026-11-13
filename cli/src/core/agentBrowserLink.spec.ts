@@ -98,8 +98,12 @@ describe('the agent browser in its own process, as the core sees it', () => {
     link.port.attached(row('a1'))
     await link.answer('browser_state', { agentId: 'a1', state: { state: 'starting' } })
     expect(link.port.streamCommand('a1')).toEqual({ error: 'NOT_READY' })
-    // Ready without a command it can run is not ready.
-    expect(await link.answer('browser_state', { agentId: 'a1', state: { state: 'ready' }, command: [1] })).toEqual({ error: 'INVALID_REQUEST' })
+    // Ready without a command it can run is not ready. And the one command the core starts is the exec into that browser's
+    // container (core/api.ts `agentBrowserStreamCommand`): any other the process names is refused, and not kept.
+    for (const command of [[1], ['/bin/sh', '-c', 'true'], [...argv, '--privileged'], ['/opt/podman/bin/podman', 'run', '--rm', 'evil']]) {
+      expect(await link.answer('browser_state', { agentId: 'a1', state: { state: 'ready' }, command })).toEqual({ error: 'INVALID_REQUEST' })
+    }
+    expect(link.port.streamCommand('a1')).toEqual({ error: 'NOT_READY' })
     await link.answer('browser_state', { agentId: 'a1', state: { state: 'ready' } })
     expect(link.port.streamCommand('a1')).toEqual({ error: 'NOT_READY' })
     await link.answer('browser_state', { agentId: 'a1', state: { state: 'ready' }, command: argv })
