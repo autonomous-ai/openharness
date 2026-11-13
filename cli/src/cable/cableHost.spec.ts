@@ -732,6 +732,18 @@ describe('the dial with no window: this computer\'s agents', () => {
     ] })
   })
 
+  it('no window: the reader\'s Buddy running here is not on the list, so its harness id stays on this computer', async () => {
+    const host = new DaemonCableHost(wiring({ sessions }), fleetOf([]))
+    // The Buddy's Claude Code session, also heard from outside: the registry still knows it is h1, so it is not listed as observed.
+    host.setRegistry(new HostRegistry([host.harness, observed([observedAgent({ id: 'o2', sessionId: 's-h1' })])]))
+    host.setSwarmCards([{ id: 'st1', name: 'web', count: 1, leads: [{ id: 'l1', projectId: 'p1', project: 'web', engine: 'claude', owner: '',
+      local: '', state: 'work', order: 0, buddies: true, buddy: { chatId: 'c1', name: "me's Buddy", engine: 'claude', cells: 0, color: '', live: true, local: 'h1' } }] }])
+    host.setSwarms(null)
+    expect(await host.listAgentSnapshot()).toEqual({ tab: '', total: 1, view: 'machine', agents: [
+      { id: 'h2', name: 'h2', engine: 'codex', machineId: 'mine', machine: 'MacbookPro.local', host: 'harness', caps: 'sva' },
+    ] })
+  })
+
   it('with a window and a registry: the tab, as today', async () => {
     const host = new DaemonCableHost(wiring({ sessions }), fleetOf([]))
     host.setRegistry(new HostRegistry([host.harness, observed([observedAgent({ id: 'o1' })])]))
