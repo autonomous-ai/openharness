@@ -295,18 +295,48 @@ branch, tags, open PRs and existing branches are preserved. For a read-only prev
 run `python3 scripts/prune-finished-caches.py --repo OWNER/REPO --pull-request N`
 or use `--deleted-branch NAME`; `--apply` performs the selected cleanup.
 
+### Who can sign and publish Desktop
+
+`release-desktop.yml` builds on any ref with no secret and no cloud identity (`build-macos`,
+`build-linux`, `build-windows`) and hands its packages on as workflow artifacts. Every job that
+signs or writes the bucket (`preflight`, `sign-macos`, `sign-windows`, `upload-linux`,
+`upload-windows`, `publish`, `candidate`, `cleanup`, `expire-candidates`, `publication-test`) runs
+in the `release` environment. The workflow's own conditions are a branch's text, so these settings
+are what enforce it (#4434):
+
+1. **GitHub, environment `release`:** deployment branches and tags limited to branch `main` and tags
+   `v*_desktop` and `v*_cli`, with no required reviewers.
+2. **GitHub, secrets:** the Apple secrets (`APPLE_CERTIFICATE_BASE64`, `APPLE_CERTIFICATE_PASSWORD`,
+   `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `KEYCHAIN_PASSWORD`)
+   are `release` environment secrets, not repository secrets.
+3. **GitHub, tag ruleset:** creating, moving or deleting `v*_desktop` and `v*_cli` tags is limited to
+   the Repository admin and Maintain roles.
+4. **Google Cloud:** only the `release` environment can write `harness/desktop/` (the live
+   `metadata.json`, the versioned `X.Y.Z/` paths and the `.ci/`, `.ci-preflight/` and
+   `.candidate-check/` scratch paths) and `harness/desktop-candidates/`. The pool provider maps
+   `attribute.environment=assertion.environment`; a Desktop publish service account holds write on
+   those two prefixes, and only `principalSet://…/attribute.environment/release` of this repository may
+   impersonate it; its email is the `release` environment's `GCP_SERVICE_ACCOUNT` secret, which
+   overrides the repository secret of that name for those jobs. The repository-level service account
+   keeps no write on either prefix; internal builds still write `harness/desktop-internal/` with it.
+
 ### Package Desktop while final checks run
 
-When the final implementation is pushed, start `make release-desktop ARGS="--prepare"`
-on that PR branch alongside its required tests and review. While Windows signing is required, the
-`release` environment must allow that branch, or `sign-windows` fails and no candidate is made
-([Windows code signing](windows-code-signing.md#2-github-repository-admin)). This chooses the next
+When the final implementation is pushed, `make release-desktop ARGS="--prepare"`
+on that PR branch is an unsigned build check alongside its required tests and review: macOS,
+Linux and Windows build with the release toolchain, and nothing is kept for reuse. Signing runs
+only in the `release` environment, which takes `main` and `v*_desktop` tags, so a branch's code
+never runs beside the Apple or Windows signing material (`sign-macos` and `sign-windows` are
+skipped there). The release then builds and signs from its tag.
+
+On `main`, `--prepare` makes a reusable candidate. It chooses the next
 version using the same tags/live-manifest rules as a release, then dispatches a
 candidate build. Use an explicit version with `--prepare` when preparing a minor
 bump. The candidate uses the release's normal macOS, Linux and Windows build, signing and
 notarization steps and production updater settings. It writes only to a random
 candidate prefix, verifies all nine downloads, and retains a small receipt in
 GitHub Actions. It neither tags nor updates the product manifest or Release page.
+A real release or a metadata-test dry run starts only from `main` or a `v*_desktop` tag.
 
 After validation and review pass, merge and release that version normally. The
 workflow automatically looks for a candidate with the same version and Desktop
@@ -347,7 +377,7 @@ the newly selected version instead.
 Unused candidates expire after seven days; a daily job deletes only recognized
 old candidate objects at their listed generations. Failed candidates and consumed
 candidates are removed by their owning workflow. For process maintenance, dispatch
-`test_candidate_reuse=true` for the same branch/version after its candidate passes:
+`test_candidate_reuse=true` for the same version after a `main` candidate passes:
 it requires reuse, promotes to disposable paths, verifies all nine downloads, then
 removes those objects and the consumed candidate. It cannot publish a product.
 

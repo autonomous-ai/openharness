@@ -126,7 +126,7 @@ documented in RELEASE.md. **macOS ships TWO builds of one universal app**, diffe
 `FLTEnableImpeller`: Intel on Skia under the old `desktop-macos` key (which every older install and the
 website download also read), Apple Silicon on Impeller under `desktop-macos-arm64`, both built by
 `scripts/publish-macos-variant.sh` — RELEASE.md, "Two macOS builds", has the why. An **internal**
-build for testers — both macOS builds, signed and notarized by CI, behind an unlisted link, with
+build for testers — both macOS builds, signed ad hoc and not notarized, behind an unlisted link, with
 self-update off — is `git push origin HEAD:internal/<name>` (`../.github/workflows/desktop-internal-build.yml`,
 RELEASE.md "Internal builds"); never cut one by hand. The run prints the links, and **this repository
 is public**, run pages included — so they are unlisted, not private. All platforms
