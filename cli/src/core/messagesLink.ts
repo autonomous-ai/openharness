@@ -22,7 +22,7 @@
  *   it (core/experiments.ts `createAgentSettingsSync`), so that turning it on wakes it.
  */
 import { messagesBackendAllowed, MESSAGES_WINDOW_FRAMES, type BackendNotice, type CoreApi, type MessagesPort, type TabFrame } from './api.js'
-import { daemonAddress, shownAgents } from './experimentQueries.js'
+import { daemonAddress, routeRefused, shownAgents } from './experimentQueries.js'
 import { answerTabKey } from '../lib/tabKeyWire.js'
 import { answerTabRelay } from '../lib/tabRelayWire.js'
 
@@ -72,7 +72,8 @@ export function createMessagesLink(deps: MessagesLinkDeps) {
         // Only the routes of MESSAGES_BACKEND_ROUTES, by method and whole path; a body only for the calls that send one.
         case 'backend': {
           const { method, path, body } = payload
-          if (!messagesBackendAllowed(method, path)) return { error: 'INVALID_REQUEST' }
+          // Said in the core's log, as an experiment's is (core/experimentQueries.ts): its process hears only that the call failed.
+          if (!messagesBackendAllowed(method, path)) return routeRefused('messages', method, path, messagesBackendAllowed)
           const asked = body === undefined ? core.account.backend(method as string, path as string) : core.account.backend(method as string, path as string, body)
           return asked.then((answer) => ({ ...answer }))
         }

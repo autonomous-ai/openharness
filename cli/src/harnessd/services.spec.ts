@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  DEFAULT_SERVICE_OPTIONS, ENGINE_LIVE_ENV, ENGINE_RUNTIME_ENV, ENGINE_SCREEN_ENV, ENGINE_MODEL_CONTROL_ENV, masterRunsEngineModelControl, ENGINE_QUESTION_CONTROL_ENV, masterRunsEngineQuestionControl, ENGINE_SUBMISSION_ENV, masterRunsEngineSubmission, ENGINE_NATIVE_CONTROL_ENV, masterRunsEngineNativeControl, ENGINE_BACKGROUND_JOB_ENV, masterRunsEngineBackgroundJob, ENGINE_PROVIDER_MOVE_ENV, masterRunsEngineProviderMove, KNOWN_SERVICES, SERVICE_HOSTS, SERVICE_PROCESSES_ENV, ServiceSupervisor, UPDATER_HOST, masterRunsLiveEngines, masterRunsEngineRuntime, masterRunsEngineScreen, serviceOptions, serviceProcessesEnv, serviceSpecs, servicesTheMasterRuns, SWARM_ENV, servicesOn, swarmOn,
-  type ServiceSpec, type ServiceSupervisorDeps, type ServiceSupervisorOptions,
+  ENGINE_LIVE_ENV, ENGINE_RUNTIME_ENV, ENGINE_SCREEN_ENV, ENGINE_MODEL_CONTROL_ENV, masterRunsEngineModelControl, ENGINE_QUESTION_CONTROL_ENV, masterRunsEngineQuestionControl, ENGINE_SUBMISSION_ENV, masterRunsEngineSubmission, ENGINE_NATIVE_CONTROL_ENV, masterRunsEngineNativeControl, ENGINE_BACKGROUND_JOB_ENV, masterRunsEngineBackgroundJob, ENGINE_PROVIDER_MOVE_ENV, masterRunsEngineProviderMove, KNOWN_SERVICES, SERVICE_HOSTS, SERVICE_PROCESSES_ENV, UPDATER_HOST, masterRunsLiveEngines, masterRunsEngineRuntime, masterRunsEngineScreen, serviceProcessesEnv, serviceSpecs, servicesTheMasterRuns, SWARM_ENV, servicesOn, swarmOn,
+  type ServiceSpec,
 } from './services.js'
+import { DEFAULT_SERVICE_OPTIONS, ServiceSupervisor, serviceOptions, type ServiceSupervisorDeps, type ServiceSupervisorOptions } from './serviceSupervisor.js'
 import type { CoreHandle } from './supervisor.js'
 
 const MIB = 1024 * 1024

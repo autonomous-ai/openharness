@@ -899,8 +899,13 @@ export const CLOUD_REQUESTS = ['cloud_transcript', 'cloud_send', 'cloud_agents']
 export const MESSAGES_QUERIES = ['writable', 'shown', 'daemon', 'account', 'backend', 'windows', 'tab_key', 'tab_relay', 'observers', 'activity'] as const
 /** Each id as the backend makes it: a shared tab's (24 hex), a desk tab's, an invitation's (a UUID) and an account's. */
 const SHARED_TAB = '[a-f0-9]{24}', DESK_TAB = '[A-Za-z0-9_-]{1,64}', USER = '[A-Za-z0-9_-]{1,128}'
-const INVITE = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
-const route = (method: string, path: string) => ({ method, path: new RegExp(`^/api/agent-messages${path}$`) })
+/** A UUID as `randomUUID` and the backend write one: an invitation's id, a share's and a link's. */
+const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+/** A backend route a service in its own process may call through the core's sign-in: one method and a whole path. */
+export interface BackendRoute { method: string; path: RegExp }
+const routeAllowed = (routes: readonly BackendRoute[], method: unknown, path: unknown): boolean =>
+  typeof method === 'string' && typeof path === 'string' && routes.some((r) => r.method === method && r.path.test(path))
+const route = (method: string, path: string): BackendRoute => ({ method, path: new RegExp(`^/api/agent-messages${path}$`) })
 /**
  * The backend routes Agent Messages in its process may call through the core's sign-in (`backend`), by method and
  * whole path, and no others (backend/src/routes/agentMessages.ts). Its process holds no credential: the core signs
@@ -909,14 +914,14 @@ const route = (method: string, path: string) => ({ method, path: new RegExp(`^/a
  * route. Shared tabs' were refused by the one GET this allowed before, which left every share action failing in the
  * edge host, where Agent Messages runs.
  */
-export const MESSAGES_BACKEND_ROUTES: ReadonlyArray<{ method: string; path: RegExp }> = [
+export const MESSAGES_BACKEND_ROUTES: readonly BackendRoute[] = [
   route('GET', ''),
   route('GET', '/shares'),
   route('PUT', `/shares/${DESK_TAB}/roster`),
   route('POST', `/shares/${SHARED_TAB}/invites`),
   route('GET', '/invites'),
-  route('DELETE', `/invites/${INVITE}`),
-  route('POST', `/invites/${INVITE}/accept`),
+  route('DELETE', `/invites/${UUID}`),
+  route('POST', `/invites/${UUID}/accept`),
   route('DELETE', `/shares/${SHARED_TAB}/members/${USER}`),
   route('DELETE', `/shares/${SHARED_TAB}`),
   route('POST', `/shares/${SHARED_TAB}/move`),
@@ -925,8 +930,7 @@ export const MESSAGES_BACKEND_ROUTES: ReadonlyArray<{ method: string; path: RegE
   route('PATCH', `/tabs/${DESK_TAB}`),
 ]
 /** Whether Agent Messages in its process may make this backend call (`MESSAGES_BACKEND_ROUTES`). */
-export const messagesBackendAllowed = (method: unknown, path: unknown): boolean =>
-  typeof method === 'string' && typeof path === 'string' && MESSAGES_BACKEND_ROUTES.some((r) => r.method === method && r.path.test(path))
+export const messagesBackendAllowed = (method: unknown, path: unknown): boolean => routeAllowed(MESSAGES_BACKEND_ROUTES, method, path)
 export const MESSAGES_WINDOW_FRAME = 'messages_changed'
 /** Shared tabs changed on this computer (a roster, an invitation, an alert, a notice, a waiting request or the
  *  untrusted list): the windows read `shares` again. Only a revision: what changed is read, never pushed. */
@@ -946,8 +950,8 @@ export const MESSAGES_WINDOW_FRAMES: readonly string[] = [MESSAGES_WINDOW_FRAME,
  *
  * Adding one: its service (`start<Name>(core, ports)`, returning its requests' handlers) and its process's
  * runner (`SERVICE_RUNNERS`, src/serviceProcess.ts); its process (`SERVICE_HOSTS`, `onDemand: true`); its
- * entry here; and its start for the core's own process (services/inline.ts `EXPERIMENT_STARTS`). Removing
- * one is deleting those.
+ * entry here; the backend routes it may call (`EXPERIMENT_BACKEND_ROUTES`, `[]` for none); and its start for the
+ * core's own process (services/inline.ts `EXPERIMENT_STARTS`). Removing one is deleting those.
  */
 export const EXPERIMENTS: Readonly<Record<string, { requests: readonly string[]; state: readonly string[] }>> = {
   orchestrator: { requests: ORCHESTRATOR_REQUESTS, state: ['orchestrator/*.json'] },
@@ -965,6 +969,46 @@ export const EXPERIMENTS: Readonly<Record<string, { requests: readonly string[];
   // for one, an answer or a message to one wakes it too (its port's calls, core/agents/cloud.ts).
   cloud: { requests: CLOUD_REQUESTS, state: ['cloud/harnesses.json'] },
 }
+
+/** The Swarm's own API: `/api/super-tabs` and whole segments under it, of the characters the Swarm makes an id of
+ *  (superTabs/wire.ts `identifier`), with a printable query that names no fragment. */
+const SWARM_API = /^\/api\/super-tabs(?:\/[A-Za-z0-9_-]+)*(?:\?[!-"$-~]*)?$/
+const each = (methods: readonly string[], path: RegExp): BackendRoute[] => methods.map((method) => ({ method, path }))
+/**
+ * The backend routes each experiment in its process may call through the core's sign-in (`backend`,
+ * core/experimentQueries.ts), and no others. Its process holds no credential: the core signs each call, so a route left
+ * open here is a route any code in that process could call as the account. Until the audit of 2026-11-12 every path
+ * under `/api/` was signed for all six, so the Swarm's process, which reads GitHub text and other accounts' messages,
+ * could have read the account's device keys or the vault of its connected services.
+ * - The Swarm: its own API, by GET and POST. All of it, not a list of its routes: an app's own asks go through its
+ *   service (superTabs/service.ts `backend`, held there to this same shape), so what its process may ask is what the
+ *   app may. And whether the server takes the sign-in again (superTabs/host.ts).
+ * - Share: a grant's and a link's publication and removal, each by its id (sharing/owner.ts).
+ * - The router: Jev's hosted decision (lib/jev/jevClient.ts).
+ * - The orchestrator, Memories and cloud agents call none.
+ * A path under the Swarm's API is whole segments: none empty, no `.` or `%`, so none climbs out of it (`..`) or hides a
+ * separator. A new experiment declares its routes here, if only `[]` (core/experimentQueries.spec.ts).
+ */
+export const EXPERIMENT_BACKEND_ROUTES: Readonly<Record<string, readonly BackendRoute[]>> = {
+  superTabs: [
+    ...each(['GET', 'POST'], SWARM_API),
+    { method: 'GET', path: /^\/api\/auth\/me$/ },
+    // The account's machines, which a Swarm process of a build before 0.5.84 read for its route context (#3626). No
+    // build since asks it. Kept for one that meets this core while its update is under way; it can go on 2026-12-13.
+    { method: 'GET', path: /^\/api\/machines$/ },
+  ],
+  sharing: [
+    ...each(['PUT', 'DELETE'], new RegExp(`^/api/harness-shares/${UUID}$`)),
+    ...each(['PUT', 'DELETE'], new RegExp(`^/api/harness-links/${UUID}$`)),
+  ],
+  router: [{ method: 'POST', path: /^\/api\/route\/jev$/ }],
+  orchestrator: [],
+  memory: [],
+  cloud: [],
+}
+/** Whether [service], an experiment in its process, may make this backend call (`EXPERIMENT_BACKEND_ROUTES`). */
+export const experimentBackendAllowed = (service: string, method: unknown, path: unknown): boolean =>
+  routeAllowed(EXPERIMENT_BACKEND_ROUTES[service] ?? [], method, path)
 
 /** The services that may write turns into agents from a process of their own (core/deliveries.ts): the experiments,
  *  Agent Messages, which left them for the edge host and still types a message into an idle agent, and the agent
@@ -1105,6 +1149,42 @@ export interface AgentCleanupPort {
 /** What the core gets when the cleanup fails: nothing told, and every harness left open, as before it. */
 export const AGENT_CLEANUP_FALLBACKS: PortFallbacks<AgentCleanupPort> = { closed: undefined, typed: undefined, stop: undefined }
 
+/** A browser's container is named this and its profile (services/agentBrowser/containers.ts `NAME`, which a file under a
+ *  service's folder keeps for itself; services/agentBrowser.spec.ts holds the command it builds to this one). */
+const AGENT_BROWSER_CONTAINER = 'harness-browser-'
+/** What a viewer's bytes are piped through inside a browser's container: to Xvnc, which listens on the container's own
+ *  loopback and publishes no port (services/agentBrowser.ts). */
+export const AGENT_BROWSER_VNC_PIPE: readonly string[] = ['socat', 'STDIO', 'TCP:127.0.0.1:5900']
+/** Podman by its whole path, as the login shell answers for it on a Mac or Linux (the agent browser does not run on
+ *  Windows); a connection's name; a profile, an agent's id or a UUID, of the characters Podman takes in a name. */
+const BROWSER_PODMAN = /^\/(?:[^\0-\x1f]*\/)?podman$/
+const BROWSER_CONNECTION = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/
+const BROWSER_PROFILE = /^[A-Za-z0-9_.-]{1,200}$/
+/**
+ * The one command the core starts for the agent browser, a viewer's pipe into a ready browser (core/browserStreams.ts):
+ * Podman by its whole path, on a named connection or the person's default, `exec -i` into a container named as the
+ * agent browser names its own, and the pipe to its screen, with nothing before, between or after. Null for any other
+ * command line. Until the audit of 2026-11-12 the core started whatever argv the agent browser's process gave it, so
+ * a name that process took from Podman's output, its state file or a page's doing could have become a command, or a
+ * flag of Podman's, in the process that types into every terminal.
+ *
+ * What is still that process's to say: which file is Podman (the one its login shell found, which the core does not
+ * look for itself), and which of its containers is an agent's (a browser moves with its pane, so its profile is not
+ * its agent's id). Both end when the stream leaves the core (docs/design/2026-11-12-core-audit.md, part 2).
+ */
+export function agentBrowserStreamCommand(value: unknown): string[] | null {
+  if (!Array.isArray(value) || !value.every((part) => typeof part === 'string')) return null
+  const [file = '', ...rest] = value as string[]
+  const named = rest[0] === '--connection'
+  const exec = named ? rest.slice(2) : rest
+  const container = exec[2] ?? ''
+  return BROWSER_PODMAN.test(file) && (!named || BROWSER_CONNECTION.test(rest[1] ?? ''))
+    && exec.length === 3 + AGENT_BROWSER_VNC_PIPE.length && exec[0] === 'exec' && exec[1] === '-i'
+    && container.startsWith(AGENT_BROWSER_CONTAINER) && BROWSER_PROFILE.test(container.slice(AGENT_BROWSER_CONTAINER.length))
+    && AGENT_BROWSER_VNC_PIPE.every((part, index) => exec[3 + index] === part)
+    ? value as string[] : null
+}
+
 /**
  * The core's calls into the agent browser (services/agentBrowser.ts): what happens to an agent whose Browser is on, and
  * its browser's state for the agent's frame, which the core reads in line (from what the service last said, when it
@@ -1122,7 +1202,8 @@ export interface AgentBrowserPort {
   moved(from: string, to: RegisteredSession, on: boolean): void
   frameContext(agentId: string): AgentBrowserFrame | undefined
   /** How the core reaches a ready browser's screen for a viewer (core/browserStreams.ts): Podman's path, then
-   *  `exec -i harness-browser-<profile> socat STDIO TCP:127.0.0.1:5900`. Read in line, as `frameContext` is. */
+   *  `exec -i harness-browser-<profile> socat STDIO TCP:127.0.0.1:5900`, which is all the core starts
+   *  (`agentBrowserStreamCommand`). Read in line, as `frameContext` is. */
   streamCommand(agentId: string): { argv: string[] } | { error: 'NO_BROWSER' | 'NOT_READY' }
   /** [listener] hears an agent whose browser stops or goes: its viewers' streams end with it. */
   onCloseViewers(listener: (agentId: string) => void): void

@@ -165,12 +165,13 @@ Left since, with the core's process as `src/architecture.coreFiles.txt` lists it
 | --- | ---: | ---: |
 | The audit's count, with the changes that landed while it ran | 563 | 99,467 |
 | The CLI's client code: seven files loaded for a helper each (13 November) | 558 | 98,600 |
+| The master's supervisor and its supervision of the services (13 November) | 557 | 97,549 |
 
 ### 1. Code the core loads for one helper (low risk, about a day each)
 
 | What | Lines | What the core needs instead |
 | --- | ---: | --- |
-| The master's own code: `harnessd/supervisor.ts` (702, loaded for `describeExit`), `harnessd/platform.ts` (902) with `lib/nodeReferences.ts` and `lib/launchers.ts` (198, to repoint one Node path once a start), the supervisor classes in `harnessd/services.ts` (340) | 2,142 | `describeExit` in `protocol.ts`; the master repoints the path when its core says ready |
+| The master's own code: `harnessd/platform.ts` (902) with `lib/nodeReferences.ts` and `lib/launchers.ts` (198), loaded to repoint one Node path once a start | 1,100 | the master repoints the path when its core says ready |
 | Windows files loaded for a constant: the guest set-up (`guestRequests.ts`, `guestShare.ts`, `sid.ts`, `guestPaneCommand.ts`, `guestAccounts.ts`), the updater's (`cliVersions.ts`, `installLayout.ts`) | 988 | the constants, in files of their own |
 | `agentClient/ledger.ts`: one purge call, and its lock can hold the loop for 2 s | 363 | the edge host's agent cleanup |
 | The New dialog's engine probe: up to 16 login shells started from the core (`lib/engineProbe.ts`, `engineAccount.ts`, `backendSocket.ts:1210-1254`) | 397 | the edge host |
@@ -188,7 +189,7 @@ this platform uses leaves them out. Low risk on a Mac and Linux, medium on a Win
 
 | What | Lines | Where to | Risk |
 | --- | ---: | --- | --- |
-| **The agent browser's stream.** The core starts a command line the service gives it for each viewer, paces up to 2 MB/s on its own loop and reads the viewer's VNC bytes (`core/browserStreams.ts`, `core/rfbShaper.ts`) | 526 | agentBrowser; the core keeps a forwarder, as for the viewers (`core/viewerStreams.ts`, 50 lines) | low |
+| **The agent browser's stream.** The core starts the exec into the browser's container for each viewer, paces up to 2 MB/s on its own loop and reads the viewer's VNC bytes (`core/browserStreams.ts`, `core/rfbShaper.ts`) | 526 | agentBrowser; the core keeps a forwarder, as for the viewers (`core/viewerStreams.ts`, 50 lines) | low |
 | **Feature routes in the two doors.** Pairing and keys, the account, desk and Store proxies, device and Wi-Fi routes, usage reports, voice, the relay to other machines (`hookServer.ts` 470, `localWsServer.ts` 430, `core/main.ts` about 320, `lib/deviceManagementHttp.ts` 199, `lib/storeProxy.ts` 48) | 1,470 | gateway, devices, edge, through one adapter that turns a route into a service request | medium |
 | **Git.** A create clones a repository or adds a worktree inside the core; every agent frame runs git for its project and branch (`lib/gitProject.ts`, `agentProject.ts`, `projectFolder.ts`, `sessionGitHistory.ts`, `sessionGitContext.ts`, `worktreeDeletion.ts`, `sshHosts.ts`, `scm/`) | 1,900 | edge (workspaces): a create asks for its folder, a frame reads a reported cache | medium |
 | **The product usage vocabulary** and the mapping of each request's outcome to counter names (`lib/productUsageContract.ts`, `productUsageSignals.ts`, `productHealthContract.ts`, `appProductUsageReport.ts`) | 723 | gateway: the core sends one raw outcome | low |
@@ -223,19 +224,25 @@ this platform uses leaves them out. Low risk on a Mac and Linux, medium on a Win
 The core is the most trusted process: whoever runs code in it can type into every agent's terminal. What it does
 today that the rule says it should not, most serious first:
 
-1. **The core runs a command line a service hands it.** The agent browser's process gives the core an argv, and
-   the core starts it for each viewer (`core/agentBrowserLink.ts:52`, `core/browserStreams.ts:118`). Fix: the stream
-   leaves for the agent browser's process (part 2).
-2. **An experiment's process can call any backend route as the account.** `core/experimentQueries.ts:171-175` signs
-   any `/api/` path for the orchestrator, Share, Memories, the router, the Swarm and cloud agents. Agent Messages
-   has a list of the routes it may call (`MESSAGES_BACKEND_ROUTES`); these have none. Fix: a list beside each
-   one's port. A day.
+1. **The core ran a command line a service handed it.** The agent browser's process gave the core an argv, and the
+   core started it for each viewer (`core/agentBrowserLink.ts`, `core/browserStreams.ts`). Narrowed on 13 November:
+   the core starts one command for the agent browser and no other, Podman's exec into a browser's container and the
+   pipe to its screen (`core/api.ts` `agentBrowserStreamCommand`), checked where the process names it and again where
+   it is started. Still that process's to say: which file is Podman, and which of its containers is an agent's. Both
+   end, with the stream itself, when it leaves the core (part 2).
+2. **An experiment's process could call any backend route as the account.** `core/experimentQueries.ts` signed any
+   `/api/` path for the orchestrator, Share, Memories, the router, the Swarm and cloud agents. Fixed on 13 November:
+   each declares its routes (`core/api.ts` `EXPERIMENT_BACKEND_ROUTES`), as Agent Messages does, and the core signs
+   no other: the Swarm's own API and `GET /api/auth/me`, Share's grants and links, Jev's decision, and none for the
+   other three. A refused route is said in the core's log. What the Swarm's process may still ask is all of the
+   Swarm's API, not only the routes its service calls: an app's asks go through that service.
 3. **Bytes from outside this computer are parsed in the core:** a remote viewer's VNC bytes (`core/rfbShaper.ts:117-147`),
    a paste of up to 20 MB from a remote client (`lib/terminalStreamManager.ts:1003-1234`), a third-party
    `harness.json` (`dsh/manifest.ts`). And what agents write: fourteen engines' transcripts and SQLite stores
    (`core/transcripts/attach.ts:415-599`), with `node:sqlite` on threads inside the core.
-4. **The core's loop can be held.** A synchronous `ps` on every registry save on a Mac (`lib/registry.ts:512`; 3.3 ms
-   measured, for a start time that never changes, and the lock can sleep the loop for 2 s); a Codex resume that
+4. **The core's loop can be held.** A registry save: its lock can sleep the loop for 2 s, and its three fsyncs took
+   about 60 ms of a save measured on a Mac (a synchronous `ps` on every save, for a start time that never changes,
+   is gone since 13 November: read once); a Codex resume that
    reads its whole rollout; the ledger's lock (2 s); a login shell and `harness-pty version`, up to 5 s each
    (`lib/engineBin.ts:116`, `lib/ptyHost/launch.ts:227`); fsync bursts for the handoff; `~/.claude.json` rewritten
    synchronously (`engines/kit/folderTrust.ts:101-115`). And work that grows with history: create receipts are

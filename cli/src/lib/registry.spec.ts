@@ -555,6 +555,23 @@ describe('registry remote display names', () => {
       rmSync(lockDir, { recursive: true, force: true })
     })
 
+  // The audit of 2026-11-12: every save read this process's own start for the lock's owner file. On a Mac that is `ps`,
+  // run synchronously: 3.3 ms on the core's loop for each save, for a value that never changes while the process lives.
+  it('reads its own start once, however many times it saves, and again only while it could not be read', async () => {
+    const answers = [{ startMarker: '', generationMarker: '' }, { startMarker: '', generationMarker: 'ps-c:fixture' }]
+    const read = vi.fn(() => answers.length > 1 ? answers.shift()! : answers[0]!)
+    vi.doMock('./processLiveness.js', async (original) => ({ ...await original<object>(), processLockIdentity: read }))
+    try {
+      const { registry } = await loadRegistryModule()
+      registry.load()
+      const open = (index: number) => registry.openProcessAgent({ agentId: `saved-${index}`, engine: 'claude', tmuxPane: `%${40 + index}`, processIdentity: processIdentity(840 + index) })
+      // The first read could not tell (`ps` failed): it is asked again at the next save, and then kept.
+      for (const index of [0, 1, 2, 3, 4]) open(index)
+      expect(registry.byAgent('saved-4')).toBeTruthy()
+      expect(read).toHaveBeenCalledTimes(2)
+    } finally { vi.doUnmock('./processLiveness.js') }
+  })
+
   it('gives up on a live lock after 2 s on the clock, however long each pause really takes', async () => {
     const { registry } = await loadRegistryModule()
     registry.load()
