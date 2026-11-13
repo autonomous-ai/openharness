@@ -166,12 +166,12 @@ Left since, with the core's process as `src/architecture.coreFiles.txt` lists it
 | The audit's count, with the changes that landed while it ran | 563 | 99,467 |
 | The CLI's client code: seven files loaded for a helper each (13 November) | 558 | 98,600 |
 | The master's supervisor and its supervision of the services (13 November) | 557 | 97,549 |
+| The platform's launchd, systemd and Task Scheduler code, loaded to repoint one Node path: the master does it now (13 November) | 554 | 96,582 |
 
 ### 1. Code the core loads for one helper (low risk, about a day each)
 
 | What | Lines | What the core needs instead |
 | --- | ---: | --- |
-| The master's own code: `harnessd/platform.ts` (902) with `lib/nodeReferences.ts` and `lib/launchers.ts` (198), loaded to repoint one Node path once a start | 1,100 | the master repoints the path when its core says ready |
 | Windows files loaded for a constant: the guest set-up (`guestRequests.ts`, `guestShare.ts`, `sid.ts`, `guestPaneCommand.ts`, `guestAccounts.ts`), the updater's (`cliVersions.ts`, `installLayout.ts`) | 988 | the constants, in files of their own |
 | `agentClient/ledger.ts`: one purge call, and its lock can hold the loop for 2 s | 363 | the edge host's agent cleanup |
 | The New dialog's engine probe: up to 16 login shells started from the core (`lib/engineProbe.ts`, `engineAccount.ts`, `backendSocket.ts:1210-1254`) | 397 | the edge host |
