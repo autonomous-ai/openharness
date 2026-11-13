@@ -257,6 +257,32 @@ describe('the edge host: several services in one process of their own', () => {
     client.close()
   })
 
+  // The probe of this machine's engines left the core's process for this one (the audit of 2026-11-12): a full
+  // probe starts up to sixteen login shells.
+  it('names the engines here, and a probe asked while it is down waits for it to be back', async () => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const connected = () => d.log().split('[services] engineProbe connected').length - 1
+    await until('the engine probe to connect to the core', () => connected() >= 1 || null, 30_000, 200)
+    const installed = async () => {
+      const answer = await client.request('engines_probe', { engines: ['claude', 'codex'] }, 60_000)
+      expect(answer.error, JSON.stringify(answer)).toBeUndefined()
+      return answer.engines.map((entry: Record<string, any>) => [entry.engine, entry.installed])
+    }
+    expect(await installed()).toEqual([['claude', true], ['codex', true]])
+    // A Swarm told nothing would take it for no engine here (superTabs/start.ts): asked while the host is gone,
+    // the answer waits for the one the master starts.
+    const before = edgePids(d)
+    expect(before).toHaveLength(1)
+    for (const pid of before) process.kill(pid, 'SIGKILL')
+    await until('the core to see the edge host gone', async () => (await client.request('fs_list_dir', {}, 30_000)).error === 'SERVICE_UNAVAILABLE' || null, 30_000, 50)
+    expect(await installed()).toEqual([['claude', true], ['codex', true]])
+    expect(connected()).toBe(2)
+    expect(edgePids(d).some((pid) => !before.includes(pid))).toBe(true)
+    expect(d.coresStarted()).toBe(1)
+    client.close()
+  })
+
   it('hung, it is killed by the master\'s heartbeat watch and started again; the core goes on', async () => {
     const d = await fresh({ HARNESSD_SERVICE_HEARTBEAT_TIMEOUT_MS: '2000' })
     const client = await LocalClient.connect(d)

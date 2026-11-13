@@ -17,7 +17,7 @@
  * every launch (`~/.claude.json`, which Harness's own folder trust writes too) would not say which
  * engine the person works in.
  */
-import { readApiConnectionStore } from './apiConnectionMetadata.js'
+import { savedBearerApi } from './apiConnectionFile.js'
 import { execFile } from 'node:child_process'
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -121,10 +121,7 @@ export async function engineAccount(engine: AgentEngine, deps: EngineAccountDeps
   // A model API saved on this computer (Models ▸ APIs) serves Claude Code without a
   // subscription, so the machine can take Swarm work on it (headless run, 2026-11-03: a working OpenRouter key saved,
   // and the account read "not signed in").
-  const savedApi = (() => {
-    try { return readApiConnectionStore(env.ADAPTER_DATA_DIR || join(home, '.harness', 'cli', 'data')).connections }
-    catch { return [] }
-  })().some((row) => row.authHeader.toLowerCase() === 'authorization' && row.authPrefix.toLowerCase() === 'bearer')
+  const savedApi = savedBearerApi(env.ADAPTER_DATA_DIR || join(home, '.harness', 'cli', 'data'))
   if (engine === 'claude') {
     const dir = env.CLAUDE_CONFIG_DIR || join(home, '.claude')
     const lastUsedAt = deps.lastUsed === false ? null : await newestChild(join(dir, 'projects'))

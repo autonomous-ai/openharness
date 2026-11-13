@@ -750,6 +750,8 @@ export const PROJECTS_REQUESTS = ['git_pull_request', 'git_pull_requests_status'
   'agent_instructions_read', 'agent_instructions_write'] as const
 /** A window's name for its repo and its work, by a small model in the background (services/windowNames.ts). */
 export const WINDOW_NAMES_REQUESTS = ['window_name'] as const
+/** Which engines this machine has, asked before a create (services/engineProbe.ts). */
+export const ENGINE_PROBE_REQUESTS = ['engines_probe'] as const
 /** Hachi's goals (`harness goal`, services/goals.ts), in the edge host: asked by the Hachi harness alone. */
 export const GOALS_REQUESTS = ['goal_open', 'goal_add', 'goal_done', 'goal_list'] as const
 /** Change agent's handoff file, prepared in the edge host (services/handoff.ts). */

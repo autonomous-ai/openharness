@@ -538,7 +538,7 @@ describe('ServiceSupervisor', () => {
     const hosted = Object.values(SERVICE_HOSTS).flatMap((host) => host.services)
     expect(KNOWN_SERVICES).toEqual(hosted)
     expect(new Set(hosted).size).toBe(hosted.length)
-    expect(SERVICE_HOSTS.edge.services).toEqual(['workspaces', 'usage', 'monitor', 'projects', 'handoff', 'recaps', 'windowNames', 'shell', 'connectors', 'sharedMachines', 'agentCleanup', 'messages', 'osDevice', 'goals', 'hachi'])
+    expect(SERVICE_HOSTS.edge.services).toEqual(['workspaces', 'usage', 'monitor', 'projects', 'handoff', 'recaps', 'windowNames', 'shell', 'connectors', 'sharedMachines', 'agentCleanup', 'messages', 'osDevice', 'goals', 'hachi', 'engineProbe'])
     // Agent Messages has no process of its own: one cost every computer it was on 62 MiB at idle (2026-10-12).
     expect(Object.keys(SERVICE_HOSTS)).not.toContain('messages')
   })
@@ -613,7 +613,7 @@ describe('which services the core leaves to its master', () => {
     expect(serviceProcessesEnv(serviceSpecs({ HARNESSD_SERVICES: 'store' }, SERVICE_HOSTS), 42)).toMatchObject({ [SERVICE_PROCESSES_ENV]: 'store' })
     // By service, not by process: a core from before the edge host routes the services it knows of it.
     const hosted = serviceSpecs({ HARNESSD_SERVICES: 'edge' }, SERVICE_HOSTS)
-    expect(serviceProcessesEnv(hosted, 42)).toEqual({ [SERVICE_PROCESSES_ENV]: 'workspaces,usage,monitor,projects,handoff,recaps,windowNames,shell,connectors,sharedMachines,agentCleanup,messages,osDevice,goals,hachi', HARNESSD_SERVICES: 'workspaces,usage,monitor,projects,handoff,recaps,windowNames,shell,connectors,sharedMachines,agentCleanup,messages,osDevice,goals,hachi', [ENGINE_LIVE_ENV]: '42:1', [ENGINE_RUNTIME_ENV]: '42:1', [ENGINE_SCREEN_ENV]: '42:1', [ENGINE_MODEL_CONTROL_ENV]: '42:1', [ENGINE_QUESTION_CONTROL_ENV]: '42:1', [ENGINE_SUBMISSION_ENV]: '42:1', [ENGINE_NATIVE_CONTROL_ENV]: '42:1', [ENGINE_BACKGROUND_JOB_ENV]: '42:1', [ENGINE_PROVIDER_MOVE_ENV]: '42:1' })
+    expect(serviceProcessesEnv(hosted, 42)).toEqual({ [SERVICE_PROCESSES_ENV]: 'workspaces,usage,monitor,projects,handoff,recaps,windowNames,shell,connectors,sharedMachines,agentCleanup,messages,osDevice,goals,hachi,engineProbe', HARNESSD_SERVICES: 'workspaces,usage,monitor,projects,handoff,recaps,windowNames,shell,connectors,sharedMachines,agentCleanup,messages,osDevice,goals,hachi,engineProbe', [ENGINE_LIVE_ENV]: '42:1', [ENGINE_RUNTIME_ENV]: '42:1', [ENGINE_SCREEN_ENV]: '42:1', [ENGINE_MODEL_CONTROL_ENV]: '42:1', [ENGINE_QUESTION_CONTROL_ENV]: '42:1', [ENGINE_SUBMISSION_ENV]: '42:1', [ENGINE_NATIVE_CONTROL_ENV]: '42:1', [ENGINE_BACKGROUND_JOB_ENV]: '42:1', [ENGINE_PROVIDER_MOVE_ENV]: '42:1' })
     expect([...servicesTheMasterRuns({ ...supervised, ...serviceProcessesEnv(hosted, 42) }, known)]).toEqual(['workspaces', 'messages'])
     expect(serviceProcessesEnv([], 42)).toEqual({ [SERVICE_PROCESSES_ENV]: '', HARNESSD_SERVICES: 'none', [ENGINE_LIVE_ENV]: '42:1', [ENGINE_RUNTIME_ENV]: '42:1', [ENGINE_SCREEN_ENV]: '42:1', [ENGINE_MODEL_CONTROL_ENV]: '42:1', [ENGINE_QUESTION_CONTROL_ENV]: '42:1', [ENGINE_SUBMISSION_ENV]: '42:1', [ENGINE_NATIVE_CONTROL_ENV]: '42:1', [ENGINE_BACKGROUND_JOB_ENV]: '42:1', [ENGINE_PROVIDER_MOVE_ENV]: '42:1' })
     expect([...servicesTheMasterRuns({ ...supervised, ...serviceProcessesEnv(specs, 42) }, known)]).toEqual(['search', 'workspaces'])

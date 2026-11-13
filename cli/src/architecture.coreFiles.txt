@@ -299,6 +299,7 @@ lib/agentSessionEnv.ts
 lib/agentSettings.ts
 lib/agentTmp.ts
 lib/agentUsageWire.ts
+lib/apiConnectionFile.ts
 lib/apiConnectionMetadata.ts
 lib/apiInstructions.ts
 lib/appProductUsageReport.ts
@@ -333,13 +334,11 @@ lib/deletedSessions.ts
 lib/deviceManagementHttp.ts
 lib/deviceRecap.ts
 lib/dialogEnd.ts
-lib/engineAccount.ts
 lib/engineBin.ts
 lib/engineExitOption.ts
 lib/engineHomes.ts
 lib/engineInstall.ts
 lib/engineLaunch.ts
-lib/engineProbe.ts
 lib/externalOwnerControl.ts
 lib/externalProcessGeneration.ts
 lib/externalResume.ts
