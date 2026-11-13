@@ -717,6 +717,20 @@ function withoutForcedModes(rows: Array<Partial<RegisteredSession>>): { rows: Ar
   return { rows: kept, cleared }
 }
 
+/**
+ * A row a build before the Swarm was deleted (2026-11-14) saved may still name its Swarm role (`swarmSkill`). One the Swarm
+ * started, a Claude Code or Codex agent with no mode, comes back in Auto-approve, the mode every Swarm agent had since
+ * 2026-11-12 and a new agent in a tab has. With no mode, discovery would read its mode back off a pane Harness may have
+ * started in full mode before task #4215, and a restart or an Open would skip permissions again. Every other row is as it
+ * was. The role goes at the row's next write (`strictPersistedRow`), so this applies once. Remove on or after 2027-01-07.
+ */
+function withRetiredSwarmMode<T extends Partial<RegisteredSession>>(row: T): T {
+  const swarmRole: unknown = (row as { swarmSkill?: unknown })?.swarmSkill
+  if (!swarmRole || typeof swarmRole !== 'object' || row.permissionMode != null || (row.engine !== 'claude' && row.engine !== 'codex')
+    || row.startedBy !== 'agent' || row.parentAgentId) return row
+  return { ...row, permissionMode: 'auto', bypassPermission: true }
+}
+
 /** A legacy `tmuxPane` adds a tmux runtime unless it is a listed runtime's own projection (`paneProjection`). */
 function normalizedRuntimes(raw: unknown, legacyTmuxPane?: unknown): TerminalRuntimeRef[] {
   const fromArray = Array.isArray(raw) ? raw.filter(validTerminalRuntime) : []
@@ -742,7 +756,7 @@ function persistedRow(entry: RegisteredSession): RegisteredSession | Omit<Regist
 export function strictPersistedRow(raw: unknown): RegisteredSession | null {
   const value = withoutRetiredRuntimes(raw)
   if (!value || typeof value !== 'object') return null
-  const row = value as Partial<RegisteredSession>
+  const row = withRetiredSwarmMode(value as Partial<RegisteredSession>)
   const runtimes = normalizedRuntimes(row.runtimes, row.tmuxPane)
   const primary = typeof row.primaryRuntimeKey === 'string' ? row.primaryRuntimeKey : ''
   const normalizedPrimary = selectedRuntimeKey(runtimes, primary)
@@ -1408,11 +1422,16 @@ class Registry {
         if (swept.cleared) console.log(`[registry] ${swept.cleared} agent(s) no longer keep a permission mode Harness forced`)
         arr = swept.rows
       }
+      // After the forced modes are cleared: a Swarm agent full mode was forced on comes back in Auto-approve too.
+      const retired = arr.map(withRetiredSwarmMode)
+      const swarmAuto = retired.some((row, i) => row !== arr[i])
+      if (swarmAuto) console.log(`[registry] ${retired.filter((row, i) => row !== arr[i]).length} agent(s) the Swarm started come back in Auto-approve`)
+      arr = retired
       // The rollback copy is the file as found, retired runtimes and all — not the cleaned rows.
       if (arr.some((row) => row.schemaVersion !== 2)) {
         atomicWriteJson(PRE_V2_BACKUP_FILE, stored, true)
       }
-      let changed = strippedRetired || (ownModes && arr.some((row, i) => row !== parsed[i]))
+      let changed = strippedRetired || swarmAuto || (ownModes && arr.some((row, i) => row !== parsed[i]))
       if (rebooted) {
         this.rebooted = true
         console.log(`[registry] machine rebooted since last run — ${arr.length} agent(s) kept with their process identity cleared (stale panes, restored on start)`)

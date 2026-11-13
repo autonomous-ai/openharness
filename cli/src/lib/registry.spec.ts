@@ -720,6 +720,49 @@ describe('registry remote display names', () => {
     expect([later.byAgent('swarm-full')?.permissionMode, later.byAgent('swarm-full')?.bypassPermission]).toEqual(['full', true])
   })
 
+  // The Swarm was deleted on 2026-11-14; a row an older build saved may still name its role. One the Swarm started with no
+  // mode comes back in Auto-approve (it had that mode since 2026-11-12), so neither discovery reading a pane Harness started
+  // in full mode, nor a restart, decides its mode; a person's own agent keeps its own default, and a recorded mode stays.
+  it('gives Auto-approve to a saved Claude Code or Codex agent the Swarm started with no mode, once, and keeps every other', async () => {
+    const { registry, strictPersistedRow } = await loadRegistryModule()
+    registry.load()
+    registry.openProcessAgent({ agentId: 'template', engine: 'claude', tmuxPane: '%60', processIdentity: processIdentity(960) })
+    const [row] = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))
+    const at = (agentId: string, pane: string, fields: Record<string, unknown>) => ({ ...row, agentId, sessionId: '', processIdentity: null,
+      tmuxPane: pane, runtimes: [{ backend: 'tmux', paneId: pane }], primaryRuntimeKey: `tmux\u0000${pane}`, ...fields })
+    const lead = { role: 'lead', key: 'swarm-lead' }, dev = { role: 'dev', key: 'swarm-dev' }
+    writeFileSync(join(dataDir, 'registry.json'), JSON.stringify([
+      at('pm', '%61', { swarmSkill: lead, startedBy: 'agent', bypassPermission: false }),
+      at('codex-builder', '%62', { engine: 'codex', swarmSkill: dev, startedBy: 'agent' }),
+      at('swarm-ask', '%63', { swarmSkill: dev, startedBy: 'agent', permissionMode: 'ask', bypassPermission: false }),
+      at('own', '%64', { bypassPermission: false }),
+      at('opencode-swarm', '%65', { engine: 'opencode', swarmSkill: dev, startedBy: 'agent' }),
+      // A person's own agents attached to a Swarm: one they started, one another harness did.
+      at('attached', '%66', { engine: 'codex', swarmSkill: dev }),
+      at('attached-child', '%67', { swarmSkill: dev, startedBy: 'agent', parentAgentId: 'parent' }),
+    ]), { mode: 0o600 })
+    const { registry: reloaded } = await loadRegistryModule()
+    reloaded.load()
+    const modeOf = (registered: typeof reloaded, id: string) => [registered.byAgent(id)?.permissionMode, registered.byAgent(id)?.bypassPermission]
+    for (const id of ['pm', 'codex-builder']) expect(modeOf(reloaded, id), id).toEqual(['auto', true])
+    expect(reloaded.byAgent('swarm-ask')?.permissionMode).toBe('ask')
+    for (const id of ['own', 'opencode-swarm', 'attached', 'attached-child']) expect(reloaded.byAgent(id)?.permissionMode, id).toBeUndefined()
+    const persisted = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8')) as Array<Record<string, unknown>>
+    expect(persisted.find(entry => entry.agentId === 'pm')).toMatchObject({ permissionMode: 'auto', bypassPermission: true })
+    expect(persisted.filter(entry => 'swarmSkill' in entry)).toEqual([])
+    // Once: with the role gone from the file, a mode its person later takes away stays away.
+    writeFileSync(join(dataDir, 'registry.json'), JSON.stringify(persisted.map(entry => {
+      if (entry.agentId !== 'pm') return entry
+      const { permissionMode: _mode, ...rest } = entry
+      return { ...rest, bypassPermission: false }
+    })), { mode: 0o600 })
+    const { registry: later } = await loadRegistryModule()
+    later.load()
+    expect(later.byAgent('pm')?.permissionMode).toBeUndefined()
+    // A stopped one an older build saved comes back the same way when it is opened (lib/stoppedAgents.ts reads it so).
+    expect(strictPersistedRow({ ...at('stopped', '%68', { swarmSkill: lead, startedBy: 'agent' }), active: false })).toMatchObject({ permissionMode: 'auto', bypassPermission: true })
+  })
+
   it('marks the sweep done on a machine with no saved agents yet, so a later load changes nothing', async () => {
     rmSync(join(dataDir, 'registry.json'), { force: true })
     rmSync(join(dataDir, 'registry-own-modes'), { force: true })

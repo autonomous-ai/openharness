@@ -234,6 +234,19 @@ describe('creating an agent', () => {
       if (expected) expect(preTrustCodexProject).toHaveBeenCalledWith(cwd, mode === 'legacy' ? null : '/fixture/selected')
     })
 
+  // A Claude Code agent in an empty project here is trusted as a Codex one is, in the profile it reads.
+  it('trusts a Claude Code agent\'s empty local project before its launch', async () => {
+    vi.mocked(projectsRoot).mockReturnValueOnce(root)
+    const cwd = folder([])
+    const launch = { current: () => true, environment: { HOME: '/fixture/home' }, permission: async () => 'supported',
+      prepareHooks: vi.fn(async () => true) } as unknown as NativeLaunch
+    const run = setup({ native: async () => ({ ok: true, launch }) })
+    const result = await run.create.prepare(request({ cwd, engine: 'claude' }),
+      { id: 'fixture', label: 'harness-claude-fixture', current: () => true, hold: () => {} }, { local: true })
+    expect(result.ok).toBe(true)
+    expect(preTrustClaudeProject).toHaveBeenCalledExactlyOnceWith(cwd)
+  })
+
   it.each(['folder inspection', 'tmux capabilities', 'config publication'] as const)('holds a create revoked during %s before launch side effects', async stage => {
     let current = true
     vi.mocked(installedDsh).mockReturnValue(installed() as never)

@@ -287,6 +287,19 @@ describe('owner authority and read-only observation', () => {
       expect(publish).not.toHaveBeenCalled()
     })
 
+    // Revoking one waits on the rosters, which may be unreadable (signed out, a broken file) for as long as it lasts: until
+    // then it lets nobody watch, at the open or after it.
+    it('lets nobody watch on what a Swarm\'s roster granted, while it cannot be revoked yet', async () => {
+      const expiry = new Date(Date.now() + 10 * DAY).toISOString()
+      store.derive('machine', [{ agentId: 'agent', email: 'old@example.com', tab: 'super:old', name: 'api', engine: 'codex', ownerPublicKey: KEY }], expiry, 0)
+      holding(null)
+      expect(await derive()).toEqual({ invited: 0, revoked: 0 })
+      const old = store.all().find(g => g.recipientEmail === 'old@example.com')!
+      expect(old.revoked).toBe(false)
+      await open(old, 'observer:old')
+      expect(frames.at(-1)).toMatchObject({ id: 'observer:old', type: 'observer_closed', payload: { retry: false } })
+    })
+
     it('derives a grant for every other account in the tab, publishes it, and lets that observer watch', async () => {
       holding(tab())
       expect(await derive()).toEqual({ invited: 2, revoked: 0 })

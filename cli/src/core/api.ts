@@ -697,7 +697,7 @@ export const AGENT_BROWSER_REQUESTS = ['agent_browser_available', 'agent_browser
   'agent_browser_state', 'agent_browser_settings', 'agent_browser_settings_save', 'agent_browser_proxy_test',
   'agent_browser_start', 'agent_browser_stop', 'agent_browser_run', 'agent_browser_window'] as const
 /** The project and folder readers (services/projects.ts). */
-export const PROJECTS_REQUESTS = ['git_pull_request', 'git_project_info', 'scm_project_info', 'project_preview', 'fs_list_dir', 'agent_read_file'] as const
+export const PROJECTS_REQUESTS = ['git_pull_request', 'git_pull_requests_status', 'git_project_info', 'scm_project_info', 'project_preview', 'fs_list_dir', 'agent_read_file'] as const
 /** A window's name for its repo and its work, by a small model in the background (services/windowNames.ts). */
 export const WINDOW_NAMES_REQUESTS = ['window_name'] as const
 /** Which engines this machine has, asked before a create (services/engineProbe.ts). */
@@ -791,6 +791,8 @@ const MINUTE = 60_000
  * how long a launch on one can wait. A launch on the engine's own login asks models nothing.
  */
 export const LONG_ANSWERS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
+  // Fifty GitHub reads, four at a time, each with an eight-second subprocess deadline.
+  projects: { git_pull_requests_status: 120_000 },
   // The device's own service waits up to 20 s for its next proposal (lib/autonomous-device/machineAddons.ts).
   machineAddons: { machine_addon: 30_000 },
   models: {
