@@ -1533,12 +1533,6 @@ export class CableSession {
       case 'focus':
         if (str('agentId')) {
           const agentId = str('agentId')!
-          // The dial sends focus on every swipe, so an agent it cannot bring forward is passed over without a toast,
-          // which would fire on each turn of the carousel. Turning to it still means its answer was seen.
-          if (this.lacks(agentId, 'f')) {
-            this.host.markSeen?.(agentId)
-            return
-          }
           const now = Date.now()
           const expectationActive = this.expectedAppFocusEcho !== ''
             && now <= this.expectedAppFocusEchoUntil
@@ -1576,7 +1570,11 @@ export class CableSession {
           // avoid echoing the dial's own move back at it.
           this.desiredFocus = agentId
           this.appFocusUnsent = false
-          this.host.focus(agentId)
+          // The dial sends focus on every swipe, so an agent it cannot bring forward is passed over without a toast,
+          // which would fire on each turn of the carousel. Turning to it still means its answer was seen, and the record
+          // above still names it: the next list push re-asserts it rather than turning the dial back.
+          if (this.lacks(agentId, 'f')) this.host.markSeen?.(agentId)
+          else this.host.focus(agentId)
         }
         return
       case 'notif.read': {
