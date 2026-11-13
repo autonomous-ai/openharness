@@ -3,9 +3,6 @@ import 'dart:convert';
 enum KeymapContext {
   workspace,
   terminal,
-
-  /// Swarm chat navigation; a focused terminal keeps its own scope.
-  swarmChat,
   picker,
 
   /// Project-menu bindings layer over picker bindings (for example, o opens
@@ -223,12 +220,19 @@ class KeymapConfig {
       // `swarm.quick_switcher` was Switch conversation (Cmd-K in a Swarm); a
       // keybindings file that still binds it is skipped, not refused.
       // `swarm.chat_with_pm` opened Chat with PM, which v4 has not.
+      // `super_tab.new` and the Swarm chat's `swarm.next_unread`,
+      // `swarm.previous_unread` and `swarm.find_in_chat` went with the Swarm
+      // (2026-11-14), and so does a binding `when` its `swarmChat`.
       if (const {
             'picker.preview',
             'navigation.quick_open',
             'team.open',
             'swarm.quick_switcher',
             'swarm.chat_with_pm',
+            'super_tab.new',
+            'swarm.next_unread',
+            'swarm.previous_unread',
+            'swarm.find_in_chat',
           }.contains(command) &&
           !commands.contains(command)) {
         continue;
@@ -238,6 +242,7 @@ class KeymapConfig {
         throw FormatException('Unknown command in bindings[$i]: $command');
       }
       final scope = row['when'] ?? 'workspace';
+      if (scope == 'swarmChat') continue;
       final contexts = KeymapContext.values.where(
         (context) => context.name == scope,
       );

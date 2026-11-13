@@ -82,24 +82,7 @@ class HarnessAttachments extends ChangeNotifier {
   final void Function(String message)? onDeliveryProblem;
 
   final _files = <HarnessAttachment>[];
-  int _reading = 0;
   bool _disposed = false;
-
-  /// Whether a picker, a drop or a paste is still reading files for this box.
-  /// An owner that would let go of an empty box waits while this is true, so
-  /// what the read brings is not lost.
-  bool get isReading => _reading > 0;
-
-  /// Runs [read], which ends by adding what it read here, and holds the box
-  /// until it is done.
-  Future<T> reading<T>(Future<T> Function() read) async {
-    _reading++;
-    try {
-      return await read();
-    } finally {
-      _reading--;
-    }
-  }
 
   @override
   void dispose() {

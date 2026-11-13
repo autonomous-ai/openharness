@@ -133,7 +133,6 @@ void main() {
         expect(grid.AppPalette.textPrimary, palette.text, reason: palette.name);
         expect(grid.AppPalette.textSecondary, palette.muted);
         expect(grid.AppPalette.textFaint, palette.faint);
-        expect(grid.AppPalette.swarmSidebar, palette.sidebar);
         expect(grid.AppPalette.windowBg, palette.background);
       });
     }
@@ -142,11 +141,9 @@ void main() {
       expect(grid.AppPalette.textPrimary, const Color(0xFF1A1A18));
       expect(grid.AppPalette.textSecondary, const Color(0xFF62615B));
       expect(grid.AppPalette.textFaint, const Color(0xFF7A7973));
-      expect(grid.AppPalette.swarmSidebar, HarnessPalette.paper.workspace);
     });
     wearing(HarnessPalette.graphite, () {
       expect(grid.AppPalette.textPrimary, const Color(0xFFF5F5F5));
-      expect(grid.AppPalette.swarmSidebar, HarnessPalette.graphite.workspace);
     });
   });
 }

@@ -133,7 +133,7 @@ enum HarnessPalette {
     tabBar: Color(0xfff4f4f4),
     search: Color(0xffededed),
     accent: Color(0xff1264a3),
-    // The one dark surface in a light theme: the Swarm sidebar, with white
+    // The one dark surface in a light theme: the sidebar, with white
     // ink and a blue selected row.
     sidebar: Color(0xff3f0e40),
     sidebarInk: Color(0xffffffff),
@@ -235,7 +235,7 @@ enum HarnessPalette {
 
   final Color? _sidebar, _sidebarHover, _sidebarSelected, _sidebarOnSelected;
 
-  /// The Swarm sidebar's ground: the workspace color unless the palette gives
+  /// A sidebar's ground: the workspace color unless the palette gives
   /// the sidebar one of its own.
   Color get sidebar => _sidebar ?? workspace;
 
@@ -243,7 +243,7 @@ enum HarnessPalette {
   /// means the sidebar uses the page's ink.
   final Color? sidebarInk, sidebarMuted;
 
-  /// Whether the Swarm sidebar wears its own ink rather than the page's.
+  /// Whether the sidebar wears its own ink rather than the page's.
   bool get hasSidebarInk => sidebarInk != null;
 
   Color get sidebarHover => _sidebarHover ?? hover;

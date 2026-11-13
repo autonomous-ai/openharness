@@ -951,7 +951,6 @@ class WsConn {
       !type.startsWith('orchestrator') &&
       // Browser settings carry a proxy's host and login, and a test its exit address.
       !type.startsWith('agent_browser') &&
-      !type.startsWith('super_tabs') &&
       !type.startsWith('route_') &&
       !type.startsWith('harness_share_') &&
       // Pair responses can contain retained memory quotations and one-use

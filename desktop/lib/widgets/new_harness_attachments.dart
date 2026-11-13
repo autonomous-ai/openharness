@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_selector/file_selector.dart';
@@ -41,25 +40,6 @@ Future<List<HarnessAttachment>> attachmentsOf(
   return weighed;
 }
 
-/// Attaches the dropped files and hands [onFolders] the dropped folders'
-/// paths, which hold nothing to read.
-Future<String?> _attachOrPaste(
-  HarnessAttachments attachments,
-  Iterable<DropItem> items,
-  ValueChanged<List<String>> onFolders,
-) async {
-  final files = <XFile>[], folders = <String>[];
-  for (final item in items) {
-    // macOS says which items are folders; Linux and Windows give paths alone.
-    final folder =
-        item is DropItemDirectory ||
-        (item.path.isNotEmpty && await FileSystemEntity.isDirectory(item.path));
-    folder ? folders.add(item.path) : files.add(item);
-  }
-  if (folders.isNotEmpty) onFolders(folders);
-  return files.isEmpty ? null : _attach(attachments, files);
-}
-
 /// Says what an attach left out, when it left anything.
 void reportAttachProblem(BuildContext context, String? problem) {
   if (problem == null) return;
@@ -67,34 +47,31 @@ void reportAttachProblem(BuildContext context, String? problem) {
       ?.showSnackBar(SnackBar(content: Text(problem)));
 }
 
-/// 📎 beside New Harness: opens the system's file chooser. A Swarm composer
-/// draws it as the phone's + ([icon]).
+/// 📎 beside New Harness: opens the system's file chooser.
 class NewHarnessAttachButton extends StatelessWidget {
   const NewHarnessAttachButton({
     super.key,
     required this.attachments,
     required this.enabled,
-    this.icon = AppIcons.paperclip,
   });
 
   final HarnessAttachments attachments;
   final bool enabled;
-  final IconData icon;
 
   @override
   Widget build(BuildContext context) => AppIconButton(
     key: const ValueKey('new-harness-attach'),
-    icon: icon,
+    icon: AppIcons.paperclip,
     tooltip: 'Attach files',
     size: 16,
     onPressed: !enabled
         ? null
-        : () => attachments.reading(() async {
+        : () async {
             final files = await openFiles();
             if (files.isEmpty) return;
             final problem = await _attach(attachments, files);
             if (context.mounted) reportAttachProblem(context, problem);
-          }),
+          },
   );
 }
 
@@ -104,18 +81,10 @@ class NewHarnessAttachmentChips extends StatelessWidget {
     super.key,
     required this.attachments,
     required this.enabled,
-    this.isUploading,
-    this.progressOf,
   });
 
   final HarnessAttachments attachments;
   final bool enabled;
-
-  /// Whether a file is on its way somewhere, when files go up as they are sent.
-  final bool Function(HarnessAttachment file)? isUploading;
-
-  /// How much of a file has gone up, from 0 to 1, or null while unknown.
-  final double? Function(HarnessAttachment file)? progressOf;
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
@@ -127,8 +96,6 @@ class NewHarnessAttachmentChips extends StatelessWidget {
         for (final file in attachments.files)
           NewHarnessAttachmentChip(
             file: file,
-            uploading: isUploading?.call(file) ?? false,
-            progress: progressOf?.call(file),
             onRemove: enabled ? () => attachments.remove(file) : null,
           ),
       ],
@@ -144,16 +111,11 @@ class NewHarnessDropZone extends StatefulWidget {
     required this.attachments,
     required this.enabled,
     required this.child,
-    this.onFolders,
   });
 
   final HarnessAttachments attachments;
   final bool enabled;
   final Widget child;
-
-  /// Told the paths of dropped folders, which are then not attached. Without
-  /// it every dropped item is read as a file.
-  final ValueChanged<List<String>>? onFolders;
 
   @override
   State<NewHarnessDropZone> createState() => _NewHarnessDropZoneState();
@@ -174,17 +136,12 @@ class _NewHarnessDropZoneState extends State<NewHarnessDropZone> {
     onDragExited: (_) => _hover(false),
     onDragDone: (details) {
       _hover(false);
-      final onFolders = widget.onFolders;
       // The box the files were dropped on, held until they are read.
       final attachments = widget.attachments;
-      unawaited(
-        attachments.reading(() async {
-          final problem = onFolders == null
-              ? await _attach(attachments, details.files)
-              : await _attachOrPaste(attachments, details.files, onFolders);
-          if (context.mounted) reportAttachProblem(context, problem);
-        }),
-      );
+      unawaited(() async {
+        final problem = await _attach(attachments, details.files);
+        if (context.mounted) reportAttachProblem(context, problem);
+      }());
     },
     child: Stack(
       children: [
