@@ -5,6 +5,9 @@ import { observedAgentId, ObservedSource, type ObservedDeps } from './observed.j
 function setup(over: Partial<ObservedDeps> = {}) {
   const clock = { t: 1_000_000 }
   const gens = new Map<number, string | null>()
+  // The machine's processes: every pid below 1000 runs, as `g<pid>`, but one `gens` says is gone (null) or another.
+  const procs = vi.fn(async (): Promise<{ pid: number; generation?: string }[]> => Array.from({ length: 1000 }, (_, pid) => pid)
+    .filter((pid) => gens.get(pid) !== null).map((pid) => ({ pid, generation: gens.get(pid) ?? `g${pid}` })))
   const open = new Map<string, 'terminal' | 'app' | 'harness' | 'maybe'>()
   const owners = new Map<string, { pid: number; engine: string }>()
   const working = new Map<string, boolean | null>()
@@ -13,6 +16,7 @@ function setup(over: Partial<ObservedDeps> = {}) {
   const deps: ObservedDeps = {
     now: () => clock.t,
     pidGeneration: (pid) => (gens.has(pid) ? gens.get(pid)! : `g${pid}`),
+    processes: procs,
     openSessions: {
       // The cached answer is empty before the first look, as it is when a dial attaches; only a fresh look sees.
       known: () => new Map(),
@@ -32,7 +36,7 @@ function setup(over: Partial<ObservedDeps> = {}) {
   const ev = (event: ObservedHookEvent['event'], over: Partial<ObservedHookEvent> = {}): ObservedHookEvent => ({
     engine: 'claude', sessionId: 's1', event, cwd: '/work/proj', callerPid: 100, hostHints: {}, at: clock.t, ...over,
   })
-  return { src, clock, gens, open, owners, working, externals, answers, changes, ev }
+  return { src, clock, gens, procs, open, owners, working, externals, answers, changes, ev }
 }
 
 describe('ObservedSource states', () => {
@@ -134,55 +138,67 @@ describe('ObservedSource states', () => {
 })
 
 describe('ObservedSource removal', () => {
-  it('session-end removes after 10 s', () => {
+  it('session-end removes after 10 s', async () => {
     const { src, clock, ev } = setup()
     src.ingest(ev('session-start'))
     src.ingest(ev('session-end'))
     clock.t += 9_000
-    src.tick()
+    await src.tick()
     expect(src.list()).toHaveLength(1)
     clock.t += 1_000
-    src.tick()
+    await src.tick()
     expect(src.list()).toHaveLength(0)
   })
 
-  it('a resume after session-end keeps the session', () => {
+  it('a resume after session-end keeps the session', async () => {
     const { src, clock, ev } = setup()
     src.ingest(ev('session-end'))
     clock.t += 5_000
     src.ingest(ev('session-start'))
     clock.t += 20_000
-    src.tick()
+    await src.tick()
     expect(src.list()).toHaveLength(1)
   })
 
-  it('removes a session whose pid is gone', () => {
+  it('removes a session whose pid is gone', async () => {
     const { src, gens, ev } = setup()
     src.ingest(ev('session-start'))
-    src.tick()
+    await src.tick()
     expect(src.list()).toHaveLength(1)
     gens.set(100, null)
-    src.tick()
+    await src.tick()
     expect(src.list()).toHaveLength(0)
   })
 
-  it('removes a session whose pid generation changed', () => {
+  it('removes a session whose pid generation changed', async () => {
     const { src, gens, ev } = setup()
     src.ingest(ev('session-start'))
+    // The first look notes its process's generation.
+    await src.tick()
     gens.set(100, 'reused')
-    src.tick()
+    await src.tick()
     expect(src.list()).toHaveLength(0)
   })
 
-  it('removes a pidless session after 12 h without an event', () => {
-    const { src, clock, gens, ev } = setup()
-    gens.set(100, null) // a pid whose generation cannot be read counts as no pid
+  it('tick reads every session\'s process generation in one call', async () => {
+    const { src, procs, ev } = setup()
+    for (let i = 0; i < 50; i++) src.ingest(ev('session-start', { sessionId: `s${i}`, callerPid: 200 + i }))
+    // A hook is never held up by a process read.
+    expect(procs).not.toHaveBeenCalled()
+    await src.tick()
+    expect(procs).toHaveBeenCalledTimes(1)
+    expect(src.list()).toHaveLength(50)
+  })
+
+  it('removes a session after 12 h without an event while the process table cannot be read', async () => {
+    const { src, clock, procs, ev } = setup()
+    procs.mockResolvedValue([])
     src.ingest(ev('session-start'))
     clock.t += 12 * 3600_000 - 1
-    src.tick()
+    await src.tick()
     expect(src.list()).toHaveLength(1)
     clock.t += 1
-    src.tick()
+    await src.tick()
     expect(src.list()).toHaveLength(0)
   })
 
