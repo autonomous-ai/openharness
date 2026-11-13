@@ -355,6 +355,16 @@ describe('ObservedSource and Harness\'s own sessions', () => {
     expect(changes).not.toHaveBeenCalled()
   })
 
+  it('the open scan lists no session whose folder it cannot tell', async () => {
+    const { src, open, owners } = setup()
+    // The voice router as the real readers see it: its pid record says it is open, and its store has no row for it
+    // (a program's transcript, `sdk-cli`, in the data folder), so nothing says where it runs.
+    open.set('router', 'app')
+    owners.set('router', { pid: 29140, engine: 'claude' })
+    await src.scanOpen()
+    expect(src.list()).toEqual([])
+  })
+
   it('the open scan lists no session in the data folder', async () => {
     const { src, open, owners, externals } = setup()
     open.set('v', 'app')
