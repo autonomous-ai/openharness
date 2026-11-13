@@ -201,7 +201,7 @@ def passed_count(name, output):
             passed = json.loads(Path(paths[-1]).read_text(encoding="utf-8"))["coverage"]["passed"]
         except (IndexError, OSError, ValueError, KeyError, TypeError):
             return 0
-        return passed if type(passed) is int else 0
+        return passed if type(passed) is int and passed > 0 else 0
     # The last summary: a test may print a line like it before Vitest's own.
     counts = re.findall(r"^\s*Tests\s+(?:\d+ failed \| )?(\d+) passed", output, re.MULTILINE)
     return int(counts[-1]) if counts else 0
