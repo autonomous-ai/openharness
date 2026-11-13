@@ -71,6 +71,9 @@ function claudeRewindMenuOpen(capture: string): boolean {
  * - "Make auto mode your default permission mode?" (2.1.321, Alba on Mac 2, 2026-11-11), asked of an agent Harness started in
  *   auto mode while its person's own default is another: its "No, keep …" row, so the person's default stays as it was, and
  *   the agent runs in auto mode either way. Down to it from Yes, then Enter.
+ * - "We recommend compacting earlier" with "enter confirm · esc not now" (Lennox on Mac 3, 2026-11-12, #4224): Esc, "not
+ *   now", so the person's autocompact setting stays as it was. Enter would take the highlighted "Autocompact at 400k tokens".
+ *   Never while a prompt shows under it: those lines are then text on the screen of an agent at work, and Esc would stop its turn.
  * A popup that reads otherwise, or two at once, gets nothing and stays the Lead's to see.
  */
 export function popupDismissKeys(capture: string): string[] | null {
@@ -83,7 +86,12 @@ export function popupDismissKeys(capture: string): string[] | null {
   const yes = lines.findIndex(line => /^(?:❯\s*)?Yes, set auto mode as my default permission mode$/.test(line))
   const autoDefault = count(/^Make auto mode your default permission mode\?$/) === 1 && yes >= 0
     && /^(?:❯\s*)?No, keep \S.*$/.test(lines[yes + 1] ?? '')
-  if (Number(draft) + Number(turnOff) + Number(survey) + Number(autoDefault) !== 1) return null
+  // Only while it is what is open: its title, then its footer, and no rule after it, as the prompt it hides comes back between
+  // two rules once it closes (claudeRewindMenuOpen). Esc interrupts a turn, and an agent at work can show these lines as text.
+  const footer = lines.findIndex(line => / · enter confirm · esc not now$/.test(line))
+  const compactEarlier = count(/^We recommend compacting earlier$/) === 1 && count(/ · enter confirm · esc not now$/) === 1
+    && lines.slice(0, footer).includes('We recommend compacting earlier') && !lines.slice(footer + 1).some(line => /[─━]{8,}/u.test(line))
+  if (Number(draft) + Number(turnOff) + Number(survey) + Number(autoDefault) + Number(compactEarlier) !== 1) return null
   if (autoDefault) return lines[yes]!.startsWith('❯') ? ['Down', 'Enter'] : ['Enter']
-  return turnOff ? ['Escape'] : ['0']
+  return turnOff || compactEarlier ? ['Escape'] : ['0']
 }
