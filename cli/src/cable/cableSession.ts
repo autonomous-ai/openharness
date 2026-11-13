@@ -2424,7 +2424,9 @@ export class CableSession {
         return
       }
       try {
-        const decision = await this.host.route(transcript, agents)
+        // Only agents the dial may talk to: the router sends each one's id and name to the backend, and nothing of an
+        // agent outside Harness leaves this computer.
+        const decision = await this.host.route(transcript, agents.filter((a) => !this.lacks(a.id, 'v')))
         if (!current()) return
         agentId = decision.agentId
         this.log(`cable: routed → ${agentId} (${decision.reason})`)
