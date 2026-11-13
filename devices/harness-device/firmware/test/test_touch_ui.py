@@ -23,6 +23,11 @@ host_detect = (here / '../../../../cli/src/cable/hosts/hostDetect.ts').read_text
 daemon_hosts = dict(re.findall(r"^\s+'?([\w-]+)'?: '([^']+)',$", host_detect.split('const NAMES', 1)[1].split('}', 1)[0], re.M))
 dial_hosts = dict(re.findall(r'\{"([\w-]+)", "([^"]+)"\}', function('host_name')))
 assert daemon_hosts and dial_hosts == {k: v for k, v in daemon_hosts.items() if v != 'Terminal'}, (dial_hosts, daemon_hosts)
+# The daemon renews the turn of an agent outside a pane every REMIND_MS; at the fuse or above, the dial would drop a
+# turn still running between two reminders.
+devices_ts = (here / '../../../../cli/src/services/devices.ts').read_text()
+remind_ms = int(re.search(r'^const REMIND_MS = ([\d_]+)$', devices_ts, re.M)[1].replace('_', ''))
+assert remind_ms < int(re.search(r'^#define BUSY_FUSE_MS (\d+)u$', source, re.M)[1]), remind_ms
 
 code = r'''
 #include "runtime.h"
@@ -53,7 +58,7 @@ code = r'''
 # Keep real protocol capacities: a larger fake buffer can hide target truncation.
 code += defines('CABLE_READ_TOKEN_MAX','ID_MAX','CABLE_NAME_MAX','SWARM_ID_MAX','SWARMS_MAX','CABLE_MAX_AGENTS','MAX_PROJECTS')
 code += defines('NOTICES','QUESTION_MAX','OPTION_MAX','PANE_MEMORY_MAX','UI_FONT','Q_ROWS','DRAFT_ROWS',source=source)
-code += defines('FACE_CX', 'BUDDY_LILAC', source=source)
+code += defines('FACE_CX', 'BUDDY_LILAC', 'BUSY_FUSE_MS', source=source)
 code += defines('CABLE_CAP_S', 'CABLE_CAP_V', 'CABLE_CAP_F', 'CABLE_CAP_A', 'CABLE_CAPS_ALL')
 code += '#define NOTICE_TTL_MS 21600000u\n#define ERROR_VIEW_MS 8000u\nstatic void ui_cable_toast(const char *message) { (void)message; }\n'
 if '#define PANE_RESULT_BYTES ' in source:

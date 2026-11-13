@@ -67,6 +67,9 @@
 #define SET_TEXT_W 300
 #define PANE_MEMORY_MAX 128
 #define PANE_RESULT_BYTES 1024
+// A turn heard nothing of for this long is over: the daemon renews a running one with turn.started, an agent outside
+// a pane every REMIND_MS (cli/src/services/devices.ts), which test_touch_ui.py keeps below this.
+#define BUSY_FUSE_MS 25000u
 typedef enum {
     HOME,
     AGENTS,
@@ -474,7 +477,7 @@ static pane_memory_t *pane_memory(const char *id, bool create)
 static void pane_memory_apply(agent_t *a, pane_memory_t *m)
 {
     if (!a || !m) return;
-    if (m->busy && ms() - m->last_busy > 25000) m->busy = false;
+    if (m->busy && ms() - m->last_busy > BUSY_FUSE_MS) m->busy = false;
     COPY(a->session, m->session);
     COPY(a->preview, m->preview);
     COPY(a->full, m->full);
@@ -1781,7 +1784,7 @@ static void render_home(ht_scene_t *f)
     if (s.voice_retry_until) snprintf(status, sizeof status, "%s", s.hint[0] ? s.hint : "Try again");
     else status[0] = 0;
     // Seconds since THIS DIAL heard about the turn, not since it began: turn.started carries no
-    // timestamp. The 25 s staleness fuse (ui_prune_stale_busy) is what keeps this from counting a
+    // timestamp. The staleness fuse (BUSY_FUSE_MS, ui_prune_stale_busy) is what keeps this from counting a
     // turn nobody is running any more.
     // 0 = unknown (not busy, no start stamp, or under a second): nothing is drawn. The same stamp sets the
     // redraw deadline: the text only changes when fmt_elapsed's displayed unit does (elapsed.h), not every tick.
@@ -4316,7 +4319,7 @@ static void event(const char *id, const char *session, const char *kind, const c
     if (kind && !strcmp(kind, "activity")) {
         // Activity is a read of the current terminal, not a new turn or a recap.
         // A late read must never reanimate an idle pane.
-        if (m->busy && ms() - m->last_busy <= 25000) {
+        if (m->busy && ms() - m->last_busy <= BUSY_FUSE_MS) {
             activity_text(m->activity, sizeof m->activity, text_);
             if (a) { COPY(a->tool, m->activity); change(); }
         }
@@ -4404,7 +4407,7 @@ int ui_prune_stale_busy(void)
     int n = 0;
     uint32_t now = ms();
     for (int i = 0; i < s.count; i++)
-        if (s.agents[i].busy && now - s.agents[i].last_busy > 25000) {
+        if (s.agents[i].busy && now - s.agents[i].last_busy > BUSY_FUSE_MS) {
             s.agents[i].busy = false;
             pane_memory_t *m = pane_memory(s.agents[i].id, false);
             if (m) m->busy = false;
