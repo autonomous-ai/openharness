@@ -152,6 +152,9 @@ function isPlaceholder(id: string): boolean {
 
 /** How long a keepalive may be answered from the last manifest read — see firmwareFor. */
 const RELEASE_KEEP_MS = 30 * 60_000
+/** The longest the machine list holds this computer's Harness agents for Swarm cards a dial asked for: a Swarm service
+ *  that is down or signed out never sends them. */
+const CARDS_WAIT_MS = 10_000
 /**
  * The wait before trying the plug-in's lane again, doubling to the cap: the same backoff as the lane's own reconnect
  * (deviceLink.ts reconnectLater). Diego, 11-01: a first open lost to a refresh that failed in a network blip was
@@ -582,7 +585,11 @@ export class DaemonCableHost implements CableHost {
     return this.cards
   }
 
+  /** When a dial asked for the cards, while it wants them; the machine list's wait for them runs from here. */
+  private cardsAskedAt: number | null = null
+
   swarmCardsWanted(on: boolean): void {
+    this.cardsAskedAt = on ? this.cardsAskedAt ?? Date.now() : null
     this.wiring.swarmCardsWanted?.(on)
   }
 
@@ -685,7 +692,9 @@ export class DaemonCableHost implements CableHost {
     // The reader's Buddy is shown on its Swarm card, and its session id never leaves this computer (cableSession dialBuddy).
     // Dropped after the registry's dedupe, which needs it to tell its Claude Code session from an agent outside Harness.
     const buddies = new Set((this.cards ?? []).flatMap((card) => card.leads.map((l) => l.buddy?.local).filter((id) => id !== undefined)))
-    const { rows, total } = selectForDial(registry.agents().filter((a) => !buddies.has(a.id)))
+    // Before the cards a dial asked for, a Buddy cannot be told from any other Harness agent: theirs wait for them.
+    const waiting = this.cards === null && this.cardsAskedAt !== null && Date.now() - this.cardsAskedAt < CARDS_WAIT_MS
+    const { rows, total } = selectForDial(registry.agents().filter((a) => !buddies.has(a.id) && !(waiting && a.host === 'harness')))
     const agents = rows.map((a): CableAgent => {
       const caps = registry.source(a.id)?.capabilities(a)
       // A Harness agent keeps the row the window would show (its chips too); another app's is drawn from what was heard.
