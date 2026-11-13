@@ -1,6 +1,5 @@
 // Pets voice (pro-edge2 "Listening" and "It answers"): the pet alone, as in its room. Listening: the room chrome (the agent's name on top) and the
-// LISTEN scene at 2x. Opened from a Lead view with no harness here (a remote Lead, talked to by its Swarm id) the roster has no agent: the name is "Lead" and the
-// pet the Lead's engine, as its who row shows them. On the Buddy screen (the Lead's chat is the Buddy's) it is the Buddy: its engine's pet and its name in lilac. Sending: the name and the SEND scene at 2x. No bubbles, no wave, no dots: the pet's own animation is all that moves
+// LISTEN scene at 2x. Sending: the name and the SEND scene at 2x. No bubbles, no wave, no dots: the pet's own animation is all that moves
 // (pod_view_next_ms follows it). One full-screen POD_A_TALK hit, added last, ends the recording (or the glue's timing decides).
 #include <stdio.h>
 #include <string.h>
@@ -57,18 +56,12 @@ static void fx_send(ht_scene_t *s, uint32_t now_ms)
         ht_pro_image(s, 360 + (i - 1) * SPARK_PITCH - PH_SPARK_W / 2, FX_Y - PH_SPARK_H / 2, spark(i == lit));
 }
 
-enum { BUDDY_INK = 0xC49BFF };   // the Buddy's lilac, as the Lead view's pill and name
-
-// Who the voice screen shows: the roster agent of the frame, else the Lead of a Lead frame ("Lead" and its engine), or its Buddy on the Buddy screen. NULL: nobody.
-typedef struct { const pod_agent_t *agent; const char *engine, *name; unsigned ink; } talk_who_t;
+// Who the voice screen shows: the roster agent of the frame. name NULL: nobody.
+typedef struct { const char *engine, *name; } talk_who_t;
 static talk_who_t talk_who(const pod_nav_t *nav, const pod_model_t *m)
 {
-    talk_who_t w = { pod_view_agent_of(nav, m), NULL, NULL, PH_ROOM_INK };
-    const pod_lead_t *l = pod_nav_lead(nav, m, NULL);
-    if (nav->talk_buddy) return (talk_who_t){ NULL, nav->talk_engine, nav->talk_name, BUDDY_INK };   // the face pinned at begin: a side flip mid-recording renames nothing
-    if (w.agent) { w.engine = w.agent->engine; w.name = w.agent->name; }
-    else if (l) { w.engine = l->engine; w.name = "Lead"; }
-    return w;
+    const pod_agent_t *a = pod_view_agent_of(nav, m);
+    return a ? (talk_who_t){ a->engine, a->name } : (talk_who_t){ NULL, NULL };
 }
 
 void ph_view_talk(pod_out_frame_t *f, const pod_nav_t *nav, pod_model_t *m, uint32_t now_ms)
@@ -77,7 +70,7 @@ void ph_view_talk(pod_out_frame_t *f, const pod_nav_t *nav, pod_model_t *m, uint
     const talk_who_t who = talk_who(nav, m);
     if (!who.name) { s->background = C(PH_ROOM_BG); return; }
     s->background = C(PH_ROOM_BG);
-    ph_title_ink(s, who.name, who.ink);
+    ph_title(s, who.name);
     if (!pod_pet_for(who.engine)) {   // no pet: the effect alone
         if (nav->sending) fx_send(s, now_ms); else fx_listen(s, now_ms);
         if (!nav->sending) pod_hit_add(f, 0, 0, POD_W, POD_W, POD_A_TALK, 0);

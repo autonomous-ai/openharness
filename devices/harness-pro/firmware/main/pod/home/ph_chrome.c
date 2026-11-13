@@ -70,8 +70,7 @@ void ph_room_floor(ht_scene_t *s, int cx, int foot, int w)
 enum { NAME_CY = 46, NAME_MAX_W = 640 };
 
 // A title centred on x = 360 (the room's name, Notices), cut with an ellipsis at NAME_MAX_W.
-void ph_title(ht_scene_t *s, const char *t) { ph_title_ink(s, t, PH_ROOM_INK); }
-void ph_title_ink(ht_scene_t *s, const char *t, unsigned rgb)
+void ph_title(ht_scene_t *s, const char *t)
 {
     char buf[sizeof((pod_agent_t *)0)->name + 4];
     snprintf(buf, sizeof buf, "%s", t);
@@ -85,7 +84,7 @@ void ph_title_ink(ht_scene_t *s, const char *t, unsigned rgb)
         } while (len > 0 && ht_pro_width(f, buf) > NAME_MAX_W);
     }
     int w = ht_pro_width(f, buf);
-    ph_text(s, (POD_W - w) / 2, NAME_CY, w + 2, f, rgb, buf);
+    ph_text(s, (POD_W - w) / 2, NAME_CY, w + 2, f, PH_ROOM_INK, buf);
 }
 
 void ph_room_chrome(pod_out_frame_t *f, const pod_nav_t *nav, const pod_model_t *m, const pod_agent_t *a)
