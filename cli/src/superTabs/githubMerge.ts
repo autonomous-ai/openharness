@@ -853,7 +853,8 @@ export class GitHubMerge {
     const me = tasks.length ? (await this.login(repo)).toLowerCase() : ''
     let found: { name: string; task: number } | null = null
     for (const task of tasks) {
-      const words = (await this.reads.current(repo, `/repos/${repo}/issues/${task}/comments?per_page=${PAGE}`, 3))
+      // A number the pull request names that is no issue's has no words: never a repository this login cannot read (#4233).
+      const words = (await this.reads.currentIfThere(repo, `/repos/${repo}/issues/${task}/comments?per_page=${PAGE}`, 3))
         .filter(c => TEAM.has(c.author_association) && String(object(c.user).login ?? '').toLowerCase() === me)
         .map(c => GAVE.exec(String(c.body ?? '').slice(0, 500))?.[1]).filter((name): name is string => !!name)
       const last = words.at(-1)

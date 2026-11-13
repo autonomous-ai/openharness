@@ -481,11 +481,16 @@ export function outOfQuota(read: Read): AwayBuilder[] {
 /** A task a builder of the team took, and when it was last touched: its issue, or a pull request for it. */
 export interface Taken { number: number; label: string; name: string; touched: number }
 
-/** The tasks a pull request is for: the issues it closes, and its builder's branch for one (`pip/14`). */
+/** The largest number an issue can have, GitHub's own (a 32-bit one). */
+const ISSUE_NUMBER_MAX = 2_147_483_647
+
+/** The tasks a pull request is for: the issues it closes, and its builder's branch for one (`pip/14`). Only numbers an issue
+ *  can have: a train's branch ends in the time it was made (`harness-train/1794456964862`), and read as a task, its comments
+ *  were asked of GitHub, which has no such issue (#4233). */
 export function tasksOf(pull: Json): number[] {
   const branch = /^[^/]+\/(\d+)$/.exec(String((pull.head as Json | undefined)?.ref ?? ''))?.[1]
   const closes = [...String(pull.body ?? '').matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/gi)].map(m => Number(m[1]))
-  return [...new Set([...closes, ...branch ? [Number(branch)] : []])]
+  return [...new Set([...closes, ...branch ? [Number(branch)] : []])].filter(number => number >= 1 && number <= ISSUE_NUMBER_MAX)
 }
 
 /** How many pieces cut off a task are still open (githubSplit.ts), as GitHub counts its sub-issues. A task with some waits

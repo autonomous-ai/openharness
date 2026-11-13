@@ -103,6 +103,9 @@ describe('reads with their ETags kept (GitHubReads)', () => {
   it('stops one repository it cannot read and every repository while gh is signed out', async () => {
     const unreadable = new GitHubReads(async () => ({ status: 404, etag: null, body: null, resetAt: null }))
     await expect(unreadable.current('acme/secret', '/repos/acme/secret/pulls')).rejects.toMatchObject({ code: 'UNREADABLE', everywhere: false })
+    // The read that failed is named, by its path with no query, and its status (#4233).
+    await expect(unreadable.current('acme/secret', '/repos/acme/secret/issues/7/comments?per_page=100')).rejects.toMatchObject({
+      message: 'this computer\'s gh login cannot read acme/secret: GitHub answered 404 for /repos/acme/secret/issues/7/comments.' })
     const out = new GitHubReads(async () => { throw Object.assign(new Error('signed out'), { code: 'GH_SIGNED_OUT' }) })
     await expect(out.one('acme/app', '/repos/acme/app')).rejects.toMatchObject({ code: 'GH_SIGNED_OUT', everywhere: true })
   })
@@ -159,6 +162,28 @@ describe('a file of a repository (GitHubReads.file)', () => {
     expect(asked.length).toBe(before + 1)
     // Refused is not missing: it stops the repository's pass, as any read.
     await expect(reads.ifThere('acme/app', '/repos/acme/app/issues/9')).rejects.toMatchObject({ code: 'UNREADABLE', everywhere: false })
+  })
+
+  // #4233: a pull request named a number that is no issue's, and its comments' 404 read as a repository this login cannot read.
+  it('reads a list of what is not there as none, asks again only five minutes on, and still stops on a refusal', async () => {
+    let now = Date.parse('2026-11-12T11:30:00Z')
+    const asked: string[] = []
+    const reads = new GitHubReads(async path => {
+      asked.push(path)
+      const body = path.startsWith('/repos/acme/app/issues/2/comments') ? [{ id: 1 }] : null
+      return { status: body ? 200 : path.includes('/issues/9/') ? 403 : 404, etag: null, body, resetAt: null }
+    }, () => now)
+    const comments = (number: number) => `/repos/acme/app/issues/${number}/comments?per_page=100`
+    expect(await reads.currentIfThere('acme/app', comments(2))).toEqual([{ id: 1 }])
+    expect(await reads.currentIfThere('acme/app', comments(99999))).toEqual([])
+    expect(await reads.currentIfThere('acme/app', comments(99999))).toEqual([])
+    expect(asked.filter(path => path === comments(99999))).toHaveLength(1)
+    now += 5 * 60_000
+    expect(await reads.currentIfThere('acme/app', comments(99999))).toEqual([])
+    expect(asked.filter(path => path === comments(99999))).toHaveLength(2)
+    expect(await reads.freshPagesIfThere('acme/app', comments(99999), 1)).toEqual([])
+    expect(await reads.freshPagesIfThere('acme/app', comments(2), 1)).toEqual([{ id: 1 }])
+    await expect(reads.currentIfThere('acme/app', comments(9))).rejects.toMatchObject({ code: 'UNREADABLE', everywhere: false })
   })
 })
 

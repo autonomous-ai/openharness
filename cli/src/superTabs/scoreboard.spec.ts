@@ -301,7 +301,7 @@ describe('a part GitHub does not give', () => {
     const hub = github(talk, files), unread = vi.fn()
     hub.failing.set(/\/comments$/, 403)
     expect(await board(twenty, hub, unread)).toEqual({ waits: null, trains: { landed: 0, closed: {} }, hot: { landings: 20, files: [['src/a.ts', 20]] }, conflicts: null })
-    expect(unread.mock.calls).toEqual([['waits', 'this computer\'s gh login cannot read acme/app.']])
+    expect(unread.mock.calls).toEqual([['waits', 'this computer\'s gh login cannot read acme/app: GitHub answered 403 for /repos/acme/app/issues/1/comments.']])
     expect(hub.asked.filter(path => path.includes('/comments'))).toHaveLength(6)
     // The files alone: the waits are said all the same.
     const other = github(talk, files), missed = vi.fn()
