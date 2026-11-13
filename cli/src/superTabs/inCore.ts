@@ -6,7 +6,8 @@
  * What it hands the core is typed by core/api.ts, the core's contract: the Super Tab members' waits and cards on the
  * devices (`SuperTabsCore`), a member's terminal for its Lead, the close and reopen of its agents (`SwarmAgents`), a
  * start's Swarm role (`SwarmLaunch`), an attached agent's role at its restart (`AdoptSwarmSkill`), its chat queued while
- * an agent works, the Leads that are never stopped, and its chat files streamed to the backend.
+ * an agent works, the Leads that are never stopped, and its chat files, which the gateway sends to the backend. What a
+ * service running in the core's process needs of the Swarm is not here: superTabs/inServices.ts.
  *
  * Its side of the core and nothing else: the Super Tab service runs in a process of its own, and a core that runs it
  * here loads it by an import of its own (core/main.ts). This file once re-exported the service's start, so every
@@ -23,7 +24,6 @@ export { createSwarmAgents } from './inCore/agents.js'
 export { swarmLaunch } from './inCore/launch.js'
 export { typesWhileBusy } from './inCore/deliveries.js'
 export { retainedHarnesses, retainedLeads } from './retention.js'
-export { recordCleanupClose } from './cleanupCloses.js'
 // A Product Manager switched from its pane (Change agent) is the one stop of a Lead its close guard and stop guard let through.
 export { leadCloseProtected, leadSwitchEnded, leadSwitching, mayBeLead } from './leadSwitch.js'
 export { forwardAttachmentUpload } from '../lib/superTabAttachmentProxy.js'

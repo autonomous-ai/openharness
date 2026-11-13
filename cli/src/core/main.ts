@@ -756,7 +756,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     ? await import('../services/inline.js') : null
   // The Swarm's side of the services that act on it, for those of them that run in this process while it is on
   // (superTabs/inServices.ts): off, or with them in their own processes, none of it is loaded here.
-  const swarmServices = swarm && ['sharing', 'handoff', 'models'].some((name) => !outOfProcess.has(name))
+  const swarmServices = swarm && ['sharing', 'handoff', 'models', 'agentCleanup'].some((name) => !outOfProcess.has(name))
     ? await import('../superTabs/inServices.js') : null
   // The Swarm's own service runs in a process of its own. Its code is loaded here only when it runs here instead: with every
   // service in the core, a list without it, or no master (Harness OS). Loaded now, with the other doors: awaited in the
@@ -1872,7 +1872,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The recaps: in this process, or in the edge host (services/recapsProcess.ts), told each turn's lifecycle.
   if (outOfProcess.has('recaps')) ports.recaps = recapsLink.port; else serviceHost.start('recaps', inline!.startRecaps, coreApi, RECAPS_FALLBACKS)
   // Cleaning up after agents: the harnesses a closed harness started, and those idle half an hour (services/agentCleanup.ts).
-  if (outOfProcess.has('agentCleanup')) ports.agentCleanup = agentCleanupLink.port; else serviceHost.start('agentCleanup', (core, given) => inline!.startAgentCleanup(core, given, swarm ? { retained: swarm.retainedHarnesses, closed: swarm.recordCleanupClose } : undefined), coreApi, AGENT_CLEANUP_FALLBACKS)
+  if (outOfProcess.has('agentCleanup')) ports.agentCleanup = agentCleanupLink.port; else serviceHost.start('agentCleanup', (core, given) => inline!.startAgentCleanup(core, given, swarmServices ? { retained: swarmServices.retainedHarnesses, closed: swarmServices.recordCleanupClose } : undefined), coreApi, AGENT_CLEANUP_FALLBACKS)
   if (!outOfProcess.has('shell')) serviceHost.serve('shell', inline!.startShell, coreApi, SHELL_REQUESTS)
   // A sandboxed Chrome beside each agent whose Browser is on (services/agentBrowser.ts): in its own process, on
   // demand (services/agentBrowserProcess.ts), or in this one.
