@@ -4,7 +4,7 @@ import { composerState } from './composer.js'
 import { screen } from './screen.js'
 
 /**
- * Task #2428 (reported 11-03): a person renamed their Buddy's Claude Code session with Claude Code's own `/rename`, and
+ * Task #2428 (reported 11-03): a person renamed their agent's Claude Code session with Claude Code's own `/rename`, and
  * from then on no chat message reached it, while typing in its terminal still worked. Claude Code then sets the session's
  * name in its prompt box's top rule, the name and one `─` after it. These are real panes of Claude Code 2.1.317 after
  * `/rename my-renamed-buddy`, read with tmux at 120 and 60 columns.
@@ -29,7 +29,7 @@ describe('a Claude Code session renamed with /rename', () => {
     for (const capture of renamed) expect(capture).toMatch(/^─{3,} my-renamed-buddy ─$/m)
   })
 
-  it('takes a Swarm message: its prompt box is found, nothing holds the delivery', () => {
+  it('takes a delivered message: its prompt box is found, nothing holds the delivery', () => {
     for (const capture of renamed) {
       expect(composerState(capture)).toBe('ready')
       expect(screen.inspect(capture)).toMatchObject({ messageHold: null, teamHold: null, question: null })

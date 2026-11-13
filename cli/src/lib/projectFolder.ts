@@ -15,7 +15,7 @@ import type { ScmLaunchRecord } from '../scm/types.js'
  *  harness and the time. `suggested` marks a name the app made up (from the first task — the phone has
  *  no name field), which is numbered past a folder that exists rather than refused. */
 export type ProjectFolder = { source: 'new'; name?: string; suggested?: boolean } | { source: 'remote'; repositoryUrl: string; name: string }
-  | { source: 'worktree'; gitSource: string; branchRef?: string; branchName?: string; existingBranch?: boolean; placeholder?: boolean; fromDefaultBranch?: boolean }
+  | { source: 'worktree'; gitSource: string; branchRef?: string; branchName?: string; existingBranch?: boolean; placeholder?: boolean }
   | { source: 'branch'; gitSource: string; branchRef?: string; branchName?: string }
 
 /** Where this daemon and the desktop app put the workspaces they make. A folder directly inside it is
@@ -36,12 +36,8 @@ export function parseProjectFolder(payload: Record<string, unknown>): ProjectFol
   if (payload.projectSource === undefined) return null
   if (payload.projectSource === 'worktree' || payload.projectSource === 'branch') {
     const ref = payload.branchRef
-    // `branchBase: 'default'` starts a new worktree from the remote's default branch rather than from `HEAD`; it
-    // is for a start that names no branch, and for a worktree.
-    const base = payload.branchBase
     if (!validGitPath(payload.gitSource) || payload.repositoryUrl !== undefined ||
         (ref !== undefined && (typeof ref !== 'string' || ref.length > 1024 || !/^refs\/(heads|remotes)\/[^\s\x00-\x1f\x7f]+$/.test(ref))) ||
-        (base !== undefined && (base !== 'default' || ref !== undefined || payload.projectSource !== 'worktree')) ||
         (payload.projectSource === 'branch' && (typeof ref !== 'string' || !ref.startsWith('refs/heads/')))) {
       throw new ProjectFolderError('INVALID_PROJECT_SOURCE', 'Choose a Git project and branch.')
     }
@@ -52,8 +48,7 @@ export function parseProjectFolder(payload: Record<string, unknown>): ProjectFol
       }
       return { source: 'worktree', gitSource: payload.gitSource, ...(typeof ref === 'string' ? { branchRef: ref } : {}),
         branchName: name, ...(payload.branchMode === 'existing' ? { existingBranch: true } : {}),
-        ...(payload.branchMode === 'placeholder' ? { placeholder: true } : {}),
-        ...(base === 'default' ? { fromDefaultBranch: true } : {}) }
+        ...(payload.branchMode === 'placeholder' ? { placeholder: true } : {}) }
     }
     // A new branch for the folder itself, named by `branchRef` too.
     if (payload.projectSource === 'branch' && name !== undefined) {
@@ -62,8 +57,7 @@ export function parseProjectFolder(payload: Record<string, unknown>): ProjectFol
       }
       return { source: 'branch', gitSource: payload.gitSource, branchRef: ref, branchName: name }
     }
-    return { source: payload.projectSource, gitSource: payload.gitSource, ...(typeof ref === 'string' ? { branchRef: ref } : {}),
-      ...(base === 'default' ? { fromDefaultBranch: true } : {}) }
+    return { source: payload.projectSource, gitSource: payload.gitSource, ...(typeof ref === 'string' ? { branchRef: ref } : {}) }
   }
   if (payload.projectSource === 'new' && payload.repositoryUrl === undefined) {
     // Slugged again here: the name becomes a path segment, so it is never taken on trust.
@@ -140,7 +134,7 @@ export async function prepareProjectFolder(
      *  (sshHosts.ts), stopping at the first that works: a person who reaches a private repository only over SSH, or
      *  only through a second account's key, can paste the browser's link. It is also what lets an address name an
      *  alias at all. Set only for the computer owner's own start (core/agents/launches.ts). Off, one attempt and no
-     *  alias: a Swarm's or a contribution's start, whose address someone else chose, never picks the owner's accounts. */
+     *  alias: a start whose address someone else chose never picks the owner's accounts. */
     cloneFallback?: boolean
     /** Told which address a clone used, when it cloned; `alias` when that was an SSH alias. */
     onCloned?: (clone: { url: string; alias?: string }) => void
@@ -155,7 +149,7 @@ export async function prepareProjectFolder(
       // The isolated-workspace path, through the SCM seam. The git implementation makes exactly the
       // prepareGitProject call this used to make.
       const { cwd, launchRecord } = await scmByKind('git')!.prepareIsolated(project.gitSource, {
-        root, base: project.branchRef, ...(project.fromDefaultBranch ? { fromDefaultBranch: true } : {}),
+        root, base: project.branchRef,
         ...(project.branchName ? { name: project.branchName, existing: project.existingBranch === true, placeholder: project.placeholder === true } : {}),
       })
       options.onPrepared?.({ cwd, scmLaunchRecord: launchRecord })
@@ -208,10 +202,10 @@ export async function prepareProjectFolder(
     const repository = parseGitHubRepository(project.repositoryUrl)
     if (!repository) throw new ProjectFolderError('INVALID_REPOSITORY', 'Enter a GitHub URL or owner/repository.')
     const resolve = options.resolveHost ?? resolveHost
-    // An alias picks one of this computer's GitHub accounts, so only its owner's own start may name one. A Swarm Lead or
-    // a contribution sets the address of a project that starts on someone else's computer: an alias there would choose
-    // that owner's second account, and "isn't a GitHub host" would tell the Lead which aliases exist. Such a start is
-    // refused in the same words as any other address, before ssh is asked anything.
+    // An alias picks one of this computer's GitHub accounts, so only its owner's own start may name one. Someone else
+    // setting the address of a project that starts here would choose the owner's second account, and "isn't a GitHub
+    // host" would tell them which aliases exist. Such a start is refused in the same words as any other address, before
+    // ssh is asked anything.
     if (repository.alias && !options.cloneFallback) {
       throw new ProjectFolderError('INVALID_REPOSITORY', 'Enter a GitHub HTTPS or SSH URL, or owner/repository.')
     }
@@ -391,12 +385,4 @@ export function cloneFailure(diagnostic: string): ProjectFolderError {
   return /authentication|permission denied|could not read username|repository not found/i.test(diagnostic)
     ? new RepositoryAccessError('CLONE_FAILED', 'Could not access this repository. Check the URL and GitHub access on the selected machine.')
     : new ProjectFolderError('CLONE_FAILED', `Could not clone the repository${gitsReason(diagnostic) ? ` (git said: ${gitsReason(diagnostic)})` : ''}. Check the URL and connection, then retry.`)
-}
-
-/** The same GitHub repository over the other transport, for parseProjectFolder's two forms; null for anything else. */
-export function otherGitHubTransport(url: string): string | null {
-  const ssh = /^git@github\.com:([^/\s]+\/[^/\s]+)$/.exec(url)
-  if (ssh) return `https://github.com/${ssh[1]}`
-  const https = /^https:\/\/github\.com\/([^/\s]+\/[^/\s]+)$/.exec(url)
-  return https ? `git@github.com:${https[1]}` : null
 }

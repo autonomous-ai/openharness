@@ -261,7 +261,7 @@ describe('the agent browser on the real daemon', () => {
     const off = await inPane(d, client, agent.id, ['browser', 'snapshot'])
     expect(off).toMatchObject({ code: 4, out: '', err: `${OFF_LINE}\n` })
 
-    // Started again, with the backend unreachable and the agent in no Swarm.
+    // Started again, with the backend unreachable.
     const before = log().length
     expect(await client.request('agent_browser_start', { agentId: agent.id }, 60_000)).toMatchObject({ ok: true })
     await ready(client, agent.id, 'the browser to be ready again')

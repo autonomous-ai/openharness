@@ -13,10 +13,6 @@ import { createSubmissions } from '../core/engines/submissions.js'
 import { screenFor } from '../engines/screens.js'
 import { submissionFor } from '../engines/submissions.js'
 import { submissionPolicy } from '../engines/submissionPolicies.js'
-import type { SubmissionReading } from '../engines/facets/submission.js'
-
-/** The Swarm's chat, which its maker types while the agent works (core/deliveries.ts `typesWhileBusy`). */
-const swarmChat = (deliveryId: string): boolean => deliveryId.startsWith('team:service:superTabs:')
 
 function session(engine: 'claude' | 'codex' | 'cursor' | 'commandcode' | 'openclaw' = 'codex'): RegisteredSession {
   return {
@@ -39,37 +35,7 @@ const codexComposer = (draft: string, footer = '  ? for shortcuts') => `\n\u001b
 describe('SessionInputController', () => {
   afterEach(() => vi.useRealTimers())
 
-  it('keeps Swarm B queued through a person paste and its uncleared composer after accepting Swarm A', async () => {
-    vi.useFakeTimers()
-    let release!: (ok: boolean) => void
-    const personWrite = new Promise<boolean>(resolve => { release = resolve })
-    const typed: string[] = [], onDelivery = vi.fn()
-    let draft = ''
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
-      getSession: () => session('claude'), validateRuntime: async () => true,
-      inject: async (_id, text) => { typed.push(text); return text === 'person' ? personWrite : true },
-      sendKey: async () => true, capture: async () => claudeBox(draft), beforeTeamWrite: async () => null,
-      onDelivery, onError: vi.fn() })
-    controller.setTurnOpen('s1', true)
-    controller.submit('s1', 'A', 'team:service:superTabs:A')
-    await vi.advanceTimersByTimeAsync(1)
-    controller.submit('s1', 'B', 'team:service:superTabs:B')
-    controller.submit('s1', 'person')
-    await vi.advanceTimersByTimeAsync(1)
-    expect(typed).toEqual(['A', 'person'])
-    draft = 'person'
-    release(true)
-    await vi.advanceTimersByTimeAsync(6_000)
-    expect(typed).toEqual(['A', 'person'])
-    draft = ''
-    await vi.advanceTimersByTimeAsync(30_000)
-    expect(typed).toEqual(['A', 'person', 'B'])
-    expect(onDelivery).toHaveBeenCalledWith(expect.objectContaining({ deliveryId: 'team:service:superTabs:B', state: 'delivered' }))
-    controller.forget('s1')
-  })
-
-  // Whose deliveries type while the agent works is the core's to say (core/deliveries.ts): the input knows no maker by name.
-  it('holds a delivery for idle when its maker is not one that types while the agent works, whatever its id', async () => {
+  it('holds a delivery while the agent works, and types it once the turn ends', async () => {
     vi.useFakeTimers()
     const typed: string[] = []
     const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
@@ -77,367 +43,12 @@ describe('SessionInputController', () => {
       inject: async (_id, text) => { typed.push(text); return true },
       sendKey: async () => true, capture: async () => claudeBox(''), beforeTeamWrite: async () => null, onError: vi.fn() })
     controller.setTurnOpen('s1', true)
-    controller.submit('s1', 'A', 'team:service:superTabs:A')
+    controller.submit('s1', 'A', 'team:service:messages:A')
     await vi.advanceTimersByTimeAsync(3_001)
     expect(typed).toEqual([])
     controller.onTurnEnded('s1')
     await vi.advanceTimersByTimeAsync(1)
     expect(typed).toEqual(['A'])
-    controller.forget('s1')
-  })
-
-  it('serializes a person message arriving while drained Swarm B is mid-paste', async () => {
-    vi.useFakeTimers()
-    let release!: (ok: boolean) => void
-    const swarmWrite = new Promise<boolean>(resolve => { release = resolve })
-    const typed: string[] = [], onDelivery = vi.fn()
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
-      getSession: () => session('claude'), validateRuntime: async () => true,
-      inject: async (_id, text) => { typed.push(text); return text === 'B' ? swarmWrite : true },
-      sendKey: async () => true, capture: async () => claudeBox(''), beforeTeamWrite: async () => null,
-      onDelivery, onError: vi.fn() })
-    controller.setTurnOpen('s1', true)
-    controller.submit('s1', 'A', 'team:service:superTabs:A')
-    controller.submit('s1', 'B', 'team:service:superTabs:B')
-    await vi.advanceTimersByTimeAsync(3_001)
-    expect(typed).toEqual(['A', 'B'])
-    controller.submit('s1', 'person')
-    await vi.advanceTimersByTimeAsync(1)
-    expect(typed).toEqual(['A', 'B'])
-    release(true)
-    await vi.advanceTimersByTimeAsync(1)
-    expect(typed).toEqual(['A', 'B', 'person'])
-    expect(onDelivery).toHaveBeenCalledWith(expect.objectContaining({ deliveryId: 'team:service:superTabs:B', state: 'delivered' }))
-    controller.forget('s1')
-  })
-
-  it.each(['transcript', 'screen unavailable', 'submission unavailable'] as const)('does not fail a busy person receipt with waiting Swarm input when %s', async mode => {
-    vi.useFakeTimers()
-    const receipt = vi.fn(), onError = vi.fn(), typed: string[] = []
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat,
-      readScreen: async (record, capture) => {
-        if (mode === 'screen unavailable') return null
-        const screen = await readInlineScreen(record, capture)
-        return screen && mode === 'transcript' ? { ...screen, messageHold: 'transcript_open' } : screen
-      },
-      submission: { ...inlineSubmission, read: async (record, capture, prompt) => mode === 'submission unavailable' ? null : inlineSubmission.read(record, capture, prompt) },
-      getSession: () => session('claude'), validateRuntime: async () => true,
-      inject: async (_id, text) => { typed.push(text); return true }, capture: async () => claudeBox(''),
-      sendKey: async () => true, beforeTeamWrite: async () => 'team_waiting_dialog', onError })
-    controller.setTurnOpen('s1', true)
-    controller.submit('s1', 'person', undefined, receipt)
-    await vi.advanceTimersByTimeAsync(1)
-    controller.submit('s1', 'Swarm', 'team:service:superTabs:waiting')
-    await vi.advanceTimersByTimeAsync(30_000)
-    expect(typed).toEqual(['person'])
-    expect(receipt).not.toHaveBeenCalled()
-    expect(onError).not.toHaveBeenCalled()
-    controller.onTurnStarted('s1', 'person')
-    expect(receipt).toHaveBeenCalledExactlyOnceWith('started')
-    controller.forget('s1')
-  })
-
-  it.each(['claude', 'codex'] as const)('bounds busy %s person-draft observations while Swarm waits', async engine => {
-    vi.useFakeTimers()
-    const capture = vi.fn(async () => engine === 'claude' ? claudeBox('person') : codexComposer('person'))
-    const onError = vi.fn(), sendKey = vi.fn(async () => true)
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
-      getSession: () => session(engine), validateRuntime: async () => true, inject: async () => true,
-      capture, sendKey, beforeTeamWrite: async () => 'team_waiting_draft', onError })
-    controller.setTurnOpen('s1', true)
-    controller.submit('s1', 'person')
-    await vi.advanceTimersByTimeAsync(1)
-    controller.submit('s1', 'Swarm', 'team:service:superTabs:waiting')
-    await vi.advanceTimersByTimeAsync(60_000)
-    expect(capture.mock.calls.length).toBeGreaterThan(0)
-    expect(capture.mock.calls.length).toBeLessThanOrEqual(6)
-    expect(sendKey).not.toHaveBeenCalled()
-    expect(onError).not.toHaveBeenCalled()
-    controller.forget('s1')
-  })
-
-  it('ignores an older busy person observation after an identical new person write', async () => {
-    vi.useFakeTimers()
-    let resolveOld!: (reading: SubmissionReading) => void
-    const oldReading = new Promise<SubmissionReading>(resolve => { resolveOld = resolve })
-    const typed: string[] = [], firstReceipt = vi.fn(), secondReceipt = vi.fn()
-    let reads = 0, draft = ''
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen,
-      submission: { ...inlineSubmission, read: async (record, capture, prompt) => ++reads === 1 ? oldReading : inlineSubmission.read(record, capture, prompt) },
-      getSession: () => session('claude'), validateRuntime: async () => true,
-      inject: async (_id, text) => { typed.push(text); return true }, capture: async () => claudeBox(draft),
-      sendKey: async () => true, beforeTeamWrite: async () => null, onError: vi.fn() })
-    controller.setTurnOpen('s1', true)
-    controller.submit('s1', 'continue', undefined, firstReceipt)
-    await vi.advanceTimersByTimeAsync(1)
-    controller.submit('s1', 'Swarm', 'team:service:superTabs:waiting')
-    await vi.advanceTimersByTimeAsync(3_001)
-    expect(reads).toBe(1)
-    controller.submit('s1', 'continue', undefined, secondReceipt)
-    await vi.advanceTimersByTimeAsync(1)
-    draft = 'continue'
-    resolveOld({ composer: true, draft: false, nativeDraft: 'clear' })
-    await vi.advanceTimersByTimeAsync(1)
-    expect(typed).toEqual(['continue', 'continue'])
-    expect(secondReceipt).not.toHaveBeenCalled()
-    controller.forget('s1')
-  })
-
-  it('settles accepted Swarm input before a person writes during its composer check', async () => {
-    vi.useFakeTimers()
-    const onDelivery = vi.fn(), onError = vi.fn(), typed: string[] = []
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
-      getSession: () => session('claude'), validateRuntime: async () => true,
-      inject: async (_id, text) => { typed.push(text); return true }, sendKey: async () => true,
-      capture: async () => claudeBox(''), beforeTeamWrite: async () => null, onDelivery, onError })
-    controller.setTurnOpen('s1', true)
-    controller.submit('s1', 'Swarm follow-up', 'team:service:superTabs:accepted')
-    await vi.advanceTimersByTimeAsync(1)
-    controller.submit('s1', 'person follow-up')
-    await vi.advanceTimersByTimeAsync(1)
-    expect(typed).toEqual(['Swarm follow-up', 'person follow-up'])
-    expect(onDelivery).toHaveBeenCalledWith(expect.objectContaining({ deliveryId: 'team:service:superTabs:accepted', state: 'delivered' }))
-    expect(onDelivery).not.toHaveBeenCalledWith(expect.objectContaining({ state: 'unknown' }))
-    controller.forget('s1')
-  })
-
-  it('settles Swarm acceptance when a permission prompt covers the composer after Enter', async () => {
-    vi.useFakeTimers()
-    const onDelivery = vi.fn(), onError = vi.fn(), sendKey = vi.fn(async () => true)
-    const permission = readFileSync(new URL('./__fixtures__/permission-claude.txt', import.meta.url), 'utf8').replaceAll('❯', ' ')
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
-      getSession: () => session('claude'), validateRuntime: async () => true,
-      inject: async () => true, sendKey, capture: async () => permission,
-      beforeTeamWrite: async () => null, onDelivery, onError })
-    controller.setTurnOpen('s1', true)
-    controller.submit('s1', 'Swarm follow-up', 'team:service:superTabs:permission-after-enter')
-    await vi.advanceTimersByTimeAsync(30_000)
-    expect(onDelivery).toHaveBeenCalledWith(expect.objectContaining({ state: 'delivered' }))
-    expect(onDelivery).not.toHaveBeenCalledWith(expect.objectContaining({ state: 'unknown' }))
-    expect(sendKey).not.toHaveBeenCalled()
-    expect(onError).not.toHaveBeenCalled()
-    controller.forget('s1')
-  })
-
-  it('keeps two Swarm receipts in FIFO behind an in-flight person write', async () => {
-    vi.useFakeTimers()
-    let release!: (ok: boolean) => void
-    const personWrite = new Promise<boolean>(resolve => { release = resolve })
-    const typed: string[] = [], onDelivery = vi.fn()
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
-      getSession: () => session('claude'), validateRuntime: async () => true,
-      inject: async (_id, text) => { typed.push(text); return text === 'person' ? personWrite : true },
-      sendKey: async () => true, capture: async () => claudeBox(''), beforeTeamWrite: async () => null,
-      onDelivery, onError: vi.fn() })
-    controller.submit('s1', 'person')
-    await vi.advanceTimersByTimeAsync(1)
-    controller.submit('s1', 'first', 'team:service:superTabs:first')
-    controller.submit('s1', 'second', 'team:service:superTabs:second')
-    release(true)
-    await vi.advanceTimersByTimeAsync(1)
-    controller.onTurnStarted('s1', 'person')
-    await vi.advanceTimersByTimeAsync(1)
-    expect(typed).toEqual(['person', 'first'])
-    await vi.advanceTimersByTimeAsync(10_000)
-    expect(typed).toEqual(['person', 'first', 'second'])
-    for (const id of ['first', 'second']) {
-      expect(onDelivery.mock.calls.map(([event]) => event).filter(event => event.deliveryId === `team:service:superTabs:${id}` && event.state === 'delivered')).toHaveLength(1)
-    }
-    controller.forget('s1')
-  })
-
-  it.each([[false, 1], [true, 1], [true, 10_000]] as const)('drains Swarm input after a person follow-up leaves the composer without a turn start (busy=%s, delay=%s)', async (busy, delay) => {
-    vi.useFakeTimers()
-    const typed: string[] = [], onDelivery = vi.fn()
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
-      getSession: () => session('claude'), validateRuntime: async () => true,
-      inject: async (_id, text) => { typed.push(text); return true }, sendKey: async () => true,
-      capture: async () => claudeBox(''), beforeTeamWrite: async () => null, onDelivery, onError: vi.fn() })
-    controller.setTurnOpen('s1', busy)
-    controller.submit('s1', 'person follow-up')
-    await vi.advanceTimersByTimeAsync(delay)
-    controller.submit('s1', 'Swarm follow-up', 'team:service:superTabs:after-person')
-    await vi.advanceTimersByTimeAsync(30_000)
-    expect(typed).toEqual(['person follow-up', 'Swarm follow-up'])
-    expect(onDelivery).toHaveBeenCalledWith(expect.objectContaining({ deliveryId: 'team:service:superTabs:after-person', state: 'delivered' }))
-    controller.forget('s1')
-  })
-
-  it('still types person input when the extra pending-Swarm acceptance capture fails', async () => {
-    vi.useFakeTimers()
-    const typed: string[] = []
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
-      getSession: () => session('claude'), validateRuntime: async () => true,
-      inject: async (_id, text) => { typed.push(text); return true }, sendKey: async () => true,
-      capture: async () => { throw new Error('capture unavailable') }, beforeTeamWrite: async () => null,
-      onDelivery: vi.fn(), onError: vi.fn() })
-    controller.submit('s1', 'Swarm follow-up', 'team:service:superTabs:before-person')
-    await vi.advanceTimersByTimeAsync(1)
-    controller.submit('s1', 'person follow-up')
-    await vi.advanceTimersByTimeAsync(1)
-    expect(typed).toEqual(['Swarm follow-up', 'person follow-up'])
-    controller.forget('s1')
-  })
-
-  it('ignores an old Swarm capture returning unavailable after a person owns the next composer check', async () => {
-    vi.useFakeTimers()
-    let resolveOld!: (value: string | null) => void
-    const oldCapture = new Promise<string | null>(resolve => { resolveOld = resolve })
-    let captures = 0
-    const onError = vi.fn(), personReceipt = vi.fn()
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
-      getSession: () => session(), validateRuntime: async () => true, inject: async () => true,
-      sendKey: async () => true, beforeTeamWrite: async () => null, onDelivery: vi.fn(), onError,
-      capture: async () => ++captures < 6 ? codexComposer('Swarm follow-up') : captures === 6 ? oldCapture : codexComposer('') })
-    controller.submit('s1', 'Swarm follow-up', 'team:service:superTabs:old-check')
-    await vi.advanceTimersByTimeAsync(9_001)
-    expect(captures).toBe(6)
-    controller.submit('s1', 'person follow-up', undefined, personReceipt)
-    await vi.advanceTimersByTimeAsync(7_501)
-    resolveOld(null)
-    await vi.advanceTimersByTimeAsync(1)
-    expect(personReceipt).not.toHaveBeenCalledWith('ambiguous')
-    expect(onError).not.toHaveBeenCalled()
-    controller.forget('s1')
-  })
-
-  it('does not retry person Enter or type Swarm input over a busy person draft', async () => {
-    vi.useFakeTimers()
-    const typed: string[] = [], sendKey = vi.fn(async () => true)
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
-      getSession: () => session('claude'), validateRuntime: async () => true,
-      inject: async (_id, text) => { typed.push(text); return true }, sendKey,
-      capture: async () => claudeBox('person draft'), beforeTeamWrite: async () => 'team_waiting_draft',
-      onDelivery: vi.fn(), onError: vi.fn() })
-    controller.setTurnOpen('s1', true)
-    controller.submit('s1', 'person draft')
-    await vi.advanceTimersByTimeAsync(1)
-    controller.submit('s1', 'Swarm follow-up', 'team:service:superTabs:after-draft')
-    await vi.advanceTimersByTimeAsync(30_000)
-    expect(typed).toEqual(['person draft'])
-    expect(sendKey).not.toHaveBeenCalled()
-    controller.forget('s1')
-  })
-
-  it.each(['claude', 'codex'] as const)('delivers ordered Swarm follow-ups during a busy %s turn without waiting for another start', async engine => {
-    vi.useFakeTimers()
-    const inject = vi.fn(async (_id: string, _text: string) => true), onDelivery = vi.fn(), sendKey = vi.fn(async () => true), onError = vi.fn()
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
-      getSession: () => session(engine), validateRuntime: async () => true, inject, sendKey, onDelivery, onError,
-      beforeTeamWrite: async () => null,
-      capture: async () => engine === 'claude' ? claudeBox('') : codexComposer(''),
-    })
-    controller.setTurnOpen('s1', true)
-    controller.submit('s1', 'first follow-up', 'team:service:superTabs:first')
-    controller.submit('s1', 'second follow-up', 'team:service:superTabs:second')
-    await vi.advanceTimersByTimeAsync(1)
-    expect(inject).toHaveBeenCalledWith('h1', 'first follow-up')
-    await vi.advanceTimersByTimeAsync(30_000)
-    expect(inject.mock.calls.map(call => call[1])).toEqual(['first follow-up', 'second follow-up'])
-    expect(onDelivery.mock.calls.map(([event]) => event).filter(event => event.state === 'delivered'))
-      .toEqual(expect.arrayContaining([
-        expect.objectContaining({ deliveryId: 'team:service:superTabs:first' }),
-        expect.objectContaining({ deliveryId: 'team:service:superTabs:second' }),
-      ]))
-    controller.onTurnEnded('s1')
-    controller.forget('s1')
-    expect(onDelivery.mock.calls.map(([event]) => event).filter(event => event.state === 'unknown')).toEqual([])
-    expect(sendKey).not.toHaveBeenCalled()
-    expect(onError).not.toHaveBeenCalled()
-  })
-
-  it('holds Swarm input for person control, then types during the same running turn', async () => {
-    vi.useFakeTimers()
-    const inject = vi.fn(async () => true)
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
-      getSession: () => session(), validateRuntime: async () => true, inject, sendKey: async () => true,
-      onError: vi.fn(), beforeTeamWrite: async () => null, capture: async () => codexComposer('') })
-    controller.setTurnOpen('s1', true)
-    const release = controller.acquireControl('s1', { forAnswer: true })!
-    controller.submit('s1', 'held chat', 'team:service:superTabs:locked')
-    await vi.advanceTimersByTimeAsync(1)
-    expect(inject).not.toHaveBeenCalled()
-    release()
-    await vi.advanceTimersByTimeAsync(2_000)
-    expect(inject).toHaveBeenCalledWith('h1', 'held chat')
-    controller.forget('s1')
-  })
-
-  it.each(['prior queued start', 'matching start'] as const)('keeps follow-ups ordered across a %s', async scenario => {
-    vi.useFakeTimers()
-    const injected: string[] = [], onDelivery = vi.fn()
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
-      getSession: () => session(), validateRuntime: async () => true,
-      inject: async (_id, content) => { injected.push(content); return true }, sendKey: async () => true,
-      onError: vi.fn(), onDelivery, beforeTeamWrite: async () => null, capture: async () => codexComposer('') })
-    controller.setTurnOpen('s1', true)
-    controller.submit('s1', 'first', 'team:service:superTabs:first')
-    controller.submit('s1', 'second', 'team:service:superTabs:second')
-    await vi.advanceTimersByTimeAsync(scenario === 'prior queued start' ? 1_501 : 1)
-    controller.onTurnStarted('s1', 'first')
-    await vi.advanceTimersByTimeAsync(1)
-    expect(injected).toEqual(['first', 'second'])
-    controller.submit('s1', 'third', 'team:service:superTabs:third')
-    await vi.advanceTimersByTimeAsync(10_000)
-    expect(injected).toEqual(['first', 'second', 'third'])
-    controller.onTurnEnded('s1')
-    controller.forget('s1')
-    expect(onDelivery.mock.calls.map(([event]) => event).filter(event => event.state === 'unknown')).toEqual([])
-  })
-
-  it('recognizes a wrapped Swarm turn through the engine reader and drains its next follow-up', async () => {
-    vi.useFakeTimers()
-    const injected: string[] = [], onDelivery = vi.fn()
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
-      getSession: () => session('claude'), validateRuntime: async () => true,
-      inject: async (_id, text) => { injected.push(text); return true }, sendKey: async () => true,
-      beforeTeamWrite: async () => null, capture: async () => claudeBox(''), onDelivery, onError: vi.fn() })
-    controller.submit('s1', 'first', 'team:service:superTabs:first')
-    controller.submit('s1', 'second', 'team:service:superTabs:second')
-    await vi.advanceTimersByTimeAsync(1)
-    controller.onTurnStarted('s1', '<pasted_content id="04e3">\nfirst\n</pasted_content id="04e3">')
-    await vi.advanceTimersByTimeAsync(1)
-    expect(onDelivery).toHaveBeenCalledWith(expect.objectContaining({ deliveryId: 'team:service:superTabs:first', state: 'started' }))
-    expect(injected).toEqual(['first', 'second'])
-    await vi.advanceTimersByTimeAsync(10_000)
-    controller.forget('s1')
-    expect(onDelivery.mock.calls.map(([event]) => event).filter(event => event.state === 'unknown')).toEqual([])
-  })
-
-  it.each(['team:peer', 'team:service:superTabs:unsupported'])('retains idle scheduling for %s', async id => {
-    vi.useFakeTimers()
-    const inject = vi.fn(async () => true)
-    const engine = id.endsWith('unsupported') ? 'commandcode' : 'codex'
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
-      getSession: () => session(engine), validateRuntime: async () => true, inject, sendKey: async () => true,
-      onError: vi.fn(), beforeTeamWrite: async () => null })
-    controller.setTurnOpen('s1', true)
-    controller.submit('s1', 'held chat', id)
-    await vi.advanceTimersByTimeAsync(1)
-    expect(inject).not.toHaveBeenCalled()
-    controller.onTurnEnded('s1')
-    await vi.advanceTimersByTimeAsync(1)
-    expect(inject).toHaveBeenCalledOnce()
-    controller.forget('s1')
-  })
-
-  it.each(['draft', 'unreadable', 'ambiguous', 'no composer'] as const)('does not confirm Swarm queue acceptance from %s evidence', async evidence => {
-    vi.useFakeTimers()
-    const onDelivery = vi.fn(), sendKey = vi.fn(async () => true)
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
-      getSession: () => session(), validateRuntime: async () => true,
-      inject: async () => evidence === 'ambiguous' ? { state: 'unknown', dispatch: 'possibly_executed', reason: 'lost reply' } : true,
-      sendKey, onError: vi.fn(), onDelivery, beforeTeamWrite: async () => null,
-      capture: async () => evidence === 'unreadable' ? null : evidence === 'no composer' ? 'Working…' : codexComposer(evidence === 'draft' ? 'follow-up' : ''),
-    })
-    controller.setTurnOpen('s1', true)
-    controller.submit('s1', 'follow-up', 'team:service:superTabs:uncertain')
-    await vi.advanceTimersByTimeAsync(1)
-    controller.onTurnEnded('s1')
-    await vi.advanceTimersByTimeAsync(30_000)
-    expect(onDelivery).toHaveBeenCalledWith(expect.objectContaining({ state: 'unknown' }))
-    expect(onDelivery.mock.calls.map(([event]) => event).filter(event => event.state === 'delivered')).toEqual([])
-    expect(sendKey).not.toHaveBeenCalled()
     controller.forget('s1')
   })
 
@@ -452,7 +63,7 @@ describe('SessionInputController', () => {
     ] as const)('%s, %s: tells the person why and what to do, asks no lease again, and awaits nothing', async (engine, reason, text) => {
       const onError = vi.fn(), onSubmitted = vi.fn(), sleep = vi.fn(async () => {})
       const inject = vi.fn(async () => held(reason))
-      const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session(engine), validateRuntime: async () => true,
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session(engine), validateRuntime: async () => true,
         inject, sendKey: async () => true, onError, onSubmitted, sleep })
       controller.submit('s1', 'a message from the app')
       await vi.waitFor(() => expect(onError).toHaveBeenCalledWith('s1', text))
@@ -468,7 +79,7 @@ describe('SessionInputController', () => {
       const onError = vi.fn(), onSubmitted = vi.fn()
       const inject = vi.fn<() => Promise<TerminalActionResult>>().mockResolvedValueOnce(held('prompt_hidden'))
         .mockResolvedValueOnce(held('screen_unreadable')).mockResolvedValue({ state: 'succeeded', dispatch: 'executed' })
-      const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('codex'), validateRuntime: async () => true,
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('codex'), validateRuntime: async () => true,
         inject, sendKey: async () => true, onError, onSubmitted, now: time.now, sleep: time.sleep })
       controller.submit('s1', 'sent while it starts')
       await vi.waitFor(() => expect(onSubmitted).toHaveBeenCalledWith('s1', 'sent while it starts'))
@@ -481,7 +92,7 @@ describe('SessionInputController', () => {
     // 40 (2026-11-10). A message sent within a second of the agent's start waited the lease's 15 s for a screen nobody could read,
     // and was lost with an error. Now it waits for the reader, bounded, says so once, and is typed once.
     // The person hears of the wait; a team delivery is automatic, and its mailbox hears how it ends.
-    it.each([[undefined, 'a person\'s message', 1], ['team:service:superTabs:A', 'a delivery', 0]] as const)(
+    it.each([[undefined, 'a person\'s message', 1], ['team:service:messages:A', 'a delivery', 0]] as const)(
       'waits for its engine\'s reader to start, says so, and types it once it is up (%s, %s)', async (deliveryId, _what, said) => {
         let up = false
         let started: (ok: boolean) => void = () => {}
@@ -489,7 +100,7 @@ describe('SessionInputController', () => {
         const onError = vi.fn(), onSubmitted = vi.fn(), onWaiting = vi.fn()
         const engineStarting = vi.fn(() => up ? null : new Promise<boolean>(resolve => { started = resolve }))
         const inject = vi.fn(async (): Promise<TerminalActionResult> => up ? { state: 'succeeded', dispatch: 'executed' } : held('screen_unreadable'))
-        const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('claude'),
+        const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('claude'),
           validateRuntime: async () => true, inject, injectTeam: inject, beforeTeamWrite: async () => null, sendKey: async () => true, onError, onSubmitted,
           onWaiting, engineStarting, now: time.now, sleep: time.sleep })
         controller.submit('s1', 'sent within a second of its start', deliveryId)
@@ -512,7 +123,7 @@ describe('SessionInputController', () => {
         let alive = true
         const onError = vi.fn()
         const inject = vi.fn(async (): Promise<TerminalActionResult> => ({ state: 'succeeded', dispatch: 'executed' }))
-        const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('claude'),
+        const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('claude'),
           validateRuntime: async () => alive, inject, sendKey: async () => true, onError, onWaiting: vi.fn(),
           engineStarting: () => new Promise<boolean>(resolve => { started = resolve }) })
         controller.submit('s1', 'sent as it started')
@@ -533,7 +144,7 @@ describe('SessionInputController', () => {
     it('says the agent waits for its engine while its reader starts, and nothing once it is up', async () => {
       let started: (ok: boolean) => void = () => {}
       const onSubmitted = vi.fn(), onWaitChanged = vi.fn()
-      const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('claude'),
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('claude'),
         validateRuntime: async () => true, inject: async () => ({ state: 'succeeded', dispatch: 'executed' }), sendKey: async () => true, onError: vi.fn(),
         onSubmitted, onWaiting: vi.fn(), onWaitChanged, injectTeam: async () => ({ state: 'succeeded', dispatch: 'executed' }), beforeTeamWrite: async () => null,
         engineStarting: () => new Promise<boolean>(resolve => { started = resolve }) })
@@ -548,7 +159,7 @@ describe('SessionInputController', () => {
       expect(onWaitChanged.mock.calls).toEqual([['a1'], ['a1']])
       controller.forget('a1')
       // A team delivery's wait is logged, not shown (no message_waiting), so not on the frame either.
-      controller.submit('a2', 'from the Swarm', 'team:service:superTabs:A')
+      controller.submit('a2', 'from Agent Messages', 'team:service:messages:A')
       await new Promise(resolve => setTimeout(resolve, 0))
       expect(controller.waitingFor('a2')).toBeNull()
       started(true)
@@ -557,7 +168,7 @@ describe('SessionInputController', () => {
 
     it('ends the wait on the frame even when the wait itself fails', async () => {
       let failed: (error: Error) => void = () => {}
-      const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('claude'),
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('claude'),
         validateRuntime: async () => true, inject: async () => ({ state: 'succeeded', dispatch: 'executed' }), sendKey: async () => true, onError: vi.fn(),
         onWaiting: vi.fn(), engineStarting: () => new Promise<boolean>((_, reject) => { failed = reject }) })
       controller.submit('a1', 'sent as it started')
@@ -569,7 +180,7 @@ describe('SessionInputController', () => {
 
     it('says nothing of a wait when its engine\'s reader is up', async () => {
       const onWaiting = vi.fn(), onSubmitted = vi.fn()
-      const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('claude'),
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('claude'),
         validateRuntime: async () => true, inject: async () => ({ state: 'succeeded', dispatch: 'executed' }), sendKey: async () => true, onError: vi.fn(), onSubmitted,
         onWaiting, engineStarting: () => null })
       controller.submit('s1', 'typed at once')
@@ -582,7 +193,7 @@ describe('SessionInputController', () => {
       const time = { at: 0, now: () => time.at, sleep: vi.fn(async (ms: number) => { time.at += ms }) }
       const onError = vi.fn()
       const inject = vi.fn(async () => held('prompt_hidden'))
-      const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('claude'), validateRuntime: async () => true,
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('claude'), validateRuntime: async () => true,
         inject, sendKey: async () => true, onError, now: time.now, sleep: time.sleep })
       controller.submit('s1', 'into a screen never seen')
       await vi.waitFor(() => expect(onError).toHaveBeenCalledWith('s1', 'Claude Code isn\'t showing its prompt; finish what\'s on its screen in its terminal, then send the message again.'))
@@ -594,7 +205,7 @@ describe('SessionInputController', () => {
       const withheld: TerminalActionResult = { state: 'unknown', dispatch: 'possibly_executed', reason: 'enter_withheld:permission_open' }
       const onError = vi.fn(), onSubmitted = vi.fn(), sendKey = vi.fn(async () => true), onDelivery = vi.fn()
       vi.useFakeTimers()
-      const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('claude'), validateRuntime: async () => true,
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('claude'), validateRuntime: async () => true,
         inject: async () => withheld, sendKey, onError, onSubmitted, onDelivery, beforeTeamWrite: async () => null })
       controller.submit('s1', 'a message from the app')
       await vi.advanceTimersByTimeAsync(30_000)
@@ -617,7 +228,7 @@ describe('SessionInputController', () => {
 
     it('rejects a message that wants a receipt with the reason, and says why', async () => {
       const onError = vi.fn(), onDelivery = vi.fn()
-      const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('codex'), validateRuntime: async () => true,
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('codex'), validateRuntime: async () => true,
         inject: async () => held('permission_open'), sendKey: async () => true, onError, onDelivery })
       controller.submit('s1', 'a message from the device', 'd1')
       await vi.waitFor(() => expect(onDelivery).toHaveBeenCalledWith({ sessionId: 's1', deliveryId: 'd1', state: 'rejected', reason: 'permission_open' }))
@@ -627,7 +238,7 @@ describe('SessionInputController', () => {
 
     it('rejects a team\'s turn with the reason, and tells no person: its team hears of it', async () => {
       const onError = vi.fn(), onDelivery = vi.fn()
-      const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('claude'), validateRuntime: async () => true,
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('claude'), validateRuntime: async () => true,
         beforeTeamWrite: async () => null, inject: vi.fn(), injectTeam: async () => held('menu_open'), sendKey: async () => true, onError, onDelivery })
       controller.submit('s1', 'a team turn', 'team:1')
       await vi.waitFor(() => expect(onDelivery).toHaveBeenCalledWith({ sessionId: 's1', deliveryId: 'team:1', state: 'rejected', reason: 'menu_open' }))
@@ -648,7 +259,7 @@ describe('SessionInputController', () => {
     it('waits for the lease — a resume whose new process is not confirmed yet — and then delivers, once', async () => {
       const time = clock(), onError = vi.fn(), onSubmitted = vi.fn()
       const inject = vi.fn<() => Promise<TerminalActionResult>>().mockResolvedValueOnce(refused).mockResolvedValueOnce(refused).mockResolvedValue(done)
-      const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('claude'), validateRuntime: async () => true,
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('claude'), validateRuntime: async () => true,
         inject, sendKey: async () => true, onError, onSubmitted, ...time })
       controller.submit('s1', 'right after the resume')
       await vi.waitFor(() => expect(onSubmitted).toHaveBeenCalledWith('s1', 'right after the resume'))
@@ -661,7 +272,7 @@ describe('SessionInputController', () => {
     it('gives up at fifteen seconds, says the message was not delivered, and wrote nothing', async () => {
       const time = clock(), onError = vi.fn()
       const inject = vi.fn(async () => refused)
-      const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('claude'), validateRuntime: async () => true,
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('claude'), validateRuntime: async () => true,
         inject, sendKey: async () => true, onError, ...time })
       controller.submit('s1', 'never leased')
       await vi.waitFor(() => expect(onError).toHaveBeenCalledWith('s1', 'The message could not be delivered to the agent.'))
@@ -674,14 +285,14 @@ describe('SessionInputController', () => {
       const time = clock(), onError = vi.fn()
       let present = true
       const inject = vi.fn(async () => { present = false; return refused })
-      const gone = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => (present ? session('claude') : undefined), validateRuntime: async () => true,
+      const gone = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => (present ? session('claude') : undefined), validateRuntime: async () => true,
         inject, sendKey: async () => true, onError, ...time })
       gone.submit('s1', 'to an agent that left')
       await vi.waitFor(() => expect(onError).toHaveBeenCalled())
       expect(inject).toHaveBeenCalledTimes(1)
 
       const other = vi.fn(async (): Promise<TerminalActionResult> => ({ state: 'failed', dispatch: 'not_started', reason: 'terminal agent is unavailable' }))
-      const elsewhere = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('claude'), validateRuntime: async () => true,
+      const elsewhere = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('claude'), validateRuntime: async () => true,
         inject: other, sendKey: async () => true, onError: vi.fn(), ...time })
       elsewhere.submit('s1', 'to an agent with no terminal')
       await vi.waitFor(() => expect(other).toHaveBeenCalledTimes(1))
@@ -692,7 +303,7 @@ describe('SessionInputController', () => {
     it('waits the same way for a message that wants a receipt, until it is cancelled', async () => {
       const time = clock(), onDelivery = vi.fn()
       const inject = vi.fn<() => Promise<TerminalActionResult>>().mockResolvedValueOnce(refused).mockResolvedValue(done)
-      const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('codex'), validateRuntime: async () => true,
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('codex'), validateRuntime: async () => true,
         inject, sendKey: async () => true, onError: vi.fn(), onDelivery, ...time })
       controller.submit('s1', 'with a receipt', 'delivery-1')
       await vi.waitFor(() => expect(inject).toHaveBeenCalledTimes(2))
@@ -700,7 +311,7 @@ describe('SessionInputController', () => {
 
       const cancelled = vi.fn(async () => refused)
       let cancel: () => void = () => {}
-      const waiting = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('codex'), validateRuntime: async () => true,
+      const waiting = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('codex'), validateRuntime: async () => true,
         inject: cancelled, sendKey: async () => true, onError: vi.fn(), onDelivery,
         now: time.now, sleep: async (ms) => { time.sleep(ms); cancel() } })
       cancel = () => waiting.forget('s1')
@@ -714,7 +325,7 @@ describe('SessionInputController', () => {
 
   it.each(['team_waiting_draft', 'team_waiting_user', 'team_waiting_idle'])('team input preserves the composer on %s', async reason => {
     const inject = vi.fn(async () => true), sendKey = vi.fn(async () => true), onDelivery = vi.fn()
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('cursor'), validateRuntime: async () => true,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('cursor'), validateRuntime: async () => true,
       inject, sendKey, onError: vi.fn(), onDelivery, beforeTeamWrite: async () => reason })
     controller.submit('s1', 'peer question', 'team:fixture')
     await vi.waitFor(() => expect(onDelivery).toHaveBeenCalledWith(expect.objectContaining({ state: 'rejected', reason })))
@@ -725,7 +336,7 @@ describe('SessionInputController', () => {
 
   it('rechecks a queued team message at the actual write boundary', async () => {
     const beforeTeamWrite = vi.fn(async () => 'team_waiting_draft'), inject = vi.fn(async () => true), onDelivery = vi.fn()
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session(), validateRuntime: async () => true,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session(), validateRuntime: async () => true,
       inject, sendKey: async () => true, onError: vi.fn(), onDelivery, beforeTeamWrite })
     controller.setTurnOpen('s1', true)
     controller.submit('s1', 'peer question', 'team:fixture')
@@ -739,7 +350,7 @@ describe('SessionInputController', () => {
   it('never retries Enter for an automatic team message with uncertain acceptance', async () => {
     vi.useFakeTimers()
     const sendKey = vi.fn(async () => true), onDelivery = vi.fn()
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session(), validateRuntime: async () => true,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session(), validateRuntime: async () => true,
       inject: async () => true, sendKey, onError: vi.fn(), onDelivery, beforeTeamWrite: async () => null })
     controller.submit('s1', 'peer question', 'team:fixture')
     await vi.advanceTimersByTimeAsync(12_000)
@@ -750,7 +361,7 @@ describe('SessionInputController', () => {
 
   it('requeues a team notice when a draft appears while waiting for the terminal writer', async () => {
     const inject = vi.fn(async () => true), onError = vi.fn(), onDelivery = vi.fn()
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session(), validateRuntime: async () => true,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session(), validateRuntime: async () => true,
       beforeTeamWrite: async () => null, inject,
       injectTeam: async () => ({ state: 'failed', dispatch: 'not_started', reason: 'team_waiting_draft' }),
       sendKey: async () => true, onError, onDelivery })
@@ -769,7 +380,7 @@ describe('SessionInputController', () => {
     { engine: 'codex', observed: '<pasted_content id="04e3">\npeer question\n</pasted_content id="04e3">', state: 'unknown' },
   ] as const)('attributes native paste evidence only to the exact $engine message: $state', async ({ engine, observed, state }) => {
     const inject = vi.fn(async () => true), sendKey = vi.fn(async () => true), onDelivery = vi.fn()
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session(engine), validateRuntime: async () => true,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session(engine), validateRuntime: async () => true,
       inject, sendKey, onError: vi.fn(), onDelivery, beforeTeamWrite: async () => null })
     controller.submit('s1', 'peer question', 'team:fixture')
     await vi.waitFor(() => expect(onDelivery).toHaveBeenCalledWith(expect.objectContaining({ state: 'delivered' })))
@@ -785,7 +396,7 @@ describe('SessionInputController', () => {
     // A voice command spoken while a Codex task ran used to sit in this controller's queue, invisible,
     // until the task ended. Codex queues composer input itself, so the daemon types straight away.
     const injected: string[] = []
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: () => session('codex'), validateRuntime: async () => true,
       inject: async (_pane, content) => { injected.push(content); return true },
       sendKey: async () => true, onError: vi.fn(),
@@ -806,7 +417,7 @@ describe('SessionInputController', () => {
 
   it('queues Command Code prompts while busy and drains exactly one after turn end', async () => {
     const injected: string[] = []
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: () => session('commandcode'), validateRuntime: async () => true,
       inject: async (_pane, content) => { injected.push(content); return true },
       sendKey: async () => true, onError: vi.fn(),
@@ -825,7 +436,7 @@ describe('SessionInputController', () => {
 
   it('clears the echoed prompt from the Cursor composer once the turn starts', async () => {
     const sendKey = vi.fn(async (_pane: string, _key: string) => true)
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: () => session('cursor'), validateRuntime: async () => true,
       inject: async () => true, sendKey,
       capture: async () => '⠰ Working\n\n→ hello\nAuto',   // the submitted prompt is still on screen
@@ -839,7 +450,7 @@ describe('SessionInputController', () => {
 
   it('leaves a fresh terminal draft alone when the Cursor composer no longer echoes our prompt', async () => {
     const sendKey = vi.fn(async (_pane: string, _key: string) => true)
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: () => session('cursor'), validateRuntime: async () => true,
       inject: async () => true, sendKey,
       capture: async () => '⠰ Working\n\n→ something the user just typed\nAuto',
@@ -857,7 +468,7 @@ describe('SessionInputController', () => {
     // message is typed onto the end of it and the two are submitted as one run-on prompt — observed as a
     // turn starting with the PREVIOUS message's text.
     const order: string[] = []
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: () => session('cursor'), validateRuntime: async () => true,
       inject: async (_pane, content) => { order.push(`inject:${content}`); return true },
       sendKey: async (_pane, key) => { order.push(`key:${key}`); return true },
@@ -874,7 +485,7 @@ describe('SessionInputController', () => {
     vi.useFakeTimers()
     const inject = vi.fn(async () => true)
     const sendKey = vi.fn(async () => true)
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: () => session(), validateRuntime: async () => true, inject, sendKey, onError: vi.fn(),
     })
     controller.submit('s1', 'hello')
@@ -888,7 +499,7 @@ describe('SessionInputController', () => {
     vi.useFakeTimers()
     const inject = vi.fn(async () => true)
     const sendKey = vi.fn(async () => true)
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: () => session('claude'), validateRuntime: async () => true, inject, sendKey, onError: vi.fn(),
     })
     controller.submit('s1', 'hello')
@@ -904,7 +515,7 @@ describe('SessionInputController', () => {
     const inject = vi.fn(async () => true)
     const sendKey = vi.fn(async (_pane: string, _key: string) => true)
     const onError = vi.fn()
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: () => session('cursor'),
       validateRuntime: async () => true,
       inject,
@@ -927,7 +538,7 @@ describe('SessionInputController', () => {
   it('retries Enter for Cursor only while the exact draft remains in an idle composer', async () => {
     vi.useFakeTimers()
     const sendKey = vi.fn(async (_pane: string, _key: string) => true)
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: () => session('cursor'),
       validateRuntime: async () => true,
       inject: async () => true,
@@ -947,7 +558,7 @@ describe('SessionInputController', () => {
   it('waits for the Cursor composer to settle before draining the next prompt', async () => {
     vi.useFakeTimers()
     const injected: string[] = []
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: () => session('cursor'),
       validateRuntime: async () => true,
       inject: async (_pane, content) => { injected.push(content); return true },
@@ -969,7 +580,7 @@ describe('SessionInputController', () => {
     vi.useFakeTimers()
     const sendKey = vi.fn(async () => true)
     const onError = vi.fn()
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: () => session('claude'),
       validateRuntime: async () => true,
       inject: async () => true,
@@ -994,7 +605,7 @@ describe('SessionInputController', () => {
     vi.useFakeTimers()
     const sendKey = vi.fn(async () => true)
     const onError = vi.fn()
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: () => session('commandcode'),
       validateRuntime: async () => true,
       inject: async () => true,
@@ -1017,7 +628,7 @@ describe('SessionInputController', () => {
     const sendKey = vi.fn(async () => true)
     const onError = vi.fn()
     const capture = vi.fn(async () => '❯ What are you working on?\n✻ Waiting for 4 background agents to finish\n────\n❯ a different draft I am still writing\n────')
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: () => session('claude'), validateRuntime: async () => true,
       inject: async () => true, sendKey, capture, onError,
     })
@@ -1044,7 +655,7 @@ describe('SessionInputController', () => {
       vi.useFakeTimers()
       const sendKey = vi.fn(async () => true), onError = vi.fn(), onDelivery = vi.fn()
       let pasted = false
-      const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
         getSession: () => session('claude'), validateRuntime: async () => true, onDelivery,
         inject: async () => { pasted = true; return true }, sendKey, capture: async () => pasted ? screen : '❯ ', onError,
       })
@@ -1059,7 +670,7 @@ describe('SessionInputController', () => {
       vi.useFakeTimers()
       const sendKey = vi.fn(async () => true), onError = vi.fn(), onDelivery = vi.fn()
       let pasted = false
-      const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
         getSession: () => session('claude'), validateRuntime: async () => true, onDelivery,
         inject: async () => { pasted = true; return true }, sendKey, capture: async () => pasted ? screen : '❯ ', onError,
       })
@@ -1075,7 +686,7 @@ describe('SessionInputController', () => {
       const sendKey = vi.fn(async () => true), onError = vi.fn()
       // Codex browsing its transcript (0.160): Enter would rewind the conversation to the prompt in view.
       const browsing = `› ${message}\n\n  Browsing transcript · ↑↓/jk scroll · ←→/hl prompts · ↵ rewind · esc back\n`
-      const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
         getSession: () => session('codex'), validateRuntime: async () => true,
         inject: async () => true, sendKey, capture: async () => browsing, onError,
       })
@@ -1091,7 +702,7 @@ describe('SessionInputController', () => {
     vi.useFakeTimers()
     const sendKey = vi.fn(async () => true)
     const onError = vi.fn()
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: () => session('claude'), validateRuntime: async () => true,
       inject: async () => true, sendKey, capture: async () => 'Sign in required', onError,
     })
@@ -1106,7 +717,7 @@ describe('SessionInputController', () => {
     vi.useFakeTimers()
     const sendKey = vi.fn(async () => true)
     const onError = vi.fn()
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: () => session('claude'),
       validateRuntime: async () => true,
       inject: async () => true,
@@ -1127,7 +738,7 @@ describe('SessionInputController', () => {
     const openclawController = () => {
       const sendKey = vi.fn(async () => true)
       const onError = vi.fn()
-      const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
         getSession: () => session('openclaw'),
         validateRuntime: async () => true,
         inject: async () => true,
@@ -1174,7 +785,7 @@ describe('SessionInputController', () => {
       vi.useFakeTimers()
       const sendKey = vi.fn(async () => true), onError = vi.fn(), onDelivery = vi.fn()
       const read = vi.fn(async () => null)
-      const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: { ...inlineSubmission, read },
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: { ...inlineSubmission, read },
         getSession: () => session(engine), validateRuntime: async () => true, inject: async () => true, sendKey, onDelivery,
         capture: async () => engine === 'claude' ? claudeBox('hello') : codexComposer('hello'), onError })
       controller.submit('s1', 'hello', 'delivery-1')
@@ -1190,7 +801,7 @@ describe('SessionInputController', () => {
     it('a reader that throws is no reading either', async () => {
       vi.useFakeTimers()
       const sendKey = vi.fn(async () => true), onError = vi.fn()
-      const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen,
+      const controller = new SessionInputController({ readScreen: readInlineScreen,
         submission: { ...inlineSubmission, read: async () => { throw new Error('worker gone') } },
         getSession: () => session('claude'), validateRuntime: async () => true, inject: async () => true, sendKey,
         capture: async () => claudeBox('hello'), onError })
@@ -1206,7 +817,7 @@ describe('SessionInputController', () => {
       const sendKey = vi.fn(async () => true), onError = vi.fn()
       const reading = held<{ draft: boolean; composer: boolean; nativeDraft: 'pending' } | null>()
       const read = vi.fn(() => reading.promise)
-      const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: { ...inlineSubmission, read },
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: { ...inlineSubmission, read },
         getSession: () => session('claude'), validateRuntime: async () => true, inject: async () => true, sendKey,
         capture: async () => claudeBox('hello'), onError })
       controller.submit('s1', 'hello')
@@ -1237,7 +848,7 @@ describe('SessionInputController', () => {
           inline: (name, capture) => capture === null ? undefined : screenFor(name).inspect(capture) })
         const submission = createSubmissions({ policy: submissionPolicy, handles: () => false, transport: { read: vi.fn(), echo: vi.fn() },
           resolve, inline: name => submissionFor(name) })
-        const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: screens.read, submission, getSession: () => current,
+        const controller = new SessionInputController({ readScreen: screens.read, submission, getSession: () => current,
           validateRuntime: async () => true, inject: async () => { current = after; return true }, sendKey,
           // Taken off the composer, its turn not started yet.
           capture: async () => engine === 'claude' ? claudeBox('') : codexComposer(''), onError })
@@ -1272,7 +883,7 @@ describe('SessionInputController', () => {
       const sendKey = vi.fn(async () => true)
       // The pane holds no draft as the core would read it; the engine says its composer still holds the prompt.
       const read = vi.fn(async () => ({ draft: true, composer: true, nativeDraft: 'pending' as const }))
-      const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: { ...inlineSubmission, read },
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: { ...inlineSubmission, read },
         getSession: () => session('codex'), validateRuntime: async () => true, inject: async () => true, sendKey,
         capture: async () => codexComposer(''), onError: vi.fn() })
       controller.submit('s1', 'hello')
@@ -1284,7 +895,7 @@ describe('SessionInputController', () => {
     it('a turn\'s prompt the engine wrapped settles its receipt once read, and the pane at once', async () => {
       const echo = held<{ start: number; end: number } | null>()
       const onDelivery = vi.fn()
-      const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: { ...inlineSubmission, echo: () => echo.promise },
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: { ...inlineSubmission, echo: () => echo.promise },
         getSession: () => session('claude'), validateRuntime: async () => true, inject: async () => true, sendKey: async () => true,
         onError: vi.fn(), onDelivery })
       controller.submit('s1', 'peer question', 'delivery-1')
@@ -1305,7 +916,7 @@ describe('SessionInputController', () => {
     ]
     it.each(noEcho)('%s of a wrapped prompt is no match', async (_name, echo) => {
       const onDelivery = vi.fn()
-      const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: { ...inlineSubmission, echo },
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: { ...inlineSubmission, echo },
         getSession: () => session('claude'), validateRuntime: async () => true, inject: async () => true, sendKey: async () => true,
         onError: vi.fn(), onDelivery })
       controller.submit('s1', 'peer question', 'delivery-1')
@@ -1319,7 +930,7 @@ describe('SessionInputController', () => {
       const echo = vi.fn(inlineSubmission.echo)
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       const onSubmitted = vi.fn()
-      const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: { ...inlineSubmission, echo },
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: { ...inlineSubmission, echo },
         getSession: () => session('claude'), validateRuntime: async () => true, inject: async () => true, sendKey: async () => true,
         onError: vi.fn(), onSubmitted })
       const turn = async (typed: string, recorded: string) => {
@@ -1338,7 +949,7 @@ describe('SessionInputController', () => {
       await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(expect.stringContaining('observed a different terminal prompt')))
       expect(echo).toHaveBeenCalledTimes(2)
       // Another engine's record is compared whole, at once, as before.
-      const other = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: { ...inlineSubmission, echo },
+      const other = new SessionInputController({ readScreen: readInlineScreen, submission: { ...inlineSubmission, echo },
         getSession: () => session('commandcode'), validateRuntime: async () => true, inject: async () => true, sendKey: async () => true,
         onError: vi.fn(), onSubmitted })
       other.submit('s1', 'fourth')
@@ -1357,7 +968,7 @@ describe('SessionInputController', () => {
     vi.useFakeTimers()
     const sendKey = vi.fn(async () => true)
     const onError = vi.fn()
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: () => session('codex'),
       validateRuntime: async () => true,
       inject: async () => true,
@@ -1378,7 +989,7 @@ describe('SessionInputController', () => {
     vi.useFakeTimers()
     const sendKey = vi.fn(async () => true)
     const onError = vi.fn()
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: () => session('codex'),
       validateRuntime: async () => true,
       inject: async () => true,
@@ -1399,7 +1010,7 @@ describe('SessionInputController', () => {
     vi.useFakeTimers()
     const sendKey = vi.fn(async () => true)
     const onError = vi.fn()
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: () => session('codex'),
       validateRuntime: async () => true,
       inject: async () => true,
@@ -1422,7 +1033,7 @@ describe('SessionInputController', () => {
     const ambiguous: TerminalActionResult = {
       state: 'unknown', dispatch: 'possibly_executed', reason: 'response was lost',
     }
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: () => session('codex'),
       validateRuntime: async () => true,
       inject: async () => ambiguous,
@@ -1444,7 +1055,7 @@ describe('SessionInputController', () => {
     const ambiguous: TerminalActionResult = {
       state: 'unknown', dispatch: 'possibly_executed', reason: 'response was lost',
     }
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: () => session('codex'),
       validateRuntime: async () => true,
       inject: async () => ambiguous,
@@ -1467,7 +1078,7 @@ describe('SessionInputController', () => {
     const ambiguous: TerminalActionResult = {
       state: 'unknown', dispatch: 'possibly_executed', reason: 'response was lost',
     }
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: () => session('codex'),
       validateRuntime: async () => true,
       inject: async () => ambiguous,
@@ -1491,7 +1102,7 @@ describe('SessionInputController', () => {
       state: 'unknown', dispatch: 'possibly_executed', reason: 'Enter response was lost',
     }))
     const onError = vi.fn()
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: () => session('codex'),
       validateRuntime: async () => true,
       inject: async () => true,
@@ -1515,7 +1126,7 @@ describe('SessionInputController', () => {
     const ambiguous: TerminalActionResult = {
       state: 'unknown', dispatch: 'possibly_executed', reason: 'response was lost',
     }
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: () => session('cursor'),
       validateRuntime: async () => true,
       inject: async () => ambiguous,
@@ -1539,7 +1150,7 @@ describe('SessionInputController', () => {
       state: 'unknown', dispatch: 'possibly_executed', reason: 'key response was lost',
     }))
     const onError = vi.fn()
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: () => session('cursor'),
       validateRuntime: async () => true,
       inject: async () => true,
@@ -1558,7 +1169,7 @@ describe('SessionInputController', () => {
 
   it('serializes chat input behind a native runtime control lock', async () => {
     const injected: string[] = []
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: () => session('claude'), validateRuntime: async () => true,
       inject: async (_pane, content) => { injected.push(content); return true },
       sendKey: async () => true, onError: vi.fn(),
@@ -1584,7 +1195,7 @@ describe('delivery correlation', () => {
   function setup(overrides: Partial<ConstructorParameters<typeof SessionInputController>[0]> = {}) {
     const onDelivery = vi.fn()
     const inject = vi.fn(async () => true)
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: () => session(), validateRuntime: async () => true,
       inject, sendKey: async () => true, onError: vi.fn(), onDelivery, ...overrides,
     })
@@ -1717,7 +1328,7 @@ describe('optional lamp delivery preserves legacy behavior', () => {
     // once: the second waits for the first's paste, not for the first's turn.
     const validations: Array<(valid: boolean) => void> = []
     const inject = vi.fn(async (_target: string, _text: string) => true)
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: () => session('claude'),
       validateRuntime: () => new Promise<boolean>(resolve => validations.push(resolve)),
       inject, sendKey: async () => true, onError: vi.fn(),
@@ -1738,7 +1349,7 @@ describe('optional lamp delivery preserves legacy behavior', () => {
   it('writes messages that arrive together in the order they arrived, whichever check finishes first', async () => {
     const checks: Array<(valid: boolean) => void> = []
     const inject = vi.fn(async (_target: string, _text: string) => true)
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: () => session('codex'),
       validateRuntime: () => new Promise<boolean>(resolve => checks.push(resolve)),
       inject, sendKey: async () => true, onError: vi.fn(),
@@ -1752,7 +1363,7 @@ describe('optional lamp delivery preserves legacy behavior', () => {
     expect(inject.mock.calls.map(([, text]) => text)).toEqual(['one', 'two', 'three'])
     // A write that fails does not hold up the ones behind it.
     const failing = vi.fn(async (_target: string, text: string) => { if (text === 'bad') throw new Error('pane gone'); return true })
-    const next = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('codex'), validateRuntime: async () => true,
+    const next = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('codex'), validateRuntime: async () => true,
       inject: failing, sendKey: async () => true, onError: vi.fn() })
     next.submit('s1', 'bad')
     next.submit('s1', 'good')
@@ -1763,7 +1374,7 @@ describe('optional lamp delivery preserves legacy behavior', () => {
 
   it('keeps native control available during untracked runtime validation', async () => {
     let resolve!: (valid: boolean) => void
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: () => session('claude'),
       validateRuntime: () => new Promise<boolean>(done => { resolve = done }),
       inject: async () => true, sendKey: async () => true, onError: vi.fn(),
@@ -1784,7 +1395,7 @@ describe('optional lamp delivery preserves legacy behavior', () => {
     vi.useFakeTimers()
     let pressed!: (ok: boolean) => void
     const keys: string[] = [], typed: string[] = [], said: string[] = []
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: () => session('codex'), validateRuntime: async () => true,
       inject: async (_id, text) => { typed.push(text); return true },
       sendKey: (_id, key) => { keys.push(key); return key === 'C-c' ? new Promise<boolean>(resolve => { pressed = resolve }) : Promise.resolve(true) },
@@ -1810,7 +1421,7 @@ describe('optional lamp delivery preserves legacy behavior', () => {
     const pressing = (over: { validateRuntime?: () => Promise<boolean>; inject?: (text: string) => Promise<boolean>; key?: () => Promise<boolean> } = {}) => {
       let pressed!: (ok: boolean) => void
       const typed: string[] = [], said: Record<string, string[]> = {}, onError = vi.fn()
-      const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
         getSession: () => session('codex'), validateRuntime: over.validateRuntime ?? (async () => true),
         inject: async (_id, text) => { typed.push(text); return over.inject ? over.inject(text) : true },
         sendKey: (_id, key) => key === 'C-c' ? over.key?.() ?? new Promise<boolean>(resolve => { pressed = resolve }) : Promise.resolve(true),
@@ -1916,7 +1527,7 @@ describe('optional lamp delivery preserves legacy behavior', () => {
   it('reports the original legacy cancellation error for a vanished process', async () => {
     const onError = vi.fn()
     const sendKey = vi.fn(async () => true)
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: () => session(), validateRuntime: async () => false,
       inject: async () => true, sendKey, onError,
     })
@@ -1930,7 +1541,7 @@ describe('optional lamp delivery preserves legacy behavior', () => {
     vi.useFakeTimers()
     const onDelivery = vi.fn()
     const sendKey = vi.fn(async () => true)
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: () => session('commandcode'), validateRuntime: async () => true,
       inject: async () => true, sendKey, capture: async () => 'Thinking… esc to interrupt',
       onError: vi.fn(), onDelivery,
@@ -1947,7 +1558,7 @@ describe('optional lamp delivery preserves legacy behavior', () => {
   it('does not invent rejection when a turn begins during pre-paste validation', async () => {
     let resolve!: (valid: boolean) => void
     const onDelivery = vi.fn()
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: () => session('claude'),
       validateRuntime: () => new Promise<boolean>(done => { resolve = done }),
       inject: async () => true, sendKey: async () => true, onError: vi.fn(), onDelivery,
@@ -1968,7 +1579,7 @@ describe('what became of a person\'s message, for its measurement', () => {
   function setup(overrides: Partial<ConstructorParameters<typeof SessionInputController>[0]> = {}) {
     const onError = vi.fn(), onSubmitted = vi.fn()
     const inject = vi.fn<(...args: unknown[]) => Promise<boolean | TerminalActionResult>>(async () => true)
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: () => session('claude'), validateRuntime: async () => true, inject, sendKey: async () => true,
       capture: async () => claudeBox(''), onError, onSubmitted, ...overrides })
     const said: string[] = []
@@ -2118,7 +1729,7 @@ describe('what became of a person\'s message, for its measurement', () => {
 
 describe('while the agent changes host', () => {
   const controllerWith = (gate: MoveGate, inject: (target: string, content: string) => Promise<boolean>) =>
-    new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+    new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: (id) => id === 's1' ? session() : id === 's2' ? { ...session(), sessionId: 's2', agentId: 'h2' } : undefined,
       validateRuntime: async () => true, inject, sendKey: async () => true,
       capture: async () => codexComposer(''), onError: vi.fn(), moveGate: gate })
@@ -2140,7 +1751,7 @@ describe('while the agent changes host', () => {
     const gate = new MoveGate()
     const injected: string[] = []
     const onDelivery = vi.fn()
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: () => session(), validateRuntime: async () => true,
       inject: async (_target, content) => { injected.push(content); return true }, sendKey: async () => true,
       capture: async () => codexComposer(''), onError: vi.fn(), onDelivery, beforeTeamWrite: async () => null, moveGate: gate })
@@ -2159,7 +1770,7 @@ describe('while the agent changes host', () => {
     const gate = new MoveGate()
     const onError = vi.fn()
     const injected: string[] = []
-    const controller = new SessionInputController({ typesWhileBusy: swarmChat, readScreen: readInlineScreen, submission: inlineSubmission,
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: () => session(), validateRuntime: async () => true,
       inject: async (_target, content) => { injected.push(content); return true }, sendKey: async () => true,
       capture: async () => codexComposer(''), onError, moveGate: gate })

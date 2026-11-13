@@ -29,8 +29,7 @@
 // refused, and the goal paused with no further output), `!compactmid` compacts in the
 // middle of a turn as an automatic compaction does, `!version` answers with the version this
 // process is, `!env <prefix>[,<prefix>…]` with the names of the variables in its environment that start with a
-// prefix (never their values), as an agent that reads its own environment can, `!cores <tag>` with the one value it
-// tells, its share of the machine's cores (`HARNESS_CORES`), `!goal` and `!goal done`
+// prefix (never their values), as an agent that reads its own environment can, `!goal` and `!goal done`
 // (Codex) start and achieve a goal the way Codex 0.160 shows one under its composer, `!browse` (Codex) leaves Codex browsing its transcript in its default fullscreen
 // mode, and `!browse scrollback` in its scrollback mode, `!transcript` (Claude Code) leaves it in its
 // transcript view, as ctrl+o does, `!overlay` (Codex) in its transcript overlay, as ctrl+t does in its
@@ -450,8 +449,8 @@ export async function run(engine, config = {}, { native = false } = {}) {
   /**
    * The JSON an event hands its hooks on stdin, in each CLI's own shape: what notify.mjs reads (session,
    * transcript, folder, the event and its source, prompt or reason) and the rest of what the real CLIs
-   * were recorded sending (src/lib/__fixtures__/swarm-prompt-hooks.json: Claude Code's prompt id and
-   * permission mode, Codex's turn id, model and permission mode).
+   * were recorded sending (Claude Code's prompt id and permission mode, Codex's turn id, model and
+   * permission mode).
    */
   const hookInput = (event, fields) => ({
     session_id: sessionId,
@@ -1368,16 +1367,6 @@ export async function run(engine, config = {}, { native = false } = {}) {
         codex('response_item', { type: 'function_call_output', call_id: id, output: `ran ${directive[2]}` })
       }
     }
-    // A turn that says what it does, runs a tool, and thinks before its answer, as a Swarm PM's did (Devon, 2026-11-12): its answer is
-    // the text after its last tool, written as Claude Code writes a message that thought first.
-    if (engine === 'claude' && directive?.[1] === 'narrate') {
-      const id = `call_${turn}`
-      claude({ type: 'assistant', message: { id: `msg_${turn}_n`, role: 'assistant', model: claudeModel, content: [{ type: 'text', text: `On it: ${directive[2]}` }], stop_reason: 'tool_use' } })
-      claude({ type: 'assistant', message: { id: `msg_${turn}_n`, role: 'assistant', model: claudeModel, content: [{ type: 'tool_use', id, name: 'Bash', input: { command: directive[2] } }], stop_reason: 'tool_use' } })
-      claude({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: `ran ${directive[2]}` }] } })
-      await finish(`answer ${turn}: ${prompt}`, true)
-      return
-    }
     if (engine === 'claude' && directive?.[1] === 'background') {
       // Claude Code 2.1.322's Bash tool with `run_in_background` (recorded 2026-11-12, docs/plans/2026-11-12-background-count-plan.md):
       // the command runs in a shell that is the engine's direct child and that the trailing `pwd` keeps alive while it
@@ -1606,12 +1595,6 @@ export async function run(engine, config = {}, { native = false } = {}) {
       const prefixes = directive[2].split(',').filter(Boolean)
       const names = Object.keys(process.env).filter((name) => prefixes.some((prefix) => name.startsWith(prefix))).sort()
       await finish(`env ${directive[2]}: ${names.join(',') || '(none)'}`)
-      return
-    }
-    // A Swarm agent's share of its machine's cores (superTabs/inCore/launch.ts), the one value an answer tells: a share is a
-    // count, never a secret. The tag tells this answer from earlier ones in the same thread.
-    if (directive?.[1] === 'cores') {
-      await finish(`cores ${directive[2]}: ${process.env.HARNESS_CORES ?? '(none)'}`)
       return
     }
     if (engine === 'codex' && directive?.[1] === 'goal') {

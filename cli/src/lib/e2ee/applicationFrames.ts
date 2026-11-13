@@ -29,7 +29,7 @@ const FLEET_REQUESTS = new Set(['grid_fleet_capabilities', 'grid_fleet_run', 'gr
   'grid_fleet_models_list', 'grid_fleet_model_download', 'grid_fleet_model_start', 'grid_fleet_model_stop'])
 const FLEET_RESULTS = new Set([...FLEET_REQUESTS].map(type => `${type}_result`))
 // `group_sync`: the trust-group roster exchange (groupSyncer.ts) — keys, so always sealed.
-const MACHINE_REQUESTS = new Set([...SHELL_REQUESTS, 'agent_purge', 'agent_worktree_delete', 'agents_cleanup_preview', 'agent_close', 'git_project_info', 'scm_project_info', 'git_pull_request', 'git_pull_requests_status', 'machine_resources', 'api_connections', 'connectors', 'group_sync', 'phone_pair', 'viewer_surface', 'orchestrator', 'agent_handoff_prepare',
+const MACHINE_REQUESTS = new Set([...SHELL_REQUESTS, 'agent_purge', 'agent_worktree_delete', 'agents_cleanup_preview', 'agent_close', 'git_project_info', 'scm_project_info', 'git_pull_request', 'machine_resources', 'api_connections', 'connectors', 'group_sync', 'phone_pair', 'viewer_surface', 'orchestrator', 'agent_handoff_prepare',
   // A held launch's cancellation and its receipt contain the client's private request identity.
   'agent_create_cancel', 'agent_handoff_complete',
   // Memories (services/memory.ts): what this machine's agents remember, and About You and its on/off choice.
@@ -43,10 +43,6 @@ const MACHINE_REQUESTS = new Set([...SHELL_REQUESTS, 'agent_purge', 'agent_workt
   // Sharing a machine across accounts (services/sharedMachines.ts): the addresses it is shared with, and where
   // a guest may start a harness (the owner's folders).
   'shared_machines', 'guest_folders',
-  'super_tabs',
-  // An agent's instructions file (services/projects.ts), read and saved from the owner's other computers: what the person
-  // wrote there is theirs, so the relay sees none of it, in either direction.
-  'agent_instructions_read', 'agent_instructions_write',
   // An agent's browser from the owner's other computers (services/agentBrowser.ts): its settings carry the proxy and its
   // password, a proxy test's answer the proxy's exit address; Start, Stop and its window's size name the agent. The
   // agent's own commands (`agent_browser_run`) are answered to a local asker only, so they are on no list here.

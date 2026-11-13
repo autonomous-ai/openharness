@@ -32,8 +32,6 @@ export interface DevicesState {
   focus: WindowFocus
   engines: string[]
   commanders: boolean
-  /** The agents with an engine's question open (core/questions.ts). */
-  asking: string[]
 }
 
 export interface DevicesLinkDeps {
@@ -88,7 +86,6 @@ export function createDevicesLink(deps: DevicesLinkDeps) {
     scroll: (phase, dy, velocity) => event('scroll', { phase, dy, velocity }),
     engines: (engines) => event('engines', { engines }),
     commanders: (connected) => event('commanders', { connected }),
-    asking: (agentIds) => event('asking', { agentIds }),
     // Their own process: the master stops it, and a core that restarts leaves it running with the dial.
     stop: async () => {},
   }
@@ -123,19 +120,6 @@ export function createDevicesLink(deps: DevicesLinkDeps) {
     models: async ({ agentId }) => ({ models: await core.agents.runtimeModels(text(agentId)) }),
     fork: async ({ agentId }) => ({ ...await core.agents.fork(text(agentId)) }),
     machines: () => core.account.machines(),
-    // The Swarm cards' requests (core/main.ts `superTabRequest` allows those and no other action of the Super Tab service).
-    super_tabs: async (payload) => {
-      if (!core.superTabRequest) return { error: 'SERVICE_UNAVAILABLE' }
-      const { action, tabId, leadId, on, include, session, harnessId, machineId, text, focus } = payload
-      // A round dial that speaks swarmChat asks for the chat on the face (one that speaks swarmBuddy, 'buddy'), and the
-      // window's open conversation rides with the wish (the Swarm's service checks them); absent, the request is today's.
-      const chat = payload.chat === true || payload.chat === 'buddy' ? { chat: payload.chat } : {}
-      return core.superTabRequest(action === 'cardsWanted' ? { action, on: on === true, include, ...(focus !== undefined ? { focus } : {}) }
-        : action === 'cardSay' ? { action, harnessId, text, ...chat, ...(typeof payload.chatId === 'string' ? { chatId: payload.chatId } : {}),
-          ...(payload.reviewed === true ? { reviewed: true } : {}) }
-        : action === 'cardWorker' ? { action, machineId, harnessId }
-        : { action, tabId, leadId, session, ...chat })
-    },
     // The transcriber's and the fleet's lane's sign-in, and the lane's sealing, asked of the core at every
     // use as every service in its own process asks them (core/accountQueries.ts): the devices hold no
     // credential and no E2EE identity.
@@ -187,7 +171,6 @@ export function createDevicesLink(deps: DevicesLinkDeps) {
       started.windowFocus(state.focus)
       started.engines(state.engines)
       started.commanders(state.commanders)
-      started.asking(state.asking)
     },
   }
 }

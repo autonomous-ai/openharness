@@ -29,7 +29,7 @@ it('finds the pane this command runs in from its parent processes, whatever TMUX
   expect(runningPane({ TMUX_PANE: '%7' }, probe({ ancestors: chain(900, 500, 600, 800, 700, 600, 1) }), 'darwin')).toMatchObject({ pane: '%7' })
 })
 
-// The Lead's must on #904's plan: an allowed command can't claim another harness by typing its pane.
+// A must on #904's plan: an allowed command can't claim another harness by typing its pane.
 it('refuses a TMUX_PANE that names another pane than the one the command runs in', () => {
   expect(runningPane({ TMUX_PANE: '%7' }, probe(), 'darwin'))
     .toEqual({ refused: 'This command names a pane it does not run in. Run it as your harness gave it, without setting TMUX_PANE.' })
@@ -107,7 +107,7 @@ describe('reading the real processes and panes', () => {
   })
 
   // Re-check 1 of #2093 (critical): Harness's own tmux, which install.sh puts on Macs without Homebrew's and in Team
-  // accounts, was not looked for, so there every agent's Swarm command was refused. The daemon's tmux comes first.
+  // accounts, was not looked for, so there every agent's Harness command was refused. The daemon's tmux comes first.
   it('reads the panes with the tmux the daemon uses: the managed one first, then the system\'s', async () => {
     const tmux = await isolatedTmux()
     try {

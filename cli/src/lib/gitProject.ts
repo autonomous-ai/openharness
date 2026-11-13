@@ -1,7 +1,7 @@
 import { execFile, spawn } from 'node:child_process'
 import { cp, lstat, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, dirname, isAbsolute, join, normalize, sep } from 'node:path'
+import { basename, dirname, isAbsolute, join, normalize } from 'node:path'
 import { promisify } from 'node:util'
 import { placeholderBranch, plausibleBranchName, worktreeFolderName } from './agentNames.js'
 import { redactSecretsInText } from './redactSecrets.js'
@@ -55,17 +55,6 @@ function parseWorktrees(output: string): Worktree[] {
     }]
   })
 }
-/** Whether `path` is a worktree Harness made in `root`'s worktrees folder: a linked worktree there whose branch carries
- *  Harness's `branch.<name>.harness` mark. A person's own checkout or worktree, anywhere, is not. */
-export async function harnessMadeWorktree(path: string, root: string): Promise<boolean> {
-  try {
-    const [here, home] = await Promise.all([realpath(path), realpath(join(root, 'worktrees'))])
-    if (dirname(here) === here || !here.startsWith(`${home}${sep}`) || !(await lstat(join(here, '.git'))).isFile()) return false
-    const branch = (await git(here, ['branch', '--show-current'])).trim()
-    return !!branch && (await git(here, ['config', '--get', `branch.${branch}.${HARNESS_BRANCH_KEY}`])).trim() !== ''
-  } catch { return false }
-}
-
 /** `branch.<name>.harness` in the repository's config marks a branch Harness made: `placeholder` while
  *  its name waits for the session's, `created` once it has one or was named at Start. */
 export const HARNESS_BRANCH_KEY = 'harness'
@@ -213,25 +202,11 @@ function remoteBranch(ref: string | undefined): { remote: string; branch: string
   return { remote: match[1]!, branch: match[2]!, refspec: `+refs/heads/${match[2]}:refs/remotes/${match[1]}/${match[2]}` }
 }
 
-/** The remote's default branch as the ref a clone keeps it in: `origin/HEAD`, else `origin/main` or
- *  `origin/master`, as `readGitProject` offers it. Null when the repository has no such ref. */
-async function originDefaultRef(path: string): Promise<string | null> {
-  const head = await git(path, ['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD']).catch(() => null)
-  for (const ref of [head, 'refs/remotes/origin/main', 'refs/remotes/origin/master']) {
-    if (ref && await git(path, ['show-ref', '--verify', '--quiet', '--', ref]).then(() => true, () => false)) return ref
-  }
-  return null
-}
-
 export type GitProjectOptions = {
   root: string
   worktree: boolean
   /** Worktree on: what a new branch starts from. Worktree off: the branch the folder is on. */
   ref?: string
-  /** Worktree on, a new branch, no `ref`: start from the remote's default branch, fetched first, rather than
-   *  from wherever `HEAD` is. A checkout nobody works in (a Swarm host's clone) stays where it was cloned, days
-   *  behind. Only a Swarm start asks for it; a repository with no `origin` default branch starts from `HEAD`. */
-  fromDefaultBranch?: boolean
   /** The worktree's branch: created from `ref`, or with `existingBranch` checked out as it is. */
   branchName?: string
   existingBranch?: boolean
@@ -244,8 +219,7 @@ export type GitProjectOptions = {
 
 /** Worktree on: a new worktree under `<root>/worktrees/<repository>`, on `branchName` — created from
  * `ref`, or with `existingBranch` an existing local branch checked out as it is. Without a name one
- * is made up (`harness/brave-otter`). A remote base is fetched first, briefly: so is the default branch
- * with `fromDefaultBranch`, when there is no `ref`.
+ * is made up (`harness/brave-otter`). A remote base is fetched first, briefly.
  *
  * Worktree off: the folder on the local `ref`. A branch that already has a worktree opens there; any
  * other is switched to, only in a folder with nothing uncommitted. With `branchName` the folder moves
@@ -261,9 +235,7 @@ export async function prepareGitProject(source: string, options: GitProjectOptio
   let root: string, head: string, prefix: string
   try {
     root = await git(source, ['rev-parse', '--show-toplevel'])
-    // The default branch is only ever a remote one, so it is fetched like any other remote base below.
-    const ref = options.ref ?? (options.fromDefaultBranch && options.worktree && !existing && !creating
-      ? await originDefaultRef(source) ?? undefined : undefined)
+    const ref = options.ref
     if (ref && !creating) {
       if (!/^refs\/(heads|remotes)\/[^\s\x00-\x1f\x7f]+$/.test(ref)) throw new Error('Invalid branch')
       // A freshly discovered remote branch may not have been fetched yet.
@@ -465,7 +437,7 @@ async function fetchOnce(source: string, remote: string, refspec: string): Promi
   try { await fetch } finally { fetches.delete(key) }
 }
 
-/** Ten minutes for `git worktree add`. 120 s failed 2 of 4 Swarm starts on a busy Mac Studio (2026-10-27): the
+/** Ten minutes for `git worktree add`. 120 s failed 2 of 4 starts on a busy Mac Studio (2026-10-27): the
  *  checkout of the whole repository was still writing when the time ran out. */
 export const WORKTREE_ADD_TIMEOUT = 10 * 60_000
 

@@ -1,4 +1,3 @@
-import { parseSwarmSkill, type SwarmSkill } from './savedSkill.js'
 /**
  * Registry of process-owned AGENTS — one per supported top-level engine process in a tmux pane.
  *
@@ -180,7 +179,7 @@ export interface RegisteredSession {
   /**
    * The model and effort this session was launched with as flags (`agent_create`'s launch model, lib/launchModel.ts),
    * or the one a person moved it onto through Harness since (`agent_update`). Every relaunch passes them again
-   * (lib/launchOverrides.ts): the flags hold for one launch only, and a Product Manager launched on Opus at xhigh came
+   * (lib/launchOverrides.ts): the flags hold for one launch only, and an agent launched on Opus at xhigh came
    * back on its engine's own default, the machine's last-used Claude Code model, once reopened (task #3395, anh Dee
    * 11-05). Absent for a session launched with none.
    */
@@ -271,8 +270,6 @@ export interface RegisteredSession {
   dsh?: string | null
   /** Stable key of the session-scoped harness runtime; preserved by bind, restore and fork. */
   dshRuntime?: string | null
-  /** Role and stable key of this Swarm session; absent for ordinary sessions. */
-  swarmSkill?: SwarmSkill
   /**
    * The engine's own named agent this pane was opened as (`agent_create`'s `agent`; opencode
    * `--agent <name>`), or null for a general session. Chosen at creation and carried into every
@@ -424,7 +421,7 @@ export function projectDisplayName(s: RegisteredSession): string {
 
 /** Whether a person chose [s]'s name: they renamed it (kept in agent-names.json), as against the name it was created with
  *  or the engine's session title, which `projectDisplayName` falls back to. The agent frame carries it (`nameChosen`), so
- *  a client sends only a chosen name to the Swarm and never a title (task #2920). */
+ *  a client sends only a chosen name on and never a title (task #2920). */
 export function isNameChosen(s: RegisteredSession): boolean {
   return !!(NAME_OVERRIDES.get(s.sessionId) || NAME_OVERRIDES.get(s.agentId))
 }
@@ -441,8 +438,6 @@ const LOCK_DIR = join(env.ADAPTER_DATA_DIR, 'registry.json.lock')
 const PRE_V2_BACKUP_FILE = join(env.ADAPTER_DATA_DIR, 'registry.pre-v2.json')
 /** Written once this machine's saved agents are cleared of the permission modes Harness forced (`withoutForcedModes`). */
 const OWN_MODES_FILE = join(env.ADAPTER_DATA_DIR, 'registry-own-modes')
-/** Written once this machine's saved Swarm agents with no mode are given Auto-approve (`withSwarmAuto`). */
-const SWARM_AUTO_FILE = join(env.ADAPTER_DATA_DIR, 'registry-swarm-auto')
 const NAME_OVERRIDES = new Map<string, string>()
 
 const PANE_RE = /^%\d+$/
@@ -704,45 +699,22 @@ function withoutRetiredRows(stored: readonly unknown[]): { rows: unknown[]; drop
 }
 
 /**
- * Swarm v3 (task #4215): until then Harness itself started every Swarm agent in full mode, and an older Buddy in `buddy` or
+ * Task #4215 (2026-11-07): until then Harness itself started every Swarm agent in full mode, and an older Buddy in `buddy` or
  * `readOnlyAsk`; nobody chose those, and a relaunch reapplies a saved mode. So the first load of a build with this clears them,
- * once (`OWN_MODES_FILE`): full mode a person chooses for a Swarm agent afterwards is theirs and kept. Review after 2027-01-07.
+ * once (`OWN_MODES_FILE`): full mode a person chose afterwards is theirs and kept. The Swarm is gone (2026-11-14), but a machine
+ * that has not loaded a build since still has those rows, Swarm role and all. Remove on or after 2027-01-07.
  */
 function withoutForcedModes(rows: Array<Partial<RegisteredSession>>): { rows: Array<Partial<RegisteredSession>>; cleared: number } {
   let cleared = 0
   const kept = rows.map((row) => {
     const mode: unknown = row?.permissionMode
-    if (!(mode === 'buddy' || mode === 'readOnlyAsk' || (mode === 'full' && parseSwarmSkill(row.swarmSkill)))) return row
+    const swarmRole: unknown = (row as { swarmSkill?: unknown })?.swarmSkill
+    if (!(mode === 'buddy' || mode === 'readOnlyAsk' || (mode === 'full' && !!swarmRole && typeof swarmRole === 'object'))) return row
     cleared++
     const { permissionMode: _mode, bypassPermission: _bypass, ...own } = row
     return own
   })
   return { rows: kept, cleared }
-}
-
-/**
- * A Swarm agent starts in Auto-approve since 2026-11-12 (anh Dee: as a new agent in a regular tab does), and a restart or
- * restore reapplies the saved mode. One started between task #4215 and then has none, and kept coming back in its owner's own
- * default, where a PM stood still before each tool and Codex refused every ask to leave its sandbox. So the first load of a
- * build with this gives each such Claude Code or Codex agent the Swarm started Auto-approve, once (`SWARM_AUTO_FILE`). Only one
- * the Swarm started (superTabs/inCore/adoption.ts `swarmStarted`): a person's own agent attached to a Swarm also carries a
- * Swarm role, often with no mode (`harness new` in its own settings, a Codex in Ask), and keeps its own default. Every mode a
- * person picks for a Swarm-started agent is recorded on its row, so one with none was never theirs. Its pane takes the mode at
- * its next relaunch (a Restart, or the computer's restart). Review after 2027-01-12.
- */
-const swarmStarted = (row: Partial<RegisteredSession>) => row.startedBy === 'agent' && !row.parentAgentId
-
-/** [row] in Auto-approve when it is one of those agents, else [row] itself. Also what Open uses for a stopped one, which is
- *  saved outside this file (lib/stoppedAgents.ts) and so outside the sweep. */
-export function inSwarmAuto<T extends Partial<RegisteredSession>>(row: T): T {
-  if (row?.permissionMode != null || (row.engine !== 'claude' && row.engine !== 'codex') || !parseSwarmSkill(row.swarmSkill)
-    || !swarmStarted(row)) return row
-  return { ...row, permissionMode: 'auto', bypassPermission: true }
-}
-
-function withSwarmAuto(rows: Array<Partial<RegisteredSession>>): { rows: Array<Partial<RegisteredSession>>; given: number } {
-  const kept = rows.map(inSwarmAuto)
-  return { rows: kept, given: kept.filter((row, i) => row !== rows[i]).length }
 }
 
 /** A legacy `tmuxPane` adds a tmux runtime unless it is a listed runtime's own projection (`paneProjection`). */
@@ -799,14 +771,13 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
   // Taken out of the spread and put back only when it is a real moment: the spread would otherwise
   // carry a hand-edited string or a negative number straight into the frame's `toISOString()`.
   // `forkedFrom` is out too, so an invalid one is dropped rather than spread back in as-is.
-  const { identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, admissionHold: _admission, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, launchModel: rawLaunchModel, externalResume: _externalResume, startedBy: rawStartedBy, parentAgentId: rawParentAgentId, swarmSkill: rawSwarmSkill, launchArgs: rawLaunchArgs, browser: rawBrowser, quietTitle: rawQuietTitle, firstTask: rawFirstTask, openclawLocal: rawOpenclawLocal, earlierSessionIds: rawEarlierSessionIds, hermesHomeDerived: _hermesHomeDerived, ...rest } = row
+  // `swarmSkill` is a Swarm role a build before the Swarm was deleted (2026-11-14) saved: dropped, and gone from the file at
+  // its next write. Remove it from here on or after 2027-01-14.
+  const { identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, admissionHold: _admission, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, launchModel: rawLaunchModel, externalResume: _externalResume, startedBy: rawStartedBy, parentAgentId: rawParentAgentId, launchArgs: rawLaunchArgs, browser: rawBrowser, quietTitle: rawQuietTitle, firstTask: rawFirstTask, openclawLocal: rawOpenclawLocal, earlierSessionIds: rawEarlierSessionIds, hermesHomeDerived: _hermesHomeDerived, swarmSkill: _retiredSwarmSkill, ...rest } = row as Partial<RegisteredSession> & { swarmSkill?: unknown }
   const lastOpenedAt = normalizedOpenedAt(rawOpenedAt)
   // Out of the spread for the same reason: a half-formed record is dropped, never relaunched with.
   const scmLaunch = parseScmLaunchRecord(rawScmLaunch)
   const launchModel = storedLaunchModel(rawLaunchModel)
-  // Read as load() reads it: a stopped harness an older CLI saved names its Swarm role in the wire's values (lead, dev,
-  // review), and is kept as this release keeps it (project instructions, phase 4).
-  const swarmSkill = parseSwarmSkill(rawSwarmSkill)
   const launchArgs = storedLaunchArgs(rawLaunchArgs)
   const firstTask = storedFirstTask(rawFirstTask)
   const openclawLocal = storedOpenclawLocal(rawOpenclawLocal)
@@ -820,7 +791,6 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
     ...storedHermesHomeDerived(row),
     ...(scmLaunch ? { scmLaunch } : {}),
     ...(launchModel ? { launchModel } : {}),
-    ...(swarmSkill ? { swarmSkill } : {}),
     ...(launchArgs ? { launchArgs } : {}),
     ...(rawBrowser === true ? { browser: true as const } : {}),
     ...(typeof rawQuietTitle === 'string' && rawQuietTitle ? { quietTitle: rawQuietTitle } : {}),
@@ -1438,18 +1408,11 @@ class Registry {
         if (swept.cleared) console.log(`[registry] ${swept.cleared} agent(s) no longer keep a permission mode Harness forced`)
         arr = swept.rows
       }
-      // After the forced modes are cleared: a Swarm agent full mode was forced on comes back in Auto-approve too.
-      const swarmAuto = !existsSync(SWARM_AUTO_FILE)
-      if (swarmAuto) {
-        const swept = withSwarmAuto(arr)
-        if (swept.given) console.log(`[registry] ${swept.given} Swarm agent(s) start in Auto-approve`)
-        arr = swept.rows
-      }
       // The rollback copy is the file as found, retired runtimes and all — not the cleaned rows.
       if (arr.some((row) => row.schemaVersion !== 2)) {
         atomicWriteJson(PRE_V2_BACKUP_FILE, stored, true)
       }
-      let changed = strippedRetired || ((ownModes || swarmAuto) && arr.some((row, i) => row !== parsed[i]))
+      let changed = strippedRetired || (ownModes && arr.some((row, i) => row !== parsed[i]))
       if (rebooted) {
         this.rebooted = true
         console.log(`[registry] machine rebooted since last run — ${arr.length} agent(s) kept with their process identity cleared (stale panes, restored on start)`)
@@ -1571,7 +1534,6 @@ class Registry {
           ...normalizedForkedFrom((raw as { forkedFrom?: unknown }).forkedFrom),
           dsh: normalizedDshId((raw as { dsh?: unknown }).dsh),
           dshRuntime: typeof raw.dshRuntime === 'string' && raw.dshRuntime ? raw.dshRuntime : null,
-          ...(parseSwarmSkill(raw.swarmSkill) ? { swarmSkill: parseSwarmSkill(raw.swarmSkill) } : {}),
           agent: normalizedAgentName((raw as { agent?: unknown }).agent),
           ...(rawGridLaunch !== undefined ? { gridLaunch: rawGridLaunch } : {}),
           ...(rawGridLaunch ? { gridWebSearch: normalizedGridWebSearch(raw?.gridWebSearch) } : {}),
@@ -1673,7 +1635,6 @@ class Registry {
       }
       if (changed) this.save()
       if (ownModes) atomicWriteJson(OWN_MODES_FILE, Date.now())
-      if (swarmAuto) atomicWriteJson(SWARM_AUTO_FILE, Date.now())
     } catch (error) {
       if (error instanceof SyntaxError) this.quarantine(`is not JSON (${error.message})`)
       else if (existsSync(FILE)) {
@@ -1681,7 +1642,6 @@ class Registry {
         console.error('[registry] registry is unreadable; refusing to overwrite it:', error instanceof Error ? error.message : error)
       } else {
         atomicWriteJson(OWN_MODES_FILE, Date.now())
-        atomicWriteJson(SWARM_AUTO_FILE, Date.now())
       }
       // A genuinely absent file starts empty. A file that cannot be opened safely (a symlink, another
       // owner, open permissions) is left exactly as it is, and nothing is written over it.
@@ -1900,7 +1860,6 @@ class Registry {
     claudeHome?: string | null
     dsh?: string | null
     dshRuntime?: string | null
-    swarmSkill?: SwarmSkill
     /** The engine's named agent the pane was opened as (`agent_create`'s `agent`), validated upstream. */
     agent?: string | null
     bypassPermission?: boolean
@@ -1958,7 +1917,6 @@ class Registry {
       hermesHome: null,
       dsh: input.dsh ?? null,
       dshRuntime: input.dshRuntime ?? null,
-      ...(input.swarmSkill ? { swarmSkill: input.swarmSkill } : {}),
       agent: normalizedAgentName(input.agent),
       ...(input.bypassPermission ? { bypassPermission: true } : {}),
       ...(permissionModeName(input.permissionMode) ? { permissionMode: input.permissionMode } : {}),
@@ -2309,7 +2267,7 @@ class Registry {
       // memory the moment the engine reports in. The symptom is a move back to the engine's own
       // login landing on a house default — the remembered model was there, then a hook bind ate it.
       ...(existing?.subscriptionModel ? { subscriptionModel: existing.subscriptionModel } : {}),
-      // And the model it launches with, for the same reason: a hook bind that forgot it reopened a Product Manager on its
+      // And the model it launches with, for the same reason: a hook bind that forgot it reopened an agent on its
       // engine's own default (task #3395).
       ...(existing?.launchModel ? { launchModel: existing.launchModel } : {}),
       // And the owner's extra launch flags: a hook bind that forgot them would drop them at the first relaunch.
@@ -2352,7 +2310,6 @@ class Registry {
       ...(existing?.firstTask ? { firstTask: existing.firstTask } : {}),
       dsh: existing?.dsh ?? null,
       dshRuntime: existing?.dshRuntime ?? null,
-      ...(existing?.swarmSkill ? { swarmSkill: existing.swarmSkill } : {}),
       agent: existing?.agent ?? null,
       // Carried forward like `agent`: dropped at the first hook, a restart of a harness another agent started came
       // back without its pull request line (found by e2e/agentClient.e2e.ts).
@@ -2557,7 +2514,7 @@ class Registry {
     this.terminalAvailableAgents.delete(agentId)
     // The archived conversation owns the original Harness ID. Preserve the physical shell under
     // a new identity, without sending input, stopping processes or claiming its route twice.
-    const entry = separateShell ? { ...original, agentId: randomUUID(), dsh: null, dshRuntime: null, swarmSkill: undefined, agent: null, defaultName: this.automaticName('Terminal', new Date()) } : original
+    const entry = separateShell ? { ...original, agentId: randomUUID(), dsh: null, dshRuntime: null, agent: null, defaultName: this.automaticName('Terminal', new Date()) } : original
     // The shell under a new identity is the person's, not a harness an agent started: kept, a window took the new id for
     // a new child and opened the shell beside the agent, even after the person had closed the child (review of #1217).
     if (separateShell) delete entry.parentAgentId
@@ -2879,16 +2836,6 @@ class Registry {
     // A `--local` row's store is its folder: a TUI seen elsewhere never moves it off.
     if (!session || session.engine !== 'openclaw' || session.openclawLocal || session.openclawStateDir === stateDir) return false
     session.openclawStateDir = stateDir
-    session.touchedAt = Date.now()
-    this.save()
-    return true
-  }
-
-  /** An agent its person attached takes its Swarm role at restart, once; later roster reads cannot replace a saved role. */
-  setSwarmSkill(agentId: string, skill: SwarmSkill): boolean {
-    const session = this.agents.get(agentId)
-    if (!session || session.swarmSkill || (session.engine !== 'claude' && session.engine !== 'codex')) return false
-    session.swarmSkill = { ...skill }
     session.touchedAt = Date.now()
     this.save()
     return true

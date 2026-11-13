@@ -62,8 +62,7 @@ export const TUI_ONLY_EVENTS: ReadonlySet<string> = new Set(['tool_end', 'subage
 /** The longest the backend's word that a terminal app is open is taken for (backend bus.ts TUI_OPEN_FOR_MS). */
 export const TUI_OPEN_MAX_MS = 180_000
 /** A machine's live events: what an app viewing it shows as it happens, and none of it read by the backend. While the
- *  backend counts no app on the machine they stay off the relay, a publish that reached no one
- *  (docs/superpowers/specs/2026-11-02-swarm-cache-delta-design.md, Part 4). `turn_started`, `agent_synced` and
+ *  backend counts no app on the machine they stay off the relay, a publish that reached no one (2026-11-02). `turn_started`, `agent_synced` and
  *  `agent_deleted` are not here: the backend counts turns and keeps the machine's agents from them. An app that connects
  *  lists the sessions itself, so what was held leaves nothing missing. */
 export const UI_GATED_EVENTS: ReadonlySet<string> = new Set([
@@ -748,19 +747,6 @@ export class RelayGateway implements GatewayPort {
       await this.core.disconnected(connId)
       return
     }
-    // A Lead's terminal request waits for an agent of this machine (spec 2026-11-02-poll-cost Part 4.2): the Swarm host picks
-    // it up now. A `__` frame, so a daemon from before it drops it below; one naming no agent is no request.
-    if (type === '__terminal_waiting') {
-      const p = (typeof frame.payload === 'object' && frame.payload !== null ? frame.payload : {}) as Record<string, unknown>
-      if (typeof p.tabId === 'string' && typeof p.agentId === 'string') this.core.notice({ type, tabId: p.tabId, agentId: p.agentId })
-      return
-    }
-    // The server renews the Swarm host's delivery push lease (task #2800, review of #2977): nothing to read, the host only
-    // keeps reading idle workers' lists when told. A `__` frame, so a daemon from before it drops it below.
-    if (type === '__deliveries_lease') {
-      this.core.notice({ type })
-      return
-    }
     // Other backend-hub internal control frames (__clients_dirty) — not for us; drop silently.
     if (type.startsWith('__')) return
 
@@ -805,34 +791,6 @@ export class RelayGateway implements GatewayPort {
     if (type === 'connectors_changed') {
       const revision = (typeof frame.payload === 'object' && frame.payload !== null ? (frame.payload as { revision?: unknown }).revision : undefined)
       this.core.notice({ type, revision: typeof revision === 'number' ? revision : 0 })
-      return
-    }
-
-    // Work waits for an agent of this machine's (backend lib/adapterWs.ts): the Swarm host reads its deliveries now. Naming
-    // none, the server says it pushes them. Backend-only like desk_changed: a client could only make the host read early.
-    if (type === 'super_tab_deliveries') {
-      const p = (typeof frame.payload === 'object' && frame.payload !== null ? frame.payload : {}) as Record<string, unknown>
-      this.core.notice(typeof p.tabId === 'string' && typeof p.agentId === 'string'
-        ? { type, tabId: p.tabId, agentId: p.agentId } : { type })
-      return
-    }
-
-    // A commit changed what this machine's Swarm host reads (backend lib/swarmHostPushes.ts): it reads its changes now.
-    // Naming none, the server says it pushes them. Backend-only like desk_changed: a client could only make the host read early.
-    if (type === 'swarm_host_changed') {
-      const p = (typeof frame.payload === 'object' && frame.payload !== null ? frame.payload : {}) as Record<string, unknown>
-      this.core.notice(typeof p.tabId === 'string' && typeof p.lastChangedAt === 'number'
-        ? { type, tabId: p.tabId, lastChangedAt: p.lastChangedAt } : { type })
-      return
-    }
-
-    // A Swarm the account is in changed (backend lib/swarmClientPushes.ts): the windows read it again. Naming none, the server
-    // says it pushes. Backend-only like desk_changed: a client could only make a window read early.
-    if (type === 'swarm_changed') {
-      const p = (typeof frame.payload === 'object' && frame.payload !== null ? frame.payload : {}) as Record<string, unknown>
-      const parts = Array.isArray(p.parts) && p.parts.length && p.parts.every(part => part === 'main' || part === 'machine') ? p.parts as Array<'main' | 'machine'> : null
-      this.core.notice(typeof p.tabId === 'string' && typeof p.lastChangedAt === 'number' && parts
-        ? { type, tabId: p.tabId, lastChangedAt: p.lastChangedAt, parts } : { type })
       return
     }
 

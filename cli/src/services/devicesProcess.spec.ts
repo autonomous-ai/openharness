@@ -25,7 +25,6 @@ function devicesPort() {
     seen: record('seen'), settings: record('settings'), windowFocus: record('windowFocus'), windowReply: record('windowReply'),
     voiceReply: record('voiceReply'), windowGone: record('windowGone'), scroll: record('scroll'), engines: record('engines'),
     commanders: record('commanders'),
-    asking: record('asking'),
     routeTask: vi.fn(async (text: string) => ({ agentId: 'a1', machineId: 'm1', name: 'api', confidence: 1, reason: text, candidates: [], weighed: 1, machines: 1, via: 'model' })),
     routeSend: vi.fn(async () => ({ ok: true as const })),
     stepFocus: vi.fn(async (): Promise<{ machineId: string; agentId: string } | 'no_agents'> => ({ machineId: 'm1', agentId: 'a2' })),
@@ -74,20 +73,6 @@ function setup(over: { processEnv?: NodeJS.ProcessEnv } = {}) {
 
 afterEach(() => vi.restoreAllMocks())
 
-// The Swarm's cards and waits, which its service hands the devices through the core (core/relays.ts), reach the devices' own
-// listeners from the process's events, ahead of the port's own kinds; and the Swarm's service coming and going with them.
-it('hands the devices what the core relays to them, and the Swarm\'s service coming and going', () => {
-  const f = setup()
-  const cards = vi.fn(), peers = vi.fn()
-  f.api().relay!.on('swarm_cards', cards)
-  f.api().relay!.onPeer(peers)
-  f.event({ kind: 'relay', relay: 'swarm_cards', payload: [{ id: 't1' }] })
-  f.event({ kind: 'relay_peer', service: 'superTabs', up: true })
-  expect(cards).toHaveBeenCalledWith([{ id: 't1' }])
-  expect(peers).toHaveBeenCalledWith('superTabs', true)
-  expect(f.calls).toEqual([])
-})
-
 describe('the devices in their own process', () => {
   it('start the devices on a link of their own, with what their process\'s environment says', () => {
     const f = setup({ processEnv: { HARNESS_DIAL_SERIALS: ' AA, ,BB ', HARNESSD_TEST_DIAL_PORT: '/dev/ttys042', HARNESSD_TEST_FAULTS: 'dial, fleet.knows ,' } })
@@ -116,16 +101,6 @@ describe('the devices in their own process', () => {
       if (was === undefined) delete process.env.HARNESSD_TEST_DIAL_PORT
       else process.env.HARNESSD_TEST_DIAL_PORT = was
     }
-  })
-
-  it('run what the devices registered for a core that connects, each time one does', () => {
-    const f = setup()
-    const again = vi.fn()
-    f.deps().onCoreConnected!(again)
-    expect(again).not.toHaveBeenCalled()
-    f.connect()
-    f.connect()
-    expect(again).toHaveBeenCalledTimes(2)
   })
 
   it('run the devices and their link as the master starts them', () => {
@@ -249,12 +224,6 @@ describe('the core\'s doors, across the link', () => {
     expect(await api.account.machines()).toEqual({ status: 200, body: { data: { machines: [] } } })
     f.answer('machines', { body: 'broken' })
     expect(await api.account.machines()).toEqual({ status: 502, body: {} })
-    // The Swarm cards' requests, asked of the core as its own `super_tabs` query; a core that cannot answer is unavailable.
-    f.answer('super_tabs', { ok: true })
-    expect(await api.superTabRequest!({ action: 'cardsWanted', on: true })).toEqual({ ok: true })
-    expect(f.queries.at(-1)).toEqual(['super_tabs', { action: 'cardsWanted', on: true }])
-    f.answer('super_tabs', new Error('the core went away'))
-    expect(await api.superTabRequest!({ action: 'cardsWanted', on: false })).toEqual({ error: 'SERVICE_UNAVAILABLE' })
     api.agents.setRuntime('a1', 'opus', 'high')
     api.turns.send('a1', 'hello')
     api.turns.stop('a1')
@@ -353,8 +322,6 @@ describe('what the core tells the devices, reaching their port', () => {
       { kind: 'scroll', phase: 'sideways', dy: 2, velocity: 1 },
       { kind: 'engines', engines: ['claude'] },
       { kind: 'commanders', connected: true },
-      { kind: 'asking', agentIds: ['a1', 7] },
-      { kind: 'asking', agentIds: 'nonsense' },
       { kind: 'nothing it knows' },
       { kind: 'constructor' },
     ]) f.event(payload)
@@ -382,15 +349,12 @@ describe('what the core tells the devices, reaching their port', () => {
       ['scroll', ['move', 2, 0]],
       ['engines', [['claude']]],
       ['commanders', [true]],
-      ['asking', [['a1']]],
-      ['asking', [[]]],
     ])
   })
 
   it('is everything the windows said at once when the devices connect, and nothing they did not', () => {
     const f = setup()
-    f.event({ kind: 'state', desk: ['a1'], foreground: true, swarms: { active: 't1', swarms: [], tiles: [] }, unread: [{ agentId: 'a1' }], focus: null, engines: ['codex'], commanders: true,
-      asking: ['a1', 7] })
+    f.event({ kind: 'state', desk: ['a1'], foreground: true, swarms: { active: 't1', swarms: [], tiles: [] }, unread: [{ agentId: 'a1' }], focus: null, engines: ['codex'], commanders: true })
     expect(f.calls).toEqual([
       ['desk', [['a1'], true]],
       ['swarms', [{ active: 't1', swarms: [], tiles: [] }]],
@@ -398,12 +362,11 @@ describe('what the core tells the devices, reaching their port', () => {
       ['windowFocus', [{ voice: null, form: null }]],
       ['engines', [['codex']]],
       ['commanders', [true]],
-      ['asking', [['a1']]],
     ])
     // No window yet: the dial is told nothing about one.
     f.calls.length = 0
     f.event({ kind: 'state', desk: [], swarms: null, unread: 'nonsense' })
-    expect(f.calls.map(([name]) => name)).toEqual(['windowFocus', 'engines', 'commanders', 'asking'])
+    expect(f.calls.map(([name]) => name)).toEqual(['windowFocus', 'engines', 'commanders'])
   })
 })
 

@@ -14,16 +14,16 @@ const actions = { agent_create: 'create', agent_resume: 'resume', agent_restart:
 } as const
 const unmeasured = (..._args: unknown[]): void => {}
 const setup = new Set(['TMUX_UNAVAILABLE', 'PTY_HOST_UNAVAILABLE', 'TMUX_TOO_OLD_FOR_DSH', 'TMUX_TOO_OLD_FOR_GRID',
-  'ENGINE_UNAVAILABLE', 'NATIVE_LAUNCH_HELD', 'DSH_MATERIALIZE_FAILED', 'SWARM_SKILL_FAILED', 'SPAWN_FAILED', 'REGISTRATION_FAILED', 'GRID_CONFIG_FAILED'])
+  'ENGINE_UNAVAILABLE', 'NATIVE_LAUNCH_HELD', 'DSH_MATERIALIZE_FAILED', 'SPAWN_FAILED', 'REGISTRATION_FAILED', 'GRID_CONFIG_FAILED'])
 // The Browser's Start refusals (core/agents/lifecycle.ts) answer no launch, so they take a fixed kind, not the launch
 // code list, where each would have joined all twelve launch families: a guest's agent (`NOT_ALLOWED`) is `auth`, and an
 // agent that does not run here (`NOT_RUNNING`) is `invalid`.
 const auth = new Set(['UNAUTHORIZED', 'AUTH_REQUIRED', 'LOGIN_REQUIRED', 'OWNER_REQUIRED', 'E2EE_REQUIRED', 'NOT_ALLOWED'])
 const unavailable = new Set(['SERVICE_UNAVAILABLE', 'SERVICE_FAILED', 'GRID_UNAVAILABLE', 'API_UNAVAILABLE',
-  'UNSUPPORTED', 'UNSUPPORTED_ON_REMOTE', 'TIMEOUT', 'NATIVE_UNAVAILABLE', 'SWARM_ROLE_UNAVAILABLE'])
+  'UNSUPPORTED', 'UNSUPPORTED_ON_REMOTE', 'TIMEOUT', 'NATIVE_UNAVAILABLE'])
 // A history page read for no session, or one this computer's index does not hold (services/search.ts): until
 // 2026-10-28 both were `other`, 2,225 that day, a Desktop list re-reading a conversation that had left the index.
-const invalid = new Set(['INVALID_ENGINE', 'INVALID_CWD', 'CWD_NOT_FOUND', 'INVALID_GRID', 'INVALID_DSH', 'INVALID_SWARM_ROLE',
+const invalid = new Set(['INVALID_ENGINE', 'INVALID_CWD', 'CWD_NOT_FOUND', 'INVALID_GRID', 'INVALID_DSH',
   'INVALID_MODEL', 'INVALID_PERMISSION_MODE', 'INVALID_LAUNCH_ARGS', 'INVALID_CREATION_ID', 'INVALID_PROJECT_SOURCE', 'WORKTREE_BUSY',
   'BAD_SESSION', 'NOT_INDEXED', 'NOT_RUNNING'])
 /** A Store install's or update's own refusals (dsh/install.ts, dsh/update.ts), by kind. Until 2026-10-28 every one was
@@ -88,7 +88,7 @@ export interface ProductUsageLaunchSignal {
   /** Local RAM only, discarded on stop/choice change; never part of a report or persisted queue. */
   id: string
   phase: 'start' | 'pending' | 'created' | 'failed' | 'refused' | 'cancelled' | 'unconfirmed' | 'work_requested'
-  /** On `start`: an agent or a Swarm asked for this launch (the create's `startedBy`), not a person. */
+  /** On `start`: an agent asked for this launch (the create's `startedBy`), not a person. */
   agentStarted?: true
   /** On `start`, only with `agentStarted`: that agent was Hachi (the create's `startedByHachi`). */
   hachiStarted?: true

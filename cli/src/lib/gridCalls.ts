@@ -3,7 +3,7 @@
  *
  * On Windows a running grid holds its install's files open. grid's installer (`install.ps1`) then refuses to replace
  * it — and a grid started after its check, while `uv tool install --force` is replacing files, leaves an install that
- * cannot even `grid stop`. A Swarm machine starts a short grid call every few seconds, so an install (Windows' pin,
+ * cannot even `grid stop`. A busy machine starts a short grid call every few seconds, so an install (Windows' pin,
  * `gridWindowsPin.ts`) holds new ones back and waits for those running to end before it begins.
  */
 

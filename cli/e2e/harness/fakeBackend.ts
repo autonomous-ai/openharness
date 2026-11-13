@@ -108,17 +108,9 @@ const json = (value: unknown): string => JSON.stringify(value)
 const bytes = (raw: RawData): Uint8Array => new Uint8Array(Array.isArray(raw) ? Buffer.concat(raw) : raw instanceof ArrayBuffer ? raw : Buffer.from(raw))
 
 export class FakeBackend {
-  /** Optional Super Tab control-plane fixture. Native creation, input and relay
-   * still go through the real daemon; database policy has its own integration suite. */
-  superTabs: ((method: string, path: string, body: Record<string, any>, machine: FakeMachine) => Promise<{
-    status?: number; data?: unknown; error?: { code: string; message: string }
-  }>) | null = null
   /** `POST /api/auth/refresh`: each refresh token the backend takes, and what it renews to. Each is taken once, as the
    *  real one rotates them; one it does not know is a 401 `REFRESH_TOKEN_INVALID`. */
   readonly renewals = new Map<string, { token: string; refreshToken?: string; expiresIn?: number }>()
-  /** Each Swarm chat file posted to `/api/super-tabs/<tab>/attachments` (lib/superTabAttachmentProxy.ts, sent by the
-   *  gateway): its path, its headers and its whole body, as they arrived. */
-  readonly attachments: Array<{ path: string; authorization: string; contentType: string; body: Buffer }> = []
   /** What `GET /api/auth/me` answers: the signed-in person; null, a 404 as before. */
   me: { id: string; email: string } | null = null
   /** Opt-in fixture: older scenarios keep the endpoint absent, as on an older backend. */
@@ -200,28 +192,6 @@ export class FakeBackend {
       res.setHeader('content-type', 'application/json')
       if (backend.down) { res.statusCode = 503; res.end(json({ success: false, error: { code: 'UNAVAILABLE' } })); return }
       if (!machine) { res.statusCode = 401; res.end(json({ success: false, error: { code: 'UNAUTHORIZED' } })); return }
-      if (req.method === 'POST' && /^\/api\/super-tabs\/[^/?]+\/attachments(?:\?|$)/.test(req.url ?? '')) {
-        const parts: Buffer[] = []
-        req.on('data', (chunk: Buffer) => parts.push(chunk))
-        req.on('end', () => {
-          const body = Buffer.concat(parts)
-          backend.attachments.push({ path: req.url!, authorization: String(req.headers.authorization ?? ''), contentType: String(req.headers['content-type'] ?? ''), body })
-          res.end(json({ success: true, data: { attachment: { id: `att-${backend.attachments.length}`, size: body.byteLength } } }))
-        })
-        return
-      }
-      if (backend.superTabs && req.url?.startsWith('/api/super-tabs')) {
-        const handler = backend.superTabs
-        let raw = ''
-        req.on('data', chunk => { raw += chunk })
-        req.on('end', () => {
-          void Promise.resolve().then(() => handler(req.method!, req.url!, JSON.parse(raw || '{}'), machine)).then(result => {
-            res.statusCode = result.status ?? 200
-            res.end(json({ success: !result.error, data: result.data, error: result.error }))
-          }, error => { res.statusCode = 500; res.end(json({ success: false, error: { code: 'FIXTURE', message: String(error) } })) })
-        })
-        return
-      }
       if (backend.me && req.method === 'GET' && req.url?.split('?')[0] === '/api/auth/me') {
         res.end(json({ success: true, data: { user: backend.me } })); return
       }

@@ -269,9 +269,9 @@ describe('the recaps', () => {
   })
 
   describe('a finished turn\'s tier', () => {
-    const turn = async (tell: (event: TurnLifecycle, seen?: typeof watching) => void, seen: typeof watching & { remote?: boolean }, quiet?: boolean) => {
-      // The core says the engine, and whether the session is quiet on devices, with every event (core/turns/recaps.ts `session`).
-      const session = { ...s1, engine: 'codex', ...(quiet === undefined ? {} : { quietOnDevices: quiet }) }
+    const turn = async (tell: (event: TurnLifecycle, seen?: typeof watching) => void, seen: typeof watching & { remote?: boolean }) => {
+      // The core says the engine with every event (core/turns/recaps.ts `session`).
+      const session = { ...s1, engine: 'codex' }
       tell({ kind: 'events', session, events: [started()], replay: false }, seen)
       tell({ kind: 'events', session, events: [ended], replay: false }, seen)
     }
@@ -283,7 +283,7 @@ describe('the recaps', () => {
       await turn(tell, watching)
       await vi.waitFor(() => expect(core.clients.turnSummary).toHaveBeenCalled())
       expect(decideTier).toHaveBeenCalledExactlyOnceWith({ agent: 'app', engine: 'codex', recap: expect.any(String),
-        durationS: 0, stats: {}, subagent: false, onScreen: false, failed: false, swarm: false })
+        durationS: 0, stats: {}, subagent: false, onScreen: false, failed: false })
       expect(vi.mocked(core.clients.turnSummary).mock.calls[0][0]).toMatchObject({ payload: { tier: 'alert' } })
       expect(vi.mocked(core.clients.turnCard).mock.calls.at(-1)?.[0].payload).toMatchObject({ kind: 'summary', tier: 'alert' })
     })
@@ -303,32 +303,22 @@ describe('the recaps', () => {
       expect(vi.mocked(alone.core.clients.turnSummary).mock.calls[0][0].payload).not.toHaveProperty('tier')
     })
 
-    const decidedWith = async (quiet: boolean | undefined) => {
+    const decidedWith = async () => {
       const log = vi.spyOn(console, 'log').mockImplementation(() => {})
       const backend = vi.fn()
-      // A row in the agent list says nothing: the session says it (in the edge host there is no agent list).
-      const core = fakeCore({ dataDir: temp(), account: { backend }, agents: { byAgent: vi.fn(() => ({ agentId: 'a1', swarmSkill: { role: 'lead', key: 'k' } }) as never) } })
+      const core = fakeCore({ dataDir: temp(), account: { backend } })
       const { tell } = setup({ decideTier: undefined }, core)
-      await turn(tell, watching, quiet)
+      await turn(tell, watching)
       await vi.waitFor(() => expect(core.clients.turnSummary).toHaveBeenCalled())
       expect(backend).not.toHaveBeenCalled()
       return { tier: (vi.mocked(core.clients.turnSummary).mock.calls[0][0].payload as { tier?: string }).tier, log }
     }
 
     it('decides a harness agent\'s turn alert, with no Jev call', async () => {
-      const { tier, log } = await decidedWith(false)
+      const { tier, log } = await decidedWith()
       expect(tier).toBe('alert')
       expect(log).toHaveBeenCalledWith(expect.stringMatching(/^\[recap\] notify · app · alert · rule:turn · turn · \d+ms$/))
     })
 
-    it('decides the turn of a session the core says is quiet on devices silent', async () => {
-      const { tier, log } = await decidedWith(true)
-      expect(tier).toBe('silent')
-      expect(log).toHaveBeenCalledWith(expect.stringMatching(/rule:swarm/))
-    })
-
-    it('decides a turn alert when the core says nothing of it', async () => {
-      expect((await decidedWith(undefined)).tier).toBe('alert')
-    })
   })
 })

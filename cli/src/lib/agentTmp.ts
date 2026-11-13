@@ -1,25 +1,17 @@
 /**
- * The agents' private temporary folders. Each Swarm agent has its own (task #4395): a mode that checks its actions can block
- * reads outside the working directories, so its folder is added to Claude Code's working directories as well as given as
- * its TMPDIR, which `mktemp` uses.
+ * The folder Harness keeps for its agents' files (`harness browser`'s screenshots and long output where nothing sets a TMPDIR,
+ * agentClient/browserOutput.ts), made this account's alone, and swept of what nothing changed in for a week.
  */
-import { createHash } from 'node:crypto'
-import { chmodSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { chmodSync, lstatSync, mkdirSync } from 'node:fs'
 import { lstat, readdir, rm, rmdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
-import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
-import type { SwarmSkill } from './savedSkill.js'
 
 /** Nothing changed in this long, and a top-level entry is deleted: longer than a task runs, as /tmp's own cleaners are. */
 const KEEP_MS = 7 * 24 * 60 * 60_000
 const SWEEP_EVERY_MS = 24 * 60 * 60_000
-/** An agent's empty folder is kept this long: it is a live agent's TMPDIR while the agent runs, however quiet. */
+/** An empty folder in it is kept this long. */
 const KEEP_EMPTY_MS = 30 * 24 * 60 * 60_000
-/** These folders are under ~/.harness/cli, whose package.json says "type": "module": without one of their own, an extensionless
- *  script written here (a spec's fake grid) loaded as an ES module and died on require, as it never does in the system's (#4356). */
-const PACKAGE = 'package.json'
-const COMMONJS = '{"type":"commonjs"}\n'
 
 export interface AgentTmpDeps {
   platform: NodeJS.Platform
@@ -44,21 +36,6 @@ export function prepareAgentTmp(folder: string, uid: number | undefined = proces
     if ((stat.mode & 0o777) !== 0o700) chmodSync(folder, 0o700)
     return true
   } catch { return false }
-}
-
-/** Gives [folder] its own CommonJS package.json, keeping one already there. Exclusive create: a link in its place is not followed. */
-function markCommonJs(folder: string, deps: AgentTmpDeps): void {
-  try { writeFileSync(join(folder, PACKAGE), COMMONJS, { flag: 'wx', mode: 0o600 }) } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
-      deps.log(`could not write ${join(folder, PACKAGE)} (${(error as NodeJS.ErrnoException).code}); scripts there load as ES modules`)
-    }
-  }
-}
-
-/** The package.json markCommonJs wrote, which no sweep deletes however old. Another, a tool's, is swept like any file. */
-function isMarker(folder: string, name: string): boolean {
-  if (name !== PACKAGE) return false
-  try { return readFileSync(join(folder, name), 'utf8') === COMMONJS } catch { return false }
 }
 
 /** Whether anything at [path] changed since [cutoff]. Stops at the first that did. What cannot be read counts as changed. The
@@ -87,15 +64,14 @@ export async function sweepAgentTmp(folder: string, now: number): Promise<number
   let removed = 0
   for (const name of names) {
     const path = join(folder, name)
-    if (isMarker(folder, name) || await changedSince(path, now - KEEP_MS)) continue
+    if (await changedSince(path, now - KEEP_MS)) continue
     try { await rm(path, { recursive: true, force: true }); removed++ } catch { /* the next sweep tries again */ }
   }
   return removed
 }
 
-/** Each folder in [parent], each agent's, swept as `sweepAgentTmp` sweeps one. The folder stays, as it is a live agent's
- *  TMPDIR, until it has been empty and idle for 30 days; a relaunch makes it again. Anything else at the top
- *  goes when idle, a link without what it points at. */
+/** Each folder in [parent] swept as `sweepAgentTmp` sweeps one, and gone once it has been empty and idle for 30 days. Anything
+ *  else at the top goes when idle, a link without what it points at. */
 export async function sweepTmpFolders(parent: string, now: number): Promise<number> {
   let names: string[]
   try {
@@ -108,7 +84,7 @@ export async function sweepTmpFolders(parent: string, now: number): Promise<numb
     const path = join(parent, name)
     try {
       if (!(await lstat(path)).isDirectory()) {
-        if (!isMarker(parent, name) && !(await changedSince(path, now - KEEP_MS))) { await rm(path, { force: true }); removed++ }
+        if (!(await changedSince(path, now - KEEP_MS))) { await rm(path, { force: true }); removed++ }
         continue
       }
       removed += await sweepAgentTmp(path, now)
@@ -130,53 +106,12 @@ function sweepWhenDue(folder: string, deps: AgentTmpDeps): void {
   void sweepTmpFolders(folder, now).then(removed => { if (removed) deps.log(`removed ${removed} entries nothing had changed in for 7 days`) })
 }
 
-/** How an engine is told of one more working directory, joined to its flag: Claude Code's `--add-dir` takes several values and
- *  would otherwise swallow what follows it. An engine not here gets the folder as its TMPDIR alone. Codex among them: its
- *  `--add-dir` is a writable root, and codex-cli 0.164 quits (exit 1) when its sandbox is read-only, as it is in an untrusted
- *  folder or read-only mode. A Swarm agent's own folder is left untrusted for Codex (superTabs/agentFolder.ts; why in
- *  core/agents/create.ts), so a Codex builder the Swarm started there never started (the rehearsal, 2026-11-11). Codex reads
- *  outside its folder by default, and its workspace-write makes $TMPDIR writable by itself. */
-const ADDED_FOLDER: Partial<Record<AgentEngine, (folder: string) => string[]>> = {
-  claude: folder => [`--add-dir=${folder}`],
+/** Sweeps the folder, at most once a day, as an agent is launched: never in the launch's way. */
+export function sweepAgentTmpWhenDue(deps: AgentTmpDeps = realDeps): void {
+  if (deps.platform !== 'win32') sweepWhenDue(agentTmpFolder(deps.dataDir), deps)
 }
 
-/** The private folder of the Swarm agent whose creation key is [key], made and closed, by its real path, or null when it cannot
- *  be, which the log says. Named by the key, which every relaunch carries, so a relaunch finds it; never by the workspace, as a
- *  person's Regular agents all start in that person's home folder. Claude Code reads an added folder's own skills and settings,
- *  so a folder two agents shared would let one plant them for the other. */
-export function agentTmpOf(key: string, deps: AgentTmpDeps = realDeps): string | null {
-  const parent = agentTmpFolder(deps.dataDir)
-  const folder = join(parent, createHash('sha256').update(key).digest('hex').slice(0, 16))
-  // The parent first: making the folder through a link in the parent's place would make it where that link points.
-  // The marker in the parent covers every agent's folder, which stays free to empty out and go (#4356).
-  try {
-    if (prepareAgentTmp(parent) && prepareAgentTmp(folder)) {
-      markCommonJs(parent, deps)
-      return realpathSync(folder)
-    }
-  } catch { /* said below */ }
-  deps.log(`the private temporary folder ${folder} could not be made private; this agent uses the system's`)
-  return null
-}
-
-/**
- * What gives an agent its private folder: the variables, and the arguments that add the folder to the engine's working
- * directories where it takes them (Claude Code), or none. A Swarm agent gets its own folder; nobody else gets one. A folder that cannot be
- * made private does not stop the agent: it starts on the system's folder, and the daemon's log says why.
- */
-export function agentTmpLaunch(engine: AgentEngine, skill: SwarmSkill | undefined,
-  deps: AgentTmpDeps = realDeps): { env: Record<string, string>; args: string[] } {
-  const none = { env: {}, args: [] }
-  if (deps.platform === 'win32') return none
-  const shared = agentTmpFolder(deps.dataDir)
-  // Whoever launches: what is left here must still go.
-  sweepWhenDue(shared, deps)
-  if (!skill || isTerminalEngine(engine)) return none
-  const folder = agentTmpOf(skill.key, deps)
-  return folder ? { env: { TMPDIR: folder }, args: ADDED_FOLDER[engine]?.(folder) ?? [] } : none
-}
-
-/** The folder agents here are given (every Swarm agent's is in it): a place they drop files that a person may then open
+/** The folder agents here are given: a place they drop files that a person may then open
  *  (./pathContainment.ts). None on Windows, whose temporary folder is the account's own. */
 export function agentTmpRoot(deps: AgentTmpDeps = realDeps): string | null {
   return deps.platform === 'win32' ? null : agentTmpFolder(deps.dataDir)

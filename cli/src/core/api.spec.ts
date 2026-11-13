@@ -1,37 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
 import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
-import { AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS, mayOpenBrowser, CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, emptyPorts, LANE_OFF, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, TURN_DELIVERERS, TURN_END_HEARERS, WIFI_FALLBACKS, WIFI_OFF, type CoreApiDeps, type SwarmAgentDeps } from './api.js'
+import { AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS, mayOpenBrowser, CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, emptyPorts, LANE_OFF, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, TURN_DELIVERERS, WIFI_FALLBACKS, WIFI_OFF, type CoreApiDeps } from './api.js'
 import { FAIL, readFallback } from './serviceHost.js'
 import { HACHI_ID } from '../dsh/builtinIds.js'
 
 const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/work/app' }) as RegisteredSession
 
 describe('the core API services stand on', () => {
-  it('allows a bounded batch of GitHub reads to finish outside the core', () => {
-    expect(LONG_ANSWERS.projects).toEqual({ git_pull_requests_status: 120_000 })
-  })
-  // The Swarm decides which of its agents it may close or reopen (superTabs/inCore/agents.ts); the core hands it what it
-  // reads them by, and has none of those members while the Swarm is off.
-  it('offers the Swarm\'s agent members only when handed them, built on the core\'s own registry, receipts, close and resume', async () => {
-    const deps = coreDeps(), closeAgent = vi.fn(async () => ({ closed: true as const })), resumeAgent = vi.fn(async () => ({ ok: true as const }))
-    const creationStatus = vi.fn(async () => null)
-    const off = createCoreApi(deps).agents
-    expect([off.closeSwarm, off.keepLeadAlive, off.closeMember]).toEqual([undefined, undefined, undefined])
-    const swarm = { closeSwarm: vi.fn(async () => ({ closed: true as const })), keepLeadAlive: vi.fn(async () => ({ ok: true as const })), closeMember: vi.fn(async () => ({ closed: true as const })) }
-    let given: SwarmAgentDeps | null = null
-    const on = createCoreApi({ ...deps, closeAgent, resumeAgent, creationStatus, swarmAgents: (agentDeps) => { given = agentDeps; return swarm } }).agents
-    expect([on.closeSwarm, on.keepLeadAlive, on.closeMember]).toEqual([swarm.closeSwarm, swarm.keepLeadAlive, swarm.closeMember])
-    expect(given!.byAgent('live')).toEqual(row('live'))
-    expect(given!.stoppedIds()).toEqual(['stopped'])
-    expect([given!.closeAgent, given!.resumeAgent, given!.creationStatus]).toEqual([closeAgent, resumeAgent, creationStatus])
-  })
-
-  it('carries the existing native creation-status provider without inventing one for an older core', async () => {
-    const creationStatus = vi.fn(async (creationId: string) => ({ creationId, state: 'cancelled' as const }))
-    const core = createCoreApi({ ...coreDeps(), creationStatus })
-    expect(await core.agents.creationStatus!('creation-fixture-1234')).toEqual({ creationId: 'creation-fixture-1234', state: 'cancelled' })
-    expect(createCoreApi(coreDeps()).agents.creationStatus).toBeUndefined()
-  })
   it('gives a service with no lane of the core\'s nothing to seal with, and never its frame back in the clear', async () => {
     await expect(LANE_OFF.hello('m', 'pub')).rejects.toThrow(/no E2EE identity/)
     expect(await LANE_OFF.welcome('m', {})).toBe(false)
@@ -66,16 +41,6 @@ describe('the core API services stand on', () => {
     expect(DELIVERIES_OFF.deliver('a', 'hello', 'd1')).toBeUndefined()
     expect(DELIVERIES_OFF.cancelDelivery('d1')).toBe(false)
     expect(DELIVERIES_OFF.onDelivery(() => {})()).toBeUndefined()
-    expect(DELIVERIES_OFF.onEnd(() => {})()).toBeUndefined()
-    expect(await DELIVERIES_OFF.answerOf({ sessionId: 'session', prompt: 'a'.repeat(32), turnId: 1 })).toBeNull()
-    expect(await DELIVERIES_OFF.leaseDeliveries('test', {})).toBe(false)
-    expect(await DELIVERIES_OFF.holdOf('a', 'd1')).toBeNull()
-  })
-
-  // The Swarm's host posts its agents' answers into their people's chats as their turns end; no other process hears every end.
-  it('tells the Swarm\'s service alone, among those in their own processes, each live turn end', () => {
-    expect(TURN_END_HEARERS).toEqual(['superTabs'])
-    expect(TURN_END_HEARERS.every(service => TURN_DELIVERERS.includes(service))).toBe(true)
   })
 
   // The agent browser types its ready and stopped lines into the agent, from its own process too.
@@ -129,7 +94,7 @@ describe('the core API services stand on', () => {
       tabRelay: TAB_RELAY_OFF,
       connectorVault: CONNECTOR_VAULT_OFF,
       observer: vi.fn(() => true),
-      turns: { send: vi.fn(), stop: vi.fn(), recent: vi.fn(async () => []), asks: vi.fn(async () => []), deliver: vi.fn(), cancelDelivery: vi.fn(() => true), onDelivery: vi.fn(() => () => {}), onEnd: vi.fn(() => () => {}), answerOf: vi.fn(async () => null), leaseDeliveries: vi.fn(async () => false), holdOf: vi.fn(async () => null) },
+      turns: { send: vi.fn(), stop: vi.fn(), recent: vi.fn(async () => []), asks: vi.fn(async () => []), deliver: vi.fn(), cancelDelivery: vi.fn(() => true), onDelivery: vi.fn(() => () => {}) },
       questions: { answer: vi.fn(), answerReviewed: vi.fn(async () => true) },
       machine: { id: vi.fn(() => 'machine-1'), computerId: vi.fn(() => 'computer-1'), name: vi.fn(() => 'Studio') },
       activityText: vi.fn(async () => 'Reading 3 files'),
@@ -158,22 +123,6 @@ describe('the core API services stand on', () => {
     expect(core.cloud).toBeUndefined()
     const cloud = { publish: vi.fn(), ask: vi.fn(), unask: vi.fn() }
     expect(createCoreApi({ ...deps, cloud }).cloud).toBe(cloud)
-    // The Super Tab service's door, the same way.
-    expect(core.superTabs).toBeUndefined()
-    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn() }
-    expect(createCoreApi({ ...deps, superTabs }).superTabs).toBe(superTabs)
-    // An agent's pane read and typed into, the same way: only while a service that may use it runs.
-    expect(core.panes).toBeUndefined()
-    const panes = { screen: vi.fn(), input: vi.fn(), inputIfScreen: vi.fn() }
-    expect(createCoreApi({ ...deps, panes }).panes).toBe(panes)
-    // The relays between services, the same way.
-    expect(core.relay).toBeUndefined()
-    const relay = { tell: vi.fn(), on: vi.fn(), onPeer: vi.fn() }
-    expect(createCoreApi({ ...deps, relay }).relay).toBe(relay)
-    // The devices' way to its card requests, the same way.
-    expect(core.superTabRequest).toBeUndefined()
-    const superTabRequest = vi.fn()
-    expect(createCoreApi({ ...deps, superTabRequest }).superTabRequest).toBe(superTabRequest)
     expect(core.agents.cloud).toBeUndefined()
     const rows = [{ agentId: 'cloud_1' }] as RegisteredSession[]
     expect(createCoreApi({ ...deps, cloudRows: () => rows }).agents.cloud!()).toBe(rows)
@@ -182,13 +131,6 @@ describe('the core API services stand on', () => {
     const terminals = { ...TERMINALS_OFF, open: vi.fn(async () => ({ ok: true as const, agentId: 'shell' })), watch: TERMINALS_OFF.watch }
     expect(createCoreApi({ ...deps, terminals }).terminals).toBe(terminals)
     expect(core.agents.all().map((s) => s.agentId)).toEqual(['live', 'stopped'])
-    expect(await core.agents.stopped!('live')).toBe(false)
-    expect(await core.agents.stopped!('unknown')).toBe(false)
-    expect(await core.agents.stopped!('stopped')).toBe(true)
-    // Gone is neither live nor kept: an agent closed by hand, never a live or stopped one.
-    expect(await core.agents.gone!('live')).toBe(false)
-    expect(await core.agents.gone!('stopped')).toBe(false)
-    expect(await core.agents.gone!('closed-by-hand')).toBe(true)
     expect(core.agents.live().map((s) => s.agentId)).toEqual(['live'])
     expect(core.agents.displayName).toBe(projectDisplayName)
     expect(core.transcripts.databaseHistory).toBe(deps.databaseHistory)
@@ -520,7 +462,7 @@ describe('the core API services stand on', () => {
   })
 
   it('starts with every port empty: a service fills its own when it starts', () => {
-    expect(emptyPorts()).toEqual({ usage: null, store: null, search: null, viewers: null, models: null, workspaces: null, messages: null, devices: null, wifi: null, monitor: null, connectors: null, orchestrator: null, sharing: null, recaps: null, agentCleanup: null, cloud: null, superTabs: null, sharedMachines: null, agentBrowser: null })
+    expect(emptyPorts()).toEqual({ usage: null, store: null, search: null, viewers: null, models: null, workspaces: null, messages: null, devices: null, wifi: null, monitor: null, connectors: null, orchestrator: null, sharing: null, recaps: null, agentCleanup: null, cloud: null, sharedMachines: null, agentBrowser: null })
     expect(emptyPorts()).not.toBe(emptyPorts())
   })
 

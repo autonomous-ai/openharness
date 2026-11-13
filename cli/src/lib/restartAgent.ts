@@ -26,15 +26,11 @@ import { permissionModeApproves } from './engineLaunch.js'
  * mode itself; this only settles the yes/no the engines without a mode table launch with.
  */
 export async function bypassPermissionFor(
-  session: Pick<RegisteredSession, 'permissionMode' | 'bypassPermission' | 'swarmSkill'>,
+  session: Pick<RegisteredSession, 'permissionMode' | 'bypassPermission'>,
   probeLive: () => Promise<boolean>,
 ): Promise<boolean> {
   if (session.permissionMode) return permissionModeApproves(session.permissionMode)
   if (session.bypassPermission !== undefined) return session.bypassPermission
-  // A Swarm agent's mode is the one on its row: Auto-approve since 2026-11-12, given once to the ones started before it
-  // (lib/registry.ts `withSwarmAuto`). Its live flag is never read back: one Harness started in full mode, cleared since,
-  // still runs with that flag until it relaunches, and read back it would decide this agent's mode instead of its row.
-  if (session.swarmSkill) return false
   return probeLive()
 }
 

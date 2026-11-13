@@ -1,4 +1,3 @@
-import type { MessageHold } from '../engines/facets/screen.js'
 import type { ProductUsageLaunchSignal } from '../lib/productUsageSignals.js'
 import type { ProductUsageMetric } from '../lib/productUsageContract.js'
 import type { PreparedHandoff, HandoffPermit, HandoffOutcome } from '../lib/handoffAuthority.js'
@@ -36,7 +35,6 @@ import { GRID_FLEET_MAX_TIMEOUT_MS } from '../lib/gridFleetProtocol.js'
 import type { GridLaunchAnswer, GridLaunchOverride, GridLaunchRequest } from '../lib/gridLaunchWire.js'
 import type { NewAgentModel } from '../lib/newAgentModel.js'
 import type { LastTurnText, LiveEvent } from '../engines/kit/events.js'
-import type { CreationObservation } from '../lib/creationObservation.js'
 import type { SessionRecaps } from '../lib/recapReads.js'
 import type { SessionInputDelivery } from '../lib/sessionInput.js'
 import type { AgentCloseRequest, AgentCloseResult } from '../lib/closeAgentService.js'
@@ -168,15 +166,6 @@ export interface CoreApi {
     cloud?(): RegisteredSession[]
     /** Whether the agent's terminal is attached: a frame without one reads to the apps as "agent gone". */
     terminalAvailable(agentId: string): boolean
-    /** Fresh native lifecycle evidence. Absence from a live snapshot alone is
-     * not a stop: a saved stopped record must also exist in the core. */
-    stopped?(agentId: string): Promise<boolean>
-    /** The agent is neither live nor kept as a stopped record: closed by hand, or its record deleted. Only for an agent
-     * the caller already knows was created; it does not prove an agent that is still starting is gone. */
-    gone?(agentId: string): Promise<boolean>
-    /** The exact durable native creation receipt. Null means unavailable, never
-     * proof that a launch was missing, cancelled or failed. */
-    creationStatus?(creationId: string): Promise<CreationObservation | null>
     /** Send the agent's frame to the apps again. */
     sync(session: RegisteredSession): void
     /** The Model/Effort choices an agent's engine offers (opaque `runtime-v1` ids): one agent's, or
@@ -213,16 +202,6 @@ export interface CoreApi {
      *  the cleanup reaches this (from its own process through core/agentCleanupLink.ts), so no client can name the
      *  ceiling. Absent where the core does not let a service close. */
     closeStarted?(agentId: string, mode: 'idle' | 'now', pastCeiling?: boolean): Promise<AgentCloseResult>
-    /** Close only the recorded native identity started for a Swarm. Missing live sessions are already gone. */
-    closeSwarm?(request: { agentId: string; creationId?: string; sessionId?: string; createdAt?: string; expiresAt?: number }): Promise<AgentCloseResult>
-    /** Reopen a Swarm Lead whose session is gone, on its own conversation, as a resume does: nothing is typed into it
-     *  (superTabs/host.ts keeps Leads alive). Only an agent stopped here that this machine's Super Tab host keeps as the
-     *  Lead of an active project (superTabs/retention.ts); a live one is answered ok. */
-    keepLeadAlive?(agentId: string): Promise<{ ok: true } | { ok: false; error: string; detail?: string }>
-    /** Close, now and keeping its conversation, a Super Tab member whose session the backend ends (its project deleted,
-     *  the agent removed). Only a harness this machine's Super Tab host retains as a member, or one whose exact native
-     *  creation receipt [creationId] (the Swarm's start) names it; a gone one is closed. */
-    closeMember?(agentId: string, creationId?: string): Promise<AgentCloseResult>
     /** When a live agent's conversation last moved, epoch ms: the latest dated work in its transcript
      *  (lib/transcriptActivity.ts), what the apps' `updatedAt` is when there is one. Null for none live, and for an
      *  engine that keeps no dated transcript: a hook's time or the bind's is not when it last answered. Absent where
@@ -275,21 +254,6 @@ export interface CoreApi {
     /** Hear what becomes of each delivery: queued, written, its turn started, refused and why, or past
      *  knowing. Returns how to stop hearing. */
     onDelivery(listener: (event: TurnDelivery) => void): () => void
-    /** Hear the end of each live turn, whichever engine ran it and whoever started it: never a turn read back from a
-     *  transcript at attach. Each says which turn it was, by a hash of its prompt, and the Swarm's host asks for that turn's
-     *  answer then and posts it where its person asked (superTabs/agentReplies.ts). Returns how to stop hearing. */
-    onEnd(listener: (event: TurnEnd) => void): () => void
-    /** What the turn that ended [end] answered, as it was said, or null when it said nothing or is not one the core knows. Its own
-     *  words as it went, so a follow-up that began at once does not change them, and the transcript's last turn only for a turn the
-     *  core did not see from its start (core/turns/ends.ts). */
-    answerOf(end: Pick<TurnEnd, 'sessionId' | 'prompt' | 'turnId'>): Promise<string | null>
-    /** Replace a service's short-lived permission to write queued typed deliveries.
-     * IDs use `team:service:<service>:`; expired or absent permission means wait.
-     * This guards the final terminal write even when its authorizing service stops. */
-    leaseDeliveries(service: string, leases: Record<string, number>): Promise<boolean>
-    /** What holds a typed delivery from [agentId]'s pane now (`team_waiting_*`), as its write would read it, with nothing written;
-     *  null when nothing does, or the core cannot say. A service asks before it writes its own intent to type it (superTabs/host.ts). */
-    holdOf(agentId: string, deliveryId: string): Promise<string | null>
   }
   questions: {
     /** Answer a live agent's question, keyed by the question keys it asked with. */
@@ -411,18 +375,6 @@ export interface CoreApi {
   daemon: DaemonAddress
   /** The cloud agents' doors into the core (services/cloud.ts): absent from a core or a process that offers them none. */
   cloud?: CloudCore
-  /** The Super Tab service's door into the core (superTabs/attention.ts): absent from a core or a process that offers it none. */
-  superTabs?: SuperTabsCore
-  /** An agent's pane read and typed into (core/terminals/panes.ts), for the services `PANE_TYPERS` names: absent from a
-   *  process that offers none. */
-  panes?: PanesCore
-  /** What one service hands another through the core, unread (core/relays.ts `RELAYS`): absent from a process that offers
-   *  none. */
-  relay?: RelayCore
-  /** The devices' way to the Super Tab service's `super_tabs` requests, for the Swarm cards alone (`cardsWanted`, `cardRecap`,
-   *  `cardOpen`, `cardSay`, `cardWorker`; core/relays.ts refuses any other action, `RELAY_ASKS`): its answer, or SERVICE_UNAVAILABLE. Absent from a core or a
-   *  process that offers none. */
-  superTabRequest?: (payload: Record<string, unknown>) => Promise<Record<string, unknown>>
   /** The Wi-Fi device's doors into the core (services/wifi.ts): each one call it made when it ran here. */
   wifi: {
     /** What it lists and reads in line (`WifiView`), asked again before each request it answers. */
@@ -628,35 +580,21 @@ export const ACCOUNT_BACKEND_OFF: Pick<CoreApi['account'], 'backend' | 'identity
 /** Where a service that was never told runs this daemon from: the installed CLI, on no port it knows. */
 export const DAEMON_UNKNOWN: DaemonAddress = { command: 'harness', port: 0, machineId: () => '', autonomousEnv: 'prod' }
 
-/** How a delivery is told apart: `answersQuestion` marks a person's Swarm message, which closes the question it answers
- *  in a Claude pane (core/input.ts `beforeTeamWrite`);
- *  `writtenAt` is when it was written (ms), as only a question open since then is its to close;
- *  `personsOwn` marks their own words in their agent's own 1:1 chat: their input, which the short-turn guard never holds;
- *  `quiet` marks a line a service types for the agent alone: the turn it starts is nobody's news, and ends with no recap
- *  and no notification (core/deliveries.ts, core/turns/recaps.ts). `turns.onEnd` still tells that end. */
-export interface DeliveryOptions { answersQuestion?: true; writtenAt?: number; personsOwn?: true; quiet?: true }
+/** How a delivery is told apart: `quiet` marks a line a service types for the agent alone: the turn it starts is nobody's
+ *  news, and ends with no recap and no notification (core/deliveries.ts, core/turns/recaps.ts). */
+export interface DeliveryOptions { quiet?: true }
 
 /** What became of a delivered turn (`turns.deliver`), as the core's input says it: `queued`, written
  *  (`delivered`), its turn `started`, `rejected` with why, or `unknown`. `sessionId` is the agent it was
  *  delivered to, as the delivery named it. */
 export type TurnDelivery = SessionInputDelivery
 
-/** A live turn that ended (`turns.onEnd`): the agent it ran in, its engine session, whether it was cut short (an interrupt), and
- *  which turn it was, whatever any transcript shows by the time it is asked: its prompt as a hash (lib/promptIdentity.ts), which
- *  says which message it answers, and its number among the turns this core has told, which tells it from another turn asked the same
- *  words. [compacted] when its agent's context was compacted in it, or since the turn before (core/turns/ends.ts). */
-export interface TurnEnd { agentId: string; sessionId: string; aborted: boolean; prompt: string; turnId: number; compacted?: true }
-
-/** The delivery and turn-end members of a core that delivers nothing for this service: nothing is written, nothing is
- *  taken back, and nothing is heard. */
-export const DELIVERIES_OFF: Pick<CoreApi['turns'], 'deliver' | 'cancelDelivery' | 'onDelivery' | 'onEnd' | 'answerOf' | 'leaseDeliveries' | 'holdOf'> = {
+/** The delivery members of a core that delivers nothing for this service: nothing is written, nothing is taken back, and
+ *  nothing is heard. */
+export const DELIVERIES_OFF: Pick<CoreApi['turns'], 'deliver' | 'cancelDelivery' | 'onDelivery'> = {
   deliver: () => {},
   cancelDelivery: () => false,
   onDelivery: () => () => {},
-  onEnd: () => () => {},
-  answerOf: async () => null,
-  leaseDeliveries: async () => false,
-  holdOf: async () => null,
 }
 
 /** A turn's card for the devices: the dial's and the Wi-Fi device's tiles and their notifications. */
@@ -749,9 +687,6 @@ export const MEMORY_REQUESTS = ['memory_snapshot', 'memory_about_put', 'memory_d
 /** The router (services/router.ts), an experiment: where a task a person typed or said should go, decided for
  *  the client that asks, which acts on it. */
 export const ROUTER_REQUESTS = ['route_decide'] as const
-export const SUPER_TAB_REQUESTS = ['super_tabs'] as const
-export interface SuperTabsPort { connected(): void; disconnected(): void; stop(): void; swarmRole(harnessId: string): Promise<import('../lib/swarmSkills.js').SwarmSkillGrant | null | undefined> }
-export const SUPER_TAB_FALLBACKS: PortFallbacks<SuperTabsPort> = { connected: undefined, disconnected: undefined, stop: undefined, swarmRole: later(undefined) }
 /**
  * The agent browser (services/agentBrowser.ts): whether Browser can run here, setting it up (this computer only), a
  * browser's state for the MCP relay of an agent launched before the browser moved to its chat (this computer only),
@@ -762,8 +697,7 @@ export const AGENT_BROWSER_REQUESTS = ['agent_browser_available', 'agent_browser
   'agent_browser_state', 'agent_browser_settings', 'agent_browser_settings_save', 'agent_browser_proxy_test',
   'agent_browser_start', 'agent_browser_stop', 'agent_browser_run', 'agent_browser_window'] as const
 /** The project and folder readers (services/projects.ts). */
-export const PROJECTS_REQUESTS = ['git_pull_request', 'git_pull_requests_status', 'git_project_info', 'scm_project_info', 'project_preview', 'fs_list_dir', 'agent_read_file',
-  'agent_instructions_read', 'agent_instructions_write'] as const
+export const PROJECTS_REQUESTS = ['git_pull_request', 'git_project_info', 'scm_project_info', 'project_preview', 'fs_list_dir', 'agent_read_file'] as const
 /** A window's name for its repo and its work, by a small model in the background (services/windowNames.ts). */
 export const WINDOW_NAMES_REQUESTS = ['window_name'] as const
 /** Which engines this machine has, asked before a create (services/engineProbe.ts). */
@@ -832,9 +766,9 @@ export const MACHINE_ADDON_REQUESTS = ['machine_addon'] as const
 export const MODELS_REQUESTS = [
   'grid_models_list', 'models_list',
   'grid_fleet_models_list', 'grid_fleet_model_download', 'grid_fleet_model_start', 'grid_fleet_model_stop',
-  'grid_fleet_run', 'grid_fleet_cancel', 'grid_swarm_sync', 'grid_swarm_api_share', 'grid_swarm_api_shares', 'grid_swarm_offer', 'grid_swarm_offers', 'grid_swarm_heal',
+  'grid_fleet_run', 'grid_fleet_cancel',
   'api_connections', 'codex_profiles_list', 'codex_profile_link',
-  'claude_profiles_list', 'claude_profile_link', 'swarm_account_offer',
+  'claude_profiles_list', 'claude_profile_link',
 ] as const
 
 const MINUTE = 60_000
@@ -857,8 +791,6 @@ const MINUTE = 60_000
  * how long a launch on one can wait. A launch on the engine's own login asks models nothing.
  */
 export const LONG_ANSWERS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
-  // Fifty GitHub reads, four at a time, each with an eight-second subprocess deadline.
-  projects: { git_pull_requests_status: 120_000 },
   // The device's own service waits up to 20 s for its next proposal (lib/autonomous-device/machineAddons.ts).
   machineAddons: { machine_addon: 30_000 },
   models: {
@@ -975,46 +907,30 @@ export const EXPERIMENTS: Readonly<Record<string, { requests: readonly string[];
   orchestrator: { requests: ORCHESTRATOR_REQUESTS, state: ['orchestrator/*.json'] },
   // Its invitations and links: a harness was shared from here. Or a shared tab held here (Agent Messages' file): the
   // observers its members are granted are derived and renewed by Share, and taken back once one leaves.
-  sharing: { requests: SHARE_REQUESTS, state: ['harness-shares.json', 'harness-collaboration.json', 'agent-messages/shared-tabs.json', 'super-tabs/host-*.json'] },
+  sharing: { requests: SHARE_REQUESTS, state: ['harness-shares.json', 'harness-collaboration.json', 'agent-messages/shared-tabs.json'] },
   // Request-only, on from its first request until the daemon stops: another machine's Memories pane asks, and
   // the package's own files are its state.
   memory: { requests: MEMORY_REQUESTS, state: [] },
   // Request-only too: it keeps nothing, and asks Jev only when a client asks it.
   router: { requests: ROUTER_REQUESTS, state: [] },
-  // A Swarm host here.
-  superTabs: { requests: SUPER_TAB_REQUESTS, state: ['super-tabs/host-*.json'] },
   // Cloud agents. Its harnesses: one was started here, and is watched again as the daemon starts. A New Harness
   // for one, an answer or a message to one wakes it too (its port's calls, core/agents/cloud.ts).
   cloud: { requests: CLOUD_REQUESTS, state: ['cloud/harnesses.json'] },
 }
 
-/** The Swarm's own API: `/api/super-tabs` and whole segments under it, of the characters the Swarm makes an id of
- *  (superTabs/wire.ts `identifier`), with a printable query that names no fragment. */
-const SWARM_API = /^\/api\/super-tabs(?:\/[A-Za-z0-9_-]+)*(?:\?[!-"$-~]*)?$/
 const each = (methods: readonly string[], path: RegExp): BackendRoute[] => methods.map((method) => ({ method, path }))
 /**
  * The backend routes each experiment in its process may call through the core's sign-in (`backend`,
  * core/experimentQueries.ts), and no others. Its process holds no credential: the core signs each call, so a route left
  * open here is a route any code in that process could call as the account. Until the audit of 2026-11-12 every path
- * under `/api/` was signed for all six, so the Swarm's process, which reads GitHub text and other accounts' messages,
- * could have read the account's device keys or the vault of its connected services.
- * - The Swarm: its own API, by GET and POST. All of it, not a list of its routes: an app's own asks go through its
- *   service (superTabs/service.ts `backend`, held there to this same shape), so what its process may ask is what the
- *   app may. And whether the server takes the sign-in again (superTabs/host.ts).
+ * under `/api/` was signed for every experiment, so a process that reads other accounts' text could have read the
+ * account's device keys or the vault of its connected services.
  * - Share: a grant's and a link's publication and removal, each by its id (sharing/owner.ts).
  * - The router: Jev's hosted decision (lib/jev/jevClient.ts).
  * - The orchestrator, Memories and cloud agents call none.
- * A path under the Swarm's API is whole segments: none empty, no `.` or `%`, so none climbs out of it (`..`) or hides a
- * separator. A new experiment declares its routes here, if only `[]` (core/experimentQueries.spec.ts).
+ * A new experiment declares its routes here, if only `[]` (core/experimentQueries.spec.ts).
  */
 export const EXPERIMENT_BACKEND_ROUTES: Readonly<Record<string, readonly BackendRoute[]>> = {
-  superTabs: [
-    ...each(['GET', 'POST'], SWARM_API),
-    { method: 'GET', path: /^\/api\/auth\/me$/ },
-    // The account's machines, which a Swarm process of a build before 0.5.84 read for its route context (#3626). No
-    // build since asks it. Kept for one that meets this core while its update is under way; it can go on 2026-12-13.
-    { method: 'GET', path: /^\/api\/machines$/ },
-  ],
   sharing: [
     ...each(['PUT', 'DELETE'], new RegExp(`^/api/harness-shares/${UUID}$`)),
     ...each(['PUT', 'DELETE'], new RegExp(`^/api/harness-links/${UUID}$`)),
@@ -1033,51 +949,6 @@ export const experimentBackendAllowed = (service: string, method: unknown, path:
  *  browser, which types its two lines into an agent when its person starts and stops its browser. No other process
  *  may: writing into a pane is no other service's to ask. */
 export const TURN_DELIVERERS: readonly string[] = [...Object.keys(EXPERIMENTS), 'messages', 'agentBrowser']
-
-/** The services in their own processes that are told each live turn's end (core/turns/ends.ts): the Swarm's, which posts an
- *  agent's answer into its person's chat when the turn that answers them ends. No other asks, so none is sent every end. */
-export const TURN_END_HEARERS: readonly string[] = ['superTabs']
-
-/** The services whose typed turns go into the engine's own input queue while the agent works, where its engine takes that
- *  (Claude Code and Codex): the Swarm's chat, which its person expects in the pane at once (core/deliveries.ts
- *  `typesWhileBusy`). Every other typed delivery, Agent Messages' among them, waits for the agent to be idle. */
-export const WHILE_BUSY_DELIVERERS: readonly string[] = ['superTabs']
-
-/** The services that may read an agent's pane and type text and keys into it from a process of their own
- *  (core/terminals/panes.ts): the Swarm's, for a Lead's view of its members' terminals and its host's answers to an
- *  engine's start screens. Typing into a pane is the core's most trusted act, so no other service may ask. */
-export const PANE_TYPERS: readonly string[] = ['superTabs']
-
-/** What one service may hand another through the core (core/relays.ts): each kind has its one sender and its one receiver,
- *  and the core passes it on between those two alone, unread, up to RELAY_MAX_BYTES; the receiver checks it. A sticky kind
- *  is its sender's latest word, which the core keeps and says again to the receiver as it connects. The Swarm's cards, a
- *  Lead's recap and the waits on a person, for the dials, which the devices check and show (cable/swarmCardsIn.ts,
- *  cable/swarmWaits.ts). */
-export const RELAYS: Readonly<Record<string, { from: string; to: string; sticky?: true }>> = {
-  swarm_cards: { from: 'superTabs', to: 'devices', sticky: true },
-  swarm_card_recap: { from: 'superTabs', to: 'devices' },
-  swarm_waits: { from: 'superTabs', to: 'devices', sticky: true },
-}
-/** The most one relayed word may be: the Swarm's cards at the Swarm's own largest (16 Swarms of 12 Leads, each with three
- *  notices of 1,500 bytes) are about 1.1 MiB, the review of this change measured. */
-export const RELAY_MAX_BYTES = 4 * 1024 * 1024
-/** The requests a service may ask of another's through the core (core/relays.ts): the request type and its actions, asked
- *  as this computer's owner and passed on as they came, for the receiver to check; any other action is refused. The
- *  devices' asks of the Swarm's cards: whether a dial that shows them is attached, a Lead's recap, a card opened, words
- *  for a Lead, and whether a failing card's agent is one of a Swarm's workers. */
-export const RELAY_ASKS: Readonly<Record<string, { to: string; type: string; actions: readonly string[] }>> = {
-  devices: { to: 'superTabs', type: 'super_tabs', actions: ['cardsWanted', 'cardRecap', 'cardOpen', 'cardSay', 'cardWorker'] },
-}
-
-/** A service's side of the relays (core/relays.ts): what it hands on, what it hears, and its partners coming and going. */
-export interface RelayCore {
-  /** Hand [kind] on to the service `RELAYS` names for it; null says the last word is gone. */
-  tell(kind: string, payload: unknown): void
-  /** Hear [kind], as its sender said it: the receiver checks it. Returns how to stop hearing. */
-  on(kind: string, hear: (payload: unknown) => void): () => void
-  /** Hear a service this one relays with connect (`up`) or go. Returns how to stop hearing. */
-  onPeer(hear: (service: string, up: boolean) => void): () => void
-}
 
 /** The core's calls into Share: an observer's frame as the relay handed it over, the relay gone (every observer
  *  with it), and stopping it. */
@@ -1141,10 +1012,6 @@ export interface RecapSession {
    *  where a turn ends, a cancel or a forget (reading it reads the orchestrator); absent, the recaps keep
    *  what they were last told. */
   subagent?: boolean
-  /** Its finished turns are silent on the devices (the dial, the phone): its news reaches people another way. The core
-   *  only carries this; who says it is outside the core (a Swarm agent's, through the Swarm's door: superTabs/inCore.ts).
-   *  Said with every event, since the recaps in their own process have no agent list to look it up in (#2540's review). */
-  quietOnDevices?: boolean
 }
 
 /** Who watches this machine's turn cards: a device at all (through the backend or on the cable), and one
@@ -1446,148 +1313,6 @@ export interface CloudCore {
   unask(agentId: string, requestId: string): void
 }
 
-/** The request ids of the Super Tab waits on the devices: never an engine's (theirs are its tool ids), so an answer
- *  sent back for one is never typed into a pane (services/devices.ts). */
-export const SUPER_TAB_REQUEST_PREFIX = 'supertab:'
-
-/**
- * A Super Tab member on this machine waits on a person: its assignment needs a decision or is stuck
- * (superTabs/attention.ts). Shown on the devices cabled here as a question nobody answers there: display only.
- */
-export interface SuperTabAttention {
-  /** The local agent (its harness id). */
-  agentId: string
-  /** `supertab:<assignment>:<status>`: stable for one wait, never an engine's question id. */
-  requestId: string
-  /** The Super Tab's name, at most 48 bytes. */
-  superTab: string
-  attention: 'decision' | 'stuck'
-  /** What the device reads: the decision asked for, or why it is stuck. */
-  text: string
-}
-
-/** What the core hands the Swarm's own close and reopen (superTabs/inCore/agents.ts): the live registry, the stopped
- *  records, and the core's close, resume and creation receipts. */
-export interface SwarmAgentDeps {
-  byAgent(agentId: string): RegisteredSession | undefined
-  stoppedIds(): string[]
-  closeAgent?: (request: AgentCloseRequest) => Promise<AgentCloseResult>
-  resumeAgent?: (agentId: string) => Promise<{ ok: true } | { ok: false; error: string; detail?: string }>
-  creationStatus?: (creationId: string) => Promise<CreationObservation | null>
-}
-export type SwarmAgents = Required<Pick<CoreApi['agents'], 'closeSwarm' | 'keepLeadAlive' | 'closeMember'>>
-
-type SwarmSkill = NonNullable<RegisteredSession['swarmSkill']>
-/** The Swarm's part of an agent's start (superTabs/inCore/launch.ts), handed to the launches while the Swarm is on: the
- *  roles a start may ask for, the team's basics the engine starts with, its share of this machine's cores, and the Harness
- *  GitHub App's git and gh at the relaunch of a session started with it before the App's removal (null where it has none;
- *  lib/swarmGitHub.ts, until 2026-12-10). */
-export interface SwarmLaunch {
-  role(value: unknown): value is SwarmSkill['role']
-  /** The team's basics in the engine's own instructions at a launch and every relaunch, the PM's part for its project's
-   *  PM ([lead]) too (lib/swarmSkills.ts swarmBasics), then the agent's own `agents/<name>.md` in its folder ([own]: the
-   *  folder it starts in and the name it was started under). */
-  basics(lead: boolean, own?: { cwd: string | null; name: string | null }): string
-  github(key: string): { env: Record<string, string>; clearEnv: string[] } | null
-  /** The engine's arguments for a session the Swarm starts, never for a person's own (lib/swarmEngineArgs.ts). */
-  args(engine: string): string[]
-  /** The variables a session the Swarm starts gets at its launch and every relaunch, never a person's own: its share of this
-   *  machine's cores (HARNESS_CORES), for its tools to size themselves by. [key] is the session's creation key. */
-  cores(key: string): Record<string, string>
-}
-
-/** Give an agent its person attached (Desktop's Attach, started outside the Swarm) its Swarm role at its first restart or
- *  resume (superTabs/inCore/adoption.ts): the row to launch, or null when the launch is no longer this one's. Absent while
- *  the Swarm is off. */
-export type AdoptSwarmSkill = ((session: RegisteredSession, current: () => boolean) => Promise<RegisteredSession | null>) & {
-  /** One role read, for a relaunch that cannot wait (boot restore, a model switch, a host move): the row to launch with
-   *  its role, written to the registry only by `commit`; `unavailable` when the role could not be read, which the caller
-   *  holds or refuses, never launching without it; null when the launch is no longer this one's. */
-  lookup?(session: RegisteredSession, current: () => boolean): Promise<{ row: RegisteredSession; commit(): void } | 'unavailable' | null>
-  /** Whether a relaunch of this row asks the Swarm for its role first (restore's `needs`). */
-  needed?(session: RegisteredSession): boolean
-}
-
-export type LeadState = 'ask' | 'stuck' | 'work' | 'done'
-/** One Swarm's Lead on a Harness Pro's card (superTabs/cards.ts). `order`: the project's index in the Swarm (the app's
- *  order), so a dial can show the Leads as the app does whatever their urgency. */
-export interface SwarmLead {
-  id: string; projectId: string; project: string; engine: string; owner: string; local: string; state: LeadState; order: number; since?: number
-  /** The face of a round dial without swarmBuddy: today's rule, whatever a newer dial swiped to. */
-  chat?: SwarmChat
-  notice?: LeadNotice
-  /** While the Swarm has Buddies on: the face of a dial that speaks swarmBuddy, on the side it keeps for this Swarm. */
-  sideChat?: SwarmChat
-  /** Present only while the Swarm has Buddies on. */
-  buddies?: true
-  /** The reader's own Buddy in this project, when it has one. */
-  buddy?: SwarmBuddy
-  /** The newest message the reader's Buddy wrote in its chat since the baseline: the dial's quiet alert. */
-  buddyNotice?: LeadNotice
-}
-/** One Swarm this account is in, as a Harness Pro's card: its Leads, most urgent first. */
-export interface SwarmCard { id: string; name: string; count: number; leads: SwarmLead[]
-  /** The reader's own Personal Swarm (the list row's `personal: true`); never set on a Team Swarm. */
-  personal?: true }
-/** A Lead's last message, for its card; `chatId` when it is the last message of the chat on the round dial's face, and
- *  `buddy` when that face is a swarmBuddy dial's (`CardChat` 'buddy'), so each dial takes only the recaps it asked for. */
-export interface LeadRecap { tabId: string; leadId: string; text: string; at: number; none: boolean; chatId?: string; buddy?: true }
-/** A project's places to chat (designs 2026-10-28-round-dial-swarm-chat and 2026-10-29-round-dial-pm-buddy): its Lead
- *  conversation, the reader's Buddy chat, and a group. A dial without swarmBuddy calls the Buddy chat `pm`, where the PM's
- *  private lines land since Buddies replaced Chat with PM; a swarmBuddy dial calls it `buddy` and hears the Buddy there. */
-export type ChatKind = 'lead' | 'pm' | 'group' | 'buddy'
-/** The chat on a project's face on the round dial: the Lead's, unless the window has the project's Buddy chat or a group
- *  open (or a swarmBuddy dial's side says the Buddy's). `working` only for a working group, `since` from one of its agents'
- *  turn here. */
-export interface SwarmChat { kind: ChatKind; id: string; name: string; working: boolean; since?: number }
-/** The newest tag of the reader's in the project since the baseline, the dial's alert: in its Lead conversation (`lead`), the
- *  reader's Buddy chat or a Chat with PM (`pm`), or a task chat (`group`, #2965); or the newest message the reader's Buddy
- *  wrote in its chat (`buddy`, the quiet one). `thread`: the root of the thread it is in, when it is in that thread only; such
- *  a notice is read only where that thread is open. */
-export interface LeadNotice { chat: 'lead' | 'pm' | 'group' | 'buddy'; chatId: string; id: string; text: string; at: number; thread?: string
-  /** A decision asked of the reader: only a swarmNeedsYou dial hears it. */
-  decision?: true
-  /** On a decision's notice: the tag notice it covers (never a decision), which a dial that hears no decisions keeps showing. */
-  tag?: LeadNotice }
-/** The reader's own Buddy in a project, for a round dial's Buddy screen: its chat, name and engine, Desktop's pattern for
- *  its name (`cells`, the 15 half bits; `color`, `#rrggbb`), and `live` false while it is down. */
-export interface SwarmBuddy { chatId: string; name: string; engine: string; cells: number; color: string; live: boolean
-  /** Its session id when it runs on this computer: how a tap on its notification is told from any other agent's. Never sent
-   *  to a device. */
-  local?: string }
-/** The chat the window opens when a device picks a project or taps a session: the project's Lead conversation or the reader's Buddy's. */
-export type CardSide = 'pm' | 'buddy'
-/** Which chat a card request is about: the Lead's conversation (false, the Pro), today's face (true, a swarmChat dial), or
- *  the face on a swarmBuddy dial's side ('buddy'). */
-export type CardChat = boolean | 'buddy'
-/** What became of words spoken on a device for a Lead: posted, not a Lead here (`said` false, so the turn goes as before), or
- *  refused by the backend with its code and message, which must never become a terminal turn instead. */
-export type SaidOnCard = { said: true } | { said: false; refused?: { code: string; message: string } }
-/** The conversation the window has open in a Swarm tab. */
-export interface CardFocus { tabId: string; conversationId: string }
-
-/** The Super Tab service's door into the core. Its cards and waits for the dials go to the devices through `relay`. */
-export interface SuperTabsCore {
-  /** Members may watch an agent of this machine's: Share must run to invite them (superTabs/observers.ts). Its saved
-   *  state wakes it only as the core starts, so a machine that joined a Swarm while running never invited anyone and
-   *  each member's pane read "must be online" (River on a contributed machine, 2026-10-23). */
-  shareObservers(): void
-}
-
-/** An agent's pane, read and typed into for a component the core lists (`PANE_TYPERS`, core/terminals/panes.ts). */
-export interface PanesCore {
-  /** The pane as plain text: the visible screen, with up to 200 lines of scrollback when asked, and what the screen reader
-   *  says it waits on (a permission prompt, a question). */
-  screen(agentId: string, scrollback: number): Promise<PaneScreen>
-  /** Text, then each key by its tmux name, typed into the pane under its write lock. */
-  input(agentId: string, text: string, keys: string[]): Promise<PaneTyped>
-  /** The same keys, sent only if the visible screen, read again under the pane's write lock, is exactly `screen`: for a
-   *  caller that read the screen earlier and must not type into a different one. */
-  inputIfScreen(agentId: string, keys: string[], screen: string): Promise<PaneTyped>
-}
-export type PaneScreen = { ok: true; text: string; hold: MessageHold | null } | { ok: false; error: string }
-export type PaneTyped = { ok: true } | { ok: false; error: string }
-
 /** What the cloud service answers the core: done, or why not, in words a person reads. */
 export type CloudResult = { ok: true; detail?: string } | { ok: false; error: string; detail?: string }
 
@@ -1625,7 +1350,7 @@ export type ForkResult = { ok: true; agentId: string } | { ok: false; error: str
  *  this desk did on a dial, and a spoken task offered to the window's palette. Never to the cloud. */
 export const DEVICE_WINDOW_FRAMES = [
   'dial_open', 'dial_notification_read', 'dial_forked', 'dial_focus', 'dial_swarm', 'dial_scroll', 'dial_status',
-  'voice_route_request', 'dial_super_tab',
+  'voice_route_request',
 ] as const
 export type DeviceWindowFrame = { type: (typeof DEVICE_WINDOW_FRAMES)[number]; payload: Record<string, unknown> }
 
@@ -1689,9 +1414,6 @@ export interface DevicesPort {
   engines(engines: string[]): void
   /** Whether a device watches through the backend: the voice router keeps its worker warm meanwhile. */
   commanders(connected: boolean): void
-  /** The agents with an engine's question open, as the core knows them, said as the devices connect or start: what the cards
-   *  that pass after say keeps it current. A Swarm wait shows only where none is open (cable/swarmWaits.ts). */
-  asking(agentIds: string[]): void
   /** Let go of the serial ports and the lane, for a restart or a shutdown. */
   stop(): Promise<void>
 }
@@ -1707,7 +1429,7 @@ export const DEVICES_FALLBACKS: PortFallbacks<DevicesPort> = {
   settings: undefined, windowFocus: undefined, windowReply: undefined, voiceReply: undefined, windowGone: undefined,
   routeTask: later({ agentId: '', machineId: '', name: '', confidence: 0, reason: DEVICES_UNAVAILABLE, candidates: [], weighed: 0, machines: 0, via: '' }),
   routeSend: later({ ok: false, machine: '', reason: DEVICES_UNAVAILABLE }),
-  stepFocus: later('no_agents'), scroll: undefined, engines: undefined, commanders: undefined, asking: undefined, stop: later(undefined),
+  stepFocus: later('no_agents'), scroll: undefined, engines: undefined, commanders: undefined, stop: later(undefined),
 }
 
 /*
@@ -1851,21 +1573,6 @@ export type BackendNotice =
   | { type: 'machines_changed'; reason: string }
   | { type: 'device_keys_changed' }
   | { type: 'connectors_changed'; revision: number }
-  /** Work waits for an agent of this machine's (backend lib/adapterWs.ts): its Swarm host reads that agent's deliveries now.
-   *  Naming none, the server says it pushes them, and every list is read once (superTabs/host.ts PUSH_LEASE_MS). */
-  | { type: 'super_tab_deliveries'; tabId?: string; agentId?: string }
-  /** A Lead's terminal request waits for an agent of this machine (backend lib/swarmDeliveryPushes.ts): its Swarm host picks
-   *  it up now rather than at its next poll (superTabs/terminal.ts). The backend's `__` frame, kept by name. */
-  | { type: '__terminal_waiting'; tabId: string; agentId: string }
-  /** The server renews the Swarm host's delivery push lease, each minute through Redis (backend lib/swarmDeliveryPushes.ts):
-   *  the host keeps reading an idle worker's list only when told (superTabs/host.ts PUSH_LEASE_MS). A `__` frame, kept by name. */
-  | { type: '__deliveries_lease' }
-  /** A commit changed what this machine's Swarm host reads (backend lib/swarmHostPushes.ts): it reads its changes now. Naming
-   *  none, the server says it pushes them, and the host reads only when told (superTabs/hostFeed.ts HOST_PUSH_LEASE_MS). */
-  | { type: 'swarm_host_changed'; tabId?: string; lastChangedAt?: number }
-  /** A Swarm the account is in changed (backend lib/swarmClientPushes.ts): this computer's windows read it again. Naming none,
-   *  the server says it pushes them (desktop super_tabs/swarm_pushes.dart). */
-  | { type: 'swarm_changed'; tabId?: string; lastChangedAt?: number; parts?: Array<'main' | 'machine'> }
 
 /** What a person has open on this computer, per surface (lib/windowSurfaces.ts). */
 export type { LocalWindows, WindowSurface } from '../lib/windowSurfaces.js'
@@ -2058,15 +1765,8 @@ export interface GatewayRefusal {
  * `remote-password`, `link connect`, `group`, `devices`, and the Wi-Fi device's pairing. Each answers as
  * the hook server's route does; while the gateway is down, a 503.
  */
-/** The backend's answer to a file the gateway sent it, as it came, or why there is none. */
-export type UploadAnswer = { status: number; body: string; contentType: string }
-  | { error: 'NOT_SIGNED_IN' | 'BACKEND_UNREACHABLE' | 'BACKEND_TIMEOUT' | 'INVALID_UPLOAD' | 'GATEWAY_UNAVAILABLE' }
 
 export interface GatewayOps {
-  /** A file the core wrote to its uploads folder (lib/gatewayWire.ts `uploadsFolder`), sent as it is, streamed, to
-   *  the backend's [path] under the account's token: a Swarm chat file (lib/superTabAttachmentProxy.ts). The core calls
-   *  no other host (the core audit of 2026-11-12). The core deletes the file once answered. */
-  backendUpload(request: { file: string; path: string; contentType: string }): Promise<UploadAnswer>
   /** The account's token. The gateway renews the sign-in (lib/authRefresh.ts) and the core asks it, so the core calls
    *  no other host (the core audit of 2026-11-12, decision 4). A refusal is the session's own error (`AuthSessionError`). */
   accessToken(opts?: { force?: boolean; failedToken?: string }): Promise<string>
@@ -2179,13 +1879,12 @@ export interface CorePorts {
   recaps: RecapsPort | null
   agentCleanup: AgentCleanupPort | null
   cloud: CloudPort | null
-  superTabs: SuperTabsPort | null
   sharedMachines: SharedMachinesCorePort | null
   agentBrowser: AgentBrowserPort | null
 }
 
 export function emptyPorts(): CorePorts {
-  return { usage: null, store: null, search: null, viewers: null, models: null, workspaces: null, messages: null, devices: null, wifi: null, monitor: null, connectors: null, orchestrator: null, sharing: null, recaps: null, agentCleanup: null, cloud: null, superTabs: null, sharedMachines: null, agentBrowser: null }
+  return { usage: null, store: null, search: null, viewers: null, models: null, workspaces: null, messages: null, devices: null, wifi: null, monitor: null, connectors: null, orchestrator: null, sharing: null, recaps: null, agentCleanup: null, cloud: null, sharedMachines: null, agentBrowser: null }
 }
 
 /** What a browser's stream answers a viewer: its open, and that it closed. Its bytes go beside them, as binary. */
@@ -2221,7 +1920,6 @@ export interface CoreApiDeps {
   backend: CoreApi['account']['backend']
   onNotice: CoreApi['account']['onNotice']
   create: CoreApi['agents']['create']
-  creationStatus?: CoreApi['agents']['creationStatus']
   dsh: CoreApi['agents']['dsh']
   windows: CoreApi['clients']['windows']
   daemon: DaemonAddress
@@ -2250,11 +1948,6 @@ export interface CoreApiDeps {
   panePid?: (session: RegisteredSession) => Promise<number | null>
   /** When an agent's conversation last moved (lib/transcriptActivity.ts), for `lastActivity`. */
   activityAt?: (session: RegisteredSession) => Promise<number | null>
-  /** A resume of a stopped agent (core/agents/lifecycle.ts `resumeAgent`), for `keepLeadAlive`. */
-  resumeAgent?: (agentId: string) => Promise<{ ok: true } | { ok: false; error: string; detail?: string }>
-  /** The Swarm's `closeSwarm`, `keepLeadAlive` and `closeMember` (superTabs/inCore/agents.ts), built on what the core
-   *  reads its agents by; absent while the Swarm is off, and then the core offers none of them. */
-  swarmAgents?: (deps: SwarmAgentDeps) => SwarmAgents
   signedIn: CoreApi['account']['signedIn']
   environment: CoreApi['account']['environment']
   machines: CoreApi['account']['machines']
@@ -2269,14 +1962,6 @@ export interface CoreApiDeps {
   wifi: CoreApi['wifi']
   /** The cloud agents' doors (core/agents/cloud.ts). */
   cloud?: CloudCore
-  /** The Super Tab service's door. */
-  superTabs?: SuperTabsCore
-  /** An agent's pane, read and typed into for the services that may (core/terminals/panes.ts). */
-  panes?: PanesCore
-  /** What one service hands another, unread (core/relays.ts). */
-  relay?: RelayCore
-  /** The devices' way to the Super Tab service's card requests. */
-  superTabRequest?: CoreApi['superTabRequest']
   /** The running cloud harnesses as list rows (`agents.cloud`). */
   cloudRows?: () => RegisteredSession[]
   lastTurn: CoreApi['transcripts']['lastTurn']
@@ -2293,9 +1978,9 @@ export interface CoreApiDeps {
 export function createCoreApi({
   dataDir, registry, stoppedAgents, databaseHistory, syncSession, runtimeModels, viewerChanged,
   gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, observerKey, tabKey, tabRelay, connectorVault, observer, privateGridName, machineName, backend, onNotice,
-  runtimeProfile, setRuntime, fork, create, creationStatus, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, viewerFrame, browserFrame, browserBytes, machine, activityText, activitySnapshot, activity, summaries,
-  closeAgent, activityAt, resumeAgent, swarmAgents, setBrowser, moveBrowser, panePid,
-  signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, cloud, superTabs, panes, relay, superTabRequest, cloudRows, lastTurn, turnCard, turnSummary,
+  runtimeProfile, setRuntime, fork, create, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, viewerFrame, browserFrame, browserBytes, machine, activityText, activitySnapshot, activity, summaries,
+  closeAgent, activityAt, setBrowser, moveBrowser, panePid,
+  signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, cloud, cloudRows, lastTurn, turnCard, turnSummary,
   count, hachiGoalDone, log = (line) => console.warn(line),
 }: CoreApiDeps): CoreApi {
   // The devices reach the windows through these alone, and only with their own frames: a devices process
@@ -2321,8 +2006,6 @@ export function createCoreApi({
     conversations,
     agents: {
       all: () => [...registry.list(), ...stoppedAgents.list()],
-      stopped: async id => !registry.byAgent(id) && stoppedAgents.list().some(s => s.agentId === id),
-      gone: async id => !registry.byAgent(id) && !stoppedAgents.ids().includes(id),
       live: () => registry.list(),
       displayName: projectDisplayName,
       byAgent: (agentId) => registry.byAgent(agentId),
@@ -2336,14 +2019,11 @@ export function createCoreApi({
       setRuntime,
       fork,
       create,
-      ...(creationStatus ? { creationStatus } : {}),
       dsh,
       activityText,
       activitySnapshot,
       activity: activity ?? (async () => ({})),
       summaries: summaries ?? (async () => ({})),
-      // The Swarm's own close and reopen (superTabs/inCore/agents.ts), handed in while it is on.
-      ...swarmAgents?.({ byAgent: id => registry.byAgent(id), stoppedIds: () => stoppedAgents.ids(), closeAgent, resumeAgent, creationStatus }),
       // Decided here, not in the service: whatever the cleanup asks, from its process or this one, the core closes only
       // a harness another agent started, the conversation it reviewed (`agent_close`'s identity), and keeps it.
       closeStarted: async (agentId, mode, pastCeiling) => {
@@ -2400,9 +2080,5 @@ export function createCoreApi({
     daemon,
     wifi,
     ...(cloud ? { cloud } : {}),
-    ...(superTabs ? { superTabs } : {}),
-    ...(panes ? { panes } : {}),
-    ...(relay ? { relay } : {}),
-    ...(superTabRequest ? { superTabRequest } : {}),
   }
 }

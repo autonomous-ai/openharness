@@ -229,9 +229,6 @@ function jsonFrame(raw: RawData, maxBytes = LOCAL_JSON_MAX_BYTES): Frame | null 
   }
 }
 
-/** A Super Tab or project id as the backend writes them, as long as the Harness Pro holds one (48 bytes with its NUL). */
-const CARD_ID = /^[A-Za-z0-9_-]{1,47}$/
-
 /**
  * The window's swarm list, checked field by field. Anything that is not an id, a name and a list of
  * agent ids is dropped rather than trusted — the same stance app_panes takes with its ids — and a
@@ -255,16 +252,7 @@ function appSwarmsFrom(payload: unknown): AppSwarms | null {
     const panes = typeof r.panes === 'number' && Number.isFinite(r.panes) && r.panes >= 0
       ? Math.min(Math.floor(r.panes), 999)
       : agentIds.length
-    // A Super Tab (Swarm) tab names its Swarm and the project the window has open in it; the Harness Pro's Swarm card
-    // links to the tab by the first and follows the second. Ids only: anything else is dropped, not trusted.
-    const superTabId = typeof r.superTabId === 'string' && CARD_ID.test(r.superTabId) ? r.superTabId : undefined
-    const projectId = typeof r.projectId === 'string' && CARD_ID.test(r.projectId) ? r.projectId : undefined
-    // And the conversation it has open (its Lead's, the person's Buddy chat or a group), which the round dial's face follows.
-    const conversationId = typeof r.conversationId === 'string' && CARD_ID.test(r.conversationId) ? r.conversationId : undefined
-    // And the thread open beside it, by its root: a thread is of a conversation, so with none named there is none.
-    const threadRoot = conversationId && typeof r.threadRoot === 'string' && CARD_ID.test(r.threadRoot) ? r.threadRoot : undefined
-    swarms.push({ id: r.id, name: r.name.slice(0, 80), agentIds, panes, ...(superTabId ? { superTabId } : {}), ...(projectId ? { projectId } : {}),
-      ...(conversationId ? { conversationId } : {}), ...(threadRoot ? { threadRoot } : {}) })
+    swarms.push({ id: r.id, name: r.name.slice(0, 80), agentIds, panes })
     if (swarms.length === 24) break   // the window's own ceiling
   }
   if (swarms.length === 0) return null
@@ -284,8 +272,7 @@ function appSwarmsFrom(payload: unknown): AppSwarms | null {
     tiles.push({ x1, y1, x2, y2, agentId: typeof t.agentId === 'string' ? t.agentId : '' })
     if (tiles.length === 24) break   // the window's own ceiling, same as the rows above
   }
-  // Set by the window on the announce a device's pick caused, so the device is not told to follow its own choice back.
-  return { active, swarms, tiles, ...(p.fromDevice === true ? { fromDevice: true } : {}) }
+  return { active, swarms, tiles }
 }
 
 /** [raw]'s length in bytes, with nothing copied or made: it is read for every message. */

@@ -66,16 +66,11 @@ SUBCOMPONENTS = {"devices/harness-pro/": "pro"}
 # test_ci_plan.CrossReadTests scans the components' sources and fails on an undeclared read.
 # The desktop VM tests run in a sparse checkout of exactly these inputs (ci-source-inputs.py).
 DEPENDS = {
-    # attachments.limits.test.ts compares the attachment size limits each client declares; cliVerbs.test-support.ts
-    # reads the CLI's super-tab usage line.
     "backend": ("cli/src/lib/productHealthContract.ts", "cli/src/lib/productUsageContract.ts",
-                "cli/src/lib/superTabAttachmentProxy.ts", "cli/src/superTabs/attachments.ts", "cli/src/superTabs/command.ts",
                 "daemons/frames.json",
                 "desktop/lib/measurement/", "mobile/lib/measurement/",
                 "provider/reference-provider/", "tests/fixtures/"),
-    # CLAUDE.md: agentInstructions.spec.ts expects '../../../CLAUDE.md' in a temporary project, and a relative path always
-    # counts as a read; the repository's own CLAUDE.md is a one-line pointer that rarely changes.
-    "cli": ("CLAUDE.md", "backend/src/lib/deviceAck.vectors.json", "backend/src/lib/deviceAckCore.ts", "desktop/",
+    "cli": ("backend/src/lib/deviceAck.vectors.json", "backend/src/lib/deviceAckCore.ts", "desktop/",
             "cli/e2e/harness/", "devices/harness-device/firmware/test/vectors/", "docs/contracts/", "mobile/", "pty/", "store/",
             "tui/"),
     "companions": ("cli/", "docs/research/2026-09-30-memory-batch-extraction-cases.json",
@@ -110,18 +105,13 @@ DEPENDS = {
 # test_ci_plan.CrossReadTests scans the components' sources against these too; a path built from parts is declared by
 # hand, or named in full where it is read. A miss here runs one suite too few on a PR; reuse still sees the change.
 PR_READS = {
-    # attachments.limits.test.ts compares the attachment size limits each client declares; cliVerbs.test-support.ts
-    # reads the CLI's super-tab usage line.
     "backend": ("cli/src/lib/productHealthContract.ts", "cli/src/lib/productUsageContract.ts",
-                "cli/src/lib/superTabAttachmentProxy.ts", "cli/src/superTabs/attachments.ts", "cli/src/superTabs/command.ts",
                 "daemons/frames.json",
                 "desktop/lib/measurement/", "mobile/lib/measurement/",
                 "provider/reference-provider/", "tests/fixtures/"),
-    # CLAUDE.md: agentInstructions.spec.ts expects '../../../CLAUDE.md' in a temporary project, and a relative path always
-    # counts as a read; the repository's own CLAUDE.md is a one-line pointer that rarely changes.
     # cli/scripts/connector-assets.mjs, which a spec imports, names the connector icons' desktop and phone copies it writes.
     # store/: the dsh specs read its agents, viewers and starter (the scan skips it: a path outside every component).
-    "cli": ("CLAUDE.md", "backend/src/lib/deviceAck.vectors.json", "backend/src/lib/deviceAckCore.ts",
+    "cli": ("backend/src/lib/deviceAck.vectors.json", "backend/src/lib/deviceAckCore.ts",
             "cli/e2e/harness/", "desktop/assets/connector-icons/",
             "desktop/lib/connectors/connector_icons.dart", "desktop/lib/measurement/product_health_contract.dart",
             "desktop/test/viewer/deviceAck.vectors.json", "desktop/test/viewer/deviceHistory.vectors.json",
@@ -189,28 +179,16 @@ NOT_READ = {"cli": ("cli/e2e/",)}
 # test data, or a script run only by hand. {source: (why, {path the scan reports, or a folder "dir/" covering it})}.
 # A folder covers only paths named from the repository root: a relative read ("../../cli/x.ts") is always a read.
 NOT_READS = {
-    # A pull request's files in the merger's tests: named, never opened (CLI Swarm v4 security, 2026-11-10).
-    "cli/src/superTabs/githubMerge.spec.ts": ("test data: a pull request's file paths", {"backend/src/", "docs/"}),
-    **{source: ("test data: a task's owned paths", {"docs/"})
-       for source in ("cli/src/superTabs/routeCheapFirst.spec.ts", "cli/src/superTabs/routeCommand.spec.ts")},
     # cli-tests runs vitest on src/ only; these start the real backend with its installed prisma.
     **{source: ("end-to-end and local stack scripts, run by hand", {"backend/"})
        for source in ("cli/e2e/harness/realBackend.ts", "cli/scripts/box-claim-e2e.ts", "cli/scripts/local-stack-peer.ts",
                       "cli/scripts/remote-viewers-stack.ts", "cli/scripts/share-harness-e2e.ts")},
     "cli/src/engines/__fixtures__/other-runtime.golden.json": ("test data: a model name", {"provider/"}),
-    "cli/src/lib/agentInstructions.spec.ts": ("test data: instruction files in a temporary project", {"AGENTS.md", "docs/"}),
-    **{source: ("test data: a task's owned paths", {"desktop/"})
-       for source in ("cli/src/superTabs/fixtures/read/legacy-tab-lead.json", "cli/src/superTabs/fixtures/read/parts-lead.json",
-                      "cli/src/superTabs/fixtures/read/status-lead.json", "cli/src/superTabs/service.spec.ts")},
     "cli/src/lib/sessionSearch/turns.spec.ts": ("test data: a tool call's file path", {"desktop/"}),
     "cli/src/lib/handoffChangedFiles.spec.ts": ("test data: changed file names", {"docs/"}),
     "cli/src/lib/opencodeOneShot.spec.ts": ("test data: a model name", {"provider/"}),
     "cli/src/lib/runtimeProfile.spec.ts": ("test data: a model name", {"provider/"}),
     "cli/src/lib/transcriptReader.spec.ts": ("test data: a tool result's text", {"devices/"}),
-    "cli/src/superTabs/githubTrain.spec.ts": ("test data: a pull request's changed files", {"docs/"}),
-    "cli/src/superTabs/plainPath.spec.ts": ("test data: a path to make plain", {"docs/"}),
-    "cli/src/superTabs/pmNumbers.spec.ts": ("test data: a hot file's name", {"backend/src/"}),
-    "cli/src/superTabs/scoreboard.spec.ts": ("test data: the files landings touched most", {"backend/", "docs/"}),
     "companions/src/application/modelProfile.spec.ts": ("test data: a model name", {"provider/"}),
     "companions/src/memory/lessons/signals.spec.ts": ("test data: a test id", {"tests/"}),
     "desktop/tool/native_benchmark/connected_stack.mjs": ("a benchmark run by hand against the built CLI", {"cli/"}),
@@ -378,30 +356,6 @@ def batch_members(root, head, base):
         raise Rerun(f"its first-parent line has more than {BATCH_MEMBERS_MAX} merges before the base branch")
     if not members:
         raise Rerun("it merges no member PR")
-    return members[::-1]
-
-
-# Harness's train (cli/src/superTabs/githubTrain.ts) lands ready pull requests together from a branch under this prefix,
-# one merge commit for each, and its body carries each member's local check receipts (trainReceipts).
-TRAIN_BRANCH = "harness-train/"
-
-
-def train_members(root, head, base):
-    """Each head a train branch merged, in merge order, with the local checks its merge needs: read from the branch's
-    own merges, never from the pull request's text. What a merge adds is its member's to prove, beyond the member's own
-    commits too, so a receipt is asked for every path the train changes."""
-    members, commit = [], head
-    for _ in range(local_checks.TRAIN_MAX + 1):
-        if is_ancestor(root, commit, base):
-            break
-        parents = git(root, "rev-list", "--parents", "-n", "1", commit).split()[1:]
-        if len(parents) != 2:
-            raise ValueError(f"train commit {commit[:12]} merges no pull request")
-        first, second = (sha(value) for value in parents)
-        members.append(dict(head=second, local_checks=local_checks.required_checks(changed_paths(root, first, commit))))
-        commit = first
-    else:
-        raise ValueError(f"train has more than {local_checks.TRAIN_MAX} merges before the base branch")
     return members[::-1]
 
 
@@ -792,13 +746,10 @@ def make_plan(root, event_name, event, scope="full", source=None, evidence=None)
         git(root, "merge-base", "--is-ancestor", base, head)
     elif event_name not in {"workflow_dispatch", "workflow_call"}:
         raise ValueError("unsupported CI event")
-    members = []
     if base:
         # Treat renames as deletion + addition so both input boundaries apply.
         paths = changed_paths(root, base, head)
         suites, reasons = select(paths)
-        if event_name == "pull_request" and str(event["pull_request"]["head"].get("ref", "")).startswith(TRAIN_BRANCH):
-            members = train_members(root, head, base)
         if event_name == "merge_group":
             suites = set()  # The PR run tested these changes; releases test the rest.
     else:
@@ -813,7 +764,6 @@ def make_plan(root, event_name, event, scope="full", source=None, evidence=None)
                 tree=git(root, "rev-parse", "HEAD^{tree}"), paths=paths, reasons=reasons,
                 suites=sorted(suites), required_jobs=sorted(required), reused=reused, reuse=reuse,
                 local_checks=local_checks.required_checks(paths) if event_name == "pull_request" else [],
-                train_members=members,
                 manual_acceptance="Review still selects relevant native, real-engine, hardware and visual acceptance.")
 
 
@@ -845,12 +795,12 @@ def verify(plan, needs, source):
     for job, result in needs.items():
         if result.get("result") not in {"success", "skipped"}:
             raise ValueError(f"CI job did not complete successfully: {job}")
-    heads = local_checks.planned_heads(plan)
+    required = local_checks.planned_checks(plan)
     try:
         receipts = json.loads(needs.get("process-checks", {}).get("outputs", {}).get("local_receipts", "[]"))
     except (ValueError, TypeError):
         receipts = None  # No receipt: validate_receipts names what is missing.
-    receipts = local_checks.validate_receipts(heads, receipts)
+    receipts = local_checks.validate_receipts(plan["head"], required, receipts)
     return dict(schema=1, kind="ci-required", status="passed", source_sha=plan["head"],
                 source_tree=plan["tree"], event=plan["event"], base=plan["base"],
                 suites=suites, required_jobs=sorted(expected), results={k: v["result"] for k, v in needs.items()},

@@ -97,9 +97,9 @@ describe('engineAccount', () => {
     expect(asked.calls).toEqual([])
   })
 
-  it('counts a saved model API as a sign-in, so a machine with no subscription can take Swarm work', async () => {
+  it('counts a saved model API as a sign-in, so a machine with no subscription can start agents', async () => {
     // Headless run, 2026-11-03: a working OpenRouter key was saved for the team account, and the machine still read
-    // "not signed in", so no Swarm start was admitted.
+    // "not signed in", so no start was admitted.
     const root = home()
     const data = join(root, '.harness', 'cli', 'data', 'api-connections')
     mkdirSync(data, { recursive: true })
@@ -113,7 +113,7 @@ describe('engineAccount', () => {
   })
 
   // The checked read every launch holds the file to decides, loaded only where an API was saved: a file it refuses
-  // would not serve a launch, and a machine that said "signed in" on it was sent Swarm work it could not start.
+  // would not serve a launch, and a machine that said "signed in" on it was sent work it could not start.
   it('counts no saved API the launch could not use: another header, or a file the checked read refuses', async () => {
     const saved = (row: Record<string, unknown>) => {
       const root = home()

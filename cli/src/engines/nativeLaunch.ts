@@ -117,9 +117,9 @@ async function read(executable: string, args: readonly string[], environment: Re
 
 /** Each engine executable's help, by the file's identity (its path, inode, size and times: kit/nativeVersion.ts) and the
  *  PATH it runs under. Its help, and that it runs at all, are facts about the installed file, not one launch: launches that
- *  ask together share one probe, and a held pass of many agents (a restore, a Swarm's agents) never meets the probes' cap,
- *  nor does a relaunch or fork ask twice. Not keyed on the homes: help does not read them, and a Swarm agent's own home
- *  would bring the cap back. Only help the engine printed is kept, for a minute: an engine can break around its unchanged
+ *  ask together share one probe, and a held pass of many agents (a restore) never meets the probes' cap, nor does a
+ *  relaunch or fork ask twice. Not keyed on the homes: help does not read them, and an agent's own home would bring the
+ *  cap back. Only help the engine printed is kept, for a minute: an engine can break around its unchanged
  *  file (its Node uninstalled), and a launch after that is refused with its reason again. No answer or a failure is asked
  *  again. A new install, an upgrade or a finished download is a new identity, asked afresh. */
 const helps = new Map<string, { help: Promise<ProbeOutput | null>; at: number }>()

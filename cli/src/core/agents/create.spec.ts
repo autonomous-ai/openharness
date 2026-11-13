@@ -1,10 +1,9 @@
-import { chmodSync, mkdirSync, mkdtempSync, opendirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, opendirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { installedDsh } from '../../dsh/installed.js'
-import { agentTmpLaunch } from '../../lib/agentTmp.js'
 import { dshPinnedPermissionMode } from '../../dsh/manifest.js'
 import { incompatibleHarnessEngine } from '../../dsh/compatibility.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
@@ -26,15 +25,12 @@ import { installOpencodePlugin } from '../../engines/nativeHooks.js'
 import { missingHookScript } from '../../engines/kit/notifyHooks.js'
 import type { NativeLaunch } from '../../engines/nativeLaunch.js'
 import { projectsRoot } from '../../lib/projectFolder.js'
-import { harnessMadeWorktree } from '../../lib/gitProject.js'
 import { NativeFiles } from '../../engines/kit/nativeFiles.js'
 import { agentLaunchArgs } from '../../lib/agentAttribution.js'
 import { WindowsBatchLaunchRefused } from '../../lib/windows/launch.js'
-import { swarmLaunch, type MachineSession } from '../../superTabs/inCore/launch.js'
 
 // Real native preparation asks the fixture engine for its help: answered in this process (testing/engineHelpInProcess.ts).
 vi.mock('node:child_process', async (real) => (await import('../../testing/engineHelpInProcess.js')).withEngineHelp(await real<typeof import('node:child_process')>()))
-vi.mock('../../lib/gitProject.js', async (real) => ({ ...await real<object>(), harnessMadeWorktree: vi.fn(async () => false) }))
 vi.mock('../../lib/projectFolder.js', async real => {
   const actual = await real<typeof import('../../lib/projectFolder.js')>()
   return { ...actual, projectsRoot: vi.fn(actual.projectsRoot) }
@@ -136,8 +132,6 @@ const request = (over: Record<string, unknown> = {}) => ({
 }) as unknown as Parameters<ReturnType<typeof createAgentCreator>>[0]
 
 const pending = { agentId: 'a1', sessionId: '', engine: 'claude' } as RegisteredSession
-/** The Swarm's part of a launch, on a machine of 16 cores with no session yet. */
-const SWARM_LAUNCH = swarmLaunch(() => [], () => 16)
 const owner = { pid: 7, engine: 'claude' } as SessionOwner
 
 function setup(over: Partial<CreateAgentDeps> = {}) {
@@ -159,7 +153,6 @@ function setup(over: Partial<CreateAgentDeps> = {}) {
     gridSetup: vi.fn(() => vi.fn(async () => ({}))) as never,
     privateGridName: vi.fn(async () => 'grid-me'),
     dshLaunch: { launch: launchDsh, materialize: async () => ({ ok: true, ...await materializeWorkspace() }) },
-    swarmLaunch: SWARM_LAUNCH,
     syncProfileHome: vi.fn(async () => []),
     ...over,
   }
@@ -179,134 +172,7 @@ describe('creating an agent', () => {
   // A launch or an installed harness one test queued and never used answers no other test.
   afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks(); launchDsh.mockReset(); vi.mocked(installedDsh).mockReset() })
 
-  // Swarm v4: no skill file and no skill mode; each Swarm role starts with the team's basics as its launch line.
-  it.each(['claude', 'codex'] as const)('attaches each Swarm role before %s pane dispatch', async engine => {
-    for (const role of ['coordinator', 'agent'] as const) {
-      const cwd = folder()
-      await setup().create(request({ cwd, engine, swarmRole: role }))
-      const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
-      expect(pane.swarmSkill).toEqual({ role, key: pane.sessionLabel })
-      const place = vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2]
-      // The team's basics (Swarm v4, 2026-11-09), and the PM's part for the coordinator alone, byte for byte.
-      expect(place.swarmInstructions).toBe(SWARM_LAUNCH.basics(role === 'coordinator'))
-      expect(place.swarmInstructions?.includes('You are your project\'s PM')).toBe(role === 'coordinator')
-    }
-  })
-
-  // anh Dee, 2026-11-11: Alba never read the rules its person wrote in agents/Alba.md; its launch line carries them now.
-  it('starts a Swarm agent with its own agents/<name>.md after the basics, by the name it is started under', async () => {
-    const cwd = folder()
-    mkdirSync(join(cwd, 'agents'))
-    writeFileSync(join(cwd, 'agents', 'Faye.md'), 'Never push to main.\n')
-    await setup().create(request({ cwd, engine: 'claude', swarmRole: 'agent', name: 'Faye' }))
-    const place = vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2]
-    expect(place.swarmInstructions).toBe(SWARM_LAUNCH.basics(false, { cwd, name: 'Faye' }))
-    expect(place.swarmInstructions).toMatch(/\nYour own instructions, from agents\/Faye\.md, [^\n]*:\nNever push to main\.$/)
-  })
-
-  // Project instructions, phase 4 (decision 1): a Reviewer started by an older client keeps its kind, and a launch an older CLI
-  // saved to finish later (a pending intent) names its role in the wire's values.
-  it('registers a Reviewer as an agent that keeps its Reviewer kind, from this CLI\'s launch or an older one\'s saved intent', async () => {
-    for (const over of [{ swarmRole: 'agent', swarmFallback: 'review' }, { swarmRole: 'review' }]) {
-      await setup().create(request({ cwd: folder(), ...over }))
-      const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
-      expect(pane.swarmSkill).toEqual({ role: 'agent', fallback: 'review', key: pane.sessionLabel })
-      expect(vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2].swarmInstructions).toContain('Never read your own or merge')
-    }
-    // A fallback is an agent's alone.
-    for (const [over, role] of [[{ swarmRole: 'lead' }, 'coordinator'], [{ swarmRole: 'coordinator', swarmFallback: 'review' }, 'coordinator'],
-      [{ swarmRole: 'dev' }, 'agent']] as const) {
-      await setup().create(request({ cwd: folder(), ...over }))
-      const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
-      expect(pane.swarmSkill).toEqual({ role, key: pane.sessionLabel })
-      expect(vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2].swarmInstructions).toContain('Never watch GitHub yourself')
-    }
-    expect(await setup().create(request({ cwd: folder(), swarmRole: 'pm' }))).toMatchObject({ ok: false, error: 'SWARM_SKILL_FAILED' })
-  })
-
-  // Codex's "Update available" screen held a Swarm agent's task with no one at its terminal (Studio Codex, 2026-10-29).
-  it('starts a Swarm Codex without its startup update check, and every other Codex and Swarm engine as it was', async () => {
-    const extraArgsOf = async (over: Record<string, unknown>) => {
-      await setup().create(request({ cwd: folder(), ...over }))
-      return (vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1] as { extraArgs?: string[] }).extraArgs ?? []
-    }
-    for (const role of ['coordinator', 'agent'] as const) expect(await extraArgsOf({ engine: 'codex', swarmRole: role })).toEqual(expect.arrayContaining(['-c', 'check_for_update_on_startup=false']))
-    expect(await extraArgsOf({ engine: 'codex' })).not.toContain('check_for_update_on_startup=false')
-    expect(await extraArgsOf({ engine: 'claude', swarmRole: 'agent' })).not.toContain('check_for_update_on_startup=false')
-  })
-
-  // Swarm v3 (task #4215): Harness writes nothing into a person's own settings for a Swarm agent. It wrote full mode's warning acceptance
-  // into them for every Swarm agent in full mode (2026-10-26); a person who chooses full mode answers Claude Code's own warning.
-  it('writes nothing into the person\'s settings for a Swarm agent, with no mode or in full mode', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'own-settings-')), config = join(home, 'claude'), settings = join(config, 'settings.json')
-    mkdirSync(config); writeFileSync(settings, '{"theme":"dark"}\n')
-    const launch = { current: () => true, environment: { HOME: home, CLAUDE_CONFIG_DIR: config }, prepareHooks: async () => true } as unknown as NativeLaunch
-    try {
-      for (const over of [{}, { permissionMode: 'full', bypassPermission: true }]) {
-        for (const swarmRole of ['coordinator', 'agent']) {
-          expect(await setup({ native: async () => ({ ok: true, launch }) }).create(request({ swarmRole, ...over }))).toMatchObject({ ok: true })
-        }
-      }
-      expect(readFileSync(settings, 'utf8')).toBe('{"theme":"dark"}\n')
-    } finally { rmSync(home, { recursive: true, force: true }) }
-  })
-
-  // Audit M1, and task #4395: an agent's private temporary folder is its TMPDIR and, for Claude Code, is added to its working
-  // directories, so its mode's checks ask nothing for its mktemp files; the launch's own variables win.
-  it('gives the agent its private temporary folder as TMPDIR and as its one added folder, and lets the launch\'s own variables win', async () => {
-    const tmp = { env: { TMPDIR: '/data/agent-tmp/one' }, args: ['--add-dir=/data/agent-tmp/one'] }
-    const extraArgs = () => (vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1] as { extraArgs?: string[] }).extraArgs ?? []
-    vi.mocked(agentTmpLaunch).mockReturnValueOnce({ env: { TMPDIR: '/data/agent-tmp' }, args: [] })
-    expect(await setup().create(request({}))).toMatchObject({ ok: true })
-    expect(agentTmpLaunch).toHaveBeenLastCalledWith('claude', undefined)
-    expect(vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0].env).toMatchObject({ TMPDIR: '/data/agent-tmp' })
-    expect(extraArgs().some(arg => arg.startsWith('--add-dir'))).toBe(false)
-    vi.mocked(agentTmpLaunch).mockReturnValueOnce({ ...tmp, env: { HARNESS_DSH: 'mine', ...tmp.env } })
-    vi.mocked(installedDsh).mockReturnValueOnce(installed() as never).mockReturnValueOnce(installed() as never)
-    expect(await setup().create(request({ dsh: 'blender', swarmRole: 'agent' }))).toMatchObject({ ok: true })
-    expect(agentTmpLaunch).toHaveBeenLastCalledWith('claude', expect.objectContaining({ role: 'agent', key: expect.any(String) }))
-    expect(vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0].env).toMatchObject({ HARNESS_DSH: 'blender', TMPDIR: '/data/agent-tmp/one' })
-    expect(extraArgs().filter(arg => arg.startsWith('--add-dir'))).toEqual(['--add-dir=/data/agent-tmp/one'])
-  })
-
-  // anh Dee, 2026-11-11: "with multiple agents, it's CPU constraint". A Swarm's agent starts with its share of this machine's
-  // cores in its environment, for its tools to size themselves by (docs/research/2026-11-11-agents-share-cpu.md).
-  it('starts a Swarm\'s agent with its share of this machine\'s cores in its environment, and a person\'s own session with none', async () => {
-    const env = () => vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0].env ?? {}
-    /** Each start on a machine of 16 cores where two of the Swarm's sessions and a person's own are already. */
-    const here: MachineSession[] = [{ swarmSkill: { key: 'harness-claude-1' } }, {}, { swarmSkill: { key: 'harness-codex-2' } }]
-    const onThisMachine = () => ({ swarmLaunch: swarmLaunch(() => here, () => 16) })
-    for (const swarmRole of ['coordinator', 'agent']) {
-      expect(await setup(onThisMachine()).create(request({ swarmRole }))).toMatchObject({ ok: true })
-      // This one makes three: 16 cores over three.
-      expect(env()).toMatchObject({ HARNESS_CORES: '5' })
-    }
-    // The launch's own variables are beside it, as before.
-    vi.mocked(installedDsh).mockReturnValueOnce(installed() as never).mockReturnValueOnce(installed() as never)
-    expect(await setup(onThisMachine()).create(request({ dsh: 'blender', swarmRole: 'agent' }))).toMatchObject({ ok: true })
-    expect(env()).toMatchObject({ HARNESS_DSH: 'blender', HARNESS_CORES: '5' })
-    expect(await setup(onThisMachine()).create(request({}))).toMatchObject({ ok: true })
-    expect(env()).not.toHaveProperty('HARNESS_CORES')
-  })
-
-  // On a shared model a Swarm session keeps the grid's web tools.
-  it('builds a Swarm agent\'s grid launch with the grid\'s web MCP, as any session\'s', async () => {
-    const grid = { baseUrl: 'https://grid.example/relay/v1', networkName: 'g', model: 'm', mcpUrl: 'https://grid.example/v1/grid/web-mcp' }
-    vi.mocked(installedDsh).mockReturnValueOnce(installed() as never).mockReturnValueOnce(installed() as never)
-    expect(await setup().create(request({ dsh: 'blender', swarmRole: 'agent', grid }))).toMatchObject({ ok: true })
-    expect(buildGridLaunch.mock.calls.at(-1)![0].override).toMatchObject({ mcpUrl: grid.mcpUrl })
-  })
-
-  it('keeps a selected Store harness when attaching a Swarm skill', async () => {
-    vi.mocked(installedDsh).mockReturnValueOnce(installed() as never).mockReturnValueOnce(installed() as never)
-    expect(await setup().create(request({ dsh: 'blender', swarmRole: 'agent' }))).toMatchObject({ ok: true })
-    expect(vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]).toMatchObject({
-      dsh: 'blender', swarmSkill: { role: 'agent' }, env: expect.objectContaining({ HARNESS_DSH: 'blender' }),
-    })
-    expect(vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1]?.extraArgs).toContain('--dsh')
-  })
-
-  // No owner subscription relay (task #4137): Claude Code and Codex, a Product Manager's Codex home among them, launch on their
+  // No owner subscription relay (task #4137): Claude Code and Codex, a profile's own Codex home among them, launch on their
   // own settings, with nothing of a relay in the pane's environment or on the engine's command line.
   it('launches every engine on its own settings: no relay variables or provider', async () => {
     for (const over of [{ engine: 'claude' }, { engine: 'codex' }, { engine: 'codex', codexHome: '/fixture/pm-home/codex' }]) {
@@ -315,27 +181,6 @@ describe('creating an agent', () => {
       for (const name of ['HARNESS_RELAY_TOKEN', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN']) expect(env).not.toHaveProperty(name)
       expect((vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1]?.extraArgs ?? []).join(' ')).not.toMatch(/harness_owner/)
     }
-  })
-
-  // The Harness GitHub App is gone: a request that still names it launches as any other Swarm session, on this machine's own git and gh.
-  it('launches a session that still asks for the GitHub App on its own git and gh', async () => {
-    expect(await setup().create(request({ cwd: folder(), swarmRole: 'agent', swarmGitHub: true } as never))).toMatchObject({ ok: true })
-    const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
-    expect(pane.swarmSkill).toEqual({ role: 'agent', key: pane.sessionLabel })
-    expect(pane.env).not.toHaveProperty('GIT_CONFIG_PARAMETERS')
-    expect(pane.env).not.toHaveProperty('GH_CONFIG_DIR')
-    expect(vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1]?.clearEnv ?? []).not.toContain('GH_TOKEN')
-  })
-
-  // HARNESS_SWARM=off: the core holds none of the Swarm's launch code, so a start that asks for a Swarm role is
-  // refused before anything is written or launched, and every other start is as it was.
-  it('refuses a Swarm role while the Swarm is off, before opening a pane, and starts everything else as before', async () => {
-    const off = setup({ swarmLaunch: undefined })
-    expect(await off.create(request({ cwd: folder(), swarmRole: 'agent' })))
-      .toEqual({ ok: false, error: 'SWARM_SKILL_FAILED', detail: 'The Swarm is off on this computer (HARNESS_SWARM).' })
-    expect(createAndRegisterPane).not.toHaveBeenCalled()
-    expect(await off.create(request({ cwd: folder() }))).toMatchObject({ ok: true })
-    expect(vi.mocked(createAndRegisterPane).mock.calls[0]![0]).not.toHaveProperty('swarmSkill')
   })
 
   it.each(['local', 'remote', 'nonempty', 'unreadable', 'unreadable before trust', 'revoked', 'revoked before trust', 'changed contents', 'replaced workspace', 'changed after enumeration', 'redirected during enumeration', 'error', 'thrown text', 'no trust contract', 'legacy'] as const)(
@@ -388,39 +233,6 @@ describe('creating an agent', () => {
       expect(preTrustCodexProject, JSON.stringify(vi.mocked(console.warn).mock.calls)).toHaveBeenCalledTimes(expected ? 1 : 0)
       if (expected) expect(preTrustCodexProject).toHaveBeenCalledWith(cwd, mode === 'legacy' ? null : '/fixture/selected')
     })
-
-  // 2026-10-30: a Cmd+S Swarm's PM, in a clone or worktree the desktop made and sent as a plain cwd, sat at Claude Code's
-  // trust question, which no Swarm view shows.
-  // In any mode since task #4215: the trust follows the Swarm's checkout, not full mode.
-  it('trusts a local Claude Swarm agent in any mode in a clone in the projects root or a worktree Harness made', async () => {
-    vi.mocked(projectsRoot).mockReturnValue(root)
-    try {
-      const clone = folder(), plain = folder(['README.md']), worktree = join(folder(), 'worktree')
-      mkdirSync(join(clone, '.git'))
-      mkdirSync(worktree)
-      vi.mocked(harnessMadeWorktree).mockImplementation(async path => path === worktree)
-      const authority = { id: 'fixture', label: 'harness-claude-fixture', current: () => true, hold: () => {} }
-      const prepare = (over: Record<string, unknown>, local = true) =>
-        setup().create.prepare(request({ swarmRole: 'coordinator', ...over }), authority, { local })
-      expect((await prepare({ cwd: clone })).ok).toBe(true)
-      expect(preTrustClaudeProject).toHaveBeenCalledWith(clone)
-      await prepare({ cwd: worktree, permissionMode: 'full', bypassPermission: true })
-      expect(preTrustClaudeProject).toHaveBeenLastCalledWith(worktree)
-      expect(harnessMadeWorktree).toHaveBeenCalledWith(worktree, root)
-      await prepare({ cwd: clone, permissionMode: 'ask' })
-      expect(preTrustClaudeProject).toHaveBeenCalledTimes(3)
-      // Not the person's own folder, not relayed, not outside a Swarm, not for Codex.
-      await prepare({ cwd: plain })
-      await prepare({ cwd: clone }, false)
-      await prepare({ cwd: clone, swarmRole: null, permissionMode: 'full', bypassPermission: true })
-      await prepare({ cwd: clone, engine: 'codex' })
-      expect(preTrustClaudeProject).toHaveBeenCalledTimes(3)
-      expect(preTrustCodexProject).not.toHaveBeenCalled()
-    } finally {
-      vi.mocked(projectsRoot).mockReset()
-      vi.mocked(harnessMadeWorktree).mockReset().mockResolvedValue(false)
-    }
-  })
 
   it.each(['folder inspection', 'tmux capabilities', 'config publication'] as const)('holds a create revoked during %s before launch side effects', async stage => {
     let current = true
@@ -817,13 +629,6 @@ describe('creating an agent', () => {
       expect(pane.argv.join(' ')).not.toContain('--message')
     })
 
-    it('a Swarm launch takes the same path', async () => {
-      const pane = await launchedFor({ engine: 'openclaw', prompt: 'Fix the parser', swarmRole: 'agent' })
-      expect(pane.firstTask).toBe('Fix the parser')
-      expect(pane.argv.join(' ')).not.toContain('Fix the parser')
-      expect(pane.argv.join(' ')).not.toContain('--message')
-    })
-
     it('an engine that takes its first prompt in argv keeps none', async () => {
       const pane = await launchedFor({ engine: 'claude', prompt: 'Fix the parser' })
       expect(pane).not.toHaveProperty('firstTask')
@@ -1064,7 +869,7 @@ describe('creating an agent', () => {
       }
     })
 
-    it('gives a Swarm agent the machine MCP servers, as its owner\'s own session has them', async () => {
+    it('gives an agent the machine MCP servers, as its owner\'s own session has them', async () => {
       const { writeMachineMcp } = await import('../../lib/machineMcp.js')
       const { rmSync } = await import('node:fs')
       const { env } = await import('../../config/env.js')
@@ -1072,7 +877,7 @@ describe('creating an agent', () => {
       try {
         const { create } = setup()
         vi.mocked(buildEngineLaunchArgv).mockClear()
-        expect(await create(request({ cwd: folder(), swarmRole: 'agent' }))).toMatchObject({ ok: true })
+        expect(await create(request({ cwd: folder() }))).toMatchObject({ ok: true })
         expect(JSON.stringify(vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1])).toContain('lamp-mcp')
       } finally { rmSync(join(env.ADAPTER_DATA_DIR, 'mcp-servers.json'), { force: true }) }
     })

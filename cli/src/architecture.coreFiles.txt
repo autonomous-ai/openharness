@@ -1,5 +1,5 @@
 # Every file the daemon core's process loads, one a line and in order: all that src/core/main.ts imports, wherever
-# the file lives, with the Swarm's, the other engines' and the services' doors shut (src/architecture.spec.ts walks it).
+# the file lives, with the other engines' and the services' doors shut (src/architecture.spec.ts walks it).
 # The core stays small. A file joins this list only when every session needs it, in a pull request that says why
 # (cli/AGENTS.md, Protect the core); a file that leaves the core's process leaves the list in the same change.
 backendSocket.ts
@@ -101,7 +101,6 @@ core/monitorLink.ts
 core/orchestratorLink.ts
 core/questions.ts
 core/recapsLink.ts
-core/relays.ts
 core/serviceHost.ts
 core/serviceLinks.ts
 core/sharedMachinesLink.ts
@@ -116,7 +115,6 @@ core/terminalWatch.ts
 core/terminals/browser.ts
 core/terminals/control.ts
 core/terminals/open.ts
-core/terminals/panes.ts
 core/terminals/requests.ts
 core/terminals/sessions.ts
 core/toolWatches.ts
@@ -134,7 +132,6 @@ core/transcripts/turnReplacement.ts
 core/turns/activity.ts
 core/turns/agyBackstop.ts
 core/turns/cancel.ts
-core/turns/ends.ts
 core/turns/funnel.ts
 core/turns/heartbeats.ts
 core/turns/recaps.ts
@@ -285,7 +282,6 @@ harnessd/baseNode.ts
 harnessd/coreLink.ts
 harnessd/protocol.ts
 harnessd/services.ts
-harnessd/swarmSwitch.ts
 hookServer.ts
 lib/activitySummary.ts
 lib/agentAttribution.ts
@@ -321,7 +317,6 @@ lib/computerIdentity.ts
 lib/connectors/vaultOps.ts
 lib/conversationIdentity.ts
 lib/createAgentPane.ts
-lib/creationObservation.ts
 lib/cwdRepair.ts
 lib/daemonCommand.ts
 lib/daemonRecord.ts
@@ -432,7 +427,6 @@ lib/productHealthContract.ts
 lib/productUsageContract.ts
 lib/productUsageSignals.ts
 lib/projectFolder.ts
-lib/promptIdentity.ts
 lib/ptyHost/client.ts
 lib/ptyHost/drain.ts
 lib/ptyHost/instance.ts
@@ -459,7 +453,6 @@ lib/runtimeActivity.ts
 lib/runtimeControl.ts
 lib/runtimeProfileState.ts
 lib/runtimeProfileWire.ts
-lib/savedSkill.ts
 lib/secureState.ts
 lib/sessionCheckpoint.ts
 lib/sessionGitContext.ts

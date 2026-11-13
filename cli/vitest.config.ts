@@ -8,7 +8,7 @@ export default defineConfig({
     globalSetup: ['./src/__fixtures__/vitestRun.ts'],
     setupFiles: ['./vitest.tmpdir.ts', './vitest.setup.ts'],
     include: ['src/**/*.test.ts', 'src/**/*.spec.ts'],
-    // Half the cores the run may use: the machine's, or its Swarm agent's share of them (src/testing/suiteWorkers.ts).
+    // Half the machine's cores (src/testing/suiteWorkers.ts).
     maxWorkers: suiteWorkers(),
     // Many cases do real I/O: git, child processes, and disk flushes, each a full drive flush on macOS (F_FULLFSYNC).
     // On a loaded developer Mac they run about 10 times as long as alone: a full run at load 8-10 sent cases of

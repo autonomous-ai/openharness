@@ -1,7 +1,7 @@
 /**
  * The git implementation of `ScmProject`: a thin wrapper over the modules that already do the work.
- * It delegates rather than moves them — `gitProject.ts`, `agentProject.ts`, `branchNaming.ts` and
- * `worktreeSweep.ts` keep their exports, their specs and their call shapes — so the seam's arrival is
+ * It delegates rather than moves them — `gitProject.ts`, `agentProject.ts` and `branchNaming.ts` keep their exports,
+ * their specs and their call shapes — so the seam's arrival is
  * invisible to a git project. The only thing this file adds to a frame is `kind: 'git'`.
  *
  * What is deliberately NOT here: any git knowledge of its own. The `refs/…` regex, the `.git` file
@@ -28,7 +28,6 @@ export class GitScmProject implements ScmProject {
   async prepareIsolated(source: string, options: PrepareOptions): Promise<{ cwd: string; launchRecord: ScmLaunchRecord }> {
     const cwd = await prepareGitProject(source, {
       root: options.root, worktree: true, ref: options.base,
-      ...(options.fromDefaultBranch ? { fromDefaultBranch: true } : {}),
       ...(options.name !== undefined ? {
         branchName: options.name, existingBranch: options.existing === true, placeholder: options.placeholder === true,
       } : {}),

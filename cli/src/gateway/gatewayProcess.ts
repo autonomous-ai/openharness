@@ -225,7 +225,6 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
     // The core's ask, for itself and for the services that ask it (core/accountQueries.ts): the core calls no other host.
     [GATEWAY_CALLS.accessToken]: (p: Payload) => tokenAnswer(() => tokens.accessToken(tokenOptionsOf(p))),
     [GATEWAY_CALLS.backend]: async (p: Payload) => ({ ...await ops().backend(text(p.method), text(p.path), p.body) }),
-    [GATEWAY_CALLS.backendUpload]: async (p: Payload) => ({ ...await ops().backendUpload({ file: text(p.file), path: text(p.path), contentType: text(p.contentType) }) }),
     [GATEWAY_CALLS.machines]: async (p: Payload) => ({ ...await ops().machines(p.fallback === true) }),
     [GATEWAY_CALLS.mintGridName]: async () => ({ name: await ops().mintGridName() }),
     [GATEWAY_CALLS.status]: async () => ({ ...await ops().status() }),

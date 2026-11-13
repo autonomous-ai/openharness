@@ -4,7 +4,7 @@ import type { RegisteredSession } from '../../lib/registry.js'
 import { createResumeAgentService } from '../../lib/resumeAgentService.js'
 import { AgentStopError, createStopAgentService } from '../../lib/stopAgentService.js'
 import { createRetainExitedSession } from '../../lib/retainExitedSession.js'
-import { createAgentBrowserLifecycle, createAgentLifecycle, createPurgeRequest, createStopRequest, LeadProtectedError, TOLD_NOT_ERASED, type LifecycleDeps } from './lifecycle.js'
+import { createAgentBrowserLifecycle, createAgentLifecycle, createPurgeRequest, createStopRequest, TOLD_NOT_ERASED, type LifecycleDeps } from './lifecycle.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 import { moveHeldLine } from '../../lib/hostMove/moveAgent.js'
@@ -108,36 +108,15 @@ describe('stopping, purging and resuming an agent', () => {
     await expect(setup().lifecycle.stopAgent('a1')).resolves.toBeUndefined()
   })
 
-  // The owner, 2026-10-23: the Lead of an active project is never stopped, in any case. Every stop goes through here (a
-  // window's close and Stop Harness, `harness close`, a purge, the cleanup), so one guard refuses them all.
-  it('refuses to stop a Swarm Lead, by agent or session id, and stops nothing', async () => {
-    const stopped = vi.fn(), leadProtected = vi.fn((agentId: string) => agentId === 'a1')
-    const { lifecycle } = setup({ stopped, leadProtected })
+  // anh Dee, 2026-11-13: an experiment never touches the core. The core refused to stop some agents for a component until
+  // then; now every stop is a stop, whoever the agent is to a component.
+  it('stops every agent asked, by agent or session id, with nothing to ask first', async () => {
+    const stopped = vi.fn()
+    const { lifecycle } = setup({ stopped })
     const stop = vi.mocked(createStopAgentService).mock.results[0].value as ReturnType<typeof vi.fn>
-    for (const target of ['a1', 's1']) {
-      const refusal = await lifecycle.stopAgent(target).catch((error: unknown) => error)
-      expect(refusal).toBeInstanceOf(LeadProtectedError)
-      expect(refusal).toMatchObject({ code: 'LEAD_PROTECTED', message: expect.stringContaining('Delete its project first') })
-    }
-    expect(stop).not.toHaveBeenCalled()
-    expect(stopped).not.toHaveBeenCalled()
-    await lifecycle.stopAgent('gone')
-    expect(stop).toHaveBeenCalledWith('gone', undefined)
-  })
-
-  // Security review 1 of #2493: only the stop a Product Manager's switch makes carries that switch to the guard; every other
-  // stop asks without one (superTabs/leadSwitch.ts decides).
-  it('asks the Lead guard with the switch a stop carries, and without one for any other stop', async () => {
-    const CHANGE = 'a'.repeat(32)
-    const leadProtected = vi.fn((agentId: string, leadSwitch?: string) => agentId === 'a1' && leadSwitch !== CHANGE)
-    const { lifecycle } = setup({ leadProtected })
-    const stop = vi.mocked(createStopAgentService).mock.results[0].value as ReturnType<typeof vi.fn>
-    await expect(lifecycle.stopAgent('a1')).rejects.toBeInstanceOf(LeadProtectedError)
-    await expect(lifecycle.stopAgent('a1', { leadSwitch: 'b'.repeat(32) })).rejects.toBeInstanceOf(LeadProtectedError)
-    expect(stop).not.toHaveBeenCalled()
-    await lifecycle.stopAgent('a1', { leadSwitch: CHANGE })
-    expect(stop).toHaveBeenCalledWith('a1', { leadSwitch: CHANGE })
-    expect(leadProtected.mock.calls.map(call => call[1])).toEqual([undefined, 'b'.repeat(32), CHANGE])
+    for (const target of ['a1', 's1']) await lifecycle.stopAgent(target)
+    expect(stop.mock.calls).toEqual([['a1', undefined], ['s1', undefined]])
+    expect(stopped.mock.calls).toEqual([['a1'], ['a1']])
   })
 
   describe('purge', () => {
@@ -149,15 +128,6 @@ describe('stopping, purging and resuming an agent', () => {
       expect(purge.stopped).toBe(deps.stoppedAgents)
       expect(purge.checkpoints).toBe(deps.sessionCheckpoints)
       expect(purge.stop).toBe(lifecycle.stopAgent)
-      expect(purge.leadProtected).toBeUndefined()
-    })
-
-    // Security review 2 of #2493: a Product Manager's saved conversation is never deleted; the purge asks the same guard.
-    it('hands the purge the Lead guard, asked without a switch', () => {
-      const leadProtected = vi.fn((agentId: string) => agentId === 'a1')
-      const { purge } = setup({ leadProtected })
-      expect([purge.leadProtected?.('a1'), purge.leadProtected?.('a2')]).toEqual([true, false])
-      expect(leadProtected.mock.calls).toEqual([['a1'], ['a2']])
     })
 
     it('asks the pane, through the core, whether an agent waits at its folder-trust question', () => {
@@ -620,11 +590,6 @@ describe('agent_delete', () => {
     expect(unconfirmed).toStrictEqual({ error: 'STOP_UNCONFIRMED', detail: 'The process could not be verified.' })
     expect(Object.keys(unconfirmed)).toEqual(['error', 'detail'])
     await expect(request(async () => { throw new Error('tmux gone') })({ agentId: 'a1' })).rejects.toThrow('tmux gone')
-  })
-
-  it('says why a Swarm Lead is not stopped', async () => {
-    const refused = await request(async () => { throw new LeadProtectedError() })({ agentId: 'a1' })
-    expect(refused).toStrictEqual({ error: 'LEAD_PROTECTED', detail: new LeadProtectedError().message })
   })
 
   it('returns an unavailable native identity as a retryable hold and permits the same Stop after recovery', async () => {

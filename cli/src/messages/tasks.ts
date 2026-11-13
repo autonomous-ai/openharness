@@ -14,7 +14,7 @@ import { validPullRequestUrl } from '../lib/sessionWorkWire.js'
 import { MessageError } from './model.js'
 import { cleanText } from './tabDelivery.js'
 
-export interface TaskRow {
+interface TaskRow {
   repo: string; issue: number; title: string; url: string; state: 'open' | 'closed'
   assignee: { account: string; harness: string } | null
   /** `mergedAt`: when the pull request was merged, as `gh pr view` says (ISO), else empty — the window keeps a merged task

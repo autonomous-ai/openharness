@@ -52,52 +52,6 @@ describe('cancelling a turn', () => {
     expect(unknown.deps.clients.send).not.toHaveBeenCalled()
   })
 
-  // The Swarm's host answers a person when the agent's turn ends (core/turns/ends.ts). A cancel emits no turn_ended, but the turn is
-  // over: told as an interrupted end, so a message whose turn it was is not owed an answer that will never come, and cannot take the
-  // answer of the same words sent again.
-  it('tells whoever answers a person at a turn\'s end that the turn was interrupted, and the windows nothing more of it', async () => {
-    const ends = { ended: vi.fn() }
-    const { deps, cancelAgent } = setup({ ends })
-    await cancelAgent('a1')
-    expect(ends.ended.mock.calls).toEqual([[{ agentId: 'a1', sessionId: 's1', aborted: true }]])
-    expect(deps.clients.send).toHaveBeenCalledTimes(1)
-    expect(deps.clients.send).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'turn_ended' }))
-    // Told once the agent is stopped as ever, so that nothing it does can hold the stop back.
-    const ordered = setup({ ends: { ended: vi.fn(() => { throw new Error('link down') }) } })
-    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
-    expect(await ordered.cancelAgent('a1')).toBe(true)
-    expect(ordered.deps.input.cancel).toHaveBeenCalledWith('a1')
-    expect(ordered.deps.clients.send).toHaveBeenCalledTimes(1)
-    expect(error).toHaveBeenCalledWith('[cancel] the end of the turn of a1 was not told · link down')
-    error.mockRestore()
-  })
-
-  it('tells the end once the interrupt was sent, and not when it could not be: the turn goes on', async () => {
-    const ends = { ended: vi.fn() }
-    const { deps, cancelAgent } = setup({ ends })
-    vi.mocked(deps.input.cancelConfirmed).mockResolvedValueOnce(false)
-    expect(await cancelAgent('a1', true)).toBe(false)
-    expect(ends.ended).not.toHaveBeenCalled()
-    expect(await cancelAgent('a1', true)).toBe(true)
-    expect(ends.ended.mock.calls).toEqual([[{ agentId: 'a1', sessionId: 's1', aborted: true }]])
-  })
-
-  it('leaves a stop that failed to its caller, and tells no end of it', async () => {
-    const ends = { ended: vi.fn() }
-    const { deps, cancelAgent } = setup({ ends })
-    vi.mocked(deps.input.cancelConfirmed).mockRejectedValueOnce(new Error('pane gone'))
-    await expect(cancelAgent('a1', true)).rejects.toThrow('pane gone')
-    expect(ends.ended).not.toHaveBeenCalled()
-  })
-
-  it('says so, by what it was, when the end it could not tell was not an error', async () => {
-    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const { cancelAgent } = setup({ ends: { ended: vi.fn(() => { throw 'not an error' }) } })
-    expect(await cancelAgent('a1')).toBe(true)
-    expect(error).toHaveBeenCalledWith('[cancel] the end of the turn of a1 was not told · not an error')
-    error.mockRestore()
-  })
-
   it('waits for input to confirm a cancel a stop depends on, and answers with what it said', async () => {
     const { deps, cancelAgent } = setup()
     vi.mocked(deps.input.cancelConfirmed).mockResolvedValueOnce(false)

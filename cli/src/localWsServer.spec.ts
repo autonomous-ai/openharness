@@ -802,7 +802,9 @@ describe('local CLI WebSocket', () => {
     expect(tabs).toHaveBeenLastCalledWith(backend.connId, null)
   })
 
-  it('keeps a Swarm tab\'s superTabId and projectId when they are ids, and the fromDevice mark; drops them otherwise', async () => {
+  // The Swarm was deleted on 2026-11-14. A window from before still names each tab's Super Tab, project, open conversation
+  // and thread, and marks a desk a device chose: none of it reaches the dial.
+  it('app_swarms keeps a tab\'s id, name, agents and panes, and drops what an older window says of the Swarm', async () => {
     const backend = new FakeBackend()
     const seen: unknown[] = []
     server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
@@ -813,78 +815,11 @@ describe('local CLI WebSocket', () => {
     const connected = onceMessage(ws)
     ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
     await connected
-    ws.send(JSON.stringify({ type: 'app_swarms', payload: {
-      active: 's1', fromDevice: true,
-      swarms: [
-        { id: 's1', name: 'Swarm', agentIds: [], panes: 1, superTabId: 'st_1', projectId: 'p-1' },
-        { id: 's2', name: 'Bad', agentIds: [], panes: 1, superTabId: 'no spaces', projectId: 7 },
-        { id: 's3', name: 'Long', agentIds: [], panes: 1, superTabId: 'x'.repeat(48), projectId: 'y'.repeat(48) },
-      ],
-    } }))
-    ws.send(JSON.stringify({ type: 'app_swarms', payload: { active: 's1', fromDevice: 'yes', swarms: [{ id: 's1', name: 'Swarm', agentIds: [], panes: 0, superTabId: 'st_1' }] } }))
-    await vi.waitFor(() => expect(seen).toHaveLength(2))
-    expect(seen).toEqual([
-      { active: 's1', fromDevice: true, tiles: [], swarms: [
-        { id: 's1', name: 'Swarm', agentIds: [], panes: 1, superTabId: 'st_1', projectId: 'p-1' },
-        { id: 's2', name: 'Bad', agentIds: [], panes: 1 },
-        { id: 's3', name: 'Long', agentIds: [], panes: 1 },
-      ] },
-      // Only a literal true marks it: anything else is an ordinary announce.
-      { active: 's1', tiles: [], swarms: [{ id: 's1', name: 'Swarm', agentIds: [], panes: 0, superTabId: 'st_1' }] },
-    ])
-    ws.close()
-  })
-
-  it('app_swarms keeps the open thread\'s root beside its conversation, and drops one that is not an id', async () => {
-    const backend = new FakeBackend()
-    const seen: unknown[] = []
-    server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
-    local = attachLocalWsServer(server, { machineId, backend, onAppSwarms: (swarms) => seen.push(swarms) })
-    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve))
-    const ws = new WebSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`)
-    await onceOpen(ws)
-    const connected = onceMessage(ws)
-    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
-    await connected
-    ws.send(JSON.stringify({ type: 'app_swarms', payload: { active: 's1', swarms: [
-      { id: 's1', name: 'Swarm', agentIds: [], panes: 1, superTabId: 'st_1', conversationId: 'pm-1', threadRoot: 'm-1' },
-      { id: 's2', name: 'Bad', agentIds: [], panes: 1, superTabId: 'st_1', conversationId: 'pm-1', threadRoot: 'no spaces' },
-      { id: 's3', name: 'Alone', agentIds: [], panes: 1, superTabId: 'st_1', threadRoot: 'm-1' },
+    ws.send(JSON.stringify({ type: 'app_swarms', payload: { active: 's1', fromDevice: true, swarms: [
+      { id: 's1', name: 'Team', agentIds: ['a1'], panes: 1, superTabId: 'st_1', projectId: 'p-1', conversationId: 'pm-1', threadRoot: 'm-1' },
     ] } }))
     await vi.waitFor(() => expect(seen).toHaveLength(1))
-    expect(seen[0]).toEqual({ active: 's1', tiles: [], swarms: [
-      { id: 's1', name: 'Swarm', agentIds: [], panes: 1, superTabId: 'st_1', conversationId: 'pm-1', threadRoot: 'm-1' },
-      { id: 's2', name: 'Bad', agentIds: [], panes: 1, superTabId: 'st_1', conversationId: 'pm-1' },
-      // A thread is of a conversation: with none named, there is none.
-      { id: 's3', name: 'Alone', agentIds: [], panes: 1, superTabId: 'st_1' },
-    ] })
-    ws.close()
-  })
-
-  it('app_swarms keeps a Swarm tab\'s conversationId, and drops one that is not an id', async () => {
-    const backend = new FakeBackend()
-    const seen: unknown[] = []
-    server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
-    local = attachLocalWsServer(server, { machineId, backend, onAppSwarms: (swarms) => seen.push(swarms) })
-    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve))
-    const ws = new WebSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`)
-    await onceOpen(ws)
-    const connected = onceMessage(ws)
-    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
-    await connected
-    ws.send(JSON.stringify({ type: 'app_swarms', payload: { active: 's1', swarms: [
-      { id: 's1', name: 'Swarm', agentIds: [], panes: 1, superTabId: 'st_1', projectId: 'p-1', conversationId: 'pm-1' },
-      { id: 's2', name: 'Bad', agentIds: [], panes: 1, superTabId: 'st_1', conversationId: 'no spaces' },
-      { id: 's3', name: 'Long', agentIds: [], panes: 1, superTabId: 'st_1', conversationId: 'c'.repeat(48) },
-      { id: 's4', name: 'Number', agentIds: [], panes: 1, superTabId: 'st_1', conversationId: 7 },
-    ] } }))
-    await vi.waitFor(() => expect(seen).toHaveLength(1))
-    expect(seen[0]).toEqual({ active: 's1', tiles: [], swarms: [
-      { id: 's1', name: 'Swarm', agentIds: [], panes: 1, superTabId: 'st_1', projectId: 'p-1', conversationId: 'pm-1' },
-      { id: 's2', name: 'Bad', agentIds: [], panes: 1, superTabId: 'st_1' },
-      { id: 's3', name: 'Long', agentIds: [], panes: 1, superTabId: 'st_1' },
-      { id: 's4', name: 'Number', agentIds: [], panes: 1, superTabId: 'st_1' },
-    ] })
+    expect(seen[0]).toEqual({ active: 's1', tiles: [], swarms: [{ id: 's1', name: 'Team', agentIds: ['a1'], panes: 1 }] })
     ws.close()
   })
 

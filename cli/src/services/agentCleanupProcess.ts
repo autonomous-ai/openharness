@@ -9,7 +9,6 @@
 import type { CoreApi, DaemonAddress } from '../core/api.js'
 import type { AgentCloseResult } from '../lib/closeAgentService.js'
 import type { RegisteredSession } from '../lib/registry.js'
-import type { SwarmServices } from '../serviceProcess.js'
 import { createAgentCleanup } from './agentCleanup.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
 import { agentsIn, daemonIn, processCoreApi } from './processCoreApi.js'
@@ -23,8 +22,6 @@ export interface AgentCleanupServiceOptions {
   run?: typeof runServiceProcess
   /** Swapped in tests. */
   create?: typeof createAgentCleanup
-  /** The Swarm's side of this service, while the Swarm is on (serviceProcess.ts, superTabs/inServices.ts). */
-  swarm?: Pick<SwarmServices, 'retainedHarnesses' | 'recordCleanupClose'>
 }
 
 /** The core API the cleanup runs on here: the light services' (processCoreApi.ts), with the two ways it acts. */
@@ -59,7 +56,6 @@ export function runAgentCleanupService(options: AgentCleanupServiceOptions): Ser
       agents = agentsIn(await ask('live', {}).catch(() => null)) ?? []
       daemon ??= daemonIn(await ask('daemon', {}).catch(() => null))
     },
-    ...(options.swarm ? { retained: options.swarm.retainedHarnesses, closed: options.swarm.recordCleanupClose } : {}),
   })
   const service = (options.run ?? runServiceProcess)({
     name: 'agentCleanup',

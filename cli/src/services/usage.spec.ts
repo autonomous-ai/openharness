@@ -11,7 +11,6 @@ import { linkCodexProfile } from '../lib/codexProfiles.js'
 import { usageTarget } from '../lib/agentUsageWire.js'
 import { accountKey, claudeReportPath } from '../lib/quotaReports.js'
 import type { CodexRateLimits } from '../lib/codexRateLimits.js'
-import { quotaOf, quotaUnknownReason } from '../superTabs/capacity.js'
 import { env } from '../config/env.js'
 
 // The person's login shell, as the daemon reads it (lib/loginShellEnv.ts): never a real shell here.
@@ -61,7 +60,7 @@ describe('the usage service', () => {
     expect(Object.keys(startUsage(fakeCore())).sort()).toEqual([...USAGE_REQUESTS].sort())
   })
 
-  it('usage_read: Claude from its status-line report and Codex from its app-server, in the shape Desktop and the router read', async () => {
+  it('usage_read: Claude from its status-line report and Codex from its app-server, in the shape Desktop reads', async () => {
     report({ five_hour: { used_percentage: 23.5, resets_at: s('2026-11-07T04:00:00Z') }, seven_day: { used_percentage: 41, resets_at: null } })
     const { requests, deps } = usage()
     const reply = await requests.usage_read!({}, ASKER) as Record<string, unknown>
@@ -76,11 +75,6 @@ describe('the usage service', () => {
     ] })
     // The default accounts: the CODEX_HOME a session launches with, none moved.
     expect(deps.codex).toHaveBeenCalledWith({ codexHome: env.CODEX_HOME })
-    // The router reads both, by the windows' own lengths.
-    expect(quotaOf(reply, 'claude', false)).toMatchObject({ known: true, windows: [
-      { name: '5-hour', usedPercent: 23.5, resetsAt: '2026-11-07T04:00:00.000Z' }, { name: 'weekly', usedPercent: 41, resetsAt: null }] })
-    expect(quotaOf(reply, 'codex', false)).toMatchObject({ known: true, account: accountKey('codex', 'acct-codex'), windows: [
-      { name: '5-hour', usedPercent: 42 }, { name: 'weekly', usedPercent: 7 }] })
   })
 
   it('usage_read: the default accounts are the folders a session launches with, and a window Codex leaves out is left out', async () => {
@@ -115,11 +109,9 @@ describe('the usage service', () => {
     const reply = await usage().requests.usage_read!({}, ASKER) as { providers: Array<Record<string, unknown>> }
     expect(reply.providers[0]).toMatchObject({ outcome: 'answered', body: { seven_day: { utilization: 60, resets_at: '2026-11-10T00:00:00.000Z' } } })
     expect(reply.providers[0]!.body).not.toHaveProperty('five_hour')
-    expect(quotaOf(reply, 'claude', false).windows).toEqual([{ name: 'weekly', usedPercent: 60, resetsAt: '2026-11-10T00:00:00.000Z' }])
     report({ five_hour: { used_percentage: 98, resets_at: s('2026-11-07T00:30:00Z') } })
     const passed = await usage().requests.usage_read!({}, ASKER) as Record<string, unknown>
     expect((passed.providers as unknown[])[0]).toEqual({ provider: 'claude', account: null, outcome: 'unreachable', source: 'cli', message: RESET_SINCE })
-    expect(quotaOf(passed, 'claude', false).known).toBe(false)
   })
 
   it('usage_read: a report more than an hour old is unknown, with why, however its windows read (task #4217)', async () => {
@@ -129,13 +121,11 @@ describe('the usage service', () => {
     report(windows, undefined, NOW - 3_600_001)
     const stale = await usage().requests.usage_read!({}, ASKER) as Record<string, unknown>
     expect((stale.providers as unknown[])[0]).toEqual({ provider: 'claude', account: null, outcome: 'unreachable', source: 'cli', message: STALE_REPORT })
-    expect(quotaUnknownReason(stale, 'claude')).toBe(STALE_REPORT)
   })
 
   it('usage_read: no report yet is unreachable, with the reason the route shows', async () => {
     const reply = await usage().requests.usage_read!({}, ASKER) as Record<string, unknown>
     expect((reply.providers as unknown[])[0]).toEqual({ provider: 'claude', account: null, outcome: 'unreachable', source: 'cli', message: NO_REPORT })
-    expect(quotaUnknownReason(reply, 'claude')).toBe(NO_REPORT)
   })
 
   it('usage_read: Codex signed out, not installed, or not answering, each said', async () => {
