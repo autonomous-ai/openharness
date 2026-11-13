@@ -510,8 +510,9 @@ const OBSERVED_EVENTS = new Map([
   ['SessionEnd', 'session-end'], ['sessionEnd', 'session-end'],
 ])
 
-/** Claude Code's Notification types that wait for the person's answer: a permission, or an MCP server's question. */
-const NEEDS_INPUT = ['permission_prompt', 'elicitation_dialog']
+/** Claude Code's Notification types that wait for the person's answer: a permission, an MCP server's question or
+ *  link, or a resume after the quota ran out. */
+const NEEDS_INPUT = ['permission_prompt', 'elicitation_dialog', 'elicitation_url_dialog', 'quota_auto_resume_stale']
 
 /** A paneless hook's event in the devices' words (core/observedHook.ts); null for one that says none of them. */
 function observedEvent(engine, event, input) {
@@ -528,8 +529,8 @@ function observedEvent(engine, event, input) {
   // Grok writes its Stop before the turn's last words (its branch in main()).
   if (engine === 'grok' && name === 'Stop') return null
   // Claude Code also says idle_prompt a minute after a finished turn, and auth_success: no answer is waited for, and a
-  // done agent stays done. One too old to name the type is taken at its word.
-  if (name === 'Notification') return !input.notification_type || NEEDS_INPUT.includes(input.notification_type) ? 'needs-input' : null
+  // done agent stays done. One too old to name its type sends that idle notice untyped too, so it says nothing.
+  if (name === 'Notification') return NEEDS_INPUT.includes(input.notification_type) ? 'needs-input' : null
   return OBSERVED_EVENTS.get(name) ?? null
 }
 
