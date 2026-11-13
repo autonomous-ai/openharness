@@ -72,9 +72,11 @@ CLI_SHARED = ("cli/package.json", "cli/package-lock.json", "cli/vitest.config.ts
 # The most pull requests Harness's train carries (cli/src/superTabs/githubTrain.ts TRAIN_MAX).
 TRAIN_MAX = 20
 FENCE = re.compile(r"^```harness-local-checks\s*\n(.*?)^```[ \t]*$", re.MULTILINE | re.DOTALL)
-# --run gives each check an hour. Vitest prints its coverage table after its summary (about 30 KB for test:core),
-# so the tail kept for the count is far longer than that report.
+# --run gives each check an hour, and a check it stops STOP_SECONDS to end after its Ctrl+C before it is killed.
+# Vitest prints its coverage table after its summary (about 30 KB for test:core), so the tail kept for the count is
+# far longer than that report.
 RUN_SECONDS = 3600
+STOP_SECONDS = 10
 TAIL_BYTES = 1 << 20
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -228,23 +230,27 @@ def attempt(command, cwd, err):
                                stderr=subprocess.STDOUT, **group)
     expired = threading.Event()
 
-    def kill():
-        # The whole group: a child the shell started holds the pipe, and reading waits for every holder.
-        if os.name == "nt":
-            try:
+    def stop():
+        # The whole group: a child the shell started holds the pipe, and reading waits for every holder. Ctrl+C first,
+        # as a terminal would send it, so the check stops what it started in a session of its own (test-desktop.py's
+        # Flutter run); then a kill for whatever is left. Windows has no Ctrl+C for another group: the tree goes at once.
+        try:
+            if os.name == "nt":
                 subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)], stdin=subprocess.DEVNULL,
                                capture_output=True, timeout=60)
-            except (OSError, subprocess.TimeoutExpired):
-                pass
-        else:
-            try:
+            else:
+                os.killpg(process.pid, signal.SIGINT)
+                try:
+                    process.wait(STOP_SECONDS)
+                except subprocess.TimeoutExpired:
+                    pass
                 os.killpg(process.pid, signal.SIGKILL)
-            except OSError:  # every member left already; macOS refuses a group that is only the unreaped shell
-                pass
+        except (OSError, subprocess.TimeoutExpired):
+            pass  # every member left already: macOS refuses a group that is only the unreaped shell
 
     def expire():
         expired.set()
-        kill()
+        stop()
 
     timer = threading.Timer(RUN_SECONDS, expire)
     timer.start()
@@ -261,11 +267,11 @@ def attempt(command, cwd, err):
             # reach the check's group, so it is stopped here, and so is the timer, which Python would wait out first.
             timer.cancel()
             timer.join()
-            kill()
+            stop()
             process.wait()
             raise
     timer.cancel()
-    timer.join()  # a kill under way ends before the shell is reaped, so its pid is never another process's
+    timer.join()  # a stop under way ends before the shell is reaped here
     code = process.wait()
     return None if expired.is_set() else code, tail.decode(errors="replace")
 
