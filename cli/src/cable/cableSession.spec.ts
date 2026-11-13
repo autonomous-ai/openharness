@@ -5938,6 +5938,15 @@ describe('the machine list with no window', () => {
     } finally { await session.stop() }
   })
 
+  it('an agent the dial may do nothing with is sent caps \'\', which an absent field would read as everything', async () => {
+    const { session, port } = await greeted(() => machine([{ ...MACHINE[0], caps: '' }]))
+    try {
+      expect(port.sent.filter((m) => m.t === 'agent')).toEqual([
+        { t: 'agent', id: 'o1', name: 'scratch', engine: 'claude', model: '', effort: '', machineId: 'mac-local', machine: 'MacBook Pro', host: 'ghostty', caps: '' },
+      ])
+    } finally { await session.stop() }
+  })
+
   it('no window and no registry: sends [] as today', async () => {
     const { session, port } = await greeted(() => ({ agents: [], tab: '', total: 2 }))
     try {
