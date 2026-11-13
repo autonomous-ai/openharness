@@ -824,9 +824,14 @@ export function selectEngineProcess(
     children.set(row.parentPid, list)
   }
   const queue: Array<{ pid: number; depth: number }> = [{ pid: rootPid, depth: 0 }]
+  const seen = new Set<number>()
   let best: { row: ProcessRow; depth: number; score: number } | null = null
   while (queue.length > 0) {
     const current = queue.shift()!
+    // Windows never re-parents a process and reuses pids, so a root's parent pid can name one of its own
+    // descendants: without this the walk circles forever (#4268).
+    if (seen.has(current.pid)) continue
+    seen.add(current.pid)
     const row = byPid.get(current.pid)
     const score = row ? engineProcessMatchScore(row, engine, ownership) : 0
     if (row && score > 0 && (!best || current.depth < best.depth || (current.depth === best.depth && score > best.score))) {
