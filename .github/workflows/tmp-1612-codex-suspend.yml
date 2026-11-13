@@ -1,0 +1,57 @@
+name: tmp 1612 codex suspend
+
+# TEMPORARY, for #1612 only: removed before the pull request opens. Runs cli/e2e/suspend.e2e.ts alone on
+# the image the CLI end-to-end shards run on (their ubuntu-latest is ubuntu-26.04: bash 5.3, tmux 3.6),
+# set up as cli-e2e.yml's e2e job sets a runner up. That workflow's Run workflow has no single-file
+# input and holds nine runners; this holds one for a few minutes.
+on:
+  push:
+    branches: [fix/1612-codex-suspend]
+
+permissions:
+  contents: read
+
+# cli-e2e.yml's pin.
+env:
+  CLI_NODE_VERSION: 24.22.2
+
+jobs:
+  suspend:
+    name: suspend.e2e.ts (ubuntu-26.04)
+    # Pinned, not ubuntu-latest: the evidence is for bash 5.3, whatever latest comes to mean.
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: cli
+    env:
+      # As the shards: tmux and procps need a UTF-8 locale, and the daemons launch engines through zsh.
+      LANG: C.UTF-8
+      SHELL: /bin/zsh
+    steps:
+      - uses: actions/checkout@v7
+      # Without setup-node's npm cache, whose save would write outside this run.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.CLI_NODE_VERSION }}
+      # cli-e2e.yml's step, whose comments say why each line is there.
+      - name: Install tmux, the shells the tests launch through, and lsof
+        run: |
+          sudo bash ../scripts/apt-install.sh tmux zsh tcsh dash lsof
+          sudo sysctl -w fs.inotify.max_user_instances=1024 fs.inotify.max_user_watches=524288
+          tmux -V && zsh --version && tcsh --version && command -v dash
+          insecure=$(zsh -fc 'autoload -U compaudit && compaudit' 2>/dev/null | grep '^/' | sort -u || true)
+          if [ -n "$insecure" ]; then
+            echo "$insecure" | xargs sudo chown root:root
+            echo "$insecure" | xargs sudo chmod g-w,o-w
+          fi
+          zsh -fc 'autoload -U compaudit && compaudit'
+      - name: The bash and tmux under test
+        run: |
+          { /bin/bash --version | head -n 1; tmux -V; } | tee -a "$GITHUB_STEP_SUMMARY"
+      - run: npm ci --no-audit --no-fund
+      # The real backend's step is left out: this file never starts it.
+      - name: Run suspend.e2e.ts
+        env:
+          E2E_BUNDLE: '1'
+        run: npx vitest run --config vitest.e2e.ci.config.ts e2e/suspend.e2e.ts --reporter=verbose
