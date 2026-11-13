@@ -1,0 +1,57 @@
+name: tmp 4259 wrapper exec
+
+# TEMPORARY: lives only on this feature branch and is removed before the pull request.
+# One end-to-end scenario on a real Linux process table (#4259): an agent launched through a wrapper that execs
+# into another name. CLI end to end has no input to run one file.
+on:
+  push:
+    branches: ['fix/4259-wrapper-exec']
+
+concurrency:
+  group: tmp-4259-wrapper-exec
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  wrapper-exec:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: cli
+    env:
+      LANG: C.UTF-8
+      SHELL: /bin/zsh
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.22.2
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - name: Install tmux, the shells the tests launch through, and lsof
+        run: |
+          sudo bash ../scripts/apt-install.sh tmux zsh tcsh dash lsof
+          sudo sysctl -w fs.inotify.max_user_instances=1024 fs.inotify.max_user_watches=524288
+          insecure=$(zsh -fc 'autoload -U compaudit && compaudit' 2>/dev/null | grep '^/' | sort -u || true)
+          if [ -n "$insecure" ]; then
+            echo "$insecure" | xargs sudo chown root:root
+            echo "$insecure" | xargs sudo chmod g-w,o-w
+          fi
+          zsh -fc 'autoload -U compaudit && compaudit'
+      - run: npm ci --no-audit --no-fund
+      - name: The wrapper exec scenario
+        env:
+          E2E_BUNDLE: '1'
+          E2E_ARTIFACTS_DIR: ${{ runner.temp }}/e2e-daemon-logs
+        run: npx vitest run --config vitest.e2e.config.ts e2e/tmp4259WrapperExec.e2e.ts
+      - name: Preserve the failing tests' daemon logs
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: tmp-4259-daemon-logs
+          path: ${{ runner.temp }}/e2e-daemon-logs/
+          if-no-files-found: ignore
+          retention-days: 7
