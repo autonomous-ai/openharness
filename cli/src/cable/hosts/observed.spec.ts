@@ -14,7 +14,9 @@ function setup(over: Partial<ObservedDeps> = {}) {
     now: () => clock.t,
     pidGeneration: (pid) => (gens.has(pid) ? gens.get(pid)! : `g${pid}`),
     openSessions: {
-      known: () => open,
+      // The cached answer is empty before the first look, as it is when a dial attaches; only a fresh look sees.
+      known: () => new Map(),
+      fresh: async () => open,
       working: async (id: string) => (working.has(id) ? working.get(id)! : false),
       owner: async (id: string) => (owners.get(id) as never) ?? null,
     } as ObservedDeps['openSessions'],
@@ -247,6 +249,14 @@ describe('ObservedSource codex and open sessions', () => {
     expect(list.map((a) => a.sessionId).sort()).toEqual(['a', 'b', 'd'])
     expect(list.find((a) => a.sessionId === 'a')).toMatchObject({ state: 'idle', name: 'alpha', callerPid: 11, cwd: '/x/alpha' })
     expect(list.every((a) => a.state === 'idle')).toBe(true)
+  })
+
+  it('scanOpen looks afresh, so the scan when a dial attaches lists an agent already running', async () => {
+    const { src, open, owners } = setup()
+    open.set('a', 'terminal')
+    owners.set('a', { pid: 11, engine: 'claude' })
+    await src.scanOpen()
+    expect(src.list().map((a) => a.sessionId)).toEqual(['a'])
   })
 
   it('scanOpen leaves a session a hook already knows', async () => {
