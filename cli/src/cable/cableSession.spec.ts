@@ -6084,6 +6084,20 @@ describe('what the dial cannot do for an agent', () => {
     } finally { await session.stop() }
   })
 
+  it('words that name no agent are routed only among the agents the dial may talk to', async () => {
+    const route = vi.fn(async () => ({ agentId: 'a2', confidence: 0.9, reason: 'name matched' }))
+    const host = caps({ route })
+    const { session, port } = await greeted(host)
+    try {
+      port.say({ t: 'voice.begin', lang: 'en', sr: 16000, uploadId: 'u3' })
+      port.pcm(Buffer.alloc(3200, 7))
+      port.say({ t: 'voice.end', uploadId: 'u3' })
+      await vi.waitFor(() => expect(host.sendTurn).toHaveBeenCalledWith('a2', 'fix the login screen'))
+      // a1 runs in Orca: its id and name are never weighed, and the router sends what it weighs to the backend.
+      expect(route).toHaveBeenCalledWith('fix the login screen', [AGENTS[1]])
+    } finally { await session.stop() }
+  })
+
   it('voice to a harness agent works as today', async () => {
     const host = caps()
     const { session, port } = await greeted(host)
