@@ -64,7 +64,11 @@ export interface ObservedHookDeps {
   /** Hand the event to the devices process; false when it is not there (the event is dropped). */
   forward: (event: ObservedHookEvent) => boolean
   now: () => number
+  log?: (line: string) => void
 }
+
+/** How often the counts of refused and dropped events are logged, at most: a flood is one line a minute. */
+const REPORT_MS = 60_000
 
 export function createObservedHook(deps: ObservedHookDeps) {
   const buckets = new Map<string, { tokens: number; at: number }>()
@@ -85,13 +89,32 @@ export function createObservedHook(deps: ObservedHookDeps) {
     return true
   }
 
+  // Counts only, never a session or a path: what was lost is seen, and what it said stays out of the log.
+  const log = deps.log ?? ((line: string) => console.warn(line))
+  const lost = { invalid: 0, dropped: 0 }
+  let report: ReturnType<typeof setTimeout> | null = null
+  const count = (result: 'invalid' | 'dropped'): typeof result => {
+    lost[result] += 1
+    if (!report) {
+      report = setTimeout(() => {
+        log(`[devices] paneless hook events in the last minute: ${lost.invalid} refused, ${lost.dropped} dropped`)
+        lost.invalid = 0
+        lost.dropped = 0
+        report = null
+      }, REPORT_MS)
+      // A count waiting to be logged never keeps the daemon from exiting.
+      report.unref?.()
+    }
+    return result
+  }
+
   return {
     onObserved(body: unknown): 'ok' | 'invalid' | 'dropped' {
       const now = deps.now()
       const event = parseObservedHook(body, now)
-      if (!event) return 'invalid'
-      if (!take(`${event.engine}:${event.sessionId}`, now)) return 'dropped'
-      return deps.forward(event) ? 'ok' : 'dropped'
+      if (!event) return count('invalid')
+      if (!take(`${event.engine}:${event.sessionId}`, now)) return count('dropped')
+      return deps.forward(event) ? 'ok' : count('dropped')
     },
   }
 }
