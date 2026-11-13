@@ -7,6 +7,7 @@ interface Client {
   readonly frames: Frame[]
   waitFor(test: (frame: Frame) => boolean, ms?: number, what?: string, since?: number): Promise<Frame>
   waitForBinary(test: (frame: unknown) => boolean, ms?: number, what?: string, since?: number): Promise<unknown>
+  turn(agentId: string, content: string, ms?: number): Promise<Frame>
   close(): void
 }
 // The end-to-end harness is outside tsconfig's rootDir (src), so it is loaded untyped, as releaseFixtures.spec.ts
@@ -58,5 +59,44 @@ describe('LocalClient.waitFor and waitForBinary take since as an index', () => {
     const later = client.waitFor((frame) => frame.type === 'later', 2_000, 'later', client.frames.length)
     send({ type: 'later' })
     expect(await later).toEqual({ type: 'later' })
+  })
+})
+
+describe('LocalClient.turn', () => {
+  const said = (frame: Frame) => frame.payload as { agentId: string; content: string }
+
+  it('resolves with the end of its own message\'s turn, not of a turn that was under way', async () => {
+    const { client } = await stubDaemon((frame, send) => {
+      if (frame.type !== 'message') return
+      const { agentId, content } = said(frame)
+      // In one go, so they reach the client in one socket read: each wait has to find its frame by index.
+      send({ type: 'turn_started', agentId, payload: { userMessage: 'a line the daemon typed' } })
+      send({ type: 'turn_started', agentId: 'another-agent', payload: { userMessage: content } })
+      send({ type: 'turn_ended', agentId, payload: { n: 1 } })
+      send({ type: 'turn_started', agentId, payload: { userMessage: content } })
+      send({ type: 'turn_ended', agentId: 'another-agent', payload: { n: 2 } })
+      send({ type: 'turn_ended', agentId, payload: { n: 3 } })
+    })
+    expect(await client.turn('agent-1', 'One turn before the exit', 2_000)).toEqual({ type: 'turn_ended', agentId: 'agent-1', payload: { n: 3 } })
+  })
+
+  it('does not take an earlier turn of the same words for its own', async () => {
+    let n = 0
+    const { client } = await stubDaemon((frame, send) => {
+      if (frame.type !== 'message') return
+      const { agentId, content } = said(frame)
+      send({ type: 'turn_started', agentId, payload: { userMessage: content } })
+      send({ type: 'turn_ended', agentId, payload: { n: ++n } })
+    })
+    expect((await client.turn('agent-1', 'again', 2_000)).payload).toEqual({ n: 1 })
+    expect((await client.turn('agent-1', 'again', 2_000)).payload).toEqual({ n: 2 })
+  })
+
+  it('names the wait that ran out', async () => {
+    const { client } = await stubDaemon((frame, send) => {
+      if (frame.type === 'message' && said(frame).content === 'starts, never ends') send({ type: 'turn_started', agentId: 'agent-1', payload: { userMessage: 'starts, never ends' } })
+    })
+    await expect(client.turn('agent-1', 'never typed', 100)).rejects.toThrow('turn_started (never typed)')
+    await expect(client.turn('agent-1', 'starts, never ends', 100)).rejects.toThrow('turn_ended (starts, never ends)')
   })
 })
