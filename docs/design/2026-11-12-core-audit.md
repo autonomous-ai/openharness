@@ -225,7 +225,7 @@ this platform uses leaves them out. Low risk on a Mac and Linux, medium on a Win
 
 anh Dee, 2026-11-13: "swarm is an experimental feature. we could turn it off / kill the feature at any time. the
 philosophy: small tiny core that is super stable and solid and a lot of components around it". With the Swarm on, its
-door (`superTabs/inCore.ts`) loaded 20 files, about 2,100 lines, into the core's process; 17 and about 1,900 once the
+door (`superTabs/inCore.ts`) loaded 20 files, about 2,100 lines, into the core's process; 15 and about 1,560 once the
 first lines below left (13 November). Each leaves by one of two ways,
 so the core keeps no Swarm code at all, and deleting the Swarm changes nothing in it:
 
@@ -239,7 +239,6 @@ so the core keeps no Swarm code at all, and deleting the Swarm changes nothing i
 | What (lines) | What the core asks of it | Where it goes | Order |
 | --- | --- | --- | ---: |
 | `inCore/devices.ts` (9) | whether a finished turn is quiet on the devices | a row flag the Swarm sets at its start | 2 |
-| `inCore/cards.ts` (228), `inCore/attention.ts` (98) | the device cards, the waits on a person | the relay: the Swarm's service to the devices, and their wants back; the devices check and replay | 4 |
 | `inCore/launch.ts` (79), `lib/swarmSkills.ts` (110), `lib/swarmEngineArgs.ts` (15), `lib/agentInstructions.ts` (408) | a start's roles, the team's basics, the agent's own instructions, its engine flags, its share of the cores | a start's additions (instructions text, flags, variables) the Swarm's service hands the core with the start and refreshes; kept in the row for a relaunch | 6 |
 | `inCore/agents.ts` (56), `retention.ts` (103), `leadSwitch.ts` (152) | which agents the Swarm may close or reopen; that a Lead is never closed, but in its engine switch | protected agents the Swarm's service names, kept on disk by the core, and the one switch's receipt check as a port | 7 |
 | `inCore/adoption.ts` (90), `inCore/role.ts` (13) | an attached agent's role at its restart | the Swarm's service tells the core the role when it knows it; kept in the row | 8 |
@@ -264,6 +263,14 @@ Left: `inCore/terminal.ts`, a member's screen for its Lead and keys into it (ord
 core lists (`PANE_TYPERS`, `core/api.ts`). It was the Swarm's only by name, so the core gains it: one more file in the
 core with the Swarm off (547 files, 94,487 lines), and the same count with it on (564), as the door loses it. The
 queries a service's process sends are `pane_screen`, `pane_input` and `pane_input_if_screen` (13 November).
+
+Left: `inCore/cards.ts` and `inCore/attention.ts`, the Swarm's cards and its members' waits on the dials (order 4). The
+core checked them, read other people's words in them (a Lead's notices) and kept which cards the devices wanted. Now the
+Swarm's service hands them to the devices through `core/relays.ts`, a generic relay: each kind names its one sender and
+receiver (`RELAYS`, `core/api.ts`), the core passes it on unread and bounded, says a sticky kind's last word again to a
+receiver that connects, and tells each side when the other comes or goes. The devices check them and keep an engine's
+question ahead of a Swarm wait (`cable/swarmCardsIn.ts`, `cable/swarmWaits.ts`). The core's process with the Swarm on:
+564 -> 563 files, 96,382 -> 96,211 lines; off, it gains the relay (547 -> 548, 94,487 -> 94,647) (13 November).
 
 ### 4. Modes where everything runs in the core
 

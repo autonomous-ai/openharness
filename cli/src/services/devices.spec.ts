@@ -10,6 +10,7 @@ import { emptyPorts, ServiceUnavailableError, type CoreApi, type CorePorts, type
 import type { FleetEvent } from '../cable/machineFleet.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
+import { relayHub } from '../testing/relayHub.js'
 import type { Fleet, FleetDeps } from './fleet.js'
 import type { DevicesDeps } from './devices.js'
 
@@ -543,16 +544,41 @@ describe('what the windows say, reaching the dial', () => {
   describe('the Swarm cards for a Harness Pro', () => {
     const lead = { id: 'lead1', projectId: 'proj1', project: 'mobile', engine: 'claude', owner: '', local: '', state: 'work' as const, order: 0 }
     const cards = [{ id: 'st1', name: 'openharness', count: 1, leads: [lead] }]
-    const withRequest = (superTabRequest?: CoreApi['superTabRequest']) => start({ core: { ...fakeCore({ dataDir }), ...(superTabRequest ? { superTabRequest } : {}) } as CoreApi })
+    const withRequest = (superTabRequest?: CoreApi['superTabRequest'], hub = relayHub()) =>
+      ({ ...start({ core: { ...fakeCore({ dataDir, relay: hub.relay }), ...(superTabRequest ? { superTabRequest } : {}) } as CoreApi }), hub })
 
-    it('keeps the list for the cable and tells every device when it changes; a recap is passed on', () => {
-      const { port } = start()
-      port.swarmCards(cards)
+    // The Swarm's service hands them through the core, unread (core/relays.ts): the devices check them (cable/swarmCardsIn.ts).
+    it('keeps a sound list the relay hands it for the cable and tells every device; a recap is passed on; an unsound one is not', () => {
+      const { hub } = withRequest()
+      hub.say('swarm_cards', cards)
       expect(seen.dial).toMatchObject({ cards })
       expect(calls('syncSwarmCards')).toEqual([[]])
+      hub.say('swarm_cards', [{ id: 'bad id' }])
+      expect(seen.dial).toMatchObject({ cards })
+      expect(logs).toContain('[super-tabs] a Swarm card list was not sound; the last one stays')
       const recap = { tabId: 'st1', leadId: 'lead1', text: 'hi', at: 1, none: false }
-      port.swarmCardRecap(recap)
+      hub.say('swarm_card_recap', recap)
+      hub.say('swarm_card_recap', { tabId: 'bad id' })
       expect(calls('swarmCardRecap')).toEqual([[recap]])
+      // The account ended: the service's last word is gone, and every card with it.
+      hub.say('swarm_cards', null)
+      expect(seen.dial).toMatchObject({ cards: [] })
+    })
+
+    it('says again which cards it wants when the Swarm\'s service starts again, only while a device wants them', () => {
+      const superTabRequest = vi.fn(async () => ({ ok: true }))
+      const { hub } = withRequest(superTabRequest)
+      hub.peer('superTabs', true)
+      expect(superTabRequest).not.toHaveBeenCalled()
+      seen.host.swarmCardsWanted!(true)
+      superTabRequest.mockClear()
+      hub.peer('superTabs', true)
+      expect(superTabRequest.mock.calls).toEqual([[{ action: 'cardsWanted', on: true, include: [] }]])
+      // Its going, and another service's coming, say nothing.
+      superTabRequest.mockClear()
+      hub.peer('superTabs', false)
+      hub.peer('orchestrator', true)
+      expect(superTabRequest).not.toHaveBeenCalled()
     })
 
     it('asks the service for cards when the first capable device attaches and stops when the last leaves', () => {
@@ -798,6 +824,44 @@ describe('what the windows say, reaching the dial', () => {
     expect(calls('question')).toEqual([['a1', 'supertab:as-1:blocked', [{ q: 'Stuck: no key' }], { superTab: 'Pilot', attention: 'stuck' }],
       ['a2', 'r2', [], undefined]])
     expect(logs.some((l) => /notify · .* · alert · rule:super-tab · question/.test(l))).toBe(true)
+  })
+
+  // The Swarm's waits come to the devices through the relay (core/relays.ts), checked here (cable/swarmWaits.ts): an engine's
+  // own question for the same agent comes first, as the core saw to before 2026-11-13.
+  it('shows the Swarm\'s waits the relay hands it, behind an engine\'s own question, and again to a dial that attaches', () => {
+    const hub = relayHub()
+    const { port } = start({ core: fakeCore({ dataDir, relay: hub.relay }) })
+    const wait = { agentId: 'a1', requestId: 'supertab:as-a1:needs_human', superTab: 'Pilot', attention: 'decision', text: 'Ship it?' }
+    const shown = ['a1', wait.requestId, [{ q: 'Ship it?' }], { superTab: 'Pilot', attention: 'decision' }]
+    hub.say('swarm_waits', [wait])
+    expect(calls('question')).toEqual([shown])
+    // An engine's question for it: ours is taken down first, and put back once the question is answered.
+    port.card({ type: 'commander_question', agentId: 'a1', payload: { requestId: 'tool-1', questions: [{ q: 'Allow?' }] } })
+    expect(calls('questionClose')).toEqual([['a1', wait.requestId]])
+    expect(calls('question').at(-1)?.[1]).toBe('tool-1')
+    port.card({ type: 'commander_question_close', agentId: 'a1', payload: { requestId: 'tool-1' } })
+    expect(calls('questionClose').at(-1)).toEqual(['a1', 'tool-1'])
+    expect(calls('question').at(-1)).toEqual(shown)
+    // A dial attaching is shown it again, once.
+    seen.cable.calls.length = 0
+    seen.host.watching!(true)
+    seen.host.watching!(true)
+    expect(calls('question')).toEqual([shown])
+    // The service's last word gone: so is the wait.
+    hub.say('swarm_waits', null)
+    expect(calls('questionClose').at(-1)).toEqual(['a1', wait.requestId])
+  })
+
+  // The review of this change: a devices process that starts fresh has seen no open question; the core says which are open.
+  it('takes the core\'s word on which agents have a question open, so a Swarm wait never shows over one', () => {
+    const hub = relayHub()
+    const { port } = start({ core: fakeCore({ dataDir, relay: hub.relay }) })
+    port.asking(['a1'])
+    hub.say('swarm_waits', [{ agentId: 'a1', requestId: 'supertab:as-a1:needs_human', superTab: 'Pilot', attention: 'decision', text: 'Ship it?' }])
+    seen.host.watching!(true)
+    expect(calls('question')).toEqual([])
+    port.card({ type: 'commander_question_close', agentId: 'a1', payload: { requestId: 'tool-1' } })
+    expect(calls('question').map(([agentId, requestId]) => [agentId, requestId])).toEqual([['a1', 'supertab:as-a1:needs_human']])
   })
 
   it('hands the dial a tool card as a step, and a processing card\'s latest sentence beside the status', () => {

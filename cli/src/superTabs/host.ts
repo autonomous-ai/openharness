@@ -582,7 +582,7 @@ export class SuperTabHost {
     // Signed out or another machine: this host's alerts are no longer anyone's. A core that is gone heard nothing, and
     // the next host's first roster replaces them anyway.
     if (this.attention !== null && this.attention !== '[]') {
-      try { this.core.superTabs?.attention([]) } catch { /* The next host's first roster replaces them. */ }
+      try { this.core.relay?.tell('swarm_waits', []) } catch { /* The next host's first roster replaces them. */ }
     }
     this.attention = null
     this.waiting.clear()
@@ -1526,7 +1526,8 @@ export class SuperTabHost {
     if (key === this.attention) return
     this.attention = key
     this.waiting = new Set(items.map(item => item.agentId))
-    this.core.superTabs?.attention(items)
+    // To the devices, through the core unread (core/relays.ts): they check each wait and show it (cable/swarmWaits.ts).
+    this.core.relay?.tell('swarm_waits', items)
   }
 
   private retire(deliveryId: string): void {

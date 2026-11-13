@@ -26,10 +26,6 @@
  *   alone: the observers a shared tab wants are derived for this account's harnesses;
  * - `cloud_publish`, `cloud_ask`, `cloud_unask`: the cloud agents' harnesses and their questions
  *   (`core.cloud`, core/agents/cloud.ts), for the cloud service alone;
- * - `super_tab_attention`: the Super Tab members here waiting on a person (`core.superTabs`,
- *   superTabs/inCore/attention.ts), for the Super Tab service alone;
- * - `super_tab_cards`, `super_tab_card_recap`: the Swarms' cards and a Lead's last message for the Harness Pro
- *   (`core.superTabs`, superTabs/inCore/cards.ts), for the Super Tab service alone;
  * - `super_tab_observers`: members may watch an agent here, so Share must run (`core.superTabs`), for the Super Tab
  *   service alone;
  * - `pane_screen`, `pane_input`, `pane_input_if_screen`: an agent's pane read as plain text and typed into, and keys typed
@@ -47,7 +43,7 @@ import { creationObservation } from '../lib/creationObservation.js'
 type Payload = Record<string, unknown>
 type Core = Pick<CoreApi, 'agents' | 'turns' | 'clients' | 'daemon' | 'account' | 'cloud' | 'superTabs' | 'panes' | 'transcripts'>
 
-const QUERIES: ReadonlySet<string> = new Set(['shown', 'activity', 'last_turn', 'turn_answer', 'close_swarm', 'keep_lead_alive', 'close_member', 'stopped', 'gone', 'creation_status', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account', 'cloud_publish', 'cloud_ask', 'cloud_unask', 'super_tab_attention', 'super_tab_cards', 'super_tab_card_recap', 'super_tab_observers', 'pane_screen', 'pane_input', 'pane_input_if_screen'])
+const QUERIES: ReadonlySet<string> = new Set(['shown', 'activity', 'last_turn', 'turn_answer', 'close_swarm', 'keep_lead_alive', 'close_member', 'stopped', 'gone', 'creation_status', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account', 'cloud_publish', 'cloud_ask', 'cloud_unask', 'super_tab_observers', 'pane_screen', 'pane_input', 'pane_input_if_screen'])
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 
 /** The pane queries' names before 2026-11-13, which a Swarm process from an older build still sends while it runs beside a
@@ -227,20 +223,6 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
       if (query === 'cloud_publish') core.cloud.publish(Array.isArray(payload.harnesses) ? payload.harnesses : [])
       else if (query === 'cloud_ask') core.cloud.ask(text(payload.agentId), text(payload.questionId), (payload.question ?? {}) as { text: string; choices: string[] })
       else core.cloud.unask(text(payload.agentId), text(payload.questionId))
-      return {}
-    }
-    case 'super_tab_attention': {
-      // The core checks each item (superTabs/inCore/attention.ts): what reaches the devices is decided there, not here.
-      if (service !== 'superTabs' || !core.superTabs) return { error: 'NOT_SUPER_TABS' }
-      core.superTabs.attention(Array.isArray(payload.items) ? payload.items : [])
-      return {}
-    }
-    case 'super_tab_cards':
-    case 'super_tab_card_recap': {
-      // Checked by the core (superTabs/inCore/cards.ts), which drops what is not sound; here only the list's shape.
-      if (service !== 'superTabs' || !core.superTabs) return { error: 'NOT_SUPER_TABS' }
-      if (query === 'super_tab_cards') core.superTabs.cards(Array.isArray(payload.items) ? payload.items : [])
-      else core.superTabs.cardRecap(payload.recap as never)
       return {}
     }
     case 'super_tab_observers':

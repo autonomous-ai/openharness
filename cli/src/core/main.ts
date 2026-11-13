@@ -137,6 +137,7 @@ import { answerShellQuery } from './shellQueries.js'
 import { createTerminalControl } from './terminals/control.js'
 import { createTerminalRequests } from './terminals/requests.js'
 import { createPanes } from './terminals/panes.js'
+import { createRelays } from './relays.js'
 import { createBrowser } from './terminals/browser.js'
 import { loopbackAnswer } from '../lib/loopbackGet.js'
 import { writeBrowserShim } from '../lib/browserShim.js'
@@ -932,20 +933,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     key: keyTerminal,
     locked: (agentId, write) => deviceInput.legacyWrite(agentId, write),
   })
-  // The Swarm's doors in this process, while it is on (superTabs/inCore/): its members here waiting on a person, on the
-  // devices alone, read only once the questions exist below (the service starts after them); and the Swarms' cards and
-  // Leads' recaps for the Harness Pro, on the devices alone, kept whole and shown again to a dial that attaches.
-  const swarmDoors = swarm && {
-    waits: swarm.createSuperTabAttention({
-      send: (frame) => ports.devices?.card(frame),
-      asking: (agentId) => [...openQuestions.values()].some((asked) => asked.agentId === agentId),
+  // What one service hands another, unread (core/relays.ts `RELAYS`): the Swarm's cards and waits for the dials, which the
+  // devices check and show. A sticky kind's last word is said again to a receiver that connects (`connected` below).
+  const relays = createRelays({
+    ownProcess: (service) => outOfProcess.has(service),
+    notify: (service, payload) => serviceLinksRef?.notify(service, { type: 'service_event', payload }) ?? false,
+    route: (type, payload) => new Promise((resolve) => {
+      const asker = { local: true, owner: true }
+      if (!(serviceLinksRef?.route(type, payload, asker, resolve) || serviceHost.route(type, payload, asker, resolve))) resolve({ error: 'SERVICE_UNAVAILABLE' })
     }),
-    cards: swarm.createSuperTabCards({
-      swarmCards: (items) => ports.devices?.swarmCards(items),
-      swarmCardRecap: (recap) => ports.devices?.swarmCardRecap(recap),
-      request: (payload) => routeSuperTabs(payload),
-    }),
-  }
+  })
   // Shared tabs' relay, a socket per shared tab held by the gateway (gateway/tabRelay.ts), and which of them the core saw
   // opened: opened again after a gateway-only restart, closed when Agent Messages' process goes (core/gatewayLink.ts).
   const tabRelay = tabRelayOf(() => gatewayOps.tabRelay)
@@ -956,13 +953,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // Offered to the services in this process only while one that may use it runs (core/api.ts PANE_TYPERS: the Swarm's),
     // as it was while it was the Swarm's door: a service in its own process is checked as it asks (core/experimentQueries.ts).
     ...(swarm ? { panes } : {}),
-    ...(swarmDoors ? {
-      superTabs: { attention: (items) => swarmDoors.waits.attention(items), cards: (items) => swarmDoors.cards.cards(items), cardRecap: (recap) => swarmDoors.cards.recap(recap),
-        // In the core's own process Share was started with it; out of it, the master starts Share's process.
-        shareObservers: () => { if (outOfProcess.has('sharing')) coreLink.want('sharing') } },
-      // The devices' `cardsWanted`, `cardRecap` and `cardOpen`, and no other action of the Super Tab service (superTabs/inCore/cards.ts `ask`).
-      superTabRequest: (payload) => swarmDoors.cards.ask(payload),
+    ...(swarm ? {
+      // In the core's own process Share was started with it; out of it, the master starts Share's process.
+      superTabs: { shareObservers: () => { if (outOfProcess.has('sharing')) coreLink.want('sharing') } },
     } : {}),
+    relay: relays.api,
+    // The devices' asks of the Swarm's cards, by the actions core/api.ts RELAY_ASKS names and no other.
+    superTabRequest: (payload) => relays.ask('devices', payload),
     cloudRows: () => (cloudAgents?.dialRows() ?? []) as unknown as RegisteredSession[],
     // Agents' terminals: a literal-argv launch, and a read-only view for Share's observers (core/terminalWatch.ts).
     terminals: { ...TERMINALS_OFF, ...createTerminalOpener({ createBackend, recoverBackend, registry, announceSession, blocksFolder: (cwd) => !!backendRef?.purgeAgentService?.blocksFolder(cwd), noBackendCode: createUnavailable }), watch: terminalWatch.watch },
@@ -1059,8 +1056,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       if (attached) for (const frame of openQuestions.values()) ports.devices?.card(frame)
       if (attached) void mirror.liveCards().then((cards) => { for (const frame of cards) ports.devices?.card(frame) })
       if (attached) for (const frame of cloudAgents?.liveCards() ?? []) ports.devices?.card(frame)
-      if (attached) swarmDoors?.waits.replay()
-      if (attached) swarmDoors?.cards.replay()
     },
     // What a device or another machine asks of an agent here: the SAME handlers the backend socket
     // drives, called directly — the slash-command adaptation and the turn and question plumbing live there.
@@ -1658,7 +1653,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     notify: (frame) => serviceLinks.notify('devices', frame),
     call: (type, payload, waitMs) => serviceLinks.call('devices', type, payload, waitMs),
     state: () => ({ desk: appPaneAgents, foreground: appWindowForeground, swarms: appSwarmsLatest, unread: appUnreadLatest,
-      focus: windowFocus(), engines: registry.active().map((agent) => agent.engine), commanders: backend.hasCommander() }),
+      focus: windowFocus(), engines: registry.active().map((agent) => agent.engine), commanders: backend.hasCommander(),
+      asking: [...new Set([...openQuestions.values()].flatMap((asked) => typeof asked.agentId === 'string' ? [asked.agentId] : []))] }),
   })
   // The Wi-Fi device in the devices' process (core/wifiLink.ts): its sessions' requests and what the agents do,
   // in order; on each connection, what the core holds for it (core/wifi.ts).
@@ -1702,6 +1698,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     answer: async (service, query, payload, authority) => await questionControls.answer(service, query, payload) ?? await modelControls.answer(service, query, payload) ?? await nativeControls.answer(service, query, payload) ?? engineReaders.answer(service) ?? (service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : null) ?? deliveries.answer(service, query, payload)
       // Agent Messages is answered what it uses and nothing more, never what an experiment may ask (core/messagesLink.ts).
       ?? (service === 'messages' ? await messagesLink.answer(query, payload) : null)
+      ?? relays.answer(service, query, payload)
       ?? await answerConnectorsQuery(coreApi, service, query, payload)
       ?? await answerSharedMachinesQuery(sharedMachinesAccount, service, query, payload)
       ?? answerDaemonQuery(coreApi, service, query)
@@ -1741,7 +1738,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // The gateway first hears what it starts from, then the shared tabs it held before a restart.
       if (service === 'gateway') { gatewayLink?.connected(); tabRelay.connected() }
       if (service === 'devices') devicesLink.connected()
-      if (service === 'superTabs') swarmDoors?.cards.serviceUp()
+      // Its relays' sticky words, and its partners told it is up (core/relays.ts).
+      relays.connected(service)
       if (service === 'wifi') wifiCore.started(appVoiceFocus ?? null)
       if (service === 'viewers') viewersLink.connected()
       if (service === 'agentBrowser') agentBrowserLink.connected()
@@ -1767,7 +1765,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       if (service === 'gateway') gatewayLink?.disconnected()
       // Agent Messages' process went: its tabs' sockets have no one to hear them, and it opens them again as it starts.
       if (service === 'messages') tabRelay.closeOpened()
-      if (service === 'devices') { devicesLink.disconnected(); swarmDoors?.cards.devicesGone() }
+      if (service === 'devices') devicesLink.disconnected()
+      relays.disconnected(service)
       if (service === 'wifi') wifiCore.stopped()
       if (service === 'recaps') recapsLink.disconnected()
       if (service === 'agentBrowser') agentBrowserLink.disconnected()
@@ -3409,7 +3408,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // The web-tools cache lives exactly as long as the sign-in. `harness logout` and `reset` stop
     // the daemon outright; this is the one sign-out the daemon learns of from inside.
     ports.models?.signedOut()
-    swarmDoors?.cards.reset()
+    relays.reset()
     // Marked before the stop: the core that comes back must read it as signed out. The mark waits for a
     // refresh another process has under way, so that refresh's save cannot write over it.
     void markSignedOut('revoked')
@@ -3441,8 +3440,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // blocking: an unplugged cable is this daemon's ordinary state.
   // In their own process they are told everything the windows said as they connect (core/devicesLink.ts):
   // said here too, it reached a dial still opening its port, before its greeting.
-  // The Swarm cards the Super Tab service sent before this line had no devices to reach: they are shown now.
-  if (outOfProcess.has('devices')) { ports.devices = devicesLink.port; swarmDoors?.cards.replay() }
+  // What the Swarm's service handed them before they connected is said to them as they do (core/relays.ts `connected`).
+  if (outOfProcess.has('devices')) ports.devices = devicesLink.port
   else {
     serviceHost.start('devices', (core, started) => inline!.startDevices(core, started, {
       logsDir: env.HARNESS_LOGS_DIR, testDialPort: harnessd.HARNESSD_TEST_DIAL_PORT,
@@ -3475,10 +3474,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     const payload = card.payload as Record<string, unknown> | undefined
     const full = card.type === 'commander_event' && payload?.kind === 'summary' && typeof card.agentId === 'string'
       ? mirror.lastFullText(registry.byAgent(card.agentId)?.sessionId ?? card.agentId) ?? cloudAgents?.said(card.agentId) : undefined
-    // An engine's question takes the place of a Super Tab wait on the devices, which shows again once it closes.
-    swarmDoors?.waits.before(card)
+    // An engine's question takes the place of a Swarm wait on the devices, which they see to (cable/swarmWaits.ts).
     ports.devices?.card(full ? { ...card, payload: { ...payload, fullText: full } } : card)
-    swarmDoors?.waits.after(card)
   }
 
   // Last: every handler is wired and the restored agents are confirmed, so requests that arrived while

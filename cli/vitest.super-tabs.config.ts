@@ -4,8 +4,10 @@ import base from './vitest.config.js'
 
 /** New files outside the core and services, which no other gate covers, held to 100% in every file. And the Swarm's side of
  *  the core's process (superTabs/inCore/), which left the core's own 100% gate when the Swarm became a switch. */
-const IN_CORE = ['adoption', 'agents', 'attention', 'cards', 'launch', 'role'].map(name => `src/superTabs/inCore/${name}.ts`)
+const IN_CORE = ['adoption', 'agents', 'launch', 'role'].map(name => `src/superTabs/inCore/${name}.ts`)
 const FILES = ['src/superTabs/shortCommand.ts', ...IN_CORE,
+  // The Swarm's cards and waits as the devices check them, which the core's door checked until 2026-11-13 (core/relays.ts).
+  'src/cable/swarmCardsIn.ts', 'src/cable/swarmWaits.ts',
   // The replies the host owes a person who talked to their agent in its own chat, posted when the agent's turn ends (anh Dee, 11-09).
   'src/superTabs/agentReplies.ts',
   // An agent's answer to its launch line, in its chat with its person (anh Dee, 11-10).

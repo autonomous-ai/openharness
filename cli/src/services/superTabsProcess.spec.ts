@@ -22,6 +22,21 @@ function setup(withPort = true) {
   return { process, port, stopped, wire: () => wire, api: () => api }
 }
 
+// Its cards and waits go to the devices through the core (core/relays.ts): its process asks the core to pass them on, and
+// hears the devices come and go, ahead of its own kinds of event.
+it('hands the core its relayed words and hears the devices come and go', async () => {
+  const t = setup()
+  const query = vi.fn(async (_name: string, _payload: Record<string, unknown>) => ({}))
+  t.wire().onConnected!({ query })
+  const peers = vi.fn()
+  t.api().relay!.onPeer(peers)
+  t.api().relay!.tell('swarm_waits', [])
+  await flush()
+  expect(query).toHaveBeenCalledWith('relay', { kind: 'swarm_waits', payload: [] })
+  t.wire().onEvent!({ kind: 'relay_peer', service: 'devices', up: false })
+  expect(peers).toHaveBeenCalledWith('devices', false)
+})
+
 it('refreshes native identity before requests and backend calls; disconnecting withdraws the host', async () => {
   const t = setup()
   await expect(t.api().account.backend('GET', '/api/super-tabs')).rejects.toThrow('Core disconnected')

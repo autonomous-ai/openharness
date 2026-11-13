@@ -1,22 +1,24 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { SuperTabAttention } from '../../core/api.js'
-import { createSuperTabAttention } from './attention.js'
+import type { SuperTabAttention } from '../core/api.js'
+import { createSwarmWaits } from './swarmWaits.js'
 
 const wait = (agentId: string, over: Partial<SuperTabAttention> = {}): SuperTabAttention =>
   ({ agentId, requestId: `supertab:as-${agentId}:needs_human`, superTab: 'Pilot', attention: 'decision', text: 'Ship it?', ...over })
 const raised = (item: SuperTabAttention) => ({ type: 'commander_question', agentId: item.agentId,
   payload: { requestId: item.requestId, questions: [{ q: item.text }], superTab: item.superTab, attention: item.attention } })
 const closed = (item: SuperTabAttention) => ({ type: 'commander_question_close', agentId: item.agentId, payload: { requestId: item.requestId } })
+/** An engine's question for [agentId], and its close, as they pass on their way to the cable. */
+const question = (agentId: string, requestId: string) => ({ type: 'commander_question', agentId, payload: { requestId } })
+const answered = (agentId: string, requestId: string) => ({ type: 'commander_question_close', agentId, payload: { requestId } })
 
 function setup() {
   const send = vi.fn()
-  const asking = new Set<string>()
   const log = vi.fn()
-  const waits = createSuperTabAttention({ send, asking: (agentId) => asking.has(agentId), log })
-  return { send, asking, log, waits }
+  const waits = createSwarmWaits({ send, log })
+  return { send, log, waits }
 }
 
-describe('the Super Tab waits on the devices', () => {
+describe('the Swarm waits on the devices', () => {
   it('raises what is new, keeps what is unchanged and closes what is gone or changed', () => {
     const { send, waits, log } = setup()
     const a = wait('a1'), b = wait('a2', { attention: 'stuck', requestId: 'supertab:as-a2:blocked', text: 'Stuck: no key' })
@@ -33,6 +35,11 @@ describe('the Super Tab waits on the devices', () => {
     send.mockClear()
     waits.attention('not a list')
     expect(send.mock.calls.map(([frame]) => frame)).toEqual([closed(reworded)])
+    // None at all (null): the service's last word is gone, and every wait with it.
+    waits.attention([a])
+    send.mockClear()
+    waits.attention(null)
+    expect(send.mock.calls.map(([frame]) => frame)).toEqual([closed(a)])
   })
 
   it('refuses what a device could not show or close, and keeps one wait per agent', () => {
@@ -51,15 +58,14 @@ describe('the Super Tab waits on the devices', () => {
   })
 
   it('lets an engine\'s question come first, and shows the wait again once it closes', () => {
-    const { send, asking, waits } = setup()
+    const { send, waits } = setup()
     const a = wait('a1')
-    // Raised while the agent's own question is open: it waits for that question.
-    asking.add('a1')
+    // Raised while the agent's own question is open, which passed here on its way: it waits for that question.
+    waits.before(question('a1', 'tool-1'))
     waits.attention([a])
     expect(send).not.toHaveBeenCalled()
-    waits.after({ type: 'commander_question_close', agentId: 'a1', payload: { requestId: 'tool-1' } })
+    waits.after(answered('a1', 'tool-1'))
     expect(send).toHaveBeenLastCalledWith(raised(a))
-    asking.delete('a1')
     // An engine's question for it takes its place: closed before the question goes out.
     send.mockClear()
     waits.before({ type: 'commander_question', agentId: 'a1', payload: { requestId: 'tool-2' } })
@@ -82,12 +88,12 @@ describe('the Super Tab waits on the devices', () => {
     expect(send).not.toHaveBeenCalled()
   })
 
-  it('shows every wait again to a dial that attaches, after the engines\' questions', () => {
-    const { send, asking, waits } = setup()
+  it('shows every wait again to a dial that attaches, but where an engine\'s question is open', () => {
+    const { send, waits } = setup()
     const a = wait('a1'), b = wait('a2')
     waits.attention([a, b])
+    waits.before(question('a2', 'tool-9'))
     send.mockClear()
-    asking.add('a2')
     waits.replay()
     expect(send.mock.calls.map(([frame]) => frame)).toEqual([raised(a)])
     // Hidden behind a2's question, it is not closed when it goes.
@@ -96,10 +102,24 @@ describe('the Super Tab waits on the devices', () => {
     expect(send).not.toHaveBeenCalled()
   })
 
+  // The review of this change: a devices process that starts fresh has seen none of the open questions, and one that outlived
+  // a core may hold a question that closed while it was away. The core says which are open as the devices connect.
+  it('takes the core\'s word on which agents have an engine\'s question open, in place of what it last read', () => {
+    const { send, waits } = setup()
+    const a = wait('a1'), b = wait('a2')
+    waits.before(question('a2', 'gone-while-away'))
+    waits.asking(['a1'])
+    waits.attention([a, b])
+    expect(send.mock.calls.map(([frame]) => frame)).toEqual([raised(b)])
+    send.mockClear()
+    waits.replay()
+    expect(send.mock.calls.map(([frame]) => frame)).toEqual([raised(b)])
+  })
+
   it('logs to the console by default', () => {
     const spy = vi.spyOn(console, 'log').mockImplementation(() => {})
     try {
-      createSuperTabAttention({ send: () => {}, asking: () => false }).attention([wait('a1')])
+      createSwarmWaits({ send: () => {} }).attention([wait('a1')])
       expect(spy).toHaveBeenCalledWith(expect.stringContaining('[super-tabs] a1 waits on a person'))
     } finally { spy.mockRestore() }
   })

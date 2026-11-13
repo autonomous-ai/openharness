@@ -21,10 +21,11 @@ function devicesPort() {
   const calls: Array<[string, unknown[]]> = []
   const record = (name: string) => (...args: unknown[]) => { calls.push([name, args]) }
   const port = {
-    card: record('card'), desk: record('desk'), swarms: record('swarms'), swarmCards: record('swarmCards'), swarmCardRecap: record('swarmCardRecap'), unread: record('unread'), appFocus: record('appFocus'),
+    card: record('card'), desk: record('desk'), swarms: record('swarms'), unread: record('unread'), appFocus: record('appFocus'),
     seen: record('seen'), settings: record('settings'), windowFocus: record('windowFocus'), windowReply: record('windowReply'),
     voiceReply: record('voiceReply'), windowGone: record('windowGone'), scroll: record('scroll'), engines: record('engines'),
     commanders: record('commanders'),
+    asking: record('asking'),
     routeTask: vi.fn(async (text: string) => ({ agentId: 'a1', machineId: 'm1', name: 'api', confidence: 1, reason: text, candidates: [], weighed: 1, machines: 1, via: 'model' })),
     routeSend: vi.fn(async () => ({ ok: true as const })),
     stepFocus: vi.fn(async (): Promise<{ machineId: string; agentId: string } | 'no_agents'> => ({ machineId: 'm1', agentId: 'a2' })),
@@ -72,6 +73,20 @@ function setup(over: { processEnv?: NodeJS.ProcessEnv } = {}) {
 }
 
 afterEach(() => vi.restoreAllMocks())
+
+// The Swarm's cards and waits, which its service hands the devices through the core (core/relays.ts), reach the devices' own
+// listeners from the process's events, ahead of the port's own kinds; and the Swarm's service coming and going with them.
+it('hands the devices what the core relays to them, and the Swarm\'s service coming and going', () => {
+  const f = setup()
+  const cards = vi.fn(), peers = vi.fn()
+  f.api().relay!.on('swarm_cards', cards)
+  f.api().relay!.onPeer(peers)
+  f.event({ kind: 'relay', relay: 'swarm_cards', payload: [{ id: 't1' }] })
+  f.event({ kind: 'relay_peer', service: 'superTabs', up: true })
+  expect(cards).toHaveBeenCalledWith([{ id: 't1' }])
+  expect(peers).toHaveBeenCalledWith('superTabs', true)
+  expect(f.calls).toEqual([])
+})
 
 describe('the devices in their own process', () => {
   it('start the devices on a link of their own, with what their process\'s environment says', () => {
@@ -320,10 +335,6 @@ describe('what the core tells the devices, reaching their port', () => {
       { kind: 'desk', agentIds: 'nonsense' },
       { kind: 'swarms', swarms: { active: 't1', swarms: [], tiles: [] } },
       { kind: 'swarms', swarms: null },
-      { kind: 'swarmCards', items: [{ id: 't1' }] },
-      { kind: 'swarmCards', items: 'nonsense' },
-      { kind: 'swarmCardRecap', recap: { tabId: 't1' } },
-      { kind: 'swarmCardRecap', recap: 'nonsense' },
       { kind: 'unread', items: [{ agentId: 'a1' }] },
       { kind: 'unread', items: 'nonsense' },
       { kind: 'appFocus', machineId: 'm1', agentId: 'a1' },
@@ -342,6 +353,8 @@ describe('what the core tells the devices, reaching their port', () => {
       { kind: 'scroll', phase: 'sideways', dy: 2, velocity: 1 },
       { kind: 'engines', engines: ['claude'] },
       { kind: 'commanders', connected: true },
+      { kind: 'asking', agentIds: ['a1', 7] },
+      { kind: 'asking', agentIds: 'nonsense' },
       { kind: 'nothing it knows' },
       { kind: 'constructor' },
     ]) f.event(payload)
@@ -352,10 +365,6 @@ describe('what the core tells the devices, reaching their port', () => {
       ['desk', [[], true]],
       ['swarms', [{ active: 't1', swarms: [], tiles: [] }]],
       ['swarms', [null]],
-      ['swarmCards', [[{ id: 't1' }]]],
-      ['swarmCards', [[]]],
-      ['swarmCardRecap', [{ tabId: 't1' }]],
-      ['swarmCardRecap', [{}]],
       ['unread', [[{ agentId: 'a1' }]]],
       ['unread', [[]]],
       ['appFocus', ['m1', 'a1']],
@@ -373,12 +382,15 @@ describe('what the core tells the devices, reaching their port', () => {
       ['scroll', ['move', 2, 0]],
       ['engines', [['claude']]],
       ['commanders', [true]],
+      ['asking', [['a1']]],
+      ['asking', [[]]],
     ])
   })
 
   it('is everything the windows said at once when the devices connect, and nothing they did not', () => {
     const f = setup()
-    f.event({ kind: 'state', desk: ['a1'], foreground: true, swarms: { active: 't1', swarms: [], tiles: [] }, unread: [{ agentId: 'a1' }], focus: null, engines: ['codex'], commanders: true })
+    f.event({ kind: 'state', desk: ['a1'], foreground: true, swarms: { active: 't1', swarms: [], tiles: [] }, unread: [{ agentId: 'a1' }], focus: null, engines: ['codex'], commanders: true,
+      asking: ['a1', 7] })
     expect(f.calls).toEqual([
       ['desk', [['a1'], true]],
       ['swarms', [{ active: 't1', swarms: [], tiles: [] }]],
@@ -386,11 +398,12 @@ describe('what the core tells the devices, reaching their port', () => {
       ['windowFocus', [{ voice: null, form: null }]],
       ['engines', [['codex']]],
       ['commanders', [true]],
+      ['asking', [['a1']]],
     ])
     // No window yet: the dial is told nothing about one.
     f.calls.length = 0
     f.event({ kind: 'state', desk: [], swarms: null, unread: 'nonsense' })
-    expect(f.calls.map(([name]) => name)).toEqual(['windowFocus', 'engines', 'commanders'])
+    expect(f.calls.map(([name]) => name)).toEqual(['windowFocus', 'engines', 'commanders', 'asking'])
   })
 })
 

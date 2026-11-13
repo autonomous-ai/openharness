@@ -77,6 +77,10 @@ The core stays small and secure, in the code and at run time: read
   worker through a revocable grant (`engines/questionControls.ts`).
   `deviceInput.ts`: the pane writer lock every write takes, and a device's queued turns behind it.
   `cardText.ts`: an engine's error, rewritten for a device's card.
+- `relays.ts`: what one service hands another through the core, unread and bounded, between the two `RELAYS` names
+  (`core/api.ts`): the Swarm's cards and waits for the dials, which the devices check (`cable/swarmCardsIn.ts`,
+  `cable/swarmWaits.ts`). A sticky kind's last word is said again to its receiver as it connects, each partner hears the
+  other come and go, and the devices' asks of the Swarm's cards pass by the actions `RELAY_ASKS` lists.
 - `deliveries.ts`: delivered turns, the Wi-Fi device's, Agent Messages' and the orchestrator's: text written into an
   agent under a delivery id of its maker's, and what became of it, told back to that maker in its process. The maker
   its id names says whether it is typed into an agent that is working (`WHILE_BUSY_DELIVERERS`: the Swarm's chat).

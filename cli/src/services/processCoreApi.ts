@@ -14,7 +14,7 @@ import { usageTarget, usageTargetKey, usageSnapshot, validUsage, validUsageTarge
  * each asked of the core over its link (`ask`). The agents it reads come as the apps are shown them (`service_query shown`): each with its
  * name, whether its terminal is there and its harness's viewer.
  */
-import { CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, LANE_OFF, OBSERVER_KEY_OFF, resolveAgent, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, WIFI_OFF, type CloudCore, type SuperTabsCore, type CoreApi, type DaemonAddress, type TerminalWatch, type PaneScreen, type PaneTyped, type PanesCore } from '../core/api.js'
+import { CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, LANE_OFF, OBSERVER_KEY_OFF, resolveAgent, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, WIFI_OFF, type CloudCore, type SuperTabsCore, type CoreApi, type DaemonAddress, type TerminalWatch, type PaneScreen, type PaneTyped, type PanesCore, type RelayCore } from '../core/api.js'
 import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { turnsLink } from './turnsLink.js'
@@ -40,6 +40,8 @@ export interface AgentsView {
   onNotice?: CoreApi['account']['onNotice']
   /** The core's read-only view of terminals, for its own viewers (services/watchLink.ts). */
   watch?: TerminalWatch
+  /** What it hands another service through the core and hears from one (services/relayLink.ts). */
+  relay?: RelayCore
 }
 
 /** Whether what the core sent is an agent. */
@@ -249,19 +251,15 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
     // The cloud agents' doors (core/experimentQueries.ts): told to the core in order, never waited on. A core
     // that is not connected hears it all again when it is (services/cloudProcess.ts `republish`). A question's
     // id travels as `questionId`: `requestId` is the query's own, which the link writes over.
+    ...(view.relay ? { relay: view.relay } : {}),
     ...(ask ? {
       cloud: {
         publish: (harnesses) => { void ask('cloud_publish', { harnesses }).catch(() => {}) },
         ask: (agentId, requestId, question) => { void ask('cloud_ask', { agentId, questionId: requestId, question }).catch(() => {}) },
         unask: (agentId, requestId) => { void ask('cloud_unask', { agentId, questionId: requestId }).catch(() => {}) },
       } satisfies CloudCore,
-      // The Super Tab service's waits (superTabs/inCore/attention.ts), the whole set each time: a core that missed one
-      // hears the next, and a new core the host's first roster (superTabs/host.ts).
+      // The Super Tab service's door: its cards and waits go to the devices through `relay` (services/relayLink.ts).
       superTabs: {
-        attention: (items) => { void ask('super_tab_attention', { items }).catch(() => {}) },
-        // The Swarm cards, whole each time they change, and one Lead's recap (superTabs/inCore/cards.ts).
-        cards: (items) => { void ask('super_tab_cards', { items }).catch(() => {}) },
-        cardRecap: (recap) => { void ask('super_tab_card_recap', { recap }).catch(() => {}) },
         shareObservers: () => { void ask('super_tab_observers', {}).catch(() => {}) },
       } satisfies SuperTabsCore,
       // An agent's pane read and typed into (core/terminals/panes.ts), answered by the core for the services it lists.

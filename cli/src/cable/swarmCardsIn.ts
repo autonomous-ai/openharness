@@ -1,29 +1,10 @@
 /**
- * The Swarms this account is in, as cards for the Harness Pro (superTabs/cards.ts): for each Swarm, its Leads and what
- * each is doing, and the last thing a Lead said (its recap). The Super Tab service reads them from the backend and tells
- * the core (`core.superTabs.cards`, `.cardRecap`); the core hands them to the devices, which put them on the cable.
- *
- * Only the devices hear these (`swarmCards`, `swarmCardRecap`): never the Wi-Fi device, the backend or a window.
- *
- * The list is the service's to say, whole, each time it changes; the core keeps the last one, so a dial that attaches
- * later is shown it (`replay`). A list is taken whole or not at all: one item that is not one drops the list and the last
- * good one stays, so a device never shows half a Swarm. A recap is one Lead's and is forwarded as it comes.
- *
- * The core also owns whether the cards are wanted at all (like attention.ts owns its waits): the devices say
- * whether a capable Pro is attached and which Swarms the desktop has tabs for (`want`), and the core says it to the Super Tab
- * service, again whenever that service (re)connects (`serviceUp`), and takes it back when the devices go (`devicesGone`).
+ * The Swarms' cards and a Lead's recap, as the Swarm's service hands them to the devices through the core, unread
+ * (core/relays.ts): checked and cut here, where the dial is, before the cable carries them. A list is taken whole or not
+ * at all: one item that is not one drops the list and the last good one stays, so a dial never shows half a Swarm. A
+ * recap is one Lead's and goes on as it comes. Until 2026-11-13 the core checked them (superTabs/inCore/cards.ts).
  */
-import type { LeadNotice, LeadRecap, SwarmBuddy, SwarmCard, SwarmChat, SwarmLead } from '../../core/api.js'
-
-export interface SuperTabCardsDeps {
-  /** The devices' door for the list (`ports.devices.swarmCards`). */
-  swarmCards(items: SwarmCard[]): void
-  /** The devices' door for one recap (`ports.devices.swarmCardRecap`). */
-  swarmCardRecap(recap: LeadRecap): void
-  /** The Super Tab service's `super_tabs` request (cardsWanted); its answer is not needed. */
-  request?(payload: Record<string, unknown>): Promise<unknown>
-  log?: (line: string) => void
-}
+import type { LeadNotice, LeadRecap, SwarmBuddy, SwarmCard, SwarmChat, SwarmLead } from '../core/api.js'
 
 const MAX_CARDS = 16, MAX_LEADS = 12, NAME_BYTES = 48, ENGINE_BYTES = 16, RECAP_BYTES = 1500
 const STATES: ReadonlySet<string> = new Set(['ask', 'stuck', 'work', 'done'])
@@ -139,90 +120,39 @@ function recapIn(value: unknown): LeadRecap | null {
     ...(recap.buddy === true ? { buddy: true as const } : {}) }
 }
 
-export function createSuperTabCards({ swarmCards, swarmCardRecap, request, log = (line) => console.log(line) }: SuperTabCardsDeps) {
-  /** The last good list, or null before the service has said one. */
-  let last: SwarmCard[] | null = null
-  /** Whether any capable device wants cards, the Swarms to read first, and the conversation the window has open in a Swarm tab. */
-  let wanted = false, include: string[] = []
-  let focus: { tabId: string; conversationId: string } | null = null
-  const route = async (payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
-    try {
-      const answer = await request?.(payload)
-      return answer === undefined ? { error: 'SERVICE_UNAVAILABLE' } : object(answer)
-    } catch { return { error: 'SERVICE_UNAVAILABLE' } }
+/** Every Swarm the service said, checked: null when one item is not sound. */
+function cardsIn(items: unknown): SwarmCard[] | null {
+  if (!Array.isArray(items)) return null
+  const cards: SwarmCard[] = []
+  for (const value of items.slice(0, MAX_CARDS)) {
+    const card = cardIn(value)
+    if (!card) return null
+    cards.push(card)
   }
-  const tell = (): void => { void route({ action: 'cardsWanted', on: wanted, include, ...(focus ? { focus } : {}) }) }
-  const api = {
-    /** The devices say whether a capable Pro is attached (and which Swarms the desktop has open, and the conversation it has
-     *  open in one): the service is told. */
-    want(on: boolean, swarms: unknown, open?: unknown): void {
-      const next = on && Array.isArray(swarms) ? [...new Set(swarms.filter(id))].slice(0, MAX_CARDS) : []
-      const asked = object(open)
-      const nextFocus = on && id(asked.tabId) && id(asked.conversationId)
-        ? { tabId: asked.tabId, conversationId: asked.conversationId } : null
-      const key = (f: typeof focus) => `${f?.tabId}/${f?.conversationId}`
-      if (on === wanted && next.join(',') === include.join(',') && key(nextFocus) === key(focus)) return
-      wanted = on
-      include = next
-      focus = nextFocus
-      tell()
-    },
-    /** The Super Tab service (re)connected: it has forgotten, so it is told again if a device wants the cards. */
-    serviceUp(): void {
-      if (wanted) tell()
-    },
-    /** The devices went (their process or link): nothing reads the Swarms for them, and each wakes with a fresh count. */
-    devicesGone(): void {
-      if (!wanted) return
-      wanted = false
-      include = []
-      focus = null
-      tell()
-    },
-    /** The account changed or ended: the list shown and kept is of someone else, and the service starts over. */
-    reset(): void {
-      last = null
-      swarmCards([])
-      if (wanted) { void route({ action: 'cardsWanted', on: false, include: [] }); tell() }
-    },
-    /** Every Swarm, replacing the last list: forwarded whole when every item is sound, else dropped and logged. */
+  return cards
+}
+
+export interface SwarmCardsInDeps {
+  /** A checked list, whole, for the cable. */
+  cards(items: SwarmCard[]): void
+  /** A checked recap, for the cable. */
+  recap(recap: LeadRecap): void
+  log: (line: string) => void
+}
+
+/** What the devices do with each word the Swarm's service hands them: a sound list replaces the last, an unsound one is
+ *  dropped and said (the last good one stays), null clears them (the account ended), and a recap goes on checked. */
+export function createSwarmCardsIn({ cards, recap, log }: SwarmCardsInDeps) {
+  return {
     cards(items: unknown): void {
-      const next: SwarmCard[] = []
-      for (const value of Array.isArray(items) ? items.slice(0, MAX_CARDS) : [null]) {
-        const card = cardIn(value)
-        if (!card) { log('[super-tabs] a Swarm card list was not sound; the last one stays'); return }
-        next.push(card)
-      }
-      last = next
-      swarmCards(next)
+      const next = items === null ? [] : cardsIn(items)
+      if (!next) { log('[super-tabs] a Swarm card list was not sound; the last one stays'); return }
+      cards(next)
     },
-    /** One Lead's last message, forwarded as it comes. */
     recap(value: unknown): void {
-      const recap = recapIn(value)
-      if (!recap) { log('[super-tabs] a Lead recap was not sound; it is dropped'); return }
-      swarmCardRecap(recap)
-    },
-    /** What the devices may ask of the Super Tab service, and nothing else of it: `cardsWanted` is kept here, `cardRecap`,
-     *  `cardOpen`, `cardSay` and `cardWorker` go to the service; any other action is refused. */
-    ask(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
-      if (payload.action === 'cardsWanted') { api.want(payload.on === true, payload.include, payload.focus); return Promise.resolve({ ok: true }) }
-      // A round dial that speaks swarmChat asks for the chat on its face, and one that speaks swarmBuddy for the face on its
-      // side ('buddy'); without the flag, the request is today's.
-      const chat = payload.chat === true || payload.chat === 'buddy' ? { chat: payload.chat } : {}
-      if (payload.action === 'cardRecap') return route({ action: 'cardRecap', tabId: payload.tabId, leadId: payload.leadId, ...chat })
-      // The chat on the dial's face when the words were spoken, which they may be posted in and no other.
-      // `reviewed`: the person saw that chat named on the dial and pressed Send.
-      if (payload.action === 'cardSay') return route({ action: 'cardSay', harnessId: payload.harnessId, text: payload.text, ...chat,
-        ...(id(payload.chatId) ? { chatId: payload.chatId, ...(payload.reviewed === true ? { reviewed: true } : {}) } : {}), })
-      if (payload.action === 'cardOpen') return route({ action: 'cardOpen', session: payload.session, tabId: payload.tabId, leadId: payload.leadId, ...chat })
-      // A card's failure from another computer: whether its agent is a Swarm's worker (services/devices.ts asks; it decides).
-      if (payload.action === 'cardWorker') return route({ action: 'cardWorker', machineId: payload.machineId, harnessId: payload.harnessId })
-      return Promise.resolve({ error: 'INVALID_REQUEST' })
-    },
-    /** A dial attached: it has nothing, so it is shown the last list again. */
-    replay(): void {
-      if (last) swarmCards(last)
+      const checked = recapIn(value)
+      if (!checked) { log('[super-tabs] a Lead recap was not sound; it is dropped'); return }
+      recap(checked)
     },
   }
-  return api
 }

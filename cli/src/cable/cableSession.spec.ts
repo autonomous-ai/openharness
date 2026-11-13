@@ -17,7 +17,7 @@ import type { MachineFleet } from './machineFleet.js'
 import { CableSession, recapFrame, type CableAgent, type CableHost, type CableMachine, type CablePort } from './cableSession.js'
 import { DialLog } from './dialLog.js'
 import { leadsOf, type LeadRecap, type SaidOnCard, type SwarmCard, type SwarmLead } from '../superTabs/cards.js'
-import { createSuperTabCards } from '../superTabs/inCore/cards.js'
+import { createSwarmCardsIn } from './swarmCardsIn.js'
 import type { PetStore } from './pets/store.js'
 
 /** A port whose two ends are both in this process. */
@@ -5192,8 +5192,8 @@ describe('swarm cards', () => {
     })
 
     it('a tap on the reader\'s Buddy opens its chat with cards generated from a Swarm and passed through the core', async () => {
-      // The cards as production makes them: read from a Swarm (superTabs/cards.ts) and checked on their way into the core
-      // (superTabs/inCore/cards.ts), which once dropped the Buddy's session id and left every Buddy tap on a terminal tab.
+      // The cards as production makes them: read from a Swarm (superTabs/cards.ts) and checked as the devices take them
+      // (cable/swarmCardsIn.ts, once the core's), which once dropped the Buddy's session id and left every Buddy tap on a terminal tab.
       const agent = (id: string, over: Record<string, unknown> = {}) =>
         ({ id, harnessId: `h-${id}`, machineId: 'm1', machineOwnerId: 'me', configuration: { engine: 'claude' }, ...over })
       const state = {
@@ -5204,7 +5204,7 @@ describe('swarm cards', () => {
           { id: 'pm-web', projectId: 'web', kind: 'buddy', buddyOwnerId: 'me', agentIds: ['y1'], archived: false }],
       }
       let forwarded: SwarmCard[] | null = null
-      const core = createSuperTabCards({ swarmCards: (items) => { forwarded = items }, swarmCardRecap: vi.fn() })
+      const core = createSwarmCardsIn({ cards: (items) => { forwarded = items }, recap: vi.fn(), log: vi.fn() })
       core.cards([{ id: 'st1', name: 'openharness', ...leadsOf(state, 'm1', () => ({ inTurn: false }), 'me') }])
       const host = cardHost({ cards: null }, { swarmCards: () => forwarded })
       const { session, port } = await connect(host)

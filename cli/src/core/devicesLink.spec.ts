@@ -7,6 +7,7 @@ import { createDevicesLink, DEVICES_WAIT_MS, ROUTE_TASK_WAIT_MS, type DevicesSta
 
 const STATE: DevicesState = {
   desk: ['a1'], foreground: true, swarms: null, unread: [], focus: { voice: null, form: null }, engines: ['claude'], commanders: false,
+  asking: ['a2'],
 }
 
 function link(answer: Record<string, unknown> = {}) {
@@ -24,8 +25,6 @@ describe('what the core tells the devices', () => {
     port.card({ type: 'commander_event', agentId: 'a1' })
     port.desk(['a1'], false)
     port.swarms(null)
-    port.swarmCards([])
-    port.swarmCardRecap({ tabId: 't1', leadId: 'l1', text: 'Shipped', at: 1, none: false })
     port.unread([])
     port.appFocus('m1', 'a1')
     port.seen('a1')
@@ -38,12 +37,11 @@ describe('what the core tells the devices', () => {
     port.scroll('move', 2, 9)
     port.engines(['codex'])
     port.commanders(true)
+    port.asking(['a1'])
     expect(sent.map((frame) => frame.payload)).toEqual([
       { kind: 'card', frame: { type: 'commander_event', agentId: 'a1' } },
       { kind: 'desk', agentIds: ['a1'], foreground: false },
       { kind: 'swarms', swarms: null },
-      { kind: 'swarmCards', items: [] },
-      { kind: 'swarmCardRecap', recap: { tabId: 't1', leadId: 'l1', text: 'Shipped', at: 1, none: false } },
       { kind: 'unread', items: [] },
       { kind: 'appFocus', machineId: 'm1', agentId: 'a1' },
       { kind: 'seen', agentId: 'a1' },
@@ -56,13 +54,14 @@ describe('what the core tells the devices', () => {
       { kind: 'scroll', phase: 'move', dy: 2, velocity: 9 },
       { kind: 'engines', engines: ['codex'] },
       { kind: 'commanders', connected: true },
+      { kind: 'asking', agentIds: ['a1'] },
     ])
     expect(sent.every((frame) => frame.type === 'service_event')).toBe(true)
   })
 
   it('tells devices started in the core\'s own process the same, as calls on their port', () => {
     const { devices, sent } = link()
-    const started = { desk: vi.fn(), swarms: vi.fn(), unread: vi.fn(), windowFocus: vi.fn(), engines: vi.fn(), commanders: vi.fn() }
+    const started = { desk: vi.fn(), swarms: vi.fn(), unread: vi.fn(), windowFocus: vi.fn(), engines: vi.fn(), commanders: vi.fn(), asking: vi.fn() }
     devices.started(started as never)
     expect(started.desk).toHaveBeenCalledWith(['a1'], true)
     expect(started.swarms).toHaveBeenCalledWith(null)
@@ -70,6 +69,8 @@ describe('what the core tells the devices', () => {
     expect(started.windowFocus).toHaveBeenCalledWith({ voice: null, form: null })
     expect(started.engines).toHaveBeenCalledWith(['claude'])
     expect(started.commanders).toHaveBeenCalledWith(false)
+    // The agents with an engine's question open: a Swarm wait for one of them waits behind it (cable/swarmWaits.ts).
+    expect(started.asking).toHaveBeenCalledWith(['a2'])
     expect(sent).toEqual([])
   })
 

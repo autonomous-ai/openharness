@@ -166,6 +166,10 @@ describe('the core API services stand on', () => {
     expect(core.panes).toBeUndefined()
     const panes = { screen: vi.fn(), input: vi.fn(), inputIfScreen: vi.fn() }
     expect(createCoreApi({ ...deps, panes }).panes).toBe(panes)
+    // The relays between services, the same way.
+    expect(core.relay).toBeUndefined()
+    const relay = { tell: vi.fn(), on: vi.fn(), onPeer: vi.fn() }
+    expect(createCoreApi({ ...deps, relay }).relay).toBe(relay)
     // The devices' way to its card requests, the same way.
     expect(core.superTabRequest).toBeUndefined()
     const superTabRequest = vi.fn()
@@ -473,7 +477,7 @@ describe('the core API services stand on', () => {
     expect(readFallback(DEVICES_FALLBACKS.routeSend)).toEqual({ deferred: true, value: { ok: false, machine: '', reason } })
     // The Wi-Fi device finds no desk to walk; the dial and the window bridges hear nothing.
     expect(readFallback(DEVICES_FALLBACKS.stepFocus).value).toBe('no_agents')
-    for (const member of ['card', 'desk', 'swarms', 'swarmCards', 'swarmCardRecap', 'unread', 'appFocus', 'seen', 'settings', 'windowFocus', 'windowReply', 'voiceReply', 'windowGone', 'scroll', 'engines', 'commanders'] as const) {
+    for (const member of ['card', 'desk', 'swarms', 'unread', 'appFocus', 'seen', 'settings', 'windowFocus', 'windowReply', 'voiceReply', 'windowGone', 'scroll', 'engines', 'commanders'] as const) {
       expect(DEVICES_FALLBACKS[member], member).toBeUndefined()
     }
     expect(readFallback(DEVICES_FALLBACKS.stop)).toEqual({ deferred: true, value: undefined })
