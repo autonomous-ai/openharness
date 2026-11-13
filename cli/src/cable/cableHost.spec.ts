@@ -744,6 +744,30 @@ describe('the dial with no window: this computer\'s agents', () => {
     ] })
   })
 
+  it('no window: until the cards a dial asked for come, no Harness agent is listed, for at most 10 s', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const host = new DaemonCableHost(wiring({ sessions }), fleetOf([]))
+      host.setRegistry(new HostRegistry([host.harness, observed([observedAgent({ id: 'o1' })])]))
+      host.setSwarms(null)
+      const ids = async () => (await host.listAgentSnapshot()).agents.map((a) => a.id)
+      // A Buddy cannot be told from any other Harness agent before the cards: one of these may be it.
+      host.swarmCardsWanted(true)
+      expect(await ids()).toEqual(['o1'])
+      vi.advanceTimersByTime(9_999)
+      expect(await ids()).toEqual(['o1'])
+      // The Swarm service may be down or signed out: the agents here are not held for ever.
+      vi.advanceTimersByTime(1)
+      expect(await ids()).toEqual(['h1', 'h2', 'o1'])
+      // Asked again later, the wait starts again; the cards end it.
+      host.swarmCardsWanted(false)
+      host.swarmCardsWanted(true)
+      expect(await ids()).toEqual(['o1'])
+      host.setSwarmCards([])
+      expect(await ids()).toEqual(['h1', 'h2', 'o1'])
+    } finally { vi.useRealTimers() }
+  })
+
   it('with a window and a registry: the tab, as today', async () => {
     const host = new DaemonCableHost(wiring({ sessions }), fleetOf([]))
     host.setRegistry(new HostRegistry([host.harness, observed([observedAgent({ id: 'o1' })])]))
