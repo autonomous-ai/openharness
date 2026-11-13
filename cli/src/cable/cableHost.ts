@@ -682,7 +682,10 @@ export class DaemonCableHost implements CableHost {
     const bound = new Map(this.wiring.sessions().map((s) => [s.agentId, s.sessionId]))
     this.harness.update(flat.map((a) => bound.get(a.id) ? { ...a, sessionId: bound.get(a.id) } : a), local.id,
       await this.viaFleet((r) => r.activityTimes()))
-    const { rows, total } = selectForDial(registry.agents())
+    // The reader's Buddy is shown on its Swarm card, and its session id never leaves this computer (cableSession dialBuddy).
+    // Dropped after the registry's dedupe, which needs it to tell its Claude Code session from an agent outside Harness.
+    const buddies = new Set((this.cards ?? []).flatMap((card) => card.leads.map((l) => l.buddy?.local).filter((id) => id !== undefined)))
+    const { rows, total } = selectForDial(registry.agents().filter((a) => !buddies.has(a.id)))
     const agents = rows.map((a): CableAgent => {
       const caps = registry.source(a.id)?.capabilities(a)
       // A Harness agent keeps the row the window would show (its chips too); another app's is drawn from what was heard.
