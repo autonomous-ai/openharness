@@ -8,6 +8,7 @@ function setup(over: Partial<ObservedDeps> = {}) {
   // The machine's processes: every pid below 1000 runs, as `g<pid>`, but one `gens` says is gone (null) or another.
   const procs = vi.fn(async (): Promise<{ pid: number; generation?: string }[]> => Array.from({ length: 1000 }, (_, pid) => pid)
     .filter((pid) => gens.get(pid) !== null).map((pid) => ({ pid, generation: gens.get(pid) ?? `g${pid}` })))
+  const alive = vi.fn((_pid: number) => true)
   const open = new Map<string, 'terminal' | 'app' | 'harness' | 'maybe'>()
   const owners = new Map<string, { pid: number; engine: string }>()
   const working = new Map<string, boolean | null>()
@@ -16,6 +17,7 @@ function setup(over: Partial<ObservedDeps> = {}) {
   const deps: ObservedDeps = {
     now: () => clock.t,
     processes: procs,
+    alive,
     openSessions: {
       // The cached answer is empty before the first look, as it is when a dial attaches; only a fresh look sees.
       known: () => new Map(),
@@ -35,7 +37,7 @@ function setup(over: Partial<ObservedDeps> = {}) {
   const ev = (event: ObservedHookEvent['event'], over: Partial<ObservedHookEvent> = {}): ObservedHookEvent => ({
     engine: 'claude', sessionId: 's1', event, cwd: '/work/proj', callerPid: 100, hostHints: {}, at: clock.t, ...over,
   })
-  return { src, clock, gens, procs, open, owners, working, externals, answers, changes, ev }
+  return { src, clock, gens, procs, alive, open, owners, working, externals, answers, changes, ev }
 }
 
 describe('ObservedSource states', () => {
@@ -187,6 +189,18 @@ describe('ObservedSource removal', () => {
     await src.tick()
     expect(procs).toHaveBeenCalledTimes(1)
     expect(src.list()).toHaveLength(50)
+  })
+
+  it('with no process table to read (Windows here), a session goes once its process is not alive', async () => {
+    const { src, procs, alive, ev } = setup()
+    procs.mockResolvedValue([])
+    src.ingest(ev('session-start'))
+    await src.tick()
+    expect(src.list()).toHaveLength(1)
+    alive.mockReturnValue(false)
+    await src.tick()
+    expect(src.list()).toHaveLength(0)
+    expect(alive).toHaveBeenCalledWith(100)
   })
 
   it('removes a session after 12 h without an event while the process table cannot be read', async () => {
