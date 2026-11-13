@@ -28,16 +28,13 @@ import { hostname } from 'os'
 import { env } from './config/env.js'
 import { registry, projectDisplayName, type RegisteredSession } from './lib/registry.js'
 import type { CloseAgentService } from './lib/closeAgentService.js'
-import { ENGINES, type AgentEngine } from './engines/types.js'
+import type { AgentEngine } from './engines/types.js'
 import { gridCliPresence } from './lib/gridBinary.js'
 import { GRID_FLEET_PROTOCOL, GRID_FLEET_MAX_TIMEOUT_MS } from './lib/gridFleetProtocol.js'
 import { isApiLaunch, parseGridLaunchOverride, type GridLaunchOverride } from './lib/gridLaunchWire.js'
 import type { LaunchModel } from './lib/launchModel.js'
 import type { ScmLaunchRecord } from './scm/types.js'
 import type { StartedBy } from './lib/agentAttribution.js'
-import { probeEngines } from './lib/engineProbe.js'
-import { engineInstallLine, engineInstallRecipe } from './lib/engineInstall.js'
-import { supportsFirstPrompt } from './lib/engineLaunch.js'
 import { agentFrame, type AgentBrowserFrame, type AgentDshContext, type AgentFrame } from './lib/agentFrame.js'
 import type { ProductUsageMetric } from './lib/productUsageContract.js'
 import type { AgentTokenUsage } from './lib/agentUsageWire.js'
@@ -57,11 +54,6 @@ export { isLocalClientId, type DownTransport }
 /** Requests one local connection may queue before the daemon is ready (see `openRequests`). The app
  *  sends a handful on connect; hundreds is a client looping, not a person. */
 const MAX_REQUESTS_BEFORE_READY = 256
-/** The line Desktop shows before installing an engine here. */
-const installRecipeLine = (engine: Parameters<typeof engineInstallRecipe>[0]): string | undefined => {
-  const recipe = engineInstallRecipe(engine)
-  return recipe && engineInstallLine(recipe)
-}
 
 /** Within how long this computer's windows hear an invitation given or taken back: the backend now answers the shares list in
  *  tens of milliseconds, and 10 s spreads every member's read of it over a hundred times that. */
@@ -247,8 +239,6 @@ export class BackendSocket {
     if (this.localClients.has(connId)) { this.sendTo(connId, { type, payload }); return true }
     return this.throughGateway('viewer', (gateway) => gateway.target(connId, type, payload), false)
   }
-  /** Injectable for queue-isolation tests; production uses the machine-local probe. */
-  engineProbeProvider: typeof probeEngines = probeEngines
   readonly ownerCommands = new OwnerCommands()
   /** Takes back a delivered turn not yet being written (core/deliveries.ts, cli.ts binds core/input.ts). */
   onCancelOrchestratorMessage: ((deliveryId: string) => boolean) | null = null
@@ -1204,52 +1194,6 @@ export class BackendSocket {
           const windows = [...this.localClients.keys()].filter((id) => id !== connId).length + this.commanderCount
           this.send({ type: 'remote_terminal_handoff', payload: { fromAgentId, machineId: handoff.machineId, agentId: handoff.agentId } })
           reply(type, requestId, { ok: true, fromAgentId, windows })
-          return
-        }
-
-        case 'engines_probe': {
-          // Which engines this machine has, asked BEFORE a create rather than discovered by one
-          // failing. Answered here — on the machine in question — because a Mac and the Docker rig
-          // routinely hold different engines, and an availability list computed anywhere else is
-          // wrong for exactly the remote case this request exists to serve.
-          //
-          // `engines` narrows the probe to what the caller is showing; an absent or malformed list
-          // means "all of them", so an older app that sends nothing still gets a usable answer.
-          const asked = Array.isArray(payload.engines)
-            ? payload.engines.filter((id): id is AgentEngine =>
-              typeof id === 'string' && (ENGINES as readonly string[]).includes(id))
-            : undefined
-          // A full probe starts interactive login shells and is intentionally detached from this
-          // connection's ordered RPC chain. Request ids make its eventual reply safe to deliver out
-          // of order; keeping it awaited here made a Create click sit behind an unrelated sweep.
-          // A guest starts agents on its own sign-in, so it needs only which engines are installed: the
-          // owner's sign-in and last use are never read for it (#4259, from #4216's security review).
-          void this.engineProbeProvider(asked && asked.length > 0 ? asked : undefined, { accounts: guest === undefined })
-            .then((availability) => reply(type, requestId, {
-              engines: availability.map((entry) => ({
-                engine: entry.engine,
-                installed: entry.installed,
-                command: entry.command,
-                installable: entry.installable,
-                installCommand: (entry.installable && installRecipeLine(entry.engine)) || null,
-                // Installed but unable to run here (OpenClaw on a Node it cannot use): New shows it and blocks Start.
-                ...(entry.unavailable ? { unavailable: entry.unavailable } : {}),
-                ...(entry.signedIn !== undefined ? { signedIn: entry.signedIn, lastUsedAt: entry.lastUsedAt ?? null } : {}),
-                // Static per-CLI-version capability, not a probe result: its mere presence is what
-                // lets an older CLI (which never sends the field) keep reading as "unknown" rather
-                // than "no", per the desktop app's `EngineAvailability.fromJson`.
-                ...(entry.engine === 'codex' ? { supportsCodexHome: true } : {}),
-                // Static too, and this machine's own: whether `harness new` here can hand the engine a
-                // first prompt (engineLaunch.ts FIRST_PROMPT_ARGS), so a caller on another version reads
-                // it from the machine that will start the agent (#1788).
-                firstPrompt: supportsFirstPrompt(entry.engine),
-                // Static too: a pane whose engine is still downloading beside Desktop Harness's setup
-                // waits for that download (engineLaunch.ts `harness_wait_download`) rather than
-                // installing it again, so the desktop may open the pane before the download ends.
-                waitsForDownload: true,
-              })),
-            }))
-            .catch(() => reply(type, requestId, { error: 'ENGINE_PROBE_FAILED' }))
           return
         }
 

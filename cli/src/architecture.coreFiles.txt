@@ -333,13 +333,11 @@ lib/deletedSessions.ts
 lib/deviceManagementHttp.ts
 lib/deviceRecap.ts
 lib/dialogEnd.ts
-lib/engineAccount.ts
 lib/engineBin.ts
 lib/engineExitOption.ts
 lib/engineHomes.ts
 lib/engineInstall.ts
 lib/engineLaunch.ts
-lib/engineProbe.ts
 lib/externalOwnerControl.ts
 lib/externalProcessGeneration.ts
 lib/externalResume.ts
@@ -359,8 +357,9 @@ lib/gridBinary.ts
 lib/gridConfigDir.ts
 lib/gridFleetProtocol.ts
 lib/gridLaunchWire.ts
-lib/guestAccounts.ts
 lib/guestEngines.ts
+lib/guestRunner.ts
+lib/guestUser.ts
 lib/hachiMetrics.ts
 lib/handoffAuthority.ts
 lib/handoffDiscovery.ts

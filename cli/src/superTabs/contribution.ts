@@ -1,7 +1,7 @@
 import type { CoreApi } from '../core/api.js'
 import { openDaemon } from '../agentClient/daemon.js'
 import { parseProjectFolder, prepareProjectFolder } from '../lib/projectFolder.js'
-import { readCapabilities, START_REQUIREMENTS } from './capacity.js'
+import { probedEngines, readCapabilities, START_REQUIREMENTS } from './capacity.js'
 import { backend, identifier, object, SuperTabHostError } from './wire.js'
 import { mkdir } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
@@ -113,8 +113,13 @@ export async function prepareContribution(core: CoreApi, input: Json, given: Par
   }
   const connection = await deps.open({ dataDir: core.dataDir, port: core.daemon.port, machineId })
   try {
-    const probe = () => connection.request('engines_probe', { engines: ['claude', 'codex'], accounts: true }, 20_000)
-    const installed = (answer: Json) => (Array.isArray(answer.engines) ? answer.engines.map(object) : [])
+    // Not answered is not "none installed" (capacity.ts `probedEngines`): nothing is installed on it.
+    const probe = async (): Promise<Json[]> => {
+      const engines = probedEngines(await connection.request('engines_probe', { engines: ['claude', 'codex'], accounts: true }, 20_000))
+      if (!engines) throw new Error('This machine could not check its engines. Try again.')
+      return engines
+    }
+    const installed = (answer: Json[]) => answer
       .filter(e => (e.engine === 'claude' || e.engine === 'codex') && e.installed === true)
       .map(e => e.engine as string)
     const [first, capability] = await Promise.all([probe(), deps.capacity({ cwd, tools: ['git'], devices: [] })])
@@ -129,8 +134,7 @@ export async function prepareContribution(core: CoreApi, input: Json, given: Par
       engines = installed(answer)
     }
     // Which of them are signed in, so that phone asks for the sign-in before an agent waits on it.
-    const signedIn = (Array.isArray(answer.engines) ? answer.engines.map(object) : [])
-      .filter(e => engines.includes(e.engine as string) && e.signedIn === true).map(e => e.engine as string)
+    const signedIn = answer.filter(e => engines.includes(e.engine as string) && e.signedIn === true).map(e => e.engine as string)
     if (!engines.length) throw new Error('Install Claude Code or Codex on this machine, then try again.')
     const resources = object('resources' in capability ? capability.resources : null)
     if (capability.ok !== true || typeof resources.projectDiskFreeBytes !== 'number') throw new Error('The project folder is unavailable on this machine.')

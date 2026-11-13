@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { GUEST_HELPER_PATH, type GuestRunner } from './guestAccounts.js'
+import { GUEST_HELPER_PATH } from './guestAccounts.js'
+import { type GuestRunner } from './guestRunner.js'
 import { guestHelperScript, helperScriptVersion } from './guestHelperAssets.js'
 import {
   adminAppleScript, buildInstallScript, GUEST_HELPER_PROMPT, GUEST_HELPER_VERSION, GUEST_HOOK_DIR, GUEST_NODE_DIR,

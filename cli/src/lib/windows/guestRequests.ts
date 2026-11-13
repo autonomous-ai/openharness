@@ -9,7 +9,8 @@
  * for guests to read, and nothing else.
  */
 import { randomBytes } from 'node:crypto'
-import { guestUserFor, isGuestUser } from '../guestAccounts.js'
+import { guestUserFor } from '../guestAccounts.js'
+import { isGuestUser } from '../guestUser.js'
 import { GUEST_SHARE_MAX, checkGuestSharePath, type GuestSharedFolder } from './guestShare.js'
 import { WINDOWS_GUEST_REQUESTS, WINDOWS_GUEST_ANSWERS } from './guestTree.js'
 

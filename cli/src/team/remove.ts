@@ -11,7 +11,7 @@
  */
 import { existsSync } from 'node:fs'
 import { homedir, userInfo } from 'node:os'
-import { runGuestCommand, type GuestRunner } from '../lib/guestAccounts.js'
+import { runGuestCommand, type GuestRunner } from '../lib/guestRunner.js'
 import type { RunAdmin } from '../lib/windows/elevated.js'
 import { WHOAMI_USER_ARGS, windowsUserSid } from '../lib/windows/whoami.js'
 import { readTeamConfig, teamConfigFile } from './config.js'

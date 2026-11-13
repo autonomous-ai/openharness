@@ -4,10 +4,11 @@
  * runs to start a guest's harness as that account. Every call is `sudo -n <helper> …`, which the
  * owner's one-time install allowed (guestHelperInstall.ts); nothing here asks for a password.
  */
-import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, readdirSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
+import { runGuestCommand, type GuestRunOptions, type GuestRunResult, type GuestRunner } from './guestRunner.js'
+import { isGuestUser } from './guestUser.js'
 
 export const GUEST_HELPER_PATH = '/usr/local/libexec/harness/guest-helper'
 
@@ -55,41 +56,6 @@ export interface GuestAccount {
   workspace: string
 }
 
-export interface GuestRunResult { code: number | null; stdout: string; stderr: string }
-export interface GuestRunOptions {
-  timeoutMs?: number
-  /** The terminal's own stdin/stdout/stderr: a password prompt (Linux `sudo`) must reach the person. */
-  interactive?: boolean
-  /** Each line of stdout as it comes (an engine install's progress). */
-  onLine?: (line: string) => void
-}
-export type GuestRunner = (command: string, args: readonly string[], options?: GuestRunOptions) => Promise<GuestRunResult>
-
-/** Runs a command and collects its output; never rejects (a spawn error is `code: null`). */
-export const runGuestCommand: GuestRunner = (command, args, options = {}) => new Promise((resolve) => {
-  let stdout = '', stderr = '', pending = ''
-  const child = spawn(command, [...args], { stdio: options.interactive ? 'inherit' : ['ignore', 'pipe', 'pipe'] })
-  const timer = options.timeoutMs ? setTimeout(() => child.kill('SIGKILL'), options.timeoutMs) : null
-  child.stdout?.on('data', (chunk: Buffer) => {
-    const text = chunk.toString('utf8')
-    stdout += text
-    if (!options.onLine) return
-    pending += text
-    const lines = pending.split('\n')
-    pending = lines.pop() ?? ''
-    for (const line of lines) options.onLine(line)
-  })
-  child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8') })
-  child.on('error', (error) => { if (timer) clearTimeout(timer); resolve({ code: null, stdout, stderr: stderr || error.message }) })
-  child.on('close', (code) => {
-    if (timer) clearTimeout(timer)
-    if (pending && options.onLine) options.onLine(pending)
-    resolve({ code, stdout, stderr })
-  })
-})
-
-const GUEST_USER = /^hg_[0-9a-f]{12}$/
-
 /** The OS user a guest gets: `hg_` and the first 12 hex of sha256(the lower-cased email). The helper
  *  derives the same name itself; a test holds the two equal. */
 export function guestUserFor(email: string): string {
@@ -101,10 +67,6 @@ export function guestUserFor(email: string): string {
 export function guestWorkspaceFor(email: string, platform: NodeJS.Platform = process.platform): string {
   const user = guestUserFor(email)
   return platform === 'win32' ? `C:\\Users\\${user}\\work` : `${guestHomeRoot(platform)}/${user}/work`
-}
-
-export function isGuestUser(user: string): boolean {
-  return GUEST_USER.test(user)
 }
 
 export function guestEnvAllowed(key: string): boolean {
