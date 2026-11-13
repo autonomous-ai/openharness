@@ -6,9 +6,12 @@
  * What it hands the core is typed by core/api.ts, the core's contract: the Super Tab members' waits and cards on the
  * devices (`SuperTabsCore`), a member's terminal for its Lead, the close and reopen of its agents (`SwarmAgents`), a
  * start's Swarm role (`SwarmLaunch`), an attached agent's role at its restart (`AdoptSwarmSkill`), its chat queued while
- * an agent works, the Leads that are never stopped, and its chat files streamed to the backend. And the Super Tab
- * service's own start, for when it runs in the core's process (services/superTabs.ts), so a core running every service
- * there with the Swarm off loads none of it either.
+ * an agent works, the Leads that are never stopped, and its chat files streamed to the backend.
+ *
+ * Its side of the core and nothing else: the Super Tab service runs in a process of its own, and its start has a door of
+ * its own for a core that runs it here (superTabs/inCoreService.ts). This file once re-exported that start, so every
+ * core with the Swarm on loaded the whole service, 118 files it never ran (the audit of 2026-11-12,
+ * docs/design/2026-11-12-core-audit.md); src/architecture.spec.ts now lists, file by file, what this door loads.
  */
 export { createSuperTabAttention } from './inCore/attention.js'
 export { createSuperTabCards } from './inCore/cards.js'
@@ -24,4 +27,3 @@ export { recordCleanupClose } from './cleanupCloses.js'
 // A Product Manager switched from its pane (Change agent) is the one stop of a Lead its close guard and stop guard let through.
 export { leadCloseProtected, leadSwitchEnded, leadSwitching, mayBeLead } from './leadSwitch.js'
 export { forwardAttachmentUpload } from '../lib/superTabAttachmentProxy.js'
-export { startSuperTabs } from '../services/superTabs.js'

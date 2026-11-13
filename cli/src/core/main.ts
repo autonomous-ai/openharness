@@ -1840,8 +1840,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   if (!outOfProcess.has('hachi')) serviceHost.serve('hachi', inline!.startHachiInCore, coreApi, [])
   if (!outOfProcess.has('memory')) serviceHost.serve('memory', inline!.startMemory, coreApi, MEMORY_REQUESTS)
   if (!outOfProcess.has('router')) serviceHost.serve('router', inline!.startRouter, coreApi, ROUTER_REQUESTS)
+  // The Swarm's own service runs in its process; its code is loaded here only when it runs here instead (superTabs/inCoreService.ts).
   if (!swarm) serviceHost.leaveOff('superTabs', SUPER_TAB_REQUESTS)
-  else if (!outOfProcess.has('superTabs')) serviceHost.start('superTabs', swarm.startSuperTabs, coreApi, SUPER_TAB_FALLBACKS, SUPER_TAB_REQUESTS)
+  else if (!outOfProcess.has('superTabs')) serviceHost.start('superTabs', (await import('../superTabs/inCoreService.js')).startSuperTabs, coreApi, SUPER_TAB_FALLBACKS, SUPER_TAB_REQUESTS)
   if (!outOfProcess.has('handoff')) serviceHost.serve('handoff', (core) => inline!.startHandoff(core, undefined, undefined, swarmServices?.recordReplacement), coreApi, HANDOFF_REQUESTS)
   // Connected services' MCP bridge and the Connectors screen (services/connectors.ts): here, or in the edge host
   // (services/connectorsProcess.ts), asked through its port (core/connectorsLink.ts) for a profile home's entries.

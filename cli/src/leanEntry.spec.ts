@@ -136,6 +136,24 @@ describe('the lean bundle a release carries', () => {
     }
   })
 
+  // The audit of 2026-11-12 (docs/design/2026-11-12-core-audit.md): the core's door to the Swarm (superTabs/inCore.ts)
+  // re-exported the service's own start, so the shipped core read the whole service once the Swarm was on, the default:
+  // 629 KB beside the 2,403 KB it starts with (v0.6.51), in the process that must never go down. The door now holds the
+  // Swarm's side of the core alone, and the service's start is a file of its own, read only by a core that runs it.
+  it('hands a core with the Swarm on its side of the core, and none of its service', () => {
+    const door = [...files.keys()].find((name) => name.startsWith('core-inCore-'))
+    const service = [...files.keys()].find((name) => name.startsWith('core-inCoreService-'))
+    expect(door, 'the core\'s door to the Swarm').toBeDefined()
+    expect(service, 'the service\'s own door, for a core that runs it').toBeDefined()
+    const side = [...new Set([...loads('core'), ...reach([door!])])]
+    expect(side.some((name) => files.get(name)!.includes('Only a stopped Product Manager of a Swarm project is reopened.'))).toBe(true)
+    // The host's journal (superTabs/host.ts) and an agent's own commands (superTabs/service.ts) are the service's.
+    for (const marker of ['Super Tab host journal is unreadable', 'This agent is not a running contribution on this machine.']) {
+      expect(side.filter((name) => files.get(name)!.includes(marker)), marker).toEqual([])
+      expect([...reach([service!])].some((name) => files.get(name)!.includes(marker)), marker).toBe(true)
+    }
+  })
+
   it('loads native hook declarations eagerly without importing the optional compatibility entry', () => {
     const core = loads('core')
     // This is native source data written into Amp's plugin file, not Amp's optional transcript reader.
