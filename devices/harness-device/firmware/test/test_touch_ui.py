@@ -245,6 +245,7 @@ for name in ['notice_remove', 'notice_sync_view', 'notice_selection', 'notice_re
 code += '#define ui_notify_task_done(a,b,c,d) ui_notify_summary(a,b,c,d,"alert",false,false)\n'
 for name in ['ui_project_set_host_caps', 'ui_fleet_set_view', 'event', 'ui_project_emit', 'ui_project_restore_event', 'ui_project_clear_event', 'ui_project_set_name', 'ui_project_remove', 'ui_project_clear_all', 'ui_project_apply_order']:
     code += function(name)
+code += 'static void dispatch(action_t a);\n'
 visit_actions=source.split('    case A_LATEST:',1)[1].split('    case A_TABS:',1)[0]
 code+='static void visit_action(action_t a) { switch(a.kind) { case A_LATEST:'+visit_actions+'default: break; } }\n'
 notice_actions=source.split('    case A_NOTICE:',1)[1].split('    case A_LATEST:',1)[0]
@@ -255,7 +256,6 @@ visit_worker=source.split('static void worker(',1)[1].split('        case A_VISI
 code+='static void visit_work(action_t a) { switch(a.kind) { case A_VISIT_SEND:'+visit_worker+'default: break; } }\n'
 carry_actions = source.split('case A_CARRY:\n',1)[1].split('case A_NAP:',1)[0]
 code += 'static void carry_action(action_t a) { switch(a.kind) { case A_CARRY:\n' + carry_actions + 'default: break; } }\n'
-code += 'static void dispatch(action_t a);\n'
 lead_actions = source.split('    case A_LEAD: {',1)[1].split('    case A_READER:',1)[0]
 panes_actions = source.split('    case A_AGENTS: {',1)[1].split('    case A_AGENT: {',1)[0]
 code += '#define TAB_ROWS 4\nstatic void panes_action(action_t a) { switch(a.kind) { case A_AGENTS: {'+panes_actions+'default: break; } }\n'
@@ -3413,6 +3413,15 @@ int main(int argc, char **argv) {
     ui_project_set_host_caps("a","orca",CABLE_CAP_S|CABLE_CAP_A); scene_take();
     assert(!action_enabled(A_QUESTION_SAY) && !scene_says("[say]") && action_enabled(A_QUESTION_CHOICES));
     portrait(dir,"caps-question-no-say");
+    // a notice tap on an agent without F opens no window: the dial goes to its face, the recap still on it
+    reset(); ui_project_set_host_caps("b","orca",CABLE_CAP_S|CABLE_CAP_V|CABLE_CAP_A);
+    ui_project_emit("b","sess","summary","The build is ready.","The build is ready.");
+    ui_notify_task_done("b","Agent B","M2","The build is ready.");
+    ui_notif_open(); dispatch((action_t){.kind=A_NOTICE,.id="b"});
+    assert(!desktop_opens && !s.opening_notice[0] && !notice_unread(NULL));
+    assert(switches==1 && s.view==AGENT && !strcmp(active()->id,"b"));
+    scene_take(); assert(result_visible() && !pane_memory("b",false)->dismissed);
+    portrait(dir,"caps-notice-no-focus");
     // Hold opens one destination immediately; every direction of the opening contact is consumed.
     const int hold_ends[][2]={{233,220},{330,220},{130,220},{233,130},{233,320}};
     for(unsigned i=0;i<sizeof hold_ends/sizeof hold_ends[0];i++) {
@@ -4339,6 +4348,10 @@ int main(int argc, char **argv) {
             DESIGN_HOME(); fake_ms = 1200; ui_project_set_host_caps("a", "orca", CABLE_CAP_S); ui_fleet_set_view(true);
             ui_project_emit("a", "", "processing", "", NULL);
             ui_project_emit("a", "", "activity", "Waiting for you \xc2\xb7 Orca", NULL); scene_take(); DESIGN("waiting-orca");
+            DESIGN_HOME(); fake_ms = 1200; ui_project_set_host_caps("b", "orca", CABLE_CAP_S);
+            ui_project_emit("b", "sess", "summary", "Hero and pricing are in.", "Hero and pricing are in.");
+            ui_notify_task_done("b", "Landing page", "MacBook", "Hero and pricing are in."); ui_notif_open();
+            dispatch((action_t){.kind = A_NOTICE, .id = "b"}); scene_take(); DESIGN("notice-no-focus");
             #undef DESIGN_HOME
             #undef DESIGN
         }
