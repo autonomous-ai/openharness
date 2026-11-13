@@ -1,16 +1,20 @@
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
+from unittest import mock
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("local_receipt_planner", SCRIPTS / "ci-plan.py")
 planner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(planner)
+checks = planner.local_checks
 
 
 def receipt(check="cli-core", **changes):
@@ -33,6 +37,46 @@ def needs(receipts=None):
     if receipts is not None:
         result["process-checks"]["outputs"] = dict(local_receipts=json.dumps(receipts))
     return result
+
+
+# What the fake checks print and do, in the throwaway repository's cli/: Vitest's summary without a suite.
+FAKE = r"""
+import pathlib, subprocess, sys, time
+
+def summary(n):
+    print(f"\x1b[2m      Tests \x1b[22m \x1b[1m\x1b[32m{n} passed\x1b[39m\x1b[22m\x1b[90m ({n})\x1b[39m", flush=True)
+
+mode = sys.argv[1]
+if mode == "pass":
+    summary(sys.argv[2])
+elif mode == "mark":
+    pathlib.Path(sys.argv[2]).write_text("ran\n")
+    summary(1)
+elif mode == "fail":
+    print("      Tests  1 failed | 2 passed (3)")
+    sys.exit(1)
+elif mode == "nocount":
+    print("ok")
+elif mode == "skipped":
+    print("      Tests  2 skipped (2)")
+elif mode == "long":
+    summary(4)
+    sys.stdout.buffer.write(b"\xff src/file.ts | 100 | 100 | 100 | 100 |\n" * 6000)
+elif mode == "move":
+    subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", "moved"], check=True)
+    summary(1)
+elif mode == "litter":
+    pathlib.Path("left-behind.txt").write_text("left\n")
+    summary(1)
+elif mode == "hang":
+    # Passed, not inherited, so the child holds the pipe on Windows too.
+    subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"], stdout=sys.stdout)
+    time.sleep(600)
+"""
+
+
+def fake(mode, platform=None, area="a"):
+    return dict(command=f'"{sys.executable}" fake.py {mode}', cwd="cli", platform=platform, paths=(f"area/{area}/*",))
 
 
 class LocalGateTests(unittest.TestCase):
@@ -125,6 +169,10 @@ class LocalGateTests(unittest.TestCase):
             with self.subTest(members=members), self.assertRaisesRegex(ValueError, "local check"):
                 planner.verify(p, needs([receipt(head="d" * 40)]), "a" * 40)
 
+    def test_a_refused_body_says_how_to_make_the_receipts(self):
+        with self.assertRaisesRegex(ValueError, r"receipts: cli-core\. Run python3 scripts/local-checks\.py --run "):
+            planner.verify(plan(), needs(), "a" * 40)
+
     def test_unmapped_manual_and_merge_group_runs_keep_their_contract(self):
         for p in [plan(["README.md"], local_checks=[]), plan(event="merge_group", local_checks=[]),
                   plan(event="workflow_dispatch", local_checks=[])]:
@@ -198,7 +246,7 @@ class LocalProcessTests(unittest.TestCase):
         self.assertEqual(json.loads(output.removeprefix("local_receipts=")), [])
 
 
-class LocalMappingTests(unittest.TestCase):
+class GitFixture:
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -213,16 +261,18 @@ class LocalMappingTests(unittest.TestCase):
     def git(self, *args):
         return subprocess.check_output(["git", *args], cwd=self.root, text=True, stderr=subprocess.PIPE).strip()
 
-    def write(self, path):
+    def write(self, path, text="fixture\n"):
         target = self.root / path
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("fixture\n")
+        target.write_text(text)
 
     def commit(self):
         self.git("add", ".")
         self.git("commit", "-qm", "fixture")
         return self.git("rev-parse", "HEAD")
 
+
+class LocalMappingTests(GitFixture, unittest.TestCase):
     def select(self, ref="pip/1"):
         head = self.git("rev-parse", "HEAD")
         event = dict(pull_request=dict(head=dict(sha=head, ref=ref), base=dict(sha=self.base)))
@@ -304,6 +354,230 @@ class LocalMappingTests(unittest.TestCase):
         self.commit()
         with self.assertRaisesRegex(ValueError, "train"):
             self.select("harness-train/1")
+
+
+class LocalRunRuleTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        (self.root / "cli").mkdir()
+        (self.root / "cli/package.json").write_text(json.dumps(dict(scripts={
+            "test:core": "vitest run --config vitest.core.config.ts",
+            "test:orchestrator": "vitest run src/orchestrator --maxWorkers=1 --coverage",
+            "test:terminal-contract": "vitest run a.spec.ts --maxWorkers=1 --passWithNoTests"})))
+
+    def test_the_platform_is_the_running_os(self):
+        for name, expected in (("darwin", "macos"), ("linux", "linux"), ("win32", "windows"), ("freebsd14", None)):
+            with mock.patch.object(checks.sys, "platform", name):
+                self.assertEqual(checks.host_platform(), expected)
+
+    def test_run_adds_only_the_caps_validation_accepts(self):
+        with mock.patch.object(checks.os, "cpu_count", return_value=8):
+            self.assertEqual(checks.run_command(self.root, "cli-core"), "npm run test:core -- --maxWorkers=4")
+            # No such script in the fixture: capped, and the command then fails by itself.
+            self.assertEqual(checks.run_command(self.root, "cli-harnessd"), "npm run test:harnessd -- --maxWorkers=4")
+            for name in ("cli-serial", "cli-shell"):                 # npx vitest … --maxWorkers=1, as they are
+                self.assertEqual(checks.run_command(self.root, name), checks.CHECKS[name]["command"])
+            self.assertEqual(checks.run_command(self.root, "desktop-macos"), 'make desktop-test ARGS="--timeout 3600"')
+        for cpus, workers in ((1, 1), (None, 1), (3, 1), (400, 99)):
+            with mock.patch.object(checks.os, "cpu_count", return_value=cpus):
+                self.assertEqual(checks.run_command(self.root, "cli-core"), f"npm run test:core -- --maxWorkers={workers}")
+
+    # Vitest refuses --maxWorkers twice, and cli/package.json sets it inside test:orchestrator and test:terminal-contract.
+    def test_a_script_that_already_sets_max_workers_gets_no_cap_and_a_plain_receipt(self):
+        package = self.root / "cli/package.json"
+        with mock.patch.object(checks.os, "cpu_count", return_value=8):
+            for name, command in (("cli-orchestrator", "npm run test:orchestrator"),
+                                  ("cli-pty", "npm run test:terminal-contract")):
+                self.assertEqual(checks.run_command(self.root, name), command)
+                r = receipt(name, command=command, cwd="cli", platform="macos")
+                self.assertEqual(checks.validate_receipts({"a" * 40: [name]}, [r]), [r])
+            # A package.json that cannot be read is no reason to drop the cap, and never a traceback.
+            for text in ("not json", "[]", '{"scripts": []}', '{"scripts": {"test:orchestrator": 1}}', None):
+                package.write_text(text) if text is not None else package.unlink()
+                self.assertEqual(checks.run_command(self.root, "cli-orchestrator"),
+                                 "npm run test:orchestrator -- --maxWorkers=4")
+
+    def test_every_command_run_makes_a_receipt_validation_accepts(self):
+        for name, contract in checks.CHECKS.items():
+            r = receipt(name, command=checks.run_command(self.root, name), cwd=contract["cwd"],
+                        platform=contract["platform"] or "linux")
+            self.assertEqual(checks.validate_receipts({"a" * 40: [name]}, [r]), [r])
+
+    def test_the_count_is_the_last_vitest_summary_without_colour(self):
+        for output, count in [
+                (" Test Files  2 passed (2)\n      Tests  12 passed (12)\n", 12),
+                ("\x1b[2m      Tests \x1b[22m \x1b[1m\x1b[32m7 passed\x1b[39m\x1b[22m\x1b[90m (7)\x1b[39m\n", 7),
+                ("      Tests  1 failed | 5 passed (6)\n", 5), ("      Tests  3 passed | 2 skipped (5)\r\n", 3),
+                ("      Tests  999 passed (999)\nlater\n      Tests  4 passed (4)\n", 4),
+                ("      Tests  2 skipped (2)\n", 0), (" Test Files  2 passed (2)\n", 0), ("12 passed\n", 0), ("", 0)]:
+            self.assertEqual(checks.passed_count("cli-core", output), count)
+
+    def test_the_desktop_count_comes_from_the_receipt_its_output_names(self):
+        path = self.root / "receipt.json"
+        path.write_text(json.dumps(dict(status="passed", coverage=dict(files=3, passed=41, skipped=1))))
+        self.assertEqual(checks.passed_count("desktop-macos", f"desktop-vm: 41 passed\npassed: {path}\n"), 41)
+        self.assertEqual(checks.passed_count("desktop-macos", f"passed_after_startup_retry: {path}\n"), 41)
+        for output in (f"failed: {path}\n", "passed: /nowhere/receipt.json\n", "      Tests  12 passed (12)\n", ""):
+            self.assertEqual(checks.passed_count("desktop-macos", output), 0)
+        for bad in ("not json", "[]", '{"coverage": {"passed": "41"}}', '{"coverage": {"passed": true}}'):
+            path.write_text(bad)
+            self.assertEqual(checks.passed_count("desktop-macos", f"passed: {path}\n"), 0)
+
+
+class LocalRunTests(GitFixture, unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        self.write("cli/fake.py", FAKE)
+        self.base = self.commit()
+        outside = tempfile.TemporaryDirectory()
+        self.addCleanup(outside.cleanup)
+        self.marker = Path(outside.name) / "marker"
+
+    def change(self, *areas):
+        for area in areas:
+            self.write(f"area/{area}/1")
+        return self.commit()
+
+    def run_checks(self, table, base=None):
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.dict(checks.CHECKS, table, clear=True):
+            code = checks.run(self.root, base or self.base, out, err)
+        return code, out.getvalue(), err.getvalue()
+
+    def cli(self, *args, cwd=None):
+        return subprocess.run([sys.executable, SCRIPTS / "local-checks.py", *args], cwd=cwd or self.root,
+                              text=True, capture_output=True, timeout=60)
+
+    def test_the_printed_fence_is_what_ci_accepts_at_this_head(self):
+        self.write(".gitignore", "ignored/\n")
+        head = self.change("a", "b")
+        self.write("ignored/log")                                    # an ignored file leaves the tree clean
+        table = {"fake-b": fake("pass 5", area="b"), "fake-a": fake("pass 3", area="a")}
+        code, out, err = self.run_checks(table)
+        receipts = [dict(check=name, command=table[name]["command"], cwd="cli", head=head, status="passed",
+                         passed=passed, platform=checks.host_platform()) for name, passed in (("fake-a", 3), ("fake-b", 5))]
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out, "```harness-local-checks\n" + json.dumps(receipts, indent=2) + "\n```\n")
+        self.assertIn("3 passed", err)                               # a check's output streams to stderr
+        event = dict(pull_request=dict(head=dict(sha=head), body="What changed\n\n" + out))
+        with mock.patch.dict(checks.CHECKS, table, clear=True):
+            self.assertEqual(checks.check(plan(["area/a/1", "area/b/1"], head=head,
+                                               local_checks=["fake-a", "fake-b"]), event), receipts)
+
+    def test_a_dirty_tree_is_refused_before_anything_runs(self):
+        self.change("a")
+        for dirty in ("staged", "unstaged", "untracked"):
+            with self.subTest(dirty=dirty):
+                self.git("reset", "-q", "--hard"), self.git("clean", "-qfd")
+                (self.root / ("new.txt" if dirty == "untracked" else "README.md")).write_text("changed\n")
+                if dirty == "staged":
+                    self.git("add", "README.md")
+                code, out, err = self.run_checks({"fake-a": fake(f'mark "{self.marker}"')})
+                self.assertEqual((code, out, err), (1, "", "Local checks not run: the tree has uncommitted changes.\n"))
+                self.assertFalse(self.marker.exists())
+
+    def test_the_checks_are_the_ones_the_paths_since_the_base_need(self):
+        first = self.change("a")
+        (self.root / "area/a/1").unlink(), self.write("area/c/1"), self.write("area/b/1"), self.commit()
+        table = {f"fake-{area}": fake("pass 1", area=area) for area in "abcd"}
+        names = lambda result: [r["check"] for r in json.loads(checks.FENCE.findall(result[1])[0])]
+        self.assertEqual(names(self.run_checks(table, base=first)), ["fake-a", "fake-b", "fake-c"])  # a move counts twice
+        self.assertEqual(names(self.run_checks(table)), ["fake-b", "fake-c"])
+
+    def test_no_required_check_prints_nothing_and_passes(self):
+        self.write("docs/guide.md"), self.commit()
+        self.assertEqual(self.run_checks({"fake-a": fake("fail")}), (0, "", "No local check is required.\n"))
+
+    def test_every_failed_check_is_named_and_no_fence_is_printed(self):
+        self.change("a", "b", "c", "d")
+        code, out, err = self.run_checks({"fake-a": fake("fail", area="a"), "fake-b": fake(f'mark "{self.marker}"', area="b"),
+                                          "fake-c": fake("nocount", area="c"), "fake-d": fake("skipped", area="d")})
+        self.assertEqual((code, out), (1, ""))
+        self.assertTrue(self.marker.exists())                        # a later check runs after one fails
+        self.assertTrue(err.endswith("fake-a failed: exit 1\nfake-c failed: no passed count\nfake-d failed: no passed count\n"))
+
+    def test_a_check_for_another_platform_is_refused_before_anything_runs(self):
+        self.change("a", "b")
+        host = checks.host_platform()
+        other = "linux" if host == "macos" else "macos"
+        table = {"fake-a": fake(f'mark "{self.marker}"', area="a"), "fake-b": fake("pass 1", platform=other, area="b")}
+        self.assertEqual(self.run_checks(table), (1, "", f"Local checks not run: fake-b needs {other}; this is {host}.\n"))
+        with mock.patch.object(checks, "host_platform", return_value=None):
+            self.assertEqual(self.run_checks(table), (1, "", "Local checks not run: this is not macOS, Linux or Windows.\n"))
+        self.assertFalse(self.marker.exists())
+
+    def test_a_run_that_moves_head_or_dirties_the_tree_is_void(self):
+        self.change("a")
+        for mode in ("move", "litter"):
+            with self.subTest(mode=mode):
+                code, out, err = self.run_checks({"fake-a": fake(mode)})
+                self.assertEqual((code, out), (1, ""))
+                self.assertTrue(err.endswith("Local checks void: HEAD or the tree changed during the run.\n"))
+                self.git("clean", "-qfd")
+
+    # The child holds the check's stdout, so run() returns only once the whole group is dead. Asking the process table
+    # instead would be flaky: a killed orphan stays a zombie until init reaps it.
+    def test_a_check_past_its_limit_is_killed_with_its_children_and_named(self):
+        self.change("a", "b")
+        started = time.monotonic()
+        with mock.patch.object(checks, "RUN_SECONDS", 3):
+            code, out, err = self.run_checks({"fake-a": fake("hang", area="a"),
+                                              "fake-b": fake(f'mark "{self.marker}"', area="b")})
+        self.assertEqual((code, out), (1, ""))
+        self.assertTrue(err.endswith("fake-a failed: timed out\n"))
+        self.assertTrue(self.marker.exists())
+        self.assertLess(time.monotonic() - started, 60)
+
+    def test_the_count_survives_a_long_report_after_the_summary(self):
+        self.change("a")
+        code, out, err = self.run_checks({"fake-a": fake("long")})
+        self.assertEqual((code, json.loads(checks.FENCE.findall(out)[0])[0]["passed"]), (0, 4))
+        self.assertGreater(len(err), 200000)                         # all of it streamed
+
+    def test_a_command_validation_would_refuse_never_becomes_a_fence(self):
+        self.change("a")
+        out = io.StringIO()
+        narrowed = lambda root, name: checks.CHECKS[name]["command"] + " -t one"
+        with mock.patch.dict(checks.CHECKS, {"fake-a": fake("pass 3")}, clear=True), \
+                mock.patch.object(checks, "run_command", narrowed), self.assertRaisesRegex(ValueError, "receipts: fake-a"):
+            checks.run(self.root, self.base, out, io.StringIO())
+        self.assertEqual(out.getvalue(), "")
+
+    # Windows writes "\n" on a text stdout as "\r\n", and CI's FENCE takes no "\r" before the closing line, so main()
+    # sets the line end itself. This stream does on every platform what a Windows stdout does.
+    def test_the_fence_on_stdout_ends_its_lines_as_ci_reads_them(self):
+        self.change("a")
+        raw = io.BytesIO()
+        stdout = io.TextIOWrapper(raw, encoding="utf-8", newline="\r\n")
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(self.root)
+        with mock.patch.dict(checks.CHECKS, {"fake-a": fake("pass 3")}, clear=True), \
+                mock.patch.object(sys, "argv", ["local-checks.py", "--run", "--base", self.base]), \
+                mock.patch.object(sys, "stdout", stdout), mock.patch.object(sys, "stderr", io.StringIO()), \
+                self.assertRaises(SystemExit) as done:
+            checks.main()
+        stdout.flush()
+        self.assertEqual(done.exception.code, 0)
+        self.assertNotIn(b"\r", raw.getvalue())
+        self.assertEqual(len(checks.FENCE.findall(raw.getvalue().decode())), 1)
+
+    def test_the_command_line_runs_from_any_folder_and_refuses_what_git_cannot_compare(self):
+        self.write("docs/guide.md"), self.commit()
+        result = self.cli("--run", "--base", self.base, cwd=self.root / "docs")
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "", "No local check is required.\n"))
+        refused = "Local checks not run: git cannot compare the base with HEAD; fetch it or pass --base REF.\n"
+        for args in (["--base=no-such-ref"], ["--base=--output=leak"], []):   # [] is origin/main, which is not here
+            result = self.cli("--run", *args)
+            self.assertEqual((result.returncode, result.stdout, result.stderr), (1, "", refused))
+        self.assertEqual(list(self.root.glob("leak*")), [])
+        result = self.cli("--run", cwd=self.marker.parent)
+        self.assertEqual((result.returncode, result.stdout, result.stderr),
+                         (1, "", "Local checks not run: this is not a git repository.\n"))
+        self.assertEqual(self.cli("--run", "--list", "x").returncode, 2)
+        self.assertEqual(json.loads(self.cli("--list", "cli/src/core/api.ts").stdout),
+                         {"cli-core": dict(command="npm run test:core", cwd="cli", platform=None)})
 
 
 if __name__ == "__main__":
