@@ -31,8 +31,9 @@ typedef struct {
      * "Coalescing", never a tool call. The face has a row for it beside the name.
      */
     const char *engine, *activity;
-    // A Swarm face's chat under its project (Chat with PM's "PM", a group's name), on the inner arc. NULL or
-    // "" for the Lead chat and every other face.
+    // The grey line under the name, on the inner arc: a Swarm face's chat under its project (Chat with PM's "PM", a
+    // group's name), or in the machine view the app an agent runs in ("Orca"). NULL or "" for the Lead chat and
+    // every other face.
     const char *chat;
     uint32_t elapsed;
     ht_character_mood_t mood;

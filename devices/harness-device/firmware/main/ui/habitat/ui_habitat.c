@@ -1664,7 +1664,7 @@ static void render_swarm_face(ht_scene_t *f)
     }
     if (thread) face_thread(f, l, buddy, recap, wait, bell && l->buddies);
     else { ht_focus_set_voice(true); ht_character_face(f, &character, &f_, ACCENT, recap); }   // a Swarm always hears
-    s.pet_next_ms = !thread ?ht_focus_pet_next_ms(&f_, recap) : 0;
+    s.pet_next_ms = !thread ? ht_focus_pet_next_ms(&f_, recap) : 0;
     ht_rect_t bubble = {0};
     bool told = bell && !thread && ht_focus_alert_shown(&f_, recap, &bubble);
     int bell_y = l->buddies ? 346 : 400;   // clear of the pair
