@@ -12,7 +12,9 @@ The core stays small and secure, in the code and at run time: read
 2. **Only what every session needs.** A feature a session can run without belongs in a service. Ask
    before growing the core; the answer is usually a service and, at most, a new `CoreApi` member. The
    same for what a core module imports: a file in `lib/` or `engines/` that the core imports runs in the
-   core's process, all of it, for the one helper asked of it. Import from small modules.
+   core's process, all of it, for the one helper asked of it. Import from small modules. Every file the
+   core's process loads is listed in `../architecture.coreFiles.txt`; a new one fails the test until its
+   line is added, in a pull request that says why every session needs it.
 3. **Never import a service, `cli.ts` or `backendSocket.ts`,** except types
    (`import type { BackendSocket }`). The core calls services only through `CorePorts`, and every call
    has a fallback (`api.ts`). `src/architecture.spec.ts` checks it.

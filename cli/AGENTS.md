@@ -37,8 +37,9 @@ small and secure, in the code and at run time, and everything else is a componen
    the component that faces it, and reaches the core as typed, bounded data.
 5. **The core lends its authority narrowly.** It runs no command line a component hands it, and signs a backend
    call for a component only on a route that component declared (`MESSAGES_BACKEND_ROUTES`).
-6. **Adding to the core's process is a decision.** A pull request that adds a file to it says why every session
-   needs it, with the test's size report before and after.
+6. **Adding to the core's process is a decision.** Every file it loads is a line of
+   `src/architecture.coreFiles.txt`, and the test fails on one more. A pull request that adds a line says why
+   every session needs the file; one that takes a file out deletes its line.
 
 ### The processes
 
@@ -103,7 +104,8 @@ sessions to the owner's other machines, the Share relay for a harness shared wit
    a handler there is one call into a module or service. Review changes for that responsibility.
    `src/architecture.spec.ts` enforces import boundaries and walks the imports from `src/core/main.ts`:
    no file from an edge folder (a service, the dial, the relay, …) but those it lists, each with the
-   reason and the step that ends it. New exceptions need a separate architecture review; remove an
+   reason and the step that ends it, and no file at all but those in `src/architecture.coreFiles.txt`.
+   New exceptions need a separate architecture review; remove an
    exception as soon as it is no longer reached. Source line counts are informational, never a merge
    gate or a proxy for runtime cost
    ([../docs/design/2026-10-06-core-boundary-next.md](../docs/design/2026-10-06-core-boundary-next.md)).
