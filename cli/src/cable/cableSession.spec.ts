@@ -19,6 +19,8 @@ import { DialLog } from './dialLog.js'
 import { leadsOf, type LeadRecap, type SaidOnCard, type SwarmCard, type SwarmLead } from '../superTabs/cards.js'
 import { createSwarmCardsIn } from './swarmCardsIn.js'
 import type { PetStore } from './pets/store.js'
+import { HostRegistry } from './hosts/registry.js'
+import type { HostAgent, HostSource } from './hosts/types.js'
 
 /** A port whose two ends are both in this process. */
 class LoopbackPort implements CablePort {
@@ -5901,5 +5903,134 @@ describe('swarm cards', () => {
         } finally { await session.stop() }
       }
     })
+  })
+})
+
+describe('the machine list with no window', () => {
+  type Snapshot = Awaited<ReturnType<NonNullable<CableHost['listAgentSnapshot']>>>
+  const MACHINE: CableAgent[] = [
+    { id: 'o1', name: 'scratch', engine: 'claude', machineId: 'mac-local', machine: 'MacBook Pro', host: 'ghostty', caps: 's' },
+    { id: 'h1', name: 'api', engine: 'claude', machineId: 'mac-local', machine: 'MacBook Pro', host: 'harness', caps: 'sva' },
+  ]
+  const WINDOW: Snapshot = { agents: AGENTS, tab: 't1', total: 2 }
+  const machine = (agents: CableAgent[] = MACHINE): Snapshot => ({ agents, tab: '', total: 5, view: 'machine' })
+
+  async function greeted(snapshot: () => Snapshot) {
+    const c = await connect(makeHost({ listAgentSnapshot: async () => snapshot() }))
+    c.port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+    await vi.waitFor(() => expect(c.port.types()).toContain('notif.replace'))
+    return c
+  }
+  const LIST = new Set(['agents.begin', 'agent', 'agents.end'])
+  const listFrames = (port: LoopbackPort) => port.sent.filter((m) => LIST.has(m.t as string))
+  const ends = (port: LoopbackPort) => port.sent.filter((m) => m.t === 'agents.end')
+
+  it('no window and a registry: sends the selected rows with host, caps and agents.end.view machine', async () => {
+    const { session, port } = await greeted(() => machine())
+    try {
+      expect(listFrames(port)).toEqual([
+        { t: 'agents.begin' },
+        { t: 'agent', id: 'o1', name: 'scratch', engine: 'claude', model: '', effort: '', machineId: 'mac-local', machine: 'MacBook Pro', host: 'ghostty', caps: 's' },
+        { t: 'agent', id: 'h1', name: 'api', engine: 'claude', model: '', effort: '', machineId: 'mac-local', machine: 'MacBook Pro', host: 'harness', caps: 'sva' },
+        { t: 'agents.end', total: 5, tab: '', view: 'machine' },
+      ])
+    } finally { await session.stop() }
+  })
+
+  it('no window and no registry: sends [] as today', async () => {
+    const { session, port } = await greeted(() => ({ agents: [], tab: '', total: 2 }))
+    try {
+      expect(listFrames(port)).toEqual([{ t: 'agents.begin' }, { t: 'agents.end', total: 2, tab: '' }])
+    } finally { await session.stop() }
+  })
+
+  it('with a window: identical frames to today', async () => {
+    // Recorded before the machine list existed: a window's frames carry no host, caps or view.
+    const { session, port } = await greeted(() => WINDOW)
+    try {
+      expect(listFrames(port)).toEqual([
+        { t: 'agents.begin' },
+        { t: 'agent', id: 'a1', name: 'Fix login screen', engine: 'claude', model: '', effort: '', machineId: '', machine: '' },
+        { t: 'agent', id: 'a2', name: 'Device firmware voice', engine: 'codex', model: '', effort: '', machineId: '', machine: '' },
+        { t: 'agents.end', total: 2, tab: 't1' },
+      ])
+    } finally { await session.stop() }
+  })
+
+  it('agentsKey changes when caps change', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    let rows = MACHINE
+    const { session, port } = await greeted(() => machine(rows))
+    try {
+      port.sent.length = 0
+      vi.setSystemTime(Date.now() + 1_100)
+      rows = [{ ...MACHINE[0], caps: 'sv' }, MACHINE[1]]
+      await session.syncAgents()
+      expect(port.sent.filter((m) => m.t === 'agent').map((m) => m.caps)).toEqual(['sv', 'sva'])
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
+  it('window flip coalesces to one push per second', async () => {
+    // The app opening and closing quickly: each flip is a `swarms` announcement and a sync of its own.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    let open = true
+    const { session, port } = await greeted(() => open ? WINDOW : machine())
+    try {
+      vi.setSystemTime(Date.now() + 2_000)
+      port.sent.length = 0
+      for (let flip = 0; flip < 10; flip++) {
+        open = !open
+        vi.setSystemTime(Date.now() + 90)
+        await session.syncAgents()
+      }
+      expect(ends(port)).toEqual([{ t: 'agents.end', total: 5, tab: '', view: 'machine' }])
+      // The window ended open: a second later the dial is told so, once.
+      vi.setSystemTime(Date.now() + 1_000)
+      await session.syncAgents()
+      await session.syncAgents()
+      expect(ends(port).slice(1)).toEqual([{ t: 'agents.end', total: 2, tab: 't1' }])
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
+  it('hello still pushes at once', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    let rows = MACHINE
+    const { session, port } = await greeted(() => machine(rows))
+    try {
+      port.sent.length = 0
+      rows = [MACHINE[1]]
+      await session.syncAgents()
+      expect(ends(port)).toEqual([])                 // paced: the last push was this instant
+      port.say({ t: 'hello', product: 'harness', mac: 'cc:dd' })
+      await vi.waitFor(() => expect(ends(port)).toHaveLength(1))
+      expect(port.sent.filter((m) => m.t === 'agent').map((m) => m.id)).toEqual(['h1'])
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
+  it('a registry change reaches the dial by the next tick', async () => {
+    // The session's 1 s tick reads the list again, so a source's change needs no push of its own: that is the
+    // spec's "coalesced for 1 s", with the gap between pushes held by the pacing above.
+    let agents: HostAgent[] = []
+    const observed: HostSource = {
+      id: 'observed',
+      list: () => agents,
+      onChange: () => () => {},
+      capabilities: () => ({ status: true, voice: false, focus: false, answer: false }),
+    }
+    const host = new DaemonCableHost({
+      sessions: () => [], displayName: () => '', machineName: () => 'this-mac', machineId: () => 'mac-local', computerId: () => 'abc',
+      sendTurn: vi.fn(), stopTurn: vi.fn(), answer: vi.fn(), recent: () => [], recentAsks: () => [], log: vi.fn(),
+    })
+    host.setRegistry(new HostRegistry([host.harness, observed]))
+    const { session, port } = await connect(host)
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(ends(port)).toEqual([{ t: 'agents.end', total: 0, tab: '', view: 'machine' }]))
+      agents = [{ id: 'o1', engine: 'claude', sessionId: 's1', name: 'scratch', host: 'ghostty', state: 'working', since: 1, lastActivityAt: 1, unseenDone: false }]
+      await vi.waitFor(() => expect(ends(port)).toHaveLength(2), NEXT_TICKS)
+      expect(port.sent.filter((m) => m.t === 'agent')).toEqual([
+        { t: 'agent', id: 'o1', name: 'scratch', engine: 'claude', model: '', effort: '', machineId: 'mac-local', machine: 'this-mac', host: 'ghostty', caps: 's' },
+      ])
+    } finally { await session.stop() }
   })
 })

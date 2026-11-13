@@ -9,6 +9,8 @@ import type { RegisteredSession } from '../lib/registry.js'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { DeviceFleet } from '../device/deviceFleet.js'
 import { DeviceLink } from '../device/deviceLink.js'
+import { HostRegistry } from './hosts/registry.js'
+import type { HostAgent, HostSource } from './hosts/types.js'
 
 const AGENTS: Array<{ agentId: string; registeredAt: number; active: boolean; terminalAvailable: boolean; engine: string; lastHookAt?: number }> = []
 
@@ -697,6 +699,54 @@ describe('DaemonCableHost.listSwarms', () => {
     const host = new DaemonCableHost(wiring(), fleetOf([]))
     host.setSwarms(null)
     expect(host.listSwarms()).toEqual({ selected: '', swarms: [], tiles: [] })
+  })
+})
+
+describe('the dial with no window: this computer\'s agents', () => {
+  const sessions = () => [
+    { agentId: 'h1', registeredAt: 1, active: true, terminalAvailable: true, engine: 'claude', sessionId: 's-h1' },
+    { agentId: 'h2', registeredAt: 2, active: true, terminalAvailable: true, engine: 'codex', sessionId: 's-h2' },
+  ] as unknown as RegisteredSession[]
+  const observedAgent = (over: Partial<HostAgent>): HostAgent => ({
+    id: 'o', engine: 'claude', name: 'scratch', host: 'ghostty', state: 'idle', since: 0, lastActivityAt: 0, unseenDone: false, ...over,
+  })
+  const observed = (agents: HostAgent[]): HostSource => ({
+    id: 'observed', list: () => agents, onChange: () => () => {},
+    capabilities: () => ({ status: true, voice: false, focus: false, answer: false }),
+  })
+
+  it('no window and a registry: the selected rows with host and caps, and view machine', async () => {
+    const host = new DaemonCableHost(wiring({ sessions }), fleetOf([]))
+    host.setRegistry(new HostRegistry([host.harness, observed([
+      observedAgent({ id: 'o1', state: 'needs-you', lastActivityAt: 10 }),
+      // The same Claude Code session as h1, heard before it moved into a Harness pane: shown once, as h1.
+      observedAgent({ id: 'o2', sessionId: 's-h1', state: 'working' }),
+    ])]))
+    host.harness.noteCard('h2', 'processing')
+    host.setSwarms(null)
+    const local = { machineId: 'mine', machine: 'MacbookPro.local' }
+    expect(await host.listAgentSnapshot()).toEqual({ tab: '', total: 3, view: 'machine', agents: [
+      { id: 'o1', name: 'scratch', engine: 'claude', ...local, host: 'ghostty', caps: 's' },
+      { id: 'h2', name: 'h2', engine: 'codex', ...local, host: 'harness', caps: 'sva' },
+      { id: 'h1', name: 'h1', engine: 'claude', ...local, host: 'harness', caps: 'sva' },
+    ] })
+  })
+
+  it('with a window and a registry: the tab, as today', async () => {
+    const host = new DaemonCableHost(wiring({ sessions }), fleetOf([]))
+    host.setRegistry(new HostRegistry([host.harness, observed([observedAgent({ id: 'o1' })])]))
+    onTab(host, ['h2'])
+    expect(await host.listAgentSnapshot()).toStrictEqual({ tab: 't1', total: 2, agents: [
+      { id: 'h2', name: 'h2', engine: 'codex', machineId: 'mine', machine: 'MacbookPro.local' },
+    ] })
+  })
+
+  it('no window and no registry: [] as today', async () => {
+    const host = new DaemonCableHost(wiring({ sessions }), fleetOf([]))
+    expect(await host.listAgentSnapshot()).toStrictEqual({ agents: [], tab: '', total: 2 })
+    host.setRegistry(new HostRegistry([host.harness]))
+    host.setRegistry(null)
+    expect(await host.listAgentSnapshot()).toStrictEqual({ agents: [], tab: '', total: 2 })
   })
 })
 
