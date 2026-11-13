@@ -225,7 +225,8 @@ this platform uses leaves them out. Low risk on a Mac and Linux, medium on a Win
 
 anh Dee, 2026-11-13: "swarm is an experimental feature. we could turn it off / kill the feature at any time. the
 philosophy: small tiny core that is super stable and solid and a lot of components around it". With the Swarm on, its
-door (`superTabs/inCore.ts`) loads 20 files, about 2,100 lines, into the core's process. Each leaves by one of two ways,
+door (`superTabs/inCore.ts`) loaded 20 files, about 2,100 lines, into the core's process; 19 and about 2,000 after the
+first line below left (13 November). Each leaves by one of two ways,
 so the core keeps no Swarm code at all, and deleting the Swarm changes nothing in it:
 
 - **Through a relay.** What the Swarm's service and the devices tell each other goes through a small generic relay in
@@ -237,7 +238,6 @@ so the core keeps no Swarm code at all, and deleting the Swarm changes nothing i
 
 | What (lines) | What the core asks of it | Where it goes | Order |
 | --- | --- | --- | ---: |
-| `cleanupCloses.ts` (49) | the closes the agent cleanup made, for its report | the agent cleanup records them itself | 1 |
 | `inCore/devices.ts` (9) | whether a finished turn is quiet on the devices | a row flag the Swarm sets at its start | 2 |
 | `inCore/deliveries.ts` (8) | whether a chat message types while the agent works | an option of the delivery the Swarm asks for | 3 |
 | `inCore/cards.ts` (228), `inCore/attention.ts` (98) | the device cards, the waits on a person | the relay: the Swarm's service to the devices, and their wants back; the devices check and replay | 4 |
@@ -250,6 +250,10 @@ so the core keeps no Swarm code at all, and deleting the Swarm changes nothing i
 | `readContract.ts` (89), `wire.ts` (50) | helpers of the files above | go with them | |
 
 Each line is one pull request, tested with the Swarm's own end-to-end files (`superTabs*.e2e.ts`, `swarm*.e2e.ts`).
+
+Left: `cleanupCloses.ts`, the closes the agent cleanup made, for the machine's report (order 1). The door handed it only
+to an agent cleanup in the core's process; that one now gets it as the cleanup in its own process does, from the
+Swarm's side of the services (`superTabs/inServices.ts`) (13 November).
 
 ### 4. Modes where everything runs in the core
 

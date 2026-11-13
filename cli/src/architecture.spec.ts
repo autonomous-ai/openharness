@@ -378,7 +378,7 @@ describe('the daemon\'s shape', () => {
     const door = [...closureOf('superTabs/inCore.ts').keys()].filter((file) => !core.has(file)).sort()
     expect(door, 'What the Swarm runs in the core\'s process is its side of the core alone. Its service runs in its own process: reach it through a port in core/api.ts. A file every Swarm session needs in the core is added here, with the review that says why.').toEqual([
       'lib/agentInstructions.ts', 'lib/superTabAttachmentProxy.ts', 'lib/swarmEngineArgs.ts', 'lib/swarmGitHub.ts', 'lib/swarmSkills.ts',
-      'superTabs/cleanupCloses.ts', 'superTabs/inCore.ts', 'superTabs/inCore/adoption.ts', 'superTabs/inCore/agents.ts',
+      'superTabs/inCore.ts', 'superTabs/inCore/adoption.ts', 'superTabs/inCore/agents.ts',
       'superTabs/inCore/attention.ts', 'superTabs/inCore/cards.ts', 'superTabs/inCore/deliveries.ts', 'superTabs/inCore/devices.ts',
       'superTabs/inCore/launch.ts', 'superTabs/inCore/role.ts', 'superTabs/inCore/terminal.ts', 'superTabs/leadSwitch.ts',
       'superTabs/readContract.ts', 'superTabs/retention.ts', 'superTabs/wire.ts',
