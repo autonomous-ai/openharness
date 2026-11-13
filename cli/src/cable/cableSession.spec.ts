@@ -5959,12 +5959,12 @@ describe('the machine list with no window', () => {
   })
 
   it('agentsKey changes when caps change', async () => {
-    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
     let rows = MACHINE
     const { session, port } = await greeted(() => machine(rows))
     try {
       port.sent.length = 0
-      vi.setSystemTime(Date.now() + 1_100)
+      vi.advanceTimersByTime(1_100)
       rows = [{ ...MACHINE[0], caps: 'sv' }, MACHINE[1]]
       await session.syncAgents()
       expect(port.sent.filter((m) => m.t === 'agent').map((m) => m.caps)).toEqual(['sv', 'sva'])
@@ -5973,28 +5973,43 @@ describe('the machine list with no window', () => {
 
   it('window flip coalesces to one push per second', async () => {
     // The app opening and closing quickly: each flip is a `swarms` announcement and a sync of its own.
-    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
     let open = true
     const { session, port } = await greeted(() => open ? WINDOW : machine())
     try {
-      vi.setSystemTime(Date.now() + 2_000)
+      vi.advanceTimersByTime(2_000)
       port.sent.length = 0
       for (let flip = 0; flip < 10; flip++) {
         open = !open
-        vi.setSystemTime(Date.now() + 90)
+        vi.advanceTimersByTime(90)
         await session.syncAgents()
       }
       expect(ends(port)).toEqual([{ t: 'agents.end', total: 5, tab: '', view: 'machine' }])
       // The window ended open: a second later the dial is told so, once.
-      vi.setSystemTime(Date.now() + 1_000)
+      vi.advanceTimersByTime(1_000)
       await session.syncAgents()
       await session.syncAgents()
       expect(ends(port).slice(1)).toEqual([{ t: 'agents.end', total: 2, tab: 't1' }])
     } finally { await session.stop(); vi.useRealTimers() }
   })
 
+  it('the push spacing is a second, whatever the wall clock does', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    let rows = MACHINE
+    const { session, port } = await greeted(() => machine(rows))
+    try {
+      port.sent.length = 0
+      // The clock is set back an hour (a time sync): a second after the last push, the next still goes.
+      vi.setSystemTime(Date.now() - 3_600_000)
+      vi.advanceTimersByTime(1_100)
+      rows = [MACHINE[1]]
+      await session.syncAgents()
+      expect(ends(port)).toEqual([{ t: 'agents.end', total: 5, tab: '', view: 'machine' }])
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
   it('hello still pushes at once', async () => {
-    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
     let rows = MACHINE
     const { session, port } = await greeted(() => machine(rows))
     try {

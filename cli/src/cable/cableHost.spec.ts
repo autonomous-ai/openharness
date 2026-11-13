@@ -745,7 +745,7 @@ describe('the dial with no window: this computer\'s agents', () => {
   })
 
   it('no window: until the cards a dial asked for come, no Harness agent is listed, for at most 10 s', async () => {
-    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
     try {
       const host = new DaemonCableHost(wiring({ sessions }), fleetOf([]))
       host.setRegistry(new HostRegistry([host.harness, observed([observedAgent({ id: 'o1' })])]))
@@ -765,6 +765,20 @@ describe('the dial with no window: this computer\'s agents', () => {
       expect(await ids()).toEqual(['o1'])
       host.setSwarmCards([])
       expect(await ids()).toEqual(['h1', 'h2', 'o1'])
+    } finally { vi.useRealTimers() }
+  })
+
+  it('no window: the wait for the cards ends 10 s after it began, whatever the wall clock does', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    try {
+      const host = new DaemonCableHost(wiring({ sessions }), fleetOf([]))
+      host.setRegistry(new HostRegistry([host.harness, observed([observedAgent({ id: 'o1' })])]))
+      host.setSwarms(null)
+      host.swarmCardsWanted(true)
+      // The clock is set back an hour (a time sync, a new time zone's server) while the dial waits.
+      vi.setSystemTime(Date.now() - 3_600_000)
+      vi.advanceTimersByTime(10_000)
+      expect((await host.listAgentSnapshot()).agents.map((a) => a.id)).toEqual(['h1', 'h2', 'o1'])
     } finally { vi.useRealTimers() }
   })
 
