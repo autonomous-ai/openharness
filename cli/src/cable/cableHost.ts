@@ -529,6 +529,14 @@ export class DaemonCableHost implements CableHost {
     return agent && source ? { agent, source } : undefined
   }
 
+  /** An agent of another app or terminal, heard on this computer, or undefined. Nothing of it may reach the core: the
+   *  fleet's router takes an id it does not know for a local agent and asks the core's doors, so each route here that
+   *  names an agent answers for it first. Asked with a window too: the dial may still hold it from the machine list. */
+  private outside(agentId: string): HostAgent | undefined {
+    const source = this.registry?.source(agentId)
+    return source && source.id !== 'harness' ? this.registry?.agents().find((a) => a.id === agentId) : undefined
+  }
+
   capsOf(agentId: string): string | undefined {
     const on = this.onMachine(agentId)
     return on && capsLetters(on.source.capabilities(on.agent))
@@ -722,20 +730,19 @@ export class DaemonCableHost implements CableHost {
    * registry, never in the router, and it runs on this computer.
    */
   describe(agentId: string): { name: string; engine: string; machine: string } | undefined {
-    const known = this.viaFleet((r) => r.describe(agentId))
-    if (known) return known
-    const agent = this.registry?.agents().find((a) => a.id === agentId)
-    return agent && { name: agent.name, engine: agent.engine, machine: this.wiring.machineName() }
+    const outside = this.outside(agentId)
+    if (outside) return { name: outside.name, engine: outside.engine, machine: this.wiring.machineName() }
+    return this.viaFleet((r) => r.describe(agentId))
   }
 
   async activityText(agentId: string): Promise<string | null> {
-    if (!this.viaFleet((r) => r.isLocalAgent(agentId))) return null
+    if (!this.outside(agentId) && !this.viaFleet((r) => r.isLocalAgent(agentId))) return null
     if (this.wiring.activityText) return await this.wiring.activityText(agentId) ?? null
     return (await this.wiring.activitySnapshot?.(agentId))?.text ?? null
   }
 
   async activitySnapshot(agentId: string): Promise<ActivitySnapshot | null> {
-    if (!this.viaFleet((r) => r.isLocalAgent(agentId))) return null
+    if (!this.outside(agentId) && !this.viaFleet((r) => r.isLocalAgent(agentId))) return null
     if (this.wiring.activitySnapshot) return await this.wiring.activitySnapshot(agentId)
     const text = await this.wiring.activityText?.(agentId)
     return text ? { text } : null
@@ -825,6 +832,7 @@ export class DaemonCableHost implements CableHost {
    * the refusal for a machine whose last request did not come back. See the router's sendTurn.
    */
   sendTurn(agentId: string, text: string): { ok: true } | { ok: false; machine: string; reason: string } {
+    if (this.outside(agentId)) return { ok: false, machine: this.wiring.machineName(), reason: 'it runs outside Harness' }
     return this.viaFleet((r) => r.sendTurn(agentId, text))
   }
 
@@ -834,19 +842,20 @@ export class DaemonCableHost implements CableHost {
   }
 
   stopTurn(agentId: string): void {
-    this.viaFleet((r) => r.stopTurn(agentId))
+    if (!this.outside(agentId)) this.viaFleet((r) => r.stopTurn(agentId))
   }
 
   canSpeakQuestion(agentId: string): boolean {
-    return this.viaFleet((r) => r.canSpeakQuestion(agentId))
+    return !this.outside(agentId) && this.viaFleet((r) => r.canSpeakQuestion(agentId))
   }
 
   answerReviewed(answer: ReviewedAnswer): Promise<AnswerReceipt> {
+    if (this.outside(answer.agentId)) return Promise.resolve({ ok: false, error: 'Use the terminal to answer this question.' })
     return this.viaFleet((r) => r.answerReviewed(answer))
   }
 
   answer(agentId: string, requestId: string, answers: Record<string, string>): void {
-    this.viaFleet((r) => r.answer(agentId, requestId, answers))
+    if (!this.outside(agentId)) this.viaFleet((r) => r.answer(agentId, requestId, answers))
   }
 
 
@@ -906,21 +915,27 @@ export class DaemonCableHost implements CableHost {
   }
 
   updateAgent(agentId: string, model?: string, effort?: string): void {
-    this.viaFleet((r) => r.updateAgent(agentId, model, effort))
+    if (!this.outside(agentId)) this.viaFleet((r) => r.updateAgent(agentId, model, effort))
   }
 
-  /** The last few turns, newest first, in the shape the dial's tile draws — from the agent's own machine. */
+  /** The last few turns, newest first, in the shape the dial's tile draws — from the agent's own machine. An agent
+   *  outside Harness has only the end of its last turn, as heard here: the card it was sent live. */
   recentSummaries(agentId: string): Promise<Array<{ recap: string; text: string; ask: string; fullText?: string }>> {
+    const outside = this.outside(agentId)
+    if (outside) {
+      const answer = outside.lastAnswer
+      return Promise.resolve(answer ? [{ recap: answer, text: answer, ask: '', fullText: answer }] : [])
+    }
     return this.viaFleet((r) => r.recentSummaries(agentId))
   }
 
   /** The person's own last questions to an agent, newest first — what the router ranks on. */
   recentAsks(agentId: string): Promise<string[]> {
-    return this.viaFleet((r) => r.recentAsks(agentId))
+    return this.outside(agentId) ? Promise.resolve([]) : this.viaFleet((r) => r.recentAsks(agentId))
   }
 
   listModels(agentId: string): Promise<string[]> {
-    return this.viaFleet((r) => r.listModels(agentId))
+    return this.outside(agentId) ? Promise.resolve([]) : this.viaFleet((r) => r.listModels(agentId))
   }
 
   /**
