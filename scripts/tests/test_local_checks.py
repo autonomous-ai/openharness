@@ -423,7 +423,8 @@ class LocalRunRuleTests(unittest.TestCase):
         self.assertEqual(checks.passed_count("desktop-macos", f"passed_after_startup_retry: {path}\n"), 41)
         for output in (f"failed: {path}\n", "passed: /nowhere/receipt.json\n", "      Tests  12 passed (12)\n", ""):
             self.assertEqual(checks.passed_count("desktop-macos", output), 0)
-        for bad in ("not json", "[]", '{"coverage": {"passed": "41"}}', '{"coverage": {"passed": true}}'):
+        for bad in ("not json", "[]", '{"coverage": {"passed": "41"}}', '{"coverage": {"passed": true}}',
+                    '{"coverage": {"passed": -3}}'):
             path.write_text(bad)
             self.assertEqual(checks.passed_count("desktop-macos", f"passed: {path}\n"), 0)
 
