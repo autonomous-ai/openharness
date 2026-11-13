@@ -62,3 +62,25 @@ describe('TmuxBackend.validate and the pre-psEnv start marker', () => {
       .toBe('gone')
   })
 })
+
+describe('TmuxBackend.validate and a pane that holds only the recorded process (#4259)', () => {
+  const BOUND = { pid: 11, executable: 'hermes', startMarker: 'Fri Nov 13 14:22:00 2026' }
+  const SHELL = { pid: 10, executable: 'zsh', startMarker: 'Fri Nov 13 14:00:00 2026' }
+  const UNSHARE = { ...BOUND, executable: 'unshare' }
+  const noEngine = (...paneProcesses: object[]) => ({ ok: false, unknown: false, reason: 'no hermes process under tmux:%42', paneProcesses })
+  const GONE = { state: 'gone', reason: 'no hermes process under tmux:%42' }
+
+  it('is alive while the recorded process runs in the pane under another name', async () => {
+    lookupPaneEngineProcess.mockResolvedValue(noEngine(SHELL, UNSHARE))
+    expect(await new TmuxBackend().validate(PANE, { engine: 'hermes', processIdentity: BOUND })).toEqual({ state: 'alive' })
+  })
+
+  it('is gone when that process left the pane, its pid was reused, or none was recorded', async () => {
+    lookupPaneEngineProcess.mockResolvedValue(noEngine(SHELL))
+    expect(await new TmuxBackend().validate(PANE, { engine: 'hermes', processIdentity: BOUND })).toEqual(GONE)
+    lookupPaneEngineProcess.mockResolvedValue(noEngine(SHELL, { ...UNSHARE, startMarker: 'Fri Nov 13 15:00:00 2026' }))
+    expect(await new TmuxBackend().validate(PANE, { engine: 'hermes', processIdentity: BOUND })).toEqual(GONE)
+    lookupPaneEngineProcess.mockResolvedValue(noEngine(SHELL, UNSHARE))
+    expect(await new TmuxBackend().validate(PANE, { engine: 'hermes' })).toEqual(GONE)
+  })
+})

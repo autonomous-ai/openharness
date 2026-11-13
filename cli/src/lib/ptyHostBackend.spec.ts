@@ -631,6 +631,40 @@ describe('PtyHostBackend validate', () => {
   })
 })
 
+describe('PtyHostBackend validate, a pane that holds only the recorded process (#4259)', () => {
+  const BOUND = { pid: 11, executable: 'hermes', startMarker: 'Fri Nov 13 14:22:00 2026' }
+  const SHELL = { pid: 10, executable: 'zsh', startMarker: 'Fri Nov 13 14:00:00 2026' }
+  const UNSHARE = { ...BOUND, executable: 'unshare' }
+  const noEngine = (...paneProcesses: object[]) => ({ ok: false, unknown: false, reason: 'no hermes process under ptyhost:p1:%1', paneProcesses })
+  const GONE = { state: 'gone', reason: 'no hermes process under ptyhost:p1:%1' }
+
+  it('is alive while the recorded process runs in the pane under another name', async () => {
+    const { backend } = await ready()
+    lookupPaneEngineProcess.mockResolvedValue(noEngine(SHELL, UNSHARE))
+    expect(await backend.validate(PANE, { engine: 'hermes', processIdentity: BOUND })).toEqual({ state: 'alive' })
+  })
+
+  it('is gone when that process left the pane, its pid was reused, or none was recorded', async () => {
+    const { backend } = await ready()
+    lookupPaneEngineProcess.mockResolvedValue(noEngine(SHELL))
+    expect(await backend.validate(PANE, { engine: 'hermes', processIdentity: BOUND })).toEqual(GONE)
+    lookupPaneEngineProcess.mockResolvedValue(noEngine(SHELL, { ...UNSHARE, startMarker: 'Fri Nov 13 15:00:00 2026' }))
+    expect(await backend.validate(PANE, { engine: 'hermes', processIdentity: BOUND })).toEqual(GONE)
+    lookupPaneEngineProcess.mockResolvedValue(noEngine(SHELL, UNSHARE))
+    expect(await backend.validate(PANE, { engine: 'hermes' })).toEqual(GONE)
+  })
+
+  it('on Windows holds that process to the pane\'s Job, as it does an engine', async () => {
+    const bound = { pid: 11, executable: 'hermes.exe', startMarker: 'w:5' }
+    lookupPaneEngineProcess.mockResolvedValue(noEngine({ pid: 10, executable: 'pwsh', startMarker: 'w:1' }, bound))
+    const inJob = await ready({ jobPids: { state: 'ok', value: { pids: [10, 11] } } })
+    expect(await inJob.backend.validateOn('win32', PANE, { engine: 'hermes', processIdentity: bound })).toEqual({ state: 'alive' })
+    const outside = await ready({ jobPids: { state: 'ok', value: { pids: [10] } } })
+    expect(await outside.backend.validateOn('win32', PANE, { engine: 'hermes', processIdentity: bound }))
+      .toEqual({ state: 'gone', reason: 'process is not in the pane job' })
+  })
+})
+
 describe('PtyHostBackend validate on Windows', () => {
   const ENGINE = { pid: 11, executable: 'claude.exe', startMarker: 'w:5' }
   afterEach(() => setProcessTableSource(null))
