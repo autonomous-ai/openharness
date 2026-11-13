@@ -28,8 +28,7 @@ import type { FleetRouting } from '../services/fleet.js'
 import { ServiceUnavailableError } from '../core/serviceHost.js'
 
 import { PLAYER_STATES, type PlayerSession } from './playerLibrary.js'
-import type { CardChat, CardSide, LeadRecap, SaidOnCard, SwarmCard } from '../superTabs/cards.js'
-import type { ActivitySnapshot, AppSwarms, SuperTabAsk, CableAgent, CableHost, CableMachine, CableMachineSource, CableSwarm, CableTile, DialStatus, OpenReason, RouteDecision } from './cableSession.js'
+import type { ActivitySnapshot, AppSwarms, CableAgent, CableHost, CableMachine, CableMachineSource, CableSwarm, CableTile, DialStatus, OpenReason, RouteDecision } from './cableSession.js'
 import type { WindowRoute } from './windowRoute.js'
 import type { SelectionCommand, SelectionResult } from './windowSelection.js'
 import type { VisitCommand, VisitResult } from './windowVisit.js'
@@ -105,19 +104,8 @@ export interface CableHostWiring {
   forkAgent?: (agentId: string) => Promise<{ ok: true; agentId: string } | { ok: false; error: string; detail?: string }>
   /** The dial picked a swarm: the window switches to it. */
   swarmSelected?: (swarmId: string) => void
-  /** A Harness Pro came with Swarm cards (true) or the last one went (false): the core reads the Swarms only meanwhile. */
-  swarmCardsWanted?: (on: boolean) => void
-  /** One Lead's last message, read on request; null when it could not be read. */
-  swarmCardRecap?: (tabId: string, leadId: string, chat?: CardChat) => Promise<LeadRecap | null>
-  /** The recap a device (one cable `session`) has open, or null once closed. */
-  swarmCardOpen?: (session: string, tabId: string, leadId: string | null, chat?: CardChat) => void
-  /** Words for a Lead that runs here, posted as the person in its Swarm chat; not `said` when the harness leads no project,
-   *  `refused` with the backend's reason when it refused the post. */
-  swarmSay?: (harnessId: string, text: string, chat?: CardChat, chatId?: string, reviewed?: boolean) => Promise<SaidOnCard>
-  /** A device picked a Lead: the window opens that Swarm tab and project. */
-  superTabSelected?: (superTabId: string, projectId: string, chat?: CardSide) => void
-  /** A finger on the dial's glass, in pieces, while it is down; `superTabId` when it scrolls that Swarm's chat (a Pro's Lead view). */
-  scrolled?: (phase: 'down' | 'move' | 'up', dy: number, velocity: number, superTabId?: string) => void
+  /** A finger on the dial's glass, in pieces, while it is down. */
+  scrolled?: (phase: 'down' | 'move' | 'up', dy: number, velocity: number) => void
   /** The dial came, went, or started taking an update — see CableSession's onDialStatus. */
   dialStatus?: (status: DialStatus) => void
   appFocus?: CableHost['appFocus']
@@ -183,7 +171,7 @@ export class DaemonCableHost implements CableHost {
   private selected = ''
   /**
    * The newest pick still on its way to a remote machine, until it settles. Only it may move `selected`: a pick waiting on
-   * a slow machine lands up to 15 s later, by when the person may be elsewhere (Diego's Buddy, 11-02). Which pick it is, not
+   * a slow machine lands up to 15 s later, by when the person may be elsewhere (Diego, 11-02). Which pick it is, not
    * just which machine: going away and back to one machine looks the same by name, and the first landing says nothing of
    * the last. The announce on plug-in names it rather than `selected`: announcing the older machine would replace the newer
    * choice at the lane (deviceLink.ts select).
@@ -527,57 +515,9 @@ export class DaemonCableHost implements CableHost {
     if (!app) return { selected: '', swarms: [], tiles: [] }
     return {
       selected: app.active,
-      swarms: app.swarms.map((s) => ({ id: s.id, name: s.name, agents: s.agentIds.length, agentIds: s.agentIds, panes: s.panes, ...(s.superTabId ? { superTabId: s.superTabId } : {}) })),
+      swarms: app.swarms.map((s) => ({ id: s.id, name: s.name, agents: s.agentIds.length, agentIds: s.agentIds, panes: s.panes })),
       tiles: app.tiles,
     }
-  }
-
-  /** The Swarm cards the devices last took (cable/swarmCardsIn.ts); a device that attaches later is shown them (`pushAgents`). */
-  private cards: SwarmCard[] | null = null
-
-  setSwarmCards(items: SwarmCard[]): void {
-    this.cards = items
-  }
-
-  swarmCards(): SwarmCard[] | null {
-    return this.cards
-  }
-
-  swarmCardsWanted(on: boolean): void {
-    this.wiring.swarmCardsWanted?.(on)
-  }
-
-  swarmCardRecap(tabId: string, leadId: string, chat: CardChat = false): Promise<LeadRecap | null> {
-    return this.wiring.swarmCardRecap?.(tabId, leadId, chat) ?? Promise.resolve(null)
-  }
-
-  swarmCardOpen(session: string, tabId: string, leadId: string | null, chat: CardChat = false): void {
-    this.wiring.swarmCardOpen?.(session, tabId, leadId, chat)
-  }
-
-  swarmSay(harnessId: string, text: string, chat: CardChat = false, chatId?: string, reviewed = false): Promise<SaidOnCard> {
-    const pinned: [chatId?: string, reviewed?: boolean] = chatId ? (reviewed ? [chatId, true] : [chatId]) : []
-    return this.wiring.swarmSay?.(harnessId, text, chat, ...pinned) ?? Promise.resolve({ said: false })
-  }
-
-  superTabSelected(superTabId: string, projectId: string, chat?: CardSide): void {
-    if (chat) this.wiring.superTabSelected?.(superTabId, projectId, chat)
-    else this.wiring.superTabSelected?.(superTabId, projectId)
-  }
-
-  /**
-   * The active tab when it is a Swarm, with its open project or '' when none is (its Chat with PM, a DM, or a Swarm
-   * not loaded yet); `fromDevice` when the announce was a device's own pick. A Swarm tab with no project used to read
-   * as no Swarm at all, and the dial stayed on "Nothing on this tab" while the window showed the Swarm. `conversationId`: the
-   * conversation it has open there, when the window names one, which the round dial's face follows, and `threadRoot` the
-   * thread whose pane is on screen beside it.
-   */
-  activeSwarmProject(): { superTabId: string; projectId: string; conversationId?: string; threadRoot?: string; fromDevice: boolean } | null {
-    const app = this.swarms
-    const tab = app?.swarms.find((s) => s.id === app.active)
-    return app && tab?.superTabId ? { superTabId: tab.superTabId, projectId: tab.projectId ?? '',
-      ...(tab.conversationId ? { conversationId: tab.conversationId, ...(tab.threadRoot ? { threadRoot: tab.threadRoot } : {}) } : {}),
-      fromDevice: app.fromDevice === true } : null
   }
 
   selectSwarm(swarmId: string): void {
@@ -814,7 +754,7 @@ export class DaemonCableHost implements CableHost {
     return { machineId: this.machineOf(agentId), agentId }
   }
 
-  scrolled(phase: 'down' | 'move' | 'up', dy: number, velocity: number, superTabId?: string): void {
+  scrolled(phase: 'down' | 'move' | 'up', dy: number, velocity: number): void {
     // THE ENDS ARE LOGGED, THE MIDDLE IS NOT. A stroke is a `down`, a dozen `move`s and an `up`, several
     // times a second: logging the middle buries every other line in the file. But the failure this
     // protocol is most exposed to is a stroke that never CLOSES — the far side then holds a drag forever
@@ -824,8 +764,7 @@ export class DaemonCableHost implements CableHost {
 
       this.wiring.log(phase === 'down' ? 'cable: scroll ↓' : `cable: scroll ↑ (v=${velocity})`)
     }
-    if (superTabId) this.wiring.scrolled?.(phase, dy, velocity, superTabId)
-    else this.wiring.scrolled?.(phase, dy, velocity)
+    this.wiring.scrolled?.(phase, dy, velocity)
   }
 
   updateAgent(agentId: string, model?: string, effort?: string): void {
@@ -1123,16 +1062,13 @@ export function cableEventFor(
  * question screen was complete, wired and unreachable: nothing on this side ever produced the message.
  */
 export function cableQuestionFor(
-  frame: { type?: string; agentId?: string; payload?: { requestId?: string; questions?: unknown; superTab?: unknown; attention?: unknown } },
-): { agentId: string; requestId: string; questions: unknown; superTab?: SuperTabAsk } | null {
+  frame: { type?: string; agentId?: string; payload?: { requestId?: string; questions?: unknown } },
+): { agentId: string; requestId: string; questions: unknown } | null {
   if (frame.type !== 'commander_question' || !frame.agentId) return null
   const requestId = frame.payload?.requestId
   const questions = frame.payload?.questions
   if (typeof requestId !== 'string' || !requestId || !Array.isArray(questions)) return null
-  // A Super Tab member waiting on a person (cable/swarmWaits.ts): the tab's name and what it needs ride along.
-  const superTab = frame.payload?.superTab, attention = frame.payload?.attention
-  const tab = typeof superTab === 'string' && superTab && (attention === 'decision' || attention === 'stuck') ? { superTab, attention } as SuperTabAsk : null
-  return { agentId: frame.agentId, requestId, questions, ...(tab ? { superTab: tab } : {}) }
+  return { agentId: frame.agentId, requestId, questions }
 }
 
 /**

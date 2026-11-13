@@ -283,7 +283,7 @@ describe('hook notify terminal scope', () => {
     const additionalContext = 'Historical coding memory: keep review changes small.'
     const memoryReceiptId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
     const { port, requests } = await collect({ ok: true, additionalContext, memoryReceiptId })
-    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/swarm-prompt-hooks.json', import.meta.url), 'utf8'))
+    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/prompt-hooks.json', import.meta.url), 'utf8'))
     const input = recordings[engine].input
     const stdout = await runHook({ port, engine, tmuxPane: '%42', input })
     expect(stdout).toBe('')
@@ -292,7 +292,7 @@ describe('hook notify terminal scope', () => {
 
   it('never acknowledges a receipt without emitted user-turn context', async () => {
     const { port, requests } = await collect({ ok: true, memoryReceiptId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' })
-    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/swarm-prompt-hooks.json', import.meta.url), 'utf8'))
+    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/prompt-hooks.json', import.meta.url), 'utf8'))
     expect(await runHook({ port, engine: 'claude', tmuxPane: '%42', input: recordings.claude.input })).toBe('')
     expect(requests.map(request => request.url)).toEqual(['/api/hook/session-start'])
   })
@@ -300,7 +300,7 @@ describe('hook notify terminal scope', () => {
   it.each(['claude', 'codex'] as const)('does not inject companion context returned by an older adapter into a %s user turn', async engine => {
     const additionalContext = 'Companions collection context: selected GNU; retain this conversation.'
     const { port, requests } = await collect({ ok: true, additionalContext })
-    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/swarm-prompt-hooks.json', import.meta.url), 'utf8'))
+    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/prompt-hooks.json', import.meta.url), 'utf8'))
     const input = recordings[engine].input
     const stdout = await runHook({ port, engine, tmuxPane: '%42', input })
     expect(stdout).toBe('')
@@ -310,7 +310,7 @@ describe('hook notify terminal scope', () => {
   // What tells a late Stop from the turn the next prompt opened (src/hookServer.ts hookFiredAt).
   it('says when its engine ran it: its own start, no later than it sends', async () => {
     const { port, firedAts } = await collect()
-    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/swarm-prompt-hooks.json', import.meta.url), 'utf8'))
+    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/prompt-hooks.json', import.meta.url), 'utf8'))
     const before = Date.now()
     await runHook({ port, engine: 'claude', tmuxPane: '%42', input: recordings.claude.input })
     const firedAt = Number(firedAts[0])
@@ -321,7 +321,7 @@ describe('hook notify terminal scope', () => {
 
   it.each(['claude', 'codex', 'grok'] as const)('forwards the actual %s accepted prompt without changing the model input', async engine => {
     const { port, requests } = await collect()
-    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/swarm-prompt-hooks.json', import.meta.url), 'utf8'))
+    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/prompt-hooks.json', import.meta.url), 'utf8'))
     const input = recordings[engine].input
     const stdout = await runHook({ port, engine, tmuxPane: '%42', input })
     expect(requests).toContainEqual({ url: '/api/hook/session-start', body: expect.objectContaining({
@@ -331,7 +331,7 @@ describe('hook notify terminal scope', () => {
   })
   it.each(['claude', 'codex', 'grok'] as const)('still announces an oversized %s prompt so earlier scope is cleared', async engine => {
     const { port, requests } = await collect()
-    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/swarm-prompt-hooks.json', import.meta.url), 'utf8'))
+    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/prompt-hooks.json', import.meta.url), 'utf8'))
     for (const prompt of ['x'.repeat(140_000), '\u0000'.repeat(30_000)]) {
       const stdout = await runHook({ port, engine, tmuxPane: '%42', input: { ...recordings[engine].input, prompt } })
       expect(stdout).toBe('')
@@ -2013,7 +2013,7 @@ describe('a hook reaches the daemon that made its pane', () => {
 
 describe('hook notify in a Harness pty host pane (Windows)', () => {
   const sessionStart = () => {
-    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/swarm-prompt-hooks.json', import.meta.url), 'utf8'))
+    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/prompt-hooks.json', import.meta.url), 'utf8'))
     return { ...recordings.claude.input, hook_event_name: 'SessionStart' }
   }
 
@@ -2055,7 +2055,7 @@ describe('hook notify in a Harness pty host pane (Windows)', () => {
  */
 describe('hook notify posts over the daemon\'s pipe on Windows (W1)', () => {
   const sessionStart = () => {
-    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/swarm-prompt-hooks.json', import.meta.url), 'utf8'))
+    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/prompt-hooks.json', import.meta.url), 'utf8'))
     return { ...recordings.claude.input, hook_event_name: 'SessionStart' }
   }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { TurnDelivery } from './api.js'
-import { createDeliveries, DELIVERY_LEASE_MS, HELD_DELIVERIES, KEPT_DELIVERERS, type DeliveriesDeps } from './deliveries.js'
+import { createDeliveries, HELD_DELIVERIES, KEPT_DELIVERERS, type DeliveriesDeps } from './deliveries.js'
 
 const setup = (over: Partial<Pick<DeliveriesDeps, 'submit' | 'cancel' | 'deliverers'>> = {}, ready = true) => {
   const deps = {
@@ -18,106 +18,6 @@ const setup = (over: Partial<Pick<DeliveriesDeps, 'submit' | 'cancel' | 'deliver
 const event = (deliveryId: string, state: TurnDelivery['state'] = 'queued'): TurnDelivery => ({ deliveryId, sessionId: 'agent-1', state })
 
 describe('delivered turns', () => {
-  it('expires a service permission at the terminal write and replaces it on revocation', async () => {
-    let clock = 10_000
-    const deliveries = createDeliveries({ submit: vi.fn(), cancel: vi.fn(() => false), tell: vi.fn(), deliverers: new Set(['worker']), now: () => clock })
-    const id = 'team:service:worker:one'
-    expect(deliveries.canWrite('team:legacy')).toBeNull()
-    expect(deliveries.canWrite(id)).toBe(false)
-    expect(await deliveries.turns.leaseDeliveries('worker', { [id]: clock + 60_000 })).toBe(true)
-    expect(deliveries.canWrite(id)).toBe(true)
-    clock += DELIVERY_LEASE_MS
-    expect(deliveries.canWrite(id)).toBe(false)
-    expect(deliveries.answer('worker', 'lease_deliveries', { leases: { [id]: clock + 1000 } })).toEqual({ leased: true })
-    expect(deliveries.canWrite(id)).toBe(true)
-    await deliveries.turns.leaseDeliveries('worker', {})
-    expect(deliveries.canWrite(id)).toBe(false)
-    expect(deliveries.answer('worker', 'deliver', { deliveryId: id, agentId: 'a', text: 'x' })).toEqual({})
-  })
-
-  // The Swarm's chat types into a working agent's own input, where its engine takes that; every other maker's waits for idle.
-  // Said by the maker its id names, so it holds before the delivery is first made, as its maker asks what holds it.
-  it('types a delivery while the agent works only for a maker the core lists', () => {
-    const deliveries = createDeliveries({ submit: vi.fn(), cancel: vi.fn(() => false), tell: vi.fn(), deliverers: new Set(['superTabs', 'messages']),
-      whileBusy: new Set(['superTabs']) })
-    expect(deliveries.typesWhileBusy('team:service:superTabs:assignment-1')).toBe(true)
-    for (const other of ['team:peer', 'team:service:messages:1', 'wifi:1', 'team:service:superTabsX:1', 'team:service:superTabs', '']) {
-      expect(deliveries.typesWhileBusy(other), other).toBe(false)
-    }
-    expect(createDeliveries({ submit: vi.fn(), cancel: vi.fn(() => false), tell: vi.fn(), deliverers: new Set(['superTabs']) })
-      .typesWhileBusy('team:service:superTabs:assignment-1'), 'no maker listed').toBe(false)
-  })
-
-  it('remembers a delivery that answers a question until it settles', () => {
-    const { deliveries } = setup()
-    deliveries.turns.deliver('a', 'x', 'p1', { answersQuestion: true, writtenAt: 5 })
-    deliveries.turns.deliver('a', 'x', 'p2')
-    expect(deliveries.answer('orchestrator', 'deliver', { deliveryId: 'p3', agentId: 'a', text: 'x', answersQuestion: true, writtenAt: 7 })).toEqual({})
-    expect(['p1', 'p2', 'p3'].map(deliveries.answersQuestion)).toEqual([{ writtenAt: 5 }, null, { writtenAt: 7 }])
-    expect(deliveries.answer('orchestrator', 'deliver', { deliveryId: 'p4', agentId: 'a', text: 'x', answersQuestion: true, writtenAt: 'soon' })).toEqual({})
-    expect(deliveries.answersQuestion('p4')).toEqual({})
-    deliveries.settled(event('p1', 'delivered'))
-    deliveries.settled(event('p3', 'rejected'))
-    expect(['p1', 'p3'].map(deliveries.answersQuestion)).toEqual([null, null])
-  })
-
-  it('cannot grant, cancel or submit another service namespace or unbounded permissions', async () => {
-    const { deliveries, deps } = setup()
-    const id = 'team:service:other:one'
-    expect(deliveries.answer('orchestrator', 'deliver', { deliveryId: id, agentId: 'a', text: 'x' })).toEqual({ error: 'INVALID_DELIVERY' })
-    expect(deliveries.answer('orchestrator', 'cancel_delivery', { deliveryId: id })).toEqual({ error: 'INVALID_DELIVERY' })
-    expect(await deliveries.turns.leaseDeliveries('unknown', {})).toBe(false)
-    for (const leases of [null, 4, [], { [id]: Date.now() }, { 'team:service:orchestrator:a': 'later' }, { 'team:service:orchestrator:a': Infinity }, { [`team:service:orchestrator:${'x'.repeat(240)}`]: 100 }, Object.fromEntries(Array.from({ length: HELD_DELIVERIES + 1 }, (_, i) => [`team:service:orchestrator:${i}`, 100]))]) {
-      expect(deliveries.answer('orchestrator', 'lease_deliveries', { leases })).toEqual({ leased: false })
-    }
-    expect(deps.submit).not.toHaveBeenCalled()
-    expect(deps.cancel).not.toHaveBeenCalled()
-  })
-  // A service asks what holds its delivery from the pane now, with nothing written: the Swarm's host writes its journal only for a
-  // pane that takes it (Q3, 2026-11-10).
-  it('says what holds a delivery from its pane now, for its own maker, in the core\'s process and from another', async () => {
-    const hold = vi.fn(async () => 'team_waiting_draft' as string | null)
-    const deliveries = createDeliveries({ submit: vi.fn(), cancel: vi.fn(() => false), tell: vi.fn(), deliverers: new Set(['superTabs']), hold })
-    const id = 'team:service:superTabs:d1'
-    expect(await deliveries.turns.holdOf('agent-1', id)).toBe('team_waiting_draft')
-    expect(await deliveries.answer('superTabs', 'delivery_hold', { agentId: 'agent-1', deliveryId: id })).toEqual({ hold: 'team_waiting_draft' })
-    hold.mockResolvedValue(null)
-    expect(await deliveries.answer('superTabs', 'delivery_hold', { agentId: 'agent-1', deliveryId: id })).toEqual({ hold: null })
-    expect(hold).toHaveBeenCalledWith('agent-1', id)
-    // Another's delivery, none at all, or not a deliverer: refused as any delivery query is.
-    expect(await deliveries.answer('superTabs', 'delivery_hold', { agentId: 'agent-1', deliveryId: 'team:service:other:d1' })).toEqual({ error: 'INVALID_DELIVERY' })
-    expect(await deliveries.answer('superTabs', 'delivery_hold', { deliveryId: id })).toEqual({ error: 'INVALID_DELIVERY' })
-    // Never any agent's pane for a delivery that is no maker's own.
-    expect(await deliveries.answer('superTabs', 'delivery_hold', { agentId: 'agent-1', deliveryId: 'x' })).toEqual({ error: 'INVALID_DELIVERY' })
-    expect(await deliveries.answer('stranger', 'delivery_hold', { agentId: 'agent-1', deliveryId: id })).toEqual({ error: 'NOT_A_DELIVERER' })
-    // A core that cannot read panes says nothing holds it, as before this question: the write itself still checks.
-    const blind = createDeliveries({ submit: vi.fn(), cancel: vi.fn(() => false), tell: vi.fn(), deliverers: new Set(['superTabs']) })
-    expect(await blind.turns.holdOf('agent-1', id)).toBeNull()
-  })
-
-  // A person's own words in their agent's 1:1 chat are their input, which the short-turn guard never holds (core/input.ts
-  // readTeamHold): marked from either process, kept through a write the pane held (its maker asks what holds it before writing it
-  // again), and forgotten once it is written.
-  it('keeps a person\'s own chat message marked through a held write, until it settles', () => {
-    const deliveries = createDeliveries({ submit: vi.fn(), cancel: vi.fn(() => false), tell: vi.fn(), deliverers: new Set(['superTabs']) })
-    deliveries.ready()
-    const mine = 'team:service:superTabs:mine', theirs = 'team:service:superTabs:theirs', inCore = 'team:service:superTabs:core'
-    deliveries.answer('superTabs', 'deliver', { agentId: 'agent-1', text: 'hi', deliveryId: mine, personsOwn: true })
-    deliveries.answer('superTabs', 'deliver', { agentId: 'agent-1', text: 'hi', deliveryId: theirs })
-    deliveries.turns.deliver('agent-1', 'hi', inCore, { personsOwn: true })
-    expect([mine, theirs, inCore].map(deliveries.personsOwn)).toEqual([true, false, true])
-    deliveries.settled({ deliveryId: mine, sessionId: 'agent-1', state: 'rejected', reason: 'team_waiting_control' })
-    expect(deliveries.personsOwn(mine)).toBe(true)
-    deliveries.settled({ deliveryId: mine, sessionId: 'agent-1', state: 'delivered' })
-    deliveries.settled({ deliveryId: inCore, sessionId: 'agent-1', state: 'rejected', reason: 'cancelled' })
-    expect([mine, inCore].map(deliveries.personsOwn)).toEqual([false, false])
-    // Bounded: past KEPT_DELIVERERS marks never settled, the oldest is forgotten; marked again, one moves to the newest end.
-    for (let i = 0; i < KEPT_DELIVERERS; i++) deliveries.turns.deliver('agent-1', 'hi', `team:service:superTabs:${i}`, { personsOwn: true })
-    deliveries.turns.deliver('agent-1', 'hi', 'team:service:superTabs:0', { personsOwn: true })
-    deliveries.turns.deliver('agent-1', 'hi', 'team:service:superTabs:last', { personsOwn: true })
-    expect(['0', '1', '2', 'last'].map(id => deliveries.personsOwn(`team:service:superTabs:${id}`))).toEqual([true, false, true, true])
-  })
-
   it('writes a delivery from the core\'s own process into the agent, and takes one back at once', () => {
     const { deps, deliveries } = setup({ cancel: vi.fn(() => false) })
     deliveries.turns.deliver('agent-1', 'hello', 'd1')

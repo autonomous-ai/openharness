@@ -2664,7 +2664,7 @@ describe('wait and watch on pushed events', () => {
   })
 })
 
-describe('a Swarm session\'s tell and reply (the v3 Buddy is gone)', () => {
+describe('the tell and reply of an agent another agent started, with no starter here', () => {
   const asked = () => {
     const calls: Array<[string, Record<string, unknown>]> = []
     const record: Rpc = async (target, payload) => { calls.push([target.machineId, payload]); return { id: 'm0000001', state: 'queued' } }
@@ -2672,14 +2672,13 @@ describe('a Swarm session\'s tell and reply (the v3 Buddy is gone)', () => {
   }
   beforeEach(() => { setAgentSettingsForTest(dir, { agentsTellAgents: true }) })
 
-  // A Swarm session here (the Swarm started it: an agent, no starter on this machine), as a person's Buddy was: the person's
-  // own harness is not one it started, so neither is asked of the machine.
+  // The person's own harness is not one it started, so neither is asked of the machine.
   it('refuses its person\'s own harness, asking the machine nothing', async () => {
     const d = new FakeDaemon()
-    d.frames = [frame('swarm', { engine: 'claude', startedBy: 'agent' }), frame('web')]
+    d.frames = [frame('started', { engine: 'claude', startedBy: 'agent' }), frame('web')]
     const r = asked()
-    expect(await tellCommand(['web', '--', 'Builders', 'are', 'done.'], harness(d, { record: r.record, pane: '%swarm' }).deps)).toBe(EXIT.refused)
-    expect(await replyCommand(['web', '--', 'Yes, go ahead.'], harness(d, { record: r.record, pane: '%swarm' }).deps)).toBe(EXIT.refused)
+    expect(await tellCommand(['web', '--', 'Builders', 'are', 'done.'], harness(d, { record: r.record, pane: '%started' }).deps)).toBe(EXIT.refused)
+    expect(await replyCommand(['web', '--', 'Yes, go ahead.'], harness(d, { record: r.record, pane: '%started' }).deps)).toBe(EXIT.refused)
     expect(r.calls).toEqual([])
   })
 })

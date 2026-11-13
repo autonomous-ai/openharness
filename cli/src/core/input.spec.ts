@@ -16,9 +16,6 @@ import { createScreens } from './engines/screens.js'
 import { screenFor } from '../engines/screens.js'
 import { readerEngine } from '../engines/worker/protocol.js'
 
-/** The Swarm's chat, as the core's deliveries say its maker types it while the agent works (core/deliveries.ts). */
-const typesWhileBusy = (deliveryId: string): boolean => deliveryId.startsWith('team:service:superTabs:')
-
 const ok: TerminalActionResult = { state: 'succeeded', dispatch: 'executed' }
 const fixture = (name: string) => readFileSync(new URL(`../lib/__fixtures__/${name}`, import.meta.url), 'utf8')
 /** Claude Code asking to run a command, and Command Code the same: the Enter behind a paste approves. */
@@ -67,7 +64,6 @@ function deps(over: Partial<InputDeps> = {}) {
     agentIdFor: (sessionId) => agents.get(sessionId)?.agentId ?? sessionId,
     commandcode: (sessionId) => sessionId === 'cc-s' ? normalizer as unknown as CommandCodeNormalizer : undefined,
     emit: vi.fn(),
-    typesWhileBusy,
     ...over,
   }
   return { deps: base, calls, device, normalizer, setPane: (next: string | null) => { pane = next } }
@@ -86,84 +82,6 @@ const delivery = (deliveryId: string) => ({ deliveryId }) as unknown as SessionI
 describe('the session input controller\'s dependencies', () => {
   afterEach(() => vi.restoreAllMocks())
 
-  it.each(['a1', 'cx'])('types Swarm input into busy %s while retaining the Agent Messages hold', async id => {
-    const t = deps(), wired = sessionInputDeps(t.deps, () => lock(t.calls))
-    t.setPane(id === 'a1' ? 'Working (esc to interrupt)\n' + READY_PANE : '\n\u001b[1m›\u001b[0m \n\n  esc to interrupt')
-    expect(await wired.beforeTeamWrite!(agents.get(id)!, 'team:service:superTabs:busy')).toBeNull()
-    expect(await wired.injectTeam!(id, 'chat follow-up', 'team:service:superTabs:busy')).toBe(ok)
-    expect(await wired.injectTeam!(id, 'peer message', 'team:peer')).toMatchObject({ dispatch: 'not_started', reason: 'team_waiting_idle' })
-  })
-
-  // HARNESS_SWARM=off: no maker's typed delivery is queued while the agent works; each waits for idle, as Agent Messages' do.
-  it('waits for idle with every typed delivery when none is handed a busy queue', async () => {
-    const t = deps({ typesWhileBusy: undefined }), wired = sessionInputDeps(t.deps, () => lock(t.calls))
-    t.setPane('Working (esc to interrupt)\n' + READY_PANE)
-    expect(await wired.injectTeam!('a1', 'chat follow-up', 'team:service:superTabs:busy')).toMatchObject({ dispatch: 'not_started', reason: 'team_waiting_idle' })
-    expect(t.deps.terminal.submitTerminalAction).not.toHaveBeenCalled()
-  })
-
-  it.each([
-    [null, 'team_waiting_unavailable'],
-    [CLAUDE_PERMISSION, 'team_waiting_user'],
-    ['Working (esc to interrupt)\n────────────\n❯ draft\n────────────', 'team_waiting_draft'],
-    ['Working (esc to interrupt)\n────────────\n❯\n  human second line\n────────────', 'team_waiting_draft'],
-  ])('keeps unsafe busy Swarm panes untouched (%s)', async (pane, reason) => {
-    const t = deps(), wired = sessionInputDeps(t.deps, () => lock(t.calls))
-    t.setPane(pane)
-    expect(await wired.injectTeam!('a1', 'chat follow-up', 'team:service:superTabs:held')).toMatchObject({ dispatch: 'not_started', reason })
-    expect(t.deps.terminal.submitTerminalAction).not.toHaveBeenCalled()
-  })
-
-  // Asked by a service before it writes its own intent (superTabs/host.ts): what holds its delivery, as the write itself would read
-  // it, with nothing typed, pressed or locked.
-  it.each([
-    [READY_PANE, null],
-    [null, 'team_waiting_unavailable'],
-    [CLAUDE_PERMISSION, 'team_waiting_user'],
-    ['Working (esc to interrupt)\n────────────\n❯ draft\n────────────', 'team_waiting_draft'],
-  ])('says what holds a typed delivery from the pane now, writing nothing (%s)', async (pane, reason) => {
-    const t = deps()
-    t.setPane(pane)
-    const { holdOf } = createInput(t.deps)
-    expect(await holdOf('a1', 'team:service:superTabs:held')).toBe(reason)
-    expect(t.deps.terminal.submitTerminalAction).not.toHaveBeenCalled()
-    expect(t.deps.terminal.keyTerminalAction).not.toHaveBeenCalled()
-  })
-
-  // Its maker asks before it leases the delivery, and leases it only when nothing holds it: a lease it has not taken yet holds
-  // nothing. Said as a lapsed authority, a delivery the pane held once (an engine still starting) was held for good, and its
-  // person's message in their 1:1 chat was never typed (CLI end to end, 2026-11-10).
-  it('says an agent that is not here and a short-turn hold, as the write would, and no lease its maker has yet to take', async () => {
-    const t = deps()
-    const { holdOf } = createInput(t.deps)
-    expect(await holdOf('nobody', 'team:service:superTabs:held')).toBe('team_waiting_unavailable')
-    t.deps.deliveries.canWrite = () => false
-    expect(await holdOf('a1', 'team:service:superTabs:held')).toBeNull()
-    // Held by the short-turn guard: said before the pane is read.
-    let at = 0
-    const shortTurns = createShortTurnGuard({ now: () => at, log: () => {} })
-    for (let i = 0; i < 10; i++) { shortTurns.started('s1', 'a1'); at += 1_000; shortTurns.ended('s1') }
-    const held = deps({ shortTurns })
-    expect(await createInput(held.deps).holdOf('a1', 'team:service:superTabs:held')).toBe('team_waiting_control')
-    expect(held.deps.terminal.captureTerminal).not.toHaveBeenCalled()
-  })
-
-  it('still checks authority and engine support for Swarm input', async () => {
-    const t = deps(), wired = sessionInputDeps(t.deps, () => lock(t.calls))
-    t.deps.deliveries.canWrite = () => false
-    expect(await wired.injectTeam!('a1', 'chat', 'team:service:superTabs:control')).toMatchObject({ reason: 'team_waiting_control' })
-    t.setPane('Working (esc to interrupt)')
-    expect(await wired.injectTeam!('cc', 'chat', 'team:service:superTabs:unsupported')).toMatchObject({ reason: 'team_waiting_idle' })
-  })
-
-  it('requires a capture even when a screen reader returns its last reading', async () => {
-    const t = deps({ readScreen: async () => screenFor('claude').inspect(READY_PANE) })
-    t.setPane(null)
-    const wired = sessionInputDeps(t.deps, () => lock(t.calls))
-    expect(await wired.injectTeam!('a1', 'chat', 'team:service:superTabs:no-capture'))
-      .toMatchObject({ dispatch: 'not_started', reason: 'team_waiting_unavailable' })
-  })
-
   it('finds a session and checks its pane through what it was given', async () => {
     const { deps: given } = deps()
     const wired = sessionInputDeps(given, () => lock([]))
@@ -179,27 +97,11 @@ describe('the session input controller\'s dependencies', () => {
     for (let i = 0; i < 10; i++) { shortTurns.started('s1', 'a1'); at += 1_000; shortTurns.ended('s1') }
     const { deps: given } = deps({ shortTurns })
     const wired = sessionInputDeps(given, () => lock([]))
-    expect(await wired.beforeTeamWrite!(agents.get('a1')!, 'team:service:superTabs:d1')).toBe('team_waiting_control')
+    expect(await wired.beforeTeamWrite!(agents.get('a1')!, 'team:service:messages:d1')).toBe('team_waiting_control')
     expect(given.terminal.captureTerminal).not.toHaveBeenCalled()
-    expect(await wired.beforeTeamWrite!(agents.get('cx')!, 'team:service:superTabs:d2')).toBeNull()
+    expect(await wired.beforeTeamWrite!(agents.get('cx')!, 'team:service:messages:d2')).toBeNull()
     at += 30_000
-    expect(await wired.beforeTeamWrite!(agents.get('a1')!, 'team:service:superTabs:d1')).toBeNull()
-  })
-
-  // Its person's own message is their input, which the guard never holds (it stops agents typing into a loop, not their person):
-  // typed at once after ten quick turns, while another's message to the same agent still waits.
-  it('never holds its person\'s own message for the short-turn guard, and still holds an agent\'s', async () => {
-    let at = 0
-    const shortTurns = createShortTurnGuard({ now: () => at, log: () => {} })
-    for (let i = 0; i < 10; i++) { shortTurns.started('s1', 'a1'); at += 1_000; shortTurns.ended('s1') }
-    const { deps: given } = deps({ shortTurns, personsOwn: (id) => id === 'team:service:superTabs:person' })
-    const wired = sessionInputDeps(given, () => lock([]))
-    expect(await wired.beforeTeamWrite!(agents.get('a1')!, 'team:service:superTabs:person')).toBeNull()
-    expect(await wired.beforeTeamWrite!(agents.get('a1')!, 'team:service:superTabs:agent')).toBe('team_waiting_control')
-    // Its maker asks the same before it writes it again, and hears what the pane holds, never the guard.
-    const { holdOf } = createInput(given)
-    expect(await holdOf('a1', 'team:service:superTabs:person')).toBeNull()
-    expect(await holdOf('a1', 'team:service:superTabs:agent')).toBe('team_waiting_control')
+    expect(await wired.beforeTeamWrite!(agents.get('a1')!, 'team:service:messages:d1')).toBeNull()
   })
 
   it('asks whether an engine\'s reader is starting, and tells the app a message waits for it', async () => {
@@ -222,137 +124,6 @@ describe('the session input controller\'s dependencies', () => {
     expect('moveGate' in sessionInputDeps(given, () => lock([]))).toBe(false)
     const moveGate = { held: () => false } as unknown as NonNullable<InputDeps['moveGate']>
     expect(sessionInputDeps({ ...given, moveGate }, () => lock([])).moveGate).toBe(moveGate)
-  })
-
-  describe('a person\'s Swarm message closes the question it answers', () => {
-    const QUESTION = fixture('question-tabs.txt')
-    const OTHER_QUESTION = QUESTION.replace('Which colors do you like?', 'Which size do you like?')
-    const ID = 'team:service:superTabs:answer'
-    type Over = { answers?: { writtenAt?: number } | null; pending?: { openedAt: number; text: string } | null; engine?: 'a1' | 'cx'; held?: boolean }
-    /** The pane shows `first` until a key is pressed, then `after`; a question was opened at 1000, the message written at 2000. */
-    const asking = (first: string, after: string, over: Over = {}) => {
-      const t = deps({
-        answersQuestion: () => over.answers === undefined ? { writtenAt: 2000 } : over.answers,
-        pendingQuestion: () => over.pending === undefined ? { openedAt: 1000, text: 'q' } : over.pending,
-        controlHeld: () => over.held === true,
-      })
-      const wired = sessionInputDeps(t.deps, () => lock(t.calls))
-      t.setPane(first)
-      vi.mocked(t.deps.terminal.keyTerminalAction).mockImplementation(async (id, key) => { t.calls.push(`key ${id} ${key}`); t.setPane(after); return ok })
-      return { t, wired, session: agents.get(over.engine ?? 'a1')! }
-    }
-    const keys = (calls: string[]) => calls.filter((c) => c.startsWith('key '))
-
-    it('presses Escape once and delivers when the question closes', async () => {
-      const { t, wired, session } = asking(QUESTION, READY_PANE)
-      expect(await wired.beforeTeamWrite!(session, ID)).toBeNull()
-      expect(keys(t.calls)).toEqual(['key a1 Escape'])
-      expect(t.calls).toContain('lock a1')
-    })
-    // An answer typed at the terminal replaces the free-text row's placeholder: Escape would end the question and lose it.
-    describe.each([
-      ['a single-select question', fixture('question-single.txt'), 'Type something.', 'Iced tea, no sugar'],
-      ['a multi-select question', QUESTION, '[ ] Type something', '[ ] Teal, please'],
-    ])('in %s', (_, empty, placeholder, answer) => {
-      it('presses Escape while its free-text row is empty', async () => {
-        const { t, wired, session } = asking(empty, READY_PANE)
-        expect(await wired.beforeTeamWrite!(session, ID)).toBeNull()
-        expect(keys(t.calls)).toEqual(['key a1 Escape'])
-      })
-      it('holds, pressing no Escape, while its free-text row holds a typed answer', async () => {
-        const typed = empty.replace(placeholder, answer)
-        expect(typed).not.toBe(empty)
-        const { t, wired, session } = asking(typed, READY_PANE)
-        expect(await wired.beforeTeamWrite!(session, ID)).toBe('team_waiting_user')
-        expect(keys(t.calls)).toEqual([])
-      })
-    })
-    it('never presses Escape on a permission prompt', async () => {
-      const { t, wired, session } = asking(CLAUDE_PERMISSION, READY_PANE)
-      expect(await wired.beforeTeamWrite!(session, ID)).toBe('team_waiting_user')
-      expect(keys(t.calls)).toEqual([])
-    })
-    it('leaves an agent\'s message waiting', async () => {
-      const { t, wired, session } = asking(QUESTION, READY_PANE, { answers: null })
-      expect(await wired.beforeTeamWrite!(session, ID)).toBe('team_waiting_user')
-      expect(keys(t.calls)).toEqual([])
-    })
-    it('leaves another engine waiting', async () => {
-      const { t, wired, session } = asking(fixture('question-codex.txt'), READY_PANE, { engine: 'cx' })
-      expect(await wired.beforeTeamWrite!(session, ID)).toBe('team_waiting_user')
-      expect(keys(t.calls)).toEqual([])
-    })
-    it('holds when Escape was not sent, or the delivery or the pane is unknown', async () => {
-      const { t, wired, session } = asking(QUESTION, READY_PANE)
-      vi.mocked(t.deps.terminal.keyTerminalAction).mockResolvedValueOnce({ state: 'failed', dispatch: 'not_started', reason: 'gone' })
-      expect(await wired.beforeTeamWrite!(session, ID)).toBe('team_waiting_user')
-      expect(await wired.beforeTeamWrite!(session)).toBe('team_waiting_user')
-      t.setPane(null)
-      expect(await wired.beforeTeamWrite!(session, ID)).toBe('team_waiting_unavailable')
-      expect(keys(t.calls)).toEqual([])
-    })
-    it('still holds when the question stays after Escape', async () => {
-      vi.useFakeTimers()
-      try {
-        const { t, wired, session } = asking(QUESTION, QUESTION)
-        const held = wired.beforeTeamWrite!(session, ID)
-        await vi.advanceTimersByTimeAsync(3000)
-        expect(await held).toBe('team_waiting_user')
-        expect(keys(t.calls)).toEqual(['key a1 Escape'])
-      } finally { vi.useRealTimers() }
-    })
-    it('does not press Escape when the question was answered before the lock', async () => {
-      const { t, session } = asking(QUESTION, READY_PANE)
-      // The writer lock is busy while the question is answered elsewhere: the pane is clear by the time it is ours.
-      const late: Pick<AutonomousDeviceInput, 'legacyWrite'> = { legacyWrite: async (_id, write) => { t.setPane(READY_PANE); return write() } }
-      const wiredLate = sessionInputDeps(t.deps, () => late)
-      expect(await wiredLate.beforeTeamWrite!(session, ID)).toBe('team_waiting_user')
-      expect(keys(t.calls)).toEqual([])
-    })
-    it('does not press Escape for another question than the one first read', async () => {
-      const { t, session } = asking(QUESTION, READY_PANE)
-      const late: Pick<AutonomousDeviceInput, 'legacyWrite'> = { legacyWrite: async (_id, write) => { t.setPane(OTHER_QUESTION); return write() } }
-      expect(await sessionInputDeps(t.deps, () => late).beforeTeamWrite!(session, ID)).toBe('team_waiting_user')
-      expect(keys(t.calls)).toEqual([])
-    })
-    it('does not press Escape without a pending AskUserQuestion record', async () => {
-      const { t, wired, session } = asking(QUESTION, READY_PANE, { pending: null })
-      expect(await wired.beforeTeamWrite!(session, ID)).toBe('team_waiting_user')
-      expect(keys(t.calls)).toEqual([])
-    })
-    it('does not press Escape while an answer holds the terminal', async () => {
-      const { t, wired, session } = asking(QUESTION, READY_PANE, { held: true })
-      expect(await wired.beforeTeamWrite!(session, ID)).toBe('team_waiting_user')
-      expect(keys(t.calls)).toEqual([])
-    })
-    it('does not press Escape for a delivery the core may no longer write', async () => {
-      const { t, wired, session } = asking(QUESTION, READY_PANE)
-      t.deps.deliveries.canWrite = () => false
-      expect(await wired.beforeTeamWrite!(session, ID)).toBe('team_waiting_user')
-      expect(keys(t.calls)).toEqual([])
-    })
-    it.each([
-      ['before the question opened', { writtenAt: 500 }],
-      ['at an unknown time', {}],
-    ])('does not press Escape for a message written %s', async (_, answers) => {
-      const { t, wired, session } = asking(QUESTION, READY_PANE, { answers })
-      expect(await wired.beforeTeamWrite!(session, ID)).toBe('team_waiting_user')
-      expect(keys(t.calls)).toEqual([])
-    })
-    it('waits for the redraw after Escape and delivers once the question is gone', async () => {
-      vi.useFakeTimers()
-      try {
-        const { t, wired, session } = asking(QUESTION, QUESTION)
-        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-        let reads = 0
-        vi.mocked(t.deps.terminal.captureTerminal).mockImplementation(async () => (++reads > 4 ? READY_PANE : QUESTION))
-        const result = wired.beforeTeamWrite!(session, ID)
-        await vi.advanceTimersByTimeAsync(3000)
-        expect(await result).toBeNull()
-        expect(keys(t.calls)).toEqual(['key a1 Escape'])
-        expect(warn.mock.calls.some(([line]) => String(line).includes('question closed for a person\'s message'))).toBe(true)
-      } finally { vi.useRealTimers() }
-    })
   })
 
   it('tells the device of a delivery first, then its caller; its caller alone without a device', () => {
@@ -722,17 +493,6 @@ describe('createInput', () => {
     expect(acquire).toHaveBeenCalledWith('a1', { forAnswer: true })
     expect(release).toBeTypeOf('function')
     release!()
-  })
-
-  it('presses no Escape while a question is being answered through the controller', async () => {
-    const run = deps({ answersQuestion: () => ({ writtenAt: 2000 }), pendingQuestion: () => ({ openedAt: 1000, text: 'q' }) })
-    run.setPane(fixture('question-tabs.txt'))
-    const inputs = createInput(run.deps)
-    const release = inputs.acquireTerminalControl('a1', { forAnswer: true })!
-    const given = (controller: object) => (controller as unknown as { deps: Record<string, (...args: unknown[]) => unknown> }).deps
-    expect(await given(inputs.input).beforeTeamWrite(agents.get('a1'), 'team:service:superTabs:x')).toBe('team_waiting_user')
-    expect(run.calls.filter((c) => c.startsWith('key '))).toEqual([])
-    release()
   })
 
   it('takes control of a pane only when both the queue and the terminal grant it, and gives both back', () => {

@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CoreApi } from '../core/api.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { agentCleanupCoreApi, runAgentCleanupService } from './agentCleanupProcess.js'
-import type { createAgentCleanup } from './agentCleanup.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcessOptions } from './process.js'
 
 // The real default reaches a real socket: never in a test.
@@ -112,21 +111,6 @@ describe('the agent cleanup in its own process', () => {
     const gone = agentCleanupCoreApi(dir, () => [], async () => { throw new Error('the core went away') }, () => null)
     expect(await gone.agents.lastActivity!('k1')).toBeNull()
     expect(await gone.agents.closeStarted!('k1', 'idle')).toEqual({ error: 'SERVICE_UNAVAILABLE' })
-  })
-
-  // HARNESS_SWARM: the Super Tab members it keeps come from the Swarm's side, which its process loads only while it is on.
-  it('keeps the members the Swarm hands it while it is on, and none without it', () => {
-    const given: Array<Parameters<typeof createAgentCleanup>[1]> = []
-    const create = (_core: CoreApi, deps?: Parameters<typeof createAgentCleanup>[1]) => { given.push(deps); return { port: { closed: vi.fn(), typed: vi.fn(), forgetTold: vi.fn(async () => true), stop: vi.fn() }, look: vi.fn(), closeStartedBy: vi.fn() } }
-    const retainedHarnesses = vi.fn(() => new Set(['member'])), recordCleanupClose = vi.fn()
-    const base = { dataDir: dir, socketPath: '/s', machineId: 'm', token: 't', run: () => ({ stop: vi.fn() }), create }
-    runAgentCleanupService({ ...base, swarm: { retainedHarnesses, recordCleanupClose } })
-    runAgentCleanupService(base)
-    expect(given[0]!.retained).toBe(retainedHarnesses)
-    // And the Swarm is told what it closed (superTabs/cleanupCloses.ts).
-    expect(given[0]!.closed).toBe(recordCleanupClose)
-    expect(given[1]).not.toHaveProperty('retained')
-    expect(given[1]).not.toHaveProperty('closed')
   })
 
   it('stops its looks with the process', () => {

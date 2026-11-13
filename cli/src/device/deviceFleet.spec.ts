@@ -299,7 +299,7 @@ describe('DeviceFleet', () => {
 
 
   // #2648's review (Orion): the emit dropped the tier the other machine's recaps decided, so the dial decided again here
-  // with no agent list for that machine, and a Swarm agent on another of the person's Macs alerted.
+  // with no agent list for that machine, and an agent on another of the person's Macs alerted.
   it('carries the tier the other machine decided on its summary card, and only a real one', () => {
     const { fleet, say } = make()
     const seen: FleetEvent[] = []

@@ -29,8 +29,6 @@ import { AutonomousDeviceDirect } from '../lib/autonomous-device/direct.js'
 import { startDevicePart } from '../lib/autonomous-device/parts.js'
 import { AuthSessionManager } from '../lib/authRefresh.js'
 import { backendHttpBase } from '../lib/backendHttpBase.js'
-import { uploadsFolder } from '../lib/gatewayWire.js'
-import { uploadToBackend } from './upload.js'
 import { thisDeviceLabel } from '../lib/daemonState.js'
 import { switchAccountTrust } from '../lib/e2ee/accountTrust.js'
 import { b64d, b64e, fingerprint } from '../lib/e2ee/core.js'
@@ -444,9 +442,6 @@ export function startGateway(given: GatewayHost): StartedGateway {
 
   const ops: GatewayOps = {
     accessToken: (options) => host.tokens.accessToken(options),
-    backendUpload: (request) => uploadToBackend(request, {
-      tokens: host.tokens, environment: host.autonomousEnv, base: backendHttpBase(), folder: uploadsFolder(env.ADAPTER_DATA_DIR),
-    }),
     backend: (async (method: string, path: string, body?: unknown) => {
       const answer = await accountHttp.backend(method, path, body)
       // Whatever the answer: a request that timed out may still have changed the choice.

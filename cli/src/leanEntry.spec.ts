@@ -110,50 +110,6 @@ describe('the lean bundle a release carries', () => {
     expect([...loads('core')].filter((name) => files.get(name)!.includes(marker))).toEqual([])
   })
 
-  // HARNESS_SWARM=off (the review of #1765): the Swarm's code is in files of its own, which a process loads only through
-  // a door while the Swarm is on (src/architecture.spec.ts `SWARM_DOORS`). With it off, the core, with every service in
-  // it too (`HARNESSD_SERVICES=none`), the master and every other service load none of it.
-  it.each([
-    ['its side of the core', 'Only a stopped Product Manager of a Swarm project is reopened.'],
-    ['its basics', 'The basics record was not saved'],
-    // The commit hook a session started with the App runs (lib/swarmGitHub.ts, kept for those sessions until 2026-12-10).
-    ['its GitHub App', 'git interpret-trailers --in-place --if-exists addIfDifferent'],
-    ['its retention', 'Super Tab retention'],
-    ['its replacements', 'Invalid agent replacement.'],
-    ['its shared APIs', 'This computer could not open a local endpoint for the API.'],
-  ])('leaves the Swarm\'s code, %s, out of every process but its own until it is on', (_, marker) => {
-    expect([...files.values()].some((code) => code.includes(marker)), 'the marker is in the build').toBe(true)
-    const inline = [...files.keys()].find((name) => name.startsWith('core-inline-'))
-    expect(inline, 'the core\'s inline services').toBeDefined()
-    const processes: Array<[string, Set<string>]> = [...ROLES.filter((role) => role !== 'superTabs').map((role) => [role, loads(role)] as [string, Set<string>]),
-      ['core with every service in it', new Set([...loads('core'), ...reach([inline!])])]]
-    for (const [role, loaded] of processes) expect([...loaded].filter((name) => files.get(name)!.includes(marker)), role).toEqual([])
-  })
-
-  it('loads the Swarm\'s code in its own process, which the master starts only while it is on', () => {
-    for (const marker of ['Super Tab retention', 'Super Tab host journal is unreadable']) {
-      expect([...loads('superTabs')].some((name) => files.get(name)!.includes(marker)), marker).toBe(true)
-    }
-  })
-
-  // The audit of 2026-11-12 (docs/design/2026-11-12-core-audit.md): the core's door to the Swarm (superTabs/inCore.ts)
-  // re-exported the service's own start, so the shipped core read the whole service once the Swarm was on, the default:
-  // 630 KB beside the 2,233 KB it starts with (built from main, 2026-11-12), in the process that must never go down. The
-  // door now holds the Swarm's side of the core alone, 39 KB, and the service is a file only a core that runs it reads.
-  it('hands a core with the Swarm on its side of the core, and none of its service', () => {
-    const door = [...files.keys()].find((name) => name.startsWith('core-inCore-'))
-    const service = [...files.keys()].find((name) => name.startsWith('core-superTabs-'))
-    expect(door, 'the core\'s door to the Swarm').toBeDefined()
-    expect(service, 'the service itself, for a core that runs it').toBeDefined()
-    const side = [...new Set([...loads('core'), ...reach([door!])])]
-    expect(side.some((name) => files.get(name)!.includes('Only a stopped Product Manager of a Swarm project is reopened.'))).toBe(true)
-    // The host's journal (superTabs/host.ts) and an agent's own commands (superTabs/service.ts) are the service's.
-    for (const marker of ['Super Tab host journal is unreadable', 'This agent is not a running contribution on this machine.']) {
-      expect(side.filter((name) => files.get(name)!.includes(marker)), marker).toEqual([])
-      expect([...reach([service!])].some((name) => files.get(name)!.includes(marker)), marker).toBe(true)
-    }
-  })
-
   it('loads native hook declarations eagerly without importing the optional compatibility entry', () => {
     const core = loads('core')
     // This is native source data written into Amp's plugin file, not Amp's optional transcript reader.

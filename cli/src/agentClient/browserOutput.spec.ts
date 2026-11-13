@@ -37,7 +37,7 @@ describe('browserFolder', () => {
     expect(statSync(folder).mode & 0o777).toBe(0o700)
   })
 
-  // On Linux nothing sets a TMPDIR for a plain agent: only a Swarm agent is given one (../lib/agentTmp.ts).
+  // On Linux nothing sets a TMPDIR for an agent.
   it('with no TMPDIR, is the browser folder in the folder Harness keeps for its agents, made 0700', () => {
     const data = fresh()
     for (const env of [{ ADAPTER_DATA_DIR: data }, { ADAPTER_DATA_DIR: data, TMPDIR: '' }]) {

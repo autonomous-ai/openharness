@@ -1,6 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
-import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { homedir } from 'node:os'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { engineBin, enginePathOverride } from '../../lib/engineBin.js'
 import { engineInstallRecipe } from '../../lib/engineInstall.js'
@@ -12,9 +10,6 @@ import { terminalRouteKey } from '../../lib/terminalRuntime.js'
 import { processLaunchArgs } from '../../lib/processTable.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
 import { createAgentRestarter, type RestartDeps } from './restart.js'
-import { createLaunchAuthority } from './launchAuthority.js'
-import { createSwarmSkillAdoption } from '../../superTabs/inCore/adoption.js'
-import { RETENTION_LAPSE_MS, retainContributions, retainedHarnesses } from '../../superTabs/retention.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 import { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
 
@@ -142,51 +137,6 @@ describe('restarting an agent', () => {
       await reconciler.trigger()
       expect(onDiscovered).toHaveBeenCalledOnce()
     } finally { releaseStop?.() }
-  })
-
-  it('adopts an old role before native inspection and relaunch', async () => {
-    const skill = { role: 'coordinator' as const, key: 'a1' }
-    const run = setup(agent(), { adoptSwarmSkill: async row => ({ ...row, swarmSkill: skill }) })
-    expect(await run.restart('a1')).toMatchObject({ ok: true })
-    expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(expect.objectContaining({ swarmSkill: skill }),
-      expect.objectContaining({ swarmSkill: skill }), expect.any(Function), undefined)
-  })
-
-  it('does not restart if role adoption loses the session binding', async () => {
-    const run = setup(agent(), { adoptSwarmSkill: async () => null })
-    expect(await run.restart('a1')).toMatchObject({ error: 'AGENT_CHANGED' })
-    expect(run.deps.relaunchOverrides).not.toHaveBeenCalled()
-    expect(restartAgent).not.toHaveBeenCalled()
-  })
-
-  it('restarts when an unrelated registry field changes during a no-role lookup', async () => {
-    const session = agent({ registeredAt: 1 })
-    const authority = createLaunchAuthority({ byAgent: () => session, revision: () => 0, cancelled: () => false })
-    const adoptSwarmSkill = createSwarmSkillAdoption({
-      authority, save: vi.fn(), candidate: () => true,
-      role: async () => { session.dsh = 'changed-during-lookup'; return null },
-    })
-    const run = setup(session, { adoptSwarmSkill })
-    expect(await run.restart('a1')).toMatchObject({ ok: true })
-    expect(restartAgent).toHaveBeenCalledOnce()
-  })
-
-  // Security review 2 of #2255: a Mac offline over a week has a lapsed local roster, which once restarted an old Swarm session
-  // without its role.
-  it('restarts an old Swarm session with its role after the local roster lapsed', async () => {
-    const data = mkdtempSync(join(tmpdir(), 'restart-roster-'))
-    try {
-      retainContributions(data, 'machine', [{ tabId: 'tab', agent: { harnessId: 'a1', machineId: 'machine' } }], Date.now() - RETENTION_LAPSE_MS - 60_000)
-      const session = agent({ startedBy: 'agent' })
-      const role = vi.fn(async () => ({ role: 'agent' as const }))
-      const adoptSwarmSkill = createSwarmSkillAdoption({ role, save: vi.fn(), candidate: id => retainedHarnesses(data).has(id),
-        authority: createLaunchAuthority({ byAgent: () => session, revision: () => 0, cancelled: () => false }) })
-      const run = setup(session, { adoptSwarmSkill })
-      expect(await run.restart('a1')).toMatchObject({ ok: true })
-      expect(role).toHaveBeenCalledOnce()
-      expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(expect.objectContaining({ swarmSkill: { role: 'agent', key: 'a1' } }),
-        expect.anything(), expect.any(Function), undefined)
-    } finally { rmSync(data, { recursive: true, force: true }) }
   })
 
   it.each(['starting', 'held'] as const)('does not replace an unbound native %s launch with a generic fresh restart', async state => {
@@ -581,21 +531,6 @@ describe('restarting an agent', () => {
       expect(console.log).toHaveBeenCalledWith('[restart] a1 claude · resumed')
       expect(run.deps.agentReconciler.holdRoute).toHaveBeenCalledWith(routeKey, null)
       expect(run.deps.agentReconciler.releaseRoute).toHaveBeenCalledWith(routeKey)
-    })
-
-    // A PM's Restart (⌘⇧E) forced full mode (Ken, 11-09) while a PM in its owner's settings stood still before each tool.
-    // Since 2026-11-12 a Swarm agent starts in Auto-approve, and a PM, as any Swarm agent, comes back in the mode it has.
-    it('restarts a Swarm\'s PM and any other Swarm agent in its own mode, never full mode', async () => {
-      const pm = agent({ swarmSkill: { role: 'coordinator', key: 'p1' }, permissionMode: 'auto' } as Partial<RegisteredSession>)
-      const run = setup(pm)
-      expect(await run.restart('a1')).toMatchObject({ ok: true })
-      expect(bypassPermissionFor).toHaveBeenCalledWith(pm, expect.any(Function))
-      expect(run.deps.downgradedPermission).toHaveBeenCalledWith(pm, true, 'restart', undefined)
-
-      vi.mocked(bypassPermissionFor).mockClear()
-      const worker = agent({ swarmSkill: { role: 'agent', key: 'p1' } } as Partial<RegisteredSession>)
-      expect(await setup(worker).restart('a1')).toMatchObject({ ok: true })
-      expect(bypassPermissionFor).toHaveBeenCalledWith(worker, expect.any(Function))
     })
 
     it('without a mode or a yes, launches with no mode and no bypass; a fresh session on a grid says both', async () => {

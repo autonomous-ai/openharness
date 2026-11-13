@@ -20,8 +20,6 @@ import { engineBin, enginePathOverride } from './engineBin.js'
 import { installedDsh } from '../dsh/installed.js'
 import { createLaunchHelpers } from '../core/agents/launch.js'
 import { createLaunchAuthority } from '../core/agents/launchAuthority.js'
-import { createSwarmSkillAdoption } from '../superTabs/inCore/adoption.js'
-import { RETENTION_LAPSE_MS, retainContributions, retainedHarnesses } from '../superTabs/retention.js'
 import type { NativeLaunch } from '../engines/nativeLaunch.js'
 import type { TerminalInventoryResult } from './terminalTypes.js'
 import { WindowsBatchLaunchRefused } from './windows/launch.js'
@@ -263,32 +261,6 @@ describe('production resume handler', () => {
     expect(create).toHaveBeenCalledOnce()
   })
 
-  it('persists an adopted old worker role in the resumed registry row', async () => {
-    const swarmSkill = { role: 'agent' as const, key: saved.agentId }
-    deps.adoptSwarmSkill = async row => ({ ...row, swarmSkill })
-    expect(await start()).toMatchObject({ ok: true, session: { swarmSkill } })
-    registry.load()
-    expect(registry.byAgent(saved.agentId)?.swarmSkill).toEqual(swarmSkill)
-  })
-
-  // Security review 2 of #2255: opening an old Swarm session after the Mac was offline over a week (a lapsed local roster) opened it
-  // without its role, with no role read at all.
-  it('opens an old Swarm session with its role after the local roster lapsed', async () => {
-    rewrite({ startedBy: 'agent' })
-    retainContributions(dir, 'machine', [{ tabId: 'tab', agent: { harnessId: saved.agentId, machineId: 'machine' } }], Date.now() - RETENTION_LAPSE_MS - 60_000)
-    const role = vi.fn(async () => ({ role: 'agent' as const }))
-    deps.adoptSwarmSkill = createSwarmSkillAdoption({ role, save: vi.fn(), candidate: id => retainedHarnesses(dir).has(id),
-      authority: createLaunchAuthority({ byAgent: id => registry.byAgent(id), revision: () => 0, cancelled: () => false }) })
-    expect(await start()).toMatchObject({ ok: true, session: { swarmSkill: { role: 'agent', key: saved.agentId } } })
-    expect(role).toHaveBeenCalledOnce()
-  })
-
-  it('does not resume a session that changed during role adoption', async () => {
-    deps.adoptSwarmSkill = async () => null
-    expect(await start()).toMatchObject({ error: 'AGENT_CHANGED' })
-    expect(create).not.toHaveBeenCalled()
-  })
-
   it.each(['auto', 'ask'])('resumes the same conversation with an explicit %s permission choice', async permissionMode => {
     rewrite({ engine: 'opencode', permissionMode: permissionMode === 'auto' ? 'ask' : 'auto' })
     vi.mocked(deps.relaunchOverrides).mockResolvedValue({ ok: true, overrides: {
@@ -306,26 +278,6 @@ describe('production resume handler', () => {
     })
     registry.load()
     expect(registry.byAgent(saved.agentId)?.permissionMode).toBe(permissionMode)
-  })
-
-  // An agent the Swarm started between task #4215 and 2026-11-12 was saved with no mode, and a stopped one is not in the
-  // registry the start-up sweep reads (lib/registry.ts `withSwarmAuto`): Open brings it back in Auto-approve. A person's own
-  // agent attached to a Swarm keeps its own default.
-  it('opens a stopped Swarm-started agent with no mode in Auto-approve', async () => {
-    const swarmSkill = { role: 'agent', key: 'swarm-dev' } as RegisteredSession['swarmSkill']
-    rewrite({ permissionMode: undefined, bypassPermission: false, swarmSkill, startedBy: 'agent' })
-    expect(await createResumeAgentService(deps)(saved.agentId)).toMatchObject({ ok: true, session: { permissionMode: 'auto', bypassPermission: true } })
-    expect(buildEngineLaunchArgv).toHaveBeenLastCalledWith('codex', expect.objectContaining({ permissionMode: 'auto', bypassPermission: true }))
-    registry.load()
-    expect(registry.byAgent(saved.agentId)?.permissionMode).toBe('auto')
-  })
-
-  it('opens a person\'s own agent attached to a Swarm, saved with no mode, in its own default', async () => {
-    const swarmSkill = { role: 'agent', key: 'swarm-dev' } as RegisteredSession['swarmSkill']
-    rewrite({ permissionMode: undefined, bypassPermission: false, swarmSkill, startedBy: undefined })
-    expect(await createResumeAgentService(deps)(saved.agentId)).toMatchObject({ ok: true })
-    const launched = vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1] as { permissionMode?: string | null; bypassPermission?: boolean }
-    expect([launched.permissionMode ?? null, launched.bypassPermission]).toEqual([null, false])
   })
 
   it('carries the captured native launch and token through permission, argv and registration', async () => {

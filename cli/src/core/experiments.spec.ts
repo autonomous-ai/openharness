@@ -26,14 +26,14 @@ describe('the experiments on as the core starts', () => {
     expect(stateIsThere(dataDir, [])).toBe(false)
   })
 
-  it('finds a file by a prefix and a suffix, as the Swarm host journal is named', () => {
-    const journal = ['super-tabs/host-*.json']
+  it('finds a file by a prefix and a suffix', () => {
+    const journal = ['saved/host-*.json']
     expect(stateIsThere(dataDir, journal)).toBe(false)
-    mkdirSync(join(dataDir, 'super-tabs'))
-    // Its other files in the folder are not a host.
-    for (const name of ['native-m1.json', 'host-m1.txt', 'retained.json']) writeFileSync(join(dataDir, 'super-tabs', name), '{}')
+    mkdirSync(join(dataDir, 'saved'))
+    // The folder's other files are not the kind asked for.
+    for (const name of ['native-m1.json', 'host-m1.txt', 'retained.json']) writeFileSync(join(dataDir, 'saved', name), '{}')
     expect(stateIsThere(dataDir, journal)).toBe(false)
-    writeFileSync(join(dataDir, 'super-tabs', `host-${'a'.repeat(32)}.json`), '{}')
+    writeFileSync(join(dataDir, 'saved', `host-${'a'.repeat(32)}.json`), '{}')
     expect(stateIsThere(dataDir, journal)).toBe(true)
   })
 

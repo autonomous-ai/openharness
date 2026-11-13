@@ -69,8 +69,6 @@ CHECKS = {
 }
 CLI_SHARED = ("cli/package.json", "cli/package-lock.json", "cli/vitest.config.ts", "cli/vitest.setup.ts",
               "cli/vitest.tmpdir.ts", "cli/src/__fixtures__/vitestRun.ts", "cli/tsconfig*.json", "cli/.node-version", "cli/.nvmrc")
-# The most pull requests Harness's train carries (cli/src/superTabs/githubTrain.ts TRAIN_MAX).
-TRAIN_MAX = 20
 FENCE = re.compile(r"^```harness-local-checks\s*\n(.*?)^```[ \t]*$", re.MULTILINE | re.DOTALL)
 # --run gives each check 65 minutes: the Desktop suite's own hour (run_command), which starts later, and five minutes
 # to stop Flutter and write its receipt naming what it never reached. A check it stops gets STOP_SECONDS to end after
@@ -100,26 +98,6 @@ def planned_checks(plan):
     return required
 
 
-def planned_heads(plan):
-    """The checks a receipt must cover at each head it may name: the pull request's own, or on Harness's train only each
-    member's, with the checks that member's own merge needs (ci-plan.py train_members). A train's head is a merge commit
-    nobody ran anything on (train #4115 on 2026-11-11: no cli-core receipt could name it, so no CLI change could land)."""
-    required = planned_checks(plan)
-    members = plan.get("train_members", [])
-    if members == []:
-        return {plan["head"]: required}
-    if (not isinstance(members, list) or len(members) > TRAIN_MAX
-            or not all(isinstance(member, dict) and isinstance(member.get("head"), str)
-                       and isinstance(member.get("local_checks"), list)
-                       and member["local_checks"] == sorted(set(member["local_checks"]) & set(CHECKS))
-                       for member in members)):
-        raise ValueError("CI plan has incomplete local check coverage")
-    heads = {member["head"]: member["local_checks"] for member in members}
-    if len(heads) != len(members) or not set(required) <= {name for names in heads.values() for name in names}:
-        raise ValueError("CI plan has incomplete local check coverage")
-    return heads
-
-
 def missing(required):
     # Only known names/commands are printed, never arbitrary PR content.
     return ValueError("Missing or invalid local check receipts: " + ", ".join(required)
@@ -127,23 +105,21 @@ def missing(required):
                       + " into the PR body.")
 
 
-def validate_receipts(heads, receipts):
-    """The receipts for every check each of [heads] ({head: [check]}) needs at that head, in that order."""
-    wanted = [(head, name) for head, names in heads.items() for name in names]
-    if not wanted:
+def validate_receipts(head, names, receipts):
+    """The receipts for every check in [names] at [head], in that order."""
+    if not names:
         return []
-    if not all(isinstance(head, str) and re.fullmatch(r"[0-9a-f]{40}", head) for head in heads):
+    if not (isinstance(head, str) and re.fullmatch(r"[0-9a-f]{40}", head)):
         raise ValueError("invalid local check head")
-    one = len(heads) == 1
-    required = sorted({name if one else f"{name} at {head[:7]}" for head, name in wanted})
-    if not isinstance(receipts, list) or len(receipts) > 32 * len(heads):
+    required = sorted(set(names))
+    if not isinstance(receipts, list) or len(receipts) > 32:
         raise missing(required)
     found = {}
     for item in receipts:
         if not isinstance(item, dict) or not isinstance(item.get("check"), str) or not isinstance(item.get("head"), str):
             raise missing(required)
-        name, head = item["check"], item["head"]
-        if name not in CHECKS or head not in heads or (head, name) in found:
+        name = item["check"]
+        if name not in CHECKS or item["head"] != head or name in found:
             raise missing(required)
         contract = CHECKS[name]
         command = item.get("command")
@@ -155,15 +131,15 @@ def validate_receipts(heads, receipts):
                 or item.get("platform") not in ("macos", "linux", "windows")
                 or (contract["platform"] and item["platform"] != contract["platform"])):
             raise missing(required)
-        found[head, name] = {key: item[key] for key in ("check", "command", "cwd", "head", "status", "passed", "platform")}
-    absent = [name if one else f"{name} at {head[:7]}" for head, name in wanted if (head, name) not in found]
+        found[name] = {key: item[key] for key in ("check", "command", "cwd", "head", "status", "passed", "platform")}
+    absent = [name for name in names if name not in found]
     if absent:
         raise missing(absent)
-    return [found[key] for key in wanted]
+    return [found[name] for name in names]
 
 
 def check(plan, event):
-    heads = planned_heads(plan)
+    required = planned_checks(plan)
     if plan.get("event") != "pull_request":
         return []
     pr = event.get("pull_request", {})
@@ -178,7 +154,7 @@ def check(plan, event):
         receipts = json.loads(blocks[0]) if len(blocks) == 1 else None
     except (ValueError, RecursionError):
         receipts = None
-    return validate_receipts(heads, receipts)
+    return validate_receipts(plan["head"], required, receipts)
 
 
 def host_platform():
@@ -187,8 +163,8 @@ def host_platform():
 
 def run_command(name):
     """The command --run runs for CHECKS[name]: its own, and for the Desktop suite the budget the docs give a slower
-    Mac. Vitest suites size their own workers to their Swarm agent's share of the cores (cli/src/testing/suiteWorkers.ts),
-    which a --maxWorkers would override."""
+    Mac. Vitest suites size their own workers to half the machine's cores (cli/src/testing/suiteWorkers.ts), which a
+    --maxWorkers would override."""
     command = CHECKS[name]["command"]
     return command + ' ARGS="--timeout 3600"' if "resources" in CHECKS[name] else command
 
@@ -327,7 +303,7 @@ def run(root, base, out, err):
         err.write("Local checks void: HEAD or the tree changed during the run.\n")
     if failures or moved:
         return 1
-    receipts = validate_receipts({head: names}, receipts)
+    receipts = validate_receipts(head, names, receipts)
     out.write("```harness-local-checks\n" + json.dumps(receipts, indent=2) + "\n```\n")
     return 0
 

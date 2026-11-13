@@ -5,20 +5,14 @@
  * Moved from lib/claudeTrust.ts, whose every write it reproduces (engines/launchPrep.golden.spec.ts).
  *
  * ⚠️ Never for a folder with content the person has not been asked about (a clone, their own repo, a worktree
- * of one): that answer is theirs. One consented exception is a Swarm's own project clones: clicking Add
- * machine authorizes those checkouts and their Swarm agent worktrees (superTabs/cloneTrust.ts), including
- * earlier contributions repaired after an update. It never authorizes the person's other repositories.
- * The other is a Swarm agent in the Swarm's full mode in the checkout of its remote project's own repository, or in a
- * worktree of the repository the person picked for it in this machine's own window (core/agents/launches.ts
- * `swarmCheckout`). Any other existing folder stays the person's question.
- * The callers decide (core/agents/create.ts, launches.ts). A worktree only inherits the answer its source
- * repo already has.
+ * of one): that answer is theirs. The callers decide (core/agents/create.ts, launches.ts). A worktree only inherits the
+ * answer its source repo already has.
  *
  * Recording only ever ADDS trust, and does nothing when the engine has never run here (no file), when the file does not
  * parse, or when it already says yes.
  */
-import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
-import { dirname, posix, win32 } from 'node:path'
+import { existsSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
+import { posix, win32 } from 'node:path'
 import type { TrustContract } from '../facets/launch.js'
 
 type JsonTrust = Extract<TrustContract, { format: 'json' }>
@@ -34,9 +28,9 @@ export function recordTrustIn(trust: TrustContract, file: string, cwd: string): 
   return trust.format === 'json' ? recordJson(trust, file, cwd) : recordToml(trust, file, cwd)
 }
 
-/** A folder as this platform compares it. DESKTOP-0TFH0OJ, 2026-10-23: a Swarm worktree's source came as
- *  `C:\…\<tab>/<project>` (the Lead joins with "/") and its trust was recorded as `C:\…\<tab>\<project>`; compared as
- *  text, every Swarm start on Windows stopped at the engine's trust prompt. On Windows any separator and any case is the
+/** A folder as this platform compares it. DESKTOP-0TFH0OJ, 2026-10-23: a worktree's source came as `C:\…\<tab>/<project>`
+ *  (joined with "/") and its trust was recorded as `C:\…\<tab>\<project>`; compared as text, every start there on Windows
+ *  stopped at the engine's trust prompt. On Windows any separator and any case is the
  *  same folder; elsewhere the text is compared as it always was. Never resolved: an engine looks up keys as written. */
 const windows = (): boolean => process.platform === 'win32'
 const folderText = (path: string): string => windows() ? path.replace(/\//g, '\\').toLowerCase() : path
@@ -73,27 +67,6 @@ export function replaceConfigFile(file: string, text: string): void {
   renameSync(tmp, target)
 }
 
-/** Record an engine's one-time answer (facets/launch.ts `OnboardingContract`) as `key` in the JSON settings `file`, as its own
- *  screen would. Like trust, only ever adds: a file that is not an object, or a `key` the person set to anything else, stays
- *  as it is. A missing file is created holding the key alone, never over a file made meanwhile. */
-export function recordAcceptanceIn(file: string, key: string): 'accepted' | 'already' | 'skipped' {
-  if (!existsSync(file)) {
-    mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
-    try {
-      writeFileSync(file, JSON.stringify({ [key]: true }, null, 2), { mode: 0o600, flag: 'wx' })
-      return 'accepted'
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-    }
-  }
-  let settings: unknown
-  try { settings = JSON.parse(readFileSync(file, 'utf8')) } catch { return 'skipped' }
-  if (!isPlainObject(settings)) return 'skipped'
-  if (settings[key] !== undefined) return settings[key] === true ? 'already' : 'skipped'
-  replaceConfigFile(file, JSON.stringify({ ...settings, [key]: true }, null, 2))
-  return 'accepted'
-}
-
 function recordJson(trust: JsonTrust, file: string, cwd: string): 'trusted' | 'already' | 'skipped' {
   if (!existsSync(file)) return 'skipped'
   let config: unknown
@@ -114,36 +87,6 @@ function recordJson(trust: JsonTrust, file: string, cwd: string): 'trusted' | 'a
   config[trust.projects] = projects
   replaceConfigFile(file, JSON.stringify(config, null, 2))
   return 'trusted'
-}
-
-/** Whether `key` is true in the JSON settings `file`: an answer the engine or [recordAcceptanceIn] recorded. A missing or
- *  unreadable file reads as no. */
-export function acceptedIn(file: string, key: string): boolean {
-  try {
-    const settings: unknown = JSON.parse(readFileSync(file, 'utf8'))
-    return isPlainObject(settings) && settings[key] === true
-  } catch {
-    return false
-  }
-}
-
-/** Set `key` to `value` in the JSON settings `file`, the person's own choice made for the engine (its theme, picked on the
- *  phone setting up the computer). A missing file is created holding the key alone; one that is not an object stays as it is. */
-export function recordSettingIn(file: string, key: string, value: string): 'recorded' | 'skipped' {
-  if (!existsSync(file)) {
-    mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
-    try {
-      writeFileSync(file, JSON.stringify({ [key]: value }, null, 2), { mode: 0o600, flag: 'wx' })
-      return 'recorded'
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-    }
-  }
-  let settings: unknown
-  try { settings = JSON.parse(readFileSync(file, 'utf8')) } catch { return 'skipped' }
-  if (!isPlainObject(settings)) return 'skipped'
-  replaceConfigFile(file, JSON.stringify({ ...settings, [key]: value }, null, 2))
-  return 'recorded'
 }
 
 /** Its own entry, or a folder above it in the same Git repository, says yes: the inheritance Claude Code applies. Unreadable or absent

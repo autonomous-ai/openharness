@@ -4,18 +4,6 @@ import type { RegisteredSession } from '../lib/registry.js'
 import { agentsIn, daemonIn, isSession, processCoreApi, UNASKED, type ShownAgent } from './processCoreApi.js'
 import { turnsLink } from './turnsLink.js'
 
-it('grants typed deliveries only in its connected service namespace and refuses a missing or failed core', async () => {
-  const ask = vi.fn(async () => ({ leased: true }))
-  const api = processCoreApi('/data', 'worker', { ask })
-  expect(await api.turns.leaseDeliveries('other', {})).toBe(false)
-  expect(ask).not.toHaveBeenCalled()
-  expect(await api.turns.leaseDeliveries('worker', { delivery: 100 })).toBe(true)
-  expect(ask).toHaveBeenCalledWith('lease_deliveries', { leases: { delivery: 100 } })
-  ask.mockRejectedValueOnce(new Error('Disconnected'))
-  expect(await api.turns.leaseDeliveries('worker', {})).toBe(false)
-  expect(await processCoreApi('/data', 'worker').turns.leaseDeliveries('worker', {})).toBe(false)
-})
-
 it('asks the core to count Hachi\'s counters, never waiting on it nor throwing when it cannot', async () => {
   const ask = vi.fn(async (): Promise<Record<string, unknown>> => ({ ok: true }))
   const api = processCoreApi('/data', 'messages', { ask })
@@ -39,38 +27,11 @@ it('asks the core to tell the windows a goal Hachi closed, never waiting on it n
   expect(() => processCoreApi('/data', 'goals').clients.hachiGoalDone!(done)).not.toThrow()
 })
 
-it('asks the core what holds a delivery from its pane, and hears nothing from a core that cannot say', async () => {
-  const ask = vi.fn(async (): Promise<Record<string, unknown>> => ({ hold: 'team_waiting_draft' }))
-  const api = processCoreApi('/data', 'superTabs', { ask })
-  expect(await api.turns.holdOf('agent-1', 'team:service:superTabs:d1')).toBe('team_waiting_draft')
-  expect(ask).toHaveBeenCalledWith('delivery_hold', { agentId: 'agent-1', deliveryId: 'team:service:superTabs:d1' })
-  ask.mockResolvedValueOnce({ hold: null })
-  expect(await api.turns.holdOf('agent-1', 'team:service:superTabs:d1')).toBeNull()
-  ask.mockResolvedValueOnce({ error: 'UNKNOWN_QUERY' })
-  expect(await api.turns.holdOf('agent-1', 'team:service:superTabs:d1')).toBeNull()
-  ask.mockRejectedValueOnce(new Error('Disconnected'))
-  expect(await api.turns.holdOf('agent-1', 'team:service:superTabs:d1')).toBeNull()
-  expect(await processCoreApi('/data', 'superTabs').turns.holdOf('agent-1', 'team:service:superTabs:d1')).toBeNull()
-})
 import { usageTarget } from '../lib/agentUsageWire.js'
 
 const agent = (agentId: string, over: Partial<RegisteredSession> = {}) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: `/work/${agentId}`, ...over }) as RegisteredSession
 
 describe('the core API a light service runs on in its own process', () => {
-  it('accepts only the requested native creation receipt from the core', async () => {
-    const id = 'creation-fixture-1234', observation = { creationId: id, state: 'cancelled' }
-    const ask = vi.fn(async (): Promise<Record<string, unknown>> => ({ observation }))
-    const api = processCoreApi('/data', 'worker', { ask })
-    expect(await api.agents.creationStatus!(id)).toEqual(observation)
-    expect(ask).toHaveBeenCalledWith('creation_status', { creationId: id })
-    ask.mockResolvedValueOnce({ observation: { ...observation, creationId: 'other' } })
-    expect(await api.agents.creationStatus!(id)).toBeNull()
-    ask.mockResolvedValueOnce({})
-    expect(await api.agents.creationStatus!(id)).toBeNull()
-    ask.mockRejectedValueOnce(new Error('Core unavailable'))
-    expect(await api.agents.creationStatus!(id)).toBeNull()
-    expect(await processCoreApi('/data', 'worker').agents.creationStatus!(id)).toBeNull()
-  })
   it('retains the observed runtime profile and treats absent or malformed older projections as unknown', () => {
     const api = processCoreApi('/data', 'worker')
     const selectedModel = 'runtime-v1:a1:claude:opus@high'
@@ -216,15 +177,15 @@ describe('the core API a light service runs on in its own process', () => {
 
   it('reads the backend through the core, and says a refusal as the core said it', async () => {
     const ask = vi.fn(async (_query: string, _payload: Record<string, unknown>): Promise<Record<string, unknown>> => ({ status: 200, body: { data: { tabs: [] } } }))
-    const api = processCoreApi('/data', 'superTabs', { ask })
-    expect(await api.account.backend('GET', '/api/super-tabs/list')).toEqual({ status: 200, body: { data: { tabs: [] } } })
+    const api = processCoreApi('/data', 'sharing', { ask })
+    expect(await api.account.backend('GET', '/api/harness-shares')).toEqual({ status: 200, body: { data: { tabs: [] } } })
     expect(ask).toHaveBeenCalledOnce()
-    expect(ask).toHaveBeenCalledWith('backend', { method: 'GET', path: '/api/super-tabs/list' })
+    expect(ask).toHaveBeenCalledWith('backend', { method: 'GET', path: '/api/harness-shares' })
     // A route its service has not declared, and a service the core does not answer for (it is not an experiment).
     ask.mockResolvedValueOnce({ error: 'ROUTE_NOT_DECLARED' })
     expect(await api.account.backend('GET', '/api/machines')).toEqual({ status: 502, body: { error: 'ROUTE_NOT_DECLARED' } })
     ask.mockResolvedValueOnce({ error: 'NOT_AN_EXPERIMENT' })
-    expect(await processCoreApi('/data', 'store', { ask }).account.backend('GET', '/api/super-tabs/list')).toEqual({ status: 502, body: { error: 'NOT_AN_EXPERIMENT' } })
+    expect(await processCoreApi('/data', 'store', { ask }).account.backend('GET', '/api/harness-shares')).toEqual({ status: 502, body: { error: 'NOT_AN_EXPERIMENT' } })
   })
 
   it('gives the cloud agents their doors only with a core to ask, and never waits on or throws from them', async () => {
@@ -236,41 +197,6 @@ describe('the core API a light service runs on in its own process', () => {
     doors.unask('cloud_1', 'cloud_q_1')
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(ask.mock.calls.map(([query]) => query)).toEqual(['cloud_publish', 'cloud_ask', 'cloud_unask'])
-  })
-
-  it('gives the Super Tab service its door only with a core to ask, and never waits on or throws from it', async () => {
-    expect(processCoreApi('/data', 'superTabs').superTabs).toBeUndefined()
-    const ask = vi.fn(async (_query: string, _payload: Record<string, unknown>): Promise<Record<string, unknown>> => { throw new Error('gone') })
-    processCoreApi('/data', 'superTabs', { ask }).superTabs!.shareObservers()
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(ask).toHaveBeenCalledWith('super_tab_observers', {})
-  })
-
-  // Its cards and waits go to the devices through the core's relays, on the link its process holds (services/relayLink.ts).
-  it('hands a service the relays its process gives it, and none when it gives none', () => {
-    const relay = { tell: vi.fn(), on: vi.fn(), onPeer: vi.fn() }
-    expect(processCoreApi('/data', 'superTabs', { relay }).relay).toBe(relay)
-    expect(processCoreApi('/data', 'superTabs').relay).toBeUndefined()
-  })
-
-  it('asks the core to read and type an agent\'s pane, and answers plainly when the core cannot be asked', async () => {
-    const ask = vi.fn(async (query: string, _payload: Record<string, unknown>): Promise<Record<string, unknown>> =>
-      query === 'pane_screen' ? { ok: true, text: 'Allow?', hold: 'permission_open' } : { ok: true })
-    const doors = processCoreApi('/data', 'superTabs', { ask }).panes!
-    expect(await doors.screen('h1', 20)).toEqual({ ok: true, text: 'Allow?', hold: 'permission_open' })
-    expect(ask).toHaveBeenLastCalledWith('pane_screen', { agentId: 'h1', scrollback: 20 })
-    expect(await doors.input('h1', 'yes', ['Enter'])).toEqual({ ok: true })
-    expect(ask).toHaveBeenLastCalledWith('pane_input', { agentId: 'h1', text: 'yes', keys: ['Enter'] })
-    expect(await doors.inputIfScreen('h1', ['Escape'], 'Update available')).toEqual({ ok: true })
-    expect(ask).toHaveBeenLastCalledWith('pane_input_if_screen', { agentId: 'h1', keys: ['Escape'], screen: 'Update available' })
-    ask.mockRejectedValue(new Error('gone'))
-    expect(await doors.inputIfScreen('h1', ['Escape'], 'x')).toEqual({ ok: false, error: 'This machine\'s daemon could not be asked. Try again in a moment.' })
-    expect(await doors.screen('h1', 0)).toEqual({ ok: false, error: 'This machine\'s daemon could not be asked. Try again in a moment.' })
-    expect(await doors.input('h1', 'x', [])).toEqual({ ok: false, error: 'This machine\'s daemon could not be asked. Try again in a moment.' })
-    ask.mockResolvedValue({ error: 'NOT_A_PANE_TYPER' })
-    expect(await doors.input('h1', 'x', [])).toEqual({ ok: false, error: 'NOT_A_PANE_TYPER' })
-    ask.mockResolvedValue({})
-    expect(await doors.screen('h1', 0)).toEqual({ ok: false, error: 'The terminal could not be reached.' })
   })
 
   it('acts on the core for an experiment: agents made, turns stopped and delivered, windows told, each asked', async () => {
@@ -382,26 +308,3 @@ describe('the core API a light service runs on in its own process', () => {
     expect(isSession({ sessionId: 's' })).toBe(false)
   })
 })
-
-it('asks for native stop evidence and treats an absent or failed link as unknown', async () => {
-  const ask = vi.fn(async (): Promise<Record<string, unknown>> => ({ stopped: true }))
-  const api = processCoreApi('/data', 'superTabs', { ask })
-  expect(await api.agents.stopped!('a')).toBe(true)
-  expect(ask).toHaveBeenLastCalledWith('stopped', { agentId: 'a' })
-  ask.mockResolvedValueOnce({ stopped: false })
-  expect(await api.agents.stopped!('a')).toBe(false)
-  ask.mockRejectedValueOnce(new Error('offline'))
-  expect(await api.agents.stopped!('a')).toBe(false)
-  expect(await processCoreApi('/data', 'superTabs').agents.stopped!('a')).toBe(false)
-})
-
-it('asks whether an agent is gone and treats an absent or failed link as not gone', async () => {
-  const ask = vi.fn(async (): Promise<Record<string, unknown>> => ({ gone: true }))
-  const api = processCoreApi('/data', 'superTabs', { ask })
-  expect(await api.agents.gone!('a')).toBe(true)
-  expect(ask).toHaveBeenLastCalledWith('gone', { agentId: 'a' })
-  ask.mockRejectedValueOnce(new Error('offline'))
-  expect(await api.agents.gone!('a')).toBe(false)
-  expect(await processCoreApi('/data', 'superTabs').agents.gone!('a')).toBe(false)
-})
-

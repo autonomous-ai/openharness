@@ -178,14 +178,6 @@ export class BackendSocket {
      *  null when the pane opens on an empty input. Validated here — length, and that the engine has a
      *  contract for it — so cli.ts never sees one it cannot hand over. Never logged. */
     prompt: string | null
-    /** Session-scoped built-in instructions for a newly launched Swarm agent: a coordinator or an agent. A launch an
-     *  older CLI saved to finish later names it in the wire's values (lead, dev, review), which create.ts reads too. */
-    swarmRole?: import('./lib/swarmSkills.js').SwarmRole
-    /** With swarmRole `agent`: an older client's Reviewer, which keeps its Reviewer kind. */
-    swarmFallback?: 'review'
-    /** Sent by a host from before the Harness GitHub App's removal, and ignored: no new agent uses the App. Delete on or after
-     *  2026-12-10. */
-    swarmGitHub?: true
     /** The name the pane opens under, instead of the next `agent-N`; null to number it. */
     name: string | null
     /** The engine's named agent the pane opens AS (`NAMED_AGENT_ARGS` in engineLaunch.ts; opencode
@@ -496,15 +488,7 @@ export class BackendSocket {
     },
     notice: (notice: BackendNotice) => {
       this.onAccountNotice?.(notice)
-      // Only the Swarm host acts on these (superTabs/host.ts): the windows have nothing to re-read.
-      if (notice.type === 'super_tab_deliveries' || notice.type === 'swarm_host_changed' || notice.type === '__terminal_waiting' || notice.type === '__deliveries_lease') return
       if (notice.type === 'machines_changed' && notice.reason === 'harness_shares') { this.sharesNotice.tell(); return }
-      // A Swarm changed: its id, time and parts, or nothing for the server's word that it pushes (desktop swarm_pushes.dart).
-      if (notice.type === 'swarm_changed') {
-        const { type, ...payload } = notice
-        this.sendLocal({ type, payload })
-        return
-      }
       this.sendLocal(notice.type === 'machines_changed' ? { type: notice.type, payload: { reason: notice.reason } }
         : notice.type === 'device_keys_changed' ? { type: notice.type, payload: {} }
           : { type: notice.type, payload: { revision: notice.revision } })

@@ -48,7 +48,7 @@ export function linkClaudeProfile(path: string, machineId: string): { profile: C
  * Whether [id] names [engine]'s default account on this machine: the literal 'default', which an older backend sends, its
  * reported id, or for Codex the id of the default home's path, which a native Codex launch once reported.
  */
-export function namesDefaultAccount(
+function namesDefaultAccount(
   engine: 'claude' | 'codex', id: string, machineId: string, options: { home?: string; environment?: NodeJS.ProcessEnv } = {},
 ): boolean {
   return id === 'default' || id === profileId(machineId, engine, 'default')

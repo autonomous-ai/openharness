@@ -2,8 +2,8 @@ import { userInfo } from 'node:os'
 import { inheritedAccountDataFolder } from '../lib/homeDataFolder.js'
 
 /** The commands that start, stop or wipe a daemon or its folder: under a HOME that is not the account's they act
- *  on that HOME's data folder, never the account's. The ones an agent uses to reach its own daemon (send, new,
- *  super-tab ...) keep the variable. */
+ *  on that HOME's data folder, never the account's. The ones an agent uses to reach its own daemon (send, new, ...) keep
+ *  the variable. */
 export const HOME_FOLLOWING_COMMANDS = ['start', 'stop', 'login', 'logout', 'update', 'reset', 'uninstall', 'service', 'status', 'logs']
 
 /**

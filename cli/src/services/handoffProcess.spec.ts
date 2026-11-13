@@ -124,16 +124,6 @@ describe('the handoff in the edge host', () => {
     expect(Object.keys(vi.mocked(runServiceProcess).mock.calls.at(-1)![0].requests)).toEqual([...HANDOFF_REQUESTS])
   })
 
-  // HARNESS_SWARM: a member's replacement is recorded by the Swarm's side, which its process loads only while it is on.
-  it('hands the change-agent handoff the Swarm\'s record while it is on, and none without it', () => {
-    const start = vi.fn((..._args: Parameters<typeof startHandoff>) => ({}))
-    const recordReplacement = vi.fn()
-    const base = { dataDir: '/data', socketPath: '/s', machineId: 'm', token: 't', run: () => ({ stop: vi.fn() }), start }
-    runHandoffService({ ...base, swarm: { recordReplacement } })
-    runHandoffService(base)
-    expect(start.mock.calls.map(call => call[3])).toEqual([recordReplacement, undefined])
-  })
-
   it('reads SQLite only for a store-backed conversation and hands that one over', async () => {
     const ws = mkdtempSync(join(tmpdir(), 'handoff-store-'))
     try {
@@ -157,7 +147,7 @@ describe('the handoff in the edge host', () => {
       // The eager SQLite module does not open a database for a file-backed conversation.
       expect(core.transcripts.databaseHistory(agents.claude as never)).toBeUndefined()
       expect(core.transcripts.databaseHistory({ ...agents.claude, engine: 'codex' } as never)).toBeUndefined()
-      const prepare = startHandoff(core, undefined, undefined, undefined, LOADED_HANDOFF_LIMITS).agent_handoff_prepare!
+      const prepare = startHandoff(core, undefined, undefined, LOADED_HANDOFF_LIMITS).agent_handoff_prepare!
       const asker = { local: true, owner: true }
       await prepare({ agentId: 'claude-1', changeId: 'c'.repeat(32), targetEngine: 'codex' }, asker)
       expect(binding.loads).toBe(1)

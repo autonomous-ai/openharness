@@ -115,7 +115,7 @@ through its link. The daemon writes the entries again as it starts, so an agent 
 service was connected gets it too. An agent reads its MCP servers when it starts: one already running
 sees a new connection after it is restarted.
 
-An agent started under a Claude profile (`CLAUDE_CONFIG_DIR`) or a Codex profile (`CODEX_HOME`), such as a switched PM, reads that
+An agent started under a Claude profile (`CLAUDE_CONFIG_DIR`) or a Codex profile (`CODEX_HOME`), such as one switched to another login, reads that
 folder's `.claude.json` or `config.toml`, not the default's. Launching it has the connectors service write the same entries there
 (`syncProfileHome`, the core's `ConnectorsPort`, waited on for 5 s at most: one not written in time leaves the config as it was) and
 records the folder in `projections.json` as `claude:<folder>` / `codex:<folder>`; every later sync keeps it current, and a folder

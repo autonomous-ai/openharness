@@ -409,7 +409,7 @@ it('exports normalized input, output and cached input without double-counting', 
   } finally { store.dispose(); await store.settled(); await rm(dir, { recursive: true, force: true }) }
 })
 
-describe('token counts by model (Swarm cost records)', () => {
+describe('token counts by model', () => {
   let dir: string
   let store: AgentTokenUsageCache
   let target: Pick<RegisteredSession, 'agentId' | 'sessionId' | 'engine' | 'transcriptPath' | 'registeredAt'>

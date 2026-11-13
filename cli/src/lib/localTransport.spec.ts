@@ -97,7 +97,7 @@ describe('daemonFetch on Windows goes over the daemon\'s pipe, never its port (W
     const form = new FormData()
     const bytes = randomBytes(10 * 1024 * 1024)
     form.append('file', new Blob([bytes]), 'big.bin')
-    const answer = await daemonFetch('/nowhere', 4242, never, 'win32', async () => ({ pipe, token }))('http://127.0.0.1:4242/api/super-tabs/t/attachments', { method: 'POST', body: form })
+    const answer = await daemonFetch('/nowhere', 4242, never, 'win32', async () => ({ pipe, token }))('http://127.0.0.1:4242/api/files', { method: 'POST', body: form })
     expect(answer.status).toBe(200)
     expect(seen[0]!.type).toMatch(/^multipart\/form-data; boundary=/)
     expect(seen[0]!.body.includes(bytes)).toBe(true)

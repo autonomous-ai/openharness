@@ -11,6 +11,10 @@ process. … protect the daemon core."
 
 ## In short
 
+- **The Swarm is deleted (14 November).** anh Dee: "delete the swarm featur entirely … that's the only way i can know
+  for sure it's compeltely out of core". Its door, its port and queries, every list and record the core kept for it, and
+  its code everywhere else went with it: the core's process is 541 files and 92,057 lines. What follows is the audit as
+  it was.
 - **The core's process grew 38% in five weeks.** It loads 98,437 lines in 556 files, against 71,244 in 332 on
   7 October, when the last plan's moves had landed. Nothing stopped it: the test that guards the core names the
   folders it must not load, and the growth came in files no list named.
@@ -179,6 +183,7 @@ Left since, with the core's process as `src/architecture.coreFiles.txt` lists it
 | The agent browser's stream: the exec into a browser's container for each viewer, the reading of the viewer's VNC bytes, the credit and the pacing run in the agent browser's process. The core keeps a forwarder that holds each stream to the connection that opened it, bounds what it passes on by itself (an unanswered open, unread bytes), and sends the service's screen frames on unread, which costs it no more per byte than reading the pipe did (13 November) | 547 | 94,319 |
 | The sign-in's renewal, the core's last call to another host: the gateway renews it, and the core asks it for a token. A test lists what in the core's process can open a connection, each to this computer (13 November) | 547 | 94,321 |
 | The Swarm's chat-file upload, the last call to another host with the Swarm on: the core keeps the file in its private uploads folder and the gateway sends it. The connection test reads every file of the core's process, the Swarm's door too. The core no longer loads the backend's address (`lib/backendHttpBase.ts`) at all (13 November) | 546 | 94,344 |
+| The Swarm, deleted: its door, its port and queries, and every list, relay and record the core kept for it (14 November) | 541 | 92,057 |
 
 ### 1. Code the core loads for one helper (low risk, about a day each)
 
@@ -226,6 +231,8 @@ this platform uses leaves them out. Low risk on a Mac and Linux, medium on a Win
 | Store engines: deletes on their databases at purge, a whole conversation read into the core at close, Codex's title index read whole | 483 | their worker | medium to high |
 
 ### 5. The Swarm, out of the core's process
+
+Done on 14 November: the Swarm is deleted, and every line below with it. The order is kept as it was.
 
 anh Dee, 2026-11-13: "swarm is an experimental feature. we could turn it off / kill the feature at any time. the
 philosophy: small tiny core that is super stable and solid and a lot of components around it". With the Swarm on, its

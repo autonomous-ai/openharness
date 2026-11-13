@@ -108,8 +108,8 @@ describe('stopping, purging and resuming an agent', () => {
     await expect(setup().lifecycle.stopAgent('a1')).resolves.toBeUndefined()
   })
 
-  // anh Dee, 2026-11-13: an experiment never touches the core. The core refused to stop a Swarm's Product Manager until then;
-  // now every stop is a stop, whoever the agent is to a component, and the Swarm reopens its own (superTabs/host.ts keepAlive).
+  // anh Dee, 2026-11-13: an experiment never touches the core. The core refused to stop some agents for a component until
+  // then; now every stop is a stop, whoever the agent is to a component.
   it('stops every agent asked, by agent or session id, with nothing to ask first', async () => {
     const stopped = vi.fn()
     const { lifecycle } = setup({ stopped })

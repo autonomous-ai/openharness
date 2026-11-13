@@ -3,8 +3,8 @@
  * automatic input for a while, so no path that types into it on its own can loop.
  *
  * Diego's daily report, 2026-10-28: 106k turns in a day against 1.2k–4.9k a day the week before, 104.5k of them
- * under 10 s, from a few macOS computers. The paths that type into an agent on their own (Swarm messages, Agent
- * Messages) each send once per message, but nothing stopped them typing again and again into an agent whose
+ * under 10 s, from a few macOS computers. The paths that type into an agent on their own (Agent Messages, …) each send
+ * once per message, but nothing stopped them typing again and again into an agent whose
  * every turn ends at once. Ten turns in a row, each under 10 s and starting within 10 s of the one before, is not a
  * person's pace: the agent's automatic input is held for 30 s, doubling while it goes on, up to 30 minutes. A turn
  * of 10 s or more lifts it. A person's input is never held.

@@ -65,14 +65,8 @@ describe('what a guest may ask', () => {
     for (const type of ['e2ee_pairings_list', 'e2ee_pairing_unpair', 'device_e2ee_pair', 'phone_pair', 'group_sync', 'shared_machines',
       'sessions_list', 'session_get', 'session_search', 'agent_recent', 'agent_fork', 'agent_purge', 'agents_cleanup_preview', 'fs_list_dir',
       'agent_read_file', 'shell', 'connectors', 'memory', 'grid_models_list', 'api_connections', 'harness_devices_list', 'browser_open',
-      'claude_login_status', 'route_task', 'viewer_surface', 'agent_instructions_read', 'agent_instructions_write', 'a_request_added_next_year']) {
+      'claude_login_status', 'route_task', 'viewer_surface', 'a_request_added_next_year']) {
       expect(verdict(type), type).toEqual({ allow: false, error: 'GUEST_NOT_ALLOWED' })
-    }
-  })
-
-  it('never reads or saves an agent\'s instructions file, not even one of its own harnesses: the owner\'s own computers do that', () => {
-    for (const type of ['agent_instructions_read', 'agent_instructions_write']) {
-      expect(verdict(type, { agentId: 'mine', name: 'Faye', text: 'x', version: '' }), type).toEqual({ allow: false, error: 'GUEST_NOT_ALLOWED' })
     }
   })
 

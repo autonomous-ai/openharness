@@ -42,9 +42,7 @@ export function fakeCore(over: Overrides = {}): CoreApi {
     },
     turns: {
       send: vi.fn(), stop: vi.fn(), recent: vi.fn(async () => []), asks: vi.fn(async () => []),
-      deliver: vi.fn(), cancelDelivery: vi.fn(() => false), onDelivery: vi.fn(() => () => {}), onEnd: vi.fn(() => () => {}), answerOf: vi.fn(async () => null),
-      leaseDeliveries: vi.fn(async () => true),
-      holdOf: vi.fn(async () => null),
+      deliver: vi.fn(), cancelDelivery: vi.fn(() => false), onDelivery: vi.fn(() => () => {}),
       ...over.turns,
     },
     questions: { answer: vi.fn(), answerReviewed: vi.fn(async () => false), ...over.questions },
@@ -96,11 +94,5 @@ export function fakeCore(over: Overrides = {}): CoreApi {
     ...(over.count ? { count: over.count } : {}),
     // Only a spec that gives the cloud agents doors has them, as only a core that offers them does.
     ...(over.cloud ? { cloud: Object.assign({ publish: vi.fn(), ask: vi.fn(), unask: vi.fn() }, over.cloud) } : {}),
-    // The relays, likewise (src/testing/relayHub.ts gives one a test can speak through).
-    ...(over.relay ? { relay: over.relay } : {}),
-    // The Super Tab service's door, likewise.
-    ...(over.superTabs ? { superTabs: Object.assign({ shareObservers: vi.fn() }, over.superTabs) } : {}),
-    // An agent's pane, likewise.
-    ...(over.panes ? { panes: Object.assign({ screen: vi.fn(), input: vi.fn(), inputIfScreen: vi.fn() }, over.panes) } : {}),
   }
 }

@@ -18,9 +18,7 @@ import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
-import { retainContributions, retainedHarnesses } from '../src/superTabs/retention.js'
 import { AGENTS_START_AGENTS_OFF } from '../src/agentClient/commands.js'
-import { overOldRoutes } from './harness/swarmReads.js'
 
 const HARNESS_INSTRUCTIONS = 'You are running in Harness, and the person can watch you. You can hand work to other agents (Claude Code, Codex) that run in their own harnesses: `harness new`, `harness wait`, `harness show`, `harness close` (see `harness --help`). Start one only for work that can run in parallel, needs another model, or takes long; do quick work yourself, and close each one once you have its answer. Only use or close harnesses you started.'
 const ME: FakeMachine = { machineId: 'b8'.repeat(16), computerId: 'e2e-computer-0000-0000-0000000000b8', name: 'studio', token: 'e2e-token-agent-client' }
@@ -241,7 +239,7 @@ describe('Harness for agents, end to end', () => {
     // Owner, October 12: "we need to be very careful about when to start a new agent so we don't waste user token and we
     // need to properly clean up after too". The cleanup runs in its own process here, as it does by default (the edge
     // host): what the core tells it and what it asks back cross the link.
-    const { d, relay } = await signedIn({ agents_start_agents: true })
+    const { d } = await signedIn({ agents_start_agents: true })
     const client = await LocalClient.connect(d, { machineId: ME.machineId })
     const list = async (includeStopped = false) => (await client.request<{ agents: Array<Record<string, any>> }>('agents_list', { includeStopped }, 30_000)).agents
     const lead = async (name: string) => {
@@ -276,7 +274,7 @@ describe('Harness for agents, end to end', () => {
     expect(deeper.err.trim()).toBe('A harness another agent started may not start harnesses itself. Do the work yourself, or say in your answer what else is needed.')
     expect((await list(true)).some((a) => a.name === 'deeper')).toBe(false)
 
-    // Lead reads its answer, and is told to close it; `ps` counts what it has open.
+    // The starter reads its answer, and is told to close it; `ps` counts what it has open.
     const waited = await harness(d, String(first.tmuxPane), ['wait', 'kid', '--timeout', '2m'])
     expect(waited.code, waited.out + waited.err).toBe(0)
     const shown = await harness(d, String(first.tmuxPane), ['show', 'kid'])
@@ -288,15 +286,6 @@ describe('Harness for agents, end to end', () => {
     const second = await lead('lead2')
     const joined = await start(second, 'joined')
     const left = await start(second, 'left')
-    const shared = await start(second, 'shared')
-    relay.superTabs = overOldRoutes(async (_method, raw) => {
-      const path = new URL(raw, relay.httpUrl).pathname
-      return { data: path === `/api/super-tabs/hosts/${ME.machineId}`
-        ? [{ tabId: 'retained-team', agent: { id: 'shared-member', harnessId: shared.id, machineId: ME.machineId }, observers: [] }]
-        : [] }
-    })
-    expect(await client.request('super_tabs', { action: 'wake' })).toMatchObject({ ok: true })
-    await until('the team host to retain its member', () => retainedHarnesses(d.dataDir).has(shared.id) || null, 10_000, 100)
     client.send('message', { agentId: joined.id, content: 'hello from the person' })
 
     // The app closes lead, as a pane's close does (`agent_close`): kid closes with it.
@@ -312,43 +301,10 @@ describe('Harness for agents, end to end', () => {
     expect(byPerson.code, byPerson.out + byPerson.err).toBe(0)
     await until('left to close with lead2', async () => (await stateOf(left)) === 'stopped' || null, 60_000, 500)
     expect(await stateOf(joined)).toBe('active')
-    expect(await stateOf(shared)).toBe('active')
     // One line for each close.
     expect(d.log()).toMatch(/\[agent-cleanup\] closed kid \(\w+\): the harness that started it was closed\. Its conversation is kept\./)
     expect(d.log()).toMatch(/\[agent-cleanup\] closed left \(\w+\): the harness that started it was closed\./)
     expect(d.log()).not.toMatch(/\[agent-cleanup\] closed joined/)
-    expect(d.log()).not.toMatch(/\[agent-cleanup\] closed shared/)
-    client.close()
-  })
-
-  // HARNESS_SWARM=off (the review of #1765): the agent cleanup, in the edge host, is handed none of the Swarm, and a harness
-  // the Swarm's saved roster names is closed with its starter as any other. On, the test above keeps it (`shared`).
-  it('with the Swarm off, a harness the Swarm\'s saved roster keeps is closed with its starter, as any other', async () => {
-    const { d } = await signedIn({ agents_start_agents: true }, { env: { HARNESS_SWARM: 'off' } })
-    const client = await LocalClient.connect(d, { machineId: ME.machineId })
-    const list = async () => (await client.request<{ agents: Array<Record<string, any>> }>('agents_list', { includeStopped: true }, 30_000)).agents
-    const dir = join(d.projectsDir, 'lead')
-    mkdirSync(dir, { recursive: true })
-    const made = await client.request('agent_create', { engine: 'claude', cwd: dir, bypassPermission: true, name: 'lead' }, 90_000)
-    expect(made.error, JSON.stringify(made)).toBeUndefined()
-    const lead = await until('lead to bind its conversation', async () => {
-      const row = (await list()).find((a) => a.id === made.agent.id)
-      return row?.sessionId && row.status === 'active' ? row : null
-    }, 60_000, 500)
-    const from = client.frames.length
-    client.send('message', { agentId: lead.id, content: 'hello lead' })
-    await client.waitFor((f) => f.type === 'turn_ended' && f.agentId === lead.id, 60_000, 'lead\'s first turn to end', from)
-    const started = await harness(d, String(lead.tmuxPane), ['new', 'claude', 'kept', '--name', 'kept', '--', 'hello kept'])
-    expect(started.code, started.out + started.err).toBe(0)
-    const kept = await until('kept to run', async () => (await list()).find((a) => a.name === 'kept' && a.status === 'active' && a.tmuxPane) ?? null, 60_000, 500)
-    // What the Swarm's host would have kept here had it run: its retention names the harness as a Super Tab member.
-    retainContributions(d.dataDir, ME.machineId, [{ tabId: 'retained-team', agent: { harnessId: kept.id, machineId: ME.machineId } }])
-    expect(retainedHarnesses(d.dataDir).has(kept.id)).toBe(true)
-    const closed = await client.request('agent_close', { agentId: lead.id, sessionId: lead.sessionId, createdAt: lead.createdAt, mode: 'now' }, 60_000)
-    expect(closed, JSON.stringify(closed)).toMatchObject({ closed: true })
-    await until('kept to close with lead', async () => (await list()).find((a) => a.id === kept.id)?.status === 'stopped' || null, 60_000, 500)
-    expect(d.log()).toMatch(/\[agent-cleanup\] closed kept \(\w+\): the harness that started it was closed\./)
-    expect(d.log()).not.toMatch(/\[harnessd\] service superTabs started/)
     client.close()
   })
 

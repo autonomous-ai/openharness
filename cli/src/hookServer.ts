@@ -1,5 +1,4 @@
 import { PRODUCT_FEEDBACK } from './lib/productUsageContract.js'
-import { ATTACHMENT_AGENT, ATTACHMENT_ROUTE } from './lib/gatewayWire.js'
 import { appProductUsageReport, APP_USAGE_VOCABULARY, APP_USAGE_VOCABULARY_HEADER } from './lib/appProductUsageReport.js'
 /**
  * Tiny localhost HTTP server for the Claude Code hook callbacks. `hook/notify.mjs` POSTs here on
@@ -208,12 +207,6 @@ export interface HookServerHandlers {
   /** The phone half of a sign-in (backend routes/qrSignIn.ts) for the desktop and web apps: approve a device
    *  that says its code aloud (a lamp, #1410) with this computer's own session, as the phone does. */
   onSignInAnswer?: (action: 'lookup' | 'approve' | 'deny', body: { code: string }) => Promise<PairOutcome>
-  /** A Super Tab chat file from the native desktop, streamed on to the backend with this computer's account
-   *  (lib/superTabAttachmentProxy.ts): the app's REST client holds no token of its own. Answers on `res` itself. */
-  onSuperTabAttachment?: (req: http.IncomingMessage, res: http.ServerResponse, path: string) => Promise<void>
-  /** A chat file over 10 MB goes straight to storage (superTabs/attach.ts): its link asked for, and its upload said complete,
-   *  with this computer's account. Small JSON both ways; the bytes never pass through here. */
-  onSuperTabAttachmentUpload?: (path: string, body: Record<string, unknown>) => Promise<PairOutcome>
   onProductUsageReport?: (body: unknown) => Promise<PairOutcome>
   onProductUsageRead?: () => Promise<PairOutcome>
   onProductUsageWrite?: (body: unknown) => Promise<PairOutcome>
@@ -1203,31 +1196,6 @@ export function startHookServer(
           json(result.status, result.body)
         } catch { json(502, { success: false, error: { code: 'USAGE_UNAVAILABLE', message: 'Product usage unavailable' } }) }
         return
-      }
-      const attachment = req.method === 'POST' ? ATTACHMENT_ROUTE.exec(url) : null
-      if (attachment) {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onSuperTabAttachment) { json(503, { error: 'UNAVAILABLE' }); return }
-        // The body is the file, read by the handler as a stream: never readBody, which holds 256 KiB of text. An agent's
-        // `post --attach` names itself; the backend checks that this account runs that agent.
-        const asAgentId = new URLSearchParams((req.url ?? '').split('?')[1] ?? '').get('asAgentId')
-        const agent = asAgentId && ATTACHMENT_AGENT.test(asAgentId) ? `?asAgentId=${asAgentId}` : ''
-        await handlers.onSuperTabAttachment(req, res, `${url}${agent}`); return
-      }
-      const direct = req.method === 'POST'
-        ? /^\/api\/super-tabs\/[A-Za-z0-9_-]{1,160}\/attachments\/uploads(\/[A-Za-z0-9_-]{1,160}\/complete)?$/.exec(url) : null
-      if (direct) {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onSuperTabAttachmentUpload) { json(503, { error: 'UNAVAILABLE' }); return }
-        // A link's request names the file ({conversationId, name, mime, size}); a completion's is {}, and may be empty.
-        let body: unknown
-        try { const raw = await readBody(req, 8192); body = direct[1] && !raw.trim() ? {} : JSON.parse(raw) } catch { body = null }
-        if (!body || typeof body !== 'object' || Array.isArray(body)) { json(400, { error: 'BAD_REQUEST' }); return }
-        const asAgentId = new URLSearchParams((req.url ?? '').split('?')[1] ?? '').get('asAgentId')
-        const agent = asAgentId && ATTACHMENT_AGENT.test(asAgentId) ? `?asAgentId=${asAgentId}` : ''
-        // Only the fields a link's request has: nothing else the page sends reaches the backend with this account's token.
-        const { conversationId, name, mime, size } = body as Record<string, unknown>
-        await proxied(() => handlers.onSuperTabAttachmentUpload!(`${url}${agent}`, direct[1] ? {} : { conversationId, name, mime, size })); return
       }
       const signInAnswer = req.method === 'POST' ? /^\/api\/auth\/qr\/(lookup|approve|deny)$/.exec(url) : null
       if (signInAnswer) {

@@ -319,7 +319,7 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
    * cannot be read (signed out, the backend down) would otherwise leave it there to be taken.
    */
   function forbidden(delivery: LocalDelivery): string | null {
-    // `started`: 0.3.75's log of starts; `relayed`: a v3 Buddy's words for its person's harness, retired with the Buddy.
+    // `started`: 0.3.75's log of starts; `relayed`: an older release's words for its person's harness, no longer written.
     const tab = store.entry(delivery.messageId)?.message.tabId
     return tab === 'started' || tab === 'relayed' ? 'it was sent outside any tab' : null
   }

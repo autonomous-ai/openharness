@@ -535,7 +535,7 @@ export class LocalModels {
     const gridId = str(grids.find(g => g.grid === grid)?.id)
     const { owned, blocker } = await this.engineRecords(gridId)
     // An app's engine this daemon joined there is named, as the list names it: read again before a start, the grid's
-    // record alone said only to open Model Manager, with llama3.2:3b from Ollama running for a Swarm (2026-10-24).
+    // record alone said only to open Model Manager, with llama3.2:3b from Ollama running (2026-10-24).
     const app = blocker ? (await this.records()).find(record => record.grid === grid) : undefined
     if (blocker) this.blockers.set(grid, app ? `Stop ${cleanName(app.name)} first to start another local model.` : blocker)
     return owned
@@ -562,10 +562,7 @@ export class LocalModels {
       const pid = recordPid(record)
       const pidAlive = pid !== null && processExists(pid)
       const dead = pid !== null && !pidAlive
-      // An API a Swarm shares (`swarmApiShares.ts`) is joined as an engine too, but runs nothing here: it never stands in
-      // a local model's way (owner, 2026-10-23: two shared APIs kept a model from running for the same Swarm).
-      const sharedApis = specs.length > 0 && !record.media && specs.every(spec => SWARM_API_SHARE.test(str(spec.endpoint_url)))
-      if ((specs.length || record.media) && !dead && !sharedApis) blocker = 'Open Model Manager to add a model alongside those already running.'
+      if ((specs.length || record.media) && !dead) blocker = 'Open Model Manager to add a model alongside those already running.'
       for (const spec of specs) {
         if (spec.endpoint_url || spec.api_kind || !Array.isArray(spec.models) || spec.models.length !== 1) continue
         const file = str(spec.models[0])
@@ -577,10 +574,7 @@ export class LocalModels {
         const advertised = Array.isArray(named) ? named.filter((v: unknown) => typeof v === 'string' && v.length > 0) : []
         const aliases: string[] = advertised.length ? advertised : [file]
         result.push({ file: basename(file), selector: file, aliases, nodeId: str(record.node_id), name: str(record.meta_name), live,
-          // An API a Swarm shares is a spec of the same engine process but runs nothing here, and a leave by this
-          // file's selector leaves it serving: it is no sibling (2026-10-26: Stop for Swarm on Qwen3.6 was refused,
-          // "Other models share its engine", beside a shared DeepSeek).
-          pidAlive, dead, siblings: specs.filter(s => !SWARM_API_SHARE.test(str(s.endpoint_url))).length + (record.media ? 1 : 0) })
+          pidAlive, dead, siblings: specs.length + (record.media ? 1 : 0) })
         if (!dead) blocker = `Stop ${cleanName(aliases[0])} first to start another local model.`
       }
     }
@@ -595,8 +589,8 @@ export class LocalModels {
     let known = this.knownByGrid.get(grid)
     if (!known) {
       known = await readKnown(path)
-      // A file this computer served on another grid is as restartable here: each Swarm has a grid of its own, and a
-      // model run for one was missing from the next one's list, offered again as a download (2026-10-24).
+      // A file this computer served on another grid is as restartable here: a model run on one was missing from another's
+      // list, offered again as a download (2026-10-24).
       const others = await readdir(this.options.stateDir).catch(() => [] as string[])
       for (const name of others.filter(n => n.endsWith('.known.json') && join(this.options.stateDir, n) !== path).sort()) {
         for (const candidate of await readKnown(join(this.options.stateDir, name))) {
@@ -716,15 +710,12 @@ export class LocalModels {
    * Models other apps downloaded here, from the last scan: a scan walks their folders and asks every
    * engine its version, which a llama-server busy serving answered in 11s [run], so nothing waits on
    * one but the very first. Past 30s, or [force]d, a new scan starts and the list after it has it.
-   * Without [scan], none starts and none is waited on: the last scan is the answer, or no models.
    */
-  private async apps(force = false, scan = true): Promise<AppModel[]> {
+  private async apps(force = false): Promise<AppModel[]> {
     if (!this.options.appModels) return []
     // A daemon just started answers from the scan it saved last time: a first scan while a llama-server
-    // was busy kept the picker without these models, and held a Stop two minutes [run]. Read once, found
-    // or not: a Swarm reading every 15 s read a missing file again each time.
+    // was busy kept the picker without these models, and held a Stop two minutes [run]. Read once, found or not.
     await (this.appsSaved ??= this.savedApps().then(saved => { this.appsRead ??= saved }))
-    if (!scan) return this.appsRead?.value ?? []
     if (force || !this.appsRead || Date.now() - this.appsRead.at >= 30_000) { void this.scanApps() }
     return this.appsRead?.value ?? this.scanApps()
   }
@@ -788,30 +779,6 @@ export class LocalModels {
     return kept
   }
 
-  /** The names this computer's app engines are joined to [grid] under (`swarmHeal.ts` compares them with what the grid
-   *  lists). An engine whose process is gone is not served by anything here. */
-  async servedApps(grid: string): Promise<string[]> {
-    const served: string[] = []
-    for (const record of (await this.records()).filter(r => r.grid === grid)) {
-      if (await this.options.appEngines?.alive(record).catch(() => false)) served.push(record.alias)
-    }
-    return served
-  }
-
-  /** Joins this computer's first live app engine on [grid] again, as it was started: grid restarts its one engine
-   *  process for the grid with every model this computer joined there, so this also brings back an API shared beside it
-   *  (2026-10-24: after a daemon restart the grid listed nothing this Mac served). Whether grid took it. */
-  async rejoinApp(grid: string): Promise<boolean> {
-    for (const record of (await this.records()).filter(r => r.grid === grid)) {
-      if (!await this.options.appEngines?.alive(record).catch(() => false)) continue
-      const named = this.options.machineName?.()?.trim()
-      return (await this.run(['--remote', 'join', grid, '--at', `http://127.0.0.1:${record.port}/v1`, '-m', record.served,
-        '--advertise-as', record.alias, '--max-concurrency', String(NODE_CONCURRENCY),
-        ...(named && validArg(named) ? ['--name', named] : [])], undefined, 10 * 60_000)).ok
-    }
-    return false
-  }
-
   /** A Jev engine still running: stopped, and off its grid (best effort — its record is already gone). */
   private async retire(record: AppEngineRecord): Promise<void> {
     try {
@@ -821,21 +788,18 @@ export class LocalModels {
     } catch { /* forgotten either way */ }
   }
 
-  /** [scan] false reads other apps' models from the last scan and never starts one ([apps]). */
-  async list(grid: string | null, force = false, scan = true): Promise<LocalModelsSnapshot> {
+  async list(grid: string | null, force = false): Promise<LocalModelsSnapshot> {
     if (!grid) return { models: [], notice: 'Sign in to find models for this computer.', observedAt: new Date().toISOString(), busy: false }
-    // A person's ask answered from a list already read, which a Swarm reading's may be, still starts a scan that is due.
-    const shared = <T>(answer: T): T => { if (scan) void this.apps(force); return answer }
-    if (!force && this.cached?.grid === grid && Date.now() - this.cached.at < 2500) return shared(this.cached.value)
+    if (!force && this.cached?.grid === grid && Date.now() - this.cached.at < 2500) return this.cached.value
     if (this.listPending) {
-      if (this.listGrid === grid) return shared(this.listPending)
-      await this.listPending; return this.list(grid, force, scan)
+      if (this.listGrid === grid) return this.listPending
+      await this.listPending; return this.list(grid, force)
     }
     this.listGrid = grid
-    this.listPending = this.readList(grid, force, scan)
+    this.listPending = this.readList(grid, force)
     try { return await this.listPending } finally { this.listPending = undefined }
   }
-  private async readList(grid: string, force: boolean, scan: boolean): Promise<LocalModelsSnapshot> {
+  private async readList(grid: string, force: boolean): Promise<LocalModelsSnapshot> {
     await Promise.all([this.loadCatalog(force), this.readReceipt(grid)])
     let owned: Owned[] = [], nodes: Record<string, any>[] = [], inventoryError: string | undefined, asleep = false
     // `grid ls` once: the own grid's records, and every other grid this computer may serve on.
@@ -853,8 +817,8 @@ export class LocalModels {
       // not a gap, so Start stays enabled (and brings it back up). Asleep says so even to a member, in
       // the grid's own answer. Only a read that failed some other way is "could not be checked".
       // A grid this account does not have yet runs nothing either: the CLI makes the account's own grid only when
-      // something needs it, and a Swarm's models run on the Swarm's grid. Read as unchecked, every Start went dark,
-      // Run for Swarm too, for a new account whose Swarm grid was ready (2026-10-26). `grid ls` answered, without it.
+      // something needs it. Read as unchecked, every Start went dark for a new account (2026-10-26). `grid ls`
+      // answered, without it.
       const missing = listed && !grids.some(row => row.grid === grid)
       if (inventory.state === 'unknown' && !DOWN.has(inventory.status ?? '') && !missing) throw new Error('unanswered')
       asleep = inventory.state === 'asleep' || inventory.status === 'asleep'
@@ -867,11 +831,11 @@ export class LocalModels {
     // this grid's receipt.
     const elsewhere = this.elsewhere?.grid !== grid ? this.elsewhere?.operation : undefined
     const operation = this.active?.operation ?? elsewhere ?? (this.receipt?.grid === grid ? this.receipt.operation : undefined)
-    const apps = await this.apps(force, scan)
+    const apps = await this.apps(force)
     const allRecords = await this.records()
     const records = allRecords.filter(record => record.grid === grid)
-    // An app's engine this daemon started on another grid — a Swarm's (docs/plans/2026-10-23-swarm-local-models.md):
-    // its model is served there, so the row says so and cannot start a second engine beside it.
+    // An app's engine this daemon started on another grid: its model is served there, so the row says so and cannot
+    // start a second engine beside it.
     const away = allRecords.filter(record => record.grid !== grid)
     // An engine this daemon started is read from its record, whatever a later scan makes of the model: a
     // scan that missed the person's llama-server (busy serving, it answered `--version` late) once listed
@@ -953,8 +917,7 @@ export class LocalModels {
       models.push(await appRow(app.id, app.name, app.app, records.find(r => r.modelId === app.id),
         { sizeBytes: app.sizeBytes, ...(app.quant ? { quant: app.quant } : {}) }))
     }
-    // So does an engine still serving on another grid (a Swarm's), whose row that Swarm's reading reads: the reading never
-    // scans, and may have no scan, or one that missed the model, to find it in.
+    // So does an engine still serving on another grid, whose model the last scan missed.
     const unscanned = allRecords.filter(r => !apps.some(a => a.id === r.modelId))
     for (const modelId of new Set(unscanned.map(r => r.modelId))) {
       const own = records.find(r => r.modelId === modelId), named = own ?? unscanned.find(r => r.modelId === modelId)!
@@ -1354,9 +1317,6 @@ function communityOf(grids: Record<string, any>[]): { osGrid?: string } {
 
 /** The one online node in [nodes] that is [instance]'s engine — its record's node id (or, with no ids,
  * its name) and every name it serves under; none while its heartbeat is stale or two nodes would match. */
-/** The endpoint a Swarm's shared API is joined at (`swarmApiShares.ts`): this computer, a port, and its secret path. */
-const SWARM_API_SHARE = /^http:\/\/127\.0\.0\.1:\d+\/[0-9a-f]{36}\/v1\/?$/
-
 function nodeServing(nodes: Record<string, any>[], instance?: Owned): Record<string, any> | undefined {
   const matches = instance?.live ? nodes.filter(n => n.online === true &&
     (str(n.node_id || n.id) ? str(n.node_id || n.id) === instance.nodeId :

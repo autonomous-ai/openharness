@@ -287,7 +287,7 @@ describe('agent_close', () => {
   })
 
   // anh Dee, 2026-11-13: an experiment never touches the core. A Change agent close names its switch, which the core once
-  // checked for a Swarm Product Manager; it is a close as any other now, and the core reads nothing of the switch.
+  // checked for one component's agents; it is a close as any other now, and the core reads nothing of the switch.
   it('closes a close that names a Change agent switch as any close', () => {
     const request = vi.fn(async () => ({}))
     ask({ request }, { ...target, mode: 'now', changeId: 'e'.repeat(32) })

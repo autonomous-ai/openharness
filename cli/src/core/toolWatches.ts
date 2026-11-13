@@ -33,7 +33,7 @@ export function createToolWatches(deps: ToolWatchesDeps) {
   /** The frame [watch] is told of [frame] about [agentId], or null when it is nothing new. */
   const toldOf = (type: string, agentId: string, payload: Record<string, unknown>, told: Told, quiet: boolean): Record<string, unknown> | null => {
     if (type === 'commander_question' || type === 'commander_question_close') {
-      // Every question has its id (core/questions.ts, core/agents/cloud.ts, the Swarm's attention).
+      // Every question has its id (core/questions.ts, core/agents/cloud.ts).
       const requestId = payload.requestId
       const key = `${type}:${String(requestId)}`
       if (told.question === key) return null

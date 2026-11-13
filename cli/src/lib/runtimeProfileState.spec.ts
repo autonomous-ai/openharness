@@ -255,7 +255,7 @@ describe('late optional profile observations', () => {
   })
 
   // Codex at its own default effort writes `reasoning_effort: null` in each turn's context (0.164, 0.165): its model was never
-  // reported, so its Swarm attempts were recorded with none (Scholes, 2026-10-30).
+  // reported, so its attempts were recorded with none (Scholes, 2026-10-30).
   it('names a Codex agent\'s model from its first turn at Codex\'s own default effort, as auto', () => {
     const manager = new RuntimeProfileManager(), agent = session('codex')
     manager.hydrate(agent, [JSON.stringify({ type: 'session_meta', payload: { cli_version: '0.165.0' } }),

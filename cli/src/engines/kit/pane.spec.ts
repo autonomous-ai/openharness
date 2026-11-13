@@ -62,7 +62,7 @@ describe("Claude Code's composer on Windows", () => {
   })
 
   // DESKTOP-0TFH0OJ, 2026-10-26: in a 42-column pane Claude Code cut its footer at the edge, the composer read as absent, and
-  // each Swarm message was typed but its Enter held as `prompt_hidden`. Read through the pty host, as the daemon reads it.
+  // each delivered message was typed but its Enter held as `prompt_hidden`. Read through the pty host, as the daemon reads it.
   it('finds the composer of a narrow pane, whose footer Claude Code cut at the edge', () => {
     on('win32')
     const narrow = (draft: string, footerRow: string) => ['✻ Brewed for 2s · done Thursday 9:07 PM', '', '─'.repeat(42),
@@ -76,7 +76,7 @@ describe("Claude Code's composer on Windows", () => {
     expect(composerState(narrow('', '  continued output'))).not.toBe('ready')
   })
 
-  // A real Buddy on DESKTOP-0TFH0OJ, 2026-11-04: after a long message is pasted Claude Code's footer reads only this, the box
+  // A real agent on DESKTOP-0TFH0OJ, 2026-11-04: after a long message is pasted Claude Code's footer reads only this, the box
   // read as absent, and the message sat typed and unsent, its Enter held as `prompt_hidden`.
   it('finds the composer under the footer a pasted message leaves', () => {
     on('win32')

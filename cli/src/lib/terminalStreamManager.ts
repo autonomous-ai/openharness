@@ -444,10 +444,6 @@ export class TerminalStreamManager {
         pasteFile: !this.deps.readOnly,
         // Bounded media reads through the already encrypted agent_read_file RPC.
         mediaPreview: !this.deps.readOnly,
-        // The daemon knows `agent_instructions_read` and `agent_instructions_write` (services/projects.ts). A client seals
-        // them for a machine only through a daemon that knows them: one that does not sends a request type it has never
-        // heard of in the clear (relayClient.ts wrapOutgoing), and the text of a save would cross the relay unsealed.
-        agentInstructions: true,
         // `agent_create` understands `projectSource` — a folder this machine makes or clones for
         // itself — rather than only a `cwd` the client already knows. A client old enough to
         // predate `lib/projectFolder.ts` never sends it, and one NEWER than the machine has no way

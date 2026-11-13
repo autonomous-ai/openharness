@@ -1,4 +1,4 @@
-/** GitHub CLI reads shared by Tasks and the Swarm pull requests pane. No prompts; every subprocess is bounded. */
+/** GitHub CLI reads for Tasks. No prompts; every subprocess is bounded. */
 import { execFile } from 'node:child_process'
 import { homedir } from 'node:os'
 import { delimiter, join } from 'node:path'
@@ -63,22 +63,6 @@ export function ghError(error: unknown): MessageError {
 
 const failedCheck = (word: string): boolean => ['FAILURE', 'ERROR', 'TIMED_OUT', 'CANCELLED', 'STARTUP_FAILURE', 'ACTION_REQUIRED'].includes(word)
 const checkWord = (check: Record<string, unknown>): string => String(check.conclusion || check.state || '').toUpperCase()
-export interface CiCounts { passed: number; failed: number; pending: number; total: number }
-/** Skipped and neutral runs are not checks a person must wait for. Commit statuses have state rather than conclusion. */
-export function ciCounts(rollup: unknown): CiCounts {
-  const counts = { passed: 0, failed: 0, pending: 0, total: 0 }
-  for (const check of Array.isArray(rollup) ? rollup : []) {
-    if (!check || typeof check !== 'object') continue
-    const word = checkWord(check)
-    if (['SKIPPED', 'NEUTRAL'].includes(word)) continue
-    counts.total++
-    if (word === 'SUCCESS') counts.passed++
-    else if (failedCheck(word)) counts.failed++
-    else counts.pending++
-  }
-  return counts
-}
-
 /** One pull request's CI from its checks: a check run has `status` and `conclusion`, a commit status has `state`. */
 export function ciOf(rollup: unknown): CiState {
   const checks = Array.isArray(rollup) ? rollup.filter((c): c is Record<string, unknown> => !!c && typeof c === 'object') : []

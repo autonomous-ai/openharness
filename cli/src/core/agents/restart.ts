@@ -3,7 +3,6 @@
  *
  * Moved verbatim out of `runForeground` (the core boundary, step 11: docs/design/2026-10-03-harnessd.md).
  */
-import type { AdoptSwarmSkill } from '../api.js'
 import { homedir } from 'node:os'
 import { isTerminalEngine, type AgentEngine } from '../../engines/types.js'
 import { engineBin, enginePathOverride } from '../../lib/engineBin.js'
@@ -80,7 +79,6 @@ export async function commitRelaunchedEngine(
 }
 
 export interface RestartDeps {
-  adoptSwarmSkill?: AdoptSwarmSkill
   native?: LaunchOverridesDeps['native']
   restartJobs: PaneSwap['restartJobs']
   registry: typeof registry
@@ -110,7 +108,7 @@ export interface RestartDeps {
 }
 
 export function createAgentRestarter({
-  native: inspectNative, adoptSwarmSkill,
+  native: inspectNative,
   restartJobs, registry, purgeBusy, stopJobs, pinnedControls, terminals, sameRestartTarget, agentReconciler,
   terminalHintMachineName, announceSession, refreshGridAssignment, relaunchOverrides, downgradedPermission, refreshGridWebSearch,
   liveBypassPermission, paneSwapDeps, restartHeld, moveHeld,
@@ -202,12 +200,6 @@ export function createAgentRestarter({
     }
     if (!session.processIdentity) return { ok: false, error: 'NO_ACTIVE_PROCESS' }
 
-    // An attached agent's Swarm role, before native inspection and launch preparation (superTabs/inCore/adoption.ts).
-    if (adoptSwarmSkill) {
-      const adopted = await adoptSwarmSkill(session, current)
-      if (!adopted || !current()) return changed
-      session = adopted
-    }
     // The relaunch runs the engine's command again, so an engine uninstalled since the agent started
     // cannot come back. Asked anyway, the swap killed the working agent and gave up twenty seconds
     // later with "did not come back up" (updates.e2e.ts, round 24). Asked here, before anything is
@@ -236,9 +228,6 @@ export function createAgentRestarter({
     // Keep this route through publication, and release only this operation's own reservation.
     const releaseRoute = agentReconciler.holdRoute(routeKey, null)
     try {
-      // A Swarm agent, its PM too, comes back in the mode it started in: Auto-approve (superTabs/start.ts, anh Dee 2026-11-12),
-      // as a regular tab's agent keeps its own. A PM's Restart forced full mode (Ken, 11-09) while a PM in its owner's settings
-      // asked before each tool and stood still; in Auto it does not, and full mode turned off every check (task #4215).
       const restartPermission = await downgradedPermission(session,
         await bypassPermissionFor(session, () => liveBypassPermission(session)), 'restart', built.overrides.native)
       if (restartPermission.nativeHold || built.overrides.native?.current() === false) return { ok: false, error: 'NATIVE_LAUNCH_HELD', detail: restartPermission.nativeHold ?? 'Waiting for fresh executable and hook evidence.' }

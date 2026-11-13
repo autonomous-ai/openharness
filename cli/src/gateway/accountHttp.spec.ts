@@ -40,7 +40,7 @@ describe('account HTTP in the gateway', () => {
     expect(await api.backend('PATCH', '/api/machines/local', { name: 'Renamed' })).toEqual({ status: 409, body: { error: { code: 'CONFLICT' } } })
     expect(request).toHaveBeenCalledWith('https://backend.invalid/api/machines/local', expect.objectContaining({
       method: 'PATCH', body: JSON.stringify({ name: 'Renamed' }),
-      // The CLI and its version, so a refusal the backend logs names its sender (#2675; backend superTabs/refusalLog.ts).
+      // The CLI and its version, so a refusal the backend logs names its sender (#2675).
       headers: { authorization: 'Bearer token', 'x-autonomous-env': 'test', 'x-harness-client': `cli/${VERSION}`, 'content-type': 'application/json' }, signal: expect.any(AbortSignal),
     }))
     await api.backend('GET', '/api/auth/me')
@@ -118,7 +118,7 @@ describe('account HTTP in the gateway', () => {
     request.mockResolvedValueOnce(stalled(503, { 'retry-after': '30' }))
     expect(await api.backend('POST', '/api/product-usage/report', {})).toEqual({ status: 503, body: {}, retryAfterMs: 30_000 })
     request.mockResolvedValueOnce(new Response('<html>Upgrade Required</html>', { status: 426 }))
-    expect(await api.backend('GET', '/api/super-tabs/hosts/machine-1/changes?full=1')).toEqual({ status: 426, body: {} })
+    expect(await api.backend('GET', '/api/machines?full=1')).toEqual({ status: 426, body: {} })
   })
   it('answers a success whose body is not JSON as a bad response, and an empty one as {}', async () => {
     const { api, request } = setup()

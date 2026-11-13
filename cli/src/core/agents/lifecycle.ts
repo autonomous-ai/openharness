@@ -19,7 +19,6 @@ import type { ResumeAgent } from './launches.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 
 export interface LifecycleDeps {
-  adoptSwarmSkill?: ResumeAgentServiceDeps['adoptSwarmSkill']
   settlePane?: StopAgentServiceDeps['settlePane']
   cancelExternal?: StopAgentServiceDeps['cancelExternal']
   registry: typeof registry
@@ -83,7 +82,7 @@ export const TOLD_NOT_ERASED = 'Harness could not erase what this harness was to
 export function createAgentLifecycle({
   registry, stoppedAgents, restartJobs, createBackend, noBackendCode, backendFor, agentReconciler, forgetSession, markDeleted, clearDeleted, stopNative, settlePane, cancelExternal,
   sessionCheckpoints, mirror, sessionSearch, forgetTold, scrubCreated, send, pinnedControls, retainExitedSession, announceSession,
-  relaunchOverrides, prepareSessionResume, stopBackgroundJob, refreshGridWebSearch, adoptSwarmSkill, attachDsh, attachBrowser, attachSession, relaunchMarks, stopped, purged, atFolderTrust, atEmptyComposer, moveHeld,
+  relaunchOverrides, prepareSessionResume, stopBackgroundJob, refreshGridWebSearch, attachDsh, attachBrowser, attachSession, relaunchMarks, stopped, purged, atFolderTrust, atEmptyComposer, moveHeld,
 }: LifecycleDeps) {
   /**
    * Stop Harness (`agent_delete`) archives its conversation and launch settings, removes the live
@@ -125,7 +124,7 @@ export function createAgentLifecycle({
 
   const resume = createResumeAgentService({
     registry, stoppedAgents, createBackend, noBackendCode, backendFor, restartJobs, stopJobs, pinnedControls,
-    retainExitedSession, announceSession, relaunchOverrides, prepareSessionResume, stopBackgroundJob, adoptSwarmSkill,
+    retainExitedSession, announceSession, relaunchOverrides, prepareSessionResume, stopBackgroundJob,
     refreshGridWebSearch, clearDeleted, attachDsh, attachBrowser, attachSession, relaunchMarks,
   })
   const resumeAgent: ResumeAgent = (id, permissionMode, launchArgs) => {

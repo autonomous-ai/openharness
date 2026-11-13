@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  cloneFailure, cloneRepository, otherGitHubTransport, parseProjectFolder, prepareProjectFolder, ProjectFolderError, projectsRoot, repositoryIdentity, RepositoryAccessError, RepositoryHostKeyError,
+  cloneFailure, cloneRepository, parseProjectFolder, prepareProjectFolder, ProjectFolderError, projectsRoot, repositoryIdentity, RepositoryAccessError, RepositoryHostKeyError,
 } from './projectFolder.js'
 
 /** A checkout at [folder] whose origin is [origin] (none when null), made by the real git, with no network. */
@@ -161,22 +161,6 @@ describe('project folder preparation', () => {
     // A changed key's warning mentions authentication: it is still the key, and never "No access".
     expect(cloneFailure('@@@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @@@\nPassword authentication is disabled to avoid man-in-the-middle attacks.\nHost key verification failed.'))
       .toBeInstanceOf(RepositoryHostKeyError)
-  })
-
-  it('names the same GitHub repository over the other transport, and nothing for another address', () => {
-    expect(otherGitHubTransport('https://github.com/owner/repo.git')).toBe('git@github.com:owner/repo.git')
-    expect(otherGitHubTransport('git@github.com:owner/repo.git')).toBe('https://github.com/owner/repo.git')
-    for (const url of ['owner/repo', 'https://gitlab.com/owner/repo.git', 'https://github.com/owner/repo/extra', 'ssh://git@github.com/owner/repo', '']) {
-      expect(otherGitHubTransport(url), url).toBeNull()
-    }
-    // Both forms parseProjectFolder makes round-trip to each other.
-    for (const url of ['https://github.com/owner/repo', 'git@github.com:owner/repo']) {
-      const parsed = parseProjectFolder({ projectSource: 'remote', repositoryUrl: url })
-      if (parsed?.source !== 'remote') throw new Error('expected a remote project')
-      const other = otherGitHubTransport(parsed.repositoryUrl)!
-      expect(otherGitHubTransport(other)).toBe(parsed.repositoryUrl)
-      expect(repositoryIdentity(other)).toBe(repositoryIdentity(parsed.repositoryUrl))
-    }
   })
 
   it('starts in a checkout of the same repository already at the destination, and never clones it again', async () => {
@@ -341,7 +325,7 @@ describe('a clone GitHub refuses', () => {
     }
   })
 
-  it('tries one address only when not asked for more, as a Swarm start is', async () => {
+  it('tries one address only when not asked for more', async () => {
     const { clone, tried } = git('git@github.com:owner/repo.git')
     await expect(prepareProjectFolder(remote('owner/repo'), { root, clone })).rejects.toBeInstanceOf(RepositoryAccessError)
     expect(tried).toStrictEqual(['https://github.com/owner/repo.git'])
@@ -360,7 +344,7 @@ describe('a clone GitHub refuses', () => {
   })
 
   it('refuses an alias in a start that is not the owner\'s own, without asking ssh which aliases exist', async () => {
-    // A Swarm Lead or a contribution names the address of a project that starts on someone else's computer.
+    // Another person's start names the address of a project that starts on this computer.
     const { clone } = git('git@gh-work:owner/repo.git')
     const resolveHost = vi.fn(async () => 'github.com')
     for (const url of ['git@gh-work:owner/repo.git', 'git@no-such-alias:owner/repo.git']) {

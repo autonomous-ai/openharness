@@ -179,16 +179,6 @@ describe('discovery', () => {
       expect(mode, 'this fixture must name a mode').not.toBeNull()
     })
 
-    // A Swarm agent's mode is the one on its row (Auto-approve since 2026-11-12), never read back. An agent Harness once started in
-    // full mode still runs with that flag until it relaunches; read back, the relaunch would skip permissions again.
-    it('never reads a Swarm agent\'s permissions off its process', async () => {
-      const run = setup()
-      const swarm = row({ swarmSkill: { role: 'coordinator', key: 'swarm-lead' } } as Partial<RegisteredSession>)
-      await run.handlers.onObserved(seen({ args: 'claude --dangerously-skip-permissions' } as Partial<DiscoveredTerminalAgent>), swarm)
-      expect(run.deps.registry.setPermissionMode).not.toHaveBeenCalled()
-      expect(run.deps.registry.setBypassPermission).not.toHaveBeenCalled()
-    })
-
     it('reads an engine launched in full mode back as full (task #2832)', () => {
       expect(permissionModeFromArgv('codex', 'codex --dangerously-bypass-approvals-and-sandbox -c tui.fullscreen_transcript=false')).toBe('full')
       expect(permissionModeFromArgv('claude', 'claude --dangerously-skip-permissions')).toBe('full')

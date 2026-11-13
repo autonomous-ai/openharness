@@ -307,7 +307,7 @@ export class PurgeAgentService {
    * An engine waiting at its folder-trust question has opened no conversation, and cannot before it is answered. Stop
    * is told so, as Close tells it of a chat it saw empty: otherwise a Codex with no bound conversation is held while
    * the shared server runs ("Cannot confirm which conversation is open"), and where the process cannot be read its
-   * conversation is held too, so two agents a Super Tab started into an untrusted folder could not be deleted
+   * conversation is held too, so two agents started into an untrusted folder could not be deleted
    * (2026-10-22). Anything that ever bound a conversation is not this, whatever the screen shows.
    */
   private async unstartedChat(live: RegisteredSession | undefined): Promise<Pick<StopAgentOptions, 'withoutConversation' | 'confirmUnusedConversation'>> {

@@ -155,7 +155,7 @@ describe('core runtime profile authority', () => {
   })
 
   // A session launched with --effort starts at it, which outranks its settings' effortLevel: the engine reads its configured
-  // effort from what the core sends it (the 2026-11-11 rehearsal's Product Manager, launched at xhigh, was announced as running
+  // effort from what the core sends it (an agent of the 2026-11-11 rehearsal, launched at xhigh, was announced as running
   // at high).
   it('sends the engine the model and effort a session was launched with, and nothing for one launched with none', async () => {
     const t = setup()

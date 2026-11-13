@@ -21,10 +21,6 @@
  *   never one this may close: the core refuses (`CoreApi.agents.closeStarted`).
  * - **Never what Hachi started.** However the Hachi harness closes, what it started is handed to the person instead of
  *   closed, and is never closed for sitting idle after (services/hachiHandOver.ts).
- * - **Keep shared members.** Super Tab membership also protects a harness from both forms of cleanup, even when its
- *   terminal is hidden or its host is offline. Only a confirmed roster removal releases that protection. The Swarm hands
- *   that membership in while it is on (`retained`); off (`HARNESS_SWARM`), its saved roster is not read and such a
- *   harness is cleaned up as any other.
  *
  * A close keeps the conversation, as `harness close` does: the person can resume it, and `harness show` still reads its
  * answer. One line in the log for each close.
@@ -38,6 +34,7 @@ import type { AgentCloseResult } from '../lib/closeAgentService.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { createMessagesRpc } from '../messages/rpc.js'
 import { createHachiHandOver } from './hachiHandOver.js'
+import { removeSwarmLeftovers } from './swarmLeftovers.js'
 
 /** How long a harness another agent started may sit idle after its last answer before it is closed. */
 export const IDLE_CLOSE_MS = 30 * 60_000
@@ -72,13 +69,6 @@ export interface AgentCleanupDeps {
   every?: (ms: number, look: () => void) => () => void
   /** Waits [ms] before a starter's harnesses are tried again. */
   wait?: (ms: number) => Promise<void>
-  /** The Super Tab members the Swarm keeps here (superTabs/retention.ts `retainedHarnesses`, through
-   *  superTabs/inServices.ts): absent while the Swarm is off, when none is kept. */
-  retained?: (dataDir: string) => ReadonlySet<string>
-  /** Told of each harness this closed (superTabs/cleanupCloses.ts `recordCleanupClose`, through superTabs/inServices.ts):
-   *  the Swarm then refuses it new work, as it does not one stopped for Change agent (review of #2953). False when it
-   *  could not record it. Absent while the Swarm is off. */
-  closed?: (dataDir: string, agentId: string) => boolean
   /** How long a delete's erase waits for the ledger's lock (`FORGET_LOCK_WAIT_MS`). */
   forgetLockWaitMs?: number
   /** Asks another of the owner's machines' messages service (messages/service.ts), as `harness tell` does: a hand-over
@@ -86,7 +76,6 @@ export interface AgentCleanupDeps {
   tell?: (machineId: string, payload: Record<string, unknown>) => Promise<unknown>
 }
 
-const NONE_RETAINED: ReadonlySet<string> = new Set()
 
 function readJoined(file: string): Map<string, number> {
   try {
@@ -109,7 +98,6 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
   const log = deps.log ?? ((line: string) => console.log(line))
   const refresh = deps.refresh ?? (async () => {})
   const wait = deps.wait ?? ((ms: number) => new Promise<void>((done) => { setTimeout(done, ms).unref() }))
-  const retainedHarnesses = deps.retained ?? (() => NONE_RETAINED)
   const file = joinedPath(core.dataDir)
   const joined = readJoined(file)
   /** When one that would not close may be asked again. */
@@ -149,17 +137,11 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
 
   /** Closes [s] as the core lets this, whatever background commands it runs once [pastCeiling]; a close done is said. */
   const close = async (s: RegisteredSession, mode: 'idle' | 'now', why: string, pastCeiling = false): Promise<AgentCloseResult> => {
-    // Recheck after an activity read: a shared team may have adopted this agent
-    // while cleanup was waiting. This is independent of visible terminal panes.
-    if (retainedHarnesses(core.dataDir).has(s.agentId)) return { error: 'SESSION_RETAINED' }
     // The ceiling is passed only when reached, so a core from before it is asked as it always was.
     const closing = pastCeiling ? core.agents.closeStarted?.(s.agentId, mode, true) : core.agents.closeStarted?.(s.agentId, mode)
     const result: AgentCloseResult = await (closing ?? Promise.resolve({ error: 'UNSUPPORTED' }))
     const running = result.backgroundCommands ?? 0
     if (result.closed) log(`[agent-cleanup] closed ${label(s)}: ${why}${running > 0 ? `, with ${backgroundSaid(running)}` : ''}. Its conversation is kept.`)
-    if (result.closed && deps.closed && !deps.closed(core.dataDir, s.agentId)) {
-      log(`[agent-cleanup] could not tell the Swarm it closed ${label(s)}: a task given to it now is lost.`)
-    }
     return result
   }
   const failed = (s: RegisteredSession, why: string, result: AgentCloseResult): void =>
@@ -180,14 +162,13 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
       if (live.some((s) => s.agentId === parentId)) return
       // The Hachi harness: what it started is the person's now, never closed with it.
       await hachi.over(parentId)
-      const retained = retainedHarnesses(core.dataDir)
-      const orphans = live.filter((s) => s.parentAgentId === parentId && s.startedBy === 'agent' && !joined.has(s.agentId) && !retained.has(s.agentId)
+      const orphans = live.filter((s) => s.parentAgentId === parentId && s.startedBy === 'agent' && !joined.has(s.agentId)
         && !hachi.handed(s.agentId))
       const left: Array<[RegisteredSession, AgentCloseResult]> = []
       // One at a time: each close saves a screen and stops a process, and a starter may have several.
       for (const s of orphans) {
         const result = await close(s, 'now', STARTER_CLOSED)
-        if (!result.closed && result.error !== 'SESSION_RETAINED') left.push([s, result])
+        if (!result.closed) left.push([s, result])
       }
       if (!left.length || stopped) return
       if (attempt >= CASCADE_TRIES) {
@@ -205,7 +186,6 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
     try {
       await refresh()
       const live = core.agents.live()
-      const retained = retainedHarnesses(core.dataDir)
       const gone = (id: string) => !live.some((s) => s.agentId === id)
       for (const id of askAgainAt.keys()) if (gone(id)) askAgainAt.delete(id)
       for (const id of said) if (gone(id)) said.delete(id)
@@ -218,7 +198,7 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
       if (handing) await handing
       for (const s of live) {
         if (stopped) return
-        if (s.startedBy !== 'agent' || joined.has(s.agentId) || retained.has(s.agentId) || (askAgainAt.get(s.agentId) ?? 0) > now()
+        if (s.startedBy !== 'agent' || joined.has(s.agentId) || (askAgainAt.get(s.agentId) ?? 0) > now()
           || hachi.handed(s.agentId)) continue
         // Not before this run of it has been here that long; then by when its conversation last moved, its last answer
         // or later. Not known (an engine that keeps no dated transcript), it is left alone.
@@ -238,7 +218,7 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
           log(`[agent-cleanup] left ${label(s)} open: ${backgroundSaid(running)}`)
         }
         // Working after all, or waiting for the person: asked again later, nothing to say. Anything else is said once.
-        if (result.error !== 'SESSION_NOT_IDLE' && result.error !== 'SESSION_RETAINED' && !said.has(s.agentId)) {
+        if (result.error !== 'SESSION_NOT_IDLE' && !said.has(s.agentId)) {
           said.add(s.agentId)
           failed(s, why, result)
         }
@@ -292,7 +272,9 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
   return { port, look, closeStartedBy }
 }
 
-/** [swarm]: the Swarm's side, while it is on (superTabs/inCore.ts, through core/main.ts). */
-export function startAgentCleanup(core: CoreApi, ports: CorePorts, swarm?: Pick<AgentCleanupDeps, 'retained' | 'closed'>): void {
-  ports.agentCleanup = createAgentCleanup(core, swarm ?? {}).port
+export function startAgentCleanup(core: CoreApi, ports: CorePorts): void {
+  ports.agentCleanup = createAgentCleanup(core, {}).port
+  // What the deleted Swarm left in the data folder goes as the edge host starts, out of the core's way (until 2027-01-14).
+  // It never rejects: each name's failure is its own, said in the log.
+  void removeSwarmLeftovers({ dataDir: core.dataDir, log: (line) => console.log(`[agent-cleanup] ${line}`) })
 }

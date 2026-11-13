@@ -5,14 +5,14 @@ import { claudeWindowsComposer } from '../kit/pane.js'
 /**
  * A row of Claude Code's rule: all `─`, or `─` at both ends with text set in it. After `/rename`, Claude Code sets the
  * session's name in the prompt box's top rule with a single `─` after it (`───…─── my-renamed-buddy ─`, 2.1.317): read as
- * no rule, the box was never found, and every Swarm message to that Buddy was held as `prompt_hidden` while typing by hand
+ * no rule, the box was never found, and every message typed into that agent was held as `prompt_hidden` while typing by hand
  * still worked (task #2428, 2026-11-03). So three at the start, and one at the end.
  */
 export const CLAUDE_RULE = /^─{3,}(?:.*─)?$/
 
 export function composerState(capture: string): ComposerState {
   const { lines } = screenLines(capture)
-  // On Windows its marker can be `>` (kit/pane.ts `claudeWindowsComposer`): a resent Super Tab message was refused as
+  // On Windows its marker can be `>` (kit/pane.ts `claudeWindowsComposer`): a resent message was refused as
   // `prompt_hidden` there (DESKTOP-0TFH0OJ, 2026-10-23).
   let prompt = Math.max(lines.findLastIndex((line) => /^❯(?:\s|$)/.test(line)), claudeWindowsComposer(lines))
   let bottom = lines.findIndex((line, index) => index > prompt && CLAUDE_RULE.test(line.trim()))

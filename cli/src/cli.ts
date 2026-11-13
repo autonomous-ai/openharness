@@ -185,11 +185,9 @@ Machine:
   harness service uninstall    undo that: the daemon goes back to \`harness start\`
   harness service status       what launchd, systemd or Task Scheduler has registered, and whether it runs (--json)
   harness logs export          zip the last 7 days of logs (app, CLI, dial, daemon) to the Desktop
-  harness tui                  all of Harness in this terminal: swarms, panes, every machine (⌥O ⌥P ⌥N)
+  harness tui                  all of Harness in this terminal: tabs, panes, every machine (⌥O ⌥P ⌥N)
   harness new [agent] [--machine <name>] [folder|name] [-- task]
                                make a harness from a shell: \`harness new\` is claude here; see \`harness new -h\`
-  harness swarm [list|status|machines|agents|starts]
-                               the Swarm as you read it: people, machines, agents, starts
   harness machines             list the machines on this account (this computer's is marked)
   harness search <words>       find the conversation on this computer that said them: every turn of
                                every harness, live or stopped (--limit=N, --json)
@@ -2802,9 +2800,6 @@ if (cmd === 'version' || cmd === '--version' || cmd === '-v') {
   process.exit(0)
 }
 
-/** The Swarm's commands, loaded only when one runs (src/architecture.spec.ts SWARM_DOORS: one door). */
-const swarmCommands = () => import('./superTabs/command.js')
-
 switch (cmd) {
   case 'privacy':
     privacyCommand(args[0], flags.includes('--json')).catch(onError)
@@ -2880,16 +2875,6 @@ switch (cmd) {
     break
   case 'orchestrator':
     orchestratorCommand(rest).then(code => { process.exitCode = code }).catch(onError)
-    break
-  // The Swarm's commands are loaded only when run: started from the sources, every daemon process runs this file, and
-  // with the Swarm off (`HARNESS_SWARM`) none of them loads its code (src/architecture.spec.ts).
-  case 'super-tab':
-    swarmCommands().then(({ superTabCommand }) => superTabCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
-    break
-  case 'git-credential':
-    // git's credential helper in a Swarm agent's session (docs/swarm-github-app.md); git runs it, people do not. Only sessions
-    // started with the App before its removal name it; delete on or after 2026-12-10 (lib/swarmGitHub.ts).
-    import('./superTabs/gitCredential.js').then(({ gitCredentialCommand }) => gitCredentialCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'login': {
     // The result line goes out FIRST (loginCommand prints it), then the daemon is swapped onto the
@@ -3112,16 +3097,6 @@ switch (cmd) {
     break
   case 'service':
     serviceCommand(rest, serviceCommandDeps({ relaunch: () => launch(false), tildify }))
-      .then((code) => { process.exitCode = code }).catch(onError)
-    break
-  case 'swarm':
-    import('./swarm/command.js')
-      .then(({ swarmCommand }) => swarmCommand(rest, {
-        out: (line) => console.log(line),
-        err: (line) => console.error(line),
-        auth: controlPlaneAuth,
-        get: (path, headers) => requestJson('GET', path, undefined, headers),
-      }, flags.includes('--json')))
       .then((code) => { process.exitCode = code }).catch(onError)
     break
   case '__remove-team-account': // internal: Desktop asks the person, then runs this hidden (team/remove.ts)
