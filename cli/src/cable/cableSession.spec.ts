@@ -1940,6 +1940,68 @@ describe('cable session', () => {
     await session.stop()
   })
 
+  // OPENHARNES-18: Diego's dial got "Didn't catch that" on every turn spoken while it followed Hachi, and on none
+  // spoken while it followed an ordinary pane. Hachi is a hidden built-in: the window follows it, the dial has
+  // no tile for it, drops the focus and goes on naming its own tile. None of that may reach the transcriber.
+  it('hands the transcriber the same audio whether the window is on Hachi or on an ordinary agent', async () => {
+    const HACHI = '476fed00-hachi'
+    const speech = Buffer.alloc(3200)
+    for (let i = 0; i < speech.length / 2; i++) speech.writeInt16LE(Math.round(8000 * Math.sin(i / 3)), i * 2)
+    const heard = async (focused: string, dialTile: string) => {
+      const calls: Array<{ pcm: Buffer; rate: number; lang: string }> = []
+      const host = makeHost({
+        appFocus: () => ({ machineId: 'mac-local', agentId: focused }),
+        knows: (id) => id !== HACHI,
+        transcribe: async (pcm, rate, lang) => { calls.push({ pcm, rate, lang }); return 'what is on my plate' },
+        route: vi.fn(),
+      })
+      const { session, port } = await connect(host)
+      try {
+        port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+        await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'focus', agentId: focused }))
+        port.say({ t: 'voice.begin', agentId: dialTile, lang: 'en', sr: 16000, uploadId: 'u1' })
+        port.pcm(speech.subarray(0, 1600))
+        port.pcm(speech.subarray(1600))
+        port.say({ t: 'voice.end', uploadId: 'u1' })
+        await vi.waitFor(() => expect(host.sendTurn).toHaveBeenCalledWith(focused, 'what is on my plate'))
+        return calls
+      } finally { await session.stop() }
+    }
+    const hachi = await heard(HACHI, 'a1')
+    const ordinary = await heard('a2', 'a2')
+    expect(hachi).toHaveLength(1)
+    expect(hachi).toEqual(ordinary)
+    expect(hachi[0].pcm.equals(speech)).toBe(true)
+  })
+
+  it('logs one line per voice turn: agent, command, language, rate, level and transcript length, never the words', async () => {
+    const lines: string[] = []
+    let answer = 'fix the login screen'
+    const host = makeHost({ log: (line) => lines.push(line), transcribe: async () => answer })
+    const { session, port } = await connect(host)
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await settle()
+      const loud = Buffer.alloc(3200)
+      for (let i = 0; i < loud.length / 2; i++) loud.writeInt16LE(i % 2 ? -1000 : 1000, i * 2)
+      port.say({ t: 'voice.begin', agentId: 'a2', cmd: 'goal', lang: 'vi', sr: 16000, uploadId: 'loud' })
+      port.pcm(loud)
+      port.say({ t: 'voice.end', uploadId: 'loud' })
+      await vi.waitFor(() => expect(host.sendTurn).toHaveBeenCalled())
+      expect(lines).toContain('cable: voice turn agent=a2 cmd=goal lang=vi sr=16000 peak=1000 rms=1000 transcript=20')
+
+      // The failure Diego saw: silence in, nothing out. The line is what tells the two apart on his dial.
+      answer = ''
+      port.say({ t: 'voice.begin', lang: 'en', sr: 16000, uploadId: 'quiet' })
+      port.pcm(Buffer.alloc(3200))
+      port.say({ t: 'voice.end', uploadId: 'quiet' })
+      await vi.waitFor(() => expect(port.sent).toContainEqual(expect.objectContaining({ t: 'voice.error', uploadId: 'quiet' })))
+      expect(lines).toContain('cable: voice turn agent=none cmd=none lang=en sr=16000 peak=0 rms=0 transcript=0')
+      expect(lines.filter((l) => l.startsWith('cable: voice turn '))).toHaveLength(2)
+      expect(lines.join('\n')).not.toContain('login')
+    } finally { await session.stop() }
+  })
+
   it('says so rather than guessing when transcription fails', async () => {
     const host = makeHost({
       transcribe: async () => {

@@ -23,7 +23,9 @@ The rules AGENTS.md carried until 2026-11-11; the sections below have the detail
   push once. Rerun only a recorded flaky test.
 - Checks PR CI does not run are yours when you touch their area: the CLI coverage gates (`npm run test:core`,
   `test:harnessd`, `test:resume`, `test:orchestrator`, `test:sharing`, `test:remote-viewers`, `test:portability`,
-  `test:local-models`), serial and PTY specs, and Desktop tests on macOS for macOS code. Record them in the PR.
+  `test:local-models`), serial and PTY specs, and Desktop tests on macOS for macOS code. Run them with
+  `python3 scripts/local-checks.py --run` from a clean tree at the final commit: it runs the ones your paths need and
+  prints their receipts; paste its output into the PR body.
 - Heavy workflows (OS images, VM tests, CLI end to end) run only by hand, once, when the change needs them; report the
   run link. The account runs at most 20 jobs at once, 5 on macOS: never several heavy workflows together.
 - In a Swarm project the merge train lands ready pull requests by itself, together on one run. Never push to a
