@@ -2701,7 +2701,8 @@ export class CableSession {
         machineId: a.machineId ?? '',
         machine: a.machine ?? '',
         ...(a.host ? { host: a.host } : {}),
-        ...(a.caps ? { caps: a.caps } : {}),
+        // '' says the dial may do nothing with it; left out, the firmware would read everything (svfa).
+        ...(a.caps !== undefined ? { caps: a.caps } : {}),
       })
 
     }
