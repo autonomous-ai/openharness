@@ -75,6 +75,7 @@ beside the CLI's own suite); the CLI reads `pty/`, `tui/` and `store/`, Desktop 
 | `desktop/` | `desktop-tests` (VM suite, four Linux shards); a change to a desktop file the phone's tests read (the Swarm models in `scripts/ci-plan.py` `PR_READS`, compared by `mobile/test/swarm/desktop_parity_test.dart`) also runs `mobile-checks` | 5–7 min |
 | `tui/`, `term/` (the TUI builds on it) | `tui-test` (`cargo test`) | a few minutes |
 | `pty/`, `term/`, `tui/vendor/`, `cli/` (the ptyhost contract imports the CLI's code) | `pty-checks` (`cargo test` for `term` and `pty`, then the ptyhost terminal contract against the built host) | a few minutes |
+| `device-app/` | `device-app-checks` (the UI's Vitest and bundle, then `cargo test` with Tauri's Linux packages; the macOS code is not compiled) | a few minutes |
 | `backend/` | `backend-desk` (the backend unit suite, `npm test` in `backend/`) and `backend-integration` (the Super Tab integration suite, `npm run test:super-tabs`, four shards) | unit about 1–2 min; integration about 5 min |
 | `companions/`, `website/`, `os/`, `provider/`, `mobile/`, `daemons/` | that component's one check | 1–4 min |
 | `devices/` | `firmware-checks` | 1–2 min |
