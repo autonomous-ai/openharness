@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { inflateRawSync } from 'node:zlib'
 import { describe, expect, it } from 'vitest'
-import { buildLogBundle, bundleFileName, redactSecretsInText, REMOVALS_BUNDLED } from './logBundle.js'
+import { buildLogBundle, bundleFileName } from './logBundle.js'
+import { redactSecretsInText } from './redactSecrets.js'
 import { crc32, writeZip } from './zipWriter.js'
 
 /** Enough of a ZIP reader to check what writeZip produced: walks the local headers. */
@@ -50,12 +51,11 @@ describe('buildLogBundle', () => {
     const root = mkdtempSync(join(tmpdir(), 'bundle-'))
     const logs = join(root, 'logs'), data = join(root, 'data')
     mkdirSync(logs); mkdirSync(data)
-    writeFileSync(join(data, REMOVALS_BUNDLED), '2026-11-12 04:58:09.000 [auth] sign-in removed · reason=logout · pid=2 (x token=abcdefgh12345)\n')
+    writeFileSync(join(data, REMOVALS_FILE), '2026-11-12 04:58:09.000 [auth] sign-in removed · reason=logout · pid=2 (x token=abcdefgh12345)\n')
     const { zip, included } = buildLogBundle({ logsDir: logs, dataDir: data, now: new Date(2026, 10, 12), version: '0.6.50', redact: redactSecretsInText })
     const files = readZip(zip)
-    expect(files.get(REMOVALS_BUNDLED)?.toString()).toBe('2026-11-12 04:58:09.000 [auth] sign-in removed · reason=logout · pid=2 (x token=<redacted>\n')
-    expect(included).toContain(REMOVALS_BUNDLED)
-    expect(REMOVALS_BUNDLED).toBe(REMOVALS_FILE)
+    expect(files.get(REMOVALS_FILE)?.toString()).toBe('2026-11-12 04:58:09.000 [auth] sign-in removed · reason=logout · pid=2 (x token=<redacted>\n')
+    expect(included).toContain(REMOVALS_FILE)
   })
 
   it('takes the last week of dated logs, the daemon log tail, and redacts', () => {

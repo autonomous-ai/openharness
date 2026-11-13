@@ -13,7 +13,8 @@ import { readAuthSession } from '../lib/authSession.js'
 import { localWsTarget } from '../lib/localTransport.js'
 import { daemonPipe, type LocalDaemonOptions } from '../lib/windows/daemonPipe.js'
 import { pipeWebSocket } from '../lib/windows/pipeClient.js'
-import { computerId, daemonUnreachableText } from '../lib/daemonState.js'
+import { computerId } from '../lib/daemonState.js'
+import { daemonUnreachableText } from '../lib/unreachable.js'
 import { paneOwner, sendPane } from '../messages/command.js'
 
 export class AgentClientError extends Error {

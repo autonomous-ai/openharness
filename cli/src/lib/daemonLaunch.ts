@@ -13,8 +13,8 @@
  * produce. No parsing, no shared-log ambiguity.
  */
 
-import { readFileSync, rmSync } from 'fs'
-import { PID_FILE, isAlive, readPid } from './daemonState.js'
+import { readFileSync } from 'fs'
+import { isAlive, readPid } from './daemonState.js'
 
 export interface LaunchDeps {
   readPid: () => number | null
@@ -125,22 +125,4 @@ export async function waitForBind(
     if (deps.now() >= deadline) return 'timeout'
     await deps.sleep(250)
   }
-}
-
-/** Remove the pid file only if it still names `pid`. A spawner that deletes unconditionally after ITS
- *  child failed can erase the record of the daemon that actually won the port. */
-export function removePidFileIf(pid: number | undefined, deps: Pick<LaunchDeps, 'readPid'> = { readPid }): boolean {
-  if (pid === undefined || deps.readPid() !== pid) return false
-  try { rmSync(PID_FILE, { force: true }) } catch { /* ignore */ }
-  return true
-}
-
-/** How a command fails, and a core that will not stay up after a failed start: say why, let go of the pid
- *  file if it is this process's, and exit. Moved out of cli.ts with the core's entry, which uses it too. */
-export const onError = (err: unknown, code = 1): never => {
-  console.error('Failed to start adapter:', err)
-  // A daemon that claimed the pid file (port bound) and then failed to finish starting must not leave
-  // that file naming a corpse — the next `harness start` would refuse on it. Only ours, though.
-  removePidFileIf(process.pid)
-  process.exit(code)
 }
