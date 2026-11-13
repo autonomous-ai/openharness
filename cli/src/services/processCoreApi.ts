@@ -217,11 +217,9 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
           ? { accountId: answer.accountId, email: answer.email } : null
       },
       onNotice: (listener) => view.onNotice?.(listener) ?? (() => {}),
+      // The account's machines are not an experiment's to read: none declares `/api/machines` (core/api.ts
+      // `EXPERIMENT_BACKEND_ROUTES`), and the devices' process asks the core for the list by its own link.
       ...UNASKED.account,
-      // The account's machine list is the one read of `/api/machines` the core's `backend` answer gives an experiment
-      // already, so a service that is not asked for it gets the same refusal for it as for any other path. The Super
-      // Tab service's route context needs it: in its own process it saw none (the 2026-10-19 manual run).
-      machines: () => backend('GET', '/api/machines'),
     },
     clients: {
       viewerChanged: () => {}, viewerFrame: () => false, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {},

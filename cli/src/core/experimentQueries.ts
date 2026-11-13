@@ -17,8 +17,8 @@
  * - `stop_turn`: stop an agent's turn;
  * - `windows`: a change notice for every window on this computer (`orchestrator_changed`);
  * - `daemon`: how an agent's shell reaches this daemon, for the prompts the experiment writes;
- * - `backend`: a read or write of the account's backend under `/api/`, signed in by the core, which holds the
- *   sign-in (Share's links);
+ * - `backend`: a read or write of the account's backend, signed in by the core, which holds the sign-in: only on the
+ *   routes its service declared (core/api.ts `EXPERIMENT_BACKEND_ROUTES`: the Swarm's own API, Share's links, Jev's decision);
  * - `observer_key`: this machine's public key, or its signature on a welcome to one observer of one share, by
  *   the gateway, which holds the identity (Share's owner);
  * - `observer_send`: a frame Share sealed for one of its observers, to the relay through the gateway;
@@ -41,14 +41,13 @@
  * answered by its own link, for what it uses alone (core/messagesLink.ts).
  */
 import type { BackendSocket } from '../backendSocket.js'
-import type { AgentCreateRequest, CoreApi } from './api.js'
+import { experimentBackendAllowed, type AgentCreateRequest, type CoreApi } from './api.js'
 import { creationObservation } from '../lib/creationObservation.js'
 
 type Payload = Record<string, unknown>
 type Core = Pick<CoreApi, 'agents' | 'turns' | 'clients' | 'daemon' | 'account' | 'cloud' | 'superTabs' | 'transcripts'>
 
 const QUERIES: ReadonlySet<string> = new Set(['shown', 'activity', 'last_turn', 'turn_answer', 'close_swarm', 'keep_lead_alive', 'close_member', 'stopped', 'gone', 'creation_status', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account', 'cloud_publish', 'cloud_ask', 'cloud_unask', 'super_tab_attention', 'super_tab_cards', 'super_tab_card_recap', 'super_tab_observers', 'super_tab_screen', 'super_tab_input', 'super_tab_input_if_screen'])
-const METHODS: ReadonlySet<string> = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 
 /** The live agents as the apps are shown them (`shown`): each with its name, whether its terminal is there and
@@ -82,8 +81,39 @@ export function answerDaemonQuery(core: Pick<CoreApi, 'daemon'>, service: string
   return DAEMON_ASKERS.has(service) && query === 'daemon' ? daemonAddress(core) : null
 }
 
+/** How many refused routes of one service are said: a process that asks for route after route fills no log. */
+const REFUSALS_SAID = 16
+
+/**
+ * What a backend call on a route its service has not declared is answered, and where it is said (core/api.ts
+ * `EXPERIMENT_BACKEND_ROUTES`, `MESSAGES_BACKEND_ROUTES`). Its process hears only that the call failed, which the Swarm
+ * shows as a server it could not reach: so the core's log names the route, once for each service, method and path's
+ * shape (a segment with a digit in it is an id), up to a bound for each service, and then says it stops. The path is
+ * whatever that process sent: printable characters only, and never its query, which can hold what a person wrote.
+ */
+export function createRouteRefusals(log: (line: string) => void = (line) => console.warn(line)) {
+  const said = new Map<string, Set<string>>()
+  return (service: string, method: unknown, path: unknown, declared: (method: unknown, path: unknown) => boolean): Payload => {
+    const [route = '', query] = String(path).split('?', 2)
+    const shape = `${String(method).slice(0, 8)} ${route.slice(0, 160).split('/').map((part) => (/\d/.test(part) ? ':id' : part)).join('/')}`.replace(/[^\x21-\x7e ]/g, '?')
+    const known = said.get(service) ?? new Set<string>()
+    said.set(service, known)
+    if (known.size < REFUSALS_SAID && !known.has(shape)) {
+      known.add(shape)
+      // Declared but for its query: the path is not what to look for.
+      const why = query !== undefined && declared(method, route) ? 'with a query that holds a space, a # or a character that is not printable' : 'which it has not declared'
+      log(`[services] ${service} asked for a backend route ${why}, and was refused: ${shape} (core/api.ts)`)
+      if (known.size === REFUSALS_SAID) log(`[services] ${service}: further refused backend routes are not said`)
+    }
+    return { error: 'ROUTE_NOT_DECLARED' }
+  }
+}
+/** The core's own: one bound for each service for as long as the core runs. */
+export const routeRefused = createRouteRefusals()
+
 /** The answer to an experiment's query, or null when it is not one of these. */
-export async function answerExperimentQuery(core: Core, experiments: ReadonlySet<string>, service: string, query: string, payload: Payload): Promise<Payload | null> {
+export async function answerExperimentQuery(core: Core, experiments: ReadonlySet<string>, service: string, query: string, payload: Payload,
+  refused: ReturnType<typeof createRouteRefusals> = routeRefused): Promise<Payload | null> {
   if (!QUERIES.has(query)) return null
   // `account` is also what models asks for the account's grid name, of its own link (core/modelsLink.ts): only
   // Share's and the Swarm's are answered here. Seen 2026-10-18: since #1376 models got NOT_AN_EXPERIMENT back instead, so
@@ -168,10 +198,12 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
       core.clients.windows({ type: text(frame.type), payload: frame.payload as Payload })
       return {}
     }
+    // Only the routes its service declared, by method and whole path (core/api.ts `EXPERIMENT_BACKEND_ROUTES`): the core
+    // signs the call, so any other would be this account's to whatever code runs in that process.
     case 'backend': {
-      const method = text(payload.method), path = text(payload.path)
-      if (!METHODS.has(method) || !path.startsWith('/api/')) return { error: 'INVALID_REQUEST' }
-      return { ...await core.account.backend(method, path, payload.body) }
+      const { method, path } = payload
+      if (!experimentBackendAllowed(service, method, path)) return refused(service, method, path, (m, p) => experimentBackendAllowed(service, m, p))
+      return { ...await core.account.backend(method as string, path as string, payload.body) }
     }
     case 'observer_key':
       try {
