@@ -11,7 +11,7 @@
  * whose real components are links before it is recorded.
  */
 import { win32 } from 'node:path'
-import { isGuestUser } from '../guestAccounts.js'
+import { isGuestUser } from '../guestUser.js'
 import { checkSid } from './sid.js'
 
 /** The macOS form's cap: a guest sees at most this many folders. */

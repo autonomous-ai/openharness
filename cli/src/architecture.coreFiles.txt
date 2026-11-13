@@ -359,8 +359,9 @@ lib/gridBinary.ts
 lib/gridConfigDir.ts
 lib/gridFleetProtocol.ts
 lib/gridLaunchWire.ts
-lib/guestAccounts.ts
 lib/guestEngines.ts
+lib/guestRunner.ts
+lib/guestUser.ts
 lib/hachiMetrics.ts
 lib/handoffAuthority.ts
 lib/handoffDiscovery.ts
