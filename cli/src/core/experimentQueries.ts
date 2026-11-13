@@ -81,26 +81,39 @@ export function answerDaemonQuery(core: Pick<CoreApi, 'daemon'>, service: string
   return DAEMON_ASKERS.has(service) && query === 'daemon' ? daemonAddress(core) : null
 }
 
-/** The undeclared routes already said, by service, method and path: a loop that asks again every pass is said once. */
-const REFUSED_SAID = new Set<string>()
-const REFUSED_SAID_MAX = 64
+/** How many refused routes of one service are said: a process that asks for route after route fills no log. */
+const REFUSALS_SAID = 16
 
 /**
- * The answer to a backend call on a route its service has not declared, said once in the core's log: its process hears
- * only that the call failed, and a route missing from core/api.ts `EXPERIMENT_BACKEND_ROUTES` would otherwise look like
- * a server that is down. The path is whatever that process sent: printable characters only, and no query.
+ * What a backend call on a route its service has not declared is answered, and where it is said (core/api.ts
+ * `EXPERIMENT_BACKEND_ROUTES`, `MESSAGES_BACKEND_ROUTES`). Its process hears only that the call failed, which the Swarm
+ * shows as a server it could not reach: so the core's log names the route, once for each service, method and path's
+ * shape (a segment with a digit in it is an id), up to a bound for each service, and then says it stops. The path is
+ * whatever that process sent: printable characters only, and never its query, which can hold what a person wrote.
  */
-export function routeRefused(service: string, method: unknown, path: unknown, log: (line: string) => void = console.warn, said: Set<string> = REFUSED_SAID): Payload {
-  const route = `${String(method).slice(0, 8)} ${String(path).split('?')[0]!.slice(0, 160)}`.replace(/[^\x21-\x7e ]/g, '?')
-  if (said.size < REFUSED_SAID_MAX && !said.has(`${service} ${route}`)) {
-    said.add(`${service} ${route}`)
-    log(`[services] ${service} asked for a backend route it has not declared, and was refused: ${route} (core/api.ts EXPERIMENT_BACKEND_ROUTES)`)
+export function createRouteRefusals(log: (line: string) => void = (line) => console.warn(line)) {
+  const said = new Map<string, Set<string>>()
+  return (service: string, method: unknown, path: unknown, declared: (method: unknown, path: unknown) => boolean): Payload => {
+    const [route = '', query] = String(path).split('?', 2)
+    const shape = `${String(method).slice(0, 8)} ${route.slice(0, 160).split('/').map((part) => (/\d/.test(part) ? ':id' : part)).join('/')}`.replace(/[^\x21-\x7e ]/g, '?')
+    const known = said.get(service) ?? new Set<string>()
+    said.set(service, known)
+    if (known.size < REFUSALS_SAID && !known.has(shape)) {
+      known.add(shape)
+      // Declared but for its query: the path is not what to look for.
+      const why = query !== undefined && declared(method, route) ? 'with a query that holds a space, a # or a character that is not printable' : 'which it has not declared'
+      log(`[services] ${service} asked for a backend route ${why}, and was refused: ${shape} (core/api.ts)`)
+      if (known.size === REFUSALS_SAID) log(`[services] ${service}: further refused backend routes are not said`)
+    }
+    return { error: 'ROUTE_NOT_DECLARED' }
   }
-  return { error: 'ROUTE_NOT_DECLARED' }
 }
+/** The core's own: one bound for each service for as long as the core runs. */
+export const routeRefused = createRouteRefusals()
 
 /** The answer to an experiment's query, or null when it is not one of these. */
-export async function answerExperimentQuery(core: Core, experiments: ReadonlySet<string>, service: string, query: string, payload: Payload): Promise<Payload | null> {
+export async function answerExperimentQuery(core: Core, experiments: ReadonlySet<string>, service: string, query: string, payload: Payload,
+  refused: ReturnType<typeof createRouteRefusals> = routeRefused): Promise<Payload | null> {
   if (!QUERIES.has(query)) return null
   // `account` is also what models asks for the account's grid name, of its own link (core/modelsLink.ts): only
   // Share's and the Swarm's are answered here. Seen 2026-10-18: since #1376 models got NOT_AN_EXPERIMENT back instead, so
@@ -189,7 +202,7 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
     // signs the call, so any other would be this account's to whatever code runs in that process.
     case 'backend': {
       const { method, path } = payload
-      if (!experimentBackendAllowed(service, method, path)) return routeRefused(service, method, path)
+      if (!experimentBackendAllowed(service, method, path)) return refused(service, method, path, (m, p) => experimentBackendAllowed(service, m, p))
       return { ...await core.account.backend(method as string, path as string, payload.body) }
     }
     case 'observer_key':

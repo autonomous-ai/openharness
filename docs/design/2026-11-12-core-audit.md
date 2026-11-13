@@ -230,7 +230,8 @@ today that the rule says it should not, most serious first:
    `/api/` path for the orchestrator, Share, Memories, the router, the Swarm and cloud agents. Fixed on 13 November:
    each declares its routes (`core/api.ts` `EXPERIMENT_BACKEND_ROUTES`), as Agent Messages does, and the core signs
    no other: the Swarm's own API and `GET /api/auth/me`, Share's grants and links, Jev's decision, and none for the
-   other three. A refused route is said once in the core's log.
+   other three. A refused route is said in the core's log. What the Swarm's process may still ask is all of the
+   Swarm's API, not only the routes its service calls: an app's asks go through that service.
 3. **Bytes from outside this computer are parsed in the core:** a remote viewer's VNC bytes (`core/rfbShaper.ts:117-147`),
    a paste of up to 20 MB from a remote client (`lib/terminalStreamManager.ts:1003-1234`), a third-party
    `harness.json` (`dsh/manifest.ts`). And what agents write: fourteen engines' transcripts and SQLite stores
