@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { publishHandoff } from './handoffPublication.js'
 import { HandoffError as PublicationError } from './handoffAuthority.js'
-import { redactSecretsInText } from './logBundle.js'
+import { redactSecretsInText } from './redactSecrets.js'
 import { LOADED_HANDOFF_MS, LOADED_HANDOFF_TEST_MS } from '../testing/handoffLimits.js'
 import type { LiveEvent } from './normalize.js'
 import type { RegisteredSession } from './registry.js'

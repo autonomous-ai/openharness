@@ -1,10 +1,10 @@
 /**
- * The backend's REST control plane, as both the CLI's commands and the daemon call it: the base URL, one
- * bounded JSON call, and the signed-in headers. Moved out of cli.ts with the core's entry
- * (docs/design/2026-10-06-core-boundary-next.md, step 1), so the core reaches it without the CLI.
+ * The backend's REST control plane, as the CLI's commands call it: one bounded JSON call and the signed-in headers,
+ * and the bounds the gateway's own calls share. The base URL is lib/backendHttpBase.ts, which the core and the gateway
+ * take without this file: the core's process loaded these calls for it and never made one (the audit of 2026-11-12).
  */
-import { env } from '../config/env.js'
 import { AuthSessionManager, readAuthSession, type AuthSession } from './authSession.js'
+import { backendHttpBase } from './backendHttpBase.js'
 
 // How long a control-plane call the daemon proxies for a local client (`/api/machines`, `/api/auth/me`)
 // may wait on the backend. Under the desktop app's own 30s receive timeout, so a slow backend is
@@ -14,11 +14,6 @@ export const PROXY_BACKEND_TIMEOUT_MS = 20_000
 /** Bounds the `POST /api/grid/name` a grid set-up makes (`ensureGrid`, `harness grid login`), so a
  *  stalled control-plane connection cannot hold it open. */
 export const GRID_MINT_TIMEOUT_MS = 10_000
-
-// The REST base for control endpoints, derived from the WS URL (wss→https, ws→http).
-export function backendHttpBase(): string {
-  return env.BACKEND_WS_URL.replace(/\/$/, '').replace(/^wss:/, 'https:').replace(/^ws:/, 'http:')
-}
 
 /** One control-plane call, returning the backend's `data` envelope; throws on a non-2xx / bad body.
  *  `signal` lets a caller bound the request — a bare `fetch` that accepts the TCP handshake and then

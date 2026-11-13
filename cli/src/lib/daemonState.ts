@@ -6,14 +6,13 @@
  * which would execute the command dispatcher.
  */
 
-import { readFileSync } from 'fs'
+import { readFileSync, rmSync } from 'fs'
 import { homedir, hostname } from 'os'
 import { join } from 'path'
 import { env } from '../config/env.js'
 import { hasAuthSession } from './authSession.js'
 import { readOrMintComputerId } from './computerIdentity.js'
 import { savedDaemonPort } from './daemonRecord.js'
-import { pidIn, unreachableText } from './unreachable.js'
 
 export const PID_FILE = join(env.ADAPTER_DATA_DIR, 'adapter.pid')
 /** The daemon's console: the master's and its core's stdout and stderr. Capped (lib/log.ts). */
@@ -67,10 +66,22 @@ export function processAlive(pid: number, deps: ProcessAliveDeps = {}): boolean 
 /** Whether a durable SSO session exists for this computer. */
 export function hasSavedAuthSession(): boolean { return hasAuthSession() }
 
-/** What to say when this shell cannot reach the daemon of [dataDir]: stopped, or out of reach in a sandbox
- *  (lib/unreachable.ts). The agent verbs reach the daemon that made their pane, whose folder may not be this CLI's. */
-export function daemonUnreachableText(error?: unknown, dataDir: string = env.ADAPTER_DATA_DIR): string {
-  return unreachableText({ error, pid: pidIn(dataDir) })
+/** Remove the pid file only if it still names `pid`. A spawner that deletes unconditionally after ITS
+ *  child failed can erase the record of the daemon that actually won the port. */
+export function removePidFileIf(pid: number | undefined, deps: { readPid: () => number | null } = { readPid }): boolean {
+  if (pid === undefined || deps.readPid() !== pid) return false
+  try { rmSync(PID_FILE, { force: true }) } catch { /* ignore */ }
+  return true
+}
+
+/** How a command fails, and a core that will not stay up after a failed start: say why, let go of the pid
+ *  file if it is this process's, and exit. The CLI's commands and the core's entry both fail this way. */
+export const onError = (err: unknown, code = 1): never => {
+  console.error('Failed to start adapter:', err)
+  // A daemon that claimed the pid file (port bound) and then failed to finish starting must not leave
+  // that file naming a corpse — the next `harness start` would refuse on it. Only ours, though.
+  removePidFileIf(process.pid)
+  process.exit(code)
 }
 
 /** Is the background daemon process alive right now? (pid file present AND that pid still exists) */

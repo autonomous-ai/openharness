@@ -44,7 +44,7 @@ import { performance } from 'node:perf_hooks'
 import { promisify } from 'node:util'
 
 import { isPlainFile } from './projectFiles.js'
-import { redactSecretsInText } from './logBundle.js'
+import { redactSecretsInText } from './redactSecrets.js'
 import type { AgentEngine } from '../engines/types.js'
 import type { LiveEvent } from './normalize.js'
 import type { RegisteredSession } from './registry.js'

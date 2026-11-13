@@ -307,6 +307,7 @@ lib/appProductUsageReport.ts
 lib/attachTracker.ts
 lib/attachTranscript.ts
 lib/authSession.ts
+lib/backendHttpBase.ts
 lib/backgroundCommands.ts
 lib/binaryOnPath.ts
 lib/bootId.ts
@@ -321,14 +322,11 @@ lib/closeAgentService.ts
 lib/cloudAgents.ts
 lib/computerIdentity.ts
 lib/connectors/vaultOps.ts
-lib/controlPlane.ts
 lib/conversationIdentity.ts
 lib/createAgentPane.ts
 lib/creationObservation.ts
 lib/cwdRepair.ts
 lib/daemonCommand.ts
-lib/daemonEndpoint.ts
-lib/daemonLaunch.ts
 lib/daemonRecord.ts
 lib/daemonSafeMode.ts
 lib/daemonState.ts
@@ -395,9 +393,7 @@ lib/launchers.ts
 lib/localCredential.ts
 lib/localJsonLimit.ts
 lib/localSocket.ts
-lib/localTransport.ts
 lib/log.ts
-lib/logBundle.ts
 lib/loginShellEnv.ts
 lib/loopbackGet.ts
 lib/loopbackRequest.ts
@@ -455,6 +451,7 @@ lib/publishedGridConfig.ts
 lib/purgeAgentService.ts
 lib/questionController.ts
 lib/recapReads.ts
+lib/redactSecrets.ts
 lib/registry.ts
 lib/relayFrames.ts
 lib/removePath.ts
@@ -530,7 +527,6 @@ lib/transcriptPages.ts
 lib/transcriptTail.ts
 lib/turnActivity.ts
 lib/typedInput.ts
-lib/unreachable.ts
 lib/userShell.ts
 lib/viewerFrames.ts
 lib/windowSurfaces.ts
@@ -558,7 +554,6 @@ lib/windows/treeKill.ts
 lib/workspaceCheck.ts
 lib/worktreeDeletion.ts
 lib/wsLiveness.ts
-lib/zipWriter.ts
 localWsServer.ts
 scm/gitScmProject.ts
 scm/scmProjects.ts

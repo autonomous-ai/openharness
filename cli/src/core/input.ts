@@ -15,7 +15,7 @@ import type { CommandCodeNormalizer } from '../engines/commandcode/normalizer.js
 import { deviceErrorText } from './cardText.js'
 import { adaptSlashCommand } from '../lib/goalCommand.js'
 import { sid } from '../lib/log.js'
-import { redactSecretsInText } from '../lib/logBundle.js'
+import { redactSecretsInText } from '../lib/redactSecrets.js'
 import type { LiveEvent } from '../engines/kit/events.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { MoveGate } from '../lib/hostMove/gate.js'
