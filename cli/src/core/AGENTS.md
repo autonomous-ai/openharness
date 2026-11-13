@@ -121,8 +121,9 @@ The core stays small and secure, in the code and at run time: read
   change-agent handoff in the edge host asks for, one at a time.
   `gatewayLink.ts`: the relay and its E2EE in their own process (src/gateway/), as the core sees them:
   the link's state and the remote clients it reads in line, the frames it hands over in the clear, a
-  window's sessions to another machine or a shared harness, and the fleet's lane's sealing
-  (`core.account.lane`). `devicesLink.ts`: the devices in their own process (the dials, the window
+  window's sessions to another machine or a shared harness, the fleet's lane's sealing
+  (`core.account.lane`), and the account's token, which the gateway renews and the core asks it for
+  (`core.account.accessToken`), so the core calls no other host. `devicesLink.ts`: the devices in their own process (the dials, the window
   bridges, the fleet): what the core tells them, what it asks with a deadline and a fallback, and what it
   answers them. `wifi.ts`: the Wi-Fi device, as the core keeps it wherever its service runs (who said
   hello, which transcripts and streams it follows, the focus revision, and the check on every answer it

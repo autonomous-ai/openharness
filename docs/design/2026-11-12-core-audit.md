@@ -173,6 +173,7 @@ Left since, with the core's process as `src/architecture.coreFiles.txt` lists it
 | The probe of which engines this machine has: the edge host answers it and starts its login shells (13 November) | 550 | 95,029 |
 | The agent ledger, loaded for one erase in a delete: the agent cleanup erases what a harness was told, asked before anything is deleted. And the dial's recap of a cloud agent's last words, markdown a maker's agent wrote: its service works the card out and the core shows what it is handed (13 November) | 548 | 94,575 |
 | The agent browser's stream: the exec into a browser's container for each viewer, the reading of the viewer's VNC bytes, the credit and the pacing run in the agent browser's process. The core keeps a forwarder that holds each stream to the connection that opened it, bounds what it passes on by itself (an unanswered open, unread bytes), and sends the service's screen frames on unread, which costs it no more per byte than reading the pipe did (13 November) | 547 | 94,319 |
+| The sign-in's renewal, the core's last call to another host: the gateway renews it, and the core asks it for a token. A test lists what in the core's process can open a connection, each to this computer (13 November) | 547 | 94,183 |
 
 ### 1. Code the core loads for one helper (low risk, about a day each)
 
@@ -281,8 +282,10 @@ today that the rule says it should not, most serious first:
     that holds the core's event loop has to run in the core's process, and each does nothing unless
     `HARNESSD_TEST_FAULTS` names it, which only whoever starts the daemon sets.
 
-What already holds: the core's one call to another host is the sign-in's refresh (`lib/authSession.ts:357`); the
-E2EE keys are the gateway's; both local doors refuse another OS user and a web page (the private socket's mode,
+What already holds: the core calls no other host, since the gateway renews the sign-in (13 November, decision 4,
+`lib/authRefresh.ts`; `src/architecture.spec.ts` lists what in the core's process can open a connection, each to this
+computer), but for one: with the Swarm on, its door uploads a chat file to the backend itself
+(`lib/superTabAttachmentProxy.ts`), which goes to the gateway next. The E2EE keys are the gateway's; both local doors refuse another OS user and a web page (the private socket's mode,
 the local credential, the Host and Origin check, `lib/loopbackRequest.ts:22-29`); a service's process connects
 with the master's token.
 
@@ -298,7 +301,8 @@ Decided by anh Dee on 2026-11-13, each as recommended: "ok do it all. test caref
    what a restart or a restore needs stays in the core.
 3. **Harness OS: one process, or the same walls.** Recommended: decide when work on Harness OS resumes. Until then
    it is the one named exception to the rule.
-4. **Who refreshes the sign-in.** The core does, and that refresh is its one call to another host. Every daemon
+4. **Who refreshes the sign-in.** Done 13 November: the gateway. Before, the core did, and that refresh was its one
+   call to another host. Every daemon
    process runs as the same OS account and can read the session file, so the gateway refreshing it loses no
    secrecy (the October plan's open decision 3). Recommended: the gateway refreshes; then the core calls no other
    host at all, and a test can hold that.

@@ -10,12 +10,14 @@
  */
 import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
 import { until, type IsolatedDaemon } from './harness/daemon.js'
-import { startFleet, startPhoneMachine, type Fleet, type PhoneMachine } from './harness/fleet.js'
+import { b64e, newIdentity } from '../src/lib/e2ee/core.js'
+import { FakeBackend } from './harness/fakeBackend.js'
+import { signedInDaemon, startFleet, startPhoneMachine, writeE2ee, type Fleet, type PhoneMachine } from './harness/fleet.js'
 import { RelayPhone, type PhoneFrame } from './harness/relayPhone.js'
 
 const row = async (client: LocalClient, agentId: string) =>
@@ -42,6 +44,42 @@ const routeSend = (client: LocalClient, agentId: string, text: string) => client
 
 const restarts = (d: IsolatedDaemon) => d.log().split('\n').filter((line) => /\[harnessd\] service gateway started .* restart \d+/.test(line)).length
 const connections = (d: IsolatedDaemon) => d.log().split('[services] gateway connected').length - 1
+
+// The core audit of 2026-11-12, decision 4: the gateway renews the sign-in and the core asks it for a token, calling no
+// other host itself (src/architecture.spec.ts holds that). Until then the core renewed it, in the process that types into
+// every terminal. Nothing end to end renewed a sign-in before this.
+describe('a sign-in renewed by the gateway', () => {
+  for (const [shape, services] of [['in its own process', undefined], ['in the core\'s, with every service (debugging, Harness OS)', 'none']] as const) {
+    it(`${shape}: an expired token is renewed once, the machine comes online with the new one, and the rotated refresh token is kept`, async () => {
+      const backend = await FakeBackend.start()
+      const spec = { machineId: 'c3'.repeat(16), computerId: 'e2e-computer-0000-0000-00000000000c', name: 'machine-c', token: 'e2e-token-renewed', identity: newIdentity() }
+      backend.addMachine(spec)
+      backend.renewals.set('e2e-refresh-1', { token: spec.token, refreshToken: 'e2e-refresh-2', expiresIn: 3600 })
+      const daemon = await signedInDaemon(backend, spec, services ? { HARNESSD_SERVICES: services } : {})
+      try {
+        await writeE2ee(daemon, { 'identity.json': { priv: b64e(spec.identity.priv), pub: b64e(spec.identity.pub) } })
+        // Signed in as `harness login` left it an hour ago: the token it was given has expired, and the backend takes it no more.
+        const file = join(daemon.root, 'auth', 'session.json')
+        const session = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+        writeFileSync(file, JSON.stringify({ ...session, accessToken: 'e2e-token-expired', refreshToken: 'e2e-refresh-1', expiresAt: Date.now() - 60_000 }), { mode: 0o600 })
+        onTestFailed(() => {
+          console.log(`---- daemon log\n${daemon.log().split('\n').slice(-120).join('\n')}`)
+          console.log(`---- fake backend saw\n${backend.seen.slice(-40).join('\n')}`)
+        })
+        await daemon.start()
+        await until('the machine to come online with the renewed token', () => backend.nodeUp(spec.machineId) || null, 45_000, 200)
+        expect(backend.seen.filter((line) => line === 'POST /api/auth/refresh')).toHaveLength(1)
+        const renewed = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+        expect(renewed).toMatchObject({ accessToken: spec.token, refreshToken: 'e2e-refresh-2', machineId: spec.machineId })
+        expect(renewed.expiresAt).toBeGreaterThan(Date.now())
+        expect(daemon.coresStarted()).toBe(1)
+      } finally {
+        await daemon.close().catch(() => {})
+        await backend.close()
+      }
+    })
+  }
+})
 
 describe('the gateway in its own process', () => {
   let world: PhoneMachine | undefined

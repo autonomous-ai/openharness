@@ -2016,6 +2016,9 @@ export interface GatewayRefusal {
  * the hook server's route does; while the gateway is down, a 503.
  */
 export interface GatewayOps {
+  /** The account's token. The gateway renews the sign-in (lib/authRefresh.ts) and the core asks it, so the core calls
+   *  no other host (the core audit of 2026-11-12, decision 4). A refusal is the session's own error (`AuthSessionError`). */
+  accessToken(opts?: { force?: boolean; failedToken?: string }): Promise<string>
   /** Account HTTP and its cache live with the network, outside the session core. */
   backend(method: string, path: string, body?: unknown): Promise<HttpAnswer>
   machines(fallback?: boolean): Promise<HttpAnswer>

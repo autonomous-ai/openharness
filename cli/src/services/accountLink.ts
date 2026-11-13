@@ -7,13 +7,12 @@
  * nothing (`lost`), so nothing for a linked machine goes out in the clear while the core is away.
  */
 import type { CoreApi } from '../core/api.js'
-import { AuthSessionError } from '../lib/authSession.js'
+import { AuthSessionError, tokenOf } from '../lib/authSession.js'
 
 type Payload = Record<string, unknown>
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 /** A frame in the core's answer: an object, or none. */
 const frameOf = (answer: Payload): Payload | null => (answer.frame && typeof answer.frame === 'object' ? answer.frame as Payload : null)
-const SESSION_CODES = new Set(['MISSING', 'INVALID_REFRESH', 'UNAVAILABLE', 'SIGN_IN_AGAIN'])
 
 /** `query` asks the core (`CoreConnection.query`, services/process.ts); it rejects when the link goes. */
 export function accountLink(query: (query: string, payload: Payload) => Promise<Payload>): Pick<CoreApi['account'], 'accessToken' | 'lane'> {
@@ -24,9 +23,7 @@ export function accountLink(query: (query: string, payload: Payload) => Promise<
       const answer = await query('access_token', options).catch((error: unknown) => {
         throw new AuthSessionError(error instanceof Error ? error.message : 'not connected to the core', 'UNAVAILABLE')
       })
-      if (typeof answer.token === 'string') return answer.token
-      const code = SESSION_CODES.has(text(answer.code)) ? text(answer.code) as AuthSessionError['code'] : 'UNAVAILABLE'
-      throw new AuthSessionError(text(answer.message) || 'the core could not hand out a token', code)
+      return tokenOf(answer, 'the core could not hand out a token')
     },
     lane: {
       hello: async (machineId, peerPub) => {

@@ -553,7 +553,7 @@ describe('remote-password link + relay session crypto (interop with the real E2e
 
 describe('RemoteRelayPool drops a peer the responder no longer trusts', { timeout: PW_SCRYPT_TEST_TIMEOUT_MS }, () => {
   // A fake AuthSessionManager — RemoteRelayPool only ever calls .accessToken({force}).
-  const fakeAuth = { accessToken: async () => 'unused-in-this-fake' } as unknown as import('../authSession.js').AuthSessionManager
+  const fakeAuth = { accessToken: async () => 'unused-in-this-fake' } as unknown as import('../authRefresh.js').AuthSessionManager
 
   it('isolates concurrent fleet clients from each other and the desktop connection', async () => {
     const wss = new WebSocketServer({ port: 0 })
@@ -833,7 +833,7 @@ describe('RemoteRelayPool closes the upstream socket when the handshake fails', 
   // its socket left an OPEN, unreachable `/api/web-ws` connection behind on every retry — one user
   // reached 175 concurrent sockets on a single backend pod — and each one counted as a "connection"
   // in user_daily_presence. Any rejection path must take the socket down with it.
-  const fakeAuth = { accessToken: async () => 'unused-in-this-fake' } as unknown as import('../authSession.js').AuthSessionManager
+  const fakeAuth = { accessToken: async () => 'unused-in-this-fake' } as unknown as import('../authRefresh.js').AuthSessionManager
 
   /** Dials once against a fake backend and reports how it ended: the acquire() rejection and the close
    *  code the SERVER saw on the socket (-1 = never closed within 2s, i.e. leaked). */
@@ -905,7 +905,7 @@ describe('RemoteRelayPool closes the upstream socket when the handshake fails', 
 describe('a client\'s sessions with one machine never open the same broadcast twice', () => {
   let E2eeStore: typeof import('./store.js')['E2eeStore']
   let GROUP_EPOCHS_KEPT: number
-  const fakeAuth = { accessToken: async () => 'unused-in-this-fake' } as unknown as import('../authSession.js').AuthSessionManager
+  const fakeAuth = { accessToken: async () => 'unused-in-this-fake' } as unknown as import('../authRefresh.js').AuthSessionManager
   beforeAll(async () => {
     E2eeStore = (await import('./store.js')).E2eeStore
     GROUP_EPOCHS_KEPT = (await import('./relayClient.js')).GROUP_EPOCHS_KEPT
@@ -1007,7 +1007,7 @@ describe('a client\'s sessions with one machine never open the same broadcast tw
 })
 
 describe('RemoteRelayPool retires a session the machine no longer has', () => {
-  const fakeAuth = { accessToken: async () => 'unused-in-this-fake' } as unknown as import('../authSession.js').AuthSessionManager
+  const fakeAuth = { accessToken: async () => 'unused-in-this-fake' } as unknown as import('../authRefresh.js').AuthSessionManager
 
   it('e2e_session_unknown closes the local connection as for node_status offline, keeps the pin, and the next acquire dials a new session', async () => {
     const E2eeStore = (await import('./store.js')).E2eeStore

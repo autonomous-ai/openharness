@@ -42,6 +42,7 @@ export function decodeGatewayBinary(raw: Uint8Array): { kind: GatewayBinary; id:
 /** The requests the core asks the gateway's process (`serviceLinks.call`), answered under `<type>_result`:
  *  one per `GatewayOps` member that answers. */
 export const GATEWAY_CALLS = {
+  accessToken: 'gateway_access_token',
   backend: 'gateway_backend',
   machines: 'gateway_machines',
   mintGridName: 'gateway_mint_grid_name',

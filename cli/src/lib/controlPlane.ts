@@ -3,7 +3,8 @@
  * and the bounds the gateway's own calls share. The base URL is lib/backendHttpBase.ts, which the core and the gateway
  * take without this file: the core's process loaded these calls for it and never made one (the audit of 2026-11-12).
  */
-import { AuthSessionManager, readAuthSession, type AuthSession } from './authSession.js'
+import { AuthSessionManager } from './authRefresh.js'
+import { readAuthSession, type AuthSession } from './authSession.js'
 import { backendHttpBase } from './backendHttpBase.js'
 
 // How long a control-plane call the daemon proxies for a local client (`/api/machines`, `/api/auth/me`)

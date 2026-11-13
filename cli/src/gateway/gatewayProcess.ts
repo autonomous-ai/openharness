@@ -19,7 +19,9 @@ import { RelayConnectError } from '../lib/relayFrames.js'
 import { decodeTerminalLocal, encodeTerminalLocal } from '../lib/terminalBinary.js'
 import { answerTabKey } from '../lib/tabKeyWire.js'
 import { answerTabRelay } from '../lib/tabRelayWire.js'
-import { accountLink } from '../services/accountLink.js'
+import { AuthSessionManager } from '../lib/authRefresh.js'
+import { tokenAnswer, tokenOptionsOf } from '../lib/authSession.js'
+import { backendHttpBase } from '../lib/backendHttpBase.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from '../services/process.js'
 import { startGateway, type StartedGateway } from './start.js'
 import { sharedPeers } from './sharedTrust.js'
@@ -35,6 +37,8 @@ export interface GatewayServiceOptions {
   run?: typeof runServiceProcess
   /** Swapped in tests for a gateway that dials nothing. */
   start?: typeof startGateway
+  /** Swapped in tests for a renewal that reaches no backend. */
+  tokens?: Pick<AuthSessionManager, 'accessToken'>
 }
 
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
@@ -75,9 +79,9 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
     browserTransportError: () => notice('browserTransportError'),
   }
 
-  /** The account's tokens, from the core (`core.account`, services/accountLink.ts): a refusal comes back as
-   *  the session's own error. */
-  const { accessToken } = accountLink((query, payload) => (core ? core.query(query, payload) : Promise.reject(new Error('not connected to the core'))))
+  /** This process renews the account's sign-in (lib/authRefresh.ts): one manager, so every start of the gateway and the
+   *  core's asks share a renewal in flight. Until the core audit of 2026-11-12 the core renewed it, and this asked it. */
+  const tokens = options.tokens ?? new AuthSessionManager(backendHttpBase())
 
   /** The gateway stopped: its link closed, its windows' sessions let go. Not waited on here: what comes after it
    *  on the link (a new `start`) must not wait for the old link's goodbye. The process's own stop waits for it. */
@@ -99,7 +103,7 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
       computerId: text(payload.computerId),
       autonomousEnv: text(payload.autonomousEnv) || 'prod',
       signedIn: payload.signedIn === true,
-      tokens: { accessToken },
+      tokens,
       machineName: text(payload.machineName), hostname: text(payload.hostname),
       machines: (state) => notice('machines', { ...state }),
       account: (payload.account as GatewayAccount | null) ?? { machineId: null, signIn: null },
@@ -218,6 +222,8 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
     return running.ops
   }
   const requests = {
+    // The core's ask, for itself and for the services that ask it (core/accountQueries.ts): the core calls no other host.
+    [GATEWAY_CALLS.accessToken]: (p: Payload) => tokenAnswer(() => tokens.accessToken(tokenOptionsOf(p))),
     [GATEWAY_CALLS.backend]: async (p: Payload) => ({ ...await ops().backend(text(p.method), text(p.path), p.body) }),
     [GATEWAY_CALLS.machines]: async (p: Payload) => ({ ...await ops().machines(p.fallback === true) }),
     [GATEWAY_CALLS.mintGridName]: async () => ({ name: await ops().mintGridName() }),
