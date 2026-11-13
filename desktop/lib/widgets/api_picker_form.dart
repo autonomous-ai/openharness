@@ -27,15 +27,10 @@ class ApiPickerForm extends StatefulWidget {
     this.onSwitchPane,
     this.connectionId,
     this.removing = false,
-    this.swarmShares,
   });
   final ApiConnectionsController controller;
   final String? connectionId;
   final bool removing;
-
-  /// In a Swarm's Your models: how many of this API's models are shared with the Swarm, which stop when it is
-  /// deleted (the CLI takes them off first). Null elsewhere.
-  final int? swarmShares;
   final ValueChanged<String?> onClose;
   final ValueChanged<bool> onFocusChanged;
   final VoidCallback? onSwitchPane;
@@ -475,36 +470,6 @@ class ApiPickerFormState extends State<ApiPickerForm> {
     _ => null,
   };
 
-  /// What deleting takes from the Swarm, in a quiet warning beside the sentence.
-  Widget _sharesNote(int shares) {
-    final warn = grid.AppPalette.warn;
-    return Container(
-      key: const ValueKey('api-form:shares-note'),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: warn.withValues(alpha: .10),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: warn.withValues(alpha: .30)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(AppIcons.triangleAlert, size: 14, color: warn),
-          const SizedBox(width: 8),
-          // Wraps in a narrow pane rather than running past it.
-          Flexible(
-            child: Text(
-              shares == 1
-                  ? '1 model stops being shared with this Swarm'
-                  : '$shares models stop being shared with this Swarm',
-              style: DesktopChrome.text(size: 12, color: warn),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _actionButton(({String id, String label, VoidCallback? run}) action) {
     final node = _buttons.putIfAbsent(
       action.id,
@@ -674,14 +639,9 @@ class ApiPickerFormState extends State<ApiPickerForm> {
                           'This removes the API and its saved key from ${controller.hostLabel}.',
                           style: style.copyWith(height: 1.5),
                         ),
-                        // The CLI takes its models off every Swarm they are shared with first (services/models.ts).
-                        if ((widget.swarmShares ?? 0) > 0) ...[
-                          const SizedBox(height: 12),
-                          _sharesNote(widget.swarmShares!),
-                        ],
                       ] else if (widget.removing)
                         Text(
-                          'Remove this saved connection and key? Any Swarm it is shared with stops using it.',
+                          'Remove this saved connection and key?',
                           style: style,
                         ),
                       if (controller.loading && !controller.saving)

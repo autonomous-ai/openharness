@@ -40,7 +40,6 @@ const Set<String> encryptedDownTypes = {
   // and where a guest may start a harness (the owner's folders).
   'shared_machines',
   'guest_folders',
-  'super_tabs',
   'orchestrator',
   'route_task',
   'route_send',

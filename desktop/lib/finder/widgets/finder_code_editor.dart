@@ -39,7 +39,6 @@ class FinderCodeEditor extends StatefulWidget {
     required this.language,
     required this.onSave,
     this.wordWrap = true,
-    this.readOnly = false,
   });
 
   final CodeLineEditingController controller;
@@ -48,7 +47,6 @@ class FinderCodeEditor extends StatefulWidget {
   final String? language;
   final VoidCallback onSave;
   final bool wordWrap;
-  final bool readOnly;
 
   @override
   State<FinderCodeEditor> createState() => _FinderCodeEditorState();
@@ -86,7 +84,6 @@ class _FinderCodeEditorState extends State<FinderCodeEditor> {
           key: const ValueKey('finder-code-editor'),
           controller: widget.controller,
           findController: _find,
-          readOnly: widget.readOnly,
           wordWrap: widget.wordWrap,
           padding: const EdgeInsets.fromLTRB(4, 6, 12, 24),
           style: CodeEditorStyle(

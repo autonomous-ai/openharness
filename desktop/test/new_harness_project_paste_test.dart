@@ -174,7 +174,6 @@ void main() {
     box.accept();
     expect(box.project.repository!.url, 'git@gh-work:org/repo.git');
     expect(box.cloudRepository, 'https://github.com/org/repo.git');
-    expect(box.leadRepositoryUrl, 'https://github.com/org/repo.git');
   });
 
   test('an SSH alias says which account clones', () {

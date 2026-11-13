@@ -43,7 +43,6 @@ class DesktopWorkspaceTab extends StatefulWidget {
     this.activity,
     this.activityLabel,
     this.highlighted = false,
-    this.attention = false,
     this.onRename,
     this.shortcutHint,
     this.sharedCount,
@@ -52,8 +51,6 @@ class DesktopWorkspaceTab extends StatefulWidget {
     this.onStopSharing,
     this.onMoveHere,
     this.onLeave,
-    this.onPauseNewWork,
-    this.newWorkPaused = false,
     this.fixed = false,
   });
 
@@ -62,15 +59,9 @@ class DesktopWorkspaceTab extends StatefulWidget {
 
   final String id, label;
   final bool selected, highlighted;
-
-  /// Something there needs the person: the name is bold, and nothing counts
-  /// it (Quiet Swarm, screen 0).
-  final bool attention;
   final ValueListenable<bool> showShortcuts;
   final VoidCallback? onSelect, onClose;
   final VoidCallback? onRename;
-  final VoidCallback? onPauseNewWork;
-  final bool newWorkPaused;
   final String? shortcutHint, tooltip, activityLabel;
 
   /// The status cell: an [ActivityMark].
@@ -223,7 +214,6 @@ class _DesktopWorkspaceTabState extends State<DesktopWorkspaceTab> {
 
   bool get _hasMenu =>
       (_everyTab && (widget.onRename != null || widget.onClose != null)) ||
-      widget.onPauseNewWork != null ||
       widget.onInvitePeople != null ||
       widget.onShowAgentMessages != null ||
       widget.onStopSharing != null ||
@@ -270,15 +260,8 @@ class _DesktopWorkspaceTabState extends State<DesktopWorkspaceTab> {
           },
         );
     return [
-      if (widget.onRename != null &&
-          (_everyTab || widget.onPauseNewWork != null))
+      if (widget.onRename != null && _everyTab)
         row('rename', 'Rename Tab…', widget.onRename),
-      if (widget.onPauseNewWork != null)
-        row(
-          'pause',
-          widget.newWorkPaused ? 'Resume new work' : 'Pause new work',
-          widget.onPauseNewWork,
-        ),
       if (widget.onInvitePeople != null)
         row('invite', 'Invite People…', widget.onInvitePeople),
       if (widget.onShowAgentMessages != null)
@@ -479,12 +462,9 @@ class _DesktopWorkspaceTabState extends State<DesktopWorkspaceTab> {
                                         maxLines: 1,
                                         overflow: TextOverflow.ellipsis,
                                         strutStyle: grid.AppType.controlStrut(),
-                                        style: DesktopChrome.control(color: ink)
-                                            .copyWith(
-                                              fontWeight: widget.attention
-                                                  ? grid.AppFont.semibold
-                                                  : null,
-                                            ),
+                                        style: DesktopChrome.control(
+                                          color: ink,
+                                        ),
                                       ),
                                     ),
                                   ),

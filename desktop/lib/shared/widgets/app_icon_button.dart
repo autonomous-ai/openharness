@@ -13,8 +13,6 @@ class AppIconButton extends StatefulWidget {
     this.tooltip,
     this.size = AppIcons.inlineSize,
     this.color,
-    this.hoverColor,
-    this.hoverFill,
     this.destructive = false,
     this.spinning = false,
     this.focusNode,
@@ -48,22 +46,9 @@ class AppIconButton extends StatefulWidget {
   /// workspace close marks use AppIcons.closeSize inside their existing target.
   final double size;
 
-  /// Resting ink. Defaults to [AppPalette.textSecondary].
+  /// Resting ink. Defaults to [AppPalette.textSecondary]; hovered, the glyph
+  /// climbs to [AppPalette.textPrimary] — the climb *is* the affordance.
   final Color? color;
-
-  /// Hovered ink. Defaults to [AppPalette.textPrimary] — the climb *is* the
-  /// affordance. Ignored when [destructive] is set.
-  final Color? hoverColor;
-
-  /// The lift behind the glyph on hover. Defaults to [AppSurface.hoverFill],
-  /// which follows the app's theme.
-  ///
-  /// Overridden only by chrome that deliberately does **not** follow it — the
-  /// bar and rulers around a document page, which stay light in dark mode the
-  /// way the page itself does (see [AppPalette.paper]). Without this the glyph
-  /// and the fill answer to two different themes, and a light toolbar lifts its
-  /// buttons with a wash mixed for charcoal.
-  final Color? hoverFill;
 
   /// Hover turns the *glyph* red, over the same neutral fill every other button
   /// gets.
@@ -154,12 +139,9 @@ class _AppIconButtonState extends State<AppIconButton>
     final enabled = widget.onPressed != null && !widget.spinning;
     final highContrast = MediaQuery.highContrastOf(context);
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
-    // In a sidebar with its own ink (Plum), that ink; elsewhere the page's.
     final resting =
         widget.color ??
-        (highContrast
-            ? SidebarInk.foreground(context)
-            : SidebarInk.muted(context));
+        (highContrast ? AppPalette.textPrimary : AppPalette.textSecondary);
     // Only the glyph changes. The fill stays the same neutral lift every other
     // button gets, so a destructive button reads as *the same affordance* the
     // rest of the app uses — just saying, in its ink, what it would do.
@@ -167,10 +149,8 @@ class _AppIconButtonState extends State<AppIconButton>
       Theme.of(context).colorScheme.error,
       AppIconButton._dangerDark,
     );
-    final active = widget.destructive
-        ? danger
-        : (widget.hoverColor ?? SidebarInk.foreground(context));
-    final hoverFill = widget.hoverFill ?? SidebarInk.hoverFill(context);
+    final active = widget.destructive ? danger : AppPalette.textPrimary;
+    final hoverFill = AppSurface.hoverFill;
 
     return Semantics(
       value: widget.spinning ? 'Working' : null,
@@ -207,7 +187,7 @@ class _AppIconButtonState extends State<AppIconButton>
           foregroundColor: WidgetStateProperty.resolveWith((states) {
             if (widget.spinning && widget.onPressed != null) return resting;
             if (states.contains(WidgetState.disabled)) {
-              return SidebarInk.faint(context);
+              return AppPalette.textFaint;
             }
             return states.contains(WidgetState.hovered) ||
                     states.contains(WidgetState.pressed) ||
@@ -217,7 +197,7 @@ class _AppIconButtonState extends State<AppIconButton>
           }),
           backgroundColor: WidgetStatePropertyAll(
             widget.selected == true
-                ? SidebarInk.selectedFill(context)
+                ? AppSurface.selectedFill
                 : Colors.transparent,
           ),
           overlayColor: WidgetStateProperty.resolveWith((states) {

@@ -173,9 +173,6 @@ abstract final class AppPalette {
   static Color get swarmAccent => AppTheme.surfacePalette.accent;
   // Shared with the native search field for a continuous input/results surface.
   static Color get swarmSearchSurface => AppTheme.surfacePalette.search;
-  // The Swarm's project sidebar: the workspace color, or a palette's own
-  // (Plum's plum). Its ink is `SidebarInk`'s.
-  static Color get swarmSidebar => AppTheme.surfacePalette.sidebar;
   // Getters, not consts: a light palette brings its own panel and card.
   static Color get agentEntrySurface =>
       AppTheme.pick(AppTheme.surfacePalette.panel, const Color(0xff101113));
@@ -255,9 +252,6 @@ abstract final class AppPalette {
   /// ```
   static Color get dangerFill =>
       AppTheme.pick(const Color(0xFFB3261E), const Color(0xFFC92E26));
-
-  /// Text and marks on [dangerFill], such as a sidebar's red count.
-  static const Color onDangerFill = Colors.white;
 
   /// The accent as a *mark on a surface* — a selected row's icon, an accent
   /// rail — rather than a fill behind white text.
@@ -619,89 +613,6 @@ abstract final class AppSurface {
   );
 }
 
-/// The Swarm sidebar's ink (task #3006).
-///
-/// A theme may draw its sidebar darker than the page around it — Plum's is
-/// plum with white text in an otherwise white app. The tokens above follow
-/// one global brightness and cannot tell the sidebar from the page, so the
-/// sidebar's widgets read their ink here instead: inside [SidebarInk.scope]
-/// on such a theme they get the sidebar's own, anywhere else (the same row
-/// widgets on another page, or any theme without a sidebar of its own) the
-/// page's ordinary tokens.
-class SidebarInk extends InheritedWidget {
-  const SidebarInk._({required super.child});
-
-  /// Marks [child] as the Swarm sidebar, and gives text and icons that pick
-  /// no color of their own the sidebar's ink.
-  static Widget scope({required Widget child}) {
-    final palette = AppTheme.surfacePalette;
-    if (!palette.hasSidebarInk) return SidebarInk._(child: child);
-    return SidebarInk._(
-      child: IconTheme.merge(
-        data: IconThemeData(color: palette.sidebarInk),
-        child: DefaultTextStyle.merge(
-          style: TextStyle(color: palette.sidebarInk),
-          child: child,
-        ),
-      ),
-    );
-  }
-
-  /// The default text style of a Material drawn as the sidebar: the theme's,
-  /// in the sidebar's ink when it has its own (a Material sets its own
-  /// default style, which would hide [scope]'s).
-  static TextStyle? textStyle(BuildContext context) => switch (_own(context)) {
-    final palette? => Theme.of(
-      context,
-    ).textTheme.bodyMedium?.copyWith(color: palette.sidebarInk),
-    null => null,
-  };
-
-  static HarnessPalette? _own(BuildContext context) {
-    final palette = AppTheme.surfacePalette;
-    return palette.hasSidebarInk &&
-            context.dependOnInheritedWidgetOfExactType<SidebarInk>() != null
-        ? palette
-        : null;
-  }
-
-  /// The sidebar's inks, for code that draws only the sidebar.
-  static HarnessPalette? get _sidebarOwn =>
-      AppTheme.surfacePalette.hasSidebarInk ? AppTheme.surfacePalette : null;
-  static Color get ink => _sidebarOwn?.sidebarInk ?? AppPalette.textPrimary;
-  static Color get inkMuted => switch (_sidebarOwn) {
-    final palette? => palette.sidebarMuted ?? palette.sidebarInk!,
-    null => AppPalette.textSecondary,
-  };
-  static Color get hover => _sidebarOwn?.sidebarHover ?? AppSurface.hoverFill;
-  static Color get selected =>
-      _sidebarOwn?.sidebarSelected ?? AppSurface.selectedFill;
-
-  /// The same, for a widget that is drawn in the sidebar and elsewhere: the
-  /// sidebar's inside [scope], the page's outside it.
-  static Color foreground(BuildContext context) =>
-      _own(context)?.sidebarInk ?? AppPalette.textPrimary;
-
-  static Color muted(BuildContext context) => switch (_own(context)) {
-    final palette? => palette.sidebarMuted ?? palette.sidebarInk!,
-    null => AppPalette.textSecondary,
-  };
-
-  /// A disabled control's ink: the sidebar's own at half strength on a
-  /// sidebar with its own ink, else the page's faint.
-  static Color faint(BuildContext context) =>
-      _own(context)?.sidebarInk?.withValues(alpha: .5) ?? AppPalette.textFaint;
-
-  static Color hoverFill(BuildContext context) =>
-      _own(context)?.sidebarHover ?? AppSurface.hoverFill;
-
-  static Color selectedFill(BuildContext context) =>
-      _own(context)?.sidebarSelected ?? AppSurface.selectedFill;
-
-  @override
-  bool updateShouldNotify(SidebarInk oldWidget) => false;
-}
-
 /// Translucent Codex-like chrome surfaces used behind a backdrop blur (the
 /// sidebar, the top bar, floating pills). Fills are semi-transparent so the blur
 /// shows through; kept separate from [AppCard] because these surfaces are chrome,
@@ -941,8 +852,6 @@ abstract final class AppMenu {
 /// and let the text do the work. Applied via [GlassCard].
 abstract final class AppCard {
   static const accent = AppPalette.accent;
-  static Color get accentStrong =>
-      AppTheme.pick(const Color(0xFF1E40AF), const Color(0xFF5C7CFF));
 
   // card surface
   static Color get base =>
@@ -1473,9 +1382,6 @@ abstract final class AppControl {
   /// label rather than tower over it.
   static const double iconSize = 16;
 
-  /// A compact glyph for an inline chip.
-  static const double iconSizeChip = 13;
-
   /// The minimum height keeps normal-size controls compact. Vertical padding
   /// lets enlarged system text grow the capsule without touching its rim.
   ///
@@ -1559,50 +1465,11 @@ abstract final class AppDesktop {
   static const double groupGap = 16;
   static const double controlGap = 8;
 
-  /// The Swarm composer's box, as the phone draws it (Huy, 11-04): the text
-  /// [composerTop] below the top and [composerSide] in from each side, and
-  /// [composerRowGap] between the text and the row of actions under it. A
-  /// rounded pill, as iMessage's (anh Dee's mockup, 11-07, #4529).
-  static const double composerRadius = 20;
-  static const double composerTop = 12;
-  static const double composerSide = groupGap;
-  static const double composerRowGap = 12;
-
   /// Between one sidebar row and the next (design system: Geometry).
   static const double listRowGap = 2;
-
-  /// A count badge's text from its capsule's ends, as in Notifications' count.
-  static const double badgeInset = 5;
   static const double menuInset = 6;
   static const double iconSize = 16;
   static const double identitySize = 28;
-
-  /// A chat or thread message's face: round at 28, as every other avatar
-  /// (anh Dee, 11-07, #4467; was Slack's 36 rounded square).
-  static const double messageAvatarSize = 28;
-
-  /// A chat bubble's text from its edges (anh Dee's mockup, 11-07, #4529).
-  static const EdgeInsets bubblePadding = EdgeInsets.symmetric(
-    horizontal: 12,
-    vertical: 7,
-  );
-
-  /// A chat card's content from its edges: a little more than a bubble's.
-  static const EdgeInsets chatCardPadding = EdgeInsets.fromLTRB(14, 10, 14, 10);
-
-  /// A centered chat time: a pause's room above it, its line's below.
-  static const EdgeInsets chatTimePadding = EdgeInsets.only(top: 12, bottom: 4);
-
-  /// A small line under or beside a bubble (a fold's More, a line's status)
-  /// from it.
-  static const double bubbleNoteGap = 4;
-
-  /// A group chat's name over its first bubble: in from the bubble's edge as
-  /// its text is, and close above it.
-  static const EdgeInsets bubbleNamePadding = EdgeInsets.only(
-    left: 12,
-    bottom: 2,
-  );
   static const double formWidth = 460;
   static const double focusWidth = 1.5;
 
@@ -1620,16 +1487,6 @@ abstract final class AppDesktop {
   static const lightVeil = Color(0xF2FFFFFF);
   static Color veil(Brightness brightness) =>
       brightness == Brightness.dark ? darkVeil : lightVeil;
-
-  /// The chat's picture viewer: a see-through dark veil in both appearances,
-  /// as a picture reads best on dark (River, 11-04), and the ink and control
-  /// fills drawn on it. The one exception to [veil]
-  /// (desktop-design-system.md).
-  static const mediaVeil = Color(0xF2000000);
-  static const mediaInk = Color(0xFFFFFFFF);
-  static const mediaInkMuted = Color(0xB3FFFFFF);
-  static const mediaControl = Color(0x26FFFFFF);
-  static const mediaControlHover = Color(0x40FFFFFF);
 }
 
 /// Desktop feedback is visible on the next frame. Keep these shared names so

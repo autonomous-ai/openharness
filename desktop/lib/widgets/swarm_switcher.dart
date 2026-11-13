@@ -28,18 +28,15 @@ import '../state/app_state.dart';
 import '../state/swarm_navigation.dart';
 import '../state/session_content_search.dart';
 import '../state/session_activity.dart';
-import '../super_tabs/visible_tick.dart';
+import 'visible_tick.dart';
 import '../state/swarm_search.dart';
-import '../models/api_connections_controller.dart' show contextWindowLabel;
 import '../models/model_search_catalog.dart';
-import '../models/swarm_models_target.dart' show swarmSharedWithYouShown;
 import '../state/harness_sessions.dart'
     show SessionFilter, harnessActivityTooltip;
 import '../store/store_mark.dart';
 import 'engine_identity.dart';
 import 'session_activity_label.dart';
 import 'swarm_icon.dart';
-import 'swarm_model_tile.dart';
 import 'swarm_search_preview.dart';
 import 'swarm_resource_preview.dart';
 import 'key_hints.dart';
@@ -571,7 +568,6 @@ class SwarmSearchResults extends StatefulWidget {
     required this.onChoose,
     required this.onRefocus,
     this.sideBySideMinWidth = 800,
-    this.fitRows = false,
     this.terminal = false,
     this.bios = false,
     this.header,
@@ -584,10 +580,6 @@ class SwarmSearchResults extends StatefulWidget {
   final ValueChanged<SwarmSearchSelection> onChoose;
   final VoidCallback onRefocus;
   final double sideBySideMinWidth;
-
-  /// Let the overlay shrink to whole rows after its editor and hints have
-  /// taken their actual heights, including larger text and warning messages.
-  final bool fitRows;
   final bool terminal;
   final bool bios;
   final Widget? header;
@@ -685,16 +677,8 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults>
       // An empty section still says it is there, so there is somewhere to add to — except the
       // downloads, which a machine with the whole catalog, or none, has nothing under, and what is
       // shared with you while Grid is not set up: the Set up row under Your models stands for it.
-      // A Swarm's Local models have no Subscriptions: nothing in one can be given to a Swarm.
-      if (search.swarmModels != null &&
-          (section == ModelSearchSection.subscriptions ||
-              (!swarmSharedWithYouShown &&
-                  section == ModelSearchSection.shared))) {
-        continue;
-      }
       if (indices.isEmpty &&
           (search.matchQuery.trim().isNotEmpty ||
-              search.modelScope != null ||
               section == ModelSearchSection.catalog ||
               (section == ModelSearchSection.shared &&
                   search.gridSetupOffered))) {
@@ -717,46 +701,12 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults>
     if (!_desktopRows) return _rowHeight;
     final index = item.index;
     if (index == null) {
-      return item.heading != null
-          ? _modelHeadingHeight
-          : search.isSwarmModels
-          ? 0
-          : 8;
+      return item.heading != null ? _modelHeadingHeight : 8;
     }
     // A shared model's row is two lines: its name, and the machine serving it under it.
-    return !search.isSwarmModels &&
-            search.modelRowNameEnd(search.rows[index]) != null
+    return search.modelRowNameEnd(search.rows[index]) != null
         ? _twoLineRowHeight
         : _rowHeight;
-  }
-
-  double _fittedHeight(
-    BoxConstraints constraints, {
-    required bool sideBySide,
-    required bool unavailable,
-  }) {
-    final hasPreview = widget.showPreview && search.hasPreview;
-    final stacked = hasPreview && !sideBySide;
-    if (stacked && search.resultsFromBottom) return constraints.maxHeight;
-    final available = stacked
-        ? (constraints.maxHeight - 8) * 5 / 11
-        : constraints.maxHeight;
-    final chrome = 16.0 + (unavailable ? 48 : 0);
-    final capacity = ((available - chrome) / _rowHeight).floor();
-    // A window too short for one row can only scroll a partial row.
-    if (capacity < 1) return constraints.maxHeight;
-    // Ten recent sessions plus the pinned New Harness row on a roomy screen.
-    // The measured capacity below still reduces this for smaller windows.
-    final maxRows = search.resultsFromBottom
-        ? 11
-        : widget.terminal
-        ? 9
-        : 12;
-    final count = hasPreview
-        ? capacity.clamp(1, maxRows)
-        : search.rows.length.clamp(1, capacity.clamp(1, maxRows));
-    final listHeight = chrome + count * _rowHeight;
-    return stacked ? 8 + listHeight * 11 / 5 : listHeight;
   }
 
   @override
@@ -915,15 +865,6 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults>
   }
 
   void _submit([SwarmDestination? row]) {
-    // In a Swarm's Local models a click chooses a model to read about: what it does to the Swarm (an API shared on
-    // the person's key and credits) is the preview's button, or Return, once its preview has been seen.
-    if (row != null &&
-        search.swarmModels != null &&
-        search.swarmModelAction(row) != null) {
-      _focusResult(row.id);
-      widget.onRefocus();
-      return;
-    }
     final choice = search.submit(row);
     if (choice != null) {
       widget.onChoose(choice);
@@ -1060,30 +1001,14 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults>
               ? oneLine.clamp(48, double.infinity)
               : _twoLineRowHeight;
         }
-        // A Swarm's Your models: two lines a row (its name, then what it is), under headings that read as headings.
-        final swarmRows = desktop && search.isSwarmModels;
-        if (swarmRows) {
-          _rowHeight = math.max(
-            58,
-            scale.scale(13) * 1.4 + scale.scale(12) * 1.4 + 26,
-          );
-        }
         // A phone's row is a finger tall, one line or two: its slot also
         // holds the 2 px either side of a desktop row's fill.
         if (workspaceIsCompact(context)) {
           _rowHeight = math.max(_rowHeight, kFingerTarget + 4);
         }
         _desktopRows = desktop;
-        _modelHeadingHeight = swarmRows
-            ? scale.scale(12) * 1.4 + 26
-            : scale.scale(12) * 1.45 + 12;
-        final height = widget.fitRows
-            ? _fittedHeight(
-                constraints,
-                sideBySide: sideBySide,
-                unavailable: unavailable,
-              )
-            : constraints.maxHeight;
+        _modelHeadingHeight = scale.scale(12) * 1.45 + 12;
+        final height = constraints.maxHeight;
         final compactAction =
             (sideBySide ? constraints.maxWidth / 2 : constraints.maxWidth) <
             380 * scale.scale(grid.AppType.monoSize) / grid.AppType.monoSize;
@@ -1148,16 +1073,6 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults>
             row.isModel ? search.modelRowAction(row) : null,
             row.isModel ? search.canSelectModel(row) : null,
             row.isModel ? search.canGetModel(row) : null,
-            // A Swarm's row says what it is to the Swarm, which changes with nothing above: a share, a run.
-            swarmRows
-                ? (
-                    search.modelRowStatus(row),
-                    search.modelRowLive(row),
-                    search.swarmApiShareCount(row),
-                    search.apiRowState(row),
-                    search.wordsQuery,
-                  )
-                : null,
             details,
           );
           final previous = _rowWidgets.remove(row.id);
@@ -1168,32 +1083,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults>
               child: previous.child,
             );
           }
-          final tile = swarmRows
-              ? Semantics(
-                  selected: selected,
-                  enabled: canSubmit,
-                  button: true,
-                  child: InkWell(
-                    key: ValueKey(row.id),
-                    onFocusChange: (focused) {
-                      if (focused) _focusResult(row.id);
-                    },
-                    onTap: canSubmit ? () => _submit(row) : null,
-                    borderRadius: BorderRadius.circular(9),
-                    hoverColor: DesktopChrome.foreground.withValues(
-                      alpha: .045,
-                    ),
-                    focusColor: Colors.transparent,
-                    highlightColor: Colors.transparent,
-                    splashFactory: NoSplash.splashFactory,
-                    child: _SwarmModelRow(
-                      search: search,
-                      row: row,
-                      enabled: canSubmit,
-                    ),
-                  ),
-                )
-              : widget.bios
+          final tile = widget.bios
               ? Semantics(
                   selected: selected,
                   enabled: canSubmit,
@@ -1442,32 +1332,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults>
                   _focusResult(row.id);
                 }
               },
-              child: swarmRows
-                  ? Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 2),
-                      child: Material(
-                        key: ValueKey('swarm-search-line:${row.id}'),
-                        // A tint and an edge in the accent, not a solid bar: the row keeps its own colours,
-                        // so its status still reads while it is chosen.
-                        color: highlighted
-                            ? DesktopChrome.accent.withValues(alpha: .16)
-                            : selected && search.managing
-                            ? grid.AppSurface.selectedFill
-                            : Colors.transparent,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(9),
-                          side: highlighted
-                              ? BorderSide(
-                                  color: DesktopChrome.accent.withValues(
-                                    alpha: .55,
-                                  ),
-                                )
-                              : BorderSide.none,
-                        ),
-                        child: tile,
-                      ),
-                    )
-                  : desktop
+              child: desktop
                   ? Padding(
                       padding: const EdgeInsets.symmetric(vertical: 2),
                       child: Material(
@@ -1544,12 +1409,6 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults>
                                   ? 'No matching projects'
                                   : search.isMachineMode
                                   ? 'No matching machines'
-                                  // A picker that brings an agent into a Swarm (Attach) speaks of agents, and its
-                                  // empty list says nothing.
-                                  : search.harnessContext != null
-                                  ? (search.query.isEmpty
-                                        ? ''
-                                        : 'No matching agents')
                                   // The footer says the tab is full.
                                   : search.adding &&
                                         search.query.isEmpty &&
@@ -1629,14 +1488,6 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults>
                                 }
                                 if (item.heading == null) {
                                   return const SizedBox();
-                                }
-                                if (swarmRows) {
-                                  return _SwarmModelHeading(
-                                    key: ValueKey<String>(item.key!),
-                                    search: search,
-                                    heading: item.heading!,
-                                    sectionKey: item.key!,
-                                  );
                                 }
                                 return Semantics(
                                   header: true,
@@ -1817,12 +1668,9 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults>
                 ],
               )
             : content;
-        final sized = widget.fitRows
-            ? SizedBox(height: height, child: withAction)
-            : withAction;
         final fitted = FocusTraversalGroup(
           policy: OrderedTraversalPolicy(),
-          child: sized,
+          child: withAction,
         );
         if (KeymapTheme.of(context) == null) return fitted;
         // The early keymap handler owns these keys across the whole picker.
@@ -1878,8 +1726,6 @@ class _SearchInventoryEmptyState extends StatelessWidget {
             ? 'machines'
             : search.isProjectMode
             ? 'projects'
-            : search.harnessContext != null
-            ? 'agents'
             : 'harnesses';
         void retry() {
           if (!app.machinesLoading && !app.machinesRefreshing) {
@@ -2764,236 +2610,6 @@ class SwarmSearchCount extends StatelessWidget {
           ),
         );
       },
-    );
-  }
-}
-
-/// A section heading of a Swarm's Your models: its title, how many it holds, a rule, and a note at the right.
-class _SwarmModelHeading extends StatelessWidget {
-  const _SwarmModelHeading({
-    super.key,
-    required this.search,
-    required this.heading,
-    required this.sectionKey,
-  });
-
-  final SwarmSearchController search;
-  final String heading;
-  final String sectionKey;
-
-  @override
-  Widget build(BuildContext context) {
-    final section = ModelSearchSection.values
-        .where((s) => 'model-section:${s.label}' == sectionKey)
-        .firstOrNull;
-    final count = section == null
-        ? 0
-        : search.rows
-              .where(
-                (row) =>
-                    search.modelSection(row) == section &&
-                    !row.isCreate &&
-                    !search.isModelDownloadsRow(row) &&
-                    !search.isApiModelRow(row) &&
-                    !search.isGridSetupRow(row),
-              )
-              .length;
-    final (:title, :note) = swarmModelHeading(section, heading);
-    return Semantics(
-      header: true,
-      label: '$title, $count',
-      excludeSemantics: true,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(10, 18, 10, 8),
-        child: Row(
-          children: [
-            Text(
-              title,
-              maxLines: 1,
-              style: DesktopChrome.text(
-                size: 12,
-                medium: true,
-                height: 1.4,
-              ).copyWith(fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6),
-              decoration: BoxDecoration(
-                color: DesktopChrome.foreground.withValues(alpha: .07),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Text(
-                '$count',
-                style: DesktopChrome.text(
-                  size: 11,
-                  medium: true,
-                  height: 1.45,
-                  color: DesktopChrome.muted,
-                ).copyWith(fontFeatures: const [FontFeature.tabularFigures()]),
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(child: Divider(height: 1, color: DesktopChrome.rim)),
-            if (note != null) ...[
-              const SizedBox(width: 10),
-              Text(
-                note,
-                maxLines: 1,
-                style: DesktopChrome.text(
-                  size: 11,
-                  height: 1.4,
-                  color: DesktopChrome.muted,
-                ),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// A row of a Swarm's Your models: its mark, its name over what it is, and what it is to the Swarm.
-class _SwarmModelRow extends StatelessWidget {
-  const _SwarmModelRow({
-    required this.search,
-    required this.row,
-    required this.enabled,
-  });
-
-  final SwarmSearchController search;
-  final SwarmDestination row;
-  final bool enabled;
-
-  /// The row's second line: where an API is and what it holds; a model's size and the app it runs in.
-  String? _detail(SwarmModelKind kind) {
-    final entry = search.models?.entries[row.modelId];
-    switch (kind) {
-      case SwarmModelKind.add:
-        return 'Any OpenAI-compatible API, with its key';
-      case SwarmModelKind.more:
-        return null;
-      case SwarmModelKind.api:
-        return entry?.api?.host;
-      case SwarmModelKind.apiModel:
-        return [
-          if (entry?.apiModel?.contextWindow case final window?)
-            '${contextWindowLabel(window)} context',
-          ?entry?.api?.name,
-        ].join(' · ');
-      case SwarmModelKind.shared:
-        return entry?.sharedBy ?? entry?.source;
-      default:
-        final local = entry?.local;
-        return [
-          if (local?.sizeBytes case final size?) gigabytesLabel(size),
-          ?local?.app,
-        ].join(' · ');
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    grid.AppTheme.watch(context);
-    final kind = swarmModelKind(search, row);
-    final entry = search.models?.entries[row.modelId];
-    final title = row.isCreate
-        ? 'Add API connection'
-        : kind == SwarmModelKind.shared
-        ? entry?.name ?? row.title
-        : search.modelRowTitle(row);
-    final api = search.apiRowState(row);
-    final shares = search.swarmApiShareCount(row);
-    var status = search.modelRowStatus(row);
-    // An action word (Get) is the preview's button, not a state: the row says nothing then.
-    if (status != null && status == search.modelRowAction(row)) status = null;
-    if (shares != null) status = shares > 0 ? '$shares shared' : null;
-    final live =
-        (shares ?? 0) > 0 ||
-        search.modelRowLive(row) ||
-        const {'In Swarm', 'Shared', 'Offered'}.contains(status);
-    final detail = [
-      ?_detail(kind),
-      ?api?.hint,
-    ].where((part) => part.isNotEmpty).join(' · ');
-    final terms = swarmQueryTerms(search.wordsQuery);
-    final ink = enabled ? DesktopChrome.foreground : DesktopChrome.muted;
-    return Semantics(
-      label: [title, if (detail.isNotEmpty) detail, ?status].join(', '),
-      excludeSemantics: true,
-      child: Padding(
-        padding: EdgeInsets.fromLTRB(
-          kind == SwarmModelKind.apiModel ? 28 : 10,
-          8,
-          10,
-          8,
-        ),
-        child: Row(
-          children: [
-            SwarmModelTile(
-              kind: kind,
-              size: kind == SwarmModelKind.apiModel ? 24 : 30,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SearchResultText(
-                    title,
-                    matches: searchResultMatches(
-                      row,
-                      terms,
-                    ).where((match) => match.title),
-                    style: DesktopChrome.text(
-                      size: 13,
-                      medium: true,
-                      height: 1.4,
-                      color: kind == SwarmModelKind.add
-                          ? DesktopChrome.accent
-                          : ink,
-                    ),
-                  ),
-                  if (detail.isNotEmpty)
-                    Text(
-                      detail,
-                      key: api != null
-                          ? ValueKey('api-row-hint:${row.id}')
-                          : null,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: DesktopChrome.text(
-                        size: 12,
-                        height: 1.4,
-                        color: DesktopChrome.muted,
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            if (status != null) ...[
-              const SizedBox(width: 10),
-              SwarmModelPill(
-                status,
-                live: live,
-                failed: search.modelRowFailed(row),
-                textKey: ValueKey('model-row-status:${row.id}'),
-              ),
-            ],
-            if (api != null) ...[
-              const SizedBox(width: 6),
-              Icon(
-                key: ValueKey('api-row-marker:${row.id}'),
-                api.open ? AppIcons.chevronDown : AppIcons.chevronRight,
-                size: 16,
-                color: DesktopChrome.muted,
-              ),
-            ],
-          ],
-        ),
-      ),
     );
   }
 }

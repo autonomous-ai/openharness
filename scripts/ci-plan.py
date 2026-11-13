@@ -71,7 +71,7 @@ DEPENDS = {
     "backend": ("cli/src/lib/productHealthContract.ts", "cli/src/lib/productUsageContract.ts",
                 "cli/src/lib/superTabAttachmentProxy.ts", "cli/src/superTabs/attachments.ts", "cli/src/superTabs/command.ts",
                 "daemons/frames.json",
-                "desktop/lib/measurement/", "desktop/lib/super_tabs/attachment_upload.dart", "mobile/lib/measurement/",
+                "desktop/lib/measurement/", "mobile/lib/measurement/",
                 "provider/reference-provider/", "tests/fixtures/"),
     # CLAUDE.md: agentInstructions.spec.ts expects '../../../CLAUDE.md' in a temporary project, and a relative path always
     # counts as a read; the repository's own CLAUDE.md is a one-line pointer that rarely changes.
@@ -115,7 +115,7 @@ PR_READS = {
     "backend": ("cli/src/lib/productHealthContract.ts", "cli/src/lib/productUsageContract.ts",
                 "cli/src/lib/superTabAttachmentProxy.ts", "cli/src/superTabs/attachments.ts", "cli/src/superTabs/command.ts",
                 "daemons/frames.json",
-                "desktop/lib/measurement/", "desktop/lib/super_tabs/attachment_upload.dart", "mobile/lib/measurement/",
+                "desktop/lib/measurement/", "mobile/lib/measurement/",
                 "provider/reference-provider/", "tests/fixtures/"),
     # CLAUDE.md: agentInstructions.spec.ts expects '../../../CLAUDE.md' in a temporary project, and a relative path always
     # counts as a read; the repository's own CLAUDE.md is a one-line pointer that rarely changes.
@@ -146,9 +146,9 @@ PR_READS = {
                 "cli/src/lib/__fixtures__/github-repository-vectors.json", "cli/src/lib/e2ee/applicationFrames.ts",
                 "cli/src/lib/e2ee/core.ts", "cli/src/lib/engineInstall.ts", "cli/src/lib/engineLaunch.ts",
                 "cli/src/lib/relayFrames.ts", "cli/src/lib/shellProtocol.ts", "cli/src/lib/viewerFrames.ts",
-                # The Windows pipe's shared proof vectors; the goal file's rows (desktop/test/swarm_goal_test.dart).
+                # The Windows pipe's shared proof vectors.
                 "cli/src/lib/windows/__fixtures__/pipe-auth-vectors.json", "cli/src/messages/wire.ts",
-                "cli/src/sharing/protocol.ts", "cli/src/superTabs/__fixtures__/goal-rows.json", "daemons/frames.json", "docs/images/",
+                "cli/src/sharing/protocol.ts", "daemons/frames.json", "docs/images/",
                 "daemons/plates.json",
                 "daemons/roster.json", "daemons/tools/illustrated/appearance.py", "daemons/tools/illustrated/daemon_art.py",
                 "daemons/tools/illustrated/generate.py", "mobile/lib/e2ee/relay_session_crypto.dart",
@@ -221,9 +221,6 @@ NOT_READS = {
                                                   "checkout holds, each declared in ci.SOURCE_INPUTS", {"mobile/"}),
     "desktop/test/community_publish_test.dart": ("test data: a file in a temporary folder", {"docs/"}),
     "desktop/test/runtime_model_name_test.dart": ("test data: a model name", {"provider/"}),
-    "desktop/test/swarm_instructions_shared_test.dart": ("test data: a project's instruction file names",
-                                                         {"AGENTS.md", "CLAUDE.md"}),
-    "desktop/test/super_tab_read_fixtures/first_load.json": ("test data: a task's owned paths", {"docs/design/"}),
     "mobile/lib/demo/sample_scripts.dart": ("demo transcript text", {"tests/"}),
     "os/tests/build-update-fixture.py": ("the CLI bundle a hand-run build copies from its work folder", {"cli/"}),
     "tui/src/runtime_model.rs": ("test data: a model name", {"provider/"}),

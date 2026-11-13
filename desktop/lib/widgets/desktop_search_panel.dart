@@ -99,8 +99,7 @@ class DesktopSearchPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     // Only a host that can go compact (the web) pages its results; Desktop,
     // which sets no compactBelow, builds the panel as it always has.
-    if (search.harnessContext != null ||
-        WorkspaceChrome.of(context).compactBelow <= 0) {
+    if (WorkspaceChrome.of(context).compactBelow <= 0) {
       return _panel(context, null);
     }
     return _SearchPages(
@@ -149,47 +148,13 @@ class DesktopSearchPanel extends StatelessWidget {
       child: Align(
         alignment: Alignment.topCenter,
         child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxWidth: search.harnessContext == null ? maxWidth : 680,
-            maxHeight: maxHeight,
-          ),
+          constraints: BoxConstraints(maxWidth: maxWidth, maxHeight: maxHeight),
           child: DesktopDialogSurface(
             key: const ValueKey('swarm-search-results'),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                if (search.harnessContext case final purpose?)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(24, 20, 24, 4),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Tooltip(
-                          message: purpose.title,
-                          child: Text(
-                            purpose.title,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: DesktopChrome.heading(),
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Tooltip(
-                          message: purpose.description,
-                          child: Text(
-                            purpose.description,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: DesktopChrome.text(
-                              size: 13,
-                              color: DesktopChrome.muted,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
                 if (search.split != null)
                   Padding(
                     padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
@@ -251,7 +216,7 @@ class DesktopSearchPanel extends StatelessWidget {
                       ),
                       // A phone's preview is a page of its own: nothing to
                       // show or hide beside the list.
-                      if (search.harnessContext == null && pages == null)
+                      if (pages == null)
                         ListenableBuilder(
                           listenable: search,
                           builder: (context, _) => _toolbarButton(
@@ -283,45 +248,41 @@ class DesktopSearchPanel extends StatelessWidget {
                     ],
                   ),
                 ),
-                if (search.harnessContext == null)
-                  ListenableBuilder(
-                    listenable: search,
-                    builder: (context, _) => SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      padding: const EdgeInsets.fromLTRB(20, 2, 20, 14),
-                      child: Row(
-                        spacing: 6,
-                        children: [
-                          if (showsBack && search.canGoBack)
-                            DesktopPill(
-                              key: const ValueKey('search-back'),
-                              label: 'Back',
-                              leading: const Icon(
-                                AppIcons.chevronLeft,
-                                size: 14,
-                              ),
-                              capsule: true,
-                              quiet: true,
-                              onPressed: () {
-                                if (search.back()) onRefocus();
-                              },
-                            ),
-                          _SearchScopes(
-                            selected: _prefix,
-                            onRefocus: onRefocus,
-                            onChanged: (prefix) {
-                              final words = search.wordsQuery;
-                              search.setQuery(
-                                prefix.isEmpty
-                                    ? words
-                                    : '$prefix $words'.trimRight(),
-                              );
+                ListenableBuilder(
+                  listenable: search,
+                  builder: (context, _) => SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.fromLTRB(20, 2, 20, 14),
+                    child: Row(
+                      spacing: 6,
+                      children: [
+                        if (showsBack && search.canGoBack)
+                          DesktopPill(
+                            key: const ValueKey('search-back'),
+                            label: 'Back',
+                            leading: const Icon(AppIcons.chevronLeft, size: 14),
+                            capsule: true,
+                            quiet: true,
+                            onPressed: () {
+                              if (search.back()) onRefocus();
                             },
                           ),
-                        ],
-                      ),
+                        _SearchScopes(
+                          selected: _prefix,
+                          onRefocus: onRefocus,
+                          onChanged: (prefix) {
+                            final words = search.wordsQuery;
+                            search.setQuery(
+                              prefix.isEmpty
+                                  ? words
+                                  : '$prefix $words'.trimRight(),
+                            );
+                          },
+                        ),
+                      ],
                     ),
                   ),
+                ),
                 if (pages != null)
                   Flexible(
                     child: pages.view(
@@ -358,7 +319,6 @@ class DesktopSearchPanel extends StatelessWidget {
                         onRefocus: onRefocus,
                         // Keep the dialog, editor, and footer stationary while a
                         // query gains a preview or changes to an empty result.
-                        fitRows: search.harnessContext != null,
                         // The scope control already explains the empty search.
                         // Give results the full width until there is a preview.
                         showPreview: !search.showsTypeHints,
@@ -369,34 +329,7 @@ class DesktopSearchPanel extends StatelessWidget {
                   ),
                   if (hooks != null) machineFooter(hooks),
                 ],
-                if (search.harnessContext != null) ...[
-                  Divider(height: 1, color: DesktopChrome.rim),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 24,
-                      vertical: 12,
-                    ),
-                    child: Row(
-                      children: [
-                        if (KeyHints.visibleOf(context))
-                          _hint(context, 'picker.cancel', 'Close'),
-                        const Spacer(),
-                        ListenableBuilder(
-                          listenable: search,
-                          builder: (context, _) => FilledButton(
-                            onPressed: search.canAccept
-                                ? () {
-                                    final choice = search.submit();
-                                    if (choice != null) onChoose(choice);
-                                  }
-                                : null,
-                            child: Text(search.actionLabel(search.selected)),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ] else if (KeyHints.visibleOf(context)) ...[
+                if (KeyHints.visibleOf(context)) ...[
                   Divider(height: 1, color: DesktopChrome.rim),
                   Padding(
                     padding: const EdgeInsets.symmetric(

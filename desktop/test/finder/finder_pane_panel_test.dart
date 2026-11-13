@@ -229,7 +229,7 @@ void main() {
     expect(widths.last, 265);
   });
 
-  // An empty list shows nothing (design doc, Swarm elements rule 7).
+  // An empty list shows nothing (design doc, Type and language rule 7).
   testWidgets('Changes with nothing changed shows nothing', (tester) async {
     await pumpPanel(tester);
     git.current = [];

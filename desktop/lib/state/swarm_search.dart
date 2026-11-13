@@ -9,7 +9,6 @@ import '../models/api_connections_controller.dart'
     show ApiConnection, ApiModel, agentOnApiModel;
 import '../models/local_model.dart';
 import '../models/model_search_catalog.dart';
-import '../models/swarm_models_target.dart';
 import '../usage/models_menu_controller.dart' show subscriptionSearchId;
 import '../usage/usage_account_key.dart';
 import '../core/dsh_catalog.dart';
@@ -20,7 +19,6 @@ import '../core/models.dart'
 import '../core/relative_time.dart';
 
 import 'account_devices.dart' show AccountDevice;
-import '../super_tabs/swarm_name.dart';
 import 'app_state.dart';
 import '../core/first_task.dart';
 import 'harness_placement.dart';
@@ -36,24 +34,6 @@ const kSwarmSearchHint = 'Search harnesses';
 const kHarnessPickerHint = kSwarmSearchHint;
 
 const kSwarmCreateRowId = 'create:harness';
-
-/// A session picker can choose a contribution without opening a native pane.
-/// The caller owns that purpose and revalidates its authority on submission.
-class HarnessPickerContext {
-  const HarnessPickerContext({
-    required this.title,
-    required this.description,
-    required this.action,
-    required this.unavailable,
-    this.hidden,
-  });
-  final String title, description, action;
-  final String? Function(SwarmDestination) unavailable;
-
-  /// Rows the picker never lists, whichever source they come from: a running
-  /// agent on this machine or one the Swarm shares.
-  final bool Function(SwarmDestination)? hidden;
-}
 
 /// The Machines picker's two runs of rows: the account's computers, then its phones and apps.
 enum MachineSearchSection {
@@ -106,9 +86,6 @@ class SwarmSearchController extends ChangeNotifier {
     this.offersHarnessCreate = true,
     this.resultsFromBottom = false,
     this.noteFor,
-    this.additionalDestinations = const [],
-    this.swarmModels,
-    this.harnessContext,
     this._placement,
     this._split,
     bool previewInitiallyVisible = true,
@@ -118,12 +95,8 @@ class SwarmSearchController extends ChangeNotifier {
        _cache = catalog ?? SwarmSearchCatalog(),
        _locations = locations ?? SwarmLocationCatalog(),
        targetId = app.activeSwarmId,
-       targetName =
-           swarmTabShownName(app, app.activeSwarm) ?? app.activeSwarm.name {
-    if (activityFirst &&
-        history == null &&
-        !navigating &&
-        harnessContext == null) {
+       targetName = app.activeSwarm.name {
+    if (activityFirst && history == null && !navigating) {
       _content = SessionContentSearch(
         machines: () => app.searchableMachineIds,
         ask: (machineId, words, when) =>
@@ -145,14 +118,8 @@ class SwarmSearchController extends ChangeNotifier {
   /// A line the box answers a query with, shown as the first row and never
   /// taken by Return (the daemons' easter words: `xyzzy`).
   final String? Function(String query)? noteFor;
-  final List<SwarmDestination> additionalDestinations;
-  final HarnessPickerContext? harnessContext;
   final SwarmProjectStore? projects;
   final ModelSearchCatalog? models;
-
-  /// Set when these Models are a Swarm's Local models ([SwarmModelsTarget]): no Subscriptions, and a model's action
-  /// puts it on the Swarm's grid ([swarmModelAction]) rather than starting a harness on it.
-  final SwarmModelsTarget? swarmModels;
   bool modelDownloadsVisible = false;
   bool isModelDownloadsRow(SwarmDestination? row) =>
       isModelMode && row?.id == 'model:downloads';
@@ -323,24 +290,6 @@ class SwarmSearchController extends ChangeNotifier {
     final catalog = models;
     final entry = catalog?.entries[row.modelId];
     if (entry == null || catalog == null) return null;
-    // A Swarm's Local models say what each row is to the Swarm.
-    if (swarmModels case final swarm?) {
-      final local = entry.local;
-      final owner = entry.controller ?? catalog.manager;
-      if (local != null &&
-          (owner.operationFor(local)?.active == true ||
-              owner.pendingId == local.id)) {
-        return catalog.localStatusWord(local, controller: owner);
-      }
-      if (local?.servedOn(swarm.grid) == true) return 'In Swarm';
-      if (entry.apiModel case final model?) {
-        return swarm.shared(entry.api!.id, model.id) ? 'Shared' : null;
-      }
-      if (entry.gridModel case GridModel(:final id, grid: final sharedGrid?)
-          when local == null) {
-        return swarm.offered(sharedGrid, id) ? 'Offered' : null;
-      }
-    }
     if (modelRowInUse(row)) return inUseWord;
     // An API's model says what Enter does on it — Use, when this pane can run on it, else nothing.
     // Its entry's status is only the API's name, which the row it sits under already shows.
@@ -474,107 +423,6 @@ class SwarmSearchController extends ChangeNotifier {
         owner.machine?.connectionStatus == ConnectionStatus.connected &&
         owner.machine?.needsLink == false &&
         (owner.targetMachineId == null || owner.machine?.isOffline == false);
-  }
-
-  /// What a model row does in a Swarm's Local models ([swarmModels]): a model of this person's machines runs for the
-  /// Swarm or stops (Get first, when it is not downloaded); an API's model is shared with the Swarm or no longer. Null
-  /// outside a Swarm, and for a row with nothing to do: an API's own row (it opens its models), a model shared with the
-  /// person (agents on their machines use it as it is), a download under way (the preview's Cancel).
-  ({String label, String command, Future<String?> Function()? run})?
-  swarmModelAction(SwarmDestination? row) {
-    final action = _swarmModelAction(row);
-    final swarm = swarmModels;
-    // Before the Swarm's models are set up, the owner's first share or run sets them up, then does it; a download needs
-    // nothing of the Swarm. Anyone else waits for the owner (the preview says so).
-    if (action == null ||
-        swarm == null ||
-        !swarm.setupNeeded ||
-        action.command == 'picker.model_download') {
-      return action;
-    }
-    final run = action.run;
-    return (
-      label: swarm.settingUp ? 'Setting up…' : action.label,
-      command: action.command,
-      run: run == null || !swarm.canSetUp || swarm.settingUp
-          ? null
-          : () async {
-              final error = await swarm.whenSetUp(run);
-              // A set up that failed is said in the preview, once; what the share or run itself answered is said here.
-              return swarm.setupNeeded ? null : error;
-            },
-    );
-  }
-
-  ({String label, String command, Future<String?> Function()? run})?
-  _swarmModelAction(SwarmDestination? row) {
-    final swarm = swarmModels;
-    final entry = models?.entries[row?.modelId];
-    if (swarm == null || entry == null) return null;
-    if (entry.local case final local?) {
-      final owner = entry.controller ?? models!.manager;
-      if (owner.downloading(local)) return null;
-      final ready =
-          !owner.busy &&
-          owner.inventoryAvailable &&
-          owner.machine?.connectionStatus == ConnectionStatus.connected &&
-          owner.machine?.needsLink == false &&
-          (owner.targetMachineId == null || owner.machine?.isOffline == false);
-      // The Swarm's grid is read when the action runs: a first run sets the Swarm's models up, and names it then.
-      Future<String?> Function() act(String action, {bool forSwarm = false}) =>
-          () async {
-            // What control answers: the read after it clears [owner.error], and a refused Run for Swarm said nothing.
-            return await owner.control(
-                  local,
-                  action,
-                  grid: forSwarm ? swarm.grid : null,
-                ) ??
-                owner.error;
-          };
-      if (local.servedOn(swarm.grid)) {
-        return (
-          label: 'Stop for Swarm',
-          command: 'picker.model_stop',
-          run: ready ? act('stop', forSwarm: true) : null,
-        );
-      }
-      // A model small or slow for a coding agent is offered all the same; its preview says so (coding_model.dart).
-      if (!local.downloaded && !local.canStop) {
-        return (
-          label: 'Get',
-          command: 'picker.model_download',
-          run: ready && local.canStart && owner.supportsDownload
-              ? act('download')
-              : null,
-        );
-      }
-      return (
-        label: 'Run for Swarm',
-        command: 'picker.model_start',
-        run: ready && local.canStart ? act('start', forSwarm: true) : null,
-      );
-    }
-    if (entry.apiModel case final model?) {
-      final api = entry.api!;
-      final on = swarm.shared(api.id, model.id);
-      return (
-        label: on ? 'Stop sharing' : 'Share with Swarm',
-        command: 'picker.accept',
-        run: () => swarm.share(api.id, model.id, start: !on),
-      );
-    }
-    // A model shared with the person, on someone else's grid: offering it lets agents in this Swarm run on their
-    // machines on it (owner, 2026-10-23: a choice, as running a model or sharing an API is).
-    if (entry.gridModel case GridModel(:final id, grid: final sharedGrid?)
-        when entry.api == null) {
-      final on = swarm.offered(sharedGrid, id);
-      return (
-        label: on ? 'Stop offering' : 'Offer to Swarm',
-        command: 'picker.accept',
-        run: () => swarm.offer(sharedGrid, id, start: !on),
-      );
-    }
-    return null;
   }
 
   Future<String?> getModel(SwarmDestination row) async {
@@ -1109,8 +957,7 @@ class SwarmSearchController extends ChangeNotifier {
   /// visible and make subsequent creation target the workspace that remains.
   void followRemainingWorkspace() {
     targetId = app.activeSwarmId;
-    targetName =
-        swarmTabShownName(app, app.activeSwarm) ?? app.activeSwarm.name;
+    targetName = app.activeSwarm.name;
     _refresh(force: true);
   }
 
@@ -1171,8 +1018,7 @@ class SwarmSearchController extends ChangeNotifier {
   HarnessPlacement? get placement => _placement;
   PaneSplitRequest? _split;
   PaneSplitRequest? get split => _split;
-  bool get allowsCommands =>
-      harnessContext == null && history == null && !navigating;
+  bool get allowsCommands => history == null && !navigating;
   bool get isCommandMode =>
       allowsCommands && (commandsOnly || query.trimLeft().startsWith('>'));
 
@@ -1330,9 +1176,7 @@ class SwarmSearchController extends ChangeNotifier {
   bool _previewVisible;
   bool get previewVisible => _previewVisible;
   bool get supportsPreview =>
-      harnessContext == null &&
-      history == null &&
-      (setupLayout || !isCommandMode && !isHelpMode);
+      history == null && (setupLayout || !isCommandMode && !isHelpMode);
   bool get canPreview =>
       supportsPreview &&
       selected != null &&
@@ -1341,7 +1185,6 @@ class SwarmSearchController extends ChangeNotifier {
       rows.any((row) => !row.isCreate);
 
   bool get hasPreview =>
-      harnessContext == null &&
       _previewVisible &&
       (canPreview ||
           setupLayout ||
@@ -1423,8 +1266,7 @@ class SwarmSearchController extends ChangeNotifier {
   /// Cmd-T and Cmd-P change where Enter opens the result, while the query,
   /// highlighted result and project/machine scope remain the person's choices.
   bool changePlacement(HarnessPlacement placement) {
-    if (harnessContext != null ||
-        !adding ||
+    if (!adding ||
         navigating ||
         history != null ||
         targetId != app.activeSwarmId) {
@@ -1441,9 +1283,7 @@ class SwarmSearchController extends ChangeNotifier {
   }
 
   int get capacity {
-    if (harnessContext != null || placement == HarnessPlacement.newTab) {
-      return AppNotifier.maxPanes;
-    }
+    if (placement == HarnessPlacement.newTab) return AppNotifier.maxPanes;
     final target = app.swarms
         .where((swarm) => swarm.id == targetId)
         .firstOrNull;
@@ -1461,8 +1301,7 @@ class SwarmSearchController extends ChangeNotifier {
       sessionFilter == SessionFilter.all &&
       query.trim().isEmpty;
   bool get showsTypeHints => _emptyFinder && selected == null;
-  // A picker that brings an agent into a Swarm (Attach) finds agents, a Swarm's word.
-  String get hint => isAgentMode || harnessContext != null
+  String get hint => isAgentMode
       ? 'Search agents'
       : isCommandMode
       ? 'Search commands'
@@ -1549,18 +1388,13 @@ class SwarmSearchController extends ChangeNotifier {
                 swarm.id == targetId &&
                 !swarm.isUtility &&
                 !swarm.isOrchestrator &&
-                // A Swarm's pickers (Attach, Add agent) bring an agent into
-                // its team, so a full tab limits them no more than [capacity]
-                // does; the Swarm says so if it cannot show a terminal.
-                (harnessContext != null ||
-                    swarm.panes.length < AppNotifier.maxPanes),
+                swarm.panes.length < AppNotifier.maxPanes,
           )) &&
       (split == null || app.isPaneSplitCurrent(split!));
 
   String get commandQuery => query.trimLeft().replaceFirst(_commandPrefix, '');
 
   String get primaryAction =>
-      harnessContext?.action ??
       placement?.action ??
       switch (split?.axis) {
         PaneResizeAxis.x => 'Split right',
@@ -1568,10 +1402,7 @@ class SwarmSearchController extends ChangeNotifier {
         null => 'Open Harness',
       };
 
-  String actionLabel(SwarmDestination? row) =>
-      harnessContext != null && row?.agentId != null
-      ? harnessContext!.action
-      : row?.isAgentChoice == true
+  String actionLabel(SwarmDestination? row) => row?.isAgentChoice == true
       ? 'Change agent'
       : row?.isCreate == true
       ? isModelMode
@@ -1649,8 +1480,8 @@ class SwarmSearchController extends ChangeNotifier {
             selected!.members.isNotEmpty &&
             !_hasMissing(selected!)
       ? 'Everything in it is already open here.'
-      // Adding lists only harnesses (and the create row) and a Swarm's pickers
-      // need no room, so what is left is a tab with no room for another pane.
+      // Adding lists only harnesses (and the create row), so what is left is a
+      // tab with no room for another pane.
       : 'This tab is full. Open a new tab to add more.';
 
   void _refresh({bool force = false}) {
@@ -1660,24 +1491,11 @@ class SwarmSearchController extends ChangeNotifier {
       return;
     }
     final storeChanged = isStoreMode && _refreshStore();
-    final base = navigating
+    final next = navigating
         ? _locations.read(app, projects?.projects ?? const [])
         : history == null
         ? _cache.read(app, projects?.projects ?? const [], recent: recent)
         : [...history!.menuDestinations(app), ...closedWorkDestinations(app)];
-    final merged = additionalDestinations.isEmpty
-        ? base
-        : <String, SwarmDestination>{
-            for (final row in additionalDestinations) row.id: row,
-            for (final row in base) row.id: row,
-          }.values.toList();
-    final hidden = harnessContext?.hidden;
-    final next = hidden == null
-        ? merged
-        : [
-            for (final row in merged)
-              if (!hidden(row)) row,
-          ];
     final splitCurrent = split == null || app.isPaneSplitCurrent(split!);
     if (!force &&
         sessionFilter == SessionFilter.all &&
@@ -1726,17 +1544,6 @@ class SwarmSearchController extends ChangeNotifier {
     if (!isCommandMode) return;
     _filter();
     notifyListeners();
-  }
-
-  /// A contribution's permissions and membership can change without changing
-  /// the native machine catalog. Keep the person's query and selection intact.
-  void refreshAvailability() {
-    if (harnessContext == null) return;
-    if (harnessContext!.hidden != null) {
-      _refresh(force: true);
-    } else {
-      notifyListeners();
-    }
   }
 
   void _modelsChanged() {
@@ -2360,21 +2167,6 @@ class SwarmSearchController extends ChangeNotifier {
           : [...found, ?create];
     }
     if (isModelMode) {
-      // A subscription is one person's own: nothing in it can be given to a Swarm. And what the Swarm's own grid serves
-      // is the Swarm's already, not shared with the person: its models are listed where they come from.
-      if (swarmModels case final swarm?) {
-        rows = rows.where((row) {
-          if (modelSection(row) == ModelSearchSection.subscriptions) {
-            return false;
-          }
-          if (!swarmSharedWithYouShown &&
-              modelSection(row) == ModelSearchSection.shared) {
-            return false;
-          }
-          final entry = models?.entries[row.modelId];
-          return entry?.local != null || entry?.gridModel?.grid != swarm.grid;
-        }).toList();
-      }
       if (matchQuery.trim().isEmpty && _downloadCount > shownDownloads) {
         rows = [...rows, _downloadsRow];
       }
@@ -2431,9 +2223,6 @@ class SwarmSearchController extends ChangeNotifier {
             ? installed
             : order[a.id]!.compareTo(order[b.id]!);
       });
-      if (modelScope case final scope?) {
-        rows = rows.where((row) => modelSection(row) == scope).toList();
-      }
     }
     if (!isCommandMode && !isHelpMode) {
       if (noteFor?.call(query) case final note?) {
@@ -2480,12 +2269,6 @@ class SwarmSearchController extends ChangeNotifier {
                   matchQuery.trim().isNotEmpty)
         ? 1
         : cursor.clamp(0, rows.length - 1);
-    if (harnessContext != null && preferred == null) {
-      final agent = rows.indexWhere(
-        (row) => row.agentId != null && canSubmit(row),
-      );
-      if (agent >= 0) cursor = agent;
-    }
     // Nor on a row Return cannot take: "Already added", dimmed, with its
     // reason stranded at the bottom. Only when the position is ours to pick —
     // a row somebody arrowed to stays theirs.
@@ -2537,29 +2320,6 @@ class SwarmSearchController extends ChangeNotifier {
   /// Subscriptions do, instead of typing a filter the person must delete.
   void openModelSection(ModelSearchSection section) {
     _openSection = section;
-    _filter();
-    notifyListeners();
-  }
-
-  /// The models list of a Swarm's Your models, drawn in its own way (`super_tabs/local_models.dart`).
-  bool get isSwarmModels => isModelMode && swarmModels != null;
-
-  /// How many of the Swarm's APIs' models [row]'s API shares with the Swarm. Null for any row but an API's own.
-  int? swarmApiShareCount(SwarmDestination row) {
-    final swarm = swarmModels;
-    if (swarm == null || !isApiRow(row)) return null;
-    final id = models!.entries[row.modelId]!.api!.id;
-    return swarm.shares.where((key) => key.startsWith('$id\u0000')).length;
-  }
-
-  /// The one model section the list shows, or every section: the scope buttons of a Swarm's Your models.
-  ModelSearchSection? modelScope;
-
-  void setModelScope(ModelSearchSection? section) {
-    if (modelScope == section) return;
-    modelScope = section;
-    cursor = 0;
-    _selectedId = null;
     _filter();
     notifyListeners();
   }
@@ -2651,12 +2411,6 @@ class SwarmSearchController extends ChangeNotifier {
       notifyListeners();
       return null;
     }
-    if (swarmModels != null && destination.isModel) {
-      // Return does what the preview's button does, for the Swarm.
-      final run = swarmModelAction(destination)?.run;
-      if (run != null) unawaited(run());
-      return null;
-    }
     if (destination.isModel &&
         !canSelectModel(destination) &&
         !canGetModel(destination)) {
@@ -2708,9 +2462,6 @@ class SwarmSearchController extends ChangeNotifier {
 
   /// Read live state at activation too: a rendered row can outlive a disconnect.
   String? sessionUnavailable(SwarmDestination? row) {
-    if (harnessContext != null && row?.agentId != null) {
-      return harnessContext!.unavailable(row!);
-    }
     if (row?.external case final external?) {
       // Short: it is a row's note. The preview says what to do about it. Its
       // preview's answer is the fresher, when there is one.
@@ -2785,14 +2536,9 @@ class SwarmSearchController extends ChangeNotifier {
       : row.members.any((id) => !_presentIds.contains(id));
 
   bool alreadyHere(SwarmDestination row) =>
-      harnessContext == null &&
-      adding &&
-      row.agentId != null &&
-      _presentIds.contains(row.id);
+      adding && row.agentId != null && _presentIds.contains(row.id);
 
-  bool canAdd(SwarmDestination? row) => harnessContext != null
-      ? adding && row?.agentId != null && sessionUnavailable(row) == null
-      : row?.external != null
+  bool canAdd(SwarmDestination? row) => row?.external != null
       // A conversation Harness did not start becomes a new harness: room for
       // one more pane, or a tab of its own.
       ? !navigating &&

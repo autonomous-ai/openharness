@@ -5,8 +5,6 @@ import 'package:flutter/material.dart';
 import '../core/models.dart';
 import '../shortcuts/app_keymap.dart';
 import '../state/app_state.dart';
-import '../super_tabs/lead_guard.dart';
-import '../super_tabs/controller.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import 'desktop_chrome.dart';
 import 'desktop_prompt_surface.dart';
@@ -52,11 +50,6 @@ class _StopAgentPrompt extends StatefulWidget {
 }
 
 class _StopAgentPromptState extends State<_StopAgentPrompt> {
-  String? get _protectionReason => superTabLeadProtectionReason(
-    widget.notifier,
-    widget.machineId,
-    widget.agentId,
-  );
   Agent? get _agent => widget.notifier
       .stateOf(widget.machineId)
       ?.agents
@@ -69,7 +62,6 @@ class _StopAgentPromptState extends State<_StopAgentPrompt> {
   final _promptFocus = FocusNode(debugLabel: 'Pending stop');
   final _body = ScrollController();
   final _announcer = BoxAnnouncer();
-  final _observedTabs = <SuperTabController>[];
   late final Future<String?> Function() _requestStop;
   bool _stopping = false;
   String? _error;
@@ -77,10 +69,6 @@ class _StopAgentPromptState extends State<_StopAgentPrompt> {
   @override
   void initState() {
     super.initState();
-    _observedTabs.addAll(widget.notifier.superTabs.loadedControllers);
-    for (final tab in _observedTabs) {
-      tab.addListener(_onTabChanged);
-    }
     _requestStop = widget.notifier.prepareAgentStop(
       widget.machineId,
       widget.agentId,
@@ -89,7 +77,7 @@ class _StopAgentPromptState extends State<_StopAgentPrompt> {
       widget.machineId,
       widget.agentId,
     );
-    if (_protectionReason == null && pending != null) {
+    if (pending != null) {
       _stopping = true;
       unawaited(_finish(pending));
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -100,10 +88,6 @@ class _StopAgentPromptState extends State<_StopAgentPrompt> {
     }
   }
 
-  void _onTabChanged() {
-    if (mounted) setState(() {});
-  }
-
   void _focusCancel() => WidgetsBinding.instance.addPostFrameCallback((_) {
     if (mounted && ModalRoute.of(context)?.isCurrent != false) {
       _cancel.requestFocus();
@@ -112,9 +96,6 @@ class _StopAgentPromptState extends State<_StopAgentPrompt> {
 
   @override
   void dispose() {
-    for (final tab in _observedTabs) {
-      tab.removeListener(_onTabChanged);
-    }
     _cancel.dispose();
     _promptFocus.dispose();
     _body.dispose();
@@ -135,7 +116,7 @@ class _StopAgentPromptState extends State<_StopAgentPrompt> {
   }
 
   void _stop() {
-    if (_stopping || _protectionReason != null) return;
+    if (_stopping) return;
     // The Stop button is removed while pending; keep Escape and custom keys
     // in the prompt instead of letting focus fall back to the terminal.
     _promptFocus.requestFocus();
@@ -202,28 +183,22 @@ class _StopAgentPromptState extends State<_StopAgentPrompt> {
               ],
               const SizedBox(height: DesktopChrome.groupGap),
               Text(
-                _protectionReason ??
-                    (widget.terminal
-                        ? 'End this shell and anything running in it? Files are kept.'
-                        // A cloud agent stops where its maker lets it: Devin Cloud
-                        // and Cursor Cloud sleep; Fo keeps working on its own.
-                        : _cloud != null
-                        ? (_engine == 'fo'
-                              ? 'Stop following this harness here? Fo keeps working on its own, and its conversation is kept.'
-                              : 'Stop this harness? Its session goes to sleep and stops spending; its conversation is kept, and a message wakes it.')
-                        : 'Stop this harness? Project files and saved conversation history are kept.'),
+                widget.terminal
+                    ? 'End this shell and anything running in it? Files are kept.'
+                    // A cloud agent stops where its maker lets it: Devin Cloud
+                    // and Cursor Cloud sleep; Fo keeps working on its own.
+                    : _cloud != null
+                    ? (_engine == 'fo'
+                          ? 'Stop following this harness here? Fo keeps working on its own, and its conversation is kept.'
+                          : 'Stop this harness? Its session goes to sleep and stops spending; its conversation is kept, and a message wakes it.')
+                    : 'Stop this harness? Project files and saved conversation history are kept.',
                 style: DesktopChrome.text(size: 13),
               ),
-              if (_protectionReason == null) ...[
-                const SizedBox(height: 8),
-                Text(
-                  'Its panes close across tabs. Switching tabs keeps it running.',
-                  style: DesktopChrome.text(
-                    size: 13,
-                    color: DesktopChrome.muted,
-                  ),
-                ),
-              ],
+              const SizedBox(height: 8),
+              Text(
+                'Its panes close across tabs. Switching tabs keeps it running.',
+                style: DesktopChrome.text(size: 13, color: DesktopChrome.muted),
+              ),
               if (_stopping) ...[
                 const SizedBox(height: 12),
                 Text(
@@ -259,11 +234,10 @@ class _StopAgentPromptState extends State<_StopAgentPrompt> {
           if (!_stopping)
             Tooltip(
               message:
-                  _protectionReason ??
                   'Stop · ${terminalPromptHint(context, 'picker.accept', 'enter')}',
               child: FilledButton(
                 key: const Key('agent-stop-confirm'),
-                onPressed: _protectionReason == null ? _stop : null,
+                onPressed: _stop,
                 style: grid.dangerButtonStyle(),
                 child: const Text('Stop'),
               ),
