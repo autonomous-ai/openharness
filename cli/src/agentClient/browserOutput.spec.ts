@@ -37,6 +37,19 @@ describe('browserFolder', () => {
     expect(statSync(folder).mode & 0o777).toBe(0o700)
   })
 
+  // On Linux nothing sets a TMPDIR for a plain agent: only a Swarm agent is given one (../lib/agentTmp.ts).
+  it('with no TMPDIR, is the browser folder in the folder Harness keeps for its agents, made 0700', () => {
+    const data = fresh()
+    for (const env of [{ ADAPTER_DATA_DIR: data }, { ADAPTER_DATA_DIR: data, TMPDIR: '' }]) {
+      const folder = browserFolder(env)
+      expect(folder).toBe(join(data, 'agent-tmp', 'browser'))
+      expect(statSync(folder).mode & 0o777).toBe(0o700)
+    }
+    const shot = saveScreenshot({ ADAPTER_DATA_DIR: data }, JPEG.toString('base64'), AT)
+    expect(shot).toBe(join(data, 'agent-tmp', 'browser', 'shot-20261111-090507-042.jpg'))
+    expect(readFileSync(shot).equals(JPEG)).toBe(true)
+  })
+
   it('closes a folder that was left open', () => {
     const tmp = fresh()
     mkdirSync(join(tmp, 'browser'), { mode: 0o755 })
@@ -129,8 +142,12 @@ describe('the folder keeps the newest files', () => {
 
 describe('when the files cannot be written (Review Focus 3)', () => {
   const cases: Array<[string, () => NodeJS.ProcessEnv]> = [
-    ['with no TMPDIR', () => ({})],
-    ['with an empty TMPDIR', () => ({ TMPDIR: '' })],
+    ['with no TMPDIR and browser a file in the agents\' folder', () => {
+      const data = fresh()
+      mkdirSync(join(data, 'agent-tmp'))
+      writeFileSync(join(data, 'agent-tmp', 'browser'), 'not a folder')
+      return { ADAPTER_DATA_DIR: data }
+    }],
     ['with browser a file', () => {
       const tmp = fresh()
       writeFileSync(join(tmp, 'browser'), 'not a folder')
