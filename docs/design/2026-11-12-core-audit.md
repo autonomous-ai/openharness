@@ -67,7 +67,7 @@ only in a design document.
 | 7 October (b4027cbd1) | 332 | 71,244 |
 | Today, the Swarm off | 556 | 98,437 |
 | Today, the Swarm on (the default) | 694 | 129,161 |
-| The Swarm on, with #4238 | 576 | 100,425 |
+| The Swarm on, with #4238 | 576 | 100,424 |
 | And once a session of another engine than Claude Code and Codex runs | +107 | +16,055 |
 | On Harness OS, or with `HARNESSD_SERVICES=none`: every service inside the core | +517 | +113,149 |
 
@@ -141,8 +141,8 @@ everything it imports: its host, its GitHub loops, the transcript normalizers of
 handoff, the Codex profiles. 118 files and 28,739 lines it never ran, 24 of them files the architecture test
 forbids the core to load. The test did not see it, because it walks the core with the Swarm off.
 
-#4238 gives the service's start a door of its own (`superTabs/inCoreService.ts`), taken only when the service
-runs in the core's process.
+With #4238 the door holds the Swarm's side of the core alone, and a core that runs the service itself loads it by
+an import of its own (`core/main.ts`), beside the doors and before its wiring starts.
 
 | | Before | After |
 | --- | ---: | ---: |

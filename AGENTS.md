@@ -31,7 +31,8 @@ The core is the one process every agent depends on (`cli/src/core/`). Protect it
 
 - **Small.** It owns sessions only: agents, terminals, transcripts, turns, input, questions.
 - **Everything else is a component in a process of its own:** the relay, the Swarm, devices, models, search, viewers,
-  every new feature. The same at run time: the core loads none of their code and runs without any of them.
+  every new feature. The same at run time: the core runs without any of them, and loads none of their code but
+  through a door its test lists file by file.
 - **Secure.** It is the most trusted process, so it meets the outside least: what someone else can shape is checked in
   a component before it reaches the core.
 
