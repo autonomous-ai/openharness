@@ -77,11 +77,13 @@ export class ObservedSource implements HostSource {
   ingest(e: ObservedHookEvent): void {
     const now = this.deps.now()
     const entry = this.entry(e.engine, e.sessionId, now, {
-      cwd: e.cwd, transcriptPath: e.transcriptPath, pid: e.callerPid, hints: e.hostHints,
+      cwd: e.cwd, transcriptPath: e.transcriptPath, pid: e.callerPid,
     })
     if (!entry) return
     const a = entry.agent
     a.lastActivityAt = now
+    // Only a hook says where a session runs: one the open scan found is a plain terminal until its first.
+    a.host = detectHost(e.hostHints)
     if (e.cwd) { a.cwd = e.cwd; a.name = basename(e.cwd) || a.name }
     if (e.transcriptPath) entry.transcriptPath = e.transcriptPath
     if (e.event === 'session-end') {
@@ -125,7 +127,7 @@ export class ObservedSource implements HostSource {
   /** The existing entry, or a new one if there is room. */
   private entry(
     engine: string, sessionId: string, now: number,
-    init: { cwd?: string; transcriptPath?: string | null; pid: number; hints?: Record<string, string> },
+    init: { cwd?: string; transcriptPath?: string | null; pid: number },
   ): Entry | undefined {
     const id = observedAgentId(engine, sessionId)
     // Harness's own session (the voice router's Claude Code runs in the data folder, outside a pane) is never an agent
@@ -144,7 +146,7 @@ export class ObservedSource implements HostSource {
       agent: {
         id, engine, sessionId, cwd: init.cwd,
         name: (init.cwd && basename(init.cwd)) || engine,
-        host: detectHost(init.hints ?? {}),
+        host: 'terminal',
         state: 'idle', since: now, lastActivityAt: now, unseenDone: false, callerPid: init.pid,
       },
       pid: init.pid,
