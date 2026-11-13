@@ -15,7 +15,6 @@ export interface ObservedHookEvent {
   callerPid: number
   transcriptPath?: string
   hostHints: Record<string, string>
-  at: number
 }
 
 const EVENTS: readonly string[] = ['session-start', 'turn-start', 'needs-input', 'turn-stop', 'turn-error', 'session-end']
@@ -36,7 +35,7 @@ const bounded = (value: unknown, max: number): value is string =>
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value)
 
-export function parseObservedHook(body: unknown, now: number): ObservedHookEvent | null {
+export function parseObservedHook(body: unknown): ObservedHookEvent | null {
   if (!isRecord(body)) return null
   const { engine, sessionId, event, cwd, callerPid, transcriptPath, hostHints } = body
   if (typeof engine !== 'string' || !(ENGINES as readonly string[]).includes(engine)) return null
@@ -56,7 +55,7 @@ export function parseObservedHook(body: unknown, now: number): ObservedHookEvent
   return {
     engine: engine as AgentEngine, sessionId, event: event as ObservedEventName,
     ...(cwd === undefined ? {} : { cwd }), callerPid,
-    ...(transcriptPath === undefined ? {} : { transcriptPath }), hostHints: hints, at: now,
+    ...(transcriptPath === undefined ? {} : { transcriptPath }), hostHints: hints,
   }
 }
 
@@ -110,10 +109,9 @@ export function createObservedHook(deps: ObservedHookDeps) {
 
   return {
     onObserved(body: unknown): 'ok' | 'invalid' | 'dropped' {
-      const now = deps.now()
-      const event = parseObservedHook(body, now)
+      const event = parseObservedHook(body)
       if (!event) return count('invalid')
-      if (!take(`${event.engine}:${event.sessionId}`, now)) return count('dropped')
+      if (!take(`${event.engine}:${event.sessionId}`, deps.now())) return count('dropped')
       return deps.forward(event) ? 'ok' : count('dropped')
     },
   }

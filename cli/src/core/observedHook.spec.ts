@@ -8,12 +8,12 @@ const full = {
 
 describe('parseObservedHook', () => {
   it('parses a full event', () => {
-    expect(parseObservedHook(full, 99)).toEqual({ ...full, at: 99 })
+    expect(parseObservedHook(full)).toEqual(full)
   })
 
   it('parses an event without the optional fields', () => {
-    expect(parseObservedHook({ engine: 'codex', sessionId: 's', event: 'session-start', callerPid: 1, hostHints: {} }, 5))
-      .toEqual({ engine: 'codex', sessionId: 's', event: 'session-start', callerPid: 1, hostHints: {}, at: 5 })
+    expect(parseObservedHook({ engine: 'codex', sessionId: 's', event: 'session-start', callerPid: 1, hostHints: {} }))
+      .toEqual({ engine: 'codex', sessionId: 's', event: 'session-start', callerPid: 1, hostHints: {} })
   })
 
   it.each([
@@ -34,13 +34,13 @@ describe('parseObservedHook', () => {
     ['hostHints that is an array', { hostHints: ['a'] }],
     ['hostHints missing', { hostHints: undefined }],
   ])('rejects %s', (_name, patch) => {
-    expect(parseObservedHook({ ...full, ...patch }, 1)).toBeNull()
+    expect(parseObservedHook({ ...full, ...patch })).toBeNull()
   })
 
   it('rejects a body that is not an object', () => {
-    expect(parseObservedHook(null, 1)).toBeNull()
-    expect(parseObservedHook('x', 1)).toBeNull()
-    expect(parseObservedHook([], 1)).toBeNull()
+    expect(parseObservedHook(null)).toBeNull()
+    expect(parseObservedHook('x')).toBeNull()
+    expect(parseObservedHook([])).toBeNull()
   })
 })
 
@@ -72,7 +72,7 @@ describe('createObservedHook', () => {
   it('forwards a valid event and answers ok', () => {
     const forward = vi.fn(() => true)
     expect(createObservedHook({ forward, now: () => 7 }).onObserved(full)).toBe('ok')
-    expect(forward).toHaveBeenCalledWith({ ...full, at: 7 })
+    expect(forward).toHaveBeenCalledWith(full)
   })
 
   it('answers invalid and forwards nothing for a bad body', () => {
