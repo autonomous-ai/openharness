@@ -165,7 +165,7 @@ Left since, with the core's process as `src/architecture.coreFiles.txt` lists it
 | --- | ---: | ---: |
 | The audit's count, with the changes that landed while it ran | 563 | 99,467 |
 | The CLI's client code: seven files loaded for a helper each (13 November) | 558 | 98,600 |
-| The master's supervisor and its supervision of the services (13 November) | 557 | 97,549 |
+| The master's supervisor and its supervision of the services, with the two security changes of the same day, which add 137 lines (13 November) | 557 | 97,686 |
 | The platform's launchd, systemd and Task Scheduler code, loaded to repoint one Node path: the master does it now (13 November) | 554 | 96,582 |
 | Windows files loaded for a constant: the guest set-up's protocol and folder checks, the pane's command for a guest, the updater's version folders and the install layout (13 November) | 551 | 95,749 |
 
