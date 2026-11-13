@@ -118,8 +118,9 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
   /** The starters whose harnesses are being closed: two stops of one harness tell this twice. */
   const cascading = new Set<string>()
   const rpc = deps.tell ? null : createMessagesRpc()
+  const ledger = new Ledger(ledgerPath(core.dataDir))
   const hachi = createHachiHandOver({
-    ledger: new Ledger(ledgerPath(core.dataDir)),
+    ledger,
     self: () => core.daemon.machineId(),
     tell: deps.tell ?? ((machineId, payload) => rpc!({ port: core.daemon.port, dataDir: core.dataDir, machineId }, payload)),
     now, log,
@@ -265,6 +266,16 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
         joined.delete(oldest)
       }
       save()
+    },
+    forgetTold: async (agentId) => {
+      try {
+        ledger.forgetTold(agentId)
+        return true
+      } catch (error) {
+        // Said here, where the reason is known: the delete is refused in the person's words (core/agents/lifecycle.ts).
+        log(`[agent-cleanup] could not erase what ${agentId.slice(0, 8)} was told: ${reason(error)}`)
+        return false
+      }
     },
     stop: () => {
       stopped = true

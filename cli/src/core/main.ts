@@ -260,7 +260,6 @@ import { type ActivityFrame } from '../lib/turnActivity.js'
 import { cursorDataDir } from '../engines/cursor/contract.js'
 import { TranscriptPager } from '../lib/transcriptPages.js'
 import { AgentCreationReceipts } from '../lib/agentCreationReceipt.js'
-import { Ledger, ledgerPath } from '../agentClient/ledger.js'
 import { agentFrame, lastActivityAt, type AgentFrame } from '../lib/agentFrame.js'
 import { transcriptActivityAt } from '../lib/transcriptActivity.js'
 import { forgetAgentProject } from '../lib/agentProject.js'
@@ -1667,7 +1666,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const recapsLink = createRecapsLink({ notify: (frame, opts) => serviceLinks.notify('recaps', frame, opts), buffered: () => serviceLinks.buffered('recaps'),
     call: (type, payload) => serviceLinks.call('recaps', type, payload), clients: coreApi.clients, lastTurn: coreApi.transcripts.lastTurn })
   // What the core tells the agent cleanup in its own process, and answers it (core/agentCleanupLink.ts).
-  const agentCleanupLink = createAgentCleanupLink(coreApi, (frame, opts) => serviceLinks.notify('agentCleanup', frame, opts))
+  const agentCleanupLink = createAgentCleanupLink(coreApi, (frame, opts) => serviceLinks.notify('agentCleanup', frame, opts),
+    (type, payload, waitMs) => serviceLinks.call('agentCleanup', type, payload, waitMs))
   // What the core tells the agent browser in its own process, keeps of what it says, and answers it (core/agentBrowserLink.ts).
   const agentBrowserLink = createAgentBrowserLink({ core: coreApi, notify: (frame, opts) => serviceLinks.notify('agentBrowser', frame, opts), want: () => coreLink.want('agentBrowser') })
   const usageLink = createUsageLink({ call: payload => ports.usage?.read(payload.target as AgentUsageTarget) ?? Promise.resolve({}), changed: agentEvents.onTokenUsageChanged })
@@ -3035,11 +3035,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     sessionCheckpoints,
     mirror,
     sessionSearch,
-    // A purge erases the harness's told lines and the requests that made it; either failing refuses the purge.
-    eraseRecords: async (s) => {
-      new Ledger(ledgerPath(env.ADAPTER_DATA_DIR)).forgetTold(s.agentId)
-      await receipts.scrubCreated(s.agentId)
-    },
+    // A purge erases the harness's told lines, which the agent cleanup does (services/agentCleanup.ts), and the requests
+    // that made it; either failing refuses the purge.
+    forgetTold: async (agentId) => await ports.agentCleanup?.forgetTold(agentId) ?? false,
+    scrubCreated: (agentId) => receipts.scrubCreated(agentId),
     send: (frame) => backend.send(frame),
     pinnedControls,
     retainExitedSession,

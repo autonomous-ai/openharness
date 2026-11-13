@@ -7,7 +7,7 @@ import type { AgentCloseResult } from '../lib/closeAgentService.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { RETENTION_LAPSE_MS, retainContributions, retainedHarnesses, retentionFile } from '../superTabs/retention.js'
-import { Ledger, ledgerPath } from '../agentClient/ledger.js'
+import { Ledger, ledgerPath, type Told } from '../agentClient/ledger.js'
 import { GONE_MS } from './hachiHandOver.js'
 import { ASK_AGAIN_MS, BACKGROUND_CLOSE_MS, CASCADE_RETRY_MS, CASCADE_TRIES, createAgentCleanup, IDLE_CLOSE_MS, JOINED_MAX, joinedPath, LOOK_EVERY_MS, startAgentCleanup, type AgentCleanupDeps } from './agentCleanup.js'
 
@@ -530,6 +530,36 @@ describe('closing a harness another agent started once it has sat idle', () => {
   })
 })
 
+// A delete erases the opening words of what the harness was told (`harness tell`). The core asked the ledger itself
+// until the audit of 2026-11-12: its lock could hold the core's loop for two seconds.
+describe('erasing what a deleted harness was told', () => {
+  const told = (agentId: string, probe: string): Told =>
+    ({ at: NOW, by: { machineId: 'machine-1', agentId: 'lead' }, told: { machineId: 'machine-1', agentId }, probe })
+
+  it('drops its told lines from the agent ledger, keeps every other line, and says it did', async () => {
+    const ledger = new Ledger(ledgerPath(dir))
+    ledger.append(told('kid', 'fix the login'))
+    ledger.append(told('other', 'write the tests'))
+    const { cleanup, log } = setup([])
+    expect(await cleanup.port.forgetTold('kid')).toBe(true)
+    const kept = readFileSync(ledgerPath(dir), 'utf8')
+    expect(kept).not.toContain('fix the login')
+    expect(kept).toContain('write the tests')
+    // A harness nobody told anything has nothing to erase: done all the same, as every delete asks.
+    expect(await cleanup.port.forgetTold('nobody')).toBe(true)
+    expect(readFileSync(ledgerPath(dir), 'utf8')).toBe(kept)
+    expect(log).not.toHaveBeenCalled()
+  })
+
+  it('says it did not, and why in the log, when the ledger could not be rewritten', async () => {
+    // A file where the ledger's folder goes: nothing under it can be locked or written.
+    writeFileSync(join(dir, 'agent-client'), '')
+    const { cleanup, log } = setup([])
+    expect(await cleanup.port.forgetTold('kid-0123456789')).toBe(false)
+    expect(log.mock.calls).toEqual([[expect.stringMatching(/^\[agent-cleanup\] could not erase what kid-0123 was told: /)]])
+  })
+})
+
 describe('what the cleanup keeps and how it runs', () => {
   it('remembers the newest thousand the person joined, and reads a damaged file as none', async () => {
     const full = Object.fromEntries([['old', 1], ['bad', 'x'], ...Array.from({ length: JOINED_MAX - 1 }, (_, i) => [`k${i}`, 2 + i])])
@@ -579,7 +609,7 @@ describe('what the cleanup keeps and how it runs', () => {
     vi.useFakeTimers()
     const ports = emptyPorts()
     startAgentCleanup(fakeCore({ dataDir: dir }), ports)
-    expect(ports.agentCleanup).toMatchObject({ closed: expect.any(Function), typed: expect.any(Function), stop: expect.any(Function) })
+    expect(ports.agentCleanup).toMatchObject({ closed: expect.any(Function), typed: expect.any(Function), forgetTold: expect.any(Function), stop: expect.any(Function) })
     ports.agentCleanup!.stop()
   })
 })
