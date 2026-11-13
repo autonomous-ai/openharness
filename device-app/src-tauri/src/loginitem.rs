@@ -1,5 +1,31 @@
 //! The login item, so the app starts at login.
 
+pub trait LoginItem: Send + Sync {
+    fn register(&self) -> Result<(), String>;
+}
+
+pub struct SystemLoginItem;
+
+#[cfg(target_os = "macos")]
+impl LoginItem for SystemLoginItem {
+    /// Never called under `cargo test`: it would make the test binary a login item of the
+    /// developer's account.
+    fn register(&self) -> Result<(), String> {
+        // SAFETY: plain ServiceManagement calls on the main app's own service, with no arguments.
+        let service = unsafe { objc2_service_management::SMAppService::mainAppService() };
+        // The error code only: macOS's description may name the app's path.
+        unsafe { service.registerAndReturnError() }
+            .map_err(|error| format!("Login item not added (error {}).", error.code()))
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+impl LoginItem for SystemLoginItem {
+    fn register(&self) -> Result<(), String> {
+        Err("Login items are not supported here.".into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
