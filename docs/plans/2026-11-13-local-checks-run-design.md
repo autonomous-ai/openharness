@@ -26,19 +26,13 @@ Direction approved by Ken on 2026-11-13.
 4. **Platform.** The receipt's platform is the running OS (`macos`, `linux`, `windows`, from `sys.platform`). A check
    whose contract names another platform (for example `cli-pty` on Linux) is not run: the script exits non-zero
    naming it and the platform it needs, before running any check.
-5. **Runs each required check, in name order,** with its exact `CHECKS` command plus a resource cap the program picks,
-   through the shell, in its `cwd` relative to the repository root. The caps are ones validation already accepts and
-   that change only budget or parallelism, never which tests run:
-   - Vitest checks (`npm run test:*`, `npx vitest ...`): ` -- --maxWorkers=N` appended to an `npm run` command, and
-     the same `--maxWorkers=N` already in the `npx vitest` commands left as is; `N` is half the logical CPUs, at
-     least 1 and at most 99. Checks run one at a time, so half the machine stays free for the agents sharing it.
-     An `npm run` command whose script in `cli/package.json` already sets `--maxWorkers` (`test:orchestrator`,
-     `test:terminal-contract`) gets no cap: Vitest refuses the option twice. `--run` reads `cli/package.json` at run
-     time, as data; nothing from it goes into a command.
-   - `make desktop-test`: `ARGS="--timeout 3600"`, the budget the docs give for a slower Mac; workers stay
-     host-sized.
-   The receipt's `command` is the exact command run, with its cap or, for a check that gets none, the plain `CHECKS`
-   command, so it passes `validate_receipts`. The check's output streams to stderr as it runs, so stdout carries
+5. **Runs each required check, in name order,** with its exact `CHECKS` command, through the shell, in its `cwd`
+   relative to the repository root. Only `make desktop-test` gets a cap, one validation already accepts:
+   `ARGS="--timeout 3600"`, the budget the docs give for a slower Mac; workers stay host-sized. Vitest checks run as
+   `CHECKS` has them: every Vitest suite already sizes its workers to half the cores its run may use, the machine's or
+   its Swarm agent's share (`cli/src/testing/suiteWorkers.ts`), and a `--maxWorkers` from `--run` would override that
+   share. Checks run one at a time.
+   The receipt's `command` is the exact command run, so it passes `validate_receipts`. The check's output streams to stderr as it runs, so stdout carries
    only the fence. Every check runs even after one fails, so one round shows every failure.
 6. **Reads the passed count** from the output:
    - Vitest commands (every `cli-*` check): the summary line `Tests  N passed` (also `Tests  F failed | N passed`),
@@ -58,9 +52,9 @@ Direction approved by Ken on 2026-11-13.
 Each check runs with a one-hour limit; on timeout its process group is killed and the check fails as `timed out`.
 `--run` takes no paths: they always come from git, so the receipts match what CI computes.
 
-Decided in the main session after the builder check (not by Ken): the caps in step 5, and `--no-renames` in step 2.
-Evidence for the caps: 23 of the 35 PR fences since 2026-11-06 carried one, and 3 of 6 Desktop receipts raised the
-900 s default budget.
+Decided in the main session after the builder check (not by Ken): the Desktop budget in step 5, and `--no-renames` in
+step 2. Evidence for the budget: 3 of 6 Desktop receipts raised the 900 s default. A Vitest worker cap was dropped in
+the final review: the suites' own config already leaves half the cores, or half the agent's share, free.
 
 ## Constraints
 
@@ -83,8 +77,7 @@ Evidence for the caps: 23 of the 35 PR fences since 2026-11-06 carried one, and 
   sleep), so no real suite runs. Cases: dirty tree refused (staged, unstaged, untracked); paths from `--base`; no
   required check prints nothing; the printed fence passes `check()` on a PR body at HEAD; failure names every failed
   check and prints no fence; no count fails; wrong platform refused before running; HEAD moved during a run voids it;
-  the Desktop count read from its receipt; a fake `package.json` whose script already sets `--maxWorkers` gives a
-  receipt command without the cap.
+  the Desktop count read from its receipt; every Vitest command runs as `CHECKS` has it.
 - `.github/pull_request_template.md`: the local-checks paragraph says: after testing the final commit, run
   `python3 scripts/local-checks.py --run` from a clean tree and paste its output into the body before pushing that
   commit or marking the PR ready. The hand-written JSON example and its field rules go. The note that body edits do
@@ -97,7 +90,7 @@ Evidence for the caps: 23 of the 35 PR fences since 2026-11-06 carried one, and 
 
 ## Non-goals
 
-- No flags for the caps: the program picks them (above). Validation keeps accepting hand-written receipts, but the
+- No flags for the Desktop budget: the program picks it (above). Validation keeps accepting hand-written receipts, but the
   template and docs describe only `--run`, the one way to make them.
 - No fetching, no PR body editing, no `gh` calls: the agent pastes the fence.
 - No change to which checks a path needs, to `ci-plan.py`, `ci.yml`, or the train.

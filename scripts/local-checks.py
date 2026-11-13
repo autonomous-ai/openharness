@@ -182,24 +182,12 @@ def host_platform():
     return {"darwin": "macos", "linux": "linux", "win32": "windows"}.get(sys.platform)
 
 
-def run_command(root, name):
-    """The command --run runs for CHECKS[name]: its own, with only a resource cap validation accepts."""
-    contract = CHECKS[name]
-    command = contract["command"]
-    if "resources" in contract:  # the Desktop suite: the budget the docs give a slower Mac
-        return command + ' ARGS="--timeout 3600"'
-    script = re.fullmatch(r"npm run (\S+)", command)
-    if not script:
-        return command
-    try:
-        text = json.loads((root / contract["cwd"] / "package.json").read_text(encoding="utf-8"))["scripts"][script[1]]
-    except (OSError, ValueError, KeyError, TypeError):
-        text = None
-    # Vitest refuses --maxWorkers twice, so a script that sets it runs as it is. Half the CPUs stay free for the
-    # agents sharing the machine.
-    if isinstance(text, str) and "--maxWorkers" in text:
-        return command
-    return command + f" -- --maxWorkers={max(1, min(99, (os.cpu_count() or 1) // 2))}"
+def run_command(name):
+    """The command --run runs for CHECKS[name]: its own, and for the Desktop suite the budget the docs give a slower
+    Mac. Vitest suites size their own workers to their Swarm agent's share of the cores (cli/src/testing/suiteWorkers.ts),
+    which a --maxWorkers would override."""
+    command = CHECKS[name]["command"]
+    return command + ' ARGS="--timeout 3600"' if "resources" in CHECKS[name] else command
 
 
 def passed_count(name, output):
@@ -297,7 +285,7 @@ def run(root, base, out, err):
         return 1
     failures, receipts = [], []
     for name in names:
-        command, cwd = run_command(root, name), CHECKS[name]["cwd"]
+        command, cwd = run_command(name), CHECKS[name]["cwd"]
         code, output = attempt(command, root / cwd, err)
         passed = passed_count(name, output)
         if code is None:

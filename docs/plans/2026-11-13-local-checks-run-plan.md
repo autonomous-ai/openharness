@@ -60,6 +60,12 @@ Exact stderr copy (each ends with a newline; `run()` exits 1 with all but the fi
 
 ## Found while reading the code
 
+**Changed in the final review: no Vitest cap.** Every Vitest suite already sizes its workers to half the cores its
+run may use, the machine's or its Swarm agent's `HARNESS_CORES` share (`cli/src/testing/suiteWorkers.ts`, #4150), and
+a `--maxWorkers` from `--run` overrides that share. `run_command(name)` now adds only the Desktop budget, reads no
+`package.json`, and the cap text below (Global Constraints, the first finding, the `run_command` rules and their
+tests) is superseded by the spec's step 5.
+
 **Two `npm run` checks cannot take the cap.** `cli/package.json` already sets `--maxWorkers=1` inside
 `test:orchestrator` and `test:terminal-contract` (`cli-orchestrator`, `cli-pty`). Vitest 4.1.10 refuses the option
 twice: `npx vitest run --maxWorkers=1 --maxWorkers=2 src/does-not-exist.spec.ts` exits 1 with
