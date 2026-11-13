@@ -253,9 +253,8 @@ describe('the device without the app', () => {
     engine.type('before the dial')
     await until('its Stop hook to run', () => engine.ran(d, 'Stop'), 30_000, 100)
     const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a')
-    await heard(dial, (m) => m.t === 'agents.end', 'the first list')
-    // Found by the scan the dial's attach runs, not the one a minute later.
-    const roster = await showing(dial, 'the agent already running listed', (r) => ids(r).includes(engine.id), 0, 20_000)
+    // Found by the scan the dial's attach runs (4-6 s after the plug here), not the next one a minute later.
+    const roster = await showing(dial, 'the agent already running listed', (r) => ids(r).includes(engine.id), 0, 15_000)
     expect(roster.rows.find((r) => r.id === engine.id)).toMatchObject({ engine: 'claude', host: 'terminal', caps: 's' })
   })
 
