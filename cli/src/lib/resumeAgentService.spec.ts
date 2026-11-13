@@ -32,7 +32,9 @@ vi.mock('./windows/engineStart.js', async (original) => {
   return { ...actual, windowsPaneLaunch: vi.fn(actual.windowsPaneLaunch) }
 })
 vi.mock('./deleteAgentFallback.js', () => ({ checkPidRuntime: vi.fn() }))
-vi.mock('./paneEngineProcess.js', () => ({ checkSessionRuntime: vi.fn(), resolvePaneEngineProcess: vi.fn() }))
+// The engine this fake stands for never exits, so there is no settle time to wait out; the rule is tested in
+// `resumeStoppedAgent.spec.ts`.
+vi.mock('./paneEngineProcess.js', () => ({ checkSessionRuntime: vi.fn(), resolvePaneEngineProcess: vi.fn(), ENGINE_SETTLE_MS: 0 }))
 // `resumeCapability` reads the real flag table through this module; only the argv builder and the
 // capability gate are faked. The gate would otherwise spawn the tester's own login shell to ask
 // `<engine> --help` about a flag, which is neither this file's subject nor the same answer on two
