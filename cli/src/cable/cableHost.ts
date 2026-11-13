@@ -593,11 +593,12 @@ export class DaemonCableHost implements CableHost {
     return this.cards
   }
 
-  /** When a dial asked for the cards, while it wants them; the machine list's wait for them runs from here. */
+  /** When a dial asked for the cards (performance.now(): a wall clock set back would hold the wait), while it wants them;
+   *  the machine list's wait for them runs from here. */
   private cardsAskedAt: number | null = null
 
   swarmCardsWanted(on: boolean): void {
-    this.cardsAskedAt = on ? this.cardsAskedAt ?? Date.now() : null
+    this.cardsAskedAt = on ? this.cardsAskedAt ?? performance.now() : null
     this.wiring.swarmCardsWanted?.(on)
   }
 
@@ -702,7 +703,7 @@ export class DaemonCableHost implements CableHost {
     const buddies = new Set((this.cards ?? []).flatMap((card) => card.leads.map((l) => l.buddy?.local).filter((id) => id !== undefined)))
     // Before the cards a dial asked for, a Buddy cannot be told from any other Harness agent: theirs wait for them. Signed
     // out, no card comes and no Swarm has a Buddy here.
-    const waiting = this.cards === null && this.cardsAskedAt !== null && Date.now() - this.cardsAskedAt < CARDS_WAIT_MS
+    const waiting = this.cards === null && this.cardsAskedAt !== null && performance.now() - this.cardsAskedAt < CARDS_WAIT_MS
       && this.wiring.signedIn?.() !== false
     const { rows, total } = selectForDial(registry.agents().filter((a) => !buddies.has(a.id) && !(waiting && a.host === 'harness')))
     const agents = rows.map((a): CableAgent => {

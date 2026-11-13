@@ -747,8 +747,9 @@ export class CableSession {
 
   /** What the dial was last told the agent list is. Empty = it has been told nothing. */
   private lastAgentsKey = ''
-  /** When the agent list last went down the cable: the machine list's pacing. */
-  private agentsPushedAt = 0
+  /** When the agent list last went down the cable, by performance.now(): the machine list's pacing, which a wall clock set
+   *  back would hold for as long. Never, at first. */
+  private agentsPushedAt = -Infinity
   // What the hello NAMED. Each switches on only its own fields; a hello that names none gets the frames it
   // always got. A positive string match, per session (see hello).
   /** `swarms: 'members-v1'`: `agentIds` and `members` on the swarms items. */
@@ -2680,9 +2681,9 @@ export class CableSession {
     // would otherwise swap whole lists down the cable on every flip. The tick sends what was held. Forced pushes
     // (an attach, a refresh) and a window's own changes go at once, as before: a new ring must beat its focus.
     const machine = view === 'machine' || this.lastAgentsKey.startsWith('machine|')
-    if (!force && machine && Date.now() - this.agentsPushedAt < AGENTS_PUSH_GAP_MS) return
+    if (!force && machine && performance.now() - this.agentsPushedAt < AGENTS_PUSH_GAP_MS) return
     this.lastAgentsKey = key
-    this.agentsPushedAt = Date.now()
+    this.agentsPushedAt = performance.now()
     // Every push, and only pushes. The dial showing a different number from the daemon is a question this
     // line answers in one look: either the daemon never said it, or it said it and the dial disagreed.
     this.log(`cable: agents → ${agents.length} of ${total}${force ? ' (requested)' : ''}`)
