@@ -1342,6 +1342,21 @@ static bool scene_says(const char *needle) {
     for (int i = 0; i < scene.count; i++) if (strstr(scene.runs[i].text, needle)) return true;
     return false;
 }
+// The resting face drawn afresh `n` times (a retry status in between ends it, so the next one picks its line again):
+// how many of those faces carried one of focus.c's lines that ask the agent for something.
+static int rest_invitations(int n) {
+    static const char *const asks[] = {"Tap to talk", "Say the word", "Ask away", "Let's build it", "Do anything",
+        "What's next?", "Ready when you are", "Make it happen", "Start something", "Your move"};
+    int seen = 0;
+    for (int k = 0; k < n; k++) {
+        fake_ms += 1000; s.voice_retry_until = fake_ms + 2000; scene_take();
+        s.voice_retry_until = 0; scene_take();
+        bool ask = false;
+        for (unsigned i = 0; i < sizeof asks / sizeof asks[0]; i++) if (scene_says(asks[i])) ask = true;
+        seen += ask;
+    }
+    return seen;
+}
 static const void *pet_frame(void) {
     for (int i = 0; i < scene.count; i++) if (scene.runs[i].sprite.width) return scene.runs[i].sprite.cells;
     return NULL;
@@ -3364,6 +3379,18 @@ int main(int argc, char **argv) {
     ui_project_set_host_caps("a","vscode",CABLE_CAP_S); scene_take(); assert(scene_says("VS Code"));
     ui_project_set_host_caps("a","",CABLE_CAP_S); scene_take(); assert(scene_says("Terminal"));
     ui_fleet_set_view(false); scene_take(); assert(!scene_says("Terminal"));
+    // the resting face of an agent without V shows no voice invitation, on the plain face and the pet's relaxing one
+    for (int pet = 0; pet < 2; pet++) {
+        reset(); fake_ms = 1000; if (pet) strcpy(s.agents[0].engine, "claude");
+        ui_project_set_host_caps("a","orca",CABLE_CAP_S|CABLE_CAP_A); scene_take();
+        assert(!rest_invitations(40));
+        // an agent with V or caps absent keeps today's invitation lines
+        reset(); fake_ms = 1000; if (pet) strcpy(s.agents[0].engine, "claude");
+        assert(rest_invitations(40) > 0);
+        reset(); fake_ms = 1000; if (pet) strcpy(s.agents[0].engine, "claude");
+        ui_project_set_host_caps("a","orca",CABLE_CAPS_ALL); scene_take();
+        assert(rest_invitations(40) > 0);
+    }
     // question screen hides [ say ] without V
     reset(); s.view=QUESTION; s.q.valid=s.q.supported=true; s.q.count=1; s.q.revision=1;
     strcpy(s.q.agent,"a"); strcpy(s.q.token,"token-a"); strcpy(s.q.name,"Research helper");
