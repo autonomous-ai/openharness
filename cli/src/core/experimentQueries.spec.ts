@@ -7,7 +7,7 @@ import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { processCoreApi } from '../services/processCoreApi.js'
 import { EXPERIMENTS, EXPERIMENT_BACKEND_ROUTES, experimentBackendAllowed } from './api.js'
-import { answerExperimentQuery, answerDaemonQuery, createForExperiment, creationForExperiment } from './experimentQueries.js'
+import { answerExperimentQuery, answerDaemonQuery, createForExperiment, creationForExperiment, routeRefused } from './experimentQueries.js'
 
 const agent = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/w' }) as RegisteredSession
 const experiments = new Set(['orchestrator'])
@@ -247,7 +247,7 @@ describe('what an experiment in its own process may ask of the core', () => {
       ['superTabs', 'GET', '/api/super-tabs/a.b'], ['superTabs', 'GET', '/api/super-tabs//list'], ['superTabs', 'GET', '/api/super-tabs/'],
       ['superTabs', 'GET', '/api/super-tabsx'], ['superTabs', 'GET', '/api/super-tabs/list#x'], ['superTabs', 'GET', '/api/super-tabs/list?a=b c'],
       ['superTabs', 'GET', '/api/super-tabs/list?a=b#c'], ['superTabs', 'GET', '/api/super-tabs/list\n'], ['superTabs', 'GET', '/api/super-tabs\\..\\device-keys'],
-      ['superTabs', 'GET', `/api/super-tabs/${'a'.repeat(161)}`], ['superTabs', 'GET', 'https://evil.example/api/super-tabs/list'],
+      ['superTabs', 'GET', 'https://evil.example/api/super-tabs/list'],
       ['superTabs', 'GET', '/api/auth/me?x=1'], ['superTabs', 'GET', '/api/auth/me/x'],
       ['sharing', 'PUT', '/api/harness-shares/not-a-share'], ['sharing', 'PUT', `/api/harness-shares/${share}/x`], ['sharing', 'PUT', `/api/harness-shares/${share}?x=1`],
       ['sharing', 'PUT', '/api/harness-shares/../super-tabs'], ['router', 'POST', '/api/route/jev/x'], ['router', 'POST', '/api/route/jev?x=1'],
@@ -255,11 +255,36 @@ describe('what an experiment in its own process may ask of the core', () => {
       ['superTabs', 'TRACE', '/api/super-tabs/list'], ['superTabs', 'GET', undefined], ['superTabs', undefined, '/api/super-tabs/list'], ['superTabs', 'GET', 7],
     ]
     backend.mockClear()
+    const warned = vi.spyOn(console, 'warn').mockImplementation(() => {})
     for (const [service, method, path] of refused) expect(await ask(service, method, path), `${service} ${String(method)} ${String(path)}`).toEqual({ error: 'ROUTE_NOT_DECLARED' })
     expect(backend).not.toHaveBeenCalled()
+    // Each is said in the core's log: its process hears only that the call failed.
+    expect(warned).toHaveBeenCalledWith('[services] superTabs asked for a backend route it has not declared, and was refused: GET /api/device-keys (core/api.ts EXPERIMENT_BACKEND_ROUTES)')
+    warned.mockRestore()
     // A call that sends no body is made with none.
     await answerExperimentQuery(core, all, 'superTabs', 'backend', { method: 'POST', path: '/api/super-tabs/hosts/machine-1/terminal' })
     expect(backend).toHaveBeenLastCalledWith('POST', '/api/super-tabs/hosts/machine-1/terminal', undefined)
+  })
+
+  it('says a refused route once, as printable text without its query, and stops at a bound', () => {
+    const lines: string[] = [], said = new Set<string>()
+    const refuse = (service: string, method: unknown, path: unknown) => routeRefused(service, method, path, (line) => lines.push(line), said)
+    expect(refuse('superTabs', 'GET', '/api/device-keys?since=1&self=m1')).toEqual({ error: 'ROUTE_NOT_DECLARED' })
+    expect(refuse('superTabs', 'GET', '/api/device-keys?since=2')).toEqual({ error: 'ROUTE_NOT_DECLARED' })
+    expect(lines).toEqual(['[services] superTabs asked for a backend route it has not declared, and was refused: GET /api/device-keys (core/api.ts EXPERIMENT_BACKEND_ROUTES)'])
+    // Another service, another method and another path are each said; what is not text, or not printable, is said as it can be.
+    refuse('sharing', 'GET', '/api/device-keys')
+    refuse('superTabs', 'DELETE', '/api/device-keys')
+    refuse('superTabs', undefined, 7)
+    refuse('superTabs', 'GET', `/api/x\n[services] forged line\u0007 ${'y'.repeat(400)}`)
+    expect(lines.slice(1, 4).map((line) => line.split(': ')[1])).toEqual([
+      'GET /api/device-keys (core/api.ts EXPERIMENT_BACKEND_ROUTES)', 'DELETE /api/device-keys (core/api.ts EXPERIMENT_BACKEND_ROUTES)', 'undefine 7 (core/api.ts EXPERIMENT_BACKEND_ROUTES)'])
+    expect(lines[4]).toMatch(/^\[services\] superTabs asked for a backend route it has not declared, and was refused: GET \/api\/x\?\[services\] forged line\? y+ \(core/)
+    expect(lines[4]!.length).toBeLessThan(300)
+    // A process that asks for route after route fills no log.
+    for (let i = 0; i < 200; i++) refuse('superTabs', 'GET', `/api/other/${i}`)
+    expect(lines).toHaveLength(64)
+    expect(said.size).toBe(64)
   })
 
   it('has every experiment declare its backend routes, if only that it calls none', () => {

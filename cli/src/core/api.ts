@@ -946,8 +946,8 @@ export const MESSAGES_WINDOW_FRAMES: readonly string[] = [MESSAGES_WINDOW_FRAME,
  *
  * Adding one: its service (`start<Name>(core, ports)`, returning its requests' handlers) and its process's
  * runner (`SERVICE_RUNNERS`, src/serviceProcess.ts); its process (`SERVICE_HOSTS`, `onDemand: true`); its
- * entry here; and its start for the core's own process (services/inline.ts `EXPERIMENT_STARTS`). Removing
- * one is deleting those.
+ * entry here; the backend routes it may call (`EXPERIMENT_BACKEND_ROUTES`, `[]` for none); and its start for the
+ * core's own process (services/inline.ts `EXPERIMENT_STARTS`). Removing one is deleting those.
  */
 export const EXPERIMENTS: Readonly<Record<string, { requests: readonly string[]; state: readonly string[] }>> = {
   orchestrator: { requests: ORCHESTRATOR_REQUESTS, state: ['orchestrator/*.json'] },
@@ -980,13 +980,13 @@ const SHARE_ID = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0
  * - Share: a grant's and a link's publication and removal (sharing/owner.ts).
  * - The router: Jev's hosted decision (lib/jev/jevClient.ts).
  * - The orchestrator, Memories and cloud agents call none.
- * A path is whole segments, each as the Swarm makes an id (superTabs/wire.ts `identifier`): none empty, no `.` or `%`,
- * so none climbs out of its API (`..`) or hides a separator; a query, where one is used, is printable and names no
- * fragment. A new experiment declares its routes here, if only `[]` (core/experimentQueries.spec.ts).
+ * A path is whole segments of the characters the Swarm makes an id of (superTabs/wire.ts `identifier`): none empty, no
+ * `.` or `%`, so none climbs out of its API (`..`) or hides a separator; a query, where one is used, is printable and
+ * names no fragment. A new experiment declares its routes here, if only `[]` (core/experimentQueries.spec.ts).
  */
 export const EXPERIMENT_BACKEND_ROUTES: Readonly<Record<string, ReadonlyArray<{ methods: readonly string[]; path: RegExp }>>> = {
   superTabs: [
-    { methods: ['GET', 'POST'], path: /^\/api\/super-tabs(?:\/[A-Za-z0-9_-]{1,160})*(?:\?[!-"$-~]*)?$/ },
+    { methods: ['GET', 'POST'], path: /^\/api\/super-tabs(?:\/[A-Za-z0-9_-]+)*(?:\?[!-"$-~]*)?$/ },
     { methods: ['GET'], path: /^\/api\/auth\/me$/ },
   ],
   sharing: [

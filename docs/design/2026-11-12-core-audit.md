@@ -220,10 +220,11 @@ today that the rule says it should not, most serious first:
 1. **The core runs a command line a service hands it.** The agent browser's process gives the core an argv, and
    the core starts it for each viewer (`core/agentBrowserLink.ts:52`, `core/browserStreams.ts:118`). Fix: the stream
    leaves for the agent browser's process (part 2).
-2. **An experiment's process can call any backend route as the account.** `core/experimentQueries.ts:171-175` signs
-   any `/api/` path for the orchestrator, Share, Memories, the router, the Swarm and cloud agents. Agent Messages
-   has a list of the routes it may call (`MESSAGES_BACKEND_ROUTES`); these have none. Fix: a list beside each
-   one's port. A day.
+2. **An experiment's process could call any backend route as the account.** `core/experimentQueries.ts` signed any
+   `/api/` path for the orchestrator, Share, Memories, the router, the Swarm and cloud agents. Fixed on 13 November:
+   each declares its routes (`core/api.ts` `EXPERIMENT_BACKEND_ROUTES`), as Agent Messages does, and the core signs
+   no other: the Swarm's own API and `GET /api/auth/me`, Share's grants and links, Jev's decision, and none for the
+   other three. A refused route is said once in the core's log.
 3. **Bytes from outside this computer are parsed in the core:** a remote viewer's VNC bytes (`core/rfbShaper.ts:117-147`),
    a paste of up to 20 MB from a remote client (`lib/terminalStreamManager.ts:1003-1234`), a third-party
    `harness.json` (`dsh/manifest.ts`). And what agents write: fourteen engines' transcripts and SQLite stores

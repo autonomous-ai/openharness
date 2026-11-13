@@ -264,7 +264,11 @@ To add one:
    also reads the backend as the account (`core.account.backend`) and has its welcomes signed by the gateway
    (`core.account.observerKey`), so it holds no credential, and watches terminals read-only
    (`core.terminals.watch`, `services/watchLink.ts`).
-2. Its entry in `EXPERIMENTS` (`src/core/api.ts`): its requests and its saved state.
+2. Its entry in `EXPERIMENTS` (`src/core/api.ts`): its requests and its saved state. And its backend routes in
+   `EXPERIMENT_BACKEND_ROUTES` beside it, by method and whole path, `[]` when it calls none: the core signs a call
+   of its process on those and no other, and answers any other `ROUTE_NOT_DECLARED`, said once in the core's log.
+   A new backend call is a line there in the same pull request; `src/core/experimentQueries.spec.ts` fails on a
+   path written in the experiment's code that is not declared.
 3. Its process in `SERVICE_HOSTS` (`src/harnessd/services.ts`) with `onDemand: true`, and its runner in
    `SERVICE_RUNNERS` (`src/serviceProcess.ts`).
 4. Its start for the core's own process, in `services/inline.ts`, and one line in `core/main.ts` that starts

@@ -36,7 +36,8 @@ small and secure, in the code and at run time, and everything else is a componen
    another account's message, GitHub text, a web page, a device, a third-party harness) is parsed and checked in
    the component that faces it, and reaches the core as typed, bounded data.
 5. **The core lends its authority narrowly.** It runs no command line a component hands it, and signs a backend
-   call for a component only on a route that component declared (`MESSAGES_BACKEND_ROUTES`).
+   call for a component only on a route that component declared (`MESSAGES_BACKEND_ROUTES`,
+   `EXPERIMENT_BACKEND_ROUTES`).
 6. **Adding to the core's process is a decision.** Every file it loads is a line of
    `src/architecture.coreFiles.txt`, and the test fails on one more. A pull request that adds a line says why
    every session needs the file; one that takes a file out deletes its line.

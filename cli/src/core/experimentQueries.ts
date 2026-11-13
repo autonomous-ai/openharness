@@ -81,6 +81,24 @@ export function answerDaemonQuery(core: Pick<CoreApi, 'daemon'>, service: string
   return DAEMON_ASKERS.has(service) && query === 'daemon' ? daemonAddress(core) : null
 }
 
+/** The undeclared routes already said, by service, method and path: a loop that asks again every pass is said once. */
+const REFUSED_SAID = new Set<string>()
+const REFUSED_SAID_MAX = 64
+
+/**
+ * The answer to a backend call on a route its service has not declared, said once in the core's log: its process hears
+ * only that the call failed, and a route missing from core/api.ts `EXPERIMENT_BACKEND_ROUTES` would otherwise look like
+ * a server that is down. The path is whatever that process sent: printable characters only, and no query.
+ */
+export function routeRefused(service: string, method: unknown, path: unknown, log: (line: string) => void = console.warn, said: Set<string> = REFUSED_SAID): Payload {
+  const route = `${String(method).slice(0, 8)} ${String(path).split('?')[0]!.slice(0, 160)}`.replace(/[^\x21-\x7e ]/g, '?')
+  if (said.size < REFUSED_SAID_MAX && !said.has(`${service} ${route}`)) {
+    said.add(`${service} ${route}`)
+    log(`[services] ${service} asked for a backend route it has not declared, and was refused: ${route} (core/api.ts EXPERIMENT_BACKEND_ROUTES)`)
+  }
+  return { error: 'ROUTE_NOT_DECLARED' }
+}
+
 /** The answer to an experiment's query, or null when it is not one of these. */
 export async function answerExperimentQuery(core: Core, experiments: ReadonlySet<string>, service: string, query: string, payload: Payload): Promise<Payload | null> {
   if (!QUERIES.has(query)) return null
@@ -171,7 +189,7 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
     // signs the call, so any other would be this account's to whatever code runs in that process.
     case 'backend': {
       const { method, path } = payload
-      if (!experimentBackendAllowed(service, method, path)) return { error: 'ROUTE_NOT_DECLARED' }
+      if (!experimentBackendAllowed(service, method, path)) return routeRefused(service, method, path)
       return { ...await core.account.backend(method as string, path as string, payload.body) }
     }
     case 'observer_key':
