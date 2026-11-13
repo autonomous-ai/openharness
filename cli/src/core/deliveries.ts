@@ -37,6 +37,9 @@ export interface DeliveriesDeps {
   tell(service: string, event: TurnDelivery): void
   /** The services in their own processes that may deliver turns: writing into an agent is no other's to ask. */
   deliverers: ReadonlySet<string>
+  /** The services whose typed turns go into the engine's own input while the agent works (core/api.ts WHILE_BUSY_DELIVERERS);
+   *  absent, none: every typed delivery waits for idle. */
+  whileBusy?: ReadonlySet<string>
   /** What holds a typed delivery from the agent's pane now, read with nothing written (core/input.ts `holdOf`); absent, nothing. */
   hold?: (agentId: string, deliveryId: string) => Promise<string | null>
   /** The turn a quiet delivery (`DeliveryOptions.quiet`) started is open in [agentId]: said once, as the input says that
@@ -150,6 +153,13 @@ export function createDeliveries(deps: DeliveriesDeps) {
 
     /** Whether the delivery is a person's own words in their agent's 1:1 chat (`DeliveryOptions.personsOwn`), held by no short-turn guard. */
     personsOwn: (deliveryId: string): boolean => own.has(deliveryId),
+
+    /** Whether the delivery's maker types it while the agent works (`DeliveriesDeps.whileBusy`), by the maker its id names
+     *  (`team:service:<it>:`): known before it is first delivered, as its maker asks what holds it (`holdOf`). */
+    typesWhileBusy: (deliveryId: string): boolean => {
+      for (const service of deps.whileBusy ?? []) if (deliveryId.startsWith(`team:service:${service}:`)) return true
+      return false
+    },
 
     /** The core's input says what became of a delivery: every listener here hears it, each guarded, and the
      *  process that made it is told. A listener that throws costs that listener the event, never the input

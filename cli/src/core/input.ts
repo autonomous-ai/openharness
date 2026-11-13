@@ -64,8 +64,8 @@ export interface InputDeps {
   /** While an agent changes host, its messages wait here and go to the pane it ends on (hostMove/gate.ts): the one
    *  gate the terminal streams hold its keystrokes in too. */
   moveGate?: MoveGate
-  /** Whether a typed delivery's maker queues it in the engine's own input while the agent works (the Swarm's chat,
-   *  superTabs/inCore/deliveries.ts), where the engine takes that; absent, every typed delivery waits for idle. */
+  /** Whether a typed delivery's maker queues it in the engine's own input while the agent works (core/deliveries.ts
+   *  `typesWhileBusy`), where the engine takes that; absent, every typed delivery waits for idle. */
   typesWhileBusy?: (deliveryId: string) => boolean
   /** Whether a delivery is a person's Swarm message, which closes a question open in a Claude pane (core/deliveries.ts), and when
    *  it was written (ms); null for any other. */
@@ -206,6 +206,7 @@ export function sessionInputDeps(
   const writeMessage = messageWriter(deps)
   return {
     ...(deps.moveGate ? { moveGate: deps.moveGate } : {}),
+    ...(deps.typesWhileBusy ? { typesWhileBusy: deps.typesWhileBusy } : {}),
     readScreen: deps.readScreen,
     submission: deps.submission,
     getSession: (id) => resolve(id),

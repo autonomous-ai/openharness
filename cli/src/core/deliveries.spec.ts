@@ -35,6 +35,19 @@ describe('delivered turns', () => {
     expect(deliveries.answer('worker', 'deliver', { deliveryId: id, agentId: 'a', text: 'x' })).toEqual({})
   })
 
+  // The Swarm's chat types into a working agent's own input, where its engine takes that; every other maker's waits for idle.
+  // Said by the maker its id names, so it holds before the delivery is first made, as its maker asks what holds it.
+  it('types a delivery while the agent works only for a maker the core lists', () => {
+    const deliveries = createDeliveries({ submit: vi.fn(), cancel: vi.fn(() => false), tell: vi.fn(), deliverers: new Set(['superTabs', 'messages']),
+      whileBusy: new Set(['superTabs']) })
+    expect(deliveries.typesWhileBusy('team:service:superTabs:assignment-1')).toBe(true)
+    for (const other of ['team:peer', 'team:service:messages:1', 'wifi:1', 'team:service:superTabsX:1', 'team:service:superTabs', '']) {
+      expect(deliveries.typesWhileBusy(other), other).toBe(false)
+    }
+    expect(createDeliveries({ submit: vi.fn(), cancel: vi.fn(() => false), tell: vi.fn(), deliverers: new Set(['superTabs']) })
+      .typesWhileBusy('team:service:superTabs:assignment-1'), 'no maker listed').toBe(false)
+  })
+
   it('remembers a delivery that answers a question until it settles', () => {
     const { deliveries } = setup()
     deliveries.turns.deliver('a', 'x', 'p1', { answersQuestion: true, writtenAt: 5 })

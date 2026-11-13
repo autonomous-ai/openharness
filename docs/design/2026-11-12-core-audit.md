@@ -225,8 +225,8 @@ this platform uses leaves them out. Low risk on a Mac and Linux, medium on a Win
 
 anh Dee, 2026-11-13: "swarm is an experimental feature. we could turn it off / kill the feature at any time. the
 philosophy: small tiny core that is super stable and solid and a lot of components around it". With the Swarm on, its
-door (`superTabs/inCore.ts`) loaded 20 files, about 2,100 lines, into the core's process; 19 and about 2,000 after the
-first line below left (13 November). Each leaves by one of two ways,
+door (`superTabs/inCore.ts`) loaded 20 files, about 2,100 lines, into the core's process; 18 and about 2,000 once the
+first lines below left (13 November). Each leaves by one of two ways,
 so the core keeps no Swarm code at all, and deleting the Swarm changes nothing in it:
 
 - **Through a relay.** What the Swarm's service and the devices tell each other goes through a small generic relay in
@@ -239,7 +239,6 @@ so the core keeps no Swarm code at all, and deleting the Swarm changes nothing i
 | What (lines) | What the core asks of it | Where it goes | Order |
 | --- | --- | --- | ---: |
 | `inCore/devices.ts` (9) | whether a finished turn is quiet on the devices | a row flag the Swarm sets at its start | 2 |
-| `inCore/deliveries.ts` (8) | whether a chat message types while the agent works | an option of the delivery the Swarm asks for | 3 |
 | `inCore/cards.ts` (228), `inCore/attention.ts` (98) | the device cards, the waits on a person | the relay: the Swarm's service to the devices, and their wants back; the devices check and replay | 4 |
 | `inCore/terminal.ts` (90) | a member's screen for its Lead, and keys into it | a generic read and write of a pane for a component the core names, under the write lock | 5 |
 | `inCore/launch.ts` (79), `lib/swarmSkills.ts` (110), `lib/swarmEngineArgs.ts` (15), `lib/agentInstructions.ts` (408) | a start's roles, the team's basics, the agent's own instructions, its engine flags, its share of the cores | a start's additions (instructions text, flags, variables) the Swarm's service hands the core with the start and refreshes; kept in the row for a relaunch | 6 |
@@ -254,6 +253,12 @@ Each line is one pull request, tested with the Swarm's own end-to-end files (`su
 Left: `cleanupCloses.ts`, the closes the agent cleanup made, for the machine's report (order 1). The door handed it only
 to an agent cleanup in the core's process; that one now gets it as the cleanup in its own process does, from the
 Swarm's side of the services (`superTabs/inServices.ts`) (13 November).
+
+Left: `inCore/deliveries.ts`, whether a chat message types while the agent works (order 3). The input queue
+(`lib/sessionInput.ts`) also named the Swarm's delivery ids itself, outside the door. Now the core keeps one list of the
+services whose typed turns go into a working agent's own input (`WHILE_BUSY_DELIVERERS`, `core/api.ts`, beside the list
+of those that may deliver at all), and the input asks it by the maker each delivery's id names. Deleting the Swarm
+takes its name off that list and changes no code (13 November).
 
 ### 4. Modes where everything runs in the core
 
