@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { PM_BASICS, SWARM_BASICS, swarmBasics } from '../lib/swarmSkills.js'
 import { describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
+import { relayHub } from '../testing/relayHub.js'
 import type { CoreApi } from '../core/api.js'
 import type { SaidOnCard } from './cards.js'
 import { superTabService, type SuperTabServiceOptions } from './service.js'
@@ -631,11 +632,12 @@ describe('post --attach steps', () => {
 describe('the Swarm cards the devices ask for', () => {
   function withCards() {
     const cards = { want: vi.fn(), open: vi.fn(), side: vi.fn(), threadLeave: vi.fn((..._a: unknown[]): { tabId: string; conversationId: string } | null => null), say: vi.fn(async (): Promise<SaidOnCard> => ({ said: true })), worker: vi.fn((machineId: string, harnessId: string) => machineId === 'm2' && harnessId === 'h-r1'), recap: vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'Shipped', at: 5, none: false })), onCards: undefined as unknown, onRecap: undefined as unknown }
-    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn() }
-    const core = fakeCore({ superTabs })
+    const superTabs = { shareObservers: vi.fn() }
+    const hub = relayHub()
+    const core = fakeCore({ superTabs, relay: hub.relay })
     const make = vi.fn(() => cards as never)
     const service = superTabService(core, { cards: make })
-    return { cards, superTabs, make, core, ask: service.requests.super_tabs, port: service.port }
+    return { cards, superTabs, hub, make, core, ask: service.requests.super_tabs, port: service.port }
   }
   it('starts and stops the reader as a capable Pro comes and goes, and hands what it reads to the core', async () => {
     const t = withCards()
@@ -645,12 +647,18 @@ describe('the Swarm cards the devices ask for', () => {
     expect(t.cards.want).toHaveBeenLastCalledWith(true, ['s1'], null)
     expect(await t.ask({ action: 'cardsWanted', on: false }, owner)).toEqual({ ok: true })
     expect(t.cards.want).toHaveBeenLastCalledWith(false, [], null)
-    // One reader for the machine, whose answers go to the core.
+    // One reader for the machine, whose answers go to the devices through the core's relay, unread (core/relays.ts).
     expect(t.make).toHaveBeenCalledOnce()
     ;(t.cards.onCards as (items: unknown[]) => void)([])
     ;(t.cards.onRecap as (recap: unknown) => void)({ tabId: 't1' })
-    expect(t.superTabs.cards).toHaveBeenCalledWith([])
-    expect(t.superTabs.cardRecap).toHaveBeenCalledWith({ tabId: 't1' })
+    expect(t.hub.told).toEqual([['swarm_cards', []], ['swarm_card_recap', { tabId: 't1' }]])
+    // The devices went: nothing reads the Swarms for them any more. Another service's going, or theirs coming, changes nothing.
+    t.cards.want.mockClear()
+    t.hub.peer('orchestrator', false)
+    t.hub.peer('devices', true)
+    expect(t.cards.want).not.toHaveBeenCalled()
+    t.hub.peer('devices', false)
+    expect(t.cards.want).toHaveBeenCalledWith(false)
     // The service going away stops the polling; the next ask makes a new reader.
     t.port.stop()
     expect(t.cards.want).toHaveBeenLastCalledWith(false)

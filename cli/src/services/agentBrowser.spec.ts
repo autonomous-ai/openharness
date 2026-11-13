@@ -1181,7 +1181,7 @@ describe('the agent\'s commands', () => {
     const unreachable = () => { throw new Error('unreachable') }
     const c = await commands({ core: {
       account: { backend: unreachable, machines: unreachable },
-      superTabs: { attention: unreachable, cards: unreachable, cardRecap: unreachable, shareObservers: unreachable },
+      superTabs: { shareObservers: unreachable },
       panes: { screen: unreachable, input: unreachable, inputIfScreen: unreachable },
       superTabRequest: unreachable,
     } })

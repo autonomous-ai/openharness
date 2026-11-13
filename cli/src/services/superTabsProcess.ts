@@ -3,6 +3,7 @@ import { startSuperTabs } from './superTabs.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
 import { agentsIn, daemonIn, processCoreApi, type ShownAgent } from './processCoreApi.js'
 import { turnsLink } from './turnsLink.js'
+import { relayLink } from './relayLink.js'
 
 export interface SuperTabsServiceOptions {
   dataDir: string; socketPath: string; machineId: string; token: string
@@ -18,6 +19,8 @@ export function runSuperTabsService(options: SuperTabsServiceOptions): ServicePr
   const ask = (query: string, payload: Record<string, unknown>) => core
     ? core.query(query, payload) : Promise.reject(new Error('Core disconnected'))
   const turns = turnsLink(ask)
+  // Its cards and waits for the dials, handed to the devices through the core (core/relays.ts), and the devices coming and going.
+  const relays = relayLink(ask)
   /** The account's notices the core tells this process (`service_event` kind `notice`): the host hears from them that the
    *  server says work waits (superTabs/host.ts). */
   const notices = new Set<(notice: BackendNotice) => void>()
@@ -30,7 +33,7 @@ export function runSuperTabsService(options: SuperTabsServiceOptions): ServicePr
       daemon = daemonIn(address)
     }).finally(() => { reading = null })
   }
-  const base = processCoreApi(options.dataDir, 'superTabs', { live: () => live, ask, deliveries: turns, daemon: () => daemon,
+  const base = processCoreApi(options.dataDir, 'superTabs', { live: () => live, ask, deliveries: turns, daemon: () => daemon, relay: relays.relay,
     onNotice: listener => { notices.add(listener); return () => { notices.delete(listener) } } })
   // Every authority read also refreshes the native registry. A stopped/replaced
   // harness cannot receive work through a stale process-side snapshot.
@@ -54,6 +57,7 @@ export function runSuperTabsService(options: SuperTabsServiceOptions): ServicePr
     name: 'superTabs', socketPath: options.socketPath, machineId: options.machineId, token: options.token,
     requests: { super_tabs: async (payload, asker, closed) => { await ready(); return requests.super_tabs(payload, asker, closed) } },
     onEvent: payload => {
+      if (relays.heard(payload)) return
       if (payload.kind !== 'notice') { turns.heard(payload); return }
       if (payload.notice && typeof payload.notice === 'object') for (const listener of notices) listener(payload.notice as BackendNotice)
     },

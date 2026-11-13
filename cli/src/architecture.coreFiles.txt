@@ -101,6 +101,7 @@ core/monitorLink.ts
 core/orchestratorLink.ts
 core/questions.ts
 core/recapsLink.ts
+core/relays.ts
 core/serviceHost.ts
 core/serviceLinks.ts
 core/sharedMachinesLink.ts

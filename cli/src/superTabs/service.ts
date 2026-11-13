@@ -328,13 +328,16 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   }
   // The Swarm cards for a Harness Pro (superTabs/cards.ts), read while a device that shows them is attached and told to the core.
   let swarmCards: SwarmCards | null = null, cardsMachine: string | null = null
+  // The devices went (their process or link): nothing reads the Swarms for them, and each wakes with a fresh count.
+  core.relay?.onPeer((service, up) => { if (service === 'devices' && !up) swarmCards?.want(false) })
   const cards = () => {
     const machine = core.daemon.machineId()
     if (cardsMachine !== machine) { swarmCards?.want(false); swarmCards = null; cardsMachine = machine }
     if (!swarmCards) {
       swarmCards = (options.cards ?? ((api, id) => new SwarmCards(api, id, { reads: sources().reads })))(core, machine)
-      swarmCards.onCards = items => core.superTabs?.cards(items)
-      swarmCards.onRecap = recap => core.superTabs?.cardRecap(recap)
+      // To the devices, through the core unread (core/relays.ts): they check them and carry them to the dial.
+      swarmCards.onCards = items => core.relay?.tell('swarm_cards', items)
+      swarmCards.onRecap = recap => core.relay?.tell('swarm_card_recap', recap)
     }
     return swarmCards
   }

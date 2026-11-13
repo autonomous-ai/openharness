@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createSuperTabCards } from './cards.js'
+import { createSwarmCardsIn } from './swarmCardsIn.js'
 
 const lead = (id: string, over: Record<string, unknown> = {}) =>
   ({ id, projectId: `p-${id}`, project: 'mobile', engine: 'claude', owner: '', local: 'h1', state: 'work', order: 0, since: 12, ...over })
@@ -8,29 +8,25 @@ const recap = (over: Record<string, unknown> = {}) => ({ tabId: 't1', leadId: 'l
 
 function setup() {
   const swarmCards = vi.fn(), swarmCardRecap = vi.fn(), log = vi.fn()
-  const cards = createSuperTabCards({ swarmCards, swarmCardRecap, log })
+  const cards = createSwarmCardsIn({ cards: swarmCards, recap: swarmCardRecap, log })
   return { swarmCards, swarmCardRecap, log, cards }
 }
 
-describe('the Swarm cards on the devices', () => {
-  it('forwards each list whole, keeps the last one and replays it to a device that attaches', () => {
+describe('the Swarm cards, as the devices check what the relay hands them', () => {
+  it('forwards each list whole, and an empty one or none at all (the account ended) as no cards', () => {
     const { cards, swarmCards } = setup()
-    cards.replay()
-    expect(swarmCards).not.toHaveBeenCalled()
     const list = [card('t1', [lead('l1', { order: 2 }), lead('l2', { state: 'ask', order: 0 }), lead('l3', { since: undefined, order: 5 })])]
     cards.cards(list)
     expect(swarmCards).toHaveBeenLastCalledWith(JSON.parse(JSON.stringify(list)))
     // Without `since` the key is left out; with an empty owner the lead is still whole.
     expect(swarmCards.mock.calls[0][0][0].leads[2]).not.toHaveProperty('since')
     expect(swarmCards.mock.calls[0][0][0].leads.map((l: { order: number }) => l.order)).toEqual([2, 0, 5])
-    swarmCards.mockClear()
-    cards.replay()
-    expect(swarmCards).toHaveBeenCalledOnce()
-    // An empty list is a list too: the devices clear their cards.
+    // An empty list is a list too: the devices clear their cards. And so does no word at all, the service's last one gone.
     cards.cards([])
-    swarmCards.mockClear()
-    cards.replay()
-    expect(swarmCards).toHaveBeenCalledWith([])
+    expect(swarmCards).toHaveBeenLastCalledWith([])
+    cards.cards(null)
+    expect(swarmCards).toHaveBeenCalledTimes(3)
+    expect(swarmCards).toHaveBeenLastCalledWith([])
   })
 
   it('passes the reader\'s own Personal Swarm on as `personal`, and nothing else as one (round dial Personal | Team)', () => {
@@ -69,8 +65,7 @@ describe('the Swarm cards on the devices', () => {
     for (const list of bad) cards.cards(list)
     expect(swarmCards).not.toHaveBeenCalled()
     expect(log).toHaveBeenCalledTimes(bad.length)
-    cards.replay()
-    expect(swarmCards).toHaveBeenCalledWith([card('t1')])
+    expect(log).toHaveBeenLastCalledWith('[super-tabs] a Swarm card list was not sound; the last one stays')
   })
 
   it('keeps at most 16 Swarms of 12 Leads and cuts strings on a character boundary', () => {
@@ -88,13 +83,6 @@ describe('the Swarm cards on the devices', () => {
     expect(Buffer.byteLength(only.leads[0].project)).toBe(48)
     expect(Buffer.byteLength(only.leads[0].owner)).toBe(48)
     expect(only.leads[0].engine).toHaveLength(16)
-  })
-
-  it('says what it drops on the console when it is given no log of its own', () => {
-    const logged = vi.spyOn(console, 'log').mockImplementation(() => {})
-    createSuperTabCards({ swarmCards: vi.fn(), swarmCardRecap: vi.fn() }).recap(null)
-    expect(logged).toHaveBeenCalledWith(expect.stringContaining('not sound'))
-    logged.mockRestore()
   })
 
   it('forwards a checked recap, cut at 1,500 bytes, and refuses a malformed one', () => {
@@ -197,168 +185,5 @@ describe('the Swarm cards on the devices', () => {
     expect(swarmCardRecap).toHaveBeenLastCalledWith(recap({ chatId: 'b1', buddy: true }))
     cards.recap(recap({ chatId: 'b1', buddy: 'yes' }))
     expect(swarmCardRecap).toHaveBeenLastCalledWith(recap({ chatId: 'b1' }))
-  })
-})
-
-describe('whether the Swarm cards are wanted, which the core owns', () => {
-  function wantingRecaps() {
-    const request = vi.fn(async (_payload: Record<string, unknown>) => ({ ok: true })), swarmCards = vi.fn(), swarmCardRecap = vi.fn()
-    return { cards: createSuperTabCards({ swarmCards, swarmCardRecap, request, log: vi.fn() }), request, swarmCards, swarmCardRecap }
-  }
-  function wanting() {
-    const request = vi.fn(async (_payload: Record<string, unknown>) => ({ ok: true }))
-    const swarmCards = vi.fn()
-    const cards = createSuperTabCards({ swarmCards, swarmCardRecap: vi.fn(), request, log: vi.fn() })
-    return { cards, request, swarmCards }
-  }
-  it('tells the service when a capable device comes, which Swarms to read first, and when the last goes; a repeat says nothing', () => {
-    const { cards, request } = wanting()
-    cards.want(true, ['t1', 'bad id', 't1', 't2'])
-    cards.want(true, ['t1', 't2'])
-    expect(request.mock.calls).toEqual([[{ action: 'cardsWanted', on: true, include: ['t1', 't2'] }]])
-    cards.want(true, ['t2'])
-    expect(request).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['t2'] })
-    cards.want(false, ['t2'])
-    expect(request).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: false, include: [] })
-    cards.want(false, [])
-    expect(request).toHaveBeenCalledTimes(3)
-    // Swarms that are not a list are none.
-    cards.want(true, 'nonsense')
-    expect(request).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: [] })
-  })
-  it('says it again whenever the service (re)connects, only while a device wants the cards', () => {
-    const { cards, request } = wanting()
-    cards.serviceUp()
-    expect(request).not.toHaveBeenCalled()
-    cards.want(true, ['t1'])
-    request.mockClear()
-    cards.serviceUp()
-    expect(request.mock.calls).toEqual([[{ action: 'cardsWanted', on: true, include: ['t1'] }]])
-    cards.want(false, [])
-    request.mockClear()
-    cards.serviceUp()
-    expect(request).not.toHaveBeenCalled()
-  })
-  it('takes the wish back when the devices go, so a crashed devices process stops the polling', () => {
-    const { cards, request } = wanting()
-    cards.devicesGone()
-    expect(request).not.toHaveBeenCalled()
-    cards.want(true, [])
-    cards.devicesGone()
-    expect(request).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: false, include: [] })
-    request.mockClear()
-    cards.serviceUp()
-    expect(request).not.toHaveBeenCalled()
-  })
-  it('on an account change forgets the list, clears the devices\' cards and has the service start over', () => {
-    const { cards, request, swarmCards } = wanting()
-    cards.cards([card('t1')])
-    cards.want(true, ['t1'])
-    request.mockClear(); swarmCards.mockClear()
-    cards.reset()
-    expect(swarmCards).toHaveBeenCalledWith([])
-    expect(request.mock.calls).toEqual([[{ action: 'cardsWanted', on: false, include: [] }], [{ action: 'cardsWanted', on: true, include: ['t1'] }]])
-    swarmCards.mockClear()
-    cards.replay()
-    expect(swarmCards).not.toHaveBeenCalled()
-  })
-  it('lets the devices ask four things of the service and nothing else, whatever the path', async () => {
-    const { cards, request } = wanting()
-    expect(await cards.ask({ action: 'cardsWanted', on: true, include: ['t1'] })).toEqual({ ok: true })
-    expect(request.mock.calls).toEqual([[{ action: 'cardsWanted', on: true, include: ['t1'] }]])
-    request.mockClear()
-    await cards.ask({ action: 'cardRecap', tabId: 't1', leadId: 'l1', extra: 1 })
-    await cards.ask({ action: 'cardOpen', session: 's1', tabId: 't1', leadId: null, extra: 1 })
-    await cards.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', extra: 1 })
-    await cards.ask({ action: 'cardWorker', machineId: 'm2', harnessId: 'h1', text: 'x', extra: 1 })
-    expect(request.mock.calls).toEqual([[{ action: 'cardRecap', tabId: 't1', leadId: 'l1' }], [{ action: 'cardOpen', session: 's1', tabId: 't1', leadId: null }],
-      [{ action: 'cardSay', harnessId: 'h1', text: 'ship it' }], [{ action: 'cardWorker', machineId: 'm2', harnessId: 'h1' }]])
-    request.mockClear()
-    for (const action of ['backend', 'command', 'wake', 'prepareContribution', undefined]) expect(await cards.ask({ action, path: '/api/super-tabs' })).toEqual({ error: 'INVALID_REQUEST' })
-    expect(request).not.toHaveBeenCalled()
-    request.mockRejectedValueOnce(new Error('gone'))
-    expect(await cards.ask({ action: 'cardRecap', tabId: 't1', leadId: 'l1' })).toEqual({ error: 'SERVICE_UNAVAILABLE' })
-  })
-  it('says the window\'s focus with the wish, again on a change and when the service reconnects; a malformed one is none', () => {
-    const { cards, request } = wanting()
-    const focus = { tabId: 't1', conversationId: 'g1' }
-    cards.want(true, ['t1'], focus)
-    expect(request).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['t1'], focus })
-    cards.want(true, ['t1'], { ...focus })
-    expect(request).toHaveBeenCalledTimes(1)
-    cards.want(true, ['t1'], { tabId: 't1', conversationId: 'pm1' })
-    expect(request).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['t1'], focus: { tabId: 't1', conversationId: 'pm1' } })
-    request.mockClear()
-    cards.serviceUp()
-    expect(request.mock.calls).toEqual([[{ action: 'cardsWanted', on: true, include: ['t1'], focus: { tabId: 't1', conversationId: 'pm1' } }]])
-    for (const bad of [{ tabId: 'bad id', conversationId: 'g1' }, { tabId: 't1', conversationId: 7 }, { tabId: 't1' }, 'focus', null]) {
-      cards.want(true, ['t1'], { tabId: 't1', conversationId: 'pm1' })
-      request.mockClear()
-      cards.want(true, ['t1'], bad)
-      expect(request.mock.calls).toEqual([[{ action: 'cardsWanted', on: true, include: ['t1'] }]])
-    }
-    // Neither whether a device caused the move nor a thread open beside it is part of the focus any more (task #3908).
-    cards.want(true, ['t1'], { ...focus, fromDevice: true, threadRoot: 'm1' })
-    expect(request).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['t1'], focus })
-    // The devices gone take the focus with them.
-    cards.want(true, ['t1'], focus)
-    cards.devicesGone()
-    expect(request).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: false, include: [] })
-  })
-  it('passes a device\'s focus and a swarmChat dial\'s chat flag on to the service', async () => {
-    const { cards, request } = wanting()
-    const focus = { tabId: 't1', conversationId: 'g1' }
-    expect(await cards.ask({ action: 'cardsWanted', on: true, include: ['t1'], focus })).toEqual({ ok: true })
-    expect(request).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['t1'], focus })
-    request.mockClear()
-    await cards.ask({ action: 'cardRecap', tabId: 't1', leadId: 'l1', chat: true })
-    await cards.ask({ action: 'cardOpen', session: 's1', tabId: 't1', leadId: 'l1', chat: true })
-    await cards.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: true })
-    await cards.ask({ action: 'cardRecap', tabId: 't1', leadId: 'l1', chat: 'yes' })
-    expect(request.mock.calls).toEqual([[{ action: 'cardRecap', tabId: 't1', leadId: 'l1', chat: true }], [{ action: 'cardOpen', session: 's1', tabId: 't1', leadId: 'l1', chat: true }],
-      [{ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: true }], [{ action: 'cardRecap', tabId: 't1', leadId: 'l1' }]])
-  })
-  it('passes a swarmBuddy dial\'s buddy flag, and refuses its side as it refuses any other action', async () => {
-    const { cards, request } = wanting()
-    await cards.ask({ action: 'cardRecap', tabId: 't1', leadId: 'l1', chat: 'buddy' })
-    await cards.ask({ action: 'cardOpen', session: 's1', tabId: 't1', leadId: 'l1', chat: 'buddy' })
-    await cards.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy', chatId: 'pm1' })
-    await cards.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: true, chatId: 'bad id' })
-    await cards.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy', chatId: 'pm1', reviewed: true })
-    expect(request.mock.calls).toEqual([[{ action: 'cardRecap', tabId: 't1', leadId: 'l1', chat: 'buddy' }], [{ action: 'cardOpen', session: 's1', tabId: 't1', leadId: 'l1', chat: 'buddy' }],
-      [{ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy', chatId: 'pm1' }],
-      [{ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: true }],
-      [{ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy', chatId: 'pm1', reviewed: true }]])
-    request.mockClear()
-    for (const side of ['pm', 'buddy', null, undefined]) expect(await cards.ask({ action: 'cardSide', tabId: 't1', side })).toEqual({ error: 'INVALID_REQUEST' })
-    expect(request).not.toHaveBeenCalled()
-  })
-  it('passes no thread: a face\'s or a recap\'s is dropped, a say\'s options are not passed on, and cardThreadLeave is refused (task #3908)', async () => {
-    const { cards, request, swarmCards, swarmCardRecap } = wantingRecaps()
-    const face = { kind: 'lead', id: 'lead-c1', name: 'Lead', working: false }
-    cards.cards([card('t1', [lead('l1', { chat: { ...face, thread: { root: 'm9', title: 'x', replies: 2 } } })])])
-    const leads = (swarmCards.mock.calls.at(-1)?.[0] as Array<{ leads: Array<{ chat: Record<string, unknown> }> }>)[0].leads
-    expect(leads[0].chat).not.toHaveProperty('thread')
-    cards.recap(recap({ chatId: 'lead-c1', thread: 'm9' }))
-    expect(swarmCardRecap.mock.calls.map((c: Array<{ thread?: string }>) => c[0].thread)).toEqual([undefined])
-    request.mockClear()
-    await cards.ask({ action: 'cardSay', harnessId: 'h1', text: 'x', chat: true, threaded: true, thread: 'm9' })
-    expect(request).toHaveBeenLastCalledWith({ action: 'cardSay', harnessId: 'h1', text: 'x', chat: true })
-    request.mockClear()
-    expect(await cards.ask({ action: 'cardThreadLeave', tabId: 't1', leadId: 'l1' })).toEqual({ error: 'INVALID_REQUEST' })
-    expect(request).not.toHaveBeenCalled()
-  })
-  it('on an account change with no device wanting cards only clears the list', () => {
-    const { cards, request, swarmCards } = wanting()
-    cards.cards([card('t1')])
-    swarmCards.mockClear()
-    cards.reset()
-    expect(swarmCards).toHaveBeenCalledWith([])
-    expect(request).not.toHaveBeenCalled()
-  })
-  it('answers unavailable when the core has no way to the service', async () => {
-    const cards = createSuperTabCards({ swarmCards: vi.fn(), swarmCardRecap: vi.fn(), log: vi.fn() })
-    cards.want(true, [])
-    expect(await cards.ask({ action: 'cardOpen', session: 's1', tabId: 't1', leadId: null })).toEqual({ error: 'SERVICE_UNAVAILABLE' })
   })
 })

@@ -31,7 +31,7 @@ function setup(options: { live?: string[]; screen?: (harnessId: string) => PaneS
   const core = fakeCore({
     account: { backend },
     agents: { byAgent: vi.fn((id: string) => (options.live ?? ['h1']).includes(id) ? { agentId: id, engine: options.engine ?? 'claude' } as never : undefined) },
-    superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn() },
+    superTabs: { shareObservers: vi.fn() },
     panes: { screen: vi.fn(async (harnessId: string) => screen(harnessId)), input: vi.fn(async () => ({ ok: true as const })), inputIfScreen: vi.fn(async () => ({ ok: true as const })) },
   })
   const host = new TerminalHost(core, 'm1', { now: () => clock, log: vi.fn() })

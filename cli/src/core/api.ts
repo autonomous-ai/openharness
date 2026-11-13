@@ -416,8 +416,11 @@ export interface CoreApi {
   /** An agent's pane read and typed into (core/terminals/panes.ts), for the services `PANE_TYPERS` names: absent from a
    *  process that offers none. */
   panes?: PanesCore
+  /** What one service hands another through the core, unread (core/relays.ts `RELAYS`): absent from a process that offers
+   *  none. */
+  relay?: RelayCore
   /** The devices' way to the Super Tab service's `super_tabs` requests, for the Swarm cards alone (`cardsWanted`, `cardRecap`,
-   *  `cardOpen`, `cardSay`, `cardWorker`; superTabs/inCore/cards.ts refuses any other action): its answer, or SERVICE_UNAVAILABLE. Absent from a core or a
+   *  `cardOpen`, `cardSay`, `cardWorker`; core/relays.ts refuses any other action, `RELAY_ASKS`): its answer, or SERVICE_UNAVAILABLE. Absent from a core or a
    *  process that offers none. */
   superTabRequest?: (payload: Record<string, unknown>) => Promise<Record<string, unknown>>
   /** The Wi-Fi device's doors into the core (services/wifi.ts): each one call it made when it ran here. */
@@ -1045,6 +1048,37 @@ export const WHILE_BUSY_DELIVERERS: readonly string[] = ['superTabs']
  *  engine's start screens. Typing into a pane is the core's most trusted act, so no other service may ask. */
 export const PANE_TYPERS: readonly string[] = ['superTabs']
 
+/** What one service may hand another through the core (core/relays.ts): each kind has its one sender and its one receiver,
+ *  and the core passes it on between those two alone, unread, up to RELAY_MAX_BYTES; the receiver checks it. A sticky kind
+ *  is its sender's latest word, which the core keeps and says again to the receiver as it connects. The Swarm's cards, a
+ *  Lead's recap and the waits on a person, for the dials, which the devices check and show (cable/swarmCardsIn.ts,
+ *  cable/swarmWaits.ts). */
+export const RELAYS: Readonly<Record<string, { from: string; to: string; sticky?: true }>> = {
+  swarm_cards: { from: 'superTabs', to: 'devices', sticky: true },
+  swarm_card_recap: { from: 'superTabs', to: 'devices' },
+  swarm_waits: { from: 'superTabs', to: 'devices', sticky: true },
+}
+/** The most one relayed word may be: the Swarm's cards at the Swarm's own largest (16 Swarms of 12 Leads, each with three
+ *  notices of 1,500 bytes) are about 1.1 MiB, the review of this change measured. */
+export const RELAY_MAX_BYTES = 4 * 1024 * 1024
+/** The requests a service may ask of another's through the core (core/relays.ts): the request type and its actions, asked
+ *  as this computer's owner and passed on as they came, for the receiver to check; any other action is refused. The
+ *  devices' asks of the Swarm's cards: whether a dial that shows them is attached, a Lead's recap, a card opened, words
+ *  for a Lead, and whether a failing card's agent is one of a Swarm's workers. */
+export const RELAY_ASKS: Readonly<Record<string, { to: string; type: string; actions: readonly string[] }>> = {
+  devices: { to: 'superTabs', type: 'super_tabs', actions: ['cardsWanted', 'cardRecap', 'cardOpen', 'cardSay', 'cardWorker'] },
+}
+
+/** A service's side of the relays (core/relays.ts): what it hands on, what it hears, and its partners coming and going. */
+export interface RelayCore {
+  /** Hand [kind] on to the service `RELAYS` names for it; null says the last word is gone. */
+  tell(kind: string, payload: unknown): void
+  /** Hear [kind], as its sender said it: the receiver checks it. Returns how to stop hearing. */
+  on(kind: string, hear: (payload: unknown) => void): () => void
+  /** Hear a service this one relays with connect (`up`) or go. Returns how to stop hearing. */
+  onPeer(hear: (service: string, up: boolean) => void): () => void
+}
+
 /** The core's calls into Share: an observer's frame as the relay handed it over, the relay gone (every observer
  *  with it), and stopping it. */
 export interface SharingPort {
@@ -1532,15 +1566,8 @@ export type SaidOnCard = { said: true } | { said: false; refused?: { code: strin
 /** The conversation the window has open in a Swarm tab. */
 export interface CardFocus { tabId: string; conversationId: string }
 
-/** The Super Tab service's door into the core (superTabs/inCore/attention.ts): the waits of its members here. */
+/** The Super Tab service's door into the core. Its cards and waits for the dials go to the devices through `relay`. */
 export interface SuperTabsCore {
-  /** Every wait, replacing the last set: the core raises what is new on the devices and closes what is gone. */
-  attention(items: SuperTabAttention[]): void
-  /** Every Swarm this account is in, whole, each time it changes: the core keeps the last list for a dial that attaches
-   *  later and hands it to the devices (superTabs/inCore/cards.ts). */
-  cards(items: SwarmCard[]): void
-  /** What one Lead last said, pushed when the recap on a Harness Pro's screen moved on. */
-  cardRecap(recap: LeadRecap): void
   /** Members may watch an agent of this machine's: Share must run to invite them (superTabs/observers.ts). Its saved
    *  state wakes it only as the core starts, so a machine that joined a Swarm while running never invited anyone and
    *  each member's pane read "must be online" (River on a contributed machine, 2026-10-23). */
@@ -1634,10 +1661,6 @@ export interface DevicesPort {
   desk(agentIds: string[], foreground: boolean): void
   /** The window's tabs, or null once it has gone. */
   swarms(swarms: AppSwarms | null): void
-  /** The Swarms' cards for a Harness Pro (superTabs/inCore/cards.ts), whole; replayed to a dial that attaches. */
-  swarmCards(items: SwarmCard[]): void
-  /** One Lead's last message, for the recap a Harness Pro has open. */
-  swarmCardRecap(recap: LeadRecap): void
   /** What the window still has unread, newest first. */
   unread(items: UnreadNotification[]): void
   /** The window moved to an agent. */
@@ -1666,6 +1689,9 @@ export interface DevicesPort {
   engines(engines: string[]): void
   /** Whether a device watches through the backend: the voice router keeps its worker warm meanwhile. */
   commanders(connected: boolean): void
+  /** The agents with an engine's question open, as the core knows them, said as the devices connect or start: what the cards
+   *  that pass after say keeps it current. A Swarm wait shows only where none is open (cable/swarmWaits.ts). */
+  asking(agentIds: string[]): void
   /** Let go of the serial ports and the lane, for a restart or a shutdown. */
   stop(): Promise<void>
 }
@@ -1677,11 +1703,11 @@ const DEVICES_UNAVAILABLE = 'the devices service is unavailable'
  * picking no agent and sending nothing, the Wi-Fi device finds no desk to walk, and a shutdown goes on.
  */
 export const DEVICES_FALLBACKS: PortFallbacks<DevicesPort> = {
-  card: undefined, desk: undefined, swarms: undefined, swarmCards: undefined, swarmCardRecap: undefined, unread: undefined, appFocus: undefined, seen: undefined,
+  card: undefined, desk: undefined, swarms: undefined, unread: undefined, appFocus: undefined, seen: undefined,
   settings: undefined, windowFocus: undefined, windowReply: undefined, voiceReply: undefined, windowGone: undefined,
   routeTask: later({ agentId: '', machineId: '', name: '', confidence: 0, reason: DEVICES_UNAVAILABLE, candidates: [], weighed: 0, machines: 0, via: '' }),
   routeSend: later({ ok: false, machine: '', reason: DEVICES_UNAVAILABLE }),
-  stepFocus: later('no_agents'), scroll: undefined, engines: undefined, commanders: undefined, stop: later(undefined),
+  stepFocus: later('no_agents'), scroll: undefined, engines: undefined, commanders: undefined, asking: undefined, stop: later(undefined),
 }
 
 /*
@@ -2243,10 +2269,12 @@ export interface CoreApiDeps {
   wifi: CoreApi['wifi']
   /** The cloud agents' doors (core/agents/cloud.ts). */
   cloud?: CloudCore
-  /** The Super Tab service's door (superTabs/inCore/attention.ts). */
+  /** The Super Tab service's door. */
   superTabs?: SuperTabsCore
   /** An agent's pane, read and typed into for the services that may (core/terminals/panes.ts). */
   panes?: PanesCore
+  /** What one service hands another, unread (core/relays.ts). */
+  relay?: RelayCore
   /** The devices' way to the Super Tab service's card requests. */
   superTabRequest?: CoreApi['superTabRequest']
   /** The running cloud harnesses as list rows (`agents.cloud`). */
@@ -2267,7 +2295,7 @@ export function createCoreApi({
   gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, observerKey, tabKey, tabRelay, connectorVault, observer, privateGridName, machineName, backend, onNotice,
   runtimeProfile, setRuntime, fork, create, creationStatus, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, viewerFrame, browserFrame, browserBytes, machine, activityText, activitySnapshot, activity, summaries,
   closeAgent, activityAt, resumeAgent, swarmAgents, setBrowser, moveBrowser, panePid,
-  signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, cloud, superTabs, panes, superTabRequest, cloudRows, lastTurn, turnCard, turnSummary,
+  signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, cloud, superTabs, panes, relay, superTabRequest, cloudRows, lastTurn, turnCard, turnSummary,
   count, hachiGoalDone, log = (line) => console.warn(line),
 }: CoreApiDeps): CoreApi {
   // The devices reach the windows through these alone, and only with their own frames: a devices process
@@ -2374,6 +2402,7 @@ export function createCoreApi({
     ...(cloud ? { cloud } : {}),
     ...(superTabs ? { superTabs } : {}),
     ...(panes ? { panes } : {}),
+    ...(relay ? { relay } : {}),
     ...(superTabRequest ? { superTabRequest } : {}),
   }
 }

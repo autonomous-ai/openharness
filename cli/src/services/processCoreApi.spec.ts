@@ -241,22 +241,16 @@ describe('the core API a light service runs on in its own process', () => {
   it('gives the Super Tab service its door only with a core to ask, and never waits on or throws from it', async () => {
     expect(processCoreApi('/data', 'superTabs').superTabs).toBeUndefined()
     const ask = vi.fn(async (_query: string, _payload: Record<string, unknown>): Promise<Record<string, unknown>> => { throw new Error('gone') })
-    processCoreApi('/data', 'superTabs', { ask }).superTabs!.attention([])
+    processCoreApi('/data', 'superTabs', { ask }).superTabs!.shareObservers()
     await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(ask).toHaveBeenCalledWith('super_tab_attention', { items: [] })
+    expect(ask).toHaveBeenCalledWith('super_tab_observers', {})
   })
 
-  it('tells the core the Swarm cards and recaps as two queries, never waiting on or throwing from them', async () => {
-    const ask = vi.fn(async (_query: string, _payload: Record<string, unknown>): Promise<Record<string, unknown>> => { throw new Error('gone') })
-    const doors = processCoreApi('/data', 'superTabs', { ask }).superTabs!
-    const recap = { tabId: 't1', leadId: 'l1', text: 'Shipped', at: 1, none: false }
-    doors.cards([])
-    doors.cardRecap(recap)
-    doors.shareObservers()
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(ask).toHaveBeenCalledWith('super_tab_cards', { items: [] })
-    expect(ask).toHaveBeenCalledWith('super_tab_card_recap', { recap })
-    expect(ask).toHaveBeenCalledWith('super_tab_observers', {})
+  // Its cards and waits go to the devices through the core's relays, on the link its process holds (services/relayLink.ts).
+  it('hands a service the relays its process gives it, and none when it gives none', () => {
+    const relay = { tell: vi.fn(), on: vi.fn(), onPeer: vi.fn() }
+    expect(processCoreApi('/data', 'superTabs', { relay }).relay).toBe(relay)
+    expect(processCoreApi('/data', 'superTabs').relay).toBeUndefined()
   })
 
   it('asks the core to read and type an agent\'s pane, and answers plainly when the core cannot be asked', async () => {

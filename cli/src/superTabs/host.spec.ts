@@ -2319,35 +2319,38 @@ describe('Super Tab waits for the Harness Pro', () => {
       if (offline) throw new Error('Host offline')
       return { status: 200, body: { success: true, data: path.includes('/hosts/') ? hostForm(rows, { tabs: ['tab'] }) : [] } }
     })
-    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn() }
-    const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
+    const superTabs = { shareObservers: vi.fn() }
+    // The waits it hands the devices, as the core's relay is told them (core/relays.ts).
+    const attention = vi.fn()
+    const relay = { tell: vi.fn((kind: string, payload: unknown) => { if (kind === 'swarm_waits') attention(payload) }), on: vi.fn(() => () => {}), onPeer: vi.fn(() => () => {}) }
+    const core = fakeCore({ dataDir: dir, superTabs, relay, account: { backend: call },
       agents: { creationStatus: vi.fn(async creationId => ({ creationId, state: 'created' as const, agentId: 'harness' })), byAgent: vi.fn(() => ({ agentId: 'harness' }) as never), terminalAvailable: vi.fn(() => true) } })
     const open = () => { const host = new SuperTabHost(core, 'machine-1', { log: vi.fn() }); hosts.push(host); return host }
     const first = open()
     await first.tick()
-    expect(superTabs.attention).toHaveBeenCalledTimes(1)
-    expect(superTabs.attention).toHaveBeenLastCalledWith([{ agentId: 'harness', requestId: 'supertab:as-1:blocked', superTab: 'Pilot', attention: 'stuck', text: 'Stuck: No key' }])
+    expect(attention).toHaveBeenCalledTimes(1)
+    expect(attention).toHaveBeenLastCalledWith([{ agentId: 'harness', requestId: 'supertab:as-1:blocked', superTab: 'Pilot', attention: 'stuck', text: 'Stuck: No key' }])
     await first.tick()
     // A failed roster read closes nothing.
     offline = true
     await first.tick()
-    expect(superTabs.attention).toHaveBeenCalledTimes(1)
+    expect(attention).toHaveBeenCalledTimes(1)
     offline = false
     rows = [{ ...waiting, attention: null }]
     await first.tick()
-    expect(superTabs.attention).toHaveBeenLastCalledWith([])
+    expect(attention).toHaveBeenLastCalledWith([])
     first.stop()
-    expect(superTabs.attention).toHaveBeenCalledTimes(2)
+    expect(attention).toHaveBeenCalledTimes(2)
     // A new host always hands over its first roster, so it closes what an earlier one raised; stopping takes its own back.
     const next = open()
     await next.tick()
-    expect(superTabs.attention).toHaveBeenCalledTimes(3)
+    expect(attention).toHaveBeenCalledTimes(3)
     rows = [waiting]
     await next.tick()
-    expect(superTabs.attention).toHaveBeenCalledTimes(4)
-    superTabs.attention.mockImplementationOnce(() => { throw new Error('Core gone') })
+    expect(attention).toHaveBeenCalledTimes(4)
+    relay.tell.mockImplementationOnce((kind: string, payload: unknown) => { if (kind === 'swarm_waits') attention(payload); throw new Error('Core gone') })
     next.stop()
-    expect(superTabs.attention).toHaveBeenLastCalledWith([])
+    expect(attention).toHaveBeenLastCalledWith([])
   })
 
   it('keeps a wait through a moment its harness is missing from the live agents, and closes it after 3 s', async () => {
@@ -2356,29 +2359,32 @@ describe('Super Tab waits for the Harness Pro', () => {
       agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' } }]
     const call: CoreApi['account']['backend'] = vi.fn(async (_method, path) => ({ status: 200, body: { success: true, data: path.includes('/hosts/') ? hostForm(rows, { tabs: ['tab'] }) : [] } }))
     let here = true, clock = 0
-    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn() }
-    const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
+    const superTabs = { shareObservers: vi.fn() }
+    // The waits it hands the devices, as the core's relay is told them (core/relays.ts).
+    const attention = vi.fn()
+    const relay = { tell: vi.fn((kind: string, payload: unknown) => { if (kind === 'swarm_waits') attention(payload) }), on: vi.fn(() => () => {}), onPeer: vi.fn(() => () => {}) }
+    const core = fakeCore({ dataDir: dir, superTabs, relay, account: { backend: call },
       agents: { byAgent: vi.fn(() => (here ? { agentId: 'harness' } : undefined) as never), terminalAvailable: vi.fn(() => true) } })
     const host = new SuperTabHost(core, 'machine-1', { log: vi.fn(), now: () => clock }); hosts.push(host)
     await host.tick()
-    expect(superTabs.attention).toHaveBeenCalledTimes(1)
+    expect(attention).toHaveBeenCalledTimes(1)
     here = false
     await host.tick()
     clock += 2_000
     await host.tick()
     here = true
     await host.tick()
-    expect(superTabs.attention).toHaveBeenCalledTimes(1)   // back within 3 s: the same wait, never closed
+    expect(attention).toHaveBeenCalledTimes(1)   // back within 3 s: the same wait, never closed
     here = false
     await host.tick()
     clock += 3_000
     await host.tick()
-    expect(superTabs.attention).toHaveBeenCalledTimes(2)
-    expect(superTabs.attention).toHaveBeenLastCalledWith([])
+    expect(attention).toHaveBeenCalledTimes(2)
+    expect(attention).toHaveBeenLastCalledWith([])
     // Never raised while missing: a harness the core does not have is not waited on.
     clock += 10_000
     await host.tick()
-    expect(superTabs.attention).toHaveBeenCalledTimes(2)
+    expect(attention).toHaveBeenCalledTimes(2)
   })
 })
 

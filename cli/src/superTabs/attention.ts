@@ -4,8 +4,8 @@
  * second anyway (backend superTabs/store.ts `hostTabs`, its `attention`), so nothing more is asked of the backend; a
  * backend from before it sends no `attention`, and nothing is raised.
  *
- * The roster is the whole truth each time: the set is handed to the core whole (`core.superTabs.attention`), which
- * raises what is new and closes what is gone (superTabs/inCore/attention.ts). A status that moves on, a new attempt, a
+ * The roster is the whole truth each time: the set is handed whole to the devices, through the core unread
+ * (`core.relay`, `swarm_waits`), which raise what is new and close what is gone (cable/swarmWaits.ts). A status that moves on, a new attempt, a
  * removed agent, a paused or deleted tab: each is a row that no longer says so, and its alert closes.
  */
 import { createHash } from 'node:crypto'

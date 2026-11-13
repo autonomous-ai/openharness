@@ -18,7 +18,6 @@
 import type { BackendNotice } from '../core/api.js'
 import { env } from '../config/env.js'
 import type { AppSwarms } from '../cable/cableSession.js'
-import type { LeadRecap, SwarmCard } from '../superTabs/cards.js'
 import type { RecentTurn } from '../cable/cableHost.js'
 import type { UnreadNotification } from '../lib/notificationRead.js'
 import { validUsage } from '../lib/agentUsageWire.js'
@@ -29,6 +28,7 @@ import { accountLink } from './accountLink.js'
 import { startDevices, type DevicesDeps } from './devices.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess, type ServiceProcessOptions } from './process.js'
 import { processCoreApi, UNASKED } from './processCoreApi.js'
+import { relayLink } from './relayLink.js'
 import { harnessdEnv } from '../lib/harnessdEnv.js'
 
 /** An agent as the core lists it for the dial: with the name the apps show and the model it runs. */
@@ -110,6 +110,7 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     if (!core) throw new Error('the devices are not connected to the core')
     return core.query(query, payload)
   }
+  const relays = relayLink(ask)
   const tell = (kind: string, payload: Record<string, unknown> = {}): void => { core?.notice?.(kind, payload) }
 
   // What the devices never ask of the core, answered as every service in its own process answers it.
@@ -204,6 +205,8 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     daemon: DAEMON_UNKNOWN,
     // The Swarm cards' requests to the Super Tab service, through the core (core/devicesLink.ts `super_tabs`).
     superTabRequest: (payload) => ask('super_tabs', payload).catch((): Record<string, unknown> => ({ error: 'SERVICE_UNAVAILABLE' })),
+    // The Swarm's cards and waits, which its service hands the devices through the core, unread (core/relays.ts).
+    relay: relays.relay,
     // The Wi-Fi device beside the dials has a link of its own (services/wifiProcess.ts).
     wifi: unasked.wifi,
   }
@@ -227,8 +230,6 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     card: ({ frame }) => port.card(object(frame)),
     desk: ({ agentIds, foreground }) => port.desk(strings(agentIds), foreground !== false),
     swarms: ({ swarms }) => port.swarms(swarms && typeof swarms === 'object' ? swarms as AppSwarms : null),
-    swarmCards: ({ items }) => port.swarmCards(Array.isArray(items) ? items as SwarmCard[] : []),
-    swarmCardRecap: ({ recap }) => port.swarmCardRecap(object(recap) as unknown as LeadRecap),
     unread: ({ items }) => port.unread(Array.isArray(items) ? items as UnreadNotification[] : []),
     appFocus: ({ machineId, agentId }) => port.appFocus(text(machineId), text(agentId)),
     seen: ({ agentId, readToken }) => port.seen(text(agentId), typeof readToken === 'string' ? readToken : undefined),
@@ -241,6 +242,7 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     scroll: ({ phase, dy, velocity }) => { if (phase === 'down' || phase === 'move' || phase === 'up') port.scroll(phase, number(dy), number(velocity)) },
     engines: ({ engines }) => port.engines(strings(engines)),
     commanders: ({ connected }) => port.commanders(connected === true),
+    asking: ({ agentIds }) => port.asking(strings(agentIds)),
     // Everything at once, as the core keeps it: this process (re)connected, and starts where the windows are.
     // What a window has not said is not said to the dial: a fresh process holds nothing yet, and a dial still
     // attached through a core's restart keeps its tab until the windows, reconnecting, say theirs again.
@@ -254,6 +256,7 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
       port.windowFocus(focusOf(state.focus))
       port.engines(strings(state.engines))
       port.commanders(state.commanders === true)
+      port.asking(strings(state.asking))
     },
   }
 
@@ -276,6 +279,7 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     token: options.token,
     requests: devices,
     onEvent: (payload) => {
+      if (relays.heard(payload)) return
       const kind = text(payload.kind)
       if (Object.hasOwn(heard, kind)) heard[kind](payload)
     },
