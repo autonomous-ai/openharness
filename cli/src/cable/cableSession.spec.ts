@@ -6125,6 +6125,22 @@ describe('what the dial cannot do for an agent', () => {
     } finally { await session.stop() }
   })
 
+  it('focus without f is still where the dial is: the next list push does not turn it back', async () => {
+    let agents = AGENTS
+    const host = caps({ listAgents: async () => agents })
+    const { session, port } = await greeted(host)
+    try {
+      await session.focusAgent('a2')
+      port.say({ t: 'focus', agentId: 'a1' })
+      await vi.waitFor(() => expect(host.markSeen).toHaveBeenCalledWith('a1'))
+      port.sent.length = 0
+      agents = [...AGENTS, { id: 'a3', name: 'Release notes', engine: 'claude' }]
+      await session.syncAgents()
+      expect(port.sent.filter((m) => m.t === 'focus')).toEqual([{ t: 'focus', agentId: 'a1' }])
+      expect(host.focus).not.toHaveBeenCalled()
+    } finally { await session.stop() }
+  })
+
   it('answer without a toasts and does not call host.answer', async () => {
     const host = caps()
     const { session, port } = await greeted(host)
