@@ -64,7 +64,7 @@ import { isAgentSessionVariable } from './agentSessionEnv.js'
 import { DEFAULT_HOST_THEME, windowStyleOf, type HostTheme } from './hostTheme.js'
 import { machineNames } from './machineNames.js'
 import { adoptLegacyHarnessSessions, isNoTmuxServerError, listTmuxPanes } from './tmuxAgentDiscovery.js'
-import { sameProcessIdentity, terminalRouteKey } from './terminalRuntime.js'
+import { processAmong, sameProcessIdentity, terminalRouteKey } from './terminalRuntime.js'
 import { TMUX_KEYS } from './terminalKeys.js'
 
 // Every tmux call here: a held event loop must not turn a timeout into a failure, or into an empty
@@ -579,7 +579,12 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
   async validate(runtime: TmuxRuntimeRef, expected: TerminalProcessExpectation): Promise<RuntimeValidation> {
     try {
       const found = await lookupPaneEngineProcess(this, runtime, expected.engine)
-      if (!found.ok) return { state: found.unknown ? 'unknown' : 'gone', reason: found.reason }
+      if (!found.ok) {
+        // The process the agent was bound to still runs in the pane under another name while its engine loads
+        // (a wrapper that `exec`s), and a message sent then was refused as sent to a stopped agent (#4259).
+        if (processAmong(expected.processIdentity, found.paneProcesses)) return { state: 'alive' }
+        return { state: found.unknown ? 'unknown' : 'gone', reason: found.reason }
+      }
       const live = found.identity
       // A saved marker that is not a C-locale `lstart` stamp was written either by the pre-fix parser,
       // with its fields shifted, or by a `ps` that still inherited the user's LC_TIME (see psEnv in
