@@ -1,13 +1,13 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
-import { createSuperTabTerminal } from './inCore/terminal.js'
+import { createPanes } from '../core/terminals/panes.js'
 import { screen as codexScreen } from '../engines/codex/screen.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import type { CoreApi, SuperTabScreen } from '../core/api.js'
+import type { CoreApi, PaneScreen } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { CODEX_MODEL_MIGRATION, CODEX_SIGN_IN, CODEX_TRUST_PROMPT, CODEX_UPDATE_PROMPT } from '../lib/__fixtures__/takeoverScreens.js'
 import { capScreen, limitOf, modelFailing, signedOut, TerminalHost, typedKeys } from './terminal.js'
@@ -15,7 +15,7 @@ import { capScreen, limitOf, modelFailing, signedOut, TerminalHost, typedKeys } 
 const row = (agentId = 'a1', harnessId = 'h1', over: Record<string, unknown> = {}) => ({ tabId: 'tab', agent: { id: agentId, harnessId, machineId: 'm1' }, ...over })
 type Sent = { path: string; body: Record<string, any> }
 
-function setup(options: { live?: string[]; screen?: (harnessId: string) => SuperTabScreen; requests?: unknown[];
+function setup(options: { live?: string[]; screen?: (harnessId: string) => PaneScreen; requests?: unknown[];
   refuse?: (command: Record<string, any>) => { status: number; code: string } | null; engine?: string } = {}) {
   let clock = 1_000_000
   const sent: Sent[] = []
@@ -31,15 +31,15 @@ function setup(options: { live?: string[]; screen?: (harnessId: string) => Super
   const core = fakeCore({
     account: { backend },
     agents: { byAgent: vi.fn((id: string) => (options.live ?? ['h1']).includes(id) ? { agentId: id, engine: options.engine ?? 'claude' } as never : undefined) },
-    superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(),
-      screen: vi.fn(async (harnessId: string) => screen(harnessId)), input: vi.fn(async () => ({ ok: true as const })), inputIfScreen: vi.fn(async () => ({ ok: true as const })) },
+    superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn() },
+    panes: { screen: vi.fn(async (harnessId: string) => screen(harnessId)), input: vi.fn(async () => ({ ok: true as const })), inputIfScreen: vi.fn(async () => ({ ok: true as const })) },
   })
   const host = new TerminalHost(core, 'm1', { now: () => clock, log: vi.fn() })
   return { core, backend, sent, host,
     now: () => clock,
     wait: (ms: number) => { clock += ms },
     request: (...rows: unknown[]) => { pending = rows },
-    showing: (next: (harnessId: string) => SuperTabScreen) => { screen = next },
+    showing: (next: (harnessId: string) => PaneScreen) => { screen = next },
     polls: () => vi.mocked(backend).mock.calls.filter(([, path]) => path === '/api/super-tabs/hosts/m1/terminal').length,
     alerts: () => sent.filter(s => s.body.command.type === 'agent.alert').map(s => s.body.command) }
 }
@@ -52,7 +52,7 @@ describe('a host serving its Lead\'s terminal requests', () => {
     const t = setup({ requests: [screenRequest({ request: { id: 'r1', kind: 'screen', scrollback: 50 } })],
       screen: () => ({ ok: true, text: 'Allow edit? 1. Yes 2. No', hold: 'permission_open' }) })
     await t.host.tick([row()])
-    expect(t.core.superTabs!.screen).toHaveBeenCalledWith('h1', 50)
+    expect(t.core.panes!.screen).toHaveBeenCalledWith('h1', 50)
     expect(t.sent).toEqual([{ path: '/api/super-tabs/tab/commands', body: { operationId: 'terminal-r1', asAgentId: 'a1',
       command: { type: 'agent.screenResult', requestId: 'r1', ok: true, text: 'Allow edit? 1. Yes 2. No' } } }])
   })
@@ -62,8 +62,8 @@ describe('a host serving its Lead\'s terminal requests', () => {
       { tabId: 'tab', agentId: 'a1', harnessId: 'h-old', request: { id: 'r2', kind: 'input', text: 'y' } }] })
     await t.host.tick([row()])
     // The one read is the alert watch's own.
-    expect(t.core.superTabs!.screen).toHaveBeenCalledOnce()
-    expect(t.core.superTabs!.input).not.toHaveBeenCalled()
+    expect(t.core.panes!.screen).toHaveBeenCalledOnce()
+    expect(t.core.panes!.input).not.toHaveBeenCalled()
     expect(t.sent.map(s => s.body.command).sort((x, y) => x.requestId.localeCompare(y.requestId))).toEqual([
       { type: 'agent.screenResult', requestId: 'r1', ok: false, error: 'This agent\'s terminal on this machine changed. Ask again.' },
       { type: 'agent.inputResult', requestId: 'r2', ok: false, error: 'This agent\'s terminal on this machine changed. Ask again.' }])
@@ -73,8 +73,8 @@ describe('a host serving its Lead\'s terminal requests', () => {
     const t = setup({ live: ['h1', 'h3'], requests: [screenRequest({ agentId: 'a9', harnessId: 'h9' }), screenRequest({ agentId: 'a2', harnessId: 'h2' }),
       screenRequest({ agentId: 'a3', harnessId: 'h3', request: { id: 'r3', kind: 'screen' } }), screenRequest({ agentId: 'a4', harnessId: 'h4', request: { id: 'r4', kind: 'input', keys: ['Enter'] } })] })
     await t.host.tick([row(), { tabId: 'tab', agent: { id: 'a2', harnessId: 'h2', machineId: 'm2' } }, row('a3', 'h3', { stopRequested: true }), row('a4', 'h4')])
-    expect(vi.mocked(t.core.superTabs!.screen).mock.calls).toEqual([['h1', 0]])
-    expect(t.core.superTabs!.input).not.toHaveBeenCalled()
+    expect(vi.mocked(t.core.panes!.screen).mock.calls).toEqual([['h1', 0]])
+    expect(t.core.panes!.input).not.toHaveBeenCalled()
     expect(t.sent.map(s => [s.body.asAgentId, s.body.command]).sort()).toEqual([
       ['a3', { type: 'agent.screenResult', requestId: 'r3', ok: false, error: 'This agent is not running on this machine.' }],
       ['a4', { type: 'agent.inputResult', requestId: 'r4', ok: false, error: 'This agent is not running on this machine.' }]])
@@ -89,7 +89,7 @@ describe('a host serving its Lead\'s terminal requests', () => {
   it('refuses typed text with a newline or another control character: those are keys, sent by name', async () => {
     const t = setup({ requests: ['a\nrm -rf x', 'a\u001b[A', 'ok\u007f'].map((text, i) => ({ tabId: 'tab', agentId: 'a1', harnessId: 'h1', request: { id: `r${i}`, kind: 'input', text } })) })
     await t.host.tick([row()])
-    expect(t.core.superTabs!.input).not.toHaveBeenCalled()
+    expect(t.core.panes!.input).not.toHaveBeenCalled()
     expect(t.sent.map(s => s.body.command.error)).toEqual(Array(3).fill('Send Enter and other keys as named keys, not in the text.'))
   })
 
@@ -112,8 +112,8 @@ describe('a host serving its Lead\'s terminal requests', () => {
     const t = setup({ requests: [{ tabId: 'tab', agentId: 'a1', harnessId: 'h1', request: { id: 'r1', kind: 'input', text: '2', keys: ['Enter'] } },
       { tabId: 'tab', agentId: 'a1', harnessId: 'h1', request: { id: 'r2', kind: 'input', keys: ['Home'] } }] })
     await t.host.tick([row()])
-    expect(t.core.superTabs!.input).toHaveBeenCalledOnce()
-    expect(t.core.superTabs!.input).toHaveBeenCalledWith('h1', '2', ['Enter'])
+    expect(t.core.panes!.input).toHaveBeenCalledOnce()
+    expect(t.core.panes!.input).toHaveBeenCalledWith('h1', '2', ['Enter'])
     expect(t.sent.map(s => s.body.command).sort((x, y) => x.requestId.localeCompare(y.requestId))).toEqual([{ type: 'agent.inputResult', requestId: 'r1', ok: true },
       { type: 'agent.inputResult', requestId: 'r2', ok: false, error: 'Unknown key: Home.' }])
   })
@@ -194,8 +194,8 @@ describe('terminal requests the server pushes', () => {
 })
 
 describe('the stuck and usage-limit alerts', () => {
-  const prompt = (): SuperTabScreen => ({ ok: true, text: 'Do you want to proceed?\n❯ 1. Yes\n  2. No', hold: 'permission_open' })
-  const idle = (): SuperTabScreen => ({ ok: true, text: '> ', hold: null })
+  const prompt = (): PaneScreen => ({ ok: true, text: 'Do you want to proceed?\n❯ 1. Yes\n  2. No', hold: 'permission_open' })
+  const idle = (): PaneScreen => ({ ok: true, text: '> ', hold: null })
 
   // Ken's prod scan (11-04): 116 agent.alert refusals in 32 minutes, AGENT_UNAVAILABLE: an alert the Swarm will never take
   // (its agent gone or to be shared again) was tried again on every 15-second read.
@@ -250,9 +250,9 @@ describe('the stuck and usage-limit alerts', () => {
     const t = setup({ screen: idle })
     await t.host.tick([row()])
     t.wait(5_000); await t.host.tick([row()])
-    expect(t.core.superTabs!.screen).toHaveBeenCalledOnce()
+    expect(t.core.panes!.screen).toHaveBeenCalledOnce()
     t.wait(10_000); await t.host.tick([row()])
-    expect(t.core.superTabs!.screen).toHaveBeenCalledTimes(2)
+    expect(t.core.panes!.screen).toHaveBeenCalledTimes(2)
   })
 
   it('alerts once for a usage-limit screen with its reset time, and ends it when the screen moves on', async () => {
@@ -265,7 +265,7 @@ describe('the stuck and usage-limit alerts', () => {
   })
 
   it('alerts once its model has failed for 10 minutes, and ends it when answers come again', async () => {
-    const failing = (): SuperTabScreen => ({ ok: true, text: '✻ Waiting for API response · will retry in 2m 38s · check your network\n❯ ', hold: null })
+    const failing = (): PaneScreen => ({ ok: true, text: '✻ Waiting for API response · will retry in 2m 38s · check your network\n❯ ', hold: null })
     const t = setup({ screen: failing })
     await t.host.tick([row()])
     t.wait(540_000); await t.host.tick([row()])
@@ -281,7 +281,7 @@ describe('the stuck and usage-limit alerts', () => {
 
   it('raises nothing for a burst of failures that recovers before ten minutes, so its task is never lost for it', async () => {
     // Last night's reviewer failures came and went (429 bursts): nine minutes of retries, then answers for ten.
-    const failing = (): SuperTabScreen => ({ ok: true, text: '✻ Waiting for API response · will retry in 2m 38s · check your network\n❯ ', hold: null })
+    const failing = (): PaneScreen => ({ ok: true, text: '✻ Waiting for API response · will retry in 2m 38s · check your network\n❯ ', hold: null })
     const t = setup({ screen: failing })
     await t.host.tick([row()])
     t.wait(539_000); await t.host.tick([row()])
@@ -295,8 +295,8 @@ describe('the stuck and usage-limit alerts', () => {
 
   it('counts retries with fresh attempts between them as one failing stretch', async () => {
     // Claude Code shows its countdown, then a plain spinner for the minutes each new attempt takes.
-    const failing = (): SuperTabScreen => ({ ok: true, text: '✻ Waiting for API response · will retry in 1m 18s · check your network\n❯ ', hold: null })
-    const attempt = (): SuperTabScreen => ({ ok: true, text: '✻ Thinking… (4m 12s · esc to interrupt)\n❯ ', hold: null })
+    const failing = (): PaneScreen => ({ ok: true, text: '✻ Waiting for API response · will retry in 1m 18s · check your network\n❯ ', hold: null })
+    const attempt = (): PaneScreen => ({ ok: true, text: '✻ Thinking… (4m 12s · esc to interrupt)\n❯ ', hold: null })
     const t = setup({ screen: failing })
     await t.host.tick([row()])
     for (let minute = 0; minute < 10; minute += 2) {
@@ -360,22 +360,22 @@ describe('answering Claude Code\'s question to make auto mode the default, for a
   it('picks No, keeping its person\'s own default, through the core\'s if-screen door, and raises no alert', async () => {
     const t = setup({ screen: () => ({ ok: true, text: ASKED, hold: 'prompt_hidden' }) })
     await t.host.tick([row()])
-    expect(vi.mocked(t.core.superTabs!.inputIfScreen).mock.calls).toEqual([['h1', ['Down', 'Enter'], ASKED]])
-    expect(t.core.superTabs!.input).not.toHaveBeenCalled()
+    expect(vi.mocked(t.core.panes!.inputIfScreen).mock.calls).toEqual([['h1', ['Down', 'Enter'], ASKED]])
+    expect(t.core.panes!.input).not.toHaveBeenCalled()
     expect(t.alerts()).toEqual([])
   })
 })
 
 describe('dismissing Codex\'s update screen for a Swarm agent', () => {
-  const update = (): SuperTabScreen => ({ ok: true, text: CODEX_UPDATE_PROMPT, hold: 'update_prompt_open' })
-  const idle = (): SuperTabScreen => ({ ok: true, text: '> ', hold: null })
-  const dismissed = (t: ReturnType<typeof setup>) => vi.mocked(t.core.superTabs!.inputIfScreen).mock.calls
+  const update = (): PaneScreen => ({ ok: true, text: CODEX_UPDATE_PROMPT, hold: 'update_prompt_open' })
+  const idle = (): PaneScreen => ({ ok: true, text: '> ', hold: null })
+  const dismissed = (t: ReturnType<typeof setup>) => vi.mocked(t.core.panes!.inputIfScreen).mock.calls
 
   it('sends Esc through the core\'s if-screen door with the screen it read, types nothing itself, and raises no alert', async () => {
     const t = setup({ screen: update })
     await t.host.tick([row()])
     expect(dismissed(t)).toEqual([['h1', ['Escape'], CODEX_UPDATE_PROMPT]])
-    expect(t.core.superTabs!.input).not.toHaveBeenCalled()
+    expect(t.core.panes!.input).not.toHaveBeenCalled()
     t.showing(idle)
     for (let i = 0; i < 14; i++) { t.wait(15_000); await t.host.tick([row()]) }
     expect(dismissed(t)).toHaveLength(1)
@@ -421,8 +421,8 @@ describe('dismissing Codex\'s update screen for a Swarm agent', () => {
 
   it('goes on watching when the core refuses, because the screen had changed or the terminal did not take the key', async () => {
     const t = setup({ screen: update })
-    vi.mocked(t.core.superTabs!.inputIfScreen).mockResolvedValueOnce({ ok: false, error: 'The screen changed before the key was sent; nothing was typed.' })
-    vi.mocked(t.core.superTabs!.inputIfScreen).mockRejectedValueOnce(new Error('core gone'))
+    vi.mocked(t.core.panes!.inputIfScreen).mockResolvedValueOnce({ ok: false, error: 'The screen changed before the key was sent; nothing was typed.' })
+    vi.mocked(t.core.panes!.inputIfScreen).mockRejectedValueOnce(new Error('core gone'))
     await t.host.tick([row()])
     t.wait(15_000); await t.host.tick([row()])
     t.wait(15_000); await t.host.tick([row()])
@@ -435,20 +435,20 @@ describe('dismissing Codex\'s update screen for a Swarm agent', () => {
 describe('dismissing Claude Code\'s feedback popups for a Swarm agent', () => {
   const DRAFT = '│ ✻ Bug report drafted: Lead switched Codex model │\n│ 1 to review · 2 to send · 0 to dismiss │\n────\n❯ '
   const TURN_OFF = 'Turn off Claude-drafted feedback? 0 to turn off · Esc to keep\n────\n❯ '
-  const dismissed = (t: ReturnType<typeof setup>) => vi.mocked(t.core.superTabs!.inputIfScreen).mock.calls
+  const dismissed = (t: ReturnType<typeof setup>) => vi.mocked(t.core.panes!.inputIfScreen).mock.calls
 
   it('dismisses the draft with 0, then keeps the setting with Esc, through the if-screen door, and raises no alert', async () => {
     const t = setup({ screen: () => ({ ok: true, text: DRAFT, hold: 'prompt_hidden' }) })
     await t.host.tick([row()])
     t.showing(() => ({ ok: true, text: TURN_OFF, hold: 'prompt_hidden' })); t.wait(15_000); await t.host.tick([row()])
     expect(dismissed(t)).toEqual([['h1', ['0'], DRAFT], ['h1', ['Escape'], TURN_OFF]])
-    expect(t.core.superTabs!.input).not.toHaveBeenCalled()
+    expect(t.core.panes!.input).not.toHaveBeenCalled()
     expect(t.alerts()).toEqual([])
   })
 })
 
 describe('progress for the machine report', () => {
-  const showing = (text: string) => (): SuperTabScreen => ({ ok: true, text, hold: null })
+  const showing = (text: string) => (): PaneScreen => ({ ok: true, text, hold: null })
 
   it('records when each running agent\'s screen last changed, from the reads the watch already makes', async () => {
     const t = setup({ screen: showing('✻ Reading files…\n❯ ') })
@@ -458,7 +458,7 @@ describe('progress for the machine report', () => {
     expect(t.host.progressOf(['h1'])).toEqual({ h1: 1_000_000 })
     t.showing(showing('✻ Editing host.ts…\n❯ ')); t.wait(15_000); await t.host.tick([row()])
     expect(t.host.progressOf(['h1'])).toEqual({ h1: 1_030_000 })
-    expect(t.core.superTabs!.screen).toHaveBeenCalledTimes(3)
+    expect(t.core.panes!.screen).toHaveBeenCalledTimes(3)
   })
 
   it('names only running agents, and forgets one once it stops or leaves', async () => {
@@ -631,7 +631,7 @@ describe.each([
     try {
       let capture = await nextScreen()
       const t = setup({ engine: 'codex' })
-      const terminal = createSuperTabTerminal({
+      const terminal = createPanes({
         resolve: id => id === 'h1' ? { agentId: id, engine: 'codex' } as RegisteredSession : undefined,
         capture: async () => ({ state: 'succeeded', value: capture }),
         read: async (_session, text) => codexScreen.inspect(text ?? ''),
@@ -639,7 +639,7 @@ describe.each([
         key: async (_id, key) => { child.stdin.write(`${key}\n`); capture = await nextScreen(); return true },
         locked: async (_id, write) => write(),
       })
-      Object.assign(t.core.superTabs!, terminal)
+      Object.assign(t.core.panes!, terminal)
       await t.host.tick([row()])
       expect(capture).toBe('› Ask Codex to do anything')
       expect(readFileSync(config, 'utf8')).toBe(savedConfig)
@@ -659,15 +659,15 @@ describe.each([
   ])('never types on %s', async (_name, text, engine, rows) => {
     const t = setup({ engine, screen: () => ({ ok: true, text, hold: 'trust_open' }) })
     await t.host.tick(rows)
-    expect(t.core.superTabs!.inputIfScreen).not.toHaveBeenCalled()
+    expect(t.core.panes!.inputIfScreen).not.toHaveBeenCalled()
   })
 
   it('bounds failed conditional inputs and alerts when the prompt persists', async () => {
     const t = setup({ engine: 'codex', screen: () => ({ ok: true, text: restricted, hold: 'trust_open' }) })
-    vi.mocked(t.core.superTabs!.inputIfScreen).mockResolvedValue({ ok: false, error: 'Screen changed.' })
+    vi.mocked(t.core.panes!.inputIfScreen).mockResolvedValue({ ok: false, error: 'Screen changed.' })
     for (let i = 0; i < 5; i++) { await t.host.tick([row()]); t.wait(15_000) }
-    expect(t.core.superTabs!.inputIfScreen).toHaveBeenCalledTimes(3)
-    expect(t.core.superTabs!.inputIfScreen).toHaveBeenCalledWith('h1', ['Enter'], restricted)
+    expect(t.core.panes!.inputIfScreen).toHaveBeenCalledTimes(3)
+    expect(t.core.panes!.inputIfScreen).toHaveBeenCalledWith('h1', ['Enter'], restricted)
     t.wait(180_000); await t.host.tick([row()])
     expect(t.alerts()).toContainEqual(expect.objectContaining({ alert: 'prompt', active: true }))
   })

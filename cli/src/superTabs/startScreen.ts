@@ -5,7 +5,7 @@
  * 11-05), and two in a row suspended Codex on its machine. Read once a pass, while the start waits for its session:
  *
  * - Codex's review of hooks it has not seen, on a computer with another program's new hook, is skipped
- *   (engines/codex/screen.ts `hooksReviewSkipKeys`), and only while the pane still shows it (inCore/terminal.ts
+ *   (engines/codex/screen.ts `hooksReviewSkipKeys`), and only while the pane still shows it (core/terminals/panes.ts
  *   `inputIfScreen`): those hooks stay off and nothing is trusted. Trusting one is a person's.
  * - Any other screen that waits for a person (terminal.ts `WAITING`) fails the start at once, saying what kind of screen it
  *   was, in fixed words ([hiddenPromptReason]): who started it, its coordinator and its machine's owner read that (backend
@@ -16,7 +16,7 @@ import { hooksReviewSkipKeys } from '../engines/codex/screen.js'
 import { WAITING } from './terminal.js'
 import type { MessageHold } from '../engines/facets/screen.js'
 
-type Terminal = Pick<NonNullable<CoreApi['superTabs']>, 'screen' | 'inputIfScreen'>
+type Terminal = Pick<NonNullable<CoreApi['panes']>, 'screen' | 'inputIfScreen'>
 
 /** Each screen that waits for a person, as a reason names it: fixed words, the engine's own heading where it has one. */
 const KINDS: Partial<Record<MessageHold, string>> = {

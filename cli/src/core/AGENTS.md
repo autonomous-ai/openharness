@@ -63,7 +63,9 @@ The core stays small and secure, in the code and at run time: read
   connected it keeps what each of the last few turns of a session said (`CoreApi.turns.answerOf`), whatever the
   transcript shows by the time it is asked.
 - `terminals/`: who controls a pane (the control lease), opening a terminal with a literal argv (`open.ts`),
-  and the requests about a terminal itself (`requests.ts`: `terminal_info`, `theme_set`).
+  and the requests about a terminal itself (`requests.ts`: `terminal_info`, `theme_set`). `panes.ts`: an agent's pane
+  read as plain text and typed into, under its write lock, for a component the core lists (`PANE_TYPERS`: the Swarm's,
+  a member's terminal for its Lead).
 - `engines/`: hook coordination, reader ports and live worker coordination. Claude Code/Codex
   history, last-turn reads, live parsing, runtime profiles/catalogs and screen interpretation run in supervised workers; core passes snapshots,
   validates bounded replies, retains acknowledged cursors and owns binding/turn state. The explicit

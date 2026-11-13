@@ -160,8 +160,12 @@ describe('the core API services stand on', () => {
     expect(createCoreApi({ ...deps, cloud }).cloud).toBe(cloud)
     // The Super Tab service's door, the same way.
     expect(core.superTabs).toBeUndefined()
-    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn(), inputIfScreen: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn() }
     expect(createCoreApi({ ...deps, superTabs }).superTabs).toBe(superTabs)
+    // An agent's pane read and typed into, the same way: only while a service that may use it runs.
+    expect(core.panes).toBeUndefined()
+    const panes = { screen: vi.fn(), input: vi.fn(), inputIfScreen: vi.fn() }
+    expect(createCoreApi({ ...deps, panes }).panes).toBe(panes)
     // The devices' way to its card requests, the same way.
     expect(core.superTabRequest).toBeUndefined()
     const superTabRequest = vi.fn()

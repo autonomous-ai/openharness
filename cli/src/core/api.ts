@@ -413,6 +413,9 @@ export interface CoreApi {
   cloud?: CloudCore
   /** The Super Tab service's door into the core (superTabs/attention.ts): absent from a core or a process that offers it none. */
   superTabs?: SuperTabsCore
+  /** An agent's pane read and typed into (core/terminals/panes.ts), for the services `PANE_TYPERS` names: absent from a
+   *  process that offers none. */
+  panes?: PanesCore
   /** The devices' way to the Super Tab service's `super_tabs` requests, for the Swarm cards alone (`cardsWanted`, `cardRecap`,
    *  `cardOpen`, `cardSay`, `cardWorker`; superTabs/inCore/cards.ts refuses any other action): its answer, or SERVICE_UNAVAILABLE. Absent from a core or a
    *  process that offers none. */
@@ -1037,6 +1040,11 @@ export const TURN_END_HEARERS: readonly string[] = ['superTabs']
  *  `typesWhileBusy`). Every other typed delivery, Agent Messages' among them, waits for the agent to be idle. */
 export const WHILE_BUSY_DELIVERERS: readonly string[] = ['superTabs']
 
+/** The services that may read an agent's pane and type text and keys into it from a process of their own
+ *  (core/terminals/panes.ts): the Swarm's, for a Lead's view of its members' terminals and its host's answers to an
+ *  engine's start screens. Typing into a pane is the core's most trusted act, so no other service may ask. */
+export const PANE_TYPERS: readonly string[] = ['superTabs']
+
 /** The core's calls into Share: an observer's frame as the relay handed it over, the relay gone (every observer
  *  with it), and stopping it. */
 export interface SharingPort {
@@ -1537,17 +1545,21 @@ export interface SuperTabsCore {
    *  state wakes it only as the core starts, so a machine that joined a Swarm while running never invited anyone and
    *  each member's pane read "must be online" (River on a contributed machine, 2026-10-23). */
   shareObservers(): void
-  /** A member's terminal as plain text for its Lead (superTabs/inCore/terminal.ts): the visible screen, with up to 200 lines
-   *  of scrollback when asked, and what the screen reader says it waits on (a permission prompt, a question). */
-  screen(agentId: string, scrollback: number): Promise<SuperTabScreen>
-  /** Text, then each key by its tmux name, typed into a member's terminal under the pane's write lock. */
-  input(agentId: string, text: string, keys: string[]): Promise<SuperTabTyped>
-  /** The same keys, sent only if the visible screen, read again under the pane's write lock, is exactly `screen` (superTabs/inCore/
-   *  terminal.ts): for a caller that read the screen earlier and must not type into a different one. */
-  inputIfScreen(agentId: string, keys: string[], screen: string): Promise<SuperTabTyped>
 }
-export type SuperTabScreen = { ok: true; text: string; hold: MessageHold | null } | { ok: false; error: string }
-export type SuperTabTyped = { ok: true } | { ok: false; error: string }
+
+/** An agent's pane, read and typed into for a component the core lists (`PANE_TYPERS`, core/terminals/panes.ts). */
+export interface PanesCore {
+  /** The pane as plain text: the visible screen, with up to 200 lines of scrollback when asked, and what the screen reader
+   *  says it waits on (a permission prompt, a question). */
+  screen(agentId: string, scrollback: number): Promise<PaneScreen>
+  /** Text, then each key by its tmux name, typed into the pane under its write lock. */
+  input(agentId: string, text: string, keys: string[]): Promise<PaneTyped>
+  /** The same keys, sent only if the visible screen, read again under the pane's write lock, is exactly `screen`: for a
+   *  caller that read the screen earlier and must not type into a different one. */
+  inputIfScreen(agentId: string, keys: string[], screen: string): Promise<PaneTyped>
+}
+export type PaneScreen = { ok: true; text: string; hold: MessageHold | null } | { ok: false; error: string }
+export type PaneTyped = { ok: true } | { ok: false; error: string }
 
 /** What the cloud service answers the core: done, or why not, in words a person reads. */
 export type CloudResult = { ok: true; detail?: string } | { ok: false; error: string; detail?: string }
@@ -2233,6 +2245,8 @@ export interface CoreApiDeps {
   cloud?: CloudCore
   /** The Super Tab service's door (superTabs/inCore/attention.ts). */
   superTabs?: SuperTabsCore
+  /** An agent's pane, read and typed into for the services that may (core/terminals/panes.ts). */
+  panes?: PanesCore
   /** The devices' way to the Super Tab service's card requests. */
   superTabRequest?: CoreApi['superTabRequest']
   /** The running cloud harnesses as list rows (`agents.cloud`). */
@@ -2253,7 +2267,7 @@ export function createCoreApi({
   gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, observerKey, tabKey, tabRelay, connectorVault, observer, privateGridName, machineName, backend, onNotice,
   runtimeProfile, setRuntime, fork, create, creationStatus, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, viewerFrame, browserFrame, browserBytes, machine, activityText, activitySnapshot, activity, summaries,
   closeAgent, activityAt, resumeAgent, swarmAgents, setBrowser, moveBrowser, panePid,
-  signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, cloud, superTabs, superTabRequest, cloudRows, lastTurn, turnCard, turnSummary,
+  signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, cloud, superTabs, panes, superTabRequest, cloudRows, lastTurn, turnCard, turnSummary,
   count, hachiGoalDone, log = (line) => console.warn(line),
 }: CoreApiDeps): CoreApi {
   // The devices reach the windows through these alone, and only with their own frames: a devices process
@@ -2359,6 +2373,7 @@ export function createCoreApi({
     wifi,
     ...(cloud ? { cloud } : {}),
     ...(superTabs ? { superTabs } : {}),
+    ...(panes ? { panes } : {}),
     ...(superTabRequest ? { superTabRequest } : {}),
   }
 }

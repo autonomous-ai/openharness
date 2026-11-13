@@ -1067,7 +1067,7 @@ export class SuperTabHost {
     this.joinSwarms(data)
     this.cleanRemoved(data)
     // Off the poll: a screen read waits on the core, and never delays the input leases below.
-    if (this.core.superTabs) void this.terminal.tick(data)
+    if (this.core.panes) void this.terminal.tick(data)
     // Recovery can wait on a native receipt. Run it beside leases, so another worker's input
     // never expires while an old Change agent is being reconciled.
     if (!this.replacementsRunning && this.now() >= this.nextReplacementsAt) {

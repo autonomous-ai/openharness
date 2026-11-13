@@ -115,6 +115,7 @@ core/terminalWatch.ts
 core/terminals/browser.ts
 core/terminals/control.ts
 core/terminals/open.ts
+core/terminals/panes.ts
 core/terminals/requests.ts
 core/terminals/sessions.ts
 core/toolWatches.ts

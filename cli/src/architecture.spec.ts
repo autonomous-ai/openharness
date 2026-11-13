@@ -380,7 +380,7 @@ describe('the daemon\'s shape', () => {
       'lib/agentInstructions.ts', 'lib/superTabAttachmentProxy.ts', 'lib/swarmEngineArgs.ts', 'lib/swarmGitHub.ts', 'lib/swarmSkills.ts',
       'superTabs/inCore.ts', 'superTabs/inCore/adoption.ts', 'superTabs/inCore/agents.ts',
       'superTabs/inCore/attention.ts', 'superTabs/inCore/cards.ts', 'superTabs/inCore/devices.ts',
-      'superTabs/inCore/launch.ts', 'superTabs/inCore/role.ts', 'superTabs/inCore/terminal.ts', 'superTabs/leadSwitch.ts',
+      'superTabs/inCore/launch.ts', 'superTabs/inCore/role.ts', 'superTabs/leadSwitch.ts',
       'superTabs/readContract.ts', 'superTabs/retention.ts', 'superTabs/wire.ts',
     ])
     // None of it is an edge file but the Swarm's own side.
