@@ -14,6 +14,12 @@ function setup(over: Partial<ObservedDeps> = {}) {
   const working = new Map<string, boolean | null>()
   const externals = new Map<string, { cwd?: string; transcriptPath?: string | null }>()
   const answers = new Map<string, string>()
+  // Each look at the machine's processes, as OpenSessions takes one: owner() looks anew, fresh() and owners() take one.
+  let looks = 0
+  let held: Promise<void> | undefined
+  const look = async (): Promise<void> => { looks++; await held }
+  const find = vi.fn(async (wanted: ReadonlyMap<string, string>) =>
+    new Map([...wanted.keys()].flatMap((id) => (externals.has(id) ? [[id, externals.get(id)!] as const] : []))))
   const deps: ObservedDeps = {
     now: () => clock.t,
     processes: procs,
@@ -21,11 +27,19 @@ function setup(over: Partial<ObservedDeps> = {}) {
     openSessions: {
       // The cached answer is empty before the first look, as it is when a dial attaches; only a fresh look sees.
       known: () => new Map(),
-      fresh: async () => open,
+      fresh: async () => { await look(); return open },
       working: async (id: string) => (working.has(id) ? working.get(id)! : false),
-      owner: async (id: string) => (owners.get(id) as never) ?? null,
-    } as ObservedDeps['openSessions'],
-    externalSessions: { scan: async () => [], get: (id) => externals.get(id) },
+      owner: async (id: string) => { await look(); return (owners.get(id) as never) ?? null },
+      owners: async () => {
+        await look()
+        return new Map([...open].flatMap(([id, openIn]) => {
+          const owner = owners.get(id)
+          return owner ? [[id, { ...owner, tty: null, record: '', ...(openIn === 'harness' ? { harness: true } : {}) }] as const] : []
+        }))
+      },
+    } as unknown as ObservedDeps['openSessions'],
+    externalSessions: { scan: async () => { await look(); return [] }, get: (id) => externals.get(id) },
+    sessionRows: { find },
     lastAnswer: async (_engine, path) => answers.get(path),
     excluded: ['/data/harness'],
     log: () => {},
@@ -37,7 +51,10 @@ function setup(over: Partial<ObservedDeps> = {}) {
   const ev = (event: ObservedHookEvent['event'], over: Partial<ObservedHookEvent> = {}): ObservedHookEvent => ({
     engine: 'claude', sessionId: 's1', event, cwd: '/work/proj', callerPid: 100, hostHints: {}, at: clock.t, ...over,
   })
-  return { src, clock, gens, procs, alive, open, owners, working, externals, answers, changes, ev }
+  return {
+    src, clock, gens, procs, alive, open, owners, working, externals, answers, changes, ev, find,
+    looks: () => looks, hold: (until: Promise<void>) => { held = until },
+  }
 }
 
 describe('ObservedSource states', () => {
@@ -287,6 +304,35 @@ describe('ObservedSource codex and open sessions', () => {
     owners.set('a', { pid: 11, engine: 'claude' })
     await src.scanOpen()
     expect(src.list().map((a) => a.sessionId)).toEqual(['a'])
+  })
+
+  it('scanOpen reads the process table once, however many sessions', async () => {
+    const { src, open, owners, externals, find, looks } = setup()
+    for (let i = 0; i < 60; i++) {
+      open.set(`s${i}`, 'terminal')
+      owners.set(`s${i}`, { pid: 200 + i, engine: i % 2 ? 'codex' : 'claude' })
+      externals.set(`s${i}`, { cwd: `/w/p${i}`, transcriptPath: `/t/s${i}.jsonl` })
+    }
+    open.set('mine', 'harness')
+    owners.set('mine', { pid: 300, engine: 'claude' })
+    await src.scanOpen()
+    expect(looks()).toBe(1)
+    // Only the sessions found open are looked up, each in its own engine's store; Harness's own pane is not one.
+    expect(find).toHaveBeenCalledTimes(1)
+    expect(find.mock.calls[0][0]).toEqual(new Map([...owners].filter(([id]) => id !== 'mine').map(([id, owner]) => [id, owner.engine])))
+    expect(src.list()).toHaveLength(50)
+  })
+
+  it('a second scanOpen while one runs does not start another', async () => {
+    const { src, open, owners, looks, hold } = setup()
+    open.set('a', 'terminal')
+    owners.set('a', { pid: 11, engine: 'claude' })
+    let release: () => void = () => {}
+    hold(new Promise((resolve) => { release = resolve }))
+    const scans = [src.scanOpen(), src.scanOpen()]
+    release()
+    await Promise.all(scans)
+    expect(looks()).toBe(1)
   })
 
   it('scanOpen leaves a session a hook already knows', async () => {
