@@ -364,27 +364,37 @@ describe('runMaster', { timeout: 60_000 }, () => {
     const signals = new Map<string, () => void>()
     const exits: number[] = []
     const updates: string[] = []
-    const supervisor = runMaster({
-      nodePath: process.execPath,
-      execArgv: [],
-      scriptPath: core,
-      pidFile,
-      restoreUpdate: () => { updates.push('restore') },
-      confirmUpdate: () => updates.push('confirm'),
-      env: { ...process.env, HARNESSD_SERVICES: 'none', HARNESSD_INITIAL_BACKOFF_MS: '10' },
-      exit: (code) => exits.push(code),
-      onSignal: (signal, listener) => signals.set(signal, listener),
-    })
-    expect([...signals.keys()]).toEqual(['SIGTERM', 'SIGINT', 'SIGHUP'])
-    await until('the pid file', () => existsSync(pidFile))
-    expect(readFileSync(pidFile, 'utf8')).toBe(`${process.pid}\n`)
-    await until('a restart', () => existsSync(runs) && readFileSync(runs, 'utf8') === '0\n1\n')
-    await until('the restarted core to bind', () => supervisor.status().state === 'running')
-    signals.get('SIGTERM')!()
-    await until('the master to finish', () => exits.length > 0)
-    expect(exits).toEqual([0])
-    expect(existsSync(pidFile)).toBe(false)
-    expect(updates).toEqual([])
+    const ups: string[] = []
+    const logged = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      const supervisor = runMaster({
+        nodePath: process.execPath,
+        execArgv: [],
+        scriptPath: core,
+        pidFile,
+        restoreUpdate: () => { updates.push('restore') },
+        confirmUpdate: () => updates.push('confirm'),
+        // The entry hears each core that comes up (../masterProcess.ts follows the Node it runs on). One that throws
+        // is said, and is no reason for the master to stop.
+        coreUp: (node) => { ups.push(node); if (ups.length === 1) throw new Error('the launcher is read-only') },
+        env: { ...process.env, HARNESSD_SERVICES: 'none', HARNESSD_INITIAL_BACKOFF_MS: '10' },
+        exit: (code) => exits.push(code),
+        onSignal: (signal, listener) => signals.set(signal, listener),
+      })
+      expect([...signals.keys()]).toEqual(['SIGTERM', 'SIGINT', 'SIGHUP'])
+      await until('the pid file', () => existsSync(pidFile))
+      expect(readFileSync(pidFile, 'utf8')).toBe(`${process.pid}\n`)
+      await until('a restart', () => existsSync(runs) && readFileSync(runs, 'utf8') === '0\n1\n')
+      await until('the restarted core to bind', () => supervisor.status().state === 'running' && ups.length === 2)
+      expect(ups).toEqual([process.execPath, process.execPath])
+      expect(logged.mock.calls.map(([line]) => String(line)).filter((line) => line.includes('after its core came up'))).toEqual([
+        expect.stringMatching(/\[harnessd\] what the master does after its core came up failed: the launcher is read-only$/)])
+      signals.get('SIGTERM')!()
+      await until('the master to finish', () => exits.length > 0)
+      expect(exits).toEqual([0])
+      expect(existsSync(pidFile)).toBe(false)
+      expect(updates).toEqual([])
+    } finally { logged.mockRestore() }
   })
 
   it('carries on, without a pid file, when the disk will not take one', async () => {
@@ -1313,6 +1323,37 @@ describe('runMaster', { timeout: 60_000 }, () => {
         expect(lines.filter((line) => line.includes('[harnessd] the core did not come up on Node'))).toEqual([
           expect.stringMatching(/\[harnessd\] the core did not come up on Node v24\.22\.2; back on v22\.23\.2$/),
         ])
+        await master.stop()
+      } finally { log.mockRestore() }
+    })
+
+    // The review of the move that gave the master's entry this hook: it points the launcher and the service file at the
+    // Node the daemon runs on. A failed update's rollback puts every core after it on the Node before; where the master
+    // could not re-execute onto that Node, its own is still the one the rollback rejected, and that is what it named.
+    it('tells its entry the Node each core came up on: after a rollback it could not re-execute for, the Node before and not its own', async () => {
+      const runtime = join(dir, 'runtime')
+      const v22 = join(runtime, 'node-v22.23.2-test', 'bin', 'node')
+      const v24 = join(runtime, 'node-v24.22.2-test', 'bin', 'node')
+      for (const node of [v22, v24]) { mkdirSync(dirname(node), { recursive: true }); placeNode(node, [join(dirname(dirname(node)), 'libexec', 'harnessd')]) }
+      // The update's build comes up and dies on its probation; the build before it, put back on disk, stays up. (The
+      // words it looks for are written apart here, so that this line is not what it finds.)
+      const script = bundle(`if (!fs.readFileSync(__filename, 'utf8').includes('the build ' + 'before')) process.exit(3)`)
+      const ups: string[] = []
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+      try {
+        const master = start(script, {
+          nodePath: v24, runtimeDir: runtime, unjudgedUpdate: () => '2.0.0',
+          // This Node has no way to replace the process: the master stays on the Node the update moved it to.
+          execve: null,
+          coreUp: (node: string) => { ups.push(node) },
+          restoreUpdate: () => {
+            writeFileSync(script, readFileSync(script, 'utf8') + '\n// the build before\n')
+            return v22
+          },
+        })
+        await until('the build before to come up', () => ups.length > 1)
+        // The update's core on the Node the update moved the daemon to, then the build before on the Node before.
+        expect(ups.slice(0, 2)).toEqual([v24, v22])
         await master.stop()
       } finally { log.mockRestore() }
     })

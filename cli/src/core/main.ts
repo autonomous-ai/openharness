@@ -253,7 +253,6 @@ import { attachLocalWsServer, LOCAL_WS_PATH, LOCAL_WS_PROTOCOL_VERSION } from '.
 import { BROWSER_CHUNK_BYTES, TERMINAL_BINARY_VERSION } from '../lib/terminalBinary.js'
 import { isLoopbackRequest, loopbackHosts } from '../lib/loopbackRequest.js'
 import { isInstalledCopy } from '../lib/installedCopy.js'
-import { refreshNodeReferences } from '../lib/nodeReferences.js'
 import { managedNodePath } from '../lib/nodeRuntime.js'
 import { settleNodeMigration } from '../lib/nodeMigration.js'
 import { nodeStatus } from '../lib/nodeStatus.js'
@@ -2392,13 +2391,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   daemonBoot.hookServer = hookServer
   daemonBoot.localSocket = localSocket
   console.log(`[cli] daemon pid ${process.pid} · v${VERSION}${process.env.ADAPTER_UPDATED_TO ? ' · updated' : ''} · listening on 127.0.0.1:${hookPort}`)
-  // The launcher and the service definition name the Node they were written with: once the core is up, they follow
-  // the Node it runs on, which an update may have moved (lib/nodeReferences.ts); and on the minimum Node, why an update once held it
-  // back no longer applies. The installed copy only: a checkout's core never changes the real installation.
-  if (isInstalledCopy(SCRIPT_PATH, env.ADAPTER_CLI_DIR)) {
-    refreshNodeReferences((line) => console.log(`[node-runtime] ${line.trim()}`))
-    settleNodeMigration(env.ADAPTER_CLI_DIR)
-  }
+  // On the minimum Node, why an update once held this core back no longer applies (lib/nodeMigration.ts). The installed
+  // copy only: a checkout's core never changes the real installation. The launcher and the service definition follow
+  // the Node this core runs on once it is up, which its master does (masterProcess.ts `coreUp`).
+  if (isInstalledCopy(SCRIPT_PATH, env.ADAPTER_CLI_DIR)) settleNodeMigration(env.ADAPTER_CLI_DIR)
   // The device key log records which sign-in this machine is under: a session from before sign-in epochs
   // gets one first, adopted so it never starts the log over, and the gateway registers with it then.
   if (session?.machineId) void ensureSignInEpoch().catch(() => null).then(() => gatewayOps.account(account()))

@@ -8,22 +8,12 @@
 import { parse as parseToml } from 'smol-toml'
 import { basename, join } from 'node:path'
 import type { HookReviewRecord } from '../facets/hooks.js'
+import { failure, type HookFileRemoval } from './hookRemovalOutcome.js'
 import { HookPreparationHeld, inspectHookFile, runHookPreparation } from './nativeHookFiles.js'
 import { reviewRecords, withoutReviewRecords } from './hookReview.js'
-import { IdentityReadUnavailable } from './identityScan.js'
 import { isMessagesBlock } from './messagesHook.js'
 import { foreignHookBlocks, isManagedHookCommand, isOurs, type HookBlock, type Settings } from './notifyHooks.js'
 import { hostPlatform } from './windowsFiles.js'
-
-export interface HookFileRemoval {
-  file: string
-  /** How many of Harness's entries (hooks, rules, approvals, or the file itself) went. */
-  removed: number
-  /** Why the file was left as it was. */
-  failed?: string
-  /** A file at a path of ours that is somebody else's. */
-  kept?: string
-}
 
 export interface JsonHookRemoval {
   schema: 'nested' | 'entries' | 'file' | 'named'
@@ -96,17 +86,6 @@ export function withoutHarnessHooks(text: string | null, rule: JsonHookRemoval, 
   const hooksLeft = object(settings.hooks) ? Object.keys(settings.hooks).length : 0
   if (rule.ownedFile && hooksLeft === 0 && Object.keys(settings).every((key) => key === 'hooks' || key === 'version')) return { kind: 'delete', removed }
   return { kind: 'write', text: JSON.stringify(settings, null, 2) + '\n', removed }
-}
-
-/**
- * Why a file was left, as the end of a sentence a person reads in uninstall's report: a held preparation's reason
- * without its "Hook preparation is waiting" prefix, which is the installers' wording, and a refused route's reason
- * without the identity reader's.
- */
-export function failure(error: unknown): string {
-  if (error instanceof HookPreparationHeld) return error.reason
-  if (error instanceof IdentityReadUnavailable) return error.message.replace(/^Conversation identity is held: (.*?)\.?$/s, '$1')
-  return error instanceof Error ? error.message : String(error)
 }
 
 /** Harness's entries out of one settings file. */

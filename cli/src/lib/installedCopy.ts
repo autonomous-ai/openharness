@@ -8,7 +8,7 @@
  */
 import { statSync } from 'node:fs'
 import { join, win32 } from 'node:path'
-import { VERSION_FOLDER } from './windows/cliVersions.js'
+import { VERSION_FOLDER } from './windows/installNames.js'
 
 export function isInstalledCopy(scriptPath: string, cliDir: string, platform: NodeJS.Platform = process.platform): boolean {
   if (platform === 'win32') {
