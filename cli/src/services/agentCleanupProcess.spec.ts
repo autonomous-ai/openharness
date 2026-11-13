@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -118,6 +118,17 @@ describe('the agent cleanup in its own process', () => {
     service.stop()
     expect(port.stop).toHaveBeenCalled()
     expect(stop).toHaveBeenCalled()
+  })
+
+  // The Swarm was deleted on 2026-11-14 (services/swarmLeftovers.ts): what it left goes as the edge host starts, where the
+  // cleanup runs by default, not only inside the core.
+  it('deletes what the Swarm left in the data folder as it starts', async () => {
+    mkdirSync(join(dir, 'super-tabs'))
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const service = runAgentCleanupService({ dataDir: dir, socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't', run: () => ({ stop: vi.fn() }) })
+    await vi.waitFor(() => expect(existsSync(join(dir, 'super-tabs'))).toBe(false))
+    expect(log).toHaveBeenCalledWith('[agent-cleanup] removed 1 of the Swarm\'s files and folders from the data folder')
+    await service.stop()
   })
 
   it('runs as a real service by default, on the cleanup', async () => {

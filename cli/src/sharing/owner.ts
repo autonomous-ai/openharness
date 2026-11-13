@@ -16,6 +16,11 @@ const DAY = 86400_000, HOUR = 3600_000
 const ignore = (): void => {}
 /** A derived grant's rolling expiry, and how close to it the next derivation publishes it again. */
 export const DERIVED_DAYS = 30, RENEW_DAYS = 7
+/** A grant a Swarm's roster made (`tab: super:<id>`) opens nothing since the Swarm was deleted (2026-11-14), whatever is left
+ *  of it until a derive revokes it: that waits on the rosters, which may be unreadable for as long as the grant lasts. An
+ *  observer exists only once opened, and a private link's invitations are never derived, so the open is the one door.
+ *  Remove on or after 2026-12-14, when the last of them (DERIVED_DAYS) has expired. */
+const swarmGrant = (grant: Pick<HarnessGrant, 'tab'>): boolean => grant.tab?.startsWith('super:') === true
 interface Observer { grant: HarnessGrant; cipher: ObserverCipher; linkId?: string; author: CommentAuthor | null }
 /** What reads an observer's terminal: the owner's own read-only stream manager, or the core's (`streams`). */
 export type ObserverStreams = Pick<TerminalStreamManager, 'handleFrame' | 'closeConnection' | 'stop'>
@@ -130,7 +135,7 @@ export class HarnessShareOwner {
       const grant: HarnessGrant | null = link && (link.visibility === 'public' || author?.owner || this.invited(link.agentId, email))
         ? { ...link, recipientEmail: email, createdAt: '', expiresAt: '', revoked: false, publicationError: null, tab: null, failedAt: null }
         : payload.linkId ? null : this.deps.grants.active(String(payload.shareId), email, this.deps.machineId())
-      if (!grant || !this.deps.resolveAgent(grant.agentId) || this.observers.size >= 100) {
+      if (!grant || swarmGrant(grant) || !this.deps.resolveAgent(grant.agentId) || this.observers.size >= 100) {
         this.deps.send(connId, 'observer_closed', { reason: 'Sharing ended or invitation expired', retry: false }); return
       }
       try {

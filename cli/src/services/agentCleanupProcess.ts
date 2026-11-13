@@ -12,6 +12,7 @@ import type { RegisteredSession } from '../lib/registry.js'
 import { createAgentCleanup } from './agentCleanup.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
 import { agentsIn, daemonIn, processCoreApi } from './processCoreApi.js'
+import { removeSwarmLeftovers } from './swarmLeftovers.js'
 
 export interface AgentCleanupServiceOptions {
   dataDir: string
@@ -57,6 +58,9 @@ export function runAgentCleanupService(options: AgentCleanupServiceOptions): Ser
       daemon ??= daemonIn(await ask('daemon', {}).catch(() => null))
     },
   })
+  // What the deleted Swarm left in the data folder goes as this process starts (until 2027-01-14). It never rejects: each
+  // name's failure is its own, said in the log.
+  void removeSwarmLeftovers({ dataDir: options.dataDir, log: (line) => console.log(`[agent-cleanup] ${line}`) })
   const service = (options.run ?? runServiceProcess)({
     name: 'agentCleanup',
     socketPath: options.socketPath,

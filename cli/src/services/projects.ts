@@ -1,10 +1,12 @@
 /**
  * The project and folder readers: an agent's branch and pull request, a project's repository and preview,
- * a folder's subfolders for the New Agent browser, and media from an agent's project. Each reads the disk or runs git,
- * so it is answered when it settles, never in the connection's line.
+ * a folder's subfolders for the New Agent browser, media from an agent's project, and the linked pull requests an agent's
+ * work names (`harness show --work`). Each reads the disk or runs git, so it is answered when it settles, never in the
+ * connection's line.
  * Moved out of the socket's switch as they were (docs/design/2026-10-06-core-boundary-next.md, step 4).
  */
-import type { CoreApi, ServiceRequests } from '../core/api.js'
+import type { Asker, CoreApi, ServiceRequests } from '../core/api.js'
+import { createPullRequestsStatusReader } from '../lib/pullRequestsStatus.js'
 import { listDir } from '../lib/fsBrowse.js'
 import { readGitProject } from '../lib/gitProject.js'
 import { MediaPreviewError, readMediaPreviewChunk } from '../lib/mediaPreview.js'
@@ -16,11 +18,20 @@ import { internalOnThrow } from './requestErrors.js'
 /** The requests the project readers answer for the apps, declared in core/api.ts for the core to route. */
 export { PROJECTS_REQUESTS } from '../core/api.js'
 
+/** A trusted collaborator may use terminals here, but must not borrow this computer's GitHub account. Only a process on
+ *  this computer, or one of the owner's own computers, may. */
+const accountOwnerOnly = (asker: Asker): boolean => asker.owner && (asker.local || asker.accountOwner === true)
+
 export function startProjects(core: CoreApi): ServiceRequests {
   /** The browsable home, widened by the folders agents are running in: a repository outside both is not
    *  somewhere this daemon runs git. */
   const knownRoots = (): string[] => core.agents.live().flatMap((agent) => agent.cwd ? [agent.cwd] : [])
+  const readPullRequests = createPullRequestsStatusReader()
   return {
+    git_pull_requests_status: internalOnThrow('git_pull_requests_status', (payload, asker) => {
+      if (!accountOwnerOnly(asker)) return { error: 'OWNER_REQUIRED' }
+      return readPullRequests(payload.urls)
+    }),
     git_pull_request: internalOnThrow('git_pull_request', (payload) => {
       const id = payload.agentId
       const agent = typeof id === 'string' ? core.agents.resolve(id) : undefined

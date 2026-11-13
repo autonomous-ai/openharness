@@ -7,6 +7,9 @@ import { HACHI_ID } from '../dsh/builtinIds.js'
 const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/work/app' }) as RegisteredSession
 
 describe('the core API services stand on', () => {
+  it('allows a bounded batch of GitHub reads to finish outside the core', () => {
+    expect(LONG_ANSWERS.projects).toEqual({ git_pull_requests_status: 120_000 })
+  })
   it('gives a service with no lane of the core\'s nothing to seal with, and never its frame back in the clear', async () => {
     await expect(LANE_OFF.hello('m', 'pub')).rejects.toThrow(/no E2EE identity/)
     expect(await LANE_OFF.welcome('m', {})).toBe(false)
