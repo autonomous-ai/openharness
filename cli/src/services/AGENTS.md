@@ -30,7 +30,9 @@ let several people build features at once without touching the core or each othe
    off or failing: `undefined` for nothing, a value, or `FAIL` to answer that one request
    `SERVICE_UNAVAILABLE`. The core only ever calls the port, never the service. Most features need no
    port: only the apps call them.
-4. **Start it in `src/core/main.ts` through the host, never directly:**
+4. **Give it a process of its own** ([Running in its own process](#running-in-its-own-process)): every
+   service runs outside the core's, the edge host for a light one. For the debugging switch
+   (`HARNESSD_SERVICES=none`) it also starts in `src/core/main.ts`, through the host, never directly:
    `serviceHost.serve('<name>', start<Name>, coreApi, <NAME>_REQUESTS)` for a service with no port, or
    `serviceHost.start('<name>', start<Name>, coreApi, <NAME>_FALLBACKS, <NAME>_REQUESTS)` for one with a
    port. The host leaves a service off when its start throws, guards every call and request, and
@@ -46,8 +48,10 @@ let several people build features at once without touching the core or each othe
 
 ## Running in its own process
 
-A service that can crash natively, hang or leak should run in a process of its own, where it costs only
-that process. A process per risk, not per feature (`SERVICE_HOSTS` in `src/harnessd/services.ts`):
+Every service runs in a process of its own, never in the core's: the core stays small and secure, in the
+code and at run time ([Protect the core](../../AGENTS.md#protect-the-core)). One that can crash natively,
+hang or leak costs only its process. A process per risk, not per feature (`SERVICE_HOSTS` in
+`src/harnessd/services.ts`), so a light pure-JS service joins the edge host:
 
 | Process | Services | Why its own | Started |
 |---|---|---|---|

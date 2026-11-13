@@ -25,6 +25,16 @@ Each component has its own AGENTS.md (`cli/`, `desktop/`, `backend/`, `mobile/`)
 - Accept all stays off for subscriptions until Anthropic and OpenAI confirm in writing.
 - Talking to anh Dee: plain words, 1-3 short lines, more only when asked.
 
+# The daemon core
+
+The core is the one process every agent depends on (`cli/src/core/`). Protect it ([rules](cli/AGENTS.md#protect-the-core)):
+
+- **Small.** It owns sessions only: agents, terminals, transcripts, turns, input, questions.
+- **Everything else is a component in a process of its own:** the relay, the Swarm, devices, models, search, viewers,
+  every new feature. The same at run time: the core loads none of their code and runs without any of them.
+- **Secure.** It is the most trusted process, so it meets the outside least: what someone else can shape is checked in
+  a component before it reaches the core.
+
 # Code standards
 
 1. **Simple.** The smallest change that does the task. One way to do a thing: a second way replaces the first. No
@@ -43,7 +53,7 @@ Each component has its own AGENTS.md (`cli/`, `desktop/`, `backend/`, `mobile/`)
 8. **Measurable.** A new path emits the measures its targets need, with no content or identifiers.
 9. **Within the architecture.** Flutter for screens, TypeScript for the backend and daemon, Rust on the terminal's hot
    path; no other language, framework, datastore or hosted service. The daemon that owns the work is the truth. Terminal
-   traffic is end-to-end encrypted. Swarm code stays out of the daemon's core.
+   traffic is end-to-end encrypted. No feature goes into [the daemon core](#the-daemon-core).
 10. **Every platform.** The pull request names the platforms it affects and it is tested where it runs. Windows looks
     and works as on a Mac ([Windows rules](docs/windows-rules.md)).
 11. **Readable.** Names and copy follow the [Naming System](docs/naming-system.md). Comments say why.
