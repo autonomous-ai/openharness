@@ -230,25 +230,40 @@ def attempt(command, cwd, err):
 
     def kill():
         # The whole group: a child the shell started holds the pipe, and reading waits for every holder.
-        expired.set()
         if os.name == "nt":
-            subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)], stdin=subprocess.DEVNULL,
-                           capture_output=True)
+            try:
+                subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)], stdin=subprocess.DEVNULL,
+                               capture_output=True, timeout=60)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
         else:
             try:
                 os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:  # every member left as the limit came
+            except OSError:  # every member left already; macOS refuses a group that is only the unreaped shell
                 pass
 
-    timer = threading.Timer(RUN_SECONDS, kill)
+    def expire():
+        expired.set()
+        kill()
+
+    timer = threading.Timer(RUN_SECONDS, expire)
     timer.start()
     decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
     tail = bytearray()
     with process.stdout:
-        for chunk in iter(lambda: process.stdout.read1(1 << 16), b""):
-            err.write(decoder.decode(chunk))
-            tail += chunk
-            del tail[:-TAIL_BYTES]
+        try:
+            for chunk in iter(lambda: process.stdout.read1(1 << 16), b""):
+                err.write(decoder.decode(chunk))
+                tail += chunk
+                del tail[:-TAIL_BYTES]
+        except BaseException:
+            # --run itself is stopping: Ctrl+C, or a SIGTERM main() turns into an exit. The terminal's signals never
+            # reach the check's group, so it is stopped here, and so is the timer, which Python would wait out first.
+            timer.cancel()
+            timer.join()
+            kill()
+            process.wait()
+            raise
     timer.cancel()
     timer.join()  # a kill under way ends before the shell is reaped, so its pid is never another process's
     code = process.wait()
@@ -323,6 +338,11 @@ def main():
     if args.run:
         # A Windows text stdout writes "\n" as "\r\n", and CI's FENCE takes no "\r" before the closing line.
         sys.stdout.reconfigure(newline="\n")
+        # A SIGTERM, or a closed terminal's SIGHUP, ends --run as an exit, as Ctrl+C does as KeyboardInterrupt, so the
+        # check under way is stopped with it (attempt) instead of running on alone.
+        for name in ("SIGTERM", "SIGHUP"):
+            if hasattr(signal, name):
+                signal.signal(getattr(signal, name), lambda signum, frame: sys.exit(128 + signum))
         top = git(".", "rev-parse", "--show-toplevel")
         if top is None:
             sys.exit(refuse(sys.stderr, "this is not a git repository"))
