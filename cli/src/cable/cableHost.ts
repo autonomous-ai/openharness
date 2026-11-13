@@ -700,8 +700,10 @@ export class DaemonCableHost implements CableHost {
     // The reader's Buddy is shown on its Swarm card, and its session id never leaves this computer (cableSession dialBuddy).
     // Dropped after the registry's dedupe, which needs it to tell its Claude Code session from an agent outside Harness.
     const buddies = new Set((this.cards ?? []).flatMap((card) => card.leads.map((l) => l.buddy?.local).filter((id) => id !== undefined)))
-    // Before the cards a dial asked for, a Buddy cannot be told from any other Harness agent: theirs wait for them.
+    // Before the cards a dial asked for, a Buddy cannot be told from any other Harness agent: theirs wait for them. Signed
+    // out, no card comes and no Swarm has a Buddy here.
     const waiting = this.cards === null && this.cardsAskedAt !== null && Date.now() - this.cardsAskedAt < CARDS_WAIT_MS
+      && this.wiring.signedIn?.() !== false
     const { rows, total } = selectForDial(registry.agents().filter((a) => !buddies.has(a.id) && !(waiting && a.host === 'harness')))
     const agents = rows.map((a): CableAgent => {
       const caps = registry.source(a.id)?.capabilities(a)
