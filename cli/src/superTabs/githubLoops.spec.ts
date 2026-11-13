@@ -18,7 +18,8 @@ import { commandRecords } from './commandRecords.fake.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 
 type Json = Record<string, unknown>
-const REPO = 'acme/app', OPENER = 'deehw'
+/** The repository, the login its PM's person opens tasks with, and its Swarm's label there, which every task here carries. */
+const REPO = 'acme/app', OPENER = 'deehw', MARK = 'swarm:acme'
 const START = Date.parse('2026-11-10T04:30:00Z')
 const PASS_MS = 30_000, PASSES = 120
 const GiB = 1024 ** 3
@@ -44,7 +45,7 @@ function liveGitHub(clock: { now: number }, repo = REPO, lag = false) {
   const commits = new Map<number, Json[]>(), files = new Map<number, string[]>()
   /** Every read asked. */
   const asked: string[] = []
-  const labels: Json[] = ['status:taken', 'size:s', 'size:m', 'size:l', 'p0', 'p1', 'p2', 'builder:pip', 'builder:juno', 'needs:gpu'].map(name => ({ name }))
+  const labels: Json[] = ['status:taken', 'size:s', 'size:m', 'size:l', 'p0', 'p1', 'p2', 'builder:pip', 'builder:juno', 'needs:gpu'].map(name => ({ name } as Json)).concat({ name: MARK, description: 'Swarm tab' })
   const sent: Array<{ at: number; method: string; path: string; body: Json }> = []
   let ids = 1000
   const records = commandRecords()
@@ -54,7 +55,7 @@ function liveGitHub(clock: { now: number }, repo = REPO, lag = false) {
     if (pulls.has(number)) pulls.get(number)!.updated_at = at
   }
   const task = (number: number, names: string[], updatedAt = iso(), body = '') =>
-    issues.set(number, { number, title: `Task ${number}`, body, state: 'open', labels: names.map(name => ({ name })), user: { login: OPENER },
+    issues.set(number, { number, title: `Task ${number}`, body, state: 'open', labels: [...names, MARK].map(name => ({ name })), user: { login: OPENER },
       author_association: 'MEMBER', created_at: updatedAt, updated_at: updatedAt })
   const pull = (number: number, head: string, extra: Json = {}) => {
     const row = { number, draft: false, state: 'open', base: { ref: 'main' }, head: { sha: head, ref: `pip/${number}`, repo: { full_name: repo } }, labels: [{ name: 'builder:pip' }],
@@ -80,7 +81,8 @@ function liveGitHub(clock: { now: number }, repo = REPO, lag = false) {
     const shown = (row: Json): Json => !lag ? row : { ...row, labels: (row.labels as Json[]).filter(label => labelled.get(`${row.number}:${label.name}`) !== clock.now) }
     // Each label GitHub's `labels` asks for, in any case.
     const wanted = (url.searchParams.get('labels') ?? '').split(',').filter(Boolean).map(name => name.toLowerCase())
-    const body = p === at ? { default_branch: 'main' }
+    const body = p === '/user' ? { login: OPENER }
+      : p === at ? { default_branch: 'main' }
       : p === `${at}/issues` ? page([...issues.values()].filter(i => (url.searchParams.get('state') ?? 'open') === 'all' || i.state === (url.searchParams.get('state') ?? 'open'))
         .filter(i => String(i.updated_at) >= since).map(shown).filter(i => wanted.every(name => (i.labels as Json[]).some(label => String(label.name).toLowerCase() === name))), url)
       : p === `${at}/pulls` ? page([...pulls.values()].filter(r => r.state === (url.searchParams.get('state') ?? 'open')), url)
@@ -181,8 +183,9 @@ describe('Harness says each thing once on GitHub, over an hour and a restart (gi
 
     const make = () => {
       const deps = { projects: async () => [PROJECT], crew: async () => structuredClone(CREW), get: gh.get, send: gh.send, now: () => clock.now, log: () => {}, records: new VerdictRecords(gh.authors, () => clock.now, () => {}) }
-      return { merger: new GitHubMerge({ ...deps, costs: async () => [], hot: () => [] }), assigner: new GitHubAssign({ ...deps, repositories: async () => [REPO], numbers: { pass: async () => {} }, pmRunning: async () => true,
-        offers: { offer: async () => {}, listed: async () => [] }, say: async () => {} }) }
+      const others = new Map<string, ReadonlySet<number>>()
+      return { merger: new GitHubMerge({ ...deps, costs: async () => [], hot: () => [], others: project => others.get(project.repo) ?? null }), assigner: new GitHubAssign({ ...deps, repositories: async () => [REPO], numbers: { pass: async () => {} }, pmRunning: async () => true,
+        swarm: async () => 'Acme', others: (project, pulls) => { others.set(project.repo, pulls) }, offers: { offer: async () => {}, listed: async () => [] }, say: async () => {} }) }
     }
     let loops = make()
     for (let pass = 0; pass < PASSES; pass++) {
@@ -266,8 +269,9 @@ describe('Harness says each thing once on GitHub, over an hour and a restart (gi
     gh.pull(24, sha(24)); gh.say(24, `Juno, 04:00, to **Pip**: READ-OK ${sha(24).slice(0, 7)}`); gh.mergeable.set(24, 'dirty')
     const make = () => {
       const deps = { projects: async () => [PROJECT], crew: async () => structuredClone(CREW), get: gh.get, send: gh.send, now: () => clock.now, log: () => {}, records: new VerdictRecords(gh.authors, () => clock.now, () => {}) }
-      return { merger: new GitHubMerge({ ...deps, costs: async () => [], hot: () => [] }), assigner: new GitHubAssign({ ...deps, repositories: async () => [REPO], numbers: { pass: async () => {} }, pmRunning: async () => true,
-        offers: { offer: async () => {}, listed: async () => [] }, say: async () => {} }) }
+      const others = new Map<string, ReadonlySet<number>>()
+      return { merger: new GitHubMerge({ ...deps, costs: async () => [], hot: () => [], others: project => others.get(project.repo) ?? null }), assigner: new GitHubAssign({ ...deps, repositories: async () => [REPO], numbers: { pass: async () => {} }, pmRunning: async () => true,
+        swarm: async () => 'Acme', others: (project, pulls) => { others.set(project.repo, pulls) }, offers: { offer: async () => {}, listed: async () => [] }, say: async () => {} }) }
     }
     let loops = make()
     // A pass every five minutes for a day, the daemon restarting every six hours, as releases restart it.
@@ -309,8 +313,9 @@ describe('Harness says each thing once on GitHub, over an hour and a restart (gi
     gh.files.set(26, ['app/b.py', 'app/hub.py'])
     const make = () => {
       const deps = { projects: async () => [PROJECT], crew: async () => structuredClone(CREW), get: gh.get, send: gh.send, now: () => clock.now, log: () => {}, records: new VerdictRecords(gh.authors, () => clock.now, () => {}) }
-      return { merger: new GitHubMerge({ ...deps, costs: async () => [], hot: () => hot }), assigner: new GitHubAssign({ ...deps, repositories: async () => [REPO], numbers: { pass: async () => {} }, pmRunning: async () => true,
-        offers: { offer: async () => {}, listed: async () => [] }, say: async () => {} }) }
+      const others = new Map<string, ReadonlySet<number>>()
+      return { merger: new GitHubMerge({ ...deps, costs: async () => [], hot: () => hot, others: project => others.get(project.repo) ?? null }), assigner: new GitHubAssign({ ...deps, repositories: async () => [REPO], numbers: { pass: async () => {} }, pmRunning: async () => true,
+        swarm: async () => 'Acme', others: (project, pulls) => { others.set(project.repo, pulls) }, offers: { offer: async () => {}, listed: async () => [] }, say: async () => {} }) }
     }
     let loops = make()
     // A pass every five minutes for a day, the daemon restarting every six hours.
@@ -344,7 +349,8 @@ describe('one task building across a Swarm\'s public projects (githubAssign.ts, 
   function swarmGitHub(clock: { now: number }, names: string[], lag = false) {
     const repos = new Map(names.map(repo => [repo, liveGitHub(clock, repo, lag)]))
     const of = (path: string) => repos.get(path.split('/').slice(2, 4).join('/'))!
-    const get: GitHubGet = (path, etag) => of(path).get(path, etag)
+    // The login is GitHub's answer, whichever repository is read.
+    const get: GitHubGet = (path, etag) => (path === '/user' ? repos.values().next().value! : of(path)).get(path, etag)
     const send: GitHubSend = (method, path, body) => of(path).send(method, path, body)
     for (const live of repos.values()) for (const number of [1, 2, 3]) live.task(number, ['size:s'])
     return { repos, get, send, authors: (project: LedProject, ids: string[]) => repos.get(project.repo)!.authors(project, ids) }
@@ -355,7 +361,7 @@ describe('one task building across a Swarm\'s public projects (githubAssign.ts, 
   const daemon = (gh: Swarm, clock: { now: number }, projects: LedProject[], get: GitHubGet = gh.get) => new GitHubAssign({ projects: async () => projects,
     crew: async () => structuredClone(CREW), repositories: async () => [...gh.repos.keys()], get, send: gh.send, now: () => clock.now, log: () => {},
     records: new VerdictRecords(gh.authors, () => clock.now, () => {}), numbers: { pass: async () => {} }, pmRunning: async () => true,
-    offers: { offer: async () => {}, listed: async () => [] }, say: async () => {} })
+    swarm: async () => 'Acme', others: () => {}, offers: { offer: async () => {}, listed: async () => [] }, say: async () => {} })
 
   /** What [name] builds across the Swarm's repositories now, as package 2 counts it: its open tasks with no pull request up for
    *  their read, one that GitHub says is not a draft and that closes it. */

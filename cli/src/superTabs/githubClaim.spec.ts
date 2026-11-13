@@ -17,7 +17,9 @@ function setup() {
     /** The builder's label the assigner moves the task to while the claim's label is put on; '' takes it from the builder for nobody. */
     regiven: null as null | string,
     /** GitHub puts the label on, and its answer cannot be read. */
-    unread: false }
+    unread: false,
+    /** The repository's labels: no Swarm's unless a case gives some, as before Harness wrote them. */
+    labels: [] as Json[] }
   const sent: Array<{ method: string; path: string; body: unknown }> = []
   const names = (issue: Json) => (issue.labels as Json[]).map(label => String(label.name))
   /** The status a failing call answers; a status of 0 is a GitHub that does not answer at all. */
@@ -35,6 +37,7 @@ function setup() {
     const issue = one ? repo.issues.get(Number(one[1])) : undefined
     const body = one ? (issue ? { ...issue, comments: (repo.comments.get(Number(one[1])) ?? []).length } : null)
       : said ? (repo.comments.get(Number(said[1])) ?? []).slice((page - 1) * per, page * per)
+      : p === '/repos/acme/app/labels' ? repo.labels.slice((page - 1) * per, page * per)
       : p === '/repos/acme/app/issues' ? [...repo.issues.values()].filter(issue => issue.state === 'open'
         && (url.searchParams.get('labels') ?? '').split(',').every(label => names(issue).includes(label))).slice((page - 1) * per, page * per)
       : null
@@ -69,7 +72,7 @@ function setup() {
     return { status: 404, etag: null, body: null, resetAt: null }
   }
   const record = vi.fn(async (_repository: string, _commentId: string) => {})
-  const pip = { name: 'Pip', repositories: new Map([['acme/app', { project: 'acme/app', github: 'acme/app' }]]) }
+  const pip = { name: 'Pip', repositories: new Map([['acme/app', { project: 'acme/app', github: 'acme/app' }]]), swarm: 'd6004d45908ca1c85fca67f0' }
   // What the Swarm's server holds of Pip's offers (taskOffers.ts): by task, how long its accepted offer still holds it.
   const offers = { left: new Map<string, number>(), declined: [] as string[] }
   const hold = { left: vi.fn(async (repository: string, number: number) => offers.left.get(`${repository}#${number}`) ?? null),
@@ -132,6 +135,29 @@ describe('a task\'s claim, made by command', () => {
     expect(u.record).toHaveBeenCalledTimes(2)
     u.record.mockRejectedValueOnce(new SuperTabHostError('COMMENT_NOT_YOURS', 'Another agent wrote this comment.', 409))
     expect((await refusal(u.take()))?.message).toBe('Taken (https://github.com/acme/app/issues/34#issuecomment-9001), but it is not recorded as yours: Another agent wrote this comment. (COMMENT_NOT_YOURS)')
+  })
+
+  // #4219: Dee's Swarm's Lennox heard of #3880, which 0xken15's Swarm's Lennox held as `builder:lennox`, and could take it.
+  it('takes only its own Swarm\'s task where two Swarms, each with a Lennox, build one repository', async () => {
+    const t = setup()
+    const lennox = (swarm: string) => ({ ...t.pip, name: 'Lennox', swarm })
+    const DEE = 'd6004d45908ca1c85fca67f0', KEN = '0f0f0f0f0f0f0f0f0f0f0f0f'
+    // Two Swarms of one name: each one's label is found by the id in its description.
+    t.repo.labels = [{ name: 'swarm:acme', description: `Swarm ${DEE}` }, { name: 'Swarm:Acme-0f0f0f0f', description: `Swarm ${KEN}` }]
+    t.repo.issues.set(35, { number: 35, state: 'open', labels: [{ name: 'builder:lennox' }, { name: 'swarm:acme' }] })
+    t.repo.issues.set(36, { number: 36, state: 'open', labels: [{ name: 'builder:lennox' }, { name: 'swarm:acme-0f0f0f0f' }] })
+    t.repo.issues.set(37, { number: 37, state: 'open', labels: [{ name: 'builder:lennox' }] })
+    const notYours = (number: number) => ({ code: 'TASK_NOT_YOURS', message: `acme/app#${number} is not a task of your Swarm: it does not carry your Swarm's label.` })
+    expect(await refusal(t.take(36, lennox(DEE)))).toEqual(notYours(36))
+    expect(await refusal(t.take(35, lennox(KEN)))).toEqual(notYours(35))
+    // Nor one with no Swarm's label, once its Swarm has one in the repository.
+    expect(await refusal(t.take(37, lennox(DEE)))).toEqual(notYours(37))
+    expect(t.sent).toEqual([])
+    expect(await t.take(35, lennox(DEE))).toMatchObject({ taken: true })
+    expect(await t.take(36, lennox(KEN))).toMatchObject({ taken: true })
+    // A Swarm with no label there yet (its PM's Harness is from before it) takes as before, but never another Swarm's.
+    expect(await refusal(t.take(36, lennox('abababababababababababab')))).toEqual(notYours(36))
+    expect(await t.take(37, lennox('abababababababababababab'))).toMatchObject({ taken: true })
   })
 
   it('takes only a task given to it: not one given to another or to nobody, one a person took, a closed one, a pull request, or one that is not there', async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { addElsewhere, buildingIn, builtOn, contextOf, crewOf, learnedMinutes, openPieces, outOfQuota, startedAt, takenTasks, QUEUED_AWAY_MS, readerFor, takeBacks, TAKEN_AWAY_MS, CLAIM_LIMIT, dependsOn, hasRoom, heldTasks, labelOf, machineHas, MEMORY_SHARE, nextPicks, readProblem, reasonOf, RESERVE, SIZES, worksOnOf, type Crew, type CrewBuilder } from './crew.js'
+import { addElsewhere, buildingIn, builtOn, contextOf, crewOf, learnedMinutes, ofProject, openPieces, outOfQuota, startedAt, takenTasks, QUEUED_AWAY_MS, readerFor, takeBacks, TAKEN_AWAY_MS, CLAIM_LIMIT, dependsOn, hasRoom, heldTasks, labelOf, machineHas, MEMORY_SHARE, nextPicks, readProblem, reasonOf, RESERVE, SIZES, worksOnOf, type Crew, type CrewBuilder } from './crew.js'
 import { solve } from './search.js'
 
 type Json = Record<string, unknown>
@@ -527,5 +527,23 @@ describe('how long tasks take, learned (startedAt, learnedMinutes)', () => {
     expect(learnedMinutes([{ size: 's', minutes: 20 }, { size: 's', minutes: 40 }, { size: 's', minutes: 600 }, { size: 'm', minutes: 50 },
       { size: 'm', minutes: 70 }, { size: 'l', minutes: 2 }, { size: 'l', minutes: 3 }, { size: 'l', minutes: 4 }])).toEqual({ s: 40, l: 10 })
     expect(learnedMinutes([{ size: 'm', minutes: 3_000 }, { size: 'm', minutes: 3_000 }, { size: 'm', minutes: 3_000 }, { size: 'm', minutes: 10 }])).toEqual({ m: 1_440 })
+  })
+})
+
+// #4212: several Swarms build one repository, and builders in different Swarms may share a name.
+describe('which of a repository\'s issues and pull requests are a Swarm\'s (ofProject)', () => {
+  const pull = (number: number, body: string, labels: string[] = []): Json => ({ ...issue(number, labels, { body }), pull_request: {} })
+  const rows = [issue(1, ['swarm:acme']), issue(2, ['Swarm:Acme', 'builder:lennox']), issue(3, ['swarm:acme-0f0f0f0f', 'builder:lennox']), issue(4, ['size:s'])]
+
+  it('takes the issues that carry its Swarm\'s label, in any case, and none that carry another\'s or none', () => {
+    expect(rows.filter(ofProject(rows, 'swarm:acme')).map(row => row.number)).toEqual([1, 2])
+    expect(rows.filter(ofProject(rows, 'swarm:acme-0f0f0f0f')).map(row => row.number)).toEqual([3])
+  })
+  it('leaves a pull request with another Swarm\'s label, or with none and for an open issue that is not its Swarm\'s', () => {
+    const pulls = [pull(11, 'Closes #1'), pull(12, 'Closes #3'), pull(13, 'Closes #4'), pull(14, ''), pull(15, 'Closes #1', ['swarm:acme-0f0f0f0f']), pull(16, 'Closes #3', ['swarm:acme']),
+      { number: 17, labels: [], body: '', head: { ref: 'lennox/3' } }]
+    expect(pulls.filter(ofProject(rows, 'swarm:acme')).map(row => row.number)).toEqual([11, 14, 16])
+    // One for a task of its Swarm is its Swarm's, whatever else it names: a person's report it also fixes (Kiri's read of #4228).
+    expect([pull(18, 'Closes #1. Fixes #4'), pull(19, 'Closes #3. Fixes #4')].filter(ofProject(rows, 'swarm:acme')).map(row => row.number)).toEqual([18])
   })
 })
