@@ -16,7 +16,10 @@ import { SuperTabHostError } from './wire.js'
 
 type Json = Record<string, unknown>
 const GiB = 1024 ** 3
-const issue = (number: number, labels: string[], extra: Json = {}): Json => ({ number, labels: labels.map(name => ({ name })), ...extra })
+/** The GitHub login of the PM's person, whose Harness plans the project, and its Swarm's label in the repository: on every task
+ *  here unless a case says otherwise. */
+const LOGIN = 'dee', MARK = 'swarm:acme'
+const issue = (number: number, labels: string[], extra: Json = {}): Json => ({ number, labels: [...labels, MARK].map(name => ({ name })), user: { login: LOGIN }, ...extra })
 const PROJECT = { repo: 'acme/app', pm: 'Faye', tabId: 'tab', pmAgentId: 'faye', projectId: 'app' }
 const TIP = 'c0ffee0000000000000000000000000000000001'
 
@@ -25,7 +28,7 @@ const TIP = 'c0ffee0000000000000000000000000000000001'
 function fakeGitHub(open: Json[], closed: Json[] = []) {
   const records = commandRecords()
   // A repository already set up for the flow: its labels, and its builders' (a fresh one is set apart below).
-  const labels = ['status:taken', 'size:s', 'size:m', 'size:l', 'p0', 'p1', 'p2', 'builder:pip', 'builder:juno', 'builder:atlas'].map(name => ({ name }))
+  const labels = ['status:taken', 'size:s', 'size:m', 'size:l', 'p0', 'p1', 'p2', 'builder:pip', 'builder:juno', 'builder:atlas'].map(name => ({ name } as Json)).concat({ name: MARK, description: 'Swarm tab' })
   const state = { open, closed, asked: [] as string[], labelAnswer: 200, deleteAnswer: 200, commentAnswer: 201, signedOut: false, applied: false,
     /** Runs as a label's DELETE arrives, before it is answered: a test changes the issue here, or refuses the call with a status. */
     deleted: null as ((issue: Json, label: string) => number | void) | null,
@@ -50,6 +53,7 @@ function fakeGitHub(open: Json[], closed: Json[] = []) {
     const text = file ? state.files.get(decodeURIComponent(file[1]!)) : undefined
     if (file && text === undefined) return { status: 404, etag: null, body: null, resetAt: null }
     const body = file ? { encoding: 'base64', content: Buffer.from(text!).toString('base64') }
+      : url.pathname === '/user' ? { login: LOGIN }
       : url.pathname === '/repos/acme/app' ? { default_branch: 'main' }
       // Main's last commit and its checks, where a project's goal is scored (goal.ts).
       : url.pathname === '/repos/acme/app/commits' ? url.searchParams.get('sha') === 'main' ? [{ sha: TIP, parents: [] }] : null
@@ -68,7 +72,8 @@ function fakeGitHub(open: Json[], closed: Json[] = []) {
       // A head against main, from the commit of main it stands on.
       : /^\/repos\/acme\/app\/compare\/main\.\.\.[0-9a-f]+$/.test(url.pathname) ? state.compare.has(url.pathname.split('...').at(-1)!)
         ? { merge_base_commit: { sha: 'f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0' }, ...state.compare.get(url.pathname.split('...').at(-1)!) as Json } : null
-      : url.pathname === '/repos/acme/app/labels' ? state.labels
+      // Every repository of the Swarm has its label.
+      : /^\/repos\/[^/]+\/[^/]+\/labels$/.test(url.pathname) ? url.pathname === '/repos/acme/app/labels' || state.elsewhere.get(url.pathname.split('/').slice(2, 4).join('/')) ? state.labels : null
       // A page of the list, as GitHub pages it.
       : url.pathname === '/repos/acme/app/issues' ? (url.searchParams.get('state') === 'closed' ? state.closed : state.open)
         .slice((Number(url.searchParams.get('page') ?? 1) - 1) * Number(url.searchParams.get('per_page') ?? 30), Number(url.searchParams.get('page') ?? 1) * Number(url.searchParams.get('per_page') ?? 30))
@@ -173,8 +178,10 @@ function setup(open: Json[], options: { closed?: Json[]; crew?: Crew
   const server = fakeServer(clock)
   /** What the PM says to its person in its chat, by the operation it is said under. */
   const say = vi.fn(async (_project: LedProject, _operationId: string, _text: string) => ({}))
-  const make = () => new GitHubAssign({ projects: async () => [PROJECT], crew: async () => options.crew ?? crew(), repositories: options.repositories ?? (async () => [PROJECT.repo]),
-    get: github.get, send: github.send, pmRunning: async () => { if (pm.unreadable) throw new Error('The backend did not answer.'); return pm.running },
+  /** The assigner of this project, or of [as] another Swarm's on the same repository: its PM's person's login, project and crew. */
+  const make = (as?: { login: string; project: LedProject; crew: Crew }) => new GitHubAssign({ projects: async () => [as?.project ?? PROJECT], crew: async () => as?.crew ?? options.crew ?? crew(), repositories: options.repositories ?? (async () => [PROJECT.repo]),
+    swarm: async () => 'Acme',
+    get: as ? (path, etag) => path === '/user' ? Promise.resolve({ status: 200, etag: null, body: { login: as.login }, resetAt: null }) : github.get(path, etag) : github.get, send: github.send, pmRunning: async () => { if (pm.unreadable) throw new Error('The backend did not answer.'); return pm.running },
     now: () => clock.now, log, records: new VerdictRecords(github.authors, () => clock.now, log), numbers: options.numbers ?? { pass: numbers }, offers: server.offers, say })
   const assigner = make()
   const labelled = () => github.sent.filter(s => /\/issues\/\d+\/labels$/.test(s.path)).map(s => [Number(s.path.split('/').at(-2)), (s.body.labels as string[])[0]])
@@ -183,6 +190,79 @@ function setup(open: Json[], options: { closed?: Json[]; crew?: Crew
 }
 
 describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () => {
+  // #4212: Tony's Harness gave Dee's #4208 to its own Mobile Builder a minute after Dee's PM opened it, and Dee's Harness asked
+  // "Lennox" about #3880, which 0xken15's Swarm's Lennox held. Whose task it is lives on the task: its Swarm's label.
+  it('gives out and asks about only its own Swarm\'s tasks where two Swarms, each with a Lennox, build one repository', async () => {
+    const quiet = '2026-11-09T01:00:00Z', KEN = 'swarm:acme-tab-ken'
+    const row = (number: number, labels: string[], login: string, extra: Json = {}): Json => ({ number, labels: labels.map(name => ({ name })), user: { login }, ...extra })
+    const lennox = { id: 'lennox', name: 'Lennox', label: 'builder:lennox', machineId: 'mac', engine: 'claude' }
+    // Each PM opened a task, which says nothing of its Swarm yet; and each Swarm's Lennox holds one, quiet for hours.
+    const f = setup([row(1, ['size:s'], 'dee'), row(2, ['size:s'], 'ken'),
+      row(3, ['size:m', 'builder:lennox', 'status:taken', KEN], 'ken', { updated_at: quiet }), row(4, ['size:m', 'builder:lennox', 'status:taken', MARK], 'dee', { updated_at: quiet })],
+    { crew: { builders: [lennox, crew().builders[1]!], machines: crew().machines },
+      closed: [row(8, ['size:s', KEN], 'ken', { closed_at: '2026-11-09T06:00:00Z', updated_at: '2026-11-09T06:00:00Z' })] })
+    // The other Swarm has the same name, so its label has the start of its id too: each is found by the id in its description.
+    f.github.state.labels.push({ name: KEN, description: 'Swarm tab-ken' }, { name: 'builder:lennox' }, { name: 'builder:kai' })
+    // The other Lennox's pull request for its task: `builder:lennox`, as this Swarm's Lennox's would be.
+    f.github.state.pulls = [{ number: 30, draft: false, base: { ref: 'main' }, head: { sha: 'f6edb44c0ffee0000000000000000000000000ab', ref: 'lennox/3' },
+      labels: [{ name: 'builder:lennox' }], body: 'Closes #3', author_association: 'MEMBER', updated_at: quiet }]
+    const wrote = (from = 0) => f.github.sent.slice(from).map(s => [Number(/\/issues\/(\d+)\//.exec(s.path)?.[1]), (s.body.labels as string[] | undefined)?.[0] ?? String(s.body.body).replace(/^Harness, \d\d:\d\d(, to|: for) /, '').slice(0, 40)])
+    await f.assigner.tick()
+    // Its PM's task gets its Swarm's label and goes to Juno, and its own Lennox is asked about its quiet task. The other Swarm's
+    // task is not given, its Lennox's is not asked about, its pull request gets no reader, and its closed task's time is not read.
+    expect(wrote()).toEqual([[1, MARK], [4, '**Lennox**: nothing has moved on this ta'], [1, 'builder:juno'], [1, '**Juno**: it can start now.']])
+    expect(f.github.state.asked.filter(path => /\/issues\/(3|8|30)\/comments/.test(path))).toEqual([])
+    // The other Swarm's Harness, as its own PM's person, with its own Lennox: it touches only what the first left alone.
+    const sent = f.github.sent.length
+    await f.make({ login: 'Ken', project: { ...PROJECT, pm: 'River', tabId: 'tab-ken', pmAgentId: 'river', projectId: 'ken-app' },
+      crew: { builders: [{ ...lennox, id: 'ken-lennox' }, { id: 'kai', name: 'Kai', label: 'builder:kai', machineId: 'mac', engine: 'claude' }], machines: crew().machines } }).tick()
+    expect(wrote(sent)).toEqual([[2, KEN], [30, '**Kai**: please read this pull request, '], [2, expect.stringMatching(/^builder:(kai|lennox)$/)], [2, expect.stringContaining('it can start now')]])
+    expect(f.github.state.asked.filter(path => /\/issues\/8\/comments/.test(path))).toHaveLength(1)
+  })
+  // Kiri's read of #4218: past the pass's limit a task was returned without the label, so it dropped out of the plan, and the
+  // builder that held it looked idle and was given another.
+  it('reads every task its PM opened as its Swarm\'s while their labels are written thirty a pass, so a builder that holds one is given no other', async () => {
+    const unlabelled = (number: number, labels: string[]): Json => ({ number, labels: labels.map(name => ({ name })), user: { login: LOGIN } })
+    const f = setup([...Array.from({ length: 30 }, (_, n) => unlabelled(n + 1, ['size:s'])), unlabelled(31, ['size:m', 'builder:pip', 'status:taken'])],
+      { crew: { builders: [crew().builders[0]!], machines: crew().machines } })
+    await f.assigner.tick()
+    expect(f.labelled()).toEqual(Array.from({ length: 30 }, (_, n) => [n + 1, MARK]))
+    await f.assigner.tick()
+    expect(f.labelled().slice(30)).toEqual([[31, MARK]])
+    // One GitHub refuses the label for is the Swarm's all the same, said once, and its label is written again next pass.
+    const g = setup([unlabelled(1, ['size:m', 'builder:pip', 'status:taken']), issue(2, ['size:s'])], { crew: { builders: [crew().builders[0]!], machines: crew().machines } })
+    g.github.state.labelAnswer = 403
+    await g.assigner.tick(); await g.assigner.tick()
+    expect(g.labelled()).toEqual([[1, MARK], [1, MARK]])
+    expect(g.log.mock.calls.filter(([line]) => String(line).includes('SWARM_LABEL_REFUSED acme/app#1: GitHub answered 403'))).toHaveLength(1)
+  })
+  it('finds its Swarm\'s label by the id in its description, makes it once, and says one GitHub refuses', async () => {
+    const made = (f: ReturnType<typeof setup>) => f.github.sent.filter(s => s.path === '/repos/acme/app/labels').map(s => s.body)
+    // None yet: made with the Swarm's name, and its id in the description.
+    const f = setup([])
+    f.github.state.labels = f.github.state.labels.filter(label => label.name !== MARK)
+    await f.assigner.tick()
+    const asked = f.github.state.asked.length
+    await f.assigner.tick()
+    expect(made(f)).toEqual([{ name: MARK, color: '5319e7', description: 'Swarm tab' }])
+    // Found once: a later pass asks GitHub for neither the labels nor the login again (the daemon at rest).
+    expect(f.github.state.asked.slice(asked).filter(path => path === '/user' || path.includes('/labels'))).toEqual([])
+    // Another Swarm of the same name has that label: this one's has the start of its id, and no task of the other's is this one's.
+    const g = setup([issue(1, ['size:s'])])
+    g.github.state.labels.find(label => label.name === MARK)!.description = 'Swarm 0f0f0f0f'
+    await g.assigner.tick()
+    expect(made(g)).toEqual([{ name: 'swarm:acme-tab', color: '5319e7', description: 'Swarm tab' }])
+    expect(g.labelled()).toEqual([])
+    // Refused: nothing is given, and it is said once.
+    const h = setup([issue(1, ['size:s'])])
+    h.github.state.labels = h.github.state.labels.filter(label => label.name !== MARK)
+    const send = h.github.send
+    h.github.send = (async (method, path, body) => path === '/repos/acme/app/labels' ? { status: 403, etag: null, body: {}, resetAt: null } : send(method, path, body)) as typeof send
+    const refused = h.make()
+    await refused.tick(); await refused.tick()
+    expect(h.labelled()).toEqual([])
+    expect(h.log.mock.calls.filter(([line]) => String(line).includes('SWARM_LABEL_NOT_MADE acme/app swarm:acme: GitHub answered 403'))).toHaveLength(1)
+  })
   // What a pass read is counted for the project's PM and its people (pmNumbers.ts; anh Dee, 2026-11-11: "Numbers when work runs short").
   it('counts each pass: the builders with nothing after its plan, the tasks nobody holds, and what landed', async () => {
     const merged = new Date(Date.parse('2026-11-09T07:31:00Z') - 3_600_000).toISOString()
@@ -228,7 +308,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     expect(await g.numbers.mock.calls[0]![3]()).toEqual({ words: 'Last 1 landed: 20 min from opened to a first verdict (median of 1), 70 min from the last READ-OK to landing (median of 1); '
       + 'none was told it was behind or in conflict.', hot: [] })
     // The closed list it read was full of the day's: there may be more trains than it held, and the words say so.
-    const h = setup([], { closed: [train('Train: #9', at(60)), ...Array.from({ length: 99 }, (_, n) => ({ number: 100 + n, closed_at: at(60), updated_at: at(60), labels: [] }))] })
+    const h = setup([], { closed: [train('Train: #9', at(60)), ...Array.from({ length: 99 }, (_, n) => issue(100 + n, [], { closed_at: at(60), updated_at: at(60) }))] })
     await h.assigner.tick()
     expect(h.numbers.mock.calls[0]![1]).toMatchObject({ more: true })
     expect(await h.numbers.mock.calls[0]![3]()).toEqual({ words: 'Trains, at least: 1 landed.', hot: [] })
@@ -1057,13 +1137,13 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     f.github.state.labels = [{ name: 'P1' }]
     await f.assigner.tick()
     const made = () => f.github.sent.filter(s => s.path === '/repos/acme/app/labels').map(s => s.body.name)
-    expect(made()).toEqual(['status:taken', 'size:s', 'size:m', 'size:l', 'p0', 'p2', 'builder:pip', 'builder:juno'])
+    expect(made()).toEqual([MARK, 'status:taken', 'size:s', 'size:m', 'size:l', 'p0', 'p2', 'builder:pip', 'builder:juno'])
     expect(f.github.sent.find(s => s.body.name === 'size:s')!.body).toEqual({ name: 'size:s', color: 'c2e0c6', description: 'About half an hour of work' })
     // Read and made once: the next pass asks GitHub for nothing about labels.
     await f.assigner.tick()
-    expect(made()).toHaveLength(8)
+    expect(made()).toHaveLength(9)
     const refused = setup([])
-    refused.github.state.labels = []
+    refused.github.state.labels = refused.github.state.labels.filter(label => label.name === MARK)
     const send = refused.github.send
     refused.github.send = (async (method, path, body) => path === '/repos/acme/app/labels' ? { status: 403, etag: null, body: {}, resetAt: null }
       : send(method, path, body)) as typeof send
@@ -1674,7 +1754,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     // Juno's claim lands as its label is about to go.
     f.github.state.deleted = (task, label) => { if (label === 'builder:juno') task.labels = [...task.labels as Json[], { name: 'status:taken' }] }
     await f.assigner.tick()
-    expect((f.github.state.open[0]!.labels as Json[]).map(l => l.name)).toEqual(['size:m'])
+    expect((f.github.state.open[0]!.labels as Json[]).map(l => l.name)).toEqual(['size:m', MARK])
     expect(f.said().filter(([, body]) => String(body).includes('is being stopped')).map(([n]) => n)).toEqual([2])
   })
 
@@ -1684,7 +1764,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     f.github.state.deleted = (_task, label) => label === 'status:taken' ? 403 : undefined
     await f.assigner.tick()
     // The builder's label is off: the task is taken back, and said so once.
-    expect((f.github.state.open[0]!.labels as Json[]).map(l => l.name)).toEqual(['size:m'])
+    expect((f.github.state.open[0]!.labels as Json[]).map(l => l.name)).toEqual(['size:m', MARK])
     expect(f.said().filter(([, body]) => String(body).includes('is being stopped')).map(([n]) => n)).toEqual([2])
     expect(f.log.mock.calls.map(([line]) => String(line))).toContainEqual('[super-tab] Task assignment: TAKEN_NOT_CLEARED acme/app#2: GitHub answered 403')
     expect(f.log.mock.calls.some(([line]) => String(line).includes('TAKE_BACK_REFUSED'))).toBe(false)
@@ -1752,7 +1832,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     expect(f.log.mock.calls.filter(([line]) => String(line).includes('TAKE_BACK_REFUSED acme/app#1: GitHub answered 403'))).toHaveLength(1)
     f.github.state.deleteAnswer = 200
     await f.assigner.tick()
-    expect(f.github.state.open[0]!.labels).toEqual([{ name: 'size:s' }])
+    expect(f.github.state.open[0]!.labels).toEqual([{ name: 'size:s' }, { name: MARK }])
     expect(f.said().filter(([, body]) => String(body).includes('is being stopped')).map(([n]) => n)).toEqual([1])
   })
 
