@@ -116,7 +116,7 @@ everywhere), [Process Creation Flags](https://learn.microsoft.com/en-us/windows/
   differed before and after `close`. Do not compare it across a close: three plugins were written and then reported as failed
   (`hookFileVersion` in `cli/src/engines/kit/nativeHookFiles.ts`).
 - **A rename over a read-only file fails with `EPERM`.** A file we write read-only stops every later refresh unless it is made
-  writable first (`writeCopies` in `cli/src/superTabs/buddyHome.ts`).
+  writable first.
 - **There is no `ps`.** Read the process table through `lib/windows/processTable.ts`. A check that treats a failed `ps` as "gone"
   quietly does nothing on Windows: viewers piled up for that reason (`dsh/viewerLedger.ts`).
 - **What Git Bash runs has a parent that has gone.** Walking Windows' parent links does not reach it (`lib/windows/gitBashTree.ts`).
@@ -137,7 +137,7 @@ everywhere), [Process Creation Flags](https://learn.microsoft.com/en-us/windows/
 - **A mouse has no sideways scroll.** Anything that overflows sideways needs arrows and the wheel, or what falls off the end looks
   deleted (`scrollsTabsByMouse` in `desktop/lib/widgets/workspace_tab_scroller.dart`).
 - **A window that nobody asked for is rule 1.** A prompt nobody can answer in a hidden pane is its sibling: answer the exact screen
-  safely or fail the start with a reason (`cli/src/superTabs/startScreen.ts`).
+  safely or fail the start with a reason.
 - **Windows scales by 125%, 150% and 175%; a Mac by 200%.** A line drawn in logical pixels can then end inside a device
   pixel, and two neighbours that each cover part of it let what is behind show through. In the terminal this put a
   dark stripe between OpenCode's panel rows every 20 device pixels, and a gap in its `┃` bar at every row (measured

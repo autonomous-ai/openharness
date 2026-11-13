@@ -1,6 +1,6 @@
 # Agent Messages
 
-October 10, 2026. Replaces Swarm collaboration (tab channels and agent teams, removed October 11, 2026).
+October 10, 2026.
 
 Harnesses in the same tab can message each other with one command, `harness send`. Harness delivers each
 message safely, says who sent it, and shows the traffic. Nothing else is built in: no roles, no inbox, no
@@ -8,12 +8,12 @@ question ledger, no keys. Agents choose their own conventions on top.
 
 ## Why
 
-We watched a real three-agent team work for several hours with Swarm switched off: a Codex lead and two
+We watched a real three-agent team work for several hours: a Codex lead and two
 Claude Code workers, on two machines.
 
 - The lead found its own way to message a worker: `tmux load-buffer`, `paste-buffer`, Enter into the
   worker's pane. The message read as if the person had typed it ("the owner explicitly requested…").
-- It then created a standalone `harness team` itself, which the Swarm switch does not gate. Question and
+- It then created a standalone `harness team` itself. Question and
   reply worked across the two machines, answers came in 1.5 to 3 minutes, and they were real work:
   reviews, interface decisions, ownership of shared files.
 - **No message was ever pushed to an agent.** All three ran turns lasting hours (the lead was a Codex goal 20
@@ -177,7 +177,7 @@ while the send was under way.
 ## How it works
 
 Agent Messages is the `messages` service, in the edge host (`SERVICE_HOSTS` in cli/src/harnessd/services.ts), beside
-workspaces, usage, the monitor and the other light services. Its contract with the core is the one Swarm's had:
+workspaces, usage, the monitor and the other light services. Its contract with the core is
 `core.turns.deliver` under `team:` delivery ids, and `MessagesPort.canWrite`, asked in line as one is written. Out of
 the core's process it asks the core for what it uses and nothing more (core/messagesLink.ts, `MESSAGES_QUERIES`): the
 agents as the apps are shown them, how this daemon is reached and whether it is signed in, the account's tabs (one
@@ -213,9 +213,7 @@ the data folder, whose log and indexes are written many times a second (messages
 from before, which does not tell. Signed
 out, it runs nothing either: there is no account to read tabs from, and signing in starts a new core, which it
 reconnects to and wakes for. Its requests are answered on or off. With `HARNESSD_SERVICES=none` it runs in the core's
-process, and named alone (`HARNESSD_SERVICES=messages`) in an edge host of its own. (It began as Swarm's
-`collaboration` experiment in the `teams` process, rewritten in place; both were renamed when Swarm's last code
-went.)
+process, and named alone (`HARNESSD_SERVICES=messages`) in an edge host of its own.
 
 A core and a master of different builds still carry each message once. Where it runs is the master's to say, by
 service name (`serviceProcessesEnv`), so a core of either build routes it to the one process that runs it and runs
@@ -228,13 +226,13 @@ not re-execute on the update) and nothing under this build's (`cli/e2e/messagesS
 `harness send` sends `$TMUX_PANE` with its request over the daemon's local socket. The service finds the live
 harness on that pane (`shown`) and refuses a pane that is not one. It routes to the pane's owning daemon the
 way the notify hook does (`@harness_daemon`), so a development daemon beside a release one is not confused.
-Like Swarm, this is a collaboration scope, not a sandbox between processes of the same user: any of them can
+This is a collaboration scope, not a sandbox between processes of the same user: any of them can
 already type into any pane.
 
 ### Who may message whom
 
 `GET /api/agent-messages` answers the account's tabs, each with its owned panes (`machineId`, `agentId`), and the
-machines' names. The service reads it as Swarm did, while it is on and signed in: polled every 15 s, read again on the
+machines' names. The service reads it while it is on and signed in: polled every 15 s, read again on the
 account's `desk_changed`, and fresh before each send. It reads this computer's setting from the data folder at most
 every 2 seconds while it runs, and through the file's watch while it is off; a change counts as a change of the
 directory at its next read, and the notes and waiting deliveries heed it at their next look. Off, no tab carries a
@@ -254,7 +252,7 @@ its deliveries until it has read the directory. Only another of the owner's mach
 ### Delivery
 
 Each recipient's daemon owns its delivery. A message for an agent on another machine is handed to that
-machine's daemon over the existing paired E2EE relay, as Swarm's were (`agent_messages` in the
+machine's daemon over the existing paired E2EE relay (`agent_messages` in the
 application-frame sets); the sender's daemon keeps it in an outbox until that machine takes it, and asks it later
 what became of it.
 
@@ -307,18 +305,17 @@ waiting. Every limit refuses explicitly; nothing is silently dropped.
 
 ## What goes
 
-Swarm collaboration: `harness team` and `harness channel`, `cli/src/teams/`, the prompt scopes the core
-recorded each prompt's tab into (and the tab the windows sent with their input for them), Settings →
-Experimental → Swarm collaboration, the Swarm conversation views on desktop and mobile, and the backend's
-`tab_channels` routes and settings. The dial's `swarm.*` frames are tabs and stay.
+The collaboration it replaced: `harness team` and `harness channel`, `cli/src/teams/`, the prompt scopes the core
+recorded each prompt's tab into (and the tab the windows sent with their input for them), its setting in Settings →
+Experimental, its conversation views on desktop and mobile, and the backend's `tab_channels` routes and settings. The dial's `swarm.*` frames are tabs and stay.
 
 ## Delivery plan
 
-1. Daemon, CLI and backend: the service, `harness send`, the hook, the backend record and routes, Swarm's
-   CLI removed.
+1. Daemon, CLI and backend: the service, `harness send`, the hook, the backend record and routes, the old
+   collaboration CLI removed.
 2. Desktop: the tab's 💬 and revealed state (macOS titlebar and the Flutter tab row), the menus, Show Agent
-   Messages, pane marks, and Swarm's views and setting removed.
-3. Cleanup: the phone's Swarm views, the backend's `tab_channels`, the core's prompt scopes. The phone shows
+   Messages, pane marks, and the old collaboration views and setting removed.
+3. Cleanup: the phone's old collaboration views, the backend's `tab_channels`, the core's prompt scopes. The phone shows
    no message log: the owner dropped it (October 11, 2026).
 4. One switch (owner, 2026-10-12): the daemon reads the account's `agent_messages` experiment (its copy, kept by
    the core) and no tab's flag, off by default; `harness settings` turns it through the daemon; the desktop drops

@@ -1,7 +1,7 @@
 # CPU by thread: name where the backend's CPU goes (Watch Production gap 2) Implementation Plan
 
-> Way of working: written by the Engineer from the task's brief (task #2801), implemented by the same Engineer task by
-> task, each failing test committed before its code. One independent review on the pull request.
+> Way of working: written from the task's brief (task #2801), implemented task by task, each failing test committed
+> before its code. One independent review on the pull request.
 
 **Goal:** Every minute, each backend process logs where its CPU went, by thread: the main thread (with its GC pauses and
 reply JSON), the Prisma query engine, the libuv pool (zlib, fs, crypto) and V8's helper threads (concurrent GC, JIT),
@@ -28,7 +28,7 @@ additions. Off Linux (a developer's Mac) the per-thread part says `unavailable` 
   millisecond).
 - Never silent: a route that declares a response schema would lose that schema's serializer to the timed one, so
   registration refuses it at startup (no route has one today).
-- Backend only; Swarm code stays out of `cli/src/core`. Red-first tests.
+- Backend only. Red-first tests.
 
 ## Design
 

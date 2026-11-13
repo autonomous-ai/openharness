@@ -115,11 +115,11 @@ Audit numbers in brackets.
 - **Partitions [#14].** The default table stays: changing it needs a USB reflash of every shipped dial, and
   nothing needs the space.
 - **PSRAM statics [#15].** 4.5 MB of PSRAM is free and nothing is short. `ui_habitat.c` `s`, the voice ring and
-  `swarm` stay; `swarm` belongs to the thread/PM audit.
+  `swarm` stay.
 
 ## Out of scope
 
-The thread/PM code, the host, the Pro (`devices/harness-pro`).
+The host, the Pro (`devices/harness-pro`).
 
 ## Done when
 
@@ -149,7 +149,7 @@ The thread/PM code, the host, the Pro (`devices/harness-pro`).
   `int_free`, `int_min` and `int_largest` from the `alive` and `RAM tag=` lines, and decide items 7 and 10 by
   their rules.
 - **30 minutes of normal use** on the final firmware:
-  - the Focus face, pets, alerts, a voice message, the Swarm screens and text with Vietnamese and other accented
+  - the Focus face, pets, alerts, a voice message and text with Vietnamese and other accented
     letters look and work as before;
   - no reboot, watchdog or `stack overflow`;
   - every task in the new telemetry keeps at least 1 KB of stack free.

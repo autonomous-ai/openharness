@@ -1,8 +1,7 @@
 # Desktop test flavor Implementation Plan
 
-> **For agentic workers:** this plan is implemented by its Engineer task by task, test first, by the project's
-> instructions (test-driven-development; one independent review on the pull request). Steps use checkbox (`- [ ]`)
-> syntax for tracking.
+> **For agentic workers:** this plan is implemented task by task, test first (test-driven-development; one
+> independent review on the pull request). Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** One command builds a pull request's Desktop and CLI and starts them as "Harness Test" beside the installed
 app, with its own home, port, daemon, tmux server, Keychain item and sign-in, and `stop` removes all of it.
@@ -197,12 +196,12 @@ PR's own CLI bundle (`cli/build-bundle.mjs`, `BUNDLE_OUT_DIR`), PlistBuddy and c
 - [ ] **Step 3: Implement** `main` and the subcommands; `forget` signs the test account out in a throwaway test home and
   removes `~/.harness-test`. That Mac's one test machine stays in the test account until removed in its Machines
   list.
-- [ ] **Step 4: Run** all tool tests → PASS; run `python3 scripts/check-ui-style.py --only desktop/lib/super_tabs`.
+- [ ] **Step 4: Run** all tool tests → PASS.
 - [ ] **Step 5: Commit.**
 
 ### Task 6: A Tester uses it once on a real PR
 
-- [ ] A Tester in a person's own account on a Mac with Xcode, routed by the instructions, runs `start` on this PR's
-  branch. It signs in with the test account, opens the Swarm screen, signs out, and runs `stop`. It shows the installed
+- [ ] A Tester in a person's own account on a Mac with Xcode runs `start` on this PR's branch. It signs in with the
+  test account, opens the app, signs out, and runs `stop`. It shows the installed
   app's `~/.harness` hash and `harness auth status` before and after, unchanged, with screenshots of "Harness Test"
   beside "Harness".
