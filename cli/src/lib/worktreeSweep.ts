@@ -5,7 +5,7 @@
  * not pass is left exactly as it is. Nothing sweeps the worktrees folder on a timer any more (#4166, #711): that removed clean,
  * week-idle worktrees their person chose to keep, gitignored files and all.
  */
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { constants, type Dirent } from 'node:fs'
 import { access, lstat, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, relative, resolve } from 'node:path'
@@ -16,26 +16,66 @@ import { upgradeOlderRuntimeIgnore } from './harnessRuntimeIgnore.js'
 const exec = promisify(execFile)
 
 /**
- * git as itself: none of the repository settings a parent process left in the environment, and not the three repository
+ * git as itself: none of the repository settings a parent process left in the environment, and not the four repository
  * settings below that ran a program or hid new files from the checks here (a filter driver its config names still runs on a
  * status). `core.fsmonitor` names a program git runs on a status, which lib/gitProject.ts turns off too; a hook runs as a
  * branch goes, which lib/worktreeDeletion.ts turns off too; and with `status.showUntrackedFiles=no` a worktree holding new
  * files read as clean, to `git status` and to `git worktree remove`, which asks git the same, so it was removed, new files
- * and all (review of the allocator's package 6, 12 November). A `-c` reaches the git that git itself starts.
+ * and all (review of the allocator's package 6, 12 November). A `core.excludesFile` the repository names hid new files the
+ * same way, as ignored files, which go with their worktree (#4199): empty, git reads none. A `-c` reaches the git that git
+ * itself starts.
  */
+const GUARDED = ['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'status.showUntrackedFiles=normal', '-c', 'core.excludesFile=']
+function gitEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' }
+  for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE']) delete env[key]
+  return env
+}
+
 export async function git(cwd: string, args: string[]): Promise<string> {
-  const env = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' }
-  for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE']) delete (env as NodeJS.ProcessEnv)[key]
-  const guarded = ['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'status.showUntrackedFiles=normal']
-  return (await exec('git', [...guarded, '-C', cwd, ...args], { timeout: 30_000, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024, env }))
+  return (await exec('git', [...GUARDED, '-C', cwd, ...args], { timeout: 30_000, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024, env: gitEnv() }))
     .stdout.replace(/\r?\n$/, '')
 }
 
+/**
+ * Whether git takes a tracked file in [path] as unchanged without reading it: an "assume unchanged" mark, a lowercase tag in
+ * `git ls-files -v`. `core.ignoreStat=true` sets one on each file a checkout writes, and `git status` and `git worktree remove`
+ * then read an edit to it as nothing, so the worktree went, edit and all (#4199); `-c core.ignoreStat=false` leaves the marks.
+ * The list has an entry per tracked file, past the 1 MiB [git] reads on a large repository, so it is read as it streams and
+ * stops at the first mark.
+ */
+function assumedUnchanged(path: string): Promise<boolean> {
+  return new Promise((done, failed) => {
+    const child = spawn('git', [...GUARDED, '-C', path, 'ls-files', '-v', '-z'], { env: gitEnv(), stdio: ['ignore', 'pipe', 'ignore'] })
+    let found = false, entry = true
+    const timer = setTimeout(() => { child.kill('SIGKILL'); failed(new Error('git ls-files timed out')) }, 30_000)
+    child.stdout.on('data', (chunk: Buffer) => {
+      // Each entry is `<tag> <path>\0`, and may end in a later chunk.
+      for (let at = 0; at < chunk.length && !found;) {
+        if (entry) { found = chunk[at]! >= 0x61 && chunk[at]! <= 0x7a; entry = false }
+        const end = chunk.indexOf(0, at)
+        if (end === -1) break
+        at = end + 1
+        entry = true
+      }
+      if (found) child.kill('SIGKILL')
+    })
+    child.on('error', error => { clearTimeout(timer); failed(error) })
+    child.on('close', code => {
+      clearTimeout(timer)
+      if (found) done(true)
+      else if (code === 0) done(false)
+      else failed(new Error(`git ls-files exited ${code}`))
+    })
+  })
+}
+
 /** Why a worktree that passed every check was kept anyway, by a fixed code: an error's own text can carry its path.
+ *  ASSUMED_UNCHANGED: git takes a tracked file in it as unchanged without reading it, so an edit there would not show.
  *  UNWRITABLE: a folder in it git could not empty, so nothing was touched. NOT_REMOVED: git began and failed; whatever is
  *  left keeps its record, so git still works there. */
 export class WorktreeKept extends Error {
-  constructor(readonly code: 'WORKTREE_UNWRITABLE' | 'WORKTREE_NOT_REMOVED') { super(code) }
+  constructor(readonly code: 'WORKTREE_ASSUMED_UNCHANGED' | 'WORKTREE_UNWRITABLE' | 'WORKTREE_NOT_REMOVED') { super(code) }
 }
 
 /** Whether a folder in the worktree cannot be emptied: git would delete part of it and stop (below). One Mac, 10-28: a
@@ -101,6 +141,7 @@ export async function sweepOne(path: string, now: number, idleMs: number, unused
   // An older Harness's own ignore file, untracked, kept every worktree (#2266): upgraded first, only when git does not track it.
   if (await git(path, ['ls-files', '--', '.harness/.gitignore']).catch(() => null) === '') upgradeOlderRuntimeIgnore(path)
   if (await git(path, ['status', '--porcelain']) !== '') return false
+  if (await assumedUnchanged(path)) throw new WorktreeKept('WORKTREE_ASSUMED_UNCHANGED')
   const branch = await git(path, ['symbolic-ref', '--quiet', 'HEAD']).catch(() => null)
   if (!branch && await git(path, ['rev-list', '--count', 'HEAD', '--not', '--branches', '--remotes']) !== '0') return false
   if (await unwritableFolder(path)) throw new WorktreeKept('WORKTREE_UNWRITABLE')
