@@ -141,7 +141,7 @@ vi.mock('../lib/sessionSearch/external.js', async (real) => ({
   ...await real<typeof import('../lib/sessionSearch/external.js')>(),
   OpenSessions: class {
     constructor(options: Record<string, unknown>) { readers.open = options }
-    known() { return readers.known }
+    async fresh() { return readers.known }
     async owner(id: string) { return readers.owners.get(id) ?? null }
     async working(id: string) { return readers.working.get(id) ?? null }
   },

@@ -28,7 +28,7 @@ export function observedAgentId(engine: string, sessionId: string): string {
 export interface ObservedDeps {
   now(): number
   pidGeneration(pid: number): string | null
-  openSessions: Pick<OpenSessions, 'known' | 'working' | 'owner'>
+  openSessions: Pick<OpenSessions, 'fresh' | 'working' | 'owner'>
   externalSessions: {
     scan(): Promise<unknown>
     get(id: string): { cwd?: string; transcriptPath?: string | null } | undefined
@@ -191,7 +191,9 @@ export class ObservedSource implements HostSource {
     }
     let changed = false
     const now = this.deps.now()
-    for (const [sessionId, openIn] of this.deps.openSessions.known()) {
+    // A fresh look, each of its process reads under a timeout (externals/support.ts): the cached answer is empty
+    // before the first look, so the scan a dial's attach runs would find nothing until the next one, 60 s later.
+    for (const [sessionId, openIn] of await this.deps.openSessions.fresh()) {
       if (openIn === 'harness') continue
       const owner = await this.deps.openSessions.owner(sessionId)
       const engine = owner?.engine
