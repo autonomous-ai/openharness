@@ -116,6 +116,17 @@ export class LocalClient {
     return this.waitFor(test, ms, what, this.frames.length)
   }
 
+  /** Sends `content` to the agent and resolves with the end of that message's own turn. The daemon types lines of its
+   *  own into an agent as turns (the browser's ready line): a test that took that turn's end for its own typed `!exit`
+   *  while its message was still on its way, so the engine got both as one prompt and never exited
+   *  (`e2e/agentBrowser.e2e.ts`, runs 43400659690 and 43254356483). */
+  async turn(agentId: string, content: string, ms = 45_000): Promise<Frame> {
+    const since = this.frames.length
+    this.send('message', { agentId, content })
+    const started = await this.waitFor((frame) => frame.type === 'turn_started' && frame.agentId === agentId && frame.payload?.userMessage === content, ms, `turn_started (${content})`, since)
+    return this.waitFor((frame) => frame.type === 'turn_ended' && frame.agentId === agentId, ms, `turn_ended (${content})`, this.frames.indexOf(started) + 1)
+  }
+
   async request<T = Record<string, any>>(type: string, payload: Record<string, unknown> = {}, ms = 30_000): Promise<T> {
     const requestId = randomUUID()
     const answer = this.next((frame) => frame.type === `${type}_result` && frame.payload?.requestId === requestId, ms, `${type}_result`)

@@ -908,9 +908,7 @@ describe('the agent browser on real Podman', () => {
     expect(set.code, set.stderr).toBe(0)
     // A turn first, as every agent a person stops has had (core.e2e.ts does the same): until one ends, the fake engine's
     // conversation has no opening to keep, and the stop is held (IDENTITY_UNAVAILABLE).
-    const ended = client!.next((frame) => frame.type === 'turn_ended' && frame.agentId === agent!.id, 45_000, 'turn_ended')
-    client!.send('message', { agentId: agent!.id, content: 'Keep this conversation across the stop' })
-    await ended
+    await client!.turn(agent!.id, 'Keep this conversation across the stop')
     const stopped = await client!.request('agent_delete', { agentId: agent!.id }, 60_000)
     expect(stopped.error, JSON.stringify(stopped)).toBeUndefined()
     await until('the agent to stop', async () => (await row())?.status === 'stopped' || null, 60_000, 500)
