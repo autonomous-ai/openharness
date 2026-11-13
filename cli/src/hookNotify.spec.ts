@@ -2219,13 +2219,19 @@ describe('hook notify: a session outside a pane', () => {
     }])
   })
 
-  it('paneless claude Notification posts needs-input', async () => {
+  // Each waits for the person: a permission, an MCP server's question or link, or a resume after the quota.
+  it.each(['permission_prompt', 'elicitation_dialog', 'elicitation_url_dialog', 'quota_auto_resume_stale'])(
+    'paneless claude Notification %s posts needs-input', async (type) => {
+      const { port, requests } = await collect()
+      await runHook({ port, input: { hook_event_name: 'Notification', notification_type: type, session_id: 'sess-1', cwd: '/w' } })
+      expect(requests.map((request) => [request.url, request.body.event])).toEqual([['/api/hook/observed', 'needs-input']])
+    })
+
+  // An old Claude Code names no type, and says so a minute after every finished turn too: it would flip each done agent.
+  it('a Notification with no type posts nothing', async () => {
     const { port, requests } = await collect()
-    await runHook({ port, input: {
-      hook_event_name: 'Notification', notification_type: 'permission_prompt', message: 'Claude needs your permission to use Bash',
-      session_id: 'sess-1', cwd: '/w',
-    } })
-    expect(requests.map((request) => [request.url, request.body.event])).toEqual([['/api/hook/observed', 'needs-input']])
+    await runHook({ port, input: { hook_event_name: 'Notification', message: 'Claude is waiting for your input', session_id: 'sess-1', cwd: '/w' } })
+    expect(requests).toEqual([])
   })
 
   // Claude Code also sends Notification a minute after a finished turn (idle_prompt) and after a sign-in: neither is a
