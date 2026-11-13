@@ -10,6 +10,12 @@ import type { IsolatedDaemon } from './daemon.js'
 
 export type Frame = { type: string; payload?: Record<string, any>; [key: string]: unknown }
 
+/** `since` is an index into the list a wait looks back over. A `Date.now()` passed as `since` made the look back always
+ *  empty, so a frame that came before its waiter was never seen (`e2e/harnessWatch.e2e.ts`, nightly run 43247147594). */
+function checkSince(method: 'waitFor' | 'waitForBinary', list: 'frames' | 'binaries', length: number, since: number): void {
+  if (!(Number.isInteger(since) && since >= 0 && since <= length)) throw new Error(`${method}: since must be an index into ${list} (0 to ${length}), not ${since}`)
+}
+
 export class LocalClient {
   readonly frames: Frame[] = []
   /** The terminals' binary frames (keyframes, output, sync), in the order they came. */
@@ -77,6 +83,7 @@ export class LocalClient {
 
   /** Resolves with the first binary frame, past or future, that passes `test`. */
   waitForBinary(test: (frame: TerminalBinaryClear) => boolean, ms = 20_000, what = 'a terminal frame', since = 0): Promise<TerminalBinaryClear> {
+    checkSince('waitForBinary', 'binaries', this.binaries.length, since)
     const seen = this.binaries.slice(since).find(test)
     if (seen) return Promise.resolve(seen)
     return new Promise((resolve, reject) => {
@@ -91,6 +98,7 @@ export class LocalClient {
 
   /** Resolves with the first frame, past or future, that passes `test`. */
   waitFor(test: (frame: Frame) => boolean, ms = 20_000, what = 'a frame', since = 0): Promise<Frame> {
+    checkSince('waitFor', 'frames', this.frames.length, since)
     const seen = this.frames.slice(since).find(test)
     if (seen) return Promise.resolve(seen)
     return new Promise((resolve, reject) => {
