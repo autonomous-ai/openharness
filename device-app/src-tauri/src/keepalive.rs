@@ -1,9 +1,135 @@
 //! The daemon rule: when to run `harness start --if-down`.
 
+use crate::types::Daemon;
+
+/// How long a watch that an old daemon or CLI turned away waits before it is tried again.
+pub const RETRY_OLD_SECS: u64 = 60;
+
+/// Seconds 10 to 19 of a minute: the desktop app's `inSpawnSlot`, clear of the CLI's update slot.
+pub fn in_spawn_slot(now: u64) -> bool {
+    (10..20).contains(&(now % 60))
+}
+
+/// What the caller does on a tick.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Keep {
+    SpawnWatch,
+    RunStart,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Watch {
+    Running,
+    /// Ended with the daemon down: looked at again on a tick.
+    Down,
+    /// Turned away by an old daemon or CLI, which updates itself.
+    Old {
+        retry_at: u64,
+    },
+    /// The app closed its stdin.
+    Closed,
+}
+
+pub struct KeepAlive {
+    daemon: Daemon,
+    watch: Watch,
+    /// Down observations in a row.
+    downs: u32,
+    starting: bool,
+    /// `now / 60` of the last start, so a start is asked at most once a minute.
+    last_start_minute: Option<u64>,
+    /// The last start exited 0: a down after it means the CLI refused (a flash, an uninstall).
+    last_start_ok: bool,
+}
+
+impl KeepAlive {
+    /// The caller has just spawned the watch.
+    pub fn new() -> Self {
+        KeepAlive {
+            daemon: Daemon::Starting,
+            watch: Watch::Running,
+            downs: 0,
+            starting: false,
+            last_start_minute: None,
+            last_start_ok: false,
+        }
+    }
+
+    /// The watch connected: the daemon is up.
+    pub fn watch_line(&mut self) {
+        self.daemon = Daemon::Up;
+        self.downs = 0;
+        self.last_start_ok = false;
+    }
+
+    pub fn watch_exit(&mut self, code: Option<i32>, now: u64) {
+        match code {
+            Some(0) => self.watch = Watch::Closed,
+            // 4: a daemon older than `dial-watch`; 1: a CLI older than `watch` printing its usage.
+            Some(1) | Some(4) => {
+                self.watch = Watch::Old {
+                    retry_at: now + RETRY_OLD_SECS,
+                };
+                self.downs = 0;
+                self.daemon = Daemon::Updating;
+            }
+            _ => {
+                self.watch = Watch::Down;
+                self.downs += 1;
+                self.daemon = if self.last_start_ok {
+                    Daemon::Stopped
+                } else {
+                    Daemon::Starting
+                };
+            }
+        }
+    }
+
+    pub fn tick(&mut self, now: u64, desktop_running: bool) -> Option<Keep> {
+        if self.starting {
+            return None;
+        }
+        match self.watch {
+            Watch::Running | Watch::Closed => None,
+            Watch::Old { retry_at } if now >= retry_at => Some(self.spawn_watch()),
+            Watch::Old { .. } => None,
+            // The desktop app supervises its own daemon; the app only watches the dial.
+            Watch::Down if self.downs < 2 || desktop_running => Some(self.spawn_watch()),
+            Watch::Down if in_spawn_slot(now) && self.last_start_minute != Some(now / 60) => {
+                self.start_begun(now);
+                Some(Keep::RunStart)
+            }
+            Watch::Down => None,
+        }
+    }
+
+    /// A start the caller runs outside the slot, after an install.
+    pub fn start_begun(&mut self, now: u64) {
+        self.starting = true;
+        self.last_start_minute = Some(now / 60);
+    }
+
+    /// The caller spawns the watch again.
+    pub fn start_done(&mut self, ok: bool) {
+        self.starting = false;
+        self.downs = 0;
+        self.last_start_ok = ok;
+        self.watch = Watch::Running;
+    }
+
+    pub fn daemon(&self) -> Daemon {
+        self.daemon
+    }
+
+    fn spawn_watch(&mut self) -> Keep {
+        self.watch = Watch::Running;
+        Keep::SpawnWatch
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::Daemon;
 
     /// Second 0 of a minute.
     const B: u64 = 1794556800;
@@ -85,10 +211,18 @@ mod tests {
             keep.watch_exit(Some(code), B);
             assert_eq!(keep.daemon(), Daemon::Updating, "exit {code}");
             quiet(&mut keep, B + 5, B + 59);
-            assert_eq!(keep.tick(B + 60, false), Some(Keep::SpawnWatch), "exit {code}");
+            assert_eq!(
+                keep.tick(B + 60, false),
+                Some(Keep::SpawnWatch),
+                "exit {code}"
+            );
             keep.watch_exit(Some(code), B + 61);
             quiet(&mut keep, B + 65, B + 120);
-            assert_eq!(keep.tick(B + 121, false), Some(Keep::SpawnWatch), "exit {code}");
+            assert_eq!(
+                keep.tick(B + 121, false),
+                Some(Keep::SpawnWatch),
+                "exit {code}"
+            );
             assert_eq!(keep.daemon(), Daemon::Updating, "exit {code}");
         }
     }
