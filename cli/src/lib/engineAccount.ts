@@ -17,8 +17,8 @@
  * every launch (`~/.claude.json`, which Harness's own folder trust writes too) would not say which
  * engine the person works in.
  */
-import { savedBearerApi } from './apiConnectionFile.js'
 import { execFile } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -111,6 +111,21 @@ async function newestDay(sessions: string): Promise<number | null> {
 
 const CLAUDE_ENV = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX']
 
+/**
+ * Whether an API saved here (Models ▸ APIs) sends its key as `Authorization: Bearer`, by the checked read every launch
+ * holds the file to (./apiConnectionMetadata.ts): a file that read refuses has none.
+ *
+ * That read brings zod, loaded here only where an API was ever saved. The New dialog's probe asks this in the edge host
+ * (services/engineProbe.ts), whose services share one process that otherwise holds none (leanEntry.spec.ts).
+ */
+async function savedBearerApi(dataDir: string): Promise<boolean> {
+  if (!existsSync(join(dataDir, 'api-connections', 'connections.json'))) return false
+  try {
+    const { readApiConnectionStore } = await import('./apiConnectionMetadata.js')
+    return readApiConnectionStore(dataDir).connections.some((row) => row.authHeader.toLowerCase() === 'authorization' && row.authPrefix.toLowerCase() === 'bearer')
+  } catch { return false }
+}
+
 /** Claude Code and Codex only; every other engine answers unknown. */
 export async function engineAccount(engine: AgentEngine, deps: EngineAccountDeps = {}): Promise<EngineAccount> {
   const home = deps.home ?? homedir()
@@ -121,7 +136,7 @@ export async function engineAccount(engine: AgentEngine, deps: EngineAccountDeps
   // A model API saved on this computer (Models ▸ APIs) serves Claude Code without a
   // subscription, so the machine can take Swarm work on it (headless run, 2026-11-03: a working OpenRouter key saved,
   // and the account read "not signed in").
-  const savedApi = savedBearerApi(env.ADAPTER_DATA_DIR || join(home, '.harness', 'cli', 'data'))
+  const savedApi = await savedBearerApi(env.ADAPTER_DATA_DIR || join(home, '.harness', 'cli', 'data'))
   if (engine === 'claude') {
     const dir = env.CLAUDE_CONFIG_DIR || join(home, '.claude')
     const lastUsedAt = deps.lastUsed === false ? null : await newestChild(join(dir, 'projects'))

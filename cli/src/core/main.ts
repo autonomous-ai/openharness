@@ -1681,10 +1681,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // disconnect, fail promptly as before. Under a master from before, Agent Messages' own process starts at its first request this way.
     onDemand: new Set([...experiments, ...DEVICES_ON_DEMAND, ...VIEWERS_ON_DEMAND, ...Object.values(READER_SERVICES), 'models', 'gateway', 'shell', 'messages', 'agentBrowser', 'engineProbe']),
     // But the Store's requests wait through its process's restart too: a window's Store list was answered unavailable
-    // while the master restarted the viewers (core/serviceLinks.ts `waitsThroughRestart`). So does the engine probe's,
-    // through the edge host's: a Swarm that asks which engines are here and is told nothing takes that for none
-    // installed (superTabs/contribution.ts installs one, superTabs/start.ts refuses a start), which the core's own
-    // probe never said while it ran in this process.
+    // while the master restarted the viewers (core/serviceLinks.ts `waitsThroughRestart`). So does an engine probe
+    // asked while the edge host is restarting: the core's own probe always answered while it ran in this process. One
+    // in flight as the host goes is still answered unavailable, which its callers read as not checked, never as no
+    // engine installed (superTabs/capacity.ts `probedEngines`).
     waitsThroughRestart: new Set(['store', 'engineProbe']),
     // Claude Code's and Codex's readers may take longer to start: a person's first message waits for them (core/input.ts).
     startWaits: Object.fromEntries(Object.values(READER_SERVICES).map(service => [service, READER_START_MS])),

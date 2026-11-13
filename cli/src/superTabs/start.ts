@@ -2,7 +2,7 @@ import { encodeRuntimeProfile } from '../engines/kit/runtime.js'
 import { parseRuntimeProfile } from '../lib/runtimeProfileWire.js'
 import { randomUUID } from 'node:crypto'
 import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
-import { admission, quotaOf, type Requirements } from './capacity.js'
+import { admission, probedEngines, quotaOf, type Requirements } from './capacity.js'
 import { identifier, object } from './wire.js'
 import { wireRole } from '../lib/swarmSkills.js'
 import { agentFolderFor, prepareAgentFolder, temporaryFolder } from './agentFolder.js'
@@ -97,8 +97,9 @@ export async function inspectCapacity(target: Daemon, request: Json) {
     target.request('usage_read', {}, 20_000),
   ])
   const capacity = capability.status === 'fulfilled' ? capability.value : {}
-  const choices = engines.status === 'fulfilled' && Array.isArray(engines.value.engines) ? engines.value.engines.map(object) : []
-  const engine = choices.find(e => e.engine === request.engine) ?? {}
+  // Not answered is not "not installed" (capacity.ts `probedEngines`): the start is refused as not verified.
+  const choices = engines.status === 'fulfilled' ? probedEngines(engines.value) : null
+  const engine = choices && (choices.find(e => e.engine === request.engine) ?? {})
   const quota = quotaOf(usage.status === 'fulfilled' ? usage.value : {}, String(request.engine), !!request.codexHome || !!request.gridModel)
   return { capacity, engine, quota, ...admission(capacity, engine, quota, requirements, !!request.codexHome || !!request.gridModel) }
 }

@@ -580,7 +580,7 @@ class MachineState {
   // Which engines this machine actually has, as this machine answered it. Kept
   // on MachineState rather than globally because that is the whole point: two
   // machines on one account hold different engines, and the Docker rig holds
-  // exactly one. See `engines_probe` in the CLI's backendSocket.
+  // exactly one. See `engines_probe` in the CLI (cli/src/services/engineProbe.ts).
   final MachineEngines engines = MachineEngines();
   // Which domain-specific harnesses this machine has or could install, as it
   // answered `dsh_list`. Per machine for the same reason `engines` is: an

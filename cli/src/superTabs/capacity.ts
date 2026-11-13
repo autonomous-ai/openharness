@@ -16,6 +16,17 @@ export interface Requirements {
  *  reading: a busy machine would refuse every start (seen in an e2e run at 98.7%), so no cap; memory, disk and pressure gate it. */
 export const START_REQUIREMENTS: Requirements = { memoryBytes: 2147483648, diskBytes: 10737418240, maxCpuPercent: 100, tools: ['git'], devices: [], quotaRequired: false }
 
+/**
+ * The engines a machine's probe named (`engines_probe`), or null when it was not answered: the probe failed, or its
+ * process (the edge host's, since the audit of 2026-11-12) was down or restarting as it was asked. No answer says
+ * nothing of what is installed: read as "none", a start was refused as "not installed" and a set-up installed an engine
+ * over the one in use.
+ */
+export function probedEngines(answer: unknown): Json[] | null {
+  const engines = object(answer).engines
+  return Array.isArray(engines) ? engines.map(object) : null
+}
+
 /** A missing result is a completed check; an absent value or failed check is only unverified. */
 function requiredToolReason(tool: string, reported: unknown, failure?: unknown): string | null {
   if (reported === true) return null
@@ -121,10 +132,12 @@ export function meteredEngine(engine: string, env: NodeJS.ProcessEnv): boolean {
     : engine === 'codex' ? ['OPENAI_BASE_URL', 'OPENAI_API_KEY', 'CODEX_API_KEY'] : []
   return names.some(name => !!env[name]?.trim())
 }
-export function admission(capacity: Json, engine: Json, quota: ReturnType<typeof quotaOf>, requirements: Requirements, customAccount = false) {
+/** [engine]: the selected engine as the machine's probe named it; null when the probe was not answered (`probedEngines`). */
+export function admission(capacity: Json, engine: Json | null, quota: ReturnType<typeof quotaOf>, requirements: Requirements, customAccount = false) {
   const reasons: string[] = [], unknown: string[] = []
   const resources = object(capacity.resources), tools = object(capacity.tools), devices = object(capacity.devices), toolProbeErrors = object(capacity.toolProbeErrors)
-  if (engine.installed !== true) reasons.push('The selected agent engine is not installed on this machine.')
+  if (!engine) reasons.push('The selected agent engine could not be verified on this machine.')
+  else if (engine.installed !== true) reasons.push('The selected agent engine is not installed on this machine.')
   const memory = finite(resources.memoryTotalBytes) && finite(resources.memoryUsedBytes)
     ? resources.memoryTotalBytes - resources.memoryUsedBytes : null
   for (const [label, value, needed] of [

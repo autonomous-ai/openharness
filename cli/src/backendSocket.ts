@@ -239,7 +239,6 @@ export class BackendSocket {
     if (this.localClients.has(connId)) { this.sendTo(connId, { type, payload }); return true }
     return this.throughGateway('viewer', (gateway) => gateway.target(connId, type, payload), false)
   }
-  /** Injectable for queue-isolation tests; production uses the machine-local probe. */
   readonly ownerCommands = new OwnerCommands()
   /** Takes back a delivered turn not yet being written (core/deliveries.ts, cli.ts binds core/input.ts). */
   onCancelOrchestratorMessage: ((deliveryId: string) => boolean) | null = null

@@ -69,9 +69,11 @@ describe('which engines this machine has, asked before a create', () => {
     expect(reply.engines[0]).not.toHaveProperty('lastUsedAt')
   })
 
-  it('says the probe failed, as it always has, when it could not run at all', async () => {
+  // The probe answers for every engine whatever fails (lib/engineProbe.ts): one that could not run at all is this
+  // service's failure, which its host says and answers SERVICE_FAILED (services/AGENTS.md), never an answer of its own.
+  it('leaves a probe that could not run at all to its host', async () => {
     const { requests } = started(new Error('spawn EAGAIN'))
-    expect(await requests.engines_probe!({}, OWNER)).toEqual({ error: 'ENGINE_PROBE_FAILED' })
+    await expect(requests.engines_probe!({}, OWNER)).rejects.toThrow('spawn EAGAIN')
   })
 
   it('probes with the real probe unless given one', () => {

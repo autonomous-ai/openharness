@@ -170,7 +170,7 @@ Left since, with the core's process as `src/architecture.coreFiles.txt` lists it
 | Windows files loaded for a constant: the guest set-up's protocol and folder checks, the pane's command for a guest, the updater's version folders and the install layout (13 November) | 551 | 95,749 |
 | `harness uninstall`'s hook removers, loaded for how one outcome is said (13 November) | 551 | 95,590 |
 | The guests' accounts, loaded for a user-name check and a small runner; and a function nothing called (13 November) | 552 | 95,372 |
-| The probe of which engines this machine has: the edge host answers it and starts its login shells; the saved APIs' file read, 39 lines, joins the list so that host needs no zod (13 November) | 551 | 95,062 |
+| The probe of which engines this machine has: the edge host answers it and starts its login shells (13 November) | 550 | 95,029 |
 
 ### 1. Code the core loads for one helper (low risk, about a day each)
 

@@ -1,7 +1,7 @@
 import type { CoreApi } from '../core/api.js'
 import { openDaemon } from '../agentClient/daemon.js'
 import { parseProjectFolder, prepareProjectFolder } from '../lib/projectFolder.js'
-import { readCapabilities, START_REQUIREMENTS } from './capacity.js'
+import { probedEngines, readCapabilities, START_REQUIREMENTS } from './capacity.js'
 import { backend, identifier, object, SuperTabHostError } from './wire.js'
 import { mkdir } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
@@ -113,12 +113,11 @@ export async function prepareContribution(core: CoreApi, input: Json, given: Par
   }
   const connection = await deps.open({ dataDir: core.dataDir, port: core.daemon.port, machineId })
   try {
-    // An answer that names no engines (the probe failed, or its process was down: the edge host's, since the audit of
-    // 2026-11-12) says nothing of what is installed here. Read as "none", it would install an engine over the one in use.
+    // Not answered is not "none installed" (capacity.ts `probedEngines`): nothing is installed on it.
     const probe = async (): Promise<Json[]> => {
-      const answer = await connection.request('engines_probe', { engines: ['claude', 'codex'], accounts: true }, 20_000)
-      if (!Array.isArray(answer.engines)) throw new Error('This machine could not check its engines. Try again.')
-      return answer.engines.map(object)
+      const engines = probedEngines(await connection.request('engines_probe', { engines: ['claude', 'codex'], accounts: true }, 20_000))
+      if (!engines) throw new Error('This machine could not check its engines. Try again.')
+      return engines
     }
     const installed = (answer: Json[]) => answer
       .filter(e => (e.engine === 'claude' || e.engine === 'codex') && e.installed === true)

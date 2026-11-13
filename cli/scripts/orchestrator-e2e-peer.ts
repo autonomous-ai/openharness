@@ -57,7 +57,6 @@ const local = attachLocalWsServer(server, { machineId, backend })
 await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
 const port = (server.address() as { port: number }).port
 backend.orchestratorCommand = `${[process.execPath, '--import', loader, join(cliRoot, 'src/cli.ts')].map(shellQuote).join(' ')} orchestrator --port ${port} --machine ${machineId}`
-if (!live) backend.engineProbeProvider = async (engines = ['claude']) => engines.map(engine => ({ engine, installed: true, command: process.execPath, installable: false }))
 backend.dshFrameProvider = agent => ({ id: agent.dsh ?? null, name: agent.dsh ?? null, viewerUrl: urls.get(agent.agentId) ?? null, viewerName: 'Fixture viewer', verdict: null })
 if (live) {
   // Read-only links to ALREADY installed harnesses; never change the real index.

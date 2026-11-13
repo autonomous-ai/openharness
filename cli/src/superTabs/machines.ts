@@ -13,7 +13,7 @@ import { backend, FIELD_REFUSED_MS, fieldRefused, identifier, object, SuperTabHo
 import type { SwarmSources } from './host.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
-import { readCapabilities, quotaOf, meteredEngine, quotaUnknownReason } from './capacity.js'
+import { readCapabilities, quotaOf, meteredEngine, quotaUnknownReason, probedEngines } from './capacity.js'
 import { SPEAKS_OFFERS } from './assign/crew.js'
 import { startAgent, type ScopedRequest } from './start.js'
 import { settleHiddenScreen } from './startScreen.js'
@@ -30,6 +30,11 @@ import { profileId } from '../lib/claudeHomes.js'
 
 const finite = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v : null
 const list = (v: unknown) => Array.isArray(v) ? v.map(object) : []
+/** The engines a probe says are installed here. One that was not answered (capacity.ts `probedEngines`) throws. */
+const installedHere = (probed: Record<string, unknown>[] | null): string[] => {
+  if (!probed) throw new Error('This machine could not check its engines.')
+  return probed.filter(engine => engine.installed === true).map(engine => String(engine.engine))
+}
 // A start's requirements are not known before it is queued. Include common tools in each snapshot, then
 // include tools from pending starts. An uncommon tool first named by a start remains unverified and is refused.
 const COMMON_TOOLS = ['git', 'node', 'npm', 'flutter', 'gh', 'cargo', 'python3']
@@ -294,12 +299,11 @@ export class ContributedMachines {
   private async ownEngines(local: { request: (type: string, payload: Record<string, unknown>, timeoutMs: number) => Promise<unknown> }, now: number): Promise<ReadyEngine[] | null> {
     // Periodic work asks only engines with account readers. Add a vendor here when its reader lands;
     // unsupported engines would spawn login shells just to return unknown (#3839 security review).
-    const answer = await local.request('engines_probe', { engines: ['claude', 'codex'], accounts: true }, 20_000).catch(() => null)
-    const engines = object(answer).engines
+    const engines = probedEngines(await local.request('engines_probe', { engines: ['claude', 'codex'], accounts: true }, 20_000).catch(() => null))
     // An engine that says nothing of its sign-in (an older daemon, an engine not installed) is unknown, never signed out.
     // Not installed is unknown too: the probe answers the same for a login shell that timed out (lib/engineProbe.ts), and
     // such a machine fails its first start loudly instead (review of #1743).
-    const value = Array.isArray(engines) ? list(engines).filter(e => (PROCESS_ENGINES as readonly unknown[]).includes(e.engine))
+    const value = engines ? engines.filter(e => (PROCESS_ENGINES as readonly unknown[]).includes(e.engine))
       .map((e): ReadyEngine => ({ engine: String(e.engine), installed: e.installed === true ? true : null,
         signedIn: e.installed === true && typeof e.signedIn === 'boolean' ? e.signedIn : null })) : null
     this.engineRead = { value, until: now + (value ? READINESS_MS : READINESS_RETRY_MS) }
@@ -585,9 +589,9 @@ export class ContributedMachines {
         const supported = (engine: string) => engine === 'claude' || engine === 'codex'
         // Older contributions may name only OpenCode or another retired Swarm engine. Probe this host so their
         // replacement choices reflect the engines actually installed here, without changing the owner's slot limit.
+        // A probe that was not answered leaves this reading out (the catch below), never a machine with no engine.
         const engines = listedEngines.some(engine => !supported(engine))
-          ? list(object(await local.request('engines_probe', { engines: ['claude', 'codex'] }, 20_000).catch(() => ({}))).engines)
-            .filter(engine => supported(String(engine.engine)) && engine.installed === true).map(engine => String(engine.engine))
+          ? installedHere(probedEngines(await local.request('engines_probe', { engines: ['claude', 'codex'] }, 20_000))).filter(supported)
           : listedEngines.filter(supported)
         // Only while the owner has the Local models add-on on: the models this machine serves on the Swarm's grid (its own
         // engines, the APIs it shares), then the ones shared with its owner that they offer to this Swarm (usable here alone).

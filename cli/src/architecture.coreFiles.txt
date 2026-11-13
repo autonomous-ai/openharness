@@ -299,7 +299,6 @@ lib/agentSessionEnv.ts
 lib/agentSettings.ts
 lib/agentTmp.ts
 lib/agentUsageWire.ts
-lib/apiConnectionFile.ts
 lib/apiConnectionMetadata.ts
 lib/apiInstructions.ts
 lib/appProductUsageReport.ts

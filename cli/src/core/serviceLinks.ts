@@ -72,7 +72,8 @@ export interface ServiceLinksOptions {
   onDemand?: ReadonlySet<string>
   /** Of those, the ones whose requests also wait for them to come back after they connected and went (a crash, a
    *  kill, the master's restart for an update), as a first start is waited for: asked for again, within the same
-   *  start wait and then the request's own, at most `RESTART_HELD_MAX` at a time for each. The Store's (core/main.ts). */
+   *  start wait and then the request's own, at most `RESTART_HELD_MAX` at a time for each. The Store's and the engine
+   *  probe's (core/main.ts). */
   waitsThroughRestart?: ReadonlySet<string>
   /** How long a service on demand may take to connect from when it is first asked for (`ON_DEMAND_START_MS`), and, by service,
    *  the ones that may take longer (`startWaits`: Claude Code's and Codex's readers, `READER_START_MS`). */
