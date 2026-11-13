@@ -221,6 +221,36 @@ this platform uses leaves them out. Low risk on a Mac and Linux, medium on a Win
 | **Engine set-up:** installing engines, their hooks and plugins, probing binaries, the person's login shell (`engines/kit/native*.ts`, `hookSettings.ts`, `hookReview.ts`, `launchExecutable.ts`, `engines/nativeLaunch.ts`) | 4,436 | a set-up process: needs a ruling first | high |
 | Store engines: deletes on their databases at purge, a whole conversation read into the core at close, Codex's title index read whole | 483 | their worker | medium to high |
 
+### 5. The Swarm, out of the core's process
+
+anh Dee, 2026-11-13: "swarm is an experimental feature. we could turn it off / kill the feature at any time. the
+philosophy: small tiny core that is super stable and solid and a lot of components around it". With the Swarm on, its
+door (`superTabs/inCore.ts`) loads 20 files, about 2,100 lines, into the core's process. Each leaves by one of two ways,
+so the core keeps no Swarm code at all, and deleting the Swarm changes nothing in it:
+
+- **Through a relay.** What the Swarm's service and the devices tell each other goes through a small generic relay in
+  the core: a listed sender, receiver and kind, each bounded in size, checked by the receiver. The core carries it unread.
+- **As data the Swarm hands the core.** What the core decides in line about an agent (a start's additions, whether its
+  turns are quiet on the devices, whether it may be closed) becomes a fact the Swarm's service gives the core ahead of
+  time, kept with the agent's row, so a relaunch while the service is down still has it. The core's code is generic:
+  "an agent a component marked protected is not closed", never "a Lead".
+
+| What (lines) | What the core asks of it | Where it goes | Order |
+| --- | --- | --- | ---: |
+| `cleanupCloses.ts` (49) | the closes the agent cleanup made, for its report | the agent cleanup records them itself | 1 |
+| `inCore/devices.ts` (9) | whether a finished turn is quiet on the devices | a row flag the Swarm sets at its start | 2 |
+| `inCore/deliveries.ts` (8) | whether a chat message types while the agent works | an option of the delivery the Swarm asks for | 3 |
+| `inCore/cards.ts` (228), `inCore/attention.ts` (98) | the device cards, the waits on a person | the relay: the Swarm's service to the devices, and their wants back; the devices check and replay | 4 |
+| `inCore/terminal.ts` (90) | a member's screen for its Lead, and keys into it | a generic read and write of a pane for a component the core names, under the write lock | 5 |
+| `inCore/launch.ts` (79), `lib/swarmSkills.ts` (110), `lib/swarmEngineArgs.ts` (15), `lib/agentInstructions.ts` (408) | a start's roles, the team's basics, the agent's own instructions, its engine flags, its share of the cores | a start's additions (instructions text, flags, variables) the Swarm's service hands the core with the start and refreshes; kept in the row for a relaunch | 6 |
+| `inCore/agents.ts` (56), `retention.ts` (103), `leadSwitch.ts` (152) | which agents the Swarm may close or reopen; that a Lead is never closed, but in its engine switch | protected agents the Swarm's service names, kept on disk by the core, and the one switch's receipt check as a port | 7 |
+| `inCore/adoption.ts` (90), `inCore/role.ts` (13) | an attached agent's role at its restart | the Swarm's service tells the core the role when it knows it; kept in the row | 8 |
+| `lib/swarmGitHub.ts` (192) | the Harness GitHub App's git and gh for old sessions | deleted on or after 2026-12-10, as it says | 9 |
+| `lib/superTabAttachmentProxy.ts` (159) | a chat file posted to this computer | already sent by the gateway (13 November); the intake stays with the local door until the doors' routes move (part 2) | |
+| `readContract.ts` (89), `wire.ts` (50) | helpers of the files above | go with them | |
+
+Each line is one pull request, tested with the Swarm's own end-to-end files (`superTabs*.e2e.ts`, `swarm*.e2e.ts`).
+
 ### 4. Modes where everything runs in the core
 
 - **Harness OS** runs the core alone, with every service inside it: 113,149 more lines. A decision, below.
