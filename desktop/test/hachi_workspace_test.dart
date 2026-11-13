@@ -77,9 +77,8 @@ void main() {
 
   String screenOf(TerminalSession session) {
     final lines = session.terminal.buffer.lines;
-    return [
-      for (var i = 0; i < lines.length; i++) lines[i].toString(),
-    ].join('\n');
+    return [for (var i = 0; i < lines.length; i++) lines[i].toString()]
+        .join('\n');
   }
 
   testWidgets(
@@ -188,4 +187,28 @@ void main() {
       await tester.pump(const Duration(seconds: 10));
     },
   );
+
+  testWidgets('with Hachi and 3 other tabs, the palette offers ⌘1…⌘3, not ⌘4', (
+    tester,
+  ) async {
+    await mount(tester);
+    await pressSwitch(tester);
+    await chord(tester, LogicalKeyboardKey.keyH, shift: true);
+    await settle(tester);
+    app.newSwarm(name: 'Second');
+    app.newSwarm(name: 'Third');
+    await settle(tester);
+    expect(app.numberedSwarms, hasLength(3));
+
+    await chord(tester, LogicalKeyboardKey.keyP, shift: true);
+    await tester.enterText(
+      find.byKey(const ValueKey('swarm-search-input')),
+      '> select tab',
+    );
+    await settle(tester);
+    expect(find.text('Select tab 3'), findsWidgets);
+    expect(find.text('Select tab 4'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(seconds: 10));
+  });
 }
