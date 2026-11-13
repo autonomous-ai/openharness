@@ -1,5 +1,108 @@
 //! The app's one log, redacted.
 
+use crate::types::{Clock, Log};
+use regex::Regex;
+use std::fs;
+use std::io::Write;
+use std::path::PathBuf;
+use std::sync::{Arc, LazyLock, Mutex};
+
+/// Days of logs kept besides today's.
+pub const KEEP_DAYS: u64 = 14;
+
+const DAY: u64 = 86_400;
+
+/// `app-YYYYMMDD.log` in `dir`, one per UTC day.
+pub struct FileLog {
+    dir: PathBuf,
+    clock: Arc<dyn Clock>,
+    /// The day last written; also keeps two lines from interleaving.
+    day: Mutex<u64>,
+}
+
+impl FileLog {
+    pub fn new(dir: PathBuf, clock: Arc<dyn Clock>) -> FileLog {
+        let today = clock.now() / DAY;
+        let log = FileLog { dir, clock, day: Mutex::new(today) };
+        log.prune(today);
+        log
+    }
+
+    /// Removes this log's own files older than KEEP_DAYS, and nothing else in the folder.
+    fn prune(&self, today: u64) {
+        let Ok(entries) = fs::read_dir(&self.dir) else { return };
+        let oldest = ymd(today.saturating_sub(KEEP_DAYS));
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(day) = name.to_str().and_then(|name| name.strip_prefix("app-")?.strip_suffix(".log")) else {
+                continue;
+            };
+            if day.len() == 8 && day.bytes().all(|byte| byte.is_ascii_digit()) && day < oldest.as_str() {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+    }
+}
+
+impl Log for FileLog {
+    /// Never fails: a log that cannot be written must not stop the app.
+    fn line(&self, text: &str) {
+        let now = self.clock.now();
+        let today = now / DAY;
+        let mut day = self.day.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if *day != today {
+            *day = today;
+            self.prune(today);
+        }
+        let (hours, minutes, seconds) = (now % DAY / 3600, now % 3600 / 60, now % 60);
+        let stamp = format!("{}T{hours:02}:{minutes:02}:{seconds:02}Z", dashed(&ymd(today)));
+        let _ = fs::create_dir_all(&self.dir)
+            .and_then(|()| {
+                fs::OpenOptions::new().create(true).append(true).open(self.dir.join(format!("app-{}.log", ymd(today))))
+            })
+            .and_then(|mut file| file.write_all(format!("{stamp} {}\n", redact(text)).as_bytes()));
+    }
+}
+
+/// `YYYYMMDD` for a count of days since 1970-01-01 (Hinnant's civil_from_days).
+fn ymd(days: u64) -> String {
+    let z = days + 719_468;
+    let (era, doe) = (z / 146_097, z % 146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + u64::from(month <= 2);
+    format!("{year:04}{month:02}{day:02}")
+}
+
+fn dashed(ymd: &str) -> String {
+    format!("{}-{}-{}", &ymd[..4], &ymd[4..6], &ymd[6..])
+}
+
+/// The desktop's four text rules (`redactSecretsInText` in its logging folder; keep the two in step), then two
+/// more: a URL loses its query and fragment, an email address becomes `<email>`.
+static REDACTIONS: LazyLock<[(Regex, &str); 6]> = LazyLock::new(|| {
+    let rule = |pattern: &str, replace| (Regex::new(pattern).unwrap(), replace);
+    [
+        rule(r"(?i)(Bearer\s+)[A-Za-z0-9._\-]{8,}", "${1}<redacted>"),
+        rule(r"\bsk-[A-Za-z0-9_\-]{8,}", "sk-<redacted>"),
+        rule(
+            r#"(?i)(["']?\b\w*(?:token|secret|password|passphrase|credential|api[_-]?key)\w*\b["']?\s*[:=]\s*["']?)([^\s"',}]{6,})"#,
+            "${1}<redacted>",
+        ),
+        rule(r"(?i)([?&][^=\s&]*(?:token|key|secret|sig|signature)[^=\s&]*=)[^\s&]+", "${1}<redacted>"),
+        rule(r#"(?i)(\b[a-z][a-z0-9+.\-]*://[^\s?#"'<>]*)[?#][^\s"'<>]*"#, "${1}"),
+        rule(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}", "<email>"),
+    ]
+});
+
+/// `text` with anything that could be a secret or a person's address blanked.
+pub fn redact(text: &str) -> String {
+    REDACTIONS.iter().fold(text.to_string(), |text, (pattern, replace)| pattern.replace_all(&text, *replace).into_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

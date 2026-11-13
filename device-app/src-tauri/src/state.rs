@@ -1,5 +1,74 @@
 //! state.json in the app's data folder.
 
+use crate::types::{Log, Saved};
+use std::fs;
+use std::io::{self, Write};
+use std::path::PathBuf;
+use std::sync::Arc;
+
+pub trait StateFile: Send + Sync {
+    fn load(&self) -> Saved;
+    fn save(&self, saved: &Saved) -> io::Result<()>;
+}
+
+/// `state.json` in `dir`.
+pub struct JsonStateFile {
+    dir: PathBuf,
+    log: Arc<dyn Log>,
+}
+
+impl JsonStateFile {
+    pub fn new(dir: PathBuf, log: Arc<dyn Log>) -> Self {
+        JsonStateFile { dir, log }
+    }
+
+}
+
+impl StateFile for JsonStateFile {
+    fn load(&self) -> Saved {
+        let text = match fs::read_to_string(self.dir.join("state.json")) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Saved::default(),
+            text => text.ok(),
+        };
+        let saved = text.and_then(|text| serde_json::from_str::<Saved>(&text).ok());
+        // A file from a newer app means what this one cannot know: start over rather than guess.
+        saved.filter(|saved| saved.version == 1).unwrap_or_else(|| {
+            // No reason in the line: a parse error quotes the file, and the file is the person's.
+            self.log.line("state: unreadable, starting from defaults");
+            Saved::default()
+        })
+    }
+
+    /// Written whole or not at all: a crash mid-write leaves the old file, never half of one.
+    fn save(&self, saved: &Saved) -> io::Result<()> {
+        let mut folder = fs::DirBuilder::new();
+        folder.recursive(true);
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut folder, 0o700);
+        folder.create(&self.dir)?;
+
+        let temp = self.dir.join("state.json.tmp");
+        // A temp file a dead save left keeps its own mode if opened again, so it goes first.
+        match fs::remove_file(&temp) {
+            Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+            _ => {}
+        }
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        let written = options.open(&temp).and_then(|mut file| {
+            file.write_all(&serde_json::to_vec(saved)?)?;
+            file.sync_all()
+        });
+        let renamed = written.and_then(|()| fs::rename(&temp, self.dir.join("state.json")));
+        if renamed.is_err() {
+            let _ = fs::remove_file(&temp);
+        }
+        renamed
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
