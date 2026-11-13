@@ -81,6 +81,17 @@ describe('an engine\'s process tree', () => {
     expect(await engineDescendants(engine, 'darwin', async () => stepped, ticksOf)).toEqual([])
   })
 
+  // A `ps` table rarely shows it, but this walk had discovery's fault (#4268): it listed the engine itself as its tree
+  // to stop, and the same processes again up to the limit.
+  it.each([
+    ['its child', 501],
+    ['a grandchild', 502],
+  ])('lists each process once, and never the engine, when the engine\'s parent pid names %s', async (_name, parent) => {
+    const cycle = PS.replace('  500   499   500 ', `  500   ${parent}   500 `)
+    const found = await engineDescendants(ENGINE, 'darwin', async () => cycle)
+    expect(found!.map((p) => p.pid)).toEqual([501, 502])
+  })
+
   it('stops at 1024 processes', async () => {
     const children = Array.from({ length: 2000 }, (_, at) => `${1000 + at}   500   500 Thu Nov 12 10:00:02 2026 node tool.js`)
     const found = await engineDescendants(ENGINE, 'darwin', async () => `${PS}${children.join('\n')}\n`)

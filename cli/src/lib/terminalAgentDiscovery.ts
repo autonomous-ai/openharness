@@ -164,10 +164,15 @@ function rootOwner(
   const queue: Array<{ pid: number; depth: number }> = [{ pid: root.rootPid, depth: 0 }]
   const matches: Array<{ row: ProcessRow; engine: AgentEngine; depth: number; score: number }> = []
   const processes: ProcessRow[] = []
+  const seen = new Set<number>()
   let unresolvedAliasDepth = Number.POSITIVE_INFINITY
 
   while (queue.length) {
     const current = queue.shift()!
+    // Windows never re-parents a process and reuses pids, so a root's parent pid can name its own descendant: without
+    // this the walk had no end, in the core, on every pass (#4268).
+    if (seen.has(current.pid)) continue
+    seen.add(current.pid)
     const row = byPid.get(current.pid)
     if (row) processes.push(row)
     if (row && !excluded.has(row.pid)) {
