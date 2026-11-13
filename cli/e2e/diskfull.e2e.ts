@@ -9,12 +9,13 @@
  * `DISKFULL=1 npm run test:e2e -- diskfull`.
  */
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, openSync, closeSync, rmSync, writeFileSync, writeSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
+import { fillVolume } from './harness/fullDisk.js'
 
 const ON = process.env.DISKFULL === '1' && process.platform === 'darwin'
 
@@ -29,27 +30,6 @@ async function turn(client: LocalClient, agentId: string, content: string): Prom
   client.send('message', { agentId, content })
   expect((await started).payload?.userMessage).toBe(content)
   await ended
-}
-
-/** Writes until the volume refuses, and returns the file, to free the space again by removing it. */
-function fill(volume: string): string {
-  const filler = join(volume, 'filler')
-  const fd = openSync(filler, 'w')
-  const chunk = Buffer.alloc(1024 * 1024, 7)
-  try {
-    for (;;) writeSync(fd, chunk)
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOSPC') throw error
-  } finally {
-    closeSync(fd)
-  }
-  // The last few blocks a metadata write may still find: take those too.
-  const tail = join(volume, 'filler-tail')
-  try {
-    const small = openSync(tail, 'w')
-    try { for (;;) writeSync(small, Buffer.alloc(4096, 7)) } catch { /* full */ } finally { closeSync(small) }
-  } catch { /* already full */ }
-  return filler
 }
 
 describe.skipIf(!ON)('a full disk', () => {
@@ -107,7 +87,7 @@ describe.skipIf(!ON)('a full disk', () => {
     for (const agent of agents) await turn(client, agent.id, `before the disk filled (${agent.engine})`)
 
     // The disk fills.
-    const filler = fill(volume)
+    const filler = fillVolume(volume)
     // The agents it has keep working: their turns, their rows.
     for (const agent of agents) await turn(client, agent.id, `while the disk is full (${agent.engine})`)
     // A rename is answered, though it cannot be written down yet.
@@ -176,7 +156,7 @@ describe.skipIf(!ON)('a full disk', () => {
       return now?.sessionId && now.status === 'active' ? now : null
     }, 60_000, 500)
     expect(existsSync(join(data, 'orchestrator')), 'no turn has asked the orchestrator yet').toBe(false)
-    const filler = fill(volume)
+    const filler = fillVolume(volume)
     try {
       await turn(client, agent.id, 'the first turn, on a full disk')
       expect(d.log()).not.toContain('line handler error')
