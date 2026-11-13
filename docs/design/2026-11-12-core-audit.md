@@ -169,17 +169,17 @@ Left since, with the core's process as `src/architecture.coreFiles.txt` lists it
 | The platform's launchd, systemd and Task Scheduler code, loaded to repoint one Node path: the master does it now (13 November) | 554 | 96,582 |
 | Windows files loaded for a constant: the guest set-up's protocol and folder checks, the pane's command for a guest, the updater's version folders and the install layout (13 November) | 551 | 95,749 |
 | `harness uninstall`'s hook removers, loaded for how one outcome is said (13 November) | 551 | 95,590 |
+| The guests' accounts, loaded for a user-name check and a small runner; and a function nothing called (13 November) | 552 | 95,372 |
 
 ### 1. Code the core loads for one helper (low risk, about a day each)
 
 | What | Lines | What the core needs instead |
 | --- | ---: | --- |
-| Windows guest accounts: `lib/guestAccounts.ts` (240), of which the core needs `isGuestUser` and `runGuestCommand` | 150 | the account's creation in a file of the shared machines service's own |
 | `agentClient/ledger.ts`: one purge call, and its lock can hold the loop for 2 s | 363 | the edge host's agent cleanup |
 | The New dialog's engine probe: up to 16 login shells started from the core (`lib/engineProbe.ts`, `engineAccount.ts`, `backendSocket.ts:1210-1254`) | 397 | the edge host |
 | Helpers of one feature: `lib/agentTmp.ts` (the Swarm's), `lib/deviceRecap.ts` (cloud agents'), `lib/apiConnectionMetadata.ts` (models': the saved-API store parsed at every launch to learn whether one exists) | 395 | the feature's door, or a flag it reports |
 | The agent settings sync: a five-minute timer and backend reads (`core/experiments.ts:52-200`) | 150 | the edge host |
-| Test-only and dead code: `core/stall.ts`, unused exports in the tmux files and `lib/externalOwnerControl.ts` | 293 | nothing |
+| Test-only code and exports only tests read: `core/stall.ts` (a test's fault, loaded by every shipped core), `decodeTmuxControlData` and `normalizeTmuxCaptureLines` in `lib/tmuxStream.ts`, `stopSessionOwner`, `writeTty` and `foregroundJob` in `lib/externalOwnerControl.ts` (kept with a golden test: ask before deleting) | 270 | nothing, or a test's own file |
 | Lines of `core/api.ts` no core file imports, and code only the inline mode runs (`core/serviceHost.ts:122-233`, `lib/transcriptPages.ts:240-466`, `lib/sharedMachinesPort.ts:49-160`) | 707 | with their service, or gone with the inline mode |
 
 Not counted above, because it is not a move to a service: **the other platform's terminal code.** The Windows
