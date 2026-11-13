@@ -42,7 +42,7 @@ import { harnessDevicesRequest } from '../lib/harnessDevices.js'
 import { truncateUtf8 } from '../lib/deviceRecentTrim.js'
 import { ExternalSessions, OpenSessions } from '../lib/sessionSearch/external.js'
 import { externalProviders } from '../lib/sessionSearch/externals/index.js'
-import { listProcesses } from '../lib/sessionSearch/externals/support.js'
+import { listProcesses, processAlive } from '../lib/sessionSearch/externals/support.js'
 import { setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter } from '../lib/voiceRouter.js'
 import { createTally, createTierDecider, type Tier, type TierDecision, type TierInput } from '../lib/notifyTier.js'
 import { createPartGuard } from './devicesGuard.js'
@@ -113,6 +113,7 @@ function observedSource(dataDir: string, log: (line: string) => void): ObservedS
   return new ObservedSource({
     now: Date.now,
     processes: listProcesses,
+    alive: processAlive,
     openSessions: new OpenSessions({ providers, log }),
     externalSessions: new ExternalSessions({ providers, excluded: [dataDir], log }),
     excluded: [dataDir],

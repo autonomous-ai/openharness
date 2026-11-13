@@ -31,6 +31,8 @@ export interface ObservedDeps {
   now(): number
   /** The machine's processes, read once for every session (externals/support.ts listProcesses); none when unreadable. */
   processes(): Promise<readonly Pick<RunningProcess, 'pid' | 'generation'>[]>
+  /** Whether a pid is running, for a session whose process has no generation to read (Windows has no `ps` here). */
+  alive(pid: number): boolean
   openSessions: Pick<OpenSessions, 'fresh' | 'working' | 'owner'>
   externalSessions: {
     scan(): Promise<unknown>
@@ -45,7 +47,7 @@ export interface ObservedDeps {
 interface Entry {
   agent: HostAgent
   transcriptPath?: string
-  pid?: number
+  pid: number
   generation?: string
   endAt?: number
 }
@@ -125,7 +127,7 @@ export class ObservedSource implements HostSource {
   /** The existing entry, or a new one if there is room. */
   private entry(
     engine: string, sessionId: string, now: number,
-    init: { cwd?: string; transcriptPath?: string | null; pid?: number; hints?: Record<string, string> },
+    init: { cwd?: string; transcriptPath?: string | null; pid: number; hints?: Record<string, string> },
   ): Entry | undefined {
     const id = observedAgentId(engine, sessionId)
     // Harness's own session (the voice router's Claude Code runs in the data folder, outside a pane) is never an agent
@@ -135,10 +137,7 @@ export class ObservedSource implements HostSource {
       return undefined
     }
     const have = this.entries.get(id)
-    if (have) {
-      if (init.pid && have.pid === undefined) this.setPid(have, init.pid)
-      return have
-    }
+    if (have) return have
     if (this.entries.size >= MAX_SESSIONS && !this.evict()) {
       this.deps.log(`[observed] full; dropped ${engine} session`)
       return undefined
@@ -148,19 +147,13 @@ export class ObservedSource implements HostSource {
         id, engine, sessionId, cwd: init.cwd,
         name: (init.cwd && basename(init.cwd)) || engine,
         host: detectHost(init.hints ?? {}),
-        state: 'idle', since: now, lastActivityAt: now, unseenDone: false,
-        ...(init.pid ? { callerPid: init.pid } : {}),
+        state: 'idle', since: now, lastActivityAt: now, unseenDone: false, callerPid: init.pid,
       },
+      pid: init.pid,
       ...(init.transcriptPath ? { transcriptPath: init.transcriptPath } : {}),
     }
-    if (init.pid) this.setPid(entry, init.pid)
     this.entries.set(id, entry)
     return entry
-  }
-
-  private setPid(entry: Entry, pid: number): void {
-    entry.pid = pid
-    entry.agent.callerPid = pid
   }
 
   /** Drops the oldest idle session; failing that the oldest finished one. False when every session is busy. */
@@ -205,12 +198,12 @@ export class ObservedSource implements HostSource {
     for (const [sessionId, openIn] of await this.deps.openSessions.fresh()) {
       if (openIn === 'harness') continue
       const owner = await this.deps.openSessions.owner(sessionId)
-      const engine = owner?.engine
-      if (!engine) continue
+      if (!owner) continue
+      const engine = owner.engine
       if (this.entries.has(observedAgentId(engine, sessionId))) continue
       const ext = this.deps.externalSessions.get(sessionId)
       const entry = this.entry(engine, sessionId, now, {
-        cwd: ext?.cwd, transcriptPath: ext?.transcriptPath, pid: owner?.pid,
+        cwd: ext?.cwd, transcriptPath: ext?.transcriptPath, pid: owner.pid,
       })
       if (entry) changed = true
     }
@@ -227,13 +220,14 @@ export class ObservedSource implements HostSource {
     let changed = false
     for (const [id, e] of this.entries) {
       // Its process's generation, noted at the first look that sees it.
-      const gen = e.pid === undefined ? undefined : table.get(e.pid)
+      const gen = table.get(e.pid)
       if (gen) e.generation ??= gen
-      let gone = false
+      let gone: boolean
       if (e.endAt !== undefined && now - e.endAt >= END_DELAY_MS) gone = true
-      else if (e.pid !== undefined && table.size && !table.has(e.pid)) gone = true
+      else if (table.size && !table.has(e.pid)) gone = true
       else if (gen) gone = gen !== e.generation
-      else if (now - e.agent.lastActivityAt >= NO_GENERATION_TTL_MS) gone = true
+      // No generation to tell a reused pid by: running, and heard from in the last 12 h.
+      else gone = !this.deps.alive(e.pid) || now - e.agent.lastActivityAt >= NO_GENERATION_TTL_MS
       if (gone) { this.entries.delete(id); changed = true }
     }
     if (changed) this.emit()

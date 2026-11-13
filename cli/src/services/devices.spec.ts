@@ -154,6 +154,7 @@ vi.mock('../lib/sessionSearch/external.js', async (real) => ({
 vi.mock('../lib/sessionSearch/externals/support.js', async (real) => ({
   ...await real<typeof import('../lib/sessionSearch/externals/support.js')>(),
   listProcesses: async () => [],
+  processAlive: () => true,
 }))
 vi.mock('../cable/hosts/lastAnswer.js', async (real) => ({
   ...await real<typeof import('../cable/hosts/lastAnswer.js')>(),
