@@ -2,25 +2,16 @@
 class MachineResources {
   const MachineResources({
     this.cpuPercent,
-    this.deviceType,
-    this.chip,
-    this.os,
-    this.projectDiskFreeBytes,
-    this.projectDiskTotalBytes,
     this.memoryUsedBytes,
     this.memoryTotalBytes,
     this.memoryPressure,
     this.swapUsedBytes,
-    this.diskFreeBytes,
-    this.diskTotalBytes,
     this.gpus = const [],
   });
 
-  final String? deviceType, chip, os;
-  final double? projectDiskFreeBytes, projectDiskTotalBytes;
   final double? cpuPercent, memoryUsedBytes, memoryTotalBytes;
   final String? memoryPressure;
-  final double? swapUsedBytes, diskFreeBytes, diskTotalBytes;
+  final double? swapUsedBytes;
   final List<MachineGpu> gpus;
 
   double? get memoryPercent =>
@@ -55,24 +46,8 @@ class MachineResources {
     final total = number('memoryTotalBytes');
     final memoryValid =
         used != null && total != null && total > 0 && used <= total;
-    final diskFree = number('diskFreeBytes'),
-        diskTotal = number('diskTotalBytes');
-    final diskValid =
-        diskFree != null &&
-        diskTotal != null &&
-        diskTotal > 0 &&
-        diskFree <= diskTotal;
     final pressure = json['memoryPressure'];
-    String? label(String key) =>
-        json[key] is String && (json[key] as String).length <= 120
-        ? json[key] as String
-        : null;
     return MachineResources(
-      deviceType: label('deviceType'),
-      chip: label('chip'),
-      os: label('os'),
-      projectDiskFreeBytes: number('projectDiskFreeBytes'),
-      projectDiskTotalBytes: number('projectDiskTotalBytes'),
       cpuPercent: cpu != null && cpu <= 100 ? cpu : null,
       memoryUsedBytes: memoryValid ? used : null,
       memoryTotalBytes: memoryValid ? total : null,
@@ -80,8 +55,6 @@ class MachineResources {
           ? pressure as String
           : null,
       swapUsedBytes: number('swapUsedBytes'),
-      diskFreeBytes: diskValid ? diskFree : null,
-      diskTotalBytes: diskValid ? diskTotal : null,
       gpus: List.unmodifiable([
         if (json['gpus'] is List)
           for (final gpu in (json['gpus'] as List).take(32))

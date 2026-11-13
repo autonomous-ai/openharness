@@ -105,16 +105,11 @@ values to creation, search and desktop presenters; it is not a second palette.
 `DesktopDialogHeader` provides the shared title/dismiss anatomy.
 `DesktopPromptSurface` keeps form actions visible beneath scrolling content.
 `DesktopPill` is the selector/scope variant of the same control family.
-`AppMenuItem` is the ordinary context-menu row. A row that stands somewhere
-says so in one word at its far end (`state`: `fails`, `not run`), 12 and faint,
-in the error ink when it failed, and in the active row's detail ink on blue; a
-`trailing` widget keeps its own colours and is not for a word of state. A
-dropdown's search finds a row by that word too.
-`AppDropdown` is every
+`AppMenuItem` is the ordinary context-menu row. `AppDropdown` is every
 dropdown: however a click or a key opened it, the control that opened it holds
-focus, and Escape closes the menu from there and leaves focus on the control (on
-a submenu's own row it closes the submenu first). Controllers, keymaps, pending
-receipts, transport state and persistence remain independent of presentation.
+focus, and Escape closes the menu from there and leaves focus on the control.
+Controllers, keymaps, pending receipts, transport state and persistence remain
+independent of presentation.
 
 Do not solve a local styling problem by inventing another button or palette.
 Use a named role below. If a new role is necessary, define it here and in shared

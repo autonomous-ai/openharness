@@ -8,13 +8,9 @@ import 'fork_link.dart';
 
 /// Queued before authentication; persisted without credentials or project content.
 class ForkInbox extends ChangeNotifier {
-  ForkInbox(
-    this.store, {
-    this.channel = const MethodChannel('harness/community_links'),
-    this.claimLink,
-  });
+  ForkInbox(this.store, {this.claimLink});
   final LocalKeyValueStore store;
-  final MethodChannel channel;
+  static const channel = MethodChannel('harness/community_links');
 
   /// Another feature's link on the same channel: true takes it, and it is
   /// never queued here. A Windows toast's click arrives this way

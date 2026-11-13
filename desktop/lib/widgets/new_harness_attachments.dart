@@ -20,9 +20,8 @@ Future<String?> _attach(
 ) async => attachments.add(await attachmentsOf(attachments, files));
 
 /// [files] as [attachments] holds them, weighed before any is read: one over
-/// its [HarnessAttachments.readUpTo] stays on disk and is read as it is sent,
-/// and one over its [HarnessAttachments.limitBytes] is never read at all, as
-/// [HarnessAttachments.add] refuses it by its size.
+/// its [HarnessAttachments.limitBytes] stays on disk, never read, for
+/// [HarnessAttachments.add] to refuse by its size.
 @visibleForTesting
 Future<List<HarnessAttachment>> attachmentsOf(
   HarnessAttachments attachments,
@@ -32,7 +31,7 @@ Future<List<HarnessAttachment>> attachmentsOf(
   for (final file in files) {
     final size = await file.length();
     weighed.add(
-      size > attachments.readUpTo
+      size > attachments.limitBytes
           ? HarnessAttachment.onDisk(file.name, file, size)
           : HarnessAttachment(file.name, await file.readAsBytes()),
     );

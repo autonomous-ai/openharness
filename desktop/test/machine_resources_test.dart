@@ -93,12 +93,9 @@ void main() {
       });
       expect(legacy.memoryPercent, 50);
       expect(legacy.busiestGpu, isNull);
-      expect(legacy.diskFreeBytes, isNull);
       final sample = MachineResources.fromJson({
         'memoryPressure': 'normal',
         'swapUsedBytes': 0,
-        'diskFreeBytes': 0,
-        'diskTotalBytes': 10,
         'gpus': [
           {'id': '1', 'name': 'First GPU', 'utilizationPercent': 80},
           {'id': '2', 'name': 'Second GPU', 'utilizationPercent': 60},
@@ -111,17 +108,13 @@ void main() {
       expect(sample.gpus, hasLength(3));
       expect(sample.gpus.last.utilizationPercent, isNull);
       expect(sample.swapUsedBytes, 0);
-      expect(sample.diskFreeBytes, 0);
       expect(sample.memoryPressure, 'normal');
       final invalid = MachineResources.fromJson({
         'memoryPressure': 'invented',
         'swapUsedBytes': -1,
-        'diskFreeBytes': 11,
-        'diskTotalBytes': 10,
       });
       expect(invalid.memoryPressure, isNull);
       expect(invalid.swapUsedBytes, isNull);
-      expect(invalid.diskFreeBytes, isNull);
       expect(resourcePercent(19.8), '20%');
       expect(resourcePercent(null), '-');
       expect(resourcePercent(0), '0%');

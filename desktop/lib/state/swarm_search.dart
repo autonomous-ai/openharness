@@ -86,7 +86,6 @@ class SwarmSearchController extends ChangeNotifier {
     this.offersHarnessCreate = true,
     this.resultsFromBottom = false,
     this.noteFor,
-    this.additionalDestinations = const [],
     this._placement,
     this._split,
     bool previewInitiallyVisible = true,
@@ -119,7 +118,6 @@ class SwarmSearchController extends ChangeNotifier {
   /// A line the box answers a query with, shown as the first row and never
   /// taken by Return (the daemons' easter words: `xyzzy`).
   final String? Function(String query)? noteFor;
-  final List<SwarmDestination> additionalDestinations;
   final SwarmProjectStore? projects;
   final ModelSearchCatalog? models;
   bool modelDownloadsVisible = false;
@@ -1493,17 +1491,11 @@ class SwarmSearchController extends ChangeNotifier {
       return;
     }
     final storeChanged = isStoreMode && _refreshStore();
-    final base = navigating
+    final next = navigating
         ? _locations.read(app, projects?.projects ?? const [])
         : history == null
         ? _cache.read(app, projects?.projects ?? const [], recent: recent)
         : [...history!.menuDestinations(app), ...closedWorkDestinations(app)];
-    final next = additionalDestinations.isEmpty
-        ? base
-        : <String, SwarmDestination>{
-            for (final row in additionalDestinations) row.id: row,
-            for (final row in base) row.id: row,
-          }.values.toList();
     final splitCurrent = split == null || app.isPaneSplitCurrent(split!);
     if (!force &&
         sessionFilter == SessionFilter.all &&
