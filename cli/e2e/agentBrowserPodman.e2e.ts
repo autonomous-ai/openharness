@@ -839,8 +839,9 @@ describe('the agent browser on real Podman', () => {
   })
 
   step('a window request changes window.innerWidth and leaves screen.width as the Device setting', 6 * CALL_MS, async () => {
-    // Inside every screen the Device setting offers, and over the smallest window (1024x640): set as asked.
-    const asked = { width: 1100, height: 700 }
+    // Inside every screen the Device setting offers: set as asked, at 1:1 (#4141, which made the default screen
+    // portrait, 1080 wide, and took the smallest window away: asked 1100, the window was never wider before).
+    const asked = { width: 800, height: 700 }
     const { screen } = await client!.request<{ screen?: string }>('agent_browser_settings', { agentId: agent!.id })
     expect(screen).toMatch(/^\d+x\d+$/)
     const read = async () => {

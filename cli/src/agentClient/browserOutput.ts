@@ -1,10 +1,11 @@
 /**
  * Where `harness browser` puts what is too big for the agent's terminal: screenshots, and the whole of a long output.
- * The folder is in the agent's own `$TMPDIR` (../lib/agentTmp.ts), which a Swarm agent reads without being asked.
+ * The folder is in the agent's own `$TMPDIR` (../lib/agentTmp.ts), which a Swarm agent reads without being asked, or in
+ * the folder Harness keeps for its agents' files where nothing sets a TMPDIR.
  */
 import { lstatSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { prepareAgentTmp } from '../lib/agentTmp.js'
+import { agentTmpFolder, prepareAgentTmp } from '../lib/agentTmp.js'
 
 /** 80% of the smaller of what the engines keep of a command's output: Claude Code 30,000 characters (measured), Codex 10,000
  *  tokens (read from its model catalog), so at least 10,000 characters
@@ -15,13 +16,16 @@ export const KEPT_FILES = 50
 
 export class BrowserFilesError extends Error {}
 
-/** `$TMPDIR/browser`, made this account's alone (0700). Never a fallback elsewhere: an agent with no private folder gets
- *  no files, rather than its screenshots in a folder other accounts can read. */
+/**
+ * `$TMPDIR/browser`, or where nothing sets a TMPDIR `<Harness data>/agent-tmp/browser`: on Linux a plain agent has none
+ * (only a Swarm agent is given its own, ../lib/agentTmp.ts), and every screenshot there was refused (the agent browser's
+ * real-Podman run, 2026-11-13). Either is made this account's alone (0700). Never a folder other accounts can read, such
+ * as /tmp: one that cannot be made private gives no files.
+ */
 export function browserFolder(env: NodeJS.ProcessEnv): string {
-  if (!env.TMPDIR) throw new BrowserFilesError("Can't save browser files: TMPDIR is not set")
-  const folder = join(env.TMPDIR, 'browser')
+  const folder = join(env.TMPDIR || agentTmpFolder(env.ADAPTER_DATA_DIR || undefined), 'browser')
   // prepareAgentTmp refuses a file, a link or another account's folder in its place, so nothing is written through one.
-  if (!prepareAgentTmp(folder)) throw new BrowserFilesError("Can't save browser files in $TMPDIR/browser")
+  if (!prepareAgentTmp(folder)) throw new BrowserFilesError(`Can't save browser files in ${folder}`)
   return folder
 }
 
@@ -58,7 +62,7 @@ function save(env: NodeJS.ProcessEnv, kind: string, extension: string, bytes: Bu
       writeFileSync(path, bytes, { flag: 'wx', mode: 0o600 })
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'EEXIST') continue
-      throw new BrowserFilesError("Can't save browser files in $TMPDIR/browser")
+      throw new BrowserFilesError(`Can't save browser files in ${folder}`)
     }
     keepNewest(folder, path)
     return path

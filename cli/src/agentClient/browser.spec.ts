@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
@@ -224,9 +224,21 @@ describe('harness browser', () => {
     expect(empty.requests[0]!.payload.args).toEqual({ ref: 'e7', text: '' })
   })
 
+  // On Linux a plain agent has no TMPDIR: its screenshots go in the folder Harness keeps for its agents' files.
+  it('with no TMPDIR, a screenshot is saved in the agents\' folder', async () => {
+    const image = Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString('base64')
+    const data = tmp()
+    const r = await run(['screenshot'], { env: { TMUX_PANE: '%7', ADAPTER_DATA_DIR: data }, answer: { ok: true, text: '', image } })
+    expect(r.code, r.err).toBe(0)
+    expect(r.out.trim().startsWith(join(data, 'agent-tmp', 'browser', 'shot-'))).toBe(true)
+  })
+
   it('a folder that cannot be written is one line and exit 1', async () => {
     const image = Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString('base64')
-    const unset = await run(['screenshot'], { env: { TMUX_PANE: '%7' }, answer: { ok: true, text: '', image } })
+    const data = tmp()
+    mkdirSync(join(data, 'agent-tmp'))
+    writeFileSync(join(data, 'agent-tmp', 'browser'), 'a file')
+    const unset = await run(['screenshot'], { env: { TMUX_PANE: '%7', ADAPTER_DATA_DIR: data }, answer: { ok: true, text: '', image } })
     expect(unset.code).toBe(1)
     expect(unset.err.split('\n')).toHaveLength(2)
     expect(unset.err).toMatch(/^Can't save browser files/)

@@ -296,7 +296,9 @@ Your browser: a Chrome your person can also see and use. Your person starts and 
   cut there, saved in full to a text file, and ends with a line that names the file. The number is set under what
   both engines keep of a shell command's output (see To measure first).
 - **Where files go.** A `browser` folder in the agent's temporary folder (`$TMPDIR`, which a Swarm agent can read
-  without being asked: `cli/src/lib/agentTmp.ts`). It keeps the newest 50 files; writing one more deletes the oldest.
+  without being asked: `cli/src/lib/agentTmp.ts`), or, where nothing sets a TMPDIR (a plain agent on Linux), in the
+  folder Harness keeps for its agents' files (`<data>/agent-tmp`), this account's alone as `$TMPDIR` is (changed
+  2026-11-13: every screenshot on Linux was refused). It keeps the newest 50 files; writing one more deletes the oldest.
 - **Timeouts.** The tools keep theirs: 20 s, navigation 60 s, `wait` at most 30 s. The service gives a call 10 s more
   than its tool, then ends it and starts the tool server again. The CLI waits 5 s more than the service. So no command runs longer than 75 s.
 - **One at a time (spec).** Commands for one browser run in the order they arrive, one at a time: the page is one
