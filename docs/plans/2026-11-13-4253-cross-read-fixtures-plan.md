@@ -30,7 +30,7 @@ Checked at `d80ed139fc`:
   (`ci-plan.py:198-201`).
 - **A data folder covers the file under it.** For a path named from the repository root the scan skips the target
   when `any(covers(entry, known) for entry in data)` (`ci-plan.py:647`); `covers` is
-  `path == entry or (entry.endswith("/") and path.startswith(entry))` (`ci-plan.py:312`). So `backend/src/superTabs/`
+  `path == entry or (entry.endswith("/") and path.startswith(entry))` (`ci-plan.py:311`). So `backend/src/superTabs/`
   covers both the folder and `commands.ts`. A relative read never consults a data folder and stays reported.
 - **All four reported pairs are root-named strings:** `githubMerge.spec.ts:1178, 1240`, `plainPath.spec.ts:7`,
   `pmNumbers.spec.ts:179, 731, 758`. With the entries below set in memory, `undeclared_reads(root, "cli")` returns

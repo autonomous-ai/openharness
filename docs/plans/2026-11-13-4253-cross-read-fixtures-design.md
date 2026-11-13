@@ -12,7 +12,7 @@ checkout of main (`d80ed139fc`). Its `cli` subtest reports four reads that are n
 | `cli/src/superTabs/pmNumbers.spec.ts` | `backend/src/superTabs/commands.ts` |
 
 None of these specs opens those files: they hold repository paths as test data (a pull request's files, a path to
-make plain, a hot file's name). They came in with #4177 and #3993.
+make plain, a hot file's name). They came in with #4177.
 
 CI stays green because `process-checks` runs in a sparse checkout, where the test skips. The merge helper runs the
 same scan (`undeclared_reads` in `scripts/ci-plan.py`) on a full checkout before it accepts reused results. Once main
