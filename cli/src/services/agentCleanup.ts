@@ -54,6 +54,11 @@ export const CASCADE_RETRY_MS = 5_000
 /** The harnesses the person joined that are remembered, the newest. */
 export const JOINED_MAX = 1_000
 
+/** How long a delete's erase waits for the ledger's lock: a writer holds it for one appended line. The wait blocks this
+ *  process, which the edge host's other services share, so it is a quarter of a second and not the ledger's own two:
+ *  refused, the delete has deleted nothing yet and is asked again. */
+export const FORGET_LOCK_WAIT_MS = 250
+
 /** Where the harnesses the person joined are kept, in the daemon's data folder. */
 export const joinedPath = (dataDir: string): string => join(dataDir, 'agent-cleanup.json')
 
@@ -74,6 +79,8 @@ export interface AgentCleanupDeps {
    *  the Swarm then refuses it new work, as it does not one stopped for Change agent (review of #2953). False when it
    *  could not record it. Absent while the Swarm is off. */
   closed?: (dataDir: string, agentId: string) => boolean
+  /** How long a delete's erase waits for the ledger's lock (`FORGET_LOCK_WAIT_MS`). */
+  forgetLockWaitMs?: number
   /** Asks another of the owner's machines' messages service (messages/service.ts), as `harness tell` does: a hand-over
    *  of what Hachi started there. By default over this daemon's own socket. */
   tell?: (machineId: string, payload: Record<string, unknown>) => Promise<unknown>
@@ -118,8 +125,9 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
   /** The starters whose harnesses are being closed: two stops of one harness tell this twice. */
   const cascading = new Set<string>()
   const rpc = deps.tell ? null : createMessagesRpc()
+  const ledger = new Ledger(ledgerPath(core.dataDir))
   const hachi = createHachiHandOver({
-    ledger: new Ledger(ledgerPath(core.dataDir)),
+    ledger,
     self: () => core.daemon.machineId(),
     tell: deps.tell ?? ((machineId, payload) => rpc!({ port: core.daemon.port, dataDir: core.dataDir, machineId }, payload)),
     now, log,
@@ -265,6 +273,16 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
         joined.delete(oldest)
       }
       save()
+    },
+    forgetTold: async (agentId) => {
+      try {
+        new Ledger(ledgerPath(core.dataDir), deps.forgetLockWaitMs ?? FORGET_LOCK_WAIT_MS).forgetTold(agentId)
+        return true
+      } catch (error) {
+        // Said here, where the reason is known: the delete is refused in the person's words (core/agents/lifecycle.ts).
+        log(`[agent-cleanup] could not erase what ${agentId.slice(0, 8)} was told: ${reason(error)}`)
+        return false
+      }
     },
     stop: () => {
       stopped = true

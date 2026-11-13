@@ -203,7 +203,10 @@ master too old to run it starts it beside itself, still in its own process (`src
   `e2e/recapsCompat.e2e.ts` that the dial and the windows hear the same cards and recaps as before.
   The agent cleanup (`src/services/agentCleanupProcess.ts`, `src/core/agentCleanupLink.ts`) is told the same way
   (a harness stopped, the person typing into one another agent started), and acts on the core only through what the
-  core lets it: `closeStarted` closes a harness another agent started and refuses any other.
+  core lets it: `closeStarted` closes a harness another agent started and refuses any other. One thing the core asks
+  it and waits for, ten seconds at most: to erase what a harness being deleted was told (`forgetTold`, the agent
+  ledger's lines, which this service reads and locks and the core never does). It is asked before anything of the
+  harness is deleted, and a delete it does not answer is refused with nothing deleted.
 
 ## On demand
 

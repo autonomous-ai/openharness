@@ -396,8 +396,10 @@ describe('the core API services stand on', () => {
     for (const [member, fallback] of Object.entries(notices)) expect(fallback, member).toBeUndefined()
   })
 
-  it('tells the agent cleanup nothing while it is off: every harness is left open, as before it', () => {
-    expect(AGENT_CLEANUP_FALLBACKS).toEqual({ closed: undefined, typed: undefined, stop: undefined })
+  it('tells the agent cleanup nothing while it is off: every harness is left open, as before it, and none whose told lines it could not erase is deleted', () => {
+    const { forgetTold, ...notices } = AGENT_CLEANUP_FALLBACKS
+    expect(notices).toEqual({ closed: undefined, typed: undefined, stop: undefined })
+    expect(readFallback(forgetTold)).toEqual({ deferred: true, value: false })
   })
 
   it('lets the recaps send a turn\'s cards and recaps, and nothing else, down those doors', () => {

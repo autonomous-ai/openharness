@@ -1138,7 +1138,8 @@ export const RECAPS_FALLBACKS: PortFallbacks<RecapsPort> = { lifecycle: undefine
 
 /**
  * The core's calls into the agent cleanup (services/agentCleanup.ts): what happens to the harnesses agents start.
- * Notices: the core never waits for them, and one the cleanup misses leaves a harness open, as before it.
+ * `closed` and `typed` are notices: the core never waits for them, and one the cleanup misses leaves a harness open,
+ * as before it.
  */
 export interface AgentCleanupPort {
   /** A harness was closed or stopped (`agent_close`, Stop Harness, a purge): the harnesses it started close too. */
@@ -1146,10 +1147,16 @@ export interface AgentCleanupPort {
   /** The person typed or pasted into a harness, from a window or the phone (an agent id or a session id): one another
    *  agent started is the person's from then on. */
   typed(id: string): void
+  /** A harness is being deleted: the agent ledger's lines that keep the opening words of what it was told
+   *  (`harness tell`) are erased. The one answer a delete waits for here, and for a bounded time: false when they were
+   *  not erased, which refuses the delete. The ledger is the agent clients' file, read and locked by the cleanup and
+   *  never by the core, whose loop its lock could hold for two seconds (the audit of 2026-11-12). */
+  forgetTold(agentId: string): Promise<boolean>
   stop(): void
 }
-/** What the core gets when the cleanup fails: nothing told, and every harness left open, as before it. */
-export const AGENT_CLEANUP_FALLBACKS: PortFallbacks<AgentCleanupPort> = { closed: undefined, typed: undefined, stop: undefined }
+/** What the core gets when the cleanup fails: nothing told, every harness left open, as before it, and no delete of a
+ *  harness whose told lines it could not erase. */
+export const AGENT_CLEANUP_FALLBACKS: PortFallbacks<AgentCleanupPort> = { closed: undefined, typed: undefined, forgetTold: later(false), stop: undefined }
 
 /** A browser's container is named this and its profile (services/agentBrowser/containers.ts `NAME`, which a file under a
  *  service's folder keeps for itself; services/agentBrowser.spec.ts holds the command it builds to this one). */

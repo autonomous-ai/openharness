@@ -46,9 +46,13 @@ export interface LifecycleDeps {
   /** Where a purged conversation's lines and its search entries are dropped. */
   mirror: { deleteHistory(sessionId: string): void }
   sessionSearch: { deleteHistory(sessionId: string): void } | null
-  /** A purge's other records of the harness (purgeAgentService.ts `eraseRecords`): its told lines in the agent ledger and
-   *  the requests of the creates that made it. Rejecting refuses the purge. */
-  eraseRecords: NonNullable<PurgeDeps['eraseRecords']>
+  /** A purge's other records of the harness. Its told lines in the agent ledger, which the agent cleanup erases in the
+   *  edge host (core/api.ts `AgentCleanupPort.forgetTold`), before anything of the harness is deleted here
+   *  (purgeAgentService.ts `eraseFirst`): false refuses the purge with nothing deleted. */
+  forgetTold: (agentId: string) => Promise<boolean>
+  /** And the requests of the creates that made it (lib/agentCreationReceipt.ts), after its conversation
+   *  (`eraseRecords`): rejecting refuses the purge. */
+  scrubCreated: (agentId: string) => Promise<unknown>
   /** To every connected window. */
   send: (frame: { type: string; payload: Record<string, unknown> }) => void
   pinnedControls: ResumeAgentServiceDeps['pinnedControls']
@@ -81,9 +85,13 @@ export class LeadProtectedError extends Error {
   constructor() { super(LEAD_PROTECTED_DETAIL) }
 }
 
+/** What a delete says when the harness's told lines could not be erased: asked first, so nothing of it has gone. The
+ *  delete adds what to do (lib/purgeAgentService.ts: the harness is stopped, refresh and try again). */
+export const TOLD_NOT_ERASED = 'Harness could not erase what this harness was told, so nothing was deleted.'
+
 export function createAgentLifecycle({
   registry, stoppedAgents, restartJobs, createBackend, noBackendCode, backendFor, agentReconciler, forgetSession, markDeleted, clearDeleted, stopNative, settlePane, cancelExternal,
-  sessionCheckpoints, mirror, sessionSearch, eraseRecords, send, pinnedControls, retainExitedSession, announceSession,
+  sessionCheckpoints, mirror, sessionSearch, forgetTold, scrubCreated, send, pinnedControls, retainExitedSession, announceSession,
   relaunchOverrides, prepareSessionResume, stopBackgroundJob, refreshGridWebSearch, adoptSwarmSkill, attachDsh, attachBrowser, attachSession, relaunchMarks, stopped, purged, atFolderTrust, atEmptyComposer, moveHeld,
   leadProtected,
 }: LifecycleDeps) {
@@ -114,7 +122,9 @@ export function createAgentLifecycle({
     ...(leadProtected ? { leadProtected: (id: string) => leadProtected(id) } : {}),
     atFolderTrust,
     atEmptyComposer,
-    eraseRecords,
+    // The person reads what was not erased; the cleanup's log has why (services/agentCleanup.ts).
+    eraseFirst: async (s) => { if (!await forgetTold(s.agentId)) throw new Error(TOLD_NOT_ERASED) },
+    eraseRecords: async (s) => { await scrubCreated(s.agentId) },
     deleted: s => {
       // Every conversation the harness had: a run that moved on (`/new`) leaves nothing under its earlier keys.
       const keys = [s.sessionId, ...(s.earlierSessionIds ?? [])].filter(Boolean)

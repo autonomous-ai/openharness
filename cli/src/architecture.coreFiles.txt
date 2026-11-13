@@ -2,7 +2,6 @@
 # the file lives, with the Swarm's, the other engines' and the services' doors shut (src/architecture.spec.ts walks it).
 # The core stays small. A file joins this list only when every session needs it, in a pull request that says why
 # (cli/AGENTS.md, Protect the core); a file that leaves the core's process leaves the list in the same change.
-agentClient/ledger.ts
 backendSocket.ts
 config/env.ts
 config/envFields.ts
@@ -331,7 +330,6 @@ lib/daemonState.ts
 lib/deleteAgentFallback.ts
 lib/deletedSessions.ts
 lib/deviceManagementHttp.ts
-lib/deviceRecap.ts
 lib/dialogEnd.ts
 lib/engineBin.ts
 lib/engineExitOption.ts

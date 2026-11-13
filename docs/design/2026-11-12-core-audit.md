@@ -171,13 +171,13 @@ Left since, with the core's process as `src/architecture.coreFiles.txt` lists it
 | `harness uninstall`'s hook removers, loaded for how one outcome is said (13 November) | 551 | 95,590 |
 | The guests' accounts, loaded for a user-name check and a small runner; and a function nothing called (13 November) | 552 | 95,372 |
 | The probe of which engines this machine has: the edge host answers it and starts its login shells (13 November) | 550 | 95,029 |
+| The agent ledger, loaded for one erase in a delete: the agent cleanup erases what a harness was told, asked before anything is deleted. And the dial's recap of a cloud agent's last words, markdown a maker's agent wrote: its service works the card out and the core shows what it is handed (13 November) | 548 | 94,575 |
 
 ### 1. Code the core loads for one helper (low risk, about a day each)
 
 | What | Lines | What the core needs instead |
 | --- | ---: | --- |
-| `agentClient/ledger.ts`: one purge call, and its lock can hold the loop for 2 s | 363 | the edge host's agent cleanup |
-| Helpers of one feature: `lib/agentTmp.ts` (the Swarm's), `lib/deviceRecap.ts` (cloud agents'), `lib/apiConnectionMetadata.ts` (models': the saved-API store parsed at every launch to learn whether one exists) | 395 | the feature's door, or a flag it reports |
+| Helpers of one feature: `lib/agentTmp.ts` (the Swarm's), `lib/apiConnectionMetadata.ts` (models': the saved-API store parsed at every launch to learn whether one exists) | 238 | the feature's door, or a flag it reports |
 | The agent settings sync: a five-minute timer and backend reads (`core/experiments.ts:52-200`) | 150 | the edge host |
 | Exports only tests read: `decodeTmuxControlData` and `normalizeTmuxCaptureLines` in `lib/tmuxStream.ts`, `stopSessionOwner`, `writeTty` and `foregroundJob` in `lib/externalOwnerControl.ts` (kept with a golden test: ask before deleting) | 154 | nothing, or a test's own file |
 | Lines of `core/api.ts` no core file imports, and code only the inline mode runs (`core/serviceHost.ts:122-233`, `lib/transcriptPages.ts:240-466`, `lib/sharedMachinesPort.ts:49-160`) | 707 | with their service, or gone with the inline mode |
@@ -245,9 +245,10 @@ today that the rule says it should not, most serious first:
 4. **The core's loop can be held.** A registry save: its lock can sleep the loop for 2 s, and its three fsyncs took
    about 60 ms of a save measured on a Mac (a synchronous `ps` on every save, for a start time that never changes,
    is gone since 13 November: read once); a Codex resume that
-   reads its whole rollout; the ledger's lock (2 s); a login shell and `harness-pty version`, up to 5 s each
+   reads its whole rollout; a login shell and `harness-pty version`, up to 5 s each
    (`lib/engineBin.ts:116`, `lib/ptyHost/launch.ts:227`); fsync bursts for the handoff; `~/.claude.json` rewritten
-   synchronously (`engines/kit/folderTrust.ts:101-115`). And work that grows with history: create receipts are
+   synchronously (`engines/kit/folderTrust.ts:101-115`). (The agent ledger's lock, 2 s, is the edge host's to wait
+   on since 13 November.) And work that grows with history: create receipts are
    never deleted and are scanned every minute, a bounded part at a time (493 on the Mac measured,
    `lib/agentCreationReceipt.ts`).
 5. **Children that are a feature's:** `git clone` inside `agent_create` (`lib/projectFolder.ts:241`), engine installers
