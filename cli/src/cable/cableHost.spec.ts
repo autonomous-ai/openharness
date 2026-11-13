@@ -768,6 +768,14 @@ describe('the dial with no window: this computer\'s agents', () => {
     } finally { vi.useRealTimers() }
   })
 
+  it('no window and signed out: no card can come, so the Harness agents are listed at once', async () => {
+    const host = new DaemonCableHost(wiring({ sessions, signedIn: () => false }), fleetOf([]))
+    host.setRegistry(new HostRegistry([host.harness, observed([observedAgent({ id: 'o1' })])]))
+    host.setSwarms(null)
+    host.swarmCardsWanted(true)
+    expect((await host.listAgentSnapshot()).agents.map((a) => a.id)).toEqual(['h1', 'h2', 'o1'])
+  })
+
   it('with a window and a registry: the tab, as today', async () => {
     const host = new DaemonCableHost(wiring({ sessions }), fleetOf([]))
     host.setRegistry(new HostRegistry([host.harness, observed([observedAgent({ id: 'o1' })])]))
