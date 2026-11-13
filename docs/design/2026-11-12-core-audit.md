@@ -170,16 +170,16 @@ Left since, with the core's process as `src/architecture.coreFiles.txt` lists it
 | Windows files loaded for a constant: the guest set-up's protocol and folder checks, the pane's command for a guest, the updater's version folders and the install layout (13 November) | 551 | 95,749 |
 | `harness uninstall`'s hook removers, loaded for how one outcome is said (13 November) | 551 | 95,590 |
 | The guests' accounts, loaded for a user-name check and a small runner; and a function nothing called (13 November) | 552 | 95,372 |
+| The probe of which engines this machine has: the edge host answers it and starts its login shells; the saved APIs' file read, 39 lines, joins the list so that host needs no zod (13 November) | 551 | 95,062 |
 
 ### 1. Code the core loads for one helper (low risk, about a day each)
 
 | What | Lines | What the core needs instead |
 | --- | ---: | --- |
 | `agentClient/ledger.ts`: one purge call, and its lock can hold the loop for 2 s | 363 | the edge host's agent cleanup |
-| The New dialog's engine probe: up to 16 login shells started from the core (`lib/engineProbe.ts`, `engineAccount.ts`, `backendSocket.ts:1210-1254`) | 397 | the edge host |
 | Helpers of one feature: `lib/agentTmp.ts` (the Swarm's), `lib/deviceRecap.ts` (cloud agents'), `lib/apiConnectionMetadata.ts` (models': the saved-API store parsed at every launch to learn whether one exists) | 395 | the feature's door, or a flag it reports |
 | The agent settings sync: a five-minute timer and backend reads (`core/experiments.ts:52-200`) | 150 | the edge host |
-| Test-only code and exports only tests read: `core/stall.ts` (a test's fault, loaded by every shipped core), `decodeTmuxControlData` and `normalizeTmuxCaptureLines` in `lib/tmuxStream.ts`, `stopSessionOwner`, `writeTty` and `foregroundJob` in `lib/externalOwnerControl.ts` (kept with a golden test: ask before deleting) | 270 | nothing, or a test's own file |
+| Exports only tests read: `decodeTmuxControlData` and `normalizeTmuxCaptureLines` in `lib/tmuxStream.ts`, `stopSessionOwner`, `writeTty` and `foregroundJob` in `lib/externalOwnerControl.ts` (kept with a golden test: ask before deleting) | 154 | nothing, or a test's own file |
 | Lines of `core/api.ts` no core file imports, and code only the inline mode runs (`core/serviceHost.ts:122-233`, `lib/transcriptPages.ts:240-466`, `lib/sharedMachinesPort.ts:49-160`) | 707 | with their service, or gone with the inline mode |
 
 Not counted above, because it is not a move to a service: **the other platform's terminal code.** The Windows
@@ -250,9 +250,9 @@ today that the rule says it should not, most serious first:
    synchronously (`engines/kit/folderTrust.ts:101-115`). And work that grows with history: create receipts are
    never deleted and are scanned every minute, a bounded part at a time (493 on the Mac measured,
    `lib/agentCreationReceipt.ts`).
-5. **Children that are a feature's:** `git clone` inside `agent_create` (`lib/projectFolder.ts:241`), login shells for
-   the New dialog (`backendSocket.ts:1227`), engine installers that run npm or curl (`engines/kit/nativeInstall.ts:357`),
-   `amp threads export`, which calls Amp's servers (`core/transcripts/history.ts:56`).
+5. **Children that are a feature's:** `git clone` inside `agent_create` (`lib/projectFolder.ts:241`), engine installers
+   that run npm or curl (`engines/kit/nativeInstall.ts:357`), `amp threads export`, which calls Amp's servers
+   (`core/transcripts/history.ts:56`). The New dialog's login shells are the edge host's since 13 November.
 6. **Launch arguments, environment and files from models, the Store and shared machines are checked for shape
    only** (`core/modelsLink.ts:75-89`, `storeLink.ts:36-42`, `sharedMachinesLink.ts:22-25`).
 7. **Keys the core holds without need.** A grid's API key is kept on the registry row and copied into each
@@ -268,7 +268,9 @@ today that the rule says it should not, most serious first:
    folder it launches in, once the person has saved an API (`lib/apiInstructions.ts:23-32`, from
    `core/agents/create.ts:426`, `launch.ts:68`, `fork.ts:180`). Its comment says only workspaces Harness made; the
    code does not check. To confirm with a test, then fix.
-10. **Test hooks ship in the core** (`core/stall.ts`, `core/main.ts:2076, 3460`).
+10. **Test hooks ship in the core** (`core/stall.ts`, `core/main.ts:2076, 3460`). They stay (13 November): a fault
+    that holds the core's event loop has to run in the core's process, and each does nothing unless
+    `HARNESSD_TEST_FAULTS` names it, which only whoever starts the daemon sets.
 
 What already holds: the core's one call to another host is the sign-in's refresh (`lib/authSession.ts:357`); the
 E2EE keys are the gateway's; both local doors refuse another OS user and a web page (the private socket's mode,
