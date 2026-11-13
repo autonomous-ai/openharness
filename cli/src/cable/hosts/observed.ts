@@ -3,6 +3,7 @@ import { basename } from 'node:path'
 // Types only: the devices process must not load core code.
 import type { ObservedHookEvent } from '../../core/observedHook.js'
 import type { OpenSessions } from '../../lib/sessionSearch/external.js'
+import { within } from '../../lib/sessionSearch/externals/support.js'
 import { detectHost } from './hostDetect.js'
 import type { Caps, HostAgent, HostAgentState, HostSource } from './types.js'
 
@@ -34,6 +35,8 @@ export interface ObservedDeps {
     get(id: string): { cwd?: string; transcriptPath?: string | null } | undefined
   }
   lastAnswer(engine: string, path: string): Promise<string | undefined>
+  /** Folders whose sessions are Harness's own (its data folder), as the external sessions are given them: never observed. */
+  excluded: readonly string[]
   log(line: string): void
 }
 
@@ -123,6 +126,12 @@ export class ObservedSource implements HostSource {
     init: { cwd?: string; transcriptPath?: string | null; pid?: number; hints?: Record<string, string> },
   ): Entry | undefined {
     const id = observedAgentId(engine, sessionId)
+    // Harness's own session (the voice router's Claude Code runs in the data folder, outside a pane) is never an agent
+    // outside it, by hook or by scan: one the scan listed before its folder was known goes once the folder is.
+    if (init.cwd && this.deps.excluded.some((dir) => within(dir, init.cwd!))) {
+      if (this.entries.delete(id)) this.emit()
+      return undefined
+    }
     const have = this.entries.get(id)
     if (have) {
       if (init.pid && have.pid === undefined) this.setPid(have, init.pid)

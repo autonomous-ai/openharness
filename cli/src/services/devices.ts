@@ -115,6 +115,7 @@ function observedSource(dataDir: string, log: (line: string) => void): ObservedS
     pidGeneration: externalProcessGeneration,
     openSessions: new OpenSessions({ providers, log }),
     externalSessions: new ExternalSessions({ providers, excluded: [dataDir], log }),
+    excluded: [dataDir],
     // Asked for Claude Code's and Codex's alone (observed.ts), and read only inside their own folders: a hook can name any path.
     lastAnswer: (engine, path) => readLastAnswer(engine as 'claude' | 'codex', path, {
       roots: engine === 'claude' ? claudeProjectsRoots(env.CLAUDE_PROJECTS_DIR) : codexHomeRoots(env.CODEX_HOME).map((home) => join(home, 'sessions')),
