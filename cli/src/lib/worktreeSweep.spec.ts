@@ -63,6 +63,54 @@ describe('removing one worktree Harness made, as the Swarm asks', { timeout: 30_
     expect(await readFile(ran, 'utf8').catch(() => ''), 'a program or hook the repository names').toBe('')
   })
 
+  // #4199: with `core.ignoreStat=true`, git marks each file a checkout writes "assume unchanged" and takes it as unchanged
+  // from then on, so an edit to a tracked file read as clean and `git worktree remove` removed it, edit and all. A
+  // `core.excludesFile` the repository names hid a new file from both the same way, as an ignored file that goes with it.
+  it('keeps an edit git was told to assume unchanged and says why, and a new file the repository\'s excludesFile names', async () => {
+    await git(repo, 'config', 'core.ignoreStat', 'true')
+    const edited = await add('edited', 'harness/edited')
+    await writeFile(join(edited, 'file'), 'edited, never committed')
+    await expect(removes(edited)).rejects.toEqual(new WorktreeKept('WORKTREE_ASSUMED_UNCHANGED'))
+    expect(await readFile(join(edited, 'file'), 'utf8')).toBe('edited, never committed')
+    await git(repo, 'config', 'core.ignoreStat', 'false')
+    const excludes = join(root, 'excludes')
+    await writeFile(excludes, '*.md\n')
+    await git(repo, 'config', 'core.excludesFile', excludes)
+    const fresh = await add('fresh', 'harness/fresh')
+    await writeFile(join(fresh, 'new-work.md'), 'not added yet')
+    expect(await removes(fresh), 'a worktree holding a new file').toBe(false)
+    expect(await readFile(join(fresh, 'new-work.md'), 'utf8')).toBe('not added yet')
+    expect(await branches()).toEqual(['harness/edited', 'harness/fresh', 'main'])
+  })
+
+  // A file list past the 1 MiB a git answer is read into: the mark on its last file is still found, and the worktree kept.
+  it('finds a file marked assume unchanged at the end of a large repository\'s list', async () => {
+    const name = (n: number) => `${String(n).padStart(5, '0')}-${'x'.repeat(200)}`
+    await Promise.all(Array.from({ length: 5_500 }, (_, n) => writeFile(join(repo, name(n)), '')))
+    await git(repo, 'add', '.')
+    await git(repo, 'commit', '--quiet', '-m', 'many files')
+    const path = await add('large', 'harness/large')
+    const list = (await exec('git', ['-C', path, 'ls-files', '-v'], { maxBuffer: 8 * 1024 * 1024 })).stdout
+    expect(list.length, 'a list past 1 MiB').toBeGreaterThan(1024 * 1024)
+    await git(path, 'update-index', '--assume-unchanged', name(5_499))
+    await writeFile(join(path, name(5_499)), 'edited, never committed')
+    await expect(removes(path)).rejects.toEqual(new WorktreeKept('WORKTREE_ASSUMED_UNCHANGED'))
+    expect(await readFile(join(path, name(5_499)), 'utf8')).toBe('edited, never committed')
+  })
+
+  it.runIf(process.platform !== 'win32')('keeps a worktree whose file list git could not give', async () => {
+    const path = await add('unlisted', 'harness/unlisted')
+    const bin = join(root, 'bin'), real = (await exec('sh', ['-c', 'command -v git'])).stdout.trim()
+    await mkdir(bin)
+    await writeFile(join(bin, 'git'), `#!/bin/sh\nfor arg in "$@"; do [ "$arg" = ls-files ] && exit 128; done\nexec "${real}" "$@"\n`)
+    await chmod(join(bin, 'git'), 0o755)
+    vi.stubEnv('PATH', `${bin}:${process.env.PATH}`)
+    try {
+      await expect(removes(path)).rejects.toThrow('git ls-files exited 128')
+    } finally { vi.unstubAllEnvs() }
+    expect(await exists(path)).toBe(true)
+  })
+
   it('removes a clean, idle, unused worktree and the harness branch that has nothing of its own', async () => {
     const path = await add('brave-otter', 'harness/brave-otter')
     expect(await removes(path)).toBe(true)
