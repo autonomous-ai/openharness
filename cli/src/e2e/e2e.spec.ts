@@ -10,7 +10,7 @@ import { pickGridModel } from './gridSwitchDriver.js'
 import { prepareWorkspace, readLog, logPath, readWorkspaceFile, preAcceptClaudeBypassMode, CALC_MCP_MJS } from './workspace.js'
 import { toolResult, useByRef } from './sessionTools.js'
 import { execFileSync } from 'node:child_process'
-import { findRef, probeLeg, runCheck, dismissStartupDialogs, STARTUP_DIALOGS, type Tmux } from './paneProbe.js'
+import { findRef, probeLeg, runCheck, dismissStartupDialogs, STARTUP_DIALOGS, typedPrompt, type Tmux } from './paneProbe.js'
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, chmodSync, existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -291,11 +291,11 @@ function fakeAgent(opts: { lie?: CheckId[]; empty?: boolean } = {}) {
   const reply = (p: string): string | null => {
     let m: RegExpMatchArray | null
     if ((m = p.match(/Read tool on (notes\/info-\d\.txt)/))) return lie.has('read') ? 'It says hello.' : `It says: ${files[m[1]].trim()}`
-    if ((m = p.match(/mcp__harness__web_search tool .*\((ref-[0-9a-z]{6})\)/))) {
+    if ((m = p.match(/^\((ref-[0-9a-z]{6})\) .*mcp__harness__web_search tool/))) {
       if (!lie.has('web')) searched[m[1]] = opts.empty ? 'No results.' : 'Node.js 24.11.0 — https://nodejs.org/en/download'
       return 'The latest stable Node.js is 24.11.0.'
     }
-    if ((m = p.match(/Write tool to create (out\/hello-\d\.txt) .*text: (.*) \(ref-/))) {
+    if ((m = p.match(/Write tool to create (out\/hello-\d\.txt) .*text: (.*)$/))) {
       if (!lie.has('write')) files[m[1]] = `${m[2]}\n`
       return 'Done.'
     }
@@ -341,14 +341,25 @@ describe('pane probe (live steps on a tmux pane)', () => {
   // the next step's prompt on the grid leg (edit=stuck).
   it('types a step once when the tool wraps its prompt across lines', async () => {
     const { pane, probe, files } = fakeAgent()
-    // At 72 columns the tag of this step's prompt (from column 69) is cut in two, as on grid-dev's screen.
-    const wrap = (text: string) => text.split('\n').map((line) => line.match(/.{1,72}/g)?.join('\n  ') ?? line).join('\n')
+    // At 10 columns the tag at the start of this step's prompt (`> (ref-…`) is cut in two, as on grid-dev's screen.
+    const wrap = (text: string) => text.split('\n').map((line) => line.match(/.{1,10}/g)?.join('\n  ') ?? line).join('\n')
     const wrapped: Tmux = { ...pane, capture: async (p, lines) => wrap(await pane.capture(p, lines)) }
     const write = SCENARIO.subscription[1]
     const out = await runCheck(wrapped, '%1', write, probe)
     expect(out.status).toBe('ok')
-    expect(pane.typed.filter((t) => t.startsWith(write.prompt))).toHaveLength(1)
+    expect(pane.typed.filter((t) => t.endsWith(write.prompt))).toHaveLength(1)
     expect(files['out/hello-1.txt']).toBe('hello from step 1\n')
+  })
+
+  // grid-dev 2026-11-13: with the tag after the prompt, GPT-6-Luna ran `cat notes/info-1.txt (ref-9qa2nu)`.
+  it('types the tag before the prompt, so a command the prompt ends with is the end of what is typed', () => {
+    for (const engine of ['codex', 'claude'] as const) {
+      for (const step of [...scenarioFor(engine).subscription, ...scenarioFor(engine).grid]) {
+        const typed = typedPrompt(step.prompt, 'ref-2uj4gc')
+        expect(typed.startsWith('(ref-2uj4gc) ')).toBe(true)
+        expect(typed.endsWith(step.prompt)).toBe(true)
+      }
+    }
   })
 
   it('finds a tag cut by a wrap inside a bordered box, and only its own', () => {
