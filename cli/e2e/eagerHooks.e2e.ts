@@ -7,7 +7,7 @@ import { afterAll, afterEach, beforeAll, expect, it, onTestFailed } from 'vitest
 import { readLeanBundle } from '../src/harnessd/leanBundle.js'
 import { LocalClient } from './harness/client.js'
 import { assertHooksContained, CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
-import { withLean } from './harness/release.js'
+import { buildWithLean } from './harness/release.js'
 import { shellSingleQuote } from '../src/lib/shellQuote.js'
 
 let scratch = '', bundle = ''
@@ -223,8 +223,7 @@ it.each([['missing', 'claude'], ['stalled', 'codex']] as const)(
     expect(chunks).toHaveLength(1)
     if (mode === 'missing') delete files[chunks[0]!]
     else files[chunks[0]!] = "console.error('[fixture] legacy hooks stalled'); await new Promise(() => {});\n"
-    const script = join(scratch, mode, 'cli.js'); mkdirSync(dirname(script), { recursive: true })
-    writeFileSync(script, withLean(readFileSync(bundle, 'utf8'), files), { mode: 0o755 })
+    const script = buildWithLean(join(scratch, mode), bundle, files)
     const d = daemon = await IsolatedDaemon.create({ scriptPath: script })
     onTestFailed(() => console.log(d.log()))
     const root = join(d.root, 'native')

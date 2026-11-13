@@ -7,7 +7,7 @@ import { afterAll, afterEach, beforeAll, expect, it, onTestFailed } from 'vitest
 import { readLeanBundle } from '../src/harnessd/leanBundle.js'
 import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
-import { withLean } from './harness/release.js'
+import { buildWithLean } from './harness/release.js'
 
 let daemon: IsolatedDaemon | undefined
 let client: LocalClient | undefined
@@ -29,9 +29,7 @@ it.each(['missing', 'stalled'] as const)('keeps Hermes admission pending and cor
   expect(chunks).toHaveLength(1)
   if (mode === 'missing') delete files[chunks[0]!]
   else files[chunks[0]!] = "console.error('[fixture] Hermes reader stalled'); await new Promise(() => {});\n"
-  const scriptPath = join(scratch, mode, 'cli.js')
-  mkdirSync(dirname(scriptPath), { recursive: true })
-  writeFileSync(scriptPath, withLean(text, files), { mode: 0o755 })
+  const scriptPath = buildWithLean(join(scratch, mode), bundle, files)
   const d = daemon = await IsolatedDaemon.create({ scriptPath })
   onTestFailed(() => console.log(d.log()))
   d.env.HERMES_HOME = join(d.root, 'hermes')

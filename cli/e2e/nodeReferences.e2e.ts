@@ -11,7 +11,7 @@
 import { execFileSync } from 'node:child_process'
 import { chmodSync, constants, copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 
@@ -52,6 +52,7 @@ describe.skipIf(!copies)('the launcher follows the Node the daemon runs on', { t
       return join(out, 'cli.js')
     })()
     copyFileSync(built, join(cli(), 'cli.js'))
+    copyFileSync(join(dirname(built), 'notify.mjs'), join(cli(), 'notify.mjs'))
     writeFileSync(join(cli(), 'package.json'), '{"type":"module"}\n')
     copyFileSync(process.execPath, node(), constants.COPYFILE_FICLONE)
     chmodSync(node(), 0o755)
