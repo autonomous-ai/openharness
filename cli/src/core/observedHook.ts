@@ -89,7 +89,7 @@ export function createObservedHook(deps: ObservedHookDeps) {
   }
 
   // Counts only, never a session or a path: what was lost is seen, and what it said stays out of the log.
-  const log = deps.log ?? ((line: string) => console.warn(line))
+  const log = deps.log ?? console.warn
   const lost = { invalid: 0, dropped: 0 }
   let report: ReturnType<typeof setTimeout> | null = null
   const count = (result: 'invalid' | 'dropped'): typeof result => {
