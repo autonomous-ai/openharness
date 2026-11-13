@@ -80,6 +80,16 @@ describe('createObservedHook', () => {
     expect(hook.onObserved(full)).toBe('dropped')
   })
 
+  it('keeps serving a session whose clock stepped back', () => {
+    let clock = 10_000
+    const hook = createObservedHook({ forward: () => true, now: () => clock })
+    for (let i = 0; i < 20; i += 1) hook.onObserved(full)
+    clock = 0
+    expect(hook.onObserved(full)).toBe('dropped')
+    clock += 1000
+    expect(hook.onObserved(full)).toBe('ok')
+  })
+
   it("forward false (devices down) is 'dropped', not an error", () => {
     expect(createObservedHook({ forward: () => false, now: () => 1 }).onObserved(full)).toBe('dropped')
   })
