@@ -577,6 +577,8 @@ const windowsCommandKeys = <String, List<String>>{
   // ⌘⌥ would be Ctrl+Alt, which is AltGr on many keyboards: Linux's key.
   'app.daemon_talk': ['alt+shift+a'],
   'app.onboarding_review': ['alt+shift+o'],
+  // Ctrl+Shift+H is Focus Pane Left (⌘H): the shifted twin takes Alt+Shift.
+  'hachi.open': ['alt+shift+h'],
   // ⌘⌃S collapses to Ctrl+Shift+S, which is New Swarm (⌘S), and Alt+Shift+S
   // is Share (⇧⌘S). Store stays in the palette and menu.
   'app.store': [],

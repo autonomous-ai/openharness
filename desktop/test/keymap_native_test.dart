@@ -65,6 +65,29 @@ void main() {
     expect(on, contains('alt+cmd+t'));
   });
 
+  test('⇧⌘H is Hachi\'s only while Hachi is on, and Alt+Shift+H where ⌘ '
+      'is not the workspace key', () {
+    addTearDown(() => hachiCommandsActive.value = false);
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    final keymap = MemoryKeymap();
+    addTearDown(keymap.dispose);
+    expect(hachiCommandsActive.value, isFalse);
+    final off = jsonEncode(nativeKeymapSnapshot(keymap));
+    expect(off, isNot(contains('"hachi.open"')));
+    expect(harnessCommandActive('hachi.open'), isFalse);
+    hachiCommandsActive.value = true;
+    expect(harnessCommandActive('hachi.open'), isTrue);
+    expect(jsonEncode(nativeKeymapSnapshot(keymap)), contains('hachi.open'));
+    expect(harnessCommandById['hachi.open']!.keys, ['cmd+shift+h']);
+    for (final platform in [TargetPlatform.linux, TargetPlatform.windows]) {
+      debugDefaultTargetPlatformOverride = platform;
+      expect(harnessCommandById['hachi.open']!.keys, [
+        'alt+shift+h',
+      ], reason: platform.name);
+    }
+  });
+
   test(
     'native payload carries resolved contexts, unbinding and actual hints',
     () async {

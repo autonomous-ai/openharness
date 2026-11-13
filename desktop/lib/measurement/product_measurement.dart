@@ -134,6 +134,26 @@ enum SignInEndReason {
 
 /// Where Add Phone was opened from, counted each time it opens
 /// (`ui_desktop_add_phone_<wire>`): which way in, nothing else.
+/// Hachi's counters a window sends (docs/design/2026-11-12-hachi.md, Measures): the switch, the ways
+/// in, the one notice it sends and the opens that failed. Names only, never a goal, harness or machine.
+enum HachiMeasure {
+  switchOn('ui_desktop_hachi_switch_on'),
+  switchOff('ui_desktop_hachi_switch_off'),
+  openShortcut('ui_desktop_hachi_open_shortcut'),
+  openTab('ui_desktop_hachi_open_tab'),
+  openPalette('ui_desktop_hachi_open_palette'),
+  openWelcome('ui_desktop_hachi_open_welcome'),
+  noticeGoalDone('hachi_notice_goal_done'),
+  openFailedHomeAsleep('hachi_open_failed_home_asleep'),
+  openFailedCreateFailed('hachi_open_failed_create_failed');
+
+  const HachiMeasure(this.wire);
+  final String wire;
+
+  /// The proxy revision that forwards them (cli `APP_USAGE_VOCABULARY`).
+  static const vocabulary = 10;
+}
+
 enum AddPhoneOpening {
   /// The Add Phone card's own button ([ProductFlow.phoneOffer]).
   offer('offer'),
@@ -609,6 +629,17 @@ class ProductMeasurement extends ChangeNotifier {
     );
   }
 
+  /// One of Hachi's counters ([HachiMeasure]).
+  void hachiCounted(HachiMeasure measure) {
+    if (!healthEnabled || !sharing || _disposed) return;
+    _coverage();
+    _count(
+      'ui',
+      _now().toUtc().toIso8601String().substring(0, 10),
+      measure.wire,
+    );
+  }
+
   /// A new non-machine key joined while Add Phone was open, by its opening only.
   void addPhonePaired(AddPhoneOpening from) {
     if (!healthEnabled || !sharing || _disposed) return;
@@ -737,9 +768,12 @@ class ProductMeasurement extends ChangeNotifier {
 
   /// The proxy revision ([proxyVocabulary]) that forwards [metric]: the Add
   /// Phone card's flow and the ways Add Phone opened are 3, the card offered
-  /// after work or after time away 4, first-run/invite counters 5, and an opened agent Browser 8. Other
+  /// after work or after time away 4, first-run/invite counters 5, an opened agent Browser 9 and Hachi's 10. Other
   /// health measures use [health] to wait for support before counting.
   static int _vocabularyOf(String metric) {
+    if (HachiMeasure.values.any((measure) => measure.wire == metric)) {
+      return HachiMeasure.vocabulary;
+    }
     if (metric == 'agent_browser_opened') return 9;
     if (metric.startsWith('ui_desktop_phone_offer_skipped_') ||
         metric.startsWith('ui_desktop_add_phone_paired_')) {

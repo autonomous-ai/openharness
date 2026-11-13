@@ -54,7 +54,11 @@ class DesktopWorkspaceTab extends StatefulWidget {
     this.onLeave,
     this.onPauseNewWork,
     this.newWorkPaused = false,
+    this.fixed = false,
   });
+
+  /// Hachi's tab (docs/design/2026-11-12-hachi.md): no ×, ever, and its name keeps its place.
+  final bool fixed;
 
   final String id, label;
   final bool selected, highlighted;
@@ -401,7 +405,7 @@ class _DesktopWorkspaceTabState extends State<DesktopWorkspaceTab> {
                     widget.label,
                   ),
                   hasActivity: hasActivity,
-                  revealed: revealed,
+                  revealed: revealed && !widget.fixed,
                   indicatorWidth: indicator,
                   sharedWidth: sharedWidth,
                 );
@@ -552,30 +556,31 @@ class _DesktopWorkspaceTabState extends State<DesktopWorkspaceTab> {
                         ),
                       ),
                     ),
-                    Positioned(
-                      right: grid.AppDesktop.tabCloseInset,
-                      top: 0,
-                      bottom: 0,
-                      child: _accessory(
-                        visible: revealed,
-                        width: DesktopWorkspaceTab.closeWidth,
-                        child: IconButton(
-                          key: ValueKey('tab-close:${widget.id}'),
-                          tooltip: 'Close tab',
-                          onPressed: widget.onClose,
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints.tightFor(
-                            width: DesktopWorkspaceTab.closeWidth,
-                            height: DesktopWorkspaceTab.closeWidth,
-                          ),
-                          style: _accessoryStyle(foreground, quietOpacity),
-                          icon: const Icon(
-                            AppIcons.close,
-                            size: AppIcons.closeSize,
+                    if (!widget.fixed)
+                      Positioned(
+                        right: grid.AppDesktop.tabCloseInset,
+                        top: 0,
+                        bottom: 0,
+                        child: _accessory(
+                          visible: revealed,
+                          width: DesktopWorkspaceTab.closeWidth,
+                          child: IconButton(
+                            key: ValueKey('tab-close:${widget.id}'),
+                            tooltip: 'Close tab',
+                            onPressed: widget.onClose,
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints.tightFor(
+                              width: DesktopWorkspaceTab.closeWidth,
+                              height: DesktopWorkspaceTab.closeWidth,
+                            ),
+                            style: _accessoryStyle(foreground, quietOpacity),
+                            icon: const Icon(
+                              AppIcons.close,
+                              size: AppIcons.closeSize,
+                            ),
                           ),
                         ),
                       ),
-                    ),
                   ],
                 );
               },

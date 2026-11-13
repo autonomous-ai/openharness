@@ -41,6 +41,7 @@ class WorkspaceWelcome extends StatefulWidget {
   const WorkspaceWelcome({
     super.key,
     required this.onCommand,
+    this.hachi = false,
     this.app,
     this.projects = const [],
     this.onOpen,
@@ -52,6 +53,9 @@ class WorkspaceWelcome extends StatefulWidget {
   });
 
   final ValueChanged<String> onCommand;
+
+  /// Hachi's switch is on: a hint for ⇧⌘H after the others (docs/design/2026-11-12-hachi.md).
+  final bool hachi;
   final AppNotifier? app;
   final List<SavedSwarmProject> projects;
   final ValueChanged<SwarmDestination>? onOpen;
@@ -249,7 +253,10 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome>
     );
     final keymap = KeymapTheme.of(context)?.current ?? harnessDefaultKeymap;
     final rows = [
-      for (final (command, description) in _actions)
+      for (final (command, description) in [
+        ..._actions,
+        if (widget.hachi) ('hachi.open', 'Ask Hachi'),
+      ])
         (
           command: command,
           description: description,

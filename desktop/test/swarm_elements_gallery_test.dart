@@ -27,6 +27,7 @@ import 'package:harness/super_tabs/chat/send_button.dart';
 import 'package:harness/super_tabs/swarm_type.dart';
 import 'package:harness/super_tabs/terminal_button.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
+import 'package:harness/widgets/desktop_workspace_tab.dart';
 import 'package:harness/widgets/web_pane_panel.dart';
 import 'package:harness/shared/theme/app_type.dart';
 import 'package:harness/state/harness_attachments.dart';
@@ -259,7 +260,7 @@ Future<List<SuperTabController>> _show(
   tester.view.devicePixelRatio = 1;
   // Taller than the gallery needs: each section is its own image, so the page's height is in none of them, and a
   // section that grows needs no new height.
-  tester.view.physicalSize = const Size(760, 6600);
+  tester.view.physicalSize = const Size(760, 6800);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
@@ -1017,6 +1018,33 @@ class _Gallery extends StatelessWidget {
                     selected: false,
                     onPressed: () {},
                   ),
+                ],
+              ),
+            ),
+          ]),
+          section('hachi-tab', 'Hachi\'s tab: first, with no ×, beside a tab', [
+            Padding(
+              padding: const EdgeInsets.all(8),
+              child: Row(
+                children: [
+                  for (final (hachi, label, hint) in [
+                    (true, 'Hachi', '⇧⌘H'),
+                    (false, 'api', '⌘1'),
+                  ])
+                    SizedBox(
+                      width: 180,
+                      height: 34,
+                      child: DesktopWorkspaceTab(
+                        id: label,
+                        label: label,
+                        selected: hachi,
+                        fixed: hachi,
+                        showShortcuts: const AlwaysStoppedAnimation(true),
+                        shortcutHint: hint,
+                        onSelect: () {},
+                        onClose: hachi ? null : () {},
+                      ),
+                    ),
                 ],
               ),
             ),
