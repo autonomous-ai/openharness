@@ -1014,6 +1014,38 @@ describe('the dial reaches the fleet through the core\'s port', () => {
     expect(await host.selectMachine('other')).toMatchObject({ ok: false, code: 'UNAVAILABLE' })
   })
 
+  it('an agent outside Harness never reaches the core: the fleet\'s router takes an id it does not know for a local agent', async () => {
+    const fleet = port()
+    const w = wiring({ fleet: () => fleet, recent: vi.fn(() => []), recentAsks: vi.fn(() => []), updateAgent: vi.fn(),
+      listModels: vi.fn(async () => []), answerReviewed: vi.fn(async () => true),
+      // The devices' own reading of it, which never asks the core (services/devices.ts).
+      activityText: async () => 'Waiting for you · Orca', activitySnapshot: async () => ({ text: 'Waiting for you · Orca' }) })
+    const host = new DaemonCableHost(w)
+    const outside: HostAgent = { id: 'outside-1', engine: 'claude', name: 'scratch', host: 'orca', state: 'done', since: 0,
+      lastActivityAt: 0, lastAnswer: 'Fixed the login.', unseenDone: true }
+    host.setRegistry(new HostRegistry([host.harness, { id: 'observed', list: () => [outside], onChange: () => () => {},
+      capabilities: () => ({ status: true, voice: false, focus: false, answer: false }) }]))
+    expect(host.sendTurn('outside-1', 'ship it')).toMatchObject({ ok: false })
+    host.stopTurn('outside-1'); host.answer('outside-1', 'q', { k: 'v' }); host.updateAgent('outside-1', 'opus')
+    expect(host.canSpeakQuestion('outside-1')).toBe(false)
+    expect(await host.answerReviewed({ agentId: 'outside-1', requestId: 'q', questions: [], answers: {}, selections: {} }))
+      .toEqual({ ok: false, error: 'Use the terminal to answer this question.' })
+    expect(await host.recentAsks('outside-1')).toEqual([])
+    expect(await host.listModels('outside-1')).toEqual([])
+    // Its answer, as heard: one entry, which an attach restores without a beep.
+    expect(await host.recentSummaries('outside-1')).toEqual([{ recap: 'Fixed the login.', text: 'Fixed the login.', ask: '', fullText: 'Fixed the login.' }])
+    // What rides on each of its cards, and its line while it waits, every refresh: read here too.
+    expect(host.describe('outside-1')).toEqual({ name: 'scratch', engine: 'claude', machine: 'MacbookPro.local' })
+    expect(await host.activityText('outside-1')).toBe('Waiting for you · Orca')
+    expect(await host.activitySnapshot('outside-1')).toEqual({ text: 'Waiting for you · Orca' })
+    // Not one call to the fleet's router, or to the core's doors this host holds, names it.
+    const calls = [...Object.values(fleet), ...Object.values(w)].filter((fn) => vi.isMockFunction(fn)).flatMap((fn) => fn.mock.calls)
+    expect(JSON.stringify(calls)).not.toContain('outside-1')
+    // A Harness agent's routes are the router's, as before.
+    expect(host.sendTurn('r1', 'ship it')).toEqual({ ok: true })
+    expect(fleet.sendTurn).toHaveBeenCalledWith('r1', 'ship it')
+  })
+
   it('says nothing of a fork that was refused before anyone was asked, and says a refused one that was', async () => {
     const fleet = port({ forkAgent: vi.fn(async () => ({ result: { ok: false as const, error: 'AGENT_NOT_FOUND' }, machineId: '', asked: false })) })
     const w = wiring({ fleet: () => fleet, opened: vi.fn() })
