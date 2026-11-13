@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { loadOrCreateHookCredential } from '../lib/hookAuth.js'
-import { devicesCommand, deviceRequest, type DevicesClientDeps } from './client.js'
+import { DEVICES_USAGE, devicesCommand, deviceRequest, runDialWatch, type DevicesClientDeps, type DialWatchDeps } from './client.js'
 
 // A folder too long for a socket now has one under the home folder: only a home too long as well is left on the port.
 beforeEach(() => { vi.stubEnv('HOME', `/${'h'.repeat(120)}`) })
@@ -92,5 +92,152 @@ describe('Devices DSH commands', () => {
       const init = vi.mocked(deps.fetch!).mock.calls[0]![1] as RequestInit
       expect(init.headers).toMatchObject({ 'x-adapter-local': '1', 'X-Harness-Local': credential })
     } finally { rmSync(dataDir, { recursive: true, force: true }) }
+  })
+})
+
+const TOO_OLD = '{"error":"Harness on this computer is too old for this. Run: harness update"}'
+function watch(over: Partial<DialWatchDeps> = {}, argv = ['--json']) {
+  const socket = Object.assign(new EventEmitter(), { send: vi.fn(), close: vi.fn() })
+  const stdin = Object.assign(new EventEmitter(), { resume: vi.fn(), pause: vi.fn() })
+  const printed: string[] = []
+  const connect = vi.fn((_url: string, _headers?: Record<string, string>) => socket)
+  const deps: DialWatchDeps = { port: 18473, machineId: async () => 'local', connect, stdin, print: line => { printed.push(line) }, ...over }
+  const done = runDialWatch(argv, deps)
+  return { done, socket, stdin, printed, connect }
+}
+// machineId() is awaited before the socket opens: wait until it has.
+async function opened(socket: EventEmitter) {
+  await vi.waitFor(() => expect(socket.listenerCount('open')).toBe(1))
+  socket.emit('open')
+}
+const connected = (socket: EventEmitter, features?: string[]) =>
+  socket.emit('message', JSON.stringify({ type: 'connected', payload: { machineId: 'local', ...(features ? { features } : {}) } }))
+const dial = (socket: EventEmitter, payload: unknown) => socket.emit('message', JSON.stringify({ type: 'dial_status', payload }))
+// Only a stdin end may finish the run here: any earlier exit would have resolved it with another code.
+async function stillRunning(run: ReturnType<typeof watch>) {
+  run.stdin.emit('end')
+  expect(await run.done).toBe(0)
+}
+
+describe('harness hardware watch', () => {
+  it('exits 3 when no daemon runs', async () => {
+    const run = watch({ machineId: async () => null })
+    expect(await run.done).toBe(3)
+    expect(run.connect).not.toHaveBeenCalled()
+  })
+  it('exits 3 when the daemon cannot be reached', async () => {
+    expect(await watch({ connect: () => { throw new Error('ENOENT') } }).done).toBe(3)
+    const errored = watch()
+    await opened(errored.socket)
+    errored.socket.emit('error', new Error('ECONNREFUSED'))
+    expect(await errored.done).toBe(3)
+    for (const code of [1006, 4403]) {
+      const closed = watch()
+      await opened(closed.socket)
+      closed.socket.emit('close', code, '')
+      expect(await closed.done).toBe(3)
+    }
+    const later = watch()
+    await opened(later.socket)
+    connected(later.socket, ['dial-watch'])
+    later.socket.emit('close', 1000, '')
+    expect(await later.done).toBe(3)
+  })
+  it('asks for the dial as a tool', async () => {
+    const run = watch()
+    await opened(run.socket)
+    expect(JSON.parse(run.socket.send.mock.calls[0]![0])).toEqual({
+      type: 'machine_select', payload: { machineId: 'local', localProtocolVersion: 1, tool: true, watch: ['dial'] },
+    })
+    await stillRunning(run)
+  })
+  it('exits 4 on a daemon without dial-watch', async () => {
+    for (const features of [['openclaw-local'], undefined]) {
+      const run = watch()
+      await opened(run.socket)
+      connected(run.socket, features)
+      expect(await run.done).toBe(4)
+      expect(run.printed).toEqual([TOO_OLD])
+      expect(run.socket.close).toHaveBeenCalled()
+    }
+  })
+  it('prints one line each time the status changes', async () => {
+    const run = watch()
+    await opened(run.socket)
+    connected(run.socket, ['dial-watch'])
+    dial(run.socket, { attached: false, devices: [] })
+    dial(run.socket, { attached: false, devices: [] })
+    const usb = { attached: true, fw: '0.0.95', hw: 'cst816s', settings: { brightness: 80 }, devices: [{}] }
+    dial(run.socket, usb)
+    dial(run.socket, { ...usb, settings: { brightness: 20 } })
+    dial(run.socket, { ...usb, updating: '0.0.96' })
+    dial(run.socket, { attached: false, board: 'pro', problem: 'Not answering — unplug and replug' })
+    expect(run.printed).toEqual([
+      '{"attached":false}',
+      '{"attached":true,"fw":"0.0.95","hw":"cst816s"}',
+      '{"attached":true,"fw":"0.0.95","hw":"cst816s","updating":"0.0.96"}',
+      '{"attached":false,"board":"pro","problem":"Not answering — unplug and replug"}',
+    ])
+    await stillRunning(run)
+  })
+  it('skips what is not a status', async () => {
+    const run = watch()
+    await opened(run.socket)
+    connected(run.socket, ['dial-watch'])
+    run.socket.emit('message', 'not json')
+    run.socket.emit('message', JSON.stringify({ type: 'agents_list_result' }))
+    dial(run.socket, 'attached')
+    expect(run.printed).toEqual([])
+    await stillRunning(run)
+  })
+  it('exits 0 when stdin closes', async () => {
+    const after = watch()
+    expect(after.stdin.resume).toHaveBeenCalled()
+    await opened(after.socket)
+    connected(after.socket, ['dial-watch'])
+    after.stdin.emit('end')
+    expect(await after.done).toBe(0)
+    expect(after.socket.close).toHaveBeenCalled()
+    const before = watch()
+    await opened(before.socket)
+    before.stdin.emit('close')
+    expect(await before.done).toBe(0)
+  })
+  it('lets go of everything when it ends', async () => {
+    const ends: ((run: ReturnType<typeof watch>) => void)[] = [
+      run => run.stdin.emit('end'),
+      run => run.socket.emit('close', 1000, ''),
+      run => run.socket.emit('error', new Error('reset')),
+      run => connected(run.socket, []),
+    ]
+    for (const end of ends) {
+      const run = watch()
+      await opened(run.socket)
+      end(run)
+      await run.done
+      expect(run.socket.close).toHaveBeenCalled()
+      expect(run.stdin.pause).toHaveBeenCalled()
+    }
+    const none = watch({ machineId: async () => null })
+    await none.done
+    expect(none.stdin.pause).toHaveBeenCalled()
+  })
+  it('anything else is its usage and exit 1', async () => {
+    const run = watch({}, ['now'])
+    expect(await run.done).toBe(1)
+    expect(run.printed).toEqual([DEVICES_USAGE])
+    expect(run.connect).not.toHaveBeenCalled()
+  })
+  it('--json is accepted and not needed', async () => {
+    const run = watch({}, [])
+    await opened(run.socket)
+    connected(run.socket, ['dial-watch'])
+    dial(run.socket, { attached: true, fw: '0.0.95' })
+    expect(run.printed).toEqual(['{"attached":true,"fw":"0.0.95"}'])
+    await stillRunning(run)
+  })
+  it('the usage names watch', () => {
+    expect(DEVICES_USAGE).toContain('watch [--json]')
+    expect(DEVICES_USAGE).toContain("one line each time this computer's dial changes")
   })
 })
