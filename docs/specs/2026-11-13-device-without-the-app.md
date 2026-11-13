@@ -59,7 +59,8 @@ devices process, cli/src/cable/hosts/
   `__CFBundleIdentifier`, `HERDR_PANE_ID`, `REX_BLOCK`, `ZELLIJ`, `KITTY_WINDOW_ID`, `WEZTERM_PANE`,
   `ORCA_AGENT_SESSION_ID`. Nothing else from the environment, and never by prefix: Orca also sets
   `ORCA_PAIRING_CODE` and `ORCA_AGENT_SESSION_SPAWN_TOKEN` in the same environment (read on an Orca 1.4.256 session,
-  2026-11-13), which must never leave the hook. cmux's variables join with its adapter in a later wave.
+  2026-11-13), which must never leave the hook. A value with a control character is left out, and a body over 4096
+  bytes leaves out `transcriptPath`, then `cwd`. cmux's variables join with its adapter in a later wave.
 - The engine-specific guards (Cursor background agents, Codex subagents, Devin's Claude duplicate) still run first:
   the paneless post goes after them.
 - **Two hooks the engines do not send today.** Claude Code's installed hooks have no `Notification`, so nothing says a

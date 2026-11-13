@@ -492,12 +492,16 @@ function postObserved(port, body) {
 const HOST_HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'KITTY_WINDOW_ID',
   'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID']
 
+/** A character the core refuses in a path or hint (core/observedHook.ts): one there is forged. */
+const CONTROL = /[\u0000-\u001f\u007f]/
+
 function hostHints() {
   const hints = {}
   for (const name of HOST_HINTS) {
-    // The core refuses a whole event with more than 8 hints (as many as this list) or one over 64 characters
-    // (core/observedHook.ts).
-    if (process.env[name]) hints[name] = process.env[name].slice(0, 64)
+    // The core refuses a whole event with more than 8 hints (as many as this list), one over 64 characters or one
+    // with a control character (core/observedHook.ts): that hint is left out instead.
+    const value = process.env[name]?.slice(0, 64)
+    if (value && !CONTROL.test(value)) hints[name] = value
   }
   return hints
 }
@@ -538,21 +542,26 @@ function observedEvent(engine, event, input) {
 /**
  * What a paneless session's hook tells the devices: which session, what happened and where, never its prompt. A path
  * the core would refuse (over 1024 characters, or with a control character) is left out rather than cost the whole
- * event (core/observedHook.ts).
+ * event (core/observedHook.ts), and so are the paths of a body over the 4096 bytes the core reads (hookServer.ts):
+ * the transcript's first, as the devices can do without it, then the folder.
  */
 function observedBody(engine, event, input) {
   const kind = observedEvent(engine, event, input)
   const sessionId = input.session_id || input.conversation_id || input.sessionId || input.conversationId
   if (!kind || typeof sessionId !== 'string') return null
-  const path = (value) => typeof value === 'string' && value.length <= 1024 && !/[\u0000-\u001f\u007f]/.test(value) ? value : undefined
+  const path = (value) => typeof value === 'string' && value.length <= 1024 && !CONTROL.test(value) ? value : undefined
   // Devin's payload carries no cwd; the hook process inherits the session's working directory.
   const cwd = Array.isArray(input.workspace_roots) ? input.workspace_roots[0]
     : Array.isArray(input.workspacePaths) ? input.workspacePaths[0]
       : input.cwd || input.workspaceRoot || (engine === 'devin' ? process.cwd() : undefined)
-  return {
+  const body = {
     engine, sessionId, event: kind, cwd: path(cwd), callerPid: process.ppid,
     transcriptPath: path(input.transcript_path || input.transcriptPath), hostHints: hostHints(),
   }
+  const fits = () => Buffer.byteLength(JSON.stringify(body)) <= 4096
+  if (!fits()) delete body.transcriptPath
+  if (!fits()) delete body.cwd
+  return body
 }
 
 /** Mirrors syncStateDirectory in src/lib/secureState.ts: Windows cannot flush a directory handle (EPERM), and NTFS
