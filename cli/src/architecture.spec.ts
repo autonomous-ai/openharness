@@ -119,6 +119,13 @@ const isSwarmCode = (file: string): boolean => /^superTabs\//.test(file) || /^li
 const LAZY_LOADERS = new Set(['engines/inProcess.ts'])
 
 /**
+ * Every file the core's process loads, one a line and in order: the walk from `core/main.ts` with every door shut.
+ * The folders the core must not load are named below (`EDGE`); this list holds the rest, the files no rule names,
+ * where the core grew 38% in five weeks unseen (docs/design/2026-11-12-core-audit.md).
+ */
+const CORE_FILES = 'architecture.coreFiles.txt'
+
+/**
  * The code a process started on `entry` runs: every file its imports reach, as each file's lines
  * (docs/design/2026-10-06-core-boundary-next.md, "The target, and its test"). It follows static and
  * dynamic imports under src, `.js` to `.ts` and folders to their index, and leaves out `import type`
@@ -609,6 +616,21 @@ describe('the daemon\'s shape', () => {
     const edge = [...closure.keys()].filter((file) => EDGE.some((pattern) => pattern.test(file))).sort()
     expect(edge.filter((file) => !CORE_MAY_REACH[file]), 'The core reaches a service only through its link and manifest (core/api.ts), never its code: import it from the service, not the core.').toEqual([])
     expect(Object.keys(CORE_MAY_REACH).filter((file) => !closure.has(file)), 'No longer loaded by the core: remove it from CORE_MAY_REACH').toEqual([])
+  }, WALK_TIMEOUT_MS)
+
+  // The audit of 2026-11-12: from 7 October the core's process went from 71,244 lines in 332 files to 98,437 in 556,
+  // and no test said so, because the growth was in files no rule named: in two days 14 of 79 changes to the CLI added
+  // to it, one of them 363 lines for a single call. A line count would stop fixes and comments too (the caps of
+  // October did), so the files are listed instead: one that joins the core's process is a line added in a pull
+  // request, where a reviewer sees it and asks why every session needs it, and one that leaves is a line deleted.
+  it('the core\'s process loads the files listed and no other: one more is a line a reviewer sees', () => {
+    const loaded = [...closureOf('core/main.ts').keys()].sort()
+    const listed = readFileSync(join(SRC, CORE_FILES), 'utf8').split('\n').filter((line) => line !== '' && !line.startsWith('#'))
+    // Named with a file that imports it: the import to cut is often one helper's, which drags the rest in.
+    const importer = (file: string): string | undefined => loaded.find((from) => parsedFile(join(SRC, from)).imports.includes(join(SRC, file)))
+    expect(loaded.filter((file) => !listed.includes(file)).map((file) => `${file}, imported by ${importer(file)}`), `The core's process would load a file it does not load today. The core stays small (cli/AGENTS.md, Protect the core): code a session can run without belongs to a component in a process of its own. If every session needs the file, add its line to src/${CORE_FILES}, in order, and say why in the pull request.`).toEqual([])
+    expect(listed.filter((file) => !loaded.includes(file)), `The core's process no longer loads these: delete their lines from src/${CORE_FILES}.`).toEqual([])
+    expect(listed, `Keep src/${CORE_FILES} in order, each file once: lines kept in order merge without conflicts.`).toEqual([...new Set(listed)].sort())
   }, WALK_TIMEOUT_MS)
 
   it('finds what it checks: imports of every kind, in every folder', () => {

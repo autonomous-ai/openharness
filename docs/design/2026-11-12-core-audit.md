@@ -262,7 +262,10 @@ with the master's token.
 
 ## Decisions for the owner
 
-1. **A file list for the whole core** ([What holds it](#what-holds-it-from-now-on)). Recommended: yes.
+Decided by anh Dee on 2026-11-13, each as recommended: "ok do it all. test carefully. it's the daemon core."
+
+1. **A file list for the whole core** ([What holds it](#what-holds-it-from-now-on)). Recommended: yes. Built:
+   `src/architecture.coreFiles.txt`.
 2. **Engine set-up in a process of its own.** 4,436 lines, the largest block that is not sessions. The October
    ruling is that a launch never waits on a worker ([engine hooks](2026-10-08-engine-hooks.md)). Recommended:
    installs, plugin writes and probes leave, and a launch that needs one waits behind the hold it already has;
@@ -281,11 +284,11 @@ with the master's token.
   `cli/src/core/AGENTS.md` (rules 2 and 8), `cli/src/services/AGENTS.md` (every service in a process of its own).
 - **The Swarm's door is listed file by file** (`architecture.spec.ts`, #4238): a file added to it fails the test
   until it is added to the list, in a change that says why.
-- **Proposed, not built: the same for the whole core.** A list of the files the core's process loads, checked by
-  the test, so that adding one is a line in a pull request that a reviewer sees. In the 43 hours before this
-  audit, 14 of 79 changes to the CLI changed that set and added 17 files, among them `agentClient/ledger.ts`
-  (363 lines for one call) and `engines/claude/backgroundCommands.ts` (engine code, in the core). While the audit
-  ran, one more change added 7 files and 1,017 lines (#4239: 99,454 lines in 563 files). It is not a line count:
-  comments and fixes never trip it.
-- **Proposed: hold the engines' code out by folder, not by name.** The test names the Claude Code and Codex files
-  the core must not load; a new file is not on the list.
+- **The same for the whole core:** every file the core's process loads is a line of
+  `src/architecture.coreFiles.txt`, checked both ways by the test, so that adding one is a line in a pull
+  request that a reviewer sees, and the test names the file that imports it. In the 43 hours before this audit,
+  14 of 79 changes to the CLI changed that set and added 17 files, among them `agentClient/ledger.ts` (363 lines
+  for one call) and `engines/claude/backgroundCommands.ts` (engine code, in the core). While the audit ran, one
+  more change added 7 files and 1,017 lines (#4239: 99,454 lines in 563 files); with the list as it stood before
+  it, the test fails and names the seven. It is not a line count: comments and fixes never trip it. It also holds
+  the engines' code out: a new engine file the core would load is a new line like any other.
