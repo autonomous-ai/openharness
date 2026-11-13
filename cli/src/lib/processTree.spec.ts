@@ -81,8 +81,8 @@ describe('an engine\'s process tree', () => {
     expect(await engineDescendants(engine, 'darwin', async () => stepped, ticksOf)).toEqual([])
   })
 
-  // A `ps` table rarely says so, but the walk is discovery's (#4268): it listed the engine itself as its tree to stop,
-  // and the same processes again up to the limit.
+  // A `ps` table rarely shows it, but this walk had discovery's fault (#4268): it listed the engine itself as its tree
+  // to stop, and the same processes again up to the limit.
   it.each([
     ['its child', 501],
     ['a grandchild', 502],
