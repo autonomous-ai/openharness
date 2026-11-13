@@ -6193,6 +6193,24 @@ describe('what the dial cannot do for an agent', () => {
     } finally { await session.stop() }
   })
 
+  it('stop and model without v toast and do not reach the host', async () => {
+    const host = caps({ listModels: vi.fn(async () => ['opus']) })
+    const { session, port } = await greeted(host)
+    try {
+      port.say({ t: 'turn.stop', agentId: 'a1' })
+      await vi.waitFor(() => expect(toasts(port)).toEqual([{ t: 'toast',
+        text: 'This agent is in Orca. Stopping it from the device comes in an update.' }]))
+      expect(host.stopTurn).not.toHaveBeenCalled()
+      // The picker still gets its answer, empty, so it closes rather than waiting on a spinner.
+      port.say({ t: 'models.list', agentId: 'a1', request: 7 })
+      await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'models', agentId: 'a1', request: 7, items: [] }))
+      expect(toasts(port).at(-1)).toEqual({ t: 'toast', text: 'This agent is in Orca. Changing its model from the device comes in an update.' })
+      expect(host.listModels).not.toHaveBeenCalled()
+      port.say({ t: 'turn.stop', agentId: 'a2' })
+      await vi.waitFor(() => expect(host.stopTurn).toHaveBeenCalledWith('a2'))
+    } finally { await session.stop() }
+  })
+
   it('no capsOf (older host) behaves as today', async () => {
     const host = makeHost()
     const { session, port } = await greeted(host)
