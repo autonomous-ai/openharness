@@ -761,6 +761,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // (superTabs/inServices.ts): off, or with them in their own processes, none of it is loaded here.
   const swarmServices = swarm && ['sharing', 'handoff', 'models'].some((name) => !outOfProcess.has(name))
     ? await import('../superTabs/inServices.js') : null
+  // The Swarm's own service runs in a process of its own. Its code is loaded here only when it runs here instead: with every
+  // service in the core, a list without it, or no master (Harness OS). Loaded now, with the other doors: awaited in the
+  // wiring below, it let the services already started run before the core was whole (src/architecture.spec.ts).
+  const swarmService = swarm && !outOfProcess.has('superTabs') ? await import('../services/superTabs.js') : null
   let serviceLinksRef: ServiceLinks | null = null
   const runtimeTransport = createRuntimeTransport({
     call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
@@ -1841,7 +1845,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   if (!outOfProcess.has('memory')) serviceHost.serve('memory', inline!.startMemory, coreApi, MEMORY_REQUESTS)
   if (!outOfProcess.has('router')) serviceHost.serve('router', inline!.startRouter, coreApi, ROUTER_REQUESTS)
   if (!swarm) serviceHost.leaveOff('superTabs', SUPER_TAB_REQUESTS)
-  else if (!outOfProcess.has('superTabs')) serviceHost.start('superTabs', swarm.startSuperTabs, coreApi, SUPER_TAB_FALLBACKS, SUPER_TAB_REQUESTS)
+  else if (swarmService) serviceHost.start('superTabs', swarmService.startSuperTabs, coreApi, SUPER_TAB_FALLBACKS, SUPER_TAB_REQUESTS)
   if (!outOfProcess.has('handoff')) serviceHost.serve('handoff', (core) => inline!.startHandoff(core, undefined, undefined, swarmServices?.recordReplacement), coreApi, HANDOFF_REQUESTS)
   // Connected services' MCP bridge and the Connectors screen (services/connectors.ts): here, or in the edge host
   // (services/connectorsProcess.ts), asked through its port (core/connectorsLink.ts) for a profile home's entries.
