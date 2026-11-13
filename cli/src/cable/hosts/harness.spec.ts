@@ -54,6 +54,19 @@ describe('HarnessSource', () => {
     expect(changed).toHaveBeenCalledTimes(2)
   })
 
+  it('markSeen clears a done agent\'s unseenDone and tells listeners once', () => {
+    const src = new HarnessSource(() => 1_000)
+    src.update(ROWS, 'mine', new Map())
+    src.noteCard('l1', 'done')
+    const changed = vi.fn()
+    src.onChange(changed)
+    src.markSeen('l1')
+    src.markSeen('l1')
+    src.markSeen('l2')
+    expect(src.list().find((a) => a.id === 'l1')).toMatchObject({ state: 'done', unseenDone: false })
+    expect(changed).toHaveBeenCalledTimes(1)
+  })
+
   it('forgets the state of an agent that left', () => {
     const src = new HarnessSource(() => 1_000)
     src.update(ROWS, 'mine', new Map())

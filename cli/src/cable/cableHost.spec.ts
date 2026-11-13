@@ -741,6 +741,25 @@ describe('the dial with no window: this computer\'s agents', () => {
     ] })
   })
 
+  it('caps, host and seen come from the registry only with no window', async () => {
+    const markSeen = vi.fn()
+    const host = new DaemonCableHost(wiring({ sessions }), fleetOf([]))
+    expect(host.capsOf('h1')).toBeUndefined()
+    host.setRegistry(new HostRegistry([host.harness, { ...observed([observedAgent({ id: 'o1', host: 'orca' })]), markSeen } as HostSource]))
+    await host.listAgentSnapshot()
+    expect([host.capsOf('h1'), host.hostOf('h1')]).toEqual(['sva', 'harness'])
+    expect([host.capsOf('o1'), host.hostOf('o1')]).toEqual(['s', 'orca'])
+    expect([host.capsOf('nobody'), host.hostOf('nobody')]).toEqual([undefined, undefined])
+    host.markSeen('o1')
+    expect(markSeen).toHaveBeenCalledWith('o1')
+    host.harness.noteCard('h1', 'done')
+    host.markSeen('h1')
+    expect(host.harness.list().find((a) => a.id === 'h1')).toMatchObject({ state: 'done', unseenDone: false })
+    // With a window the dial holds the tab, whose agents it may do everything with, as today.
+    onTab(host, ['h1'])
+    expect([host.capsOf('h1'), host.hostOf('h1')]).toEqual([undefined, undefined])
+  })
+
   it('no window and no registry: [] as today', async () => {
     const host = new DaemonCableHost(wiring({ sessions }), fleetOf([]))
     expect(await host.listAgentSnapshot()).toStrictEqual({ agents: [], tab: '', total: 2 })

@@ -21,6 +21,7 @@ import { createSwarmCardsIn } from './swarmCardsIn.js'
 import type { PetStore } from './pets/store.js'
 import { HostRegistry } from './hosts/registry.js'
 import type { HostAgent, HostSource } from './hosts/types.js'
+import type { RegisteredSession } from '../lib/registry.js'
 
 /** A port whose two ends are both in this process. */
 class LoopbackPort implements CablePort {
@@ -6031,6 +6032,132 @@ describe('the machine list with no window', () => {
       expect(port.sent.filter((m) => m.t === 'agent')).toEqual([
         { t: 'agent', id: 'o1', name: 'scratch', engine: 'claude', model: '', effort: '', machineId: 'mac-local', machine: 'this-mac', host: 'ghostty', caps: 's' },
       ])
+    } finally { await session.stop() }
+  })
+})
+
+describe('what the dial cannot do for an agent', () => {
+  // a1 is in Orca, heard from its hooks (`s`); a2 is a Harness agent with no window (`sva`).
+  const CAPS: Record<string, string> = { a1: 's', a2: 'sva' }
+  const HOSTS: Record<string, string> = { a1: 'orca', a2: 'harness' }
+  const caps = (over: Partial<CableHost> = {}) => makeHost({
+    capsOf: (id) => CAPS[id], hostOf: (id) => HOSTS[id], markSeen: vi.fn(), ...over,
+  })
+  async function greeted(host: CableHost) {
+    const c = await connect(host)
+    c.port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+    await vi.waitFor(() => expect(c.port.types()).toContain('agents.end'))
+    return c
+  }
+  const speak = (port: LoopbackPort, agentId: string, uploadId: string) => {
+    port.say({ t: 'voice.begin', agentId, lang: 'en', sr: 16000, uploadId })
+    port.pcm(Buffer.alloc(3200, 7))
+  }
+  const toasts = (port: LoopbackPort) => port.sent.filter((m) => m.t === 'toast')
+
+  it('voice to an observed agent keeps no audio and answers voice.error on voice.end', async () => {
+    const { session, port } = await greeted(caps())
+    try {
+      speak(port, 'a1', 'u1')
+      await settle()
+      expect(session['voice']).toBeNull()
+      // Today's firmware drops a voice error before the person lets go: nothing is said at voice.begin.
+      expect(port.types()).not.toContain('voice.error')
+      port.say({ t: 'voice.end', uploadId: 'u1' })
+      await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'voice.error', uploadId: 'u1',
+        message: 'This agent is in Orca. Talking to it from the device comes in an update.' }))
+    } finally { await session.stop() }
+  })
+
+  it('no transcription request is made for it', async () => {
+    const transcribe = vi.fn(async () => 'fix the login screen')
+    const route = vi.fn()
+    const host = caps({ transcribe, route })
+    const { session, port } = await greeted(host)
+    try {
+      speak(port, 'a1', 'u1')
+      port.say({ t: 'voice.end', uploadId: 'u1' })
+      await vi.waitFor(() => expect(port.types()).toContain('voice.error'))
+      expect(transcribe).not.toHaveBeenCalled()
+      expect(route).not.toHaveBeenCalled()
+      expect(host.sendTurn).not.toHaveBeenCalled()
+    } finally { await session.stop() }
+  })
+
+  it('voice to a harness agent works as today', async () => {
+    const host = caps()
+    const { session, port } = await greeted(host)
+    try {
+      speak(port, 'a2', 'u2')
+      port.say({ t: 'voice.end', uploadId: 'u2' })
+      await vi.waitFor(() => expect(host.sendTurn).toHaveBeenCalledWith('a2', 'fix the login screen'))
+      expect(port.types()).not.toContain('voice.error')
+    } finally { await session.stop() }
+  })
+
+  it('focus without f sends no toast, does not call host.focus, and marks the agent seen', async () => {
+    const host = caps()
+    const { session, port } = await greeted(host)
+    try {
+      port.sent.length = 0
+      port.say({ t: 'focus', agentId: 'a1' })
+      port.say({ t: 'focus', agentId: 'a2' })
+      await vi.waitFor(() => expect(host.markSeen).toHaveBeenCalledTimes(2))
+      expect(host.markSeen).toHaveBeenNthCalledWith(1, 'a1')
+      expect(host.markSeen).toHaveBeenNthCalledWith(2, 'a2')
+      await settle()
+      expect(host.focus).not.toHaveBeenCalled()
+      expect(toasts(port)).toEqual([])
+    } finally { await session.stop() }
+  })
+
+  it('answer without a toasts and does not call host.answer', async () => {
+    const host = caps()
+    const { session, port } = await greeted(host)
+    try {
+      port.say({ t: 'answer', agentId: 'a1', requestId: 'r1', answers: { q: 'yes' } })
+      await vi.waitFor(() => expect(toasts(port)).toEqual([{ t: 'toast',
+        text: 'This agent is in Orca. Answering it from the device comes in an update.' }]))
+      expect(host.answer).not.toHaveBeenCalled()
+      port.say({ t: 'answer', agentId: 'a2', requestId: 'r2', answers: { q: 'yes' } })
+      await vi.waitFor(() => expect(host.answer).toHaveBeenCalledWith('a2', 'r2', { q: 'yes' }))
+    } finally { await session.stop() }
+  })
+
+  it('no capsOf (older host) behaves as today', async () => {
+    const host = makeHost()
+    const { session, port } = await greeted(host)
+    try {
+      speak(port, 'a1', 'u1')
+      port.say({ t: 'voice.end', uploadId: 'u1' })
+      await vi.waitFor(() => expect(host.sendTurn).toHaveBeenCalledWith('a1', 'fix the login screen'))
+      port.say({ t: 'focus', agentId: 'a2' })
+      await vi.waitFor(() => expect(host.focus).toHaveBeenCalledWith('a2'))
+      port.say({ t: 'answer', agentId: 'a1', requestId: 'r1', answers: { q: 'yes' } })
+      await vi.waitFor(() => expect(host.answer).toHaveBeenCalledWith('a1', 'r1', { q: 'yes' }))
+      expect(port.types()).not.toContain('voice.error')
+      expect(toasts(port)).toEqual([])
+    } finally { await session.stop() }
+  })
+
+  it('focus marks a done harness agent seen', async () => {
+    const sessions = () => [
+      { agentId: 'h1', registeredAt: 1, active: true, terminalAvailable: true, engine: 'claude', sessionId: 's-h1' },
+    ] as unknown as RegisteredSession[]
+    const host = new DaemonCableHost({
+      sessions, displayName: (s) => s.agentId, machineName: () => 'this-mac', machineId: () => 'mac-local', computerId: () => 'abc',
+      sendTurn: vi.fn(), stopTurn: vi.fn(), answer: vi.fn(), recent: () => [], recentAsks: () => [], log: vi.fn(),
+    })
+    host.setRegistry(new HostRegistry([host.harness]))
+    const { session, port } = await connect(host)
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'agents.end', total: 1, tab: '', view: 'machine' }))
+      host.harness.noteCard('h1', 'done')
+      expect(host.harness.list()[0]).toMatchObject({ state: 'done', unseenDone: true })
+      port.say({ t: 'focus', agentId: 'h1' })
+      await vi.waitFor(() => expect(host.harness.list()[0]).toMatchObject({ state: 'done', unseenDone: false }))
+      expect(toasts(port)).toEqual([])
     } finally { await session.stop() }
   })
 })
