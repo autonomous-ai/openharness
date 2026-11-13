@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AuthSessionManager } from '../lib/authSession.js'
+import type { AuthSessionManager } from '../lib/authRefresh.js'
 import { b64e, newIdentity } from '../lib/e2ee/core.js'
 import { ownerHandshake } from './crypto.js'
 const state = vi.hoisted(() => ({ sockets: [] as any[], stop: vi.fn(), liveness: undefined as any }))

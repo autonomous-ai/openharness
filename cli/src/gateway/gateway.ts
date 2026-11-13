@@ -19,7 +19,7 @@ import { launchErrorCode, type ProductUsageLaunchSignal } from '../lib/productUs
 import type { LaunchErrorCode, ProductUsageMetric } from '../lib/productUsageContract.js'
 import { WINDOW_SURFACES, type LocalWindows, type WindowSurface } from '../lib/windowSurfaces.js'
 import { deviceDump } from '../lib/autonomous-device/dump.js'
-import type { AuthSessionManager } from '../lib/authSession.js'
+import type { AuthSessionManager } from '../lib/authRefresh.js'
 import { shouldReplayCommander } from '../lib/commanderReplay.js'
 import { DEVICE_RECENT_SAFE_FRAME_BYTES, fitRecentReplyPayloadForDevice } from '../lib/deviceRecentTrim.js'
 import { encryptRpcResult, rpcResultType } from '../lib/e2ee/applicationFrames.js'

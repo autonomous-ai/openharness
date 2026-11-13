@@ -649,6 +649,42 @@ describe('the daemon\'s shape', () => {
     expect(listed, `Keep src/${CORE_FILES} in order, each file once: lines kept in order merge without conflicts.`).toEqual([...new Set(listed)].sort())
   }, WALK_TIMEOUT_MS)
 
+  // The core meets the outside least (cli/AGENTS.md, Protect the core, rule 4). Its one call to another host was the
+  // sign-in's renewal, which the gateway's process makes now (the core audit of 2026-11-12, decision 4). Whatever can
+  // open a connection, a network module imported for its code (not its types) or a `fetch`, is in one of these files,
+  // and each listens on this computer or connects to it alone.
+  it('the core\'s process opens no connection to another host: what can open one is listed, with what it does', () => {
+    const OPENS: Record<string, string> = {
+      'core/main.ts': 'listens: the daemon\'s local HTTP server, on loopback and its private socket',
+      'engines/kit/pluginFetch.ts': 'a plugin\'s own source, written into an engine\'s plugin folder and run there, never here',
+      'hookServer.ts': 'listens: the engines\' hooks, on this computer',
+      'lib/localSocket.ts': 'the daemon\'s own Unix socket, to ask whether a daemon serves here already',
+      'lib/loopbackGet.ts': 'a GET to this computer\'s loopback alone',
+      'lib/ptyHost/client.ts': 'the Windows terminal host\'s pipe on this computer',
+      'lib/ptyHost/launch.ts': 'the Windows terminal host\'s pipe on this computer',
+      'lib/windows/dataFolderClaim.ts': 'a named pipe on this computer that claims the data folder',
+      'lib/windows/pipeClient.ts': 'a named pipe on this computer',
+      'localWsServer.ts': 'listens: the windows\' and the services\' WebSocket, on this computer',
+    }
+    const NETWORK = String.raw`(?:node:)?(?:http|https|http2|net|tls|dgram|undici|ws)`
+    const OPENING = [
+      new RegExp(String.raw`^\s*(?:import|export)\s+(?!type\b)[^;]*\bfrom\s+['"]${NETWORK}['"]`),
+      new RegExp(String.raw`\b(?:import|require)\s*\(\s*['"]${NETWORK}['"]\s*\)`),
+      /\bfetch\s*\(/,
+    ]
+    const opening = [...closureOf('core/main.ts').keys()].filter((file) => readFileSync(join(SRC, file), 'utf8').split('\n')
+      .some((line) => !/^\s*(?:\/\/|\*|\/\*)/.test(line) && OPENING.some((pattern) => pattern.test(line)))).sort()
+    expect(opening.filter((file) => !OPENS[file]), 'A file the core\'s process loads can open a connection: the core calls no other host. Make the call in the component that faces it (the gateway, for the backend), or, for one on this computer only, list it here and say what it does.').toEqual([])
+    expect(Object.keys(OPENS).filter((file) => !opening.includes(file)), 'Opens no connection, or is no longer loaded: remove it from the list.').toEqual([])
+    // What it finds, so a change of its patterns cannot quietly find nothing.
+    for (const line of ["import http from 'node:http'", "import { request } from 'http'", "import { connect } from 'node:net'", 'const { request } = await import("node:https")',
+      "export { connect } from 'node:tls'", 'const answer = await fetch (url)', "import { WebSocket } from 'ws'", "import { request } from 'undici'"]) {
+      expect(OPENING.some((pattern) => pattern.test(line)), line).toBe(true)
+    }
+    for (const line of ["import type { IncomingMessage } from 'node:http'", "import type { Server } from 'net'", "import { join } from 'node:path'", 'const fetched = prefetch'])
+      expect(OPENING.some((pattern) => pattern.test(line)), line).toBe(false)
+  }, WALK_TIMEOUT_MS)
+
   it('finds what it checks: imports of every kind, in every folder', () => {
     const services = importsIn('services')
     expect(services.some(({ from, typeOnly }) => from === '../core/api.js' && typeOnly)).toBe(true)

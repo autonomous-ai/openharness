@@ -19,10 +19,9 @@
 import { RelayConnectError } from '../lib/relayFrames.js'
 import { decodeGatewayBinary, encodeGatewayBinary, GatewayBinary, GATEWAY_CALLS } from '../lib/gatewayWire.js'
 import { decodeTerminalLocal, encodeTerminalLocal } from '../lib/terminalBinary.js'
-import { answerAccountQuery } from './accountQueries.js'
+import { currentToken, RENEWAL_WAIT_MS, tokenOf } from '../lib/authSession.js'
 import { guestMachineList, withStaleMarker } from '../lib/machineListReply.js'
 import type { GatewayMachines } from './api.js'
-import { LANE_OFF } from './api.js'
 import type {
   BackendNotice, GatewayEvents, LocalWindows, GatewayOps, GatewayPort, GatewayRefusal, GatewayStatus, HttpAnswer, LaneSeal,
   RemoteClient, RemoteRole, RemoteTransport, TabFrame, TabKey, TabRelay, WindowRelay, WindowRelaySession, WindowRelaySink,
@@ -41,8 +40,6 @@ export interface GatewayLinkDeps {
   call(type: string, payload: Record<string, unknown>, waitMs?: number): Promise<Record<string, unknown>>
   /** What the gateway starts from each time it connects: this machine's ids, whether it is signed in. */
   start(): Record<string, unknown>
-  /** The account's tokens (`core.account`): the gateway asks for one each time it dials, and holds none. */
-  tokens: { accessToken(opts?: { force?: boolean; failedToken?: string }): Promise<string> }
   /** A read of the backend's REST API under the account's session (the core's proxy). */
   backend(method: 'GET', path: string): Promise<HttpAnswer>
   /** The last machine list reported by the gateway, for the models service's presence labels. */
@@ -264,6 +261,12 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
   const tabRelayOps: TabRelay = askTabRelay((payload) => deps.call(GATEWAY_CALLS.tabRelay, payload, TAB_RELAY_WAIT_MS))
 
   const ops: GatewayOps = {
+    // A token that needs no renewal is the session file's, read here: a gateway that is restarting costs nobody one. To
+    // renew one, the core, for itself or a service that asks it, asks the gateway, and calls no other host. A renewal
+    // that is not answered in time hands out none (`UNAVAILABLE`), and the asker tries again.
+    accessToken: async (options = {}) => currentToken(options)
+      ?? tokenOf(await deps.call(GATEWAY_CALLS.accessToken, { ...options }, RENEWAL_WAIT_MS),
+        "Harness could not renew this computer's sign-in just now: its gateway is restarting, or the renewal is slow. It tries again."),
     backend: (method, path, body) => http(GATEWAY_CALLS.backend, { method, path, ...(body === undefined ? {} : { body }) }, 25_000),
     machines: async (fallback = false) => {
       const state = deps.start()
@@ -522,15 +525,12 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
   }
 
   /**
-   * What the gateway asks the core (`service_query`): a token to dial with, the device key log's reads of
-   * the backend, and the harnesses shared with this account (the Share relay finds a share among them
-   * before it dials). Nothing else: the gateway is the relay, and the core's own REST reads are not its to
-   * make. A refused token comes back as the session's own error, so the gateway can tell a session that
-   * is over (stop for good) from one that could not be refreshed just now (try again).
+   * What the gateway asks the core (`service_query`): the device key log's reads of the backend, and the harnesses
+   * shared with this account (the Share relay finds a share among them before it dials). Nothing else: the gateway
+   * is the relay, and the core's own REST reads are not its to make. Never a token: the gateway renews the sign-in
+   * itself, and the core asks it (`ops.accessToken`).
    */
   const answer = async (query: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
-    // The gateway is the lane's seal, never a lane of its own: it is answered tokens, and no lane step.
-    if (query === 'access_token') return (await answerAccountQuery({ accessToken: (options) => deps.tokens.accessToken(options), lane: LANE_OFF }, query, payload))!
     if (query === 'backend' && payload.method === 'GET' && (text(payload.path).startsWith('/api/device-keys') || payload.path === '/api/harness-shares')) {
       return { ...await deps.backend('GET', text(payload.path)) }
     }

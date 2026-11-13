@@ -31,8 +31,11 @@ small and secure, in the code and at run time, and everything else is a componen
 3. **The core loads no component's code.** What it needs of one is typed in `src/core/api.ts`. Code a component
    must run inside the core comes through a door of its own, loaded only while the component is on, which
    `src/architecture.spec.ts` holds to its files.
-4. **The core meets the outside least.** It listens only on this computer, and its one call to another host is
-   the sign-in's refresh. Whatever someone other than this computer's owner can shape (a relay or backend frame,
+4. **The core meets the outside least.** It listens only on this computer and calls no other host: the gateway
+   renews the sign-in, and the core asks it for a token (`src/architecture.spec.ts` lists what in the core's process
+   can open a connection, each to this computer). With the Swarm on, its door still uploads a chat file to the
+   backend itself (`lib/superTabAttachmentProxy.ts`): [the audit](../docs/design/2026-11-12-core-audit.md) has it.
+   Whatever someone other than this computer's owner can shape (a relay or backend frame,
    another account's message, GitHub text, a web page, a device, a third-party harness) is parsed and checked in
    the component that faces it, and reaches the core as typed, bounded data.
 5. **The core lends its authority narrowly.** It runs no command line a component hands it, and signs a backend

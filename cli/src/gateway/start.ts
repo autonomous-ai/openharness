@@ -13,9 +13,10 @@ import { nodeStatus } from '../lib/nodeStatus.js'
  *   - the Wi-Fi device's direct links (lib/autonomous-device/direct.ts), which carry its E2EE sessions;
  *   - the daemon's own commands about the keys (`harness pair`, `unpair`, `group`, `devices`, …).
  *
- * The core gives it what it cannot hold itself: its events (`GatewayEvents`), the account's tokens and the
- * backend's REST answers, both through `core.account` (a service holds no credential), and a few facts
- * that it says again whenever they change (`GatewayOps.account`, `reachable`, …).
+ * The core gives it what it cannot hold itself: its events (`GatewayEvents`) and a few facts that it says again
+ * whenever they change (`GatewayOps.account`, `reachable`, …). The account's tokens are its own to renew
+ * (lib/authRefresh.ts): it is the one part of the daemon that meets the backend, and the core asks it for a token
+ * (`GatewayOps.accessToken`), so the core calls no other host (the core audit of 2026-11-12, decision 4).
  */
 import { renameSync } from 'node:fs'
 import { hostname } from 'node:os'
@@ -26,7 +27,8 @@ import { env } from '../config/env.js'
 import type { GatewayAccount, GatewayEvents, GatewayOps, HttpAnswer, WindowRelay } from '../core/api.js'
 import { AutonomousDeviceDirect } from '../lib/autonomous-device/direct.js'
 import { startDevicePart } from '../lib/autonomous-device/parts.js'
-import type { AuthSessionManager } from '../lib/authSession.js'
+import { AuthSessionManager } from '../lib/authRefresh.js'
+import { backendHttpBase } from '../lib/backendHttpBase.js'
 import { thisDeviceLabel } from '../lib/daemonState.js'
 import { switchAccountTrust } from '../lib/e2ee/accountTrust.js'
 import { b64d, b64e, fingerprint } from '../lib/e2ee/core.js'
@@ -57,8 +59,9 @@ export interface GatewayHost {
   autonomousEnv: string
   /** Signed in when the core started: the trust group syncs, and the device key log registers this machine. */
   signedIn: boolean
-  /** The account's tokens, as `core.account` hands them out; it never holds the session itself. */
-  tokens: Pick<AuthSessionManager, 'accessToken'>
+  /** Who renews the account's tokens: its process's one manager (gateway/gatewayProcess.ts), so a renewal in flight is
+   *  shared by every start; absent, one of its own, when the gateway runs in the core's process. */
+  tokens?: Pick<AuthSessionManager, 'accessToken'>
   /** Local identity for the guest list; the core reports these facts without doing network work. */
   machineName: string
   hostname: string
@@ -129,7 +132,8 @@ const PAIR_STATUS: Record<string, number> = {
   RATE_LIMITED: 429, BUSY: 409, TIMEOUT: 504,
 }
 
-export function startGateway(host: GatewayHost): StartedGateway {
+export function startGateway(given: GatewayHost): StartedGateway {
+  const host = { ...given, tokens: given.tokens ?? new AuthSessionManager(backendHttpBase()) }
   let account = host.account
   let reachable: Set<string> | null = null
   const accountHttp = createAccountHttp({
@@ -437,6 +441,7 @@ export function startGateway(host: GatewayHost): StartedGateway {
     .map((m) => m.pub)
 
   const ops: GatewayOps = {
+    accessToken: (options) => host.tokens.accessToken(options),
     backend: (async (method: string, path: string, body?: unknown) => {
       const answer = await accountHttp.backend(method, path, body)
       // Whatever the answer: a request that timed out may still have changed the choice.

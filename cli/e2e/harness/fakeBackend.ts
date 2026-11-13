@@ -113,6 +113,9 @@ export class FakeBackend {
   superTabs: ((method: string, path: string, body: Record<string, any>, machine: FakeMachine) => Promise<{
     status?: number; data?: unknown; error?: { code: string; message: string }
   }>) | null = null
+  /** `POST /api/auth/refresh`: each refresh token the backend takes, and what it renews to. Each is taken once, as the
+   *  real one rotates them; one it does not know is a 401 `REFRESH_TOKEN_INVALID`. */
+  readonly renewals = new Map<string, { token: string; refreshToken?: string; expiresIn?: number }>()
   /** What `GET /api/auth/me` answers: the signed-in person; null, a 404 as before. */
   me: { id: string; email: string } | null = null
   /** Opt-in fixture: older scenarios keep the endpoint absent, as on an older backend. */
@@ -173,6 +176,23 @@ export class FakeBackend {
     const backend = new FakeBackend(server, address.port)
     server.on('request', (req, res) => {
       backend.seen.push(`${req.method} ${req.url}`)
+      // A renewal carries its refresh token in its body, not a token to sign in with.
+      if (req.method === 'POST' && req.url?.split('?')[0] === '/api/auth/refresh') {
+        let raw = ''
+        req.on('data', chunk => { raw += chunk })
+        req.on('end', () => {
+          res.setHeader('content-type', 'application/json')
+          if (backend.down) { res.statusCode = 503; res.end(json({ success: false, error: { code: 'AUTH_SERVICE_UNAVAILABLE' } })); return }
+          let body: { refreshToken?: unknown }
+          try { body = JSON.parse(raw || '{}') as { refreshToken?: unknown } } catch { res.statusCode = 400; res.end(json({ success: false, error: { code: 'BAD_JSON' } })); return }
+          const asked = String(body.refreshToken ?? '')
+          const renewed = backend.renewals.get(asked)
+          backend.renewals.delete(asked)
+          if (!renewed) { res.statusCode = 401; res.end(json({ success: false, error: { code: 'REFRESH_TOKEN_INVALID' } })); return }
+          res.end(json({ success: true, data: renewed }))
+        })
+        return
+      }
       const machine = backend.byToken(req)
       res.setHeader('content-type', 'application/json')
       if (backend.down) { res.statusCode = 503; res.end(json({ success: false, error: { code: 'UNAVAILABLE' } })); return }

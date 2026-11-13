@@ -66,7 +66,7 @@ import { clearSafeModeMarker, safeModeDisposition, safeModeStatusBody, SafeModeR
 import { awakeTimeout } from '../lib/sleepAware.js'
 import { harnessdEnv, holdHarnessdEnv } from '../lib/harnessdEnv.js'
 import { dropAgentSessionEnv } from '../lib/agentSessionEnv.js'
-import { AUTH_DIR, AuthSessionManager, ensureSignInEpoch, markSignedOut, readAuthSession, signInOf, type AuthSession } from '../lib/authSession.js'
+import { AUTH_DIR, AuthSessionError, ensureSignInEpoch, markSignedOut, readAuthSession, signInOf, type AuthSession } from '../lib/authSession.js'
 import { ENGINES, enginePathOverride } from '../lib/engineBin.js'
 import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import { engineInstallRecipe } from '../lib/engineInstall.js'
@@ -839,9 +839,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Cmd-P can find them and open one here; and which sessions a process has open right now. Harness's
   // own byproducts (recaps run in its data folder) are never among them.
 
-  // The core's one session manager: the backend link, the gateway's dials, the fleet's lane and the dial's
-  // transcriber all take their tokens from it, so a refresh in flight is shared rather than raced.
-  const auth = new AuthSessionManager(backendHttpBase())
+  // The account's tokens are the gateway's to renew (lib/authRefresh.ts), which the core asks for one: the core calls
+  // no other host (the core audit of 2026-11-12, decision 4). Made below, with the gateway.
+  let gatewayOpsRef: GatewayOps | undefined
   /** Whether a dial on this computer is watching it, as the devices last said (`clients.dialWatching`). */
   let dialWatching = false
   /** The last `dial_status` the devices sent the windows: a window that connects afterwards is told it. */
@@ -989,7 +989,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // email nor its id. An older backend (no route) answers nothing, which the grid reconcile treats as
     // "no grid yet". Bounded so a stalled control-plane connection cannot hold the attempt open.
     mintGridName: () => gatewayOps.mintGridName(),
-    accessToken: (options) => auth.accessToken(options),
+    accessToken: (options) => gatewayOpsRef?.accessToken(options) ?? Promise.reject(new AuthSessionError('Harness is still starting: try again.', 'UNAVAILABLE')),
     // The fleet's lane's sessions are the gateway's, which holds this machine's E2EE identity; it starts
     // below, before the devices whose fleet seals through it.
     lane: laneOf(() => gatewayOps.lane),
@@ -1210,17 +1210,18 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     buffered: () => serviceLinksRef?.buffered('gateway') ?? 0,
     call: (type, payload, waitMs) => serviceLinksRef?.call('gateway', type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
     start: () => ({ machineId: backend.machineId, computerId: computerId(), autonomousEnv, signedIn: !!session?.machineId, account: account(), machineName: terminalHintMachineName(), hostname: hostname() }),
-    tokens: auth, backend: (method, path) => proxyBackend(method, path), want: () => coreLink.want('gateway'),
+    backend: (method, path) => proxyBackend(method, path), want: () => coreLink.want('gateway'),
     machines: ({ body }) => ports.models?.machines(body, computerId()),
   }) : null
   const gateway = gatewayLink ?? inline!.startGateway({
     events: backend.fromGateway, machineId: backend.machineId, computerId: computerId(), autonomousEnv,
-    signedIn: !!session?.machineId, tokens: auth, account: account(), machineName: terminalHintMachineName(), hostname: hostname(),
+    signedIn: !!session?.machineId, account: account(), machineName: terminalHintMachineName(), hostname: hostname(),
     machines: ({ body }) => ports.models?.machines(body, computerId()),
   })
   backend.useGateway(gateway.port)
   backend.useWifi(wifiCore.fromGateway)
   const gatewayOps = gateway.ops
+  gatewayOpsRef = gatewayOps
   daemonBoot.openRequests = () => backend.openRequests()
   // This machine's viewers, served to a client over its connection by the viewers (core/viewerStreams.ts).
   backend.viewerStreams = createViewerStreams(() => ports.viewers, (connId, type, payload) => backend.sendViewerFrame(connId, type, payload))
@@ -2356,7 +2357,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onProductFeedback: (body) => proxyBackend('POST', '/api/product-usage/feedback', body),
     onSignInAnswer: (action, body) => proxyBackend('POST', `/api/auth/qr/${action}`, body),
     ...(swarm ? { onSuperTabAttachment: (req, res, path) => swarm.forwardAttachmentUpload(req, res, path,
-      { accessToken: () => auth.accessToken(), environment: autonomousEnv, base: backendHttpBase() }),
+      { accessToken: () => gatewayOps.accessToken(), environment: autonomousEnv, base: backendHttpBase() }),
       // A file over 10 MB: its signed link and its completion, with the account's token; the bytes go straight to storage.
       onSuperTabAttachmentUpload: (path, body) => proxyBackend('POST', path, body) } : {}),
     onProductUsageReport: (body) => proxyBackend('POST', '/api/product-usage/report', body),
