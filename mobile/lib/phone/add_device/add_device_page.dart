@@ -10,6 +10,7 @@ import 'package:harness_mobile/shared/widgets/app_icon_button.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
 import '../../swarm/swarm_inbox.dart' show SwarmListing;
+import '../../swarm/swarm_name.dart';
 import '../../swarm/swarm_session.dart';
 import '../machines_tab.dart';
 import '../phone_navigation.dart' show phoneRoute;
@@ -1285,7 +1286,8 @@ class _AddDevicePageState extends State<AddDevicePage> {
           null =>
             'Start makes your Personal Swarm, adds it there and starts your Buddy on it.',
           final swarm =>
-            'Start adds it to "${swarm.name}" and starts your Buddy there.',
+            'Start adds it to "${swarmShownName(session.inbox, swarm.id, swarm.name)}" '
+                'and starts your Buddy there.',
         })
       else ...[
         say('Add it to which Swarm? Start adds it there and starts your Buddy.'),
@@ -1295,7 +1297,7 @@ class _AddDevicePageState extends State<AddDevicePage> {
             for (final swarm in choices)
               SettingsRow(
                 key: ValueKey('add-device-swarm-${swarm.id}'),
-                title: swarm.name,
+                title: swarmShownName(session.inbox, swarm.id, swarm.name),
                 trailing: swarm.id == picked?.id ? tick() : null,
                 onTap: _busy
                     ? null

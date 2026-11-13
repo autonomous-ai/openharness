@@ -20,6 +20,7 @@ import 'swarm_conversation_page.dart' show SwarmAttachButton, attachSwarmFiles;
 import 'swarm_home_list.dart' show swarmProjectActivity;
 import 'swarm_home_top.dart' show swarmHomeOffers;
 import 'swarm_inbox.dart';
+import 'swarm_name.dart';
 import 'swarm_new_repository.dart';
 import 'swarm_outgoing_files.dart';
 import 'swarm_reader.dart';
@@ -1870,9 +1871,12 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
           (newRepository == null ? null : swarmNewRepositoryUrl(newRepository)),
     );
     _goOnFromOutcome(swarmId, reader, snapshot, steps, machineId);
-    final swarmName =
-        _inbox.swarms.where((s) => s.id == swarmId).firstOrNull?.name ??
-        snapshot.name;
+    final swarmName = swarmShownName(
+      _inbox,
+      swarmId,
+      _inbox.swarms.where((s) => s.id == swarmId).firstOrNull?.name ??
+          snapshot.name,
+    );
     return _frame(
       header: _header(
         'New project',
@@ -3088,10 +3092,13 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
     }
   }
 
-  String _swarmName(String id) =>
-      _inbox.swarms.where((s) => s.id == id).firstOrNull?.name ??
-      _inbox.reader(id)?.snapshot?.name ??
-      'Swarm';
+  String _swarmName(String id) => swarmShownName(
+    _inbox,
+    id,
+    _inbox.swarms.where((s) => s.id == id).firstOrNull?.name ??
+        _inbox.reader(id)?.snapshot?.name ??
+        'Swarm',
+  );
 }
 
 /// One of the sheet's choices: its [label] at its left, what is chosen at

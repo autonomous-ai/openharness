@@ -18,6 +18,7 @@ import 'swarm_home_list.dart';
 import 'swarm_home_rows.dart';
 import 'swarm_home_top.dart';
 import 'swarm_inbox.dart';
+import 'swarm_name.dart';
 import 'swarm_mark_all.dart';
 import 'swarm_new_project_sheet.dart';
 import 'swarm_project_page.dart';
@@ -604,7 +605,7 @@ class _SwarmPageState extends State<SwarmPage> {
     List<Widget> section(SwarmListing swarm, List<Widget> body) => [
       if (several && !(inbox.reader(swarm.id)?.accessRevoked ?? false))
         SwarmCaption(
-          swarm.name,
+          swarmShownName(inbox, swarm.id, swarm.name),
           key: ValueKey('swarm-heading-${swarm.id}'),
           first: first && notices.isEmpty && swarm == firstDrawn,
         )

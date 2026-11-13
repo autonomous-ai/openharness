@@ -29,6 +29,8 @@ SwarmHomeSwarm swarmHomeSwarm(
     'name': snapshot.name,
     'ownerId': snapshot.ownerId,
     'paused': snapshot.paused,
+    // Whose Swarm it is shows in its name to a guest (swarm_name.dart).
+    if (snapshot.personal) 'personal': true,
     if (snapshot.swarmBuddy) 'swarmBuddy': true,
     'projects': [for (final p in snapshot.projects) _project(p)],
     'people': [

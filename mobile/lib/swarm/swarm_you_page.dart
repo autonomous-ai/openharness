@@ -20,6 +20,7 @@ import 'model.dart';
 import 'swarm_devices_page.dart';
 import 'swarm_face.dart';
 import 'swarm_inbox.dart';
+import 'swarm_name.dart';
 import 'swarm_models_page.dart';
 import 'swarm_row.dart';
 import 'swarm_session.dart';
@@ -289,7 +290,7 @@ class SwarmYouPage extends StatelessWidget {
       _Me(
         key: const ValueKey('swarm-you-me'),
         me: me,
-        swarm: me == null ? null : you!.name,
+        swarm: me == null ? null : swarmShownName(inbox!, you!.id, you.name),
       ),
       const SizedBox(height: AppSpace.l),
       SwarmGroup(

@@ -7,6 +7,7 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 
 import 'model.dart';
 import 'swarm_inbox.dart';
+import 'swarm_name.dart';
 import 'swarm_reader.dart';
 import 'swarm_row.dart';
 import 'swarm_session.dart';
@@ -140,7 +141,7 @@ class SwarmModelsPage extends StatelessWidget {
         ..._swarm(
           swarm.id,
           inbox.reader(swarm.id),
-          name: several ? swarm.name : null,
+          name: several ? swarmShownName(inbox, swarm.id, swarm.name) : null,
           first: i == 0,
         ),
     ];
