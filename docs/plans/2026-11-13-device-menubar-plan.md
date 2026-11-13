@@ -143,6 +143,9 @@ and the task that touches it (checked against `cli/src/architecture.coreFiles.tx
 
 ## Decisions
 
+10. (orchestrator, 2026-11-13) Add Task 23, defining "Harness Device" and "dial" in docs/naming-system.md in this
+    PR; the tester runs the "CLI end to end" workflow once in phase 4 after asking the orchestrator for the runner slot.
+
 Diego's answers to the draft's open questions (2026-11-13). Final; the plan below follows them.
 
 1. **Install failed and its window closed:** the dial line stays "Setting up Harness" and the menu offers
@@ -400,6 +403,7 @@ below the label. A spinner stands still under `prefers-reduced-motion`. Themes: 
 | 20 CI component | nothing | high |
 | 21 AGENTS.md rule 9 | nothing | medium |
 | 22 End-to-end spec for `harness hardware watch` | 18, 19 | high |
+| 23 Naming System: Harness Device and dial | nothing | medium |
 
 Tasks 16 to 21 and Task 1 can start at once; Task 22 starts when Tasks 18 and 19 are both done (18 → 22 and
 19 → 22, a chain of two). The longest chain is five tasks: 1 → 2 → 7 (or 8, 9, 10) → 12 → 15.
@@ -1717,6 +1721,17 @@ git worktree remove --force "$W"
 
 ---
 
+### Task 23: Naming System: Harness Device and dial
+
+**Effort:** medium. **Depends on:** nothing. **Red test:** none (docs only, no behavior).
+
+**Files:**
+- Modify: `docs/naming-system.md` (Product names: "Harness Device", the menu-bar app for the round dial; Work and
+  interface terms: "dial", the round Harness device on a desk, as desktop copy already says "Your dial is unplugged")
+
+Define both terms in the document's own format, beside the nearest existing entries (read the whole file first; it
+writes the controller as "Harness device" today: keep that entry and say how the app name differs). One commit.
+
 ## For the pull request
 
 - Platforms: macOS built and tested on this Mac; Linux compiled and unit-tested by `device-app-checks`; Windows not
@@ -1870,8 +1885,9 @@ harness hardware watch nonsense; echo "exit=$?"   # the usage, exit=1
 **Checks the repository requires and PR CI does not run:** one, the CLI's end-to-end suite. PR CI never runs
 `cli/e2e` (`docs/validation-and-release.md`, "What PR CI does not run"), and this branch adds a user-facing CLI flow
 with its spec, so the tester runs that spec with its gate, `npm run test:e2e` (check 6), and the pull request records
-it. The guide's row also asks one "CLI end to end" workflow run on the branch; the plan starts none (decisions 6 and
-9; asked under [Decisions](#decisions)). Nothing else: `python3 scripts/local-checks.py --list` on this plan's paths,
+it. The guide's row also asks one "CLI end to end" workflow run on the branch: decision 10 (orchestrator, 2026-11-13)
+says the tester runs it once in phase 4, after the orchestrator grants the runner slot (one heavy workflow at a time
+across children); its run link goes in the PR. Nothing else: `python3 scripts/local-checks.py --list` on this plan's paths,
 the new spec's among them, prints `{}` (2026-11-13), and decision 6(b) adds no receipt for `cargo test` on a Mac;
 the CLI changes touch no `src/core`, `src/services` or `src/harnessd` file, so `npm run test:core` and the other
 coverage gates are not needed. PR CI runs every component by itself, because `scripts/` and `.github/` are shared
