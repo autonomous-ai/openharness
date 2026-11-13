@@ -157,14 +157,20 @@ none of `services/superTabs.ts`, `superTabs/host.ts` and `superTabs/service.ts`,
 ## What leaves, in order
 
 Each line is one pull request or a few, with the test that fails without it, and removes its entry from this
-list. The per-file detail is in [files.tsv](2026-11-12-core-audit/files.tsv).
+list. The per-file detail is in [files.tsv](2026-11-12-core-audit/files.tsv), as the audit found it.
+
+Left since, with the core's process as `src/architecture.coreFiles.txt` lists it after each:
+
+| What | Files | Lines |
+| --- | ---: | ---: |
+| The audit's count, with the changes that landed while it ran | 563 | 99,467 |
+| The CLI's client code: seven files loaded for a helper each (13 November) | 558 | 98,600 |
 
 ### 1. Code the core loads for one helper (low risk, about a day each)
 
 | What | Lines | What the core needs instead |
 | --- | ---: | --- |
 | The master's own code: `harnessd/supervisor.ts` (702, loaded for `describeExit`), `harnessd/platform.ts` (902) with `lib/nodeReferences.ts` and `lib/launchers.ts` (198, to repoint one Node path once a start), the supervisor classes in `harnessd/services.ts` (340) | 2,142 | `describeExit` in `protocol.ts`; the master repoints the path when its core says ready |
-| The CLI's client code: `lib/localTransport.ts`, `daemonEndpoint.ts`, `daemonLaunch.ts`, `controlPlane.ts`, `unreachable.ts`, and `logBundle.ts` with `zipWriter.ts` (loaded for `redactSecretsInText`) | 802 | the few helpers it calls, in files of their own |
 | Windows files loaded for a constant: the guest set-up (`guestRequests.ts`, `guestShare.ts`, `sid.ts`, `guestPaneCommand.ts`, `guestAccounts.ts`), the updater's (`cliVersions.ts`, `installLayout.ts`) | 988 | the constants, in files of their own |
 | `agentClient/ledger.ts`: one purge call, and its lock can hold the loop for 2 s | 363 | the edge host's agent cleanup |
 | The New dialog's engine probe: up to 16 login shells started from the core (`lib/engineProbe.ts`, `engineAccount.ts`, `backendSocket.ts:1210-1254`) | 397 | the edge host |
