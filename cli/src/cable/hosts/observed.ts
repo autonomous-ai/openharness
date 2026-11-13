@@ -75,6 +75,8 @@ export class ObservedSource implements HostSource {
   }
 
   ingest(e: ObservedHookEvent): void {
+    // The end of a session never listed (one of the 50 dropped when full, or ended before the devices started) lists none.
+    if (e.event === 'session-end' && !this.entries.has(observedAgentId(e.engine, e.sessionId))) return
     const now = this.deps.now()
     const entry = this.entry(e.engine, e.sessionId, now, {
       cwd: e.cwd, transcriptPath: e.transcriptPath, pid: e.callerPid,
