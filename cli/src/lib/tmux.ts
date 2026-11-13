@@ -3,7 +3,6 @@
 import { execFile, spawn } from 'child_process'
 import { existsSync } from 'node:fs'
 import { basename } from 'path'
-import type { ProcessIdentity } from './registry.js'
 import { ENGINE_EXIT_PANE_OPTION } from './engineExitOption.js'
 import { psEnv } from './childLocale.js'
 import { neutralizePasteControls } from './pasteText.js'
@@ -11,7 +10,6 @@ import { submitContent, submitSettleMs } from './submitTiming.js'
 import { patientDeadline, patientExec } from './patientExec.js'
 import { inTmuxRoom } from './tmuxControlGate.js'
 import { tmuxFeatures, type TmuxFeatures } from './tmuxVersion.js'
-import { processIdentityOf } from './terminalRuntime.js'
 import type { TerminalPaneInfo, TerminalPaneRead, TerminalPaneState } from './terminalTypes.js'
 import { processRows, type ProcessRow } from './processTable.js'
 import { isKittyGraphicsCommand } from './terminalTitle.js'
@@ -183,29 +181,6 @@ export function tmuxPanePid(pane: string, revived = false): Promise<number | 'mi
 async function panePid(pane: string): Promise<number | null> {
   const found = await tmuxPanePid(pane)
   return typeof found === 'number' ? found : null
-}
-
-/**
- * The pane's OWN process — whatever is sitting there, engine or not.
- *
- * [resolvePaneEngineProcess] answers "is the engine running here yet", which during an install is
- * deliberately no: the pane is running the user's shell, and the shell is running `npm`. This one
- * answers "what is running here", so an agent can be registered for a pane whose engine has not
- * started — the record the terminal tile attaches to while the install scrolls past.
- *
- * The identity is a placeholder by design, and a SHORT-LIVED one. When the engine finally execs,
- * discovery registers it against the same pane and the registry adopts the record in place — see the
- * `routeAgent` branch in `registry.ts`, which matches on the terminal route precisely while an agent
- * has no engine session bound yet. The agentId therefore survives, and so does the tile.
- */
-export async function resolvePaneRootProcess(pane: string): Promise<ProcessIdentity | null> {
-  const rootPid = await panePid(pane)
-  if (!rootPid) return null
-  const rows = await processRows()
-  if (!rows) return null
-  const row = rows.find((candidate) => candidate.pid === rootPid)
-  if (!row) return null
-  return processIdentityOf(row)
 }
 
 /**
