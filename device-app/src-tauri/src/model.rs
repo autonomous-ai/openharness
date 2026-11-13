@@ -1,5 +1,92 @@
 //! What the menu shows and which screen is due, from the app's state.
 
+use crate::types::{AppState, ClaudeStatus, CliState, Daemon, MenuAction, MenuItem, Screen};
+
+/// The menu's first, disabled row: the first of these that applies.
+pub fn dial_line(state: &AppState) -> String {
+    match (state.cli, state.daemon) {
+        (CliState::Installing | CliState::InstallFailed, _) => return "Setting up Harness".into(),
+        (CliState::Removed, _) => return "Harness removed".into(),
+        (_, Daemon::Updating) => return "Updating Harness".into(),
+        (_, Daemon::Stopped) => return "Harness stopped".into(),
+        (_, Daemon::Starting) => return "Starting Harness".into(),
+        (_, Daemon::Up) => {}
+    }
+    // Up with no status line yet: the watch child has not spoken.
+    let Some(dial) = &state.dial else { return "Starting Harness".into() };
+    if let Some(version) = &dial.updating {
+        return format!("Updating to {version}");
+    }
+    if let Some(problem) = &dial.problem {
+        return problem.clone();
+    }
+    match (dial.attached, &dial.fw) {
+        (true, Some(fw)) => format!("Dial connected · {fw}"),
+        (true, None) => "Dial connected".into(),
+        (false, _) => "No dial".into(),
+    }
+}
+
+/// The tray menu's rows, top to bottom. A row with nothing to say is absent.
+pub fn menu(state: &AppState) -> Vec<MenuItem> {
+    let mut items = vec![MenuItem::Text(dial_line(state))];
+    // Decision 1: a failed install whose window was closed is offered again from the menu.
+    if matches!(state.cli, CliState::Removed | CliState::InstallFailed) {
+        items.push(MenuItem::Action(MenuAction::Install, "Install".into()));
+    }
+    match state.signed_in {
+        Some(true) => items.push(MenuItem::Text("Signed in".into())),
+        Some(false) => items.push(MenuItem::Action(MenuAction::SignIn, "Sign in…".into())),
+        None => {}
+    }
+    match state.claude.as_ref().filter(|claude| available(claude)) {
+        Some(claude) if claude.enabled => items.extend([
+            MenuItem::Text("Claude Code: On".into()),
+            MenuItem::Action(MenuAction::ClaudeOff, "Turn off".into()),
+        ]),
+        Some(_) => items.extend([
+            MenuItem::Text("Claude Code: Off".into()),
+            MenuItem::Action(MenuAction::ClaudeOn, "Turn on…".into()),
+        ]),
+        None => {}
+    }
+    items.push(MenuItem::Separator);
+    if state.desktop_installed {
+        items.push(MenuItem::Action(MenuAction::OpenHarness, "Open Harness".into()));
+    }
+    items.push(MenuItem::Action(MenuAction::Quit, "Quit".into()));
+    items
+}
+
+/// The screen the window should show next, in the order they chain: install, sign-in, Claude Code.
+pub fn due(state: &AppState) -> Option<Screen> {
+    if matches!(state.cli, CliState::Installing | CliState::InstallFailed) {
+        return Some(Screen::Install);
+    }
+    if state.signed_in == Some(false) && !state.saved.asked_sign_in {
+        return Some(Screen::SignIn);
+    }
+    let claude_off = state.claude.as_ref().is_some_and(|claude| available(claude) && !claude.enabled);
+    (claude_off && !state.saved.asked_claude).then_some(Screen::Claude)
+}
+
+/// The menu as one log line: its labels joined by ` | `, without separators.
+pub fn menu_log(items: &[MenuItem]) -> String {
+    let labels: Vec<&str> = items
+        .iter()
+        .filter_map(|item| match item {
+            MenuItem::Text(label) | MenuItem::Action(_, label) => Some(label.as_str()),
+            MenuItem::Separator => None,
+        })
+        .collect();
+    labels.join(" | ")
+}
+
+/// Claude Code can be turned on or off here.
+fn available(claude: &ClaudeStatus) -> bool {
+    claude.supported && claude.installed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
