@@ -7,8 +7,11 @@
  * The command runs as an agent's shell tool runs it: a child of the engine in the agent's pane, so its parents prove the
  * pane. A browser left on follows its agent through a restart, a stop and a resume, and a daemon restart, and moves with
  * its pane to the agent typed there after it; its purge removes its container, volume, network and proxy secret; and
- * the service failing costs the agent nothing.
+ * the service failing costs the agent nothing. A window watches it through a stream the browser's own process runs
+ * (services/agentBrowser/streams.ts), which the core only passes on: its bytes both ways, its close, and what the
+ * window is told when that process dies.
  */
+import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -16,6 +19,7 @@ import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { browserAssetsHash } from '../src/services/agentBrowser/assets.js'
 import { imageTag } from '../src/services/agentBrowser/image.js'
 import { READY_LINE } from '../src/services/agentBrowser/notices.js'
+import { TerminalBinaryKind } from '../src/lib/terminalBinary.js'
 import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, fakeEngineShim, IsolatedDaemon, until } from './harness/daemon.js'
 
@@ -24,7 +28,9 @@ const GiB = 1024 ** 3
 /**
  * A `podman` that logs each argv as a line and answers what a browser's start asks; `events` streams nothing. Its exec
  * of the tool server (browser-tools.mjs) answers each line as the real one does: a snapshot with [TREE], a screenshot
- * with [SHOT], and the window with the size it was asked for.
+ * with [SHOT], and the window with the size it was asked for. Its exec of the pipe to a browser's screen (`socat`)
+ * logs which process started it, sends the server's banner, then sends back every byte it is sent, and logs
+ * `pipe ended` when it ends.
  */
 function writeFakePodman(daemon: IsolatedDaemon): string {
   const calls = join(daemon.root, 'podman-calls.log')
@@ -48,6 +54,20 @@ if (args[0] === 'exec' && args.at(-1) === '/opt/harness-browser/browser-tools.mj
       : method === 'tools/call' && answers[params.name] ? answers[params.name]() : null
     process.stdout.write(JSON.stringify(result ? { jsonrpc: '2.0', id, result } : { jsonrpc: '2.0', id, error: { code: -32601, message: 'Method not found' } }) + '\\n')
   })
+  return
+}
+if (args[0] === 'exec' && args.at(-1) === 'TCP:127.0.0.1:5900') {
+  fs.appendFileSync(${JSON.stringify(calls)}, 'pipe started by ' + process.ppid + '\\n')
+  let ended = false
+  const end = () => {
+    if (!ended) fs.appendFileSync(${JSON.stringify(calls)}, 'pipe ended\\n')
+    ended = true
+    process.exit(0)
+  }
+  process.on('SIGTERM', end)
+  process.stdin.on('end', end)
+  process.stdin.on('data', (chunk) => process.stdout.write(chunk))
+  process.stdout.write('RFB 003.008\\n')
   return
 }
 if (line.startsWith('info')) process.stdout.write(JSON.stringify({ version: { Version: '5.8.1' }, host: { memTotal: ${8 * GiB} } }))
@@ -163,6 +183,31 @@ async function started(onDaemon: (d: IsolatedDaemon) => void, options: Parameter
 
 const OFF_LINE = 'Your browser is off. Ask your person to start it: Browser in your chat.'
 
+/** This daemon's agent browser processes, by the pids its master logged: the title alone would match every daemon's on
+ *  the machine, another file's in a parallel run (as `devicesPids`, e2e/harness/desk.ts). */
+function browserPids(d: IsolatedDaemon): number[] {
+  const ours = new Set([...d.log().matchAll(/\[harnessd\] service agentBrowser started \(pid (\d+)\)/g)].map((match) => Number(match[1])))
+  const table = execFileSync('ps', ['-A', '-o', 'pid=,command=']).toString().trim().split('\n')
+  return table.map((line) => line.trim().match(/^(\d+)\s+(.*)$/)).filter((match): match is RegExpMatchArray => !!match)
+    .filter(([, pid, command]) => command.trim() === 'harnessd-agentBrowser' && ours.has(Number(pid))).map(([, pid]) => Number(pid))
+}
+
+/** A stream's screen bytes, as the Desktop's page reads them: `take(n)` resolves with the next `n`, in order. */
+function screenOf(client: LocalClient, streamId: string): (n: number) => Promise<Buffer> {
+  let buffered = Buffer.alloc(0)
+  let since = client.binaries.length
+  return async (n) => {
+    while (buffered.length < n) {
+      const frame = await client.waitForBinary((f) => f.kind === TerminalBinaryKind.browser && f.streamId === streamId, 30_000, `${n} bytes of the stream`, since)
+      since = client.binaries.indexOf(frame) + 1
+      buffered = Buffer.concat([buffered, frame.bytes])
+    }
+    const taken = buffered.subarray(0, n)
+    buffered = buffered.subarray(n)
+    return taken
+  }
+}
+
 /** What the fake tool server's snapshot answers. */
 const TREE = '- main [ref=e1]:\n  - button "Sign in" [ref=e7]'
 
@@ -203,8 +248,10 @@ describe('the agent browser on the real daemon', () => {
     const path = shot.out.trim()
     expect(path).toMatch(/\/browser\/shot-\d{8}-\d{6}-\d{3}\.jpg$/)
     expect(readFileSync(path).equals(SHOT)).toBe(true)
-    // The panel's size, held to the smallest window.
-    expect(await client.request('agent_browser_window', { agentId: agent.id, width: 800, height: 500 }, 30_000)).toMatchObject({ width: 1024, height: 640 })
+    // The panel's size, at 1:1: Chrome's window is the panel's, held only to the browser's screen (#4141, which left
+    // this line asking for the smallest window it took away; nightly e2e on main failed it since).
+    expect(await client.request('agent_browser_window', { agentId: agent.id, width: 800, height: 500 }, 30_000)).toMatchObject({ width: 800, height: 500 })
+    expect(await client.request('agent_browser_window', { agentId: agent.id, width: 4000, height: 500 }, 30_000)).toMatchObject({ width: 1080, height: 500 })
 
     // The person's Stop: the browser goes from the frame, and its login stays.
     expect(await client.request('agent_browser_stop', { agentId: agent.id }, 60_000)).toMatchObject({ ok: true })
@@ -347,6 +394,73 @@ describe('the agent browser on the real daemon', () => {
     }, 60_000, 250)
     expect(resumed.browser).toBeUndefined()
     expect((await row(client, successor!))?.browser).toMatchObject({ state: 'ready' })
+    client.close()
+  })
+
+  // The stream is the agent browser's own, in its process (services/agentBrowser/streams.ts): the core passes a
+  // window's frames and bytes on, and holds each stream to the window that opened it (core/browserStreams.ts). Until
+  // the audit of 2026-11-12 the core started the pipe itself and read the viewer's VNC bytes.
+  it('a window watches the browser: its screen comes through, its keys go in, and the pipe ends with the panel, and with the browser\'s process', async () => {
+    const { d, client, log } = await started((created) => { daemon = created })
+    const agent = await newAgent(d, client, 'watched')
+    expect(await client.request('agent_browser_start', { agentId: agent.id }, 60_000)).toMatchObject({ ok: true })
+    await ready(client, agent.id, 'the browser to be ready in its frame')
+    const pipe = `exec -i harness-browser-${agent.id} socat STDIO TCP:127.0.0.1:5900`
+    const count = (line: string) => log().filter((logged) => logged === line).length
+    const open = async () => {
+      const opened = await client.request<{ streamId?: string; error?: string }>('agent_browser_open', { agentId: agent.id }, 30_000)
+      expect(opened.error, JSON.stringify(opened)).toBeUndefined()
+      return opened.streamId!
+    }
+    const closeOf = (streamId: string) => client.next((frame) => frame.type === 'agent_browser_close' && frame.payload?.streamId === streamId, 30_000, 'agent_browser_close')
+
+    const streamId = await open()
+    const screen = screenOf(client, streamId)
+    // The banner is the pipe's own first word: by then it has run, and logged its start.
+    expect((await screen(12)).toString('latin1')).toBe('RFB 003.008\n')
+    expect(count(pipe)).toBe(1)
+    // Started by the agent browser's process, never by the core: the core runs no command for a browser.
+    const starters = log().filter((line) => line.startsWith('pipe started by ')).map((line) => Number(line.slice('pipe started by '.length)))
+    expect(starters).toEqual(browserPids(d))
+    expect(starters).not.toContain(d.corePid())
+    // The panel's bytes reach the pipe, which sends them back: its version, None and a shared ClientInit, then a key
+    // (RFC 6143 § 7.1-7.3, § 7.5.4). They are VNC's own, read in the browser's process and never in the core.
+    const send = (...bytes: number[]) => client.sendBinary({ kind: TerminalBinaryKind.browser, streamId, seq: 0, bytes: Uint8Array.from(bytes), compressed: false })
+    send(...Buffer.from('RFB 003.008\n', 'latin1'))
+    expect((await screen(12)).toString('latin1')).toBe('RFB 003.008\n')
+    send(1, 1)
+    expect([...await screen(2)]).toEqual([1, 1])
+    const key = [4, 1, 0, 0, 0, 0, 0, 0x61]
+    send(...key)
+    expect([...await screen(8)]).toEqual(key)
+    // An ack is the stream's, and ends nothing.
+    client.send('agent_browser_ack', { streamId, bytes: 34 })
+
+    // The panel closes: it is told so, and the pipe ends.
+    const closed = closeOf(streamId)
+    client.send('agent_browser_close', { streamId })
+    expect((await closed).payload).toMatchObject({ streamId, reason: 'closed' })
+    await until('the pipe to end with its panel', () => count('pipe ended') === 1 || null, 15_000, 100)
+
+    // The browser's process dies under a panel: the core tells the panel its stream is gone (`agent`), and the panel
+    // opens again once the process is back, on a new pipe. The agent and the core go on.
+    const second = await open()
+    expect((await screenOf(client, second)(12)).toString('latin1')).toBe('RFB 003.008\n')
+    const gone = closeOf(second)
+    const before = browserPids(d)
+    expect(before).toHaveLength(1)
+    for (const pid of before) process.kill(pid, 'SIGKILL')
+    expect((await gone).payload).toMatchObject({ streamId: second, reason: 'agent' })
+    // The pipe of the process that died ends with it: its stdin closed.
+    await until('the dead process\'s pipe to end', () => count('pipe ended') === 2 || null, 15_000, 100)
+    const third = await until('the stream to open again', async () => {
+      const opened = await client.request<{ streamId?: string; error?: string }>('agent_browser_open', { agentId: agent.id }, 30_000)
+      return opened.streamId ?? null
+    }, 60_000, 500)
+    expect(third).not.toBe(second)
+    expect((await screenOf(client, third)(12)).toString('latin1')).toBe('RFB 003.008\n')
+    expect(count(pipe)).toBe(3)
+    expect(d.coresStarted()).toBe(1)
     client.close()
   })
 

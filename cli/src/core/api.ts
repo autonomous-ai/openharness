@@ -357,6 +357,16 @@ export interface CoreApi {
      *  `viewer_ack`, `viewer_end`, `viewer_close`): false when it cannot reach that connection. Only those
      *  types; the core drops any other. */
     viewerFrame(connId: string, type: string, payload: Record<string, unknown>): boolean
+    /** A frame of a browser's stream for the connection that opened it (`agent_browser_open_result`,
+     *  `agent_browser_close`): only those types, and only to the connection the core holds that open or that stream
+     *  for (core/browserStreams.ts). False otherwise, or when it could not reach it. Absent, with `browserBytes`, where
+     *  the core offers a service none: only the agent browser streams. */
+    browserFrame?(connId: string, type: string, payload: Record<string, unknown>): boolean
+    /** A browser stream's screen bytes as the agent browser frames them: a terminal's plain frame of kind browser
+     *  (lib/terminalBinary.ts `encodeTerminalLocal`), which names its stream. The core sends it as it came to the
+     *  connection it holds the stream for: false when it holds it for none, when it is no such frame, or when that
+     *  connection's transport refused it, which ends the stream. */
+    browserBytes?(frame: Uint8Array): boolean
     /** The account's grid has a name: the models picker answers with it at once. */
     gridNamed(name: string): void
     /** What the models picker lists may have changed (a local model started or stopped, grid set up):
@@ -1158,42 +1168,6 @@ export interface AgentCleanupPort {
  *  harness whose told lines it could not erase. */
 export const AGENT_CLEANUP_FALLBACKS: PortFallbacks<AgentCleanupPort> = { closed: undefined, typed: undefined, forgetTold: later(false), stop: undefined }
 
-/** A browser's container is named this and its profile (services/agentBrowser/containers.ts `NAME`, which a file under a
- *  service's folder keeps for itself; services/agentBrowser.spec.ts holds the command it builds to this one). */
-const AGENT_BROWSER_CONTAINER = 'harness-browser-'
-/** What a viewer's bytes are piped through inside a browser's container: to Xvnc, which listens on the container's own
- *  loopback and publishes no port (services/agentBrowser.ts). */
-export const AGENT_BROWSER_VNC_PIPE: readonly string[] = ['socat', 'STDIO', 'TCP:127.0.0.1:5900']
-/** Podman by its whole path, as the login shell answers for it on a Mac or Linux (the agent browser does not run on
- *  Windows); a connection's name; a profile, an agent's id or a UUID, of the characters Podman takes in a name. */
-const BROWSER_PODMAN = /^\/(?:[^\0-\x1f]*\/)?podman$/
-const BROWSER_CONNECTION = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/
-const BROWSER_PROFILE = /^[A-Za-z0-9_.-]{1,200}$/
-/**
- * The one command the core starts for the agent browser, a viewer's pipe into a ready browser (core/browserStreams.ts):
- * Podman by its whole path, on a named connection or the person's default, `exec -i` into a container named as the
- * agent browser names its own, and the pipe to its screen, with nothing before, between or after. Null for any other
- * command line. Until the audit of 2026-11-12 the core started whatever argv the agent browser's process gave it, so
- * a name that process took from Podman's output, its state file or a page's doing could have become a command, or a
- * flag of Podman's, in the process that types into every terminal.
- *
- * What is still that process's to say: which file is Podman (the one its login shell found, which the core does not
- * look for itself), and which of its containers is an agent's (a browser moves with its pane, so its profile is not
- * its agent's id). Both end when the stream leaves the core (docs/design/2026-11-12-core-audit.md, part 2).
- */
-export function agentBrowserStreamCommand(value: unknown): string[] | null {
-  if (!Array.isArray(value) || !value.every((part) => typeof part === 'string')) return null
-  const [file = '', ...rest] = value as string[]
-  const named = rest[0] === '--connection'
-  const exec = named ? rest.slice(2) : rest
-  const container = exec[2] ?? ''
-  return BROWSER_PODMAN.test(file) && (!named || BROWSER_CONNECTION.test(rest[1] ?? ''))
-    && exec.length === 3 + AGENT_BROWSER_VNC_PIPE.length && exec[0] === 'exec' && exec[1] === '-i'
-    && container.startsWith(AGENT_BROWSER_CONTAINER) && BROWSER_PROFILE.test(container.slice(AGENT_BROWSER_CONTAINER.length))
-    && AGENT_BROWSER_VNC_PIPE.every((part, index) => exec[3 + index] === part)
-    ? value as string[] : null
-}
-
 /**
  * The core's calls into the agent browser (services/agentBrowser.ts): what happens to an agent whose Browser is on, and
  * its browser's state for the agent's frame, which the core reads in line (from what the service last said, when it
@@ -1210,23 +1184,36 @@ export interface AgentBrowserPort {
    *  the service asks `agents.moveBrowser`. [on]: [from]'s Browser was on. */
   moved(from: string, to: RegisteredSession, on: boolean): void
   frameContext(agentId: string): AgentBrowserFrame | undefined
-  /** How the core reaches a ready browser's screen for a viewer (core/browserStreams.ts): Podman's path, then
-   *  `exec -i harness-browser-<profile> socat STDIO TCP:127.0.0.1:5900`, which is all the core starts
-   *  (`agentBrowserStreamCommand`). Read in line, as `frameContext` is. */
-  streamCommand(agentId: string): { argv: string[] } | { error: 'NO_BROWSER' | 'NOT_READY' }
-  /** [listener] hears an agent whose browser stops or goes: its viewers' streams end with it. */
-  onCloseViewers(listener: (agentId: string) => void): void
+  /** A viewer's frame of a browser's stream (`agent_browser_open`, `agent_browser_ack`, `agent_browser_close`), from the
+   *  connection [connId]; an open with who asked as the core established it, and an ack or a close with nobody, as the
+   *  stream's own. The stream is the service's (services/agentBrowser/streams.ts): the core passes frames on and
+   *  answers back (core/browserStreams.ts). False when nobody took it. */
+  stream(connId: string, type: string, payload: Record<string, unknown>, asker?: Asker): boolean
+  /** A viewer's bytes for its stream: its keys and mouse, as VNC writes them. The core passes them on only from the
+   *  connection it holds the stream for (core/browserStreams.ts), and names the stream alone. False when they did not
+   *  reach the service: the core then ends the stream. */
+  streamInput(streamId: string, bytes: Uint8Array): boolean
+  /** A viewer's connection ended: its streams end. */
+  streamClosed(connId: string): void
+  /** The gateway's word on the route a remote stream took (`GatewayEvents.browserRoute`), or null: the route went
+   *  away, and the stream ends with it. */
+  streamRoute(streamId: string, route: BrowserRoute | null): void
+  /** The backend refused one of this machine's relayed browser frames: every stream that may be on the relay ends. */
+  streamTransportError(): void
+  /** The viewer's transport refused one of the stream's frames: a hole in its screen, so it ends. */
+  streamRefused(streamId: string): void
   stop(): void
 }
 /** What turning an agent's Browser on or off answered (`CoreApi.agents.setBrowser`): whether its flag changed, or why
  *  it was not turned on. */
 export type BrowserSwitch = { ok: true; changed: boolean } | { error: 'NOT_RUNNING' | 'NOT_ALLOWED' }
 
-/** What the core gets when the agent browser fails: nothing told, frames without a browser, and no stream to open. A
+/** What the core gets when the agent browser fails: nothing told, frames without a browser, and no stream taken. A
  *  purge it misses is finished when it next starts, which deletes the browser of every agent that is gone. A move it
  *  misses leaves the browser with the agent that ended, whose resume brings it back. */
 export const AGENT_BROWSER_FALLBACKS: PortFallbacks<AgentBrowserPort> = {
-  attached: undefined, stopped: undefined, deleted: undefined, moved: undefined, frameContext: undefined, streamCommand: { error: 'NO_BROWSER' }, onCloseViewers: undefined, stop: undefined,
+  attached: undefined, stopped: undefined, deleted: undefined, moved: undefined, frameContext: undefined,
+  stream: false, streamInput: false, streamClosed: undefined, streamRoute: undefined, streamTransportError: undefined, streamRefused: undefined, stop: undefined,
 }
 
 /** The core's calls into the DSH viewers: each harness agent's viewer server and verdict watch. */
@@ -2147,6 +2134,9 @@ export function emptyPorts(): CorePorts {
   return { usage: null, store: null, search: null, viewers: null, models: null, workspaces: null, messages: null, devices: null, wifi: null, monitor: null, connectors: null, orchestrator: null, sharing: null, recaps: null, agentCleanup: null, cloud: null, superTabs: null, sharedMachines: null, agentBrowser: null }
 }
 
+/** What a browser's stream answers a viewer: its open, and that it closed. Its bytes go beside them, as binary. */
+const BROWSER_STREAM_ANSWERS: ReadonlySet<string> = new Set(['agent_browser_open_result', 'agent_browser_close'])
+
 export interface CoreApiDeps {
   terminals?: TerminalsPort
   conversations?: ConversationReads
@@ -2158,6 +2148,9 @@ export interface CoreApiDeps {
   runtimeModels: CoreApi['agents']['runtimeModels']
   viewerChanged: CoreApi['clients']['viewerChanged']
   viewerFrame: CoreApi['clients']['viewerFrame']
+  /** Where a browser stream's answers and bytes go (core/browserStreams.ts); absent, nowhere. */
+  browserFrame?: NonNullable<CoreApi['clients']['browserFrame']>
+  browserBytes?: NonNullable<CoreApi['clients']['browserBytes']>
   gridNamed: CoreApi['clients']['gridNamed']
   gridModelsChanged: CoreApi['clients']['gridModelsChanged']
   dshInstallStatus: CoreApi['clients']['dshInstallStatus']
@@ -2242,7 +2235,7 @@ export interface CoreApiDeps {
 export function createCoreApi({
   dataDir, registry, stoppedAgents, databaseHistory, syncSession, runtimeModels, viewerChanged,
   gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, observerKey, tabKey, tabRelay, connectorVault, observer, privateGridName, machineName, backend, onNotice,
-  runtimeProfile, setRuntime, fork, create, creationStatus, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, viewerFrame, machine, activityText, activitySnapshot, activity, summaries,
+  runtimeProfile, setRuntime, fork, create, creationStatus, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, viewerFrame, browserFrame, browserBytes, machine, activityText, activitySnapshot, activity, summaries,
   closeAgent, activityAt, resumeAgent, swarmAgents, setBrowser, moveBrowser, panePid,
   signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, cloud, superTabs, superTabRequest, cloudRows, lastTurn, turnCard, turnSummary,
   count, hachiGoalDone, log = (line) => console.warn(line),
@@ -2331,6 +2324,8 @@ export function createCoreApi({
       // A viewers process speaks to the core as a service: what it may send a client is a viewer stream's
       // frame, decided here, never whatever it names.
       viewerFrame: (connId, type, payload) => VIEWER_UP_TYPES.has(type) && viewerFrame(connId, type, payload),
+      ...(browserFrame ? { browserFrame: (connId: string, type: string, payload: Record<string, unknown>) => BROWSER_STREAM_ANSWERS.has(type) && browserFrame(connId, type, payload) } : {}),
+      ...(browserBytes ? { browserBytes } : {}),
       sendLocal: (frame) => {
         if (windowFrames.has(frame?.type)) sendLocal(frame)
         else refused(frame?.type)

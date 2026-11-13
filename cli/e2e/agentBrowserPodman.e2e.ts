@@ -771,7 +771,7 @@ describe('the agent browser on real Podman', () => {
 
   step('a stream opened as the Desktop opens one: the banner, a handshake, the local profile at Xvnc, and a close that ends the exec', 2 * CALL_MS, async () => {
     // Xvnc sends a full-colour rectangle as Tight JPEG only when the viewer set a quality level. This viewer sets none,
-    // so a JPEG rectangle is the shaper's level (q6/c2 for a local connection, core/browserStreams.ts) reaching Xvnc.
+    // so a JPEG rectangle is the shaper's level (q6/c2 for a local connection, services/agentBrowser/streams.ts) reaching Xvnc.
     const noise = await browser(['navigate', pages!.url('/noise')])
     expect(noise.code, noise.stderr).toBe(0)
     const opened = await client!.request<{ streamId?: string; error?: string }>('agent_browser_open', { agentId: agent!.id })

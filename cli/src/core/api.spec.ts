@@ -1,44 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
-import { AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS, AGENT_BROWSER_VNC_PIPE, agentBrowserStreamCommand, mayOpenBrowser, CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, emptyPorts, LANE_OFF, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, TURN_DELIVERERS, TURN_END_HEARERS, WIFI_FALLBACKS, WIFI_OFF, type CoreApiDeps, type SwarmAgentDeps } from './api.js'
+import { AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS, mayOpenBrowser, CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, emptyPorts, LANE_OFF, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, TURN_DELIVERERS, TURN_END_HEARERS, WIFI_FALLBACKS, WIFI_OFF, type CoreApiDeps, type SwarmAgentDeps } from './api.js'
 import { FAIL, readFallback } from './serviceHost.js'
 import { HACHI_ID } from '../dsh/builtinIds.js'
 
 const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/work/app' }) as RegisteredSession
-
-describe('the one command the core starts for the agent browser', () => {
-  const exec = ['exec', '-i', 'harness-browser-a1', 'socat', 'STDIO', 'TCP:127.0.0.1:5900']
-  it('is Podman\'s exec into a browser\'s container and the pipe to its screen, on any connection', () => {
-    for (const argv of [
-      ['/opt/podman/bin/podman', ...exec], ['/opt/homebrew/bin/podman', '--connection', 'harness', ...exec],
-      ['/nix/store/abc-podman-5.2.1/bin/podman', '--connection', 'podman-machine-default', ...exec],
-      // As a login shell answers for a PATH that holds `..`, and a profile with every character Podman takes in a name.
-      ['/Users/x/tools/../bin/podman', ...exec], ['/usr/bin/podman', 'exec', '-i', 'harness-browser-0b0e1c2d-3f4a-4b5c-8d6e-7f8091a2b3c4', ...AGENT_BROWSER_VNC_PIPE],
-      ['/usr/bin/podman', 'exec', '-i', 'harness-browser-agent_1.2-x', ...AGENT_BROWSER_VNC_PIPE],
-    ]) expect(agentBrowserStreamCommand(argv), argv.join(' ')).toEqual(argv)
-  })
-
-  it('is no other command line', () => {
-    const podman = '/opt/podman/bin/podman'
-    for (const argv of [
-      // Another program, or Podman not named by its whole path.
-      ['/bin/sh', '-c', 'true'], ['/opt/podman/bin/sh', ...exec], ['podman', ...exec], ['./podman', ...exec], ['/tmp/podman/../../bin/sh', ...exec],
-      ['/opt/podman/bin/podman\n', ...exec], ['/opt/podman/bin/notpodman', ...exec], ['/opt/podman/bin/podman.sh', ...exec], [],
-      // Windows, where the agent browser does not run.
-      ['C:\\Program Files\\RedHat\\Podman\\podman.exe', ...exec], ['C:/tools/podman', ...exec],
-      // Podman doing something else, or on something that is not a connection's name.
-      [podman, 'run', '--rm', 'evil'], [podman, 'exec', '-i', 'harness-browser-a1', 'sh', '-c', 'true'], [podman, 'exec', '-it', ...exec.slice(2)],
-      [podman, '--url', 'tcp://evil.example:1', ...exec], [podman, '--connection', '--url=tcp://evil.example', ...exec], [podman, '--connection', ...exec],
-      [podman, '--connection', 'harness', '--root', '/tmp/x', ...exec], [podman, '--privileged', ...exec],
-      // Another container, another pipe, or anything after it.
-      [podman, 'exec', '-i', 'someone-elses', ...AGENT_BROWSER_VNC_PIPE], [podman, 'exec', '-i', 'harness-browser-', ...AGENT_BROWSER_VNC_PIPE],
-      [podman, 'exec', '-i', 'harness-browser-a1;id', ...AGENT_BROWSER_VNC_PIPE], [podman, 'exec', '-i', 'harness-browser-a1', 'socat', 'STDIO', 'TCP:10.0.0.1:22'],
-      [podman, ...exec, 'EXEC:sh'], [podman, ...exec.slice(0, -1)],
-      // Not a command line.
-      [podman, ...exec.slice(0, 5), 7], 'podman exec', null, undefined, { 0: podman },
-    ]) expect(agentBrowserStreamCommand(argv), JSON.stringify(argv)).toBeNull()
-  })
-})
 
 describe('the core API services stand on', () => {
   it('allows a bounded batch of GitHub reads to finish outside the core', () => {
@@ -231,6 +197,9 @@ describe('the core API services stand on', () => {
     expect(deps.viewerFrame).toHaveBeenCalledWith('c1', 'viewer_data', { streamId: 's' })
     expect(core.clients.viewerFrame('c1', 'agent_synced', {})).toBe(false)
     expect(deps.viewerFrame).toHaveBeenCalledTimes(1)
+    // A core that names no browser streams offers a service none.
+    expect(core.clients.browserFrame).toBeUndefined()
+    expect(core.clients.browserBytes).toBeUndefined()
     expect(core.clients.dshInstallStatus).toBe(deps.dshInstallStatus)
     expect(core.agents.advertised().map((s) => s.agentId)).toEqual(['live'])
     expect(core.clients.gridNamed).toBe(deps.gridNamed)
@@ -377,6 +346,19 @@ describe('the core API services stand on', () => {
   })
 
   // A verified machine share is `owner` too, and the browser holds its person's logins.
+  it('passes a browser stream\'s answers and bytes on, and nothing else the agent browser names', () => {
+    const browserFrame = vi.fn(() => true)
+    const browserBytes = vi.fn(() => true)
+    const core = createCoreApi({ ...coreDeps(), browserFrame, browserBytes })
+    expect(core.clients.browserFrame?.('c1', 'agent_browser_open_result', { requestId: 'r-1' })).toBe(true)
+    expect(core.clients.browserFrame?.('c1', 'agent_browser_close', { streamId: 's' })).toBe(true)
+    expect(browserFrame.mock.calls).toEqual([['c1', 'agent_browser_open_result', { requestId: 'r-1' }], ['c1', 'agent_browser_close', { streamId: 's' }]])
+    // A frame of another kind, a terminal's or a viewer's, is never the agent browser's to send a window.
+    for (const type of ['terminal_output', 'viewer_data', 'agent_synced', 'agent_browser_open']) expect(core.clients.browserFrame?.('c1', type, {}), type).toBe(false)
+    expect(browserFrame).toHaveBeenCalledTimes(2)
+    expect(core.clients.browserBytes).toBe(browserBytes)
+  })
+
   it('opens an agent\'s browser for this computer and the owner\'s own apps only, never a plain owner or a guest', () => {
     expect(AGENT_BROWSER_REQUESTS).toEqual(['agent_browser_available', 'agent_browser_setup', 'agent_browser_retry',
       'agent_browser_state', 'agent_browser_settings', 'agent_browser_settings_save', 'agent_browser_proxy_test',
@@ -390,9 +372,11 @@ describe('the core API services stand on', () => {
 
   it('tells the agent browser nothing while it is off, and its frames carry no browser', () => {
     // Asserted member by member, not as one object, so a member added later still has to answer one of these.
-    const { streamCommand, ...notices } = AGENT_BROWSER_FALLBACKS
-    // No stream to open: the same answer the core gives when the service never started (core/main.ts).
-    expect(streamCommand).toEqual({ error: 'NO_BROWSER' })
+    const { stream, streamInput, ...notices } = AGENT_BROWSER_FALLBACKS
+    // Nobody took a viewer's frame: the core refuses the open at once, as when the service never started, and ends a
+    // stream whose viewer's bytes reached nobody (core/browserStreams.ts).
+    expect(stream).toBe(false)
+    expect(streamInput).toBe(false)
     for (const [member, fallback] of Object.entries(notices)) expect(fallback, member).toBeUndefined()
   })
 

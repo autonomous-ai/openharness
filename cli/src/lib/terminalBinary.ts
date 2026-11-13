@@ -239,6 +239,24 @@ export function encodeTerminalLocal(frame: TerminalBinaryClear): Uint8Array | nu
   return out
 }
 
+/**
+ * A browser stream's screen frame as the agent browser makes it (`encodeTerminalLocal` of kind browser), read in place:
+ * its stream, its seq and a view of its bytes. The core sends such a frame on as it came (core/browserStreams.ts), so
+ * nothing is copied: decoded and made again, every frame cost the core more than reading a pipe had (measured
+ * 2026-11-13). The checks `decodeTerminalLocal` makes of it; null for any other frame.
+ */
+export function browserLocalFrame(raw: Uint8Array): { streamId: string; seq: number; bytes: Uint8Array } | null {
+  if (raw.length < TERMINAL_LOCAL_HEADER_BYTES + 24) return null
+  for (let index = 0; index < LOCAL_MAGIC.length; index++) if (raw[index] !== LOCAL_MAGIC[index]) return null
+  if (raw[4] !== TERMINAL_LOCAL_VERSION || raw[5] !== TerminalBinaryKind.browser || raw[6] !== 0 || raw[7] !== 0) return null
+  const view = new DataView(raw.buffer, raw.byteOffset, raw.byteLength)
+  const length = view.getUint32(8, false)
+  if (length > TERMINAL_LOCAL_MAX_PAYLOAD_BYTES || raw.length !== TERMINAL_LOCAL_HEADER_BYTES + length) return null
+  const seq = safeU64(view, TERMINAL_LOCAL_HEADER_BYTES + 16)
+  if (seq == null) return null
+  return { streamId: uuidString(raw.subarray(TERMINAL_LOCAL_HEADER_BYTES, TERMINAL_LOCAL_HEADER_BYTES + 16)), seq, bytes: raw.subarray(TERMINAL_LOCAL_HEADER_BYTES + 24) }
+}
+
 /** Decode a terminal frame only after the WebSocket peer passed loopback API-key authentication. */
 export function decodeTerminalLocal(raw: Uint8Array): TerminalBinaryClear | null {
   const bytes = Uint8Array.from(raw)

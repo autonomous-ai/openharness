@@ -7,8 +7,9 @@ import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { PassThrough } from 'node:stream'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { agentBrowserStreamCommand, emptyPorts, type AgentBrowserPort, type Asker, type BrowserSwitch, type CoreApi, type CorePorts, type ServiceRequests, type TurnDelivery } from '../core/api.js'
+import { emptyPorts, type AgentBrowserPort, type Asker, type BrowserSwitch, type CoreApi, type CorePorts, type ServiceRequests, type TurnDelivery } from '../core/api.js'
 import type { RegisteredSession } from '../lib/registry.js'
+import { decodeTerminalLocal } from '../lib/terminalBinary.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { browserAssetsHash } from './agentBrowser/assets.js'
 import { fakePodman, type FakePodman } from './agentBrowser/fakePodman.js'
@@ -88,6 +89,45 @@ function podmanHere() {
   const podman = createPodman({ resolve: async () => fake.path, platform: 'linux' })
   return { podman, spawn: vi.spyOn(podman, 'spawn') }
 }
+
+/**
+ * A browser's viewers, as the core stands for them (core/browserStreams.ts): what a stream answers and the screen's
+ * bytes it sends, and each exec the service started to pipe a screen, which the spec drives in place of `socat`.
+ */
+function viewing(clients = true) {
+  const podman = createPodman({ resolve: async () => fake.path, platform: 'linux' })
+  const real = podman.spawn
+  const pipes: Array<EventEmitter & { args: string[]; stdin: PassThrough; stdout: PassThrough; kill: ReturnType<typeof vi.fn> }> = []
+  vi.spyOn(podman, 'spawn').mockImplementation((args) => {
+    if (args[0] !== 'exec') return real(args)
+    // Running, as a child Node started: no exit code and no signal yet.
+    const pipe = Object.assign(new EventEmitter(), { args, stdin: new PassThrough(), stdout: new PassThrough(), stderr: null, exitCode: null, signalCode: null, kill: vi.fn(() => true) })
+    pipes.push(pipe)
+    return pipe as unknown as ChildProcess
+  })
+  const frames: Array<[connId: string, type: string, payload: Record<string, unknown>]> = []
+  const screen: Array<[streamId: string, seq: number, bytes: string]> = []
+  const core = fakeCore({ dataDir, ...(clients ? { clients: {
+    browserFrame: (connId, type, payload) => { frames.push([connId, type, payload]); return true },
+    // The service frames them as a window is sent them, and the core sends that frame on as it is.
+    browserBytes: (frame) => {
+      const { streamId, seq, bytes } = decodeTerminalLocal(frame)!
+      screen.push([streamId, seq, Buffer.from(bytes).toString()])
+      return true
+    },
+  } } : {}) })
+  let opens = 0
+  /** A viewer's open through the port: the stream it was given, or why none. */
+  const open = (port: AgentBrowserPort, agentId: string, asker: Asker = LOCAL, connId = 'local:w'): string => {
+    const requestId = `r-${++opens}`
+    expect(port.stream(connId, 'agent_browser_open', { requestId, agentId }, asker)).toBe(true)
+    const answer = frames.find(([, type, payload]) => type === 'agent_browser_open_result' && payload.requestId === requestId)![2]
+    return (answer.streamId ?? answer.error) as string
+  }
+  const closes = () => frames.filter(([, type]) => type === 'agent_browser_close').map(([connId, , payload]) => [connId, payload.streamId, payload.reason])
+  return { podman, pipes, core, frames, screen, open, closes }
+}
+const VNC_PIPE_ARGS = (profile: string) => ['exec', '-i', `harness-browser-${profile}`, 'socat', 'STDIO', 'TCP:127.0.0.1:5900']
 
 function saveState(browsers: Record<string, BrowserSettings>, deleting: string[] = []) {
   writeFileSync(join(dataDir, 'agent-browser.json'), JSON.stringify({ browsers, deleting, setup: null }), { mode: 0o600 })
@@ -243,8 +283,6 @@ describe('the agent browser service', () => {
 
   it('stopped stops, deleted deletes', async () => {
     const { port } = start()
-    const closed: string[] = []
-    port.onCloseViewers(agentId => closed.push(agentId))
     port.attached(session('a1'))
     await ready(port, 'a1')
     port.stopped('a1')
@@ -259,40 +297,123 @@ describe('the agent browser service', () => {
     port.deleted('a1')
     await eventually(() => expect(asked()).toContain('volume rm harness-browser-a1'))
     await eventually(() => expect(secretRemoves()).toBe(3))
-    // An agent without a browser costs Podman nothing: a stop or a delete closes its viewers at once, before any
-    // Podman call, and none was asked for.
+    // An agent without a browser costs Podman nothing: none is asked for its stop or its delete.
     const before = asked().length
     port.stopped('plain')
     port.deleted('plain')
-    expect(closed).toEqual(['a1', 'a1'])
     expect(asked()).toHaveLength(before)
   })
 
-  // The core pipes a viewer to the container's VNC through this command (core/browserStreams.ts).
-  it('streamCommand is NO_BROWSER, NOT_READY, then the exec into the ready browser', async () => {
-    const { port } = start()
-    expect(port.streamCommand('a1')).toEqual({ error: 'NO_BROWSER' })
+  // A viewer's stream is this service's own exec into the browser's container (agentBrowser/streams.ts). Until the audit
+  // of 2026-11-12 the core was handed the command line and started it, in the process that types into every terminal.
+  it('a viewer\'s open is NO_BROWSER, NOT_READY, then a stream piped from the ready browser\'s screen', async () => {
+    const v = viewing()
+    const { port } = start(v.core, { podman: v.podman })
+    expect(v.open(port, 'a1')).toBe('NO_BROWSER')
     port.attached(session('a1'))
     await ready(port, 'a1')
-    expect(port.streamCommand('a1')).toEqual({ argv: [fake.path, 'exec', '-i', 'harness-browser-a1', 'socat', 'STDIO', 'TCP:127.0.0.1:5900'] })
-    // And the core starts it: its one command for the agent browser (core/api.ts).
-    expect(agentBrowserStreamCommand((port.streamCommand('a1') as { argv: string[] }).argv)).not.toBeNull()
+    const stream = v.open(port, 'a1')
+    expect(stream).toMatch(/^[0-9a-f-]{36}$/)
+    expect(v.pipes.map(pipe => pipe.args)).toEqual([VNC_PIPE_ARGS('a1')])
+    // The screen's bytes go to the core under their stream, and its viewer's to the pipe.
+    v.pipes[0]!.stdout.write('RFB 003.008\n')
+    await eventually(() => expect(v.screen).toEqual([[stream, 0, 'RFB 003.008\n']]))
+    port.streamInput(stream, new TextEncoder().encode('RFB 003.008\n'))
+    expect(v.pipes[0]!.stdin.read()?.toString()).toBe('RFB 003.008\n')
+    // An ack is the stream's; a frame of no stream's kind is nobody's.
+    expect(port.stream('local:w', 'agent_browser_ack', { streamId: stream, bytes: 12 }, LOCAL)).toBe(true)
+    expect(port.stream('local:w', 'viewer_data', { streamId: stream }, LOCAL)).toBe(false)
+    expect(v.closes()).toEqual([])
+    expect(port.stream('local:w', 'agent_browser_close', { streamId: stream }, LOCAL)).toBe(true)
+    expect(v.closes()).toEqual([['local:w', stream, 'closed']])
+
+    // Who may open is `mayOpenBrowser`, here as in the core: never a share's guest or a plain owner.
+    expect(v.open(port, 'a1', SHARE_GUEST, 'share')).toBe('NOT_OWNER')
+    expect(v.open(port, 'a1', PLAIN_OWNER, 'web')).toBe('NOT_OWNER')
+    expect(v.pipes).toHaveLength(1)
+
     fake.reply('info --format json', { stdout: JSON.stringify({ version: { Version: '4.3.0' }, host: { memTotal: 8 * GiB } }) })
-    const old = start(fakeCore({ dataDir: mkdtempSync(join(dataDir, 'old-')) }))
+    const old = start(fakeCore({ dataDir: mkdtempSync(join(dataDir, 'old-')), clients: v.core.clients }))
     old.port.attached(session('a2'))
     await eventually(() => expect(old.port.frameContext('a2')).toEqual({ state: 'failed', error: 'podman_old' }))
-    expect(old.port.streamCommand('a2')).toEqual({ error: 'NOT_READY' })
+    expect(v.open(old.port, 'a2')).toBe('NOT_READY')
   })
 
-  it('a stop and a delete close the browser\'s viewers', async () => {
-    const { port } = start()
-    const closed: string[] = []
-    port.onCloseViewers(agentId => closed.push(agentId))
+  it('a stream ends with its connection, its route, a relay that refused a frame, and a viewer whose transport refused one', async () => {
+    const v = viewing()
+    const { port } = start(v.core, { podman: v.podman })
     port.attached(session('a1'))
     await ready(port, 'a1')
+    const gone = v.open(port, 'a1', OTHER_DESKTOP, 'mac-2')
+    port.streamClosed('mac-2')
+    const moved = v.open(port, 'a1', OTHER_DESKTOP, 'mac-3')
+    // The gateway's word on its route, which it keeps; then that the route went away.
+    port.streamRoute(moved, 'direct')
+    expect(v.closes()).toEqual([['mac-2', gone, 'closed']])
+    port.streamRoute(moved, null)
+    const relayed = v.open(port, 'a1', OTHER_DESKTOP, 'mac-4')
+    port.streamTransportError()
+    const refused = v.open(port, 'a1')
+    port.streamRefused(refused)
+    expect(v.closes()).toEqual([['mac-2', gone, 'closed'], ['mac-3', moved, 'route'], ['mac-4', relayed, 'rate'], ['local:w', refused, 'backlog']])
+  })
+
+  it('a stop and a delete close the browser\'s viewers at once', async () => {
+    const v = viewing()
+    const { port } = start(v.core, { podman: v.podman })
+    port.attached(session('a1'))
+    port.attached(session('a2'))
+    await ready(port, 'a1')
+    await ready(port, 'a2')
+    const first = v.open(port, 'a1')
+    const second = v.open(port, 'a2', OTHER_DESKTOP, 'mac-2')
     port.stopped('a1')
-    port.deleted('a1')
-    expect(closed).toEqual(['a1', 'a1'])
+    port.deleted('a2')
+    // In the same turn, before any Podman call has ended.
+    expect(v.closes()).toEqual([['local:w', first, 'agent'], ['mac-2', second, 'agent']])
+  })
+
+  // Switched off in the core's process, nothing else would end a viewer's exec: it went on piping a screen nobody
+  // could use (review, 2026-11-13).
+  it('every viewer\'s stream ends as the service stops, and an open with nobody asking is no open', async () => {
+    const v = viewing()
+    const { port } = start(v.core, { podman: v.podman })
+    port.attached(session('a1'))
+    await ready(port, 'a1')
+    expect(port.stream('local:w', 'agent_browser_open', { requestId: 'r-0', agentId: 'a1' })).toBe(false)
+    expect(v.pipes).toEqual([])
+    const stream = v.open(port, 'a1')
+    expect(port.streamInput(stream, Uint8Array.of(1))).toBe(true)
+    port.stop()
+    expect(v.closes()).toEqual([['local:w', stream, 'agent']])
+    expect(v.pipes[0]!.kill).toHaveBeenCalled()
+  })
+
+  it('a stream whose exec does not start is NOT_READY', async () => {
+    const v = viewing()
+    const { port } = start(v.core, { podman: v.podman })
+    port.attached(session('a1'))
+    await ready(port, 'a1')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      vi.mocked(v.podman.spawn).mockImplementationOnce(() => { throw new Error('Podman is not installed') })
+      expect(v.open(port, 'a1')).toBe('NOT_READY')
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  // A core that offers a service no browser streams (one from before 2026-11-13, were it to run this service): the
+  // stream has nowhere to send, and ends at its first byte instead of piping a screen to nobody.
+  it('a stream on a core that takes none of its answers or bytes ends at its first byte', async () => {
+    const v = viewing(false)
+    const { port } = start(v.core, { podman: v.podman })
+    port.attached(session('a1'))
+    await ready(port, 'a1')
+    expect(port.stream('local:w', 'agent_browser_open', { requestId: 'r-1', agentId: 'a1' }, LOCAL)).toBe(true)
+    expect(v.pipes).toHaveLength(1)
+    v.pipes[0]!.stdout.write('RFB 003.008\n')
+    await eventually(() => expect(v.pipes[0]!.stdin.writableEnded).toBe(true))
   })
 
   it('frameContext follows state and calls core.agents.sync on change', async () => {
@@ -368,10 +489,14 @@ describe('the agent browser service', () => {
     port.attached(session('a1'))
     port.stopped('a1')
     port.deleted('a1')
-    // The core's browser streams listen on every port; on win32 no browser ever closes its viewers.
-    port.onCloseViewers(() => expect.unreachable())
     expect(port.frameContext('a1')).toBeUndefined()
-    expect(port.streamCommand('a1')).toEqual({ error: 'NO_BROWSER' })
+    // No stream is taken: the core refuses the open at once (core/browserStreams.ts), and the rest is told to nothing.
+    expect(port.stream('local:w', 'agent_browser_open', { requestId: 'r-1', agentId: 'a1' }, LOCAL)).toBe(false)
+    port.streamInput('s', Uint8Array.of(1))
+    port.streamClosed('local:w')
+    port.streamRoute('s', 'direct')
+    port.streamTransportError()
+    port.streamRefused('s')
     expect(fake.calls()).toEqual([])
     expect(spawn).not.toHaveBeenCalled()
     expect(run).not.toHaveBeenCalled()
@@ -562,10 +687,6 @@ describe('the agent browser service', () => {
     port.attached(session('a1'))
     await ready(port, 'a1')
     expect(await requests.agent_browser_state!({ pane: '%7' }, LOCAL)).toEqual({ agentId: 'a1', state: 'ready', podman: fake.path, connection: 'harness', human: 'normal' })
-    // And the exec into it, on that connection, is the one command the core starts (core/api.ts).
-    const command = port.streamCommand('a1') as { argv: string[] }
-    expect(command.argv).toEqual([fake.path, '--connection', 'harness', 'exec', '-i', 'harness-browser-a1', 'socat', 'STDIO', 'TCP:127.0.0.1:5900'])
-    expect(agentBrowserStreamCommand(command.argv)).toEqual(command.argv)
   })
 
   it('a failed browser\'s state names its failure', async () => {
@@ -1443,20 +1564,24 @@ describe('the browser moves with its pane', () => {
     await eventually(() => expect(secretsRemoved('a1')).toBe(2))
     c.move('a1', 'a2')
     await ready(c.port, 'a2')
-    expect(c.port.streamCommand('a2')).toEqual({ argv: [fake.path, 'exec', '-i', 'harness-browser-a1', 'socat', 'STDIO', 'TCP:127.0.0.1:5900'] })
     const snapshot = c.run('snapshot', {}, { pane: '%8' })
     await c.line(1)
     expect(c.tools.map(tool => tool.args)).toEqual([TOOL_SERVER_ARGS('a1')])
     c.tools[0]!.answer(page('moved'))
     expect(await snapshot).toMatchObject({ ok: true, text: 'moved' })
+    // A viewer's stream is an exec too, which this spec's Podman hands back beside the tool servers.
+    expect(c.port.stream('local:w', 'agent_browser_open', { requestId: 'r-1', agentId: 'a2' }, LOCAL)).toBe(true)
+    expect(c.tools.map(tool => tool.args)).toEqual([TOOL_SERVER_ARGS('a1'), VNC_PIPE_ARGS('a1')])
   })
 
   it('a ready browser whose state file cannot be read has no stream to open', async () => {
-    const { port } = start()
+    const v = viewing()
+    const { port } = start(v.core, { podman: v.podman })
     port.attached(session('a1'))
     await ready(port, 'a1')
     writeFileSync(join(dataDir, 'agent-browser.json'), '{')
-    expect(port.streamCommand('a1')).toEqual({ error: 'NOT_READY' })
+    expect(v.open(port, 'a1')).toBe('NOT_READY')
+    expect(v.pipes).toEqual([])
   })
 
   // Review Focus 12.

@@ -172,6 +172,7 @@ Left since, with the core's process as `src/architecture.coreFiles.txt` lists it
 | The guests' accounts, loaded for a user-name check and a small runner; and a function nothing called (13 November) | 552 | 95,372 |
 | The probe of which engines this machine has: the edge host answers it and starts its login shells (13 November) | 550 | 95,029 |
 | The agent ledger, loaded for one erase in a delete: the agent cleanup erases what a harness was told, asked before anything is deleted. And the dial's recap of a cloud agent's last words, markdown a maker's agent wrote: its service works the card out and the core shows what it is handed (13 November) | 548 | 94,575 |
+| The agent browser's stream: the exec into a browser's container for each viewer, the reading of the viewer's VNC bytes, the credit and the pacing run in the agent browser's process. The core keeps a forwarder that holds each stream to the connection that opened it, bounds what it passes on by itself (an unanswered open, unread bytes), and sends the service's screen frames on unread, which costs it no more per byte than reading the pipe did (13 November) | 547 | 94,319 |
 
 ### 1. Code the core loads for one helper (low risk, about a day each)
 
@@ -199,7 +200,6 @@ this platform uses leaves them out. Low risk on a Mac and Linux, medium on a Win
 
 | What | Lines | Where to | Risk |
 | --- | ---: | --- | --- |
-| **The agent browser's stream.** The core starts the exec into the browser's container for each viewer, paces up to 2 MB/s on its own loop and reads the viewer's VNC bytes (`core/browserStreams.ts`, `core/rfbShaper.ts`) | 526 | agentBrowser: the stream manager whole, with its credit and pacing. The core keeps a forwarder of its nine calls, as for the viewers (`core/viewerStreams.ts`, 50 lines), carries the bytes both ways as binary frames on the service's link, as the gateway's are, and tells the service a send the transport refused | medium: 531 lines and 808 of tests, and real Podman runs only in CI |
 | **Feature routes in the two doors.** Pairing and keys, the account, desk and Store proxies, device and Wi-Fi routes, usage reports, voice, the relay to other machines (`hookServer.ts` 470, `localWsServer.ts` 430, `core/main.ts` about 320, `lib/deviceManagementHttp.ts` 199, `lib/storeProxy.ts` 48) | 1,470 | gateway, devices, edge, through one adapter that turns a route into a service request | medium |
 | **Git.** A create clones a repository or adds a worktree inside the core; every agent frame runs git for its project and branch (`lib/gitProject.ts`, `agentProject.ts`, `projectFolder.ts`, `sessionGitHistory.ts`, `sessionGitContext.ts`, `worktreeDeletion.ts`, `sshHosts.ts`, `scm/`) | 1,900 | edge (workspaces): a create asks for its folder, a frame reads a reported cache | medium |
 | **The product usage vocabulary** and the mapping of each request's outcome to counter names (`lib/productUsageContract.ts`, `productUsageSignals.ts`, `productHealthContract.ts`, `appProductUsageReport.ts`) | 723 | gateway: the core sends one raw outcome | low |
@@ -235,20 +235,20 @@ The core is the most trusted process: whoever runs code in it can type into ever
 today that the rule says it should not, most serious first:
 
 1. **The core ran a command line a service handed it.** The agent browser's process gave the core an argv, and the
-   core started it for each viewer (`core/agentBrowserLink.ts`, `core/browserStreams.ts`). Narrowed on 13 November:
-   the core starts one command for the agent browser and no other, Podman's exec into a browser's container and the
-   pipe to its screen (`core/api.ts` `agentBrowserStreamCommand`), checked where the process names it and again where
-   it is started. Still that process's to say: which file is Podman, and which of its containers is an agent's. Both
-   end, with the stream itself, when it leaves the core (part 2).
+   core started it for each viewer (`core/agentBrowserLink.ts`, `core/browserStreams.ts`). Fixed on 13 November: the
+   stream is the agent browser's own, in its process (`services/agentBrowser/streams.ts`), and the core starts no
+   command for it and is handed none. What the core still decides is who may open a browser's stream, and whose each
+   stream is: the screen's bytes go only to the connection that opened it, which the service never names.
 2. **An experiment's process could call any backend route as the account.** `core/experimentQueries.ts` signed any
    `/api/` path for the orchestrator, Share, Memories, the router, the Swarm and cloud agents. Fixed on 13 November:
    each declares its routes (`core/api.ts` `EXPERIMENT_BACKEND_ROUTES`), as Agent Messages does, and the core signs
    no other: the Swarm's own API and `GET /api/auth/me`, Share's grants and links, Jev's decision, and none for the
    other three. A refused route is said in the core's log. What the Swarm's process may still ask is all of the
    Swarm's API, not only the routes its service calls: an app's asks go through that service.
-3. **Bytes from outside this computer are parsed in the core:** a remote viewer's VNC bytes (`core/rfbShaper.ts:117-147`),
-   a paste of up to 20 MB from a remote client (`lib/terminalStreamManager.ts:1003-1234`), a third-party
-   `harness.json` (`dsh/manifest.ts`). And what agents write: fourteen engines' transcripts and SQLite stores
+3. **Bytes from outside this computer are parsed in the core:** a paste of up to 20 MB from a remote client
+   (`lib/terminalStreamManager.ts:1003-1234`), a third-party `harness.json` (`dsh/manifest.ts`). A remote viewer's
+   VNC bytes were (`core/rfbShaper.ts`), until 13 November: the agent browser's process reads them now, and the
+   core passes them on unread. And what agents write: fourteen engines' transcripts and SQLite stores
    (`core/transcripts/attach.ts:415-599`), with `node:sqlite` on threads inside the core.
 4. **The core's loop can be held.** A registry save: its lock can sleep the loop for 2 s, and its three fsyncs took
    about 60 ms of a save measured on a Mac (a synchronous `ps` on every save, for a start time that never changes,

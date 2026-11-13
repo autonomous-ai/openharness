@@ -7,7 +7,7 @@ import { MESSAGES_REQUESTS, SHARE_REQUESTS, type Asker, type LocalWindows, type 
 import { ServiceUnavailableError } from './core/serviceHost.js'
 import { countWindows } from './lib/windowSurfaces.js'
 import type { ViewerStreams } from './core/viewerStreams.js'
-import type { BrowserStreamManager } from './core/browserStreams.js'
+import type { BrowserStreams } from './core/browserStreams.js'
 import type { ActivityFrame } from './lib/turnActivity.js'
 import { MonitorCompletions } from './lib/harnessMonitor.js'
 import type { WifiCore } from './core/wifi.js'
@@ -42,7 +42,7 @@ import { terminalHandoffRequest } from './lib/terminalHandoff.js'
 import { OwnerCommands, ROUTE_COMMAND_TYPES } from './lib/ownerCommands.js'
 import { VIEWER_DOWN_TYPES } from './lib/viewerFrames.js'
 import type { TerminalStreamManager } from './lib/terminalStreamManager.js'
-import { encodeTerminalLocal, TerminalBinaryKind, type TerminalBinaryClear } from './lib/terminalBinary.js'
+import { decodeTerminalLocal, encodeTerminalLocal, TerminalBinaryKind, type TerminalBinaryClear } from './lib/terminalBinary.js'
 import { BACKEND_ONLY_DOWN_TYPES, GATEWAY_REQUEST_TYPES, isLocalClientId, logSafeType, PAIR_REQUESTS, PLATE_REQUEST, rpcResultType, type DownTransport } from './lib/relayFrames.js'
 import { sid, logFrame } from './lib/log.js'
 import { spreadNotice } from './lib/spreadNotice.js'
@@ -124,7 +124,7 @@ export class BackendSocket {
   /** The windows that are `harness tui`, not the desktop app: each surface is its own presence. */
   private readonly tuiClients = new Set<string>()
   private terminalStreams: TerminalStreamManager | null = null
-  private browserStreams: BrowserStreamManager | null = null
+  private browserStreams: BrowserStreams | null = null
   private onStatus: (connected: boolean) => void
   /** Cross-instance commander (device) client count, as the gateway reads it from the backend. */
   private commanderCount = 0
@@ -535,8 +535,8 @@ export class BackendSocket {
     this.terminalStreams = manager
   }
 
-  setBrowserStreams(manager: BrowserStreamManager): void {
-    this.browserStreams = manager
+  setBrowserStreams(streams: BrowserStreams): void {
+    this.browserStreams = streams
   }
 
   /** The account's private harness grid name, as the backend last reported it. Null until the first
@@ -728,6 +728,16 @@ export class BackendSocket {
       return frame ? local.sendBinary(frame) : false
     }
     return this.throughGateway('terminal', (gateway) => gateway.terminalBinary(connId, clear), false)
+  }
+
+  /** A frame already on a window's wire (`encodeTerminalLocal`): as it is to a window here, and read for the gateway,
+   *  which seals it for another machine. A browser stream's screen, framed once by its service (core/browserStreams.ts).
+   *  False when it reached nobody, or is no such frame. */
+  sendTerminalLocalFrameTo(connId: string, frame: Uint8Array): boolean {
+    const local = this.localClients.get(connId)
+    if (local) return local.sendBinary(frame)
+    const clear = decodeTerminalLocal(frame)
+    return clear ? this.throughGateway('terminal', (gateway) => gateway.terminalBinary(connId, clear), false) : false
   }
 
   /** Send a user-level notification to every logged-in browser that owns this machine. */
@@ -1110,7 +1120,8 @@ export class BackendSocket {
       return
     }
 
-    // An agent browser's stream (core/browserStreams.ts), which decides who may open one. Its route is the gateway's.
+    // An agent browser's stream, which is its service's: handed on by core/browserStreams.ts, which decides who may open
+    // one and holds each to the connection that opened it. Its route is the gateway's.
     if (type === 'agent_browser_open') { this.browserStreams?.open(connId, payload); return }
     if (type === 'agent_browser_ack') { this.browserStreams?.ack(connId, payload); return }
     if (type === 'agent_browser_close') { this.browserStreams?.close(connId, payload); return }

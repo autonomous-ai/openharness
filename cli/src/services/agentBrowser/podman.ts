@@ -28,10 +28,8 @@ export type Availability =
 export interface Podman {
   path(): Promise<string | null>
   run(args: string[], opts?: { timeoutMs?: number; stdin?: string }): Promise<{ stdout: string; stderr: string }>
+  /** Throws `needs_setup` until Podman has been found. */
   spawn(args: string[]): ChildProcess
-  /** The command line `spawn` runs for [args], for a process the core starts itself (a browser stream's exec,
-   *  core/browserStreams.ts). Throws `needs_setup` until Podman has been found. */
-  argv(args: string[]): string[]
   available(): Promise<Availability>
   startMachine(): Promise<void>
   memoryBytes(): Promise<number>
@@ -100,11 +98,6 @@ export function createPodman(deps: {
     return found
   }
 
-  function argv(args: string[]): string[] {
-    if (!found) throw new PodmanError('needs_setup', 'Podman is not installed')
-    return [found, ...onConnection(args)]
-  }
-
   async function run(args: string[], opts: { timeoutMs?: number; stdin?: string } = {}): Promise<{ stdout: string; stderr: string }> {
     const file = await path()
     if (!file) throw new PodmanError('needs_setup', 'Podman is not installed')
@@ -159,10 +152,9 @@ export function createPodman(deps: {
     path,
     run,
     spawn(args) {
-      const [file, ...rest] = argv(args)
-      return spawn(file, rest, { env: oneShotParentEnv(), stdio: 'pipe', ...ownProcessGroup() })
+      if (!found) throw new PodmanError('needs_setup', 'Podman is not installed')
+      return spawn(found, onConnection(args), { env: oneShotParentEnv(), stdio: 'pipe', ...ownProcessGroup() })
     },
-    argv,
     available() {
       if (cached && now() - cached.at < AVAILABLE_CACHE_MS) return cached.answer
       cached = { at: now(), answer: measure() }

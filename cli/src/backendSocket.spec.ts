@@ -27,7 +27,7 @@ import { AuthSessionError, type AuthSessionManager } from './lib/authSession.js'
 import { WS_IDLE_DEADLINE_MS as IDLE_DEADLINE_MS } from './lib/wsLiveness.js'
 import { TerminalStreamManager } from './lib/terminalStreamManager.js'
 import type { TerminalBackendCoordinator } from './lib/terminalBackendCoordinator.js'
-import { decodeTerminalLocal, TerminalBinaryKind } from './lib/terminalBinary.js'
+import { decodeTerminalLocal, encodeTerminalLocal, TerminalBinaryKind } from './lib/terminalBinary.js'
 import { registry, type RegisteredSession } from './lib/registry.js'
 import { stoppedAgents } from './lib/stoppedAgents.js'
 import { AgentStopError } from './lib/stopAgentService.js'
@@ -2475,6 +2475,10 @@ describe('BackendSocket outbound queue', () => {
     expect(handleBinary).toHaveBeenCalledWith('local:terminal', clear)
     expect(socket.sendTerminalBinaryTo('local:terminal', clear)).toBe(true)
     expect(decodeTerminalLocal(binary[0])).toEqual(clear)
+    // A frame its maker framed already (a browser stream's screen, core/browserStreams.ts) goes to a window as it is.
+    const framed = encodeTerminalLocal(clear)!
+    expect(socket.sendTerminalLocalFrameTo('local:terminal', framed)).toBe(true)
+    expect(binary[1]).toBe(framed)
 
     socket.connect()
     const ws = wsMock.instances[0]
