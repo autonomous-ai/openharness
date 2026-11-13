@@ -580,5 +580,14 @@ class LocalRunTests(GitFixture, unittest.TestCase):
                          {"cli-core": dict(command="npm run test:core", cwd="cli", platform=None)})
 
 
+class PullRequestTemplateTests(unittest.TestCase):
+    # A body opened from the template and given --run's output must hold one fence: two are refused.
+    def test_the_template_names_run_and_carries_no_fence_of_its_own(self):
+        template = (SCRIPTS.parent / ".github/pull_request_template.md").read_text()
+        self.assertIn("`python3 scripts/local-checks.py --run`", template)
+        self.assertNotIn("--list", template)
+        self.assertEqual(checks.FENCE.findall(template), [])
+
+
 if __name__ == "__main__":
     unittest.main()
