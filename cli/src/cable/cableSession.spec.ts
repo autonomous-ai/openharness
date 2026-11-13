@@ -5971,7 +5971,7 @@ describe('the machine list with no window', () => {
     } finally { await session.stop(); vi.useRealTimers() }
   })
 
-  it('window flip coalesces to one push per second', async () => {
+  it('window flip coalesces the machine list to one push per second', async () => {
     // The app opening and closing quickly: each flip is a `swarms` announcement and a sync of its own.
     vi.useFakeTimers({ toFake: ['Date', 'performance'] })
     let open = true
@@ -5984,12 +5984,27 @@ describe('the machine list with no window', () => {
         vi.advanceTimersByTime(90)
         await session.syncAgents()
       }
-      expect(ends(port)).toEqual([{ t: 'agents.end', total: 5, tab: '', view: 'machine' }])
-      // The window ended open: a second later the dial is told so, once.
+      // The first close, then the next opening at once; every machine list after it waits out the second, and the
+      // window ended open, as the dial was told.
+      expect(ends(port)).toEqual([{ t: 'agents.end', total: 5, tab: '', view: 'machine' }, { t: 'agents.end', total: 2, tab: 't1' }])
       vi.advanceTimersByTime(1_000)
       await session.syncAgents()
       await session.syncAgents()
-      expect(ends(port).slice(1)).toEqual([{ t: 'agents.end', total: 2, tab: 't1' }])
+      expect(ends(port)).toHaveLength(2)
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
+  it('the switch into a window goes at once, within the second', async () => {
+    // A window's list must reach the dial before the focus that follows it, as before the machine list.
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    let open = false
+    const { session, port } = await greeted(() => open ? WINDOW : machine())
+    try {
+      port.sent.length = 0
+      open = true
+      vi.advanceTimersByTime(100)
+      await session.syncAgents()
+      expect(ends(port)).toEqual([{ t: 'agents.end', total: 2, tab: 't1' }])
     } finally { await session.stop(); vi.useRealTimers() }
   })
 
