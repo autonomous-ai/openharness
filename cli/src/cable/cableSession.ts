@@ -390,6 +390,7 @@ import type { TurnStatsFields } from './turnStats.js'
 import type { Tier } from '../lib/notifyTier.js'
 import type { CardChat, CardSide, LeadNotice, LeadRecap, SaidOnCard, SwarmBuddy, SwarmCard, SwarmChat, SwarmLead } from '../superTabs/cards.js'
 import { truncateUtf8 } from '../lib/deviceRecentTrim.js'
+import { hostDisplayName } from './hosts/hostDetect.js'
 
 export interface RouteDecision {
   agentId: string
@@ -469,6 +470,13 @@ export interface CableHost {
   answer(agentId: string, requestId: string, answers: Record<string, string>): void
   answerReviewed?(answer: ReviewedAnswer): Promise<AnswerReceipt>
   canSpeakQuestion?(agentId: string): boolean
+  /** What the dial may do with an agent of the machine list, as letters of s v f a; undefined (an older host, a
+   *  window, an agent it does not list) means everything, as before. */
+  capsOf?(agentId: string): string | undefined
+  /** The app or terminal that agent runs in (`orca`, `ghostty`, …), for the words of a refusal. */
+  hostOf?(agentId: string): string | undefined
+  /** The dial is on that agent: its finished answer counts as seen. */
+  markSeen?(agentId: string): void
   focus(agentId: string): void
   /**
    * "Put this one in front of me" — a NOTIFICATION was tapped.
@@ -932,6 +940,9 @@ export class CableSession {
   private readonly questionInbox = new QuestionInbox()
   private voiceGeneration = 0
   private voiceUploadId = ''
+  /** A recording refused at `voice.begin` (its agent has no `v`), said on `voice.end`: today's firmware drops a voice
+   *  error that arrives before the person lets go. Any later turn, abort or close moves the generation on and drops it. */
+  private voiceRefusal?: { generation: number; message: string }
 
   constructor(
     private readonly host: CableHost,
@@ -1522,6 +1533,12 @@ export class CableSession {
       case 'focus':
         if (str('agentId')) {
           const agentId = str('agentId')!
+          // The dial sends focus on every swipe, so an agent it cannot bring forward is passed over without a toast,
+          // which would fire on each turn of the carousel. Turning to it still means its answer was seen.
+          if (this.lacks(agentId, 'f')) {
+            this.host.markSeen?.(agentId)
+            return
+          }
           const now = Date.now()
           const expectationActive = this.expectedAppFocusEcho !== ''
             && now <= this.expectedAppFocusEchoUntil
@@ -1712,6 +1729,10 @@ export class CableSession {
           for (const [k, v] of Object.entries(answers as Record<string, unknown>)) {
             if (typeof v === 'string') flat[k] = v
           }
+          if (this.lacks(agentId, 'a')) {
+            await this.toast(`This agent is in ${this.hostName(agentId)}. Answering it from the device comes in an update.`)
+            return
+          }
           this.host.answer(agentId, requestId, flat)
         }
         return
@@ -1793,6 +1814,14 @@ export class CableSession {
         const focused = plain && !dialFace && !swarmId ? this.host.appFocus?.() : undefined
         const agentId = focused?.agentId ?? str('agentId')
         const swarmFace = dialFace ?? (agentId ? this.voiceFaceOf(agentId, proFace) : undefined)
+        // Words for an agent's terminal that the dial cannot type into (an agent outside Harness): no audio is kept and
+        // nothing goes to the transcriber. A form, a search, a draft, a question or a Swarm chat is not its terminal.
+        if (agentId && !swarmFace && !formVoice && !searchVoice && !draftVoice && !questionVoice && this.lacks(agentId, 'v')) {
+          this.voice = null
+          this.voiceRefusal = { generation: this.voiceGeneration,
+            message: `This agent is in ${this.hostName(agentId)}. Talking to it from the device comes in an update.` }
+          return
+        }
         this.voice = {
           agentId,
           ...(swarmFace ? { swarmFace } : {}),
@@ -2229,6 +2258,9 @@ export class CableSession {
       return current() ? this.send({ ...message, ...(uploadId ? { uploadId } : {}) }) : Promise.resolve(false)
     }
     this.voice = null
+    const refusal = this.voiceRefusal?.generation === generation ? this.voiceRefusal.message : undefined
+    this.voiceRefusal = undefined
+    if (refusal) { await reply({ t: 'voice.error', message: refusal }); return }
     if (turn?.draft && (!turn.draft.pin || !this.voiceDraft.current(turn.draft.pin))) {
       await reply({ t: 'voice.error', message: 'That draft changed. Review it again.' }); return
     }
@@ -3778,5 +3810,15 @@ export class CableSession {
   }
   async toast(text: string): Promise<void> {
     await this.send({ t: 'toast', text })
+  }
+
+  /** The agent's host says the dial may not do this with it. A host that says nothing (an older one, a window) allows it. */
+  private lacks(agentId: string, cap: 'v' | 'f' | 'a'): boolean {
+    const caps = this.host.capsOf?.(agentId)
+    return caps !== undefined && !caps.includes(cap)
+  }
+
+  private hostName(agentId: string): string {
+    return hostDisplayName(this.host.hostOf?.(agentId) ?? '')
   }
 }

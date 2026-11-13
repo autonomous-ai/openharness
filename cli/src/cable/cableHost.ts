@@ -41,7 +41,7 @@ import { isTier, type Tier } from '../lib/notifyTier.js'
 import { HarnessSource } from './hosts/harness.js'
 import type { HostRegistry } from './hosts/registry.js'
 import { selectForDial } from './hosts/select.js'
-import { capsLetters } from './hosts/types.js'
+import { capsLetters, type HostAgent, type HostSource } from './hosts/types.js'
 
 /** One completed turn's recap, as the mirror keeps them. */
 
@@ -515,6 +515,30 @@ export class DaemonCableHost implements CableHost {
   /** Its changes reach the dial on the session's next tick, which reads the list every second. */
   setRegistry(registry: HostRegistry | null): void {
     this.registry = registry
+  }
+
+  /** An agent of the machine list and the source that holds it. With a window the dial holds the tab, whose agents
+   *  it may do everything with, so the registry is not asked. */
+  private onMachine(agentId: string): { agent: HostAgent; source: HostSource } | undefined {
+    const registry = this.swarms === null ? this.registry : null
+    const agent = registry?.agents().find((a) => a.id === agentId)
+    const source = agent && registry?.source(agentId)
+    return agent && source ? { agent, source } : undefined
+  }
+
+  capsOf(agentId: string): string | undefined {
+    const on = this.onMachine(agentId)
+    return on && capsLetters(on.source.capabilities(on.agent))
+  }
+
+  hostOf(agentId: string): string | undefined {
+    return this.onMachine(agentId)?.agent.host
+  }
+
+  markSeen(agentId: string): void {
+    // Not every source keeps unseen answers (HostSource has no markSeen); those that do are the Harness and observed ones.
+    const source = this.onMachine(agentId)?.source as { markSeen?(id: string): void } | undefined
+    source?.markSeen?.(agentId)
   }
 
   /** What the window still has unread, newest first. Empty until a window says otherwise. */

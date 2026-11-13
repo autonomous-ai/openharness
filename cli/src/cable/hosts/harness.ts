@@ -65,6 +65,14 @@ export class HarnessSource implements HostSource {
     this.emit()
   }
 
+  /** The person turned the dial to it: a done agent's answer has been seen, rather than staying unseen until its next turn. */
+  markSeen(agentId: string): void {
+    const noted = this.noted.get(agentId)
+    if (!noted?.unseenDone) return
+    this.noted.set(agentId, { ...noted, unseenDone: false })
+    this.emit()
+  }
+
   list(): HostAgent[] {
     return this.rows.map((r) => {
       const noted = this.noted.get(r.id)
