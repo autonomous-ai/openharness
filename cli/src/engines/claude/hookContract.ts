@@ -16,7 +16,9 @@ export const hooks: HookContract = {
     // Stop/StopFailure are the authoritative turn-close signals (Stop = normal finish incl. max_tokens/
     // refusal; StopFailure = turn ended on an API error, where Stop does NOT fire) — they close a turn even
     // when the JSONL-derived turn_ended is missed. Neither supports a matcher (silently ignored).
-    events: [{ event: 'SessionStart' }, { event: 'SessionEnd' }, { event: 'UserPromptSubmit' }, { event: 'Stop' }, { event: 'StopFailure' }],
+    // Notification is how a session outside a pane says it waits for the person, which the hook tells the devices
+    // (hook/notify.mjs); for a session in a pane the hook ignores it.
+    events: [{ event: 'SessionStart' }, { event: 'SessionEnd' }, { event: 'UserPromptSubmit' }, { event: 'Stop' }, { event: 'StopFailure' }, { event: 'Notification' }],
     timeout: 5,
     // Agent Messages: a teammate's message reaches a working agent at its next tool call (kit/messagesHook.ts).
     inbox: { event: 'PostToolUse' },
