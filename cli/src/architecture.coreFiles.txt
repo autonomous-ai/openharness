@@ -98,6 +98,7 @@ core/messagesLink.ts
 core/modelsLink.ts
 core/modelsWake.ts
 core/monitorLink.ts
+core/observedHook.ts
 core/orchestratorLink.ts
 core/questions.ts
 core/recapsLink.ts

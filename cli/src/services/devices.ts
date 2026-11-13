@@ -565,6 +565,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (event) toDial(event)
   }
   const port: DevicesPort = {
+    // A paneless session's hook event. The host sources take it once they are wired; until then it is dropped,
+    // as it is when no devices process runs at all.
+    observed: () => {},
     // Every card bound for the Wi-Fi devices goes down the cable too, translated once: a new kind of card
     // reaches the dial the day it reaches the backend's devices.
     // An engine's question takes the place of a Swarm wait on the devices, which shows again once it closes (cable/swarmWaits.ts).

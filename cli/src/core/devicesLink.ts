@@ -89,6 +89,7 @@ export function createDevicesLink(deps: DevicesLinkDeps) {
     engines: (engines) => event('engines', { engines }),
     commanders: (connected) => event('commanders', { connected }),
     asking: (agentIds) => event('asking', { agentIds }),
+    observed: (observed) => event('observed', { ...observed }),
     // Their own process: the master stops it, and a core that restarts leaves it running with the dial.
     stop: async () => {},
   }

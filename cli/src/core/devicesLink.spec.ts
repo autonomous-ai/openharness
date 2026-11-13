@@ -20,6 +20,12 @@ function link(answer: Record<string, unknown> = {}) {
 }
 
 describe('what the core tells the devices', () => {
+  it('carries a paneless agent\'s hook event as a notice of kind observed', () => {
+    const { sent, port } = link()
+    port.observed({ engine: 'claude', sessionId: 's1', event: 'turn-stop', callerPid: 9, hostHints: {}, at: 1 })
+    expect(sent).toEqual([{ type: 'service_event', payload: { engine: 'claude', sessionId: 's1', event: 'turn-stop', callerPid: 9, hostHints: {}, at: 1, kind: 'observed' } }])
+  })
+
   it('is a notice for each, by kind, carrying what the windows said', () => {
     const { sent, port } = link()
     port.card({ type: 'commander_event', agentId: 'a1' })

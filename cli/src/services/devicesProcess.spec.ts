@@ -21,7 +21,7 @@ function devicesPort() {
   const calls: Array<[string, unknown[]]> = []
   const record = (name: string) => (...args: unknown[]) => { calls.push([name, args]) }
   const port = {
-    card: record('card'), desk: record('desk'), swarms: record('swarms'), unread: record('unread'), appFocus: record('appFocus'),
+    card: record('card'), observed: record('observed'), desk: record('desk'), swarms: record('swarms'), unread: record('unread'), appFocus: record('appFocus'),
     seen: record('seen'), settings: record('settings'), windowFocus: record('windowFocus'), windowReply: record('windowReply'),
     voiceReply: record('voiceReply'), windowGone: record('windowGone'), scroll: record('scroll'), engines: record('engines'),
     commanders: record('commanders'),
