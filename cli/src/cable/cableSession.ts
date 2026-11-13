@@ -24,6 +24,7 @@ import { readCompanionIdentity, type CompanionIdentity } from './companionProtoc
 
 import { CABLE_MAX_PAYLOAD, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DialLog } from './dialLog.js'
+import { voiceLevel } from './voiceLevel.js'
 import { FirmwareTransfer, otaKeyFor } from './fwPush.js'
 import { PACK_VERSION } from './pets/pack.js'
 import { planPetSync } from './pets/sync.js'
@@ -2266,14 +2267,22 @@ export class CableSession {
     const seconds = turn.bytes / (turn.rate * 2)
     this.log(`cable: voice ${seconds.toFixed(1)}s (${Math.round(turn.bytes / 1024)} KB) → stt`)
 
+    const pcm = Buffer.concat(turn.chunks)
+    // One line per turn, numbers only: whether an empty transcript was silence on the dial or words the
+    // transcriber missed, and for which agent (OPENHARNES-18). No audio and no text.
+    const { peak, rms } = voiceLevel(pcm)
+    const heard = (transcript: string) => this.log(`cable: voice turn agent=${turn.agentId ?? 'none'} ` +
+      `cmd=${turn.cmd || 'none'} lang=${turn.lang} sr=${turn.rate} peak=${peak} rms=${rms} transcript=${transcript}`)
     let transcript: string
     try {
-      transcript = (await this.host.transcribe(Buffer.concat(turn.chunks), turn.rate, turn.lang)).trim()
+      transcript = (await this.host.transcribe(pcm, turn.rate, turn.lang)).trim()
     } catch (err) {
+      heard('failed')
       if (current()) { this.cancelFormVoice(); this.cancelSearchVoice() }
       await reply({ t: 'voice.error', message: (err as Error).message })
       return
     }
+    heard(String(transcript.length))
     if (!current()) return
     if (!transcript) {
       this.cancelFormVoice()
