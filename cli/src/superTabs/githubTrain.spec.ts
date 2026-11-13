@@ -195,7 +195,7 @@ function setup(project = 'acme/app') {
   // What the server keeps of what each change cost its builder (taskTokens.ts): nothing, unless a test says.
   const costs = vi.fn(async (_project: LedProject, _numbers: number[]): Promise<ReadRow[]> => [])
   const start = () => new GitHubMerge({ projects: async () => [{ repo: project, pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }],
-    crew: async () => crew, get: repo.get, send: repo.send, now: () => clock.now, log, records: new VerdictRecords(repo.authors, () => clock.now, log), costs, hot: () => [] })
+    crew: async () => crew, get: repo.get, send: repo.send, now: () => clock.now, log, records: new VerdictRecords(repo.authors, () => clock.now, log), costs, hot: () => [], others: () => new Set() })
   const f = {
     state, log, clock, costs, merger: start(), mark: repo.mark,
     /** A daemon restart: a new merger, which remembers nothing. */

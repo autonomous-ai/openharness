@@ -24,7 +24,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { TurnEnd } from '../core/api.js'
 import { named } from './agentReplies.js'
-import { builtOn, dependsOn, openPieces, readerKey, tasksOf } from './assign/crew.js'
+import { builtOn, dependsOn, markOf, openPieces, readerKey, swarmsOf, swarmsOwn, tasksOf } from './assign/crew.js'
 import { backLine, giveBack, labelNames } from './githubAssign.js'
 import type { WatchedAgent } from './githubMentions.js'
 import { FailingHeads, headChecks, isHeld, pullPeople, pullTalk, verdicts } from './githubMerge.js'
@@ -49,6 +49,9 @@ export const NEXT_TIMES = 1
  *  asked once; at an hour its person is told and its work is free to take"). The assigner's own watch, by GitHub's quiet alone,
  *  asks at 4 hours and moves at 8 (githubAssign.ts): it cannot see a session, and one that works for hours pushes nothing. */
 export const IDLE_ASK_MS = 20 * 60_000
+/** How long a repository with no label of an agent's Swarm is taken to have none, and how many pages of labels it is looked
+ *  for among, as the assigner does (githubAssign.ts). */
+const MARK_AGAIN_MS = 10 * 60_000, LABEL_PAGES = 10
 export const IDLE_BACK_MS = 60 * 60_000
 /** How long after it starts each of its agents is looked at as though its turn had just ended (Swarm plan, step 1, item 2: "Harness
  *  types it once after a restart"): a turn that ended while the daemon was down, for an update or a restart, was never heard, and
@@ -121,6 +124,9 @@ export class NextThing {
   /** The asks to read found made, gone or moved on (`agent:repo#N@sha`), so they are not read again while they are owed: each
    *  goes once GitHub news no longer keeps its ask, so it holds no more than those do. */
   private readonly answered = new Set<string>()
+  /** Each Swarm's label in a repository, by `<repository>|<Swarm's id>`: kept once found, and looked for again [MARK_AGAIN_MS]
+   *  on while there is none (own). */
+  private readonly marks = new Map<string, { mark: string | null; until: number }>()
   private readonly log: (line: string) => void
 
   constructor(private readonly deps: {
@@ -313,7 +319,7 @@ export class NextThing {
     // by label still comes.
     let offered: Promise<{ offers: TaskOffer[]; serverTime: number }> | null = null
     for (const repo of agent.repos) {
-      const items = await this.reads.current(repo, `/repos/${repo}/issues?state=open&labels=${encodeURIComponent(agent.label)}&per_page=100`, 1)
+      const items = await this.own(agent, repo, await this.reads.current(repo, `/repos/${repo}/issues?state=open&labels=${encodeURIComponent(agent.label)}&per_page=100`, 1))
       const tasks = items.filter(it => !it.pull_request && Number.isSafeInteger(it.number))
       const pulls = items.filter(it => it.pull_request && Number.isSafeInteger(it.number)).sort((a, b) => Number(a.number) - Number(b.number))
       const held = heldTask(items)
@@ -453,6 +459,25 @@ export class NextThing {
     if (ids.length) this.save(memory)
   }
 
+  /**
+   * Those of [items], the open issues and pull requests in [repo] that carry [agent]'s builder label, that are its own Swarm's
+   * (assign/crew.ts swarmsOwn). Builders in different Swarms may share a name: Dee's Swarm's Lennox was told every twenty minutes
+   * that it held #3880, which 0xken15's Swarm's Lennox held, and an hour idle it would have given that task back, its labels
+   * taken off and a line written on it (#4212). The Swarm's label there is found by the Swarm's id in its description, read
+   * only when there is something to tell apart, kept once found, and looked for again ten minutes on while there is none.
+   */
+  private async own(agent: WatchedAgent, repo: string, items: Record<string, unknown>[]): Promise<Record<string, unknown>[]> {
+    if (!items.length) return items
+    const key = `${repo}|${agent.tabId}`
+    let kept = this.marks.get(key)
+    if (!kept || kept.until <= Date.now()) {
+      const mark = markOf(await this.reads.current(repo, `/repos/${repo}/labels?per_page=100`, LABEL_PAGES), agent.tabId)?.toLowerCase() ?? null
+      kept = { mark, until: mark ? Infinity : Date.now() + MARK_AGAIN_MS }
+      this.marks.set(key, kept)
+    }
+    return items.filter(item => swarmsOwn(swarmsOf(item), kept.mark, !!item.pull_request))
+  }
+
   private async idleWith(agent: WatchedAgent, repo: string, number: number, title: string, since: number, back: number | undefined, floor: number): Promise<void> {
     const key = `${repo}#${number}`, what = titled(repo, { number, title }), name = agent.names[0]!
     // Whether this watch is the one its file keeps: a turn of its that ends while this awaits drops it, and its end's look starts the
@@ -462,7 +487,7 @@ export class NextThing {
       // Working, or nobody can say: its turn's end looks again.
       if (await this.deps.working(agent.harnessId) !== false) return
       const paused = (await this.deps.watched()).find(watched => watched.harnessId === agent.harnessId)?.paused
-      const items = paused ? [] : await this.reads.current(repo, `/repos/${repo}/issues?state=open&labels=${encodeURIComponent(agent.label)}&per_page=100`, 1)
+      const items = paused ? [] : await this.own(agent, repo, await this.reads.current(repo, `/repos/${repo}/issues?state=open&labels=${encodeURIComponent(agent.label)}&per_page=100`, 1))
       // Dropped while this read (a turn of its ended): what it did now would undo the next watch, its end's look's (review of #4129).
       if (!ours()) return
       // Paused since it was watched, whose time paused is no idle time, or the task not its own, taken, with no pull request of its yet:
@@ -481,7 +506,7 @@ export class NextThing {
       const given = await giveBack(this.deps.send, repo, number, agent.label, true)
       if ('refused' in given) return this.log(`[super-tab] next thing of agent ${agent.agentId}: ${key} not given back: GitHub answered ${given.refused}.`)
       if (given.takenKept !== null) this.log(`[super-tab] next thing of agent ${agent.agentId}: ${key} kept status:taken: GitHub answered ${given.takenKept}.`)
-      const said = await this.deps.send('POST', `/repos/${repo}/issues/${number}/comments`, { body: backLine(`${name} held it with nothing done for an hour`, hhmm(Date.now())) })
+      const said = await this.deps.send('POST', `/repos/${repo}/issues/${number}/comments`, { body: backLine(`${name} held it with nothing done for an hour`) })
       // Given back all the same: the labels say so. Its line held or refused is said here (githubWrites.ts holds a line said too often).
       if (said.status >= 300) this.log(`[super-tab] next thing of agent ${agent.agentId}: ${key}'s line not written: GitHub answered ${said.status}.`)
       // Posted as the agent, in its chat with its person, so said as it says it: "Pip held …" under Pip's own name read as no

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { addElsewhere, buildingIn, builtOn, contextOf, crewOf, learnedMinutes, openPieces, outOfQuota, startedAt, takenTasks, QUEUED_AWAY_MS, readerFor, takeBacks, TAKEN_AWAY_MS, CLAIM_LIMIT, dependsOn, hasRoom, heldTasks, labelOf, machineHas, MEMORY_SHARE, nextPicks, readProblem, reasonOf, RESERVE, SIZES, worksOnOf, type Crew, type CrewBuilder } from './crew.js'
+import { addElsewhere, buildingIn, builtOn, contextOf, crewOf, askedToRead, gaveTo, learnedMinutes, ofProject, openPieces, saidTo, toLine, tookLine, outOfQuota, startedAt, takenTasks, QUEUED_AWAY_MS, readerFor, takeBacks, TAKEN_AWAY_MS, CLAIM_LIMIT, dependsOn, hasRoom, heldTasks, labelOf, machineHas, MEMORY_SHARE, nextPicks, readProblem, reasonOf, RESERVE, SIZES, worksOnOf, type Crew, type CrewBuilder } from './crew.js'
 import { solve } from './search.js'
 
 type Json = Record<string, unknown>
@@ -521,11 +521,65 @@ describe('how long tasks take, learned (startedAt, learnedMinutes)', () => {
     expect(startedAt([c('Opened by deehw.', '2026-11-09T01:00:00Z'), c('Pip, 09:00, taken by Pip.', '2026-11-09T02:00:00Z')])).toBe(Date.parse('2026-11-09T02:00:00Z'))
     expect(startedAt([c('Harness, 09:00: for **Pip**: it can start now.', '2026-11-09T03:00:00Z')])).toBe(Date.parse('2026-11-09T03:00:00Z'))
     expect(startedAt([c('No start here.', '2026-11-09T03:00:00Z')])).toBeNull()
+    // As a builder and Harness say it since #4223: its name, a colon, and no clock.
+    expect(startedAt([c('Devon: please look at the parser first.', '2026-11-09T01:00:00Z'), c(tookLine('Pip'), '2026-11-09T02:00:00Z')])).toBe(Date.parse('2026-11-09T02:00:00Z'))
+    expect(startedAt([c(toLine('Pip', 'this is yours. You can start now.'), '2026-11-09T03:00:00Z')])).toBe(Date.parse('2026-11-09T03:00:00Z'))
+    expect(startedAt([c('Pip: On it. And then some.', '2026-11-09T03:00:00Z'), c(toLine('Pip', 'please read this pull request.'), '2026-11-09T04:00:00Z')])).toBeNull()
   })
 
   it('takes the median of each size once there are three, within ten minutes and a day', () => {
     expect(learnedMinutes([{ size: 's', minutes: 20 }, { size: 's', minutes: 40 }, { size: 's', minutes: 600 }, { size: 'm', minutes: 50 },
       { size: 'm', minutes: 70 }, { size: 'l', minutes: 2 }, { size: 'l', minutes: 3 }, { size: 'l', minutes: 4 }])).toEqual({ s: 40, l: 10 })
     expect(learnedMinutes([{ size: 'm', minutes: 3_000 }, { size: 'm', minutes: 3_000 }, { size: 'm', minutes: 3_000 }, { size: 'm', minutes: 10 }])).toEqual({ m: 1_440 })
+  })
+})
+
+// #4212: several Swarms build one repository, and builders in different Swarms may share a name.
+describe('which of a repository\'s issues and pull requests are a Swarm\'s (ofProject)', () => {
+  const pull = (number: number, body: string, labels: string[] = []): Json => ({ ...issue(number, labels, { body }), pull_request: {} })
+  const rows = [issue(1, ['swarm:acme']), issue(2, ['Swarm:Acme', 'builder:lennox']), issue(3, ['swarm:acme-0f0f0f0f', 'builder:lennox']), issue(4, ['size:s'])]
+
+  it('takes the issues that carry its Swarm\'s label, in any case, and none that carry another\'s or none', () => {
+    expect(rows.filter(ofProject(rows, 'swarm:acme')).map(row => row.number)).toEqual([1, 2])
+    expect(rows.filter(ofProject(rows, 'swarm:acme-0f0f0f0f')).map(row => row.number)).toEqual([3])
+  })
+  it('leaves a pull request with another Swarm\'s label, or with none and for an open issue that is not its Swarm\'s', () => {
+    const pulls = [pull(11, 'Closes #1'), pull(12, 'Closes #3'), pull(13, 'Closes #4'), pull(14, ''), pull(15, 'Closes #1', ['swarm:acme-0f0f0f0f']), pull(16, 'Closes #3', ['swarm:acme']),
+      { number: 17, labels: [], body: '', head: { ref: 'lennox/3' } }]
+    expect(pulls.filter(ofProject(rows, 'swarm:acme')).map(row => row.number)).toEqual([11, 14, 16])
+    // One for a task of its Swarm is its Swarm's, whatever else it names: a person's report it also fixes (Kiri's read of #4228).
+    expect([pull(18, 'Closes #1. Fixes #4'), pull(19, 'Closes #3. Fixes #4')].filter(ofProject(rows, 'swarm:acme')).map(row => row.number)).toEqual([18])
+  })
+})
+
+// #4223: Harness signs as every agent does, "Harness: …", with no clock; its lines from before stay on GitHub.
+describe('Harness\'s own lines, as it writes them now and as it did (toLine, saidTo, gaveTo, askedToRead)', () => {
+  const ASK = 'please read this pull request, then run `harness super-tab read ok acme/app#30 f6edb44 \'what you found\'`.'
+
+  it('reads what it said to someone in either form, to that one alone, on any line', () => {
+    expect(toLine('Juno', 'nothing has moved on this task for 5 h.')).toBe('Harness: Juno, nothing has moved on this task for 5 h.')
+    for (const line of ['Harness: Juno, nothing has moved on this task for 5 h.', 'Harness, 07:31, to **Juno**: nothing has moved on this task for 5 h.']) {
+      expect(saidTo(line, 'Juno')).toBe('nothing has moved on this task for 5 h.')
+      expect(saidTo(line, 'juno')).toBe('nothing has moved on this task for 5 h.')
+      expect(saidTo(`A word first.\n${line}`, 'Juno')).toBe('nothing has moved on this task for 5 h.')
+      expect(saidTo(line, 'Pip')).toBeNull()
+    }
+    expect(saidTo('Harness: Kai Lee, read it.', 'Kai')).toBeNull()
+    expect(saidTo('Juno: Harness: Juno, not its own line.', 'Juno')).toBeNull()
+  })
+  it('reads who it gave a task to in either form', () => {
+    expect(gaveTo('Harness: Pip, this is yours. You can start now.')).toBe('Pip')
+    expect(gaveTo('Harness: Pip, Jr, this is yours. You can start in 40 min.')).toBe('Pip, Jr')
+    expect(gaveTo('Harness, 09:30: for **Kai Lee**: it can start now.')).toBe('Kai Lee')
+    expect(gaveTo('Harness: Pip, please read this pull request.')).toBeNull()
+  })
+  it('reads the reader and the head of an ask to read in either form, each of its three asks, a comma in the name or not', () => {
+    expect(askedToRead(`Harness: Juno, ${ASK}`)).toEqual({ name: 'Juno', sha: 'f6edb44' })
+    expect(askedToRead(`Harness: Pip, Jr, ${ASK}`)).toEqual({ name: 'Pip, Jr', sha: 'f6edb44' })
+    expect(askedToRead(`Harness: Juno, the head is now f6edb44, after your HOLD on 1234567: please read it again, then run \`harness super-tab read ok acme/app#30 f6edb44 'what you found'\`.`)).toEqual({ name: 'Juno', sha: 'f6edb44' })
+    expect(askedToRead(`Harness: Juno, your READ-OK on 1234567 was typed, and only one made by command counts: please read it again, then run \`harness super-tab read ok acme/app#30 f6edb44 'x'\`.`)).toEqual({ name: 'Juno', sha: 'f6edb44' })
+    expect(askedToRead(`Harness, 14:20, to **Kai Lee**: ${ASK}`)).toEqual({ name: 'Kai Lee', sha: 'f6edb44' })
+    expect(askedToRead('Harness, 07:20, to **Atlas**: please read this pull request, and start your comment with READ-OK f6edb44 or HOLD f6edb44.')).toEqual({ name: 'Atlas', sha: 'f6edb44' })
+    expect(askedToRead('Harness: Juno, nothing has moved on this task for 5 h.')).toBeNull()
   })
 })

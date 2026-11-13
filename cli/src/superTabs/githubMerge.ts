@@ -27,7 +27,7 @@
  * every one was until 2026-11-10.
  */
 import { createHash } from 'node:crypto'
-import { dependsOn, labelOf, readerKey, sameKey, tasksOf, teamOf, type Crew } from './assign/crew.js'
+import { dependsOn, gaveTo, labelOf, readerKey, sameKey, tasksOf, teamOf, type Crew } from './assign/crew.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { GitHubReads, GitHubStop, PAGE, retryIn, STOP_ASKING, Waits, waitWords } from './githubRest.js'
 import { projectRepositorySlug, TEAM } from './githubMentions.js'
@@ -43,6 +43,8 @@ export const MERGE_INTERVAL_MS = 30_000
  *  repository has over a hundred open (lampOS and openharness about 110 each, 2026-11-10), and the team's own can be any of
  *  them. The newest thirty alone left an older team pull request unread and unmerged for good. */
 export const PULL_PAGES = 3
+/** How long the merger waits for the assigner's first read of a repository's pull requests before it says so. */
+const UNREAD_SAID_MS = 5 * 60_000
 export const openPullsPath = (repo: string): string => `/repos/${repo}/pulls?state=open&sort=updated&direction=desc&per_page=${PAGE}`
 /** How often the projects whose PM runs here are asked again: each ask reads the PM's Swarm. */
 const PROJECTS_FRESH_MS = 60_000
@@ -136,8 +138,6 @@ const FILES_KEPT = 1_000
  *  lampOS's merge-when-green.sh waits for "the same in two looks 30 s apart, from 3 min on". A head just pushed has no checks
  *  yet, which read as all passed, and a job that needs another gets its check only when that one ends. */
 const CHECKS_SETTLE_MS = 3 * 60_000
-/** How the assigner's word on a task begins when it gives it (githubAssign.ts give): "Harness, 09:30: for **Pip**: ...". */
-const GAVE = /^Harness, \d\d:\d\d: for \*\*([^*]+)\*\*: /
 /** How many notes are remembered, as the train bot keeps the last 5,000 lines of its told list. */
 const TOLD_MAX = 5_000
 /** Records asked for in one request (the backend takes at most 100 ids), how many are remembered, and how long after a comment
@@ -623,6 +623,9 @@ export class GitHubMerge {
   /** For each pull request off the team at a head, the builder Harness here gave its task and the task, or null: read once. */
   private readonly givenLeft = new Map<string, { name: string; task: number } | null>()
   private me: string | null = null
+  /** Since when each repository's pull requests wait for the assigner's first read (deps.others), and which were said to. */
+  private readonly unread = new Map<string, number>()
+  private readonly unreadSaid = new Set<string>()
   /** When each open team pull request's head (`<repo>#<number>@<head>`) was first seen, and its checks as last read: they count as
    *  passed only once they hold still (CHECKS_SETTLE_MS). Kept for the heads open now, so the memory is the open work. */
   private readonly seenAt = new Map<string, number>()
@@ -651,7 +654,12 @@ export class GitHubMerge {
      *  readTaskTokens), read as the project's PM. */
     costs: (project: LedProject, numbers: number[]) => Promise<ReadRow[]>
     /** The files most landings of [project] touch, as its day's scoreboard named them and its numbers keep them (pmNumbers.ts). */
-    hot: (project: LedProject) => readonly string[] }) {
+    hot: (project: LedProject) => readonly string[]
+    /** The open pull requests of [project]'s repository that are another Swarm's, as the assigner's last pass read them from the
+     *  repository's issues (githubAssign.ts, assign/crew.ts ofProject): builders in different Swarms may share a name, so a
+     *  `builder:` label and a branch alone do not say whose a pull request is (#4219). Null until that pass has read once:
+     *  nothing is landed or said before. The merger reads no task for it. */
+    others: (project: LedProject) => ReadonlySet<number> | null }) {
     this.now = deps.now ?? Date.now
     this.log = deps.log ?? (line => console.warn(line))
     this.reads = new GitHubReads(deps.get, this.now)
@@ -717,6 +725,20 @@ export class GitHubMerge {
     const pulls = listed.filter(pull => pull.draft !== true && object(pull.base).ref === base)
     // The team, read of the PM's Swarm (a changes read on the backend), only when a pull request could merge.
     if (!pulls.length) { this.forgetHeads(repo, new Set()); return }
+    const others = this.deps.others(project)
+    if (!others) {
+      // Said once it has lasted: every start waits a moment for the assigner's first pass, and one that fails each pass before
+      // it reads the pull requests would stop all landing with no word here (Kiri's read of #4228).
+      const since = this.unread.get(repo) ?? this.now()
+      this.unread.set(repo, since)
+      if (this.now() - since >= UNREAD_SAID_MS && !this.unreadSaid.has(repo)) {
+        this.unreadSaid.add(repo)
+        this.log(`[super-tab] merging by rule waits · ${repo}: task assignment has not read its pull requests yet, so none is landed`)
+      }
+      return
+    }
+    this.unread.delete(repo)
+    if (this.unreadSaid.delete(repo)) this.log(`[super-tab] merging by rule goes on · ${repo}`)
     const team = teamOf(await this.deps.crew(project), project.pm)
     const open = new Set<string>()
     const conflicts = (pull: { number: number; head: string; author: string; comments: Json[] }) =>
@@ -747,7 +769,7 @@ export class GitHubMerge {
       const number = Number(pull.number), head = String(object(pull.head).sha ?? '')
       if (!Number.isSafeInteger(number) || !/^[0-9a-f]{40}$/.test(head) || landed.has(number)) continue
       const author = authorOf(pull)
-      if (author === null || isHeld(pull)) continue
+      if (author === null || isHeld(pull) || others.has(number)) continue
       // The team's own pull requests only (assign/crew.ts teamOf): a person's merges as that person's repository does it.
       if (!team.has(labelOf(author))) {
         // Nor a task Harness here gave a builder who has left the team since: its PM is told, or it waits for good with nobody
@@ -855,7 +877,7 @@ export class GitHubMerge {
     for (const task of tasks) {
       const words = (await this.reads.current(repo, `/repos/${repo}/issues/${task}/comments?per_page=${PAGE}`, 3))
         .filter(c => TEAM.has(c.author_association) && String(object(c.user).login ?? '').toLowerCase() === me)
-        .map(c => GAVE.exec(String(c.body ?? '').slice(0, 500))?.[1]).filter((name): name is string => !!name)
+        .map(c => gaveTo(String(c.body ?? '').slice(0, 500))).filter((name): name is string => !!name)
       const last = words.at(-1)
       if (last && labelOf(last) === labelOf(author)) { found = { name: last, task }; break }
     }

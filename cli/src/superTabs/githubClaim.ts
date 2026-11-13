@@ -15,9 +15,9 @@
  * what is missing, and posts and records only what is not there. The comment is recorded with the backend as the calling
  * agent's (backend superTabs/githubComments.ts).
  */
-import { CLAIM_LIMIT, labelOf, openPieces } from './assign/crew.js'
+import { CLAIM_LIMIT, labelOf, markOf, openPieces, SWARM, tookLine } from './assign/crew.js'
 import type { GitHubReply } from './githubRest.js'
-import { hhmm, projectRepository, recordOwn, type ProjectRepositories, type VerdictDeps } from './githubVerdict.js'
+import { projectRepository, recordOwn, type ProjectRepositories, type VerdictDeps } from './githubVerdict.js'
 import { TAKE_MARGIN_MS } from './taskOffers.js'
 import { object, SuperTabHostError } from './wire.js'
 
@@ -44,18 +44,49 @@ export function claimAsked(payload: Record<string, unknown>): Claim | null {
 export const splitHint = (at: string): string => `Too big for one pull request? harness super-tab split ${at} s|m|l 'TITLE' 'WHAT IT IS' `
   + 'cuts a piece off it, and Harness gives that piece to the builder who can ship it soonest.'
 
+/** Pages of a hundred of a repository's labels its Swarm's is looked for among, as the assigner does (githubAssign.ts). */
+const LABEL_PAGES = 10
+
+/**
+ * Whether an issue with [labels] is a task of the Swarm with id [swarm]: it carries that Swarm's label, the one whose
+ * description holds its id among the repository's ([listed], read only when needed). Builders in different Swarms may share a
+ * name, so `builder:lennox` alone says nothing of whose it is: Dee's Swarm's Lennox heard of, and could take, #3880, which
+ * 0xken15's Swarm's Lennox held (#4212, #4219). A Swarm with no label in the repository yet (its PM's Harness is a CLI from before
+ * the label, until 2026-12-14, 30 days after the one that writes it is released) is read as before: every task that carries no
+ * Swarm's label.
+ */
+export async function swarmTask(labels: readonly string[], listed: () => Promise<Record<string, unknown>[]>, swarm: string): Promise<boolean> {
+  const swarms = labels.map(label => label.toLowerCase()).filter(label => label.startsWith(SWARM))
+  const mark = markOf(await listed(), swarm)?.toLowerCase()
+  return mark ? swarms.includes(mark) : !swarms.length
+}
+
+/** A repository's labels, a few pages of them. */
+async function repositoryLabels(github: (call: () => Promise<GitHubReply>) => Promise<GitHubReply>, deps: VerdictDeps, repository: string,
+  refused: (status: number) => SuperTabHostError): Promise<Record<string, unknown>[]> {
+  const labels: Record<string, unknown>[] = []
+  for (let page = 1; page <= LABEL_PAGES; page++) {
+    const read = await github(() => deps.get(`/repos/${repository}/labels?per_page=${PAGE}&page=${page}`, null))
+    if (read.status !== 200 || !Array.isArray(read.body)) throw refused(read.status)
+    labels.push(...read.body.map(object))
+    if (read.body.length < PAGE) break
+  }
+  return labels
+}
+
 /** An issue's labels as GitHub compares them: whatever their case. */
 export const labelsOf = (labels: unknown): string[] => (Array.isArray(labels) ? labels.map(object) : []).map(label => String(label.name ?? '').toLowerCase())
 /**
  * Takes [asked] for [builder]: marks it `status:taken`, says so in a comment under the builder's name, and records the
  * comment as the builder's. Refused, with nothing changed: a repository that is no project of the builder's, an issue that is
- * closed, a pull request or cannot be read, one not given to this builder, and a claim past CLAIM_LIMIT (assign/crew.ts). What
+ * closed, a pull request or cannot be read, one not given to this builder, another Swarm's (swarmTask), and a claim past
+ * CLAIM_LIMIT (assign/crew.ts). What
  * the builder holds is read, then added to: takes of several tasks at the same moment can pass the limit by a few, as GitHub's
  * list is a little behind its writes. `taken` is whether this command changed anything: a task taken in full already is not
  * taken again. `split` is how a task too big is cut. A task held by an offer (OfferHold) gets the builder's label and the claim's
  * in one call; one this cannot take after all (its limit, or another builder's label put on meanwhile) has its offer declined.
  */
-export async function takeTask(deps: VerdictDeps, builder: { name: string; repositories: ProjectRepositories }, asked: Claim,
+export async function takeTask(deps: VerdictDeps, builder: { name: string; repositories: ProjectRepositories; swarm: string }, asked: Claim,
   offers: OfferHold): Promise<{ url: string; taken: boolean; split: string }> {
   const name = builder.name.trim()
   if (!name) throw new SuperTabHostError('AGENT_UNNAMED', 'This agent has no name to take a task under.', 409)
@@ -87,6 +118,9 @@ export async function takeTask(deps: VerdictDeps, builder: { name: string; repos
   const another = (held: string[]) => held.find(label => label.startsWith('builder:') && label !== mine)
   // Which builder is not said: a label is anyone's words.
   if (another(labels)) throw new SuperTabHostError('TASK_NOT_YOURS', `${at} is given to another builder.`, 409)
+  if (!await swarmTask(labels, () => repositoryLabels(github, deps, repository, refused), builder.swarm)) {
+    throw new SuperTabHostError('TASK_NOT_YOURS', `${at} is not a task of your Swarm: it does not carry your Swarm's label.`, 409)
+  }
   // With no builder's label it is this builder's only on an offer its computer accepted that holds it long enough for the labels
   // to land before another builder may be offered it (taskOffers.ts TAKE_MARGIN_MS). One taken with no builder's label is a
   // person's.
@@ -149,10 +183,11 @@ export async function takeTask(deps: VerdictDeps, builder: { name: string; repos
   let comment: Record<string, unknown> | undefined
   if (!changed) {
     const login = String((await github(async () => ({ status: 200, etag: null, resetAt: null, body: await deps.login() }))).body).toLowerCase()
+    // As it says it now, or as it did with its clock ("Pip, 14:05: taken by Pip"), which stays on tasks taken before (#4223).
     const open = `${name}, `, close = `: taken by ${name}`
     const own = (said: Record<string, unknown>): boolean => {
       const line = String(said.body ?? '').split('\n')[0] ?? ''
-      return line.startsWith(open) && line.endsWith(close) && /^\d\d:\d\d$/.test(line.slice(open.length, line.length - close.length))
+      return (line === tookLine(name) || line.startsWith(open) && line.endsWith(close) && /^\d\d:\d\d$/.test(line.slice(open.length, line.length - close.length)))
         && String(object(said.user).login ?? '').toLowerCase() === login
     }
     const last = Math.max(1, Math.ceil((Number(issue.comments) || 0) / PAGE))
@@ -163,7 +198,7 @@ export async function takeTask(deps: VerdictDeps, builder: { name: string; repos
     }
   }
   if (!comment) {
-    const made = await github(() => deps.send('POST', `${task}/comments`, { body: `${name}, ${hhmm((deps.now ?? Date.now)())}: taken by ${name}` }))
+    const made = await github(() => deps.send('POST', `${task}/comments`, { body: tookLine(name) }))
     if (made.status !== 201) throw refused(made.status)
     comment = object(made.body)
     changed = true

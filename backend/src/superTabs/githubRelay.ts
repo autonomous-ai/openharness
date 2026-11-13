@@ -44,14 +44,36 @@ export type GitHubRelay = z.infer<typeof githubRelaySchema>
 
 const VERDICTS = { APPROVED: 'Approved', CHANGES_REQUESTED: 'Changes requested', COMMENTED: 'Commented' } as const
 
-/** The row's words, which its agent reads; a Desktop that meets a server before this one draws a card from its source. */
-export function relayText(command: GitHubRelay): string {
+/** Harness's own name on the lines it writes on GitHub with its PM's person's login. */
+const HARNESS = 'Harness'
+const sameName = (name: string): string => name.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')
+
+/**
+ * The agent that signed [text], and the text after its signature, or null. Every agent of a person posts on GitHub with that
+ * person's login and opens its comment with its name, so "deehw wrote: Devon: Lennox, …" named only the login Devon posts with
+ * (anh Dee, 2026-11-12: each comment credited to the agent who wrote it). The forms agents and Harness write: "Devon: …",
+ * "**Faye** (PM): …", and the older "Lennox, 16:52: …" and "Harness, 17:15, to **Kiri**: …", which stay on GitHub. A name
+ * counts only when it is one of the Swarm's agents' ([names]) or Harness's: "Note: …" is no signature, nor is "Devon, can you
+ * look?", how a person addresses an agent. The comment is a team login's already (githubRelaySchema's association).
+ */
+export function signedBy(text: string, names: readonly string[]): { name: string; text: string } | null {
+  const found = /^\s*\**([^:,(*\n]{1,60}?)\**\s*(?:\([^)\n]{1,40}\)\s*)?(?:,\s*\d{1,2}:\d{2}\s*(?:,\s*to\s+\**[^:*\n]{1,60}\**\s*)?)?:\s*/.exec(text)
+  if (!found) return null
+  const key = sameName(found[1]!), name = [...names, HARNESS].find(known => sameName(known) === key), rest = text.slice(found[0].length).trim()
+  return name && key && rest ? { name, text: rest } : null
+}
+
+/** The row's words, which its agent reads; a Desktop that meets a server before this one draws a card from its source. Who
+ *  wrote is the agent of [names], the Swarm's, that signed the comment, with its signature left out; else its GitHub login. */
+export function relayText(command: GitHubRelay, names: readonly string[] = []): string {
   const where = `${command.on === 'pull' ? 'pull request' : 'issue'} ${command.repository}#${command.number}`
+  const signed = command.event === 'task' ? null : signedBy(command.text, names)
+  const who = signed?.name ?? command.login
   const head = command.event === 'task' ? `New task for you on GitHub: ${where} ${command.text}`
-    : command.event === 'review' ? `On GitHub, ${command.login} reviewed ${where}: ${VERDICTS[command.verdict!]}`
-    : command.event === 'review-comment' ? `On GitHub, ${command.login} commented on ${command.path}${command.line ? ` line ${command.line}` : ''} in ${where}:`
-    : `On GitHub, ${command.login} wrote on ${where}:`
-  return command.event === 'task' ? `${head}\n${command.url}` : `${head}\n${command.text}\n${command.url}`
+    : command.event === 'review' ? `On GitHub, ${who} reviewed ${where}: ${VERDICTS[command.verdict!]}`
+    : command.event === 'review-comment' ? `On GitHub, ${who} commented on ${command.path}${command.line ? ` line ${command.line}` : ''} in ${where}:`
+    : `On GitHub, ${who} wrote on ${where}:`
+  return command.event === 'task' ? `${head}\n${command.url}` : `${head}\n${signed?.text ?? command.text}\n${command.url}`
 }
 
 /** Each kind with what it needs and nothing it cannot have: a task is an issue's; a review has a verdict; a line's comment a file. */
@@ -78,7 +100,9 @@ export function relayGitHub(state: SuperTabState, actor: Actor, command: GitHubR
   // Only a link into the repository it names: the card opens it.
   if (!command.url.startsWith(`https://github.com/${command.repository}/`)) fail('VALIDATION_ERROR', 'Link to the comment or issue on GitHub.', 400)
   messages.push({ id: operationId, conversationId: chat.id, author: author(state, actor), replyTo: null, recipients: [target.id],
-    text: relayText(command),
+    // Never the agent it is for: its own posts are not relayed to it (cli githubMentions.ts), so its name first is someone
+    // addressing it ("Pip: add a test for day 0.").
+    text: relayText(command, state.agents.filter(one => one.id !== target.id).map(one => one.displayName ?? one.name)),
     source: { kind: GITHUB_SOURCE, event: command.event, on: command.on, repository: command.repository, number: command.number, url: command.url,
       login: command.login, association: command.association, ...(command.verdict ? { verdict: command.verdict } : {}),
       ...(command.path ? { path: command.path } : {}), ...(command.line !== undefined ? { line: command.line } : {}) } })

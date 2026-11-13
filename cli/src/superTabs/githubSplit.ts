@@ -21,7 +21,7 @@
  * the piece; and a piece cut twice by the same command with other words.
  */
 import { REPLY_TEXT_MAX } from './agentReplies.js'
-import { labelOf } from './assign/crew.js'
+import { labelOf, SWARM } from './assign/crew.js'
 import { labelsOf } from './githubClaim.js'
 import type { GitHubReply } from './githubRest.js'
 import { hhmm, projectRepository, recordOwn, type ProjectRepositories, type VerdictDeps } from './githubVerdict.js'
@@ -170,8 +170,9 @@ export async function splitTask(deps: VerdictDeps, builder: { name: string; repo
         throw new SuperTabHostError('PIECE_LIMIT', `${at} has ${open} open pieces already, and ${PIECES_MAX} is the most. `
           + 'Cut a piece off one of them, or wait for one to land.', 409)
       }
-      // What the task says of every piece of it: its area, what its machine needs, how urgent it is. Not yet its size.
-      const carried = labels.filter(label => label.startsWith('part:') || label.startsWith('needs:') || /^p[0-2]$/.test(label))
+      // What the task says of every piece of it: its area, what its machine needs, how urgent it is, whose Swarm's it is
+      // (assign/crew.ts ofProject). Not yet its size.
+      const carried = labels.filter(label => label.startsWith('part:') || label.startsWith('needs:') || label.startsWith(SWARM) || /^p[0-2]$/.test(label))
       opening = true
       const opened = await github(() => deps.send('POST', issues, { title: asked.title, body: `${asked.text.trim() ? `${asked.text.trim()}\n\n` : ''}${marker}`, labels: carried }))
       opening = false

@@ -7,10 +7,12 @@
  * (one task at a time, four open at most: assign/crew.ts hasRoom): an offer of it on the Swarm's server, which the builder's own
  * computer accepts once it has room and takes in its person's name (taskOffers.ts, the allocator's package 16); or, to a builder
  * whose computer does not answer offers, `builder:<name>` on the issue and one line saying why, which GitHub news
- * (githubMentions.ts) then brings to its builder. It runs where the merger runs: in the Harness of the person whose agent is
- * the project's PM, running or stopped there, with their gh. A task its PM or a person gave by hand is never moved.
+ * (githubMentions.ts) then brings to its builder. Only its own Swarm's tasks, in a repository several Swarms build: those that
+ * carry its Swarm's label, which it puts on the tasks its PM opens (stamp). It runs where the merger runs: in the Harness of the
+ * person whose agent is the project's PM, running or stopped there, with their gh. A task its PM or a person gave by hand is
+ * never moved.
  */
-import { addElsewhere, areaOf, ASKED, buildingIn, builtOn, dependsOn, hasRoom, heldTasks, labelOf, machineHas, nextPicks, openPieces, OTHER_PROJECTS, outOfQuota, teamOf, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readerKey, readProblem, reasonOf, startedAt, takeBacks, takenTasks, tasksOf, worksOnOf, type AwayBuilder, type Crew, type CrewBuilder, type Pick, type Read, type Up } from './assign/crew.js'
+import { addElsewhere, areaOf, askedToRead, buildingIn, builtOn, dependsOn, gaveTo, HARNESS, hasRoom, heldTasks, labelOf, machineHas, markOf, nextPicks, ofProject, openPieces, OTHER_PROJECTS, outOfQuota, teamOf, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readerKey, readProblem, reasonOf, saidTo, startedAt, SWARM, takeBacks, takenTasks, tasksOf, toLine, worksOnOf, type AwayBuilder, type Crew, type CrewBuilder, type Pick, type Read, type Up } from './assign/crew.js'
 import type { Choice } from './assign/model.js'
 import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
@@ -33,7 +35,6 @@ const SOLVE_MS = 1_000
 /** Search steps for each task, up to a ceiling: at 20 tasks the solver takes about 15,000 steps a second, at 200 about 1,300
  *  (benchmark, 2026-11-09), so a small team stops early and a large one uses the second. */
 const STEPS_PER_TASK = 400, MAX_STEPS = 200_000
-const SELF = 'Harness'
 /** Closed tasks whose time is read each pass, and how many are remembered: a slow start, never a slow pass. */
 const MEASURES_PER_PASS = 5, MAX_MEASURED = 500
 /** The labels the team's flow uses (lib/swarmSkills.ts SWARM_BASICS, PM_BASICS), made where a repository lacks them: gh
@@ -53,6 +54,9 @@ const FLOW_LABELS: ReadonlyArray<{ name: string; color: string; description: str
 const WAIT_TAKE_MS = 10 * 60_000
 /** Pages of a hundred open issues and pull requests read each pass: a list that fills them is said (TOO_MANY_OPEN). */
 const ISSUE_PAGES = 10
+/** Pages of a hundred of a repository's labels its Swarm's is looked for among, and how many of its PM's tasks get it in one pass:
+ *  a backlog is labelled over a few passes. */
+const LABEL_PAGES = 10, STAMPS_PER_PASS = 30
 /** Pages of a repository's newest open items a builder whose label has a comma is looked for among (listOf), as a claim does. */
 const COMMA_PAGES = 3
 /** How long a builder found building in another project goes before it is read again when a task is about to be given to it:
@@ -130,6 +134,15 @@ export class GitHubAssign {
   /** Until when this Swarm's server is taken to have no offers (taskOffers.ts noSuchRoute): every task goes by label meanwhile. */
   private offersFrom = 0
   private projects: { at: number; list: LedProject[] } | null = null
+  /** This computer's GitHub login, its PM's person's, asked once: the PM opens its tasks with it (stamp). */
+  private me = ''
+  /** Each Swarm's label in a repository, by `<repository>|<Swarm's id>` (mark); and the tasks it was put on that GitHub's lists
+   *  do not show labelled yet, by `repo#N`, forgotten once they do or the task is no longer open (stamp). */
+  private readonly marks = new Map<string, string>()
+  private readonly stamped = new Set<string>()
+  /** The tasks read as its Swarm's whose label is not written yet, by `repo#N`, as each pass finds them: one is labelled before
+   *  it is given, as its builder takes only a task that carries its Swarm's label (githubClaim.ts). */
+  private readonly unwritten = new Set<string>()
   private offUntil = 0
   private logged = ''
   private readonly now: () => number
@@ -140,6 +153,11 @@ export class GitHubAssign {
     /** The repositories of [project]'s Swarm's projects, as its PM's person reads the Swarm (swarmRepositories): its builders
      *  may build in each. The PM's own read shows only its own project. */
     repositories: (project: LedProject) => Promise<string[]>
+    /** The name of [project]'s Swarm, as its PM reads it, for its label in a repository (mark). */
+    swarm: (project: LedProject) => Promise<string>
+    /** Takes the open pull requests of [project]'s repository that are another Swarm's, as each pass reads them, for the merger
+     *  (githubMerge.ts), which lands none of them. */
+    others: (project: LedProject, pulls: ReadonlySet<number>) => void
     get: GitHubGet; send: GitHubSend; now?: () => number; log?: (line: string) => void; intervalMs?: number
     /** Who made each verdict by command, the merger's own (githubMerge.ts VerdictRecords): only such a READ-OK is a read. */
     records: VerdictRecords
@@ -203,10 +221,16 @@ export class GitHubAssign {
 
   private async assign(project: LedProject): Promise<void> {
     const { repo } = project
-    const listed = await this.reads.current(repo, `/repos/${repo}/issues?state=open&per_page=${PAGE}`, ISSUE_PAGES)
+    const mark = await this.mark(project)
+    // With no label of its own, no pull request can be told as another Swarm's.
+    if (!mark) { this.deps.others(project, new Set()); return }
+    const everyone = await this.stamp(repo, await this.reads.current(repo, `/repos/${repo}/issues?state=open&per_page=${PAGE}`, ISSUE_PAGES), mark)
+    // Only this Swarm's: another's tasks and pull requests in the repository are never planned, given, asked about, taken back
+    // or measured here.
+    const ours = ofProject(everyone, mark), listed = everyone.filter(ours)
     // GitHub's list of issues counts the pull requests too: lampOS had 155 issues and 104 pull requests open (2026-11-10), 259 of
     // the 300 three pages held. Past the last page the oldest tasks would drop out of the plan, so a list that fills it is said.
-    if (listed.length >= ISSUE_PAGES * PAGE) this.once(`[super-tab] Task assignment: TOO_MANY_OPEN ${repo}: the newest ${listed.length} open issues and pull requests are planned`)
+    if (everyone.length >= ISSUE_PAGES * PAGE) this.once(`[super-tab] Task assignment: TOO_MANY_OPEN ${repo}: the newest ${everyone.length} open issues and pull requests are planned`)
     // A task given and not yet shown labelled (GitHub's lists can lag) is read with its label, so it counts in its builder's
     // list and is never given twice; once shown, or closed, it is forgotten.
     const open = new Set(listed.map(issue => `${repo}#${issue.number}`))
@@ -227,11 +251,13 @@ export class GitHubAssign {
     // What each builder works on in this project: the Works on line of its instructions file here (agents/<Name>.md).
     for (const builder of crew.builders) builder.worksOn = worksOnOf(await this.reads.file(repo, `agents/${builder.name}.md`))
     await this.labelRepo(repo, crew)
-    const closed = await this.reads.current(repo, `/repos/${repo}/issues?state=closed&sort=updated&direction=desc&per_page=${PAGE}`, 1)
+    const ended = await this.reads.current(repo, `/repos/${repo}/issues?state=closed&sort=updated&direction=desc&per_page=${PAGE}`, 1)
+    const closed = ended.filter(ofProject([...everyone, ...ended], mark))
     await this.measure(repo, closed)
     const minutes = learnedMinutes([...this.took].filter(([key, took]) => key.startsWith(`${repo}#`) && took).map(([, took]) => took!))
     // Open pull requests, drafts included: a draft is where a task's work shows before it is read.
-    const pulls = await this.reads.current(repo, openPullsPath(repo), PULL_PAGES)
+    const everyPull = await this.reads.current(repo, openPullsPath(repo), PULL_PAGES), pulls = everyPull.filter(ours)
+    this.deps.others(project, new Set(everyPull.filter(pull => !ours(pull)).map(pull => Number(pull.number))))
     // The tasks whose pull request waits for its readers or its merge, readers asked as needed (with no builder here, its
     // PM): their builders have done their part, so none is called quiet, and one whose builder went away is kept, as its
     // pull request merges without it. Another builder would do it again.
@@ -295,7 +321,7 @@ export class GitHubAssign {
       const lists = await Promise.all(others.slice(0, OTHER_PROJECTS).map(async (other): Promise<Json[]> => {
         if (this.unreadOthers.held(other, this.now())) return []
         try {
-          const listed = await this.listOf(other, builder)
+          const listed = await this.listOf({ ...project, repo: other }, builder)
           // Given there from here (its project led here too): GitHub's lists can lag behind the label.
           const given = [...this.given].filter(([key, label]) => key.startsWith(`${other}#`) && label === builder.label).map(([key]) => Number(key.slice(other.length + 1)))
           this.unreadOthers.ok(other)
@@ -316,16 +342,94 @@ export class GitHubAssign {
     }
   }
 
+  /** This computer's GitHub login. One GitHub does not say stops the project's pass, said as any stop is, and is asked again. */
+  private async login(repo: string): Promise<string> {
+    if (!this.me) {
+      const login = (await this.reads.one(repo, '/user')).login
+      if (typeof login !== 'string' || !login) throw new GitHubStop('LOGIN_UNREAD', 'GitHub did not say this computer\'s login.', false, this.now())
+      this.me = login
+    }
+    return this.me
+  }
+
+  /**
+   * [project]'s Swarm's label in its repository (anh Dee, 2026-11-12: "whose task it is lives on the task, not on the builder"):
+   * the `swarm:` label whose description holds the Swarm's id, so two Swarms of one name in a repository are told apart, and
+   * never one found by its name alone. Made once, as `swarm:<the Swarm's name>`, or with the start of its id after it where
+   * another Swarm has that name there; not made when [make] is false (another project's repository, read for what a builder
+   * holds). Null when there is none: one GitHub refuses to make is said once, the pass gives nothing, and the next asks again.
+   */
+  private async mark(project: LedProject, make = true): Promise<string | null> {
+    const { repo, tabId } = project, key = `${repo}|${tabId}`
+    const known = this.marks.get(key)
+    if (known) return known
+    const swarms = (await this.reads.current(repo, `/repos/${repo}/labels?per_page=${PAGE}`, LABEL_PAGES)).filter(label => String(label.name ?? '').toLowerCase().startsWith(SWARM))
+    let name = markOf(swarms, tabId)
+    if (!name && make) {
+      const words = (await this.deps.swarm(project)).trim().toLowerCase().replace(/[\s,]+/g, '-').slice(0, 30) || tabId.slice(0, 8)
+      const wanted = swarms.some(label => String(label.name).toLowerCase() === `${SWARM}${words}`) ? `${SWARM}${words}-${tabId.slice(0, 8)}` : `${SWARM}${words}`
+      const made = await this.deps.send('POST', `/repos/${repo}/labels`, { name: wanted, color: '5319e7', description: `Swarm ${tabId}` })
+      if (made.status !== 201) { this.once(`[super-tab] Task assignment: SWARM_LABEL_NOT_MADE ${repo} ${wanted}: GitHub answered ${made.status}`); return null }
+      this.log(`[super-tab] made the label ${wanted} in ${repo}`)
+      name = wanted
+    }
+    if (name) this.marks.set(key, name)
+    return name
+  }
+
+  /**
+   * Puts [mark], its Swarm's label, on the open tasks of [listed] its PM opened that carry no Swarm's yet, and gives the list
+   * with them labelled: the PM opens its tasks with its person's GitHub login, which Harness runs with, and says nothing of its
+   * Swarm (the label is Harness's to add, never the PM's). An issue any other login opened is the Swarm's once someone puts its
+   * label on. At most [STAMPS_PER_PASS] writes a pass, and one GitHub refuses is said once and written again next pass: each such
+   * task is read as labelled meanwhile.
+   */
+  private async stamp(repo: string, listed: Json[], mark: string): Promise<Json[]> {
+    const me = (await this.login(repo)).toLowerCase()
+    const labelled = (issue: Json) => labelNames(issue).some(name => name.toLowerCase().startsWith(SWARM))
+    const open = new Map(listed.map(issue => [`${repo}#${issue.number}`, issue]))
+    for (const key of [...this.stamped]) if (key.startsWith(`${repo}#`) && (!open.has(key) || labelled(open.get(key)!))) this.stamped.delete(key)
+    for (const key of [...this.unwritten]) if (key.startsWith(`${repo}#`)) this.unwritten.delete(key)
+    let stamps = 0
+    const out: Json[] = []
+    for (const issue of listed) {
+      const key = `${repo}#${issue.number}`
+      if (issue.pull_request || labelled(issue) || String((issue.user as Json | undefined)?.login ?? '').toLowerCase() !== me) { out.push(issue); continue }
+      // Only the write waits for a later pass, or for GitHub to take it: the task is the Swarm's now. Left out of the list, one a
+      // builder holds dropped out of the plan, and its builder looked idle and was given another (Kiri's read of #4218).
+      if (!this.stamped.has(key) && stamps < STAMPS_PER_PASS) {
+        stamps++
+        const put = await this.deps.send('POST', `/repos/${repo}/issues/${issue.number}/labels`, { labels: [mark] })
+        if (put.status !== 200) this.once(`[super-tab] Task assignment: SWARM_LABEL_REFUSED ${repo}#${issue.number}: GitHub answered ${put.status}`)
+        else {
+          this.stamped.add(key)
+          this.log(`[super-tab] labelled ${repo}#${issue.number} ${mark}`)
+        }
+      }
+      if (!this.stamped.has(key)) this.unwritten.add(key)
+      out.push({ ...issue, labels: [...(Array.isArray(issue.labels) ? issue.labels : []), { name: mark }] })
+    }
+    return out
+  }
+
   /** [builder]'s own open list in [repo] as GitHub has it now, with its ETag, read once a pass ([fresh]): the issues and pull
    *  requests that carry its label (`labels=`, as githubClaim.ts reads a builder's own). GitHub reads a comma there as "and", so a
-   *  label with one is looked for among the repository's newest open items, as a claim does (githubClaim.ts HELD_PAGES). */
-  private listOf(repo: string, builder: CrewBuilder): Promise<Json[]> {
-    const key = `${repo} ${builder.label}`
+   *  label with one is looked for among the repository's newest open items, as a claim does (githubClaim.ts HELD_PAGES). Not what
+   *  another Swarm's label is on: that is its builder of the same name's. This Swarm's label there is read only when an item
+   *  carries a Swarm's (mark). [project] is the Swarm's, with the repository read as its own. */
+  private listOf(project: LedProject, builder: CrewBuilder): Promise<Json[]> {
+    const { repo } = project, key = `${repo} ${builder.label} ${project.tabId}`
     let listed = this.fresh.get(key)
     if (!listed) {
       const comma = builder.label.includes(',')
       listed = this.reads.current(repo, `/repos/${repo}/issues?state=open${comma ? '' : `&labels=${encodeURIComponent(builder.label)}`}&per_page=${PAGE}`, comma ? COMMA_PAGES : 1)
-        .then(items => items.filter(item => labelNames(item).includes(builder.label)))
+        .then(async items => {
+          const held = items.filter(item => labelNames(item).includes(builder.label))
+          const swarms = (item: Json) => labelNames(item).map(name => name.toLowerCase()).filter(name => name.startsWith(SWARM))
+          if (!held.some(item => swarms(item).length)) return held
+          const own = (await this.mark(project, false))?.toLowerCase()
+          return held.filter(item => swarms(item).every(name => name === own))
+        })
       this.fresh.set(key, listed)
     }
     return listed
@@ -383,7 +487,7 @@ export class GitHubAssign {
       if ('refused' in given) { this.once(`[super-tab] Task assignment: TAKE_BACK_REFUSED ${repo}#${back.number}: GitHub answered ${given.refused}`); continue }
       if (given.takenKept !== null) this.once(`[super-tab] Task assignment: TAKEN_NOT_CLEARED ${repo}#${back.number}: GitHub answered ${given.takenKept}`)
       this.backs.add(key)
-      const said = await this.deps.send('POST', `/repos/${repo}/issues/${back.number}/comments`, { body: backLine(back.why, this.clock()) })
+      const said = await this.deps.send('POST', `/repos/${repo}/issues/${back.number}/comments`, { body: backLine(back.why) })
       // Taken back all the same: the labels say so. Its line held or refused is said here (githubWrites.ts holds a line said too often).
       if (said.status >= 300) this.once(`[super-tab] Task assignment: LINE_REFUSED ${repo}#${back.number}: GitHub answered ${said.status}`)
       this.log(`[super-tab] took ${repo}#${back.number} back: ${back.why}`)
@@ -479,16 +583,16 @@ export class GitHubAssign {
       // How often each was asked for this head.
       const onThisHead = new Map<string, number>()
       for (const c of comments) {
-        const found = ownAsk(c, ASKED)
+        const found = askedToRead(ownWords(c))
         if (!found) continue
         // Keyed as the readers are (verdicts): the one asked as "Kai Lee" is the one that answered as "kai-lee".
-        const name = readerKey(found[1]!)
-        written.set(name, found[1]!)
-        if (head.startsWith(found[2]!)) onThisHead.set(name, (onThisHead.get(name) ?? 0) + 1)
+        const name = readerKey(found.name)
+        written.set(name, found.name)
+        if (head.startsWith(found.sha)) onThisHead.set(name, (onThisHead.get(name) ?? 0) + 1)
         const heads = asked.get(name) ?? new Map<string, number>()
         // GitHub dates every comment; one it did not is taken as asked now, as before.
         const at = Date.parse(String(c.created_at ?? ''))
-        heads.set(found[2]!, Math.max(heads.get(found[2]!) ?? 0, Number.isFinite(at) ? at : now))
+        heads.set(found.sha, Math.max(heads.get(found.sha) ?? 0, Number.isFinite(at) ? at : now))
         asked.set(name, heads)
       }
       // A reader asked [READ_WAIT_MS] ago with no verdict since is no longer counted on: another is asked too, and the first
@@ -615,8 +719,8 @@ export class GitHubAssign {
         await this.takeBack(repo, issues.filter(issue => Number(issue.number) === task.number),
           [{ name: task.name, label: task.label, why: 'stopping' }], `${task.name} has had no activity on it since it was asked`)
       } else if (!asked && now - since >= QUIET_ASK_MS) {
-        const reply = await this.deps.send('POST', `/repos/${repo}/issues/${task.number}/comments`, { body: `${SELF}, ${this.clock()}, to **${task.name}**: `
-          + `${QUIET_ASKED}${Math.round((now - since) / 3_600_000)} h. Are you still on it? Say where it stands, or what you need.`
+        const reply = await this.deps.send('POST', `/repos/${repo}/issues/${task.number}/comments`, { body: toLine(task.name,
+          `${QUIET_ASKED}${Math.round((now - since) / 3_600_000)} h. Are you still on it? Say where it stands, or what you need.`)
           // A team's one builder keeps it (below), so it is told no other will take it.
           + (crew.builders.some(b => b.label !== task.label) ? ` With no word in ${Math.round((QUIET_BACK_MS - QUIET_ASK_MS) / 3_600_000)} h it goes to another builder.` : '') })
         if (reply.status >= 300) { this.once(`[super-tab] Task assignment: ASK_REFUSED ${repo}#${task.number}: GitHub answered ${reply.status}`); continue }
@@ -646,14 +750,14 @@ export class GitHubAssign {
       // last waited is of an earlier time its pieces closed.
       const since = new Date(Math.floor((now - PIECES_SAID_MS) / 3_600_000) * 3_600_000).toISOString()
       const comments = await this.reads.current(repo, `/repos/${repo}/issues/${issue.number}/comments?since=${since}&per_page=${PAGE}`, 1)
-      const said = comments.find(c => Date.parse(String(c.created_at ?? '')) >= (this.waited.get(key) ?? 0) && ownAsk(c, /^Harness, \d\d:\d\d, to \*\*[^*]+\*\*: (.*)$/m)?.[1]?.startsWith(line))
+      const said = comments.find(c => Date.parse(String(c.created_at ?? '')) >= (this.waited.get(key) ?? 0) && saidTo(ownWords(c), builder.name)?.startsWith(line))
       // Said before a restart: quiet from that word, which GitHub's list may not show as the task's time yet.
       if (said) this.waited.set(key, Date.parse(String(said.created_at)))
       else {
         // Not quiet while it is being told, and from this word on once it is.
         this.waited.set(key, now)
         const reply = await this.deps.send('POST', `/repos/${repo}/issues/${issue.number}/comments`,
-          { body: `${SELF}, ${this.clock()}, to **${builder.name}**: ${line}. It is yours to finish, or to close if nothing is left.` })
+          { body: toLine(builder.name, `${line}. It is yours to finish, or to close if nothing is left.`) })
         if (reply.status >= 300) { this.once(`[super-tab] Task assignment: ASK_REFUSED ${repo}#${issue.number}: GitHub answered ${reply.status}`); continue }
         this.log(`[super-tab] told ${builder.name} the pieces of ${repo}#${issue.number} are closed`)
       }
@@ -688,7 +792,7 @@ export class GitHubAssign {
       const taker = idle.find(b => b !== builder && !task?.notBuilders.includes(b.id))
       if (!task || !taker) continue
       const comments = await this.reads.current(repo, `/repos/${repo}/issues/${issue.number}/comments?per_page=${PAGE}`, 1)
-      const gave = Math.max(0, ...comments.filter(c => readerKey(ownAsk(c, /^Harness, \d\d:\d\d: for \*\*([^*]+)\*\*: /)?.[1] ?? '\n') === readerKey(builder.name))
+      const gave = Math.max(0, ...comments.filter(c => readerKey(gaveTo(ownWords(c)) ?? '\n') === readerKey(builder.name))
         .map(c => Date.parse(String(c.created_at ?? ''))).filter(Number.isFinite))
       if (!gave || now - gave < WAIT_TAKE_MS) continue
       idle.splice(idle.indexOf(taker), 1)
@@ -703,10 +807,7 @@ export class GitHubAssign {
   private async quietAskedAt(repo: string, number: number, name: string, touched: number): Promise<number | null> {
     const since = new Date(touched - 60_000).toISOString()
     const comments = await this.reads.current(repo, `/repos/${repo}/issues/${number}/comments?since=${since}&per_page=${PAGE}`, 1)
-    const asks = comments.filter(c => {
-      const found = ownAsk(c, /^Harness, \d\d:\d\d, to \*\*([^*]+)\*\*: (.*)$/m)
-      return !!found?.[1] && readerKey(found[1]) === readerKey(name) && found[2]!.startsWith(QUIET_ASKED)
-    }).map(c => Date.parse(String(c.created_at ?? ''))).filter(Number.isFinite)
+    const asks = comments.filter(c => saidTo(ownWords(c), name)?.startsWith(QUIET_ASKED)).map(c => Date.parse(String(c.created_at ?? ''))).filter(Number.isFinite)
     return asks.length ? Math.max(...asks) : null
   }
 
@@ -718,11 +819,11 @@ export class GitHubAssign {
     if (this.blocked.has(key)) return false
     const line = `nobody can start this yet: ${blocked}`
     const comments = await this.reads.current(repo, `/repos/${repo}/issues/${number}/comments?per_page=${PAGE}`, 1)
-    if (comments.some(c => ownAsk(c, new RegExp(`^Harness, \\d\\d:\\d\\d, to \\*\\*[^*]+\\*\\*: ${line.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`)))) {
+    if (comments.some(c => saidTo(ownWords(c), project.pm)?.startsWith(line))) {
       this.blocked.add(key)
       return false
     }
-    const reply = await this.deps.send('POST', `/repos/${repo}/issues/${number}/comments`, { body: `${SELF}, ${this.clock()}, to **${project.pm}**: ${line}.` })
+    const reply = await this.deps.send('POST', `/repos/${repo}/issues/${number}/comments`, { body: toLine(project.pm, `${line}.`) })
     if (reply.status >= 300) { this.once(`[super-tab] Task assignment: ASK_REFUSED ${repo}#${number}: GitHub answered ${reply.status}`); return false }
     this.blocked.add(key)
     this.log(`[super-tab] told ${project.pm} why nobody can start ${repo}#${number}: ${blocked}`)
@@ -748,8 +849,8 @@ export class GitHubAssign {
   private async ask(repo: string, number: number, head: string, name: string, what: string, nth = 0): Promise<void> {
     const key = `${repo}#${number}@${head}:${readerKey(name)}${nth ? `:${nth}` : ''}`
     if (this.asks.has(key)) return
-    const reply = await this.deps.send('POST', `/repos/${repo}/issues/${number}/comments`, { body: `${SELF}, ${this.clock()}, to **${name}**: ${what}, `
-      + `then run \`harness super-tab read ok ${repo}#${number} ${head.slice(0, 7)} 'what you found'\`. For a HOLD, read hold in place of read ok, with the file, line and fix.` })
+    const reply = await this.deps.send('POST', `/repos/${repo}/issues/${number}/comments`, { body: toLine(name, `${what}, `
+      + `then run \`harness super-tab read ok ${repo}#${number} ${head.slice(0, 7)} 'what you found'\`. For a HOLD, read hold in place of read ok, with the file, line and fix.`) })
     if (reply.status >= 300) { this.once(`[super-tab] Task assignment: ASK_REFUSED ${repo}#${number}: GitHub answered ${reply.status}`); return }
     this.asks.add(key)
     this.log(`[super-tab] asked ${name} to read ${repo}#${number} at ${head.slice(0, 7)}`)
@@ -863,6 +964,14 @@ export class GitHubAssign {
     if (!builder || !Number.isSafeInteger(number)) return false
     const { name, label } = builder
     if (this.now() < (this.coordinated.get(`${project.tabId}|${project.repo}`) ?? 0)) return false
+    // Its Swarm's label first, where its write still waited (stamp): its builder takes only a task that carries it.
+    const key = `${project.repo}#${number}`
+    if (this.unwritten.has(key)) {
+      const put = await this.deps.send('POST', `/repos/${project.repo}/issues/${number}/labels`, { labels: [this.marks.get(`${project.repo}|${project.tabId}`)!] })
+      if (put.status !== 200) { this.once(`[super-tab] Task assignment: SWARM_LABEL_REFUSED ${key}: GitHub answered ${put.status}`); return false }
+      this.unwritten.delete(key)
+      this.stamped.add(key)
+    }
     if (builder.offers && this.now() >= this.offersFrom) {
       try {
         await this.deps.offers.offer(project, number, builder.id)
@@ -889,16 +998,11 @@ export class GitHubAssign {
     // One that comes after tasks whose pull requests are up says which branches it is built on.
     const bases = read.bases.get(pick.task)
     const said = await this.deps.send('POST', `/repos/${project.repo}/issues/${number}/comments`,
-      { body: `${SELF}, ${this.clock()}: for **${name}**: ${reasonOf(pick, read)}.${bases ? ` ${builtOn(bases)}.` : ''}` })
+      { body: toLine(name, `this is yours. ${reasonOf(pick, read, true)}.${bases ? ` ${builtOn(bases)}.` : ''}`) })
     // Given all the same: its label is on, and its builder's turn's end types it (nextThing.ts). Its line held or refused is said here.
     if (said.status >= 300) this.once(`[super-tab] Task assignment: LINE_REFUSED ${project.repo}#${number}: GitHub answered ${said.status}`)
     this.log(`[super-tab] gave ${project.repo}#${number} to ${name} (${reasonOf(pick, read)})`)
     return true
-  }
-
-  private clock(): string {
-    const at = new Date(this.now())
-    return `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`
   }
 
   /** Says [line] the first time only; the memory is bounded, oldest first. */
@@ -948,12 +1052,11 @@ export function blockedWhy(issue: Json | undefined, why: string, crew: Crew, rea
   return null
 }
 
-/** The first line of a comment Harness may have written, matched by [pattern]: only a member's, as Harness writes with the PM's
- *  person's gh, so nobody outside the team can make Harness believe it asked (and never ask), and only its first 500
- *  characters, as Harness's own are short, so a long comment costs nothing. */
-function ownAsk(comment: Json, pattern: RegExp): RegExpExecArray | null {
-  if (!TEAM.has(comment.author_association)) return null
-  return pattern.exec(String(comment.body ?? '').slice(0, 500))
+/** The words of a comment Harness may have written, or none: only a member's, as Harness writes with the PM's person's gh, so
+ *  nobody outside the team can make Harness believe it asked (and never ask), and only its first 500 characters, as Harness's
+ *  own are short, so a long comment costs nothing. */
+function ownWords(comment: Json): string {
+  return TEAM.has(comment.author_association) ? String(comment.body ?? '').slice(0, 500) : ''
 }
 
 /** What taking a task back answered: GitHub refused it (its status), or it is done, with the status GitHub answered when it kept
@@ -981,8 +1084,8 @@ export async function giveBack(send: GitHubSend, repo: string, number: number, l
   return { takenKept: cleared && cleared.status !== 200 && cleared.status !== 404 ? cleared.status : null }
 }
 
-/** The line a task taken back says on it, as Harness at [at] (HH:MM): [why], and where it goes. */
-export const backLine = (why: string, at: string): string => `${SELF}, ${at}: ${why}, so this task goes to the builder who can start it next.`
+/** The line a task taken back says on it, as Harness: [why], and where it goes. */
+export const backLine = (why: string): string => `${HARNESS}: ${why}, so this task goes to the builder who can start it next.`
 
 export const labelNames = (issue: Json): string[] =>
   (Array.isArray(issue.labels) ? issue.labels : []).map(label => String((label as Json)?.name ?? ''))

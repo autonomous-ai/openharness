@@ -18,7 +18,8 @@ import { commandRecords } from './commandRecords.fake.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 
 type Json = Record<string, unknown>
-const REPO = 'acme/app', OPENER = 'deehw'
+/** The repository, the login its PM's person opens tasks with, and its Swarm's label there, which every task here carries. */
+const REPO = 'acme/app', OPENER = 'deehw', MARK = 'swarm:acme'
 const START = Date.parse('2026-11-10T04:30:00Z')
 const PASS_MS = 30_000, PASSES = 120
 const GiB = 1024 ** 3
@@ -44,7 +45,7 @@ function liveGitHub(clock: { now: number }, repo = REPO, lag = false) {
   const commits = new Map<number, Json[]>(), files = new Map<number, string[]>()
   /** Every read asked. */
   const asked: string[] = []
-  const labels: Json[] = ['status:taken', 'size:s', 'size:m', 'size:l', 'p0', 'p1', 'p2', 'builder:pip', 'builder:juno', 'needs:gpu'].map(name => ({ name }))
+  const labels: Json[] = ['status:taken', 'size:s', 'size:m', 'size:l', 'p0', 'p1', 'p2', 'builder:pip', 'builder:juno', 'needs:gpu'].map(name => ({ name } as Json)).concat({ name: MARK, description: 'Swarm tab' })
   const sent: Array<{ at: number; method: string; path: string; body: Json }> = []
   let ids = 1000
   const records = commandRecords()
@@ -54,7 +55,7 @@ function liveGitHub(clock: { now: number }, repo = REPO, lag = false) {
     if (pulls.has(number)) pulls.get(number)!.updated_at = at
   }
   const task = (number: number, names: string[], updatedAt = iso(), body = '') =>
-    issues.set(number, { number, title: `Task ${number}`, body, state: 'open', labels: names.map(name => ({ name })), user: { login: OPENER },
+    issues.set(number, { number, title: `Task ${number}`, body, state: 'open', labels: [...names, MARK].map(name => ({ name })), user: { login: OPENER },
       author_association: 'MEMBER', created_at: updatedAt, updated_at: updatedAt })
   const pull = (number: number, head: string, extra: Json = {}) => {
     const row = { number, draft: false, state: 'open', base: { ref: 'main' }, head: { sha: head, ref: `pip/${number}`, repo: { full_name: repo } }, labels: [{ name: 'builder:pip' }],
@@ -80,7 +81,8 @@ function liveGitHub(clock: { now: number }, repo = REPO, lag = false) {
     const shown = (row: Json): Json => !lag ? row : { ...row, labels: (row.labels as Json[]).filter(label => labelled.get(`${row.number}:${label.name}`) !== clock.now) }
     // Each label GitHub's `labels` asks for, in any case.
     const wanted = (url.searchParams.get('labels') ?? '').split(',').filter(Boolean).map(name => name.toLowerCase())
-    const body = p === at ? { default_branch: 'main' }
+    const body = p === '/user' ? { login: OPENER }
+      : p === at ? { default_branch: 'main' }
       : p === `${at}/issues` ? page([...issues.values()].filter(i => (url.searchParams.get('state') ?? 'open') === 'all' || i.state === (url.searchParams.get('state') ?? 'open'))
         .filter(i => String(i.updated_at) >= since).map(shown).filter(i => wanted.every(name => (i.labels as Json[]).some(label => String(label.name).toLowerCase() === name))), url)
       : p === `${at}/pulls` ? page([...pulls.values()].filter(r => r.state === (url.searchParams.get('state') ?? 'open')), url)
@@ -181,8 +183,9 @@ describe('Harness says each thing once on GitHub, over an hour and a restart (gi
 
     const make = () => {
       const deps = { projects: async () => [PROJECT], crew: async () => structuredClone(CREW), get: gh.get, send: gh.send, now: () => clock.now, log: () => {}, records: new VerdictRecords(gh.authors, () => clock.now, () => {}) }
-      return { merger: new GitHubMerge({ ...deps, costs: async () => [], hot: () => [] }), assigner: new GitHubAssign({ ...deps, repositories: async () => [REPO], numbers: { pass: async () => {} }, pmRunning: async () => true,
-        offers: { offer: async () => {}, listed: async () => [] }, say: async () => {} }) }
+      const others = new Map<string, ReadonlySet<number>>()
+      return { merger: new GitHubMerge({ ...deps, costs: async () => [], hot: () => [], others: project => others.get(project.repo) ?? null }), assigner: new GitHubAssign({ ...deps, repositories: async () => [REPO], numbers: { pass: async () => {} }, pmRunning: async () => true,
+        swarm: async () => 'Acme', others: (project, pulls) => { others.set(project.repo, pulls) }, offers: { offer: async () => {}, listed: async () => [] }, say: async () => {} }) }
     }
     let loops = make()
     for (let pass = 0; pass < PASSES; pass++) {
@@ -217,7 +220,7 @@ describe('Harness says each thing once on GitHub, over an hour and a restart (gi
 
     // What Harness said, by issue or pull request, made alike across minutes: never the same thing twice.
     const harness = new Map<number, string[]>()
-    for (const [number, list] of gh.comments) harness.set(number, list.map(c => String(c.body)).filter(body => body.startsWith('Harness, ')).map(same))
+    for (const [number, list] of gh.comments) harness.set(number, list.map(c => String(c.body)).filter(body => /^Harness[,:] /.test(body)).map(same))
     for (const [number, said] of harness) expect(said, `#${number}: ${JSON.stringify(said, null, 1)}`).toEqual([...new Set(said)])
     // And every write once: a label on an issue, a label off, a merge.
     const writes = gh.sent.filter(s => s.method !== 'POST' || !s.path.endsWith('/comments'))
@@ -227,11 +230,11 @@ describe('Harness says each thing once on GitHub, over an hour and a restart (gi
     // It did run through each case, so the hour proves something: each said what it is for, once.
     const one = (number: number, pattern: RegExp) => expect((harness.get(number) ?? []).filter(body => pattern.test(body)), `#${number}`).toHaveLength(1)
     one(10, /not merged yet at \w+: the READ-OK from deehw is typed/)
-    one(10, /to \*\*Juno\*\*: please read this pull request/)
+    one(10, /^Harness: Juno, please read this pull request/)
     one(12, /not merged yet at \w+: it conflicts with main/)
     one(13, /not merged yet at \w+: it is behind main/)
     // No verdict in 30 minutes: another reader is asked too (Swarm plan, step 1, item 1), each reader once in the hour.
-    const asked14 = (harness.get(14) ?? []).filter(body => /: please read this pull request/.test(body)).map(body => /\*\*(\w+)\*\*/.exec(body)?.[1])
+    const asked14 = (harness.get(14) ?? []).filter(body => /, please read this pull request/.test(body)).map(body => /^Harness: (\w+),/.exec(body)?.[1])
     expect(asked14, '#14').toHaveLength(2)
     expect(new Set(asked14).size, '#14').toBe(2)
     one(15, /: merged\. READ-OK on \w+ by Juno, checks green\./)
@@ -246,7 +249,7 @@ describe('Harness says each thing once on GitHub, over an hour and a restart (gi
     // The one built on #17 is told once, in the hour and across the restart and the push, what it waits for; #17's reader
     // is asked once to read its new head.
     expect((harness.get(18) ?? []).filter(body => body.includes('not merged yet'))).toEqual([expect.stringMatching(/: it lands after #17, whose commits it carries \(its head \w+\)\.$/)])
-    one(17, /to \*\*Juno\*\*: the head is now \w+, after your HOLD on \w+: please read it again/)
+    one(17, /^Harness: Juno, the head is now \w+, after your HOLD on \w+: please read it again/)
     expect(gh.pulls.get(18)!.state).toBe('open')
   }, 60_000)
 
@@ -266,8 +269,9 @@ describe('Harness says each thing once on GitHub, over an hour and a restart (gi
     gh.pull(24, sha(24)); gh.say(24, `Juno, 04:00, to **Pip**: READ-OK ${sha(24).slice(0, 7)}`); gh.mergeable.set(24, 'dirty')
     const make = () => {
       const deps = { projects: async () => [PROJECT], crew: async () => structuredClone(CREW), get: gh.get, send: gh.send, now: () => clock.now, log: () => {}, records: new VerdictRecords(gh.authors, () => clock.now, () => {}) }
-      return { merger: new GitHubMerge({ ...deps, costs: async () => [], hot: () => [] }), assigner: new GitHubAssign({ ...deps, repositories: async () => [REPO], numbers: { pass: async () => {} }, pmRunning: async () => true,
-        offers: { offer: async () => {}, listed: async () => [] }, say: async () => {} }) }
+      const others = new Map<string, ReadonlySet<number>>()
+      return { merger: new GitHubMerge({ ...deps, costs: async () => [], hot: () => [], others: project => others.get(project.repo) ?? null }), assigner: new GitHubAssign({ ...deps, repositories: async () => [REPO], numbers: { pass: async () => {} }, pmRunning: async () => true,
+        swarm: async () => 'Acme', others: (project, pulls) => { others.set(project.repo, pulls) }, offers: { offer: async () => {}, listed: async () => [] }, say: async () => {} }) }
     }
     let loops = make()
     // A pass every five minutes for a day, the daemon restarting every six hours, as releases restart it.
@@ -278,7 +282,7 @@ describe('Harness says each thing once on GitHub, over an hour and a restart (gi
       clock.now += 5 * 60_000
     }
     const harness = new Map<number, string[]>()
-    for (const [number, list] of gh.comments) harness.set(number, list.map(c => String(c.body)).filter(body => body.startsWith('Harness, ')).map(same))
+    for (const [number, list] of gh.comments) harness.set(number, list.map(c => String(c.body)).filter(body => /^Harness[,:] /.test(body)).map(same))
     for (const [number, said] of harness) expect(said, `#${number}: ${JSON.stringify(said, null, 1)}`).toEqual([...new Set(said)])
     // Measured 2026-11-11: eleven in the day. Each stuck pull request is said once (behind, conflicting); the one nobody reads asks
     // a builder, then the PM half an hour on; the one needing a GPU says so once; each task left is asked after at 4 h and given
@@ -309,8 +313,9 @@ describe('Harness says each thing once on GitHub, over an hour and a restart (gi
     gh.files.set(26, ['app/b.py', 'app/hub.py'])
     const make = () => {
       const deps = { projects: async () => [PROJECT], crew: async () => structuredClone(CREW), get: gh.get, send: gh.send, now: () => clock.now, log: () => {}, records: new VerdictRecords(gh.authors, () => clock.now, () => {}) }
-      return { merger: new GitHubMerge({ ...deps, costs: async () => [], hot: () => hot }), assigner: new GitHubAssign({ ...deps, repositories: async () => [REPO], numbers: { pass: async () => {} }, pmRunning: async () => true,
-        offers: { offer: async () => {}, listed: async () => [] }, say: async () => {} }) }
+      const others = new Map<string, ReadonlySet<number>>()
+      return { merger: new GitHubMerge({ ...deps, costs: async () => [], hot: () => hot, others: project => others.get(project.repo) ?? null }), assigner: new GitHubAssign({ ...deps, repositories: async () => [REPO], numbers: { pass: async () => {} }, pmRunning: async () => true,
+        swarm: async () => 'Acme', others: (project, pulls) => { others.set(project.repo, pulls) }, offers: { offer: async () => {}, listed: async () => [] }, say: async () => {} }) }
     }
     let loops = make()
     // A pass every five minutes for a day, the daemon restarting every six hours.
@@ -321,7 +326,7 @@ describe('Harness says each thing once on GitHub, over an hour and a restart (gi
       await loops.assigner.tick()
       clock.now += 5 * 60_000
     }
-    const harness = [...gh.comments.values()].flat().map(c => String(c.body)).filter(body => body.startsWith('Harness, '))
+    const harness = [...gh.comments.values()].flat().map(c => String(c.body)).filter(body => /^Harness[,:] /.test(body))
     expect(harness).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*pip\*\*: #25 already touches `app\/hub\.py`, which most changes touch: read it before you change that file again\.$/)])
     expect(gh.sent.filter(s => s.method !== 'POST' || !s.path.endsWith('/comments'))).toEqual([])
     // Each one's files once, by the day's first daemon: the four after it find the note said, and read none. And no task of either.
@@ -344,7 +349,8 @@ describe('one task building across a Swarm\'s public projects (githubAssign.ts, 
   function swarmGitHub(clock: { now: number }, names: string[], lag = false) {
     const repos = new Map(names.map(repo => [repo, liveGitHub(clock, repo, lag)]))
     const of = (path: string) => repos.get(path.split('/').slice(2, 4).join('/'))!
-    const get: GitHubGet = (path, etag) => of(path).get(path, etag)
+    // The login is GitHub's answer, whichever repository is read.
+    const get: GitHubGet = (path, etag) => (path === '/user' ? repos.values().next().value! : of(path)).get(path, etag)
     const send: GitHubSend = (method, path, body) => of(path).send(method, path, body)
     for (const live of repos.values()) for (const number of [1, 2, 3]) live.task(number, ['size:s'])
     return { repos, get, send, authors: (project: LedProject, ids: string[]) => repos.get(project.repo)!.authors(project, ids) }
@@ -355,7 +361,7 @@ describe('one task building across a Swarm\'s public projects (githubAssign.ts, 
   const daemon = (gh: Swarm, clock: { now: number }, projects: LedProject[], get: GitHubGet = gh.get) => new GitHubAssign({ projects: async () => projects,
     crew: async () => structuredClone(CREW), repositories: async () => [...gh.repos.keys()], get, send: gh.send, now: () => clock.now, log: () => {},
     records: new VerdictRecords(gh.authors, () => clock.now, () => {}), numbers: { pass: async () => {} }, pmRunning: async () => true,
-    offers: { offer: async () => {}, listed: async () => [] }, say: async () => {} })
+    swarm: async () => 'Acme', others: () => {}, offers: { offer: async () => {}, listed: async () => [] }, say: async () => {} })
 
   /** What [name] builds across the Swarm's repositories now, as package 2 counts it: its open tasks with no pull request up for
    *  their read, one that GitHub says is not a draft and that closes it. */
@@ -397,7 +403,7 @@ describe('one task building across a Swarm\'s public projects (githubAssign.ts, 
   }
   /** Each task of every repository, with how many times Harness gave it and whether it landed. */
   const landed = (gh: Swarm) => [...gh.repos].flatMap(([repo, live]) => [1, 2, 3].map(number =>
-    `${repo}#${number} ${(live.comments.get(number) ?? []).filter(c => /^Harness, \d\d:\d\d: for \*\*/.test(String(c.body))).length} ${live.issues.get(number)!.state}`))
+    `${repo}#${number} ${(live.comments.get(number) ?? []).filter(c => /^Harness: .+, this is yours\./.test(String(c.body))).length} ${live.issues.get(number)!.state}`))
   const allLanded = (repos: string[]) => repos.flatMap(repo => [1, 2, 3].map(number => `${repo}#${number} 1 closed`))
 
   it('gives a builder one task building across both, each project planned on its own PM\'s computer, and all the work goes', async () => {
@@ -413,10 +419,10 @@ describe('one task building across a Swarm\'s public projects (githubAssign.ts, 
   it('with both PMs\' passes at once, gives a builder two tasks only when both are about to give it one in the same minute', async () => {
     const clock = { now: START }, gh = swarmGitHub(clock, [REPO, WEB])
     const over = await run(gh, clock, PROJECTS.slice(0, 2).map(project => daemon(gh, clock, [project])), true)
-    // When each of the two it held was given: the minute of Harness's line giving it.
+    // When each of the two it held was given: the minute of Harness's line giving it, as GitHub dates it.
     const givenAt = (task: string) => {
       const [repo, number] = task.split('#') as [string, string]
-      return (gh.repos.get(repo)!.comments.get(Number(number)) ?? []).map(c => /^Harness, (\d\d:\d\d): for \*\*/.exec(String(c.body))?.[1]).find(Boolean)
+      return (gh.repos.get(repo)!.comments.get(Number(number)) ?? []).filter(c => /^Harness: .+, this is yours\./.test(String(c.body))).map(c => String(c.created_at).slice(11, 16))[0]
     }
     expect(over.length, 'the passes at once raced').toBeGreaterThan(0)
     for (const line of over) {

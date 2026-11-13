@@ -109,6 +109,49 @@ export const readerKey = (name: string): string => sameKey(name) || name.toLower
 /** The label a builder's tasks carry: builder:pip for Pip, as githubMentions.ts builderLabel. */
 export const labelOf = (name: string): string => `builder:${name.trim().toLowerCase().replace(/\s+/g, '-')}`
 
+/** How a Swarm's label begins: `swarm:autonomous.ai`. Whose task it is lives on the task, not on its builder (anh Dee,
+ *  2026-11-12): builders in different Swarms may share a name, so `builder:lennox` alone names none of them. */
+export const SWARM = 'swarm:'
+
+/** The Swarm's labels on an issue or pull request, in lower case. */
+export const swarmsOf = (row: Json): string[] => labelsOf(row).map(label => label.toLowerCase()).filter(label => label.startsWith(SWARM))
+
+/** The name of the label of the Swarm with id [swarm] among a repository's [labels]: the `swarm:` one whose description holds
+ *  that id, so two Swarms of one name there are told apart, and never one found by its name alone. Null when it has none. */
+export const markOf = (labels: Json[], swarm: string): string | null => {
+  const found = labels.find(label => String(label.name ?? '').toLowerCase().startsWith(SWARM) && String(label.description ?? '').split(/\s+/).includes(swarm))
+  return found ? String(found.name) : null
+}
+
+/** Whether an issue, or a pull request ([pull]), that carries the Swarms' labels [on] is its builder's own Swarm's to hear of
+ *  and to hold, where that Swarm's label is [mark], or null when it has none in the repository yet (githubMentions.ts,
+ *  nextThing.ts). One that carries a Swarm's label is that Swarm's. An issue that carries none is no Swarm's task; a pull request
+ *  that carries none is read as before. A Swarm with no label yet (its PM's Harness is a CLI from before the label, until
+ *  2026-12-14, 30 days after the one that writes it is released) reads as before, but never what carries another Swarm's. */
+export const swarmsOwn = (on: readonly string[], mark: string | null, pull: boolean): boolean =>
+  on.length ? mark !== null && on.includes(mark.toLowerCase()) : pull || mark === null
+
+/**
+ * Which of a repository's issues and pull requests are the Swarm's whose label there is [mark], told from [rows], its issues as
+ * GitHub lists them. Several Swarms may build one repository, and each one's Harness planned, gave, asked about and took back
+ * every sized issue in it: Tony's gave Dee's #4208 to its own builder a minute after it was opened, and #3880, held by 0xken15's
+ * Swarm's Lennox, read as Dee's Swarm's Lennox's (#4212). An issue is the Swarm's when it carries [mark], which Harness puts on
+ * its PM's tasks (githubAssign.ts) and a piece takes from its task (githubSplit.ts). A pull request carries a Swarm's label only
+ * when someone put one on: one that carries none is the Swarm's when it is for one of the Swarm's open tasks, whatever else it
+ * names ("Closes #1. Fixes #7", #7 a person's report), and is not when it is only for open issues that are not (tasksOf).
+ */
+export function ofProject(rows: Json[], mark: string): (row: Json) => boolean {
+  const own = (row: Json) => swarmsOf(row).includes(mark.toLowerCase())
+  const isPull = (row: Json) => !!row.pull_request || !!row.head
+  const issues = rows.filter(row => !isPull(row))
+  const ours = new Set(issues.filter(own).map(row => Number(row.number))), others = new Set(issues.filter(row => !own(row)).map(row => Number(row.number)))
+  return row => {
+    if (!isPull(row) || swarmsOf(row).length) return own(row)
+    const tasks = tasksOf(row)
+    return tasks.some(task => ours.has(task)) || !tasks.some(task => others.has(task))
+  }
+}
+
 /** The labels of a project's team: its builders' (away ones too) and its PM's. Harness asks readers for, and merges, only
  *  the team's own pull requests: a person's, or anyone's in a shared repository, is theirs (openharness has dozens open at a
  *  time, by people and their own agents). */
@@ -522,11 +565,12 @@ export function takenTasks(issues: Json[], pulls: Json[], builders: CrewBuilder[
 /** Finished tasks of a size needed before their time replaces the size's guess, and the bounds kept on it. */
 export const LEARN_MIN = 3, LEARNED_FLOOR = 10, LEARNED_CEILING = 24 * 60
 
-/** When a closed task's work began: its builder's "taken by" comment (githubClaim.ts), else Harness's word giving it. */
+/** When a closed task's work began: its builder's comment as it took it (githubClaim.ts: "Lennox: On it.", and "Lennox, 16:52:
+ *  taken by Lennox" before), else Harness's word giving it (gaveTo). */
 export function startedAt(comments: Json[]): number | null {
   for (const comment of comments) {
     const first = String(comment.body ?? '').split('\n').find(line => line.trim()) ?? ''
-    if (/\btaken by\b/i.test(first) || /^Harness, \d\d:\d\d: for \*\*/.test(first)) {
+    if (/\btaken by\b/i.test(first) || TOOK.test(first) || gaveTo(first) !== null) {
       const at = Date.parse(String(comment.created_at ?? ''))
       if (Number.isFinite(at)) return at
     }
@@ -566,11 +610,12 @@ export function nextPicks(plan: Plan, read: Read): Pick[] {
 }
 
 /** Why a builder got a task, in a few words: when it starts it, and the task's area when its person says it works on it. */
-export function reasonOf(pick: Pick, read: Read): string {
+export function reasonOf(pick: Pick, read: Read, to = false): string {
   const task = read.problem.tasks.find(t => t.id === pick.task)
-  const when = pick.start <= 0 ? 'it can start now' : `it can start in ${pick.start < 90 ? `${pick.start} min` : `${Math.round(pick.start / 60)} h`}`
+  // Said to the builder itself ([to]) on the task, or of it in the log.
+  const when = `${to ? 'You' : 'it'} can start ${pick.start <= 0 ? 'now' : `in ${pick.start < 90 ? `${pick.start} min` : `${Math.round(pick.start / 60)} h`}`}`
   const part = task?.part
-  return part && read.builders.get(pick.builder)?.worksOn?.includes(part) ? `${when}, and it works on ${part}` : when
+  return part && read.builders.get(pick.builder)?.worksOn?.includes(part) ? `${when}, and ${to ? 'you work' : 'it works'} on ${part}` : when
 }
 
 /**
@@ -587,8 +632,43 @@ export function readerFor(builders: CrewBuilder[], held: Map<string, number[]>, 
   return candidates[0] ?? null
 }
 
-/** Harness's ask to read a pull request (githubAssign.ts ask): "Harness, 14:20, to **Juno**: please read this pull request, then run
- *  `harness super-tab read ok owner/repo#24 f6edb44 …`": the reader it names, and the head it is asked to read. An ask from before
- *  the verdict was a command named the head after "READ-OK", and is on open pull requests still: that form can go after
- *  2026-12-10. The assigner finds its own asks by it, and GitHub news keeps each agent's as owed (githubMentions.ts). */
-export const ASKED = /^Harness, \d\d:\d\d, to \*\*([^*]+)\*\*: [^\n]*?please read[^\n]*?(?:super-tab read ok \S+|READ-OK) ([0-9a-f]{7,40})/
+/**
+ * Harness's own lines on GitHub, written with its PM's person's login (#4223; anh Dee, 2026-11-12: each comment credited to the
+ * agent who wrote it). It signs as every agent does, its name and a colon, with no clock, which GitHub shows, and names whoever
+ * the line is to once, as a person would: "Harness: Lennox, this is yours. You can start now." Before, "Harness, 09:30: for
+ * **Lennox**: it can start now." and "Harness, 14:20, to **Juno**: please read …": those stay on GitHub's open tasks and pull
+ * requests, so every reader here reads both forms. The old ones can go after 2026-12-14.
+ */
+export const HARNESS = 'Harness'
+/** A line of Harness's to [name]. */
+export const toLine = (name: string, words: string): string => `${HARNESS}: ${name}, ${words}`
+const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/** What Harness said to [name] on a line of [text], after its name, or null when it said nothing to it there. */
+export function saidTo(text: string, name: string): string | null {
+  const now = new RegExp(`^${HARNESS}: ${escaped(name)}, (.*)$`, 'im').exec(text)
+  if (now) return now[1]!
+  const before = /^Harness, \d\d:\d\d, to \*\*([^*]+)\*\*: (.*)$/m.exec(text)
+  return before && readerKey(before[1]!) === readerKey(name) ? before[2]! : null
+}
+
+/** Who Harness gave a task to, when [text] opens with its word giving it (githubAssign.ts give), or null. */
+export function gaveTo(text: string): string | null {
+  return (/^Harness: (.+), this is yours\./.exec(text) ?? /^Harness, \d\d:\d\d: for \*\*([^*]+)\*\*: /.exec(text))?.[1] ?? null
+}
+
+/** A builder's line as it takes a task by command (githubClaim.ts): "Lennox: On it." */
+export const tookLine = (name: string): string => `${name}: On it.`
+const TOOK = /^[^:\n]{1,80}: On it\.$/
+
+/** Harness's ask to read a pull request (githubAssign.ts ask): "Harness: Juno, please read this pull request, then run
+ *  `harness super-tab read ok owner/repo#24 f6edb44 …`", and "Harness, 14:20, to **Juno**: please read …" before: the reader it
+ *  names, and the head it is asked to read. An ask from before the verdict was a command named the head after "READ-OK", and is
+ *  on open pull requests still: that form can go after 2026-12-10. The assigner finds its own asks by it, and GitHub news keeps
+ *  each agent's as owed (githubMentions.ts). */
+export function askedToRead(text: string): { name: string; sha: string } | null {
+  // Its three asks begin so (githubAssign.ts askReaders): the name is all before the last of them, a comma in it or not.
+  const found = /^Harness: (.+), (?:please read|the head is now|your READ-OK on)[^\n]*?super-tab read ok \S+ ([0-9a-f]{7,40})/.exec(text)
+    ?? /^Harness, \d\d:\d\d, to \*\*([^*]+)\*\*: [^\n]*?please read[^\n]*?(?:super-tab read ok \S+|READ-OK) ([0-9a-f]{7,40})/.exec(text)
+  return found ? { name: found[1]!, sha: found[2]! } : null
+}
