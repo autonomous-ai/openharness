@@ -177,10 +177,18 @@ Left since, with the core's process as `src/architecture.coreFiles.txt` lists it
 
 | What | Lines | What the core needs instead |
 | --- | ---: | --- |
-| Helpers of one feature: `lib/agentTmp.ts` (the Swarm's), `lib/apiConnectionMetadata.ts` (models': the saved-API store parsed at every launch to learn whether one exists) | 238 | the feature's door, or a flag it reports |
-| The agent settings sync: a five-minute timer and backend reads (`core/experiments.ts:52-200`) | 150 | the edge host |
+| `lib/agentTmp.ts`, a Swarm agent's private temporary folder, made and swept at a launch. A relaunch needs the folder too, and behind the Swarm's door it would still load by default | 183 | the folder kept in the launch record; the Swarm's service makes and sweeps it |
+| `lib/apiConnectionMetadata.ts`: the saved-API store parsed at every launch, keys included, to learn whether one exists. A look that skips the check gives another answer for a file the check refuses, as the engine probe's first cut did (#4255) | 53 | the keys in a file of their own, apart from what a launch reads: a change of what is on disk, with its migration |
 | Exports only tests read: `decodeTmuxControlData` and `normalizeTmuxCaptureLines` in `lib/tmuxStream.ts`, `stopSessionOwner`, `writeTty` and `foregroundJob` in `lib/externalOwnerControl.ts` (kept with a golden test: ask before deleting) | 154 | nothing, or a test's own file |
 | Lines of `core/api.ts` no core file imports, and code only the inline mode runs (`core/serviceHost.ts:122-233`, `lib/transcriptPages.ts:240-466`, `lib/sharedMachinesPort.ts:49-160`) | 707 | with their service, or gone with the inline mode |
+
+**Stays, decided 13 November: the agent settings sync** (`core/experiments.ts` `createAgentSettingsSync`, 150 lines).
+It was built as a service in the edge host and measured. The core's side of it (the local door's relay of a window's
+switch, the link, and the check that the edge host changes no switch but the agents' own, since Hachi's is the person's
+yes) came to more than what left: one file and 47 lines more in the core's process, and `harness settings` would fail
+while the edge host is down. Lending the edge host every switch would make the core smaller and let a process that
+reads other accounts' messages turn Hachi on. What the sync does in the core is ask the gateway for one small read
+every five minutes and write one file.
 
 Not counted above, because it is not a move to a service: **the other platform's terminal code.** The Windows
 terminal host and its host moves load on a Mac and on Linux and never run there (`lib/ptyHost/`,
@@ -191,7 +199,7 @@ this platform uses leaves them out. Low risk on a Mac and Linux, medium on a Win
 
 | What | Lines | Where to | Risk |
 | --- | ---: | --- | --- |
-| **The agent browser's stream.** The core starts the exec into the browser's container for each viewer, paces up to 2 MB/s on its own loop and reads the viewer's VNC bytes (`core/browserStreams.ts`, `core/rfbShaper.ts`) | 526 | agentBrowser; the core keeps a forwarder, as for the viewers (`core/viewerStreams.ts`, 50 lines) | low |
+| **The agent browser's stream.** The core starts the exec into the browser's container for each viewer, paces up to 2 MB/s on its own loop and reads the viewer's VNC bytes (`core/browserStreams.ts`, `core/rfbShaper.ts`) | 526 | agentBrowser: the stream manager whole, with its credit and pacing. The core keeps a forwarder of its nine calls, as for the viewers (`core/viewerStreams.ts`, 50 lines), carries the bytes both ways as binary frames on the service's link, as the gateway's are, and tells the service a send the transport refused | medium: 531 lines and 808 of tests, and real Podman runs only in CI |
 | **Feature routes in the two doors.** Pairing and keys, the account, desk and Store proxies, device and Wi-Fi routes, usage reports, voice, the relay to other machines (`hookServer.ts` 470, `localWsServer.ts` 430, `core/main.ts` about 320, `lib/deviceManagementHttp.ts` 199, `lib/storeProxy.ts` 48) | 1,470 | gateway, devices, edge, through one adapter that turns a route into a service request | medium |
 | **Git.** A create clones a repository or adds a worktree inside the core; every agent frame runs git for its project and branch (`lib/gitProject.ts`, `agentProject.ts`, `projectFolder.ts`, `sessionGitHistory.ts`, `sessionGitContext.ts`, `worktreeDeletion.ts`, `sshHosts.ts`, `scm/`) | 1,900 | edge (workspaces): a create asks for its folder, a frame reads a reported cache | medium |
 | **The product usage vocabulary** and the mapping of each request's outcome to counter names (`lib/productUsageContract.ts`, `productUsageSignals.ts`, `productHealthContract.ts`, `appProductUsageReport.ts`) | 723 | gateway: the core sends one raw outcome | low |
