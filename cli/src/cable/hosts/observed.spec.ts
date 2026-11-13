@@ -105,6 +105,20 @@ describe('ObservedSource states', () => {
     expect(src.list()[0].state).toBe('done')
   })
 
+  it('a new turn clears the last answer, so the same answer twice is told twice', async () => {
+    const { src, answers, ev } = setup()
+    // Each answer the listeners see, as a change from the one before.
+    const told: (string | undefined)[] = []
+    src.onChange(() => { const a = src.list()[0].lastAnswer; if (a !== told.at(-1)) told.push(a) })
+    answers.set('/t/s.jsonl', 'Done.')
+    src.ingest(ev('turn-stop', { transcriptPath: '/t/s.jsonl' }))
+    await vi.waitFor(() => expect(src.list()[0].lastAnswer).toBe('Done.'))
+    src.ingest(ev('turn-start'))
+    expect(src.list()[0].lastAnswer).toBeUndefined()
+    src.ingest(ev('turn-stop'))
+    await vi.waitFor(() => expect(told).toEqual(['Done.', undefined, 'Done.']))
+  })
+
   it('a late answer does not land on a newer turn', async () => {
     let release: (v: string) => void = () => {}
     const { src, ev } = setup({ lastAnswer: () => new Promise((r) => { release = r }) })
