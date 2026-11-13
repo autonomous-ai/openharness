@@ -13,8 +13,6 @@ export const WINDOWS_GUEST_REQUESTS = `${WINDOWS_GUEST_ROOT}\\requests`
 export const WINDOWS_GUEST_ANSWERS = `${WINDOWS_GUEST_ROOT}\\answers`
 export const WINDOWS_GUEST_RECORDS = `${WINDOWS_GUEST_ROOT}\\records`
 export const WINDOWS_GUEST_SCRIPTS = `${WINDOWS_GUEST_ROOT}\\scripts`
-export const WINDOWS_GUEST_RUNTIME = `${WINDOWS_GUEST_ROOT}\\runtime`
-export const WINDOWS_GUEST_HOOK = `${WINDOWS_GUEST_ROOT}\\hook`
 /** One home per guest host (`hosts\<user>`): its discovery file, logs and `host.cmd`. */
 export const WINDOWS_GUEST_HOSTS = `${WINDOWS_GUEST_ROOT}\\hosts`
 /** A guest's own host home (lib/windows/guestHostBackend.ts starts its task on it). */

@@ -29,10 +29,11 @@ function thisComputer(): ServiceReference {
 }
 
 /**
- * Point the launcher and the service definition at [node], where they name another: by default the Node this process
- * runs on, the master's, which is the one it started its core on and that core's coming up just proved. Not
- * current-node, which can name a Node no probation judged (a master that could not put it back: masterProcess.ts,
- * lib/selfUpdate.ts `putNodeBack`).
+ * Point the launcher and the service definition at [node], where they name another: the Node the master started its
+ * core on, which that core's coming up just proved (masterProcess.ts `coreUp`; by default the Node this process runs
+ * on). Not current-node, which can name a Node no probation judged (a master that could not put it back:
+ * masterProcess.ts, lib/selfUpdate.ts `putNodeBack`), and not the master's own, which after a rollback it could not
+ * re-execute for is the Node the rollback rejected.
  */
 export function refreshNodeReferences(log: (line: string) => void, reference: ServiceReference = thisComputer(), node: string = baseNode(process.execPath)): NodeReferences {
   // Only a Node of ours: nothing is pointed at a Node somebody else installed and may remove.

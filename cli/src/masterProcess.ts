@@ -250,6 +250,7 @@ export function startMaster(
   // and an aside file may hold the only copy of a path a rollback puts back. Taken only while a host is on probation.
   const lock = () => tryAcquireSpawnLockSync('update')
   const masterLog = (line: string) => console.log(`${ts()} ${line}`)
+  const installed = isInstalledCopy(start.scriptPath, env.ADAPTER_CLI_DIR)
   return runMaster({
     env: masterEnv(process.env, unixSocketPath(env.ADAPTER_DATA_DIR, env.PORT), undefined, platform),
     nodePath: baseNode(process.execPath),
@@ -279,13 +280,14 @@ export function startMaster(
     unjudgedUpdate: (bundle) => unjudgedUpdate(env.ADAPTER_CLI_DIR, bundle)
       ?? (ptyRoot === null ? null : ptyUnjudged(ptyRoot, { cliPending: pendingVersion(env.ADAPTER_CLI_DIR) !== null, log: masterLog, lock })),
     // The updater runs for the installed copy alone (lib/installedCopy.ts), beside the core, never in it.
-    updater: !env.ADAPTER_UPDATE_DISABLE && isInstalledCopy(start.scriptPath, env.ADAPTER_CLI_DIR),
+    updater: !env.ADAPTER_UPDATE_DISABLE && installed,
     // The launcher and the service definition name the Node they were written with: once a core is up, they follow the
-    // Node it runs on, which is this master's, and which an update may have moved (lib/nodeReferences.ts). The
-    // installed copy only: a checkout's master never changes the real installation. The core did this itself until the
-    // audit of 2026-11-12, and loaded the platform's launchd, systemd and Task Scheduler code to do it, which this
-    // process already holds.
-    ...(isInstalledCopy(start.scriptPath, env.ADAPTER_CLI_DIR) ? { coreUp: () => { refreshNodeReferences((line) => masterLog(`[node-runtime] ${line.trim()}`)) } } : {}),
+    // Node it came up on, which an update may have moved (lib/nodeReferences.ts). That Node is the one the master
+    // names, not this process's own: after a rollback this master could not re-execute for, its own is the Node the
+    // rollback rejected. The installed copy only: a checkout's master never changes the real installation. The core
+    // did this itself until the audit of 2026-11-12, and loaded the platform's launchd, systemd and Task Scheduler
+    // code to do it, which this process already holds.
+    ...(installed ? { coreUp: (node: string) => { refreshNodeReferences((line) => masterLog(`[node-runtime] ${line.trim()}`), undefined, node) } } : {}),
     // A master that ends cleanly gives up its claim on its lean bundle, so the next one to start can
     // clear the folder; one that dies leaves a claim whose pid is gone, which counts for nothing.
     exit: (code) => {

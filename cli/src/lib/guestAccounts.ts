@@ -12,7 +12,7 @@ import { isAbsolute } from 'node:path'
 export const GUEST_HELPER_PATH = '/usr/local/libexec/harness/guest-helper'
 
 /** Where guests' homes are (the helper's HOME_ROOT): never the owner's own home or `staff`'s reach. On Windows the
- *  guests' own tree (lib/windows/guestRequests.ts `WINDOWS_GUEST_ROOT`); their profiles are `C:\Users\hg_<12 hex>`. */
+ *  guests' own tree (lib/windows/guestTree.ts `WINDOWS_GUEST_ROOT`); their profiles are `C:\Users\hg_<12 hex>`. */
 export function guestHomeRoot(platform: NodeJS.Platform = process.platform): string {
   if (platform === 'darwin') return '/Users/Shared/HarnessGuests'
   if (platform === 'win32') return 'C:\\ProgramData\\HarnessGuests'

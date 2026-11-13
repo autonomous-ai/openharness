@@ -15,7 +15,23 @@ import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 
-describe.skipIf(process.platform === 'win32')('the launcher follows the Node the daemon runs on', { timeout: 240_000 }, () => {
+/**
+ * Whether a copy of this Node runs by itself. The official builds are one file, as the managed Node is; a Node built
+ * against a shared libnode (Homebrew's, some distributions') is not, and its copy dies at start for want of it.
+ */
+const copies = ((): boolean => {
+  if (process.platform === 'win32') return false
+  const dir = mkdtempSync(join(tmpdir(), 'harnessd-node-copy-'))
+  try {
+    copyFileSync(process.execPath, join(dir, 'node'), constants.COPYFILE_FICLONE)
+    chmodSync(join(dir, 'node'), 0o755)
+    execFileSync(join(dir, 'node'), ['-e', ''], { stdio: 'ignore', timeout: 20_000 })
+    return true
+  } catch { return false } finally { rmSync(dir, { recursive: true, force: true }) }
+})()
+
+// Not on Windows, which has no launcher file to repoint (lib/nodeReferences.ts), nor on a Node whose copy cannot run.
+describe.skipIf(!copies)('the launcher follows the Node the daemon runs on', { timeout: 240_000 }, () => {
   let scratch = ''
   let daemon: IsolatedDaemon | undefined
   const cli = () => join(scratch, 'cli')
@@ -57,8 +73,8 @@ describe.skipIf(process.platform === 'win32')('the launcher follows the Node the
     const d = await start(false)
     await until('the launcher to name the Node the daemon runs on', () => readFileSync(launcher(), 'utf8').includes(`exec '${node()}' `) || null, 60_000, 200)
     expect(readFileSync(launcher(), 'utf8')).toBe(before().replace(/^exec .*$/m, `exec '${node()}' '${join(cli(), 'cli.js')}' "$@"`))
-    // Said by the master, which did it: the core's process no longer holds that code.
-    expect(d.log()).toMatch(new RegExp(`\\[node-runtime\\] ✓ repointed ${launcher().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} at `))
+    // Said by the master, which did it, after the file is in place: its line comes over a pipe, so it is waited for.
+    await until('the master to say so', () => d.log().includes(`[node-runtime] ✓ repointed ${launcher()} at `) || null, 30_000, 100)
   })
 
   it('a core with no master leaves the launcher as it is', async () => {

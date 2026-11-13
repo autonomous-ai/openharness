@@ -57,9 +57,10 @@ export interface MasterConfig {
    *  onto the build put back on it, and starts everything after on it. */
   restoreUpdate(): string | null | void
   confirmUpdate(): void
-  /** A core is up, each time one is: what the master's entry does then (../masterProcess.ts points the launcher and
-   *  the service definition at the Node the core runs on). One that throws is said, and stops nothing. */
-  coreUp?(): void
+  /** A core is up, each time one is, on [node]: what the master's entry does then (../masterProcess.ts points the
+   *  launcher and the service definition at that Node). The Node is the one this master started the core on, which is
+   *  not its own after a rollback it could not re-execute for. One that throws is said, and stops nothing. */
+  coreUp?(node: string): void
   env?: NodeJS.ProcessEnv
   /** Defaults to `process.exit`. */
   exit?: (code: number) => void
@@ -512,7 +513,7 @@ export function runMaster(config: MasterConfig): Supervisor {
     // which is never a reason for the master to stop.
     coreUp: () => {
       if (reexec && markerFile) removeMarker(markerFile)
-      try { config.coreUp?.() } catch (error) { log(`[harnessd] what the master does after its core came up failed: ${(error as Error).message}`) }
+      try { config.coreUp?.(node) } catch (error) { log(`[harnessd] what the master does after its core came up failed: ${(error as Error).message}`) }
     },
   }, options, { version: config.version, resume, unjudgedUpdate: unjudged })
   for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) onSignal(signal, () => stopAll(signal))

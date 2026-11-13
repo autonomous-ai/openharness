@@ -15,8 +15,8 @@ const runMaster = vi.hoisted(() => vi.fn((_config: Record<string, unknown>) => '
 vi.mock('./harnessd/master.js', async (real) => ({ ...await real<object>(), runMaster }))
 const leanBundle = vi.hoisted(() => ({ read: vi.fn((_bundle: Buffer): LeanBundle | null => null) }))
 vi.mock('./harnessd/leanBundle.js', async (real) => ({ ...await real<object>(), readLeanBundle: (bundle: Buffer) => leanBundle.read(bundle) }))
-const nodeReferences = vi.hoisted(() => ({ refresh: vi.fn((_log: (line: string) => void) => ({ launcher: false, service: false })) }))
-vi.mock('./lib/nodeReferences.js', async (real) => ({ ...await real<object>(), refreshNodeReferences: (log: (line: string) => void) => nodeReferences.refresh(log) }))
+const nodeReferences = vi.hoisted(() => ({ refresh: vi.fn((_log: (line: string) => void, _reference?: unknown, _node?: string) => ({ launcher: false, service: false })) }))
+vi.mock('./lib/nodeReferences.js', async (real) => ({ ...await real<object>(), refreshNodeReferences: (log: (line: string) => void, reference?: unknown, node?: string) => nodeReferences.refresh(log, reference, node) }))
 const spawnLock = vi.hoisted(() => ({
   acquire: vi.fn(async (..._args: unknown[]): Promise<() => void> => () => {}),
   sync: vi.fn((..._args: unknown[]): (() => void) | null => () => {}),
@@ -518,14 +518,16 @@ describe('starting the master', () => {
     expect((runMaster.mock.calls[0][0] as { updater: boolean }).updater).toBe(true)
     // The installed copy's master points the launcher and the service definition at the Node its core came up on
     // (lib/nodeReferences.ts), each time one does: the core did, and loaded the platform's code for it.
+    // At the Node the master names, which is the one that core runs on: after a rollback it is not the master's own.
     nodeReferences.refresh.mockClear()
-    ;(runMaster.mock.calls[0][0] as { coreUp(): void }).coreUp()
-    ;(runMaster.mock.calls[0][0] as { coreUp(): void }).coreUp()
-    expect(nodeReferences.refresh).toHaveBeenCalledTimes(2)
+    ;(runMaster.mock.calls[0][0] as { coreUp(node: string): void }).coreUp('/runtime/node-v24/bin/node')
+    ;(runMaster.mock.calls[0][0] as { coreUp(node: string): void }).coreUp('/runtime/node-v22/bin/node')
+    expect(nodeReferences.refresh.mock.calls.map(([, reference, node]) => [reference, node])).toEqual([[undefined, '/runtime/node-v24/bin/node'], [undefined, '/runtime/node-v22/bin/node']])
     const said = vi.spyOn(console, 'log').mockImplementation(() => {})
-    ;(nodeReferences.refresh.mock.calls[0]![0] as (line: string) => void)('  ✓ repointed /bin/harness at /runtime/node')
-    expect(said.mock.calls[0]![0]).toMatch(/ \[node-runtime\] ✓ repointed \/bin\/harness at \/runtime\/node$/)
-    said.mockRestore()
+    try {
+      ;(nodeReferences.refresh.mock.calls[0]![0] as (line: string) => void)('  ✓ repointed /bin/harness at /runtime/node')
+      expect(said.mock.calls[0]![0]).toMatch(/ \[node-runtime\] ✓ repointed \/bin\/harness at \/runtime\/node$/)
+    } finally { said.mockRestore() }
     expect(LEAN_DIR).toMatch(/[\\/]lean$/)
     expect(LEAN_OFF_FILE).toMatch(/[\\/]lean-off$/)
   })
