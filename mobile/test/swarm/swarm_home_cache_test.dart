@@ -4,10 +4,10 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/parts.dart';
+import 'package:harness_mobile/swarm/swarm_agent_state.dart';
 import 'package:harness_mobile/swarm/swarm_buddy.dart';
 import 'package:harness_mobile/swarm/swarm_home_cache.dart';
 import 'package:harness_mobile/swarm/swarm_pm_chat.dart';
-import 'package:harness_mobile/swarm/team_glance.dart';
 import 'package:harness_mobile/swarm/waiting_work.dart';
 
 import 'swarm_fixture.dart';
@@ -61,10 +61,6 @@ void main() {
       expect([for (final p in back.projects) p.name], ['Mobile']);
       final project = back.projects.single;
       expect(swarmPmName(back, project), 'River');
-      expect(
-        swarmTeamGlance(back, projectId: project.id).line,
-        swarmTeamGlance(snapshot, projectId: project.id).line,
-      );
       final waiting = swarmWaitingWork(back, me, partners: kept.partners);
       expect(
         [for (final w in waiting) w.conversation.label],
@@ -90,6 +86,45 @@ void main() {
       expect(back.mentionsWaiting, 0);
       expect(back.conversation('g1')!.lastMessageSequence, 0);
     });
+  });
+
+  test('keeps what Your Team says each agent does', () {
+    final now = DateTime.utc(2026, 11, 12, 8);
+    final until = DateTime.utc(2026, 11, 12, 9, 30);
+    final snapshot = SuperTabSnapshot.fromJson(
+      SuperTabParts.firstLoad(
+        firstLoad(
+          agents: [
+            {...agent('agent-a'), 'pausedAt': '2026-11-12T07:00:00.000Z'},
+            {
+              ...agent('agent-b'),
+              'alerting': ['prompt'],
+            },
+            {...agent('agent-c'), 'limitedUntil': until.toIso8601String()},
+            {...agent('agent-d'), 'downSince': '2026-11-12T07:00:00.000Z'},
+            agent('agent-e'),
+          ],
+        ),
+      ).state,
+    );
+    List<String?> states(SuperTabSnapshot read) => [
+      for (final id in ['agent-a', 'agent-b', 'agent-c', 'agent-d', 'agent-e'])
+        swarmAgentState(read.agent(id)!, me: me, now: now),
+    ];
+    final shown = states(snapshot);
+    expect(shown, [
+      'paused',
+      'needs you',
+      startsWith('limited until '),
+      'offline',
+      null,
+    ]);
+
+    final back = SuperTabSnapshot.fromJson(
+      swarmHomeSwarm(snapshot, const {}).state,
+    );
+
+    expect(states(back), shown);
   });
 
   group('Buddies kept', () {

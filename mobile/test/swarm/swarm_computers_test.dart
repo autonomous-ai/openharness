@@ -226,9 +226,9 @@ void main() {
       expect(agents.working, 1);
     });
 
-    test('tells when how many work changes, not at every change of the app; '
-        "and never tells Swarm's computers, whose change reads Swarms "
-        'again', () async {
+    test('tells when how many work, or what one does, changes, not at every '
+        "change of the app; and never tells Swarm's computers, whose change "
+        'reads Swarms again', () async {
       final rig = await signedInWith({
         'a': ['one', 'two'],
       });
@@ -253,7 +253,7 @@ void main() {
         ],
       };
       await push(rig, 'a', 'commander_question', question());
-      expect(told, 1, reason: 'one waits now; still one works');
+      expect(told, 2, reason: 'two waits on its person now');
 
       var appTold = 0;
       void counted() => appTold++;
@@ -264,12 +264,49 @@ void main() {
       await push(rig, 'a', 'turn_heartbeat', {'agentId': 'one'});
       await settle();
       expect(appTold, greaterThan(0), reason: 'the app did tell');
-      expect(told, 1, reason: 'still one working');
+      expect(told, 2, reason: 'still one working, one waiting');
 
       await push(rig, 'a', 'turn_ended', {'agentId': 'one'});
-      expect(told, 2);
+      expect(told, 3);
       expect(computers.agents!.working, 0);
       expect(computersTold, 0);
+    });
+
+    test('what each harness does, by computer and harness: a question on its '
+        'screen before the turn it asked in, nothing once both are over, and '
+        'nothing for one on another computer', () async {
+      final rig = await signedInWith({
+        'a': ['one', 'two'],
+      });
+      addTearDown(rig.app.dispose);
+      final computers = AppSwarmComputers(rig.app);
+      addTearDown(computers.dispose);
+      final agents = computers.agents!;
+      expect(agents.activityOf('a', 'one'), isNull, reason: 'doing nothing');
+
+      await push(rig, 'a', 'turn_started', {'agentId': 'one'});
+      expect(agents.activityOf('a', 'one'), SwarmHarnessActivity.working);
+      expect(agents.activityOf('a', 'two'), isNull);
+      expect(agents.activityOf('b', 'one'), isNull, reason: 'not its computer');
+
+      await push(rig, 'a', 'commander_question', {
+        'agentId': 'one',
+        'requestId': 'q1',
+        'questions': [
+          {
+            'q': 'Proceed?',
+            'options': ['Yes'],
+          },
+        ],
+      });
+      expect(agents.activityOf('a', 'one'), SwarmHarnessActivity.needsInput);
+
+      await push(rig, 'a', 'commander_question_close', {
+        'agentId': 'one',
+        'requestId': 'q1',
+      });
+      await push(rig, 'a', 'turn_ended', {'agentId': 'one'});
+      expect(agents.activityOf('a', 'one'), isNull);
     });
 
     test('gone with its computers: a change of the app after tells no one '

@@ -57,12 +57,21 @@ class _Computers extends ChangeNotifier implements SwarmComputers {
   void add(BuildContext context) {}
 }
 
-/// The person's agents as a test sets them: two working.
+/// The person's agents as a test sets them: two working, and what each
+/// does by `machineId/harnessId` ([activities], told of by [tell]).
 class _Agents extends ChangeNotifier implements SwarmAgents {
   @override
   int? get working => 2;
 
   var lists = 0;
+
+  final activities = <String, SwarmHarnessActivity>{};
+
+  @override
+  SwarmHarnessActivity? activityOf(String machineId, String harnessId) =>
+      activities['$machineId/$harnessId'];
+
+  void tell() => notifyListeners();
 
   @override
   void openList(BuildContext context) => lists++;

@@ -351,6 +351,34 @@ void main() {
       expect(find.text('No agents running'), findsOneWidget);
     },
   );
+  testWidgets(
+    'its agents by name, each with its role and what it does as Your Team '
+    'says it',
+    (tester) async {
+      await open(
+        tester,
+        agents: [
+          agent('a-bo', displayName: 'Bo'),
+          {
+            ...agent('a-ada', displayName: 'Ada'),
+            'pausedAt': '2026-11-12T08:00:00.000Z',
+          },
+        ],
+      );
+      await tester.tap(key('swarm-machine-$tab-mac-1'));
+      await tester.pumpAndSettle();
+      Finder inSheet(String text) => find.descendant(
+        of: find.byType(SwarmMachineSheet),
+        matching: find.text(text),
+      );
+      expect(inSheet('Dev · paused'), findsOneWidget);
+      expect(inSheet('Dev'), findsOneWidget);
+      expect(
+        tester.getTopLeft(inSheet('Ada')).dy,
+        lessThan(tester.getTopLeft(inSheet('Bo')).dy),
+      );
+    },
+  );
   testWidgets('an agent-only machine with no observation still opens safely', (
     tester,
   ) async {

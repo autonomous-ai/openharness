@@ -9,12 +9,13 @@ import '../shared/theme/app_space.dart';
 import '../shared/theme/app_theme.dart';
 import '../shared/theme/app_type.dart';
 import 'model.dart';
+import 'swarm_agent_state.dart';
+import 'swarm_agents.dart';
 import 'swarm_buddy.dart';
 import 'swarm_machine_details.dart';
 import 'swarm_machine_menu.dart';
 import 'swarm_reader.dart';
 import 'swarm_style.dart';
-import 'team_glance.dart';
 
 /// Swarm inventory only: never the account's private linked-computer list.
 /// Backend-filtered parts and Desktop's readingPoolOf own visibility.
@@ -238,11 +239,13 @@ class SwarmMachineSheet extends StatelessWidget {
         readingDim: view.dim,
         now: DateTime.now(),
       );
-      final agents = swarmTeamGlance(snapshot).agents.where(
-        (a) =>
-            snapshot.placeOf(a.agent.machineId) == machineId &&
-            a.agent.downSince == null,
-      );
+      // By name, each with what it does in a word, as on Your Team.
+      final agents = [...view.agents]
+        ..sort(
+          (a, b) =>
+              snapshot.agentName(a.id).compareTo(snapshot.agentName(b.id)),
+        );
+      final harnesses = swarmAgentsOf(context);
       return SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(AppSpace.screenInset),
@@ -287,11 +290,22 @@ class SwarmMachineSheet extends StatelessWidget {
               if (agents.isEmpty)
                 swarmMachineDetailRow('Running here', 'No agents running')
               else
-                for (final a in agents)
-                  swarmMachineDetailRow(
-                    a.name,
-                    '${snapshot.roleOf(a.agent.id)?.badge ?? 'Dev'} · ${a.label}',
+                ListenableBuilder(
+                  listenable: Listenable.merge([?harnesses]),
+                  builder: (context, _) => Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      for (final a in agents)
+                        swarmMachineDetailRow(
+                          snapshot.agentName(a.id),
+                          [
+                            snapshot.roleOf(a.id)?.badge ?? 'Dev',
+                            ?swarmAgentStateIn(reader, a, harnesses),
+                          ].join(' · '),
+                        ),
+                    ],
                   ),
+                ),
               SwarmMachinePauseButton(reader: reader, machineId: machineId),
             ],
           ),

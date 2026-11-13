@@ -13,7 +13,6 @@ import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_style.dart' show SwarmButton;
 import 'package:harness_mobile/swarm/swarm_switch_pm.dart';
-import 'package:harness_mobile/swarm/team_glance.dart';
 
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
@@ -503,11 +502,6 @@ void main() {
         fake,
         host,
         pm: pmData({'switchRequest': switching()}),
-      );
-      final snapshot = host.session!.inbox.reader(tab)!.snapshot!;
-      expect(
-        swarmTeamGlance(snapshot, projectId: project).agents.single.label,
-        'Switching…',
       );
       await openSettings(tester);
       expect(menuItem, findsNothing);
@@ -1647,22 +1641,5 @@ void main() {
         expect(swarmMaySwitchLead(snapshot(pmData()), 'nope', me), isFalse);
       },
     );
-
-    test('a PM with a switch asked for reads Switching…', () {
-      final glance = swarmTeamGlance(
-        snapshot(
-          pmData({
-            'switchRequest': switching(),
-            'limitedUntil': DateTime.now()
-                .add(const Duration(hours: 1))
-                .toUtc()
-                .toIso8601String(),
-          }),
-        ),
-        projectId: project,
-      );
-      expect(glance.agents.single.label, 'Switching…');
-      expect(glance.agents.single.state, SwarmAgentState.working);
-    });
   });
 }

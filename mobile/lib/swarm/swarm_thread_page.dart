@@ -826,6 +826,7 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
                 people: t.mentionablePeople,
                 agents: t.mentionable,
                 snapshot: snapshot,
+                me: t.reader.accountId,
                 query: query,
                 onPick: (id) {
                   t.completeMention(id);
