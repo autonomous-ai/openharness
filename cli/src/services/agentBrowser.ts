@@ -33,9 +33,10 @@ import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { availableParallelism, totalmem } from 'node:os'
 import { join, resolve } from 'node:path'
-import { AGENT_BROWSER_REQUESTS, AGENT_BROWSER_VNC_PIPE, mayOpenBrowser, type Asker, type BrowserSwitch, type CoreApi, type CorePorts, type ServiceRequests } from '../core/api.js'
+import { AGENT_BROWSER_REQUESTS, mayOpenBrowser, type Asker, type BrowserSwitch, type CoreApi, type CorePorts, type ServiceRequests } from '../core/api.js'
 import { browserTools } from '../lib/browserToolsAsset.js'
 import type { ProductUsageMetric } from '../lib/productUsageContract.js'
+import { BROWSER_CHUNK_BYTES, encodeTerminalLocal } from '../lib/terminalBinary.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { resolveViaLoginShell } from '../lib/tmuxOnPath.js'
 import { Browsers, type BrowserState } from './agentBrowser/browsers.js'
@@ -49,6 +50,7 @@ import { createPodman, PodmanError, type Podman } from './agentBrowser/podman.js
 import { clampWindow, humanMode, parseSettings, publicSettings, type BrowserHost } from './agentBrowser/settings.js'
 import { canAskForPassword, Setup } from './agentBrowser/setup.js'
 import { StateFile } from './agentBrowser/stateFile.js'
+import { BROWSER_PACING_BYTES_PER_SECOND, BROWSER_WINDOW, BrowserStreamManager } from './agentBrowser/streams.js'
 import { ToolServers, type ToolChild, type ToolReply } from './agentBrowser/toolServers.js'
 
 export { AGENT_BROWSER_REQUESTS } from '../core/api.js'
@@ -60,6 +62,9 @@ const LOCAL_ONLY = { error: 'LOCAL_ONLY' }
 const INVALID_REQUEST = { error: 'INVALID_REQUEST' }
 /** Setup's own failures whose Retry installs Podman again (agentBrowser/setup.ts); no start fails with them. */
 const SETUP_INSTALL_FAILURES = new Set(['podman_install_failed', 'podman_manual'])
+/** What a viewer's bytes are piped through inside a browser's container: to Xvnc, which listens on the container's own
+ *  loopback and publishes no port. */
+const VNC_PIPE = ['socat', 'STDIO', 'TCP:127.0.0.1:5900']
 // The tool server in the image (cli/assets/browser/browser-tools.mjs), one JSON-RPC message per line on its stdio.
 const TOOL_SERVER = ['node', '/opt/harness-browser/browser-tools.mjs']
 /** Answered by name on Windows, so Desktop says Browser does not run there rather than "update Harness" (spec § Desktop),
@@ -122,8 +127,12 @@ function unsupported(ports: Pick<CorePorts, 'agentBrowser'>): ServiceRequests {
     deleted: () => {},
     moved: () => {},
     frameContext: () => undefined,
-    streamCommand: () => ({ error: 'NO_BROWSER' }),
-    onCloseViewers: () => {},
+    stream: () => false,
+    streamInput: () => false,
+    streamClosed: () => {},
+    streamRoute: () => {},
+    streamTransportError: () => {},
+    streamRefused: () => {},
     stop: () => {},
   }
   return Object.fromEntries(AGENT_BROWSER_REQUESTS.map(type => [type, () => (type === 'agent_browser_available'
@@ -154,10 +163,37 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
    * is told apart from the agent's own end, and a browser that turns ready meanwhile is owed nothing.
    */
   const byPerson = new Set<string>()
-  /** The core's streams to this machine's browsers (core/browserStreams.ts), told when one stops or goes. */
-  const viewerListeners: Array<(agentId: string) => void> = []
   // Built after setup, which tells it each step.
   let browsers: Browsers
+  /**
+   * The viewers' streams of this machine's browsers (agentBrowser/streams.ts). Each is this service's own exec into a
+   * ready browser's container; its answers and the screen's bytes go to the core, which holds each to the connection
+   * that opened the stream (core/browserStreams.ts). Until the audit of 2026-11-12 the core ran these itself.
+   */
+  const streams = new BrowserStreamManager({
+    exec: (agentId) => {
+      const shown = browsers.state(agentId)
+      if (!shown) return { error: 'NO_BROWSER' }
+      if (shown.state !== 'ready') return { error: 'NOT_READY' }
+      // A ready browser has an entry, so a profile; one whose state file cannot be read now has no stream to open.
+      let profile: string
+      try { profile = browsers.profile(agentId)! } catch { return { error: 'NOT_READY' } }
+      // Ready means Podman was found: it started this container. Xvnc listens on 5900 inside the container only (no
+      // published port), so a viewer's bytes reach it through this exec.
+      return { spawn: () => podman.spawn(containers.execArgs(profile, VNC_PIPE)) }
+    },
+    sendTarget: (connId, type, payload) => core.clients.browserFrame?.(connId, type, payload) ?? false,
+    // Framed once, here, as a window is sent it: the core sends it on as it is, to the connection it holds the stream
+    // for, whichever this names.
+    sendBinaryTarget: (_connId, frame) => {
+      const encoded = encodeTerminalLocal(frame)
+      return !!encoded && (core.clients.browserBytes?.(encoded) ?? false)
+    },
+    measure: count,
+    pacing: { bytesPerSecond: BROWSER_PACING_BYTES_PER_SECOND },
+    window: BROWSER_WINDOW,
+    chunkBytes: BROWSER_CHUNK_BYTES,
+  })
   const setup = new Setup({
     podman, platform, arch: process.arch,
     download, sha256, run, which: resolveViaLoginShell, interactive: canAskForPassword,
@@ -180,7 +216,7 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
       const session = core.agents.byAgent(agentId)
       if (session) core.agents.sync(session)
     },
-    closeViewers: agentId => { for (const listener of viewerListeners) listener(agentId) },
+    closeViewers: agentId => streams.closeAgent(agentId),
     measure: count,
     podmanAnswered: () => events?.wake(),
   })
@@ -264,23 +300,29 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
       void move(from, to.agentId, on)
     },
     frameContext: agentId => browsers.state(agentId),
-    streamCommand(agentId) {
-      const shown = browsers.state(agentId)
-      if (!shown) return { error: 'NO_BROWSER' }
-      if (shown.state !== 'ready') return { error: 'NOT_READY' }
-      // A ready browser has an entry, so a profile; one whose state file cannot be read now has no stream to open.
-      let profile: string
-      try { profile = browsers.profile(agentId)! } catch { return { error: 'NOT_READY' } }
-      // Ready means Podman was found: it started this container. Xvnc listens on 5900 inside the container only (no
-      // published port), so a viewer's bytes reach it through this exec, the one command the core starts (core/api.ts).
-      return { argv: podman.argv(containers.execArgs(profile, [...AGENT_BROWSER_VNC_PIPE])) }
+    // A viewer's stream (agentBrowser/streams.ts). Who may open one is the core's word, with whether it is a window here.
+    stream(connId, type, payload, asker) {
+      // An open without who asked is no open: never a browser on a guess.
+      if (type === 'agent_browser_open' && asker) streams.open(connId, payload, { allowed: mayOpenBrowser(asker), local: asker.local })
+      else if (type === 'agent_browser_ack') streams.ack(connId, payload)
+      else if (type === 'agent_browser_close') streams.close(connId, payload)
+      else return false
+      return true
     },
-    onCloseViewers: listener => { viewerListeners.push(listener) },
+    // Taken, as the stream's own process: one that ended meanwhile hears its close come back.
+    streamInput: (streamId, bytes) => { streams.input(streamId, bytes); return true },
+    streamClosed: connId => streams.closeConnection(connId),
+    streamRoute: (streamId, route) => (route ? streams.route(streamId, route) : streams.routeLost(streamId)),
+    streamTransportError: () => streams.transportError(),
+    streamRefused: streamId => streams.refused(streamId),
     stop() {
       stopped = true
       events?.close()
       notices.close()
       toolServers.endAll()
+      // Each viewer's exec ends with the service, and its panel is told: switched off in the core's process, nothing
+      // else would end them.
+      streams.closeAll()
     },
   }
 

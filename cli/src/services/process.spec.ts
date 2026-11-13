@@ -299,6 +299,31 @@ describe('a service in its own process', () => {
     expect(asked[3].closed.aborted).toBe(true)
   })
 
+  // A service that keeps something of its own per connection (an agent browser's viewers' streams) hears each end.
+  it('tells the service a connection ended after what it asked is aborted, and logs a throw', async () => {
+    const order: string[] = []
+    const closedConnections: string[] = []
+    run({
+      requests: { command: (_payload: Record<string, unknown>, _asker: unknown, closed?: AbortSignal) => new Promise(() => { closed!.addEventListener('abort', () => order.push('aborted')) }) },
+      onConnectionClosed: (connection) => {
+        order.push(`closed ${connection}`)
+        closedConnections.push(connection)
+        if (connection === 'conn-x') throw new Error('kept nothing')
+      },
+    })
+    socket().open()
+    socket().say({ type: 'command', payload: { id: 'a1', requestId: 'a1' }, asker: { local: false, owner: true, connection: 'conn-a' } })
+    await vi.waitFor(() => expect(order).toEqual([]))
+    await Promise.resolve()
+    socket().say({ type: 'service_connection_closed', payload: { connection: 'conn-a' } })
+    expect(order).toEqual(['aborted', 'closed conn-a'])
+    socket().say({ type: 'service_connection_closed', payload: { connection: 'conn-x' } })
+    expect(lines.some((line) => line.includes('connection closed failed') && line.includes('kept nothing'))).toBe(true)
+    // Not a connection's name: nobody to tell.
+    socket().say({ type: 'service_connection_closed', payload: { connection: 7 } })
+    expect(closedConnections).toEqual(['conn-a', 'conn-x'])
+  })
+
   it('hears what the core tells it, and asks the core what it needs to know', async () => {
     const onEvent = vi.fn()
     let core: Parameters<NonNullable<ServiceProcessOptions['onConnected']>>[0] | null = null

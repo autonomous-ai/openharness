@@ -69,7 +69,7 @@ hang or leak costs only its process. A process per risk, not per feature (`SERVI
 | `router` | router | an experiment: where ⌘B sends a task, decided by Jev | on demand |
 | `cloud` | cloud | an experiment: cloud agents (Fo, Devin Cloud, Cursor Cloud), harnesses on their makers' servers | on demand |
 | `superTabs` | superTabs | the Swarm: its host, its GitHub loops and its calls to the backend | on demand, only while the Swarm is on |
-| `agentBrowser` | agentBrowser | Podman's calls and event stream, image builds, Podman's setup (`agentBrowserProcess.ts`, `core/agentBrowserLink.ts`) | on demand |
+| `agentBrowser` | agentBrowser | Podman's calls and event stream, image builds, Podman's setup, and each viewer's stream of a browser's screen: its exec into the container, the viewer's VNC bytes, the credit and the pacing (`agentBrowserProcess.ts`, `core/agentBrowserLink.ts`; the core passes a stream on and holds it to the connection that opened it, `core/browserStreams.ts`) | on demand |
 
 A fault in one of the edge host's services can cost the others in it, never the core. Every service in
 `KNOWN_SERVICES` runs out of the core's process by default, unless `HARNESSD_SERVICES` names a subset, by

@@ -101,7 +101,6 @@ core/monitorLink.ts
 core/orchestratorLink.ts
 core/questions.ts
 core/recapsLink.ts
-core/rfbShaper.ts
 core/serviceHost.ts
 core/serviceLinks.ts
 core/sharedMachinesLink.ts

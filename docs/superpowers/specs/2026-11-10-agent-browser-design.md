@@ -317,8 +317,11 @@ Saving a change that needs it restarts the browser; the login stays.
   - it answers the app's `agent_browser_*` requests;
   - it supplies the agent frame's `browser` field.
   - It starts on demand, and also at daemon start when its state file exists.
-- **Core** *(call)*: one small generic piece, `BrowserStreamManager`, beside `TerminalStreamManager`. Only the core and
-  the gateway carry binary frames; a service link carries JSON only. All Podman logic stays in the service.
+- **Core** *(call, changed 2026-11-13)*: a forwarder, `core/browserStreams.ts`. It decides who may open a stream and
+  holds each stream to the connection that opened it; the stream itself, `BrowserStreamManager`, runs in the service
+  (`services/agentBrowser/streams.ts`), and its bytes ride the service's link as binary frames. As first built the
+  core ran the manager and started the exec; [the core audit](../../design/2026-11-12-core-audit.md) moved both out.
+  All Podman logic stays in the service.
 - **Desktop**: one Dart browser client in `desktop/lib/browser/`.
 
 ### Podman
@@ -772,7 +775,7 @@ Saving a change that needs it restarts the browser; the login stays.
    - **The viewing Desktop:** its own daemon terminates the encryption and passes browser frames to the app over
      loopback, as it does for terminal frames. When the agent is on the same machine, that daemon serves the stream
      itself.
-   - **The agent's machine:** `BrowserStreamManager` refuses `agent_browser_open` unless all of these hold:
+   - **The agent's machine:** the core (`core/browserStreams.ts`) refuses `agent_browser_open` unless all of these hold:
      - the caller is the machine's own person, meaning `asker.local` or `asker.accountOwner === true`. The gateway
        already sets `accountOwner` for the person's other Desktops and not for a shared machine, so no gateway change
        is needed;
@@ -781,9 +784,9 @@ Saving a change that needs it restarts the browser; the login stays.
      - the agent has a browser and it is ready.
    - **Guests** are refused twice: the guest policy refuses every `agent_browser_*` frame and request by default,
      before routing, and the check above refuses them again.
-   - It then asks the service's port for the exec command and pipes
-     `podman exec -i harness-browser-<agentId> socat STDIO TCP:127.0.0.1:5900`: one exec per open viewer, at most 4
-     per browser.
+   - It then hands the open to the service, which pipes
+     `podman exec -i harness-browser-<agentId> socat STDIO TCP:127.0.0.1:5900` in its own process: one exec per open
+     viewer, at most 4 per browser. The core starts no command (changed 2026-11-13).
    - The stream exists only while a panel is open. Closing the panel, or losing the connection, ends the exec.
    - **Stream profiles by route** *(call; the relay budget, 512 KB/s per machine, agreed 2026-11-10)*. The first spike measured, while a page
      scrolls without stopping (Wikipedia, 201 images), Tight encoding:

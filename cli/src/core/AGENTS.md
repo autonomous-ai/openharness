@@ -129,6 +129,11 @@ The core stays small and secure, in the code and at run time: read
   sends a device); `wifiAgents.ts`: its doors into the core (the agents as it lists them, a prompt, an
   agent made for a Store harness); `wifiLink.ts`: its service in the devices' process. `devicesWake.ts`: when
   that process is asked for, once there is a device (a dial's port in /dev, a paired Wi-Fi device).
+  `agentBrowserLink.ts`: the agent browser in its own process: what the core tells it of agents, each browser's
+  state as it last said, and its viewers' streams passed on. `browserStreams.ts`: the core's side of a browser's
+  stream, and nothing of the stream itself: who may open one, whose each is, its own bounds (an open the service does
+  not answer, bytes a viewer has not read), and that it is closed when its service goes. The core starts no command
+  for a browser, reads none of a viewer's VNC bytes, and sends the service's screen frames on as they came.
   `modelsWake.ts`: when models' process is asked for as the core starts, once grid is in use here.
   `gatewayWake.ts`: when the gateway's process is asked for as the core starts, before it binds: signed in, or
   anything paired here. `viewersWake.ts`: when the viewers' process (the viewers and the Store) is asked for: a
