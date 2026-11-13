@@ -5,6 +5,7 @@ import 'package:clock/clock.dart';
 import 'package:flutter/foundation.dart' show setEquals;
 import 'package:flutter/material.dart';
 
+import '../core/runtime_model_name.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/swarm_layout.dart';
@@ -295,7 +296,12 @@ class _SwarmAgentInfoState extends State<SwarmAgentInfo>
         _Fact('computer', 'Computer', Text(computer.join(' · '))),
       if (swarmEngineName(agent) case final engine?)
         _Fact('engine', 'Engine', Text(engine)),
-      if (known.model case final model?) _Fact('model', 'Model', Text(model)),
+      if (known.model case final model?)
+        _Fact(
+          'model',
+          'Model',
+          Text(modelLabelWithEffort(model, known.effort)),
+        ),
       if (state != null) _Fact('state', 'State', Text(state)),
       // What the boards held when last read, and why one could not be read now: never stale without saying so.
       if (held.isNotEmpty || errors.isNotEmpty)

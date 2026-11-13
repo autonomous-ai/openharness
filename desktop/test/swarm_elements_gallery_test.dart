@@ -248,8 +248,17 @@ Future<List<SuperTabController>> _show(
             'truncated': false,
           },
         ];
-  // The task cards read the lampOS review Swarm's channel.
-  final c = swarmV4Server().controller(account: 'owner');
+  // The task cards read the lampOS review Swarm's channel; Info reads first builder's model and effort.
+  final server = swarmV4Server();
+  final builder = (server.state['agents'] as List)
+      .cast<Map<String, dynamic>>()
+      .firstWhere((a) => a['id'] == 'first builder');
+  builder['configuration'] = {
+    ...builder['configuration'] as Map,
+    'model': 'claude-opus-5-5',
+    'effort': 'xhigh',
+  };
+  final c = server.controller(account: 'owner');
   addTearDown(c.dispose);
   await c.refresh();
   // Faye's Browser settings, as her computer keeps them, and her running browser's screen.
