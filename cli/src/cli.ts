@@ -2,7 +2,7 @@
 import './lib/connectWait.js'
 import './config/startHome.js'
 import './config/loadEnv.js'
-import { runDevicesCommand } from './devices/client.js'
+import { runDevicesCommand, runDialWatch, type DevicesClientDeps } from './devices/client.js'
 import { fingerprint as e2eeCoreFingerprint, b64d as e2eeCoreDecode } from './lib/e2ee/core.js'
 /**
  * machine-adapter CLI (the `harness` command) — connect this computer to a "remote" agent.
@@ -2943,13 +2943,18 @@ switch (cmd) {
   case 'autonomous-device':
     runAutonomousDeviceCommand(rest, env.ADAPTER_DATA_DIR, daemonPort()).then(code => { process.exitCode = code }).catch(onError)
     break
-  case 'hardware':
-    runDevicesCommand(rest, {
+  case 'hardware': {
+    const daemon: DevicesClientDeps = {
       port: daemonPort(),
       machineId: async () => (await runningDaemonStatus())?.machineId ?? null,
       connect: (url, headers) => new NewCommandSocket(url, { headers }),
-    }).then(code => { process.exitCode = code }).catch(onError)
+    }
+    const run = rest[0] === 'watch'
+      ? runDialWatch(rest.slice(1), { ...daemon, stdin: process.stdin, print: (line) => console.log(line) })
+      : runDevicesCommand(rest, daemon)
+    run.then(code => { process.exitCode = code }).catch(onError)
     break
+  }
   case 'pair':
     pairCommand(args[0]).catch(onError)
     break
