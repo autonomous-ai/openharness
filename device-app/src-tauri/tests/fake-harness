@@ -1,0 +1,58 @@
+#!/bin/sh
+# The fake `harness` the app's tests run (testing::Fake). Its folder is FAKE_HARNESS, or `fake` beside this script.
+# Each run appends its arguments to calls.log and its pid to pids.log, then plays the file named by its arguments
+# joined with `_` (`hardware_watch_--json`): each line is printed, except
+#   @err TEXT   TEXT, on stderr
+#   @wait NAME  waits until the file NAME is in the folder
+#   @stdin      waits until stdin closes
+#   @hang       waits for ever, in this same process
+#   @exit N     exits N
+#   @driver     from here on, stdin closing prints harness login --json's CANCELLED result and exits 1
+# A run that ends by itself appends its arguments to ends.log; a killed one leaves no line.
+
+dir=${FAKE_HARNESS:-$(dirname "$0")/fake}
+args="$*"
+IFS=_
+script="$dir/$*"
+unset IFS
+watcher=
+printf '%s\n' "$args" >>"$dir/calls.log"
+printf '%s\n' "$$" >>"$dir/pids.log"
+
+end() {
+  # The watcher goes with the run, so nothing is left to signal a pid that may be another process's by then.
+  if [ -n "$watcher" ]; then kill "$watcher" 2>/dev/null; fi
+  printf '%s\n' "$args" >>"$dir/ends.log"
+  exit "$1"
+}
+
+cancelled() {
+  watcher=
+  printf '%s%s\n' '{"type":"result","status":"error","code":"CANCELLED",' \
+    '"message":"Sign-in stopped: the app that started it has gone."}'
+  end 1
+}
+
+if [ ! -f "$script" ]; then
+  printf 'Unknown command\n' >&2
+  end 1
+fi
+
+# The watcher reads stdin through fd 3: a job in the background has /dev/null for its own stdin.
+exec 3<&0
+while IFS= read -r line <&4 || [ -n "$line" ]; do
+  case $line in
+    '@err '*) printf '%s\n' "${line#@err }" >&2 ;;
+    '@wait '*) while [ ! -e "$dir/${line#@wait }" ]; do sleep 0.02; done ;;
+    @stdin) cat >/dev/null ;;
+    @hang) exec sleep 2147483647 ;;
+    '@exit '*) end "${line#@exit }" ;;
+    @driver)
+      trap cancelled USR1
+      # Holds neither output pipe, so the run's output ends with the script.
+      (while read -r unused; do :; done <&3; kill -USR1 $$) >/dev/null 2>&1 &
+      watcher=$! ;;
+    *) printf '%s\n' "$line" ;;
+  esac
+done 4<"$script"
+end 0
