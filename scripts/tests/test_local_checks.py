@@ -3,9 +3,11 @@ import io
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -71,12 +73,25 @@ elif mode == "litter":
 elif mode == "hang":
     # Passed, not inherited, so the child holds the pipe on Windows too.
     subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"], stdout=sys.stdout)
+    print("started", flush=True)
     time.sleep(600)
 """
 
 
 def fake(mode, platform=None, area="a"):
     return dict(command=f'"{sys.executable}" fake.py {mode}', cwd="cli", platform=platform, paths=(f"area/{area}/*",))
+
+
+class StopsOnStart(io.StringIO):
+    """A stderr that calls stop() as a check says it started: Ctrl+C or a SIGTERM in the middle of a check."""
+    def __init__(self, stop):
+        super().__init__()
+        self.stop = stop
+
+    def write(self, text):
+        if "started" in text:
+            self.stop()
+        return super().write(text)
 
 
 class LocalGateTests(unittest.TestCase):
@@ -416,11 +431,52 @@ class LocalRunTests(GitFixture, unittest.TestCase):
             self.write(f"area/{area}/1")
         return self.commit()
 
-    def run_checks(self, table, base=None):
-        out, err = io.StringIO(), io.StringIO()
+    def run_checks(self, table, base=None, err=None):
+        out, err = io.StringIO(), err or io.StringIO()
         with mock.patch.dict(checks.CHECKS, table, clear=True):
             code = checks.run(self.root, base or self.base, out, err)
         return code, out.getvalue(), err.getvalue()
+
+    def main_run(self, table, stdout, stderr):
+        """main() with --run in the repository, as the command line runs it: its exit code."""
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(self.root)
+        for name in ("SIGTERM", "SIGHUP"):                             # main() takes them for the run
+            if hasattr(signal, name):
+                self.addCleanup(signal.signal, getattr(signal, name), signal.getsignal(getattr(signal, name)))
+        with mock.patch.dict(checks.CHECKS, table, clear=True), \
+                mock.patch.object(sys, "argv", ["local-checks.py", "--run", "--base", self.base]), \
+                mock.patch.object(sys, "stdout", stdout), mock.patch.object(sys, "stderr", stderr), \
+                self.assertRaises(SystemExit) as done:
+            checks.main()
+        return done.exception.code
+
+    def held_outputs(self):
+        """A copy of each check's output pipe, which reads to its end only once every process holding it is dead."""
+        copies = []
+
+        class Spy(subprocess.Popen):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                if kwargs.get("shell"):
+                    copies.append(os.dup(self.stdout.fileno()))
+
+        patcher = mock.patch.object(subprocess, "Popen", Spy)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return copies
+
+    def assertAllDead(self, copies):
+        for copy in copies:
+            ended = threading.Event()
+
+            def drain(copy=copy):
+                with open(copy, "rb") as pipe:
+                    pipe.read()
+                ended.set()
+
+            threading.Thread(target=drain, daemon=True).start()
+            self.assertTrue(ended.wait(20), "a process of the check outlived --run")
 
     def cli(self, *args, cwd=None):
         return subprocess.run([sys.executable, SCRIPTS / "local-checks.py", *args], cwd=cwd or self.root,
@@ -506,6 +562,39 @@ class LocalRunTests(GitFixture, unittest.TestCase):
         self.assertTrue(self.marker.exists())
         self.assertLess(time.monotonic() - started, 60)
 
+    # A check runs in a group of its own, out of the terminal's reach, so --run stops it when it is stopped itself. Ctrl+C
+    # left the check running and Python waiting out the hour's timer before it exited.
+    def test_an_interrupted_run_stops_its_check_and_leaves_no_timer(self):
+        self.change("a")
+        held = self.held_outputs()
+
+        def interrupt():
+            raise KeyboardInterrupt
+
+        with mock.patch.object(checks, "RUN_SECONDS", 30), self.assertRaises(KeyboardInterrupt):
+            self.run_checks({"fake-a": fake("hang")}, err=StopsOnStart(interrupt))
+        self.assertEqual([t for t in threading.enumerate() if isinstance(t, threading.Timer)], [])
+        self.assertEqual(len(held), 1)
+        self.assertAllDead(held)
+
+    # A SIGTERM (or a closed terminal's SIGHUP) killed --run at once and left its check running, with no limit.
+    def test_a_terminated_run_stops_its_check(self):
+        self.change("a")
+        held = self.held_outputs()
+
+        def default(signum, frame):
+            raise AssertionError("SIGTERM kills --run and leaves its check running")
+
+        self.addCleanup(signal.signal, signal.SIGTERM, signal.signal(signal.SIGTERM, default))
+        stdout = io.TextIOWrapper(io.BytesIO(), encoding="utf-8")
+        with mock.patch.object(checks, "RUN_SECONDS", 30):
+            code = self.main_run({"fake-a": fake("hang")}, stdout,
+                                 StopsOnStart(lambda: signal.raise_signal(signal.SIGTERM)))
+        self.assertEqual(code, 128 + signal.SIGTERM)
+        self.assertEqual([t for t in threading.enumerate() if isinstance(t, threading.Timer)], [])
+        self.assertEqual(len(held), 1)
+        self.assertAllDead(held)
+
     def test_the_count_survives_a_long_report_after_the_summary(self):
         self.change("a")
         code, out, err = self.run_checks({"fake-a": fake("long")})
@@ -527,15 +616,8 @@ class LocalRunTests(GitFixture, unittest.TestCase):
         self.change("a")
         raw = io.BytesIO()
         stdout = io.TextIOWrapper(raw, encoding="utf-8", newline="\r\n")
-        self.addCleanup(os.chdir, os.getcwd())
-        os.chdir(self.root)
-        with mock.patch.dict(checks.CHECKS, {"fake-a": fake("pass 3")}, clear=True), \
-                mock.patch.object(sys, "argv", ["local-checks.py", "--run", "--base", self.base]), \
-                mock.patch.object(sys, "stdout", stdout), mock.patch.object(sys, "stderr", io.StringIO()), \
-                self.assertRaises(SystemExit) as done:
-            checks.main()
+        self.assertEqual(self.main_run({"fake-a": fake("pass 3")}, stdout, io.StringIO()), 0)
         stdout.flush()
-        self.assertEqual(done.exception.code, 0)
         self.assertNotIn(b"\r", raw.getvalue())
         self.assertEqual(len(checks.FENCE.findall(raw.getvalue().decode())), 1)
 
