@@ -43,7 +43,7 @@ def needs(receipts=None):
 
 # What the fake checks print and do, in the throwaway repository's cli/: Vitest's summary without a suite.
 FAKE = r"""
-import pathlib, subprocess, sys, time
+import pathlib, signal, subprocess, sys, time
 
 def summary(n):
     print(f"\x1b[2m      Tests \x1b[22m \x1b[1m\x1b[32m{n} passed\x1b[39m\x1b[22m\x1b[90m ({n})\x1b[39m", flush=True)
@@ -75,6 +75,17 @@ elif mode == "hang":
     subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"], stdout=sys.stdout)
     print("started", flush=True)
     time.sleep(600)
+elif mode == "nest":
+    # As test-desktop.py runs Flutter: a child in a session of its own, out of the group's reach, which this stops on
+    # Ctrl+C (whatever Ctrl+C the test run itself was started with). It holds the pipe, so the output ends with it.
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], stdout=sys.stdout,
+                             start_new_session=True)
+    try:
+        print("started", flush=True)
+        time.sleep(600)
+    finally:
+        child.kill()
 """
 
 
@@ -551,16 +562,18 @@ class LocalRunTests(GitFixture, unittest.TestCase):
 
     # The child holds the check's stdout, so run() returns only once the whole group is dead. Asking the process table
     # instead would be flaky: a killed orphan stays a zombie until init reaps it.
+    # fake-b stands for the Desktop suite, whose Flutter run is in a session of its own: only a Ctrl+C first lets it stop
+    # that run, which holds the pipe here, before the group is killed.
     def test_a_check_past_its_limit_is_killed_with_its_children_and_named(self):
-        self.change("a", "b")
+        self.change("a", "b", "c")
         started = time.monotonic()
         with mock.patch.object(checks, "RUN_SECONDS", 3):
-            code, out, err = self.run_checks({"fake-a": fake("hang", area="a"),
-                                              "fake-b": fake(f'mark "{self.marker}"', area="b")})
+            code, out, err = self.run_checks({"fake-a": fake("hang", area="a"), "fake-b": fake("nest", area="b"),
+                                              "fake-c": fake(f'mark "{self.marker}"', area="c")})
         self.assertEqual((code, out), (1, ""))
-        self.assertTrue(err.endswith("fake-a failed: timed out\n"))
+        self.assertTrue(err.endswith("fake-a failed: timed out\nfake-b failed: timed out\n"))
         self.assertTrue(self.marker.exists())
-        self.assertLess(time.monotonic() - started, 60)
+        self.assertLess(time.monotonic() - started, 40)
 
     # A check runs in a group of its own, out of the terminal's reach, so --run stops it when it is stopped itself. Ctrl+C
     # left the check running and Python waiting out the hour's timer before it exited.
@@ -572,7 +585,7 @@ class LocalRunTests(GitFixture, unittest.TestCase):
             raise KeyboardInterrupt
 
         with mock.patch.object(checks, "RUN_SECONDS", 30), self.assertRaises(KeyboardInterrupt):
-            self.run_checks({"fake-a": fake("hang")}, err=StopsOnStart(interrupt))
+            self.run_checks({"fake-a": fake("nest")}, err=StopsOnStart(interrupt))
         self.assertEqual([t for t in threading.enumerate() if isinstance(t, threading.Timer)], [])
         self.assertEqual(len(held), 1)
         self.assertAllDead(held)
