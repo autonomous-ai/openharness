@@ -6,7 +6,8 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { localDaemonCall, localDaemonStatus, saveDaemonPort } from '../daemonEndpoint.js'
+import { localDaemonCall, localDaemonStatus } from '../daemonEndpoint.js'
+import { writeDaemonRecord } from '../daemonRecord.js'
 import { listenLocalSocket } from '../localSocket.js'
 import { daemonPipe } from './daemonPipe.js'
 import { ensureDaemonToken, newPipePath } from './pipeAuth.js'
@@ -35,7 +36,7 @@ describe('the daemon over its Windows pipe', () => {
     const pipe = pipeName(dir)
     const server = await listenLocalSocket(handler, pipe, { token })
     cleanup.push(server.close)
-    saveDaemonPort(dir, port, 24567, { pipe, pid: process.pid })
+    writeDaemonRecord(dir, port, 24567, { pipe, pid: process.pid })
     return { dir, token, pipe, port }
   }
   const options = { platform: 'win32' as const, pipe: (dir: string, port: number) => daemonPipe(dir, port, alive) }
@@ -47,7 +48,7 @@ describe('the daemon over its Windows pipe', () => {
     expect(found?.token.equals(token)).toBe(true)
     expect(await daemonPipe(dir, port, { alive: () => false })).toBeNull()
     expect(await daemonPipe(dir, port + 1, alive)).toBeNull()
-    saveDaemonPort(dir, port, 24567)
+    writeDaemonRecord(dir, port, 24567)
     expect(await daemonPipe(dir, port, alive)).toBeNull()
     expect(await daemonPipe(pipeDir(), port, alive)).toBeNull()
   })

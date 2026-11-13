@@ -13,6 +13,7 @@
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { env } from '../config/env.js'
 
 export const NOT_RUNNING = 'Harness is not running here. Start it with `harness start`.'
 /**
@@ -69,6 +70,12 @@ export function sandboxed({ error, pid = null, env = process.env, signal = (p, s
 export function unreachableText(evidence: SandboxEvidence = {}): string {
   if (sandboxed(evidence)) return SANDBOXED
   return codexSandbox(evidence.env ?? process.env) ? START_OUTSIDE : NOT_RUNNING
+}
+
+/** What to say when this shell cannot reach the daemon of [dataDir]: stopped, or out of reach in a sandbox. The agent
+ *  verbs reach the daemon that made their pane, whose folder may not be this CLI's. */
+export function daemonUnreachableText(error?: unknown, dataDir: string = env.ADAPTER_DATA_DIR): string {
+  return unreachableText({ error, pid: pidIn(dataDir) })
 }
 
 /** What `harness start` says for [evidence.error] in place of the error itself, or null when it is no sandbox's doing:

@@ -23,7 +23,7 @@ export class GatewayError extends ConnectorError {}
  */
 export const backend = {
   signedIn: (): boolean => hasAuthSession(),
-  base: async (): Promise<string> => (await import('../controlPlane.js')).backendHttpBase(),
+  base: async (): Promise<string> => (await import('../backendHttpBase.js')).backendHttpBase(),
   /** Bearer + environment headers, the sign-in renewed first when it is about to expire. */
   headers: async (): Promise<Record<string, string>> => (await (await import('../controlPlane.js')).controlPlaneAuth()).headers,
 }

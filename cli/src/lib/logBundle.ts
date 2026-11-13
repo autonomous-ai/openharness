@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync, statSync, openSync, readSync, closeSync } from 'node:fs'
 import { basename, join } from 'node:path'
+import { REMOVALS_FILE } from './signOut.js'
 import { writeZip, type ZipEntry } from './zipWriter.js'
 
 /**
@@ -122,10 +123,10 @@ export function buildLogBundle(opts: LogBundleOptions): { zip: Buffer; included:
   } catch { /* no daemon log */ }
 
   // Kept apart because harness.log's trim can take its line (anh Dee's Mac, 2026-11-12): small and whole.
-  const removals = join(opts.dataDir, REMOVALS_BUNDLED)
+  const removals = join(opts.dataDir, REMOVALS_FILE)
   try {
-    entries.push({ name: REMOVALS_BUNDLED, data: Buffer.from(opts.redact(readFileSync(removals, 'utf8'))), mtime: statSync(removals).mtime })
-    included.push(REMOVALS_BUNDLED)
+    entries.push({ name: REMOVALS_FILE, data: Buffer.from(opts.redact(readFileSync(removals, 'utf8'))), mtime: statSync(removals).mtime })
+    included.push(REMOVALS_FILE)
   } catch { /* no removal yet */ }
 
   const readme = [
@@ -147,17 +148,4 @@ export function buildLogBundle(opts: LogBundleOptions): { zip: Buffer; included:
   entries.unshift({ name: 'README.txt', data: Buffer.from(readme + '\n'), mtime: now })
 
   return { zip: writeZip(entries), included }
-}
-
-/** The sign-in removals' file, as signOut.ts `REMOVALS_FILE` names it (the spec holds the two the same; this file cannot import
- *  it, as signOut.ts reads this one's redaction). */
-export const REMOVALS_BUNDLED = 'sign-in-removals.log'
-
-/** The same denylist the desktop app's `redactSecretsInText` applies — keep the two in step. */
-export function redactSecretsInText(input: string): string {
-  return input
-    .replace(/(Bearer\s+)[A-Za-z0-9._-]{8,}/gi, '$1<redacted>')
-    .replace(/\bsk-[A-Za-z0-9_-]{8,}/g, 'sk-<redacted>')
-    .replace(/(["']?\b\w*(?:token|secret|password|passphrase|credential|api[_-]?key)\w*\b["']?\s*[:=]\s*["']?)([^\s"',}]{6,})/gi, '$1<redacted>')
-    .replace(/([?&][^=\s&]*(?:token|key|secret|sig|signature)[^=\s&]*=)[^\s&]+/gi, '$1<redacted>')
 }

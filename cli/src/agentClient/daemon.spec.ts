@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { connectSocket, openDaemon, whereFor, type ClientSocket } from './daemon.js'
-import { saveDaemonPort } from '../lib/daemonEndpoint.js'
+import { writeDaemonRecord } from '../lib/daemonRecord.js'
 import { WebSocketServer } from 'ws'
 import { listenLocalSocket } from '../lib/localSocket.js'
 import { attachLocalWsServer } from '../localWsServer.js'
@@ -95,7 +95,7 @@ it('where no socket can exist, dials the port this user recorded when another da
     if (typeof unusedAddress !== 'object' || unusedAddress === null) throw new Error('No configured port')
     const configuredPort = unusedAddress.port
     await new Promise<void>((resolve) => unused.close(() => resolve()))
-    saveDaemonPort(dataDir, configuredPort, address.port)
+    writeDaemonRecord(dataDir, configuredPort, address.port)
     const socket = await connectSocket({ port: configuredPort, dataDir, machineId: 'm1' }, { platform: 'linux' })
     await new Promise<void>((resolve, reject) => {
       socket.on('open', resolve)
@@ -129,7 +129,7 @@ it.each([false, true])('never sends the local credential to TCP when the Windows
     const address = server.address()
     if (typeof address !== 'object' || address === null) throw new Error('No test port')
     writeFileSync(join(dataDir, 'hook-credential'), `${'A'.repeat(43)}\n`)
-    if (withRecord) saveDaemonPort(dataDir, address.port, address.port)
+    if (withRecord) writeDaemonRecord(dataDir, address.port, address.port)
     const where = { port: address.port, dataDir, machineId: 'm1' }
     const result = await openDaemon(where, 'm1', (target) => connectSocket(target, {
       platform: 'win32', pipe: async () => null,

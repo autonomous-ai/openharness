@@ -13,7 +13,7 @@ import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readlin
 import { dirname, join } from 'path'
 import { env } from '../config/env.js'
 import { redactArgv } from './agentCreateDiagnosis.js'
-import { redactSecretsInText } from './logBundle.js'
+import { redactSecretsInText } from './redactSecrets.js'
 import { clearAuthSession } from './authSession.js'
 
 /** What the desktop app's Sign out button passes to `harness logout`: a person asked, in the app. */
