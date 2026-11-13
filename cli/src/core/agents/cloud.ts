@@ -14,8 +14,6 @@ import { CLOUD_DOWN } from '../api.js'
 import { cloudAgentFrame, cloudHarnessIn, isCloudAgent, type CloudAgentFrame, type CloudHarness } from '../../lib/cloudAgents.js'
 import type { AutonomousDeviceInput } from '../deviceInput.js'
 import type { QuestionAnswerResult } from '../../lib/questionController.js'
-import { deriveTurnSummary } from '../../lib/deviceRecap.js'
-import { splitSummary } from '../../lib/recapReads.js'
 
 type Frame = { type: string; agentId?: string; dbSessionId?: string; payload: Record<string, unknown> }
 
@@ -32,13 +30,9 @@ export interface CloudAgentsDeps {
 
 const DOWN = async (): Promise<typeof CLOUD_DOWN> => CLOUD_DOWN
 const busy = (harness: CloudHarness): boolean => harness.state === 'working' || harness.state === 'starting'
-/** Its last words as the dial's recap and the text under it, or null when it has said nothing. */
-const recapOf = (harness: CloudHarness): { recap: string; text: string } | null => {
-  const summary = harness.said ? deriveTurnSummary(harness.said) : null
-  if (!summary) return null
-  const { recap, body } = splitSummary(summary)
-  return { recap, text: body }
-}
+/** Its last words as the dial's recap and the text under it, as its service worked them out (lib/cloudAgents.ts
+ *  `card`), or null when it has said nothing. */
+const recapOf = (harness: CloudHarness): { recap: string; text: string } | null => (harness.said ? harness.card ?? null : null)
 
 export function createCloudAgents({ port, clients, openQuestions, deviceInput, log = (line) => console.log(line) }: CloudAgentsDeps) {
   let harnesses = new Map<string, CloudHarness>()

@@ -105,9 +105,16 @@ export interface CloudHarness {
   /** What it said last, for the dial's card: a terminal agent's turn ends with its answer the same way. Kept in
    *  the core alone, never in a frame: the apps read the whole conversation. */
   said?: string | null
+  /** Those words as the dial's card reads them, a headline and the text under it. Worked out by the cloud service
+   *  (cloud/service.ts), which faces the maker: the core never reads markdown a maker's agent wrote (the audit of
+   *  2026-11-12). Absent while it has said nothing, and from a service from before 2026-11-13. */
+  card?: CloudCard | null
   createdAt: string
   updatedAt: string
 }
+
+/** A dial card's two lines. */
+export interface CloudCard { recap: string; text: string }
 
 /** As much of its last words as the dial's longest card draws, and some over (lib/deviceRecap.ts). */
 export const SAID_MAX = 4_000
@@ -122,6 +129,18 @@ function providerStatusIn(raw: unknown): CloudProviderStatus | undefined {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
   const value = raw as Record<string, unknown>
   return { status: text(value.status, PROVIDER_STATUS_MAX), detail: text(value.detail, PROVIDER_STATUS_MAX) }
+}
+
+/** A card's line on the way into the core: what any recap's part may hold (lib/recapReads.ts `MAX_PART`). The service
+ *  clips them far shorter (lib/deviceRecap.ts). */
+const CARD_PART_MAX = 2_000
+
+/** A card's two lines as a service reported them: both, or none. */
+function cardIn(raw: unknown): CloudCard | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const value = raw as Record<string, unknown>
+  const recap = text(value.recap, CARD_PART_MAX), body = text(value.text, CARD_PART_MAX)
+  return recap && body ? { recap, text: body } : null
 }
 
 /** A harness as a service reported it, or null for anything else: the core keeps nothing it cannot read. */
@@ -149,6 +168,7 @@ export function cloudHarnessIn(raw: unknown): CloudHarness | null {
     links,
     messages: typeof value.messages === 'number' && Number.isInteger(value.messages) && value.messages >= 0 ? value.messages : 0,
     said: text(value.said, SAID_MAX),
+    card: cardIn(value.card),
     createdAt,
     updatedAt,
   }

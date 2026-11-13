@@ -14,7 +14,9 @@ import { randomBytes } from 'node:crypto'
 import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { CloudCore, CloudPort, CloudResult, ServiceRequests } from '../core/api.js'
-import { CLOUD_AGENT_IDS, CLOUD_AGENTS, SAID_MAX, cloudAgentFrame, cloudRequestRefusal, isCloudAgent, repositoryOf, type CloudAgentId, type CloudHarness } from '../lib/cloudAgents.js'
+import { CLOUD_AGENT_IDS, CLOUD_AGENTS, SAID_MAX, cloudAgentFrame, cloudRequestRefusal, isCloudAgent, repositoryOf, type CloudAgentId, type CloudCard, type CloudHarness } from '../lib/cloudAgents.js'
+import { deriveTurnSummary } from '../lib/deviceRecap.js'
+import { splitSummary } from '../lib/recapReads.js'
 import { connectionFor, connectionsBridge, type Bridge } from './bridge.js'
 import { cursorAdapter } from './cursor.js'
 import { devinAdapter } from './devin.js'
@@ -34,6 +36,8 @@ interface Entry {
   heard: boolean
   /** The New Harness that made it (`creationId`): a retry of the same one gets this harness, never a second. */
   creationId?: string
+  /** Its last words as the dial's card reads them, and the words they were worked out from: never saved. */
+  card?: { said: string; lines: CloudCard | null }
 }
 
 export interface TranscriptMessage { id: string; from: 'agent' | 'person'; text: string; at: string }
@@ -125,9 +129,22 @@ export function startCloudService(options: CloudServiceOptions) {
     if (message.from === 'agent') entry.harness.said = message.text.slice(0, SAID_MAX)
   }
 
+  /** What it said last as the dial's card reads it (lib/deviceRecap.ts), worked out again only when it says something new.
+   *  Here, not in the core: the words are a maker's agent's, and their markdown is read in the process that faces it. */
+  const cardOf = (entry: Entry): CloudCard | null => {
+    const said = entry.harness.said
+    if (!said) return null
+    if (entry.card?.said !== said) {
+      const summary = deriveTurnSummary(said)
+      const lines = summary ? splitSummary(summary) : null
+      entry.card = { said, lines: lines ? { recap: lines.recap, text: lines.body } : null }
+    }
+    return entry.card.lines
+  }
+
   const publish = (): void => {
     if (stopped) return
-    options.core.publish([...entries.values()].map((entry) => ({ ...entry.harness, links: [...entry.harness.links] })))
+    options.core.publish([...entries.values()].map((entry) => ({ ...entry.harness, links: [...entry.harness.links], card: cardOf(entry) })))
   }
   const touched = (entry: Entry): void => {
     entry.harness.updatedAt = new Date(now()).toISOString()

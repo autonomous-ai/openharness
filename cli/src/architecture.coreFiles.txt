@@ -330,7 +330,6 @@ lib/daemonState.ts
 lib/deleteAgentFallback.ts
 lib/deletedSessions.ts
 lib/deviceManagementHttp.ts
-lib/deviceRecap.ts
 lib/dialogEnd.ts
 lib/engineBin.ts
 lib/engineExitOption.ts

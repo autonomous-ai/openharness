@@ -172,12 +172,13 @@ Left since, with the core's process as `src/architecture.coreFiles.txt` lists it
 | The guests' accounts, loaded for a user-name check and a small runner; and a function nothing called (13 November) | 552 | 95,372 |
 | The probe of which engines this machine has: the edge host answers it and starts its login shells (13 November) | 550 | 95,029 |
 | The agent ledger, loaded for one erase in a delete: the agent cleanup erases what a harness was told, and the delete waits for its answer (13 November) | 549 | 94,695 |
+| The dial's recap of a cloud agent's last words, markdown a maker's agent wrote: its service works the card out and the core shows what it is handed (13 November) | 548 | 94,552 |
 
 ### 1. Code the core loads for one helper (low risk, about a day each)
 
 | What | Lines | What the core needs instead |
 | --- | ---: | --- |
-| Helpers of one feature: `lib/agentTmp.ts` (the Swarm's), `lib/deviceRecap.ts` (cloud agents'), `lib/apiConnectionMetadata.ts` (models': the saved-API store parsed at every launch to learn whether one exists) | 395 | the feature's door, or a flag it reports |
+| Helpers of one feature: `lib/agentTmp.ts` (the Swarm's), `lib/apiConnectionMetadata.ts` (models': the saved-API store parsed at every launch to learn whether one exists) | 238 | the feature's door, or a flag it reports |
 | The agent settings sync: a five-minute timer and backend reads (`core/experiments.ts:52-200`) | 150 | the edge host |
 | Exports only tests read: `decodeTmuxControlData` and `normalizeTmuxCaptureLines` in `lib/tmuxStream.ts`, `stopSessionOwner`, `writeTty` and `foregroundJob` in `lib/externalOwnerControl.ts` (kept with a golden test: ask before deleting) | 154 | nothing, or a test's own file |
 | Lines of `core/api.ts` no core file imports, and code only the inline mode runs (`core/serviceHost.ts:122-233`, `lib/transcriptPages.ts:240-466`, `lib/sharedMachinesPort.ts:49-160`) | 707 | with their service, or gone with the inline mode |
