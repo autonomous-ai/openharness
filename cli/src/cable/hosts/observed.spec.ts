@@ -15,7 +15,6 @@ function setup(over: Partial<ObservedDeps> = {}) {
   const answers = new Map<string, string>()
   const deps: ObservedDeps = {
     now: () => clock.t,
-    pidGeneration: (pid) => (gens.has(pid) ? gens.get(pid)! : `g${pid}`),
     processes: procs,
     openSessions: {
       // The cached answer is empty before the first look, as it is when a dial attaches; only a fresh look sees.

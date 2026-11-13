@@ -151,7 +151,10 @@ vi.mock('../lib/sessionSearch/external.js', async (real) => ({
     get() { return undefined }
   },
 }))
-vi.mock('../lib/externalProcessGeneration.js', () => ({ externalProcessGeneration: () => null }))
+vi.mock('../lib/sessionSearch/externals/support.js', async (real) => ({
+  ...await real<typeof import('../lib/sessionSearch/externals/support.js')>(),
+  listProcesses: async () => [],
+}))
 vi.mock('../cable/hosts/lastAnswer.js', async (real) => ({
   ...await real<typeof import('../cable/hosts/lastAnswer.js')>(),
   readLastAnswer: readers.answer,

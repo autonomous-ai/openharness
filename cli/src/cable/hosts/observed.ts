@@ -4,6 +4,7 @@ import { basename } from 'node:path'
 import type { ObservedHookEvent } from '../../core/observedHook.js'
 import type { OpenSessions } from '../../lib/sessionSearch/external.js'
 import { within } from '../../lib/sessionSearch/externals/support.js'
+import type { RunningProcess } from '../../lib/sessionSearch/externals/types.js'
 import { detectHost } from './hostDetect.js'
 import type { Caps, HostAgent, HostAgentState, HostSource } from './types.js'
 
@@ -12,7 +13,7 @@ export { detectHost, hostDisplayName } from './hostDetect.js'
 const NAMESPACE = '6f1d0c3e-5b7a-4c92-8e41-3a9d7b2f60c8'
 const MAX_SESSIONS = 50
 const END_DELAY_MS = 10_000
-const NO_PID_TTL_MS = 12 * 60 * 60 * 1000
+const NO_GENERATION_TTL_MS = 12 * 60 * 60 * 1000
 /** The dial's card is small; keep what it can show. */
 const ANSWER_CHARS = 300
 
@@ -28,7 +29,8 @@ export function observedAgentId(engine: string, sessionId: string): string {
 
 export interface ObservedDeps {
   now(): number
-  pidGeneration(pid: number): string | null
+  /** The machine's processes, read once for every session (externals/support.ts listProcesses); none when unreadable. */
+  processes(): Promise<readonly Pick<RunningProcess, 'pid' | 'generation'>[]>
   openSessions: Pick<OpenSessions, 'fresh' | 'working' | 'owner'>
   externalSessions: {
     scan(): Promise<unknown>
@@ -159,8 +161,6 @@ export class ObservedSource implements HostSource {
   private setPid(entry: Entry, pid: number): void {
     entry.pid = pid
     entry.agent.callerPid = pid
-    const gen = this.deps.pidGeneration(pid)
-    if (gen) entry.generation = gen
   }
 
   /** Drops the oldest idle session; failing that the oldest finished one. False when every session is busy. */
@@ -217,15 +217,23 @@ export class ObservedSource implements HostSource {
     if (changed) this.emit()
   }
 
-  /** Removals: ended sessions, dead or reused pids, and pidless sessions silent for 12 h. Called every 30 s by the owner. */
-  tick(): void {
+  /** Removals: ended sessions, dead or reused pids, and sessions with no generation silent for 12 h. Called every 30 s by the owner. */
+  async tick(): Promise<void> {
+    if (!this.entries.size) return
+    // One read of the machine's processes for every session: a `ps` each blocked the loop for seconds with 50 of them.
+    // A table that cannot be read is empty: it always holds the process reading it.
+    const table = new Map((await this.deps.processes()).map((p) => [p.pid, p.generation]))
     const now = this.deps.now()
     let changed = false
     for (const [id, e] of this.entries) {
+      // Its process's generation, noted at the first look that sees it.
+      const gen = e.pid === undefined ? undefined : table.get(e.pid)
+      if (gen) e.generation ??= gen
       let gone = false
       if (e.endAt !== undefined && now - e.endAt >= END_DELAY_MS) gone = true
-      else if (e.pid !== undefined && e.generation) gone = this.deps.pidGeneration(e.pid) !== e.generation
-      else if (now - e.agent.lastActivityAt >= NO_PID_TTL_MS) gone = true
+      else if (e.pid !== undefined && table.size && !table.has(e.pid)) gone = true
+      else if (gen) gone = gen !== e.generation
+      else if (now - e.agent.lastActivityAt >= NO_GENERATION_TTL_MS) gone = true
       if (gone) { this.entries.delete(id); changed = true }
     }
     if (changed) this.emit()
