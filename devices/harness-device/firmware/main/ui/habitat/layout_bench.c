@@ -123,13 +123,13 @@ void ht_layout_benchmark(uint16_t *scratch, ht_scene_t *a, ht_scene_t *b,
     vTaskDelay(pdMS_TO_TICKS(200));
     // "straight" and "curved" once drew different title curves; the face has one title now, so they measure the same face.
     static const char *layouts[] = {"straight", "curved", "reading"};
-    static const char *events[] = {"name", "activity", "chat", "engine", "recap"};
+    static const char *events[] = {"name", "activity", "engine", "recap"};
     static const char *names[] = {"Deploy latest firmware", "Mobile app build and deploy"};
     static const char *summary = "The update is installed. Voice input now sends to the selected agent. The result stays in the center.";
     // The reading face hides the status and the working line, so there the activity and engine events change the recap instead.
     static const char *summary2 = "The update is installed. Voice input now sends to the selected pane. The result stays in the center.";
     uint32_t model[SAMPLES], damage_us[SAMPLES], raster_us[SAMPLES], total[SAMPLES], bytes[SAMPLES];
-    ESP_LOGI("layout-bench", "BEGIN 4800 samples; CPU and request-to-final-DMA service time; excludes queue, sensor, panel scanout and voice; actual " BASELINE_LABEL " versus " CURRENT_LABEL " ABBA; 40 per block");
+    ESP_LOGI("layout-bench", "BEGIN 3840 samples; CPU and request-to-final-DMA service time; excludes queue, sensor, panel scanout and voice; actual " BASELINE_LABEL " versus " CURRENT_LABEL " ABBA; 40 per block");
     ht_arc_fast_sampling(true); ht_glyph_cache_enable(true); ht_damage_fast_ascii(true); ht_raster_fast_ascii(true); ht_arc_tight_bounds(true);
     checkpoint("before");
     uint32_t touches = touch_activity_generation();
@@ -143,9 +143,9 @@ void ht_layout_benchmark(uint16_t *scratch, ht_scene_t *a, ht_scene_t *b,
             int panel = pass ? 1 - path_order : path_order;
             for (int order = 0; order < 3; order++) {
                 int layout = pass ? 2 - order : order;
-                for (int event = 0; event < 5; event++) {
+                for (int event = 0; event < 4; event++) {
                     ht_character_face_t f = {.recipient=names[0], .status="Inbox 2 / Working",
-                        .engine="claude", .activity="Coalescing", .chat="Chat with PM", .clock_ms=0,
+                        .engine="claude", .activity="Coalescing", .clock_ms=0,
                         .mood=HT_CHARACTER_WORKING, .foreground=0xffff};
                     ht_scene_clear(a, ht_rgb(0x080c08));
                     make_scene(a, &f, 0, ht_rgb(0xc8a9f0), layout==2 ? summary : NULL);
@@ -162,13 +162,12 @@ void ht_layout_benchmark(uint16_t *scratch, ht_scene_t *a, ht_scene_t *b,
                         f.recipient=names[event==0 ? (i+1)%2 : 0];
                         bool second=(i+1)%2;
                         f.activity=event==1 && second ? "Pondering" : "Coalescing";
-                        f.chat=event==2 && second ? "PM" : "Chat with PM";
-                        f.engine=event==3 && second ? "codex" : "claude";
+                        f.engine=event==2 && second ? "codex" : "claude";
                         uint8_t frame=0;
-                        bool reading = event==4 ? ((i+1)%2 ? layout!=2 : layout==2) : layout==2;
+                        bool reading = event==3 ? ((i+1)%2 ? layout!=2 : layout==2) : layout==2;
                         int64_t start=esp_timer_get_time();
                         ht_scene_clear(b,a->background);
-                        make_scene(b,&f,frame,ht_rgb(0xc8a9f0),reading ? (layout==2 && (event==1 || event==3) && second ? summary2 : summary) : NULL);
+                        make_scene(b,&f,frame,ht_rgb(0xc8a9f0),reading ? (layout==2 && (event==1 || event==2) && second ? summary2 : summary) : NULL);
                         int64_t modeled=esp_timer_get_time();
                         find_damage(a,b,&damage);
                         int64_t damaged=esp_timer_get_time();

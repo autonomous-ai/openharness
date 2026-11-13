@@ -24,8 +24,6 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "ui/ui_screens.h"
-#include "ui/habitat/supertab.h"
-#include "esp_attr.h"
 #include "esp_heap_caps.h"
 
 static const char *TAG = "cable_client";
@@ -253,24 +251,6 @@ static void send_hello(void)
     // Named before anything else about this dial is believed. See CABLE_PRODUCT.
     msg_string(&root, "product", CABLE_PRODUCT);
     msg_number(&root, "proto", CABLE_PROTO_VERSION);
-    // The Swarms (handle_supertab) and their Super Tab waits (handle_question). Without the second the daemon holds
-    // a wait back from this dial, which once had to: a wait is never an answer screen here.
-    msg_string(&root, "swarmCard", "v1");
-    msg_string(&root, "superTab", "wait-v1");
-    // Each Lead's face is the chat the desktop has open, and the alerts are the Lead's new messages (handle_supertab_notice;
-    // design 2026-10-28-round-dial-swarm-chat). A daemon that predates it ignores the field and sends today's frames.
-    msg_string(&root, "swarmChat", "v1");
-    // A PM and a Buddy side per Swarm (spec 2026-10-29-round-dial-pm-buddy): each Lead's `buddies` and the reader's
-    // Buddy, a face that may be the Buddy chat, its quiet notice, and `supertab.side` back. Older daemons ignore it.
-    msg_string(&root, "swarmBuddy", "v1");
-    // A face in a thread (spec 2026-11-03-dial-thread-face): each Lead's `thread`, `threadTitle`, `threadReplies`, a recap
-    // that names its thread, and `supertab.thread.leave` back. Older daemons ignore it and send none.
-    msg_string(&root, "swarmThread", "v1");
-    // This dial hears only what needs the reader: no Buddy quiet notices, and a decision asked of the reader is a notice (spec
-    // 2026-11-05-dial-lead-pm-buddy-pair). Also the Swarm card's `personal`. Older daemons ignore it.
-    msg_string(&root, "swarmNeedsYou", "v1");
-    // No swarmReview: words for a Swarm chat are sent as any harness's are and reviewed only when held (Diego's dial,
-    // 2026-10-29), and a daemon that heard it would refuse every word not reviewed (docs/device-voice-swarm-chat.md).
     // Which of the two dials this is (board.h) — informational, so a log or a bug report can say. A
     // daemon that predates the field ignores it.
     msg_string(&root, "hw", board()->name);
@@ -315,50 +295,6 @@ void cable_client_select_swarm(const char *swarm_id)
     msg_string(&root, "swarmId", swarm_id);
     send_json(root);
 }
-
-void cable_client_supertab_send(const char *t, const char *tab, const char *lead)
-{
-    if (!t || (strcmp(t, "supertab.recap.get") && strcmp(t, "supertab.open") && strcmp(t, "supertab.select"))) return;
-    // Only an open may name no Lead: it says the dial left the Swarm.
-    if (!tab || !tab[0] || strlen(tab) >= ID_MAX || !lead || strlen(lead) >= ID_MAX ||
-        (!lead[0] && strcmp(t, "supertab.open"))) return;
-    cJSON *root = msg(t);
-    msg_string(&root, "tab", tab);
-    msg_string(&root, "lead", lead);
-    send_json(root);
-}
-
-// The dial's face leaves its thread (spec 2026-11-03-dial-thread-face); a daemon without swarmThread ignores it.
-void cable_client_supertab_thread_leave(const char *tab, const char *lead)
-{
-    if (!tab || !tab[0] || strlen(tab) >= ID_MAX || !lead || !lead[0] || strlen(lead) >= ID_MAX) return;
-    cJSON *root = msg("supertab.thread.leave");
-    msg_string(&root, "tab", tab);
-    msg_string(&root, "lead", lead);
-    send_json(root);
-}
-
-void cable_client_supertab_side(const char *tab, bool buddy)
-{
-    if (!tab || !tab[0] || strlen(tab) >= ID_MAX) return;
-    cJSON *root = msg("supertab.side");
-    msg_string(&root, "tab", tab);
-    msg_string(&root, "side", buddy ? "buddy" : "pm");
-    send_json(root);
-}
-
-// The Buddy side a restart took off the face, for a daemon that remembers none: `kept` says no finger moved, so the
-// window stays where it is. An older daemon ignores the word, and its window follows.
-void cable_client_supertab_side_kept(const char *tab)
-{
-    if (!tab || !tab[0] || strlen(tab) >= ID_MAX) return;
-    cJSON *root = msg("supertab.side");
-    msg_string(&root, "tab", tab);
-    msg_string(&root, "side", "buddy");
-    msg_bool(&root, "kept", true);
-    send_json(root);
-}
-
 
 void cable_client_send_turn(const char *agent_id, const char *text)
 {
@@ -851,137 +787,10 @@ static void handle_swarms(const cJSON *p)
     ui_swarms_replace(rows, n, selected);
 }
 
-// ── the Swarms ──────────────────────────────────────────────────────────────────────────────────────
-// Two frames, as for the Pro, so each stays under the JSON guard: `supertabs` {ids} is the set and its order,
-// `supertab` one Swarm with at most 12 Leads. A Swarm without a usable id is dropped; a Lead that is not an
-// object, has no usable id or repeats one is skipped and the frame survives.
-static bool id_fits(const char *s)
-{
-    return s && s[0] && strlen(s) < ID_MAX;
-}
-static void handle_supertabs(const cJSON *p)
-{
-    const cJSON *ids = cJSON_GetObjectItemCaseSensitive(p, "ids");
-    if (!cJSON_IsArray(ids)) return;
-    static EXT_RAM_BSS_ATTR char rows[HT_SUPERTABS_MAX][ID_MAX];
-    int n = 0;
-    const cJSON *it = NULL;
-    cJSON_ArrayForEach(it, ids) {
-        if (n >= HT_SUPERTABS_MAX) break;
-        if (!cJSON_IsString(it) || !id_fits(it->valuestring)) continue;
-        bool duplicate = false;
-        for (int i = 0; i < n; i++) if (!strcmp(rows[i], it->valuestring)) duplicate = true;
-        if (!duplicate) snprintf(rows[n++], ID_MAX, "%s", it->valuestring);
-    }
-    ESP_LOGI(TAG, "supertabs: %d", n);
-    ui_supertabs_ids((const char (*)[ID_MAX])rows, n);
-}
-static void handle_supertab(const cJSON *p)
-{
-    static EXT_RAM_BSS_ATTR ht_supertab_t card;   // 6 KB: too large for the reader task's stack
-    const char *tab = str_of(p, "tab");
-    if (tab && strlen(tab) >= ID_MAX) tab = "";   // a desk tab id that cannot be held links to nothing
-    if (!ht_supertab_init(&card, str_of(p, "id"), tab, str_of(p, "name"), 0)) return;
-    // The Swarm's side, from a swarmBuddy daemon (review of #2218): the dial follows it. Anything else is none.
-    const char *side = str_of(p, "side");
-    card.side = !side ? HT_SIDE_NONE : !strcmp(side, "buddy") ? HT_SIDE_BUDDY : !strcmp(side, "pm") ? HT_SIDE_PM : HT_SIDE_NONE;
-    card.personal = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p, "personal"));
-    const cJSON *l = NULL;
-    cJSON_ArrayForEach(l, cJSON_GetObjectItemCaseSensitive(p, "leads")) {
-        if (card.lead_n >= HT_SUPERTAB_LEADS_MAX) break;
-        if (!cJSON_IsObject(l)) continue;
-        const cJSON *order = cJSON_GetObjectItemCaseSensitive(l, "order"), *since = cJSON_GetObjectItemCaseSensitive(l, "since");
-        const cJSON *buddy = cJSON_GetObjectItemCaseSensitive(l, "buddy"), *replies = cJSON_GetObjectItemCaseSensitive(l, "threadReplies");
-        const cJSON *cells = cJSON_IsObject(buddy) ? cJSON_GetObjectItemCaseSensitive(buddy, "cells") : NULL;
-        ht_lead_in_t in = {
-            .id = str_of(l, "id"), .project_id = str_of(l, "projectId"), .project = str_of(l, "project"),
-            .engine = str_of(l, "engine"), .owner = str_of(l, "owner"), .local = str_of(l, "local"), .state = str_of(l, "state"),
-            // Absent from a daemon before `order`: the frame's own order stands.
-            .order = cJSON_IsNumber(order) && order->valuedouble >= 0 && order->valuedouble < 65536 ? (int)order->valuedouble : -1,
-            .since = cJSON_IsNumber(since) && since->valuedouble >= 0 ? (since->valuedouble > 2592000 ? 2592000 : (long)since->valuedouble) : -1,
-            // The chat on the face; absent from a daemon without swarmChat, which reads as the Lead chat.
-            .chat = str_of(l, "chat"), .chat_id = str_of(l, "chatId"), .chat_name = str_of(l, "chatName"),
-            // The thread on the face, from a swarmThread daemon; absent reads as the main chat, and replies as unknown.
-            .thread = str_of(l, "thread"), .thread_title = str_of(l, "threadTitle"),
-            .thread_replies = cJSON_IsNumber(replies) && replies->valuedouble >= 0 ? (replies->valuedouble > 2147483647.0 ? 2147483647L : (long)replies->valuedouble) : -1,
-            // The reader's Buddy, from a swarmBuddy daemon while Buddies are on; supertab.c drops a block it cannot draw.
-            .buddies = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(l, "buddies")),
-            .buddy = {.present = cJSON_IsObject(buddy), .chat_id = str_of(buddy, "chatId"), .name = str_of(buddy, "name"),
-                      .engine = str_of(buddy, "engine"), .color = str_of(buddy, "color"),
-                      .cells = cJSON_IsNumber(cells) && cells->valuedouble >= 0 && cells->valuedouble < 65536 ? (long)cells->valuedouble : -1,
-                      .live = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(buddy, "live"))},
-        };
-        ht_supertab_lead_add(&card, &in);
-    }
-    const cJSON *count = cJSON_GetObjectItemCaseSensitive(p, "count");   // absent: the Leads listed
-    card.count = cJSON_IsNumber(count) ? (count->valuedouble > 0 ? (count->valuedouble > 65535 ? 65535 : (uint16_t)count->valuedouble) : 0)
-                                       : card.lead_n;
-    // A Lead that starts needing a person, off the face: the same coalesced beep as a question.
-    if (ui_supertab(&card)) audio_notify_done();
-}
-// `supertab.recap`: one Lead's last message. The model cuts it to 1,500 bytes; `none` is "no message yet".
-static void handle_supertab_recap(const cJSON *p)
-{
-    const char *tab = str_of(p, "tab"), *lead = str_of(p, "lead"), *text = str_of(p, "text"), *chat_id = str_of(p, "chatId");
-    if (!id_fits(tab) || !id_fits(lead)) return;
-    // A chat's recap names its chat; one whose chat cannot be held is not one (never shown for another).
-    if (chat_id && !id_fits(chat_id)) return;
-    // And a thread's names its root; one whose root cannot be held is not one (never taken for the main chat's).
-    const char *thread = str_of(p, "thread");
-    if (thread && !id_fits(thread)) return;
-    const cJSON *at = cJSON_GetObjectItemCaseSensitive(p, "at");
-    const double secs = cJSON_IsNumber(at) && at->valuedouble > 0 ? at->valuedouble : 0;
-    const bool none = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p, "none"));
-    ui_supertab_recap(tab, lead, chat_id ? chat_id : "", thread ? thread : "", none || !text ? "" : text, secs > 4294967295.0 ? 0xFFFFFFFFu : (uint32_t)secs, none);
-}
-// `supertab.notice` {tab, lead, chat, chatId, id, text, at}: the one thing that alerts with a swarmChat daemon. From a daemon
-// since #2965 a tag of the person's in the Lead's project, in its Lead conversation ("lead"), Chat with PM ("pm") or a task
-// chat ("group"); from one before, the Lead's new message in the first two. Or the Buddy's in its chat (chat "buddy", a quiet
-// one). The daemon sends each once; the UI decides the beep.
-static void handle_supertab_notice(const cJSON *p)
-{
-    const char *tab = str_of(p, "tab"), *lead = str_of(p, "lead"), *chat = str_of(p, "chat"), *chat_id = str_of(p, "chatId");
-    const char *id = str_of(p, "id"), *text = str_of(p, "text");
-    if (!id_fits(tab) || !id_fits(lead) || !id_fits(chat_id) || !id_fits(id) || !text || !chat) return;
-    if (strcmp(chat, "lead") && strcmp(chat, "pm") && strcmp(chat, "group") && strcmp(chat, "buddy")) return;   // a kind it does not know
-    const cJSON *at = cJSON_GetObjectItemCaseSensitive(p, "at");
-    const double secs = cJSON_IsNumber(at) && at->valuedouble > 0 ? at->valuedouble : 0;
-    ht_chat_kind_t kind = !strcmp(chat, "pm") ? HT_CHAT_PM : !strcmp(chat, "buddy") ? HT_CHAT_BUDDY
-                        : !strcmp(chat, "group") ? HT_CHAT_GROUP : HT_CHAT_LEAD;
-    // A reply inside a thread names its root (#2463): read on the face only in that thread. A root too long to hold is
-    // passed as it is: no face's root matches it, so it beeps, never read as the main chat's.
-    const char *thread = str_of(p, "thread");
-    if (ui_supertab_notice(tab, lead, kind, chat_id, thread ? thread : "", text,
-                           secs > 4294967295.0 ? 0xFFFFFFFFu : (uint32_t)secs))
-        audio_notify_done();
-}
-// `supertab.notice.read` {tab, lead, chatId}: the desktop opened that chat, so its alert is read.
-static void handle_supertab_notice_read(const cJSON *p)
-{
-    const char *tab = str_of(p, "tab"), *lead = str_of(p, "lead"), *chat_id = str_of(p, "chatId");
-    if (id_fits(tab) && id_fits(lead) && id_fits(chat_id)) ui_supertab_notice_read(tab, lead, chat_id);
-}
-// `supertab.focus` {tab, lead}. An empty `lead` is the desktop on that Swarm's tab with no project open: still a focus.
-static void handle_supertab_focus(const cJSON *p)
-{
-    const char *tab = str_of(p, "tab"), *lead = str_of(p, "lead");
-    if (id_fits(tab) && lead && (!lead[0] || id_fits(lead))) ui_supertab_focus(tab, lead);
-}
-
-// `question` {agentId, id, questions, superTab?, attention?}. With a non-empty `superTab` it is a Super Tab wait: the
-// dial cannot load its answer screen, so it only changes the asking Lead's inbox entry and face (ui_supertab_wait).
+// `question` {agentId, id, questions}.
 static void handle_question(const cJSON *p, const char *agent_id)
 {
     const cJSON *questions = cJSON_GetObjectItemCaseSensitive(p, "questions");
-    const char *swarm = str_of(p, "superTab");
-    if (agent_id && swarm && swarm[0]) {
-        const char *request = str_of(p, "id"), *attention = str_of(p, "attention");
-        if (!request || !request[0] || strlen(request) >= 64) return;
-        if (ui_supertab_wait(agent_id, request, swarm, attention && !strcmp(attention, "stuck"),
-                             str_of(cJSON_GetArrayItem(questions, 0), "q")))
-            audio_notify_done();
-        return;
-    }
     // The name rides on the frame for the same reason as on `summary`: the asker may be off this tab.
     if (agent_id && questions) {
         // A question is an alert: pinned row, wake and a (coalesced) beep, all but the beep inside
@@ -997,8 +806,7 @@ static void handle_question_close(const cJSON *p, const char *agent_id)
 {
     const char *request = str_of(p, "id");
     if (!agent_id) return;
-    if (request && !strncmp(request, "supertab:", 9)) ui_supertab_wait_close(agent_id, request);
-    else ui_question_close(agent_id, request);
+    ui_question_close(agent_id, request);
 }
 
 static void session_up(const cJSON *p)
@@ -1066,8 +874,6 @@ static void session_down(const char *why)
     // alone deliberately: a session that comes back on the same computer should land where it was.
     cable_machines_clear(&s_machines);
     ui_machines_clear();
-    // The Swarms too, with their inbox entries: on attach the daemon resends every card and every open wait.
-    ui_supertabs_clear();
     s_machine_name[0] = '\0';
     s_machine_id[0] = '\0';
     // Restore the plain console FIRST: whatever follows this point should be readable by a developer with
@@ -1354,12 +1160,6 @@ static void handle_message(const cJSON *root)
     if (strcmp(t, "settings.set") == 0) { handle_settings_set(p); return; }
     if (strcmp(t, "models") == 0) { handle_models(p); return; }
     if (strcmp(t, "swarms") == 0) { handle_swarms(p); return; }
-    if (strcmp(t, "supertabs") == 0) { handle_supertabs(p); return; }
-    if (strcmp(t, "supertab") == 0) { handle_supertab(p); return; }
-    if (strcmp(t, "supertab.recap") == 0) { handle_supertab_recap(p); return; }
-    if (strcmp(t, "supertab.focus") == 0) { handle_supertab_focus(p); return; }
-    if (strcmp(t, "supertab.notice") == 0) { handle_supertab_notice(p); return; }
-    if (strcmp(t, "supertab.notice.read") == 0) { handle_supertab_notice_read(p); return; }
 
     if (strcmp(t, "agent.updated") == 0) {
         // One agent changed. Cheapest correct answer is to re-ask: the daemon is on the other end of a
