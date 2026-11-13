@@ -21,7 +21,9 @@ type PaneRootSource = Pick<TerminalBackend, 'rootProcess'> & Pick<Partial<Termin
  */
 export type PaneProcessLookup =
   | { ok: true; identity: ProcessIdentity }
-  | { ok: false; unknown: boolean; reason: string }
+  /** [paneProcesses]: every process in the pane, on "no engine under it" only, so a caller can tell whether the
+   *  process an agent was bound to still runs there under another name (#4259). */
+  | { ok: false; unknown: boolean; reason: string; paneProcesses?: readonly ProcessIdentity[] }
 
 export async function lookupPaneEngineProcess(
   backend: PaneRootSource,
@@ -39,9 +41,13 @@ export async function lookupPaneEngineProcess(
   if (!rootPid) return { ok: false, unknown: true, reason: `${label} could not be resolved` }
   const rows = await readRows()
   if (!rows) return { ok: false, unknown: true, reason: 'the process table could not be read' }
-  const enrichedRows = await enrichProcessRows(rows, processTreePids(rows, [rootPid]))
+  const panePids = processTreePids(rows, [rootPid])
+  const enrichedRows = await enrichProcessRows(rows, panePids)
   const process = selectEngineProcess(enrichedRows, rootPid, engine)
-  if (!process) return { ok: false, unknown: false, reason: `no ${engine} process under ${label}` }
+  if (!process) {
+    const paneProcesses = enrichedRows.filter((row) => panePids.has(row.pid)).map(processIdentityOf)
+    return { ok: false, unknown: false, reason: `no ${engine} process under ${label}`, paneProcesses }
+  }
   return {
     ok: true,
     identity: processIdentityOf(process),

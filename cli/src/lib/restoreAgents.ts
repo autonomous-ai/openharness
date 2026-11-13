@@ -41,7 +41,7 @@ import type { LaunchOverrides } from './launchOverrides.js'
 import type { AgentLaunch, ProcessIdentity, RegisteredSession } from './registry.js'
 import type { TerminalDispatchControl, TerminalRuntimeRef } from './terminalTypes.js'
 import type { WindowsPaneLaunch } from './windows/engineStart.js'
-import { sameTerminalPlacement, terminalInstanceId, terminalRouteKey } from './terminalRuntime.js'
+import { processAmong, sameTerminalPlacement, terminalInstanceId, terminalRouteKey } from './terminalRuntime.js'
 import { resumesConversation } from './resumeCapability.js'
 
 export interface RestoreLaunch {
@@ -122,9 +122,9 @@ export interface RestoreAgentsDeps {
    */
   waitingPane?: (runtime: TerminalRuntimeRef, token: string) => Promise<boolean | 'unknown'>
   livePane?: (runtime: TerminalRuntimeRef) => Promise<boolean | 'unknown'>
-  /** The engine process still running in this row's pane, or null when tmux does not know the pane
-   *  at all — including when no tmux server is running — or the pane has become something else.
-   *  `'unknown'` when tmux or `ps` could not be asked. */
+  /** The engine process still running in this row's pane, or the process the row recorded when it still runs there
+   *  under another name (`terminalSurvey`); null when tmux does not know the pane at all — including when no tmux
+   *  server is running — or the pane has become something else. `'unknown'` when tmux or `ps` could not be asked. */
   liveProcess: (entry: RegisteredSession, runtime: TerminalRuntimeRef) => Promise<ProcessIdentity | null | 'unknown'>
   /** The pane's launch — engine argv plus whatever puts it back on its grid / profile. A grid the
    *  machine cannot honour (unsupported engine, tmux too old, config dir unwritable) is a refusal. */
@@ -215,10 +215,15 @@ export type SurveyListing = { ok: true; panes: readonly TerminalRuntimeRef[] } |
  * The survey's two questions, each asked of the runtime's own backend: one pane listing per backend for the whole
  * survey, read again only after a read that failed, and the engine in a pane as `lookupPaneEngineProcess` finds it.
  * A pane counts only on its own backend: `%3` on tmux is not `%3` on the pty host.
+ * A pane with no engine in it but the process the agent was bound to still counts as running: a wrapper that `exec`s
+ * keeps its pid and start under another name, and a daemon that restarted while the pane held only `unshare` would
+ * archive a running agent, as two passes of the reconciler did on lamp-9adf (2026-11-13, #4259).
  */
 export function terminalSurvey(
   listPanes: (runtime: TerminalRuntimeRef) => Promise<SurveyListing>,
-  lookup: (runtime: TerminalRuntimeRef, engine: AgentEngine) => Promise<{ ok: true; identity: ProcessIdentity } | { ok: false; unknown: boolean }>,
+  lookup: (runtime: TerminalRuntimeRef, engine: AgentEngine) => Promise<
+    { ok: true; identity: ProcessIdentity } | { ok: false; unknown: boolean; paneProcesses?: readonly ProcessIdentity[] }
+  >,
 ): Pick<RestoreAgentsDeps, 'livePane' | 'liveProcess'> {
   const inventories = new Map<string, Promise<SurveyListing>>()
   return {
@@ -236,7 +241,9 @@ export function terminalSurvey(
     },
     liveProcess: async (entry, runtime) => {
       const found = await lookup(runtime, entry.engine)
-      return found.ok ? found.identity : found.unknown ? 'unknown' : null
+      if (found.ok) return found.identity
+      if (found.unknown) return 'unknown'
+      return processAmong(entry.processIdentity, found.paneProcesses) ? entry.processIdentity : null
     },
   }
 }

@@ -1527,3 +1527,27 @@ describe('external adoption crash boundaries', () => {
     expect(h.rows.get('agent-a')).toMatchObject({ sessionId: 'imported-session', launch: { state: 'failed', error: 'RESUME_FAILED' } })
   })
 })
+
+describe('restoreAgents — a pane that holds only the recorded process (#4259)', () => {
+  it('keeps the agent whose recorded process still runs in its pane under another name, and archives the one whose process is gone', async () => {
+    const bound = identity(11)
+    const kept = row({ agentId: 'kept', processIdentity: bound })
+    const gone = row({ agentId: 'gone', sessionId: 'session-b', tmuxPane: '%4', runtimes: [{ backend: 'tmux', paneId: '%4' }],
+      primaryRuntimeKey: 'tmux\u0000%4', processIdentity: identity(21) })
+    const h = harness([kept, gone])
+    const retainStopped = h.deps.retainStopped = vi.fn()
+    const panes: TerminalRuntimeRef[] = [{ backend: 'tmux', paneId: '%3' }, { backend: 'tmux', paneId: '%4' }]
+    h.deps.survey = () => terminalSurvey(async () => ({ ok: true, panes }), async (runtime) => ({
+      ok: false, unknown: false,
+      paneProcesses: runtime.paneId === '%3'
+        ? [identity(10), { ...bound, executable: 'unshare' }]
+        // The same pid started later is another process.
+        : [identity(20), { ...identity(21), startMarker: 'start later' }],
+    }))
+    const summary = await restoreAgents(h.deps)
+    expect(retainStopped.mock.calls.map(([entry, paneAlive]) => [entry.agentId, paneAlive])).toEqual([['gone', true]])
+    expect(summary).toEqual({ restored: [], skipped: [], failed: [], held: [], unsurveyed: [] })
+    expect(h.paneCreates).toBe(0)
+    expect(h.rows.get('kept')!.processIdentity).toEqual(bound)
+  })
+})
