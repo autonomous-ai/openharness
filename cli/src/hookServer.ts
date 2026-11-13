@@ -1,4 +1,5 @@
 import { PRODUCT_FEEDBACK } from './lib/productUsageContract.js'
+import { ATTACHMENT_AGENT, ATTACHMENT_ROUTE } from './lib/gatewayWire.js'
 import { appProductUsageReport, APP_USAGE_VOCABULARY, APP_USAGE_VOCABULARY_HEADER } from './lib/appProductUsageReport.js'
 /**
  * Tiny localhost HTTP server for the Claude Code hook callbacks. `hook/notify.mjs` POSTs here on
@@ -1203,14 +1204,14 @@ export function startHookServer(
         } catch { json(502, { success: false, error: { code: 'USAGE_UNAVAILABLE', message: 'Product usage unavailable' } }) }
         return
       }
-      const attachment = req.method === 'POST' ? /^\/api\/super-tabs\/[A-Za-z0-9_-]{1,160}\/attachments$/.exec(url) : null
+      const attachment = req.method === 'POST' ? ATTACHMENT_ROUTE.exec(url) : null
       if (attachment) {
         if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
         if (!handlers.onSuperTabAttachment) { json(503, { error: 'UNAVAILABLE' }); return }
         // The body is the file, read by the handler as a stream: never readBody, which holds 256 KiB of text. An agent's
         // `post --attach` names itself; the backend checks that this account runs that agent.
         const asAgentId = new URLSearchParams((req.url ?? '').split('?')[1] ?? '').get('asAgentId')
-        const agent = asAgentId && /^[A-Za-z0-9_-]{1,160}$/.test(asAgentId) ? `?asAgentId=${asAgentId}` : ''
+        const agent = asAgentId && ATTACHMENT_AGENT.test(asAgentId) ? `?asAgentId=${asAgentId}` : ''
         await handlers.onSuperTabAttachment(req, res, `${url}${agent}`); return
       }
       const direct = req.method === 'POST'
@@ -1223,7 +1224,7 @@ export function startHookServer(
         try { const raw = await readBody(req, 8192); body = direct[1] && !raw.trim() ? {} : JSON.parse(raw) } catch { body = null }
         if (!body || typeof body !== 'object' || Array.isArray(body)) { json(400, { error: 'BAD_REQUEST' }); return }
         const asAgentId = new URLSearchParams((req.url ?? '').split('?')[1] ?? '').get('asAgentId')
-        const agent = asAgentId && /^[A-Za-z0-9_-]{1,160}$/.test(asAgentId) ? `?asAgentId=${asAgentId}` : ''
+        const agent = asAgentId && ATTACHMENT_AGENT.test(asAgentId) ? `?asAgentId=${asAgentId}` : ''
         // Only the fields a link's request has: nothing else the page sends reaches the backend with this account's token.
         const { conversationId, name, mime, size } = body as Record<string, unknown>
         await proxied(() => handlers.onSuperTabAttachmentUpload!(`${url}${agent}`, direct[1] ? {} : { conversationId, name, mime, size })); return

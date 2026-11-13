@@ -2015,7 +2015,15 @@ export interface GatewayRefusal {
  * `remote-password`, `link connect`, `group`, `devices`, and the Wi-Fi device's pairing. Each answers as
  * the hook server's route does; while the gateway is down, a 503.
  */
+/** The backend's answer to a file the gateway sent it, as it came, or why there is none. */
+export type UploadAnswer = { status: number; body: string; contentType: string }
+  | { error: 'NOT_SIGNED_IN' | 'BACKEND_UNREACHABLE' | 'BACKEND_TIMEOUT' | 'INVALID_UPLOAD' | 'GATEWAY_UNAVAILABLE' }
+
 export interface GatewayOps {
+  /** A file the core wrote to its uploads folder (lib/gatewayWire.ts `uploadsFolder`), sent as it is, streamed, to
+   *  the backend's [path] under the account's token: a Swarm chat file (lib/superTabAttachmentProxy.ts). The core calls
+   *  no other host (the core audit of 2026-11-12). The core deletes the file once answered. */
+  backendUpload(request: { file: string; path: string; contentType: string }): Promise<UploadAnswer>
   /** The account's token. The gateway renews the sign-in (lib/authRefresh.ts) and the core asks it, so the core calls
    *  no other host (the core audit of 2026-11-12, decision 4). A refusal is the session's own error (`AuthSessionError`). */
   accessToken(opts?: { force?: boolean; failedToken?: string }): Promise<string>

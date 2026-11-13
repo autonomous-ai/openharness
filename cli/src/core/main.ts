@@ -271,7 +271,7 @@ import { createRuntimeProfiles } from './engines/runtimeProfiles.js'
 import { createRuntimeTransport } from './engines/runtimeTransport.js'
 import { RuntimeProfileController } from '../lib/runtimeControl.js'
 import { installTimestampedConsole, sid, prepareLogFile, trimLogFile, LOG_CHECK_INTERVAL_MS } from '../lib/log.js'
-import { backendHttpBase } from '../lib/backendHttpBase.js'
+import { uploadsFolder } from '../lib/gatewayWire.js'
 
 // Daemon stdout/stderr. Capped at LOG_MAX_BYTES — see prepareLogFile/trimLogFile in lib/log.ts.
 const LOG_FILE = DAEMON_LOG_FILE
@@ -2357,7 +2357,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onProductFeedback: (body) => proxyBackend('POST', '/api/product-usage/feedback', body),
     onSignInAnswer: (action, body) => proxyBackend('POST', `/api/auth/qr/${action}`, body),
     ...(swarm ? { onSuperTabAttachment: (req, res, path) => swarm.forwardAttachmentUpload(req, res, path,
-      { accessToken: () => gatewayOps.accessToken(), environment: autonomousEnv, base: backendHttpBase() }),
+      { upload: (request) => gatewayOps.backendUpload(request), folder: uploadsFolder(env.ADAPTER_DATA_DIR) }),
       // A file over 10 MB: its signed link and its completion, with the account's token; the bytes go straight to storage.
       onSuperTabAttachmentUpload: (path, body) => proxyBackend('POST', path, body) } : {}),
     onProductUsageReport: (body) => proxyBackend('POST', '/api/product-usage/report', body),

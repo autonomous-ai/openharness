@@ -303,7 +303,6 @@ lib/appProductUsageReport.ts
 lib/attachTracker.ts
 lib/attachTranscript.ts
 lib/authSession.ts
-lib/backendHttpBase.ts
 lib/backgroundCommands.ts
 lib/binaryOnPath.ts
 lib/bootId.ts

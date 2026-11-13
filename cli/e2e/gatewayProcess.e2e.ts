@@ -10,7 +10,7 @@
  */
 import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
@@ -72,6 +72,47 @@ describe('a sign-in renewed by the gateway', () => {
         const renewed = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
         expect(renewed).toMatchObject({ accessToken: spec.token, refreshToken: 'e2e-refresh-2', machineId: spec.machineId })
         expect(renewed.expiresAt).toBeGreaterThan(Date.now())
+        expect(daemon.coresStarted()).toBe(1)
+      } finally {
+        await daemon.close().catch(() => {})
+        await backend.close()
+      }
+    })
+  }
+})
+
+// The core audit of 2026-11-12: with the Swarm on too, the core calls no other host. A Swarm chat file the desktop posts
+// to this computer is kept by the core and sent on by the gateway (lib/superTabAttachmentProxy.ts, gateway/upload.ts);
+// until then the core sent it itself. Nothing end to end sent one before.
+describe('a Swarm chat file sent on by the gateway', () => {
+  for (const [shape, services] of [['in its own process', undefined], ['in the core\'s, with every service (debugging, Harness OS)', 'none']] as const) {
+    it(`${shape}: the backend gets the file whole, under this machine's token, the desktop its answer, and nothing is kept`, async () => {
+      const backend = await FakeBackend.start()
+      const spec = { machineId: 'd4'.repeat(16), computerId: 'e2e-computer-0000-0000-00000000000d', name: 'machine-d', token: 'e2e-token-machine-d', identity: newIdentity() }
+      backend.addMachine(spec)
+      const daemon = await signedInDaemon(backend, spec, { HARNESS_SWARM: 'on', ...(services ? { HARNESSD_SERVICES: services } : {}) })
+      try {
+        await writeE2ee(daemon, { 'identity.json': { priv: b64e(spec.identity.priv), pub: b64e(spec.identity.pub) } })
+        onTestFailed(() => {
+          console.log(`---- daemon log\n${daemon.log().split('\n').slice(-120).join('\n')}`)
+          console.log(`---- fake backend saw\n${backend.seen.slice(-40).join('\n')}`)
+        })
+        await daemon.start()
+        const boundary = 'harness-e2e'
+        const file = Buffer.alloc(300 * 1024)
+        for (let i = 0; i < file.length; i++) file[i] = (i * 31 + (i >> 8)) & 0xff
+        const body = Buffer.concat([Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="shot.bin"\r\n\r\n`), file, Buffer.from(`\r\n--${boundary}--\r\n`)])
+        const posted = await fetch(`http://127.0.0.1:${daemon.port}/api/super-tabs/tab-1/attachments`, {
+          // As `post --attach` sends it (superTabs/attach.ts): the local credential, and the header a web page cannot set.
+          method: 'POST', body, headers: { ...daemon.localHeaders({ 'x-adapter-local': '1' }), 'content-type': `multipart/form-data; boundary=${boundary}` }, signal: AbortSignal.timeout(60_000),
+        })
+        expect(posted.status, await posted.clone().text()).toBe(200)
+        expect(await posted.json()).toEqual({ success: true, data: { attachment: { id: 'att-1', size: body.byteLength } } })
+        expect(backend.attachments).toHaveLength(1)
+        expect(backend.attachments[0]).toMatchObject({ path: '/api/super-tabs/tab-1/attachments', authorization: `Bearer ${spec.token}`, contentType: `multipart/form-data; boundary=${boundary}` })
+        expect(backend.attachments[0]!.body.equals(body)).toBe(true)
+        // The file the core kept goes with the answer.
+        expect(readdirSync(join(daemon.dataDir, 'uploads'))).toEqual([])
         expect(daemon.coresStarted()).toBe(1)
       } finally {
         await daemon.close().catch(() => {})

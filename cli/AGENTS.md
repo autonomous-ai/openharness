@@ -19,8 +19,11 @@ SERVICES src/services/     everything else, each in a process of its own: search
 
 The core is the one process every agent depends on, and the most trusted: it types into every terminal. It stays
 small and secure, in the code and at run time, and everything else is a component in a process of its own
-(anh Dee, 2026-11-12). What still breaks these rules, and the order it is fixed in, is in
-[the audit](../docs/design/2026-11-12-core-audit.md): that list only shrinks.
+(anh Dee, 2026-11-12). Each of those components is an experiment, tested every day, that can be switched off or
+deleted at any time, the Swarm among them: "small tiny core that is super stable and solid and a lot of components
+around it" (anh Dee, 2026-11-13). So nothing in the core depends on one, and deleting one changes nothing in the core.
+What still breaks these rules, and the order it is fixed in, is in [the audit](../docs/design/2026-11-12-core-audit.md):
+that list only shrinks.
 
 1. **The core is a process, not a folder.** Everything `src/core/main.ts` imports runs in it, wherever the file
    lives: `core/`, `lib/`, `engines/`, a component's door. `src/architecture.spec.ts` walks those imports.
@@ -31,11 +34,10 @@ small and secure, in the code and at run time, and everything else is a componen
 3. **The core loads no component's code.** What it needs of one is typed in `src/core/api.ts`. Code a component
    must run inside the core comes through a door of its own, loaded only while the component is on, which
    `src/architecture.spec.ts` holds to its files.
-4. **The core meets the outside least.** It listens only on this computer and calls no other host: the gateway
-   renews the sign-in, and the core asks it for a token (`src/architecture.spec.ts` lists what in the core's process
-   can open a connection, each to this computer). With the Swarm on, its door still uploads a chat file to the
-   backend itself (`lib/superTabAttachmentProxy.ts`): [the audit](../docs/design/2026-11-12-core-audit.md) has it.
-   Whatever someone other than this computer's owner can shape (a relay or backend frame,
+4. **The core meets the outside least.** It listens only on this computer and calls no other host, with the Swarm on
+   or off: the gateway renews the sign-in and sends a Swarm chat file to the backend, and the core asks it to
+   (`src/architecture.spec.ts` reads every file of the core's process and lists what can open a connection, each on
+   this computer). Whatever someone other than this computer's owner can shape (a relay or backend frame,
    another account's message, GitHub text, a web page, a device, a third-party harness) is parsed and checked in
    the component that faces it, and reaches the core as typed, bounded data.
 5. **The core lends its authority narrowly.** It runs no command line a component hands it, and signs a backend
