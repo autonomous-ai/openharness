@@ -2,8 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { CLOUD_DOWN, type CloudPort } from '../api.js'
 import type { CloudHarness } from '../../lib/cloudAgents.js'
 import { createCloudAgents } from './cloud.js'
-import { deriveTurnSummary } from '../../lib/deviceRecap.js'
-import { splitSummary } from '../../lib/recapReads.js'
+import { cloudCard } from '../../cloud/service.js'
 
 /** A row as the cloud service publishes it: what it said, and those words as a card reads them (cloud/service.ts). */
 const harness = (over: Partial<CloudHarness> = {}): CloudHarness => {
@@ -11,10 +10,7 @@ const harness = (over: Partial<CloudHarness> = {}): CloudHarness => {
     agentId: 'cloud_1', agent: 'devin-cloud', name: 'fix it', state: 'working', activity: null, repository: 'acme/api', branch: null,
     links: [], messages: 1, createdAt: '2026-10-11T10:00:00.000Z', updatedAt: '2026-10-11T10:00:00.000Z', ...over,
   }
-  const summary = row.said && !('card' in over) ? deriveTurnSummary(row.said) : null
-  if (!summary) return row
-  const { recap, body } = splitSummary(summary)
-  return { ...row, card: { recap, text: body } }
+  return row.said && !('card' in over) ? { ...row, card: cloudCard(row.said) } : row
 }
 
 function setup(port: CloudPort | null = null) {
@@ -132,13 +128,23 @@ describe('agents a service owns', () => {
     cloud.doors.publish([harness({ agent: 'fo', state: 'idle', said: '## Booked\n\nBooked for **9:30**.', card: { recap: 'the service\'s headline', text: 'the service\'s text' }, messages: 2 })])
     expect(cards().at(-1)).toMatchObject({ payload: { kind: 'summary', recap: 'the service\'s headline', text: 'the service\'s text' } })
     expect(cloud.recent('cloud_1')).toEqual([{ kind: 'summary', recap: 'the service\'s headline', text: 'the service\'s text', fullText: '## Booked\n\nBooked for **9:30**.' }])
-    // A service from before 2026-11-13 sends what it said and no card: done, as when it has said nothing.
-    const { cloud: older, clients: dial } = setup()
-    older.doors.publish([harness({ state: 'working' })])
-    older.doors.publish([harness({ state: 'idle', said: 'Opened #42.', card: null })])
-    expect(dial.sendCommander.mock.calls.map(([frame]) => frame.payload).at(-1)).toEqual({ kind: 'done', text: 'done' })
-    expect(older.recent('cloud_1')).toEqual([])
-    expect(older.said('cloud_1')).toBe('Opened #42.')
+  })
+
+  // Delete with the fallback, on or after 2026-12-13 (core/agents/cloud.ts `recapOf`).
+  it('shows the words of a service from before 2026-11-13, which sends no card, as they are: one line, cut, no markdown read', () => {
+    const { cloud, clients } = setup()
+    const said = `## Booked\n\nBooked for **9:30**. ${'More. '.repeat(60)}`
+    cloud.doors.publish([harness({ state: 'working' })])
+    cloud.doors.publish([harness({ state: 'idle', said, card: null, messages: 2 })])
+    const card = clients.sendCommander.mock.calls.map(([frame]) => frame.payload).at(-1)
+    const line = said.replace(/\s+/g, ' ').trim()
+    expect(card).toMatchObject({ kind: 'summary', recap: line.slice(0, 180), text: line.slice(0, 250) })
+    expect(card.recap.startsWith('## Booked Booked for **9:30**.')).toBe(true)
+    expect(cloud.recent('cloud_1')).toEqual([{ kind: 'summary', recap: line.slice(0, 180), text: line.slice(0, 250), fullText: said.trim() }])
+    // Words that are only space are no words (lib/cloudAgents.ts keeps none), so nothing is shown for them.
+    const { cloud: quiet } = setup()
+    quiet.doors.publish([{ ...harness({ state: 'idle' }), said: ' \n ' }])
+    expect(quiet.recent('cloud_1')).toEqual([])
   })
 
   it('shows its questions where questions show, and closes them', () => {

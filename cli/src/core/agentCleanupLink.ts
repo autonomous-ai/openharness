@@ -9,7 +9,7 @@
  * lookups and never a frame to another process.
  *
  * One thing the core asks and waits for, for a bounded time: that what a harness being deleted was told is erased
- * (`forget_told`). The agent ledger is the process's to read and lock, never the core's, and a delete whose erase is
+ * (`forgetTold`). The agent ledger is the process's to read and lock, never the core's, and a delete whose erase is
  * not answered is refused.
  *
  * The process asks the core what only the core knows: the live agents (`live`), when one's conversation last moved
@@ -22,8 +22,9 @@ import type { ServiceFrame } from './serviceLinks.js'
 
 type Payload = Record<string, unknown>
 
-/** How long a delete waits for the cleanup to erase what a harness was told: the ledger's own wait for its lock is two
- *  seconds (agentClient/ledger.ts `LEDGER_LOCK_WAIT_MS`), and the rewrite of two files of 2 MiB at most comes after. */
+/** How long a delete waits for the cleanup to erase what a harness was told: its wait for the ledger's lock is a
+ *  quarter of a second (services/agentCleanup.ts `FORGET_LOCK_WAIT_MS`), the rewrite of two files of 2 MiB at most
+ *  comes after, and the edge host may be busy with another service's work. */
 export const FORGET_TOLD_MS = 10_000
 
 /** [call]: ask the cleanup's process for an answer (core/serviceLinks.ts `call`, for `agentCleanup`): never rejects. */
@@ -41,7 +42,7 @@ export function createAgentCleanupLink(core: Pick<CoreApi, 'agents' | 'usage' | 
     },
     // Anything but its word that it erased them (the process down or slow, the ledger's lock held, a file it could
     // not write) is not erased, and the delete is refused.
-    forgetTold: async (agentId) => (await call('forget_told', { agentId }, FORGET_TOLD_MS)).ok === true,
+    forgetTold: async (agentId) => (await call('forgetTold', { agentId }, FORGET_TOLD_MS)).ok === true,
     stop: () => {},
   }
 

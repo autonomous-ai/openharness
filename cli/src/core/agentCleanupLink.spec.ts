@@ -64,7 +64,8 @@ describe('the agent cleanup in its own process, as the core sees it', () => {
   it('asks it to erase what a harness being deleted was told, and takes only its word that it did', async () => {
     const { link, call, notify } = setup()
     expect(await link.port.forgetTold('kid')).toBe(true)
-    expect(call).toHaveBeenCalledWith('forget_told', { agentId: 'kid' }, FORGET_TOLD_MS)
+    // Under its port member's name, as every call the core makes of a service is: a test's fault names it either way.
+    expect(call).toHaveBeenCalledWith('forgetTold', { agentId: 'kid' }, FORGET_TOLD_MS)
     expect(FORGET_TOLD_MS).toBe(10_000)
     // Down, slow, the ledger's lock held, a file it could not write, an answer from a build that knows no such
     // request: not erased.

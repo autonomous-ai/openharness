@@ -210,8 +210,13 @@ export interface PurgeDeps {
   stop(id: string, options: StopAgentOptions): Promise<void>
   restarting(id: string): boolean
   deleted(session: RegisteredSession): void
-  /** Erases what else Harness keeps of the harness (its told lines, its creation requests), after its conversation and
-   *  before [deleted]. Rejecting refuses the delete and keeps the archive, so the delete can be asked again. */
+  /** Erases what another process keeps of the harness (its told lines, which the agent cleanup holds), before anything
+   *  of it is deleted here: that process may be down, and a delete refused for it after the conversation had gone left a
+   *  harness with no conversation that would not delete (the review of 2026-11-13). Rejecting refuses the delete with
+   *  nothing deleted. Only where session data is deleted. */
+  eraseFirst?(session: RegisteredSession): Promise<void>
+  /** Erases what else Harness keeps of the harness (its creation requests), after its conversation and before
+   *  [deleted]. Rejecting refuses the delete and keeps the archive, so the delete can be asked again. */
   eraseRecords?(session: RegisteredSession): Promise<void>
   /** A fresh read of the pane says the engine is waiting at its folder-trust question (Codex's "Do you trust the contents of this directory?"). */
   atFolderTrust?(session: RegisteredSession): Promise<boolean>
@@ -417,6 +422,7 @@ export class PurgeAgentService {
         try {
           const files = sessionData ? checkpointsOf(saved, this.deps.checkpoints).map(file) : []
           if (sessionData) review.history!.verify?.()
+          if (sessionData) await this.deps.eraseFirst?.(saved)
           if (worktreeData && !worktreeDeleted) {
             const removedWorkspace = sessionData ? review.history!.prepareWorkspaceRemoval?.(review.worktree!) : undefined
             await removeReviewedWorktree(review.worktree!, saved, this.deps.sessions(), request.discardChanges === true)

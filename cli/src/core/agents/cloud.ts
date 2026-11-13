@@ -30,9 +30,23 @@ export interface CloudAgentsDeps {
 
 const DOWN = async (): Promise<typeof CLOUD_DOWN> => CLOUD_DOWN
 const busy = (harness: CloudHarness): boolean => harness.state === 'working' || harness.state === 'starting'
-/** Its last words as the dial's recap and the text under it, as its service worked them out (lib/cloudAgents.ts
- *  `card`), or null when it has said nothing. */
-const recapOf = (harness: CloudHarness): { recap: string; text: string } | null => (harness.said ? harness.card ?? null : null)
+/** The lengths of a card's two lines where the core has to cut them itself (lib/deviceRecap.ts cuts to the same). */
+const HEADLINE_MAX = 180, TEXT_MAX = 250
+/**
+ * Its last words as the dial's recap and the text under it, as its service worked them out (lib/cloudAgents.ts
+ * `card`), or null when it has said nothing.
+ *
+ * A cloud service from before 2026-11-13 sends its words and no card: beside this core its card read "done" and its
+ * tile restored empty (the review of 2026-11-13). Until that process starts again on this build its words are shown
+ * as they are, in one line and cut to a card's lengths: no markdown is read here. Delete on or after 2026-12-13.
+ */
+const recapOf = (harness: CloudHarness): { recap: string; text: string } | null => {
+  if (!harness.said) return null
+  if (harness.card) return harness.card
+  // Kept trimmed, and never empty (lib/cloudAgents.ts `cloudHarnessIn`).
+  const line = harness.said.replace(/\s+/g, ' ')
+  return { recap: line.slice(0, HEADLINE_MAX), text: line.slice(0, TEXT_MAX) }
+}
 
 export function createCloudAgents({ port, clients, openQuestions, deviceInput, log = (line) => console.log(line) }: CloudAgentsDeps) {
   let harnesses = new Map<string, CloudHarness>()

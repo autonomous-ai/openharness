@@ -36,7 +36,7 @@ describe('the agent cleanup in its own process', () => {
     const { options, port } = setup()
     expect(options).toMatchObject({ name: 'agentCleanup', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't' })
     // The apps ask it nothing: its one request is the core's own (core/agentCleanupLink.ts), which no client's is routed to.
-    expect(Object.keys(options.requests)).toEqual(['forget_told'])
+    expect(Object.keys(options.requests)).toEqual(['forgetTold'])
     options.onEvent!({ kind: 'closed', agentId: 'lead' })
     options.onEvent!({ kind: 'typed', agentId: 'kid' })
     options.onEvent!({ kind: 'typed', agentId: '' })
@@ -48,7 +48,7 @@ describe('the agent cleanup in its own process', () => {
 
   it('erases what a harness being deleted was told when the core asks, and says so only once it is erased', async () => {
     const { options, port } = setup()
-    const ask = (payload: Record<string, unknown>) => options.requests.forget_told!(payload, { local: true, owner: true })
+    const ask = (payload: Record<string, unknown>) => options.requests.forgetTold!(payload, { local: true, owner: true })
     expect(await ask({ agentId: 'kid' })).toEqual({ ok: true })
     expect(port.forgetTold).toHaveBeenCalledWith('kid')
     port.forgetTold.mockResolvedValueOnce(false)

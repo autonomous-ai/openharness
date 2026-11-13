@@ -286,7 +286,7 @@ describe('the edge host: several services in one process of their own', () => {
 
   // A delete erases the opening words of what the harness was told (`harness tell`), kept in the agent ledger. The
   // agent cleanup does it here (the audit of 2026-11-12): the core never reads that file, nor waits on its lock.
-  it('a delete erases what the harness was told through the agent cleanup, and is refused while it cannot', async () => {
+  it('a delete erases what the harness was told through the agent cleanup, and is refused with nothing deleted while it cannot', async () => {
     const d = await fresh()
     const client = await LocalClient.connect(d)
     const agent = await create(d, client, 'claude', 'delete-told')
@@ -301,12 +301,15 @@ describe('the edge host: several services in one process of their own', () => {
       const review = await client.request('agent_purge', { ...target, mode: 'inspect' }, 60_000)
       return client.request('agent_purge', { ...target, mode: 'delete', reviewId: review.reviewId }, 90_000)
     }
-    // Held still: the core waits its ten seconds for the erase and refuses the delete, in words the person can act on.
+    // Held still: the core waits its ten seconds for the erase, asked before anything is deleted, and refuses the
+    // delete in words the person can act on. The conversation is still there.
     const held = edgePids(d)
     expect(held).toHaveLength(1)
     for (const pid of held) process.kill(pid, 'SIGSTOP')
     const refused = await remove()
-    expect(refused, JSON.stringify(refused)).toMatchObject({ error: 'DELETE_REFUSED', detail: expect.stringContaining('Harness could not erase what this harness was told. Try deleting it again.') })
+    expect(refused, JSON.stringify(refused)).toMatchObject({ error: 'DELETE_REFUSED', sessionDeleted: false,
+      detail: 'Harness could not erase what this harness was told, so nothing was deleted. The harness is stopped; refresh before trying again.' })
+    expect((await row(client, agent.id))?.sessionId).toBe(agent.sessionId)
     for (const pid of held) { try { process.kill(pid, 'SIGCONT') } catch { /* the master's watch had killed it already */ } }
     // Asked again once the cleanup answers: erased, with every other line kept, and the harness is gone.
     await until('the delete to go through', async () => (await remove()).deleted === true || null, 90_000, 1_000)

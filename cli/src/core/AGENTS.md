@@ -49,7 +49,7 @@ The core stays small and secure, in the code and at run time: read
 - `agents/`: create, fork, restart, retarget, stop, resume, close, discovery, adoption, binding, the list.
   `agents/cloud.ts`: agents a service owns, the cloud agents: listed with the rest from what the cloud
   service publishes, their questions shown as a pane's are, the dial's turn cards made from what changes
-  (working, then what it said), and New Harness, words, an answer, a rename and Stop Harness for one handed
+  (working, then what it said, in the card's two lines as the service worked them out), and New Harness, words, an answer, a rename and Stop Harness for one handed
   to its port (`cloudLink.ts` when it runs in its own process).
 - `transcripts/`: attach (bounded reads from the end), ingest, live tail, relaunch marks, normalizers.
   Claude Code/Codex live interpretation is injected through `Engine.live`; core keeps parser handles
@@ -108,7 +108,8 @@ The core stays small and secure, in the code and at run time: read
   told each turn's lifecycle and never waited on, and read back from what they last said
   (`turns/recaps.ts` is the core's whole side of them). `storeLink.ts`: what the Store in its
   process tells the core. `agentCleanupLink.ts`: the agent cleanup in its process, told every stop and the person
-  typing into a harness another agent started, and answered what it may close. `modelsLink.ts`: what the core keeps of models in its process for frames and
+  typing into a harness another agent started, answered what it may close, and asked to erase what a harness being
+  deleted was told (the agent ledger is its to read and lock, never the core's). `modelsLink.ts`: what the core keeps of models in its process for frames and
   keystrokes, and how it asks it the rest. `agentQueries.ts`: what a service in its own process may ask of the agents;
   `accountQueries.ts`: of the account (a token, and the fleet's lane's sealing), so it holds no credential.
   `experimentQueries.ts`: what an experiment acts on the core through; `experiments.ts`: which are on as the

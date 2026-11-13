@@ -42,6 +42,16 @@ interface Entry {
 
 export interface TranscriptMessage { id: string; from: 'agent' | 'person'; text: string; at: string }
 
+/** A cloud agent's words as the dial's card reads them (lib/deviceRecap.ts): a headline and the text under it, or null
+ *  when they hold nothing to show. Worked out here, not in the core: the words are a maker's agent's, and their markdown
+ *  is read in the process that faces it (the audit of 2026-11-12). */
+export function cloudCard(said: string): CloudCard | null {
+  const summary = deriveTurnSummary(said)
+  if (!summary) return null
+  const { recap, body } = splitSummary(summary)
+  return { recap, text: body }
+}
+
 export interface CloudServiceOptions {
   dataDir: string
   core: CloudCore
@@ -129,16 +139,11 @@ export function startCloudService(options: CloudServiceOptions) {
     if (message.from === 'agent') entry.harness.said = message.text.slice(0, SAID_MAX)
   }
 
-  /** What it said last as the dial's card reads it (lib/deviceRecap.ts), worked out again only when it says something new.
-   *  Here, not in the core: the words are a maker's agent's, and their markdown is read in the process that faces it. */
+  /** What it said last as the dial's card reads it, worked out again only when it says something new. */
   const cardOf = (entry: Entry): CloudCard | null => {
     const said = entry.harness.said
     if (!said) return null
-    if (entry.card?.said !== said) {
-      const summary = deriveTurnSummary(said)
-      const lines = summary ? splitSummary(summary) : null
-      entry.card = { said, lines: lines ? { recap: lines.recap, text: lines.body } : null }
-    }
+    if (entry.card?.said !== said) entry.card = { said, lines: cloudCard(said) }
     return entry.card.lines
   }
 

@@ -9,7 +9,8 @@ import { fakeCore } from '../testing/fakeCore.js'
 import { RETENTION_LAPSE_MS, retainContributions, retainedHarnesses, retentionFile } from '../superTabs/retention.js'
 import { Ledger, ledgerPath, type Told } from '../agentClient/ledger.js'
 import { GONE_MS } from './hachiHandOver.js'
-import { ASK_AGAIN_MS, BACKGROUND_CLOSE_MS, CASCADE_RETRY_MS, CASCADE_TRIES, createAgentCleanup, IDLE_CLOSE_MS, JOINED_MAX, joinedPath, LOOK_EVERY_MS, startAgentCleanup, type AgentCleanupDeps } from './agentCleanup.js'
+import { ASK_AGAIN_MS, BACKGROUND_CLOSE_MS, CASCADE_RETRY_MS, CASCADE_TRIES, createAgentCleanup, FORGET_LOCK_WAIT_MS, IDLE_CLOSE_MS, JOINED_MAX, joinedPath, LOOK_EVERY_MS, startAgentCleanup, type AgentCleanupDeps } from './agentCleanup.js'
+import { processLockIdentity } from '../lib/processLiveness.js'
 
 const NOW = Date.parse('2026-10-12T12:00:00Z')
 const MIN = 60_000
@@ -549,6 +550,21 @@ describe('erasing what a deleted harness was told', () => {
     expect(await cleanup.port.forgetTold('nobody')).toBe(true)
     expect(readFileSync(ledgerPath(dir), 'utf8')).toBe(kept)
     expect(log).not.toHaveBeenCalled()
+  })
+
+  // The wait blocks the edge host's process, which other services share: a quarter of a second, not the ledger's two.
+  it('gives up on a ledger another writer holds within a quarter of a second, and says so', async () => {
+    expect(FORGET_LOCK_WAIT_MS).toBe(250)
+    const ledger = new Ledger(ledgerPath(dir))
+    ledger.append(told('kid', 'fix the login'))
+    // A live writer's lock: this process's own, which is alive.
+    writeFileSync(`${ledgerPath(dir)}.lock`, JSON.stringify({ pid: process.pid, ...processLockIdentity(process.pid) }))
+    const { cleanup, log } = setup([], {}, { forgetLockWaitMs: 30 })
+    const began = Date.now()
+    expect(await cleanup.port.forgetTold('kid')).toBe(false)
+    expect(Date.now() - began).toBeLessThan(1_500)
+    expect(readFileSync(ledgerPath(dir), 'utf8')).toContain('fix the login')
+    expect(log.mock.calls).toEqual([['[agent-cleanup] could not erase what kid was told: The agent ledger is busy. Try again.']])
   })
 
   it('says it did not, and why in the log, when the ledger could not be rewritten', async () => {

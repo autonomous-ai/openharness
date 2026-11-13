@@ -200,16 +200,19 @@ describe('stopping, purging and resuming an agent', () => {
       expect(vi.mocked(deps.mirror.deleteHistory).mock.calls).toEqual([['k2'], ['k1']])
       expect(vi.mocked(deps.sessionSearch!.deleteHistory).mock.calls).toEqual([['k2'], ['k1']])
       expect(deps.registry.deleteSavedNames).toHaveBeenCalledWith(['a1', 'k2', 'k1'])
-      // What it was told, then the requests that made it, and only then is it gone for the windows.
+      // What it was told goes first, before anything of it is deleted here; the requests that made it after its
+      // conversation; and only then is it gone for the windows.
       expect(deps.forgetTold).toHaveBeenCalledExactlyOnceWith('a1')
       expect(deps.scrubCreated).toHaveBeenCalledExactlyOnceWith('a1')
       expect(deps.send).toHaveBeenCalledWith({ type: 'agent_deleted', payload: { agentId: 'a1', retained: false } })
+      expect(vi.mocked(deps.forgetTold).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(deps.mirror.deleteHistory).mock.invocationCallOrder[0]!)
       expect(vi.mocked(deps.forgetTold).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(deps.scrubCreated).mock.invocationCallOrder[0]!)
       expect(vi.mocked(deps.scrubCreated).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(deps.send).mock.invocationCallOrder[0]!)
     })
 
     // The agent cleanup erases them, in the edge host (the audit of 2026-11-12): its lock held, or its process down.
-    it('refuses a purge whose told lines were not erased, in words the person can act on, and keeps the rest to ask again', async () => {
+    // Asked first: refused after the conversation had gone, the harness was left with none and would not delete.
+    it('refuses a purge whose told lines were not erased before anything is deleted, in words the person can act on', async () => {
       const closed = row({ engine: 'openclaw', sessionId: 'k2', registeredAt: 7 })
       const { deps, lifecycle } = setup({
         registry: { byAgent: vi.fn(() => undefined), list: vi.fn(() => []), deleteSavedNames: vi.fn() } as unknown as LifecycleDeps['registry'],
@@ -222,8 +225,10 @@ describe('stopping, purging and resuming an agent', () => {
       const { reviewId } = await lifecycle.purgeAgentService.request({ ...target, mode: 'inspect' })
       expect(await lifecycle.purgeAgentService.request({ ...target, mode: 'delete', reviewId: String(reviewId) }))
         .toMatchObject({ error: 'DELETE_REFUSED', detail: expect.stringContaining(TOLD_NOT_ERASED) })
-      expect(TOLD_NOT_ERASED).toBe('Harness could not erase what this harness was told. Try deleting it again.')
+      expect(TOLD_NOT_ERASED).toBe('Harness could not erase what this harness was told, so nothing was deleted.')
       expect(deps.scrubCreated).not.toHaveBeenCalled()
+      expect(deps.mirror.deleteHistory).not.toHaveBeenCalled()
+      expect(deps.sessionSearch!.deleteHistory).not.toHaveBeenCalled()
       expect(deps.stoppedAgents.remove).not.toHaveBeenCalled()
       expect(deps.send).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'agent_deleted' }))
     })

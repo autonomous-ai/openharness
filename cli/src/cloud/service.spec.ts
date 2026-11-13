@@ -9,7 +9,7 @@ import type { CloudCore } from '../core/api.js'
 import type { CloudHarness } from '../lib/cloudAgents.js'
 import type { Bridge } from './bridge.js'
 import { repositoryOf } from '../lib/cloudAgents.js'
-import { nameFor, startCloudService } from './service.js'
+import { cloudCard, nameFor, startCloudService } from './service.js'
 import { CloudError, type CloudAdapter, type CloudUpdate } from './types.js'
 
 const owner = { local: true, owner: true }
@@ -241,6 +241,13 @@ describe('a cloud harness', () => {
     start({ 'devin-cloud': devin }).republish()
     expect(published()[0].said).toBeNull()
     expect(published()[0].card).toBeNull()
+  })
+
+  it('works a card out of words: a headline and the text under it, or none where they hold nothing to show', () => {
+    expect(cloudCard('Opened #42.')).toEqual({ recap: 'Opened #42.', text: 'Opened #42.' })
+    expect(cloudCard('## Booked\n\nBooked for **9:30** at Hair Lab.')).toEqual({ recap: 'Booked for 9:30 at Hair Lab.', text: 'Booked Booked for 9:30 at Hair Lab.' })
+    expect(cloudCard('**  **')).toBeNull()
+    expect(cloudCard('')).toBeNull()
   })
 
   it('reads a maker\'s markdown into the card\'s two lines, and none from words that hold nothing to say', async () => {

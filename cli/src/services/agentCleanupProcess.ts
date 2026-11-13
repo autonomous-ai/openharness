@@ -3,7 +3,7 @@
  * the core's process (services/agentCleanup.ts), on the live agents the core names as each look and each close of a
  * starter's harnesses begins (`service_query live`). The core tells it what happens (`service_event closed`, `typed`)
  * and never waits for it, but for one answer: that a harness being deleted has had what it was told erased
- * (`forget_told`). It asks the core when a harness last moved (`lastActivity`) and to close one
+ * (`forgetTold`). It asks the core when a harness last moved (`lastActivity`) and to close one
  * (`closeStarted`), which the core does for a harness another agent started and nothing else (core/agentCleanupLink.ts).
  */
 import type { CoreApi, DaemonAddress } from '../core/api.js'
@@ -68,8 +68,9 @@ export function runAgentCleanupService(options: AgentCleanupServiceOptions): Ser
     token: options.token,
     // The apps ask it nothing; the core tells it what happens, and asks it one thing (core/agentCleanupLink.ts).
     requests: {
-      // A delete's erase of what the harness was told: `ok` only once erased, and the delete is refused without it.
-      forget_told: async (payload) => {
+      // A delete's erase of what the harness was told, under its port member's name (core/agentCleanupLink.ts): `ok` only
+      // once erased, and the delete is refused without it.
+      forgetTold: async (payload) => {
         if (typeof payload.agentId !== 'string' || !payload.agentId) return { error: 'INVALID_REQUEST' }
         return { ok: await cleanup.port.forgetTold(payload.agentId) }
       },
