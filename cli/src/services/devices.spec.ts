@@ -4,10 +4,14 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { CableHostWiring } from '../cable/cableHost.js'
+import type { CableHostWiring, DaemonCableHost } from '../cable/cableHost.js'
+import { observedAgentId } from '../cable/hosts/observed.js'
 import { env } from '../config/env.js'
-import { emptyPorts, ServiceUnavailableError, type CoreApi, type CorePorts, type DevicesPort } from '../core/api.js'
+import { DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, ServiceUnavailableError, type CoreApi, type CorePorts, type DevicesPort } from '../core/api.js'
+import type { ObservedHookEvent } from '../core/observedHook.js'
+import { createServiceHost } from '../core/serviceHost.js'
 import type { FleetEvent } from '../cable/machineFleet.js'
+import { claudeProjectsRoots, codexHomeRoots } from '../lib/engineHomes.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { relayHub } from '../testing/relayHub.js'
@@ -122,6 +126,36 @@ vi.mock('../lib/voiceRouter.js', () => ({
   shutdownVoiceRouter: seen.voice.shutdown,
   routeVoiceTask: vi.fn(),
 }))
+// What the observed source reads of this machine: its processes, the engines' stores and transcripts. Stood in for, so
+// no spec looks at the developer's running sessions.
+const readers = vi.hoisted(() => ({
+  open: null as null | Record<string, unknown>,
+  external: null as null | Record<string, unknown>,
+  known: new Map<string, string>(),
+  owners: new Map<string, { engine: string; pid: number }>(),
+  working: new Map<string, boolean>(),
+  scans: 0,
+  answer: vi.fn(async (..._args: unknown[]): Promise<string | undefined> => undefined),
+}))
+vi.mock('../lib/sessionSearch/external.js', async (real) => ({
+  ...await real<typeof import('../lib/sessionSearch/external.js')>(),
+  OpenSessions: class {
+    constructor(options: Record<string, unknown>) { readers.open = options }
+    known() { return readers.known }
+    async owner(id: string) { return readers.owners.get(id) ?? null }
+    async working(id: string) { return readers.working.get(id) ?? null }
+  },
+  ExternalSessions: class {
+    constructor(options: Record<string, unknown>) { readers.external = options }
+    async scan() { readers.scans++; return [] }
+    get() { return undefined }
+  },
+}))
+vi.mock('../lib/externalProcessGeneration.js', () => ({ externalProcessGeneration: () => null }))
+vi.mock('../cable/hosts/lastAnswer.js', async (real) => ({
+  ...await real<typeof import('../cable/hosts/lastAnswer.js')>(),
+  readLastAnswer: readers.answer,
+}))
 
 const { startDevices } = await import('./devices.js')
 
@@ -132,11 +166,17 @@ beforeEach(() => {
   logs = []
   seen.bridges = {}
   seen.fleet = null
+  readers.open = readers.external = null
+  readers.known.clear(); readers.owners.clear(); readers.working.clear()
+  readers.scans = 0
   vi.clearAllMocks()
+  readers.answer.mockResolvedValue(undefined)
 })
 afterEach(() => {
   rmSync(dataDir, { recursive: true, force: true })
   vi.restoreAllMocks()
+  vi.useRealTimers()
+  vi.unstubAllEnvs()
 })
 
 function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null } = {}) {
@@ -1464,5 +1504,214 @@ describe('the Devices tab', () => {
     // A changed mapping reaches every live dial.
     expect(await requests.pet_reset({ target: 'all' }, { local: true, owner: true })).toMatchObject({ ok: true })
     expect(calls('petsChanged')).toEqual([[]])
+  })
+})
+
+describe('agents outside a pane, from their hooks and the open sessions (cable/hosts/observed.ts)', () => {
+  const ID = observedAgentId('claude', 'sess-1')
+  const hook = (event: ObservedHookEvent['event'], over: Partial<ObservedHookEvent> = {}): ObservedHookEvent => ({
+    engine: 'claude', sessionId: 'sess-1', event, cwd: '/work/api', callerPid: 4242, transcriptPath: '/t/sess-1.jsonl',
+    hostHints: { ORCA_AGENT_SESSION_ID: 'orca-1' }, at: 1, ...over,
+  })
+  const host = () => seen.dial as unknown as DaemonCableHost
+  /** The dial's list with no window, as its session reads it every second. */
+  const machineList = async (port: DevicesPort) => { port.swarms(null); return host().listAgentSnapshot() }
+  const harnessAgent = () => fakeCore({ dataDir, agents: { advertised: vi.fn(() => [{ agentId: 'h1', registeredAt: 1, engine: 'claude' }] as RegisteredSession[]) } })
+
+  it('an observed event from the core reaches ObservedSource and the dial\'s list', async () => {
+    const { port } = start({ faults: ['fleet'] })
+    port.observed(hook('session-start'))
+    expect(await machineList(port)).toMatchObject({ view: 'machine', tab: '', total: 1,
+      agents: [{ id: ID, name: 'api', engine: 'claude', host: 'orca', caps: 's' }] })
+    // This machine's own readers, every engine's, with Harness's data folder left out as search leaves it.
+    expect(readers.external).toMatchObject({ providers: expect.any(Array), excluded: [dataDir] })
+    expect(readers.open).toMatchObject({ providers: readers.external!.providers })
+  })
+
+  it('HARNESS_DEVICE_OBSERVED=off ignores observed events and lists only harness agents with no window', async () => {
+    vi.stubEnv('HARNESS_DEVICE_OBSERVED', 'off')
+    const { port } = start({ core: harnessAgent(), faults: ['fleet'] })
+    port.observed(hook('needs-input'))
+    expect(await machineList(port)).toMatchObject({ view: 'machine', total: 1, agents: [{ id: 'h1', host: 'harness', caps: 'sva' }] })
+    expect(calls('turnStarted')).toEqual([])
+    // No source at all: nothing reads this machine's sessions.
+    expect(readers.open).toBeNull()
+    expect(readers.external).toBeNull()
+  })
+
+  it('scan runs on dial attach and every 60 s only while a dial is attached', async () => {
+    vi.useFakeTimers()
+    const { port } = start({ faults: ['fleet'] })
+    readers.known.set('sess-9', 'terminal')
+    readers.owners.set('sess-9', { engine: 'codex', pid: 77 })
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(readers.scans).toBe(0)
+    seen.host.watching!(true)
+    expect(readers.scans).toBe(1)
+    // Running before the dial came, it is listed now.
+    await vi.waitFor(async () => expect((await machineList(port)).agents).toEqual([expect.objectContaining({ id: observedAgentId('codex', 'sess-9'), engine: 'codex' })]))
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(readers.scans).toBe(2)
+    seen.host.watching!(false)
+    await vi.advanceTimersByTimeAsync(180_000)
+    expect(readers.scans).toBe(2)
+  })
+
+  it('removes an ended session within 30 s, and ends a Codex turn within 3 s of its process going quiet', async () => {
+    vi.useFakeTimers()
+    const { port } = start({ faults: ['fleet'] })
+    const codex = observedAgentId('codex', 'cx-1')
+    port.observed(hook('turn-start', { engine: 'codex', sessionId: 'cx-1' }))
+    readers.working.set('cx-1', false)
+    await vi.advanceTimersByTimeAsync(3_000)
+    expect(calls('turnDone')).toEqual([[codex]])
+    port.observed(hook('session-start'))
+    port.observed(hook('session-end'))
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect((await machineList(port)).agents.map((a) => a.id)).toEqual([codex])
+  })
+
+  it('timers stop when the service stops', async () => {
+    vi.useFakeTimers()
+    const { port } = start()
+    seen.host.watching!(true)
+    expect(vi.getTimerCount()).toBeGreaterThan(0)
+    await port.stop()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('inline (HARNESSD_SERVICES=none) wiring gets the same port', async () => {
+    // As core/main.ts starts the devices in the core's own process: through the service host, which guards the port.
+    const ports = emptyPorts()
+    createServiceHost(ports, { log: () => {} }).start('devices', (core, started) => startDevices(core, started, {
+      logsDir: join(dataDir, 'logs'), cableDisabled: true, faults: new Set(['fleet']), log: () => {}, onExit: vi.fn(),
+    }), fakeCore({ dataDir }), DEVICES_FALLBACKS, DEVICES_REQUESTS)
+    ports.devices!.observed(hook('session-start'))
+    expect(await machineList(ports.devices!)).toMatchObject({ view: 'machine', agents: [{ id: ID, host: 'orca', caps: 's' }] })
+  })
+
+  it('observed turn-stop reaches the dial as turn.done and summary with the last answer', async () => {
+    readers.answer.mockResolvedValue('All 12 tests pass.')
+    const { port } = start()
+    port.observed(hook('turn-start'))
+    port.observed(hook('turn-stop'))
+    await vi.waitFor(() => expect(calls('summary')).toHaveLength(1))
+    expect(seen.cable.calls.map(([name]) => name)).toEqual(['start', 'turnStarted', 'turnDone', 'summary'])
+    expect(calls('turnStarted')).toEqual([[ID, '', undefined]])
+    expect(calls('turnDone')).toEqual([[ID]])
+    expect(calls('summary')).toEqual([[ID, 'All 12 tests pass.', 'All 12 tests pass.', 'alert', 'All 12 tests pass.', false]])
+    // Read only inside Claude Code's own folders, bounded in bytes and time.
+    expect(readers.answer).toHaveBeenCalledWith('claude', '/t/sess-1.jsonl', { roots: claudeProjectsRoots(env.CLAUDE_PROJECTS_DIR), maxBytes: 262_144, deadlineMs: 1000 })
+
+    // The next turn's answer is not read: the last one is not said again as if it were this turn's.
+    readers.answer.mockResolvedValue(undefined)
+    port.observed(hook('turn-start'))
+    port.observed(hook('turn-stop'))
+    await vi.waitFor(() => expect(readers.answer).toHaveBeenCalledTimes(2))
+    expect(calls('turnDone')).toHaveLength(2)
+    expect(calls('summary')).toHaveLength(1)
+
+    // Codex's transcripts are read under its home's sessions folder.
+    readers.answer.mockResolvedValue('Renamed the flag.')
+    port.observed(hook('turn-stop', { engine: 'codex', sessionId: 'cx-1', transcriptPath: '/t/rollout.jsonl' }))
+    await vi.waitFor(() => expect(calls('summary')).toHaveLength(2))
+    expect(calls('summary')[1]).toEqual([observedAgentId('codex', 'cx-1'), 'Renamed the flag.', 'Renamed the flag.', 'alert', 'Renamed the flag.', false])
+    expect(readers.answer).toHaveBeenLastCalledWith('codex', '/t/rollout.jsonl',
+      expect.objectContaining({ roots: codexHomeRoots(env.CODEX_HOME).map((home) => join(home, 'sessions')) }))
+  })
+
+  it('observed needs-input reaches the dial as turn.activity Waiting for you · Orca', async () => {
+    const { core, port } = start({ faults: ['fleet'] })
+    port.observed(hook('needs-input'))
+    // turn.started carries the line, and the activity the session reads right after it (its turn.activity) is the same.
+    expect(calls('turnStarted')).toEqual([[ID, 'Waiting for you · Orca', undefined]])
+    expect(await host().activityText(ID)).toBe('Waiting for you · Orca')
+    expect(await host().activitySnapshot(ID)).toEqual({ text: 'Waiting for you · Orca' })
+    port.observed(hook('turn-start'))
+    expect(await host().activityText(ID)).toBeNull()
+    expect(await host().activitySnapshot(ID)).toBeNull()
+    port.observed(hook('turn-error'))
+    expect(calls('turnError')).toEqual([[ID, '']])
+    expect(core.agents.activityText).not.toHaveBeenCalled()
+  })
+
+  it('tells the dial again every 20 s, while one is attached, of an observed agent that waits or works', async () => {
+    vi.useFakeTimers()
+    const { port } = start()
+    const other = observedAgentId('claude', 'sess-2')
+    port.observed(hook('needs-input'))
+    port.observed(hook('turn-start', { sessionId: 'sess-2', hostHints: {} }))
+    port.observed(hook('session-start', { sessionId: 'sess-3' }))
+    expect(calls('turnStarted')).toEqual([[ID, 'Waiting for you · Orca', undefined], [other, '', undefined]])
+    // No dial: nobody to remind.
+    await vi.advanceTimersByTimeAsync(40_000)
+    expect(calls('turnStarted')).toHaveLength(2)
+    // The dial forgets a turn it hears nothing of for 25 s (firmware ui_prune_stale_busy), and a person can take minutes.
+    seen.host.watching!(true)
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(calls('turnStarted').slice(2)).toEqual([[ID, 'Waiting for you · Orca', undefined], [other, '', undefined]])
+    port.observed(hook('turn-stop', { sessionId: 'sess-2' }))
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(calls('turnStarted').slice(4)).toEqual([[ID, 'Waiting for you · Orca', undefined]])
+    seen.host.watching!(false)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(calls('turnStarted')).toHaveLength(5)
+  })
+
+  it('moves a harness agent on the machine list with the cards it is sent, a sub-agent\'s aside', async () => {
+    const { port } = start({ core: harnessAgent(), faults: ['fleet'] })
+    const states = () => host().harness.list().map((a) => a.state)
+    // The harness source learns its rows as the list is read.
+    await machineList(port)
+    port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'processing', text: 'Working' } })
+    expect(states()).toEqual(['working'])
+    port.card({ type: 'commander_question', agentId: 'h1', payload: { requestId: 'q1', questions: [] } })
+    expect(states()).toEqual(['needs-you'])
+    port.card({ type: 'commander_question_close', agentId: 'h1', payload: { requestId: 'q1' } })
+    expect(states()).toEqual(['working'])
+    port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'done', subagent: true } })
+    expect(states()).toEqual(['working'])
+    port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'done' } })
+    expect(states()).toEqual(['done'])
+  })
+
+  it('an observed agent is never sent to the core, a window or the gateway', async () => {
+    readers.answer.mockResolvedValue('Shipped the fix.')
+    const core = fakeCore({ dataDir })
+    const { port } = start({ core, faults: ['fleet'] })
+    seen.host.watching!(true)
+    for (const event of ['session-start', 'turn-start', 'needs-input', 'turn-stop'] as const) port.observed(hook(event))
+    await vi.waitFor(() => expect(calls('summary')).toHaveLength(1))
+    port.observed(hook('turn-error'))
+    expect((await machineList(port)).agents.map((a) => a.id)).toEqual([ID])
+    // What the dial's session asks of its host about an agent it holds: for a harness agent, each is a door to the core.
+    const w = seen.host
+    expect(await w.activityText!(ID)).toBeNull()
+    expect(await w.activitySnapshot!(ID)).toBeNull()
+    expect(await w.recent(ID, 3)).toEqual([])
+    expect(await w.recentAsks(ID)).toEqual([])
+    expect(await w.listModels!(ID)).toEqual([])
+    expect(await w.answerReviewed!({ agentId: ID, requestId: 'q1', questions: [], answers: {}, selections: {} })).toBe(false)
+    w.sendTurn(ID, 'run the tests')
+    w.stopTurn(ID)
+    w.answer(ID, 'q1', { a: 'yes' })
+    w.updateAgent!(ID, 'opus', 'high')
+    // A turn of the dial onto it, a tap on its card or a fork: the router has no machine for it, and asks nobody.
+    host().focus(ID)
+    host().openAgent(ID)
+    expect(await host().forkAgent(ID)).toMatchObject({ ok: false, error: 'AGENT_NOT_FOUND' })
+    port.observed(hook('session-end'))
+
+    const carried = (value: unknown): boolean => ['sess-1', ID, '/work/api', 'Shipped the fix.'].some((s) => JSON.stringify(value).includes(s))
+    const leaks: string[] = []
+    const walk = (value: unknown, path: string): void => {
+      // A lookup in the agents this process holds a copy of (devicesProcess.ts `view`): no message, nothing leaves.
+      if (path === 'core.agents.byAgent') return
+      if (vi.isMockFunction(value)) { if (carried(value.mock.calls)) leaks.push(path); return }
+      if (value && typeof value === 'object') for (const [key, inner] of Object.entries(value)) walk(inner, `${path}.${key}`)
+    }
+    walk(core, 'core')
+    for (const [name, bridge] of Object.entries(seen.bridges)) if (carried(bridge.calls)) leaks.push(name)
+    expect(leaks).toEqual([])
   })
 })

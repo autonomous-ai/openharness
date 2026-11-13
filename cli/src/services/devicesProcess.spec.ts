@@ -387,6 +387,14 @@ describe('what the core tells the devices, reaching their port', () => {
     ])
   })
 
+  it('is a paneless agent\'s hook event, handed to the devices as the core checked it', () => {
+    const f = setup()
+    const event = { engine: 'claude', sessionId: 's1', event: 'turn-stop', cwd: '/work/api', callerPid: 42, transcriptPath: '/t/s1.jsonl',
+      hostHints: { TERM_PROGRAM: 'ghostty' }, at: 7 }
+    f.event({ ...event, kind: 'observed' })
+    expect(f.calls).toEqual([['observed', [event]]])
+  })
+
   it('is everything the windows said at once when the devices connect, and nothing they did not', () => {
     const f = setup()
     f.event({ kind: 'state', desk: ['a1'], foreground: true, swarms: { active: 't1', swarms: [], tiles: [] }, unread: [{ agentId: 'a1' }], focus: null, engines: ['codex'], commanders: true,
