@@ -182,7 +182,9 @@ export class ObservedSource implements HostSource {
     if (!text || this.entries.get(entry.agent.id) !== entry) return
     // A newer turn began while the file was read; its answer is not this one's.
     if (entry.agent.state !== 'done') return
-    entry.agent.lastAnswer = text.length > ANSWER_CHARS ? `${text.slice(0, ANSWER_CHARS - 1)}…` : text
+    // By code point: a cut through an emoji's surrogate pair leaves a broken character on the card.
+    const chars = Array.from(text)
+    entry.agent.lastAnswer = chars.length > ANSWER_CHARS ? `${chars.slice(0, ANSWER_CHARS - 1).join('')}…` : text
     this.emit()
   }
 
