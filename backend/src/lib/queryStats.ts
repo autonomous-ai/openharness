@@ -114,7 +114,7 @@ export function filterShape(action: string, args: unknown): string {
   return text.length > MAX_SHAPE ? `${text.slice(0, MAX_SHAPE)}…` : text
 }
 
-/** `Model.action`; a raw command by its collection and command name (`SwarmGroup.$runCommandRaw aggregate`). */
+/** `Model.action`; a raw command by its collection and command name (`HarnessShare.$runCommandRaw aggregate`). */
 export function opName(model: string | undefined, action: string, args: unknown): string {
   if (model) return `${model}.${action}`
   if (action === '$runCommandRaw' && isPlainObject(args)) {

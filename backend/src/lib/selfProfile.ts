@@ -60,8 +60,8 @@ export function frameKind(prefix: string, type: unknown, known: ReadonlySet<stri
 
 /** Every kind of channel the bus subscribes to (lib/bus.ts), the name before its first `:`; a test keeps the two in step. */
 export const BUS_CHANNEL_KINDS: ReadonlySet<string> = new Set(['amsg', 'amsg-share', 'appdown', 'appup', 'connvault', 'desk', 'devctl', 'deve2eepair',
-  'devkeys', 'devmachines', 'devstatus', 'down', 'harness-share', 'machine-share', 'mgr', 'mgrreply', 'status', 'swarm-access', 'swarm-deliveries',
-  'swarm-host', 'swarm-member', 'swarm-stamp', 'termdown', 'terminal-answer', 'termpod', 'termup', 'tui', 'up', 'uppod', 'zoo'])
+  'devkeys', 'devmachines', 'devstatus', 'down', 'harness-share', 'machine-share', 'mgr', 'mgrreply', 'status', 'termdown', 'termpod', 'termup',
+  'tui', 'up', 'uppod', 'zoo'])
 
 /** A Redis message's kind: `bus <subscriber> <channel kind>`, the channel's name before its first `:` (`termup:<machine>` is
  *  `termup`), never the id after it. Only the bus's own kinds are named, and anything else counts as `other`, so a bare id
@@ -123,7 +123,7 @@ export function startSelfProfile({ everyMs = 15 * 60_000, profileMs = 30_000, re
     session.connect()
     try {
       await session.post('Profiler.enable')
-      // Call counts for the same window: ~2.6% CPU while on (messages + changes load on a copy of prod's busiest Swarm).
+      // Call counts for the same window: ~2.6% CPU while on (a messages and changes load on a copy of prod's busiest data).
       await session.post('Profiler.startPreciseCoverage', { callCount: true, detailed: false })
       const start = performance.now()
       const recorded: Array<[number, string]> = [[start, current ?? '(idle)']]

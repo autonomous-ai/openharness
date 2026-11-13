@@ -10,7 +10,7 @@ import { recipientShare } from '../routes/harnessShares.js'
 import { recipientLink } from '../routes/harnessLinks.js'
 import type { AutonomousEnvironment } from './autonomousEnvironment.js'
 import { prisma } from './prisma.js'
-import { publishDown, subscribeUp, subscribeShareChanged, subscribeSwarmAccessChanged } from './bus.js'
+import { publishDown, subscribeUp, subscribeShareChanged } from './bus.js'
 import { guardedSendJson } from './wsSend.js'
 import { trackSocketLiveness } from './hub.js'
 import { createOrderedInbox } from './orderedInbox.js'
@@ -42,7 +42,7 @@ export function handleObserverUpgrade(req: IncomingMessage, socket: Duplex, head
 
 /** Separate from the machine hub: no group key, machine inventory, P2P, or generic RPC route. */
 export async function attachObserver(ws: WebSocket, user: AuthUser | null,
-  share: { id: string; machineId: string; ownerId: string; superTabId?: string | null }, linkEnv?: AutonomousEnvironment,
+  share: { id: string; machineId: string; ownerId: string }, linkEnv?: AutonomousEnvironment,
   declared: ReturnType<typeof declaredKind> = { client: 'unknown', version: null }): Promise<void> {
   // Its connect and disconnect lines (lib/wsAttribution.ts). Never the share or link id: a link's is its address.
   const track = trackSocket('observer', 'observer', ws, { ...declared, userId: user?.sub, machineId: share.machineId })
@@ -59,18 +59,10 @@ export async function attachObserver(ws: WebSocket, user: AuthUser | null,
     void down('observer_close', {}).catch(() => {})
   }
   ws.once('close', close)
-  // Each change to who may watch is told (the share or link, its Swarm); the minute's re-check covers the rest, and an
-  // invitation is read again the moment it ends.
+  // Each change to the share or link is told; the minute's re-check covers the rest, and an invitation is read again the moment
+  // it ends.
   let expiry: NodeJS.Timeout | undefined
-  let swarm: { tabId: string; dispose: () => void } | null = null
-  disposers.push(() => { clearTimeout(expiry); swarm?.dispose() })
-  const follow = async (tabId: string | null | undefined) => {
-    if ((swarm?.tabId ?? null) === (tabId ?? null)) return
-    swarm?.dispose(); swarm = null
-    if (!tabId) return
-    const dispose = await subscribeSwarmAccessChanged(tabId, () => { void check() })
-    if (closed) dispose(); else swarm = { tabId, dispose }
-  }
+  disposers.push(() => clearTimeout(expiry))
   const check = async () => {
     try {
       const allowed = linkEnv ? await recipientLink(share.id, user, linkEnv) : await recipientShare(share.id, user!)
@@ -80,7 +72,6 @@ export async function attachObserver(ws: WebSocket, user: AuthUser | null,
       // Later ends are armed by a later minute's check (a timer past 24.8 days would fire at once).
       const left = allowed.expiresAt.getTime() - Date.now()
       if (left < RECHECK_MS) expiry = setTimeout(() => { void check() }, left)
-      await follow(allowed.superTabId)
     } catch { ws.close(1013, 'Sharing temporarily unavailable') }
   }
   const timer = setInterval(() => { void check() }, RECHECK_MS)
@@ -88,7 +79,6 @@ export async function attachObserver(ws: WebSocket, user: AuthUser | null,
   disposers.push(() => clearInterval(timer))
   const keep = (dispose: () => void) => { if (closed) dispose(); else disposers.push(dispose) }
   keep(await subscribeShareChanged(share.id, () => { void check() }))
-  await follow(share.superTabId)
   keep(await subscribeUp(share.machineId, message => {
     if (closed) return
     const frame = message.frame

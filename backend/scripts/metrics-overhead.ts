@@ -30,7 +30,7 @@ async function requestApp(measured: boolean) {
   const app = Fastify()
   // Both sides have main's route latency hook; the measured one also feeds the histogram and the last hour.
   registerRouteLatency(app, { log: () => {}, ...(measured ? { observe: createMetrics().request } : {}) })
-  app.get('/api/super-tabs/:tabId/changes', async () => ({ ok: true }))
+  app.get('/api/harness-links/:id', async () => ({ ok: true }))
   await app.ready()
   return app
 }
@@ -38,7 +38,7 @@ async function requestApp(measured: boolean) {
 async function requests() {
   const plain = await requestApp(false)
   const measured = await requestApp(true)
-  const get = (app: typeof plain) => () => app.inject({ method: 'GET', url: '/api/super-tabs/c51479bd73b59e58176ad9e4/changes?since=1' })
+  const get = (app: typeof plain) => () => app.inject({ method: 'GET', url: '/api/harness-links/c51479bd73b59e58176ad9e4?since=1' })
   await microsPerCall(5_000, get(plain))
   await microsPerCall(5_000, get(measured))
   const [a, b]: number[][] = [[], []]

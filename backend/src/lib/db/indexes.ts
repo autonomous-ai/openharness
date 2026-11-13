@@ -24,7 +24,7 @@ const sameKey = (a: Record<string, number>, b: Record<string, number>) => JSON.s
 
 /**
  * Makes sure `collection` has `index`, and changes nothing when it already does. A build, a drop or an option change locks
- * the collection exclusively for a moment, and a Swarm read's transaction waits at most 5 ms for its lock (the 10-28 release);
+ * the collection exclusively for a moment, and a read's transaction waited at most 5 ms for its lock (the 10-28 release);
  * listing the indexes takes no lock that reads or writes wait for. An index Prisma declares without expiry (db push builds it
  * so on a new database) gets its expiry with collMod, without a rebuild. Any other difference fails in createIndexes, as before.
  * It answers 'expiry-refused' when the database user may not run that collMod, so the caller can remove what the expiry would.

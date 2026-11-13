@@ -15,12 +15,6 @@ import { STT_TIMEOUT_MS } from './sttTimeout.js'
  */
 export const VOICE_WAV_LANGS = new Set(['en', 'vi', 'es', 'fr', 'ja', 'it'])
 
-/** The language the audio is in, or `en` when the caller named one this path does not serve. */
-export function pickWavLang(raw: unknown): string {
-  const lang = typeof raw === 'string' ? raw.trim().toLowerCase() : ''
-  return VOICE_WAV_LANGS.has(lang) ? lang : 'en'
-}
-
 /**
  * Deepgram, called directly rather than through lib/deepgram.ts, because that module's `transcribe()`
  * declares `encoding=linear16&sample_rate=…&channels=1` — a headerless PCM stream, which is exactly what

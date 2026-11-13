@@ -39,18 +39,6 @@ export function createMetrics(hour: LastHour = createLastHour()) {
     labelNames: ['work'] as const, registers: [registry] })
   const phonePushes = new Counter({ name: 'phone_pushes_total', help: 'Pushes to phones (push/send.ts), by platform, outcome and kind',
     labelNames: ['platform', 'outcome', 'kind'] as const, registers: [registry] })
-  const githubCommentRecords = new Counter({ name: 'swarm_github_comment_records_total',
-    help: 'Records of which agent wrote a GitHub comment (superTabs/githubComments.ts), by outcome', labelNames: ['outcome'] as const, registers: [registry] })
-  const githubCommentReads = new Counter({ name: 'swarm_github_comment_ids_total',
-    help: 'Comment ids the merger and news asked about (superTabs/githubComments.ts), by whether a record answered', labelNames: ['found'] as const, registers: [registry] })
-  const taskTokensWrites = new Counter({ name: 'swarm_task_tokens_writes_total',
-    help: 'Writes of what an agent\'s conversation used on a task (superTabs/taskTokens.ts), by outcome', labelNames: ['outcome'] as const, registers: [registry] })
-  const taskTokensReads = new Counter({ name: 'swarm_task_tokens_reads_total',
-    help: 'Reads of tasks\' tokens (superTabs/taskTokens.ts), by whether a row answered', labelNames: ['found'] as const, registers: [registry] })
-  const taskOffers = new Counter({ name: 'swarm_task_offers_total',
-    help: 'Offers of a task to an agent and their answers (superTabs/taskOffers.ts), by outcome', labelNames: ['outcome'] as const, registers: [registry] })
-  const taskOfferAccept = new Histogram({ name: 'swarm_task_offer_accept_seconds', help: 'From a task\'s offer to its agent\'s daemon accepting it',
-    buckets: [1, 2, 5, 10, 20, 30, 60, 90, 120], registers: [registry] })
   const works = new Set<string>()
   const work = (kind: string) => {
     if (works.has(kind)) return kind
@@ -78,26 +66,6 @@ export function createMetrics(hour: LastHour = createLastHour()) {
     },
     /** One push to one phone: sent, gone (a dead token), sandbox, failed, or unconfigured (no keys for its platform). */
     phonePush(platform: string, outcome: string, kind: string) { phonePushes.inc({ platform, outcome, kind }) },
-    /** One record of a GitHub comment's author: recorded, again (the same agent's), taken (another's), limited. */
-    githubCommentRecord(outcome: 'recorded' | 'again' | 'taken' | 'limited') { githubCommentRecords.inc({ outcome }) },
-    /** One read of comment authors: how many ids it asked about, and how many a record answered. */
-    githubCommentRead(asked: number, found: number) {
-      githubCommentReads.inc({ found: 'yes' }, found)
-      githubCommentReads.inc({ found: 'no' }, asked - found)
-    },
-    /** One write of a task's tokens: created (a new row), updated (its totals moved on), limited. */
-    taskTokensWrite(outcome: 'created' | 'updated' | 'limited') { taskTokensWrites.inc({ outcome }) },
-    /** One read of tasks' tokens, and whether any row answered: how many landed changes had their cost to show. */
-    taskTokensRead(found: boolean) { taskTokensReads.inc({ found: found ? 'yes' : 'no' }) },
-    /** One offer of a task or one answer to it: offered, again (the same one, nothing written), live (refused: another agent's
-     *  offer of the task stands, so a PM's daemon that forgot its offers shows here first; counted against no hour), limited (the
-     *  PM's hourly offers), declined, late (an answer to an offer that is not this agent's live one). */
-    taskOffer(outcome: 'offered' | 'again' | 'live' | 'limited' | 'declined' | 'late') { taskOffers.inc({ outcome }) },
-    /** An offer its agent's daemon accepted, [seconds] after it was made: what the two minutes an offer waits rest on. */
-    taskOfferAccepted(seconds: number) {
-      taskOffers.inc({ outcome: 'accepted' })
-      taskOfferAccept.observe(seconds)
-    },
     /** A minute of `cpu by kind`, every kind of work's busy ms. */
     busyWindow(window: BusyWindow) {
       for (const [kind, ms] of window) workBusy.inc({ work: work(kind) }, ms / 1000)
