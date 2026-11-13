@@ -3,6 +3,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import subprocess
 import sys
@@ -86,6 +87,12 @@ elif mode == "nest":
         time.sleep(600)
     finally:
         child.kill()
+elif mode == "deaf":
+    # A check that ignores Ctrl+C, and a child that inherits it: only the kill after the grace ends them.
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], stdout=sys.stdout)
+    print("started", flush=True)
+    time.sleep(60)
 """
 
 
@@ -401,6 +408,12 @@ class LocalRunRuleTests(unittest.TestCase):
                 budget = ' ARGS="--timeout 3600"' if name == "desktop-macos" else ""
                 self.assertEqual(checks.run_command(name), contract["command"] + budget)
 
+    # The Desktop suite's own budget ends it with a receipt that names what it never reached. --run's limit starts
+    # earlier, so it must leave the suite that budget and the time to stop Flutter and write its receipt.
+    def test_the_run_limit_leaves_the_desktop_suite_its_own_budget(self):
+        budget = int(re.search(r"--timeout (\d+)", checks.run_command("desktop-macos"))[1])
+        self.assertGreaterEqual(checks.RUN_SECONDS - budget, 300)
+
     def test_every_command_run_makes_a_receipt_validation_accepts(self):
         for name, contract in checks.CHECKS.items():
             r = receipt(name, command=checks.run_command(name), cwd=contract["cwd"],
@@ -565,14 +578,16 @@ class LocalRunTests(GitFixture, unittest.TestCase):
     # instead would be flaky: a killed orphan stays a zombie until init reaps it.
     # fake-b stands for the Desktop suite, whose Flutter run is in a session of its own: only a Ctrl+C first lets it stop
     # that run, which holds the pipe here, before the group is killed.
+    # fake-c ignores Ctrl+C: the kill after the grace ends it.
     def test_a_check_past_its_limit_is_killed_with_its_children_and_named(self):
-        self.change("a", "b", "c")
+        self.change("a", "b", "c", "d")
         started = time.monotonic()
-        with mock.patch.object(checks, "RUN_SECONDS", 3):
+        with mock.patch.object(checks, "RUN_SECONDS", 3), mock.patch.object(checks, "STOP_SECONDS", 1):
             code, out, err = self.run_checks({"fake-a": fake("hang", area="a"), "fake-b": fake("nest", area="b"),
-                                              "fake-c": fake(f'mark "{self.marker}"', area="c")})
+                                              "fake-c": fake("deaf", area="c"),
+                                              "fake-d": fake(f'mark "{self.marker}"', area="d")})
         self.assertEqual((code, out), (1, ""))
-        self.assertTrue(err.endswith("fake-a failed: timed out\nfake-b failed: timed out\n"))
+        self.assertTrue(err.endswith("fake-a failed: timed out\nfake-b failed: timed out\nfake-c failed: timed out\n"))
         self.assertTrue(self.marker.exists())
         self.assertLess(time.monotonic() - started, 40)
 
@@ -588,6 +603,29 @@ class LocalRunTests(GitFixture, unittest.TestCase):
         with mock.patch.object(checks, "RUN_SECONDS", 30), self.assertRaises(KeyboardInterrupt):
             self.run_checks({"fake-a": fake("nest")}, err=StopsOnStart(interrupt))
         self.assertEqual([t for t in threading.enumerate() if isinstance(t, threading.Timer)], [])
+        self.assertEqual(len(held), 1)
+        self.assertAllDead(held)
+
+    # A second Ctrl+C while the check has its grace to stop is what a person waiting does. It skipped the kill, so a
+    # check that ignores Ctrl+C ran on alone.
+    def test_a_second_interrupt_during_the_grace_still_kills_the_check(self):
+        self.change("a")
+        held = self.held_outputs()
+        stopping = threading.Event()
+        wait = subprocess.Popen.wait
+
+        def impatient(process, timeout=None):
+            if stopping.is_set() and timeout is not None and "fake.py" in str(process.args):
+                raise KeyboardInterrupt
+            return wait(process, timeout)
+
+        def interrupt():
+            stopping.set()
+            raise KeyboardInterrupt
+
+        with mock.patch.object(subprocess.Popen, "wait", impatient), mock.patch.object(checks, "RUN_SECONDS", 30), \
+                mock.patch.object(checks, "STOP_SECONDS", 30), self.assertRaises(KeyboardInterrupt):
+            self.run_checks({"fake-a": fake("deaf")}, err=StopsOnStart(interrupt))
         self.assertEqual(len(held), 1)
         self.assertAllDead(held)
 
