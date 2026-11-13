@@ -718,8 +718,17 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   request as a row (the chip, its title and branch, and Open, which goes to it
   on GitHub; a tap on the row opens the pull request's own chat in the task's
   place, and closing that goes back to the task), then its text and
-  comments as posts, each under the face and name its first words sign it with
-  (`Migrate, 09:3x: …`) and its GitHub login. It reads the newest 30
+  comments as posts. An agent posts with its person's GitHub login and signs
+  its first words, so a signed post's header is the agent's face and name,
+  then the login (`Devon · deehw`), and its text starts after the signature:
+  `Devon: …`, and Harness's older `Lennox, 16:52, to **Pip**: taken by Lennox`,
+  shows as `taken by Lennox`. One reader (`SwarmSignature`,
+  `super_tabs/github_issues.dart`) serves this view and a pull request's
+  reads. A name counts only when it is one of the Swarm's agents or Harness,
+  on a post from one of the repository's people, in a form agents and Harness
+  write (`Name:`, `Name (role):`, `Name, 16:52[, to X]` then a colon or comma):
+  `Note: …`, an outsider's `Devon: …` and a person's `Devon, can you look?`
+  keep their login and their whole text. It reads the newest 30
   comments; the rest are one tap away (`1,546 earlier comments` and Show,
   100 at a time), because reading all of lampOS #5385's 1,576 took 22 s. A
   later read joins what is held when its newest comments start at one of them,

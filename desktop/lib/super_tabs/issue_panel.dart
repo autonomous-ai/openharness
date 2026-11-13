@@ -509,6 +509,7 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel>
             body: thread.body,
             author: issue.author,
             createdAt: thread.createdAt,
+            fromTeam: thread.fromTeam,
           ),
           agents,
         ),
@@ -567,14 +568,16 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel>
     ),
   );
 
-  /// One post: the face and name it is signed with (else its GitHub login), its login, a review's verdict or a line comment's
-  /// place, and its time, then its text.
+  /// One post: the face and name of the agent that signed it (else its GitHub login), its login, a review's verdict or a
+  /// line comment's place, and its time, then its text, which starts after the signature.
   Widget _post(
     BuildContext context,
     SwarmIssueComment post,
     List<String> agents,
   ) {
-    final name = post.signedBy ?? post.author ?? 'GitHub';
+    final signature = post.signedAmong(agents);
+    final name = signature?.name ?? post.author ?? 'GitHub';
+    final text = signature?.text ?? post.body;
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -609,8 +612,8 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel>
                 ),
               ),
               const SizedBox(height: 4),
-              if (post.body.trim().isNotEmpty)
-                SuperTabMessageText(post.body, agents: agents),
+              if (text.trim().isNotEmpty)
+                SuperTabMessageText(text, agents: agents),
             ],
           ),
         ),

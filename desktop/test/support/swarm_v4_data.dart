@@ -175,8 +175,9 @@ ConversationServer swarmV4Server() {
 }
 
 /// What `gh` answers for lampOS's issues in these tests, as GitHub's GraphQL does: three open tasks (one nobody has, one for
-/// the seventh builder, one the first builder is on), and #5759's text with its newest two comments, signed by their agents as
-/// lampOS's builders sign them, and one before them. Every other call fails as an unknown issue does, and every call while
+/// the seventh builder, one the first builder is on), and #5759's text with its newest two comments, signed by their agents
+/// ("First builder: …", and as Harness signed for one, "Seventh, 09:3x GMT+7, to **First builder**: …"), and an outsider's
+/// before them. Every other call fails as an unknown issue does, and every call while
 /// [signedOut] says so fails as a `gh` that is not signed in does.
 SwarmGitHub swarmV4GitHub({
   List<List<String>>? calls,
@@ -209,8 +210,16 @@ SwarmGitHub swarmV4GitHub({
       'name': name,
       'color': color,
     };
-    Map<String, Object?> comment(int n, String who, String body, String at) => {
+    // [association]: what GitHub says of its login in the repository; MEMBER is one of its people.
+    Map<String, Object?> comment(
+      int n,
+      String who,
+      String body,
+      String at, {
+      String association = 'MEMBER',
+    }) => {
       'author': {'login': who},
+      'authorAssociation': association,
       'body': body,
       'createdAt': at,
       'url': '$url/5759#issuecomment-$n',
@@ -469,11 +478,13 @@ SwarmGitHub swarmV4GitHub({
             'comments': {
               'pageInfo': {'hasPreviousPage': false, 'startCursor': 'c0'},
               'nodes': [
+                // An outsider's words, opening as an agent's would: no signature.
                 comment(
                   0,
-                  'deehw',
-                  'Opened by deehw, 09:0x GMT+7: the rows need a lamp check.',
+                  'leo',
+                  'Second: the rows need a lamp check.',
                   '2026-11-09T01:30:00Z',
+                  association: 'NONE',
                 ),
               ],
             },
@@ -506,13 +517,14 @@ SwarmGitHub swarmV4GitHub({
                 comment(
                   1,
                   '69tc',
-                  'Migrate, 09:3x GMT+7, taken by Migrate. The first step: what each row still lacks.',
+                  // As Harness wrote for an agent before the agents signed their own.
+                  'Seventh, 09:3x GMT+7, to **First builder**: taken by Seventh. The first step: what each row still lacks.',
                   '2026-11-09T02:11:20Z',
                 ),
                 comment(
                   2,
                   'deehw',
-                  'First builder, 09:4x: I\'m taking this one.',
+                  'First builder: I\'m taking this one.',
                   '2026-11-09T02:27:00Z',
                 ),
               ],

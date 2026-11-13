@@ -299,9 +299,33 @@ void main() {
         findsOneWidget,
       );
       expect(find.textContaining('Score both rows again'), findsOneWidget);
-      // Each comment is named by the agent that signed it, its GitHub account beside it.
-      expect(find.textContaining('Migrate'), findsWidgets);
-      expect(find.textContaining('First builder'), findsWidgets);
+      // Each comment is named by the agent that signed it, its GitHub account beside it, and its text starts after the
+      // signature: "First builder: …" and Harness's older "Seventh, 09:3x GMT+7, to **First builder**: …" (#4222).
+      final thread = key('swarm-issue-thread');
+      Finder said(String words) => find.descendant(
+        of: thread,
+        matching: find.textContaining(words, findRichText: true),
+      );
+      expect(said('first builder · deehw · '), findsOneWidget);
+      expect(said('seventh · 69tc · '), findsOneWidget);
+      expect(
+        find.descendant(
+          of: thread,
+          matching: find.text('I\'m taking this one.', findRichText: true),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: thread,
+          matching: find.text(
+            'taken by Seventh. The first step: what each row still lacks.',
+            findRichText: true,
+          ),
+        ),
+        findsOneWidget,
+      );
+      expect(said('09:3x'), findsNothing);
       expect(key('swarm-label-status:taken'), findsWidgets);
       expect(key('swarm-issue-opened'), findsOneWidget);
       // Its pull request under its title, with Open.
@@ -317,7 +341,19 @@ void main() {
       expect(find.textContaining('lamp check'), findsNothing);
       await tester.tap(key('swarm-issue-show-earlier'));
       await tester.pumpAndSettle();
-      expect(find.textContaining('lamp check'), findsOneWidget);
+      // An outsider's "Second: …" is no agent's: its login names it, and its words stay whole.
+      expect(
+        find.descendant(
+          of: thread,
+          matching: find.text(
+            'Second: the rows need a lamp check.',
+            findRichText: true,
+          ),
+        ),
+        findsOneWidget,
+      );
+      expect(said('second · leo'), findsNothing);
+      expect(said('leo · '), findsOneWidget);
       expect(key('swarm-issue-earlier'), findsNothing);
       expect(
         calls.where((c) => c.contains('last=100') && c.contains('before=c1')),
