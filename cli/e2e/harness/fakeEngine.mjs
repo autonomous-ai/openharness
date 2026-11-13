@@ -86,7 +86,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
  */
 const HOOK_EVENTS = {
   // PostToolUse: Agent Messages' hook (engines/kit/messagesHook.ts), run after each tool of the `!work` directive.
-  claude: new Set(['SessionStart', 'UserPromptSubmit', 'Stop', 'StopFailure', 'SessionEnd', 'PostToolUse']),
+  // Notification: run as a permission dialog opens (`permitDialog`).
+  claude: new Set(['SessionStart', 'UserPromptSubmit', 'Stop', 'StopFailure', 'SessionEnd', 'PostToolUse', 'Notification']),
   codex: new Set(['SessionStart', 'UserPromptSubmit', 'PostToolUse']),
 }
 
@@ -1234,15 +1235,22 @@ export async function run(engine, config = {}, { native = false } = {}) {
     }
     return finish(allowed ? `ran ${command}` : `did not run ${command}`)
   }
+  // A permission dialog in the composer's place, as the CLIs draw theirs, until it is answered. Claude Code also says
+  // so to its Notification hooks, the dialog already up (2.1.x: `permission_prompt`, "Claude needs your permission to
+  // use Bash"); Codex has no such hook.
+  const permitDialog = (command, resolve) => {
+    eraseComposer()
+    dialog = { kind: 'permit', command, cursor: 0, drawn: 0, resolve }
+    drawDialog()
+    void runHooks('Notification', { message: 'Claude needs your permission to use Bash', notification_type: 'permission_prompt' })
+  }
   // `!permitnext`: the request waiting for the next paste.
   let armed = null
   const askOnPaste = () => {
     if (!armed) return
     const { command, turn: turnOf } = armed
     armed = null
-    eraseComposer()
-    dialog = { kind: 'permit', command, cursor: 0, drawn: 0, resolve: (row) => { void permitted(command, row, turnOf) } }
-    drawDialog()
+    permitDialog(command, (row) => { void permitted(command, row, turnOf) })
   }
 
   const handle = async (raw) => {
@@ -1489,8 +1497,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
     if (directive?.[1] === 'permit') {
       const command = directive[2] || 'printf hi'
       await new Promise((resolve) => setTimeout(resolve, 2_000))
-      // The dialog takes the composer's place, as the CLIs draw theirs, until it is answered.
-      const row = await new Promise((resolve) => { eraseComposer(); dialog = { kind: 'permit', command, cursor: 0, drawn: 0, resolve }; drawDialog() })
+      const row = await new Promise((resolve) => permitDialog(command, resolve))
       await permitted(command, row)
       return
     }
