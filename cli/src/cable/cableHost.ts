@@ -38,6 +38,10 @@ import type { PetStore } from './pets/store.js'
 import { LANE_SESSION_OVER, LANE_TOKEN_UNAVAILABLE, type MachineFleet } from './machineFleet.js'
 import type { ReviewedAnswer, AnswerReceipt } from './questionInbox.js'
 import { isTier, type Tier } from '../lib/notifyTier.js'
+import { HarnessSource } from './hosts/harness.js'
+import type { HostRegistry } from './hosts/registry.js'
+import { selectForDial } from './hosts/select.js'
+import { capsLetters } from './hosts/types.js'
 
 /** One completed turn's recap, as the mirror keeps them. */
 
@@ -502,6 +506,17 @@ export class DaemonCableHost implements CableHost {
     this.swarms = swarms
   }
 
+  /** This computer's Harness agents, fed from the list this host reads; the devices put it in their registry. */
+  readonly harness = new HarnessSource()
+
+  /** Every agent on this computer, by source; null when the devices have none. Read only with no window. */
+  private registry: HostRegistry | null = null
+
+  /** Its changes reach the dial on the session's next tick, which reads the list every second. */
+  setRegistry(registry: HostRegistry | null): void {
+    this.registry = registry
+  }
+
   /** What the window still has unread, newest first. Empty until a window says otherwise. */
   private unread: UnreadNotification[] = []
 
@@ -599,8 +614,11 @@ export class DaemonCableHost implements CableHost {
    * (`agentTotal`), the switcher is gone, and a notification for an agent the dial does not hold carries
    * its own name.
    *
-   * Three answers, and each is a state the dial draws:
-   *   - no window (`swarms === null`)      → `[]`; the dial shows "Run OpenHarness on your computer".
+   * Four answers, and each is a state the dial draws:
+   *   - no window, and the devices have a registry → this computer's agents (Harness and any other app or
+   *                                          terminal), at most ten, the ones that need the person first, with
+   *                                          `host`, `caps` and `view: 'machine'`; `total` is every agent here.
+   *   - no window and no registry          → `[]`; the dial shows "Run OpenHarness on your computer".
    *   - a window with an empty tab         → `[]`; the dial shows "Nothing on this tab".
    *   - a window with panes                → those agents, in tile order; a tile whose machine dropped out
    *                                          is held from the router's `knownAgents` (see listAgentsFlat).
@@ -609,13 +627,15 @@ export class DaemonCableHost implements CableHost {
     return (await this.listAgentSnapshot()).agents
   }
 
-  async listAgentSnapshot(): Promise<{ agents: CableAgent[]; tab: string; total: number }> {
+  async listAgentSnapshot(): Promise<{ agents: CableAgent[]; tab: string; total: number; view?: 'machine' }> {
     const flat = await this.listAgentsFlat()
     const byId = new Map(flat.map((a) => [a.id, a]))
     // app_panes and app_swarms are separate messages. Never label the new panes
     // with the previous tab (or vice versa) between those two arrivals. The
     // swarm announcement already contains membership in the same tile order.
     const app = this.swarms
+    const registry = this.registry
+    if (app === null && registry) return this.machineSnapshot(registry, flat, byId)
     const tab = app?.active ?? ''
     const ids = app?.swarms.find(s => s.id === tab)?.agentIds ?? []
     const out = ids.map(id => byId.get(id)).filter((a): a is CableAgent => !!a)
@@ -629,6 +649,23 @@ export class DaemonCableHost implements CableHost {
       this.wiring.log(`cable: tab ${shape} · ${flat.length} in all`)
     }
     return { agents: out, tab, total: this.viaFleet((r) => r.agentTotal()) }
+  }
+
+  /** The machine list: the registry's agents, bounded by the selection (the 78-agent reconnect above is not repeated). */
+  private async machineSnapshot(registry: HostRegistry, flat: CableAgent[], byId: Map<string, CableAgent>): Promise<{ agents: CableAgent[]; tab: string; total: number; view: 'machine' }> {
+    const local = this.localMachine()
+    // The engine session bound to each agent, so one that moved into a Harness pane is not listed again as observed.
+    const bound = new Map(this.wiring.sessions().map((s) => [s.agentId, s.sessionId]))
+    this.harness.update(flat.map((a) => bound.get(a.id) ? { ...a, sessionId: bound.get(a.id) } : a), local.id,
+      await this.viaFleet((r) => r.activityTimes()))
+    const { rows, total } = selectForDial(registry.agents())
+    const agents = rows.map((a): CableAgent => {
+      const caps = registry.source(a.id)?.capabilities(a)
+      // A Harness agent keeps the row the window would show (its chips too); another app's is drawn from what was heard.
+      const row = byId.get(a.id) ?? { id: a.id, name: a.name, engine: a.engine, machineId: local.id, machine: local.name }
+      return { ...row, host: a.host, ...(caps ? { caps: capsLetters(caps) } : {}) }
+    })
+    return { agents, tab: '', total, view: 'machine' }
   }
 
   /** How many agents the account has across every machine — the overview's number, sent beside the

@@ -102,6 +102,8 @@ const FW_WRITES_PER_HOUR = 3
 /** How often the machine list is re-read. Slower than the agent list because it is an HTTP read, not a
  *  map lookup — and because a machine appearing is not something anyone is waiting on a stopwatch for. */
 const MACHINES_POLL_MS = 15_000
+/** The least time between two pushes of the machine list (spec 2026-11-13-device-without-the-app, "When"). */
+const AGENTS_PUSH_GAP_MS = 1_000
 /**
  * A programmatic focus write may be followed by the dial reporting the tile it was painting just before
  * that write. Real hardware delivered that stale report 23 ms after the machine switch completed; keep
@@ -281,6 +283,10 @@ export interface CableAgent {
    */
   machineId?: string
   machine?: string
+  /** With no window only: the app or terminal the agent runs in (`harness`, `ghostty`, …) and what the dial may do
+   *  with it, as letters of s v f a (cable/hosts/types.ts capsLetters). Absent, the firmware reads `svfa`. */
+  host?: string
+  caps?: string
 }
 
 
@@ -439,8 +445,9 @@ export interface CableHost {
   appFocus?(): { machineId: string; agentId: string } | undefined
   /** The active tab's agents, in tile order — and nothing else. Empty with no window or an empty tab. */
   listAgents(): Promise<CableAgent[]>
-  /** Pane rows and workspace identity from the same desktop announcement. */
-  listAgentSnapshot?(): Promise<{ agents: CableAgent[]; tab: string; total: number }>
+  /** Pane rows and workspace identity from the same desktop announcement; with no window, `view: 'machine'` when the
+   *  rows are this computer's agents instead. */
+  listAgentSnapshot?(): Promise<{ agents: CableAgent[]; tab: string; total: number; view?: 'machine' }>
   /** Every agent across the account — the overview's number. The dial gets the count, never the rows. */
   agentTotal(): number
   /** The active tab's id, or '' with no window: what lets the dial tell an empty tab from a shut app. */
@@ -732,6 +739,8 @@ export class CableSession {
 
   /** What the dial was last told the agent list is. Empty = it has been told nothing. */
   private lastAgentsKey = ''
+  /** When the agent list last went down the cable: the machine list's pacing. */
+  private agentsPushedAt = 0
   // What the hello NAMED. Each switches on only its own fields; a hello that names none gets the frames it
   // always got. A positive string match, per session (see hello).
   /** `swarms: 'members-v1'`: `agentIds` and `members` on the swarms items. */
@@ -2579,7 +2588,7 @@ export class CableSession {
   private static agentsKey(agents: CableAgent[]): string {
     // `machine` is in the key, not just `machineId`: the dial DRAWS the name, so a machine being renamed
     // has to reach the screen even though not one agent has changed.
-    return agents.map((a) => `${a.id}:${a.name}:${a.engine ?? ''}:${a.model ?? ''}:${a.effort ?? ''}:${a.machineId ?? ''}:${a.machine ?? ''}`).join('|')
+    return agents.map((a) => `${a.id}:${a.name}:${a.engine ?? ''}:${a.model ?? ''}:${a.effort ?? ''}:${a.machineId ?? ''}:${a.machine ?? ''}:${a.host ?? ''}:${a.caps ?? ''}`).join('|')
   }
 
 
@@ -2628,14 +2637,20 @@ export class CableSession {
     const snapshot = this.host.listAgentSnapshot ? await this.host.listAgentSnapshot() : {
       agents: await this.host.listAgents(), tab: this.host.activeSwarm(), total: this.host.agentTotal(),
     }
-    const { agents, tab, total } = snapshot
+    const { agents, tab, total, view } = snapshot
     // WHETHER there is a window is in the key, not WHICH tab: an empty tab after the window shut sends the
     // same zero rows and draws a different screen, so that flip has to push. The tab's id does not — the
     // dial names the tab from the `swarms` frame — and keying on it made every tab switch push twice,
     // once when `app_swarms` named the new tab over the old panes and again when `app_panes` arrived.
-    const key = `${tab ? 'window' : ''}|${CableSession.agentsKey(agents)}`
+    const key = `${tab ? 'window' : view ?? ''}|${CableSession.agentsKey(agents)}`
     if (!force && key === this.lastAgentsKey) return
+    // Into, out of or within the machine list, pushes stay a second apart: a window opening and closing quickly
+    // would otherwise swap whole lists down the cable on every flip. The tick sends what was held. Forced pushes
+    // (an attach, a refresh) and a window's own changes go at once, as before: a new ring must beat its focus.
+    const machine = view === 'machine' || this.lastAgentsKey.startsWith('machine|')
+    if (!force && machine && Date.now() - this.agentsPushedAt < AGENTS_PUSH_GAP_MS) return
     this.lastAgentsKey = key
+    this.agentsPushedAt = Date.now()
     // Every push, and only pushes. The dial showing a different number from the daemon is a question this
     // line answers in one look: either the daemon never said it, or it said it and the dial disagreed.
     this.log(`cable: agents → ${agents.length} of ${total}${force ? ' (requested)' : ''}`)
@@ -2653,13 +2668,16 @@ export class CableSession {
         // under the agent's, and the id is also how a machine row finds its first agent.
         machineId: a.machineId ?? '',
         machine: a.machine ?? '',
+        ...(a.host ? { host: a.host } : {}),
+        ...(a.caps ? { caps: a.caps } : {}),
       })
 
     }
     // Every agent sent is walked. What travels beside them: `total`, the account-wide count the overview
     // prints (the rows behind it stay here), and `tab`, the active tab's id — '' with no window, which is
-    // how the dial tells "the app is shut" from "this tab is empty" when both send zero agents.
-    await this.send({ t: 'agents.end', total, tab })
+    // how the dial tells "the app is shut" from "this tab is empty" when both send zero agents. `view`:
+    // with no window, rows that are this computer's agents rather than nothing.
+    await this.send({ t: 'agents.end', total, tab, ...(view ? { view } : {}) })
 
     // The list just changed shape under the dial, so say again which agent both screens are on.
     //
