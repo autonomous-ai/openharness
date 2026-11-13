@@ -78,11 +78,11 @@ class Machine {
   final String? status;
 
   /// Another account's machine shared with this one (the list's `shared` or
-  /// `share`): never where this person's Buddy runs.
+  /// `share`).
   final bool shared;
 
   /// How its computer signed in on its last connect: `team` for a Harness
-  /// Team account, which is never a person's own machine for a Buddy.
+  /// Team account, whose agents are not this person's own.
   final String? sessionKind;
 
   const Machine({

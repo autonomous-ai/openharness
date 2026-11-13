@@ -129,15 +129,7 @@ class Join(unittest.TestCase):
             out = setup.join(dict(ssid='Glink 1', password='@11235813', ticket='t'), self.NETWORKS, 'wlo1')
         self.assertEqual(out, dict(state='done', ssid='Glink 1', signedIn=True))
         connect.assert_called_once_with('Glink 1', '@11235813', 'WPA2', 'wlo1')
-        sign_in.assert_called_once_with('t', swarm=False)
-
-    def test_a_phone_with_swarm_on_signs_in_for_its_swarm(self):
-        with patch.object(setup, 'connect', return_value=None), \
-             patch.object(setup, 'internet', return_value=True), \
-             patch.object(setup, 'sign_in', return_value=(True, '')) as sign_in, \
-             patch.object(setup, 'signed_in', return_value=True):
-            setup.join(dict(ssid='Glink 1', password='@11235813', ticket='t', swarm=True), self.NETWORKS, 'wlo1')
-        sign_in.assert_called_once_with('t', swarm=True)
+        sign_in.assert_called_once_with('t')
 
     def test_wifi_without_internet_is_forgotten_and_reported(self):
         with patch.object(setup, 'connect', return_value=None), \
@@ -293,21 +285,6 @@ class FromPhone(unittest.TestCase):
                 run.assert_called_once()
                 self.assertFalse(marker.exists())
                 as_user.assert_called_once()
-
-    def test_a_swarm_setup_leaves_its_own_mark_and_a_plain_one_clears_it(self):
-        with tempfile.TemporaryDirectory() as folder:
-            marker, swarm = Path(folder) / 'set-up-from-phone', Path(folder) / 'set-up-for-swarm'
-            with patch.object(setup, 'FROM_PHONE', marker), patch.object(setup, 'FOR_SWARM', swarm), \
-                 patch.object(setup, 'signed_in', return_value=False), patch.object(setup, 'as_user'):
-                with patch.object(setup, 'run_sign_in', side_effect=lambda t: (swarm.exists(), '', False)):
-                    self.assertEqual(setup.sign_in('t', swarm=True), (True, ''))
-                self.assertTrue(swarm.exists())
-                with patch.object(setup, 'run_sign_in', return_value=(True, '', False)):
-                    setup.sign_in('t')
-                self.assertFalse(swarm.exists())
-                with patch.object(setup, 'run_sign_in', return_value=(False, 'used', False)):
-                    self.assertEqual(setup.sign_in('t', swarm=True), (False, 'used'))
-                self.assertFalse(swarm.exists())
 
 
 class SignedIn(unittest.TestCase):
