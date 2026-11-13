@@ -1,8 +1,8 @@
 # Hidden windows stop polling — Implementation Plan
 
-> Way of working: the project's Engineer workflow (docs/plans plan first, then each plan task test first —
-> failing test committed before its code — with independent plan tasks run in parallel by subagents and
-> merged into one pull request). Steps use checkbox (`- [ ]`) syntax.
+> Way of working: docs/plans plan first, then each plan task test first (failing test committed before its
+> code), with independent plan tasks run in parallel by subagents and merged into one pull request. Steps use
+> checkbox (`- [ ]`) syntax.
 
 **Goal:** A Desktop window or web tab that is hidden or closed, and the phone app in the background, make no
 periodic backend requests; on return each poller reads once, then goes live again.
@@ -12,19 +12,13 @@ periodic backend requests; on return each poller reads once, then goes live agai
   is `resumed` or `inactive`; Flutter web turns `document.visibilityState == 'hidden'` into `hidden`, macOS an
   occluded, minimised or closed window). Long-lived pollers listen to it: off → cancel the timer; on → one
   read, then the timer again.
-- Desktop and web widgets: the existing `VisibleTick` mixin (`desktop/lib/super_tabs/visible_tick.dart`:
-  TickerMode on and the app shown). A widget poller ticks through it and reads once from
+- Desktop and web widgets: the existing `VisibleTick` mixin (TickerMode on and the app shown). A widget poller ticks through it and reads once from
   `onScreenChanged(true)`.
-- Swarm reads (`SuperTabClient.pageVisible` / `SuperTabController.away`): while the page is hidden and the
-  server pushes, only a push reads; the safety nets wait for the return. Without push the away poll stays,
-  so tags and notices still arrive (failure: nothing breaks silently).
 - Phone: `AppNotifier.handleAppPaused` / `handleAppResumed` (`mobile/lib/state/app_state.dart`) stop and
-  restart the app-model pollers; page pollers use `WidgetsBindingObserver` the way `swarm_machines.dart`
-  already does.
+  restart the app-model pollers; page pollers use `WidgetsBindingObserver`.
 
-Pollers already gated (Harness Monitor, the Swarm machines panel, its usage, machines panel, pull request
-badges, model manager, agent messages watches, the web deaf watch, the web Swarm reading, phone desk/deaf
-poll/Swarm reads) keep their gate and get a regression test where none pins "no request while hidden".
+Pollers already gated (Harness Monitor, machines panel, pull request badges, model manager, agent messages
+watches, the web deaf watch, phone desk/deaf poll) keep their gate and get a regression test where none pins "no request while hidden".
 
 **Tech Stack:** Flutter 3.47 / Dart 3.13, flutter_test (`testWidgets` fake clock), the existing fakes
 (`WsConn` subclasses, `ApiClient` subclasses, `MemoryStore`).
@@ -36,7 +30,7 @@ poll/Swarm reads) keep their gate and get a regression test where none pins "no 
 - Optimizations ship on, no switches (Ken).
 - Phase 3 items 1 (shared E2EE session) and 3 (observer fan-out) are out of scope.
 - Never run a test that signs the Mac out of the real CLI; Desktop tests use a memory store and a fake sign-in.
-- Swarm code stays out of cli/src/core. No backend change.
+- No backend change.
 - "Hidden" means not seen: Desktop `hidden`/`paused`/`detached` (minimised, occluded, closed to the menu
   bar); web tab hidden; phone `paused`/`hidden`. An unfocused window still in sight (`inactive`) keeps reading.
 - Not periodic reads, left alone and listed in the PR: terminal stream heartbeats (`terminal_alive`, a 30 s
@@ -49,8 +43,7 @@ poll/Swarm reads) keep their gate and get a regression test where none pins "no 
 1. A window hidden while a read is in flight: the late answer still applies; no second timer is armed.
 2. Hide → show → hide quickly: exactly one read on return, never two timers.
 3. Sign-out while hidden, then show: nothing reads for the old account (existing sign-out cancels stay).
-4. Desktop hidden with Swarm push down: the away poll still runs, so tag notices still arrive.
-5. A machine that connects while the window is hidden starts no agent-sync timer until the window shows.
+4. A machine that connects while the window is hidden starts no agent-sync timer until the window shows.
 
 ---
 
@@ -85,25 +78,19 @@ poll/Swarm reads) keep their gate and get a regression test where none pins "no 
 ### Task 2: Desktop/web app-level controllers
 
 **Files:**
-- Modify: `desktop/lib/super_tabs/client.dart` (discovery), `desktop/lib/super_tabs/controller.dart` (desktop
-  non-adaptive poll and receipt reads), `desktop/lib/settings/experimental_features.dart`,
+- Modify: `desktop/lib/settings/experimental_features.dart`,
   `desktop/lib/usage/models_menu_controller.dart` + where the app-level one starts
-  (`desktop/lib/screens/swarm_screen.dart`), `desktop/lib/super_tabs/pull_request_facts.dart`,
-  `desktop/lib/web/update/web_update_watcher.dart`, `desktop/lib/measurement/product_runtime_health.dart`
+  (`desktop/lib/screens/swarm_screen.dart`), `desktop/lib/web/update/web_update_watcher.dart`, `desktop/lib/measurement/product_runtime_health.dart`
 - Test: `desktop/test/hidden_window_controllers_test.dart`
 
 **Interfaces:**
-- Consumes: `SuperTabClient.pageVisible` (already set by `SuperTabWorkspace`), `AppNotifier.inSight`.
+- Consumes: `AppNotifier.inSight`.
 - Produces: `ValueListenable<bool>? seen` constructor parameter on `ExperimentalFeatures`,
   `ModelsMenuController` and `WebUpdateWatcher` (null = always seen, every existing caller and test).
 
 - [ ] **Step 1: Failing tests:**
-  - `Swarm: page hidden while pushing — no state read for 3 safety nets; shown — one read`
-  - `Swarm: page hidden without push — the 15 s away poll still reads` (pins Review Focus 4)
-  - `Swarm discovery: page hidden while pushing — no list read for 2 safety nets; shown — one`
   - `experimental settings: unseen — no read for 2 poll intervals; seen — one`
   - `models menu usage: unseen — no usage read; seen — one, then on the interval`
-  - `backlog pull request facts: away — no status read; back — one`
   - `web update watcher: hidden — no manifest read; shown — one`
   - `runtime health: hidden — no sample, so no report scheduled`
 - [ ] **Step 2:** Run the file — FAIL. **Step 3:** commit it.
@@ -132,8 +119,7 @@ workspace widget), `state/session_activity.dart` (via its widgets), `devices/dev
 
 **Files:** `mobile/lib/state/app_state.dart` (agent sync, offline retry, key watch in
 `handleAppPaused`/`handleAppResumed`), `mobile/lib/usage/usage_controller.dart` + `phone/usage_page.dart`,
-`mobile/lib/phone/welcome/your_computer.dart` (`ComputerWatch`), `mobile/lib/swarm/swarm_leaderboard_reader.dart`
-(read once on return)
+`mobile/lib/phone/welcome/your_computer.dart` (`ComputerWatch`)
 - Test: `mobile/test/background_polling_test.dart`
 
 - [ ] **Step 1:** Failing tests: `<poller>: paused — no request for 3 intervals; resumed — one read`.

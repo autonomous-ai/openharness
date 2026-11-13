@@ -6,21 +6,20 @@ Security pass of 2026-11-02 (task #2022), at `origin/main` 29795af79. It covers 
 pipes, the relay and purge. **No Windows machine was used.** Everything below was read in code, or tested on a Mac against the
 text and values the code produces. Nothing on a real account, permission or file was changed.
 
+**Status, 2026-11-14:** Harness Team accounts are gone. W1, the daemon's port and credential, stands for any other account
+on the machine.
+
 ## Answer
 
 **The folders hold; the daemon's port does not.** Ports were covered only in part: the Team daemon's own port was not read. The ACLs setup writes keep the Team account out of the owner's profile.
 Other accounts can't read the sign-in code or the relay's token, and the daemon's pipe proves both ends. On Windows the owner's
 local credential went over TCP to whoever holds the daemon's port, and the daemon accepted it from any account (W1, fixed in
 task #2095; the connectors bridge's port is fixed in task #2162).
-The Team account's daemon starts at boot, before the owner signs in. Purge was written for POSIX paths. It never deleted a
-Codex Product Manager's own home on Windows (W2, fixed in this pull request), and it can't finish a Claude Code one there (W3).
+The Team account's daemon starts at boot, before the owner signs in.
 
 | ID | Rating | Finding | Status |
 |---|---|---|---|
 | W1 | **High** | The owner's local credential goes to whoever holds the daemon's port, and opens the daemon from any account | **Fixed** in task #2095 for every client, test first. The Store add-ons over the pipe (task #2161): fixed, and run on real Windows x64 and Arm against the installed daemon (Windows workflow run 41464966703). The connectors bridge: fixed in task #2162, and run on real Windows x64 and Arm (Windows workflow run 41488691783) |
-| W2 | **High** | Purge left a Codex Product Manager's whole home on Windows, and could take every PM's home on any platform | **Fixed here**, test first |
-| W3 | Medium | Purge can't scrub a Claude Code Product Manager on Windows: the account stays held, its memory stays | Read in code, fix requested |
-| W4 | Medium | The Team account can stall the owner's read of its status file | Read in code, fix requested |
 | W5 | Medium | The elevated scripts walk and delete folders the Team account can write | Read in code, fix requested |
 | W6 | Low | Setup closes the profile folder itself, not what inside it lets others in | Read in code, noted |
 | W7 | Low | The elevated setup prints what the Team account wrote to the administrator's console as it is | Read in code, fix requested |
@@ -112,52 +111,6 @@ make the daemon refuse the credential over TCP from another account. Windows can
   under a dead daemon's name is never dialled for it. A pid this account's own process took since is still dialled; then only the
   pipe's proof refuses the answer, after the request was sent. That needs the pid reused by chance, not by choice.
 
-### W2. Purge left a Codex Product Manager's home on Windows (High, fixed here)
-
-`superTabs/inCore/teamPurge.ts` deletes a purged Codex PM's own engine home only if its path starts with `<home>/.harness-pm-homes/`.
-`pmEngineHome` (`superTabs/teamDaemon.ts:35`) builds it with `join`, which gives `\` on Windows, so the check never matched.
-Purge answered `ok`, and the PM's Codex history, sessions and sign-in stayed in the Team account for its next agent to read. The
-sweep doesn't look there.
-
-The same check also matched a home one level under the PM homes folder. Purge deletes the home's parent, so that would have deleted
-every PM's home. It also took any id, and Windows drops a name's trailing spaces and dots: an id of `.. ` is `..`, and the parent
-deleted is the whole Team home (security review 1 of this pull request). Only the daemon writes the record, in the Team account's
-data folder, so this needs a bad record, or a Team agent that writes it.
-
-**Fixed:** `isPmCodexHome` accepts exactly `<home>\.harness-pm-homes\<id>\codex`, checked with the platform's own path rules,
-and the id by `pmEngineHome`'s own rule (`PM_START_ID`: letters, digits, `_` and `-`).
-`ownHomeFolder`, main's check for a Team-written agent's own home, follows the same id rule, so `.. ` is refused there too.
-Tests: `teamPurge.spec.ts`, "isPmCodexHome" (with `path.win32`), and "of a Codex session whose home is not one of
-pmEngineHome's". Both fail on `main`; the `.. ` case fails without the id rule. PR #2559 adds the same `/` check in a second place and needs the same helper.
-
-### W3. Purge can't scrub a Claude Code Product Manager on Windows (Medium)
-
-`teamPurge.ts:120` `folderOf` uses a session's folder only if it starts with `/`. A Windows worktree (`C:\...`) never does,
-so the scrub skips its transcript folder, its project memory, its history lines by folder, and its entries in `.claude.json` and
-the backups. Then the sweep finds the transcripts, which are named by session id, and answers `SCRUB_INCOMPLETE` at every retry.
-The account stays held until a person steps in, which is said (it fails closed). Files the sweep can't name, such as the
-project's `memory/` notes, are not checked. `sweepForSession` also looks for `"<folder>/`, a POSIX separator.
-
-**Fix:** derive the folder and its separators from the platform, as W2 does. That covers Claude Code's slug for `C:\` and how
-Claude Code writes a Windows path in its history and config. Test with `path.win32`. Check against a real Windows Claude Code home.
-
-### W4. The Team account can stall the owner's read of its status file (Medium)
-
-This is the Windows form of macOS M5. The Team account may write `C:\ProgramData\Harness\Team` (`windowsScript.ts:77`, `status`).
-The owner's daemon reads `status.json` there about once a minute, synchronously (`superTabs/service.ts:883`,
-`team/privacy.ts:164` `readStatusFile`), as do `harness team status` and setup.
-
-- An exclusive oplock that the Team account takes on its own file makes the owner's open wait until it lets go. On Windows a
-  `CreateFile` waits for the oplock to break. That would stop the owner's Swarm service, as the FIFO did on a Mac.
-- `O_NOFOLLOW` and `O_NONBLOCK` exist only on POSIX (Node documents Windows' flags), so the open follows a symbolic link. A
-  file link needs Developer Mode or the privilege. The size check after the open still bounds what is read.
-- A file opened without sharing gives `EBUSY`, which is read as no status. That is harmless.
-
-Not tried: no Windows machine.
-
-**Fix:** read the status off the daemon's main thread with a deadline, in a worker or a child process. Or ask the Team daemon
-for it over a connection with a timeout.
-
 ### W5. The elevated scripts walk folders the Team account can write (Medium)
 
 `Remove-Tree` (`windowsScript.ts:104-114`) checks that a folder is not a link, then lists it and deletes by path. Removal runs it,
@@ -223,8 +176,8 @@ as `privacy.ts` `statusText` does.
 
 ## Not verified
 
-- **No Windows machine.** Nothing here ran on Windows: not the ACLs, the oplock (W4), the race (W5), the port (W1) or Claude
-  Code's Windows paths (W3). The SDDL tests check what setup asks Windows for, not what Windows did.
+- **No Windows machine.** Nothing here ran on Windows: not the ACLs, the race (W5) or the port (W1). The SDDL tests check
+  what setup asks Windows for, not what Windows did.
 - Whether another standard account can read a Team or owner process's command line on Windows (macOS M2). Windows normally
   needs a right on the process that it doesn't give across accounts. Not checked.
 - Ports were covered only in part: the Team daemon's own loopback port (18493) was not read beyond what the macOS audit says.

@@ -862,7 +862,7 @@ This computer only.
   1. `agent_purge { agentId, sessionId: frame.sessionId ?? null, createdAt: Date.parse(frame.createdAt), mode: 'inspect' }`, 60 s.
   2. `agent_purge { …the same three…, mode: 'delete', reviewId, choices: { sessionData: true, worktreeData: false } }`, 120 s.
   An `error` in either answer is an `AgentClientError(error, detail || 'Could not delete <name>.')`: purge's own
-  words (`LEAD_PROTECTED`, `DELETE_IN_PROGRESS`, `DELETE_REFUSED`, `IDENTITY_UNAVAILABLE`), exit 1.
+  words (`DELETE_IN_PROGRESS`, `DELETE_REFUSED`, `IDENTITY_UNAVAILABLE`), exit 1.
 - Output. Nothing kept: `<name> on <machine>: deleted. Its conversation and everything Harness kept of it are erased.`
   Something kept: `<name> on <machine>: deleted. Everything Harness kept of it is erased.` then each `kept[].reason`
   on its own line. `--json`: `{ name, id, deleted: true, kept }` (`kept` is `[]` when none).
@@ -891,7 +891,6 @@ it('refuses an agent a harness it did not start, and its own; the person deletes
   // as the close test of the same name: exit 5, NOT_YOURS, and no agent_purge sent
 })
 it('says purge\'s own refusals as they are', async () => {
-  // inspect answers { error: 'LEAD_PROTECTED', detail: LEAD_PROTECTED_DETAIL } → exit 1, err is the detail, no delete sent
   // delete answers { error: 'DELETE_REFUSED', detail: 'The harness did not stop. No session data was deleted.' } → exit 1, that detail
 })
 it('works on this computer only, one harness at a time, and never a cloud one', async () => {
@@ -966,7 +965,6 @@ it('is refused, and says why, when its other records cannot be erased; asked aga
   expect(deps.stopped.remove).not.toHaveBeenCalled()
   expect(await deleteOnce()).toMatchObject({ deleted: true, sessionDeleted: true })
 })
-it('never deletes a Lead', async () => { /* leadProtected → { error: 'LEAD_PROTECTED' }; keep or extend the file's own */ })
 ```
 
 `lifecycle.spec.ts`: `'a purge forgets the recaps, the search rows and the names under every session key, then its

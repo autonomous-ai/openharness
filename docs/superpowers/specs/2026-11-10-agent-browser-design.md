@@ -1,4 +1,4 @@
-# Agent Browser: a sandboxed Chrome beside a Swarm agent
+# Agent Browser: a sandboxed Chrome beside an agent
 
 **Status:** design, not built. Reviewed independently nine times on 2026-11-10; rewritten after the fifth and
 corrected after each later one.
@@ -9,9 +9,8 @@ How a browser is turned on, off and driven is changed by
 
 ## Intent
 
-A team wants Swarm agents to do work that lives in web apps, such as customer support in a shared Gmail inbox. The
-Swarm v4 PM writes a skill for each area of the work, and each agent takes one area. For that, an agent needs a real
-browser with four properties:
+A team wants agents to do work that lives in web apps, such as customer support in a shared Gmail inbox. For that,
+an agent needs a real browser with four properties:
 
 - it is logged in to the team's web accounts;
 - it is kept apart from the person's own machine and browser;
@@ -26,19 +25,19 @@ instructions: whether it reads, drafts or sends mail, and whether a person appro
 
 ## Goals
 
-- **A checkbox.** The Swarm New agent form gets a **Browser** checkbox. When it is on, the agent gets its own
+- **A checkbox.** The New agent form gets a **Browser** checkbox. When it is on, the agent gets its own
   container on the same machine. The container runs a browser, a VNC server, and Harness's own browser tool server on
   `playwright-core`, which the agent uses to drive the browser.
 - **Set up in the product.** The container runtime is Podman, and only Podman. When the machine has none, Harness
   installs it after the person agrees once. The person never opens a terminal for it.
-- **A button.** A **Browser** button sits next to Terminal in the agent's Swarm chat on Desktop. It opens the
+- **A button.** A **Browser** button sits next to the agent's Terminal on Desktop. It opens the
   container's screen with noVNC. There the person logs in to Gmail or takes over by hand.
 - **From any of the person's Desktops.** The screen travels over the same end-to-end encrypted transport as terminals:
   on a direct link when there is one, and through the relay when there is not. The container publishes no port.
 - **The login lasts.** Restarting the container, the agent or the machine keeps the browser profile.
 - **The agent asks for a person in chat.** When a page wants a captcha, a 2FA code or a login, the tool's reply says
-  so, and the agent asks its person in their Swarm chat, as it asks anything else. The person opens Browser, does it
-  by hand, and answers in chat; the agent goes on.
+  so, and the agent asks its person, as it asks anything else. The person opens Browser, does it by hand, and
+  answers; the agent goes on.
 - **Its own network and look.** Each browser can have its own proxy, time zone, language, screen size and device,
   and it types and moves the mouse like a person.
 
@@ -50,12 +49,11 @@ instructions: whether it reads, drafts or sends mail, and whether a person appro
 - Docker. Harness calls `podman` and nothing else, so there is one runtime and one code path.
 - Installing Podman without the person's consent, at Harness setup, or on a machine the person is not sitting at.
 - Removing or replacing a Podman the person already has.
-- Gmail-specific code, customer-support logic, or the skills themselves. The PM writes those.
+- Gmail-specific code, customer-support logic, or the skills themselves.
 - Tools in the container beyond the browser, VNC and the browser tool server. One image serves every area of work.
 - Playwright MCP (`@playwright/mcp`): the tools are Harness's own, on `playwright-core`.
 - Sharing one browser between agents, or giving one agent several browsers.
-- Browser agents started by the PM or the router. Only a person starts one, through New agent. That is how Swarm v4
-  agents are created today.
+- Browser agents started by another agent. Only a person starts one, through New agent.
 - Solving captchas by itself or through a captcha service. A person solves them.
 - A WireGuard or VPN exit for a browser. A proxy is the only network setting.
 - Switches for WebGL, fonts, audio, the warning bar or a fake taskbar. They are fixed.
@@ -71,8 +69,7 @@ instructions: whether it reads, drafts or sends mail, and whether a person appro
 - A failure that leaves the button doing nothing, with no reason shown.
 - Any change to agents that did not ask for a browser. Product rule: agents start as plain Claude Code or Codex.
 - A slower terminal. Browser traffic must not delay terminal output or input on the same transport.
-- Anyone but the machine's own person opening a browser: not Swarm teammates, and not a guest the machine is shared
-  with.
+- Anyone but the machine's own person opening a browser: not a teammate, and not a guest the machine is shared with.
 - A changed Podman setup the person already had.
 - A browser with a proxy set that ever connects from the machine's own address.
 - A proxy password in a log, an agent frame, a process list or telemetry.
@@ -81,12 +78,8 @@ instructions: whether it reads, drafts or sends mail, and whether a person appro
 ## What exists today (read 2026-11-10)
 
 - **New agent form.**
-  - `desktop/lib/super_tabs/new_agent.dart:20` `swarmNewAgent` offers Claude and Codex, on own machines only, using
-    the generic `desktop/lib/widgets/new_harness_form.dart`.
+  - It offers Claude and Codex, on own machines only, using the generic `desktop/lib/widgets/new_harness_form.dart`.
   - The form's only checkbox is the Worktree `DesktopPill` (`:2457-2479`).
-- **Agent chat header (Desktop).** `desktop/lib/super_tabs/view.dart:3896-3955` `_agentHeader` holds Instructions
-  (`swarm-instructions-button`) and Terminal (`swarm-terminal-button`). Each opens a side panel, and they close each
-  other.
 - **Transport.**
   - Native Desktop carries no crypto. It talks plaintext to its own daemon over loopback
     (`cli/src/localWsServer.ts`), and that daemon terminates the end-to-end encryption for remote machines.
@@ -171,13 +164,13 @@ instructions: whether it reads, drafts or sends mail, and whether a person appro
 - The product word stays **Browser**.
 - Where the prior art has an answer, this design follows it as closely as it can: the settings per agent, the proxy
   and its exit-zone lookup, human-like input, the device script, and detecting a page that needs a person.
-- Asking a person goes through the Swarm chat, not a tool that waits (decided after the spike showed both engines cut
+- Asking a person is the agent's own question, not a tool that waits (decided after the spike showed both engines cut
   long tool calls short).
 - Desktop first. The web and the phone come after it.
 
 ## Mockups
 
-**1. Swarm New agent: a Browser pill next to Worktree, off by default**
+**1. New agent: a Browser pill next to Worktree, off by default**
 
 ```
 ┌──────────────────────────────────────────────────────┐
@@ -583,7 +576,7 @@ Saving a change that needs it restarts the browser; the login stays.
 - **Who gets it** *(call)*: the agent's registry row carries `browser: true`. The MCP arguments are added at create
   and at every relaunch, the way machine MCP servers are, only for those agents.
 - **Approval** *(call)*: the agent's browser tools must run without a prompt, or the agent cannot work on its own.
-  - The plan checks what a Swarm agent's default approval mode (`auto`) does for MCP tools, in Claude and in Codex.
+  - The plan checks what an agent's default approval mode (`auto`) does for MCP tools, in Claude and in Codex.
   - If a mode would prompt, the launch adds an allow rule for the `browser` server only: Claude
     `--allowedTools=mcp__browser` as one token, and Codex's equivalent.
 - **Tool timeouts:** no tool waits longer than 60 seconds (navigation). That is inside both engines' defaults: Codex
@@ -599,9 +592,8 @@ Saving a change that needs it restarts the browser; the login stays.
 
 ### A page that needs a person *(prior art: `2026-11-01-captcha-handoff-design.md`)*
 
-- **No waiting tool** *(decided)*. The agent asks its person in its Swarm chat, the way it asks anything, and ends its
-  turn. The person does it in Browser and answers in chat, and that answer starts the agent's next turn. Swarm
-  already carries the message to the person's Desktop and phone.
+- **No waiting tool** *(decided)*. The agent asks its person, the way it asks anything, and ends its turn. The
+  person does it in Browser and answers, and that answer starts the agent's next turn.
   - The spike showed why a waiting tool does not fit: Claude Code moves a tool call to the background after 120 s and
     aborts a silent one after 30 minutes, and Codex cuts one at 300 s.
 - **Detection** *(call)*: after `browser_navigate`, `browser_click`, `browser_type` and `browser_snapshot`, the tool
@@ -852,7 +844,7 @@ Linux is measured by Task 20's real-Podman run on CI:
 - **The stream.** How many bytes per second noVNC needs at Tight, quality 6, while Gmail scrolls at 1920x1080.
 - **The echo.** Terminal echo p95 while the stream runs, at several credit window sizes, on a direct link, through
   TURN, and through the relay.
-- **Approval.** Whether Claude Code and Codex prompt for an MCP tool in a Swarm agent's default mode.
+- **Approval.** Whether Claude Code and Codex prompt for an MCP tool in an agent's default mode.
 - **The engines.** Whether Claude Code and Codex each wait 30 minutes on one stdio tool call.
 - **Podman.** That the facts this design leans on are true under Podman on each OS:
   - `--read-only` with these tmpfs mounts runs Chrome;
@@ -863,13 +855,12 @@ Linux is measured by Task 20's real-Podman run on CI:
   - the TigerVNC flags work, and `Xvnc` types characters its keyboard map lacks into Chrome.
 
 The spike's numbers set the relay budget, the credit window and the pacing. It also reports what one viewer costs
-the relay per open minute, because backend cost per Swarm must fall as Swarms grow; that number is agreed before the
-stream is built. If the bridge cannot carry the stream, no window protects the echo, or an engine cannot wait, the
+the relay per open minute; that number is agreed before the stream is built. If the bridge cannot carry the stream, no window protects the echo, or an engine cannot wait, the
 design changes first and this spec is revised.
 
 ### The person's view on Desktop
 
-- **Swarm New agent form** (only the `swarmNewAgent` integration, not other New harness forms):
+- **New agent form**:
   - a **Browser** pill next to Worktree, with the tooltip "A sandboxed Chrome the agent drives";
   - when the form targets a machine, it asks that machine's daemon `agent_browser_available`;
   - `ready`, `stopped`, `podman_old` or `podman_memory`: the pill works;
@@ -878,8 +869,7 @@ design changes first and this spec is revised.
   - `needs_setup` on another computer: the pill is disabled, with the tooltip "Set up Browser on <machine name>
     first";
   - no answer (older CLI): the pill is disabled, with the tooltip "Update Harness on <machine name> first".
-- **Agent header:** a **Browser** icon button after Terminal in `_agentHeader` (`swarm-browser-button`,
-  `AppIcons.globe`, tooltip "Browser"). It opens a side panel with the page in the native webview. Browser, Terminal
+- **Agent header:** a **Browser** icon button after Terminal (`AppIcons.globe`, tooltip "Browser"). It opens a side panel with the page in the native webview. Browser, Terminal
   and Instructions each close the others.
 - **Panel header:** a gear for Browser settings (Mockup 5), Paste, and close.
 - **Which agents:** the button shows for a browser agent on one of the person's own machines (a machine that is not
@@ -1002,8 +992,7 @@ workload, over a direct link and over the relay:
   - A browser uses about 300-600 MB of RAM, capped at 2 GB.
   - The first metrics to warn are `browser.start` failing for memory, and the backend's relay bytes for the browser
     budget.
-  - The stream uses the direct link when it can. The PR reports relay bytes per open minute, because backend cost per
-    Swarm must still fall.
+  - The stream uses the direct link when it can. The PR reports relay bytes per open minute.
 - **Compatibility:**
   - Fields, frames and the binary kind are only added.
   - An older CLI never sends `browser`, so older pairs show nothing new. An older Desktop ignores the field.
@@ -1104,8 +1093,7 @@ Not in v1. What was decided for them, so the next spec starts from it:
 - **The web.** The same panel, opened next to where the v3 layout offers the agent's terminal. The page runs in an
   `<iframe sandbox="allow-scripts" srcdoc=…>`, bridged with `postMessage`. The web never offers setup.
 - **The phone.**
-  - An **Open browser** action next to **Open terminal** (`mobile/lib/swarm/swarm_terminal_row.dart:98`,
-    `swarm_project_page.dart:1789`), opening a full-screen page.
+  - An **Open browser** action next to **Open terminal**, opening a full-screen page.
   - The screen is scaled to fit, and touch is noVNC's own, as in the prior art: a tap clicks, one finger drags in the
     page, two fingers scroll, a long press is a right click, and pinch is sent to the remote.
   - **Keyboard** shows a native Flutter text field above the phone's keyboard. **Send** types the text into the remote

@@ -25,7 +25,7 @@
 - Frames for every client of a machine (no `targetConnId`) are unchanged.
 - No stored data, no client change, backend only. No ids in logs.
 - Do not commit or push until Ken asks; each task ends with a diff checkpoint. Remove dead code.
-- Commands from `backend/`: `npx vitest run <file>`; `npm run typecheck`. Real-Redis tests run with `REDIS_TEST_URL=redis://127.0.0.1:6379/15` (local docker `harness-redis`; CI skips them, as `src/superTabs/cacheRedis.test.ts` does).
+- Commands from `backend/`: `npx vitest run <file>`; `npm run typecheck`. Real-Redis tests run with `REDIS_TEST_URL=redis://127.0.0.1:6379/15` (local docker `harness-redis`; CI skips them).
 
 ## Review Focus
 

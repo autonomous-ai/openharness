@@ -147,7 +147,7 @@ acceptance bar.
 | `cli/src/lib/windows/ptyUpdate.ts` (new), `cli/src/services/updaterProcess.ts`, `cli/src/harnessd/{protocol,supervisor,masterProcess}.ts`, `cli/src/lib/selfUpdate.ts` | G3.3 | The poller; one handover; probation and rollback |
 | `cli/src/cli.ts` (`version --json`, `harness update`), `selfUpdate.ts` (canary), `protocol.spec.ts`, B spec | G3.4 | The protocol rule; `harness update` |
 | `cli/scripts/install.ps1`, `cli/src/scripts/installPs1.spec.ts` | G3.5 | Restart when only the PTY moved |
-| `desktop/lib/state/app_state.dart`, `desktop/lib/super_tabs/workspace.dart`, `cli/src/localWsServer.ts`, `cli/src/backendSocket.ts`, `cli/src/lib/terminalStreamManager.ts`, `cli/src/core/terminalWatch.ts` | G4.1 | Who is looking |
+| `desktop/lib/state/app_state.dart`, `cli/src/localWsServer.ts`, `cli/src/backendSocket.ts`, `cli/src/lib/terminalStreamManager.ts`, `cli/src/core/terminalWatch.ts` | G4.1 | Who is looking |
 | `cli/src/lib/hostMove/quiet.ts` (new) | G4.2 | Idle and input clocks |
 | `cli/src/lib/terminalTypes.ts`, `ptyHostBackend.ts`, `cli/src/lib/hostMove/seed.ts` (new) | G4.3 | Seeded create; seed from capture |
 | `cli/src/lib/hostMove/gate.ts` (new), `terminalStreamManager.ts`, `cli/src/lib/sessionInput.ts` | G4.4 | Hold input; move open streams |
@@ -634,7 +634,7 @@ Windows API.
 ### Task G4.1: Who is looking
 
 **Files:**
-- Modify: `desktop/lib/state/app_state.dart` (the `app_focus` send), `desktop/lib/super_tabs/workspace.dart`.
+- Modify: `desktop/lib/state/app_state.dart` (the `app_focus` send).
 - Modify: `cli/src/localWsServer.ts` (the `app_focus` handler), `cli/src/backendSocket.ts` (`setLocalTerminalFocus`),
   `cli/src/lib/terminalStreamManager.ts`, `cli/src/core/terminalWatch.ts`.
 - Tests: `desktop/test/app_focus_visible_agents_test.dart` (new), `cli/src/lib/terminalStreamManager.spec.ts`,
@@ -667,13 +667,13 @@ Windows API.
     - `closing the connection forgets its list`.
     - In `localWsServer`: `app_focus with visibleAgents reaches setLocalTerminalFocus`.
   - Desktop:
-    - `app_focus carries the on-screen tiles`: two super tabs, only the active tab's tiles are listed.
+    - `app_focus carries the on-screen tiles`: two tabs, only the active tab's tiles are listed.
     - `minimizing sends an empty list`.
 - [ ] **Step 2: Run.**
   - Run: `cd cli && npx vitest run src/lib/terminalStreamManager.spec.ts src/localWsServer.spec.ts`, and
     `cd desktop && flutter test test/app_focus_visible_agents_test.dart`.
   - Expected: FAIL.
-- [ ] **Step 3: Implement.** The desktop derives the list from the active super tab's mounted, non-`Offstage` tiles
+- [ ] **Step 3: Implement.** The desktop derives the list from the active tab's mounted, non-`Offstage` tiles
   and the window's visibility state.
 - [ ] **Step 4: Run.** The same commands. Expected: PASS.
 - [ ] **Step 5: Commit** `feat: the desktop tells its daemon which terminals are on screen`.
@@ -949,7 +949,7 @@ Windows API.
   1. on N, start a claude agent, a codex agent and a terminal;
   2. let the updater install N+1's payload;
   3. check that a new agent opens on the new host;
-  4. keep one tile on screen, put one in another super tab, and minimize;
+  4. keep one tile on screen, put one in another tab, and minimize;
   5. wait out `QUIET_MS`. Check that:
      - the off-screen agents moved, with the same ids, their scrollback and resumed conversations;
      - the on-screen one did not move;

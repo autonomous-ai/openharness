@@ -1,12 +1,12 @@
 # Quota from the CLIs' own reports; no login reading, no relay (#4137)
 
-> Way of working: this project's Engineer role (project instructions, Roles › Engineer): plan first, then each plan task
-> test first (failing test committed, then the code), parallel subagents only for plan tasks that share no files.
+> Way of working: plan first, then each plan task test first (failing test committed, then the code), parallel
+> subagents only for plan tasks that share no files.
 
 **Goal:** The CLI never opens a Claude or ChatGPT login or credential, and never relays an owner's subscription. The
-router's "enough quota left" answer comes only from what Claude Code and Codex report themselves.
+quota Harness reads comes only from what Claude Code and Codex report themselves.
 
-**Architecture:** `usage_read` keeps its wire shape (Desktop and the router's `quotaOf` parse it unchanged), but its
+**Architecture:** `usage_read` keeps its wire shape (Desktop parses it unchanged), but its
 source changes. Claude: every Claude session Harness launches gets a pass-through status line. It records
 `rate_limits.five_hour` / `seven_day` from Claude Code's status-line JSON into a small report file in Harness's data
 folder, then runs the owner's own status line command, if they have one, and prints its output unchanged. Codex: the
@@ -17,8 +17,7 @@ from `claude auth status --json` and `codex login status`. The owner subscriptio
 **Tech Stack:** TypeScript (cli), node built-ins only in the status-line script (it runs inside the person's `claude`,
 like `hook/notify.mjs`), vitest.
 
-**Spec:** task #4137 brief (anh Dee, 2026-11-07, Swarm v3 ROUTER and REMOVE lines);
-`docs/specs/2026-11-07-swarm-v3.md` once #V3-backend lands it.
+**Spec:** task #4137 brief (anh Dee, 2026-11-07).
 
 ## Global Constraints
 
@@ -45,7 +44,7 @@ like `hook/notify.mjs`), vitest.
 - concurrency: the report is written by rename, so a reader sees a whole file; the last writer wins.
 - read cost: the daemon reads one small file per account, and one app-server read per Codex home per
   `USAGE_FRESH_MS` (3 min, unchanged).
-- scale: N/A because per machine, not per Swarm; the metric that warns first is the app-server read's duration in the
+- scale: N/A because per machine; the metric that warns first is the app-server read's duration in the
   daemon log.
 - compatibility: wire shape unchanged plus `source`; the backend's `quotas` field unchanged.
 - migration and rollback: none stored; reverting the PR restores the old reader.
@@ -97,16 +96,15 @@ primary: Window | null; secondary: Window | null } | { ok: false; reason: 'missi
 
 ### Task 4: `usage_read` from the reports
 
-**Files:** `cli/src/services/usage.ts`, `cli/src/superTabs/capacity.ts`, `cli/src/superTabs/machines.ts`; remove
-`cli/src/lib/accountUsage.ts` and its specs.
+**Files:** `cli/src/services/usage.ts`; remove `cli/src/lib/accountUsage.ts` and its specs.
 
-- [ ] Failing spec: `usage_read` answers Claude from the report and Codex from the app-server read, in the shape
-  `quotaOf` reads, with `source: 'cli'`, and no report is an `unreachable` reading with its reason.
+- [ ] Failing spec: `usage_read` answers Claude from the report and Codex from the app-server read, in its existing
+  shape, with `source: 'cli'`, and no report is an `unreachable` reading with its reason.
 - [ ] Implement; remove the vendor reader and the relayed-quota wording.
 
 ### Task 5: Sign-in from the CLIs' own status
 
-**Files:** `cli/src/lib/engineAccount.ts`, `cli/src/superTabs/leadSwitchRequest.ts`, `cli/src/lib/claudeProfiles.ts`;
+**Files:** `cli/src/lib/engineAccount.ts`, `cli/src/lib/claudeProfiles.ts`;
 remove `cli/src/lib/agentCredentials.ts`.
 
 - [ ] Failing spec: signed in comes from `claude auth status --json` `loggedIn` and `codex login status`'s exit code
@@ -116,8 +114,7 @@ remove `cli/src/lib/agentCredentials.ts`.
 ### Task 6: No owner subscription relay
 
 **Files:** remove `cli/src/lib/subscriptionRelay.ts`, `cli/src/lib/ownerSubscriptions.ts` and their specs; edit
-`cli/src/superTabs/service.ts`, `cli/src/services/sharedMachines.ts`, `cli/src/services/guestLaunches.ts`,
-`cli/src/lib/guestPaneCommand.ts`, `cli/src/team/relay.ts`.
+`cli/src/services/sharedMachines.ts`, `cli/src/services/guestLaunches.ts`, `cli/src/lib/guestPaneCommand.ts`.
 
 - [ ] Failing spec: a guest's launch on a shared machine carries no relay variables or provider arguments.
 - [ ] Remove the relay and its launch contract; a guest's engine starts with the guest's own sign-in.

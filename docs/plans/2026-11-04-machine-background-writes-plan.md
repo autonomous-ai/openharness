@@ -1,7 +1,6 @@
 # Machine background writes Implementation Plan
 
-> Written and carried out by the task's Engineer, test first, by these project instructions (no subagent-driven
-> development, no execution handoff).
+> Written and carried out test first (no subagent-driven development, no execution handoff).
 
 **Goal:** Ken's prod scan of 11-04 found `Machine.update` by `machineId`, in background work, slow 53 times in 32
 minutes (19 s total, max 723 ms). Background writers of a Machine row skip writes that change nothing and merge the

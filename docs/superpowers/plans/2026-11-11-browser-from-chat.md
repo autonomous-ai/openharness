@@ -4,8 +4,8 @@
 > task, each in its own worktree; every task commits its failing test first, then the code that makes it pass; no
 > per-task review; one final review of the whole branch; full suites once, on CI. Steps use checkbox (`- [ ]`) syntax.
 
-**Goal:** A person starts and stops the browser of any of their running agents from the Browser button in the agent's
-Swarm chat, and the agent drives it with `harness browser <command>`: no MCP, no launch argument, no checkbox.
+**Goal:** A person starts and stops the browser of any of their running agents from the Browser button beside the
+agent, and the agent drives it with `harness browser <command>`: no MCP, no launch argument, no checkbox.
 
 **Architecture:**
 
@@ -42,13 +42,12 @@ them and does not repeat them.
 - **No MCP.** After this branch nothing adds a browser argument to a launch, and `harness browser-mcp` does not exist.
 - **Only the person starts and stops.** `agent_browser_run` takes no start and no stop; `harness browser start` and
   `harness browser stop` exit 2.
-- **Nothing else reaches the agent.** No file under `cli/src/superTabs/` changes, except the move of `callerPane.ts`
-  and the import in `command.ts` (Task 4). Deliveries, their context lines and `plainChat` are untouched.
+- **Nothing else reaches the agent.** Deliveries are untouched.
 - **Quiet lines (Ken, 2026-11-11, option b).** The turn the ready line or the stop line starts makes no recap and no
   notification, on the daemon and so on every app. The turn path's change is general and small: a `quiet` mark on a
   delivery, carried to its turn's end (Tasks 21, 22). The code on that path (`core/deliveries.ts`,
   `core/turns/recaps.ts`, `lib/commander.ts`, `services/recaps.ts`) names no feature. `turns.onEnd` still tells that
-  end: the Swarm still types the agent its next thing.
+  end.
 - **The browser follows its agent, by its id (Ken, 2026-11-11, decision 14).** Only the person's Stop clears the
   flag. An agent that stops has its browser stopped; whenever a row with the flag has a running engine again, by any
   path, its browser is attached, and nothing is typed (its `told` mark stays).
@@ -59,7 +58,7 @@ them and does not repeat them.
   line; the previous one keeps no browser. No name in Podman is made from an agent's id but through its profile.
 - **No asking (Ken, 2026-11-11).** `harness browser …` is in both engines' allow rules, as `harness send` is
   (Task 20). It has no MCP tool.
-- **No read of the backend or of the Swarm on a command's path.** `agent_browser_run` reads the registry row, the
+- **No read of the backend on a command's path.** `agent_browser_run` reads the registry row, the
   pane's process and the service's memory.
 - **Logs and counters carry no content.** A command's arguments, a page's text, an address and a file's path never
   reach a log, a counter or an error sent to the apps. A command is logged by its name and outcome only. No
@@ -172,8 +171,8 @@ Every task uses these names. Requests are answered by `cli/src/services/agentBro
 | `cli/src/services/agentBrowser.ts`, `agentBrowserProcess.ts`, `agentBrowser/browsers.ts`, `agentBrowser/settings.ts` | the requests; the move, in the service's queue | 12, 15 (`agentBrowser.ts` and `agentBrowserProcess.ts` also 26) |
 | `cli/src/agentClient/browser.ts`, `cli/src/cli.ts`, `cli/src/agentClient/help.ts` | the command | 13 |
 | `desktop/lib/state/app_state.dart`, `desktop/lib/e2ee/envelope.dart` | Desktop's requests | 11, 14 |
-| `desktop/lib/browser/browser_panel.dart`, `desktop/lib/super_tabs/view.dart`, `browser_bridge.dart` | button and panel | 16, 19 |
-| `desktop/design/desktop-design-system.md`, `desktop/test/swarm_elements_gallery_test.dart`, goldens | design doc and gallery | 11, 16, 19 |
+| `desktop/lib/browser/browser_panel.dart`, `browser_bridge.dart` | button and panel | 16, 19 |
+| `desktop/design/desktop-design-system.md`, the gallery test, goldens | design doc and gallery | 11, 16, 19 |
 | `cli/e2e/agentBrowser.e2e.ts`, `cli/e2e/agentBrowserPodman.e2e.ts` | end to end | 17, 18 (`agentBrowser.e2e.ts` also 26) |
 | `cli/src/engines/facets/hooks.ts`, `cli/src/engines/kit/hookSettings.ts`, `cli/src/engines/__fixtures__/hook-installers.golden.json`, `cli/e2e/agentClient.e2e.ts` | `harness browser` in both engines' allow rules | 20 |
 | `cli/src/lib/commander.ts` | a quiet turn's end: no recap, no notification | 21 |
@@ -223,15 +222,14 @@ npm run typecheck
 npx vitest run src/lib/registry.spec.ts src/core/api.spec.ts src/core/agents/lifecycle.spec.ts \
   src/core/agentBrowserLink.spec.ts src/lib/e2ee/relayLink.spec.ts src/core/guestPolicy.spec.ts \
   src/core/agents/create.spec.ts src/lib/launchOverrides.spec.ts src/lib/callerPane.spec.ts \
-  src/superTabs/command.spec.ts src/architecture.spec.ts src/agentClient/browserArgs.spec.ts \
+  src/architecture.spec.ts src/agentClient/browserArgs.spec.ts \
   src/agentClient/browserOutput.spec.ts src/services/agentBrowser/toolServers.spec.ts \
   src/services/agentBrowser/notices.spec.ts src/services/agentBrowser/stateFile.spec.ts \
   src/services/agentBrowser/browserToolsLib.spec.ts src/services/agentBrowser/assets.spec.ts --maxWorkers=4
 (cd ../backend && npx vitest run src/lib/productUsage.test.ts src/routes/productUsage.test.ts)
 (cd ../desktop/tool/browser_viewer && npm ci && npm test)
 (cd ../desktop && flutter analyze lib test && flutter test --no-pub --concurrency=2 --timeout=60s \
-  test/new_harness_form_test.dart test/super_tab_new_agent_launch_test.dart test/browser/browser_requests_test.dart \
-  test/swarm_elements_gallery_test.dart test/browser/viewer_asset_test.dart)
+  test/new_harness_form_test.dart test/browser/browser_requests_test.dart test/browser/viewer_asset_test.dart)
 ```
 
 **Wave 2 verify:**
@@ -258,8 +256,7 @@ npx vitest run src/services/agentBrowser.spec.ts src/services/agentBrowserProces
   src/backendSocket.agentBrowser.spec.ts src/services/agentBrowser/containers.spec.ts \
   src/services/agentBrowser/browsers.spec.ts src/services/agentBrowser/stateFile.spec.ts \
   src/lib/registry.spec.ts src/lib/stoppedAgents.spec.ts --maxWorkers=4
-(cd ../desktop && flutter analyze lib test && flutter test --no-pub --concurrency=2 --timeout=60s test/browser \
-  test/swarm_v4_journey_test.dart test/swarm_elements_gallery_test.dart)
+(cd ../desktop && flutter analyze lib test && flutter test --no-pub --concurrency=2 --timeout=60s test/browser)
 ```
 
 **Wave 4 verify:**
@@ -293,7 +290,7 @@ E2E_BUNDLE=1 npx vitest run --config vitest.e2e.config.ts e2e/agentBrowser.e2e.t
 
 ### Task 0: Measure the engines (by hand, before any code)
 
-This cannot be a test: it needs a real Claude Code and a real Codex, each as a Swarm agent in its default mode, on a
+This cannot be a test: it needs a real Claude Code and a real Codex, each in its default mode, on a
 Mac with Harness installed. The main session runs it with Ken's Desktop (or one Opus subagent that drives two real
 agents through `harness new` and `harness show`). It gates wave 1: Tasks 5 and 6 read its numbers.
 
@@ -451,23 +448,22 @@ before `createCoreApi` (it needs only `ports` and the registry) and handed in as
 - [ ] **Step 4:** Same command and `npm run typecheck`: PASS. Commit `feat: agents launch plain; the browser MCP
   arguments go`.
 
-### Task 4: The pane proof moves out of the Swarm's code
+### Task 4: The pane proof moves to `lib/`
 
-`harness browser` is not Swarm code and may not import `superTabs/` (`architecture.spec.ts` `SWARM_DOORS`).
+`harness browser` needs the pane proof from `lib/`, where any command may import it.
 
 **Files:**
-- Move: `cli/src/superTabs/callerPane.ts` to `cli/src/lib/callerPane.ts`, `cli/src/superTabs/callerPane.spec.ts` to
-  `cli/src/lib/callerPane.spec.ts`
-- Modify: `cli/src/superTabs/command.ts:13` (the import); `cli/vitest.super-tabs.config.ts` only if it names the file
+- Move: `callerPane.ts` and its spec to `cli/src/lib/callerPane.ts` and `cli/src/lib/callerPane.spec.ts`
+- Modify: the one import of it
 
 **Depends on:** nothing.
 
 - [ ] **Step 1: Red.** `git mv` the spec alone and fix its imports to `./callerPane.js`.
 - [ ] **Step 2:** `npx vitest run src/lib/callerPane.spec.ts`: FAIL (no such module). Commit `test: the pane proof
   lives in lib`.
-- [ ] **Step 3: Green.** `git mv` the source, fix its relative imports and `command.ts`'s. No behaviour changes.
-- [ ] **Step 4:** `npx vitest run src/lib/callerPane.spec.ts src/superTabs/command.spec.ts src/architecture.spec.ts`
-  and `npm run typecheck`: PASS. Commit `refactor: the pane proof moves to lib, for commands outside the Swarm`.
+- [ ] **Step 3: Green.** `git mv` the source, fix its relative imports and its importer's. No behaviour changes.
+- [ ] **Step 4:** `npx vitest run src/lib/callerPane.spec.ts src/architecture.spec.ts` and `npm run typecheck`: PASS.
+  Commit `refactor: the pane proof moves to lib`.
 
 ### Task 5: The commands and their help, from `browser-tools.json`
 
@@ -728,27 +724,26 @@ the whole screen, as today (`scaleViewport = true`).
 ### Task 11: New agent without Browser
 
 **Files:**
-- Delete: `desktop/lib/browser/browser_pill.dart`, `desktop/test/goldens/swarm-elements/browser-pill-light.png`,
-  `browser-pill-dark.png`
+- Delete: `desktop/lib/browser/browser_pill.dart` and its two goldens
 - Modify: `desktop/lib/state/new_harness.dart:1051-1116` and `:625`, `:4968`; `desktop/lib/widgets/new_harness_form.dart:980-990`
   and `:2464-2472`; `desktop/lib/state/harness_launch_integration.dart:45,64-65`;
-  `desktop/lib/super_tabs/new_agent.dart:101`; `desktop/lib/state/app_state.dart:15879,15916` (create's `browser`);
+  `desktop/lib/state/app_state.dart:15879,15916` (create's `browser`);
   `desktop/lib/browser/browser_availability.dart` (the comment on `browserOffered`);
   `desktop/design/desktop-design-system.md` (the "Browser in New agent" entry goes; "Set up Browser" says it opens
   from the Browser panel's Install on a computer with no Podman, Install starts the setup, Cancel does nothing)
-- Test: `desktop/test/new_harness_form_test.dart:997-1125`, `desktop/test/super_tab_new_agent_launch_test.dart`,
-  `desktop/test/browser/browser_requests_test.dart:211`, `desktop/test/swarm_elements_gallery_test.dart:853-874`
+- Test: `desktop/test/new_harness_form_test.dart:997-1125`, the New agent launch test,
+  `desktop/test/browser/browser_requests_test.dart:211`, the gallery test
 
 **Depends on:** nothing.
 
-- [ ] **Step 1: Red.** `super_tab_new_agent_launch_test.dart`: replace the Install case with `New agent shows no
+- [ ] **Step 1: Red.** The New agent launch test: replace the Install case with `New agent shows no
   Browser pill, and Start creates the agent with no browser and no setup request` (opens the form as a person
   does, presses Start; `find.byKey(ValueKey('new-harness-field-browser'))` finds nothing; the `agent_create`
   payload has no `browser` key; no `agent_browser_setup` and no `agent_browser_available` was sent).
   `browser_requests_test.dart:211`: `createAgent sends no browser`. Remove the group at
   `new_harness_form_test.dart:997` and the gallery's `browser-pill` section.
-- [ ] **Step 2:** `flutter test --no-pub test/super_tab_new_agent_launch_test.dart
-  test/browser/browser_requests_test.dart`: FAIL (the pill is there; `browser` is sent). Commit `test: New agent
+- [ ] **Step 2:** `flutter test --no-pub` on the launch test and
+  `test/browser/browser_requests_test.dart`: FAIL (the pill is there; `browser` is sent). Commit `test: New agent
   has no Browser pill`.
 - [ ] **Step 3: Green.** Remove the pill, the form's browser state and `setUpBrowser`, `offersBrowser`, and the
   `browser` argument of create; delete the two goldens; change the design doc.
@@ -1068,7 +1063,7 @@ whether `ended` is reached on the way:
 |---|---|---|---|---|
 | Create with `browser: true` (an older Desktop) | `create.ts:464` | new | no | yes (`create.spec.ts:752`) |
 | The person's Start | `lifecycle.ts` `set` | same | no | yes (Task 2) |
-| Resume of a stopped agent: Desktop, the Swarm (`superTabs/inCore/agents.ts:37`), with new launch words or mode | `resumeAgentService.ts:424` | same | yes, at its stop | yes (`resumeAgentService.spec.ts:411`) |
+| Resume of a stopped agent: Desktop, with new launch words or mode | `resumeAgentService.ts:424` | same | yes, at its stop | yes (`resumeAgentService.spec.ts:411`) |
 | Daemon start, for the rows the registry kept; a machine restart, whose restore relaunches into those rows (`restoreAgents.ts`, `restoreLaunch.ts`); a held launch started later (`heldLaunches.ts`) | `main.ts:2678` | same | no | yes, no unit test |
 | **Back from the archive:** the daemon took a running engine for exited (a restore that could not see it, `restoreAgents.ts:496`, `main.ts:2555`; two missed scans, `discovery.ts:267`), archived it, and the next scan finds that same process | `discovery.ts:148` `reinstateArchived` | same | yes | **no** |
 | Restart in its pane (`agent_restart`, with or without new launch words), a move to a grid or back (`retarget.ts`), a move to the pty host and its fallback (`hostMove.ts`): all relaunch through `relaunchOverrides` and `restartAgent` with the route held | `restart.ts`, `swap.ts` | same | no | not needed: never ended. No test says so |
@@ -1190,8 +1185,8 @@ Rules:
 
 - [ ] **Step 1: Red.** Cases in `agentBrowser.spec.ts` (fake `podman` whose `exec` child the spec drives):
   - `run is refused to a remote asker`; `the pane gives the agent`; `a guest's agent is NOT_ALLOWED`; `an agent in
-    a regular tab is allowed`; `it answers with the backend and the Swarm unreachable` (the fake core's `backend`
-    and `superTabs` throw if touched).
+    a regular tab is allowed`; `it answers with the backend unreachable` (the fake core's `backend` throws if
+    touched).
   - `off, starting, setting up and each failed state answer by name, and start nothing`.
   - `the first command starts the tool server once; it starts again after it exits; a state that leaves ready
     ends it`.
@@ -1222,13 +1217,12 @@ Rules:
 ### Task 16: Browser on every agent; Start and Stop in the panel
 
 **Files:**
-- Modify: `desktop/lib/browser/browser_panel.dart`, `desktop/lib/super_tabs/view.dart:2823-2843,2967-2985,4937-4953`,
+- Modify: `desktop/lib/browser/browser_panel.dart`, the agent's view,
   `desktop/design/desktop-design-system.md` (the agent chat's header at `:457-460`; the Browser panel entry at
   `:564-584`)
 - Create: `desktop/test/browser/browser_from_chat_test.dart`
 - Test: `desktop/test/browser/browser_panel_test.dart`, `desktop/test/browser/browser_button_test.dart`,
-  `desktop/test/swarm_v4_journey_test.dart:236-291`, `desktop/test/swarm_elements_gallery_test.dart:897-927`,
-  `desktop/test/goldens/swarm-elements/browser-bar-light.png`, `browser-bar-dark.png`
+  the journey test, the gallery test and its two `browser-bar` goldens
 
 **Depends on:** Tasks 11 and 14.
 
@@ -1238,19 +1232,19 @@ Rules:
 
 Decisions the spec leaves:
 - **The button** shows for an agent whose machine is the person's own (not `isShared`, not `isSharedMachine`) and
-  lists the agent as running, never on the web build or on Windows Desktop. `view.dart`'s `_browserAgent` becomes
-  `bool _offersBrowser(SuperTabAgent agent)`; the panel is built whenever it is true.
+  lists the agent as running, never on the web build or on Windows Desktop. The view's `_browserAgent` becomes
+  `_offersBrowser(agent)`; the panel is built whenever it is true.
 - **The running mark** is a 6-point dot in `AppPalette.online` (the connection dot's colour) at the glyph's top
   right, drawn while the frame's `browser.state` is `ready`. Tooltip `Browser`; semantics label `Browser, running`.
-- **Stop** is a compact quiet `DesktopPill` labelled `Stop`, key `swarm-browser-stop`, before the gear, drawn
+- **Stop** is a compact quiet `DesktopPill` labelled `Stop`, before the gear, drawn
   whenever the frame has `browser`. No confirmation.
 - **Off** (the frame has no `browser`): `A sandboxed Chrome the agent drives` and a blue `Start`
-  (key `swarm-browser-start`). The gear works; Paste is off.
+  The gear works; Paste is off.
 - **Refusals** under the line, 12 grey: `UNSUPPORTED`: `Update Harness on <machine> first`; `NOT_ON_WINDOWS`:
   `Browser doesn't run on Windows yet`; `NOT_OWNER`: `Only its owner can open this browser`; any other: today's
   `Browser isn't available on <machine> right now`.
 
-- [ ] **Step 1: Red.** `browser_from_chat_test.dart`, a full `SuperTabView` with the fixture of
+- [ ] **Step 1: Red.** `browser_from_chat_test.dart`, a full agent view with the fixture of
   `browser_button_test.dart` and an app that records `agentBrowserStart` and `agentBrowserStop`, each case clicking
   as a person does:
   - `an agent with no browser: Browser is there; pressing it shows off; Start sends the request; the frame turns
@@ -1274,8 +1268,7 @@ Decisions the spec leaves:
   chat`.
 - [ ] **Step 3: Green.** Implement; rewrite the two design doc entries (the mark named, Start and Stop, the off
   state, the refusals; "the gallery draws the button plain and running, and the panel off, running and failed");
-  regenerate the two goldens with `flutter test --no-pub --update-goldens test/swarm_elements_gallery_test.dart`
-  and look at them.
+  regenerate the two goldens with the gallery test's `--update-goldens` and look at them.
 - [ ] **Step 4:** The Desktop command under Wave 3 verify: PASS. Commit `feat: Browser on every agent's chat, with
   Start and Stop`.
 
@@ -1484,7 +1477,7 @@ tmux (`send-keys`, its output and exit code written to a file in the fixture).
   prints a path whose file is the fake's 1 MiB JPEG, byte for byte (Review Focus 2); `agent_browser_window
   {width: 800, height: 500}` answers `{width: 1024, height: 640}`; `agent_browser_stop`; the frame has no
   `browser` and no `volume rm` was called; `harness browser snapshot` exits 4 with the off line; start again and
-  see `ready`, with the backend unreachable and the agent in no Swarm; purge; the container, the volume, the
+  see `ready`, with the backend unreachable; purge; the container, the volume, the
   network and the secret are removed. Add `an older Desktop's browser:true still gives a browser`. Keep the fault
   case. Add `a browser left on follows its agent` (decision 14; it passes on Task 23's code as written, and holds
   on the real daemon the paths no unit test sees whole): with the browser `ready`, `agent_restart` answers ok and
@@ -1541,7 +1534,7 @@ ready browser, and one 300 ms after the size last changed (`BrowserPanel.windowS
 one sent sends nothing; closing the panel sends nothing. An answer is posted to the page; null posts nothing, so
 the page keeps what it shows, and the next settled resize asks again.
 
-- [ ] **Step 1: Red.** `browser_window_test.dart`, the panel beside the chat in a `SuperTabView`:
+- [ ] **Step 1: Red.** `browser_window_test.dart`, the panel beside the agent's view:
   `opening the panel on a ready browser sends one window request with the panel's size, and the page is told the
   size the machine set`; `resizing in steps sends one request, 300 ms after the last step` (the window's surface
   is resized with `tester.binding.setSurfaceSize`, time moved with `tester.pump`); `closing the panel sends none`;
@@ -1571,7 +1564,7 @@ turn's end, where Task 21 reads it. Nothing here names the browser but the one o
   `cli/src/services/agentBrowser/notices.spec.ts`
 - Not changed: `cli/src/core/recapsLink.ts` and `cli/src/services/recapsProcess.ts` (the lifecycle event crosses
   whole), `cli/src/core/turns/funnel.ts`, `cli/src/core/turns/ends.ts`, `cli/src/lib/sessionInput.ts`,
-  `cli/src/superTabs/`, Desktop, the phone.
+  Desktop, the phone.
 
 **Depends on:** Tasks 8 and 21; Tasks 12 and 15 (`api.ts` and `main.ts` as they leave them; Task 12 hands the
 service's own process the turns of `turnsLink`).
@@ -1627,7 +1620,7 @@ Rules:
 - **Compatibility.** No frame changes shape for a turn that is not quiet. For a quiet one the apps get a
   `turn_summary` with a `tier` and no `summary`: every Desktop reads only `notification` there (2026-09-28, #444),
   so a Desktop from the last 30 days does not alert either. The phone reads only `tier` there, and `silent` files
-  nothing (a Swarm agent's turns are already `silent` on it, `notifyTier.ts:55`); a phone too old to read tiers
+  nothing; a phone too old to read tiers
   tells that end as it tells any. An older CLI types no line at all (Start is `UNSUPPORTED`).
 - **Standard 4.** No timer, no file, no wait, nothing while idle. Per event batch: the `turn_ended` test `ingest`
   already makes, then one Set removal on a batch that ends a turn. Per delivery event: one Set lookup.
@@ -1688,7 +1681,7 @@ core to move the flag; the core attaches the new agent, which starts the browser
   `cli/src/core/agentBrowserLink.spec.ts`, `cli/src/services/agentBrowser.spec.ts`,
   `cli/src/services/agentBrowserProcess.spec.ts`
 - Not changed: `cli/src/lib/registry.ts`, `cli/src/lib/stoppedAgents.ts` (Task 25), `cli/src/services/agentBrowser/`
-  (Task 24), `cli/src/core/agents/forget.ts`, `cli/src/lib/retainExitedSession.ts`, `cli/src/superTabs/`, Desktop (the
+  (Task 24), `cli/src/core/agents/forget.ts`, `cli/src/lib/retainExitedSession.ts`, Desktop (the
   button is already on every running agent: Task 16), the backend (no counter, no frame).
 
 **Depends on:** Tasks 24 and 25; Tasks 15 and 22 (`api.ts`, `main.ts`, `agentBrowserLink.ts`, `agentBrowser.ts` and
@@ -1827,8 +1820,7 @@ Rules:
 ## At the end
 
 1. **Final review** (ken15dev phase 4): one fresh Opus subagent that wrote none of it reviews the branch against
-   `main` and both specs, and fixes what it finds. It also checks: `git diff --stat main -- cli/src/superTabs`
-   shows only Task 4's move and import; `git grep -n "browser-mcp\|browserMcp\|created with Browser\|Browser ticked"
+   `main` and both specs, and fixes what it finds. It also checks: `git grep -n "browser-mcp\|browserMcp\|created with Browser\|Browser ticked"
    -- cli desktop` finds nothing but the dated compatibility comments; no caller of `turns.deliver` but
    `agentBrowser/notices.ts` passes `quiet`; and the quiet path names no feature: `git diff main --
    cli/src/core/deliveries.ts cli/src/core/turns/recaps.ts cli/src/lib/commander.ts cli/src/services/recaps.ts
@@ -1918,7 +1910,7 @@ Each is built as written here; Ken may change any.
    event has not yet arrived; `Browser is not reachable` only when the tool server never started.
 4. **Pane ids restart in every tmux server.** `runningPane` alone would let a private tmux server's pane stand for
    another agent's. Built: the CLI also sends its parents' pids and the core holds the pane's process to them
-   (`ofPane(pane, ancestors)`), as `inDaemonPane` does for the Swarm.
+   (`ofPane(pane, ancestors)`), as `inDaemonPane` does.
 5. **A ptyhost pane on macOS or Linux** (opt-in backend) cannot be proven by `runningPane`. Built: refused, exit 5.
 6. **The stop line for an agent that was never told** (Stop while it starts, or failed). Built: nothing is typed,
    as for a ready line taken back: that agent never knew.

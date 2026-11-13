@@ -1,6 +1,6 @@
 # Windows: a native account lookup for local connections: Implementation Plan
 
-> Way of working: this project's instructions. The Engineer implements it task by task, each failing test committed before its code. Security Reviewers: Reed and Orion. The PM starts the real Windows run on the final head.
+> Way of working: implemented task by task, each failing test committed before its code, with two security reviews and the real Windows run on the final head.
 
 **Goal:** The check of who is calling over loopback runs natively in `harness-pty` in milliseconds, keeping W1's answers and fail-closed rules, with PowerShell only if the helper is missing.
 
@@ -64,6 +64,6 @@
 
 - [ ] **Step 1: Commit failing tests:** yes and no are taken from the helper; PowerShell runs only when the helper is missing or says 2 or 3; a hang or crash is no, without PowerShell; the real spec measures each lookup under 1 s.
 - [ ] **Step 2: Watch them fail.**
-- [ ] **Step 3: Commit the code. Mark the pull request ready; message Reed and Orion in their steps; ask the PM for the real Windows run.**
+- [ ] **Step 3: Commit the code. Mark the pull request ready; ask for the two security reviews and the real Windows run.**
 
 Found while wiring: the helper refused only its own kind of process the daemon started, and W1's query only PowerShell and console hosts. A fallback PowerShell runs beside a helper that just refused the command, so both now refuse all three, with the same parent and grandparent rule.
