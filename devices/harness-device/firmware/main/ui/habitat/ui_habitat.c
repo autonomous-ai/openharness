@@ -3009,6 +3009,14 @@ static void dispatch(action_t a)
             else swarm_notice_drop(a.id);
             break;
         }
+        if (s.connected && a.id[0] && !agent_allows(a.id, CABLE_CAP_F)) {
+            // The agent lives in another app, so there is no window to open: go to its face, its recap still there.
+            for (int i = 0; i < s.notice_count; i++)
+                if (!strcmp(s.notice[i].agent_id, a.id)) notice_mark_read(&s.notice[i]);
+            action_t face = {.kind = A_AGENT}; COPY(face.id, a.id);
+            dispatch(face);
+            break;
+        }
         if (s.connected && !visit.pending && a.id[0]) {
             for (int i = 0; i < s.notice_count; i++)
                 if (!strcmp(s.notice[i].agent_id, a.id)) notice_mark_read(&s.notice[i]);
