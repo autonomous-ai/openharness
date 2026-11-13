@@ -32,7 +32,8 @@ let several people build features at once without touching the core or each othe
    port: only the apps call them.
 4. **Give it a process of its own** ([Running in its own process](#running-in-its-own-process)): every
    service runs outside the core's, the edge host for a light one. For the debugging switch
-   (`HARNESSD_SERVICES=none`) it also starts in `src/core/main.ts`, through the host, never directly:
+   (`HARNESSD_SERVICES=none`) and for Harness OS, which runs the core with no master, it also starts in
+   `src/core/main.ts`, through the host, never directly:
    `serviceHost.serve('<name>', start<Name>, coreApi, <NAME>_REQUESTS)` for a service with no port, or
    `serviceHost.start('<name>', start<Name>, coreApi, <NAME>_FALLBACKS, <NAME>_REQUESTS)` for one with a
    port. The host leaves a service off when its start throws, guards every call and request, and
@@ -67,6 +68,7 @@ hang or leak costs only its process. A process per risk, not per feature (`SERVI
 | `memory` | memory | an experiment: Memories across machines | on demand |
 | `router` | router | an experiment: where ⌘B sends a task, decided by Jev | on demand |
 | `cloud` | cloud | an experiment: cloud agents (Fo, Devin Cloud, Cursor Cloud), harnesses on their makers' servers | on demand |
+| `superTabs` | superTabs | the Swarm: its host, its GitHub loops and its calls to the backend | on demand, only while the Swarm is on |
 | `agentBrowser` | agentBrowser | Podman's calls and event stream, image builds, Podman's setup (`agentBrowserProcess.ts`, `core/agentBrowserLink.ts`) | on demand |
 
 A fault in one of the edge host's services can cost the others in it, never the core. Every service in

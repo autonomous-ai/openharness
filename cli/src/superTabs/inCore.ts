@@ -8,8 +8,8 @@
  * start's Swarm role (`SwarmLaunch`), an attached agent's role at its restart (`AdoptSwarmSkill`), its chat queued while
  * an agent works, the Leads that are never stopped, and its chat files streamed to the backend.
  *
- * Its side of the core and nothing else: the Super Tab service runs in a process of its own, and its start has a door of
- * its own for a core that runs it here (superTabs/inCoreService.ts). This file once re-exported that start, so every
+ * Its side of the core and nothing else: the Super Tab service runs in a process of its own, and a core that runs it
+ * here loads it by an import of its own (core/main.ts). This file once re-exported the service's start, so every
  * core with the Swarm on loaded the whole service, 118 files it never ran (the audit of 2026-11-12,
  * docs/design/2026-11-12-core-audit.md); src/architecture.spec.ts now lists, file by file, what this door loads.
  */
