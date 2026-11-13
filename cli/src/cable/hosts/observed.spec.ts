@@ -119,6 +119,13 @@ describe('ObservedSource states', () => {
     await vi.waitFor(() => expect(src.list()[0].lastAnswer).toBe('Fixed the bug.'))
   })
 
+  it('cuts a long answer to the card on a whole character', async () => {
+    const { src, answers, ev } = setup()
+    answers.set('/t/s.jsonl', `${'a'.repeat(298)}😀${'b'.repeat(10)}`)
+    src.ingest(ev('turn-stop', { transcriptPath: '/t/s.jsonl' }))
+    await vi.waitFor(() => expect(src.list()[0].lastAnswer).toBe(`${'a'.repeat(298)}😀…`))
+  })
+
   it('does not read a transcript for other engines', () => {
     const lastAnswer = vi.fn(async () => 'x')
     const { src, ev } = setup({ lastAnswer })
