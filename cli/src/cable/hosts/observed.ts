@@ -129,7 +129,7 @@ export class ObservedSource implements HostSource {
   ): Entry | undefined {
     const id = observedAgentId(engine, sessionId)
     // Harness's own session (the voice router's Claude Code runs in the data folder, outside a pane) is never an agent
-    // outside it, by hook or by scan: one the scan listed before its folder was known goes once the folder is.
+    // outside it: one first heard of without its folder (a hook cut to its bound) goes once the folder is known.
     if (init.cwd && this.deps.excluded.some((dir) => within(dir, init.cwd!))) {
       if (this.entries.delete(id)) this.emit()
       return undefined
@@ -202,10 +202,11 @@ export class ObservedSource implements HostSource {
     let changed = false
     const now = this.deps.now()
     for (const [sessionId, engine] of open) {
-      // A hook may have told of it while its row was read.
-      if (this.entries.has(observedAgentId(engine, sessionId))) continue
+      // No row, no folder to tell Harness's own from a person's (the voice router's transcript is a program's, in the data
+      // folder) or to name it by. A hook may also have told of it while the rows were read.
       const row = rows.get(sessionId)
-      const entry = this.entry(engine, sessionId, now, { cwd: row?.cwd, transcriptPath: row?.transcriptPath, pid: owners.get(sessionId)!.pid })
+      if (!row || this.entries.has(observedAgentId(engine, sessionId))) continue
+      const entry = this.entry(engine, sessionId, now, { cwd: row.cwd, transcriptPath: row.transcriptPath, pid: owners.get(sessionId)!.pid })
       if (entry) changed = true
     }
     if (changed) this.emit()

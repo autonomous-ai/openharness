@@ -288,6 +288,9 @@ describe('ObservedSource codex and open sessions', () => {
     owners.set('c', { pid: 13, engine: 'claude' })
     owners.set('d', { pid: 14, engine: 'claude' })
     externals.set('a', { cwd: '/x/alpha', transcriptPath: '/t/a.jsonl' })
+    externals.set('b', { cwd: '/x/beta', transcriptPath: null })
+    externals.set('c', { cwd: '/x/gamma', transcriptPath: '/t/c.jsonl' })
+    externals.set('d', { cwd: '/x/delta', transcriptPath: '/t/d.jsonl' })
     await src.scanOpen()
     const list = src.list()
     expect(list.map((a) => a.sessionId).sort()).toEqual(['a', 'b', 'd'])
@@ -296,9 +299,10 @@ describe('ObservedSource codex and open sessions', () => {
   })
 
   it('scanOpen looks afresh, so the scan when a dial attaches lists an agent already running', async () => {
-    const { src, open, owners } = setup()
+    const { src, open, owners, externals } = setup()
     open.set('a', 'terminal')
     owners.set('a', { pid: 11, engine: 'claude' })
+    externals.set('a', { cwd: '/x/alpha', transcriptPath: '/t/a.jsonl' })
     await src.scanOpen()
     expect(src.list().map((a) => a.sessionId)).toEqual(['a'])
   })
@@ -374,11 +378,9 @@ describe('ObservedSource and Harness\'s own sessions', () => {
     expect(src.list()).toEqual([])
   })
 
-  it('a session the scan listed without its folder goes once its hook names the data folder', async () => {
-    const { src, open, owners, changes, ev } = setup()
-    open.set('s1', 'app')
-    owners.set('s1', { pid: 100, engine: 'claude' })
-    await src.scanOpen()
+  it('a session first heard of without its folder goes once a hook names the data folder', async () => {
+    const { src, changes, ev } = setup()
+    src.ingest(ev('session-start', { cwd: undefined }))
     expect(src.list()).toHaveLength(1)
     changes.mockClear()
     src.ingest(ev('turn-start', { cwd: scratch }))

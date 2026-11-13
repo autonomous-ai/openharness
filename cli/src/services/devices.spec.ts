@@ -133,6 +133,7 @@ const readers = vi.hoisted(() => ({
   external: null as null | Record<string, unknown>,
   known: new Map<string, string>(),
   owners: new Map<string, { engine: string; pid: number }>(),
+  rows: new Map<string, { cwd: string; transcriptPath: string | null }>(),
   working: new Map<string, boolean>(),
   scans: 0,
   answer: vi.fn(async (..._args: unknown[]): Promise<string | undefined> => undefined),
@@ -149,7 +150,9 @@ vi.mock('../lib/sessionSearch/external.js', async (real) => ({
   },
   SessionRows: class {
     constructor(options: Record<string, unknown>) { readers.external = options }
-    async find() { return new Map() }
+    async find(wanted: ReadonlyMap<string, string>) {
+      return new Map([...wanted.keys()].flatMap((id) => readers.rows.has(id) ? [[id, readers.rows.get(id)!] as const] : []))
+    }
   },
 }))
 vi.mock('../lib/sessionSearch/externals/support.js', async (real) => ({
@@ -172,7 +175,7 @@ beforeEach(() => {
   seen.bridges = {}
   seen.fleet = null
   readers.open = readers.external = null
-  readers.known.clear(); readers.owners.clear(); readers.working.clear()
+  readers.known.clear(); readers.owners.clear(); readers.rows.clear(); readers.working.clear()
   readers.scans = 0
   vi.clearAllMocks()
   readers.answer.mockResolvedValue(undefined)
@@ -1549,6 +1552,7 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     const { port } = start({ faults: ['fleet'] })
     readers.known.set('sess-9', 'terminal')
     readers.owners.set('sess-9', { engine: 'codex', pid: 77 })
+    readers.rows.set('sess-9', { cwd: '/work/web', transcriptPath: null })
     await vi.advanceTimersByTimeAsync(120_000)
     expect(readers.scans).toBe(0)
     seen.host.watching!(true)
