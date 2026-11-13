@@ -99,6 +99,7 @@ void main() {
       final created = app.connections['m']!.creations.single;
       expect(created['dsh'], 'autonomous/hachi');
       expect(created['name'], 'Hachi');
+      expect(created['engine'], 'claude');
       expect(created['prompt'], isNull, reason: 'it waits for the person');
       expect(app.swarms.first.id, hachiTabId);
       expect(app.activeSwarmId, hachiTabId);

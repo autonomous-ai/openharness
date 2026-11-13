@@ -48,6 +48,11 @@ void main() {
     expect(made['name'], 'Hachi');
     expect(made['engine'], 'claude');
     expect(made['prompt'], isNull);
+    expect(
+      app.connections['m']!.requests.map((r) => r.type),
+      isNot(anyOf(contains('dsh_list'), contains('dsh_install'))),
+      reason: 'a built-in the daemon puts in place: never asked of the Store',
+    );
     expect(app.swarms.first.id, hachiTabId);
     expect(app.activeSwarmId, hachiTabId);
     expect(app.hachi.home?.agentId, 'hachi-1');
@@ -58,6 +63,23 @@ void main() {
     expect(await app.hachi.openFrom(HachiOpening.shortcut), isNull);
     expect(app.activeSwarmId, hachiTabId);
     expect(app.connections['m']!.creations, hasLength(1));
+  });
+
+  test('switched on a moment ago, before the daemon put it in place: said so, '
+      'and the next open makes it', () async {
+    await turnOn();
+    final daemon = app.connections['m']!..hachiPrepared = false;
+    expect(
+      await app.hachi.openFrom(HachiOpening.shortcut),
+      'Hachi is still being set up. Try again in a moment.',
+    );
+    expect(app.hachi.home, isNull);
+    expect(app.measured.counted.last, 'hachi_open_failed_create_failed');
+
+    daemon.hachiPrepared = true;
+    expect(await app.hachi.openFrom(HachiOpening.shortcut), isNull);
+    expect(app.hachi.home?.agentId, 'hachi-1');
+    expect(daemon.creations, hasLength(2));
   });
 
   test('its tab stays first, open and named; ⌘1 is the first tab after it', () async {

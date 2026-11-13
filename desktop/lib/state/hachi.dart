@@ -16,6 +16,7 @@ const hachiEssential = EssentialHarness(
   id: 'autonomous/hachi',
   name: 'Hachi',
   folderLabel: 'hachi',
+  builtinEngine: 'claude',
 );
 
 /// How the person came to Hachi, as its measures name it.
