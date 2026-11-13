@@ -5,7 +5,7 @@ import { HookPreparationHeld, inspectHookFile, type HookFilePublication, runHook
 import { NativeEvidenceBudget } from './nativeEvidence.js'
 import { isManagedHookCommand } from './notifyHooks.js'
 import { nativeHookHomes, type NativeHookHomes } from './nativeHookHomes.js'
-import { failure, type HookFileRemoval } from './hookRemoval.js'
+import { failure, type HookFileRemoval } from './hookRemovalOutcome.js'
 
 /** The most YAML tokens a settings file may have. Hermes's own config of 134 KB, 2,438 lines, was over the 4,096 this was, so its
  *  hooks never installed and every Hermes agent stayed held (DESKTOP-0TFH0OJ, 2026-11-05). The 1 MiB file limit bounds the parse too. */

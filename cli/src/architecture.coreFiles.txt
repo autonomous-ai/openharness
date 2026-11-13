@@ -196,7 +196,7 @@ engines/kit/folderTrust.ts
 engines/kit/homeAdoption.ts
 engines/kit/homeCatalog.ts
 engines/kit/hookHeld.ts
-engines/kit/hookRemoval.ts
+engines/kit/hookRemovalOutcome.ts
 engines/kit/hookReview.ts
 engines/kit/hookRules.ts
 engines/kit/hookSettings.ts
