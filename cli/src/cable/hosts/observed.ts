@@ -93,6 +93,8 @@ export class ObservedSource implements HostSource {
       case 'turn-start':
         this.setState(a, 'working', now)
         a.unseenDone = false
+        // The last turn's answer is not this one's: cleared, the same answer at this turn's end is a change the dial hears.
+        a.lastAnswer = undefined
         break
       case 'needs-input':
         this.setState(a, 'needs-you', now)
