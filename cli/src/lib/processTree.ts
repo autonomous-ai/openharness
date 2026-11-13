@@ -71,8 +71,13 @@ export async function engineDescendants(
   }
   const tree: TreeProcess[] = []
   const queue = [...children.get(root.pid) ?? []]
+  // Pids are reused, so a table can name the engine's own descendant as its parent: the walk then listed the engine
+  // as its own tree to stop, and the same processes again up to the limit (#4268). The engine is never in its tree.
+  const seen = new Set([root.pid])
   for (let next = 0; next < queue.length && tree.length < TREE_LIMIT; next++) {
     const row = queue[next]!
+    if (seen.has(row.pid)) continue
+    seen.add(row.pid)
     // Hermes' gateway and Codex's shared app server serve every session of their engine from under whichever pane
     // started them: neither they nor what they run are this engine's to stop.
     if (hermesGatewayProcess(row) || codexSharedServerProcess(row)) continue
