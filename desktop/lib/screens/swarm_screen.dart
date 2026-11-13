@@ -8152,7 +8152,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       final number = int.tryParse(id.substring('swarm.select_'.length));
       return number != null &&
           number >= 1 &&
-          number <= app.profileSwarms.length;
+          number <= app.numberedSwarms.length;
     }
     if (id == 'swarm.new' || id == 'super_tab.new') return true;
     // Hachi's tab is closed and named by its switch alone.
