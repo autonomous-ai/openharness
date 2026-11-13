@@ -760,6 +760,13 @@ describe('the dial with no window: this computer\'s agents', () => {
     expect([host.capsOf('h1'), host.hostOf('h1')]).toEqual([undefined, undefined])
   })
 
+  it('describes an agent the fleet never listed from the registry, so its summary and question carry a name', () => {
+    const host = new DaemonCableHost(wiring({ sessions }), fleetOf([]))
+    host.setRegistry(new HostRegistry([host.harness, observed([observedAgent({ id: 'o1', engine: 'codex' })])]))
+    expect(host.describe('o1')).toEqual({ name: 'scratch', engine: 'codex', machine: 'MacbookPro.local' })
+    expect(host.describe('nobody')).toBeUndefined()
+  })
+
   it('no window and no registry: [] as today', async () => {
     const host = new DaemonCableHost(wiring({ sessions }), fleetOf([]))
     expect(await host.listAgentSnapshot()).toStrictEqual({ agents: [], tab: '', total: 2 })
