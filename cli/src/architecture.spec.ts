@@ -100,8 +100,8 @@ const IN_PROCESS_ONLY = 'services/inline.ts'
  */
 const SWARM_DOORS: Readonly<Record<string, readonly string[]>> = {
   // Its side of the core's process, of the services that act on it when they run there, and its own service when that
-  // runs there too (`HARNESSD_SERVICES=none`).
-  'core/main.ts': ['superTabs/inCore.ts', 'superTabs/inServices.ts', 'superTabs/inCoreService.ts'],
+  // runs there too (`HARNESSD_SERVICES=none`, or no master).
+  'core/main.ts': ['superTabs/inCore.ts', 'superTabs/inServices.ts', 'services/superTabs.ts'],
   // Its side of the services that act on it, in their own processes, and its own service's process, which the master
   // starts only while it is on (harnessd/services.ts `servicesOn`).
   'serviceProcess.ts': ['superTabs/inServices.ts', 'services/superTabsProcess.ts'],
@@ -348,9 +348,9 @@ describe('the daemon\'s shape', () => {
     const wrong = importsIn('core').filter(({ from }) => /(^|\/)superTabs\//.test(from) || /(^|\/)lib\/swarm/.test(from))
       .map(({ file, from }) => `${file} imports ${from}`)
     expect(wrong, 'Declare what the core needs of the Swarm in core/api.ts, and hand its code in from superTabs/inCore.ts.').toEqual([])
-    const main = importsFor('core/main.ts', readFileSync(join(SRC, 'core', 'main.ts'), 'utf8')).filter(({ from }) => /(^|\/)superTabs\//.test(from))
+    const main = importsFor('core/main.ts', readFileSync(join(SRC, 'core', 'main.ts'), 'utf8')).filter(({ from }) => /(^|\/)superTabs(\/|\.js$)/.test(from))
     expect(main).toEqual([{ from: '../superTabs/inCore.js', dynamic: true }, { from: '../superTabs/inServices.js', dynamic: true },
-      { from: '../superTabs/inCoreService.js', dynamic: true }])
+      { from: '../services/superTabs.js', dynamic: true }])
     expect(followed('core/main.ts', 'superTabs/inCore.ts', true)).toBe(false)
     expect(followed('core/main.ts', 'superTabs/inCore.ts', false)).toBe(true)
     expect(followed('services/models.ts', 'superTabs/inServices.ts', true)).toBe(true)
@@ -359,8 +359,8 @@ describe('the daemon\'s shape', () => {
   // The audit of 2026-11-12 (docs/design/2026-11-12-core-audit.md): the door re-exported the service's own start, for a
   // core that runs it in its own process, so every core with the Swarm on, the default, loaded the whole service: 118
   // files and 28,739 lines it never ran, edge files among them (the transcript normalizers, the handoff, the Codex
-  // profiles), in the process that must never go down. The service's start now has a door of its own, taken only when
-  // it runs in the core's process, and what the first door hands the core is listed here, file by file.
+  // profiles), in the process that must never go down. A core that runs the service itself now loads it by an import of
+  // its own (core/main.ts), and what the door hands every core is listed here, file by file.
   it('with the Swarm on, the core\'s process loads the Swarm\'s side of it and none of its service', () => {
     const core = closureOf('core/main.ts')
     const door = [...closureOf('superTabs/inCore.ts').keys()].filter((file) => !core.has(file)).sort()
@@ -371,10 +371,26 @@ describe('the daemon\'s shape', () => {
       'superTabs/inCore/launch.ts', 'superTabs/inCore/role.ts', 'superTabs/inCore/terminal.ts', 'superTabs/leadSwitch.ts',
       'superTabs/readContract.ts', 'superTabs/retention.ts', 'superTabs/wire.ts',
     ])
-    // None of it is an edge file but the Swarm's own side, and the service is reached only through its own door.
+    // None of it is an edge file but the Swarm's own side.
     expect(door.filter((file) => !/^superTabs\//.test(file) && EDGE.some((pattern) => pattern.test(file)))).toEqual([])
-    expect(closureOf('superTabs/inCoreService.ts').has('services/superTabs.ts')).toBe(true)
   }, WALK_TIMEOUT_MS)
+
+  // The review of #4241: the first cut of that fix imported the service with an `await` at the line that starts it, in
+  // the middle of the wiring. The wiring ran in one go until then, and its closures count on it ("declared further down:
+  // read when …, never now"): a wait there gives the services already started a turn of the loop before the core is whole.
+  it('once a service is started, the core\'s wiring runs to the hook server without a wait', () => {
+    const source = ts.createSourceFile('main.ts', readFileSync(join(SRC, 'core', 'main.ts'), 'utf8'), ts.ScriptTarget.Latest, true)
+    const run = source.statements.find((statement): statement is ts.FunctionDeclaration => ts.isFunctionDeclaration(statement) && statement.name?.text === 'runForeground')!
+    // A statement that waits itself: an `await` in it that is not inside a function of its own.
+    const waits = (node: ts.Node): boolean => ts.isAwaitExpression(node) || (!ts.isFunctionLike(node) && ts.forEachChild(node, waits) === true)
+    const statements = [...run.body!.statements]
+    const started = statements.findIndex((statement) => /\bserviceHost\.(serve|start)\(/.test(statement.getText(source)))
+    const hooks = statements.findIndex((statement) => statement.getText(source).includes('await startHookServer('))
+    expect(started).toBeGreaterThan(0)
+    expect(hooks).toBeGreaterThan(started)
+    expect(statements.slice(started, hooks).filter(waits).map((statement) => statement.getText(source).split('\n')[0]),
+      'Load what the wiring needs before it starts, beside the doors (`swarmService` in core/main.ts).').toEqual([])
+  })
 
   // The review of #1765: with the Swarm off, every core still loaded its skills through the registry, and with every
   // service in the core's process (`HARNESSD_SERVICES=none`) its retention, observers and grid code, and the agent cleanup

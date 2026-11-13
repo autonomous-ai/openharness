@@ -27,9 +27,9 @@ The core stays small and secure, in the code and at run time: read
    `api.ts` (`SuperTabsCore`, `SuperTabsPort`, `SwarmAgents`, `SwarmLaunch`, `AdoptSwarmSkill`) and handed in by
    `main.ts` from `../superTabs/inCore.ts`; the services that act on it get their side from `../superTabs/inServices.ts`
    (`serviceProcess.ts`, or `main.ts` when they run here). Its own service runs in its own process, and a core that
-   runs it instead takes a third door for it, `../superTabs/inCoreService.ts`: the first door holds no service code,
-   and `src/architecture.spec.ts` lists, file by file, what it loads beyond the core. All are imported dynamically
-   and only while it is on.
+   runs it instead loads it by an import of its own in `main.ts`, beside the doors and before the wiring: the first
+   door holds no service code, and `src/architecture.spec.ts` lists, file by file, what it loads beyond the core.
+   All are imported dynamically and only while it is on.
    Every such dependency is optional, and absent is exactly the daemon without the Swarm. `src/architecture.spec.ts`
    holds every import of its code to those doors and walks each process's imports; `src/leanEntry.spec.ts` checks the
    shipped build, and `e2e/swarmSwitch.e2e.ts` what each process loads.

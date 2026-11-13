@@ -26,9 +26,11 @@ small and secure, in the code and at run time, and everything else is a componen
    lives: `core/`, `lib/`, `engines/`, a component's door. `src/architecture.spec.ts` walks those imports.
 2. **Every other component runs in a process of its own,** from its first pull request (`SERVICE_HOSTS`): a light
    one in the edge host, a risky one alone. A service inside the core's process (`HARNESSD_SERVICES=none`) is for
-   debugging, never where a feature lives.
+   debugging, never where a feature lives. The one exception is Harness OS, which runs the core with no master
+   and every service inside it (`HARNESS_NO_MASTER=1`), until its decision in the audit: that path stays tested.
 3. **The core loads no component's code.** What it needs of one is typed in `src/core/api.ts`. Code a component
-   must run inside the core comes through one door, which `src/architecture.spec.ts` holds to its files.
+   must run inside the core comes through a door of its own, loaded only while the component is on, which
+   `src/architecture.spec.ts` holds to its files.
 4. **The core meets the outside least.** It listens only on this computer, and its one call to another host is
    the sign-in's refresh. Whatever someone other than this computer's owner can shape (a relay or backend frame,
    another account's message, GitHub text, a web page, a device, a third-party harness) is parsed and checked in
@@ -57,6 +59,7 @@ they show as `harnessd`, `harnessd-core` and `harnessd-<process>` (`src/harnessd
 | updater | checks, downloads and stages a new build (`src/services/updaterProcess.ts`) | by the master, for the installed copy only |
 | devices | the dials, the window bridges, the fleet, the voice router, the Wi-Fi device; on Windows the dial's port through `harness-serial.exe` (`cable/windowsSerial.ts`) | on demand: once there is a device; on Windows, starts unconditionally with the core when inline, or is requested once at startup by `core/devicesWake.ts` when out of process and cable support is enabled |
 | orchestrator, sharing, memory, router, cloud (cloud agents) | the experiments | on demand: on a request, or saved state at start |
+| superTabs | the Swarm's service: its host and its GitHub loops (`src/superTabs/`, `src/services/superTabs.ts`) | on demand, and only while the Swarm is on (`HARNESS_SWARM`): on a request, or a Swarm host's saved state at start |
 | agentBrowser | the agent browser: Podman, its setup, one container per agent whose Browser is on (`src/services/agentBrowser.ts`) | on demand: an agent whose Browser is on, a request, or its state file at start |
 
 `HARNESSD_SERVICES` names a subset to run in their own processes, by service or by process.
