@@ -33,7 +33,8 @@ interface Case { name: string; setup?: (target: Target) => void; noHome?: boolea
 
 /** The events each former installer wrote, with their matchers, to build the files a current install leaves. */
 const EVENTS: Record<Engine, Array<{ event: string; matcher?: string }>> = {
-  claude: ['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'Stop', 'StopFailure', 'Notification'].map((event) => ({ event })),
+  claude: [...['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'Stop', 'StopFailure'].map((event) => ({ event })),
+    { event: 'Notification', matcher: 'permission_prompt|elicitation_dialog|elicitation_url_dialog|quota_auto_resume_stale' }],
   codex: [{ event: 'SessionStart', matcher: 'startup|resume|clear|compact' }, { event: 'UserPromptSubmit' }],
 }
 const current = (engine: Engine, cmd: string, timeout = 5) => ({

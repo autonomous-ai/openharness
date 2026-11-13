@@ -17,8 +17,10 @@ export const hooks: HookContract = {
     // refusal; StopFailure = turn ended on an API error, where Stop does NOT fire) — they close a turn even
     // when the JSONL-derived turn_ended is missed. Neither supports a matcher (silently ignored).
     // Notification is how a session outside a pane says it waits for the person, which the hook tells the devices
-    // (hook/notify.mjs); for a session in a pane the hook ignores it.
-    events: [{ event: 'SessionStart' }, { event: 'SessionEnd' }, { event: 'UserPromptSubmit' }, { event: 'Stop' }, { event: 'StopFailure' }, { event: 'Notification' }],
+    // (hook/notify.mjs); for a session in a pane the hook ignores it. Its matcher names the types that wait for the
+    // person (notify.mjs NEEDS_INPUT), so the idle notice after every turn starts no hook.
+    events: [{ event: 'SessionStart' }, { event: 'SessionEnd' }, { event: 'UserPromptSubmit' }, { event: 'Stop' }, { event: 'StopFailure' },
+      { event: 'Notification', matcher: 'permission_prompt|elicitation_dialog|elicitation_url_dialog|quota_auto_resume_stale' }],
     timeout: 5,
     // Agent Messages: a teammate's message reaches a working agent at its next tool call (kit/messagesHook.ts).
     inbox: { event: 'PostToolUse' },
