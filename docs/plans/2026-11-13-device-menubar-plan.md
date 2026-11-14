@@ -339,7 +339,7 @@ there).
 | `--control` | `#F2F2F4` | `#303030` | neutral control fill (`AppDesktop.field`) |
 | `--accent` | `#2F5BEA` | `#2F5BEA` | primary action |
 | `--focus` | `#2F5BEA` | `#8BA9FF` | 1.5 px focus boundary |
-| `--danger` | `#B3261E` | `#C92E26` | error ink |
+| `--danger` | `#B3261E` | `#FF7068` | error ink |
 
 Type: system face; heading 17 semibold, line height 1.3; body 13, 1.45; control 13 medium, 1.25; metadata 12, 1.35.
 Geometry: content inset 24; group gap 16; control gap 8; buttons are capsules, 32 high at least, 6 or more above and
