@@ -172,23 +172,20 @@ async function boot(accounts: Account[], log: (line: string) => void, stops: Arr
 }
 
 /** An isolated daemon signed in as `a` against `backend`, with a client on its account machine. The daemon is
- *  closed by backend.stop(), also when this throws after creating it. `before` runs once its folders exist and before
- *  it starts: a test that changes what the daemon finds on its PATH (shared tabs' `gh`) does it there. `submissionGate` makes
- *  its fake engines keep every prompt they were typed, in `submitted-prompts` of the daemon's root. */
-export async function signIn(backend: RealBackend, a: Account, env: Record<string, string> = {},
-  before?: (daemon: IsolatedDaemon) => void | Promise<void>, options: { submissionGate?: boolean } = {}): Promise<{ daemon: IsolatedDaemon; machineId: string; client: LocalClient }> {
+ *  closed by backend.stop(), also when this throws after creating it. */
+export async function signIn(backend: RealBackend, a: Account,
+  env: Record<string, string> = {}): Promise<{ daemon: IsolatedDaemon; machineId: string; client: LocalClient }> {
   const computerId = randomUUID()
   const r = await backend.api(a, '/api/machines/resolve-computer', 'POST', { computerId, label: a.name })
   if (r.status !== 200) throw new Error(`Sign-in of ${a.name} refused: ${r.status} ${JSON.stringify(r.body)}`)
   const machineId = r.body.data.machine.machineId as string
-  const daemon = await IsolatedDaemon.create({ ...(options.submissionGate ? { submissionGate: true } : {}), env: {
+  const daemon = await IsolatedDaemon.create({ env: {
     ADAPTER_COMPUTER_ID: computerId, BACKEND_WS_URL: backend.wsUrl, WEB_URL: backend.url,
     HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', ...env } })
   owned.get(backend)?.push(daemon)
   writeFileSync(join(daemon.root, 'auth/session.json'), JSON.stringify({ version: 1, accessToken: a.token,
     refreshToken: 'x', autonomousEnv: 'prod', computerId, machineId,
     expiresAt: Date.now() + 3_600_000, updatedAt: Date.now() }), { mode: 0o600 })
-  await before?.(daemon)
   await daemon.start()
   await untilDaemon('connected', async () => (await (await fetch(`http://127.0.0.1:${daemon.port}/api/status`,
     // Without the local credential the status is cut down to what says a daemon is here (hookServer.ts `publicStatus`).

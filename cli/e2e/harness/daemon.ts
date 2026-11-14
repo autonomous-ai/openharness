@@ -336,10 +336,10 @@ export class IsolatedDaemon {
       // Signed out, and nothing reaches beyond the machine.
       BACKEND_WS_URL: 'ws://127.0.0.1:9',
       WEB_URL: 'http://127.0.0.1:9',
-      // Nor grid's release server: removed roots on one Mac kept a 19 MB runtime/grid-0.3.63-darwin-arm64 each, from
-      // swarmV4Journey.e2e.ts, whose Swarm grid sends models a `grid_swarm_sync` at each of its starts, and grid's set-up
-      // (services/models.ts installCli) installs the managed grid. With no manifest to read, installCli goes on to
-      // grid's public installer: that is switched off too.
+      // Nor grid's release server: removed roots on one Mac kept a 19 MB runtime/grid-0.3.63-darwin-arm64 each, since
+      // the Swarm's grid pass (superTabs/swarmGrids.ts) sends models a `grid_swarm_sync` at each of its starts, and
+      // grid's set-up (services/models.ts installCli) installs the managed grid. With no manifest to read, installCli
+      // goes on to grid's public installer: that is switched off too.
       ADAPTER_GRID_RUNTIME_METADATA_URL: 'http://127.0.0.1:9/grid.json',
       DISABLE_GRID_INSTALL: 'true',
       // Claude Code's and Codex's hooks, installed as on a person's computer, into this home and CODEX_HOME
@@ -482,15 +482,6 @@ export class IsolatedDaemon {
     const exited = leader.exitCode !== null || leader.signalCode !== null
     if (!pgid || (exited && alive(pgid))) return
     try { process.kill(-pgid, 'SIGKILL') } catch { /* empty */ }
-  }
-
-  /** A crash of every one of its processes at once, the core and the services with the master: no shutdown path runs in any. */
-  async crash(): Promise<void> {
-    const child = this.child
-    if (!child) return
-    const exited = new Promise<void>((done) => child.once('exit', () => done()))
-    try { process.kill(-child.pid!, 'SIGKILL') } catch { /* gone */ }
-    await exited
   }
 
   /** The way a crash ends it: no shutdown path runs. */
