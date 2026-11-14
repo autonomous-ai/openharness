@@ -4,7 +4,8 @@
 use crate::types::Log;
 use std::sync::Arc;
 
-/// What an OS names an app is outside text: past this it is cut, so the line stays under the 1 KiB the watch reads.
+/// What an OS names an app is outside text: past this it is cut. With only `kept` characters the longest line is 140
+/// bytes, one write a pipe takes whole on every OS (macOS's PIPE_BUF is 512): a slow watch never sees it torn.
 pub const FRONT_MAX: usize = 128;
 
 /// Where the app in front is read. The OS tells it: no source polls.
@@ -33,10 +34,17 @@ pub fn system(
     Arc::new(source)
 }
 
-/// `{"front":"…"}`, one line: the value cut to FRONT_MAX characters, then escaped.
+/// `{"front":"…"}`, one line: the value cut to FRONT_MAX characters. A value with a character that is not `kept` is the
+/// empty value.
 pub fn front_line(value: &str) -> String {
     let cut: String = value.chars().take(FRONT_MAX).collect();
-    serde_json::json!({ "front": cut }).to_string()
+    let value = if value.chars().all(kept) { cut } else { String::new() };
+    serde_json::json!({ "front": value }).to_string()
+}
+
+/// `[A-Za-z0-9._ -]`: every bundle id and exe name the watch's table maps is ASCII, so any other value is no app.
+fn kept(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ' ' | '-')
 }
 
 /// What the watch has been told: a line only for a change, and the last one again for a watch that has just started.
