@@ -56,6 +56,7 @@ code = r'''
 '''
 # Keep real protocol capacities: a larger fake buffer can hide target truncation.
 code += defines('CABLE_READ_TOKEN_MAX','ID_MAX','CABLE_NAME_MAX','SWARM_ID_MAX','SWARMS_MAX','CABLE_MAX_AGENTS','MAX_PROJECTS')
+code += defines('CABLE_MAX_APPS','CABLE_APP_ID_MAX')
 code += defines('NOTICES','QUESTION_MAX','OPTION_MAX','PANE_MEMORY_MAX','UI_FONT','Q_ROWS','DRAFT_ROWS',source=source)
 code += defines('FACE_CX', 'BUSY_FUSE_MS', source=source)
 code += defines('CABLE_CAP_S', 'CABLE_CAP_V', 'CABLE_CAP_F', 'CABLE_CAP_A', 'CABLE_CAPS_ALL')
@@ -64,7 +65,7 @@ if '#define PANE_RESULT_BYTES ' in source:
     code += defines('PANE_RESULT_BYTES', source=source)
 code += face_geometry(source)
 code += source[source.index('typedef enum {'):source.index('static EXT_RAM_BSS_ATTR struct {')]
-code += typedef('cable_swarm_t') + typedef('cable_notif_t')
+code += typedef('cable_swarm_t') + typedef('cable_notif_t') + typedef('cable_app_t')
 code += r'''
 static struct {
     bool ready, connected, loading, voice_open, voice_start_pending, voice_waiting, voice_carry, voice_review, voice_draft_append, voice_review_preview, voice_search;
@@ -79,6 +80,10 @@ static struct {
     uint32_t notice_sequence, voice_retry_until, error_until;
     char hint[40];
     bool machine_view;
+    cable_app_t apps[CABLE_MAX_APPS];
+    int app_count;
+    char app_shown[CABLE_APP_ID_MAX];
+    bool apps_known;
     uint8_t status_phase;
     unsigned bell_unread;
     uint32_t notice_ms;
@@ -231,7 +236,7 @@ code += function('focus_centred') + function('focus_header') + function('focus_c
 for name in ['notice_remove', 'notice_sync_view', 'notice_selection', 'notice_restore_selection', 'notice_add', 'notice_expire', 'on_face', 'notice_read_now', 'ui_notify_summary', 'ui_turn_error', 'ui_notif_seen', 'ui_notif_read', 'ui_notif_replace', 'ui_notif_open', 'ui_question_close', 'ui_answer_receipt']:
     code += function(name)
 code += '#define ui_notify_task_done(a,b,c,d) ui_notify_summary(a,b,c,d,"alert",false,false)\n'
-for name in ['ui_project_set_host_caps', 'ui_fleet_set_view', 'event', 'ui_project_emit', 'ui_project_restore_event', 'ui_project_clear_event', 'ui_project_set_name', 'ui_project_remove', 'ui_project_clear_all', 'ui_project_apply_order']:
+for name in ['ui_project_set_host_caps', 'ui_fleet_set_view', 'ui_apps_replace', 'ui_apps_forget', 'event', 'ui_project_emit', 'ui_project_restore_event', 'ui_project_clear_event', 'ui_project_set_name', 'ui_project_remove', 'ui_project_clear_all', 'ui_project_apply_order']:
     code += function(name)
 code += 'static void dispatch(action_t a);\n'
 visit_actions=source.split('    case A_LATEST:',1)[1].split('    case A_TABS:',1)[0]
@@ -1833,6 +1838,15 @@ int main(int argc, char **argv) {
     ui_project_set_host_caps("a","claude",CABLE_CAP_S); scene_take(); assert(scene_says("Claude"));
     ui_project_set_host_caps("a","",CABLE_CAP_S); scene_take(); assert(scene_says("Terminal"));
     ui_fleet_set_view(false); scene_take(); assert(!scene_says("Terminal"));
+    // ui_apps_replace holds the apps and the shown one; an empty list is still known. ui_apps_forget makes them unknown.
+    { reset(); assert(!s.apps_known && !s.app_count);
+      const cable_app_t rows[2] = {{"ghostty", "Ghostty", 3, 0}, {"vscode", "VS Code", 2, 1}};
+      changes = 0; ui_apps_replace(rows, 2, "vscode");
+      assert(changes && s.apps_known && s.app_count == 2 && !strcmp(s.app_shown, "vscode"));
+      assert(!strcmp(s.apps[0].id, "ghostty") && !strcmp(s.apps[1].name, "VS Code") && s.apps[1].count == 2 && s.apps[1].waiting == 1);
+      ui_apps_replace(rows, 0, ""); assert(s.apps_known && !s.app_count && !s.app_shown[0]);
+      ui_apps_replace(rows, 2, "ghostty"); changes = 0; ui_apps_forget();
+      assert(changes && !s.apps_known && !s.app_count && !s.app_shown[0]); }
     // the resting face of an agent without V shows no voice invitation, on the plain face and the pet's relaxing one
     for (int pet = 0; pet < 2; pet++) {
         reset(); fake_ms = 1000; if (pet) strcpy(s.agents[0].engine, "claude");
