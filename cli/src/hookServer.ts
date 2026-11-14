@@ -17,6 +17,7 @@ import { readStorePool } from './engines/kit/storePool.js'
 import { isInteractiveSource, rowSessionSource, storeSourceQuery } from './engines/kit/storeSource.js'
 import { IdentityReadUnavailable } from './engines/kit/identityScan.js'
 import { createPendingAdmissions, type AdmissionDecision } from './core/engines/pendingAdmission.js'
+import type { ApprovalDecision } from './core/deviceHookCalls.js'
 import { paneReadIdentity } from './core/transcripts/readIdentity.js'
 import { processIdentityKey } from './lib/terminalRuntime.js'
 import { isRecentlyDeleted } from './lib/deletedSessions.js'
@@ -70,6 +71,10 @@ export interface PairOutcome {
 export interface HookServerHandlers {
   /** A paneless agent's hook event (core/observedHook.ts): checked, rate limited and forwarded, never kept. */
   onObserved?: (body: unknown) => 'ok' | 'invalid' | 'dropped'
+  /** A permission prompt the dial may answer, and the mod's held poll for a spoken prompt (core/deviceHookCalls.ts).
+   *  `gone` aborts when the client goes before its answer. */
+  onApproval?: (body: unknown, gone: AbortSignal) => Promise<'invalid' | ApprovalDecision>
+  onInbox?: (body: unknown, gone: AbortSignal) => Promise<'invalid' | 'off' | { text?: string }>
   onAutonomousDeviceRequest?: (method: string, target: string, body?: unknown) => Promise<{ status: number; body: unknown }>
 
   onRegistered: (
@@ -966,6 +971,38 @@ export function startHookServer(
         // A dropped event (rate limited, or the devices not there) is not the hook's error: it never retries.
         if (handlers.onObserved?.(body) === 'invalid') { json(400, { error: 'invalid observed body' }); return }
         json(200, { ok: true })
+        return
+      }
+
+      if (req.method === 'POST' && url === '/api/hook/approval') {
+        if (!hookOk) { json(401, { error: 'UNAUTHORIZED' }); return }
+        // Before the body is read: the person can answer in the terminal at any time, and Claude Code then kills the hook.
+        const gone = new AbortController()
+        res.once('close', () => { if (!res.writableEnded) gone.abort() })
+        let body: unknown
+        // 4 KB: a session id, a tool's name, a 200-byte summary and a path.
+        try { body = JSON.parse(await readBody(req, 4096)) as unknown } catch { json(400, { error: 'bad json' }); return }
+        const decision = handlers.onApproval ? await handlers.onApproval(body, gone.signal) : 'none'
+        if (gone.signal.aborted) return
+        if (decision === 'invalid') { json(400, { error: 'invalid approval body' }); return }
+        json(200, { decision })
+        return
+      }
+
+      if (req.method === 'POST' && url === '/api/hook/inbox') {
+        if (!hookOk) { json(401, { error: 'UNAUTHORIZED' }); return }
+        // Before the body is read: a mod whose Claude Code quit holds no poll the devices should still answer.
+        const gone = new AbortController()
+        res.once('close', () => { if (!res.writableEnded) gone.abort() })
+        let body: unknown
+        // 1 KB: a session id.
+        try { body = JSON.parse(await readBody(req, 1024)) as unknown } catch { json(400, { error: 'bad json' }); return }
+        const answer = handlers.onInbox ? await handlers.onInbox(body, gone.signal) : 'off'
+        if (gone.signal.aborted) return
+        if (answer === 'invalid') { json(400, { error: 'invalid inbox body' }); return }
+        // No device is not an empty hold: the mod asks again in 60 s, not at once.
+        if (answer === 'off') { json(503, { error: 'NO_DEVICE' }); return }
+        json(200, answer)
         return
       }
 
