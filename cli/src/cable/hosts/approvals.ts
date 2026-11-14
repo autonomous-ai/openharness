@@ -9,6 +9,8 @@ const EXPIRES_MS = 300_000
 const MAX_HELD = 16
 /** The firmware's `prompt[256]`, less its terminating zero. */
 const MAX_Q_BYTES = 255
+/** The gone ids kept for a request still to come; past this many the oldest goes. */
+const MAX_EARLY_GONE = 16
 
 /** The dial's card. What it cannot draw becomes `?` before the cut, so the command's line always keeps its place. */
 export function approvalQuestion(tool: string, summary: string): ReviewQuestion {
@@ -56,17 +58,26 @@ export class Approvals {
   private readonly held = new Map<string, Held>()
   /** Requests still checking their session: `gone` or `closeAll` takes one out, and it then shows no card. */
   private readonly checking = new Set<string>()
+  /** Ids `gone` found nowhere, oldest first. Its notice can come before its own request: the devices process handles a
+   *  notice at once and a request a microtask later (services/process.ts), and the socket hands it several in one tick. */
+  private readonly early = new Set<string>()
 
   constructor(private readonly deps: ApprovalsDeps) {}
 
   async request(request: ApprovalRequest): Promise<ApprovalDecision> {
     const arrived = this.deps.now()
-    if (!this.deps.canShow()) return 'none'
+    // The terminal answered before the request reached here.
+    if (this.early.delete(request.id) || !this.deps.canShow()) return 'none'
     this.checking.add(request.id)
     // A check that fails cannot rule out the pane's own answer: the terminal's prompt decides.
     const owned = await this.deps.owned(request.sessionId).catch(() => true)
     // The terminal may have answered, the dial gone or everything closed while the session was checked.
     if (!this.checking.delete(request.id) || owned || !this.deps.canShow()) return 'none'
+    // A check that took the whole wait: the core has stopped waiting, and a card now would be answered for nobody.
+    if (this.deps.now() - arrived >= EXPIRES_MS) {
+      this.deps.count('expired', this.deps.now() - arrived)
+      return 'none'
+    }
     // A command the dial cannot show whole: Allow there would approve what it never showed. The agent waits on its
     // terminal, and nothing is held.
     if (request.terminalOnly) {
@@ -90,9 +101,13 @@ export class Approvals {
 
   /** The terminal answered first: Claude Code killed the hook. */
   gone(id: string): void {
-    this.checking.delete(id)
+    const checked = this.checking.delete(id)
     const held = this.held.get(id)
     if (held) this.end(held, 'none', 'terminal')
+    else if (!checked) {
+      this.early.add(id)
+      if (this.early.size > MAX_EARLY_GONE) this.early.delete(this.early.values().next().value!)
+    }
   }
 
   answer(agentId: string, requestId: string, choice: string | undefined): AnswerReceipt {
