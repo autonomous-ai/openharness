@@ -31,11 +31,12 @@ impl StateFile for JsonStateFile {
             text => text.ok(),
         };
         let saved = text.and_then(|text| serde_json::from_str::<Saved>(&text).ok());
-        // A file from a newer app means what this one cannot know: start over rather than guess.
+        // A file from a newer app means what this one cannot know: start over rather than guess. Only a missing file is
+        // a first run, though: the CLI counts as seen, so one the person removed is not installed again.
         saved.filter(|saved| saved.version == 1).unwrap_or_else(|| {
             // No reason in the line: a parse error quotes the file, and the file is the person's.
             self.log.line("state: unreadable, starting from defaults");
-            Saved::default()
+            Saved { cli_seen: true, ..Saved::default() }
         })
     }
 
