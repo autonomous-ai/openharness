@@ -1314,6 +1314,39 @@ Off (Settings ▸ Experimental ▸ Hachi), none of them is drawn and ⇧⌘H is 
 | Goal done | the agent banner, sound and system notice | Title `Hachi: flaky login test is done`, then `Finished`. One per goal, none for the pane in view, at most one in two minutes, under Settings ▸ Notifications' three switches. |
 | Off | the pane's one-line snackbar | `Hachi is off. Its 2 harnesses keep running.` (`Its harness keeps running.`, or `Hachi is off.` alone), once, with nothing to click. |
 
+## Harness Device
+
+Harness Device is the menu-bar app for the dial (`device-app/`). It sets up
+Harness, keeps it running and shows the dial's state; it offers sign-in and
+Claude Code once.
+
+Its menu is the native menu. Its window has three screens, Install, Sign in and
+Claude Code, at 420 × 320, in plain HTML and CSS (`device-app/ui/src/styles.css`)
+with this document's tokens and type:
+
+| CSS token | Role here |
+| --- | --- |
+| `--surface` | Floating surface (`AppMenu.fill`) |
+| `--text` | Primary text |
+| `--muted` | Metadata |
+| `--rim` | Hairline rim |
+| `--control` | Neutral control fill (`AppDesktop.field`) |
+| `--accent` | Primary action |
+| `--focus` | 1.5-point focus boundary |
+| `--danger` | Error ink |
+
+- Type: dialog heading 17 semibold, 1.3; body 13, 1.45; control 13 medium,
+  1.25; metadata 12, 1.35; monospace for the install's last lines.
+- Geometry: dialog content inset 24; group / control gap 16 / 8; buttons are
+  capsules, 32 high at least. The spinner stands still under Reduce Motion.
+- The menu-bar icon is Lucide `circle-dot`, a template image
+  (`device-app/src-tauri/icons/tray.png`): black on a light bar, white on a dark one.
+
+The [gallery](../../device-app/ui/gallery.html) shows every screen in every
+state, light and dark, and the menu-bar icon on both bars. Build it with
+`npm run gallery` in `device-app/ui`, then open the file. A change to a screen
+changes the gallery and this section in the same pull request.
+
 ## Interaction and review
 
 Every clickable element has a hand cursor, every editor a text cursor.

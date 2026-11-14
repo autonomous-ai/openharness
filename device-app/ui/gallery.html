@@ -1,0 +1,70 @@
+<!doctype html>
+<!-- Every Harness Device screen in every state, both themes. Build it with `npm run gallery`, then open this file. -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Harness Device gallery</title>
+    <link rel="stylesheet" href="src/styles.css" />
+    <style>
+      html,
+      body,
+      #gallery {
+        height: auto;
+      }
+
+      .theme {
+        padding: 24px;
+        background: color-mix(in srgb, var(--surface), var(--text) 5%);
+        color: var(--text);
+        font: 12px/1.35 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      }
+
+      .bar {
+        display: flex;
+        justify-content: flex-end;
+        padding: 3px 12px;
+        margin-bottom: 24px;
+        background: var(--control);
+        border-radius: 6px;
+      }
+
+      .tray {
+        width: 22px;
+        height: 22px;
+      }
+
+      /* A template image: macOS draws it white on a dark menu bar. */
+      [data-theme='dark'] .tray {
+        filter: invert(1);
+      }
+
+      .grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 24px;
+      }
+
+      figure {
+        margin: 0;
+      }
+
+      .frame {
+        overflow: hidden;
+        border-radius: 10px;
+        box-shadow:
+          0 0 0 1px var(--rim),
+          0 8px 24px rgba(0, 0, 0, 0.12);
+      }
+
+      figcaption {
+        margin-top: 8px;
+        color: var(--muted);
+      }
+    </style>
+    <script src="dist-gallery/gallery.js" defer></script>
+  </head>
+  <body>
+    <div id="gallery"></div>
+  </body>
+</html>
