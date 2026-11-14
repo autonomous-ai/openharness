@@ -794,6 +794,18 @@ mod tests {
     }
 
     #[test]
+    fn only_a_watch_the_app_stopped_ends_for_good() {
+        let mut app = found();
+        app.handle(Event::WatchExit(Some(0)));
+        assert_eq!(app.handle(tick(B + 5)), [Effect::SpawnWatch]);
+
+        let mut app = found();
+        app.handle(Event::Menu(MenuAction::Quit));
+        app.handle(Event::WatchExit(Some(0)));
+        assert!(!has(&app.handle(tick(B + 5)), &Effect::SpawnWatch));
+    }
+
+    #[test]
     fn a_cli_that_comes_back_is_found_on_a_tick() {
         let mut app = removed();
         assert_eq!(app.handle(tick(B + 5)), [Effect::FindCli]);

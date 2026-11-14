@@ -324,6 +324,14 @@ mod tests {
     }
 
     #[test]
+    fn an_exit_0_the_app_did_not_ask_for_is_a_down() {
+        let mut keep = KeepAlive::new();
+        keep.watch_exit(Some(0), B);
+        assert_eq!(keep.daemon(), Daemon::Starting);
+        assert_eq!(keep.tick(B + 5, false), Some(Keep::SpawnWatch));
+    }
+
+    #[test]
     fn a_start_after_an_install_is_not_started_twice() {
         let mut keep = KeepAlive::new();
         keep.start_begun(B + 30);
