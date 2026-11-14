@@ -230,6 +230,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const tellCards = (): void => {
     const on = cardDevices > 0
     void askCards({ action: 'cardsWanted', on, include: on ? cardInclude : [], ...(on && cardFocus ? { focus: cardFocus } : {}) })
+      // Refused (no Swarm on this computer, or the core not reached): no card is coming, and the machine list waits for none.
+      .then((answer) => { if (on && typeof answer.error === 'string') cableHost.swarmCardsUnavailable() })
   }
   deps.onCoreConnected?.(() => { if (cardDevices > 0) tellCards() })
   // The Swarm's members here waiting on a person, as alerts on the dial (cable/swarmWaits.ts): raised through the same

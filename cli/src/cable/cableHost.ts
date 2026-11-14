@@ -584,6 +584,14 @@ export class DaemonCableHost implements CableHost {
     this.cards = items
   }
 
+  /** The cards could not be asked for (no Swarm on this computer, or the core not reached): none is coming, so the machine
+   *  list waits for none. */
+  private cardsUnavailable = false
+
+  swarmCardsUnavailable(): void {
+    this.cardsUnavailable = true
+  }
+
   swarmCards(): SwarmCard[] | null {
     return this.cards
   }
@@ -697,9 +705,9 @@ export class DaemonCableHost implements CableHost {
     // Dropped after the registry's dedupe, which needs it to tell its Claude Code session from an agent outside Harness.
     const buddies = new Set((this.cards ?? []).flatMap((card) => card.leads.map((l) => l.buddy?.local).filter((id) => id !== undefined)))
     // Before the cards a dial asked for, a Buddy cannot be told from any other Harness agent: theirs wait for them. Signed
-    // out, no card comes and no Swarm has a Buddy here.
+    // out or with the Swarm service down, no card comes and no Swarm has a Buddy here.
     const waiting = this.cards === null && this.cardsAskedAt !== null && performance.now() - this.cardsAskedAt < CARDS_WAIT_MS
-      && this.wiring.signedIn?.() !== false
+      && this.wiring.signedIn?.() !== false && !this.cardsUnavailable
     // Read once: each read merges every source's whole list.
     const entries = registry.entries()
     const sourceOf = new Map(entries.map((e) => [e.agent, e.source]))
