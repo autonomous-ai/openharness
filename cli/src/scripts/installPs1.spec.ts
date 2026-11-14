@@ -89,7 +89,9 @@ describe('install.ps1, as written', () => {
   // allows its unsigned build (HARNESS_ALLOW_UNSIGNED=1), and PR CI runs none of them, so only this holds
   // Install-HarnessPty to the check: on the unpacked download, and on a version folder already there.
   it('checks the terminal host\'s signatures before it moves the host into place or points current-pty at it', () => {
-    const pty = source.match(/^function Install-HarnessPty[\s\S]*?^}\r?$/m)?.[0] ?? ''
+    // Its code lines only: a call commented out is no check.
+    const pty = (source.match(/^function Install-HarnessPty[\s\S]*?^}\r?$/m)?.[0] ?? '')
+      .split(/\r?\n/).filter((line) => !line.trimStart().startsWith('#')).join('\n')
     const at = (text: string) => { expect(pty).toContain(text); return pty.indexOf(text) }
     expect(at('Assert-HarnessPtySigned $unpacked')).toBeLessThan(at('Move-Item -LiteralPath $unpacked -Destination $target'))
     expect(at('Assert-HarnessPtySigned $target')).toBeLessThan(at('Write-HarnessPointer -Path $pointer -Value $version'))
