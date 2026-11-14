@@ -7,7 +7,7 @@
  * held it, about 7% of a core around the clock.
  */
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
-import { existsSync, readdirSync, rmSync } from 'node:fs'
+import { chmodSync, existsSync, readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { ownProcessGroup } from '../src/lib/windows/noWindow.js'
@@ -16,7 +16,7 @@ import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { hungRateLimitRead, writeHungCodex } from './harness/hungCodex.js'
 
-interface Started { root: string; master: number; core: number; socket: string }
+interface Started { root: string; master: number; core: number; socket: string; escaped: number[]; readOnly: string }
 
 /** The master [pid] and the service processes it runs (`harnessd-<process>`): the short-lived probes they start
  *  (`lsof`, `ps`) are left out, as their pids can go to strangers while the test waits. */
@@ -40,6 +40,7 @@ describe('a daemon under test', () => {
     for (const pid of watched) if (alive(pid)) { try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } }
     if (started) {
       try { execFileSync('tmux', ['-S', started.socket, 'kill-server'], { stdio: 'ignore', timeout: 5_000 }) } catch { /* gone */ }
+      try { chmodSync(started.readOnly, 0o755) } catch { /* gone */ }
       rmSync(started.root, { recursive: true, force: true })
     }
     worker = undefined
@@ -125,7 +126,8 @@ describe('a daemon under test', () => {
     started = await until('the worker\'s daemon', () => out.includes('\n') ? JSON.parse(out.split('\n')[0]) as Started : null, 120_000, 100)
     const tmux = tmuxServer(started.socket)
     expect(tmux, 'the daemon\'s tmux server').not.toBeNull()
-    watched = [...new Set([...daemonProcesses(started.master), started.core, tmux!])]
+    expect(started.escaped, 'the hung read\'s Codex and its child').toHaveLength(2)
+    watched = [...new Set([...daemonProcesses(started.master), started.core, tmux!, ...started.escaped])]
     expect(watched.length, 'master, core, edge and tmux at the least').toBeGreaterThanOrEqual(4)
     end(child)
     await until('every process of the daemon to be gone', () => watched.every((pid) => !alive(pid)) || null, 40_000, 100)
