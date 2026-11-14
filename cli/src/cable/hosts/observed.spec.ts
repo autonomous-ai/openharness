@@ -608,28 +608,23 @@ describe('ObservedSource actions', () => {
     expect(actions.orcaSend).not.toHaveBeenCalled()
   })
 
-  // Claude Code queues what is typed into its running TUI (engines/claude/submissionPolicy.ts typesWhileBusy), and its
-  // hooks say when a permission prompt opens (Notification, the plugin's asked), so a working turn reads as one with none.
-  it('to Orca while Claude Code works, as typed into its running turn', async () => {
+  // A working turn may show a permission prompt the daemon has not heard of yet (Codex has no hook for its approval, which
+  // takes `y` or Enter; Claude Code's comes a few hundred ms late): the words and their Enter would answer it.
+  it.each(['claude', 'codex', 'grok'] as const)('with no mod, %s is typed into only at its prompt: busy while it works, waiting while it asks', async (engine) => {
     const { actions } = fakeActions()
     const { src, ev } = setup({ actions })
-    src.ingest(ev('turn-start', withHandle))
-    expect(await src.send(src.list()[0], 'next step')).toEqual({ ok: true })
-    expect(actions.orcaSend).toHaveBeenCalledWith(HANDLE, 'next step')
-  })
-
-  // Codex's hooks never say an approval is open, and its overlay takes `y` or Enter as an approval: a working turn may be
-  // showing one, so nothing is typed into it. Idle, it takes the words.
-  it.each(['codex', 'grok'] as const)('never typed into Orca while %s works: its prompts are never heard of', async (engine) => {
-    const { actions } = fakeActions()
-    const { src, ev } = setup({ actions })
+    const after = async (event: ObservedHookEvent['event'], text: string) => {
+      src.ingest(ev(event, { engine, ...withHandle }))
+      return src.send(src.list()[0], text)
+    }
+    expect(await after('session-start', 'one')).toEqual({ ok: true })
+    expect(await after('turn-start', 'yes run it')).toEqual({ ok: false, reason: 'proj is busy. Say it when it is done.' })
+    expect(await after('needs-input', '1')).toEqual({ ok: false, reason: 'proj is waiting for your answer in Orca.' })
+    expect(await after('turn-stop', 'two')).toEqual({ ok: true })
     src.ingest(ev('turn-start', { engine, ...withHandle }))
-    expect(await src.send(src.list()[0], 'yes run it')).toEqual({ ok: false, reason: 'proj is busy. Say it when it is done.' })
-    expect(actions.orcaSend).not.toHaveBeenCalled()
-    expect(actions.count.mock.calls.map(([what]) => what)).toEqual(['busy'])
-    src.ingest(ev('turn-stop', { engine, ...withHandle }))
-    expect(await src.send(src.list()[0], 'next step')).toEqual({ ok: true })
-    expect(actions.orcaSend).toHaveBeenCalledWith(HANDLE, 'next step')
+    expect(await after('turn-error', 'three')).toEqual({ ok: true })
+    expect(actions.orcaSend.mock.calls).toEqual([[HANDLE, 'one'], [HANDLE, 'two'], [HANDLE, 'three']])
+    expect(actions.count.mock.calls.map(([what]) => what)).toEqual(['orca', 'busy', 'waiting', 'orca', 'orca'])
   })
 
   // The dial never answers a prompt: typed into a terminal that shows one, the words and their Enter would.
@@ -674,22 +669,25 @@ describe('ObservedSource actions', () => {
     expect(actions.orcaSend).toHaveBeenCalledWith(HANDLE, 'next step')
   })
 
-  it('a turn that begins while the mod is waited for still takes the words in Orca; a prompt that opens keeps them out', async () => {
-    for (const [meanwhile, sent] of [
-      ['turn-start', { ok: true }],
-      ['needs-input', { ok: false, reason: 'proj is waiting for your answer in Orca.' }],
+  it('words the mod missed are never typed into a turn or a prompt, though it began while the mod was waited for', async () => {
+    const busy = { ok: false, reason: 'proj is busy. Say it when it is done.' }
+    const waiting = { ok: false, reason: 'proj is waiting for your answer in Orca.' }
+    for (const [before, meanwhile, sent] of [
+      ['turn-start', [], busy],
+      ['turn-stop', ['turn-start'], busy],
+      ['turn-stop', ['turn-start', 'needs-input'], waiting],
     ] as const) {
       let missed!: (delivery: Delivery) => void
       const { actions, ready } = fakeActions({ toMod: vi.fn(() => new Promise<Delivery>((resolve) => { missed = resolve })) })
       const { src, ev } = setup({ actions })
       ready.add('s1')
-      src.ingest(ev('turn-start', withHandle))
+      src.ingest(ev(before, withHandle))
       const words = src.send(src.list()[0], 'run the tests')
       // The mod's next poll does not come, and meanwhile the person goes on in the terminal.
-      src.ingest(ev(meanwhile, withHandle))
+      for (const event of meanwhile) src.ingest(ev(event, withHandle))
       missed('missed')
       expect(await words).toEqual(sent)
-      expect(actions.orcaSend).toHaveBeenCalledTimes(sent.ok ? 1 : 0)
+      expect(actions.orcaSend).not.toHaveBeenCalled()
     }
   })
 
@@ -799,11 +797,12 @@ describe('ObservedSource actions', () => {
     expect(actions.open).toHaveBeenCalledTimes(2)
   })
 
-  it('counts mod, orca, waiting, too-long and no-answer', async () => {
+  it('counts mod, orca, busy, waiting, too-long and no-answer', async () => {
     const { actions, ready } = fakeActions()
     const { src, ev } = setup({ actions })
     src.ingest(ev('turn-start', { sessionId: 'mod' }))
-    src.ingest(ev('turn-start', { sessionId: 'orca', ...withHandle }))
+    src.ingest(ev('session-start', { sessionId: 'orca', ...withHandle }))
+    src.ingest(ev('turn-start', { sessionId: 'working', ...withHandle }))
     src.ingest(ev('session-start', { sessionId: 'none' }))
     src.ingest(ev('turn-start', { sessionId: 'asking', ...withHandle }))
     src.ingest(ev('needs-input', { sessionId: 'asking', ...withHandle }))
@@ -811,10 +810,11 @@ describe('ObservedSource actions', () => {
     const agent = (sessionId: string) => src.list().find((a) => a.sessionId === sessionId)!
     await src.send(agent('mod'), 'x')
     await src.send(agent('orca'), 'x')
+    await src.send(agent('working'), 'x')
     await src.send(agent('asking'), 'x')
     await src.send(agent('none'), 'x'.repeat(2001))
     await src.send(agent('none'), 'x')
-    expect(actions.count.mock.calls.map(([what]) => what)).toEqual(['mod', 'orca', 'waiting', 'too-long', 'no-answer'])
+    expect(actions.count.mock.calls.map(([what]) => what)).toEqual(['mod', 'orca', 'busy', 'waiting', 'too-long', 'no-answer'])
   })
 })
 
