@@ -154,12 +154,27 @@ describe('scannedApps on macOS', () => {
     expect(d.bundleId.mock.calls).toEqual(pids.slice(0, 16).map((_, i) => [`/Applications/App ${i}.app`]))
   })
 
-  it('a bundle id that could not be read names nothing, and the walk goes on', async () => {
+  it('a bundle id that could not be read ends the walk with no answer: an outer app would be a guess', async () => {
     const d = deps([
-      [9500, 9501, 'claude'], [9501, 9502, '/Applications/A.app/Contents/MacOS/a'],
-      [9502, 9503, '/Applications/B.app/Contents/MacOS/b'], [9503, 1, GHOSTTY],
+      [9500, 9501, 'claude'], [9501, 9503, '/Applications/A.app/Contents/MacOS/a'],
+      [9600, 9601, 'claude'], [9601, 9503, '/Applications/B.app/Contents/MacOS/b'], [9503, 1, GHOSTTY],
     ], { '/Applications/A.app': undefined, '/Applications/B.app': new Error('unreadable'), '/Applications/Ghostty.app': 'com.mitchellh.ghostty' })
-    expect(await scannedApps([9500], d)).toEqual(new Map([[9500, 'ghostty']]))
+    expect(await scannedApps([9500, 9600], d)).toEqual(new Map())
+  })
+
+  it('a bundle past the 16 a pass ends its walk with no answer, though an outer one was read', async () => {
+    // Fifteen sessions in apps of their own and one in Ghostty fill the pass; kitty, under Ghostty, is the 17th.
+    const pids = Array.from({ length: 15 }, (_, i) => 9700 + i)
+    const d = deps([
+      ...pids.flatMap((pid, i) => [[pid, pid + 100, 'claude'], [pid + 100, 1, `/Applications/App ${i}.app/Contents/MacOS/app`]] as Array<[number, number, string]>),
+      [9900, 9999, 'claude'],
+      [9950, 9951, 'claude'], [9951, 9999, '/Applications/kitty.app/Contents/MacOS/kitty'], [9999, 1, GHOSTTY],
+    ], {
+      ...Object.fromEntries(pids.map((_, i) => [`/Applications/App ${i}.app`, 'com.example.app'])),
+      '/Applications/kitty.app': 'net.kovidgoyal.kitty', '/Applications/Ghostty.app': 'com.mitchellh.ghostty',
+    })
+    expect(await scannedApps([...pids, 9900, 9950], d)).toEqual(new Map([[9900, 'ghostty']]))
+    expect(d.bundleId).not.toHaveBeenCalledWith('/Applications/kitty.app')
   })
 
   it('a table that could not be read names nothing', async () => {
