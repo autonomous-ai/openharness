@@ -412,8 +412,10 @@ describe('execFileTied', () => {
   it('maxBuffer is for stdout and for stderr each, and what a call read is decoded once', async () => {
     const both = await run(`process.stdout.write('x'.repeat(${1.5 * MiB})); process.stderr.write('y'.repeat(${1.5 * MiB}))`, { maxBuffer: 2 * MiB })
     expect([both.stdout.length, both.stderr.length]).toEqual([1.5 * MiB, 1.5 * MiB])
-    const text = `x${'é'.repeat(200_000)}` // a character of two bytes falls across two reads
-    expect((await run(`process.stdout.write(${JSON.stringify(text)})`)).stdout).toBe(text)
+    // A character of two bytes falls across two reads. The child makes the text: an argument of it would pass the
+    // 128 KiB Linux allows one argument (E2BIG).
+    const chars = 200_000
+    expect((await run(`process.stdout.write('x' + 'é'.repeat(${chars}))`)).stdout).toBe(`x${'é'.repeat(chars)}`)
   })
 
   // As execFile rejects, never the shell's exit 127: a missing command must not read as one that ran and failed.
