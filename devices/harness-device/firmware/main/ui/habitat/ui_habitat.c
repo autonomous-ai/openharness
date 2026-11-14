@@ -3495,6 +3495,9 @@ void ui_apps_replace(const cable_app_t *rows, int count, const char *shown)
     if (s.app_count) memcpy(s.apps, rows, (size_t)s.app_count * sizeof *rows);
     COPY(s.app_shown, shown);
     s.apps_known = true;
+    // The host answers a pick with `apps` showing that app; one showing another means it ignored the pick, which must
+    // not land the face later, when that app is shown for another reason.
+    if (strcmp(s.app_landing, s.app_shown)) s.app_landing[0] = 0;
     if (s.view == APPS) {
         int i = app_index(on);
         if (!s.app_count) view(HOME);
