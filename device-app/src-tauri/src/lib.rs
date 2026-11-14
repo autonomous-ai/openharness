@@ -6,6 +6,8 @@ pub mod claude;
 pub mod cli;
 pub mod desktop;
 pub mod front;
+#[cfg(target_os = "macos")]
+pub mod front_macos;
 pub mod install;
 pub mod keepalive;
 pub mod log;
