@@ -620,6 +620,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     return timer
   }
   const timers = observed ? [every(OBSERVED_TICK_MS, () => observed.tick()), every(TURN_CHECK_MS, () => observed.checkWorking())] : []
+  /** Each observed agent mid-turn, told again: the dial forgets a turn it hears nothing of for 25 s, and one that
+   *  just came, or whose window just closed, has heard nothing of it yet. */
+  const remind = (): void => { for (const agent of observed?.list() ?? []) if (busy(agent)) tell(started(agent)) }
   /** The scan and the reminders, for an attached dial alone. */
   let attached: ReturnType<typeof setInterval>[] = []
   const dialAttached = (on: boolean): void => {
@@ -628,10 +631,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (!on || !observed) return
     // Agents already running when the dial came are listed now, idle until their next hook event.
     part.call('observed', () => observed.scanOpen())
+    part.call('dial', remind)
     attached = [
       every(OPEN_SCAN_MS, () => observed.scanOpen()),
       // A person can take minutes to come to an agent that waits on them.
-      every(REMIND_MS, () => { for (const agent of observed.list()) if (busy(agent)) tell(started(agent)) }),
+      every(REMIND_MS, remind),
     ]
   }
 
@@ -707,6 +711,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     },
     // Null is the window gone: an empty desk with a window behind it is an empty tab, with none a shut app.
     swarms: (swarms) => part.call('dial', () => {
+      const closed = windowOpen && swarms === null
       windowOpen = swarms !== null
       cableHost.setSwarms(swarms)
       // The Swarms the window has tabs for are read first; said again to the core only when they change.
@@ -720,6 +725,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       void cable.syncAgents()
       // The Swarm cards link to their desk tab and follow its open project.
       void cable.syncSwarmCards()
+      if (closed) remind()
     }),
     // Held rather than acted on: the dial is handed it when it attaches, the one moment its drawer is known
     // to be empty.

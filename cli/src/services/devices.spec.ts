@@ -1671,15 +1671,17 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     await vi.advanceTimersByTimeAsync(40_000)
     expect(calls('turnStarted')).toHaveLength(3)
     // The dial forgets a turn it hears nothing of for 25 s (firmware ui_prune_stale_busy), and a person can take minutes.
+    // Told at once as it attaches, then every 20 s.
     seen.host.watching!(true)
-    await vi.advanceTimersByTimeAsync(20_000)
     expect(calls('turnStarted').slice(3)).toEqual([[ID, 'Waiting for you · Orca', undefined], [other, '', undefined]])
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(calls('turnStarted').slice(5)).toEqual([[ID, 'Waiting for you · Orca', undefined], [other, '', undefined]])
     port.observed(hook('turn-stop', { sessionId: 'sess-2' }))
     await vi.advanceTimersByTimeAsync(20_000)
-    expect(calls('turnStarted').slice(5)).toEqual([[ID, 'Waiting for you · Orca', undefined]])
+    expect(calls('turnStarted').slice(7)).toEqual([[ID, 'Waiting for you · Orca', undefined]])
     seen.host.watching!(false)
     await vi.advanceTimersByTimeAsync(60_000)
-    expect(calls('turnStarted')).toHaveLength(6)
+    expect(calls('turnStarted')).toHaveLength(8)
   })
 
   it('a dial attaching while an observed agent waits hears turn.started + Waiting for you · Orca before any 20 s tick', async () => {
