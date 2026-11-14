@@ -120,9 +120,9 @@ Claude Code or Codex in an Orca terminal (hint ORCA_TERMINAL_HANDLE from the wav
   `curl`).
 - **Only the tools whose card shows what they act on** (Diego, 2026-11-14). The dial may approve Bash (by the rules
   above), Edit, Write and NotebookEdit (the file path), Read (the file path) and WebFetch (the URL's host); a path or host
-  over 200 bytes or with any character outside printable ASCII is `terminalOnly` too. An MCP tool (`mcp__…`) and every
-  other tool are always `terminalOnly`: their card could show only a name, while Allow would approve arguments it never
-  showed.
+  over 200 bytes, with any character outside printable ASCII, or opening or ending with a space, and a host in other
+  letters (punycode, `xn--…`), are `terminalOnly` too. An MCP tool (`mcp__…`) and every other tool are always
+  `terminalOnly`: their card could show only a name, while Allow would approve arguments it never showed.
 - Posts `{ sessionId, tool, summary, cwd }` to `/api/hook/approval` with the CLI's own client for the daemon's local
   socket (the TypeScript transport under `cli/src/lib/` the other CLI commands use, not `notify.mjs`, which is a
   standalone script), and waits up to 5 minutes.
