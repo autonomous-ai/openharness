@@ -332,7 +332,7 @@ describe('the devices\' own listener (services/devicesListener.ts)', () => {
     expect(calls('stop')).toHaveLength(1)
   })
 
-  it('stopping while the listener is still opening closes it once it has opened', async () => {
+  it('stopping while the listener is still opening closes it once it has opened, and the cable never starts', async () => {
     let opened!: (listener: DevicesListener) => void
     const close = vi.fn(async () => {})
     const { port } = start({ listen: () => new Promise((resolve) => { opened = resolve }) })
@@ -344,6 +344,30 @@ describe('the devices\' own listener (services/devicesListener.ts)', () => {
     await stopping
     expect(close).toHaveBeenCalledTimes(1)
     expect(calls('stop')).toHaveLength(1)
+    expect(calls('start')).toEqual([])
+  })
+
+  it('the cable starts after the listener opened', async () => {
+    let opened!: (listener: DevicesListener) => void
+    start({ listen: () => new Promise((resolve) => { opened = resolve }) })
+    await new Promise((resolve) => setImmediate(resolve))
+    // A dial attached means a listener open: the watch tells it the app in front as the dial attaches.
+    expect(calls('start')).toEqual([])
+    opened({ close: async () => {} })
+    await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
+  })
+
+  it('a listener that has not opened in a second does not keep the cable off, and opening later starts it no second time', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    let opened!: (listener: DevicesListener) => void
+    start({ listen: () => new Promise((resolve) => { opened = resolve }) })
+    await vi.advanceTimersByTimeAsync(999)
+    expect(calls('start')).toEqual([])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(calls('start')).toHaveLength(1)
+    opened({ close: async () => {} })
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(calls('start')).toHaveLength(1)
   })
 
   it('a listener that cannot open is one log line, and the devices run on', async () => {
