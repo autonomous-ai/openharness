@@ -1,4 +1,3 @@
-import type { SwarmSkill } from './savedSkill.js'
 /**
  * Open a tmux pane for a new agent and claim it in the registry, retrying the claim up to
  * `maxAttempts` times.
@@ -43,7 +42,6 @@ export interface CreateAgentPaneDeps<Ref extends TerminalRuntimeRef = TerminalRu
     codexHome?: string | null
     claudeHome?: string | null
     dsh?: string | null
-    swarmSkill?: SwarmSkill
     dshRuntime?: string | null
     agent?: string | null
     bypassPermission?: boolean
@@ -96,7 +94,6 @@ export interface CreateAgentPaneDeps<Ref extends TerminalRuntimeRef = TerminalRu
   claudeHome?: string | null
   /** The domain-specific harness this agent is created as, if any. */
   dsh?: string | null
-  swarmSkill?: SwarmSkill
   dshRuntime?: string | null
   /** The engine's named agent the pane opens as (`agent_create`'s `agent`); kept on the row so a
    *  relaunch opens as it again. Already in `argv` — this is the record, not the launch. */
@@ -169,7 +166,6 @@ export async function createAndRegisterPane<Ref extends TerminalRuntimeRef = Ter
       claudeHome: deps.claudeHome,
       dsh: deps.dsh,
       dshRuntime: deps.dshRuntime,
-      ...(deps.swarmSkill ? { swarmSkill: deps.swarmSkill } : {}),
       agent: deps.agent,
       bypassPermission: deps.bypassPermission,
       permissionMode: deps.permissionMode,

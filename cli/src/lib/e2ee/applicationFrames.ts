@@ -43,10 +43,6 @@ const MACHINE_REQUESTS = new Set([...SHELL_REQUESTS, 'agent_purge', 'agent_workt
   // Sharing a machine across accounts (services/sharedMachines.ts): the addresses it is shared with, and where
   // a guest may start a harness (the owner's folders).
   'shared_machines', 'guest_folders',
-  'super_tabs',
-  // An agent's instructions file (services/projects.ts), read and saved from the owner's other computers: what the person
-  // wrote there is theirs, so the relay sees none of it, in either direction.
-  'agent_instructions_read', 'agent_instructions_write',
   // An agent's browser from the owner's other computers (services/agentBrowser.ts): its settings carry the proxy and its
   // password, a proxy test's answer the proxy's exit address; Start, Stop and its window's size name the agent. The
   // agent's own commands (`agent_browser_run`) are answered to a local asker only, so they are on no list here.

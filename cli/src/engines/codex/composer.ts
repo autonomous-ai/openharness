@@ -13,8 +13,8 @@ const ANSWERED = /^\s*(?:[›»]\s*)?\d+\.\s|\b(?:enter|esc)\b.*\b(?:confirm|con
  * Where an unshaded draft in paragraphs ends: at the blank row above the footer, when every row from the composer down to it
  * is a draft's (blank, or two columns in), the footer is at most three such rows, and nothing there answers a dialog; else
  * null. A draft holding a numbered list, or the words of a dialog's keys, is read as covered and held, as before: a wrong
- * "ready" would press Enter into a dialog. A Swarm message ("@Pip, to you:", the text, the line to answer with) is paragraphs, and Codex in a pane no window
- * shows has no background to shade its composer from: ended at its first blank row, the rest read as a screen under it, and
+ * "ready" would press Enter into a dialog. A message in paragraphs (who it is from, the text, the line to answer with), in a
+ * Codex in a pane no window shows, has no background to shade its composer from: ended at its first blank row, the rest read as a screen under it, and
  * its Enter was never pressed.
  */
 function paragraphsEnd(lines: readonly string[], composer: number): number | null {

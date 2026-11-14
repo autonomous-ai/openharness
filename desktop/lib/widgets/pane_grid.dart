@@ -3,8 +3,6 @@ import 'dart:math' as math;
 // A browser leaves the Finder out of main.dart.js until a Finder tile is drawn.
 import '../finder/widgets/finder_pane_panel.dart'
     if (dart.library.js_interop) '../web/parts/finder_pane_panel.dart';
-import '../super_tabs/pane.dart';
-import '../super_tabs/saved_session.dart';
 import '../sharing/shared_harness_panel.dart';
 
 import 'dart:async';
@@ -395,7 +393,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
       );
       _activeId = app.activeSwarmId;
       // The notification precedes the frame. Restore before layout/paint so
-      // switching never briefly displays the previous Swarm's scroll offset.
+      // switching never briefly displays the previous tab's scroll offset.
       final offset = _offsets[_activeId] ?? Offset.zero;
       if (_scroll.hasClients) _scroll.jumpTo(offset.dy);
       if (_horizontalScroll.hasClients) _horizontalScroll.jumpTo(offset.dx);
@@ -1706,19 +1704,7 @@ class _PaneContent extends StatelessWidget {
       unawaited(notifier.requestClosePane(pane.id));
     }
 
-    final superPane = SuperPane.maybeOf(context);
-    final VoidCallback? close = superPane == null ? closeView : null;
-    final failure = superPane?.failures[(pane.machineId, pane.agentId)];
-    if (failure != null) {
-      return _PaneStatus(
-        title:
-            superPane?.titleFor(pane.machineId, pane.agentId ?? '') ?? 'Agent',
-        icon: AppIcons.terminal,
-        message: failure,
-        actionLabel: 'Retry',
-        onAction: superPane?.onRetry,
-      );
-    }
+    final VoidCallback close = closeView;
 
     VoidCallback? split(PaneResizeAxis axis) =>
         swarmMode &&
@@ -1790,9 +1776,7 @@ class _PaneContent extends StatelessWidget {
           compactHeader: swarmMode,
           zoomed: notifier.zoomedPaneId == pane.id,
           onToggleZoom:
-              superPane == null &&
-                  swarmMode &&
-                  (!single || notifier.zoomedPaneId == pane.id)
+              swarmMode && (!single || notifier.zoomedPaneId == pane.id)
               ? () {
                   notifier.focusPane(pane.id);
                   notifier.toggleZoomPane();
@@ -1964,28 +1948,12 @@ class _PaneContent extends StatelessWidget {
           pane.machineId,
           wantedAgentId!,
         );
-        final resume = superPane?.onResume;
-        final canResume = resume != null && !machine.belongsToOtherAccount;
         notice = terminalNotice(
           label: opening?.busy == true ? 'Opening' : 'Stopped',
           icon: AppIcons.terminal,
-          detail:
-              opening?.result?.error ??
-              (superPane != null
-                  ? 'This agent is stopped. Retained output is read only.'
-                  : 'Open to continue your saved conversation. Retained output is read only.'),
-          actionLabel: opening?.busy == true
-              ? null
-              : superPane == null
-              ? 'Open'
-              : canResume
-              ? 'Resume'
-              : null,
-          onAction: superPane == null
-              ? () => notifier.openSavedPane(pane.id).ignore()
-              : canResume
-              ? () => resume(pane.machineId, wantedAgentId)
-              : null,
+          detail: opening?.result?.error ?? 'Open to continue your saved conversation. Retained output is read only.',
+          actionLabel: opening?.busy == true ? null : 'Open',
+          onAction: () => notifier.openSavedPane(pane.id).ignore(),
           banner: true,
         );
       } else if (agent != null && agent.launchState == 'held') {
@@ -2105,9 +2073,7 @@ class _PaneContent extends StatelessWidget {
                 ),
           zoomed: notifier.zoomedPaneId == pane.id,
           onToggleZoom:
-              superPane == null &&
-                  swarmMode &&
-                  (!single || notifier.zoomedPaneId == pane.id)
+              swarmMode && (!single || notifier.zoomedPaneId == pane.id)
               ? () {
                   notifier.focusPane(pane.id);
                   notifier.toggleZoomPane();
@@ -2247,31 +2213,6 @@ class _PaneContent extends StatelessWidget {
       );
     }
     if (agent?.isStopped == true) {
-      if (superPane != null) {
-        final resume = superPane.onResume;
-        return Column(
-          children: [
-            _PaneHeader(
-              title:
-                  superPane.titleFor(pane.machineId, wantedAgentId) ??
-                  agentName,
-              activity: activityMark,
-            ),
-            Divider(height: 1, color: AppColors.border),
-            Expanded(
-              child: SuperTabSavedSession(
-                key: ValueKey((pane.machineId, wantedAgentId)),
-                app: notifier,
-                machineId: pane.machineId,
-                harnessId: wantedAgentId,
-                onResume: resume != null && !machine.belongsToOtherAccount
-                    ? () => resume(pane.machineId, wantedAgentId)
-                    : null,
-              ),
-            ),
-          ],
-        );
-      }
       final opening = notifier.pendingAgentRestart(
         pane.machineId,
         wantedAgentId,

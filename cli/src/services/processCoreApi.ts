@@ -14,11 +14,10 @@ import { usageTarget, usageTargetKey, usageSnapshot, validUsage, validUsageTarge
  * each asked of the core over its link (`ask`). The agents it reads come as the apps are shown them (`service_query shown`): each with its
  * name, whether its terminal is there and its harness's viewer.
  */
-import { CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, LANE_OFF, OBSERVER_KEY_OFF, resolveAgent, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, WIFI_OFF, type CloudCore, type SuperTabsCore, type CoreApi, type DaemonAddress, type TerminalWatch, type PaneScreen, type PaneTyped, type PanesCore, type RelayCore } from '../core/api.js'
+import { CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, LANE_OFF, OBSERVER_KEY_OFF, resolveAgent, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, WIFI_OFF, type CloudCore, type CoreApi, type DaemonAddress, type TerminalWatch } from '../core/api.js'
 import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { turnsLink } from './turnsLink.js'
-import { creationObservation } from '../lib/creationObservation.js'
 
 type Payload = Record<string, unknown>
 
@@ -40,8 +39,6 @@ export interface AgentsView {
   onNotice?: CoreApi['account']['onNotice']
   /** The core's read-only view of terminals, for its own viewers (services/watchLink.ts). */
   watch?: TerminalWatch
-  /** What it hands another service through the core and hears from one (services/relayLink.ts). */
-  relay?: RelayCore
 }
 
 /** Whether what the core sent is an agent. */
@@ -93,10 +90,6 @@ export const UNASKED = {
   lastTurn: CoreApi['transcripts']['lastTurn']
 }
 
-/** The core's answer to a pane read or write, or why there is none, in words a person reads. */
-const terminalAnswer = (asked: Promise<Record<string, unknown>>): Promise<PaneTyped | PaneScreen> => asked.then(
-  answer => answer.ok === true ? answer as PaneScreen : { ok: false, error: String(answer.error ?? 'The terminal could not be reached.') },
-  () => ({ ok: false, error: 'This machine\'s daemon could not be asked. Try again in a moment.' }))
 
 export function processCoreApi(dataDir: string, service: string, view: AgentsView = {}): CoreApi {
   const live = (): ShownAgent[] => view.live?.() ?? []
@@ -126,21 +119,6 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
       live,
       displayName: (session) => (session as ShownAgent).displayName ?? '',
       byAgent: (agentId) => live().find((session) => session.agentId === agentId),
-      closeSwarm: async request => await (ask?.('close_swarm', { ...request }) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }))
-        .catch(() => ({ error: 'SERVICE_UNAVAILABLE' })),
-      keepLeadAlive: async agentId => {
-        const answer = await ask?.('keep_lead_alive', { agentId }).catch(() => null)
-        if (answer?.ok === true) return { ok: true }
-        return answer?.ok === false && typeof answer.error === 'string'
-          ? { ok: false, error: answer.error, ...(typeof answer.detail === 'string' ? { detail: answer.detail } : {}) }
-          : { ok: false, error: 'SERVICE_UNAVAILABLE' }
-      },
-      closeMember: async (agentId, creationId) => await (ask?.('close_member', { agentId, ...(creationId ? { creationId } : {}) }) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }))
-        .catch(() => ({ error: 'SERVICE_UNAVAILABLE' })),
-      stopped: async agentId => (await ask?.('stopped', { agentId }).catch(() => null))?.stopped === true,
-      gone: async agentId => (await ask?.('gone', { agentId }).catch(() => null))?.gone === true,
-      creationStatus: async creationId => creationObservation(creationId,
-        (await ask?.('creation_status', { creationId }).catch(() => null))?.observation),
       resolve: (id) => resolveAgent(live(), id),
       advertised: () => view.advertised?.() ?? [],
       terminalAvailable: (agentId) => live().find((session) => session.agentId === agentId)?.terminalAvailable === true,
@@ -181,15 +159,6 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
       recent: async () => [],
       asks: async () => [],
       ...(view.deliveries?.turns ?? DELIVERIES_OFF),
-      // The connected service identity decides the namespace; the payload cannot
-      // grant another process permission to write a queued instruction.
-      leaseDeliveries: async (maker, leases) => maker === service &&
-        (await ask?.('lease_deliveries', { leases }).catch(() => null))?.leased === true,
-      // A core from before this question answers with an error: nothing said holds it, and the write checks as before.
-      holdOf: async (agentId, deliveryId) => {
-        const hold = (await ask?.('delivery_hold', { agentId, deliveryId }).catch(() => null))?.hold
-        return typeof hold === 'string' ? hold : null
-      },
     },
     questions: { answer: () => {}, answerReviewed: async () => false },
     transcripts: { databaseHistory: () => undefined, lastTurn: UNASKED.lastTurn },
@@ -251,23 +220,12 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
     // The cloud agents' doors (core/experimentQueries.ts): told to the core in order, never waited on. A core
     // that is not connected hears it all again when it is (services/cloudProcess.ts `republish`). A question's
     // id travels as `questionId`: `requestId` is the query's own, which the link writes over.
-    ...(view.relay ? { relay: view.relay } : {}),
     ...(ask ? {
       cloud: {
         publish: (harnesses) => { void ask('cloud_publish', { harnesses }).catch(() => {}) },
         ask: (agentId, requestId, question) => { void ask('cloud_ask', { agentId, questionId: requestId, question }).catch(() => {}) },
         unask: (agentId, requestId) => { void ask('cloud_unask', { agentId, questionId: requestId }).catch(() => {}) },
       } satisfies CloudCore,
-      // The Super Tab service's door: its cards and waits go to the devices through `relay` (services/relayLink.ts).
-      superTabs: {
-        shareObservers: () => { void ask('super_tab_observers', {}).catch(() => {}) },
-      } satisfies SuperTabsCore,
-      // An agent's pane read and typed into (core/terminals/panes.ts), answered by the core for the services it lists.
-      panes: {
-        screen: (agentId, scrollback) => terminalAnswer(ask('pane_screen', { agentId, scrollback })) as Promise<PaneScreen>,
-        input: (agentId, text, keys) => terminalAnswer(ask('pane_input', { agentId, text, keys })),
-        inputIfScreen: (agentId, keys, screen) => terminalAnswer(ask('pane_input_if_screen', { agentId, keys, screen })),
-      } satisfies PanesCore,
     } : {}),
   }
 }

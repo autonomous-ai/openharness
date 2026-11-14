@@ -37,8 +37,6 @@ export interface RecapDeps {
   sessionTurnOpen: (sessionId: string) => boolean
   /** The orchestrator's role for an agent: a specialist, or the director. */
   orchestratorRoleOf: OrchestratorService['roleOf']
-  /** Whether an agent's finished turns are silent on the devices, as someone outside the core says (RecapSession). */
-  quietOnDevices: (session: RegisteredSession) => boolean
   /** Whether the funnel has a turn open in the session (its `turnStartedAt`). */
   turnRunning: (sessionId: string) => boolean
 }
@@ -68,7 +66,7 @@ export interface TurnRecaps {
 
 export function createRecaps({
   port, turnActivity, clients, deviceIsWatching, cableWatchingLocal, remoteApp, bySession, resolve, stopped, live, sessionTurnOpen,
-  orchestratorRoleOf, quietOnDevices, turnRunning,
+  orchestratorRoleOf, turnRunning,
 }: RecapDeps) {
   /**
    * A turn that belongs to a SUB-AGENT: an Orchestrator specialist, or its Director while specialists
@@ -103,7 +101,6 @@ export function createRecaps({
       ...(known?.engine ? { engine: known.engine } : {}),
       ...(known?.transcriptPath ? { transcriptPath: known.transcriptPath } : {}),
       ...(subagent === undefined ? {} : { subagent }),
-      ...(known && quietOnDevices(known) ? { quietOnDevices: true } : {}),
     }
   }
   const tell = (event: TurnLifecycle): void => { port()?.lifecycle(event, watchers()) }

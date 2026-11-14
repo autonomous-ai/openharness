@@ -143,7 +143,7 @@ it('starts an engine that runs when the launch names no mode, with one probe of 
 }, 15_000)
 
 // What an engine's help says, and that it runs, is a fact about the installed file. Asked at every launch, a restore or a
-// held pass of many Swarm agents met the probes' cap of 8 and held the rest; a relaunch or fork asked twice.
+// held pass of many agents met the probes' cap of 8 and held the rest; a relaunch or fork asked twice.
 it('asks an engine install for its help once, for launches that ask together and every launch after', async () => {
   const launches = await Promise.all(Array.from({ length: 12 }, () => inspectNativeLaunch('claude', {})))
   for (const launch of launches) expect(launch).toMatchObject({ ok: true })

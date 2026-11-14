@@ -1,9 +1,8 @@
 /** Exact-resume lifecycle shared by the daemon and its isolated acceptance tests. */
-import type { AdoptSwarmSkill } from '../core/api.js'
 import { transcriptSize, type RelaunchMarks } from '../core/transcripts/relaunch.js'
 import { isTerminalEngine } from '../engines/types.js'
 import { installedDsh } from '../dsh/installed.js'
-import { engineKeepsTranscriptFile, inSwarmAuto, registry as liveRegistry, type RegisteredSession } from './registry.js'
+import { engineKeepsTranscriptFile, registry as liveRegistry, type RegisteredSession } from './registry.js'
 import { controlTranscriptEvidence } from '../engines/transcriptBindings.js'
 import { materializeResumeTranscript } from '../engines/resumeTranscript.js'
 import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
@@ -29,7 +28,6 @@ import type { TerminalRuntimeRef } from './terminalTypes.js'
 import { harnessPermissionEnvironment } from './harnessDefaults.js'
 
 export interface ResumeAgentServiceDeps {
-  adoptSwarmSkill?: AdoptSwarmSkill
   registry: Pick<typeof liveRegistry, 'byAgent' | 'bySession' | 'resumePendingAgent' | 'setLaunch' | 'setLaunchArgs' | 'updateProcessIdentity'>
   stoppedAgents: StoppedAgentStore
   /** Where a resumed harness's new pane is made (main.ts `createBackend`); null with no backend ready. */
@@ -75,7 +73,7 @@ function preparationFailed(agent: string, error: unknown) {
 
 export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
   const { registry, stoppedAgents, createBackend, noBackendCode = 'TMUX_UNAVAILABLE', backendFor, restartJobs, stopJobs, pinnedControls,
-    retainExitedSession, announceSession, relaunchOverrides, prepareSessionResume, adoptSwarmSkill,
+    retainExitedSession, announceSession, relaunchOverrides, prepareSessionResume,
     refreshGridWebSearch, clearDeleted, attachDsh, attachBrowser, attachSession, relaunchMarks, stopBackgroundJob } = deps
   const resumeConversations = new Set<string>()
   /** Same short form every other `[…]` line in the daemon logs uses. */
@@ -235,7 +233,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
         if (!permissionModeFlags(saved.engine, permissionMode)) return { ok: false, error: 'INVALID_PERMISSION_MODE' }
         const choice = { permissionMode, bypassPermission: permissionModeApproves(permissionMode) }
         saved = { ...saved, ...choice }
-      } else saved = inSwarmAuto(saved) // One the Swarm started, saved with no mode before 2026-11-12 (lib/registry.ts).
+      }
       if (saved.grid && !saved.gridLaunch) return { ok: false, error: 'GRID_CREDENTIAL_REQUIRED', detail: 'The saved provider configuration is unavailable.' }
       if (saved.dsh && !installedDsh(saved.dsh)) return { ok: false, error: 'INVALID_DSH', detail: 'Install this harness from the Harness Store before resuming it.' }
       if (!saved.cwd) return { ok: false, error: 'CWD_NOT_FOUND', detail: 'The saved project folder is no longer available.' }
@@ -247,11 +245,6 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
       // a resume that works — after the harness had already been paused.
       if (resumeSessionId && engineKeepsTranscriptFile(saved.engine) && !saved.transcriptPath) {
         return { ok: false, error: 'RESUME_UNAVAILABLE', detail: 'The saved conversation file is unavailable. Start a new conversation separately.' }
-      }
-      if (adoptSwarmSkill) {
-        const adopted = await adoptSwarmSkill(saved, current)
-        if (!adopted || !current()) return resumeChanged
-        saved = adopted
       }
       const sourceEvidence = () => resumeSessionId && engineKeepsTranscriptFile(saved.engine)
         ? controlTranscriptEvidence(saved.engine, resumeSessionId, saved.transcriptPath!, saved.codexHome ?? undefined, saved.cwd) : undefined

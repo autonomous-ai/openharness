@@ -906,11 +906,6 @@ class WsConn {
     // File paths and media contents are user data, not frame diagnostics.
     'agent_read_file',
     'agent_read_file_result',
-    // An agent's instructions: the person's own words, and the file they are in.
-    'agent_instructions_read',
-    'agent_instructions_read_result',
-    'agent_instructions_write',
-    'agent_instructions_write_result',
     // Conversation-derived: file names and the project folder.
     'agent_handoff_prepare',
     'agent_handoff_prepare_result',
@@ -924,8 +919,6 @@ class WsConn {
     'window_name_result',
     'git_project_info',
     'git_project_info_result',
-    'git_pull_requests_status',
-    'git_pull_requests_status_result',
     'terminal_output',
     'terminal_input',
     'terminal_resize',
@@ -951,7 +944,6 @@ class WsConn {
       !type.startsWith('orchestrator') &&
       // Browser settings carry a proxy's host and login, and a test its exit address.
       !type.startsWith('agent_browser') &&
-      !type.startsWith('super_tabs') &&
       !type.startsWith('route_') &&
       !type.startsWith('harness_share_') &&
       // Pair responses can contain retained memory quotations and one-use

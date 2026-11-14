@@ -17,31 +17,18 @@
  *     afresh, as a core's restart did when the relay ran in the core.
  */
 import { RelayConnectError } from '../lib/relayFrames.js'
-import { decodeGatewayBinary, encodeGatewayBinary, GatewayBinary, GATEWAY_CALLS, UPLOAD_TOTAL_MS } from '../lib/gatewayWire.js'
+import { decodeGatewayBinary, encodeGatewayBinary, GatewayBinary, GATEWAY_CALLS } from '../lib/gatewayWire.js'
 import { decodeTerminalLocal, encodeTerminalLocal } from '../lib/terminalBinary.js'
 import { currentToken, RENEWAL_WAIT_MS, tokenOf } from '../lib/authSession.js'
 import { guestMachineList, withStaleMarker } from '../lib/machineListReply.js'
 import type { GatewayMachines } from './api.js'
 import type {
   BackendNotice, GatewayEvents, LocalWindows, GatewayOps, GatewayPort, GatewayRefusal, GatewayStatus, HttpAnswer, LaneSeal,
-  RemoteClient, RemoteRole, RemoteTransport, TabFrame, TabKey, TabRelay, UploadAnswer, WindowRelay, WindowRelaySession, WindowRelaySink,
+  RemoteClient, RemoteRole, RemoteTransport, TabFrame, TabKey, TabRelay, WindowRelay, WindowRelaySession, WindowRelaySink,
 } from './api.js'
 import { askTabKey } from '../lib/tabKeyWire.js'
 import { askTabRelay, tabFrameOf } from '../lib/tabRelayWire.js'
 import { ON_DEMAND_START_MS, type ServiceFrame } from './serviceLinks.js'
-
-const UPLOAD_REFUSALS: ReadonlySet<string> = new Set(['NOT_SIGNED_IN', 'BACKEND_UNREACHABLE', 'BACKEND_TIMEOUT', 'INVALID_UPLOAD'])
-
-/** The gateway's answer to an upload, held to its shape. A gateway that is not there, or answered no upload's answer,
- *  is said as itself, never as a backend that could not be reached: the network may be fine (review, 2026-11-13). */
-export function uploadAnswerOf(answer: Record<string, unknown>, log: (line: string) => void = (line) => console.warn(line)): UploadAnswer {
-  if (typeof answer.status === 'number' && typeof answer.body === 'string' && typeof answer.contentType === 'string') {
-    return { status: answer.status, body: answer.body, contentType: answer.contentType }
-  }
-  if (typeof answer.error === 'string' && UPLOAD_REFUSALS.has(answer.error)) return { error: answer.error as Exclude<UploadAnswer, { status: number }>['error'] }
-  log(`[gateway] a Swarm chat file was not sent: the gateway answered ${typeof answer.error === 'string' ? answer.error.slice(0, 60) : 'no upload\'s answer'}`)
-  return { error: 'GATEWAY_UNAVAILABLE' }
-}
 
 export interface GatewayLinkDeps {
   /** The core's side of what the gateway tells it (BackendSocket's `fromGateway`). */
@@ -281,9 +268,6 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
       ?? tokenOf(await deps.call(GATEWAY_CALLS.accessToken, { ...options }, RENEWAL_WAIT_MS),
         "Harness could not renew this computer's sign-in just now: its gateway is restarting, or the renewal is slow. It tries again."),
     backend: (method, path, body) => http(GATEWAY_CALLS.backend, { method, path, ...(body === undefined ? {} : { body }) }, 25_000),
-    // The gateway sends the file, for as long as an upload may take and its answer a little after. One that is not there
-    // sends nothing: the backend was not reached.
-    backendUpload: async (request) => uploadAnswerOf(await deps.call(GATEWAY_CALLS.backendUpload, { ...request }, UPLOAD_TOTAL_MS + 30_000), log),
     machines: async (fallback = false) => {
       const state = deps.start()
       const requestedOwner = text(record(state.account).machineId)

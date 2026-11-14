@@ -1,11 +1,10 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CoreApi } from '../core/api.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { agentCleanupCoreApi, runAgentCleanupService } from './agentCleanupProcess.js'
-import type { createAgentCleanup } from './agentCleanup.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcessOptions } from './process.js'
 
 // The real default reaches a real socket: never in a test.
@@ -114,26 +113,22 @@ describe('the agent cleanup in its own process', () => {
     expect(await gone.agents.closeStarted!('k1', 'idle')).toEqual({ error: 'SERVICE_UNAVAILABLE' })
   })
 
-  // HARNESS_SWARM: the Super Tab members it keeps come from the Swarm's side, which its process loads only while it is on.
-  it('keeps the members the Swarm hands it while it is on, and none without it', () => {
-    const given: Array<Parameters<typeof createAgentCleanup>[1]> = []
-    const create = (_core: CoreApi, deps?: Parameters<typeof createAgentCleanup>[1]) => { given.push(deps); return { port: { closed: vi.fn(), typed: vi.fn(), forgetTold: vi.fn(async () => true), stop: vi.fn() }, look: vi.fn(), closeStartedBy: vi.fn() } }
-    const retainedHarnesses = vi.fn(() => new Set(['member'])), recordCleanupClose = vi.fn()
-    const base = { dataDir: dir, socketPath: '/s', machineId: 'm', token: 't', run: () => ({ stop: vi.fn() }), create }
-    runAgentCleanupService({ ...base, swarm: { retainedHarnesses, recordCleanupClose } })
-    runAgentCleanupService(base)
-    expect(given[0]!.retained).toBe(retainedHarnesses)
-    // And the Swarm is told what it closed (superTabs/cleanupCloses.ts).
-    expect(given[0]!.closed).toBe(recordCleanupClose)
-    expect(given[1]).not.toHaveProperty('retained')
-    expect(given[1]).not.toHaveProperty('closed')
-  })
-
   it('stops its looks with the process', () => {
     const { service, port, stop } = setup()
     service.stop()
     expect(port.stop).toHaveBeenCalled()
     expect(stop).toHaveBeenCalled()
+  })
+
+  // The Swarm was deleted on 2026-11-14 (services/swarmLeftovers.ts): what it left goes as the edge host starts, where the
+  // cleanup runs by default, not only inside the core.
+  it('deletes what the Swarm left in the data folder as it starts', async () => {
+    mkdirSync(join(dir, 'super-tabs'))
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const service = runAgentCleanupService({ dataDir: dir, socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't', run: () => ({ stop: vi.fn() }) })
+    await vi.waitFor(() => expect(existsSync(join(dir, 'super-tabs'))).toBe(false))
+    expect(log).toHaveBeenCalledWith('[agent-cleanup] removed 1 of the Swarm\'s files and folders from the data folder')
+    await service.stop()
   })
 
   it('runs as a real service by default, on the cleanup', async () => {

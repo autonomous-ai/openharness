@@ -186,7 +186,7 @@ export const COMMON_MATCHES = 30_000
 
 /**
  * Query words as the index sees them: each split into its letter-and-digit parts, since the index
- * splits on everything else — "swarm_search.dart" and "OH-14" become phrases of their parts.
+ * splits on everything else — "app_state.dart" and "OH-14" become phrases of their parts.
  */
 function queryWords(query: string): string[][] {
   const seen = new Set<string>()

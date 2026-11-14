@@ -438,7 +438,7 @@ async function processPrepare(ctx: Awaited<ReturnType<typeof setup>>,
     const requestId = `query-${++next}`; replies.set(requestId, resolve)
     link.receive(clone({ type: 'service_query', payload: { ...payload, query, requestId } }))
   }))
-  const service = startHandoff(processCore, undefined, undefined, undefined, LOADED_HANDOFF_LIMITS)
+  const service = startHandoff(processCore, undefined, undefined, LOADED_HANDOFF_LIMITS)
   const link = links.accept('handoff', 'fixture-token', { sendFrame: frame => {
     const wire = clone(frame)
     if (wire.type === 'service_query_result') replies.get(String(wire.payload!.requestId))!(wire.payload!)

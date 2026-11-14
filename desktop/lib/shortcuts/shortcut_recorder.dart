@@ -48,7 +48,6 @@ const _pickerBareKeys = {'up', 'down', 'pageup', 'pagedown'};
 String contextPhrase(KeymapContext context) => switch (context) {
   KeymapContext.workspace => '',
   KeymapContext.terminal => ' in agent input',
-  KeymapContext.swarmChat => ' in Swarm chat',
   KeymapContext.picker => ' in search',
   KeymapContext.project => ' in the project menu',
 };

@@ -28,17 +28,6 @@ void main() {
         ),
       )!;
       expect((device.machineId, device.agentId), ('@device', 'pub+k='));
-      // A Swarm chat's toast: its Swarm tab and chat survive the link.
-      final chat = NotificationLink.parse(
-        NotificationLink.build(
-          SystemNotifications.chatNoticeMachine,
-          '0123456789abcdef01234567/5f0c2a',
-        ),
-      )!;
-      expect((chat.machineId, chat.agentId), (
-        '@chat',
-        '0123456789abcdef01234567/5f0c2a',
-      ));
     });
 
     test('the bare link names no agent', () {

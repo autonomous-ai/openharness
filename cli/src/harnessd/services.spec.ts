@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  ENGINE_LIVE_ENV, ENGINE_RUNTIME_ENV, ENGINE_SCREEN_ENV, ENGINE_MODEL_CONTROL_ENV, masterRunsEngineModelControl, ENGINE_QUESTION_CONTROL_ENV, masterRunsEngineQuestionControl, ENGINE_SUBMISSION_ENV, masterRunsEngineSubmission, ENGINE_NATIVE_CONTROL_ENV, masterRunsEngineNativeControl, ENGINE_BACKGROUND_JOB_ENV, masterRunsEngineBackgroundJob, ENGINE_PROVIDER_MOVE_ENV, masterRunsEngineProviderMove, KNOWN_SERVICES, SERVICE_HOSTS, SERVICE_PROCESSES_ENV, UPDATER_HOST, masterRunsLiveEngines, masterRunsEngineRuntime, masterRunsEngineScreen, serviceProcessesEnv, serviceSpecs, servicesTheMasterRuns, SWARM_ENV, servicesOn, swarmOn,
+  ENGINE_LIVE_ENV, ENGINE_RUNTIME_ENV, ENGINE_SCREEN_ENV, ENGINE_MODEL_CONTROL_ENV, masterRunsEngineModelControl, ENGINE_QUESTION_CONTROL_ENV, masterRunsEngineQuestionControl, ENGINE_SUBMISSION_ENV, masterRunsEngineSubmission, ENGINE_NATIVE_CONTROL_ENV, masterRunsEngineNativeControl, ENGINE_BACKGROUND_JOB_ENV, masterRunsEngineBackgroundJob, ENGINE_PROVIDER_MOVE_ENV, masterRunsEngineProviderMove, KNOWN_SERVICES, SERVICE_HOSTS, SERVICE_PROCESSES_ENV, UPDATER_HOST, masterRunsLiveEngines, masterRunsEngineRuntime, masterRunsEngineScreen, serviceProcessesEnv, serviceSpecs, servicesTheMasterRuns,
   type ServiceSpec,
 } from './services.js'
 import { DEFAULT_SERVICE_OPTIONS, ServiceSupervisor, serviceOptions, type ServiceSupervisorDeps, type ServiceSupervisorOptions } from './serviceSupervisor.js'
@@ -578,26 +578,6 @@ describe('ServiceSupervisor', () => {
     supervisor.want('messages')
     supervisor.want('messages')
     expect(children.filter((child) => child.spec.services.includes('messages')).map((child) => [child.spec.name, child.spec.services])).toEqual([['messages', ['messages']]])
-  })
-})
-
-describe('the Swarm switch', () => {
-  it('is on unless HARNESS_SWARM says off, so nothing changes for anyone who does not set it', () => {
-    expect(SWARM_ENV).toBe('HARNESS_SWARM')
-    expect(swarmOn({})).toBe(true)
-    for (const on of ['', 'on', '1', 'true', 'yes', 'anything']) expect(swarmOn({ HARNESS_SWARM: on }), on).toBe(true)
-    for (const off of ['off', 'OFF', ' off ', '0', 'false', 'no']) expect(swarmOn({ HARNESS_SWARM: off }), off).toBe(false)
-  })
-
-  it('off, leaves the Swarm\'s service out of the services this computer runs, and out of every process the master starts', () => {
-    expect(servicesOn({}, ['search', 'superTabs', 'cloud'])).toEqual(['search', 'superTabs', 'cloud'])
-    expect(servicesOn({ HARNESS_SWARM: 'off' }, ['search', 'superTabs', 'cloud'])).toEqual(['search', 'cloud'])
-    const processes = (env: NodeJS.ProcessEnv): string[] => serviceSpecs(env, SERVICE_HOSTS).flatMap(spec => spec.services)
-    expect(processes({})).toContain('superTabs')
-    expect(processes({ HARNESS_SWARM: 'off' })).not.toContain('superTabs')
-    // Named outright, it still stays off: the switch is the computer's, HARNESSD_SERVICES only says where services run.
-    expect(serviceSpecs({ HARNESSD_SERVICES: 'superTabs,search', HARNESS_SWARM: 'off' }, SERVICE_HOSTS).map(spec => spec.name)).toEqual(['search'])
-    expect(processes({ HARNESS_SWARM: 'off' })).toEqual(processes({}).filter(service => service !== 'superTabs'))
   })
 })
 

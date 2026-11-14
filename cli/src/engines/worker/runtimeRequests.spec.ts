@@ -156,7 +156,7 @@ describe('runtime worker contract', () => {
   })
 
   // The engine's own process reads a session's configured effort: one launched with --effort starts at it, which outranks its
-  // settings' effortLevel (the 2026-11-11 rehearsal's Product Manager, launched at xhigh, read as high until its first reply).
+  // settings' effortLevel (an agent of the 2026-11-11 rehearsal, launched at xhigh, read as high until its first reply).
   it('reads the effort a Claude session was launched with as its configured one', async () => {
     const requests = engineRuntimeRequests('claude', { load: async () => runtimeFor('claude')!, recycle: vi.fn() })
     const ctx = context(); ctx.session.launchModel = { model: 'opus', effort: 'xhigh' }

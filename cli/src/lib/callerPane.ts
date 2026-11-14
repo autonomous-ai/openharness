@@ -1,11 +1,11 @@
 /**
- * The pane a `harness super-tab` (or `send`, `new`, `tell`, `close`) runs in, from its parent processes rather than from
- * what it says.
+ * The pane a `harness` command an agent runs (`browser`, …) runs in, from its parent processes rather than from what it
+ * says.
  *
- * Security review of #2087: a Buddy allowed to run `harness super-tab` could name a Builder with --agent and speak as it.
+ * Security review of #2087: an agent allowed to run such a command could name another with --agent and speak as it.
  * The CLI tells the daemon which harness asks, and that harness has to be the pane's own. TMUX_PANE alone is what the
  * command's environment says, which a command can set; so the pane is the one whose process is this command's nearest
- * ancestor, and a TMUX_PANE that names another pane is refused (the Lead's must on #904's plan).
+ * ancestor, and a TMUX_PANE that names another pane is refused (a must on #904's plan).
  *
  * It fails closed (security review 2's late finding): a command that may run in a pane but cannot prove which one, with TMUX
  * pointing at a socket that does not exist, a fake tmux first on PATH, or a double fork with TMUX still set, went on as a
@@ -33,14 +33,13 @@ export interface PaneProbe {
 }
 
 const NAMED_ANOTHER = 'This command names a pane it does not run in. Run it as your harness gave it, without setting TMUX_PANE.'
-export const NOT_IN_PANE = 'This command does not run in the Harness pane it names, so it did not run. Run it as your harness gave it, in its own pane.'
 /** No pane proven where one may be: ps or tmux unreadable (a sandbox refuses both), or no parent among the panes. */
 export const UNPROVEN = 'Harness could not tell which pane this command runs in, so it did not run it. Run it as your harness gave it, in its own pane.'
 
 /** A tmux server, as ps names it: `tmux` on macOS (it sets its own title), `tmux: server` on Linux. */
 const isTmuxServer = (command: string): boolean => /^tmux(:|$)/.test(basename(command.split(' ')[0] ?? ''))
 
-export interface RunningPane { pane?: string; refused?: string; ancestors?: number[] }
+interface RunningPane { pane?: string; refused?: string; ancestors?: number[] }
 
 /** The process table, from the PTY host this account installed: never one a command names (`HARNESS_PTY_BIN`, or a data folder
  *  in its environment), which could answer with any parents it likes. As `ps` and tmux are never run from PATH. */
@@ -136,7 +135,7 @@ const accountHome = (): string => userInfo().homedir
  * tmux and ps as the system has them, with [env]'s tmux socket: steered elsewhere, that server's panes are not its parents.
  * tmux is the one the daemon runs (lib/tmuxOnPath.ts): Linux names the server's own executable; otherwise Harness's own
  * build, which install.sh lays down on a Mac without Homebrew's and in Team accounts (re-check 1 of #2093: missing it there
- * refused every agent's Swarm command), and only then where systems keep it. A tmux of another version cannot read the
+ * refused every agent's command), and only then where systems keep it. A tmux of another version cannot read the
  * daemon's server, so the daemon's own comes first.
  */
 export const processProbe = (env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform,

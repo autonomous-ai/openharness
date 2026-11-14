@@ -3,7 +3,7 @@ import { createTierDecider, fallbackTier, isTier, type TierInput } from './notif
 
 const base: TierInput = {
   agent: 'lamp', engine: 'codex', recap: 'Shipped the thing.', durationS: 300,
-  stats: { testsPassed: 640, testsFailed: 0, commits: 1 }, subagent: false, onScreen: false, failed: false, swarm: false,
+  stats: { testsPassed: 640, testsFailed: 0, commits: 1 }, subagent: false, onScreen: false, failed: false,
 }
 const make = (extra: object = {}) => {
   const log = vi.fn()
@@ -27,14 +27,9 @@ describe('notifyTier', () => {
     expect(await decide(base)).toMatchObject({ tier: 'alert', by: 'rule:turn' })
   })
 
-  it("a Swarm agent's finished turn is silent", async () => {
-    const { decide } = make()
-    expect(await decide({ ...base, swarm: true })).toMatchObject({ tier: 'silent', by: 'rule:swarm' })
-  })
-
   it('the fixed rules come first', async () => {
     const { decide } = make()
-    expect(await decide({ ...base, failed: true, swarm: true })).toMatchObject({ tier: 'alert', by: 'rule:failed' })
+    expect(await decide({ ...base, failed: true })).toMatchObject({ tier: 'alert', by: 'rule:failed' })
     expect(await decide({ ...base, subagent: true })).toMatchObject({ tier: 'silent', by: 'rule:subagent' })
     expect(await decide({ ...base, onScreen: true })).toMatchObject({ tier: 'silent', by: 'rule:onScreen' })
     expect(await decide({ ...base, recap: '  ' })).toMatchObject({ tier: 'silent', by: 'rule:empty' })

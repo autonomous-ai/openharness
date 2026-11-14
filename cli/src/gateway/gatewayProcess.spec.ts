@@ -30,7 +30,6 @@ function stubGateway() {
   const answer = { status: 200, body: { ok: true } }
   const ops = {
     accessToken: vi.fn(async () => 'never asked: the process answers the core from its own renewal'),
-    backendUpload: vi.fn(async (_request: { file: string; path: string; contentType: string }) => ({ status: 201, body: '{"ok":true}', contentType: 'application/json' })),
     backend: vi.fn(async (_method: string, _path: string, _body?: unknown) => answer),
     machines: vi.fn(async (_fallback?: boolean) => answer), mintGridName: vi.fn(async (): Promise<string | null> => 'private-grid'),
     status: vi.fn(async () => ({ fingerprint: 'AB12', pairs: [], pending: null })),
@@ -516,10 +515,6 @@ describe('account HTTP across the gateway service link', () => {
     const w = wire()
     w.connect()
     const { ops } = w.gateways[0]
-    // A Swarm chat file the core kept, sent by the gateway: the core calls no other host.
-    const kept = { file: '/data/uploads/f1', path: '/api/super-tabs/t1/attachments', contentType: 'multipart/form-data; boundary=b' }
-    expect(await w.link.ops.backendUpload(kept)).toEqual({ status: 201, body: '{"ok":true}', contentType: 'application/json' })
-    expect(ops.backendUpload).toHaveBeenCalledWith(kept)
     expect(await w.link.ops.backend('POST', '/api/desk/ops', { changes: [] })).toEqual({ status: 200, body: { ok: true } })
     expect(ops.backend).toHaveBeenCalledWith('POST', '/api/desk/ops', { changes: [] })
     await w.link.ops.machines(true)

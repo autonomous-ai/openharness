@@ -1,14 +1,14 @@
 /// What one idle, hidden Desktop window asks of the backend per minute (task #2953): the PR's
 /// before/after measurement.
 ///
-/// The window: signed in, this computer connected (its agent list relayed like any machine's), two
-/// Swarms open with the server pushing, as a person leaves it at the end of a day. Then the window
-/// is hidden — minimised, or closed to the menu bar — and ten simulated minutes pass. Every read
-/// the app model and the Swarm client make is counted by kind; the test prints requests per minute
-/// and asserts none was made on a clock. Run on main's code it prints the before.
+/// The window: signed in, this computer connected (its agent list relayed like any machine's), as a
+/// person leaves it at the end of a day. Then the window is hidden — minimised, or closed to the
+/// menu bar — and ten simulated minutes pass. Every read the app model makes is counted by kind;
+/// the test prints requests per minute and asserts none was made on a clock. Run on main's code it
+/// prints the before.
 ///
-/// Fixtures as in hidden_window_rereads_test.dart: the real app model and Swarm client, a fake CLI
-/// that never signs this Mac out, a memory store.
+/// Fixtures as in hidden_window_rereads_test.dart: the real app model, a fake CLI that never signs
+/// this Mac out, a memory store.
 library;
 
 import 'dart:async';
@@ -24,42 +24,10 @@ import 'package:harness/bootstrap/environment_provisioner.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
-import 'package:harness/super_tabs/client.dart';
-import 'package:harness/super_tabs/reading.dart';
 import 'package:harness/ws/local_cli_discovery.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 import 'swarm_state_test.dart' show MemoryStore;
-import 'support/super_tab_fixture.dart';
-
-/// Two Swarms behind the backend, every read counted.
-class _Swarms {
-  final servers = {'tab': ConversationServer(), 'other': ConversationServer()};
-  final paths = <String>[];
-
-  _Swarms() {
-    servers['other']!.state['id'] = 'other';
-  }
-
-  Future<Object?> call(
-    String method,
-    String path, {
-    Map<String, dynamic>? body,
-  }) async {
-    paths.add(path);
-    if (Uri.parse(path).path == '/api/super-tabs/list') {
-      return {
-        'tabs': [
-          {'id': 'tab', 'name': 'Pilot'},
-          {'id': 'other', 'name': 'Other'},
-        ],
-        'next': null,
-      };
-    }
-    final id = Uri.parse(path).pathSegments[2];
-    return servers[id]!.request(method, path, body: body);
-  }
-}
 
 const _computerId = 'aabbccddeeff0011';
 
@@ -249,38 +217,14 @@ void main() {
       _launch(async, app);
       expect(app.isGuest, isFalse);
 
-      // The Swarm client as the workspace runs it (Desktop's reading, pushes heard).
-      final swarms = _Swarms();
-      final client = SuperTabClient(
-        transport: swarms.call,
-        storage: MemoryStore(),
-        onTabs: (_, _) {},
-        discoveryInterval: const Duration(seconds: 15),
-      )..reading = SuperTabReading.desktop;
-      client
-        ..bind('owner')
-        ..show('tab');
-      client.open('tab');
-      client.open('other');
-      async.elapse(const Duration(seconds: 1));
-      // The server's word that it pushes: on connect, then every 4 minutes (backend
-      // lib/swarmClientPushes.ts PUSHES_REPEAT_MS).
-      client.swarmChanged(const {});
-      final repeat = Timer.periodic(
-        const Duration(minutes: 4),
-        (_) => client.swarmChanged(const {}),
-      );
       async.elapse(const Duration(minutes: 1));
-
-      // Hidden, as the workspace tells both (SuperTabWorkspace, SwarmScreen).
+      // Hidden, as the workspace tells it (SwarmScreen).
       app.appLifecycleChanged(AppLifecycleState.inactive);
       app.appLifecycleChanged(AppLifecycleState.hidden);
-      client.pageVisible = false;
       async.elapse(const Duration(seconds: 2));
 
       final machines0 = asked.machineReads, desk0 = asked.deskReads;
       final socket0 = Map.of(asked.socket);
-      swarms.paths.clear();
       const minutes = 10;
       for (var minute = 1; minute <= minutes; minute++) {
         async.elapse(const Duration(minutes: 1));
@@ -294,13 +238,6 @@ void main() {
         for (final type in asked.socket.keys)
           'machine $type (relayed)': asked.socket[type]! - (socket0[type] ?? 0),
       };
-      for (final path in swarms.paths) {
-        final uri = Uri.parse(path);
-        final kind = uri.pathSegments.length > 3
-            ? 'Swarm ${uri.pathSegments[3]}'
-            : 'Swarm ${uri.pathSegments.last}';
-        perKind[kind] = (perKind[kind] ?? 0) + 1;
-      }
       perKind.removeWhere((_, count) => count == 0);
       final total = perKind.values.fold(0, (sum, n) => sum + n);
       // ignore: avoid_print
@@ -313,14 +250,10 @@ void main() {
       // Back in sight: each reads once.
       app.appLifecycleChanged(AppLifecycleState.inactive);
       app.appLifecycleChanged(AppLifecycleState.resumed);
-      client.pageVisible = true;
       async.elapse(const Duration(seconds: 2));
       expect(asked.socket['agents_list'], greaterThan(socket0['agents_list']!));
       expect(asked.machineReads, machines0 + 1);
-      expect(swarms.paths, isNotEmpty);
 
-      repeat.cancel();
-      client.dispose();
       app.dispose();
       async.flushMicrotasks();
     });

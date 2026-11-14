@@ -20,7 +20,7 @@
  * The agent drives it with `harness browser <command>` from its own pane (`agent_browser_run`, from this computer only):
  * the core proves the pane and names its agent, and the command runs on that agent's tool server, which this service
  * holds while the browser is ready (agentBrowser/toolServers.ts), one at a time. A command never starts or stops a
- * browser, never wakes Podman, and reads neither the backend nor the Swarm. The person's panel sizes Chrome's window
+ * browser, never wakes Podman, and never reads the backend. The person's panel sizes Chrome's window
  * through the same tool server (`agent_browser_window`).
  *
  * The settings are its person's before the first Start too: a proxy set then is the one the browser first connects

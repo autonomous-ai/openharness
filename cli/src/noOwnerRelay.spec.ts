@@ -1,5 +1,5 @@
 /**
- * No owner subscription relay (anh Dee, 2026-11-07, Swarm v3, task #4137): every agent runs under its own person's login
+ * No owner subscription relay (anh Dee, 2026-11-07, task #4137): every agent runs under its own person's login
  * and settings, and nothing spends the machine owner's Claude or ChatGPT subscription for someone else. A Harness Team
  * account's launches are built by the core with what its composition root hands them (core/main.ts), so that is where a
  * relay would come back: no relay launch wired in, no relay provider or token named, and nothing written into an engine's

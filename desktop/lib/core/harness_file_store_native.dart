@@ -96,6 +96,19 @@ class HarnessFileStore implements BatchLocalKeyValueStore {
     await _writeDocument(values);
   });
 
+  /// Removes [keys] in one write, however many there are.
+  Future<void> deleteAll(Iterable<String> keys) {
+    final gone = keys.toSet();
+    if (gone.isEmpty) return Future.value();
+    return _serialized(() async {
+      final values = await _readDocument();
+      final before = values.length;
+      values.removeWhere((key, _) => gone.contains(key));
+      if (values.length == before) return;
+      await _writeDocument(values);
+    });
+  }
+
   Future<T> _serialized<T>(Future<T> Function() operation) {
     final result = Completer<T>();
     final path = directory.absolute.path;

@@ -16,8 +16,8 @@ import { claudeCodeGitBash } from '../../lib/windows/claudeCodeGitBash.js'
 
 declare const __STATUS_LINE_SCRIPT__: string | undefined
 
-/** Where a launch's status line reads the person's settings; `folder: false` reads only their own, not the folder's. */
-export type StatusLineFiles = AttributionFiles & { folder: boolean }
+/** Where a launch's status line reads the person's settings: their own, then the folder's. */
+export type StatusLineFiles = AttributionFiles
 
 /**
  * The script, as this release ships it. The release bundle carries it inside cli.js (build-bundle.mjs `define`): the
@@ -86,7 +86,7 @@ function commandLine(argv: string[], platform: NodeJS.Platform, bash: string | n
  */
 export function statusLineSetting(contract: StatusLineContract, files: StatusLineFiles, dataDir: string,
   platform: NodeJS.Platform = process.platform, gitBash: () => string | null = claudeCodeGitBash): Record<string, unknown> | null {
-  const paths = [join(files.home, contract.file), ...(files.cwd && files.folder ? contract.folder.map((name) => join(files.cwd!, name)) : [])]
+  const paths = [join(files.home, contract.file), ...(files.cwd ? contract.folder.map((name) => join(files.cwd!, name)) : [])]
   let theirs: unknown
   for (const path of paths) {
     const settings = jsonObject(files.read(path))

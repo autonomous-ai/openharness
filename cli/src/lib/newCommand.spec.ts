@@ -139,7 +139,7 @@ describe('harness new: the words', () => {
     expect(() => parseNewArgs(['devin-cloud', '--acu-limit', '2.5'], env)).toThrow(/1 to 1000/)
   })
 
-  // Swarm v3 (task #4215): an agent starts with its owner's own settings. A mode is sent only when the person typed one;
+  // Task #4215: an agent starts with its owner's own settings. A mode is sent only when the person typed one;
   // the default `auto` went to every engine that has it, and before that to every engine, which the daemon refused
   // (INVALID_PERMISSION_MODE) for the ten without a PERMISSION_MODES row.
   it('sends a permission mode only when the person typed one', () => {

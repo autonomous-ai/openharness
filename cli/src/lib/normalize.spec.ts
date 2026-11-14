@@ -50,7 +50,7 @@ describe('folding a transcript that ends mid-turn', () => {
 
   // Claude Code writes each block of a message as a line of its own, each with the message's stop reason (2.1.322: every one of
   // 86 thinking lines with `end_turn` in a transcript was followed by its message's text, also `end_turn`). Closed on the
-  // thinking, the turn ended before its answer was read: a Swarm PM's chat reply (Devon, 2026-11-12) had the narration from
+  // thinking, the turn ended before its answer was read: an agent's reply (Devon, 2026-11-12) had the narration from
   // before its last tool and not its final paragraph.
   it('ends a turn on its final message\'s text, not on the thinking line before it that carries the same stop reason', () => {
     const state = newTurnState()

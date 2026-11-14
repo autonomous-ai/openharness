@@ -208,7 +208,6 @@ void main() {
     expect(command('ctrl+shift+d'), 'pane.split_down');
     expect(command('ctrl+shift+m'), 'machines.list');
     expect(command('ctrl+shift+i'), 'models.list');
-    expect(command('ctrl+shift+s'), 'super_tab.new');
     expect(harnessCommandById['app.store']!.keys, isEmpty);
     expect(command('ctrl+shift+y'), 'agent_messages.activity');
     expect(command('alt+shift+f'), 'pane.toggle_shading');
@@ -432,7 +431,9 @@ void main() {
       'ctrl+o agent.open',
       'ctrl+p harnesses.list',
       'ctrl+r machines.refresh',
-      'ctrl+s super_tab.new',
+      // New Swarm's Ctrl+Shift+S went with the Swarm (2026-11-14), so Share
+      // (⇧⌘S) has its Ctrl twin outside a terminal.
+      'ctrl+shift+s agent.share',
       'ctrl+slash keyboard.help',
       'ctrl+t swarm.new',
       'ctrl+w swarm.close',

@@ -198,16 +198,12 @@ export function createDiscoveryHandlers({
     // that did not yet) learns it here, before any pane recreation ever needs it.
     // `observed.engine`, not `current.engine`: for a terminal that just adopted one, the row's
     // engine was `terminal` a line ago, which has no bypass flag and would read every launch as "no".
-    // Not a Swarm agent's (task #4215): its mode is the one it started in, Auto-approve, or its person chose. One Harness
-    // started in full mode before then still runs with that flag until it relaunches, and read back the relaunch would skip
-    // permissions again.
-    const own = !current.swarmSkill
-    if (own) registry.setBypassPermission(current.agentId, bypassPermissionActive(observed.engine, observed.args))
+    registry.setBypassPermission(current.agentId, bypassPermissionActive(observed.engine, observed.args))
     // And the exact MODE, fill-only: a row that recorded one at create is authoritative, and one
     // that never did (adopted from a terminal, written by an older build, created by a path that
     // passes no mode) learns it from the same argv — so its restart brings back
     // `--dangerously-skip-permissions`, not the auto mode `bypassPermission` alone would pick.
-    if (own && !current.permissionMode) {
+    if (!current.permissionMode) {
       const mode = permissionModeFromArgv(observed.engine, observed.args)
       if (mode) registry.setPermissionMode(current.agentId, mode)
     }

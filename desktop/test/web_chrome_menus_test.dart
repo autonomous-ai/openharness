@@ -153,14 +153,13 @@ void main() {
       await _done(tester, app);
     });
 
-    testWidgets('+ offers New tab, New Swarm, Split pane, History and More', (
+    testWidgets('+ offers New tab, Split pane, History and More', (
       tester,
     ) async {
       final app = await _mount(tester, _wide);
       await _tap(tester, _plus);
       for (final id in [
         'swarm.new',
-        'super_tab.new',
         'pane.split_right',
         'navigation.history',
         'web.more',

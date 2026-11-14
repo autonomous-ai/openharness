@@ -1,7 +1,7 @@
 /**
  * Whether this process runs as an old Harness Team account's boot job, which ends at once (entry.ts).
  *
- * Team accounts went with Swarm v3 (#4221) and their code with them (anh Dee, 2026-11-10: "clean up v1/2/3 entirely"). A
+ * Team accounts went in #4221 and their code with them (anh Dee, 2026-11-10: "clean up v1/2/3 entirely"). A
  * computer set up before 2026-11-07 whose person has not yet removed the account (Desktop asks: widgets/old_team_account.dart)
  * still has its boot job, which runs the account's own copy of this CLI at every boot: `team __start` and `__harnessd` on a
  * Mac and Linux, `__harnessd` in a loop that ends on exit 0 on Windows. That copy takes releases, as every Team account did.

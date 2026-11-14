@@ -412,7 +412,7 @@ describe('RuntimeProfileManager', () => {
   })
 
   // A session launched with --effort starts at it, which outranks its settings' effortLevel: read as the settings' until its
-  // first reply, the 2026-11-11 rehearsal's Product Manager, launched at xhigh, was announced to its project as running at high.
+  // first reply, an agent of the 2026-11-11 rehearsal, launched at xhigh, was announced to its project as running at high.
   it('reads a session launched with an effort at that effort, not its settings\', until it shows its own', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'machine-runtime-'))
     cleanup.push(cwd)
@@ -546,7 +546,7 @@ describe('RuntimeProfileManager', () => {
   })
 
   // A session launched with --effort, or adopted, never prints "Set effort level", and its banner names no effort:
-  // its Lead read as "opus unknown" in the Swarm sidebar (2026-10-28). Claude Code records the effort on each reply.
+  // it read as "opus unknown" in Desktop's sidebar (2026-10-28). Claude Code records the effort on each reply.
   it('observes the effort Claude Code records on each assistant reply', () => {
     const manager = new RuntimeProfileManager()
     const value = session('claude')

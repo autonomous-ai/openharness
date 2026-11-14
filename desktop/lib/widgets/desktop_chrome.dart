@@ -139,7 +139,6 @@ class DesktopPill extends StatelessWidget {
     this.tooltip,
     this.monospace = false,
     this.semanticLabel,
-    this.semanticHint,
     this.focusNode,
     this.foregroundColor,
     this.surfaceColor,
@@ -151,22 +150,16 @@ class DesktopPill extends StatelessWidget {
     this.truncateFromStart = false,
     this.menuIcon = AppIcons.chevronDown,
     this.highlightFocus = false,
-    this.leadingGap = 7,
   });
 
   final String label;
   final VoidCallback? onPressed;
   final IconData? icon;
   final Widget? leading;
-
-  /// The space between [leading] (or [icon]) and the label: a narrow row's
-  /// on/off choice (a reply box's options) sets it tighter.
-  final double leadingGap;
   final bool menu, monospace;
   final bool? selected;
   final String? tooltip;
   final String? semanticLabel;
-  final String? semanticHint;
   final FocusNode? focusNode;
   final Color? foregroundColor;
 
@@ -274,7 +267,7 @@ class DesktopPill extends StatelessWidget {
         children: [
           if (leading != null || icon != null) ...[
             leading ?? Icon(icon, size: 16),
-            SizedBox(width: leadingGap),
+            const SizedBox(width: 7),
           ],
           Flexible(
             child: truncateFromStart
@@ -298,11 +291,7 @@ class DesktopPill extends StatelessWidget {
         ],
       ),
     );
-    final control = Semantics(
-      selected: selected,
-      hint: semanticHint,
-      child: button,
-    );
+    final control = Semantics(selected: selected, child: button);
     return tooltip == null
         ? control
         : Tooltip(message: tooltip!, child: control);
@@ -311,27 +300,21 @@ class DesktopPill extends StatelessWidget {
 
 /// The same heading and dismiss control for every list or task dialog.
 /// A form can omit Close when its Cancel action already provides dismissal.
-/// [leading] is an identity beside the title (an avatar); [trailing] are icon
-/// controls that belong to the whole dialog, placed before Close.
 class DesktopDialogHeader extends StatelessWidget {
   const DesktopDialogHeader({
     super.key,
     required this.title,
     this.detail,
     this.onClose,
-    this.leading,
-    this.trailing = const [],
     this.padding = const EdgeInsets.fromLTRB(24, 24, 16, 16),
   });
 
   final String title;
   final String? detail;
   final VoidCallback? onClose;
-  final Widget? leading;
-  final List<Widget> trailing;
   final EdgeInsets padding;
 
-  /// The icon controls' target, centred on the title's first line.
+  /// Close's target, centred on the title's first line.
   static const _control = 32.0;
 
   @override
@@ -345,8 +328,8 @@ class DesktopDialogHeader extends StatelessWidget {
     )..layout();
     final line = measure.height;
     measure.dispose();
-    final controls = trailing.isNotEmpty || onClose != null;
-    // Whichever is shorter, the title line or a control, moves down to share the other's centre.
+    final controls = onClose != null;
+    // Whichever is shorter, the title line or Close, moves down to share the other's centre.
     final titleTop = controls ? ((_control - line) / 2).clamp(0.0, 99.0) : 0.0;
     final controlsTop = ((line - _control) / 2).clamp(0.0, 99.0);
     return Padding(
@@ -354,10 +337,6 @@ class DesktopDialogHeader extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (leading case final leading?) ...[
-            leading,
-            const SizedBox(width: 12),
-          ],
           Expanded(
             child: Padding(
               padding: EdgeInsets.only(top: titleTop),
@@ -374,37 +353,27 @@ class DesktopDialogHeader extends StatelessWidget {
               ),
             ),
           ),
-          if (controls)
+          if (controls) ...[
+            const SizedBox(width: 12),
             Padding(
               padding: EdgeInsets.only(top: controlsTop),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (trailing.isNotEmpty) ...[
-                    const SizedBox(width: 12),
-                    ...trailing,
-                  ],
-                  if (onClose != null) ...[
-                    SizedBox(width: trailing.isEmpty ? 12 : 4),
-                    IconButton(
-                      tooltip: 'Close',
-                      onPressed: onClose,
-                      icon: const Icon(AppIcons.close, size: 16),
-                      constraints: const BoxConstraints.tightFor(
-                        width: _control,
-                        height: _control,
-                      ),
-                      padding: const EdgeInsets.all(8),
-                      visualDensity: VisualDensity.standard,
-                      // The 32-point target itself, not padded to 48 below the title.
-                      style: const ButtonStyle(
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                    ),
-                  ],
-                ],
+              child: IconButton(
+                tooltip: 'Close',
+                onPressed: onClose,
+                icon: const Icon(AppIcons.close, size: 16),
+                constraints: const BoxConstraints.tightFor(
+                  width: _control,
+                  height: _control,
+                ),
+                padding: const EdgeInsets.all(8),
+                visualDensity: VisualDensity.standard,
+                // The 32-point target itself, not padded to 48 below the title.
+                style: const ButtonStyle(
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
               ),
             ),
+          ],
         ],
       ),
     );

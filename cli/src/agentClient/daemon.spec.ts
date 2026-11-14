@@ -228,7 +228,7 @@ describe('a request too large for the daemon', () => {
   it('refuses one past 512 KiB by name, with its size and the limit, and sends nothing', async () => {
     const { sent, socket } = line()
     const daemon = await openDaemon(where, 'm1', () => socket)
-    const refused = daemon.request('super_tabs', { text: 'x'.repeat(600 * 1024) })
+    const refused = daemon.request('agent_input', { text: 'x'.repeat(600 * 1024) })
     await expect(refused).rejects.toMatchObject({ code: 'REQUEST_TOO_LARGE',
       // Its size as sent: the words and the request around them.
       message: 'This request is 601 KiB, and Harness takes at most 512 KiB in one: nothing was sent. Put the rest in a file and send its path.' })

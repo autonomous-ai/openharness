@@ -163,9 +163,8 @@ web, and do not copy shared screens into `lib/web/` — add a seam instead.
 
 **A browser downloads the app in parts** (`lib/web/parts/`, `DeferredPart`/`DeferredPartView`): the
 signed-in workspace (`web_entry.dart` → `workspace_part.dart`, fetched once the first frame is up, so a
-first visit's sign-in page skips its 4.4 MB), the Finder and its editor (`pane_grid.dart`), and the chat's
-text viewer (`attachment_chips.dart`). Shared code reaches the last two through a compile-time import
-switch (`if (dart.library.js_interop)`, as `main.dart` picks the web entry), so a computer compiles the
+first visit's sign-in page skips its 4.4 MB), and the Finder and its editor (`pane_grid.dart`). Shared
+code reaches the Finder through a compile-time import switch (`if (dart.library.js_interop)`, as `main.dart` picks the web entry), so a computer compiles the
 same files as ever (`test/pane_grid_finder_test.dart`). Importing one of these libraries directly from
 shared code puts it back in `main.dart.js`. Check a real build with `tool/web_ux/deferred-parts.mjs`.
 
@@ -477,10 +476,7 @@ rebuild unchanged row controls and arrows rebuild only changed highlights. The c
 invalidates for row metadata, availability, action, geometry, theme, and font changes. Keep focus,
 semantics, and traversal on the row; do not replace them with paint-only search results.
 Creation and draft precedence are documented in `design/new-harness-entry-rules.md` and exercised
-by its listed tests. A Swarm's New project and New agent never hold their person (anh Dee, 2026-11-10): once the
-start is under way (`HarnessLaunchIntegration.onStarted`) the form closes and its controller goes to
-`AppNotifier.swarmStarts` (`super_tabs/swarm_starts.dart`), which waits for its start, follows a held request and
-gives it a `starting` row in the left pane; a `failed` row opens that same controller again. Cmd-T/Cmd-O retarget the same draft/search; Store requests own their explicit
+by its listed tests. Cmd-T/Cmd-O retarget the same draft/search; Store requests own their explicit
 product and machine. `test/benchmarks/swarm_benchmark.dart` measures large synthetic inventories;
 its headless debug timings do not establish native display or network latency.
 
@@ -602,9 +598,7 @@ add a kind there, not at the call site.
 - **Type** is `AppType` (`lib/shared/theme/app_type.dart`): system sans for app
   headings, labels, fields, navigation, and prose; explicit mono for code, paths,
   logs, and identifiers. Ordinary UI is independent of terminal zoom and respects
-  accessibility text scaling, except the Swarm's panes: a chat, a task's or pull request's chat
-  and an agent's instructions read at the terminal's size beside them (`SwarmType.sizeOf`, anh Dee
-  2026-11-10: "one consistent font across all panes"). The terminal grid, in-pane composer, and in-pane
+  accessibility text scaling. The terminal grid, in-pane composer, and in-pane
   find keep the selected terminal font and size. Compact pane/status bars retain
   their established `workspaceBarTextStyle()` and user-selected status themes.
   Native menus use the system menu font. Do not measure desktop UI in terminal cells.
@@ -616,9 +610,6 @@ add a kind there, not at the call site.
 - All local state is in `HarnessFileStore` (`~/.harness/desktop-app/state.json`, mode 0600, keyed
   strings behind `LocalKeyValueStore`): connection config, skipped update version, theme, font, pane
   layout. `~/.harness/computer-id` is the machine identity shared with the CLI.
-  A Swarm's saved view (up to 512 KB of chat) is never in it: each is a private file of its own in
-  `swarm-views/` beside it (`super_tabs/view_store_native.dart`), and the first use moves out any
-  that Desktop builds from 1.3.27 on left in `state.json`. Tests that pass a memory store keep views there.
 - The window is frameless on macOS via `window_manager` (`lib/core/desktop_window.dart`, same size and
   `TitleBarStyle.hidden` as Grid). On macOS the tabs are native, in the title bar beside the traffic
   lights (`SwarmTitlebar.swift`); the pane headers are a `DragToMoveArea`. A screen that

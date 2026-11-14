@@ -9,9 +9,7 @@ import 'swarm.dart';
 /// stay, so there is always a place to start one.
 bool swarmMatchesMachineProfile(Swarm swarm, String? machineId) {
   if (machineId == null || machineId.isEmpty) return true;
-  // Super Tab membership spans machines. Its current terminal selection does
-  // not make the shared conversation belong to that terminal's computer.
-  if (swarm.isUtility || swarm.isSuperTab) return true;
+  if (swarm.isUtility) return true;
   final paneIds = <String>{
     for (final pane in swarm.panes)
       if (pane.machineId.isNotEmpty) pane.machineId,
@@ -65,9 +63,9 @@ List<Swarm> swarmsForMachineProfile(List<Swarm> swarms, String? machineId) {
 }
 
 /// A tab whose membership comes from a computer: its agents, its orchestrator
-/// or its title's. Not the Store, a Super Tab or a tab with nothing in it yet.
+/// or its title's. Not the Store or a tab with nothing in it yet.
 bool _namesAMachine(Swarm swarm) {
-  if (swarm.isUtility || swarm.isSuperTab) return false;
+  if (swarm.isUtility) return false;
   return swarm.panes.any((pane) => pane.machineId.isNotEmpty) ||
       (swarm.orchestratorMachineId?.isNotEmpty ?? false) ||
       (swarm.titleMachineId?.isNotEmpty ?? false);

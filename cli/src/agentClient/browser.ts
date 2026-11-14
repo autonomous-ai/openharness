@@ -83,7 +83,7 @@ export async function browserCommand(argv: readonly string[], io: BrowserIo = pr
   const env = deps.env ?? process.env
   // The pane from the command's parents: a TMUX_PANE that names another pane, or no pane at all (a person's terminal, a
   // pty host's on macOS or Linux), is refused rather than taken at its word. A pane its environment keeps it from proving
-  // (Codex's sandbox refuses ps and the tmux socket) fails with the proof's reason, as super-tab's does, so it is run again
+  // (Codex's sandbox refuses ps and the tmux socket) fails with the proof's reason, so it is run again
   // outside the sandbox.
   const { pane, ancestors, refused } = runningPane(env, deps.probe, deps.platform)
   if (refused === UNPROVEN) return say(io.stderr, UNPROVEN, EXIT.failed)

@@ -20,7 +20,7 @@ export interface FakeDialOptions {
   mac?: string
   /** The settings it says it holds when it greets, as the firmware reads them from its flash. */
   settings?: Record<string, unknown>
-  /** The capabilities its greeting names (`swarmCard: 'v1'`, …), as a firmware that speaks them does. */
+  /** The capabilities its greeting names (`stats: 'turn-v1'`, …), as a firmware that speaks them does. */
   capabilities?: Record<string, string>
 }
 

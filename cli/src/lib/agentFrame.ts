@@ -57,7 +57,7 @@ export type AgentFrame = {
   name: string
   /**
    * Whether a person chose `name` (they renamed the agent), as against the name it was created with or its session
-   * title (registry.ts, `isNameChosen`). A client sends only a chosen name to the Swarm (task #2920). Absent from a
+   * title (registry.ts, `isNameChosen`). A client sends only a chosen name on (task #2920). Absent from a
    * daemon before it: a client reads that as "unknown" and sends nothing.
    */
   nameChosen: boolean

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { launchClaudeConfigDir, launchCodexHome } from '../../lib/engineHomes.js'
 import { launch as claude } from '../claude/launch.js'
 import { launch as codex } from '../codex/launch.js'
-import { acceptedIn, recordAcceptanceIn, recordSettingIn, recordTrustIn, trustsIn } from './folderTrust.js'
+import { recordTrustIn, trustsIn } from './folderTrust.js'
 
 /** Whether this account may link to a file: Windows lets it only with Developer Mode or as an administrator (Window of Tim,
  *  #3815), and a person there with neither has no such link to write through. */
@@ -215,9 +215,9 @@ describe('whether a source repo is already trusted (a worktree inherits only tha
     expect(claudeTrusts('/work/allow/../sub', home)).toBe(true)
   })
 
-  // DESKTOP-0TFH0OJ, 2026-10-23: a Swarm worktree's source arrived as `C:\\…\\<tab>/<project>` (the Lead joins with "/")
+  // DESKTOP-0TFH0OJ, 2026-10-23: a worktree's source arrived as `C:\\…\\<tab>/<project>` (joined with "/")
   // while its trust was recorded as `C:\\…\\<tab>\\<project>`. Compared as text with "/" only, it never matched, so
-  // every Swarm start on Windows stopped at Claude Code's trust prompt.
+  // every such start on Windows stopped at Claude Code's trust prompt.
   it('compares Windows folders the way Windows does: any separator, any case, a folder above it', () => {
     const home = mkdtempSync(join(tmpdir(), 'trust-'))
     writeFileSync(join(home, '.claude.json'), JSON.stringify({ projects: { 'C:\\Users\\DELL\\swarm-projects\\tab\\project': { hasTrustDialogAccepted: true } } }))
@@ -295,61 +295,5 @@ describe('the config each engine actually reads', () => {
     vi.stubEnv('CLAUDE_CONFIG_DIR', '')
     expect(preTrustClaudeProject('/v')).toBe('trusted')
     expect(claudeTrusts('/v')).toBe(true)
-  })
-})
-
-// Claude Code's first-run screens, finished, write this key to `.claude.json`; recorded as the phone sets an Intern 3 up.
-describe('the engine\'s first-run screens recorded as it records them', () => {
-  const key = claude.onboarding!.key
-  it('adds the key to the settings, keeping everything else, once', () => {
-    const file = join(mkdtempSync(join(tmpdir(), 'accept-')), '.claude.json')
-    writeFileSync(file, JSON.stringify({ theme: 'dark', oauthAccount: { emailAddress: 'a@b.c' } }))
-    expect(recordAcceptanceIn(file, key)).toBe('accepted')
-    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ theme: 'dark', oauthAccount: { emailAddress: 'a@b.c' }, hasCompletedOnboarding: true })
-    expect(recordAcceptanceIn(file, key)).toBe('already')
-  })
-
-  it('creates a missing file, its folder too, holding the key alone', () => {
-    const file = join(mkdtempSync(join(tmpdir(), 'accept-')), 'config', '.claude.json')
-    expect(recordAcceptanceIn(file, key)).toBe('accepted')
-    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ hasCompletedOnboarding: true })
-    expect(recordAcceptanceIn(file, key)).toBe('already')
-  })
-
-  it('leaves an unreadable or other-shaped file, and a value the person set, as it was', () => {
-    const folder = mkdtempSync(join(tmpdir(), 'accept-')), file = join(folder, 'settings.json')
-    for (const text of ['{not json', '[]', JSON.stringify({ [key]: false })]) {
-      writeFileSync(file, text)
-      expect(recordAcceptanceIn(file, key)).toBe('skipped')
-      expect(readFileSync(file, 'utf8')).toBe(text)
-    }
-  })
-})
-
-// The phone setting up a computer asks Claude Code's theme and full mode first, and reads whether they are answered (owner,
-// 2026-11-06).
-describe('first-run answers read and the theme recorded', () => {
-  it('reads a key as answered only when it is true in a readable object', () => {
-    const folder = mkdtempSync(join(tmpdir(), 'answered-')), file = join(folder, '.claude.json')
-    expect(acceptedIn(file, 'hasCompletedOnboarding')).toBe(false)
-    for (const [text, answered] of [['{not json', false], ['[]', false], ['{"hasCompletedOnboarding":false}', false],
-      ['{"hasCompletedOnboarding":"yes"}', false], ['{"hasCompletedOnboarding":true}', true]] as const) {
-      writeFileSync(file, text)
-      expect(acceptedIn(file, 'hasCompletedOnboarding')).toBe(answered)
-    }
-  })
-
-  it('sets the theme the person picked, keeping everything else, and creates a missing file holding it alone', () => {
-    const folder = mkdtempSync(join(tmpdir(), 'theme-')), file = join(folder, '.claude.json')
-    expect(recordSettingIn(file, 'theme', 'light')).toBe('recorded')
-    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ theme: 'light' })
-    writeFileSync(file, JSON.stringify({ theme: 'dark', oauthAccount: { emailAddress: 'a@b.c' } }))
-    expect(recordSettingIn(file, 'theme', 'light')).toBe('recorded')
-    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ theme: 'light', oauthAccount: { emailAddress: 'a@b.c' } })
-    for (const text of ['{not json', '[]']) {
-      writeFileSync(file, text)
-      expect(recordSettingIn(file, 'theme', 'light')).toBe('skipped')
-      expect(readFileSync(file, 'utf8')).toBe(text)
-    }
   })
 })

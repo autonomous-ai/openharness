@@ -85,9 +85,9 @@ export const MAGIC = Uint8Array.of(0x48, 0x54, 0x52, 0x4d) // HTRM
 const HOP_MAGIC = Uint8Array.of(0x48, 0x54, 0x52, 0x48) // HTRH
 const LOCAL_MAGIC = Uint8Array.of(0x48, 0x54, 0x52, 0x4c) // HTRL
 const FLAG_ZLIB = 1
-const FLAG_SWARM = 2
-const canCarrySwarm = (kind: TerminalBinaryKind): boolean => kind === TerminalBinaryKind.input || kind === TerminalBinaryKind.paste
-export const flagsFor = (frame: TerminalBinaryClear): number => (frame.compressed ? FLAG_ZLIB : 0) | (frame.tabId !== undefined ? FLAG_SWARM : 0)
+const FLAG_TAB = 2
+const canCarryTab = (kind: TerminalBinaryKind): boolean => kind === TerminalBinaryKind.input || kind === TerminalBinaryKind.paste
+export const flagsFor = (frame: TerminalBinaryClear): number => (frame.compressed ? FLAG_ZLIB : 0) | (frame.tabId !== undefined ? FLAG_TAB : 0)
 
 function safeU64(view: DataView, offset: number): number | null {
   const value = view.getBigUint64(offset, false)
@@ -156,7 +156,7 @@ export function encodeTerminalPlain(frame: TerminalBinaryClear): Uint8Array | nu
     && frame.compressed) return null
   if (frame.kind === TerminalBinaryKind.sync && frame.bytes.length !== 0) return null
   const scope = frame.tabId === undefined ? null : Buffer.from(frame.tabId, 'utf8')
-  if (scope && (!canCarrySwarm(frame.kind) || !/^[A-Za-z0-9_-]{1,128}$/.test(frame.tabId!))) return null
+  if (scope && (!canCarryTab(frame.kind) || !/^[A-Za-z0-9_-]{1,128}$/.test(frame.tabId!))) return null
   const metaBytes = frame.kind === TerminalBinaryKind.keyframe ? 28 : 24 + (scope ? 1 + scope.length : 0)
   const out = new Uint8Array(metaBytes + frame.bytes.length)
   out.set(id, 0)
@@ -174,13 +174,13 @@ export function encodeTerminalPlain(frame: TerminalBinaryClear): Uint8Array | nu
 }
 
 export function decodeTerminalPlain(kind: TerminalBinaryKind, flags: number, plaintext: Uint8Array): TerminalBinaryClear | null {
-  if ((flags & ~(FLAG_ZLIB | FLAG_SWARM)) !== 0 || ((flags & FLAG_SWARM) && !canCarrySwarm(kind))
+  if ((flags & ~(FLAG_ZLIB | FLAG_TAB)) !== 0 || ((flags & FLAG_TAB) && !canCarryTab(kind))
     || ((kind === TerminalBinaryKind.input || kind === TerminalBinaryKind.sync
       || kind === TerminalBinaryKind.paste || kind === TerminalBinaryKind.imagePaste
       || kind === TerminalBinaryKind.pasteFile || kind === TerminalBinaryKind.browser) && (flags & FLAG_ZLIB) !== 0)) return null
   let metaBytes = kind === TerminalBinaryKind.keyframe ? 28 : 24
   let tabId: string | undefined
-  if (flags & FLAG_SWARM) {
+  if (flags & FLAG_TAB) {
     const length = plaintext[24]
     if (!length || length > 128 || plaintext.length < 25 + length) return null
     tabId = Buffer.from(plaintext.subarray(25, 25 + length)).toString('utf8')

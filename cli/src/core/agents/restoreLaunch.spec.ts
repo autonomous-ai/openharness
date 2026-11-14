@@ -6,14 +6,11 @@ import { WindowsBatchLaunchRefused } from '../../lib/windows/launch.js'
 import { createLaunchHelpers } from './launch.js'
 import { createLaunchAuthority } from './launchAuthority.js'
 import type { NativeLaunch } from '../../engines/nativeLaunch.js'
-import type { SwarmSkillGrant } from '../../lib/swarmSkills.js'
-import { createSwarmSkillAdoption } from '../../superTabs/inCore/adoption.js'
 
 const entry = { agentId: 'agent', sessionId: 'conversation', cwd: '/workspace' } as RegisteredSession
 const built: Extract<LaunchOverridesResult, { ok: true }> = { ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [] } }
-const setup = (adoptSwarmSkill?: ReturnType<typeof createSwarmSkillAdoption>) => {
+const setup = () => {
   const deps = {
-    ...(adoptSwarmSkill ? { adoptSwarmSkill } : {}),
     workspaceMissing: vi.fn((): { error: string; detail: string } | null => null),
     relaunchOverrides: vi.fn(async (): Promise<LaunchOverridesResult> => built),
     downgradedPermission: vi.fn(async () => ({ bypassPermission: false })),
@@ -22,52 +19,6 @@ const setup = (adoptSwarmSkill?: ReturnType<typeof createSwarmSkillAdoption>) =>
   }
   return { deps, build: createRestoreLaunch(deps) }
 }
-
-// Security review 1 of #2255: boot restore and a host move relaunched an old Swarm session with no saved role without asking the
-// Swarm, so it came back without its guard.
-describe('an old Swarm session with no saved role', () => {
-  const legacy = { ...entry, engine: 'claude', startedBy: 'agent' } as RegisteredSession
-  const swarm = (grant: SwarmSkillGrant | null | undefined) => {
-    const save = vi.fn()
-    const role = vi.fn(async () => grant)
-    return { save, role, adopt: createSwarmSkillAdoption({ role, save, authority: () => () => true, candidate: () => false }) }
-  }
-  it('is restored with its role, saved on its row before the launch is built', async () => {
-    const s = swarm({ role: 'agent' }), { deps, build } = setup(s.adopt)
-    expect(await build(legacy, { current: () => true })).toEqual({ argv: ['engine'] })
-    const tagged = expect.objectContaining({ swarmSkill: { role: 'agent', key: 'agent' } })
-    expect(deps.relaunchOverrides).toHaveBeenCalledWith(tagged, tagged, expect.any(Function))
-    expect(deps.launch).toHaveBeenCalledWith(tagged, { agentId: 'agent' }, built.overrides, { bypassPermission: false })
-    expect(s.save).toHaveBeenCalledWith('agent', { role: 'agent', key: 'agent' })
-  })
-  it('is held, never launched, while its role cannot be read', async () => {
-    const { deps, build } = setup(swarm(undefined).adopt)
-    // What its pane shows the person while it waits: plain words, no ids.
-    expect(await build(legacy, { current: () => true })).toEqual({ held: 'superTabs',
-      detail: 'Waiting for the Swarm to confirm this agent\'s role. It starts by itself once the Swarm answers.' })
-    expect(deps.relaunchOverrides).not.toHaveBeenCalled()
-    expect(deps.launch).not.toHaveBeenCalled()
-  })
-  it('is left alone when the restore is cancelled while its role is read', async () => {
-    let current = true
-    const role = vi.fn(async () => { current = false; return { role: 'agent' as const } })
-    const { deps, build } = setup(createSwarmSkillAdoption({ role, save: vi.fn(), authority: () => () => true, candidate: () => false }))
-    expect(await build(legacy, { current: () => current })).toEqual({ cancelled: true })
-    expect(deps.relaunchOverrides).not.toHaveBeenCalled()
-  })
-  it('moves to another host with its role, writing nothing while its old engine runs', async () => {
-    const s = swarm({ role: 'agent' }), { deps, build } = setup(s.adopt)
-    expect(await build(legacy, { resumeSessionId: 'conversation', current: () => true, prepare: false })).toMatchObject({ argv: ['engine'] })
-    expect(deps.launch).toHaveBeenCalledWith(expect.objectContaining({ swarmSkill: { role: 'agent', key: 'agent' } }),
-      { resumeSessionId: 'conversation', agentId: 'agent' }, built.overrides, { bypassPermission: false })
-    expect(s.save).not.toHaveBeenCalled()
-  })
-  it('does not move while its role cannot be read', async () => {
-    const { deps, build } = setup(swarm(undefined).adopt)
-    expect(await build(legacy, { resumeSessionId: 'conversation', current: () => true, prepare: false })).toMatchObject({ held: 'superTabs' })
-    expect(deps.launch).not.toHaveBeenCalled()
-  })
-})
 
 describe('a guest\'s harness at boot', () => {
   it('is never relaunched as the owner: refused before a workspace or service is touched', async () => {
