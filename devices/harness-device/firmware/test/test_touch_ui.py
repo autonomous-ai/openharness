@@ -1847,6 +1847,24 @@ int main(int argc, char **argv) {
       ui_apps_replace(rows, 0, ""); assert(s.apps_known && !s.app_count && !s.app_shown[0]);
       ui_apps_replace(rows, 2, "ghostty"); changes = 0; ui_apps_forget();
       assert(changes && !s.apps_known && !s.app_count && !s.app_shown[0]); }
+    // the face's line is the shown app's name (the app in front, around zellij); a tap still says the nearest host
+    { reset(); fake_ms = 1000; ui_project_set_host_caps("a","zellij",CABLE_CAP_S); ui_fleet_set_view(true);
+      const cable_app_t rows[2] = {{"ghostty", "Ghostty", 3, 0}, {"vscode", "VS Code", 2, 1}};
+      ui_apps_replace(rows, 2, "ghostty"); scene_take();
+      assert(scene_says("Ghostty") && !scene_says("Zellij")); portrait(dir,"caps-machine-view-app");
+      tap(1000,233,220); assert(!starts && scene_says("See it in Zellij"));
+      // a shown app that is not in the list falls back to the host's name
+      reset(); fake_ms = 1000; ui_project_set_host_caps("a","zellij",CABLE_CAP_S); ui_fleet_set_view(true);
+      ui_apps_replace(rows, 2, "cursor"); scene_take(); assert(scene_says("Zellij") && !scene_says("Ghostty"));
+      // without apps the line is the host's name, as before; with a window there is no line
+      ui_apps_replace(rows, 2, "ghostty"); ui_apps_forget(); scene_take(); assert(scene_says("Zellij") && !scene_says("Ghostty"));
+      ui_apps_replace(rows, 2, "ghostty"); ui_fleet_set_view(false); scene_take();
+      assert(!scene_says("Ghostty") && !scene_says("Zellij")); }
+    // an agent in an unknown terminal: the line is the name the daemon sent, and a tap says See it in Terminal
+    { reset(); fake_ms = 1000; ui_project_set_host_caps("a","terminal",CABLE_CAP_S); ui_fleet_set_view(true);
+      const cable_app_t rows[1] = {{"terminal", "Other", 1, 0}};
+      ui_apps_replace(rows, 1, "terminal"); scene_take(); assert(scene_says("Other") && !scene_says("Terminal"));
+      tap(1000,233,220); assert(!starts && scene_says("See it in Terminal")); }
     // the resting face of an agent without V shows no voice invitation, on the plain face and the pet's relaxing one
     for (int pet = 0; pet < 2; pet++) {
         reset(); fake_ms = 1000; if (pet) strcpy(s.agents[0].engine, "claude");
@@ -2806,6 +2824,11 @@ int main(int argc, char **argv) {
             DESIGN_HOME(); fake_ms = 1200; dispatch((action_t){.kind = A_VOICE, .id = "a"}); scene_take(); DESIGN("voice-listening");
             DESIGN_HOME(); fake_ms = 1200; dispatch((action_t){.kind = A_VOICE, .id = "a"}); s.voice_waiting = true; scene_take(); DESIGN("voice-sending");
             DESIGN_HOME(); fake_ms = 1200; ui_project_set_host_caps("a", "orca", CABLE_CAP_S); ui_fleet_set_view(true); scene_take(); DESIGN("machine-view");
+            {
+                const cable_app_t rows[2] = {{"ghostty", "Ghostty", 3, 0}, {"vscode", "VS Code", 2, 1}};
+                DESIGN_HOME(); fake_ms = 1200; ui_project_set_host_caps("a", "zellij", CABLE_CAP_S); ui_fleet_set_view(true);
+                ui_apps_replace(rows, 2, "ghostty"); scene_take(); DESIGN("machine-view-app");
+            }
             DESIGN_HOME(); fake_ms = 1200; ui_project_set_host_caps("a", "orca", CABLE_CAP_S); scene_take(); tap(1200, 233, 220); DESIGN("no-voice-hint");
             DESIGN_HOME(); fake_ms = 1200; ui_project_set_host_caps("a", "orca", CABLE_CAP_S); ui_fleet_set_view(true);
             ui_project_emit("a", "", "processing", "", NULL);
